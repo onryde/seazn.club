@@ -6,13 +6,18 @@
 // Pure TypeScript, no React: the reducers and the runner are tested without a DOM (apps/web vitest is node-only).
 import { ApiV1Error } from "@/lib/client-v1";
 import {
+  CHECKIN_EXTEND_MAX,
   CHECKIN_EXTEND_STEP_MINUTES,
   EXTEND_REFUSALS,
   EXTEND_REFUSAL_CODES,
   EXTEND_REFUSAL_KEYS,
   EXTEND_ROUND_SKIP_COPY,
+  EXTEND_WHY_KEYS,
+  liveExtendRefusal,
   type CheckinExtendBoardResult,
   type CheckinExtendRoundResult,
+  type CheckinExtendState,
+  type ExtendRefusal,
 } from "@/lib/checkin-extend";
 
 type Vars = Record<string, string | number>;
@@ -38,9 +43,53 @@ export function extendClosesLine(deadlineAt: string, c: ExtendCopy): string | nu
   return time === null ? null : c.t("externalPlay.checkinExtend.closesAt", { time });
 }
 
-/** The answer to ONE board's press: "Added 5 minutes to board 3. Check-in now closes 19:14." */
-export function extendBoardSentence(r: CheckinExtendBoardResult, boardNo: number, c: ExtendCopy): string {
-  return c.t("externalPlay.checkinExtend.notice.board", { minutes: r.addedMinutes, n: boardNo, time: c.hm(r.deadlineAt) ?? "" });
+/** The later of two ISO instants. */
+export const laterIso = (a: string, b: string): string => (Date.parse(a) >= Date.parse(b) ? a : b);
+
+/** The time a board's "Added 5 minutes" answer names: never one that differs from the board's LIVE deadline. The answer carries the
+ *  deadline the press made, and the board's own check-in line carries the deadline the panel last read; once the panel has caught up
+ *  they are the same instant and the sentence reads the board's. Until it has (the refresh after a press is a moment behind), the
+ *  press's own is the newer of the two and is the true one - and when the board has been extended since (another arbiter, or a round
+ *  press) the live one is. The sentence therefore never names a time earlier than the board's own line says. */
+export function extendedNoticeTime(resultDeadlineAt: string, liveDeadlineAt: string | null): string {
+  return liveDeadlineAt === null ? resultDeadlineAt : laterIso(resultDeadlineAt, liveDeadlineAt);
+}
+
+/** The answer to ONE board's press: "Added 5 minutes to board 3. Check-in now closes 19:14." `liveDeadlineAt`: the board's deadline as
+ *  the screen reads it now (`board.checkin.deadlineAt`), so the sentence cannot contradict the "Check-in closes" line beside it. */
+export function extendBoardSentence(r: CheckinExtendBoardResult, boardNo: number, c: ExtendCopy, liveDeadlineAt: string | null = null): string {
+  return c.t("externalPlay.checkinExtend.notice.board", {
+    minutes: r.addedMinutes,
+    n: boardNo,
+    time: c.hm(extendedNoticeTime(r.deadlineAt, liveDeadlineAt)) ?? "",
+  });
+}
+
+/** The helper line under either "+5 min" button: what a press does and the limits, from the constants (never retyped). */
+export const extendHelperLine = (c: ExtendCopy) =>
+  c.t("externalPlay.checkinExtend.helper", { minutes: CHECKIN_EXTEND_STEP_MINUTES, max: CHECKIN_EXTEND_MAX });
+
+/** The short reason shown where a board's "+5 min" is not offered, or null when it says nothing (a board that is over). */
+export function extendWhyLine(refusal: ExtendRefusal, c: ExtendCopy): string | null {
+  const key = EXTEND_WHY_KEYS[refusal];
+  return key === null ? null : c.t(key);
+}
+
+/** What the board's "+5 min" is, on the screen's ticking clock: the refusal now (null: offered), its words, and the snapshot's
+ *  numbers. `nowMs` null (before the viewer's clock is known): the server's own reading of the snapshot stands. */
+export function boardExtendOffer(
+  checkin: CheckinExtendState | null,
+  nowMs: number | null,
+): { refusal: ExtendRefusal | null; offered: boolean } | null {
+  if (checkin === null) return null;
+  const refusal = nowMs === null ? checkin.refusal : liveExtendRefusal(checkin, nowMs);
+  return { refusal, offered: refusal === null };
+}
+
+/** How many of a round's boards a round-wide press would reach at `nowMs` (the arbiter panel lists every board with its check-in). */
+export function liveExtendableBoards(boards: readonly { checkin: CheckinExtendState | null }[], nowMs: number | null, snapshotCount: number): number {
+  if (nowMs === null) return snapshotCount;
+  return boards.filter((b) => b.checkin !== null && liveExtendRefusal(b.checkin, nowMs) === null).length;
 }
 
 /** The answer to a ROUND press, one line for what was done and one for each reason a board was left alone, only the reasons that
@@ -78,6 +127,9 @@ export type RoundExtendNotice = { kind: "answered"; result: CheckinExtendRoundRe
 export type RoundExtendState = { busy: boolean; notice: RoundExtendNotice | null };
 export type RoundExtendAction =
   | { type: "extend" }
+  /** Another extend action (a board's "+5 min") started, or the round on screen changed: the answer on screen is no longer about
+   *  what is there. */
+  | { type: "clear" }
   | { type: "extendDone"; outcome: { ok: true; result: CheckinExtendRoundResult } | { ok: false; code: string } };
 
 export const initialRoundExtend = (): RoundExtendState => ({ busy: false, notice: null });
@@ -86,6 +138,8 @@ export function roundExtendUi(s: RoundExtendState, a: RoundExtendAction): RoundE
   switch (a.type) {
     case "extend":
       return s.busy ? s : { busy: true, notice: null };
+    case "clear":
+      return s.notice === null ? s : { ...s, notice: null };
     case "extendDone":
       if (!s.busy) return s; // an answer lands only if it answers the request in flight
       return { busy: false, notice: a.outcome.ok ? { kind: "answered", result: a.outcome.result } : { kind: "failed", code: a.outcome.code } };
@@ -126,6 +180,25 @@ export function roundExtendRunner(deps: {
         inflight = false;
       }
       return true;
+    },
+  };
+}
+
+/** The two "+5 min" presses share one panel and answer in two places (a board's notice, the round's bar): starting either clears the
+ *  OTHER's answer, whose counts or time are about deadlines the press has just moved. The panel hands each runner the dispatch this
+ *  returns for it. `board` and `round` are the two reducers' dispatches. */
+export function linkedExtendDispatch<B extends { type: string }>(
+  board: (a: B | { type: "clearExtend" }) => void,
+  round: (a: RoundExtendAction) => void,
+): { forBoard: (a: B) => void; forRound: (a: RoundExtendAction) => void } {
+  return {
+    forBoard: (a) => {
+      if (a.type === "extend") round({ type: "clear" });
+      board(a);
+    },
+    forRound: (a) => {
+      if (a.type === "extend") board({ type: "clearExtend" });
+      round(a);
     },
   };
 }

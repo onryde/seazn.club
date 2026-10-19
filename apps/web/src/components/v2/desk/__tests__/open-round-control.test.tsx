@@ -58,6 +58,7 @@ const ROUND = (o: Partial<OpenRoundView> = {}): OpenRoundView => ({
   earlierInPlay: [],
   pairings: [P(1), P(2), P(3)],
   extendableBoards: 0,
+  extendWindows: [],
   ...o,
 });
 const html = (round: OpenRoundView) => renderToStaticMarkup(<OpenRoundControl round={round} tz={TZ} />);

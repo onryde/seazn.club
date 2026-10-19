@@ -9,14 +9,14 @@
 // component the harness does not expand, so its props are read and called.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import { plural as pluralRuntime, t as tRuntime } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
 import type { OpenRoundPairing, OpenRoundView } from "@/lib/open-round";
 import { DEADLINE_AFTER_MS } from "@/server/external-play/window";
-import { CHECKIN_EXTEND_STEP_MINUTES } from "@/lib/checkin-extend";
+import { CHECKIN_EXTEND_MAX, CHECKIN_EXTEND_STEP_MINUTES } from "@/lib/checkin-extend";
 
 const router = vi.hoisted(() => ({ refresh: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
@@ -73,6 +73,7 @@ const ROUND = (o: Partial<OpenRoundView> = {}): OpenRoundView => ({
   earlierInPlay: [],
   pairings: [P(1), P(2)],
   extendableBoards: 0,
+  extendWindows: [],
   ...o,
 });
 const OPENED_AT = "2026-10-16T18:04:00.000Z";
@@ -312,3 +313,94 @@ describe("+5 min to the round - on the control of an open round", () => {
     expect(net.calls.map((c) => c.url), "the +5 min tap behind it sent nothing").toEqual(["/api/v1/fixtures/f1/external-play/resend"]);
   });
 });
+
+// Owner rule (2026-10-19): +5 is offered ONLY inside a board's check-in window, and the screen keeps that true on a ticking clock - the
+// button arrives AT the opening and leaves AT the deadline, with no refresh between. Through the real component and the real clock hook,
+// under a fake clock (the island renders without a DOM; the hook's timers are the thing under test).
+describe("+5 min to the round - the control's ticking clock", () => {
+  const OPENS = Date.parse("2026-10-16T18:14:00.000Z");
+  const CLOSES = Date.parse("2026-10-16T18:24:00.000Z");
+  const WINDOW = { opensAt: new Date(OPENS).toISOString(), deadlineAt: new Date(CLOSES).toISOString() };
+  /** An open round whose one window is ahead: the server's snapshot count is 0 (nothing extendable yet). */
+  const AHEAD = (over: Partial<OpenRoundView> = {}): OpenRoundView => ({ ...INVITED, extendableBoards: 0, extendWindows: [WINDOW], ...over });
+  const cta = (tree: ReactElement[]) => byTestId(tree, "open-round-extend-cta").length;
+  const extendNotice = (tree: ReactElement[]) => byTestId(tree, "open-round-extend-notice").map((n) => textOf(n)).join("|");
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("one ms before the opening: no button; AT the opening: the button; one ms before the deadline: still; AT the deadline: gone - and then no timer is left running", () => {
+    vi.setSystemTime(OPENS - 5);
+    const ui = mount(AHEAD());
+    vi.advanceTimersByTime(0);
+    expect(cta(ui.tree()), "5 ms before the opening").toBe(0);
+    vi.advanceTimersByTime(4);
+    expect(Date.now(), "premise: the clock is 1 ms short of the opening").toBe(OPENS - 1);
+    expect(cta(ui.tree()), "1 ms before the opening").toBe(0);
+    vi.advanceTimersByTime(1);
+    expect(Date.now(), "premise: the clock is AT the opening").toBe(OPENS);
+    expect(cta(ui.tree()), "AT the opening").toBe(1);
+    expect(textOf(byTestId(ui.tree(), "open-round-extend")[0]!), "reaching one board").toContain(pl("externalPlay.checkinExtend.roundHint", 1));
+    vi.advanceTimersByTime(CLOSES - 1 - OPENS);
+    expect(Date.now(), "premise: the clock is 1 ms short of the deadline").toBe(CLOSES - 1);
+    expect(cta(ui.tree()), "1 ms before the deadline").toBe(1);
+    vi.advanceTimersByTime(1);
+    expect(Date.now(), "premise: the clock is AT the deadline").toBe(CLOSES);
+    expect(cta(ui.tree()), "AT the deadline").toBe(0);
+    expect(byTestId(ui.tree(), "open-round-extend"), "nothing to offer, nothing answered: no bar").toHaveLength(0);
+    expect(vi.getTimerCount(), "every edge is behind: no timer keeps running").toBe(0);
+  });
+
+  it("the count it shows is the CLOCK's, not the snapshot's: a stale server count of 6 over one live window reads 1", () => {
+    vi.setSystemTime(OPENS + 1);
+    const ui = mount(AHEAD({ extendableBoards: 6 }));
+    expect(cta(ui.tree()), "before the clock is known, the server's count stands").toBe(1);
+    expect(textOf(byTestId(ui.tree(), "open-round-extend")[0]!)).toContain(pl("externalPlay.checkinExtend.roundHint", 6));
+    vi.advanceTimersByTime(0);
+    expect(textOf(byTestId(ui.tree(), "open-round-extend")[0]!)).toContain(pl("externalPlay.checkinExtend.roundHint", 1));
+  });
+
+  it("the helper line stands under the button, its numbers from the constants", () => {
+    vi.setSystemTime(OPENS + 1);
+    const ui = mount(AHEAD());
+    vi.advanceTimersByTime(0);
+    expect(textOf(byTestId(ui.tree(), "open-round-extend-helper")[0]!)).toContain(
+      en["externalPlay.checkinExtend.helper"]!.replace("{minutes}", String(CHECKIN_EXTEND_STEP_MINUTES)).replace("{max}", String(CHECKIN_EXTEND_MAX)),
+    );
+  });
+
+  it("a round that is not open, or has no window, keeps no timer at all", () => {
+    vi.setSystemTime(OPENS + 1);
+    mount(ROUND({ extendWindows: [WINDOW] }));
+    mount(AHEAD({ extendWindows: [] }));
+    vi.advanceTimersByTime(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("the answer to a press survives the deadline passing, with no button beside it", async () => {
+    vi.setSystemTime(OPENS + 1);
+    const ui = mount(AHEAD());
+    vi.advanceTimersByTime(0);
+    click(byTestId(ui.tree(), "open-round-extend-cta")[0]);
+    net.calls[0]!.resolve(RESULT_FOR_CLOCK);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(extendNotice(ui.tree()), "the answer is on screen").toContain("Added 5 minutes to 1 board.");
+    await vi.advanceTimersByTimeAsync(CLOSES - Date.now());
+    expect(Date.now()).toBe(CLOSES);
+    expect(cta(ui.tree()), "the deadline passed: the button left").toBe(0);
+    expect(extendNotice(ui.tree()), "the answer stayed").toContain("Added 5 minutes to 1 board.");
+  });
+});
+
+const RESULT_FOR_CLOCK = {
+  extended: 1,
+  skipped: { closed: 0, gameStarted: 0, capReached: 0 },
+  notOpenYet: 0,
+  ownBoards: 0,
+  failed: 0,
+  addedMinutes: CHECKIN_EXTEND_STEP_MINUTES,
+};

@@ -188,8 +188,8 @@ the round's open row, below), and a player can read when they are due.
   allows). `boardAnchor` reads the STORED flag and never the live policy. D9 allows a policy change
   after a round opens, downgrade only, and a downgrade from `required` to `off` must not collapse a
   later batch back to `T`: that would move its open time and its deadline underneath players who
-  were told a time. So `boardAnchor(roundOpenedAt, rank, staggered)` is `roundOpenedAt + (staggered
-  ? floor(rank / CHECKIN_BATCH_SIZE) : 0) × CHECKIN_BATCH_GAP_MS`. The organiser's view and the
+  were told a time. So `boardAnchor(roundOpenedAt, rank, staggered, extraMs = 0)` is `roundOpenedAt + (staggered
+  ? floor(rank / CHECKIN_BATCH_SIZE) : 0) × CHECKIN_BATCH_GAP_MS`, carrying the board's check-in extension (§3.2.2) beside it. The organiser's view and the
   invite mail read the same flag.
 - **The constants.** `CHECKIN_BATCH_SIZE = 10` and `CHECKIN_BATCH_GAP_MS = 120_000`, beside the
   other window values in `server/external-play/window.ts` ("the only definition of these
@@ -262,7 +262,7 @@ the round's open row, below), and a player can read when they are due.
   for the rest, and `deadline = T_batch + 10 min` for all.
 - **Every reader moves, through one authority.** Every place that asks "is this window open"
   today passes `round_opened_at`. Each now passes the BOARD's anchor, and the window functions in
-  `window.ts` take a branded `BoardAnchor` that only `boardAnchor(roundOpenedAt, rank, staggered)` makes, so
+  `window.ts` take a branded `BoardAnchor` that only `boardAnchor(roundOpenedAt, rank, staggered, extraMs = 0)` makes (`extraMs`, §3.2.2, is the board's stored check-in extension), so
   a raw round stamp no longer compiles. The readers, found by symbol at `00e5179b6`:
 
 | Reader | Symbol | What `T` does there |
@@ -270,10 +270,10 @@ the round's open row, below), and a player can read when they are due.
 | seat | `preflight.ts` `seatPlayer` | `before` → `round_not_open` (no stamp) or `checkin_not_open` (stamped, this board's batch not yet open); `closed` and not a re-entry → `window_closed`, unless the line holds the place (§5.7.8) |
 | a check-in counts | `window.ts` `checkInCounts`, via `room.ts` `checkIns` (the room, `noShow` and `mintRetry` all judge "who came" through it) | a check-in counts only inside the board's window |
 | snapshot | `room.ts` `compose` and `claimRoomSeat`, via `room-snapshot.ts` `roomPhaseWire` and `windowWire` | the `phase`, `opensAt`, `deadline` and `heldUntil` (where a held viewer's hold ends, §5.7.8) the room draws, and the gate on stamping a check-in |
-| game create | `create-game.ts` `createGameIfReady` (the `not_ready` gate), `createAtDequeue` (the `claimAt` refusal), and the `ready` row's `expires_at` | "T+10 is the deadline to have the game created" (`T_batch` + `DEADLINE_AFTER_MS`) |
+| game create | `create-game.ts` `createGameIfReady` (the `not_ready` gate), `createAtDequeue` (the `claimAt` refusal), and the `ready` row's `expires_at` | "the board's deadline is the deadline to have the game created": `T_batch` + `DEADLINE_AFTER_MS` + the board's extension (§3.2.2), which is `T_batch + 10` for a board nobody extended. `createAtDequeue` re-reads the board's window (`boardOpenFor`) at the dequeue, never the plan's snapshot, so an extension that lands while a create waits in the queue is seen |
 | sweep | `sweep.ts` `playableWindow`, read by `noShow` (and its `not_started` hold), `mintRetry`, `meetingIsDone` (teardown) and `expectedEnd` (the reconcile base) | the no-show, the stranded-board and throttled-create arms, the "nobody played" teardown, the base of an expected end |
 | invites | `invite.ts` `sendFixtureInvite` (the deadline in the mail) and the resend refusal; `open-round.ts` `openRound`'s "reinvited" `window_closed` skip | per board: a board whose batch window has closed is skipped, one whose has not is still invited |
-| organiser | `open-round-view.ts` `closed`, `deadlineAt`, `windowMinutes` | the round is closed when its LAST batch has closed; the view lists each batch (below) |
+| organiser | `open-round-view.ts` `closed`, `deadlineAt`, `windowMinutes` | the round is closed when the LATEST deadline across its boards has passed (the last batch's, or an extended board's, extensions included); the view lists each batch (below) |
 | QR self check-in | `me.ts` `checkInToFixture`, via `boardOpenFor` and `windowFor` | the window handed to the check-in stamp for a fixture whose round was opened: a counted check-in is never re-stamped out of its board's window (test 28); a fixture whose round was never opened keeps the plain re-stamp |
 
   Not moved: `guard.ts`'s `scheduled_at_basis` (schedule-based, a different question; do not
@@ -377,17 +377,24 @@ the panel's own `requireWatcher`). The routes are `NEVER_KEY_ROUTES` entries: an
 an extension decides "it has not" and moves it. Both take `lockCheckinWindow(tx, fixtureId)` first, an advisory transaction lock keyed by
 the board (`pg_advisory_xact_lock(hashtext('checkin-window:' || id))`), then read the deadline under it. An extension that commits first is
 seen by the sweep (no forfeit); a sweep that judged first made its walkover on a clock the extension's own clock, read AFTER the lock and so
-never earlier, has already passed, and the extension is refused `closed`. **Deviation from the brief, stated:** the brief asked for "the same
+never earlier, has already passed, and the extension is refused `closed`. **Whose clock.** Both decisions read the DATABASE's clock, inside the
+locked transaction and after the lock (`clock_timestamp()`, not `now()`, which is the transaction's START and so earlier than the lock): the
+extension's "is it still open" and the sweep's "has the deadline passed" (`anchorIfClosedNow`, for the no-show and the teardown), so a web
+machine whose clock runs ahead cannot forfeit a board that was just extended, nor refuse a press the database still accepts. `deps.now` /
+`SweepDeps.now` remain test overrides. **Deviation from the brief, stated:** the brief asked for "the same
 row lock"; no row lock is shared between the extension and the sweep (the sweep's candidate query takes none), so the shared lock is this
 advisory one. The create has no row lock either (claim-then-call: a conditional UPDATE of `mint_claimed_at`), so an extension racing it is
 decided by the same facts under this lock: a claim or a marker on the row is a game on file. Order of locks inside the extension: the window
 lock, the fixture row (`for share`), the bridge row (`for update`), then the audit insert.
 
-**Re-open.** A board's re-open (kind `reopened`, §3.2) resets its extension to 0 on boards with no game evidence (they are re-armed and
-read 0 presses); a board with a game on file keeps what it had.
+**Re-open and re-invite.** A re-open (kind `reopened`, §3.2) restarts the window, so a re-armed board (no game evidence) reads 0 presses; a board
+with a game on file keeps what it had. A re-invite (kind `reinvited`, a re-arm INSIDE the running window) keeps the board's extension: the
+re-arm deletes and recreates the row, and the extension is carried across it, so a player who was told a later deadline is not moved back.
 
 **The round-wide press** (`POST /stages/{id}/extend-checkin`, body `{ roundNo }`): the same rule on every online board of the opened round,
-each board its own atomic step (a board that cannot be extended, or whose step throws, never holds up another). It answers
+each board its own atomic step (a board that cannot be extended, or whose step throws, never holds up another). **A refusal writes nothing:** the
+refusal is decided before the board's bridge row is created (`ensureBridgeRow`), and a withdrawn board is skipped, so pressing +5 on a board that
+cannot take it leaves no row behind. It answers
 `{ extended, skipped: { closed, gameStarted, capReached }, notOpenYet, ownBoards, failed, addedMinutes }`. Not-yet-open batches are
 untouched and counted apart; a settled board with no game on file (withdrawn, voided) has nothing to extend and is not counted.
 
@@ -401,8 +408,8 @@ extension. The organiser's Open round view reads the new deadline through `board
 
 **Readers moved.** Every reader of the table in §3.2.1 reads the extension through the board's anchor with no code of its own; the
 batch-anchor source guard requires each anchor to be built with the board's `extraMs`. Two readers are new here (they are not window readers
-but they print or judge the deadline): the arbiter's board list (`checkin`: `canExtend`, `refusal`, `extensionsLeft`, `deadlineAt`, and the
-round's `extendableBoards`) and the extend door's own answer. Each of the 19 has an `[extend-reader:<id>]` test that asks ONE question at
+but they print or judge the deadline): the arbiter's board list (`checkin`: `canExtend`, `refusal`, `extensionsLeft`, `opensAt`, `deadlineAt`, and the
+round's `extendableBoards`; the Open round view carries `extendableBoards` and `extendWindows`, the windows of the boards that only the clock stands in the way of) and the extend door's own answer. Each of the 19 has an `[extend-reader:<id>]` test that asks ONE question at
 ONE instant between the unextended and the extended deadline, so the same question has two right answers and a reader that missed the
 extension gives the wrong one:
 
@@ -420,7 +427,7 @@ extension gives the wrong one:
 | `open-round-view` | `open-round-view.ts` | a round closed at P shows nothing; after the press it is back with the new deadline |
 | `reinvite` | `open-round.ts` "reinvited" skip | a re-open at P invites the extended board and reports the other `window_closed` |
 | `qr-checkin` | `me.ts` `checkInToFixture` | a QR scan keeps a stamp inside the extended window, re-stamps it before |
-| `arbiter-board` | `arbiter.ts` `extendableBoards` | the panel offers a press exactly when the door would accept one |
+| `arbiter-board` | `arbiter.ts` `checkinOf` | the panel offers a press exactly when the door would accept one, and carries the window's `opensAt` and `deadlineAt` |
 | `extend-result` | `checkin-extend.ts` | the answer's deadline is `windowFor`'s own |
 | `create` | `create-game.ts` `createGameIfReady` | `not_ready` on an unextended board at P, runs on an extended one; `not_ready` again at the new deadline exactly |
 | `expires-at` | the `ready` row's `expires_at` | the extended deadline: 0, 1 and the cap's worth of presses |
@@ -428,11 +435,29 @@ extension gives the wrong one:
 | `mint-retry` | `sweep.ts` `mintRetry` | a throttled create is retried past the unextended cap when extended |
 | `expected-end` | `sweep.ts` `expectedEnd` | a never-started ready game counts its expected end from the extended deadline |
 
-**The screens.** The arbiter panel shows "+5 min (N left)" on a board only when the server's own reading says a press would be accepted
-(`checkin.canExtend`), with "Check-in closes HH:MM" beside it; a "+5 min to the round" bar sits at the top of the panel when at least one
+Beside the table, `[opens-at:arbiter]` and `[opens-at:open-round-view]` ask the opening itself through the real loaders: a board of a LATER batch (camera
+required, rank `2 × CHECKIN_BATCH_SIZE`) is `not_open` one ms before its opening and extendable AT it, and each loader passes the stored `staggered`
+flag (a mutant that passes `false` at either site reds its test).
+
+**The screens.** The arbiter panel shows "+5 min (N left)" on a board only when a press would be accepted, with "Check-in closes HH:MM" beside it; a "+5 min to the round" bar sits at the top of the panel when at least one
 board is extendable. The organiser's Open round control (Fixtures tab) shows the same round button while the round is open. The answer reads
 like "Added 5 minutes to 6 boards." followed by one line per reason a board was left alone ("2 boards skipped: game started"), only the
-reasons that happened. The screens never decide the rule: they offer what `extendRefusal` said they could. All copy is in the four locales
+reasons that happened. The screens never decide the rule: they offer what `extendRefusal` said they could, and re-ask only the CLOCK of it.
+
+**Only inside the check-in window (owner, 2026-10-19).** +5 is offered from a board's opening up to, not including, its deadline, to the
+millisecond, and the screens keep that true on a ticking clock and not on the snapshot they were drawn from (the panel's poll is up to 20 s
+apart). The server's snapshot says WHY a press was or was not accepted when it was read; `liveExtendRefusal` (`lib/checkin-extend.ts`) keeps the
+snapshot's word for what a clock cannot change (a game on file, a board that is over, a window that had already closed) and re-judges the window
+from the board's `opensAt` / `deadlineAt` at the viewer's time. A differential test runs it against the server's `extendRefusal` over every board
+state and every later instant. The Open round control, which has no per-board list, is handed the windows (`extendWindows`) and counts those that
+hold the instant. Both screens run on `useExtendClock`, one self-re-arming timer that lands exactly on the next opening or deadline (and, for the
+panel, ticks every 500 ms between), so the button arrives and leaves AT the edge and not at the next tick or poll.
+
+**Words around the button.** Under both +5 buttons a helper line says what a press does and its limits ("Adds 5 minutes while check-in is open. Up to
+3 times per board.", the 5 and the 3 from the constants). Where a board's +5 is not available a short reason stands in its place and the button
+never silently vanishes: "Check-in hasn't opened yet", "Check-in has closed", "Game started", "No extensions left" (a board that is over says
+nothing). A board's answer ("Added 5 minutes to board 3. Check-in now closes 19:14.") names the board's LIVE deadline, never a time that differs
+from the "Check-in closes" line beside it, and starting either press clears the other's answer. All copy is in the four locales
 (`externalPlay.checkinExtend.*`). One request is in flight at a time across the panel and the control.
 
 **Capacity.** The extension only adds `extraMs` to the anchor; batch timing, the gap and the line are untouched, so the capacity load test is

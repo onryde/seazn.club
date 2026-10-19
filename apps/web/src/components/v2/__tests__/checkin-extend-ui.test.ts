@@ -8,23 +8,32 @@ import fr from "@/dictionaries/fr/ui.json";
 import { plural as pluralRuntime, t as tRuntime } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
 import {
+  CHECKIN_EXTEND_MAX,
   CHECKIN_EXTEND_STEP_MINUTES,
   EXTEND_REFUSALS,
   EXTEND_REFUSAL_CODES,
   EXTEND_REFUSAL_KEYS,
   type CheckinExtendRoundResult,
+  type CheckinExtendState,
 } from "@/lib/checkin-extend";
 import {
+  boardExtendOffer,
   codeOf,
   extendBoardLabel,
   extendBoardPath,
   extendBoardSentence,
   extendClosesLine,
   extendFailureText,
+  extendHelperLine,
   extendRoundLabel,
   extendRoundLines,
   extendRoundPath,
+  extendWhyLine,
+  extendedNoticeTime,
   initialRoundExtend,
+  laterIso,
+  linkedExtendDispatch,
+  liveExtendableBoards,
   roundExtendRunner,
   roundExtendUi,
   type ExtendCopy,
@@ -166,5 +175,103 @@ describe("the round press's runner - at most one request on the network", () => 
     expect(refresh).not.toHaveBeenCalled();
     expect(await runner.extend("s1", 1)).toBe(true);
     expect(refresh).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── the ticking-clock pieces (owner, 2026-10-19) ─────────────────────────────────────────────────────────────────────────────────
+describe("what a board's +5 is on a ticking clock", () => {
+  const OPENS = Date.parse("2026-10-19T12:00:00.000Z");
+  const CLOSES = OPENS + 20 * 60_000;
+  const snap = (over: Partial<CheckinExtendState> = {}): CheckinExtendState => ({
+    canExtend: true,
+    refusal: null,
+    extensionsLeft: 2,
+    opensAt: new Date(OPENS).toISOString(),
+    deadlineAt: new Date(CLOSES).toISOString(),
+    ...over,
+  });
+
+  it("boardExtendOffer: no check-in, no offer; a null clock keeps the server's word; a clock re-judges the window", () => {
+    expect(boardExtendOffer(null, OPENS), "the empty case").toBeNull();
+    expect(boardExtendOffer(snap(), null)).toEqual({ refusal: null, offered: true });
+    expect(boardExtendOffer(snap({ canExtend: false, refusal: "not_open" }), null), "no clock: the snapshot's reason").toEqual({ refusal: "not_open", offered: false });
+    expect(boardExtendOffer(snap({ canExtend: false, refusal: "not_open" }), OPENS)).toEqual({ refusal: null, offered: true });
+    expect(boardExtendOffer(snap(), CLOSES)).toEqual({ refusal: "closed", offered: false });
+  });
+
+  it("liveExtendableBoards: the boards the clock still allows; the server's count only while the clock is unknown", () => {
+    const boards = [{ checkin: snap() }, { checkin: snap({ deadlineAt: new Date(OPENS + 60_000).toISOString() }) }, { checkin: null }];
+    expect(liveExtendableBoards([], OPENS, 7), "the empty case: no boards, the clock known").toBe(0);
+    expect(liveExtendableBoards(boards, null, 7), "no clock: the snapshot's count").toBe(7);
+    expect(liveExtendableBoards(boards, OPENS + 59_999, 7)).toBe(2);
+    expect(liveExtendableBoards(boards, OPENS + 60_000, 7), "the second board's deadline: it leaves").toBe(1);
+    expect(liveExtendableBoards(boards, CLOSES, 7)).toBe(0);
+  });
+
+  it("the answer's time is never earlier than the board's own line: the later of the press's and the live deadline", () => {
+    const a = "2026-10-19T12:55:00.000Z";
+    const b = "2026-10-19T13:00:00.000Z";
+    expect(laterIso(a, b)).toBe(b);
+    expect(laterIso(b, a)).toBe(b);
+    expect(laterIso(a, a)).toBe(a);
+    expect(extendedNoticeTime(a, null), "no live board: the press's own").toBe(a);
+    expect(extendedNoticeTime(a, b), "extended since: the live one").toBe(b);
+    expect(extendedNoticeTime(b, a), "the refresh has not landed: the press's own").toBe(b);
+    const sentence = extendBoardSentence(
+      { fixtureId: "f", extensions: 1, extensionsLeft: 2, addedMinutes: 5, deadlineAt: a },
+      3,
+      copyOf(EN, (iso) => iso.slice(11, 16)),
+      b,
+    );
+    expect(sentence, "the sentence names the live time").toContain("13:00");
+    expect(sentence).not.toContain("12:55");
+  });
+
+  it("the helper line carries the step and the cap from the constants; the reason line has words for four refusals and silence for a board that is over", () => {
+    expect(extendHelperLine(C)).toBe(`Adds ${CHECKIN_EXTEND_STEP_MINUTES} minutes while check-in is open. Up to ${CHECKIN_EXTEND_MAX} times per board.`);
+    const said = EXTEND_REFUSALS.map((r) => extendWhyLine(r, C));
+    expect(said.filter((x) => x !== null), "anti-vacuity: four reasons").toHaveLength(4);
+    expect(extendWhyLine("not_playable", C)).toBeNull();
+    expect(said.filter((x) => x !== null).sort()).toEqual(["Check-in hasn't opened yet", "Check-in has closed", "Game started", "No extensions left"].sort());
+  });
+
+  it("the round reducer's clear: drops the answer and nothing else, and is a no-op with nothing to drop", () => {
+    const answered = { busy: false, notice: { kind: "failed", code: "X" } } as const;
+    expect(roundExtendUi(answered, { type: "clear" })).toEqual({ busy: false, notice: null });
+    const idle = initialRoundExtend();
+    expect(roundExtendUi(idle, { type: "clear" })).toBe(idle);
+    expect(roundExtendUi({ busy: true, notice: null }, { type: "clear" }).busy).toBe(true);
+  });
+});
+
+describe("linkedExtendDispatch - the two presses clear each other's answer", () => {
+  const rig = () => {
+    const board = vi.fn();
+    const round = vi.fn();
+    return { board, round, ...linkedExtendDispatch<{ type: string }>(board, round) };
+  };
+
+  it("a board's press starting clears the round's answer; its other actions touch nothing else", () => {
+    const l = rig();
+    l.forBoard({ type: "extend" });
+    expect(l.round.mock.calls, "the round's answer is cleared").toEqual([[{ type: "clear" }]]);
+    expect(l.board.mock.calls, "and the board's own action still goes through").toEqual([[{ type: "extend" }]]);
+    l.round.mockClear();
+    l.forBoard({ type: "resync" });
+    l.forBoard({ type: "extendDone" });
+    expect(l.round.mock.calls, "only the START of an extend clears the other").toEqual([]);
+    expect(l.board.mock.calls.length).toBe(3);
+  });
+
+  it("the round's press starting clears the board's answer, and only its start does", () => {
+    const l = rig();
+    l.forRound({ type: "extend" });
+    expect(l.board.mock.calls).toEqual([[{ type: "clearExtend" }]]);
+    expect(l.round.mock.calls).toEqual([[{ type: "extend" }]]);
+    l.board.mockClear();
+    l.forRound({ type: "extendDone", outcome: { ok: false, code: "X" } });
+    l.forRound({ type: "clear" });
+    expect(l.board.mock.calls, "an answer arriving, or a clear, does not clear the board's").toEqual([]);
+    expect(l.round.mock.calls.length).toBe(3);
   });
 });

@@ -208,8 +208,9 @@ export function boardStateWord(state: ArbiterBoard["state"], f: Fmt): string {
 
 /** What an answered decision request says, by its notice (arbiter-decision.ts). */
 /** `over`: the board's game is over, so a close was a REVIEW, never a go-on (R4, T16 fix round 1) — the panel and the
- *  queue both say so in the queue's words. */
-export function noticeSentence(n: ArbiterNotice, f: Fmt, over = false): string {
+ *  queue both say so in the queue's words. `liveDeadlineAt`: the board's deadline as the screen reads it NOW, so an "extended" answer
+ *  never names a time that differs from the board's own "Check-in closes" line (spec §3.2.2). */
+export function noticeSentence(n: ArbiterNotice, f: Fmt, over = false, liveDeadlineAt: string | null = null): string {
   switch (n.kind) {
     case "resynced":
       return n.adopted === 0 ? f.t("arbiter.notice.resyncedNone") : f.plural("arbiter.notice.resynced", n.adopted);
@@ -249,7 +250,7 @@ export function noticeSentence(n: ArbiterNotice, f: Fmt, over = false): string {
                         ? f.t("arbiter.notice.noResultChanged")
                         : f.t("arbiter.notice.failed");
     case "extended":
-      return extendBoardSentence(n.result, n.boardNo, f);
+      return extendBoardSentence(n.result, n.boardNo, f, liveDeadlineAt);
     case "extend_failed":
       return extendFailureText(n.code, f);
     case "overridden":

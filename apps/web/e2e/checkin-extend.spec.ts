@@ -13,7 +13,11 @@
  *  2. The ROUND: "+5 min to the round" on the Fixtures tab's Open round control extends the open boards and says why it left one
  *     alone (a game is on it); the arbiter panel's own round bar does the same and stops offering itself at the cap.
  *  3. The bar: both surfaces with their answers painted, at 320, 768 and 1280 - no sideways scroll, every button's whole label,
- *     a 44px target.
+ *     a 44px target. The answers are ASSERTED: a board press then a round press leaves only the round's answer (and the other way
+ *     round), and the time a board's answer names is the time the board's own "Check-in closes" line names.
+ *  4. The window's edges, LIVE (owner, 2026-10-19: +5 only inside the check-in window): with no reload and no poll to lean on, the
+ *     button arrives AT a board's opening and leaves AT its deadline, with the short reason ("Check-in hasn't opened yet" /
+ *     "Check-in has closed") standing in its place.
  *
  * Expected copy comes from the dictionary and the numbers from lib/checkin-extend.ts - never from the code under test.
  */
@@ -21,6 +25,7 @@ import { test, expect, type Locator, type Page } from "@playwright/test";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { CHECKIN_EXTEND_MAX, CHECKIN_EXTEND_STEP_MINUTES, CHECKIN_EXTEND_STEP_MS } from "../src/lib/checkin-extend";
+import { DEADLINE_AFTER_MS, WINDOW_OPEN_LEAD_MS } from "../src/server/external-play/window";
 import { apiJson, withDb } from "./helpers";
 import { fill, longName, roundGameSql, seedOnlineRound, uiEn, type SeededRound } from "./match-room-kit";
 import { mintMatchRoomLink } from "./match-room-link";
@@ -50,6 +55,13 @@ function lineRe(key: string, vars: Record<string, string | number> = {}): RegExp
       .join(""),
   );
 }
+const helperLine = fill("externalPlay.checkinExtend.helper", { minutes: CHECKIN_EXTEND_STEP_MINUTES, max: CHECKIN_EXTEND_MAX });
+/** The HH:MM in a sentence. */
+const hm = (text: string): string => {
+  const m = /(\d{1,2}:\d{2})/.exec(text);
+  if (!m) throw new Error(`no HH:MM in ${JSON.stringify(text)}`);
+  return m[1]!;
+};
 const boardLabel = (left: number) => fill("externalPlay.checkinExtend.board", { minutes: CHECKIN_EXTEND_STEP_MINUTES, left });
 const roundLabel = fill("externalPlay.checkinExtend.round", { minutes: CHECKIN_EXTEND_STEP_MINUTES });
 
@@ -159,6 +171,8 @@ test.describe("the check-in extension", () => {
     const press = page.getByTestId("arbiter-extend-board");
     await expect(press, "the check-in is open, nobody is on a game: a press is offered, counting its presses").toHaveText(boardLabel(CHECKIN_EXTEND_MAX));
     await expect(page.getByTestId("arbiter-extend-closes")).toHaveText(lineRe("externalPlay.checkinExtend.closesAt"));
+    await expect(page.getByTestId("arbiter-extend-helper"), "under the button: what a press does and its limits").toHaveText(helperLine);
+    await expect(page.getByTestId("arbiter-extend-round-helper"), "and under the round button").toContainText(helperLine);
 
     const answer = page.waitForResponse((q) => q.request().method() === "POST" && q.url().endsWith(`/fixtures/${b1.fixtureId}/external-play/extend-checkin`));
     await press.click();
@@ -216,6 +230,7 @@ test.describe("the check-in extension", () => {
     // The arbiter panel: board 1 (a game is on it) offers no press; board 2 offers two more, and the round bar presses it again.
     await page.goto(r.arbiterPath);
     await expect(page.getByTestId("arbiter-extend-board"), "board 1 has a game on it: no per-board press").toHaveCount(0);
+    await expect(page.getByTestId("arbiter-extend-why"), "... and the reason stands in its place, not a silent gap").toHaveText(uiEn["externalPlay.checkinExtend.why.gameStarted"]!);
     await expect(page.getByTestId("arbiter-extend-round-cta")).toHaveText(roundLabel);
     await page.goto(`${r.arbiterPath}?fixture=${b2.fixtureId}`);
     await expect(page.getByTestId("arbiter-extend-board")).toHaveText(boardLabel(CHECKIN_EXTEND_MAX - 1));
@@ -229,6 +244,7 @@ test.describe("the check-in extension", () => {
     // At the cap nothing is left to extend: the bar and the per-board press go, the last answer stays.
     await expect(page.getByTestId("arbiter-extend-round-cta")).toHaveCount(0);
     await expect(page.getByTestId("arbiter-extend-board")).toHaveCount(0);
+    await expect(page.getByTestId("arbiter-extend-why"), "the press went, and says why").toHaveText(uiEn["externalPlay.checkinExtend.why.capReached"]!);
     await expect(page.getByTestId("arbiter-extend-round-notice")).toContainText(fill("externalPlay.checkinExtend.notice.round.one", { minutes: CHECKIN_EXTEND_STEP_MINUTES, count: 1 }));
     expect((await auditRows(b2.fixtureId)).length).toBe(CHECKIN_EXTEND_MAX);
 
@@ -248,39 +264,112 @@ test.describe("the check-in extension", () => {
     const r = await seedOnlineRound(request, [longName(), longName(), "Chen Wei", "Dara Okafor"]);
     const b1 = r.boards[0]!;
 
-    // The arbiter panel: a board press and the round bar, with the board's answer and the round's both painted.
+    // The arbiter panel: a board press, then the round bar. Each answer is ASSERTED, and only one is ever on screen: starting the other
+    // press clears the first (its counts and its time are about deadlines the second has just moved).
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto(`${r.arbiterPath}?fixture=${b1.fixtureId}`);
+    const closes = page.getByTestId("arbiter-extend-closes");
+    const boardNotice = decision(page).getByRole("status");
+    const roundNotice = page.getByTestId("arbiter-extend-round-notice");
+    await expect(closes).toHaveAttribute("data-deadline-at", /.+/);
+    const base = Date.parse((await closes.getAttribute("data-deadline-at"))!);
+    const deadlineIs = (presses: number) => expect(closes, `board 1's closing time after ${presses} press(es)`).toHaveAttribute("data-deadline-at", new Date(base + presses * CHECKIN_EXTEND_STEP_MS).toISOString());
+
     await page.getByTestId("arbiter-extend-board").click();
-    await expect(decision(page).getByRole("status")).toHaveText(lineRe("externalPlay.checkinExtend.notice.board", { minutes: CHECKIN_EXTEND_STEP_MINUTES, n: 1 }));
-    await page.getByTestId("arbiter-extend-round-cta").click();
-    await expect(page.getByTestId("arbiter-extend-round-notice")).toContainText(
-      fill("externalPlay.checkinExtend.notice.round.other", { minutes: CHECKIN_EXTEND_STEP_MINUTES, count: 2 }),
-    );
-    // Board 1 has had two presses and has one left; the board's own answer is still on screen beside the round's.
-    await expect(page.getByTestId("arbiter-extend-board")).toHaveText(boardLabel(CHECKIN_EXTEND_MAX - 2));
-    await shoot(page, "arbiter-panel-extend");
+    await expect(boardNotice).toHaveText(lineRe("externalPlay.checkinExtend.notice.board", { minutes: CHECKIN_EXTEND_STEP_MINUTES, n: 1 }));
+    await deadlineIs(1);
+    // The time the answer names IS the time the board's own line names (the refresh may land a moment after the answer: wait for it).
+    await expect.poll(async () => hm(await boardNotice.innerText()), { message: "the board's answer and its 'Check-in closes' line say the same time" }).toBe(hm(await closes.innerText()));
+    await expect(roundNotice, "no round answer yet").toHaveText("");
+    await shoot(page, "arbiter-panel-extend-board");
     expect(
-      await barHolds(
-        page,
-        () => page.locator('[data-testid="arbiter-extend-board"], [data-testid="arbiter-extend-round-cta"]'),
-        "arbiter panel",
-      ),
+      await barHolds(page, () => page.locator('[data-testid="arbiter-extend-board"], [data-testid="arbiter-extend-round-cta"]'), "arbiter panel, board answer"),
       "anti-vacuity: widths x (two buttons + page)",
     ).toBe(WIDTHS.length * 3);
 
-    // The Fixtures tab: the control with its round press and, after a press, its answer (board 2 is still extendable, so the press stays).
+    // Board press, then ROUND press: only the round's answer is left, with its counts; the board's is gone.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.getByTestId("arbiter-extend-round-cta").click();
+    await expect(roundNotice).toContainText(fill("externalPlay.checkinExtend.notice.round.other", { minutes: CHECKIN_EXTEND_STEP_MINUTES, count: 2 }));
+    await expect(boardNotice, "the board's answer is cleared by the round press").toHaveText("");
+    await deadlineIs(2);
+    await expect(page.getByTestId("arbiter-extend-board")).toHaveText(boardLabel(CHECKIN_EXTEND_MAX - 2));
+    await shoot(page, "arbiter-panel-extend");
+    expect(
+      await barHolds(page, () => page.locator('[data-testid="arbiter-extend-board"], [data-testid="arbiter-extend-round-cta"]'), "arbiter panel, round answer"),
+      "anti-vacuity: widths x (two buttons + page)",
+    ).toBe(WIDTHS.length * 3);
+
+    // ... and ROUND press, then BOARD press: the board's answer, naming the board's LIVE closing time; the round's is gone.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.getByTestId("arbiter-extend-board").click();
+    await expect(boardNotice).toHaveText(lineRe("externalPlay.checkinExtend.notice.board", { minutes: CHECKIN_EXTEND_STEP_MINUTES, n: 1 }));
+    await expect(roundNotice, "the round's answer is cleared by the board press").toHaveText("");
+    await deadlineIs(3);
+    await expect.poll(async () => hm(await boardNotice.innerText()), { message: "the answer names the board's live closing time" }).toBe(hm(await closes.innerText()));
+    expect(await extensionOf(b1.fixtureId)).toEqual({ ms: 3 * CHECKIN_EXTEND_STEP_MS, n: 3 });
+
+    // The Fixtures tab: the control with its round press and, after a press, its answer. Board 1 is at the cap, so the press reaches
+    // board 2 only (its second) and says why board 1 was left alone; the helper line stands under the button.
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto(r.fixturesTab);
+    await expect(desk(page).getByTestId("open-round-extend-helper")).toContainText(helperLine);
     await desk(page).getByTestId("open-round-extend-cta").click();
-    // Board 1's third press (the cap) and board 2's second: both are extended, none skipped.
-    await expect(desk(page).getByTestId("open-round-extend-notice")).toContainText(
-      fill("externalPlay.checkinExtend.notice.round.other", { minutes: CHECKIN_EXTEND_STEP_MINUTES, count: 2 }),
-    );
+    const fixturesNotice = desk(page).getByTestId("open-round-extend-notice");
+    await expect(fixturesNotice).toContainText(fill("externalPlay.checkinExtend.notice.round.one", { minutes: CHECKIN_EXTEND_STEP_MINUTES, count: 1 }));
+    await expect(fixturesNotice).toContainText(fill("externalPlay.checkinExtend.skip.capReached.one", { count: 1 }));
+    expect(await extensionOf(r.boards[1]!.fixtureId)).toEqual({ ms: 2 * CHECKIN_EXTEND_STEP_MS, n: 2 });
     await shoot(page, "fixtures-tab-extend");
     expect(
       await barHolds(page, () => desk(page).getByTestId("open-round-extend-cta"), "fixtures tab"),
       "anti-vacuity: widths x (button + page)",
     ).toBe(WIDTHS.length * 2);
+  });
+  test("the window's edges, live: the button arrives AT a board's opening and leaves AT its deadline, with no reload - and a reason stands in its place", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(240_000);
+    const r = await seedOnlineRound(request, NAMES());
+    const b1 = r.boards[0]!;
+    const stampOpenedAt = (openedAt: Date) =>
+      withDb(async (sql) => {
+        await sql`update stage_round_opens set opened_at = ${openedAt} where stage_id = ${r.stageId} and round_no = 1`;
+      });
+    const press = page.getByTestId("arbiter-extend-board");
+    const roundPress = page.getByTestId("arbiter-extend-round-cta");
+    const why = page.getByTestId("arbiter-extend-why");
+    await page.setViewportSize({ width: 1280, height: 900 });
+
+    // THE OPENING. Batch 0 opens WINDOW_OPEN_LEAD_MS before its anchor: stamp the round so that happens a few seconds after the page loads.
+    const OPENS_IN_MS = 20_000;
+    const opensAt = Date.now() + OPENS_IN_MS;
+    await stampOpenedAt(new Date(opensAt + WINDOW_OPEN_LEAD_MS));
+    await page.goto(`${r.arbiterPath}?fixture=${b1.fixtureId}`);
+    await expect(why, "before the opening: the reason, not a silent gap").toHaveText(uiEn["externalPlay.checkinExtend.why.notOpen"]!);
+    await expect(press).toHaveCount(0);
+    await expect(roundPress).toHaveCount(0);
+    expect(Date.now(), "premise: the page loaded before the opening").toBeLessThan(opensAt);
+    await expect(press, "the button arrives with the opening").toBeVisible({ timeout: OPENS_IN_MS + 15_000 });
+    const arrived = Date.now();
+    expect(arrived, "not before the opening").toBeGreaterThanOrEqual(opensAt - 50);
+    expect(arrived - opensAt, "at the opening, not at the next 20 s poll").toBeLessThan(3_000);
+    await expect(why, "the reason went with it").toHaveCount(0);
+    await expect(roundPress, "and the round's button came with it").toBeVisible();
+
+    // THE DEADLINE. Stamp the round so the board's deadline (DEADLINE_AFTER_MS after the anchor) is a few seconds ahead; reload to take
+    // the new snapshot, then watch the button leave on its own.
+    const CLOSES_IN_MS = 20_000;
+    const closesAt = Date.now() + CLOSES_IN_MS;
+    await stampOpenedAt(new Date(closesAt - DEADLINE_AFTER_MS));
+    await page.goto(`${r.arbiterPath}?fixture=${b1.fixtureId}`);
+    await expect(press, "inside the window: offered").toBeVisible();
+    expect(Date.now(), "premise: the page loaded before the deadline").toBeLessThan(closesAt - 3_000);
+    await expect(press, "the button leaves with the deadline").toHaveCount(0, { timeout: CLOSES_IN_MS + 15_000 });
+    const left = Date.now();
+    expect(left, "not before the deadline").toBeGreaterThanOrEqual(closesAt - 50);
+    expect(left - closesAt, "at the deadline, not at the next 20 s poll").toBeLessThan(3_000);
+    await expect(why).toHaveText(uiEn["externalPlay.checkinExtend.why.closed"]!);
+    await expect(roundPress, "the round's button leaves with the last board's deadline").toHaveCount(0);
   });
 });

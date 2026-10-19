@@ -59,6 +59,8 @@ export type ArbiterDecisionAction =
   | { type: "settle"; boardId: string }
   | { type: "extend"; boardId: string }
   | { type: "toggleSettle" }
+  /** The round-wide "+5 min" started: a board's own "+5 min" answer (and its failure) is no longer about what is there. */
+  | { type: "clearExtend" }
   | { type: "resyncDone"; boardId: string; outcome: { ok: true; read: boolean; adopted: number } | Failed }
   | { type: "overrideDone"; boardId: string; outcome: { ok: true } | Failed }
   | { type: "goOnDone"; boardId: string; outcome: { ok: true; closed: number; stillOpen: number } | Failed }
@@ -95,6 +97,8 @@ export function arbiterDecision(s: ArbiterDecisionState, a: ArbiterDecisionActio
     case "toggleSettle":
       if (s.boardId === null) return s;
       return { ...s, settleOpen: !s.settleOpen };
+    case "clearExtend":
+      return s.notice !== null && (s.notice.kind === "extended" || s.notice.kind === "extend_failed") ? { ...s, notice: null } : s;
     case "resyncDone":
     case "overrideDone":
     case "goOnDone":

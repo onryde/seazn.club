@@ -22,8 +22,10 @@ import Link from "@/components/ui/console-link";
 import { routes } from "@/lib/routes";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { boardIsOver, offersSettle, type ArbiterBoard, type ArbiterFlag, type ArbiterRound } from "@/lib/arbiter-view";
+import { extendEdgesOf, watchedWindows } from "@/lib/checkin-extend";
 import { formatClock, remainingMs } from "@/components/public-site/match-room/clock-math";
 import { browserBandPollDeps, startBandPolling } from "./desk/band-poll";
+import { useExtendClock } from "./use-extend-clock";
 import {
   arbiterDecision,
   decisionRunner,
@@ -33,12 +35,17 @@ import {
   type SettleChoice,
 } from "./arbiter-decision";
 import {
+  boardExtendOffer,
   extendBoardLabel,
   extendClosesLine,
   extendFailureText,
+  extendHelperLine,
   extendRoundLabel,
   extendRoundLines,
+  extendWhyLine,
   initialRoundExtend,
+  linkedExtendDispatch,
+  liveExtendableBoards,
   roundExtendRunner,
   roundExtendUi,
   type RoundExtendState,
@@ -237,7 +244,7 @@ export function ArbiterScreen(p: ArbiterScreenProps) {
 
       {p.requested === null && p.round !== null && <RoundNotes round={p.round} slugs={p.slugs} f={f} />}
       {p.requested === null && p.round !== null && (
-        <RoundExtend round={p.round} state={p.roundExtend} requestBusy={p.decision.busy !== null} onExtend={p.on.extendRound} f={f} />
+        <RoundExtend round={p.round} state={p.roundExtend} requestBusy={p.decision.busy !== null} nowMs={p.nowMs} onExtend={p.on.extendRound} f={f} />
       )}
 
       {p.requested !== null ? (
@@ -344,7 +351,7 @@ export function ArbiterScreen(p: ArbiterScreenProps) {
                 <p className={`m-0 text-[13px] ${SOFT}`}>{f.t("arbiter.flags.none")}</p>
               )}
             </section>
-            <Decision board={board} decision={p.decision} roundBusy={p.roundExtend.busy} slugs={p.slugs} on={p.on} f={f} headingId={ids.decide} />
+            <Decision board={board} decision={p.decision} roundBusy={p.roundExtend.busy} nowMs={p.nowMs} slugs={p.slugs} on={p.on} f={f} headingId={ids.decide} />
             {showsOutageCard(board, p.video) && (
               <section aria-labelledby={ids.outage} className="order-6 flex min-w-0 flex-col gap-2 rounded-xl border border-[#f5d27a] bg-[#fef3c7] p-3 text-[#713f12]">
                 <span className="text-[11px] font-semibold tracking-[0.06em] uppercase">{f.t("arbiter.outage.eyebrow")}</span>
@@ -410,26 +417,30 @@ function RoundNotes({ round, slugs, f }: { round: ArbiterRound; slugs: ArbiterSc
 
 /** Spec §3.2.2: "+5 min to the round" at the top of the panel - one press gives every board of the round whose check-in is open
  *  five more minutes, and the answer says how many and why the rest were left alone. Offered while at least one board would
- *  accept it (the server's own count, `round.extendableBoards`) and, once pressed, for as long as its answer is on screen. */
+ *  accept it - the server's own reading of each board (`checkin.refusal`), re-asked of the TICKING clock (owner, 2026-10-19: +5 only
+ *  inside the check-in window, to the millisecond) - and, once pressed, for as long as its answer is on screen. */
 function RoundExtend({
   round,
   state,
   requestBusy,
+  nowMs,
   onExtend,
   f,
 }: {
   round: ArbiterRound;
   state: RoundExtendState;
   requestBusy: boolean;
+  nowMs: number | null;
   onExtend: () => void;
   f: Fmt;
 }) {
   const lines =
     state.notice === null ? [] : state.notice.kind === "answered" ? extendRoundLines(state.notice.result, f) : [extendFailureText(state.notice.code, f)];
-  if (round.extendableBoards === 0 && lines.length === 0 && !state.busy) return null;
+  const reach = liveExtendableBoards(round.boards, nowMs, round.extendableBoards);
+  if (reach === 0 && lines.length === 0 && !state.busy) return null;
   return (
     <div data-testid="arbiter-extend-round" className="mx-auto flex w-full max-w-[1232px] min-w-0 flex-col items-start gap-1.5 px-4 pt-3 lg:px-6 lg:pt-5">
-      {(round.extendableBoards > 0 || state.busy) && (
+      {(reach > 0 || state.busy) && (
         <>
           <button
             type="button"
@@ -441,9 +452,10 @@ function RoundExtend({
           >
             {state.busy ? f.t("externalPlay.checkinExtend.busy") : extendRoundLabel(f)}
           </button>
-          {round.extendableBoards > 0 && (
-            <p className={`m-0 text-xs leading-[1.45] ${MUTED}`}>{f.plural("externalPlay.checkinExtend.roundHint", round.extendableBoards)}</p>
-          )}
+          <p data-testid="arbiter-extend-round-helper" className={`m-0 text-xs leading-[1.45] ${MUTED}`}>
+            {extendHelperLine(f)}
+            {reach > 0 && <> {f.plural("externalPlay.checkinExtend.roundHint", reach)}</>}
+          </p>
         </>
       )}
       <div role="status" data-testid="arbiter-extend-round-notice" className={`flex min-w-0 flex-col gap-0.5 text-[13px] leading-[1.45] ${SOFT}`}>
@@ -733,6 +745,7 @@ function Decision({
   board,
   decision,
   roundBusy,
+  nowMs,
   slugs,
   on,
   f,
@@ -742,6 +755,8 @@ function Decision({
   decision: ArbiterDecisionState;
   /** The round-wide "+5 min" is in flight: one request at a time across the panel. */
   roundBusy: boolean;
+  /** The viewer's ticking clock (null before it is known): the "+5 min" is offered inside the check-in window and nowhere else. */
+  nowMs: number | null;
   slugs: ArbiterScreenProps["slugs"];
   on: ArbiterScreenProps["on"];
   f: Fmt;
@@ -759,9 +774,13 @@ function Decision({
   // The reducer owns "a notice belongs to the board on screen" (R4: a switch
   // clears it, an answer for the board left behind shows nothing).
   const notice = decision.notice;
-  // Spec §3.2.2: offered only on what the server's own reading of the board said it would accept now.
-  const extend = board.checkin !== null && board.checkin.canExtend ? board.checkin : null;
-  if (!canResync && !canGoOn && !canSettle && extend === null && notice === null) return null;
+  // Spec §3.2.2: offered only on what the server's own reading of the board said it would accept, re-asked of the ticking clock: the
+  // snapshot is up to a poll old, and "+5 min" exists only between the board's opening and its deadline (owner, 2026-10-19). Where it
+  // is not offered, a short reason stands in its place (never a button that silently vanishes).
+  const offer = boardExtendOffer(board.checkin, nowMs);
+  const extend = offer !== null && offer.offered ? board.checkin : null;
+  const why = offer !== null && offer.refusal !== null ? extendWhyLine(offer.refusal, f) : null;
+  if (!canResync && !canGoOn && !canSettle && extend === null && why === null && notice === null) return null;
   const busy = decision.busy !== null || roundBusy;
   const guidance = settleGuidance(board);
   return (
@@ -785,7 +804,15 @@ function Decision({
           <p data-testid="arbiter-extend-closes" data-deadline-at={extend.deadlineAt} className={`m-0 text-xs leading-[1.45] ${MUTED}`}>
             {extendClosesLine(extend.deadlineAt, f)}
           </p>
+          <p data-testid="arbiter-extend-helper" className={`m-0 text-xs leading-[1.45] ${MUTED}`}>
+            {extendHelperLine(f)}
+          </p>
         </>
+      )}
+      {why !== null && offer !== null && (
+        <p data-testid="arbiter-extend-why" data-why={offer.refusal} className={`m-0 text-[13px] leading-[1.45] ${SOFT}`}>
+          {why}
+        </p>
       )}
       {canResync && (
         <button type="button" onClick={on.resync} disabled={busy} aria-busy={decision.busy?.kind === "resync" || undefined} className={BUTTON_QUIET}>
@@ -868,7 +895,7 @@ function Decision({
         </>
       )}
       <p role="status" className={`m-0 min-h-0 text-[13px] leading-[1.45] ${SOFT}`}>
-        {notice ? noticeSentence(notice, f, over) : null}
+        {notice ? noticeSentence(notice, f, over, board.checkin?.deadlineAt ?? null) : null}
       </p>
     </section>
   );
@@ -924,18 +951,18 @@ export function ArbiterPanel({
     if (firstBoard !== null && firstBoard !== decision.boardId) dispatch({ type: "select", boardId: firstBoard });
   }
   const board = round?.boards.find((b) => b.fixtureId === decision.boardId) ?? null;
+  // The round's "+5 min" answer is about the round it was given for: a different round on screen (a newer open lands, back/forward)
+  // starts clean - the same previous-props pattern as the target above.
+  const roundKey = round === null ? null : `${round.stageId}:${round.roundNo}`;
+  const [seenRound, setSeenRound] = useState(roundKey);
+  if (seenRound !== roundKey) {
+    setSeenRound(roundKey);
+    dispatchRound({ type: "clear" });
+  }
 
-  // The viewer's clock: null on the server and the first client render.
-  const [nowMs, setNowMs] = useState<number | null>(null);
-  useEffect(() => {
-    const read = () => setNowMs(Date.now());
-    const first = setTimeout(read, 0);
-    const id = setInterval(read, 500);
-    return () => {
-      clearTimeout(first);
-      clearInterval(id);
-    };
-  }, []);
+  // The viewer's clock: null on the server and the first client render. It ticks every 500 ms (the player clocks run on it) and
+  // lands exactly on each board's check-in opening and deadline, where the "+5 min" arrives and leaves (owner, 2026-10-19).
+  const nowMs = useExtendClock(true, extendEdgesOf(watchedWindows(round?.boards.map((b) => b.checkin) ?? [])), true);
 
   // The round's boards move without us (moves, results, flags): the desk's
   // own poll, paused while the tab is hidden.
@@ -1013,25 +1040,29 @@ export function ArbiterPanel({
                   ? join.view
                   : { kind: switchingFrom(join?.key ?? null, board.fixtureId, side) ? "switching" : "connecting" };
 
+  // Any extend action starting clears the OTHER extend answer too (spec §3.2.2): a round answer's counts and a board's time are no
+  // longer about what is on screen once the other has moved the deadlines. (`dispatch` and `dispatchRound` are stable.)
+  const linked = useMemo(() => linkedExtendDispatch<ArbiterDecisionAction>(dispatch, dispatchRound), [dispatch, dispatchRound]);
+
   const runner = useMemo(
     () =>
       decisionRunner({
-        dispatch: (a: ArbiterDecisionAction) => dispatch(a),
+        dispatch: linked.forBoard,
         post: (path, body) => apiV1(path, { method: "POST", ...(body === undefined ? {} : { json: body }) }),
         refresh: () => router.refresh(),
         overrideNote: ARBITER_OVERRIDE_NOTE,
       }),
-    [router],
+    [router, linked],
   );
 
   const roundRunner = useMemo(
     () =>
       roundExtendRunner({
-        dispatch: dispatchRound,
+        dispatch: linked.forRound,
         post: (path, body) => apiV1(path, { method: "POST", ...(body === undefined ? {} : { json: body }) }),
         refresh: () => router.refresh(),
       }),
-    [router],
+    [router, linked],
   );
 
   const select = useCallback(
