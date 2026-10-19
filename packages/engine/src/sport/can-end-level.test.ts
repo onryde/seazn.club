@@ -63,7 +63,10 @@ function kindsOver(m: AnySportModule, cfg: Record<string, unknown>): { decided: 
 
 // One row = one decider configuration of one sport. The cfg overrides are INPUTS (which switches to throw); what each
 // row proves is read from the fold.
-interface Row { readonly sport: string; readonly name: string; readonly cfg: Record<string, unknown>; readonly canEnd: boolean }
+// `raw` rows are played under their cfg as parsed, with no bracket overlay: the setups the overlay would hide (carrom's
+// drawn-game house rule, a chess match with no tie-break at all). They are what a TABLE stage plays, and the declaration
+// answers for them too.
+interface Row { readonly sport: string; readonly name: string; readonly cfg: Record<string, unknown>; readonly canEnd: boolean; readonly raw?: true }
 const OFF = { enabled: false, halfMinutes: 15 } as const;
 const ET = { enabled: true, halfMinutes: 15 } as const;
 const PENS = { attempts: 5, suddenDeath: true } as const;
@@ -79,10 +82,12 @@ const ROWS: readonly Row[] = [
   { sport: "icehockey", name: "overtime then shootout", cfg: { overtime: SD_OT, shootout: PENS }, canEnd: false },
   { sport: "hockey", name: "no shootout", cfg: { shootout: null }, canEnd: true },
   { sport: "hockey", name: "shootout", cfg: { shootout: PENS }, canEnd: false },
-  { sport: "carrom", name: "extra board (the bracket overlay forces it)", cfg: { tieBoard: "draw" }, canEnd: false },
+  { sport: "carrom", name: "extra board (the bracket overlay forces it over a drawn-game division)", cfg: { tieBoard: "draw" }, canEnd: false },
+  { sport: "carrom", name: "drawn game as configured, no overlay: the tie stands", cfg: { tieBoard: "draw" }, canEnd: true, raw: true },
   { sport: "boardgame", name: "tie-break rungs absent: every rung is played", cfg: {}, canEnd: false },
   { sport: "boardgame", name: "one rung", cfg: { tiebreakRungs: ["blitz"] }, canEnd: false },
   { sport: "boardgame", name: "no rungs: a drawn game stays level", cfg: { tiebreakRungs: [] }, canEnd: true },
+  { sport: "boardgame", name: "no tie-break played at all, no overlay: a draw stands", cfg: { tiebreak: false }, canEnd: true, raw: true },
   { sport: "cricket", name: "no super over", cfg: { ballsPerInnings: 30, superOver: false }, canEnd: true },
   { sport: "cricket", name: "super over repeated until decided", cfg: { ballsPerInnings: 30, superOver: true, superOverStillTied: "repeat" }, canEnd: false },
 ];
@@ -115,7 +120,7 @@ describe("canEndLevel (M-3): the engine says which bracket decider setups can st
   for (const row of ROWS) {
     it(`${row.sport}: ${row.name} -> canEndLevel ${String(row.canEnd)}, and the folds agree`, () => {
       const m = sport(row.sport);
-      const cfg = bracketCfg(m, row.cfg);
+      const cfg = row.raw === true ? (m.configSchema.parse(row.cfg) as Record<string, unknown>) : bracketCfg(m, row.cfg);
       expect(m.canEndLevel!(cfg as never), "the declaration").toBe(row.canEnd);
       const { decided, level } = kindsOver(m, cfg);
       expect(decided, "the generator reached an outcome (anti-vacuity)").toBeGreaterThan(SEEDS / 4);
