@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { TAG, apiJson, activeOrg, loginUi } from "./helpers";
+import { TAG, apiJson, activeOrg, loginUi, mintEmailClaimPathBySql } from "./helpers";
 
 // PROMPT-53 acceptance: invite → claim → RSVP on /me → organiser sees the
 // chip in the lineup picker → QR self-check-in marks presence. Consent flip
@@ -22,6 +22,9 @@ interface MyFixtureOut {
   availability: { status: string; note: string | null } | null;
   checked_in_at: string | null;
 }
+
+/** Explicitly no session: the project's `use.storageState` is the organiser's, and these steps are about a visitor who has none. */
+const SIGNED_OUT = { storageState: { cookies: [], origins: [] } };
 
 test.describe("player accounts (PROMPT-53)", () => {
   test.describe.configure({ mode: "serial" });
@@ -260,5 +263,101 @@ test.describe("player accounts (PROMPT-53)", () => {
     await page.goto("/me");
     await expect(page.getByTestId("run-your-own")).toHaveCount(0);
     await expect(page.locator('a[href="/orgs/new"]')).toHaveCount(0);
+  });
+
+  // Claiming from the INVITE EMAIL signs the player in, in one tap (V464: a claim has two secrets — the
+  // organiser's console link, and the one that only ever goes into the email). Cleo is invited through the
+  // REAL route; the mail's link is stood in by mintEmailClaimPathBySql (see its doc: the mail is not
+  // capturable and its secret is never returned by an API — the producer → mail seam is pinned in
+  // claim-invites/__tests__/email-secret.test.ts). Each step below opens a FRESH signed-out context.
+  test.describe("emailed link signs in (one tap)", () => {
+    const cleoEmail = `delivered+e2e-cleo-${TAG}@resend.dev`;
+    let cleo: Person;
+    let consoleUrl: string;
+    let emailPath: string;
+
+    test("organiser invites Cleo: the console link is returned, the emailed one is not", async ({ request }) => {
+      cleo = (
+        await apiJson<Person>(request, "/api/v1/persons", "POST", { full_name: `Cleo ${TAG}`, consent: {} })
+      ).data!;
+      const invite = await apiJson<Record<string, unknown>>(
+        request,
+        `/api/v1/persons/${cleo.id}/claim-invites`,
+        "POST",
+        { email: cleoEmail },
+      );
+      expect(invite.status).toBe(201);
+      consoleUrl = invite.data!.claim_url as string;
+      expect(consoleUrl).toContain("/claim/pc_");
+      emailPath = await mintEmailClaimPathBySql(cleo.id);
+      expect(emailPath).toContain("/claim/pc_");
+      expect(consoleUrl).not.toContain(emailPath);
+      // The response names no field for the emailed link, whatever it is called.
+      expect(Object.keys(invite.data!).filter((k) => /email_?(token|secret|claim)/i.test(k))).toEqual([]);
+    });
+
+    test("signed out, the organiser's CONSOLE link still asks you to sign in — no one-tap", async ({ browser }) => {
+      const ctx = await browser.newContext(SIGNED_OUT);
+      const p = await ctx.newPage();
+      await p.goto(consoleUrl);
+      await expect(p.getByRole("heading", { name: "Claim your profile" })).toBeVisible();
+      await expect(p.getByLabel("Email")).toBeVisible();
+      await expect(p.getByRole("button", { name: "Claim and sign in" })).toHaveCount(0);
+      // The accept route refuses it without a session, exactly as before.
+      const consoleToken = consoleUrl.slice(consoleUrl.indexOf("/claim/") + "/claim/".length);
+      const refused = await p.request.post(`/api/claims/${consoleToken}/accept`);
+      expect(refused.status()).toBe(401);
+      await ctx.close();
+    });
+
+    test("signed out, the EMAILED link: nothing happens on load; one tap signs in and claims", async ({ browser, request }) => {
+      const ctx = await browser.newContext(SIGNED_OUT);
+      const p = await ctx.newPage();
+
+      // A mail scanner / link preview GETs the link: it must not consume it or start a session.
+      const scan = await ctx.request.get(emailPath);
+      expect(scan.status()).toBe(200);
+      expect((await ctx.request.get("/api/v1/me/fixtures")).status()).toBe(401);
+
+      await p.goto(emailPath);
+      await expect(p.getByRole("heading", { name: "Claim your profile" })).toBeVisible();
+      const cta = p.getByRole("button", { name: "Claim and sign in" });
+      await expect(cta).toBeVisible();
+      // The one primary action on a phone-first page: a 44px tap target, and what is under its centre is the
+      // button itself (boundingBox measures paint; elementFromPoint is what a finger hits).
+      const box = (await cta.boundingBox())!;
+      expect(box.height, "tap target height").toBeGreaterThanOrEqual(44);
+      expect(
+        await cta.evaluate((el) => {
+          const r = el.getBoundingClientRect();
+          const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+          return hit === el || el.contains(hit);
+        }),
+        "the button is what sits under its own centre",
+      ).toBe(true);
+      await expect(p.getByLabel("Email")).toHaveCount(0); // no second email round
+      // The invited address is shown masked, not in full.
+      await expect(p.getByText(`${cleoEmail[0]}***`, { exact: false }).first()).toBeVisible();
+      expect(await p.content()).not.toContain(cleoEmail);
+      // Still signed out after the page has loaded and settled.
+      expect((await ctx.request.get("/api/v1/me/fixtures")).status()).toBe(401);
+
+      await cta.click();
+      await p.waitForURL(/\/me\?claimed=1/, { timeout: 20_000 });
+      await expect(p.getByText("Profile claimed")).toBeVisible();
+
+      // Signed in as the invited address, and the organiser sees the profile claimed.
+      expect((await ctx.request.get("/api/v1/me/fixtures")).status()).toBe(200);
+      const persons = await apiJson<{ items: Person[] }>(request, "/api/v1/persons?limit=200");
+      expect(persons.data!.items.find((x) => x.id === cleo.id)?.user_id).toBeTruthy();
+
+      // A stale tab on the same (now used) link is a dead end, not a second sign-in.
+      const stale = await (await browser.newContext(SIGNED_OUT)).newPage();
+      await stale.goto(emailPath);
+      await expect(stale.getByText("Already claimed")).toBeVisible();
+      await expect(stale.getByRole("button", { name: "Claim and sign in" })).toHaveCount(0);
+      await stale.context().close();
+      await ctx.close();
+    });
   });
 });
