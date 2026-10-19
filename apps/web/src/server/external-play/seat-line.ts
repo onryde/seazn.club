@@ -4,9 +4,10 @@ import "server-only";
 // per player - instead of luck. It orders who is ADMITTED to spend, and funds them in advance (windowed admission); it grants
 // no seat: the camera proof of §5.2 is unchanged.
 //
-// ONE LEDGER, FOUR FRAGMENTS. `fixture_seat_line` (V461) holds a STAY per (fixture, person). The five columns that say where a
-// stay stands - `queued_at`, `last_seen_at`, `last_gate`, `admitted_at`, `completing` - are read ONLY by the four SQL fragments
-// below and by `upsertStay` (the stay's arrival and liveness). `seat-line-one-reader.test.ts` forbids every other reader, and
+// ONE LEDGER, FIVE FRAGMENTS. `fixture_seat_line` (V461) holds a STAY per (fixture, person). The five columns that say where a
+// stay stands - `queued_at`, `last_seen_at`, `last_gate`, `admitted_at`, `completing` - are read ONLY by the five SQL fragments
+// below (`holdEndsSql` is the fifth: the one spelling of when an admitted stay's hold ends) and by `upsertStay` (the stay's
+// arrival and liveness): six readers in all. `seat-line-one-reader.test.ts` forbids every other reader, and
 // forbids re-spelling the open-stay test (`served_at is null and ended_at is null`) anywhere but `stayOpenSql`. Everything
 // outside this file asks the question through one of the named functions, so every place that asks "is this player in line?"
 // gets the same answer for the same stay by construction (the consumers are listed in §5.7.2 and pinned by that guard).
@@ -86,7 +87,9 @@ const ms = (n: number) => sql`(${n}::float8 * interval '1 millisecond')`;
 
 /** WHEN an admitted stay's hold ends: `admitted_at + ADMIT_HOLD_MS` (null for a stay never admitted). The ONE spelling of that
  *  bound: the lapse clause below tests against it, and the room's countdown reads it (`lineHoldsBoard`, final review N-1), so the
- *  instant the check-in card names is the instant the stay lapses. */
+ *  instant the check-in card names is the latest instant the hold can last. It is the end of the HOLD, not of the STAY: a stay
+ *  that sends no claim (an admitted player over the camera prompt) lapses earlier, at `last_seen_at` + `LINE_RELEASE_GRACE_MS`
+ *  (the other disjunct of the lapse clause), so the card can be generous by up to `ADMIT_HOLD_MS - LINE_RELEASE_GRACE_MS`. */
 export function holdEndsSql() {
   return sql`(l.admitted_at + ${ms(ADMIT_HOLD_MS)})`;
 }
@@ -299,8 +302,8 @@ function reservationIf(completing: boolean): number {
   return LINE_RESERVATION + (completing ? LINE_RECHECK_COST : 0);
 }
 
-/** The `line` object of a `queued` answer: position among WAITING stays, the estimate to ADMISSION (a conservative upper bound,
- *  below), the poll cadence and the board's cap.
+/** The `line` object of a `queued` answer: position among WAITING stays, the estimate to ADMISSION (a conservative estimate and
+ *  NOT a bound, below), the poll cadence and the board's cap.
  *
  *  THE ESTIMATE (spec §5.7.9; final review M-2). The stay at `position` is admitted once the pool has grown to what every place
  *  ahead is promised plus its own `need`. The most a place ahead can be promised is `LINE_RESERVATION + LINE_RECHECK_COST` (a
@@ -309,8 +312,12 @@ function reservationIf(completing: boolean): number {
  *  POLL after the pool allows it (§5.7.3), so one `pollMs` of trail is added. Every term is derived from a declared constant. The
  *  old pricing - every place, the stay's own included, at plain `LINE_RESERVATION`, and no trail - told a completing stay at the
  *  front with a pool of 22 that it would wait 0 s while it was held until 24, so the `mayTimeOut` warning (which adds
- *  `LINE_SERVE_TAIL_S` to this number) fired late. It is an upper bound for a wait that the POOL sets, which is what forms a line;
- *  a place ahead that spends less releases the rest, so the true wait is usually shorter. */
+ *  `LINE_SERVE_TAIL_S` to this number) fired late. The pricing makes that warning fire earlier than the old one did; it does not make
+ *  the estimate an upper bound, for a wait the POOL sets or any other. The load measured it (B-honest, where the pool sets the wait):
+ *  1 of 20 players waited longer than the first ETA shown, and 4 of 21 in the earlier identical leg - the estimate leaves out a stay
+ *  that turns completing after the answer, a stay ahead that completes, and the dead-camera re-claims (spec §5.7.9). Nor does the
+ *  absence of `mayTimeOut` promise admission inside the estimate. A place ahead that spends less releases the rest, so the true
+ *  wait is usually shorter. */
 export function lineWire(a: {
   position: number;
   pool: number;
@@ -543,7 +550,7 @@ export type PhaseViewer = {
  *  line (the one predicate), arrived in time (`first_claim_at` before the deadline: a claim AT the deadline is `window_closed`, so
  *  no stay exists from it) - and the cap, which the caller has already applied. Each protected stay holds the board until its OWN
  *  end: the cap for a stay still waiting, and for an ADMITTED stay the earlier of the cap and its hold's end (§5.7.5;
- *  `holdEndsSql`, the same instant the stay lapses). `own` is the latest such end over the viewer's own stay, `any` over every
+ *  `holdEndsSql`, the latest instant the hold can last: a stay that sends no claim lapses sooner, see `holdEndsSql`). `own` is the latest such end over the viewer's own stay, `any` over every
  *  protected stay on the board; each is null when there is none, so "held" and "until when" cannot disagree (final review N-1). */
 export async function lineHoldsBoard(a: {
   board: Board;
@@ -579,7 +586,8 @@ export type PhaseVerdict = { phase: RoomPhase; heldUntil: Date | null };
  *  `heldUntil` (final review N-1) is where that hold ends for the VIEWER, so the room can say when their check-in closes. Each
  *  reason that holds the board open has its own end - a protected stay's (the cap while it waits, the earlier of the cap and
  *  `admitted_at + ADMIT_HOLD_MS` once admitted: §5.7.5, the dead-camera bound, past which the stay lapses and holds nothing), and
- *  the cap for two counted check-ins - and the hold lasts until the LATEST of the reasons that apply. */
+ *  the cap for two counted check-ins - and the hold lasts until the LATEST of the reasons that apply. It is where the HOLD ends,
+ *  not the stay: a silent admitted stay lapses sooner (see `holdEndsSql`), so the instant is the latest the card can promise. */
 export async function judgePhase(now: Date, board: Board, viewer: PhaseViewer): Promise<PhaseVerdict> {
   const base = roomPhase(now, board.anchor);
   if (base !== "closed") return { phase: base, heldUntil: null };

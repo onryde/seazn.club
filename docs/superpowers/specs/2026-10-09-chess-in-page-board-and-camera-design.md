@@ -1640,7 +1640,8 @@ game. The word is retired here because it covers two different failures.
   p50 because stays released together admit in clumps with long gaps between them, which the p50 does
   not see; how many players were served inside the cap and how many took a walkover caused by the
   line; and for each player the ETA first shown against the wait that happened (the ETA ends at
-  admission and is a conservative upper bound for a pool-limited wait, §5.7.9; the median of shown over
+  admission and is a conservative estimate, not a bound, §5.7.9: B-honest measured 1 of 20 players, and
+  the earlier identical leg 4 of 21, waiting longer than the first ETA shown; the median of shown over
   actual and the count of waits that exceeded it are reported; the camera comes after admission, bounded by `ADMIT_HOLD_MS`, §5.7.5).
 - **Regressions.** 20 Required boards (two batches): about 605 calls, 0 deferrals, 0 never
   created, 0 late creates, and **0 rows with `queued_at` or `admitted_at`**: the line stays inert when it is not
@@ -1814,11 +1815,11 @@ A new delta, **V461 (next free; renumbered at merge)** (V460, `video_rooms_to_en
 - Index `(budget_key, first_claim_at, fixture_id, person_id) where queued_at is not null and
   served_at is null and ended_at is null`: the line's order; and `(budget_key) where admitted_at is
   not null and served_at is null and ended_at is null`: the reservation sum.
-- **Four named SQL fragments in `seat-line.ts` are the only readers of `queued_at`, `last_seen_at`,
+- **Five named SQL fragments in `seat-line.ts` are the only readers of `queued_at`, `last_seen_at`,
   `last_gate`, `admitted_at` and `completing`.**
   - `stayLapsedSql`, the **lapse clause**, TIME ONLY: `now − last_seen_at >= (case last_gate when
     'held' then LINE_ABANDON_AFTER_MS else LINE_RELEASE_GRACE_MS end)`, or `admitted_at is not null
-    and now − admitted_at >= ADMIT_HOLD_MS` (the dead-camera bound, §5.7.5). It reads no `queued_at`,
+    and now >= holdEndsSql` (the dead-camera bound, §5.7.5). It reads no `queued_at`,
     so it gives the same answer for a stay the budget never held as for one it did.
   - `stayOpenSql`, **an open stay** (the re-review 2's I-A): `served_at is null and ended_at is null
     and not (stayLapsedSql)`. It also reads no `queued_at`, so a stay the budget never held is open
@@ -1828,12 +1829,16 @@ A new delta, **V461 (next free; renumbered at merge)** (V460, `video_rooms_to_en
     in line with no `admitted_at` is **waiting**; one with `admitted_at` is **admitted**.
   - `reservedSql`, **the reservations**: the key's live admitted stays, `admitted_at is not null and
     (stayOpenSql)`, each worth `LINE_RESERVATION + LINE_RECHECK_COST × completing`.
+  - `holdEndsSql`, **the hold's end** (final review N-1): `admitted_at + ADMIT_HOLD_MS`, null for a
+    stay never admitted. A time expression, not a predicate, so "one predicate" still means `inLine`. It is
+    the ONE spelling of that bound: the lapse clause tests against it and the room's countdown
+    (`heldUntil`, §5.7.8) reads it.
 
   The stay upsert (below) is the one other statement that reads them, through `stayLapsedSql` (and,
   for `left`, the old row's `queued_at`), and the guard allow-lists it by name. A **source guard**
   forbids any other query from reading the five columns, or from re-spelling the open-stay test
-  (`served_at is null and ended_at is null`), and reports how many readers it found (the four
-  fragments and the upsert: 5; `stayOpenSql` counts because it is where that test lives). Zero is a
+  (`served_at is null and ended_at is null`), and reports how many readers it found (the five
+  fragments and the upsert: 6; `stayOpenSql` counts because it is where that test lives). Zero is a
   failure, and so is an allow-listed reader, or a consumer of the lists below, that the scan no longer
   finds.
 - **The consumers of `inLine`: nine, listed once (the re-review's m-d, reopened by the re-review 2's
@@ -2306,19 +2311,29 @@ viewer)`, whose line part is a single query, `lineHoldsBoard`; the pure window a
 - **The room's phase** is per viewer: `open` for a viewer whose own stay is protected, or who is
   seated while the create is owed; `closed` for anyone else. Without it a queued player sees the
   closed card. **The check-in card's countdown follows it (final review M-3, amended by N-1):** the snapshot
-  carries `heldUntil`, the instant THIS viewer's hold on the board ends, and the card counts down
+  carries `heldUntil`, the instant THIS viewer's HOLD on the board ends (the latest it can last, not a
+  promise about the stay: see the last sentences), and the card counts down
   to `heldUntil` (to `deadline` when it is null) and names that instant's time of day. The SERVER
   computes it (`judgePhase`, the same call that decides the phase): it is null unless the board is
   held open past the deadline; the CAP for a player waiting in line (the line card names the same
   instant) and for two counted check-ins while the create is owed; and for an ADMITTED stay (the
   viewer's own, or the other side's that holds a counted viewer's board open) the earlier of the
-  cap and `admitted_at + ADMIT_HOLD_MS` (§5.7.5: the dead-camera bound, about 54.5 s, which already
-  includes the camera permission prompt), because the stay lapses there and the board is no
+  cap and `admitted_at + ADMIT_HOLD_MS` (§5.7.5: the dead-camera bound, which already includes the
+  camera permission prompt), because the stay lapses there at the latest and the board is no
   longer held for it; where two reasons hold, the later. `holdEndsSql` is the one spelling of
   `admitted_at + ADMIT_HOLD_MS`: the lapse clause and the countdown both read it. An admitted player
   is the one viewer who sees this countdown (a waiting one sees the line card), and the first cut
   counted them down to the cap, minutes more than they have. "Closes in 0:00" behind the camera
-  prompt had read as over; so would "closes in 4:00" at 54 s have read as plenty.
+  prompt had read as over; so would a countdown to the cap, with only `ADMIT_HOLD_MS` left, have read
+  as plenty. **`heldUntil` is where the HOLD ends, not where the STAY ends.** An admitted stay sends no
+  claim while the camera prompt is up (the room asks again only once the camera is live), so a stay that
+  sends none lapses EARLIER, at `last_seen_at + LINE_RELEASE_GRACE_MS` (the lapse clause's other
+  disjunct, §5.7.2). For that player the time shown is generous by up to `ADMIT_HOLD_MS −
+  LINE_RELEASE_GRACE_MS`. Accepted for this merge: the larger bound binds for a stay that keeps
+  claiming, and a player slower over the prompt than `CAMERA_PROMPT_ALLOWANCE_MS` is outside the design
+  envelope (that allowance is an assumption and not a measurement, §5.7.5). OWED: the real-device measurement of the
+  prompt time, and, if it shows players routinely past `LINE_RELEASE_GRACE_MS`, a silent end named in
+  the same fragment family (so test 33 sees it) and shown as the earliest of the three.
 - **`expectedEnd`'s base (m8).** `sweep.ts`'s `expectedEnd` uses `playableWindow(openedAt).deadline`
   as the base of a never-started board, on the comment "T9 creates no game after the round's
   deadline". That comment is no longer true: a game can be created up to the cap. The base becomes
@@ -2410,8 +2425,14 @@ player in line well before the deadline has all the time before it as well.
   reservation the stay would hold itself (`LINE_RESERVATION`, plus `LINE_RECHECK_COST` while its seat
   could complete its board), and `pool` = `tokens − reserved` at the answer (§5.7.3): tokens other stays
   have been promised are not available to this one. It is the time to ADMISSION, and an estimate: "about".
-  **It is a conservative estimate and an upper bound for a wait the POOL sets, which is what forms a line;
-  it is not an upper bound "by construction".** The first pricing (every place, the stay's own included, at
+  **It is a conservative estimate. It is NOT an upper bound: not "by construction", and not for a wait the
+  POOL sets either.** The measurement of exactly that regime says so: in B-honest (the line forms, the pool
+  sets the wait) the median of shown over actual was 1.55 and 1 of 20 players waited longer than the first
+  ETA shown; in the earlier identical leg 4 of 21 did. The arithmetic below leaves terms out (the stay's own
+  seat turning completing after the answer, a stay ahead completing, traffic the gate does not count, the
+  dead-camera re-claims named below). Those figures compare the RAW `etaS` of the FIRST answer; the card
+  shows the figure rounded up to the next 5 s and a fresh one on every poll, and the size of the
+  overshoot is not yet reported. The first pricing (every place, the stay's own included, at
   `LINE_RESERVATION`, and no trail) was measured not to be one: a minority waited longer than shown
   (A-slow 21 of 40, B-end-slow-10 5 of 45), because a COMPLETING stay is admitted only at
   `LINE_RESERVATION + LINE_RECHECK_COST` (so is each completing stay ahead of it) and admission trails
@@ -2422,7 +2443,8 @@ player in line well before the deadline has all the time before it as well.
   exceed the wait; that errs the safe way (a player told "about 75 s" who is admitted in 40 is not
   harmed; one told 40 who waits 75 is). The estimate feeds `mayTimeOut`, the one sentence that tells a
   player they may be walked over, so an under-estimate delays that warning: the pricing above is what
-  makes it fire in time. The load records the ETA each player was shown against the wait they had (the
+  makes it fire earlier than the first pricing did, not a guarantee that it fires in time, and the absence
+  of the warning promises nothing. The load records the ETA each player was shown against the wait they had (the
   median of shown over actual, and the count of waits that exceeded it) and reports both; if the median
   is persistently above 2, pricing a place at the run's `D̄` is one line. The dead-camera re-claims
   that the reservation does not cover (the capacity build's P1, documented at `LINE_RESERVATION` in
@@ -2958,9 +2980,9 @@ Every minute count is derived from `DEADLINE_AFTER_MS`, `LINE_DEADLINE_GRACE_MS`
     `left` (asserted by key absence, not by `null`). Mutants: invert `mayTimeOut`: red; drop
     `LINE_SERVE_TAIL_S` from it: the third case is red; attach `left` to a non-queued answer: red.
 33. **One predicate.** A source guard: no query outside `lineLiveSql`, `stayLapsedSql`, `stayOpenSql`,
-    `reservedSql` and the allow-listed stay upsert reads `queued_at`, `last_seen_at`, `last_gate`,
-    `admitted_at` or `completing` (the five columns of §5.7.2); it reports the readers found (5: the four
-    fragments and the upsert), the consumers of `inLine` found (the nine of §5.7.2's list, among them
+    `reservedSql`, `holdEndsSql` and the allow-listed stay upsert reads `queued_at`, `last_seen_at`,
+    `last_gate`, `admitted_at` or `completing` (the five columns of §5.7.2); it reports the readers found
+    (6: the five fragments and the upsert), the consumers of `inLine` found (the nine of §5.7.2's list, among them
     the door read and the gate's idle key-wide waiting count, which the first draft did not list), the
     consumers of `reservedSql` found (the four) and the outside consumers of `stayOpenSql` found (the
     one, the `completing` evaluation), and fails on zero, or on a reader or consumer of those lists that

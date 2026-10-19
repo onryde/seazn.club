@@ -1,24 +1,27 @@
-// Capacity test 33 (spec §8.1, §5.7.2): ONE predicate. Nothing outside `lineLiveSql`, `stayLapsedSql`, `stayOpenSql`, `reservedSql`
-// and the allow-listed stay upsert reads `queued_at`, `last_seen_at`, `last_gate`, `admitted_at` or `completing` (the five columns
-// of §5.7.2) - so every place that asks "is this player in line?" asks the same question by construction - and the open-stay test
-// (`served_at is null and ended_at is null`) is spelled in `stayOpenSql` and nowhere else.
+// Capacity test 33 (spec §8.1, §5.7.2): ONE predicate. Nothing outside `lineLiveSql`, `stayLapsedSql`, `stayOpenSql`, `reservedSql`,
+// `holdEndsSql` and the allow-listed stay upsert reads `queued_at`, `last_seen_at`, `last_gate`, `admitted_at` or `completing` (the
+// five columns of §5.7.2) - so every place that asks "is this player in line?" asks the same question by construction - and the
+// open-stay test (`served_at is null and ended_at is null`) is spelled in `stayOpenSql` and nowhere else. `holdEndsSql` (final review
+// N-1) is a time expression, not a predicate: the one spelling of when an admitted stay's hold ends, shared by the lapse clause and
+// the room's countdown. Five fragments and the upsert make six readers.
 //
 // What it judges, over the production tree (comments blanked by the same lexer the video guards use, SQL taken from string and
 // template literals):
 //   1. THE READERS. Every read of a guarded column (a use that is not an assignment or an insert column) is counted per enclosing
 //      top-level declaration. The set of declarations that read is EXACTLY the six allow-listed ones - the five fragments and
-//      `upsertStay` (`stayOpenSql` counts: it is where the open test lives; `holdEndsSql` is the one spelling of the hold's end). A reader outside the list, or an allow-listed one
-//      the scan no longer finds, fails.
+//      `upsertStay` (`stayOpenSql` counts: it is where the open test lives; `holdEndsSql` is the one spelling of the hold's end).
+//      A reader outside the list, or an allow-listed one the scan no longer finds, fails.
 //   2. THE RE-SPELLING. The open-stay test appears in no SQL outside `stayOpenSql`, in either order and with any alias.
 //   3. THE CONSUMERS. Each fragment's uses are pinned per declaration: `lineLiveSql` by the gate's standing read, the door read,
 //      the optional-yield read and the deadline protection (the nine consumers of `inLine` reach it through those and through
 //      `boardPhase`); `reservedSql` by the standing read (the pool, the idle test, the own-row test) and the optional yield;
-//      `stayOpenSql` outside the two fragments built on it by the standing read alone (the `completing` evaluation). The call
+//      `stayOpenSql` outside the two fragments built on it by the standing read alone (the `completing` evaluation); `holdEndsSql`
+//      by the lapse clause and, twice, by the hold query behind the room's countdown (`lineHoldsBoard`). The call
 //      sites that reach `lineLiveSql` through `boardPhase`, and the other readers of the seat-line module, are pinned per file
 //      and declaration, so a consumer gone, or a new one, fails and sends the author here.
 //   4. NOTHING ELSE TOUCHES THE LEDGER. No other production file names `fixture_seat_line`, or a guarded column in SQL.
 //
-// The scanner is itself tested: it must pass the real seat-line.ts and fail six in-memory mutants of it, one per rule. Every count it
+// The scanner is itself tested: it must pass the real seat-line.ts and fail eight in-memory mutants of it, one per rule. Every count it
 // judges is reported and zero is a failure. Single-sport reason: no sport is involved - these are source files.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
