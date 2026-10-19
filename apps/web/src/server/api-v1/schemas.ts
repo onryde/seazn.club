@@ -1735,6 +1735,10 @@ export const StreamSettings = z
     streamMode: StreamMode.nullable(),
     overlayTemplate: z.string().nullable(),
     overlayDelayMs: z.number().int().nullable(),
+    // PR #989 confirm N1: the row's revision after this write, microseconds since the epoch of its last write — later
+    // writes to one fixture's settings always answer higher, so a reader orders two answers (or an answer and a page
+    // read) by it. null only when no row exists.
+    revision: z.number().int().nullable(),
   })
   .strict();
 export type StreamSettings = z.infer<typeof StreamSettings>;

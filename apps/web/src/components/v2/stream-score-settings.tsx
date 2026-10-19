@@ -7,68 +7,130 @@
 //    `streamPrefs`), each change shown at once and saved through the ONE settings route (PUT …/stream-settings, a body
 //    naming only that field). A save that fails puts the stored value back — the value the phone's start and the
 //    automatic start will read — and says so; only the newest save of a field lands, so a slow older answer never
-//    overwrites a newer choice. A newer page read (a refresh after another tab or organiser changed a preference)
-//    re-seeds every field it MOVED that has no save in flight (PR #989 review m3).
+//    overwrites a newer choice. Every page read and every save's answer is folded in by the settings row's `revision`
+//    (PR #989 confirm N1): a field takes a read only when it is NEWER than the one the field last took, so a refresh
+//    that left the server before a save landed cannot put the older value back, and a failed save shows what the
+//    server is known to hold now. A field with a save in flight keeps the organiser's own choice on screen (m3).
 //  - `ScoreTiming` edits the delay before going live: 0–30 s in steps of 0.1, null = the server's default (handed in,
 //    never typed), 0 a real override. `ScoreLiveSummary` is the read-only pair a running composed session shows: a
 //    running session never moves, so it reads the SESSION's own copy, not the settings.
-import { useRef, useState } from "react";
+import { useReducer, useRef, useState } from "react";
 import { ChevronRight, RotateCcw } from "lucide-react";
 import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { apiV1 } from "@/lib/client-v1";
 import { fmtNumber } from "@/lib/format";
-import { OVERLAY_DELAY_MAX_MS, type StreamPrefs } from "@/lib/stream-settings";
+import { OVERLAY_DELAY_MAX_MS, type StreamPrefs, type StreamPrefsRead } from "@/lib/stream-settings";
 
 export type PrefKey = keyof StreamPrefs;
 
 const PREF_KEYS: readonly PrefKey[] = ["streamMode", "overlayTemplate", "overlayDelayMs"];
 const NONE_IN_FLIGHT: Readonly<Record<PrefKey, number>> = { streamMode: 0, overlayTemplate: 0, overlayDelayMs: 0 };
 
+/** What the panel knows of the stored preferences, folded from every READ it has seen — the page's reads and each save's
+ *  answer (an answer is a read of the whole row) — field by field: a field takes a read's value only when that read is
+ *  strictly NEWER (`revision`) than the one the field last took. PR #989 confirm N1: values alone cannot order a read
+ *  against a save already settled — a refresh that left the server before a save landed can carry that field's OLDER
+ *  value and still differ from the page's previous read. */
+interface PrefsState {
+  /** What the panel shows: `known`, except a field with a save in flight shows the organiser's own newer choice. */
+  shown: StreamPrefs;
+  known: { [K in PrefKey]: { value: StreamPrefs[K]; revision: number } };
+  inFlight: Record<PrefKey, number>;
+  /** The page read last folded in — a new one is noticed in render, against this. */
+  seen: StreamPrefsRead;
+}
+
+/** A read's revision as an order: no row yet is older than any write. */
+const order = (revision: number | null): number => revision ?? Number.NEGATIVE_INFINITY;
+
+const knownFrom = (read: StreamPrefsRead): PrefsState["known"] => ({
+  streamMode: { value: read.streamMode, revision: order(read.revision) },
+  overlayTemplate: { value: read.overlayTemplate, revision: order(read.revision) },
+  overlayDelayMs: { value: read.overlayDelayMs, revision: order(read.revision) },
+});
+
+/** Fold one read into `known`: each field it is newer for takes its value. */
+function foldRead(known: PrefsState["known"], read: StreamPrefsRead): PrefsState["known"] {
+  const at = order(read.revision);
+  const next = { ...known };
+  for (const k of PREF_KEYS) if (at > known[k].revision) (next as Record<PrefKey, unknown>)[k] = { value: read[k], revision: at };
+  return next;
+}
+
+/** Show `known` for every field with no save in flight. */
+function settledShown(shown: StreamPrefs, known: PrefsState["known"], inFlight: Record<PrefKey, number>): StreamPrefs {
+  const next = { ...shown };
+  for (const k of PREF_KEYS) if (inFlight[k] === 0) (next as Record<PrefKey, unknown>)[k] = known[k].value;
+  return next;
+}
+
+type PrefsAction =
+  | { type: "read"; read: StreamPrefsRead }
+  | { type: "start"; key: PrefKey; value: StreamPrefs[PrefKey] }
+  | { type: "settled"; key: PrefKey; newest: boolean; ok: boolean; answer: StreamPrefsRead | null };
+
+function prefsReducer(state: PrefsState, action: PrefsAction): PrefsState {
+  switch (action.type) {
+    case "read": {
+      const known = foldRead(state.known, action.read);
+      return { ...state, seen: action.read, known, shown: settledShown(state.shown, known, state.inFlight) };
+    }
+    case "start": {
+      const inFlight = { ...state.inFlight, [action.key]: state.inFlight[action.key] + 1 };
+      return { ...state, inFlight, shown: { ...state.shown, [action.key]: action.value } };
+    }
+    case "settled": {
+      const { key, newest, ok, answer } = action;
+      const inFlight = { ...state.inFlight, [key]: state.inFlight[key] - 1 };
+      const known = answer ? foldRead(state.known, answer) : state.known;
+      const shown = settledShown(state.shown, known, inFlight);
+      // The newest save of a field decides what it shows, even while an older one is still out. On success, that is the
+      // newest the server is known to hold (its answer, or a read written after it). On failure, it is whatever the
+      // server is now known to hold (the latest read, or an earlier save that landed), never the value from before the
+      // save began once a newer read has arrived. A success with no answer (none in this route's contract) keeps the
+      // organiser's choice on screen.
+      if (newest) (shown as Record<PrefKey, unknown>)[key] = ok && answer === null ? state.shown[key] : known[key].value;
+      return { ...state, inFlight, known, shown };
+    }
+  }
+}
+
 /** The panel's copy of the stored preferences, and one saver per field. `failed` names the field whose last save did
  *  not land (it shows the stored value again); a later save of any field clears it. */
-export function useStreamPrefs(fixtureId: string, initial: StreamPrefs) {
-  const [prefs, setPrefs] = useState<StreamPrefs>(initial);
+export function useStreamPrefs(fixtureId: string, initial: StreamPrefsRead) {
+  const [state, dispatch] = useReducer(prefsReducer, initial, (read): PrefsState => ({
+    shown: { streamMode: read.streamMode, overlayTemplate: read.overlayTemplate, overlayDelayMs: read.overlayDelayMs },
+    known: knownFrom(read),
+    inFlight: NONE_IN_FLIGHT,
+    seen: read,
+  }));
   const [failed, setFailed] = useState<PrefKey | null>(null);
-  // m3 (PR #989 review): the page's read this copy was last seeded from, and how many saves of each field are in flight.
-  const [seed, setSeed] = useState<StreamPrefs>(initial);
-  const [inFlight, setInFlight] = useState<Record<PrefKey, number>>(NONE_IN_FLIGHT);
   // Each field's newest save — read only in a save's own answer, so an older answer can tell it was overtaken.
   const seq = useRef<Record<PrefKey, number>>({ ...NONE_IN_FLIGHT });
-  // A newer page read moves every field it MOVED whose saves have all settled — adjusted in render against the read it
-  // was drawn from, never by an effect. A field with a save in flight keeps the organiser's own newer choice, and a read
-  // that did not move a field (a refresh carrying the value this copy was seeded with) leaves the shown value alone.
-  const moved = PREF_KEYS.filter((k) => initial[k] !== seed[k]);
-  if (moved.length > 0) {
-    setSeed(initial);
-    const take = moved.filter((k) => inFlight[k] === 0);
-    if (take.length > 0) setPrefs((p) => ({ ...p, ...Object.fromEntries(take.map((k) => [k, initial[k]])) }));
+  // A newer page read is folded in render against the read last seen, never by an effect (m3).
+  if (initial.revision !== state.seen.revision || PREF_KEYS.some((k) => initial[k] !== state.seen[k])) {
+    dispatch({ type: "read", read: initial });
   }
   const save = <K extends PrefKey>(key: K, value: StreamPrefs[K]) => {
     // No "same value" guard here (m4): every caller offers only a change — the picker skips the selected option, Score
     // timing the delay already in force, and the mode controls exist only for the mode not in force.
-    const before = prefs[key];
     const n = ++seq.current[key];
-    const settled = () => setInFlight((c) => ({ ...c, [key]: c[key] - 1 }));
-    setPrefs((p) => ({ ...p, [key]: value }));
-    setInFlight((c) => ({ ...c, [key]: c[key] + 1 }));
+    dispatch({ type: "start", key, value });
     setFailed(null);
-    void apiV1<StreamPrefs>(`/api/v1/fixtures/${fixtureId}/stream-settings`, { method: "PUT", json: { [key]: value } }).then(
+    void apiV1<StreamPrefsRead>(`/api/v1/fixtures/${fixtureId}/stream-settings`, { method: "PUT", json: { [key]: value } }).then(
       (answer) => {
-        settled();
-        // The server's answer is the stored value (a template it resolved, a delay it kept) — newest save only.
-        if (seq.current[key] !== n || !answer || !(key in answer)) return;
-        setPrefs((p) => ({ ...p, [key]: answer[key] }));
+        const read = answer && key in answer && "revision" in answer ? answer : null;
+        dispatch({ type: "settled", key, newest: seq.current[key] === n, ok: true, answer: read });
       },
       () => {
-        settled();
+        const newest = seq.current[key] === n;
+        dispatch({ type: "settled", key, newest, ok: false, answer: null });
         // An overtaken save that fails says nothing: the newer choice is the one on screen and in flight.
-        if (seq.current[key] !== n) return;
-        setPrefs((p) => ({ ...p, [key]: before }));
-        setFailed(key);
+        if (newest) setFailed(key);
       },
     );
   };
-  return { prefs, failed, save };
+  return { prefs: state.shown, failed, save };
 }
 
 /** Seconds as the organiser reads them: one decimal, in the page's locale. */

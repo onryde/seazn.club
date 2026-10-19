@@ -42,7 +42,7 @@ import { OVERLAY_KEY_PARAM } from "@/lib/realtime-purpose";
 import { decidedOutcomeTemplates } from "@/lib/scoring-vocab";
 import { formatMinor, type Currency } from "@/lib/currency";
 import { chainFor, phoneDot } from "@/lib/stream-chain";
-import { DEFAULT_STREAM_PREFS, effectiveStreamMode, type StreamPrefs } from "@/lib/stream-settings";
+import { NO_STREAM_PREFS_READ, effectiveStreamMode, type StreamPrefsRead } from "@/lib/stream-settings";
 import { renderSeaznQr, seaznQrModules, type SeaznQr } from "@/lib/seazn-qr";
 import {
   STREAM_CREDIT_PACKS, streamPackAmountMinor, streamPackPerMatchMinor, type StreamPackSize,
@@ -178,7 +178,7 @@ export interface StreamPanelContext {
   composedAvailable: boolean;
   /** R2006: each listed fixture's STORED score preferences (mode, template, delay; null = the default), keyed by
    *  fixture as `overlayKeys` is. A fixture missing here reads as all defaults. */
-  streamPrefs: Record<string, StreamPrefs>;
+  streamPrefs: Record<string, StreamPrefsRead>;
   /** R2006: config.ts `RELAY_OVERLAY_DELAY_DEFAULT_MS` — the delay a composed session serves when the fixture sets none.
    *  Score timing's "Default {seconds}s" and its reset value; the panel never types the number. */
   overlayDelayDefaultMs: number;
@@ -290,7 +290,7 @@ export function FixtureStreamPanel({
   // R2006: the fixture's STORED score preferences (mode, style, timing) — seeded from the page's read, each change shown
   // at once and saved; a failed save shows the stored value again. ONE copy for both tabs, so the OBS URL, the Phone
   // tab's score card and its Go live never disagree about the style.
-  const prefs = useStreamPrefs(fixture.id, stream.streamPrefs[fixture.id] ?? DEFAULT_STREAM_PREFS);
+  const prefs = useStreamPrefs(fixture.id, stream.streamPrefs[fixture.id] ?? NO_STREAM_PREFS_READ);
   // OPENS ON the stored style resolved through the registry (the sport's own default when none is stored, a retired
   // one's replacement) — never a second rule here.
   const style: TemplateId = resolveTemplate(prefs.prefs.overlayTemplate, stream.sportKey).id;

@@ -242,7 +242,8 @@ async function addTargetApi(page: Page, orgId: string, label: string): Promise<{
 /** R2006: the settings answer carries the score preferences too; a fixture that stored none answers them null (the
  *  defaults). A fixture this file STARTS stores Camera only first (helpers/stream-mode.ts): it follows the camera's
  *  lifecycle, and on a server with a compositor image every start is the score by default. */
-const UNSET_PREFS = { streamMode: null, overlayTemplate: null, overlayDelayMs: null } as const;
+// PR #989 confirm N1: every settings answer also carries the row's revision, a number that every write moves.
+const UNSET_PREFS = { streamMode: null, overlayTemplate: null, overlayDelayMs: null, revision: expect.any(Number) as unknown as number } as const;
 const CAMERA_ONLY_PREFS = { ...UNSET_PREFS, streamMode: "passthrough" } as const;
 
 /** The organiser's switch, through the real route. Returns the answer, parsed by its schema. */
@@ -823,8 +824,10 @@ test("the switch over the API: the organiser's PUT answers 200 and the paired ph
     checked++;
   }
   expect(checked).toBe(3);
+  const once = await putAutoStream(page, f, true);
   const again = await putAutoStream(page, f, true);
   expect(again, "the same PUT twice answers the same").toEqual({ targetId: null, autoStream: true, ...UNSET_PREFS });
+  expect(again.revision!, "…at a later revision: an identical write is still a write").toBeGreaterThan(once.revision!);
 
   const rowsBefore = await withDb((sql) => sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_settings where org_id = ${rig.orgId}`);
   const unknown = await apiJson(page.request, `/api/v1/fixtures/${randomUUID()}/stream-settings`, "PUT", { autoStream: true });

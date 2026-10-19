@@ -49,7 +49,8 @@ import { startedDivisionWithFixture } from "./_rig";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 /** R2006: the three score preferences, never chosen — each `null` ("the default"). */
-const NO_PREFS = { streamMode: null, overlayTemplate: null, overlayDelayMs: null } as const;
+// PR #989 confirm N1: every answer carries the row's revision; its ORDER is pinned in stream-start-mode.test.ts.
+const NO_PREFS = { streamMode: null, overlayTemplate: null, overlayDelayMs: null, revision: expect.any(Number) as number } as const;
 
 // A KEK of this file's own (secret-columns.test.ts precedent): CI supplies no RELAY_KEK. The developer's is put back
 // afterwards, or removed when there was none — never assigned `undefined`, which Node stores as the string. Never printed.
@@ -863,7 +864,9 @@ describe.skipIf(!HAS_DB)("stream settings — a row records whether the organise
       const row1 = await switchRowOf(r.fixtureId);
       const second = await put(r, { autoStream: true });
       const row2 = await switchRowOf(r.fixtureId);
-      expect(second).toEqual(first);
+      // The same answer, at a later revision: an identical write is still a write (PR #989 confirm N1).
+      expect({ ...second, revision: 0 }).toEqual({ ...first, revision: 0 });
+      expect(second.revision!, "the second write reads newer").toBeGreaterThan(first.revision!);
       expect(row2).toMatchObject({ auto_stream: true, target_chosen: false, target_id: null, updated_by: r.auth.userId });
       expect(await rowCount(r.fixtureId)).toBe(1);
       expect(row2!.updated_at.getTime(), "a write stamps updated_at").toBeGreaterThanOrEqual(row1!.updated_at.getTime());
@@ -904,7 +907,7 @@ describe.skipIf(!HAS_DB)("stream settings — a row records whether the organise
 
     it("a body naming NEITHER field (the route's schema refuses it; the usecase must not crash on it) writes nothing and answers the defaults", async () => {
       const r = await rig();
-      expect(await put(r, {})).toEqual({ targetId: null, autoStream: false, ...NO_PREFS });
+      expect(await put(r, {})).toEqual({ targetId: null, autoStream: false, ...NO_PREFS, revision: null });
       expect(await switchRowOf(r.fixtureId)).toBeNull();
     });
 

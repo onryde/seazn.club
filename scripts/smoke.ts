@@ -19740,9 +19740,16 @@ async function captureV2Suite(): Promise<void> {
     const autoBefore = await readPhone(autoFx.fixtureId);
     const switched = await v1(owner, `/api/v1/fixtures/${autoFx.fixtureId}/stream-settings`, "PUT", { autoStream: true });
     const unsetPrefs = { streamMode: null, overlayTemplate: null, overlayDelayMs: null };
+    // PR #989 confirm N1: every answer also carries the row's revision, a number every write moves. It is compared apart.
+    const answerOf = (data: unknown) => {
+      const { revision, ...rest } = (data ?? {}) as { revision?: unknown };
+      return { revision, rest: JSON.stringify(rest) };
+    };
+    const switchedAnswer = answerOf(switched.json.data);
     step(
-      `PUT stream-settings {autoStream: true} → 200 {targetId: null, autoStream: true}, the score preferences unset (got ${switched.status} ${JSON.stringify(switched.json.data)})`,
-      switched.status === 200 && JSON.stringify(switched.json.data) === JSON.stringify({ targetId: null, autoStream: true, ...unsetPrefs }),
+      `PUT stream-settings {autoStream: true} → 200 {targetId: null, autoStream: true}, the score preferences unset, a revision (got ${switched.status} ${JSON.stringify(switched.json.data)})`,
+      switched.status === 200 && switchedAnswer.rest === JSON.stringify({ targetId: null, autoStream: true, ...unsetPrefs })
+        && typeof switchedAnswer.revision === "number",
     );
 
     // 12c. R2006 (owner ruling 2026-10-19, "Option C"): the organiser's "Camera only", stored — the automatic start in step
@@ -19750,10 +19757,13 @@ async function captureV2Suite(): Promise<void> {
     // score, so step 15's passthrough session is the witness that the stored mode was read; on an imageless one the
     // default is the camera as well. The switch from step 12 survives a body that names only the mode.
     const cameraOnly = await v1(owner, `/api/v1/fixtures/${autoFx.fixtureId}/stream-settings`, "PUT", { streamMode: "passthrough" });
+    const cameraOnlyAnswer = answerOf(cameraOnly.json.data);
     step(
-      `PUT stream-settings {streamMode: "passthrough"} → 200, stored, the switch still on (got ${cameraOnly.status} ${JSON.stringify(cameraOnly.json.data)})`,
+      `PUT stream-settings {streamMode: "passthrough"} → 200, stored, the switch still on, a later revision (got ${cameraOnly.status} ${JSON.stringify(cameraOnly.json.data)})`,
       cameraOnly.status === 200
-        && JSON.stringify(cameraOnly.json.data) === JSON.stringify({ targetId: null, autoStream: true, ...unsetPrefs, streamMode: "passthrough" }),
+        && cameraOnlyAnswer.rest === JSON.stringify({ targetId: null, autoStream: true, ...unsetPrefs, streamMode: "passthrough" })
+        && typeof cameraOnlyAnswer.revision === "number" && typeof switchedAnswer.revision === "number"
+        && cameraOnlyAnswer.revision > switchedAnswer.revision,
     );
 
     // 12b. The organiser's read (§9, PR-2 T6) serves the switch: `auto` null before it (the empty case — a fixture with

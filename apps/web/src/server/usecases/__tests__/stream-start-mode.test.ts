@@ -16,7 +16,7 @@ import { CaptureBeat } from "@/server/api-v1/capture-schemas";
 import type { CreateStreamSession, PutStreamSettings, StreamMode } from "@/server/api-v1/schemas";
 import { RELAY_OVERLAY_DELAY_DEFAULT_MS } from "@/server/relay/config";
 import { postBeat, postStart } from "../capture-phone";
-import { saveStreamSettings, startModeFor, streamPrefsOf } from "../stream-codes";
+import { saveStreamSettings, startModeFor, streamPrefsOf, writeOverlayDelay } from "../stream-codes";
 import { createSession, currentSession, sessionFactsForJob } from "../stream-sessions";
 import { captureRig, phoneId, type CaptureRig } from "./_capture-rig";
 import { startedDivisionWithFixture } from "./_rig";
@@ -223,12 +223,14 @@ describe.skipIf(!HAS_DB)("R2006: the panel reads — the stored preferences (str
   it("streamPrefsOf: one row per listed fixture of THIS org, as stored; a fixture with no row, or another org's, is left out; no ids reads nothing", async () => {
     const a = await captureRig();
     const b = await captureRig();
-    await saveStreamSettings(a.auth, a.fixtureId, { streamMode: "passthrough", overlayTemplate: "bar", overlayDelayMs: 0 });
-    await saveStreamSettings(b.auth, b.fixtureId, { streamMode: "composed" });
+    const savedA = await saveStreamSettings(a.auth, a.fixtureId, { streamMode: "passthrough", overlayTemplate: "bar", overlayDelayMs: 0 });
+    const savedB = await saveStreamSettings(b.auth, b.fixtureId, { streamMode: "composed" });
     const { fixtureId: none } = await startedDivisionWithFixture(a.auth);
     const got = await streamPrefsOf(a.auth.orgId, [a.fixtureId, b.fixtureId, none]);
-    expect(got).toEqual({ [a.fixtureId]: { streamMode: "passthrough", overlayTemplate: "bar", overlayDelayMs: 0 } });
-    expect(await streamPrefsOf(b.auth.orgId, [b.fixtureId])).toEqual({ [b.fixtureId]: { streamMode: "composed", overlayTemplate: null, overlayDelayMs: null } });
+    // Each read carries its row's revision: the same number the row's last answer carried (PR #989 confirm N1).
+    expect(typeof savedA.revision, "PREMISE: the answer carries a revision").toBe("number");
+    expect(got).toEqual({ [a.fixtureId]: { streamMode: "passthrough", overlayTemplate: "bar", overlayDelayMs: 0, revision: savedA.revision } });
+    expect(await streamPrefsOf(b.auth.orgId, [b.fixtureId])).toEqual({ [b.fixtureId]: { streamMode: "composed", overlayTemplate: null, overlayDelayMs: null, revision: savedB.revision } });
     expect(await streamPrefsOf(a.auth.orgId, [])).toEqual({});
   });
 
@@ -249,3 +251,48 @@ describe.skipIf(!HAS_DB)("R2006: the panel reads — the stored preferences (str
     expect((await currentSession(cam.auth, cam.fixtureId, cam.deps))?.overlay).toBeNull();
   });
 });
+
+describe.skipIf(!HAS_DB)("PR #989 confirm N1: the settings row's revision orders every read and answer", () => {
+  it("every write answers a strictly higher revision — an identical write included — and the page's read carries the latest", async () => {
+    const r = await captureRig();
+    const bodies: PutStreamSettings[] = [
+      { autoStream: true }, { streamMode: "passthrough" }, { overlayDelayMs: 1500 }, { overlayDelayMs: 1500 }, { streamMode: null },
+    ];
+    const revisions: number[] = [];
+    for (const body of bodies) {
+      const answer = await saveStreamSettings(r.auth, r.fixtureId, body);
+      expect(typeof answer.revision, `${JSON.stringify(body)}: a revision`).toBe("number");
+      revisions.push(answer.revision!);
+    }
+    expect(revisions, "one revision per write").toHaveLength(bodies.length);
+    for (let i = 1; i < revisions.length; i++) expect(revisions[i]!, `write ${i + 1} reads newer than write ${i}`).toBeGreaterThan(revisions[i - 1]!);
+    expect((await streamPrefsOf(r.auth.orgId, [r.fixtureId]))[r.fixtureId]).toEqual({
+      streamMode: null, overlayTemplate: null, overlayDelayMs: 1500, revision: revisions.at(-1),
+    });
+  });
+
+  it("two overlapping writes: the one that COMMITS last reads highest, though its transaction began first (clock_timestamp after the row lock, not now())", async () => {
+    const r = await captureRig();
+    await saveStreamSettings(r.auth, r.fixtureId, { overlayDelayMs: 1000 });
+    let release!: () => void;
+    const gate = new Promise<void>((res) => { release = res; });
+    let begun!: () => void;
+    const began = new Promise<void>((res) => { begun = res; });
+    // The late writer's transaction starts FIRST (its now() is fixed here), then waits while another write commits.
+    const late = sql.begin(async (tx) => {
+      await tx`select now()`;
+      begun();
+      await gate;
+      await writeOverlayDelay(tx, { orgId: r.auth.orgId, fixtureId: r.fixtureId, overlayDelayMs: 2000, updatedBy: r.auth.userId });
+    });
+    await began;
+    await new Promise((res) => setTimeout(res, 20));
+    const early = await saveStreamSettings(r.auth, r.fixtureId, { streamMode: "passthrough" });
+    release();
+    await late;
+    const read = (await streamPrefsOf(r.auth.orgId, [r.fixtureId]))[r.fixtureId]!;
+    expect(read, "both writes landed").toMatchObject({ streamMode: "passthrough", overlayDelayMs: 2000 });
+    expect(read.revision!, "the last commit reads newer than the write it followed").toBeGreaterThan(early.revision!);
+  });
+});
+

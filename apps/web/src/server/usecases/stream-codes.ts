@@ -10,7 +10,7 @@ import { sql, type Tx } from "@/lib/db";
 import { requireFeature } from "@/lib/entitlements";
 import { HttpError } from "@/lib/errors";
 import { resolveStreamTarget, type SavedStreamTarget, type StreamTargetSource } from "@/lib/stream-destinations";
-import { effectiveStreamMode, isPickableTemplate, type StreamPrefs } from "@/lib/stream-settings";
+import { effectiveStreamMode, isPickableTemplate, type StreamPrefsRead } from "@/lib/stream-settings";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { CaptureRefusalError, codeEnded } from "@/server/api-v1/capture-http";
 import type { PutStreamSettings, StreamCodeShown, StreamMode, StreamSettings } from "@/server/api-v1/schemas";
@@ -280,6 +280,12 @@ export async function resolveStreamCode(
  * (`target_chosen ? target_id : null`): a row the switch made alone has chosen nothing, even though the fixture still streams
  * to the org's default destination.
  */
+/** PR #989 confirm N1: the settings row's revision, microseconds since the epoch of `updated_at` — exact in a double
+ *  (≈1.8e15 < 2^53). Every writer below stamps `updated_at = clock_timestamp()`, evaluated AFTER `on conflict` has
+ *  locked the row, so two writes to one row always read in commit order. `now()` is the transaction's START, and two
+ *  overlapping writes could have read backwards. */
+const REVISION = sql`(extract(epoch from updated_at) * 1000000)::float8`;
+
 export async function saveStreamSettings(auth: AuthCtx, fixtureId: string, body: PutStreamSettings): Promise<StreamSettings> {
   requireSessionEditor(auth);
   const { sportKey } = await fixtureOf(auth, fixtureId);
@@ -294,18 +300,19 @@ export async function saveStreamSettings(auth: AuthCtx, fixtureId: string, body:
     if (body.overlayDelayMs !== undefined) await writeOverlayDelay(tx, { ...a, overlayDelayMs: body.overlayDelayMs });
     const [row] = await tx<{
       target_id: string | null; target_chosen: boolean; auto_stream: boolean;
-      stream_mode: StreamMode | null; overlay_template: string | null; overlay_delay_ms: number | null;
+      stream_mode: StreamMode | null; overlay_template: string | null; overlay_delay_ms: number | null; revision: number;
     }[]>`
-      select target_id, target_chosen, auto_stream, stream_mode, overlay_template, overlay_delay_ms
+      select target_id, target_chosen, auto_stream, stream_mode, overlay_template, overlay_delay_ms, ${REVISION} as revision
         from fixture_stream_settings where fixture_id = ${fixtureId}`;
     // No row only for a body that named nothing (the route's schema refuses that): the defaults, with nothing written.
-    if (row === undefined) return { targetId: null, autoStream: false, streamMode: null, overlayTemplate: null, overlayDelayMs: null };
+    if (row === undefined) return { targetId: null, autoStream: false, streamMode: null, overlayTemplate: null, overlayDelayMs: null, revision: null };
     return {
       targetId: row.target_chosen ? row.target_id : null,
       autoStream: row.auto_stream,
       streamMode: row.stream_mode,
       overlayTemplate: row.overlay_template,
       overlayDelayMs: row.overlay_delay_ms,
+      revision: row.revision,
     };
   });
 }
@@ -349,9 +356,9 @@ export async function writeStreamSettings(
   }
   await tx`
     insert into fixture_stream_settings (fixture_id, org_id, target_id, target_chosen, updated_by, updated_at)
-    values (${a.fixtureId}, ${a.orgId}, ${a.targetId}, true, ${a.updatedBy}, now())
+    values (${a.fixtureId}, ${a.orgId}, ${a.targetId}, true, ${a.updatedBy}, clock_timestamp())
     on conflict (fixture_id) do update
-       set target_id = excluded.target_id, target_chosen = true, updated_by = excluded.updated_by, updated_at = now()`;
+       set target_id = excluded.target_id, target_chosen = true, updated_by = excluded.updated_by, updated_at = clock_timestamp()`;
   return { targetId: a.targetId };
 }
 
@@ -366,9 +373,9 @@ export async function writeAutoStream(
 ): Promise<void> {
   await tx`
     insert into fixture_stream_settings (fixture_id, org_id, auto_stream, updated_by, updated_at)
-    values (${a.fixtureId}, ${a.orgId}, ${a.autoStream}, ${a.updatedBy}, now())
+    values (${a.fixtureId}, ${a.orgId}, ${a.autoStream}, ${a.updatedBy}, clock_timestamp())
     on conflict (fixture_id) do update
-       set auto_stream = excluded.auto_stream, updated_by = excluded.updated_by, updated_at = now(),
+       set auto_stream = excluded.auto_stream, updated_by = excluded.updated_by, updated_at = clock_timestamp(),
            auto_start_refusal = case when excluded.auto_stream then fixture_stream_settings.auto_start_refusal else null end`;
 }
 
@@ -381,9 +388,9 @@ export async function writeStreamMode(
 ): Promise<void> {
   await tx`
     insert into fixture_stream_settings (fixture_id, org_id, stream_mode, updated_by, updated_at)
-    values (${a.fixtureId}, ${a.orgId}, ${a.streamMode}, ${a.updatedBy}, now())
+    values (${a.fixtureId}, ${a.orgId}, ${a.streamMode}, ${a.updatedBy}, clock_timestamp())
     on conflict (fixture_id) do update
-       set stream_mode = excluded.stream_mode, updated_by = excluded.updated_by, updated_at = now()`;
+       set stream_mode = excluded.stream_mode, updated_by = excluded.updated_by, updated_at = clock_timestamp()`;
 }
 
 /** R2006 (V462's `overlay_template`, R2004's reader): the one writer of the organiser's score style. An id this fixture's
@@ -397,9 +404,9 @@ export async function writeOverlayTemplate(
   }
   await tx`
     insert into fixture_stream_settings (fixture_id, org_id, overlay_template, updated_by, updated_at)
-    values (${a.fixtureId}, ${a.orgId}, ${a.overlayTemplate}, ${a.updatedBy}, now())
+    values (${a.fixtureId}, ${a.orgId}, ${a.overlayTemplate}, ${a.updatedBy}, clock_timestamp())
     on conflict (fixture_id) do update
-       set overlay_template = excluded.overlay_template, updated_by = excluded.updated_by, updated_at = now()`;
+       set overlay_template = excluded.overlay_template, updated_by = excluded.updated_by, updated_at = clock_timestamp()`;
 }
 
 /** R2006 (V462's `overlay_delay_ms`): the one writer of the organiser's Score timing. `null` resets to the server's
@@ -411,9 +418,9 @@ export async function writeOverlayDelay(
 ): Promise<void> {
   await tx`
     insert into fixture_stream_settings (fixture_id, org_id, overlay_delay_ms, updated_by, updated_at)
-    values (${a.fixtureId}, ${a.orgId}, ${a.overlayDelayMs}, ${a.updatedBy}, now())
+    values (${a.fixtureId}, ${a.orgId}, ${a.overlayDelayMs}, ${a.updatedBy}, clock_timestamp())
     on conflict (fixture_id) do update
-       set overlay_delay_ms = excluded.overlay_delay_ms, updated_by = excluded.updated_by, updated_at = now()`;
+       set overlay_delay_ms = excluded.overlay_delay_ms, updated_by = excluded.updated_by, updated_at = clock_timestamp()`;
 }
 
 /** R2006 (V466): the mode a start that names none streams with — the phone operator's own start and the automatic start.
@@ -428,14 +435,15 @@ export async function startModeFor(exec: Tx | typeof sql, fixtureId: string): Pr
 }
 
 /** R2006: the stored score preferences of each listed fixture, for the panel's page context — ONE read for the page.
- *  A fixture with no row (or another org's) is left out, and the panel reads it as "all defaults". */
-export async function streamPrefsOf(orgId: string, fixtureIds: readonly string[]): Promise<Record<string, StreamPrefs>> {
+ *  A fixture with no row (or another org's) is left out, and the panel reads it as "all defaults". Each carries the
+ *  row's `revision` (lib/stream-settings.ts `StreamPrefsRead`), the same number a PUT answer carries. */
+export async function streamPrefsOf(orgId: string, fixtureIds: readonly string[]): Promise<Record<string, StreamPrefsRead>> {
   if (fixtureIds.length === 0) return {};
-  const rows = await sql<{ fixture_id: string; stream_mode: StreamMode | null; overlay_template: string | null; overlay_delay_ms: number | null }[]>`
-    select fixture_id, stream_mode, overlay_template, overlay_delay_ms from fixture_stream_settings
+  const rows = await sql<{ fixture_id: string; stream_mode: StreamMode | null; overlay_template: string | null; overlay_delay_ms: number | null; revision: number }[]>`
+    select fixture_id, stream_mode, overlay_template, overlay_delay_ms, ${REVISION} as revision from fixture_stream_settings
      where org_id = ${orgId} and fixture_id in ${sql([...fixtureIds])}`;
   return Object.fromEntries(
-    rows.map((r) => [r.fixture_id, { streamMode: r.stream_mode, overlayTemplate: r.overlay_template, overlayDelayMs: r.overlay_delay_ms }]),
+    rows.map((r) => [r.fixture_id, { streamMode: r.stream_mode, overlayTemplate: r.overlay_template, overlayDelayMs: r.overlay_delay_ms, revision: r.revision }]),
   );
 }
 
@@ -450,8 +458,8 @@ export async function markAutoStartBlocked(
 ): Promise<void> {
   await exec`
     insert into fixture_stream_settings (fixture_id, org_id, auto_start_blocked_at, updated_by, updated_at)
-    values (${fixtureId}, ${orgId}, ${at}, ${updatedBy}, now())
+    values (${fixtureId}, ${orgId}, ${at}, ${updatedBy}, clock_timestamp())
     on conflict (fixture_id) do update
-       set auto_start_blocked_at = excluded.auto_start_blocked_at, updated_by = excluded.updated_by, updated_at = now()
+       set auto_start_blocked_at = excluded.auto_start_blocked_at, updated_by = excluded.updated_by, updated_at = clock_timestamp()
      where fixture_stream_settings.auto_start_blocked_at is null`;
 }

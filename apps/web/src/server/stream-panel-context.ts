@@ -23,7 +23,7 @@ import { overlayKeyFor } from "@/server/overlay/overlay-key";
 import { relayOverlayPageFacts } from "@/server/overlay/page-facts";
 import type { OverlaySideInput } from "@/lib/overlay-model";
 import { overlayDictOf } from "@/lib/overlay-dict";
-import { DEFAULT_STREAM_PREFS, type StreamPrefs } from "@/lib/stream-settings";
+import { NO_STREAM_PREFS_READ, type StreamPrefsRead } from "@/lib/stream-settings";
 import { AUTO_STOP_AFTER_RESULT_SECONDS, PHONE_LOST_LIVE_MINUTES, RELAY_OVERLAY_DELAY_DEFAULT_MS, tunable } from "@/server/relay/config";
 import { composedUnavailable, relayUnavailable } from "@/server/relay/drivers";
 import { streamPrefsOf } from "@/server/usecases/stream-codes";
@@ -90,7 +90,7 @@ async function phoneCaptureOffered(auth: AuthCtx): Promise<boolean> {
   return on;
 }
 
-const NO_STORED_PREFS: Record<string, StreamPrefs> = {};
+const NO_STORED_PREFS: Record<string, StreamPrefsRead> = {};
 type PreviewSides = Record<string, [OverlaySideInput, OverlaySideInput]>;
 const NO_PREVIEW_SIDES: PreviewSides = {};
 
@@ -156,7 +156,7 @@ export async function loadStreamPanelContext(args: {
     composedAvailable,
     // R2006: each listed fixture's stored score preferences; a fixture with no row is at the defaults (the panel opens
     // on the score, the sport's template and the server's delay).
-    streamPrefs: entitled ? Object.fromEntries(args.fixtureIds.map((id) => [id, storedPrefs[id] ?? DEFAULT_STREAM_PREFS])) : {},
+    streamPrefs: entitled ? Object.fromEntries(args.fixtureIds.map((id) => [id, storedPrefs[id] ?? NO_STREAM_PREFS_READ])) : {},
     // R2006: the delay a composed session serves when the fixture sets none — the number the session create copies
     // (stream-sessions.ts), so the panel's "Default {seconds}s" is the server's, never a typed one. No read.
     overlayDelayDefaultMs: RELAY_OVERLAY_DELAY_DEFAULT_MS,

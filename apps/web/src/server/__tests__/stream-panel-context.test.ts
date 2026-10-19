@@ -566,13 +566,14 @@ describe("R2006: the score preferences and whether the score can stream", () => 
   });
 
   it("the stored preferences are read ONCE for every listed fixture, for THIS org, and handed over keyed by fixture; a fixture with no row is at the defaults", async () => {
-    prefs.streamPrefsOf.mockResolvedValue({ "fx-1": { streamMode: "passthrough", overlayTemplate: "bar", overlayDelayMs: 0 } });
+    prefs.streamPrefsOf.mockResolvedValue({ "fx-1": { streamMode: "passthrough", overlayTemplate: "bar", overlayDelayMs: 0, revision: 1_792_000_000_000_000 } });
     const got = await load(undefined, { fixtureIds: ["fx-1", "fx-2"] });
     expect(prefs.streamPrefsOf).toHaveBeenCalledTimes(1);
     expect(prefs.streamPrefsOf.mock.calls[0]).toEqual([AUTH.orgId, ["fx-1", "fx-2"]]);
     expect(got?.streamPrefs).toEqual({
-      "fx-1": { streamMode: "passthrough", overlayTemplate: "bar", overlayDelayMs: 0 },
-      "fx-2": { streamMode: null, overlayTemplate: null, overlayDelayMs: null },
+      "fx-1": { streamMode: "passthrough", overlayTemplate: "bar", overlayDelayMs: 0, revision: 1_792_000_000_000_000 },
+      // No row: the defaults, at no revision — older than any write (PR #989 confirm N1).
+      "fx-2": { streamMode: null, overlayTemplate: null, overlayDelayMs: null, revision: null },
     });
   });
 

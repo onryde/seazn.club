@@ -62,8 +62,9 @@ afterAll(async () => {
 });
 
 const BASE = "https://test.local/api/v1";
-/** R2006: the three score preferences, never chosen — each `null` ("the default"). */
-const NO_PREFS = { streamMode: null, overlayTemplate: null, overlayDelayMs: null } as const;
+/** R2006: the three score preferences, never chosen — each `null` ("the default") — and the row's revision after the
+ *  write (PR #989 confirm N1: a number on every answer; its ORDER is pinned where it is the point). */
+const NO_PREFS = { streamMode: null, overlayTemplate: null, overlayDelayMs: null, revision: expect.any(Number) as number } as const;
 
 interface Envelope<T = unknown> {
   ok: boolean;
@@ -240,11 +241,19 @@ describe.skipIf(!HAS_DB)("PUT …/stream-settings over HTTP", () => {
   it("the switch survives a destination pick and the pick survives the switch, over HTTP — and a second identical PUT changes nothing", async () => {
     const o = await organiser();
     const target = await createStreamTarget(o.auth, o.auth.orgId, { kind: "youtube", label: "Court", streamKey: `k-${randomUUID().slice(0, 8)}` });
-    const put = async (body: unknown) => StreamSettings.parse((await read<StreamSettings>(await settingsRaw(o.fixtureId, body))).body.data);
+    const revisions: number[] = [];
+    const put = async (body: unknown) => {
+      const answer = StreamSettings.parse((await read<StreamSettings>(await settingsRaw(o.fixtureId, body))).body.data);
+      revisions.push(answer.revision!);
+      return answer;
+    };
     expect(await put({ autoStream: true })).toEqual({ targetId: null, autoStream: true, ...NO_PREFS });
     expect(await put({ targetId: target.id }), "pick after the switch").toEqual({ targetId: target.id, autoStream: true, ...NO_PREFS });
     expect(await put({ autoStream: false }), "switch off after the pick").toEqual({ targetId: target.id, autoStream: false, ...NO_PREFS });
     expect(await put({ autoStream: false }), "the same PUT twice").toEqual({ targetId: target.id, autoStream: false, ...NO_PREFS });
+    // PR #989 confirm N1: every write, an identical one included, answers a strictly higher revision over HTTP.
+    expect(revisions, "four answers, four revisions").toHaveLength(4);
+    for (let i = 1; i < revisions.length; i++) expect(revisions[i]!, `answer ${i + 1} is newer than answer ${i}`).toBeGreaterThan(revisions[i - 1]!);
     const rows = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_settings where fixture_id = ${o.fixtureId}`;
     expect(rows[0]!.n).toBe(1);
   });

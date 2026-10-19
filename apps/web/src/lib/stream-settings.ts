@@ -43,3 +43,14 @@ export interface StreamPrefs {
 
 /** A fixture with no settings row: every preference at its default. */
 export const DEFAULT_STREAM_PREFS: StreamPrefs = { streamMode: null, overlayTemplate: null, overlayDelayMs: null };
+
+/** The preferences as one READ of the settings row, with the row's `revision`: microseconds since the epoch of its last
+ *  write (`fixture_stream_settings.updated_at`, stamped `clock_timestamp()` after the row lock, so later writes to one
+ *  row always read higher), or null when no row exists. The page's read and each PUT answer carry it, so the panel can
+ *  order a read against a save it has already seen settle (PR #989 confirm N1) — values alone cannot. */
+export interface StreamPrefsRead extends StreamPrefs {
+  revision: number | null;
+}
+
+/** A fixture with no settings row, as a read: the defaults, before any write. */
+export const NO_STREAM_PREFS_READ: StreamPrefsRead = { ...DEFAULT_STREAM_PREFS, revision: null };

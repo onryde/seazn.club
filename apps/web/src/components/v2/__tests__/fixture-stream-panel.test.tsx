@@ -229,6 +229,19 @@ function open(o: Partial<StreamPanelContext> = {}) {
   click(byTestId(island.tree(), "stream-tab-obs"));
   return island;
 }
+/** PUT …/stream-settings answers as the route does: the whole row after the write, at the next revision (PR #989
+ *  confirm N1 — an answer is a read the panel folds in). Any other call answers {} at once. A test's own
+ *  `mockRejectedValueOnce` still takes precedence for the next call. */
+function answerSettingsLikeTheRoute(start: { streamMode: string | null; overlayTemplate: string | null; overlayDelayMs: number | null }) {
+  const stored: Record<string, unknown> = { targetId: null, autoStream: false, ...start };
+  let revision = 1;
+  apiV1.mockImplementation(async (url: string, o?: { method?: string; json?: unknown }) => {
+    if (!url.endsWith("/stream-settings") || o?.method !== "PUT") return {};
+    Object.assign(stored, o.json as Record<string, unknown>);
+    return { ...stored, revision: ++revision };
+  });
+}
+
 function openPanel(o: Partial<StreamPanelContext> = {}) {
   return renderIsland(FixtureStreamPanel, {
     fixture: FIXTURE,
@@ -350,21 +363,21 @@ describe("R2006 P3: the OBS tab's picker is built from the registry and opens on
 
   it("opens on the fixture's STORED style — the non-default one — and the OBS link carries it as template=, never style=", () => {
     const other = templatesForSport("football").find((t) => t.id !== defaultTemplateFor("football"))!;
-    const tree = open({ sportKey: "football", streamPrefs: { [FIXTURE.id]: { streamMode: null, overlayTemplate: other.id, overlayDelayMs: null } } }).tree();
+    const tree = open({ sportKey: "football", streamPrefs: { [FIXTURE.id]: { streamMode: null, overlayTemplate: other.id, overlayDelayMs: null, revision: 1 } } }).tree();
     expect(pickerProps(tree).selected).toBe(other.id);
     expect(linkOf(tree).searchParams.get("template")).toBe(other.id);
     expect(linkOf(tree).searchParams.has("style"), "the panel no longer writes ?style=").toBe(false);
   });
 
   it("a stored id the registry does not offer resolves as the overlay page resolves it (resolveTemplate) — never a dead selection", () => {
-    const tree = open({ sportKey: "cricket", streamPrefs: { [FIXTURE.id]: { streamMode: null, overlayTemplate: "nope", overlayDelayMs: null } } }).tree();
+    const tree = open({ sportKey: "cricket", streamPrefs: { [FIXTURE.id]: { streamMode: null, overlayTemplate: "nope", overlayDelayMs: null, revision: 1 } } }).tree();
     expect(pickerProps(tree).selected).toBe(resolveTemplate("nope", "cricket").id);
     expect(pickerProps(tree).selected, "premise: that is the sport's default").toBe(defaultTemplateFor("cricket"));
   });
 
   it("another fixture's stored style is never this row's", () => {
     const other = templatesForSport("football").find((t) => t.id !== defaultTemplateFor("football"))!;
-    const tree = open({ streamPrefs: { "f-other": { streamMode: null, overlayTemplate: other.id, overlayDelayMs: null } } }).tree();
+    const tree = open({ streamPrefs: { "f-other": { streamMode: null, overlayTemplate: other.id, overlayDelayMs: null, revision: 1 } } }).tree();
     expect(pickerProps(tree).selected).toBe(defaultTemplateFor("football"));
   });
 
@@ -4952,7 +4965,8 @@ describe("R2006: ScoreTiming — 0–30 s in tenths, the server's default, Reset
   });
 
   it("the panel: a timing change PUTs { overlayDelayMs } alone, Reset PUTs null, and a failed save puts the stored value back and says so", async () => {
-    const island = openPanel({ relayEntitled: true, composedAvailable: true, streamPrefs: { [FIXTURE.id]: { streamMode: null, overlayTemplate: null, overlayDelayMs: 1500 } } });
+    answerSettingsLikeTheRoute({ streamMode: null, overlayTemplate: null, overlayDelayMs: 1500 });
+    const island = openPanel({ relayEntitled: true, composedAvailable: true, streamPrefs: { [FIXTURE.id]: { streamMode: null, overlayTemplate: null, overlayDelayMs: 1500, revision: 1 } } });
     const timingOf = () => {
       const tab = island.tree().find((el) => el.type === PhoneTab)!;
       const editor = (propsOf(tab).score as PhoneScore).editor as ReactElement;
@@ -4982,7 +4996,7 @@ describe("R2006: the panel hands the Phone tab the score — availability, the s
     let checked = 0;
     for (const available of [true, false]) {
       for (const stored of [null, "passthrough", "composed"] as const) {
-        const s = scoreOf(openPanel({ relayEntitled: true, composedAvailable: available, streamPrefs: { [FIXTURE.id]: { streamMode: stored, overlayTemplate: other.id, overlayDelayMs: null } } }));
+        const s = scoreOf(openPanel({ relayEntitled: true, composedAvailable: available, streamPrefs: { [FIXTURE.id]: { streamMode: stored, overlayTemplate: other.id, overlayDelayMs: null, revision: 1 } } }));
         expect([s.available, s.stored, s.template, s.sportKey], `${available} × ${stored}`).toEqual([available, stored, other.id, "football"]);
         checked++;
       }
@@ -4994,6 +5008,7 @@ describe("R2006: the panel hands the Phone tab the score — availability, the s
   });
 
   it("the sequence: Camera only → PUT { streamMode: passthrough }, shown at once; Add the score back → PUT { streamMode: composed }; a failed save puts the stored mode back and says so", async () => {
+    answerSettingsLikeTheRoute({ streamMode: null, overlayTemplate: null, overlayDelayMs: null });
     const island = openPanel({ relayEntitled: true, composedAvailable: true });
     scoreOf(island).onMode("passthrough");
     expect(apiV1).toHaveBeenLastCalledWith(`/api/v1/fixtures/${FIXTURE.id}/stream-settings`, { method: "PUT", json: { streamMode: "passthrough" } });
@@ -5022,7 +5037,7 @@ describe("R2006: the panel hands the Phone tab the score — availability, the s
 });
 
 // ─── PR #989 review: the stored preferences under real timing (I2, m2, m3), the next-stream line (m1), the keyboard (m6) ──
-describe("PR #989 review: useStreamPrefs — the newest save lands (I2), a newer page read re-seeds (m3), Go live carries the shown timing (m2)", () => {
+describe("PR #989 review: useStreamPrefs — the newest save lands (I2), a newer page read re-seeds (m3), reads and answers are ordered by revision (confirm N1/N2), Go live carries the shown timing (m2)", () => {
   type Deferred = { url: string; json: unknown; resolve: (v: unknown) => void; reject: (e: unknown) => void };
   /** Every settings PUT waits for the test to answer it; everything else answers {} at once. */
   const deferSettings = (): Deferred[] => {
@@ -5035,8 +5050,11 @@ describe("PR #989 review: useStreamPrefs — the newest save lands (I2), a newer
     });
     return held;
   };
-  /** The route's answer (`StreamSettings`): every field as stored, with `over` the ones this save wrote. */
-  const answer = (over: Record<string, unknown>) => ({ targetId: null, autoStream: false, streamMode: null, overlayTemplate: null, overlayDelayMs: null, ...over });
+  /** The route's answer (`StreamSettings`): the whole row as stored at `revision`, with `over` the fields that differ from
+   *  the defaults then. An answer IS a read of the row (PR #989 confirm N1), so a test hands it the row state at that
+   *  revision, not just the field the save wrote. */
+  const answer = (over: Record<string, unknown>, revision: number) =>
+    ({ targetId: null, autoStream: false, streamMode: null, overlayTemplate: null, overlayDelayMs: null, ...over, revision });
   const flush = () => new Promise<void>((r) => setImmediate(r));
   const two = () => {
     const def = defaultTemplateFor("football");
@@ -5051,14 +5069,23 @@ describe("PR #989 review: useStreamPrefs — the newest save lands (I2), a newer
     pickerProps(island.tree()).onPick(other); // A
     pickerProps(island.tree()).onPick(def); // B
     expect(held.map((h) => h.json), "two saves in flight, in order").toEqual([{ overlayTemplate: other }, { overlayTemplate: def }]);
-    held[1]!.resolve(answer({ overlayTemplate: def }));
+    held[1]!.resolve(answer({ overlayTemplate: def }, 2));
     await flush();
     expect(pickerProps(island.tree()).selected).toBe(def);
-    held[0]!.resolve(answer({ overlayTemplate: other }));
+    held[0]!.resolve(answer({ overlayTemplate: other }, 1)); // A landed first on the server (revision 1), answered last
     await flush();
     expect(pickerProps(island.tree()).selected, "the overtaken answer never lands").toBe(def);
     expect(linkOf(island.tree()).searchParams.get("template")).toBe(def);
     expect(pickerProps(island.tree()).saveFailed).toBe(false);
+    // The other order: A's answer arrives FIRST, while B is still out — the newer choice stays on screen until B lands.
+    pickerProps(island.tree()).onPick(other); // C
+    pickerProps(island.tree()).onPick(def); // D
+    held[2]!.resolve(answer({ overlayTemplate: other }, 3));
+    await flush();
+    expect(pickerProps(island.tree()).selected, "an overtaken answer while the newest is out never shows").toBe(def);
+    held[3]!.resolve(answer({ overlayTemplate: def }, 4));
+    await flush();
+    expect(pickerProps(island.tree()).selected).toBe(def);
   });
 
   it("I2 failure: pick A then B; B saves, then A fails late — nothing reverts and no line shows; the positive pair: the NEWEST save failing does both", async () => {
@@ -5067,13 +5094,13 @@ describe("PR #989 review: useStreamPrefs — the newest save lands (I2), a newer
     const island = open({ sportKey: "football" });
     pickerProps(island.tree()).onPick(other); // A
     pickerProps(island.tree()).onPick(def); // B
-    held[1]!.resolve(answer({ overlayTemplate: def }));
+    held[1]!.resolve(answer({ overlayTemplate: def }, 2));
     await flush();
     held[0]!.reject(new Error("offline"));
     await flush();
     expect(pickerProps(island.tree()).selected, "the overtaken failure never reverts").toBe(def);
     expect(pickerProps(island.tree()).saveFailed, "and never says so").toBe(false);
-    // Positive pair: a newest save that fails puts the value before it back and says so.
+    // Positive pair: a newest save that fails puts back what the server holds (B's answer) and says so.
     pickerProps(island.tree()).onPick(other);
     held[2]!.reject(new Error("offline"));
     await flush();
@@ -5089,8 +5116,8 @@ describe("PR #989 review: useStreamPrefs — the newest save lands (I2), a newer
     timingOf().onSave(1000);
     timingOf().onSave(2000);
     scoreOf().onMode("passthrough"); // a save of ANOTHER field, in flight beside them
-    held[1]!.resolve(answer({ overlayDelayMs: 2000 }));
-    held[0]!.resolve(answer({ overlayDelayMs: 1000 }));
+    held[1]!.resolve(answer({ overlayDelayMs: 2000 }, 2));
+    held[0]!.resolve(answer({ overlayDelayMs: 1000 }, 1));
     await flush();
     expect(timingOf().storedMs, "the timing's newest").toBe(2000);
     held[2]!.reject(new Error("offline"));
@@ -5100,47 +5127,171 @@ describe("PR #989 review: useStreamPrefs — the newest save lands (I2), a newer
     expect(timingOf().storedMs).toBe(2000);
   });
 
-  it("m3: a newer page read moves a field it MOVED with no save in flight; a field with a save in flight keeps the organiser's choice; a read that moved nothing changes nothing", async () => {
-    const held = deferSettings();
+  /** The panel at one page read, re-rendered with later reads: the timing and the mode as it shows them. */
+  const readRig = (first: StreamPanelContext["streamPrefs"][string]) => {
     const ctxWith = (p: StreamPanelContext["streamPrefs"][string]) => ctx({ relayEntitled: true, composedAvailable: true, streamPrefs: { [FIXTURE.id]: p } });
     const props = (p: StreamPanelContext["streamPrefs"][string]) => ({ fixture: FIXTURE, entrantNames: ENTRANTS, tz: TZ, stream: ctxWith(p) });
-    const island = renderIsland(FixtureStreamPanel, props({ streamMode: null, overlayTemplate: null, overlayDelayMs: 1500 }));
+    const island = renderIsland(FixtureStreamPanel, props(first));
     const scoreOf = () => propsOf(island.tree().find((el) => el.type === PhoneTab)!).score as PhoneScore;
     const timingOf = () => propsOf(walk(scoreOf().editor as ReactElement).find((el) => el.type === ScoreTiming)!) as unknown as Parameters<typeof ScoreTiming>[0];
+    return { reread: (p: StreamPanelContext["streamPrefs"][string]) => island.rerender(props(p)), scoreOf, timingOf };
+  };
+  const row = (over: Partial<StreamPanelContext["streamPrefs"][string]>, revision: number) =>
+    ({ streamMode: null, overlayTemplate: null, overlayDelayMs: null, ...over, revision });
+
+  it("m3: a newer page read moves a field with no save in flight; a field with a save in flight keeps the organiser's choice; a read that moved nothing changes nothing", async () => {
+    const held = deferSettings();
+    const { reread, scoreOf, timingOf } = readRig(row({ overlayDelayMs: 1500 }, 10));
     let checked = 0;
-    // The empty case first: a read that moved nothing (a new object, the same values) changes nothing and saves nothing.
-    island.rerender(props({ streamMode: null, overlayTemplate: null, overlayDelayMs: 1500 }));
+    // The empty case first: a read that moved nothing (a new object, the same row) changes nothing and saves nothing.
+    reread(row({ overlayDelayMs: 1500 }, 10));
     expect([scoreOf().stored, timingOf().storedMs]).toEqual([null, 1500]);
     checked++;
-    // Moved, nothing in flight: taken (another organiser chose Camera only and 2 s).
-    island.rerender(props({ streamMode: "passthrough", overlayTemplate: null, overlayDelayMs: 2000 }));
+    // Newer, nothing in flight: taken (another organiser chose Camera only and 2 s).
+    reread(row({ streamMode: "passthrough", overlayDelayMs: 2000 }, 20));
     expect([scoreOf().stored, timingOf().storedMs], "a newer read is shown").toEqual(["passthrough", 2000]);
     checked++;
-    // A save in flight: the organiser's own newer choice holds against a read that moved that field — the other field,
+    // A save in flight: the organiser's own newer choice holds against a newer read of that field — the other field,
     // with nothing in flight, still moves.
     timingOf().onSave(2500);
-    island.rerender(props({ streamMode: "composed", overlayTemplate: null, overlayDelayMs: 3000 }));
+    reread(row({ streamMode: "composed", overlayDelayMs: 3000 }, 30));
     expect(timingOf().storedMs, "the in-flight choice holds").toBe(2500);
     expect(scoreOf().stored, "the field with nothing in flight moves").toBe("composed");
     checked++;
-    held[0]!.resolve(answer({ overlayDelayMs: 2500 }));
+    held[0]!.resolve(answer({ streamMode: "composed", overlayDelayMs: 2500 }, 35)); // landed after the other organiser's
     await flush();
-    expect(timingOf().storedMs, "settled: the save's own answer").toBe(2500);
-    // The read the copy was last seeded with, again (a refresh that began before the save landed): nothing moves.
-    island.rerender(props({ streamMode: "composed", overlayTemplate: null, overlayDelayMs: 3000 }));
-    expect(timingOf().storedMs).toBe(2500);
-    checked++;
+    expect(timingOf().storedMs, "settled: the save's own answer, the newest write").toBe(2500);
     // A later read that moved it is taken again — the settled field is no longer held.
-    island.rerender(props({ streamMode: "composed", overlayTemplate: null, overlayDelayMs: 4000 }));
+    reread(row({ streamMode: "composed", overlayDelayMs: 4000 }, 40));
     expect(timingOf().storedMs).toBe(4000);
     checked++;
     expect(held, "no read ever saved anything").toHaveLength(1);
-    expect(checked).toBe(5);
+    expect(checked).toBe(4);
+  });
+
+  it("confirm N1 (scenario A): a refresh that left the server between two saves arrives after both — it differs from the last read, and is still not shown; both orders; the positive pair: a NEWER read is", async () => {
+    let checked = 0;
+    // Order 1: both saves settle, then the stale refresh (carrying the first save's value, at its revision) arrives.
+    {
+      const held = deferSettings();
+      const { reread, timingOf } = readRig(row({ overlayDelayMs: 1000 }, 10));
+      timingOf().onSave(2000);
+      held[0]!.resolve(answer({ overlayDelayMs: 2000 }, 20));
+      await flush();
+      timingOf().onSave(3000);
+      held[1]!.resolve(answer({ overlayDelayMs: 3000 }, 30));
+      await flush();
+      expect(timingOf().storedMs, "PREMISE: the newest save shows").toBe(3000);
+      reread(row({ overlayDelayMs: 2000 }, 20));
+      expect(timingOf().storedMs, "order 1: the stale refresh never puts 2 s back").toBe(3000);
+      reread(row({ overlayDelayMs: 1500 }, 15));
+      expect(timingOf().storedMs, "nor an even older one").toBe(3000);
+      reread(row({ overlayDelayMs: 2000 }, 20));
+      expect(timingOf().storedMs, "nor the same stale refresh again").toBe(3000);
+      // Positive pairs: a read newer than both saves is shown — even one whose values equal the stale read last seen
+      // (another organiser put 2 s back at revision 40), and then another (5 s).
+      reread(row({ overlayDelayMs: 2000 }, 40));
+      expect(timingOf().storedMs, "a newer read with the stale read's values is still newer").toBe(2000);
+      reread(row({ overlayDelayMs: 5000 }, 50));
+      expect(timingOf().storedMs, "a newer read is shown").toBe(5000);
+      checked++;
+    }
+    // Order 2: the stale refresh arrives while the second save is still in flight, then the save settles.
+    {
+      const held = deferSettings();
+      const { reread, timingOf } = readRig(row({ overlayDelayMs: 1000 }, 10));
+      timingOf().onSave(2000);
+      held[0]!.resolve(answer({ overlayDelayMs: 2000 }, 20));
+      await flush();
+      timingOf().onSave(3000);
+      reread(row({ overlayDelayMs: 2000 }, 20));
+      expect(timingOf().storedMs, "order 2: in flight, the organiser's choice").toBe(3000);
+      held[1]!.resolve(answer({ overlayDelayMs: 3000 }, 30));
+      await flush();
+      expect(timingOf().storedMs, "settled: still 3 s").toBe(3000);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("the NEWEST save fails while an older save of the field is still out: the failure shows at once what the server is known to hold, and says so; the older's late answer then lands, the server's newest", async () => {
+    const held = deferSettings();
+    const { timingOf } = readRig(row({ overlayDelayMs: 1000 }, 10));
+    timingOf().onSave(2000); // A
+    timingOf().onSave(3000); // B, the newest
+    held[1]!.reject(new Error("offline"));
+    await flush();
+    expect(timingOf().storedMs, "B failed with A still out: what is known, 1 s — never B's 3 s").toBe(1000);
+    expect(timingOf().saveFailed, "and it says so").toBe(true);
+    held[0]!.resolve(answer({ overlayDelayMs: 2000 }, 20));
+    await flush();
+    expect(timingOf().storedMs, "A landed: the server holds 2 s, and the panel shows it").toBe(2000);
+  });
+
+  it("confirm N1 (scenario B): a save that fails after a NEWER read arrived shows that read, not the value from before the save; both orders", async () => {
+    let checked = 0;
+    // Order 1: the newer read arrives mid-flight, then the save fails.
+    {
+      const held = deferSettings();
+      const { reread, timingOf } = readRig(row({ overlayDelayMs: 1000 }, 10));
+      timingOf().onSave(2000);
+      reread(row({ overlayDelayMs: 4000 }, 40)); // another organiser chose 4 s while the save was out
+      expect(timingOf().storedMs, "in flight: the organiser's choice").toBe(2000);
+      held[0]!.reject(new Error("offline"));
+      await flush();
+      expect(timingOf().storedMs, "order 1: the failure shows what the server holds now, 4 s — not the 1 s from before").toBe(4000);
+      checked++;
+    }
+    // Order 2: the save fails first (back to what was known), then the newer read arrives and is shown.
+    {
+      const held = deferSettings();
+      const { reread, timingOf } = readRig(row({ overlayDelayMs: 1000 }, 10));
+      timingOf().onSave(2000);
+      held[0]!.reject(new Error("offline"));
+      await flush();
+      expect(timingOf().storedMs, "order 2: the failure shows what was known, 1 s").toBe(1000);
+      reread(row({ overlayDelayMs: 4000 }, 40));
+      expect(timingOf().storedMs, "then the newer read").toBe(4000);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("confirm N2: a stale refresh that moved one field carries another at its pre-save value — the saved one keeps the organiser's value, field by field; both orders", async () => {
+    // Another organiser chose Camera only at revision 20; this organiser's 2.5 s landed at 30, so its answer is the row
+    // at 30: Camera only AND 2.5 s. The stale refresh (revision 20) moved the mode and still carries 1 s.
+    let checked = 0;
+    // Order 1: the timing save settles, then the stale refresh arrives.
+    {
+      const held = deferSettings();
+      const { reread, scoreOf, timingOf } = readRig(row({ overlayDelayMs: 1000 }, 10));
+      timingOf().onSave(2500);
+      held[0]!.resolve(answer({ streamMode: "passthrough", overlayDelayMs: 2500 }, 30));
+      await flush();
+      reread(row({ streamMode: "passthrough", overlayDelayMs: 1000 }, 20));
+      expect(timingOf().storedMs, "order 1: the saved timing holds").toBe(2500);
+      expect(scoreOf().stored, "and the mode reads Camera only").toBe("passthrough");
+      checked++;
+    }
+    // Order 2: the stale refresh arrives while the timing save is in flight (the mode moves), then the save settles.
+    {
+      const held = deferSettings();
+      const { reread, scoreOf, timingOf } = readRig(row({ overlayDelayMs: 1000 }, 10));
+      timingOf().onSave(2500);
+      reread(row({ streamMode: "passthrough", overlayDelayMs: 1000 }, 20));
+      expect(scoreOf().stored, "order 2: the mode, with nothing in flight, moves").toBe("passthrough");
+      expect(timingOf().storedMs, "the timing in flight holds").toBe(2500);
+      held[0]!.resolve(answer({ streamMode: "passthrough", overlayDelayMs: 2500 }, 30));
+      await flush();
+      expect([scoreOf().stored, timingOf().storedMs], "settled").toEqual(["passthrough", 2500]);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("m2 (the panel's half): a timing typed just before Go live is the score's delayMs at once, while its own PUT is still in flight — Go live sends it (the Go live table above), so the session never waits on the save", () => {
     const held = deferSettings();
-    const island = openPanel({ relayEntitled: true, composedAvailable: true, streamPrefs: { [FIXTURE.id]: { streamMode: null, overlayTemplate: null, overlayDelayMs: 4000 } } });
+    const island = openPanel({ relayEntitled: true, composedAvailable: true, streamPrefs: { [FIXTURE.id]: { streamMode: null, overlayTemplate: null, overlayDelayMs: 4000, revision: 1 } } });
     const scoreOf = () => propsOf(island.tree().find((el) => el.type === PhoneTab)!).score as PhoneScore;
     expect(scoreOf().delayMs, "seeded").toBe(4000);
     const timing = propsOf(walk(scoreOf().editor as ReactElement).find((el) => el.type === ScoreTiming)!) as unknown as Parameters<typeof ScoreTiming>[0];
