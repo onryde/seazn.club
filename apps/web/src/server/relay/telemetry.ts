@@ -132,6 +132,19 @@ export async function recordSample(exec: Exec, s: SampleInput): Promise<"written
   return rows.length === 1 ? "written" : "capped";
 }
 
+/** The rung of a session's newest NON-final heartbeat sample after `since` (null = the whole session) — the sizing
+ *  alarm's read THROUGH a final beat to the attempt's last live one (stream-sessions.ts `previousRungOf`). A READ, kept
+ *  beside the writer of the same table. It runs on whatever handle it is given: the beat passes its row-lock
+ *  transaction's savepoint (#983 r2), so the alarm decision reads the samples under the lock. */
+export async function latestLiveRung(exec: Exec, sessionId: string, since: string | Date | null): Promise<string | null> {
+  const [r] = await exec<{ rung: string | null }[]>`
+    select raw->>'rung' as rung from fixture_stream_samples
+     where session_id = ${sessionId} and source = 'heartbeat' and raw->>'state' is distinct from 'stopped'
+       ${since == null ? exec`` : exec`and sampled_at > ${since}`}
+     order by sampled_at desc, id desc limit 1`;
+  return r?.rung ?? null;
+}
+
 export interface ProviderCallInput {
   sessionId?: string | null;
   provider: "cloudflare" | "fly" | "stripe";

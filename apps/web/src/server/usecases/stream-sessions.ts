@@ -48,7 +48,7 @@ import {
   TargetSecretUnreadableError, lockStreamTarget, readCameraPlayback, readFirstInput, readTargetSecret, storeInputCredentials, storePlaybackCredentials, wipeStreamCodeTok,
 } from "@/server/relay/secret-columns";
 import { scrubBeatText } from "@/server/relay/sanitise";
-import { recordEvent, recordSample, recordStorageSnapshot, type EventSource } from "@/server/relay/telemetry";
+import { latestLiveRung, recordEvent, recordSample, recordStorageSnapshot, type EventSource } from "@/server/relay/telemetry";
 import { mintRelayToken, relayTokenExpiry, verifyRelayToken } from "@/server/relay/tokens";
 import { log } from "@/server/logger";
 import { captureError } from "@/lib/sentry";
@@ -2308,14 +2308,14 @@ export async function heartbeat(sessionId: string, token: string, body: RelayHea
   const { att } = await verifyRelayToken(token, { sid: sessionId, scope: "relay-job" });
   // R2002 review Q3: the Machine's free text is scrubbed before EITHER store keeps it (its job token, anything
   // JWT-shaped, everything from the first `?`), so last_heartbeat and the sample's raw hold the same detail.
-  // A PEEK (unlocked, pooled) for the reads that cannot run inside the beat's transaction (lib/db's nesting guard):
-  // the secrets to scrub with (R2004 m1) and the sizing alarm's previous rung (#981), both read BEFORE this beat is stored
-  // or sampled. Every decision about the write is re-taken on the LOCKED row below.
+  // A PEEK (unlocked, pooled) for the one read that cannot run inside the beat's transaction (lib/db's nesting guard):
+  // the secrets to scrub with (R2004 m1), a pooled read of its own. The peek decides NOTHING else — it can be stale by
+  // the time the lock is granted (#983 r2): the 410, the superseded attempt, the Owed 37 guard and the sizing alarm's
+  // previous rung are all taken on the LOCKED row below.
   const peek = await readRow(sessionId);
   if (!peek) throw new HttpError(404, "session not found");
   if (isTerminal(peek.state)) throw new HttpError(410, "session has ended", "SESSION_ENDED");
   const beat: RelayHeartbeat = body.exitDetail == null ? body : { ...body, exitDetail: scrubBeatText(body.exitDetail, await beatSecretsOf(sessionId, peek.mode, token)) };
-  const previousRung = await previousRungOf(peek);
   // #983 review r1: a beat whose token names an attempt OLDER than the row's (`superseded`) is a replaced Machine's —
   // received after the retry moved on, where the beat_window_at anchor cannot tell it from the replacement's first beat.
   // It is a SAMPLE only: no row write, no expiry tick, no callback, no sizing alarm, and the reply is `ending` (drain).
@@ -2332,23 +2332,25 @@ export async function heartbeat(sessionId: string, token: string, body: RelayHea
   // G5 (Task 11 review): `egressBytes` is optional, and an omitted field leaves the stored count alone — only a Machine
   // that REPORTS 0 stores 0 (the A29 rule: absent is not a measured zero). Within ONE attempt the count never goes
   // backwards (Owed 37: the GREATEST is kept — a lower count is an overtaken beat); a new attempt's count is its own.
-  const { row: before, superseded } = (await sql.begin(async (tx) => {
+  const { row: before, superseded, previousRung } = (await sql.begin(async (tx) => {
     const cur = await lockRow(tx, sessionId);
     if (!cur) throw new HttpError(404, "session not found");
     if (isTerminal(cur.state)) throw new HttpError(410, "session has ended", "SESSION_ENDED");
-    if (supersededAttempt(att, cur.runner_attempts)) return { row: cur, superseded: true };
+    if (supersededAttempt(att, cur.runner_attempts)) return { row: cur, superseded: true, previousRung: null };
+    // Read BEFORE this beat is stored or sampled, on the locked row (#983 r2).
+    const previousRung = await previousRungOf(tx, cur);
     const thisAttempt = storedBeatIsThisAttempt(cur);
     if (thisAttempt && closesAttempt(cur.last_heartbeat) && beat.state !== "stopped") {
       log.info({ sid: sessionId, state: beat.state }, "stream session: a beat received after this attempt's final beat is a sample only — the stored final stands");
-      return { row: cur, superseded: false };
+      return { row: cur, superseded: false, previousRung };
     }
     const egress = beat.egressBytes ?? null;
     await tx`update fixture_stream_sessions set last_heartbeat = ${sql.json(beat as never)}, heartbeat_at = ${deps.now()},
                egress_bytes = case when ${thisAttempt}::boolean then greatest(${egress}::bigint, egress_bytes)
                                    else coalesce(${egress}::bigint, egress_bytes) end
               where id = ${sessionId}`;
-    return { row: cur, superseded: false };
-  })) as { row: Row; superseded: boolean };
+    return { row: cur, superseded: false, previousRung };
+  })) as { row: Row; superseded: boolean; previousRung: unknown };
   await sampleBeat(sessionId, before.org_id, beat, deps);
   if (superseded) {
     log.info({ sid: sessionId, state: beat.state, att, attempt: before.runner_attempts }, "stream session: a beat from a superseded attempt's Machine is a sample only — the current attempt is untouched; the Machine is told to drain");
@@ -2402,18 +2404,15 @@ export async function heartbeat(sessionId: string, token: string, body: RelayHea
  *  last live beat — kept whole in the beat samples — and the restarted process's first beat on the rung its predecessor
  *  held is no new step. Read only after a final beat, so an ordinary beat costs no query. A read that fails answers
  *  null: an extra alarm is the safe direction for a sizing alarm, a lost one is not. */
-async function previousRungOf(before: Row): Promise<unknown> {
+async function previousRungOf(tx: Tx, before: Row): Promise<unknown> {
   if (before.mode !== "composed") return null;
   if (!storedBeatIsThisAttempt(before)) return null;
   if (before.last_heartbeat?.state !== "stopped") return before.last_heartbeat?.rung ?? null;
+  // #983 r2: read on the beat's own row-lock transaction (the LOCKED row's anchor, no second pooled connection), in a
+  // SAVEPOINT: a read that fails rolls back to it and answers null, and the beat's write still commits — without the
+  // savepoint a failed read would abort the whole transaction and 500 the beat.
   try {
-    const since = before.beat_window_at;
-    const [r] = await sql<{ rung: string | null }[]>`
-      select raw->>'rung' as rung from fixture_stream_samples
-       where session_id = ${before.id} and source = 'heartbeat' and raw->>'state' is distinct from 'stopped'
-         ${since == null ? sql`` : sql`and sampled_at > ${since}`}
-       order by sampled_at desc, id desc limit 1`;
-    return r?.rung ?? null;
+    return await tx.savepoint((sp) => latestLiveRung(sp, before.id, before.beat_window_at));
   } catch (err) {
     log.error({ sid: before.id, err: String(err) }, "stream session: the sizing alarm's previous rung could not be read — the beat may re-alarm");
     return null;

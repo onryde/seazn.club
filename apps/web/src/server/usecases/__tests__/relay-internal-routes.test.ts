@@ -18,17 +18,18 @@ import { resolve } from "node:path";
 import { decodeJwt } from "jose";
 
 // The sample writer, passed through untouched — one test makes it fail ONCE, to prove a telemetry failure can never
-// cost a beat its lifecycle half (Task 11 review I1b). Every other test runs the real writer.
+// cost a beat its lifecycle half (Task 11 review I1b). Every other test runs the real writer. The sizing alarm's
+// read-through (latestLiveRung) likewise, made to fail ONCE on the server by one #983 r2 test.
 vi.mock("@/server/relay/telemetry", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/server/relay/telemetry")>();
-  return { ...actual, recordSample: vi.fn(actual.recordSample), recordEvent: vi.fn(actual.recordEvent) };
+  return { ...actual, recordSample: vi.fn(actual.recordSample), recordEvent: vi.fn(actual.recordEvent), latestLiveRung: vi.fn(actual.latestLiveRung) };
 });
 
 // The house Sentry helper, spied: the forced-destroy capture is for PROVIDER failures only (re-review N3).
 const sentry = vi.hoisted(() => ({ captureError: vi.fn() }));
 vi.mock("@/lib/sentry", () => ({ captureError: sentry.captureError }));
 
-import { sql } from "@/lib/db";
+import { sql, type Tx } from "@/lib/db";
 import { RelayHeartbeatReply, RelayJobSession, type RelayHeartbeat } from "@/server/api-v1/schemas";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { STREAM_PLATFORM_PRESETS } from "@/lib/stream-destinations";
@@ -42,7 +43,7 @@ import { setRelayDriversForTest } from "@/server/relay/drivers";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import type { IngestCredentials } from "@/server/relay/ports";
 import { pairPresentPhone, rigUser } from "@/server/relay/__tests__/_session-rig";
-import { recordEvent, recordSample } from "@/server/relay/telemetry";
+import { latestLiveRung, recordEvent, recordSample } from "@/server/relay/telemetry";
 import { mintRelayToken, verifyRelayToken } from "@/server/relay/tokens";
 import { log } from "@/server/logger";
 import { GET as facts } from "@/app/api/internal/relay/sessions/[sid]/route";
@@ -2123,6 +2124,101 @@ describe.skipIf(!HAS_DB)("Owed 37: a late beat never overwrites the final stoppe
       checked++;
     }
     expect(checked).toBe(cases.length);
+  });
+
+  // #983 r2 confirm pass: the beat PEEKS the row unlocked (for beatSecretsOf), so every decision must be re-taken on the
+  // LOCKED row — the peek can be stale by the time the lock is granted. Staged on the row lock: a third connection holds
+  // the row, the beat peeks it as it was and queues behind the holder; the holder then moves the row and commits.
+  /** Hold the session row FOR UPDATE; once the beat has queued behind it, run `move` in the holder's transaction and commit. */
+  async function moveRowUnderTheBeat(sessionId: string, run: () => Promise<unknown>, move: (tx: Tx) => Promise<unknown>) {
+    let release!: () => void;
+    const mayMove = new Promise<void>((res) => (release = res));
+    let signalHeld!: (pid: number) => void;
+    const held = new Promise<number>((res) => (signalHeld = res));
+    const holder = sql.begin(async (tx) => {
+      const [{ pid }] = await tx<{ pid: number }[]>`select pg_backend_pid() as pid`;
+      await tx`select id from fixture_stream_sessions where id = ${sessionId} for update`;
+      signalHeld(pid);
+      await mayMove;
+      await move(tx);
+    });
+    const holderPid = await held;
+    const out = run().then((v) => ({ ok: true as const, v }), (e: unknown) => ({ ok: false as const, e }));
+    expect(await queuedBehind(holderPid, 1), "the race was not staged: the beat never queued on the row").toBeGreaterThanOrEqual(1);
+    release();
+    await holder;
+    return out;
+  }
+
+  it("#983 r2: the row goes TERMINAL between the beat's peek and its lock — the beat is refused 410 on the LOCKED row, and writes nothing: no stored beat, no sample", async () => {
+    const s = await playingSession();
+    expect((await postBeat(s.sessionId, { state: "playing", egressBytes: PREV_EGRESS }, { token: s.jobToken })).status).toBe(200);
+    const stored = await beatFacts(s.sessionId);
+    const samples0 = (await samples(s.sessionId)).length;
+    const out = await moveRowUnderTheBeat(s.sessionId,
+      () => heartbeat(s.sessionId, s.jobToken, { state: "playing", fps: 23, egressBytes: LATE_EGRESS }, defaultDeps("http://app.test")),
+      (tx) => tx`update fixture_stream_sessions set state = 'completed', end_reason = 'stopped', ended_at = now() where id = ${s.sessionId}`);
+    expect(out.ok, "the beat is refused, not answered").toBe(false);
+    expect((out as { e: unknown }).e).toMatchObject({ status: 410, code: "SESSION_ENDED" });
+    expect((await row(s.sessionId)).state, "premise: the holder's move committed").toBe("completed");
+    expect(await beatFacts(s.sessionId), "no write on the terminal row").toEqual(stored);
+    expect((await samples(s.sessionId)).length, "no sample either: a 410 records nothing").toBe(samples0);
+  });
+
+  it("#983 r2: the retry lands between the beat's peek and its lock — attempt 1's beat, CURRENT at its peek, is superseded on the LOCKED row: a sample only, answered `ending`", async () => {
+    const s = await playingSession();
+    expect((await postBeat(s.sessionId, { state: "playing", egressBytes: PREV_EGRESS }, { token: s.jobToken })).status).toBe(200);
+    const attempts = async () => (await sql<{ n: number }[]>`select runner_attempts as n from fixture_stream_sessions where id = ${s.sessionId}`)[0]!.n;
+    expect(await attempts(), "premise: attempt 1 is current at the peek").toBe(1);
+    const stored = await beatFacts(s.sessionId);
+    const samples0 = (await samples(s.sessionId)).length;
+    const out = await moveRowUnderTheBeat(s.sessionId,
+      () => heartbeat(s.sessionId, s.jobToken, { state: "playing", fps: 23, egressBytes: LATE_EGRESS }, defaultDeps("http://app.test")),
+      (tx) => tx`update fixture_stream_sessions set runner_attempts = runner_attempts + 1, runner_state = 'booting' where id = ${s.sessionId}`);
+    expect(out.ok ? (out as { v: unknown }).v : String((out as { e: unknown }).e), "the superseded Machine is told to drain").toEqual({ desiredState: "ending" });
+    expect(await beatFacts(s.sessionId), "no row write").toEqual(stored);
+    expect(await row(s.sessionId), "attempt 2 untouched").toMatchObject({ state: "live", runner_state: "booting" });
+    expect(await attempts(), "premise: the holder's retry committed").toBe(2);
+    expect((await samples(s.sessionId)).length - samples0, "still a sample").toBe(1);
+  });
+
+  it("#983 r2: the sizing alarm's previous rung is read on the LOCKED row — a step stored between the beat's peek and its lock is the one this beat holds, so it does not alarm twice", async () => {
+    const s = await playingSession();
+    expect((await postBeat(s.sessionId, { state: "playing", rung: "full" }, { token: s.jobToken })).status).toBe(200);
+    const alarms = () => sentry.captureError.mock.calls.filter(([, c]) => (c as { route?: string } | undefined)?.route === "relay.sizing_alarm"
+      && (c as { extra?: { sessionId?: string } }).extra?.sessionId === s.sessionId).length;
+    const a0 = alarms();
+    // The holder stores the STEP (a beat that already alarmed, committed while this one waited); this beat reports the
+    // same bottom rung. Read off the peek (`full`), it would be a fresh step and alarm a second time.
+    const out = await moveRowUnderTheBeat(s.sessionId,
+      () => heartbeat(s.sessionId, s.jobToken, { state: "playing", rung: "overlay_half_rate" }, defaultDeps("http://app.test")),
+      (tx) => tx`update fixture_stream_sessions set last_heartbeat = ${sql.json({ state: "playing", rung: "overlay_half_rate" } as never)}, heartbeat_at = now()
+                  where id = ${s.sessionId}`);
+    expect(out.ok ? (out as { v: unknown }).v : String((out as { e: unknown }).e)).toEqual({ desiredState: "live" });
+    expect(alarms() - a0, "the bottom rung is HELD, not stepped to again").toBe(0);
+    // The positive pair: a climb and a step after it alarms once.
+    expect((await postBeat(s.sessionId, { state: "playing", rung: "full" }, { token: s.jobToken })).status).toBe(200);
+    expect((await postBeat(s.sessionId, { state: "playing", rung: "overlay_half_rate" }, { token: s.jobToken })).status).toBe(200);
+    expect(alarms() - a0, "a real step alarms").toBe(1);
+  });
+
+  it("#983 r2: the read-through query runs INSIDE the beat's transaction, in a savepoint — a read that FAILS on the server answers null (an extra alarm, the safe direction) and never costs the beat its write", async () => {
+    const s = await playingSession();
+    expect((await postBeat(s.sessionId, { state: "playing", rung: "overlay_half_rate" }, { token: s.jobToken })).status).toBe(200);
+    // A fatal final (Fly restarts in place, same attempt): the stored beat has no rung, so the next beat reads THROUGH it.
+    expect((await postBeat(s.sessionId, stoppedBeat("fatal"), { token: s.jobToken })).status).toBe(200);
+    const alarms = () => sentry.captureError.mock.calls.filter(([, c]) => (c as { route?: string } | undefined)?.route === "relay.sizing_alarm"
+      && (c as { extra?: { sessionId?: string } }).extra?.sessionId === s.sessionId).length;
+    const a0 = alarms();
+    let failed = 0;
+    // The failure is a REAL server-side error on the handle the read was given — it aborts whatever transaction runs it.
+    vi.mocked(latestLiveRung).mockImplementationOnce(async (exec) => { failed++; await exec`select 1/0`; return null; });
+    const body: RelayHeartbeat = { state: "starting", rung: "overlay_half_rate" };
+    const res = await postBeat(s.sessionId, body, { token: s.jobToken });
+    expect(failed, "premise: the read-through ran, and failed").toBe(1);
+    expect(res.status, "the beat is answered, never a 500").toBe(200);
+    expect(await lastHeartbeat(s.sessionId), "the beat is written: the failed read rolled back to its savepoint only").toEqual(body);
+    expect(alarms() - a0, "the read answered null: the held rung alarms again (the safe direction)").toBe(1);
   });
 
   it("#983 r1: a job token WITHOUT an attempt claim (minted before this deploy, the session in flight across it) keeps today's behaviour — after the retry its beat still writes and plays the runner", async () => {
