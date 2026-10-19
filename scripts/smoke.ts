@@ -15745,12 +15745,14 @@ async function i18nSuite(): Promise<void> {
   // The chip's NAME is the dictionaries' `sport.boardgame` word (owner 2026-10-19: "Chess", not "Board game"), read
   // from the dictionaries on disk for both locales rather than typed here, so a later rename moves this check with
   // it. The gate is the chip's own link (`/discover/boardgame"`), not the word — "Chess" appears in other copy.
-  const sportWord = (lang: "en" | "fr") =>
-    (
-      JSON.parse(
-        readFileSync(new URL(`../apps/web/src/dictionaries/${lang}/ui.json`, import.meta.url), "utf8"),
-      ) as Record<string, string>
-    )["sport.boardgame"]!;
+  const sportWord = (lang: "en" | "fr"): string => {
+    const dict = JSON.parse(
+      readFileSync(new URL(`../apps/web/src/dictionaries/${lang}/ui.json`, import.meta.url), "utf8"),
+    ) as Record<string, string>;
+    const word = dict["sport.boardgame"];
+    if (word === undefined) throw new Error(`${lang}/ui.json has no sport.boardgame`);
+    return word;
+  };
   const enSport = sportWord("en");
   const frSport = sportWord("fr");
   check("i18n: the en and fr boardgame sport words differ (else the check below proves nothing)", enSport !== frSport);

@@ -79,11 +79,14 @@ async function untie(personId: string) {
 
 const noAccount = { status: 409, code: ROOM_SEAT_NO_ACCOUNT };
 
-afterAll(async () => {
-  await sql.end();
-});
-
 describe.skipIf(!process.env.DATABASE_URL)("match room - whose seat it is, and who is looking (snapshot.account)", () => {
+  // Inside the gate: `sql` throws "DATABASE_URL is not set" the moment it is touched, so a top-level afterAll failed
+  // this whole file to COLLECT on the DB-less unit shard (CI run 39239558566) and took the pure seatAccount suite below
+  // with it. The pool is only ever opened by the tests in here.
+  afterAll(async () => {
+    await sql.end();
+  });
+
   it("the four cases through the real read: signed out and the seat's own account are ok; another account is wrong_account; a seat with no account is the 409 for any viewer", async () => {
     const s = await seed();
     const token = await tokenFor(s, s.home.personId);
