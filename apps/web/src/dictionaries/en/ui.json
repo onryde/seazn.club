@@ -6379,5 +6379,11 @@
   "settings.account.lichess.flashNext.already_linked": "Sign in to the Seazn account that has this Lichess account and unlink it in Settings, or switch to a different account on Lichess and link that one here.",
   "settings.account.lichess.flashNext.already_linked_game": "Sign in to the Seazn account that has this Lichess account and unlink it in Settings, then come back and link it here.",
   "login.flash.google.email_unverified": "Google hasn't verified this email address. Verify it with Google, or sign in with an email link.",
-  "login.flash.google.linked_elsewhere": "This email is linked to a different Google account. Sign in with an email link instead."
+  "login.flash.google.linked_elsewhere": "This email is linked to a different Google account. Sign in with an email link instead.",
+  "claim.signin.invited": "Invitation sent to {email}",
+  "claim.signin.cta": "Claim and sign in",
+  "claim.signin.busy": "Signing you in…",
+  "claim.signin.hint": "You opened this from your inbox, so there's no password and no second email.",
+  "claim.signin.failed": "Couldn't claim this profile. Try again.",
+  "claim.signin.expired": "This link no longer signs you in on its own. Sign in below and you'll come straight back to claim your profile."
 }

@@ -17,6 +17,9 @@ export class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    /** The machine `code` the route's envelope carried (`{ ok:false, error, code }`), when it set one —
+     *  what lets a caller act on a SPECIFIC refusal instead of parsing the English sentence. */
+    readonly code?: string,
   ) {
     super(message);
     this.name = "ApiError";
@@ -53,6 +56,7 @@ export async function api<T = unknown>(
     throw new ApiError(
       payload?.reason || payload?.error || `Request failed (${res.status})`,
       res.status,
+      typeof payload?.code === "string" ? payload.code : undefined,
     );
   }
   return payload.data as T;

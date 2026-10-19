@@ -6379,5 +6379,11 @@
   "settings.account.lichess.flashNext.already_linked": "Log in op het Seazn-account dat dit Lichess-account heeft en ontkoppel het in Instellingen, of schakel op Lichess over naar een ander account en koppel dat hier.",
   "settings.account.lichess.flashNext.already_linked_game": "Log in op het Seazn-account dat dit Lichess-account heeft en ontkoppel het in Instellingen; kom daarna terug en koppel het hier.",
   "login.flash.google.email_unverified": "Google heeft dit e-mailadres niet geverifieerd. Verifieer het bij Google of log in met een inloglink per e-mail.",
-  "login.flash.google.linked_elsewhere": "Dit e-mailadres is gekoppeld aan een ander Google-account. Log in met een inloglink per e-mail."
+  "login.flash.google.linked_elsewhere": "Dit e-mailadres is gekoppeld aan een ander Google-account. Log in met een inloglink per e-mail.",
+  "claim.signin.invited": "Uitnodiging verstuurd naar {email}",
+  "claim.signin.cta": "Claimen en inloggen",
+  "claim.signin.busy": "Bezig met inloggen…",
+  "claim.signin.hint": "Je hebt dit vanuit je inbox geopend, dus geen wachtwoord en geen tweede e-mail.",
+  "claim.signin.failed": "Dit profiel kon niet worden geclaimd. Probeer het opnieuw.",
+  "claim.signin.expired": "Deze link logt je niet meer automatisch in. Log hieronder in en je komt direct terug om je profiel te claimen."
 }

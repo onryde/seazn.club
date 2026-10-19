@@ -1424,7 +1424,10 @@ async function maybeInviteClaim(orgId: string, personId: string, email: string):
     if (openClaim) return;
     const invite = await createSystemClaimInvite(sql, orgId, personId, email);
     if (!invite) return;
-    const claimUrl = `${fallbackOrigin()}${routes.claim(invite.secret)}`;
+    // The EMAIL secret, not the console one: this mail is the invite's only
+    // channel (no organiser console shows it), and opening it signs the player
+    // in and claims in one tap. `invite.secret` is never used.
+    const claimUrl = `${fallbackOrigin()}${routes.claim(invite.emailSecret)}`;
     await sendClaimInviteEmail(email, {
       orgName: invite.org_name,
       personName: invite.person_name,
