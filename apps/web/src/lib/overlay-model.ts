@@ -280,8 +280,8 @@ const EM_DASH = "—";
  * algorithm here). A code resolved one side at a time cannot see a collision: three letters per name aired Harlow and
  * Harrow as HAR and HAR, and "HAR won 4–3 on penalties" named nobody.
  *
- * A producer's code (`OverlaySideInput.short`) wins, upper-cased: both page doors pass the match centre's pair, which
- * knows whether an entrant is a person and whether a seat holds one. Without one, the names are resolved as SEATED
+ * A producer's code (`OverlaySideInput.short`) wins, upper-cased and cut to `BADGE_MAX_CHARS` code points: both page
+ * doors pass the match centre's pair, which knows whether an entrant is a person and whether a seat holds one. Without one, the names are resolved as SEATED
  * TEAMS: every name the model is handed without a code is an entrant's (the staff gallery's, the organiser console's),
  * or the em dash of an empty seat, which has no letters and so never widens. A side with no letters to its name reads
  * the em dash, the overlay's own no-name glyph, rather than the match centre's "?".
@@ -299,7 +299,10 @@ export function overlaySideCodes(sides: readonly [OverlaySideInput, OverlaySideI
   );
   const codeOf = (side: OverlaySideInput, resolved: string): string => {
     const explicit = side.short?.trim();
-    if (explicit) return explicit.toUpperCase();
+    // Cut ONCE, here, to the badge bound in code points (#987 confirm pass, M5 residue): every template reads this
+    // code, so a long producer short can never air whole on the bug and cut in the bar. Every production short is
+    // within the bound already; the gallery's `?code=` stress is not.
+    if (explicit) return Array.from(explicit.toUpperCase()).slice(0, BADGE_MAX_CHARS).join("");
     return /[\p{L}\p{N}]/u.test(side.name) ? resolved : EM_DASH;
   };
   return [codeOf(sides[0], a), codeOf(sides[1], b)];
@@ -331,9 +334,9 @@ export function nameLadder(side: OverlaySideInput, code: string): readonly strin
   const rungs = [
     side.name,
     ...(explicit === undefined || explicit === "" ? [] : [explicit]),
-    // The rung that must fit when nothing else does: at most `BADGE_MAX_CHARS` characters (code points), the ladder's
-    // own bound (#987 review M5). Every production code is within it; a longer producer short keeps its middle rung.
-    Array.from(code).slice(0, BADGE_MAX_CHARS).join(""),
+    // The rung that must fit when nothing else does: the code as handed. `overlaySideCodes` has already cut it to
+    // `BADGE_MAX_CHARS` code points — one cut, so the bar's bottom rung is the bug's code (#987 confirm pass, M5).
+    code,
   ];
   return rungs.filter((rung, i) => rungs.indexOf(rung) === i);
 }

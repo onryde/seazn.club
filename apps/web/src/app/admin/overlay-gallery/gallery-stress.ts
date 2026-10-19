@@ -9,7 +9,8 @@
 //                                     (a real fixture: the codes, the tiles and the winner token all tell them apart),
 //                                     never one name on both sides
 //   ?code=<text>                      both sides' explicit short name (`OverlaySideInput.short`, the producer's code;
-//                                     the model reads it, and a long one is the Result ladder's last rung)
+//                                     the model reads it and cuts it to `BADGE_MAX_CHARS`, as it does any producer's —
+//                                     the widest four drive the Result ladder's last rung, gallery check 4c)
 import type { OverlaySideInput } from "@/lib/overlay-model";
 import type { DecidedOutcomeTemplates } from "@/lib/scoring-vocab";
 

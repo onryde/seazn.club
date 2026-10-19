@@ -203,12 +203,11 @@ describe("nameLadder — `_THEMES.md` §1's one size step (W2-F45)", () => {
     expect(nameLadder({ id: "H", name: "Player One", short: "ONE" }, "ONE").at(-1)).toBe("ONE");
   });
 
-  // #987 review M5 — the bar's tightest rung is the side's code at most BADGE_MAX_CHARS wide: the rung that must fit
-  // when nothing else does. Every production code is within it already; a longer producer short (a declared short
-  // name, the gallery's `?code=` stress) keeps its own middle rung and is cut to four at the bottom.
-  it("caps the last rung at BADGE_MAX_CHARS characters (ROVERS -> ROVE), keeping the short name as the middle rung", () => {
-    expect(nameLadder({ id: "H", name: "Milton Keynes Rovers", short: "Rovers" }, "ROVERS")).toEqual(["Milton Keynes Rovers", "Rovers", "ROVE"]);
-    expect(BADGE_MAX_CHARS, "premise: the ceiling the cap reads").toBe(4);
+  // #987 review M5, confirm-pass residue — the code is cut to BADGE_MAX_CHARS ONCE, where it is resolved
+  // (`overlaySideCodes`; the sweep in "side codes are the public site's pair" below), so every template reads that one
+  // code. The rung repeats the code it is handed; a long producer short keeps its own middle rung.
+  it("the last rung is the code as handed — never cut a second time — beside a long short name's own middle rung", () => {
+    expect(nameLadder({ id: "H", name: "Milton Keynes Rovers", short: "Rovers" }, "ROVE")).toEqual(["Milton Keynes Rovers", "Rovers", "ROVE"]);
   });
 
   it("an unnameable side still has a rung — the em dash, not an empty string", () => {
@@ -292,10 +291,40 @@ describe("overlayModel — side codes are the public site's pair (owner ruling 2
     expect(collidedUnderOldRule, "the cases that aired one code for both sides before this fix").toBeGreaterThanOrEqual(7);
   });
 
+  // #987 confirm pass, M5 residue: a producer short longer than the badge bound was honoured whole on the bug, the
+  // tiles and the Result line while the bar's bottom rung cut it — ROVERS on the bug, ROVE in the bar: one side, two
+  // codes. The cut is now `overlaySideCodes`' own, so every template reads the one code. The bound is the public site's
+  // declaration (`BADGE_MAX_CHARS`), counted in code points (an astral glyph is one character, never half of one).
+  it("a producer short longer than BADGE_MAX_CHARS is cut ONCE, so the bug, the tiles, the bar's last rung and the short Result rung read one code", () => {
+    const shorts = ["r", "ro", "rov", "rove", "rovers", "harrow borough fc", "𠮷田kickers", "ÆØÅÆØÅ"];
+    let checked = 0;
+    for (const short of shorts) {
+      const want = Array.from(short.toUpperCase()).slice(0, BADGE_MAX_CHARS).join("");
+      for (const winner of ["H", "A"] as const) {
+        const at = `"${short}" / ${winner} wins`;
+        const model = overlayModel({
+          sportKey: "football",
+          data: { lastSeq: null, venueTz: "UTC", ...payload("football", [], "decided", { kind: "win", winner, method: "regulation" }) } as OverlayLiveData,
+          sides: [{ id: "H", name: "Milton Keynes Rovers", short }, { id: "A", name: "Riverside", short: "RIV" }],
+          startLabel: null,
+          clockLabel: null,
+          msg: keyMsg,
+          decidedTemplates: TEMPLATES,
+        });
+        expect(model.sides[0].short, `${at}: the bug's and the tiles' code`).toBe(want);
+        expect(model.sides[0].ladder.at(-1), `${at}: the bar's last rung is that code`).toBe(want);
+        expect(model.resultShort, `${at}: the short Result rung names the winner by that code`).toBe(`WIN ${winner === "H" ? want : "RIV"} REG`);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: every short × both winners").toBe(shorts.length * 2);
+    expect(BADGE_MAX_CHARS, "premise: the ceiling the cut reads").toBe(4);
+  });
+
   it("a producer's codes (both page doors pass the match centre's pair, persons included) are honoured as given, and the bar steps down to THEM", () => {
     // Two players: the match centre resolves them by surname (ONE / TWO). Before this fix the bar's bottom rung was
     // three letters off each name — PLA and PLA — while the bug read ONE / TWO.
-    const [one, two] = disambiguatedShorts({ name: "Player One", isPerson: true }, { name: "Player Two", isPerson: true });
+    const [one, two] = disambiguatedShorts({ name: "Player One", isPerson: true, seated: true }, { name: "Player Two", isPerson: true, seated: true });
     const model = overlayModel({
       sportKey: "tennis",
       data: { lastSeq: null, venueTz: "UTC", status: "in_play" } as OverlayLiveData,
