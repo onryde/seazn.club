@@ -23,7 +23,11 @@ export async function POST(req: Request, { params }: Ctx) {
     const { id } = await params;
     const { email } = await parseBody(req, CreateClaimInvite);
     const auth = await requireResourceAuth(req, "person", id, "write");
-    const { secret, emailSecret, person_name, org_name, ...claim } = await createClaimInvite(auth, id, email);
+    const { secret, emailSecret, person_name, org_name, ...claim } = await createClaimInvite(
+      auth,
+      id,
+      email.trim().toLowerCase(), // as the officials invite does: accounts are matched case-insensitively later
+    );
     const claim_url = `${baseUrl(req)}${routes.claim(secret)}`;
     const emailClaimUrl = `${baseUrl(req)}${routes.claim(emailSecret)}`;
     // Email is the primary channel (owner decision 2026-07-13); the console

@@ -98,9 +98,14 @@ const post = (url: string, body: unknown) =>
     body: JSON.stringify(body),
   });
 const accept = (token: string) =>
-  acceptRoute(new Request(`http://localhost/api/claims/${token}/accept`, { method: "POST" }), {
-    params: Promise.resolve({ token }),
-  });
+  acceptRoute(
+    // What a browser sends from our own page; the signed-out branch asks for it (lib/same-origin.ts).
+    new Request(`http://localhost/api/claims/${token}/accept`, {
+      method: "POST",
+      headers: { "sec-fetch-site": "same-origin" },
+    }),
+    { params: Promise.resolve({ token }) },
+  );
 
 const claimRowFor = async (personId: string) =>
   (
@@ -188,6 +193,23 @@ describe.skipIf(!HAS_DB)("POST /persons/{id}/claim-invites: two secrets, two aud
     expect(world.sessions).toEqual([user!.id]);
     const [linked] = await sql<{ user_id: string | null }[]>`select user_id from persons where id = ${person.id}`;
     expect(linked!.user_id).toBe(user!.id);
+  });
+
+  it("the address is stored lower-cased (accounts are matched case-insensitively later); the mail goes to what was typed", async () => {
+    const { owner } = await rig();
+    const person = await createPerson(owner, { full_name: "Mixed Case", consent: {} } as never);
+    const typed = `Mixed.${randomUUID().slice(0, 8)}@Example.ORG`;
+
+    const res = await inviteRoute(
+      post(`http://seazn.test/api/v1/persons/${person.id}/claim-invites`, { email: typed }),
+      { params: Promise.resolve({ id: person.id }) },
+    );
+
+    expect(res.status).toBe(201);
+    const [row] = await sql<{ email: string }[]>`select email from person_claims where person_id = ${person.id}`;
+    expect(row!.email).toBe(typed.toLowerCase());
+    expect(row!.email).not.toBe(typed); // the fixture really has capitals to fold
+    expect(world.mail[0]!.to).toBe(typed);
   });
 
   it("inviting again through the route kills the previously emailed link; the new one works", async () => {

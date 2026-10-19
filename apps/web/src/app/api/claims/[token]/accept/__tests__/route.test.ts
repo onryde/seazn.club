@@ -7,7 +7,11 @@
 //   - signed OUT with the CONSOLE secret → 401, no session, nothing created (what it always did);
 //   - a double tap mints ONE session;
 //   - SIGNED IN is unchanged for both secrets (strict email match, no new session);
-//   - the new session-minting branch is rate limited, the signed-in branch is not.
+//   - the new session-minting branch is rate limited, the signed-in branch is not;
+//   - the session-minting branch also refuses a request that cannot show it came from our own page
+//     (no Sec-Fetch-Site: same-origin and no Origin) — the signed-in branch, which mints nothing, is not asked;
+//   - the terms stamp rides the SAME transaction as the claim: a stamp that fails leaves nothing consumed,
+//     no account, and no session (PR #991 review).
 // Skipped without DATABASE_URL (CI unit shards have none; nothing here touches `sql` at module level).
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -16,6 +20,7 @@ const auth = vi.hoisted(() => ({
   user: null as null | { id: string; email: string; display_name: string },
   sessions: [] as string[],
   ip: "203.0.113.7",
+  failTermsStamp: false,
 }));
 
 vi.mock("@/lib/auth", async (importOriginal) => {
@@ -25,6 +30,17 @@ vi.mock("@/lib/auth", async (importOriginal) => {
     getCurrentUser: async () => auth.user,
     createSession: async (userId: string) => {
       auth.sessions.push(userId);
+    },
+  };
+});
+vi.mock("@/lib/legal", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/legal")>();
+  return {
+    ...actual,
+    // The real stamp, unless a test arms the failure — whichever db handle the caller passes is honoured.
+    stampTermsAcceptance: async (...args: Parameters<typeof actual.stampTermsAcceptance>) => {
+      if (auth.failTermsStamp) throw new Error("terms stamp failed");
+      return actual.stampTermsAcceptance(...args);
     },
   };
 });
@@ -49,8 +65,14 @@ interface Envelope {
   code?: string;
 }
 
-async function post(token: string): Promise<{ status: number; body: Envelope }> {
-  const res = await POST(new Request(`http://localhost/api/claims/${token}/accept`, { method: "POST" }), {
+/** What a browser sends from our own page: every modern one sets Sec-Fetch-Site on a same-origin fetch. */
+const OUR_PAGE = { "sec-fetch-site": "same-origin" };
+
+async function post(
+  token: string,
+  headers: Record<string, string> = OUR_PAGE,
+): Promise<{ status: number; body: Envelope }> {
+  const res = await POST(new Request(`http://localhost/api/claims/${token}/accept`, { method: "POST", headers }), {
     params: Promise.resolve({ token }),
   });
   return { status: res.status, body: (await res.json()) as Envelope };
@@ -82,6 +104,7 @@ beforeEach(() => {
   auth.user = null;
   auth.sessions = [];
   auth.ip = "203.0.113.7";
+  auth.failTermsStamp = false;
   __setRateLimitCounterForTests(null);
 });
 afterEach(() => {
@@ -217,6 +240,90 @@ describe.skipIf(!HAS_DB)("signed IN: unchanged for both secrets", () => {
     expect(status).toBe(403);
     expect(body).toMatchObject({ ok: false, code: "CLAIM_EMAIL_MISMATCH" });
     expect(auth.sessions).toEqual([]);
+    expect(await personUser(person.id)).toBeNull();
+  });
+});
+
+describe.skipIf(!HAS_DB)("signed OUT: only a request from our own page may start a session", () => {
+  // `proxy.ts` already refuses a FOREIGN Origin on every mutating /api call. What it lets through is a request
+  // with NO Origin at all, and this route now mints a session — so the route itself asks for proof.
+  const REFUSED: [string, Record<string, string>][] = [
+    ["neither Origin nor Sec-Fetch-Site", {}],
+    ["Sec-Fetch-Site: cross-site", { "sec-fetch-site": "cross-site" }],
+    ["Sec-Fetch-Site: same-site (a sibling subdomain)", { "sec-fetch-site": "same-site" }],
+    ["Sec-Fetch-Site: none (typed into the address bar)", { "sec-fetch-site": "none" }],
+    ["Origin present but Sec-Fetch-Site says cross-site", { origin: "http://localhost", "sec-fetch-site": "cross-site" }],
+  ];
+  const ALLOWED: [string, Record<string, string>][] = [
+    ["Sec-Fetch-Site: same-origin", { "sec-fetch-site": "same-origin" }],
+    ["an Origin header (older browsers; proxy.ts has already matched its host)", { origin: "http://localhost" }],
+  ];
+
+  it.each(REFUSED)("refuses %s: 403, no session, nothing consumed, no account", async (_name, headers) => {
+    const { person, email, invite } = await rig();
+
+    const { status, body } = await post(invite.emailSecret, headers);
+
+    expect(status).toBe(403);
+    expect(body).toMatchObject({ ok: false });
+    expect(auth.sessions).toEqual([]);
+    expect(await usersWithEmail(email)).toHaveLength(0);
+    expect(await personUser(person.id)).toBeNull();
+    // Positive pair: the SAME link from our own page signs in — the refusal consumed nothing.
+    expect((await post(invite.emailSecret)).status).toBe(200);
+    expect(auth.sessions).toHaveLength(1);
+  });
+
+  it.each(ALLOWED)("allows %s", async (_name, headers) => {
+    const { invite } = await rig();
+    expect((await post(invite.emailSecret, headers)).status).toBe(200);
+    expect(auth.sessions).toHaveLength(1);
+  });
+
+  it("the signed-in branch mints nothing and is not asked for the proof (smoke, bench and API clients send neither header)", async () => {
+    const { person, email, invite } = await rig();
+    const [u] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified) values (${email}, 'Me', true) returning id`;
+    auth.user = { id: u!.id, email, display_name: "Me" };
+
+    const { status } = await post(invite.secret, {});
+
+    expect(status).toBe(200);
+    expect(await personUser(person.id)).toBe(u!.id);
+    expect(auth.sessions).toEqual([]);
+  });
+});
+
+describe.skipIf(!HAS_DB)("signed OUT: the terms stamp is part of the claim, not an afterthought", () => {
+  it("a stamp that fails rolls the claim back: 500, no session, claim still open, no account — and the retry works", async () => {
+    const { person, email, invite } = await rig();
+    auth.failTermsStamp = true;
+
+    const failed = await post(invite.emailSecret);
+
+    expect(failed.status).toBe(500);
+    expect(auth.sessions).toEqual([]); // no cookie to go with the error
+    expect(await personUser(person.id)).toBeNull(); // not consumed
+    expect(await usersWithEmail(email)).toHaveLength(0); // the new account rolled back with it
+    auth.failTermsStamp = false;
+    const retry = await post(invite.emailSecret); // not CLAIM_CLAIMED: the failed tap left the link intact
+    expect(retry.status).toBe(200);
+    expect(auth.sessions).toHaveLength(1);
+    expect((await usersWithEmail(email))[0]!.terms_accepted_at).not.toBeNull();
+  });
+
+  it("an existing UNVERIFIED account stays unverified and keeps its password when the stamp fails", async () => {
+    const { person, email, invite } = await rig();
+    const [u] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified, password_hash)
+      values (${email}, 'Held', false, 'squatter-hash') returning id`;
+    auth.failTermsStamp = true;
+
+    expect((await post(invite.emailSecret)).status).toBe(500);
+
+    const [after] = await sql<{ email_verified: boolean; password_hash: string | null }[]>`
+      select email_verified, password_hash from users where id = ${u!.id}`;
+    expect(after).toEqual({ email_verified: false, password_hash: "squatter-hash" });
     expect(await personUser(person.id)).toBeNull();
   });
 });

@@ -51,4 +51,15 @@ describe("proxy: the claim accept route (which can mint a session) is Origin-che
     const res = proxy(post(ACCEPT, { origin: "https://seazn.club" }));
     expect(res.headers.get("x-middleware-next")).toBe("1");
   });
+
+  it("a request with NO Origin is still waved through here — for this route and every other one", () => {
+    // The missing-Origin refusal for the claim route's session-minting branch is the ROUTE's own
+    // (lib/same-origin.ts, pinned in accept/__tests__/route.test.ts). It cannot live in the proxy: the same
+    // route is also called, signed in, by smoke, the bench and API-level e2e, none of which send an Origin,
+    // and the proxy cannot tell the two branches apart.
+    for (const path of [ACCEPT, "/api/v1/persons"]) {
+      const res = proxy(post(path, {}));
+      expect(res.headers.get("x-middleware-next"), path).toBe("1");
+    }
+  });
 });

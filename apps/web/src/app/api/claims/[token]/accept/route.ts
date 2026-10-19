@@ -1,9 +1,10 @@
 import { headers } from "next/headers";
 import { createSession, getCurrentUser } from "@/lib/auth";
 import { handler } from "@/lib/http";
-import { stampTermsAcceptance } from "@/lib/legal";
+import { HttpError } from "@/lib/errors";
 import { rateLimit, AUTH_LIMIT } from "@/lib/rate-limit";
 import { routes } from "@/lib/routes";
+import { isSameOriginRequest } from "@/lib/same-origin";
 import { claimByEmailLink, claimPerson, type ResolvedClaim } from "@/server/usecases/person-claims";
 
 type Ctx = { params: Promise<{ token: string }> };
@@ -34,7 +35,7 @@ function answer(claim: ResolvedClaim, signedIn: boolean) {
  *  mail scanner or link prefetch can never consume the link, and proxy.ts's
  *  Origin check covers this mutation like every other. The organiser's console
  *  link is not that proof and is refused here as it always was (401). */
-export async function POST(_req: Request, { params }: Ctx) {
+export async function POST(req: Request, { params }: Ctx) {
   return handler(async () => {
     const { token } = await params;
     const user = await getCurrentUser();
@@ -42,15 +43,18 @@ export async function POST(_req: Request, { params }: Ctx) {
       return answer(await claimPerson(token, user.id, user.email), false);
     }
 
+    // This branch mints a session for a caller who has none, so the request must show it came from our
+    // own page (proxy.ts only catches a FOREIGN Origin; a missing one passes). Asked before anything is
+    // touched or counted, and only here — the signed-in branch above mints nothing.
+    if (!isSameOriginRequest(req.headers)) throw new HttpError(403, "Forbidden");
+
     const ip = (await headers()).get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
     await rateLimit(`claim-signin:${ip}`, AUTH_LIMIT);
 
+    // The terms acceptance (the button sits under the clickwrap notice) is stamped inside the claim's own
+    // transaction, so the session is only minted once everything has committed.
     const { userId, claim } = await claimByEmailLink(token);
     await createSession(userId);
-    // The button sits under the "By continuing, you agree…" notice — record the
-    // acceptance, same as the magic-link and email-invite paths (GDPR spec
-    // 2026-07-14). First acceptance wins; a later one never moves it.
-    await stampTermsAcceptance(userId);
     return answer(claim, true);
   });
 }

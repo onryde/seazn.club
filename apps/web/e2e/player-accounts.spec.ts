@@ -305,8 +305,14 @@ test.describe("player accounts (PROMPT-53)", () => {
       await expect(p.getByRole("button", { name: "Claim and sign in" })).toHaveCount(0);
       // The accept route refuses it without a session, exactly as before.
       const consoleToken = consoleUrl.slice(consoleUrl.indexOf("/claim/") + "/claim/".length);
-      const refused = await p.request.post(`/api/claims/${consoleToken}/accept`);
+      // Sent the way our own page sends it (Sec-Fetch-Site), so what is refused is the SECRET, not the missing proof.
+      const refused = await p.request.post(`/api/claims/${consoleToken}/accept`, {
+        headers: { "sec-fetch-site": "same-origin" },
+      });
       expect(refused.status()).toBe(401);
+      // ...and the emailed secret from outside our page is refused too: no session may start without that proof.
+      const noProof = await p.request.post(`/api/claims/${emailPath.slice("/claim/".length)}/accept`);
+      expect(noProof.status()).toBe(403);
       await ctx.close();
     });
 
