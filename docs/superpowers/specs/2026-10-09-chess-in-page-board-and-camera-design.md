@@ -1637,8 +1637,8 @@ game. The word is retired here because it covers two different failures.
   p50 because stays released together admit in clumps with long gaps between them, which the p50 does
   not see; how many players were served inside the cap and how many took a walkover caused by the
   line; and for each player the ETA first shown against the wait that happened (the ETA ends at
-  admission and is an UPPER bound by construction, §5.7.9; the median of shown over actual is
-  reported; the camera comes after admission, bounded by `ADMIT_HOLD_MS`, §5.7.5).
+  admission and is a conservative upper bound for a pool-limited wait, §5.7.9; the median of shown over
+  actual and the count of waits that exceeded it are reported; the camera comes after admission, bounded by `ADMIT_HOLD_MS`, §5.7.5).
 - **Regressions.** 20 Required boards (two batches): about 605 calls, 0 deferrals, 0 never
   created, 0 late creates, and **0 rows with `queued_at` or `admitted_at`**: the line stays inert when it is not
   needed, which is the evidence for "the line empties, back to today's path". Mixed 10 Required +
@@ -2388,19 +2388,32 @@ player in line well before the deadline has all the time before it as well.
 
 #### 5.7.9 What the player is told, and what it costs
 
-- **The estimate.** `etaS` = `ceil(max(0, position × LINE_RESERVATION − pool) /
-  RTK_BUDGET_REFILL_PER_S)`, with `LINE_RESERVATION` = 21 (§5.6.8), `position` the stay's place among
-  the WAITING stays, and `pool` = `tokens − reserved` at the answer (§5.7.3): tokens other stays have
-  been promised are not available to this one. It is the time to ADMISSION, and an estimate: "about".
-  It is an UPPER bound by construction: each place ahead is priced at its reservation (the worst case,
-  21), and a stay ahead spends less (6 to 18) and releases the rest when it is served, so the time
-  shown can be up to about twice the wait at the clean cost. That errs the safe way (a player told
-  "about 75 s" who is admitted in 40 is not harmed; one told 40 who waits 75 is), and B-slow records
-  the ETA each player was shown against the wait they had (the median of shown over actual is
-  reported); if it is persistently above 2, pricing a place at the run's `D̄` is one line. What follows
-  admission is the player's own camera, bounded by `ADMIT_HOLD_MS` (§5.7.5), and is not part of the
-  estimate. The card rounds up to the next 5 s, and shows minutes above 90 s. `mayTimeOut` is `etaS +
-  LINE_SERVE_TAIL_S` greater than the seconds to `closesAt` (§5.7.3).
+- **The estimate (amended by the final review's M-2).** `etaS` = `ceil(max(0, tokensToAdmit − pool) /
+  RTK_BUDGET_REFILL_PER_S + pollMs / 1000)`, with `tokensToAdmit` = `(position − 1) × (LINE_RESERVATION +
+  LINE_RECHECK_COST) + need`. `position` is the stay's place among the WAITING stays, `need` is the
+  reservation the stay would hold itself (`LINE_RESERVATION`, plus `LINE_RECHECK_COST` while its seat
+  could complete its board), and `pool` = `tokens − reserved` at the answer (§5.7.3): tokens other stays
+  have been promised are not available to this one. It is the time to ADMISSION, and an estimate: "about".
+  **It is a conservative estimate and an upper bound for a wait the POOL sets, which is what forms a line;
+  it is not an upper bound "by construction".** The first pricing (every place, the stay's own included, at
+  `LINE_RESERVATION`, and no trail) was measured not to be one: a minority waited longer than shown
+  (A-slow 21 of 40, B-end-slow-10 5 of 45), because a COMPLETING stay is admitted only at
+  `LINE_RESERVATION + LINE_RECHECK_COST` (so is each completing stay ahead of it) and admission trails
+  the pool by one poll (§5.7.3). A completing stay at the front with a pool of 22 was told 0 s and was
+  held until 24. So each place ahead is priced at its worst case, `LINE_RESERVATION + LINE_RECHECK_COST`
+  (24); the stay's own place at its own `need`; and one `pollMs` is added for the poll that admits it. A
+  stay ahead that spends less (6 to 18) releases the rest when it is served, so the time shown can still
+  exceed the wait; that errs the safe way (a player told "about 75 s" who is admitted in 40 is not
+  harmed; one told 40 who waits 75 is). The estimate feeds `mayTimeOut`, the one sentence that tells a
+  player they may be walked over, so an under-estimate delays that warning: the pricing above is what
+  makes it fire in time. The load records the ETA each player was shown against the wait they had (the
+  median of shown over actual, and the count of waits that exceeded it) and reports both; if the median
+  is persistently above 2, pricing a place at the run's `D̄` is one line. The dead-camera re-claims
+  that the reservation does not cover (the capacity build's P1, documented at `LINE_RESERVATION` in
+  `seat-line.ts`) still make the line's ETAs optimistic by at most 6 s a dead-camera stay in flight. What follows admission is the player's own camera, bounded by
+  `ADMIT_HOLD_MS` (§5.7.5), and is not part of the estimate. The card rounds up to the next 5 s, and
+  shows minutes above 90 s. `mayTimeOut` is `etaS + LINE_SERVE_TAIL_S` greater than the seconds to
+  `closesAt` (§5.7.3).
 - **The cadence, with a floor (the review's I5).** The server sends `pollMs`: `LINE_POLL_MS` for places
   1 to 5, `LINE_POLL_SLOW_MS` behind them, and for the first waiting stay the time until the pool holds
   the reservation it would hold (`LINE_RESERVATION`, plus `LINE_RECHECK_COST` when completing), clamped to `[LINE_POLL_MIN_MS, LINE_POLL_MS]`: **never below `LINE_POLL_MIN_MS` = 2 s**. The client clamps again: it polls at

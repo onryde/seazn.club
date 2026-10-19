@@ -292,8 +292,18 @@ function reservationIf(completing: boolean): number {
   return LINE_RESERVATION + (completing ? LINE_RECHECK_COST : 0);
 }
 
-/** The `line` object of a `queued` answer: position among WAITING stays, the estimate to ADMISSION (an upper bound: each place
- *  ahead is priced at its worst-case reservation), the poll cadence and the board's cap. */
+/** The `line` object of a `queued` answer: position among WAITING stays, the estimate to ADMISSION (a conservative upper bound,
+ *  below), the poll cadence and the board's cap.
+ *
+ *  THE ESTIMATE (spec §5.7.9; final review M-2). The stay at `position` is admitted once the pool has grown to what every place
+ *  ahead is promised plus its own `need`. The most a place ahead can be promised is `LINE_RESERVATION + LINE_RECHECK_COST` (a
+ *  COMPLETING stay: its seat triggers the opponent's re-verify), and the stay's own place is priced at its own `need` (which is that
+ *  larger price when IT is completing). The pool refills at `RTK_BUDGET_REFILL_PER_S`, and admission happens at the stay's next
+ *  POLL after the pool allows it (§5.7.3), so one `pollMs` of trail is added. Every term is derived from a declared constant. The
+ *  old pricing - every place, the stay's own included, at plain `LINE_RESERVATION`, and no trail - told a completing stay at the
+ *  front with a pool of 22 that it would wait 0 s while it was held until 24, so the `mayTimeOut` warning (which adds
+ *  `LINE_SERVE_TAIL_S` to this number) fired late. It is an upper bound for a wait that the POOL sets, which is what forms a line;
+ *  a place ahead that spends less releases the rest, so the true wait is usually shorter. */
 export function lineWire(a: {
   position: number;
   pool: number;
@@ -303,7 +313,6 @@ export function lineWire(a: {
   left: LineWire["left"];
   busy?: boolean;
 }): LineWire {
-  const etaS = Math.ceil(Math.max(0, a.position * LINE_RESERVATION - a.pool) / RTK_BUDGET_REFILL_PER_S);
   const closesAt = boardCap(a.anchor);
   const secondsToCap = (closesAt.getTime() - a.now.getTime()) / 1_000;
   let pollMs: number;
@@ -313,6 +322,8 @@ export function lineWire(a: {
     const untilMs = (Math.max(0, a.need - a.pool) / RTK_BUDGET_REFILL_PER_S) * 1_000;
     pollMs = Math.min(LINE_POLL_MS, Math.max(LINE_POLL_MIN_MS, Math.ceil(untilMs)));
   } else pollMs = a.position <= LINE_NEAR_POSITIONS ? LINE_POLL_MS : LINE_POLL_SLOW_MS;
+  const tokensToAdmit = (a.position - 1) * (LINE_RESERVATION + LINE_RECHECK_COST) + a.need;
+  const etaS = Math.ceil(Math.max(0, tokensToAdmit - a.pool) / RTK_BUDGET_REFILL_PER_S + pollMs / 1_000);
   return {
     position: a.position,
     etaS,
