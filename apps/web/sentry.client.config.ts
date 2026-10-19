@@ -1,10 +1,14 @@
 import * as Sentry from "@sentry/nextjs";
+import { REPLAY_BLOCK_SELECTORS, recordingEventHook, replayMayRunAt } from "@/lib/replay-guard";
 import {
-  scrubRecordingEvent,
   scrubScoreTokens,
   scrubScoreTokensIntegration,
   scrubSentryEvent,
 } from "@/lib/scrub-score-url";
+
+// A replay records the page URL where no hook reaches (rrweb's Meta frame, the DOM): it does not run on a page whose URL
+// holds a credential. See lib/replay-guard.
+const replayRuns = replayMayRunAt(typeof window === "undefined" ? undefined : window.location.href);
 
 Sentry.init({
   dsn: process.env.NEXT_PUBLIC_SENTRY_DSN,
@@ -20,14 +24,22 @@ Sentry.init({
   enableLogs: true,
 
   integrations: [
-    Sentry.replayIntegration({
-      // Mask all inputs/text for privacy; block all media
-      maskAllText: true,
-      blockAllMedia: true,
-      // Custom frames only (breadcrumbs, performance spans): the SDK passes
-      // nothing else to this hook. See lib/scrub-score-url.
-      beforeAddRecordingEvent: scrubRecordingEvent,
-    }),
+    ...(replayRuns
+      ? [
+          Sentry.replayIntegration({
+            // Mask all inputs/text for privacy; block all media
+            maskAllText: true,
+            blockAllMedia: true,
+            // An element that paints a one-time secret (a claim link, a join code, a sign-in href) carries
+            // `ph-no-capture`; the replay blocks it as PostHog's does. maskAllText hides its text, but an
+            // attribute (`href`) is recorded unless the element is blocked.
+            block: REPLAY_BLOCK_SELECTORS,
+            // Custom frames only (breadcrumbs, performance spans): the SDK passes
+            // nothing else to this hook. See lib/scrub-score-url and lib/replay-guard.
+            beforeAddRecordingEvent: recordingEventHook,
+          }),
+        ]
+      : []),
     // Forward console.warn/error as structured Sentry logs
     Sentry.consoleLoggingIntegration({ levels: ["warn", "error"] }),
     // A replay_event's URL list skips beforeSend; only a processor reaches it.

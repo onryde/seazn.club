@@ -73,7 +73,7 @@ export function StartWizard({ initial }: { initial: Initial }) {
           <a
             href={done.claim_url}
             data-claim-url={done.claim_url}
-            className="mt-4 inline-block text-xs text-purple-500 underline"
+            className="ph-no-capture mt-4 inline-block text-xs text-purple-500 underline"
           >
             {t("start.wizard.openDev")}
           </a>

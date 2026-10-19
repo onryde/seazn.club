@@ -4,15 +4,23 @@
 import posthog from "posthog-js";
 import * as Sentry from "@sentry/nextjs";
 import { analyticsConsented } from "@/lib/consent";
+import { stopReplayBeforeNavigatingTo } from "@/lib/replay-guard";
 import { posthogBeforeSend } from "@/lib/scrub-score-url";
 
-// Sentry treats instrumentation-client as the client instrumentation entry once
-// it exists (sentry.client.config still runs Sentry.init on the client). The
-// server/edge counterpart is NOT auto-loaded past @sentry/nextjs v9 — see
-// ../instrumentation.ts, which is what actually runs sentry.server.config /
-// sentry.edge.config now. Re-export the router hook here so SPA navigation
-// tracing keeps working — without this, Sentry logs an ACTION REQUIRED at build.
-export const onRouterTransitionStart = Sentry.captureRouterTransitionStart;
+// Sentry.init is NOT called on the client today. The client options live in ../sentry.client.config.ts, but @sentry/nextjs
+// only picks that file up in its WEBPACK integration (config/webpack.js, getClientSentryConfigFile); this app builds with
+// Turbopack, so the file is never bundled (a prod build holds none of its options). Wiring the client init is an owner
+// decision still pending, and not part of this file. Until then the router hook below has no client to report to and the
+// replay guard finds no Replay integration to stop, so both are no-ops, in place for the day the init is wired. The
+// server/edge counterpart is NOT auto-loaded past @sentry/nextjs v9 either: ../instrumentation.ts is what runs
+// sentry.server.config / sentry.edge.config. The hook is exported because without it Sentry logs an ACTION REQUIRED at
+// build.
+// The replay is stopped before the app navigates to a page whose URL holds a credential (lib/replay-guard). Sentry's own
+// hook runs first, so the guard can never cost the navigation span.
+export const onRouterTransitionStart: typeof Sentry.captureRouterTransitionStart = (href, navigationType) => {
+  Sentry.captureRouterTransitionStart(href, navigationType);
+  stopReplayBeforeNavigatingTo(href);
+};
 
 const key = process.env.NEXT_PUBLIC_POSTHOG_KEY;
 
