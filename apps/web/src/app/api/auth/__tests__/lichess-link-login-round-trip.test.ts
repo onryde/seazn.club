@@ -31,12 +31,19 @@ vi.mock("@/lib/rate-limit", async (importOriginal) => ({
   rateLimit: vi.fn(async () => {}),
 }));
 
-const jar = vi.hoisted(() => ({ values: new Map<string, string>() }));
+const jar = vi.hoisted(() => ({
+  values: new Map<string, string>(),
+  // The options each `set` was given: the Set-Cookie header the route really wrote needs them (a Max-Age, a Path).
+  options: new Map<string, Record<string, unknown> | undefined>(),
+}));
 vi.mock("next/headers", () => ({
   headers: async () => new Headers({ "x-forwarded-for": "203.0.113.20" }),
   cookies: async () => ({
     get: (name: string) => (jar.values.has(name) ? { name, value: jar.values.get(name)! } : undefined),
-    set: (name: string, value: string) => void jar.values.set(name, value),
+    set: (name: string, value: string, options?: Record<string, unknown>) => {
+      jar.values.set(name, value);
+      jar.options.set(name, options);
+    },
     delete: (name: string) => void jar.values.delete(name),
   }),
 }));
@@ -63,12 +70,14 @@ vi.mock("@/server/slug-resolve", () => ({
   orgBySlug: vi.fn(async (slug: string) => ({ id: "org-1", name: "Club", slug })),
 }));
 
+import { NextResponse } from "next/server";
 import { sql } from "@/lib/db";
 import { hashPassword, safeNextPath } from "@/lib/auth";
 import { NEXT_PATH_MAX_LENGTH, loginSchema } from "@/lib/types";
 import { routes } from "@/lib/routes";
 import { lichessLinkStartHref } from "@/lib/lichess-link";
 import { LICHESS_OAUTH_NEXT_COOKIE } from "@/lib/oauth";
+import { posthogBeforeSend, scrubScoreUrl, scrubSentryEvent } from "@/lib/scrub-score-url";
 import { Slug } from "@/server/api-v1/schemas";
 import { mintMatchRoomToken, verifyMatchRoomToken } from "@/server/usecases/match-room-token";
 import { AuthForm } from "@/components/auth-form";
@@ -115,15 +124,39 @@ async function roomLink(slugs: Slugs = SLUGS) {
 }
 type RoomLink = Awaited<ReturnType<typeof roomLink>>;
 
-/** The start, signed out: where it sends the person, and the `next` it puts on the login URL. */
-async function startSignedOut(startHref: string): Promise<string> {
+/** The widest club, competition and division the slug schema allows. Derived from its own declaration, never a typed 80. */
+function widestSlugs(): Slugs {
+  const longest = Slug.maxLength;
+  expect(typeof longest, "Slug declares a maximum").toBe("number");
+  const wide: Slugs = { org: "o".repeat(longest!), comp: "c".repeat(longest!), div: "d".repeat(longest!) };
+  expect(Slug.safeParse(wide.org).success, "that slug is a legal slug").toBe(true);
+  return wide;
+}
+
+/** The start, signed out: the login URL it redirects to, exactly as written on the Location header. */
+async function startSignedOutLocation(startHref: string): Promise<string> {
   jar.values.clear();
+  jar.options.clear();
   const res = await START(new Request(`${ORIGIN}${startHref}`));
-  const loc = new URL(res.headers.get("location")!, ORIGIN);
-  expect(loc.pathname, "signed out, the start goes to the login page").toBe("/login");
-  const next = loc.searchParams.get("next");
+  const location = res.headers.get("location")!;
+  expect(new URL(location, ORIGIN).pathname, "signed out, the start goes to the login page").toBe("/login");
+  return location;
+}
+
+/** The same, read the way the login page reads it: the `next` the login URL carries. */
+async function startSignedOut(startHref: string): Promise<string> {
+  const next = new URL(await startSignedOutLocation(startHref), ORIGIN).searchParams.get("next");
   expect(next, "the login URL carries a next").not.toBeNull();
   return next!;
+}
+
+/** The Set-Cookie header the route REALLY wrote for `name`: the value and options it passed to `cookies().set`,
+ *  serialised by the framework's own response cookies (URL-encoded value, every attribute). */
+function writtenSetCookie(name: string): string {
+  expect(jar.values.has(name), `the route set ${name}`).toBe(true);
+  const res = NextResponse.next();
+  res.cookies.set(name, jar.values.get(name)!, jar.options.get(name));
+  return res.headers.get("set-cookie")!;
 }
 
 /** The real login page, handed the query a browser would hand it, and the `next` it gives its form. */
@@ -219,6 +252,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   jar.values.clear();
+  jar.options.clear();
   mail.sent.length = 0;
   router.push.mockClear();
   router.refresh.mockClear();
@@ -294,15 +328,9 @@ describe("the real nested URL (no database)", () => {
     expect(parsed.success, JSON.stringify(parsed.error?.issues)).toBe(true);
   });
 
-  it("the longest real link still fits: the bound has headroom for 80-character slugs, and the cookie that holds the room path fits 4 KB", async () => {
-    // Derived from the slug schema's own declaration, never a typed 80.
-    const longest = Slug.maxLength;
-    expect(typeof longest, "Slug declares a maximum").toBe("number");
-    const wide: Slugs = { org: "o".repeat(longest!), comp: "c".repeat(longest!), div: "d".repeat(longest!) };
-    expect(Slug.safeParse(wide.org).success, "that slug is a legal slug").toBe(true);
-
+  it("the longest real link still fits: the bound has headroom for 80-character slugs", async () => {
     const typical = await roomLink();
-    const link = await roomLink(wide);
+    const link = await roomLink(widestSlugs());
     const loginNext = await startSignedOut(link.startHref);
     const typicalNext = await startSignedOut(typical.startHref);
 
@@ -310,10 +338,6 @@ describe("the real nested URL (no database)", () => {
       typicalNext.length,
     );
     expect(loginNext.length, "the widest real link is within the bound").toBeLessThanOrEqual(NEXT_PATH_MAX_LENGTH);
-
-    // The start stores the room path in a cookie, URL-encoded on the wire, name and attributes included.
-    const header = `${LICHESS_OAUTH_NEXT_COOKIE}=${encodeURIComponent(link.selfPath)}; Max-Age=600; Path=/; HttpOnly; Secure; SameSite=Lax`;
-    expect(header.length, "the widest real room path fits one cookie").toBeLessThan(COOKIE_BYTES);
   });
 
   it("a long path to another origin is still refused, however it is spelled", () => {
@@ -335,6 +359,119 @@ describe("the real nested URL (no database)", () => {
   });
 });
 
+// ---- telemetry: the token rides every one of these URLs -------------------------------------------------------------
+
+describe("the match-room token never reaches telemetry (review I1)", () => {
+  /** The scrubber's own placeholder style (`/score/[token]`, `key=[key]`): the value is swapped, the URL is kept. */
+  const PLACEHOLDER = "[token]";
+  /** The URL as it should come out: the same string with the REAL minted token swapped for the placeholder. */
+  const without = (url: string, token: string) => url.split(token).join(PLACEHOLDER);
+
+  it("depth 0, the room URL: ?t= and &t= both lose the token and keep everything else", async () => {
+    const link = await roomLink();
+    const url = `${ORIGIN}${link.selfPath}`;
+    expect(url, "premise: the room URL carries the token").toContain(link.token);
+    expect(scrubScoreUrl(url)).toBe(without(url, link.token));
+    expect(scrubScoreUrl(url)).toContain(`/play?t=${PLACEHOLDER}`);
+
+    const later = url.replace("?t=", "?lang=en&t=");
+    expect(later, "premise: the token is now a later parameter").toContain("&t=");
+    expect(scrubScoreUrl(later)).toBe(without(later, link.token));
+    // Sentry's request.query_string carries no `?`: the parameter is first, then later.
+    expect(scrubScoreUrl(`t=${link.token}`)).toBe(`t=${PLACEHOLDER}`);
+    expect(scrubScoreUrl(`lang=en&t=${link.token}`)).toBe(`lang=en&t=${PLACEHOLDER}`);
+  });
+
+  it("depth 1, the Lichess start URL (the room path URL-encoded in its next=): %3Ft%3D loses the token, either hex case", async () => {
+    const link = await roomLink();
+    expect(link.startHref, "premise: one level of encoding around the token").toContain(`%3Ft%3D${link.token}`);
+    expect(scrubScoreUrl(link.startHref)).toBe(without(link.startHref, link.token));
+    expect(scrubScoreUrl(link.startHref)).toContain(`%3Ft%3D${PLACEHOLDER}`);
+
+    const lower = link.startHref.replace(/%3F/g, "%3f").replace(/%3D/g, "%3d");
+    expect(lower, "premise: lower-case hex").toContain(`%3ft%3d${link.token}`);
+    expect(scrubScoreUrl(lower)).toBe(without(lower, link.token));
+  });
+
+  it("depth 2, the login URL the start redirects to (and the start inside it encoded again): %253Ft%253D loses the token", async () => {
+    const link = await roomLink();
+    const location = await startSignedOutLocation(link.startHref);
+    expect(location, "premise: two levels of encoding around the token").toContain(`%253Ft%253D${link.token}`);
+    expect(scrubScoreUrl(location)).toBe(without(location, link.token));
+    expect(scrubScoreUrl(location)).toContain(`%253Ft%253D${PLACEHOLDER}`);
+
+    const wide = await roomLink(widestSlugs());
+    const wideLocation = await startSignedOutLocation(wide.startHref);
+    expect(scrubScoreUrl(wideLocation), "the widest real link too").toBe(without(wideLocation, wide.token));
+  });
+
+  it("the real hooks: PostHog's before_send and Sentry's beforeSend scrub the room URL at every depth, wherever an event carries one", async () => {
+    const link = await roomLink();
+    const room = `${ORIGIN}${link.selfPath}`;
+    const start = `${ORIGIN}${link.startHref}`;
+    const login = `${ORIGIN}${await startSignedOutLocation(link.startHref)}`;
+    for (const url of [room, start, login]) expect(url, "premise: each carries the token").toContain(link.token);
+
+    const posthog = posthogBeforeSend({
+      uuid: "u1",
+      event: "$pageview",
+      properties: { $current_url: room, $referrer: login, $pathname: "/x", $elements: [{ attr__href: start }] },
+      $set_once: { $initial_current_url: login },
+    });
+    expect(posthog, "a room page is not a staff page: the event is kept").not.toBeNull();
+    expect(JSON.stringify(posthog)).not.toContain(link.token);
+    expect(posthog!.properties.$current_url).toBe(without(room, link.token));
+
+    const sentry = scrubSentryEvent({
+      event_id: "e1",
+      transaction: `GET ${link.selfPath}`,
+      request: { url: room, query_string: `t=${link.token}`, headers: { Referer: login } },
+      breadcrumbs: [{ category: "navigation", data: { from: start, to: room } }],
+    });
+    expect(JSON.stringify(sentry)).not.toContain(link.token);
+    expect(sentry.request?.url).toBe(without(room, link.token));
+    expect(sentry.request?.query_string).toBe(`t=${PLACEHOLDER}`);
+  });
+
+  it("a t= that is not a match-room token is left alone, at every depth, and so is a token under any other name", async () => {
+    // A time offset, a version, a date, a word: none is three long base64url segments.
+    const notTokens = ["90s", "1.2.3", "2026.10.19", "top", "a.b.c", "abc123"];
+    const forms: ((v: string) => string)[] = [
+      (v) => `https://seazn.club/watch?t=${v}`,
+      (v) => `https://seazn.club/watch?lang=en&t=${v}`,
+      (v) => `/api/auth/lichess?org=x&next=%2Fwatch%3Ft%3D${v}`,
+      (v) => `/login?next=%2Fapi%2Fauth%2Flichess%3Forg%3Dx%26next%3D%252Fwatch%253Ft%253D${v}`,
+      (v) => `t=${v}`,
+    ];
+    let checked = 0;
+    for (const value of notTokens) {
+      for (const form of forms) {
+        const url = form(value);
+        expect(scrubScoreUrl(url), url).toBe(url);
+        checked++;
+      }
+    }
+    expect(checked).toBe(notTokens.length * forms.length);
+
+    // The scope is the parameter NAME `t` as well as the value's shape: the same real token under another name stays.
+    // Each URL ALSO carries a genuine non-token `t=`, so the scrubber's cheap pre-check passes and the pattern itself
+    // has to refuse the other name (a bare `at=<jwt>` would be waved through by the pre-check alone).
+    const link = await roomLink();
+    const names = ["at", "utm_t", "format", "tt"];
+    for (const name of names) {
+      for (const url of [
+        `https://seazn.club/play?t=90s&${name}=${link.token}`,
+        `/api/auth/lichess?next=%2Fplay%3Ft%3D90s%26${name}%3D${link.token}`,
+        `/login?next=%2Fapi%2Fauth%2Flichess%3Fnext%3D%252Fplay%253Ft%253D90s%2526${name}%253D${link.token}`,
+      ]) {
+        expect(scrubScoreUrl(url), url).toBe(url);
+        checked++;
+      }
+    }
+    expect(checked).toBe(notTokens.length * forms.length + names.length * 3);
+  });
+});
+
 // ---- the database-backed round trips -------------------------------------------------------------------------------
 
 describe.skipIf(!HAS_DB)("a signed-out player links Lichess from the match room and comes back to the room", () => {
@@ -353,6 +490,11 @@ describe.skipIf(!HAS_DB)("a signed-out player links Lichess from the match room 
 
     const emailed = new URL(mail.sent[0]!.link);
     expect(emailed.searchParams.get("next"), "the emailed link carries the start").toBe(link.startHref);
+    // The page a person opens from that mail is a URL telemetry records: the token is two encodings deep in it.
+    expect(mail.sent[0]!.link, "premise: the token is in the emailed link").toContain(link.token);
+    expect(scrubScoreUrl(mail.sent[0]!.link), "the /magic-link page URL").toBe(
+      mail.sent[0]!.link.split(link.token).join("[token]"),
+    );
 
     const opened = await openMagicLink(emailed.href);
     expect(opened.landed, `signed in and sent to the start (the page showed: ${opened.shown.slice(0, 120)})`).toBe(
@@ -385,11 +527,31 @@ describe.skipIf(!HAS_DB)("a signed-out player links Lichess from the match room 
     expect(mail.sent.map((m) => m.to)).toEqual([email]);
     const emailed = new URL(mail.sent[0]!.link);
     expect(emailed.searchParams.get("next"), "the verification link carries the start").toBe(link.startHref);
+    expect(mail.sent[0]!.link, "premise: the token is in the emailed link").toContain(link.token);
+    expect(scrubScoreUrl(mail.sent[0]!.link), "the /verify-email page URL").toBe(
+      mail.sent[0]!.link.split(link.token).join("[token]"),
+    );
 
     const opened = await openVerifyLink(emailed.href, router.push);
     expect(opened.landed).toBe(link.startHref);
 
     await expectBackOnTheRoom(await followStartSignedIn(opened.landed!), link);
+  });
+
+  it("the widest real link: the Set-Cookie the real start writes for the return path fits one cookie", async () => {
+    const link = await roomLink(widestSlugs());
+    const user = await verifiedUser();
+
+    const r = await post(LOGIN, "/api/auth/login", { email: user.email, password: PASSWORD, next: link.startHref });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.body.data?.redirect, "login carries the widest link whole").toBe(link.startHref);
+
+    expect(await followStartSignedIn(r.body.data!.redirect)).toBe(link.selfPath);
+    // The header the route wrote, not text built here: URL-encoded value, Max-Age, Path, HttpOnly, SameSite.
+    const header = writtenSetCookie(LICHESS_OAUTH_NEXT_COOKIE);
+    expect(header, "it holds the room path, token and all").toContain(encodeURIComponent(link.selfPath));
+    expect(header, "and the attributes the route set").toContain("HttpOnly");
+    expect(header.length, `the widest real Set-Cookie is ${header.length} bytes`).toBeLessThan(COOKIE_BYTES);
   });
 
   it("the empty case: a form handed no next mails a link with none, and opening it lands on the first-run wizard", async () => {

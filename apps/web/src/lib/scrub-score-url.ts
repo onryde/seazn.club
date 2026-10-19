@@ -23,6 +23,13 @@
 // STREAM_POLL_MS (`overlayPollPath`: `/api/v1/public/fixtures/{id}/overlay?sid=…&st=…`). A `relay-page` token opens a
 // NON-public fixture's overlay until its session ends, so every `st=` QUERY PARAMETER value becomes `[st]`, plain or
 // URL-encoded, by the `key=` rules. `sid` names a session and is not a credential: it stays.
+//
+// The personal match-room link (chess external play, spec §12.1) is the same kind of secret: `…/play?t=<token>`, a 24-hour
+// HS256 JWT that IDENTIFIES the player to the room without a session. Signing in to link Lichess from that room carries
+// the whole room path inside a `next` parameter (the Lichess start URL, then /login?next=, /magic-link?token=…&next= and
+// /verify-email?token=…&next=), so the token sits in a URL at three encoding depths: `?t=`, `%3Ft%3D` and `%253Ft%253D`.
+// Every `t=` QUERY PARAMETER whose value is shaped like a JWT becomes `[token]`, plain or URL-encoded at any depth. A `t=`
+// that is not a JWT (`?t=90s`, `?t=1.2.3`) is left alone: the discriminator is the value's shape, three base64url segments.
 import type * as Sentry from "@sentry/nextjs";
 import type { CaptureResult } from "posthog-js";
 import { OVERLAY_KEY_PARAM } from "./realtime-purpose";
@@ -67,14 +74,27 @@ const ENCODED_RELAY_PAGE_TOKEN = new RegExp(`(%(?:25)*(?:3[Ff]|26)${RELAY_PAGE_T
 const CAPTURE_PATH = /(\/capture\/codes\/)[^/?#\s"'<>]+/g;
 /** The same path URL-ENCODED inside another URL, at any encoding depth, either hex case. */
 const ENCODED_CAPTURE_PATH = /(%(?:25)*2[Ff]capture%(?:25)*2[Ff]codes%(?:25)*2[Ff])[^%&/?#\s"'<>]+/g;
+/**
+ * A JWT's shape: three base64url segments, each at least 8 characters (the match-room token's header alone is ~50, its
+ * payload ~170, its HS256 signature 43). The floor is what keeps a version (`1.2.3`), a date (`2026.10.19`) or a time
+ * offset (`90s`) from being read as a credential.
+ */
+const JWT_SHAPE = "[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}";
+/** The personal match-room token as the query parameter `t`, with a JWT-shaped value: at the start of a query string
+ *  (Sentry's `request.query_string` carries no `?`) or after `?` / `&`, never inside another name (`at=`, `utm_t=`). */
+const ROOM_TOKEN_QUERY = new RegExp(`((?:^|[?&])t=)${JWT_SHAPE}`, "g");
+/** The same parameter URL-ENCODED inside another URL (the room path in a `next=`): `%3Ft%3D` / `%26t%3D`, at any
+ *  encoding depth, either hex case. The token ends at its first non-JWT character, so its encoded delimiter stays. */
+const ENCODED_ROOM_TOKEN = new RegExp(`(%(?:25)*(?:3[Ff]|26)t%(?:25)*3[Dd])${JWT_SHAPE}`, "g");
 /** Cheap pre-check: nothing any of the patterns could match. */
 const MAYBE_TOKEN = new RegExp(
-  `\\/score\\/|%(?:25)*2[Ff]score%|dl_|${OVERLAY_KEY_PARAM}=|${OVERLAY_KEY_PARAM}%|${RELAY_PAGE_TOKEN_PARAM}=|${RELAY_PAGE_TOKEN_PARAM}%|\\/capture\\/codes\\/|capture%(?:25)*2[Ff]codes%`,
+  `\\/score\\/|%(?:25)*2[Ff]score%|dl_|${OVERLAY_KEY_PARAM}=|${OVERLAY_KEY_PARAM}%|${RELAY_PAGE_TOKEN_PARAM}=|${RELAY_PAGE_TOKEN_PARAM}%|\\/capture\\/codes\\/|capture%(?:25)*2[Ff]codes%|(?:^|[?&])t=|%(?:25)*(?:3[Ff]|26)t%`,
 );
 
 /** One string: `/score/<token>` (plain or encoded) becomes `/score/[token]`, a bare `dl_…` secret becomes `dl_[token]`,
  *  an overlay `key=` query value (plain or encoded) becomes `[key]`, a relay page token's `st=` value (plain or
- *  encoded) becomes `[st]`, and a capture code in `/capture/codes/<code>` (plain or encoded) becomes `[code]`. */
+ *  encoded) becomes `[st]`, a capture code in `/capture/codes/<code>` (plain or encoded) becomes `[code]`, and a
+ *  match-room token in a `t=` query value (plain or encoded) becomes `[token]`. */
 export function scrubScoreUrl(value: string): string {
   if (!MAYBE_TOKEN.test(value)) return value;
   return value
@@ -86,7 +106,9 @@ export function scrubScoreUrl(value: string): string {
     .replace(RELAY_PAGE_TOKEN_QUERY, "$1[st]")
     .replace(ENCODED_RELAY_PAGE_TOKEN, "$1[st]")
     .replace(CAPTURE_PATH, "$1[code]")
-    .replace(ENCODED_CAPTURE_PATH, "$1[code]");
+    .replace(ENCODED_CAPTURE_PATH, "$1[code]")
+    .replace(ROOM_TOKEN_QUERY, "$1[token]")
+    .replace(ENCODED_ROOM_TOKEN, "$1[token]");
 }
 
 /**

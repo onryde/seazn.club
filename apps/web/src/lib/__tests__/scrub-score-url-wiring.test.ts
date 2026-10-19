@@ -11,6 +11,10 @@
 // and is outside it. The client test below pins the file's wiring so the scrub
 // is already in place on the day client Sentry is initialised.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
+import { routes } from "@/lib/routes";
+import { lichessLinkStartHref } from "@/lib/lichess-link";
+import { mintMatchRoomToken } from "@/server/usecases/match-room-token";
 
 vi.mock("posthog-js", () => ({ default: { init: vi.fn(), opt_in_capturing: vi.fn() } }));
 vi.mock("@sentry/nextjs", () => ({
@@ -212,5 +216,84 @@ describe("Sentry client (sentry.client.config.ts; not loaded by the Turbopack bu
     expect(replayOptions.blockAllMedia).toBe(true);
     const frame = { type: 5, timestamp: 1, data: { tag: "performanceSpan", payload: { description: PAGE } } };
     expectScrubbed(run(replayOptions.beforeAddRecordingEvent, frame));
+  });
+});
+
+// Review I1 of the login-round-trip fix: the personal match-room link (`/play?t=<JWT>`) rides URLs at three encoding
+// depths once a signed-out player links Lichess from the room. The patterns are proven in
+// api/auth/__tests__/lichess-link-login-round-trip.test.ts; this half proves each REAL config hands them to its SDK, so
+// a scrub nothing passes to an SDK (an inert seam) would be red here. The token and the room/start URLs come from the
+// real minter and builders; the login URL is the start route's own one-line `/login?next=<encoded start>`.
+describe("the match-room token (review I1): every config's real hooks scrub it", () => {
+  async function roomUrls() {
+    const token = await mintMatchRoomToken({
+      fixtureId: randomUUID(),
+      personId: randomUUID(),
+      roundOpenId: randomUUID(),
+      roundOpenedAt: new Date().toISOString(),
+    });
+    const selfPath = routes.sharedFixturePlay("chess-club", "autumn-open", "open", randomUUID(), token);
+    const startHref = lichessLinkStartHref("chess-club", selfPath);
+    const urls = {
+      room: `https://seazn.club${selfPath}`,
+      start: `https://seazn.club${startHref}`,
+      login: `https://seazn.club/login?next=${encodeURIComponent(startHref)}`,
+    };
+    for (const [depth, url] of Object.entries(urls)) expect(url, `premise: ${depth} carries the token`).toContain(token);
+    return { token, ...urls };
+  }
+  const expectScrubbedOf = (value: unknown, token: string) => {
+    const text = JSON.stringify(value);
+    expect(text).not.toContain(token);
+    expect(text).toContain("[token]");
+  };
+
+  it("PostHog: a pageview of the room, its referrer and an autocaptured link", async () => {
+    vi.stubEnv("NEXT_PUBLIC_POSTHOG_KEY", "phc_test");
+    vi.stubGlobal("document", { cookie: "" });
+    await import("../../instrumentation-client");
+    const posthog = (await import("posthog-js")).default;
+    const options = vi.mocked(posthog.init).mock.calls[0]![1] as Options;
+    const { token, room, start, login } = await roomUrls();
+    const pageview = {
+      uuid: "u1",
+      event: "$pageview",
+      properties: { $current_url: room, $referrer: login, $elements: [{ attr__href: start }] },
+      $set_once: { $initial_current_url: room },
+    };
+    let out: unknown = pageview;
+    for (const fn of [options.before_send].flat()) out = run(fn, out);
+    expectScrubbedOf(out, token);
+  });
+
+  it.each([
+    ["server", "../../../sentry.server.config"],
+    ["edge", "../../../sentry.edge.config"],
+  ])("Sentry %s: an error's request URL and query, a transaction's span, and a log line", async (_name, config) => {
+    const options = await sentryInitOptions(config);
+    const { token, room, start, login } = await roomUrls();
+    expectScrubbedOf(
+      run(options.beforeSend, { event_id: "e1", request: { url: room, query_string: `t=${token}`, headers: { Referer: login } } }, {}),
+      token,
+    );
+    expectScrubbedOf(
+      run(options.beforeSendTransaction, { type: "transaction", transaction: "GET /play", spans: [{ span_id: "s1", trace_id: "t1", start_timestamp: 1, data: { "url.full": start } }] }, {}),
+      token,
+    );
+    expectScrubbedOf(run(options.beforeSendLog, { level: "error", message: `Failed to fetch RSC payload for ${room}`, attributes: {} }), token);
+  });
+
+  it("Sentry client: an error, a navigation breadcrumb, a replay's URL list and a recording frame", async () => {
+    const options = await sentryInitOptions("../../../sentry.client.config");
+    const { token, room, start, login } = await roomUrls();
+    expectScrubbedOf(run(options.beforeSend, { event_id: "e1", request: { url: room } }, {}), token);
+    expectScrubbedOf(run(options.beforeBreadcrumb, { category: "navigation", data: { from: login, to: room } }, {}), token);
+    const integrations = options.integrations as { name: string; processEvent?: unknown }[];
+    const scrubber = integrations.find((i) => typeof i.processEvent === "function")!;
+    expectScrubbedOf(run(scrubber.processEvent, { type: "replay_event", urls: [room, start, login] }, {}, {}), token);
+    const Sentry = await import("@sentry/nextjs");
+    const replayOptions = vi.mocked(Sentry.replayIntegration).mock.calls[0]![0] as Options;
+    const frame = { type: 5, timestamp: 1, data: { tag: "performanceSpan", payload: { description: start } } };
+    expectScrubbedOf(run(replayOptions.beforeAddRecordingEvent, frame), token);
   });
 });
