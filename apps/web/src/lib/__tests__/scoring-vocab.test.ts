@@ -44,7 +44,10 @@ describe("scoring-vocab label helpers", () => {
   });
 
   it("resolves against the real en dictionary", () => {
-    expect(sportLabel("boardgame", en)).toBe("Board game");
+    // The word comes from the dictionary the helper reads (owner 2026-10-19: chess is "Chess", not "Board game" —
+    // pinned as a VALUE in division-header-sport-label.test.tsx); here it must resolve to that entry, not the key.
+    expect(sportLabel("boardgame", en)).toBe(LOCALES.en["sport.boardgame"]);
+    expect(sportLabel("boardgame", en)).not.toBe("boardgame");
     expect(wicketLabel("runout", en)).toBe("Run out");
     expect(extraLabel("noball", en)).toBe("No-ball");
   });

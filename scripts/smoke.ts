@@ -15742,10 +15742,23 @@ async function i18nSuite(): Promise<void> {
   const frDisc = await fetch(`${BASE}/fr/discover`);
   const frDiscHtml = await frDisc.text();
   check("i18n: /fr/discover 200", frDisc.status === 200);
-  if (enDiscHtml.includes("Board game")) {
+  // The chip's NAME is the dictionaries' `sport.boardgame` word (owner 2026-10-19: "Chess", not "Board game"), read
+  // from the dictionaries on disk for both locales rather than typed here, so a later rename moves this check with
+  // it. The gate is the chip's own link (`/discover/boardgame"`), not the word — "Chess" appears in other copy.
+  const sportWord = (lang: "en" | "fr") =>
+    (
+      JSON.parse(
+        readFileSync(new URL(`../apps/web/src/dictionaries/${lang}/ui.json`, import.meta.url), "utf8"),
+      ) as Record<string, string>
+    )["sport.boardgame"]!;
+  const enSport = sportWord("en");
+  const frSport = sportWord("fr");
+  check("i18n: the en and fr boardgame sport words differ (else the check below proves nothing)", enSport !== frSport);
+  if (enDiscHtml.includes('/discover/boardgame"')) {
+    check(`i18n: /en/discover names the boardgame chip '${enSport}'`, enDiscHtml.includes(enSport));
     check(
-      "i18n: /fr/discover localizes the 'Board game' sport name",
-      !frDiscHtml.includes("Board game"),
+      `i18n: /fr/discover localizes the boardgame sport name ('${frSport}', not '${enSport}')`,
+      frDiscHtml.includes(frSport) && !frDiscHtml.includes(` ${enSport}<`),
     );
   } else {
     check("i18n: /discover has no boardgame seed to assert (skipped)", true);

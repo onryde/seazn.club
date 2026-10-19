@@ -1,10 +1,10 @@
 ---
-title: Scoring board games
-description: Chess, draughts and go — tap the winner, say how it ended, and record the board and colours on a pairing card.
+title: Scoring chess
+description: Tap the winner, say how it ended, and record the board and colours on a pairing card.
 order: 22
 ---
 
-Board-game divisions — chess, draughts, go and any other one-against-one win, draw or loss game — record one thing: the result, and how the game got there. A win is worth a point, a draw half a point, and the standings show them that way. Pick a time-control family when you create the division — **Classical**, **Rapid** or **Blitz**; it's recorded as a label on the fixture and doesn't change how anything is scored.
+Chess divisions record one thing: the result, and how the game got there. A win is worth a point, a draw half a point, and the standings show them that way. Pick a time-control family when you create the division — **Classical**, **Rapid** or **Blitz**; it's recorded as a label on the fixture and doesn't change how anything is scored.
 
 ## The board
 
@@ -30,7 +30,7 @@ A mis-tap on a half is a real risk on this pad, because one tap decides the game
 
 Wins, draws and losses feed the table the usual way, and half points are exact — the ledger holds them as whole numbers and halves them only to display, so Buchholz and Sonneborn-Berger arithmetic stays exact for Swiss events. Games as White and games as Black are tracked as pairing data rather than shown as table columns.
 
-Draws are always allowed here, in every kind of stage, including knockouts — a knockout in these sports is settled by a mini-match of several games rather than by forcing one of them to have a winner.
+Draws are always allowed here, in every kind of stage, including knockouts — a knockout in chess is settled by a mini-match of several games rather than by forcing one of them to have a winner.
 
 ## Recording level
 

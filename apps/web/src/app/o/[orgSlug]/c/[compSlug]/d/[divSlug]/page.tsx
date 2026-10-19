@@ -7,6 +7,8 @@ import { StatusChip, divisionChipState } from "@/components/ui/status-chip";
 import { routes } from "@/lib/routes";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
+import { sportLabel } from "@/lib/scoring-vocab";
+import { variantWord } from "@/lib/variant-label-keys";
 import { requireDivisionPage } from "@/server/page-auth";
 import { getDivision, listVariantOptions } from "@/server/usecases/divisions";
 import { divisionConsumesSlotOnArchive } from "@/server/usecases/division-slots";
@@ -575,8 +577,11 @@ export default async function DivisionPage({
             <h1 className="page-title">
               {division.name}
             </h1>
+            {/* The sport and variant as WORDS in the viewer's locale. This chip printed the stored keys and `.chip`'s
+                `capitalize` made "boardgame" read "Boardgame" (owner staging test 2026-10-19). The keys themselves
+                stay the identity everywhere else; only what is shown changes. */}
             <span className="chip">
-              {division.sport_key} · {division.variant_key}
+              {`${sportLabel(division.sport_key, (k) => t(dict, k))} · ${variantWord(division.sport_key, division.variant_key, (k) => t(dict, k))}`}
             </span>
             <StatusChip state={divisionChipState(division.status)} locale={locale} />
             {billingFrozen && <StatusChip state="frozen" locale={locale} />}

@@ -10,6 +10,7 @@ import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { ConfirmDialog } from "@/components/v2/confirm-dialog";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useMsg } from "@/components/i18n/dict-provider";
+import { sportLabel } from "@/lib/scoring-vocab";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 
 export interface ArchivedDivisionLite {
@@ -125,7 +126,7 @@ export function ArchivedDivisions({
             // full-width line on phones instead of pushing past the card edge.
             <li key={d.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 py-2 text-sm">
               <span className="min-w-0 flex-1 truncate text-slate-700">{d.name}</span>
-              <span className="chip">{d.sport_key}</span>
+              <span className="chip">{sportLabel(d.sport_key, msg)}</span>
               <span className="shrink-0 text-xs text-slate-500">
                 {msg("archived.archivedAt", { date: new Date(d.archived_at).toLocaleDateString() })}
               </span>

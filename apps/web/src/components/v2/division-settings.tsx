@@ -26,6 +26,8 @@ import {
 } from "@/lib/format-templates";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useMsg } from "@/components/i18n/dict-provider";
+import { sportLabel } from "@/lib/scoring-vocab";
+import { variantWord } from "@/lib/variant-label-keys";
 import { TagChipInput } from "@/components/ui/tag-chip-input";
 import type { MessageKey } from "@/lib/messages";
 import type { EffectiveEntrantModel } from "@seazn/engine/sport";
@@ -433,6 +435,10 @@ export function DivisionSettings({
   onlineChessOffered: boolean;
 }) {
   const msg = useMsg();
+  // The Format section names the division's sport and variant as WORDS (`sport.<key>`, `variant.<sport>.<variant>`),
+  // never the stored keys: the key is the identity (`boardgame`), the word is what the organiser reads ("Chess").
+  const sportName = sportLabel(division.sport_key, msg);
+  const variantName = variantWord(division.sport_key, division.variant_key, msg);
   const router = useRouter();
   const [name, setName] = useState(division.name);
   const [logoUrl, setLogoUrl] = useState(division.logo_url);
@@ -933,14 +939,14 @@ export function DivisionSettings({
         title={msg("divset.format")}
         // T16 (canvas SettingsPhone): the summary states that the division plays online — a fact, shown whatever the
         // flag and even when the format is locked (the select itself is hidden then).
-        summary={`${division.sport_key} · ${locked ? msg("divset.variantLocked", { variant: division.variant_key }) : division.variant_key}${
+        summary={`${sportName} · ${locked ? msg("divset.variantLocked", { variant: variantName }) : variantName}${
           division.sport_key === "boardgame" && onlinePlaySaved ? ` · ${msg("divset.onlinePlay.summaryOn")}` : ""
         }`}
       >
         {locked ? (
           <div data-testid="format-locked" className="rounded-md bg-slate-50 p-3 text-xs text-slate-600">
             <p className="font-medium text-slate-700">
-              {division.sport_key} · {division.variant_key}
+              {sportName} · {variantName}
             </p>
             <p className="mt-1">
               {msg("divset.lockedNotePre")}
