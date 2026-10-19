@@ -2436,6 +2436,7 @@ export type DictionaryKey =
   | "externalPlay.openRound.notPaired"
   | "externalPlay.openRound.skipped.sendFailed"
   | "externalPlay.openRound.skipped.windowClosed"
+  | "externalPlay.openRound.startFirst"
   | "externalPlay.queue.flaggedHeading"
   | "externalPlay.queue.flaggedLede"
   | "externalPlay.queue.heldHeading"

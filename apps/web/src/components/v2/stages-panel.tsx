@@ -358,6 +358,10 @@ interface Props {
   /** T16 (D12) — the organiser's Open round control per stage (`listOpenRounds`), keyed by stage id. The page hands
    *  it down only while the club is offered online chess (an open STARTS play, T20); absent ⇒ no control. */
   openRounds?: Record<string, OpenRoundView[]>;
+  /** The division plays online and has not been started, so no round can be opened yet (`listOpenRounds` answers
+   *  none until it starts). The page sets it from the SAME gates as `openRounds` plus the shared not-started predicate
+   *  (`divisionScoringClosed`); true ⇒ the first stage card says to start the division. Optional: absent ⇒ no hint. */
+  onlineAwaitsStart?: boolean;
   /** T16 (T19 carry) — where a refused Unpair / Rebuild sends the organiser when an online game stands behind a board
    *  it would clear (409 ONLINE_GAME_EXISTS): the arbiter panel, which settles it. Null ⇒ the notice alone. */
   arbiterHref?: string | null;
@@ -475,7 +479,7 @@ export function boardSlotOptionsFor(
  *  whole panel every second. */
 const RUN_SHEET_NOW_TICK_MS = 60_000;
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, divisionConfig = {}, formatLockedStageIds = [], tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, openRounds, arbiterHref = null }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, divisionConfig = {}, formatLockedStageIds = [], tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, openRounds, onlineAwaitsStart = false, arbiterHref = null }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -1298,6 +1302,13 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                   (openRounds?.[stage.id] ?? []).map((r) => (
                     <OpenRoundControl key={`${r.stageId}:${r.roundNo}`} round={r} tz={tz} />
                   ))}
+                {/* The same slot, before there is anything to open: an online division that has not started. One line,
+                    on the first stage only — the start is the division's, not a stage's. */}
+                {canEdit && onlineAwaitsStart && stage.seq === Math.min(...stages.map((s) => s.seq)) && (
+                  <p className="px-4 py-3 text-xs text-slate-500" data-testid="online-start-hint">
+                    {msg("externalPlay.openRound.startFirst")}
+                  </p>
+                )}
 
                 {/* Owner-approved "Option 2" (on top of Option B) — "why are
                     we not showing the fixtures in each stage?" answered as

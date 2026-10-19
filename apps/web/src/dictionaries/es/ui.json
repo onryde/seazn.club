@@ -5942,6 +5942,7 @@
   "externalPlay.openRound.noFixtures": "Esta ronda aún no tiene partidas que jugar.",
   "externalPlay.openRound.notPaired": "Empareja todos los tableros de esta ronda antes de abrirla.",
   "externalPlay.openRound.divisionNotStarted": "Inicia la división antes de abrir una ronda.",
+  "externalPlay.openRound.startFirst": "Inicia la división para abrir rondas de juego en línea.",
   "externalPlay.openRound.clockNotPlayable": "El reloj de esta división no se puede jugar en línea. Elige uno de los controles de tiempo de la lista y luego abre la ronda.",
   "externalPlay.openRound.skipped.windowClosed": "Sin invitar: ya pasó el plazo para ocupar el puesto en este tablero.",
   "externalPlay.openRound.skipped.sendFailed": "No se pudo enviar el correo de invitación. Abre la ronda de nuevo para reintentarlo.",

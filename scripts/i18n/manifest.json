@@ -2181,7 +2181,8 @@
     "divset.timeControl.label": "7346a5e76a21ad99",
     "divset.timeControl.choose": "a166205906c66804",
     "divset.timeControl.help": "eccaf70fd1bad208",
-    "divset.timeControl.unsupported": "a495305af1926920"
+    "divset.timeControl.unsupported": "a495305af1926920",
+    "externalPlay.openRound.startFirst": "bed7105c59d6756c"
   },
   "fr": {
     "app.name": "fb56d648fbb9ae92",
@@ -4365,7 +4366,8 @@
     "divset.timeControl.label": "7346a5e76a21ad99",
     "divset.timeControl.choose": "a166205906c66804",
     "divset.timeControl.help": "eccaf70fd1bad208",
-    "divset.timeControl.unsupported": "a495305af1926920"
+    "divset.timeControl.unsupported": "a495305af1926920",
+    "externalPlay.openRound.startFirst": "bed7105c59d6756c"
   },
   "nl": {
     "app.name": "fb56d648fbb9ae92",
@@ -6549,6 +6551,7 @@
     "divset.timeControl.label": "7346a5e76a21ad99",
     "divset.timeControl.choose": "a166205906c66804",
     "divset.timeControl.help": "eccaf70fd1bad208",
-    "divset.timeControl.unsupported": "a495305af1926920"
+    "divset.timeControl.unsupported": "a495305af1926920",
+    "externalPlay.openRound.startFirst": "bed7105c59d6756c"
   }
 }

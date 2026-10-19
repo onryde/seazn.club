@@ -5942,6 +5942,7 @@
   "externalPlay.openRound.noFixtures": "Cette ronde n'a pas encore de partie à jouer.",
   "externalPlay.openRound.notPaired": "Appariez chaque échiquier de cette ronde avant de l'ouvrir.",
   "externalPlay.openRound.divisionNotStarted": "Démarrez la division avant d'ouvrir une ronde.",
+  "externalPlay.openRound.startFirst": "Démarrez la division pour ouvrir les rondes du jeu en ligne.",
   "externalPlay.openRound.clockNotPlayable": "La cadence de cette division ne peut pas être jouée en ligne. Choisissez l'une des cadences proposées, puis ouvrez la ronde.",
   "externalPlay.openRound.skipped.windowClosed": "Non invité : le délai pour prendre place à cet échiquier est écoulé.",
   "externalPlay.openRound.skipped.sendFailed": "L'e-mail d'invitation n'a pas pu être envoyé. Ouvrez la ronde à nouveau pour réessayer.",

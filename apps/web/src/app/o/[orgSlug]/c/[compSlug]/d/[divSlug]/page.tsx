@@ -36,7 +36,7 @@ import { listVenues } from "@/server/usecases/venues";
 import { omit } from "@/lib/omit";
 import { openStreamStates } from "@/server/usecases/stream-sessions";
 import { resolveVenueTz } from "@/lib/tz";
-import { fixtureAwaitsSeedDraw, resolvePhase, type DivisionStatus } from "@/lib/division-phase";
+import { divisionScoringClosed, fixtureAwaitsSeedDraw, resolvePhase, type DivisionStatus } from "@/lib/division-phase";
 import { defaultMatchMinutes, listFixturesAwaitingSettle } from "@/server/usecases/competition-desk";
 import { comparePools } from "@/lib/pool-order";
 import { poolLabel } from "@/lib/pool-label";
@@ -547,9 +547,13 @@ export default async function DivisionPage({
   // now, and only while the club is offered online chess (T20: the control is not rendered at all otherwise, never
   // rendered disabled). Grouped by stage, in the reader's order.
   let openRounds: Record<string, OpenRoundView[]> | undefined;
+  // Same gates, one more fact: the division has not started, so `listOpenRounds` answers none and the stage cards say to
+  // start it (the shared not-started predicate — what the Start button and the open-round guard ask).
+  let onlineAwaitsStart = false;
   if (onlineDesk && readOnlinePlay(division.config) === "lichess" && (await onlineChessOffered(auth))) {
     openRounds = {};
     for (const r of await listOpenRounds(auth, id)) (openRounds[r.stageId] ??= []).push(r);
+    onlineAwaitsStart = divisionScoringClosed(division.status);
   }
   // T20: the controls that START online chess (turning it on, the camera policy) render only while the club is
   // offered it (the PostHog flag `online-chess`). Asked only where one of them can render: a chess division's settings
@@ -864,6 +868,7 @@ export default async function DivisionPage({
               awaitingSettle={[...awaitingSettle]}
               onlinePlay={runSheetOnlinePlay}
               openRounds={openRounds}
+              onlineAwaitsStart={onlineAwaitsStart}
               arbiterHref={arbiterHref}
             />
           </>

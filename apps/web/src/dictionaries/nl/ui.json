@@ -5942,6 +5942,7 @@
   "externalPlay.openRound.noFixtures": "Deze ronde heeft nog geen partijen om te spelen.",
   "externalPlay.openRound.notPaired": "Koppel elk bord in deze ronde voordat je haar opent.",
   "externalPlay.openRound.divisionNotStarted": "Start de divisie voordat je een ronde opent.",
+  "externalPlay.openRound.startFirst": "Start de divisie om rondes voor online spelen te openen.",
   "externalPlay.openRound.clockNotPlayable": "De klok van deze divisie kan niet online worden gespeeld. Kies een van de vermelde tempo's en open dan de ronde.",
   "externalPlay.openRound.skipped.windowClosed": "Niet uitgenodigd: de tijd om plaats te nemen aan dit bord is voorbij.",
   "externalPlay.openRound.skipped.sendFailed": "De uitnodigingsmail kon niet worden verstuurd. Open de ronde opnieuw om het nog eens te proberen.",

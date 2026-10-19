@@ -5942,6 +5942,7 @@
   "externalPlay.openRound.noFixtures": "This round has no games to play yet.",
   "externalPlay.openRound.notPaired": "Pair every board in this round before opening it.",
   "externalPlay.openRound.divisionNotStarted": "Start the division before opening a round.",
+  "externalPlay.openRound.startFirst": "Start the division to open rounds for online play.",
   "externalPlay.openRound.clockNotPlayable": "This division's clock can't be played online. Choose one of the listed time controls, then open the round.",
   "externalPlay.openRound.skipped.windowClosed": "Not invited: the time to take a seat at this board has passed.",
   "externalPlay.openRound.skipped.sendFailed": "The invite email could not be sent. Open the round again to retry.",
