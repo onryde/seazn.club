@@ -35,7 +35,13 @@ import {
 import { disposeFakePhones, pairPhoneOnFixture } from "./helpers/fake-capture-phone";
 import { FAKE_CONNECT_MS, POLL_WAIT_MS, cycleMs, holdsStreamSlot, releaseStreamSlot, takeWholePool } from "./helpers/stream-slot-pool";
 import { STREAM_POLL_MS } from "../src/lib/stream-session-view";
-import { OVERLAY_ALIVE_EVERY_MS, PHASE_LOOPBACK_FAILURES_TO_FALLBACK, SIGNAL_ALIVE, SIGNAL_READY } from "../src/lib/overlay-compositor";
+import {
+  OVERLAY_ALIVE_EVERY_MS,
+  PHASE_LOOPBACK_FAILURES_TO_FALLBACK,
+  SCORE_STALE_AFTER_MS,
+  SIGNAL_ALIVE,
+  SIGNAL_READY,
+} from "../src/lib/overlay-compositor";
 
 /** Compositor spec 2026-10-15 §4.2: Final holds the programme `FINAL_HOLD_MS` = 10 000 ms before EOS. */
 const FINAL_HOLD_MS = 10_000;
@@ -299,14 +305,46 @@ interface Cef {
   page: Page;
   lines: { at: number; text: string }[];
   linesOf(text: string): { at: number; text: string }[];
+  /** What the page showed AT the instant it logged ready (null before it has). */
+  readyDom(): Promise<ReadyDom | null>;
+}
+
+interface ReadyDom {
+  /** The stage still waiting out the URL's delay (`data-awaiting-delay="1"`): no snapshot drawn yet. */
+  awaiting: boolean;
+  /** The template's own drawn elements (the `display: contents` wrapper's children). */
+  template: number;
 }
 
 async function cefBrowser(browser: Browser): Promise<Cef> {
   const context = await browser.newContext({ viewport: VIEWPORT, storageState: { cookies: [], origins: [] } });
+  // Brief Step 7 mutant 3: "ready" is asserted AFTER the first snapshot's DOM is present, not merely once. The page's
+  // own console.info is wrapped before any of its scripts run, and the DOM is read synchronously inside the call that
+  // logs ready — the one instant the claim is about. A console listener in this process would read it later.
+  await context.addInitScript(() => {
+    const info = console.info.bind(console);
+    console.info = (...args: unknown[]) => {
+      if (args[0] === "seazn:ready") {
+        const root = document.querySelector('[data-testid="ovl-root"]');
+        const tpl = document.querySelector('[data-testid="ovl-template"]');
+        (window as unknown as { __seaznReadyDom?: unknown }).__seaznReadyDom = {
+          awaiting: root?.getAttribute("data-awaiting-delay") === "1",
+          template: tpl ? tpl.children.length : 0,
+        };
+      }
+      info(...args);
+    };
+  });
   const page = await context.newPage();
   const lines: Cef["lines"] = [];
   page.on("console", (m) => lines.push({ at: Date.now(), text: m.text() }));
-  return { context, page, lines, linesOf: (text) => lines.filter((l) => l.text === text) };
+  return {
+    context,
+    page,
+    lines,
+    linesOf: (text) => lines.filter((l) => l.text === text),
+    readyDom: () => page.evaluate(() => ((window as unknown as { __seaznReadyDom?: ReadyDom }).__seaznReadyDom ?? null) as ReadyDom | null),
+  };
 }
 
 const pathOf = (u: URL) => `${u.pathname}${u.search}`;
@@ -333,8 +371,40 @@ async function expectScene(page: Page, want: { scene: string | null; card: Card 
   if (want.scene === null) await expect(scene, `${step}: no scene`).toHaveCount(0);
   else await expect(scene, `${step}: scene ${want.scene}`).toHaveAttribute("data-scene", want.scene);
   if (want.card === null) await expect(page.getByTestId("ovl-slate"), `${step}: no card`).toHaveCount(0);
-  else await expect(cardLocator(page, want.card), `${step}: the ${want.card} card`).toBeVisible();
+  else {
+    await expect(cardLocator(page, want.card), `${step}: the ${want.card} card`).toBeVisible();
+    await expectCardFits(page, step);
+  }
   await expectBugOnTop(page, step);
+}
+
+/** The card on screen fits its region by LAYOUT, never by clipping (`.ovl-slate-card` is `overflow: hidden`, max-height
+ *  100%): it hides none of its content, and no line in it — the context pill, the headline, the status — is cut
+ *  short vertically. A seed's long entrant names (E4's cricket teams are 38 characters) are what reach this: a
+ *  three-line headline once squeezed the context pill to half its height. Every line read is counted. */
+async function expectCardFits(page: Page, step: string): Promise<void> {
+  const fit = await page.evaluate(() => {
+    const card = document.querySelector<HTMLElement>('[data-testid="ovl-slate-card"]');
+    if (card === null) return { lines: 0, cut: ["no card element"] };
+    const cut: string[] = [];
+    if (card.scrollHeight > card.clientHeight + 1) cut.push(`the card hides ${card.scrollHeight - card.clientHeight}px of content`);
+    let lines = 0;
+    for (const el of card.querySelectorAll<HTMLElement>("*")) {
+      const own = [...el.childNodes].some((n) => n.nodeType === Node.TEXT_NODE && (n.textContent ?? "").trim() !== "");
+      if (!own) continue;
+      lines++;
+      const cs = getComputedStyle(el);
+      // A line-clamped box yields on purpose, with its own ellipsis (the headline): that is a fit, not a cut.
+      const clamped = (cs as CSSStyleDeclaration & { webkitLineClamp?: string }).webkitLineClamp;
+      if (clamped !== undefined && clamped !== "" && clamped !== "none") continue;
+      if (el.scrollHeight > el.clientHeight + 1 && cs.overflowY !== "visible") {
+        cut.push(`"${(el.textContent ?? "").slice(0, 32)}" is cut to ${el.clientHeight}px of ${el.scrollHeight}px`);
+      }
+    }
+    return { lines, cut };
+  });
+  expect(fit.lines, `${step}: anti-vacuity — the card's text lines read`).toBeGreaterThan(0);
+  expect(fit.cut, `${step}: the card fits by layout, not by clipping`).toEqual([]);
 }
 
 /** The score bug is on top: a hit-test at the centre of the template's first element lands inside the template, and
@@ -472,11 +542,59 @@ test("E1 sequence: live → frozen → reconnecting → live → final, each ste
     expect(res?.status(), "the compositor's page loads through the relay door").toBe(200);
     await expect(cef.page.getByTestId("ovl-root")).toBeAttached();
     await expect.poll(() => cef.linesOf(SIGNAL_READY).length, { message: "the page signals ready" }).toBe(1);
+    const atReady = await cef.readyDom();
+    expect(atReady, "ready was logged with the first snapshot drawn: not awaiting, the template on the page").toEqual({
+      awaiting: false,
+      template: expect.any(Number),
+    });
+    expect(atReady!.template, "the template had drawn elements when ready was logged").toBeGreaterThan(0);
     const steps = await walk(cef.page, script, "live", ["live", "frozen", "reconnecting", "live", "final"], "E1");
     console.log(`E1 steps checked: ${steps}`);
     expect(steps).toBe(5);
     expect(cef.linesOf("seazn:phase-channel=loopback"), "a run where the loopback answers logs its channel once").toHaveLength(1);
     expect(cef.linesOf("seazn:phase-channel=web"), "and never falls back").toHaveLength(0);
+  } finally {
+    await cef.context.close();
+  }
+});
+
+test("E0 score stale: the feed cut off reads stale within the rule plus one poll, and fresh again once it returns", async ({ page, browser }) => {
+  const rig = await seedOverlayFixture(page);
+  const c = await composedSession(page, rig);
+  const cef = await cefBrowser(browser);
+  // The compositor spec §6 line, typed here (C11's `ScoreStale(bool)`), never imported from the code under test.
+  const STALE = "seazn:score-stale=true";
+  const FRESH = "seazn:score-stale=false";
+  try {
+    await scriptPhase(cef.context, c.overlayUrl.origin);
+    expect((await cef.page.goto(pathOf(c.overlayUrl)))?.status()).toBe(200);
+    await expect.poll(() => cef.linesOf(SIGNAL_READY).length, { message: "ready" }).toBe(1);
+    // The first value is the change from "unknown": a fresh feed at ready.
+    await expect.poll(() => cef.linesOf(FRESH).length, { message: "the first stale value, at ready, is false" }).toBe(1);
+    expect(cef.linesOf(STALE), "nothing stale while the feed answers").toHaveLength(0);
+
+    // Cut the live-data feed: every overlay poll (the page's own route, with its relay access) now fails.
+    let blocked = 0;
+    await cef.context.route("**/api/v1/public/fixtures/*/overlay**", async (route) => {
+      blocked++;
+      await route.abort("connectionrefused").catch(() => {});
+    });
+    const cutAt = Date.now();
+    await expect
+      .poll(() => cef.linesOf(STALE).length, { message: "stale within the rule plus one poll", timeout: SCORE_STALE_AFTER_MS + STREAM_POLL_MS + 3_000, intervals: [250] })
+      .toBe(1);
+    const staleAt = cef.linesOf(STALE)[0]!.at;
+    console.log(`E0 stale after ${staleAt - cutAt} ms of a cut feed (${blocked} poll(s) refused)`);
+    expect(blocked, "the cut reached the page's polls").toBeGreaterThan(0);
+    // Never sooner than the rule allows: the last success was at or before the cut.
+    expect(staleAt - cutAt, "not before the rule").toBeGreaterThanOrEqual(SCORE_STALE_AFTER_MS - STREAM_POLL_MS - 1_000);
+
+    // Restore it: the next successful poll flips it back, once.
+    await cef.context.unroute("**/api/v1/public/fixtures/*/overlay**");
+    await expect
+      .poll(() => cef.linesOf(FRESH).length, { message: "fresh again on the next success", timeout: STREAM_POLL_MS + 3_000, intervals: [250] })
+      .toBe(2);
+    expect(cef.linesOf(STALE), "one stale edge, logged once").toHaveLength(1);
   } finally {
     await cef.context.close();
   }
@@ -624,6 +742,11 @@ test("E7 moments by scene: Reconnecting airs the slab after the delay, Starting 
     const script = await scriptPhase(cef.context, c.overlayUrl.origin);
     expect((await cef.page.goto(pathOf(c.overlayUrl)))?.status()).toBe(200);
     await expect(cef.page.getByTestId("ovl-root")).not.toHaveAttribute("data-awaiting-delay", "1", { timeout: DELAY_MS + 5_000 });
+    // The delayed page is where "ready on mount" and "ready after the first snapshot" differ: at mount it is awaiting.
+    await expect.poll(() => cef.linesOf(SIGNAL_READY).length, { message: "the delayed page signals ready" }).toBe(1);
+    const atReady = await cef.readyDom();
+    expect(atReady?.awaiting, "ready waited out the URL's delay").toBe(false);
+    expect(atReady?.template ?? 0, "and the template had drawn when it was logged").toBeGreaterThan(0);
     const latest = DELAY_MS + STREAM_POLL_MS + 2_000;
 
     // Leg 1 — Reconnecting.

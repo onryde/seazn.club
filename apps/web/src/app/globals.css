@@ -1797,10 +1797,22 @@ body {
   font-size: 30px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
   color: color-mix(in srgb, var(--sport-ink) 82%, transparent);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  /* R2005: never a flex-shrink target. `overflow: hidden` drops a flex item's automatic minimum to 0, so a card taller
+     than its region squeezed the PILL first — its text cut to half height under a three-line headline. And a one-line
+     box: `line-height: 1` (the pill had the canvas's tall default leading) puts it at the 48 px the tallest card,
+     cricket's Result on the bar, was already squeezed to — now by layout, every glyph whole (the clip is the padding
+     box, so the 8 px padding holds the ascenders and an accent's descent). */
+  flex: none;
+  line-height: 1;
 }
+/* R2005: the headline is what yields on a long pairing — at most two lines, the second ellipsised. Two 43-character
+   names ran it to three, which (with the Reconnecting card's status line) overflowed the bar's 636 px card region; the
+   name pills under the tiles still carry each side. `flex: none` for the pill's reason: a clamped box is overflow: hidden. */
 .ovl-slate-headline { font-size: 64px; font-weight: 800; letter-spacing: 0.02em;
                        color: var(--sport-ink); text-transform: uppercase;
                        line-height: 1.04; max-width: 1400px;
+                       display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
+                       overflow: hidden; flex: none;
                        text-shadow: 0 2px 14px color-mix(in srgb, var(--sport-board) 75%, transparent); }
 .ovl-slate-line { font-size: 30px; font-weight: 500;
                    color: color-mix(in srgb, var(--sport-ink) 70%, transparent); }

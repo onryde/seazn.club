@@ -225,6 +225,10 @@ const HOSTILE_NAME = "Wolfeschlegelsteinhausenbergerdorff ".repeat(12).slice(0, 
 function probeFigures(hostile: string | null) {
   const cut: string[] = [];
   let figures = 0;
+  // R2005 change 12: the corner bug's striker line. Counted apart, so the aggregate cannot hide a bug that drew nothing.
+  let bugFigures = 0;
+  let bugSqueezed = 0;
+  let bugNameEllipsised = 0;
   let marks = 0;
   let ellipsised = 0;
   let squeezed = 0;
@@ -243,6 +247,16 @@ function probeFigures(hostile: string | null) {
       const names = [...band.querySelectorAll<HTMLElement>(".ovl-detail-name")];
       if (names.some((n) => n.textContent === hostile) && names.some((n) => n.getBoundingClientRect().width <= 1)) floored++;
     }
+    // The bug's striker line has one name: made hostile, it must ELLIPSE (the name yields), and the figures beside it
+    // are held whole by the same reads below.
+    for (const name of document.querySelectorAll<HTMLElement>('[data-gallery-cell] [data-testid="ovl-root"] .ovl-bug-footer .ovl-detail-name')) {
+      if (!visible(name)) continue;
+      name.textContent = hostile;
+      bugSqueezed++;
+    }
+    for (const name of document.querySelectorAll<HTMLElement>('[data-gallery-cell] [data-testid="ovl-root"] .ovl-bug-footer .ovl-detail-name')) {
+      if (name.textContent === hostile && name.scrollWidth > name.clientWidth + 1) bugNameEllipsised++;
+    }
   }
   for (const root of roots) {
     const key = root.closest<HTMLElement>("[data-gallery-cell]")?.dataset.galleryCell ?? "?";
@@ -250,7 +264,10 @@ function probeFigures(hostile: string | null) {
       if (!visible(fig)) continue;
       const isMark = fig.classList.contains("ovl-detail-mark");
       if (isMark) marks++;
-      else figures++;
+      else {
+        figures++;
+        if (fig.closest(".ovl-bug") !== null) bugFigures++;
+      }
       const text = (fig.textContent ?? "").trim();
       if (fig.scrollWidth > fig.clientWidth + 1) cut.push(`${key}: "${text}" is ellipsised`);
       const r = fig.getBoundingClientRect();
@@ -296,7 +313,7 @@ function probeFigures(hostile: string | null) {
       if (/\d/.test(el.textContent ?? "")) cut.push(`${key}: "${(el.textContent ?? "").slice(0, 40)}" is cut and holds a numeral`);
     }
   }
-  return { figures, marks, ellipsised, squeezed, floored, cut };
+  return { figures, marks, ellipsised, squeezed, floored, cut, bugFigures, bugSqueezed, bugNameEllipsised };
 }
 
 test.describe("the staff overlay gallery (R2007)", () => {
@@ -410,9 +427,11 @@ test.describe("the staff overlay gallery (R2007)", () => {
       const declared = await openGallery(page, query);
       const read = await page.evaluate(probeFigures, null);
       console.log(
-        `[8] frame ${query || "full"}: cells ${declared}, figures + glyphs checked: ${read.figures}, marks checked: ${read.marks}, cut boxes read: ${read.ellipsised}, figures cut: ${read.cut.length}`,
+        `[8] frame ${query || "full"}: cells ${declared}, figures + glyphs checked: ${read.figures} (in a bug: ${read.bugFigures}), marks checked: ${read.marks}, cut boxes read: ${read.ellipsised}, figures cut: ${read.cut.length}`,
       );
       expect(read.figures, `anti-vacuity: no crease figure or ball glyph was read at ${query || "full"}`).toBeGreaterThan(0);
+      // R2005 change 12: the corner bug's striker line, apart — the aggregate would hide a bug that drew nothing.
+      expect(read.bugFigures, `anti-vacuity: no figure was read inside an .ovl-bug cell at ${query || "full"}`).toBeGreaterThan(0);
       expect(read.marks, `anti-vacuity: no striker mark was read at ${query || "full"}`).toBeGreaterThan(0);
       expect.soft(read.cut, `figures cut at ${query || "full"}`).toEqual([]);
     }
@@ -423,19 +442,32 @@ test.describe("the staff overlay gallery (R2007)", () => {
   // set to 0 passed check 8. Here the first name in every crease band is made hostile (400 characters, no digits): the
   // band must give nearly all of it back, a flex row shrinks every entry in proportion to its width, and an entry with
   // no floor is pushed under its own figures, which then spill out of it. The witness that the squeeze reached a floor:
-  // some name in a squeezed band gave every pixel it had. Full HD only — a frame scales the one 1920 layout (check 8
-  // reads all three). Cricket only, with no sweep: the crease is the only detail line that carries figures.
+  // some name in a squeezed band gave every pixel it had. Cricket only, with no sweep: the crease is the only detail line
+  // that carries figures. R2005 change 12 adds the corner bug's striker line, whose ONE name is made hostile too: it
+  // must ellipse while its figures stay whole. Read at all three frames, as check 8 is (the brief's acceptance: "check 8
+  // and 8b at 1920, 844 and 390"); a frame scales the one 1920 layout, so all three must agree.
   test("check 8b: a hostile name squeezes the crease band, and every figure still sits whole inside its own entry", async ({ page }) => {
+    test.setTimeout(300_000);
     await signInStaff(page);
-    const declared = await openGallery(page, "");
-    const read = await page.evaluate(probeFigures, HOSTILE_NAME);
-    console.log(
-      `[8b] cells ${declared}, crease bands squeezed: ${read.squeezed}, reaching a floor: ${read.floored}, figures + glyphs + marks checked: ${read.figures + read.marks}, figures cut: ${read.cut.length}`,
-    );
-    expect(read.squeezed, "anti-vacuity: no crease band was squeezed").toBeGreaterThan(0);
-    expect(read.floored, "anti-vacuity: the squeeze never reached a figures floor").toBeGreaterThan(0);
-    expect(read.figures, "anti-vacuity: no figure was read").toBeGreaterThan(0);
-    expect.soft(read.cut, "figures cut under the squeeze").toEqual([]);
+    let frames = 0;
+    for (const query of ["", "?frame=844", "?frame=390"]) {
+      const at = query || "full";
+      const declared = await openGallery(page, query);
+      const read = await page.evaluate(probeFigures, HOSTILE_NAME);
+      console.log(
+        `[8b] frame ${at}: cells ${declared}, crease bands squeezed: ${read.squeezed}, reaching a floor: ${read.floored}, bug striker names squeezed: ${read.bugSqueezed} (ellipsised: ${read.bugNameEllipsised}), figures + glyphs + marks checked: ${read.figures + read.marks} (bug figures: ${read.bugFigures}), figures cut: ${read.cut.length}`,
+      );
+      expect(read.squeezed, `anti-vacuity: no crease band was squeezed at ${at}`).toBeGreaterThan(0);
+      expect(read.floored, `anti-vacuity: the squeeze never reached a figures floor at ${at}`).toBeGreaterThan(0);
+      expect(read.figures, `anti-vacuity: no figure was read at ${at}`).toBeGreaterThan(0);
+      // R2005 change 12: the bug's striker name YIELDS (ellipses) and its figures stay whole (the `cut` read below).
+      expect(read.bugSqueezed, `anti-vacuity: no bug striker name was squeezed at ${at}`).toBeGreaterThan(0);
+      expect(read.bugNameEllipsised, `every squeezed bug striker name ellipses at ${at}`).toBe(read.bugSqueezed);
+      expect(read.bugFigures, `anti-vacuity: no bug figure was read under the squeeze at ${at}`).toBeGreaterThan(0);
+      expect.soft(read.cut, `figures cut under the squeeze at ${at}`).toEqual([]);
+      frames++;
+    }
+    expect(frames, "frames checked").toBe(3);
   });
 
   test("check 6: no preview fetches or subscribes — nothing leaves the page for 16 s (longer than POLL_MS)", async ({ page }) => {
