@@ -576,7 +576,7 @@ export async function claimRoomSeat(
   // claim met a dry bucket): a stay never admitted becomes a waiting stay and is answered `queued`; an ADMITTED one keeps its
   // admission and is answered `camera_starting`, with no number to show.
   if (!seat.seated && seat.reason === "camera_starting" && "budgetDeferred" in seat && seat.budgetDeferred === true) {
-    seat = await queueDeferred(r, fixtureId, seat, deps);
+    seat = await queueDeferred(r, fixtureId, seat, deps, now);
   }
   // Seated again (a reload's way back after a guard fault): our gap is over,
   // even if the page that opened it never said so (I-1).
@@ -622,7 +622,7 @@ export async function claimRoomSeat(
 }
 
 /** The deferral of step 4 (see claimRoomSeat): settle the stay and say what the room is told. */
-async function queueDeferred(r: Resolved, fixtureId: string, seat: SeatResult, deps: RoomDeps): Promise<SeatResult> {
+async function queueDeferred(r: Resolved, fixtureId: string, seat: SeatResult, deps: RoomDeps, now: Date): Promise<SeatResult> {
   const budgetKey = currentBudgetKey();
   const anchor = r.open?.anchor ?? null;
   // A deferral exists only where a vendor is configured and the round is open; either missing is not a line to join.
@@ -637,6 +637,7 @@ async function queueDeferred(r: Resolved, fixtureId: string, seat: SeatResult, d
     budgetKey,
     anchor,
     at: deps.line?.at,
+    arrival: now,
   });
   return answer.kind === "queued"
     ? { seated: false, reason: "queued", participant: null, line: answer.line }

@@ -122,6 +122,16 @@ async function dbNow(): Promise<Date> {
   return row!.now;
 }
 
+/** The arrival a NEW stay is dated at: the instant the claim's window was judged, never later than the gate's own clock `now`.
+ *  The window is judged on the application's clock at the top of the claim and the gate reads the database's clock after the room's
+ *  whole preamble, so `first_claim_at` on the database's clock alone could fall after a deadline the claim was judged inside - and
+ *  protection (`first_claim_at < deadline`, §5.7.8) would then refuse a player who came in time. `least` keeps the ledger's own
+ *  invariant (`queued_at >= first_claim_at`, V461) when the application's clock runs AHEAD of the database's. Liveness
+ *  (`last_seen_at`, the lapse clauses) stays on the gate's clock: every stay is compared on one clock. */
+function arrivalOf(a: Pick<GateAsk, "arrival">, now: Date): Date {
+  return a.arrival !== undefined && a.arrival.getTime() < now.getTime() ? a.arrival : now;
+}
+
 // ─── The stay's arrival and liveness: the ONE other reader ────────────────────────────────────────────────────────────────
 
 export type Stay = {
@@ -136,13 +146,13 @@ export type Stay = {
   left: "silent" | "camera" | null;
 };
 
-/** Stamp the stay's arrival (first call) and its liveness (every call), in ONE statement. A stay is restarted on
+/** Stamp the stay's arrival (first call, `arrival`) and its liveness (every call, `now`), in ONE statement. A stay is restarted on
  *  `served_at is not null or ended_at is not null or stayLapsedSql` and on nothing else - never on `queued_at`: a stay the
  *  budget has never held keeps its `first_claim_at` across its claims, which is its order key whenever the budget first holds it
  *  (spec §5.7.2, the re-review's N2). The old row is read in the same statement for `left`. */
 export async function upsertStay(
   db: Db,
-  a: { fixtureId: string; personId: string; budgetKey: string; now: Date },
+  a: { fixtureId: string; personId: string; budgetKey: string; now: Date; arrival: Date },
 ): Promise<Stay> {
   const now = at(a.now);
   const restart = sql`(l.served_at is not null or l.ended_at is not null or ${stayLapsedSql(now)})`;
@@ -165,7 +175,7 @@ export async function upsertStay(
        where l.fixture_id = ${a.fixtureId} and l.person_id = ${a.personId}
     ), up as (
       insert into fixture_seat_line as l (fixture_id, person_id, budget_key, first_claim_at, last_seen_at, last_gate)
-      values (${a.fixtureId}, ${a.personId}, ${a.budgetKey}, ${a.now}, ${a.now}, 'passed')
+      values (${a.fixtureId}, ${a.personId}, ${a.budgetKey}, ${a.arrival}, ${a.now}, 'passed')
       on conflict (fixture_id, person_id) do update set
         budget_key     = excluded.budget_key,
         first_claim_at = case when ${restart} then excluded.first_claim_at else l.first_claim_at end,
@@ -224,6 +234,9 @@ export type GateAsk = {
   anchor: BoardAnchor;
   /** The test seam: the clock of the whole decision. Production passes nothing and the database's clock decides. */
   at?: Date;
+  /** The instant the claim's window was JUDGED (`seatPlayer`'s `now`, the application's clock). A NEW stay is dated there (see
+   *  `arrivalOf`), so a claim judged inside the window never opens a stay dated after the deadline (final review M-1). */
+  arrival?: Date;
   /** The test seam of the concurrent-admission test: called inside the gate's transaction between its read and its decision. */
   afterRead?: () => void | Promise<void>;
 };
@@ -335,7 +348,8 @@ export async function gateClaim(a: GateAsk): Promise<GateAnswer> {
   const ids = { fixtureId: a.fixtureId, personId: a.personId };
   // Step 1: arrival and liveness, one statement, OUTSIDE the lock - so a stay's place is its first claim and not the moment it won
   // the lock. `left` is read here: it is set once, on the claim that starts the replacement stay.
-  const first = await upsertStay(sql, { ...ids, budgetKey: a.budgetKey, now });
+  const arrival = arrivalOf(a, now);
+  const first = await upsertStay(sql, { ...ids, budgetKey: a.budgetKey, now, arrival });
   const lockStarted = performance.now();
   try {
     return await sql.begin(async (tx) => {
@@ -343,7 +357,7 @@ export async function gateClaim(a: GateAsk): Promise<GateAnswer> {
       await tx`select pg_advisory_xact_lock(hashtext('rtk-line'), hashtext(${a.budgetKey}))`;
       const lockWaitMs = Math.round(performance.now() - lockStarted);
       // The state under the lock: a second claim of this very stay (another tab) may have admitted it since step 1.
-      const mine = await upsertStay(tx, { ...ids, budgetKey: a.budgetKey, now });
+      const mine = await upsertStay(tx, { ...ids, budgetKey: a.budgetKey, now, arrival });
       // Step 2. The opponent's arrival is applied FIRST (the re-review 2's I-A): the stay on the board's other side now has an
       // opponent who could be seated, so ITS seat could complete the board - and if it is admitted its reservation rises by
       // LINE_RECHECK_COST and the pool falls by it from this instant. A PURE write: it reads none of the guarded columns, and
@@ -415,7 +429,7 @@ export async function answerBusy(a: GateAsk, left: LineWire["left"] = null): Pro
   log.warn({ fixtureId: a.fixtureId, busy: busyCount }, "seat-line: gate lock busy; the claim answered as if the pool were short");
   const now = a.at ?? (await dbNow());
   const ids = { fixtureId: a.fixtureId, personId: a.personId };
-  const mine = await upsertStay(sql, { ...ids, budgetKey: a.budgetKey, now });
+  const mine = await upsertStay(sql, { ...ids, budgetKey: a.budgetKey, now, arrival: arrivalOf(a, now) });
   const st = await readStanding(sql, a, now, mine);
   if (st.mineAdmitted) {
     await writeStay(sql, ids, { gate: "passed", queuedAt: mine.queuedAt ?? now });
@@ -432,7 +446,7 @@ export async function answerBusy(a: GateAsk, left: LineWire["left"] = null): Pro
 export async function settleDeferral(a: GateAsk): Promise<GateAnswer> {
   const now = a.at ?? (await dbNow());
   const ids = { fixtureId: a.fixtureId, personId: a.personId };
-  const mine = await upsertStay(sql, { ...ids, budgetKey: a.budgetKey, now });
+  const mine = await upsertStay(sql, { ...ids, budgetKey: a.budgetKey, now, arrival: arrivalOf(a, now) });
   const st = await readStanding(sql, a, now, mine);
   if (st.mineAdmitted) {
     await writeStay(sql, ids, { gate: "passed", queuedAt: mine.queuedAt ?? now });

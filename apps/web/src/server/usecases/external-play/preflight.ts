@@ -282,7 +282,7 @@ export async function seatPlayer(a: SeatAsk, deps: PreflightDeps = {}): Promise<
 
   // Spec §5.7.3: the check-in line, on the `required` path only - after the window, the grant, `off`, the override and the
   // optional branch, and before the first vendor call. A T9 re-verify never reaches it.
-  const line = await passTheLine(a, { f, home, away, player, anchor: open.anchor, checkedIn }, deps);
+  const line = await passTheLine(a, { f, home, away, player, anchor: open.anchor, checkedIn, now }, deps);
   if (line.held !== null) return line.held;
 
   try {
@@ -318,6 +318,8 @@ async function passTheLine(
     player: SidePlayer;
     anchor: Parameters<typeof countedCheckIns>[3];
     checkedIn: () => ReturnType<typeof countedCheckIns>;
+    /** The instant `seatPlayer` judged the window: the ARRIVAL of a new stay (seat-line.ts `arrivalOf`). */
+    now: Date;
   },
   deps: PreflightDeps,
 ): Promise<{ held: SeatResult | null; gated: boolean }> {
@@ -336,6 +338,7 @@ async function passTheLine(
     budgetKey,
     anchor: w.anchor,
     at: deps.line?.at,
+    arrival: w.now,
     afterRead: deps.line?.afterRead,
   };
   let answer;

@@ -7,10 +7,10 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { sql } from "@/lib/db";
 import { LINE_DEADLINE_GRACE_MS, boardAnchor, boardCap } from "@/server/external-play/window";
-import { LINE_RESERVATION } from "@/server/external-play/seat-line";
+import { LINE_RESERVATION, answerBusy, gateClaim, settleDeferral } from "@/server/external-play/seat-line";
 import { checkInToFixture, stampFixtureCheckIn } from "../me";
 import { createGameIfReady } from "../external-play/create-game";
-import { stayRow } from "./_external-play-line";
+import { askOf, putStay, stayRow } from "./_external-play-line";
 import { CAMERA_ON_EVENTS } from "./_external-play-rtk-fake";
 import {
   DEADLINE,
@@ -251,4 +251,105 @@ describe.skipIf(!DB)("a counted check-in is never re-stamped (test 28)", () => {
       "ONE walkover, against the absent AWAY - the player who came is not forfeited with them",
     ).toEqual([{ by: b.away.entrantId, reason: "walkover" }]);
   }, 120_000);
+});
+
+// Final review M-1: the window is judged on the APP's clock (claimRoomSeat's `now`) and a stay's `first_claim_at` was stamped on
+// the DATABASE's clock at gate time, with the room's preamble between them (two room reads, the door read, the limiter, the stale
+// bridge reset, the online-chess flag, the grant read - tenths of a second, more under the load in which the line forms). A claim
+// judged `open` a moment before the deadline could therefore open a stay dated AFTER it: the card promised the cap, and the next
+// poll answered `window_closed` because protection condition 2 is `first_claim_at < deadline`. The same class of defect as the
+// check-in stamp (05e73438a), left on the line's order key. The gate now takes the judged instant as the stay's ARRIVAL.
+//
+// Two clocks, kept apart on purpose (the scenes' own rule): `now` is the claim's judged instant, `line.at` is the gate's clock - the
+// database's, in production. Single sport, deliberately: the gate does not know a sport, and online play exists for `boardgame` only.
+describe.skipIf(!DB)("the stay is dated where the window was judged (final review M-1)", () => {
+  /** HOME's first claim on a dry bucket: judged at `judged`, the gate running on `gate`. The mint is deferred, so the stay is held. */
+  async function firstClaim(judged: Date, gate: Date) {
+    const w = world();
+    const b = await seedBoard();
+    await fund(w.key, 0);
+    const got = await claimRoom(w, b, "home", judged, { line: { at: gate } });
+    return { w, b, got };
+  }
+
+  it("judged 1 ms before the deadline, gated after it (the app's clock behind the database's): the stay is dated at the judged instant, so it is protected and the NEXT poll is not window_closed", async () => {
+    const judged = new Date(DEADLINE.getTime() - 1);
+    const gate = new Date(DEADLINE.getTime() + SEC);
+    expect(gate.getTime(), "premise: the two clocks DIFFER and straddle the deadline").toBeGreaterThan(DEADLINE.getTime());
+    const { w, b, got } = await firstClaim(judged, gate);
+    expect(got.seat, "premise: the dry bucket holds the claim in line").toMatchObject({ seated: false, reason: "queued" });
+    const stay = await stayRow(b.fixtureId, b.home.personId);
+    expect(stay?.first_claim_at, "the arrival is where the window was judged, not where the database's clock read at gate time").toEqual(judged);
+    expect(stay?.last_seen_at, "liveness stays on the gate's clock").toEqual(gate);
+    expect(stay!.first_claim_at.getTime(), "protection condition 2: arrived before the deadline").toBeLessThan(DEADLINE.getTime());
+    // The player's next poll, after the deadline on a single clock, is held - not told the window is closed.
+    const next = await claimRoom(w, b, "home", new Date(gate.getTime() + 5 * SEC));
+    expect(next.seat, "the next poll is held in line").toMatchObject({ seated: false, reason: "queued" });
+    expect(next.snapshot.phase, "the board still reads open to the protected player").toBe("open");
+  }, 60_000);
+
+  it("the pair: judged AT the deadline is window_closed with no stay at all (nothing to date), and the clocks agreeing 1 ms before it keeps the stay too", async () => {
+    // (1) AT the deadline: the seat refuses before the gate is ever reached.
+    const at = await firstClaim(DEADLINE, new Date(DEADLINE.getTime() + SEC));
+    expect(at.got.seat, "judged at the deadline").toMatchObject({ seated: false, reason: "window_closed" });
+    expect(await stayRow(at.b.fixtureId, at.b.home.personId), "no stay was opened").toBeNull();
+    // (2) One clock, 1 ms before: unchanged by the fix.
+    const judged = new Date(DEADLINE.getTime() - 1);
+    const agree = await firstClaim(judged, judged);
+    expect((await stayRow(agree.b.fixtureId, agree.b.home.personId))?.first_claim_at).toEqual(judged);
+  }, 60_000);
+
+  it("the other direction (the app's clock AHEAD of the database's): the arrival is never later than the gate's own clock, so no stay is dated after it was last seen", async () => {
+    const judged = new Date(DEADLINE.getTime() - 1);
+    const gate = new Date(DEADLINE.getTime() - 5 * SEC);
+    const { b, got } = await firstClaim(judged, gate);
+    expect(got.seat, "premise: held in line").toMatchObject({ seated: false, reason: "queued" });
+    const stay = await stayRow(b.fixtureId, b.home.personId);
+    expect(stay?.first_claim_at, "least(judged, the gate's clock)").toEqual(gate);
+    expect(stay!.queued_at!.getTime(), "the ledger's own check: queued_at >= first_claim_at").toBeGreaterThanOrEqual(stay!.first_claim_at.getTime());
+  }, 60_000);
+
+  it("every way a stay can be OPENED honours the judged instant - the gate, the busy answer, and the mid-claim deferral (which restarts a stay the claim just served) - at the gate's own clock a second later", async () => {
+    const judged = new Date(DEADLINE.getTime() - 1);
+    const gate = new Date(DEADLINE.getTime() + SEC);
+    const w = world();
+    await fund(w.key, 0);
+    const arrivals: Record<string, Date | undefined> = {};
+    // The gate and the busy answer: no stay yet, so each creates one.
+    for (const [name, open] of [
+      ["gateClaim", (a: ReturnType<typeof askOf>) => gateClaim(a)],
+      ["answerBusy", (a: ReturnType<typeof askOf>) => answerBusy(a)],
+    ] as const) {
+      const b = await seedBoard();
+      await open(askOf(w.key, b, "home", gate, { anchor: ANCHOR, arrival: judged }));
+      arrivals[name] = (await stayRow(b.fixtureId, b.home.personId))?.first_claim_at;
+    }
+    // The deferral: the stay was served a moment ago, so settling it starts a NEW one (spec §5.7.5, restart on served).
+    const served = await seedBoard();
+    await putStay({
+      fixtureId: served.fixtureId, personId: served.home.personId, budgetKey: w.key,
+      firstClaimAt: new Date(judged.getTime() - 60 * SEC), servedAt: new Date(judged.getTime() - 30 * SEC), gate: "passed",
+    });
+    await settleDeferral(askOf(w.key, served, "home", gate, { anchor: ANCHOR, arrival: judged }));
+    arrivals.settleDeferral = (await stayRow(served.fixtureId, served.home.personId))?.first_claim_at;
+    expect(arrivals, "each opening path dated its stay at the judged instant").toEqual({ gateClaim: judged, answerBusy: judged, settleDeferral: judged });
+  }, 60_000);
+
+  it("the room hands the judged instant to the deferral too: a claim whose seat is cut short by the budget, on a stay it just restarted, is dated where the window was judged", async () => {
+    const judged = new Date(DEADLINE.getTime() - 1);
+    const gate = new Date(DEADLINE.getTime() + SEC);
+    const w = world();
+    const b = await seedBoard();
+    await fund(w.key, 0);
+    // A stay already served: the deferral's upsert restarts it. The seat is stubbed to the budget's cut-short answer so the claim
+    // goes straight to the room's `queueDeferred` (the gate has nothing to say about a stay it never saw).
+    await putStay({
+      fixtureId: b.fixtureId, personId: b.home.personId, budgetKey: w.key,
+      firstClaimAt: new Date(judged.getTime() - 60 * SEC), servedAt: new Date(judged.getTime() - 30 * SEC), gate: "passed",
+    });
+    const deferred = { seated: false, reason: "camera_starting", participant: null, budgetDeferred: true };
+    const got = await claimRoom(w, b, "home", judged, { line: { at: gate }, seat: (async () => deferred) as never });
+    expect(got.seat, "premise: the deferral queued the restarted stay").toMatchObject({ seated: false, reason: "queued" });
+    expect((await stayRow(b.fixtureId, b.home.personId))?.first_claim_at).toEqual(judged);
+  }, 60_000);
 });

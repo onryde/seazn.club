@@ -1781,7 +1781,12 @@ A new delta, **V461 (next free; renumbered at merge)** (V460, `video_rooms_to_en
 - `budget_key text not null`: the bucket this player spends from, `budgetKey(baseUrl, accountId)`.
   The line is per bucket (§5.7.6).
 - `first_claim_at timestamptz not null`: the stay's **arrival**, the line's order key. Stamped once
-  per stay, on the database clock, by its first gated claim, whether or not the stay is ever held.
+  per stay, by its first gated claim, whether or not the stay is ever held. It is dated at the instant
+  the claim's window was JUDGED (`seatPlayer`'s `now`, the application's clock), never later than the
+  database's clock at gate time (`least`): the room's preamble sits between the two reads, and a claim
+  judged inside the window must not open a stay dated after the deadline, which condition 2 of the
+  deadline protection (§5.7.8) would then refuse (final review M-1). `last_seen_at` and every lapse
+  clause stay on the database's clock, so stays are compared on one clock.
 - `last_seen_at timestamptz not null` and `last_gate text not null check (last_gate in ('held',
   'passed'))`: the last gate event and what it was. Liveness (below).
 - `queued_at timestamptz null`: the first time the budget held this stay (blocked behind an earlier

@@ -1114,7 +1114,9 @@ describe.skipIf(!process.env.DATABASE_URL)("which refusals carry a token (contro
       const s = await req();
       const ahead = await req();
       const key = stubBucket();
-      await putStay({ fixtureId: ahead.fixtureId, personId: ahead.home.personId, budgetKey: key, firstClaimAt: new Date(Date.now() - 5_000), seenAt: new Date(), queuedAt: new Date(Date.now() - 5_000) });
+      // Dated on the CLAIM's judged clock (NOW), because that is where a new stay's arrival is dated (final review M-1); its
+      // liveness is the database's now, which is the clock the lapse clauses read.
+      await putStay({ fixtureId: ahead.fixtureId, personId: ahead.home.personId, budgetKey: key, firstClaimAt: new Date(NOW.getTime() - 5_000), seenAt: new Date(), queuedAt: new Date(NOW.getTime() - 5_000) });
       const rtk = fakeRealtimeKit();
       seen.set("queued", await claim(s, "home", rtk));
       expect(rtk.http, "queued spends nothing: the vendor heard nothing").toEqual([]);
