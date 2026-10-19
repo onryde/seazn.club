@@ -2318,8 +2318,8 @@ export async function heartbeat(sessionId: string, token: string, body: RelayHea
   const previousRung = await previousRungOf(peek);
   // #983 review r1: a beat whose token names an attempt OLDER than the row's (`superseded`) is a replaced Machine's —
   // received after the retry moved on, where the beat_window_at anchor cannot tell it from the replacement's first beat.
-  // It is a SAMPLE only: no row write, no expiry tick, no callback, no sizing alarm, and the reply is the session's
-  // desired state as it stands. Decided on the locked row below, and again on each callback's own locked row.
+  // It is a SAMPLE only: no row write, no expiry tick, no callback, no sizing alarm, and the reply is `ending` (drain).
+  // Decided on the locked row below, and again on each callback's own locked row.
   // The beat is recorded FIRST (a late beat that arrived is not a stale one), then the policy runs.
   // Owed 37 (compositor PR #27): the compositor sends its FINAL beat on a lane of its own, so a periodic beat it sent
   // BEFORE the final can be received — and committed — AFTER it. So whether this beat may overwrite the stored one is
@@ -2351,8 +2351,11 @@ export async function heartbeat(sessionId: string, token: string, body: RelayHea
   })) as { row: Row; superseded: boolean };
   await sampleBeat(sessionId, before.org_id, beat, deps);
   if (superseded) {
-    log.info({ sid: sessionId, state: beat.state, att, attempt: before.runner_attempts }, "stream session: a beat from a superseded attempt's Machine is a sample only — the current attempt is untouched");
-    return { desiredState: before.desired_state };
+    log.info({ sid: sessionId, state: beat.state, att, attempt: before.runner_attempts }, "stream session: a beat from a superseded attempt's Machine is a sample only — the current attempt is untouched; the Machine is told to drain");
+    // #983 review r2 (coordinator ruling): the superseded Machine is answered `ending` whatever the session's own
+    // desired state — it is a stray (its force-destroy failed, or has not landed), and a stray told `live` keeps
+    // publishing. `ending` drains it; the final beat it then sends is a superseded beat too, so a sample only.
+    return { desiredState: "ending" };
   }
   raiseSizingAlarm(before, beat, previousRung);
   let s = (await applyExpiry(sessionId, deps))!;

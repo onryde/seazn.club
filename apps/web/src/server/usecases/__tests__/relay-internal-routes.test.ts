@@ -2026,7 +2026,7 @@ describe.skipIf(!HAS_DB)("Owed 37: a late beat never overwrites the final stoppe
   // runner: booting → playing cut its stale window from the boot allowance to the played one (expiry.ts
   // staleWindowSeconds), and a 15–30 s cold start then failed the session with the retry already spent. Each attempt's
   // job token now names its attempt (`att`), and a beat for an older one than runner_attempts is a sample only.
-  it("#983 r1: attempt 1's LATE beats after the retry — a periodic one that stepped down, then its final retried on its lane — leave attempt 2 BOOTING with its boot allowance intact: no row write, no runner transition, no state move, no sizing alarm, one sample each", async () => {
+  it("#983 r1: attempt 1's LATE beats after the retry — a periodic one that stepped down, then its final retried on its lane — leave attempt 2 BOOTING with its boot allowance intact: no row write, no runner transition, no state move, no sizing alarm, one sample each — and are answered `ending` (drain) while attempt 2 is answered `live`", async () => {
     const s = await playingSession();
     const m1 = (await row(s.sessionId)).machine_id!;
     expect((await postBeat(s.sessionId, { state: "playing", rung: "full", egressBytes: PREV_EGRESS }, { token: s.jobToken })).status).toBe(200);
@@ -2051,7 +2051,11 @@ describe.skipIf(!HAS_DB)("Owed 37: a late beat never overwrites the final stoppe
     ];
     let checked = 0;
     for (const [label, body] of late) {
-      expect((await postBeat(s.sessionId, body, { token: s.jobToken })).status, label).toBe(200);
+      const res = await postBeat(s.sessionId, body, { token: s.jobToken });
+      expect(res.status, label).toBe(200);
+      // #983 r2 (coordinator ruling): the superseded Machine is told to DRAIN — a stray whose force-destroy failed stops
+      // publishing — while the session itself is live (attempt 2 is answered `live`, below).
+      expect(((await json(res)) as { data: unknown }).data, `${label}: the superseded Machine is told to drain`).toEqual({ desiredState: "ending" });
       expect(await row(s.sessionId), `${label}: attempt 2 untouched`).toMatchObject({ state: "live", runner_state: "booting", machine_id: m2 });
       expect(await beatFacts(s.sessionId), `${label}: no row write`).toEqual(stored);
       expect(await transitions(), `${label}: no runner transition`).toBe(t0);
@@ -2067,9 +2071,15 @@ describe.skipIf(!HAS_DB)("Owed 37: a late beat never overwrites the final stoppe
     expect((await getFacts(s.sessionId, { token: s.runner.created[1]!.jobToken })).status).toBe(200);
     expect(await row(s.sessionId), `attempt 2, unbeaten for ${quiet} s: still booting`).toMatchObject({ state: "live", runner_state: "booting", machine_id: m2 });
     expect(s.runner.destroyed, "only attempt 1's Machine was torn down").toEqual([m1]);
-    // The positive pair: attempt 2's own beat, on its own token, plays it.
-    expect((await postBeat(s.sessionId, { state: "playing" }, { token: s.runner.created[1]!.jobToken })).status).toBe(200);
+    // The positive pair: attempt 2's own beat, on its own token, plays it — and is answered `live`.
+    const own = await postBeat(s.sessionId, { state: "playing" }, { token: s.runner.created[1]!.jobToken });
+    expect(own.status).toBe(200);
+    expect(((await json(own)) as { data: unknown }).data, "the CURRENT attempt is told to carry on").toEqual({ desiredState: "live" });
     expect(await row(s.sessionId)).toMatchObject({ state: "live", runner_state: "playing", machine_id: m2 });
+    // …and attempt 1 is still told to drain after attempt 2 plays (a second late beat, the other order).
+    const again = await postBeat(s.sessionId, { state: "playing", fps: 24 }, { token: s.jobToken });
+    expect(((await json(again)) as { data: unknown }).data, "attempt 1, after attempt 2 plays: still drain").toEqual({ desiredState: "ending" });
+    expect(await row(s.sessionId), "and attempt 2 still plays").toMatchObject({ state: "live", runner_state: "playing", machine_id: m2 });
   });
 
   it("#983 r1, the callback's own locked row: attempt 1's beat, CURRENT at its write, whose callback meets attempt 2 (a retry lands between the two) moves nothing — `playing` plays nothing, a final with no reason loses nothing; the replacement stays booting (count reported)", async () => {
