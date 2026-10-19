@@ -2239,7 +2239,8 @@ function AddMatchForm({
  *    will actually be played at, and an inherited stage's own fragment is
  *    empty.
  *  - The CHIPS under it (review I-1) say the same effective format in the public line's own words: the stage's division
- *    and its rules resolved (`resolvedStageCfg`), described by the public describers (`stageSummaryClauses`).
+ *    and its rules resolved (`resolvedStageCfg`), described by the public describers (`stageSummaryClauses`). Closed, they
+ *    are the saved rules; open, they follow the edit (round 2), exactly as the notice does.
  *  - The EDITOR hydrates the FRAGMENT ONLY (`stage.config.rules`). In a
  *    fragment a key's ABSENCE means "inherit the division". Hydrating the
  *    editor from the merge would arrive with every field filled, and the first
@@ -2313,14 +2314,11 @@ function StageFormatRow({
     () => (sportModule === null ? null : resolvedStageCfg(sportModule, divisionConfig, kind, noticeRules)),
     [sportModule, divisionConfig, kind, noticeRules],
   );
-  // The chips say what the stage plays NOW (its saved rules), not the edit in progress: the editor below is where an edit
-  // is read back.
+  // The chips say what the stage plays: with the editor closed that is its saved rules, and while it is open they preview
+  // what Save will store - the SAME `resolved` as the notice and the held fields, so the row never contradicts its editor.
   const chips = useMemo(
-    () =>
-      sportModule === null || ruleDict === undefined
-        ? []
-        : stageSummaryClauses(sportKey, sportModule, kind, resolvedStageCfg(sportModule, divisionConfig, kind, rules)),
-    [sportModule, ruleDict, sportKey, kind, divisionConfig, rules],
+    () => (sportModule === null || ruleDict === undefined ? [] : stageSummaryClauses(sportKey, sportModule, kind, resolved)),
+    [sportModule, ruleDict, sportKey, kind, resolved],
   );
   // Focus follows the editor: it lands on the editor when it opens (the Edit button it came from is gone while editing)
   // and returns to the Edit button when it closes.

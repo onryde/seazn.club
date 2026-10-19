@@ -318,8 +318,9 @@ describe("the collapsed row's chips say the stage's EFFECTIVE format in the publ
   it("rulesLineDict keeps exactly the rules-line keys, so the whole public dictionary does not cross into the client", () => {
     const keys = Object.keys(ruleDict);
     expect(keys.length).toBeGreaterThan(0);
-    expect(keys.every((k) => k.startsWith("format.rules."))).toBe(true);
-    expect(keys.length).toBe(Object.keys(enPublic).filter((k) => k.startsWith("format.rules.")).length);
+    expect(keys.every((k) => k.startsWith("format.rules.") || k === "format.sets.bestOf")).toBe(true);
+    expect(keys.length).toBe(Object.keys(enPublic).filter((k) => k.startsWith("format.rules.") || k === "format.sets.bestOf").length);
+    expect(keys, "the one clause key that sits outside format.rules.* is kept, not dropped").toContain("format.sets.bestOf");
     expect(keys.length, "and it is a slice, not the whole dictionary").toBeLessThan(Object.keys(enPublic).length);
   });
 

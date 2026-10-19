@@ -1,17 +1,23 @@
 // W2c Task 17 (review I9) - the decisions the stage format row makes live in a pure helper with a unit killer, never in a
 // browser. Expected values come from the engine's own declarations (`ruleKeys`, `bracketDeciders`, `canEndLevel`,
 // `abandonOptions`, `configSchema`), never from a table typed here; every sweep reports how many items it checked.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
 import { BRACKET_KINDS, DRAW_KINDS, StageKind } from "@seazn/engine/core";
 import { bracketMayEndLevel, deciderKeysFor, stageDefaultsFor, stageKeysFor, type AnySportModule } from "@seazn/engine/sport";
+import { effectiveRungs } from "@seazn/engine/sports/boardgame";
 import { declaredCfgs } from "@seazn/engine/testkit";
-import { SPORT_RULES } from "@/lib/match-rules";
+import { hydrateRuleValues, setRuleValue, SPORT_RULES } from "@/lib/match-rules";
 import { DECIDER_DESCRIBED_KEYS, deciderIsOn, describeAbandon, describeDeciders, matchRulesLine } from "@/server/public-site/describe-rules";
 import enPublic from "@/dictionaries/en/public.json";
+import esPublic from "@/dictionaries/es/public.json";
+import frPublic from "@/dictionaries/fr/public.json";
+import nlPublic from "@/dictionaries/nl/public.json";
 import type { Dict } from "@/lib/i18n-constants";
-import { rulesChipText } from "@/lib/rules-line";
-import { decidersOffRules } from "@/lib/stage-decider-off";
+import { rulesChipText, rulesLineDict } from "@/lib/rules-line";
+import { decidersOffRules, mergedStageRules } from "@/lib/stage-decider-off";
 import {
   abandonOptionStates,
   decidersAllOff,
@@ -21,6 +27,7 @@ import {
   detailIsInert,
   resolvedStageCfg,
   stageFieldsShown,
+  stageFormatSaveFragment,
   stageSections,
   stageSummaryClauses,
 } from "../stage-row-model";
@@ -32,6 +39,9 @@ const sport = (key: string): AnySportModule => {
 };
 const football = sport("football");
 const chess = sport("boardgame");
+// The chips read `rulesLineDict(public)` - the slice the page hands the panel - so "has words" means: in the slice, in every locale.
+const CHIP_DICTS: Readonly<Record<string, Dict>> = { en: rulesLineDict(enPublic as Dict), es: rulesLineDict(esPublic as Dict), fr: rulesLineDict(frPublic as Dict), nl: rulesLineDict(nlPublic as Dict) };
+const SRC = join(import.meta.dirname, "..", "..", "..", "..");
 const BRACKETS = [...BRACKET_KINDS] as StageKind[];
 const NOT_BRACKET = StageKind.options.filter((k) => !BRACKET_KINDS.has(k));
 
@@ -308,7 +318,6 @@ describe("a detail of a decider is held while its decider is off - the pairing i
 });
 
 describe("the collapsed row's chips: the stage's EFFECTIVE format in the public line's own words (I-1)", () => {
-  const dict = enPublic as Dict;
   const division = football.configSchema.parse(football.variants["11-a-side"]) as Record<string, unknown>;
   const chipsFor = (rules: Record<string, unknown>, kind: StageKind = "knockout") =>
     stageSummaryClauses("football", football, kind, resolvedStageCfg(football, division, kind, rules));
@@ -337,6 +346,55 @@ describe("the collapsed row's chips: the stage's EFFECTIVE format in the public 
     expect(stageSummaryClauses("football", football, "knockout", null)).toEqual([]);
   });
 
+  // Round 2: the row feeds its chips the SAME `resolved` as the notice and the held fields - the stored rules with the
+  // fragment a Save would send merged in (`StageFormatRow`'s `noticeRules`) - so while the editor is open they preview what
+  // Save stores, and closed (no edit) they are the saved rules. The wiring itself is the e2e's (it needs an open editor);
+  // this pins the chain it composes.
+  it("the chips follow the edit in progress: penalties Off drops the penalties chip, a new kick count changes it, an untouched editor changes nothing", () => {
+    const saved = { shootout: true, shootoutAttempts: 3 };
+    const opened = hydrateRuleValues("football", saved);
+    const live = (values: Record<string, string>) => mergedStageRules(saved, stageFormatSaveFragment("football", saved, opened, values, division)) ?? {};
+    const penalties = (n: number) => ({ key: "format.rules.decider.penalties", params: { n } });
+    expect(chipsFor(saved), "premise: the saved stage plays penalties of 3").toContainEqual(penalties(3));
+
+    const off = setRuleValue("football", opened, "shootout", "off", division);
+    expect(off, "premise: the edit changed the form").not.toEqual(opened);
+    expect(chipsFor(live(off)).some((c) => c.key === "format.rules.decider.penalties"), "penalties Off: no penalties chip").toBe(false);
+    expect(chipsFor(saved), "the saved rules are untouched by the edit").toContainEqual(penalties(3));
+
+    const more = setRuleValue("football", opened, "shootoutAttempts", "4", division);
+    expect(chipsFor(live(more))).toContainEqual(penalties(4));
+    expect(chipsFor(live(more))).not.toContainEqual(penalties(3));
+
+    expect(chipsFor(live(opened)), "an untouched editor says what the saved rules say").toEqual(chipsFor(saved));
+  });
+
+  // Round 2 (re-review residual 3): a key the describers can say but the chips' dictionary slice drops would show as a raw
+  // key. The universe is every `format.*` string the describers' source names (static keys) plus the three families they
+  // build from the engine's own declarations (a board variant, an offered abandon policy, a tie-break rung).
+  it("every key the describers can emit reaches the chips' dictionary slice with words, in all four locales (counted)", () => {
+    const source = readFileSync(join(SRC, "server", "public-site", "describe-rules.ts"), "utf8");
+    const fixed = new Set([...source.matchAll(/["`'](format\.[A-Za-z0-9_.]+)["`']/g)].map((m) => m[1]!));
+    const families = new Set<string>();
+    for (const m of builtinModules) {
+      for (const variant of Object.keys(m.variants)) if (m.key === "boardgame") families.add(`format.rules.board.${variant}`);
+      for (const policy of m.abandonOptions ?? []) families.add(`format.rules.abandon.${policy}`);
+    }
+    for (const rung of effectiveRungs({ tiebreakRungs: undefined })) families.add(`format.rules.decider.${rung}`);
+    const keys = [...fixed, ...families];
+    expect(fixed.has("format.sets.bestOf"), "premise: the scan sees the key that sits outside format.rules.*").toBe(true);
+    expect(families.size, "premise: the families are not empty").toBeGreaterThan(8);
+    let checked = 0;
+    for (const key of keys)
+      for (const [locale, slice] of Object.entries(CHIP_DICTS)) {
+        expect(Object.hasOwn(slice, key), `${key} reaches the chips' slice (${locale})`).toBe(true);
+        expect(rulesChipText(slice, { key, params: { n: 1, points: 1, cap: 1, decider: 1, games: 1, minutes: 1 } }), `${key} has words (${locale})`).not.toBe(key);
+        checked++;
+      }
+    expect(checked).toBe(keys.length * Object.keys(CHIP_DICTS).length);
+    expect(keys.length, "the static scan finds the describers' keys").toBeGreaterThan(50);
+  });
+
   it("over every sport, declared cfg and stage kind: it is the public line plus the abandon clause, and every clause has words (counted)", () => {
     let checked = 0;
     let withChips = 0;
@@ -350,12 +408,13 @@ describe("the collapsed row's chips: the stage's EFFECTIVE format in the public 
           // The public composer, given a division that plays the same abandon policy, says everything but the abandon clause.
           const expected = [...(matchRulesLine(m.key, m, resolved, resolved, kind) ?? []), ...describeAbandon(m, resolved)];
           expect(chips, `${m.key}/${kind}`).toEqual(expected);
-          for (const c of chips) {
-            expect(c.key.startsWith("format.rules."), `${m.key}: ${c.key}`).toBe(true);
-            const text = rulesChipText(dict, c);
-            expect(text, `${m.key}: ${c.key} has words in the public dictionary`).not.toBe(c.key);
-            expect(text.charAt(0), `${m.key}: a chip is capitalised`).toBe(text.charAt(0).toUpperCase());
-          }
+          for (const c of chips)
+            for (const [locale, slice] of Object.entries(CHIP_DICTS)) {
+              expect(Object.hasOwn(slice, c.key), `${m.key}: ${c.key} reaches the chips' dictionary slice (${locale})`).toBe(true);
+              const text = rulesChipText(slice, c);
+              expect(text, `${m.key}: ${c.key} has words in the ${locale} public dictionary`).not.toBe(c.key);
+              expect(text.charAt(0), `${m.key}: a chip is capitalised (${locale})`).toBe(text.charAt(0).toUpperCase());
+            }
           if (chips.length > 0) {
             withChips++;
             sportsWithChips.add(m.key);

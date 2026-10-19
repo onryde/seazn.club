@@ -36,11 +36,16 @@ export function rulesLineText(dict: Dict, line: readonly RulesClause[]): string 
 /** The keys a rules line reads from the PUBLIC dictionary: every clause is a `format.rules.*` key. */
 export const RULES_LINE_DICT_PREFIX = "format.rules.";
 
-/** The slice of the public dictionary a rules line needs (`format.rules.*`), for a client island that is not the public
- *  site - the stage format row's chips (W2c Task 17) - so the whole 85 KB dictionary does not cross the RSC boundary. */
+/** The one clause key outside that prefix: the set kernel's head when a best-of config names no points target
+ *  (`describeSetKernel`). The describers share it with the hub's division line, hence its `format.sets.*` home. */
+export const RULES_LINE_DICT_EXTRA_KEYS: ReadonlySet<string> = new Set(["format.sets.bestOf"]);
+
+/** The slice of the public dictionary a rules line needs (`format.rules.*` and `RULES_LINE_DICT_EXTRA_KEYS`), for a client
+ *  island that is not the public site - the stage format row's chips (W2c Task 17) - so the whole 85 KB dictionary does not
+ *  cross the RSC boundary. Pinned: every key the describers can emit is inside it (`stage-row-model.test.ts`). */
 export function rulesLineDict(dict: Dict): Dict {
   const out: Record<string, unknown> = {};
-  for (const key of Object.keys(dict)) if (key.startsWith(RULES_LINE_DICT_PREFIX)) out[key] = dict[key];
+  for (const key of Object.keys(dict)) if (key.startsWith(RULES_LINE_DICT_PREFIX) || RULES_LINE_DICT_EXTRA_KEYS.has(key)) out[key] = dict[key];
   return out;
 }
 
