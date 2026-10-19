@@ -271,6 +271,13 @@ export async function resolveStreamCode(
 // One sentence for every refusal of a code (C1): `codeEnded` lives in capture-http.ts, shared with the route's Bearer
 // read (A17), so the wire never tells expired, revoked, unknown, wrong-tok and no-Bearer apart.
 
+/** PR #989 confirm N1: the settings row's revision, microseconds since the epoch of `updated_at` — exact in a double
+ *  (≈1.8e15 < 2^53). Every writer below stamps `updated_at = clock_timestamp()`, evaluated AFTER `on conflict` has
+ *  locked the row, so two writes to one row always read in commit order. `now()` is the transaction's START, and two
+ *  overlapping writes could have read backwards. A function, never a module-scope fragment: building `sql` at import
+ *  opens the client, which throws where DATABASE_URL is unset (`next build`, db-import-safety.test.ts). */
+const revisionColumn = () => sql`(extract(epoch from updated_at) * 1000000)::float8`;
+
 /**
  * The fixture's stream settings (§6.7.3 and §8.1): the destination pre-pick and the automatic-streaming switch, either or
  * both in ONE transaction, each written only when the body names it. `targetId: null` clears the pick. Another org's target,
@@ -280,12 +287,6 @@ export async function resolveStreamCode(
  * (`target_chosen ? target_id : null`): a row the switch made alone has chosen nothing, even though the fixture still streams
  * to the org's default destination.
  */
-/** PR #989 confirm N1: the settings row's revision, microseconds since the epoch of `updated_at` — exact in a double
- *  (≈1.8e15 < 2^53). Every writer below stamps `updated_at = clock_timestamp()`, evaluated AFTER `on conflict` has
- *  locked the row, so two writes to one row always read in commit order. `now()` is the transaction's START, and two
- *  overlapping writes could have read backwards. */
-const REVISION = sql`(extract(epoch from updated_at) * 1000000)::float8`;
-
 export async function saveStreamSettings(auth: AuthCtx, fixtureId: string, body: PutStreamSettings): Promise<StreamSettings> {
   requireSessionEditor(auth);
   const { sportKey } = await fixtureOf(auth, fixtureId);
@@ -302,7 +303,7 @@ export async function saveStreamSettings(auth: AuthCtx, fixtureId: string, body:
       target_id: string | null; target_chosen: boolean; auto_stream: boolean;
       stream_mode: StreamMode | null; overlay_template: string | null; overlay_delay_ms: number | null; revision: number;
     }[]>`
-      select target_id, target_chosen, auto_stream, stream_mode, overlay_template, overlay_delay_ms, ${REVISION} as revision
+      select target_id, target_chosen, auto_stream, stream_mode, overlay_template, overlay_delay_ms, ${revisionColumn()} as revision
         from fixture_stream_settings where fixture_id = ${fixtureId}`;
     // No row only for a body that named nothing (the route's schema refuses that): the defaults, with nothing written.
     if (row === undefined) return { targetId: null, autoStream: false, streamMode: null, overlayTemplate: null, overlayDelayMs: null, revision: null };
@@ -440,7 +441,7 @@ export async function startModeFor(exec: Tx | typeof sql, fixtureId: string): Pr
 export async function streamPrefsOf(orgId: string, fixtureIds: readonly string[]): Promise<Record<string, StreamPrefsRead>> {
   if (fixtureIds.length === 0) return {};
   const rows = await sql<{ fixture_id: string; stream_mode: StreamMode | null; overlay_template: string | null; overlay_delay_ms: number | null; revision: number }[]>`
-    select fixture_id, stream_mode, overlay_template, overlay_delay_ms, ${REVISION} as revision from fixture_stream_settings
+    select fixture_id, stream_mode, overlay_template, overlay_delay_ms, ${revisionColumn()} as revision from fixture_stream_settings
      where org_id = ${orgId} and fixture_id in ${sql([...fixtureIds])}`;
   return Object.fromEntries(
     rows.map((r) => [r.fixture_id, { streamMode: r.stream_mode, overlayTemplate: r.overlay_template, overlayDelayMs: r.overlay_delay_ms, revision: r.revision }]),
