@@ -18,6 +18,7 @@ import {
   personShortCandidates,
   disambiguatedShorts,
   BADGE_MAX_CHARS,
+  type ShortSide,
   type StandingsRowLike,
 } from "@/lib/public-site";
 
@@ -392,7 +393,10 @@ describe("disambiguatedShorts — a PLACEHOLDER seat is never widened (#987 revi
     for (const [where, a, b] of pairs) {
       const before = [teamShortOf(a), teamShortOf(b)];
       expect(disambiguatedShorts(placeholder(a), placeholder(b)), `${where}: "${a}" / "${b}"`).toEqual(before);
-      expect(disambiguatedShorts({ name: a, isPerson: false }, { name: b, isPerson: false }), `${where}: an UNMARKED side is a placeholder`).toEqual(before);
+      // `seated` is REQUIRED (#987 confirm pass N3), so only an untyped caller can omit it — and the gate's
+      // `=== true` still reads that side as a placeholder: the fail-safe direction, held at run time too.
+      const unmarked = (name: string) => ({ name, isPerson: false }) as unknown as ShortSide;
+      expect(disambiguatedShorts(unmarked(a), unmarked(b)), `${where}: an UNTYPED side with no flag is a placeholder`).toEqual(before);
       checked++;
       if (before[0] === before[1]) collided++;
       // The witness that the gate is what keeps them: the same two sentences as SEATED teams read something else.
@@ -452,8 +456,8 @@ describe("teamShortOf / personShortCandidates / disambiguatedShorts (R11 fix rou
 
   it("disambiguatedShorts: two PERSON entrants whose first names collide but surnames differ — 'Player One'/'Player Two' -> 'ONE'/'TWO', never both 'PLA'", () => {
     const [home, away] = disambiguatedShorts(
-      { name: "Player One", isPerson: true },
-      { name: "Player Two", isPerson: true },
+      { name: "Player One", isPerson: true, seated: true },
+      { name: "Player Two", isPerson: true, seated: true },
     );
     expect(home).not.toBe(away);
     expect(home).toBe("ONE");
@@ -466,8 +470,8 @@ describe("teamShortOf / personShortCandidates / disambiguatedShorts (R11 fix rou
   // surname) must be what breaks the tie.
   it("disambiguatedShorts: surnames ALSO collide ('Alice Smith'/'Bob Smith') — widens to initial+surname, still 3 letters, still different", () => {
     const [home, away] = disambiguatedShorts(
-      { name: "Alice Smith", isPerson: true },
-      { name: "Bob Smith", isPerson: true },
+      { name: "Alice Smith", isPerson: true, seated: true },
+      { name: "Bob Smith", isPerson: true, seated: true },
     );
     expect(home).not.toBe(away);
     expect(home).toBe("ASM");
@@ -486,8 +490,8 @@ describe("teamShortOf / personShortCandidates / disambiguatedShorts (R11 fix rou
   // screenshotted defect, not a hypothetical.
   it("disambiguatedShorts: first AND last word collide (a shared per-run tag), only the MIDDLE word differs — still resolves to a short 3-letter code, not the untruncated full name", () => {
     const [home, away] = disambiguatedShorts(
-      { name: "Player One mtpyoivq", isPerson: true },
-      { name: "Player Two mtpyoivq", isPerson: true },
+      { name: "Player One mtpyoivq", isPerson: true, seated: true },
+      { name: "Player Two mtpyoivq", isPerson: true, seated: true },
     );
     expect(home).not.toBe(away);
     expect(home).toBe("ONE");
@@ -505,8 +509,8 @@ describe("teamShortOf / personShortCandidates / disambiguatedShorts (R11 fix rou
   // produce.
   it("disambiguatedShorts: genuinely identical full names on both sides — the tie-break keeps 'never equal' AND stays a short badge label, never the untruncated name", () => {
     const [home, away] = disambiguatedShorts(
-      { name: "John Smith", isPerson: true },
-      { name: "John Smith", isPerson: true },
+      { name: "John Smith", isPerson: true, seated: true },
+      { name: "John Smith", isPerson: true, seated: true },
     );
     expect(home).not.toBe(away);
     expect(home).toBe("SMI1");
@@ -518,8 +522,8 @@ describe("teamShortOf / personShortCandidates / disambiguatedShorts (R11 fix rou
   // tie-break, and the same width ceiling.
   it("disambiguatedShorts: names identical only after normalisation ('John Smith'/'john SMITH') take the same short tie-break", () => {
     const [home, away] = disambiguatedShorts(
-      { name: "John Smith", isPerson: true },
-      { name: "john SMITH", isPerson: true },
+      { name: "John Smith", isPerson: true, seated: true },
+      { name: "john SMITH", isPerson: true, seated: true },
     );
     expect(home).not.toBe(away);
     expect([home, away]).toEqual(["SMI1", "SMI2"]);
@@ -534,8 +538,8 @@ describe("teamShortOf / personShortCandidates / disambiguatedShorts (R11 fix rou
   // and watching nothing fail.
   it("disambiguatedShorts: a pair that differs only in the JOINED name keeps a real abbreviation, not a positional one", () => {
     const [home, away] = disambiguatedShorts(
-      { name: "Ann Smith", isPerson: true },
-      { name: "Anna Smith", isPerson: true },
+      { name: "Ann Smith", isPerson: true, seated: true },
+      { name: "Anna Smith", isPerson: true, seated: true },
     );
     expect([home, away]).toEqual(["ANNS", "ANNA"]);
   });
@@ -546,8 +550,8 @@ describe("teamShortOf / personShortCandidates / disambiguatedShorts (R11 fix rou
   // both true of ANDERSEN/ANDERSON and it was still the defect.
   it("disambiguatedShorts: surnames that collide for longer than the badge is wide fall to the tie-break, never to the full surname", () => {
     const [home, away] = disambiguatedShorts(
-      { name: "John Andersen", isPerson: true },
-      { name: "John Anderson", isPerson: true },
+      { name: "John Andersen", isPerson: true, seated: true },
+      { name: "John Anderson", isPerson: true, seated: true },
     );
     expect(home).toBe("AND1");
     expect(away).toBe("AND2");
@@ -582,7 +586,7 @@ describe("teamShortOf / personShortCandidates / disambiguatedShorts (R11 fix rou
       ["Ronaldinho", "Ronaldo"],
     ];
     for (const [nameA, nameB] of pairs) {
-      const [home, away] = disambiguatedShorts({ name: nameA, isPerson: true }, { name: nameB, isPerson: true });
+      const [home, away] = disambiguatedShorts({ name: nameA, isPerson: true, seated: true }, { name: nameB, isPerson: true, seated: true });
       expect(home).not.toBe(away);
       expect(home.length, `${nameA} -> ${home}`).toBeLessThanOrEqual(BADGE_MAX_CHARS);
       expect(away.length, `${nameB} -> ${away}`).toBeLessThanOrEqual(BADGE_MAX_CHARS);
@@ -661,7 +665,7 @@ describe("teamShortOf / personShortCandidates / disambiguatedShorts (R11 fix rou
   });
 
   it("disambiguatedShorts: a TEAM side in a MIXED pair keeps the team rule exactly — only a pair of two teams widens the team side", () => {
-    const [person, teamSide] = disambiguatedShorts({ name: "Harriet Lowe", isPerson: true }, team("Lowestoft Town"));
+    const [person, teamSide] = disambiguatedShorts({ name: "Harriet Lowe", isPerson: true, seated: true }, team("Lowestoft Town"));
     expect(teamSide).toBe(teamShortOf("Lowestoft Town"));
     expect(person).not.toBe(teamSide);
   });
@@ -726,8 +730,8 @@ describe("teamShortOf / personShortCandidates / disambiguatedShorts (R11 fix rou
 
   it("disambiguatedShorts: a PERSON side against a TEAM side (mixed kinds, defensive — does not occur in practice) resolves each independently and still differs when they would otherwise collide", () => {
     const [home, away] = disambiguatedShorts(
-      { name: "Ben Lane", isPerson: true },
-      { name: "Ben Lane FC", isPerson: false },
+      { name: "Ben Lane", isPerson: true, seated: true },
+      { name: "Ben Lane FC", isPerson: false, seated: true },
     );
     expect(home).not.toBe(away);
   });

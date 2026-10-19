@@ -866,10 +866,11 @@ export interface ShortSide {
   name: string;
   isPerson: boolean;
   /** TRUE only when the seat holds a real entrant the read found. A placeholder — a slot sentence ("Winner of …",
-   *  "No. 3 in Group A"), a bye, TBD, the overlay doors' "—", the "?" of an entrant the read cannot find — is false or
-   *  ABSENT: a producer that does not say is treated as a placeholder, so forgetting it costs a widening, never an
-   *  invented ordinal. Read only for a pair of two teams; a person's ladder is unchanged by it. */
-  seated?: boolean;
+   *  "No. 3 in Group A"), a bye, TBD, the overlay doors' "—", the "?" of an entrant the read cannot find — is false.
+   *  REQUIRED (#987 confirm pass N3): an optional flag let a producer that forgot it compile and silently air a
+   *  colliding seated pair as HAR / HAR, so every producer now says which it holds. Read only for a pair of two
+   *  teams; a person's ladder is unchanged by it. */
+  seated: boolean;
 }
 
 /**
