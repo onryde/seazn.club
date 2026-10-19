@@ -3348,6 +3348,8 @@ export type DictionaryKey =
   | "live.wall.emptyStart"
   | "live.wall.emptyTitle"
   | "live.wall.watch"
+  | "login.flash.google.email_unverified"
+  | "login.flash.google.linked_elsewhere"
   | "login.subtitle"
   | "magicLink.body"
   | "magicLink.button"

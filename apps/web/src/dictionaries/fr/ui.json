@@ -6377,5 +6377,7 @@
   "externalPlay.room.state.noAccount.title": "Cette place n'est pas encore liée à un compte Seazn",
   "externalPlay.room.state.noAccount.body": "Demandez à l'organisateur.",
   "settings.account.lichess.flashNext.already_linked": "Connectez-vous au compte Seazn qui possède ce compte Lichess et déliez-le dans Paramètres, ou passez à un autre compte sur Lichess et liez-le ici.",
-  "settings.account.lichess.flashNext.already_linked_game": "Connectez-vous au compte Seazn qui possède ce compte Lichess et déliez-le dans Paramètres, puis revenez le lier ici."
+  "settings.account.lichess.flashNext.already_linked_game": "Connectez-vous au compte Seazn qui possède ce compte Lichess et déliez-le dans Paramètres, puis revenez le lier ici.",
+  "login.flash.google.email_unverified": "Google n'a pas vérifié cette adresse e-mail. Vérifiez-la auprès de Google, ou connectez-vous avec un lien envoyé par e-mail.",
+  "login.flash.google.linked_elsewhere": "Cette adresse e-mail est liée à un autre compte Google. Connectez-vous plutôt avec un lien envoyé par e-mail."
 }
