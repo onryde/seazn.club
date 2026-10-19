@@ -8,7 +8,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isValidElement, type ReactElement, type ReactNode } from "react";
+import { createElement, isValidElement, type ReactElement, type ReactNode } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import { OverlayMatchCard, OverlaySlate, slateStateOf } from "../overlay-slate";
 import type { OverlayThemeProps } from "../template-registry";
@@ -244,6 +245,92 @@ describe("OverlayMatchCard — headline/line per state, resolved through `msg`",
     expect(textOf(byTestId(tree, "ovl-slate-tile-0")!)).toContain("MIL");
     expect(textOf(byTestId(tree, "ovl-slate-tile-0")!)).toContain("2");
     expect(textOf(byTestId(tree, "ovl-slate-tile-1")!)).toContain("NOR");
+  });
+
+  // R2005 review round 1, item 2: the two-line clamp is the "A vs B" headline's yield only (`--pairing`). The Result
+  // headline is the outcome sentence and the Stream-ended one a title: neither may carry the clamp class. Every card
+  // the layer can show, by the card the scene picks (`card`), each one's headline read from the rendered markup (the
+  // harness does not expand the scene cards' own component).
+  it("only an A-vs-B headline carries the clamp class: Upcoming and Reconnecting yes; Result, voided and Stream ended never", () => {
+    const VOIDED: OverlayModel = { ...BASE_MODEL, live: false, decided: false, voided: true, header: { context: "Cancelled" } };
+    const cases: [string, OverlayModel, "reconnecting" | "ended" | undefined, boolean][] = [
+      ["upcoming", WARMING, undefined, true],
+      ["result", ENDED, undefined, false],
+      ["result (voided)", VOIDED, undefined, false],
+      ["reconnecting", { ...BASE_MODEL, live: true }, "reconnecting", true],
+      ["stream ended", { ...BASE_MODEL, live: true }, "ended", false],
+    ];
+    let checked = 0;
+    for (const [what, model, card, pairing] of cases) {
+      const props = card === undefined ? { model, msg: msgOf("en"), sportKey: "cricket" } : { model, msg: msgOf("en"), sportKey: "cricket", card };
+      const html = renderToStaticMarkup(createElement(OverlayMatchCard, props));
+      const attrs = /<span([^>]*data-testid="ovl-slate-headline"[^>]*)>/.exec(html)?.[1];
+      expect(attrs, `${what}: a headline is drawn`).toBeDefined();
+      const classes = (/class="([^"]*)"/.exec(attrs!)?.[1] ?? "").split(/\s+/);
+      expect(classes, `${what}: the headline class`).toContain("ovl-slate-headline");
+      expect(classes.includes("ovl-slate-headline--pairing"), `${what}: clamp class`).toBe(pairing);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+  });
+
+  // Owner ruling (1), 2026-10-19: the Result headline is a measured ladder. Server-side (and before the first
+  // measurement) it is the FULL rung; three hidden probes carry the rung texts the browser measures — outside the card,
+  // so the card's own fit is never measured against them. The warming card has none of it.
+  it("the Result card: the full rung first, three aria-hidden probes outside the card (full, short, short-compact); warming: none", () => {
+    const SHORT_MODEL: OverlayModel = { ...ENDED, resultShort: "MIL won by 44 runs" };
+    const html = renderToStaticMarkup(createElement(OverlayMatchCard, { model: SHORT_MODEL, msg: msgOf("en"), sportKey: "cricket" }));
+    const headline = /<span([^>]*data-testid="ovl-slate-headline"[^>]*)>([^<]*)</.exec(html);
+    expect(headline?.[2]).toBe("Milton Keynes Rovers won by 44 runs");
+    expect(headline?.[1]).toContain('data-result-rung="full"');
+    expect(headline?.[1], "not yet measured").not.toContain("data-result-ladder-settled");
+    const probes = [...html.matchAll(/<span class="([^"]*ovl-slate-headline-probe[^"]*)">([^<]*)</g)];
+    expect(probes.map((m) => m[2])).toEqual(["Milton Keynes Rovers won by 44 runs", "MIL won by 44 runs", "MIL won by 44 runs"]);
+    expect(probes.map((m) => m[1].includes("ovl-slate-headline--compact"))).toEqual([false, false, true]);
+    const box = /<span class="ovl-slate-probes" aria-hidden="true">/.exec(html);
+    expect(box, "the probes' box is aria-hidden").not.toBeNull();
+    const cardEnd = html.indexOf('data-testid="ovl-slate-card"');
+    expect(box!.index, "the probes sit AFTER the card, outside it").toBeGreaterThan(cardEnd);
+    expect(html.slice(cardEnd, box!.index)).not.toContain("ovl-slate-headline-probe");
+
+    const warming = renderToStaticMarkup(createElement(OverlayMatchCard, { model: WARMING, msg: msgOf("en"), sportKey: "cricket" }));
+    expect(warming).not.toContain("ovl-slate-headline-probe");
+    expect(warming).not.toContain("data-result-rung");
+  });
+
+  it("the CSS: the compact rung is a smaller headline that still clears the 30 px text floor; the probes never wrap", () => {
+    const css = readFileSync(join(HERE, "../../../app/globals.css"), "utf8");
+    const rule = (selector: string) => {
+      const at = css.indexOf(`\n${selector} {`);
+      expect(at, `premise: ${selector} is declared`).toBeGreaterThan(-1);
+      return css.slice(at, css.indexOf("}", at));
+    };
+    const px = (r: string) => Number(/font-size:\s*(\d+)px/.exec(r)?.[1]);
+    const base = px(rule(".ovl-slate-headline"));
+    const compact = px(rule(".ovl-slate-headline--compact"));
+    expect(base).toBe(64);
+    expect(compact).toBeLessThan(base);
+    expect(compact).toBeGreaterThanOrEqual(30);
+    expect(rule(".ovl-slate-headline-probe")).toMatch(/white-space:\s*nowrap/);
+    expect(rule(".ovl-slate-headline-probe")).toMatch(/max-width:\s*none/);
+    expect(rule(".ovl-slate-probes")).toMatch(/overflow:\s*hidden/);
+    expect(rule(".ovl-slate-probes")).toMatch(/visibility:\s*hidden/);
+  });
+
+  it("the CSS: the line clamp lives on `--pairing` alone, never on the base headline rule", () => {
+    const css = readFileSync(join(HERE, "../../../app/globals.css"), "utf8");
+    const rule = (selector: string) => {
+      const at = css.indexOf(`\n${selector} {`);
+      expect(at, `premise: ${selector} is declared`).toBeGreaterThan(-1);
+      return css.slice(at, css.indexOf("}", at));
+    };
+    expect(rule(".ovl-slate-headline--pairing")).toMatch(/-webkit-line-clamp:\s*2/);
+    expect(rule(".ovl-slate-headline--pairing")).toMatch(/overflow:\s*hidden/);
+    expect(rule(".ovl-slate-headline")).not.toMatch(/line-clamp/);
+    expect(rule(".ovl-slate-headline")).not.toMatch(/overflow:\s*hidden/);
+    // A clamp declared anywhere else on a headline selector would reach the Result headline too.
+    const clampSelectors = [...css.matchAll(/\n([^\n{}]*ovl-slate-headline[^\n{}]*)\{[^}]*line-clamp/g)].map((m) => m[1]!.trim());
+    expect(clampSelectors).toEqual([".ovl-slate-headline--pairing"]);
   });
 
   it("ended (voided, no verdict): headline falls back to endedHeadline; NO fabricated result line", () => {

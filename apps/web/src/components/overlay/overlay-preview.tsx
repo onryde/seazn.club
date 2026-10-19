@@ -62,6 +62,8 @@ export function OverlayPreview(props: OverlayPreviewProps) {
           startLabel={props.startLabel}
           dict={props.dict}
           decidedTemplates={props.decidedTemplates}
+          // R2005: the cell's scene reaches the stage (preview-only prop; the overlay page never sets it).
+          sceneOverride={props.scene}
           {...(props.slateMeta ? { slateMeta: props.slateMeta } : {})}
           {...(props.moment ? { pinnedMoment: props.moment } : {})}
         />

@@ -1797,11 +1797,36 @@ body {
   font-size: 30px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
   color: color-mix(in srgb, var(--sport-ink) 82%, transparent);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  /* R2005: never a flex-shrink target. `overflow: hidden` drops a flex item's automatic minimum to 0, so a card taller
+     than its region squeezed the PILL first — its text cut to half height under a three-line headline. And a one-line
+     box: `line-height: 1` (the pill had the canvas's tall default leading) puts it at the 48 px the tallest card,
+     cricket's Result on the bar, was already squeezed to — now by layout, every glyph whole (the clip is the padding
+     box, so the 8 px padding holds the ascenders and an accent's descent). */
+  flex: none;
+  line-height: 1;
 }
+/* `flex: none`: the headline is never a flex-shrink target (the pill's reason, above). */
 .ovl-slate-headline { font-size: 64px; font-weight: 800; letter-spacing: 0.02em;
                        color: var(--sport-ink); text-transform: uppercase;
-                       line-height: 1.04; max-width: 1400px;
+                       line-height: 1.04; max-width: 1400px; flex: none;
                        text-shadow: 0 2px 14px color-mix(in srgb, var(--sport-board) 75%, transparent); }
+/* R2005: an "A vs B" headline (the Upcoming and Reconnecting cards) is what yields on a long pairing — at most two
+   lines, the second ellipsised. Two 43-character names ran it to three, which (with the Reconnecting card's status
+   line) overflowed the bar's 636 px card region; the name pills under the tiles still carry each side. ONLY the
+   pairing: the Result headline is the outcome sentence, and a clamp would cut the words that say how the match was
+   decided (review round 1, item 2 — gallery check 4c holds every locale's every decided sentence unclamped). */
+.ovl-slate-headline--pairing { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
+                                overflow: hidden; }
+/* Owner ruling (1), 2026-10-19: the Result headline's measured ladder (`result-ladder.ts`) — full sentence, the short
+   sentence, the short sentence at this compact size, then the highlights give way; each rung only when the one before
+   does not fit on ONE line. 48 px: three quarters of the headline, well over the 30 px text floor (D9), and one line
+   for every decided sentence in every locale beside a short code (gallery check 4c). */
+.ovl-slate-headline--compact { font-size: 48px; }
+/* The ladder's probes: a 0 × 0 clipping box OUTSIDE the card, so neither the card's scroll size nor any fit check sees
+   them; each probe unwrapped (`nowrap`, no max-width) so its width is the rung's one-line width. */
+.ovl-slate-probes { position: absolute; left: 0; top: 0; width: 0; height: 0; overflow: hidden;
+                    visibility: hidden; pointer-events: none; }
+.ovl-slate-headline-probe { position: absolute; left: 0; top: 0; white-space: nowrap; max-width: none; }
 .ovl-slate-line { font-size: 30px; font-weight: 500;
                    color: color-mix(in srgb, var(--sport-ink) 70%, transparent); }
 .ovl-slate-matchup {
@@ -1873,6 +1898,29 @@ body {
 .ovl-slate-warming-dots span:nth-child(2) { animation-delay: 300ms; }
 .ovl-slate-warming-dots span:nth-child(3) { animation-delay: 600ms; }
 
+/* R2005 — the scene layer (overlay templates spec 2026-10-15 §4.1–§4.2). A scene is shown when the compositor's
+   programme is not the live camera: Starting soon, Reconnecting, Final. Its BACKDROP is the stadium-night plate the
+   cards already stand on, opened out to the whole canvas and lit from above like a floodlit ground before the gates
+   open — opaque, because there is no picture behind it to read through, and textless, because the card and the score
+   bug carry every word. It is the canvas's FIRST child and sits at z 0: below the card (`.ovl-slate`, z 1) and below
+   the template (z 3), so the score bug is never covered by a scene. */
+.ovl-scene { position: absolute; inset: 0; z-index: 0;
+             background:
+               radial-gradient(ellipse 1500px 760px at 50% -6%,
+                 color-mix(in srgb, var(--sport-board-2) 82%, transparent), transparent 72%),
+               radial-gradient(ellipse 1100px 420px at 50% 112%,
+                 color-mix(in srgb, var(--sport-led) 10%, transparent), transparent 70%),
+               var(--sport-board); }
+/* §4.8: the slab sits ABOVE a scene card (a goal while the camera reconnects still reaches viewers), still below the
+   template that clips it. Only under a scene: without one the stacking is exactly what OBS has always painted. */
+.ovl-scene ~ .ovl-moment-slot { z-index: 2; }
+/* The Reconnecting card's status line: the LED lamp a broadcast truck shows while a feed re-locks, then the words. */
+.ovl-slate-status { display: inline-flex; align-items: center; gap: 18px; }
+.ovl-slate-status-dot { flex: none; width: 18px; height: 18px; border-radius: 9999px;
+                        background: var(--sport-led);
+                        box-shadow: 0 0 0 7px color-mix(in srgb, var(--sport-led) 22%, transparent);
+                        animation: ovl-breathe 1.6s ease-in-out infinite; }
+
 /* Motion — _THEMES.md §6, R13. transform/opacity only; nothing on mount. */
 @keyframes ovl-tick { 0% { transform: scale(1); } 45% { transform: scale(1.12); } 100% { transform: scale(1); } }
 @keyframes ovl-breathe { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
@@ -1895,6 +1943,8 @@ body {
      rather than eased over 250ms). */
   .ovl-slate-warming-dots span { animation: none; opacity: 1; }
   .ovl-slate-content.ovl-slate-fading { animation: none; }
+  /* R2005 (spec D8): the Reconnecting lamp holds, lit, under reduced motion. */
+  .ovl-slate-status-dot { animation: none; opacity: 1; }
 }
 
 /* ───────────────────────────────────────────────────────────────────────────

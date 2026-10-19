@@ -508,6 +508,11 @@ const CACHE_SITES: Record<string, { via: "cachedIfFound" | "unstable_cache"; fil
     file: "server/overlay/load.ts",
     why: "folded after the fixture is found, keyed on its last_seq; a null fold = no events yet",
   },
+  "overlay-fold-relay-v4": {
+    via: "unstable_cache",
+    file: "server/overlay/load.ts",
+    why: "R2005: the relay door's own fold namespace, behind relayPageAccess; the same never-null fold as overlay-fold-v4",
+  },
 };
 
 function sourceFiles(dir: string): string[] {
@@ -552,6 +557,6 @@ describe("every cached read under src/ is classified: routed through the not-fou
     expect(byKey(found)).toEqual(
       byKey(Object.entries(CACHE_SITES).map(([key, { via, file }]) => ({ key, via, file }))),
     );
-    expect(found).toHaveLength(16);
+    expect(found).toHaveLength(17);
   });
 });

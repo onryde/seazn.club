@@ -34,6 +34,12 @@ import type { DecidedOutcomeTemplates } from "@/lib/scoring-vocab";
 import { OVERLAY_TEMPLATES, cardRegionFor, type CanvasBox, type TemplateId } from "./template-registry";
 import { OverlayMatchCard, slateStateOf } from "./overlay-slate";
 import { forfeitCopyOf } from "@/lib/forfeit-tag";
+import { COMPOSITOR_HOST } from "@/lib/overlay-compositor";
+import { STREAM_POLL_MS } from "@/lib/stream-session-view";
+import { momentsFireIn, type SceneId } from "./overlay-scenes";
+import { OverlaySceneBackdrop, phaseForScene, sceneFor } from "./overlay-scene";
+import { useProgrammePhase } from "./use-programme-phase";
+import { useCompositorSignals } from "./use-compositor-signals";
 
 export interface OverlayStageProps {
   fixtureId: string;
@@ -80,6 +86,17 @@ export interface OverlayStageProps {
   /** R2007, preview-only (the gallery's moment cells): a slab shown statically in the slot, in the queue's fully-shown
    *  phase (`hold`). A static render never raises one from the queue — the baseline is the mount's tip. */
   pinnedMoment?: OverlayMoment;
+  /** R2005: the page's `?host=compositor` — the composed session's `overlayUrl` is its only producer. It turns on the
+   *  compositor's console signals (ready, alive, score stale), the phase channel and the scene layer. Absent on every
+   *  OBS page, which therefore logs, fetches and shows nothing new. Ignored under `snapshotOnly`. */
+  host?: typeof COMPOSITOR_HOST;
+  /** R2005: the relay page access (`sid` + `st`) the page verified, passed on with every poll so the overlay route
+   *  answers through the same check (fallback B's `programmePhase`, and a fixture that is not public). Absent on the
+   *  public path. */
+  relay?: { sid: string; st: string };
+  /** R2005, PREVIEW-ONLY (`OverlayPreview`, review I6): the scene the gallery cell or the picker's toggle names. The
+   *  overlay PAGE never sets it, so an OBS URL shows no scene. `live` means no scene, whatever the phase. */
+  sceneOverride?: SceneId;
 }
 
 /** The card layout's inputs, as the inline custom properties `.ovl-slate-content` reads (R2007 step 9b, decision G2):
@@ -142,14 +159,31 @@ export function OverlayStage(props: OverlayStageProps) {
   // CALLER's — the OBS page's, off the URL the organiser copied — so a
   // community org's overlay asks for realtime on a signed key and a refusal
   // leaves it on the poll; the console preview passes neither and never asks.
-  const { data, transport, presentationNowOffsetMs, awaitingDelay } = useLiveFixture(props.fixtureId, props.initial, props.realtime, {
+  // R2005: the compositor host. Never in a preview: a preview has no compositor and must not touch the network.
+  const compositor = props.host === COMPOSITOR_HOST && !props.snapshotOnly;
+  const relay = props.relay;
+  const { data, transport, presentationNowOffsetMs, awaitingDelay, received } = useLiveFixture(props.fixtureId, props.initial, props.realtime, {
     // R2007: a preview (`snapshotOnly`) never touches the network — its fetcher hands back the snapshot it was given.
-    // The hook holds its fetcher in a ref, so a fresh closure per render is harmless.
-    fetcher: props.snapshotOnly ? async () => props.initial : fetchOverlayFixture,
+    // The hook holds its fetcher in a ref, so a fresh closure per render is harmless. R2005: a relay page polls with
+    // its own access, so the route can answer for a fixture that is not public and add the programme phase.
+    fetcher: props.snapshotOnly
+      ? async () => props.initial
+      : relay
+        ? (id: string) => fetchOverlayFixture(id, relay)
+        : fetchOverlayFixture,
     delayMs: props.delayMs,
     realtimePurpose: props.realtimePurpose,
     overlayKey: props.overlayKey,
+    // R2005 change 2: every tier's own interval (15 s, 60 s, never) is longer than the 10 s score-stale rule, so the
+    // compositor host polls at the stream panel's STREAM_POLL_MS (5 s) whatever the status. Recorded choice.
+    ...(compositor ? { steadyPollMs: STREAM_POLL_MS } : {}),
   });
+  // R2005 change 6: the programme phase — loopback first, fallback B off the newest RECEIVED snapshot (the phase is
+  // the compositor's now, so it never waits out the score's presentation delay). No request without the host.
+  const programme = useProgrammePhase({ enabled: compositor, webPhase: received.snapshot.programmePhase ?? null });
+  // R2005 changes 2 and 10: ready, the alive beat and score stale. HERE, at the stage's top level and never under the
+  // scene or card subtree — a scene change must never unmount the beat (compositor PR #22 review G3).
+  useCompositorSignals({ enabled: compositor, contentReady: !awaitingDelay, lastSuccessAt: received.at });
   // The ONE timer in the overlay (Step 8a; _THEMES.md §6; owner 2026-09-06:
   // the clock TICKS). Formatted here, handed to the pure model as a string.
   const clockLabel = useOverlayClock(data.clock, data.status, presentationNowOffsetMs);
@@ -203,8 +237,11 @@ export function OverlayStage(props: OverlayStageProps) {
     slateMeta: props.slateMeta,
   });
 
-  const cardState = slateStateOf(model);
-  const showMatchCard = (cardState === "warming" || cardState === "ended") && cardRegion !== null;
+  // R2005 change 5: the scene layer and the one card on screen. The phase is the preview's override, else the
+  // channel's (null without the host: today's card layer, unchanged — `sceneFor`'s first row).
+  const scenePhase = props.sceneOverride !== undefined ? phaseForScene(props.sceneOverride) : programme.phase;
+  const decision = sceneFor(scenePhase, slateStateOf(model));
+  const showMatchCard = decision.card !== null && cardRegion !== null;
 
   // Moments first, then end-of-over (so OUT precedes the over card), then toss
   // (only when the match card is NOT up — card owns warming openers).
@@ -236,7 +273,9 @@ export function OverlayStage(props: OverlayStageProps) {
         return [...moments, ...(eoo ?? []), ...(toss ? [toss] : [])];
       })();
 
-  const queued = useMomentQueue(incoming, { reducedMotion });
+  // R2005 change 7 (spec §4.8, D14): the active scene's own `momentsFire` decides — Final discards, so nothing it drops
+  // can ever replay. Read off the declaration (`momentsFireIn`), never off a scene id.
+  const queued = useMomentQueue(incoming, { reducedMotion, discard: !momentsFireIn(decision.scene) });
   // A pinned moment (the gallery's moment cells) replaces the queue's, held in the fully-shown phase.
   const moment = props.pinnedMoment ?? queued.current;
   const phase = props.pinnedMoment ? "hold" : queued.phase;
@@ -328,10 +367,20 @@ export function OverlayStage(props: OverlayStageProps) {
         className={`ovl-canvas ovl-label${model.live ? "" : " ovl-static"}`}
         style={canvasStyle}
       >
+        {/* R2005: the scene's opaque backdrop, FIRST — below the template, so the score bug paints over every scene. */}
+        {decision.scene !== null ? <OverlaySceneBackdrop scene={decision.scene} /> : null}
         {/* Scorebug theme (bar|bug). Match/end card is a LAYER above it when
-            warming or ended — not a third ?style= (2026-09-12). */}
+            warming or ended — not a third ?style= (2026-09-12). R2005: the scene picks the card when one is active
+            (one card at a time); without one it is exactly the card layer's. */}
         {showMatchCard ? (
-          <OverlayMatchCard model={model} msg={msg} sportKey={props.sportKey} cricketToss={data.cricketToss} />
+          <OverlayMatchCard
+            model={model}
+            msg={msg}
+            sportKey={props.sportKey}
+            cricketToss={data.cricketToss}
+            carromToss={data.carromToss}
+            {...(decision.scene !== null ? { card: decision.card } : {})}
+          />
         ) : null}
         {/* `display: contents`: no box of its own, so the template lays out exactly as before. It exists so the gallery
             e2e can find THE TEMPLATE'S elements (its children) and measure them against the declared box. */}

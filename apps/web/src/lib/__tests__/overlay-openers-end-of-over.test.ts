@@ -74,7 +74,7 @@ describe("warmingLine", () => {
     expect(
       warmingLine({
         sportKey: "cricket",
-        toss: { wonBySide: 0, elected: "bat" },
+        toss: { sport: "cricket", toss: { wonBySide: 0, elected: "bat" } },
         sideNames: ["Kings", "Royals"],
         startContext: "Sat 14:30",
         msg,
@@ -118,7 +118,7 @@ describe("warmingLine — a toss line only for a sport whose module declares a t
 
   it("a known toss on a sport with none declared is ignored, not announced", () => {
     expect(
-      warmingLine({ sportKey: "football", toss: { wonBySide: 0, elected: "bat" }, sideNames: ["Kings", "Royals"], startContext: "Sat 14:30", msg }),
+      warmingLine({ sportKey: "football", toss: { sport: "cricket", toss: { wonBySide: 0, elected: "bat" } }, sideNames: ["Kings", "Royals"], startContext: "Sat 14:30", msg }),
     ).toBe("Sat 14:30");
   });
 

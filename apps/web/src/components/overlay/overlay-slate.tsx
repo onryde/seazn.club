@@ -10,8 +10,12 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { OverlayCricketToss } from "@/lib/overlay-cricket";
 import { warmingLine } from "@/lib/overlay-openers";
+import { overlayTossOf, type OverlayCarromToss } from "@/lib/overlay-toss";
 import type { OverlayHighlight, OverlayModel, OverlaySide } from "@/lib/overlay-model";
 import type { OverlayThemeProps } from "./template-registry";
+import type { SceneCard } from "./overlay-scene";
+import { RESULT_RUNG_NAMES, resultLadderTexts } from "./result-ladder";
+import { useResultRung } from "./use-result-rung";
 
 export type SlateState = "warming" | "ended" | "live";
 
@@ -28,17 +32,23 @@ function tileStyle(side: OverlaySide, index: 0 | 1): CSSProperties {
 }
 
 function metaPill(
-  state: "warming" | "ended",
+  state: "warming" | "ended" | null,
   model: OverlayModel,
   msg: OverlayThemeProps["msg"],
 ): string {
-  const lead = msg(state === "warming" ? "overlay.slate.pillUpcoming" : "overlay.slate.pillResult");
+  // R2005: a scene card (`state` null) has no lead word — its own line or title says what it is.
+  const lead = state === null ? undefined : msg(state === "warming" ? "overlay.slate.pillUpcoming" : "overlay.slate.pillResult");
   const parts = [
     lead,
     model.slateMeta?.competition,
     model.slateMeta?.stage,
   ].filter((p): p is string => Boolean(p && p.trim()));
   return parts.join(" · ");
+}
+
+/** The card a slate state shows when no scene picks one: warming → Upcoming, ended → Result, live → none. */
+function layerCardOf(state: SlateState): SceneCard | null {
+  return state === "warming" ? "upcoming" : state === "ended" ? "result" : null;
 }
 
 function HighlightBox(props: {
@@ -64,55 +74,81 @@ function HighlightBox(props: {
   );
 }
 
-/** Warming / ended match card. Stage mounts only when not live. */
+/** Warming / ended match card. Stage mounts only when not live — or, R2005, when a scene picks a card. */
 export function OverlayMatchCard({
   model,
   msg,
   sportKey,
   cricketToss,
+  carromToss,
+  card,
 }: Pick<OverlayThemeProps, "model" | "msg"> & {
   /** Whose warming line this is: only a sport that declares a toss shows one (review d, PR #974). */
   sportKey: string;
   cricketToss?: OverlayCricketToss | null;
+  /** R2005 change 11: carrom's toss (who breaks first), beside cricket's. */
+  carromToss?: OverlayCarromToss | null;
+  /** R2005: the card the active SCENE picked (`sceneFor`). Absent: the slate state's own card, exactly as before. */
+  card?: SceneCard | null;
 }) {
   const state = slateStateOf(model);
+  const variant = card === undefined ? layerCardOf(state) : card;
+  // Owner ruling (1), 2026-10-19: the Result card's headline is a measured ladder (`result-ladder.ts`). Above the
+  // early returns: a hook runs on every render. `null` everywhere but the Result card.
+  const ladder =
+    variant === "result" ? resultLadderTexts(model.result ?? msg("overlay.slate.endedHeadline"), model.resultShort) : null;
+  const { rung, settled, cardRef, probeRefs } = useResultRung(ladder);
 
-  const previousStateRef = useRef<SlateState | undefined>(undefined);
+  const previousVariantRef = useRef<SceneCard | null | undefined>(undefined);
   const [fading, setFading] = useState(false);
   useEffect(() => {
-    const previous = previousStateRef.current;
-    previousStateRef.current = state;
-    if (previous === undefined || previous === state) return;
+    const previous = previousVariantRef.current;
+    previousVariantRef.current = variant;
+    if (previous === undefined || previous === variant) return;
     setFading(true);
     const timer = setTimeout(() => setFading(false), 250);
     return () => clearTimeout(timer);
-  }, [state]);
+  }, [variant]);
 
-  if (state === "live") return null;
+  if (variant === null) return null;
+  if (variant === "reconnecting" || variant === "ended") {
+    return <SceneMatchCard variant={variant} state={state} model={model} msg={msg} fading={fading} />;
+  }
+  // Upcoming is the warming card and Result the ended one (`sceneFor` pairs them with those slate states only).
+  const cardState: "warming" | "ended" = variant === "upcoming" ? "warming" : "ended";
 
   const home = model.sides[0];
   const away = model.sides[1];
   const warming =
-    state === "warming"
-      ? warmingLine({ sportKey, toss: cricketToss, sideNames: [home.name, away.name], startContext: model.header.context, msg })
+    cardState === "warming"
+      ? warmingLine({ sportKey, toss: overlayTossOf({ cricketToss, carromToss }), sideNames: [home.name, away.name], startContext: model.header.context, msg })
       : "";
 
   return (
-    <div className="ovl-slate" data-testid="ovl-slate" data-slate-state={state}>
+    <div className="ovl-slate" data-testid="ovl-slate" data-slate-state={cardState}>
       <span className="ovl-slate-brand ovl-display">{msg("overlay.brand")}</span>
       <div
         data-testid="ovl-slate-content"
         className={`ovl-slate-content${fading ? " ovl-slate-fading" : ""}`}
       >
-        <div className="ovl-slate-card" data-testid="ovl-slate-card">
+        <div className="ovl-slate-card" data-testid="ovl-slate-card" ref={cardRef}>
           <span data-testid="ovl-slate-pill" className="ovl-slate-pill">
-            {metaPill(state, model, msg)}
+            {metaPill(cardState, model, msg)}
           </span>
 
-          <span data-testid="ovl-slate-headline" className="ovl-slate-headline ovl-display">
-            {state === "warming"
+          {/* Only the pairing clamps (`--pairing`): the Result headline is the outcome sentence and is never cut — it
+              steps down its measured ladder instead (`--compact` is the size step). */}
+          <span
+            data-testid="ovl-slate-headline"
+            className={`ovl-slate-headline${cardState === "warming" ? " ovl-slate-headline--pairing" : ""}${rung >= 2 ? " ovl-slate-headline--compact" : ""} ovl-display`}
+            data-result-rung={ladder === null ? undefined : RESULT_RUNG_NAMES[rung]}
+            data-result-ladder-settled={settled ? "true" : undefined}
+          >
+            {cardState === "warming"
               ? msg("overlay.slate.warmingHeadlineVs", { home: home.name, away: away.name })
-              : (model.result ?? msg("overlay.slate.endedHeadline"))}
+              : ladder === null
+                ? (model.result ?? msg("overlay.slate.endedHeadline"))
+                : ladder[Math.min(rung, 2)]}
           </span>
 
           <div className="ovl-slate-matchup" data-testid="ovl-slate-matchup">
@@ -123,7 +159,7 @@ export function OverlayMatchCard({
                 style={tileStyle(home, 0)}
               >
                 <span className="ovl-slate-tile-code ovl-display">{home.short}</span>
-                {state === "ended" ? (
+                {cardState === "ended" ? (
                   <span className="ovl-slate-tile-score">
                     {home.big}
                     {home.sub ? ` ${home.sub}` : ""}
@@ -146,7 +182,7 @@ export function OverlayMatchCard({
                 style={tileStyle(away, 1)}
               >
                 <span className="ovl-slate-tile-code ovl-display">{away.short}</span>
-                {state === "ended" ? (
+                {cardState === "ended" ? (
                   <span className="ovl-slate-tile-score">
                     {away.big}
                     {away.sub ? ` ${away.sub}` : ""}
@@ -159,7 +195,8 @@ export function OverlayMatchCard({
             </div>
           </div>
 
-          {state === "ended" && model.highlights && (model.highlights.batter || model.highlights.bowler) ? (
+          {/* The ladder's last rung: the highlights give way when no headline rung fits on one line. */}
+          {cardState === "ended" && rung !== 3 && model.highlights && (model.highlights.batter || model.highlights.bowler) ? (
             <div className="ovl-slate-highlights" data-testid="ovl-slate-highlights">
               {model.highlights.batter ? (
                 <HighlightBox role="batter" item={model.highlights.batter} msg={msg} />
@@ -174,7 +211,7 @@ export function OverlayMatchCard({
             </div>
           ) : null}
 
-          {state === "warming" ? (
+          {cardState === "warming" ? (
             <>
               {/* A sport with no toss and no start time has nothing to say here — never an empty line. */}
               {warming ? (
@@ -188,6 +225,109 @@ export function OverlayMatchCard({
                 <span />
               </span>
             </>
+          ) : null}
+        </div>
+        {/* The ladder's probes: each rung once, hidden and unwrapped, OUTSIDE the card so the card's own fit is never
+            measured against them (`.ovl-slate-probes` is a 0 × 0 clipping box). */}
+        {ladder === null ? null : (
+          <span className="ovl-slate-probes" aria-hidden="true">
+            {ladder.map((text, i) => (
+              <span
+                key={i}
+                className={`ovl-slate-headline ovl-display ovl-slate-headline-probe${i === 2 ? " ovl-slate-headline--compact" : ""}`}
+                ref={(el) => {
+                  probeRefs.current[i] = el;
+                }}
+              >
+                {text}
+              </span>
+            ))}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** One team on a scene card: the tile (code, and the score when the card carries one) over the name pill — the same
+ *  markup and classes as the Upcoming / Result cards, so the scene cards inherit their measured layout. */
+function SceneTeam({ side, index, withScore }: { side: OverlaySide; index: 0 | 1; withScore: boolean }) {
+  return (
+    <div className="ovl-slate-team">
+      <div className="ovl-slate-tile" data-testid={`ovl-slate-tile-${index}`} style={tileStyle(side, index)}>
+        <span className="ovl-slate-tile-code ovl-display">{side.short}</span>
+        {withScore ? (
+          <span className="ovl-slate-tile-score">
+            {side.big}
+            {side.sub ? ` ${side.sub}` : ""}
+          </span>
+        ) : null}
+      </div>
+      <span className="ovl-slate-name-pill" data-testid={`ovl-slate-name-${index}`}>
+        {side.name}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * R2005's two scene cards (overlay templates spec 2026-10-15 §4.1–§4.2, D8), on the Upcoming / Result card's own
+ * stadium-night plate and inside the same `.ovl-slate-content` region, so R2007's card layout and its gallery checks
+ * cover them unedited.
+ *
+ *  - RECONNECTING: who is playing, and the one line that says the camera is coming back, led by a pulsing LED dot (the
+ *    broadcast "signal" lamp). No score: the score bug stays on screen above the scene, and a second copy of it on the
+ *    card would be two authorities for one number.
+ *  - STREAM ENDED: the title, and the score as it stands — the match did not finish on camera, so this card never
+ *    claims a result.
+ */
+function SceneMatchCard({
+  variant,
+  state,
+  model,
+  msg,
+  fading,
+}: {
+  variant: "reconnecting" | "ended";
+  state: SlateState;
+  model: OverlayModel;
+  msg: OverlayThemeProps["msg"];
+  fading: boolean;
+}) {
+  const home = model.sides[0];
+  const away = model.sides[1];
+  const pill = metaPill(null, model, msg);
+  const reconnecting = variant === "reconnecting";
+  return (
+    <div className="ovl-slate" data-testid="ovl-slate" data-slate-state={state} data-card={variant}>
+      <span className="ovl-slate-brand ovl-display">{msg("overlay.brand")}</span>
+      <div data-testid="ovl-slate-content" className={`ovl-slate-content${fading ? " ovl-slate-fading" : ""}`}>
+        <div className="ovl-slate-card" data-testid="ovl-slate-card" data-card={variant}>
+          {pill ? (
+            <span data-testid="ovl-slate-pill" className="ovl-slate-pill">
+              {pill}
+            </span>
+          ) : null}
+          <span
+            data-testid="ovl-slate-headline"
+            className={`ovl-slate-headline${reconnecting ? " ovl-slate-headline--pairing" : ""} ovl-display`}
+          >
+            {reconnecting
+              ? msg("overlay.slate.warmingHeadlineVs", { home: home.name, away: away.name })
+              : msg("overlay.scene.ended.title")}
+          </span>
+          <div className="ovl-slate-matchup" data-testid="ovl-slate-matchup">
+            <SceneTeam side={home} index={0} withScore={!reconnecting} />
+            <span className="ovl-slate-vs" data-testid="ovl-slate-vs">
+              {msg("overlay.slate.vs")}
+            </span>
+            <SceneTeam side={away} index={1} withScore={!reconnecting} />
+          </div>
+          {reconnecting ? (
+            <span data-testid="ovl-slate-line" className="ovl-slate-line ovl-slate-status">
+              <span data-testid="ovl-slate-status-dot" className="ovl-slate-status-dot" aria-hidden="true" />
+              {msg("overlay.scene.reconnecting.line")}
+            </span>
           ) : null}
         </div>
       </div>

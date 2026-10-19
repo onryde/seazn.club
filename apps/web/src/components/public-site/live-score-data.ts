@@ -6,6 +6,8 @@ import { api } from "@/lib/client";
 import { OVERLAY_KEY_PARAM, OVERLAY_REALTIME_PURPOSE, REALTIME_PURPOSE_PARAM, type RealtimePurpose } from "@/lib/realtime-purpose";
 import type { MatchCentreDocT } from "@/server/public-site/match-centre-schema";
 import type { RecentEvent } from "@/lib/overlay-recent-types";
+import type { ProgrammePhaseWire } from "@/lib/relay-phase";
+import type { OverlayCarromToss } from "@/lib/overlay-toss";
 import type { OverlayClosedOver, OverlayCricketLive, OverlayCricketToss, OverlayHighlights } from "@/lib/overlay-cricket";
 
 export interface LiveFixtureData {
@@ -99,12 +101,19 @@ export interface OverlayLiveData extends LiveFixtureData {
   cricketLive?: OverlayCricketLive | null;
   /** Match openers — toss winner side + bat/bowl election. */
   cricketToss?: OverlayCricketToss | null;
+  /** R2005 change 11 — carrom's toss: the side that breaks first. Absent (or null) = no toss taken. Its own shape:
+   *  carrom's toss has no winner and no election, so it never rides `cricketToss`. */
+  carromToss?: OverlayCarromToss | null;
   /** End-of-over card — most recently completed over in the active innings. */
   lastClosedOver?: OverlayClosedOver | null;
   /** True once any scoring (ball / over) has been recorded. */
   scoringStarted?: boolean;
   /** Ended match card — top batter / bowler from the cricket scorecard fold. */
   highlights?: OverlayHighlights | null;
+  /** R2005 fallback B (overlay templates spec 2026-10-15 §4.3): the programme phase the compositor last put on its
+   *  heartbeat. Present ONLY on an answer to a verified composed relay page (`sid` + `st`), and only when that beat
+   *  carried one — an absent key is absent, never defaulted. Every public answer omits it. */
+  programmePhase?: ProgrammePhaseWire;
 }
 
 export interface PublicRealtimeToken {
@@ -119,10 +128,19 @@ export async function fetchLiveFixture(fixtureId: string): Promise<LiveFixtureDa
   return api<LiveFixtureData>(`/api/v1/public/fixtures/${fixtureId}`, { cache: "no-store" });
 }
 
-export async function fetchOverlayFixture(fixtureId: string): Promise<OverlayLiveData> {
-  return api<OverlayLiveData>(`/api/v1/public/fixtures/${fixtureId}/overlay`, {
+/** The overlay poll. R2005: a relay page passes its `sid` + `st` (the page's own, already verified server-side), so the
+ *  route answers through the same check — `programmePhase` for fallback B, and a fixture that is not public. Without
+ *  them the request is byte-for-byte today's. */
+export async function fetchOverlayFixture(fixtureId: string, relay?: { sid: string; st: string }): Promise<OverlayLiveData> {
+  return api<OverlayLiveData>(overlayPollPath(fixtureId, relay), {
     cache: "no-store",
   });
+}
+
+/** The overlay poll's path. Exported for the telemetry scrub's test (`st` is a credential on every poll). */
+export function overlayPollPath(fixtureId: string, relay?: { sid: string; st: string }): string {
+  const path = `/api/v1/public/fixtures/${fixtureId}/overlay`;
+  return relay ? `${path}?${new URLSearchParams({ sid: relay.sid, st: relay.st }).toString()}` : path;
 }
 
 export { OVERLAY_REALTIME_PURPOSE, type RealtimePurpose };

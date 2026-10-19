@@ -2,6 +2,7 @@ import { requireStaff } from "@/lib/admin";
 import { getDictionary } from "@/lib/i18n";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { msgFor } from "@/lib/messages-i18n";
+import type { MessageKey } from "@/lib/messages";
 import { overlayStartLabel } from "@/lib/overlay-model";
 import { decidedOutcomeTemplates } from "@/lib/scoring-vocab";
 import type { OverlayLiveData } from "@/components/public-site/live-score-data";
@@ -15,6 +16,7 @@ import {
   gallerySnapshots,
 } from "@/server/overlay/gallery-snapshots";
 import { OverlayGallery, type GalleryFrame } from "./overlay-gallery";
+import { parseGalleryStress, stressSides, stressTemplates } from "./gallery-stress";
 
 export const dynamic = "force-dynamic";
 
@@ -46,7 +48,14 @@ function galleryData() {
 export default async function AdminOverlayGalleryPage({
   searchParams,
 }: {
-  searchParams: Promise<{ sport?: string | string[]; frame?: string | string[] }>;
+  searchParams: Promise<{
+    sport?: string | string[];
+    frame?: string | string[];
+    // The stress mode (`gallery-stress.ts`; owner ruling 1, 2026-10-19): gallery check 4c's real-producer sweep.
+    decided?: string | string[];
+    name?: string | string[];
+    code?: string | string[];
+  }>;
 }) {
   await requireStaff();
   const query = await searchParams;
@@ -59,6 +68,9 @@ export default async function AdminOverlayGalleryPage({
   const locale = await resolveLocale();
   const uiDict = (await getDictionary(locale, "ui")) as Record<string, string>;
   const publicDict = (await getDictionary(locale, "public")) as Record<string, string>;
+
+  const stress = parseGalleryStress({ decided: one(query.decided), name: one(query.name), code: one(query.code) }, uiDict);
+  const templates = decidedOutcomeTemplates((k, v) => msgFor(locale, k, v));
 
   const { snapshots, variants, startIso } = galleryData();
   const variantSnapshots: Record<string, OverlayLiveData> = Object.fromEntries(
@@ -74,13 +86,13 @@ export default async function AdminOverlayGalleryPage({
       cells={cells}
       snapshots={snapshots}
       variantSnapshots={variantSnapshots}
-      sides={[{ ...GALLERY_SIDES[0] }, { ...GALLERY_SIDES[1] }]}
+      sides={stressSides([{ ...GALLERY_SIDES[0] }, { ...GALLERY_SIDES[1] }], stress)}
       slateMeta={{ ...GALLERY_SLATE_META }}
       // A start 90 minutes out, in the reader's locale: what the warming card shows a club before kick-off.
       startLabel={overlayStartLabel(startIso, locale, "UTC")}
       publicDict={publicDict}
       uiDict={uiDict}
-      decidedTemplates={decidedOutcomeTemplates((k, v) => msgFor(locale, k, v))}
+      decidedTemplates={stress.decided === null ? templates : stressTemplates(templates, msgFor(locale, stress.decided as MessageKey))}
       sport={sport}
       frame={frame}
       frameWidth={FRAMES[frame]}

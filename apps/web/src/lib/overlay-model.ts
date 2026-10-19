@@ -124,7 +124,7 @@ export interface OverlayDetailLine {
   /** Cricket this-over ball chips (already notated). When set, bar/bug render
    *  circular LED pills after `text` instead of flattening glyphs into the string. */
   glyphs?: readonly string[];
-  /** A crease line (`cricketDetail`): the bar band's, never drawn by the bug (review a, PR #974). */
+  /** A crease line (`cricketDetail`): the bar band's (review a, PR #974); the bug draws only its striker (R2005). */
   crease?: true;
   /** The people on a crease line, each a name that may ellipse beside figures that may not. When set, the renderers
    *  draw these instead of `text` (which stays their spoken join). */
@@ -175,6 +175,10 @@ export interface OverlayModel {
   detail: OverlayDetailLine[];
   chase?: string;
   result?: string;
+  /** Owner ruling (1), 2026-10-19: `result` with the winner reduced to its short code — the SAME producer and
+   *  templates, one different name map (the sentence `header.period` carries once decided). The Result card's
+   *  headline ladder falls to it when the full sentence does not fit on one line. Set only beside `result`. */
+  resultShort?: string;
   /**
    * Cricket live only: bar/bug show the batting side as a single hero and
    * (in a chase) a compact strip for the closed innings + absolute target.
@@ -746,6 +750,7 @@ export function overlayModel(input: OverlayModelInput): OverlayModel {
           ),
         }),
     ...(result === null ? {} : { result }),
+    ...(result === null || shortResult === null ? {} : { resultShort: shortResult }),
     ...(focus === undefined ? {} : { focus }),
     ...(input.slateMeta
       ? {

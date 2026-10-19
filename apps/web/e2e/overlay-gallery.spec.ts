@@ -1,4 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
+import { readdirSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { signInStaff } from "./overlay-kit";
 
 // THE STAFF OVERLAY GALLERY (R2007; spec 2026-10-15 §4.5 and §4.8). Every template × sport × scene × state, every
@@ -17,6 +19,10 @@ import { signInStaff } from "./overlay-kit";
 //   8. figures              no crease figure or ball glyph is ellipsised, clipped or out of its entry, at every frame,
 //                           and the striker's mark leads its name (review a and confirm pass, PR #974)
 //   8b. squeeze             with one batter's name made hostile, every figure still sits whole inside its own entry
+//   4c. Result card         every Result card fits by its measured headline ladder (owner ruling 1, 2026-10-19): every
+//                           locale × every `fixture.decidedBy.*` sentence with a 43-character winner, through the real
+//                           producer (the gallery's stress mode); never clamped, nothing hidden, each rung only when
+//                           the one before does not fit on one line
 // The cells are `galleryCells(OVERLAY_TEMPLATES, …)` — the gallery's one cell source — so a template or scene added to
 // the registry is swept here with no edit. Every check prints its count, and zero checked fails it. The per-check
 // verdicts are `expect.soft`, so one run reports EVERY check that fails rather than stopping at the first.
@@ -225,6 +231,10 @@ const HOSTILE_NAME = "Wolfeschlegelsteinhausenbergerdorff ".repeat(12).slice(0, 
 function probeFigures(hostile: string | null) {
   const cut: string[] = [];
   let figures = 0;
+  // R2005 change 12: the corner bug's striker line. Counted apart, so the aggregate cannot hide a bug that drew nothing.
+  let bugFigures = 0;
+  let bugSqueezed = 0;
+  let bugNameEllipsised = 0;
   let marks = 0;
   let ellipsised = 0;
   let squeezed = 0;
@@ -243,6 +253,16 @@ function probeFigures(hostile: string | null) {
       const names = [...band.querySelectorAll<HTMLElement>(".ovl-detail-name")];
       if (names.some((n) => n.textContent === hostile) && names.some((n) => n.getBoundingClientRect().width <= 1)) floored++;
     }
+    // The bug's striker line has one name: made hostile, it must ELLIPSE (the name yields), and the figures beside it
+    // are held whole by the same reads below.
+    for (const name of document.querySelectorAll<HTMLElement>('[data-gallery-cell] [data-testid="ovl-root"] .ovl-bug-footer .ovl-detail-name')) {
+      if (!visible(name)) continue;
+      name.textContent = hostile;
+      bugSqueezed++;
+    }
+    for (const name of document.querySelectorAll<HTMLElement>('[data-gallery-cell] [data-testid="ovl-root"] .ovl-bug-footer .ovl-detail-name')) {
+      if (name.textContent === hostile && name.scrollWidth > name.clientWidth + 1) bugNameEllipsised++;
+    }
   }
   for (const root of roots) {
     const key = root.closest<HTMLElement>("[data-gallery-cell]")?.dataset.galleryCell ?? "?";
@@ -250,7 +270,10 @@ function probeFigures(hostile: string | null) {
       if (!visible(fig)) continue;
       const isMark = fig.classList.contains("ovl-detail-mark");
       if (isMark) marks++;
-      else figures++;
+      else {
+        figures++;
+        if (fig.closest(".ovl-bug") !== null) bugFigures++;
+      }
       const text = (fig.textContent ?? "").trim();
       if (fig.scrollWidth > fig.clientWidth + 1) cut.push(`${key}: "${text}" is ellipsised`);
       const r = fig.getBoundingClientRect();
@@ -296,7 +319,7 @@ function probeFigures(hostile: string | null) {
       if (/\d/.test(el.textContent ?? "")) cut.push(`${key}: "${(el.textContent ?? "").slice(0, 40)}" is cut and holds a numeral`);
     }
   }
-  return { figures, marks, ellipsised, squeezed, floored, cut };
+  return { figures, marks, ellipsised, squeezed, floored, cut, bugFigures, bugSqueezed, bugNameEllipsised };
 }
 
 test.describe("the staff overlay gallery (R2007)", () => {
@@ -410,9 +433,11 @@ test.describe("the staff overlay gallery (R2007)", () => {
       const declared = await openGallery(page, query);
       const read = await page.evaluate(probeFigures, null);
       console.log(
-        `[8] frame ${query || "full"}: cells ${declared}, figures + glyphs checked: ${read.figures}, marks checked: ${read.marks}, cut boxes read: ${read.ellipsised}, figures cut: ${read.cut.length}`,
+        `[8] frame ${query || "full"}: cells ${declared}, figures + glyphs checked: ${read.figures} (in a bug: ${read.bugFigures}), marks checked: ${read.marks}, cut boxes read: ${read.ellipsised}, figures cut: ${read.cut.length}`,
       );
       expect(read.figures, `anti-vacuity: no crease figure or ball glyph was read at ${query || "full"}`).toBeGreaterThan(0);
+      // R2005 change 12: the corner bug's striker line, apart — the aggregate would hide a bug that drew nothing.
+      expect(read.bugFigures, `anti-vacuity: no figure was read inside an .ovl-bug cell at ${query || "full"}`).toBeGreaterThan(0);
       expect(read.marks, `anti-vacuity: no striker mark was read at ${query || "full"}`).toBeGreaterThan(0);
       expect.soft(read.cut, `figures cut at ${query || "full"}`).toEqual([]);
     }
@@ -423,19 +448,164 @@ test.describe("the staff overlay gallery (R2007)", () => {
   // set to 0 passed check 8. Here the first name in every crease band is made hostile (400 characters, no digits): the
   // band must give nearly all of it back, a flex row shrinks every entry in proportion to its width, and an entry with
   // no floor is pushed under its own figures, which then spill out of it. The witness that the squeeze reached a floor:
-  // some name in a squeezed band gave every pixel it had. Full HD only — a frame scales the one 1920 layout (check 8
-  // reads all three). Cricket only, with no sweep: the crease is the only detail line that carries figures.
+  // some name in a squeezed band gave every pixel it had. Cricket only, with no sweep: the crease is the only detail line
+  // that carries figures. R2005 change 12 adds the corner bug's striker line, whose ONE name is made hostile too: it
+  // must ellipse while its figures stay whole. Read at all three frames, as check 8 is (the brief's acceptance: "check 8
+  // and 8b at 1920, 844 and 390"); a frame scales the one 1920 layout, so all three must agree.
   test("check 8b: a hostile name squeezes the crease band, and every figure still sits whole inside its own entry", async ({ page }) => {
+    test.setTimeout(300_000);
     await signInStaff(page);
-    const declared = await openGallery(page, "");
-    const read = await page.evaluate(probeFigures, HOSTILE_NAME);
+    let frames = 0;
+    for (const query of ["", "?frame=844", "?frame=390"]) {
+      const at = query || "full";
+      const declared = await openGallery(page, query);
+      const read = await page.evaluate(probeFigures, HOSTILE_NAME);
+      console.log(
+        `[8b] frame ${at}: cells ${declared}, crease bands squeezed: ${read.squeezed}, reaching a floor: ${read.floored}, bug striker names squeezed: ${read.bugSqueezed} (ellipsised: ${read.bugNameEllipsised}), figures + glyphs + marks checked: ${read.figures + read.marks} (bug figures: ${read.bugFigures}), figures cut: ${read.cut.length}`,
+      );
+      expect(read.squeezed, `anti-vacuity: no crease band was squeezed at ${at}`).toBeGreaterThan(0);
+      expect(read.floored, `anti-vacuity: the squeeze never reached a figures floor at ${at}`).toBeGreaterThan(0);
+      expect(read.figures, `anti-vacuity: no figure was read at ${at}`).toBeGreaterThan(0);
+      // R2005 change 12: the bug's striker name YIELDS (ellipses) and its figures stay whole (the `cut` read below).
+      expect(read.bugSqueezed, `anti-vacuity: no bug striker name was squeezed at ${at}`).toBeGreaterThan(0);
+      expect(read.bugNameEllipsised, `every squeezed bug striker name ellipses at ${at}`).toBe(read.bugSqueezed);
+      expect(read.bugFigures, `anti-vacuity: no bug figure was read under the squeeze at ${at}`).toBeGreaterThan(0);
+      expect.soft(read.cut, `figures cut under the squeeze at ${at}`).toEqual([]);
+      frames++;
+    }
+    expect(frames, "frames checked").toBe(3);
+  });
+
+  // Owner ruling (1), 2026-10-19 (relayed by the coordinator): the Result card's headline is a MEASURED ladder — the full
+  // result sentence, the same sentence with the winner's short code, that short sentence at the compact size, then the
+  // highlights give way; each rung only when the one before does not fit on ONE line. (Round 1, item 2 before it: the
+  // two-line clamp is the "A vs B" headline's alone, and a Result headline is never clamped.)
+  //
+  // Every Result card runs through the REAL producer and the REAL ladder: the gallery's stress mode
+  // (`gallery-stress.ts`) makes every winner-bearing decided template one `fixture.decidedBy.*` sentence and both sides
+  // a 43-character name, and the page is loaded in each locale. Sentences and locales come from the dictionaries on disk;
+  // the cells from the page. Per card: nothing hidden (the card's own overflow, any text box cut — headline AND
+  // highlights), no clamp, a rung-0..2 headline on ONE line, each rung taken only when the one before does not fit
+  // (measured by a clone of the previous rung in the same card), and the highlights gone exactly at the last rung.
+  test("check 4c: every Result card fits by the headline ladder — every locale × every decided sentence, a 43-character winner, the real producer", async ({
+    page,
+    baseURL,
+  }) => {
+    test.setTimeout(900_000);
+    await signInStaff(page);
+    const WINNER = "Haruto Fujimoto and Kenji Watanabe-Yamamoto";
+    expect(WINNER.length).toBe(43);
+    const dictRoot = fileURLToPath(new URL("../src/dictionaries/", import.meta.url));
+    const locales = readdirSync(dictRoot, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+    expect(locales.length, "anti-vacuity: the locales read").toBeGreaterThanOrEqual(4);
+
+    const total = { loads: 0, cases: 0, hidden: [] as string[], rungs: { full: 0, short: 0, compact: 0, yield: 0 } as Record<string, number>, forced: 0, perLoad: new Set<number>() };
+    const sweep = async (locale: string, key: string, template: string, extra: Record<string, string> = {}) => {
+      await page.context().addCookies([{ name: "seazn_locale", value: locale, url: baseURL! }]);
+      const q = new URLSearchParams({ decided: key, name: WINNER, ...extra });
+      await openGallery(page, `?${q.toString()}`);
+      await page.evaluate(() => document.fonts.ready);
+      await expect
+        .poll(() => page.locator('[data-testid="ovl-slate-headline"][data-result-rung]:not([data-result-ladder-settled="true"])').count(), {
+          message: `${locale} ${key}: every Result headline measured`,
+        })
+        .toBe(0);
+      await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+      return page.evaluate(
+        ({ template, winner, score }) => {
+          const out = { cells: 0, hidden: [] as string[], rungs: {} as Record<string, number>, forced: 0 };
+          const linesOf = (el: HTMLElement) => Math.round(el.offsetHeight / parseFloat(getComputedStyle(el).lineHeight));
+          const cells = [...document.querySelectorAll<HTMLElement>("[data-gallery-cell]")].filter((c) =>
+            c.querySelector('[data-testid="ovl-slate"][data-slate-state="ended"]:not([data-card])'),
+          );
+          for (const cell of cells) {
+            const h = cell.querySelector<HTMLElement>('[data-testid="ovl-slate-headline"]');
+            const card = cell.querySelector<HTMLElement>('[data-testid="ovl-slate-card"]');
+            const where = cell.dataset.galleryCell ?? "?";
+            if (!h || !card) {
+              out.hidden.push(`${where}: no headline or card`);
+              continue;
+            }
+            out.cells++;
+            const rung = h.getAttribute("data-result-rung") ?? "none";
+            out.rungs[rung] = (out.rungs[rung] ?? 0) + 1;
+            const code = cell.querySelector(".ovl-slate-tile-code")?.textContent ?? "";
+            const full = template.replaceAll("{score}", score).replaceAll("{winner}", winner);
+            const short = template.replaceAll("{score}", score).replaceAll("{winner}", code);
+            if (h.textContent === full || h.textContent === short) out.forced++;
+            // 1. Nothing hidden: the card's own overflow, then every text box in it (the headline AND the highlights).
+            if (card.scrollHeight > card.clientHeight + 1) out.hidden.push(`${where} [${rung}]: the card hides ${card.scrollHeight - card.clientHeight}px`);
+            for (const el of card.querySelectorAll<HTMLElement>("*")) {
+              const own = [...el.childNodes].some((n) => n.nodeType === Node.TEXT_NODE && (n.textContent ?? "").trim() !== "");
+              if (!own) continue;
+              const cs = getComputedStyle(el) as CSSStyleDeclaration & { webkitLineClamp?: string };
+              if (el === h && cs.webkitLineClamp !== undefined && cs.webkitLineClamp !== "" && cs.webkitLineClamp !== "none") {
+                out.hidden.push(`${where} [${rung}]: the Result headline is line-clamped (${cs.webkitLineClamp})`);
+              }
+              if (el.scrollHeight > el.clientHeight + 1 && cs.overflowY !== "visible") {
+                out.hidden.push(`${where} [${rung}]: "${(el.textContent ?? "").slice(0, 28)}" cut to ${el.clientHeight}px of ${el.scrollHeight}px`);
+              }
+            }
+            // 2. A headline rung is ONE line; the last rung alone may wrap, and it alone drops the highlights.
+            if (rung !== "yield" && linesOf(h) !== 1) out.hidden.push(`${where} [${rung}]: the headline runs ${linesOf(h)} lines`);
+            const hasHighlights = cell.querySelector('[data-testid="ovl-slate-highlights"]') !== null;
+            if (rung === "yield" && hasHighlights) out.hidden.push(`${where} [yield]: the highlights did not give way`);
+            // 3. Taken only when the rung before does not fit on one line: the previous rung, cloned into this card.
+            //    short ← the full sentence at the headline size (the first probe's text); compact ← the short sentence at the
+            //    headline size; yield ← the short sentence at the compact size (both the text on air).
+            const previous: Record<string, { text: string; compact: boolean }> = {
+              short: { text: cell.querySelector(".ovl-slate-headline-probe")?.textContent ?? "", compact: false },
+              compact: { text: h.textContent ?? "", compact: false },
+              yield: { text: h.textContent ?? "", compact: true },
+            };
+            const prev = previous[rung];
+            if (prev) {
+              const probe = document.createElement("span");
+              probe.className = `ovl-slate-headline ovl-display${prev.compact ? " ovl-slate-headline--compact" : ""}`;
+              probe.textContent = prev.text;
+              h.after(probe);
+              const lines = linesOf(probe);
+              probe.remove();
+              if (lines <= 1) out.hidden.push(`${where} [${rung}]: taken though the rung before fits on one line ("${(probe.textContent ?? "").slice(0, 40)}")`);
+            }
+          }
+          return out;
+        },
+        { template, winner: WINNER, score: "4–3" },
+      );
+    };
+
+    for (const locale of locales) {
+      const ui = JSON.parse(readFileSync(`${dictRoot}${locale}/ui.json`, "utf8")) as Record<string, string>;
+      const keys = Object.keys(ui).filter((k) => k.startsWith("fixture.decidedBy."));
+      expect(keys.length, `anti-vacuity: ${locale}'s decided sentences`).toBeGreaterThanOrEqual(10);
+      for (const key of keys) {
+        const read = await sweep(locale, key, ui[key]!);
+        total.loads++;
+        total.cases += read.cells;
+        total.perLoad.add(read.cells);
+        total.forced += read.forced;
+        total.hidden.push(...read.hidden.map((h) => `${locale} ${key} ${h}`));
+        for (const [r, n] of Object.entries(read.rungs)) total.rungs[r] = (total.rungs[r] ?? 0) + n;
+      }
+    }
     console.log(
-      `[8b] cells ${declared}, crease bands squeezed: ${read.squeezed}, reaching a floor: ${read.floored}, figures + glyphs + marks checked: ${read.figures + read.marks}, figures cut: ${read.cut.length}`,
+      `[4c] locales ${locales.length} (${locales.join(", ")}), loads ${total.loads}, Result cards checked ${total.cases}, showing the forced sentence ${total.forced}, rungs ${JSON.stringify(total.rungs)}, hidden ${total.hidden.length}`,
     );
-    expect(read.squeezed, "anti-vacuity: no crease band was squeezed").toBeGreaterThan(0);
-    expect(read.floored, "anti-vacuity: the squeeze never reached a figures floor").toBeGreaterThan(0);
-    expect(read.figures, "anti-vacuity: no figure was read").toBeGreaterThan(0);
-    expect.soft(read.cut, "figures cut under the squeeze").toEqual([]);
+    expect([...total.perLoad], "every load draws the same Result cells").toHaveLength(1);
+    expect(total.cases, "anti-vacuity: every Result card of every load").toBe(total.loads * [...total.perLoad][0]!);
+    expect(total.cases).toBeGreaterThan(1000);
+    expect(total.forced, "anti-vacuity: the forced sentence reached the cards").toBeGreaterThan(0);
+    // The verdict before the rung counts, so a ladder that stops early reds as the content it hides.
+    expect(total.hidden.slice(0, 25), `Result cards hiding content or off the ladder (${total.hidden.length})`).toEqual([]);
+    for (const r of ["full", "short", "compact"]) expect(total.rungs[r] ?? 0, `anti-vacuity: rung ${r} reached`).toBeGreaterThan(0);
+
+    // The last rung: a long explicit short name (`?code=`, the model's own `short`) runs even the compact short sentence
+    // past one line — the highlights give way, and the card still hides nothing.
+    const reach = await sweep("fr", "fixture.decidedBy.settled.organiser", JSON.parse(readFileSync(`${dictRoot}fr/ui.json`, "utf8"))["fixture.decidedBy.settled.organiser"], { code: "HARUTO-KENJI-FC" });
+    console.log(`[4c] last rung (fr, organiser, a 15-character code): cards ${reach.cells}, rungs ${JSON.stringify(reach.rungs)}, hidden ${reach.hidden.length}`);
+    expect(reach.rungs.yield ?? 0, "anti-vacuity: the last rung reached").toBeGreaterThan(0);
+    expect(reach.hidden.slice(0, 25)).toEqual([]);
   });
 
   test("check 6: no preview fetches or subscribes — nothing leaves the page for 16 s (longer than POLL_MS)", async ({ page }) => {

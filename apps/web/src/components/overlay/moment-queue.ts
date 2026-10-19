@@ -52,7 +52,14 @@ export type QueueAction =
   | { type: "enqueue"; moments: readonly OverlayMoment[]; now: number; foldMs: number; holdMs: number }
   | { type: "tick"; now: number; foldMs: number; holdMs: number }
   /** Drop / fold away anything no longer in the live window (scorer undo). */
-  | { type: "sync"; live: readonly OverlayMoment[]; now: number; foldMs: number; holdMs: number };
+  | { type: "sync"; live: readonly OverlayMoment[]; now: number; foldMs: number; holdMs: number }
+  /** R2005 (spec §4.8, D14): a scene whose `momentsFire` is false (Final) marks every new moment SEEN and queues none
+   *  of them, so none can air later either — not when the scene ends, not on the next poll. */
+  | { type: "discard"; moments: readonly OverlayMoment[] }
+  /** Owner ruling (4), 2026-10-19 (PR #982 review round 1, item 8): Final arrives — a moment already QUEUED must not
+   *  play under it. The queue is dropped; every dropped id stays SEEN (a re-sent window cannot queue it again, while a
+   *  scorer's undo still forgets it through `sync`). The slab already on air keeps its own run. */
+  | { type: "flush" };
 
 
 export const INITIAL: MomentQueueState = {
@@ -139,6 +146,27 @@ export function momentQueueReducer(
     }
 
     return { ...state, queue, seen, revision };
+  }
+
+  if (action.type === "flush") {
+    // Nothing queued: the same state, so a re-render under Final arms no timer and re-renders nothing.
+    if (state.queue.length === 0) return state;
+    return { ...state, queue: [], revision: state.revision + 1 };
+  }
+
+  if (action.type === "discard") {
+    // Seen, never queued. The batch is deduped the way `enqueue` dedupes it, and an id already seen changes nothing —
+    // so a poll that re-sends the window is not a state change (no re-render, no timer).
+    const seen = new Set(state.seen);
+    const fresh: string[] = [];
+    for (const moment of action.moments) {
+      const id = idOf(moment);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      fresh.push(id);
+    }
+    if (fresh.length === 0) return state;
+    return { ...state, seen: [...state.seen, ...fresh], revision: state.revision + 1 };
   }
 
   if (action.type === "enqueue") {

@@ -51,3 +51,61 @@ describe("CSP vs cacheable public routes", () => {
     expect(typeof nonceHeader).toBe("string");
   });
 });
+
+// R2005 A5 (change 8; compositor F-009, coordinator decision 2026-10-16): the overlay page's `connect-src` allows the
+// compositor's loopback phase endpoint, on the `/overlay` tree ONLY. Driven through `proxy()` — the real call site — so
+// the pathname wiring is what is proven, not `cspHeader` alone. The origin is TYPED from spec §4.3 (port 7419), never
+// read from RELAY_PHASE_PORT.
+describe("A5 — connect-src carries the loopback phase endpoint on /overlay only", () => {
+  const LOOPBACK = "http://127.0.0.1:7419";
+  const UUID = "8c4f7a52-1f3e-4b9a-9d2c-3e5f6a7b8c9d";
+  // "Whichever CSP header is present": the response's own, or — on a marketing path, which `proxy()` REWRITES with the
+  // policy on the forwarded request headers only (pre-existing, unchanged here) — the forwarded copy.
+  const cspOf = (res: Response): string => {
+    const v =
+      res.headers.get("Content-Security-Policy") ??
+      res.headers.get("Content-Security-Policy-Report-Only") ??
+      res.headers.get("x-middleware-request-content-security-policy") ??
+      res.headers.get("x-middleware-request-content-security-policy-report-only");
+    if (v === null) throw new Error("no CSP header on a page response");
+    return v;
+  };
+  const directives = (csp: string): string[] => csp.split("; ").map((d) => d.replace(/'nonce-[^']+'/g, "'nonce-*'"));
+  const connectSrc = (csp: string): string[] => {
+    const d = directives(csp).find((x) => x.startsWith("connect-src "));
+    if (d === undefined) throw new Error(`no connect-src in ${csp}`);
+    return d.split(" ").slice(1);
+  };
+  const OVERLAY = [`/overlay/fixtures/${UUID}`, `/overlay/fixtures/${UUID}?host=compositor`];
+  const OTHERS = ["/", "/dashboard", "/shared/riverside", "/embed/divisions/x/standings", "/score/tok123", `/overlayx/fixtures/${UUID}`];
+
+  for (const mode of ["report-only", "enforce"] as const) {
+    it(`${mode}: every /overlay route carries it; no other route class does; every other directive is byte-identical`, () => {
+      if (mode === "enforce") vi.stubEnv("CSP_MODE", "enforce");
+      let checked = 0;
+      const classes = new Set<string>();
+      const dashboard = directives(cspOf(proxy(page("/dashboard")))).filter((d) => !d.startsWith("connect-src "));
+      for (const path of OVERLAY) {
+        const res = proxy(page(path));
+        if (mode === "enforce") expect(res.headers.get("Content-Security-Policy"), `${path}: enforced`).not.toBeNull();
+        const csp = cspOf(res);
+        expect(connectSrc(csp), path).toContain(LOOPBACK);
+        expect(directives(csp).filter((d) => !d.startsWith("connect-src ")), `${path}: other directives`).toEqual(dashboard);
+        // The addition is the ONLY difference inside connect-src too.
+        expect(connectSrc(csp).filter((s) => s !== LOOPBACK), path).toEqual(connectSrc(cspOf(proxy(page("/dashboard")))));
+        classes.add("overlay");
+        checked++;
+      }
+      for (const path of OTHERS) {
+        const csp = cspOf(proxy(page(path)));
+        expect(connectSrc(csp), path).not.toContain(LOOPBACK);
+        expect(csp.includes("127.0.0.1"), `${path}: no loopback anywhere in the policy`).toBe(false);
+        classes.add(path.split("/")[1] || "root");
+        checked++;
+      }
+      console.log(`[${mode}] routes checked: ${checked}`);
+      expect(checked).toBe(OVERLAY.length + OTHERS.length);
+      expect([...classes].sort()).toEqual(["dashboard", "embed", "overlay", "overlayx", "root", "score", "shared"]);
+    });
+  }
+});
