@@ -43,9 +43,18 @@
 // `/api/auth/change-email/confirm`. Sentry's `request.query_string` has no path to scope by, so it is scrubbed when the
 // event's URL or transaction names one of those routes, the way a capture route's request is recognised (`isCaptureEvent`).
 //
-// The profile-claim link `/claim/<secret>` (routes.claim, `pc_` + 43 base64url, 14 days; person-claims.ts) carries its
-// secret in the PATH, and so does the accept call the claim page's button makes, `/api/claims/<secret>/accept`. Each
-// secret becomes `[token]`, plain or URL-encoded at any depth, by the `/capture/codes/` rules.
+// Three more credentials carry themselves in the PATH, and become `[token]` after their prefix, plain or URL-encoded at
+// any depth, by the `/capture/codes/` rules (`SECRET_PATH_PREFIXES`):
+//  - the profile-claim link `/claim/<secret>` (routes.claim; `pc_` + 43 base64url, 14 days; person-claims.ts) and the
+//    accept call its button makes, `/api/claims/<secret>/accept`: whoever holds it links the profile to their account;
+//  - the org invite `/join/<token>` (24 random bytes; 1 hour to never; up to 1000 uses, 0 = unlimited; the role is admin
+//    or viewer; invites.ts) and its calls `/api/invites/<token>[/accept|/claim]`, `/api/orgs/<id>/invites/<token>/revoke`.
+//    An email invite also mints a SESSION for a new or unverified invitee (`/claim`), as a magic link does; the team
+//    screen masks the token on purpose;
+//  - the fixture check-in code `/checkin/<token>` and `/api/checkin/<token>` (an HS256 JWT valid until the fixture's local
+//    midnight; checkin-token.ts): it is the proof of presence at the venue, so it is a credential, not a public address.
+// Left alone: `/refer/<code>` (a referral link is shared in public on purpose) and `/r/<ref>` (a lookup, not auth; the
+// emailed `token` is what authorises a withdrawal).
 import type * as Sentry from "@sentry/nextjs";
 import type { CaptureResult } from "posthog-js";
 import { OVERLAY_KEY_PARAM } from "./realtime-purpose";
@@ -102,14 +111,22 @@ const ROOM_TOKEN_QUERY = new RegExp(`((?:^|[?&])t=)${JWT_SHAPE}`, "g");
 /** The same parameter URL-ENCODED inside another URL (the room path in a `next=`): `%3Ft%3D` / `%26t%3D`, at any
  *  encoding depth, either hex case. The token ends at its first non-JWT character, so its encoded delimiter stays. */
 const ENCODED_ROOM_TOKEN = new RegExp(`(%(?:25)*(?:3[Ff]|26)t%(?:25)*3[Dd])${JWT_SHAPE}`, "g");
-/** A profile-claim secret in the claim page's path, `/claim/<secret>`: everything up to the next `/`, `?`, `#`, quote, angle bracket or space. */
-const CLAIM_PATH = /(\/claim\/)[^/?#\s"'<>]+/g;
+/**
+ * Path prefixes whose NEXT segment is a credential: the profile-claim secret (`/claim/<secret>` and the accept call
+ * `/api/claims/<secret>/accept`), the org-invite token (`/join/<token>` and `/api/invites/<token>[/accept|/claim]`; the
+ * revoke call `/api/orgs/<id>/invites/<token>/revoke` is matched by `/invites/`) and the day's check-in code
+ * (`/checkin/<token>`, `/api/checkin/<token>`). Each is spelled with its trailing slash, so `/claims/…`, `/joined/…`,
+ * `/checkin-link` and `/register/join` (a public page with nothing after it) do not match. The shortest prefix that
+ * covers the API twin is used: `/checkin/` is also inside `/api/checkin/`, `/invites/` inside `/api/invites/`.
+ * Not here, on purpose: `/refer/<code>` (a referral link is shared in public) and `/r/<ref>` (a lookup, not auth).
+ */
+const SECRET_PATH_PREFIXES = ["/claim/", "/api/claims/", "/join/", "/checkin/", "/invites/"] as const;
+/** The prefixes with each `/` spelled as given: `\/claim\/` plain, `%(?:25)*2[Ff]claim%(?:25)*2[Ff]` encoded at any depth. */
+const prefixAlternation = (slash: string) => SECRET_PATH_PREFIXES.map((p) => p.split("/").join(slash)).join("|");
+/** A prefix and the secret after it: everything up to the next `/`, `?`, `#`, quote, angle bracket or space. */
+const SECRET_PATH = new RegExp(`(${prefixAlternation("\\/")})[^/?#\\s"'<>]+`, "g");
 /** The same path URL-ENCODED inside another URL (a sign-in `next=/claim/<secret>`), at any encoding depth, either hex case. */
-const ENCODED_CLAIM_PATH = /(%(?:25)*2[Ff]claim%(?:25)*2[Ff])[^%&/?#\s"'<>]+/g;
-/** The same secret in the claim API's path, `/api/claims/<secret>` and `/api/claims/<secret>/accept`. `/claims/` is its own segment: `/claim/` does not match it. */
-const CLAIM_API_PATH = /(\/api\/claims\/)[^/?#\s"'<>]+/g;
-/** The same path URL-ENCODED inside another URL, at any encoding depth, either hex case. */
-const ENCODED_CLAIM_API_PATH = /(%(?:25)*2[Ff]api%(?:25)*2[Ff]claims%(?:25)*2[Ff])[^%&/?#\s"'<>]+/g;
+const ENCODED_SECRET_PATH = new RegExp(`(${prefixAlternation("%(?:25)*2[Ff]")})[^%&/?#\\s"'<>]+`, "g");
 
 /**
  * The routes whose emailed link carries a SINGLE-USE token in its `token` query parameter to a page that spends it: the
@@ -159,10 +176,8 @@ const MAYBE_TOKEN = new RegExp(
     "capture%(?:25)*2[Ff]codes%",
     "(?:^|[?&])t=",
     "%(?:25)*(?:3[Ff]|26)t%",
-    "\\/claim\\/",
-    "%(?:25)*2[Ff]claim%",
-    "\\/api\\/claims\\/",
-    "%(?:25)*2[Ff]api%(?:25)*2[Ff]claims%",
+    prefixAlternation("\\/"),
+    prefixAlternation("%(?:25)*2[Ff]"),
     ONE_TIME_ROUTE,
     ENCODED_ONE_TIME_ROUTE,
   ].join("|"),
@@ -176,9 +191,9 @@ export function scrubTokenQuery(query: string): string {
 /** One string: `/score/<token>` (plain or encoded) becomes `/score/[token]`, a bare `dl_…` secret becomes `dl_[token]`,
  *  an overlay `key=` query value (plain or encoded) becomes `[key]`, a relay page token's `st=` value (plain or
  *  encoded) becomes `[st]`, a capture code in `/capture/codes/<code>` (plain or encoded) becomes `[code]`, a
- *  match-room token in a `t=` query value (plain or encoded) becomes `[token]`, a profile-claim secret in
- *  `/claim/<secret>` or `/api/claims/<secret>` (plain or encoded) becomes `[token]`, and a one-time sign-in token in
- *  the `token=` query value of a one-time route (plain or encoded) becomes `[token]`. */
+ *  match-room token in a `t=` query value (plain or encoded) becomes `[token]`, the secret after a
+ *  `SECRET_PATH_PREFIXES` prefix (`/claim/`, `/join/`, `/checkin/`, …; plain or encoded) becomes `[token]`, and a
+ *  one-time sign-in token in the `token=` query value of a one-time route (plain or encoded) becomes `[token]`. */
 export function scrubScoreUrl(value: string): string {
   if (!MAYBE_TOKEN.test(value)) return value;
   return value
@@ -193,10 +208,8 @@ export function scrubScoreUrl(value: string): string {
     .replace(ENCODED_CAPTURE_PATH, "$1[code]")
     .replace(ROOM_TOKEN_QUERY, "$1[token]")
     .replace(ENCODED_ROOM_TOKEN, "$1[token]")
-    .replace(CLAIM_PATH, "$1[token]")
-    .replace(ENCODED_CLAIM_PATH, "$1[token]")
-    .replace(CLAIM_API_PATH, "$1[token]")
-    .replace(ENCODED_CLAIM_API_PATH, "$1[token]")
+    .replace(SECRET_PATH, "$1[token]")
+    .replace(ENCODED_SECRET_PATH, "$1[token]")
     .replace(ONE_TIME_ROUTE_QUERY, (_m, head: string, query: string) => head + scrubTokenQuery(query))
     .replace(ENCODED_ONE_TIME_ROUTE_QUERY, (_m, head: string, query: string) => head + query.replace(ENCODED_TOKEN_PARAM, "$1$2[token]"));
 }

@@ -16,6 +16,8 @@ import { routes } from "@/lib/routes";
 import { lichessLinkStartHref } from "@/lib/lichess-link";
 import { mintMatchRoomToken } from "@/server/usecases/match-room-token";
 import { mintClaimSecret } from "@/server/usecases/person-claims";
+import { createInvite } from "@/server/usecases/invites";
+import { mintCheckinToken } from "@/server/usecases/checkin-token";
 import { createLoginLink } from "@/lib/login-link";
 import { createVerificationToken } from "@/lib/verification";
 import { USER_ID } from "./_fake-sql";
@@ -315,7 +317,7 @@ describe("the one-time sign-in token: every config's real hooks scrub it", () =>
   async function signInUrls() {
     const login = await createLoginLink(USER_ID);
     const verify = await createVerificationToken(USER_ID);
-    const next = encodeURIComponent("/join/inv0123456789");
+    const next = encodeURIComponent("/dashboard");
     const magicUrl = `https://seazn.club/magic-link?token=${login}&next=${next}`;
     const verifyUrl = `https://seazn.club/verify-email?token=${verify}&next=${next}`;
     expect(magicUrl, "premise: the sign-in link carries the token").toContain(login);
@@ -354,11 +356,11 @@ describe("the one-time sign-in token: every config's real hooks scrub it", () =>
     const { login, verify, magicUrl, verifyUrl } = await signInUrls();
     const out = run(
       options.beforeSend,
-      { event_id: "e1", request: { url: magicUrl, query_string: `token=${login}&next=%2Fjoin%2Finv0123456789`, headers: { Referer: verifyUrl } } },
+      { event_id: "e1", request: { url: magicUrl, query_string: `token=${login}&next=%2Fdashboard`, headers: { Referer: verifyUrl } } },
       {},
     ) as { request: { query_string: string } };
     expectGone(out, login, verify);
-    expect(out.request.query_string, "Sentry's query string has no `?`, and is still scrubbed").toBe("token=[token]&next=%2Fjoin%2Finv0123456789");
+    expect(out.request.query_string, "Sentry's query string has no `?`, and is still scrubbed").toBe("token=[token]&next=%2Fdashboard");
     expectGone(
       run(
         options.beforeSendTransaction,
@@ -455,5 +457,83 @@ describe("the profile-claim secret: every config's real hooks scrub it", () => {
     const replayOptions = vi.mocked(Sentry.replayIntegration).mock.calls[0]![0] as Options;
     const frame = { type: 5, timestamp: 1, data: { tag: "performanceSpan", payload: { description: accept } } };
     expectGone(run(replayOptions.beforeAddRecordingEvent, frame), secret);
+  });
+});
+
+// The org invite `/join/<token>` (admin or viewer; an email invite also mints a session) and the day's check-in code
+// `/checkin/<token>` (a JWT, the proof of presence) carry their secret in the PATH. Proven in scrub-path-secrets.test.ts;
+// this half proves each REAL config hands the rule to its SDK. The invite comes from the real `createInvite`, the code
+// from the real `mintCheckinToken`, the page URL from `routes.checkin()`, the API URLs from the islands' own templates.
+describe("the invite token and the check-in code: every config's real hooks scrub them", () => {
+  async function pathSecretUrls() {
+    const invite = (await createInvite("00000000-0000-4000-8000-000000000002", USER_ID, { role: "admin", max_uses: 1 })).token;
+    const checkin = await mintCheckinToken("00000000-0000-4000-8000-000000000003", new Date(Date.now() + 3600_000));
+    const urls = {
+      joinUrl: `https://seazn.club/join/${invite}`,
+      claimApiUrl: `https://seazn.club/api/invites/${invite}/claim`,
+      revokeApiUrl: `https://seazn.club/api/orgs/00000000-0000-4000-8000-000000000002/invites/${invite}/revoke`,
+      checkinUrl: `https://seazn.club${routes.checkin(checkin)}`,
+      checkinApiUrl: `https://seazn.club/api/checkin/${checkin}`,
+    };
+    for (const [name, url] of Object.entries(urls)) expect(url, `premise: ${name} carries its secret`).toMatch(new RegExp(`${invite}|${checkin}`));
+    return { invite, checkin, ...urls };
+  }
+  const expectGone = (value: unknown, ...secrets: string[]) => {
+    const text = JSON.stringify(value);
+    for (const secret of secrets) expect(text).not.toContain(secret);
+    expect(text).toContain("[token]");
+  };
+
+  it("PostHog: the pageview of the join page and of the check-in page (their $pathname too), and a referrer", async () => {
+    vi.stubEnv("NEXT_PUBLIC_POSTHOG_KEY", "phc_test");
+    vi.stubGlobal("document", { cookie: "" });
+    await import("../../instrumentation-client");
+    const posthog = (await import("posthog-js")).default;
+    const options = vi.mocked(posthog.init).mock.calls[0]![1] as Options;
+    const { invite, checkin, joinUrl, checkinUrl } = await pathSecretUrls();
+    for (const [url, pathname, secret] of [
+      [joinUrl, `/join/${invite}`, invite],
+      [checkinUrl, routes.checkin(checkin), checkin],
+    ] as const) {
+      let out: unknown = {
+        uuid: "u1",
+        event: "$pageview",
+        properties: { $current_url: url, $pathname: pathname, $referrer: joinUrl, $elements: [{ attr__href: url }] },
+        $set_once: { $initial_current_url: url },
+      };
+      for (const fn of [options.before_send].flat()) out = run(fn, out);
+      expectGone(out, secret);
+      expect((out as { properties: { $pathname: string } }).properties.$pathname).toBe(pathname.replace(secret, "[token]"));
+    }
+  });
+
+  it.each([
+    ["server", "../../../sentry.server.config"],
+    ["edge", "../../../sentry.edge.config"],
+  ])("Sentry %s: an error's request URL, a transaction's span, a log line and the API calls", async (_name, config) => {
+    const options = await sentryInitOptions(config);
+    const { invite, checkin, joinUrl, claimApiUrl, revokeApiUrl, checkinUrl, checkinApiUrl } = await pathSecretUrls();
+    expectGone(run(options.beforeSend, { event_id: "e1", request: { url: joinUrl, headers: { Referer: checkinUrl } } }, {}), invite, checkin);
+    expectGone(
+      run(options.beforeSendTransaction, { type: "transaction", transaction: `POST /api/invites/${invite}/claim`, spans: [{ span_id: "s1", trace_id: "t1", start_timestamp: 1, data: { "url.full": claimApiUrl } }] }, {}),
+      invite,
+    );
+    expectGone(run(options.beforeSend, { event_id: "e2", request: { url: revokeApiUrl } }, {}), invite);
+    expectGone(run(options.beforeSend, { event_id: "e3", request: { url: checkinApiUrl } }, {}), checkin);
+    expectGone(run(options.beforeSendLog, { level: "error", message: `Failed to fetch RSC payload for ${joinUrl}`, attributes: {} }), invite);
+  });
+
+  it("Sentry client: an error, a navigation breadcrumb, a replay's URL list and a recording frame", async () => {
+    const options = await sentryInitOptions("../../../sentry.client.config");
+    const { invite, checkin, joinUrl, claimApiUrl, checkinUrl } = await pathSecretUrls();
+    expectGone(run(options.beforeSend, { event_id: "e1", request: { url: joinUrl } }, {}), invite);
+    expectGone(run(options.beforeBreadcrumb, { category: "navigation", data: { from: joinUrl, to: checkinUrl } }, {}), invite, checkin);
+    const integrations = options.integrations as { name: string; processEvent?: unknown }[];
+    const scrubber = integrations.find((i) => typeof i.processEvent === "function")!;
+    expectGone(run(scrubber.processEvent, { type: "replay_event", urls: [joinUrl, checkinUrl, claimApiUrl] }, {}, {}), invite, checkin);
+    const Sentry = await import("@sentry/nextjs");
+    const replayOptions = vi.mocked(Sentry.replayIntegration).mock.calls[0]![0] as Options;
+    const frame = { type: 5, timestamp: 1, data: { tag: "performanceSpan", payload: { description: claimApiUrl } } };
+    expectGone(run(replayOptions.beforeAddRecordingEvent, frame), invite);
   });
 });

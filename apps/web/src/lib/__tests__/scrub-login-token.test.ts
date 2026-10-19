@@ -45,6 +45,11 @@ vi.mock("@/lib/legal", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/legal")>()),
   stampTermsAcceptance: vi.fn(async () => {}),
 }));
+// The org-invites route is editor-only; the session check is the stand-in, the route and its link builder are real.
+vi.mock("@/lib/auth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/auth")>()),
+  requireOrgRole: vi.fn(async () => ({ user: { id: (await import("./_fake-sql")).USER_ID }, role: "admin" })),
+}));
 const mail = vi.hoisted(() => ({ sent: [] as { to: string; link: string }[] }));
 vi.mock("@/lib/email", async (importOriginal) => {
   const record = vi.fn(async (to: string, link: string) => {
@@ -56,6 +61,10 @@ vi.mock("@/lib/email", async (importOriginal) => {
     sendMagicLinkEmail: record,
     sendVerificationEmail: record,
     sendPasswordResetEmail: record,
+    sendInviteEmail: vi.fn(async (to: string, _org: string, link: string) => {
+      mail.sent.push({ to, link });
+      return true;
+    }),
   };
 });
 
@@ -68,10 +77,12 @@ import { routes } from "@/lib/routes";
 import { lichessLinkStartHref } from "@/lib/lichess-link";
 import { mintMatchRoomToken } from "@/server/usecases/match-room-token";
 import { mintClaimSecret } from "@/server/usecases/person-claims";
+import { mintCheckinToken } from "@/server/usecases/checkin-token";
 import { posthogBeforeSend, scrubRecordingEvent, scrubScoreUrl, scrubSentryEvent } from "../scrub-score-url";
 import { POST as MAGIC_LINK } from "@/app/api/auth/magic-link/route";
 import { POST as SIGNUP } from "@/app/api/auth/signup/route";
 import { POST as FORGOT_PASSWORD } from "@/app/api/auth/forgot-password/route";
+import { POST as ORG_INVITES } from "@/app/api/orgs/[id]/invites/route";
 
 const ORIGIN = "https://seazn.club";
 const PLACEHOLDER = "[token]";
@@ -142,6 +153,28 @@ async function drive(route: Route, pathname: string, table: string, body: unknow
   return { link, token: minted[0]! };
 }
 
+/** POST to the real org-invites route for an EMAIL invite: the `/join/<token>` link it mails, and the token it minted. */
+async function emailInvite(role: "admin" | "viewer") {
+  mail.sent.length = 0;
+  inserts.length = 0;
+  const orgId = randomUUID();
+  const res = await ORG_INVITES(
+    new Request(`${ORIGIN}/api/orgs/${orgId}/invites`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ role, email: "invitee@example.test" }),
+    }),
+    { params: Promise.resolve({ id: orgId }) },
+  );
+  expect(res.status, `the invite route answered ${res.status}: ${await res.clone().text()}`).toBe(200);
+  expect(mail.sent, "the invite was emailed").toHaveLength(1);
+  const minted = inserts.filter((i) => i.table === "org_invites").map((i) => i.values[3] as string);
+  expect(minted, "one invite token was minted").toHaveLength(1);
+  const link = mail.sent[0]!.link;
+  expect(link, "premise: the emailed link is the join page carrying the token").toBe(`${ORIGIN}/join/${minted[0]}`);
+  return { link, token: minted[0]! };
+}
+
 const hasRoute = (route: string) =>
   ["page.tsx", "route.ts"].some((file) => fs.existsSync(path.join(APP_DIR, route, file)));
 
@@ -160,9 +193,9 @@ describe.each(REAL_LINKS)("the link the real $name route emails", ({ route, path
   });
 
   it("with a next: the token is scrubbed and the encoded next is kept exactly", async () => {
-    const { link, token } = await drive(route, pathname, table, body("/join/inv0123456789"));
-    expect(link).toBe(`${ORIGIN}${page}?token=${token}&next=${encodeURIComponent("/join/inv0123456789")}`);
-    expect(scrubScoreUrl(link)).toBe(`${ORIGIN}${page}?token=${PLACEHOLDER}&next=%2Fjoin%2Finv0123456789`);
+    const { link, token } = await drive(route, pathname, table, body("/dashboard"));
+    expect(link).toBe(`${ORIGIN}${page}?token=${token}&next=${encodeURIComponent("/dashboard")}`);
+    expect(scrubScoreUrl(link)).toBe(`${ORIGIN}${page}?token=${PLACEHOLDER}&next=%2Fdashboard`);
   });
 
   it("with the Lichess start as its next (the match-room token two encodings deep): BOTH tokens are scrubbed, nothing else changes", async () => {
@@ -185,6 +218,35 @@ describe.each(REAL_LINKS)("the link the real $name route emails", ({ route, path
     const out = scrubScoreUrl(link);
     expect(out).toBe(without(link, token, secret));
     expect(out).toBe(`${ORIGIN}${page}?token=${PLACEHOLDER}&next=%2Fclaim%2F${PLACEHOLDER}`);
+  });
+
+  it("with an org-invite link as its next (ClaimInvite's sign-in sends next=/join/<token>): BOTH tokens are scrubbed", async () => {
+    const invite = await emailInvite("admin");
+    const { link, token } = await drive(route, pathname, table, body(new URL(invite.link).pathname));
+    expect(link, "premise: the invite token is carried, encoded once").toContain(`%2Fjoin%2F${invite.token}`);
+    const out = scrubScoreUrl(link);
+    expect(out).toBe(without(link, token, invite.token));
+    expect(out).toBe(`${ORIGIN}${page}?token=${PLACEHOLDER}&next=%2Fjoin%2F${PLACEHOLDER}`);
+  });
+
+  it("with a check-in link as its next (the printed QR, signed out): BOTH tokens are scrubbed", async () => {
+    const checkin = await mintCheckinToken(randomUUID(), new Date(Date.now() + 3600_000));
+    const { link, token } = await drive(route, pathname, table, body(routes.checkin(checkin)));
+    expect(link, "premise: the check-in code is carried, encoded once").toContain(`%2Fcheckin%2F${checkin}`);
+    const out = scrubScoreUrl(link);
+    expect(out).toBe(without(link, token, checkin));
+    expect(out).toBe(`${ORIGIN}${page}?token=${PLACEHOLDER}&next=%2Fcheckin%2F${PLACEHOLDER}`);
+  });
+});
+
+describe("the link the real org-invites route emails", () => {
+  it("is /join/<token> for an admin invite and for a viewer invite, and its token is scrubbed with the rest of the URL kept", async () => {
+    for (const role of ["admin", "viewer"] as const) {
+      const { link, token } = await emailInvite(role);
+      expect(hasRoute("/join/[token]"), "/join/[token] is a real page").toBe(true);
+      expect(scrubScoreUrl(link), role).toBe(`${ORIGIN}/join/${PLACEHOLDER}`);
+      expect(without(link, token)).toBe(scrubScoreUrl(link));
+    }
   });
 });
 
@@ -269,8 +331,8 @@ const oneTimeRoutes = () => [...linkBuilders().keys()].filter((r) => !(r in NOT_
 const FORMS: { name: string; build: (route: string, t: string) => string }[] = [
   { name: "absolute URL", build: (r, t) => `${ORIGIN}${r}?token=${t}` },
   { name: "bare path", build: (r, t) => `${r}?token=${t}` },
-  { name: "token first, next after", build: (r, t) => `${ORIGIN}${r}?token=${t}&next=%2Fjoin%2Fabc` },
-  { name: "token after another parameter", build: (r, t) => `${ORIGIN}${r}?next=%2Fjoin%2Fabc&token=${t}` },
+  { name: "token first, next after", build: (r, t) => `${ORIGIN}${r}?token=${t}&next=%2Fdashboard` },
+  { name: "token after another parameter", build: (r, t) => `${ORIGIN}${r}?next=%2Fdashboard&token=${t}` },
   { name: "token between two parameters", build: (r, t) => `${ORIGIN}${r}?a=1&token=${t}&b=2` },
   { name: "a hash after it", build: (r, t) => `${ORIGIN}${r}?token=${t}#top` },
   { name: "a trailing slash on the route", build: (r, t) => `${ORIGIN}${r}/?token=${t}` },
@@ -282,14 +344,14 @@ const FORMS: { name: string; build: (route: string, t: string) => string }[] = [
       {
         name: `URL-encoded ${depth}x in a next=, ${hex}-case hex, token first`,
         build: (r: string, t: string) => {
-          const url = `${ORIGIN}/login?next=${encode(`${ORIGIN}${r}?token=${t}&next=%2Fjoin%2Fabc`, depth)}`;
+          const url = `${ORIGIN}/login?next=${encode(`${ORIGIN}${r}?token=${t}&next=%2Fdashboard`, depth)}`;
           return hex === "lower" ? lowerHex(url) : url;
         },
       },
       {
         name: `URL-encoded ${depth}x in a next=, ${hex}-case hex, token last`,
         build: (r: string, t: string) => {
-          const url = `${ORIGIN}/login?lang=en&next=${encode(`${ORIGIN}${r}?next=%2Fjoin%2Fabc&token=${t}`, depth)}&x=1`;
+          const url = `${ORIGIN}/login?lang=en&next=${encode(`${ORIGIN}${r}?next=%2Fdashboard&token=${t}`, depth)}&x=1`;
           return hex === "lower" ? lowerHex(url) : url;
         },
       },
@@ -372,9 +434,9 @@ describe("an empty token=", () => {
     const live = pool.verification[0]!;
     for (const empty of [
       `${ORIGIN}/magic-link?token=`,
-      `${ORIGIN}/magic-link?token=&next=%2Fjoin%2Fabc`,
-      `${ORIGIN}/verify-email?next=%2Fjoin%2Fabc&token=`,
-      `${ORIGIN}/login?next=${encodeURIComponent(`${ORIGIN}/magic-link?token=&next=%2Fjoin%2Fabc`)}`,
+      `${ORIGIN}/magic-link?token=&next=%2Fdashboard`,
+      `${ORIGIN}/verify-email?next=%2Fdashboard&token=`,
+      `${ORIGIN}/login?next=${encodeURIComponent(`${ORIGIN}/magic-link?token=&next=%2Fdashboard`)}`,
       `${ORIGIN}/login?next=${encode(`${ORIGIN}/magic-link?token=`, 2)}`,
     ]) {
       expect(scrubScoreUrl(empty), empty).toBe(empty);
@@ -390,7 +452,7 @@ describe("an empty token=", () => {
 
 describe("the hooks, on the real emailed links", () => {
   it("PostHog: the $pageview on landing (and its referrer, autocaptured hrefs and person properties) loses the token", async () => {
-    const magic = await drive(MAGIC_LINK, "/api/auth/magic-link", "login_links", { email: "d@example.test", next: "/join/inv0123456789" });
+    const magic = await drive(MAGIC_LINK, "/api/auth/magic-link", "login_links", { email: "d@example.test", next: "/dashboard" });
     const verify = await drive(SIGNUP, "/api/auth/signup", "email_verifications", { email: "e@example.test", password: "correct-horse-1" });
     const event: CaptureResult = {
       uuid: "u1",
@@ -450,14 +512,14 @@ describe("the hooks, on the real emailed links", () => {
 
 describe("Sentry's request.query_string (no `?`) is scrubbed when the event is on a one-time route, and only then", () => {
   const T = () => pool.login[5]!;
-  const onRoute = (route: string): Event => ({ event_id: "e", request: { url: `${ORIGIN}${route}?token=${T()}&next=%2Fjoin%2Fabc`, query_string: `token=${T()}&next=%2Fjoin%2Fabc` } });
+  const onRoute = (route: string): Event => ({ event_id: "e", request: { url: `${ORIGIN}${route}?token=${T()}&next=%2Fdashboard`, query_string: `token=${T()}&next=%2Fdashboard` } });
 
   it("every one-time route: the string form", () => {
     const routesSwept = oneTimeRoutes();
     let checked = 0;
     for (const route of routesSwept) {
       const out = scrubSentryEvent(onRoute(route));
-      expect(out.request?.query_string, route).toBe(`token=${PLACEHOLDER}&next=%2Fjoin%2Fabc`);
+      expect(out.request?.query_string, route).toBe(`token=${PLACEHOLDER}&next=%2Fdashboard`);
       expect(JSON.stringify(out), route).not.toContain(T());
       checked++;
     }
@@ -467,7 +529,7 @@ describe("Sentry's request.query_string (no `?`) is scrubbed when the event is o
 
   it("the token anywhere in the query, repeated, and an empty one beside a live one", () => {
     const ev = (qs: string): Event => ({ event_id: "e", request: { url: `${ORIGIN}/magic-link`, query_string: qs } });
-    expect(scrubSentryEvent(ev(`next=%2Fjoin%2Fabc&token=${T()}`)).request?.query_string).toBe(`next=%2Fjoin%2Fabc&token=${PLACEHOLDER}`);
+    expect(scrubSentryEvent(ev(`next=%2Fdashboard&token=${T()}`)).request?.query_string).toBe(`next=%2Fdashboard&token=${PLACEHOLDER}`);
     expect(scrubSentryEvent(ev(`a=1&token=${T()}&b=2`)).request?.query_string).toBe(`a=1&token=${PLACEHOLDER}&b=2`);
     expect(scrubSentryEvent(ev(`token=${T()}&token=${T()}`)).request?.query_string).toBe(`token=${PLACEHOLDER}&token=${PLACEHOLDER}`);
     expect(scrubSentryEvent(ev(`token=&token=${T()}`)).request?.query_string).toBe(`token=&token=${PLACEHOLDER}`);
@@ -481,10 +543,10 @@ describe("Sentry's request.query_string (no `?`) is scrubbed when the event is o
   });
 
   it("the object and pair-list forms Sentry's type allows are scrubbed too", () => {
-    const asObject = scrubSentryEvent({ event_id: "e", request: { url: `${ORIGIN}/magic-link`, query_string: { token: T(), next: "/join/abc" } } });
-    expect(asObject.request?.query_string).toEqual({ token: PLACEHOLDER, next: "/join/abc" });
-    const asPairs = scrubSentryEvent({ event_id: "e", request: { url: `${ORIGIN}/magic-link`, query_string: [["token", T()], ["next", "/join/abc"]] as [string, string][] } });
-    expect(asPairs.request?.query_string).toEqual([["token", PLACEHOLDER], ["next", "/join/abc"]]);
+    const asObject = scrubSentryEvent({ event_id: "e", request: { url: `${ORIGIN}/magic-link`, query_string: { token: T(), next: "/dashboard" } } });
+    expect(asObject.request?.query_string).toEqual({ token: PLACEHOLDER, next: "/dashboard" });
+    const asPairs = scrubSentryEvent({ event_id: "e", request: { url: `${ORIGIN}/magic-link`, query_string: [["token", T()], ["next", "/dashboard"]] as [string, string][] } });
+    expect(asPairs.request?.query_string).toEqual([["token", PLACEHOLDER], ["next", "/dashboard"]]);
   });
 
   it("the positive pair: the SAME query string on any other route is kept, and so is an event with no request", () => {
