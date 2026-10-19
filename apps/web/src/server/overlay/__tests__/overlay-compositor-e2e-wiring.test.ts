@@ -6,7 +6,7 @@
 // sessions (so the image is still load-bearing). Read from the files themselves — no YAML parser in the repo; the
 // step slicer is pinned to the workflow's own indentation, as composed-smoke-ci-wiring.test.ts's is.
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const WEB = resolve(import.meta.dirname, "../../../..");
@@ -80,5 +80,18 @@ describe("R2005 e2e wiring: the composed overlay spec runs against a server that
 
   it("the spec still starts COMPOSED sessions, so the image is load-bearing", () => {
     expect(SPEC).toMatch(/mode: "composed"/);
+  });
+
+  // A RUNNING composed session reserves two matches of the one recording pool, which is the whole database's
+  // (`storageReservations`). The vitest rig seats them raw; a file that leaves one live refuses every later composed
+  // start on that database `storage_exhausted` — the e2e above on a shared local database, or another suite in CI.
+  it("every test file that seats a relay session through the rig ends them in its teardown", () => {
+    const files = readdirSync(resolve(WEB, "src"), { recursive: true, encoding: "utf8" })
+      .filter((f) => /\.test\.tsx?$/.test(f))
+      .map((f) => resolve(WEB, "src", f));
+    const seaters = files.filter((f) => /\brelaySession\(/.test(readFileSync(f, "utf8")) && /_relay-overlay-rig/.test(readFileSync(f, "utf8")));
+    expect(seaters.length, `files seating rig sessions: ${seaters.map((f) => f.split("/apps/web/")[1]).join(", ")}`).toBeGreaterThan(0);
+    const leaky = seaters.filter((f) => !/afterAll\([\s\S]*?await endRelaySessions\(\)/.test(readFileSync(f, "utf8")));
+    expect(leaky.map((f) => f.split("/apps/web/")[1]), "await endRelaySessions() in afterAll").toEqual([]);
   });
 });

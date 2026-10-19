@@ -64,6 +64,9 @@ export async function seedOverlayRig(visibility: "public" | "private" | "unliste
   };
 }
 
+/** Every session this rig seated, so the file's teardown can end them (`endRelaySessions`). */
+const seated = new Set<string>();
+
 /** A stream session on `fixtureId`, written raw, in `mode` / `state`, with `heartbeat` as its stored last beat. */
 export async function relaySession(
   rig: Pick<OverlayRig, "orgId">,
@@ -85,7 +88,24 @@ export async function relaySession(
       from fixtures f join divisions d on d.id = f.division_id where f.id = ${fixtureId}
     returning id`;
   if (!s) throw new Error(`relaySession: no fixture ${fixtureId}`);
+  seated.add(s.id);
   return s.id;
+}
+
+/** Teardown: end every session this rig seated. A RUNNING composed session reserves two matches of the ONE recording
+ *  pool (`storageReservations`, R2004) and that pool is the whole database's, so a live session left behind refuses
+ *  every later composed start — another suite's, or an e2e's on the same local database — `storage_exhausted`. These
+ *  raw rows have no inputs, so an ENDED one reserves nothing. Returns how many it ended; throws if any is still open. */
+export async function endRelaySessions(): Promise<number> {
+  const ids = [...seated];
+  seated.clear();
+  if (ids.length === 0) return 0;
+  const ended = await sql`update fixture_stream_sessions set state = 'completed', ended_at = coalesce(ended_at, now())
+                          where id in ${sql(ids)} and state not in ('completed', 'failed')`;
+  const [open] = await sql<{ n: number }[]>`
+    select count(*)::int as n from fixture_stream_sessions where id in ${sql(ids)} and state not in ('completed', 'failed')`;
+  if (open!.n !== 0) throw new Error(`endRelaySessions: ${open!.n} of ${ids.length} session(s) still open`);
+  return ended.count;
 }
 
 export const relayToken = (sid: string, scope: RelayScope = "relay-page") =>

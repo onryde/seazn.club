@@ -45,7 +45,7 @@ vi.mock("@/lib/cache", async (importOriginal) => ({
 
 import { sql } from "@/lib/db";
 import { appendEvent } from "@/server/engine-db/append-event";
-import { ensureRelaySecret, relaySession, relayToken, seedOverlayRig, type OverlayRig } from "@/server/overlay/__tests__/_relay-overlay-rig";
+import { endRelaySessions, ensureRelaySecret, relaySession, relayToken, seedOverlayRig, type OverlayRig } from "@/server/overlay/__tests__/_relay-overlay-rig";
 import { GET as OVERLAY_ROUTE } from "@/app/api/v1/public/fixtures/[id]/overlay/route";
 import OverlayPage from "../page";
 
@@ -84,6 +84,7 @@ beforeAll(async () => {
 afterAll(async () => {
   restoreSecret();
   if (!HAS_DB) return;
+  await endRelaySessions();
   const g = globalThis as { _sql?: { end(): Promise<void> } };
   const c = g._sql;
   g._sql = undefined;

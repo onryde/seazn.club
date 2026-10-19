@@ -14,7 +14,7 @@ vi.mock("next/cache", () => ({
   revalidateTag: vi.fn(),
 }));
 
-import { ensureRelaySecret, relaySession, relayToken, seedOverlayRig, type OverlayRig } from "@/server/overlay/__tests__/_relay-overlay-rig";
+import { endRelaySessions, ensureRelaySecret, relaySession, relayToken, seedOverlayRig, type OverlayRig } from "@/server/overlay/__tests__/_relay-overlay-rig";
 import { GET } from "../route";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -45,6 +45,7 @@ beforeAll(async () => {
 afterAll(async () => {
   restoreSecret();
   if (!HAS_DB) return;
+  await endRelaySessions();
   const g = globalThis as { _sql?: { end(): Promise<void> } };
   const c = g._sql;
   g._sql = undefined;
