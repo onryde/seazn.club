@@ -43,6 +43,42 @@ export function livePhoneLost(i: {
   return beatAge >= limitMs && !i.freshReadConnected && videoAge >= limitMs;
 }
 
+/** R2008 (owner ruling 2026-10-19, "apply your rec"): whether the phone has been silent for `lostMinutes` — timed from its
+ *  last beat, else from `floorAt` (W19's own fallback: the first sign the stream was up). With neither there is nothing to
+ *  time it from, so it cannot be judged silent (false, never true). ONE authority for the arithmetic: `composedCameraGone`
+ *  and the use-case's cheap pre-check (stream-sessions.ts `endIfPhoneLost`) both read it. */
+export function phoneSilentFor(phoneBeatAt: Date | null, floorAt: Date | null, now: Date, lostMinutes: number): boolean {
+  const from = phoneBeatAt ?? floorAt;
+  return from !== null && since(from, now) >= lostMinutes * 60_000;
+}
+
+/** R2008: the composed analogue of W19's first two clauses — the camera is GONE. A composed session never records first
+ *  ingest (only the passthrough poll writes it) and records no connected samples, so the evidence is the COMPOSITOR's own:
+ *  the `programmePhase` of its beats, as the beat route logged each change (`programme_phase` events).
+ *  - `liveOnceAt`: the first beat that reported `live`. A stream that never had a camera is not judged here (its end, if
+ *    it is to have one, is a different rule — the never-live finding). It is also the floor the phone's silence falls back to.
+ *  - `reconnectingSince`: when the CURRENT attempt's phase became `reconnecting`, and null while it is anything else —
+ *    `live`, `frozen` (the half-second hold that precedes it), `waiting`, `final`, none reported, or a phase last seen by a
+ *    superseded attempt. A camera that returns at any minute therefore resets the clock: the phase left `reconnecting`.
+ *  Both clocks must reach `lostMinutes`, as W19's must. Only a `live` session is judged: composed `warming` is the Machine
+ *  booting (ask 10's), `ending` is already stopping. */
+export function composedCameraGone(i: {
+  state: SessionState; phoneBeatAt: Date | null; liveOnceAt: Date | null; reconnectingSince: Date | null;
+}, now: Date, lostMinutes: number): boolean {
+  if (i.state !== "live" || i.liveOnceAt === null || i.reconnectingSince === null) return false;
+  return phoneSilentFor(i.phoneBeatAt, i.liveOnceAt, now, lostMinutes) && since(i.reconnectingSince, now) >= lostMinutes * 60_000;
+}
+
+/** R2008: the composed W19 — the camera is gone AND a fresh read of the camera's input (A) says it is not publishing.
+ *  The read is the third clause, as in W19: the compositor's own `input` word can cycle back to `connected` while the
+ *  camera is gone (Cloudflare sends no event when a source stops), so only Cloudflare's reading of A can say the phone is
+ *  still pushing video. */
+export function composedCameraLost(i: {
+  state: SessionState; phoneBeatAt: Date | null; liveOnceAt: Date | null; reconnectingSince: Date | null; freshReadConnected: boolean;
+}, now: Date, lostMinutes: number): boolean {
+  return composedCameraGone(i, now, lostMinutes) && !i.freshReadConnected;
+}
+
 /** The countdown names the end it counts to (controller ruling 2026-10-04): `live` only W19's; `warming` the warming
  *  timeout or ask 10's, whichever lands first. elapsedMs is the silence that end is timed from: since warming entry for
  *  the timeout, since the last beat for ask 10, the shorter of the two silences for W19. */

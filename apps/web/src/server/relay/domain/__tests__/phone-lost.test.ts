@@ -5,9 +5,9 @@ import {
   PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, PHONE_SILENT_SLACK_SECONDS, POLL_FAR_SECONDS, POLL_NEAR_SECONDS,
   POLL_STARTING_SECONDS, RECONNECT_QUIET_SECONDS, WARMING_TIMEOUT_MINUTES,
 } from "../../config";
-import { type CountdownRead, livePhoneLost, lostCountdown, warmingPhoneLost } from "../phone-lost";
+import { type CountdownRead, composedCameraGone, composedCameraLost, livePhoneLost, lostCountdown, phoneSilentFor, warmingPhoneLost } from "../phone-lost";
 import { OPEN_SESSION_MAX_POLL_SECONDS, pollSecondsFor } from "../poll-seconds";
-import { ACTIVE_STATES } from "../session";
+import { ACTIVE_STATES, TERMINAL_STATES } from "../session";
 
 const NOW = new Date("2026-10-01T12:00:00Z");
 const S = 1000, MIN = 60_000;
@@ -155,6 +155,65 @@ describe("livePhoneLost — W19 (§6.8.5), both clocks and a fresh read", () => 
     const short = { ...lost, phoneBeatAt: ago(MIN), lastConnectedSampleAt: ago(MIN) };
     expect(livePhoneLost(short, NOW, PHONE_LOST_LIVE_MINUTES)).toBe(false);
     expect(livePhoneLost(short, NOW, 1)).toBe(true);
+  });
+});
+
+// R2008 (owner ruling 2026-10-19, "apply your rec"): a COMPOSED stream ends after the same PHONE_LOST_LIVE_MINUTES without
+// a camera as a passthrough one does. W19's three clauses, with the composed stream's own evidence for the video clause:
+// the compositor's `reconnecting` programme phase (since when) in place of first ingest and the connected samples.
+describe("phoneSilentFor / composedCameraGone / composedCameraLost — R2008, the composed analogue of W19", () => {
+  const lost = { state: "live" as const, phoneBeatAt: ago(LOST_MS), liveOnceAt: ago(LOST_MS * 3), reconnectingSince: ago(LOST_MS), freshReadConnected: false };
+
+  it("all three conjuncts at exactly PHONE_LOST_LIVE_MINUTES → lost; the phone's silence and the reconnecting run each time the SAME limit", () => {
+    expect(composedCameraLost(lost, NOW, PHONE_LOST_LIVE_MINUTES)).toBe(true);
+    expect(composedCameraGone(lost, NOW, PHONE_LOST_LIVE_MINUTES)).toBe(true);
+  });
+
+  it("each clock 1 s short, alone → not lost: the phone's beat, then the reconnecting run (the two cases differ)", () => {
+    expect(composedCameraLost({ ...lost, phoneBeatAt: ago(LOST_MS - S) }, NOW, PHONE_LOST_LIVE_MINUTES), "a beat 14:59 ago").toBe(false);
+    expect(composedCameraLost({ ...lost, reconnectingSince: ago(LOST_MS - S) }, NOW, PHONE_LOST_LIVE_MINUTES), "reconnecting for 14:59").toBe(false);
+    // ORDERING differential: one clock far past the limit never stands in for the other.
+    expect(composedCameraLost({ ...lost, phoneBeatAt: ago(LOST_MS * 2), reconnectingSince: ago(LOST_MS - S) }, NOW, PHONE_LOST_LIVE_MINUTES)).toBe(false);
+    expect(composedCameraLost({ ...lost, phoneBeatAt: ago(LOST_MS - S), reconnectingSince: ago(LOST_MS * 2) }, NOW, PHONE_LOST_LIVE_MINUTES)).toBe(false);
+    expect(composedCameraLost({ ...lost, phoneBeatAt: ago(LOST_MS * 2), reconnectingSince: ago(LOST_MS * 2) }, NOW, PHONE_LOST_LIVE_MINUTES)).toBe(true);
+  });
+
+  it("a fresh read that says connected → not lost (the camera still publishes to Cloudflare); the camera is still GONE by the other two", () => {
+    const connected = { ...lost, freshReadConnected: true };
+    expect(composedCameraLost(connected, NOW, PHONE_LOST_LIVE_MINUTES)).toBe(false);
+    expect(composedCameraGone(connected, NOW, PHONE_LOST_LIVE_MINUTES), "the read is not part of `gone`").toBe(true);
+  });
+
+  it("the empty cases first: never live (liveOnceAt null) and not reconnecting (reconnectingSince null) are never lost, however old the rest", () => {
+    expect(composedCameraLost({ ...lost, liveOnceAt: null }, NOW, PHONE_LOST_LIVE_MINUTES), "never live").toBe(false);
+    expect(composedCameraLost({ ...lost, liveOnceAt: null, phoneBeatAt: null }, NOW, PHONE_LOST_LIVE_MINUTES), "never live, no beat").toBe(false);
+    expect(composedCameraLost({ ...lost, reconnectingSince: null }, NOW, PHONE_LOST_LIVE_MINUTES), "not reconnecting").toBe(false);
+  });
+
+  it("phoneBeatAt null falls back to the first live instant, as W19 falls back to first ingest: an old one is lost, one 1 s short is not", () => {
+    expect(composedCameraLost({ ...lost, phoneBeatAt: null, liveOnceAt: ago(LOST_MS) }, NOW, PHONE_LOST_LIVE_MINUTES)).toBe(true);
+    expect(composedCameraLost({ ...lost, phoneBeatAt: null, liveOnceAt: ago(LOST_MS - S) }, NOW, PHONE_LOST_LIVE_MINUTES)).toBe(false);
+  });
+
+  it("only a LIVE session is judged: every other state, active or terminal, is never lost (and the sweep checked them all)", () => {
+    const others = [...ACTIVE_STATES, ...TERMINAL_STATES].filter((s) => s !== "live");
+    expect(others.length, "anti-vacuity: the sweep named states").toBeGreaterThan(0);
+    for (const state of others) expect(composedCameraLost({ ...lost, state }, NOW, PHONE_LOST_LIVE_MINUTES), state).toBe(false);
+  });
+
+  it("lostMinutes is the parameter, not the constant: at 1 minute, a 1-minute silence and run is lost", () => {
+    const short = { ...lost, phoneBeatAt: ago(MIN), reconnectingSince: ago(MIN) };
+    expect(composedCameraLost(short, NOW, PHONE_LOST_LIVE_MINUTES)).toBe(false);
+    expect(composedCameraLost(short, NOW, 1)).toBe(true);
+  });
+
+  it("phoneSilentFor: a beat, else the floor; with neither the silence cannot be judged (false, never true)", () => {
+    expect(phoneSilentFor(ago(LOST_MS), null, NOW, PHONE_LOST_LIVE_MINUTES), "a beat at the limit").toBe(true);
+    expect(phoneSilentFor(ago(LOST_MS - 1), null, NOW, PHONE_LOST_LIVE_MINUTES), "a beat 1 ms short").toBe(false);
+    expect(phoneSilentFor(null, ago(LOST_MS), NOW, PHONE_LOST_LIVE_MINUTES), "no beat, the floor at the limit").toBe(true);
+    expect(phoneSilentFor(null, ago(LOST_MS - 1), NOW, PHONE_LOST_LIVE_MINUTES), "no beat, the floor 1 ms short").toBe(false);
+    expect(phoneSilentFor(null, null, NOW, PHONE_LOST_LIVE_MINUTES), "no beat and no floor").toBe(false);
+    expect(phoneSilentFor(ago(LOST_MS - 1), ago(LOST_MS * 9), NOW, PHONE_LOST_LIVE_MINUTES), "a beat wins over an older floor").toBe(false);
   });
 });
 
