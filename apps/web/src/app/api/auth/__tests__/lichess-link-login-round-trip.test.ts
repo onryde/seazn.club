@@ -486,14 +486,17 @@ describe.skipIf(!HAS_DB)("a signed-out player links Lichess from the match room 
     expect(mail.sent.map((m) => m.to), `the magic link was mailed (the form showed: ${shown.slice(0, 120)})`).toEqual([
       email,
     ]);
-    await userByEmail(email);
+    const userId = await userByEmail(email);
 
     const emailed = new URL(mail.sent[0]!.link);
     expect(emailed.searchParams.get("next"), "the emailed link carries the start").toBe(link.startHref);
-    // The page a person opens from that mail is a URL telemetry records: the token is two encodings deep in it.
-    expect(mail.sent[0]!.link, "premise: the token is in the emailed link").toContain(link.token);
-    expect(scrubScoreUrl(mail.sent[0]!.link), "the /magic-link page URL").toBe(
-      mail.sent[0]!.link.split(link.token).join("[token]"),
+    // The page a person opens from that mail is a URL telemetry records: the room token is two encodings deep in it, and
+    // the link's own one-time sign-in token (the row the route inserted, read back) is its first parameter.
+    const [{ token: signInToken }] = await sql<{ token: string }[]>`select token from login_links where user_id = ${userId}`;
+    expect(mail.sent[0]!.link, "premise: the room token is in the emailed link").toContain(link.token);
+    expect(mail.sent[0]!.link, "premise: the sign-in token is in the emailed link").toContain(`?token=${signInToken}&`);
+    expect(scrubScoreUrl(mail.sent[0]!.link), "the /magic-link page URL: both tokens go").toBe(
+      mail.sent[0]!.link.split(link.token).join("[token]").split(signInToken).join("[token]"),
     );
 
     const opened = await openMagicLink(emailed.href);
@@ -523,13 +526,15 @@ describe.skipIf(!HAS_DB)("a signed-out player links Lichess from the match room 
 
     const r = await post(SIGNUP, "/api/auth/signup", { email, password: PASSWORD, next: loginNext });
     expect(r.status, JSON.stringify(r.body)).toBe(200);
-    await userByEmail(email);
+    const userId = await userByEmail(email);
     expect(mail.sent.map((m) => m.to)).toEqual([email]);
     const emailed = new URL(mail.sent[0]!.link);
     expect(emailed.searchParams.get("next"), "the verification link carries the start").toBe(link.startHref);
-    expect(mail.sent[0]!.link, "premise: the token is in the emailed link").toContain(link.token);
-    expect(scrubScoreUrl(mail.sent[0]!.link), "the /verify-email page URL").toBe(
-      mail.sent[0]!.link.split(link.token).join("[token]"),
+    const [{ token: verifyToken }] = await sql<{ token: string }[]>`select token from email_verifications where user_id = ${userId}`;
+    expect(mail.sent[0]!.link, "premise: the room token is in the emailed link").toContain(link.token);
+    expect(mail.sent[0]!.link, "premise: the verification token is in the emailed link").toContain(`?token=${verifyToken}&`);
+    expect(scrubScoreUrl(mail.sent[0]!.link), "the /verify-email page URL: both tokens go").toBe(
+      mail.sent[0]!.link.split(link.token).join("[token]").split(verifyToken).join("[token]"),
     );
 
     const opened = await openVerifyLink(emailed.href, router.push);

@@ -30,6 +30,22 @@
 // /verify-email?token=…&next=), so the token sits in a URL at three encoding depths: `?t=`, `%3Ft%3D` and `%253Ft%253D`.
 // Every `t=` QUERY PARAMETER whose value is shaped like a JWT becomes `[token]`, plain or URL-encoded at any depth. A `t=`
 // that is not a JWT (`?t=90s`, `?t=1.2.3`) is left alone: the discriminator is the value's shape, three base64url segments.
+//
+// A one-time sign-in token rides a URL the same way, and reaches telemetry BEFORE it is spent. The emailed link is
+// `/magic-link?token=<one-time>&next=…` (login-link.ts, 15 minutes) or `/verify-email?token=<one-time>&next=…`
+// (verification.ts, 24 hours); the page lands, PostHog's `$pageview` fires on landing, and only then does the island POST the
+// token to be consumed. Until then the URL holds a working credential, and so do Sentry's request URL, its bare
+// `request.query_string`, its breadcrumbs and a replay's URL list. A `token=` QUERY PARAMETER value on one of the routes in
+// `ONE_TIME_TOKEN_ROUTES` becomes `token=[token]`, plain or URL-encoded at any depth, either hex case (inside a login's
+// `next=`, a referrer). The scope is the ROUTE, not the parameter name: a `token=` on any other path stays (the registration
+// status page's access token is reusable and is not one of these). The routes are the ones whose links the app builds with
+// a single-use token: also `/reset-password`, the funnel's `/start/claim`, a staff `/admin/impersonate` hand-off and
+// `/api/auth/change-email/confirm`. Sentry's `request.query_string` has no path to scope by, so it is scrubbed when the
+// event's URL or transaction names one of those routes, the way a capture route's request is recognised (`isCaptureEvent`).
+//
+// The profile-claim link `/claim/<secret>` (routes.claim, `pc_` + 43 base64url, 14 days; person-claims.ts) carries its
+// secret in the PATH, and so does the accept call the claim page's button makes, `/api/claims/<secret>/accept`. Each
+// secret becomes `[token]`, plain or URL-encoded at any depth, by the `/capture/codes/` rules.
 import type * as Sentry from "@sentry/nextjs";
 import type { CaptureResult } from "posthog-js";
 import { OVERLAY_KEY_PARAM } from "./realtime-purpose";
@@ -86,15 +102,83 @@ const ROOM_TOKEN_QUERY = new RegExp(`((?:^|[?&])t=)${JWT_SHAPE}`, "g");
 /** The same parameter URL-ENCODED inside another URL (the room path in a `next=`): `%3Ft%3D` / `%26t%3D`, at any
  *  encoding depth, either hex case. The token ends at its first non-JWT character, so its encoded delimiter stays. */
 const ENCODED_ROOM_TOKEN = new RegExp(`(%(?:25)*(?:3[Ff]|26)t%(?:25)*3[Dd])${JWT_SHAPE}`, "g");
+/** A profile-claim secret in the claim page's path, `/claim/<secret>`: everything up to the next `/`, `?`, `#`, quote, angle bracket or space. */
+const CLAIM_PATH = /(\/claim\/)[^/?#\s"'<>]+/g;
+/** The same path URL-ENCODED inside another URL (a sign-in `next=/claim/<secret>`), at any encoding depth, either hex case. */
+const ENCODED_CLAIM_PATH = /(%(?:25)*2[Ff]claim%(?:25)*2[Ff])[^%&/?#\s"'<>]+/g;
+/** The same secret in the claim API's path, `/api/claims/<secret>` and `/api/claims/<secret>/accept`. `/claims/` is its own segment: `/claim/` does not match it. */
+const CLAIM_API_PATH = /(\/api\/claims\/)[^/?#\s"'<>]+/g;
+/** The same path URL-ENCODED inside another URL, at any encoding depth, either hex case. */
+const ENCODED_CLAIM_API_PATH = /(%(?:25)*2[Ff]api%(?:25)*2[Ff]claims%(?:25)*2[Ff])[^%&/?#\s"'<>]+/g;
+
+/**
+ * The routes whose emailed link carries a SINGLE-USE token in its `token` query parameter to a page that spends it: the
+ * sign-in link, the email-verification link, the password reset, the funnel claim (it signs the visitor in), a staff
+ * impersonation hand-off and an email-change confirmation. A `token=` is scrubbed only when it is a parameter of one of
+ * these. Not here, on purpose: the registration status page's `?token=` is a reusable access token for a cart.
+ */
+const ONE_TIME_TOKEN_ROUTES = [
+  "/magic-link",
+  "/verify-email",
+  "/reset-password",
+  "/start/claim",
+  "/admin/impersonate",
+  "/api/auth/change-email/confirm",
+] as const;
+/** The routes as one regex alternation (`magic-link|verify-email|start\/claim|…`), the path separator spelled as given. */
+const routeAlternation = (slash: string) => ONE_TIME_TOKEN_ROUTES.map((r) => r.slice(1).split("/").join(slash)).join("|");
+/** `/magic-link`, `/start/claim`, …: plain, and with the separators URL-encoded at any depth, either hex case. */
+const ONE_TIME_ROUTE = `\\/(?:${routeAlternation("\\/")})`;
+const ENCODED_ONE_TIME_ROUTE = `%(?:25)*2[Ff](?:${routeAlternation("%(?:25)*2[Ff]")})`;
+/**
+ * A one-time route and its query, up to the end of the URL (the next `#`, quote, angle bracket or space): group 1 is
+ * `<route>?` (a trailing slash allowed), group 2 the query. A route that only STARTS with one of the names
+ * (`/magic-linkage?`) does not match: the `?` must follow it.
+ */
+const ONE_TIME_ROUTE_QUERY = new RegExp(`(${ONE_TIME_ROUTE}\\/?\\?)([^#\\s"'<>]*)`, "g");
+/**
+ * The same URL-ENCODED inside another URL, at any encoding depth. Its query ends at the first plain `&` (the carrying
+ * URL's own next parameter); the nested URL's own parameters are separated by an encoded `&`, so they stay inside.
+ */
+const ENCODED_ONE_TIME_ROUTE_QUERY = new RegExp(`(${ENCODED_ONE_TIME_ROUTE}(?:%(?:25)*2[Ff])?%(?:25)*3[Ff])([^&#\\s"'<>]*)`, "g");
+/** `token=` as a parameter of a bare query string: first, or after `&`; never inside another name (`mytoken=`). An empty value has nothing to leak and is kept. */
+const TOKEN_PARAM = /(^|&)(token=)[^&]+/g;
+/** The same parameter in an ENCODED query: first, or after an encoded `&`; the value ends at its encoded delimiter. */
+const ENCODED_TOKEN_PARAM = /(^|%(?:25)*26)(token%(?:25)*3[Dd])[^%]+/g;
 /** Cheap pre-check: nothing any of the patterns could match. */
 const MAYBE_TOKEN = new RegExp(
-  `\\/score\\/|%(?:25)*2[Ff]score%|dl_|${OVERLAY_KEY_PARAM}=|${OVERLAY_KEY_PARAM}%|${RELAY_PAGE_TOKEN_PARAM}=|${RELAY_PAGE_TOKEN_PARAM}%|\\/capture\\/codes\\/|capture%(?:25)*2[Ff]codes%|(?:^|[?&])t=|%(?:25)*(?:3[Ff]|26)t%`,
+  [
+    "\\/score\\/",
+    "%(?:25)*2[Ff]score%",
+    "dl_",
+    `${OVERLAY_KEY_PARAM}=`,
+    `${OVERLAY_KEY_PARAM}%`,
+    `${RELAY_PAGE_TOKEN_PARAM}=`,
+    `${RELAY_PAGE_TOKEN_PARAM}%`,
+    "\\/capture\\/codes\\/",
+    "capture%(?:25)*2[Ff]codes%",
+    "(?:^|[?&])t=",
+    "%(?:25)*(?:3[Ff]|26)t%",
+    "\\/claim\\/",
+    "%(?:25)*2[Ff]claim%",
+    "\\/api\\/claims\\/",
+    "%(?:25)*2[Ff]api%(?:25)*2[Ff]claims%",
+    ONE_TIME_ROUTE,
+    ENCODED_ONE_TIME_ROUTE,
+  ].join("|"),
 );
+
+/** A bare query string with every `token=` value swapped for the placeholder (no `?`: Sentry's `request.query_string`). */
+export function scrubTokenQuery(query: string): string {
+  return query.replace(TOKEN_PARAM, "$1$2[token]");
+}
 
 /** One string: `/score/<token>` (plain or encoded) becomes `/score/[token]`, a bare `dl_…` secret becomes `dl_[token]`,
  *  an overlay `key=` query value (plain or encoded) becomes `[key]`, a relay page token's `st=` value (plain or
- *  encoded) becomes `[st]`, a capture code in `/capture/codes/<code>` (plain or encoded) becomes `[code]`, and a
- *  match-room token in a `t=` query value (plain or encoded) becomes `[token]`. */
+ *  encoded) becomes `[st]`, a capture code in `/capture/codes/<code>` (plain or encoded) becomes `[code]`, a
+ *  match-room token in a `t=` query value (plain or encoded) becomes `[token]`, a profile-claim secret in
+ *  `/claim/<secret>` or `/api/claims/<secret>` (plain or encoded) becomes `[token]`, and a one-time sign-in token in
+ *  the `token=` query value of a one-time route (plain or encoded) becomes `[token]`. */
 export function scrubScoreUrl(value: string): string {
   if (!MAYBE_TOKEN.test(value)) return value;
   return value
@@ -108,7 +192,13 @@ export function scrubScoreUrl(value: string): string {
     .replace(CAPTURE_PATH, "$1[code]")
     .replace(ENCODED_CAPTURE_PATH, "$1[code]")
     .replace(ROOM_TOKEN_QUERY, "$1[token]")
-    .replace(ENCODED_ROOM_TOKEN, "$1[token]");
+    .replace(ENCODED_ROOM_TOKEN, "$1[token]")
+    .replace(CLAIM_PATH, "$1[token]")
+    .replace(ENCODED_CLAIM_PATH, "$1[token]")
+    .replace(CLAIM_API_PATH, "$1[token]")
+    .replace(ENCODED_CLAIM_API_PATH, "$1[token]")
+    .replace(ONE_TIME_ROUTE_QUERY, (_m, head: string, query: string) => head + scrubTokenQuery(query))
+    .replace(ENCODED_ONE_TIME_ROUTE_QUERY, (_m, head: string, query: string) => head + query.replace(ENCODED_TOKEN_PARAM, "$1$2[token]"));
 }
 
 /**
@@ -196,15 +286,44 @@ function dropCaptureSecrets<E extends Event>(event: E): E {
   return { ...event, request };
 }
 
+/** A one-time-token route's event: its request URL or its transaction names the route (`/magic-link`, `GET /verify-email`). */
+const ONE_TIME_ROUTE_EVENT = new RegExp(`${ONE_TIME_ROUTE}\\/?(?:[?#]|$)`);
+function isOneTimeTokenEvent(event: Event): boolean {
+  return [event.request?.url, event.transaction].some((v) => typeof v === "string" && ONE_TIME_ROUTE_EVENT.test(v));
+}
+
+type QueryString = NonNullable<Event["request"]>["query_string"];
+/** Sentry types `query_string` as a string, an object or a list of pairs: the `token` entry of each loses its value. */
+function scrubQueryString(query: QueryString): QueryString {
+  if (typeof query === "string") return scrubTokenQuery(query);
+  if (Array.isArray(query)) {
+    return query.map((pair) => (Array.isArray(pair) && pair[0] === "token" && pair[1] ? ([pair[0], "[token]"] as [string, string]) : pair));
+  }
+  if (query && typeof query === "object") {
+    return Object.fromEntries(Object.entries(query).map(([k, v]) => [k, k === "token" && v ? "[token]" : v]));
+  }
+  return query;
+}
+
+/** A one-time route's request loses the token in its bare query string, which has no path to scrub it by. A copy: the input is never mutated. */
+function dropOneTimeToken<E extends Event>(event: E): E {
+  const query = event.request?.query_string;
+  if (!event.request || !query) return event;
+  const scrubbed = scrubQueryString(query);
+  return scrubbed === query ? event : { ...event, request: { ...event.request, query_string: scrubbed } };
+}
+
 /**
  * Sentry `beforeSend` / `beforeSendTransaction`: scrubs the request URL and
  * headers (the Bearer secret), the transaction name, breadcrumbs, tags, stack
  * frames and span data. A capture route's event also loses its Bearer and its
- * request body (A18).
+ * request body (A18); a one-time-token route's event also loses the token in
+ * its bare `request.query_string`.
  */
 export function scrubSentryEvent<E extends Event>(event: E): E {
   const scrubbed = scrubScoreTokens(event);
-  return isCaptureEvent(event) ? dropCaptureSecrets(scrubbed) : scrubbed;
+  const safe = isCaptureEvent(event) ? dropCaptureSecrets(scrubbed) : scrubbed;
+  return isOneTimeTokenEvent(event) ? dropOneTimeToken(safe) : safe;
 }
 
 /**

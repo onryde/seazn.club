@@ -15,7 +15,16 @@ import { randomUUID } from "node:crypto";
 import { routes } from "@/lib/routes";
 import { lichessLinkStartHref } from "@/lib/lichess-link";
 import { mintMatchRoomToken } from "@/server/usecases/match-room-token";
+import { mintClaimSecret } from "@/server/usecases/person-claims";
+import { createLoginLink } from "@/lib/login-link";
+import { createVerificationToken } from "@/lib/verification";
+import { USER_ID } from "./_fake-sql";
 
+// Only the Postgres round trip is a stand-in: the real minters (`createLoginLink`, `createVerificationToken`) run on it.
+vi.mock("@/lib/db", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/db")>()),
+  sql: (await import("./_fake-sql")).fakeSql,
+}));
 vi.mock("posthog-js", () => ({ default: { init: vi.fn(), opt_in_capturing: vi.fn() } }));
 vi.mock("@sentry/nextjs", () => ({
   init: vi.fn(),
@@ -295,5 +304,156 @@ describe("the match-room token (review I1): every config's real hooks scrub it",
     const replayOptions = vi.mocked(Sentry.replayIntegration).mock.calls[0]![0] as Options;
     const frame = { type: 5, timestamp: 1, data: { tag: "performanceSpan", payload: { description: start } } };
     expectScrubbedOf(run(replayOptions.beforeAddRecordingEvent, frame), token);
+  });
+});
+
+// A one-time sign-in token rides `/magic-link?token=…` and `/verify-email?token=…` and reaches telemetry BEFORE it is
+// spent (the `$pageview` fires on landing, the consume POST comes after). The rules are proven in scrub-login-token.test.ts;
+// this half proves each REAL config hands them to its SDK, so a scrub nothing passes to an SDK (an inert seam) would be
+// red here. The tokens come from the real minters, over a stand-in for the Postgres round trip alone.
+describe("the one-time sign-in token: every config's real hooks scrub it", () => {
+  async function signInUrls() {
+    const login = await createLoginLink(USER_ID);
+    const verify = await createVerificationToken(USER_ID);
+    const next = encodeURIComponent("/join/inv0123456789");
+    const magicUrl = `https://seazn.club/magic-link?token=${login}&next=${next}`;
+    const verifyUrl = `https://seazn.club/verify-email?token=${verify}&next=${next}`;
+    expect(magicUrl, "premise: the sign-in link carries the token").toContain(login);
+    expect(verifyUrl, "premise: the verification link carries the token").toContain(verify);
+    return { login, verify, magicUrl, verifyUrl };
+  }
+  const expectGone = (value: unknown, ...secrets: string[]) => {
+    const text = JSON.stringify(value);
+    for (const secret of secrets) expect(text).not.toContain(secret);
+    expect(text).toContain("token=[token]");
+  };
+
+  it("PostHog: the pageview on landing, its referrer and the person's first-seen URL", async () => {
+    vi.stubEnv("NEXT_PUBLIC_POSTHOG_KEY", "phc_test");
+    vi.stubGlobal("document", { cookie: "" });
+    await import("../../instrumentation-client");
+    const posthog = (await import("posthog-js")).default;
+    const options = vi.mocked(posthog.init).mock.calls[0]![1] as Options;
+    const { login, verify, magicUrl, verifyUrl } = await signInUrls();
+    const pageview = {
+      uuid: "u1",
+      event: "$pageview",
+      properties: { $current_url: magicUrl, $pathname: "/magic-link", $referrer: verifyUrl, $elements: [{ attr__href: verifyUrl }] },
+      $set_once: { $initial_current_url: magicUrl },
+    };
+    let out: unknown = pageview;
+    for (const fn of [options.before_send].flat()) out = run(fn, out);
+    expectGone(out, login, verify);
+  });
+
+  it.each([
+    ["server", "../../../sentry.server.config"],
+    ["edge", "../../../sentry.edge.config"],
+  ])("Sentry %s: an error's request URL and bare query string, a transaction, a span and a log line", async (_name, config) => {
+    const options = await sentryInitOptions(config);
+    const { login, verify, magicUrl, verifyUrl } = await signInUrls();
+    const out = run(
+      options.beforeSend,
+      { event_id: "e1", request: { url: magicUrl, query_string: `token=${login}&next=%2Fjoin%2Finv0123456789`, headers: { Referer: verifyUrl } } },
+      {},
+    ) as { request: { query_string: string } };
+    expectGone(out, login, verify);
+    expect(out.request.query_string, "Sentry's query string has no `?`, and is still scrubbed").toBe("token=[token]&next=%2Fjoin%2Finv0123456789");
+    expectGone(
+      run(
+        options.beforeSendTransaction,
+        { type: "transaction", transaction: "GET /verify-email", request: { query_string: `token=${verify}` }, spans: [{ span_id: "s1", trace_id: "t1", start_timestamp: 1, data: { "url.full": verifyUrl } }] },
+        {},
+      ),
+      verify,
+    );
+    expectGone(run(options.beforeSendLog, { level: "error", message: `Failed to fetch RSC payload for ${magicUrl}`, attributes: {} }), login);
+    // The positive pair: the same query string on a route that is not a one-time route is kept.
+    const other = run(options.beforeSend, { event_id: "e2", request: { url: "https://seazn.club/dashboard", query_string: `token=${login}` } }, {}) as {
+      request: { query_string: string };
+    };
+    expect(other.request.query_string).toBe(`token=${login}`);
+  });
+
+  it("Sentry client: an error, a navigation breadcrumb, a replay's URL list and a recording frame", async () => {
+    const options = await sentryInitOptions("../../../sentry.client.config");
+    const { login, verify, magicUrl, verifyUrl } = await signInUrls();
+    expectGone(run(options.beforeSend, { event_id: "e1", request: { url: magicUrl, query_string: `token=${login}` } }, {}), login);
+    expectGone(run(options.beforeBreadcrumb, { category: "navigation", data: { from: verifyUrl, to: magicUrl } }, {}), login, verify);
+    const integrations = options.integrations as { name: string; processEvent?: unknown }[];
+    const scrubber = integrations.find((i) => typeof i.processEvent === "function")!;
+    expectGone(run(scrubber.processEvent, { type: "replay_event", urls: [magicUrl, verifyUrl] }, {}, {}), login, verify);
+    const Sentry = await import("@sentry/nextjs");
+    const replayOptions = vi.mocked(Sentry.replayIntegration).mock.calls[0]![0] as Options;
+    const frame = { type: 5, timestamp: 1, data: { tag: "performanceSpan", payload: { description: magicUrl } } };
+    expectGone(run(replayOptions.beforeAddRecordingEvent, frame), login);
+  });
+});
+
+// The profile-claim link `/claim/<pc_secret>` (routes.claim, 14 days, shown to the organiser as a link and a QR) and the
+// accept call its page makes, `/api/claims/<secret>/accept`, carry the secret in the PATH. Proven in
+// scrub-claim-path.test.ts; this half proves each REAL config hands the rule to its SDK. The secret is the real
+// `mintClaimSecret()`, the page URL the real `routes.claim()`, the sign-in `next=` the one AuthForm sends.
+describe("the profile-claim secret: every config's real hooks scrub it", () => {
+  function claimUrls() {
+    const secret = mintClaimSecret();
+    const urls = {
+      page: `https://seazn.club${routes.claim(secret)}`,
+      accept: `https://seazn.club/api/claims/${secret}/accept`,
+      login: `https://seazn.club/login?next=${encodeURIComponent(routes.claim(secret))}`,
+    };
+    for (const [name, url] of Object.entries(urls)) expect(url, `premise: ${name} carries the secret`).toContain(secret);
+    return { secret, ...urls };
+  }
+  const expectGone = (value: unknown, secret: string) => {
+    const text = JSON.stringify(value);
+    expect(text).not.toContain(secret);
+    expect(text).toContain("[token]");
+  };
+
+  it("PostHog: the pageview of the claim page, its referrer (a sign-in next=) and an autocaptured link", async () => {
+    vi.stubEnv("NEXT_PUBLIC_POSTHOG_KEY", "phc_test");
+    vi.stubGlobal("document", { cookie: "" });
+    await import("../../instrumentation-client");
+    const posthog = (await import("posthog-js")).default;
+    const options = vi.mocked(posthog.init).mock.calls[0]![1] as Options;
+    const { secret, page, login } = claimUrls();
+    const pageview = {
+      uuid: "u1",
+      event: "$pageview",
+      properties: { $current_url: page, $pathname: routes.claim(secret), $referrer: login, $elements: [{ attr__href: page }] },
+      $set_once: { $initial_current_url: page },
+    };
+    let out: unknown = pageview;
+    for (const fn of [options.before_send].flat()) out = run(fn, out);
+    expectGone(out, secret);
+  });
+
+  it.each([
+    ["server", "../../../sentry.server.config"],
+    ["edge", "../../../sentry.edge.config"],
+  ])("Sentry %s: an error's request URL, a transaction's span, a log line and the accept call's transaction", async (_name, config) => {
+    const options = await sentryInitOptions(config);
+    const { secret, page, accept, login } = claimUrls();
+    expectGone(run(options.beforeSend, { event_id: "e1", request: { url: page, headers: { Referer: login } } }, {}), secret);
+    expectGone(
+      run(options.beforeSendTransaction, { type: "transaction", transaction: `POST /api/claims/${secret}/accept`, spans: [{ span_id: "s1", trace_id: "t1", start_timestamp: 1, data: { "url.full": accept } }] }, {}),
+      secret,
+    );
+    expectGone(run(options.beforeSendLog, { level: "error", message: `Failed to fetch RSC payload for ${page}`, attributes: {} }), secret);
+  });
+
+  it("Sentry client: an error, a navigation breadcrumb, a replay's URL list and a recording frame", async () => {
+    const options = await sentryInitOptions("../../../sentry.client.config");
+    const { secret, page, accept, login } = claimUrls();
+    expectGone(run(options.beforeSend, { event_id: "e1", request: { url: page } }, {}), secret);
+    expectGone(run(options.beforeBreadcrumb, { category: "navigation", data: { from: login, to: page } }, {}), secret);
+    const integrations = options.integrations as { name: string; processEvent?: unknown }[];
+    const scrubber = integrations.find((i) => typeof i.processEvent === "function")!;
+    expectGone(run(scrubber.processEvent, { type: "replay_event", urls: [page, accept, login] }, {}, {}), secret);
+    const Sentry = await import("@sentry/nextjs");
+    const replayOptions = vi.mocked(Sentry.replayIntegration).mock.calls[0]![0] as Options;
+    const frame = { type: 5, timestamp: 1, data: { tag: "performanceSpan", payload: { description: accept } } };
+    expectGone(run(replayOptions.beforeAddRecordingEvent, frame), secret);
   });
 });
