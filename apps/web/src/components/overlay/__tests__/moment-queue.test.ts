@@ -410,7 +410,7 @@ describe("A3 — moments during scenes (the stage's rule: momentsFireIn ? enqueu
   // moment already QUEUED must not play under it. The stage dispatches `flush` on the edge into a scene whose
   // `momentsFire` is false; the slab already on air keeps its own run (the test below).
   it("flush drops every QUEUED moment, each stays seen; the slab on air is untouched; an empty queue is no change", () => {
-    let s = deliver(INITIAL, "live", [m(1), m(2), m(3)], 0);
+    const s = deliver(INITIAL, "live", [m(1), m(2), m(3)], 0);
     expect(s.current, "premise: one on air").toEqual(m(1));
     expect(s.queue, "premise: two queued behind it").toEqual([m(2), m(3)]);
     const flushed = reduce(s, { type: "flush" });

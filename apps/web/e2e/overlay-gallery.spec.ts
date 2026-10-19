@@ -596,8 +596,9 @@ test.describe("the staff overlay gallery (R2007)", () => {
     expect(total.cases, "anti-vacuity: every Result card of every load").toBe(total.loads * [...total.perLoad][0]!);
     expect(total.cases).toBeGreaterThan(1000);
     expect(total.forced, "anti-vacuity: the forced sentence reached the cards").toBeGreaterThan(0);
-    for (const r of ["full", "short", "compact"]) expect(total.rungs[r] ?? 0, `anti-vacuity: rung ${r} reached`).toBeGreaterThan(0);
+    // The verdict before the rung counts, so a ladder that stops early reds as the content it hides.
     expect(total.hidden.slice(0, 25), `Result cards hiding content or off the ladder (${total.hidden.length})`).toEqual([]);
+    for (const r of ["full", "short", "compact"]) expect(total.rungs[r] ?? 0, `anti-vacuity: rung ${r} reached`).toBeGreaterThan(0);
 
     // The last rung: a long explicit short name (`?code=`, the model's own `short`) runs even the compact short sentence
     // past one line — the highlights give way, and the card still hides nothing.
