@@ -274,6 +274,7 @@ the round's open row, below), and a player can read when they are due.
 | sweep | `sweep.ts` `playableWindow`, read by `noShow` (and its `not_started` hold), `mintRetry`, `meetingIsDone` (teardown) and `expectedEnd` (the reconcile base) | the no-show, the stranded-board and throttled-create arms, the "nobody played" teardown, the base of an expected end |
 | invites | `invite.ts` `sendFixtureInvite` (the deadline in the mail) and the resend refusal; `open-round.ts` `openRound`'s "reinvited" `window_closed` skip | per board: a board whose batch window has closed is skipped, one whose has not is still invited |
 | organiser | `open-round-view.ts` `closed`, `deadlineAt`, `windowMinutes` | the round is closed when its LAST batch has closed; the view lists each batch (below) |
+| QR self check-in | `me.ts` `checkInToFixture`, via `boardOpenFor` and `windowFor` | the window handed to the check-in stamp for a fixture whose round was opened: a counted check-in is never re-stamped out of its board's window (test 28); a fixture whose round was never opened keeps the plain re-stamp |
 
   Not moved: `guard.ts`'s `scheduled_at_basis` (schedule-based, a different question; do not
   re-anchor).
