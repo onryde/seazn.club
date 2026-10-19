@@ -18,7 +18,16 @@ import es from "@/dictionaries/es/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
 import nl from "@/dictionaries/nl/ui.json";
 import type { ArbiterBoard, ArbiterFlag, ArbiterRound, ArbiterSideMeeting, NoResultOffer } from "@/lib/arbiter-view";
-import { initialArbiterDecision, type ArbiterDecisionState } from "../arbiter-decision";
+import { arbiterDecision, initialArbiterDecision, type ArbiterDecisionState } from "../arbiter-decision";
+import { initialRoundExtend, roundExtendUi } from "../checkin-extend-ui";
+import {
+  CHECKIN_EXTEND_MAX,
+  CHECKIN_EXTEND_STEP_MINUTES,
+  EXTEND_REFUSALS,
+  EXTEND_REFUSAL_CODES,
+  type CheckinExtendRoundResult,
+  type CheckinExtendState,
+} from "@/lib/checkin-extend";
 import {
   ArbiterPanel,
   ArbiterScreen,
@@ -35,6 +44,7 @@ import {
   type ArbiterVideoView,
 } from "../arbiter-panel";
 import { ApiV1Error } from "@/lib/client-v1";
+import { noticeLapsed } from "../arbiter-flag-cards";
 // The container's first render (effects never run here): only the router's
 // existence is needed.
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => undefined }) }));
@@ -86,6 +96,7 @@ function board(over: Partial<ArbiterBoard> & Pick<ArbiterBoard, "fixtureId" | "b
     whiteSide: "home",
     tiebreakOwed: false,
     noResultOffer: { kind: "void" },
+    checkin: null,
     flags: [],
     ...over,
   };
@@ -99,6 +110,7 @@ const ROUND: ArbiterRound = {
   timeControl: "10+5",
   ownBoards: 0,
   current: true,
+  extendableBoards: 0,
   boards: [
     board({ fixtureId: "f1", boardNo: 1, white: { name: "Ada Okonkwo", personId: "a" }, black: { name: "Tomasz Wieczorek", personId: "b" }, state: { kind: "live", moveNo: 23 } }),
     board({
@@ -133,11 +145,12 @@ function props(over: Partial<ArbiterScreenProps> = {}): ArbiterScreenProps {
     round: ROUND,
     requested: null,
     decision: initialArbiterDecision("f3"),
+    roundExtend: initialRoundExtend(),
     video: WATCHING,
     shown: "white",
     nowMs: NOW,
     slugs: { org: "club", comp: "autumn", div: "open" },
-    on: { select: noop, resync: noop, goOn: noop, toggleSettle: noop, settle: noop, override: noop, retryVideo: noop, switchTo: noop },
+    on: { select: noop, resync: noop, goOn: noop, toggleSettle: noop, settle: noop, extend: noop, extendRound: noop, override: noop, retryVideo: noop, switchTo: noop },
     ...over,
   };
 }
@@ -1086,6 +1099,559 @@ describe("your decision", () => {
   });
 });
 
+// ── the check-in extension (spec 2026-10-09 §3.2.2) ─────────────────────────────────────────────────────────────────────────────
+describe("the check-in extension: +5 min on a board and on the round", () => {
+  // The window the screen's clock (NOW = 19:44) is inside: it opened at 19:30 and closes at 19:50.
+  const OPENS = at(19, 30);
+  const DEADLINE = at(19, 50);
+  const checkin = (over: Partial<CheckinExtendState> = {}): CheckinExtendState => ({
+    canExtend: true,
+    refusal: null,
+    extensionsLeft: CHECKIN_EXTEND_MAX,
+    opensAt: OPENS,
+    deadlineAt: DEADLINE,
+    ...over,
+  });
+  /** Board f3 (the one on screen) carries `c`; `extendable` MORE boards stand in the round with a check-in the server would accept now
+   *  (the round bar counts boards, never a number typed beside them), and the snapshot count is what the server said at the time. */
+  const withCheckin = (c: CheckinExtendState | null, extendable = 0, rest: Partial<ArbiterScreenProps> = {}) =>
+    props({
+      round: {
+        ...ROUND,
+        extendableBoards: extendable,
+        boards: [
+          ...ROUND.boards.map((b) => (b.fixtureId === "f3" ? { ...b, checkin: c } : b)),
+          ...Array.from({ length: extendable }, (_, i) => board({ fixtureId: `x${i}`, boardNo: 20 + i, checkin: checkin() })),
+        ],
+      },
+      ...rest,
+    });
+  const label = (left: number, locale: keyof typeof LOCALES = "en") =>
+    (LOCALES[locale] as Record<string, string>)["externalPlay.checkinExtend.board"]!.replace("{minutes}", String(CHECKIN_EXTEND_STEP_MINUTES)).replace("{left}", String(left));
+  const BOARD_BTN = /<button[^>]*data-testid="arbiter-extend-board"[^>]*>(.*?)<\/button>/;
+  const ROUND_BTN = /<button[^>]*data-testid="arbiter-extend-round-cta"[^>]*>(.*?)<\/button>/;
+  const result = (over: Partial<CheckinExtendRoundResult> = {}): CheckinExtendRoundResult => ({
+    extended: 6,
+    skipped: { closed: 0, gameStarted: 2, capReached: 0 },
+    notOpenYet: 0,
+    ownBoards: 0,
+    failed: 0,
+    addedMinutes: CHECKIN_EXTEND_STEP_MINUTES,
+    ...over,
+  });
+
+  it("the empty case first: a board with no check-in offers no button, and a round that lists no board with a check-in has no bar; a round whose boards all refuse has the bar, with its reason and no button", () => {
+    const none = html(withCheckin(null));
+    expect(none, "no check-in on any board").not.toContain('data-testid="arbiter-extend-board"');
+    expect(none, "a round with no board that has a check-in says nothing").not.toContain('data-testid="arbiter-extend-round"');
+    const closed = html(withCheckin(checkin({ canExtend: false, refusal: "closed", extensionsLeft: 2 })));
+    expect(closed).not.toContain('data-testid="arbiter-extend-board"');
+    expect(closed, "the bar stays, with the reason where the button was").toContain('data-testid="arbiter-extend-round"');
+    expect(closed).toContain('data-testid="arbiter-extend-round-why" data-why="closed"');
+    expect(closed).not.toContain('data-testid="arbiter-extend-round-cta"');
+  });
+
+  it("a board whose press the server would accept: '+5 min (N left)' with the presses it has left, and when its check-in closes", () => {
+    let checked = 0;
+    for (let left = 1; left <= CHECKIN_EXTEND_MAX; left++) {
+      const h = html(withCheckin(checkin({ extensionsLeft: left })));
+      expect(text(BOARD_BTN.exec(h)![1]!), `${left} left`).toBe(label(left));
+      expect(h).toContain(`data-deadline-at="${DEADLINE}"`);
+      expect(text(h)).toContain("Check-in closes 19:50");
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity").toBe(CHECKIN_EXTEND_MAX);
+    expect(label(CHECKIN_EXTEND_MAX), "premise: the label carries the step in minutes").toContain(`+${CHECKIN_EXTEND_STEP_MINUTES} min`);
+  });
+
+  it("never offered on a refusal: every reason the server gives, counted", () => {
+    // Each snapshot is one the server could have drawn for the reason, and the clock (19:44) agrees with it: a not_open board opens
+    // after NOW, a closed one closed before it. (A snapshot the CLOCK has since overtaken is the next describe's.)
+    const SNAPSHOT: Record<(typeof EXTEND_REFUSALS)[number], Partial<CheckinExtendState>> = {
+      not_playable: {},
+      game_started: {},
+      closed: { opensAt: at(19, 20), deadlineAt: at(19, 40) },
+      not_open: { opensAt: at(19, 45) },
+      cap_reached: { extensionsLeft: 0 },
+    };
+    let checked = 0;
+    for (const refusal of EXTEND_REFUSALS) {
+      const h = html(withCheckin(checkin({ canExtend: false, refusal, extensionsLeft: 2, ...SNAPSHOT[refusal] })));
+      expect(h, refusal).not.toContain('data-testid="arbiter-extend-board"');
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: every refusal").toBe(EXTEND_REFUSALS.length);
+  });
+
+  it("in every locale the label is that locale's own, with both slots filled", () => {
+    let checked = 0;
+    for (const locale of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
+      const h = html(withCheckin(checkin({ extensionsLeft: 2 })), locale);
+      expect(text(BOARD_BTN.exec(h)![1]!), locale).toBe(label(2, locale));
+      expect(text(BOARD_BTN.exec(h)![1]!), locale).not.toMatch(/[{}]/);
+      checked += 1;
+    }
+    expect(checked).toBe(4);
+    expect(label(2, "fr"), "premise: the locales differ").not.toBe(label(2, "en"));
+  });
+
+  it("one request at a time: any request in flight, or the round's press, disables it; its own request says so", () => {
+    const own = html(withCheckin(checkin(), 0, { decision: { ...initialArbiterDecision("f3"), busy: { kind: "extend", boardId: "f3" } } }));
+    expect(own).toMatch(/<button[^>]*data-testid="arbiter-extend-board"[^>]*disabled=""/);
+    expect(own).toMatch(/<button[^>]*data-testid="arbiter-extend-board"[^>]*aria-busy="true"/);
+    expect(text(BOARD_BTN.exec(own)![1]!)).toBe(EN["externalPlay.checkinExtend.busy"]);
+    const other = html(withCheckin(checkin(), 0, { decision: { ...initialArbiterDecision("f3"), busy: { kind: "resync", boardId: "f3" } } }));
+    expect(other).toMatch(/<button[^>]*data-testid="arbiter-extend-board"[^>]*disabled=""/);
+    expect(text(BOARD_BTN.exec(other)![1]!), "another request: the label stays").toBe(label(CHECKIN_EXTEND_MAX));
+    const round = html(withCheckin(checkin(), 4, { roundExtend: { busy: true, notice: null } }));
+    expect(round).toMatch(/<button[^>]*data-testid="arbiter-extend-board"[^>]*disabled=""/);
+    expect(html(withCheckin(checkin()))).not.toMatch(/<button[^>]*data-testid="arbiter-extend-board"[^>]*disabled=""/);
+  });
+
+  it("the round bar: '+5 min to the round' and how many boards it reaches (one, and more); where nothing is extendable, the reason stands in its place", () => {
+    const one = html(withCheckin(null, 1));
+    expect(text(ROUND_BTN.exec(one)![1]!)).toBe(EN["externalPlay.checkinExtend.round"]!.replace("{minutes}", String(CHECKIN_EXTEND_STEP_MINUTES)));
+    expect(text(one)).toContain(EN["externalPlay.checkinExtend.roundHint.one"]!.replace("{count}", "1"));
+    const many = html(withCheckin(null, 6));
+    expect(text(many)).toContain(EN["externalPlay.checkinExtend.roundHint.other"]!.replace("{count}", "6"));
+    expect(html(withCheckin(null, 0)), "no board with a check-in: nothing to say").not.toContain("arbiter-extend-round");
+    const started = html(withCheckin(checkin({ canExtend: false, refusal: "game_started" }), 0));
+    expect(started, "nothing extendable but a board that has a reason: the bar says why").toContain('data-testid="arbiter-extend-round-why" data-why="game_started"');
+    expect(started).not.toContain('data-testid="arbiter-extend-round-cta"');
+    expect(text(started)).toContain(EN["externalPlay.checkinExtend.why.gameStarted"]!);
+  });
+
+  it("the round's answer says how many were extended and why the rest were left alone - only the reasons that happened", () => {
+    const answered = (r: CheckinExtendRoundResult) => text(html(withCheckin(null, 0, { roundExtend: { busy: false, notice: { kind: "answered", result: r } } })));
+    const t = answered(result());
+    expect(t, "6 boards, 2 skipped because a game started").toContain(EN["externalPlay.checkinExtend.notice.round.other"]!.replace("{minutes}", "5").replace("{count}", "6"));
+    expect(t).toContain(EN["externalPlay.checkinExtend.skip.gameStarted.other"]!.replace("{count}", "2"));
+    expect(t, "a reason that did not happen is not said").not.toContain("check-in closed");
+    // The brief's own sentence.
+    expect(t).toContain("Added 5 minutes to 6 boards.");
+    expect(t).toContain("2 boards skipped: game started");
+    const every = answered(
+      result({ extended: 1, skipped: { closed: 1, gameStarted: 1, capReached: 1 }, notOpenYet: 1, ownBoards: 1, failed: 1 }),
+    );
+    for (const key of ["closed", "gameStarted", "capReached", "notOpenYet", "ownBoards", "failed"]) {
+      expect(every, key).toContain(EN[`externalPlay.checkinExtend.skip.${key}.one`]!.replace("{count}", "1"));
+    }
+    expect(every).toContain(EN["externalPlay.checkinExtend.notice.round.one"]!.replace("{minutes}", "5").replace("{count}", "1"));
+    expect(answered(result({ extended: 0, skipped: { closed: 3, gameStarted: 0, capReached: 0 } })), "nothing extended").toContain(
+      EN["externalPlay.checkinExtend.notice.roundNone"]!,
+    );
+  });
+
+  it("the answer stays on screen after the count drops to zero (every board capped), and a refusal is said in words, never a code", () => {
+    const stays = text(html(withCheckin(null, 0, { roundExtend: { busy: false, notice: { kind: "answered", result: result({ extended: 3, skipped: { closed: 0, gameStarted: 0, capReached: 0 } }) } } })));
+    expect(stays).toContain("Added 5 minutes to 3 boards.");
+    expect(stays, "no button with nothing to extend").not.toContain(EN["externalPlay.checkinExtend.round"]!.replace("{minutes}", "5"));
+    const failed = (code: string) => text(html(withCheckin(null, 2, { roundExtend: { busy: false, notice: { kind: "failed", code } } })));
+    expect(failed("ROUND_NOT_OPEN")).toContain(EN["externalPlay.checkinExtend.refused.roundNotOpen"]!);
+    expect(failed("SOMETHING_ELSE")).toContain(EN["externalPlay.checkinExtend.refused.failed"]!);
+    expect(failed("SOMETHING_ELSE")).not.toContain("SOMETHING_ELSE");
+  });
+
+  it("the round press is disabled while any request is in flight, and says so while its own is", () => {
+    const busyOwn = html(withCheckin(null, 2, { roundExtend: { busy: true, notice: null } }));
+    expect(busyOwn).toMatch(/<button[^>]*data-testid="arbiter-extend-round-cta"[^>]*disabled=""/);
+    expect(text(ROUND_BTN.exec(busyOwn)![1]!)).toBe(EN["externalPlay.checkinExtend.busy"]);
+    const behind = html(withCheckin(null, 2, { decision: { ...initialArbiterDecision("f3"), busy: { kind: "goOn", boardId: "f3" } } }));
+    expect(behind).toMatch(/<button[^>]*data-testid="arbiter-extend-round-cta"[^>]*disabled=""/);
+    expect(html(withCheckin(null, 2))).not.toMatch(/<button[^>]*data-testid="arbiter-extend-round-cta"[^>]*disabled=""/);
+  });
+
+  it("a board's answer is its notice: the new closing time on success, the door's own words on each refusal - in every locale", () => {
+    const board = ROUND.boards.find((b) => b.fixtureId === "f3")!;
+    const noticeText = (n: ArbiterDecisionState["notice"], locale: keyof typeof LOCALES) => text(html(withCheckin(checkin(), 0, { decision: { ...initialArbiterDecision("f3"), notice: n } }), locale));
+    let checked = 0;
+    for (const locale of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
+      const d = LOCALES[locale] as Record<string, string>;
+      const ok = noticeText(
+        { boardId: "f3", kind: "extended", boardNo: board.boardNo, result: { fixtureId: "f3", extensions: 1, extensionsLeft: 2, addedMinutes: 5, deadlineAt: at(19, 55) } },
+        locale,
+      );
+      expect(ok, locale).toContain(d["externalPlay.checkinExtend.notice.board"]!.replace("{minutes}", "5").replace("{n}", String(board.boardNo)).replace("{time}", "19:55"));
+      checked += 1;
+      const codes: [string, string][] = [
+        ...EXTEND_REFUSALS.map((r): [string, string] => [EXTEND_REFUSAL_CODES[r], d[`externalPlay.checkinExtend.refused.${{ not_playable: "notPlayable", game_started: "gameStarted", closed: "closed", not_open: "notOpen", cap_reached: "capReached" }[r]}`]!]),
+        ["ARBITER_PLAYS_THIS_BOARD", d["externalPlay.checkinExtend.refused.playsThis"]!],
+        ["ROUND_NOT_OPEN", d["externalPlay.checkinExtend.refused.roundNotOpen"]!],
+        ["UNKNOWN", d["externalPlay.checkinExtend.refused.failed"]!],
+      ];
+      for (const [code, sentence] of codes) {
+        expect(sentence, `${locale} ${code}: the sentence exists`).toBeTruthy();
+        expect(noticeText({ boardId: "f3", kind: "extend_failed", code }, locale), `${locale} ${code}`).toContain(sentence);
+        checked += 1;
+      }
+    }
+    expect(checked, "anti-vacuity: (1 + 5 refusals + 3 others) x 4 locales").toBe((1 + EXTEND_REFUSALS.length + 3) * 4);
+  });
+});
+
+// ── +5 only INSIDE the check-in window, on a ticking clock (owner, 2026-10-19) ────────────────────────────────────────────────────
+describe("the check-in extension on a ticking clock: offered between the opening and the deadline, and nowhere else", () => {
+  const OPENS = Date.parse(at(19, 30));
+  const DEADLINE = Date.parse(at(19, 50));
+  const mk = (over: Partial<CheckinExtendState> = {}): CheckinExtendState => ({
+    canExtend: true,
+    refusal: null,
+    extensionsLeft: CHECKIN_EXTEND_MAX,
+    opensAt: new Date(OPENS).toISOString(),
+    deadlineAt: new Date(DEADLINE).toISOString(),
+    ...over,
+  });
+  /** f3 carries `c`; one more board `x0` carries an in-window one, so the round bar has something of its own to count. */
+  const screen = (c: CheckinExtendState | null, nowMs: number | null, rest: Partial<ArbiterScreenProps> = {}) =>
+    props({
+      round: {
+        ...ROUND,
+        extendableBoards: c?.canExtend ? 1 : 0,
+        boards: ROUND.boards.map((b) => (b.fixtureId === "f3" ? { ...b, checkin: c } : b)),
+      },
+      nowMs,
+      ...rest,
+    });
+  const BOARD = 'data-testid="arbiter-extend-board"';
+  const ROUND_CTA = 'data-testid="arbiter-extend-round-cta"';
+  const why = (h: string) => /data-testid="arbiter-extend-why" data-why="(\w+)"[^>]*>([^<]*)</.exec(h);
+
+  it("one ms before the opening: no button, and the reason says it has not opened; AT the opening: the button; one ms before the deadline: still; AT the deadline: gone, with its reason", () => {
+    // The snapshot is the one the server drew a minute before the opening: `not_open`. Only the clock moves.
+    const snap = mk({ canExtend: false, refusal: "not_open" });
+    const rows: [number, boolean, string | null][] = [
+      [OPENS - 1, false, "not_open"],
+      [OPENS, true, null],
+      [DEADLINE - 1, true, null],
+      [DEADLINE, false, "closed"],
+      [DEADLINE + 60_000, false, "closed"],
+    ];
+    let checked = 0;
+    for (const [nowMs, offered, reason] of rows) {
+      const h = html(screen(snap, nowMs));
+      expect(h.includes(BOARD), `board button at ${nowMs - OPENS} ms from the opening`).toBe(offered);
+      expect(h.includes(ROUND_CTA), `round button at ${nowMs - OPENS} ms from the opening`).toBe(offered);
+      expect(why(h)?.[1] ?? null, `reason at ${nowMs - OPENS} ms`).toBe(reason);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: five instants").toBe(5);
+  });
+
+  it("a snapshot that said the window was OPEN stops offering at the deadline, without a refresh", () => {
+    const snap = mk();
+    expect(snap.canExtend).toBe(true);
+    expect(html(screen(snap, DEADLINE - 1))).toContain(BOARD);
+    const gone = html(screen(snap, DEADLINE));
+    expect(gone).not.toContain(BOARD);
+    expect(gone).not.toContain(ROUND_CTA);
+    expect(why(gone)?.[1]).toBe("closed");
+  });
+
+  it("before the viewer's clock is known (null), the server's own reading of the snapshot stands - and the clock never makes it WORSE", () => {
+    expect(html(screen(mk(), null))).toContain(BOARD);
+    expect(html(screen(mk({ canExtend: false, refusal: "not_open" }), null))).not.toContain(BOARD);
+  });
+
+  it("the round bar counts the boards the CLOCK still allows: it leaves with the last one's deadline", () => {
+    const early = mk({ opensAt: new Date(OPENS).toISOString(), deadlineAt: new Date(DEADLINE).toISOString() });
+    const late = mk({ opensAt: new Date(OPENS).toISOString(), deadlineAt: new Date(DEADLINE + 5 * 60_000).toISOString() });
+    const round = (nowMs: number) =>
+      props({
+        round: {
+          ...ROUND,
+          extendableBoards: 2,
+          boards: ROUND.boards.map((b) => (b.fixtureId === "f3" ? { ...b, checkin: early } : b.fixtureId === "f1" ? { ...b, checkin: late } : b)),
+        },
+        nowMs,
+      });
+    const hint = (h: string) => text(h);
+    expect(hint(html(round(DEADLINE - 1))), "both boards").toContain(EN["externalPlay.checkinExtend.roundHint.other"]!.replace("{count}", "2"));
+    const one = html(round(DEADLINE));
+    expect(hint(one), "the early board's deadline passed: one board left").toContain(EN["externalPlay.checkinExtend.roundHint.one"]!.replace("{count}", "1"));
+    expect(one).toContain(ROUND_CTA);
+    const none = html(round(DEADLINE + 5 * 60_000));
+    expect(none, "no board inside its window: no button").not.toContain(ROUND_CTA);
+    expect(none, "the bar stays, with its reason").toContain('data-testid="arbiter-extend-round"');
+    expect(none).toContain('data-testid="arbiter-extend-round-why" data-why="closed"');
+    expect(text(none)).toContain(EN["externalPlay.checkinExtend.why.closed"]!);
+  });
+
+  it("the helper line stands under BOTH buttons, its numbers from the constants - in every locale", () => {
+    let checked = 0;
+    for (const locale of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
+      const d = LOCALES[locale] as Record<string, string>;
+      const line = d["externalPlay.checkinExtend.helper"]!.replace("{minutes}", String(CHECKIN_EXTEND_STEP_MINUTES)).replace("{max}", String(CHECKIN_EXTEND_MAX));
+      expect(line, `${locale}: slots filled`).not.toMatch(/[{}]/);
+      const h = html(screen(mk(), OPENS + 1), locale);
+      const board = /data-testid="arbiter-extend-helper"[^>]*>([^<]*)</.exec(h);
+      const round = /data-testid="arbiter-extend-round-helper"[^>]*>([^<]*)</.exec(h);
+      expect(text(board?.[1] ?? ""), `${locale}: under the board button`).toBe(line);
+      expect(text(round?.[1] ?? ""), `${locale}: under the round button`).toContain(line);
+      checked += 2;
+    }
+    expect(checked, "anti-vacuity: two lines x 4 locales").toBe(8);
+    // The brief's own English, with the numbers its constants give today.
+    expect(EN["externalPlay.checkinExtend.helper"]!.replace("{minutes}", "5").replace("{max}", "3")).toBe("Adds 5 minutes while check-in is open. Up to 3 times per board.");
+    expect([CHECKIN_EXTEND_STEP_MINUTES, CHECKIN_EXTEND_MAX]).toEqual([5, 3]);
+  });
+
+  it("where the button is not offered, a short reason stands in its place - one per refusal, in every locale, and none for a board that is over", () => {
+    const WORDS = { game_started: "gameStarted", closed: "closed", not_open: "notOpen", cap_reached: "capReached" } as const;
+    const SNAP: Record<keyof typeof WORDS, Partial<CheckinExtendState>> = {
+      game_started: {},
+      closed: { opensAt: at(19, 20), deadlineAt: at(19, 40) },
+      not_open: { opensAt: at(19, 45) },
+      cap_reached: { extensionsLeft: 0 },
+    };
+    let checked = 0;
+    for (const locale of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
+      const d = LOCALES[locale] as Record<string, string>;
+      for (const refusal of Object.keys(WORDS) as (keyof typeof WORDS)[]) {
+        const h = html(screen(mk({ canExtend: false, refusal, ...SNAP[refusal] }), NOW), locale);
+        const got = why(h);
+        expect(got?.[1], `${locale} ${refusal}: its code`).toBe(refusal);
+        expect(text(got?.[2] ?? ""), `${locale} ${refusal}: its words`).toBe(d[`externalPlay.checkinExtend.why.${WORDS[refusal]}`]);
+        expect(h, `${locale} ${refusal}: no button`).not.toContain(BOARD);
+        checked += 1;
+      }
+      expect(html(screen(mk({ canExtend: false, refusal: "not_playable" }), NOW), locale), `${locale}: a board that is over says nothing`).not.toContain("arbiter-extend-why");
+    }
+    expect(checked, "anti-vacuity: 4 refusals x 4 locales").toBe(16);
+    expect(EN["externalPlay.checkinExtend.why.notOpen"]).toBe("Check-in hasn't opened yet");
+    expect(EN["externalPlay.checkinExtend.why.closed"]).toBe("Check-in has closed");
+    expect(EN["externalPlay.checkinExtend.why.gameStarted"]).toBe("Game started");
+    expect(EN["externalPlay.checkinExtend.why.capReached"]).toBe("No extensions left");
+    expect(html(screen(null, NOW)), "a board with no check-in at all has no reason line").not.toContain("arbiter-extend-why");
+  });
+});
+
+// ── where "+5 min to the round" is not offered, the round says why (owner, 2026-10-19) ───────────────────────────────────────────────
+describe("the round bar's reason: one cause says its own words, a mix says the round's, an empty round says nothing", () => {
+  const OPENS = Date.parse(at(19, 30));
+  const DEADLINE = Date.parse(at(19, 50));
+  const mk = (over: Partial<CheckinExtendState> = {}): CheckinExtendState => ({
+    canExtend: false,
+    refusal: "closed",
+    extensionsLeft: CHECKIN_EXTEND_MAX,
+    opensAt: new Date(OPENS).toISOString(),
+    deadlineAt: new Date(DEADLINE).toISOString(),
+    ...over,
+  });
+  /** One board per entry of `cs`, in the test's round (a `null` is a board with no check-in); the snapshot count is what the server said. */
+  const roundOf = (cs: (CheckinExtendState | null)[], nowMs: number | null, rest: Partial<ArbiterScreenProps> = {}) =>
+    props({
+      round: { ...ROUND, extendableBoards: cs.filter((c) => c?.canExtend === true).length, boards: ROUND.boards.slice(0, cs.length).map((b, i) => ({ ...b, checkin: cs[i]! })) },
+      nowMs,
+      ...rest,
+    });
+  const WHY = /data-testid="arbiter-extend-round-why" data-why="(\w+)"[^>]*>([^<]*)</;
+  const CTA = 'data-testid="arbiter-extend-round-cta"';
+  const BAR = 'data-testid="arbiter-extend-round"';
+  const REASONS = {
+    game_started: { word: "gameStarted", snap: {} },
+    closed: { word: "closed", snap: {} },
+    not_open: { word: "notOpen", snap: {} },
+    cap_reached: { word: "capReached", snap: { extensionsLeft: 0 } },
+  } as const;
+  type Cause = keyof typeof REASONS;
+  const CAUSES = Object.keys(REASONS) as Cause[];
+  /** A snapshot that gives `cause`, with a window the test's clock (NOW, 19:44) agrees with it on. */
+  const giving = (cause: Cause): CheckinExtendState => {
+    const base = { canExtend: false, refusal: cause, ...REASONS[cause].snap } as Partial<CheckinExtendState>;
+    if (cause === "closed") return mk({ ...base, opensAt: at(19, 20), deadlineAt: at(19, 40) });
+    if (cause === "not_open") return mk({ ...base, opensAt: at(19, 45), deadlineAt: at(19, 55) });
+    return mk(base);
+  };
+
+  it("the empty cases first: a round that lists no boards, boards with no check-in, and boards that are all over say nothing - no bar", () => {
+    const rows: [string, ArbiterScreenProps][] = [
+      ["no boards", props({ round: { ...ROUND, boards: [] }, nowMs: NOW })],
+      ["no board has a check-in (the round was never opened)", roundOf([null, null, null], NOW)],
+      ["every board is over", roundOf([mk({ refusal: "not_playable" }), mk({ refusal: "not_playable" })], NOW)],
+      ["the viewer's clock is not known yet", roundOf([mk({ refusal: "not_playable" }), null], null)],
+    ];
+    for (const [name, p] of rows) {
+      const h = html(p);
+      expect(h, name).not.toContain(BAR);
+      expect(h, name).not.toContain("arbiter-extend-round-why");
+    }
+    expect(rows.length, "anti-vacuity: four empty cases").toBe(4);
+  });
+
+  it("ONE cause, however many boards give it (and boards that are over beside them): its own words, in every locale, with no button and no helper", () => {
+    let checked = 0;
+    for (const locale of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
+      const d = LOCALES[locale] as Record<string, string>;
+      for (const cause of CAUSES) {
+        for (const boards of [[giving(cause)], [giving(cause), giving(cause), giving(cause)], [giving(cause), mk({ refusal: "not_playable" })]]) {
+          const h = html(roundOf(boards, NOW), locale);
+          const got = WHY.exec(h);
+          expect(got?.[1], `${locale} ${cause} x ${boards.length}: its code`).toBe(cause);
+          expect(text(got?.[2] ?? ""), `${locale} ${cause} x ${boards.length}: its words`).toBe(d[`externalPlay.checkinExtend.why.${REASONS[cause].word}`]);
+          expect(h, `${locale} ${cause}: no button`).not.toContain(CTA);
+          expect(h, `${locale} ${cause}: no helper line either`).not.toContain("arbiter-extend-round-helper");
+          checked += 1;
+        }
+      }
+    }
+    expect(checked, "anti-vacuity: 4 locales x 4 causes x 3 rounds").toBe(48);
+  });
+
+  it("a MIX - every pair of the four causes - is 'No board can be extended right now', in every locale", () => {
+    let checked = 0;
+    for (const locale of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
+      const d = LOCALES[locale] as Record<string, string>;
+      for (const a of CAUSES) {
+        for (const b of CAUSES) {
+          if (a === b) continue;
+          const got = WHY.exec(html(roundOf([giving(a), giving(b)], NOW), locale));
+          expect(got?.[1], `${locale} ${a} + ${b}: its code`).toBe("mixed");
+          expect(text(got?.[2] ?? ""), `${locale} ${a} + ${b}: its words`).toBe(d["externalPlay.checkinExtend.why.roundNoneOpen"]);
+          checked += 1;
+        }
+      }
+    }
+    expect(checked, "anti-vacuity: 4 locales x 12 ordered pairs").toBe(48);
+    expect(EN["externalPlay.checkinExtend.why.roundNoneOpen"]).toBe("No board can be extended right now");
+    // True of ALL FIVE causes, so it claims nothing about the check-in's state: a board with no press left (cap_reached) has its
+    // check-in OPEN, and a sentence that said "closed" or "not open" would be false of it, one that said "open" false of the rest.
+    expect(EN["externalPlay.checkinExtend.why.roundNoneOpen"], "no claim about the check-in being open or closed").not.toMatch(/check-in|open|closed/i);
+    // ... and the pair that made the old wording false is among the 12 the loop above walked.
+    expect(CAUSES.includes("cap_reached") && CAUSES.includes("not_open"), "premise: cap_reached beside not_open is a walked pair").toBe(true);
+  });
+
+  it("a board that would accept a press means the button, never a reason; and while the press is in flight the bar is the button's", () => {
+    const open = mk({ canExtend: true, refusal: null, opensAt: at(19, 30), deadlineAt: at(19, 50) });
+    const withButton = html(roundOf([giving("closed"), open], NOW));
+    expect(withButton).toContain(CTA);
+    expect(withButton, "a round with a button has no reason beside it").not.toContain("arbiter-extend-round-why");
+    const inFlight = html(roundOf([giving("closed")], NOW, { roundExtend: { busy: true, notice: null } }));
+    expect(inFlight, "in flight: the busy button, not the reason").toContain(CTA);
+    expect(inFlight).not.toContain("arbiter-extend-round-why");
+  });
+
+  it("the round's answer and its reason stand together: every board capped after a press says what was done AND why there is no button", () => {
+    const result: CheckinExtendRoundResult = { extended: 2, skipped: { closed: 0, gameStarted: 0, capReached: 0 }, notOpenYet: 0, ownBoards: 0, failed: 0, addedMinutes: CHECKIN_EXTEND_STEP_MINUTES };
+    const h = html(roundOf([giving("cap_reached"), giving("cap_reached")], NOW, { roundExtend: { busy: false, notice: { kind: "answered", result } } }));
+    expect(text(h)).toContain("Added 5 minutes to 2 boards.");
+    expect(WHY.exec(h)?.[1]).toBe("cap_reached");
+    expect(h).not.toContain(CTA);
+  });
+
+  it("on the ticking clock: the sentence follows it - not_open, then the button AT the opening, then closed AT the deadline - with no refresh", () => {
+    // The snapshot was drawn before the opening: it said not_open. Only the clock moves.
+    const snap = [mk({ refusal: "not_open" })];
+    const rows: [number, string | null][] = [
+      [OPENS - 1, "not_open"],
+      [OPENS, null],
+      [DEADLINE - 1, null],
+      [DEADLINE, "closed"],
+      [DEADLINE + 60_000, "closed"],
+    ];
+    let checked = 0;
+    for (const [nowMs, code] of rows) {
+      const h = html(roundOf(snap, nowMs));
+      expect(WHY.exec(h)?.[1] ?? null, `${nowMs - OPENS} ms from the opening`).toBe(code);
+      expect(h.includes(CTA), `the button at ${nowMs - OPENS} ms`).toBe(code === null);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: five instants").toBe(5);
+  });
+
+  it("on the ticking clock, a round that begins with ONE cause can become a MIX and back to one as the boards' windows pass", () => {
+    // Board A: closed already. Board B: not open until 19:45. At 19:44 they differ (a mix); B's window then runs, so the round has its
+    // button; B's deadline (19:55) passes and both are closed - one cause again.
+    const a = giving("closed");
+    const b = mk({ refusal: "not_open", opensAt: at(19, 45), deadlineAt: at(19, 55) });
+    const code = (nowMs: number) => {
+      const h = html(roundOf([a, b], nowMs));
+      return WHY.exec(h)?.[1] ?? (h.includes(CTA) ? "button" : "nothing");
+    };
+    expect([code(Date.parse(at(19, 44))), code(Date.parse(at(19, 45))), code(Date.parse(at(19, 55)) - 1), code(Date.parse(at(19, 55)))]).toEqual(["mixed", "button", "button", "closed"]);
+  });
+});
+
+// ── a board's answer never names a time the board itself does not show; the other press clears it ────────────────────────────────
+describe("the check-in extension's answers stay true to the board on screen", () => {
+  const board = ROUND.boards.find((b) => b.fixtureId === "f3")!;
+  const result = (deadlineAt: string) => ({ fixtureId: "f3", extensions: 1, extensionsLeft: 2, addedMinutes: 5, deadlineAt });
+  const extended = (deadlineAt: string): ArbiterDecisionState["notice"] => ({ boardId: "f3", kind: "extended", boardNo: board.boardNo, result: result(deadlineAt) });
+  const live = (deadlineAt: string): CheckinExtendState => ({ canExtend: true, refusal: null, extensionsLeft: 2, opensAt: at(19, 30), deadlineAt });
+  const sentence = (notice: ArbiterDecisionState["notice"], c: CheckinExtendState | null) =>
+    text(
+      html(
+        props({
+          round: { ...ROUND, boards: ROUND.boards.map((b) => (b.fixtureId === "f3" ? { ...b, checkin: c } : b)) },
+          decision: { ...initialArbiterDecision("f3"), notice },
+          nowMs: NOW,
+        }),
+      ),
+    );
+  const said = (time: string) => EN["externalPlay.checkinExtend.notice.board"]!.replace("{minutes}", "5").replace("{n}", String(board.boardNo)).replace("{time}", time);
+
+  it("the notice and the board's own 'Check-in closes' line name the SAME time: caught up, the board extended since, or the refresh a moment behind", () => {
+    // Caught up: the press made 19:55 and the board now reads 19:55.
+    expect(sentence(extended(at(19, 55)), live(at(19, 55)))).toContain(said("19:55"));
+    // Extended since (another arbiter, or the round press): the answer names the board's LIVE time, not its own old one.
+    const since = sentence(extended(at(19, 55)), live(at(20, 0)));
+    expect(since, "the live deadline").toContain(said("20:00"));
+    expect(since, "never the stale one").not.toContain(said("19:55"));
+    expect(since).toContain("Check-in closes 20:00");
+    // The refresh after the press has not landed yet: the board still reads the old 19:50, the press's own 19:55 is the true one.
+    expect(sentence(extended(at(19, 55)), live(at(19, 50)))).toContain(said("19:55"));
+    // No check-in on the board any more: the press's own time stands.
+    expect(sentence(extended(at(19, 55)), null)).toContain(said("19:55"));
+  });
+
+  it("an 'extended' answer stops showing when the clock reaches the closing time it names - to the millisecond - and the later of the press's and the board's live time is the one that counts", () => {
+    const D = (h: number, m: number) => Date.parse(at(h, m));
+    const answer = extended(at(19, 55));
+    const sayingAt = (nowMs: number, c: CheckinExtendState | null) =>
+      text(html(props({ round: { ...ROUND, boards: ROUND.boards.map((b) => (b.fixtureId === "f3" ? { ...b, checkin: c } : b)) }, decision: { ...initialArbiterDecision("f3"), notice: answer }, nowMs })));
+    const rows: [string, number, CheckinExtendState | null, boolean][] = [
+      ["one ms before the time it names", D(19, 55) - 1, live(at(19, 55)), true],
+      ["AT the time it names", D(19, 55), live(at(19, 55)), false],
+      ["a minute past it", D(19, 56), live(at(19, 55)), false],
+      ["the board was extended since (20:00): at 19:55 the live time still stands", D(19, 55), live(at(20, 0)), true],
+      ["... and it goes at 20:00, the live time", D(20, 0), live(at(20, 0)), false],
+      ["the refresh is a moment behind (the board still reads 19:50): the press's own 19:55 counts", D(19, 54), live(at(19, 50)), true],
+      ["no check-in on the board: the press's own time counts, and it has passed", D(19, 56), null, false],
+    ];
+    for (const [name, nowMs, c, shown] of rows) {
+      expect(sayingAt(nowMs, c).includes("Check-in now closes"), name).toBe(shown);
+    }
+    expect(rows.length, "anti-vacuity: seven instants").toBe(7);
+    expect(sentence(answer, live(at(19, 55))), "at the fixture's own clock (19:44), before the time it names: shown").toContain("Check-in now closes 19:55");
+  });
+
+  it("only an 'extended' answer lapses with the clock: every other answer stays until the next action replaces it, and the clock unknown (null) lapses nothing", () => {
+    const wentOn: ArbiterDecisionState["notice"] = { boardId: "f3", kind: "went_on", stillOpen: 0 };
+    const failed: ArbiterDecisionState["notice"] = { boardId: "f3", kind: "extend_failed", code: "CHECKIN_CLOSED" };
+    const far = Date.parse(at(23, 0));
+    expect(noticeLapsed(wentOn!, null, far), "another action's answer").toBe(false);
+    expect(noticeLapsed(failed!, null, far), "a refusal stays: it says why nothing was added, whatever the time").toBe(false);
+    expect(noticeLapsed(extended(at(19, 55))!, null, far), "an 'extended' answer, long past").toBe(true);
+    expect(noticeLapsed(extended(at(19, 55))!, null, null), "the clock unknown").toBe(false);
+  });
+
+  it("a board's extend answer is cleared when the round-wide press starts, and the round's answer when a board's does - and nothing else is touched", () => {
+    const answered = extended(at(19, 55));
+    const failed: ArbiterDecisionState["notice"] = { boardId: "f3", kind: "extend_failed", code: "CHECKIN_CLOSED" };
+    const base = { ...initialArbiterDecision("f3") };
+    expect(arbiterDecision({ ...base, notice: answered }, { type: "clearExtend" }).notice, "the board's answer").toBeNull();
+    expect(arbiterDecision({ ...base, notice: failed }, { type: "clearExtend" }).notice, "the board's refusal").toBeNull();
+    const other: ArbiterDecisionState["notice"] = { boardId: "f3", kind: "resync_nothing" };
+    expect(arbiterDecision({ ...base, notice: other }, { type: "clearExtend" }).notice, "another action's answer is left").toEqual(other);
+    expect(arbiterDecision(base, { type: "clearExtend" }), "nothing to clear: the same state").toBe(base);
+    const roundDone = { busy: false, notice: { kind: "answered", result: { extended: 3, skipped: { closed: 0, gameStarted: 0, capReached: 0 }, notOpenYet: 0, ownBoards: 0, failed: 0, addedMinutes: 5 } } } as const;
+    expect(roundExtendUi(roundDone, { type: "clear" }).notice, "the round's answer").toBeNull();
+    expect(roundExtendUi(roundDone, { type: "clear" }).busy).toBe(false);
+    const idle = initialRoundExtend();
+    expect(roundExtendUi(idle, { type: "clear" }), "nothing to clear: the same state").toBe(idle);
+    expect(roundExtendUi({ busy: true, notice: null }, { type: "clear" }).busy, "an in-flight press is not cancelled by a clear").toBe(true);
+  });
+});
+
 describe("the outage card", () => {
   it("only during a video outage on a required, playable board not already let go — the whole table", () => {
     const POLICIES = ["off", "optional", "required"] as const;
@@ -1269,6 +1835,9 @@ describe("every locale", () => {
       withSides("open", "none"),
       withSides("open", "open", { cameraPolicy: "off" }, { video: { kind: "none" } }),
       props({ round: { ...ROUND, current: false, ownBoards: 1 } }),
+      // §3.2.2: the extension's button, bar and answers.
+      props({ round: { ...ROUND, extendableBoards: 3, boards: ROUND.boards.map((b) => (b.fixtureId === "f3" ? { ...b, checkin: { canExtend: true, refusal: null, extensionsLeft: 2, opensAt: at(19, 30), deadlineAt: at(19, 50) } } : b)) } }),
+      props({ roundExtend: { busy: false, notice: { kind: "answered", result: { extended: 2, skipped: { closed: 1, gameStarted: 1, capReached: 1 }, notOpenYet: 1, ownBoards: 1, failed: 1, addedMinutes: 5 } } } }),
       props({ round: { ...ROUND, ownBoards: 2 } }),
       props({ round: null, requested: "unavailable", decision: initialArbiterDecision("x"), video: { kind: "idle" } }),
       props({ round: null, requested: "own", decision: initialArbiterDecision("x"), video: { kind: "idle" } }),
@@ -1304,7 +1873,7 @@ describe("every locale", () => {
         checked++;
       }
     }
-    expect(checked, "anti-vacuity: 22 states in 4 locales").toBe(4 * 22);
+    expect(checked, "anti-vacuity: 24 states in 4 locales").toBe(4 * 24);
   });
 
   it("the source never asks for the arbiter's own camera or microphone", () => {

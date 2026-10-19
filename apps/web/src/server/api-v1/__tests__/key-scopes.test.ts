@@ -74,6 +74,9 @@ describe("matchKeyRoute", () => {
       "POST /fixtures/:id/external-play/resolve",
       // T16: "Let the game go on".
       "POST /fixtures/:id/external-play/flags/close",
+      // Spec 2026-10-09 §3.2.2: "+5 min" on one board's check-in, and on a whole round's. The audit row names the user.
+      "POST /fixtures/:id/external-play/extend-checkin",
+      "POST /stages/:id/extend-checkin",
     ];
     let checked = 0;
     for (const e of entries) {
@@ -82,7 +85,7 @@ describe("matchKeyRoute", () => {
       expect(matchKeyRoute(method, `/api/v1${path.replace(/:id/g, "seg")}`), e).toBeNull();
       checked += 1;
     }
-    expect(checked, "anti-vacuity: external-play routes checked").toBe(10);
+    expect(checked, "anti-vacuity: external-play routes checked").toBe(12);
   });
 
   it("capture QR v2 (T8c, A16; W27): the phone's start and its scoring link are never key-reachable — and an org API key on EACH of the four phone routes finds no key rule", () => {

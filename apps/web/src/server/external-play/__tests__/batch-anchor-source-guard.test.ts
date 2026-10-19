@@ -18,6 +18,11 @@
 //      counted per file against a pinned table, and each call's arguments must name `window`: a third caller fails the count, a
 //      caller that drops the window fails the argument check. (me.ts's own call hands `{}` for a fixture whose round was never opened,
 //      deliberately - a ternary on `open`; the check reads the call's text, so that branch is the one place it cannot see.)
+//   5. THE EXTENSION (spec §3.2.2): a board's deadline also carries the arbiter's check-in extension, through `boardAnchor`'s 4th
+//      argument. Every production `boardAnchor(` call hands it (one pinned exception: the batch's OPENING, which an extension does not
+//      move), and every file that interpolates the SQL rank fragment interpolates the SQL extension fragment beside it - an anchor
+//      built without it judges the board by a deadline its players are no longer on. The reader table gains two readers that are not
+//      batch readers (the arbiter's board list; the extend door's answer), and every reader is owed an `[extend-reader:<id>]` test.
 // And the table of READERS (the spec names 15; the scan found a 16th - openRound's re-invite skip; the build's review found a 17th - the
 // QR self check-in, which hands the stamp the board's window) is closed over the tests: each
 // reader id appears in exactly one test title as `[reader:<id>]`, and no title carries an id that is not in the table.
@@ -58,10 +63,16 @@ const READERS = [
   "reinvite",
   "qr-checkin",
 ] as const;
-type ReaderId = (typeof READERS)[number];
+
+/** The readers the check-in extension adds (spec §3.2.2): the arbiter's board list, which says whether a press is offered and what
+ *  the deadline is, and the extend door's own answer. Neither is a batch reader, so neither owns a `[reader:<id>]` title; all of
+ *  `READERS` and these two own an `[extend-reader:<id>]` title (external-play-checkin-extend*.test.ts). */
+const EXTEND_ONLY_READERS = ["arbiter-board", "extend-result"] as const;
+const EXTEND_READERS = [...READERS, ...EXTEND_ONLY_READERS] as const;
+type SiteReader = (typeof EXTEND_READERS)[number];
 
 /** Call sites of the consumers, per production file (under `src`). `readers` names who they serve. */
-const SITES: readonly { file: string; fn: Consumer; times: number; readers: readonly ReaderId[] }[] = [
+const SITES: readonly { file: string; fn: Consumer; times: number; readers: readonly SiteReader[] }[] = [
   // The check-in line (spec §5.7.8) took the seat's, the create's and the dequeue's question "is this board's window open?" and
   // mint-retry's deadline test into ONE reader, `boardPhase`: the window's own answer, held open past the deadline (until the
   // cap) for a protected player. Its two call sites into window.ts are the readers' now.
@@ -80,12 +91,20 @@ const SITES: readonly { file: string; fn: Consumer; times: number; readers: read
   { file: "server/usecases/external-play/create-game.ts", fn: "windowFor", times: 2, readers: ["expires-at"] },
   // The one definition; its three consumers below are the sweep's readers (mint-retry now asks `boardPhase`).
   { file: "server/usecases/external-play/sweep.ts", fn: "windowFor", times: 1, readers: ["sweep-window"] },
-  { file: "server/usecases/external-play/sweep.ts", fn: "playableWindow", times: 3, readers: ["no-show", "teardown", "expected-end"] },
+  // The no-show asks the window three times (the cheap precheck on the candidate, the judgement itself, and the re-read of the
+  // deadline UNDER the board's check-in-window lock - spec §3.2.2, the race rule); the teardown and the expected end once each.
+  { file: "server/usecases/external-play/sweep.ts", fn: "playableWindow", times: 5, readers: ["no-show", "teardown", "expected-end"] },
   { file: "server/usecases/external-play/invite.ts", fn: "windowFor", times: 1, readers: ["invite"] },
   { file: "server/usecases/external-play/invite.ts", fn: "roomPhase", times: 1, readers: ["resend"] },
   { file: "server/usecases/external-play/open-round.ts", fn: "roomPhase", times: 1, readers: ["reinvite"] },
-  { file: "server/usecases/external-play/open-round-view.ts", fn: "roomPhase", times: 2, readers: ["open-round-view"] },
-  { file: "server/usecases/external-play/open-round-view.ts", fn: "windowFor", times: 2, readers: ["open-round-view"] },
+  // `closed` and a batch's `closesAt` are the LATEST deadline among the boards (an extended board outlasts its batch-mates), so they
+  // ask `windowFor`, not `roomPhase`, board by board; `roomPhase` is left to the owed-seat count.
+  { file: "server/usecases/external-play/open-round-view.ts", fn: "roomPhase", times: 1, readers: ["open-round-view"] },
+  { file: "server/usecases/external-play/open-round-view.ts", fn: "windowFor", times: 3, readers: ["open-round-view"] },
+  // The check-in extension's two new readers (spec §3.2.2): the arbiter's board list (its deadline and whether a press is offered),
+  // and the extend door's answer (the new deadline, from the same function the readers above judge by).
+  { file: "server/usecases/external-play/arbiter.ts", fn: "windowFor", times: 1, readers: ["arbiter-board"] },
+  { file: "server/usecases/external-play/checkin-extend.ts", fn: "windowFor", times: 1, readers: ["extend-result"] },
 ];
 
 /** The text of a call's argument list, from the `(` at `open`, balanced; null if it never closes. */
@@ -288,7 +307,8 @@ describe("the production tree", () => {
 
 describe("the reader table is closed over the tests", () => {
   /** Test titles (`it(`/`describe(` lines, in any variant) over the whole source tree, test files included. */
-  function titles(): { file: string; line: number; text: string }[] {
+  function titles(tag: "reader" | "extend-reader"): { file: string; line: number; text: string }[] {
+    const marker = new RegExp(`\\[${tag}:[a-z-]+\\]`);
     const out: { file: string; line: number; text: string }[] = [];
     const walk = (dir: string): void => {
       for (const name of readdirSync(dir)) {
@@ -300,7 +320,7 @@ describe("the reader table is closed over the tests", () => {
           readFileSync(full, "utf8")
             .split("\n")
             .forEach((text, i) => {
-              if (/^\s*(it|describe|test)(\.\w+(\([^)]*\))?)*\(\s*["'`]/.test(text) && /\[reader:[a-z-]+\]/.test(text)) {
+              if (/^\s*(it|describe|test)(\.\w+(\([^)]*\))?)*\(\s*["'`]/.test(text) && marker.test(text)) {
                 out.push({ file: relative(SRC, full), line: i + 1, text });
               }
             });
@@ -312,7 +332,7 @@ describe("the reader table is closed over the tests", () => {
   }
 
   it(`${READERS.length} readers, each named by exactly one test title; no title names a reader that is not in the table`, () => {
-    const all = titles();
+    const all = titles("reader");
     const seen = new Map<string, number>();
     for (const t of all) for (const m of t.text.matchAll(/\[reader:([a-z-]+)\]/g)) seen.set(m[1]!, (seen.get(m[1]!) ?? 0) + 1);
     expect(READERS.length, "readers in the table (the spec's 15, openRound's re-invite and the QR self check-in)").toBe(17);
@@ -323,10 +343,111 @@ describe("the reader table is closed over the tests", () => {
 
   it("every reader in the table is served by at least one pinned call site, and every site serves a reader in the table", () => {
     const served = new Set(SITES.flatMap((s) => s.readers));
-    expect([...served].sort()).toEqual([...READERS].sort());
+    expect([...served].sort()).toEqual([...EXTEND_READERS].sort());
     for (const s of SITES) {
       expect(s.readers.length, `${s.file} ${s.fn}`).toBeGreaterThan(0);
-      for (const r of s.readers) expect(READERS, `${s.file} serves ${r}`).toContain(r);
+      for (const r of s.readers) expect(EXTEND_READERS, `${s.file} serves ${r}`).toContain(r);
     }
+  });
+
+  it(`${EXTEND_READERS.length} readers see the check-in extension: each is named by exactly one [extend-reader:<id>] title, and no title names one that is not in the table`, () => {
+    const all = titles("extend-reader");
+    const seen = new Map<string, number>();
+    for (const t of all) for (const m of t.text.matchAll(/\[extend-reader:([a-z-]+)\]/g)) seen.set(m[1]!, (seen.get(m[1]!) ?? 0) + 1);
+    expect(EXTEND_READERS.length, "the 17 batch readers and the arbiter's board list and the extend door's answer").toBe(19);
+    expect([...seen.keys()].sort(), "ids in titles = ids in the table").toEqual([...EXTEND_READERS].sort());
+    for (const id of EXTEND_READERS) expect(seen.get(id), `[extend-reader:${id}] in test titles`).toBe(1);
+    expect(all.length, "titled tests found").toBe(EXTEND_READERS.length);
+  });
+});
+
+// ── 5. the extension ───────────────────────────────────────────────────────────────────────────────────────────────────
+/** Every `boardAnchor(` call in `src` (the definition excluded), with its argument count and balanced argument text. */
+export function anchorCalls(src: string): { args: string; line: number; argc: number }[] {
+  const { live } = lex(src);
+  const out: { args: string; line: number; argc: number }[] = [];
+  const re = /\bboardAnchor\(/g;
+  for (let m = re.exec(live); m !== null; m = re.exec(live)) {
+    if (/function\s+$/.test(live.slice(Math.max(0, m.index - 24), m.index))) continue; // the definition
+    const args = argsAt(live, m.index + m[0].length - 1);
+    if (args === null) continue;
+    // Top-level commas only: a nested call or a ternary's comma inside parentheses does not split an argument.
+    let depth = 0;
+    let argc = args.trim() === "" ? 0 : 1;
+    for (const ch of args) {
+      if (ch === "(" || ch === "[" || ch === "{") depth += 1;
+      else if (ch === ")" || ch === "]" || ch === "}") depth -= 1;
+      else if (ch === "," && depth === 0) argc += 1;
+    }
+    out.push({ args, line: live.slice(0, m.index).split("\n").length, argc });
+  }
+  return out;
+}
+
+/** Interpolations of an SQL fragment helper (`name(`), definitions excluded. */
+export function fragmentCalls(src: string, name: string): number {
+  const { live } = lex(src);
+  const re = new RegExp(`\\b${name}\\(`, "g");
+  let n = 0;
+  for (let m = re.exec(live); m !== null; m = re.exec(live)) {
+    if (/function\s+$/.test(live.slice(Math.max(0, m.index - 24), m.index))) continue;
+    n += 1;
+  }
+  return n;
+}
+
+/** The one production `boardAnchor` call that does not hand the extension, and why: it builds the batch's OPENING (`opensAt`), which
+ *  an extension moves not at all. A new one is a new reader that may be judging a deadline - it goes in the table above, not here. */
+const ANCHORS_WITHOUT_EXTENSION: readonly { file: string; calls: number; why: string }[] = [
+  { file: "server/usecases/external-play/open-round-view.ts", calls: 1, why: "the batch's opensAt: an extension moves the deadline, never the opening" },
+];
+
+describe("the check-in extension rides on every anchor (spec §3.2.2)", () => {
+  it("the scanner: counts a call's top-level arguments, skips the definition, and sees a 3-argument call as one without the extension", () => {
+    const src = `
+      export function boardAnchor(a, b, c, extraMs = 0) { return a; }
+      const x = boardAnchor(open.roundOpenedAt, rank, open.staggered, row.extraMs);
+      const y = boardAnchor(open.roundOpenedAt, staggered ? slice[0]!.rank : 0, staggered);
+      const z = boardAnchor(at, f(rank, 1), s, rearmed.has(id) ? 0 : placed.extraMs);
+    `;
+    expect(anchorCalls(src).map((c) => c.argc)).toEqual([4, 3, 4]);
+    expect(fragmentCalls("a ${boardRankSql(sql)} b ${boardRankSql(tx)} export function boardRankSql(db) {}", "boardRankSql")).toBe(2);
+  });
+
+  it("every production boardAnchor call hands the board's extension, but the pinned exceptions", () => {
+    const without: string[] = [];
+    const exempt = new Map(ANCHORS_WITHOUT_EXTENSION.map((e) => [e.file, e.calls] as const));
+    let calls = 0;
+    for (const rel of allSources) {
+      const src = read(rel);
+      if (!/\bboardAnchor\(/.test(src) || rel === "server/external-play/window.ts") continue;
+      const bare = anchorCalls(src).filter((c) => c.argc < 4);
+      calls += anchorCalls(src).length;
+      if (bare.length !== (exempt.get(rel) ?? 0)) without.push(`${rel}: ${bare.length} anchor call(s) without the extension (pinned: ${exempt.get(rel) ?? 0}) at lines ${bare.map((c) => c.line).join(",")}`);
+    }
+    expect(without).toEqual([]);
+    expect(calls, "anti-vacuity: the scan saw the anchor calls").toBeGreaterThan(6);
+    for (const e of ANCHORS_WITHOUT_EXTENSION) expect(anchorCalls(read(e.file)).filter((c) => c.argc < 4).length, e.why).toBe(e.calls);
+  });
+
+  it("every file that interpolates the SQL rank fragment interpolates the SQL extension fragment as often (the sweep's four candidate queries, the arbiter's, the open's and the view's)", () => {
+    let files = 0;
+    let ranks = 0;
+    const mismatched: string[] = [];
+    for (const rel of allSources) {
+      const src = read(rel);
+      if (!/\bboardRankSql\(/.test(src)) continue;
+      const rank = fragmentCalls(src, "boardRankSql");
+      const extra = fragmentCalls(src, "boardExtraSql");
+      files += 1;
+      ranks += rank;
+      // open-round-view.ts reads the extension in its own select list through the same fragment: the pairing is per file, not per line.
+      if (rank !== extra) mismatched.push(`${rel}: ${rank} rank, ${extra} extension`);
+    }
+    expect(mismatched).toEqual([]);
+    // round-open.ts (boardOpenFor) 1, open-round.ts 1, open-round-view.ts 1, sweep.ts 4, arbiter.ts 1: a new query that builds a rank
+    // owes the extension beside it, and a number here that moved is the author's cue to say which query it was.
+    expect(files, "anti-vacuity: files that build a rank").toBe(5);
+    expect(ranks, "anti-vacuity: rank interpolations seen").toBe(8);
   });
 });

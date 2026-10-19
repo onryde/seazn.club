@@ -380,6 +380,10 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   "DELETE /fixtures/:id/external-play/arbiter/:participantId",
   "POST /fixtures/:id/external-play/resync",
   "POST /fixtures/:id/external-play/video-override",
+  // Online chess (spec §3.2.2): the arbiter's +5 minutes moves a deadline players are counting down to, and its audit record
+  // names the signed-in user who pressed it - a key has no person to name. The round-wide press is the same act on every board.
+  "POST /fixtures/:id/external-play/extend-checkin",
+  "POST /stages/:id/extend-checkin",
   "GET /orgs/:id/stream-targets",
   "POST /orgs/:id/stream-targets",
   "PATCH /orgs/:id/stream-targets/:targetId",

@@ -96,10 +96,17 @@ const HAND_CHECKED_DYNAMIC: Record<string, number> = {
   // `/api/v1/fixtures/${id}/external-play/arbiter/${participantId}` (both routes exist, POST and DELETE).
   // (2) `decisionRunner({ post: (path, body) => apiV1(path, …) })` — arbiter-decision.ts builds every path as
   // `/api/v1/fixtures/${id}/external-play/${tail}`, tail ∈ resync | video-override | flags/close | resolve (each a POST
-  // route that exists).
-  "src/components/v2/arbiter-panel.tsx": 2,
+  // route that exists). The check-in extension (traced 2026-10-19, spec 2026-10-09 §3.2.2) adds a third dynamic call and a tail to
+  // (2): the board's "+5 min" goes through the same `decisionRunner` post, to `extendBoardPath` =
+  // `/api/v1/fixtures/${id}/external-play/extend-checkin` (a POST route that exists, src/app/api/v1/fixtures/[id]/external-play/
+  // extend-checkin); (3) `roundExtendRunner({ post: (path, body) => apiV1(path, …) })` (checkin-extend-ui.ts) posts only
+  // `extendRoundPath` = `/api/v1/stages/${stageId}/extend-checkin` with `{ roundNo }` (a POST route that exists, src/app/api/v1/
+  // stages/[id]/extend-checkin).
+  "src/components/v2/arbiter-panel.tsx": 3,
   // `openRoundRunner({ post: (path, body) => apiV1(path, …) })` — open-round-state.ts posts only
-  // `/api/v1/stages/${stageId}/open-round` and `/api/v1/fixtures/${id}/external-play/resend` (both POST routes exist).
+  // `/api/v1/stages/${stageId}/open-round`, `/api/v1/fixtures/${id}/external-play/resend` and (the check-in extension, 2026-10-19)
+  // `extendRoundPath` = `/api/v1/stages/${stageId}/extend-checkin` (all POST routes that exist). Still ONE dynamic call: the
+  // extend press shares this `post`.
   "src/components/v2/desk/open-round-control.tsx": 1,
   // The same `decisionRunner` post as the arbiter panel's (2) above.
   "src/components/v2/external-play-needs-result-queue.tsx": 1,

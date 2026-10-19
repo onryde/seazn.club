@@ -2398,6 +2398,30 @@ export const OpenRoundResult = z.union([
   z.object({ opened: z.literal(false), reason: z.enum(OPEN_ROUND_REFUSALS) }),
 ]);
 
+/** POST /fixtures/{id}/external-play/extend-checkin (spec §3.2.2) - the arbiter adds time to ONE board's check-in. No body. */
+export const CheckinExtendBoardOut = z.object({
+  fixtureId: Uuid,
+  /** Presses made on this board, this one included. */
+  extensions: z.number().int(),
+  extensionsLeft: z.number().int(),
+  /** Minutes this press added. */
+  addedMinutes: z.number().int(),
+  /** The board's new deadline. */
+  deadlineAt: z.iso.datetime({ offset: true }),
+});
+
+/** POST /stages/{id}/extend-checkin (spec §3.2.2) - the same press on every board of an opened round whose check-in is open now. */
+export const ExtendRoundCheckinInput = z.object({ roundNo: z.number().int().positive() }).strict();
+export type ExtendRoundCheckinInput = z.infer<typeof ExtendRoundCheckinInput>;
+export const CheckinExtendRoundOut = z.object({
+  extended: z.number().int(),
+  skipped: z.object({ closed: z.number().int(), gameStarted: z.number().int(), capReached: z.number().int() }),
+  notOpenYet: z.number().int(),
+  ownBoards: z.number().int(),
+  failed: z.number().int(),
+  addedMinutes: z.number().int(),
+});
+
 export const CompleteResult = z.object({
   completed: z.boolean(),
   events: z.array(z.record(z.string(), z.unknown())),

@@ -7,6 +7,7 @@ import { useLocale, usePlural, useT } from "@/components/i18n/dict-provider";
 import { fullMoveOf, timelineSegments, type ArbiterBoard, type ArbiterFlag, type CameraOffReport, type NoResultOffer } from "@/lib/arbiter-view";
 import { formatTimeOfDay } from "@/components/public-site/match-room/room-time";
 import type { ArbiterNotice, SettleChoice } from "./arbiter-decision";
+import { extendBoardSentence, extendedNoticeTime, extendFailureText } from "./checkin-extend-ui";
 
 export const MUTED = "text-[#6b5b8a]";
 export const SOFT = "text-[#4a3a6b]";
@@ -207,8 +208,9 @@ export function boardStateWord(state: ArbiterBoard["state"], f: Fmt): string {
 
 /** What an answered decision request says, by its notice (arbiter-decision.ts). */
 /** `over`: the board's game is over, so a close was a REVIEW, never a go-on (R4, T16 fix round 1) — the panel and the
- *  queue both say so in the queue's words. */
-export function noticeSentence(n: ArbiterNotice, f: Fmt, over = false): string {
+ *  queue both say so in the queue's words. `liveDeadlineAt`: the board's deadline as the screen reads it NOW, so an "extended" answer
+ *  never names a time that differs from the board's own "Check-in closes" line (spec §3.2.2). */
+export function noticeSentence(n: ArbiterNotice, f: Fmt, over = false, liveDeadlineAt: string | null = null): string {
   switch (n.kind) {
     case "resynced":
       return n.adopted === 0 ? f.t("arbiter.notice.resyncedNone") : f.plural("arbiter.notice.resynced", n.adopted);
@@ -247,6 +249,10 @@ export function noticeSentence(n: ArbiterNotice, f: Fmt, over = false): string {
                         n.code === "NO_RESULT_CHANGED"
                         ? f.t("arbiter.notice.noResultChanged")
                         : f.t("arbiter.notice.failed");
+    case "extended":
+      return extendBoardSentence(n.result, n.boardNo, f, liveDeadlineAt);
+    case "extend_failed":
+      return extendFailureText(n.code, f);
     case "overridden":
       return f.t("arbiter.notice.overridden");
     case "override_failed":
@@ -258,6 +264,16 @@ export function noticeSentence(n: ArbiterNotice, f: Fmt, over = false): string {
             ? f.t("arbiter.notice.ownBoard")
             : f.t("arbiter.notice.failed");
   }
+}
+
+/** An "extended" answer says when check-in now closes. On a ticking clock that time arrives: from the instant it does, the sentence
+ *  would say "Check-in now closes 19:55" about a moment already past, so the panel stops showing it (the board's own line has already
+ *  turned into the reason "Check-in has closed"). The time is the one the sentence names - the later of the press's and the board's
+ *  live deadline - so the two never part. Every other notice stays until the arbiter's next action replaces it. Not before the
+ *  viewer's clock is known (`nowMs` null). */
+export function noticeLapsed(n: ArbiterNotice, liveDeadlineAt: string | null, nowMs: number | null): boolean {
+  if (n.kind !== "extended" || nowMs === null) return false;
+  return nowMs >= Date.parse(extendedNoticeTime(n.result.deadlineAt, liveDeadlineAt));
 }
 
 /** The settle buttons, by colour as the panel and the queue name the

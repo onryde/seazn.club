@@ -9,13 +9,14 @@
 // component the harness does not expand, so its props are read and called.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import { plural as pluralRuntime, t as tRuntime } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
 import type { OpenRoundPairing, OpenRoundView } from "@/lib/open-round";
 import { DEADLINE_AFTER_MS } from "@/server/external-play/window";
+import { CHECKIN_EXTEND_MAX, CHECKIN_EXTEND_STEP_MINUTES, emptyExtendTally } from "@/lib/checkin-extend";
 
 const router = vi.hoisted(() => ({ refresh: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
@@ -71,6 +72,9 @@ const ROUND = (o: Partial<OpenRoundView> = {}): OpenRoundView => ({
   press: "open",
   earlierInPlay: [],
   pairings: [P(1), P(2)],
+  extendableBoards: 0,
+  extendWindows: [],
+  extendRefusals: emptyExtendTally(),
   ...o,
 });
 const OPENED_AT = "2026-10-16T18:04:00.000Z";
@@ -229,3 +233,285 @@ describe("Resend — on its own pairing", () => {
     expect(checked, "anti-vacuity: answers checked").toBe(7);
   });
 });
+
+// Spec 2026-10-09 §3.2.2: "+5 min to the round" on the control of an OPEN round - through the real component, reducer and runner.
+describe("+5 min to the round - on the control of an open round", () => {
+  const EXTENDABLE = (extendableBoards: number) => ({ ...INVITED, extendableBoards });
+  const extendNotice = (tree: ReactElement[]) => byTestId(tree, "open-round-extend-notice").map((n) => textOf(n)).join("|");
+  const RESULT = {
+    extended: 6,
+    skipped: { closed: 0, gameStarted: 2, capReached: 0 },
+    notOpenYet: 0,
+    ownBoards: 0,
+    failed: 0,
+    addedMinutes: CHECKIN_EXTEND_STEP_MINUTES,
+  };
+
+  it("the empty case first: no extendable board, no button; a round not yet opened offers none either", () => {
+    expect(byTestId(mount(EXTENDABLE(0)).tree(), "open-round-extend-cta")).toHaveLength(0);
+    expect(byTestId(mount(ROUND({ extendableBoards: 4 })).tree(), "open-round-extend-cta"), "a paired round is not open: nothing to extend").toHaveLength(0);
+    expect(byTestId(mount(EXTENDABLE(0)).tree(), "open-round-extend")).toHaveLength(0);
+  });
+
+  it("offered on an open round with extendable boards: the label, and the count of boards it reaches", () => {
+    const ui = mount(EXTENDABLE(6));
+    const cta = byTestId(ui.tree(), "open-round-extend-cta");
+    expect(cta).toHaveLength(1);
+    expect(textOf(cta[0]!)).toBe(en["externalPlay.checkinExtend.round"]!.replace("{minutes}", String(CHECKIN_EXTEND_STEP_MINUTES)));
+    expect(textOf(byTestId(ui.tree(), "open-round-extend")[0]!)).toContain(pl("externalPlay.checkinExtend.roundHint", 6));
+  });
+
+  it("sends ONE request with THIS round's number to the extend route, however many taps; the answer is the round's extend notice and the page refreshes", async () => {
+    const ui = mount(EXTENDABLE(6));
+    click(byTestId(ui.tree(), "open-round-extend-cta")[0]);
+    click(byTestId(ui.tree(), "open-round-extend-cta")[0]);
+    expect(net.calls.map((c) => [c.url, c.json])).toEqual([["/api/v1/stages/s1/extend-checkin", { roundNo: 2 }]]);
+    expect(propsOf(byTestId(ui.tree(), "open-round-extend-cta")[0]!).disabled, "held while in flight").toBe(true);
+    expect(propsOf(byTestId(ui.tree(), "open-round-cta")[0] ?? byTestId(ui.tree(), "open-round-resend-f1")[0]!).disabled, "so is every other control").toBe(true);
+    net.calls[0]!.resolve(RESULT);
+    await flush();
+    expect(extendNotice(ui.tree())).toBe(`Added ${CHECKIN_EXTEND_STEP_MINUTES} minutes to 6 boards. ${pl("externalPlay.checkinExtend.skip.gameStarted", 2)}`);
+    expect(router.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("the answer survives the refresh, even when nothing is left to extend; a second press clears it first", async () => {
+    const ui = mount(EXTENDABLE(6));
+    click(byTestId(ui.tree(), "open-round-extend-cta")[0]);
+    net.calls[0]!.resolve(RESULT);
+    await flush();
+    ui.rerender({ round: EXTENDABLE(0), tz: "Europe/London" });
+    expect(extendNotice(ui.tree())).toContain("Added 5 minutes to 6 boards.");
+    expect(byTestId(ui.tree(), "open-round-extend-cta"), "everything capped: no button").toHaveLength(0);
+    ui.rerender({ round: EXTENDABLE(3), tz: "Europe/London" });
+    click(byTestId(ui.tree(), "open-round-extend-cta")[0]);
+    expect(extendNotice(ui.tree()), "cleared while the next is in flight").toBe("");
+  });
+
+  it("each refusal reads in words, never the code: the round not open, any other error", async () => {
+    const cases: [ApiV1Error, string][] = [
+      [new ApiV1Error("x", 409, "ROUND_NOT_OPEN"), en["externalPlay.checkinExtend.refused.roundNotOpen"]!],
+      [new ApiV1Error("x", 403, "ARBITER_NOT_ORGANISER"), en["externalPlay.checkinExtend.refused.failed"]!],
+      [new ApiV1Error("x", 500, "INTERNAL"), en["externalPlay.checkinExtend.refused.failed"]!],
+    ];
+    let checked = 0;
+    for (const [err, expected] of cases) {
+      net.calls.length = 0;
+      const ui = mount(EXTENDABLE(2));
+      click(byTestId(ui.tree(), "open-round-extend-cta")[0]);
+      net.calls[0]!.reject(err);
+      await flush();
+      expect(extendNotice(ui.tree()), err.code).toBe(expected);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity").toBe(cases.length);
+  });
+
+  it("a Resend in flight holds it: one request at a time across the control", () => {
+    const ui = mount(EXTENDABLE(2));
+    click(byTestId(ui.tree(), "open-round-resend-f1")[0]);
+    expect(propsOf(byTestId(ui.tree(), "open-round-extend-cta")[0]!).disabled).toBe(true);
+    click(byTestId(ui.tree(), "open-round-extend-cta")[0]);
+    expect(net.calls.map((c) => c.url), "the +5 min tap behind it sent nothing").toEqual(["/api/v1/fixtures/f1/external-play/resend"]);
+  });
+});
+
+// Owner rule (2026-10-19): +5 is offered ONLY inside a board's check-in window, and the screen keeps that true on a ticking clock - the
+// button arrives AT the opening and leaves AT the deadline, with no refresh between. Through the real component and the real clock hook,
+// under a fake clock (the island renders without a DOM; the hook's timers are the thing under test).
+describe("+5 min to the round - the control's ticking clock", () => {
+  const OPENS = Date.parse("2026-10-16T18:14:00.000Z");
+  const CLOSES = Date.parse("2026-10-16T18:24:00.000Z");
+  const WINDOW = { opensAt: new Date(OPENS).toISOString(), deadlineAt: new Date(CLOSES).toISOString(), extensionsLeft: CHECKIN_EXTEND_MAX };
+  /** An open round whose one window is ahead: the server's snapshot count is 0 (nothing extendable yet). */
+  const AHEAD = (over: Partial<OpenRoundView> = {}): OpenRoundView => ({ ...INVITED, extendableBoards: 0, extendWindows: [WINDOW], ...over });
+  const cta = (tree: ReactElement[]) => byTestId(tree, "open-round-extend-cta").length;
+  const extendNotice = (tree: ReactElement[]) => byTestId(tree, "open-round-extend-notice").map((n) => textOf(n)).join("|");
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("one ms before the opening: no button; AT the opening: the button; one ms before the deadline: still; AT the deadline: gone - and then no timer is left running", () => {
+    vi.setSystemTime(OPENS - 5);
+    const ui = mount(AHEAD());
+    vi.advanceTimersByTime(0);
+    expect(cta(ui.tree()), "5 ms before the opening").toBe(0);
+    vi.advanceTimersByTime(4);
+    expect(Date.now(), "premise: the clock is 1 ms short of the opening").toBe(OPENS - 1);
+    expect(cta(ui.tree()), "1 ms before the opening").toBe(0);
+    vi.advanceTimersByTime(1);
+    expect(Date.now(), "premise: the clock is AT the opening").toBe(OPENS);
+    expect(cta(ui.tree()), "AT the opening").toBe(1);
+    expect(textOf(byTestId(ui.tree(), "open-round-extend")[0]!), "reaching one board").toContain(pl("externalPlay.checkinExtend.roundHint", 1));
+    vi.advanceTimersByTime(CLOSES - 1 - OPENS);
+    expect(Date.now(), "premise: the clock is 1 ms short of the deadline").toBe(CLOSES - 1);
+    expect(cta(ui.tree()), "1 ms before the deadline").toBe(1);
+    vi.advanceTimersByTime(1);
+    expect(Date.now(), "premise: the clock is AT the deadline").toBe(CLOSES);
+    expect(cta(ui.tree()), "AT the deadline").toBe(0);
+    expect(byTestId(ui.tree(), "open-round-extend-why").map((n) => propsOf(n)["data-why"]), "nothing to offer: the reason stands in its place").toEqual(["closed"]);
+    expect(vi.getTimerCount(), "every edge is behind: no timer keeps running").toBe(0);
+  });
+
+  it("the count it shows is the CLOCK's, not the snapshot's: a stale server count of 6 over one live window reads 1", () => {
+    vi.setSystemTime(OPENS + 1);
+    const ui = mount(AHEAD({ extendableBoards: 6 }));
+    expect(cta(ui.tree()), "before the clock is known, the server's count stands").toBe(1);
+    expect(textOf(byTestId(ui.tree(), "open-round-extend")[0]!)).toContain(pl("externalPlay.checkinExtend.roundHint", 6));
+    vi.advanceTimersByTime(0);
+    expect(textOf(byTestId(ui.tree(), "open-round-extend")[0]!)).toContain(pl("externalPlay.checkinExtend.roundHint", 1));
+  });
+
+  it("the helper line stands under the button, its numbers from the constants", () => {
+    vi.setSystemTime(OPENS + 1);
+    const ui = mount(AHEAD());
+    vi.advanceTimersByTime(0);
+    expect(textOf(byTestId(ui.tree(), "open-round-extend-helper")[0]!)).toContain(
+      en["externalPlay.checkinExtend.helper"]!.replace("{minutes}", String(CHECKIN_EXTEND_STEP_MINUTES)).replace("{max}", String(CHECKIN_EXTEND_MAX)),
+    );
+  });
+
+  it("a round that is not open, or has no window, keeps no timer at all", () => {
+    vi.setSystemTime(OPENS + 1);
+    mount(ROUND({ extendWindows: [WINDOW] }));
+    mount(AHEAD({ extendWindows: [] }));
+    vi.advanceTimersByTime(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("the answer to a press survives the deadline passing, with no button beside it", async () => {
+    vi.setSystemTime(OPENS + 1);
+    const ui = mount(AHEAD());
+    vi.advanceTimersByTime(0);
+    click(byTestId(ui.tree(), "open-round-extend-cta")[0]);
+    net.calls[0]!.resolve(RESULT_FOR_CLOCK);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(extendNotice(ui.tree()), "the answer is on screen").toContain("Added 5 minutes to 1 board.");
+    await vi.advanceTimersByTimeAsync(CLOSES - Date.now());
+    expect(Date.now()).toBe(CLOSES);
+    expect(cta(ui.tree()), "the deadline passed: the button left").toBe(0);
+    expect(extendNotice(ui.tree()), "the answer stayed").toContain("Added 5 minutes to 1 board.");
+  });
+});
+
+// Owner copy (2026-10-19): where "+5 min to the round" is not offered the round says why - the one cause every board gives in its own
+// words, "No board can be extended right now" for a mix, nothing for a round that lists no boards. The control's two facts: the
+// server's tally of the boards no clock can change (`extendRefusals`) and the windows it counts on the ticking clock.
+describe("+5 min to the round - the control's reason where it is not offered", () => {
+  const OPENS = Date.parse("2026-10-16T18:14:00.000Z");
+  const CLOSES = Date.parse("2026-10-16T18:24:00.000Z");
+  const WIN = (left = CHECKIN_EXTEND_MAX) => ({ opensAt: new Date(OPENS).toISOString(), deadlineAt: new Date(CLOSES).toISOString(), extensionsLeft: left });
+  const VIEW = (o: { tally?: Partial<OpenRoundView["extendRefusals"]>; windows?: OpenRoundView["extendWindows"]; extendable?: number } = {}): OpenRoundView => ({
+    ...INVITED,
+    extendableBoards: o.extendable ?? 0,
+    extendWindows: o.windows ?? [],
+    extendRefusals: { ...emptyExtendTally(), ...o.tally },
+  });
+  const whyOf = (tree: ReactElement[]) => byTestId(tree, "open-round-extend-why").map((n) => [propsOf(n)["data-why"], textOf(n)] as const);
+  const WORDS = {
+    game_started: en["externalPlay.checkinExtend.why.gameStarted"]!,
+    closed: en["externalPlay.checkinExtend.why.closed"]!,
+    not_open: en["externalPlay.checkinExtend.why.notOpen"]!,
+    cap_reached: en["externalPlay.checkinExtend.why.capReached"]!,
+  };
+  const MIXED = en["externalPlay.checkinExtend.why.roundNoneOpen"]!;
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("the empty cases first: a round with no boards counted, and a round not opened, say nothing - and no button", () => {
+    vi.setSystemTime(OPENS - 5);
+    const empty = mount(VIEW());
+    expect(byTestId(empty.tree(), "open-round-extend"), "no boards counted: no bar at all").toHaveLength(0);
+    const paired = mount(ROUND({ extendRefusals: { ...emptyExtendTally(), game_started: 2 } }));
+    expect(whyOf(paired.tree()), "a round that was never opened has nothing to extend and nothing to explain").toEqual([]);
+  });
+
+  it("ONE cause, in its own words: a game on each board; every board closed; no board open yet; no press left on the board that is open", () => {
+    const rows: [string, OpenRoundView, number, keyof typeof WORDS][] = [
+      ["game_started", VIEW({ tally: { game_started: 2 } }), OPENS + 1, "game_started"],
+      ["closed", VIEW({ tally: { closed: 1 } }), OPENS + 1, "closed"],
+      ["not_open", VIEW({ windows: [WIN()] }), OPENS - 1, "not_open"],
+      ["cap_reached", VIEW({ windows: [WIN(0)] }), OPENS + 1, "cap_reached"],
+    ];
+    for (const [name, view, now, code] of rows) {
+      vi.setSystemTime(now);
+      const ui = mount(view);
+      vi.advanceTimersByTime(0);
+      expect(whyOf(ui.tree()), name).toEqual([[code, WORDS[code]]]);
+      expect(byTestId(ui.tree(), "open-round-extend-cta"), `${name}: no button`).toHaveLength(0);
+    }
+    expect(rows.length, "anti-vacuity: four causes").toBe(4);
+  });
+
+  it("a MIX is 'No board can be extended right now': a game on one board and the other not open yet", () => {
+    vi.setSystemTime(OPENS - 1);
+    const ui = mount(VIEW({ tally: { game_started: 1 }, windows: [WIN()] }));
+    vi.advanceTimersByTime(0);
+    expect(whyOf(ui.tree())).toEqual([["mixed", MIXED]]);
+  });
+
+  it("before the viewer's clock is known, the snapshot's reading stands (the windows as the server saw them: not open yet)", () => {
+    vi.setSystemTime(OPENS - 1);
+    const ui = mount(VIEW({ windows: [WIN()] }));
+    expect(whyOf(ui.tree()), "the first render, before any tick").toEqual([["not_open", WORDS.not_open]]);
+  });
+
+  it("on the ticking clock the sentence follows the windows: mix -> button AT the opening -> mix again AT the deadline - with no refresh", () => {
+    vi.setSystemTime(OPENS - 5);
+    const ui = mount(VIEW({ tally: { game_started: 1 }, windows: [WIN()] }));
+    vi.advanceTimersByTime(0);
+    const state = () => [whyOf(ui.tree()).map(([c]) => c), byTestId(ui.tree(), "open-round-extend-cta").length] as const;
+    expect(state(), "5 ms before the opening: a game here, not open there").toEqual([["mixed"], 0]);
+    vi.advanceTimersByTime(4);
+    expect(state(), "1 ms before").toEqual([["mixed"], 0]);
+    vi.advanceTimersByTime(1);
+    expect(Date.now()).toBe(OPENS);
+    expect(state(), "AT the opening: the button, and no reason beside it").toEqual([[], 1]);
+    vi.advanceTimersByTime(CLOSES - 1 - OPENS);
+    expect(state(), "1 ms before the deadline").toEqual([[], 1]);
+    vi.advanceTimersByTime(1);
+    expect(Date.now()).toBe(CLOSES);
+    expect(state(), "AT the deadline: a game on one board, closed on the other").toEqual([["mixed"], 0]);
+  });
+
+  it("on the ticking clock a capped board says 'No extensions left' while its window runs and 'Check-in has closed' from its deadline on", () => {
+    vi.setSystemTime(OPENS + 1);
+    const ui = mount(VIEW({ windows: [WIN(0)] }));
+    vi.advanceTimersByTime(0);
+    expect(whyOf(ui.tree()).map(([c]) => c)).toEqual(["cap_reached"]);
+    vi.advanceTimersByTime(CLOSES - Date.now());
+    expect(Date.now()).toBe(CLOSES);
+    expect(whyOf(ui.tree()).map(([c]) => c)).toEqual(["closed"]);
+  });
+
+  it("every locale has the round's sentence, and none carries an unfilled slot", () => {
+    const sentence = (locale: Record<string, string>) => locale["externalPlay.checkinExtend.why.roundNoneOpen"];
+    const dict = (l: string) => JSON.parse(readFileSync(join(__dirname, "..", "..", "..", "..", "dictionaries", l, "ui.json"), "utf8")) as Record<string, string>;
+    expect(sentence(en)).toBe("No board can be extended right now");
+    let checked = 0;
+    for (const l of ["es", "fr", "nl"]) {
+      expect(sentence(dict(l)), `${l}: translated`).toBeTruthy();
+      expect(sentence(dict(l)), `${l}: not the English`).not.toBe(sentence(en));
+      expect(sentence(dict(l)), `${l}: no unfilled slot`).not.toMatch(/[{}]/);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: three other locales").toBe(3);
+  });
+});
+
+const RESULT_FOR_CLOCK = {
+  extended: 1,
+  skipped: { closed: 0, gameStarted: 0, capReached: 0 },
+  notOpenYet: 0,
+  ownBoards: 0,
+  failed: 0,
+  addedMinutes: CHECKIN_EXTEND_STEP_MINUTES,
+};

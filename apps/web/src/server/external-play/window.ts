@@ -1,3 +1,4 @@
+import { CHECKIN_EXTEND_MAX, CHECKIN_EXTEND_STEP_MS, EXTEND_REFUSALS, extensionsLeft, type ExtendRefusal, type ExtendWindow } from "@/lib/checkin-extend";
 import type { NeedsReason } from "./types";
 
 /** Spec §8.1 — the only definition of these values. */
@@ -20,13 +21,21 @@ export const LICHESS_TIMEOUT_MS = 10_000;
 export const CHECKIN_BATCH_SIZE = 10;
 export const CHECKIN_BATCH_GAP_MS = 120_000;
 
+/** The check-in extension (spec §3.2.2): the arbiter adds `CHECKIN_EXTEND_STEP_MS` to ONE board's check-in while it is still open,
+ *  at most `CHECKIN_EXTEND_MAX` times (owner, 2026-10-19: +5 minutes a press, three presses). The numbers are declared once, in
+ *  the client-safe `lib/checkin-extend.ts` (the screens print them), and re-exported here, where the rules are. The board's
+ *  extension is stored on its bridge row (`fixture_external_play.checkin_extra_ms`, a number of ms, not a count of presses, so a
+ *  retuned step never moves a deadline a player was told) and enters every reader through the board's anchor (`boardAnchor`). */
+export { CHECKIN_EXTEND_MAX, CHECKIN_EXTEND_STEP_MS, EXTEND_REFUSALS, extensionsLeft, type ExtendRefusal };
+
 declare const boardAnchorBrand: unique symbol;
 
 /** The instant a BOARD's window hangs off: its batch's start, `round_opened_at + batch × CHECKIN_BATCH_GAP_MS`. A branded
  *  value that only `boardAnchor` makes, so a raw round stamp (a bare Date) no longer compiles anywhere a window is asked
  *  about. `batch` rides along because batch 0 keeps the T−10 lead (a stamp in the future still reads "before") and a later
- *  batch does not (it opens AT its start, never before the organiser pressed Open). */
-export type BoardAnchor = { readonly at: Date; readonly batch: number; readonly [boardAnchorBrand]: true };
+ *  batch does not (it opens AT its start, never before the organiser pressed Open). `extraMs` is the board's check-in
+ *  extension (spec §3.2.2): time added to its DEADLINE, and through the deadline to the line's cap, by `windowFor` and nowhere else. */
+export type BoardAnchor = { readonly at: Date; readonly batch: number; readonly extraMs: number; readonly [boardAnchorBrand]: true };
 
 /** The batch a board of zero-based `rank` is in, in a round that staggers. */
 export function batchOfRank(rank: number): number {
@@ -40,23 +49,27 @@ export function batchCount(boards: number): number {
 }
 
 /** THE constructor of a board's anchor. `staggered` is the flag the round's open STORED (spec §3.2.1): an `off` round is one
- *  batch, and a later camera downgrade never reads here. */
-export function boardAnchor(roundOpenedAt: Date, rank: number, staggered: boolean): BoardAnchor {
+ *  batch, and a later camera downgrade never reads here. `extraMs` is the board's stored check-in extension (spec §3.2.2): 0 for
+ *  a board nobody extended, and it MUST be handed through by every production caller (batch-anchor-source-guard.test.ts reads
+ *  the call sites), because a reader that leaves it out judges the board by a deadline the players are no longer on. */
+export function boardAnchor(roundOpenedAt: Date, rank: number, staggered: boolean, extraMs = 0): BoardAnchor {
+  if (!Number.isInteger(extraMs) || extraMs < 0) throw new RangeError(`a board's check-in extension is a non-negative integer of ms, got ${extraMs}`);
   const batch = staggered ? batchOfRank(rank) : 0;
-  return { at: new Date(roundOpenedAt.getTime() + batch * CHECKIN_BATCH_GAP_MS), batch } as BoardAnchor;
+  return { at: new Date(roundOpenedAt.getTime() + batch * CHECKIN_BATCH_GAP_MS), batch, extraMs } as BoardAnchor;
 }
 
 export type PlayWindow = { emailAt: Date; opensAt: Date; deadline: Date };
 
 /** A board's window: batch 0 opens `WINDOW_OPEN_LEAD_MS` before its anchor, a later batch AT its anchor (the lead would
  *  open it before the organiser pressed Open, and the stagger would not exist); every batch closes `DEADLINE_AFTER_MS`
- *  after its own start, so a batch that opens late loses none of it. */
+ *  after its own start, so a batch that opens late loses none of it - plus the board's own extension (spec §3.2.2), which
+ *  moves the deadline and nothing else. */
 export function windowFor(anchor: BoardAnchor): PlayWindow {
   const t = anchor.at.getTime();
   return {
     emailAt: new Date(t - EMAIL_LEAD_MS),
     opensAt: new Date(anchor.batch === 0 ? t - WINDOW_OPEN_LEAD_MS : t),
-    deadline: new Date(t + DEADLINE_AFTER_MS),
+    deadline: new Date(t + DEADLINE_AFTER_MS + anchor.extraMs),
   };
 }
 
@@ -82,6 +95,54 @@ export function roomPhase(now: Date, anchor: BoardAnchor): RoomPhase {
 export function checkInCounts(checkedInAt: Date | null, anchor: BoardAnchor): boolean {
   if (checkedInAt === null) return false;
   return roomPhase(checkedInAt, anchor) === "open";
+}
+
+/** Is a game on file - or possibly on file - behind a board's bridge row at `now`? A recorded challenge, a sent create (T9's
+ *  marker) or a LIVE mint claim (T9 in flight, before its marker): the same three facts as `gameEvidenceOn` (video/realtimekit.ts,
+ *  the SQL form the re-open and ensureMeeting keep), so the check-in extension refuses on exactly the boards a re-pair would. */
+export function bridgeGameOnFile(
+  b: { status: string; challengeId: string | null; createSentAt: Date | null; mintClaimedAt: Date | null },
+  now: Date,
+): boolean {
+  if (b.challengeId !== null || b.createSentAt !== null) return true;
+  return b.status === "pending" && b.mintClaimedAt !== null && b.mintClaimedAt.getTime() >= liveMintClaimSince(now).getTime();
+}
+
+/** THE rule for "may this board's check-in be extended now?", pure so the door, the arbiter's board list and the round's count
+ *  of extendable boards all ask the same function. The board's check-in must be OPEN - between its opening and its (extended)
+ *  deadline - with no game on file (`gameOnFile`: a challenge, a create marker or a live mint claim: the repo's `gameEvidenceOn`),
+ *  the board still to be played (`playable`: not finished, cancelled, voided or withdrawn) and under the cap. The reasons are
+ *  judged in a fixed order, the board's own state first: an over board is over whatever the clock says, a game on file is a
+ *  game whatever the window says, and a capped board that has also closed is `closed` (nothing more to be done) and not `cap_reached`.
+ *  `anchor` carries the board's CURRENT extension; `extensions` is its count of presses. */
+export function extendRefusal(a: {
+  now: Date;
+  anchor: BoardAnchor;
+  extensions: number;
+  playable: boolean;
+  gameOnFile: boolean;
+}): ExtendRefusal | null {
+  if (!Number.isInteger(a.extensions) || a.extensions < 0) throw new RangeError(`a board's count of extensions is a non-negative integer, got ${a.extensions}`);
+  if (!a.playable) return "not_playable";
+  if (a.gameOnFile) return "game_started";
+  const phase = roomPhase(a.now, a.anchor);
+  if (phase === "closed") return "closed";
+  if (phase === "before") return "not_open";
+  if (a.extensions >= CHECKIN_EXTEND_MAX) return "cap_reached";
+  return null;
+}
+
+/** The window a screen may ask the CLOCK about (spec §3.2.2, owner 2026-10-19: +5 only inside the check-in window): the board's
+ *  `opensAt`, deadline and presses left when only the clock stands between it and a verdict - the board still to be played, no game on
+ *  file, and not yet closed at `now` - and null when something else has settled it, which no tick of a clock can change (a board that is
+ *  over, a game on file, a window already closed). A board with no presses left is in the list (`extensionsLeft` 0): its verdict still
+ *  follows the clock - "no extensions left" while the window runs, "closed" from its deadline on - and a screen counts a board as
+ *  extendable at an instant iff that instant is inside its window AND it has a press left (`liveExtendableCount`), so for any `now` that
+ *  count is the count of boards `extendRefusal` accepts: asserted by the DB tests that read both. */
+export function extendWindowOf(a: { now: Date; anchor: BoardAnchor; extensions: number; playable: boolean; gameOnFile: boolean }): ExtendWindow | null {
+  if (!a.playable || a.gameOnFile || roomPhase(a.now, a.anchor) === "closed") return null;
+  const w = windowFor(a.anchor);
+  return { opensAt: w.opensAt.toISOString(), deadlineAt: w.deadline.toISOString(), extensionsLeft: extensionsLeft(a.extensions) };
 }
 
 export const LICHESS_NOT_STARTED: ReadonlySet<string> = new Set(["created"]);
