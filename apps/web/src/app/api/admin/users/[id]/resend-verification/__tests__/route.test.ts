@@ -43,6 +43,21 @@ vi.mock("next/headers", () => ({
 const router = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
 
+// The REAL minter runs; this only records what it was asked and what it returned, so the test can prove the route
+// goes through `createVerificationToken` (the minter the telemetry scrub tests also drive) and mails ITS token.
+const minted = vi.hoisted(() => ({ calls: [] as { userId: string; token: string }[] }));
+vi.mock("@/lib/verification", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/verification")>();
+  return {
+    ...real,
+    createVerificationToken: vi.fn(async (userId: string) => {
+      const token = await real.createVerificationToken(userId);
+      minted.calls.push({ userId, token });
+      return token;
+    }),
+  };
+});
+
 const mail = vi.hoisted(() => ({ sent: [] as { to: string; link: string }[] }));
 vi.mock("@/lib/email", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/email")>()),
@@ -103,6 +118,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  minted.calls = [];
   jar.values.clear();
   router.push.mockClear();
   router.refresh.mockClear();
@@ -169,5 +185,57 @@ describe.skipIf(!HAS_DB)("POST /api/admin/users/[id]/resend-verification — the
     expect(third.status).toBe(400);
     expect(third.body.error).toBe("Email already verified");
     expect(third.mailed, "nothing mailed once verified").toEqual([]);
+  });
+
+  it("mints through createVerificationToken: stale tokens are gone, one 24h row exists, and the mailed link carries that token", async () => {
+    const staff = await user("staff", { staff: true });
+    const target = await user("target");
+    // Two stale tokens from earlier presses: the route must clear them, not add a third beside them.
+    const stale = [`stale-${randomUUID()}`, `stale-${randomUUID()}`];
+    for (const token of stale) {
+      await sql`insert into email_verifications (user_id, token, expires_at) values (${target.id}, ${token}, now() + interval '1 hour')`;
+    }
+
+    const before = Date.now();
+    const pressed = await pressResend(staff.id, target.id);
+    const after = Date.now();
+
+    expect(pressed.status, JSON.stringify(pressed.body)).toBe(200);
+    expect(minted.calls, "one mint, for the target user").toHaveLength(1);
+    expect(minted.calls[0]!.userId).toBe(target.id);
+    const rows = await sql<{ token: string; expires_at: string }[]>`
+      select token, expires_at from email_verifications where user_id = ${target.id}`;
+    expect(rows.map((r) => r.token), "the stale tokens are gone; only the minted one remains").toEqual([minted.calls[0]!.token]);
+    // The 24-hour life of a verification link (kept from the inline minting this replaced).
+    const lifeMs = new Date(rows[0]!.expires_at).getTime();
+    expect(lifeMs).toBeGreaterThanOrEqual(before + 24 * 3600_000 - 1000);
+    expect(lifeMs).toBeLessThanOrEqual(after + 24 * 3600_000 + 1000);
+    expect(new URL(pressed.mailed[0]!.link).searchParams.get("token"), "the mailed link carries the minted token").toBe(
+      minted.calls[0]!.token,
+    );
+    for (const token of stale) {
+      expect((await openVerifyLink(`${ORIGIN}/verify-email?token=${token}`, router.push)).landed, "a stale token verifies nobody").toBeNull();
+    }
+    expect(await emailVerified(target.id)).toBe(false);
+  });
+
+  it("mints nothing when the press is refused: unknown user, deleted user, already verified", async () => {
+    const staff = await user("staff", { staff: true });
+    const verified = await user("verified", { staff: true }); // staff rows are seeded verified
+    const gone = await user("gone");
+    await sql`update users set deleted_at = now() where id = ${gone.id}`;
+
+    const cases = [
+      { id: randomUUID(), status: 404 },
+      { id: gone.id, status: 404 },
+      { id: verified.id, status: 400 },
+    ];
+    for (const c of cases) {
+      const pressed = await pressResend(staff.id, c.id);
+      expect(pressed.status, `target ${c.id}`).toBe(c.status);
+      expect(pressed.mailed, "nothing mailed").toEqual([]);
+    }
+    expect(minted.calls, "nothing minted").toEqual([]);
+    expect(cases.length, "anti-vacuity: every refusal was driven").toBe(3);
   });
 });
