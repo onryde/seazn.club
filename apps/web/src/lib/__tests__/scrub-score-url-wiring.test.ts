@@ -20,7 +20,9 @@ import { createInvite } from "@/server/usecases/invites";
 import { mintCheckinToken } from "@/server/usecases/checkin-token";
 import { createLoginLink } from "@/lib/login-link";
 import { createVerificationToken } from "@/lib/verification";
+import { generateRefCode } from "@/lib/ref-code";
 import { USER_ID } from "./_fake-sql";
+import { clientSpanDetails, otelTraceData, outgoingBreadcrumb, serverSpanDetails, transaction } from "./_sdk-span-data";
 
 // Only the Postgres round trip is a stand-in: the real minters (`createLoginLink`, `createVerificationToken`) run on it.
 vi.mock("@/lib/db", async (importOriginal) => ({
@@ -604,5 +606,65 @@ describe("a credential in a request body: every Sentry config's real hooks drop 
     const integrations = options.integrations as { name: string; processEvent?: unknown }[];
     const scrubber = integrations.find((i) => typeof i.processEvent === "function")!;
     expectBodyGone(run(scrubber.processEvent, consume, {}, {}), login);
+  });
+});
+
+// A sampled transaction's span data carries the request's bare query (`http.query` / `url.query`, with its `?`) beside a URL
+// that has none, and a team's join code rides the register pages' query. The events come from the SDK's own span-data helpers
+// (_sdk-span-data.ts); scrub-span-query.test.ts and scrub-join-code.test.ts hold the sweeps, this proves each REAL config's
+// hooks do it (an inert seam would be red here).
+describe("a one-time token in a span's bare query, and a join code: every Sentry config's real hooks", () => {
+  async function spanEvents() {
+    const login = await createLoginLink(USER_ID);
+    const code = generateRefCode();
+    const url = `https://seazn.club/magic-link?token=${login}&next=%2Fdashboard`;
+    const joinUrl = `https://seazn.club/api/v1/public/orgs/city-club/competitions/spring-open/register/join?join_code=${encodeURIComponent(code)}`;
+    const tx = transaction({ name: "GET /magic-link", traceData: otelTraceData(url) });
+    const child = transaction({
+      name: "GET /dashboard",
+      traceData: otelTraceData("https://seazn.club/dashboard"),
+      spans: [{ description: `GET ${url}`, data: clientSpanDetails(url).data }],
+    });
+    const server = transaction({ name: "GET /magic-link", traceData: serverSpanDetails(url, "/magic-link").data });
+    const joinTx = transaction({ name: "GET /api/v1/public/orgs/[orgSlug]/competitions/[slug]/register/join", traceData: otelTraceData(joinUrl) });
+    const error = { event_id: "s1", transaction: "GET /magic-link", breadcrumbs: [outgoingBreadcrumb(url)], request: { url: "https://seazn.club/magic-link" } };
+    const joinError = { event_id: "s2", request: { method: "GET", url: "https://seazn.club/shared/city-club/spring-open/register/join", query_string: { join_code: code, player_id: "p1" } } };
+    return { login, code, tx, child, server, joinTx, error, joinError };
+  }
+  const data = (e: unknown) => (e as { contexts: { trace: { data: Record<string, unknown> } } }).contexts.trace.data;
+  const spanData = (e: unknown) => (e as { spans: { data: Record<string, unknown> }[] }).spans[0]!.data;
+
+  for (const [name, config] of [
+    ["Sentry server", "../../../sentry.server.config"],
+    ["Sentry edge", "../../../sentry.edge.config"],
+  ] as const) {
+    it(`${name}: beforeSendTransaction scrubs http.query / url.query; beforeSend scrubs a breadcrumb's and a join code's query_string`, async () => {
+      const options = await sentryInitOptions(config);
+      const { login, code, tx, child, server, joinTx, error, joinError } = await spanEvents();
+      const out = (hook: unknown, event: unknown) => run(hook, event, {});
+      expect(data(out(options.beforeSendTransaction, tx))["http.query"]).toBe("?token=[token]&next=%2Fdashboard");
+      expect(data(out(options.beforeSendTransaction, server))["url.query"]).toBe("?token=[token]&next=%2Fdashboard");
+      expect(spanData(out(options.beforeSendTransaction, child))["url.query"]).toBe("?token=[token]&next=%2Fdashboard");
+      expect(data(out(options.beforeSendTransaction, joinTx))["http.query"]).toBe("?join_code=[code]");
+      const beforeSend = JSON.stringify(out(options.beforeSend, error));
+      expect(beforeSend).not.toContain(login);
+      expect(beforeSend).toContain("?token=[token]");
+      const joinOut = out(options.beforeSend, joinError) as { request: { query_string: Record<string, string> } };
+      expect(joinOut.request.query_string).toEqual({ join_code: "[code]", player_id: "p1" });
+      for (const o of [tx, child, server, joinTx]) expect(JSON.stringify(out(options.beforeSendTransaction, o))).not.toMatch(new RegExp(`${login}|${code}`));
+    });
+  }
+
+  it("Sentry client: beforeSend, beforeSendTransaction and the event processor do it too", async () => {
+    const options = await sentryInitOptions("../../../sentry.client.config");
+    const { login, code, tx, child, joinTx, error, joinError } = await spanEvents();
+    expect(data(run(options.beforeSendTransaction, tx, {}))["http.query"]).toBe("?token=[token]&next=%2Fdashboard");
+    expect(spanData(run(options.beforeSendTransaction, child, {}))["url.query"]).toBe("?token=[token]&next=%2Fdashboard");
+    expect(data(run(options.beforeSendTransaction, joinTx, {}))["http.query"]).toBe("?join_code=[code]");
+    expect(JSON.stringify(run(options.beforeSend, error, {}))).not.toContain(login);
+    const integrations = options.integrations as { name: string; processEvent?: unknown }[];
+    const scrubber = integrations.find((i) => typeof i.processEvent === "function")!;
+    expect(data(run(scrubber.processEvent, tx, {}, {}))["http.query"]).toBe("?token=[token]&next=%2Fdashboard");
+    expect(JSON.stringify(run(scrubber.processEvent, joinError, {}, {}))).not.toContain(code);
   });
 });

@@ -124,7 +124,8 @@ export function OfficialInviteForm({
             <>
               <p className="text-slate-500">{msg("officials.inviteLink")}</p>
               <div className="flex items-center gap-2">
-                <code className="min-w-0 flex-1 truncate rounded bg-slate-50 px-2 py-1 text-[11px] text-slate-600">
+                {/* `ph-no-capture`: the one-time claim secret, kept out of PostHog replay (see invite-claim.tsx). */}
+                <code className="ph-no-capture min-w-0 flex-1 truncate rounded bg-slate-50 px-2 py-1 text-[11px] text-slate-600">
                   {result.claim_url}
                 </code>
                 <button

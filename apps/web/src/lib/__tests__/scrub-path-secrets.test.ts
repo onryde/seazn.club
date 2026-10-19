@@ -136,10 +136,13 @@ describe("every route with a secret segment is scrubbed, or is knowingly public"
 
 // ---- builders: every /<path>/${token}-style template -----------------------------------------------------------------
 
-/** Every `/<static path>/${<expression naming a token, secret or code>}` template in the app (routes.ts included), by its static path. */
+/** Every `/<path>/${<expression naming a token, secret or code>}` template in the app (routes.ts included), by its path, with each
+ *  interpolated segment (`${orgId}`) as `[id]`: the invite revoke call is `/api/orgs/[id]/invites/<token>/revoke`, and the path rules are
+ *  anchored at the route root, so the tail `/invites` alone is no longer one. */
 function pathBuilders(): Map<string, string> {
   const found = new Map<string, string>();
-  const builder = /(\/[a-z][a-z0-9-]*(?:\/[a-z][a-z0-9-]*)*)\/\$\{([^}]*)\}/g;
+  const segment = "(?:[a-z][a-z0-9-]*|\\$\\{[^}]*\\})";
+  const builder = new RegExp(`(\\/${segment}(?:\\/${segment})*)\\/\\$\\{([^}]*)\\}`, "g");
   const walk = (dir: string) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name);
@@ -150,8 +153,9 @@ function pathBuilders(): Map<string, string> {
         for (const m of text.matchAll(builder)) {
           // The expression NAMES a secret (`.token`, `invite.token`, `got.secret`, `c.code`, `refCode`), not merely contains the
           // letters (`encodeURIComponent`).
-          if (/(?:^|[.(!\s])(?:token|secret|code|ref_code|refCode|referralCode)\b/.test(m[2]!) && !found.has(m[1]!)) {
-            found.set(m[1]!, path.relative(SRC_DIR, full));
+          const key = m[1]!.replace(/\$\{[^}]*\}/g, "[id]");
+          if (/(?:^|[.(!\s])(?:token|secret|code|ref_code|refCode|referralCode)\b/.test(m[2]!) && !found.has(key)) {
+            found.set(key, path.relative(SRC_DIR, full));
           }
         }
       }
@@ -173,7 +177,7 @@ describe("every /<path>/${token} template is scrubbed, or is knowingly public", 
 
   it("the scan found the builders (anti-vacuity)", () => {
     expect([...builders.keys()].sort()).toEqual(
-      expect.arrayContaining(["/join", "/checkin", "/api/checkin", "/claim", "/api/claims", "/api/invites", "/invites", "/score", "/api/v1/capture/codes", "/refer", "/r", "/api/v1/public/registrations/by-ref"]),
+      expect.arrayContaining(["/join", "/checkin", "/api/checkin", "/claim", "/api/claims", "/api/invites", "/api/orgs/[id]/invites", "/score", "/api/v1/capture/codes", "/refer", "/r", "/api/v1/public/registrations/by-ref"]),
     );
     expect(builders.size).toBeGreaterThanOrEqual(12);
   });
@@ -183,7 +187,7 @@ describe("every /<path>/${token} template is scrubbed, or is knowingly public", 
     let kept = 0;
     for (const [prefix, file] of builders) {
       for (const [kind, tokens] of KINDS) {
-        const url = `${ORIGIN}${prefix}/${tokens[0]!}`;
+        const url = `${ORIGIN}${prefix.replace(/\[id\]/g, "00000000-0000-4000-8000-000000000002")}/${tokens[0]!}`;
         if (prefix in PUBLIC_BUILDERS) {
           expect(scrubScoreUrl(url), `${prefix} (${PUBLIC_BUILDERS[prefix]})`).toBe(url);
           kept++;

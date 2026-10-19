@@ -44,7 +44,9 @@
 // event's URL or transaction names one of those routes, the way a capture route's request is recognised (`isCaptureEvent`).
 //
 // Three more credentials carry themselves in the PATH, and become `[token]` after their prefix, plain or URL-encoded at
-// any depth, by the `/capture/codes/` rules (`SECRET_PATH_PREFIXES`):
+// any depth, by the `/capture/codes/` rules (`SECRET_PATH_ROUTES`). Each is a ROUTE ROOT and is matched only there (the start
+// of a path, after an origin, or after the marketing locale prefix): a club or competition slug is free text, so
+// `/o/x/c/join/d/claim` is an address and not a secret (`ROUTE_ROOT`):
 //  - the profile-claim link `/claim/<secret>` (routes.claim; `pc_` + 43 base64url, 14 days; person-claims.ts) and the
 //    accept call its button makes, `/api/claims/<secret>/accept`: whoever holds it links the profile to their account;
 //  - the org invite `/join/<token>` (24 random bytes; 1 hour to never; up to 1000 uses, 0 = unlimited; the role is admin
@@ -56,15 +58,33 @@
 // Left alone: `/refer/<code>` (a referral link is shared in public on purpose) and `/r/<ref>` (a lookup, not auth; the
 // emailed `token` is what authorises a withdrawal).
 //
+// A team's JOIN CODE is a capability too (`generateRefCode`, 30^6): whoever holds it can join the entry. It rides the register
+// pages as `?join_code=<code>[&player_id=…]` (the join page and its preview request) and as `?join=<code>` (the register
+// page's deep link and the Lichess return path), and is in the join POST's body. Every `join_code=` / `join=` QUERY PARAMETER
+// value becomes `[code]`, plain or URL-encoded at any depth, by name (a join code has no route of its own to scope by).
+//
+// Left visible, on purpose: the OAuth `code=` / `state=` on `/api/auth/google/callback` and `/api/auth/lichess/callback`. The
+// authorization code is single-use and is redeemed only WITH a secret that never leaves the server (Google: the client
+// secret; Lichess: the PKCE `code_verifier`, in an httpOnly cookie), and `state` is compared to an httpOnly cookie, so
+// neither is worth anything to whoever reads the URL. (The verdict table is in lib/__tests__/scrub-query-credentials.test.ts.)
+//
 // A credential also rides a request BODY, which no URL rule sees: the POST that spends a one-time token sends it as JSON
 // (`{ token, next }`), so a Sentry error on that route carries the working credential in `request.data`. A Sentry event
 // whose request URL or transaction names such a route loses its body, the way a capture route's does (`isCaptureEvent`):
 // the POST routes in `BODY_CREDENTIAL_ROUTES` (sign-in consume, email verification, password reset, email-change
 // confirmation, funnel claim, a registrant's withdraw / checkout / resend, and the two whose body is a PASSWORD: log-in
-// and sign-up) and every route with a secret in its path (`SECRET_PATH_PREFIXES`: the invite and claim accepts,
-// check-in, revoke). Only a Sentry event has a body to drop.
+// and sign-up, and a team's join POST) and every route with a secret in its path (`SECRET_PATH_ROUTES`: the invite and claim
+// accepts, check-in, revoke). Only a Sentry event has a body to drop.
+//
+// A sampled TRANSACTION carries the request's query string a second time, in its span data, WITH its `?` and beside a URL
+// that has none: `http.query` in `contexts.trace.data` and an outgoing request's breadcrumb (@sentry/opentelemetry
+// `getRequestSpanData`), `url.query` in a span's data (@sentry/core `getHttpSpanDetailsFromUrlObject`). Where the event, or
+// the span's own sibling url (`url.full`, `url.path`, `http.route`, `http.target`, `url`), names a one-time route, that query
+// loses its `token=` like `request.query_string` does; where it names a body-credential route, the serialised body in
+// `http.request.body.data` goes with the request body (`scrubSpanData`).
 import type * as Sentry from "@sentry/nextjs";
 import type { CaptureResult } from "posthog-js";
+import { LOCALES } from "./i18n-constants";
 import { OVERLAY_KEY_PARAM } from "./realtime-purpose";
 
 // @sentry/nextjs re-exports `Event` but not `Integration` (that lives in
@@ -103,6 +123,16 @@ const RELAY_PAGE_TOKEN_PARAM = "st";
 const RELAY_PAGE_TOKEN_QUERY = new RegExp(`((?:^|[?&])${RELAY_PAGE_TOKEN_PARAM}=)[^&#\\s"'<>]+`, "g");
 /** The same parameter URL-ENCODED inside another URL: `%3Fst%3D` / `%26st%3D`, at any encoding depth, either hex case. */
 const ENCODED_RELAY_PAGE_TOKEN = new RegExp(`(%(?:25)*(?:3[Ff]|26)${RELAY_PAGE_TOKEN_PARAM}%(?:25)*3[Dd])[^%&#\\s"'<>]+`, "g");
+/**
+ * A team's join code (M3, review of PR 988): the register pages' `join_code` and the register deep link's `join`. Both names
+ * are listed here and nowhere else, so a test can follow them.
+ */
+export const JOIN_CODE_PARAMS = ["join_code", "join"] as const;
+const JOIN_CODE_NAMES = JOIN_CODE_PARAMS.join("|");
+/** `join_code=` / `join=` as a query parameter: first in a bare query string or after `?` / `&`, never inside another name (`rejoin=`). */
+const JOIN_CODE_QUERY = new RegExp(`((?:^|[?&])(?:${JOIN_CODE_NAMES})=)[^&#\\s"'<>]+`, "g");
+/** The same parameter URL-ENCODED inside another URL: `%3Fjoin_code%3D` / `%26join%3D`, at any encoding depth, either hex case. */
+const ENCODED_JOIN_CODE = new RegExp(`(%(?:25)*(?:3[Ff]|26)(?:${JOIN_CODE_NAMES})%(?:25)*3[Dd])[^%&#\\s"'<>]+`, "g");
 /** A capture code in a phone route's path: everything up to the next `/`, `?`, `#`, quote, angle bracket or space. */
 const CAPTURE_PATH = /(\/capture\/codes\/)[^/?#\s"'<>]+/g;
 /** The same path URL-ENCODED inside another URL, at any encoding depth, either hex case. */
@@ -120,21 +150,50 @@ const ROOM_TOKEN_QUERY = new RegExp(`((?:^|[?&])t=)${JWT_SHAPE}`, "g");
  *  encoding depth, either hex case. The token ends at its first non-JWT character, so its encoded delimiter stays. */
 const ENCODED_ROOM_TOKEN = new RegExp(`(%(?:25)*(?:3[Ff]|26)t%(?:25)*3[Dd])${JWT_SHAPE}`, "g");
 /**
- * Path prefixes whose NEXT segment is a credential: the profile-claim secret (`/claim/<secret>` and the accept call
+ * Route prefixes whose NEXT segment is a credential: the profile-claim secret (`/claim/<secret>` and the accept call
  * `/api/claims/<secret>/accept`), the org-invite token (`/join/<token>` and `/api/invites/<token>[/accept|/claim]`; the
- * revoke call `/api/orgs/<id>/invites/<token>/revoke` is matched by `/invites/`) and the day's check-in code
- * (`/checkin/<token>`, `/api/checkin/<token>`). Each is spelled with its trailing slash, so `/claims/…`, `/joined/…`,
- * `/checkin-link` and `/register/join` (a public page with nothing after it) do not match. The shortest prefix that
- * covers the API twin is used: `/checkin/` is also inside `/api/checkin/`, `/invites/` inside `/api/invites/`.
+ * revoke call `/api/orgs/<id>/invites/<token>/revoke`) and the day's check-in code (`/checkin/<token>`,
+ * `/api/checkin/<token>`). Each is spelled with its trailing slash, so `/claims/…`, `/joined/…`, `/checkin-link` and
+ * `/register/join` (a public page with nothing after it) do not match, and `[id]` stands for one path segment.
+ *
+ * Every one is a ROUTE ROOT, and is matched there only (`ROUTE_ROOT`): a club or competition slug is free text, so
+ * `/o/x/c/join/d/claim` is an address and not a secret. They are spelled in full, not by their shortest tail, for the same
+ * reason: `/invites/` alone would match any segment named `invites` anywhere.
  * Not here, on purpose: `/refer/<code>` (a referral link is shared in public) and `/r/<ref>` (a lookup, not auth).
  */
-const SECRET_PATH_PREFIXES = ["/claim/", "/api/claims/", "/join/", "/checkin/", "/invites/"] as const;
-/** The prefixes with each `/` spelled as given: `\/claim\/` plain, `%(?:25)*2[Ff]claim%(?:25)*2[Ff]` encoded at any depth. */
-const prefixAlternation = (slash: string) => SECRET_PATH_PREFIXES.map((p) => p.split("/").join(slash)).join("|");
-/** A prefix and the secret after it: everything up to the next `/`, `?`, `#`, quote, angle bracket or space. */
-const SECRET_PATH = new RegExp(`(${prefixAlternation("\\/")})[^/?#\\s"'<>]+`, "g");
+const SECRET_PATH_ROUTES = [
+  "/claim/",
+  "/api/claims/",
+  "/join/",
+  "/checkin/",
+  "/api/checkin/",
+  "/api/invites/",
+  "/api/orgs/[id]/invites/",
+] as const;
+/** The marketing locale prefix (`/fr/pricing`): a route root may follow it. */
+const LOCALE_PREFIX = LOCALES.join("|");
+/**
+ * Where a route root may start, consumed as the front of the match (no lookbehind: it is a syntax error in Safari before
+ * 16.4, and this module loads in every browser): the start of the string, whitespace or a delimiter (a transaction
+ * name's `GET `, a quote, `=`, `&`, `?`, `#`), or an origin (`https://host:3000`); then an optional locale prefix.
+ * A `/` that follows a path segment (`/o/x/join/…`) is not a root.
+ */
+const ROUTE_ROOT = `(?:^|[\\s"'<>=(,;&?#]|https?:\\/\\/[^/\\s"'<>?#]+)(?:\\/(?:${LOCALE_PREFIX}))?`;
+/** The same root inside a URL-ENCODED string, at any depth, either hex case: the start, a plain delimiter, an encoded one
+ *  (`=` `&` `?` `,`), an encoded origin (`https%3A%2F%2Fhost%3A3000`), then the encoded locale prefix. */
+const ENCODED_ROUTE_ROOT = `(?:^|[\\s"'<>=(,;&?#]|%(?:25)*(?:3[Dd]|26|3[Ff]|2[Cc])|https?%(?:25)*3[Aa]%(?:25)*2[Ff]%(?:25)*2[Ff](?:[^%/\\s"'<>?#&]|%(?:25)*3[Aa])+)(?:%(?:25)*2[Ff](?:${LOCALE_PREFIX}))?`;
+/** The routes with each `/` spelled as given and `[id]` as one segment: `\/claim\/` plain, `%(?:25)*2[Ff]claim%(?:25)*2[Ff]` encoded. */
+const prefixAlternation = (slash: string, segment = "[^/?#\\s\"'<>]+") =>
+  SECRET_PATH_ROUTES.map((r) =>
+    r
+      .split("/")
+      .map((seg) => (seg === "[id]" ? segment : seg))
+      .join(slash),
+  ).join("|");
+/** A route root, its prefix, and the secret after it: base64url, so up to the next `/`, `?`, `#`, `&`, `=`, quote, angle bracket or space. */
+const SECRET_PATH = new RegExp(`(${ROUTE_ROOT}(?:${prefixAlternation("\\/")}))[^/?#&=\\s"'<>]+`, "g");
 /** The same path URL-ENCODED inside another URL (a sign-in `next=/claim/<secret>`), at any encoding depth, either hex case. */
-const ENCODED_SECRET_PATH = new RegExp(`(${prefixAlternation("%(?:25)*2[Ff]")})[^%&/?#\\s"'<>]+`, "g");
+const ENCODED_SECRET_PATH = new RegExp(`(${ENCODED_ROUTE_ROOT}(?:${prefixAlternation("%(?:25)*2[Ff]", "[^%&/?#\\s\"'<>]+")}))[^%&=/?#\\s"'<>]+`, "g");
 
 /**
  * The routes whose emailed link carries a SINGLE-USE token in its `token` query parameter to a page that spends it: the
@@ -182,6 +241,8 @@ const MAYBE_TOKEN = new RegExp(
     `${RELAY_PAGE_TOKEN_PARAM}%`,
     "\\/capture\\/codes\\/",
     "capture%(?:25)*2[Ff]codes%",
+    `(?:${JOIN_CODE_NAMES})=`,
+    `(?:${JOIN_CODE_NAMES})%`,
     "(?:^|[?&])t=",
     "%(?:25)*(?:3[Ff]|26)t%",
     prefixAlternation("\\/"),
@@ -199,8 +260,9 @@ export function scrubTokenQuery(query: string): string {
 /** One string: `/score/<token>` (plain or encoded) becomes `/score/[token]`, a bare `dl_…` secret becomes `dl_[token]`,
  *  an overlay `key=` query value (plain or encoded) becomes `[key]`, a relay page token's `st=` value (plain or
  *  encoded) becomes `[st]`, a capture code in `/capture/codes/<code>` (plain or encoded) becomes `[code]`, a
- *  match-room token in a `t=` query value (plain or encoded) becomes `[token]`, the secret after a
- *  `SECRET_PATH_PREFIXES` prefix (`/claim/`, `/join/`, `/checkin/`, …; plain or encoded) becomes `[token]`, and a
+ *  match-room token in a `t=` query value (plain or encoded) becomes `[token]`, a team's join code in a
+ *  `join_code=` / `join=` query value (plain or encoded) becomes `[code]`, the secret after a
+ *  `SECRET_PATH_ROUTES` route root (`/claim/`, `/join/`, `/checkin/`, …; plain or encoded) becomes `[token]`, and a
  *  one-time sign-in token in the `token=` query value of a one-time route (plain or encoded) becomes `[token]`. */
 export function scrubScoreUrl(value: string): string {
   if (!MAYBE_TOKEN.test(value)) return value;
@@ -212,6 +274,8 @@ export function scrubScoreUrl(value: string): string {
     .replace(ENCODED_OVERLAY_KEY, "$1[key]")
     .replace(RELAY_PAGE_TOKEN_QUERY, "$1[st]")
     .replace(ENCODED_RELAY_PAGE_TOKEN, "$1[st]")
+    .replace(JOIN_CODE_QUERY, "$1[code]")
+    .replace(ENCODED_JOIN_CODE, "$1[code]")
     .replace(CAPTURE_PATH, "$1[code]")
     .replace(ENCODED_CAPTURE_PATH, "$1[code]")
     .replace(ROOM_TOKEN_QUERY, "$1[token]")
@@ -322,9 +386,10 @@ function isOneTimeTokenEvent(event: Event): boolean {
  * the sign-in consume `{ token, next }`, the email verification `{ token, next }`, the password reset `{ token,
  * password }` (the new password is in it too), the email-change confirmation (its token rides the query; any body goes
  * with it), the funnel claim `{ token }`, the registrant's access-token calls (withdraw, checkout, resend), and the
- * routes whose body is a PASSWORD: log-in and sign-up `{ email, password, next }`. A password is a standing credential
- * rather than a one-time token, but it leaks the same way. A route whose secret is in its PATH is not listed:
- * `SECRET_PATH_PREFIXES` covers it. Exported so a test can compare the list with the route files, which are where it
+ * routes whose body is a PASSWORD: log-in and sign-up `{ email, password, next }`, and the team join POST, whose body
+ * carries the join code (`{ join_code, … }`). A password is a standing credential rather than a one-time token, but it leaks
+ * the same way. A route whose secret is in its PATH is not listed:
+ * `SECRET_PATH_ROUTES` covers it. Exported so a test can compare the list with the route files, which are where it
  * comes from: a route that takes a token or a password in its body and is missing here fails that test.
  */
 export const BODY_CREDENTIAL_ROUTES = [
@@ -339,6 +404,7 @@ export const BODY_CREDENTIAL_ROUTES = [
   "/api/v1/public/registrations/groups/[id]/resend",
   "/api/auth/login",
   "/api/auth/signup",
+  "/api/v1/public/orgs/[orgSlug]/competitions/[slug]/register/join",
 ] as const;
 const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /** A route template as a regex source: a `[param]` segment is any one segment (a real id, or the literal `[id]` of a transaction). */
@@ -346,7 +412,7 @@ const routePattern = (route: string) => route.split("/").map((seg) => (/^\[.+\]$
 /** A body-credential route's event: the route ends the URL (a query string or fragment may follow), so `/verify-emails` is not it. */
 const BODY_ROUTE_EVENT = new RegExp(`(?:${BODY_CREDENTIAL_ROUTES.map(routePattern).join("|")})\\/?(?:[?#]|$)`);
 /** The same prefixes as `SECRET_PATH`, not global (a global regex's `lastIndex` makes `test` stateful), for an event's URL or transaction. */
-const SECRET_PATH_EVENT = new RegExp(`(?:${prefixAlternation("\\/")})[^/?#\\s"'<>]+`);
+const SECRET_PATH_EVENT = new RegExp(`${ROUTE_ROOT}(?:${prefixAlternation("\\/")})[^/?#&=\\s"'<>]+`);
 function holdsCredentialBody(event: Event): boolean {
   return eventNames(event, BODY_ROUTE_EVENT) || eventNames(event, SECRET_PATH_EVENT);
 }
@@ -380,6 +446,84 @@ function dropOneTimeToken<E extends Event>(event: E): E {
   return scrubbed === query ? event : { ...event, request: { ...event.request, query_string: scrubbed } };
 }
 
+/** Span / breadcrumb data keys that hold the bare query string, WITH its `?` (the SDK's helpers write them; see the header). */
+const SPAN_QUERY_KEYS = ["http.query", "url.query"] as const;
+/** The data keys that name the request a span belongs to, beside its query: the SDK's sanitised `url`, `url.full`, `url.path`, `http.route`, `http.target`, … */
+const SPAN_URL_KEYS = ["url", "url.full", "url.path", "url.template", "http.url", "http.target", "http.route"] as const;
+/** The data key that holds a serialised request body (@sentry/core `addNormalizedRequestDataToSpan`). */
+const SPAN_BODY_KEY = "http.request.body.data";
+
+type Data = Record<string, unknown>;
+const isData = (v: unknown): v is Data => typeof v === "object" && v !== null && !Array.isArray(v);
+/** Does any of a span's own request-naming keys match the route regex? */
+const dataNames = (data: Data, route: RegExp): boolean => SPAN_URL_KEYS.some((key) => typeof data[key] === "string" && route.test(data[key]));
+
+/**
+ * One span's (or breadcrumb's) data: on a one-time route the bare query loses its `token=`, on a body-credential route the
+ * serialised body goes. The route is the EVENT's (a transaction named for it) or the span's own sibling url, so a fetch span
+ * from another page to `/magic-link?token=…` is covered. A copy; data with nothing to scrub keeps its reference.
+ */
+function scrubSpanData(data: Data, eventOneTime: boolean, eventBody: boolean): Data {
+  const oneTime = eventOneTime || dataNames(data, ONE_TIME_ROUTE_EVENT);
+  const body = eventBody || dataNames(data, BODY_ROUTE_EVENT) || dataNames(data, SECRET_PATH_EVENT);
+  let copy: Data | undefined;
+  if (oneTime) {
+    for (const key of SPAN_QUERY_KEYS) {
+      const query = data[key];
+      if (typeof query !== "string") continue;
+      // `?token=…` (the SDK keeps the `?`) or `token=…` (a Sentry query_string style value).
+      const scrubbed = query.startsWith("?") ? `?${scrubTokenQuery(query.slice(1))}` : scrubTokenQuery(query);
+      if (scrubbed !== query) (copy ??= { ...data })[key] = scrubbed;
+    }
+  }
+  if (body && Object.hasOwn(data, SPAN_BODY_KEY)) {
+    copy ??= { ...data };
+    delete copy[SPAN_BODY_KEY];
+  }
+  return copy ?? data;
+}
+
+/** The trace context's data, every span's data and every breadcrumb's data, scrubbed by `scrubSpanData`. A copy; the input is never mutated. */
+function scrubSpans<E extends Event>(event: E, oneTime: boolean, body: boolean): E {
+  let next: E = event;
+  const trace = event.contexts?.trace;
+  if (trace && isData(trace.data)) {
+    const data = scrubSpanData(trace.data, oneTime, body);
+    if (data !== trace.data) next = { ...next, contexts: { ...next.contexts, trace: { ...trace, data } } };
+  }
+  const mapData = <T extends { data?: unknown }>(items: T[] | undefined): T[] | undefined => {
+    let copy: T[] | undefined;
+    items?.forEach((item, i) => {
+      if (!isData(item.data)) return;
+      const data = scrubSpanData(item.data, oneTime, body);
+      if (data !== item.data) (copy ??= items.slice())[i] = { ...item, data };
+    });
+    return copy ?? items;
+  };
+  const spans = mapData(event.spans);
+  if (spans !== event.spans) next = { ...next, spans };
+  const breadcrumbs = mapData(event.breadcrumbs);
+  if (breadcrumbs !== event.breadcrumbs) next = { ...next, breadcrumbs };
+  return next;
+}
+
+/** `request.query_string` as an object or a list of pairs holds the join code under its own key; a string was scrubbed with every other string. */
+function scrubJoinCodeKeys<E extends Event>(event: E): E {
+  const query = event.request?.query_string;
+  if (!event.request || !query || typeof query === "string") return event;
+  const isJoinCode = (key: unknown) => JOIN_CODE_PARAMS.some((name) => name === key);
+  const hit = { n: 0 };
+  const mask = (key: unknown, value: unknown) => {
+    if (!isJoinCode(key) || !value || value === "[code]") return value;
+    hit.n++;
+    return "[code]";
+  };
+  const scrubbed: typeof query = Array.isArray(query)
+    ? query.map((pair): [string, string] => [pair[0], mask(pair[0], pair[1]) as string])
+    : Object.fromEntries(Object.entries(query).map(([k, v]) => [k, mask(k, v) as string]));
+  return hit.n ? { ...event, request: { ...event.request, query_string: scrubbed } } : event;
+}
+
 /**
  * Sentry `beforeSend` / `beforeSendTransaction`: scrubs the request URL and
  * headers (the Bearer secret), the transaction name, breadcrumbs, tags, stack
@@ -390,10 +534,13 @@ function dropOneTimeToken<E extends Event>(event: E): E {
  * loses `request.data`.
  */
 export function scrubSentryEvent<E extends Event>(event: E): E {
+  const oneTime = isOneTimeTokenEvent(event);
+  const body = holdsCredentialBody(event);
   const scrubbed = scrubScoreTokens(event);
   const safe = isCaptureEvent(event) ? dropCaptureSecrets(scrubbed) : scrubbed;
-  const queryScrubbed = isOneTimeTokenEvent(event) ? dropOneTimeToken(safe) : safe;
-  return holdsCredentialBody(event) ? dropRequestBody(queryScrubbed) : queryScrubbed;
+  const queryScrubbed = oneTime ? dropOneTimeToken(safe) : safe;
+  const withSpans = scrubSpans(scrubJoinCodeKeys(queryScrubbed), oneTime, body);
+  return body ? dropRequestBody(withSpans) : withSpans;
 }
 
 /**

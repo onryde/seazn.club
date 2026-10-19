@@ -12,8 +12,9 @@
 //    `/api/claims/<token>/accept`, `/api/checkin/<token>`, `/api/orgs/<id>/invites/<token>/revoke`.
 //
 // The route lists are not typed here. They come from the app's own directories:
-//  - the body credentials: every `app/api/**/route.ts` that names a `token` AND reads a request body is found by a scan, and
-//    must carry a verdict in BODY_VERDICTS (a credential, or why its body is not one). A new route that takes a token in
+//  - the body credentials: every `app/api/**/route.ts` that names a `token` or a `*_code` (`join_code`, `ref_code`, …) AND
+//    reads a request body is found by a scan, and must carry a verdict in BODY_VERDICTS (a credential, or why its body is not
+//    one). A new route that takes a token in
 //    its body fails the first test until it takes a side; a verdict whose route is gone fails too;
 //  - the passwords: every body-reading route whose schema has a password field (inline, or an exported schema found by
 //    scanning src, aliases followed) is derived the same way, so a new change-password or set-password route fails the
@@ -90,9 +91,10 @@ describe("premise: the tokens are real and varied", () => {
 
 /** A route file reads a request body: `req.json()`, `request.text()`, `req.formData()` or the API's `parseBody(`. */
 const READS_BODY = /\b(?:req|request)\.(?:json|text|formData)\(\)|\bparseBody\(/;
-const NAMES_TOKEN = /\btoken\b/;
+/** A route names a credential: a `token`, or any `*_code` (`join_code`, `ref_code`, `reason_code`, `postal_code`): a code is either a capability or a plain field, and each route says which. */
+const NAMES_CREDENTIAL = /\btoken\b|\b[a-z]+_code\b/;
 
-/** Every `app/api/**\/route.ts` that names a `token` AND reads a request body, by its directory under app/. */
+/** Every `app/api/**\/route.ts` that names a `token` or a `*_code` AND reads a request body, by its directory under app/. */
 function bodyReaders(): { key: string; file: string }[] {
   const found: { key: string; file: string }[] = [];
   const walk = (dir: string) => {
@@ -101,7 +103,7 @@ function bodyReaders(): { key: string; file: string }[] {
       if (entry.isDirectory()) walk(full);
       else if (entry.name === "route.ts") {
         const text = fs.readFileSync(full, "utf8");
-        if (READS_BODY.test(text) && NAMES_TOKEN.test(text)) found.push({ key: path.relative(APP_DIR, dir), file: path.relative(APP_DIR, full) });
+        if (READS_BODY.test(text) && NAMES_CREDENTIAL.test(text)) found.push({ key: path.relative(APP_DIR, dir), file: path.relative(APP_DIR, full) });
       }
     }
   };
@@ -119,7 +121,12 @@ const BODY_VERDICTS: Record<string, true | string> = {
   "api/v1/public/registrations/[id]/withdraw": true,
   "api/v1/public/registrations/by-ref/[ref]/withdraw": true,
   "api/v1/public/registrations/groups/[id]/resend": true,
+  "api/v1/public/orgs/[orgSlug]/competitions/[slug]/register/join": true,
   "api/auth/change-email": "the body is the new address; the token is minted and emailed, never received",
+  "api/admin/orgs/[id]/addons": "`reason_code` is the staff-entered reason for a grant, not a credential",
+  "api/admin/orgs/[id]/credits": "`reason_code` is the staff-entered reason for a grant, not a credential",
+  "api/billing/address": "`postal_code` is a billing address field",
+  "api/v1/public/orgs/[orgSlug]/competitions/[slug]/register": "`ref_code` is the registration reference, a lookup as /r/[ref] is, not auth; the access token is in the response",
   "api/auth/forgot-password": "the body is an email address; the token is minted and emailed, never received",
   "api/auth/login": "no token in the body (the verification token is minted and emailed); its PASSWORD is dropped by the password scan below",
   "api/auth/signup": "no token in the body (the verification token is minted and emailed); its PASSWORD is dropped by the password scan below",
@@ -215,8 +222,12 @@ const apiLinkRoutes = [...linkBuilders().keys()].filter((r) => r.startsWith("/ap
 
 describe("which routes take a credential in their body: found from the route files, not typed", () => {
   it("the scan found the readers (anti-vacuity), and every one has a verdict; no verdict is stale", () => {
-    expect(readers.length).toBeGreaterThanOrEqual(20);
-    expect(credentialReaders.length).toBeGreaterThanOrEqual(8);
+    expect(readers.length).toBeGreaterThanOrEqual(25);
+    expect(credentialReaders.length).toBeGreaterThanOrEqual(9);
+    // The widened names are in the scan: the join POST (`join_code`) and the register POST (`ref_code`).
+    expect(readers.map((r) => r.key)).toEqual(
+      expect.arrayContaining(["api/v1/public/orgs/[orgSlug]/competitions/[slug]/register/join", "api/v1/public/orgs/[orgSlug]/competitions/[slug]/register"]),
+    );
     expect(
       readers.map((r) => r.key),
       "a route that names a token and reads a body needs a verdict in BODY_VERDICTS",
@@ -234,7 +245,7 @@ describe("which routes take a credential in their body: found from the route fil
 
   it("the scrubber's table is exactly the credential readers, the password routes and the API routes a link lands on", () => {
     const derived = [...new Set([...credentialReaders.map((r) => `/${r.key}`), ...passwordBodies.map((r) => `/${r.key}`), ...apiLinkRoutes])].sort();
-    expect(derived.length).toBeGreaterThanOrEqual(11);
+    expect(derived.length).toBeGreaterThanOrEqual(12);
     expect([...BODY_CREDENTIAL_ROUTES].sort()).toEqual(derived);
     for (const route of BODY_CREDENTIAL_ROUTES) {
       expect(fs.existsSync(path.join(APP_DIR, route, "route.ts")), `${route} is a real route handler`).toBe(true);

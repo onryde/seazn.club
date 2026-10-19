@@ -374,7 +374,7 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
                   <li key={p.id}>
                     <a
                       href={claimHref(orgSlug, competitionSlug, entry.join_code!, p.id)}
-                      className="text-xs font-medium text-accent-strong underline underline-offset-2"
+                      className="ph-no-capture text-xs font-medium text-accent-strong underline underline-offset-2"
                     >
                       {/* Code-review fix (2026-08-30, item 6): this used to
                           fall back to the RAW p.full_name on a miss — the
@@ -395,7 +395,7 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
                   <li>
                     <a
                       href={claimHref(orgSlug, competitionSlug, entry.join_code)}
-                      className="text-xs font-medium text-accent-strong underline underline-offset-2"
+                      className="ph-no-capture text-xs font-medium text-accent-strong underline underline-offset-2"
                     >
                       {t(ui, "register.status.roster.genericClaimLink")}
                     </a>

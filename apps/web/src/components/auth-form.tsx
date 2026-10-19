@@ -57,7 +57,7 @@ export function AuthForm({ next }: { next?: string }) {
         {devLink && (
           <a
             href={devLink}
-            className="btn btn-primary mt-4 inline-block w-full justify-center py-2.5"
+            className="ph-no-capture btn btn-primary mt-4 inline-block w-full justify-center py-2.5"
           >
             {msg("auth.check.devLink")}
           </a>

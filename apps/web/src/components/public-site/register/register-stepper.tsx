@@ -426,7 +426,12 @@ export function RegisterStepper({
   }
 
   return (
-    <div ref={containerRef} className="space-y-4" data-join-code={joinCode ?? undefined}>
+    <div ref={containerRef} className="space-y-4">
+      {/* The RS007 seam marker. `ph-no-capture` on its OWN empty element, not on this root: the join code is a capability
+          (anyone holding it can join the entry), PostHog replay records attributes before the `before_send` scrub can see
+          them, and its recorder blocks only this class on the element that carries the value, which here would be the
+          whole registration form. `hidden`, so it takes no space. */}
+      {joinCode ? <span hidden className="ph-no-capture" data-join-code={joinCode} /> : null}
       <StepNav order={stepOrder} currentIndex={clampedIndex} />
 
       {currentStep === "who" && (

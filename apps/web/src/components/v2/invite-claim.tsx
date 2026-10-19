@@ -176,8 +176,11 @@ export function InviteClaim({ personId, personName, claimed, claimPending }: Pro
                       {msg("claim.invite.sendFailed")}
                     </p>
                     <div className="flex items-center gap-2">
+                      {/* `ph-no-capture`: the link IS the one-time claim secret, and PostHog replay compresses its DOM
+                          frames before the `before_send` scrub can see them; its recorder blocks only this class (the
+                          same rule as every sensitive QR, seazn-qr-image.tsx). */}
                       <code
-                        className="min-w-0 flex-1 truncate rounded bg-slate-100 px-2 py-1.5 text-xs text-slate-700"
+                        className="ph-no-capture min-w-0 flex-1 truncate rounded bg-slate-100 px-2 py-1.5 text-xs text-slate-700"
                         data-testid="claim-link"
                       >
                         {link}
