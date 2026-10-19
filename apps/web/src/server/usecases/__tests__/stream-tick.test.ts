@@ -1330,6 +1330,21 @@ describe.skipIf(!HAS_DB)("R2008: a COMPOSED live stream whose camera is gone for
     expect(checked).toBe(2);
   });
 
+  it("a phone that has NEVER beaten (phone_beat_at null): its silence runs from the first `live` — so the video clock alone decides, at exactly the limit; and with the camera in, the same session is never ended", async () => {
+    const r = await composedLive();
+    await sql`update fixture_stream_sessions set phone_beat_at = null where id = ${r.sessionId}`;
+    // Camera in for ever: the phone's silence alone (a floor of `live` + limit, long past) ends nothing.
+    r.tick(3 * LOST_MS); await r.beat("live");
+    expect((await tickOf(r))?.state, "no beat ever, but the camera is in").toBe("live");
+    expect(await readsOf(r), "not gone, so not read").toBe(0);
+    // Camera lost: the video clock decides, on its own limit.
+    r.tick(1000); await r.beat("reconnecting");
+    r.tick(LOST_MS - 1); await hold(r);
+    expect((await tickOf(r))?.state, "1 ms short of the limit").toBe("live");
+    r.tick(1); await hold(r);
+    expect(await tickOf(r), "the limit").toMatchObject({ endReason: "phone_lost" });
+  });
+
   it("the camera comes back at minute 14: the clock RESETS — the original deadline passes unended, and the second loss ends it a full limit after ITS first reconnecting beat", async () => {
     const r = await composedLive();
     r.tick(MIN); await r.beat("reconnecting");
@@ -1488,6 +1503,26 @@ describe.skipIf(!HAS_DB)("R2008: a COMPOSED live stream whose camera is gone for
     b.tick(MIN); await b.beat("reconnecting", b2);
     b.tick(LOST_MS); await b.beat("reconnecting", b2);
     expect(await tickOf(b), "attempt 2's own run").toMatchObject({ endReason: "phone_lost" });
+  });
+
+  it("a RETRY: attempt 1's reconnecting run, a full limit old, ends nothing once attempt 2 owns the session; attempt 2's first beat is logged though its phase equals the stored one, and ITS run is what ends it", async () => {
+    const r = await composedLive();
+    r.tick(MIN); await r.beat("reconnecting");
+    r.tick(LOST_MS); await hold(r);   // attempt 1's run is now a full limit old: a tick on it would end the session
+    // The retry: attempt 2 owns the row and its beat window restarts (domain/session.ts `retry`, I4) — no beat of its own yet.
+    await sql`update fixture_stream_sessions set runner_attempts = 2, beat_window_at = ${r.deps.now()} where id = ${r.sessionId}`;
+    expect((await tickOf(r))?.state, "attempt 1's run is another Machine's: nothing to judge for attempt 2").toBe("live");
+    expect(await readsOf(r), "not gone, so not read").toBe(0);
+    const att2 = await mintRelayToken({ sid: r.sessionId, scope: "relay-job", expiresAt: new Date(Date.now() + 3_600_000), attempt: 2 });
+    r.tick(STREAM_POLL_MS); await r.beat("reconnecting", att2);   // its first beat reports the phase the stored beat already had
+    const own = (await phaseEvents(r.sessionId)).filter((e) => e.attempt === 2);
+    expect(own.map((e) => [e.from_state, e.to_state]), "logged for attempt 2 although nothing CHANGED").toEqual([["reconnecting", "reconnecting"]]);
+    const runStart = r.deps.now();
+    r.tick(LOST_MS - 1); await r.beat("reconnecting", att2);
+    expect((await tickOf(r))?.state, "1 ms short of attempt 2's own limit").toBe("live");
+    r.tick(1); await r.beat("reconnecting", att2);
+    expect(await tickOf(r), "attempt 2's own run").toMatchObject({ endReason: "phone_lost" });
+    expect(r.deps.now().getTime() - runStart.getTime()).toBe(LOST_MS);
   });
 
   it("a session that has no phone (pairing_id null, C-1) is never judged: everything due, nothing ended, nothing read", async () => {

@@ -45,8 +45,7 @@ export function livePhoneLost(i: {
 
 /** R2008 (owner ruling 2026-10-19, "apply your rec"): whether the phone has been silent for `lostMinutes` — timed from its
  *  last beat, else from `floorAt` (W19's own fallback: the first sign the stream was up). With neither there is nothing to
- *  time it from, so it cannot be judged silent (false, never true). ONE authority for the arithmetic: `composedCameraGone`
- *  and the use-case's cheap pre-check (stream-sessions.ts `endIfPhoneLost`) both read it. */
+ *  time it from, so it cannot be judged silent (false, never true). */
 export function phoneSilentFor(phoneBeatAt: Date | null, floorAt: Date | null, now: Date, lostMinutes: number): boolean {
   const from = phoneBeatAt ?? floorAt;
   return from !== null && since(from, now) >= lostMinutes * 60_000;

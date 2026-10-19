@@ -628,6 +628,28 @@ describe.skipIf(!HAS_DB)("R2002: the relay-job.v1 contract through the internal 
     for (const k of R2_HEALTH_FIELDS) expect(first, `the earlier sample keeps ${k}`).toHaveProperty(k);
   });
 
+  // R2008 (owner ruling 2026-10-19): the composed phone-lost rule reads the compositor's programme phase from the log the beat
+  // route writes. This is the producer's half, through the real route and its zod parse — stream-tick.test.ts holds the
+  // consumer's, which reads exactly what this writes.
+  it("R2008: a beat through the ROUTE logs the programme phase it reports — one `programme_phase` event per CHANGE, on the beat's attempt, and none for a phase the beat does not carry", async () => {
+    const s = await session();
+    const log = async () => sql<{ from_state: string | null; to_state: string | null; attempt: number | null }[]>`
+      select from_state, to_state, attempt from fixture_stream_events where session_id = ${s.sessionId} and type = 'programme_phase' order by seq`;
+    const sent = ["live", "live", "frozen", "reconnecting", "reconnecting"] as const;
+    for (const programmePhase of sent) expect((await postBeat(s.sessionId, { state: "playing", programmePhase }, { token: s.jobToken })).status).toBe(200);
+    expect(await log(), "five beats, three changes").toEqual([
+      { from_state: null, to_state: "live", attempt: 1 }, { from_state: "live", to_state: "frozen", attempt: 1 }, { from_state: "frozen", to_state: "reconnecting", attempt: 1 },
+    ]);
+    // The pair: a beat that carries no phase is a change too (the Machine stopped saying `reconnecting`), and a second such beat is not.
+    for (let i = 0; i < 2; i++) expect((await postBeat(s.sessionId, { state: "playing" }, { token: s.jobToken })).status).toBe(200);
+    expect((await log()).slice(3), "the change to none, once").toEqual([{ from_state: "reconnecting", to_state: null, attempt: 1 }]);
+    // A session that never reports a phase has an empty log.
+    const quiet = await session();
+    expect((await postBeat(quiet.sessionId, { state: "playing" }, { token: quiet.jobToken })).status).toBe(200);
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_events where session_id = ${quiet.sessionId} and type = 'programme_phase'`;
+    expect(n).toBe(0);
+  });
+
   it("a present 0 is a measurement: heartbeat-zero-is-a-measurement stores fps 0 (typed column too), and zero counters store 0 — the differential to the absent case above", async () => {
     const s = await session();
     expect((await postBeat(s.sessionId, vector("heartbeat-zero-is-a-measurement"), { token: s.jobToken })).status).toBe(200);

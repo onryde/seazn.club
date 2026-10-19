@@ -40,7 +40,7 @@ import { autoStopApplies, autoStopVerdict, type PhoneMode } from "@/server/relay
 import { codeStatus } from "@/server/relay/domain/stream-code";
 import { InvalidRunnerTransition, machineNameFor, stoppedBeatTrigger, type ExitInfo, type RunnerEffect } from "@/server/relay/domain/runner";
 import { evaluate, runnerDeadlineOf, warmingTimedOut, type Expiry } from "@/server/relay/domain/expiry";
-import { type Ask10Phone, composedCameraGone, composedCameraLost, livePhoneLost, lostCountdown, phoneSilentFor, warmingPhoneLost } from "@/server/relay/domain/phone-lost";
+import { type Ask10Phone, composedCameraGone, composedCameraLost, livePhoneLost, lostCountdown, warmingPhoneLost } from "@/server/relay/domain/phone-lost";
 import { headroomAfterReservations, reservationMinutes } from "@/server/relay/domain/credits";
 import { composedUnavailable, relayDrivers, type RelayDrivers } from "@/server/relay/drivers";
 import { createFailureOf, createRefusedBeforeCall, type IngestProtocol, type IngestState, type OutputState, type RunnerSpec, type StorageUsage } from "@/server/relay/ports";
@@ -2062,17 +2062,14 @@ function ask10PhoneOf(f: PhoneFacts): Ask10Phone {
 async function endIfPhoneLost(row: Row, fresh: IngestState | undefined, deps: SessionDeps, cause: "poll" | "beat" | "sweep"): Promise<Row> {
   const facts = await phoneFactsOf(sql, row.id);
   if (!facts) return row;
-  // R2008: a composed live session with a phone is judged on the compositor's evidence, and its camera's input is read ONLY
-  // when everything but that read already says the camera is gone (the phone silent, the phase `reconnecting` for the whole
-  // limit) — in order, cheapest first: the phone's beat is on the facts above, and the phase log is read only once it is old.
-  const composed = row.mode === "composed" && row.state === "live" && facts.has_phone;
-  const lostMinutes = tunable("PHONE_LOST_LIVE_MINUTES", PHONE_LOST_LIVE_MINUTES);
+  // R2008: a composed session with a phone is judged on the compositor's evidence, and its camera's input is read ONLY when
+  // everything but that read already says the camera is gone (a live session, the phone silent and the phase `reconnecting`
+  // for the whole limit — `composedCameraGone`, the one authority for it), so a healthy stream costs no Cloudflare call.
   let camera: CameraFacts | null = null;
-  if (composed && (facts.phone_beat_at === null || phoneSilentFor(facts.phone_beat_at, null, deps.now(), lostMinutes))) {
+  if (row.mode === "composed" && facts.has_phone) {
     camera = await cameraFactsOf(sql, row.id);
-    if (composedCameraGone({ state: row.state, phoneBeatAt: facts.phone_beat_at, liveOnceAt: camera.live_once_at, reconnectingSince: camera.reconnecting_since }, deps.now(), lostMinutes)) {
-      fresh = await readCameraWord(row, deps);
-    }
+    if (composedCameraGone({ state: row.state, phoneBeatAt: facts.phone_beat_at, liveOnceAt: camera.live_once_at, reconnectingSince: camera.reconnecting_since },
+      deps.now(), tunable("PHONE_LOST_LIVE_MINUTES", PHONE_LOST_LIVE_MINUTES))) fresh = await readCameraWord(row, deps);
   }
   if (phoneLostEnd(toSession(row), facts, fresh, deps.now(), camera) === null) return row;
   let rule: string | null = null;
@@ -2398,7 +2395,11 @@ const PROGRAMME_PHASE_EVENT = "programme_phase";
 async function logProgrammePhase(tx: Tx, cur: Row, beat: RelayHeartbeat, at: Date): Promise<void> {
   const stored = typeof cur.last_heartbeat?.programmePhase === "string" ? cur.last_heartbeat.programmePhase : null;
   const phase = beat.programmePhase ?? null;
-  if (phase === stored) return;
+  // The first beat after a replacement boots (or a stale window moved the anchor) is logged even when its phase equals the
+  // stored one: the stored beat is another process's, and without this event a new attempt that opens on the phase its
+  // predecessor ended on would have no event of its own — nothing to say the CURRENT attempt is reconnecting. A same-attempt
+  // blip that re-anchors the window logs one duplicate, which can only restart a run (the safe direction).
+  if (phase === stored && storedBeatIsThisAttempt(cur)) return;
   await recordEvent(tx, { sessionId: cur.id, orgId: cur.org_id, source: "runner", kind: "observed", type: PROGRAMME_PHASE_EVENT,
     from: stored, to: phase, attempt: cur.runner_attempts, occurredAt: at });
 }
