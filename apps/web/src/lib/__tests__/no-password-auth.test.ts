@@ -17,7 +17,7 @@
 //
 // DB objects: `users.password_hash` and `password_resets` still EXIST (the owner decides separately about dropping
 // them). Code must not read or write them, except the ERASURES pinned below: a line that only ever NULLS a legacy hash
-// (account deletion; Google verifying an unverified account). Each is allowed by its exact line in its exact file, and
+// (account deletion; Google or an emailed claim link verifying an unverified account). Each is allowed by its exact line in its exact file, and
 // the test beside it proves the line is still there.
 //
 // Sport: not applicable. This is auth plumbing.
@@ -71,34 +71,45 @@ function codeOf(source: string): string {
 const PASSWORD_FIELD = /password(?!less)/i;
 
 /**
- * The allowed mentions, each the exact line in the exact route: a legacy credential hash is only ever ERASED, never read
- * back or compared. `context` is the statement the line must sit in (so it is the erasure it claims to be, not a read).
- * A new entry needs the owner's reason in `why`; the profile-claim sign-in (verifyByInbox) will want one too when it lands.
+ * The allowed mentions, each the exact lines in the exact file (relative to src/): a legacy credential hash is only ever
+ * ERASED, never read back or compared. `lines` are every line of the file that mentions a password (no more, no fewer),
+ * `context` the statement they must sit in (so each is the erasure it claims to be, not a read). A new entry needs a
+ * reason in `why`.
  */
 const ERASURES = [
   {
-    file: "users/me/route.ts",
-    line: /^\s*password_hash\s*=\s*null,\s*$/,
+    file: "app/api/users/me/route.ts",
+    lines: [/^\s*password_hash\s*=\s*null,\s*$/],
     context: /update users set[\s\S]*?password_hash\s*=\s*null[\s\S]*?deleted_at\s*=\s*now\(\)/,
     why: "account deletion erases the stored credential hash with the rest of the PII",
   },
   {
-    file: "auth/google/callback/route.ts",
-    line: /^\s*password_hash\s*=\s*case when email_verified then password_hash else null end,\s*$/,
+    file: "app/api/auth/google/callback/route.ts",
+    lines: [/^\s*password_hash\s*=\s*case when email_verified then password_hash else null end,\s*$/],
     context: /update users set[\s\S]*?google_sub\s*=[\s\S]*?email_verified\s*=\s*true,[\s\S]*?password_hash\s*=\s*case when email_verified then password_hash else null end/,
     why: "Google verifying an unverified account drops a squatter's legacy hash (a verified account's column is left as it was)",
   },
+  {
+    file: "server/usecases/person-claims.ts",
+    lines: [
+      /^\s*await tx`update users set email_verified = true, password_hash = null where id = \$\{userId\}`;\s*$/,
+      /^\s*await tx`delete from password_resets where user_id = \$\{userId\} and used = false`;\s*$/,
+    ],
+    context: /update users set email_verified = true, password_hash = null where id = \$\{userId\}`;\s*await tx`delete from password_resets where user_id = \$\{userId\} and used = false`/,
+    why: "the emailed claim link verifies an unverified account and clears a squatter's legacy hash and pending reset tokens (#991)",
+  },
 ] as const;
 
-/** Is this line, in this route file (relative to app/api/), one of the pinned erasures? */
-const isErasure = (relFile: string, line: string) => ERASURES.some((e) => relFile === e.file && e.line.test(line));
+/** Is this line, in this file (relative to src/), one of the pinned erasure lines? */
+const isErasure = (relFromSrc: string, line: string) =>
+  ERASURES.some((e) => relFromSrc === e.file && e.lines.some((rx) => rx.test(line)));
 
 /** The lines of `source` (as a route under app/api) that read or accept a password, less the allowed erasures. */
 function passwordLines(relFile: string, source: string): string[] {
   return codeOf(source)
     .split("\n")
     .filter((l) => PASSWORD_FIELD.test(l))
-    .filter((l) => !isErasure(relFile, l));
+    .filter((l) => !isErasure(`app/api/${relFile}`, l));
 }
 
 describe("no route under app/api reads or accepts a password", () => {
@@ -125,22 +136,26 @@ describe("no route under app/api reads or accepts a password", () => {
     expect(flagged("const u = 'https://seazn.club/x'; // see password docs")).toBe(0);
   });
 
-  it("each allowed mention is exactly its erasure, still there once, in its own file only (delete an allowance with the column)", () => {
+  it("each allowed mention is exactly its erasure, still there, in its own file only (delete an allowance with the column)", () => {
     let checked = 0;
     for (const erasure of ERASURES) {
-      const source = fs.readFileSync(`${API}${erasure.file}`, "utf8");
+      const source = fs.readFileSync(`${SRC}${erasure.file}`, "utf8");
       const hits = codeOf(source).split("\n").filter((l) => PASSWORD_FIELD.test(l));
-      expect(hits.length, `${erasure.file} still has the one line (${erasure.why})`).toBe(1);
-      expect(erasure.line.test(hits[0]!), `${erasure.file}: the line is the pinned erasure`).toBe(true);
-      // The allowance applies to that file only: the same line anywhere else is an offender.
-      expect(passwordLines("v1/other/route.ts", hits[0]!).length, `${erasure.file}: elsewhere it is a hit`).toBe(1);
-      expect(passwordLines(erasure.file, hits[0]!).length, `${erasure.file}: in its own file it is allowed`).toBe(0);
-      // And it is the erasure it claims to be: inside the UPDATE that clears it, not a read of the hash.
+      expect(hits.length, `${erasure.file} still has exactly its ${erasure.lines.length} line(s) (${erasure.why})`).toBe(erasure.lines.length);
+      for (const rx of erasure.lines) {
+        expect(hits.filter((h) => rx.test(h)).length, `${erasure.file}: ${rx} matches one line`).toBe(1);
+      }
+      for (const hit of hits) {
+        // The allowance applies to that file only: the same line anywhere else is an offender.
+        expect(isErasure("lib/elsewhere.ts", hit), `${erasure.file}: elsewhere it is a hit`).toBe(false);
+        expect(isErasure(erasure.file, hit), `${erasure.file}: in its own file it is allowed`).toBe(true);
+      }
+      // And it is the erasure it claims to be: inside the statement that clears it, not a read of the hash.
       expect(source, `${erasure.file}: the statement around it`).toMatch(erasure.context);
       checked++;
     }
     expect(checked).toBe(ERASURES.length);
-    expect(checked).toBeGreaterThanOrEqual(2);
+    expect(checked).toBeGreaterThanOrEqual(3);
   });
 });
 
@@ -225,7 +240,7 @@ describe("the password code and its DB objects are not touched by the app", () =
       for (const line of codeOf(fs.readFileSync(f, "utf8")).split("\n")) {
         if (!NEEDLE.test(line)) continue;
         // The pinned erasures have their own test above.
-        if (rel.startsWith("app/api/") && isErasure(rel.slice("app/api/".length), line)) continue;
+        if (isErasure(rel, line)) continue;
         hits.push(`${rel}: ${line.trim()}`);
       }
     }
