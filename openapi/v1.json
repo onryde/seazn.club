@@ -53075,7 +53075,7 @@
     },
     "/api/v1/fixtures/{id}/external-play/room": {
       "get": {
-        "summary": "Match-room snapshot for one of the fixture's two players (session, or the personal link token in `?t=`, which wins when present). Never writes. Never key-reachable. Every identity failure is the same 404 NOT_FOUND; 409 ROOM_BEING_REPAIRED while the organiser re-pairs the board's round (it seats nobody), to the board's own link or a player of its division",
+        "summary": "Match-room snapshot for one of the fixture's two players (session, or the personal link token in `?t=`, which wins when present). Never writes. Never key-reachable. The snapshot's `deadline` is the board's own check-in deadline; `heldUntil` is, while the check-in line holds the board open for this viewer past it, the instant that hold ends (the board's cap, or for a player already admitted the earlier of the cap and the end of their admission hold) and null otherwise. Every identity failure is the same 404 NOT_FOUND; 409 ROOM_BEING_REPAIRED while the organiser re-pairs the board's round (it seats nobody), to the board's own link or a player of its division",
         "tags": [
           "fixtures"
         ],

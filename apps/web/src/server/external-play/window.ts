@@ -64,15 +64,9 @@ export function windowFor(anchor: BoardAnchor): PlayWindow {
  *  holding. ONE cap for the three things it covers - line admission, the no-show skip and the create - and nothing is uncapped. */
 export const LINE_DEADLINE_GRACE_MS = 5 * 60_000;
 
-/** The cap that follows a deadline: the deadline plus the line's grace. The room's wire carries a deadline and no anchor, so
- *  the client asks the same rule through this; `boardCap` below is it applied to a board's own deadline. */
-export function capAfter(deadline: Date): Date {
-  return new Date(deadline.getTime() + LINE_DEADLINE_GRACE_MS);
-}
-
 /** The board's cap: its deadline plus the line's grace. After it the window is closed to everyone, protected or not. */
 export function boardCap(anchor: BoardAnchor): Date {
-  return capAfter(windowFor(anchor).deadline);
+  return new Date(windowFor(anchor).deadline.getTime() + LINE_DEADLINE_GRACE_MS);
 }
 
 export type RoomPhase = "before" | "open" | "closed";

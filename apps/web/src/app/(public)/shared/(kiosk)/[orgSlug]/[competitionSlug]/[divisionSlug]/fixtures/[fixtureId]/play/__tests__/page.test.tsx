@@ -158,6 +158,7 @@ describe("match-room page", () => {
       held: false,
       result: null,
       watchUrl: null,
+      heldUntil: null,
       realtime: null,
     };
     let checked = 0;

@@ -7,8 +7,8 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { sql } from "@/lib/db";
 import { checkinClosesAt } from "@/components/public-site/match-room/room-snapshot";
-import { LINE_DEADLINE_GRACE_MS, boardAnchor, boardCap } from "@/server/external-play/window";
-import { LINE_RESERVATION, answerBusy, gateClaim, settleDeferral } from "@/server/external-play/seat-line";
+import { LINE_DEADLINE_GRACE_MS, boardAnchor, boardCap, windowFor } from "@/server/external-play/window";
+import { ADMIT_HOLD_MS, LINE_RECHECK_COST, LINE_RESERVATION, answerBusy, gateClaim, judgePhase, settleDeferral } from "@/server/external-play/seat-line";
 import { checkInToFixture, stampFixtureCheckIn } from "../me";
 import { createGameIfReady } from "../external-play/create-game";
 import { askOf, putStay, stayRow } from "./_external-play-line";
@@ -355,33 +355,146 @@ describe.skipIf(!DB)("the stay is dated where the window was judged (final revie
   }, 60_000);
 });
 
-// Final review M-3, the producer's side: the snapshot a PROTECTED viewer is handed past the deadline reads `open` (spec §5.7.8) and the
-// room's check-in card counted down to a deadline that had passed ("closes in 0:00"). The room now asks `checkinClosesAt` of exactly
-// this snapshot - driven here through the REAL claim, never a fixture, because a snapshot typed into a test proves the test.
-describe.skipIf(!DB)("a protected viewer's snapshot names the board's cap as where the check-in closes (final review M-3)", () => {
-  it("held in line past the deadline: phase open, serverNow past the deadline, and the closing time is the cap - the unprotected viewer's is the deadline", async () => {
+// Final review M-3 + N-1, the producer's side. A player the check-in line holds open past the deadline reads phase `open` (spec
+// §5.7.8) and the room's check-in card counted down to a deadline that had passed ("closes in 0:00"). M-3 first counted to the CAP; N-1
+// (the re-review) showed that is wrong for the one viewer who actually SEES the countdown - an ADMITTED player, whose protection ends at
+// `admitted_at + ADMIT_HOLD_MS` (spec §5.7.5, §5.7.8, test 35), about 54.5 s from admission, not minutes. (A queued player sees the line
+// card, which names the cap itself.) The server now carries the real bound in the snapshot (`heldUntil`), and the room counts down to
+// `heldUntil ?? deadline`. Every case is driven through the REAL claim, never a fixture, because a snapshot typed into a test proves the
+// test. Expected values come from ADMIT_HOLD_MS, the cap, and the stay's own `admitted_at` row.
+describe.skipIf(!DB)("the snapshot carries the instant the viewer's hold really ends (final review M-3, N-1)", () => {
+  /** HOME queued on a dry bucket just before the deadline, polling every 10 s (the page is open) up to `until`. */
+  async function queuedAndPolling(until: Date) {
     const w = world();
     const b = await seedBoard();
     await fund(w.key, 0);
     const arrival = new Date(DEADLINE.getTime() - 20 * SEC);
     const first = await claimRoom(w, b, "home", arrival);
     expect(first.seat, "premise: held in line").toMatchObject({ seated: false, reason: "queued" });
-    expect(checkinClosesAt(first.snapshot), "inside the window: the deadline").toBe(DEADLINE.toISOString());
+    const { last, claims } = await pollStay(w, b, "home", new Date(arrival.getTime() + 10 * SEC), until);
+    expect(claims, "anti-vacuity: the stay polled").toBeGreaterThan(2);
+    expect(last.seat, "premise: still held in line").toMatchObject({ seated: false, reason: "queued" });
+    return { w, b, first, last };
+  }
+  /** The bucket refills and HOME's next claim is ADMITTED: the mint runs and the answer is the real camera_required. */
+  async function admit(w: World, b: Board, at: Date) {
+    await fund(w.key, 2 * (L + LINE_RECHECK_COST));
+    const got = await claimRoom(w, b, "home", at);
+    expect(got.seat, "premise: admitted - the mint ran and the camera is asked for").toMatchObject({ seated: false, reason: "camera_required" });
+    const stay = await stayRow(b.fixtureId, b.home.personId);
+    expect(stay?.admitted_at, "premise: the stay is admitted and not served").toEqual(at);
+    expect(stay?.served_at).toBeNull();
+    return { got, admittedAt: stay!.admitted_at! };
+  }
 
+  it("inside the window nothing is held: heldUntil is null, so the card counts down to the deadline", async () => {
+    const w = world();
+    const b = await seedBoard();
+    await fund(w.key, 0);
+    const first = await claimRoom(w, b, "home", new Date(DEADLINE.getTime() - 20 * SEC));
+    expect(first.snapshot.phase).toBe("open");
+    expect(first.snapshot.heldUntil, "the field is always on the wire (null), never absent").toBeNull();
+  }, 60_000);
+
+  it("an ADMITTED player past the deadline, the admit hold the binding bound: heldUntil is admitted_at + ADMIT_HOLD_MS, not the cap", async () => {
     const past = new Date(DEADLINE.getTime() + MIN);
-    // The player keeps the page open: a poll every 10 s, so the stay stays live right up to a minute past the deadline.
-    const { last: next, claims } = await pollStay(w, b, "home", new Date(arrival.getTime() + 10 * SEC), past);
-    expect(claims, "anti-vacuity: the stay polled across the deadline").toBeGreaterThan(5);
-    expect(next.seat, "premise: still held in line").toMatchObject({ seated: false, reason: "queued" });
-    expect(next.snapshot.phase, "premise: still open for the protected viewer").toBe("open");
-    expect(Date.parse(next.snapshot.serverNow), "premise: composed past the deadline").toBeGreaterThan(DEADLINE.getTime());
-    expect(Date.parse(next.snapshot.deadline!), "premise: the wire still carries the deadline").toBe(DEADLINE.getTime());
-    expect(checkinClosesAt(next.snapshot), "the protected viewer's check-in closes at the cap").toBe(CAP.toISOString());
-    expect(CAP.getTime() - DEADLINE.getTime(), "premise: the cap is the grace past the deadline").toBe(LINE_DEADLINE_GRACE_MS);
+    const { w, b } = await queuedAndPolling(past);
+    const { got, admittedAt } = await admit(w, b, new Date(past.getTime() + 10 * SEC));
+    const hold = new Date(admittedAt.getTime() + ADMIT_HOLD_MS);
+    expect(got.snapshot.phase, "premise: still open for the protected viewer").toBe("open");
+    expect(Date.parse(got.snapshot.serverNow), "premise: composed past the deadline").toBeGreaterThan(DEADLINE.getTime());
+    expect(hold.getTime(), "premise: the admit hold ends BEFORE the cap, so it is the binding bound").toBeLessThan(CAP.getTime());
+    expect(CAP.getTime() - hold.getTime(), "premise: by minutes, so the two answers are far apart").toBeGreaterThan(MIN);
+    expect(got.snapshot.heldUntil, "the real bound").toBe(hold.toISOString());
+    expect(got.snapshot.heldUntil, "the wrong answer's constant: the cap").not.toBe(CAP.toISOString());
+    expect(checkinClosesAt(got.snapshot), "and the card counts down to it").toBe(hold.toISOString());
+  }, 120_000);
 
-    // The pair: AWAY never came, holds no stay, and is closed out past the deadline - their closing time stays the deadline.
+  it("an ADMITTED player admitted near the cap, the cap the binding bound: heldUntil is the cap, never past it", async () => {
+    const { w, b } = await queuedAndPolling(new Date(CAP.getTime() - 15 * SEC));
+    const { got, admittedAt } = await admit(w, b, new Date(CAP.getTime() - 5 * SEC));
+    expect(admittedAt.getTime() + ADMIT_HOLD_MS, "premise: the admit hold would run PAST the cap").toBeGreaterThan(CAP.getTime());
+    expect(got.snapshot.phase, "premise: still open").toBe("open");
+    expect(got.snapshot.heldUntil, "the cap bounds the hold").toBe(CAP.toISOString());
+    expect(checkinClosesAt(got.snapshot)).toBe(CAP.toISOString());
+  }, 180_000);
+
+  it("a player still WAITING in line past the deadline: heldUntil is the cap (the line card names the same instant)", async () => {
+    const { last } = await queuedAndPolling(new Date(DEADLINE.getTime() + MIN));
+    expect(last.snapshot.phase).toBe("open");
+    expect(last.snapshot.heldUntil).toBe(CAP.toISOString());
+    expect(last.seat && "line" in last.seat ? last.seat.line.closesAt : null, "the card's own cap, from the wire's line").toBe(CAP.toISOString());
+  }, 120_000);
+
+  it("a SEATED player whose counted check-in holds the board open while the create is owed: heldUntil is the cap", async () => {
+    const s = await homeInLine({ awayCounted: true, until: new Date(DEADLINE.getTime() + MIN) });
+    const read = await admitAndSeat(s, new Date(DEADLINE.getTime() + MIN + 10 * SEC));
+    expect(read.seat?.seated, "premise: seated past the deadline").toBe(true);
+    expect(read.snapshot.phase, "premise: open").toBe("open");
+    expect(read.snapshot.heldUntil).toBe(CAP.toISOString());
+  }, 120_000);
+
+  it("two reasons hold at once: an admitted stay AND both check-ins counted - the hold lasts until the LATER end (the cap, not the admit hold)", async () => {
+    const past = new Date(DEADLINE.getTime() + MIN);
+    const { w, b } = await queuedAndPolling(past);
+    const { admittedAt } = await admit(w, b, new Date(past.getTime() + 10 * SEC));
+    const hold = new Date(admittedAt.getTime() + ADMIT_HOLD_MS);
+    const now = new Date(admittedAt.getTime() + SEC);
+    const viewer = (both: boolean) => ({ personId: b.home.personId, facts: { own: true, both } });
+    expect(hold.getTime(), "premise: the two ends differ").toBeLessThan(CAP.getTime());
+    // The admitted stay alone, counted but the opponent's is not: the stay's own end is the only reason.
+    expect(await judgePhase(now, { fixtureId: b.fixtureId, anchor: ANCHOR }, viewer(false)), "one reason: the admit hold").toEqual({ phase: "open", heldUntil: hold });
+    // Both counted: the stay's end and the cap both hold the board; the later wins.
+    expect(await judgePhase(now, { fixtureId: b.fixtureId, anchor: ANCHOR }, viewer(true)), "two reasons: the later, the cap").toEqual({ phase: "open", heldUntil: CAP });
+  }, 180_000);
+
+  it("a SEATED, counted viewer held open by the OPPONENT's admitted stay: heldUntil is the opponent's hold end, the later reason being absent", async () => {
+    const w = world();
+    const b = await seedBoard();
+    await seatAndCount(w, b, "away", inWindow(2 * MIN));
+    await fund(w.key, 0);
+    const arrival = new Date(DEADLINE.getTime() - 20 * SEC);
+    expect((await claimRoom(w, b, "home", arrival)).seat, "premise: HOME held in line").toMatchObject({ seated: false, reason: "queued" });
+    const polled = new Date(DEADLINE.getTime() + MIN);
+    await pollStay(w, b, "home", new Date(arrival.getTime() + 10 * SEC), polled);
+    const { admittedAt } = await admit(w, b, new Date(polled.getTime() + 10 * SEC));
+    const hold = new Date(admittedAt.getTime() + ADMIT_HOLD_MS);
+    expect(hold.getTime(), "premise: HOME's hold ends before the cap").toBeLessThan(CAP.getTime());
+
+    const away = await claimRoom(w, b, "away", new Date(admittedAt.getTime() + 5 * SEC));
+    expect(away.snapshot.phase, "premise: AWAY (counted, the opponent protected) is held open").toBe("open");
+    expect(away.snapshot.heldUntil, "until the opponent's stay lapses, not the cap").toBe(hold.toISOString());
+  }, 180_000);
+
+  it("the pair: a viewer nothing protects is closed past the deadline and heldUntil is null (the closed card names the deadline)", async () => {
+    const past = new Date(DEADLINE.getTime() + MIN);
+    const { w, b } = await queuedAndPolling(past);
     const away = await claimRoom(w, b, "away", past);
     expect(away.snapshot.phase, "premise: closed for the viewer nothing protects").toBe("closed");
+    expect(away.snapshot.heldUntil).toBeNull();
     expect(checkinClosesAt(away.snapshot)).toBe(DEADLINE.toISOString());
-  }, 60_000);
+  }, 120_000);
+});
+
+// `judgePhase` itself (final review N-1): the instant a hold ends exists only while the board is held open past the deadline, so the
+// window's own answers - before the window, inside it, and at or after the cap - carry none. The room short-circuits the first two before
+// asking, so only a direct call reaches them. No row is read in any of these (the line is asked only between the deadline and the cap).
+describe("judgePhase: no hold, no heldUntil (final review N-1)", () => {
+  const board = { fixtureId: "00000000-0000-4000-8000-000000000001", anchor: ANCHOR };
+  const viewer = { personId: "00000000-0000-4000-8000-000000000002", facts: { own: true, both: true } };
+  const OPENS = windowFor(ANCHOR).opensAt;
+
+  it("before the window, inside it, at the cap and past it: the window's own phase and no heldUntil (counted, so any reason to hold would show)", async () => {
+    const cases: [string, Date, string][] = [
+      ["before the window", new Date(OPENS.getTime() - 1), "before"],
+      ["inside the window", new Date(DEADLINE.getTime() - 1), "open"],
+      ["at the cap", CAP, "closed"],
+      ["past the cap", new Date(CAP.getTime() + MIN), "closed"],
+    ];
+    for (const [name, now, phase] of cases) {
+      const got = await judgePhase(now, board, viewer);
+      expect(got, name).toEqual({ phase, heldUntil: null });
+    }
+    expect(cases.length, "cases checked").toBe(4);
+  });
 });

@@ -35,6 +35,7 @@ function snap(): RoomSnapshot {
     held: false,
     result: null,
     watchUrl: null,
+    heldUntil: null,
     realtime: null,
   };
 }

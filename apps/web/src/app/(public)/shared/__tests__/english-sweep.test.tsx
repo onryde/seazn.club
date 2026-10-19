@@ -1080,6 +1080,7 @@ async function renderMatchRooms(): Promise<Segment[]> {
     held: false,
     result: null,
     watchUrl: null,
+    heldUntil: null,
     realtime: null,
   };
   const game = {

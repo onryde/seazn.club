@@ -46,6 +46,7 @@ function snap(over: Partial<RoomSnapshot>): RoomSnapshot {
     result: null,
     watchUrl: null,
     realtime: null,
+    heldUntil: null,
     ...over,
   };
 }
@@ -79,25 +80,34 @@ async function mounted(s: RoomSnapshot, clockAt: number, laterMs = 0) {
   return { closesIn: props.closesIn as string | null, closesAt: props.closesAt as string | null };
 }
 
-describe("the check-in card's countdown runs to where THIS viewer's check-in closes (final review M-3)", () => {
-  it("inside the window: the deadline, counting down (the unchanged case)", async () => {
+describe("the check-in card's countdown runs to where THIS viewer's check-in closes (final review M-3, N-1)", () => {
+  it("nothing held (heldUntil null): the deadline, counting down (the unchanged case)", async () => {
     const got = await mounted(snap({ serverNow: new Date(DEADLINE - 3 * MIN).toISOString() }), DEADLINE - 3 * MIN);
     expect(got.closesIn).toBe(face(3));
     expect(got.closesAt).toBe(formatTimeOfDay(new Date(DEADLINE).toISOString(), "en"));
   });
 
-  it("an admitted, protected player one minute PAST the deadline (the server still says open): the countdown is to the cap - never 0:00", async () => {
-    const got = await mounted(snap({ serverNow: new Date(DEADLINE + MIN).toISOString() }), DEADLINE + MIN);
-    expect(GRACE_MIN, "premise: the grace is longer than the minute past the deadline").toBeGreaterThan(1);
-    expect(got.closesIn, "the grace less the minute already used").toBe(face(GRACE_MIN - 1));
+  it("held by the admit hold (the server's instant is 30 s out, well before the cap): the countdown is to THAT instant - not 0:00 and not the cap", async () => {
+    const heldUntil = DEADLINE + MIN + 30_000;
+    const got = await mounted(snap({ serverNow: new Date(DEADLINE + MIN).toISOString(), heldUntil: new Date(heldUntil).toISOString() }), DEADLINE + MIN);
+    expect(got.closesIn, "30 seconds left").toBe("0:30");
     expect(got.closesIn).not.toBe(face(0));
-    expect(got.closesAt, "and the time of day is the cap's").toBe(formatTimeOfDay(new Date(DEADLINE + LINE_DEADLINE_GRACE_MS).toISOString(), "en"));
+    expect(got.closesIn, "the wrong answer: the cap's minutes").not.toBe(face(GRACE_MIN - 1));
+    expect(got.closesAt, "and the time of day is the held instant's").toBe(formatTimeOfDay(new Date(heldUntil).toISOString(), "en"));
     expect(got.closesAt).not.toBe(formatTimeOfDay(new Date(DEADLINE).toISOString(), "en"));
   });
 
-  it("the pair: a page composed a second BEFORE the deadline and not yet refreshed past it keeps the deadline (0:00) - it is not told it has the grace", async () => {
+  it("held by the cap (a waiting or counted player): the countdown is to the cap, derived from the grace", async () => {
+    const cap = DEADLINE + LINE_DEADLINE_GRACE_MS;
+    const got = await mounted(snap({ serverNow: new Date(DEADLINE + MIN).toISOString(), heldUntil: new Date(cap).toISOString() }), DEADLINE + MIN);
+    expect(GRACE_MIN, "premise: the grace is longer than the minute past the deadline").toBeGreaterThan(1);
+    expect(got.closesIn, "the grace less the minute already used").toBe(face(GRACE_MIN - 1));
+    expect(got.closesAt).toBe(formatTimeOfDay(new Date(cap).toISOString(), "en"));
+  });
+
+  it("the pair: a page composed a second BEFORE the deadline and not yet refreshed past it keeps the deadline (0:00) - it has been told nothing is held", async () => {
     const got = await mounted(snap({ serverNow: new Date(DEADLINE - 1_000).toISOString() }), DEADLINE - 1_000, 30_000);
-    expect(got.closesIn, "the page's clock is 29 s past the deadline; the server never said this viewer was protected").toBe(face(0));
+    expect(got.closesIn, "the page's clock is 29 s past the deadline; the server never said this viewer was held").toBe(face(0));
     expect(got.closesAt).toBe(formatTimeOfDay(new Date(DEADLINE).toISOString(), "en"));
   });
 });

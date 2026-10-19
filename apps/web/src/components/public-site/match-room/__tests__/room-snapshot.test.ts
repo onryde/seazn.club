@@ -16,7 +16,7 @@ import {
   turnAfter,
   windowWire,
 } from "../room-snapshot";
-import { boardAnchor, boardCap, DEADLINE_AFTER_MS, LINE_DEADLINE_GRACE_MS, windowFor } from "@/server/external-play/window";
+import { boardAnchor, DEADLINE_AFTER_MS, LINE_DEADLINE_GRACE_MS, windowFor } from "@/server/external-play/window";
 
 describe("frozenFor (T11 M7 — which seat a token_revoked hold froze, seen by the viewer)", () => {
   it("the empty case: no frozen seat ⇒ null for either viewer", () => {
@@ -317,43 +317,35 @@ describe("the camera-evidence back-off schedule (D21)", () => {
   });
 });
 
-// Final review M-3: an admitted, protected player past the deadline was shown "Check-in closes in 0:00". The room's phase is PER
-// VIEWER (spec §5.7.8): `open` past the deadline means the server judged THIS viewer protected, and a protected viewer's check-in
-// closes at the board's CAP (deadline + LINE_DEADLINE_GRACE_MS), not at the deadline. The server's own `serverNow` is the evidence
-// (the snapshot was composed at or past the deadline and still reads open), never the client's wall clock: a page that has not
-// refreshed yet at the deadline instant is NOT protected and must not be told it has five more minutes.
-describe("checkinClosesAt (final review M-3: where the viewer's check-in really closes)", () => {
+// Final review M-3 + N-1: a viewer the check-in line holds open past the deadline was shown "Check-in closes in 0:00". The SERVER knows
+// when that hold really ends (the cap for a waiting or counted player, `admitted_at + ADMIT_HOLD_MS` for an admitted one, whichever
+// comes first with the cap) and carries it as `heldUntil`; the card counts down to `heldUntil ?? deadline`. (The first M-3 cut guessed
+// the cap on the client from `serverNow`, which over-promised the admitted player by minutes: N-1.)
+describe("checkinClosesAt (final review M-3, N-1: where THIS viewer's check-in really closes)", () => {
   const anchor = boardAnchor(new Date("2026-10-16T19:04:00.000Z"), 0, false);
   const w = windowWire(anchor);
   const DEADLINE = Date.parse(w.deadline!);
   const at = (offsetMs: number) => new Date(DEADLINE + offsetMs).toISOString();
-  const capIso = boardCap(anchor).toISOString();
 
-  it("the empty case first: no deadline (the round is unopened) has no closing time", () => {
-    for (const phase of ["not_opened", "before", "open", "closed"] as const) {
-      expect(checkinClosesAt({ phase, deadline: null, serverNow: at(0) }), phase).toBeNull();
-    }
+  it("the empty case first: no deadline and nothing held has no closing time", () => {
+    expect(checkinClosesAt({ deadline: null, heldUntil: null })).toBeNull();
   });
 
-  it("composed BEFORE the deadline: the deadline, as ever (the viewer is simply inside the window)", () => {
-    expect(checkinClosesAt({ phase: "open", deadline: w.deadline, serverNow: at(-60_000) })).toBe(w.deadline);
-    expect(checkinClosesAt({ phase: "open", deadline: w.deadline, serverNow: at(-1) })).toBe(w.deadline);
+  it("nothing held: the deadline, as ever", () => {
+    expect(checkinClosesAt({ deadline: w.deadline, heldUntil: null })).toBe(w.deadline);
   });
 
-  it("composed AT or PAST the deadline and still `open`: the viewer is protected - the closing time is the board's cap, from the window's own authority", () => {
-    expect(checkinClosesAt({ phase: "open", deadline: w.deadline, serverNow: at(0) }), "at the deadline").toBe(capIso);
-    expect(checkinClosesAt({ phase: "open", deadline: w.deadline, serverNow: at(60_000) }), "a minute past").toBe(capIso);
-    expect(checkinClosesAt({ phase: "open", deadline: w.deadline, serverNow: at(LINE_DEADLINE_GRACE_MS - 1) }), "1 ms before the cap").toBe(capIso);
-    expect(Date.parse(capIso) - DEADLINE, "premise: the cap is the grace past the deadline").toBe(LINE_DEADLINE_GRACE_MS);
-    expect(Date.parse(capIso), "premise: and later than the deadline, so the countdown is not 0:00").toBeGreaterThan(DEADLINE);
-  });
-
-  it("the pair: a viewer the server did NOT hold open (phase closed, or before, or unopened) keeps the deadline - the closed card names the deadline, never the cap", () => {
+  it("held: the server's instant wins over the deadline, whichever side of the cap it falls", () => {
     let checked = 0;
-    for (const phase of ["closed", "before", "not_opened"] as const) {
-      expect(checkinClosesAt({ phase, deadline: w.deadline, serverNow: at(60_000) }), phase).toBe(w.deadline);
+    for (const heldUntil of [at(30_000), at(LINE_DEADLINE_GRACE_MS), at(LINE_DEADLINE_GRACE_MS - 1)]) {
+      expect(checkinClosesAt({ deadline: w.deadline, heldUntil }), heldUntil).toBe(heldUntil);
       checked += 1;
     }
-    expect(checked, "phases checked").toBe(3);
+    expect(checked, "held instants checked").toBe(3);
+    expect(Date.parse(at(30_000)), "premise: an instant past the deadline, so the countdown is not 0:00").toBeGreaterThan(DEADLINE);
+  });
+
+  it("held with no deadline on the wire still counts to the held instant (the field stands on its own)", () => {
+    expect(checkinClosesAt({ deadline: null, heldUntil: at(30_000) })).toBe(at(30_000));
   });
 });

@@ -140,6 +140,7 @@ describe("the screen: a stamped round whose batch has not opened is the batch wa
       held: false,
       result: null,
       watchUrl: null,
+      heldUntil: null,
       realtime: null,
       ...over,
     };

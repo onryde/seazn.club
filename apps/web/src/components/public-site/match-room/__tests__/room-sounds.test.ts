@@ -300,6 +300,7 @@ describe("through the REAL reducer: the room's own events in, sounds out", () =>
       held: false,
       result: null,
       watchUrl: null,
+      heldUntil: null,
       realtime: null,
     };
   }

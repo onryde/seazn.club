@@ -78,6 +78,7 @@ function snap(g: RoomGame | null, o: { at?: number; incrementSeconds?: number; y
     held: false,
     result: o.result ?? null,
     watchUrl: null,
+    heldUntil: null,
     realtime: null,
   };
 }

@@ -73,6 +73,7 @@ function snap(over: Partial<RoomSnapshot> = {}): RoomSnapshot {
     held: false,
     result: null,
     watchUrl: null,
+    heldUntil: null,
     realtime: null,
     ...over,
   };

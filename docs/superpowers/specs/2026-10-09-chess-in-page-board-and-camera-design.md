@@ -269,7 +269,7 @@ the round's open row, below), and a player can read when they are due.
 |---|---|---|
 | seat | `preflight.ts` `seatPlayer` | `before` → `round_not_open` (no stamp) or `checkin_not_open` (stamped, this board's batch not yet open); `closed` and not a re-entry → `window_closed`, unless the line holds the place (§5.7.8) |
 | a check-in counts | `window.ts` `checkInCounts`, via `room.ts` `checkIns` (the room, `noShow` and `mintRetry` all judge "who came" through it) | a check-in counts only inside the board's window |
-| snapshot | `room.ts` `compose` and `claimRoomSeat`, via `room-snapshot.ts` `roomPhaseWire` and `windowWire` | the `phase`, `opensAt` and `deadline` the room draws, and the gate on stamping a check-in |
+| snapshot | `room.ts` `compose` and `claimRoomSeat`, via `room-snapshot.ts` `roomPhaseWire` and `windowWire` | the `phase`, `opensAt`, `deadline` and `heldUntil` (where a held viewer's hold ends, §5.7.8) the room draws, and the gate on stamping a check-in |
 | game create | `create-game.ts` `createGameIfReady` (the `not_ready` gate), `createAtDequeue` (the `claimAt` refusal), and the `ready` row's `expires_at` | "T+10 is the deadline to have the game created" (`T_batch` + `DEADLINE_AFTER_MS`) |
 | sweep | `sweep.ts` `playableWindow`, read by `noShow` (and its `not_started` hold), `mintRetry`, `meetingIsDone` (teardown) and `expectedEnd` (the reconcile base) | the no-show, the stranded-board and throttled-create arms, the "nobody played" teardown, the base of an expected end |
 | invites | `invite.ts` `sendFixtureInvite` (the deadline in the mail) and the resend refusal; `open-round.ts` `openRound`'s "reinvited" `window_closed` skip | per board: a board whose batch window has closed is skipped, one whose has not is still invited |
@@ -2305,13 +2305,20 @@ viewer)`, whose line part is a single query, `lineHoldsBoard`; the pure window a
 - **Teardown** (`meetingIsDone`): not "nobody played" while the board is held.
 - **The room's phase** is per viewer: `open` for a viewer whose own stay is protected, or who is
   seated while the create is owed; `closed` for anyone else. Without it a queued player sees the
-  closed card. **The check-in card's countdown follows it (final review M-3):** a snapshot the server
-  composed at or past the deadline and still called `open` marks a protected viewer, so the card
-  counts down to the board's CAP (`capAfter(deadline)`, the deadline plus `LINE_DEADLINE_GRACE_MS`)
-  and names the cap's time of day, not to a deadline that has passed ("closes in 0:00" behind the
-  camera prompt read as over). The test is the server's own `serverNow`, never the client's clock: a
-  page that has not refreshed at the deadline instant has not been told it is protected. Where the
-  line card is showing, it names the cap itself (`line.closesAt`, §6.1 (2)).
+  closed card. **The check-in card's countdown follows it (final review M-3, amended by N-1):** the snapshot
+  carries `heldUntil`, the instant THIS viewer's hold on the board ends, and the card counts down
+  to `heldUntil` (to `deadline` when it is null) and names that instant's time of day. The SERVER
+  computes it (`judgePhase`, the same call that decides the phase): it is null unless the board is
+  held open past the deadline; the CAP for a player waiting in line (the line card names the same
+  instant) and for two counted check-ins while the create is owed; and for an ADMITTED stay (the
+  viewer's own, or the other side's that holds a counted viewer's board open) the earlier of the
+  cap and `admitted_at + ADMIT_HOLD_MS` (§5.7.5: the dead-camera bound, about 54.5 s, which already
+  includes the camera permission prompt), because the stay lapses there and the board is no
+  longer held for it; where two reasons hold, the later. `holdEndsSql` is the one spelling of
+  `admitted_at + ADMIT_HOLD_MS`: the lapse clause and the countdown both read it. An admitted player
+  is the one viewer who sees this countdown (a waiting one sees the line card), and the first cut
+  counted them down to the cap, minutes more than they have. "Closes in 0:00" behind the camera
+  prompt had read as over; so would "closes in 4:00" at 54 s have read as plenty.
 - **`expectedEnd`'s base (m8).** `sweep.ts`'s `expectedEnd` uses `playableWindow(openedAt).deadline`
   as the base of a never-started board, on the comment "T9 creates no game after the round's
   deadline". That comment is no longer true: a game can be created up to the cap. The base becomes

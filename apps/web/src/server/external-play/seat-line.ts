@@ -82,7 +82,14 @@ export const LINE_LOCK_TIMEOUT_MS = 1_000;
 
 const ms = (n: number) => sql`(${n}::float8 * interval '1 millisecond')`;
 
-// ─── The four fragments ───────────────────────────────────────────────────────────────────────────────────────────────────
+// ─── The five fragments ───────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** WHEN an admitted stay's hold ends: `admitted_at + ADMIT_HOLD_MS` (null for a stay never admitted). The ONE spelling of that
+ *  bound: the lapse clause below tests against it, and the room's countdown reads it (`lineHoldsBoard`, final review N-1), so the
+ *  instant the check-in card names is the instant the stay lapses. */
+export function holdEndsSql() {
+  return sql`(l.admitted_at + ${ms(ADMIT_HOLD_MS)})`;
+}
 
 /** The lapse clause, TIME ONLY: a stay is over when it has been silent for its grace (LINE_ABANDON_AFTER_MS after a hold,
  *  LINE_RELEASE_GRACE_MS after a pass), or - an admitted stay - has held its admission for ADMIT_HOLD_MS. It reads no
@@ -90,7 +97,7 @@ const ms = (n: number) => sql`(${n}::float8 * interval '1 millisecond')`;
  *  upsert); every other caller takes the whole. */
 export function stayLapsedSql(now: Now, cause: "any" | "silent" | "hold" = "any") {
   const silent = sql`${now} - l.last_seen_at >= (case l.last_gate when 'held' then ${ms(LINE_ABANDON_AFTER_MS)} else ${ms(LINE_RELEASE_GRACE_MS)} end)`;
-  const hold = sql`(l.admitted_at is not null and ${now} - l.admitted_at >= ${ms(ADMIT_HOLD_MS)})`;
+  const hold = sql`(l.admitted_at is not null and ${now} >= ${holdEndsSql()})`;
   if (cause === "silent") return sql`(${silent})`;
   if (cause === "hold") return hold;
   return sql`(${hold} or ${silent})`;
@@ -532,34 +539,73 @@ export type PhaseViewer = {
   bothOnly?: boolean;
 };
 
-/** The line's part of the deadline protection, ONE query: is there a PROTECTED player on the board? Protected = in line (the one
- *  predicate), arrived in time (`first_claim_at` before the deadline: a claim AT the deadline is `window_closed`, so no stay
- *  exists from it) - and the cap, which the caller has already applied. `own` is the viewer's own stay. */
-export async function lineHoldsBoard(a: { board: Board; now: Date; personId: string | null }): Promise<{ own: boolean; any: boolean }> {
+/** The line's part of the deadline protection, ONE query: is there a PROTECTED player on the board, and until when? Protected = in
+ *  line (the one predicate), arrived in time (`first_claim_at` before the deadline: a claim AT the deadline is `window_closed`, so
+ *  no stay exists from it) - and the cap, which the caller has already applied. Each protected stay holds the board until its OWN
+ *  end: the cap for a stay still waiting, and for an ADMITTED stay the earlier of the cap and its hold's end (§5.7.5;
+ *  `holdEndsSql`, the same instant the stay lapses). `own` is the latest such end over the viewer's own stay, `any` over every
+ *  protected stay on the board; each is null when there is none, so "held" and "until when" cannot disagree (final review N-1). */
+export async function lineHoldsBoard(a: {
+  board: Board;
+  now: Date;
+  personId: string | null;
+}): Promise<{ own: Date | null; any: Date | null }> {
   const nowSql = at(a.now);
   const deadline = windowFor(a.board.anchor).deadline;
-  const [row] = await sql<{ own: boolean; any: boolean }[]>`
-    select coalesce(bool_or(l.person_id = ${a.personId}::uuid), false) as own, count(*) > 0 as any
+  const cap = boardCap(a.board.anchor);
+  const [row] = await sql<{ own: Date | null; any: Date | null }[]>`
+    select max(least(coalesce(${holdEndsSql()}, ${cap}::timestamptz), ${cap}::timestamptz))
+             filter (where l.person_id = ${a.personId}::uuid) as own,
+           max(least(coalesce(${holdEndsSql()}, ${cap}::timestamptz), ${cap}::timestamptz)) as any
       from fixture_seat_line l
      where l.fixture_id = ${a.board.fixtureId} and l.first_claim_at < ${deadline}::timestamptz and ${lineLiveSql(nowSql)}`;
   return { own: row!.own, any: row!.any };
 }
 
+/** What `judgePhase` says: the phase, and - when the phase is `open` only because the line (or a counted check-in) is holding the
+ *  board past the deadline - the instant that hold ENDS for this viewer. `null` when nothing is held. */
+export type PhaseVerdict = { phase: RoomPhase; heldUntil: Date | null };
+
 /** THE phase reader for every place the deadline matters (§5.7.8): the seat's admission, the room's phase per viewer, the create
- *  allowance, the no-show skip and the teardown all call this, and the pure window arithmetic in window.ts stays pure.
+ *  allowance, the no-show skip and the teardown all call this (through `boardPhase`), and the pure window arithmetic in window.ts
+ *  stays pure.
  *
  *  Inside the window, and before it, the answer is the window's. PAST the deadline and before the cap, a board is held `open` for
  *  - a viewer whose OWN stay is protected, or who holds a counted check-in while the board's create is owed (the other side is
  *    protected, or both sides are counted);
  *  - the board itself (`personId` null) while any side is protected or both are counted.
- *  At and past the cap it is `closed` for everyone. */
-export async function boardPhase(now: Date, board: Board, viewer: PhaseViewer): Promise<RoomPhase> {
+ *  At and past the cap it is `closed` for everyone.
+ *
+ *  `heldUntil` (final review N-1) is where that hold ends for the VIEWER, so the room can say when their check-in closes. Each
+ *  reason that holds the board open has its own end - a protected stay's (the cap while it waits, the earlier of the cap and
+ *  `admitted_at + ADMIT_HOLD_MS` once admitted: §5.7.5, the dead-camera bound, past which the stay lapses and holds nothing), and
+ *  the cap for two counted check-ins - and the hold lasts until the LATEST of the reasons that apply. */
+export async function judgePhase(now: Date, board: Board, viewer: PhaseViewer): Promise<PhaseVerdict> {
   const base = roomPhase(now, board.anchor);
-  if (base !== "closed") return base;
-  if (now.getTime() >= boardCap(board.anchor).getTime()) return "closed";
+  if (base !== "closed") return { phase: base, heldUntil: null };
+  const cap = boardCap(board.anchor);
+  const closed: PhaseVerdict = { phase: "closed", heldUntil: null };
+  if (now.getTime() >= cap.getTime()) return closed;
   const facts = typeof viewer.facts === "function" ? await viewer.facts() : viewer.facts;
-  if (viewer.bothOnly) return facts.both ? "open" : "closed";
-  const held = await lineHoldsBoard({ board, now, personId: viewer.personId });
-  if (viewer.personId === null) return held.any || facts.both ? "open" : "closed";
-  return held.own || (facts.own && (held.any || facts.both)) ? "open" : "closed";
+  const ends: Date[] = [];
+  if (viewer.bothOnly) {
+    if (facts.both) ends.push(cap);
+  } else {
+    const held = await lineHoldsBoard({ board, now, personId: viewer.personId });
+    if (viewer.personId === null) {
+      if (held.any) ends.push(held.any);
+      if (facts.both) ends.push(cap);
+    } else {
+      if (held.own) ends.push(held.own);
+      if (facts.own && held.any) ends.push(held.any);
+      if (facts.own && facts.both) ends.push(cap);
+    }
+  }
+  if (ends.length === 0) return closed;
+  return { phase: "open", heldUntil: new Date(Math.max(...ends.map((d) => d.getTime()))) };
+}
+
+/** The phase alone, for every caller that does not say when the hold ends. */
+export async function boardPhase(now: Date, board: Board, viewer: PhaseViewer): Promise<RoomPhase> {
+  return (await judgePhase(now, board, viewer)).phase;
 }

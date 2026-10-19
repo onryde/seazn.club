@@ -57,6 +57,7 @@ function snap(g: RoomGame | null, at = T0): RoomSnapshot {
     held: false,
     result: null,
     watchUrl: null,
+    heldUntil: null,
     realtime: null,
   };
 }

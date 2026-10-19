@@ -6,8 +6,8 @@
 // What it judges, over the production tree (comments blanked by the same lexer the video guards use, SQL taken from string and
 // template literals):
 //   1. THE READERS. Every read of a guarded column (a use that is not an assignment or an insert column) is counted per enclosing
-//      top-level declaration. The set of declarations that read is EXACTLY the five allow-listed ones - the four fragments and
-//      `upsertStay` (`stayOpenSql` counts: it is where the open test lives). A reader outside the list, or an allow-listed one
+//      top-level declaration. The set of declarations that read is EXACTLY the six allow-listed ones - the five fragments and
+//      `upsertStay` (`stayOpenSql` counts: it is where the open test lives; `holdEndsSql` is the one spelling of the hold's end). A reader outside the list, or an allow-listed one
 //      the scan no longer finds, fails.
 //   2. THE RE-SPELLING. The open-stay test appears in no SQL outside `stayOpenSql`, in either order and with any alias.
 //   3. THE CONSUMERS. Each fragment's uses are pinned per declaration: `lineLiveSql` by the gate's standing read, the door read,
@@ -30,9 +30,11 @@ const SRC = join(import.meta.dirname, "..", "..", "..");
 const LINE_FILE = "server/external-play/seat-line.ts";
 
 const GUARDED = ["queued_at", "last_seen_at", "last_gate", "admitted_at", "completing"] as const;
-/** The allow-list: the four fragments and the upsert. */
-const READERS = ["stayLapsedSql", "stayOpenSql", "lineLiveSql", "reservedSql", "upsertStay"] as const;
-const FRAGMENTS = ["lineLiveSql", "reservedSql", "stayOpenSql", "stayLapsedSql"] as const;
+/** The allow-list: the five fragments and the upsert. `holdEndsSql` (final review N-1) is the ONE spelling of when an admitted stay's
+ *  hold ends: the lapse clause tests against it and the room's countdown reads it, so the instant the card names is the instant the
+ *  stay lapses - a second spelling of `admitted_at + ADMIT_HOLD_MS` would let the two drift. */
+const READERS = ["stayLapsedSql", "stayOpenSql", "lineLiveSql", "reservedSql", "holdEndsSql", "upsertStay"] as const;
+const FRAGMENTS = ["lineLiveSql", "reservedSql", "stayOpenSql", "stayLapsedSql", "holdEndsSql"] as const;
 type Fragment = (typeof FRAGMENTS)[number];
 
 /** Where each fragment is used inside seat-line.ts, by declaration. The consumers of the lists in spec §5.7.2 hang off these. */
@@ -46,6 +48,9 @@ const FRAGMENT_USES: Record<Fragment, Record<string, number>> = {
   stayOpenSql: { lineLiveSql: 1, reservedSql: 1, readStanding: 1 },
   // The lapse clause: the open test, and the upsert's restart / silent / hold reads.
   stayLapsedSql: { stayOpenSql: 1, upsertStay: 3 },
+  // The one spelling of the hold's end: the lapse clause tests against it, and the room's countdown (lineHoldsBoard, twice: the
+  // viewer's own end and the board's) reads it.
+  holdEndsSql: { stayLapsedSql: 1, lineHoldsBoard: 2 },
 };
 
 /** The consumers outside seat-line.ts: every call of a seat-line reader, per file and declaration, and (for `boardPhase`) whether
@@ -56,7 +61,7 @@ const SITES: readonly Site[] = [
   { file: "server/usecases/external-play/preflight.ts", owner: "seatPlayer", fn: "lineActive", times: 1, consumer: "inLine 9: the optional yield" },
   { file: "server/usecases/external-play/preflight.ts", owner: "passTheLine", fn: "gateClaim", times: 1, consumer: "the gate (inLine 1 and 2, reservedSql 1 to 3)" },
   { file: "server/usecases/external-play/preflight.ts", owner: "passTheLine", fn: "answerBusy", times: 1, consumer: "the gate's one named refusal" },
-  { file: "server/usecases/external-play/room.ts", owner: "viewerPhase", fn: "boardPhase", times: 1, bothOnly: false, consumer: "inLine 7: the room's phase, per viewer" },
+  { file: "server/usecases/external-play/room.ts", owner: "viewerPhase", fn: "judgePhase", times: 1, bothOnly: false, consumer: "inLine 7: the room's phase, per viewer (and where its hold ends)" },
   { file: "server/usecases/external-play/room.ts", owner: "claimRoomSeat", fn: "ownStayInLine", times: 1, consumer: "inLine 3: the door" },
   { file: "server/usecases/external-play/room.ts", owner: "claimRoomSeat", fn: "ownStayArrival", times: 1, consumer: "the check-in is dated at the stay's arrival" },
   { file: "server/usecases/external-play/room.ts", owner: "claimRoomSeat", fn: "endStay", times: 2, consumer: "a seat serves the stay; a camera no wait can fix ends it" },
@@ -70,7 +75,7 @@ const SITES: readonly Site[] = [
   { file: "server/usecases/external-play/create-game.ts", owner: "createAtDequeue", fn: "boardPhase", times: 1, bothOnly: true, consumer: "inLine 6: the create's allowance (dequeue)" },
 ];
 /** The seat-line functions whose callers are pinned above. */
-const SEAT_LINE_API = ["boardPhase", "lineActive", "gateClaim", "answerBusy", "ownStayInLine", "ownStayArrival", "endStay", "settleDeferral", "lineHoldsBoard"] as const;
+const SEAT_LINE_API = ["boardPhase", "judgePhase", "lineActive", "gateClaim", "answerBusy", "ownStayInLine", "ownStayArrival", "endStay", "settleDeferral", "lineHoldsBoard"] as const;
 
 // ─── The scanner ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -119,7 +124,7 @@ export function scanFile(src: string, sqlOnly = false): FileScan {
     writes: [],
     openTests: [],
     namesLedger: false,
-    fragmentUses: { lineLiveSql: {}, reservedSql: {}, stayOpenSql: {}, stayLapsedSql: {} },
+    fragmentUses: { lineLiveSql: {}, reservedSql: {}, stayOpenSql: {}, stayLapsedSql: {}, holdEndsSql: {} },
     calls: [],
     guardedMentionsInSql: [],
   };
@@ -233,10 +238,10 @@ describe("one predicate: the check-in line's ledger has one reader (test 33)", (
   const lineSrc = read(LINE_FILE);
   const lineScan = scanFile(lineSrc);
 
-  it("seat-line.ts: the guarded columns are READ by exactly the five allow-listed declarations (4 fragments + the upsert), and the open-stay test is spelled once", () => {
+  it("seat-line.ts: the guarded columns are READ by exactly the six allow-listed declarations (5 fragments + the upsert), and the open-stay test is spelled once", () => {
     const readers = new Set([...lineScan.reads.map((u) => u.owner), ...lineScan.openTests.map((t) => t.owner)]);
     expect([...readers].sort(), "the readers found").toEqual([...READERS].sort());
-    expect(readers.size, "readers found: the four fragments and the upsert").toBe(5);
+    expect(readers.size, "readers found: the five fragments and the upsert").toBe(6);
     expect(lineScan.reads.length, "anti-vacuity: reads scanned").toBeGreaterThan(10);
     expect(lineScan.writes.length, "anti-vacuity: writes scanned (assignments and the insert's columns)").toBeGreaterThan(4);
     expect(lineScan.openTests, "the open-stay test is in stayOpenSql only").toEqual([expect.objectContaining({ owner: "stayOpenSql" })]);
@@ -321,13 +326,25 @@ describe("one predicate: the check-in line's ledger has one reader (test 33)", (
         expectBad: /read of queued_at in ownStayInLine/,
       },
       {
+        name: "a second spelling of the hold's end: a raw admitted_at read added to the board's hold query",
+        from: "where l.fixture_id = ${a.board.fixtureId} and l.first_claim_at < ${deadline}::timestamptz and ${lineLiveSql(nowSql)}`;",
+        to: "where l.fixture_id = ${a.board.fixtureId} and l.first_claim_at < ${deadline}::timestamptz and l.admitted_at is not null and ${lineLiveSql(nowSql)}`;",
+        expectBad: /read of admitted_at in lineHoldsBoard/,
+      },
+      {
+        name: "the lapse clause re-spells the hold's end instead of asking holdEndsSql",
+        from: "${now} >= ${holdEndsSql()})`;",
+        to: "${now} >= (l.admitted_at + ${ms(ADMIT_HOLD_MS)}))`;",
+        expectBad: /holdEndsSql used 0x in stayLapsedSql, expected 1/,
+      },
+      {
         name: "a consumer gone: the optional yield no longer asks for a live admitted stay",
         from: " or exists (select 1 from fixture_seat_line l where l.budget_key = ${a.budgetKey} and ${reservedSql(now)} is not null)) as active",
         to: ") as active",
         expectBad: /reservedSql used 0x in lineActive, expected 1/,
       },
     ];
-    it("passes the real file and fails every mutant, with the reason (6 mutants, all applied)", () => {
+    it("passes the real file and fails every mutant, with the reason (8 mutants, all applied)", () => {
       expect(judgeLineFile(lineScan), "premise: the real file passes").toEqual([]);
       let applied = 0;
       for (const m of mutants) {

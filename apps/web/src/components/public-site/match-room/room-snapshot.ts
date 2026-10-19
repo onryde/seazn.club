@@ -7,7 +7,7 @@
 // is the engine's boardgame fold.
 import { foldMatchWithStoppage, outcomeOf, summaryOf } from "@seazn/engine/core";
 import { boardgame, BoardgameMethod } from "@seazn/engine/sports/boardgame";
-import { capAfter, roomPhase, windowFor, type BoardAnchor } from "@/server/external-play/window";
+import { roomPhase, windowFor, type BoardAnchor } from "@/server/external-play/window";
 
 /** Fix round 4b: GET and POST room's answer (409) while the organiser re-pairs the board's round — the board names
  *  nobody for now. The open room reads on through it (room-state), where the room's one 404 stops it for good. */
@@ -187,6 +187,11 @@ export type RoomSnapshot = {
   roundOpenedAt: string | null;
   opensAt: string | null;
   deadline: string | null;
+  /** The instant THIS viewer's hold on the board ends, when the check-in line is holding it open for them past `deadline`
+   *  (spec §5.7.8): the board's cap for a player waiting in line or seated while the create is owed, and for an ADMITTED player
+   *  the earlier of the cap and `admitted_at + ADMIT_HOLD_MS` (§5.7.5). `null` otherwise - nothing is held, so the check-in
+   *  closes at `deadline`. Always on the wire. */
+  heldUntil: string | null;
   links: { fixture: string; standings: string };
   meta: {
     divisionName: string;
@@ -268,16 +273,13 @@ export function windowWire(anchor: BoardAnchor | null): { opensAt: string | null
   return { opensAt: w.opensAt.toISOString(), deadline: w.deadline.toISOString() };
 }
 
-/** Where THIS viewer's check-in closes (final review M-3). The deadline - unless the server composed the snapshot at or past
- *  it and still said `open`: the phase is per viewer (spec §5.7.8), so that viewer is protected by the check-in line and their
- *  check-in closes at the board's CAP (the deadline plus the grace). Read off the server's own `serverNow`, never the client's
- *  wall clock: a page that has not refreshed at the deadline instant has not been told it is protected. Without it the check-in
- *  card of an admitted player past the deadline counted down to a deadline that had passed and read "closes in 0:00". */
-export function checkinClosesAt(s: Pick<RoomSnapshot, "phase" | "deadline" | "serverNow">): string | null {
-  if (s.deadline === null) return null;
-  const deadline = new Date(s.deadline);
-  if (s.phase === "open" && Date.parse(s.serverNow) >= deadline.getTime()) return capAfter(deadline).toISOString();
-  return s.deadline;
+/** Where THIS viewer's check-in closes (final review M-3, N-1): the instant the SERVER says their hold on the board ends, else the
+ *  deadline. Past the deadline a viewer the check-in line protects still reads `open` (spec §5.7.8), and the card used to count down
+ *  to a deadline that had passed ("closes in 0:00"). The first cut guessed the CAP here from `serverNow`, which over-promised the
+ *  one viewer who sees this countdown - an ADMITTED player, held only to `admitted_at + ADMIT_HOLD_MS` (§5.7.5) - by minutes. The
+ *  server alone has the stay row, so it computes the bound (`heldUntil`, seat-line.ts `judgePhase`) and the card trusts it. */
+export function checkinClosesAt(s: Pick<RoomSnapshot, "deadline" | "heldUntil">): string | null {
+  return s.heldUntil ?? s.deadline;
 }
 
 /** A token_revoked hold's frozen seat, as the viewer reads it. */

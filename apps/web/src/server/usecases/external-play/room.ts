@@ -28,7 +28,7 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { CAMERA_FAULT_PING_LIMIT, rateLimit } from "@/lib/rate-limit";
 import { takeSeatAsk } from "@/server/external-play/seat-ask-limit";
-import { boardPhase, endStay, ownStayArrival, ownStayInLine, settleDeferral } from "@/server/external-play/seat-line";
+import { endStay, judgePhase, ownStayArrival, ownStayInLine, settleDeferral } from "@/server/external-play/seat-line";
 import { log } from "@/server/logger";
 import { routes } from "@/lib/routes";
 import { externalPlayLobbyTopic, mintExternalPlayLobbyToken, publishExternalPlayLobby } from "@/lib/realtime";
@@ -59,6 +59,7 @@ import {
   type Colour,
   type RoomGame,
   type LineWire,
+  type RoomPhaseWire,
   type RoomSnapshot,
   type SeatRefusal,
 } from "@/components/public-site/match-room/room-snapshot";
@@ -296,17 +297,18 @@ async function opponentCameraReport(
   return row.state === "live" ? "live" : row.state === "off" ? "off" : "unknown";
 }
 
-/** The room's phase for ONE viewer (spec §5.7.8): the window's own, held open by `boardPhase` for a protected player. */
+/** The room's phase for ONE viewer (spec §5.7.8): the window's own, held open by `judgePhase` for a protected player - and, then,
+ *  the instant that hold ends for this viewer (`heldUntil`, final review N-1), which the card counts down to. */
 async function viewerPhase(a: {
   fixtureId: string;
   anchor: BoardAnchor | null;
   now: Date;
   player: SidePlayer;
   ci: { home: boolean; away: boolean };
-}) {
+}): Promise<{ phase: RoomPhaseWire; heldUntil: Date | null }> {
   const base = roomPhaseWire({ now: a.now, anchor: a.anchor });
-  if (a.anchor === null || base !== "closed") return base;
-  return boardPhase(
+  if (a.anchor === null || base !== "closed") return { phase: base, heldUntil: null };
+  return judgePhase(
     a.now,
     { fixtureId: a.fixtureId, anchor: a.anchor },
     { personId: a.player.personId, facts: { own: a.ci[a.player.side], both: a.ci.home && a.ci.away } },
@@ -322,7 +324,7 @@ async function compose(r: Resolved, now: Date, deps: RoomDeps): Promise<RoomSnap
   // Spec §5.7.8: the phase is PER VIEWER - past the deadline and before the board's cap it is still `open` for a player the
   // call budget is holding in the check-in line (or who is seated while the board's create is owed), and `closed` for anyone
   // else. Without it a queued player would see the closed card.
-  const phase = await viewerPhase({ fixtureId: f.fixtureId, anchor, now, player, ci });
+  const { phase, heldUntil } = await viewerPhase({ fixtureId: f.fixtureId, anchor, now, player, ci });
   const opponent = player.side === "home" ? away : home;
 
   // T10 review carry: once a game exists its RECORDED colours are the truth;
@@ -464,6 +466,7 @@ async function compose(r: Resolved, now: Date, deps: RoomDeps): Promise<RoomSnap
     scheduledAt: f.scheduledAt?.toISOString() ?? null,
     roundOpenedAt: open?.roundOpenedAt.toISOString() ?? null,
     ...windowWire(anchor),
+    heldUntil: heldUntil?.toISOString() ?? null,
     links: {
       fixture: routes.sharedFixture(f.orgSlug, f.competitionSlug, f.divisionSlug, f.fixtureId),
       standings: routes.shared(f.orgSlug, f.competitionSlug, f.divisionSlug),
@@ -593,7 +596,7 @@ export async function claimRoomSeat(
     const open =
       base === "open" ||
       (base === "closed" &&
-        (await viewerPhase({ fixtureId, anchor, now, player: r.player, ci: await checkIns(r.f, r.home, r.away, anchor) })) === "open");
+        (await viewerPhase({ fixtureId, anchor, now, player: r.player, ci: await checkIns(r.f, r.home, r.away, anchor) })).phase === "open");
     if (open) {
       const arrival = base === "closed" ? await ownStayArrival({ fixtureId, personId: r.player.personId }) : null;
       const w = windowFor(anchor);
