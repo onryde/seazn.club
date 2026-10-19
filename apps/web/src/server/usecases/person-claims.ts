@@ -21,6 +21,7 @@ import { createHash, randomBytes } from "node:crypto";
 import type postgres from "postgres";
 import { sql, withTenant, type Tx } from "@/lib/db";
 import { AuthError, HttpError } from "@/lib/errors";
+import { emailSigninOpen } from "@/lib/claim-signin-window";
 import { stampTermsAcceptance } from "@/lib/legal";
 import { resolveOrCreateUser } from "@/lib/users";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -253,8 +254,11 @@ export interface ResolvedClaim {
   is_official: boolean;
 }
 
-/** Which of the claim's two secrets opened it: `email` is the secret that only
- *  ever went into the invite email, `console` the organiser's copyable link. */
+/** What the link that opened the claim may DO right now: `email` is the secret
+ *  that only ever went into the invite email AND is still inside its sign-in
+ *  window (CLAIM_EMAIL_SIGNIN_MS from when it was minted); `console` is the
+ *  organiser's copyable link, or an emailed link whose window has passed — both
+ *  prove nothing about their holder, so a signed-out visitor must sign in. */
 export type ClaimVia = "email" | "console";
 
 /** A claim resolved from a pc_ token — the claim plus which secret it was. */
@@ -269,7 +273,9 @@ type ClaimLookupRow = ResolvedClaim & {
   user_id: string | null;
 };
 
-type TokenLookupRow = ClaimLookupRow & { via_email: boolean };
+/** `via_email`: the token is the email secret. `minted_at`: when that secret was minted — it is born with
+ *  its claim row (a re-invite inserts a new row), so the row's created_at is its clock. */
+type TokenLookupRow = ClaimLookupRow & { via_email: boolean; minted_at: Date };
 
 /** Distinct error codes so a dead-end renders its own copy, whichever way the
  *  claim was looked up: CLAIM_INVALID / CLAIM_REVOKED / CLAIM_EXPIRED /
@@ -312,7 +318,8 @@ async function lookupClaimByToken(
            exists(select 1 from officials off where off.person_id = pc.person_id)
              as is_official,
            pc.expires_at, pc.claimed_at, pc.revoked_at, p.user_id,
-           coalesce(pc.email_token_hash = ${hash}, false) as via_email
+           coalesce(pc.email_token_hash = ${hash}, false) as via_email,
+           pc.created_at as minted_at
     from person_claims pc
     join persons p on p.id = pc.person_id
     join organizations o on o.id = pc.org_id
@@ -322,11 +329,12 @@ async function lookupClaimByToken(
   return claim;
 }
 
-/** Resolve a pc_ token for the /claim page, reporting which secret it was. */
-export async function resolveClaimToken(token: string): Promise<ResolvedTokenClaim> {
+/** Resolve a pc_ token for the /claim page, reporting what the link may do (`via`). `now` is the clock the
+ *  sign-in window is measured on — a parameter so the boundary is testable to the millisecond. */
+export async function resolveClaimToken(token: string, now: number = Date.now()): Promise<ResolvedTokenClaim> {
   const claim = await lookupClaimByToken(sql, token);
   const settled = settleClaimRow(claim);
-  return { ...settled, via: claim!.via_email ? "email" : "console" };
+  return { ...settled, via: claim!.via_email && emailSigninOpen(claim!.minted_at, now) ? "email" : "console" };
 }
 
 /**
@@ -466,9 +474,11 @@ export async function claimPerson(
  * google_sub are left exactly as they were, whatever its verified state.
  *
  * Refuses, as 401 "not authenticated" (what the route always answered to a
- * sessionless accept), anything that is not the EMAIL secret — the console link
- * is shown to the organiser and proves nothing about its holder, so it still
- * has to sign in first. A dead email link answers with its own CLAIM_* code.
+ * sessionless accept), anything that is not the EMAIL secret inside its sign-in
+ * window — the console link is shown to the organiser and proves nothing about
+ * its holder, and an emailed link older than CLAIM_EMAIL_SIGNIN_MS has stopped
+ * being a sign-in credential, so both still have to sign in first. A dead email
+ * link answers with its own CLAIM_* code.
  *
  * One transaction: re-validates under a row lock (a racing revoke or second tap
  * queues behind it), finds or creates the account, marks it verified and links
@@ -478,9 +488,13 @@ export async function claimPerson(
  */
 export async function claimByEmailLink(
   token: string,
+  now: number = Date.now(),
 ): Promise<{ userId: string; claim: ResolvedClaim }> {
   const found = await lookupClaimByToken(sql, token);
-  if (!found || !found.via_email) throw new AuthError("Not authenticated");
+  // Not the email secret, or an email secret past its sign-in window (CLAIM_EMAIL_SIGNIN_MS): a console link
+  // in everything but name, so it is refused exactly as one is. Enforced HERE, not on the page. The mint time
+  // is immutable, so the locked re-read below need not repeat it.
+  if (!found || !found.via_email || !emailSigninOpen(found.minted_at, now)) throw new AuthError("Not authenticated");
   settleClaimRow(found);
 
   try {

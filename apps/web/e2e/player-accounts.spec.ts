@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
-import { TAG, apiJson, activeOrg, loginUi, mintEmailClaimPathBySql } from "./helpers";
+import { TAG, apiJson, activeOrg, loginUi, mintEmailClaimPathBySql, withDb } from "./helpers";
+import { CLAIM_EMAIL_SIGNIN_MS } from "../src/lib/claim-signin-window";
 
 // PROMPT-53 acceptance: invite → claim → RSVP on /me → organiser sees the
 // chip in the lineup picker → QR self-check-in marks presence. Consent flip
@@ -363,6 +364,39 @@ test.describe("player accounts (PROMPT-53)", () => {
       await expect(stale.getByText("Already claimed")).toBeVisible();
       await expect(stale.getByRole("button", { name: "Claim and sign in" })).toHaveCount(0);
       await stale.context().close();
+      await ctx.close();
+    });
+
+    test("past its sign-in window the emailed link asks you to sign in, like the console link", async ({ browser, request }) => {
+      const dara = (
+        await apiJson<Person>(request, "/api/v1/persons", "POST", { full_name: `Dara ${TAG}`, consent: {} })
+      ).data!;
+      const invite = await apiJson(request, `/api/v1/persons/${dara.id}/claim-invites`, "POST", {
+        email: `delivered+e2e-dara-${TAG}@resend.dev`,
+      });
+      expect(invite.status).toBe(201);
+      const path = await mintEmailClaimPathBySql(dara.id);
+      const token = path.slice("/claim/".length);
+      const ctx = await browser.newContext(SIGNED_OUT);
+      const p = await ctx.newPage();
+
+      // Inside the window: the one-tap card.
+      await p.goto(path);
+      await expect(p.getByRole("button", { name: "Claim and sign in" })).toBeVisible();
+
+      // Age the claim past the window (the clock is the row's creation time, which the window constant is measured from).
+      await withDb(async (sql) => {
+        await sql`update person_claims set created_at = created_at - ${`${CLAIM_EMAIL_SIGNIN_MS + 60_000} milliseconds`}::interval
+                  where person_id = ${dara.id} and claimed_at is null and revoked_at is null`;
+      });
+      await p.goto(path);
+      await expect(p.getByRole("heading", { name: "Claim your profile" })).toBeVisible();
+      await expect(p.getByLabel("Email")).toBeVisible(); // the normal sign-in card
+      await expect(p.getByRole("button", { name: "Claim and sign in" })).toHaveCount(0);
+      // The server enforces it, not the page: the accept route refuses too, and nothing was consumed.
+      const refused = await p.request.post(`/api/claims/${token}/accept`, { headers: { "sec-fetch-site": "same-origin" } });
+      expect(refused.status()).toBe(401);
+      expect((await ctx.request.get("/api/v1/me/fixtures")).status()).toBe(401);
       await ctx.close();
     });
   });

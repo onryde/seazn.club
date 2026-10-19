@@ -49,6 +49,7 @@ vi.mock("next/headers", () => ({
   headers: async () => new Headers({ "x-forwarded-for": `${auth.ip}, 10.0.0.1` }),
 }));
 
+import { CLAIM_EMAIL_SIGNIN_MS } from "@/lib/claim-signin-window";
 import { sql } from "@/lib/db";
 import { AUTH_LIMIT, __setRateLimitCounterForTests } from "@/lib/rate-limit";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -325,5 +326,54 @@ describe.skipIf(!HAS_DB)("signed OUT: the terms stamp is part of the claim, not 
       select email_verified, password_hash from users where id = ${u!.id}`;
     expect(after).toEqual({ email_verified: false, password_hash: "squatter-hash" });
     expect(await personUser(person.id)).toBeNull();
+  });
+});
+
+describe.skipIf(!HAS_DB)("the emailed secret's sign-in window (CLAIM_EMAIL_SIGNIN_MS)", () => {
+  /** Mint the email secret `ms` ago: the window is measured from the row's creation. */
+  const age = (claimId: string, ms: number) =>
+    sql`update person_claims set created_at = created_at - ${`${ms} milliseconds`}::interval where id = ${claimId}`;
+
+  it("past the window the emailed link no longer signs in: 401 like a console link, no session, no account, claim open", async () => {
+    const { person, email, invite } = await rig();
+    await age(invite.id, CLAIM_EMAIL_SIGNIN_MS + 60_000);
+
+    const { status, body } = await post(invite.emailSecret);
+
+    expect(status).toBe(401);
+    expect(body).toMatchObject({ ok: false, error: "Not authenticated" });
+    expect(auth.sessions).toEqual([]);
+    expect(await usersWithEmail(email)).toHaveLength(0);
+    expect(await personUser(person.id)).toBeNull();
+  });
+
+  it("inside the window the same request signs in (the positive pair of the row above)", async () => {
+    const { person, invite } = await rig();
+    await age(invite.id, CLAIM_EMAIL_SIGNIN_MS - 60_000);
+
+    expect((await post(invite.emailSecret)).status).toBe(200);
+    expect(auth.sessions).toHaveLength(1);
+    expect(await personUser(person.id)).not.toBeNull();
+  });
+
+  it("past the window a signed-in account with the matching email still accepts, and a different one is still refused", async () => {
+    const { person, email, invite } = await rig();
+    await age(invite.id, CLAIM_EMAIL_SIGNIN_MS + 60_000);
+
+    const otherEmail = `other-${randomUUID().slice(0, 8)}@test.local`;
+    const [other] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified) values (${otherEmail}, 'Other', true) returning id`;
+    auth.user = { id: other!.id, email: otherEmail, display_name: "Other" };
+    expect((await post(invite.emailSecret)).status).toBe(403);
+    expect(await personUser(person.id)).toBeNull();
+
+    const [me] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified) values (${email}, 'Me', true) returning id`;
+    auth.user = { id: me!.id, email, display_name: "Me" };
+    const accepted = await post(invite.emailSecret, {});
+    expect(accepted.status).toBe(200);
+    expect(accepted.body.data).toMatchObject({ signed_in: false, redirect: "/me?claimed=1" });
+    expect(await personUser(person.id)).toBe(me!.id);
+    expect(auth.sessions).toEqual([]);
   });
 });

@@ -390,5 +390,7 @@
   "externalPlayInvite.button": "Ouvrir la partie",
   "externalPlayInvite.footer": "Vous recevez ceci car vous êtes inscrit dans une division d'échecs en ligne chez {orgName} sur Seazn Club.",
   "externalPlayInvite.text": "La ronde {roundNo} est ouverte. Votre partie contre {opponentName} peut se jouer dès maintenant. Prenez place avant {deadline} : {fixtureUrl}",
-  "externalPlayInvite.textLater": "La ronde {roundNo} est ouverte. Votre partie contre {opponentName} sera accessible à {opens}. Prenez place avant {deadline} : {fixtureUrl}"
+  "externalPlayInvite.textLater": "La ronde {roundNo} est ouverte. Votre partie contre {opponentName} sera accessible à {opens}. Prenez place avant {deadline} : {fixtureUrl}",
+  "claimInvite.signinNote": "Ce lien vous connecte pendant {hours} heures. Ne le transférez pas.",
+  "officialInvite.signinNote": "Ce lien vous connecte pendant {hours} heures. Ne le transférez pas."
 }

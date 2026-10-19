@@ -1,5 +1,6 @@
 import { button, linkFallback, paragraph, renderEmail } from "./compose";
 import { escapeHtml } from "./shared";
+import { CLAIM_EMAIL_SIGNIN_HOURS } from "@/lib/claim-signin-window";
 import { t, type Dict } from "@/lib/i18n";
 
 export interface OfficialInviteArgs {
@@ -20,6 +21,9 @@ export function officialInviteTemplate(
   text: string;
 } {
   const subject = t(dict, "officialInvite.subject", { orgName: args.orgName });
+  // The link signs the recipient in for a limited time (owner decision 2026-10-19); the hours are derived
+  // from the same constant claimByEmailLink enforces, so the line cannot drift from the rule.
+  const signinNote = t(dict, "officialInvite.signinNote", { hours: CLAIM_EMAIL_SIGNIN_HOURS });
   return {
     subject,
     html: renderEmail({
@@ -36,9 +40,10 @@ export function officialInviteTemplate(
           }),
         ) +
         button(t(dict, "officialInvite.button"), args.claimUrl) +
-        linkFallback(args.claimUrl),
+        linkFallback(args.claimUrl) +
+        paragraph(signinNote),
       footerNote: t(dict, "officialInvite.footer", { orgName: args.orgName }),
     }),
-    text: t(dict, "officialInvite.text", { orgName: args.orgName, claimUrl: args.claimUrl }),
+    text: `${t(dict, "officialInvite.text", { orgName: args.orgName, claimUrl: args.claimUrl })}\n\n${signinNote}`,
   };
 }

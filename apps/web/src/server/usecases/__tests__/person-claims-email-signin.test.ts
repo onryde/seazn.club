@@ -13,6 +13,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { createHash, randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
+import { CLAIM_EMAIL_SIGNIN_MS } from "@/lib/claim-signin-window";
 import { AuthError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import {
@@ -304,11 +305,12 @@ describe.skipIf(!HAS_DB)("claimByEmailLink: the emailed secret signs the invitee
     await expect(claimByEmailLink(invite.emailSecret)).resolves.toMatchObject({ claim: { person_id: person.id } });
   });
 
-  it("a garbage token is refused as 'not authenticated' (the route's old answer) and mints nothing", async () => {
-    const before = await sql<{ n: number }[]>`select count(*)::int as n from users`;
+  it("a garbage token is refused as 'not authenticated' (the route's old answer)", async () => {
+    // Nothing is minted for it by construction (there is no claim row, so no invited address to make an
+    // account for); the refusals above and below assert the no-account half against a KNOWN address. A global
+    // `count(*) from users` here was flaky: the route and page test files create users in the same database
+    // while this file runs.
     await expect(claimByEmailLink("pc_definitely-not-a-token")).rejects.toBeInstanceOf(AuthError);
-    const after = await sql<{ n: number }[]>`select count(*)::int as n from users`;
-    expect(after[0]!.n).toBe(before[0]!.n);
   });
 
   it("expired, revoked and already-claimed email secrets are refused with their own codes, minting nothing", async () => {
@@ -642,5 +644,92 @@ describe.skipIf(!HAS_DB)("the case-insensitive account lookup is indexed (V464)"
       return rows.map((r) => Object.values(r)[0]).join("\n");
     });
     expect(plan).toContain("users_email_lower_idx");
+  });
+});
+
+// The emailed link's SIGN-IN power lasts CLAIM_EMAIL_SIGNIN_MS from when its secret was minted (owner decision
+// 2026-10-19). The usecases take the clock as an argument, so the boundary is exact to the millisecond:
+// `minted` is read back from the claim row, and every expected instant is `minted` plus/minus the CONSTANT.
+describe.skipIf(!HAS_DB)("the emailed link's sign-in window", () => {
+  const mintedAt = async (claimId: string) =>
+    (await sql<{ created_at: Date }[]>`select created_at from person_claims where id = ${claimId}`)[0]!.created_at.getTime();
+  /** Move the claim's mint time (and so its email secret's) into the past by `ms`. */
+  const age = (claimId: string, ms: number) =>
+    sql`update person_claims set created_at = created_at - ${`${ms} milliseconds`}::interval where id = ${claimId}`;
+
+  it("window - 1 ms signs in; window + 1 ms and exactly the window fall back to a console link", async () => {
+    const edges = [
+      { offset: -1, signsIn: true },
+      { offset: 0, signsIn: false }, // half-open: at exactly the window it has already fallen back
+      { offset: +1, signsIn: false },
+    ];
+    let checked = 0;
+    for (const { offset, signsIn } of edges) {
+      const { invite, person } = await rig();
+      const now = (await mintedAt(invite.id)) + CLAIM_EMAIL_SIGNIN_MS + offset;
+
+      expect((await resolveClaimToken(invite.emailSecret, now)).via).toBe(signsIn ? "email" : "console");
+      if (signsIn) {
+        const out = await claimByEmailLink(invite.emailSecret, now);
+        expect(await personUser(person.id)).toBe(out.userId);
+      } else {
+        await expect(claimByEmailLink(invite.emailSecret, now)).rejects.toBeInstanceOf(AuthError);
+        expect(await personUser(person.id)).toBeNull(); // nothing created, nothing linked
+        expect((await claimRow(invite.id)).claimed_at).toBeNull(); // the claim itself is still open
+      }
+      checked++;
+    }
+    expect(checked).toBe(edges.length);
+  });
+
+  it("the console secret is never the email kind, inside the window or out", async () => {
+    const { invite } = await rig();
+    const minted = await mintedAt(invite.id);
+    for (const now of [minted, minted + CLAIM_EMAIL_SIGNIN_MS - 1, minted + CLAIM_EMAIL_SIGNIN_MS + 1]) {
+      expect((await resolveClaimToken(invite.secret, now)).via).toBe("console");
+    }
+  });
+
+  it("after the window the SAME link still resolves the claim (CLAIM_DAYS is unchanged): only its power changed", async () => {
+    const { invite, person } = await rig();
+    await age(invite.id, CLAIM_EMAIL_SIGNIN_MS + 60_000);
+
+    const resolved = await resolveClaimToken(invite.emailSecret); // real clock, 14-day expiry far away
+    expect(resolved.person_id).toBe(person.id);
+    expect(resolved.via).toBe("console");
+    await expect(claimByEmailLink(invite.emailSecret)).rejects.toBeInstanceOf(AuthError); // what a console link gets signed out
+  });
+
+  it("a signed-in account with the matching email still accepts after the window; a different one is refused", async () => {
+    const { invite, person, email } = await rig();
+    await age(invite.id, CLAIM_EMAIL_SIGNIN_MS + 60_000);
+    const [other] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified)
+      values (${`other-${randomUUID().slice(0, 8)}@test.local`}, 'Other', true) returning id`;
+    await expect(claimPerson(invite.emailSecret, other!.id, `other@test.local`)).rejects.toMatchObject({ code: "CLAIM_EMAIL_MISMATCH" });
+
+    const [me] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified) values (${email}, 'Me', true) returning id`;
+    const claim = await claimPerson(invite.emailSecret, me!.id, email);
+
+    expect(claim.person_id).toBe(person.id);
+    expect(await personUser(person.id)).toBe(me!.id);
+  });
+
+  it("a re-invite restarts the clock: the aged link is dead, the new email secret signs in", async () => {
+    const first = await rig();
+    await age(first.invite.id, CLAIM_EMAIL_SIGNIN_MS + 60_000);
+    await expect(claimByEmailLink(first.invite.emailSecret)).rejects.toBeInstanceOf(AuthError); // fell back
+
+    const again = await createClaimInvite(first.owner, first.person.id, first.email);
+
+    expect(again.emailSecret).not.toBe(first.invite.emailSecret);
+    const minted = await mintedAt(again.id);
+    expect(minted).toBeGreaterThan(await mintedAt(first.invite.id) + CLAIM_EMAIL_SIGNIN_MS); // a new, later clock
+    // Its own window runs from ITS mint: still open just inside it, closed just past it.
+    expect((await resolveClaimToken(again.emailSecret, minted + CLAIM_EMAIL_SIGNIN_MS - 1)).via).toBe("email");
+    expect((await resolveClaimToken(again.emailSecret, minted + CLAIM_EMAIL_SIGNIN_MS + 1)).via).toBe("console");
+    const out = await claimByEmailLink(again.emailSecret); // real clock: seconds after minting
+    expect(await personUser(first.person.id)).toBe(out.userId);
   });
 });

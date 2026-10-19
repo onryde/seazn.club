@@ -29,6 +29,7 @@ vi.mock("next/headers", () => ({
   headers: async () => new Headers(),
 }));
 
+import { CLAIM_EMAIL_SIGNIN_MS } from "@/lib/claim-signin-window";
 import { sql } from "@/lib/db";
 import { maskEmail } from "@/lib/mask-email";
 import { AuthForm } from "@/components/auth-form";
@@ -105,6 +106,22 @@ describe.skipIf(!HAS_DB)("/claim/[token], signed OUT", () => {
     expect(ofType(tree, ClaimSignIn)).toHaveLength(0);
   });
 
+  it("an emailed link PAST its sign-in window shows the auth card like a console link — and a fresh one still shows the one-tap card", async () => {
+    const aged = await rig();
+    await sql`update person_claims set created_at = created_at - ${`${CLAIM_EMAIL_SIGNIN_MS + 60_000} milliseconds`}::interval where id = ${aged.invite.id}`;
+    const fresh = await rig();
+
+    const agedTree = await render(aged.invite.emailSecret);
+    const freshTree = await render(fresh.invite.emailSecret);
+
+    expect(ofType(agedTree, ClaimSignIn)).toHaveLength(0);
+    const forms = ofType(agedTree, AuthForm);
+    expect(forms).toHaveLength(1);
+    expect(forms[0]!.props).toMatchObject({ next: `/claim/${aged.invite.emailSecret}` });
+    expect(ofType(freshTree, ClaimSignIn)).toHaveLength(1);
+    expect(ofType(freshTree, AuthForm)).toHaveLength(0);
+  });
+
   it("the card's copy follows the visitor's locale, from the shipped dictionary", async () => {
     world.cookieLocale = "fr";
     const { invite } = await rig();
@@ -140,6 +157,17 @@ describe.skipIf(!HAS_DB)("/claim/[token], signed OUT", () => {
 });
 
 describe.skipIf(!HAS_DB)("/claim/[token], signed IN: unchanged for both kinds", () => {
+  it("the invited account on an emailed link PAST its sign-in window still gets the one-tap accept", async () => {
+    const { email, invite } = await rig();
+    await sql`update person_claims set created_at = created_at - ${`${CLAIM_EMAIL_SIGNIN_MS + 60_000} milliseconds`}::interval where id = ${invite.id}`;
+    world.user = { id: randomUUID(), email: email.toLowerCase(), display_name: "Me" };
+
+    const tree = await render(invite.emailSecret);
+
+    expect(ofType(tree, ClaimAccept)).toHaveLength(1);
+    expect(ofType(tree, ClaimSignIn)).toHaveLength(0);
+  });
+
   it.each(["secret", "emailSecret"] as const)("the invited account on the %s link gets the one-tap accept", async (kind) => {
     const { email, invite } = await rig();
     world.user = { id: randomUUID(), email: email.toLowerCase(), display_name: "Me" };
