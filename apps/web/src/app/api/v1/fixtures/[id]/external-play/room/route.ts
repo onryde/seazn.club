@@ -1,9 +1,13 @@
-import { v1 } from "@/server/api-v1/http";
+import { reply, v1 } from "@/server/api-v1/http";
 import { RoomSeatClaim } from "@/server/api-v1/schemas";
 import { matchRoomIdentity } from "@/server/api-v1/match-room-identity";
 import { claimRoomSeat, readRoom } from "@/server/usecases/external-play/room";
 
 type Ctx = { params: Promise<{ id: string }> };
+
+/** The snapshot varies by the session cookie (a link's answer carries `account`, and a mismatched viewer's own email) and is
+ *  one player's: never stored by a shared cache, never reused across viewers (review m7, PR #986). */
+const PRIVATE = { "Cache-Control": "private, no-store" };
 
 /** GET /api/v1/fixtures/{id}/external-play/room — the match-room snapshot for
  *  one of the fixture's two players (session, or `?t=` personal link). Never
@@ -11,7 +15,7 @@ type Ctx = { params: Promise<{ id: string }> };
 export async function GET(req: Request, { params }: Ctx) {
   return v1(async () => {
     const { id } = await params;
-    return readRoom(await matchRoomIdentity(req), id);
+    return reply(200, await readRoom(await matchRoomIdentity(req, { viewer: true }), id), PRIVATE);
   });
 }
 
@@ -27,7 +31,7 @@ export async function POST(req: Request, { params }: Ctx) {
   return v1(async () => {
     const { id } = await params;
     const body = RoomSeatClaim.parse(await req.json().catch(() => ({})));
-    const { snapshot, seat, create } = await claimRoomSeat(await matchRoomIdentity(req), id, {}, { heldParticipantId: body.heldParticipantId ?? null });
-    return { snapshot, seat, create };
+    const { snapshot, seat, create } = await claimRoomSeat(await matchRoomIdentity(req, { viewer: true }), id, {}, { heldParticipantId: body.heldParticipantId ?? null });
+    return reply(200, { snapshot, seat, create }, PRIVATE);
   });
 }

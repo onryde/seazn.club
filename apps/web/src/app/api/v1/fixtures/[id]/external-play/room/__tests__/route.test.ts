@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { AuthError } from "@/lib/errors";
 
-const authState = vi.hoisted(() => ({ userId: "" }));
+const authState = vi.hoisted(() => ({ userId: "", email: "viewer@example.test" }));
 vi.mock("@/lib/auth", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/auth")>();
   return {
@@ -18,7 +18,7 @@ vi.mock("@/lib/auth", async (importOriginal) => {
       if (!authState.userId) throw new AuthError("Not authenticated");
       return { id: authState.userId };
     },
-    getCurrentUser: async () => (authState.userId ? { id: authState.userId } : null),
+    getCurrentUser: async () => (authState.userId ? { id: authState.userId, email: authState.email } : null),
   };
 });
 
@@ -121,6 +121,32 @@ describe.skipIf(!HAS_DB)("GET/POST /fixtures/{id}/external-play/room", () => {
     const s = await seed();
     const req = new Request(url(s.fixtureId), { headers: { authorization: "Bearer sk_live_whatever" } });
     expect((await roomGet(req, ctx(s.fixtureId))).status).toBe(401);
+  });
+
+  it("review m7: every snapshot answer is `private, no-store` - it varies by the session cookie and carries the viewer's own email - GET (a link, a session, a signed-in mismatch) and POST alike", async () => {
+    const s = await seed();
+    const link = await s.tokenFor(s.away.personId);
+    const asked: { why: string; res: Response; email?: string }[] = [];
+    authState.userId = "";
+    asked.push({ why: "GET, a link, signed out", res: await roomGet(new Request(url(s.fixtureId, "", link)), ctx(s.fixtureId)) });
+    authState.userId = s.away.userId;
+    asked.push({ why: "GET, the session alone", res: await roomGet(new Request(url(s.fixtureId)), ctx(s.fixtureId)) });
+    authState.userId = s.home.userId;
+    authState.email = "home-viewer@example.test";
+    asked.push({ why: "GET, a link, signed in as the OTHER player (the email is in the body)", res: await roomGet(new Request(url(s.fixtureId, "", link)), ctx(s.fixtureId)), email: authState.email });
+    asked.push({ why: "POST, the check-in", res: await roomPost(post(url(s.fixtureId, "", await s.tokenFor(s.home.personId))), ctx(s.fixtureId)) });
+    let checked = 0;
+    for (const a of asked) {
+      expect(a.res.status, a.why).toBe(200);
+      expect(a.res.headers.get("cache-control"), a.why).toBe("private, no-store");
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity").toBe(4);
+    const mismatch = (await asked[2]!.res.clone().json()) as Envelope;
+    expect((mismatch.data!.account as { state: string; viewerEmail?: string }), "the premise: the body DID carry the viewer's email").toEqual({
+      state: "wrong_account",
+      viewerEmail: "home-viewer@example.test",
+    });
   });
 
   it("POST takes the seat (camera policy off), stamps the check-in, and answers { snapshot, seat, create } (review m3: T9's answer is not dropped)", async () => {
