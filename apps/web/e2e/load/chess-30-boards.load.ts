@@ -70,8 +70,10 @@
  * cost bars of spec §5.6.8 apply); the other names are only labels. Which further bars a burst run owes is by the SHAPE of its run
  * (line-load.ts barsOf, pinned in line-load.test.ts): the ORDER bars (admission pairs >= 1, 0 unexcused inversions, positions looked at >= 1,
  * 0 unexcused rises) belong to the legs where the line forms with two or more stays waiting - `B-honest` and `B-slow-*` - because zero
- * pairs is a failure and B has none; `B` owes the HELD-STAYS bar instead (the dry bucket was met and a stay held for it). Every
- * strict leg owes 0 never created / 0 late / 0 beyond the stranded bound. Each is run once, on a fresh database:
+ * pairs is a failure and B has none. `B` owes NO held-stays bar: its demand sits a few tokens from the bucket's supply, so whether a stay is
+ * held is run to run (5 of 6 runs) - its held count and lowest gate level are only RECORDED. The DRY bars (a stay held, and the gate saw a
+ * bucket level under LINE_COMPLETING_LEVEL) belong to `B-dry`, whose arrival spread is derived so the bucket is short of tokens by construction.
+ * Every strict leg owes 0 never created / 0 late / 0 beyond the stranded bound. Each is run once, on a fresh database:
  *
  *   A           LOAD_SCENARIO=A LOAD_BOARDS=30 LOAD_ARRIVAL_SPREAD_S=20 LOAD_OPENED_AGO_S=0
  *               (all 60 on the page before the batches open; the harness's own 1-3 s cameras; strict)
@@ -79,6 +81,8 @@
  *               (RECORDS whether the batch size or the gap must move; the code's constants are not touched by a run)
  *   B           LOAD_SCENARIO=B LOAD_BOARDS=30 LOAD_ARRIVAL_SPREAD_S=60 LOAD_OPENED_AGO_S=250 LOAD_CAMERA_LAG_MIN_S=0 LOAD_CAMERA_LAG_MAX_S=0
  *               (instant cameras: the bucket's figures alone; the bucket runs dry once and the line holds ONE stay, so there are no pairs)
+ *   B-dry       LOAD_SCENARIO=B-dry LOAD_BOARDS=30 LOAD_OPENED_AGO_S=250 LOAD_CAMERA_LAG_MIN_S=0 LOAD_CAMERA_LAG_MAX_S=0 - and NO LOAD_ARRIVAL_SPREAD_S: B's shape
+ *               with the spread derived (line-load.ts dryArrivalSpreadS, refused if set by hand); owes the dry bars
  *   B-honest    as B with LOAD_SCENARIO=B-honest and the harness's 1-3 s cameras (LOAD_CAMERA_LAG_MIN_S=1 LOAD_CAMERA_LAG_MAX_S=3):
  *               a stay then costs ~10-12 calls and the line forms, which instant cameras do not make it do - it owns the order bars
  *   B-slow      as B with LOAD_SCENARIO=B-slow-W LOAD_CAMERA_LAG_MIN_S=W LOAD_CAMERA_LAG_MAX_S=W, run at W = 5 (the sum model does not
@@ -121,8 +125,11 @@ import {
   boardTimes,
   classifyCreates,
   classifyInversions,
+  DRY_MARGIN_CALLS,
   drainOf,
+  dryArrivalSpreadS,
   etaStats,
+  gateLevels,
   heldStays,
   judgeCosts,
   nettingOwed,
@@ -147,7 +154,22 @@ const num = (name: string, fallback: number): number => {
 
 const BOARDS = num("LOAD_BOARDS", 30);
 const PLIES = num("LOAD_PLIES", 20);
-const ARRIVAL_SPREAD_S = num("LOAD_ARRIVAL_SPREAD_S", 60);
+/** Which capacity scenario this run is (a label in the report; the knobs below are what make it one). */
+const SCENARIO = process.env.LOAD_SCENARIO ?? "default";
+/** B-dry's arrival spread is DERIVED, never typed (line-load.ts dryArrivalSpreadS): demand exceeds what the call budget supplies by DRY_MARGIN_CALLS.
+ *  The players are the required boards' two seats each (the default mix), at the instant-camera cost measured for B. Setting the spread or the mix
+ *  by hand on this leg would make the derivation a lie, so either is refused; a spread that does not exist (a run too small to run dry) is refused too. */
+const DRY_DERIVATION = (() => {
+  if (SCENARIO !== "B-dry") return null;
+  for (const name of ["LOAD_ARRIVAL_SPREAD_S", "LOAD_POLICY_MIX"]) {
+    if (process.env[name] !== undefined && process.env[name] !== "") throw new Error(`B-dry derives its own arrival spread: ${name} must not be set`);
+  }
+  const input = { players: BOARDS * 2, perPlayerCalls: LINE_LOAD.instantCallsPerPlayer, burst: LOAD_LIMITS.rtkBurst, refillPerS: LOAD_LIMITS.rtkRefillPerS, marginCalls: DRY_MARGIN_CALLS };
+  const spreadS = dryArrivalSpreadS(input);
+  if (spreadS === null) throw new Error(`B-dry: ${BOARDS} boards cannot run the bucket dry (demand is not above burst + margin): no spread exists`);
+  return { ...input, spreadS };
+})();
+const ARRIVAL_SPREAD_S: number = DRY_DERIVATION ? DRY_DERIVATION.spreadS : num("LOAD_ARRIVAL_SPREAD_S", 60);
 const THINK_MIN_S = num("LOAD_THINK_MIN_S", 1.5);
 const THINK_MAX_S = num("LOAD_THINK_MAX_S", 4);
 const SWEEP_EVERY_S = num("LOAD_SWEEP_EVERY_S", 40);
@@ -172,8 +194,6 @@ const EVIDENCE_SWEEP_EVERY_S = num("LOAD_EVIDENCE_SWEEP_EVERY_S", 20);
 const REPORTS_FINAL = num("LOAD_REPORTS_FINAL", 1) === 1;
 const REPORT = process.env.LOAD_REPORT ?? "test-results/load/chess-30-boards.json";
 
-/** Which capacity scenario this run is (a label in the report; the knobs below are what make it one). */
-const SCENARIO = process.env.LOAD_SCENARIO ?? "default";
 /** Move every seeded round's open this many seconds into the PAST (SQL, time only), before any link is minted. Unset: the real open. */
 const OPENED_AGO_S: number | null = process.env.LOAD_OPENED_AGO_S === undefined || process.env.LOAD_OPENED_AGO_S === "" ? null : num("LOAD_OPENED_AGO_S", 0);
 /** Store the rounds as one batch (0) or as batches (1), whatever the camera policy decided at the open. Unset: as the open stored it. */
@@ -1188,6 +1208,7 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
     let lockWaitsMs: number[] = [];
     let busyRefusals: number | null = null;
     let gateDecisions: Record<string, number> | null = null;
+    let gateLevel: { decisions: number; min: number | null } | null = null;
     if (SERVER_LOG && existsSync(SERVER_LOG)) {
       const lines = readFileSync(SERVER_LOG, "utf8").split("\n").slice(serverLogLinesAtStart);
       const decisionLines = lines.filter((l) => l.includes("seat-line: gate decision"));
@@ -1195,6 +1216,7 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
         const m = /lockWaitMs"?[:=]\s*(\d+)/.exec(l);
         return m ? [Number(m[1])] : [];
       });
+      gateLevel = gateLevels(decisionLines);
       gateDecisions = {};
       for (const l of decisionLines) {
         const d = /decision"?[:=]\s*"?(\w+)/.exec(l)?.[1] ?? "unknown";
@@ -1244,15 +1266,18 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
       eta: { ...eta, items: etaItems.length },
       busiestSecond: busiest,
       peakTransactionsPerSecond: Math.round(peakXactPerS * 10) / 10,
-      line: { rows: lineRows.total, stamped: lineRows.stamped, stampedOnOffOrOptional: stampedOffOrOptional, heldStays: held },
+      line: { rows: lineRows.total, stamped: lineRows.stamped, stampedOnOffOrOptional: stampedOffOrOptional, heldStays: held, minGateLevel: gateLevel?.min ?? null, gateDecisionsWithLevel: gateLevel?.decisions ?? 0 },
       // What each bar family read, beside the family's own applicability - the report is written before the bars run, so a red leg still says what it saw.
       bars: {
         owed: bars,
+        derivation: DRY_DERIVATION,
         read: {
           neverCreated: creates.neverCreated.length,
           lateCreates: creates.lateCreates.length,
           beyondStrandedBound: creates.beyondStrandedBound.length,
           heldStays: held,
+          minGateLevel: gateLevel?.min ?? null,
+          gateDecisionsWithLevel: gateLevel?.decisions ?? 0,
           admissionPairs: inversions.pairs,
           unexcusedInversions: inversions.unexcused.length,
           positionsLooked: rises.looked,
@@ -1441,15 +1466,18 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
     }
     // B, B-slow and B-honest (B with the 1-3 s cameras of D16: its 10 calls a stay drain the bucket, where instant cameras' 7 only just fit) are the burst runs;
     // which bars each owes is barsOf's (line-load.ts), by the shape of its run: the ORDER bars need a line with two or more stays waiting, so they belong
-    // to the legs where it forms (B-honest, B-slow-*); B, whose instant cameras run the bucket dry once, owes the held-stays bar instead.
+    // to the legs where it forms (B-honest, B-slow-*); B, whose instant cameras sit a few tokens from dry, owes none of these (its held count and lowest gate
+    // level are RECORDED in the report); B-dry, short of tokens by derivation, owes the dry bars below.
     if (STRICT && bars.order) {
       expect(inversions.pairs, `capacity ${SCENARIO}: admission pairs checked (zero pairs is a failure)`).toBeGreaterThan(0);
       expect(inversions.unexcused, `capacity ${SCENARIO}: admission inversions: 0 (excuses counted apart in the report)`).toEqual([]);
       expect(rises.looked, `capacity ${SCENARIO}: positions looked at (zero is a failure)`).toBeGreaterThan(0);
       expect(rises.unexcused, `capacity ${SCENARIO}: unexcused position rises: 0`).toEqual([]);
     }
-    if (STRICT && bars.held) {
+    if (STRICT && bars.dry) {
       expect(held, `capacity ${SCENARIO}: the dry bucket was met and a stay was held for it (held stays; zero would leave the late-create bar vacuous)`).toBeGreaterThan(0);
+      expect(gateLevel?.decisions ?? 0, `capacity ${SCENARIO}: gate decisions that carried a bucket level (zero is a failure: the level bar below would read nothing)`).toBeGreaterThan(0);
+      expect(gateLevel?.min ?? Number.POSITIVE_INFINITY, `capacity ${SCENARIO}: the gate saw the bucket below LINE_COMPLETING_LEVEL (${LINE_LOAD.completingLevel}) at least once`).toBeLessThan(LINE_LOAD.completingLevel);
     }
     if (STRICT && bars.cost) {
       expect(costVerdict.stays, "capacity B: stays costed (the 60 players: zero is a failure)").toBe(requiredPlayers);

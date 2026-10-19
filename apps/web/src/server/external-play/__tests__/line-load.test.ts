@@ -5,7 +5,17 @@ import { describe, expect, it } from "vitest";
 import { BATCH_REREAD_JITTER_MS } from "../../../components/public-site/match-room/use-room";
 import { LINE_POLL_MIN_MS, LINE_POLL_MS } from "../../../components/public-site/match-room/room-snapshot";
 import { STRANDED_CREATE_AFTER_MS, SWEEP_CADENCE_MS } from "../../usecases/external-play/sweep";
-import { ADMIT_HOLD_MS, LINE_ABANDON_AFTER_MS, LINE_RECHECK_COST, LINE_RELEASE_GRACE_MS, LINE_RESERVATION } from "../seat-line";
+import {
+  ADMIT_HOLD_MS,
+  LINE_ABANDON_AFTER_MS,
+  LINE_COMPLETING_LEVEL,
+  LINE_MINT_CALLS,
+  LINE_READ_CALLS,
+  LINE_RECHECK_COST,
+  LINE_RELEASE_GRACE_MS,
+  LINE_RESERVATION,
+  LINE_TOKEN_CALLS,
+} from "../seat-line";
 import { RTK_BUDGET_BURST, RTK_BUDGET_REFILL_PER_S } from "../video/budget";
 import {
   CHECKIN_BATCH_GAP_MS,
@@ -25,8 +35,11 @@ import {
   callsOf,
   classifyCreates,
   classifyInversions,
+  DRY_MARGIN_CALLS,
   drainOf,
+  dryArrivalSpreadS,
   etaStats,
+  gateLevels,
   heldStays,
   judgeCosts,
   nettingOwed,
@@ -57,6 +70,17 @@ describe("LINE_LOAD: every number the run copies is the server's own", () => {
     expect(LINE_LOAD.batchRereadJitterMs).toBe(BATCH_REREAD_JITTER_MS);
     expect(LINE_LOAD.pollMinMs).toBe(LINE_POLL_MIN_MS);
     expect(LINE_LOAD.pollMs).toBe(LINE_POLL_MS);
+    expect(LINE_LOAD.completingLevel, "seat-line.ts LINE_COMPLETING_LEVEL: the level B-dry's min gate level is judged against").toBe(LINE_COMPLETING_LEVEL);
+  });
+
+  it("the MEASURED instant-camera cost per player sits between the model's floor and ceiling, both made from the server's own call counts", () => {
+    // 7.1 is the report's `perPlayerCheckIn` of every B run (426 check-in calls for 60 players). The floor is one stay (the mint, one read of the
+    // seat, the token handed with it); the ceiling adds the opponent's re-verify, shared by the board's two players. A measurement outside the
+    // bracket would mean the harness or the product changed under it, and B-dry's derivation would be dry or wet by accident.
+    const floor = LINE_MINT_CALLS + LINE_READ_CALLS + LINE_TOKEN_CALLS;
+    const ceiling = floor + LINE_RECHECK_COST / 2;
+    expect(LINE_LOAD.instantCallsPerPlayer).toBeGreaterThanOrEqual(floor);
+    expect(LINE_LOAD.instantCallsPerPlayer).toBeLessThanOrEqual(ceiling);
   });
 
   it("the spec's own thresholds (30 s prompt, 50 ms jitter) are the spec's words, and not zero", () => {
@@ -337,35 +361,37 @@ describe("ETA shown against the wait that happened, and the busiest second", () 
   });
 });
 
-describe("which pass bars a capacity scenario owes, by the shape of its run (harness bar fix)", () => {
+describe("which pass bars a capacity scenario owes, by the shape of its run (harness bar fix, B-dry)", () => {
   // The scenario names are the ones the harness header documents (chess-30-boards.load.ts, "RUN IT"); the expected sets are written from
   // that header's words, not read back from barsOf: the line FORMS (two or more stays waiting, so there are pairs and positions to order)
-  // on B-honest and the B-slow legs; at B's instant cameras the bucket runs dry ONCE, so B owes the shape of that run instead.
-  const NAMED = ["A", "A-slow", "B", "B-honest", "B-slow-5", "B-slow-10", "B-end", "B-end-slow-10", "regress", "mixed"] as const;
+  // on B-honest and the B-slow legs; at B's instant cameras the bucket sits a few tokens from dry and whether a stay is held is run-to-run
+  // (5 of 6 runs), so B owes the product bars only and RECORDS the held count; B-dry is B made short of tokens ON PURPOSE and owes the dry bars.
+  const NAMED = ["A", "A-slow", "B", "B-dry", "B-honest", "B-slow-5", "B-slow-10", "B-end", "B-end-slow-10", "regress", "mixed"] as const;
   const COST = ["B", "B-honest", "B-slow-5", "B-slow-10"];
   const ORDER = ["B-honest", "B-slow-5", "B-slow-10"];
-  const HELD = ["B"];
+  const DRY = ["B-dry"];
 
-  it("every documented scenario, against the three bar families (10 scenarios checked)", () => {
+  it("every documented scenario, against the three bar families (11 scenarios checked)", () => {
     let checked = 0;
     for (const name of NAMED) {
       const got = barsOf(name);
       expect(got.cost, `${name}: cost bars`).toBe(COST.includes(name));
       expect(got.order, `${name}: order bars (admission pairs, inversions, positions)`).toBe(ORDER.includes(name));
-      expect(got.held, `${name}: held-stays bar`).toBe(HELD.includes(name));
+      expect(got.dry, `${name}: dry bars (held stays >= 1, min gate level under the completing level)`).toBe(DRY.includes(name));
       checked += 1;
     }
     expect(checked, "scenarios checked").toBe(NAMED.length);
   });
 
-  it("the order bars and the held-stays bar are disjoint: B owes pairs of nothing, B-honest owes no held-count of its own", () => {
-    for (const name of NAMED) expect(barsOf(name).order && barsOf(name).held, name).toBe(false);
-    expect(barsOf("B").order, "B (instant cameras): 0 pairs is the shape of the run, not a failure").toBe(false);
-    expect(barsOf("B-honest").order, "B-honest measured 210 pairs: it owns the order bars").toBe(true);
+  it("the families are disjoint where the shapes differ: B owes neither the order nor the dry bars; B-dry owes only the dry bars", () => {
+    for (const name of NAMED) expect(barsOf(name).order && barsOf(name).dry, name).toBe(false);
+    expect(barsOf("B"), "B (instant cameras): 0 pairs is the shape of the run, and the held count is recorded, not judged").toEqual({ cost: true, order: false, dry: false });
+    expect(barsOf("B-honest").order, "B-honest measured 190-210 pairs: it owns the order bars").toBe(true);
+    expect(barsOf("B-dry"), "B-dry owes the dry bars and the product bars every strict leg owes").toEqual({ cost: false, order: false, dry: true });
   });
 
   it("an unknown scenario name owes nothing - a label, as the header says", () => {
-    expect(barsOf("anything-else")).toEqual({ cost: false, order: false, held: false });
+    expect(barsOf("anything-else")).toEqual({ cost: false, order: false, dry: false });
   });
 
   it("heldStays counts the stays the budget held (a queued_at stamp), and is 0 for none", () => {
@@ -373,5 +399,58 @@ describe("which pass bars a capacity scenario owes, by the shape of its run (har
     expect(heldStays([]), "empty").toBe(0);
     expect(heldStays([stay("a", null, null), stay("b", null, null)]), "never held").toBe(0);
     expect(heldStays([stay("a", 110, 900), stay("b", null, 200), stay("c", 120, null)]), "held then admitted, admitted straight away (not held), held and gone").toBe(2);
+  });
+});
+
+describe("B-dry's arrival spread is derived: demand exceeds the bucket's supply by a margin made of the product's own constants", () => {
+  const PLAYERS = 60; // 30 boards, as B
+  const c = LINE_LOAD.instantCallsPerPlayer;
+  const supply = (spreadS: number) => RTK_BUDGET_BURST + RTK_BUDGET_REFILL_PER_S * spreadS;
+  const input = { players: PLAYERS, perPlayerCalls: c, burst: RTK_BUDGET_BURST, refillPerS: RTK_BUDGET_REFILL_PER_S, marginCalls: DRY_MARGIN_CALLS };
+
+  it("the margin is a completing candidate's admission threshold plus the idle level, from the server's declarations", () => {
+    expect(DRY_MARGIN_CALLS).toBe(LINE_RESERVATION + LINE_RECHECK_COST + LINE_COMPLETING_LEVEL);
+  });
+
+  it("at the derived spread the run's demand exceeds the supply by EXACTLY the margin (the definition, checked on the numbers)", () => {
+    const w = dryArrivalSpreadS(input);
+    expect(w, "a spread was derived").not.toBeNull();
+    expect(PLAYERS * c - supply(w!)).toBeCloseTo(DRY_MARGIN_CALLS, 9);
+    expect(w!, "a real spread, not a burst").toBeGreaterThan(0);
+  });
+
+  it("B's own spread (60 s) is short of tokens by far less than the margin, which is why B alone cannot promise a dry bucket", () => {
+    const bShort = PLAYERS * c - supply(60);
+    expect(bShort, "B is barely short (knife-edge), not wet").toBeGreaterThan(0);
+    expect(bShort, "and by less than the margin").toBeLessThan(DRY_MARGIN_CALLS);
+    expect(dryArrivalSpreadS(input)!, "so B-dry's spread is shorter than B's").toBeLessThan(60);
+  });
+
+  it("monotone and honest: more players need a longer spread; a demand the burst alone covers (plus the margin) has none, and the run refuses it", () => {
+    const more = dryArrivalSpreadS({ ...input, players: PLAYERS + 20 });
+    expect(more!).toBeGreaterThan(dryArrivalSpreadS(input)!);
+    expect(dryArrivalSpreadS({ ...input, players: 10 }), "10 players cannot exceed burst + margin").toBeNull();
+    expect(dryArrivalSpreadS({ ...input, players: 0 }), "no players").toBeNull();
+    expect(dryArrivalSpreadS({ ...input, refillPerS: 0 }), "no refill: no spread to divide by").toBeNull();
+    expect(dryArrivalSpreadS({ ...input, perPlayerCalls: 0 }), "no demand").toBeNull();
+    // the edge: demand = burst + margin exactly gives a zero spread, which is no spread (one call per player keeps the sum exact)
+    const edge = { ...input, perPlayerCalls: 1, players: RTK_BUDGET_BURST + DRY_MARGIN_CALLS };
+    expect(dryArrivalSpreadS(edge), "exactly the edge").toBeNull();
+    expect(dryArrivalSpreadS({ ...edge, players: edge.players + RTK_BUDGET_REFILL_PER_S }), "one second of refill past the edge is a one-second spread").toBeCloseTo(1, 9);
+  });
+});
+
+describe("gateLevels: the lowest bucket level any gate decision saw, read from the server's log", () => {
+  const line = (extra: string) => `{"level":30,"msg":"seat-line: gate decision",${extra}}`;
+
+  it("empty and unrelated logs have no level (null, and zero decisions: a run that looked at nothing proves nothing)", () => {
+    expect(gateLevels([])).toEqual({ decisions: 0, min: null });
+    expect(gateLevels(['{"msg":"scoring event appended"}', "", "not json"])).toEqual({ decisions: 0, min: null });
+  });
+
+  it("the minimum over the decisions that carry a level, zero included; decisions without one (an older build) are not counted", () => {
+    const got = gateLevels([line('"decision":"go_idle","tokens":7.6'), line('"decision":"hold_recheck","tokens":3.9'), line('"decision":"go_idle"'), line('"decision":"go_idle","tokens":12'), '{"msg":"other","tokens":0.1}']);
+    expect(got).toEqual({ decisions: 3, min: 3.9 });
+    expect(gateLevels([line('"decision":"hold_pool","tokens":0')]), "a level of 0 is a level").toEqual({ decisions: 1, min: 0 });
   });
 });

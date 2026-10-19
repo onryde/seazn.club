@@ -19,6 +19,11 @@ export const LINE_LOAD = {
   /** seat-line.ts: what one stay reserves, and the re-verify held beside it while it could complete its board. */
   reservation: 21,
   recheckCost: 3,
+  /** seat-line.ts LINE_COMPLETING_LEVEL: the bucket level at which an idle line lets a completing claim straight through (reads + token + re-verify). */
+  completingLevel: 7,
+  /** MEASURED, not declared anywhere: the report's `perPlayerCheckIn` of every instant-camera B run (426 check-in calls for 60 players). The pin test
+   *  brackets it between the model's floor and ceiling made from seat-line.ts's own call counts, so a change under it cannot pass silently. */
+  instantCallsPerPlayer: 7.1,
   /** seat-line.ts: when a stay stops counting - a held one silent this long, a passed one silent this long, an admitted one past its hold. */
   abandonAfterMs: 20_000,
   releaseGraceMs: 35_000,
@@ -173,13 +178,16 @@ export function judgeCosts(costs: readonly StayCost[], reservation: number, rech
  *    stays waiting (B-honest measured 210 pairs, the B-slow legs 780 and 1,377). At B's instant cameras the bucket runs dry once and the
  *    line holds ONE stay, so there is no pair to order: zero checked is a failure (TEST-STRATEGY), which is why B does not owe these bars
  *    rather than owing them conditionally.
- *  - `held`: B's own shape - the dry bucket must have been MET, and a completing claim held for it (heldStays >= 1). Without it the
- *    run's late-create bar would be vacuous: a bucket that never ran dry proves nothing about the re-verify.
+ *  - `dry`: B-dry's own shape - the bucket must have been MET: a stay held for it (heldStays >= 1) and the gate must have SEEN a level under the
+ *    completing level. Without it the run's late-create bar would be vacuous: a bucket that never ran dry proves nothing about the re-verify.
+ *    B itself does NOT owe it: its demand (426 calls) sits a few tokens from its supply (about 430), so whether a stay is held is run to run
+ *    (held in 5 of 6 runs) - B owes the product bars (0 never, late or beyond) and its held count and lowest gate level are only RECORDED.
+ *    B-dry is B made short of tokens ON PURPOSE (dryArrivalSpreadS), so the bucket is dry by construction rather than by luck.
  *  Any other name is a label (A, A-slow, B-end, regress, mixed) and owes none of these. */
-export type ScenarioBars = { cost: boolean; order: boolean; held: boolean };
+export type ScenarioBars = { cost: boolean; order: boolean; dry: boolean };
 export function barsOf(scenario: string): ScenarioBars {
   const slow = scenario.startsWith("B-slow");
-  return { cost: scenario === "B" || scenario === "B-honest" || slow, order: scenario === "B-honest" || slow, held: scenario === "B" };
+  return { cost: scenario === "B" || scenario === "B-honest" || slow, order: scenario === "B-honest" || slow, dry: scenario === "B-dry" };
 }
 
 /** Stays the budget held: a `queued_at` stamp is the line's own word for it (a stay admitted straight away was never held). */
@@ -352,4 +360,50 @@ export function peakPerSecond(timesMs: readonly number[]): { peak: number; secon
   const bySecond = new Map<number, number>();
   for (const t of timesMs) bySecond.set(Math.floor(t / 1_000), (bySecond.get(Math.floor(t / 1_000)) ?? 0) + 1);
   return { peak: Math.max(0, ...bySecond.values()), seconds: bySecond.size };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────── B-dry: a dry bucket by derivation
+
+/** What B-dry's demand must exceed the bucket's supply by, in calls. Made of the product's own declarations, one reason each:
+ *   - `reservation + recheckCost`: a completing candidate that is NOT let straight through must be held for a whole claim (what it reserves) plus the
+ *     re-verify beside it. A run short of less than that never forces the gate to hold one - the shortfall would be absorbed by a single admitted claim.
+ *   - `completingLevel`: the level an idle line wants before it lets a completing claim by. A run that ends no lower than that level never stood
+ *     below it, and the min-gate-level bar (< completingLevel) could not be met.
+ *  The run's tail (the check-ins that still run after the last arrival, and the refill that keeps coming during it) is NOT modelled; this margin is
+ *  what absorbs it, which is why it is the sum of three whole thresholds rather than a single token. */
+export const DRY_MARGIN_CALLS = LINE_LOAD.reservation + LINE_LOAD.recheckCost + LINE_LOAD.completingLevel;
+
+export type DryArrivalInput = { players: number; perPlayerCalls: number; burst: number; refillPerS: number; marginCalls: number };
+
+/** The arrival spread, in seconds, at which `players` arrivals of `perPlayerCalls` check-in calls each EXCEED what the call budget can supply by
+ *  `marginCalls`. The bucket supplies `burst + refillPerS * spreadS` over a spread (full at the start, refilling the whole time), so
+ *      demand - supply = marginCalls
+ *      players * perPlayerCalls - burst - refillPerS * spreadS = marginCalls
+ *      spreadS = (players * perPlayerCalls - burst - marginCalls) / refillPerS
+ *  At B's 60 s the same sum leaves demand (426) a handful of calls above supply, which is a knife edge; this spread is the one that moves it a whole
+ *  margin past. null when there is no such spread (no demand, no refill, or a demand the burst plus the margin already covers): the run refuses to
+ *  start rather than run a "dry" leg that cannot be dry. */
+export function dryArrivalSpreadS(i: DryArrivalInput): number | null {
+  if (!(i.players > 0) || !(i.perPlayerCalls > 0) || !(i.refillPerS > 0)) return null;
+  const spread = (i.players * i.perPlayerCalls - i.burst - i.marginCalls) / i.refillPerS;
+  return spread > 0 ? spread : null;
+}
+
+// ──────────────────────────────────────────────────────────────────────────────────────────────────────────── the gate's lowest level
+
+/** The lowest bucket level any gate decision saw, read from the server's log (`seat-line: gate decision`, field `tokens`). `decisions` is how
+ *  many carried a level: zero is a run that looked at nothing, and the caller owes a failure for it (a null min proves nothing). A decision with
+ *  no `tokens` field (an older build) is not counted. */
+export function gateLevels(lines: readonly string[]): { decisions: number; min: number | null } {
+  let decisions = 0;
+  let min: number | null = null;
+  for (const l of lines) {
+    if (!l.includes("seat-line: gate decision")) continue;
+    const m = /"tokens"\s*:\s*(-?\d+(?:\.\d+)?)/.exec(l);
+    if (!m) continue;
+    const v = Number(m[1]);
+    decisions += 1;
+    if (min === null || v < min) min = v;
+  }
+  return { decisions, min };
 }
