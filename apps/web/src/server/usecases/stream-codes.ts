@@ -372,7 +372,7 @@ export async function writeAutoStream(
            auto_start_refusal = case when excluded.auto_stream then fixture_stream_settings.auto_start_refusal else null end`;
 }
 
-/** R2006 (V464): the one writer of `fixture_stream_settings.stream_mode` — the organiser's "Camera only" (`passthrough`),
+/** R2006 (V465): the one writer of `fixture_stream_settings.stream_mode` — the organiser's "Camera only" (`passthrough`),
  *  "Add the score back" (`composed`) or the default (`null`). Modelled on `writeAutoStream`: an upsert that sets only the
  *  mode, `updated_by` and `updated_at`, never `target_id`/`target_chosen` (plan R-1). The caller has already proved the
  *  fixture is `orgId`'s. */
@@ -416,7 +416,7 @@ export async function writeOverlayDelay(
        set overlay_delay_ms = excluded.overlay_delay_ms, updated_by = excluded.updated_by, updated_at = now()`;
 }
 
-/** R2006 (V464): the mode a start that names none streams with — the phone operator's own start and the automatic start.
+/** R2006 (V465): the mode a start that names none streams with — the phone operator's own start and the automatic start.
  *  The fixture's stored choice (`stream_mode`, null with no row) through `effectiveStreamMode`, against this deployment's
  *  `composedUnavailable()` — the ONE availability authority `startBroadcast` refuses on — so a stored `composed` on a
  *  deployment that cannot run one streams the camera rather than refusing. The organiser's Go live states its mode
