@@ -2665,13 +2665,33 @@ test("T17B fix 2, D24: my increment shows AT ONCE on my move — the clock jumps
   await ctx.close();
 });
 
+// The I1/I2 test's timeline, in ms after its seed (`seededAt`). The seed writes white's clock at SEEDED_WHITE_MS as of
+// NOW, so the SERVER's zero is SEEDED_WHITE_MS after the seed. The move must be dropped before that zero (premise 1
+// asks for a full second of room) and still be in flight when the test LOOKS, LOOK_AT_MS after the seed (900 ms past
+// the zero). The division is 10+5, so the drop leaves a guess of (the clock as it stood) + 5 s, frozen, standing for
+// OPTIMISTIC_CLOCK_MAX_MS = 10 s from the drop (clock-math); premise 2 asks for a full second of that life to be left
+// at the look (the wait, dropAt -> look, under 9 s). With `D` the drop's instant:
+//   premise 2, the guess outlives the look:   D > 9_000 + 900 - 9_000 = 900   (+ the wait's overshoot)
+//   premise 1, dropped in time:               D < 9_000 - 1_000     = 8_000
+//   the face at the look reads the guess:     (9_000 - D) + 5_000 > 3_000, i.e. D < 11_000 (looser than premise 1)
+// So D must land in (900, 8_000). It used to be wherever the page load and the two taps left it, and a fast runner
+// dropped at ~0.83 s: the wait read 9_070 against < 9_000 (CI run 39186053878, both attempts). Now the test holds
+// until DROP_AT_MS and THEN taps, so D = DROP_AT_MS + the taps and the poll that sees the POST (well under a second,
+// a few at worst under load): mid-window, with about 3 s of room each way. Setup (seed, page, board) has DROP_AT_MS to
+// finish, and the face at the look reads ~(9_000 - 4_500) + 5_000 = 9.5 s, 6.5 s clear of the > 3 bar.
+const SEEDED_WHITE_MS = 9_000;
+const LOOK_AT_MS = SEEDED_WHITE_MS + 900;
+const DROP_AT_MS = 4_500;
+
 test("T17B fix 2, D24 (re-review I1, I2): a move dropped in time and still in flight when the SERVER's clock reaches zero is not a flag — no 'Time's up' over a live face, no clock-zero report; its refusal brings the lock and the report back", async ({ page, browser }) => {
+  // The budget: the seed, then LOOK_AT_MS (~10 s) to the look, then up to 6 s for the lock after the release. The drop's
+  // wait lives INSIDE the LOOK_AT_MS, so anchoring it adds no wall clock; 180 s is for the seeding and a loaded runner.
   test.setTimeout(180_000);
   const room = await seedMatchRoom(page.request, { names: [`Bo Lind ${Date.now() % 1e5}`, `Ada Okonkwo ${Date.now() % 1e5}`] });
   // White to move with 9 s on the clock as at the last move (seeded now): the server's zero is 9 s from here, the drop
-  // lands a few seconds in, and the move is held past that zero. The division is 10+5, so the guess is ~10 s.
+  // lands DROP_AT_MS in, and the move is held past that zero.
   const seededAt = Date.now();
-  await seedGameSql(room, { moves: ["e2e4", "e7e5"], whiteMs: 9_000, blackMs: 300_000 });
+  await seedGameSql(room, { moves: ["e2e4", "e7e5"], whiteMs: SEEDED_WHITE_MS, blackMs: 300_000 });
   const ctx = await cold(browser);
   let zeroReports = 0;
   await ctx.route("**/external-play/room/clock-zero*", async (route: Route) => {
@@ -2682,13 +2702,19 @@ test("T17B fix 2, D24 (re-review I1, I2): a move dropped in time and still in fl
   await boardReady(p);
   const mine = faceOf(p, "room-clock-you");
   const acts = await catchActs(p, { hold: true });
+  // Hold until the fixed drop point, THEN tap: the drop is DROP_AT_MS after the seed whatever the setup's speed. A
+  // setup that overran it cannot be waited for (a negative wait would pass the premises below by luck, not by
+  // construction), so it is a loud red here: raise DROP_AT_MS (and re-derive the window above), do not skip the wait.
+  const toDrop = seededAt + DROP_AT_MS - Date.now();
+  expect(toDrop, `premise: the setup (seed, page, board) is done within ${DROP_AT_MS} ms of the seed - it took ${DROP_AT_MS - toDrop} ms`).toBeGreaterThan(0);
+  await p.waitForTimeout(toDrop);
   await tap(p, "g1", "white");
   await tap(p, "f3", "white");
   await expect.poll(() => acts.bodies.length, { message: "the move is in flight" }).toBe(1);
   const dropAt = Date.now();
-  expect(dropAt, "premise: the drop is before the server's zero").toBeLessThan(seededAt + 9_000 - 1_000);
-  // Past the server's zero, the move still out.
-  await p.waitForTimeout(Math.max(0, seededAt + 9_000 + 900 - Date.now()));
+  expect(dropAt, "premise: the drop is before the server's zero").toBeLessThan(seededAt + SEEDED_WHITE_MS - 1_000);
+  // Past the server's zero, the move still out. Premise 1 above leaves this wait at least ~1.9 s, so it is never negative.
+  await p.waitForTimeout(seededAt + LOOK_AT_MS - Date.now());
   expect(Date.now() - dropAt, "premise: the guess (10 s) outlives this wait").toBeLessThan(9_000);
   expect(faceSeconds(await mine.textContent()), "the face is the guess, not 0:00").toBeGreaterThan(3);
   await expect(p.getByTestId("room-flag-notice"), "no 'Time's up' over a live face").toHaveCount(0);
