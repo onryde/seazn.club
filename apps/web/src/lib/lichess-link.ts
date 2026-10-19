@@ -41,10 +41,46 @@ export function lichessLanding(next: string | null, code: LichessFlashCode): str
   return `${base}${base.includes("?") ? "&" : "?"}lichess=${code}`;
 }
 
-/** The sentence key for a `?lichess=` value a page was handed — `null` for anything that is not one of ours (a
+/** The code in a `?lichess=` value a page was handed - `null` for anything that is not one of ours (a hand-typed value
+ *  is no outcome anywhere). The ONE narrowing every page reads the parameter through: settings, /me, the registration
+ *  stepper and the match room. */
+export function lichessFlashCode(value: string | null | undefined): LichessFlashCode | null {
+  return (LICHESS_FLASH_CODES as readonly string[]).includes(value ?? "") ? (value as LichessFlashCode) : null;
+}
+
+/** The sentence key for a `?lichess=` value a page was handed - `null` for anything that is not one of ours (a
  *  hand-typed value renders nothing). */
 export function lichessFlashKey(value: string | null | undefined): `settings.account.lichess.flash.${LichessFlashCode}` | null {
-  return (LICHESS_FLASH_CODES as readonly string[]).includes(value ?? "")
-    ? (`settings.account.lichess.flash.${value as LichessFlashCode}` as const)
-    : null;
+  const code = lichessFlashCode(value);
+  return code === null ? null : (`settings.account.lichess.flash.${code}` as const);
+}
+
+/** The outcomes that tell the player what to DO next, and the sentence that says it. A sentence alone is enough for
+ *  most failures (try again; ask us); `already_linked` is the one a retry can never fix - that Lichess account belongs
+ *  to ANOTHER Seazn account (unique provider + external id) - so it names the way out. The sentence never names that
+ *  other account: the server does not know whose it is, and would not say. */
+export const LICHESS_FLASH_NEXT_KEYS = {
+  already_linked: "settings.account.lichess.flashNext.already_linked",
+} as const satisfies Partial<Record<LichessFlashCode, string>>;
+
+/** The next-step key for an outcome, `null` when it has none (or is not an outcome at all). */
+export function lichessFlashNextKey(value: string | null | undefined): (typeof LICHESS_FLASH_NEXT_KEYS)[keyof typeof LICHESS_FLASH_NEXT_KEYS] | null {
+  const code = lichessFlashCode(value);
+  return code !== null && Object.hasOwn(LICHESS_FLASH_NEXT_KEYS, code) ? LICHESS_FLASH_NEXT_KEYS[code as keyof typeof LICHESS_FLASH_NEXT_KEYS] : null;
+}
+
+/** `href` (a path with its query and fragment) without any `lichess=` parameter - everything else kept byte for byte,
+ *  in order, with its own encoding (the match room's personal link `t=` must survive untouched, so this does not
+ *  round-trip the query through URLSearchParams). Unchanged when there is none. */
+export function withoutLichessParam(href: string): string {
+  const hashAt = href.indexOf("#");
+  const hash = hashAt === -1 ? "" : href.slice(hashAt);
+  const rest = hashAt === -1 ? href : href.slice(0, hashAt);
+  const queryAt = rest.indexOf("?");
+  if (queryAt === -1) return href;
+  const path = rest.slice(0, queryAt);
+  const parts = rest.slice(queryAt + 1).split("&");
+  const kept = parts.filter((part) => part.split("=", 1)[0] !== "lichess");
+  if (kept.length === parts.length) return href;
+  return `${path}${kept.length > 0 ? `?${kept.join("&")}` : ""}${hash}`;
 }

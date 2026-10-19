@@ -23,6 +23,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { HttpError } from "@/lib/errors";
 import { getDictionary, t } from "@/lib/i18n";
 import { toLocale } from "@/lib/i18n-constants";
+import { lichessFlashCode } from "@/lib/lichess-link";
 import { routes } from "@/lib/routes";
 import { publicOrgOrNull } from "@/server/public-site/org-guard";
 import { readRoom, roomGrantDowngraded, type RoomIdentity } from "@/server/usecases/external-play/room";
@@ -70,11 +71,16 @@ export default async function MatchRoomPage({
   searchParams,
 }: {
   params: Promise<Params>;
-  searchParams: Promise<{ t?: string | string[] }>;
+  searchParams: Promise<{ t?: string | string[]; lichess?: string | string[] }>;
 }) {
   const { orgSlug, competitionSlug, divisionSlug, fixtureId } = await params;
-  const raw = (await searchParams).t;
+  const query = await searchParams;
+  const raw = query.t;
   const token = typeof raw === "string" && raw.length > 0 ? raw : null;
+  // Owner staging test 2026-10-19: the Lichess link's callback lands back here as `…/play?t=…&lichess=<code>`
+  // (lib/lichess-link.ts `lichessLanding`). Read the way /me and settings read it - through the shared narrowing, so a
+  // value that is not one of ours is no outcome - and handed to the shell, which says it on the link / re-link card.
+  const lichessFlash = typeof query.lichess === "string" ? lichessFlashCode(query.lichess) : null;
 
   const org = await publicOrgOrNull(orgSlug);
   const locale = toLocale(org?.org.default_locale);
@@ -138,7 +144,7 @@ export default async function MatchRoomPage({
   const selfPath = `${snapshot.links.fixture}/play${token ? `?t=${encodeURIComponent(token)}` : ""}`;
   return (
     <DictProvider dict={ui} locale={locale}>
-      <RoomShell initial={snapshot} token={token} selfPath={selfPath} grantRefused={grantRefused} />
+      <RoomShell initial={snapshot} token={token} selfPath={selfPath} grantRefused={grantRefused} lichessFlash={lichessFlash ?? undefined} />
     </DictProvider>
   );
 }

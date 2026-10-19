@@ -6375,5 +6375,6 @@
   "externalPlay.room.state.wrongAccount.switch": "Changer de compte",
   "externalPlay.room.state.wrongAccount.failed": "Nous n'avons pas pu vous déconnecter. Réessayez.",
   "externalPlay.room.state.noAccount.title": "Cette place n'est pas encore liée à un compte Seazn",
-  "externalPlay.room.state.noAccount.body": "Demandez à l'organisateur."
+  "externalPlay.room.state.noAccount.body": "Demandez à l'organisateur.",
+  "settings.account.lichess.flashNext.already_linked": "Connectez-vous au compte Seazn qui possède ce compte Lichess et déliez-le dans Paramètres, ou passez à un autre compte sur Lichess et liez-le ici."
 }
