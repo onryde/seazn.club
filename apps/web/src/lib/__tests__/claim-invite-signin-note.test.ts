@@ -1,6 +1,8 @@
 // The invite email tells the recipient how long the link signs them in (owner decision 2026-10-19, I4):
-// "This link signs you in for {hours} hours. Don't forward it." The hours are DERIVED from
-// CLAIM_EMAIL_SIGNIN_MS, never typed, so the copy cannot disagree with the rule claimByEmailLink enforces.
+// "This link signs you in for {hours} hours; after that it still works, you'll just sign in first. Don't forward
+// it." (the second clause added at the owner's request 2026-10-19, so a reader opening it on day 4 is not
+// surprised by the sign-in). The hours are DERIVED from CLAIM_EMAIL_SIGNIN_MS, never typed, so the copy cannot
+// disagree with the rule claimByEmailLink enforces.
 // Expected strings come from the shipped dictionaries and the constant, never from the template under test.
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -37,6 +39,13 @@ describe("the invite emails state the sign-in window", () => {
         expect(line, `${locale} ${k.key}`).toBeTruthy();
         expect(line).toContain("{hours}"); // a placeholder, not a typed number
         if (locale !== "en") expect(line).not.toBe((dictOf("en") as Record<string, string>)[k.key]);
+        // Three parts, in every language: the window, what happens after it (a clause set off after the hours),
+        // and the don't-forward warning. The old two-sentence line had one full stop after the hours; the new
+        // one carries the "after that" clause BEFORE it, so the {hours} placeholder is followed by a ';' and
+        // then a further sentence.
+        expect(line!.slice(line!.indexOf("{hours}")), `${locale} ${k.key}: window, after-window clause, warning`).toMatch(
+          /;[^.;]+\.\s+\S[^.]*\.$/,
+        );
         const sentence = line!.replace("{hours}", HOURS);
         const mail = k.build(ARGS, dict);
         expect(mail.html, `${locale} ${k.name} html`).toContain(sentence);
@@ -50,7 +59,9 @@ describe("the invite emails state the sign-in window", () => {
   it("the English copy is the sentence the owner asked for", () => {
     const en = dictOf("en") as Record<string, string>;
     for (const k of KINDS) {
-      expect(en[k.key]!.replace("{hours}", HOURS)).toBe(`This link signs you in for ${HOURS} hours. Don't forward it.`);
+      expect(en[k.key]!.replace("{hours}", HOURS)).toBe(
+        `This link signs you in for ${HOURS} hours; after that it still works, you'll just sign in first. Don't forward it.`,
+      );
     }
   });
 

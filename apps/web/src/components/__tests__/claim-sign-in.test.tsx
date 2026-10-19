@@ -5,11 +5,16 @@
 //     fired on load would be consumed by a robot. The POST waits for the tap.
 //   - The tap posts to the accept route ONCE, goes where the SERVER says (not a path typed in the
 //     component), and a failure shows the server's reason and gives the button back.
+//   - A tap that arrives AFTER the 72h window (the page was loaded inside it) is answered with
+//     CLAIM_SIGNIN_EXPIRED; the card then turns, in place, into the normal sign-in (no reload, no navigation).
+//     Only that code does: every other refusal keeps the card and its reason.
 // Expected copy is read from the shipped dictionary, never typed here.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { renderIsland, propsOf, textOf } from "@/components/__tests__/_hook-harness";
 import { ClaimSignIn } from "@/components/claim-sign-in";
+import { AuthForm } from "@/components/auth-form";
+import { ApiError } from "@/lib/client";
 import { LegalNotice } from "@/components/legal-notice";
 import en from "@/dictionaries/en/ui.json";
 
@@ -102,5 +107,63 @@ describe("ClaimSignIn", () => {
     await flush();
 
     expect(island.text()).toContain(dict["claim.signin.failed"]);
+  });
+  it("a tap past the window (CLAIM_SIGNIN_EXPIRED) turns the card, IN PLACE, into the normal sign-in for this claim: one POST, no navigation, no reload", async () => {
+    const serverEnglish = "The server's English refusal text";
+    h.next = { reject: new ApiError(serverEnglish, 401, "CLAIM_SIGNIN_EXPIRED") };
+    const island = renderIsland(ClaimSignIn, props);
+    // Before the tap: the one-tap card, no sign-in form (the page was loaded inside the window).
+    expect(island.tree().some((el) => el.type === AuthForm)).toBe(false);
+
+    (propsOf(button(island)).onClick as () => void)();
+    await flush();
+
+    // After: the same sign-in the console link gets, coming back to THIS claim page once signed in.
+    const forms = island.tree().filter((el) => el.type === AuthForm);
+    expect(forms).toHaveLength(1);
+    expect(propsOf(forms[0]!).next).toBe(`/claim/${props.token}`);
+    // The one-tap button is gone; the explanation is the localised line, not the server's English refusal.
+    expect(island.tree().some((el) => el.type === "button")).toBe(false);
+    expect(island.text()).toContain(dict["claim.signin.expired"]);
+    expect(island.text()).not.toContain(serverEnglish);
+    expect(island.text()).not.toContain(dict["claim.signin.failed"]);
+    // In place: exactly the one tap's POST, nothing navigated, nothing refreshed.
+    expect(h.posts).toEqual([{ url: "/api/claims/pc_email-secret-0123/accept", method: "POST" }]);
+    expect(h.pushed).toEqual([]);
+    expect(h.refreshed).toBe(0);
+  });
+
+  it("every OTHER refusal keeps the one-tap card and shows its reason (only CLAIM_SIGNIN_EXPIRED swaps to the sign-in)", async () => {
+    const others: { name: string; err: Error }[] = [
+      { name: "a bare 401 (a console link's answer)", err: new ApiError("Not authenticated", 401) },
+      { name: "CLAIM_REVOKED", err: new ApiError("This invite was withdrawn", 401, "CLAIM_REVOKED") },
+      { name: "CLAIM_CLAIMED", err: new ApiError("This profile has already been claimed", 409, "CLAIM_CLAIMED") },
+      { name: "a plain Error", err: new Error("Network down") },
+    ];
+    let checked = 0;
+    for (const { err } of others) {
+      h.next = { reject: err };
+      const island = renderIsland(ClaimSignIn, props);
+      (propsOf(button(island)).onClick as () => void)();
+      await flush();
+
+      expect(island.tree().some((el) => el.type === AuthForm)).toBe(false);
+      expect(island.text()).toContain(err.message);
+      expect(propsOf(button(island)).disabled).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(others.length);
+  });
+
+  it("the sequence: refused as expired, the sign-in card stays; a tap cannot happen again (no one-tap button to press)", async () => {
+    h.next = { reject: new ApiError("x", 401, "CLAIM_SIGNIN_EXPIRED") };
+    const island = renderIsland(ClaimSignIn, props);
+    (propsOf(button(island)).onClick as () => void)();
+    await flush();
+    await flush();
+
+    expect(island.tree().filter((el) => el.type === "button")).toHaveLength(0);
+    expect(island.tree().filter((el) => el.type === AuthForm)).toHaveLength(1);
+    expect(h.posts).toHaveLength(1); // the expired answer is not retried
   });
 });

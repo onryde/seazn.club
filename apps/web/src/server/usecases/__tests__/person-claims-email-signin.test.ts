@@ -651,6 +651,10 @@ describe.skipIf(!HAS_DB)("the case-insensitive account lookup is indexed (V464)"
 // 2026-10-19). The usecases take the clock as an argument, so the boundary is exact to the millisecond:
 // `minted` is read back from the claim row, and every expected instant is `minted` plus/minus the CONSTANT.
 describe.skipIf(!HAS_DB)("the emailed link's sign-in window", () => {
+  // What a tap past the window is told (the page loaded inside it; the client switches to the normal sign-in
+  // card on this code). Specific on purpose: the generic "Not authenticated" 401 is what a console link or a
+  // garbage token gets, and the client must be able to tell the two apart.
+  const EXPIRED = { code: "CLAIM_SIGNIN_EXPIRED", status: 401 };
   const mintedAt = async (claimId: string) =>
     (await sql<{ created_at: Date }[]>`select created_at from person_claims where id = ${claimId}`)[0]!.created_at.getTime();
   /** Move the claim's mint time (and so its email secret's) into the past by `ms`. */
@@ -673,7 +677,7 @@ describe.skipIf(!HAS_DB)("the emailed link's sign-in window", () => {
         const out = await claimByEmailLink(invite.emailSecret, now);
         expect(await personUser(person.id)).toBe(out.userId);
       } else {
-        await expect(claimByEmailLink(invite.emailSecret, now)).rejects.toBeInstanceOf(AuthError);
+        await expect(claimByEmailLink(invite.emailSecret, now)).rejects.toMatchObject(EXPIRED);
         expect(await personUser(person.id)).toBeNull(); // nothing created, nothing linked
         expect((await claimRow(invite.id)).claimed_at).toBeNull(); // the claim itself is still open
       }
@@ -697,7 +701,52 @@ describe.skipIf(!HAS_DB)("the emailed link's sign-in window", () => {
     const resolved = await resolveClaimToken(invite.emailSecret); // real clock, 14-day expiry far away
     expect(resolved.person_id).toBe(person.id);
     expect(resolved.via).toBe("console");
-    await expect(claimByEmailLink(invite.emailSecret)).rejects.toBeInstanceOf(AuthError); // what a console link gets signed out
+    // Refused with the SPECIFIC code (not a console link's generic 401): the same link, so the page can offer the normal sign-in.
+    const refused = await claimByEmailLink(invite.emailSecret).catch((e: unknown) => e);
+    expect(refused).toMatchObject(EXPIRED);
+    expect(refused).not.toBeInstanceOf(AuthError);
+  });
+
+  it("past the window a CONSOLE secret and a garbage token keep the generic 'not authenticated' (only the emailed secret gets the specific code)", async () => {
+    const { invite } = await rig();
+    await age(invite.id, CLAIM_EMAIL_SIGNIN_MS + 60_000);
+    let checked = 0;
+    for (const token of [invite.secret, "pc_definitely-not-a-token"]) {
+      const refused = await claimByEmailLink(token).catch((e: unknown) => e);
+      expect(refused).toBeInstanceOf(AuthError);
+      expect((refused as { code?: string }).code).toBeUndefined();
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("past the window, a dead claim says why it is dead: revoked / expired / claimed win over 'sign-in expired'", async () => {
+    const cases: { code: string; status: number; arrange: (r: Awaited<ReturnType<typeof rig>>) => Promise<void> }[] = [
+      { code: "CLAIM_REVOKED", status: 401, arrange: (r) => revokeClaimInvite(r.owner, r.person.id).then(() => undefined) },
+      {
+        code: "CLAIM_EXPIRED",
+        status: 401,
+        arrange: async (r) => {
+          await sql`update person_claims set expires_at = now() - interval '1 minute' where id = ${r.invite.id}`;
+        },
+      },
+      {
+        code: "CLAIM_CLAIMED",
+        status: 409,
+        arrange: async (r) => {
+          await claimPerson(r.invite.secret, await makeUser("early"), r.email);
+        },
+      },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      const r = await rig();
+      await age(r.invite.id, CLAIM_EMAIL_SIGNIN_MS + 60_000);
+      await c.arrange(r);
+      await expect(claimByEmailLink(r.invite.emailSecret)).rejects.toMatchObject({ code: c.code, status: c.status });
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
   });
 
   it("a signed-in account with the matching email still accepts after the window; a different one is refused", async () => {
@@ -719,7 +768,7 @@ describe.skipIf(!HAS_DB)("the emailed link's sign-in window", () => {
   it("a re-invite restarts the clock: the aged link is dead, the new email secret signs in", async () => {
     const first = await rig();
     await age(first.invite.id, CLAIM_EMAIL_SIGNIN_MS + 60_000);
-    await expect(claimByEmailLink(first.invite.emailSecret)).rejects.toBeInstanceOf(AuthError); // fell back
+    await expect(claimByEmailLink(first.invite.emailSecret)).rejects.toMatchObject(EXPIRED); // fell back
 
     const again = await createClaimInvite(first.owner, first.person.id, first.email);
 

@@ -6380,5 +6380,6 @@
   "claim.signin.cta": "Réclamer et me connecter",
   "claim.signin.busy": "Connexion en cours…",
   "claim.signin.hint": "Vous l'avez ouvert depuis votre boîte de réception : pas de mot de passe, pas de second e-mail.",
-  "claim.signin.failed": "Impossible de réclamer ce profil. Réessayez."
+  "claim.signin.failed": "Impossible de réclamer ce profil. Réessayez.",
+  "claim.signin.expired": "Ce lien ne vous connecte plus automatiquement. Connectez-vous ci-dessous et vous reviendrez directement ici pour réclamer votre profil."
 }

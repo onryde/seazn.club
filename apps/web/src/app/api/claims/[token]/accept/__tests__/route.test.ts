@@ -146,6 +146,7 @@ describe.skipIf(!HAS_DB)("signed OUT: the emailed secret signs in", () => {
 
     expect(status).toBe(401);
     expect(body).toMatchObject({ ok: false, error: "Not authenticated" });
+    expect(body.code).toBeUndefined(); // only a past-window EMAILED link carries CLAIM_SIGNIN_EXPIRED
     expect(auth.sessions).toEqual([]);
     expect(await usersWithEmail(email)).toHaveLength(0);
     expect(await personUser(person.id)).toBeNull();
@@ -334,14 +335,16 @@ describe.skipIf(!HAS_DB)("the emailed secret's sign-in window (CLAIM_EMAIL_SIGNI
   const age = (claimId: string, ms: number) =>
     sql`update person_claims set created_at = created_at - ${`${ms} milliseconds`}::interval where id = ${claimId}`;
 
-  it("past the window the emailed link no longer signs in: 401 like a console link, no session, no account, claim open", async () => {
+  it("past the window the emailed link no longer signs in: 401 CLAIM_SIGNIN_EXPIRED (not a console link's bare 401), no session, no account, claim open", async () => {
     const { person, email, invite } = await rig();
     await age(invite.id, CLAIM_EMAIL_SIGNIN_MS + 60_000);
 
     const { status, body } = await post(invite.emailSecret);
 
     expect(status).toBe(401);
-    expect(body).toMatchObject({ ok: false, error: "Not authenticated" });
+    // The code is what the page's card acts on (switches to the normal sign-in); a console link carries none.
+    expect(body).toMatchObject({ ok: false, code: "CLAIM_SIGNIN_EXPIRED" });
+    expect(body.error).not.toBe("Not authenticated");
     expect(auth.sessions).toEqual([]);
     expect(await usersWithEmail(email)).toHaveLength(0);
     expect(await personUser(person.id)).toBeNull();

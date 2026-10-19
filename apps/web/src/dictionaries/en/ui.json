@@ -6380,5 +6380,6 @@
   "claim.signin.cta": "Claim and sign in",
   "claim.signin.busy": "Signing you in…",
   "claim.signin.hint": "You opened this from your inbox, so there's no password and no second email.",
-  "claim.signin.failed": "Couldn't claim this profile. Try again."
+  "claim.signin.failed": "Couldn't claim this profile. Try again.",
+  "claim.signin.expired": "This link no longer signs you in on its own. Sign in below and you'll come straight back to claim your profile."
 }

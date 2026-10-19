@@ -14,6 +14,8 @@ const TABLE: { name: string; headers: Record<string, string>; ok: boolean }[] = 
   { name: "none: user-initiated navigation cannot be a POST from our page", headers: { "sec-fetch-site": "none" }, ok: false },
   { name: "Sec-Fetch-Site wins over a present Origin", headers: { "sec-fetch-site": "cross-site", origin: "https://seazn.club" }, ok: false },
   { name: "empty Sec-Fetch-Site value is not same-origin", headers: { "sec-fetch-site": "" }, ok: false },
+  { name: "empty Origin header is missing, not proof", headers: { origin: "" }, ok: false },
+  { name: "empty Origin does not undo a same-origin Sec-Fetch-Site", headers: { "sec-fetch-site": "same-origin", origin: "" }, ok: true },
 ];
 
 describe("isSameOriginRequest", () => {

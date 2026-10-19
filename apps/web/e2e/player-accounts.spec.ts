@@ -382,20 +382,44 @@ test.describe("player accounts (PROMPT-53)", () => {
 
       // Inside the window: the one-tap card.
       await p.goto(path);
-      await expect(p.getByRole("button", { name: "Claim and sign in" })).toBeVisible();
+      const cta = p.getByRole("button", { name: "Claim and sign in" });
+      await expect(cta).toBeVisible();
+      // A marker on this document: if the page reloads or navigates, it is gone.
+      await p.evaluate(() => {
+        (window as unknown as { __sameDocument?: boolean }).__sameDocument = true;
+      });
 
-      // Age the claim past the window (the clock is the row's creation time, which the window constant is measured from).
+      // The window closes while the page is open (the clock is the row's creation time, which the window constant is measured from).
       await withDb(async (sql) => {
         await sql`update person_claims set created_at = created_at - ${`${CLAIM_EMAIL_SIGNIN_MS + 60_000} milliseconds`}::interval
                   where person_id = ${dara.id} and claimed_at is null and revoked_at is null`;
       });
+
+      // The tap lands after it: the server refuses with CLAIM_SIGNIN_EXPIRED and the card turns, IN PLACE, into
+      // the normal sign-in — not a raw "Not authenticated", and not a reload.
+      await cta.click();
+      await expect(p.getByLabel("Email")).toBeVisible({ timeout: 15_000 });
+      await expect(p.getByRole("button", { name: "Claim and sign in" })).toHaveCount(0);
+      await expect(p.getByText("Not authenticated")).toHaveCount(0);
+      await expect(p.getByRole("status").filter({ hasText: /no longer signs you in/i })).toBeVisible();
+      expect(await p.evaluate(() => (window as unknown as { __sameDocument?: boolean }).__sameDocument)).toBe(true);
+      expect(new URL(p.url()).pathname).toBe(path);
+      // The sign-in it shows brings the visitor back to THIS claim page afterwards (the seam is the link's next=).
+      await expect(p.locator(`a[href^="/api/auth/google?next="]`)).toHaveAttribute(
+        "href",
+        `/api/auth/google?next=${encodeURIComponent(path)}`,
+      );
+      expect((await ctx.request.get("/api/v1/me/fixtures")).status()).toBe(401); // nothing was signed in
+
+      // A fresh load of the same link past the window shows that sign-in straight away.
       await p.goto(path);
       await expect(p.getByRole("heading", { name: "Claim your profile" })).toBeVisible();
       await expect(p.getByLabel("Email")).toBeVisible(); // the normal sign-in card
       await expect(p.getByRole("button", { name: "Claim and sign in" })).toHaveCount(0);
-      // The server enforces it, not the page: the accept route refuses too, and nothing was consumed.
+      // The server enforces it, not the page: the accept route refuses too, with the specific code, and nothing was consumed.
       const refused = await p.request.post(`/api/claims/${token}/accept`, { headers: { "sec-fetch-site": "same-origin" } });
       expect(refused.status()).toBe(401);
+      expect(await refused.json()).toMatchObject({ ok: false, code: "CLAIM_SIGNIN_EXPIRED" });
       expect((await ctx.request.get("/api/v1/me/fixtures")).status()).toBe(401);
       await ctx.close();
     });

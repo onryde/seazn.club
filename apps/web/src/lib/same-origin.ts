@@ -10,11 +10,14 @@
  *     subdomain, `none` is an address-bar navigation, neither is our page). Page scripts cannot set or forge
  *     it — it is a forbidden request header name.
  *   - when it is absent (older browsers), an `Origin` header must be present; its host was matched against
- *     ours by proxy.ts before the route ran.
- * Neither header present means no proof, so refuse.
+ *     ours by proxy.ts before the route ran. An empty `Origin: ""` is not a header worth the name: it
+ *     counts as missing.
+ * Neither header present (or only an empty one) means no proof, so refuse.
  */
 export function isSameOriginRequest(headers: Headers): boolean {
   const site = headers.get("sec-fetch-site");
   if (site !== null) return site === "same-origin";
-  return headers.get("origin") !== null;
+  // An empty value is a header that says nothing, so it counts as missing.
+  const origin = headers.get("origin");
+  return origin !== null && origin !== "";
 }

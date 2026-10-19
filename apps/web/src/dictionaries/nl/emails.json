@@ -391,6 +391,6 @@
   "externalPlayInvite.footer": "Je ontvangt dit omdat je bent ingeschreven in een online schaakdivisie bij {orgName} op Seazn Club.",
   "externalPlayInvite.text": "Ronde {roundNo} is geopend. Je partij tegen {opponentName} kan nu gespeeld worden. Neem je plaats in vóór {deadline}: {fixtureUrl}",
   "externalPlayInvite.textLater": "Ronde {roundNo} is geopend. Je partij tegen {opponentName} gaat open om {opens}. Neem je plaats in vóór {deadline}: {fixtureUrl}",
-  "claimInvite.signinNote": "Deze link logt je {hours} uur lang in. Stuur hem niet door.",
-  "officialInvite.signinNote": "Deze link logt je {hours} uur lang in. Stuur hem niet door."
+  "claimInvite.signinNote": "Deze link logt je {hours} uur lang in; daarna werkt hij nog steeds, je moet dan alleen eerst inloggen. Stuur hem niet door.",
+  "officialInvite.signinNote": "Deze link logt je {hours} uur lang in; daarna werkt hij nog steeds, je moet dan alleen eerst inloggen. Stuur hem niet door."
 }

@@ -6380,5 +6380,6 @@
   "claim.signin.cta": "Reclamar e iniciar sesión",
   "claim.signin.busy": "Iniciando sesión…",
   "claim.signin.hint": "Lo abriste desde tu bandeja de entrada, así que no hay contraseña ni un segundo correo.",
-  "claim.signin.failed": "No se pudo reclamar este perfil. Inténtalo de nuevo."
+  "claim.signin.failed": "No se pudo reclamar este perfil. Inténtalo de nuevo.",
+  "claim.signin.expired": "Este enlace ya no inicia sesión por sí solo. Inicia sesión abajo y volverás directo aquí para reclamar tu perfil."
 }

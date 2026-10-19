@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { api } from "@/lib/client";
+import { api, ApiError } from "@/lib/client";
+import { AuthForm } from "@/components/auth-form";
 import { LegalNotice } from "@/components/legal-notice";
 import { useMsg } from "@/components/i18n/dict-provider";
 
@@ -16,12 +17,19 @@ import { useMsg } from "@/components/i18n/dict-provider";
  * previews open links, and a sign-in must wait for a person. `email` is the
  * invited address already masked by the page, shown so the person can see
  * which account they are about to be signed in as.
+ *
+ * The page decided this card was right when it LOADED; the link's one-tap power
+ * is time-limited (CLAIM_EMAIL_SIGNIN_MS), so a tap can land after it ended. The
+ * server — which owns the clock — answers that with CLAIM_SIGNIN_EXPIRED, and the
+ * card turns, in place, into the normal sign-in the console link gets (coming
+ * back to this claim page once signed in): no reload, no raw refusal.
  */
 export function ClaimSignIn({ token, email }: { token: string; email: string }) {
   const msg = useMsg();
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [expired, setExpired] = useState(false);
 
   async function claim() {
     // A second tap while the first is in flight would only meet the server's
@@ -33,9 +41,25 @@ export function ClaimSignIn({ token, email }: { token: string; email: string }) 
       router.push(out.redirect);
       router.refresh();
     } catch (err) {
+      if (err instanceof ApiError && err.code === "CLAIM_SIGNIN_EXPIRED") {
+        setExpired(true);
+        setBusy(false);
+        return;
+      }
       setError(err instanceof Error && err.message ? err.message : msg("claim.signin.failed"));
       setBusy(false);
     }
+  }
+
+  if (expired) {
+    return (
+      <>
+        <p role="status" className="mb-4 text-center text-sm text-cream/70">
+          {msg("claim.signin.expired")}
+        </p>
+        <AuthForm next={`/claim/${token}`} />
+      </>
+    );
   }
 
   return (

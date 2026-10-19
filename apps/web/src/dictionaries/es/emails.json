@@ -391,6 +391,6 @@
   "externalPlayInvite.footer": "Recibes esto porque estás inscrito en una división de ajedrez en línea de {orgName} en Seazn Club.",
   "externalPlayInvite.text": "La ronda {roundNo} está abierta. Tu partida contra {opponentName} ya se puede jugar. Ocupa tu puesto antes de {deadline}: {fixtureUrl}",
   "externalPlayInvite.textLater": "La ronda {roundNo} está abierta. Tu partida contra {opponentName} estará lista a las {opens}. Ocupa tu puesto antes de {deadline}: {fixtureUrl}",
-  "claimInvite.signinNote": "Este enlace inicia tu sesión durante {hours} horas. No lo reenvíes.",
-  "officialInvite.signinNote": "Este enlace inicia tu sesión durante {hours} horas. No lo reenvíes."
+  "claimInvite.signinNote": "Este enlace inicia tu sesión durante {hours} horas; después sigue funcionando, solo que primero tendrás que iniciar sesión. No lo reenvíes.",
+  "officialInvite.signinNote": "Este enlace inicia tu sesión durante {hours} horas; después sigue funcionando, solo que primero tendrás que iniciar sesión. No lo reenvíes."
 }

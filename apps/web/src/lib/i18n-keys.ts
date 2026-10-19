@@ -1324,6 +1324,7 @@ export type DictionaryKey =
   | "claim.revoke.tip"
   | "claim.signin.busy"
   | "claim.signin.cta"
+  | "claim.signin.expired"
   | "claim.signin.failed"
   | "claim.signin.hint"
   | "claim.signin.invited"

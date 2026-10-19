@@ -474,11 +474,13 @@ export async function claimPerson(
  * google_sub are left exactly as they were, whatever its verified state.
  *
  * Refuses, as 401 "not authenticated" (what the route always answered to a
- * sessionless accept), anything that is not the EMAIL secret inside its sign-in
- * window — the console link is shown to the organiser and proves nothing about
- * its holder, and an emailed link older than CLAIM_EMAIL_SIGNIN_MS has stopped
- * being a sign-in credential, so both still have to sign in first. A dead email
- * link answers with its own CLAIM_* code.
+ * sessionless accept), anything that is not the EMAIL secret — the console
+ * link is shown to the organiser and proves nothing about its holder. An
+ * emailed link older than CLAIM_EMAIL_SIGNIN_MS has stopped being a sign-in
+ * credential too, but it is told apart: 401 CLAIM_SIGNIN_EXPIRED, so a page
+ * that was loaded INSIDE the window and tapped after it can switch to the
+ * normal sign-in card instead of showing a raw refusal. A dead email link
+ * (revoked / expired / claimed) answers with its own CLAIM_* code first.
  *
  * One transaction: re-validates under a row lock (a racing revoke or second tap
  * queues behind it), finds or creates the account, marks it verified and links
@@ -491,11 +493,17 @@ export async function claimByEmailLink(
   now: number = Date.now(),
 ): Promise<{ userId: string; claim: ResolvedClaim }> {
   const found = await lookupClaimByToken(sql, token);
-  // Not the email secret, or an email secret past its sign-in window (CLAIM_EMAIL_SIGNIN_MS): a console link
-  // in everything but name, so it is refused exactly as one is. Enforced HERE, not on the page. The mint time
-  // is immutable, so the locked re-read below need not repeat it.
-  if (!found || !found.via_email || !emailSigninOpen(found.minted_at, now)) throw new AuthError("Not authenticated");
+  // Not the email secret: a console link (or no claim at all) proves nothing about its holder.
+  if (!found || !found.via_email) throw new AuthError("Not authenticated");
+  // A dead claim says why it is dead, whatever the clock: the same answer the page gives for it.
   settleClaimRow(found);
+  // An email secret past its sign-in window (CLAIM_EMAIL_SIGNIN_MS) is a console link in everything but name.
+  // Enforced HERE, not on the page, and with its own code so a client holding a card from inside the window
+  // can tell it from a console link's generic 401. The mint time is immutable, so the locked re-read below
+  // need not repeat it.
+  if (!emailSigninOpen(found.minted_at, now)) {
+    throw new HttpError(401, "This link no longer signs you in — sign in to claim", "CLAIM_SIGNIN_EXPIRED");
+  }
 
   try {
     return await sql.begin(async (tx) => {
