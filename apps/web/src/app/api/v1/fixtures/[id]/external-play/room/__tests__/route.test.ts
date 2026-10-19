@@ -49,7 +49,7 @@ const post = (u: string, body?: unknown, headers: Record<string, string> = {}) =
     body: body === undefined ? undefined : JSON.stringify(body),
   });
 
-// Real clock: the check-in is stamped by the DB's now().
+// Real clock: the check-in is stamped at the claim's own now (the real clock here, no `now` is injected).
 const OPENED = new Date(Date.now() - 2 * 60_000);
 async function seed() {
   const s = await seedOnlineChessFixture({

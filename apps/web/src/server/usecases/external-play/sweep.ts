@@ -570,8 +570,11 @@ const THROTTLED_MARKER = "create:rate_limited";
  *  The room's own create runs inside the second player's claim; its slowest honest run (two seat re-verifies, a Lichess
  *  create and an accept, each bounded at LICHESS_TIMEOUT_MS / the vendor's 10 s) is shorter than the claim-staleness
  *  bound a takeover waits for (MINT_CLAIM_STALE_MS), and this grace is shorter again, because a create that has already
- *  CLAIMED is excluded by its own live claim, not by this wait. What the wait covers is only the stretch before the claim,
- *  the seats' re-verify. Two creates racing past it are still safe: the claim is one statement and the loser is `lost`. */
+ *  CLAIMED is excluded by its own live claim, not by this wait. Since 17dcfc352 the check-in is stamped at the instant the
+ *  window was JUDGED, which precedes the seat, so by the time a claim's seat has finished its stamp can already be older than this wait:
+ *  the wait no longer covers the claim's own seat, and a pass may try a create beside the claim's (see the comment above
+ *  `stampFixtureCheckIn` in room.ts, and spec §5.7.8). Two creates racing past it are still safe: the claim is one statement and the
+ *  loser is `lost`. */
 export const STRANDED_CREATE_AFTER_MS = 10_000;
 
 type RetryCandidate = { fixtureId: string; openedAt: Date; anchor: BoardAnchor; lastError: string | null };

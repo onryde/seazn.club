@@ -64,7 +64,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-// Real clock: the check-in is stamped by the DB's now().
+// Real clock: the check-in is stamped at the claim's own now (the real clock here, no `now` is injected).
 const OPENED = new Date(Date.now() - 2 * 60_000);
 async function seed(cameraPolicy: "required" | "optional") {
   const s = await seedOnlineChessFixture({

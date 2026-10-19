@@ -58,7 +58,7 @@ afterAll(async () => {
   if (HAS_DB) await sql.end({ timeout: 2 }).catch(() => undefined);
 });
 
-// Real clock: check-ins are stamped by the DB's now() and judged against the
+// Real clock: check-ins are stamped at the claim's own now (the real clock here, no `now` is injected) and judged against the
 // open's window, so the round is opened two minutes ago.
 const OPENED = new Date(Date.now() - 2 * 60_000);
 const deps = (): RoomDeps => ({ now: new Date(), publish: async () => {}, offered: async () => true, mintRealtime: async () => "rt" });
