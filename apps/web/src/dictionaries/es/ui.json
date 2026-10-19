@@ -6375,5 +6375,6 @@
   "externalPlay.room.state.wrongAccount.switch": "Cambiar de cuenta",
   "externalPlay.room.state.wrongAccount.failed": "No pudimos cerrar tu sesión. Inténtalo de nuevo.",
   "externalPlay.room.state.noAccount.title": "Este asiento aún no está vinculado a una cuenta de Seazn",
-  "externalPlay.room.state.noAccount.body": "Pregúntaselo al organizador."
+  "externalPlay.room.state.noAccount.body": "Pregúntaselo al organizador.",
+  "login.flash.google.email_unverified": "Google no ha verificado esta dirección de correo. Verifícala con Google o inicia sesión con un enlace por correo."
 }

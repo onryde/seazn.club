@@ -6375,5 +6375,6 @@
   "externalPlay.room.state.wrongAccount.switch": "Changer de compte",
   "externalPlay.room.state.wrongAccount.failed": "Nous n'avons pas pu vous déconnecter. Réessayez.",
   "externalPlay.room.state.noAccount.title": "Cette place n'est pas encore liée à un compte Seazn",
-  "externalPlay.room.state.noAccount.body": "Demandez à l'organisateur."
+  "externalPlay.room.state.noAccount.body": "Demandez à l'organisateur.",
+  "login.flash.google.email_unverified": "Google n'a pas vérifié cette adresse e-mail. Vérifiez-la auprès de Google, ou connectez-vous avec un lien envoyé par e-mail."
 }
