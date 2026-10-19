@@ -817,6 +817,11 @@ jobs:
           # Online chess: what starts it is behind the PostHog flag online-chess (fallback false); the
           # override offers it to every spec and walkthrough. Exactly "1". Staging and prod never set it.
           ONLINE_CHESS_ALWAYS: "1"
+          # R2005: overlay-compositor.spec.ts starts COMPOSED sessions through the API, and a deployment whose env
+          # names no compositor image refuses every one 503 composed_unavailable (drivers.ts `composedUnavailable()`).
+          # A dummy, as on the smoke job's second server: the fake drivers never pull it. The organiser's panel still
+          # starts passthrough only (fixture-stream-panel.tsx), so no other spec's sessions change.
+          RELAY_IMAGE: registry.fly.io/e2e-fake-compositor:dummy
           # The fake ingest reports the phone "connected" this long after a stream's input is
           # made (server/relay/fakes.ts; default 3000). stream-relay.spec.ts asserts the QR the
           # Phone tab draws while the camera warms, which stays on screen only until the server's

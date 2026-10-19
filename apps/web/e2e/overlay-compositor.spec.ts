@@ -1,0 +1,786 @@
+// R2005 — the overlay page in COMPOSITOR-HOST mode, driven through its REAL producer and consumer.
+//
+// The producer is the composed session's `overlayUrl` (`sessionFactsForJob`, R2004 decision 5): every case here creates
+// a REAL composed session through the organiser's API (a paired phone, credits, a destination — the product's own
+// preconditions), then plays the compositor's part by hand — it mints a `relay-job` token with jose (HS256, audience
+// `seazn-relay`, the shape `server/relay/tokens.ts` signs), GETs the session's facts with it, and opens the URL those
+// facts carry, exactly as cefsrc does. Nothing here builds an overlay URL of its own. The consumer is a real browser on
+// a local production build, `RELAY_DRIVERS=fake`.
+//
+// The phase LOOPBACK (C12, `http://127.0.0.1:7419/phase`) is played by `page.route` from a scripted state: a long poll
+// that answers at once when the script's seq has moved past `after`, and otherwise holds and answers the same seq (C12's
+// own stale reply). The page at `localhost:<port>` calling `127.0.0.1:7419` is cross-origin, so every fulfilled answer
+// carries `Access-Control-Allow-Origin: <the page's origin>`, and an OPTIONS is answered 204 with that header plus
+// `Access-Control-Allow-Private-Network: true` (review m13). These tests cannot witness Private Network Access; only
+// compositor C11 Step 0 and C17 can.
+//
+// Every scene step asserts the score bug is VISIBLE AND ON TOP: `document.elementFromPoint` at the template's centre is
+// a node inside the template (AGENTS.md class 2 — a box is paint, a hit-test is what is on top), and the scene card's
+// box does not intersect the template's.
+//
+// The expected scene and card per (phase, slate) are the brief's A1 table, typed below from the brief (spec §4.2) —
+// never imported from `overlay-scene.tsx`, the code under test.
+import { test, expect, type Browser, type BrowserContext, type Page } from "@playwright/test";
+import { randomBytes } from "node:crypto";
+import { SignJWT } from "jose";
+import { TAG, addEntrantsViaApi, apiJson, createStageAndGenerate } from "./helpers";
+import {
+  grantRigPackCredits,
+  seedCricketOverlayFixture,
+  seedOverlayFixture,
+  sendEvent,
+  signInAs,
+  type OverlayRig,
+} from "./overlay-kit";
+import { disposeFakePhones, pairPhoneOnFixture } from "./helpers/fake-capture-phone";
+import { FAKE_CONNECT_MS, POLL_WAIT_MS, cycleMs, holdsStreamSlot, releaseStreamSlot, takeWholePool } from "./helpers/stream-slot-pool";
+import { STREAM_POLL_MS } from "../src/lib/stream-session-view";
+import { OVERLAY_ALIVE_EVERY_MS, PHASE_LOOPBACK_FAILURES_TO_FALLBACK, SIGNAL_ALIVE, SIGNAL_READY } from "../src/lib/overlay-compositor";
+
+/** Compositor spec 2026-10-15 §4.2: Final holds the programme `FINAL_HOLD_MS` = 10 000 ms before EOS. */
+const FINAL_HOLD_MS = 10_000;
+/** The phase a script serves, typed from compositor spec §4.3 (C08's `ProgrammePhase`). */
+type Phase = "waiting" | "live" | "frozen" | "reconnecting" | "final";
+type Card = "upcoming" | "result" | "reconnecting" | "ended" | null;
+type Slate = "warming" | "live" | "ended";
+/** The brief's A1 table (spec §4.2), per phase and slate: the scene on screen and the card on it. */
+const A1: Record<Phase, Record<Slate, { scene: string | null; card: Card }>> = {
+  waiting: { warming: { scene: "starting", card: "upcoming" }, live: { scene: "starting", card: null }, ended: { scene: "starting", card: "result" } },
+  live: { warming: { scene: null, card: "upcoming" }, live: { scene: null, card: null }, ended: { scene: null, card: "result" } },
+  frozen: { warming: { scene: null, card: "upcoming" }, live: { scene: null, card: null }, ended: { scene: null, card: "result" } },
+  reconnecting: {
+    warming: { scene: "reconnecting", card: "reconnecting" },
+    live: { scene: "reconnecting", card: "reconnecting" },
+    ended: { scene: "reconnecting", card: "result" },
+  },
+  final: { warming: { scene: "final", card: "ended" }, live: { scene: "final", card: "ended" }, ended: { scene: "final", card: "result" } },
+};
+
+/** The longest any case here holds a stream slot: one session's create and facts (a cycle), then E6's sticky window,
+ *  its beat-driven scenes and the hold (each a poll plus slack), plus E7's three legs. */
+const POOL_HOLD = { file: "overlay-compositor.spec.ts", holdMs: 3 * cycleMs(FAKE_CONNECT_MS) } as const;
+/** A case's whole budget: the seed and the session (SEED_MS), plus its streaming hold. */
+const SEED_MS = 120_000;
+test.setTimeout(SEED_MS + POOL_HOLD.holdMs);
+
+const VIEWPORT = { width: 1920, height: 1080 };
+
+async function withDb<T>(fn: (sql: import("postgres").Sql) => Promise<T>): Promise<T> {
+  const dbUrl = process.env.DATABASE_URL;
+  if (!dbUrl) throw new Error("DATABASE_URL required for direct DB setup in e2e");
+  const { default: postgres } = await import("postgres");
+  const sql = postgres(dbUrl, {
+    connection: { search_path: process.env.DB_SCHEMA ?? "seazn_club" },
+    ssl: process.env.DATABASE_SSL === "disable" ? false : /@(localhost|127\.0\.0\.1)[:/]/.test(dbUrl) ? false : "require",
+    prepare: !dbUrl.includes(":6543"),
+    max: 1,
+  });
+  try {
+    return await fn(sql);
+  } finally {
+    await sql.end();
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The composed session — through the organiser's real API — and the compositor's own reads of it.
+// ---------------------------------------------------------------------------------------------------------------------
+interface Composed {
+  rig: OverlayRig;
+  sid: string;
+  jobToken: string;
+  /** The URL the session's facts carry, exactly as served (absolute, on the request's own origin). */
+  overlayUrl: URL;
+}
+
+const sessionsThisTest: { request: Page["request"]; fixtureId: string; sid: string }[] = [];
+
+/** Stop a session as the organiser does, then send the compositor's own last beat (`stopped`, C06's `ended` exit): a
+ *  composed session's `ending` is the RUNNER's (domain/session.ts), so without its Machine's final beat it holds. */
+async function endSession(s: { request: Page["request"]; fixtureId: string; sid: string }): Promise<void> {
+  await stopAndBeat(s);
+  await expect
+    .poll(
+      async () => {
+        // `current` is the organiser's read, and a read TICKS the session (its runner's exit lands on it).
+        await s.request.get(`/api/v1/fixtures/${s.fixtureId}/stream-sessions/current`).catch(() => null);
+        return (await withDb((sql) => sql<{ state: string }[]>`select state from fixture_stream_sessions where id = ${s.sid}`))[0]?.state;
+      },
+      { timeout: POLL_WAIT_MS, intervals: [1_000] },
+    )
+    .toMatch(/^(completed|failed)$/)
+    .catch(() =>
+      // A session that will not end never keeps its reservation. V410's end_reason_state: a session with an end
+      // reason (stopped → ending) may only complete; one without fails.
+      withDb((sql) => sql`update fixture_stream_sessions
+                             set state = case when end_reason is null then 'failed' else 'completed' end,
+                                 fail_reason = case when end_reason is null then 'unknown' else fail_reason end,
+                                 ended_at = now()
+                           where id = ${s.sid} and state not in ('completed', 'failed')`),
+    );
+  // An ENDED composed session keeps the camera's match reserved until the daily sweep's camera pass deletes its
+  // recordings (`storageReservations`, R2004). The fake ingest has nothing to delete, so this case writes what that
+  // pass writes, for ITS OWN session only, before it gives its keys back — or the next composed start anywhere on the
+  // server is refused `storage_exhausted` for a day.
+  await withDb((sql) => sql`update fixture_stream_inputs set recordings_deleted_at = now()
+                             where session_id = ${s.sid} and role = 'camera' and recordings_deleted_at is null`);
+}
+
+async function stopAndBeat(s: { request: Page["request"]; fixtureId: string; sid: string }): Promise<void> {
+  await s.request.post(`/api/v1/fixtures/${s.fixtureId}/stream-sessions/${s.sid}/stop`).catch(() => null);
+  await s.request
+    .post(`/api/internal/relay/sessions/${s.sid}/heartbeat`, {
+      headers: { Authorization: `Bearer ${await jobTokenFor(s.sid)}` },
+      data: { state: "stopped", exitReason: "ended" },
+    })
+    .catch(() => null);
+}
+
+/** The compositor's job token: HS256 over AUTH_SECRET, audience `seazn-relay`, `{ sid, scope: "relay-job" }` — the
+ *  claim set `mintRelayToken` writes (server/relay/tokens.ts). The server and this process share AUTH_SECRET (CI sets
+ *  it at job level; locally it is exported from the same .env.local the server reads). */
+async function jobTokenFor(sid: string): Promise<string> {
+  const secret = process.env.AUTH_SECRET;
+  if (!secret) throw new Error("AUTH_SECRET must be set for the fake compositor to mint its job token");
+  return new SignJWT({ sid, scope: "relay-job" })
+    .setProtectedHeader({ alg: "HS256", typ: "JWT" })
+    .setIssuedAt()
+    .setExpirationTime(Math.floor(Date.now() / 1000) + 3600)
+    .setAudience("seazn-relay")
+    .sign(new TextEncoder().encode(secret));
+}
+
+async function fixturePathOf(rig: OverlayRig): Promise<string> {
+  const [{ no }] = await withDb((sql) => sql<{ no: number }[]>`select fixture_no as no from fixtures where id = ${rig.fixtureId}`);
+  return `/o/${rig.orgSlug}/c/${rig.compSlug}/d/${rig.divSlug}/f/${no}`;
+}
+
+/** A composed session on the rig's fixture, through the organiser's own API (W5: a paired phone first), and the facts
+ *  the compositor reads with its job token. `delayMs` writes the session's stored overlay delay BEFORE the facts are
+ *  read, so the URL that carries it is still the producer's. */
+async function composedSession(page: Page, rig: OverlayRig, opts: { themeId?: string; delayMs?: number } = {}): Promise<Composed> {
+  await grantRigPackCredits(rig.orgId, 5);
+  const target = await apiJson<{ id: string }>(page.request, `/api/v1/orgs/${rig.orgId}/stream-targets`, "POST", {
+    kind: "youtube",
+    label: `Compositor ${randomBytes(3).toString("hex")}`,
+    streamKey: `e2e-${randomBytes(6).toString("hex")}`,
+  });
+  if (target.status >= 300 || !target.data) throw new Error(`stream target -> ${target.status} ${JSON.stringify(target.error)}`);
+  // R2004 (owner ruling 2026-10-18, option (a)): a RUNNING composed session reserves TWO matches of recording — the
+  // camera's and the programme's — where the pool's slot is sized for one (`STREAM_CAPACITY`, a passthrough's). So a
+  // composed case takes the WHOLE pool (every pool key), which leaves the deployment's last slot to stream-credits.
+  // The credits key is never asked for (this file never touches the credits tick).
+  if (!holdsStreamSlot()) await takeWholePool(POOL_HOLD, { creditsKeyWaitMs: 1 });
+  await pairPhoneOnFixture(page, await fixturePathOf(rig));
+  const made = await apiJson<{ sessionId: string }>(page.request, `/api/v1/fixtures/${rig.fixtureId}/stream-sessions`, "POST", {
+    mode: "composed",
+    targetId: target.data.id,
+    ...(opts.themeId ? { themeId: opts.themeId } : {}),
+  });
+  if (made.status >= 300 || !made.data?.sessionId) throw new Error(`composed create -> ${made.status} ${JSON.stringify(made.error)}`);
+  const sid = made.data.sessionId;
+  sessionsThisTest.push({ request: page.request, fixtureId: rig.fixtureId, sid });
+  if (opts.delayMs !== undefined) {
+    await withDb((sql) => sql`update fixture_stream_sessions set overlay_delay_ms = ${opts.delayMs!} where id = ${sid}`);
+  }
+  const jobToken = await jobTokenFor(sid);
+  let overlayUrl: string | undefined;
+  await expect
+    .poll(
+      async () => {
+        const res = await page.request.get(`/api/internal/relay/sessions/${sid}`, { headers: { Authorization: `Bearer ${jobToken}` } });
+        if (res.status() !== 200) return `HTTP ${res.status()}`;
+        overlayUrl = ((await res.json()) as { data: { overlayUrl?: string } }).data.overlayUrl;
+        return overlayUrl ? "facts" : "facts without an overlayUrl";
+      },
+      { message: "the composed session's facts never carried an overlayUrl", timeout: cycleMs(FAKE_CONNECT_MS), intervals: [1_000] },
+    )
+    .toBe("facts");
+  const url = new URL(overlayUrl!);
+  // The producer's own contract (R2004 decision 5), stated where this file depends on it.
+  expect(url.pathname, "the URL names the session's fixture").toBe(`/overlay/fixtures/${rig.fixtureId}`);
+  expect(url.searchParams.get("sid")).toBe(sid);
+  expect(url.searchParams.get("host")).toBe("compositor");
+  expect(url.searchParams.get("st"), "a page token rides the URL").toBeTruthy();
+  return { rig, sid, jobToken, overlayUrl: url };
+}
+
+/** A beat as the compositor sends it (C07's `heartbeat_wire`), through the internal route with the job token. */
+async function beat(page: Page, c: Composed, programmePhase: Phase): Promise<void> {
+  const res = await page.request.post(`/api/internal/relay/sessions/${c.sid}/heartbeat`, {
+    headers: { Authorization: `Bearer ${c.jobToken}` },
+    data: { state: "playing", programmePhase },
+  });
+  expect(res.status(), `heartbeat ${programmePhase}: ${await res.text()}`).toBe(200);
+}
+
+test.afterEach(async () => {
+  try {
+    await disposeFakePhones();
+  } finally {
+    try {
+      for (const s of sessionsThisTest.splice(0)) await endSession(s);
+    } finally {
+      await releaseStreamSlot();
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The loopback, scripted.
+// ---------------------------------------------------------------------------------------------------------------------
+interface PhaseScript {
+  /** Serve `phase` from now on (a new seq; every held long poll answers at once). */
+  serve(phase: Phase): void;
+  /** `refuse`: every request is aborted (`connectionrefused`) — the channel's failure. */
+  mode: "serve" | "refuse";
+  /** GET requests the handler saw (OPTIONS excluded). */
+  readonly calls: number;
+}
+
+/** C12's long-poll hold, kept under the page's own abort (RELAY_PHASE_LONG_POLL_MAX_MS + the grace). */
+const HOLD_MS = 8_000;
+
+async function scriptPhase(context: BrowserContext, origin: string, first: Phase = "live"): Promise<PhaseScript> {
+  let phase: Phase = first;
+  // C12's seq starts past 0: the page's first ask is `after=0` (its initial seq is −1), and a reply must be NEWER.
+  let seq = 1;
+  let calls = 0;
+  const waiters = new Set<() => void>();
+  const script: PhaseScript = {
+    serve(next) {
+      phase = next;
+      seq++;
+      for (const w of [...waiters]) w();
+    },
+    mode: "serve",
+    get calls() {
+      return calls;
+    },
+  };
+  await context.route("http://127.0.0.1:7419/phase**", async (route) => {
+    const req = route.request();
+    const cors = { "access-control-allow-origin": origin };
+    if (req.method() === "OPTIONS") {
+      await route
+        .fulfill({ status: 204, headers: { ...cors, "access-control-allow-private-network": "true", "access-control-allow-methods": "GET" } })
+        .catch(() => {});
+      return;
+    }
+    calls++;
+    if (script.mode === "refuse") {
+      await route.abort("connectionrefused").catch(() => {});
+      return;
+    }
+    const after = Number(new URL(req.url()).searchParams.get("after"));
+    if (!(seq > after)) {
+      await new Promise<void>((resolve) => {
+        const done = () => {
+          clearTimeout(timer);
+          waiters.delete(done);
+          resolve();
+        };
+        const timer = setTimeout(done, HOLD_MS);
+        waiters.add(done);
+      });
+    }
+    await route
+      .fulfill({ status: 200, headers: { ...cors, "content-type": "application/json" }, body: JSON.stringify({ phase, seq }) })
+      .catch(() => {});
+  });
+  return script;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The compositor's browser: an anonymous 1920×1080 context, its console lines timestamped.
+// ---------------------------------------------------------------------------------------------------------------------
+interface Cef {
+  context: BrowserContext;
+  page: Page;
+  lines: { at: number; text: string }[];
+  linesOf(text: string): { at: number; text: string }[];
+}
+
+async function cefBrowser(browser: Browser): Promise<Cef> {
+  const context = await browser.newContext({ viewport: VIEWPORT, storageState: { cookies: [], origins: [] } });
+  const page = await context.newPage();
+  const lines: Cef["lines"] = [];
+  page.on("console", (m) => lines.push({ at: Date.now(), text: m.text() }));
+  return { context, page, lines, linesOf: (text) => lines.filter((l) => l.text === text) };
+}
+
+const pathOf = (u: URL) => `${u.pathname}${u.search}`;
+const withoutHost = (u: URL) => {
+  const v = new URL(u);
+  v.searchParams.delete("host");
+  return v;
+};
+
+// ---------------------------------------------------------------------------------------------------------------------
+// What is on screen.
+// ---------------------------------------------------------------------------------------------------------------------
+function cardLocator(page: Page, card: Exclude<Card, null>) {
+  if (card === "reconnecting" || card === "ended") return page.locator(`[data-testid="ovl-slate"][data-card="${card}"]`);
+  // The card layer's own two cards carry no `data-card`: `data-slate-state` names them (warming = upcoming).
+  const state = card === "upcoming" ? "warming" : "ended";
+  return page.locator(`[data-testid="ovl-slate"][data-slate-state="${state}"]:not([data-card])`);
+}
+
+async function expectScene(page: Page, want: { scene: string | null; card: Card }, step: string): Promise<void> {
+  // A delayed page draws no template until its seed matures (`awaitingDelay`): wait for the scorebug first.
+  await expect(page.getByTestId("ovl-root"), `${step}: the stage is past its delay`).not.toHaveAttribute("data-awaiting-delay", "1", { timeout: 15_000 });
+  const scene = page.getByTestId("ovl-scene");
+  if (want.scene === null) await expect(scene, `${step}: no scene`).toHaveCount(0);
+  else await expect(scene, `${step}: scene ${want.scene}`).toHaveAttribute("data-scene", want.scene);
+  if (want.card === null) await expect(page.getByTestId("ovl-slate"), `${step}: no card`).toHaveCount(0);
+  else await expect(cardLocator(page, want.card), `${step}: the ${want.card} card`).toBeVisible();
+  await expectBugOnTop(page, step);
+}
+
+/** The score bug is on top: a hit-test at the centre of the template's first element lands inside the template, and
+ *  the scene card's box (when one is up) does not intersect the template's — the union of the `display: contents`
+ *  wrapper's CHILDREN, the box `overlay-gallery.spec.ts` check 4 measures. */
+async function expectBugOnTop(page: Page, step: string): Promise<void> {
+  const r = await page.evaluate(() => {
+    const tpl = document.querySelector('[data-testid="ovl-template"]');
+    if (!tpl) return { error: "no template" };
+    const boxes = [...tpl.children]
+      .map((el) => el.getBoundingClientRect())
+      .filter((b) => b.width > 0 && b.height > 0);
+    if (boxes.length === 0) return { error: "the template painted nothing" };
+    const root = (tpl.firstElementChild as HTMLElement).getBoundingClientRect();
+    const cx = root.left + root.width / 2;
+    const cy = root.top + root.height / 2;
+    const hit = document.elementFromPoint(cx, cy);
+    const union = boxes.reduce(
+      (u, b) => ({ l: Math.min(u.l, b.left), t: Math.min(u.t, b.top), r: Math.max(u.r, b.right), b: Math.max(u.b, b.bottom) }),
+      { l: Infinity, t: Infinity, r: -Infinity, b: -Infinity },
+    );
+    const card = document.querySelector('[data-testid="ovl-slate-card"]')?.getBoundingClientRect() ?? null;
+    const overlap = card ? !(card.right <= union.l || card.left >= union.r || card.bottom <= union.t || card.top >= union.b) : false;
+    return {
+      inside: hit !== null && tpl.contains(hit),
+      hit: hit ? `${hit.tagName}.${(hit as HTMLElement).className}` : "nothing",
+      overlap,
+      union,
+      card: card ? { l: card.left, t: card.top, r: card.right, b: card.bottom } : null,
+    };
+  });
+  expect("error" in r ? r.error : null, `${step}: the template is there`).toBeNull();
+  expect((r as { inside: boolean }).inside, `${step}: the score bug is on top (hit ${(r as { hit: string }).hit})`).toBe(true);
+  expect((r as { overlap: boolean }).overlap, `${step}: the scene card clears the template (${JSON.stringify(r)})`).toBe(false);
+}
+
+/** A1's sequence for one slate, step by step: the script serves the phase, the screen shows the table's row. */
+async function walk(page: Page, script: PhaseScript, slate: Slate, phases: Phase[], label: string): Promise<number> {
+  let steps = 0;
+  for (const phase of phases) {
+    script.serve(phase);
+    await expectScene(page, A1[phase][slate], `${label} ${phase}`);
+    steps++;
+  }
+  return steps;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Rigs.
+// ---------------------------------------------------------------------------------------------------------------------
+/** A LIVE badminton fixture in a public competition on pro (streaming.overlay), one rally in — the bug's sport. */
+async function seedBadmintonOverlayFixture(page: Page): Promise<OverlayRig> {
+  const tag = `${TAG}-${randomBytes(4).toString("hex")}`;
+  const ownerEmail = `delivered+ovlb-${tag}@resend.dev`;
+  const orgSlug = `ovlb-org-${tag}`;
+  const orgId = await withDb(async (sql) => {
+    const [{ id: userId }] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified) values (${ownerEmail}, ${"Badminton Owner " + tag}, true) returning id`;
+    const [{ id: newOrgId }] = await sql<{ id: string }[]>`
+      insert into organizations (name, slug, status, created_by)
+      values (${"Overlay Badminton " + tag}, ${orgSlug}, 'active', ${userId}) returning id`;
+    await sql`insert into org_members (org_id, user_id, role) values (${newOrgId}, ${userId}, 'owner')`;
+    const [{ id: subId }] = await sql<{ id: string }[]>`
+      insert into subscriptions (owner_user_id, plan_key, status) values (${userId}, 'pro', 'active') returning id`;
+    await sql`update organizations set subscription_id = ${subId} where id = ${newOrgId}`;
+    return newOrgId;
+  });
+  await signInAs(page, ownerEmail);
+  const request = page.request;
+  const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Badminton ${tag}`,
+    visibility: "public",
+  });
+  if (comp.status >= 300 || !comp.data) throw new Error(`badminton rig: competition -> ${comp.status}`);
+  const div = await apiJson<{ id: string; slug: string }>(request, `/api/v1/competitions/${comp.data.id}/divisions`, "POST", {
+    name: "Open",
+    sport_key: "badminton",
+    variant_key: "short",
+    config: {},
+  });
+  if (div.status >= 300 || !div.data) throw new Error(`badminton rig: division -> ${div.status} ${JSON.stringify(div.error)}`);
+  const ents = await addEntrantsViaApi(request, div.data.id, [`Kento ${tag}`, `Viktor ${tag}`]);
+  if (ents.ids.length !== 2) throw new Error(`badminton rig: entrants -> ${ents.status}`);
+  const { fixtureIds } = await createStageAndGenerate(request, div.data.id);
+  await apiJson(request, `/api/v1/divisions/${div.data.id}/start`, "POST");
+  const fixtureId = fixtureIds[0]!;
+  const [fx] = await withDb((sql) => sql<{ home: string; away: string }[]>`
+    select home_entrant_id as home, away_entrant_id as away from fixtures where id = ${fixtureId}`);
+  await sendEvent(request, fixtureId, "core.start", {});
+  await sendEvent(request, fixtureId, "badminton.rally", { wonBy: fx!.home });
+  return {
+    orgId,
+    orgSlug,
+    ownerEmail,
+    competitionId: comp.data.id,
+    compSlug: comp.data.slug,
+    divisionId: div.data.id,
+    divSlug: div.data.slug,
+    fixtureId,
+    homeEntrantId: fx!.home,
+    awayEntrantId: fx!.away,
+    offenderIds: [],
+  };
+}
+
+/** Full time on the seeded hockey fixture, through the real reducer — `stream-overlay.spec.ts`'s own ladder walk: the
+ *  phase ladder is READ OFF THE ENGINE (`summary.detail.nextAdvance`), one goal first so a level score cannot send it
+ *  to a shoot-out. */
+async function decideHockey(page: Page, rig: OverlayRig): Promise<void> {
+  await sendEvent(page.request, rig.fixtureId, "hockey.goal", { by: rig.homeEntrantId });
+  for (let guard = 0; guard < 10; guard++) {
+    const state = await apiJson<{ status: string; summary: { detail?: { nextAdvance?: string | null } } | null }>(
+      page.request,
+      `/api/v1/fixtures/${rig.fixtureId}/state`,
+    );
+    if (state.data?.status === "decided" || state.data?.status === "finalized") return;
+    const next = state.data?.summary?.detail?.nextAdvance;
+    if (!next) throw new Error(`decideHockey: status ${state.data?.status} and no nextAdvance`);
+    await sendEvent(page.request, rig.fixtureId, "hockey.period.advance", { to: next });
+  }
+  throw new Error("decideHockey: ten advances and the fixture is still not decided");
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// E1 / E2 — the sequence, on the hockey rig (a live, scored fixture: slate `live`).
+// ---------------------------------------------------------------------------------------------------------------------
+test("E1 sequence: live → frozen → reconnecting → live → final, each step the A1 row, the bug on top", async ({ page, browser }) => {
+  const rig = await seedOverlayFixture(page);
+  const c = await composedSession(page, rig);
+  const cef = await cefBrowser(browser);
+  try {
+    const script = await scriptPhase(cef.context, c.overlayUrl.origin);
+    const res = await cef.page.goto(pathOf(c.overlayUrl));
+    expect(res?.status(), "the compositor's page loads through the relay door").toBe(200);
+    await expect(cef.page.getByTestId("ovl-root")).toBeAttached();
+    await expect.poll(() => cef.linesOf(SIGNAL_READY).length, { message: "the page signals ready" }).toBe(1);
+    const steps = await walk(cef.page, script, "live", ["live", "frozen", "reconnecting", "live", "final"], "E1");
+    console.log(`E1 steps checked: ${steps}`);
+    expect(steps).toBe(5);
+    expect(cef.linesOf("seazn:phase-channel=loopback"), "a run where the loopback answers logs its channel once").toHaveLength(1);
+    expect(cef.linesOf("seazn:phase-channel=web"), "and never falls back").toHaveLength(0);
+  } finally {
+    await cef.context.close();
+  }
+});
+
+test("E2 second camera loss: live → reconnecting → live → reconnecting → live — the card appears and clears twice", async ({ page, browser }) => {
+  const rig = await seedOverlayFixture(page);
+  const c = await composedSession(page, rig);
+  const cef = await cefBrowser(browser);
+  try {
+    const script = await scriptPhase(cef.context, c.overlayUrl.origin);
+    expect((await cef.page.goto(pathOf(c.overlayUrl)))?.status()).toBe(200);
+    let appeared = 0;
+    let cleared = 0;
+    for (const phase of ["live", "reconnecting", "live", "reconnecting", "live"] as const) {
+      script.serve(phase);
+      await expectScene(cef.page, A1[phase].live, `E2 ${phase}`);
+      if (phase === "reconnecting") appeared++;
+      else if (appeared > cleared) cleared++;
+    }
+    console.log(`E2 card appeared ${appeared}, cleared ${cleared}`);
+    expect([appeared, cleared]).toEqual([2, 2]);
+  } finally {
+    await cef.context.close();
+  }
+});
+
+test("E4 another sport — cricket (template=bar) and badminton (template=bug): E1's sequence, each row, the bug on top", async ({ page, browser }) => {
+  test.setTimeout(2 * (SEED_MS + POOL_HOLD.holdMs));
+  let sports = 0;
+  for (const [sport, seed, template] of [
+    ["cricket", seedCricketOverlayFixture, "bar"],
+    ["badminton", seedBadmintonOverlayFixture, "bug"],
+  ] as const) {
+    const rig = await seed(page);
+    const c = await composedSession(page, rig, { themeId: template });
+    expect(c.overlayUrl.searchParams.get("template"), `${sport}: the producer resolved the session's template`).toBe(template);
+    const cef = await cefBrowser(browser);
+    try {
+      const script = await scriptPhase(cef.context, c.overlayUrl.origin);
+      expect((await cef.page.goto(pathOf(c.overlayUrl)))?.status(), sport).toBe(200);
+      await expect(cef.page.getByTestId("ovl-template"), sport).toHaveAttribute("data-template", template);
+      const steps = await walk(cef.page, script, "live", ["live", "frozen", "reconnecting", "live", "final"], `E4 ${sport}`);
+      expect(steps, sport).toBe(5);
+      sports++;
+    } finally {
+      await cef.context.close();
+    }
+    // One session at a time on the pool: end this sport's before the next one's, and give the pool back between them
+    // so no hold here outlasts POOL_HOLD (the next sport's `composedSession` takes it again).
+    for (const s of sessionsThisTest.splice(0)) await endSession(s);
+    await disposeFakePhones();
+    await releaseStreamSlot();
+  }
+  console.log(`E4 sports checked: ${sports}`);
+  expect(sports).toBe(2);
+});
+
+test("E5 OBS: the same URL without host=compositor — no scene ever, and the loopback is never called", async ({ page, browser }) => {
+  const rig = await seedOverlayFixture(page);
+  const c = await composedSession(page, rig);
+  const cef = await cefBrowser(browser);
+  try {
+    const script = await scriptPhase(cef.context, c.overlayUrl.origin, "reconnecting");
+    expect((await cef.page.goto(pathOf(withoutHost(c.overlayUrl))))?.status(), "the relay door still opens it").toBe(200);
+    await expect(cef.page.getByTestId("ovl-root")).toBeAttached();
+    // Watch for longer than one steady poll and one loopback hold: a scene would have come by now.
+    let samples = 0;
+    const until = Date.now() + STREAM_POLL_MS + 3_000;
+    while (Date.now() < until) {
+      expect(await cef.page.getByTestId("ovl-scene").count(), "no scene on an OBS page").toBe(0);
+      samples++;
+      await cef.page.waitForTimeout(250);
+    }
+    console.log(`E5 samples checked: ${samples}`);
+    expect(samples).toBeGreaterThan(0);
+    expect(script.calls, "the loopback handler is never called").toBe(0);
+    expect(cef.lines.filter((l) => l.text.startsWith("seazn:")), "and nothing is signalled").toEqual([]);
+  } finally {
+    await cef.context.close();
+  }
+});
+
+test("E6 fallback B: 3 refusals switch to web for good; the beat's phase arrives by the poll; the hold survives a reload", async ({ page, browser }) => {
+  const rig = await seedOverlayFixture(page);
+  const c = await composedSession(page, rig);
+  const cef = await cefBrowser(browser);
+  try {
+    const script = await scriptPhase(cef.context, c.overlayUrl.origin);
+    script.mode = "refuse";
+    expect((await cef.page.goto(pathOf(c.overlayUrl)))?.status()).toBe(200);
+    await expect.poll(() => cef.linesOf("seazn:phase-channel=web").length, { message: "the channel falls back to web" }).toBe(1);
+    expect(script.calls, `exactly ${PHASE_LOOPBACK_FAILURES_TO_FALLBACK} refusals before the fallback`).toBe(PHASE_LOOPBACK_FAILURES_TO_FALLBACK);
+    // Sticky: the loopback starts answering, and the page never asks it again.
+    script.mode = "serve";
+    script.serve("final");
+    await cef.page.waitForTimeout(15_000);
+    expect(script.calls, "the handler count stays where the fallback left it").toBe(PHASE_LOOPBACK_FAILURES_TO_FALLBACK);
+    await expectScene(cef.page, A1.live.live, "E6 before any beat: the web phase is absent, no scene");
+
+    // The phase now comes from the compositor's beat, through the internal route and the overlay route's relay answer.
+    await beat(page, c, "reconnecting");
+    await expect(cef.page.getByTestId("ovl-scene"), "the Reconnecting scene arrives by the poll").toHaveAttribute("data-scene", "reconnecting", {
+      timeout: STREAM_POLL_MS + 3_000,
+    });
+    await expectScene(cef.page, A1.reconnecting.live, "E6 reconnecting by the beat");
+
+    // (I5) The hold under fallback B: the organiser stops, the session goes `ending`, the final beat says `final`.
+    const stop = await page.request.post(`/api/v1/fixtures/${rig.fixtureId}/stream-sessions/${c.sid}/stop`);
+    expect(stop.status(), await stop.text()).toBe(200);
+    const [{ state }] = await withDb((sql) => sql<{ state: string }[]>`select state from fixture_stream_sessions where id = ${c.sid}`);
+    expect(state, "the stop leaves the composed session in its final hold").toBe("ending");
+    await beat(page, c, "final");
+    await expect(cef.page.getByTestId("ovl-scene"), "the Final scene arrives by the poll").toHaveAttribute("data-scene", "final", {
+      timeout: STREAM_POLL_MS + 3_000,
+    });
+    await expectScene(cef.page, A1.final.live, "E6 final by the beat");
+    const reload = await cef.page.reload();
+    expect(reload?.status(), "a CEF reload during the hold loads").toBe(200);
+    await expect(cef.page.getByTestId("ovl-scene"), "and shows the Final scene again").toHaveAttribute("data-scene", "final", {
+      timeout: STREAM_POLL_MS + 3_000 + (PHASE_LOOPBACK_FAILURES_TO_FALLBACK + 1) * 2_000,
+    });
+  } finally {
+    await cef.context.close();
+  }
+});
+
+/** The moment slab's first visible instant, sampled every 100 ms, or null if it never shows inside `windowMs`. */
+async function slabSeenAt(page: Page, windowMs: number): Promise<number | null> {
+  const until = Date.now() + windowMs;
+  while (Date.now() < until) {
+    if (await page.getByTestId("overlay-moment").isVisible().catch(() => false)) return Date.now();
+    await page.waitForTimeout(100);
+  }
+  return null;
+}
+
+test("E7 moments by scene: Reconnecting airs the slab after the delay, Starting soon airs it, Final drops it", async ({ page, browser }) => {
+  const DELAY_MS = 3_000;
+  const rig = await seedOverlayFixture(page);
+  const c = await composedSession(page, rig, { delayMs: DELAY_MS });
+  expect(c.overlayUrl.searchParams.get("delay"), "the producer carries the session's delay").toBe(String(DELAY_MS));
+  const cef = await cefBrowser(browser);
+  try {
+    const script = await scriptPhase(cef.context, c.overlayUrl.origin);
+    expect((await cef.page.goto(pathOf(c.overlayUrl)))?.status()).toBe(200);
+    await expect(cef.page.getByTestId("ovl-root")).not.toHaveAttribute("data-awaiting-delay", "1", { timeout: DELAY_MS + 5_000 });
+    const latest = DELAY_MS + STREAM_POLL_MS + 2_000;
+
+    // Leg 1 — Reconnecting.
+    script.serve("reconnecting");
+    await expectScene(cef.page, A1.reconnecting.live, "E7 reconnecting");
+    const t0 = Date.now();
+    await sendEvent(page.request, rig.fixtureId, "hockey.goal", { by: rig.homeEntrantId });
+    const seen0 = await slabSeenAt(cef.page, latest + 1_000);
+    expect(seen0, "the slab airs during Reconnecting").not.toBeNull();
+    expect(seen0! - t0, "no sooner than the URL's delay").toBeGreaterThanOrEqual(DELAY_MS);
+    expect(seen0! - t0, "and no later than the delay, one poll and slack").toBeLessThanOrEqual(latest);
+    // Once fully out (its `hold` phase — mid-fold it is still sliding from under the scorebug), the slab is on top.
+    await expect(cef.page.getByTestId("overlay-moment")).toHaveAttribute("data-phase", "hold");
+    const onTop = await cef.page.evaluate(() => {
+      const el = document.querySelector<HTMLElement>('[data-testid="overlay-moment"]')!;
+      const slot = document.querySelector<HTMLElement>('[data-testid="ovl-moment-slot"]')!;
+      const slab = el.getBoundingClientRect();
+      // The slot is `pointer-events: none` (it must never eat a click in a browser source), and a hit-test SKIPS such
+      // a box — it would report whatever paints beneath. Made hit-testable for the one probe, then put back, so the
+      // probe reads PAINT order, which is what "on top" means.
+      const saved = [slot.style.pointerEvents, el.style.pointerEvents];
+      slot.style.pointerEvents = "auto";
+      el.style.pointerEvents = "auto";
+      const hit = document.elementFromPoint(slab.left + slab.width / 2, slab.top + slab.height / 2);
+      [slot.style.pointerEvents, el.style.pointerEvents] = saved as [string, string];
+      const card = document.querySelector('[data-testid="ovl-slate-card"]')?.getBoundingClientRect() ?? null;
+      return {
+        on: hit !== null && el.contains(hit),
+        hit: hit ? `${hit.tagName}.${(hit as HTMLElement).className}` : "nothing",
+        slab: { l: slab.left, t: slab.top, r: slab.right, b: slab.bottom },
+        card: card ? { l: card.left, t: card.top, r: card.right, b: card.bottom } : null,
+      };
+    });
+    expect(onTop.on, `the slab is on top of the scene: ${JSON.stringify(onTop)}`).toBe(true);
+    await expect(cef.page.getByTestId("overlay-moment"), "the slab folds away").toHaveCount(0, { timeout: 30_000 });
+
+    // Leg 2 — Starting soon, on a fixture already in play (D14: Starting soon shows the moment).
+    script.serve("waiting");
+    await expectScene(cef.page, A1.waiting.live, "E7 starting");
+    const t1 = Date.now();
+    await sendEvent(page.request, rig.fixtureId, "hockey.goal", { by: rig.awayEntrantId });
+    const seen1 = await slabSeenAt(cef.page, latest + 1_000);
+    expect(seen1, "the slab airs over Starting soon").not.toBeNull();
+    expect(seen1! - t1).toBeGreaterThanOrEqual(DELAY_MS);
+    expect(seen1! - t1).toBeLessThanOrEqual(latest);
+    await expect(cef.page.getByTestId("overlay-moment")).toHaveCount(0, { timeout: 30_000 });
+
+    // Leg 3 — Final drops the moment: over the whole hold, nothing attaches.
+    script.serve("final");
+    await expectScene(cef.page, A1.final.live, "E7 final");
+    await sendEvent(page.request, rig.fixtureId, "hockey.goal", { by: rig.homeEntrantId });
+    let samples = 0;
+    const until = Date.now() + FINAL_HOLD_MS;
+    while (Date.now() < until) {
+      expect(await cef.page.getByTestId("overlay-moment").count(), "Final drops the moment").toBe(0);
+      samples++;
+      await cef.page.waitForTimeout(250);
+    }
+    console.log(`E7 final-hold samples checked: ${samples}`);
+    expect(samples).toBeGreaterThan(0);
+  } finally {
+    await cef.context.close();
+  }
+});
+
+test("E3 reconnecting while decided: the Result card on the backdrop", async ({ page, browser }) => {
+  const rig = await seedOverlayFixture(page);
+  const c = await composedSession(page, rig);
+  await decideHockey(page, rig);
+  const cef = await cefBrowser(browser);
+  try {
+    const script = await scriptPhase(cef.context, c.overlayUrl.origin);
+    expect((await cef.page.goto(pathOf(c.overlayUrl)))?.status()).toBe(200);
+    await expectScene(cef.page, A1.live.ended, "E3 decided, live phase: the Result card, no scene");
+    script.serve("reconnecting");
+    await expectScene(cef.page, A1.reconnecting.ended, "E3 decided, reconnecting");
+    script.serve("final");
+    await expectScene(cef.page, A1.final.ended, "E3 decided, final");
+  } finally {
+    await cef.context.close();
+  }
+});
+
+test("E8 CSP enforce: E1's sequence on a server that ENFORCES its policy (the loopback is in connect-src)", async ({ page, browser }) => {
+  const probe = await page.request.get("/overlay/fixtures/00000000-0000-4000-8000-000000000000");
+  const enforced = probe.headers()["content-security-policy"];
+  test.skip(!enforced, "this server reports its CSP only (CSP_MODE is not enforce) — E8 runs against a CSP_MODE=enforce build");
+  expect(enforced, "the enforced policy names the loopback").toContain("http://127.0.0.1:7419");
+  const rig = await seedOverlayFixture(page);
+  const c = await composedSession(page, rig);
+  const cef = await cefBrowser(browser);
+  try {
+    const script = await scriptPhase(cef.context, c.overlayUrl.origin);
+    const violations: string[] = [];
+    cef.page.on("console", (m) => {
+      if (/Content Security Policy/i.test(m.text())) violations.push(m.text());
+    });
+    expect((await cef.page.goto(pathOf(c.overlayUrl)))?.status()).toBe(200);
+    const steps = await walk(cef.page, script, "live", ["live", "frozen", "reconnecting", "live", "final"], "E8");
+    expect(steps).toBe(5);
+    expect(script.calls, "the enforced policy let the loopback through").toBeGreaterThan(0);
+    expect(violations, "no CSP violation").toEqual([]);
+    expect(cef.linesOf("seazn:phase-channel=web"), "never fell back").toHaveLength(0);
+  } finally {
+    await cef.context.close();
+  }
+});
+
+test("E9 the alive beat: ≥ 2 beats within 5 s of ready with host, 0 without; it never gaps past 2 beats across scene changes", async ({ page, browser }) => {
+  const rig = await seedOverlayFixture(page);
+  const c = await composedSession(page, rig);
+
+  // Without host: nothing, in the same window.
+  const obs = await cefBrowser(browser);
+  try {
+    await scriptPhase(obs.context, c.overlayUrl.origin);
+    expect((await obs.page.goto(pathOf(withoutHost(c.overlayUrl))))?.status()).toBe(200);
+    await expect(obs.page.getByTestId("ovl-root")).toBeAttached();
+    await obs.page.waitForTimeout(5_000);
+    expect(obs.linesOf(SIGNAL_ALIVE), "without host: no beat").toHaveLength(0);
+    expect(obs.linesOf(SIGNAL_READY), "and no ready").toHaveLength(0);
+  } finally {
+    await obs.context.close();
+  }
+
+  const cef = await cefBrowser(browser);
+  try {
+    const script = await scriptPhase(cef.context, c.overlayUrl.origin);
+    expect((await cef.page.goto(pathOf(c.overlayUrl)))?.status()).toBe(200);
+    await expect.poll(() => cef.linesOf(SIGNAL_READY).length).toBe(1);
+    const readyAt = cef.linesOf(SIGNAL_READY)[0]!.at;
+    await cef.page.waitForTimeout(5_000);
+    const early = cef.linesOf(SIGNAL_ALIVE).filter((l) => l.at >= readyAt && l.at <= readyAt + 5_000);
+    expect(early.length, "≥ 2 beats within 5 s of ready").toBeGreaterThanOrEqual(2);
+    expect(cef.linesOf(SIGNAL_ALIVE).filter((l) => l.at < readyAt), "no beat before ready").toHaveLength(0);
+
+    // The beat survives a scene change: each scene held ≥ 6 s.
+    const HOLD = 6_000;
+    const perScene: Record<string, number> = {};
+    for (const phase of ["live", "reconnecting", "final"] as const) {
+      script.serve(phase);
+      await expectScene(cef.page, A1[phase].live, `E9 ${phase}`);
+      const from = Date.now();
+      await cef.page.waitForTimeout(HOLD);
+      perScene[phase] = cef.linesOf(SIGNAL_ALIVE).filter((l) => l.at >= from && l.at <= from + HOLD).length;
+    }
+    console.log(`E9 beats per scene: ${JSON.stringify(perScene)}`);
+    for (const [scene, n] of Object.entries(perScene)) expect(n, `${scene}: at least one beat`).toBeGreaterThan(0);
+    const beats = cef.linesOf(SIGNAL_ALIVE).map((l) => l.at);
+    let gaps = 0;
+    for (let i = 1; i < beats.length; i++) {
+      expect(beats[i]! - beats[i - 1]!, `beat ${i}: the gap stays inside two beats`).toBeLessThanOrEqual(2 * OVERLAY_ALIVE_EVERY_MS);
+      gaps++;
+    }
+    console.log(`E9 gaps checked: ${gaps}`);
+    expect(gaps).toBeGreaterThan(3);
+  } finally {
+    await cef.context.close();
+  }
+});
