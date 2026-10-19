@@ -887,7 +887,7 @@
         "files": [
           "src/components/v2/__tests__/match-rules-block.test.tsx"
         ],
-        "name": "a bye (decided without play) says so"
+        "name": "a bye .decided without play. says so"
       }
     ]
   },
