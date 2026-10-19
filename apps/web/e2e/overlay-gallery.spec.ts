@@ -27,6 +27,7 @@ import { signInStaff } from "./overlay-kit";
 //   4d. side codes          two sides sharing a three-letter prefix (Harlow v Harrow) read two different codes on every
 //                           template — the bug, the bar's tightest rung, the tiles and the short Result rung — and
 //                           each side ONE code everywhere (the public site's `disambiguatedShorts`, owner 2026-10-19)
+//                           and every four-letter code inside the bug's 96px code column (#987 review M6)
 // The cells are `galleryCells(OVERLAY_TEMPLATES, …)` — the gallery's one cell source — so a template or scene added to
 // the registry is swept here with no edit. Every check prints its count, and zero checked fails it. The per-check
 // verdicts are `expect.soft`, so one run reports EVERY check that fails rather than stopping at the first.
@@ -636,7 +637,7 @@ test.describe("the staff overlay gallery (R2007)", () => {
   // Every cell of every template, read off the RENDERED page: the two sides' codes differ wherever both are drawn, each
   // side has ONE code across every template, and every short Result rung names the credited side (the cell's own
   // `data-result-winner`, read off the snapshot) by that side's code.
-  test("check 4d: two sides sharing a three-letter prefix (Harlow v Harrow) read two different codes on every template — bug, bar, tiles, short Result rung", async ({
+  test("check 4d: two sides sharing a three-letter prefix (Harlow v Harrow) read two different codes on every template — bug, bar, tiles, short Result rung — and a four-letter code fits the bug's column", async ({
     page,
     baseURL,
   }) => {
@@ -668,6 +669,7 @@ test.describe("the staff overlay gallery (R2007)", () => {
           winnerBearing: 0,
           shortRungs: 0,
           wrongShort: [] as string[],
+          bugFit: { checked: 0, fourChar: 0, misfit: [] as string[] },
         };
         for (const cell of document.querySelectorAll<HTMLElement>("[data-gallery-cell]")) {
           const where = cell.dataset.galleryCell ?? "?";
@@ -685,6 +687,19 @@ test.describe("the staff overlay gallery (R2007)", () => {
           // The bug's code column — both rows, where both are drawn (cricket's bug carries one hero row).
           const bug = [...cell.querySelectorAll(".ovl-bug-code")].map(text);
           if (bug.length === 2) pair("bug", bug[0]!, bug[1]!);
+          // #987 review M6 — a four-letter code in the bug's fixed code column (`.ovl-bug-code`, 96px, no clip): the
+          // text's own box must sit inside the column, or it paints into the gap before the cells.
+          for (const el of cell.querySelectorAll<HTMLElement>(".ovl-bug-code")) {
+            const code = text(el);
+            if (code === "") continue;
+            const range = document.createRange();
+            range.selectNodeContents(el);
+            const ink = range.getBoundingClientRect().width;
+            const column = el.getBoundingClientRect().width;
+            out.bugFit.checked++;
+            if ([...code].length === 4) out.bugFit.fourChar++;
+            if (ink > column + 0.5) out.bugFit.misfit.push(`${where}: "${code}" ${ink.toFixed(1)}px in a ${column.toFixed(1)}px column`);
+          }
           // The bar's tightest rung — the LAST probe of each side's name ladder, the code it steps down to.
           const rungOf = (side: string) => {
             const probes = [...cell.querySelectorAll(`[data-testid="${side}"] .ovl-team-name-probe`)];
@@ -714,7 +729,7 @@ test.describe("the staff overlay gallery (R2007)", () => {
     );
     const unique = (xs: string[]) => [...new Set(xs)];
     console.log(
-      `[4d] cells ${read.cells}, pairs ${JSON.stringify(read.pairs)}, per template ${JSON.stringify(read.perTemplate)}, codes ${JSON.stringify(read.codes.map(unique))}, short Result rungs ${read.shortRungs}/${read.winnerBearing}`,
+      `[4d] cells ${read.cells}, pairs ${JSON.stringify(read.pairs)}, per template ${JSON.stringify(read.perTemplate)}, codes ${JSON.stringify(read.codes.map(unique))}, short Result rungs ${read.shortRungs}/${read.winnerBearing}, bug codes measured ${read.bugFit.checked} (four letters: ${read.bugFit.fourChar}), overflowing the column ${read.bugFit.misfit.length}`,
     );
     // Anti-vacuity: every template the registry ships drew codes to compare, and every surface was read.
     const templates = Object.keys(read.perTemplate);
@@ -730,6 +745,10 @@ test.describe("the staff overlay gallery (R2007)", () => {
     expect(read.winnerBearing, "anti-vacuity: Result cards whose outcome names a winner").toBeGreaterThan(0);
     expect(read.wrongShort.slice(0, 25), `short Result rungs naming the wrong side or an ambiguous code (${read.wrongShort.length})`).toEqual([]);
     expect(read.shortRungs).toBe(read.winnerBearing);
+    // Four-letter codes fit the bug's code column (#987 review M6): every bug code drawn here is four letters, measured.
+    expect(read.bugFit.checked, "anti-vacuity: bug codes measured").toBeGreaterThan(0);
+    expect(read.bugFit.fourChar, "every bug code measured is a four-letter code (HARL / HARR)").toBe(read.bugFit.checked);
+    expect(read.bugFit.misfit.slice(0, 25), `four-letter codes overflowing the bug's code column (${read.bugFit.misfit.length})`).toEqual([]);
   });
 
   test("check 6: no preview fetches or subscribes — nothing leaves the page for 16 s (longer than POLL_MS)", async ({ page }) => {
