@@ -5961,7 +5961,7 @@ describe.skipIf(!HAS_DB)("T6: one start path — the present phone, startCause, 
     const organiser = await observe(() => organiserStart(r.auth, a, body(r.target.id), deps));
     const operator = await observe(() => startBroadcast(
       { userId: issuedBy, orgId: r.auth.orgId, source: "phone", pairingId: phoneB.pairingId }, b,
-      { targetId: second.id, startCause: "operator", phone: "present" }, deps));
+      { mode: "passthrough", targetId: second.id, startCause: "operator", phone: "present" }, deps));
     // The W5 probe (before the storage read), the M1 probe and the admission: three asks each, or one path skipped a gate
     // the other kept.
     expect(organiser.inputs).toHaveLength(3);
@@ -5997,7 +5997,7 @@ describe.skipIf(!HAS_DB)("T6: one start path — the present phone, startCause, 
     expect(issuedBy, "the differential: the code's issuer is not the organiser this rig signs in as").not.toBe(r.auth.userId);
     const { sessionId } = await startBroadcast(
       { userId: issuedBy, orgId: r.auth.orgId, source: "phone", pairingId: phone.pairingId }, r.fixtureId,
-      { targetId: r.target.id, startCause: "operator", phone: "present" }, r.deps);
+      { mode: "passthrough", targetId: r.target.id, startCause: "operator", phone: "present" }, r.deps);
     const [row] = await sql<{ created_by: string; start_cause: string; pairing_id: string; code_id: string }[]>`
       select created_by, start_cause, pairing_id, code_id from fixture_stream_sessions where id = ${sessionId}`;
     expect(row).toEqual({ created_by: issuedBy, start_cause: "operator", pairing_id: phone.pairingId, code_id: phone.codeId });
@@ -6022,7 +6022,7 @@ describe.skipIf(!HAS_DB)("T6: one start path — the present phone, startCause, 
     let checked = 0;
     for (const [label, actor] of refused) {
       const err = await startBroadcast(actor, r.fixtureId,
-        { targetId: r.target.id, startCause: actor.source === "auto" ? "automatic" : "operator", phone: "present" }, r.deps).then(() => null, (e: unknown) => e);
+        { mode: "passthrough", targetId: r.target.id, startCause: actor.source === "auto" ? "automatic" : "operator", phone: "present" }, r.deps).then(() => null, (e: unknown) => e);
       expect(err, label).toBeInstanceOf(Error);
       expect(err, label).not.toBeInstanceOf(HttpError);
       expect((err as Error).message, label).toMatch(/startBroadcast: an? (phone|auto) start/);
@@ -6032,7 +6032,7 @@ describe.skipIf(!HAS_DB)("T6: one start path — the present phone, startCause, 
     expect(await sessionsOf(r.auth.orgId)).toBe(0);
     const { sessionId } = await startBroadcast(
       { userId: issuedBy, orgId: r.auth.orgId, source: "phone", pairingId: phone.pairingId }, r.fixtureId,
-      { targetId: r.target.id, startCause: "operator", phone: "present" }, r.deps);
+      { mode: "passthrough", targetId: r.target.id, startCause: "operator", phone: "present" }, r.deps);
     const [row] = await sql<{ created_by: string }[]>`select created_by from fixture_stream_sessions where id = ${sessionId}`;
     expect(row!.created_by).toBe(issuedBy);
   });
@@ -6045,14 +6045,14 @@ describe.skipIf(!HAS_DB)("T6: one start path — the present phone, startCause, 
     const [{ issued_by: issuerB }] = await sql<{ issued_by: string }[]>`select issued_by from fixture_stream_codes where id = ${onB.codeId}`;
     const err = await startBroadcast(
       { userId: issuerB, orgId: r.auth.orgId, source: "phone", pairingId: onA.pairingId }, b,
-      { targetId: r.target.id, startCause: "operator", phone: "present" }, r.deps).then(() => null, (e: unknown) => e);
+      { mode: "passthrough", targetId: r.target.id, startCause: "operator", phone: "present" }, r.deps).then(() => null, (e: unknown) => e);
     expect(err).toBeInstanceOf(Error);
     expect(err).not.toBeInstanceOf(HttpError);
     expect((err as Error).message).toMatch(/is not on fixture/);
     expect(await sessionsOf(r.auth.orgId)).toBe(0);
     await expect(startBroadcast(
       { userId: issuerB, orgId: r.auth.orgId, source: "phone", pairingId: onB.pairingId }, b,
-      { targetId: r.target.id, startCause: "operator", phone: "present" }, r.deps)).resolves.toMatchObject({ sessionId: expect.any(String) });
+      { mode: "passthrough", targetId: r.target.id, startCause: "operator", phone: "present" }, r.deps)).resolves.toMatchObject({ sessionId: expect.any(String) });
   });
 
   it("A8: warming_at is written when the session ENTERS warming, on the start's clock, round-trips into the Session, and anchors the warming timeout — created_at alone past the limit does not expire it; warming_at past it does", async () => {

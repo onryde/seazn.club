@@ -1354,7 +1354,12 @@ export async function startBroadcast(
   actor: StartActor,
   fixtureId: string,
   opts: {
-    targetId: string; startCause: StartCause; phone: PhoneStanding; mode?: CreateStreamSession["mode"]; themeId?: string | null;
+    targetId: string; startCause: StartCause; phone: PhoneStanding;
+    /** R2006: REQUIRED, so no start path can stream a mode it did not decide. The organiser's Go live states the mode its
+     *  panel showed; the phone's start and the automatic start read the fixture's stored choice (stream-codes.ts
+     *  `startModeFor`). */
+    mode: CreateStreamSession["mode"];
+    themeId?: string | null;
     /** The automatic start's instant (§7.2, final review m-1): stamped as `auto_started_at` IN the insert's transaction, so
      *  the session and "once per match" commit together. Given exactly when `actor.source` is `auto`. */
     autoStartedAt?: Date;
@@ -1364,7 +1369,7 @@ export async function startBroadcast(
   const { orgId, competitionId } = await fixtureContext(fixtureId);
   if (orgId !== actor.orgId) throw new HttpError(404, "fixture not found");
   const actorUserId = actor.userId;
-  const body = { mode: opts.mode ?? "passthrough", targetId: opts.targetId, themeId: opts.themeId ?? null };
+  const body = { mode: opts.mode, targetId: opts.targetId, themeId: opts.themeId ?? null };
   // R2001: can this deployment run a composed session at all (drivers.ts `composedUnavailable()`, the ONE authority the
   // organiser UI reads too)? Read ONCE, here, and handed to every `admit` below. Asked only for a composed start — a
   // passthrough start reads no new fact and its path is unchanged.
@@ -2193,6 +2198,7 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
   }) : null;
   return {
     id: row.id, fixtureId, mode: row.mode, state: row.state, desiredState: row.desired_state, failReason: row.fail_reason,
+    overlay: row.mode === "composed" ? { themeId: row.theme_id, delayMs: row.overlay_delay_ms } : null,
     health: row.heartbeat_at ? { fps: hb?.fps ?? null, bitrateKbps: hb?.bitrateKbps ?? null, lastBeatAt: new Date(row.heartbeat_at).toISOString() } : null,
     ingest: ingestState, output,
     balance: await creditBalance(sql, row.org_id),

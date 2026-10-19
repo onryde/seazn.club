@@ -1637,6 +1637,10 @@ export const StreamSessionCurrent = z
     id: z.string(),
     fixtureId: z.string(),
     mode: StreamMode,
+    /** R2006: a COMPOSED session's own score style and timing, as its create copied them (V410's `theme_id` — null is
+     *  the sport's default, resolved by the reader — and `overlay_delay_ms`). Null for passthrough. The panel shows these
+     *  read-only while the session runs: a running session never moves, whatever the settings say since. */
+    overlay: z.object({ themeId: z.string().nullable(), delayMs: z.number().int().min(0) }).strict().nullable(),
     state: StreamSessionState,
     desiredState: z.enum(["live", "ending"]),
     failReason: StreamFailReason.nullable(),
@@ -1687,13 +1691,39 @@ export type StreamCodeShown = z.infer<typeof StreamCodeShown>;
 /** §6.7.3 / §8.1 (plan T3): the fixture's stream settings. `targetId` is the destination pre-pick (PR-1; `null` clears it) and
  *  `autoStream` is the automatic-streaming switch (PR-2, W7). Either or both, at least one: a PUT writes only the fields it
  *  names, so the panel's PR-1 body `{ targetId }` still leaves the switch alone and `{ autoStream }` leaves the pick alone. */
+/** R2006 (owner ruling 2026-10-19, "Option C"): three more preferences, each written only when the body names it.
+ *  `streamMode` — null resets to the default (the score whenever the deployment can run it), `passthrough` is "Camera
+ *  only", `composed` is "Add the score back"; every start path reads it (V464). `overlayTemplate` — null resets to the
+ *  sport's default; an id the fixture's sport is not offered is a 400 and writes nothing; 40 matches
+ *  `CreateStreamSession.themeId`. `overlayDelayMs` — whole ms, 0–30000 (V462's check; lib/stream-settings.ts
+ *  `OVERLAY_DELAY_MAX_MS`), null resets to the server's default and 0 is a real override. */
 export const PutStreamSettings = z
-  .object({ targetId: z.string().uuid().nullable().optional(), autoStream: z.boolean().optional() })
+  .object({
+    targetId: z.string().uuid().nullable().optional(),
+    autoStream: z.boolean().optional(),
+    streamMode: StreamMode.nullable().optional(),
+    overlayTemplate: z.string().min(1).max(40).nullable().optional(),
+    overlayDelayMs: z.number().int().min(0).max(30_000).nullable().optional(),
+  })
   .strict()
-  .refine((b) => b.targetId !== undefined || b.autoStream !== undefined, { message: "targetId or autoStream is required" });
+  .refine(
+    (b) =>
+      b.targetId !== undefined || b.autoStream !== undefined || b.streamMode !== undefined ||
+      b.overlayTemplate !== undefined || b.overlayDelayMs !== undefined,
+    { message: "targetId, autoStream, streamMode, overlayTemplate or overlayDelayMs is required" },
+  );
 export type PutStreamSettings = z.infer<typeof PutStreamSettings>;
-/** The answer: `targetId` is the SAVED choice (`null` when none was chosen or it was cleared); `autoStream` the switch. */
-export const StreamSettings = z.object({ targetId: z.string().uuid().nullable(), autoStream: z.boolean() }).strict();
+/** The answer: `targetId` is the SAVED choice (`null` when none was chosen or it was cleared); `autoStream` the switch.
+ *  R2006: the three stored preferences as stored — `null` is "the default" for each (never the resolved value). */
+export const StreamSettings = z
+  .object({
+    targetId: z.string().uuid().nullable(),
+    autoStream: z.boolean(),
+    streamMode: StreamMode.nullable(),
+    overlayTemplate: z.string().nullable(),
+    overlayDelayMs: z.number().int().nullable(),
+  })
+  .strict();
 export type StreamSettings = z.infer<typeof StreamSettings>;
 
 /** Capture QR v2 §9 / §6.12 (T9): the phone's latest beat as the panel reads it — each field picked by name from the

@@ -48,6 +48,8 @@ import { makeUser, seedOrg } from "./_seed";
 import { startedDivisionWithFixture } from "./_rig";
 
 const HAS_DB = !!process.env.DATABASE_URL;
+/** R2006: the three score preferences, never chosen — each `null` ("the default"). */
+const NO_PREFS = { streamMode: null, overlayTemplate: null, overlayDelayMs: null } as const;
 
 // A KEK of this file's own (secret-columns.test.ts precedent): CI supplies no RELAY_KEK. The developer's is put back
 // afterwards, or removed when there was none — never assigned `undefined`, which Node stores as the string. Never printed.
@@ -577,11 +579,11 @@ describe.skipIf(!HAS_DB)("stream settings — the destination pre-pick (§6.7.3)
     expect(await settingsOf(r.fixtureId)).toBeNull();
     const t1 = await createStreamTarget(r.auth, r.auth.orgId, { kind: "youtube", label: "Court 1", streamKey: `k-${randomUUID().slice(0, 8)}` });
     const t2 = await createStreamTarget(r.auth, r.auth.orgId, { kind: "twitch", label: "Court 2", streamKey: `k-${randomUUID().slice(0, 8)}` });
-    expect(await saveStreamSettings(r.auth, r.fixtureId, { targetId: t1.id })).toEqual({ targetId: t1.id, autoStream: false });
+    expect(await saveStreamSettings(r.auth, r.fixtureId, { targetId: t1.id })).toEqual({ targetId: t1.id, autoStream: false, ...NO_PREFS });
     expect(await settingsOf(r.fixtureId)).toEqual({ target_id: t1.id, org_id: r.auth.orgId, updated_by: r.auth.userId });
-    expect(await saveStreamSettings(r.auth, r.fixtureId, { targetId: t2.id })).toEqual({ targetId: t2.id, autoStream: false });
+    expect(await saveStreamSettings(r.auth, r.fixtureId, { targetId: t2.id })).toEqual({ targetId: t2.id, autoStream: false, ...NO_PREFS });
     expect((await settingsOf(r.fixtureId))!.target_id).toBe(t2.id);
-    expect(await saveStreamSettings(r.auth, r.fixtureId, { targetId: null })).toEqual({ targetId: null, autoStream: false });
+    expect(await saveStreamSettings(r.auth, r.fixtureId, { targetId: null })).toEqual({ targetId: null, autoStream: false, ...NO_PREFS });
     expect((await settingsOf(r.fixtureId))!.target_id).toBeNull();
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_settings where fixture_id = ${r.fixtureId}`;
     expect(n).toBe(1);
@@ -738,7 +740,7 @@ describe.skipIf(!HAS_DB)("stream settings — a row records whether the organise
       const { old } = await twoDestinations(r);
       expect(await switchRowOf(r.fixtureId), "PREMISE: no row yet").toBeNull();
       expect(await pickOf(r), "PREMISE: the default before the toggle").toMatchObject({ id: old.id, source: "default" });
-      expect(await put(r, { autoStream: true }), "no pick was chosen, so the answer's targetId is null").toEqual({ targetId: null, autoStream: true });
+      expect(await put(r, { autoStream: true }), "no pick was chosen, so the answer's targetId is null").toEqual({ targetId: null, autoStream: true, ...NO_PREFS });
       expect(await switchRowOf(r.fixtureId)).toMatchObject({ auto_stream: true, target_chosen: false, target_id: null, updated_by: r.auth.userId });
       expect(await pickOf(r), "exactly as before the toggle: the oldest live destination, never none").toMatchObject({ id: old.id, label: "Old feed", source: "default" });
       expect(await rowCount(r.fixtureId)).toBe(1);
@@ -747,7 +749,7 @@ describe.skipIf(!HAS_DB)("stream settings — a row records whether the organise
     it("the switch OFF on a fixture with no row also creates one (auto_stream false, nothing chosen) and leaves the default destination", async () => {
       const r = await rig();
       const { old } = await twoDestinations(r);
-      expect(await put(r, { autoStream: false })).toEqual({ targetId: null, autoStream: false });
+      expect(await put(r, { autoStream: false })).toEqual({ targetId: null, autoStream: false, ...NO_PREFS });
       expect(await switchRowOf(r.fixtureId)).toMatchObject({ auto_stream: false, target_chosen: false, target_id: null });
       expect(await pickOf(r)).toMatchObject({ id: old.id, source: "default" });
     });
@@ -756,20 +758,20 @@ describe.skipIf(!HAS_DB)("stream settings — a row records whether the organise
       const r = await rig();
       const { old, fresh } = await twoDestinations(r);
       let steps = 0;
-      const step = async (label: string, body: Parameters<typeof saveStreamSettings>[2], want: { answer: { targetId: string | null; autoStream: boolean }; row: Partial<SwitchRow>; pick: string | null }) => {
+      const step = async (label: string, body: Parameters<typeof saveStreamSettings>[2], want: { answer: { targetId: string | null; autoStream: boolean } & typeof NO_PREFS; row: Partial<SwitchRow>; pick: string | null }) => {
         expect(await put(r, body), label).toEqual(want.answer);
         expect(await switchRowOf(r.fixtureId), label).toMatchObject(want.row);
         const pick = await pickOf(r);
         expect(pick === null ? null : pick.id, `${label}: the destination the phone would stream to`).toBe(want.pick);
         steps++;
       };
-      await step("switch on", { autoStream: true }, { answer: { targetId: null, autoStream: true }, row: { auto_stream: true, target_chosen: false, target_id: null }, pick: old.id });
-      await step("pick the newer", { targetId: fresh.id }, { answer: { targetId: fresh.id, autoStream: true }, row: { auto_stream: true, target_chosen: true, target_id: fresh.id }, pick: fresh.id });
-      await step("switch off after a pick", { autoStream: false }, { answer: { targetId: fresh.id, autoStream: false }, row: { auto_stream: false, target_chosen: true, target_id: fresh.id }, pick: fresh.id });
-      await step("switch on again", { autoStream: true }, { answer: { targetId: fresh.id, autoStream: true }, row: { auto_stream: true, target_chosen: true, target_id: fresh.id }, pick: fresh.id });
-      await step("clear the pick", { targetId: null }, { answer: { targetId: null, autoStream: true }, row: { auto_stream: true, target_chosen: true, target_id: null }, pick: null });
-      await step("switch off after a CLEAR: still cleared, never back to the default", { autoStream: false }, { answer: { targetId: null, autoStream: false }, row: { auto_stream: false, target_chosen: true, target_id: null }, pick: null });
-      await step("switch on after a CLEAR", { autoStream: true }, { answer: { targetId: null, autoStream: true }, row: { auto_stream: true, target_chosen: true, target_id: null }, pick: null });
+      await step("switch on", { autoStream: true }, { answer: { targetId: null, autoStream: true, ...NO_PREFS }, row: { auto_stream: true, target_chosen: false, target_id: null }, pick: old.id });
+      await step("pick the newer", { targetId: fresh.id }, { answer: { targetId: fresh.id, autoStream: true, ...NO_PREFS }, row: { auto_stream: true, target_chosen: true, target_id: fresh.id }, pick: fresh.id });
+      await step("switch off after a pick", { autoStream: false }, { answer: { targetId: fresh.id, autoStream: false, ...NO_PREFS }, row: { auto_stream: false, target_chosen: true, target_id: fresh.id }, pick: fresh.id });
+      await step("switch on again", { autoStream: true }, { answer: { targetId: fresh.id, autoStream: true, ...NO_PREFS }, row: { auto_stream: true, target_chosen: true, target_id: fresh.id }, pick: fresh.id });
+      await step("clear the pick", { targetId: null }, { answer: { targetId: null, autoStream: true, ...NO_PREFS }, row: { auto_stream: true, target_chosen: true, target_id: null }, pick: null });
+      await step("switch off after a CLEAR: still cleared, never back to the default", { autoStream: false }, { answer: { targetId: null, autoStream: false, ...NO_PREFS }, row: { auto_stream: false, target_chosen: true, target_id: null }, pick: null });
+      await step("switch on after a CLEAR", { autoStream: true }, { answer: { targetId: null, autoStream: true, ...NO_PREFS }, row: { auto_stream: true, target_chosen: true, target_id: null }, pick: null });
       expect(steps).toBe(7);
       expect(await rowCount(r.fixtureId), "one row throughout").toBe(1);
     });
@@ -783,7 +785,7 @@ describe.skipIf(!HAS_DB)("stream settings — a row records whether the organise
       // The pick is written FIRST, so a refused pick throws before the switch write is reached: this case does not witness the
       // transaction (the tripwire case below does).
       expect(await switchRowOf(r.fixtureId), "the refused pick wrote nothing, the switch included").toBeNull();
-      expect(await put(r, { targetId: fresh.id, autoStream: true })).toEqual({ targetId: fresh.id, autoStream: true });
+      expect(await put(r, { targetId: fresh.id, autoStream: true })).toEqual({ targetId: fresh.id, autoStream: true, ...NO_PREFS });
       expect(await switchRowOf(r.fixtureId)).toMatchObject({ auto_stream: true, target_chosen: true, target_id: fresh.id });
       // And on an existing row: a refused pick does not flip an existing switch.
       expect(await refusalOf(put(r, { targetId: theirs.id, autoStream: false }))).toMatchObject({ status: 404 });
@@ -820,7 +822,7 @@ describe.skipIf(!HAS_DB)("stream settings — a row records whether the organise
         expect(await switchRowOf(r.fixtureId), "the pick was rolled back with the failed switch write: no row at all").toBeNull();
         expect(await pickOf(r), "and the fixture still resolves the default").toMatchObject({ id: old.id, source: "default" });
         // Positive pair: the SAME trigger lets the pick through when the switch is not being turned on.
-        expect(await put(r, { targetId: fresh.id, autoStream: false })).toEqual({ targetId: fresh.id, autoStream: false });
+        expect(await put(r, { targetId: fresh.id, autoStream: false })).toEqual({ targetId: fresh.id, autoStream: false, ...NO_PREFS });
         // A prior pick: a refused pair leaves it, and the switch, exactly as they were.
         const again = await refusalOf(put(r, { targetId: old.id, autoStream: true }));
         expect((again as Error).message).toMatch(/test tripwire/);
@@ -829,7 +831,7 @@ describe.skipIf(!HAS_DB)("stream settings — a row records whether the organise
       });
       expect(await triggerCount(r.fixtureId), "the tripwire is gone").toBe(0);
       // With it gone the very same body goes through: the refusal above was the trigger's, nothing else.
-      expect(await put(r, { targetId: old.id, autoStream: true })).toEqual({ targetId: old.id, autoStream: true });
+      expect(await put(r, { targetId: old.id, autoStream: true })).toEqual({ targetId: old.id, autoStream: true, ...NO_PREFS });
     });
 
     it("turning the switch OFF clears auto_start_refusal and ONLY that: auto_started_at, auto_start_blocked_at, auto_start_attempted_at and the pick survive (R-3: the Stop stamp outlives a toggle); turning it ON clears nothing", async () => {
@@ -893,16 +895,16 @@ describe.skipIf(!HAS_DB)("stream settings — a row records whether the organise
       const { old, fresh } = await twoDestinations(r);
       await sql`insert into fixture_stream_settings (fixture_id, org_id, target_id) values (${r.fixtureId}, ${r.auth.orgId}, ${fresh.id})`;
       expect(await switchRowOf(r.fixtureId), "PREMISE: a pick in the column, the choice flag not yet backfilled").toMatchObject({ target_chosen: false, target_id: fresh.id });
-      expect(await put(r, { autoStream: true }), "nothing chosen: no saved choice").toEqual({ targetId: null, autoStream: true });
+      expect(await put(r, { autoStream: true }), "nothing chosen: no saved choice").toEqual({ targetId: null, autoStream: true, ...NO_PREFS });
       expect(await pickOf(r), "and the resolver agrees: the default").toMatchObject({ id: old.id, source: "default" });
       await runBackfill(r.fixtureId);
-      expect(await put(r, { autoStream: true }), "after the backfill the pick is the saved choice").toEqual({ targetId: fresh.id, autoStream: true });
+      expect(await put(r, { autoStream: true }), "after the backfill the pick is the saved choice").toEqual({ targetId: fresh.id, autoStream: true, ...NO_PREFS });
       expect(await pickOf(r)).toMatchObject({ id: fresh.id, source: "saved" });
     });
 
     it("a body naming NEITHER field (the route's schema refuses it; the usecase must not crash on it) writes nothing and answers the defaults", async () => {
       const r = await rig();
-      expect(await put(r, {})).toEqual({ targetId: null, autoStream: false });
+      expect(await put(r, {})).toEqual({ targetId: null, autoStream: false, ...NO_PREFS });
       expect(await switchRowOf(r.fixtureId)).toBeNull();
     });
 

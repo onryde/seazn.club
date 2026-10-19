@@ -44,7 +44,7 @@ import { readFirstInput } from "@/server/relay/secret-columns";
 import { recordEvent } from "@/server/relay/telemetry";
 import { captureStageOf } from "./capture-stage";
 import { provideDeviceLinkForPhone, type HolderVerifiedCode, type PhoneScoringLink } from "./device-links";
-import { fixtureStreamTarget, resolveStreamCode, type ResolvedCode } from "./stream-codes";
+import { fixtureStreamTarget, resolveStreamCode, startModeFor, type ResolvedCode } from "./stream-codes";
 import { maybeAutoStart } from "./stream-auto";
 import { apply, lastConnectedSampleAt, startBroadcast, tickSession, type SessionDeps } from "./stream-sessions";
 
@@ -680,9 +680,11 @@ export function phoneStartRefusal(err: unknown): CaptureRefusalError | { already
     case "phone_not_paired":
     case "phone_not_responding":
       throw new Error(`postStart: startBroadcast answered ${err.code} to a phone start, which passes phone: "present"`);
-    // R2001, the same kind of guard: a phone start passes no mode, so it is passthrough and the composed gate cannot answer it.
+    // R2001, the same kind of guard (R2006): a phone start passes the mode `startModeFor` resolved against the SAME
+    // `composedUnavailable()` startBroadcast asks — composed only when that says the deployment can run it — so the
+    // composed gate cannot answer it.
     case "composed_unavailable":
-      throw new Error(`postStart: startBroadcast answered ${err.code} to a phone start, which passes no mode (passthrough)`);
+      throw new Error(`postStart: startBroadcast answered ${err.code} to a phone start, whose mode was resolved against composedUnavailable()`);
   }
   // admit's target_not_found (the pre-pick vanished between the read and the row lock) has no code.
   if (err.status === 404 && err.code === undefined && err.message === "stream target not found") return noDestination("the picked destination is gone");
@@ -712,11 +714,14 @@ export async function postStart(rawCode: string, tok: string, body: CaptureStart
   if (open) throw alreadyLive(open);
   const pick = await fixtureStreamTarget(sql, { orgId: resolved.orgId, fixtureId: resolved.fixtureId });
   if (!pick) throw noDestination("this match has no destination to stream to");
+  // R2006 (owner ruling 2026-10-19): the fixture's stored mode — the score by default, the camera when the organiser
+  // chose Camera only or the deployment cannot run the score. Never a refusal: the phone always starts.
+  const mode = await startModeFor(sql, resolved.fixtureId);
   try {
     const { sessionId } = await startBroadcast(
       { userId: resolved.issuedBy, orgId: resolved.orgId, source: "phone", pairingId: current.id },
       resolved.fixtureId,
-      { targetId: pick.id, startCause: "operator", phone: "present" },
+      { targetId: pick.id, startCause: "operator", phone: "present", mode },
       deps,
     );
     return { sid: sessionId };

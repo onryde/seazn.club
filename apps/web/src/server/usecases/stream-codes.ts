@@ -10,11 +10,13 @@ import { sql, type Tx } from "@/lib/db";
 import { requireFeature } from "@/lib/entitlements";
 import { HttpError } from "@/lib/errors";
 import { resolveStreamTarget, type SavedStreamTarget, type StreamTargetSource } from "@/lib/stream-destinations";
+import { effectiveStreamMode, isPickableTemplate, type StreamPrefs } from "@/lib/stream-settings";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { CaptureRefusalError, codeEnded } from "@/server/api-v1/capture-http";
-import type { PutStreamSettings, StreamCodeShown, StreamSettings } from "@/server/api-v1/schemas";
+import type { PutStreamSettings, StreamCodeShown, StreamMode, StreamSettings } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
 import { CODE_GRACE_AFTER_FINISH_MINUTES, tunable } from "@/server/relay/config";
+import { composedUnavailable } from "@/server/relay/drivers";
 import { hasValidKek, sealWith } from "@/server/relay/crypto";
 import { ACTIVE_STATES } from "@/server/relay/domain/session";
 import { type CodeCall, codeServes, codeStatus, normaliseCode, type RecordTail, recordTailAnchor } from "@/server/relay/domain/stream-code";
@@ -59,14 +61,14 @@ export function requireSessionEditor(auth: AuthCtx): void {
 
 /** The fixture's org and competition, pooled and OUTSIDE any transaction (`requireFeature` queries the pool; the
  *  device-links `competitionForFixture` reason). Another org's fixture reads exactly like a missing one. */
-async function fixtureOf(auth: AuthCtx, fixtureId: string): Promise<{ competitionId: string }> {
-  const [row] = await sql<{ org_id: string; competition_id: string }[]>`
-    select c.org_id, c.id as competition_id from fixtures f
+async function fixtureOf(auth: AuthCtx, fixtureId: string): Promise<{ competitionId: string; sportKey: string }> {
+  const [row] = await sql<{ org_id: string; competition_id: string; sport_key: string }[]>`
+    select c.org_id, c.id as competition_id, d.sport_key from fixtures f
       join divisions d on d.id = f.division_id
       join competitions c on c.id = d.competition_id
      where f.id = ${fixtureId}`;
   if (!row || row.org_id !== auth.orgId) throw new HttpError(404, "fixture not found");
-  return { competitionId: row.competition_id };
+  return { competitionId: row.competition_id, sportKey: row.sport_key };
 }
 
 /** Serialise every ensure and reissue on one fixture (§6.1): without it two organisers opening the panel at once both
@@ -280,19 +282,31 @@ export async function resolveStreamCode(
  */
 export async function saveStreamSettings(auth: AuthCtx, fixtureId: string, body: PutStreamSettings): Promise<StreamSettings> {
   requireSessionEditor(auth);
-  await fixtureOf(auth, fixtureId);
+  const { sportKey } = await fixtureOf(auth, fixtureId);
+  const a = { orgId: auth.orgId, fixtureId, updatedBy: auth.userId };
   return sql.begin(async (tx) => {
-    if (body.targetId !== undefined) {
-      await writeStreamSettings(tx, { orgId: auth.orgId, fixtureId, targetId: body.targetId, updatedBy: auth.userId });
-    }
-    if (body.autoStream !== undefined) {
-      await writeAutoStream(tx, { orgId: auth.orgId, fixtureId, autoStream: body.autoStream, updatedBy: auth.userId });
-    }
-    const [row] = await tx<{ target_id: string | null; target_chosen: boolean; auto_stream: boolean }[]>`
-      select target_id, target_chosen, auto_stream from fixture_stream_settings where fixture_id = ${fixtureId}`;
+    if (body.targetId !== undefined) await writeStreamSettings(tx, { ...a, targetId: body.targetId });
+    if (body.autoStream !== undefined) await writeAutoStream(tx, { ...a, autoStream: body.autoStream });
+    // R2006: each preference has its own writer, as each field above does. A refused template throws inside this
+    // transaction, so a body that also named other fields writes none of them.
+    if (body.streamMode !== undefined) await writeStreamMode(tx, { ...a, streamMode: body.streamMode });
+    if (body.overlayTemplate !== undefined) await writeOverlayTemplate(tx, { ...a, sportKey, overlayTemplate: body.overlayTemplate });
+    if (body.overlayDelayMs !== undefined) await writeOverlayDelay(tx, { ...a, overlayDelayMs: body.overlayDelayMs });
+    const [row] = await tx<{
+      target_id: string | null; target_chosen: boolean; auto_stream: boolean;
+      stream_mode: StreamMode | null; overlay_template: string | null; overlay_delay_ms: number | null;
+    }[]>`
+      select target_id, target_chosen, auto_stream, stream_mode, overlay_template, overlay_delay_ms
+        from fixture_stream_settings where fixture_id = ${fixtureId}`;
     // No row only for a body that named nothing (the route's schema refuses that): the defaults, with nothing written.
-    if (row === undefined) return { targetId: null, autoStream: false };
-    return { targetId: row.target_chosen ? row.target_id : null, autoStream: row.auto_stream };
+    if (row === undefined) return { targetId: null, autoStream: false, streamMode: null, overlayTemplate: null, overlayDelayMs: null };
+    return {
+      targetId: row.target_chosen ? row.target_id : null,
+      autoStream: row.auto_stream,
+      streamMode: row.stream_mode,
+      overlayTemplate: row.overlay_template,
+      overlayDelayMs: row.overlay_delay_ms,
+    };
   });
 }
 
@@ -356,6 +370,73 @@ export async function writeAutoStream(
     on conflict (fixture_id) do update
        set auto_stream = excluded.auto_stream, updated_by = excluded.updated_by, updated_at = now(),
            auto_start_refusal = case when excluded.auto_stream then fixture_stream_settings.auto_start_refusal else null end`;
+}
+
+/** R2006 (V464): the one writer of `fixture_stream_settings.stream_mode` — the organiser's "Camera only" (`passthrough`),
+ *  "Add the score back" (`composed`) or the default (`null`). Modelled on `writeAutoStream`: an upsert that sets only the
+ *  mode, `updated_by` and `updated_at`, never `target_id`/`target_chosen` (plan R-1). The caller has already proved the
+ *  fixture is `orgId`'s. */
+export async function writeStreamMode(
+  tx: Tx, a: { orgId: string; fixtureId: string; streamMode: StreamMode | null; updatedBy: string | null },
+): Promise<void> {
+  await tx`
+    insert into fixture_stream_settings (fixture_id, org_id, stream_mode, updated_by, updated_at)
+    values (${a.fixtureId}, ${a.orgId}, ${a.streamMode}, ${a.updatedBy}, now())
+    on conflict (fixture_id) do update
+       set stream_mode = excluded.stream_mode, updated_by = excluded.updated_by, updated_at = now()`;
+}
+
+/** R2006 (V462's `overlay_template`, R2004's reader): the one writer of the organiser's score style. An id this fixture's
+ *  sport is not offered NOW (unknown, retired or sport-unsuitable — lib/stream-settings.ts `isPickableTemplate`) is
+ *  refused 400 before the write; `null` resets to the sport's default. The same upsert shape as `writeStreamMode`. */
+export async function writeOverlayTemplate(
+  tx: Tx, a: { orgId: string; fixtureId: string; sportKey: string; overlayTemplate: string | null; updatedBy: string | null },
+): Promise<void> {
+  if (a.overlayTemplate !== null && !isPickableTemplate(a.overlayTemplate, a.sportKey)) {
+    throw new HttpError(400, "overlay template not available for this fixture");
+  }
+  await tx`
+    insert into fixture_stream_settings (fixture_id, org_id, overlay_template, updated_by, updated_at)
+    values (${a.fixtureId}, ${a.orgId}, ${a.overlayTemplate}, ${a.updatedBy}, now())
+    on conflict (fixture_id) do update
+       set overlay_template = excluded.overlay_template, updated_by = excluded.updated_by, updated_at = now()`;
+}
+
+/** R2006 (V462's `overlay_delay_ms`): the one writer of the organiser's Score timing. `null` resets to the server's
+ *  default (config.ts `RELAY_OVERLAY_DELAY_DEFAULT_MS`); `0` is a real override and is stored as 0. The bound is the
+ *  schema's and the column's. A composed create copies the effective value into its session, so a session already running
+ *  never moves. The same upsert shape as `writeStreamMode`. */
+export async function writeOverlayDelay(
+  tx: Tx, a: { orgId: string; fixtureId: string; overlayDelayMs: number | null; updatedBy: string | null },
+): Promise<void> {
+  await tx`
+    insert into fixture_stream_settings (fixture_id, org_id, overlay_delay_ms, updated_by, updated_at)
+    values (${a.fixtureId}, ${a.orgId}, ${a.overlayDelayMs}, ${a.updatedBy}, now())
+    on conflict (fixture_id) do update
+       set overlay_delay_ms = excluded.overlay_delay_ms, updated_by = excluded.updated_by, updated_at = now()`;
+}
+
+/** R2006 (V464): the mode a start that names none streams with — the phone operator's own start and the automatic start.
+ *  The fixture's stored choice (`stream_mode`, null with no row) through `effectiveStreamMode`, against this deployment's
+ *  `composedUnavailable()` — the ONE availability authority `startBroadcast` refuses on — so a stored `composed` on a
+ *  deployment that cannot run one streams the camera rather than refusing. The organiser's Go live states its mode
+ *  itself: its panel opens on the same stored choice and shows what it will send. */
+export async function startModeFor(exec: Tx | typeof sql, fixtureId: string): Promise<StreamMode> {
+  const [row] = await exec<{ stream_mode: StreamMode | null }[]>`
+    select stream_mode from fixture_stream_settings where fixture_id = ${fixtureId}`;
+  return effectiveStreamMode(row?.stream_mode ?? null, !composedUnavailable());
+}
+
+/** R2006: the stored score preferences of each listed fixture, for the panel's page context — ONE read for the page.
+ *  A fixture with no row (or another org's) is left out, and the panel reads it as "all defaults". */
+export async function streamPrefsOf(orgId: string, fixtureIds: readonly string[]): Promise<Record<string, StreamPrefs>> {
+  if (fixtureIds.length === 0) return {};
+  const rows = await sql<{ fixture_id: string; stream_mode: StreamMode | null; overlay_template: string | null; overlay_delay_ms: number | null }[]>`
+    select fixture_id, stream_mode, overlay_template, overlay_delay_ms from fixture_stream_settings
+     where org_id = ${orgId} and fixture_id in ${sql([...fixtureIds])}`;
+  return Object.fromEntries(
+    rows.map((r) => [r.fixture_id, { streamMode: r.stream_mode, overlayTemplate: r.overlay_template, overlayDelayMs: r.overlay_delay_ms }]),
+  );
 }
 
 /** A12: an organiser Stop turns auto START off for the match. Stamps `auto_start_blocked_at` once — the FIRST stamp wins and a
