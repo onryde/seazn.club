@@ -7,7 +7,7 @@
 // So this reads the source. It scans every non-test .ts/.tsx under apps/web/src for a property named `next` whose value
 // is a zod schema, and requires `.max(NEXT_PATH_MAX_LENGTH)` and no other `.max(`. It reports how many schemas it
 // checked, and finding none is a failure (a scan whose pattern drifted from the code would otherwise pass for ever).
-// The four sites that exist today are named, so a refactor that moves one has to say so here.
+// The three sites that exist today are named, so a refactor that moves one has to say so here.
 //
 // Sport: not applicable. This is auth plumbing.
 import { describe, expect, it } from "vitest";
@@ -56,7 +56,6 @@ function boundProblem(text: string): string | null {
 
 /** The sites that carry a `next` bound today, relative to src/. A move or a deletion has to be made here too. */
 const KNOWN_SITES = [
-  "lib/types.ts",
   "app/api/auth/magic-link/route.ts",
   "app/api/auth/magic-link/consume/route.ts",
   "app/api/auth/verify-email/route.ts",

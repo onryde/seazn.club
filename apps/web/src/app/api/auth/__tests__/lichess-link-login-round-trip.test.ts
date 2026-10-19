@@ -11,11 +11,16 @@
 // This suite builds that URL the way the app does, with nothing typed in: the REAL token minter
 // (`mintMatchRoomToken`, claims shaped as invite.ts shapes them), the REAL room path builder (`routes`), the REAL
 // room-shell href builder (`lichessLinkStartHref`), the REAL start route, the REAL login page (the `next` it hands
-// the form), the REAL form (`AuthForm`, submitted), the REAL magic-link / consume / signup / login / verify-email
-// routes, and the REAL magic-link and verify pages' islands. It then follows the redirect the person is landed on
+// the form), the REAL form (`AuthForm`, submitted), the REAL magic-link and magic-link consume routes (and the
+// verify-email route's bound), and the REAL magic-link page's island. It then follows the redirect the person is landed on
 // back through the REAL start route and reads what the callback will use: the stored return path.
 //
-// Stand-ins, and only these: the mail senders (captured, never sent), the limiter (pinned in token-rate-limits),
+// 2026-10-19: the password log-in and sign-up routes were removed (the product signs in by email link and Google only),
+// so the cases that drove them now drive the magic-link request and consume routes instead; the "by signing up" case
+// is gone because no route mints a verification link carrying a `next` any more. That link's `next` handling is pinned
+// in verify-email/__tests__/route.test.ts.
+//
+// Stand-ins, and only these: the mail sender (captured, never sent), the limiter (pinned in token-rate-limits),
 // `next/headers` (a cookie jar Map, read back through the real `getCurrentUser`), `next/navigation`'s router, and
 // the club lookup (`orgBySlug`: the start route's club check, not the thing under test; the online-chess flag is
 // the config's own ONLINE_CHESS_ALWAYS override).
@@ -59,10 +64,6 @@ vi.mock("@/lib/email", async (importOriginal) => ({
     mail.sent.push({ to, link });
     return true;
   }),
-  sendVerificationEmail: vi.fn(async (to: string, link: string) => {
-    mail.sent.push({ to, link });
-    return true;
-  }),
 }));
 
 // The start route's club check: any slug is a club that is offered online chess (the flag is the config override).
@@ -72,8 +73,8 @@ vi.mock("@/server/slug-resolve", () => ({
 
 import { NextResponse } from "next/server";
 import { sql } from "@/lib/db";
-import { hashPassword, safeNextPath } from "@/lib/auth";
-import { NEXT_PATH_MAX_LENGTH, loginSchema } from "@/lib/types";
+import { safeNextPath } from "@/lib/auth";
+import { NEXT_PATH_MAX_LENGTH } from "@/lib/types";
 import { routes } from "@/lib/routes";
 import { lichessLinkStartHref } from "@/lib/lichess-link";
 import { LICHESS_OAUTH_NEXT_COOKIE } from "@/lib/oauth";
@@ -87,14 +88,12 @@ import en from "@/dictionaries/en/ui.json";
 import LoginPage from "@/app/login/page";
 import MagicLinkPage from "@/app/magic-link/page";
 import { GET as START } from "../lichess/route";
-import { POST as LOGIN } from "../login/route";
-import { POST as SIGNUP } from "../signup/route";
+import { POST as VERIFY_EMAIL } from "../verify-email/route";
 import { POST as MAGIC_LINK } from "../magic-link/route";
 import { POST as MAGIC_LINK_CONSUME } from "../magic-link/consume/route";
-import { FIRST_RUN_WIZARD, ORIGIN, openVerifyLink, pageFileFor, warmDefaultLanding } from "./_verify-link";
+import { FIRST_RUN_WIZARD, ORIGIN, pageFileFor, warmDefaultLanding } from "./_verify-link";
 
 const HAS_DB = !!process.env.DATABASE_URL;
-const PASSWORD = "correct-horse-1";
 const made: string[] = [];
 
 /** The sign-in schemas' bound BEFORE this fix. Not an expected value: it is the line the staging link crossed, kept
@@ -270,8 +269,8 @@ afterAll(async () => {
 async function verifiedUser(): Promise<{ id: string; email: string }> {
   const email = `lichess-next-${randomUUID()}@example.test`;
   const [u] = await sql<{ id: string }[]>`
-    insert into users (email, password_hash, display_name, email_verified)
-    values (${email}, ${await hashPassword(PASSWORD)}, 'Lichess Next', true)
+    insert into users (email, display_name, email_verified)
+    values (${email}, 'Lichess Next', true)
     returning id`;
   made.push(u.id);
   return { id: u.id, email };
@@ -301,6 +300,24 @@ async function post(route: (req: Request) => Promise<Response>, path: string, bo
   return { status: res.status, body: (await res.json()) as Envelope };
 }
 
+/** A returning (verified) account signs in the way the app does: ask for a link, read the link that was mailed, consume
+ *  its token. Both calls are the real routes and both carry `next`, as the magic-link page's island does. Returns the
+ *  consume answer and the mailed link. */
+async function magicLinkSignIn(email: string, next?: string) {
+  mail.sent.length = 0;
+  const asked = await post(MAGIC_LINK, "/api/auth/magic-link", { email, ...(next ? { next } : {}) });
+  expect(asked.status, JSON.stringify(asked.body)).toBe(200);
+  expect(mail.sent.map((m) => m.to), "the link was mailed to the address asked for").toEqual([email]);
+  const emailed = new URL(mail.sent[0]!.link);
+  const token = emailed.searchParams.get("token");
+  expect(token, "the mailed link carries a sign-in token").not.toBeNull();
+  const consumed = await post(MAGIC_LINK_CONSUME, "/api/auth/magic-link/consume", {
+    token,
+    ...(next ? { next } : {}),
+  });
+  return { ...consumed, emailed };
+}
+
 // ---- no database: the URL itself -----------------------------------------------------------------------------------
 
 describe("the real nested URL (no database)", () => {
@@ -315,7 +332,7 @@ describe("the real nested URL (no database)", () => {
     expect(loginNext, "the login URL carries the whole start, query included").toBe(link.startHref);
   });
 
-  it("the link the staging player followed is longer than the old bound, and the sign-in schema now takes it", async () => {
+  it("the link the staging player followed is longer than the old bound, and still fits the shared one", async () => {
     const link = await roomLink();
     const loginNext = await startSignedOut(link.startHref);
 
@@ -323,9 +340,8 @@ describe("the real nested URL (no database)", () => {
     expect(loginNext.length, "the real nested next exceeds the former bound").toBeGreaterThan(FORMER_NEXT_CAP);
     // The login page forwards it whole (safeNextPath is its only gate), and the form carries it on.
     expect(await loginPageFormNext(loginNext)).toBe(link.startHref);
-
-    const parsed = loginSchema.safeParse({ email: "p@example.test", password: PASSWORD, next: loginNext });
-    expect(parsed.success, JSON.stringify(parsed.error?.issues)).toBe(true);
+    // The routes themselves take it in the database-backed cases below (the form posts it, the link is mailed).
+    expect(loginNext.length, "and the shared bound takes it").toBeLessThanOrEqual(NEXT_PATH_MAX_LENGTH);
   });
 
   it("the longest real link still fits: the bound has headroom for 80-character slugs", async () => {
@@ -507,49 +523,26 @@ describe.skipIf(!HAS_DB)("a signed-out player links Lichess from the match room 
     await expectBackOnTheRoom(await followStartSignedIn(opened.landed!), link);
   });
 
-  it("with a password: a verified account's login answers with the start, which stores the room path", async () => {
+  it("by magic link, for a verified account: the consume answers with the start, which stores the room path", async () => {
     const link = await roomLink();
     const loginNext = await startSignedOut(link.startHref);
     const user = await verifiedUser();
 
-    const r = await post(LOGIN, "/api/auth/login", { email: user.email, password: PASSWORD, next: loginNext });
+    const r = await magicLinkSignIn(user.email, loginNext);
     expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.emailed.searchParams.get("next"), "the emailed link carries the start").toBe(link.startHref);
     expect(r.body.data?.redirect).toBe(link.startHref);
 
     await expectBackOnTheRoom(await followStartSignedIn(r.body.data!.redirect), link);
-  });
-
-  it("by signing up: the verification link carries the start, and opening it lands on the start, which stores the room path", async () => {
-    const link = await roomLink();
-    const loginNext = await startSignedOut(link.startHref);
-    const email = `lichess-next-${randomUUID()}@example.test`;
-
-    const r = await post(SIGNUP, "/api/auth/signup", { email, password: PASSWORD, next: loginNext });
-    expect(r.status, JSON.stringify(r.body)).toBe(200);
-    const userId = await userByEmail(email);
-    expect(mail.sent.map((m) => m.to)).toEqual([email]);
-    const emailed = new URL(mail.sent[0]!.link);
-    expect(emailed.searchParams.get("next"), "the verification link carries the start").toBe(link.startHref);
-    const [{ token: verifyToken }] = await sql<{ token: string }[]>`select token from email_verifications where user_id = ${userId}`;
-    expect(mail.sent[0]!.link, "premise: the room token is in the emailed link").toContain(link.token);
-    expect(mail.sent[0]!.link, "premise: the verification token is in the emailed link").toContain(`?token=${verifyToken}&`);
-    expect(scrubScoreUrl(mail.sent[0]!.link), "the /verify-email page URL: both tokens go").toBe(
-      mail.sent[0]!.link.split(link.token).join("[token]").split(verifyToken).join("[token]"),
-    );
-
-    const opened = await openVerifyLink(emailed.href, router.push);
-    expect(opened.landed).toBe(link.startHref);
-
-    await expectBackOnTheRoom(await followStartSignedIn(opened.landed!), link);
   });
 
   it("the widest real link: the Set-Cookie the real start writes for the return path fits one cookie", async () => {
     const link = await roomLink(widestSlugs());
     const user = await verifiedUser();
 
-    const r = await post(LOGIN, "/api/auth/login", { email: user.email, password: PASSWORD, next: link.startHref });
+    const r = await magicLinkSignIn(user.email, link.startHref);
     expect(r.status, JSON.stringify(r.body)).toBe(200);
-    expect(r.body.data?.redirect, "login carries the widest link whole").toBe(link.startHref);
+    expect(r.body.data?.redirect, "sign-in carries the widest link whole").toBe(link.startHref);
 
     expect(await followStartSignedIn(r.body.data!.redirect)).toBe(link.selfPath);
     // The header the route wrote, not text built here: URL-encoded value, Max-Age, Path, HttpOnly, SameSite.
@@ -575,17 +568,16 @@ describe.skipIf(!HAS_DB)("a signed-out player links Lichess from the match room 
     const atMax = `/${"a".repeat(NEXT_PATH_MAX_LENGTH - 1)}`;
     expect(atMax.length).toBe(NEXT_PATH_MAX_LENGTH);
 
-    const ok = await post(LOGIN, "/api/auth/login", { email: user.email, password: PASSWORD, next: atMax });
+    const ok = await magicLinkSignIn(user.email, atMax);
     expect(ok.status, JSON.stringify(ok.body)).toBe(200);
     expect(ok.body.data?.redirect).toBe(atMax);
 
-    // Every route that takes a next, one past the maximum: all four refuse it, naming `next`.
+    // Every route that takes a next, one past the maximum: all three refuse it, naming `next`.
     const over = `${atMax}a`;
     const refusals = [
-      await post(LOGIN, "/api/auth/login", { email: user.email, password: PASSWORD, next: over }),
-      await post(SIGNUP, "/api/auth/signup", { email: `over-${randomUUID()}@example.test`, password: PASSWORD, next: over }),
       await post(MAGIC_LINK, "/api/auth/magic-link", { email: user.email, next: over }),
       await post(MAGIC_LINK_CONSUME, "/api/auth/magic-link/consume", { token: "t".repeat(20), next: over }),
+      await post(VERIFY_EMAIL, "/api/auth/verify-email", { token: "t".repeat(20), next: over }),
     ];
     let checked = 0;
     for (const r of refusals) {
@@ -593,7 +585,7 @@ describe.skipIf(!HAS_DB)("a signed-out player links Lichess from the match room 
       expect(r.body.issues?.map((i) => i.path.join(".")), JSON.stringify(r.body)).toEqual(["next"]);
       checked++;
     }
-    expect(checked).toBe(4);
+    expect(checked).toBe(3);
   });
 
   it("an over-long path to another origin is still ignored by the routes: the person gets the default landing, never that origin", async () => {
@@ -603,7 +595,8 @@ describe.skipIf(!HAS_DB)("a signed-out player links Lichess from the match room 
       const evil = `${prefix}${"a".repeat(FORMER_NEXT_CAP + 200 - prefix.length)}`;
       expect(evil.length).toBeGreaterThan(FORMER_NEXT_CAP);
       expect(evil.length).toBeLessThanOrEqual(NEXT_PATH_MAX_LENGTH);
-      const r = await post(LOGIN, "/api/auth/login", { email: user.email, password: PASSWORD, next: evil });
+      const r = await magicLinkSignIn(user.email, evil);
+      expect(r.emailed.searchParams.has("next"), `${prefix}: the mailed link drops an unsafe next`).toBe(false);
       expect(r.status, `${prefix}: ${JSON.stringify(r.body)}`).toBe(200);
       expect(r.body.data?.redirect, prefix).not.toBe(evil);
       expect(new URL(r.body.data!.redirect, ORIGIN).origin, `${prefix}: stays on this origin`).toBe(ORIGIN);

@@ -16,7 +16,6 @@ import {
   officialInviteTemplate,
   passRevokedTemplate,
   staffDisputeAlertTemplate,
-  passwordResetTemplate,
   paymentReminderTemplate,
   refundIssuedTemplate,
   registrationPromotedTemplate,
@@ -74,7 +73,6 @@ function makeBuilders(
 ): [string, { subject: string; html: string; text: string }, string][] {
   return [
     ["verification", verificationTemplate(LINK, dict), "verification.subject"],
-    ["password-reset", passwordResetTemplate(LINK, dict), "passwordReset.subject"],
     ["magic-link", magicLinkTemplate(LINK, dict), "magicLink.subject"],
     ["email-change-confirm", emailChangeConfirmTemplate(LINK, dict), "emailChangeConfirm.subject"],
     [
@@ -428,7 +426,6 @@ describe("email builders compose from the html templates", () => {
   it("CTA builders carry the link in a button href", () => {
     for (const t of [
       verificationTemplate(LINK, emailsEn as Dict),
-      passwordResetTemplate(LINK, emailsEn as Dict),
       magicLinkTemplate(LINK, emailsEn as Dict),
       emailChangeConfirmTemplate(LINK, emailsEn as Dict),
       inviteTemplate("Org", LINK, emailsEn as Dict),

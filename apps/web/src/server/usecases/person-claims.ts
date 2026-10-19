@@ -532,11 +532,11 @@ export async function claimByEmailLink(
 
 /** Opening the emailed link proves the inbox, so the account that holds the address is marked verified — what
  *  magic-link consume does — with one rule consume does not have (PR #991 review I3, "pre-hijack"). An
- *  account that was UNVERIFIED has never shown its password belongs to the inbox owner: a stranger can sign
- *  up with someone else's address (signup, and registration's captain email, take any address) and wait.
- *  Login refuses an unverified account, but verifying it here would switch that password on, for the
- *  squatter, on an account now linked to the claimed profile. So the password and any pending reset tokens
- *  are cleared; the invitee is signed in by this tap and can set a fresh password through the usual reset.
+ *  account that was UNVERIFIED has never shown it belongs to the inbox owner: a stranger can create one for
+ *  someone else's address (a magic-link request, and registration's captain email, take any address) and wait.
+ *  Password sign-in was removed 2026-10-19, so a legacy password hash can no longer switch anything on; it and
+ *  any pending reset tokens are still cleared here, so nothing a squatter set on the account outlives the
+ *  claim. The invitee is signed in by this tap; later sign-ins are by emailed link or Google.
  *  A verified account is left exactly as it is, and so is a Google-linked one (its sign-in is Google's). */
 async function verifyByInbox(tx: Tx, userId: string): Promise<void> {
   const [acct] = await tx<{ email_verified: boolean; google_sub: string | null }[]>`

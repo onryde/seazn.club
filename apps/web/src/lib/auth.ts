@@ -1,5 +1,4 @@
 import "server-only";
-import bcrypt from "bcryptjs";
 import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { sql } from "@/lib/db";
@@ -62,18 +61,6 @@ function secretKey(): Uint8Array {
     return new TextEncoder().encode("dev-insecure-secret-change-me");
   }
   return new TextEncoder().encode(secret);
-}
-
-export async function hashPassword(password: string): Promise<string> {
-  return bcrypt.hash(password, 10);
-}
-
-export async function verifyPassword(
-  password: string,
-  hash: string | null,
-): Promise<boolean> {
-  if (!hash) return false;
-  return bcrypt.compare(password, hash);
 }
 
 /** Issue a signed session cookie for the given user id. */

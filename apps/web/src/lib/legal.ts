@@ -14,7 +14,7 @@ import { sql, type Tx } from "@/lib/db";
  *  app/legal/__tests__/privacy-scheduling-note.test.tsx, and to the
  *  media-consent copy by
  *  app/legal/__tests__/media-consent-copy-version.test.ts. */
-export const LEGAL_VERSION = "2026-10-15";
+export const LEGAL_VERSION = "2026-10-19";
 
 /**
  * Record clickwrap acceptance of Terms + Privacy (GDPR spec 2026-07-14): the

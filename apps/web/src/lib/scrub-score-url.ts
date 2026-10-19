@@ -39,7 +39,7 @@
 // `ONE_TIME_TOKEN_ROUTES` becomes `token=[token]`, plain or URL-encoded at any depth, either hex case (inside a login's
 // `next=`, a referrer). The scope is the ROUTE, not the parameter name: a `token=` on any other path stays (the registration
 // status page's access token is reusable and is not one of these). The routes are the ones whose links the app builds with
-// a single-use token: also `/reset-password`, the funnel's `/start/claim`, a staff `/admin/impersonate` hand-off and
+// a single-use token: also the funnel's `/start/claim`, a staff `/admin/impersonate` hand-off and
 // `/api/auth/change-email/confirm`. Sentry's `request.query_string` has no path to scope by, so it is scrubbed when the
 // event's URL or transaction names one of those routes, the way a capture route's request is recognised (`isCaptureEvent`).
 //
@@ -71,9 +71,8 @@
 // A credential also rides a request BODY, which no URL rule sees: the POST that spends a one-time token sends it as JSON
 // (`{ token, next }`), so a Sentry error on that route carries the working credential in `request.data`. A Sentry event
 // whose request URL or transaction names such a route loses its body, the way a capture route's does (`isCaptureEvent`):
-// the POST routes in `BODY_CREDENTIAL_ROUTES` (sign-in consume, email verification, password reset, email-change
-// confirmation, funnel claim, a registrant's withdraw / checkout / resend, and the two whose body is a PASSWORD: log-in
-// and sign-up, and a team's join POST) and every route with a secret in its path (`SECRET_PATH_ROUTES`: the invite and claim
+// the POST routes in `BODY_CREDENTIAL_ROUTES` (sign-in consume, email verification, email-change confirmation, funnel
+// claim, a registrant's withdraw / checkout / resend, and a team's join POST) and every route with a secret in its path (`SECRET_PATH_ROUTES`: the invite and claim
 // accepts, check-in, revoke). Only a Sentry event has a body to drop.
 //
 // A sampled TRANSACTION carries the request's query string a second time, in its span data, WITH its `?` and beside a URL
@@ -199,14 +198,13 @@ const ENCODED_SECRET_PATH = new RegExp(`(${ENCODED_ROUTE_ROOT}(?:${prefixAlterna
 
 /**
  * The routes whose emailed link carries a SINGLE-USE token in its `token` query parameter to a page that spends it: the
- * sign-in link, the email-verification link, the password reset, the funnel claim (it signs the visitor in), a staff
+ * sign-in link, the email-verification link, the funnel claim (it signs the visitor in), a staff
  * impersonation hand-off and an email-change confirmation. A `token=` is scrubbed only when it is a parameter of one of
  * these. Not here, on purpose: the registration status page's `?token=` is a reusable access token for a cart.
  */
 const ONE_TIME_TOKEN_ROUTES = [
   "/magic-link",
   "/verify-email",
-  "/reset-password",
   "/start/claim",
   "/admin/impersonate",
   "/api/auth/change-email/confirm",
@@ -385,27 +383,23 @@ function isOneTimeTokenEvent(event: Event): boolean {
 
 /**
  * The POST routes that read a CREDENTIAL from the request body, as Next route templates (`[id]` is one path segment):
- * the sign-in consume `{ token, next }`, the email verification `{ token, next }`, the password reset `{ token,
- * password }` (the new password is in it too), the email-change confirmation (its token rides the query; any body goes
- * with it), the funnel claim `{ token }`, the registrant's access-token calls (withdraw, checkout, resend), and the
- * routes whose body is a PASSWORD: log-in and sign-up `{ email, password, next }`, and the team join POST, whose body
- * carries the join code (`{ join_code, … }`). A password is a standing credential rather than a one-time token, but it leaks
- * the same way. A route whose secret is in its PATH is not listed:
+ * the sign-in consume `{ token, next }`, the email verification `{ token, next }`, the email-change confirmation (its
+ * token rides the query; any body goes with it), the funnel claim `{ token }`, the registrant's access-token calls
+ * (withdraw, checkout, resend), and the team join POST, whose body carries the join code (`{ join_code, … }`). There is
+ * no password route any more (password sign-in was removed 2026-10-19); one added later must be listed here again, and
+ * scrub-request-body.test.ts fails until it is. A route whose secret is in its PATH is not listed:
  * `SECRET_PATH_ROUTES` covers it. Exported so a test can compare the list with the route files, which are where it
  * comes from: a route that takes a token or a password in its body and is missing here fails that test.
  */
 export const BODY_CREDENTIAL_ROUTES = [
   "/api/auth/magic-link/consume",
   "/api/auth/verify-email",
-  "/api/auth/reset-password",
   "/api/auth/change-email/confirm",
   "/api/funnel/claim",
   "/api/v1/public/registrations/[id]/checkout",
   "/api/v1/public/registrations/[id]/withdraw",
   "/api/v1/public/registrations/by-ref/[ref]/withdraw",
   "/api/v1/public/registrations/groups/[id]/resend",
-  "/api/auth/login",
-  "/api/auth/signup",
   "/api/v1/public/orgs/[orgSlug]/competitions/[slug]/register/join",
 ] as const;
 const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -537,7 +531,7 @@ function scrubJoinCodeKeys<E extends Event>(event: E): E {
  * frames and span data. A capture route's event also loses its Bearer and its
  * request body (A18); a one-time-token route's event also loses the token in
  * its bare `request.query_string`; the event of a route that takes a credential
- * in its body (`BODY_CREDENTIAL_ROUTES`: a token or a password) or in its path
+ * in its body (`BODY_CREDENTIAL_ROUTES`: a token or a join code) or in its path
  * loses `request.data`.
  */
 export function scrubSentryEvent<E extends Event>(event: E): E {

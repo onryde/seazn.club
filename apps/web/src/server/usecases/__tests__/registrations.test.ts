@@ -3918,8 +3918,8 @@ describe.skipIf(!HAS_DB)("inviteUnclaimedMembers (RS008 — claim-invite sweep)"
     const { orgId, ownerId } = await seedOrg("pro");
     const { division } = await rig(asOwner(orgId, ownerId));
     const [{ id: signedInUserId }] = await sql<{ id: string }[]>`
-      insert into users (email, display_name, password_hash)
-      values (${`u-${randomUUID().slice(0, 8)}@test.local`}, 'Signed In', 'x')
+      insert into users (email, display_name)
+      values (${`u-${randomUUID().slice(0, 8)}@test.local`}, 'Signed In')
       returning id`;
     const { entrantId, personIdByName } = await seedEntrantWithPlayers(orgId, division.id, [
       {
@@ -4012,8 +4012,8 @@ describe.skipIf(!HAS_DB)("inviteUnclaimedMembers (RS008 — claim-invite sweep)"
       { fullName: "Claims Later", email: "later@test.local", consentStatus: "granted" },
     ]);
     const [{ id: laterUserId }] = await sql<{ id: string }[]>`
-      insert into users (email, display_name, password_hash)
-      values (${`u-${randomUUID().slice(0, 8)}@test.local`}, 'Later User', 'x')
+      insert into users (email, display_name)
+      values (${`u-${randomUUID().slice(0, 8)}@test.local`}, 'Later User')
       returning id`;
     await sql`update persons set user_id = ${laterUserId} where id = ${personIdByName.get("Claims Later")!}`;
 

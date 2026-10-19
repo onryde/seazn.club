@@ -2,12 +2,12 @@
 // Mint a live fixture, wait for OPEN_MS, then fire one SIX and print seq.
 // Companion: browser measures fetch/DOM latency against wall clock.
 import { readFileSync, writeFileSync } from "node:fs";
+import { signInByMagicLink } from "./seed-signin.ts";
 
 const BASE = process.env.SMOKE_BASE ?? "http://127.0.0.1:3326";
 const OPEN_MS = Number(process.env.PROBE_OPEN_MS ?? 8000);
 const state = JSON.parse(readFileSync(new URL("./.seed-demo-state.json", import.meta.url), "utf8"));
 const EMAIL = process.env.SEED_EMAIL ?? state.pro.email;
-const PASSWORD = process.env.SEED_PASSWORD ?? "smokepass123";
 
 const jar = new Map();
 const cookie = () => [...jar.entries()].map(([k, v]) => `${k}=${v}`).join("; ");
@@ -35,7 +35,7 @@ async function call(path, method = "GET", body) {
 }
 
 const list = (x) => (Array.isArray(x) ? x : (x?.items ?? []));
-await call("/api/auth/login", "POST", { email: EMAIL, password: PASSWORD });
+await signInByMagicLink(call, EMAIL);
 const comps = list(await call("/api/v1/competitions"));
 const comp = comps.find((c) => (c.name || "").includes("Southend Premier")) ?? comps[0];
 if (!comp) throw new Error("no competition — seed demo first");

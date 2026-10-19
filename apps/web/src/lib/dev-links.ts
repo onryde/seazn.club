@@ -2,9 +2,10 @@
  * Whether this server may hand a sign-in / claim link back over HTTP instead
  * of only emailing it.
  *
- * Three routes want this — `api/auth/magic-link`, `api/funnel/start` and
- * `api/auth/signup` — and before this helper existed each decided for itself.
- * Two of them decided it the same wrong way:
+ * Two routes want this — `api/auth/magic-link` and `api/funnel/start` (a third,
+ * the retired password `api/auth/signup`, was removed 2026-10-19) — and before
+ * this helper existed each decided for itself. Two of the three decided it the
+ * same wrong way:
  *
  *     if (!sent || process.env.NODE_ENV !== "production") …
  *
@@ -31,7 +32,7 @@
  * production-mode harness opts in by setting `AUTH_DEV_LINKS=1`. Production
  * sets neither, and a broken mailer now fails closed.
  *
- * Deliberately ONE helper for all three routes. Three copies of a rule about
+ * Deliberately ONE helper for every route. Separate copies of a rule about
  * who may see a credential is how two of them ended up wrong in the same way,
  * and the next route to want a dev link should inherit the answer rather than
  * invent a third variant.

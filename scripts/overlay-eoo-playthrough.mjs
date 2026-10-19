@@ -2,11 +2,11 @@
 // Live overlay demo on the BAR theme (never slate): mint a fresh 2-team
 // fixture, toss → start → two short innings packed with 6 / 4 / W ×3 each.
 import { readFileSync, writeFileSync } from "node:fs";
+import { signInByMagicLink } from "./seed-signin.ts";
 
 const BASE = process.env.SMOKE_BASE ?? "http://127.0.0.1:3326";
 const GAP_MS = Number(process.env.DEMO_GAP_MS ?? 5000);
 const OPEN_WAIT_MS = Number(process.env.DEMO_OPEN_WAIT_MS ?? 15000);
-const PASSWORD = process.env.SEED_PASSWORD ?? "smokepass123";
 const state = JSON.parse(readFileSync(new URL("./.seed-demo-state.json", import.meta.url), "utf8"));
 const EMAIL = process.env.SEED_EMAIL ?? state.pro.email;
 
@@ -47,7 +47,7 @@ async function step(label, fn) {
   await sleep(GAP_MS);
 }
 
-await call("/api/auth/login", "POST", { email: EMAIL, password: PASSWORD });
+await signInByMagicLink(call, EMAIL);
 
 const comps = list(await call("/api/v1/competitions"));
 const comp = comps.find((c) => (c.name || "").includes("Southend Premier")) ?? comps[0];

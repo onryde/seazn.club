@@ -430,7 +430,6 @@ describe("toolchain: pnpm workspace", () => {
     for (const dep of [
       "@anthropic-ai/sdk",
       "@seazn/engine",
-      "bcryptjs",
       "exceljs",
       "playwright",
       "postgres",

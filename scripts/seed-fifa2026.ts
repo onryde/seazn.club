@@ -7,12 +7,13 @@
 // decisive scorelines so the bracket populates through to a Final.
 //
 // Drives the app HTTP API on SEED_BASE (like scripts/seed-demo.ts) and uses
-// DATABASE_URL to (a) provision/verify the owner account and (b) flip the org's
-// subscription to Pro (48 entrants + two stages exceed the free caps).
+// DATABASE_URL to flip the org's subscription to Pro (48 entrants + two stages
+// exceed the free caps).
 //
-// Usage (dev server must be running on SEED_BASE):
+// Usage (dev server must be running on SEED_BASE; it signs in by emailed link, so the server
+// must expose the link: development, or AUTH_DEV_LINKS=1):
 //   SEED_BASE=http://localhost:3000 \
-//   DATABASE_URL=postgres://…  SEED_EMAIL=ashokhein@gmail.com SEED_PASSWORD=… \
+//   DATABASE_URL=postgres://…  SEED_EMAIL=ashokhein@gmail.com \
 //   node --experimental-strip-types scripts/seed-fifa2026.ts
 //
 // Resume-safe: reuses an existing org/competition/division by name and skips
@@ -21,12 +22,11 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import postgres from "postgres";
-import bcrypt from "bcryptjs";
+import { signInByMagicLink } from "./seed-signin.ts";
 
 // ─────────────────────────── config ────────────────────────────
 const BASE = process.env.SEED_BASE ?? "http://localhost:3000";
 const EMAIL = process.env.SEED_EMAIL ?? "ashokhein@gmail.com";
-const PASSWORD = process.env.SEED_PASSWORD ?? "worldcup2026!";
 const ORG_NAME = "FIFA World Cup 2026";
 const COMP_NAME = "FIFA World Cup 2026";
 const DIV_NAME = process.env.SEED_DIV_NAME ?? "Main";
@@ -214,32 +214,9 @@ let data: Data;
 let entrantToCodeGlobal = new Map<string, string>();
 
 async function ensureOwnerAndLogin() {
-  // Create the account if missing, force-verify via DB (no email dependency),
-  // then password-login. A password is set ONLY when the account has none
-  // (additive for OAuth/magic-link accounts) — an existing password is never
-  // overwritten, so a real account is only touched if it had no password.
-  const existing = await sql<
-    { password_hash: string | null }[]
-  >`select password_hash from users where email = ${EMAIL}`;
-  if (existing.length === 0) {
-    try {
-      await call("/api/auth/signup", "POST", {
-        email: EMAIL,
-        password: PASSWORD,
-      });
-    } catch (e) {
-      if (!/exists|registered|taken|in use|already/i.test(String(e))) throw e;
-    }
-  }
-  await sql`update users set email_verified = true where email = ${EMAIL}`;
-  const [u] = await sql<
-    { password_hash: string | null }[]
-  >`select password_hash from users where email = ${EMAIL}`;
-  if (!u?.password_hash) {
-    await sql`update users set password_hash = ${await bcrypt.hash(PASSWORD, 10)} where email = ${EMAIL}`;
-    console.log(`Set an additive password on ${EMAIL} (account had none) for seeder login.`);
-  }
-  await call("/api/auth/login", "POST", { email: EMAIL, password: PASSWORD });
+  // Sign in by emailed link: an unknown email creates the account, and consuming the link verifies it and starts the
+  // session. There is no password to provision any more (the password routes were removed 2026-10-19).
+  await signInByMagicLink(call, EMAIL);
 }
 
 async function setPro(orgId: string) {

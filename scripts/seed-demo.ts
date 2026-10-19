@@ -3,7 +3,8 @@
 // group+stepladder), mixed entrant kinds (individual/team/pair), random
 // entrant counts, and results played so standings/fixtures/brackets populate.
 //
-// Usage (dev server must be running on SEED_BASE, default localhost:3000):
+// Usage (dev server must be running on SEED_BASE, default localhost:3000; it signs in by
+// emailed link, so the server must expose the link: development, or AUTH_DEV_LINKS=1):
 //   npm run seed:demo:setup -- --account=pro         (or --account=community)
 //   npm run seed:demo -- --account=pro
 //
@@ -15,13 +16,13 @@
 // divisions that already exist, so tweak the PLANs below and rerun.
 import { writeFileSync, readFileSync } from "node:fs";
 import { findOrCreateCompetition } from "./seed-resume.ts";
+import { signInByMagicLink } from "./seed-signin.ts";
 import { publishDrafts } from "./seed-publish.ts";
 import { completeStageIntoNext } from "./seed-progression.ts";
 import { TEMPLATES } from "./seed-demo-templates.ts";
 
 const BASE = process.env.SEED_BASE ?? "http://localhost:3000";
 const STATE = new URL("./.seed-demo-state.json", import.meta.url).pathname;
-const PASSWORD = process.env.SEED_PASSWORD ?? "smokepass123";
 
 const jar = new Map<string, string>();
 const cookieHeader = () => [...jar.entries()].map(([k, v]) => `${k}=${v}`).join("; ");
@@ -751,15 +752,12 @@ async function main() {
 
   if (phase === "setup") {
     const email = `delivered+smoke-${account}-${1000 + rnd(9000)}@resend.dev`;
-    const reg = await call("/api/auth/signup", "POST", {
-      email,
-      password: PASSWORD,
-    });
-    await call("/api/auth/verify-email", "POST", { token: reg.verify_token });
+    // An unknown email creates the account; consuming the link verifies it and starts the session.
+    await signInByMagicLink(call, email);
     await call("/api/onboarding/complete", "POST");
     await call("/api/tour", "POST");
     writeFileSync(STATE, JSON.stringify({ ...loadState(), [account]: { email } }));
-    console.log(`${account} account: ${email} / ${PASSWORD}`);
+    console.log(`${account} account: ${email}`);
 
     // Pro account gets a real pro subscription row — entitlements resolve from
     // plan_entitlements exactly like a paying org (no piecemeal overrides).
@@ -815,7 +813,7 @@ async function main() {
     throw new Error(
       `no ${account} account in ${STATE} — run --phase=setup --account=${account} first`,
     );
-  await call("/api/auth/login", "POST", { email, password: PASSWORD });
+  await signInByMagicLink(call, email);
 
   for (const comp of PLAN) {
     // Resume-safe by NAME, checked before creating — NOT by catching a 409.

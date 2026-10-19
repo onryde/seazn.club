@@ -14,7 +14,7 @@ export default function PrivacyPage() {
       <MarketingNav />
       <main className="mx-auto max-w-3xl px-4 py-16">
         <h1 className="mb-2 text-3xl font-bold text-purple-900">Privacy Policy</h1>
-        <p className="mb-8 text-sm text-slate-400">Last updated: 15 October 2026</p>
+        <p className="mb-8 text-sm text-slate-400">Last updated: 19 October 2026</p>
         <div className="prose prose-slate max-w-none space-y-6 text-sm text-slate-700">
 
           <section>
@@ -25,7 +25,7 @@ export default function PrivacyPage() {
           <section>
             <h2 className="mb-2 text-lg font-semibold text-slate-800">2. Data we collect</h2>
             <ul className="list-disc space-y-1 pl-5">
-              <li><strong>Account data:</strong> email address, display name, avatar URL, password hash.</li>
+              <li><strong>Account data:</strong> email address, display name, avatar URL.</li>
               <li><strong>Organisation data:</strong> organisation name, slug, member roles.</li>
               <li><strong>Tournament data:</strong> player names, results, standings, audit logs.</li>
               <li><strong>Billing data:</strong> subscription status, plan. Card details are held by Stripe and never stored on our servers.</li>
@@ -49,7 +49,7 @@ export default function PrivacyPage() {
             <h2 className="mb-2 text-lg font-semibold text-slate-800">4. How we use your data</h2>
             <ul className="list-disc space-y-1 pl-5">
               <li>Providing, operating, and improving the service.</li>
-              <li>Sending transactional emails (verification, password reset, billing receipts).</li>
+              <li>Sending transactional emails (verification, sign-in links, billing receipts).</li>
               <li>Detecting and preventing abuse or fraud.</li>
               <li>Responding to support requests.</li>
             </ul>
@@ -94,7 +94,7 @@ export default function PrivacyPage() {
 
           <section>
             <h2 className="mb-2 text-lg font-semibold text-slate-800">11. Security</h2>
-            <p>Data is encrypted in transit (TLS) and at rest. Passwords are hashed with bcrypt. Access is controlled by row-level security policies at the database level. Staff access is logged and audited.</p>
+            <p>Data is encrypted in transit (TLS) and at rest. Sign-in is by a single-use emailed link or by Google. Access is controlled by row-level security policies at the database level. Staff access is logged and audited.</p>
           </section>
 
           <section>

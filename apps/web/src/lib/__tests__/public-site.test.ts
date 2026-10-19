@@ -45,6 +45,20 @@ describe("reserved slugs (doc 09 §1)", () => {
       expect(isReservedSlug(slug)).toBe(true);
     }
   });
+  it("keeps the retired password pages reserved: an old reset email or bookmark must never land on an organisation's slug", () => {
+    // /forgot-password and /reset-password were removed 2026-10-19 (no more password sign-in), and their URLs now end
+    // at the app's 404. Reserved stays: reset emails carried /reset-password?token=… for an hour and people bookmark
+    // /forgot-password, so freeing the name would let an organisation take a URL that people still hold.
+    let checked = 0;
+    for (const slug of ["forgot-password", "reset-password", "FORGOT-PASSWORD", "Reset-Password"]) {
+      expect(isReservedSlug(slug), slug).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    // The positive pair: a slug that merely contains the words is an ordinary organisation slug.
+    expect(isReservedSlug("password-managers-club")).toBe(false);
+    expect(isReservedSlug("reset-password-fans")).toBe(false);
+  });
   it("is case-insensitive and allows normal org slugs", () => {
     expect(isReservedSlug("API")).toBe(true);
     expect(isReservedSlug("riverside-cc")).toBe(false);

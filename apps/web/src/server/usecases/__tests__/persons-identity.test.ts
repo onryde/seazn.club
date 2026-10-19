@@ -172,8 +172,8 @@ describe.skipIf(!HAS_DB)("persons lane identity (#402)", () => {
   it("rejects a second player-lane person for the same user in one org", async () => {
     const { auth } = await seedOrg("pro");
     const [user] = await sql<{ id: string }[]>`
-      insert into users (email, display_name, password_hash)
-      values (${`lane-${randomUUID().slice(0, 8)}@test.local`}, 'Lane Tester', 'x')
+      insert into users (email, display_name)
+      values (${`lane-${randomUUID().slice(0, 8)}@test.local`}, 'Lane Tester')
       returning id`;
 
     await sql`
@@ -189,8 +189,8 @@ describe.skipIf(!HAS_DB)("persons lane identity (#402)", () => {
   it("accepts the same user in BOTH lanes — the case that killed V345", async () => {
     const { auth } = await seedOrg("pro");
     const [user] = await sql<{ id: string }[]>`
-      insert into users (email, display_name, password_hash)
-      values (${`dual-${randomUUID().slice(0, 8)}@test.local`}, 'Dual Role', 'x')
+      insert into users (email, display_name)
+      values (${`dual-${randomUUID().slice(0, 8)}@test.local`}, 'Dual Role')
       returning id`;
 
     await sql`insert into persons (org_id, full_name, user_id, lane)

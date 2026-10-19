@@ -1,9 +1,9 @@
-import crypto from "node:crypto";
 import { sql } from "@/lib/db";
 import { requireStaff, logStaffAction } from "@/lib/admin";
 import { handler, HttpError } from "@/lib/http";
 import { sendVerificationEmail } from "@/lib/email";
 import { baseUrl } from "@/lib/oauth";
+import { createVerificationToken } from "@/lib/verification";
 
 /** Resend email verification link on behalf of a user. Support or superadmin. */
 export async function POST(
@@ -19,16 +19,13 @@ export async function POST(
     if (!user) throw new HttpError(404, "User not found");
     if (user.email_verified) throw new HttpError(400, "Email already verified");
 
-    // Invalidate old tokens and issue a fresh one
+    // Invalidate old tokens, then issue a fresh one through the shared minter (24h, single use).
     await sql`delete from email_verifications where user_id = ${id}`;
-    const token = crypto.randomBytes(32).toString("hex");
-    const expires = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    await sql`
-      insert into email_verifications (user_id, token, expires_at)
-      values (${id}, ${token}, ${expires.toISOString()})`;
+    const token = await createVerificationToken(id);
 
-    // The /verify-email PAGE, as the signup email links it. The API route
-    // beside it is POST-only, so a link there answers a click with a 405.
+    // The /verify-email PAGE, which mounts the island that POSTs the token to the API route beside it. That route is
+    // POST-only, so a link straight at it would answer a click with a 405. This staff action is the only thing that
+    // emails a verify link now (the password sign-up that used to is gone).
     const link = `${baseUrl(req)}/verify-email?token=${token}`;
     await sendVerificationEmail(user.email, link);
     await logStaffAction(staff.id, "resend_verification", "user", id);

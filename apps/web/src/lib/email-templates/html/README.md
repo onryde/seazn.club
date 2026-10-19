@@ -79,7 +79,6 @@ plain-text inputs). `email-builders.test.ts` pins each recipe.
 | Email (builder) | Kind | Recipe |
 | --- | --- | --- |
 | `verification.ts` | transactional | paragraph + button + link-fallback |
-| `password-reset.ts` | transactional | paragraph + button + link-fallback |
 | `magic-link.ts` | transactional | paragraph + button + link-fallback |
 | `email-change-confirm.ts` | transactional | paragraph + button + link-fallback |
 | `email-change-notice.ts` | transactional | paragraph only (no CTA) |

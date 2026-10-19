@@ -5,12 +5,12 @@
 // window between landing and consumption a still-live credential sits in `$current_url` (consent-gated, but a third
 // party), in Sentry's request URL, breadcrumbs and `request.query_string`, and in a replay's URL list. Each such URL's
 // `token=` query value becomes `token=[token]`, plain or URL-encoded at any depth, and the rest of the URL is kept.
-// The same holds for every other single-use token a link carries to a page that consumes it (reset-password, the funnel
-// claim, an impersonation hand-off, an email-change confirmation).
+// The same holds for every other single-use token a link carries to a page that consumes it (the funnel claim, an
+// impersonation hand-off, an email-change confirmation).
 //
 // Every token here is minted by the REAL minter (`createLoginLink`, `createVerificationToken`,
-// `createPasswordResetToken`, `createImpersonationToken`; only the Postgres round trip is a stand-in, see
-// _fake-sql.ts), and every link is built by the REAL route that emails it (magic-link, signup, forgot-password). The
+// `createImpersonationToken`; only the Postgres round trip is a stand-in, see _fake-sql.ts), and every link is built by
+// the REAL route that emails it (magic-link, and the staff resend of the verification link). The
 // expected value of each case is the same string with the minted token swapped for the placeholder, never a typed
 // literal, and never taken from the scrubber's own route list: the routes swept are the ones the app's own link
 // builders name (a source scan), so a new builder cannot ship unscrubbed without this file saying so.
@@ -44,6 +44,13 @@ vi.mock("@/lib/legal", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/legal")>()),
   stampTermsAcceptance: vi.fn(async () => {}),
 }));
+// The resend-verification route is staff-only; the staff check and its audit-log write are the stand-ins, the route and its
+// link builder are real. (`createImpersonationToken` below stays the real one.)
+vi.mock("@/lib/admin", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/admin")>()),
+  requireStaff: vi.fn(async () => ({ id: "00000000-0000-4000-8000-000000000001" })),
+  logStaffAction: vi.fn(async () => {}),
+}));
 // The org-invites route is editor-only; the session check is the stand-in, the route and its link builder are real.
 vi.mock("@/lib/auth", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/auth")>()),
@@ -59,7 +66,6 @@ vi.mock("@/lib/email", async (importOriginal) => {
     ...(await importOriginal<typeof import("@/lib/email")>()),
     sendMagicLinkEmail: record,
     sendVerificationEmail: record,
-    sendPasswordResetEmail: record,
     sendInviteEmail: vi.fn(async (to: string, _org: string, link: string) => {
       mail.sent.push({ to, link });
       return true;
@@ -71,7 +77,6 @@ import { inserts, USER_ID } from "./_fake-sql";
 import { APP_DIR, linkBuilders, NOT_ONE_TIME } from "./_route-scan";
 import { createLoginLink } from "@/lib/login-link";
 import { createVerificationToken } from "@/lib/verification";
-import { createPasswordResetToken } from "@/lib/password-reset";
 import { createImpersonationToken } from "@/lib/admin";
 import { routes } from "@/lib/routes";
 import { lichessLinkStartHref } from "@/lib/lichess-link";
@@ -80,8 +85,7 @@ import { mintClaimSecret } from "@/server/usecases/person-claims";
 import { mintCheckinToken } from "@/server/usecases/checkin-token";
 import { posthogBeforeSend, scrubRecordingEvent, scrubScoreUrl, scrubSentryEvent } from "../scrub-score-url";
 import { POST as MAGIC_LINK } from "@/app/api/auth/magic-link/route";
-import { POST as SIGNUP } from "@/app/api/auth/signup/route";
-import { POST as FORGOT_PASSWORD } from "@/app/api/auth/forgot-password/route";
+import { POST as RESEND } from "@/app/api/admin/users/[id]/resend-verification/route";
 import { POST as ORG_INVITES } from "@/app/api/orgs/[id]/invites/route";
 
 const ORIGIN = "https://seazn.club";
@@ -107,13 +111,12 @@ afterEach(() => vi.unstubAllEnvs());
 
 // ---- real tokens -------------------------------------------------------------------------------------------------
 
-const pool = { login: [] as string[], verification: [] as string[], reset: [] as string[], impersonation: [] as string[] };
+const pool = { login: [] as string[], verification: [] as string[], impersonation: [] as string[] };
 const MINTS = 300;
 beforeAll(async () => {
   for (let i = 0; i < MINTS; i++) {
     pool.login.push(await createLoginLink(USER_ID));
     pool.verification.push(await createVerificationToken(USER_ID));
-    pool.reset.push(await createPasswordResetToken(USER_ID));
     pool.impersonation.push(await createImpersonationToken(USER_ID, USER_ID));
   }
 }, 60_000);
@@ -125,7 +128,7 @@ describe("premise: the minted tokens are real and varied", () => {
       expect(new Set(tokens).size, `${kind}: unique`).toBe(MINTS);
       for (const t of tokens) expect(encodeURIComponent(t), `${kind}: needs no escaping in a URL`).toBe(t);
     }
-    for (const kind of ["login", "verification", "reset"] as const) {
+    for (const kind of ["login", "verification"] as const) {
       expect(pool[kind].some((t) => t.includes("-")), `${kind} has a '-'`).toBe(true);
       expect(pool[kind].some((t) => t.includes("_")), `${kind} has a '_'`).toBe(true);
     }
@@ -135,6 +138,8 @@ describe("premise: the minted tokens are real and varied", () => {
 // ---- the real emailed links -------------------------------------------------------------------------------------
 
 type Route = (req: Request) => Promise<Response>;
+/** The staff "resend verification" action, the one thing that emails a /verify-email link now, as a plain POST. */
+const RESEND_VERIFICATION: Route = (req) => RESEND(req, { params: Promise.resolve({ id: USER_ID }) });
 /** POST to a real route and return the link it emailed, plus the token it minted (read off the row it inserted). */
 async function drive(route: Route, pathname: string, table: string, body: unknown) {
   mail.sent.length = 0;
@@ -178,7 +183,7 @@ const hasRoute = (route: string) =>
 
 const REAL_LINKS = [
   { name: "magic-link", route: MAGIC_LINK, pathname: "/api/auth/magic-link", table: "login_links", page: "/magic-link", body: (next?: string) => ({ email: "a@example.test", ...(next ? { next } : {}) }) },
-  { name: "signup (verification)", route: SIGNUP, pathname: "/api/auth/signup", table: "email_verifications", page: "/verify-email", body: (next?: string) => ({ email: "b@example.test", password: "correct-horse-1", ...(next ? { next } : {}) }) },
+  { name: "resend-verification (verification)", route: RESEND_VERIFICATION, pathname: `/api/admin/users/${USER_ID}/resend-verification`, table: "email_verifications", page: "/verify-email", body: () => ({}) },
 ] as const;
 
 describe.each(REAL_LINKS)("the link the real $name route emails", ({ route, pathname, table, page, body }) => {
@@ -189,7 +194,21 @@ describe.each(REAL_LINKS)("the link the real $name route emails", ({ route, path
     expect(link, "premise: the token is a real query value").toBe(`${ORIGIN}${page}?token=${token}`);
     expect(scrubScoreUrl(link)).toBe(`${ORIGIN}${page}?token=${PLACEHOLDER}`);
   });
+});
 
+// The sign-in link takes a `next`; the staff resend of a verification link does not (the signup that put a `next` on a
+// /verify-email link is gone, so no route builds one now; the shape still arrives from an email sent before 2026-10-19,
+// and the sweep below covers it on every one-time route).
+const LINKS_WITH_NEXT = REAL_LINKS.filter((l) => l.page === "/magic-link");
+
+describe("which real links the next-variants below run for", () => {
+  it("the sign-in link only: the staff resend builds a verification link with no next", () => {
+    expect(LINKS_WITH_NEXT.map((l) => l.page)).toEqual(["/magic-link"]);
+    expect(REAL_LINKS.map((l) => l.page)).toEqual(["/magic-link", "/verify-email"]);
+  });
+});
+
+describe.each(LINKS_WITH_NEXT)("the link the real $name route emails, with a next", ({ route, pathname, table, page, body }) => {
   it("with a next: the token is scrubbed and the encoded next is kept exactly", async () => {
     const { link, token } = await drive(route, pathname, table, body("/dashboard"));
     expect(link).toBe(`${ORIGIN}${page}?token=${token}&next=${encodeURIComponent("/dashboard")}`);
@@ -248,15 +267,6 @@ describe("the link the real org-invites route emails", () => {
   });
 });
 
-describe("the link the real forgot-password route emails", () => {
-  it("is /reset-password?token=…, and its token is scrubbed", async () => {
-    const { link, token } = await drive(FORGOT_PASSWORD, "/api/auth/forgot-password", "password_resets", { email: "c@example.test" });
-    expect(hasRoute("/reset-password")).toBe(true);
-    expect(scrubScoreUrl(link)).toBe(`${ORIGIN}/reset-password?token=${PLACEHOLDER}`);
-    expect(without(link, token)).toBe(scrubScoreUrl(link));
-  });
-});
-
 // ---- which links carry a one-time token: the app's own builders (linkBuilders, _route-scan.ts) -----------------------
 
 describe("every emailed ?token= link is scrubbed, or is knowingly not a one-time token", () => {
@@ -265,9 +275,9 @@ describe("every emailed ?token= link is scrubbed, or is knowingly not a one-time
 
   it("the scan found the builders (anti-vacuity), and each names a real route", () => {
     expect([...builders.keys()].sort()).toEqual(
-      expect.arrayContaining(["/magic-link", "/verify-email", "/reset-password", "/start/claim", "/admin/impersonate", "/api/auth/change-email/confirm"]),
+      expect.arrayContaining(["/magic-link", "/verify-email", "/start/claim", "/admin/impersonate", "/api/auth/change-email/confirm"]),
     );
-    expect(builders.size).toBeGreaterThanOrEqual(7);
+    expect(builders.size).toBeGreaterThanOrEqual(6);
     for (const route of builders.keys()) {
       // "/register/status" is the tail of /shared/<org>/<comp>/register/status: a real page, under a dynamic prefix.
       if (route in NOT_ONE_TIME) continue;
@@ -289,7 +299,7 @@ describe("every emailed ?token= link is scrubbed, or is knowingly not a one-time
       }
     }
     for (const route of Object.keys(NOT_ONE_TIME)) expect(builders.has(route), `${route} is no longer built anywhere: delete it`).toBe(true);
-    expect(scrubbed).toBeGreaterThanOrEqual(6);
+    expect(scrubbed).toBeGreaterThanOrEqual(5);
     expect(kept).toBe(Object.keys(NOT_ONE_TIME).length);
   });
 });
@@ -333,7 +343,7 @@ const FORMS: { name: string; build: (route: string, t: string) => string }[] = [
 describe("the sweep", () => {
   it("scrubs the minted token out of every form, for every one-time route, with every kind of real token; the rest of the URL is kept; a second pass changes nothing", () => {
     const routesSwept = oneTimeRoutes();
-    expect(routesSwept.length).toBeGreaterThanOrEqual(6);
+    expect(routesSwept.length).toBeGreaterThanOrEqual(5);
     // A few tokens per kind, spread across the pool so the charset's `-` and `_` are among them.
     const samples = Object.entries(pool).flatMap(([kind, tokens]) => [0, 1, 150, 299].map((i) => ({ kind, token: tokens[i]! })));
     let checked = 0;
@@ -355,7 +365,7 @@ describe("the sweep", () => {
     }
     expect(failures).toEqual([]);
     expect(checked).toBe(routesSwept.length * samples.length * FORMS.length);
-    expect(checked).toBeGreaterThan(2000);
+    expect(checked).toBeGreaterThan(1300);
   });
 });
 
@@ -424,7 +434,7 @@ describe("an empty token=", () => {
 describe("the hooks, on the real emailed links", () => {
   it("PostHog: the $pageview on landing (and its referrer, autocaptured hrefs and person properties) loses the token", async () => {
     const magic = await drive(MAGIC_LINK, "/api/auth/magic-link", "login_links", { email: "d@example.test", next: "/dashboard" });
-    const verify = await drive(SIGNUP, "/api/auth/signup", "email_verifications", { email: "e@example.test", password: "correct-horse-1" });
+    const verify = await drive(RESEND_VERIFICATION, `/api/admin/users/${USER_ID}/resend-verification`, "email_verifications", {});
     const event: CaptureResult = {
       uuid: "u1",
       event: "$pageview",
@@ -472,7 +482,7 @@ describe("the hooks, on the real emailed links", () => {
   });
 
   it("Sentry Replay: a replay_event's URL list and a recording frame's URL", async () => {
-    const { link, token } = await drive(SIGNUP, "/api/auth/signup", "email_verifications", { email: "g@example.test", password: "correct-horse-1" });
+    const { link, token } = await drive(RESEND_VERIFICATION, `/api/admin/users/${USER_ID}/resend-verification`, "email_verifications", {});
     expect(JSON.stringify(scrubSentryEvent({ type: "replay_event", urls: [link] } as unknown as Event))).not.toContain(token);
     const frame = { type: 5, timestamp: 1, data: { tag: "performanceSpan", payload: { description: link } } };
     expect(JSON.stringify(scrubRecordingEvent(frame))).not.toContain(token);
@@ -495,7 +505,7 @@ describe("Sentry's request.query_string (no `?`) is scrubbed when the event is o
       checked++;
     }
     expect(checked).toBe(routesSwept.length);
-    expect(checked).toBeGreaterThanOrEqual(6);
+    expect(checked).toBeGreaterThanOrEqual(5);
   });
 
   it("the token anywhere in the query, repeated, and an empty one beside a live one", () => {

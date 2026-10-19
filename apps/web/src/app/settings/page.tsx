@@ -34,7 +34,7 @@ export default async function LegacySettings({
   // commits and the outcome is still discarded, one hop later than before.
   //
   // `next` round-trips through machinery that already exists: AuthForm forwards
-  // it to the magic-link/signup/google routes, safeNextPath rejects anything
+  // it to the magic-link/google routes, safeNextPath rejects anything
   // not a site-relative path (so no open redirect), and postAuthLanding honours
   // it. Coming back here signed in, the forward below runs normally.
   const target = `/settings${qs ? `?${qs}` : ""}`;

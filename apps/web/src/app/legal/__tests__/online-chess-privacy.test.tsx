@@ -47,8 +47,8 @@ describe("privacy — the online-chess camera and the Lichess account link (I-4)
     expect(section).not.toBe("");
   });
 
-  it("is dated 15 October 2026: the camera sentence changed that day (D16 states the guarantee)", () => {
-    expect(privacy).toContain("Last updated: 15 October 2026");
+  it("is dated 19 October 2026: the sign-in wording changed that day (the camera sentence, D16, last changed 15 October)", () => {
+    expect(privacy).toContain("Last updated: 19 October 2026");
   });
 
   it("says what is processed: camera video during a match, the Lichess username and the OAuth token", () => {

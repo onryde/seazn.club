@@ -26,7 +26,6 @@ vi.mock("@/lib/db", async (importOriginal) => ({
 import { USER_ID } from "./_fake-sql";
 import { APP_DIR } from "./_route-scan";
 import { createLoginLink } from "@/lib/login-link";
-import { createPasswordResetToken } from "@/lib/password-reset";
 import { createVerificationToken } from "@/lib/verification";
 import { generateRefCode } from "@/lib/ref-code";
 import { mintMatchRoomToken } from "@/server/usecases/match-room-token";
@@ -77,7 +76,6 @@ const OAUTH_STATE = "the OAuth state: compared to an httpOnly cookie, so it is w
 const QUERY_VERDICTS: Record<string, true | string> = {
   "magic-link/page.tsx:token": true,
   "verify-email/page.tsx:token": true,
-  "reset-password/page.tsx:token": true,
   "start/claim/page.tsx:token": true,
   "admin/impersonate/page.tsx:token": true,
   "api/auth/change-email/confirm/route.ts:token": true,
@@ -117,7 +115,7 @@ describe("every page and route that reads a credential-looking query parameter h
     for (const k of ["register/join/page.tsx:join_code", "register/join/route.ts:join_code", "google/callback/route.ts:code", "lichess/callback/route.ts:state"]) {
       expect(found.some((f) => f.endsWith(k)), k).toBe(true);
     }
-    expect(Object.values(QUERY_VERDICTS).filter((v) => v === true).length).toBeGreaterThanOrEqual(10);
+    expect(Object.values(QUERY_VERDICTS).filter((v) => v === true).length).toBeGreaterThanOrEqual(9);
     expect(Object.values(QUERY_VERDICTS).filter((v) => v !== true).length).toBeGreaterThanOrEqual(8);
   });
 });
@@ -128,7 +126,7 @@ async function witnesses(): Promise<Record<string, string[]>> {
   const roomToken = () =>
     mintMatchRoomToken({ fixtureId: randomUUID(), personId: randomUUID(), roundOpenId: randomUUID(), roundOpenedAt: new Date().toISOString() });
   return {
-    token: [await createLoginLink(USER_ID), await createVerificationToken(USER_ID), await createPasswordResetToken(USER_ID)],
+    token: [await createLoginLink(USER_ID), await createVerificationToken(USER_ID)],
     t: [await roomToken(), await roomToken()],
     join_code: [generateRefCode(), generateRefCode(), generateRefCode()],
     join: [generateRefCode(), generateRefCode(), generateRefCode()],
@@ -179,9 +177,9 @@ describe("each verdict is what the scrubber does", () => {
         }
       }
     }
-    expect(pool.token.length + pool.t.length + pool.join_code.length, "premise: witnesses exist").toBeGreaterThanOrEqual(8);
+    expect(pool.token.length + pool.t.length + pool.join_code.length, "premise: witnesses exist").toBeGreaterThanOrEqual(7);
     expect(failures.slice(0, 5), `${failures.length} of ${checked} failed`).toEqual([]);
-    expect(checked).toBeGreaterThanOrEqual(150);
+    expect(checked).toBeGreaterThanOrEqual(126);
   });
 
   it("a string: the URL comes out unchanged, so 'left visible' is what happens", async () => {
