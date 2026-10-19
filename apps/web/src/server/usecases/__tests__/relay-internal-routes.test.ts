@@ -28,7 +28,7 @@ const sentry = vi.hoisted(() => ({ captureError: vi.fn() }));
 vi.mock("@/lib/sentry", () => ({ captureError: sentry.captureError }));
 
 import { sql } from "@/lib/db";
-import { RelayHeartbeatReply, RelayJobSession } from "@/server/api-v1/schemas";
+import { RelayHeartbeatReply, RelayJobSession, type RelayHeartbeat } from "@/server/api-v1/schemas";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { STREAM_PLATFORM_PRESETS } from "@/lib/stream-destinations";
 import { PHASE_CHANNELS, PROGRAMME_PHASES } from "@/lib/relay-phase";
@@ -49,7 +49,7 @@ import { POST as beat } from "@/app/api/internal/relay/sessions/[sid]/heartbeat/
 import { makeCommunityRig, seedOrg, startedDivisionWithFixture } from "./_rig";
 import { grantCredits } from "../stream-credits";
 import { createStreamTarget } from "../stream-targets";
-import { createSession, defaultDeps, sessionFactsForJob, stopSession } from "../stream-sessions";
+import { createSession, defaultDeps, heartbeat, sessionFactsForJob, stopSession } from "../stream-sessions";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -347,15 +347,19 @@ describe.skipIf(!HAS_DB)("internal relay routes", () => {
   });
 
   // Task 11 review G5: `egressBytes` is optional, and an omitted field is NOT a measured zero.
-  it("egressBytes: a beat that reports it stores it; a beat that OMITS it leaves the stored value alone; a beat that reports 0 stores 0", async () => {
+  // Owed 37 (compositor PR #27): within ONE attempt the stored count never goes backwards — a lower count is a beat that
+  // was overtaken (the final beat rides its own lane), so the GREATEST is kept. A NEW attempt's measured zero still
+  // stores 0: "Owed 37 … a NEW attempt after an old one stopped writes normally" below is that half of G5.
+  it("egressBytes: a beat that reports it stores it; a beat that OMITS it leaves the stored value alone; within one attempt a LOWER count (a 0 included) never moves it backwards", async () => {
     const s = await session();
     expect(await egressOf(s.sessionId), "the column's default before any beat").toBe(0);
     const steps: [Record<string, unknown>, number][] = [
       [{ state: "playing", egressBytes: 5_000_000 }, 5_000_000],
       [{ state: "playing" }, 5_000_000],
       [{ state: "playing", fps: 30 }, 5_000_000],
+      [{ state: "playing", egressBytes: 3_000_000 }, 5_000_000],     // overtaken: never backwards
       [{ state: "playing", egressBytes: 7_250_000 }, 7_250_000],
-      [{ state: "playing", egressBytes: 0 }, 0],
+      [{ state: "playing", egressBytes: 0 }, 7_250_000],             // a zero on the SAME attempt is not a decrease either
     ];
     let checked = 0;
     for (const [body, expected] of steps) {
@@ -1816,5 +1820,187 @@ describe.skipIf(!HAS_DB)("R2004: a composed session's facts — Input A to read,
     expect(templateOf(await factsOf(body))).toBe("bug");
     const none = await session();
     expect((await columnsOf(none.sessionId)).theme_id, "no choice anywhere: null, resolved at the URL").toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// Owed 37 (compositor PR onryde/seazn.club.compositor#27): the compositor sends its FINAL beat on a lane of its own, so a
+// periodic beat it sent BEFORE the final can be received — and committed — AFTER it. A late beat must never overwrite
+// the stored final: not `last_heartbeat` (the exit's record), not `heartbeat_at` (it anchors the stale window, so a
+// late beat delays `lost`), not the egress count (it would move backwards). The late beat is still a SAMPLE. What
+// follows a final beat is the R2003 / R2003b rulings', typed here — never read off the code under test.
+// ---------------------------------------------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("Owed 37: a late beat never overwrites the final stopped beat", () => {
+  /** The three facts the guard protects, as the row holds them (heartbeat_at as text: exact to the microsecond). */
+  async function beatFacts(sid: string) {
+    const [r] = await sql<{ last_heartbeat: Record<string, unknown> | null; heartbeat_at: string | null; egress: string }[]>`
+      select last_heartbeat, heartbeat_at::text as heartbeat_at, egress_bytes::text as egress from fixture_stream_sessions where id = ${sid}`;
+    return { lastHeartbeat: r!.last_heartbeat, heartbeatAt: r!.heartbeat_at, egress: Number(r!.egress) };
+  }
+  /** How many backends wait, directly or down a chain, on the one `pid` holds — a lock queue on the session row. */
+  async function queuedBehind(pid: number, want: number): Promise<number> {
+    let n = 0;
+    for (let i = 0; i < 150 && n < want; i++) {
+      await new Promise((res) => setTimeout(res, 20));
+      [{ n }] = await sql<{ n: number }[]>`
+        with recursive chain(pid) as (
+          select ${pid}::int
+          union
+          select a.pid from pg_stat_activity a join chain c on c.pid = any(pg_blocking_pids(a.pid))
+        ) select (count(*) - 1)::int as n from chain`;
+    }
+    return n;
+  }
+  // The counts a run of this attempt reports: the final carries the most (it is sent LAST), and the late periodic beat
+  // carries one between the previous beat's and the final's (it was sent before the final). Distinct on purpose: a
+  // late beat that wrote its count would land on LATE_EGRESS, and one that kept the larger would land on FINAL_EGRESS.
+  const PREV_EGRESS = 4_000_000, FINAL_EGRESS = 5_000_000, LATE_EGRESS = 4_500_000;
+  const LATE: RelayHeartbeat = { state: "playing", fps: 23, egressBytes: LATE_EGRESS };
+
+  // What a late periodic beat meets after each final, from the rulings: R2003 (no reason → lost → the ONE retry, a NEW
+  // attempt; ended / deadline complete the session; refused fails it), R2003b (fatal → Fly restarts the compositor IN
+  // PLACE on the SAME attempt, and the restarted process beats again — AGENTS.md class 13: a guard must not skip that
+  // legitimate arrival), and stoppedBeatTrigger's own record (signalled is exit 0, which Fly never restarts; session_gone
+  // is a run whose session is already over) — after those two no live process of this attempt is left to beat.
+  type AfterFinal = "late_dropped" | "over_410" | "same_attempt_restart" | "new_attempt";
+  const AFTER_FINAL: Record<BeatExitReason | "absent" | "null", AfterFinal> = {
+    absent: "new_attempt", null: "new_attempt",
+    ended: "over_410", deadline: "over_410", refused: "over_410",
+    fatal: "same_attempt_restart",
+    signalled: "late_dropped", session_gone: "late_dropped",
+  };
+
+  it("final, then a late periodic beat — every exit reason from a PLAYING runner, and ended / signalled while our own stop is STOPPING it: the stored final stays whole (last_heartbeat, heartbeat_at, egress) wherever no live process of the attempt is left; a terminal session answers 410 and writes nothing; a restart in place and a new attempt still write (count reported)", async () => {
+    expect(Object.keys(AFTER_FINAL).sort(), "every exit reason is decided").toEqual([...BEAT_EXIT_REASONS, "absent", "null"].sort());
+    const cases: (readonly [label: string, reason: keyof typeof AFTER_FINAL, from: "playing" | "stopping", want: AfterFinal])[] = [
+      // Our own Stop: the SIGINT holds the Final scene and the compositor's final beat lands while the runner is stopping —
+      // the production shape of Owed 37 (the session is `ending`, not terminal, so the late beat reaches the guard).
+      ["stopping × ended", "ended", "stopping", "late_dropped"],
+      ["stopping × signalled", "signalled", "stopping", "late_dropped"],
+      ...(Object.entries(AFTER_FINAL) as [keyof typeof AFTER_FINAL, AfterFinal][]).map(([reason, want]) => [`playing × ${reason}`, reason, "playing", want] as const),
+    ];
+    const seen = new Set<AfterFinal>();
+    let checked = 0;
+    for (const [label, reason, from, want] of cases) {
+      const s = await playingSession();
+      expect((await postBeat(s.sessionId, { state: "playing", egressBytes: PREV_EGRESS }, { token: s.jobToken })).status, `${label}: premise beat`).toBe(200);
+      if (from === "stopping") {
+        // A real Machine takes its flush to exit after the SIGINT; the fake would report it stopped at once (the R2003 STOPPING test's runner).
+        const slowStop = Object.assign(Object.create(s.runner) as FakeRunner, { async stop() { /* signalled; still flushing */ } });
+        setRelayDriversForTest({ ingest: s.ingest, runner: slowStop });
+        await stopSession(s.auth, s.fixtureId, s.sessionId, defaultDeps("http://app.test"));
+        expect(await row(s.sessionId), `${label}: premise`).toMatchObject({ state: "ending", runner_state: "stopping" });
+      }
+      const final = { ...stoppedBeat(reason), egressBytes: FINAL_EGRESS };
+      expect((await postBeat(s.sessionId, final, { token: s.jobToken })).status, `${label}: the final`).toBe(200);
+      // One beat interval passes (inside the composed window), so a late beat that wrote heartbeat_at would MOVE it.
+      await advance(s.sessionId, BEAT_S);
+      const stored = await beatFacts(s.sessionId);
+      expect(stored.lastHeartbeat, `${label}: premise — the final is stored`).toEqual(final);
+      const samplesBefore = (await samples(s.sessionId)).length;
+      const res = await postBeat(s.sessionId, LATE, { token: s.jobToken });
+      const after = await beatFacts(s.sessionId);
+      const late = (await samples(s.sessionId)).slice(samplesBefore);
+      if (want === "late_dropped") {
+        expect(res.status, label).toBe(200);
+        expect(after, `${label}: the final survives whole`).toEqual(stored);
+        expect(late, `${label}: the late beat is still a sample`).toEqual([{ source: "heartbeat", fps: LATE.fps, bitrate_kbps: null }]);
+        // The guard drops a NON-final beat only: the final itself, replayed (its lane retried the POST), is the same
+        // fact and still writes — heartbeat_at moves to the replay.
+        expect((await postBeat(s.sessionId, final, { token: s.jobToken })).status, `${label}: the replayed final`).toBe(200);
+        const replayed = await beatFacts(s.sessionId);
+        expect(replayed.lastHeartbeat, `${label}: the replayed final`).toEqual(final);
+        expect(replayed.heartbeatAt, `${label}: the replayed final is written`).not.toBe(stored.heartbeatAt);
+      } else if (want === "over_410") {
+        expect(res.status, label).toBe(410);
+        expect(after, `${label}: a terminal session writes nothing`).toEqual(stored);
+        expect(late, `${label}: …not even a sample`).toEqual([]);
+      } else {
+        expect(res.status, label).toBe(200);
+        expect(after.lastHeartbeat, `${label}: the next process's beat is written`).toEqual(LATE);
+        expect(after.heartbeatAt, `${label}: and it holds the stale window off`).not.toBe(stored.heartbeatAt);
+        if (want === "same_attempt_restart") {
+          expect(s.runner.created, `${label}: premise — no retry, the same attempt`).toHaveLength(1);
+          expect(after.egress, `${label}: the SAME attempt's count never goes backwards`).toBe(Math.max(FINAL_EGRESS, LATE_EGRESS));
+        } else {
+          expect(s.runner.created, `${label}: premise — the ONE retry booted attempt 2`).toHaveLength(RUNNER_MAX_ATTEMPTS);
+          expect(after.egress, `${label}: a new attempt's count is its own, lower or not`).toBe(LATE_EGRESS);
+        }
+      }
+      seen.add(want);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every case ran").toBe(cases.length);
+    expect([...seen].sort(), "every outcome was reached").toEqual(["late_dropped", "new_attempt", "over_410", "same_attempt_restart"]);
+  });
+
+  it("the RACE, on two connections: the late periodic beat is in flight before the final commits and commits after it — the final survives (last_heartbeat, heartbeat_at, egress), and the late beat is a sample", async () => {
+    const s = await playingSession();
+    expect((await postBeat(s.sessionId, { state: "playing", egressBytes: PREV_EGRESS }, { token: s.jobToken })).status).toBe(200);
+    // Each beat on its own clock, so the stored heartbeat_at says WHICH beat wrote it.
+    const FINAL_AT = new Date(Date.now() + 1_000), LATE_AT = new Date(Date.now() + 2_000);
+    const depsAt = (at: Date) => ({ ...defaultDeps("http://app.test"), now: () => at });
+    const final: RelayHeartbeat = { state: "stopped", exitReason: "ended", egressBytes: FINAL_EGRESS };
+    // A third connection holds the session row, so both beats queue on it in the order they arrive: the final first (on
+    // its own lane), then the periodic one. Released, the final commits first and the periodic one second — the order
+    // Owed 37 describes. Without a locked decision the periodic beat read the row BEFORE the final committed.
+    let release!: () => void;
+    const mayCommit = new Promise<void>((res) => (release = res));
+    let signalHeld!: (pid: number) => void;
+    const held = new Promise<number>((res) => (signalHeld = res));
+    const holder = sql.begin(async (tx) => {
+      const [{ pid }] = await tx<{ pid: number }[]>`select pg_backend_pid() as pid`;
+      await tx`select id from fixture_stream_sessions where id = ${s.sessionId} for update`;
+      signalHeld(pid);
+      await mayCommit;
+    });
+    const holderPid = await held;
+    const settle = <T,>(p: Promise<T>) => p.then((v) => ({ ok: true as const, v }), (e: unknown) => ({ ok: false as const, e }));
+    const finalBeat = settle(heartbeat(s.sessionId, s.jobToken, final, depsAt(FINAL_AT)));
+    expect(await queuedBehind(holderPid, 1), "the race was not staged: the final never queued on the row").toBeGreaterThanOrEqual(1);
+    const lateBeat = settle(heartbeat(s.sessionId, s.jobToken, LATE, depsAt(LATE_AT)));
+    expect(await queuedBehind(holderPid, 2), "the race was not staged: the periodic beat never queued behind the final").toBeGreaterThanOrEqual(2);
+    release();
+    await holder;
+    const [f, l] = await Promise.all([finalBeat, lateBeat]);
+    expect(f.ok ? "resolved" : String((f as { e: unknown }).e), "the final is answered").toBe("resolved");
+    expect(l.ok ? "resolved" : String((l as { e: unknown }).e), "the late beat is answered, never a 500").toBe("resolved");
+    const after = await beatFacts(s.sessionId);
+    expect(after.lastHeartbeat, "the stored beat is the FINAL").toEqual(final);
+    expect(after.heartbeatAt === null ? null : new Date(after.heartbeatAt).getTime(), "heartbeat_at is the final's").toBe(FINAL_AT.getTime());
+    expect(after.egress, "egress is the final's").toBe(FINAL_EGRESS);
+    const fps = (await samples(s.sessionId)).map((r) => r.fps);
+    expect(fps, "the late beat is still a sample").toContain(LATE.fps);
+  });
+
+  it("a NEW attempt after an old one stopped writes normally — its measured zero included (G5's other half) — then holds its own count and drops its own late beat (both directions, AGENTS.md class 13)", async () => {
+    const s = await playingSession();
+    expect((await postBeat(s.sessionId, { state: "playing", egressBytes: 9_000_000 }, { token: s.jobToken })).status).toBe(200);
+    // Attempt 1's final gives no reason: lost → torn down → the ONE retry (R2003), which restarts the beat window.
+    expect((await postBeat(s.sessionId, { ...stoppedBeat("absent"), egressBytes: 9_500_000 }, { token: s.jobToken })).status).toBe(200);
+    expect(s.runner.created, "premise: attempt 2 booted").toHaveLength(RUNNER_MAX_ATTEMPTS);
+    expect(await row(s.sessionId), "premise: live, the replacement booting").toMatchObject({ state: "live", runner_state: "booting" });
+    expect(await lastHeartbeat(s.sessionId), "premise: attempt 1's final is stored").toMatchObject({ state: "stopped" });
+    await advance(s.sessionId, BEAT_S);
+    const token2 = s.runner.created[1]!.jobToken;
+    const steps: [body: Record<string, unknown>, egress: number, stored: "this" | "kept"][] = [
+      [{ state: "starting", egressBytes: 0 }, 0, "this"],            // the replacement's first beat: written, and its 0 is a measured 0
+      [{ state: "playing", egressBytes: 1_000 }, 1_000, "this"],
+      [{ state: "playing" }, 1_000, "this"],                         // omitted: unchanged
+      [{ state: "playing", egressBytes: 500 }, 1_000, "this"],       // attempt 2's own count never goes backwards
+      [{ state: "stopped", exitReason: "signalled", egressBytes: 2_000 }, 2_000, "this"],   // attempt 2's final
+      [{ state: "playing", egressBytes: 1_500 }, 2_000, "kept"],     // …and attempt 2's own late beat is dropped
+    ];
+    let checked = 0, last: Record<string, unknown> | null = null;
+    for (const [body, egress, stored] of steps) {
+      expect((await postBeat(s.sessionId, body, { token: token2 })).status, JSON.stringify(body)).toBe(200);
+      const after = await beatFacts(s.sessionId);
+      if (stored === "this") last = body;
+      expect(after.lastHeartbeat, JSON.stringify(body)).toEqual(last);
+      expect(after.egress, JSON.stringify(body)).toBe(egress);
+      checked++;
+    }
+    expect(checked).toBe(steps.length);
+    expect(s.runner.created, "no third Machine").toHaveLength(RUNNER_MAX_ATTEMPTS);
   });
 });

@@ -2304,18 +2304,44 @@ async function beatSecretsOf(sessionId: string, mode: string, token: string): Pr
 
 export async function heartbeat(sessionId: string, token: string, body: RelayHeartbeat, deps: SessionDeps): Promise<{ desiredState: "live" | "ending" }> {
   await verifyRelayToken(token, { sid: sessionId, scope: "relay-job" });
-  const before = await readRow(sessionId);
-  if (!before) throw new HttpError(404, "session not found");
-  if (isTerminal(before.state)) throw new HttpError(410, "session has ended", "SESSION_ENDED");
-  // The beat is recorded FIRST (a late beat that arrived is not a stale one), then the policy runs.
-  // G5 (Task 11 review): `egressBytes` is optional, and an omitted field leaves the stored count alone — only a Machine
-  // that REPORTS 0 stores 0 (the A29 rule: absent is not a measured zero).
   // R2002 review Q3: the Machine's free text is scrubbed before EITHER store keeps it (its job token, anything
   // JWT-shaped, everything from the first `?`), so last_heartbeat and the sample's raw hold the same detail.
-  const beat: RelayHeartbeat = body.exitDetail == null ? body : { ...body, exitDetail: scrubBeatText(body.exitDetail, await beatSecretsOf(sessionId, before.mode, token)) };
-  const previousRung = await previousRungOf(before);   // read BEFORE this beat is stored or sampled
-  await sql`update fixture_stream_sessions set last_heartbeat = ${sql.json(beat as never)}, heartbeat_at = ${deps.now()},
-              egress_bytes = coalesce(${beat.egressBytes ?? null}::bigint, egress_bytes) where id = ${sessionId}`;
+  // A PEEK (unlocked, pooled) for the reads that cannot run inside the beat's transaction (lib/db's nesting guard):
+  // the secrets to scrub with (R2004 m1) and the sizing alarm's previous rung (#981), both read BEFORE this beat is stored
+  // or sampled. Every decision about the write is re-taken on the LOCKED row below.
+  const peek = await readRow(sessionId);
+  if (!peek) throw new HttpError(404, "session not found");
+  if (isTerminal(peek.state)) throw new HttpError(410, "session has ended", "SESSION_ENDED");
+  const beat: RelayHeartbeat = body.exitDetail == null ? body : { ...body, exitDetail: scrubBeatText(body.exitDetail, await beatSecretsOf(sessionId, peek.mode, token)) };
+  const previousRung = await previousRungOf(peek);
+  // The beat is recorded FIRST (a late beat that arrived is not a stale one), then the policy runs.
+  // Owed 37 (compositor PR #27): the compositor sends its FINAL beat on a lane of its own, so a periodic beat it sent
+  // BEFORE the final can be received — and committed — AFTER it. So whether this beat may overwrite the stored one is
+  // decided on the LOCKED row, in the transaction that writes it (an unlocked read let a beat that read the row before
+  // the final committed overwrite the final after it). Once this attempt's stored beat is a final that closed the
+  // attempt (`closesAttempt`), a non-final beat is a SAMPLE only: last_heartbeat keeps the exit's record, heartbeat_at
+  // keeps the stale window running from the final (a late beat would delay `lost`), and the egress count stands. A
+  // final beat still writes (a replayed final is the same fact), and so does a beat of a NEW attempt
+  // (`storedBeatIsThisAttempt`). The row lock is taken alone — never the org lock — like recordEffect's (A7).
+  // G5 (Task 11 review): `egressBytes` is optional, and an omitted field leaves the stored count alone — only a Machine
+  // that REPORTS 0 stores 0 (the A29 rule: absent is not a measured zero). Within ONE attempt the count never goes
+  // backwards (Owed 37: the GREATEST is kept — a lower count is an overtaken beat); a new attempt's count is its own.
+  const before = (await sql.begin(async (tx) => {
+    const cur = await lockRow(tx, sessionId);
+    if (!cur) throw new HttpError(404, "session not found");
+    if (isTerminal(cur.state)) throw new HttpError(410, "session has ended", "SESSION_ENDED");
+    const thisAttempt = storedBeatIsThisAttempt(cur);
+    if (thisAttempt && closesAttempt(cur.last_heartbeat) && beat.state !== "stopped") {
+      log.info({ sid: sessionId, state: beat.state }, "stream session: a beat received after this attempt's final beat is a sample only — the stored final stands");
+      return cur;
+    }
+    const egress = beat.egressBytes ?? null;
+    await tx`update fixture_stream_sessions set last_heartbeat = ${sql.json(beat as never)}, heartbeat_at = ${deps.now()},
+               egress_bytes = case when ${thisAttempt}::boolean then greatest(${egress}::bigint, egress_bytes)
+                                   else coalesce(${egress}::bigint, egress_bytes) end
+              where id = ${sessionId}`;
+    return cur;
+  })) as Row;
   await sampleBeat(sessionId, before.org_id, beat, deps);
   raiseSizingAlarm(before, beat, previousRung);
   let s = (await applyExpiry(sessionId, deps))!;
@@ -2361,9 +2387,7 @@ export async function heartbeat(sessionId: string, token: string, body: RelayHea
  *  null: an extra alarm is the safe direction for a sizing alarm, a lost one is not. */
 async function previousRungOf(before: Row): Promise<unknown> {
   if (before.mode !== "composed") return null;
-  const storedIsThisAttempt = before.beat_window_at == null
-    || (before.heartbeat_at != null && new Date(before.heartbeat_at).getTime() > new Date(before.beat_window_at).getTime());
-  if (!storedIsThisAttempt) return null;
+  if (!storedBeatIsThisAttempt(before)) return null;
   if (before.last_heartbeat?.state !== "stopped") return before.last_heartbeat?.rung ?? null;
   try {
     const since = before.beat_window_at;
@@ -2377,6 +2401,29 @@ async function previousRungOf(before: Row): Promise<unknown> {
     log.error({ sid: before.id, err: String(err) }, "stream session: the sizing alarm's previous rung could not be read — the beat may re-alarm");
     return null;
   }
+}
+
+/** Whether the row's STORED beat belongs to the current attempt. #980 review M2: a retry boots a new Machine — a new
+ *  process — and restarts the beat window (beat_window_at, I4: "booted a replacement … restarts the window here"), so a
+ *  stored beat from before that anchor is the OLD Machine's. (The stale-beat arm moves the anchor too: after it a stored
+ *  beat reads as another attempt's, so a rung re-alarms and the next beat writes — the direction that never drops a live
+ *  process's beat.) The sizing alarm's dedupe and the beat route's Owed 37 guard read it; without a seq on the wire (a
+ *  later contract bump) it is the only attempt boundary a beat has. */
+function storedBeatIsThisAttempt(row: Pick<Row, "beat_window_at" | "heartbeat_at">): boolean {
+  return row.beat_window_at == null
+    || (row.heartbeat_at != null && new Date(row.heartbeat_at).getTime() > new Date(row.beat_window_at).getTime());
+}
+
+/** Owed 37: a stored beat that is a FINAL after which no live process of this attempt is left to beat. Every stopped beat
+ *  but one: a `fatal` final is a crash Fly restarts IN PLACE on the SAME attempt (R2003b, `stoppedBeatTrigger` →
+ *  callback_crashed, runner-fly.ts `on-failure`), and the restarted process's beats are what hold the composed stale
+ *  window off — so they must still write (AGENTS.md class 13). A late beat of the crashed process is indistinguishable
+ *  from them without a seq, and writes too. The rest (R2003): no reason tears the Machine down (its retry is a NEW
+ *  attempt), `ended` / `deadline` / `refused` end the session, `signalled` is exit 0 (Fly never restarts it), and
+ *  `session_gone` is a run whose session is already over. */
+function closesAttempt(stored: Row["last_heartbeat"]): boolean {
+  if (stored?.state !== "stopped") return false;
+  return stoppedBeatTrigger(stored.exitReason as RelayHeartbeat["exitReason"])?.type !== "callback_crashed";
 }
 
 /** The relay sizing alarm (owner ruling 2026-10-18, compositor `docs/_INDEX.md` Owed 20: "no lite mode; if CPU impacts,
