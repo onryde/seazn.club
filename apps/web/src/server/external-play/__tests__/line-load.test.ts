@@ -20,12 +20,14 @@ import {
 import {
   LINE_LOAD,
   admissionPace,
+  barsOf,
   boardTimes,
   callsOf,
   classifyCreates,
   classifyInversions,
   drainOf,
   etaStats,
+  heldStays,
   judgeCosts,
   nettingOwed,
   peakPerSecond,
@@ -332,5 +334,44 @@ describe("ETA shown against the wait that happened, and the busiest second", () 
   it("the peak a second: the busiest whole second and how many seconds had any request", () => {
     expect(peakPerSecond([0, 100, 999, 1_000, 1_001, 1_002, 1_003, 5_000])).toEqual({ peak: 4, seconds: 3 });
     expect(peakPerSecond([])).toEqual({ peak: 0, seconds: 0 });
+  });
+});
+
+describe("which pass bars a capacity scenario owes, by the shape of its run (harness bar fix)", () => {
+  // The scenario names are the ones the harness header documents (chess-30-boards.load.ts, "RUN IT"); the expected sets are written from
+  // that header's words, not read back from barsOf: the line FORMS (two or more stays waiting, so there are pairs and positions to order)
+  // on B-honest and the B-slow legs; at B's instant cameras the bucket runs dry ONCE, so B owes the shape of that run instead.
+  const NAMED = ["A", "A-slow", "B", "B-honest", "B-slow-5", "B-slow-10", "B-end", "B-end-slow-10", "regress", "mixed"] as const;
+  const COST = ["B", "B-honest", "B-slow-5", "B-slow-10"];
+  const ORDER = ["B-honest", "B-slow-5", "B-slow-10"];
+  const HELD = ["B"];
+
+  it("every documented scenario, against the three bar families (10 scenarios checked)", () => {
+    let checked = 0;
+    for (const name of NAMED) {
+      const got = barsOf(name);
+      expect(got.cost, `${name}: cost bars`).toBe(COST.includes(name));
+      expect(got.order, `${name}: order bars (admission pairs, inversions, positions)`).toBe(ORDER.includes(name));
+      expect(got.held, `${name}: held-stays bar`).toBe(HELD.includes(name));
+      checked += 1;
+    }
+    expect(checked, "scenarios checked").toBe(NAMED.length);
+  });
+
+  it("the order bars and the held-stays bar are disjoint: B owes pairs of nothing, B-honest owes no held-count of its own", () => {
+    for (const name of NAMED) expect(barsOf(name).order && barsOf(name).held, name).toBe(false);
+    expect(barsOf("B").order, "B (instant cameras): 0 pairs is the shape of the run, not a failure").toBe(false);
+    expect(barsOf("B-honest").order, "B-honest measured 210 pairs: it owns the order bars").toBe(true);
+  });
+
+  it("an unknown scenario name owes nothing - a label, as the header says", () => {
+    expect(barsOf("anything-else")).toEqual({ cost: false, order: false, held: false });
+  });
+
+  it("heldStays counts the stays the budget held (a queued_at stamp), and is 0 for none", () => {
+    const stay = (id: string, queued: number | null, admitted: number | null) => ({ id, firstClaimAt: 100, queuedAt: queued, admittedAt: admitted, servedAt: null });
+    expect(heldStays([]), "empty").toBe(0);
+    expect(heldStays([stay("a", null, null), stay("b", null, null)]), "never held").toBe(0);
+    expect(heldStays([stay("a", 110, 900), stay("b", null, 200), stay("c", 120, null)]), "held then admitted, admitted straight away (not held), held and gone").toBe(2);
   });
 });

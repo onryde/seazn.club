@@ -165,6 +165,28 @@ export function judgeCosts(costs: readonly StayCost[], reservation: number, rech
   };
 }
 
+// ───────────────────────────────────────────────────────────────────────────────────────────── which bars a scenario owes
+
+/** The pass bars a capacity scenario owes, by the SHAPE of its run (spec §5.6.8). Three families:
+ *  - `cost`: the stays' realized spend against their reservation, and no gate-lock refusal - every burst run (B, B-honest, B-slow-*).
+ *  - `order`: admission pairs, inversions, positions - bars about the LINE, so they are owed only where the line forms with two or more
+ *    stays waiting (B-honest measured 210 pairs, the B-slow legs 780 and 1,377). At B's instant cameras the bucket runs dry once and the
+ *    line holds ONE stay, so there is no pair to order: zero checked is a failure (TEST-STRATEGY), which is why B does not owe these bars
+ *    rather than owing them conditionally.
+ *  - `held`: B's own shape - the dry bucket must have been MET, and a completing claim held for it (heldStays >= 1). Without it the
+ *    run's late-create bar would be vacuous: a bucket that never ran dry proves nothing about the re-verify.
+ *  Any other name is a label (A, A-slow, B-end, regress, mixed) and owes none of these. */
+export type ScenarioBars = { cost: boolean; order: boolean; held: boolean };
+export function barsOf(scenario: string): ScenarioBars {
+  const slow = scenario.startsWith("B-slow");
+  return { cost: scenario === "B" || scenario === "B-honest" || slow, order: scenario === "B-honest" || slow, held: scenario === "B" };
+}
+
+/** Stays the budget held: a `queued_at` stamp is the line's own word for it (a stay admitted straight away was never held). */
+export function heldStays(stays: readonly StayFacts[]): number {
+  return stays.filter((s) => s.queuedAt !== null).length;
+}
+
 // ───────────────────────────────────────────────────────────────────────────────────────────── admission-order excuses
 
 export type StayInLine = StayFacts & { /** A later stay of a player who already had one (left the line, silent, came back). */ rejoiner: boolean };

@@ -67,16 +67,20 @@
  *
  * Every leg is one invocation of the command above with these variables added (LOAD_REPORT and LOAD_SERVER_LOG as in the knobs; LOAD_SWEEP_EVERY_S=300 on
  * all of them). The scenario name is a LABEL and a bar selector: `B`, `B-honest` and every name starting `B-slow` are the burst runs (the
- * bound and the pass bars of spec §5.6.8 apply); the other names are only labels. Each is run once, on a fresh database:
+ * cost bars of spec §5.6.8 apply); the other names are only labels. Which further bars a burst run owes is by the SHAPE of its run
+ * (line-load.ts barsOf, pinned in line-load.test.ts): the ORDER bars (admission pairs >= 1, 0 unexcused inversions, positions looked at >= 1,
+ * 0 unexcused rises) belong to the legs where the line forms with two or more stays waiting - `B-honest` and `B-slow-*` - because zero
+ * pairs is a failure and B has none; `B` owes the HELD-STAYS bar instead (the dry bucket was met and a stay held for it). Every
+ * strict leg owes 0 never created / 0 late / 0 beyond the stranded bound. Each is run once, on a fresh database:
  *
  *   A           LOAD_SCENARIO=A LOAD_BOARDS=30 LOAD_ARRIVAL_SPREAD_S=20 LOAD_OPENED_AGO_S=0
  *               (all 60 on the page before the batches open; the harness's own 1-3 s cameras; strict)
  *   A-slow      as A, plus LOAD_SCENARIO=A-slow LOAD_CAMERA_LAG_MIN_S=10 LOAD_CAMERA_LAG_MAX_S=10 LOAD_STRICT=0
  *               (RECORDS whether the batch size or the gap must move; the code's constants are not touched by a run)
  *   B           LOAD_SCENARIO=B LOAD_BOARDS=30 LOAD_ARRIVAL_SPREAD_S=60 LOAD_OPENED_AGO_S=250 LOAD_CAMERA_LAG_MIN_S=0 LOAD_CAMERA_LAG_MAX_S=0
- *               (instant cameras: the bucket's figures alone)
+ *               (instant cameras: the bucket's figures alone; the bucket runs dry once and the line holds ONE stay, so there are no pairs)
  *   B-honest    as B with LOAD_SCENARIO=B-honest and the harness's 1-3 s cameras (LOAD_CAMERA_LAG_MIN_S=1 LOAD_CAMERA_LAG_MAX_S=3):
- *               a stay then costs ~10-12 calls and the line forms, which instant cameras do not make it do
+ *               a stay then costs ~10-12 calls and the line forms, which instant cameras do not make it do - it owns the order bars
  *   B-slow      as B with LOAD_SCENARIO=B-slow-W LOAD_CAMERA_LAG_MIN_S=W LOAD_CAMERA_LAG_MAX_S=W, run at W = 5 (the sum model does not
  *               discriminate there, and the report says so) and W = 10 (it does)
  *   B-end       LOAD_SCENARIO=B-end LOAD_BOARDS=30 LOAD_ARRIVAL_SPREAD_S=60 LOAD_OPENED_AGO_S=500 LOAD_STAGGERED=0 LOAD_ARRIVE_AT_DEADLINE=1
@@ -113,11 +117,13 @@ import { positionRises, completionReorders, type PositionSample } from "./line-c
 import {
   LINE_LOAD,
   admissionPace,
+  barsOf,
   boardTimes,
   classifyCreates,
   classifyInversions,
   drainOf,
   etaStats,
+  heldStays,
   judgeCosts,
   nettingOwed,
   peakPerSecond,
@@ -1074,6 +1080,9 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
       return p.claimLog.flatMap((c) => (c.line ? [{ id: t?.key ?? p.info.name, sentAt: c.sentAt, at: c.recvAt, position: c.line.position }] : []));
     });
     const rises = positionRises(positionSamples, stayFacts);
+    // The bars this scenario owes by the shape of its run (line-load.ts barsOf), and the one count B's own bar reads.
+    const bars = barsOf(SCENARIO);
+    const held = heldStays(stayFacts);
 
     // The spend: a required player's own meeting from the first claim to the seat, and the re-verify of the OPPONENT's camera after the
     // opponent was already served. Counted from the fixture host's log.
@@ -1235,7 +1244,25 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
       eta: { ...eta, items: etaItems.length },
       busiestSecond: busiest,
       peakTransactionsPerSecond: Math.round(peakXactPerS * 10) / 10,
-      line: { rows: lineRows.total, stamped: lineRows.stamped, stampedOnOffOrOptional: stampedOffOrOptional },
+      line: { rows: lineRows.total, stamped: lineRows.stamped, stampedOnOffOrOptional: stampedOffOrOptional, heldStays: held },
+      // What each bar family read, beside the family's own applicability - the report is written before the bars run, so a red leg still says what it saw.
+      bars: {
+        owed: bars,
+        read: {
+          neverCreated: creates.neverCreated.length,
+          lateCreates: creates.lateCreates.length,
+          beyondStrandedBound: creates.beyondStrandedBound.length,
+          heldStays: held,
+          admissionPairs: inversions.pairs,
+          unexcusedInversions: inversions.unexcused.length,
+          positionsLooked: rises.looked,
+          unexcusedRises: rises.unexcused.length,
+          staysCosted: costVerdict.stays,
+          overReservation: overWithoutReason.length,
+          overRecheck: overRecheckWithoutReason.length,
+          busyRefusals: busyRefusals ?? 0,
+        },
+      },
       walkovers: { boardsWithAPlayerNeverSeated: unseatedBoards.length, withAForfeitEvent: walkoverEvents.filter((n) => n > 0).length },
       closedDoors: players.filter((p) => p.closedAt !== null).length,
       // A closed door told apart: a first claim made too late for ANY camera (seconds before the deadline) is the edge of the window, not the line.
@@ -1412,13 +1439,19 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
       expect(creates.unresolved, "the run proved something about every board").toEqual([]);
       expect(creates.notBothSeated, "every board had both players seated").toBe(0);
     }
-    // B, B-slow and B-honest (B with the 1-3 s cameras of D16: its 10 calls a stay drain the bucket, where instant cameras' 7 only just fit) are the burst runs.
-    const isBurst = SCENARIO === "B" || SCENARIO === "B-honest" || SCENARIO.startsWith("B-slow");
-    if (STRICT && isBurst) {
-      expect(inversions.pairs, "capacity B: admission pairs checked (zero pairs is a failure)").toBeGreaterThan(0);
-      expect(inversions.unexcused, "capacity B: admission inversions: 0 (excuses counted apart in the report)").toEqual([]);
-      expect(rises.looked, "capacity B: positions looked at (zero is a failure)").toBeGreaterThan(0);
-      expect(rises.unexcused, "capacity B: unexcused position rises: 0").toEqual([]);
+    // B, B-slow and B-honest (B with the 1-3 s cameras of D16: its 10 calls a stay drain the bucket, where instant cameras' 7 only just fit) are the burst runs;
+    // which bars each owes is barsOf's (line-load.ts), by the shape of its run: the ORDER bars need a line with two or more stays waiting, so they belong
+    // to the legs where it forms (B-honest, B-slow-*); B, whose instant cameras run the bucket dry once, owes the held-stays bar instead.
+    if (STRICT && bars.order) {
+      expect(inversions.pairs, `capacity ${SCENARIO}: admission pairs checked (zero pairs is a failure)`).toBeGreaterThan(0);
+      expect(inversions.unexcused, `capacity ${SCENARIO}: admission inversions: 0 (excuses counted apart in the report)`).toEqual([]);
+      expect(rises.looked, `capacity ${SCENARIO}: positions looked at (zero is a failure)`).toBeGreaterThan(0);
+      expect(rises.unexcused, `capacity ${SCENARIO}: unexcused position rises: 0`).toEqual([]);
+    }
+    if (STRICT && bars.held) {
+      expect(held, `capacity ${SCENARIO}: the dry bucket was met and a stay was held for it (held stays; zero would leave the late-create bar vacuous)`).toBeGreaterThan(0);
+    }
+    if (STRICT && bars.cost) {
       expect(costVerdict.stays, "capacity B: stays costed (the 60 players: zero is a failure)").toBe(requiredPlayers);
       expect(overWithoutReason.map((c) => c.id), "capacity B: a stay above its reservation with no unreserved claim to explain it: 0").toEqual([]);
       expect(overRecheckWithoutReason.map((c) => c.id), "capacity B: a re-verify above LINE_RECHECK_COST with no unreserved claim to explain it: 0").toEqual([]);
