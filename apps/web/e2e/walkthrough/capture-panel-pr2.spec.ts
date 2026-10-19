@@ -36,6 +36,7 @@ import {
   setBoolEntitlementOverrideSql,
 } from "../helpers";
 import { setRigPlan, signInAs } from "../overlay-kit";
+import { storeCameraOnly } from "../helpers/stream-mode";
 import {
   disposeFakePhones,
   fakeCapturePhone,
@@ -231,6 +232,9 @@ async function seedRig(page: Page, opts: { orgTz?: string } = {}): Promise<Rig> 
     ...(await sql<Fx[]>`select id, fixture_no as no from fixtures where division_id = ${div.data!.id} order by fixture_no`),
   ]);
   expect(fixtures.length, "rig: a league of two plays once").toBe(1);
+  // R2006: this file follows the CAMERA's lifecycle; on a server with a compositor image every start is the score by
+  // default, so each fixture stores Camera only (helpers/stream-mode.ts).
+  await storeCameraOnly(page.request, fixtures.map((f) => f.id));
   await setRigPlan(orgId, "pro");
   return { orgId, divPath: `/o/${orgSlug}/c/${comp.data.slug}/d/${div.data.slug}`, fixtures, tag };
 }
