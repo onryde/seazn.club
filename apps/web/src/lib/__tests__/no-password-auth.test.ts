@@ -36,6 +36,8 @@ const REPO = path.resolve(SRC, "../../../");
 
 const RETIRED_ROUTES = ["login", "signup", "forgot-password", "reset-password"] as const;
 const RETIRED_PAGES = ["forgot-password", "reset-password"] as const;
+/** A path segment naming a retired page, wherever it sits in a string, template literal or URL (not `/reset-password-fans`). */
+const PAGE_LINK = new RegExp(`/(?:${RETIRED_PAGES.join("|")})(?![\\w-])`);
 
 /** Every file under `dir` whose name passes `keep`, skipping installed packages and build output. */
 function filesUnder(dir: string, keep: (name: string) => boolean): string[] {
@@ -204,14 +206,40 @@ describe("the removed routes and pages stay removed", () => {
     const files = appSource();
     expect(files.length, "anti-vacuity: the source tree was walked").toBeGreaterThan(500);
     const route = new RegExp(`/api/auth/(?:${RETIRED_ROUTES.join("|")})\\b`);
-    const page = new RegExp(`["'\`(]/(?:${RETIRED_PAGES.join("|")})\\b`);
     const hits = files
       .filter((f) => {
         const code = codeOf(fs.readFileSync(f, "utf8"));
-        return route.test(code) || page.test(code);
+        return route.test(code) || PAGE_LINK.test(code);
       })
       .map((f) => path.relative(SRC, f));
     expect(hits).toEqual([]);
+  });
+
+  it("the page-link matcher can fail: a quoted path, a template literal, a full URL and any deeper path segment are caught; lookalikes are not", () => {
+    // The first draft only saw a quote or "(" before the slash, so `${baseUrl(req)}/reset-password?token=` (the way the
+    // reset email built its link) walked straight past it.
+    for (const link of [
+      '"/reset-password"',
+      "'/forgot-password'",
+      "href={`/reset-password?token=${t}`}",
+      "`${baseUrl(req)}/reset-password?token=${token}`",
+      "`${origin}/forgot-password#top`",
+      '"https://seazn.club/reset-password"',
+      "const next = `/x/y/forgot-password`;",
+      "redirect(`/${lang}/reset-password`)",
+    ]) {
+      expect(PAGE_LINK.test(link), link).toBe(true);
+    }
+    for (const innocent of [
+      '"/reset-password-fans"',
+      '"/forgot-passwords"',
+      '"/preset-password"',
+      '"reset-password"', // the reserved slug itself (lib/public-site.ts): a name, not a link
+      "const reset = '/reset';",
+    ]) {
+      expect(PAGE_LINK.test(innocent), innocent).toBe(false);
+    }
+    expect(RETIRED_PAGES.length, "the matcher is built from the retired page list").toBe(2);
   });
 
   it("no script, tool or e2e spec calls a removed route (the harnesses sign in by magic link)", () => {
