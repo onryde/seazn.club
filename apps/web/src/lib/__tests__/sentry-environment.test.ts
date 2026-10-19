@@ -53,6 +53,14 @@ describe("sentryEnvironment", () => {
     expect(sentryEnvironment("https://stg.seazn.club:8443/", "development")).toBe("staging");
   });
 
+  it("a host that is an Object.prototype name is not a deployment (the table is looked up by own key, not by property access)", () => {
+    for (const baseUrl of ["http://constructor", "http://tostring", "http://valueof", "http://hasownproperty"]) {
+      // URL lower-cases the host, so `toString` arrives as `tostring`: still not a key, and `constructor` is the real trap.
+      expect(sentryEnvironment(baseUrl, "development"), baseUrl).toBe("development");
+    }
+    expect(sentryEnvironment("http://constructor", "production")).toBe("production");
+  });
+
   it("never throws, whatever the baked value", () => {
     for (const baseUrl of ["http://", "https://[", "//", "\u0000", "javascript:alert(1)", "https://stg.seazn.club\n"]) {
       expect(() => sentryEnvironment(baseUrl, "production"), JSON.stringify(baseUrl)).not.toThrow();
