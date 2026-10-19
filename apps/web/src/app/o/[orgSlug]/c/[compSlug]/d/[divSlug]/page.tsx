@@ -9,7 +9,7 @@ import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
 import { sportLabel } from "@/lib/scoring-vocab";
 import { variantWord } from "@/lib/variant-label-keys";
-import { rulesLineDict } from "@/lib/rules-line";
+import { pointsLineDict, rulesLineDict } from "@/lib/rules-line";
 import { requireDivisionPage } from "@/server/page-auth";
 import { getDivision, listVariantOptions } from "@/server/usecases/divisions";
 import { divisionConsumesSlotOnArchive } from "@/server/usecases/division-slots";
@@ -467,7 +467,14 @@ export default async function DivisionPage({
   const publicDict = tab === "standings" ? await getDictionary(locale, "public") : {};
   // The fixtures tab's stage format rows say each stage's effective rules as chips, in the PUBLIC line's own clauses
   // (`format.rules.*`, W2c Task 17): only that slice crosses into the client panel.
-  const ruleDict = tab === "fixtures" ? rulesLineDict(await getDictionary(locale, "public")) : undefined;
+  const fixturesPublicDict = tab === "fixtures" ? await getDictionary(locale, "public") : undefined;
+  const ruleDict = fixturesPublicDict === undefined ? undefined : rulesLineDict(fixturesPublicDict);
+  // W2c Task 18 (S3): the stage points section previews its rule in the public stage line's own `format.points.*` words,
+  // and asks the SAME gate the stage PUT asks (`assertCustomPointsAllowed`: `standings.custom_points`, org-wide, no
+  // competition) so the section never offers a walkover row or a bonus the server will answer 402 to.
+  const pointsDict = fixturesPublicDict === undefined ? undefined : pointsLineDict(fixturesPublicDict);
+  const customPointsAllowed =
+    tab === "fixtures" && editable ? await hasFeature(auth.orgId, "standings.custom_points") : true;
 
   // Standings per table stage (+ per pool), with pool labels.
   const tableStages = stages.filter((s) => TABLE_KINDS.has(s.kind));
@@ -855,6 +862,8 @@ export default async function DivisionPage({
               variantKey={division.variant_key}
               divisionConfig={(division.config ?? {}) as Record<string, unknown>}
               ruleDict={ruleDict}
+              pointsDict={pointsDict}
+              customPointsAllowed={customPointsAllowed}
               formatLockedStageIds={formatLockedStages}
               tz={scheduleSettings.tz}
               // The GOVERNING clock, resolved here exactly as the schedule page

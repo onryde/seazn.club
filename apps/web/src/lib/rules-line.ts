@@ -49,6 +49,19 @@ export function rulesLineDict(dict: Dict): Dict {
   return out;
 }
 
+/** The keys a stage's POINTS sentence reads from the PUBLIC dictionary (`pointsLine`, Task 16): every clause is a
+ *  `format.points.*` key. */
+export const POINTS_LINE_DICT_PREFIX = "format.points.";
+
+/** The slice of the public dictionary the stage points section's preview needs (W2c Task 18): the `format.points.*`
+ *  clauses, so the editor says the rule in the words the public stage line will. Its own slice, not part of
+ *  `rulesLineDict`: the chips read the rules clauses and never the points ones. */
+export function pointsLineDict(dict: Dict): Dict {
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(dict)) if (key.startsWith(POINTS_LINE_DICT_PREFIX)) out[key] = dict[key];
+  return out;
+}
+
 /** One clause as a chip's text: the same words the public line says, its first letter capitalised (a chip stands alone;
  *  a clause is written to sit mid-sentence, so it begins lowercase). */
 export function rulesChipText(dict: Dict, clause: RulesClause): string {

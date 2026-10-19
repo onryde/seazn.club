@@ -51,6 +51,8 @@ import { sportLabel } from "@/lib/scoring-vocab";
 import type { StageKind } from "@seazn/engine/core";
 import { DecidersNotice } from "@/components/v2/stage-rules/deciders-off-notice";
 import { StageRuleFields } from "@/components/v2/stage-rules/stage-rule-fields";
+import { StagePointsSection } from "@/components/v2/stage-rules/stage-points-section";
+import { stageTakesPoints } from "@/components/v2/stage-rules/stage-points-model";
 import { isStagePreset, resolvedStageCfg, stageFormatSaveFragment, stageSummaryClauses } from "@/components/v2/stage-rules/stage-row-model";
 import { Modal } from "@/components/modal";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
@@ -313,6 +315,13 @@ interface Props {
   /** The public dictionary's rules-line slice (`rulesLineDict`: the `format.rules.*` keys). The format row's chips are the
    *  public line's own clauses, which live in the PUBLIC dictionary, not the console's; absent, the row shows no chips. */
   ruleDict?: Dict;
+  /** The public dictionary's `format.points.*` slice (`pointsLineDict`): the stage points section previews its rule in the
+   *  public stage line's own words (W2c Task 18). Absent, the section shows no preview. */
+  pointsDict?: Dict;
+  /** Does the org hold `standings.custom_points` (the page reads it with `hasFeature`, the gate the stage PUT asks)? Without
+   *  it the points section offers the base win / draw / loss sentence only. Optional like `venues`/`phase`: the
+   *  pre-existing `stages-panel-*.test.tsx` props build without it; absent reads as allowed, and the server's 402 stands. */
+  customPointsAllowed?: boolean;
   /** Stage ids whose match format is LOCKED, resolved server-side by
    *  `formatLockedStageIds` (usecases/stage-rules.ts) from the same predicate
    *  the PUT refuses on. Deliberately a server fact rather than anything
@@ -487,7 +496,7 @@ export function boardSlotOptionsFor(
  *  whole panel every second. */
 const RUN_SHEET_NOW_TICK_MS = 60_000;
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, variantKey = null, divisionConfig = {}, ruleDict, formatLockedStageIds = [], tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, openRounds, onlineAwaitsStart = false, arbiterHref = null }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, customPointsAllowed = true, formatLockedStageIds = [], tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, openRounds, onlineAwaitsStart = false, arbiterHref = null }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -1279,6 +1288,8 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     variantKey={variantKey}
                     divisionConfig={divisionConfig}
                     ruleDict={ruleDict}
+                    pointsDict={pointsDict}
+                    customPointsAllowed={customPointsAllowed}
                     stageConfig={stage.config}
                     locked={formatLockedStageIds.includes(stage.id)}
                     canEdit={canEdit}
@@ -2260,6 +2271,8 @@ function StageFormatRow({
   variantKey,
   divisionConfig,
   ruleDict,
+  pointsDict,
+  customPointsAllowed,
   stageConfig,
   locked,
   canEdit,
@@ -2273,6 +2286,8 @@ function StageFormatRow({
   variantKey: string | null;
   divisionConfig: Record<string, unknown>;
   ruleDict: Dict | undefined;
+  pointsDict: Dict | undefined;
+  customPointsAllowed: boolean;
   stageConfig: Record<string, unknown>;
   locked: boolean;
   canEdit: boolean;
@@ -2391,6 +2406,7 @@ function StageFormatRow({
   }
 
   return (
+    <>
     <div data-testid={`stage-format-row-${stageId}`}>
       <div
         className="border-b border-slate-100 px-4 py-3"
@@ -2529,6 +2545,22 @@ function StageFormatRow({
         </div>
       )}
     </div>
+    {/* W2c Task 18 (S3): the stage's own points, a table stage only (a bracket has no table to rank). Its own PUT arm and
+        its own lock: the same `readOnly` the format row uses (a started stage, or a viewer). A sibling of the format row,
+        not inside it, so the row's controls and its tests are untouched. */}
+    {stageTakesPoints(kind) && (
+      <StagePointsSection
+        stageId={stageId}
+        module={sportModule}
+        divisionConfig={divisionConfig}
+        stored={stageConfig.points}
+        pointsDict={pointsDict}
+        customPointsAllowed={customPointsAllowed}
+        readOnly={readOnly}
+        onSaved={onSaved}
+      />
+    )}
+    </>
   );
 }
 

@@ -22,7 +22,12 @@ vi.mock("@/server/usecases/stages", () => stagesSpies);
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: vi.fn(async () => "en") }));
 // W2c Task 17: the PUBLIC dictionary carries the rules-line clauses the stage format row's chips are worded from; the double
 // holds one of them and one key that is not a clause, so the slice the page hands the panel can be told from the whole.
-const PUBLIC_DICT = { "format.rules.decider.extraTime": "extra time (2 × {n} min)", "landing.title": "not a rules-line key" };
+// W2c Task 18: and one `format.points.*` clause, which the stage points section's preview is worded from.
+const PUBLIC_DICT = {
+  "format.rules.decider.extraTime": "extra time (2 × {n} min)",
+  "format.points.base": "{win} for a win",
+  "landing.title": "not a rules-line key",
+};
 vi.mock("@/lib/i18n", () => ({
   getDictionary: vi.fn(async (_locale: unknown, ns: string) => (ns === "public" ? PUBLIC_DICT : {})),
   t: (_dict: unknown, key: string) => key,
@@ -105,6 +110,7 @@ vi.mock("@/server/usecases/stream-sessions", () => ({
 
 import DivisionPage from "../page";
 import { StagesPanel } from "@/components/v2/stages-panel";
+import { hasFeature } from "@/lib/entitlements";
 
 /** First element of the given type in a server-component tree (mirrors
  *  officials-loads-deferred.test.tsx's `find` — this page renders exactly
@@ -152,7 +158,13 @@ const renderTab = () =>
     searchParams: Promise.resolve({ tab: "fixtures" }),
   });
 
-type PanelProps = { phase?: string; awaitingSettle?: readonly string[]; ruleDict?: Record<string, string> };
+type PanelProps = {
+  phase?: string;
+  awaitingSettle?: readonly string[];
+  ruleDict?: Record<string, string>;
+  pointsDict?: Record<string, string>;
+  customPointsAllowed?: boolean;
+};
 
 describe("the division page reads an abandoned final awaiting its settle as owed work (fix round 1, M3/M10)", () => {
   beforeEach(() => {
@@ -203,5 +215,42 @@ describe("the fixtures tab hands the stage format row the rules-line words (W2c 
     expect(props.ruleDict, "the seam is wired: the chips have words to resolve against").toBeDefined();
     expect(props.ruleDict).toEqual({ "format.rules.decider.extraTime": PUBLIC_DICT["format.rules.decider.extraTime"] });
     expect(Object.hasOwn(props.ruleDict!, "landing.title"), "a key that is not a clause is not sent").toBe(false);
+  });
+});
+
+describe("the fixtures tab hands the stage points section its words and its plan gate (W2c Task 18)", () => {
+  beforeEach(() => {
+    pageAuth.requireDivisionPage.mockReset().mockResolvedValue(PAGE);
+    stagesSpies.listStages.mockReset().mockResolvedValue([KO_STAGE]);
+    stagesSpies.getSeedProposal.mockReset();
+    stagesSpies.getStageRosterDrift.mockReset().mockResolvedValue({ ghosts: [], unplaced: [] });
+    fixtureSpies.listDivisionFixtures.mockReset().mockResolvedValue([FINAL]);
+    deskSpies.listFixturesAwaitingSettle.mockReset().mockResolvedValue(new Set());
+    vi.mocked(hasFeature).mockReset().mockResolvedValue(true);
+  });
+
+  it("StagesPanel gets the format.points.* slice of the PUBLIC dictionary - the points words, not the rules words, not the rest", async () => {
+    const props = find(await renderTab(), StagesPanel)!.props as PanelProps;
+    expect(props.pointsDict, "the seam is wired: the preview has words to resolve against").toEqual({ "format.points.base": PUBLIC_DICT["format.points.base"] });
+    expect(Object.hasOwn(props.ruleDict!, "format.points.base"), "the chips do not carry the points clauses").toBe(false);
+  });
+
+  it("customPointsAllowed is the SERVER's gate, asked as the stage PUT asks it: standings.custom_points, for the org, no competition", async () => {
+    for (const held of [true, false]) {
+      vi.mocked(hasFeature).mockReset().mockResolvedValue(held);
+      const props = find(await renderTab(), StagesPanel)!.props as PanelProps;
+      expect(props.customPointsAllowed, `hasFeature answered ${held}`).toBe(held);
+      const asked = vi.mocked(hasFeature).mock.calls.filter((c) => c[1] === "standings.custom_points");
+      expect(asked.length, "the gate was asked").toBe(1);
+      expect(asked[0]![0], "of THIS org").toBe("org-1");
+      expect(asked[0]!.length, "org-wide: no competition id").toBe(2);
+    }
+  });
+
+  it("a viewer is not asked (the section is read-only for them, and it saves a query)", async () => {
+    pageAuth.requireDivisionPage.mockReset().mockResolvedValue({ ...PAGE, canEdit: false });
+    const props = find(await renderTab(), StagesPanel)!.props as PanelProps;
+    expect(props.customPointsAllowed, "read-only: nothing to gate").toBe(true);
+    expect(vi.mocked(hasFeature).mock.calls.filter((c) => c[1] === "standings.custom_points")).toHaveLength(0);
   });
 });
