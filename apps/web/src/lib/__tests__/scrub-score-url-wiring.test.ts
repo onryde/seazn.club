@@ -36,6 +36,7 @@ vi.mock("@sentry/nextjs", () => ({
   consoleLoggingIntegration: vi.fn(() => ({ name: "ConsoleLogs" })),
   pinoIntegration: vi.fn(() => ({ name: "Pino" })),
   captureRouterTransitionStart: vi.fn(),
+  getReplay: vi.fn(),
 }));
 
 const TOKEN = "dl_Q2hvb3NlIGEgcmVhbGx5IGxvbmcgcmFuZG9tIHRva2Vu_Ab-9";
@@ -61,6 +62,13 @@ async function sentryInitOptions(configPath: string): Promise<Options> {
   expect(calls, `${configPath} calls Sentry.init once`).toHaveLength(1);
   return calls[0]![0] as Options;
 }
+
+/** A performanceSpan frame as @sentry/replay's createPerformanceSpans writes it: op, description, start, end, data. */
+const replaySpanFrame = (description: string, op = "resource.fetch", data: Record<string, unknown> = { method: "GET" }) => ({
+  type: 5,
+  timestamp: 1,
+  data: { tag: "performanceSpan", payload: { op, description, startTimestamp: 1, endTimestamp: 2, data } },
+});
 
 const errorEvent = () => ({
   event_id: "e1",
@@ -227,8 +235,80 @@ describe("Sentry client (sentry.client.config.ts; not loaded by the Turbopack bu
     const replayOptions = vi.mocked(Sentry.replayIntegration).mock.calls[0]![0] as Options;
     expect(replayOptions.maskAllText).toBe(true);
     expect(replayOptions.blockAllMedia).toBe(true);
-    const frame = { type: 5, timestamp: 1, data: { tag: "performanceSpan", payload: { description: PAGE } } };
+    const frame = replaySpanFrame(PAGE);
     expectScrubbed(run(replayOptions.beforeAddRecordingEvent, frame));
+  });
+
+  // Round 3: Sentry Replay records the page URL where no hook reaches (rrweb's Meta frame, the DOM). Proven against the
+  // installed @sentry/replay in sentry-replay-guard.test.ts; this half proves the REAL config hands the guard to the SDK.
+  it("blocks the elements that paint a secret, and opens no network detail (the exact option set: a new one is a decision)", async () => {
+    await sentryInitOptions("../../../sentry.client.config");
+    const Sentry = await import("@sentry/nextjs");
+    const replayOptions = vi.mocked(Sentry.replayIntegration).mock.calls[0]![0] as Options;
+    expect(replayOptions.block).toEqual([".ph-no-capture"]);
+    expect(Object.keys(replayOptions).sort()).toEqual(["beforeAddRecordingEvent", "block", "blockAllMedia", "maskAllText"]);
+  });
+
+  it("runs the replay on an ordinary page, and not at all on a page whose URL holds a credential", async () => {
+    vi.stubGlobal("window", { location: { href: "https://seazn.club/dashboard" } });
+    const ordinary = (await sentryInitOptions("../../../sentry.client.config")).integrations as { name: string }[];
+    expect(ordinary.map((i) => i.name)).toContain("Replay");
+    const Sentry = await import("@sentry/nextjs");
+    expect(vi.mocked(Sentry.replayIntegration)).toHaveBeenCalledTimes(1);
+
+    vi.resetModules();
+    vi.clearAllMocks();
+    vi.stubGlobal("window", { location: { href: PAGE } });
+    const secret = (await sentryInitOptions("../../../sentry.client.config")).integrations as { name: string }[];
+    const Sentry2 = await import("@sentry/nextjs");
+    expect(vi.mocked(Sentry2.replayIntegration)).not.toHaveBeenCalled();
+    expect(secret.map((i) => i.name)).not.toContain("Replay");
+    // Everything else the config sets up is still there on that page: the scrubbers, the console logs.
+    expect(secret.map((i) => i.name)).toEqual(ordinary.map((i) => i.name).filter((n) => n !== "Replay"));
+  });
+
+  it("stops the replay when a recorded navigation names a credential page, and keeps it for any other", async () => {
+    await sentryInitOptions("../../../sentry.client.config");
+    const Sentry = await import("@sentry/nextjs");
+    const stop = vi.fn(async () => undefined);
+    vi.mocked(Sentry.getReplay).mockReturnValue({ stop } as never);
+    const hook = (vi.mocked(Sentry.replayIntegration).mock.calls[0]![0] as Options).beforeAddRecordingEvent;
+    const nav = (to: string) => replaySpanFrame(to, "navigation.push", { previous: "/" });
+    expect(run(hook, nav("/dashboard"))).not.toBeNull();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(stop).not.toHaveBeenCalled();
+    expect(run(hook, nav(`/score/${TOKEN}`))).toBeNull();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Sentry router hook (src/instrumentation-client.ts, onRouterTransitionStart)", () => {
+  async function routerHook() {
+    const mod = await import("../../instrumentation-client");
+    const Sentry = await import("@sentry/nextjs");
+    return { hook: mod.onRouterTransitionStart, Sentry };
+  }
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it("stops the replay before the app navigates to a credential page, and still reports the transition", async () => {
+    const { hook, Sentry } = await routerHook();
+    const stop = vi.fn(async () => undefined);
+    vi.mocked(Sentry.getReplay).mockReturnValue({ stop } as never);
+    hook(`/score/${TOKEN}`, "push");
+    await settle();
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(Sentry.captureRouterTransitionStart)).toHaveBeenCalledWith(`/score/${TOKEN}`, "push");
+  });
+
+  it("leaves the replay running for any other navigation, and still reports the transition", async () => {
+    const { hook, Sentry } = await routerHook();
+    const stop = vi.fn(async () => undefined);
+    vi.mocked(Sentry.getReplay).mockReturnValue({ stop } as never);
+    hook("/dashboard", "replace");
+    await settle();
+    expect(stop).not.toHaveBeenCalled();
+    expect(vi.mocked(Sentry.captureRouterTransitionStart)).toHaveBeenCalledWith("/dashboard", "replace");
   });
 });
 
@@ -306,7 +386,7 @@ describe("the match-room token (review I1): every config's real hooks scrub it",
     expectScrubbedOf(run(scrubber.processEvent, { type: "replay_event", urls: [room, start, login] }, {}, {}), token);
     const Sentry = await import("@sentry/nextjs");
     const replayOptions = vi.mocked(Sentry.replayIntegration).mock.calls[0]![0] as Options;
-    const frame = { type: 5, timestamp: 1, data: { tag: "performanceSpan", payload: { description: start } } };
+    const frame = replaySpanFrame(start);
     expectScrubbedOf(run(replayOptions.beforeAddRecordingEvent, frame), token);
   });
 });
@@ -389,7 +469,7 @@ describe("the one-time sign-in token: every config's real hooks scrub it", () =>
     expectGone(run(scrubber.processEvent, { type: "replay_event", urls: [magicUrl, verifyUrl] }, {}, {}), login, verify);
     const Sentry = await import("@sentry/nextjs");
     const replayOptions = vi.mocked(Sentry.replayIntegration).mock.calls[0]![0] as Options;
-    const frame = { type: 5, timestamp: 1, data: { tag: "performanceSpan", payload: { description: magicUrl } } };
+    const frame = replaySpanFrame(magicUrl);
     expectGone(run(replayOptions.beforeAddRecordingEvent, frame), login);
   });
 });
@@ -457,7 +537,7 @@ describe("the profile-claim secret: every config's real hooks scrub it", () => {
     expectGone(run(scrubber.processEvent, { type: "replay_event", urls: [page, accept, login] }, {}, {}), secret);
     const Sentry = await import("@sentry/nextjs");
     const replayOptions = vi.mocked(Sentry.replayIntegration).mock.calls[0]![0] as Options;
-    const frame = { type: 5, timestamp: 1, data: { tag: "performanceSpan", payload: { description: accept } } };
+    const frame = replaySpanFrame(accept);
     expectGone(run(replayOptions.beforeAddRecordingEvent, frame), secret);
   });
 });
@@ -535,7 +615,7 @@ describe("the invite token and the check-in code: every config's real hooks scru
     expectGone(run(scrubber.processEvent, { type: "replay_event", urls: [joinUrl, checkinUrl, claimApiUrl] }, {}, {}), invite, checkin);
     const Sentry = await import("@sentry/nextjs");
     const replayOptions = vi.mocked(Sentry.replayIntegration).mock.calls[0]![0] as Options;
-    const frame = { type: 5, timestamp: 1, data: { tag: "performanceSpan", payload: { description: claimApiUrl } } };
+    const frame = replaySpanFrame(claimApiUrl);
     expectGone(run(replayOptions.beforeAddRecordingEvent, frame), invite);
   });
 });

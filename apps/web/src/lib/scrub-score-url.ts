@@ -564,8 +564,19 @@ export function scrubScoreTokensIntegration(): Integration {
  * Sentry Replay `beforeAddRecordingEvent`. The SDK passes only CUSTOM frames to
  * it: breadcrumbs (navigation from/to, console) and performance spans (fetch
  * and navigation URLs). @sentry/replay 10.62 gates it with `isCustomEvent`.
- * rrweb's own meta frame (`href`) and DOM snapshots never reach this hook.
+ * rrweb's own meta frame (`href`) and DOM snapshots never reach this hook, which
+ * is why the replay must not run on a page `holdsCredential` (lib/replay-guard.ts).
  */
 export function scrubRecordingEvent<T>(event: T): T {
   return scrubScoreTokens(event);
+}
+
+/**
+ * Does a page URL carry a credential? The scrubber is its own authority: a URL it would change holds one (a device-link,
+ * check-in or claim token, an invite, a join code, a one-time `?token=`, a room token, …), so no list is kept here to drift
+ * from the rules. Sentry Replay records the page's URL in places no hook reaches (rrweb's Meta frame, the DOM), so it must
+ * not run on such a page.
+ */
+export function holdsCredential(url: string): boolean {
+  return scrubScoreUrl(url) !== url;
 }
