@@ -845,6 +845,20 @@ describe("overlayModel — §3's decided/void context line (fix round 5, I2)", (
     ).not.toBe(model.result);
   });
 
+  // Owner ruling (1), 2026-10-19: the Result card's headline ladder reads the short sentence off the model as
+  // `resultShort` — the SAME producer and templates as `result`, the winner reduced to its code (the sentence the
+  // context line already carries). Home and away winners both, so a short form that always names sides[0] goes red.
+  it("resultShort: the result sentence with the winner's short code — decided (home) and forfeit (away); absent without a verdict", () => {
+    const decided = project("football", payload("football", [["core.start", {}], ["football.goal", { by: "H" }]], "decided", { kind: "win", winner: "H", method: "regulation" }));
+    expect(decided.result).toBe("WIN Milton Keynes Rovers REG");
+    expect(decided.resultShort).toBe("WIN MIL REG");
+    const forfeit = project("football", payload("football", [["core.start", {}], ["football.goal", { by: "H" }]], "forfeited", { kind: "award", winner: "A", method: "regulation" }));
+    expect(forfeit.resultShort).toBe("WIN NOR REG");
+    const live = project("football", payload("football", [["core.start", {}], ["football.goal", { by: "H" }]], "in_play", null));
+    expect(live.result).toBeUndefined();
+    expect(live.resultShort, "no result, no short form").toBeUndefined();
+  });
+
   it("void carrying a verdict (a forfeit): the same short form, under the status word", () => {
     const data = payload("football", [
       ["core.start", {}],

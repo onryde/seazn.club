@@ -14,6 +14,8 @@ import { overlayTossOf, type OverlayCarromToss } from "@/lib/overlay-toss";
 import type { OverlayHighlight, OverlayModel, OverlaySide } from "@/lib/overlay-model";
 import type { OverlayThemeProps } from "./template-registry";
 import type { SceneCard } from "./overlay-scene";
+import { RESULT_RUNG_NAMES, resultLadderTexts } from "./result-ladder";
+import { useResultRung } from "./use-result-rung";
 
 export type SlateState = "warming" | "ended" | "live";
 
@@ -91,6 +93,11 @@ export function OverlayMatchCard({
 }) {
   const state = slateStateOf(model);
   const variant = card === undefined ? layerCardOf(state) : card;
+  // Owner ruling (1), 2026-10-19: the Result card's headline is a measured ladder (`result-ladder.ts`). Above the
+  // early returns: a hook runs on every render. `null` everywhere but the Result card.
+  const ladder =
+    variant === "result" ? resultLadderTexts(model.result ?? msg("overlay.slate.endedHeadline"), model.resultShort) : null;
+  const { rung, settled, cardRef, probeRefs } = useResultRung(ladder);
 
   const previousVariantRef = useRef<SceneCard | null | undefined>(undefined);
   const [fading, setFading] = useState(false);
@@ -124,19 +131,24 @@ export function OverlayMatchCard({
         data-testid="ovl-slate-content"
         className={`ovl-slate-content${fading ? " ovl-slate-fading" : ""}`}
       >
-        <div className="ovl-slate-card" data-testid="ovl-slate-card">
+        <div className="ovl-slate-card" data-testid="ovl-slate-card" ref={cardRef}>
           <span data-testid="ovl-slate-pill" className="ovl-slate-pill">
             {metaPill(cardState, model, msg)}
           </span>
 
-          {/* Only the pairing clamps (`--pairing`): the Result headline is the outcome sentence and is never cut. */}
+          {/* Only the pairing clamps (`--pairing`): the Result headline is the outcome sentence and is never cut — it
+              steps down its measured ladder instead (`--compact` is the size step). */}
           <span
             data-testid="ovl-slate-headline"
-            className={`ovl-slate-headline${cardState === "warming" ? " ovl-slate-headline--pairing" : ""} ovl-display`}
+            className={`ovl-slate-headline${cardState === "warming" ? " ovl-slate-headline--pairing" : ""}${rung >= 2 ? " ovl-slate-headline--compact" : ""} ovl-display`}
+            data-result-rung={ladder === null ? undefined : RESULT_RUNG_NAMES[rung]}
+            data-result-ladder-settled={settled ? "true" : undefined}
           >
             {cardState === "warming"
               ? msg("overlay.slate.warmingHeadlineVs", { home: home.name, away: away.name })
-              : (model.result ?? msg("overlay.slate.endedHeadline"))}
+              : ladder === null
+                ? (model.result ?? msg("overlay.slate.endedHeadline"))
+                : ladder[Math.min(rung, 2)]}
           </span>
 
           <div className="ovl-slate-matchup" data-testid="ovl-slate-matchup">
@@ -183,7 +195,8 @@ export function OverlayMatchCard({
             </div>
           </div>
 
-          {cardState === "ended" && model.highlights && (model.highlights.batter || model.highlights.bowler) ? (
+          {/* The ladder's last rung: the highlights give way when no headline rung fits on one line. */}
+          {cardState === "ended" && rung !== 3 && model.highlights && (model.highlights.batter || model.highlights.bowler) ? (
             <div className="ovl-slate-highlights" data-testid="ovl-slate-highlights">
               {model.highlights.batter ? (
                 <HighlightBox role="batter" item={model.highlights.batter} msg={msg} />
@@ -214,6 +227,23 @@ export function OverlayMatchCard({
             </>
           ) : null}
         </div>
+        {/* The ladder's probes: each rung once, hidden and unwrapped, OUTSIDE the card so the card's own fit is never
+            measured against them (`.ovl-slate-probes` is a 0 × 0 clipping box). */}
+        {ladder === null ? null : (
+          <span className="ovl-slate-probes" aria-hidden="true">
+            {ladder.map((text, i) => (
+              <span
+                key={i}
+                className={`ovl-slate-headline ovl-display ovl-slate-headline-probe${i === 2 ? " ovl-slate-headline--compact" : ""}`}
+                ref={(el) => {
+                  probeRefs.current[i] = el;
+                }}
+              >
+                {text}
+              </span>
+            ))}
+          </span>
+        )}
       </div>
     </div>
   );

@@ -274,6 +274,49 @@ describe("OverlayMatchCard — headline/line per state, resolved through `msg`",
     expect(checked).toBe(cases.length);
   });
 
+  // Owner ruling (1), 2026-10-19: the Result headline is a measured ladder. Server-side (and before the first
+  // measurement) it is the FULL rung; three hidden probes carry the rung texts the browser measures — outside the card,
+  // so the card's own fit is never measured against them. The warming card has none of it.
+  it("the Result card: the full rung first, three aria-hidden probes outside the card (full, short, short-compact); warming: none", () => {
+    const SHORT_MODEL: OverlayModel = { ...ENDED, resultShort: "MIL won by 44 runs" };
+    const html = renderToStaticMarkup(createElement(OverlayMatchCard, { model: SHORT_MODEL, msg: msgOf("en"), sportKey: "cricket" }));
+    const headline = /<span([^>]*data-testid="ovl-slate-headline"[^>]*)>([^<]*)</.exec(html);
+    expect(headline?.[2]).toBe("Milton Keynes Rovers won by 44 runs");
+    expect(headline?.[1]).toContain('data-result-rung="full"');
+    expect(headline?.[1], "not yet measured").not.toContain("data-result-ladder-settled");
+    const probes = [...html.matchAll(/<span class="([^"]*ovl-slate-headline-probe[^"]*)">([^<]*)</g)];
+    expect(probes.map((m) => m[2])).toEqual(["Milton Keynes Rovers won by 44 runs", "MIL won by 44 runs", "MIL won by 44 runs"]);
+    expect(probes.map((m) => m[1].includes("ovl-slate-headline--compact"))).toEqual([false, false, true]);
+    const box = /<span class="ovl-slate-probes" aria-hidden="true">/.exec(html);
+    expect(box, "the probes' box is aria-hidden").not.toBeNull();
+    const cardEnd = html.indexOf('data-testid="ovl-slate-card"');
+    expect(box!.index, "the probes sit AFTER the card, outside it").toBeGreaterThan(cardEnd);
+    expect(html.slice(cardEnd, box!.index)).not.toContain("ovl-slate-headline-probe");
+
+    const warming = renderToStaticMarkup(createElement(OverlayMatchCard, { model: WARMING, msg: msgOf("en"), sportKey: "cricket" }));
+    expect(warming).not.toContain("ovl-slate-headline-probe");
+    expect(warming).not.toContain("data-result-rung");
+  });
+
+  it("the CSS: the compact rung is a smaller headline that still clears the 30 px text floor; the probes never wrap", () => {
+    const css = readFileSync(join(HERE, "../../../app/globals.css"), "utf8");
+    const rule = (selector: string) => {
+      const at = css.indexOf(`\n${selector} {`);
+      expect(at, `premise: ${selector} is declared`).toBeGreaterThan(-1);
+      return css.slice(at, css.indexOf("}", at));
+    };
+    const px = (r: string) => Number(/font-size:\s*(\d+)px/.exec(r)?.[1]);
+    const base = px(rule(".ovl-slate-headline"));
+    const compact = px(rule(".ovl-slate-headline--compact"));
+    expect(base).toBe(64);
+    expect(compact).toBeLessThan(base);
+    expect(compact).toBeGreaterThanOrEqual(30);
+    expect(rule(".ovl-slate-headline-probe")).toMatch(/white-space:\s*nowrap/);
+    expect(rule(".ovl-slate-headline-probe")).toMatch(/max-width:\s*none/);
+    expect(rule(".ovl-slate-probes")).toMatch(/overflow:\s*hidden/);
+    expect(rule(".ovl-slate-probes")).toMatch(/visibility:\s*hidden/);
+  });
+
   it("the CSS: the line clamp lives on `--pairing` alone, never on the base headline rule", () => {
     const css = readFileSync(join(HERE, "../../../app/globals.css"), "utf8");
     const rule = (selector: string) => {

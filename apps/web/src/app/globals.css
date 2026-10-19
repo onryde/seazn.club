@@ -1817,6 +1817,16 @@ body {
    decided (review round 1, item 2 — gallery check 4c holds every locale's every decided sentence unclamped). */
 .ovl-slate-headline--pairing { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
                                 overflow: hidden; }
+/* Owner ruling (1), 2026-10-19: the Result headline's measured ladder (`result-ladder.ts`) — full sentence, the short
+   sentence, the short sentence at this compact size, then the highlights give way; each rung only when the one before
+   does not fit on ONE line. 48 px: three quarters of the headline, well over the 30 px text floor (D9), and one line
+   for every decided sentence in every locale beside a short code (gallery check 4c). */
+.ovl-slate-headline--compact { font-size: 48px; }
+/* The ladder's probes: a 0 × 0 clipping box OUTSIDE the card, so neither the card's scroll size nor any fit check sees
+   them; each probe unwrapped (`nowrap`, no max-width) so its width is the rung's one-line width. */
+.ovl-slate-probes { position: absolute; left: 0; top: 0; width: 0; height: 0; overflow: hidden;
+                    visibility: hidden; pointer-events: none; }
+.ovl-slate-headline-probe { position: absolute; left: 0; top: 0; white-space: nowrap; max-width: none; }
 .ovl-slate-line { font-size: 30px; font-weight: 500;
                    color: color-mix(in srgb, var(--sport-ink) 70%, transparent); }
 .ovl-slate-matchup {

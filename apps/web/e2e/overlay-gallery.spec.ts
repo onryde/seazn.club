@@ -19,8 +19,10 @@ import { signInStaff } from "./overlay-kit";
 //   8. figures              no crease figure or ball glyph is ellipsised, clipped or out of its entry, at every frame,
 //                           and the striker's mark leads its name (review a and confirm pass, PR #974)
 //   8b. squeeze             with one batter's name made hostile, every figure still sits whole inside its own entry
-//   4c. Result headline     the outcome sentence is NEVER clamped: every locale × every `fixture.decidedBy.*` sentence
-//                           with a 43-character winner, in every Result-card cell (R2005 review round 1, item 2)
+//   4c. Result card         every Result card fits by its measured headline ladder (owner ruling 1, 2026-10-19): every
+//                           locale × every `fixture.decidedBy.*` sentence with a 43-character winner, through the real
+//                           producer (the gallery's stress mode); never clamped, nothing hidden, each rung only when
+//                           the one before does not fit on one line
 // The cells are `galleryCells(OVERLAY_TEMPLATES, …)` — the gallery's one cell source — so a template or scene added to
 // the registry is swept here with no edit. Every check prints its count, and zero checked fails it. The per-check
 // verdicts are `expect.soft`, so one run reports EVERY check that fails rather than stopping at the first.
@@ -474,72 +476,135 @@ test.describe("the staff overlay gallery (R2007)", () => {
     expect(frames, "frames checked").toBe(3);
   });
 
-  // R2005 review round 1, item 2 (coordinator ruling): the 2-line clamp is the "A vs B" headline's yield ONLY — the
-  // name pills under the tiles carry each side. The Result headline is the outcome sentence ("… won 4–3 on penalties",
-  // "… advanced by organiser decision"), and a clamp would cut the very words that say how the match was decided. So
-  // in every Result-card cell, every locale's every `fixture.decidedBy.*` sentence, with a 43-character winner, must
-  // compute no line clamp and hide none of its own text. The sentences come from the dictionaries on disk (every
-  // locale directory), the cells from the page — nothing here is a list typed for the test.
-  test("check 4c: a Result headline is never clamped — every locale × every decided sentence, a 43-character winner", async ({ page }) => {
-    test.setTimeout(300_000);
+  // Owner ruling (1), 2026-10-19 (relayed by the coordinator): the Result card's headline is a MEASURED ladder — the full
+  // result sentence, the same sentence with the winner's short code, that short sentence at the compact size, then the
+  // highlights give way; each rung only when the one before does not fit on ONE line. (Round 1, item 2 before it: the
+  // two-line clamp is the "A vs B" headline's alone, and a Result headline is never clamped.)
+  //
+  // Every Result card runs through the REAL producer and the REAL ladder: the gallery's stress mode
+  // (`gallery-stress.ts`) makes every winner-bearing decided template one `fixture.decidedBy.*` sentence and both sides
+  // a 43-character name, and the page is loaded in each locale. Sentences and locales come from the dictionaries on disk;
+  // the cells from the page. Per card: nothing hidden (the card's own overflow, any text box cut — headline AND
+  // highlights), no clamp, a rung-0..2 headline on ONE line, each rung taken only when the one before does not fit
+  // (measured by a clone of the previous rung in the same card), and the highlights gone exactly at the last rung.
+  test("check 4c: every Result card fits by the headline ladder — every locale × every decided sentence, a 43-character winner, the real producer", async ({
+    page,
+    baseURL,
+  }) => {
+    test.setTimeout(900_000);
     await signInStaff(page);
     const WINNER = "Haruto Fujimoto and Kenji Watanabe-Yamamoto";
     expect(WINNER.length).toBe(43);
     const dictRoot = fileURLToPath(new URL("../src/dictionaries/", import.meta.url));
     const locales = readdirSync(dictRoot, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
-    const sentences: { locale: string; key: string; text: string }[] = [];
+    expect(locales.length, "anti-vacuity: the locales read").toBeGreaterThanOrEqual(4);
+
+    const total = { loads: 0, cases: 0, hidden: [] as string[], rungs: { full: 0, short: 0, compact: 0, yield: 0 } as Record<string, number>, forced: 0, perLoad: new Set<number>() };
+    const sweep = async (locale: string, key: string, template: string, extra: Record<string, string> = {}) => {
+      await page.context().addCookies([{ name: "seazn_locale", value: locale, url: baseURL! }]);
+      const q = new URLSearchParams({ decided: key, name: WINNER, ...extra });
+      await openGallery(page, `?${q.toString()}`);
+      await page.evaluate(() => document.fonts.ready);
+      await expect
+        .poll(() => page.locator('[data-testid="ovl-slate-headline"][data-result-rung]:not([data-result-ladder-settled="true"])').count(), {
+          message: `${locale} ${key}: every Result headline measured`,
+        })
+        .toBe(0);
+      await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+      return page.evaluate(
+        ({ template, winner, score }) => {
+          const out = { cells: 0, hidden: [] as string[], rungs: {} as Record<string, number>, forced: 0 };
+          const linesOf = (el: HTMLElement) => Math.round(el.offsetHeight / parseFloat(getComputedStyle(el).lineHeight));
+          const cells = [...document.querySelectorAll<HTMLElement>("[data-gallery-cell]")].filter((c) =>
+            c.querySelector('[data-testid="ovl-slate"][data-slate-state="ended"]:not([data-card])'),
+          );
+          for (const cell of cells) {
+            const h = cell.querySelector<HTMLElement>('[data-testid="ovl-slate-headline"]');
+            const card = cell.querySelector<HTMLElement>('[data-testid="ovl-slate-card"]');
+            const where = cell.dataset.galleryCell ?? "?";
+            if (!h || !card) {
+              out.hidden.push(`${where}: no headline or card`);
+              continue;
+            }
+            out.cells++;
+            const rung = h.getAttribute("data-result-rung") ?? "none";
+            out.rungs[rung] = (out.rungs[rung] ?? 0) + 1;
+            const code = cell.querySelector(".ovl-slate-tile-code")?.textContent ?? "";
+            const full = template.replaceAll("{score}", score).replaceAll("{winner}", winner);
+            const short = template.replaceAll("{score}", score).replaceAll("{winner}", code);
+            if (h.textContent === full || h.textContent === short) out.forced++;
+            // 1. Nothing hidden: the card's own overflow, then every text box in it (the headline AND the highlights).
+            if (card.scrollHeight > card.clientHeight + 1) out.hidden.push(`${where} [${rung}]: the card hides ${card.scrollHeight - card.clientHeight}px`);
+            for (const el of card.querySelectorAll<HTMLElement>("*")) {
+              const own = [...el.childNodes].some((n) => n.nodeType === Node.TEXT_NODE && (n.textContent ?? "").trim() !== "");
+              if (!own) continue;
+              const cs = getComputedStyle(el) as CSSStyleDeclaration & { webkitLineClamp?: string };
+              if (el === h && cs.webkitLineClamp !== undefined && cs.webkitLineClamp !== "" && cs.webkitLineClamp !== "none") {
+                out.hidden.push(`${where} [${rung}]: the Result headline is line-clamped (${cs.webkitLineClamp})`);
+              }
+              if (el.scrollHeight > el.clientHeight + 1 && cs.overflowY !== "visible") {
+                out.hidden.push(`${where} [${rung}]: "${(el.textContent ?? "").slice(0, 28)}" cut to ${el.clientHeight}px of ${el.scrollHeight}px`);
+              }
+            }
+            // 2. A headline rung is ONE line; the last rung alone may wrap, and it alone drops the highlights.
+            if (rung !== "yield" && linesOf(h) !== 1) out.hidden.push(`${where} [${rung}]: the headline runs ${linesOf(h)} lines`);
+            const hasHighlights = cell.querySelector('[data-testid="ovl-slate-highlights"]') !== null;
+            if (rung === "yield" && hasHighlights) out.hidden.push(`${where} [yield]: the highlights did not give way`);
+            // 3. Taken only when the rung before does not fit on one line: the previous rung, cloned into this card.
+            //    short ← the full sentence at the headline size (the first probe's text); compact ← the short sentence at the
+            //    headline size; yield ← the short sentence at the compact size (both the text on air).
+            const previous: Record<string, { text: string; compact: boolean }> = {
+              short: { text: cell.querySelector(".ovl-slate-headline-probe")?.textContent ?? "", compact: false },
+              compact: { text: h.textContent ?? "", compact: false },
+              yield: { text: h.textContent ?? "", compact: true },
+            };
+            const prev = previous[rung];
+            if (prev) {
+              const probe = document.createElement("span");
+              probe.className = `ovl-slate-headline ovl-display${prev.compact ? " ovl-slate-headline--compact" : ""}`;
+              probe.textContent = prev.text;
+              h.after(probe);
+              const lines = linesOf(probe);
+              probe.remove();
+              if (lines <= 1) out.hidden.push(`${where} [${rung}]: taken though the rung before fits on one line ("${(probe.textContent ?? "").slice(0, 40)}")`);
+            }
+          }
+          return out;
+        },
+        { template, winner: WINNER, score: "4–3" },
+      );
+    };
+
     for (const locale of locales) {
       const ui = JSON.parse(readFileSync(`${dictRoot}${locale}/ui.json`, "utf8")) as Record<string, string>;
-      for (const [key, template] of Object.entries(ui)) {
-        if (!key.startsWith("fixture.decidedBy.")) continue;
-        sentences.push({ locale, key, text: template.replaceAll("{winner}", WINNER).replaceAll("{score}", "4–3") });
+      const keys = Object.keys(ui).filter((k) => k.startsWith("fixture.decidedBy."));
+      expect(keys.length, `anti-vacuity: ${locale}'s decided sentences`).toBeGreaterThanOrEqual(10);
+      for (const key of keys) {
+        const read = await sweep(locale, key, ui[key]!);
+        total.loads++;
+        total.cases += read.cells;
+        total.perLoad.add(read.cells);
+        total.forced += read.forced;
+        total.hidden.push(...read.hidden.map((h) => `${locale} ${key} ${h}`));
+        for (const [r, n] of Object.entries(read.rungs)) total.rungs[r] = (total.rungs[r] ?? 0) + n;
       }
     }
-    expect(locales.length, "anti-vacuity: the locales read").toBeGreaterThanOrEqual(4);
-    expect(sentences.length, "anti-vacuity: the decided sentences read").toBeGreaterThanOrEqual(locales.length * 10);
-    await openGallery(page);
-    const read = await page.evaluate((rows) => {
-      const out = { cells: 0, checked: 0, clamped: [] as string[], cardsHiding: 0, hidingBy: {} as Record<string, number>, longest: 0 };
-      const cells = [...document.querySelectorAll<HTMLElement>("[data-gallery-cell]")].filter((cell) =>
-        cell.querySelector('[data-testid="ovl-slate"][data-slate-state="ended"]:not([data-card])'),
-      );
-      for (const cell of cells) {
-        const h = cell.querySelector<HTMLElement>('[data-testid="ovl-slate-headline"]');
-        const card = cell.querySelector<HTMLElement>('[data-testid="ovl-slate-card"]');
-        if (!h || !card) continue;
-        out.cells++;
-        const original = h.textContent;
-        for (const r of rows) {
-          h.textContent = r.text;
-          const cs = getComputedStyle(h) as CSSStyleDeclaration & { webkitLineClamp?: string; lineClamp?: string };
-          const clamp = [cs.webkitLineClamp, cs.lineClamp].filter((v) => v !== undefined && v !== "" && v !== "none");
-          const hidden = h.scrollHeight - h.clientHeight;
-          // Layout px (`scrollHeight`), never the preview's scaled `getBoundingClientRect`: the content's own height.
-          const lines = Math.round(h.scrollHeight / parseFloat(cs.lineHeight));
-          out.longest = Math.max(out.longest, lines);
-          // Hidden text needs a box that hides it: on an `overflow: visible` box `scrollHeight` also counts the glyphs'
-          // own content area past `line-height: 1.04` (~4 px here), which is painted, not hidden.
-          if (clamp.length > 0 || (hidden > 1 && cs.overflowY !== "visible")) {
-            out.clamped.push(`${cell.dataset.galleryCell} ${r.locale} ${r.key}: clamp ${clamp.join("/") || "none"}, hides ${hidden}px`);
-          }
-          if (card.scrollHeight > card.clientHeight + 1) {
-            out.cardsHiding++;
-            const by = `${cell.dataset.template}/${cell.dataset.sport}`;
-            out.hidingBy[by] = (out.hidingBy[by] ?? 0) + 1;
-          }
-          out.checked++;
-        }
-        h.textContent = original;
-      }
-      return out;
-    }, sentences);
     console.log(
-      `[4c] locales ${locales.length} (${locales.join(", ")}), sentences ${sentences.length}, Result cells ${read.cells}, headlines checked ${read.checked}, clamped ${read.clamped.length}, longest ${read.longest} lines; cards that then hide content (R2007 region limit, not this check's verdict): ${read.cardsHiding} ${JSON.stringify(read.hidingBy)}`,
+      `[4c] locales ${locales.length} (${locales.join(", ")}), loads ${total.loads}, Result cards checked ${total.cases}, showing the forced sentence ${total.forced}, rungs ${JSON.stringify(total.rungs)}, hidden ${total.hidden.length}`,
     );
-    expect(read.cells, "anti-vacuity: Result-card cells found").toBeGreaterThan(0);
-    expect(read.checked, "every sentence in every cell").toBe(read.cells * sentences.length);
-    expect(read.longest, "anti-vacuity: the sweep reached a headline past the old two-line clamp").toBeGreaterThan(2);
-    expect.soft(read.clamped.slice(0, 20), `Result headlines clamped (${read.clamped.length})`).toEqual([]);
+    expect([...total.perLoad], "every load draws the same Result cells").toHaveLength(1);
+    expect(total.cases, "anti-vacuity: every Result card of every load").toBe(total.loads * [...total.perLoad][0]!);
+    expect(total.cases).toBeGreaterThan(1000);
+    expect(total.forced, "anti-vacuity: the forced sentence reached the cards").toBeGreaterThan(0);
+    for (const r of ["full", "short", "compact"]) expect(total.rungs[r] ?? 0, `anti-vacuity: rung ${r} reached`).toBeGreaterThan(0);
+    expect(total.hidden.slice(0, 25), `Result cards hiding content or off the ladder (${total.hidden.length})`).toEqual([]);
+
+    // The last rung: a long explicit short name (`?code=`, the model's own `short`) runs even the compact short sentence
+    // past one line — the highlights give way, and the card still hides nothing.
+    const reach = await sweep("fr", "fixture.decidedBy.settled.organiser", JSON.parse(readFileSync(`${dictRoot}fr/ui.json`, "utf8"))["fixture.decidedBy.settled.organiser"], { code: "HARUTO-KENJI-FC" });
+    console.log(`[4c] last rung (fr, organiser, a 15-character code): cards ${reach.cells}, rungs ${JSON.stringify(reach.rungs)}, hidden ${reach.hidden.length}`);
+    expect(reach.rungs.yield ?? 0, "anti-vacuity: the last rung reached").toBeGreaterThan(0);
+    expect(reach.hidden.slice(0, 25)).toEqual([]);
   });
 
   test("check 6: no preview fetches or subscribes — nothing leaves the page for 16 s (longer than POLL_MS)", async ({ page }) => {
