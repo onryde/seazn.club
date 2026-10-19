@@ -102,10 +102,12 @@ export function RegisterLichessCard({
           )}
           {state.configured ? (
             <>
+              {/* `ph-no-capture`: `next` is the register page's return path, which carries the team's join code (`?join=`),
+                  url-encoded into this href; PostHog replay records attributes before the `before_send` scrub can see them. */}
               <a
                 href={lichessLinkStartHref(orgSlug, next)}
                 data-testid="register-lichess-start"
-                className="flex min-h-11 items-center justify-center rounded-[10px] bg-[#7c3aed] px-4 text-[15px] font-semibold text-white no-underline hover:bg-[#6d28d9] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#7c3aed]"
+                className="ph-no-capture flex min-h-11 items-center justify-center rounded-[10px] bg-[#7c3aed] px-4 text-[15px] font-semibold text-white no-underline hover:bg-[#6d28d9] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#7c3aed]"
               >
                 {t("settings.account.lichess.link")}
               </a>

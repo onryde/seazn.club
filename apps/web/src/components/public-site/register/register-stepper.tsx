@@ -518,7 +518,8 @@ export function RegisterStepper({
               {submitError.code === "LICHESS_LINK_REQUIRED" ? (
                 <p className="text-sm text-ink">
                   {t("register.lichessLinkRequired")}{" "}
-                  <a href={lichessLinkStartHref(orgSlug, lichessReturn)} className="font-medium underline" data-testid="register-lichess-link">
+                  {/* `ph-no-capture`: the return path carries the team's join code (`?join=`), url-encoded into this href. */}
+                  <a href={lichessLinkStartHref(orgSlug, lichessReturn)} className="ph-no-capture font-medium underline" data-testid="register-lichess-link">
                     {t("register.lichessLinkCta")}
                   </a>
                 </p>

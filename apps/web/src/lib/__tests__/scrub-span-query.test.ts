@@ -14,7 +14,9 @@
 //    ROUTE is named by the transaction, by the trace data's own url, or only by a child span's sibling url, the token is
 //    nowhere in the event and the other parameters of the query survive;
 //  - the positive pair: a reusable cart token, an ordinary route and a one-time route with no token keep their query;
-//  - the body: a serialised request body in a span's data (`http.request.body.data`) goes with the route's body.
+//  - the body: a serialised request body in a span's data (`http.request.body.data`) goes with the route's body;
+//  - each key that NAMES a span's request (`SPAN_URL_KEYS`) pins the span to its route on its own: the sibling query and body
+//    of a span that only that one key identifies are scrubbed, so dropping any single key from the list goes red.
 //
 // Sport: not applicable — account credentials are sport-agnostic.
 import { describe, expect, it, vi } from "vitest";
@@ -29,12 +31,12 @@ vi.mock("@/lib/db", async (importOriginal) => ({
 
 import { USER_ID } from "./_fake-sql";
 import { NOT_ONE_TIME, linkBuilders } from "./_route-scan";
-import { clientSpanDetails, otelTraceData, outgoingBreadcrumb, serverSpanDetails, transaction, type SpanData } from "./_sdk-span-data";
+import { clientSpanDetails, otelTraceData, outgoingBreadcrumb, outgoingRequestSpanData, serverSpanDetails, transaction, type SpanData } from "./_sdk-span-data";
 import { createInvite } from "@/server/usecases/invites";
 import { createLoginLink } from "@/lib/login-link";
 import { createPasswordResetToken } from "@/lib/password-reset";
 import { createVerificationToken } from "@/lib/verification";
-import { scrubSentryEvent } from "../scrub-score-url";
+import { SPAN_URL_KEYS, scrubSentryEvent } from "../scrub-score-url";
 
 const ORIGIN = "https://seazn.club";
 const oneTimeRoutes = [...linkBuilders().keys()].filter((r) => !(r in NOT_ONE_TIME)).sort();
@@ -235,5 +237,76 @@ describe("a serialised request body in a span's data goes with the route's body"
     );
     expect(Object.hasOwn(result.spans[0]!.data, "http.request.body.data")).toBe(false);
     expect(json(result)).not.toContain(password);
+  });
+});
+
+describe("every key that names a span's request pins the span to its route, each on its own", () => {
+  // Typed on purpose: this is the test's own statement of which keys name a request. It is compared with the scrubber's list
+  // in both directions (a dropped key and an added one both fail), and with what the SDK's helpers really write, below.
+  const KEYS = ["url", "url.full", "url.path", "url.template", "http.url", "http.target", "http.route"] as const;
+
+  /** Every string the SDK's helpers write for a request to `url` (route template `route`) that names the request, by key. */
+  function written(url: string, route: string): Record<string, string> {
+    const path = new URL(url).pathname;
+    const out: Record<string, string> = {};
+    for (const data of [
+      serverSpanDetails(url, route).data,
+      clientSpanDetails(url, "GET", route).data,
+      otelTraceData(url),
+      outgoingRequestSpanData(url),
+      outgoingBreadcrumb(url).data,
+    ]) {
+      for (const [key, value] of Object.entries(data)) if (typeof value === "string" && (value.includes(path) || value === route)) out[key] ??= value;
+    }
+    return out;
+  }
+
+  it("the scrubber's list is exactly this one, and it is what the SDK's helpers write (anti-vacuity: seven keys, none empty)", () => {
+    expect([...SPAN_URL_KEYS].sort()).toEqual([...KEYS].sort());
+    const sdk = written(`${ORIGIN}/api/orgs/o1/things?x=1`, "/api/orgs/[id]/things");
+    // The helpers write the request under these keys; any other key they add for a request has no entry in the list and fails here.
+    expect(Object.keys(sdk).sort()).toEqual([...KEYS].sort());
+    for (const key of KEYS) expect(sdk[key], key).toBeTruthy();
+  });
+
+  /** A child span of an unrelated page whose ONLY request-naming key is `key`, with the sibling data a scrub must reach. */
+  const spanNamedBy = (key: string, url: string, route: string, extra: SpanData) => {
+    const value = written(url, route)[key];
+    expect(value, `${key}: the SDK wrote a value for ${url}`).toBeTruthy();
+    return out(
+      transaction({
+        name: "GET /dashboard",
+        traceData: otelTraceData(`${ORIGIN}/dashboard`),
+        spans: [{ description: "request", data: { [key]: value, ...extra } }],
+      }),
+    ).spans[0]!.data;
+  };
+
+  it.each(KEYS)("%s alone names a one-time-token route: the sibling bare query loses the token", (key) => {
+    const query = `?token=${tokens[0]!}&${NEXT}`;
+    const data = spanNamedBy(key, `${ORIGIN}/magic-link${query}`, "/magic-link", { "http.query": query, "url.query": query });
+    expect(data["http.query"], key).toBe(`?token=[token]&${NEXT}`);
+    expect(data["url.query"], key).toBe(`?token=[token]&${NEXT}`);
+  });
+
+  it.each(KEYS)("%s alone names a route that takes a credential in its body: the serialised body goes", (key) => {
+    const body = JSON.stringify({ email: "a@example.test", password: "correct-horse-battery-1" });
+    const data = spanNamedBy(key, `${ORIGIN}/api/auth/login`, "/api/auth/login", { "http.request.body.data": body });
+    expect(Object.hasOwn(data, "http.request.body.data"), key).toBe(false);
+  });
+
+  it.each(KEYS)("%s alone names a route with a secret in its path: the serialised body goes", async (key) => {
+    const invite = (await createInvite("00000000-0000-4000-8000-000000000002", USER_ID, { role: "admin", max_uses: 1 })).token;
+    const body = JSON.stringify({ token: invite });
+    const data = spanNamedBy(key, `${ORIGIN}/api/invites/${invite}/claim`, "/api/invites/[token]/claim", { "http.request.body.data": body });
+    expect(Object.hasOwn(data, "http.request.body.data"), key).toBe(false);
+  });
+
+  it.each(KEYS)("%s alone names an ordinary route: the query and the body stay (the positive pair)", (key) => {
+    const query = `?token=${tokens[0]!}&page=2`;
+    const body = JSON.stringify({ note: "hello" });
+    const data = spanNamedBy(key, `${ORIGIN}/api/v1/things${query}`, "/api/v1/things", { "http.query": query, "http.request.body.data": body });
+    expect(data["http.query"], key).toBe(query);
+    expect(data["http.request.body.data"], key).toBe(body);
   });
 });

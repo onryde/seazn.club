@@ -4,8 +4,9 @@
 // api/invites, api/claims, api/checkin). A competition or club slug is free text: `/o/x/c/join/d/claim` is a perfectly good
 // address, and an unanchored `/join/` rule turned it into `/o/x/c/join/[token]/claim`, and dropped the request body of a
 // Sentry event on it. The rule now starts at the start of a path: the start of the string, after whitespace or a
-// delimiter (a transaction name's `GET `, a quote, `=`, `&`, `?`), after an origin, or after the marketing locale prefix
-// (`/fr`), and for the URL-encoded form after the encoded equivalents at any depth.
+// delimiter (a transaction name's `GET `, a quote, `=`, `&`, `?`, `:`, `{`, `|`, a backtick), after an origin (with its
+// scheme in any letter case, or protocol-relative: `//host`), or after the marketing locale prefix (`/fr`), and for the
+// URL-encoded form after the encoded equivalents at any depth.
 //
 // The probes are built by the app's own route builders (routes.ts), every builder, with every reserved word as every slug
 // argument; nothing here types a URL where a builder exists. The positive pair (a real secret at a root path is still
@@ -76,7 +77,17 @@ describe("a slug named like a secret route is not a secret (probes built by the 
         ["origin + query", `${ORIGIN}${url}${url.includes("?") ? "&" : "?"}from=qr#top`],
         ["transaction", `GET ${url}`],
         ["sentence", `Failed to fetch RSC payload for ${ORIGIN}${url}`],
+        // The widened anchor: every new way a root may start must still not make a slug a root.
+        ["protocol-relative", `//seazn.club${url}`],
+        ["protocol-relative + port", `//localhost:3000${url}`],
+        ["upper-case scheme", `HTTPS://seazn.club${url}`],
+        ["colon", `url:${url}`],
+        ["brace", `{${url}}`],
+        ["pipe", `a|${url}`],
+        ["backtick", `\`${url}\``],
         ...[1, 2, 3].flatMap((depth): [string, string][] => [
+          [`login next= (upper-case scheme) depth ${depth}`, `${ORIGIN}/login?next=${encode(`HTTPS://seazn.club${url}`, depth)}`],
+          [`login next= (protocol-relative) depth ${depth}`, `${ORIGIN}/login?next=${encode(`//seazn.club${url}`, depth)}`],
           [`login next= depth ${depth}`, `${ORIGIN}/login?next=${encode(url, depth)}`],
           [`login next= (with origin) depth ${depth}`, `${ORIGIN}/login?lang=en&next=${encode(`${ORIGIN}${url}`, depth)}&x=1`],
           [`login next= lower hex depth ${depth}`, `${ORIGIN}/login?next=${encode(url, depth).replace(/(%(?:25)*)([0-9A-F]{2})/g, (_m, p: string, h: string) => p + h.toLowerCase())}`],
@@ -88,7 +99,7 @@ describe("a slug named like a secret route is not a secret (probes built by the 
       }
     }
     expect(failures.slice(0, 5), `${failures.length} of ${checked} changed`).toEqual([]);
-    expect(checked).toBe(all.length * 14);
+    expect(checked).toBe(all.length * 27);
   });
 
   it("a Sentry event on such a URL keeps its URL, its transaction and its request body", () => {
@@ -155,6 +166,14 @@ describe("the anchor still finds a real secret at a route root, in every context
         ["transaction", `POST ${p}`],
         ["sentence", `Failed to fetch RSC payload for ${ORIGIN}${p}`],
         ["quoted", `{"to":"${p}"}`],
+        ["protocol-relative", `//seazn.club${p}`],
+        ["protocol-relative + port", `//localhost:3000${p}`],
+        ["upper-case scheme", `HTTPS://seazn.club${p}`],
+        ["mixed-case scheme + port", `Http://localhost:3000${p}`],
+        ["colon", `url:${p}`],
+        ["brace", `{${p}}`],
+        ["pipe", `a|${p}`],
+        ["backtick", `\`${p}\``],
         ["next=", `${ORIGIN}/login?next=${p}`],
         ["&next=", `${ORIGIN}/login?lang=en&next=${p}`],
         ...LOCALES.map((l): [string, string] => [`locale ${l}`, `${ORIGIN}/${l}${p}`]),
@@ -163,6 +182,17 @@ describe("the anchor still finds a real secret at a route root, in every context
           [`encoded origin depth ${depth}`, `${ORIGIN}/login?next=${encode(`${ORIGIN}${p}`, depth)}`],
           [`encoded origin + port depth ${depth}`, `${ORIGIN}/login?next=${encode(`http://localhost:3000${p}`, depth)}`],
           [`encoded in a query depth ${depth}`, `${ORIGIN}/x?from=a&ret=${encode(p, depth)}&b=1`],
+          [`encoded upper-case scheme depth ${depth}`, `${ORIGIN}/login?next=${encode(`HTTPS://seazn.club${p}`, depth)}`],
+          [`encoded protocol-relative depth ${depth}`, `${ORIGIN}/login?next=${encode(`//seazn.club${p}`, depth)}`],
+          [`encoded colon depth ${depth}`, `${ORIGIN}/x?ret=${encode(`url:${p}`, depth)}`],
+          [`encoded brace depth ${depth}`, `${ORIGIN}/x?ret=${encode(`{${p}}`, depth)}`],
+          [`encoded pipe depth ${depth}`, `${ORIGIN}/x?ret=${encode(`a|${p}`, depth)}`],
+          [`encoded backtick depth ${depth}`, `${ORIGIN}/x?ret=${encode(`\`${p}\``, depth)}`],
+          // A plain delimiter right before an ENCODED path (the encoded rule takes the plain set too).
+          [`colon, then encoded depth ${depth}`, `url:${encode(p, depth)}`],
+          [`brace, then encoded depth ${depth}`, `{${encode(p, depth)}}`],
+          [`pipe, then encoded depth ${depth}`, `a|${encode(p, depth)}`],
+          [`backtick, then encoded depth ${depth}`, `\`${encode(p, depth)}\``],
         ]),
       ];
       for (const [form, input] of forms) {
@@ -174,7 +204,7 @@ describe("the anchor still finds a real secret at a route root, in every context
       }
     }
     expect(failures.slice(0, 5), `${failures.length} of ${checked} failed`).toEqual([]);
-    expect(checked).toBe(7 * (8 + LOCALES.length + 12));
+    expect(checked).toBe(7 * (8 + 8 + LOCALES.length + 12 + 18 + 12));
   });
 
   it("the same word one level down is not the root: a segment before it takes it off the root, for every route", async () => {
@@ -183,14 +213,26 @@ describe("the anchor still finds a real secret at a route root, in every context
     for (const { path: p } of await cases()) {
       for (const prefix of ["/o/x", "/shared/org/comp", "/api/v1/x", "/c/y"]) {
         // `/api/...` twins are routes of their own; a prefix before `/api` is a different route entirely.
-        const input = `${ORIGIN}${prefix}${p}`;
-        const out = scrubScoreUrl(input);
         // `/api/orgs/<id>/invites/` is anchored at `/api/orgs`, so only a prefix before THAT is off the root.
-        if (out !== input) failures.push(`${prefix}${p}: ${out}`);
-        checked++;
+        const inputs = [
+          `${ORIGIN}${prefix}${p}`,
+          `//seazn.club${prefix}${p}`,
+          `HTTPS://seazn.club${prefix}${p}`,
+          `url:${prefix}${p}`,
+          `{${prefix}${p}}`,
+          `a|${prefix}${p}`,
+          `\`${prefix}${p}\``,
+          `${ORIGIN}/login?next=${encodeURIComponent(`HTTPS://seazn.club${prefix}${p}`)}`,
+          `${ORIGIN}/login?next=${encodeURIComponent(`//seazn.club${prefix}${p}`)}`,
+        ];
+        for (const input of inputs) {
+          const out = scrubScoreUrl(input);
+          if (out !== input) failures.push(`${input}: ${out}`);
+          checked++;
+        }
       }
     }
     expect(failures.slice(0, 5), `${failures.length} of ${checked} changed`).toEqual([]);
-    expect(checked).toBe(7 * 4);
+    expect(checked).toBe(7 * 4 * 9);
   });
 });

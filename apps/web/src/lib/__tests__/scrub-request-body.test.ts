@@ -8,7 +8,7 @@
 //    verification, the password reset (its body also holds the NEW password), the email-change confirmation, the funnel
 //    claim, and the registrant's access-token calls (withdraw, checkout, resend); and the routes whose body is a PASSWORD,
 //    log-in and sign-up (a standing credential rather than a one-time token, but the same leak);
-//  - every route whose PATH carries a secret (`SECRET_PATH_PREFIXES`): `/api/invites/<token>/accept|claim`,
+//  - every route whose PATH carries a secret (`SECRET_PATH_ROUTES`): `/api/invites/<token>/accept|claim`,
 //    `/api/claims/<token>/accept`, `/api/checkin/<token>`, `/api/orgs/<id>/invites/<token>/revoke`.
 //
 // The route lists are not typed here. They come from the app's own directories:

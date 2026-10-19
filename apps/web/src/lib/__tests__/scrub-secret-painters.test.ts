@@ -12,6 +12,12 @@
 //    a variable, property or function whose initialiser builds one of those URLs (`const claim_url = `${base}${routes.claim(s)}``)
 //    is secret-bound; so is the scrubbed `join_code` query parameter and its camelCase;
 //  - the names are followed through `useState` (`setLink(out.claim_url)` makes `link` secret-bound) and local `const`s;
+//  - a secret handed to a COMPONENT as a prop is followed into that component's file: `<AuthForm next={`/claim/${token}`} />`
+//    makes `next` secret-bound there, and a template or `encodeURIComponent(...)` built from a bound name is bound too, so
+//    its `<a href={`/api/auth/google?next=${encodeURIComponent(next)}`}>` is a painter (review 2: the Google button's href
+//    carried the claim secret, and the scan, which only knew names bound in a file, never saw it);
+//  - a secret stored in an object field a component builds for its siblings (`{ next: lichessReturn }` -> `lichess.next` in the
+//    step next door) binds that field's name in the files of the same directory;
 //  - every JSX site that PAINTS one (an interpolated text child, or an attribute other than an event handler) is found;
 //  - each painting element, or an ancestor in the same file, must carry the class, unless its file is in `PAINTERS` with a
 //    reason it does not paint the secret. A file with a painter that is in neither list fails: a new painter needs a verdict.
@@ -134,6 +140,9 @@ function endpointCall(rel: string): RegExp {
   return new RegExp("/" + segs.map((s) => (/^\[.+\]$/.test(s) ? "\\$\\{[^}]*\\}" : esc(s))).join("/") + "(?![\\w/-])");
 }
 
+/** Calls that return their argument in another spelling: `encodeURIComponent(next)` is as secret as `next`. */
+const PASS_THROUGH = new Set(["encodeURIComponent", "encodeURI", "decodeURIComponent", "decodeURI", "String"]);
+
 /** Names too common to carry a secret across files by themselves. */
 const GENERIC = new Set(["url", "link", "href", "code", "token", "secret", "value", "path", "data", "result"]);
 
@@ -144,6 +153,8 @@ interface Known {
   /** Names that cross a file: a JSON field an API route replies with, an exported function that builds the URL, the seeds. */
   global: Set<string>;
   local: Map<string, Set<string>>;
+  /** Secrets handed to a component as a prop, and the call site: `<AuthForm next={`/claim/${token}`} />` -> AuthForm / next. */
+  props: { component: string; prop: string; from: string }[];
 }
 
 /** Is this expression a credential URL, or a value derived straight from one (a template, a builder call, a bound name)? */
@@ -151,9 +162,13 @@ function isSecretValue(node: ts.Expression, file: ts.SourceFile, known: Known, t
   const e = unwrap(node);
   const local = known.local.get(file.fileName)!;
   const again = (x: ts.Expression) => isSecretValue(x, file, known, template, builders);
-  if (ts.isTemplateExpression(e) || ts.isNoSubstitutionTemplateLiteral(e)) return template.test(e.getText(file));
+  // A template is a credential URL by its text, or by what it interpolates (`/api/auth/google?next=${encodeURIComponent(next)}`).
+  if (ts.isTemplateExpression(e)) return template.test(e.getText(file)) || e.templateSpans.some((span) => again(span.expression));
+  if (ts.isNoSubstitutionTemplateLiteral(e)) return template.test(e.getText(file));
   if (ts.isCallExpression(e)) {
     const callee = e.expression;
+    // A wrapper that returns the value in another spelling keeps it a secret.
+    if (ts.isIdentifier(callee) && PASS_THROUGH.has(callee.text)) return e.arguments.some((a) => again(a));
     if (ts.isPropertyAccessExpression(callee) && callee.expression.getText(file) === "routes" && builders.has(callee.name.text)) return true;
     // A call of a function known to build one: `claimHref(...)`.
     return ts.isIdentifier(callee) && (local.has(callee.text) || known.global.has(callee.text));
@@ -181,11 +196,34 @@ function buildsSecret(fn: ts.FunctionLikeDeclaration, file: ts.SourceFile, known
   return found;
 }
 
+/** Where each component is declared (an uppercase function or arrow-function const), and whether another file can import it. */
+function componentDecls(all: Source[]): Map<string, { fileName: string; exported: boolean }[]> {
+  const out = new Map<string, { fileName: string; exported: boolean }[]>();
+  const isExported = (n: ts.Node) => ts.canHaveModifiers(n) && !!ts.getModifiers(n)?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword);
+  for (const { file, tsx } of all) {
+    if (!tsx) continue;
+    const add = (name: string, exported: boolean) => out.set(name, [...(out.get(name) ?? []), { fileName: file.fileName, exported }]);
+    const visit = (n: ts.Node) => {
+      if (ts.isFunctionDeclaration(n) && n.name && /^[A-Z]/.test(n.name.text)) add(n.name.text, isExported(n));
+      else if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && /^[A-Z]/.test(n.name.text) && n.initializer) {
+        const init = unwrap(n.initializer);
+        if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) add(n.name.text, isExported(n.parent.parent));
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(file);
+  }
+  return out;
+}
+
 /** Learn the secret-bound names of every file, to a fixed point (a file's names feed the files that import them). */
 function learn(all: Source[]): Known {
   const template = secretTemplate();
   const builders = new Set(secretBuilderNames());
-  const known: Known = { endpoints: [], global: new Set(SEED_NAMES), local: new Map(all.map((s) => [s.file.fileName, new Set<string>(SEED_NAMES)])) };
+  const components = componentDecls(all);
+  const byDir = new Map<string, Source[]>();
+  for (const s of all) if (s.tsx) byDir.set(path.dirname(s.file.fileName), [...(byDir.get(path.dirname(s.file.fileName)) ?? []), s]);
+  const known: Known = { endpoints: [], global: new Set(SEED_NAMES), local: new Map(all.map((s) => [s.file.fileName, new Set<string>(SEED_NAMES)])), props: [] };
   for (let changed = true; changed; ) {
     changed = false;
     for (const { file, rel } of all) {
@@ -214,6 +252,26 @@ function learn(all: Source[]): Known {
       for (const e of known.endpoints) if (!isRoute && e.call.test(file.text)) addLocal(e.key);
       const visit = (n: ts.Node) => {
         const secret = (x: ts.Expression) => isSecretValue(x, file, known, template, builders);
+        if (ts.isJsxOpeningElement(n) || ts.isJsxSelfClosingElement(n)) {
+          // A secret handed to a component as a prop is a secret in the files that declare that component.
+          const tag = n.tagName.getText(file);
+          if (isComponentTag(tag)) {
+            for (const attr of n.attributes.properties) {
+              if (!ts.isJsxAttribute(attr) || NOT_PAINTED_ATTR.test(attr.name.getText(file))) continue;
+              if (!attr.initializer || !ts.isJsxExpression(attr.initializer) || !attr.initializer.expression || !secret(attr.initializer.expression)) continue;
+              const prop = attr.name.getText(file);
+              for (const decl of components.get(tag) ?? []) {
+                if (!decl.exported && decl.fileName !== file.fileName) continue;
+                const names = known.local.get(decl.fileName)!;
+                if (!names.has(prop)) {
+                  names.add(prop);
+                  changed = true;
+                }
+              }
+              if (!known.props.some((p) => p.component === tag && p.prop === prop && p.from === rel)) known.props.push({ component: tag, prop, from: rel });
+            }
+          }
+        }
         if (ts.isVariableDeclaration(n)) {
           if (ts.isArrayBindingPattern(n.name) && n.name.elements.length === 2 && n.initializer?.getText(file).startsWith("useState")) {
             const [state, setter] = n.name.elements as unknown as ts.BindingElement[];
@@ -238,6 +296,15 @@ function learn(all: Source[]): Known {
           addGlobal(n.name.text);
         } else if (isRoute && ts.isShorthandPropertyAssignment(n) && local.has(n.name.text)) {
           addGlobal(n.name.text);
+        } else if (!isRoute && ts.isPropertyAssignment(n) && ts.isIdentifier(n.name) && !GENERIC.has(n.name.text) && secret(n.initializer)) {
+          // A field a component builds for the components beside it.
+          for (const sibling of byDir.get(path.dirname(file.fileName)) ?? []) {
+            const names = known.local.get(sibling.file.fileName)!;
+            if (!names.has(n.name.text)) {
+              names.add(n.name.text);
+              changed = true;
+            }
+          }
         }
         ts.forEachChild(n, visit);
       };
@@ -262,8 +329,8 @@ interface Site {
   component: boolean;
   how: string;
 }
-function sitesIn(file: ts.SourceFile, known: Known, extra: readonly string[]): Site[] {
-  const secret = new Set([...known.global, ...known.local.get(file.fileName)!, ...extra]);
+function sitesIn(file: ts.SourceFile, known: Known): Site[] {
+  const secret = new Set([...known.global, ...known.local.get(file.fileName)!]);
   const out: Site[] = [];
   const carries = (el: ts.JsxOpeningLikeElement) =>
     el.attributes.properties.some((a) => {
@@ -309,17 +376,22 @@ function sitesIn(file: ts.SourceFile, known: Known, extra: readonly string[]): S
 
 /**
  * Every file with a painter, and its verdict: `true` = each painting element carries `ph-no-capture` (asserted); a string = why
- * the file paints no secret that needs it. `extra` names the props a component receives the secret under, so its own file is
- * scanned for them (a component that gets `code={row.join_code}` paints `{code}`).
+ * the file paints no secret that needs it; `handoff` names the file a component passes the secret to as a prop. The props a
+ * component receives a secret under are found by the scan (`Known.props`), not listed here.
  */
-const PAINTERS: Record<string, { verdict: true | string; extra?: string[]; handoff?: string }> = {
+const PAINTERS: Record<string, { verdict: true | string; handoff?: string }> = {
   "components/v2/invite-claim.tsx": { verdict: true },
   "components/v2/officials-shared.tsx": { verdict: true },
   "components/start-wizard.tsx": { verdict: true },
   "components/auth-form.tsx": { verdict: true },
   "components/v2/checkin-qr.tsx": { verdict: true },
   "components/v2/device-link-panel.tsx": { verdict: true },
-  "components/registration-hub-registrant-join-code.tsx": { verdict: true, extra: ["code"] },
+  "components/registration-hub-registrant-join-code.tsx": { verdict: true },
+  "components/public-site/register/register-lichess-card.tsx": { verdict: true },
+  "components/public-site/register/step-consent.tsx": {
+    verdict: "passes the register page's return path (which carries the join code) to RegisterLichessCard as a prop and paints nothing itself",
+    handoff: "components/public-site/register/register-lichess-card.tsx",
+  },
   "components/public-site/register/register-stepper.tsx": { verdict: true },
   "app/(public)/shared/[orgSlug]/[competitionSlug]/register/status/entry-card.tsx": { verdict: true },
   "components/registration-hub-registrant-detail.tsx": {
@@ -342,7 +414,7 @@ describe("every element that paints a scrubbed secret carries ph-no-capture, or 
   const painters = new Map<string, Site[]>();
   for (const { rel, file, tsx } of all) {
     if (!tsx) continue;
-    const sites = sitesIn(file, known, PAINTERS[rel]?.extra ?? []);
+    const sites = sitesIn(file, known);
     if (sites.length) painters.set(rel, sites);
   }
 
@@ -358,6 +430,16 @@ describe("every element that paints a scrubbed secret carries ph-no-capture, or 
     // A generic field (`url`) is followed by its endpoint, not app-wide: the check-in link route replies `{ url }`.
     expect(known.endpoints.some((e) => e.key === "url" && e.route.includes("checkin-link"))).toBe(true);
     expect(known.global.has("url")).toBe(false);
+    // A secret handed to a component as a prop is followed into it: the sign-in form gets `next={`/claim/${token}`}` (and the
+    // join and check-in pages' twins), and paints it into the Google button's href.
+    const nexts = known.props.filter((p) => p.component === "AuthForm" && p.prop === "next").map((p) => p.from);
+    expect(nexts.sort()).toEqual(expect.arrayContaining(["app/checkin/[token]/page.tsx", "app/claim/[token]/page.tsx", "app/join/[token]/page.tsx", "components/claim-invite.tsx"]));
+    // The scan REACHES the hrefs that carry a secret under another name: the Google button (`next` prop -> `googleHref`, through
+    // a template and `encodeURIComponent`), the Lichess links (the return path's join code, through a sibling's object field).
+    const hrefNames = (rel: string) => (painters.get(rel) ?? []).filter((s) => s.how === "attribute href").flatMap((s) => s.names);
+    expect(hrefNames("components/auth-form.tsx")).toContain("googleHref");
+    expect(hrefNames("components/public-site/register/register-stepper.tsx")).toContain("lichessReturn");
+    expect(hrefNames("components/public-site/register/register-lichess-card.tsx")).toContain("next");
     expect(painters.size).toBeGreaterThanOrEqual(12);
     let sites = 0;
     for (const s of painters.values()) sites += s.length;
@@ -365,7 +447,10 @@ describe("every element that paints a scrubbed secret carries ph-no-capture, or 
   });
 
   it("the painter files and the verdict table are the same set", () => {
-    expect([...painters.keys()].sort(), "a file paints a secret: add it to PAINTERS with a verdict (and the class)").toEqual(Object.keys(PAINTERS).sort());
+    const found = [...painters.keys()].sort();
+    const listed = Object.keys(PAINTERS).sort();
+    const diff = [...found.filter((f) => !listed.includes(f)).map((f) => `+ ${f}`), ...listed.filter((f) => !found.includes(f)).map((f) => `- ${f}`)];
+    expect(found, `a file paints a secret: add it to PAINTERS with a verdict (and the class), or drop the stale entry:\n${diff.join("\n")}`).toEqual(listed);
   });
 
   it("each file with verdict true: every painting element, or an ancestor, carries ph-no-capture (a component gets the secret as a prop and is checked in its own file)", () => {
@@ -379,7 +464,7 @@ describe("every element that paints a scrubbed secret carries ph-no-capture, or 
         if (!site.blocked) failures.push(`${rel}:${site.line} <${site.tag}> paints ${site.names.join("/")} as ${site.how} without ph-no-capture`);
       }
     }
-    expect(failures).toEqual([]);
+    expect(failures, failures.join("\n")).toEqual([]);
     expect(checked).toBeGreaterThanOrEqual(10);
   });
 

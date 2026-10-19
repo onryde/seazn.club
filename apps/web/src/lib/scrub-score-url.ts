@@ -175,13 +175,15 @@ const LOCALE_PREFIX = LOCALES.join("|");
 /**
  * Where a route root may start, consumed as the front of the match (no lookbehind: it is a syntax error in Safari before
  * 16.4, and this module loads in every browser): the start of the string, whitespace or a delimiter (a transaction
- * name's `GET `, a quote, `=`, `&`, `?`, `#`), or an origin (`https://host:3000`); then an optional locale prefix.
- * A `/` that follows a path segment (`/o/x/join/…`) is not a root.
+ * name's `GET `, a quote or backtick, `=`, `&`, `?`, `#`, `:`, `{`, `|`), or an origin; then an optional locale prefix. An origin
+ * is `//host` (`https://host:3000`, `HTTPS://host`, protocol-relative `//host`: the scheme needs no pattern of its own, so
+ * its letter case cannot matter). A `/` that follows a path segment (`/o/x/join/…`) is not a root.
  */
-const ROUTE_ROOT = `(?:^|[\\s"'<>=(,;&?#]|https?:\\/\\/[^/\\s"'<>?#]+)(?:\\/(?:${LOCALE_PREFIX}))?`;
+const ROUTE_ROOT = `(?:^|[\\s"'\`<>=(,;&?#:{|]|\\/\\/[^/\\s"'<>?#]+)(?:\\/(?:${LOCALE_PREFIX}))?`;
 /** The same root inside a URL-ENCODED string, at any depth, either hex case: the start, a plain delimiter, an encoded one
- *  (`=` `&` `?` `,`), an encoded origin (`https%3A%2F%2Fhost%3A3000`), then the encoded locale prefix. */
-const ENCODED_ROUTE_ROOT = `(?:^|[\\s"'<>=(,;&?#]|%(?:25)*(?:3[Dd]|26|3[Ff]|2[Cc])|https?%(?:25)*3[Aa]%(?:25)*2[Ff]%(?:25)*2[Ff](?:[^%/\\s"'<>?#&]|%(?:25)*3[Aa])+)(?:%(?:25)*2[Ff](?:${LOCALE_PREFIX}))?`;
+ *  (`=` `&` `?` `,` `:` `{` `|` backtick), an encoded origin (`%2F%2Fhost`: `https%3A%2F%2Fhost%3A3000`, `HTTPS%3A…`,
+ *  protocol-relative), then the encoded locale prefix. */
+const ENCODED_ROUTE_ROOT = `(?:^|[\\s"'\`<>=(,;&?#:{|]|%(?:25)*(?:3[Dd]|26|3[Ff]|2[Cc]|3[Aa]|7[Bb]|7[Cc]|60)|%(?:25)*2[Ff]%(?:25)*2[Ff](?:[^%/\\s"'<>?#&]|%(?:25)*3[Aa])+)(?:%(?:25)*2[Ff](?:${LOCALE_PREFIX}))?`;
 /** The routes with each `/` spelled as given and `[id]` as one segment: `\/claim\/` plain, `%(?:25)*2[Ff]claim%(?:25)*2[Ff]` encoded. */
 const prefixAlternation = (slash: string, segment = "[^/?#\\s\"'<>]+") =>
   SECRET_PATH_ROUTES.map((r) =>
@@ -448,8 +450,13 @@ function dropOneTimeToken<E extends Event>(event: E): E {
 
 /** Span / breadcrumb data keys that hold the bare query string, WITH its `?` (the SDK's helpers write them; see the header). */
 const SPAN_QUERY_KEYS = ["http.query", "url.query"] as const;
-/** The data keys that name the request a span belongs to, beside its query: the SDK's sanitised `url`, `url.full`, `url.path`, `http.route`, `http.target`, … */
-const SPAN_URL_KEYS = ["url", "url.full", "url.path", "url.template", "http.url", "http.target", "http.route"] as const;
+/**
+ * The data keys that name the request a span belongs to, beside its query, as the SDK writes them: `url` (the sanitised url of
+ * @sentry/opentelemetry `getRequestSpanData`), `url.full`, `url.path` and `http.route` (server) or `url.template` (client) from
+ * @sentry/core `getHttpSpanDetailsFromUrlObject`, and the legacy `http.url` and `http.target` of an outgoing request's span.
+ * Exported so a test can pin each key on its own against what the SDK's helpers really write.
+ */
+export const SPAN_URL_KEYS = ["url", "url.full", "url.path", "url.template", "http.url", "http.target", "http.route"] as const;
 /** The data key that holds a serialised request body (@sentry/core `addNormalizedRequestDataToSpan`). */
 const SPAN_BODY_KEY = "http.request.body.data";
 

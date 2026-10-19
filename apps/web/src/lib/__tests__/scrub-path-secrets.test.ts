@@ -1,6 +1,6 @@
 // The invite token and the check-in code must not reach telemetry; the public lookups next to them must.
 //
-// Credentials that ride the URL PATH (the scrubber's `SECRET_PATH_PREFIXES`):
+// Credentials that ride the URL PATH (the scrubber's `SECRET_PATH_ROUTES`):
 //  - the org invite, `/join/<token>` and its calls `/api/invites/<token>[/accept|/claim]` and
 //    `/api/orgs/<id>/invites/<token>/revoke`. 24 random bytes; an hour to never; up to 1000 uses (0 = unlimited); it joins the
 //    org as an ADMIN or a viewer, and `/claim` mints a SESSION for a new or unverified invitee. The team screen masks it

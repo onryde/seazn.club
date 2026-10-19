@@ -8,7 +8,11 @@
 //    bare query as `url.query` (WITH its `?`), beside `url.full`, `url.path`, `url.fragment` and `http.route`.
 //  - `getRequestSpanData` (@sentry/opentelemetry) is what turns an OpenTelemetry http span into the transaction's trace
 //    data: a SANITISED `url` (no query) and the bare query as `http.query` (WITH its `?`).
+//  - `getOutgoingRequestSpanData` (@sentry/core, http integration; not in the package's public exports, so it is loaded by its
+//    file path) is what an outgoing request's span is created with: the legacy `http.url` and `http.target`, beside the
+//    `url.*` keys.
 import { createRequire } from "node:module";
+import path from "node:path";
 
 const fromNextjs = createRequire(createRequire(import.meta.url).resolve("@sentry/nextjs"));
 const core = fromNextjs("@sentry/core") as {
@@ -23,6 +27,9 @@ const core = fromNextjs("@sentry/core") as {
     routeName?: string,
   ): [string, Record<string, unknown>];
 };
+const outgoing = fromNextjs(path.join(path.dirname(fromNextjs.resolve("@sentry/core")), "integrations/http/get-outgoing-span-data.js")) as {
+  getOutgoingRequestSpanData(request: unknown): { name: string; attributes: Record<string, unknown> };
+};
 const otel = fromNextjs("@sentry/opentelemetry") as {
   getRequestSpanData(span: { attributes: Record<string, unknown> }): Record<string, unknown>;
 };
@@ -34,10 +41,16 @@ export function serverSpanDetails(url: string, route?: string, method = "GET"): 
   const [name, data] = core.getHttpSpanDetailsFromUrlObject(core.parseStringToURLObject(url), "server", "auto.http.otel.http", { method }, route);
   return { name, data };
 }
-/** What the http client integration records for an outgoing request. */
-export function clientSpanDetails(url: string, method = "GET"): { name: string; data: SpanData } {
-  const [name, data] = core.getHttpSpanDetailsFromUrlObject(core.parseStringToURLObject(url), "client", "auto.http.fetch", { method });
+/** What the http client integration records for an outgoing request (`url.template` too, when the request has a route template). */
+export function clientSpanDetails(url: string, method = "GET", route?: string): { name: string; data: SpanData } {
+  const [name, data] = core.getHttpSpanDetailsFromUrlObject(core.parseStringToURLObject(url), "client", "auto.http.fetch", { method }, route);
   return { name, data };
+}
+/** The attributes the http integration creates an outgoing request's span with, from a minimal Node ClientRequest. */
+export function outgoingRequestSpanData(url: string, method = "GET"): SpanData {
+  const u = new URL(url);
+  const request = { method, protocol: u.protocol, host: u.host, path: `${u.pathname}${u.search}`, getHeader: () => undefined, getHeaders: () => ({}) };
+  return outgoing.getOutgoingRequestSpanData(request).attributes;
 }
 /** What an OpenTelemetry http span becomes in a transaction's trace data: a sanitised `url` and the bare `http.query`. */
 export function otelTraceData(url: string, method = "GET"): SpanData {
