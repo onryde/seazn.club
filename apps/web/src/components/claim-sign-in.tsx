@@ -43,7 +43,7 @@ export function ClaimSignIn({ token, email }: { token: string; email: string }) 
       <p className="mb-4 min-w-0 break-words text-sm text-slate-600">
         {msg("claim.signin.invited", { email })}
       </p>
-      <button onClick={claim} disabled={busy} className="btn btn-primary w-full py-2.5">
+      <button onClick={claim} disabled={busy} className="btn btn-primary min-h-11 w-full py-2.5">
         {busy ? msg("claim.signin.busy") : msg("claim.signin.cta")}
       </button>
       <p className="mt-3 text-center text-xs text-slate-500">{msg("claim.signin.hint")}</p>
