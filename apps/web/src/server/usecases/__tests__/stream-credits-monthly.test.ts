@@ -629,6 +629,26 @@ describe.skipIf(!HAS_DB)("refundConsumeForSession — R2008: the platform return
     expect(await rowCount(r.orgId)).toBe(n);
   });
 
+  it("the amount is what is STILL owed — consumed minus refunded — not a constant one: two consumes return two; a staff refund of one of them leaves one", async () => {
+    const r = await rig(null);
+    const write = (sessionId: string, delta: number, reason: "consume" | "refund", bucket: "monthly" | "pack", after: number) =>
+      sql`insert into org_stream_credits (org_id, delta, reason, bucket, session_id, balance_after) values (${r.orgId}, ${delta}, ${reason}, ${bucket}, ${sessionId}, ${after})`;
+    await sql`insert into org_stream_credits (org_id, delta, reason, bucket, session_id, balance_after) values (${r.orgId}, 4, 'purchase', 'pack', null, 4)`;
+    // Hand-written (no writer consumes twice for one session): the arithmetic is the writer's own, so it is pinned on the ledger.
+    const two = await r.session(r.fixtureIds[0]!, "completed");
+    await write(two, -1, "consume", "pack", 3);
+    await write(two, -1, "consume", "pack", 2);
+    expect(await system(r, two), "two consumes, none returned").toMatchObject({ refunded: true, delta: 2, balance: 4 });
+    expect(await system(r, two), "and now nothing is owed").toMatchObject({ refunded: false, delta: 0 });
+    const half = await r.session(r.fixtureIds[1]!, "completed");
+    await write(half, -1, "consume", "pack", 3);
+    await write(half, -1, "consume", "pack", 2);
+    await write(half, 1, "refund", "pack", 3);   // a staff refund of one of the two
+    expect(await system(r, half), "one of two already returned").toMatchObject({ refunded: true, delta: 1 });
+    expect((await full(r.orgId, half)).filter((x) => x.reason === "refund").map((x) => x.delta), "two refund rows of one credit each").toEqual([1, 1]);
+    expect(await creditBalance(sql, r.orgId)).toBe(await creditBreakdown(sql, r.orgId).then((b) => b.total));
+  });
+
   it("A7: it takes the org's money lock FIRST — a refund issued while another writer holds the lock waits for it, and lands after", async () => {
     const r = await rig(null);
     await ensureMonthlyStreamGrant(r.orgId, JAN);

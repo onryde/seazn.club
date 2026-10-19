@@ -1728,7 +1728,12 @@ describe.skipIf(!HAS_DB)("R2008: a COMPOSED live stream whose camera is gone for
     expect(rows[1]!.session_id).toBe(r.sessionId);
     expect(await netSpend(r.sessionId), `${label}: net spend on the ledger`).toBe(0);
     expect(await creditBalance(sql, r.orgId), `${label}: the balance is what it was before the go-live`).toBe(r.balanceBefore);
+    // The event row says what was written (the ledger's own id and balance), once: the session's history names the refund.
+    const [refund] = await sql<{ id: string }[]>`select id from org_stream_credits where session_id = ${r.sessionId} and reason = 'refund'`;
+    expect(await refundEventsOf(r.sessionId), `${label}: the refund_credit event`).toEqual([{ delta: 1, balanceAfter: rows[1]!.balance_after, ledgerId: refund!.id }]);
   }
+  const refundEventsOf = async (sid: string) =>
+    (await sql<{ payload: Record<string, unknown> }[]>`select payload from fixture_stream_events where session_id = ${sid} and type = 'refund_credit' order by seq`).map((e) => e.payload);
 
   it("never-live: 14:59.999 after it went live → still live, still charged; 15:00 → failed camera_never_live, the Machine told to stop, the credit returned (net 0 on the ledger, the balance back), and NO Cloudflare read", async () => {
     const r = await composedWaiting();
@@ -2031,6 +2036,45 @@ describe.skipIf(!HAS_DB)("R2008: a COMPOSED live stream whose camera is gone for
     seen.tick(10 * MIN); await seen.beat("live");
     seen.tick(5 * MIN); await seen.beat("live"); await seen.phoneBeat();
     expect(await countdownOf(seen), "a live phase at minute 10 → this end cannot fire").toBeNull();
+  });
+
+  it("never-live across a RETRY: attempt 2 also says only `waiting`, six minutes later — the end is still counted from go-live (the log began with the session), at exactly the limit, refunded once", async () => {
+    const r = await composedWaiting();
+    r.tick(6 * MIN);
+    await sql`update fixture_stream_sessions set runner_attempts = 2, beat_window_at = ${r.deps.now()} where id = ${r.sessionId}`;
+    const att2 = await mintRelayToken({ sid: r.sessionId, scope: "relay-job", expiresAt: new Date(Date.now() + 3_600_000), attempt: 2 });
+    await r.beat("waiting", att2);
+    expect((await phaseEvents(r.sessionId)).map((e) => [e.attempt, e.to_state]), "PREMISE: the log holds attempt 1's `waiting` and attempt 2's own").toEqual([[1, "waiting"], [2, "waiting"]]);
+    r.tick(r.liveAt.getTime() + LOST_MS - 1 - r.deps.now().getTime()); await r.beat("waiting", att2);
+    expect((await tickOf(r))?.state, "1 ms short of the limit since GO-LIVE").toBe("live");
+    expect(await refunds(r.sessionId)).toBe(0);
+    r.tick(1); await r.beat("waiting", att2);
+    expect(await tickOf(r), "the limit since go-live, though attempt 2 is only nine minutes old").toMatchObject({ failReason: "camera_never_live" });
+    await expectCreditReturned(r, "retry");
+  });
+
+  it("never-live is judged only on a log that is WHOLE: a beat that reported NO phase between two `waiting`s (a compositor that stopped saying) means the camera is not known absent — no end at the limit and no countdown (the pair of the clean `waiting`-only log, which does both)", async () => {
+    const r = await composedWaiting();
+    r.tick(MIN); await r.beat(null);
+    r.tick(MIN); await r.beat("waiting");
+    expect((await phaseEvents(r.sessionId)).map((e) => e.to_state), "PREMISE: waiting, none, waiting").toEqual(["waiting", null, "waiting"]);
+    r.tick(QUIET_MS); await hold(r, "waiting");
+    expect(await countdownOf(r), "past the quiet hold, no countdown: the end will not fire").toBeNull();
+    r.tick(LOST_MS); await hold(r, "waiting");
+    expect((await tickOf(r))?.state, "and the limit ends nothing").toBe("live");
+    expect(await refunds(r.sessionId)).toBe(0);
+  });
+
+  it("never-live after a STAFF refund: the end returns nothing more (the ledger is the authority, not 'a live session consumed'), the event row says nothing was owed, and the balance holds", async () => {
+    const r = await composedWaiting();
+    await refundCredits({ orgId: r.orgId, delta: 1, sessionId: r.sessionId, createdBy: await rigUser(), note: "goodwill first", idempotencyKey: randomUUID() });
+    const balance = await creditBalance(sql, r.orgId);
+    expect(balance, "PREMISE: the staff refund returned the go-live consume").toBe(r.balanceBefore);
+    r.tick(LOST_MS); await hold(r, "waiting");
+    expect(await tickOf(r), "the end still happens").toMatchObject({ failReason: "camera_never_live" });
+    expect((await ledgerOf(r.sessionId)).map((x) => [x.reason, x.delta, x.created_by === null]), "consume, the staff's refund, and no second").toEqual([["consume", -1, true], ["refund", 1, false]]);
+    expect(await creditBalance(sql, r.orgId), "no credit was manufactured").toBe(balance);
+    expect(await refundEventsOf(r.sessionId), "nothing was owed: delta 0, no ledger row").toEqual([{ delta: 0, balanceAfter: balance, ledgerId: null }]);
   });
 
   // ---- m1 (review): the phase-change decision must be taken on the LOCKED row --------------------------------------------

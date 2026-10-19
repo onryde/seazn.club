@@ -1652,7 +1652,8 @@ describe("decide — R2008: expire × camera_never_live fails a composed LIVE se
     expect(held.effects.map((e) => e.type)).toEqual(["release_output", "runner", "refund_credit"]);
     // No Machine to tear down: nothing torn, still failed and still refunded.
     const bare = decide(LIVE({ runner: RUNNER_NONE }), NEVER_LIVE, T0);
-    expect(bare.next).toMatchObject({ state: "failed", failReason: "camera_never_live", runner: RUNNER_NONE });
+    expect(bare.next, "desiredState ending is the end's own, not the Machine teardown's (nothing re-wants it live)").toMatchObject({ state: "failed", failReason: "camera_never_live", runner: RUNNER_NONE, desiredState: "ending" });
+    expect(LIVE({ runner: RUNNER_NONE }).desiredState, "PREMISE: the session was wanted live before the end").toBe("live");
     expect(bare.effects).toEqual([{ type: "refund_credit" }]);
   });
 
