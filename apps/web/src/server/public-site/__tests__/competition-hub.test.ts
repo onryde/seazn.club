@@ -101,7 +101,8 @@ import { msgFor } from "@/lib/messages-i18n";
 import { decidedOutcomeText } from "@/lib/scoring-vocab";
 import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
 import { t } from "@/lib/i18n-runtime";
-import { resolveSlotLabel } from "@/lib/slot-label";
+import { resolveSlotLabel, type SlotLabel as SlotLabelT } from "@/lib/slot-label";
+import { teamShortOf } from "@/lib/public-site";
 import enPublic from "@/dictionaries/en/public.json";
 import esPublic from "@/dictionaries/es/public.json";
 import frPublic from "@/dictionaries/fr/public.json";
@@ -404,6 +405,33 @@ describe("hubSides", () => {
   it("an entrant the division read no longer returns renders '?', never a blank row", () => {
     const [home] = hubSides(F({ id: "f1", home_entrant_id: "gone" }), ctx);
     expect(home.name).toBe("?");
+  });
+
+  // #987 review M7 — the team ladder through a REAL producer, not just the function: two seated clubs the team rule
+  // cannot tell apart. Expected codes worked by hand from the ladder's convention (the fourth letter differs).
+  it("two seated TEAMS sharing three letters (Harlow / Harrow) read two codes — HARL / HARR", () => {
+    const clubs = { ...ctx, names: { e1: "Harlow", e2: "Harrow" } };
+    const [home, away] = hubSides(F({ id: "f1" }), clubs);
+    expect([home.short, away.short]).toEqual(["HARL", "HARR"]);
+  });
+
+  // #987 review I1 — a placeholder seat never widens: two of them, or one facing a seated club it collides with, read
+  // the team rule on each side, as they did before the ladder (WIN / WIN — never WIN1 / WIN2, an ordinal that reads as
+  // the match it waits on). The slot sentences are the product's own (`resolveSlotLabel` over the English dictionary).
+  it("placeholder seats keep the team rule — a placeholder pair, and a seated club facing a placeholder", () => {
+    const sentences = { ...ctx, slot: (label: SlotLabelT | null) => resolveSlotLabel(label, (k, v) => msgFor("en", k, v), "schedule.tbd") };
+    const groupA = { key: "slot.winner_group", params: { g: "A" } } as SlotLabelT;
+    const groupB = { key: "slot.winner_group", params: { g: "B" } } as SlotLabelT;
+    const pair = hubSides(F({ id: "f1", home_entrant_id: null, home_slot_label: groupA, away_entrant_id: null, away_slot_label: groupB }), sentences);
+    expect(teamShortOf(pair[0].name), "premise: the two placeholders collide under the team rule").toBe(teamShortOf(pair[1].name));
+    expect(pair[0].name).not.toBe(pair[1].name);
+    expect(pair.map((s) => s.short)).toEqual([teamShortOf(pair[0].name), teamShortOf(pair[1].name)]);
+    const mixed = hubSides(F({ id: "f1", away_entrant_id: null, away_slot_label: groupB }), { ...sentences, names: { e1: "Winners United" } });
+    expect(teamShortOf("Winners United"), "premise: the club collides with the placeholder").toBe(teamShortOf(mixed[1].name));
+    expect(mixed.map((s) => [s.name, s.short])).toEqual([
+      ["Winners United", teamShortOf("Winners United")],
+      [mixed[1].name, teamShortOf(mixed[1].name)],
+    ]);
   });
 });
 

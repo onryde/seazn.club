@@ -18,7 +18,7 @@ import { DictProvider } from "@/components/i18n/dict-provider";
 import { RegisterStepper } from "@/components/public-site/register/register-stepper";
 import type { RegisterLichessState } from "@/components/public-site/register/register-lichess-card";
 import { getCurrentUser } from "@/lib/auth";
-import { LICHESS_FLASH_CODES, type LichessFlashCode } from "@/lib/lichess-link";
+import { lichessFlashCode } from "@/lib/lichess-link";
 import { lichessConfigured } from "@/lib/oauth";
 import { getLichessLink } from "@/server/usecases/external-accounts";
 
@@ -44,7 +44,7 @@ async function lichessStateFor(
   return {
     configured: lichessConfigured(),
     linkedUsername: link?.username ?? null,
-    flash: (LICHESS_FLASH_CODES as readonly string[]).includes(flash ?? "") ? (flash as LichessFlashCode) : null,
+    flash: lichessFlashCode(flash),
   };
 }
 

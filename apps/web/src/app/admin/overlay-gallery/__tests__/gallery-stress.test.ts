@@ -1,7 +1,7 @@
 // Owner ruling (1), 2026-10-19: gallery check 4c drives every Result card through the REAL result producer and the
 // REAL headline ladder — so the staff gallery takes a stress mode: `?decided=<fixture.decidedBy key>` makes every
-// winner-bearing decided template that key's sentence, `?name=` gives both sides a long display name, and `?code=` an
-// explicit short name (the model's `short`, which today's payload never carries but the model already reads).
+// winner-bearing decided template that key's sentence, `?name=` / `?away=` give the home / away side a display name
+// (each side its OWN, never one name on both), and `?code=` an explicit short name (the model's `short`).
 //
 // Everything here is checked against the real dictionaries and the real renderer (`renderDecidedOutcome`), never a
 // sentence typed into the test.
@@ -42,21 +42,39 @@ describe("parseGalleryStress — only a real decided key, a bounded name and cod
     expect(parseGalleryStress({ name: "   " }, en).name).toBeNull();
     expect(parseGalleryStress({ name: "x".repeat(121) }, en).name).toBeNull();
     expect(parseGalleryStress({ name: "x".repeat(120) }, en).name).toBe("x".repeat(120));
+    expect(parseGalleryStress({ away: "   " }, en).away).toBeNull();
+    expect(parseGalleryStress({ away: "x".repeat(121) }, en).away).toBeNull();
+    expect(parseGalleryStress({ away: " Harrow " }, en).away).toBe("Harrow");
     expect(parseGalleryStress({ code: "y".repeat(41) }, en).code).toBeNull();
     expect(parseGalleryStress({ code: " HARUTO-KENJI " }, en).code).toBe("HARUTO-KENJI");
-    expect(parseGalleryStress({}, en)).toEqual({ decided: null, name: null, code: null });
+    expect(parseGalleryStress({}, en)).toEqual({ decided: null, name: null, away: null, code: null });
   });
 });
 
-describe("stressSides — the name and the code reach BOTH sides, so the winner is long whoever wins", () => {
-  it("name and code set; unset leaves the gallery's own sides", () => {
+describe("stressSides — each side its OWN long name, so the capture is a real fixture and the winner is long whoever wins", () => {
+  it("?name= alone names the HOME side; the away side keeps the gallery's own long club name — two distinct long names, different first letters", () => {
     const long = "Haruto Fujimoto and Kenji Watanabe-Yamamoto";
-    const out = stressSides(SIDES, { decided: null, name: long, code: "HARUTO" });
+    const out = stressSides(SIDES, { decided: null, name: long, away: null, code: "HARUTO" });
     expect(out.map((s) => [s.id, s.name, s.short])).toEqual([
       ["home", long, "HARUTO"],
-      ["away", long, "HARUTO"],
+      ["away", SIDES[1].name, "HARUTO"],
     ]);
-    expect(stressSides(SIDES, { decided: null, name: null, code: null })).toEqual([{ ...SIDES[0] }, { ...SIDES[1] }]);
+    expect(out[0].name).not.toBe(out[1].name);
+    expect(out[0].name[0]).not.toBe(out[1].name[0]);
+    // Long whoever wins: the away side's own name is as long as the stress name the e2e uses.
+    expect(out[1].name.length).toBe(long.length);
+  });
+
+  it("?name= and ?away= name each side — the shared-prefix pair the code collision check drives (Harlow v Harrow)", () => {
+    const out = stressSides(SIDES, { decided: null, name: "Harlow", away: "Harrow", code: null });
+    expect(out.map((s) => [s.id, s.name, s.short])).toEqual([
+      ["home", "Harlow", undefined],
+      ["away", "Harrow", undefined],
+    ]);
+  });
+
+  it("the empty case: nothing set leaves the gallery's own sides untouched", () => {
+    expect(stressSides(SIDES, { decided: null, name: null, away: null, code: null })).toEqual([{ ...SIDES[0] }, { ...SIDES[1] }]);
   });
 });
 

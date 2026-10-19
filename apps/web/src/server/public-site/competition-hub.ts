@@ -248,7 +248,9 @@ export interface HubSideCtx {
   slot: (label: SlotLabel | null, seat: "home" | "away") => string;
 }
 
-type SidePre = SideT & { isPerson: boolean };
+/** `seated`: the seat holds an entrant the division read returned — a slot sentence or a lost entrant's "?" is a
+ *  placeholder, which `disambiguatedShorts` never widens (#987 review I1). */
+type SidePre = SideT & { isPerson: boolean; seated: boolean };
 
 /**
  * Both sides of a fixture, resolved TOGETHER.
@@ -285,6 +287,7 @@ export function hubSides(
         colour: null,
         badgeUrl: null,
         isPerson: false,
+        seated: false,
       };
     }
     return {
@@ -297,6 +300,7 @@ export function hubSides(
       colour: ctx.colours[entrantId] ?? null,
       badgeUrl: ctx.badges[entrantId] ?? null,
       isPerson: (ctx.kinds[entrantId] ?? "team") !== "team",
+      seated: ctx.names[entrantId] !== undefined,
     };
   };
   const home = pre(fixture.home_entrant_id, fixture.home_slot_label, "home");

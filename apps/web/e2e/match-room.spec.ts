@@ -105,14 +105,15 @@ function isStagedSeatReport404(m: import("@playwright/test").ConsoleMessage): bo
   return /^Failed to load resource: the server responded with a status of 404/.test(m.text()) && /\/external-play\/room\/camera-report/.test(m.location().url);
 }
 
-async function openRoom(ctx: BrowserContext, room: SeededRoom, token: string, width = 1280): Promise<Page> {
+/** `extraQuery`: what follows `?t=` on the address, `&lichess=<code>` for the landing the Lichess callback sends a player to. */
+async function openRoom(ctx: BrowserContext, room: SeededRoom, token: string, width = 1280, extraQuery = ""): Promise<Page> {
   const page = await ctx.newPage();
   page.on("console", (m) => {
     if (m.type() === "error" && !SITE_WIDE.has(m.text()) && !isStagedSeatReport404(m)) consoleErrors.push(m.text().slice(0, 300));
   });
   page.on("pageerror", (e) => consoleErrors.push(`pageerror: ${e.message.slice(0, 300)}`));
   await page.setViewportSize({ width, height: 900 });
-  const res = await page.goto(`${room.roomPath}?t=${encodeURIComponent(token)}`);
+  const res = await page.goto(`${room.roomPath}?t=${encodeURIComponent(token)}${extraQuery}`);
   expect(res?.status(), "the room renders").toBe(200);
   await expect(page.getByTestId("match-room")).toBeVisible();
   return page;
@@ -666,6 +667,247 @@ test("owner staging 2026-10-19: a personal link opened while signed in as ANOTHE
   expect(new URL(p.url()).searchParams.get("next"), "back to the link, token and all").toBe(link);
   const me = await p.request.get("/api/users/me");
   expect(me.status(), "the other player's session is gone").toBe(401);
+  await ctx.close();
+});
+
+// Owner staging test 2026-10-19: Check in -> "Seazn will submit your moves" -> Re-link Lichess -> Lichess -> back. The callback
+// lands on `…/play?t=…&lichess=already_linked` when that Lichess account is linked to a DIFFERENT Seazn account, and the room
+// ignored `?lichess=` - the same Re-link card came back, in silence, for ever. These tests LAND the room on that address
+// (lichessLanding's own shape) rather than driving the callback: the callback exchanges its code with lichess.org itself
+// (lib/oauth.ts LICHESS_TOKEN_URL is a constant, not LICHESS_BASE_URL) and the Lichess fixture server has no OAuth endpoints,
+// so the real collision cannot be produced here. The callback's own `already_linked` is lichess-oauth-routes.test.ts's.
+const LICHESS_FLASH_IDS = ["lichess-flash", "lichess-flash-text", "lichess-flash-next"] as const;
+
+/** White's grant lost a play scope: the seat call refuses it (lichess_reconsent_required) - the prompt that links Lichess. */
+async function narrowWhitesGrant(room: SeededRoom): Promise<void> {
+  const dropped = playScopes()[0]!;
+  const narrowed = await withDb(async (sql) => {
+    const rows = await sql<{ scopes: string[] }[]>`
+      update user_external_accounts set scopes = array_remove(scopes, ${dropped})
+       where user_id = ${room.white.userId} and provider = 'lichess'
+      returning scopes`;
+    return rows.length;
+  });
+  expect(narrowed, "White's grant was found and narrowed").toBe(1);
+}
+
+test("owner staging 2026-10-19: a refused Lichess link (already_linked) is SAID on the Re-link card, with the next step - the room used to loop in silence - and the address bar loses lichess= but keeps t=, at every width", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(150_000);
+  const room = await seedMatchRoom(page.request, { names: [`Ada Okonkwo ${Date.now() % 1e5}`, `Bo Lind ${Date.now() % 1e5}`] });
+  await narrowWhitesGrant(room);
+  const token = room.white.token;
+  const selfPath = `${room.roomPath}?t=${encodeURIComponent(token)}`;
+  const ctx = await cold(browser);
+
+  // The player lands where the callback sent them.
+  const p = await openRoom(ctx, room, token, 1280, "&lichess=already_linked");
+  // The address bar: the outcome is read and taken out; the personal link is untouched.
+  await expect.poll(() => new URL(p.url()).searchParams.has("lichess"), { message: "lichess= left the address bar" }).toBe(false);
+  const here = new URL(p.url());
+  expect(here.searchParams.get("t"), "t= is kept, byte for byte").toBe(token);
+  expect(`${here.pathname}${here.search}`, "and nothing else was added or lost").toBe(selfPath);
+
+  // Check in -> the seat call is refused for the grant -> card 8. The outcome the room read is still there to be said.
+  await p.getByTestId("room-checkin-cta").click();
+  await expect.poll(() => screenOf(p)).toBe("relink");
+  const card = p.getByTestId("room-state-relink");
+  await expect(card).toBeVisible();
+  const flash = card.getByTestId("lichess-flash");
+  await expect(flash, "the outcome is on the card, not somewhere else").toBeVisible();
+  await expect(flash).toHaveAttribute("data-code", "already_linked");
+  await expect(flash).toHaveAttribute("data-tone", "error");
+  await expect(flash).toHaveAttribute("role", "alert");
+  await expect(flash.getByTestId("lichess-flash-text")).toHaveText(uiEn["settings.account.lichess.flash.already_linked"]!);
+  await expect(flash.getByTestId("lichess-flash-next"), "and what to do about it").toHaveText(uiEn["settings.account.lichess.flashNext.already_linked"]!);
+  // Above the button it explains, and the button is still the way to link a different account.
+  const relink = p.getByTestId("room-relink");
+  const flashBox = await flash.boundingBox();
+  const relinkBox = await relink.boundingBox();
+  expect(flashBox && relinkBox && flashBox.y + flashBox.height <= relinkBox.y + 1, "the outcome sits above Re-link").toBe(true);
+  const href = new URL((await relink.getAttribute("href"))!, "http://x");
+  expect(href.pathname).toBe("/api/auth/lichess");
+  expect(href.searchParams.get("next"), "the way back is the personal link alone - no stale outcome rides it").toBe(selfPath);
+  // The other Seazn account is nowhere: nobody's address, the seat's or the other player's.
+  const body = await p.content();
+  for (const who of [room.white, room.black]) {
+    expect(body.includes(who.email), `${who.name}'s email is not on the page`).toBe(false);
+    expect(body.includes(who.email.split("@")[0]!), `nor its local part`).toBe(false);
+  }
+  // The pair on the same card: it is the SAME card the owner looped on, with its consent copy and its action.
+  await expect(card).toContainText(uiEn["settings.account.lichess.consent.title"]!);
+  await expect(relink).toHaveText(uiEn["settings.account.lichess.consent.cta"]!);
+
+  // Painted at every width: nothing sideways, nothing past the edge.
+  expect(await noSidewaysScroll(p, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
+  expect(await nothingPastTheEdge(p, [320, 768, 1280]), "anti-vacuity: widths").toBe(3);
+  await shoot(p, "lichess-flash-already-linked");
+
+  // PR #990 review, M2 - the strip is Next-router-safe. The address bar losing lichess= proves the BROWSER's history was
+  // written; only the router's own URL state decides whether the next router.refresh() writes it BACK (the app router
+  // refreshes the canonical URL it holds, and HistoryUpdater re-stamps the address from it when the refresh commits - a
+  // probe of the old strip, which handed Next's own history state back, saw lichess= return exactly there). So drive a real
+  // router refresh - the server page, re-read - wait for the router's re-stamp (counted on replaceState, so the check below
+  // cannot run before the moment the address would come back), and read the address after it: the personal link alone, and
+  // the outcome still on its card (the shell holds it).
+  await p.setViewportSize({ width: 1280, height: 900 });
+  await p.evaluate(() => {
+    const w = window as unknown as { __restamps: number };
+    w.__restamps = 0;
+    const next = history.replaceState.bind(history);
+    history.replaceState = (...args: Parameters<History["replaceState"]>) => {
+      w.__restamps += 1;
+      return next(...args);
+    };
+  });
+  const refreshed = p.waitForResponse((r) => new URL(r.url()).pathname === room.roomPath && r.request().headers()["rsc"] !== undefined);
+  const hadRouter = await p.evaluate(() => {
+    const router = (window as unknown as { next?: { router?: { refresh: () => void } } }).next?.router;
+    router?.refresh();
+    return router !== undefined;
+  });
+  expect(hadRouter, "the page exposes Next's router (anti-vacuity: the refresh below is a real one)").toBe(true);
+  expect((await refreshed).ok(), "the server page was re-read").toBe(true);
+  await expect
+    .poll(() => p.evaluate(() => (window as unknown as { __restamps: number }).__restamps), { message: "the router re-stamped the address when the refresh committed (anti-vacuity)" })
+    .toBeGreaterThan(0);
+  expect(`${new URL(p.url()).pathname}${new URL(p.url()).search}`, "after router.refresh(): still the personal link alone").toBe(selfPath);
+  await expect(flash, "and the outcome is still said").toBeVisible();
+
+  // A reload re-reads the address, which no longer carries the outcome: no stale sentence comes back.
+  await p.reload();
+  await expect(p.getByTestId("match-room")).toBeVisible();
+  await expect.poll(() => screenOf(p)).toMatch(/^(checkin|relink)$/);
+  if ((await screenOf(p)) === "checkin") {
+    await p.getByTestId("room-checkin-cta").click();
+    await expect.poll(() => screenOf(p)).toBe("relink");
+  }
+  await expect(p.getByTestId("room-state-relink")).toBeVisible();
+  for (const id of LICHESS_FLASH_IDS) await expect(p.getByTestId(id), `after a reload: ${id}`).toHaveCount(0);
+  await ctx.close();
+});
+
+test("owner staging 2026-10-19: a value that is not one of ours (?lichess=nonsense) says nothing - and is taken out of the address bar all the same", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(120_000);
+  const room = await seedMatchRoom(page.request, { names: [`Ada Okonkwo ${Date.now() % 1e5}`, `Bo Lind ${Date.now() % 1e5}`] });
+  await narrowWhitesGrant(room);
+  const ctx = await cold(browser);
+  const p = await openRoom(ctx, room, room.white.token, 1280, "&lichess=nonsense");
+  await expect.poll(() => new URL(p.url()).searchParams.has("lichess")).toBe(false);
+  expect(new URL(p.url()).searchParams.get("t")).toBe(room.white.token);
+  await p.getByTestId("room-checkin-cta").click();
+  await expect.poll(() => screenOf(p)).toBe("relink");
+  await expect(p.getByTestId("room-relink")).toBeVisible();
+  for (const id of LICHESS_FLASH_IDS) await expect(p.getByTestId(id), id).toHaveCount(0);
+  await ctx.close();
+});
+
+test("owner staging 2026-10-19: the revoked-link notice (seam A) says the refused link too, above its own words and its Link Lichess again - and a board without the outcome does not", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(150_000);
+  const room = await seedMatchRoom(page.request, { names: [`Bo Lind ${Date.now() % 1e5}`, `Ada Okonkwo ${Date.now() % 1e5}`] });
+  await seedGameSql(room, { moves: ["e2e4", "e7e5"] });
+  await withDb(
+    (sql) => sql`
+      update fixture_external_play
+         set status = 'needs_organiser', needs_reason = 'token_revoked', revoked_seat = 'white', updated_at = now()
+       where fixture_id = ${room.fixtureId}`,
+  );
+  // The pair first: the same frozen board, opened WITHOUT the outcome, shows the notice and none of it.
+  const bare = await cold(browser);
+  const q = await openRoom(bare, room, room.white.token);
+  await expect.poll(() => screenOf(q)).toBe("revoked");
+  await expect(q.getByTestId("room-revoked-notice")).toBeVisible();
+  for (const id of LICHESS_FLASH_IDS) await expect(q.getByTestId(id), `no outcome: ${id}`).toHaveCount(0);
+  await bare.close();
+
+  const ctx = await cold(browser);
+  const p = await openRoom(ctx, room, room.white.token, 1280, "&lichess=already_linked");
+  await expect.poll(() => screenOf(p)).toBe("revoked");
+  const notice = p.getByTestId("room-revoked-notice");
+  const flash = notice.getByTestId("lichess-flash");
+  await expect(flash).toBeVisible();
+  await expect(flash.getByTestId("lichess-flash-text")).toHaveText(uiEn["settings.account.lichess.flash.already_linked"]!);
+  await expect(flash.getByTestId("lichess-flash-next")).toHaveText(uiEn["settings.account.lichess.flashNext.already_linked"]!);
+  await expect(notice).toContainText(uiEn["externalPlay.room.state.revoked.title"]!);
+  const href = new URL((await p.getByTestId("room-revoked-relink").getAttribute("href"))!, "http://x");
+  expect(href.searchParams.get("next"), "no stale outcome on the way back").toBe(`${room.roomPath}?t=${encodeURIComponent(room.white.token)}`);
+  await expect.poll(() => new URL(p.url()).searchParams.has("lichess")).toBe(false);
+  expect(await noSidewaysScroll(p, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
+  expect(await nothingPastTheEdge(p, [320, 768, 1280]), "anti-vacuity: widths").toBe(3);
+  await shoot(p, "lichess-flash-revoked");
+  await ctx.close();
+});
+
+// PR #990 review, I1: a `linked` landing (the happy path) held for the page's life stood ABOVE a later revoke - "Lichess account
+// linked." over "Your Lichess link was revoked". The room says only a failure; the sequence is driven in a real browser.
+test("PR #990 I1: landed on ?lichess=linked, a LATER revoke on the same page shows the revoked notice with no 'linked' above it", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(120_000);
+  const room = await seedMatchRoom(page.request, { names: [`Bo Lind ${Date.now() % 1e5}`, `Ada Okonkwo ${Date.now() % 1e5}`] });
+  await seedGameSql(room, { moves: ["e2e4", "e7e5"] });
+  const ctx = await cold(browser);
+  const p = await openRoom(ctx, room, room.white.token, 1280, "&lichess=linked");
+  await expect.poll(() => new URL(p.url()).searchParams.has("lichess"), { message: "lichess= left the address bar" }).toBe(false);
+  await boardReady(p);
+  expect(await screenOf(p), "the pair: the live board, and 'linked' says nothing on it").toBe("live");
+  await withDb(
+    (sql) => sql`
+      update fixture_external_play
+         set status = 'needs_organiser', needs_reason = 'token_revoked', revoked_seat = 'white', updated_at = now()
+       where fixture_id = ${room.fixtureId}`,
+  );
+  await expect.poll(() => screenOf(p), { timeout: 20_000, message: "a poll reads the revoke" }).toBe("revoked");
+  const notice = p.getByTestId("room-revoked-notice");
+  await expect(notice).toContainText(uiEn["externalPlay.room.state.revoked.title"]!);
+  for (const id of LICHESS_FLASH_IDS) await expect(p.getByTestId(id), id).toHaveCount(0);
+  await expect(p.getByTestId("match-room")).not.toContainText(uiEn["settings.account.lichess.flash.linked"]!);
+  await ctx.close();
+});
+
+// PR #990 review, M3: the game is on ONE Lichess account (`otherAccount`) and the player's refused link lands them on its
+// notice. "Sign in to Lichess as X, then link it again" and a step that offers a DIFFERENT account contradicted each other;
+// the notice now says the one thing that keeps the account: free it from the other Seazn account, then link it here.
+test("PR #990 M3: the game on another Lichess account + ?lichess=already_linked says ONE coherent instruction - the account line, and the step that keeps the account", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(120_000);
+  const room = await seedMatchRoom(page.request, { names: [`Bo Lind ${Date.now() % 1e5}`, `Ada Okonkwo ${Date.now() % 1e5}`] });
+  await seedGameSql(room, { moves: ["e2e4", "e7e5"] });
+  const linkedNow = `x-${Date.now().toString(36)}`;
+  const relinked = await withDb(
+    (sql) => sql`
+      update user_external_accounts set external_user_id = ${linkedNow}, username = ${linkedNow}
+       where user_id = ${room.white.userId} and provider = 'lichess'
+      returning user_id`,
+  );
+  expect(relinked.length, "White's link was found and re-pointed").toBe(1);
+  const ctx = await cold(browser);
+  const p = await openRoom(ctx, room, room.white.token, 1280, "&lichess=already_linked");
+  await expect.poll(() => screenOf(p), { timeout: 20_000 }).toBe("revoked");
+  const notice = p.getByTestId("room-revoked-notice");
+  await expect(notice).toHaveAttribute("data-reason", "account");
+  const flash = notice.getByTestId("lichess-flash");
+  await expect(flash.getByTestId("lichess-flash-text")).toHaveText(uiEn["settings.account.lichess.flash.already_linked"]!);
+  await expect(flash.getByTestId("lichess-flash-next"), "the step that keeps the account").toHaveText(uiEn["settings.account.lichess.flashNext.already_linked_game"]!);
+  await expect(notice, "never the generic step, which offers a different account").not.toContainText(uiEn["settings.account.lichess.flashNext.already_linked"]!);
+  await expect(notice.getByTestId("room-revoked-account")).toHaveText(fill("externalPlay.room.state.revoked.otherAccount", { username: room.white.lichessId }));
+  await expect(flash, "the outcome block names nobody").not.toContainText(room.white.lichessId);
+  await expect(notice).not.toContainText(linkedNow);
+  await expect.poll(() => new URL(p.url()).searchParams.has("lichess")).toBe(false);
+  expect(await noSidewaysScroll(p, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
+  expect(await nothingPastTheEdge(p, [320, 768, 1280]), "anti-vacuity: widths").toBe(3);
+  await shoot(p, "lichess-flash-other-account");
   await ctx.close();
 });
 

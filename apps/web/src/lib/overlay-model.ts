@@ -6,11 +6,13 @@
 // All eleven sports render through this. Board game, carrom and generic come
 // out with `cells: []` and `detail: []` — a designed state, not an error.
 import {
+  BADGE_MAX_CHARS,
   battingEntrantId,
   chaseBalls,
   chaseNeed,
   chaseTargetRuns,
   chaseTargetSource,
+  disambiguatedShorts,
   disciplineLabel,
   disciplineList,
   matchStrength,
@@ -40,10 +42,10 @@ export type OverlayMsg = (key: string, vars?: Record<string, string | number>) =
 export interface OverlaySideInput {
   id: string;
   name: string;
-  /** The entrant's own short name where one ever reaches the public payload.
-   *  None does today — `public_entrants_v` carries `display_name` and a
-   *  `team_display` blob with no `short_name` — so this is always absent and
-   *  `shortCode` falls to three letters. */
+  /** The side's code as its PRODUCER already resolved it, for the pair. Both page doors pass one
+   *  (`server/overlay/page-facts.ts`): the match centre's / the relay read's `disambiguatedShorts` answer, which knows
+   *  each entrant's kind (a person by surname). Absent — the staff gallery, the organiser console's preview — the model
+   *  resolves the pair itself (`overlaySideCodes`). Upper-cased on air. */
   short?: string | null;
   /** Club kit colour (`team_display.colors.home_primary`) for the slate card tiles. */
   colour?: string | null;
@@ -270,28 +272,47 @@ export interface OverlayModelInput {
 
 const EM_DASH = "—";
 
-/** Three letters from the entrant's NAME, upper-cased. Punctuation and spaces
- *  are dropped first so "St. Ives" reads STI, not "ST.".
+/**
+ * The two sides' codes — the bug's code column, the tiles, the bar's tightest rung, the short Result sentence, the
+ * moments and the cricket strip all read these, so a side has ONE code on every template.
  *
- *  Split out of `shortCode` for `nameLadder`: the ladder's BOTTOM rung is
- *  always this derivation, while `shortCode` prefers the entrant's own short
- *  name when one exists. Folded together they made a two-rung ladder whose
- *  last two entries differed only in case. */
-export function threeLetterCode(name: string): string {
-  const letters = name.replace(/[^\p{L}\p{N}]/gu, "");
-  return letters.length > 0 ? letters.slice(0, 3).toUpperCase() : EM_DASH;
-}
-
-/** Three letters, upper-cased — the bug's code column. */
-export function shortCode(side: OverlaySideInput): string {
-  const explicit = side.short?.trim();
-  if (explicit) return explicit.toUpperCase();
-  return threeLetterCode(side.name);
+ * Resolved for the PAIR, by the public site's one rule (`disambiguatedShorts`; owner ruling 2026-10-19 — never a second
+ * algorithm here). A code resolved one side at a time cannot see a collision: three letters per name aired Harlow and
+ * Harrow as HAR and HAR, and "HAR won 4–3 on penalties" named nobody.
+ *
+ * A producer's code (`OverlaySideInput.short`) wins, upper-cased and cut to `BADGE_MAX_CHARS` code points: both page
+ * doors pass the match centre's pair, which knows whether an entrant is a person and whether a seat holds one. Without one, the names are resolved as SEATED
+ * TEAMS: every name the model is handed without a code is an entrant's (the staff gallery's, the organiser console's),
+ * or the em dash of an empty seat, which has no letters and so never widens. A side with no letters to its name reads
+ * the em dash, the overlay's own no-name glyph, rather than the match centre's "?".
+ *
+ * The producer's codes are honoured AS GIVEN, even when the two are equal (#987 review M4) — deliberately, not as an
+ * unchecked assumption: two placeholder seats read the team rule on each side (WIN / WIN for "Winner of Group A" /
+ * "… B"), which is the public site's answer for them, and the gallery's `?code=` stress puts one code on both sides on
+ * purpose. Re-resolving equal codes would hand those seats the ordinals (WIN1 / WIN2) the review refused. Two seated
+ * entrants cannot arrive equal: both doors resolve them as a pair (`disambiguatedShorts`).
+ */
+export function overlaySideCodes(sides: readonly [OverlaySideInput, OverlaySideInput]): [string, string] {
+  const [a, b] = disambiguatedShorts(
+    { name: sides[0].name, isPerson: false, seated: true },
+    { name: sides[1].name, isPerson: false, seated: true },
+  );
+  const codeOf = (side: OverlaySideInput, resolved: string): string => {
+    const explicit = side.short?.trim();
+    // Cut ONCE, here, to the badge bound in code points (#987 confirm pass, M5 residue): every template reads this
+    // code, so a long producer short can never air whole on the bug and cut in the bar. Every production short is
+    // within the bound already; the gallery's `?code=` stress is not.
+    if (explicit) return Array.from(explicit.toUpperCase()).slice(0, BADGE_MAX_CHARS).join("");
+    return /[\p{L}\p{N}]/u.test(side.name) ? resolved : EM_DASH;
+  };
+  return [codeOf(sides[0], a), codeOf(sides[1], b)];
 }
 
 /**
- * `_THEMES.md` §1's ladder, longest first: the full name, the entrant's own
- * short name where the payload carries one, then the three-letter code.
+ * `_THEMES.md` §1's ladder, longest first: the full name, the producer's
+ * short name where it differs from the code, then the side's CODE — the one
+ * `overlaySideCodes` resolved for the pair, so the bar's tightest rung reads
+ * exactly what the bug, the tiles and the Result card call that side.
  *
  * A LIST rather than a step, because the choice is a MEASUREMENT and only the
  * browser can make it — §1 forbids wrapping, truncation and an ellipsis alike,
@@ -303,16 +324,19 @@ export function shortCode(side: OverlaySideInput): string {
  * not.
  *
  * `public_entrants_v` carries no `short_name` today (W1 watch-list 6, resolved
- * to the code), so in production this is [name, code]. The middle rung is
- * reachable the day that view grows one, and is driven in both directions by
+ * to the code), and the short both page doors pass IS the pair's code, so in
+ * production this is [name, code]. The middle rung is reachable the day a
+ * declared short name reaches the payload, and is driven in both directions by
  * `overlay-model.test.ts` rather than left to be discovered then.
  */
-export function nameLadder(side: OverlaySideInput): readonly string[] {
+export function nameLadder(side: OverlaySideInput, code: string): readonly string[] {
   const explicit = side.short?.trim();
   const rungs = [
     side.name,
     ...(explicit === undefined || explicit === "" ? [] : [explicit]),
-    threeLetterCode(side.name),
+    // The rung that must fit when nothing else does: the code as handed. `overlaySideCodes` has already cut it to
+    // `BADGE_MAX_CHARS` code points — one cut, so the bar's bottom rung is the bug's code (#987 confirm pass, M5).
+    code,
   ];
   return rungs.filter((rung, i) => rungs.indexOf(rung) === i);
 }
@@ -622,7 +646,7 @@ export function overlayModel(input: OverlayModelInput): OverlayModel {
   const decided = ended && verdict;
   const voided = ended && !verdict;
   const live = data.status === "in_play";
-  const codes: [string, string] = [shortCode(sides[0]), shortCode(sides[1])];
+  const codes = overlaySideCodes(sides);
   const led = ledEntrantId(input, decided, ended);
   const serving = servingSide(data.summary);
   // Kernel perSide order is [home, away]; a payload with anything else is a
@@ -641,7 +665,7 @@ export function overlayModel(input: OverlayModelInput): OverlayModel {
     return {
       short: codes[row],
       name: input_.name,
-      ladder: nameLadder(input_),
+      ladder: nameLadder(input_, codes[row]),
       big: line.big,
       ...(line.sub === undefined ? {} : { sub: line.sub }),
       led: led !== null && led === input_.id,
@@ -689,8 +713,8 @@ export function overlayModel(input: OverlayModelInput): OverlayModel {
   // the winner token differs." So this is the SAME producer with the SAME
   // templates and one different name map — never a second sentence authority,
   // which would let the bar and the detail band disagree about who won.
-  // `codes` is what `OverlaySide.short` already carries (an entrant's own
-  // short name where the payload ever holds one, else three letters).
+  // `codes` is what `OverlaySide.short` already carries — the pair's codes
+  // (`overlaySideCodes`), so "HAR won" can never name both Harlow and Harrow.
   const shortResult =
     forfeitLine({ [sides[0].id]: codes[0], [sides[1].id]: codes[1] }) ??
     renderDecidedOutcome(
