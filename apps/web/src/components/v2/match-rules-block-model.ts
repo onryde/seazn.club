@@ -41,6 +41,14 @@ export interface MatchRulesBlockProps {
 }
 
 /**
+ * Who is offered the block at all: an organiser (the writer is organiser auth - a block shown to a scorer or a viewer would
+ * only earn a 403) on a competition that is not billing-frozen. The page reads the facts only when this says yes.
+ */
+export function offersMatchRules(who: { readonly canEdit: boolean; readonly frozen: boolean }): boolean {
+  return who.canEdit && !who.frozen;
+}
+
+/**
  * The loader's answer as the page hands it to the console: exactly the serialisable facts, listed by name so a field the
  * loader grows later (a function-valued one, like `fields`) cannot ride along into an RSC payload that cannot carry it.
  * `undefined` for a sport with nothing to change for one match (no match field: the block would be an empty card).

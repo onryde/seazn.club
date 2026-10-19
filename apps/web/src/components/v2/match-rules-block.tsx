@@ -144,7 +144,7 @@ function MatchRulesBlockBody({ fixtureId, sportKey, stageKind, variant, stageLin
         </p>
       )}
 
-      {!locked && state === "live" && !correcting && (
+      {state === "live" && !correcting && (
         <button type="button" data-testid="match-rules-correct" onClick={() => setCorrecting(true)} className="btn btn-ghost min-h-11 text-sm">
           {msg("matchRules.correctLive")}
         </button>
@@ -212,13 +212,6 @@ function MatchRulesBlockBody({ fixtureId, sportKey, stageKind, variant, stageLin
             )}
           </div>
         </div>
-      )}
-
-      {/* A refusal on a closed form (a reset from a live correction that was refused) still has to be seen. */}
-      {!formOpen && error !== null && (
-        <p data-testid="match-rules-error" role="alert" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 [overflow-wrap:anywhere]">
-          {error}
-        </p>
       )}
     </section>
   );

@@ -25,6 +25,7 @@ import {
   matchFormFields,
   matchFragment,
   matchRulesBlockProps,
+  offersMatchRules,
   matchSource,
   type MatchFormCtx,
   type MatchFormLabels,
@@ -273,6 +274,16 @@ describe("the fragment is what differs from the stage - and nothing else", () =>
     expect(blockSeedKey({ ...base, stageResolved: { ...stage, bestOf: 5 } }), "stage").not.toBe(key);
   });
 
+  it("source: a blank or an equal value is the stage's, a different one is this match's", () => {
+    const stage = { a: "10", b: "" };
+    expect(matchSource("a", { a: "10" }, stage), "equal").toBe("stage");
+    expect(matchSource("a", { a: "" }, stage), "blank: use the stage's").toBe("stage");
+    expect(matchSource("a", {}, stage), "absent").toBe("stage");
+    expect(matchSource("a", { a: "5" }, stage), "different").toBe("match");
+    expect(matchSource("b", { b: "3" }, stage), "the stage writes none, the match does").toBe("match");
+    expect(matchSource("b", { b: "" }, stage), "neither writes one").toBe("stage");
+  });
+
   it("dirty: equal value sets are clean, a changed value is dirty, a key order difference is not a change", () => {
     expect(matchFormDirty({ a: "1", b: "2" }, { b: "2", a: "1" })).toBe(false);
     expect(matchFormDirty({ a: "1" }, { a: "2" })).toBe(true);
@@ -361,6 +372,21 @@ describe("the page seam: a sport with nothing to change for one match gets no bl
       fields: matchFieldsFor(ctxOf("badminton", "league", "short")),
     });
     expect(props?.state).toBe("locked");
+  });
+});
+
+describe("the page seam: who is offered the block", () => {
+  it("only an organiser on a competition that is not billing-frozen (all four cases, counted)", () => {
+    const cases: [boolean, boolean, boolean][] = [
+      [true, false, true],
+      [true, true, false],
+      [false, false, false],
+      [false, true, false],
+    ];
+    for (const [canEdit, frozen, offered] of cases) {
+      expect(offersMatchRules({ canEdit, frozen }), `canEdit ${canEdit}, frozen ${frozen}`).toBe(offered);
+    }
+    expect(cases.length, "anti-vacuity: every combination was checked").toBe(4);
   });
 });
 

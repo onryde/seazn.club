@@ -1,0 +1,879 @@
+[
+  {
+    "id": "t19-tag-always",
+    "file": "apps/web/src/components/v2/desk/run-sheet-tags.ts",
+    "find": "return row.format_changed === true ? \"runSheet.formatChanged\" : null;",
+    "replace": "return \"runSheet.formatChanged\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/desk/__tests__/run-sheet-tags.test.ts"
+        ],
+        "name": "the run sheet tags a changed format"
+      }
+    ]
+  },
+  {
+    "id": "t19-tag-never",
+    "file": "apps/web/src/components/v2/desk/run-sheet-tags.ts",
+    "find": "return row.format_changed === true ? \"runSheet.formatChanged\" : null;",
+    "replace": "return null;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/desk/__tests__/run-sheet-tags.test.ts"
+        ],
+        "name": "the run sheet tags a changed format"
+      }
+    ]
+  },
+  {
+    "id": "t19-tag-truthy",
+    "file": "apps/web/src/components/v2/desk/run-sheet-tags.ts",
+    "find": "row.format_changed === true",
+    "replace": "Boolean(row.format_changed)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/desk/__tests__/run-sheet-tags.test.ts"
+        ],
+        "name": "a truthy non-boolean is not a changed format"
+      }
+    ]
+  },
+  {
+    "id": "t19-row-no-chip",
+    "file": "apps/web/src/components/v2/desk/run-sheet-row.tsx",
+    "find": "const tag = formatChangedTag(fixture);",
+    "replace": "const tag = null as ReturnType<typeof formatChangedTag>;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/desk/__tests__/run-sheet-row-format-changed.test.tsx"
+        ],
+        "name": "shows when the match's format was changed"
+      }
+    ]
+  },
+  {
+    "id": "t19-row-chip-always",
+    "file": "apps/web/src/components/v2/desk/run-sheet-row.tsx",
+    "find": "return tag === null ? null : (",
+    "replace": "return (",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/desk/__tests__/run-sheet-row-format-changed.test.tsx"
+        ],
+        "name": "is absent when it was not"
+      }
+    ]
+  },
+  {
+    "id": "t19-list-flag-false",
+    "file": "apps/web/src/server/usecases/fixtures.ts",
+    "find": "f.rules_override is not null as format_changed",
+    "replace": "false as format_changed",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/list-division-fixtures-format-changed.test.ts"
+        ],
+        "name": "false on every untouched row; true exactly on the changed one"
+      }
+    ]
+  },
+  {
+    "id": "t19-list-flag-inverted",
+    "file": "apps/web/src/server/usecases/fixtures.ts",
+    "find": "f.rules_override is not null as format_changed",
+    "replace": "f.rules_override is null as format_changed",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/list-division-fixtures-format-changed.test.ts"
+        ],
+        "name": "false on every untouched row; true exactly on the changed one"
+      }
+    ]
+  },
+  {
+    "id": "t19-loader-lock-never",
+    "file": "apps/web/src/server/usecases/fixtures.ts",
+    "find": "const standing = LOCKED_FIXTURE_STATUSES.has(row.status) ? null : await formatStanding(tx, fixtureId);",
+    "replace": "const standing = await formatStanding(tx, fixtureId);",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/fixture-match-rules-loader.test.ts"
+        ],
+        "name": "the lock is the writer's own predicate"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/fixture-match-rules-loader.test.ts"
+        ],
+        "name": "override -> started -> finalized -> reset"
+      }
+    ]
+  },
+  {
+    "id": "t19-loader-live-played-only",
+    "file": "apps/web/src/server/usecases/fixtures.ts",
+    "find": "standing.played || standing.decidedWithoutPlay ? \"live\" : \"unstarted\"",
+    "replace": "standing.played ? \"live\" : \"unstarted\"",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/fixture-match-rules-loader.test.ts"
+        ],
+        "name": "a walkover recorded but not finalized is live"
+      }
+    ]
+  },
+  {
+    "id": "t19-loader-live-walkover-only",
+    "file": "apps/web/src/server/usecases/fixtures.ts",
+    "find": "standing.played || standing.decidedWithoutPlay ? \"live\" : \"unstarted\"",
+    "replace": "standing.decidedWithoutPlay ? \"live\" : \"unstarted\"",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/fixture-match-rules-loader.test.ts"
+        ],
+        "name": "override -> started -> finalized -> reset"
+      }
+    ]
+  },
+  {
+    "id": "t19-loader-live-never",
+    "file": "apps/web/src/server/usecases/fixtures.ts",
+    "find": "standing.played || standing.decidedWithoutPlay ? \"live\" : \"unstarted\"",
+    "replace": "\"unstarted\"",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/fixture-match-rules-loader.test.ts"
+        ],
+        "name": "override -> started -> finalized -> reset"
+      }
+    ]
+  },
+  {
+    "id": "t19-loader-override-null",
+    "file": "apps/web/src/server/usecases/fixtures.ts",
+    "find": "override: isCfgObject(row.rules_override) ? row.rules_override : null,",
+    "replace": "override: null,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/fixture-match-rules-loader.test.ts"
+        ],
+        "name": "override -> started -> finalized -> reset"
+      }
+    ]
+  },
+  {
+    "id": "t19-loader-effective-stage",
+    "file": "apps/web/src/server/usecases/fixtures.ts",
+    "find": "const effective = parsedCfg(sportModule, resolveFixtureCfg(row, row.division_config, stage, sportModule));",
+    "replace": "const effective = stageResolved;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/fixture-match-rules-loader.test.ts"
+        ],
+        "name": "override -> started -> finalized -> reset"
+      }
+    ]
+  },
+  {
+    "id": "t19-loader-fields-empty",
+    "file": "apps/web/src/server/usecases/fixtures.ts",
+    "find": "fields: matchFieldsFor({ module: sportModule, stageKind, variant: row.variant_key }),",
+    "replace": "fields: [],",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/fixture-match-rules-loader.test.ts"
+        ],
+        "name": "unstarted with no override"
+      }
+    ]
+  },
+  {
+    "id": "t19-route-leak",
+    "file": "apps/web/src/app/api/v1/divisions/[id]/fixtures/route.ts",
+    "find": "\"format_changed\",",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/app/api/v1/divisions/[id]/fixtures/__tests__/route.test.ts"
+        ],
+        "name": "does not leak the internal bracket feed columns"
+      }
+    ]
+  },
+  {
+    "id": "t19-refusal-any-code",
+    "file": "apps/web/src/lib/rule-errors.ts",
+    "find": "return code === \"FORMAT_DOES_NOT_FIT_PLAY\" && message !== \"\"",
+    "replace": "return message !== \"\"",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/rule-refusal-sentence.test.ts"
+        ],
+        "name": "any other code keeps batch 3's answer"
+      }
+    ]
+  },
+  {
+    "id": "t19-refusal-empty-message",
+    "file": "apps/web/src/lib/rule-errors.ts",
+    "find": "code === \"FORMAT_DOES_NOT_FIT_PLAY\" && message !== \"\"",
+    "replace": "code === \"FORMAT_DOES_NOT_FIT_PLAY\"",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/rule-refusal-sentence.test.ts"
+        ],
+        "name": "the engine's reason is never dropped"
+      }
+    ]
+  },
+  {
+    "id": "t19-refusal-reason-dropped",
+    "file": "apps/web/src/lib/rule-errors.ts",
+    "find": "{ reason: message }",
+    "replace": "{ reason: \"\" }",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/rule-refusal-sentence.test.ts"
+        ],
+        "name": "an engine's own reason is framed in the reader's language"
+      }
+    ]
+  },
+  {
+    "id": "t19-refusal-frame-first",
+    "file": "apps/web/src/lib/rule-errors.ts",
+    "find": "if (text !== null) return text;",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/rule-refusal-sentence.test.ts"
+        ],
+        "name": "a refusal that names a fit reason is the app's own sentence"
+      }
+    ]
+  },
+  {
+    "id": "t19-save-error-not-localized",
+    "file": "apps/web/src/lib/config-issue-copy.ts",
+    "find": "if (said !== null) return said;",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/rule-refusal-sentence.test.ts"
+        ],
+        "name": "a 409 FORMAT_DOES_NOT_FIT_PLAY from a stage or division save reads in Spanish"
+      }
+    ]
+  },
+  {
+    "id": "t19-model-withhold",
+    "file": "apps/web/src/components/v2/match-rules-block-model.ts",
+    "find": "if (r.fields.length === 0) return undefined;",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block-model.test.ts"
+        ],
+        "name": "the block is offered exactly when the engine declares a match key"
+      }
+    ]
+  },
+  {
+    "id": "t19-model-offers-frozen",
+    "file": "apps/web/src/components/v2/match-rules-block-model.ts",
+    "find": "return who.canEdit && !who.frozen;",
+    "replace": "return who.canEdit;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block-model.test.ts"
+        ],
+        "name": "only an organiser on a competition that is not billing-frozen"
+      }
+    ]
+  },
+  {
+    "id": "t19-model-offers-scorer",
+    "file": "apps/web/src/components/v2/match-rules-block-model.ts",
+    "find": "return who.canEdit && !who.frozen;",
+    "replace": "return !who.frozen;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block-model.test.ts"
+        ],
+        "name": "only an organiser on a competition that is not billing-frozen"
+      }
+    ]
+  },
+  {
+    "id": "t19-model-lengths-longer",
+    "file": "apps/web/src/components/v2/match-rules-block-model.ts",
+    "find": "Array.from({ length: n }, (_, i) => n - i)",
+    "replace": "Array.from({ length: n + 5 }, (_, i) => n + 5 - i)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block-model.test.ts"
+        ],
+        "name": "a stage with extra time 2 x 10: the field opens at 10"
+      }
+    ]
+  },
+  {
+    "id": "t19-model-off-keeps-on",
+    "file": "apps/web/src/components/v2/match-rules-block-model.ts",
+    "find": "v === \"off\" ? { ...base, enabled: false }",
+    "replace": "v === \"off\" ? { ...base, enabled: true }",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block-model.test.ts"
+        ],
+        "name": "choosing 'Off' sends extra time off"
+      }
+    ]
+  },
+  {
+    "id": "t19-model-et-off-not-held",
+    "file": "apps/web/src/components/v2/match-rules-block-model.ts",
+    "find": "held: length === null || inert",
+    "replace": "held: inert",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block-model.test.ts"
+        ],
+        "name": "a stage with extra time OFF"
+      }
+    ]
+  },
+  {
+    "id": "t19-model-ceiling-default",
+    "file": "apps/web/src/components/v2/match-rules-block-model.ts",
+    "find": "const ceiling = isLength(stageValue) ? stageValue : owned.fact.whenAbsent;",
+    "replace": "const ceiling = isLength(stageValue) ? stageValue : 999;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block-model.test.ts"
+        ],
+        "name": "football shoot-out kicks: max is the stage's value"
+      }
+    ]
+  },
+  {
+    "id": "t19-model-no-max",
+    "file": "apps/web/src/components/v2/match-rules-block-model.ts",
+    "find": "field: { ...field, max: ceiling, min: Math.min(field.min ?? 1, ceiling) },",
+    "replace": "field: { ...field, min: Math.min(field.min ?? 1, ceiling) },",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block-model.test.ts"
+        ],
+        "name": "football shoot-out kicks: max is the stage's value"
+      }
+    ]
+  },
+  {
+    "id": "t19-model-min-floor",
+    "file": "apps/web/src/components/v2/match-rules-block-model.ts",
+    "find": "min: Math.min(field.min ?? 1, ceiling)",
+    "replace": "min: field.min ?? 1",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block-model.test.ts"
+        ],
+        "name": "a stage value below the field's own minimum"
+      }
+    ]
+  },
+  {
+    "id": "t19-model-no-ceiling-held",
+    "file": "apps/web/src/components/v2/match-rules-block-model.ts",
+    "find": "if (!isLength(ceiling)) return { field, bound: owned.bound, held: true };",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block-model.test.ts"
+        ],
+        "name": "ice hockey overtime minutes (a nested key)"
+      }
+    ]
+  },
+  {
+    "id": "t19-model-shadow-shown",
+    "file": "apps/web/src/components/v2/match-rules-block-model.ts",
+    "find": "return shown === undefined ? [] : [{ ...a, field: { ...a.field, label: shown.label } }];",
+    "replace": "return [{ ...a, field: { ...a.field, label: shown?.label ?? a.field.label } }];",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block-model.test.ts"
+        ],
+        "name": "best of 1: ONE 'Points to win' field"
+      }
+    ]
+  },
+  {
+    "id": "t19-model-source-blank",
+    "file": "apps/web/src/components/v2/match-rules-block-model.ts",
+    "find": "return v !== \"\" && v !== (stageValues[key] ?? \"\") ? \"match\" : \"stage\";",
+    "replace": "return v !== (stageValues[key] ?? \"\") ? \"match\" : \"stage\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block-model.test.ts"
+        ],
+        "name": "source: a blank or an equal value is the stage's"
+      }
+    ]
+  },
+  {
+    "id": "t19-model-source-always-match",
+    "file": "apps/web/src/components/v2/match-rules-block-model.ts",
+    "find": "return v !== \"\" && v !== (stageValues[key] ?? \"\") ? \"match\" : \"stage\";",
+    "replace": "return v !== \"\" ? \"match\" : \"stage\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block-model.test.ts"
+        ],
+        "name": "source: a blank or an equal value is the stage's"
+      }
+    ]
+  },
+  {
+    "id": "t19-model-dirty-absent",
+    "file": "apps/web/src/components/v2/match-rules-block-model.ts",
+    "find": "(opened[k] ?? \"\") !== (values[k] ?? \"\")",
+    "replace": "opened[k] !== values[k]",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block-model.test.ts"
+        ],
+        "name": "dirty: equal value sets are clean"
+      }
+    ]
+  },
+  {
+    "id": "t19-model-held-sent",
+    "file": "apps/web/src/components/v2/match-rules-block-model.ts",
+    "find": "const sent = all.filter((f) => !f.held && matchSource(f.field.key, values, stageValues) === \"match\");",
+    "replace": "const sent = all.filter((f) => matchSource(f.field.key, values, stageValues) === \"match\");",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block-model.test.ts"
+        ],
+        "name": "a shoot-out the stage does not play holds its kicks"
+      }
+    ]
+  },
+  {
+    "id": "t19-model-unchanged-sent",
+    "file": "apps/web/src/components/v2/match-rules-block-model.ts",
+    "find": "const sent = all.filter((f) => !f.held && matchSource(f.field.key, values, stageValues) === \"match\");",
+    "replace": "const sent = all.filter((f) => !f.held);",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block-model.test.ts"
+        ],
+        "name": "badminton: untouched sends nothing"
+      }
+    ]
+  },
+  {
+    "id": "t19-model-no-align",
+    "file": "apps/web/src/components/v2/match-rules-block-model.ts",
+    "find": "alignBestOfOnePoints(ctx.sportKey, buildFragment(sent.map((f) => f.field), values, stageResolved), stageResolved)",
+    "replace": "buildFragment(sent.map((f) => f.field), values, stageResolved)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block-model.test.ts"
+        ],
+        "name": "best of 1: ONE 'Points to win' field"
+      }
+    ]
+  },
+  {
+    "id": "t19-model-visible-only",
+    "file": "apps/web/src/components/v2/match-rules-block-model.ts",
+    "find": "const all = allAdapted(ctx, stageResolved, { off: \"\", halfMinutes: () => \"\" });",
+    "replace": "const all = matchFormFields(ctx, stageResolved, values, { off: \"\", halfMinutes: () => \"\" });",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block-model.test.ts"
+        ],
+        "name": "best of 1: ONE 'Points to win' field"
+      }
+    ]
+  },
+  {
+    "id": "t19-model-drop-stored-edited",
+    "file": "apps/web/src/components/v2/match-rules-block-model.ts",
+    "find": ".filter(([k]) => !edited.has(k)));",
+    "replace": ".filter(() => true));",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block-model.test.ts"
+        ],
+        "name": "a stored override's key that a match field edits is the form's to say"
+      }
+    ]
+  },
+  {
+    "id": "t19-model-drop-stored-all",
+    "file": "apps/web/src/components/v2/match-rules-block-model.ts",
+    "find": "return { ...kept, ...built };",
+    "replace": "return built;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block-model.test.ts"
+        ],
+        "name": "a key the override carries that no match field edits is kept"
+      }
+    ]
+  },
+  {
+    "id": "t19-seed-key-override",
+    "file": "apps/web/src/components/v2/match-rules-block-model.ts",
+    "find": "JSON.stringify([p.override, p.state, p.effective, p.stageResolved])",
+    "replace": "JSON.stringify([null, p.state, p.effective, p.stageResolved])",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block-model.test.ts"
+        ],
+        "name": "the block re-seeds when the page's facts change"
+      }
+    ]
+  },
+  {
+    "id": "t19-seed-key-state",
+    "file": "apps/web/src/components/v2/match-rules-block-model.ts",
+    "find": "JSON.stringify([p.override, p.state, p.effective, p.stageResolved])",
+    "replace": "JSON.stringify([p.override, null, p.effective, p.stageResolved])",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block-model.test.ts"
+        ],
+        "name": "the block re-seeds when the page's facts change"
+      }
+    ]
+  },
+  {
+    "id": "t19-seed-key-effective",
+    "file": "apps/web/src/components/v2/match-rules-block-model.ts",
+    "find": "JSON.stringify([p.override, p.state, p.effective, p.stageResolved])",
+    "replace": "JSON.stringify([p.override, p.state, null, p.stageResolved])",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block-model.test.ts"
+        ],
+        "name": "the block re-seeds when the page's facts change"
+      }
+    ]
+  },
+  {
+    "id": "t19-seed-key-stageResolved",
+    "file": "apps/web/src/components/v2/match-rules-block-model.ts",
+    "find": "JSON.stringify([p.override, p.state, p.effective, p.stageResolved])",
+    "replace": "JSON.stringify([p.override, p.state, p.effective, null])",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block-model.test.ts"
+        ],
+        "name": "the block re-seeds when the page's facts change"
+      }
+    ]
+  },
+  {
+    "id": "t19-block-form-always",
+    "file": "apps/web/src/components/v2/match-rules-block.tsx",
+    "find": "const formOpen = state === \"unstarted\" || (state === \"live\" && correcting);",
+    "replace": "const formOpen = state !== \"locked\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block.test.tsx"
+        ],
+        "name": "live: the form stays closed behind 'Correct format'"
+      }
+    ]
+  },
+  {
+    "id": "t19-block-lock-hidden",
+    "file": "apps/web/src/components/v2/match-rules-block.tsx",
+    "find": "{locked && (",
+    "replace": "{false && (",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block.test.tsx"
+        ],
+        "name": "locked (finished)"
+      }
+    ]
+  },
+  {
+    "id": "t19-block-chip-always",
+    "file": "apps/web/src/components/v2/match-rules-block.tsx",
+    "find": "{overridden && (\n          <span",
+    "replace": "{true && (\n          <span",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block.test.tsx"
+        ],
+        "name": "unstarted, no override"
+      }
+    ]
+  },
+  {
+    "id": "t19-block-reset-always",
+    "file": "apps/web/src/components/v2/match-rules-block.tsx",
+    "find": "{overridden && (\n              <button",
+    "replace": "{true && (\n              <button",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block.test.tsx"
+        ],
+        "name": "unstarted, no override"
+      }
+    ]
+  },
+  {
+    "id": "t19-block-cancel-everywhere",
+    "file": "apps/web/src/components/v2/match-rules-block.tsx",
+    "find": "{state === \"live\" && (\n              <button type=\"button\" disabled={saving} onClick={cancel}",
+    "replace": "{true && (\n              <button type=\"button\" disabled={saving} onClick={cancel}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block.test.tsx"
+        ],
+        "name": "each state exposes exactly its own controls"
+      }
+    ]
+  },
+  {
+    "id": "t19-block-warning-always",
+    "file": "apps/web/src/components/v2/match-rules-block.tsx",
+    "find": "{state === \"live\" && (\n            <p data-testid=\"match-rules-warning\"",
+    "replace": "{true && (\n            <p data-testid=\"match-rules-warning\"",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block.test.tsx"
+        ],
+        "name": "unstarted, no override"
+      }
+    ]
+  },
+  {
+    "id": "t19-block-correct-always",
+    "file": "apps/web/src/components/v2/match-rules-block.tsx",
+    "find": "{state === \"live\" && !correcting && (",
+    "replace": "{!correcting && (",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block.test.tsx"
+        ],
+        "name": "unstarted, no override"
+      }
+    ]
+  },
+  {
+    "id": "t19-block-save-always-on",
+    "file": "apps/web/src/components/v2/match-rules-block.tsx",
+    "find": "disabled={!dirty || saving}",
+    "replace": "disabled={saving}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block.test.tsx"
+        ],
+        "name": "unstarted, no override"
+      }
+    ]
+  },
+  {
+    "id": "t19-block-held-enabled",
+    "file": "apps/web/src/components/v2/match-rules-block.tsx",
+    "find": "disabled={held || saving}",
+    "replace": "disabled={saving}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block.test.tsx"
+        ],
+        "name": "a stage with extra time OFF: held"
+      }
+    ]
+  },
+  {
+    "id": "t19-block-stage-line-empty",
+    "file": "apps/web/src/components/v2/match-rules-block.tsx",
+    "find": "{stageLine !== \"\" && (",
+    "replace": "{true && (",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block.test.tsx"
+        ],
+        "name": "an empty stage line says nothing"
+      }
+    ]
+  },
+  {
+    "id": "t19-block-no-reseed",
+    "file": "apps/web/src/components/v2/match-rules-block.tsx",
+    "find": "key={blockSeedKey(props)}",
+    "replace": "key=\"fixed\"",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block.test.tsx"
+        ],
+        "name": "unstarted, no override"
+      }
+    ]
+  },
+  {
+    "id": "t19-console-block-never",
+    "file": "apps/web/src/components/v2/fixture-console.tsx",
+    "find": "{matchRules && (",
+    "replace": "{false && (",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/fixture-console-match-rules.test.tsx"
+        ],
+        "name": "handed matchRules"
+      }
+    ]
+  },
+  {
+    "id": "t19-console-block-always-fold",
+    "file": "apps/web/src/components/v2/fixture-console.tsx",
+    "find": "aside={matchRules.override !== null ? msg(\"matchRules.overridden\") : undefined}",
+    "replace": "aside={undefined}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/fixture-console-match-rules.test.tsx"
+        ],
+        "name": "an override in force shows on the closed phone row too"
+      }
+    ]
+  },
+  {
+    "id": "t19-console-aside-inverted",
+    "file": "apps/web/src/components/v2/fixture-console.tsx",
+    "find": "aside={matchRules.override !== null ? msg(\"matchRules.overridden\") : undefined}",
+    "replace": "aside={matchRules.override === null ? msg(\"matchRules.overridden\") : undefined}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/fixture-console-match-rules.test.tsx"
+        ],
+        "name": "an override in force shows on the closed phone row too"
+      }
+    ]
+  }
+]

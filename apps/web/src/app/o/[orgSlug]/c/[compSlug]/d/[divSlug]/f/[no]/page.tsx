@@ -29,7 +29,7 @@ import {
 } from "@/components/v2/fixture-console";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary } from "@/lib/i18n";
-import { matchRulesBlockProps } from "@/components/v2/match-rules-block-model";
+import { matchRulesBlockProps, offersMatchRules } from "@/components/v2/match-rules-block-model";
 import { loadStreamPanelContext } from "@/server/stream-panel-context";
 import { fixtureStreamMode } from "@/lib/fixture-stream-mount";
 import { openStreamStates } from "@/server/usecases/stream-sessions";
@@ -177,7 +177,7 @@ export default async function FixturePage({
     canEdit ? openStreamStates(auth, [id]) : Promise.resolve({} as Awaited<ReturnType<typeof openStreamStates>>),
     // W2c Task 19 (S2): the match rules block's facts - organisers only, like the other organiser controls (settle, forfeit):
     // the writer is organiser auth, so a block shown to a scorer would only earn a 403. A billing-frozen competition shows none.
-    canEdit && !frozen ? loadFixtureMatchRules(auth, id, await getDictionary(locale, "public")) : Promise.resolve(null),
+    offersMatchRules({ canEdit, frozen }) ? loadFixtureMatchRules(auth, id, await getDictionary(locale, "public")) : Promise.resolve(null),
   ]);
   const streamMode = fixtureStreamMode({
     canEdit,
