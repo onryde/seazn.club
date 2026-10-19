@@ -517,6 +517,8 @@ header:           height 60, padding 0 21, background board-2   (D9; was 48)
                   right: brand Barlow 30/600 .08em ink 70 % (D9; was 24)  — football family: clock Barlow 33/700 LED instead
 row ×2:           height 90, padding 0 24, gap 18
                   code  Barlow 48/600 width 96         ("MK", "NBR", "RDG"; tennis: surname Barlow 42/600 width 144)
+                        a code wider than 96 (a pair's four-letter code: WOME 100, WWWW 128) scales DOWN to fit it,
+                        never past it; one that fits is drawn as above (#987, 2026-10-19)
                   cells Barlow 39/600 ink 70 %, gap 18 (sets / games / sets-won), current 700 ink 100 %
                   score Barlow 69/700 line-height 1 tabular (margin-left auto)
                   meta  Barlow 30/500 ink 65 % width 78 right-aligned (overs)

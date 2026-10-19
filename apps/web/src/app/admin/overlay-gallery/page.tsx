@@ -54,6 +54,7 @@ export default async function AdminOverlayGalleryPage({
     // The stress mode (`gallery-stress.ts`; owner ruling 1, 2026-10-19): gallery check 4c's real-producer sweep.
     decided?: string | string[];
     name?: string | string[];
+    away?: string | string[];
     code?: string | string[];
   }>;
 }) {
@@ -69,7 +70,10 @@ export default async function AdminOverlayGalleryPage({
   const uiDict = (await getDictionary(locale, "ui")) as Record<string, string>;
   const publicDict = (await getDictionary(locale, "public")) as Record<string, string>;
 
-  const stress = parseGalleryStress({ decided: one(query.decided), name: one(query.name), code: one(query.code) }, uiDict);
+  const stress = parseGalleryStress(
+    { decided: one(query.decided), name: one(query.name), away: one(query.away), code: one(query.code) },
+    uiDict,
+  );
   const templates = decidedOutcomeTemplates((k, v) => msgFor(locale, k, v));
 
   const { snapshots, variants, startIso } = galleryData();

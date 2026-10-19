@@ -421,6 +421,39 @@ export async function mintClaimPathForPlayerRow(
   return `/claim/${secret}`;
 }
 
+/**
+ * Stand-in for the invite EMAIL's claim link (V464, two secrets per claim). A
+ * claim carries a console secret (the organiser's copyable link — what the
+ * invite API returns as `claim_url`) and a second one that goes ONLY into the
+ * email and is never returned by any API, so a spec cannot read it back; only
+ * its sha256 is stored. The mail itself is not capturable here (Resend, no
+ * sink), so — the same shortcut {@link mintLoginPathBySql} takes for magic
+ * links — this gives the person's OPEN claim a KNOWN email secret and returns
+ * the `/claim/{secret}` path the mail would carry.
+ *
+ * It stands in for the MAIL only. The claim row is whatever the real invite
+ * route made, and the producer → mail seam (the mail carries the email secret,
+ * the organiser's JSON never does) is pinned in
+ * src/app/api/v1/persons/[id]/claim-invites/__tests__/email-secret.test.ts,
+ * which folds the real route's mail args through the real accept route. Throws
+ * when the person has no open claim — mint the invite through the API first.
+ */
+export async function mintEmailClaimPathBySql(personId: string): Promise<string> {
+  const { randomBytes, createHash } = await import("node:crypto");
+  const secret = "pc_" + randomBytes(32).toString("base64url");
+  const hash = createHash("sha256").update(secret, "utf8").digest("hex");
+  await withDb(async (sql) => {
+    const rows = await sql<{ id: string }[]>`
+      update person_claims set email_token_hash = ${hash}
+      where person_id = ${personId} and claimed_at is null and revoked_at is null
+      returning id`;
+    if (rows.length !== 1) {
+      throw new Error(`mintEmailClaimPathBySql: expected one open claim for person ${personId}, got ${rows.length}`);
+    }
+  });
+  return `/claim/${secret}`;
+}
+
 const DEFAULT_SHOT_WIDTHS = [1280, 768, 320];
 
 /**

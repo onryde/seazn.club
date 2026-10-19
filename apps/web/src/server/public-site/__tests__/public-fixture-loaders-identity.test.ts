@@ -152,6 +152,10 @@ interface SidePreBefore {
   colour: string | null;
   badgeUrl: string | null;
   isPerson: boolean;
+  /** #987 confirm pass N3 — `ShortSide.seated` is required, so the frozen copy says what the real loader says: a slot
+   *  sentence and the "?" of an entrant the read cannot find are placeholders, a found entrant is seated. Without it
+   *  every side read as a placeholder here while the real loader widened a colliding seated pair. */
+  seated: boolean;
 }
 
 async function loadSidesBefore(
@@ -180,10 +184,10 @@ async function loadSidesBefore(
   const sideOf = (entrantId: string | null, slotLabel: SlotLabel | null, seat: "home" | "away"): SidePreBefore => {
     if (entrantId === null) {
       const name = slot(slotLabel, seat);
-      return { entrantId: "", name, colour: null, badgeUrl: null, isPerson: false };
+      return { entrantId: "", name, colour: null, badgeUrl: null, isPerson: false, seated: false };
     }
     const row = byId.get(entrantId);
-    if (!row) return { entrantId, name: "?", colour: null, badgeUrl: null, isPerson: false };
+    if (!row) return { entrantId, name: "?", colour: null, badgeUrl: null, isPerson: false, seated: false };
     const name = maskedNames.get(entrantId) ?? row.display_name;
     const colors = row.team_display?.colors as { home_primary?: string } | null | undefined;
     return {
@@ -192,6 +196,7 @@ async function loadSidesBefore(
       colour: colors?.home_primary ?? null,
       badgeUrl: resolveEntrantBadge({ badge_url: row.badge_url, team_logo_path: row.team_display?.logo_path ?? null }),
       isPerson: row.kind !== "team",
+      seated: true,
     };
   };
   const home = sideOf(fixture.home_entrant_id, fixture.home_slot_label, "home");

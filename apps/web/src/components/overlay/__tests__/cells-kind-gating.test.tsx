@@ -35,8 +35,8 @@ function classesOf(el: ReturnType<typeof walk>[number]): string {
 }
 
 const SIDES_PERIOD: OverlayModel["sides"] = [
-  { short: "RED", name: "Redbridge United", ladder: nameLadder({ id: "x", name: "Redbridge United" }), big: "1", led: false, serving: false },
-  { short: "BLU", name: "Blue Harbour", ladder: nameLadder({ id: "x", name: "Blue Harbour" }), big: "0", led: false, serving: false },
+  { short: "RED", name: "Redbridge United", ladder: nameLadder({ id: "x", name: "Redbridge United" }, "RED"), big: "1", led: false, serving: false },
+  { short: "BLU", name: "Blue Harbour", ladder: nameLadder({ id: "x", name: "Blue Harbour" }, "BLU"), big: "0", led: false, serving: false },
 ];
 
 /** A period-kernel sport (football) live, mid-match, WITH a period cell
@@ -55,8 +55,8 @@ const periodModel = (clock?: string): OverlayModel => ({
 });
 
 const SIDES_SET: OverlayModel["sides"] = [
-  { short: "MIL", name: "Milton Keynes Rovers", ladder: nameLadder({ id: "x", name: "Milton Keynes Rovers" }), big: "21", led: false, serving: true },
-  { short: "NOR", name: "Northbridge Athletic", ladder: nameLadder({ id: "x", name: "Northbridge Athletic" }), big: "18", led: true, serving: false },
+  { short: "MIL", name: "Milton Keynes Rovers", ladder: nameLadder({ id: "x", name: "Milton Keynes Rovers" }, "MIL"), big: "21", led: false, serving: true },
+  { short: "NOR", name: "Northbridge Athletic", ladder: nameLadder({ id: "x", name: "Northbridge Athletic" }, "NOR"), big: "18", led: true, serving: false },
 ];
 
 /** A set-kernel sport (badminton/volleyball family) live, mid-match, no

@@ -122,7 +122,15 @@ export async function relayOverlayPageFacts(fixtureId: string): Promise<OverlayP
     // the match centre's own defensive fallback ("never a blank row").
     const name = entrantId === null ? "—" : (r?.display_name ?? "?");
     const colors = r?.colors as { home_primary?: string } | null | undefined;
-    return { id: entrantId ?? seat, name, isPerson: r !== undefined && r.kind !== "team", colour: colors?.home_primary ?? null };
+    // `seated`: only a seat holding an entrant the read found — "—" and "?" are placeholders, which
+    // `disambiguatedShorts` never widens (#987 review I1: two empty seats read "?" / "?", never "?1" / "?2").
+    return {
+      id: entrantId ?? seat,
+      name,
+      isPerson: r !== undefined && r.kind !== "team",
+      seated: r !== undefined,
+      colour: colors?.home_primary ?? null,
+    };
   };
   const home = pre(row.home_entrant_id, "home");
   const away = pre(row.away_entrant_id, "away");

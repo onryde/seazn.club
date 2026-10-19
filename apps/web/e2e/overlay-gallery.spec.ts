@@ -22,7 +22,14 @@ import { signInStaff } from "./overlay-kit";
 //   4c. Result card         every Result card fits by its measured headline ladder (owner ruling 1, 2026-10-19): every
 //                           locale × every `fixture.decidedBy.*` sentence with a 43-character winner, through the real
 //                           producer (the gallery's stress mode); never clamped, nothing hidden, each rung only when
-//                           the one before does not fit on one line
+//                           the one before does not fit on one line; the forced sentence on EVERY card that names a
+//                           winner, naming the side the outcome credits by that side's own code
+//   4d. side codes          two sides sharing a three-letter prefix (Harlow v Harrow) read two different codes on every
+//                           template — the bug, the bar's tightest rung, the tiles and the short Result rung — and
+//                           each side ONE code everywhere (the public site's `disambiguatedShorts`, owner 2026-10-19)
+//                           and the widest four-letter codes the ladder mints (WOME, TOWN; WWWW, MMMM, ÆÆÆÆ, ØØØØ)
+//                           fit the bug's code column, the bar's tightest rung and the tiles, at 1920, 844 and 390
+//                           (#987 confirm pass N2 / M6)
 // The cells are `galleryCells(OVERLAY_TEMPLATES, …)` — the gallery's one cell source — so a template or scene added to
 // the registry is swept here with no edit. Every check prints its count, and zero checked fails it. The per-check
 // verdicts are `expect.soft`, so one run reports EVERY check that fails rather than stopping at the first.
@@ -217,6 +224,84 @@ const inside = (b: Box, area: Box) =>
 const intersects = (a: Box, b: Box) =>
   a.x + TOL < b.x + b.width && b.x + TOL < a.x + a.width && a.y + TOL < b.y + b.height && b.y + TOL < a.y + a.height;
 const fmt = (b: Box | null) => (b === null ? "none" : `{x:${b.x.toFixed(1)}, y:${b.y.toFixed(1)}, w:${b.width.toFixed(1)}, h:${b.height.toFixed(1)}}`);
+
+/**
+ * Check 4d's fit sweep (#987 confirm pass N2 / M6): name pairs whose codes — resolved by the REAL producer, the public
+ * site's pair rule through the gallery's `?name=` / `?away=` — are the widest four-letter codes on air. The two real
+ * cases are the review's own (fontkit, Barlow Condensed SemiBold 48 px, against the bug's 96 px column): WOME 100.4 and
+ * TOWN 99.1. The other two are the face's widest capitals, four of each (Æ 35.3, W 31.9, Ø 28.7, M 25.8 px a glyph):
+ * a code made of them is the worst any four-letter code can be, so a fit that holds here holds for every code the
+ * ladder can mint in a Latin script. `codes` is the premise (each pair resolves to its widest code), checked off the
+ * page before anything is measured — never the verdict.
+ */
+const WIDE_CODE_PAIRS = [
+  { name: "Manchester United", away: "Manchester United Women", codes: ["UNIT", "WOME"] },
+  { name: "St. Ives", away: "St Ives Town", codes: ["IVES", "TOWN"] },
+  { name: "Wwww Wwww", away: "Wwww Wwww Mmmm", codes: ["WWWW", "MMMM"] },
+  { name: "Ææææ Ææææ", away: "Ææææ Ææææ Øøøø", codes: ["ÆÆÆÆ", "ØØØØ"] },
+] as const;
+const FIT_FRAMES = ["", "844", "390"] as const;
+
+interface CodeFit {
+  where: string;
+  code: string;
+  /** The code's painted width, in canvas px (the preview's scale divided back out). */
+  ink: number;
+  /** The room it has, in canvas px: the bug's column, the bar name box plus its slack, the tile's content box. */
+  room: number;
+  /** Bar only: the name ladder settled on a rung that fits. */
+  settled?: boolean;
+  /** Tiles only: the tile sits inside its card. */
+  inCard?: boolean;
+}
+
+/** Check 4d's in-page read of every code a cell draws — the bug's code column, the bar's tightest rung (the LAST probe
+ *  of each side's name ladder, the code it steps down to), the tiles — against the room each has. Self-contained. */
+function probeCodeFit(canvasW: number) {
+  const out = { bug: [] as CodeFit[], bar: [] as CodeFit[], tiles: [] as CodeFit[] };
+  for (const cell of document.querySelectorAll<HTMLElement>("[data-gallery-cell]")) {
+    const root = cell.querySelector<HTMLElement>('[data-testid="ovl-root"]');
+    if (!root) continue;
+    const where = cell.dataset.galleryCell ?? "?";
+    const scale = root.getBoundingClientRect().width / canvasW;
+    const inkOf = (el: Element) => {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      return range.getBoundingClientRect().width / scale;
+    };
+    const text = (el: Element) => (el.textContent ?? "").trim();
+    for (const el of root.querySelectorAll<HTMLElement>(".ovl-bug-code")) {
+      if (text(el) === "") continue;
+      out.bug.push({ where, code: text(el), ink: inkOf(el), room: el.getBoundingClientRect().width / scale });
+    }
+    for (const box of root.querySelectorAll<HTMLElement>(".ovl-team-name")) {
+      const probes = box.querySelectorAll<HTMLElement>(".ovl-team-name-probe");
+      const last = probes[probes.length - 1];
+      if (!last) continue;
+      // `availableNameWidth`'s room, in canvas px: the box plus the slack before the next in-flow sibling.
+      const rect = box.getBoundingClientRect();
+      let room = rect.width / scale;
+      const next = box.nextElementSibling;
+      if (next instanceof HTMLElement && getComputedStyle(next).position !== "absolute") {
+        const gap = parseFloat(getComputedStyle(box.parentElement!).columnGap) || 0;
+        room += Math.max(0, (next.getBoundingClientRect().left - rect.right) / scale - gap);
+      }
+      out.bar.push({ where, code: text(last), ink: last.getBoundingClientRect().width / scale, room, settled: box.dataset.ladderSettled === "true" });
+    }
+    for (const el of root.querySelectorAll<HTMLElement>(".ovl-slate-tile-code")) {
+      const tile = el.closest<HTMLElement>(".ovl-slate-tile");
+      if (!tile || text(el) === "") continue;
+      const cs = getComputedStyle(tile);
+      const room = tile.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0);
+      const card = tile.closest<HTMLElement>('[data-testid="ovl-slate-card"]');
+      const t = tile.getBoundingClientRect();
+      const c = card?.getBoundingClientRect();
+      const inCard = c === undefined || (t.left >= c.left - 1 && t.right <= c.right + 1);
+      out.tiles.push({ where, code: text(el), ink: inkOf(el), room, inCard });
+    }
+  }
+  return out;
+}
 
 /** 400 characters with no digit, so check 8's "an ellipsised box holds a numeral" half never reads the name itself. */
 const HOSTILE_NAME = "Wolfeschlegelsteinhausenbergerdorff ".repeat(12).slice(0, 400);
@@ -482,8 +567,8 @@ test.describe("the staff overlay gallery (R2007)", () => {
   // two-line clamp is the "A vs B" headline's alone, and a Result headline is never clamped.)
   //
   // Every Result card runs through the REAL producer and the REAL ladder: the gallery's stress mode
-  // (`gallery-stress.ts`) makes every winner-bearing decided template one `fixture.decidedBy.*` sentence and both sides
-  // a 43-character name, and the page is loaded in each locale. Sentences and locales come from the dictionaries on disk;
+  // (`gallery-stress.ts`) makes every winner-bearing decided template one `fixture.decidedBy.*` sentence and gives each
+  // side its own 43-character name, and the page is loaded in each locale. Sentences and locales come from the dictionaries on disk;
   // the cells from the page. Per card: nothing hidden (the card's own overflow, any text box cut — headline AND
   // highlights), no clamp, a rung-0..2 headline on ONE line, each rung taken only when the one before does not fit
   // (measured by a clone of the previous rung in the same card), and the highlights gone exactly at the last rung.
@@ -495,14 +580,19 @@ test.describe("the staff overlay gallery (R2007)", () => {
     await signInStaff(page);
     const WINNER = "Haruto Fujimoto and Kenji Watanabe-Yamamoto";
     expect(WINNER.length).toBe(43);
+    // The away side its OWN long name (the gallery's own club name), so the capture is a real fixture, the winner is
+    // 43 characters whoever wins, and the short rung must name the winning side by THAT side's code.
+    const AWAY = "Northbridge Athletic Football & Social Club";
+    expect(AWAY.length).toBe(43);
+    expect(AWAY[0], "two different first letters, so two different codes").not.toBe(WINNER[0]);
     const dictRoot = fileURLToPath(new URL("../src/dictionaries/", import.meta.url));
     const locales = readdirSync(dictRoot, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
     expect(locales.length, "anti-vacuity: the locales read").toBeGreaterThanOrEqual(4);
 
-    const total = { loads: 0, cases: 0, hidden: [] as string[], rungs: { full: 0, short: 0, compact: 0, yield: 0 } as Record<string, number>, forced: 0, perLoad: new Set<number>() };
+    const total = { loads: 0, cases: 0, hidden: [] as string[], rungs: { full: 0, short: 0, compact: 0, yield: 0 } as Record<string, number>, forced: 0, winnerBearing: 0, unforced: [] as string[], perLoad: new Set<number>() };
     const sweep = async (locale: string, key: string, template: string, extra: Record<string, string> = {}) => {
       await page.context().addCookies([{ name: "seazn_locale", value: locale, url: baseURL! }]);
-      const q = new URLSearchParams({ decided: key, name: WINNER, ...extra });
+      const q = new URLSearchParams({ decided: key, name: WINNER, away: AWAY, ...extra });
       await openGallery(page, `?${q.toString()}`);
       await page.evaluate(() => document.fonts.ready);
       await expect
@@ -512,8 +602,8 @@ test.describe("the staff overlay gallery (R2007)", () => {
         .toBe(0);
       await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
       return page.evaluate(
-        ({ template, winner, score }) => {
-          const out = { cells: 0, hidden: [] as string[], rungs: {} as Record<string, number>, forced: 0 };
+        ({ template, names, score }) => {
+          const out = { cells: 0, hidden: [] as string[], rungs: {} as Record<string, number>, forced: 0, winnerBearing: 0, unforced: [] as string[] };
           const linesOf = (el: HTMLElement) => Math.round(el.offsetHeight / parseFloat(getComputedStyle(el).lineHeight));
           const cells = [...document.querySelectorAll<HTMLElement>("[data-gallery-cell]")].filter((c) =>
             c.querySelector('[data-testid="ovl-slate"][data-slate-state="ended"]:not([data-card])'),
@@ -529,10 +619,17 @@ test.describe("the staff overlay gallery (R2007)", () => {
             out.cells++;
             const rung = h.getAttribute("data-result-rung") ?? "none";
             out.rungs[rung] = (out.rungs[rung] ?? 0) + 1;
-            const code = cell.querySelector(".ovl-slate-tile-code")?.textContent ?? "";
-            const full = template.replaceAll("{score}", score).replaceAll("{winner}", winner);
-            const short = template.replaceAll("{score}", score).replaceAll("{winner}", code);
-            if (h.textContent === full || h.textContent === short) out.forced++;
+            // The side the cell's OUTCOME credits (`data-result-winner`, read off the snapshot, never the model), and that
+            // side's own name and code: never the first tile's, which named the home side whoever won.
+            const w = cell.dataset.resultWinner;
+            if (w === "0" || w === "1") {
+              out.winnerBearing++;
+              const code = cell.querySelector(`[data-testid="ovl-slate-tile-${w}"] .ovl-slate-tile-code`)?.textContent ?? "";
+              const full = template.replaceAll("{score}", score).replaceAll("{winner}", names[Number(w)]!);
+              const short = template.replaceAll("{score}", score).replaceAll("{winner}", code);
+              if (h.textContent === full || h.textContent === short) out.forced++;
+              else out.unforced.push(`${where} [${rung}]: "${(h.textContent ?? "").slice(0, 48)}" is not the forced sentence naming side ${w} (${code})`);
+            }
             // 1. Nothing hidden: the card's own overflow, then every text box in it (the headline AND the highlights).
             if (card.scrollHeight > card.clientHeight + 1) out.hidden.push(`${where} [${rung}]: the card hides ${card.scrollHeight - card.clientHeight}px`);
             for (const el of card.querySelectorAll<HTMLElement>("*")) {
@@ -571,7 +668,7 @@ test.describe("the staff overlay gallery (R2007)", () => {
           }
           return out;
         },
-        { template, winner: WINNER, score: "4–3" },
+        { template, names: [WINNER, AWAY], score: "4–3" },
       );
     };
 
@@ -585,27 +682,172 @@ test.describe("the staff overlay gallery (R2007)", () => {
         total.cases += read.cells;
         total.perLoad.add(read.cells);
         total.forced += read.forced;
+        total.winnerBearing += read.winnerBearing;
+        total.unforced.push(...read.unforced.map((u) => `${locale} ${key} ${u}`));
         total.hidden.push(...read.hidden.map((h) => `${locale} ${key} ${h}`));
         for (const [r, n] of Object.entries(read.rungs)) total.rungs[r] = (total.rungs[r] ?? 0) + n;
       }
     }
     console.log(
-      `[4c] locales ${locales.length} (${locales.join(", ")}), loads ${total.loads}, Result cards checked ${total.cases}, showing the forced sentence ${total.forced}, rungs ${JSON.stringify(total.rungs)}, hidden ${total.hidden.length}`,
+      `[4c] locales ${locales.length} (${locales.join(", ")}), loads ${total.loads}, Result cards checked ${total.cases}, naming a winner ${total.winnerBearing}, showing the forced sentence ${total.forced}, rungs ${JSON.stringify(total.rungs)}, hidden ${total.hidden.length}`,
     );
     expect([...total.perLoad], "every load draws the same Result cells").toHaveLength(1);
     expect(total.cases, "anti-vacuity: every Result card of every load").toBe(total.loads * [...total.perLoad][0]!);
     expect(total.cases).toBeGreaterThan(1000);
-    expect(total.forced, "anti-vacuity: the forced sentence reached the cards").toBeGreaterThan(0);
     // The verdict before the rung counts, so a ladder that stops early reds as the content it hides.
     expect(total.hidden.slice(0, 25), `Result cards hiding content or off the ladder (${total.hidden.length})`).toEqual([]);
+    expect(total.winnerBearing, "anti-vacuity: Result cards whose outcome names a winner").toBeGreaterThan(0);
+    // EVERY card that names a winner shows the forced sentence, naming the credited side by its own name or code — not
+    // merely some card somewhere (a short rung naming the other side, or a stale code, drops a card out of this count).
+    expect(total.unforced.slice(0, 25), `Result cards naming a winner without the forced sentence (${total.unforced.length})`).toEqual([]);
+    expect(total.forced, "the forced sentence reached every card that names a winner").toBe(total.winnerBearing);
     for (const r of ["full", "short", "compact"]) expect(total.rungs[r] ?? 0, `anti-vacuity: rung ${r} reached`).toBeGreaterThan(0);
 
-    // The last rung: a long explicit short name (`?code=`, the model's own `short`) runs even the compact short sentence
-    // past one line — the highlights give way, and the card still hides nothing.
-    const reach = await sweep("fr", "fixture.decidedBy.settled.organiser", JSON.parse(readFileSync(`${dictRoot}fr/ui.json`, "utf8"))["fixture.decidedBy.settled.organiser"], { code: "HARUTO-KENJI-FC" });
-    console.log(`[4c] last rung (fr, organiser, a 15-character code): cards ${reach.cells}, rungs ${JSON.stringify(reach.rungs)}, hidden ${reach.hidden.length}`);
+    // The last rung: the widest code the badge bound allows (`?code=`, the model's own `short` — cut to BADGE_MAX_CHARS,
+    // four, since #987's confirm pass, so a longer one would air as its first four) runs even the compact short sentence
+    // past one line in the narrowest card — the highlights give way, and the card still hides nothing. ÆÆÆÆ is the
+    // face's widest four capitals (check 4d's `WIDE_CODE_PAIRS`).
+    const reach = await sweep("fr", "fixture.decidedBy.settled.organiser", JSON.parse(readFileSync(`${dictRoot}fr/ui.json`, "utf8"))["fixture.decidedBy.settled.organiser"], { code: "ÆÆÆÆ" });
+    console.log(`[4c] last rung (fr, organiser, the widest four-character code): cards ${reach.cells}, rungs ${JSON.stringify(reach.rungs)}, hidden ${reach.hidden.length}`);
     expect(reach.rungs.yield ?? 0, "anti-vacuity: the last rung reached").toBeGreaterThan(0);
     expect(reach.hidden.slice(0, 25)).toEqual([]);
+  });
+
+  // fix/overlay-team-code-disambiguation (owner ruling 2026-10-19): the overlay's side codes are the public site's
+  // `disambiguatedShorts` pair. Three letters per name aired Harlow and Harrow as HAR / HAR — on the bug, at the bar's
+  // tightest rung, on the tiles, and in the Result card's short rung ("HAR won 4–3 on penalties"), which named nobody.
+  // Every cell of every template, read off the RENDERED page: the two sides' codes differ wherever both are drawn, each
+  // side has ONE code across every template, and every short Result rung names the credited side (the cell's own
+  // `data-result-winner`, read off the snapshot) by that side's code.
+  test("check 4d: two sides sharing a three-letter prefix (Harlow v Harrow) read two different codes on every template — bug, bar, tiles, short Result rung — and the widest four-letter codes fit the bug, the bar and the tiles at 1920, 844 and 390", async ({
+    page,
+    baseURL,
+  }) => {
+    test.setTimeout(900_000);
+    await signInStaff(page);
+    const NAMES = ["Harlow", "Harrow"] as const;
+    expect(NAMES[0].slice(0, 3), "premise: three letters per name collide").toBe(NAMES[1].slice(0, 3));
+    const key = "fixture.decidedBy.shootout";
+    const ui = JSON.parse(readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8")) as Record<string, string>;
+    const template = ui[key]!;
+    expect(template, "the forced sentence names its winner").toContain("{winner}");
+    await page.context().addCookies([{ name: "seazn_locale", value: "en", url: baseURL! }]);
+    await openGallery(page, `?${new URLSearchParams({ decided: key, name: NAMES[0], away: NAMES[1] }).toString()}`);
+    await page.evaluate(() => document.fonts.ready);
+    await expect
+      .poll(() => page.locator('[data-testid="ovl-slate-headline"][data-result-rung]:not([data-result-ladder-settled="true"])').count(), {
+        message: "every Result headline measured",
+      })
+      .toBe(0);
+    const read = await page.evaluate(
+      ({ template, score }) => {
+        const text = (el: Element | null | undefined) => (el?.textContent ?? "").trim();
+        const out = {
+          cells: 0,
+          perTemplate: {} as Record<string, { cells: number; pairs: number }>,
+          pairs: { bug: 0, bar: 0, tiles: 0 } as Record<string, number>,
+          same: [] as string[],
+          codes: [[], []] as string[][],
+          winnerBearing: 0,
+          shortRungs: 0,
+          wrongShort: [] as string[],
+        };
+        for (const cell of document.querySelectorAll<HTMLElement>("[data-gallery-cell]")) {
+          const where = cell.dataset.galleryCell ?? "?";
+          const tpl = cell.dataset.template ?? "?";
+          out.cells++;
+          const per = (out.perTemplate[tpl] ??= { cells: 0, pairs: 0 });
+          per.cells++;
+          const pair = (surface: string, home: string, away: string) => {
+            out.pairs[surface] = (out.pairs[surface] ?? 0) + 1;
+            per.pairs++;
+            out.codes[0]!.push(home);
+            out.codes[1]!.push(away);
+            if (home === "" || away === "" || home === away) out.same.push(`${where} ${surface}: "${home}" / "${away}"`);
+          };
+          // The bug's code column — both rows, where both are drawn (cricket's bug carries one hero row).
+          const bug = [...cell.querySelectorAll(".ovl-bug-code")].map(text);
+          if (bug.length === 2) pair("bug", bug[0]!, bug[1]!);
+          // The bar's tightest rung — the LAST probe of each side's name ladder, the code it steps down to.
+          const rungOf = (side: string) => {
+            const probes = [...cell.querySelectorAll(`[data-testid="${side}"] .ovl-team-name-probe`)];
+            return probes.length > 0 ? text(probes[probes.length - 1]) : null;
+          };
+          const [barHome, barAway] = [rungOf("ovl-side-home"), rungOf("ovl-side-away")];
+          if (barHome !== null && barAway !== null) pair("bar", barHome, barAway);
+          // The scene and Result cards' tiles.
+          const tile = (i: number) => cell.querySelector(`[data-testid="ovl-slate-tile-${i}"] .ovl-slate-tile-code`);
+          if (tile(0) && tile(1)) pair("tiles", text(tile(0)), text(tile(1)));
+          // The Result card's short rung (the ladder's second probe): the credited side, by its own code.
+          const w = cell.dataset.resultWinner;
+          const probes = [...cell.querySelectorAll(".ovl-slate-headline-probe")];
+          if ((w === "0" || w === "1") && probes.length >= 2 && tile(0) && tile(1)) {
+            out.winnerBearing++;
+            const codes = [text(tile(0)), text(tile(1))];
+            const want = template.replaceAll("{score}", score).replaceAll("{winner}", codes[Number(w)]!);
+            const other = template.replaceAll("{score}", score).replaceAll("{winner}", codes[1 - Number(w)]!);
+            const got = text(probes[1]);
+            if (got === want && got !== other) out.shortRungs++;
+            else out.wrongShort.push(`${where}: short rung "${got}", want "${want}"`);
+          }
+        }
+        return out;
+      },
+      { template, score: "4–3" },
+    );
+    const unique = (xs: string[]) => [...new Set(xs)];
+    console.log(
+      `[4d] cells ${read.cells}, pairs ${JSON.stringify(read.pairs)}, per template ${JSON.stringify(read.perTemplate)}, codes ${JSON.stringify(read.codes.map(unique))}, short Result rungs ${read.shortRungs}/${read.winnerBearing}`,
+    );
+    // Anti-vacuity: every template the registry ships drew codes to compare, and every surface was read.
+    const templates = Object.keys(read.perTemplate);
+    expect(templates.length, "anti-vacuity: the gallery's templates").toBeGreaterThanOrEqual(2);
+    for (const tpl of templates) expect(read.perTemplate[tpl]!.pairs, `anti-vacuity: ${tpl} drew both sides' codes`).toBeGreaterThan(0);
+    for (const surface of ["bug", "bar", "tiles"]) expect(read.pairs[surface] ?? 0, `anti-vacuity: ${surface} pairs read`).toBeGreaterThan(0);
+    // The verdicts: never one code for both sides, and ONE code per side on every template.
+    expect(read.same.slice(0, 25), `sides drawn with the same code (${read.same.length})`).toEqual([]);
+    expect(unique(read.codes[0]!), "Harlow reads one code on every template").toHaveLength(1);
+    expect(unique(read.codes[1]!), "Harrow reads one code on every template").toHaveLength(1);
+    expect(unique(read.codes[0]!)[0]).not.toBe(unique(read.codes[1]!)[0]);
+    // Every short Result rung names the credited side by its own code.
+    expect(read.winnerBearing, "anti-vacuity: Result cards whose outcome names a winner").toBeGreaterThan(0);
+    expect(read.wrongShort.slice(0, 25), `short Result rungs naming the wrong side or an ambiguous code (${read.wrongShort.length})`).toEqual([]);
+    expect(read.shortRungs).toBe(read.winnerBearing);
+
+    // The fit (#987 confirm pass N2 / M6): the widest four-letter codes the ladder mints, at all three frames, on the
+    // bug, the bar's tightest rung and the tiles. Harlow / Harrow alone measured HARL / HARR (86.8 / 89.0 px), which
+    // fit a column that WOME (100.4) and TOWN (99.1) overflow — one lucky sample, so the sweep carries the widest.
+    for (const frame of FIT_FRAMES) {
+      for (const { name, away, codes } of WIDE_CODE_PAIRS) {
+        const params = new URLSearchParams({ name, away });
+        if (frame !== "") params.set("frame", frame);
+        await openGallery(page, `?${params.toString()}`);
+        await page.evaluate(() => document.fonts.ready);
+        // A ladder whose tightest rung does not fit never settles: wait for it, and let the verdict below report it.
+        await expect
+          .poll(() => page.locator('.ovl-team-name:not([data-ladder-settled="true"])').count(), { timeout: 10_000 })
+          .toBe(0)
+          .catch(() => undefined);
+        const fit = await page.evaluate(probeCodeFit, CANVAS_W);
+        const at = `${frame || "1920"} ${codes.join("/")}`;
+        const widest = (xs: CodeFit[]) => xs.reduce((m, x) => (x.ink > m.ink ? x : m), { ink: 0, room: 0, code: "", where: "" });
+        const summary = (["bug", "bar", "tiles"] as const).map((s) => {
+          const w = widest(fit[s]);
+          return `${s} ${fit[s].length} (widest "${w.code}" ${w.ink.toFixed(1)} in ${w.room.toFixed(1)})`;
+        });
+        console.log(`[4d fit] frame ${at}: ${summary.join(", ")}`);
+        for (const surface of ["bug", "bar", "tiles"] as const) {
+          expect(fit[surface].length, `anti-vacuity: ${surface} codes measured at ${at}`).toBeGreaterThan(0);
+          // The premise: this load drew the codes it is here for, on this surface.
+          const drawn = new Set(fit[surface].map((f) => f.code));
+          for (const code of codes) expect(drawn.has(code), `premise: ${surface} drew "${code}" at ${at} (drew ${[...drawn].join(", ")})`).toBe(true);
+          const misfit = fit[surface]
+            .filter((f) => f.ink > f.room + 0.5 || f.settled === false || f.inCard === false)
+            .map((f) => `${f.where}: "${f.code}" ${f.ink.toFixed(1)}px in ${f.room.toFixed(1)}px${f.settled === false ? ", ladder unsettled" : ""}${f.inCard === false ? ", tile out of its card" : ""}`);
+          expect.soft(misfit.slice(0, 25), `${surface} codes that do not fit at ${at} (${misfit.length})`).toEqual([]);
+        }
+      }
+    }
   });
 
   test("check 6: no preview fetches or subscribes — nothing leaves the page for 16 s (longer than POLL_MS)", async ({ page }) => {

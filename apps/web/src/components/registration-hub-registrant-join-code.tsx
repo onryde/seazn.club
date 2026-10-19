@@ -50,7 +50,9 @@ export function RegistrationHubRegistrantJoinCode({
   return (
     <div data-registration-hub-registrant-join-code className="flex flex-wrap items-center gap-2">
       <span className="text-xs font-medium text-slate-500">{label}</span>
-      <code className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 font-mono text-sm text-slate-800">
+      {/* `ph-no-capture`: a team's join code is a capability (anyone holding it can join the entry), so it stays out of
+          PostHog replay. */}
+      <code className="ph-no-capture rounded-md border border-slate-200 bg-slate-50 px-2 py-1 font-mono text-sm text-slate-800">
         {code}
       </code>
       <button type="button" onClick={copy} className="btn btn-ghost text-xs">

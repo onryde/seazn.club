@@ -17,7 +17,7 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePlural, useLocale, useT } from "@/components/i18n/dict-provider";
-import { lichessLinkStartHref } from "@/lib/lichess-link";
+import { lichessLinkStartHref, type LichessFailureCode, type LichessFlashCode } from "@/lib/lichess-link";
 import { moverFlagAt, optimisticOwnMs, type OptimisticClock } from "./clock-math";
 import { ClockBar, ClocksStrip } from "./clocks-strip";
 import { SoundToggle, type SoundSwitch } from "./sound-toggle";
@@ -30,6 +30,8 @@ import { Checkin } from "./checkin";
 import { GameOver } from "./game-over";
 import { RoomHeader } from "./room-header";
 import { useRoomSounds, useSoundSwitch } from "./use-room-sounds";
+import { useStripLichessParam } from "./use-strip-lichess-param";
+import { flashPhase, heldFlashFrom, nextHeldFlash } from "./room-held-flash";
 import {
   CameraBlockedCard,
   CameraCard,
@@ -170,6 +172,7 @@ export function RoomShell({
   token,
   selfPath,
   grantRefused = false,
+  lichessFlash = null,
 }: {
   initial: RoomSnapshot;
   token: string | null;
@@ -178,11 +181,20 @@ export function RoomShell({
   /** Final review P10: Lichess said, as this page loaded, that the player's grant no longer plays — the re-link
    *  screen shows at once (room.ts `roomGrantDowngraded`, asked by the page). */
   grantRefused?: boolean;
+  /** Owner staging test 2026-10-19: how the Lichess link the player just tried went - the `?lichess=<code>` the page
+   *  read (lib/lichess-link.ts). Said on the link / re-link card; the parameter is then taken out of the address bar. */
+  lichessFlash?: LichessFlashCode | null;
 }) {
   const t = useT();
   const plural = usePlural();
   const locale = useLocale();
   const room = useRoom(initial, token, grantRefused);
+  // The outcome is HELD while the page lives: the address bar loses `lichess=` as soon as it has been read, and a refresh
+  // of the server page (the stripped address) must not take the sentence off the card it was read for. Only a failure is
+  // held, and only for as long as its card stands (room-held-flash.ts): a `linked` landing, or a failure the screen has
+  // since moved on from, must never show above a LATER revoke / re-consent card. Adjusted below, once the screen is known.
+  const [held, setHeld] = useState(() => heldFlashFrom(lichessFlash));
+  useStripLichessParam();
   const { state } = room;
   const snap = state.snap;
   const cameraOn = snap.cameraPolicy !== "off";
@@ -284,6 +296,11 @@ export function RoomShell({
     camera.status === "gave_up" ||
     (camera.status === "live" && retries < SEAT_RETRIES);
   const screen = roomScreen(state, { cameraSettling });
+  // Render-phase adjustment (the sanctioned adjust-state-on-change pattern): the held outcome follows the screen.
+  const phase = flashPhase(screen.kind, state.seat?.seated === true);
+  const nextHeld = nextHeldFlash(held, phase);
+  if (nextHeld !== held) setHeld(nextHeld);
+  const flash = phase === "card" ? nextHeld.code : null;
 
   const tryAgain = useCallback(() => {
     setRetry({ for: participantId, n: 0 });
@@ -310,6 +327,7 @@ export function RoomShell({
           startBudgetSpent={cameraStarting && !checkingCamera}
           relinkHref={relinkHref}
           selfPath={selfPath}
+          lichessFlash={flash}
           locale={locale}
           t={t}
           plural={plural}
@@ -383,6 +401,7 @@ export function Screen({
   startBudgetSpent = false,
   relinkHref,
   selfPath = null,
+  lichessFlash = null,
   locale,
   t,
   plural,
@@ -405,6 +424,9 @@ export function Screen({
   /** This page's own path and query (the personal link included): where "Switch account" signs back in to. Absent ⇒ the
    *  room's canonical path, which a session identity reads without the link. */
   selfPath?: string | null;
+  /** How the Lichess link the player just tried FAILED (`?lichess=`, held by the shell - room-held-flash.ts): said on card 8
+   *  and on seam A's notice, the two places that offer the link again. Nothing else draws it, and a success never is one. */
+  lichessFlash?: LichessFailureCode | null;
   locale: string;
   t: RoomT;
   plural: ReturnType<typeof usePlural>;
@@ -549,7 +571,7 @@ export function Screen({
           ) : null}
           <aside data-testid="room-aside" className="flex min-w-0 flex-col gap-3 max-md:contents md:order-4">
             <div className="order-2 min-w-0">
-              {mine ? <RevokedNotice relinkHref={relinkHref} otherAccount={snap.otherAccount} t={t} /> : <SeatHeldNotice t={t} />}
+              {mine ? <RevokedNotice relinkHref={relinkHref} otherAccount={snap.otherAccount} flash={lichessFlash} t={t} /> : <SeatHeldNotice t={t} />}
             </div>
             {policyOn ? <TileStrip snap={snap} camera={camera} presence={presence} handover={handover} cameraPending={cameraRetryDue(state)} t={t} /> : null}
             <BackToFixture href={snap.links.fixture} className="order-7" t={t} />
@@ -563,7 +585,7 @@ export function Screen({
       );
     }
     case "relink":
-      return <RelinkCard relinkHref={relinkHref} t={t} />;
+      return <RelinkCard relinkHref={relinkHref} flash={lichessFlash} t={t} />;
     case "wrongAccount":
       return <WrongAccountCard name={snap.you.name} email={screen.viewerEmail} next={selfPath ?? `${snap.links.fixture}/play`} t={t} />;
     case "notOpened":

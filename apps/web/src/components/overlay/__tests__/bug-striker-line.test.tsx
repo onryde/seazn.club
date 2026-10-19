@@ -56,8 +56,8 @@ const MODEL: OverlayModel = {
   voided: false,
   header: { context: "overlay.header.live", period: "" },
   sides: [
-    { short: "ASH", name: "Ashgrove Rovers", ladder: nameLadder({ id: "h", name: "Ashgrove Rovers" }), big: "5/0", led: true, serving: false },
-    { short: "NOR", name: "Northbridge Athletic", ladder: nameLadder({ id: "a", name: "Northbridge Athletic" }), big: "", led: false, serving: false },
+    { short: "ASH", name: "Ashgrove Rovers", ladder: nameLadder({ id: "h", name: "Ashgrove Rovers" }, "ASH"), big: "5/0", led: true, serving: false },
+    { short: "NOR", name: "Northbridge Athletic", ladder: nameLadder({ id: "a", name: "Northbridge Athletic" }, "NOR"), big: "", led: false, serving: false },
   ],
   cellsKind: "none",
   cells: [],

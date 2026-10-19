@@ -57,7 +57,7 @@ export function AuthForm({ next }: { next?: string }) {
         {devLink && (
           <a
             href={devLink}
-            className="btn btn-primary mt-4 inline-block w-full justify-center py-2.5"
+            className="ph-no-capture btn btn-primary mt-4 inline-block w-full justify-center py-2.5"
           >
             {msg("auth.check.devLink")}
           </a>
@@ -82,7 +82,10 @@ export function AuthForm({ next }: { next?: string }) {
 
   return (
     <div className="card mx-auto w-full max-w-sm p-6">
-      <a href={googleHref} className="btn btn-ghost mb-4 w-full justify-center py-2.5">
+      {/* `ph-no-capture`: `next` is where the visitor lands after signing in, and on the claim, invite and check-in pages it IS
+          the page's one-time secret (`/claim/<secret>`), url-encoded into this href. PostHog replay records attributes before
+          the `before_send` scrub can see them, and only this class stops the recorder (see the dev link above). */}
+      <a href={googleHref} className="ph-no-capture btn btn-ghost mb-4 w-full justify-center py-2.5">
         <GoogleMark />
         <span className="ml-2">{msg("auth.google")}</span>
       </a>

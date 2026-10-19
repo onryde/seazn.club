@@ -2188,7 +2188,9 @@
     "externalPlay.room.state.wrongAccount.switch": "fedce010cffcb86e",
     "externalPlay.room.state.wrongAccount.failed": "6e34beff85266a69",
     "externalPlay.room.state.noAccount.title": "805df327bff3dfc3",
-    "externalPlay.room.state.noAccount.body": "ac5ccbbf96150135"
+    "externalPlay.room.state.noAccount.body": "ac5ccbbf96150135",
+    "settings.account.lichess.flashNext.already_linked": "2598385a7abca783",
+    "settings.account.lichess.flashNext.already_linked_game": "3414b0b80ecaa61a"
   },
   "fr": {
     "app.name": "fb56d648fbb9ae92",
@@ -4379,7 +4381,9 @@
     "externalPlay.room.state.wrongAccount.switch": "fedce010cffcb86e",
     "externalPlay.room.state.wrongAccount.failed": "6e34beff85266a69",
     "externalPlay.room.state.noAccount.title": "805df327bff3dfc3",
-    "externalPlay.room.state.noAccount.body": "ac5ccbbf96150135"
+    "externalPlay.room.state.noAccount.body": "ac5ccbbf96150135",
+    "settings.account.lichess.flashNext.already_linked": "2598385a7abca783",
+    "settings.account.lichess.flashNext.already_linked_game": "3414b0b80ecaa61a"
   },
   "nl": {
     "app.name": "fb56d648fbb9ae92",
@@ -6570,6 +6574,8 @@
     "externalPlay.room.state.wrongAccount.switch": "fedce010cffcb86e",
     "externalPlay.room.state.wrongAccount.failed": "6e34beff85266a69",
     "externalPlay.room.state.noAccount.title": "805df327bff3dfc3",
-    "externalPlay.room.state.noAccount.body": "ac5ccbbf96150135"
+    "externalPlay.room.state.noAccount.body": "ac5ccbbf96150135",
+    "settings.account.lichess.flashNext.already_linked": "2598385a7abca783",
+    "settings.account.lichess.flashNext.already_linked_game": "3414b0b80ecaa61a"
   }
 }

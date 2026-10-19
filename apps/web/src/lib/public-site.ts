@@ -695,15 +695,18 @@ export function chipLabelKey(
 
 // ---------------------------------------------------------------------------
 // Match-centre entrant abbreviations (R11 fix round, C9). The court card and
-// the timeline/sets-tab chips abbreviate each side to a short label. TEAM
-// entrants keep the existing "first three compacted letters of the whole
-// name" rule unconditionally (it already disambiguates in practice —
-// cricket's BLA/COM — and C9 is scoped to person sports only). PERSON
-// entrants collided under that same rule ("Player One"/"Player Two" both
-// read "PLA"): `personShortCandidates` prefers the surname instead, and
-// `disambiguatedShorts` resolves both sides of a fixture TOGETHER, since a
-// single side's name never carries enough information on its own to know it
-// needs to widen past its first candidate.
+// the timeline/sets-tab chips abbreviate each side to a short label, and the
+// stream overlay airs the same pair (`overlaySideCodes`, overlay-model.ts).
+// TEAM entrants read "the first three compacted letters of the whole name"
+// (`teamShortOf`) wherever that already tells the two apart — cricket's
+// BLA/COM. Two SEATED teams it does not tell apart (Harlow / Harrow, both HAR)
+// widen through `teamShortCandidates` (fix/overlay-team-code-disambiguation);
+// a placeholder seat never widens (#987 review I1). PERSON entrants collided
+// under the team rule ("Player One"/"Player Two" both read "PLA"):
+// `personShortCandidates` prefers the surname instead. `disambiguatedShorts`
+// resolves both sides of a fixture TOGETHER, since a single side's name never
+// carries enough information on its own to know it needs to widen past its
+// first candidate.
 // ---------------------------------------------------------------------------
 
 function compactWord(word: string): string {
@@ -733,11 +736,63 @@ function compactWord(word: string): string {
  */
 export const BADGE_MAX_CHARS = 4;
 
-/** The existing team-style rule, unchanged by C9: first three compacted
- *  letters of the whole name ("Blazers" -> "BLA"). */
+/** The first `n` CODE POINTS of `s` — never half of a surrogate pair. An astral
+ *  letter (CJK Ext-B 𠮷, as in the surname 𠮷田) is two UTF-16 units, and a
+ *  `slice` by unit kept its lone high surrogate, which renders as "�" (#987
+ *  review M2). */
+function headOf(s: string, n: number): string {
+  return Array.from(s).slice(0, n).join("");
+}
+
+/** The team rule, unchanged by C9: first three compacted letters of the whole
+ *  name ("Blazers" -> "BLA"), counted in code points. */
 export function teamShortOf(name: string): string {
   const compact = compactWord(name);
-  return compact.length > 0 ? compact.slice(0, 3) : "?";
+  return compact.length > 0 ? headOf(compact, 3) : "?";
+}
+
+/**
+ * Ordered abbreviations for a TEAM's name, read only when the other side is a
+ * seated team too and the two collide (fix/overlay-team-code-disambiguation, for
+ * the stream overlay, which takes its codes from `disambiguatedShorts`: "Harlow"
+ * and "Harrow" both read HAR under the team rule, so the overlay aired "HAR won
+ * 4–3 on penalties"). Four rungs, each stating its own width (all within
+ * `BADGE_MAX_CHARS`):
+ *
+ *  0. the team rule itself (`teamShortOf`), so a pair that already differs reads
+ *     exactly as before — C9's "team entrants keep today's behaviour where it
+ *     already disambiguates";
+ *  1. the team rule one letter wider (Harlow / Harrow -> HARL / HARR);
+ *  2. the first word's initial with the second word's first two letters, the
+ *     broadcast convention for a shared first word (Manchester United /
+ *     Manchester City -> MUN / MCI);
+ *  3. the LAST word's first four letters, for clubs that share a first word AND
+ *     a second word's start, or a prefix word (Real Madrid / Real Mallorca ->
+ *     MADR / MALL, FC Barcelona / FC Bayern -> BARC / BAYE; #987 review M1).
+ *
+ * POSITIONAL: rung i is the same rung for every name, so the pair loop compares
+ * like with like. A rung a name cannot draw (one word has no second or last
+ * word) REPEATS the rung before it, rather than being dropped — a dropped rung
+ * shifted the ones after it, and "Ab C"'s initials (AC) then competed against
+ * the other side's four letters (#987 review M3). A pair that collides through
+ * all four falls to `disambiguatedShorts`'s positional tie-break.
+ *
+ * A name with no letters or digits has no code at all: `["?"]`, the no-code
+ * glyph (`disambiguatedShorts` never widens one; #987 review I2).
+ */
+export function teamShortCandidates(name: string): string[] {
+  const words = name
+    .trim()
+    .split(/\s+/)
+    .map(compactWord)
+    .filter((w) => w.length > 0);
+  if (words.length === 0) return ["?"];
+  const whole = words.join("");
+  const rule = headOf(whole, 3);
+  const wider = headOf(whole, 4);
+  const initials = words.length > 1 ? `${headOf(words[0]!, 1)}${headOf(words[1]!, 2)}` : wider;
+  const lastWord = words.length > 1 ? headOf(words[words.length - 1]!, 4) : initials;
+  return [rule, wider, initials, lastWord];
 }
 
 /**
@@ -806,25 +861,61 @@ export function personShortCandidates(name: string): string[] {
   return out.length > 0 ? out : ["?"];
 }
 
+/** One side of a fixture, as `disambiguatedShorts` reads it. */
+export interface ShortSide {
+  name: string;
+  isPerson: boolean;
+  /** TRUE only when the seat holds a real entrant the read found. A placeholder — a slot sentence ("Winner of …",
+   *  "No. 3 in Group A"), a bye, TBD, the overlay doors' "—", the "?" of an entrant the read cannot find — is false.
+   *  REQUIRED (#987 confirm pass N3): an optional flag let a producer that forgot it compile and silently air a
+   *  colliding seated pair as HAR / HAR, so every producer now says which it holds. Read only for a pair of two
+   *  teams; a person's ladder is unchanged by it. */
+  seated: boolean;
+}
+
 /**
  * The two sides' court-card abbreviations, resolved TOGETHER: a collision on
- * one side can only be seen — and broken — by comparing both at once. Team
- * sides keep today's fixed rule unconditionally (out of C9's scope: "team
- * entrants keep today's behaviour where it already disambiguates"); a person
+ * one side can only be seen — and broken — by comparing both at once. A person
  * side widens through its own candidate ladder until it differs from the
- * other side. If every candidate is exhausted and the two sides are STILL
- * equal — the two entrants share the exact same full name, letter for
- * letter — a positional tie-break keeps the invariant "never equal" intact
- * even then (still built from each side's own candidate, just no longer
- * unique to it).
+ * other side. Two TEAM sides keep the team rule wherever it already tells them
+ * apart, and widen through `teamShortCandidates` only where it does not and
+ * BOTH seats hold a real entrant with letters to its name
+ * (fix/overlay-team-code-disambiguation — before it, two teams kept the rule
+ * unconditionally, and Harlow / Harrow both read HAR).
+ *
+ * A PLACEHOLDER seat never widens and never takes the tie-break (#987 review
+ * I1): its sentence's second word is a preposition ("of", "de", "van"), so the
+ * ladder cannot separate two of them, and the tie-break's ordinal then reads as
+ * data — "No. 3 in Group A" / "… B" became NO31 / NO32, the relay door's two
+ * empty seats "?1" / "?2", a final's share card WIN1 v WIN2. Nor does a name
+ * with no letters (I2: no code to widen; it reads "?"). Either way the pair
+ * reads exactly what it read before the team ladder: `teamShortOf` per side —
+ * so two placeholder seats can read one code (WIN / WIN), which is the owner's
+ * call to change, not this function's to invent.
+ *
+ * A team side facing a person keeps the team rule as it always has; the
+ * person's ladder does the widening. If every rung is exhausted and the two
+ * sides are STILL equal — identical names, or names that differ only past
+ * every rung's width — a positional tie-break keeps the invariant "never equal"
+ * intact even then (still built from each side's own first candidate, just no
+ * longer unique to it).
+ *
+ * The ONE implementation: the match centre, the hub, the overlay page's two
+ * doors and the overlay model (`overlaySideCodes`) all read it.
  */
-export function disambiguatedShorts(
-  a: { name: string; isPerson: boolean },
-  b: { name: string; isPerson: boolean },
-): [string, string] {
-  if (!a.isPerson && !b.isPerson) return [teamShortOf(a.name), teamShortOf(b.name)];
+export function disambiguatedShorts(a: ShortSide, b: ShortSide): [string, string] {
+  if (!a.isPerson && !b.isPerson) {
+    const widens = (side: ShortSide) => side.seated === true && compactWord(side.name).length > 0;
+    if (!widens(a) || !widens(b)) return [teamShortOf(a.name), teamShortOf(b.name)];
+    return firstThatDiffers(teamShortCandidates(a.name), teamShortCandidates(b.name));
+  }
   const candsA = a.isPerson ? personShortCandidates(a.name) : [teamShortOf(a.name)];
   const candsB = b.isPerson ? personShortCandidates(b.name) : [teamShortOf(b.name)];
+  return firstThatDiffers(candsA, candsB);
+}
+
+/** The first rung at which two ladders differ, else the positional tie-break. */
+function firstThatDiffers(candsA: readonly string[], candsB: readonly string[]): [string, string] {
   const rungs = Math.max(candsA.length, candsB.length);
   for (let i = 0; i < rungs; i++) {
     const candA = candsA[Math.min(i, candsA.length - 1)]!;
@@ -837,7 +928,8 @@ export function disambiguatedShorts(
   // entrants genuinely called the same thing — a label no badge chip is
   // legible at, and the exact defect the C9 follow-up rung exists to prevent.
   // Every first candidate is at most three characters (`surname.slice(0, 3)`,
-  // or `teamShortOf`), so the suffixed label is at most four. THIS SHAPE IS
+  // or `teamShortOf`, which is also `teamShortCandidates`' first), so the
+  // suffixed label is at most four. THIS SHAPE IS
   // WHAT SETS `BADGE_MAX_CHARS`: three plus an ordinal. The two must move
   // together — a smaller ceiling truncates the ordinal away and the tie-break
   // stops disambiguating.

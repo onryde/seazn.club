@@ -390,5 +390,7 @@
   "externalPlayInvite.button": "Open game",
   "externalPlayInvite.footer": "You received this because you're entered in an online chess division at {orgName} on Seazn Club.",
   "externalPlayInvite.text": "Round {roundNo} is open. Your game vs {opponentName} is ready to play now. Take your seat by {deadline}: {fixtureUrl}",
-  "externalPlayInvite.textLater": "Round {roundNo} is open. Check-in for your game vs {opponentName} opens at {opens}; take your seat by {deadline}: {fixtureUrl}"
+  "externalPlayInvite.textLater": "Round {roundNo} is open. Check-in for your game vs {opponentName} opens at {opens}; take your seat by {deadline}: {fixtureUrl}",
+  "claimInvite.signinNote": "This link signs you in for {hours} hours; after that it still works, you'll just sign in first. Don't forward it.",
+  "officialInvite.signinNote": "This link signs you in for {hours} hours; after that it still works, you'll just sign in first. Don't forward it."
 }

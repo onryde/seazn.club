@@ -41,10 +41,75 @@ export function lichessLanding(next: string | null, code: LichessFlashCode): str
   return `${base}${base.includes("?") ? "&" : "?"}lichess=${code}`;
 }
 
-/** The sentence key for a `?lichess=` value a page was handed — `null` for anything that is not one of ours (a
+/** The code in a `?lichess=` value a page was handed - `null` for anything that is not one of ours (a hand-typed value
+ *  is no outcome anywhere). The ONE narrowing every page reads the parameter through: settings, /me, the registration
+ *  stepper and the match room. */
+export function lichessFlashCode(value: string | null | undefined): LichessFlashCode | null {
+  return (LICHESS_FLASH_CODES as readonly string[]).includes(value ?? "") ? (value as LichessFlashCode) : null;
+}
+
+/** The sentence key for a `?lichess=` value a page was handed - `null` for anything that is not one of ours (a
  *  hand-typed value renders nothing). */
 export function lichessFlashKey(value: string | null | undefined): `settings.account.lichess.flash.${LichessFlashCode}` | null {
-  return (LICHESS_FLASH_CODES as readonly string[]).includes(value ?? "")
-    ? (`settings.account.lichess.flash.${value as LichessFlashCode}` as const)
-    : null;
+  const code = lichessFlashCode(value);
+  return code === null ? null : (`settings.account.lichess.flash.${code}` as const);
+}
+
+/** An outcome that went WRONG - every code but `linked`. */
+export type LichessFailureCode = Exclude<LichessFlashCode, "linked">;
+
+/** The failure in a `?lichess=` value - `null` for `linked` as well as for anything that is not one of ours. The ONE
+ *  narrowing the match room and the registration card say an outcome through (PR #990 review, I1): both hold the code
+ *  while the page lives, and a held "Lichess account linked." would stand over a LATER "Your Lichess link was
+ *  revoked" card; a success is shown by the state itself (the linked row, the seat taken), never by a held sentence. */
+export function lichessFailureCode(value: string | null | undefined): LichessFailureCode | null {
+  const code = lichessFlashCode(value);
+  return code === null || code === "linked" ? null : code;
+}
+
+/** The outcomes that tell the player what to DO next, and the sentence that says it. A sentence alone is enough for
+ *  most failures (try again; ask us); `already_linked` is the one a retry can never fix - that Lichess account belongs
+ *  to ANOTHER Seazn account (unique provider + external id) - so it names the way out. The sentence never names that
+ *  other account: the server does not know whose it is, and would not say. */
+export const LICHESS_FLASH_NEXT_KEYS = {
+  already_linked: "settings.account.lichess.flashNext.already_linked",
+} as const satisfies Partial<Record<LichessFailureCode, string>>;
+
+/** The same steps where the player's board is on ONE specific Lichess account (the match room's `otherAccount`: "this
+ *  game is on your Lichess account X - sign in to Lichess as X, then link it again"). The generic already_linked step
+ *  ends "or switch to a different account on Lichess", which that notice rules out (PR #990 review, M3) - so this one
+ *  keeps the account: free it from the other Seazn account, then link it here. Total over the table above (a test sweeps it). */
+export const LICHESS_FLASH_NEXT_KEYS_FOR_GAME_ACCOUNT = {
+  already_linked: "settings.account.lichess.flashNext.already_linked_game",
+} as const satisfies Record<keyof typeof LICHESS_FLASH_NEXT_KEYS, string>;
+
+/** The next-step key for an outcome, `null` when it has none (or is not an outcome at all). `gameAccount`: the board is
+ *  on one specific Lichess account, so a step that offers a different one must not be said. */
+export function lichessFlashNextKey(
+  value: string | null | undefined,
+  opts: { gameAccount?: boolean } = {},
+):
+  | (typeof LICHESS_FLASH_NEXT_KEYS)[keyof typeof LICHESS_FLASH_NEXT_KEYS]
+  | (typeof LICHESS_FLASH_NEXT_KEYS_FOR_GAME_ACCOUNT)[keyof typeof LICHESS_FLASH_NEXT_KEYS_FOR_GAME_ACCOUNT]
+  | null {
+  const code = lichessFlashCode(value);
+  if (code === null || !Object.hasOwn(LICHESS_FLASH_NEXT_KEYS, code)) return null;
+  const table = opts.gameAccount === true ? LICHESS_FLASH_NEXT_KEYS_FOR_GAME_ACCOUNT : LICHESS_FLASH_NEXT_KEYS;
+  return table[code as keyof typeof LICHESS_FLASH_NEXT_KEYS];
+}
+
+/** `href` (a path with its query and fragment) without any `lichess=` parameter - everything else kept byte for byte,
+ *  in order, with its own encoding (the match room's personal link `t=` must survive untouched, so this does not
+ *  round-trip the query through URLSearchParams). Unchanged when there is none. */
+export function withoutLichessParam(href: string): string {
+  const hashAt = href.indexOf("#");
+  const hash = hashAt === -1 ? "" : href.slice(hashAt);
+  const rest = hashAt === -1 ? href : href.slice(0, hashAt);
+  const queryAt = rest.indexOf("?");
+  if (queryAt === -1) return href;
+  const path = rest.slice(0, queryAt);
+  const parts = rest.slice(queryAt + 1).split("&");
+  const kept = parts.filter((part) => part.split("=", 1)[0] !== "lichess");
+  if (kept.length === parts.length) return href;
+  return `${path}${kept.length > 0 ? `?${kept.join("&")}` : ""}${hash}`;
 }

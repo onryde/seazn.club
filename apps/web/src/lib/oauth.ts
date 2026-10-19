@@ -53,6 +53,17 @@ export interface GoogleProfile {
   picture: string | null;
 }
 
+/** The only profile a sign-in may act on: Google vouches for the address, and
+ *  there is one. The callback's `isVerified` is the sole producer. */
+export type VerifiedGoogleProfile = GoogleProfile & { email: string; email_verified: true };
+
+/** `/login?google=<code>` — why Google sign-in sent the person back. The login
+ *  page maps the code to a sentence; an unknown code shows nothing. */
+export const GOOGLE_FLASH_PARAM = "google";
+export const GOOGLE_FLASH_EMAIL_UNVERIFIED = "email_unverified";
+/** The address belongs to a Seazn account already linked to a different Google account. */
+export const GOOGLE_FLASH_LINKED_ELSEWHERE = "linked_elsewhere";
+
 // --- Lichess (external play link; not sign-in) --------------------------------
 
 export const LICHESS_AUTH_URL = "https://lichess.org/oauth";

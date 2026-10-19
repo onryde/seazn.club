@@ -45,7 +45,19 @@ vi.mock("@/lib/cache", async (importOriginal) => ({
 
 import { sql } from "@/lib/db";
 import { appendEvent } from "@/server/engine-db/append-event";
-import { endRelaySessions, ensureRelaySecret, relaySession, relayToken, seedOverlayRig, type OverlayRig } from "@/server/overlay/__tests__/_relay-overlay-rig";
+import {
+  KNOCKOUT_CLUB_CODES,
+  endRelaySessions,
+  ensureRelaySecret,
+  relaySession,
+  relayToken,
+  seedOverlayKnockoutRig,
+  seedOverlayRig,
+  type OverlayKnockoutRig,
+  type OverlayRig,
+} from "@/server/overlay/__tests__/_relay-overlay-rig";
+import { getPublicFixture, publicFixtureSlugs } from "@/server/public-site/data";
+import { teamShortOf } from "@/lib/public-site";
 import { GET as OVERLAY_ROUTE } from "@/app/api/v1/public/fixtures/[id]/overlay/route";
 import OverlayPage from "../page";
 
@@ -264,5 +276,53 @@ describe.skipIf(!HAS_DB)("the overlay page's relay access (R2005 change 1)", () 
     expect("host" in p, "host is honoured only with a verified relay access").toBe(false);
     checked++;
     expect(checked).toBe(3);
+  });
+});
+
+// #987 review I1 / M7 — the side codes the overlay airs, through its two REAL doors (the public read the match centre
+// builds, and the relay door's own base-table read), on a public eight-club TEAM knockout. A seated pair the team rule
+// cannot tell apart widens; a placeholder seat never does — two placeholders, or a seated club facing one, read the
+// team rule on each side exactly as before the ladder, never an ordinal that reads as data (WIN1 / WIN2, "?1" / "?2").
+describe.skipIf(!HAS_DB)("the overlay page's side codes through BOTH doors (#987 review I1 / M7)", () => {
+  let ko: OverlayKnockoutRig;
+  beforeAll(async () => {
+    ko = await seedOverlayKnockoutRig();
+  });
+  const shortsOf = (v: Visit) => (propsOf(v).sides as Array<{ short?: string | null }>).map((s) => s.short);
+  const relayVisit = async (fixtureId: string) => {
+    const sid = await relaySession(ko, fixtureId);
+    return visit(fixtureId, { sid, st: await relayToken(sid) });
+  };
+  /** The two sides as the public match centre names them (a placeholder seat reads its slot sentence). */
+  const matchCentreNames = async (fixtureId: string): Promise<[string, string]> => {
+    const slugs = await publicFixtureSlugs(fixtureId);
+    const data = await getPublicFixture(slugs!.orgSlug, slugs!.compSlug, slugs!.divSlug, fixtureId);
+    const [home, away] = data!.matchCentre.header.sides;
+    return [home.name, away.name];
+  };
+
+  it("a SEATED pair the team rule cannot tell apart: both doors read the same two widened codes (worked by hand)", async () => {
+    const [a, b] = ko.seated.names;
+    expect(teamShortOf(a), "premise: the team rule alone collides").toBe(teamShortOf(b));
+    const want = [KNOCKOUT_CLUB_CODES[a], KNOCKOUT_CLUB_CODES[b]];
+    expect(want.every((code) => typeof code === "string"), `premise: both clubs are in the hand table (${a} / ${b})`).toBe(true);
+    expect(shortsOf(await visit(ko.seated.id)), "the public door").toEqual(want);
+    expect(shortsOf(await relayVisit(ko.seated.id)), "the relay door").toEqual(want);
+  });
+
+  it("a PLACEHOLDER pair keeps the team rule on each side: the public door its slot sentences' codes, the relay door '?' / '?'", async () => {
+    const [a, b] = await matchCentreNames(ko.placeholder);
+    expect(a, "premise: two different slot sentences").not.toBe(b);
+    expect(teamShortOf(a), "premise: they collide under the team rule").toBe(teamShortOf(b));
+    expect(shortsOf(await visit(ko.placeholder)), "the public door").toEqual([teamShortOf(a), teamShortOf(b)]);
+    expect(shortsOf(await relayVisit(ko.placeholder)), "the relay door: two empty seats").toEqual(["?", "?"]);
+  });
+
+  it("a MIXED pair — a seated club facing a placeholder it collides with — keeps the team rule on each side, both doors", async () => {
+    const [a, b] = await matchCentreNames(ko.mixed);
+    expect(a, "premise: the home seat holds the club").toBe(ko.mixedHome);
+    expect(teamShortOf(a), "premise: the club collides with the slot sentence").toBe(teamShortOf(b));
+    expect(shortsOf(await visit(ko.mixed)), "the public door").toEqual([teamShortOf(a), teamShortOf(b)]);
+    expect(shortsOf(await relayVisit(ko.mixed)), "the relay door").toEqual([teamShortOf(ko.mixedHome), "?"]);
   });
 });
