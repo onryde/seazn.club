@@ -86,6 +86,16 @@ describe("GET /api/auth/google/callback — refusal precedes every query", () =>
     expect([...jar.values.keys()]).toEqual([]);
   });
 
+  it("an EMPTY email is refused before any query, even marked verified", async () => {
+    stubGoogle(claimsFor("g-sub-1", ""));
+
+    const res = await GET(callbackRequest());
+
+    expect(locationOf(res).searchParams.get("google")).toBe("email_unverified");
+    expect(db.queries).toEqual([]);
+    expect([...jar.values.keys()]).toEqual([]);
+  });
+
   it("the refusal carries a valid next to /login and clears the one-shot next cookie", async () => {
     jar.values.set(NEXT_COOKIE, "/invite/abc123");
     stubGoogle(NOT_VERIFIED[0]!.apply(claimsFor("g-sub-1", "someone@example.test")));

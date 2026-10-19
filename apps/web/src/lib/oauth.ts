@@ -61,6 +61,8 @@ export type VerifiedGoogleProfile = GoogleProfile & { email: string; email_verif
  *  page maps the code to a sentence; an unknown code shows nothing. */
 export const GOOGLE_FLASH_PARAM = "google";
 export const GOOGLE_FLASH_EMAIL_UNVERIFIED = "email_unverified";
+/** The address belongs to a Seazn account already linked to a different Google account. */
+export const GOOGLE_FLASH_LINKED_ELSEWHERE = "linked_elsewhere";
 
 // --- Lichess (external play link; not sign-in) --------------------------------
 

@@ -32,7 +32,12 @@ vi.mock("next/navigation", () => ({ redirect: vi.fn(), useRouter: () => ({ push:
 
 import LoginPage from "../page";
 
-const KEY = "login.flash.google.email_unverified" as const;
+/** The two codes the Google callback redirects with, and the dictionary key each one shows. */
+const FLASHES = [
+  { code: "email_unverified", key: "login.flash.google.email_unverified" },
+  { code: "linked_elsewhere", key: "login.flash.google.linked_elsewhere" },
+] as const;
+const KEY = FLASHES[0].key;
 const DICT: Record<Locale, Record<string, string>> = { en, fr, es, nl };
 
 /** React's static renderer escapes these five characters in text. */
@@ -56,27 +61,40 @@ describe("/login — the Google refusal notice", () => {
     );
   });
 
-  it("shows it as an alert in every locale, in that locale's own words", async () => {
+  it("says, in English, that the email is linked to a different Google account", async () => {
+    const html = await render({ google: "linked_elsewhere" });
+    expect(html).toContain(
+      escapeHtml("This email is linked to a different Google account. Sign in with an email link instead."),
+    );
+  });
+
+  it("shows each notice as an alert in every locale, in that locale's own words, and never the other one's", async () => {
     let checked = 0;
-    for (const locale of LOCALES) {
-      const text = DICT[locale][KEY];
-      expect(text, `${locale}: the key is missing`).toBeTruthy();
-      if (locale !== "en") expect(text, `${locale}: left as English`).not.toBe(DICT.en[KEY]);
+    for (const { code, key } of FLASHES) {
+      const other = FLASHES.find((f) => f.code !== code)!;
+      for (const locale of LOCALES) {
+        const text = DICT[locale][key];
+        expect(text, `${code}/${locale}: the key is missing`).toBeTruthy();
+        if (locale !== "en") expect(text, `${code}/${locale}: left as English`).not.toBe(DICT.en[key]);
 
-      const html = await render({ google: "email_unverified" }, locale);
+        const html = await render({ google: code }, locale);
 
-      expect(html, `${locale}: notice text`).toContain(escapeHtml(text!));
-      expect(html, `${locale}: announced as an alert`).toMatch(/role="alert"[^>]*>[^<]*Google/);
-      checked++;
+        expect(html, `${code}/${locale}: notice text`).toContain(escapeHtml(text!));
+        expect(html, `${code}/${locale}: announced as an alert`).toMatch(/role="alert"[^>]*>[^<]*Google/);
+        expect(html, `${code}/${locale}: the other notice showed too`).not.toContain(escapeHtml(DICT[locale][other.key]!));
+        checked++;
+      }
     }
-    expect(checked).toBe(LOCALES.length);
-    expect(checked).toBe(4);
+    expect(checked).toBe(FLASHES.length * LOCALES.length);
+    expect(checked).toBe(8);
   });
 
   it("keeps both ways in: the Google button and the email-link form are still on the page", async () => {
-    const html = await render({ google: "email_unverified" });
-    expect(html).toContain('href="/api/auth/google"');
-    expect(html).toContain('type="email"');
+    for (const { code } of FLASHES) {
+      const html = await render({ google: code });
+      expect(html, code).toContain('href="/api/auth/google"');
+      expect(html, code).toContain('type="email"');
+    }
   });
 
   it("shows nothing without the code, and nothing for a code it does not know", async () => {
@@ -91,7 +109,9 @@ describe("/login — the Google refusal notice", () => {
   });
 
   it("the invite destination still reaches the Google button after a refusal", async () => {
-    const html = await render({ google: "email_unverified", next: "/invite/abc123" });
-    expect(html).toContain(escapeHtml("/api/auth/google?next=%2Finvite%2Fabc123"));
+    for (const { code } of FLASHES) {
+      const html = await render({ google: code, next: "/invite/abc123" });
+      expect(html, code).toContain(escapeHtml("/api/auth/google?next=%2Finvite%2Fabc123"));
+    }
   });
 });

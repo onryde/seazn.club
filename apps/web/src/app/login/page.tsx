@@ -5,13 +5,18 @@ import { NightStage } from "@/components/night-stage";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
 import { DictProvider } from "@/components/i18n/dict-provider";
-import { GOOGLE_FLASH_EMAIL_UNVERIFIED, GOOGLE_FLASH_PARAM } from "@/lib/oauth";
+import {
+  GOOGLE_FLASH_EMAIL_UNVERIFIED,
+  GOOGLE_FLASH_LINKED_ELSEWHERE,
+  GOOGLE_FLASH_PARAM,
+} from "@/lib/oauth";
 
 /** `?google=<code>` — why the Google callback sent the person back here. Only a
  *  code listed here is shown; anything else (and the callback's older
  *  `?error=` codes) renders nothing, and nothing from the URL is echoed. */
 const GOOGLE_FLASH_KEY = {
   [GOOGLE_FLASH_EMAIL_UNVERIFIED]: "login.flash.google.email_unverified",
+  [GOOGLE_FLASH_LINKED_ELSEWHERE]: "login.flash.google.linked_elsewhere",
 } as const;
 
 export default async function LoginPage({

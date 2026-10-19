@@ -6376,5 +6376,6 @@
   "externalPlay.room.state.wrongAccount.failed": "We couldn't sign you out. Try again.",
   "externalPlay.room.state.noAccount.title": "This seat isn't tied to a Seazn account yet",
   "externalPlay.room.state.noAccount.body": "Ask the organiser.",
-  "login.flash.google.email_unverified": "Google hasn't verified this email address. Verify it with Google, or sign in with an email link."
+  "login.flash.google.email_unverified": "Google hasn't verified this email address. Verify it with Google, or sign in with an email link.",
+  "login.flash.google.linked_elsewhere": "This email is linked to a different Google account. Sign in with an email link instead."
 }

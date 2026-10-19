@@ -6376,5 +6376,6 @@
   "externalPlay.room.state.wrongAccount.failed": "We konden je niet uitloggen. Probeer het opnieuw.",
   "externalPlay.room.state.noAccount.title": "Deze plek is nog niet gekoppeld aan een Seazn-account",
   "externalPlay.room.state.noAccount.body": "Vraag het aan de organisator.",
-  "login.flash.google.email_unverified": "Google heeft dit e-mailadres niet geverifieerd. Verifieer het bij Google of log in met een inloglink per e-mail."
+  "login.flash.google.email_unverified": "Google heeft dit e-mailadres niet geverifieerd. Verifieer het bij Google of log in met een inloglink per e-mail.",
+  "login.flash.google.linked_elsewhere": "Dit e-mailadres is gekoppeld aan een ander Google-account. Log in met een inloglink per e-mail."
 }

@@ -61,6 +61,8 @@ interface Row {
   google_sub: string | null;
   display_name: string;
   avatar_url: string | null;
+  password_hash: string | null;
+  deleted_at: Date | null;
 }
 
 const fresh = () => ({
@@ -74,24 +76,28 @@ async function insertUser(o: {
   googleSub?: string | null;
   displayName?: string;
   avatar?: string | null;
+  passwordHash?: string | null;
+  deleted?: boolean;
 }): Promise<Row> {
   const [u] = await sql<Row[]>`
-    insert into users (email, display_name, email_verified, google_sub, avatar_url)
+    insert into users (email, display_name, email_verified, google_sub, avatar_url, password_hash, deleted_at)
     values (${o.email}, ${o.displayName ?? "Existing Person"}, ${o.emailVerified},
-            ${o.googleSub ?? null}, ${o.avatar ?? null})
-    returning id, email, email_verified, google_sub, display_name, avatar_url`;
+            ${o.googleSub ?? null}, ${o.avatar ?? null}, ${o.passwordHash ?? null},
+            ${o.deleted ? new Date() : null})
+    returning id, email, email_verified, google_sub, display_name, avatar_url, password_hash, deleted_at`;
   made.push(u.id);
   return u;
 }
 
 const byId = async (id: string): Promise<Row> =>
   (await sql<Row[]>`
-    select id, email, email_verified, google_sub, display_name, avatar_url from users where id = ${id}`)[0]!;
+    select id, email, email_verified, google_sub, display_name, avatar_url, password_hash, deleted_at
+      from users where id = ${id}`)[0]!;
 
 /** Every users row this Google identity could have produced or touched. */
 async function rowsFor(sub: string, email: string): Promise<Row[]> {
   return sql<Row[]>`
-    select id, email, email_verified, google_sub, display_name, avatar_url
+    select id, email, email_verified, google_sub, display_name, avatar_url, password_hash, deleted_at
       from users where google_sub = ${sub} or email = ${email}`;
 }
 
@@ -111,11 +117,11 @@ async function signIn(claims: Claims): Promise<Response> {
 }
 
 /** The refusal contract, asserted in one place so no case can forget a leg. */
-function expectRefusedWithFlash(res: Response) {
+function expectRefusedWithFlash(res: Response, code: "email_unverified" | "linked_elsewhere" = "email_unverified") {
   const loc = locationOf(res);
   expect(res.status).toBe(307);
   expect(loc.pathname).toBe("/login");
-  expect(loc.searchParams.get("google")).toBe("email_unverified");
+  expect(loc.searchParams.get("google")).toBe(code);
   // Nothing was written to the cookie jar: no session, no signed-in hint, no
   // active-org cookie, and the one-shot state/next cookies were consumed.
   expect([...jar.values.keys()]).toEqual([]);
@@ -353,5 +359,143 @@ describe.skipIf(!HAS_DB)("GET /api/auth/google/callback — an unverified Google
     expect(loc.searchParams.get("error")).toBe("oauth_userinfo");
     expect(loc.searchParams.has("google")).toBe(false);
     expect([...jar.values.keys()]).toEqual([]);
+  });
+});
+
+describe.skipIf(!HAS_DB)("GET /api/auth/google/callback — an empty email is no email", () => {
+  it("email: '' with email_verified: true is refused, and no account is created for it", async () => {
+    const { sub } = fresh();
+    madeEmails.push("");
+
+    const res = await signIn(claimsFor(sub, ""));
+
+    expectRefusedWithFlash(res);
+    expect(await sql`select 1 from users where google_sub = ${sub} or email = ''`).toHaveLength(0);
+  });
+});
+
+describe.skipIf(!HAS_DB)("GET /api/auth/google/callback — linking by email takes over nothing it should not", () => {
+  it("an unverified account's password is dropped when Google verifies it (a squatter's password must not outlive the link)", async () => {
+    const { sub, email } = fresh();
+    // The squatter: signed up with the victim's address and a password of their
+    // own, never verified. The real owner then arrives through Google.
+    const squatted = await insertUser({ email, emailVerified: false, passwordHash: "squatter-bcrypt-hash" });
+
+    const res = await signIn(claimsFor(sub, email));
+
+    expect(locationOf(res).pathname).not.toBe("/login");
+    expect(jar.values.has(SESSION_COOKIE)).toBe(true);
+    const after = await byId(squatted.id);
+    expect(after.google_sub).toBe(sub);
+    expect(after.email_verified).toBe(true);
+    expect(after.password_hash, "the squatter's password survived the link").toBeNull();
+  });
+
+  it("a VERIFIED account keeps its password when Google links it (only an unverified one is wiped)", async () => {
+    const { sub, email } = fresh();
+    const owned = await insertUser({ email, emailVerified: true, passwordHash: "owner-bcrypt-hash" });
+
+    const res = await signIn(claimsFor(sub, email));
+
+    expect(locationOf(res).pathname).not.toBe("/login");
+    const after = await byId(owned.id);
+    expect(after.google_sub).toBe(sub);
+    expect(after.password_hash).toBe("owner-bcrypt-hash");
+  });
+
+  it("an account whose google_sub is NULL is linked (the counterpart of the refusal below)", async () => {
+    const { sub, email } = fresh();
+    const existing = await insertUser({ email, emailVerified: true });
+
+    expect(existing.google_sub).toBeNull();
+    const res = await signIn(claimsFor(sub, email));
+
+    expect(locationOf(res).pathname).not.toBe("/login");
+    expect(jar.values.has(SESSION_COOKIE)).toBe(true);
+    expect((await byId(existing.id)).google_sub).toBe(sub);
+  });
+
+  it("an account already linked to a DIFFERENT Google account is refused: no session, no write, linked_elsewhere", async () => {
+    let checked = 0;
+    for (const emailVerified of [true, false]) {
+      for (const passwordHash of [null, "some-bcrypt-hash"]) {
+        const { sub, email } = fresh();
+        const otherSub = `g-sub-other-${randomUUID()}`;
+        madeSubs.push(otherSub);
+        const owned = await insertUser({
+          email,
+          emailVerified,
+          googleSub: otherSub,
+          passwordHash,
+          displayName: "Before",
+          avatar: "https://example.test/before.png",
+        });
+        const label = `verified=${emailVerified} password=${passwordHash !== null}`;
+
+        const res = await signIn(claimsFor(sub, email, { name: "After", picture: "https://example.test/after.png" }));
+
+        expectRefusedWithFlash(res, "linked_elsewhere");
+        expect(await byId(owned.id), `${label}: the row was touched`).toEqual(owned);
+        expect(await sql`select 1 from users where google_sub = ${sub}`, `${label}: the new sub was linked`).toHaveLength(0);
+        checked++;
+      }
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("the linked_elsewhere refusal carries a valid next and clears the one-shot cookie, like the unverified one", async () => {
+    const { sub, email } = fresh();
+    const otherSub = `g-sub-other-${randomUUID()}`;
+    madeSubs.push(otherSub);
+    await insertUser({ email, emailVerified: true, googleSub: otherSub });
+    jar.values.clear();
+    plantState(jar.values);
+    jar.values.set(NEXT_COOKIE, "/invite/abc123");
+    stubGoogle(claimsFor(sub, email));
+
+    const loc = locationOf(await GET(callbackRequest()));
+
+    expect(loc.pathname).toBe("/login");
+    expect(loc.searchParams.get("google")).toBe("linked_elsewhere");
+    expect(loc.searchParams.get("next")).toBe("/invite/abc123");
+    expect([...jar.values.keys()]).toEqual([]);
+  });
+
+  it("a second attempt after the refusal is refused again (the refusal is not sticky, and not a link)", async () => {
+    const { sub, email } = fresh();
+    const otherSub = `g-sub-other-${randomUUID()}`;
+    madeSubs.push(otherSub);
+    const owned = await insertUser({ email, emailVerified: true, googleSub: otherSub });
+
+    expectRefusedWithFlash(await signIn(claimsFor(sub, email)), "linked_elsewhere");
+    expectRefusedWithFlash(await signIn(claimsFor(sub, email)), "linked_elsewhere");
+    expect(await byId(owned.id)).toEqual(owned);
+  });
+});
+
+describe.skipIf(!HAS_DB)("GET /api/auth/google/callback — a soft-deleted account is never matched", () => {
+  // Deletion anonymises the email and nulls google_sub (api/users/me), so a
+  // deleted row does not normally still carry either. These rows are the state
+  // the lookups' `deleted_at is null` exists for: with it, the callback does not
+  // sign the deleted account in or resurrect it, and the insert that follows
+  // fails closed on the unique constraint instead.
+  it("a deleted row still holding the google_sub is not signed in", async () => {
+    const { sub, email } = fresh();
+    const deleted = await insertUser({ email: `deleted-${randomUUID()}@deleted.invalid`, emailVerified: true, googleSub: sub, deleted: true });
+
+    await expect(signIn(claimsFor(sub, email))).rejects.toThrow();
+
+    expect(jar.values.has(SESSION_COOKIE), "a deleted account was signed in").toBe(false);
+    expect(await byId(deleted.id)).toEqual(deleted);
+  });
+
+  it("a deleted row still holding the email is not linked or signed in", async () => {
+    const { sub, email } = fresh();
+    const deleted = await insertUser({ email, emailVerified: false, deleted: true });
+
+    await expect(signIn(claimsFor(sub, email))).rejects.toThrow();
+
+    expect(jar.values.has(SESSION_COOKIE), "a deleted account was signed in").toBe(false);
+    expect(await byId(deleted.id)).toEqual(deleted);
   });
 });
