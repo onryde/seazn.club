@@ -92,8 +92,9 @@ export function Checkin({
           })}
         </p>
       </div>
-      {/* The line is the player's place; the check-in's own countdown is to the DEADLINE, which a queued player is allowed to pass
-          (the line card says when their check-in really closes). */}
+      {/* Held in line, the line card is the player's place and it says when their check-in closes; the check-in's own countdown below
+          is for a player not in line, and counts to `closesAt` (room-shell: the deadline, or - where the server holds the board open
+          for this viewer past it - the `heldUntil` it sends). */}
       {line !== null ? <LineBlock view={line} t={t} plural={plural} /> : null}
       {line === null ? (
         <div className="flex items-center justify-between rounded-xl bg-[#f3effc] px-3.5 py-2.5">

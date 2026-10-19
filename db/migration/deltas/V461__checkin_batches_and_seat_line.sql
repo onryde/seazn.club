@@ -37,8 +37,10 @@ create table fixture_seat_line (
   person_id      uuid not null references persons(id)  on delete cascade,
   -- The bucket this player spends from: budgetKey(baseUrl, accountId). The line is per bucket (spec §5.7.6).
   budget_key     text not null,
-  -- The stay's ARRIVAL, the line's order key: stamped once per stay, on the database clock, by its first gated claim,
-  -- whether or not the stay is ever held.
+  -- The stay's ARRIVAL, the line's order key: stamped once per stay, by its first gated claim, whether or not the stay is
+  -- ever held. It is the instant that claim's window was judged (the application's clock), never later than the gate's own
+  -- reading of the database clock - so a claim judged inside the window never opens a stay dated after the deadline
+  -- (seat-line.ts arrivalOf).
   first_claim_at timestamptz not null,
   -- The last gate event and what it was. Liveness is judged from these (seat-line.ts stayLapsedSql): a stay that was HELD
   -- and went silent for LINE_ABANDON_AFTER_MS, or one that PASSED and went silent for LINE_RELEASE_GRACE_MS, is over.
