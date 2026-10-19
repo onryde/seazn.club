@@ -920,5 +920,72 @@
         "name": "an overtime the stage plays with NO minutes written"
       }
     ]
+  },
+  {
+    "id": "t19-page-gate-always",
+    "file": "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/f/[no]/page.tsx",
+    "find": "offersMatchRules({ canEdit, frozen }) ? loadFixtureMatchRules(",
+    "replace": "true ? loadFixtureMatchRules(",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/f/[no]/__tests__/stream-mount.test.tsx"
+        ],
+        "name": "organisers only: a scorer without canEdit is not offered the block"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/f/[no]/__tests__/stream-mount.test.tsx"
+        ],
+        "name": "a billing-frozen competition is offered no block"
+      }
+    ]
+  },
+  {
+    "id": "t19-page-prop-dropped",
+    "file": "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/f/[no]/page.tsx",
+    "find": "matchRules={matchRules === null ? undefined : matchRulesBlockProps(id, matchRules)}",
+    "replace": "matchRules={undefined}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/f/[no]/__tests__/stream-mount.test.tsx"
+        ],
+        "name": "an organiser on an unfrozen page: the loader is read for THIS fixture"
+      }
+    ]
+  },
+  {
+    "id": "t19-page-prop-raw",
+    "file": "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/f/[no]/page.tsx",
+    "find": "matchRules={matchRules === null ? undefined : matchRulesBlockProps(id, matchRules)}",
+    "replace": "matchRules={matchRules === null ? undefined : (matchRules as never)}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/f/[no]/__tests__/stream-mount.test.tsx"
+        ],
+        "name": "an organiser on an unfrozen page: the loader is read for THIS fixture"
+      }
+    ]
+  },
+  {
+    "id": "t19-page-prop-no-fields-check",
+    "file": "apps/web/src/components/v2/match-rules-block-model.ts",
+    "find": "if (r.fields.length === 0) return undefined;",
+    "replace": "if (false as boolean) return undefined;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/f/[no]/__tests__/stream-mount.test.tsx"
+        ],
+        "name": "a sport with nothing to change for one match"
+      }
+    ]
   }
 ]
