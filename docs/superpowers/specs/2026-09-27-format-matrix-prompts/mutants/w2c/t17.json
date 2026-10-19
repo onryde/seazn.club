@@ -989,7 +989,7 @@
   {
     "id": "t17-chips-override",
     "file": "apps/web/src/components/v2/stages-panel.tsx",
-    "find": "stageSummaryClauses(sportKey, sportModule, kind, resolvedStageCfg(sportModule, divisionConfig, kind, rules))",
+    "find": "stageSummaryClauses(sportKey, sportModule, kind, resolved)",
     "replace": "stageSummaryClauses(sportKey, sportModule, kind, resolvedStageCfg(sportModule, divisionConfig, kind, {}))",
     "killers": [
       {
@@ -1049,7 +1049,7 @@
   {
     "id": "t17-chips-prefix",
     "file": "apps/web/src/lib/rules-line.ts",
-    "find": "if (key.startsWith(RULES_LINE_DICT_PREFIX)) out[key] = dict[key];",
+    "find": "if (key.startsWith(RULES_LINE_DICT_PREFIX) || RULES_LINE_DICT_EXTRA_KEYS.has(key)) out[key] = dict[key];",
     "replace": "out[key] = dict[key];",
     "killers": [
       {
@@ -1058,6 +1058,140 @@
           "src/components/v2/__tests__/stages-panel-stage-format.test.tsx"
         ],
         "name": "rulesLineDict keeps exactly the rules-line keys"
+      }
+    ]
+  },
+  {
+    "id": "t17-chips-extra-key",
+    "file": "apps/web/src/lib/rules-line.ts",
+    "find": "if (key.startsWith(RULES_LINE_DICT_PREFIX) || RULES_LINE_DICT_EXTRA_KEYS.has(key)) out[key] = dict[key];",
+    "replace": "if (key.startsWith(RULES_LINE_DICT_PREFIX)) out[key] = dict[key];",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-row-model.test.ts"
+        ],
+        "name": "every key the describers can emit reaches"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/stages-panel-stage-format.test.tsx"
+        ],
+        "name": "rulesLineDict keeps exactly the rules-line keys"
+      }
+    ]
+  },
+  {
+    "id": "t17-rawkey-nl",
+    "file": "apps/web/src/dictionaries/nl/public.json",
+    "find": "\"format.rules.decider.superOver\"",
+    "replace": "\"format.rules.decider.superOverX\"",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-row-model.test.ts"
+        ],
+        "name": "every key the describers can emit reaches"
+      }
+    ]
+  },
+  {
+    "id": "t17-rawkey-family",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "`format.rules.abandon.${policy}`",
+    "replace": "`format.rules.abandon2.${policy}`",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-row-model.test.ts"
+        ],
+        "name": "over every sport, declared cfg and stage kind"
+      }
+    ]
+  },
+  {
+    "id": "t17-seq-inherit",
+    "file": "apps/web/src/components/v2/stage-rules/sequence-field.tsx",
+    "find": "sequenceItems(field, value === \"\" ? (inheritedValue ?? \"\") : value)",
+    "replace": "sequenceItems(field, value)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-rule-fields.test.tsx"
+        ],
+        "name": "a blank stage lists Rapid only"
+      }
+    ]
+  },
+  {
+    "id": "t17-seq-from-division",
+    "file": "apps/web/src/components/v2/stage-rules/sequence-field.tsx",
+    "find": "const fromDivision = inheritedValue !== undefined;",
+    "replace": "const fromDivision = false;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-rule-fields.test.tsx"
+        ],
+        "name": "a blank stage lists Rapid only"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-rule-fields.test.tsx"
+        ],
+        "name": "the stage's OWN list wins over the division's"
+      }
+    ]
+  },
+  {
+    "id": "t17-seq-plumb",
+    "file": "apps/web/src/components/v2/stage-rules/rule-field-control.tsx",
+    "find": "inheritedValue={sequenceInherits === undefined ? undefined : field.read?.(sequenceInherits)}",
+    "replace": "inheritedValue={undefined}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-rule-fields.test.tsx"
+        ],
+        "name": "a blank stage lists Rapid only"
+      }
+    ]
+  },
+  {
+    "id": "t17-seq-stage-pass",
+    "file": "apps/web/src/components/v2/stage-rules/stage-rule-fields.tsx",
+    "find": "                      sequenceInherits={divisionConfig}\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-rule-fields.test.tsx"
+        ],
+        "name": "a blank stage lists Rapid only"
+      }
+    ]
+  },
+  {
+    "id": "t17-seq-division-leak",
+    "file": "apps/web/src/components/v2/match-rules.tsx",
+    "find": "            disabled={disabled}\n            inherited={inherited}\n",
+    "replace": "            disabled={disabled}\n            inherited={inherited}\n            sequenceInherits={inherited}\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-rule-fields.test.tsx"
+        ],
+        "name": "the DIVISION editor does not inherit"
       }
     ]
   },

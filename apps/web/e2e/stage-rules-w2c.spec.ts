@@ -41,7 +41,7 @@ interface StageRow {
 async function seedStage(
   request: APIRequestContext,
   sport: string,
-  opts: { kind?: string; variant?: string; label: string },
+  opts: { kind?: string; variant?: string; label: string; config?: Record<string, unknown> },
 ): Promise<{ divisionId: string; stageId: string; variant: string }> {
   const m = builtinModules.find((x) => x.key === sport)!;
   const variant = opts.variant ?? Object.keys(m.variants)[0]!;
@@ -55,6 +55,7 @@ async function seedStage(
     name: `${sport} ${opts.label}`,
     sport_key: sport,
     variant_key: variant,
+    ...(opts.config === undefined ? {} : { config: opts.config }),
   });
   expect(div.status, `division ${sport}/${variant}: ${JSON.stringify(div.error)}`).toBeLessThan(300);
   const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${div.data!.id}/stages`, "POST", {
@@ -405,12 +406,15 @@ test("football knockout: the chips say what the stage plays after each save, and
   await expect(kicks).toBeEnabled();
   await expect(held).toHaveCount(0);
   await shootout.selectOption("off");
+  // Round 2: the chips are the SAME preview as the notice and the held kicks - they follow the edit before anything is saved.
+  await expect(chips, "while editing, the chips preview what Save stores: no penalties").not.toContainText(chipText("format.rules.decider.penalties", { n: presetKicks as number }), { timeout: STEP_MS });
   await expect(kicks, "the kicks mean nothing with no shoot-out").toBeDisabled();
   await expect(held).toHaveText(L["stageRules.detail.off"]!.replace("{decider}", shootoutLabel));
   await expect(row.getByTestId("stage-rule-field-halfMinutes").locator("input"), "a field that is not a detail stays editable").toBeEnabled();
   await shootout.selectOption("on");
   await expect(kicks).toBeEnabled();
   await expect(held).toHaveCount(0);
+  await expect(chips, "and back on: the penalties chip returns with it").toContainText(chipText("format.rules.decider.penalties", { n: presetKicks as number }), { timeout: STEP_MS });
 
   // A save moves the chips to the stage's own value, and the division's / old value is gone from them.
   await kicks.fill(String(newKicks));
@@ -499,4 +503,46 @@ test("chess division Settings: 'Use the default order' removes the stored tie-br
   // The positive pair: nothing else was lost by the save.
   const after = await configOf();
   expect(Object.keys(after).length, "the rest of the config survives the save").toBeGreaterThan(0);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Fix round 2 (re-review residual 4, G1): a blank stage list shows the list it INHERITS from its division.
+// ---------------------------------------------------------------------------------------------------------------------
+test("chess stage under a division that holds a tie-break list: the blank stage lists the division's, [] at the stage lists none across a reload, and the reset brings the division's back", async ({ page, request }) => {
+  test.setTimeout(180_000);
+  const seq = SPORT_RULES.boardgame!.find((f) => f.kind === "sequence")!;
+  const rungLabel = (v: string): string => seq.options!.find((o) => o.value === v)!.label;
+  const stored = [TIEBREAK_RUNGS[1]!];
+  const { divisionId, stageId } = await seedStage(request, "boardgame", { label: "inherit", config: { tiebreakRungs: stored } });
+  expect((await storedRules(request, divisionId, stageId))?.tiebreakRungs, "premise: the stage holds no list of its own").toBeUndefined();
+  const row = await openRow(page, request, divisionId, stageId);
+  await openEditor(row);
+  const item = (r: Locator, i: number): Locator => r.getByTestId(`stage-rule-sequence-${seq.key}-item-${i}`);
+  // Blank stage: the division's list - ONE rung - not the engine's default three, and the control says whose it is.
+  await expect(item(row, 0)).toContainText(rungLabel(stored[0]!));
+  await expect(item(row, 1), "the engine's default rungs are not listed").toHaveCount(0);
+  await expect(row.getByTestId(`stage-rule-sequence-${seq.key}`)).toContainText(L["stageRules.sequence.inherited"]!);
+  await expect(row.getByTestId(`stage-rule-sequence-${seq.key}-reset`), "a blank list has nothing of its own to reset").toHaveCount(0);
+
+  // The stage empties it: [] is the stage's own value, over the division's list.
+  await item(row, 0).getByRole("button", { name: new RegExp(`^${L["stageRules.sequence.remove"]!.replace("{item}", "")}`) }).click();
+  await expect(row.getByTestId(`stage-rule-sequence-${seq.key}-empty`)).toBeVisible();
+  await row.getByTestId("stage-format-save").click();
+  await expect(row.getByTestId("stage-format-editor")).toHaveCount(0, { timeout: STEP_MS });
+  expect((await storedRules(request, divisionId, stageId))?.tiebreakRungs, "the stage's empty list is stored").toEqual([]);
+
+  // Reload: it still lists none (not the division's one, not the default three).
+  await page.reload({ waitUntil: "load" });
+  const row2 = page.getByTestId(`stage-format-row-${stageId}`);
+  await openEditor(row2);
+  await expect(row2.getByTestId(`stage-rule-sequence-${seq.key}-empty`)).toBeVisible({ timeout: STEP_MS });
+  await expect(item(row2, 0)).toHaveCount(0);
+
+  // Reset: the division's list is back, and the stage stores nothing of its own again.
+  await row2.getByTestId(`stage-rule-sequence-${seq.key}-reset`).click();
+  await expect(item(row2, 0)).toContainText(rungLabel(stored[0]!));
+  await expect(item(row2, 1)).toHaveCount(0);
+  await row2.getByTestId("stage-format-save").click();
+  await expect(row2.getByTestId("stage-format-editor")).toHaveCount(0, { timeout: STEP_MS });
+  expect(Object.hasOwn((await storedRules(request, divisionId, stageId)) ?? {}, "tiebreakRungs"), "the reset drops the stage's own list").toBe(false);
 });
