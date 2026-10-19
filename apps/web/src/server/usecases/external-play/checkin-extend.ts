@@ -22,7 +22,9 @@ import "server-only";
 // (`lockCheckinWindow`, an advisory lock keyed by the board), then READ the deadline under it - so whichever comes second sees
 // the other's write: an extension that commits first is seen by the sweep (no walkover); a sweep that judged first made its
 // judgement on a clock this extension's own clock (read AFTER the lock, so never earlier) has already passed, and the extension
-// is refused `closed`. The create has no row lock to share (claim-then-call, a conditional UPDATE of `mint_claimed_at`), so an
+// is refused `closed`. BOTH read that clock from the DATABASE (`clock_timestamp()` inside the locked transaction), never from the
+// machine they run on: two clocks that disagree by a few seconds would let the extension find the window open after the sweep
+// found it closed (a forfeit over a board that was just given more time), and one clock cannot disagree with itself. The create has no row lock to share (claim-then-call, a conditional UPDATE of `mint_claimed_at`), so an
 // extension racing it is decided by the same facts under this lock: a claim or a marker on the row is a game on file.
 //
 // AUDIT. One `online_chess_audit` row per board extended (kind `checkin_extend`, V465): the actor, the board, and in `note` the
@@ -50,12 +52,13 @@ import {
   windowFor,
 } from "@/server/external-play/window";
 import { requireWatcher } from "./arbiter";
-import { ensureBridgeRow, loadOnlinePlayFixture } from "./guard";
+import { ensureBridgeRow, loadOnlinePlayFixture, type OnlinePlayFixture } from "./guard";
 import { isPlayableFixtureStatus } from "./preflight";
 import { isSeatedOn } from "./seated";
 
 export type ExtendDeps = {
-  /** The clock, read AFTER the board's lock is held (the race rule above). */
+  /** The decision clock. Production leaves it out: the database's own clock is read AFTER the board's lock is held (the race rule
+   *  above). A test sets it to put the decision at an instant of its choosing. */
   now?: () => Date;
   /** The room nudge that makes a player's open room re-read its deadline at once. */
   publish?: (fixtureId: string) => Promise<void>;
@@ -69,52 +72,62 @@ type Step =
   | { ok: false; refusal: ExtendRefusal; gameOnFile: boolean };
 
 /** One board, one transaction: lock the board's check-in window, re-read everything the rule asks under it, then either refuse or
- *  move the deadline and write the audit row. Nothing is written on a refusal. Lock order (preflight.ts `organiserOverrideVideo`):
- *  the window lock first, then the fixture row BEFORE the bridge row, then the audit insert (which takes KEY SHARE on the fixture). */
+ *  move the deadline and write the audit row. NOTHING is written on a refusal - not even the board's bridge row: a board nobody has
+ *  touched has none, and a refusal (a withdrawn board, a closed window) must not leave one behind; the row is made only for a board
+ *  that is about to be extended. Lock order (preflight.ts `organiserOverrideVideo`): the window lock first, then the fixture row
+ *  BEFORE the bridge row, then the audit insert (which takes KEY SHARE on the fixture). */
 async function extendOneBoard(
-  a: { fixtureId: string; orgId: string; actorUserId: string; scope: Scope },
+  a: { f: OnlinePlayFixture; actorUserId: string; scope: Scope },
   deps: ExtendDeps,
 ): Promise<Step> {
+  const { fixtureId, orgId } = a.f;
   return sql.begin(async (tx): Promise<Step> => {
-    await lockCheckinWindow(tx, a.fixtureId);
-    const [fx] = await tx<{ status: string }[]>`select status from fixtures where id = ${a.fixtureId} for share`;
+    await lockCheckinWindow(tx, fixtureId);
+    const [fx] = await tx<{ status: string }[]>`select status from fixtures where id = ${fixtureId} for share`;
     const [row] = await tx<{ status: string; challengeId: string | null; createSentAt: Date | null; mintClaimedAt: Date | null }[]>`
       select status, challenge_id as "challengeId", create_sent_at as "createSentAt", mint_claimed_at as "mintClaimedAt"
-        from fixture_external_play where fixture_id = ${a.fixtureId} for update`;
-    const open = await boardOpenFor(tx, a.fixtureId);
-    // Not "cannot happen" in a comment: the caller proved the round open and made the row, so any of these missing is the
-    // board changing underneath this call (a re-pair deleted its row; a rebuild removed the fixture) - refused by name.
-    if (!fx || !row || open === null) throw new HttpError(409, "the board changed while its check-in was being extended - try again", "ROUND_CHANGED");
-    const at = (deps.now ?? (() => new Date()))();
-    const gameOnFile = bridgeGameOnFile(row, at);
+        from fixture_external_play where fixture_id = ${fixtureId} for update`;
+    const open = await boardOpenFor(tx, fixtureId);
+    // Not "cannot happen" in a comment: the caller proved the round open, so a missing fixture or open is the board changing
+    // underneath this call (a rebuild removed the fixture) - refused by name. A missing BRIDGE ROW is not: it is a board nobody
+    // has touched (the open invites through it, but a board added since, or one that was re-paired, has none yet).
+    if (!fx || open === null) throw new HttpError(409, "the board changed while its check-in was being extended - try again", "ROUND_CHANGED");
+    // The decision clock: read AFTER the lock, from the database (the race rule above).
+    const at = deps.now ? deps.now() : (await tx<{ at: Date }[]>`select clock_timestamp() as at`)[0]!.at;
+    const gameOnFile = row ? bridgeGameOnFile(row, at) : false;
     const refusal = extendRefusal({
       now: at,
       anchor: open.anchor,
       extensions: open.extensions,
-      playable: isPlayableFixtureStatus(fx.status) && row.status !== "finished",
+      playable: isPlayableFixtureStatus(fx.status) && row?.status !== "finished",
       gameOnFile,
     });
     if (refusal !== null) return { ok: false, refusal, gameOnFile };
 
+    // Only now, for a board that WILL be extended: the row the extension lives on (idempotent; a no-op when it exists).
+    if (!row) await ensureBridgeRow(a.f);
     const [moved] = await tx<{ extraMs: number; extensions: number }[]>`
       update fixture_external_play
          set checkin_extra_ms = checkin_extra_ms + ${CHECKIN_EXTEND_STEP_MS},
              checkin_extensions = checkin_extensions + 1,
              updated_at = now()
-       where fixture_id = ${a.fixtureId}
+       where fixture_id = ${fixtureId}
        returning checkin_extra_ms as "extraMs", checkin_extensions as extensions`;
+    // A board re-paired between the read and the make (ensureBridgeRow writes only while the fixture still seats the entrants `a.f`
+    // was read with) has no row to move: the same "changed underneath" refusal, written as one and tested.
+    if (!moved) throw new HttpError(409, "the board changed while its check-in was being extended - try again", "ROUND_CHANGED");
     // The deadline the board is on NOW, from window.ts's own function with the extension just written.
-    const deadline = windowFor(boardAnchor(open.roundOpenedAt, open.rank, open.staggered, moved!.extraMs)).deadline;
+    const deadline = windowFor(boardAnchor(open.roundOpenedAt, open.rank, open.staggered, moved.extraMs)).deadline;
     await tx`
       insert into online_chess_audit (org_id, fixture_id, kind, actor_user_id, note)
-      values (${a.orgId}, ${a.fixtureId}, 'checkin_extend', ${a.actorUserId},
-              ${JSON.stringify({ scope: a.scope, extensions: moved!.extensions, addedMs: CHECKIN_EXTEND_STEP_MS, deadlineAt: deadline.toISOString() })})`;
+      values (${orgId}, ${fixtureId}, 'checkin_extend', ${a.actorUserId},
+              ${JSON.stringify({ scope: a.scope, extensions: moved.extensions, addedMs: CHECKIN_EXTEND_STEP_MS, deadlineAt: deadline.toISOString() })})`;
     return {
       ok: true,
       board: {
-        fixtureId: a.fixtureId,
-        extensions: moved!.extensions,
-        extensionsLeft: extensionsLeft(moved!.extensions),
+        fixtureId,
+        extensions: moved.extensions,
+        extensionsLeft: extensionsLeft(moved.extensions),
         addedMinutes: CHECKIN_EXTEND_STEP_MINUTES,
         deadlineAt: deadline.toISOString(),
       },
@@ -152,9 +165,7 @@ export async function extendCheckin(auth: AuthCtx, fixtureId: string, deps: Exte
     throw new HttpError(403, "You play on this board, so another organiser must extend its check-in", "ARBITER_PLAYS_THIS_BOARD");
   }
   if ((await boardOpenFor(sql, fixtureId)) === null) throw new HttpError(409, "this board's round is not open yet", "ROUND_NOT_OPEN");
-  // A board nobody has touched has no bridge row yet; the extension lives on it.
-  await ensureBridgeRow(f);
-  const step = await extendOneBoard({ fixtureId, orgId: f.orgId, actorUserId: userId, scope: "board" }, deps);
+  const step = await extendOneBoard({ f, actorUserId: userId, scope: "board" }, deps);
   if (!step.ok) throw refused(step.refusal);
   await nudge([fixtureId], deps);
   return step.board;
@@ -198,8 +209,7 @@ export async function extendRoundCheckin(
         result.ownBoards += 1;
         continue;
       }
-      await ensureBridgeRow(f);
-      const step = await extendOneBoard({ fixtureId, orgId: f.orgId, actorUserId: userId, scope: "round" }, deps);
+      const step = await extendOneBoard({ f, actorUserId: userId, scope: "round" }, deps);
       if (step.ok) {
         result.extended += 1;
         moved.push(fixtureId);

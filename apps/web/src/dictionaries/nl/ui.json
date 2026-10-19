@@ -6405,5 +6405,10 @@
   "externalPlay.checkinExtend.refused.capReached": "De check-in van dit bord is al zo ver verlengd als kan.",
   "externalPlay.checkinExtend.refused.playsThis": "Je speelt op dit bord, dus een andere organisator moet het verlengen.",
   "externalPlay.checkinExtend.refused.roundNotOpen": "Deze ronde is nog niet open.",
-  "externalPlay.checkinExtend.refused.failed": "We konden geen tijd toevoegen. Probeer opnieuw."
+  "externalPlay.checkinExtend.refused.failed": "We konden geen tijd toevoegen. Probeer opnieuw.",
+  "externalPlay.checkinExtend.why.notOpen": "Check-in is nog niet open",
+  "externalPlay.checkinExtend.why.closed": "Check-in is gesloten",
+  "externalPlay.checkinExtend.why.gameStarted": "Partij is begonnen",
+  "externalPlay.checkinExtend.why.capReached": "Geen verlengingen meer",
+  "externalPlay.checkinExtend.helper": "Voegt {minutes} minuten toe zolang de check-in open is. Maximaal {max} keer per bord."
 }

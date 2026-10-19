@@ -8,6 +8,7 @@
 // also compiled under tsconfig.scripts.json (nodenext), which refuses an
 // extensionless specifier — the convention of every file in that chain.
 import type { DictionaryKey } from "./i18n-keys.ts";
+import type { ExtendWindow } from "./checkin-extend.ts";
 
 /** Why a round was NOT opened. Each is refused before anything is written —
  *  no stamp, no invite. */
@@ -97,6 +98,10 @@ export type OpenRoundView = {
   /** Spec §3.2.2: how many of this round's boards a round-wide "+N min" would extend right now (check-in open, no game on
    *  file, under the cap, not a board the viewer plays on). 0 before the open. The control offers the button above zero. */
   extendableBoards: number;
+  /** Spec §3.2.2 (owner, 2026-10-19: +5 only inside the check-in window): for each board a round-wide press could reach if only the
+   *  clock allowed it, the instants it is allowed between. The control counts them on its ticking clock, so the button appears at a
+   *  board's opening and goes at its deadline without waiting for the next refresh. `extendableBoards` is this list at the snapshot. */
+  extendWindows: ExtendWindow[];
   /** T16 fix round 1, R1 — this stage's EARLIER rounds that still have games in play (a paired board still to be
    *  played), lowest round first; empty when none. Opening is still allowed (the organiser drives; D8 never blocks):
    *  the confirmation names them so the press is made knowingly. */

@@ -22,6 +22,7 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { isRoundPaired } from "@/lib/division-phase";
 import type { OpenRoundBatch, OpenRoundPairing, OpenRoundPress, OpenRoundView } from "@/lib/open-round";
+import type { ExtendWindow } from "@/lib/checkin-extend";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { stageCameraPolicy } from "@/server/external-play/camera-policy";
 import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
@@ -34,6 +35,7 @@ import {
   boardAnchor,
   bridgeGameOnFile,
   extendRefusal,
+  extendWindowOf,
   roomPhase,
   windowFor,
 } from "@/server/external-play/window";
@@ -281,6 +283,7 @@ export async function listOpenRounds(
       if (ahead.length > 0) deadlineAt = new Date(Math.min(...ahead.map((d) => d.getTime()))).toISOString();
     }
     const times = f.boards.map((b) => b.scheduledAt?.getTime()).filter((t): t is number => t !== undefined);
+    const extend = extendReach(f, own, now);
     const view: OpenRoundView = {
       stageId: f.stageId,
       stageName: f.stageName,
@@ -295,27 +298,44 @@ export async function listOpenRounds(
       scheduledAt: times.length === 0 ? null : new Date(Math.min(...times)).toISOString(),
       press: f.press,
       pairings,
-      // Spec §3.2.2: how many boards a "+N min to the round" would extend right now - the same rule the door asks, board by board.
-      extendableBoards:
-        f.open === null
-          ? 0
-          : f.boards.filter(
-              (b) =>
-                !own.has(b.fixtureId) &&
-                extendRefusal({
-                  now,
-                  anchor: boardAnchor(f.open!.roundOpenedAt, b.rank, f.open!.staggered, b.extraMs),
-                  extensions: b.extensions,
-                  playable: isPlayableFixtureStatus(b.status) && b.bridgeStatus !== "finished",
-                  gameOnFile: bridgeGameOnFile(
-                    { status: b.bridgeStatus ?? "pending", challengeId: b.challengeId, createSentAt: b.createSentAt, mintClaimedAt: b.mintClaimedAt },
-                    now,
-                  ),
-                }) === null,
-            ).length,
+      // Spec §3.2.2: how many boards a "+N min to the round" would extend right now - the same rule the door asks, board by board -
+      // and the windows the screen counts on its ticking clock (every board that only the clock stands between and a press).
+      extendableBoards: extend.extendableBoards,
+      extendWindows: extend.windows,
       earlierInPlay: (inPlay.get(f.stageId) ?? []).filter((x) => x.roundNo < f.roundNo).sort((a, b) => a.roundNo - b.roundNo),
     };
     out.push(view);
   }
   return out;
+}
+
+/** Spec §3.2.2: what a round-wide press reaches. `extendableBoards` is the count `extendRefusal` accepts at `now` (the board the viewer
+ *  plays on excluded: a round press leaves it alone, C1); `windows` is, per such board, the instants it is extendable between, for every
+ *  board that nothing but the clock stands in the way of - so the screen can keep the count true as time passes. Empty before the open. */
+function extendReach(
+  f: { open: RoundOpenRow | null; boards: Paired[] },
+  own: ReadonlySet<string>,
+  now: Date,
+): { extendableBoards: number; windows: ExtendWindow[] } {
+  const open = f.open;
+  if (open === null) return { extendableBoards: 0, windows: [] };
+  let extendableBoards = 0;
+  const windows: ExtendWindow[] = [];
+  for (const b of f.boards) {
+    if (own.has(b.fixtureId)) continue;
+    const facts = {
+      now,
+      anchor: boardAnchor(open.roundOpenedAt, b.rank, open.staggered, b.extraMs),
+      extensions: b.extensions,
+      playable: isPlayableFixtureStatus(b.status) && b.bridgeStatus !== "finished",
+      gameOnFile: bridgeGameOnFile(
+        { status: b.bridgeStatus ?? "pending", challengeId: b.challengeId, createSentAt: b.createSentAt, mintClaimedAt: b.mintClaimedAt },
+        now,
+      ),
+    };
+    if (extendRefusal(facts) === null) extendableBoards += 1;
+    const w = extendWindowOf(facts);
+    if (w !== null) windows.push(w);
+  }
+  return { extendableBoards, windows };
 }

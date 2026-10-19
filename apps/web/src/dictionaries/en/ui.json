@@ -6405,5 +6405,10 @@
   "externalPlay.checkinExtend.refused.capReached": "This board's check-in has already been extended as far as it can be.",
   "externalPlay.checkinExtend.refused.playsThis": "You play on this board, so another organiser must extend it.",
   "externalPlay.checkinExtend.refused.roundNotOpen": "This round isn't open yet.",
-  "externalPlay.checkinExtend.refused.failed": "We couldn't add time. Try again."
+  "externalPlay.checkinExtend.refused.failed": "We couldn't add time. Try again.",
+  "externalPlay.checkinExtend.why.notOpen": "Check-in hasn't opened yet",
+  "externalPlay.checkinExtend.why.closed": "Check-in has closed",
+  "externalPlay.checkinExtend.why.gameStarted": "Game started",
+  "externalPlay.checkinExtend.why.capReached": "No extensions left",
+  "externalPlay.checkinExtend.helper": "Adds {minutes} minutes while check-in is open. Up to {max} times per board."
 }

@@ -1,4 +1,4 @@
-import { CHECKIN_EXTEND_MAX, CHECKIN_EXTEND_STEP_MS, EXTEND_REFUSALS, extensionsLeft, type ExtendRefusal } from "@/lib/checkin-extend";
+import { CHECKIN_EXTEND_MAX, CHECKIN_EXTEND_STEP_MS, EXTEND_REFUSALS, extensionsLeft, type ExtendRefusal, type ExtendWindow } from "@/lib/checkin-extend";
 import type { NeedsReason } from "./types";
 
 /** Spec §8.1 — the only definition of these values. */
@@ -130,6 +130,17 @@ export function extendRefusal(a: {
   if (phase === "before") return "not_open";
   if (a.extensions >= CHECKIN_EXTEND_MAX) return "cap_reached";
   return null;
+}
+
+/** The window a screen may ask the CLOCK about (spec §3.2.2, owner 2026-10-19: +5 only inside the check-in window): the board's
+ *  `opensAt` and deadline when everything but the clock allows a press - the board still to be played, no game on file, presses
+ *  left, and not yet closed at `now` - and null when something else forbids it, which no tick of a clock can change. A screen counts
+ *  a board as extendable at an instant iff that instant is inside its window (`liveExtendableCount`), so for any `now` the count of
+ *  windows that contain it is the count of boards `extendRefusal` accepts: asserted by the DB tests that read both. */
+export function extendWindowOf(a: { now: Date; anchor: BoardAnchor; extensions: number; playable: boolean; gameOnFile: boolean }): ExtendWindow | null {
+  if (!a.playable || a.gameOnFile || a.extensions >= CHECKIN_EXTEND_MAX || roomPhase(a.now, a.anchor) === "closed") return null;
+  const w = windowFor(a.anchor);
+  return { opensAt: w.opensAt.toISOString(), deadlineAt: w.deadline.toISOString() };
 }
 
 export const LICHESS_NOT_STARTED: ReadonlySet<string> = new Set(["created"]);

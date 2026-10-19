@@ -8,7 +8,7 @@ import es from "@/dictionaries/es/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
 import nl from "@/dictionaries/nl/ui.json";
 import { LOCALES } from "@/lib/i18n-constants";
-import { EXTEND_REFUSALS, EXTEND_REFUSAL_KEYS, EXTEND_ROUND_SKIP_COPY } from "@/lib/checkin-extend";
+import { EXTEND_REFUSALS, EXTEND_REFUSAL_KEYS, EXTEND_ROUND_SKIP_COPY, EXTEND_WHY_KEYS } from "@/lib/checkin-extend";
 
 const DICTS: Record<(typeof LOCALES)[number], Record<string, string>> = { en, es, fr, nl };
 const PREFIX = "externalPlay.checkinExtend.";
@@ -67,6 +67,22 @@ describe("check-in extension copy", () => {
       const texts = EXTEND_REFUSALS.map((r) => DICTS[loc][EXTEND_REFUSAL_KEYS[r]]);
       expect(new Set(texts).size, loc).toBe(texts.length);
     }
+  });
+
+  it("the short reasons (EXTEND_WHY_KEYS) and the helper line have copy in every locale, with their slots, and no two reasons share words", () => {
+    const keys = EXTEND_REFUSALS.flatMap((r) => (EXTEND_WHY_KEYS[r] === null ? [] : [EXTEND_WHY_KEYS[r]!]));
+    expect(keys, "anti-vacuity: four reasons (a board that is over says nothing)").toHaveLength(4);
+    let checked = 0;
+    for (const loc of LOCALES) {
+      for (const k of keys) {
+        expect(DICTS[loc][k]?.trim().length, `${loc} ${k}`).toBeGreaterThan(0);
+        checked += 1;
+      }
+      expect(new Set(keys.map((k) => DICTS[loc][k])).size, `${loc}: each reason its own words`).toBe(keys.length);
+      expect(slots(DICTS[loc]["externalPlay.checkinExtend.helper"]!), `${loc}: the helper line's slots`).toEqual(["max", "minutes"]);
+      checked += 1;
+    }
+    expect(checked).toBe((keys.length + 1) * LOCALES.length);
   });
 
   it("every key a source file asks for exists: an exact key, or a plural base with both forms", () => {

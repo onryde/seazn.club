@@ -220,6 +220,9 @@ function codeOf(err: unknown): string {
 
 type Pass = {
   now: Date;
+  /** TEST SEAM made visible: the pass's `now` was handed in (`SweepDeps.now`), so a test owns the decision clock of the window
+   *  judgements too. Production hands none, and those judgements read the DATABASE's clock (`anchorIfClosedNow`). */
+  fixedNow: boolean;
   orgIds: readonly string[] | undefined;
   report: SweepReport;
   /** I-1: the budget's clock, read at the pass's start and before each network row. */
@@ -393,19 +396,23 @@ async function noShowCandidates(pass: Pass): Promise<NoShowCandidate[]> {
   return rows.map((r) => ({ ...r, anchor: anchorOfRow(r) }));
 }
 
-/** Spec §3.2.2: the board's anchor as it stands NOW, read under the board's check-in-window lock, or `null` when the board's
- *  deadline has NOT passed at the pass's clock on that fresh read. The candidate query read the board's extension some time
+/** Spec §3.2.2: the board's anchor as it stands NOW, with the clock the judgement was made on, read under the board's check-in-window
+ *  lock - or `null` when the board's deadline has NOT passed on that clock. The candidate query read the board's extension some time
  *  ago; an arbiter's +5 minutes committed since (or in flight at this moment - the lock waits for it) moves the deadline, and a
  *  destructive judgement - a walkover, ending the players' rooms - on the candidate's stale anchor would undo it. Holds the lock
  *  only for the read: an extension arriving after it reads its own clock after taking the lock, and that clock is not before
- *  this pass's, so it finds the deadline passed and is refused (checkin-extend.ts) - it cannot move the deadline back under a
- *  judgement already made. */
-async function anchorIfClosedNow(pass: Pass, fixtureId: string): Promise<BoardAnchor | null> {
+ *  this one, so it finds the deadline passed and is refused (checkin-extend.ts) - it cannot move the deadline back under a
+ *  judgement already made. THE CLOCK is the database's (`clock_timestamp()`, read after the lock - the extension reads the same
+ *  one the same way): a machine clock that runs ahead of it would otherwise find the deadline passed while the extension, on the
+ *  database's clock, still found it open and extended it - a walkover over a board that had just been given more time. A pass
+ *  that was handed its clock (a test's) judges on that. */
+async function anchorIfClosedNow(pass: Pass, fixtureId: string): Promise<{ anchor: BoardAnchor; now: Date } | null> {
   return sql.begin(async (tx) => {
     await lockCheckinWindow(tx, fixtureId);
     const open = await boardOpenFor(tx, fixtureId);
     if (open === null) return null;
-    return pass.now.getTime() < playableWindow(open.anchor).deadline.getTime() ? null : open.anchor;
+    const now = pass.fixedNow ? pass.now : (await tx<{ now: Date }[]>`select clock_timestamp() as now`)[0]!.now;
+    return now.getTime() < playableWindow(open.anchor).deadline.getTime() ? null : { anchor: open.anchor, now };
   });
 }
 
@@ -416,7 +423,7 @@ async function noShow(pass: Pass, cand: NoShowCandidate): Promise<void> {
   if (gameMayBeOnFile(pass, cand)) return;
   const fresh = await anchorIfClosedNow(pass, cand.fixtureId);
   if (fresh === null) return;
-  const c: NoShowCandidate = { ...cand, anchor: fresh };
+  const c: NoShowCandidate = { ...cand, anchor: fresh.anchor };
   const { deadline } = playableWindow(c.anchor);
   // THE guard (spec §6): online play still on, a boardgame, both entrants.
   // An organiser who switched online play off after the open has taken the
@@ -429,7 +436,7 @@ async function noShow(pass: Pass, cand: NoShowCandidate): Promise<void> {
   // side (the call budget was holding them in line; they arrived in time) is not judged until the board's cap, and nor is a
   // board whose two players both came while its create is still owed (T9 can still recover a sent create there, so the
   // unknown-create hold waits for the cap too). At the cap, and after, it is judged normally.
-  const held = await boardPhase(pass.now, { fixtureId: c.fixtureId, anchor: c.anchor }, { personId: null, facts: { own: false, both: came.home && came.away } });
+  const held = await boardPhase(fresh.now, { fixtureId: c.fixtureId, anchor: c.anchor }, { personId: null, facts: { own: false, both: came.home && came.away } });
   if (held === "open") return;
   if (c.createSentAt !== null) {
     await holdUnknownCreate(pass, c, deadline);
@@ -743,7 +750,7 @@ async function meetingIsDone(pass: Pass, c: TeardownCandidate): Promise<boolean>
   if (fresh === null) return false;
   // Spec §5.7.8: "nobody played" is not true of a board the check-in line (or a create still owed) is holding open past its
   // deadline: those players' rooms stay up until the board's cap.
-  const held = await boardPhase(pass.now, { fixtureId: c.fixtureId, anchor: fresh }, { personId: null, facts: () => bothCameFor(c.fixtureId, fresh) });
+  const held = await boardPhase(fresh.now, { fixtureId: c.fixtureId, anchor: fresh.anchor }, { personId: null, facts: () => bothCameFor(c.fixtureId, fresh.anchor) });
   return held !== "open";
 }
 
@@ -1458,6 +1465,7 @@ async function runPass(deps: SweepDeps): Promise<SweepReport> {
   const clock = deps.wallClock ?? Date.now;
   const pass: Pass = {
     now: deps.now ?? new Date(),
+    fixedNow: deps.now !== undefined,
     orgIds: deps.orgIds,
     report,
     clock,

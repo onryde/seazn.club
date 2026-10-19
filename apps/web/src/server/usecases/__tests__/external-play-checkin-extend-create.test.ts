@@ -190,6 +190,35 @@ describe.skipIf(!HAS_DB)("the extension at the create (T9)", () => {
     }
   }, 120_000);
 
+  it("an extension that lands BETWEEN the plan and the dequeue is seen at the dequeue (the window is re-read there, not carried in the plan), and the row expires at the new deadline", async () => {
+    const r = await openedRound(2);
+    const [landed, control] = r.boards as [SeedRoundBoard, SeedRoundBoard];
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const waits = async (b: SeedRoundBoard, between: () => Promise<unknown>) => {
+        vi.setSystemTime(EXT_AT);
+        const blocker = blockQueue();
+        const pending = createGameIfReady(b.fixtureId); // the PLAN is made now: the board's window is the unextended one
+        await waitUntilQueued(b.fixtureId);
+        await between(); // ...an arbiter extends while the create waits
+        vi.setSystemTime(P); // ...and the world moves past the OLD deadline
+        await blocker.release();
+        return pending;
+      };
+      expect(
+        await waits(landed, () => press(r.owner, landed.fixtureId)),
+        "the extension landed between plan and dequeue: the create runs",
+      ).toMatchObject({ created: true });
+      expect((await bridge(landed.fixtureId))?.expires_at?.toISOString(), "and the row expires at the EXTENDED deadline").toBe(deadlineAfter(1).toISOString());
+      board.createChallengeToUser.mockClear();
+      board.acceptChallenge.mockClear();
+      expect(await waits(control, async () => undefined), "the control: nothing landed, past the old deadline at the dequeue").toEqual({ created: false, reason: "not_ready" });
+      noHttp();
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 120_000);
+
   it("the line's cap moves with the deadline: both players counted, a create after the extended deadline and before the extended cap runs; the same instant on an unextended board is past ITS cap", async () => {
     const r = await openedRound(3);
     const [plain, extended, atCap] = r.boards as [SeedRoundBoard, SeedRoundBoard, SeedRoundBoard];

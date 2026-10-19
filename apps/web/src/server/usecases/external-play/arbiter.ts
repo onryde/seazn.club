@@ -462,11 +462,13 @@ function checkinOf(r: BoardRow, now: Date): CheckinExtendState | null {
       now,
     ),
   });
+  const w = windowFor(anchor);
   return {
     canExtend: refusal === null,
     refusal,
     extensionsLeft: extensionsLeft(r.extensions),
-    deadlineAt: windowFor(anchor).deadline.toISOString(),
+    opensAt: w.opensAt.toISOString(),
+    deadlineAt: w.deadline.toISOString(),
   };
 }
 

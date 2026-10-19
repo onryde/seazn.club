@@ -428,7 +428,9 @@ export async function openRound(
       // Spec §3.2.2: the board's own check-in extension rides on its anchor, so a re-invite does not call an extended board
       // `window_closed` and a mail names the deadline the board is really on. A re-armed board's row is deleted below (it starts
       // afresh, extension 0), so it reads 0 here too.
-      return boardAnchor(open.roundOpenedAt, placed.rank, open.staggered, rearmed.has(fixtureId) ? 0 : placed.extraMs);
+      // A re-armed board inside a RUNNING window (`reinvited`) keeps the time the arbiter gave it: that window is the one it is
+      // invited back into. One that starts afresh (`reopened`) starts at zero - the window moves, and its time with it.
+      return boardAnchor(open.roundOpenedAt, placed.rank, open.staggered, rearmed.has(fixtureId) && kind !== "reinvited" ? 0 : placed.extraMs);
     };
 
     // A re-open into a window that is already running (nobody-invited and re-arm re-stamped above): a board whose OWN batch
@@ -451,15 +453,31 @@ export async function openRound(
     // it holds no game's evidence, and a meeting the sweep ended at the No result would refuse the replay's check-in
     // (VIDEO_MEETING_ENDED) — ended at RealtimeKit after the commit, as N-2's are. D16: both players' meetings, by board
     // on purpose (allow-listed in the source guard).
+    // Spec §3.2.2: the arbiter's time on a re-armed board is kept when the window it is invited back into is the one still running
+    // (`reinvited`) - the row is made afresh below, so what it carried is read before the delete and written back after the attach.
+    const keptExtension = new Map<string, { extraMs: number; extensions: number }>();
     if (rearmed.size > 0) {
       const rearmedIds = [...rearmed];
       retireBoards.push(...(await retireBoardsMeetings(tx, rearmedIds, now)));
+      if (kind === "reinvited") {
+        for (const r of await tx<{ id: string; extraMs: number; extensions: number }[]>`
+          select fixture_id as id, checkin_extra_ms as "extraMs", checkin_extensions as extensions
+            from fixture_external_play where fixture_id in ${tx(rearmedIds)} and checkin_extensions > 0`) {
+          keptExtension.set(r.id, { extraMs: r.extraMs, extensions: r.extensions });
+        }
+      }
       await tx`delete from fixture_external_play where fixture_id in ${tx(rearmedIds)}`;
     }
 
     const claims: Claim[] = [];
     for (const p of pending) {
       await attachToOpen(tx, p.board.f, open);
+      const kept = keptExtension.get(p.board.f.fixtureId);
+      if (kept !== undefined) {
+        await tx`
+          update fixture_external_play set checkin_extra_ms = ${kept.extraMs}, checkin_extensions = ${kept.extensions}, updated_at = now()
+           where fixture_id = ${p.board.f.fixtureId}`;
+      }
       for (const seat of p.seats) {
         if (await claimSeat(tx, p.board.f.fixtureId, seat.colour, open.id, now)) {
           claims.push({ board: p.board, seat, anchor: anchorOf(p.board.f.fixtureId) });

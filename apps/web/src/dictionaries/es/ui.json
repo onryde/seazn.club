@@ -6405,5 +6405,10 @@
   "externalPlay.checkinExtend.refused.capReached": "El registro de este tablero ya se amplió todo lo posible.",
   "externalPlay.checkinExtend.refused.playsThis": "Juegas en este tablero, así que otro organizador debe ampliarlo.",
   "externalPlay.checkinExtend.refused.roundNotOpen": "Esta ronda aún no está abierta.",
-  "externalPlay.checkinExtend.refused.failed": "No pudimos añadir tiempo. Inténtalo de nuevo."
+  "externalPlay.checkinExtend.refused.failed": "No pudimos añadir tiempo. Inténtalo de nuevo.",
+  "externalPlay.checkinExtend.why.notOpen": "El registro aún no ha abierto",
+  "externalPlay.checkinExtend.why.closed": "El registro ha cerrado",
+  "externalPlay.checkinExtend.why.gameStarted": "La partida ya empezó",
+  "externalPlay.checkinExtend.why.capReached": "No quedan ampliaciones",
+  "externalPlay.checkinExtend.helper": "Añade {minutes} minutos mientras el registro está abierto. Hasta {max} veces por tablero."
 }

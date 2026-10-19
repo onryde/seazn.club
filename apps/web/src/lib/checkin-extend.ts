@@ -40,15 +40,76 @@ export const EXTEND_REFUSAL_KEYS: Readonly<Record<ExtendRefusal, DictionaryKey>>
   cap_reached: "externalPlay.checkinExtend.refused.capReached",
 };
 
-/** A board's check-in as the screens read it: whether a press would be accepted NOW, how many presses it has left and the
- *  deadline it is on (ISO). The server's one reading (`extendRefusal`), never re-derived on the client. */
+/** A board's check-in as the screens read it: whether a press would be accepted at the SNAPSHOT's clock, why not, how many presses
+ *  it has left and the window it is on (ISO). The server's one reading (`extendRefusal`); a screen that keeps showing it after the
+ *  snapshot was taken re-asks the CLOCK through `liveExtendRefusal`, never the rule. */
 export type CheckinExtendState = {
   canExtend: boolean;
   /** Why not, when not. null exactly when `canExtend`. */
   refusal: ExtendRefusal | null;
   extensionsLeft: number;
+  /** When the board's check-in opens (window.ts `windowFor`: a later batch opens AT its start, batch 0 ten minutes before it). */
+  opensAt: string;
   /** The board's effective deadline: `T_batch + DEADLINE_AFTER_MS` plus every press so far. */
   deadlineAt: string;
+};
+
+/** The two instants a board's press is allowed between: `opensAt <= now < deadlineAt`. */
+export type ExtendWindow = { opensAt: string; deadlineAt: string };
+
+/** Is `nowMs` inside the window - the opening included, the deadline excluded (window.ts `roomPhase`: "open" from `opensAt`,
+ *  "closed" from the deadline on). */
+export function inExtendWindow(w: ExtendWindow, nowMs: number): boolean {
+  return Date.parse(w.opensAt) <= nowMs && nowMs < Date.parse(w.deadlineAt);
+}
+
+/** What a screen shows on a board's check-in on a TICKING clock. The snapshot says why a press was refused when it was read; the
+ *  clock keeps moving (the screen's poll is up to 20 s apart), and the owner's rule is that +5 is offered only INSIDE the window -
+ *  hidden before the opening and from the deadline on, to the millisecond. The board's own state (a game on file, a board that is
+ *  over) is the snapshot's word, which a clock cannot change; the window is the clock's. A snapshot that said `closed` stays closed
+ *  (a deadline only moves later while the window is open). Equal to the server's `extendRefusal` at `nowMs` for every
+ *  `nowMs` at or after the snapshot's own (checkin-extend-live.test.ts runs the two against each other). */
+export function liveExtendRefusal(c: Pick<CheckinExtendState, "refusal" | "extensionsLeft" | "opensAt" | "deadlineAt">, nowMs: number): ExtendRefusal | null {
+  if (c.refusal === "not_playable" || c.refusal === "game_started" || c.refusal === "closed") return c.refusal;
+  if (nowMs >= Date.parse(c.deadlineAt)) return "closed";
+  if (nowMs < Date.parse(c.opensAt)) return "not_open";
+  return c.extensionsLeft === 0 ? "cap_reached" : null;
+}
+
+/** How many of a round's windows a round-wide press reaches at `nowMs`. */
+export function liveExtendableCount(windows: readonly ExtendWindow[], nowMs: number): number {
+  return windows.filter((w) => inExtendWindow(w, nowMs)).length;
+}
+
+/** The windows of the boards whose answer the CLOCK can still change: not the ones a game, a result or a closed window already settled
+ *  (`liveExtendRefusal` returns the snapshot's word for those, whatever the time). */
+export function watchedWindows(checkins: readonly (CheckinExtendState | null)[]): ExtendWindow[] {
+  return checkins.flatMap((c) => (c === null || c.refusal === "not_playable" || c.refusal === "game_started" || c.refusal === "closed" ? [] : [c]));
+}
+
+/** The instants (epoch ms) at which a window changes what a screen may offer: its opening and its deadline. A screen schedules its
+ *  next re-read on the nearest one ahead (`nextExtendEdge`), so the +5 button arrives and leaves AT the edge, not at the next tick. */
+export function extendEdgesOf(windows: readonly ExtendWindow[]): number[] {
+  return [...new Set(windows.flatMap((w) => [Date.parse(w.opensAt), Date.parse(w.deadlineAt)]))].filter((t) => Number.isFinite(t)).sort((a, b) => a - b);
+}
+
+/** The first edge STRICTLY after `nowMs` (an edge at `nowMs` has already happened: the opening is included, the deadline is out), or
+ *  null when every edge is behind. */
+export function nextExtendEdge(edges: readonly number[], nowMs: number): number | null {
+  let best: number | null = null;
+  for (const e of edges) if (e > nowMs && (best === null || e < best)) best = e;
+  return best;
+}
+
+/** The short reason shown where the +5 button is not offered (owner, 2026-10-19): "Check-in hasn't opened yet", "Check-in has closed",
+ *  "Game started", "No extensions left". `not_playable` (a board that is over) says nothing: it has no check-in to speak of. Every
+ *  refusal is a key of this table, so a sixth reason cannot be added without choosing its words (or choosing silence) here. */
+export const EXTEND_WHY_KEYS: Readonly<Record<ExtendRefusal, DictionaryKey | null>> = {
+  not_playable: null,
+  game_started: "externalPlay.checkinExtend.why.gameStarted",
+  closed: "externalPlay.checkinExtend.why.closed",
+  not_open: "externalPlay.checkinExtend.why.notOpen",
+  cap_reached: "externalPlay.checkinExtend.why.capReached",
 };
 
 /** The answer to ONE board's press. */

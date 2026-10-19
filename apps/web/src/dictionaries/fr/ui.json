@@ -6405,5 +6405,10 @@
   "externalPlay.checkinExtend.refused.capReached": "L'enregistrement de cet échiquier a déjà été prolongé au maximum.",
   "externalPlay.checkinExtend.refused.playsThis": "Vous jouez sur cet échiquier : un autre organisateur doit le prolonger.",
   "externalPlay.checkinExtend.refused.roundNotOpen": "Cette ronde n'est pas encore ouverte.",
-  "externalPlay.checkinExtend.refused.failed": "Impossible d'ajouter du temps. Réessayez."
+  "externalPlay.checkinExtend.refused.failed": "Impossible d'ajouter du temps. Réessayez.",
+  "externalPlay.checkinExtend.why.notOpen": "L'enregistrement n'est pas encore ouvert",
+  "externalPlay.checkinExtend.why.closed": "L'enregistrement est clos",
+  "externalPlay.checkinExtend.why.gameStarted": "La partie a commencé",
+  "externalPlay.checkinExtend.why.capReached": "Plus de prolongation possible",
+  "externalPlay.checkinExtend.helper": "Ajoute {minutes} minutes tant que l'enregistrement est ouvert. Jusqu'à {max} fois par échiquier."
 }
