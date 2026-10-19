@@ -261,6 +261,39 @@ describe("X-SR-1 P1 engine sweep — ruleKeys", () => {
     expect(values).toBeGreaterThanOrEqual(checked);
   });
 
+  // W2c Task 17, fix round 1 (review M-4): the stage editor holds a decider's detail (the kicks of a shoot-out, the minutes
+  // of an overtime) while its decider is off, and reads the pairing from the engine's `detailOf`. The expected pairs are the
+  // rulebook's: FB-SO-1 (the kicks are the penalty shoot-out's) and the period kernel's own comment (the overtime and the
+  // shoot-out are stage objects whose LENGTH leaves a match may lower).
+  const DETAILS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+    football: { shootoutAttempts: "shootout" },
+    hockey: { "shootout.attempts": "shootout" },
+    icehockey: { "overtime.minutes": "overtime", "shootout.attempts": "shootout" },
+  };
+
+  it("every bounded key is a whole decider or the detail of one: `detailOf` names a declared decider of the same sport, and the pairs are the rulebook's (counted)", () => {
+    let bounded = 0;
+    let details = 0;
+    for (const m of builtinModules) {
+      for (const [key, fact] of deciders(m)) {
+        bounded++;
+        if (fact.decider === true) expect(fact.detailOf, `${m.key}.${key}: a whole decider is not a detail`).toBeUndefined();
+        else expect(fact.detailOf, `${m.key}.${key}: a bounded key that is not a decider is a detail of one`).toBeDefined();
+      }
+      const declared: Record<string, string> = {};
+      for (const [key, fact] of Object.entries(m.ruleKeys ?? {})) {
+        if (fact.detailOf === undefined) continue;
+        expect(m.ruleKeys![fact.detailOf]?.decider, `${m.key}.${key} -> ${fact.detailOf} is a declared whole decider`).toBe(true);
+        declared[key] = fact.detailOf;
+        details++;
+      }
+      expect(declared, `${m.key}: the declared pairs`).toEqual(DETAILS[m.key] ?? {});
+    }
+    expect(bounded).toBe(deciderCount());
+    expect(details).toBe(Object.values(DETAILS).reduce((n, d) => n + Object.keys(d).length, 0));
+    expect(details).toBeGreaterThan(0);
+  });
+
   it("Q5 (rulebook): each sport's match, stage and points keys are exactly Q5's lists plus the plan's, restricted to its schema", () => {
     let sports = 0;
     const counts: Record<RuleScope, number> = { match: 0, stage: 0, points: 0 };

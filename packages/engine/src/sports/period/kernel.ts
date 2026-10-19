@@ -1829,8 +1829,8 @@ export function periodKeeperStatsFold(
  */
 export const PERIOD_RULE_KEYS: RuleKeys = {
   "periods.minutes": { scope: "match" },
-  "overtime.minutes": { scope: "match", matchBound: "shorter" },
-  "shootout.attempts": { scope: "match", matchBound: "shorter" },
+  "overtime.minutes": { scope: "match", matchBound: "shorter", detailOf: "overtime" },
+  "shootout.attempts": { scope: "match", matchBound: "shorter", detailOf: "shootout" },
   overtime: { scope: "stage", decider: true },
   shootout: { scope: "stage", decider: true },
   points: { scope: "points" },

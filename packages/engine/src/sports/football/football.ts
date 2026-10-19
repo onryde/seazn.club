@@ -2581,7 +2581,7 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
     // FB-SO-1 / X-SR-2 — the kicks per side differ per stage (youth 3) and a match may only shorten them. A stage that
     // carries no value (one created before the key existed) plays SHOOTOUT_ATTEMPTS_DEFAULT, so that is what the bound
     // compares against - an absent key is not "off" (fix round 1, ruling).
-    shootoutAttempts: { scope: "match", matchBound: "shorter", whenAbsent: SHOOTOUT_ATTEMPTS_DEFAULT },
+    shootoutAttempts: { scope: "match", matchBound: "shorter", whenAbsent: SHOOTOUT_ATTEMPTS_DEFAULT, detailOf: "shootout" },
     teamSize: { scope: "stage" },
     maxSubs: { scope: "stage" },
     subWindows: { scope: "stage" },
