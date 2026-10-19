@@ -40,7 +40,7 @@ import { autoStopApplies, autoStopVerdict, type PhoneMode } from "@/server/relay
 import { codeStatus } from "@/server/relay/domain/stream-code";
 import { InvalidRunnerTransition, machineNameFor, stoppedBeatTrigger, type ExitInfo, type RunnerEffect } from "@/server/relay/domain/runner";
 import { evaluate, runnerDeadlineOf, warmingTimedOut, type Expiry } from "@/server/relay/domain/expiry";
-import { type Ask10Phone, livePhoneLost, lostCountdown, warmingPhoneLost } from "@/server/relay/domain/phone-lost";
+import { type Ask10Phone, composedCameraGone, composedCameraLost, livePhoneLost, lostCountdown, phoneSilentFor, warmingPhoneLost } from "@/server/relay/domain/phone-lost";
 import { headroomAfterReservations, reservationMinutes } from "@/server/relay/domain/credits";
 import { composedUnavailable, relayDrivers, type RelayDrivers } from "@/server/relay/drivers";
 import { createFailureOf, createRefusedBeforeCall, type IngestProtocol, type IngestState, type OutputState, type RunnerSpec, type StorageUsage } from "@/server/relay/ports";
@@ -1980,8 +1980,11 @@ export async function lastConnectedSampleAt(exec: Tx | typeof sql, sessionId: st
  *    expire warming_timeout at warming_at + WARMING_TIMEOUT_MINUTES (`warmingTimedOut`, evaluate's own clock). Composed
  *    is excluded by name: a composed session never records first ingest (only the passthrough poll writes it), so the
  *    rule would end every composed broadcast at its warming deadline — and the domain refuses that cell anyway.
- *  - ask 10 (§6.8.3) and W19 (§6.8.5): the domain's own predicates, with the tunable timings (§6.15). */
-function phoneLostEnd(s: Session, f: PhoneFacts, fresh: IngestState | undefined, now: Date): { command: Command; rule: "m-5" | "ask-10" | "w19" } | null {
+ *  - ask 10 (§6.8.3) and W19 (§6.8.5): the domain's own predicates, with the tunable timings (§6.15).
+ *  - R2008: a COMPOSED live session is judged by the composed W19 (`composedCameraLost`) on `camera`, the compositor's own
+ *    evidence (`cameraFactsOf`), and `fresh`, this tick's read of the camera's input (`readCameraWord`). The same `stop
+ *    phone_lost` as W19's: the organiser's copy, the credit and the reservation are the ones any composed end gets. */
+function phoneLostEnd(s: Session, f: PhoneFacts, fresh: IngestState | undefined, now: Date, camera: CameraFacts | null = null): { command: Command; rule: "m-5" | "ask-10" | "w19" | "w19-composed" } | null {
   if (isTerminal(s.state)) return null;
   if (!f.has_phone) return null;   // C-1: no phone, no phone rules — the session keeps today's expiry and runner ends
   if (s.mode === "passthrough" && s.state === "live" && f.first_ingest_at === null && warmingTimedOut(s, now)) {
@@ -1997,7 +2000,50 @@ function phoneLostEnd(s: Session, f: PhoneFacts, fresh: IngestState | undefined,
     state: s.state, firstIngestAt: f.first_ingest_at, phoneBeatAt: f.phone_beat_at,
     freshReadConnected: fresh === "connected", lastConnectedSampleAt: f.last_connected_at,
   }, now, tunable("PHONE_LOST_LIVE_MINUTES", PHONE_LOST_LIVE_MINUTES))) return { command: { type: "stop", reason: "phone_lost" }, rule: "w19" };
+  if (s.mode === "composed" && camera !== null && fresh !== undefined && fresh !== "unknown" && composedCameraLost({
+    state: s.state, phoneBeatAt: f.phone_beat_at, liveOnceAt: camera.live_once_at, reconnectingSince: camera.reconnecting_since,
+    freshReadConnected: fresh === "connected",
+  }, now, tunable("PHONE_LOST_LIVE_MINUTES", PHONE_LOST_LIVE_MINUTES))) return { command: { type: "stop", reason: "phone_lost" }, rule: "w19-composed" };
   return null;
+}
+
+/** R2008: what the compositor's beats say about the camera, from the `programme_phase` log (`logProgrammePhase`) — the
+ *  composed stream's own evidence, as `first_ingest_at` and the connected samples are the passthrough stream's.
+ *  - `live_once_at`: the first beat, of any attempt, that reported `live` (null: the camera was never in).
+ *  - `reconnecting_since`: when the CURRENT attempt's phase became `reconnecting`, IF that is its latest phase; null when
+ *    the latest phase is anything else (a phase the compositor left, `frozen`, `final`, none reported) or was last
+ *    written by another attempt. One statement (one snapshot); `exec` is apply's tx when re-taken under the row lock,
+ *    where it reads every beat stored before the lock was granted. */
+type CameraFacts = { live_once_at: Date | null; reconnecting_since: Date | null };
+async function cameraFactsOf(exec: Tx | typeof sql, sessionId: string): Promise<CameraFacts> {
+  const [f] = await exec<CameraFacts[]>`
+    select (select min(e.occurred_at) from fixture_stream_events e
+             where e.session_id = s.id and e.type = ${PROGRAMME_PHASE_EVENT} and e.to_state = 'live') as live_once_at,
+           case when l.to_state = 'reconnecting' and l.attempt = s.runner_attempts then l.occurred_at end as reconnecting_since
+      from fixture_stream_sessions s
+      left join lateral (select e.to_state, e.occurred_at, e.attempt from fixture_stream_events e
+                          where e.session_id = s.id and e.type = ${PROGRAMME_PHASE_EVENT} order by e.seq desc limit 1) l on true
+     where s.id = ${sessionId}`;
+  return f ?? { live_once_at: null, reconnecting_since: null };
+}
+
+/** R2008: the composed W19's third clause — one fresh read of the CAMERA's input (A; the programme, B, is the compositor's
+ *  own output and says nothing of the phone). Made only once the phone has been silent and the camera gone for the whole
+ *  limit (`endIfPhoneLost`), so a healthy stream costs no Cloudflare call, and through the same claim window as the
+ *  organiser's passthrough poll (`claimIngestPoll`: a tick that does not hold the claim reads nothing and decides nothing).
+ *  Undefined = no fresh word: no input row, no claim, a read that threw (reported once, N1) or one with no evidence. The
+ *  read records no sample and no event and never writes first ingest — a composed session never has one. */
+async function readCameraWord(row: Row, deps: SessionDeps): Promise<IngestState | undefined> {
+  const input = (await sql.begin((tx) => readFirstInput(tx, row.id))) as Awaited<ReturnType<typeof readFirstInput>>;
+  const inputId = input?.ingestInputId ?? null;
+  if (!inputId) return undefined;
+  if (!(await claimIngestPoll(row.id, deps.now()))) return undefined;
+  try {
+    return (await deps.drivers.ingest.inputStatus(inputId, { sessionId: row.id })).state ?? undefined;
+  } catch (err) {
+    reportIngestReadFailure(err, { sessionId: row.id, orgId: row.org_id, inputUid: inputId, site: "poll" });
+    return undefined;
+  }
 }
 
 /** Ask 10's phone, from the facts: ONE mapping for the tick's end and the W24 countdown, so the countdown names the
@@ -2015,11 +2061,25 @@ function ask10PhoneOf(f: PhoneFacts): Ask10Phone {
  *  "two ticks AT ONCE"). A row that moved on answers null and nothing is written. */
 async function endIfPhoneLost(row: Row, fresh: IngestState | undefined, deps: SessionDeps, cause: "poll" | "beat" | "sweep"): Promise<Row> {
   const facts = await phoneFactsOf(sql, row.id);
-  if (!facts || phoneLostEnd(toSession(row), facts, fresh, deps.now()) === null) return row;
+  if (!facts) return row;
+  // R2008: a composed live session with a phone is judged on the compositor's evidence, and its camera's input is read ONLY
+  // when everything but that read already says the camera is gone (the phone silent, the phase `reconnecting` for the whole
+  // limit) — in order, cheapest first: the phone's beat is on the facts above, and the phase log is read only once it is old.
+  const composed = row.mode === "composed" && row.state === "live" && facts.has_phone;
+  const lostMinutes = tunable("PHONE_LOST_LIVE_MINUTES", PHONE_LOST_LIVE_MINUTES);
+  let camera: CameraFacts | null = null;
+  if (composed && (facts.phone_beat_at === null || phoneSilentFor(facts.phone_beat_at, null, deps.now(), lostMinutes))) {
+    camera = await cameraFactsOf(sql, row.id);
+    if (composedCameraGone({ state: row.state, phoneBeatAt: facts.phone_beat_at, liveOnceAt: camera.live_once_at, reconnectingSince: camera.reconnecting_since }, deps.now(), lostMinutes)) {
+      fresh = await readCameraWord(row, deps);
+    }
+  }
+  if (phoneLostEnd(toSession(row), facts, fresh, deps.now(), camera) === null) return row;
   let rule: string | null = null;
   await apply(row.id, async (s, tx) => {
     const locked = await phoneFactsOf(tx, s.id);
-    const end = locked ? phoneLostEnd(s, locked, fresh, deps.now()) : null;
+    const lockedCamera = s.mode === "composed" && camera !== null ? await cameraFactsOf(tx, s.id) : null;
+    const end = locked ? phoneLostEnd(s, locked, fresh, deps.now(), lockedCamera) : null;
     rule = end?.rule ?? null;
     return end?.command ?? null;
   }, deps);
@@ -2322,6 +2382,27 @@ async function beatSecretsOf(sessionId: string, mode: string, token: string): Pr
   }
 }
 
+/** R2008 (owner ruling 2026-10-19): the type of the event the beat route writes when the compositor's programme phase
+ *  CHANGES — what the composed phone-lost rule (`cameraFactsOf`, below) reads. */
+const PROGRAMME_PHASE_EVENT = "programme_phase";
+
+/** R2008: one `programme_phase` event per CHANGE of the phase the compositor reports, written in the transaction that stores
+ *  the beat, under the row lock — so the log and `last_heartbeat` cannot disagree, and the tick's locked re-take reads a
+ *  log that already holds every beat stored before it took the lock. `from` is the phase the STORED beat carried (whatever
+ *  attempt wrote it) and `to` this beat's, null for a beat that reports none: a Machine that stops reporting a phase has
+ *  stopped saying `reconnecting`, which must end that run (the safe direction). Keyed to the beat's attempt by the typed
+ *  `attempt` column — only the CURRENT attempt's phase is a claim about the camera now; a superseded beat never gets here
+ *  (it returns before the write, #983 r1), so a stray Machine's `live` or `reconnecting` is no evidence either way.
+ *  Why a log of changes and not the beat samples: a sample carries no attempt (`raw` is the whole body, pinned so), is written
+ *  after the beat's lock is released, and stops at SAMPLES_PER_SESSION_CAP; an event has none of those three faults. */
+async function logProgrammePhase(tx: Tx, cur: Row, beat: RelayHeartbeat, at: Date): Promise<void> {
+  const stored = typeof cur.last_heartbeat?.programmePhase === "string" ? cur.last_heartbeat.programmePhase : null;
+  const phase = beat.programmePhase ?? null;
+  if (phase === stored) return;
+  await recordEvent(tx, { sessionId: cur.id, orgId: cur.org_id, source: "runner", kind: "observed", type: PROGRAMME_PHASE_EVENT,
+    from: stored, to: phase, attempt: cur.runner_attempts, occurredAt: at });
+}
+
 export async function heartbeat(sessionId: string, token: string, body: RelayHeartbeat, deps: SessionDeps): Promise<{ desiredState: "live" | "ending" }> {
   const { att } = await verifyRelayToken(token, { sid: sessionId, scope: "relay-job" });
   // R2002 review Q3: the Machine's free text is scrubbed before EITHER store keeps it (its job token, anything
@@ -2363,6 +2444,7 @@ export async function heartbeat(sessionId: string, token: string, body: RelayHea
       return { row: cur, superseded: false, previousRung };
     }
     const egress = beat.egressBytes ?? null;
+    if (cur.mode === "composed") await logProgrammePhase(tx, cur, beat, deps.now());   // R2008: with the stored beat, under its lock
     await tx`update fixture_stream_sessions set last_heartbeat = ${sql.json(beat as never)}, heartbeat_at = ${deps.now()},
                egress_bytes = case when ${thisAttempt}::boolean then greatest(${egress}::bigint, egress_bytes)
                                    else coalesce(${egress}::bigint, egress_bytes) end
