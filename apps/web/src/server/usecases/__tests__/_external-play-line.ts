@@ -1,6 +1,7 @@
 // Test helpers for the check-in line (spec §5.7): the ledger's rows read and written as the TEST'S setup, a bucket of a stated
 // level at a stated instant, and a base URL that is a bucket of its own. Setup only - a line under test is built by real claims;
 // a row written here stands for "somebody else already waiting", which no test of a gate can build without a second player.
+import { randomUUID } from "node:crypto";
 import { vi } from "vitest";
 import { sql } from "@/lib/db";
 import { currentBudgetKey } from "@/server/external-play/video/realtimekit";
@@ -60,13 +61,15 @@ export async function setBucket(key: string, tokens: number, asOf: Date): Promis
     on conflict (key) do update set tokens = excluded.tokens, refilled_at = excluded.refilled_at`;
 }
 
-let bases = 0;
-/** A vendor base that is a bucket - and so a LINE - of its own: the host's port is unique per call within a run and across
- *  files (the run id is mixed in), so a test never shares a line with another test or with the platform's default key. */
+/** A vendor base that is a bucket - and so a LINE - of its own. The bucket's key IS the base (budget.ts `budgetKey`), so a repeated
+ *  base puts two scenes on one line, each reading the other's stays. A UUID in the host is unique across calls, files and
+ *  processes alike; the port this used to draw at random out of 40 000 repeated inside a 36-scene test in ~3% of runs, and CI saw
+ *  a "served" stay read the previous scene's live one (external-play-line-unique-base.test.ts).
+ *
+ *  `.test` is reserved (RFC 2606) and never resolves; nothing dials the base (the fake vendor is the adapter's `fetch`), and a
+ *  stray dial would fail rather than reach a real host. The path stays `/client/v4`: the fake vendor strips that prefix. */
 export function uniqueBase(): string {
-  bases += 1;
-  const port = 20_000 + ((process.pid * 7 + bases * 131 + Math.floor(Math.random() * 20_000)) % 40_000);
-  return `http://127.0.0.1:${port}/client/v4`;
+  return `http://${randomUUID()}.rtk.test/client/v4`;
 }
 
 /** Point the adapter at `base` (default: a fresh one) and meter it, returning the bucket's key. RealtimeKit must be configured
@@ -86,7 +89,6 @@ export async function clearBucket(key: string): Promise<void> {
 }
 
 // ─── A gate-level scene: one bucket, boards seeded on demand, claims at a stated instant ─────────────────────────────────
-import { randomUUID } from "node:crypto";
 import { boardAnchor } from "@/server/external-play/window";
 import { gateClaim, type GateAnswer, type GateAsk } from "@/server/external-play/seat-line";
 import { seedOnlineChessFixture } from "./_external-play-seed";
