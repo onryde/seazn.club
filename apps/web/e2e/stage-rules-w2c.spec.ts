@@ -301,13 +301,14 @@ test("generic: 'share the points' is offered only where draws are allowed, and a
   await openEditor(row);
   const abandon = row.getByTestId("stage-rule-field-abandonPolicy");
   await expect(abandon).toBeVisible();
-  await expect(abandon.locator('option[value="share"]')).toBeDisabled();
+  // The DOM property, not Playwright's toBeDisabled: that matcher does not report an <option> as disabled.
+  await expect(abandon.locator('option[value="share"]')).toHaveJSProperty("disabled", true);
   await expect(row.getByTestId("stage-abandon-unavailable-share")).toContainText(L["stageRules.abandon.shareNeedsDraws"]!);
   // the score variant allows draws: share is a real choice, and no reason is shown.
   const draws = await seedStage(request, "generic", { label: "abandon-on", kind: "league", variant: "score" });
   const row2 = await openRow(page, request, draws.divisionId, draws.stageId);
   await openEditor(row2);
-  await expect(row2.getByTestId("stage-rule-field-abandonPolicy").locator('option[value="share"]')).toBeEnabled();
+  await expect(row2.getByTestId("stage-rule-field-abandonPolicy").locator('option[value="share"]')).toHaveJSProperty("disabled", false);
   await expect(row2.getByTestId("stage-abandon-unavailable-share")).toHaveCount(0);
   await row2.getByTestId("stage-rule-field-abandonPolicy").locator("select").selectOption("share");
   await row2.getByTestId("stage-format-save").click();

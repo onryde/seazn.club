@@ -7,7 +7,7 @@ import { BRACKET_KINDS, DRAW_KINDS, StageKind } from "@seazn/engine/core";
 import { bracketMayEndLevel, deciderKeysFor, stageDefaultsFor, stageKeysFor, type AnySportModule } from "@seazn/engine/sport";
 import { declaredCfgs } from "@seazn/engine/testkit";
 import { SPORT_RULES } from "@/lib/match-rules";
-import { describeDeciders } from "@/server/public-site/describe-rules";
+import { DECIDER_DESCRIBED_KEYS, deciderIsOn, describeDeciders } from "@/server/public-site/describe-rules";
 import { decidersOffRules } from "@/lib/stage-decider-off";
 import {
   abandonOptionStates,
@@ -184,6 +184,21 @@ describe("the notice and the public line agree, and the engine's declaration say
     expect(checked).toBeGreaterThan(builtinModules.length);
     const badminton = sport("badminton");
     expect(deciderNotice(badminton, "knockout", badminton.configSchema.parse(Object.values(badminton.variants)[0]) as Record<string, unknown>)).toBeNull();
+  });
+});
+
+describe("deciderIsOn - the one on/off table the notice and the public line share", () => {
+  it("an undeclared decider is never read as off, and a known one follows its own cfg (positive pair, counted)", () => {
+    // The guard under test: a decider no describer knows may be what settles a match, so it is never "off".
+    expect(DECIDER_DESCRIBED_KEYS, "premise: the describer table knows some deciders").not.toContain("someFutureDecider");
+    expect(deciderIsOn(football, "someFutureDecider", {})).toBe(true);
+    // The positive pair: the keys it DOES know are on or off by their cfg.
+    const parsed = (m: AnySportModule, over: Record<string, unknown>) => m.configSchema.parse({ ...Object.values(m.variants)[0], ...over }) as Record<string, unknown>;
+    expect(deciderIsOn(football, "shootout", parsed(football, { shootout: false }))).toBe(false);
+    expect(deciderIsOn(football, "shootout", parsed(football, { shootout: true }))).toBe(true);
+    expect(deciderIsOn(chess, "tiebreakRungs", parsed(chess, { tiebreakRungs: [] }))).toBe(false);
+    expect(deciderIsOn(chess, "tiebreakRungs", parsed(chess, { tiebreakRungs: ["blitz"] }))).toBe(true);
+    expect(DECIDER_DESCRIBED_KEYS.length, "the table has entries to be asked about").toBeGreaterThan(0);
   });
 });
 

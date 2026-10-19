@@ -73,7 +73,7 @@ export function SequenceField({
         <ol className="divide-y divide-slate-100">
           {items.map((v, i) => (
             <li key={v} data-testid={`${testId}-item-${i}`} className="flex items-center gap-1 pl-3 pr-1">
-              <span className="min-w-0 flex-1 truncate py-2 text-sm text-slate-800">{labelOf(v)}</span>
+              <span className="min-w-0 flex-1 break-words py-2 text-sm leading-snug text-slate-800">{labelOf(v)}</span>
               <button
                 type="button"
                 className={BUTTON}
@@ -115,7 +115,7 @@ export function SequenceField({
         <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 px-2 py-2">
           {remaining.length > 0 && (
             <select
-              className="select min-h-11 min-w-0 flex-1"
+              className="select min-h-11 min-w-[10rem] flex-1"
               aria-label={`${field.label}: ${msg("stageRules.sequence.add")}`}
               data-testid={`${testId}-add`}
               disabled={disabled}
