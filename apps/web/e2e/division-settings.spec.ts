@@ -475,9 +475,14 @@ test.describe("online chess: the division's camera group (Task 6's owed browser 
     await gotoSettings(page, rig.settings);
     // The Format group's title in French, then the clock fields (sport-rules vocabulary: English in every locale).
     await page.getByRole("button", { name: new RegExp(escapeRe(uiString("fr", "divset.format"))) }).first().click();
-    await page.getByTestId("division-online-play").selectOption("lichess");
+    // Online play is still Off, so the free clock fields are there: type a 1+0 the server will refuse. THEN turn
+    // Lichess on — the picker takes the fields' place, finds none of the supported controls in the typed clock, and
+    // says so (item 2, 2026-10-19: with Lichess the clock is a picker, not three free inputs).
     await page.getByRole("spinbutton", { name: "Time per side (minutes)" }).fill("1");
     await page.getByRole("spinbutton", { name: "Increment per move (seconds, Fischer)" }).fill("0");
+    await page.getByTestId("division-online-play").selectOption("lichess");
+    await expect(page.getByTestId("division-time-control"), "a typed 1+0 is none of the supported controls").toHaveValue("");
+    await expect(page.getByText(uiString("fr", "divset.timeControl.unsupported"))).toBeVisible();
     await page.getByRole("button", { name: uiString("fr", "divset.saveRules") }).click();
     await expect(page.getByText(uiString("fr", "divset.err.timeControlUnsupported", { controls: SHIP_1_CLOCKS.join(", ") }))).toBeVisible({
       timeout: 15_000,
@@ -485,6 +490,61 @@ test.describe("online chess: the division's camera group (Task 6's owed browser 
     const stored = await apiJson<{ config: { onlinePlay?: string; clock?: unknown } }>(request, `/api/v1/divisions/${rig.divisionId}`);
     expect(stored.data?.config.onlinePlay, "the refused save wrote nothing").toBeUndefined();
     expect(stored.data?.config.clock).toEqual({ base: 600, increment: 5 });
+  });
+
+  test("online play = Lichess: the clock is ONE picker of the supported controls; choosing saves, a reopen keeps it, Off brings the free fields back (item 2)", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(120_000);
+    const errors = pageErrors(page);
+    // 10+5 stored, online play OFF: the free fields are there to begin with.
+    const rig = await seedChessDivision(request, page, { online: false });
+    await gotoSettings(page, rig.settings);
+    await page.getByRole("button", { name: /Format/ }).click();
+    const freeFields = ["Time per side (minutes)", "Increment per move (seconds, Fischer)", "Move delay (seconds, Bronstein/US delay)"];
+    for (const name of freeFields) await expect(page.getByRole("spinbutton", { name }), `Off: ${name}`).toBeVisible();
+    await expect(page.getByTestId("division-time-control"), "Off: no picker").toHaveCount(0);
+
+    // Lichess: one select, opened on the stored clock; the free inputs (and the family field) give way to it.
+    await page.getByTestId("division-online-play").selectOption("lichess");
+    const picker = page.getByTestId("division-time-control");
+    await expect(picker).toBeVisible();
+    await expect(picker, "opens on the stored 10+5").toHaveValue("10+5");
+    for (const name of freeFields) await expect(page.getByRole("spinbutton", { name }), `Lichess: ${name}`).toHaveCount(0);
+    await expect(page.getByText("Clock family", { exact: true })).toHaveCount(0);
+    // The options are the supported controls — the same list the server's refusal names (test 8 above reads it from there).
+    const values = await picker.locator("option").evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value));
+    expect(values).toEqual(SHIP_1_CLOCKS);
+    const labels = await picker.locator("option").allTextContents();
+    expect(labels, "each option names its clock family").toContain(`5+3 \u00b7 ${uiString("en", "variant.boardgame.blitz")}`);
+    expect(labels).toContain(`10+5 \u00b7 ${uiString("en", "variant.boardgame.rapid")}`);
+
+    // Choose 5+3. Lichess -> Off: the free inputs return carrying the pick (the same form fields); -> Lichess again: still 5+3.
+    await picker.selectOption("5+3");
+    await page.getByTestId("division-online-play").selectOption("off");
+    await expect(page.getByTestId("division-time-control")).toHaveCount(0);
+    await expect(page.getByRole("spinbutton", { name: freeFields[0]! })).toHaveValue("5");
+    await expect(page.getByRole("spinbutton", { name: freeFields[1]! })).toHaveValue("3");
+    await page.getByTestId("division-online-play").selectOption("lichess");
+    await expect(page.getByTestId("division-time-control")).toHaveValue("5+3");
+
+    // Save: the same fields the free inputs write (seconds), the family follows, Lichess on.
+    await page.getByRole("button", { name: uiString("en", "divset.saveRules") }).click();
+    await expect(page.getByText("Match rules saved.")).toBeVisible({ timeout: 15_000 });
+    const stored = await apiJson<{ config: { onlinePlay?: string; variant?: string; clock?: unknown } }>(
+      request,
+      `/api/v1/divisions/${rig.divisionId}`,
+    );
+    expect(stored.data?.config.clock).toEqual({ base: 300, increment: 3 });
+    expect(stored.data?.config.variant).toBe("blitz");
+    expect(stored.data?.config.onlinePlay).toBe("lichess");
+
+    // Reopen: the saved control is the one selected.
+    await gotoSettings(page, rig.settings);
+    await page.getByRole("button", { name: /Format/ }).click();
+    await expect(page.getByTestId("division-time-control")).toHaveValue("5+3");
+    expect(errors).toEqual([]);
   });
 
   test("Required, in all four languages: the notice verbatim and nothing says monitored (11); no page scroll at 320/768/1280 in es and fr (10); axe on the open group (M-7a); the collapsed summary at 320 (M-7b)", async ({

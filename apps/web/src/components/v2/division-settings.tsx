@@ -14,6 +14,12 @@ import { ONLINE_CHESS_DISABLED_CODE } from "@/lib/online-chess";
 import { CAMERA_POLICIES, type CameraPolicy } from "@/lib/camera-policy";
 import { MatchRuleFields, buildRuleOverride, hydrateRuleValues, SPORT_RULES } from "./match-rules";
 import {
+  LICHESS_CLOCK_FIELD_KEYS,
+  selectedTimeControlKey,
+  timeControlOptions,
+  timeControlRuleValues,
+} from "@/lib/online-time-control";
+import {
   STAGE_TEMPLATES,
   applyStandingsCarry,
   buildTemplateStages,
@@ -528,6 +534,11 @@ export function DivisionSettings({
   const storedCameraChoice = cameraChoiceOf(ownCamera);
   const cameraOptions = cameraSelectOptions(msg);
   const onlinePlaySaved = cfg.onlinePlay === "lichess";
+  // While Online play is Lichess (the form's state, not the saved one) the clock is ONE select of the supported time
+  // controls instead of free time/increment/delay inputs. Which option it shows is decided by the form values, else the
+  // saved clock; "" (none of them) renders a prompt, never the first option. See lib/online-time-control.ts.
+  const lichessClock = division.sport_key === "boardgame" && onlinePlay === "lichess";
+  const timeControl = lichessClock ? selectedTimeControlKey(ruleValues, division.config) : "";
   const [cameraChoice, setCameraChoice] = useState<CameraChoice>(storedCameraChoice);
   const cameraHint = cameraInheritHint(cameraChoice, storedCameraChoice, inheritedCamera, msg);
   // Same derive-from-props resync as the config block above: a saved change
@@ -1099,6 +1110,35 @@ export function DivisionSettings({
               </div>
             )}
 
+            {lichessClock && (
+              <div>
+                <label className="block text-xs text-slate-500">
+                  {msg("divset.timeControl.label")}
+                  <select
+                    disabled={!canEdit}
+                    value={timeControl}
+                    onChange={(e) => {
+                      const picked = timeControlRuleValues(e.target.value);
+                      if (picked) setRuleValues({ ...ruleValues, ...picked });
+                    }}
+                    className="input mt-1 w-full"
+                    data-testid="division-time-control"
+                  >
+                    {timeControl === "" && <option value="">{msg("divset.timeControl.choose")}</option>}
+                    {timeControlOptions(msg).map((o) => (
+                      <option key={o.key} value={o.key}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <p className="mt-1 text-[11px] text-slate-500">{msg("divset.timeControl.help")}</p>
+                {timeControl === "" && (
+                  <p className="mt-1 text-[11px] text-amber-700">{msg("divset.timeControl.unsupported")}</p>
+                )}
+              </div>
+            )}
+
             {pointsFieldKeys.length > 0 && (
               <div>
                 <p className="text-xs text-slate-500">{msg("divset.standingsPoints")}</p>
@@ -1127,6 +1167,7 @@ export function DivisionSettings({
               onChange={setRuleValues}
               disabled={!canEdit}
               inherited={(division.config as Record<string, unknown>) ?? {}}
+              omit={lichessClock ? LICHESS_CLOCK_FIELD_KEYS : undefined}
             />
 
             {stages.length > 0 && (

@@ -75,18 +75,24 @@ export const SHIP1_TIME_CONTROLS: readonly TimeControl[] = Object.freeze([
   Object.freeze({ key: "15+10", limitSeconds: 900, incrementSeconds: 10 }),
 ]);
 
-/** The setup gate, on the clock as the division stores it. The CATALOGUE is
- *  the gate, not the formula: a clock can satisfy both measured rules and
- *  still be refused, because §3.7 permits only the curated list. Matched on
- *  the mapped numbers with `===`, so a missing clock, a delay clock, a NaN or
- *  a value that drifted to a string in stored JSON matches nothing. */
-export function assertTimeControl(clock: BoardgameClockInput | undefined): TimeControl {
+/** The catalogue entry a stored clock IS, or undefined. The one predicate behind the setup gate AND the settings
+ *  screen's picker (which must open on exactly the control the gate would accept, so it reads this rather than
+ *  re-deriving the match). Matched on the mapped numbers with `===`, so a missing clock, a delay clock, a NaN or a
+ *  value that drifted to a string in stored JSON matches nothing. */
+export function findTimeControl(clock: BoardgameClockInput | undefined): TimeControl | undefined {
   const mapped = mapBoardgameClockToLichess(clock);
-  const found = mapped.ok
+  return mapped.ok
     ? SHIP1_TIME_CONTROLS.find(
       (tc) => tc.limitSeconds === mapped.clock.limit && tc.incrementSeconds === mapped.clock.increment,
     )
     : undefined;
+}
+
+/** The setup gate, on the clock as the division stores it. The CATALOGUE is
+ *  the gate, not the formula: a clock can satisfy both measured rules and
+ *  still be refused, because §3.7 permits only the curated list. */
+export function assertTimeControl(clock: BoardgameClockInput | undefined): TimeControl {
+  const found = findTimeControl(clock);
   if (!found) {
     const controls = SHIP1_TIME_CONTROLS.map((t) => t.key);
     throw new HttpError(

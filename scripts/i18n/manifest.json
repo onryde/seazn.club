@@ -2177,7 +2177,11 @@
     "pay.save": "1509f561f2416598",
     "pay.saved": "fca046ccd586c67f",
     "pay.saveFailed": "2c07997249abaa76",
-    "billing.poweredByStripe": "7c3b00ad21d08c24"
+    "billing.poweredByStripe": "7c3b00ad21d08c24",
+    "divset.timeControl.label": "7346a5e76a21ad99",
+    "divset.timeControl.choose": "a166205906c66804",
+    "divset.timeControl.help": "eccaf70fd1bad208",
+    "divset.timeControl.unsupported": "a495305af1926920"
   },
   "fr": {
     "app.name": "fb56d648fbb9ae92",
@@ -4357,7 +4361,11 @@
     "pay.save": "1509f561f2416598",
     "pay.saved": "fca046ccd586c67f",
     "pay.saveFailed": "2c07997249abaa76",
-    "billing.poweredByStripe": "7c3b00ad21d08c24"
+    "billing.poweredByStripe": "7c3b00ad21d08c24",
+    "divset.timeControl.label": "7346a5e76a21ad99",
+    "divset.timeControl.choose": "a166205906c66804",
+    "divset.timeControl.help": "eccaf70fd1bad208",
+    "divset.timeControl.unsupported": "a495305af1926920"
   },
   "nl": {
     "app.name": "fb56d648fbb9ae92",
@@ -6537,6 +6545,10 @@
     "pay.save": "1509f561f2416598",
     "pay.saved": "fca046ccd586c67f",
     "pay.saveFailed": "2c07997249abaa76",
-    "billing.poweredByStripe": "7c3b00ad21d08c24"
+    "billing.poweredByStripe": "7c3b00ad21d08c24",
+    "divset.timeControl.label": "7346a5e76a21ad99",
+    "divset.timeControl.choose": "a166205906c66804",
+    "divset.timeControl.help": "eccaf70fd1bad208",
+    "divset.timeControl.unsupported": "a495305af1926920"
   }
 }
