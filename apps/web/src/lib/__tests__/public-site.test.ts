@@ -1,5 +1,6 @@
 // Pure helpers for the public dashboard (PROMPT-12).
 import { describe, expect, it } from "vitest";
+import fc from "fast-check";
 import {
   isReservedSlug,
   buildIcs,
@@ -506,17 +507,78 @@ describe("teamShortOf / personShortCandidates / disambiguatedShorts (R11 fix rou
     }
   });
 
-  it("disambiguatedShorts: TEAM entrants keep today's behaviour unconditionally (out of C9's scope) — no widening even if they collided", () => {
+  // This pin used to read the OPPOSITE way — "TEAM entrants keep today's behaviour unconditionally, no widening even if
+  // they collided", Blazers United / Blazers Town -> BLA / BLA — and said so "so a future change to the team rule is a
+  // deliberate decision". This is that decision (fix/overlay-team-code-disambiguation): the stream overlay takes its side
+  // codes from this function (owner ruling 2026-10-19: one implementation), and an overlay that airs "HAR won 4–3 on
+  // penalties" between Harlow and Harrow has not said who won. C9's own words were "team entrants keep today's
+  // behaviour WHERE IT ALREADY DISAMBIGUATES": every team pair that already differs still reads exactly as before (the
+  // sweep below counts them); only a colliding pair widens.
+  it("disambiguatedShorts: two TEAMS that collide under the team rule widen until they differ ('Blazers United'/'Blazers Town' no longer both 'BLA')", () => {
+    expect(teamShortOf("Blazers United"), "premise: the team rule alone collides").toBe(teamShortOf("Blazers Town"));
     const [home, away] = disambiguatedShorts(
       { name: "Blazers United", isPerson: false },
       { name: "Blazers Town", isPerson: false },
     );
-    // Both compact to "BLA" under the unchanged team rule — this is NOT
-    // fixed by C9 (team entrants "keep today's behaviour where it already
-    // disambiguates"); pinned here so a future change to the team rule is a
-    // deliberate decision, not an accidental side effect of this one.
-    expect(home).toBe("BLA");
-    expect(away).toBe("BLA");
+    expect(home).not.toBe(away);
+  });
+
+  // The team ladder's rungs, each as `teamShortCandidates` declares it: the team rule, then one letter wider, then the
+  // first word's initial with the second word's first two letters.
+  it("disambiguatedShorts: colliding TEAMS take the first rung where they differ — one letter wider, then initial + second word", () => {
+    // One word each, sharing three letters: the fourth letter is the first that differs.
+    expect(disambiguatedShorts({ name: "Harlow", isPerson: false }, { name: "Harrow", isPerson: false })).toEqual(["HARL", "HARR"]);
+    // Sharing their whole first word: one letter wider still collides, the second word does not.
+    expect(disambiguatedShorts({ name: "Manchester United", isPerson: false }, { name: "Manchester City", isPerson: false })).toEqual(["MUN", "MCI"]);
+    // One-word against multi-word, sharing a first word: the one-word side has no second word to draw on and stays on
+    // its widest rung, while the other side moves to its initials.
+    const [solo, town] = disambiguatedShorts({ name: "Harlow", isPerson: false }, { name: "Harlow Town", isPerson: false });
+    expect(solo).not.toBe(town);
+    expect([solo, town]).toEqual(["HARL", "HTO"]);
+  });
+
+  it("disambiguatedShorts: identical TEAM names (and names identical only after normalisation) take the positional tie-break, still a badge-width label", () => {
+    for (const [a, b] of [["Ashgrove Rovers", "Ashgrove Rovers"], ["Ashgrove Rovers", "ASHGROVE rovers"], ["Al", "Al"]] as const) {
+      const [home, away] = disambiguatedShorts({ name: a, isPerson: false }, { name: b, isPerson: false });
+      expect(home, `${a} / ${b}`).not.toBe(away);
+      // Built from each side's OWN team-rule code — the tie-break's declared shape (`${first}1` / `${first}2`).
+      expect([home, away], `${a} / ${b}`).toEqual([`${teamShortOf(a)}1`, `${teamShortOf(b)}2`]);
+      expect(home.length).toBeLessThanOrEqual(BADGE_MAX_CHARS);
+    }
+  });
+
+  it("disambiguatedShorts: a TEAM side in a MIXED pair keeps the team rule exactly — only a pair of two teams widens the team side", () => {
+    const [person, team] = disambiguatedShorts({ name: "Harriet Lowe", isPerson: true }, { name: "Lowestoft Town", isPerson: false });
+    expect(team).toBe(teamShortOf("Lowestoft Town"));
+    expect(person).not.toBe(team);
+  });
+
+  // The C9 contract, swept rather than sampled: a team pair that ALREADY differs under the team rule reads exactly as it
+  // did (both codes are `teamShortOf`, today's rule), and a colliding pair always ends different and badge-width. Names
+  // are generated around a shared stem so collisions are common, and both kinds are counted — a sweep whose generator
+  // never collides proves nothing about the widening.
+  it("disambiguatedShorts: TEAM pairs, swept — a pair that already differs is unchanged; a colliding pair always ends different, at most BADGE_MAX_CHARS wide", () => {
+    const word = fc.stringMatching(/^[A-Za-zÀ-ÿΑ-Ωα-ω0-9]{1,9}$/);
+    const name = fc.tuple(fc.constantFrom("Har", "Man", "Ash", "U12", "Ολυ", "St."), word, fc.array(word, { maxLength: 2 })).map(([stem, w, rest]) => [`${stem}${w}`, ...rest].join(" "));
+    let unchanged = 0;
+    let widened = 0;
+    fc.assert(
+      fc.property(name, name, (a, b) => {
+        const [home, away] = disambiguatedShorts({ name: a, isPerson: false }, { name: b, isPerson: false });
+        expect(home, `${a} / ${b}`).not.toBe(away);
+        expect(home.length, `${a} -> ${home}`).toBeLessThanOrEqual(BADGE_MAX_CHARS);
+        expect(away.length, `${b} -> ${away}`).toBeLessThanOrEqual(BADGE_MAX_CHARS);
+        if (teamShortOf(a) !== teamShortOf(b)) {
+          expect([home, away], `${a} / ${b}: already distinct, so unchanged`).toEqual([teamShortOf(a), teamShortOf(b)]);
+          unchanged++;
+        } else {
+          widened++;
+        }
+      }),
+      { numRuns: 2000, seed: 20261019 },
+    );
+    expect(unchanged, "anti-vacuity: pairs that already differed").toBeGreaterThan(100);
+    expect(widened, "anti-vacuity: pairs that collided and had to widen").toBeGreaterThan(100);
   });
 
   it("disambiguatedShorts: a PERSON side against a TEAM side (mixed kinds, defensive — does not occur in practice) resolves each independently and still differs when they would otherwise collide", () => {

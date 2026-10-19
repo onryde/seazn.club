@@ -174,9 +174,11 @@ async function maskSideNames(
  * players ("Player One"/"Player Two") both compacted to "PLA" under it, so
  * both sides read identically on the court card. `disambiguatedShorts`
  * (`@/lib/public-site`) resolves BOTH sides together instead, preferring the
- * surname for a person and widening only as far as needed to differ; team
- * entrants keep this exact rule, unconditionally, per the brief ("team
- * entrants keep today's behaviour where it already disambiguates").
+ * surname for a person and widening only as far as needed to differ. Team
+ * entrants keep this exact rule wherever it already disambiguates (the C9
+ * brief's words); two teams it does NOT tell apart — Harlow / Harrow, both HAR
+ * — widen through `teamShortCandidates` (fix/overlay-team-code-disambiguation:
+ * the stream overlay airs these codes, and reads them from this function).
  */
 interface SidePre {
   entrantId: string;

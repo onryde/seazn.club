@@ -741,6 +741,39 @@ export function teamShortOf(name: string): string {
 }
 
 /**
+ * Ordered abbreviations for a TEAM's name, read only when the other side is a
+ * team too and the two collide (fix/overlay-team-code-disambiguation, for the
+ * stream overlay, which takes its codes from `disambiguatedShorts`: "Harlow" and
+ * "Harrow" both read HAR under the team rule, so the overlay aired "HAR won 4–3
+ * on penalties"). The first rung IS `teamShortOf`, so a pair that already
+ * differs reads exactly as before — C9's "team entrants keep today's behaviour
+ * where it already disambiguates". Then the team rule one letter wider (HARL /
+ * HARR), then the first word's initial with the second word's first two
+ * letters, the broadcast convention for a shared first word (Manchester United
+ * / Manchester City -> MUN / MCI). Every rung is within `BADGE_MAX_CHARS`; a
+ * pair that collides through all of them falls to `disambiguatedShorts`'s
+ * positional tie-break, as two persons do.
+ */
+export function teamShortCandidates(name: string): string[] {
+  const words = name
+    .trim()
+    .split(/\s+/)
+    .map(compactWord)
+    .filter((w) => w.length > 0);
+  if (words.length === 0) return ["?"];
+  const whole = words.join("");
+  const out: string[] = [];
+  const add = (s: string) => {
+    const clamped = s.slice(0, BADGE_MAX_CHARS);
+    if (clamped.length > 0 && !out.includes(clamped)) out.push(clamped);
+  };
+  add(whole.slice(0, 3));
+  add(whole.slice(0, 4));
+  if (words.length > 1) add(`${words[0]!.slice(0, 1)}${words[1]!.slice(0, 2)}`);
+  return out;
+}
+
+/**
  * Ordered, increasingly specific abbreviations for a PERSON's name — surname
  * first (how a spectator actually tells two players apart), then initial +
  * surname, widening only as far as needed to disambiguate two entrants that
@@ -808,23 +841,31 @@ export function personShortCandidates(name: string): string[] {
 
 /**
  * The two sides' court-card abbreviations, resolved TOGETHER: a collision on
- * one side can only be seen — and broken — by comparing both at once. Team
- * sides keep today's fixed rule unconditionally (out of C9's scope: "team
- * entrants keep today's behaviour where it already disambiguates"); a person
+ * one side can only be seen — and broken — by comparing both at once. A person
  * side widens through its own candidate ladder until it differs from the
- * other side. If every candidate is exhausted and the two sides are STILL
+ * other side. Two TEAM sides keep the team rule wherever it already tells them
+ * apart, and widen through `teamShortCandidates` only where it does not
+ * (fix/overlay-team-code-disambiguation — before it, two teams kept the rule
+ * unconditionally, and Harlow / Harrow both read HAR). A team side facing a
+ * person keeps the team rule as it always has; the person's ladder does the
+ * widening. If every candidate is exhausted and the two sides are STILL
  * equal — the two entrants share the exact same full name, letter for
  * letter — a positional tie-break keeps the invariant "never equal" intact
  * even then (still built from each side's own candidate, just no longer
  * unique to it).
+ *
+ * The ONE implementation: the match centre, the hub, the overlay page's two
+ * doors and the overlay model (`overlaySideCodes`) all read it.
  */
 export function disambiguatedShorts(
   a: { name: string; isPerson: boolean },
   b: { name: string; isPerson: boolean },
 ): [string, string] {
-  if (!a.isPerson && !b.isPerson) return [teamShortOf(a.name), teamShortOf(b.name)];
-  const candsA = a.isPerson ? personShortCandidates(a.name) : [teamShortOf(a.name)];
-  const candsB = b.isPerson ? personShortCandidates(b.name) : [teamShortOf(b.name)];
+  const bothTeams = !a.isPerson && !b.isPerson;
+  const ladderOf = (side: { name: string; isPerson: boolean }): string[] =>
+    side.isPerson ? personShortCandidates(side.name) : bothTeams ? teamShortCandidates(side.name) : [teamShortOf(side.name)];
+  const candsA = ladderOf(a);
+  const candsB = ladderOf(b);
   const rungs = Math.max(candsA.length, candsB.length);
   for (let i = 0; i < rungs; i++) {
     const candA = candsA[Math.min(i, candsA.length - 1)]!;
@@ -837,7 +878,8 @@ export function disambiguatedShorts(
   // entrants genuinely called the same thing — a label no badge chip is
   // legible at, and the exact defect the C9 follow-up rung exists to prevent.
   // Every first candidate is at most three characters (`surname.slice(0, 3)`,
-  // or `teamShortOf`), so the suffixed label is at most four. THIS SHAPE IS
+  // or `teamShortOf`, which is also `teamShortCandidates`' first), so the
+  // suffixed label is at most four. THIS SHAPE IS
   // WHAT SETS `BADGE_MAX_CHARS`: three plus an ordinal. The two must move
   // together — a smaller ceiling truncates the ordinal away and the tie-break
   // stops disambiguating.
