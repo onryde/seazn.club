@@ -35,7 +35,7 @@ This is an npm workspace monorepo. Root scripts delegate to `apps/web` and
 | App | Next.js App Router, React 19, TypeScript |
 | Styling | Tailwind CSS v4 |
 | Database | PostgreSQL (Supabase) via the `postgres` package — no Supabase client SDK for queries |
-| Auth | bcrypt + `jose` JWT in httpOnly cookie; active org in a separate cookie |
+| Auth | Emailed magic link and Google sign-in (no passwords); `jose` JWT in httpOnly cookie; active org in a separate cookie |
 | Realtime | Supabase Realtime broadcast (live scoreboards) |
 | Storage | Supabase Storage (org logos, player avatars) |
 | Billing | Stripe (flat per-org pricing) |
