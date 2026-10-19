@@ -108,6 +108,9 @@ const flashOf = (island: Island) => propsOf(screenEl(island)).lichessFlash;
 const claim = (island: Island) => (propsOf(screenEl(island)).room as { claim: () => Promise<unknown> }).claim();
 const needsLink = () => ({ snapshot: snap(), seat: { seated: false, reason: "lichess_link_required", participant: null } });
 const seated = () => ({ snapshot: snap({ creation: { state: "creating" } }), seat: { seated: true, participant: null } });
+/** A seated answer that leaves the room waiting for the opponent: still the check-in screen, with the seat taken. */
+const seatedWaiting = () => ({ snapshot: snap(), seat: { seated: true, participant: null } });
+const windowClosed = () => ({ snapshot: snap(), seat: { seated: false, reason: "window_closed", participant: null } });
 const mount = (lichessFlash?: string) =>
   renderIsland(RoomShell, { initial: snap(), token: "tok", selfPath: "/x", lichessFlash: lichessFlash as never });
 
@@ -196,6 +199,74 @@ describe("a failure is held until the card it was read for, and is gone once the
     await settle();
     expect(kindOf(island)).toBe("relink");
     expect(flashOf(island)).toBeNull();
+    island.unmount();
+  });
+});
+
+// PR #990 re-review, N1: a failure landed and NEVER seen on a card (the player's link worked all along - seated, creating,
+// live, held, over) must not wait for a LATER revoke card and show up there as if it were fresh. It is spent the moment the
+// room shows the link works; but not by the screens that merely come BEFORE the card (a closed window, the check-in).
+describe("an unseen failure is spent once the room shows the link works (re-review N1)", () => {
+  // Snapshots are built inside the test (a function each): their serverNow must come AFTER the beforeEach reset of the clock
+  // tick, or the later poll's snapshot would look older than the first and be dropped as stale.
+  const OVER = { ...GAME, over: true };
+  // `laterCard: false` - a game that is over never goes back to a card (room-screen: a written result or an over game outranks
+  // seam A and card 8), so there is no later card to hand the outcome to; the case proves the premise and the empty hand-over,
+  // and the unit sweep (room-held-flash.test.ts) pins `over` as a settled screen.
+  type Case = { name: string; initial: () => RoomSnapshot; kind: string; laterCard?: boolean; drive?: (island: Island) => Promise<void> };
+  const CASES: Case[] = [
+    { name: "creating", initial: () => snap({ creation: { state: "creating" } }), kind: "creating" },
+    { name: "live", initial: () => snap({ game: GAME, canAct: true }), kind: "live" },
+    { name: "held", initial: () => snap({ game: GAME, canAct: false }), kind: "held" },
+    { name: "over", initial: () => snap({ game: OVER }), kind: "over", laterCard: false },
+    {
+      name: "a seated answer (the seat is taken, the screen is still the check-in)",
+      initial: () => snap(),
+      kind: "checkin",
+      drive: async (island) => {
+        seatAnswers = [seatedWaiting];
+        await claim(island);
+        await settle();
+      },
+    },
+  ];
+
+  it("landed with already_linked, never on a card: the room settles, then a LATER revoke card gets NO outcome - on every settled screen", async () => {
+    let swept = 0;
+    let later = 0;
+    for (const c of CASES) {
+      seatAnswers = [];
+      getAnswer = () => snap();
+      const island = renderIsland(RoomShell, { initial: c.initial(), token: "tok", selfPath: "/x", lichessFlash: "already_linked" as never });
+      await c.drive?.(island);
+      expect(kindOf(island), `${c.name}: the premise - the screen the room settled on`).toBe(c.kind);
+      expect(flashOf(island), `${c.name}: nothing to say on it`).toBeNull();
+
+      if (c.laterCard !== false) {
+        getAnswer = revoked;
+        await settle(IDLE_POLL_MS);
+        expect(kindOf(island), `${c.name}: the premise - a revoke card, later, on the same page`).toBe("revoked");
+        expect(flashOf(island), `${c.name}: an old failure is not fresh news on it`).toBeNull();
+        later++;
+      }
+      island.unmount();
+      swept++;
+    }
+    expect(swept, "anti-vacuity: every settled case").toBe(CASES.length);
+    expect(later, "anti-vacuity: every case that can reach a later card did").toBe(CASES.length - 1);
+  });
+
+  it("the pair: a screen that only comes BEFORE the card (a closed window) does not spend it - the link card that follows still says it", async () => {
+    const island = mount("already_linked");
+    seatAnswers = [windowClosed, needsLink];
+    await claim(island);
+    await settle();
+    expect(kindOf(island), "the premise: before the card").toBe("closed");
+    expect(flashOf(island)).toBeNull();
+    await claim(island);
+    await settle();
+    expect(kindOf(island)).toBe("relink");
+    expect(flashOf(island), "held through it: the card says what the player met").toBe("already_linked");
     island.unmount();
   });
 });

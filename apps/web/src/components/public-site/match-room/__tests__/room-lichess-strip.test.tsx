@@ -195,7 +195,7 @@ describe("the room takes ?lichess= out of the address bar once it has read it - 
     const island = mount({ lichessFlash: "already_linked" });
     flushTimers();
     expect(screenProps(island).lichessFlash).toBe("already_linked");
-    // The stripped URL re-reads the server page (Next's restore fetches it): the new render carries no param, the card keeps its words.
+    // A later server re-read (router.refresh) renders the page without the param: the card keeps its words.
     island.rerender({ initial: snap(), token: TOKEN, selfPath: SELF, grantRefused: true });
     expect(screenProps(island).lichessFlash).toBe("already_linked");
   });

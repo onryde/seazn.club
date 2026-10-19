@@ -15,8 +15,9 @@ import { withoutLichessParam } from "@/lib/lichess-link";
  *  follow it. Two things make that work, and the strip honours both:
  *   1. The call must carry NO Next marker. The patch passes straight through, router NOT told, any state with `__NA` -
  *      which is what `window.history.state` is. So the state is `null`: the patch copies the router's own state onto it
- *      and dispatches ACTION_RESTORE with the clean URL. (Next then re-reads this server page for it, once; the shell
- *      keeps the outcome it holds across that - room-lichess-strip.test.tsx.)
+ *      and dispatches ACTION_RESTORE with the clean URL (the restore adopts the new URL and reuses the tree the router
+ *      already holds). The shell keeps the outcome it holds whatever a later server re-read renders without the parameter
+ *      (room-lichess-strip.test.tsx).
  *   2. The patch must exist. It is installed by the router's own MOUNT EFFECT, and React runs a child's mount effect
  *      before its parent's - on the first hydration this hook's effect runs BEFORE the router's. A task later, every
  *      effect of that commit has run, and the patch is there. (A room mounted by a client navigation is past that

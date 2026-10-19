@@ -31,7 +31,7 @@ import { GameOver } from "./game-over";
 import { RoomHeader } from "./room-header";
 import { useRoomSounds, useSoundSwitch } from "./use-room-sounds";
 import { useStripLichessParam } from "./use-strip-lichess-param";
-import { heldFlashFrom, nextHeldFlash, onFlashScreen } from "./room-held-flash";
+import { flashPhase, heldFlashFrom, nextHeldFlash } from "./room-held-flash";
 import {
   CameraBlockedCard,
   CameraCard,
@@ -297,10 +297,10 @@ export function RoomShell({
     (camera.status === "live" && retries < SEAT_RETRIES);
   const screen = roomScreen(state, { cameraSettling });
   // Render-phase adjustment (the sanctioned adjust-state-on-change pattern): the held outcome follows the screen.
-  const onCard = onFlashScreen(screen.kind);
-  const nextHeld = nextHeldFlash(held, onCard);
+  const phase = flashPhase(screen.kind, state.seat?.seated === true);
+  const nextHeld = nextHeldFlash(held, phase);
   if (nextHeld !== held) setHeld(nextHeld);
-  const flash = onCard ? nextHeld.code : null;
+  const flash = phase === "card" ? nextHeld.code : null;
 
   const tryAgain = useCallback(() => {
     setRetry({ for: participantId, n: 0 });
