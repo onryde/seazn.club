@@ -24,6 +24,10 @@
 // case drives the real entry and asserts the bracket overlay reached it and that the call carried `rules_override: null`.
 // The line itself cannot witness the overlay (`describeDeciders` lays `bracketDeciders` over its cfg again), so the case
 // reads what the RESOLVER returned there, through the spy.
+//
+// W2c Task 19 (fix round 1, review I1): the 17th site, `usecases/fixtures.ts` `loadFixtureMatchRules` - the fixture console's
+// "Match rules" block reads the cfg the match plays NOW (the stage's format under the override, or the frozen snapshot) through
+// the same resolver. Its row is the second in fixtures.ts; its case drives the real entry on a fixture with an override.
 import { randomUUID } from "node:crypto";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
@@ -55,7 +59,8 @@ import { msgFor } from "@/lib/messages-i18n";
 import type { PublicFixture } from "@/server/public-site/data";
 import { loadMatchCentre, type MatchCentreLoadCtx } from "@/server/public-site/match-centre-load";
 import { importEvents } from "@/server/usecases/event-import";
-import { loadFixturePadCfg } from "@/server/usecases/fixtures";
+import { getDictionary } from "@/lib/i18n";
+import { loadFixtureMatchRules, loadFixturePadCfg } from "@/server/usecases/fixtures";
 import { draftPostsForDecidedFixture } from "@/server/usecases/org-posts";
 import { computePlayerStats } from "@/server/usecases/player-stats";
 import { fixtureConfigPanel, resnapshotFixtureConfig } from "@/server/usecases/admin-fixture-config";
@@ -155,7 +160,8 @@ const SITES: readonly { file: string; count: number; case: string; override?: fa
   { file: "apps/web/src/server/engine-db/append-event.ts", count: 2, case: "append-event.ts appendEvent" },
   { file: "apps/web/src/server/engine-db/competition.ts", count: 2, case: "competition.ts loadStageInputs" },
   { file: "apps/web/src/server/public-site/match-centre-load.ts", count: 1, case: "match-centre-load.ts loadMatchCentre" },
-  { file: "apps/web/src/server/usecases/fixtures.ts", count: 1, case: "fixtures.ts loadFixturePadCfg" },
+  // W2c Task 19: the second is `loadFixtureMatchRules` - the console block's "what this match plays now" (its `effective`).
+  { file: "apps/web/src/server/usecases/fixtures.ts", count: 2, case: "fixtures.ts loadFixturePadCfg and loadFixtureMatchRules" },
   { file: "apps/web/src/server/usecases/player-stats.ts", count: 1, case: "player-stats.ts computePlayerStats" },
   { file: "apps/web/src/server/usecases/event-import.ts", count: 1, case: "event-import.ts importEvents" },
   { file: "apps/web/src/server/usecases/admin-fixture-config.ts", count: 2, case: "admin-fixture-config.ts panel and resnapshot" },
@@ -175,7 +181,7 @@ const SITES: readonly { file: string; count: number; case: string; override?: fa
 const SITE_TOTAL = SITES.reduce((n, s) => n + s.count, 0);
 
 describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)", () => {
-  it("the site ledger is exact: 16 production calls, and none unlisted", () => {
+  it("the site ledger is exact: 17 production calls, and none unlisted", () => {
     const files: string[] = [];
     (function walk(d: string) {
       for (const e of readdirSync(d)) {
@@ -194,8 +200,8 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
       if (n > 0) found.set(rel, n);
     }
     expect(Object.fromEntries(found)).toEqual(Object.fromEntries(SITES.map((s) => [s.file, s.count])));
-    expect([...found.values()].reduce((a, b) => a + b, 0)).toBe(16);
-    expect(SITE_TOTAL, "the ledger's own rows add up to the scan").toBe(16);
+    expect([...found.values()].reduce((a, b) => a + b, 0)).toBe(17);
+    expect(SITE_TOTAL, "the ledger's own rows add up to the scan").toBe(17);
   });
 
   it("the comment stripper keeps a call and drops prose (both directions)", () => {
@@ -293,6 +299,18 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
     expect((loaded.cfg as Record<string, unknown>).bestOf, "W2c: the pad reads the match override").toBe(OVERRIDE.bestOf);
     expect(loaded.stageKind).toBe("knockout"); // Task 12 threads it on to the pad
     expectOverlay("knockout");
+    expectOverrideArg();
+  });
+
+  it.skipIf(!HAS_DB)("fixtures.ts loadFixtureMatchRules (the console's Match rules block): the bracket overlay and the match override reach what the match plays now", async () => {
+    const s = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "knockout", entrants: 2 });
+    await seedOverride({ fixtureId: s.fixtureIds[0]! });
+    const dict = await getDictionary("en", "public");
+    const loaded = await loadFixtureMatchRules(s.auth, s.fixtureIds[0]!, dict);
+    expect(loaded.override, "the select carried the row's own override (a select that forgot the column reads as none)").toEqual(OVERRIDE);
+    expect(loaded.state).toBe("unstarted");
+    expectOverlay("knockout");
+    expectOverrideOut("knockout");
     expectOverrideArg();
   });
 
@@ -505,11 +523,11 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
     expect(league[0]!.out?.tieBoard, "no overlay on a table stage").toBe("draw");
   });
 
-  // M3 (review): the ledger above pins the 16 sites in the SOURCE; this pins that the cases DROVE all 16 - 15 with the
+  // M3 (review): the ledger above pins the 17 sites in the SOURCE; this pins that the cases DROVE all 17 - 16 with the
   // override and the stage line without one (its row says `override: false`). Sites come from the spy's own caller frames (`callSite`), so a case cannot vouch for a site it never
   // reached. Declared last: vitest runs a file's cases in order, so every case above has run (or was filtered out
   // with -t, in which case this one is filtered out too).
-  it.skipIf(!HAS_DB)("every one of the 16 call sites was driven (15 with the override, the stage line without), per the spy's caller frames", () => {
+  it.skipIf(!HAS_DB)("every one of the 17 call sites was driven (16 with the override, the stage line without), per the spy's caller frames", () => {
     const tally = (driven: ReadonlySet<string>) => {
       const byFile = new Map<string, number>();
       for (const site of driven) {
@@ -532,7 +550,7 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
       SITES.filter((s) => s.override === false).map((s) => s.file).sort(),
     );
     expect(DRIVEN.size + DRIVEN_NO_OVERRIDE.size, "anti-vacuity: the sites checked").toBe(SITE_TOTAL);
-    expect(SITE_TOTAL).toBe(16);
+    expect(SITE_TOTAL).toBe(17);
   });
 });
 
