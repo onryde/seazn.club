@@ -86,25 +86,38 @@ describe("the points section is on a TABLE stage's card and on no other", () => 
   });
 });
 
-describe("the state the section opens in follows the division and the plan the page reports", () => {
-  it("an omitted customPointsAllowed reads as allowed (the server's 402 stands behind it): the editor", () => {
+describe("the state the section opens in follows the division (scoring is free on every plan: the panel is handed no plan)", () => {
+  it("an expressible division opens the editor, for a viewer of any plan the panel is built for", () => {
     expect(stateOf(panel())).toBe("editor");
+    for (const plan of ["community", "pro"]) expect(stateOf(panel({ viewerPlan: { plan, isStaff: false } as never })), plan).toBe("editor");
   });
 
-  it("customPointsAllowed false: the gate; true: the editor (the SAME panel otherwise)", () => {
-    expect(stateOf(panel({ customPointsAllowed: false }))).toBe("gate");
-    expect(stateOf(panel({ customPointsAllowed: true }))).toBe("editor");
-  });
-
-  it("a division whose points a stage cannot say shows the reason on the card, whatever the plan", () => {
+  it("a division whose points a stage cannot say shows the reason on the card; one the stage still stores a rule on also shows that rule and the way out", () => {
     const m = builtinModules.find((x) => x.key === "icehockey")!;
     const split = Object.keys(m.variants).find((v) => !pointsRuleExpressible(m.configSchema.parse(m.variants[v])).ok);
     expect(split, "premise: the engine has a splitting ice-hockey variant").toBeDefined();
-    for (const customPointsAllowed of [true, false]) {
-      const html = panel({ sportKey: "icehockey", divisionConfig: m.variants[split!], customPointsAllowed });
-      expect(stateOf(html)).toBe("inexpressible");
-      expect(html).toContain('data-testid="stage-points-inexpressible"');
-    }
+    const html = panel({ sportKey: "icehockey", divisionConfig: m.variants[split!] });
+    expect(stateOf(html)).toBe("inexpressible");
+    expect(html).toContain('data-testid="stage-points-inexpressible"');
+    expect(html, "nothing stored: the reason alone").not.toContain('data-testid="stage-points-clear"');
+    const stored = panel({
+      sportKey: "icehockey",
+      divisionConfig: m.variants[split!],
+      stages: stageOf("league", { points: { base: { win: 4, draw: 1, loss: 0 }, bonuses: [] } }),
+      pointsDict: POINTS_DICT,
+    });
+    expect(stateOf(stored)).toBe("inexpressible");
+    for (const id of ["stage-points-inexpressible", "stage-points-readonly", "stage-points-preview", "stage-points-clear"]) expect(stored, id).toContain(`data-testid="${id}"`);
+    // a started stage reads the same rule and cannot clear it
+    const locked = panel({
+      sportKey: "icehockey",
+      divisionConfig: m.variants[split!],
+      stages: stageOf("league", { points: { base: { win: 4, draw: 1, loss: 0 }, bonuses: [] } }),
+      pointsDict: POINTS_DICT,
+      formatLockedStageIds: [STAGE_ID],
+    });
+    expect(locked).toContain('data-testid="stage-points-readonly"');
+    expect(locked).not.toContain('data-testid="stage-points-clear"');
   });
 });
 

@@ -5,9 +5,11 @@
 // row (its own PUT arm, `{points}`) and follows the same lock: a started stage, or a viewer, reads it and cannot change it.
 //
 // WHAT IT OFFERS IS WHAT THE SERVER TAKES (every question is `stage-points-model.ts`'s, which asks the engine):
-//   - a division whose points a stage rule cannot say gets the reason and NO inputs (Q1, `POINTS_RULE_INEXPRESSIBLE`);
-//   - an org without `standings.custom_points` gets the base sentence and a note where the walkover and bonus rows would
-//     be (the server answers 402 for either); the base sentence is free on every plan;
+//   - a division whose points a stage rule cannot say gets the reason and NO inputs (Q1, `POINTS_RULE_INEXPRESSIBLE`); a
+//     stage that still STORES its own rule there (a legacy row, or a division edited after the stage started) reads that
+//     rule beside the reason, with "Use the division's points" to clear it (`{points: null}` is never refused);
+//   - scoring is free on every plan (owner, 2026-10-19: "all scoring are free", V393 gives community `custom_points`), so
+//     the section asks no plan question; the server's gate stays and a 402 is said in the server's own words;
 //   - the walkover SCORE is shown only where the sport's table reads it (batch-3 I3: the server REFUSES it elsewhere, so a
 //     shown input there would be a save that fails);
 //   - bonus kinds are those the sport's metrics can feed.
@@ -32,7 +34,6 @@ import {
   pointsSectionState,
   previewClauses,
   ruleFromDraft,
-  storedHasCustomParts,
   storedPointsRule,
   type BonusWhen,
   type PointsDraft,
@@ -80,11 +81,11 @@ function NumberBox({
   );
 }
 
-/** What a failed Save says: the plan gate in this app's words, a rule refusal localized where this app owns it, else the
- *  server's own message. */
-function failureText(err: unknown, msg: Msg): string {
+/** What a failed Save says: a 402 in the server's own words (its `extra.reason`, else its message - the section holds no plan
+ *  copy of its own), a rule refusal localized where this app owns it, else the server's own message. */
+export function failureText(err: unknown, msg: Msg): string {
   if (err instanceof ApiV1Error) {
-    if (err.status === 402) return msg("stagePoints.upgrade");
+    if (err.status === 402) return typeof err.extra.reason === "string" ? err.extra.reason : err.message;
     return ruleRefusalText(err.code, err.extra, msg) ?? err.message;
   }
   return err instanceof Error ? err.message : String(err);
@@ -103,7 +104,6 @@ export function StagePointsSection({
   divisionConfig,
   stored,
   pointsDict,
-  customPointsAllowed,
   readOnly,
   onSaved,
 }: {
@@ -114,8 +114,6 @@ export function StagePointsSection({
   stored: unknown;
   /** The public dictionary's `format.points.*` slice (`pointsLineDict`); absent, the section shows no preview. */
   pointsDict: Dict | undefined;
-  /** The org holds `standings.custom_points` (the page reads it with `hasFeature`, the server's own gate). */
-  customPointsAllowed: boolean;
   /** A started stage (the S4 lock) or a viewer: the section reads, nothing writes. */
   readOnly: boolean;
   onSaved: () => void;
@@ -128,7 +126,7 @@ export function StagePointsSection({
   const [error, setError] = useState<string | null>(null);
 
   const expressible = divisionExpressible(module, divisionConfig);
-  const state = pointsSectionState(customPointsAllowed, expressible.ok);
+  const state = pointsSectionState(expressible.ok);
   const heading = (
     <span className="text-xs font-semibold text-slate-800">{msg("stagePoints.title")}</span>
   );
@@ -143,9 +141,37 @@ export function StagePointsSection({
     </section>
   );
 
-  // Q1: the reason, in the reader's words, and no inputs. The server stays the authority (it answers the same).
+  const ownRule = storedPointsRule(inForce);
+  const preview = (d: PointsDraft): string => {
+    if (pointsDict === undefined) return "";
+    const clauses = previewClauses(module, divisionConfig, d);
+    return clauses.length === 0 ? "" : rulesLineText(pointsDict, clauses);
+  };
+
+  /** One PUT, `{points}` only: the body is strict, and `rules` left out stays as stored. `null` removes the stage's own rule
+   *  (never refused: no plan gate, no Q1). What the server answers is what the section then shows, until the page re-reads. */
+  async function write(points: unknown) {
+    setSaving(true);
+    setError(null);
+    try {
+      const out = await apiV1<{ points?: unknown }>(`/api/v1/stages/${stageId}/rules`, { method: "PUT", json: { points } });
+      const landed = out.points ?? null;
+      setSaved({ against: stored, points: landed });
+      setDraft(draftFromStored(module, divisionConfig, landed));
+      onSaved();
+    } catch (err) {
+      setError(failureText(err, msg));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // Q1: the reason, in the reader's words, and no inputs. The server stays the authority (it answers the same). A rule the
+  // stage STORES anyway is not hidden behind the reason (it is what the stage plays): it is read, and an editable stage can
+  // clear it - the one change the server takes here.
   if (state === "inexpressible") {
     const reason = ruleRefusalText("POINTS_RULE_INEXPRESSIBLE", { keys: expressible.ok ? [] : expressible.keys }, msg);
+    const own = ownRule === null ? "" : preview(draftFromStored(module, divisionConfig, inForce));
     return shell(
       <div className="space-y-2">
         {heading}
@@ -156,16 +182,37 @@ export function StagePointsSection({
         >
           {reason ?? msg("stagePoints.inexpressible")}
         </p>
+        {ownRule !== null && (
+          <div className="space-y-2">
+            <p className="text-xs text-slate-600" data-testid="stage-points-readonly">
+              {msg("stagePoints.ownPoints")}
+            </p>
+            {own !== "" && (
+              <p className="text-xs text-slate-700" data-testid="stage-points-preview">
+                {own}
+              </p>
+            )}
+            {!readOnly && (
+              <button
+                type="button"
+                className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
+                data-testid="stage-points-clear"
+                disabled={saving}
+                onClick={() => void write(null)}
+              >
+                {saving ? msg("schedule.working") : msg("stagePoints.useDivision")}
+              </button>
+            )}
+            {error !== null && (
+              <p role="alert" className="text-xs text-red-600" data-testid="stage-points-error">
+                {error}
+              </p>
+            )}
+          </div>
+        )}
       </div>,
     );
   }
-
-  const ownRule = storedPointsRule(inForce);
-  const preview = (d: PointsDraft): string => {
-    if (pointsDict === undefined) return "";
-    const clauses = previewClauses(module, divisionConfig, d);
-    return clauses.length === 0 ? "" : rulesLineText(pointsDict, clauses);
-  };
 
   // A started stage, or a viewer: what the stage plays, in words. No control.
   if (readOnly) {
@@ -190,38 +237,19 @@ export function StagePointsSection({
   const problem = built.ok ? null : built.problem;
   const dirty = draftIsDirty(module, draft, inForce);
   const canDraw = divisionBasePoints(module, divisionConfig).draw !== null;
-  const gate = state === "gate";
-  // A walkover row or bonuses already stored cannot be re-sent by an org the plan withholds them from (the same rule SENT is
-  // 402), so the base boxes are held while they stand; "Use the division's points" (null asks no gate) is the way out.
-  const heldByGate = gate && storedHasCustomParts(inForce);
-  const baseDisabled = saving || heldByGate;
   const previewText = preview(draft);
   const reaches = offersWalkoverScore(module);
 
-  async function save() {
-    if (!built.ok) return;
-    setSaving(true);
-    setError(null);
-    try {
-      // ONLY `points`: the body is strict, and `rules` left out stays as stored.
-      const out = await apiV1<{ points: unknown }>(`/api/v1/stages/${stageId}/rules`, { method: "PUT", json: { points: built.rule } });
-      const points = out.points ?? null;
-      setSaved({ against: stored, points });
-      setDraft(draftFromStored(module, divisionConfig, points));
-      onSaved();
-    } catch (err) {
-      setError(failureText(err, msg));
-    } finally {
-      setSaving(false);
-    }
-  }
+  const save = () => {
+    if (built.ok) void write(built.rule);
+  };
 
   const baseBoxes = (
     <p className="flex flex-wrap items-center gap-x-2 gap-y-2 text-sm text-slate-800" data-testid="stage-points-sentence">
       {slotted(msg, canDraw ? "stagePoints.sentence" : "stagePoints.sentenceNoDraw", {
-        win: <NumberBox value={draft.win} onChange={(win) => patch({ win })} label={msg("stagePoints.win")} testId="stage-points-win" disabled={baseDisabled} />,
-        draw: <NumberBox value={draft.draw} onChange={(draw) => patch({ draw })} label={msg("stagePoints.draw")} testId="stage-points-draw" disabled={baseDisabled} />,
-        loss: <NumberBox value={draft.loss} onChange={(loss) => patch({ loss })} label={msg("stagePoints.loss")} testId="stage-points-loss" disabled={baseDisabled} />,
+        win: <NumberBox value={draft.win} onChange={(win) => patch({ win })} label={msg("stagePoints.win")} testId="stage-points-win" disabled={saving} />,
+        draw: <NumberBox value={draft.draw} onChange={(draw) => patch({ draw })} label={msg("stagePoints.draw")} testId="stage-points-draw" disabled={saving} />,
+        loss: <NumberBox value={draft.loss} onChange={(loss) => patch({ loss })} label={msg("stagePoints.loss")} testId="stage-points-loss" disabled={saving} />,
       })}
     </p>
   );
@@ -353,28 +381,13 @@ export function StagePointsSection({
       {!draft.useDivision && (
         <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-3">
           {baseBoxes}
-          {heldByGate && (
-            <p role="status" data-testid="stage-points-gate-held" className="text-xs text-slate-700">
-              {msg("stagePoints.gateHeld")}
-            </p>
-          )}
-          {gate ? (
-            <p
-              role="status"
-              data-testid="stage-points-upgrade"
-              className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-snug text-amber-900"
-            >
-              {msg("stagePoints.upgrade")}
-            </p>
-          ) : (
-            <PhoneDisclosure
-              summary={msg("stagePoints.more")}
-              showLabel={msg("stagePoints.moreShow")}
-              hideLabel={msg("stagePoints.moreHide")}
-            >
-              {walkoverAndBonuses}
-            </PhoneDisclosure>
-          )}
+          <PhoneDisclosure
+            summary={msg("stagePoints.more")}
+            showLabel={msg("stagePoints.moreShow")}
+            hideLabel={msg("stagePoints.moreHide")}
+          >
+            {walkoverAndBonuses}
+          </PhoneDisclosure>
         </div>
       )}
 
@@ -391,7 +404,7 @@ export function StagePointsSection({
             className="btn btn-primary min-h-11 px-3 py-1.5 text-xs"
             data-testid="stage-points-save"
             disabled={saving || !dirty || problem !== null}
-            onClick={() => void save()}
+            onClick={save}
           >
             {saving ? msg("schedule.working") : msg("stagePoints.save")}
           </button>

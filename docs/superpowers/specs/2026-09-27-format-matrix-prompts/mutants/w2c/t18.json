@@ -1,46 +1,31 @@
 [
   {
-    "id": "t18-gate",
-    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
-    "find": "if (!canCustom) return \"gate\";",
-    "replace": "if (false) return \"gate\";",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
-        ],
-        "name": "Community org sees the gate"
-      }
-    ]
-  },
-  {
-    "id": "t18-inexpressible-first",
-    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
-    "find": "if (!expressible) return \"inexpressible\";",
-    "replace": "if (!canCustom) return \"gate\"; if (!expressible) return \"inexpressible\";",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
-        ],
-        "name": "pointsSectionState: inexpressible first"
-      }
-    ]
-  },
-  {
     "id": "t18-inexpressible-off",
     "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
-    "find": "if (!expressible) return \"inexpressible\";",
-    "replace": "if (false) return \"inexpressible\";",
+    "find": "return expressible ? \"editor\" : \"inexpressible\";",
+    "replace": "return \"editor\";",
     "killers": [
       {
         "cwd": "apps/web",
         "files": [
           "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
         ],
-        "name": "pointsSectionState: inexpressible first"
+        "name": "pointsSectionState: a division a stage rule cannot say"
+      }
+    ]
+  },
+  {
+    "id": "t18-inexpressible-always",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "return expressible ? \"editor\" : \"inexpressible\";",
+    "replace": "return \"inexpressible\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ],
+        "name": "pointsSectionState: a division a stage rule cannot say"
       }
     ]
   },
@@ -515,36 +500,6 @@
     ]
   },
   {
-    "id": "t18-held-forfeit",
-    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
-    "find": "return rule !== null && (rule.bonuses.length > 0 || rule.forfeit !== undefined);",
-    "replace": "return rule !== null && rule.bonuses.length > 0;",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
-        ],
-        "name": "what the gate withholds"
-      }
-    ]
-  },
-  {
-    "id": "t18-held-bonus",
-    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
-    "find": "return rule !== null && (rule.bonuses.length > 0 || rule.forfeit !== undefined);",
-    "replace": "return rule !== null && rule.forfeit !== undefined;",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
-        ],
-        "name": "what the gate withholds"
-      }
-    ]
-  },
-  {
     "id": "t18-preview-division",
     "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
     "find": "draft.useDivision ? { ...draftFromStored(module, divisionConfig, null), useDivision: false } : draft",
@@ -597,36 +552,6 @@
     ]
   },
   {
-    "id": "t18-sec-held",
-    "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
-    "find": "const heldByGate = gate && storedHasCustomParts(inForce);",
-    "replace": "const heldByGate = false;",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
-        ],
-        "name": "the gate holds a stored walkover row"
-      }
-    ]
-  },
-  {
-    "id": "t18-sec-held-always",
-    "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
-    "find": "const heldByGate = gate && storedHasCustomParts(inForce);",
-    "replace": "const heldByGate = gate;",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
-        ],
-        "name": "the gate holds a stored walkover row"
-      }
-    ]
-  },
-  {
     "id": "t18-sec-readonly",
     "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
     "find": "if (readOnly) {",
@@ -638,21 +563,6 @@
           "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
         ],
         "name": "a started stage, or a viewer, reads the section"
-      }
-    ]
-  },
-  {
-    "id": "t18-sec-gate-rows",
-    "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
-    "find": "{gate ? (",
-    "replace": "{false ? (",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
-        ],
-        "name": "the section's three states"
       }
     ]
   },
@@ -682,7 +592,7 @@
         "files": [
           "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
         ],
-        "name": "the section's three states"
+        "name": "the section's two states"
       }
     ]
   },
@@ -713,6 +623,177 @@
           "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
         ],
         "name": "the add menu offers the kinds"
+      }
+    ]
+  },
+  {
+    "id": "t18-m1-stored-hidden",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
+    "find": "{ownRule !== null && (",
+    "replace": "{false && (",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+        ],
+        "name": "an editable stage shows the reason AND the rule"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/stages-panel-stage-points.test.tsx"
+        ],
+        "name": "a division whose points a stage cannot say"
+      }
+    ]
+  },
+  {
+    "id": "t18-m1-clear-for-viewer",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
+    "find": "{!readOnly && (",
+    "replace": "{true && (",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+        ],
+        "name": "a locked stage or a viewer reads it"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/stages-panel-stage-points.test.tsx"
+        ],
+        "name": "a division whose points a stage cannot say"
+      }
+    ]
+  },
+  {
+    "id": "t18-m1-preview-dropped",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
+    "find": "const own = ownRule === null ? \"\" : preview(draftFromStored(module, divisionConfig, inForce));",
+    "replace": "const own = \"\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+        ],
+        "name": "an editable stage shows the reason AND the rule"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/stages-panel-stage-points.test.tsx"
+        ],
+        "name": "a division whose points a stage cannot say"
+      }
+    ]
+  },
+  {
+    "id": "t18-m1-reason-dropped",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
+    "find": "{reason ?? msg(\"stagePoints.inexpressible\")}",
+    "replace": "{ownRule === null ? (reason ?? msg(\"stagePoints.inexpressible\")) : null}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+        ],
+        "name": "an editable stage shows the reason AND the rule"
+      }
+    ]
+  },
+  {
+    "id": "t18-fail-402-branch",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
+    "find": "if (err.status === 402) return typeof err.extra.reason === \"string\" ? err.extra.reason : err.message;",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+        ],
+        "name": "a 402 says the server's own reason"
+      }
+    ]
+  },
+  {
+    "id": "t18-fail-402-message-only",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
+    "find": "return typeof err.extra.reason === \"string\" ? err.extra.reason : err.message;",
+    "replace": "return err.message;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+        ],
+        "name": "a 402 says the server's own reason"
+      }
+    ]
+  },
+  {
+    "id": "t18-fail-402-canned",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
+    "find": "return typeof err.extra.reason === \"string\" ? err.extra.reason : err.message;",
+    "replace": "return msg(\"stagePoints.title\");",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+        ],
+        "name": "a 402 says the server's own reason"
+      }
+    ]
+  },
+  {
+    "id": "t18-fail-402-nonstring",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
+    "find": "typeof err.extra.reason === \"string\" ? err.extra.reason : err.message",
+    "replace": "err.extra.reason !== undefined ? (err.extra.reason as string) : err.message",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+        ],
+        "name": "a 402 says the server's own reason"
+      }
+    ]
+  },
+  {
+    "id": "t18-fail-refusal-words",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
+    "find": "return ruleRefusalText(err.code, err.extra, msg) ?? err.message;",
+    "replace": "return err.message;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+        ],
+        "name": "a rule refusal is said in the app's words"
+      }
+    ]
+  },
+  {
+    "id": "t18-fail-refusal-fallback",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
+    "find": "return ruleRefusalText(err.code, err.extra, msg) ?? err.message;",
+    "replace": "return ruleRefusalText(err.code, err.extra, msg) ?? \"\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+        ],
+        "name": "a rule refusal is said in the app's words"
       }
     ]
   },
@@ -762,25 +843,10 @@
     ]
   },
   {
-    "id": "t18-panel-gate-mount",
-    "file": "apps/web/src/components/v2/stages-panel.tsx",
-    "find": "        pointsDict={pointsDict}\n        customPointsAllowed={customPointsAllowed}\n        readOnly={readOnly}",
-    "replace": "        pointsDict={pointsDict}\n        customPointsAllowed={true}\n        readOnly={readOnly}",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/v2/__tests__/stages-panel-stage-points.test.tsx"
-        ],
-        "name": "customPointsAllowed false"
-      }
-    ]
-  },
-  {
     "id": "t18-panel-dict-mount",
     "file": "apps/web/src/components/v2/stages-panel.tsx",
-    "find": "        pointsDict={pointsDict}\n        customPointsAllowed={customPointsAllowed}\n        readOnly={readOnly}",
-    "replace": "        pointsDict={undefined}\n        customPointsAllowed={customPointsAllowed}\n        readOnly={readOnly}",
+    "find": "        pointsDict={pointsDict}\n        readOnly={readOnly}",
+    "replace": "        pointsDict={undefined}\n        readOnly={readOnly}",
     "killers": [
       {
         "cwd": "apps/web",
@@ -788,21 +854,6 @@
           "src/components/v2/__tests__/stages-panel-stage-points.test.tsx"
         ],
         "name": "the points slice of the public dictionary"
-      }
-    ]
-  },
-  {
-    "id": "t18-panel-gate-pass",
-    "file": "apps/web/src/components/v2/stages-panel.tsx",
-    "find": "                    customPointsAllowed={customPointsAllowed}",
-    "replace": "                    customPointsAllowed={true}",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/v2/__tests__/stages-panel-stage-points.test.tsx"
-        ],
-        "name": "customPointsAllowed false"
       }
     ]
   },
@@ -818,66 +869,6 @@
           "src/components/v2/__tests__/stages-panel-stage-points.test.tsx"
         ],
         "name": "the points slice of the public dictionary"
-      }
-    ]
-  },
-  {
-    "id": "t18-panel-default-allowed",
-    "file": "apps/web/src/components/v2/stages-panel.tsx",
-    "find": "customPointsAllowed = true,",
-    "replace": "customPointsAllowed = false,",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/v2/__tests__/stages-panel-stage-points.test.tsx"
-        ],
-        "name": "an omitted customPointsAllowed reads as allowed"
-      }
-    ]
-  },
-  {
-    "id": "t18-page-feature-key",
-    "file": "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx",
-    "find": "await hasFeature(auth.orgId, \"standings.custom_points\")",
-    "replace": "await hasFeature(auth.orgId, \"standings.custom_pointz\")",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/__tests__/held-final-phase.test.tsx"
-        ],
-        "name": "customPointsAllowed is the SERVER's gate"
-      }
-    ]
-  },
-  {
-    "id": "t18-page-viewer-asked",
-    "file": "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx",
-    "find": "tab === \"fixtures\" && editable ? await hasFeature(auth.orgId, \"standings.custom_points\") : true;",
-    "replace": "await hasFeature(auth.orgId, \"standings.custom_points\");",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/__tests__/held-final-phase.test.tsx"
-        ],
-        "name": "a viewer is not asked"
-      }
-    ]
-  },
-  {
-    "id": "t18-page-gate-pass",
-    "file": "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx",
-    "find": "customPointsAllowed={customPointsAllowed}",
-    "replace": "customPointsAllowed={true}",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/__tests__/held-final-phase.test.tsx"
-        ],
-        "name": "customPointsAllowed is the SERVER's gate"
       }
     ]
   },
@@ -908,21 +899,6 @@
           "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/__tests__/held-final-phase.test.tsx"
         ],
         "name": "StagesPanel gets the format.points"
-      }
-    ]
-  },
-  {
-    "id": "t18-page-with-competition",
-    "file": "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx",
-    "find": "await hasFeature(auth.orgId, \"standings.custom_points\")",
-    "replace": "await hasFeature(auth.orgId, \"standings.custom_points\", competition.id)",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/__tests__/held-final-phase.test.tsx"
-        ],
-        "name": "customPointsAllowed is the SERVER's gate"
       }
     ]
   },

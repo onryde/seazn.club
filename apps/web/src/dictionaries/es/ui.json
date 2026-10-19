@@ -6582,12 +6582,10 @@
   "stagePoints.bonus.forfeit_win": "Ganar por incomparecencia: {points} puntos extra",
   "stagePoints.bonus.forfeit_loss": "Perder por incomparecencia: {points} puntos extra",
   "stagePoints.bonus.no_result": "Sin resultado: {points} puntos extra",
-  "stagePoints.upgrade": "Los puntos de bonificación y de incomparecencia están desactivados para esta organización: los puntos de victoria, empate y derrota funcionan en todos los planes.",
   "stagePoints.inexpressible": "Los puntos de esta división aún no se pueden ajustar por fase",
   "stagePoints.save": "Guardar puntos",
   "stagePoints.invalid.number": "Introduce un número para los puntos de victoria, empate y derrota.",
   "stagePoints.invalid.walkover": "Introduce los dos puntos de incomparecencia o deja ambos vacíos.",
   "stagePoints.invalid.score": "Introduce los dos resultados de incomparecencia o deja ambos vacíos.",
-  "stagePoints.invalid.bonus": "Completa todas las bonificaciones.",
-  "stagePoints.gateHeld": "Esta fase ya tiene puntos de incomparecencia o de bonificación. Quítalos con \"Usar los puntos de la división\" antes de cambiar los de victoria, empate y derrota."
+  "stagePoints.invalid.bonus": "Completa todas las bonificaciones."
 }

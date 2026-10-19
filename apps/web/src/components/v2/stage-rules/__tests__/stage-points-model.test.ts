@@ -22,7 +22,6 @@ import {
   previewClauses,
   ruleFromDraft,
   stageTakesPoints,
-  storedHasCustomParts,
   storedPointsRule,
   type PointsDraft,
 } from "../stage-points-model";
@@ -54,19 +53,28 @@ const BASE = { win: 3, draw: 1, loss: 0 };
 const plain = (): PointsRule => ({ base: BASE, bonuses: [] });
 
 describe("stage points model (I9 killers for t18)", () => {
-  it("pointsSectionState: inexpressible first, then the gate, then the editor - all four pairs (Community org sees the gate)", () => {
-    const rows: [boolean, boolean, string][] = [
-      [true, true, "editor"],
-      [false, true, "gate"], // Community org sees the gate
-      [true, false, "inexpressible"],
-      [false, false, "inexpressible"], // an ice-hockey stage says why before it asks for Pro
+  it("pointsSectionState: a division a stage rule cannot say is inexpressible, every other the editor - both answers, counted", () => {
+    const rows: [boolean, string][] = [
+      [true, "editor"],
+      [false, "inexpressible"],
     ];
     let checked = 0;
-    for (const [canCustom, expressible, want] of rows) {
-      expect(pointsSectionState(canCustom, expressible), `(${canCustom}, ${expressible})`).toBe(want);
+    for (const [expressible, want] of rows) {
+      expect(pointsSectionState(expressible), `expressible=${expressible}`).toBe(want);
       checked++;
     }
-    expect(checked).toBe(4);
+    expect(checked).toBe(2);
+    // and against the SERVER's door, for every division the registry ships
+    let swept = 0;
+    let split = 0;
+    for (const { m, variant, cfg } of DIVISIONS) {
+      const refused = serverAnswer(m, cfg, plain())?.code === "POINTS_RULE_INEXPRESSIBLE";
+      expect(pointsSectionState(divisionExpressible(m, cfg).ok), `${m.key}/${variant}`).toBe(refused ? "inexpressible" : "editor");
+      if (refused) split++;
+      swept++;
+    }
+    expect(swept, "every division swept").toBe(DIVISIONS.length);
+    expect(split, "and some of them split").toBeGreaterThan(0);
   });
 
   it("the section is mounted on table stages only: the server's own door refuses every other kind (sweep of every StageKind)", () => {
@@ -102,20 +110,30 @@ describe("stage points model (I9 killers for t18)", () => {
     expect(split, "and some split their points (ice hockey, hockey shoot-out, cricket, indoor volleyball)").toBeGreaterThan(0);
   });
 
-  it("I3: the walkover SCORE is offered exactly where the server accepts it, for every sport (set sports, goal sports, both)", () => {
+  it("I3: the walkover SCORE is offered exactly where the server accepts it, for every sport and variant (set sports, goal sports, both)", () => {
+    let checked = 0;
+    let skipped = 0;
     let offered = 0;
     let hidden = 0;
-    for (const m of builtinModules) {
-      const cfg = m.variants[Object.keys(m.variants)[0]!] as Record<string, unknown>;
-      const withScore: PointsRule = { ...plain(), forfeit: { winnerPoints: 2, loserPoints: 0, awardScore: [3, 0] } };
+    const withScore: PointsRule = { ...plain(), forfeit: { winnerPoints: 2, loserPoints: 0, awardScore: [3, 0] } };
+    for (const { m, variant, cfg } of DIVISIONS) {
       const answer = serverAnswer(m, cfg, withScore);
-      if (answer?.code === "POINTS_RULE_INEXPRESSIBLE") continue; // asked first; the score is moot where nothing can be saved
+      if (answer?.code === "POINTS_RULE_INEXPRESSIBLE") {
+        // asked first; the score is moot where nothing can be saved. Counted, so a skip is never silent.
+        expect(divisionExpressible(m, cfg).ok, `${m.key}/${variant}: skipped only because the engine says it splits`).toBe(false);
+        skipped++;
+        continue;
+      }
       const serverRefusesScore = answer?.field === "points.forfeit.awardScore";
-      expect(offersWalkoverScore(m), `${m.key}: the input is shown iff the server takes the score`).toBe(!serverRefusesScore);
-      expect(offersWalkoverScore(m), `${m.key}: the engine's declaration`).toBe(pointsRuleAwardReachesTable(m));
+      expect(offersWalkoverScore(m), `${m.key}/${variant}: the input is shown iff the server takes the score`).toBe(!serverRefusesScore);
+      expect(offersWalkoverScore(m), `${m.key}/${variant}: the engine's declaration`).toBe(pointsRuleAwardReachesTable(m));
       if (offersWalkoverScore(m)) offered++;
       else hidden++;
+      checked++;
     }
+    expect(checked + skipped, "every division is either checked or skipped for a stated reason").toBe(DIVISIONS.length);
+    expect(checked, "most divisions are checked").toBeGreaterThan(skipped);
+    expect(skipped, "and some split their points (ice hockey, cricket, indoor volleyball)").toBeGreaterThan(0);
     expect(offered, "goal sports reach the table").toBeGreaterThan(0);
     expect(hidden, "set sports, carrom and the board games do not").toBeGreaterThan(0);
   });
@@ -296,18 +314,9 @@ describe("stage points model (I9 killers for t18)", () => {
     for (const stored of junk) {
       expect(storedPointsRule(stored), JSON.stringify(stored)).toBeNull();
       expect(draftFromStored(football, football.variants["11-a-side"], stored).useDivision, `${JSON.stringify(stored)} opens inheriting`).toBe(true);
-      expect(storedHasCustomParts(stored)).toBe(false);
     }
     expect(junk.length, "rows tried").toBeGreaterThan(5);
     expect(storedPointsRule({ base: BASE, bonuses: [] }), "and a real rule is still a rule").not.toBeNull();
-  });
-
-  it("what the gate withholds: a stored walkover row or any bonus", () => {
-    expect(storedHasCustomParts(null)).toBe(false);
-    expect(storedHasCustomParts({ base: BASE, bonuses: [] })).toBe(false);
-    expect(storedHasCustomParts({ base: BASE, bonuses: [], forfeit: { winnerPoints: 2, loserPoints: 0 } })).toBe(true);
-    expect(storedHasCustomParts({ base: BASE, bonuses: [{ when: "draw", points: 1 }] })).toBe(true);
-    expect(storedPointsRule({ base: { win: "x" } }), "a hand-edited row is no rule").toBeNull();
   });
 
   it("the preview says the walkover score only where the sport's table reads it, and nothing for a draft that is not a rule yet", () => {

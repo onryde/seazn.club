@@ -6582,12 +6582,10 @@
   "stagePoints.bonus.forfeit_win": "Een walkover winnen: {points} extra punten",
   "stagePoints.bonus.forfeit_loss": "Een walkover verliezen: {points} extra punten",
   "stagePoints.bonus.no_result": "Geen uitslag: {points} extra punten",
-  "stagePoints.upgrade": "Bonus- en walkoverpunten staan uit voor deze organisatie: punten voor winst, gelijkspel en verlies werken in elk abonnement.",
   "stagePoints.inexpressible": "De punten van deze divisie kunnen nog niet per fase worden ingesteld",
   "stagePoints.save": "Punten opslaan",
   "stagePoints.invalid.number": "Vul een getal in voor de punten voor winst, gelijkspel en verlies.",
   "stagePoints.invalid.walkover": "Vul beide walkoverpunten in of laat beide leeg.",
   "stagePoints.invalid.score": "Vul beide walkoveruitslagen in of laat beide leeg.",
-  "stagePoints.invalid.bonus": "Vul elke bonus in.",
-  "stagePoints.gateHeld": "Deze fase heeft al walkover- of bonuspunten. Verwijder ze met \"Punten van de divisie gebruiken\" voordat je de punten voor winst, gelijkspel en verlies wijzigt."
+  "stagePoints.invalid.bonus": "Vul elke bonus in."
 }

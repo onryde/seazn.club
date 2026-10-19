@@ -14,7 +14,9 @@ import enPublic from "@/dictionaries/en/public.json";
 import type { Dict } from "@/lib/i18n-constants";
 import { pointsLine } from "@/lib/points-line";
 import { pointsLineDict, rulesLineText } from "@/lib/rules-line";
-import { StagePointsSection } from "../stage-points-section";
+import { ApiV1Error } from "@/lib/client-v1";
+import { msg as enMsg } from "@/lib/messages";
+import { StagePointsSection, failureText } from "../stage-points-section";
 import { divisionExpressible, offeredBonusKinds } from "../stage-points-model";
 
 const sport = (key: string): AnySportModule => builtinModules.find((m) => m.key === key)!;
@@ -26,7 +28,7 @@ const BASE = { win: 3, draw: 1, loss: 0 };
 const FORFEIT_RULE: PointsRule = { base: BASE, bonuses: [], forfeit: { winnerPoints: 4, loserPoints: 1 } };
 const SCORED_RULE: PointsRule = { base: BASE, bonuses: [], forfeit: { winnerPoints: 4, loserPoints: 1, awardScore: [3, 0] } };
 
-function render(m: AnySportModule, variant: string, stored: unknown, over: { customPointsAllowed?: boolean; readOnly?: boolean; pointsDict?: Dict } = {}): string {
+function render(m: AnySportModule, variant: string, stored: unknown, over: { readOnly?: boolean; pointsDict?: Dict } = {}): string {
   return renderToStaticMarkup(
     <DictProvider dict={enUi as Dict} locale="en">
       <StagePointsSection
@@ -35,7 +37,6 @@ function render(m: AnySportModule, variant: string, stored: unknown, over: { cus
         divisionConfig={m.variants[variant] as Record<string, unknown>}
         stored={stored}
         pointsDict={"pointsDict" in over ? over.pointsDict : POINTS_DICT}
-        customPointsAllowed={over.customPointsAllowed ?? true}
         readOnly={over.readOnly ?? false}
         onSaved={() => undefined}
       />
@@ -104,20 +105,17 @@ describe("I3: the walkover SCORE is shown on goal sports and hidden on the sport
   });
 });
 
-describe("the section's three states, in the order inexpressible, gate, editor", () => {
-  it("inexpressible: an ice-hockey division that splits its points says why, in words, with NO inputs - even for an org that has the feature", () => {
+describe("the section's two states: inexpressible, else the editor (scoring is free on every plan)", () => {
+  it("inexpressible: an ice-hockey division that splits its points says why, in words, with NO inputs", () => {
     const m = sport("icehockey");
     const variant = Object.keys(m.variants).find((v) => !divisionExpressible(m, m.variants[v]).ok)!;
     expect(variant, "premise: a splitting variant exists").toBeDefined();
-    for (const customPointsAllowed of [true, false]) {
-      const html = render(m, variant, null, { customPointsAllowed });
-      expect(html).toContain('data-stage-points-state="inexpressible"');
-      const said = text(tagOf(html, "stage-points-inexpressible") + html.slice(html.indexOf('data-testid="stage-points-inexpressible"'), html.indexOf("</p>", html.indexOf('data-testid="stage-points-inexpressible"'))));
-      expect(said, "the reason names the split points").toMatch(/overtime/i);
-      expect(said, "and says the stage cannot take them").toMatch(/can't be set per stage/i);
-      expect(html, "no input at all").not.toContain("<input");
-      expect(has(html, "stage-points-upgrade"), "a sport that cannot use the feature is not sold it").toBe(false);
-    }
+    const html = render(m, variant, null);
+    expect(html).toContain('data-stage-points-state="inexpressible"');
+    const said = text(tagOf(html, "stage-points-inexpressible") + html.slice(html.indexOf('data-testid="stage-points-inexpressible"'), html.indexOf("</p>", html.indexOf('data-testid="stage-points-inexpressible"'))));
+    expect(said, "the reason names the split points").toMatch(/overtime/i);
+    expect(said, "and says the stage cannot take them").toMatch(/can't be set per stage/i);
+    expect(html, "no input at all").not.toContain("<input");
   });
 
   it("inexpressible is judged per VARIANT: the same sport's recreational variant has an editor", () => {
@@ -127,35 +125,98 @@ describe("the section's three states, in the order inexpressible, gate, editor",
     expect(render(m, variant, null)).toContain('data-stage-points-state="editor"');
   });
 
-  it("gate: the base sentence is there and editable; the upgrade note stands where the walkover and bonus rows would be", () => {
-    const html = render(football, "11-a-side", { base: BASE, bonuses: [] }, { customPointsAllowed: false });
-    expect(html).toContain('data-stage-points-state="gate"');
-    for (const id of ["stage-points-win", "stage-points-draw", "stage-points-loss"]) {
-      expect(has(html, id), id).toBe(true);
-      expect(tagOf(html, id), `${id} is editable`).not.toContain("disabled");
+  it("editor: the base sentence, the walkover row and the bonus add menu are all there for every stored rule - no plan note, no held boxes", () => {
+    let checked = 0;
+    for (const stored of [{ base: BASE, bonuses: [] }, FORFEIT_RULE, { base: BASE, bonuses: [{ when: "draw", points: 1 }] }]) {
+      const html = render(football, "11-a-side", stored);
+      expect(html).toContain('data-stage-points-state="editor"');
+      expect(has(html, "stage-points-walkover-w") && has(html, "stage-points-bonus-add"), JSON.stringify(stored)).toBe(true);
+      for (const id of ["stage-points-win", "stage-points-draw", "stage-points-loss"]) expect(tagOf(html, id), `${JSON.stringify(stored)}: ${id} is editable`).not.toContain("disabled");
+      // the plan copy is gone from the product: neither a note nor a held-boxes line
+      for (const id of ["stage-points-upgrade", "stage-points-gate-held"]) expect(has(html, id), id).toBe(false);
+      checked++;
     }
-    expect(has(html, "stage-points-upgrade")).toBe(true);
-    expect(text(html)).toContain(UI["stagePoints.upgrade"]!);
-    for (const id of ["stage-points-walkover-w", "stage-points-walkover-l", "stage-points-award-w", "stage-points-bonuses", "stage-points-bonus-add"]) {
-      expect(has(html, id), `${id} is not offered without the entitlement`).toBe(false);
-    }
+    expect(checked).toBe(3);
+    expect(render(football, "11-a-side", null), "and nothing stored inherits the division's, still the editor").toContain('data-stage-points-state="editor"');
+  });
+});
+
+describe("a STORED own rule on a division a stage rule cannot say (review M1): read, and a way out", () => {
+  const OWN: PointsRule = { base: { win: 4, draw: 1, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 1 } };
+  const split = (): { m: AnySportModule; variant: string } => {
+    const m = sport("icehockey");
+    const variant = Object.keys(m.variants).find((v) => !divisionExpressible(m, m.variants[v]).ok)!;
+    expect(variant, "premise: a splitting variant exists").toBeDefined();
+    return { m, variant };
+  };
+
+  it("an editable stage shows the reason AND the rule it still plays - the sentence and its preview - with 'Use the division's points' to clear it", () => {
+    const { m, variant } = split();
+    const html = render(m, variant, OWN);
+    expect(html).toContain('data-stage-points-state="inexpressible"');
+    expect(has(html, "stage-points-inexpressible"), "the reason is still said").toBe(true);
+    expect(has(html, "stage-points-readonly"), "and the stored rule is read").toBe(true);
+    expect(text(html.slice(html.indexOf('data-testid="stage-points-readonly"')))).toContain(UI["stagePoints.ownPoints"]!);
+    expect(text(html), "the preview is the stored rule in the public line's words").toContain(rulesLineText(POINTS_DICT, pointsLine(OWN, { awardReaches: pointsRuleAwardReachesTable(m) })));
+    const clear = tagOf(html, "stage-points-clear");
+    expect(clear, "the way out is a button").toMatch(/^<button/);
+    expect(clear).not.toContain("disabled");
+    expect(text(html.slice(html.indexOf('data-testid="stage-points-clear"')))).toContain(UI["stagePoints.useDivision"]!);
+    expect(html, "and still no number input: a rule that cannot be re-saved cannot be edited").not.toContain("<input");
   });
 
-  it("editor: the walkover row and the bonus add menu are there, and the upgrade note is not", () => {
-    const html = render(football, "11-a-side", { base: BASE, bonuses: [] });
-    expect(html).toContain('data-stage-points-state="editor"');
-    expect(has(html, "stage-points-walkover-w") && has(html, "stage-points-bonus-add")).toBe(true);
-    expect(has(html, "stage-points-upgrade")).toBe(false);
+  it("a locked stage or a viewer reads it and gets no button (the server holds the same lock)", () => {
+    const { m, variant } = split();
+    const html = render(m, variant, OWN, { readOnly: true });
+    expect(html).toContain('data-stage-points-state="inexpressible"');
+    expect(has(html, "stage-points-readonly") && has(html, "stage-points-preview"), "the rule is read").toBe(true);
+    expect(has(html, "stage-points-clear"), "no clear on a locked stage").toBe(false);
+    expect(html).not.toMatch(/<(input|select|button)/);
   });
 
-  it("the gate holds a stored walkover row's base boxes (the same rule SENT is 402) and leaves 'Use the division's points' as the way out", () => {
-    const html = render(football, "11-a-side", FORFEIT_RULE, { customPointsAllowed: false });
-    expect(has(html, "stage-points-gate-held")).toBe(true);
-    for (const id of ["stage-points-win", "stage-points-draw", "stage-points-loss"]) expect(tagOf(html, id), id).toContain("disabled");
-    expect(tagOf(html, "stage-points-use-division"), "null asks no gate").not.toContain("disabled");
-    // the positive pair: a gated org whose stored rule is the plain base sentence is NOT held
-    const plain = render(football, "11-a-side", { base: BASE, bonuses: [] }, { customPointsAllowed: false });
-    expect(has(plain, "stage-points-gate-held")).toBe(false);
+  it("nothing stored (or a row the schema refuses): the reason alone - no sentence, no preview, no clear", () => {
+    const { m, variant } = split();
+    let checked = 0;
+    for (const stored of [undefined, null, {}, { base: { win: "x", draw: 1, loss: 0 }, bonuses: [] }, 5]) {
+      const html = render(m, variant, stored);
+      expect(has(html, "stage-points-inexpressible"), JSON.stringify(stored)).toBe(true);
+      for (const id of ["stage-points-readonly", "stage-points-preview", "stage-points-clear"]) expect(has(html, id), `${JSON.stringify(stored)}: ${id}`).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(5);
+  });
+
+  it("sweep: every splitting (sport, variant) in the registry reads a stored rule the same way", () => {
+    let checked = 0;
+    for (const m of builtinModules)
+      for (const variant of Object.keys(m.variants)) {
+        if (divisionExpressible(m, m.variants[variant]).ok) continue;
+        const html = render(m, variant, OWN);
+        expect(has(html, "stage-points-inexpressible") && has(html, "stage-points-readonly") && has(html, "stage-points-clear"), `${m.key}/${variant}`).toBe(true);
+        checked++;
+      }
+    expect(checked, "splitting divisions swept").toBeGreaterThan(0);
+  });
+});
+
+describe("what a failed Save says (review M2)", () => {
+  const m = enMsg;
+
+  it("a 402 says the server's own reason when it names one, else the server's message - never a canned plan sentence", () => {
+    const reason = "Custom points need the Pro plan.";
+    expect(failureText(new ApiV1Error("Payment required", 402, "PAYMENT_REQUIRED", { reason }), m)).toBe(reason);
+    expect(failureText(new ApiV1Error("Payment required", 402, "PAYMENT_REQUIRED", {}), m), "no reason: the message").toBe("Payment required");
+    expect(failureText(new ApiV1Error("Payment required", 402, "PAYMENT_REQUIRED", { reason: 3 }), m), "a reason that is not text is not said").toBe("Payment required");
+  });
+
+  it("a rule refusal is said in the app's words; one it cannot say keeps the server's message; a plain error its own", () => {
+    const refused = failureText(new ApiV1Error("english from the server", 422, "POINTS_RULE_INEXPRESSIBLE", { keys: ["otWin"] }), m);
+    expect(refused).toMatch(/can't be set per stage/i);
+    expect(refused).not.toBe("english from the server");
+    expect(failureText(new ApiV1Error("english from the server", 422, "POINTS_RULE_INEXPRESSIBLE", { keys: [] }), m), "no nameable keys: the message").toBe("english from the server");
+    expect(failureText(new ApiV1Error("boom", 500, "INTERNAL", {}), m)).toBe("boom");
+    expect(failureText(new Error("offline"), m)).toBe("offline");
+    expect(failureText("odd", m)).toBe("odd");
   });
 });
 

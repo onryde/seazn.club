@@ -6582,12 +6582,10 @@
   "stagePoints.bonus.forfeit_win": "Gagner par forfait : {points} points en plus",
   "stagePoints.bonus.forfeit_loss": "Perdre par forfait : {points} points en plus",
   "stagePoints.bonus.no_result": "Sans résultat : {points} points en plus",
-  "stagePoints.upgrade": "Les points de bonus et de forfait sont désactivés pour cette organisation : les points de victoire, de nul et de défaite fonctionnent sur toutes les offres.",
   "stagePoints.inexpressible": "Les points de cette division ne peuvent pas encore être réglés par phase",
   "stagePoints.save": "Enregistrer les points",
   "stagePoints.invalid.number": "Saisissez un nombre pour les points de victoire, de nul et de défaite.",
   "stagePoints.invalid.walkover": "Saisissez les deux points de forfait, ou laissez les deux vides.",
   "stagePoints.invalid.score": "Saisissez les deux scores de forfait, ou laissez les deux vides.",
-  "stagePoints.invalid.bonus": "Renseignez chaque bonus.",
-  "stagePoints.gateHeld": "Cette phase a déjà des points de forfait ou de bonus. Retirez-les avec « Utiliser les points de la division » avant de modifier ceux de victoire, de nul et de défaite."
+  "stagePoints.invalid.bonus": "Renseignez chaque bonus."
 }

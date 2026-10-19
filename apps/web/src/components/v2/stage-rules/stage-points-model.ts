@@ -25,18 +25,15 @@ const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object
 // Which state the section is in.
 // ---------------------------------------------------------------------------
 
-export type PointsSectionState = "inexpressible" | "gate" | "editor";
+export type PointsSectionState = "inexpressible" | "editor";
 
 /**
- * The section's state, in this order (review I9): a division whose points a stage rule cannot say is `inexpressible` first
- * (an ice-hockey stage says why before it asks for Pro, so an org that cannot have the feature is never sold it for a
- * sport that cannot use it); else an org without `standings.custom_points` gets the `gate` (the base sentence, and the
- * note where the walkover and bonus rows would be); else the `editor`.
+ * The section's state (review I9): a division whose points a stage rule cannot say is `inexpressible` (the reason, and no
+ * boxes); every other division gets the `editor`. There is no plan state: scoring is free on every plan (owner, 2026-10-19),
+ * so the section asks nothing of the org's entitlements.
  */
-export function pointsSectionState(canCustom: boolean, expressible: boolean): PointsSectionState {
-  if (!expressible) return "inexpressible";
-  if (!canCustom) return "gate";
-  return "editor";
+export function pointsSectionState(expressible: boolean): PointsSectionState {
+  return expressible ? "editor" : "inexpressible";
 }
 
 /** Does this stage have a table its own points could rank? The server refuses a bracket kind (`refuseStagePoints`). */
@@ -271,12 +268,6 @@ export function draftIsDirty(module: AnySportModule, draft: PointsDraft, stored:
   const next = ruleFromDraft(module, draft);
   if (!next.ok) return true;
   return canonical(next.rule) !== canonical(storedPointsRule(stored));
-}
-
-/** Does a stored rule carry what the gate withholds (a walkover row or any bonus)? */
-export function storedHasCustomParts(stored: unknown): boolean {
-  const rule = storedPointsRule(stored);
-  return rule !== null && (rule.bonuses.length > 0 || rule.forfeit !== undefined);
 }
 
 /**

@@ -6582,12 +6582,10 @@
   "stagePoints.bonus.forfeit_win": "Winning a walkover: {points} extra points",
   "stagePoints.bonus.forfeit_loss": "Losing a walkover: {points} extra points",
   "stagePoints.bonus.no_result": "No result: {points} extra points",
-  "stagePoints.upgrade": "Bonus and walkover points are switched off for this organisation — win, draw and loss points work on every plan.",
   "stagePoints.inexpressible": "This division's points can't be set per stage yet",
   "stagePoints.save": "Save points",
   "stagePoints.invalid.number": "Enter a number for the win, draw and loss points.",
   "stagePoints.invalid.walkover": "Enter both walkover points, or leave both empty.",
   "stagePoints.invalid.score": "Enter both walkover scores, or leave both empty.",
-  "stagePoints.invalid.bonus": "Fill in every bonus.",
-  "stagePoints.gateHeld": "This stage already has walkover or bonus points. Clear them with \"Use the division's points\" before changing the win, draw and loss points."
+  "stagePoints.invalid.bonus": "Fill in every bonus."
 }

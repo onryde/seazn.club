@@ -318,10 +318,6 @@ interface Props {
   /** The public dictionary's `format.points.*` slice (`pointsLineDict`): the stage points section previews its rule in the
    *  public stage line's own words (W2c Task 18). Absent, the section shows no preview. */
   pointsDict?: Dict;
-  /** Does the org hold `standings.custom_points` (the page reads it with `hasFeature`, the gate the stage PUT asks)? Without
-   *  it the points section offers the base win / draw / loss sentence only. Optional like `venues`/`phase`: the
-   *  pre-existing `stages-panel-*.test.tsx` props build without it; absent reads as allowed, and the server's 402 stands. */
-  customPointsAllowed?: boolean;
   /** Stage ids whose match format is LOCKED, resolved server-side by
    *  `formatLockedStageIds` (usecases/stage-rules.ts) from the same predicate
    *  the PUT refuses on. Deliberately a server fact rather than anything
@@ -496,7 +492,7 @@ export function boardSlotOptionsFor(
  *  whole panel every second. */
 const RUN_SHEET_NOW_TICK_MS = 60_000;
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, customPointsAllowed = true, formatLockedStageIds = [], tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, openRounds, onlineAwaitsStart = false, arbiterHref = null }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, openRounds, onlineAwaitsStart = false, arbiterHref = null }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -1289,7 +1285,6 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     divisionConfig={divisionConfig}
                     ruleDict={ruleDict}
                     pointsDict={pointsDict}
-                    customPointsAllowed={customPointsAllowed}
                     stageConfig={stage.config}
                     locked={formatLockedStageIds.includes(stage.id)}
                     canEdit={canEdit}
@@ -2272,7 +2267,6 @@ function StageFormatRow({
   divisionConfig,
   ruleDict,
   pointsDict,
-  customPointsAllowed,
   stageConfig,
   locked,
   canEdit,
@@ -2287,7 +2281,6 @@ function StageFormatRow({
   divisionConfig: Record<string, unknown>;
   ruleDict: Dict | undefined;
   pointsDict: Dict | undefined;
-  customPointsAllowed: boolean;
   stageConfig: Record<string, unknown>;
   locked: boolean;
   canEdit: boolean;
@@ -2555,7 +2548,6 @@ function StageFormatRow({
         divisionConfig={divisionConfig}
         stored={stageConfig.points}
         pointsDict={pointsDict}
-        customPointsAllowed={customPointsAllowed}
         readOnly={readOnly}
         onSaved={onSaved}
       />

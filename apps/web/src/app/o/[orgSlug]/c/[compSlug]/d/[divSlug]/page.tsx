@@ -469,12 +469,9 @@ export default async function DivisionPage({
   // (`format.rules.*`, W2c Task 17): only that slice crosses into the client panel.
   const fixturesPublicDict = tab === "fixtures" ? await getDictionary(locale, "public") : undefined;
   const ruleDict = fixturesPublicDict === undefined ? undefined : rulesLineDict(fixturesPublicDict);
-  // W2c Task 18 (S3): the stage points section previews its rule in the public stage line's own `format.points.*` words,
-  // and asks the SAME gate the stage PUT asks (`assertCustomPointsAllowed`: `standings.custom_points`, org-wide, no
-  // competition) so the section never offers a walkover row or a bonus the server will answer 402 to.
+  // W2c Task 18 (S3): the stage points section previews its rule in the public stage line's own `format.points.*` words.
+  // It asks no plan question: scoring is free on every plan (owner, 2026-10-19), and the server's own gate stays.
   const pointsDict = fixturesPublicDict === undefined ? undefined : pointsLineDict(fixturesPublicDict);
-  const customPointsAllowed =
-    tab === "fixtures" && editable ? await hasFeature(auth.orgId, "standings.custom_points") : true;
 
   // Standings per table stage (+ per pool), with pool labels.
   const tableStages = stages.filter((s) => TABLE_KINDS.has(s.kind));
@@ -863,7 +860,6 @@ export default async function DivisionPage({
               divisionConfig={(division.config ?? {}) as Record<string, unknown>}
               ruleDict={ruleDict}
               pointsDict={pointsDict}
-              customPointsAllowed={customPointsAllowed}
               formatLockedStageIds={formatLockedStages}
               tz={scheduleSettings.tz}
               // The GOVERNING clock, resolved here exactly as the schedule page
