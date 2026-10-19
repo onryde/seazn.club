@@ -203,7 +203,7 @@ describe("tools/matrix import boundary", () => {
   // anything read back from the code under test.
   const MATCH_RULES_API = [
     "SINGLE_SET_POINTS_LABEL", "SPORT_RULES", "alignBestOfOnePoints", "borrowOptionLabel",
-    "buildRuleOverride", "configKeysFor", "hydrateRuleValues", "keysEmittedBy", "ruleOptionLabel", "setRuleValue",
+    "buildRuleOverride", "clearedSequenceKeys", "configKeysFor", "hydrateRuleValues", "keysEmittedBy", "ruleOptionLabel", "setRuleValue",
     "showsOnePointsField", "visibleRuleFields",
   ];
   it("the match-rules directory is a tree plain node can load: every relative import names its .ts, and node loads the whole public API", () => {
