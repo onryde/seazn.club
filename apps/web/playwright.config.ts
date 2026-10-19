@@ -162,6 +162,18 @@ const PARALLEL_SLICE = process.env.E2E_PARALLEL_SLICE;
 // `test file "ai-architect.spec.ts" should not import test file "helpers.ts"`.
 const WALKTHROUGH = /[\\/]e2e[\\/]walkthrough[\\/]/;
 
+// Walkthrough carve-outs, selected by E2E_WALKTHROUGH_SLICE (see the block
+// above the project for the measurements and the reasoning). "capture" and
+// "stream" each select ONE group of files; "rest" ignores both and is the
+// catch-all; unset runs the whole directory, which is what a local run wants.
+const WALKTHROUGH_CAPTURE = /walkthrough[\\/]capture-(phone|panel-pr2|auto)\.spec\.ts/;
+const WALKTHROUGH_STREAM = /walkthrough[\\/]stream-relay\.spec\.ts/;
+const WALKTHROUGH_SLICE = process.env.E2E_WALKTHROUGH_SLICE;
+const WALKTHROUGH_SLICE_MATCH: Record<string, RegExp> = {
+  capture: WALKTHROUGH_CAPTURE,
+  stream: WALKTHROUGH_STREAM,
+};
+
 export default defineConfig({
   testDir: "./e2e",
   // Runs before EVERY project, `setup` included: proves the server on BASE is a
@@ -211,7 +223,12 @@ export default defineConfig({
     // WALKTHROUGH above for why, and for what it costs.
     {
       name: "walkthrough",
-      testMatch: WALKTHROUGH,
+      testMatch: WALKTHROUGH_SLICE && WALKTHROUGH_SLICE in WALKTHROUGH_SLICE_MATCH
+        ? WALKTHROUGH_SLICE_MATCH[WALKTHROUGH_SLICE]
+        : WALKTHROUGH,
+      ...(WALKTHROUGH_SLICE === "rest"
+        ? { testIgnore: [WALKTHROUGH_CAPTURE, WALKTHROUGH_STREAM] }
+        : {}),
       use: { ...devices["Desktop Chrome"], storageState: AUTH_STATE },
       dependencies: ["setup"],
     },
