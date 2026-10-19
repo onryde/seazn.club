@@ -5679,3 +5679,111 @@ test("rules-changed banner (W2c T15, X-SR-7): an open remote pad after a correct
     await ctx.close();
   }
 });
+
+// W2c Task 17 (S1): the stage rules row at every width. One DOM, branched with `max-md:*` - never a second phone tree - so
+// the evidence is: the row and its editor fit (no page scroll, nothing clipped), every control holds the 44px floor and is
+// hit-testable (`elementFromPoint`, not paint), the deciders notice shows at this width, and the control SET (membership,
+// order, repeats) is the one 1280 shows. Football carries the sections, the notice and the selects; chess carries the
+// ordered-list control, which has the most buttons per row of anything in the product's rules editors.
+test("W2c stage format row at every width: sections, the deciders notice and the tie-break list hold the 44px floor, no scroll, the control set matches 1280", async ({
+  page,
+  request,
+}, testInfo) => {
+  test.setTimeout(180_000);
+  const seed = async (sport: string, variant: string, label: string): Promise<{ divisionId: string; stageId: string }> => {
+    const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+      ends_on: "2030-12-31",
+      name: `W2c T17 ${label} ${TAG}-${testInfo.project.name}`,
+      visibility: "private",
+    });
+    expect(comp.status, `competition: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
+    const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+      name: `${label} division`,
+      sport_key: sport,
+      variant_key: variant,
+    });
+    expect(div.status, `division ${sport}: ${JSON.stringify(div.error)}`).toBeLessThan(300);
+    const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${div.data!.id}/stages`, "POST", {
+      seq: 1,
+      kind: "knockout",
+      name: "Knockout",
+    });
+    expect(stage.status, `stage ${sport}: ${JSON.stringify(stage.error)}`).toBeLessThan(300);
+    return { divisionId: div.data!.id, stageId: stage.data!.id };
+  };
+  const projectWidth = page.viewportSize()!.width;
+  const shots = process.env.T17_SHOTS_DIR;
+  const editorControls = (row: Locator) =>
+    row
+      .getByTestId("stage-format-editor")
+      .locator('[data-testid^="stage-rule-field-"], [data-testid^="stage-rule-sequence-"], [data-testid="stage-format-save"], [data-testid="stage-deciders-off"], [data-testid="stage-deciders-level"]')
+      .evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")));
+
+  // --- football: the sections, the selects, the notice -------------------------------------------------------------
+  const fb = await seed("football", "11-a-side", "football");
+  await page.goto(await divisionPath(page.request, fb.divisionId, "?tab=fixtures"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const row = page.getByTestId(`stage-format-row-${fb.stageId}`);
+  await expect(row).toBeVisible({ timeout: 20_000 });
+  await assertTapFloor(row.getByTestId("stage-format-edit"), "Edit rules");
+  await expectNoHorizontalScroll(page);
+  if (shots) await row.screenshot({ path: `${shots}/collapsed-${projectWidth}.png` });
+  await row.getByTestId("stage-format-edit").click();
+  const editor = row.getByTestId("stage-format-editor");
+  await expect(editor).toBeVisible();
+  const interactive = editor.locator("select, input, button");
+  const n = await interactive.count();
+  expect(n, "the editor has controls to measure").toBeGreaterThan(4);
+  for (let i = 0; i < n; i++) await assertTapFloor(interactive.nth(i), `football editor control ${i}`);
+  // Both deciders off: the notice shows, inside the row, at this width.
+  await row.getByTestId("stage-rule-field-extraTime").locator("select").selectOption("off");
+  await row.getByTestId("stage-rule-field-shootout").locator("select").selectOption("off");
+  const notice = row.getByTestId("stage-deciders-off");
+  await expect(notice).toBeVisible();
+  const clip = await overflowingIn(page, `[data-testid="stage-format-row-${fb.stageId}"]`, "*", "the stage rules row is missing");
+  expect(clip.clipped, `nothing in the row is clipped at ${projectWidth}`).toEqual([]);
+  await expectNoHorizontalScroll(page);
+  const dims = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
+  expect(dims.scroll, `${projectWidth}: scrollWidth ${dims.scroll} within clientWidth ${dims.client}`).toBeLessThanOrEqual(dims.client);
+  if (shots) {
+    await editor.scrollIntoViewIfNeeded();
+    await row.screenshot({ path: `${shots}/expanded-${projectWidth}.png` });
+    await notice.screenshot({ path: `${shots}/deciders-off-${projectWidth}.png` });
+  }
+  const here = await editorControls(row);
+  expect(here.length, "the editor's controls were read").toBeGreaterThan(4);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  expect(here, `the football editor's control set at ${projectWidth} vs 1280: membership, order, repeats`).toEqual(await editorControls(row));
+  await page.setViewportSize({ width: projectWidth, height: page.viewportSize()!.height });
+
+  // --- chess: the ordered list -------------------------------------------------------------------------------------
+  const chess = await seed("boardgame", "blitz", "chess");
+  await page.goto(await divisionPath(page.request, chess.divisionId, "?tab=fixtures"), { waitUntil: "load" });
+  const crow = page.getByTestId(`stage-format-row-${chess.stageId}`);
+  await expect(crow).toBeVisible({ timeout: 20_000 });
+  await crow.getByTestId("stage-format-edit").click();
+  const list = crow.getByTestId("stage-rule-sequence-tiebreakRungs");
+  await expect(list).toBeVisible();
+  const items = list.locator("li");
+  const rungs = await items.count();
+  expect(rungs, "the default list has every rung").toBe(3);
+  for (let i = 0; i < rungs; i++) {
+    const buttons = items.nth(i).locator("button");
+    const b = await buttons.count();
+    expect(b, "up, down and remove").toBe(3);
+    for (let j = 0; j < b; j++) if (!(await buttons.nth(j).isDisabled())) await assertTapFloor(buttons.nth(j), `chess rung ${i} button ${j}`);
+  }
+  // Empty it: the add menu and the reset hold the floor too, and the empty line fits.
+  for (let i = 0; i < rungs; i++) await items.first().locator("button").last().click();
+  await expect(crow.getByTestId("stage-rule-sequence-tiebreakRungs-empty")).toBeVisible();
+  await assertTapFloor(crow.getByTestId("stage-rule-sequence-tiebreakRungs-add"), "chess add rung");
+  await assertTapFloor(crow.getByTestId("stage-rule-sequence-tiebreakRungs-reset"), "chess use default order");
+  await assertTapFloor(crow.getByTestId("stage-format-save"), "chess Save rules");
+  const cclip = await overflowingIn(page, `[data-testid="stage-format-row-${chess.stageId}"]`, "*", "the chess rules row is missing");
+  expect(cclip.clipped, `nothing in the chess row is clipped at ${projectWidth}`).toEqual([]);
+  await expectNoHorizontalScroll(page);
+  if (shots) await crow.screenshot({ path: `${shots}/chess-sequence-${projectWidth}.png` });
+  const chessHere = await editorControls(crow);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  expect(chessHere, `the chess editor's control set at ${projectWidth} vs 1280`).toEqual(await editorControls(crow));
+});

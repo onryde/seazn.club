@@ -16,10 +16,10 @@ import { StageRuleFields } from "../stage-rule-fields";
 
 const KINDS = ["league", ...BRACKET_KINDS] as StageKind[];
 const render = (sportKey: string, kind: StageKind, values: Record<string, string> = {}, divisionConfig: Record<string, unknown> = {}, variant: string | null = null): string => {
-  const module = builtinModules.find((m) => m.key === sportKey)!;
+  const mod = builtinModules.find((m) => m.key === sportKey)!;
   return renderToStaticMarkup(
     <DictProvider dict={enUi as Dict} locale="en">
-      <StageRuleFields sportKey={sportKey} module={module} kind={kind} variant={variant} values={values} onChange={() => undefined} disabled={false} divisionConfig={divisionConfig} />
+      <StageRuleFields sportKey={sportKey} module={mod} kind={kind} variant={variant} values={values} onChange={() => undefined} disabled={false} divisionConfig={divisionConfig} />
     </DictProvider>,
   );
 };
@@ -99,5 +99,37 @@ describe("the abandon select names the option it will not take, with the engine'
       const enabled = render("generic", "league", { [draws.key]: "on" }, { allowDraws: false });
       expect(enabled).not.toContain("stage-abandon-unavailable-share");
     }
+  });
+});
+
+describe("the abandon field follows the engine's declarations (carries 'share only on draw kinds' and the carrom flip)", () => {
+  it("generic offers the abandon field on a league and not on a knockout (abandonPolicy appliesTo the table kinds)", () => {
+    let withField = 0;
+    let without = 0;
+    for (const kind of KINDS) {
+      const has = render("generic", kind).includes('data-testid="stage-rule-field-abandonPolicy"');
+      const declared = stageFieldsFor({ module: builtinModules.find((m) => m.key === "generic")!, stageKind: kind, variant: null }).some((f) => f.edits.includes("abandonPolicy"));
+      expect(has, `generic/${kind}`).toBe(declared);
+      if (has) withField++;
+      else without++;
+    }
+    expect(withField, "a table kind has it").toBeGreaterThan(0);
+    expect(without, "a bracket kind does not").toBeGreaterThan(0);
+    expect(render("generic", "league")).toContain('data-testid="stage-rule-field-abandonPolicy"');
+    expect(render("generic", "knockout")).not.toContain('data-testid="stage-rule-field-abandonPolicy"');
+  });
+
+  it("carrom: 'share' is unavailable while the tie board is the extra board, and available once the stage sets 'Drawn game' (the flipped case)", () => {
+    const tieBoard = SPORT_RULES.carrom!.find((f) => f.edits.includes("tieBoard"))!;
+    const drawn = tieBoard.options!.find((o) => (tieBoard.build(o.value, { [tieBoard.key]: o.value }) as { tieBoard?: string }).tieBoard === "draw");
+    expect(drawn, "premise: carrom's tie-board field has a Drawn game option").toBeDefined();
+    const extra = tieBoard.options!.find((o) => (tieBoard.build(o.value, { [tieBoard.key]: o.value }) as { tieBoard?: string }).tieBoard === "extra")!;
+    const before = render("carrom", "league", { [tieBoard.key]: extra.value });
+    expect(before).toMatch(/<option value="share" disabled=""/);
+    expect(before).toContain('data-testid="stage-abandon-unavailable-share"');
+    const after = render("carrom", "league", { [tieBoard.key]: drawn!.value });
+    expect(after).not.toMatch(/<option value="share" disabled=""/);
+    expect(after).not.toContain("stage-abandon-unavailable");
+    expect(after).toMatch(/<option value="share"/);
   });
 });

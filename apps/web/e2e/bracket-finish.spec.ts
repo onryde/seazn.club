@@ -904,9 +904,9 @@ test.describe("W2a — the pad finishes a bracket (Task 12)", () => {
   });
 
   test("BG-KO-3 a rung list carried by the STAGE's own rules — where the stage editor writes it — reaches the pad and beats the division's", async ({ page, request }) => {
-    // The division carries no list (every rung); the stage's `rules.tiebreakRungs` is the narrower, reordered one. The API's
-    // stage-rules writer does not take chess yet (STAGE_RULES_SPORTS), so the stage row is written directly: the seam under
-    // test is the resolver and the pad, not the writer.
+    // The division carries no list (every rung); the stage's `rules.tiebreakRungs` is the narrower, reordered one. The stage row is
+    // written directly (the stage-rules writer takes chess since W2c Task 11, and `stage-rules-w2c.spec.ts` drives it): the
+    // seam under test is the resolver and the pad, not the writer.
     const ko = await knockout(request, "boardgame", "classical");
     expect(await stageRungs(request, ko.divisionId), "precondition: the division plays every rung").toEqual([...TIEBREAK_RUNGS]);
     const own = ["blitz", "armageddon"];

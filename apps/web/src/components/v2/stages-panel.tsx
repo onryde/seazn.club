@@ -2270,7 +2270,7 @@ function StageFormatRow({
   /** The lock line's link: show this stage's fixtures in the run sheet. */
   onSeeFixtures: () => void;
 }) {
-  const module = useMemo(() => moduleFor(sportKey), [sportKey]);
+  const sportModule = useMemo(() => moduleFor(sportKey), [sportKey]);
   const [open, setOpen] = useState(false);
   const [values, setValues] = useState<Record<string, string>>({});
   /** What the editor was opened with — the save path diffs against this so
@@ -2301,11 +2301,11 @@ function StageFormatRow({
     [open, rules, sportKey, opened, values, divisionConfig],
   );
   const resolved = useMemo(
-    () => (module === null ? null : resolvedStageCfg(module, divisionConfig, kind, noticeRules)),
-    [module, divisionConfig, kind, noticeRules],
+    () => (sportModule === null ? null : resolvedStageCfg(sportModule, divisionConfig, kind, noticeRules)),
+    [sportModule, divisionConfig, kind, noticeRules],
   );
 
-  if (module === null) return null;
+  if (sportModule === null) return null;
 
   const readOnly = locked || !canEdit;
   const state = locked ? "locked" : overridden ? "overridden" : "inherited";
@@ -2316,7 +2316,7 @@ function StageFormatRow({
         ? "schedule.stageFormat.overridden"
         : "schedule.stageFormat.inherited",
   );
-  const preset = overridden && isStagePreset(module, kind, variantKey, rules);
+  const preset = overridden && isStagePreset(sportModule, kind, variantKey, rules);
 
   function openEditor() {
     // FRAGMENT, never `effective`. See the header. The fragment IN FORCE: what the last save answered while the props
@@ -2436,7 +2436,7 @@ function StageFormatRow({
         {error !== null && !open && <p className="mt-1 text-xs text-red-600">{error}</p>}
         {!open && (
           <div className="mt-2">
-            <DecidersNotice module={module} kind={kind} resolved={resolved} />
+            <DecidersNotice module={sportModule} kind={kind} resolved={resolved} />
           </div>
         )}
       </div>
@@ -2447,7 +2447,7 @@ function StageFormatRow({
               inherits best of 1 still gets the single "Points to win" field (owner ruling 2026-09-25). */}
           <StageRuleFields
             sportKey={sportKey}
-            module={module}
+            module={sportModule}
             kind={kind}
             variant={variantKey}
             values={values}
@@ -2455,7 +2455,7 @@ function StageFormatRow({
             disabled={saving || readOnly}
             divisionConfig={divisionConfig}
           />
-          <DecidersNotice module={module} kind={kind} resolved={resolved} />
+          <DecidersNotice module={sportModule} kind={kind} resolved={resolved} />
           {!readOnly && (
             <div className="flex flex-wrap items-center gap-3">
               <button

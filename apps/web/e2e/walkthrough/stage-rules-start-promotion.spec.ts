@@ -26,9 +26,8 @@
 // WHY NOT journey-pro. `journey-pro.spec.ts` already drives the Start dialog
 // and the promotion, and stays as it is. It reaches that screen through a
 // generic 6-entrant league with every fixture timed, so it can say nothing
-// about per-stage rules: `generic` is not in `STAGE_RULES_SPORTS`, and it has
-// exactly one stage, so neither direction of a PER-STAGE lock is expressible
-// in it. This file is badminton, two stages, and reads the format row.
+// about a per-stage BEST-OF (generic has none), and it has exactly one stage,
+// so neither direction of a PER-STAGE lock is expressible in it. This file is badminton, two stages, and reads the format row.
 //
 // BOTH DIRECTIONS, always. A stage whose first match has been scored must
 // REFUSE, and the stage beside it that has not begun must still SAVE — in the

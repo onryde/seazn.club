@@ -218,12 +218,12 @@ export function stageFormatSaveFragment(
     Object.keys(opened).length === Object.keys(values).length && Object.keys(opened).every((k) => opened[k] === values[k]);
   if (untouched) return alignBestOfOnePoints(sportKey, stored, inherited);
 
-  const module = moduleFor(sportKey);
+  const sportModule = moduleFor(sportKey);
   const now = buildRuleOverride(sportKey, values, inherited);
   const before = buildRuleOverride(sportKey, opened, inherited);
   const sendable = (key: string, v: unknown): unknown => {
     if (v === undefined) return null;
-    if (v === null) return module !== null && offByFalse(module, inherited, key) ? false : null;
+    if (v === null) return sportModule !== null && offByFalse(sportModule, inherited, key) ? false : null;
     return v;
   };
   const out: Record<string, unknown> = {};
