@@ -69,8 +69,9 @@ name: E2E
 # e2e-parallel's own comment for the measurements and the trade.
 #
 # 2026-10-19: `parallel 2/3` then hit the 20-minute `timeout-minutes` below and
-# was cancelled with no test failing. The cure was moving three files into the
-# heavy leg, not a fourth rest leg or a longer timeout; see the same comment.
+# was cancelled with no test failing. The cure was two files into the heavy leg
+# and a fourth rest leg, not a longer timeout; see the same comment for the
+# measurements, and for the first attempt that was not enough.
 #
 # Each job independently migrates its own fresh Postgres and mints its own
 # `setup`-project org — GitHub Actions `services:` are job-scoped, so there
@@ -247,20 +248,42 @@ jobs:
     #                          39153666111 it WAS the shard: 6.5 min of step
     #                          around a 5.1 min test.
     #
-    # THE CHANGE: match-room, online-chess-desk and overlay-gallery join
-    # PARALLEL_HEAVY (playwright.config.ts). The heavy leg had 84s of work
-    # against rest steps of 336-1050s, the shortest leg in the workflow rather
-    # than a balancing one; it has ~500s of room. Four legs before and after:
-    # no runner-minutes added, and no fourth rest leg — plain 4/4 count
-    # shards (no carve-out) replay at 692s for the slowest, against 599s for
-    # this. The split was chosen by replaying every candidate over per-test
-    # costs recovered from the line reporter's start timestamps (runs
-    # 39300823701 and 39312115708) through a two-worker first-free scheduler
-    # over `playwright test --list`'s order; that replay put the OLD split at
-    # 350 / 983 / 573s against 384 / 936 / 618s and 336 / 1050 / 534s measured.
-    # Predicted step now: heavy 509s, rest 321 / 598 / 528s — slowest leg
-    # ~12 min start to end, ~8 under the cap. Two files that cost as much are
-    # left in "rest" on purpose; playwright.config.ts says why.
+    # A START-timestamp reading hides a long test that runs beside many short
+    # ones, which is how the first attempt at this went wrong: it carved
+    # match-room, online-chess-desk and overlay-gallery into the heavy leg on a
+    # replay that charged overlay-gallery 258s, and run 39320198519 measured
+    # that leg at 727s of step / 880s of job — the slowest of the run, 5.3 min
+    # under the cap. That run uploaded the leg's JSON report (two flaky tests),
+    # which has what the log does not, each test's own duration:
+    # overlay-gallery.spec.ts is 480s in all, and ONE of its tests (check 4c,
+    # every Result card in four locales: 7,344 of them) is 332s. In heavy it
+    # started 6.5 min in, behind match-room and online-chess-desk, and was the
+    # leg's tail. Replaying the shipped split with those durations gives 719s
+    # against 727s measured; the replay is trustworthy once it is fed real
+    # per-test durations, and not before.
+    #
+    # THE CHANGE: overlay-gallery and online-chess-desk join PARALLEL_HEAVY
+    # (playwright.config.ts) and "rest" is sharded FOUR ways, not three. The
+    # heavy leg had 84s of work against rest steps of 336-1050s, so it has the
+    # room; overlay-gallery is there for its 332s test, which a count shard
+    # cannot place early, and online-chess-desk because it is the movable half
+    # of the chess + overlay neighbourhood (match-room 547s, overlay-compositor
+    # 271s) that 2/4 would otherwise carry whole. Two heavy files are
+    # deliberately NOT carved: overlay-compositor (overlay-compositor-e2e-wiring
+    # pins it in "rest") and player-stats-stale-version (alphabetically it
+    # would start after the gallery's tests and be heavy's tail).
+    #
+    # Why a fourth rest leg now, after the paragraph above argued against one:
+    # that paragraph's trigger — "a rest leg is once more the slowest in a
+    # run" — is exactly what happened, and replaying every option over real
+    # costs, four legs cannot be brought under ~650s of step whichever files
+    # are carved (the best the search found was 625s, by also carving two
+    # unrelated specs as filler), while plain 4/4 count shards with no
+    # carve-out replay at 913s. Replayed step now: heavy 446s, rest 279 / 558 /
+    # 472 / 419s, against 936-1050s measured for the old 2/3. That is one more
+    # setup (~2.5 runner-min of ~110 a run) for ~3.5 min more headroom on the
+    # slowest leg, and it leaves room for the chess and overlay specs to keep
+    # growing. A prediction until the run that carries this change is read.
     #
     # `timeout-minutes: 20` STAYS. It is a cost guard against a hung job, and
     # the data does not show a shard that cannot be brought under ~15 min.
@@ -268,11 +291,12 @@ jobs:
     # main push since 07:45 that morning before one lost to it.
     #
     # NEXT LEG TO WATCH, outside this split: walkthrough 1/3 ran 1000-1147s
-    # on main pushes of 10-19 (19.1 min on run 39288837798) and 3/3 850-1083s,
-    # under the same cap. On run 39300823701 the test starts of 1/3 were
-    # capture-phone 260s, capture-panel-pr2 110s, event-pass 86s; of 3/3,
-    # stream-relay 411s. That is the leg that will be cancelled next, and it is
-    # the walkthrough shard cut, not PARALLEL_HEAVY, that would need to move.
+    # on main pushes of 10-19 (19.1 min on run 39288837798, 18.8 on
+    # 39320198519) and 3/3 850-1083s, under the same cap. On run 39300823701
+    # the test starts of 1/3 were capture-phone 260s, capture-panel-pr2 110s,
+    # event-pass 86s; of 3/3, stream-relay 411s. That is the leg that will be
+    # cancelled next, and it is the walkthrough shard cut, not PARALLEL_HEAVY,
+    # that would need to move.
     strategy:
       fail-fast: false # one leg's failure must not hide another's
       matrix:
@@ -280,21 +304,26 @@ jobs:
         # carries one: upload-artifact@v4 rejects "/" and fails the job on a
         # duplicate name.
         include:
-          - group: parallel 1/3
+          - group: parallel 1/4
             slug: parallel-1
             project: parallel
             slice: rest
-            args: --shard=1/3
-          - group: parallel 2/3
+            args: --shard=1/4
+          - group: parallel 2/4
             slug: parallel-2
             project: parallel
             slice: rest
-            args: --shard=2/3
-          - group: parallel 3/3
+            args: --shard=2/4
+          - group: parallel 3/4
             slug: parallel-3
             project: parallel
             slice: rest
-            args: --shard=3/3
+            args: --shard=3/4
+          - group: parallel 4/4
+            slug: parallel-4
+            project: parallel
+            slice: rest
+            args: --shard=4/4
           - group: parallel heavy
             slug: parallel-heavy
             project: parallel
@@ -351,7 +380,7 @@ jobs:
           # WHEN TO STOP SPLITTING. The rule this file already applies: measure
           # a leg against the slowest leg of the OTHER JOBS, never against
           # itself. Note what that means here — these walkthrough shards are
-          # `e2e-parallel` legs, the same `strategy.matrix` as the four
+          # `e2e-parallel` legs, the same `strategy.matrix` as the five
           # `parallel` ones above, so `e2e-parallel`'s own slowest shard is NOT
           # a valid comparison for them. The jobs to measure against are
           # `e2e-serial` and `e2e-mobile`, whose slowest leg is phones-small at
@@ -369,7 +398,7 @@ jobs:
           # does not parse slugs — so a fourth shard added by hand is unguarded
           # and the next duplicate is found by a failed upload, not by a test.
           # `group` is the human label and may contain the slash, as
-          # `parallel 1/3` above already does.
+          # `parallel 1/4` above already does.
           #
           # THREE THINGS THAT WENT FROM 1x TO 3x with this split, because every
           # shard carries `project: walkthrough` and the conditions below key on
