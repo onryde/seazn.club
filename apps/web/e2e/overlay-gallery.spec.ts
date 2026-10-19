@@ -22,7 +22,11 @@ import { signInStaff } from "./overlay-kit";
 //   4c. Result card         every Result card fits by its measured headline ladder (owner ruling 1, 2026-10-19): every
 //                           locale × every `fixture.decidedBy.*` sentence with a 43-character winner, through the real
 //                           producer (the gallery's stress mode); never clamped, nothing hidden, each rung only when
-//                           the one before does not fit on one line
+//                           the one before does not fit on one line; the forced sentence on EVERY card that names a
+//                           winner, naming the side the outcome credits by that side's own code
+//   4d. side codes          two sides sharing a three-letter prefix (Harlow v Harrow) read two different codes on every
+//                           template — the bug, the bar's tightest rung, the tiles and the short Result rung — and
+//                           each side ONE code everywhere (the public site's `disambiguatedShorts`, owner 2026-10-19)
 // The cells are `galleryCells(OVERLAY_TEMPLATES, …)` — the gallery's one cell source — so a template or scene added to
 // the registry is swept here with no edit. Every check prints its count, and zero checked fails it. The per-check
 // verdicts are `expect.soft`, so one run reports EVERY check that fails rather than stopping at the first.
@@ -482,8 +486,8 @@ test.describe("the staff overlay gallery (R2007)", () => {
   // two-line clamp is the "A vs B" headline's alone, and a Result headline is never clamped.)
   //
   // Every Result card runs through the REAL producer and the REAL ladder: the gallery's stress mode
-  // (`gallery-stress.ts`) makes every winner-bearing decided template one `fixture.decidedBy.*` sentence and both sides
-  // a 43-character name, and the page is loaded in each locale. Sentences and locales come from the dictionaries on disk;
+  // (`gallery-stress.ts`) makes every winner-bearing decided template one `fixture.decidedBy.*` sentence and gives each
+  // side its own 43-character name, and the page is loaded in each locale. Sentences and locales come from the dictionaries on disk;
   // the cells from the page. Per card: nothing hidden (the card's own overflow, any text box cut — headline AND
   // highlights), no clamp, a rung-0..2 headline on ONE line, each rung taken only when the one before does not fit
   // (measured by a clone of the previous rung in the same card), and the highlights gone exactly at the last rung.
@@ -495,14 +499,19 @@ test.describe("the staff overlay gallery (R2007)", () => {
     await signInStaff(page);
     const WINNER = "Haruto Fujimoto and Kenji Watanabe-Yamamoto";
     expect(WINNER.length).toBe(43);
+    // The away side its OWN long name (the gallery's own club name), so the capture is a real fixture, the winner is
+    // 43 characters whoever wins, and the short rung must name the winning side by THAT side's code.
+    const AWAY = "Northbridge Athletic Football & Social Club";
+    expect(AWAY.length).toBe(43);
+    expect(AWAY[0], "two different first letters, so two different codes").not.toBe(WINNER[0]);
     const dictRoot = fileURLToPath(new URL("../src/dictionaries/", import.meta.url));
     const locales = readdirSync(dictRoot, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
     expect(locales.length, "anti-vacuity: the locales read").toBeGreaterThanOrEqual(4);
 
-    const total = { loads: 0, cases: 0, hidden: [] as string[], rungs: { full: 0, short: 0, compact: 0, yield: 0 } as Record<string, number>, forced: 0, perLoad: new Set<number>() };
+    const total = { loads: 0, cases: 0, hidden: [] as string[], rungs: { full: 0, short: 0, compact: 0, yield: 0 } as Record<string, number>, forced: 0, winnerBearing: 0, unforced: [] as string[], perLoad: new Set<number>() };
     const sweep = async (locale: string, key: string, template: string, extra: Record<string, string> = {}) => {
       await page.context().addCookies([{ name: "seazn_locale", value: locale, url: baseURL! }]);
-      const q = new URLSearchParams({ decided: key, name: WINNER, ...extra });
+      const q = new URLSearchParams({ decided: key, name: WINNER, away: AWAY, ...extra });
       await openGallery(page, `?${q.toString()}`);
       await page.evaluate(() => document.fonts.ready);
       await expect
@@ -512,8 +521,8 @@ test.describe("the staff overlay gallery (R2007)", () => {
         .toBe(0);
       await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
       return page.evaluate(
-        ({ template, winner, score }) => {
-          const out = { cells: 0, hidden: [] as string[], rungs: {} as Record<string, number>, forced: 0 };
+        ({ template, names, score }) => {
+          const out = { cells: 0, hidden: [] as string[], rungs: {} as Record<string, number>, forced: 0, winnerBearing: 0, unforced: [] as string[] };
           const linesOf = (el: HTMLElement) => Math.round(el.offsetHeight / parseFloat(getComputedStyle(el).lineHeight));
           const cells = [...document.querySelectorAll<HTMLElement>("[data-gallery-cell]")].filter((c) =>
             c.querySelector('[data-testid="ovl-slate"][data-slate-state="ended"]:not([data-card])'),
@@ -529,10 +538,17 @@ test.describe("the staff overlay gallery (R2007)", () => {
             out.cells++;
             const rung = h.getAttribute("data-result-rung") ?? "none";
             out.rungs[rung] = (out.rungs[rung] ?? 0) + 1;
-            const code = cell.querySelector(".ovl-slate-tile-code")?.textContent ?? "";
-            const full = template.replaceAll("{score}", score).replaceAll("{winner}", winner);
-            const short = template.replaceAll("{score}", score).replaceAll("{winner}", code);
-            if (h.textContent === full || h.textContent === short) out.forced++;
+            // The side the cell's OUTCOME credits (`data-result-winner`, read off the snapshot, never the model), and that
+            // side's own name and code: never the first tile's, which named the home side whoever won.
+            const w = cell.dataset.resultWinner;
+            if (w === "0" || w === "1") {
+              out.winnerBearing++;
+              const code = cell.querySelector(`[data-testid="ovl-slate-tile-${w}"] .ovl-slate-tile-code`)?.textContent ?? "";
+              const full = template.replaceAll("{score}", score).replaceAll("{winner}", names[Number(w)]!);
+              const short = template.replaceAll("{score}", score).replaceAll("{winner}", code);
+              if (h.textContent === full || h.textContent === short) out.forced++;
+              else out.unforced.push(`${where} [${rung}]: "${(h.textContent ?? "").slice(0, 48)}" is not the forced sentence naming side ${w} (${code})`);
+            }
             // 1. Nothing hidden: the card's own overflow, then every text box in it (the headline AND the highlights).
             if (card.scrollHeight > card.clientHeight + 1) out.hidden.push(`${where} [${rung}]: the card hides ${card.scrollHeight - card.clientHeight}px`);
             for (const el of card.querySelectorAll<HTMLElement>("*")) {
@@ -571,7 +587,7 @@ test.describe("the staff overlay gallery (R2007)", () => {
           }
           return out;
         },
-        { template, winner: WINNER, score: "4–3" },
+        { template, names: [WINNER, AWAY], score: "4–3" },
       );
     };
 
@@ -585,19 +601,25 @@ test.describe("the staff overlay gallery (R2007)", () => {
         total.cases += read.cells;
         total.perLoad.add(read.cells);
         total.forced += read.forced;
+        total.winnerBearing += read.winnerBearing;
+        total.unforced.push(...read.unforced.map((u) => `${locale} ${key} ${u}`));
         total.hidden.push(...read.hidden.map((h) => `${locale} ${key} ${h}`));
         for (const [r, n] of Object.entries(read.rungs)) total.rungs[r] = (total.rungs[r] ?? 0) + n;
       }
     }
     console.log(
-      `[4c] locales ${locales.length} (${locales.join(", ")}), loads ${total.loads}, Result cards checked ${total.cases}, showing the forced sentence ${total.forced}, rungs ${JSON.stringify(total.rungs)}, hidden ${total.hidden.length}`,
+      `[4c] locales ${locales.length} (${locales.join(", ")}), loads ${total.loads}, Result cards checked ${total.cases}, naming a winner ${total.winnerBearing}, showing the forced sentence ${total.forced}, rungs ${JSON.stringify(total.rungs)}, hidden ${total.hidden.length}`,
     );
     expect([...total.perLoad], "every load draws the same Result cells").toHaveLength(1);
     expect(total.cases, "anti-vacuity: every Result card of every load").toBe(total.loads * [...total.perLoad][0]!);
     expect(total.cases).toBeGreaterThan(1000);
-    expect(total.forced, "anti-vacuity: the forced sentence reached the cards").toBeGreaterThan(0);
     // The verdict before the rung counts, so a ladder that stops early reds as the content it hides.
     expect(total.hidden.slice(0, 25), `Result cards hiding content or off the ladder (${total.hidden.length})`).toEqual([]);
+    expect(total.winnerBearing, "anti-vacuity: Result cards whose outcome names a winner").toBeGreaterThan(0);
+    // EVERY card that names a winner shows the forced sentence, naming the credited side by its own name or code — not
+    // merely some card somewhere (a short rung naming the other side, or a stale code, drops a card out of this count).
+    expect(total.unforced.slice(0, 25), `Result cards naming a winner without the forced sentence (${total.unforced.length})`).toEqual([]);
+    expect(total.forced, "the forced sentence reached every card that names a winner").toBe(total.winnerBearing);
     for (const r of ["full", "short", "compact"]) expect(total.rungs[r] ?? 0, `anti-vacuity: rung ${r} reached`).toBeGreaterThan(0);
 
     // The last rung: a long explicit short name (`?code=`, the model's own `short`) runs even the compact short sentence
@@ -606,6 +628,108 @@ test.describe("the staff overlay gallery (R2007)", () => {
     console.log(`[4c] last rung (fr, organiser, a 15-character code): cards ${reach.cells}, rungs ${JSON.stringify(reach.rungs)}, hidden ${reach.hidden.length}`);
     expect(reach.rungs.yield ?? 0, "anti-vacuity: the last rung reached").toBeGreaterThan(0);
     expect(reach.hidden.slice(0, 25)).toEqual([]);
+  });
+
+  // fix/overlay-team-code-disambiguation (owner ruling 2026-10-19): the overlay's side codes are the public site's
+  // `disambiguatedShorts` pair. Three letters per name aired Harlow and Harrow as HAR / HAR — on the bug, at the bar's
+  // tightest rung, on the tiles, and in the Result card's short rung ("HAR won 4–3 on penalties"), which named nobody.
+  // Every cell of every template, read off the RENDERED page: the two sides' codes differ wherever both are drawn, each
+  // side has ONE code across every template, and every short Result rung names the credited side (the cell's own
+  // `data-result-winner`, read off the snapshot) by that side's code.
+  test("check 4d: two sides sharing a three-letter prefix (Harlow v Harrow) read two different codes on every template — bug, bar, tiles, short Result rung", async ({
+    page,
+    baseURL,
+  }) => {
+    test.setTimeout(240_000);
+    await signInStaff(page);
+    const NAMES = ["Harlow", "Harrow"] as const;
+    expect(NAMES[0].slice(0, 3), "premise: three letters per name collide").toBe(NAMES[1].slice(0, 3));
+    const key = "fixture.decidedBy.shootout";
+    const ui = JSON.parse(readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8")) as Record<string, string>;
+    const template = ui[key]!;
+    expect(template, "the forced sentence names its winner").toContain("{winner}");
+    await page.context().addCookies([{ name: "seazn_locale", value: "en", url: baseURL! }]);
+    await openGallery(page, `?${new URLSearchParams({ decided: key, name: NAMES[0], away: NAMES[1] }).toString()}`);
+    await page.evaluate(() => document.fonts.ready);
+    await expect
+      .poll(() => page.locator('[data-testid="ovl-slate-headline"][data-result-rung]:not([data-result-ladder-settled="true"])').count(), {
+        message: "every Result headline measured",
+      })
+      .toBe(0);
+    const read = await page.evaluate(
+      ({ template, score }) => {
+        const text = (el: Element | null | undefined) => (el?.textContent ?? "").trim();
+        const out = {
+          cells: 0,
+          perTemplate: {} as Record<string, { cells: number; pairs: number }>,
+          pairs: { bug: 0, bar: 0, tiles: 0 } as Record<string, number>,
+          same: [] as string[],
+          codes: [[], []] as string[][],
+          winnerBearing: 0,
+          shortRungs: 0,
+          wrongShort: [] as string[],
+        };
+        for (const cell of document.querySelectorAll<HTMLElement>("[data-gallery-cell]")) {
+          const where = cell.dataset.galleryCell ?? "?";
+          const tpl = cell.dataset.template ?? "?";
+          out.cells++;
+          const per = (out.perTemplate[tpl] ??= { cells: 0, pairs: 0 });
+          per.cells++;
+          const pair = (surface: string, home: string, away: string) => {
+            out.pairs[surface] = (out.pairs[surface] ?? 0) + 1;
+            per.pairs++;
+            out.codes[0]!.push(home);
+            out.codes[1]!.push(away);
+            if (home === "" || away === "" || home === away) out.same.push(`${where} ${surface}: "${home}" / "${away}"`);
+          };
+          // The bug's code column — both rows, where both are drawn (cricket's bug carries one hero row).
+          const bug = [...cell.querySelectorAll(".ovl-bug-code")].map(text);
+          if (bug.length === 2) pair("bug", bug[0]!, bug[1]!);
+          // The bar's tightest rung — the LAST probe of each side's name ladder, the code it steps down to.
+          const rungOf = (side: string) => {
+            const probes = [...cell.querySelectorAll(`[data-testid="${side}"] .ovl-team-name-probe`)];
+            return probes.length > 0 ? text(probes[probes.length - 1]) : null;
+          };
+          const [barHome, barAway] = [rungOf("ovl-side-home"), rungOf("ovl-side-away")];
+          if (barHome !== null && barAway !== null) pair("bar", barHome, barAway);
+          // The scene and Result cards' tiles.
+          const tile = (i: number) => cell.querySelector(`[data-testid="ovl-slate-tile-${i}"] .ovl-slate-tile-code`);
+          if (tile(0) && tile(1)) pair("tiles", text(tile(0)), text(tile(1)));
+          // The Result card's short rung (the ladder's second probe): the credited side, by its own code.
+          const w = cell.dataset.resultWinner;
+          const probes = [...cell.querySelectorAll(".ovl-slate-headline-probe")];
+          if ((w === "0" || w === "1") && probes.length >= 2 && tile(0) && tile(1)) {
+            out.winnerBearing++;
+            const codes = [text(tile(0)), text(tile(1))];
+            const want = template.replaceAll("{score}", score).replaceAll("{winner}", codes[Number(w)]!);
+            const other = template.replaceAll("{score}", score).replaceAll("{winner}", codes[1 - Number(w)]!);
+            const got = text(probes[1]);
+            if (got === want && got !== other) out.shortRungs++;
+            else out.wrongShort.push(`${where}: short rung "${got}", want "${want}"`);
+          }
+        }
+        return out;
+      },
+      { template, score: "4–3" },
+    );
+    const unique = (xs: string[]) => [...new Set(xs)];
+    console.log(
+      `[4d] cells ${read.cells}, pairs ${JSON.stringify(read.pairs)}, per template ${JSON.stringify(read.perTemplate)}, codes ${JSON.stringify(read.codes.map(unique))}, short Result rungs ${read.shortRungs}/${read.winnerBearing}`,
+    );
+    // Anti-vacuity: every template the registry ships drew codes to compare, and every surface was read.
+    const templates = Object.keys(read.perTemplate);
+    expect(templates.length, "anti-vacuity: the gallery's templates").toBeGreaterThanOrEqual(2);
+    for (const tpl of templates) expect(read.perTemplate[tpl]!.pairs, `anti-vacuity: ${tpl} drew both sides' codes`).toBeGreaterThan(0);
+    for (const surface of ["bug", "bar", "tiles"]) expect(read.pairs[surface] ?? 0, `anti-vacuity: ${surface} pairs read`).toBeGreaterThan(0);
+    // The verdicts: never one code for both sides, and ONE code per side on every template.
+    expect(read.same.slice(0, 25), `sides drawn with the same code (${read.same.length})`).toEqual([]);
+    expect(unique(read.codes[0]!), "Harlow reads one code on every template").toHaveLength(1);
+    expect(unique(read.codes[1]!), "Harrow reads one code on every template").toHaveLength(1);
+    expect(unique(read.codes[0]!)[0]).not.toBe(unique(read.codes[1]!)[0]);
+    // Every short Result rung names the credited side by its own code.
+    expect(read.winnerBearing, "anti-vacuity: Result cards whose outcome names a winner").toBeGreaterThan(0);
+    expect(read.wrongShort.slice(0, 25), `short Result rungs naming the wrong side or an ambiguous code (${read.wrongShort.length})`).toEqual([]);
+    expect(read.shortRungs).toBe(read.winnerBearing);
   });
 
   test("check 6: no preview fetches or subscribes — nothing leaves the page for 16 s (longer than POLL_MS)", async ({ page }) => {

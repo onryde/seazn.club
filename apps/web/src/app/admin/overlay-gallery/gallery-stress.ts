@@ -3,9 +3,13 @@
 // long winner. Staff-only by the page's own `requireStaff`, and inert without its parameters.
 //
 //   ?decided=<fixture.decidedBy key>  every winner-bearing decided template becomes that key's sentence
-//   ?name=<text>                      both sides' display name (so the winner is long whoever wins)
-//   ?code=<text>                      both sides' explicit short name (`OverlaySideInput.short`: today's payload never
-//                                     carries one, but the model reads it, and a long one is the ladder's last rung)
+//   ?name=<text>                      the HOME side's display name
+//   ?away=<text>                      the AWAY side's display name; absent, the away side keeps the gallery's own
+//                                     43-character club name — so `?name=` alone still airs two DIFFERENT long names
+//                                     (a real fixture: the codes, the tiles and the winner token all tell them apart),
+//                                     never one name on both sides
+//   ?code=<text>                      both sides' explicit short name (`OverlaySideInput.short`, the producer's code;
+//                                     the model reads it, and a long one is the Result ladder's last rung)
 import type { OverlaySideInput } from "@/lib/overlay-model";
 import type { DecidedOutcomeTemplates } from "@/lib/scoring-vocab";
 
@@ -16,7 +20,10 @@ const CODE_MAX = 40;
 
 export interface GalleryStress {
   decided: string | null;
+  /** The home side's name. */
   name: string | null;
+  /** The away side's name. */
+  away: string | null;
   code: string | null;
 }
 
@@ -26,26 +33,33 @@ const bounded = (v: string | undefined, max: number): string | null => {
 };
 
 /** A parameter that is not exactly what the mode takes is ignored, never guessed at: the key must be a
- *  `fixture.decidedBy.*` key the locale's dictionary declares; the name and code are trimmed and bounded. */
+ *  `fixture.decidedBy.*` key the locale's dictionary declares; the names and code are trimmed and bounded. */
 export function parseGalleryStress(
-  query: { decided?: string | undefined; name?: string | undefined; code?: string | undefined },
+  query: { decided?: string | undefined; name?: string | undefined; away?: string | undefined; code?: string | undefined },
   ui: Record<string, string>,
 ): GalleryStress {
   const key = query.decided;
   const decided = key !== undefined && key.startsWith("fixture.decidedBy.") && Object.hasOwn(ui, key) ? key : null;
-  return { decided, name: bounded(query.name, NAME_MAX), code: bounded(query.code, CODE_MAX) };
+  return {
+    decided,
+    name: bounded(query.name, NAME_MAX),
+    away: bounded(query.away, NAME_MAX),
+    code: bounded(query.code, CODE_MAX),
+  };
 }
 
 export function stressSides(
   sides: readonly [OverlaySideInput, OverlaySideInput],
   stress: GalleryStress,
 ): [OverlaySideInput, OverlaySideInput] {
-  const one = (s: OverlaySideInput): OverlaySideInput => ({
+  // Each side its OWN name (fix/overlay-team-code-disambiguation): one `?name=` on both sides drew a fixture between two
+  // identically named teams, which no real fixture is, and hid which side's code the Result card's short rung named.
+  const one = (s: OverlaySideInput, name: string | null): OverlaySideInput => ({
     ...s,
-    ...(stress.name === null ? {} : { name: stress.name }),
+    ...(name === null ? {} : { name }),
     ...(stress.code === null ? {} : { short: stress.code }),
   });
-  return [one(sides[0]), one(sides[1])];
+  return [one(sides[0], stress.name), one(sides[1], stress.away)];
 }
 
 /** Every template that names a winner becomes `sentence` (its `{score}` filled with `STRESS_SCORE`); the tie keeps its
