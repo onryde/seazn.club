@@ -14,7 +14,7 @@ describe("localeFromPath", () => {
     expect(localeFromPath("/")).toBeNull();
     expect(localeFromPath("/login")).toBeNull();
     expect(localeFromPath("/o/riverside/settings/billing")).toBeNull();
-    expect(localeFromPath("/reset-password")).toBeNull();
+    expect(localeFromPath("/magic-link")).toBeNull();
     // unsupported locale is not a [lang] route
     expect(localeFromPath("/de/start")).toBeNull();
   });

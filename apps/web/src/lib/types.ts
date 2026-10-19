@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { isValidIana } from "@/lib/tz";
 
-/** Authenticated user. `password_hash` is never sent to the client. */
+/** Authenticated user: the fields safe to send to the client. */
 export const userSchema = z.object({
   id: z.string().uuid(),
   display_name: z.string(),
@@ -115,8 +115,8 @@ export interface InvitePreview {
 // ---- request payload schemas -------------------------------------------------
 
 /** The longest `next` (post-auth return path) a sign-in REQUEST BODY may carry, in characters. ONE bound shared by every
- *  zod schema that takes a `next`: loginSchema (login and signup), magic-link, magic-link/consume and verify-email, so
- *  the same string is never accepted at one step and 400ed at the next. `next-path-bound-sources.test.ts` pins that
+ *  zod schema that takes a `next`: magic-link, magic-link/consume and verify-email, so the same string is never
+ *  accepted at one step and 400ed at the next. `next-path-bound-sources.test.ts` pins that
  *  every such schema uses this constant and no other `.max(`.
  *
  *  It is not the whole chain's bound, and it is not the open-redirect guard. The login page (`/login?next=`), the Google
@@ -132,16 +132,6 @@ export interface InvitePreview {
  *  (the room path, URL-encoded: ~700 bytes at the widest) stays far under a cookie's 4 KB.
  *  `lichess-link-login-round-trip.test.ts` derives all of this from the real builders. */
 export const NEXT_PATH_MAX_LENGTH = 2048;
-
-export const loginSchema = z.object({
-  email: z.string().email().max(120),
-  password: z.string().min(6).max(100),
-  /** Post-auth redirect carried through invite links; validated server-side
-   *  by safeNextPath. Without this key .strict() 400s every invite signup. */
-  next: z.string().max(NEXT_PATH_MAX_LENGTH).optional(),
-}).strict();
-
-export const signupSchema = loginSchema;
 
 // ---- organization request payloads -------------------------------------------
 

@@ -62,7 +62,7 @@ export default async function AdminUserPage({
         {/* Meta */}
         <div className="rounded-lg bg-slate-800 p-4 space-y-2">
           <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Account</h2>
-          <p className="text-sm text-slate-300">Auth: {user.google_sub ? "Google OAuth" : "Email/Password"}</p>
+          <p className="text-sm text-slate-300">Auth: {user.google_sub ? "Google OAuth" : "Email link"}</p>
           <p className="text-sm text-slate-300">Joined: {new Date(user.created_at).toLocaleDateString()}</p>
           {user.deleted_at && (
             <p className="text-sm text-red-400">Deleted: {new Date(user.deleted_at).toLocaleDateString()}</p>

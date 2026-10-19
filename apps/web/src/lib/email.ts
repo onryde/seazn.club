@@ -8,7 +8,6 @@ import { aiRunUnitNoun } from "@/lib/ai-pricing";
 import type { PassKey } from "@/lib/currency";
 import {
   verificationTemplate,
-  passwordResetTemplate,
   magicLinkTemplate,
   emailChangeConfirmTemplate,
   emailChangeNoticeTemplate,
@@ -108,7 +107,7 @@ export async function suppress(
 // ---------------------------------------------------------------------------
 // Core send — never throws; returns true on provider acceptance.
 // Checks suppression list for non-transactional mail (pass transactional=true
-// to bypass the list for critical auth emails like password reset).
+// to bypass the list for critical auth emails like the sign-in link).
 // ---------------------------------------------------------------------------
 
 interface SendOptions {
@@ -173,15 +172,6 @@ export async function sendVerificationEmail(
 ): Promise<boolean> {
   const dict = await getDictionary(locale, "emails");
   return send({ to, transactional: true, ...verificationTemplate(link, dict) });
-}
-
-export async function sendPasswordResetEmail(
-  to: string,
-  link: string,
-  locale: Locale = "en",
-): Promise<boolean> {
-  const dict = await getDictionary(locale, "emails");
-  return send({ to, transactional: true, ...passwordResetTemplate(link, dict) });
 }
 
 export async function sendMagicLinkEmail(

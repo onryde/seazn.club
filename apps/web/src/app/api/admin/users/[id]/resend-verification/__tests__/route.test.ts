@@ -1,16 +1,20 @@
 // POST /api/admin/users/[id]/resend-verification: staff re-send a user's
-// verification email. The link must open the /verify-email PAGE, which is the
-// page the normal signup email links to.
+// verification email. The link must open the /verify-email PAGE, the page that
+// mounts the `VerifyEmail` island.
 //
 // It used to link to `/api/auth/verify-email?token=…`, the verify API route.
 // That route exports only POST, so a person clicking the emailed link sent a
 // GET and got a 405, with no screen and no verification. Support's "resend"
 // button mailed a dead link every time it was pressed.
 //
-// The expected page is DERIVED, not typed: the real signup route is driven
-// first and its emailed link's origin and path are what this route must match.
-// Opening the link goes through the real verify page and route
-// (`openVerifyLink`), and that helper also requires the path to be a page file.
+// This route is now the only producer of a verify link (the password sign-up
+// and login that also minted them were removed 2026-10-19). An unverified
+// account still exists without a password: the first magic-link request or an
+// email invite creates one, unverified until its link is opened.
+//
+// The expected page is DERIVED, not typed: the link's path must be a page FILE
+// whose source mounts `VerifyEmail`. Opening the link goes through the real
+// verify page and route (`openVerifyLink`), which also requires a page file.
 // Staff auth is real: a seeded support user's session in the cookie jar,
 // through the real requireStaff. Stand-ins: the mail sender (captured, never
 // sent), the limiter, and `next/headers`.
@@ -19,6 +23,7 @@
 // Sport: not applicable.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 
 vi.mock("@/lib/rate-limit", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/rate-limit")>()),
@@ -50,7 +55,6 @@ vi.mock("@/lib/email", async (importOriginal) => ({
 import { sql } from "@/lib/db";
 import { createSession } from "@/lib/auth";
 import * as verifyEmailApi from "@/app/api/auth/verify-email/route";
-import { POST as signup } from "@/app/api/auth/signup/route";
 import {
   FIRST_RUN_WIZARD,
   ORIGIN,
@@ -73,24 +77,6 @@ async function user(tag: string, opts: { staff?: boolean } = {}): Promise<{ id: 
     returning id`;
   made.push(u.id);
   return { id: u.id, email };
-}
-
-/** The link the NORMAL signup email carries, from the real signup route. */
-async function signupMailLink(): Promise<URL> {
-  mail.sent = [];
-  const email = emailOf("signup");
-  const res = await signup(
-    new Request(`${ORIGIN}/api/auth/signup`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ email, password: "correct-horse-1" }),
-    }),
-  );
-  expect(res.status, await res.clone().text()).toBe(200);
-  const [row] = await sql<{ id: string }[]>`select id from users where email = ${email}`;
-  made.push(row.id);
-  expect(mail.sent.map((m) => m.to)).toEqual([email]);
-  return new URL(mail.sent[0]!.link);
 }
 
 /** Staff press "resend" for `targetId`. Returns the status and what was mailed. */
@@ -131,13 +117,12 @@ afterAll(async () => {
 });
 
 describe.skipIf(!HAS_DB)("POST /api/admin/users/[id]/resend-verification — the link opens the verify page", () => {
-  it("mails a link to the same /verify-email page as the signup email, and opening it verifies the account", async () => {
+  it("mails a link to the /verify-email page, and opening it verifies the account", async () => {
     // The hazard, proven: the API path is not something a browser can open.
     // It has no page file, and its route module exports no GET handler.
     expect(pageFileFor("/api/auth/verify-email")).toBeNull();
     expect(Object.keys(verifyEmailApi)).not.toContain("GET");
 
-    const signupLink = await signupMailLink();
     const staff = await user("staff", { staff: true });
     const target = await user("target");
 
@@ -146,9 +131,10 @@ describe.skipIf(!HAS_DB)("POST /api/admin/users/[id]/resend-verification — the
     expect(pressed.status, JSON.stringify(pressed.body)).toBe(200);
     expect(pressed.mailed.map((m) => m.to)).toEqual([target.email]);
     const link = new URL(pressed.mailed[0]!.link);
-    expect(`${link.origin}${link.pathname}`, "same page as the signup email").toBe(
-      `${signupLink.origin}${signupLink.pathname}`,
-    );
+    expect(link.origin, "the link points at this deployment").toBe(ORIGIN);
+    const pageFile = pageFileFor(link.pathname);
+    expect(pageFile, `${link.pathname} is a page a browser can open`).not.toBeNull();
+    expect(fs.readFileSync(pageFile!, "utf8"), "and that page mounts the VerifyEmail island").toContain("<VerifyEmail");
 
     const opened = await openVerifyLink(link.href, router.push);
 

@@ -112,6 +112,27 @@ describe.skipIf(!HAS_DB)("deleting an account that holds a Lichess link", () => 
     expect(fetchCalls()).toEqual([]);
   });
 
+  // Password sign-in was removed 2026-10-19, but `users.password_hash` still exists (the owner decides separately
+  // about dropping it) and legacy password accounts still hold a bcrypt hash. Deleting such an account must not
+  // leave a credential behind in the anonymised row; only the leaver's hash is erased.
+  it("erases a legacy password hash on deletion, and leaves every other account's hash alone", async () => {
+    const userId = await seedUser();
+    const [{ id: otherId }] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified)
+      values (${`other-${uniq()}@test.local`}, 'Stays', true) returning id`;
+    await sql`update users set password_hash = '$2b$10$legacyhashlegacyhashlegacyhashlegacyhashlegacyha' where id in (${userId}, ${otherId})`;
+
+    const res = await del();
+    expect(res.status).toBe(200);
+
+    const hashes = await sql<{ id: string; password_hash: string | null }[]>`
+      select id, password_hash from users where id in (${userId}, ${otherId})`;
+    const byId = new Map(hashes.map((r) => [r.id, r.password_hash]));
+    expect(byId.size, "both rows were read").toBe(2);
+    expect(byId.get(userId), "the deleted account's hash is erased").toBeNull();
+    expect(byId.get(otherId), "another account's hash is untouched").not.toBeNull();
+  });
+
   // Ordering: a deletion the handler REFUSES must not have revoked anything —
   // the player keeps their account, so they keep their link. Sole owner of an
   // org with another member is the handler's own 409.

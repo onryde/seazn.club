@@ -1,6 +1,7 @@
-// Bot hardening, 2026-09-25: the two token-consuming auth endpoints get the
-// same per-IP AUTH_LIMIT bucket their siblings (login, signup, magic-link
-// consume) already had. Without it a token could be guessed at wire speed.
+// Bot hardening, 2026-09-25: the token-consuming auth endpoint verify-email gets
+// the same per-IP AUTH_LIMIT bucket its sibling (magic-link consume) has.
+// Without it a token could be guessed at wire speed. (It was one of two until
+// the password reset endpoint was removed on 2026-10-19.)
 //
 // Driven through the REAL route handlers and the REAL limiter
 // (`@/lib/rate-limit`); only Redis's INCR is an in-memory counter, as in
@@ -26,19 +27,16 @@ vi.mock("next/headers", () => ({
   cookies: async () => ({ get: () => undefined, set: () => {}, delete: () => {} }),
 }));
 const usecase = vi.hoisted(() => ({
-  consumePasswordReset: vi.fn(async () => {}),
   consumeVerificationToken: vi.fn(async () => "u1"),
   createSession: vi.fn(async () => {}),
   postAuthLanding: vi.fn(async () => ({ hasOrg: false, orgId: null, redirect: "/onboarding" })),
   sql: vi.fn(async () => []),
 }));
-vi.mock("@/lib/password-reset", () => ({ consumePasswordReset: usecase.consumePasswordReset }));
 vi.mock("@/lib/verification", () => ({ consumeVerificationToken: usecase.consumeVerificationToken }));
 vi.mock("@/lib/auth", () => ({ createSession: usecase.createSession, postAuthLanding: usecase.postAuthLanding }));
 vi.mock("@/lib/db", () => ({ sql: usecase.sql }));
 
 import { AUTH_LIMIT } from "@/lib/rate-limit";
-import { POST as resetPassword } from "../reset-password/route";
 import { POST as verifyEmail } from "../verify-email/route";
 
 const post = (body: unknown) =>
@@ -50,18 +48,16 @@ const post = (body: unknown) =>
 
 const ROUTES = [
   {
-    name: "POST /api/auth/reset-password",
-    bucket: "reset-password",
-    call: () => resetPassword(post({ token: "reset-token", password: "hunter22" })),
-    work: usecase.consumePasswordReset,
-  },
-  {
     name: "POST /api/auth/verify-email",
     bucket: "verify-email",
     call: () => verifyEmail(post({ token: "verify-token-0123456789" })),
     work: usecase.consumeVerificationToken,
   },
 ] as const;
+
+it("covers at least one route (anti-vacuity: an emptied table would pass every case below by not running)", () => {
+  expect(ROUTES.length).toBeGreaterThan(0);
+});
 
 async function send(call: () => Promise<Response>, n: number): Promise<number[]> {
   const statuses: number[] = [];

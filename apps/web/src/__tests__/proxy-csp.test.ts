@@ -14,7 +14,7 @@ describe("CSP vs cacheable public routes", () => {
     expect(isCacheablePublicPath("/dashboard")).toBe(false);
     expect(isCacheablePublicPath("/r/AB12CD")).toBe(false); // force-dynamic registration-ref tree excluded
     expect(isCacheablePublicPath("/register")).toBe(false);
-    expect(isCacheablePublicPath("/reset-password")).toBe(false);
+    expect(isCacheablePublicPath("/magic-link")).toBe(false);
   });
 
   it("keeps report-only CSP on cacheable public pages even in enforce mode", () => {

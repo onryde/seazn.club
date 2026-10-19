@@ -83,8 +83,9 @@ export async function rateLimit(
 // ─── Pre-configured limits ────────────────────────────────────────────────────
 
 /**
- * Auth endpoints: login, signup, forgot-password. Fail-closed — a limiter
- * outage must not open a credential-stuffing window.
+ * Auth endpoints that consume a one-time credential: magic-link consume,
+ * verify-email, invite claim, funnel claim. Fail-closed — a limiter outage must not
+ * open a token-guessing window.
  */
 export const AUTH_LIMIT: RateLimitConfig = { max: 10, windowSeconds: 60, failClosed: true };
 

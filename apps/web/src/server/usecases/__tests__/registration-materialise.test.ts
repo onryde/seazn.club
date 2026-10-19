@@ -128,8 +128,8 @@ async function seedPerson(
 
 async function makeUser(): Promise<string> {
   const [u] = await sql<{ id: string }[]>`
-    insert into users (email, display_name, password_hash)
-    values (${`u-${randomUUID().slice(0, 8)}@test.local`}, 'Session User', 'x')
+    insert into users (email, display_name)
+    values (${`u-${randomUUID().slice(0, 8)}@test.local`}, 'Session User')
     returning id`;
   return u.id;
 }

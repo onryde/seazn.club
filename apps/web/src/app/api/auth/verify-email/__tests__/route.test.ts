@@ -10,6 +10,11 @@
 // 400 "Invalid input" before the token was even read, so an invited person
 // could not verify at all. The same token verified with `{ token }` alone.
 //
+// 2026-10-19: the password sign-up that minted those links was removed, so the
+// app no longer puts a `next` into a verify link (the staff resend sends none).
+// The route keeps accepting one because a link emailed before then is valid for
+// 24 hours; these cases pin that it still does.
+//
 // Driven through the REAL route, the REAL token store (`createVerificationToken`
 // / `consumeVerificationToken`), the REAL `postAuthLanding` and its REAL
 // validator `safeNextPath`, against a real database. Only the request edges
@@ -43,7 +48,7 @@ vi.mock("next/navigation", () => ({ useRouter: () => router }));
 
 import { sql } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
-import { signupSchema } from "@/lib/types";
+import { NEXT_PATH_MAX_LENGTH } from "@/lib/types";
 import { createVerificationToken } from "@/lib/verification";
 import { VerifyEmail } from "@/components/verify-email";
 import { renderIsland } from "@/components/__tests__/_hook-harness";
@@ -151,16 +156,15 @@ describe.skipIf(!HAS_DB)("POST /api/auth/verify-email — a link that carries ne
     expect(checked).toBe(4);
   });
 
-  it("accepts the longest next the signup route will put in the link", async () => {
-    // The producer's bound, read from its own schema — so tightening either
-    // side's bound without the other reds here. signup/route.ts parses with
-    // signupSchema and copies `next` into the emailed verify link.
-    const bound = signupSchema.shape.next.unwrap().maxLength;
-    expect(bound, "signupSchema declares a bound on next").toBeGreaterThan(1);
-    const longest = "/" + "a".repeat(bound! - 1);
-    const signup = { email: "longest@example.test", password: "hunter22" };
-    expect(signupSchema.safeParse({ ...signup, next: longest }).success, "signup accepts it").toBe(true);
-    expect(signupSchema.safeParse({ ...signup, next: `${longest}a` }).success, "the bound is real").toBe(false);
+  it("accepts the longest next the sign-in routes allow", async () => {
+    // The shared bound, read from its one declaration (NEXT_PATH_MAX_LENGTH) — so a
+    // sign-in route and this one cannot drift apart. Every link already emailed
+    // (the password sign-up that minted them was removed 2026-10-19, but a link
+    // stays valid for 24h) carries a `next` that passed this bound.
+    const bound = NEXT_PATH_MAX_LENGTH;
+    expect(bound, "NEXT_PATH_MAX_LENGTH declares a bound on next").toBeGreaterThan(1);
+    const longest = "/" + "a".repeat(bound - 1);
+    expect(longest).toHaveLength(bound);
 
     const userId = await freshUser();
     const token = await createVerificationToken(userId);
@@ -171,9 +175,9 @@ describe.skipIf(!HAS_DB)("POST /api/auth/verify-email — a link that carries ne
   });
 
   it("an over-long next is refused 400 before the token is read — and the SAME token still verifies", async () => {
-    // One past the producer's own bound: signup would never mint it, so the
-    // route refuses it as malformed rather than guessing at it.
-    const bound = signupSchema.shape.next.unwrap().maxLength!;
+    // One past the shared bound: no sign-in route would mint it, so the route
+    // refuses it as malformed rather than guessing at it.
+    const bound = NEXT_PATH_MAX_LENGTH;
     const tooLong = "/" + "a".repeat(bound);
     expect(tooLong).toHaveLength(bound + 1);
     const userId = await freshUser();

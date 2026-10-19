@@ -17,7 +17,9 @@ import { headers } from "next/headers";
 //  - anything else, i.e. a string over that length or a non-string (null,
 //    a number, an array, an object), fails this schema with a 400 before the
 //    token is read, so the link itself stays usable.
-// That bound is signupSchema's (lib/types.ts), and signup is what put `next` into the link.
+// That bound is NEXT_PATH_MAX_LENGTH, the same constant the sign-in schemas use. Nothing the app sends today puts a
+// `next` into a verify link (the password sign-up that did was removed 2026-10-19), but a verification email sent
+// before then stays valid for 24 hours and may still carry one, so the key is kept.
 const schema = z
   .object({
     token: z.string().min(10),
