@@ -6,6 +6,7 @@
 // Single sport, deliberately: the gate does not know a sport, and online play exists for `boardgame` only (guard.ts).
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { sql } from "@/lib/db";
+import { checkinClosesAt } from "@/components/public-site/match-room/room-snapshot";
 import { LINE_DEADLINE_GRACE_MS, boardAnchor, boardCap } from "@/server/external-play/window";
 import { LINE_RESERVATION, answerBusy, gateClaim, settleDeferral } from "@/server/external-play/seat-line";
 import { checkInToFixture, stampFixtureCheckIn } from "../me";
@@ -351,5 +352,36 @@ describe.skipIf(!DB)("the stay is dated where the window was judged (final revie
     const got = await claimRoom(w, b, "home", judged, { line: { at: gate }, seat: (async () => deferred) as never });
     expect(got.seat, "premise: the deferral queued the restarted stay").toMatchObject({ seated: false, reason: "queued" });
     expect((await stayRow(b.fixtureId, b.home.personId))?.first_claim_at).toEqual(judged);
+  }, 60_000);
+});
+
+// Final review M-3, the producer's side: the snapshot a PROTECTED viewer is handed past the deadline reads `open` (spec §5.7.8) and the
+// room's check-in card counted down to a deadline that had passed ("closes in 0:00"). The room now asks `checkinClosesAt` of exactly
+// this snapshot - driven here through the REAL claim, never a fixture, because a snapshot typed into a test proves the test.
+describe.skipIf(!DB)("a protected viewer's snapshot names the board's cap as where the check-in closes (final review M-3)", () => {
+  it("held in line past the deadline: phase open, serverNow past the deadline, and the closing time is the cap - the unprotected viewer's is the deadline", async () => {
+    const w = world();
+    const b = await seedBoard();
+    await fund(w.key, 0);
+    const arrival = new Date(DEADLINE.getTime() - 20 * SEC);
+    const first = await claimRoom(w, b, "home", arrival);
+    expect(first.seat, "premise: held in line").toMatchObject({ seated: false, reason: "queued" });
+    expect(checkinClosesAt(first.snapshot), "inside the window: the deadline").toBe(DEADLINE.toISOString());
+
+    const past = new Date(DEADLINE.getTime() + MIN);
+    // The player keeps the page open: a poll every 10 s, so the stay stays live right up to a minute past the deadline.
+    const { last: next, claims } = await pollStay(w, b, "home", new Date(arrival.getTime() + 10 * SEC), past);
+    expect(claims, "anti-vacuity: the stay polled across the deadline").toBeGreaterThan(5);
+    expect(next.seat, "premise: still held in line").toMatchObject({ seated: false, reason: "queued" });
+    expect(next.snapshot.phase, "premise: still open for the protected viewer").toBe("open");
+    expect(Date.parse(next.snapshot.serverNow), "premise: composed past the deadline").toBeGreaterThan(DEADLINE.getTime());
+    expect(Date.parse(next.snapshot.deadline!), "premise: the wire still carries the deadline").toBe(DEADLINE.getTime());
+    expect(checkinClosesAt(next.snapshot), "the protected viewer's check-in closes at the cap").toBe(CAP.toISOString());
+    expect(CAP.getTime() - DEADLINE.getTime(), "premise: the cap is the grace past the deadline").toBe(LINE_DEADLINE_GRACE_MS);
+
+    // The pair: AWAY never came, holds no stay, and is closed out past the deadline - their closing time stays the deadline.
+    const away = await claimRoom(w, b, "away", past);
+    expect(away.snapshot.phase, "premise: closed for the viewer nothing protects").toBe("closed");
+    expect(checkinClosesAt(away.snapshot)).toBe(DEADLINE.toISOString());
   }, 60_000);
 });

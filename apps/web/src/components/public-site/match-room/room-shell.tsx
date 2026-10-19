@@ -65,7 +65,7 @@ import { HANDED } from "./camera-test";
 import { useCameraTest } from "./use-camera-test";
 import { isHandoverActive } from "./camera-handover";
 import { useCameraHandover } from "./use-camera-handover";
-import { CAMERA_EVIDENCE_MAX_POLLS, SEAT_RETRIES, SEAT_RETRY_MS, cameraEvidenceDelayMs, type RoomGame, type RoomSnapshot } from "./room-snapshot";
+import { CAMERA_EVIDENCE_MAX_POLLS, SEAT_RETRIES, SEAT_RETRY_MS, cameraEvidenceDelayMs, checkinClosesAt, type RoomGame, type RoomSnapshot } from "./room-snapshot";
 import type { RoomT } from "./room-copy";
 
 const Board = dynamic(() => import("./board"), { ssr: false });
@@ -578,8 +578,8 @@ export function Screen({
           {gaveUp !== null ? <div className="mb-3.5 md:mx-auto md:w-full md:max-w-md">{gaveUp}</div> : null}
           <Checkin
             snap={snap}
-            closesIn={countdownTo(snap.deadline)}
-            closesAt={timeOf(snap.deadline)}
+            closesIn={countdownTo(checkinClosesAt(snap))}
+            closesAt={timeOf(checkinClosesAt(snap))}
             stream={camera.stream}
             cameraOn={camera.status === "live"}
             busy={busy}

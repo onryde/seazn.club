@@ -2302,7 +2302,13 @@ viewer)`, whose line part is a single query, `lineHoldsBoard`; the pure window a
 - **Teardown** (`meetingIsDone`): not "nobody played" while the board is held.
 - **The room's phase** is per viewer: `open` for a viewer whose own stay is protected, or who is
   seated while the create is owed; `closed` for anyone else. Without it a queued player sees the
-  closed card.
+  closed card. **The check-in card's countdown follows it (final review M-3):** a snapshot the server
+  composed at or past the deadline and still called `open` marks a protected viewer, so the card
+  counts down to the board's CAP (`capAfter(deadline)`, the deadline plus `LINE_DEADLINE_GRACE_MS`)
+  and names the cap's time of day, not to a deadline that has passed ("closes in 0:00" behind the
+  camera prompt read as over). The test is the server's own `serverNow`, never the client's clock: a
+  page that has not refreshed at the deadline instant has not been told it is protected. Where the
+  line card is showing, it names the cap itself (`line.closesAt`, §6.1 (2)).
 - **`expectedEnd`'s base (m8).** `sweep.ts`'s `expectedEnd` uses `playableWindow(openedAt).deadline`
   as the base of a never-started board, on the comment "T9 creates no game after the round's
   deadline". That comment is no longer true: a game can be created up to the cap. The base becomes

@@ -7,7 +7,7 @@
 // is the engine's boardgame fold.
 import { foldMatchWithStoppage, outcomeOf, summaryOf } from "@seazn/engine/core";
 import { boardgame, BoardgameMethod } from "@seazn/engine/sports/boardgame";
-import { roomPhase, windowFor, type BoardAnchor } from "@/server/external-play/window";
+import { capAfter, roomPhase, windowFor, type BoardAnchor } from "@/server/external-play/window";
 
 /** Fix round 4b: GET and POST room's answer (409) while the organiser re-pairs the board's round — the board names
  *  nobody for now. The open room reads on through it (room-state), where the room's one 404 stops it for good. */
@@ -266,6 +266,18 @@ export function windowWire(anchor: BoardAnchor | null): { opensAt: string | null
   if (anchor === null) return { opensAt: null, deadline: null };
   const w = windowFor(anchor);
   return { opensAt: w.opensAt.toISOString(), deadline: w.deadline.toISOString() };
+}
+
+/** Where THIS viewer's check-in closes (final review M-3). The deadline - unless the server composed the snapshot at or past
+ *  it and still said `open`: the phase is per viewer (spec §5.7.8), so that viewer is protected by the check-in line and their
+ *  check-in closes at the board's CAP (the deadline plus the grace). Read off the server's own `serverNow`, never the client's
+ *  wall clock: a page that has not refreshed at the deadline instant has not been told it is protected. Without it the check-in
+ *  card of an admitted player past the deadline counted down to a deadline that had passed and read "closes in 0:00". */
+export function checkinClosesAt(s: Pick<RoomSnapshot, "phase" | "deadline" | "serverNow">): string | null {
+  if (s.deadline === null) return null;
+  const deadline = new Date(s.deadline);
+  if (s.phase === "open" && Date.parse(s.serverNow) >= deadline.getTime()) return capAfter(deadline).toISOString();
+  return s.deadline;
 }
 
 /** A token_revoked hold's frozen seat, as the viewer reads it. */
