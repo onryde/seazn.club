@@ -52,6 +52,12 @@ function tagOf(html: string, testId: string): string {
   return html.slice(html.lastIndexOf("<", at), html.indexOf(">", at) + 1);
 }
 const text = (html: string): string => html.replace(/<[^>]*>/g, " ").replace(/&#x27;/g, "'").replace(/\s+/g, " ");
+/** The words inside the paragraph that carries a testid (its tag to its closing tag). */
+function wordsOf(html: string, testId: string): string {
+  const at = html.indexOf(`data-testid="${testId}"`);
+  expect(at, `${testId} is on the page`).toBeGreaterThan(-1);
+  return text(html.slice(at, html.indexOf("</p>", at)));
+}
 
 const football = sport("football");
 const badminton = sport("badminton");
@@ -154,7 +160,7 @@ describe("a STORED own rule on a division a stage rule cannot say (review M1): r
     const { m, variant } = split();
     const html = render(m, variant, OWN);
     expect(html).toContain('data-stage-points-state="inexpressible"');
-    expect(has(html, "stage-points-inexpressible"), "the reason is still said").toBe(true);
+    expect(wordsOf(html, "stage-points-inexpressible"), "the reason is still said, in words").toMatch(/can't be set per stage/i);
     expect(has(html, "stage-points-readonly"), "and the stored rule is read").toBe(true);
     expect(text(html.slice(html.indexOf('data-testid="stage-points-readonly"')))).toContain(UI["stagePoints.ownPoints"]!);
     expect(text(html), "the preview is the stored rule in the public line's words").toContain(rulesLineText(POINTS_DICT, pointsLine(OWN, { awardReaches: pointsRuleAwardReachesTable(m) })));
@@ -192,7 +198,8 @@ describe("a STORED own rule on a division a stage rule cannot say (review M1): r
       for (const variant of Object.keys(m.variants)) {
         if (divisionExpressible(m, m.variants[variant]).ok) continue;
         const html = render(m, variant, OWN);
-        expect(has(html, "stage-points-inexpressible") && has(html, "stage-points-readonly") && has(html, "stage-points-clear"), `${m.key}/${variant}`).toBe(true);
+        expect(wordsOf(html, "stage-points-inexpressible"), `${m.key}/${variant}: the reason`).toMatch(/can't be set per stage/i);
+        expect(has(html, "stage-points-readonly") && has(html, "stage-points-clear"), `${m.key}/${variant}`).toBe(true);
         checked++;
       }
     expect(checked, "splitting divisions swept").toBeGreaterThan(0);
