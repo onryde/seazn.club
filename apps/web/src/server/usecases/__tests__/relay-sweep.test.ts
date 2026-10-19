@@ -1201,6 +1201,8 @@ describe("relay sweep — pure parts", () => {
     output_failed: "otherFailures",
     // M10: produced by the organiser's poll on a deployment with no relay — where the sweep does not run at all.
     relay_disabled: "otherFailures",
+    // R2008: produced by the tick's phone-lost judgement (the compositor's phase log), never by the backstop's expiry.
+    camera_never_live: "otherFailures",
   };
 
   it("every fail reason the API declares lands in its declared bucket — the table and the enum are the same set", () => {

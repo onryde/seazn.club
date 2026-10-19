@@ -569,6 +569,30 @@ export interface StaffCreditArgs {
 
 export interface StaffCreditResult { id: string; balance: number; applied: boolean }
 
+/** What a session's ledger rows say: how much it consumed, how much has been refunded against it, and the bucket(s) the
+ *  consume drew from. ONE read for both refund writers — the staff refund (`staffRow`) and the system refund
+ *  (`refundConsumeForSession`) — so the cap and the bucket can never be judged two ways. The CALLER holds the org's money
+ *  lock. */
+async function sessionCreditStanding(tx: Tx, orgId: string, sessionId: string): Promise<{ consumed: number; refunded: number; buckets: StreamCreditBucket[] }> {
+  const [s] = await tx<{ consumed: number; refunded: number; buckets: StreamCreditBucket[] | null }[]>`
+    select coalesce(-sum(delta) filter (where reason = 'consume'), 0)::int as consumed,
+           coalesce(sum(delta) filter (where reason = 'refund'), 0)::int as refunded,
+           array_agg(distinct bucket) filter (where reason = 'consume') as buckets
+      from org_stream_credits where org_id = ${orgId} and session_id = ${sessionId}`;
+  return { consumed: s!.consumed, refunded: s!.refunded, buckets: s!.buckets ?? [] };
+}
+
+/** V426: the credit goes back to the bucket it was drawn from, so a refunded free credit is still a free one (and the next
+ *  rollover sweeps it) and a refunded bought one never expires. Past the refund cap the session consumed ≥ 1, so `drawn` has
+ *  at least one entry. More than one cannot happen — consume is a one-shot per session (the lock-order note in `staffRow`) —
+ *  and a guard, not a guess, answers it: picking either would move money between the pools. */
+function drawnBucketOf(drawn: StreamCreditBucket[]): StreamCreditBucket {
+  if (drawn.length !== 1) {
+    throw new HttpError(500, `That session's consumes were drawn from ${drawn.length} buckets (${drawn.join(", ")}); refusing to guess which one the refund returns to`, "refund_bucket_ambiguous");
+  }
+  return drawn[0]!;
+}
+
 async function staffRow(kind: StaffKind, args: StaffCreditArgs & { sessionId?: string | null }): Promise<StaffCreditResult> {
   // The ruled 1..STAFF_CREDIT_MAX bound, at the single writer (review I4). Written as two
   // comparisons so each end can be mutated on its own rather than covering for the other.
@@ -645,24 +669,11 @@ async function staffRow(kind: StaffKind, args: StaffCreditArgs & { sessionId?: s
         // only because a credit is consumed ONCE, at warming → live, so a session inside that
         // transaction has no committed consume row, and THIS cap refuses its refund BEFORE the insert.
         // Keep the cap ahead of the insert, and keep consume a one-shot, or this becomes a 40P01.
-        const [s] = await tx<{ consumed: number; refunded: number; buckets: StreamCreditBucket[] | null }[]>`
-          select coalesce(-sum(delta) filter (where reason = 'consume'), 0)::int as consumed,
-                 coalesce(sum(delta) filter (where reason = 'refund'), 0)::int as refunded,
-                 array_agg(distinct bucket) filter (where reason = 'consume') as buckets
-            from org_stream_credits where org_id = ${args.orgId} and session_id = ${sessionId}`;
-        if (s!.refunded + args.delta > s!.consumed) {
-          throw new HttpError(422, `That session consumed ${s!.consumed} and has ${s!.refunded} refunded already; refund it unlinked if more is owed`, "refund_exceeds_consumed");
+        const s = await sessionCreditStanding(tx, args.orgId, sessionId);
+        if (s.refunded + args.delta > s.consumed) {
+          throw new HttpError(422, `That session consumed ${s.consumed} and has ${s.refunded} refunded already; refund it unlinked if more is owed`, "refund_exceeds_consumed");
         }
-        // V426: the credit goes back to the bucket it was drawn from, so a refunded free credit is
-        // still a free one (and the next rollover sweeps it) and a refunded bought one never expires.
-        // Past the cap above, the session consumed ≥ 1, so `buckets` has at least one entry. More than
-        // one cannot happen — consume is a one-shot per session (the lock-order note above) — and a
-        // guard, not a guess, answers it: picking either would move money between the pools.
-        const drawn = s!.buckets ?? [];
-        if (drawn.length !== 1) {
-          throw new HttpError(500, `That session's consumes were drawn from ${drawn.length} buckets (${drawn.join(", ")}); refusing to guess which one the refund returns to`, "refund_bucket_ambiguous");
-        }
-        bucket = drawn[0]!;
+        bucket = drawnBucketOf(s.buckets);
       }
       ({ balanceAfter } = credit(balance, args.delta));
     }
@@ -691,6 +702,32 @@ async function staffRow(kind: StaffKind, args: StaffCreditArgs & { sessionId?: s
     }
     throw err;
   }) as Promise<StaffCreditResult>;
+}
+
+/** R2008 (owner ruling 2026-10-19): the SYSTEM's refund of one session's go-live consume — a composed stream that went live
+ *  and never had a camera, which the viewer never saw. The same ledger, reason, bucket and cap as the staff refund
+ *  (`staffRow`'s linked branch, through `sessionCreditStanding` and `drawnBucketOf`), written by no staff member: no
+ *  `created_by`, no key and no audit row (the audit chain is the staff's — this is the platform keeping its own promise).
+ *  Runs INSIDE the transaction that fails the session (stream-sessions.ts `apply`), under the org's money lock.
+ *  EXACTLY ONCE, by state and not by key: a session whose consume was never written (a free restart, or one refused for
+ *  credits) has nothing to return, and one whose consumes are all refunded already (a staff refund first, or a second
+ *  call) writes nothing — `refunded < consumed` is the only way a row is written. A free restart is also why the caller
+ *  cannot assume a consume: the session's own ledger is read, never "a live session consumed". */
+export async function refundConsumeForSession(
+  tx: Tx, args: { orgId: string; sessionId: string; note: string },
+): Promise<{ refunded: boolean; delta: number; balance: number; ledgerId: string | null }> {
+  await lockOrg(tx, args.orgId);
+  const split = await creditBreakdown(tx, args.orgId);
+  const standing = await sessionCreditStanding(tx, args.orgId, args.sessionId);
+  const owed = standing.consumed - standing.refunded;
+  if (owed < 1) return { refunded: false, delta: 0, balance: split.total, ledgerId: null };
+  const bucket = drawnBucketOf(standing.buckets);
+  const { balanceAfter } = credit(split.total, owed);
+  const [row] = await tx<{ id: string }[]>`
+    insert into org_stream_credits (org_id, delta, reason, bucket, session_id, balance_after, note)
+    values (${args.orgId}, ${owed}, 'refund', ${bucket}, ${args.sessionId}, ${balanceAfter}, ${args.note})
+    returning id`;
+  return { refunded: true, delta: owed, balance: balanceAfter, ledgerId: row!.id };
 }
 
 export async function grantCredits(args: StaffCreditArgs): Promise<StaffCreditResult> {

@@ -32,6 +32,7 @@ const FAIL_TO_WIRE: Record<FailReason, WireEndReason> = {
   target_rejected: "target_rejected",
   output_failed: "failed",
   no_credits: "failed",
+  camera_never_live: "failed",           // R2008: the phone has no copy for it (§6.8.4: every other server-side failure is `failed`)
   provision_timeout: "failed",
   admission_timeout: "failed",
   relay_disabled: "failed",

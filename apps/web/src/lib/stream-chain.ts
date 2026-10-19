@@ -13,6 +13,8 @@ export type ChainWord =
   | "notReceiving" | "noSignal" | "ending"
   // Capture QR v2 §6.12 (T11): the phone node's own words once the phone has a read model.
   | "paired" | "notAnswering" | "starting" | "reconnecting"
+  // R2008 (confirm review m-C2): a composed session live whose camera has NEVER appeared is not "reconnecting".
+  | "waitingCamera"
   // Owner ruling 2026-10-08: the Seazn node while the server's health verdict is `stalled` (live, the input up).
   | "waitingVideo"
   // R2006 (owner ruling 2026-10-19, Owed 26): a composed session's destination while live — not observed, so neutral.
@@ -64,6 +66,9 @@ function capturePhone(view: ChainView | null, row: Chain, capture: CaptureFacts)
         if (health === "stalled") return node("amber", row.phone.word, "bang");
         return row.phone;
       }
+      // R2008 (m-C2): the never-live countdown is about a camera that never connected — nothing to reconnect, so the node
+      // says what the strip says (waiting), with the "!" as every countdown has it.
+      if (capture.countdown?.reason === "camera_never_live") return node("amber", "waitingCamera", "bang");
       const bang = capture.countdown !== null || (d3Warning(view) === "phone" && reconnectReasonOf(capture.phone) === null);
       return node("amber", "reconnecting", bang ? "bang" : null);
     }
@@ -76,13 +81,14 @@ export type PhoneDot = "lime" | "amber" | "slate";
 /**
  * The folded "Paired · Show the code again" line's dot — the third voice beside the Phone node and the strip (B8
  * re-review ruling: the same defect class as the node). While the server counts down, it reads THAT fact, as they do:
- * amber exactly when the countdown is about a lost phone (ask 10, W19), lime while the phone still checks in (the warming
+ * amber exactly when the countdown is about a lost phone (ask 10, W19) or a camera that never appeared (R2008, composed:
+ * the node says Reconnecting… with the "!" there too), lime while the phone still checks in (the warming
  * timeout). Never the read model's `present` then — in ask 10's window it is still true (§6.9's threshold IS ask 10's
  * end). With no countdown it is the read model's, as Ready's node is: present lime, silent amber, no phone slate; and
  * the timeout with the read model unread says nothing of a phone (slate).
  */
 export function phoneDot({ phone, countdown }: CaptureFacts): PhoneDot {
-  if (countdown?.reason === "phone_lost") return "amber";
+  if (countdown?.reason === "phone_lost" || countdown?.reason === "camera_never_live") return "amber";
   if (!phone) return "slate";
   if (countdown) return "lime";
   // PR-2 §7.4: a HELD phone the server calls not responding is amber here too — the node says "Not answering" (W8 warns).

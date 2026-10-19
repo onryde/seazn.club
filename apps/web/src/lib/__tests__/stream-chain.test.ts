@@ -392,16 +392,24 @@ describe("W24 — the Phone node, link 1, the strip and the fold's dot agree for
   const WIRE: [Countdown["kind"], Countdown["reason"]][] = StreamLostCountdown.options.flatMap((o) => {
     const kind = o.shape.kind.value;
     const reason = o.shape.reason;
-    const reasons = "options" in reason ? (reason.options as Countdown["reason"][]) : [reason.value as Countdown["reason"]];
+    const reasons = "options" in reason ? (reason.options as Countdown["reason"][]) : [(reason as { value: string }).value as Countdown["reason"]];
     return reasons.map((r) => [kind, r] as [Countdown["kind"], Countdown["reason"]]);
   });
   const TABLE: Record<string, { key: string; node: ChainNode; link1: LinkStyle; dot: PhoneDot }> = {
     "warming.no_inbound_timeout": { key: "stream.phone.countdown.warming.no_inbound_timeout", node: n("amber", "starting"), link1: "connecting", dot: "lime" },
     "warming.phone_lost": { key: "stream.phone.countdown.warming.phone_lost", node: n("amber", "notAnswering", "bang"), link1: "problem", dot: "amber" },
     "live.phone_lost": { key: "stream.phone.countdown.live.phone_lost", node: n("amber", "reconnecting", "bang"), link1: "problem", dot: "amber" },
+    // R2008 (owner ruling 2026-10-19): a COMPOSED session that went live and never had a camera — the stream will be cancelled
+    // because of the phone's camera, so the node, link 1 and the dot say what a lost phone says.
+    // The node does NOT say "Reconnecting…": the camera never connected (confirm review m-C2). The "!", link 1 and the dot are a lost phone's.
+    "live.camera_never_live": { key: "stream.phone.countdown.live.camera_never_live", node: n("amber", "waitingCamera", "bang"), link1: "problem", dot: "amber" },
   };
-  /** The states each kind is served in: `warming` before any video; `live` in live AND in a warming reconnect. */
-  const STATES: Record<Countdown["kind"], readonly ("live" | "warming")[]> = { warming: ["warming"], live: ["live", "warming"] };
+  /** The reasons that are about a lost phone: the '!', link 1's `problem` and the amber dot go with exactly these. */
+  const LOST: readonly string[] = ["phone_lost", "camera_never_live"];
+  /** The states each (kind, reason) is served in: `warming` before any video; `live` in live AND in a warming reconnect —
+   *  except a NEVER-live end, which only a session that already went live can have (R2008). */
+  const STATES = (kind: Countdown["kind"], reason: Countdown["reason"]): readonly ("live" | "warming")[] =>
+    kind === "warming" ? ["warming"] : reason === "camera_never_live" ? ["live"] : ["live", "warming"];
   const projection = (state: "live" | "warming", countdown: Countdown | null) => ({
     ...v(state, "disconnected", countdown?.kind === "live" ? "unknown" : null, W),
     countdown,
@@ -420,27 +428,28 @@ describe("W24 — the Phone node, link 1, the strip and the fold's dot agree for
       const row = TABLE[`${kind}.${reason}`]!;
       const countdown = { kind, reason, elapsedMs: 40_000, remainingMs: 20_000 } as Countdown;
       // ask 10's real window has the phone still `present` (not yet silent); a staged one may say silent — both agree.
-      for (const state of STATES[kind]) for (const phone of [beating(), beating({ present: false, silent: true })]) {
+      for (const state of STATES(kind, reason)) for (const phone of [beating(), beating({ present: false, silent: true })]) {
         const session = projection(state, countdown);
         const where = `${kind}.${reason} in ${state} (present ${phone.present})`;
         const strip = phoneStrip(readModel(phone), session);
         expect(strip?.body?.key, `${where}: the strip`).toBe(row.key);
         const chain = chainFor(session, { capture: { phone, countdown } })!;
         expect(chain.phone, `${where}: the node`).toEqual(row.node);
-        expect(chain.phone.mark === "bang", `${where}: the '!' iff the phone is lost`).toBe(reason === "phone_lost");
+        expect(chain.phone.mark === "bang", `${where}: the '!' iff the phone is lost`).toBe(LOST.includes(reason));
         expect(chain.link1, `${where}: link 1`).toBe(row.link1);
         expect(chain.link1 === "problem", `${where}: link 1 is a problem iff the node carries the '!'`).toBe(chain.phone.mark === "bang");
         const dot = phoneDot({ phone, countdown });
         expect(dot, `${where}: the fold's dot`).toBe(row.dot);
         expect(dot === "amber", `${where}: the dot is amber iff the node carries the '!'`).toBe(chain.phone.mark === "bang");
-        if (reason === "phone_lost") lost++;
+        if (LOST.includes(reason)) lost++;
         checked++;
       }
     }
-    // warming.no_inbound_timeout ×1 state, warming.phone_lost ×1, live.phone_lost ×2 (live, warming reconnect); ×2 phones.
-    expect(checked).toBe(WIRE.reduce((sum, [k]) => sum + STATES[k].length, 0) * 2);
-    expect(checked).toBe(8);
-    expect(lost, "every lost row was reached").toBe(6);
+    // warming.no_inbound_timeout ×1 state, warming.phone_lost ×1, live.phone_lost ×2 (live, warming reconnect),
+    // live.camera_never_live ×1 (live only); ×2 phones.
+    expect(checked).toBe(WIRE.reduce((sum, [k, r]) => sum + STATES(k, r).length, 0) * 2);
+    expect(checked).toBe(10);
+    expect(lost, "every lost row was reached").toBe(8);
   });
 
   it("the empty case: warming with NO countdown — the strip leads with 'Waiting' alone and the node is Starting with no mark, even with the read model saying silent", () => {
@@ -477,7 +486,7 @@ describe("W24 — the Phone node, link 1, the strip and the fold's dot agree for
     let checked = 0;
     for (const [kind, reason] of WIRE) {
       const countdown = { kind, reason, elapsedMs: 40_000, remainingMs: 20_000 } as Countdown;
-      expect(phoneDot({ phone: null, countdown }), `${kind}.${reason}`).toBe(reason === "phone_lost" ? "amber" : "slate");
+      expect(phoneDot({ phone: null, countdown }), `${kind}.${reason}`).toBe(LOST.includes(reason) ? "amber" : "slate");
       checked++;
     }
     expect(checked).toBe(WIRE.length);

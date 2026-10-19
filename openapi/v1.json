@@ -39365,6 +39365,7 @@
                                     "no_inbound_timeout",
                                     "target_rejected",
                                     "no_credits",
+                                    "camera_never_live",
                                     "machine_create_failed",
                                     "machine_boot_timeout",
                                     "machine_exit_nonzero",
@@ -39648,7 +39649,10 @@
                                         },
                                         "reason": {
                                           "type": "string",
-                                          "const": "phone_lost"
+                                          "enum": [
+                                            "phone_lost",
+                                            "camera_never_live"
+                                          ]
                                         },
                                         "elapsedMs": {
                                           "type": "integer",
@@ -40111,6 +40115,7 @@
                                 "no_inbound_timeout",
                                 "target_rejected",
                                 "no_credits",
+                                "camera_never_live",
                                 "machine_create_failed",
                                 "machine_boot_timeout",
                                 "machine_exit_nonzero",
@@ -40394,7 +40399,10 @@
                                     },
                                     "reason": {
                                       "type": "string",
-                                      "const": "phone_lost"
+                                      "enum": [
+                                        "phone_lost",
+                                        "camera_never_live"
+                                      ]
                                     },
                                     "elapsedMs": {
                                       "type": "integer",

@@ -112,6 +112,7 @@ export const STATE_PILL_KEYS: Record<PhoneTabState, MessageKey> = {
 
 export const FAIL_REASON_KEYS: Record<StreamFailReason, MessageKey> = {
   no_inbound_timeout: "stream.fail.no_inbound_timeout",
+  camera_never_live: "stream.fail.camera_never_live",   // R2008
   target_rejected: "stream.fail.target_rejected",
   output_failed: "stream.fail.output_failed",
   no_credits: "stream.fail.no_credits",
@@ -404,6 +405,7 @@ export const COUNTDOWN_KEYS = {
   "warming.no_inbound_timeout": "stream.phone.countdown.warming.no_inbound_timeout",
   "warming.phone_lost": "stream.phone.countdown.warming.phone_lost",
   "live.phone_lost": "stream.phone.countdown.live.phone_lost",
+  "live.camera_never_live": "stream.phone.countdown.live.camera_never_live",   // R2008
 } as const satisfies Record<CountdownCombo, MessageKey>;
 
 export function countdownKey(c: StreamLostCountdown): MessageKey {

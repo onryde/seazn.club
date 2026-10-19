@@ -628,6 +628,42 @@ describe.skipIf(!HAS_DB)("R2002: the relay-job.v1 contract through the internal 
     for (const k of R2_HEALTH_FIELDS) expect(first, `the earlier sample keeps ${k}`).toHaveProperty(k);
   });
 
+  // R2008 (owner ruling 2026-10-19): the composed phone-lost rule reads the compositor's programme phase from the log the beat
+  // route writes. This is the producer's half, through the real route and its zod parse — stream-tick.test.ts holds the
+  // consumer's, which reads exactly what this writes.
+  it("R2008: a beat through the ROUTE logs the programme phase it reports — one `programme_phase` event per CHANGE that a rule reads (a `frozen` out of `live` is not one), on the beat's attempt, and none for a phase the beat does not carry", async () => {
+    const s = await session();
+    const log = async (id = s.sessionId) => sql<{ from_state: string | null; to_state: string | null; attempt: number | null }[]>`
+      select from_state, to_state, attempt from fixture_stream_events where session_id = ${id} and type = 'programme_phase' order by seq`;
+    const send = async (id: string, token: string, phases: readonly (string | null)[]) => {
+      for (const programmePhase of phases) {
+        expect((await postBeat(id, { state: "playing", ...(programmePhase === null ? {} : { programmePhase }) }, { token })).status).toBe(200);
+      }
+    };
+    // `frozen` out of `live` is the half-second hold a flickering camera makes: written for neither beat, or the table grows
+    // without bound under a bad camera. The change to `reconnecting` (3 s) is the first row after it.
+    await send(s.sessionId, s.jobToken, ["live", "live", "frozen", "frozen", "reconnecting", "reconnecting"]);
+    // (`from_state` is the phase the row STORED held before the beat — the `frozen` it skipped — not the last logged row's.)
+    expect(await log(), "six beats, two rows: the first live and the outage").toEqual([
+      { from_state: null, to_state: "live", attempt: 1 }, { from_state: "frozen", to_state: "reconnecting", attempt: 1 },
+    ]);
+    // The pair: a beat that carries no phase is a change too (the Machine stopped saying `reconnecting`), and a second such beat is not.
+    await send(s.sessionId, s.jobToken, [null, null]);
+    expect((await log()).slice(2), "the change to none, once").toEqual([{ from_state: "reconnecting", to_state: null, attempt: 1 }]);
+    // A `frozen` after any OTHER logged phase IS a row (it ends that run — a compositor bug must never extend an outage), and a
+    // `frozen` out of `live` stays unwritten however many times the camera flickers.
+    const flick = await session();
+    await send(flick.sessionId, flick.jobToken, ["reconnecting", "frozen", "live", "frozen", "live", "frozen"]);
+    expect(await log(flick.sessionId), "reconnecting → frozen written; live → frozen not; live after live-less frozen written").toEqual([
+      { from_state: null, to_state: "reconnecting", attempt: 1 }, { from_state: "reconnecting", to_state: "frozen", attempt: 1 },
+      { from_state: "frozen", to_state: "live", attempt: 1 },
+    ]);
+    // A session that never reports a phase has an empty log.
+    const quiet = await session();
+    expect((await postBeat(quiet.sessionId, { state: "playing" }, { token: quiet.jobToken })).status).toBe(200);
+    expect((await log(quiet.sessionId)).length).toBe(0);
+  });
+
   it("a present 0 is a measurement: heartbeat-zero-is-a-measurement stores fps 0 (typed column too), and zero counters store 0 — the differential to the absent case above", async () => {
     const s = await session();
     expect((await postBeat(s.sessionId, vector("heartbeat-zero-is-a-measurement"), { token: s.jobToken })).status).toBe(200);

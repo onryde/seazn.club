@@ -79,7 +79,7 @@ describe("relay wire enums equal their declarations", () => {
     expect(sorted(S.StreamSessionState.options)).toEqual(sorted(domain));
   });
 
-  it("StreamFailReason is exactly the domain's FailReason — thirteen (R2003: machine_refused; R2004: output_failed), and never storage_exhausted (E5: a refusal with no row)", () => {
+  it("StreamFailReason is exactly the domain's FailReason — fourteen (R2003: machine_refused; R2004: output_failed; R2008: camera_never_live), and never storage_exhausted (E5: a refusal with no row)", () => {
     // Keyed by the DOMAIN type: tsc refuses this literal if FailReason gains or loses a member, so the runtime
     // comparison below always compares the wire enum against the domain's current declaration.
     const domain: Record<FailReason, true> = {
@@ -88,9 +88,10 @@ describe("relay wire enums equal their declarations", () => {
       machine_refused: true,   // R2003: the compositor's refusal (exit 78, or a final beat saying `refused`)
       relay_disabled: true,
       output_failed: true,   // R2004 (PR #981 review I3): the destination output could not be added — failed closed
+      camera_never_live: true,   // R2008 (owner ruling 2026-10-19): went live, the camera never appeared — cancelled, the credit returned
     };
     expect(sorted(S.StreamFailReason.options)).toEqual(sorted(Object.keys(domain)));
-    expect(S.StreamFailReason.options).toHaveLength(13);
+    expect(S.StreamFailReason.options).toHaveLength(14);
     expect(S.StreamFailReason.options as readonly string[]).not.toContain("storage_exhausted");
     // R2001: composed_unavailable is a create-time refusal with no row, exactly as storage_exhausted is — never a fail reason.
     expect(S.StreamFailReason.options as readonly string[]).not.toContain("composed_unavailable");

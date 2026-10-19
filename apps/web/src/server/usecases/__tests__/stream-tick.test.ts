@@ -14,23 +14,27 @@
 // deps (one clock, one fake ingest), scoped to their orgs by the test-only `orgIds` (the cron route passes none).
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomBytes, randomUUID } from "node:crypto";
-import { sql } from "@/lib/db";
+import { sql, statementCount } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
+import { PROGRAMME_PHASES, type ProgrammePhaseWire } from "@/lib/relay-phase";
 import { STREAM_POLL_MS } from "@/lib/stream-session-view";
+import { StreamLostCountdown } from "@/server/api-v1/schemas";
 import {
-  PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, PHONE_SILENT_SLACK_SECONDS, POLL_FAR_SECONDS, POLL_NEAR_SECONDS,
+  MAX_DURATION_MINUTES, PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, PHONE_SILENT_SLACK_SECONDS, POLL_FAR_SECONDS, POLL_NEAR_SECONDS,
   RECONNECT_QUIET_SECONDS, WARMING_TIMEOUT_MINUTES,
 } from "@/server/relay/config";
 import { OPEN_SESSION_MAX_POLL_SECONDS } from "@/server/relay/domain/poll-seconds";
+import { RECORDINGS_PER_SESSION } from "@/server/relay/domain/credits";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import type { IngestProvider, IngestState, IngestStatus, ProviderCallRecord } from "@/server/relay/ports";
+import { mintRelayToken } from "@/server/relay/tokens";
 import { pairPresentPhone, rigUser } from "@/server/relay/__tests__/_session-rig";
 import { seedOrg, startedDivisionWithFixture } from "./_rig";
-import { grantCredits } from "../stream-credits";
+import { creditBalance, grantCredits, refundCredits } from "../stream-credits";
 import { createStreamTarget } from "../stream-targets";
 import { reissueStreamCode } from "../stream-codes";
 import {
-  type SessionDeps, STREAM_TICK_BUDGET_MS, createSession, currentSession, heartbeat, tickOpenSessions, tickSession,
+  type SessionDeps, STREAM_TICK_BUDGET_MS, createSession, currentSession, heartbeat, stopSession, storageReservations, tickOpenSessions, tickSession,
 } from "../stream-sessions";
 
 const sentry = vi.hoisted(() => ({ captureError: vi.fn() }));
@@ -182,7 +186,7 @@ describe.skipIf(!HAS_DB)("tickSession — the tick (§6.11)", () => {
 
   it("an UNKNOWN session id is not a throw: the empty observation, every field at its 'read nothing' value", async () => {
     const r = await rig();
-    expect(await tickSession(randomUUID(), r.deps, "sweep")).toEqual({ session: null, ingestState: null, outputObserved: null, coalescedSince: undefined, phoneReadFailed: false });
+    expect(await tickSession(randomUUID(), r.deps, "sweep")).toEqual({ session: null, ingestState: null, outputObserved: null, coalescedSince: undefined, phoneReadFailed: false, camera: null });
   });
 
   it("coalescing: two organiser polls and one beat inside one STREAM_POLL_MS make exactly ONE inputStatus call — concurrently and in sequence", async () => {
@@ -902,7 +906,7 @@ describe.skipIf(!HAS_DB)("W24 (§6.12, T9): current's countdown agrees with the 
           await hold.at(at);
           const end = (await tickSession(r.sessionId, r.deps, "sweep")).session;
           expect(endOf(end), `${h.label}: the tick at the countdown's end makes the end it named`).toBe(c.reason);
-          seen[c.reason]++;
+          seen[c.reason as "no_inbound_timeout" | "phone_lost"]++;   // `warming` only counts down these two (asserted just above)
         } else {
           // Nothing named: nothing may fire, out to past every end these clocks can make.
           await hold.at(deadline + ASK10_SILENT_MS + MIN);
@@ -1220,5 +1224,939 @@ describe.skipIf(!HAS_DB)("tickOpenSessions (W22, T7b): the stream-tick job's pas
     expect(await tickOpenSessions(f.deps, { ...f.scope(), wallClock: short.wallClock })).toEqual({ ticked: 2, ended: 0, failed: 0, deferred: 1 });
     expect(await readBy(from), "b read; c, the newest, deferred").toEqual([b.sessionId]);
     for (const s of [a, b, c]) expect((await s.row()).state, "no pass ended anything (none was due)").toBe("warming");
+  });
+});
+
+// ===========================================================================================================================
+// R2008 (owner ruling 2026-10-19, "apply your rec"): a COMPOSED (score) stream ends after the same PHONE_LOST_LIVE_MINUTES
+// without a camera as a passthrough one does, with the same `phone_lost` reason. W19's three clauses, the composed way:
+//   (a) the phone's beat silent for the limit;
+//   (b) the compositor's programme phase `reconnecting` — since a `programme_phase` event, written by the beat route in
+//       the beat's own transaction and keyed to its attempt — for the limit, the session having been `live` once;
+//   (c) a fresh Cloudflare read of the camera's input (A) saying it is not connected — made ONLY once (a) and (b) hold.
+// Every beat here goes through the REAL `heartbeat` (the route's use-case) and every end through the REAL `tickSession` /
+// `tickOpenSessions`: the evidence the rule judges is what the producer wrote, never a row typed into the test. The expected
+// thresholds are the config's constants and the compositor's own phase list (PROGRAMME_PHASES), not the rule's.
+// ===========================================================================================================================
+describe.skipIf(!HAS_DB)("R2008: a COMPOSED live stream whose camera is gone for PHONE_LOST_LIVE_MINUTES ends phone_lost (W19, the composed way)", () => {
+  type Composed = Awaited<ReturnType<typeof composedLive>>;
+  /** §6.12: the hold before the countdown (W24), from the spec's constant. */
+  const QUIET_MS = RECONNECT_QUIET_SECONDS * 1000;
+  // Every phase that ENDS a camera-outage run: not `reconnecting`, and not `waiting` either — a compositor restarted during an
+  // outage opens on `waiting` and the camera is exactly as gone (review I2; its own tests are below).
+  const BREAKS_THE_RUN = PROGRAMME_PHASES.filter((p) => p !== "reconnecting" && p !== "waiting");
+  const cameraInputOf = async (sid: string) =>
+    (await sql<{ ingest_input_id: string }[]>`select ingest_input_id from fixture_stream_inputs where session_id = ${sid} and role = 'camera' order by slot limit 1`)[0]!.ingest_input_id;
+  const phaseEvents = async (sid: string) => sql<{ from_state: string | null; to_state: string | null; attempt: number | null; occurred_at: Date; kind: string; source: string }[]>`
+    select from_state, to_state, attempt, occurred_at, kind, source from fixture_stream_events where session_id = ${sid} and type = 'programme_phase' order by seq`;
+
+  /** A composed session taken live by its first playing beat, which reports `live` (the camera is in). Beats go through
+   *  `heartbeat`, as the Machine's do; `beat(null)` is a beat that reports no phase. */
+  async function composedLive(o: { sport?: string } = {}) {
+    const r = await rig({ mode: "composed", ...o });
+    const cam = await cameraInputOf(r.sessionId);
+    const token = r.runner.created[0]!.jobToken;
+    const beatWith = (phase: ProgrammePhaseWire | null, tok: string = token) =>
+      heartbeat(r.sessionId, tok, phase === null ? { state: "playing" } : { state: "playing", programmePhase: phase }, r.deps);
+    await beatWith("live");
+    expect(await r.row(), "PREMISE: the first playing beat took it live").toMatchObject({ state: "live", first_ingest_at: null });
+    const phoneBeat = (at: Date = r.deps.now()) => sql`update fixture_stream_sessions set phone_beat_at = ${at} where id = ${r.sessionId}`;
+    await phoneBeat();
+    r.ingest.setState(cam, "disconnected");
+    return { ...r, cam, token, beat: beatWith, phoneBeat, liveAt: r.deps.now() };
+  }
+  /** The machine beats at its cadence: a beat at the clock's instant keeps the stale-beat window (3 beats) from reading a
+   *  15-minute jump as a dead Machine. The phase it reports is the same one, so this writes no event. */
+  const hold = (r: Composed, phase: ProgrammePhaseWire = "reconnecting") => r.beat(phase);
+  /** A tick one claim window after the last (a real tick is STREAM_POLL_MS or more behind the previous one): the claim is
+   *  free, so each tick here is the one that may read the camera's input. `o.claimHeld` keeps another reader's claim. */
+  const tickOf = async (r: Composed, cause: "poll" | "beat" | "sweep" = "sweep", o: { claimHeld?: boolean } = {}) => {
+    if (!o.claimHeld) await sql`update fixture_stream_sessions set ingest_polled_at = null where id = ${r.sessionId}`;
+    return (await tickSession(r.sessionId, r.deps, cause)).session;
+  };
+  /** After the end decision a composed session is `ending` (the runner's SIGINT); a later tick completes it. */
+  async function settled(r: Composed) {
+    for (let i = 0; i < 4; i++) {
+      r.tick(STREAM_POLL_MS);
+      const s = await tickOf(r);
+      if (s?.state === "completed") return s;
+    }
+    throw new Error("PREMISE: the composed session did not complete within four ticks of its end");
+  }
+  const readsOf = (r: Composed) => inputStatusCalls(r);
+
+  it("the programme_phase log: one event per CHANGE, in the beat's own transaction — never one per beat; `attempt`, the words and the chain are the beat's", async () => {
+    const r = await composedLive();
+    const seq: (ProgrammePhaseWire | null)[] = ["live", "live", "frozen", "reconnecting", "reconnecting", "live", null, null];
+    for (const p of seq) { r.tick(1000); await r.beat(p); }
+    const events = await phaseEvents(r.sessionId);
+    // live (the go-live beat, from nothing), reconnecting (whose `from` is the stored `frozen` — which, a blip out of `live`,
+    // wrote no row of its own: see the toggle test below), live, then the beat that stopped reporting a phase.
+    expect(events.map((e) => [e.from_state, e.to_state])).toEqual([[null, "live"], ["frozen", "reconnecting"], ["reconnecting", "live"], ["live", null]]);
+    expect(events.every((e) => e.attempt === 1 && e.source === "runner" && e.kind === "observed"), "attempt 1, the runner's observation").toBe(true);
+    expect(events.length, "anti-vacuity: the log was read").toBeGreaterThan(0);
+    // The empty case: a Machine that never reports a phase writes none.
+    const quiet = await rig({ mode: "composed" });
+    for (let i = 0; i < 3; i++) { quiet.tick(1000); await heartbeat(quiet.sessionId, quiet.runner.created[0]!.jobToken, { state: "playing" }, quiet.deps); }
+    expect((await quiet.row()).state, "PREMISE: it beat, and went live on the first").toBe("live");
+    expect(await phaseEvents(quiet.sessionId), "no phase reported, no event").toEqual([]);
+  });
+
+  it("review minor: `frozen` blips write no row — a camera that flickers live ↔ frozen all match long adds NOTHING to the log; a frozen that follows a phase that is not `live` (a break in a run) IS written", async () => {
+    const r = await composedLive();
+    let beats = 0;
+    for (let i = 0; i < 40; i++) { r.tick(1000); await r.beat(i % 2 === 0 ? "frozen" : "live"); beats++; }
+    expect(beats, "anti-vacuity: the toggles were sent").toBe(40);
+    expect((await phaseEvents(r.sessionId)).map((e) => [e.from_state, e.to_state]), "the go-live `live` is the only row: forty toggles wrote none").toEqual([[null, "live"]]);
+    // The other side: reconnecting, then a (table-impossible, but a compositor bug is what a guard is for) frozen — it ends the run, so it is a row.
+    r.tick(1000); await r.beat("reconnecting");
+    r.tick(1000); await r.beat("frozen");
+    expect((await phaseEvents(r.sessionId)).map((e) => [e.from_state, e.to_state]).slice(-2)).toEqual([["live", "reconnecting"], ["reconnecting", "frozen"]]);
+  });
+
+  it("15:00 reconnecting, the phone silent, the camera's input not connected: ended phone_lost — one end, one consume, no refund; 14:59.999 is not", async () => {
+    const r = await composedLive();
+    r.tick(MIN); await r.beat("reconnecting");   // the camera is lost one minute in; the phone's last beat was at go-live
+    const lostAt = r.deps.now();
+    r.tick(LOST_MS - 1); await hold(r);
+    expect(await readsOf(r), "PREMISE: nothing has read the input").toBe(0);
+    expect((await tickOf(r))?.state, "1 ms short of the limit").toBe("live");
+    expect(await readsOf(r), "the camera has been gone past the quiet hold, so the tick READS its input (the organiser's countdown needs the word) — and the answer is still 'not yet'").toBe(1);
+    r.tick(1); await hold(r);
+    expect(r.deps.now().getTime() - lostAt.getTime(), "PREMISE: exactly the limit since reconnecting").toBe(LOST_MS);
+    const t = await tickOf(r);
+    expect(t, "at the limit").toMatchObject({ state: "ending", endReason: "phone_lost", failReason: null });
+    expect(await readsOf(r), "one read per tick: the 14:59.999 tick's and the one that decided it").toBe(2);
+    expect(await settled(r)).toMatchObject({ state: "completed", endReason: "phone_lost", failReason: null });
+    expect(await ends(r.sessionId)).toEqual({ transitions: 1, ended: 1 });
+    expect(await netSpend(r.sessionId), "the go-live consume stands, nothing more").toBe(-1);
+    expect(await refunds(r.sessionId), "no refund").toBe(0);
+  });
+
+  it("each clock alone: the phone's beat 14:59 old (the video clock past the limit), then the reconnecting run 14:59 old (the beat clock past it) — one second later each ends it", async () => {
+    let checked = 0;
+    for (const clock of ["beat", "video"] as const) {
+      const r = await composedLive();
+      r.tick(MIN); await r.beat("reconnecting");
+      const lostAt = r.deps.now();
+      // This clock's last sign of life is 1 s after the camera was lost (the beat), or the reconnecting run began then (the video).
+      if (clock === "beat") await r.phoneBeat(new Date(lostAt.getTime() + 1000));
+      else { r.tick(1000); await r.beat("live"); r.tick(0); await r.beat("reconnecting"); }
+      const runStart = r.deps.now();
+      const limit = clock === "beat" ? lostAt.getTime() + 1000 + LOST_MS : runStart.getTime() + LOST_MS;
+      r.tick(limit - 1000 - r.deps.now().getTime()); await hold(r);
+      expect((await tickOf(r))?.state, `${clock} at 14:59`).toBe("live");
+      r.tick(1000); await hold(r);
+      expect(await tickOf(r), `${clock} at 15:00`).toMatchObject({ endReason: "phone_lost" });
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a phone that has NEVER beaten (phone_beat_at null): its silence runs from the first `live` — so the video clock alone decides, at exactly the limit; and with the camera in, the same session is never ended", async () => {
+    const r = await composedLive();
+    await sql`update fixture_stream_sessions set phone_beat_at = null where id = ${r.sessionId}`;
+    // Camera in for ever: the phone's silence alone (a floor of `live` + limit, long past) ends nothing.
+    r.tick(3 * LOST_MS); await r.beat("live");
+    expect((await tickOf(r))?.state, "no beat ever, but the camera is in").toBe("live");
+    expect(await readsOf(r), "not gone, so not read").toBe(0);
+    // Camera lost: the video clock decides, on its own limit.
+    r.tick(1000); await r.beat("reconnecting");
+    r.tick(LOST_MS - 1); await hold(r);
+    expect((await tickOf(r))?.state, "1 ms short of the limit").toBe("live");
+    r.tick(1); await hold(r);
+    expect(await tickOf(r), "the limit").toMatchObject({ endReason: "phone_lost" });
+  });
+
+  it("the camera comes back at minute 14: the clock RESETS — the original deadline passes unended, and the second loss ends it a full limit after ITS first reconnecting beat", async () => {
+    const r = await composedLive();
+    r.tick(MIN); await r.beat("reconnecting");
+    const firstLost = r.deps.now();
+    r.tick(14 * MIN); await r.beat("live");
+    expect(await tickOf(r), "back at 14:00").toMatchObject({ state: "live" });
+    r.tick(1000); await r.beat("frozen");   // the half-second hold that always precedes the slate
+    r.tick(1000); await r.beat("reconnecting");
+    const secondLost = r.deps.now();
+    r.tick(firstLost.getTime() + LOST_MS - r.deps.now().getTime() + 1000); await hold(r);
+    expect(r.deps.now().getTime(), "PREMISE: past the FIRST loss's deadline").toBeGreaterThan(firstLost.getTime() + LOST_MS);
+    expect((await tickOf(r))?.state, "the first deadline passed; the clock was reset").toBe("live");
+    expect(await readsOf(r), "the SECOND run is a minute old, past the quiet hold: read once, and the clocks say not yet").toBe(1);
+    r.tick(secondLost.getTime() + LOST_MS - 1 - r.deps.now().getTime()); await hold(r);
+    expect((await tickOf(r))?.state, "1 ms short of the SECOND limit").toBe("live");
+    r.tick(1); await hold(r);
+    expect(await tickOf(r), "the second limit").toMatchObject({ endReason: "phone_lost" });
+  });
+
+  it("a phone beat inside the window holds it: not ended at the limit after the camera was lost, ended exactly the limit after the LAST beat", async () => {
+    const r = await composedLive();
+    r.tick(MIN); await r.beat("reconnecting");
+    r.tick(10 * MIN); await hold(r);
+    await r.phoneBeat();                        // the phone checks in at minute 10 of the loss
+    const lastBeat = r.deps.now();
+    r.tick(LOST_MS - 10 * MIN); await hold(r);  // the camera has now been gone the full limit
+    expect((await tickOf(r))?.state, "the video clock is due, the beat clock is not").toBe("live");
+    expect(await readsOf(r), "the phone has been silent past the quiet hold and the camera gone: read once; the beat clock still says no").toBe(1);
+    r.tick(lastBeat.getTime() + LOST_MS - 1 - r.deps.now().getTime()); await hold(r);
+    expect((await tickOf(r))?.state, "1 ms short of the limit after the last beat").toBe("live");
+    r.tick(1); await hold(r);
+    expect(await tickOf(r)).toMatchObject({ endReason: "phone_lost" });
+  });
+
+  it("a fresh read of the camera's input that says CONNECTED holds it however long both other clocks run; the same read saying disconnected ends it next tick", async () => {
+    const r = await composedLive();
+    r.tick(MIN); await r.beat("reconnecting");
+    r.ingest.setState(r.cam, "connected");   // the compositor says reconnecting (its own link), Cloudflare says the phone still pushes
+    let ticks = 0;
+    for (let m = 0; m < 5; m++) {
+      r.tick(LOST_MS / 5 + STREAM_POLL_MS); await hold(r);
+      expect((await tickOf(r))?.state, `minute ${Math.round((r.deps.now().getTime() - r.liveAt.getTime()) / MIN)}`).toBe("live");
+      ticks++;
+    }
+    expect(ticks).toBe(5);
+    expect(await readsOf(r), "PREMISE: due and READ at least once").toBeGreaterThan(0);
+    r.ingest.setState(r.cam, "disconnected");
+    r.tick(STREAM_POLL_MS); await hold(r);
+    expect(await tickOf(r), "the same clocks, the read now disconnected").toMatchObject({ endReason: "phone_lost" });
+  });
+
+  it("m-3: an UNKNOWN read, a read that THROWS and a read with no evidence never end it (the throw is reported); the next fresh disconnected word does", async () => {
+    const r = await composedLive();
+    r.tick(MIN); await r.beat("reconnecting");
+    r.tick(LOST_MS); await hold(r);
+    let checked = 0;
+    r.ingest.setState(r.cam, "unknown");
+    expect((await tickOf(r))?.state, "unknown").toBe("live");
+    checked++;
+    r.tick(STREAM_POLL_MS); await hold(r);
+    sentry.captureError.mockClear();
+    const throwing = vi.spyOn(r.ingest as IngestProvider, "inputStatus").mockRejectedValue(new Error("injected: Cloudflare 503"));
+    try { expect((await tickOf(r))?.state, "a read that throws").toBe("live"); checked++; } finally { throwing.mockRestore(); }
+    expect(sentry.captureError, "reported once, the way a failed passthrough read is").toHaveBeenCalledTimes(1);
+    expect(sentry.captureError.mock.calls[0]![1], "the route names the status read").toMatchObject({ route: "relay.ingest_status" });
+    r.tick(STREAM_POLL_MS); await hold(r);
+    const noEvidence = vi.spyOn(r.ingest as IngestProvider, "inputStatus").mockResolvedValue({ state: null, protocol: null, enteredAt: null, lastSeenAt: null, reason: null } satisfies IngestStatus);
+    try { expect((await tickOf(r))?.state, "a read with no evidence").toBe("live"); checked++; } finally { noEvidence.mockRestore(); }
+    expect(checked, "three non-words judged").toBe(3);
+    expect(await ends(r.sessionId), "nothing ended").toEqual({ transitions: 0, ended: 0 });
+    r.ingest.setState(r.cam, "disconnected");
+    r.tick(STREAM_POLL_MS); await hold(r);
+    expect(await tickOf(r), "the next fresh word decides").toMatchObject({ endReason: "phone_lost" });
+  });
+
+  it("`frozen`, `live` and `final` are not `reconnecting`: each as the latest phase holds it past the limit, and each in the window resets the clock (every phase the compositor declares that is neither `reconnecting` nor `waiting`)", async () => {
+    expect(BREAKS_THE_RUN.length, "anti-vacuity: the compositor declares phases besides reconnecting and waiting").toBeGreaterThanOrEqual(2);
+    let checked = 0;
+    for (const phase of BREAKS_THE_RUN) {
+      // (1) reconnecting, then this phase for good: well past the limit, never ended.
+      const held = await composedLive();
+      held.tick(MIN); await held.beat("reconnecting");
+      held.tick(MIN); await held.beat(phase);
+      held.tick(2 * LOST_MS); await held.beat(phase);
+      expect((await tickOf(held))?.state, `${phase} as the latest phase`).toBe("live");
+      expect(await readsOf(held), `${phase}: not gone, so not read`).toBe(0);
+      // (2) this phase for one beat at 14:59, then reconnecting again: the limit from the FIRST loss passes unended.
+      const reset = await composedLive();
+      reset.tick(MIN); await reset.beat("reconnecting");
+      const lostAt = reset.deps.now();
+      reset.tick(LOST_MS - 1000); await reset.beat(phase);
+      reset.tick(500); await reset.beat("reconnecting");
+      const runStart = reset.deps.now();
+      reset.tick(lostAt.getTime() + LOST_MS + 1000 - reset.deps.now().getTime()); await hold(reset);
+      expect((await tickOf(reset))?.state, `${phase} at 14:59, then reconnecting again: past the first deadline`).toBe("live");
+      reset.tick(runStart.getTime() + LOST_MS - reset.deps.now().getTime()); await hold(reset);
+      expect(await tickOf(reset), `${phase}: a full limit after the new run`).toMatchObject({ endReason: "phone_lost" });
+      checked++;
+    }
+    expect(checked).toBe(BREAKS_THE_RUN.length);
+  });
+
+  it("a camera-gone end is for a camera that WAS live: a `reconnecting` phase with no `live` ever reported is judged by NEITHER rule, however old (the log is not the whole story: `reconnecting` is reachable only from `live`)", async () => {
+    const r = await rig({ mode: "composed" });
+    const cam = await cameraInputOf(r.sessionId);
+    const token = r.runner.created[0]!.jobToken;
+    await heartbeat(r.sessionId, token, { state: "playing", programmePhase: "reconnecting" }, r.deps);
+    expect(await r.row(), "PREMISE: live, and never `live`").toMatchObject({ state: "live" });
+    expect((await phaseEvents(r.sessionId)).some((e) => e.to_state === "live"), "PREMISE: no live phase was ever reported").toBe(false);
+    await sql`update fixture_stream_sessions set phone_beat_at = ${r.deps.now()} where id = ${r.sessionId}`;
+    r.ingest.setState(cam, "disconnected");
+    let ticks = 0;
+    for (let h = 0; h < 4; h++) {
+      r.tick(LOST_MS * 2);
+      await heartbeat(r.sessionId, token, { state: "playing", programmePhase: "reconnecting" }, r.deps);
+      await sql`update fixture_stream_sessions set ingest_polled_at = null where id = ${r.sessionId}`;
+      expect((await tickSession(r.sessionId, r.deps, "sweep")).session?.state, `${2 * (h + 1)} limits in`).toBe("live");
+      ticks++;
+    }
+    expect(ticks).toBe(4);
+    expect(await ends(r.sessionId)).toEqual({ transitions: 0, ended: 0 });
+    expect(await refunds(r.sessionId), "never judged, never refunded").toBe(0);
+  });
+
+  it("superseded attempts: a stray attempt-1 `live` beat does NOT reset attempt 2's clock, and a stray attempt-1 `reconnecting` run does NOT end an attempt-2 session that is live", async () => {
+    // A. The current attempt (2) lost its camera at t; the stray's `live` beat at minute 10 must not move it.
+    const a = await composedLive();
+    await sql`update fixture_stream_sessions set runner_attempts = 2 where id = ${a.sessionId}`;
+    const exp = new Date(Date.now() + 3_600_000);
+    const att1 = await mintRelayToken({ sid: a.sessionId, scope: "relay-job", expiresAt: exp, attempt: 1 });
+    const att2 = await mintRelayToken({ sid: a.sessionId, scope: "relay-job", expiresAt: exp, attempt: 2 });
+    a.tick(1000); await a.beat("live", att2);
+    a.tick(MIN); await a.beat("reconnecting", att2);
+    const lostAt = a.deps.now();
+    a.tick(10 * MIN);
+    expect(await a.beat("live", att1), "the stray is told to drain").toEqual({ desiredState: "ending" });
+    await a.beat("reconnecting", att2);
+    a.tick(LOST_MS - 10 * MIN - 1); await a.beat("reconnecting", att2);
+    expect((await tickOf(a))?.state, "1 ms short of the limit since attempt 2's loss").toBe("live");
+    a.tick(1); await a.beat("reconnecting", att2);
+    expect(await tickOf(a), "the stray's live beat reset nothing").toMatchObject({ endReason: "phone_lost" });
+    expect(a.deps.now().getTime() - lostAt.getTime()).toBe(LOST_MS);
+    expect((await phaseEvents(a.sessionId)).filter((e) => e.attempt === 1).map((e) => e.to_state), "the stray wrote no event: only attempt 1's own go-live beat did").toEqual(["live"]);
+
+    // B. The current attempt is live; the stray reports a 20-minute reconnecting run, which counts for nothing.
+    const b = await composedLive();
+    await sql`update fixture_stream_sessions set runner_attempts = 2 where id = ${b.sessionId}`;
+    const b1 = await mintRelayToken({ sid: b.sessionId, scope: "relay-job", expiresAt: exp, attempt: 1 });
+    const b2 = await mintRelayToken({ sid: b.sessionId, scope: "relay-job", expiresAt: exp, attempt: 2 });
+    b.tick(1000); await b.beat("live", b2);
+    for (let m = 0; m < 4; m++) { b.tick(LOST_MS / 3); await b.beat("reconnecting", b1); await b.beat("live", b2); }
+    expect((await tickOf(b))?.state, "attempt 2 is live; the stray's reconnecting beats are not its camera").toBe("live");
+    expect(await readsOf(b), "not gone, so not read").toBe(0);
+    // C. The pair: attempt 2's own reconnecting run, the stray silent, ends it — so B's `live` is the stray's doing, not a defect of the rig.
+    b.tick(MIN); await b.beat("reconnecting", b2);
+    b.tick(LOST_MS); await b.beat("reconnecting", b2);
+    expect(await tickOf(b), "attempt 2's own run").toMatchObject({ endReason: "phone_lost" });
+  });
+
+  it("a RETRY (review I2): attempt 1's outage continues into attempt 2 — whose first beat is `waiting`, the only phase a freshly booted compositor can report — and the clock runs from the outage's FIRST reconnecting beat, not from the restart", async () => {
+    const r = await composedLive();
+    r.tick(MIN); await r.beat("reconnecting");
+    const outageAt = r.deps.now();
+    r.tick(10 * MIN); await hold(r);
+    // The retry: attempt 2 owns the row and its beat window restarts (domain/session.ts `retry`, I4) — no beat of its own yet.
+    await sql`update fixture_stream_sessions set runner_attempts = 2, beat_window_at = ${r.deps.now()} where id = ${r.sessionId}`;
+    expect((await tickOf(r))?.state, "attempt 2 has not beaten: attempt 1's run is another Machine's, nothing of the current attempt to judge").toBe("live");
+    expect(await readsOf(r), "nothing judged, nothing read").toBe(0);
+    const att2 = await mintRelayToken({ sid: r.sessionId, scope: "relay-job", expiresAt: new Date(Date.now() + 3_600_000), attempt: 2 });
+    r.tick(MIN); await r.beat("waiting", att2);   // 11 minutes into the outage
+    const own = (await phaseEvents(r.sessionId)).filter((e) => e.attempt === 2);
+    expect(own.map((e) => [e.from_state, e.to_state]), "attempt 2's first beat is its own row, though it differs from nothing the stored beat said but its attempt").toEqual([["reconnecting", "waiting"]]);
+    r.tick(outageAt.getTime() + LOST_MS - 1 - r.deps.now().getTime()); await r.beat("waiting", att2);
+    expect((await tickOf(r))?.state, "1 ms short of the limit since the OUTAGE began").toBe("live");
+    r.tick(1); await r.beat("waiting", att2);
+    expect(await tickOf(r), "the limit from the outage's first reconnecting beat — attempt 2's own `waiting` is 4 minutes younger").toMatchObject({ endReason: "phone_lost" });
+    expect(own[0]!.occurred_at.getTime() - outageAt.getTime(), "PREMISE: the restart came 11 minutes after the outage began").toBe(11 * MIN);
+  });
+
+  it("review I2, the other side: a restarted compositor after a camera that was FINE opens on `waiting` and the clock starts THERE — the same limit, counted from attempt 2's first beat; a `live` after it resets it", async () => {
+    const r = await composedLive();
+    r.tick(5 * MIN); await r.beat("live");
+    await sql`update fixture_stream_sessions set runner_attempts = 2, beat_window_at = ${r.deps.now()} where id = ${r.sessionId}`;
+    const att2 = await mintRelayToken({ sid: r.sessionId, scope: "relay-job", expiresAt: new Date(Date.now() + 3_600_000), attempt: 2 });
+    r.tick(STREAM_POLL_MS); await r.beat("waiting", att2);
+    const runStart = r.deps.now();
+    expect((await phaseEvents(r.sessionId)).filter((e) => e.attempt === 2).map((e) => [e.from_state, e.to_state])).toEqual([["live", "waiting"]]);
+    r.tick(LOST_MS - 1); await r.beat("waiting", att2);
+    expect((await tickOf(r))?.state, "1 ms short of the limit since attempt 2's first `waiting`").toBe("live");
+    // The camera arrives at 14:59.999: `live` ends the run; a later `waiting` (another restart) is a NEW run from ITS first beat.
+    await r.beat("live", att2);
+    r.tick(5 * MIN); await r.beat("live", att2);
+    expect((await tickOf(r))?.state, "the old deadline passed; the run was reset by `live`").toBe("live");
+    r.tick(1); await r.beat("waiting", att2);
+    const second = r.deps.now();
+    r.tick(LOST_MS - 1); await r.beat("waiting", att2);
+    expect((await tickOf(r))?.state, "1 ms short of the SECOND run's limit").toBe("live");
+    r.tick(1); await r.beat("waiting", att2);
+    expect(await tickOf(r), "the second run's limit").toMatchObject({ endReason: "phone_lost" });
+    expect(second.getTime() - runStart.getTime(), "PREMISE: the second run began long after the first's start").toBeGreaterThan(LOST_MS);
+  });
+
+  it("a session that has no phone (pairing_id null, C-1) is never judged: everything due, nothing ended, nothing read", async () => {
+    const r = await composedLive();
+    await asLegacy(r);
+    r.tick(MIN); await r.beat("reconnecting");
+    r.tick(2 * LOST_MS); await hold(r);
+    expect((await tickOf(r))?.state).toBe("live");
+    expect(await readsOf(r)).toBe(0);
+  });
+
+  it("the Cloudflare read is rate-limited exactly as a passthrough poll is: two ticks inside one claim window make ONE read, and the one that did not claim decides nothing", async () => {
+    const r = await composedLive();
+    r.tick(MIN); await r.beat("reconnecting");
+    r.tick(LOST_MS); await hold(r);
+    await sql`update fixture_stream_sessions set ingest_polled_at = ${r.deps.now()} where id = ${r.sessionId}`;   // another caller holds the claim
+    expect((await tickOf(r, "sweep", { claimHeld: true }))?.state, "the claim is held elsewhere: no read, no decision").toBe("live");
+    expect(await readsOf(r)).toBe(0);
+    r.tick(STREAM_POLL_MS); await hold(r);
+    const both = await Promise.all([tickSession(r.sessionId, r.deps, "sweep"), tickSession(r.sessionId, r.deps, "beat")]);
+    expect(await readsOf(r), "two ticks, one claim, one read").toBe(1);
+    expect(both.every((t) => t.session !== null)).toBe(true);
+    expect((await r.row()).end_reason, "the claimant decided").toBe("phone_lost");
+    const again = await tickOf(r, "sweep", { claimHeld: true });
+    expect(["ending", "completed"], "SECOND CALL: a session already ending is not re-decided").toContain(again?.state);
+    expect(await settled(r)).toMatchObject({ endReason: "phone_lost" });
+    expect(await ends(r.sessionId)).toEqual({ transitions: 1, ended: 1 });
+  });
+
+  it("a tick racing a camera RETURN: the beat that says `live` lands after the tick judged the session due and before its end decision locks the row — the decision is re-taken on the locked row, and the session lives", async () => {
+    const r = await composedLive();
+    r.tick(MIN); await r.beat("reconnecting");
+    r.tick(LOST_MS); await hold(r);
+    let applies = 0;
+    let landedAt = 0;
+    hook.onLockOrg = async () => {
+      applies++;
+      // The tick's applies: the reconcile's expiry, the observation's runner step, then the end decision. The beat the hook
+      // sends makes applies of its own (its expiry tick), which are not the tick's — `landedAt` fixes which one it met.
+      if (applies === 3 && landedAt === 0) { landedAt = applies; await r.beat("live"); }
+    };
+    try {
+      expect((await tickOf(r))?.state).toBe("live");
+    } finally {
+      hook.onLockOrg = null;
+    }
+    expect(landedAt, "PREMISE: the beat landed at the tick's third apply — the end decision, after its unlocked judgement found it due").toBe(3);
+    expect(await ends(r.sessionId)).toEqual({ transitions: 0, ended: 0 });
+  });
+
+  it("an organiser's Stop that landed first keeps its reason (the first reason wins): the tick at the limit does not turn `stopped` into `phone_lost`", async () => {
+    const r = await composedLive();
+    r.tick(MIN); await r.beat("reconnecting");
+    r.tick(LOST_MS - 1); await hold(r);
+    await stopSession(r.auth, r.fixtureId, r.sessionId, r.deps);
+    r.tick(1);
+    const t = await tickOf(r);
+    expect(t?.endReason, "stopped first").toBe("stopped");
+    expect(await settled(r)).toMatchObject({ endReason: "stopped" });
+    expect(await readsOf(r), "an ending session is not judged, so nothing was read").toBe(0);
+  });
+
+  it("the money and the storage are what any composed end gets: no refund, one consume, and the reservation after the end is the one an organiser's Stop leaves — the camera's share, one recording", async () => {
+    const lostOne = await composedLive();
+    lostOne.tick(MIN); await lostOne.beat("reconnecting");
+    const stopped = await composedLive();
+    expect((await storageReservations(sql, lostOne.deps.now())).find((x) => x.sessionId === lostOne.sessionId)?.minutes, "PREMISE: running = every recording it makes")
+      .toBe(RECORDINGS_PER_SESSION.composed * MAX_DURATION_MINUTES);
+    lostOne.tick(LOST_MS); await hold(lostOne);
+    expect(await tickOf(lostOne)).toMatchObject({ endReason: "phone_lost" });
+    await stopSession(stopped.auth, stopped.fixtureId, stopped.sessionId, stopped.deps);
+    await settled(lostOne);
+    await settled(stopped);
+    const reserved = async (r: Composed) => (await storageReservations(sql, r.deps.now())).find((x) => x.sessionId === r.sessionId)?.minutes;
+    expect(await reserved(lostOne), "the camera's share is kept until the daily sweep deletes A's recording").toBe(MAX_DURATION_MINUTES);
+    expect(await reserved(lostOne), "phone_lost reserves what a Stop does").toBe(await reserved(stopped));
+    expect(await netSpend(lostOne.sessionId)).toBe(await netSpend(stopped.sessionId));
+    expect(await netSpend(lostOne.sessionId)).toBe(-1);
+    expect(await refunds(lostOne.sessionId)).toBe(0);
+  });
+
+  it("through the stream-tick job (W22): a due composed session and a healthy one in one pass — the due one ends phone_lost, the healthy one is untouched and its camera never read", async () => {
+    const c = clockedDeps();   // one clock, one fake ingest and one runner for both sessions, as one pass meets them
+    const due = await seedSession(c, { mode: "composed" });
+    const healthy = await seedSession(c, { mode: "composed" });
+    for (const s of [due, healthy]) {
+      await heartbeat(s.sessionId, c.runner.created.find((x) => x.sessionId === s.sessionId)!.jobToken, { state: "playing", programmePhase: "live" }, c.deps);
+      await sql`update fixture_stream_sessions set phone_beat_at = ${c.deps.now()} where id = ${s.sessionId}`;
+      c.ingest.setState(await cameraInputOf(s.sessionId), "disconnected");
+    }
+    const tokenOf = (sid: string) => c.runner.created.find((x) => x.sessionId === sid)!.jobToken;
+    c.tick(MIN);
+    await heartbeat(due.sessionId, tokenOf(due.sessionId), { state: "playing", programmePhase: "reconnecting" }, c.deps);
+    c.tick(LOST_MS);
+    await heartbeat(due.sessionId, tokenOf(due.sessionId), { state: "playing", programmePhase: "reconnecting" }, c.deps);
+    await heartbeat(healthy.sessionId, tokenOf(healthy.sessionId), { state: "playing", programmePhase: "live" }, c.deps);
+    await sql`update fixture_stream_sessions set phone_beat_at = ${c.deps.now()} where id = ${healthy.sessionId}`;
+    const scope = { orgIds: [due.orgId, healthy.orgId] };
+    const before = c.calls.length;
+    const pass = await tickOpenSessions(c.deps, scope);
+    expect(pass, "two ticked, none failed").toMatchObject({ ticked: 2, failed: 0, deferred: 0 });
+    expect((await due.row()), "the due one").toMatchObject({ end_reason: "phone_lost" });
+    expect((await healthy.row()).state, "the healthy one").toBe("live");
+    await settle();
+    const reads = c.calls.slice(before).filter((x) => x.operation === "inputStatus");
+    expect(reads.map((x) => x.sessionId), "only the due one's camera was read").toEqual([due.sessionId]);
+  });
+
+  it("another sport: every sport the catalog holds ends a due composed session phone_lost the same way (the relay reads no sport; the sweep proves it)", async () => {
+    const sports = (await sql<{ key: string }[]>`select key from sports where key <> 'generic' order by key`).map((s) => s.key);
+    expect(sports.length, "PREMISE: the catalog is synced (sync:sports)").toBeGreaterThanOrEqual(2);
+    let checked = 0;
+    for (const sport of sports) {
+      const r = await composedLive({ sport });
+      r.tick(MIN); await r.beat("reconnecting");
+      r.tick(LOST_MS); await hold(r);
+      expect(await tickOf(r), sport).toMatchObject({ endReason: "phone_lost" });
+      const [{ sport_key }] = await sql<{ sport_key: string }[]>`select sport_key from fixture_stream_sessions where id = ${r.sessionId}`;
+      expect(sport_key, "PREMISE: the session carries the sport").toBe(sport);
+      checked++;
+    }
+    expect(checked).toBe(sports.length);
+  });
+
+  // =========================================================================================================================
+  // R2008, owner ruling 2026-10-19 ("apply rec"): a composed session that went LIVE and whose camera NEVER appeared — no `live`
+  // programme phase from ANY attempt — is cancelled after PHONE_LOST_LIVE_MINUTES counted from when it went live, and the
+  // credit is returned: the viewer never saw video. `failed` / `camera_never_live` (the organiser's copy says nothing was
+  // ever received), the go-live consume reversed by a `refund` row on the same ledger and bucket, in the same transaction.
+  // =========================================================================================================================
+  /** A composed session taken live by its first playing beat, which reports `waiting` — the compositor's first phase
+   *  (`Programme::default`): the camera has not appeared. The session boots for two minutes first, so the clock the rule
+   *  counts (go-live) is not the creation's. */
+  async function composedWaiting(o: { sport?: string } = {}) {
+    const r = await rig({ mode: "composed", ...o });
+    const cam = await cameraInputOf(r.sessionId);
+    const token = r.runner.created[0]!.jobToken;
+    const beatWith = (phase: ProgrammePhaseWire | null, tok: string = token) =>
+      heartbeat(r.sessionId, tok, phase === null ? { state: "playing" } : { state: "playing", programmePhase: phase }, r.deps);
+    const balanceBefore = await creditBalance(sql, r.orgId);
+    r.tick(2 * MIN);
+    await beatWith("waiting");
+    expect(await r.row(), "PREMISE: the first playing beat took it live").toMatchObject({ state: "live", first_ingest_at: null });
+    const phoneBeat = (at: Date = r.deps.now()) => sql`update fixture_stream_sessions set phone_beat_at = ${at} where id = ${r.sessionId}`;
+    await phoneBeat();
+    r.ingest.setState(cam, "disconnected");
+    return { ...r, cam, token, beat: beatWith, phoneBeat, liveAt: r.deps.now(), balanceBefore };
+  }
+  type Waiting = Awaited<ReturnType<typeof composedWaiting>>;
+  const ledgerOf = (sid: string) => sql<{ reason: string; delta: number; bucket: string; created_by: string | null; idempotency_key: string | null; session_id: string | null; balance_after: number; note: string | null }[]>`
+    select reason, delta, bucket, created_by, idempotency_key, session_id, balance_after, note from org_stream_credits where session_id = ${sid} order by created_at, id`;
+  /** What the ruling says, typed from it and never read off the code: ONE consume of one credit, ONE refund of one, the same bucket. */
+  async function expectCreditReturned(r: Waiting, label: string) {
+    const rows = await ledgerOf(r.sessionId);
+    expect(rows.map((x) => [x.reason, x.delta]), `${label}: the ledger's rows for the session`).toEqual([["consume", -1], ["refund", 1]]);
+    expect(rows[1]!.bucket, `${label}: a refunded credit returns to the bucket it was drawn from`).toBe(rows[0]!.bucket);
+    expect(rows[1]!.created_by, `${label}: the platform's refund, no staff member`).toBeNull();
+    expect(rows[1]!.session_id).toBe(r.sessionId);
+    expect(await netSpend(r.sessionId), `${label}: net spend on the ledger`).toBe(0);
+    expect(await creditBalance(sql, r.orgId), `${label}: the balance is what it was before the go-live`).toBe(r.balanceBefore);
+    // The event row says what was written (the ledger's own id and balance), once: the session's history names the refund.
+    const [refund] = await sql<{ id: string }[]>`select id from org_stream_credits where session_id = ${r.sessionId} and reason = 'refund'`;
+    expect(await refundEventsOf(r.sessionId), `${label}: the refund_credit event`).toEqual([{ delta: 1, balanceAfter: rows[1]!.balance_after, ledgerId: refund!.id }]);
+  }
+  const refundEventsOf = async (sid: string) =>
+    (await sql<{ payload: Record<string, unknown> }[]>`select payload from fixture_stream_events where session_id = ${sid} and type = 'refund_credit' order by seq`).map((e) => e.payload);
+
+  it("never-live: 14:59.999 after it went live → still live, still charged; 15:00 → failed camera_never_live, the Machine told to stop, the credit returned (net 0 on the ledger, the balance back), and NO Cloudflare read", async () => {
+    const r = await composedWaiting();
+    expect((await ledgerOf(r.sessionId)).map((x) => x.reason), "PREMISE: the go-live consumed").toEqual(["consume"]);
+    expect(await creditBalance(sql, r.orgId), "PREMISE: one credit taken").toBe(r.balanceBefore - 1);
+    r.tick(LOST_MS - 1); await hold(r, "waiting");
+    expect((await tickOf(r))?.state, "14:59.999 after go-live").toBe("live");
+    expect(await refunds(r.sessionId), "not refunded before the end").toBe(0);
+    r.tick(1); await hold(r, "waiting");
+    expect(r.deps.now().getTime() - r.liveAt.getTime(), "PREMISE: exactly the limit since go-live").toBe(LOST_MS);
+    expect(await tickOf(r), "15:00").toMatchObject({ state: "failed", failReason: "camera_never_live", endReason: null });
+    await expectCreditReturned(r, "15:00");
+    expect(await readsOf(r), "the rule reads nothing: there was never a camera to look for").toBe(0);
+    expect(r.runner.stops.map((x) => x.signal), "the compositor is told to stop, once").toEqual(["SIGINT"]);
+    expect(await ends(r.sessionId)).toEqual({ transitions: 1, ended: 1 });
+    const view = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    expect(view, "what the organiser's panel reads").toMatchObject({ state: "failed", failReason: "camera_never_live", endReason: null, creditUsed: false, countdown: null });
+  });
+
+  it("never-live: the clock is GO-LIVE's — a session that boots for 8 minutes (inside the warming timeout) is not ended 7 minutes early by it; and the end is counted from the first playing beat, not from any later `waiting` beat", async () => {
+    const r = await rig({ mode: "composed" });
+    const cam = await cameraInputOf(r.sessionId);
+    const token = r.runner.created[0]!.jobToken;
+    r.tick(8 * MIN);   // boots for eight minutes: the limit counted from CREATION would land seven minutes before go-live's
+    await heartbeat(r.sessionId, token, { state: "playing", programmePhase: "waiting" }, r.deps);
+    const liveAt = r.deps.now();
+    await sql`update fixture_stream_sessions set phone_beat_at = ${liveAt} where id = ${r.sessionId}`;
+    r.ingest.setState(cam, "disconnected");
+    expect((await tickSession(r.sessionId, r.deps, "sweep")).session?.state, "8 minutes after creation, 0 after go-live").toBe("live");
+    // Later `waiting` beats are the same phase: they move nothing (no row, no clock).
+    for (let i = 0; i < 5; i++) { r.tick(3 * MIN); await heartbeat(r.sessionId, token, { state: "playing", programmePhase: "waiting" }, r.deps); }
+    r.tick(LOST_MS - 5 * 3 * MIN - 1); await heartbeat(r.sessionId, token, { state: "playing", programmePhase: "waiting" }, r.deps);
+    await sql`update fixture_stream_sessions set ingest_polled_at = null where id = ${r.sessionId}`;
+    expect((await tickSession(r.sessionId, r.deps, "sweep")).session?.state, "1 ms short, measured from go-live").toBe("live");
+    r.tick(1); await heartbeat(r.sessionId, token, { state: "playing", programmePhase: "waiting" }, r.deps);
+    expect(r.deps.now().getTime() - liveAt.getTime()).toBe(LOST_MS);
+    expect((await tickSession(r.sessionId, r.deps, "sweep")).session, "the limit").toMatchObject({ state: "failed", failReason: "camera_never_live" });
+  });
+
+  it("never-live, a `live` at minute 10: the camera appeared, so this rule NEVER fires — not at minute 15, not at hour 5 (the normal rule applies: it is judged only if the camera is lost later), and nothing is refunded", async () => {
+    const r = await composedWaiting();
+    r.tick(10 * MIN); await r.beat("live");
+    let ticks = 0;
+    for (const at of [5 * MIN, 5 * MIN, 5 * MIN, 4 * 60 * MIN]) {
+      r.tick(at); await r.beat("live"); await r.phoneBeat();
+      expect((await tickOf(r))?.state, `${Math.round((r.deps.now().getTime() - r.liveAt.getTime()) / MIN)} minutes after go-live`).toBe("live");
+      ticks++;
+    }
+    expect(ticks).toBe(4);
+    expect(await refunds(r.sessionId), "no refund for a stream that had a camera").toBe(0);
+    expect(await netSpend(r.sessionId)).toBe(-1);
+    expect(await ends(r.sessionId)).toEqual({ transitions: 0, ended: 0 });
+    // The normal rule applies from here: the camera lost for the limit ends it phone_lost, and is NOT refunded.
+    r.tick(MIN); await r.beat("reconnecting");
+    r.tick(LOST_MS); await hold(r);
+    expect(await tickOf(r)).toMatchObject({ endReason: "phone_lost" });
+    expect(await refunds(r.sessionId), "a lost camera is not a never-live camera: the viewer saw video").toBe(0);
+  });
+
+  it("never-live, each guard ALONE keeps it off for hours: a compositor that reports no phase; a log that began long after go-live; `waiting` then a beat that reports no phase — and the pair, the plain `waiting` session, ends", async () => {
+    const hours = async (r: Waiting, phase: ProgrammePhaseWire | null) => {
+      for (let h = 0; h < 4; h++) {
+        r.tick(LOST_MS); await r.beat(phase); await r.phoneBeat();
+        expect((await tickOf(r))?.state, `${h + 1} limits in`).toBe("live");
+      }
+    };
+    let checked = 0;
+    // (1) an image that reports no phase at all: no log, nothing judged.
+    const none = await rig({ mode: "composed" });
+    const noneCam = await cameraInputOf(none.sessionId);
+    const noneToken = none.runner.created[0]!.jobToken;
+    const noneBeat = () => heartbeat(none.sessionId, noneToken, { state: "playing" }, none.deps);
+    await noneBeat();
+    none.ingest.setState(noneCam, "disconnected");
+    for (let h = 0; h < 4; h++) {
+      none.tick(LOST_MS); await noneBeat();
+      await sql`update fixture_stream_sessions set phone_beat_at = ${none.deps.now()}, ingest_polled_at = null where id = ${none.sessionId}`;
+      expect((await tickSession(none.sessionId, none.deps, "sweep")).session?.state, `no phase reported, ${h + 1} limits in`).toBe("live");
+    }
+    expect(await phaseEvents(none.sessionId), "PREMISE: a compositor that reports no phase writes no log").toEqual([]);
+    checked++;
+    // (2) the log began late: the compositor only started reporting a phase 30 minutes after go-live (a session already
+    // running when the log did, as a deploy mid-broadcast makes). Judged by nothing.
+    const late = await rig({ mode: "composed" });
+    const lateCam = await cameraInputOf(late.sessionId);
+    const lateToken = late.runner.created[0]!.jobToken;
+    const lateBeat = (phase: ProgrammePhaseWire | null) => heartbeat(late.sessionId, lateToken, phase === null ? { state: "playing" } : { state: "playing", programmePhase: phase }, late.deps);
+    await lateBeat(null);
+    late.ingest.setState(lateCam, "disconnected");
+    late.tick(30 * MIN); await lateBeat(null);
+    late.tick(1000); await lateBeat("waiting");
+    expect((await phaseEvents(late.sessionId)).map((e) => e.to_state), "PREMISE: the log began with a `waiting` 30 minutes after go-live").toEqual(["waiting"]);
+    for (let h = 0; h < 4; h++) {
+      late.tick(LOST_MS); await lateBeat("waiting"); await sql`update fixture_stream_sessions set phone_beat_at = ${late.deps.now()}, ingest_polled_at = null where id = ${late.sessionId}`;
+      expect((await tickSession(late.sessionId, late.deps, "sweep")).session?.state, `late log, ${h + 1} limits in`).toBe("live");
+    }
+    checked++;
+    // (3) `waiting`, then a beat that reports NO phase: the compositor has stopped saying anything — not a verdict.
+    const mute = await composedWaiting();
+    mute.tick(MIN); await mute.beat(null);
+    await hours(mute, null);
+    checked++;
+    expect(checked).toBe(3);
+    for (const r of [none, late, mute]) expect(await refunds(r.sessionId), "never refunded").toBe(0);
+    // The pair: the same session with none of those faults ends at the limit.
+    const plain = await composedWaiting();
+    plain.tick(LOST_MS); await hold(plain, "waiting");
+    expect(await tickOf(plain)).toMatchObject({ failReason: "camera_never_live" });
+  });
+
+  it("never-live ends EXACTLY ONCE: a second tick, two ticks at once and a later poll write one refund and one end — the ledger nets 0, never +1", async () => {
+    const r = await composedWaiting();
+    r.tick(LOST_MS); await hold(r, "waiting");
+    await Promise.all([tickOf(r), tickOf(r, "poll"), tickOf(r, "beat")]);
+    expect((await r.row()).state).toBe("failed");
+    await tickOf(r);
+    r.tick(STREAM_POLL_MS);
+    await currentSession(r.auth, r.fixtureId, r.deps);
+    await tickOf(r);
+    expect(await refunds(r.sessionId), "one refund row after three ticks, two at once, and a poll").toBe(1);
+    await expectCreditReturned(r, "after the repeats");
+    expect(await ends(r.sessionId)).toEqual({ transitions: 1, ended: 1 });
+    expect((await ledgerOf(r.sessionId)).map((x) => x.reason)).toEqual(["consume", "refund"]);
+  });
+
+  it("never-live after a STAFF refund: the credit was already returned, so the platform writes none — one refund in all, net 0, never +1", async () => {
+    const r = await composedWaiting();
+    await refundCredits({ orgId: r.orgId, delta: 1, sessionId: r.sessionId, createdBy: await rigUser(), note: "goodwill: the camera never worked", idempotencyKey: randomUUID() });
+    r.tick(LOST_MS); await hold(r, "waiting");
+    expect(await tickOf(r)).toMatchObject({ failReason: "camera_never_live" });
+    const rows = await ledgerOf(r.sessionId);
+    expect(rows.map((x) => [x.reason, x.delta, x.created_by === null]), "the staff refund only").toEqual([["consume", -1, true], ["refund", 1, false]]);
+    expect(await netSpend(r.sessionId)).toBe(0);
+    expect(await creditBalance(sql, r.orgId)).toBe(r.balanceBefore);
+  });
+
+  it("never-live on a FREE restart (the go-live consumed nothing): ended and failed all the same, and nothing is refunded — the ledger, not 'a live session consumed', says what is owed", async () => {
+    // Session 1 consumes and ends (the organiser stops it); session 2 on the SAME fixture, inside the reuse window, restarts free.
+    const first = await composedLive();
+    await stopSession(first.auth, first.fixtureId, first.sessionId, first.deps);
+    await settled(first);
+    const [{ id: targetId }] = await sql<{ id: string }[]>`select id from org_stream_targets where org_id = ${first.orgId} limit 1`;
+    first.tick(MIN);
+    const { sessionId } = await createSession(first.auth, first.fixtureId, { mode: "composed", targetId }, first.deps);
+    const token = first.runner.created.find((x) => x.sessionId === sessionId)!.jobToken;
+    await heartbeat(sessionId, token, { state: "playing", programmePhase: "waiting" }, first.deps);
+    expect((await sql<{ state: string }[]>`select state from fixture_stream_sessions where id = ${sessionId}`)[0]!.state, "PREMISE: it went live").toBe("live");
+    expect((await ledgerOf(sessionId)).length, "PREMISE: a free restart consumes nothing — no ledger row of its own").toBe(0);
+    const balance = await creditBalance(sql, first.orgId);
+    await sql`update fixture_stream_sessions set phone_beat_at = ${first.deps.now()} where id = ${sessionId}`;
+    first.tick(LOST_MS);
+    await heartbeat(sessionId, token, { state: "playing", programmePhase: "waiting" }, first.deps);
+    await sql`update fixture_stream_sessions set ingest_polled_at = null where id = ${sessionId}`;
+    expect((await tickSession(sessionId, first.deps, "sweep")).session, "the limit").toMatchObject({ state: "failed", failReason: "camera_never_live" });
+    expect((await ledgerOf(sessionId)).length, "nothing refunded: nothing was taken").toBe(0);
+    expect(await creditBalance(sql, first.orgId), "the balance did not move").toBe(balance);
+  });
+
+  it("never-live loses to an organiser's Stop that landed first (the first reason wins) and to a `live` beat that lands between the tick's judgement and its locked decision — no end, no refund either way", async () => {
+    // A Stop at 14:59.999: it keeps its reason; the credit stays spent (a Stop is not a cancellation).
+    const stopped = await composedWaiting();
+    stopped.tick(LOST_MS - 1); await hold(stopped, "waiting");
+    await stopSession(stopped.auth, stopped.fixtureId, stopped.sessionId, stopped.deps);
+    stopped.tick(1);
+    expect((await tickOf(stopped))?.endReason, "stopped first").toBe("stopped");
+    await settled(stopped);
+    expect(await refunds(stopped.sessionId)).toBe(0);
+    expect(await netSpend(stopped.sessionId), "a Stop keeps the consume").toBe(-1);
+    // The race: the camera appears after the tick judged the session due and before the end decision locks the row.
+    const r = await composedWaiting();
+    r.tick(LOST_MS); await hold(r, "waiting");
+    let applies = 0, landedAt = 0;
+    hook.onLockOrg = async () => {
+      applies++;
+      if (applies === 3 && landedAt === 0) { landedAt = applies; await r.beat("live"); }
+    };
+    try { expect((await tickOf(r))?.state).toBe("live"); } finally { hook.onLockOrg = null; }
+    expect(landedAt, "PREMISE: the beat landed at the end decision's apply, after the unlocked judgement found it due").toBe(3);
+    expect(await ends(r.sessionId)).toEqual({ transitions: 0, ended: 0 });
+    expect(await refunds(r.sessionId)).toBe(0);
+  });
+
+  it("never-live: the money and the storage — the reservation after the end is what an organiser's Stop leaves for the same session (the camera's share, one recording), and a session with no phone (C-1) is never judged", async () => {
+    const never = await composedWaiting();
+    const stopped = await composedWaiting();
+    never.tick(LOST_MS); await hold(never, "waiting");
+    expect(await tickOf(never)).toMatchObject({ failReason: "camera_never_live" });
+    stopped.tick(LOST_MS - 1); await hold(stopped, "waiting");
+    await stopSession(stopped.auth, stopped.fixtureId, stopped.sessionId, stopped.deps);
+    await settled(stopped);
+    const reserved = async (r: Waiting) => (await storageReservations(sql, r.deps.now())).find((x) => x.sessionId === r.sessionId)?.minutes;
+    expect(await reserved(never), "the camera's share is kept until the daily sweep deletes A's recording").toBe(MAX_DURATION_MINUTES);
+    expect(await reserved(never), "the same share a Stop leaves").toBe(await reserved(stopped));
+    const legacy = await composedWaiting();
+    await asLegacy(legacy);
+    legacy.tick(LOST_MS * 3); await hold(legacy, "waiting");
+    expect((await tickOf(legacy))?.state, "no phone, no phone rules").toBe("live");
+    expect(await refunds(legacy.sessionId)).toBe(0);
+  });
+
+  it("never-live, every sport the catalog holds: the same end and the same refund (the relay reads no sport)", async () => {
+    const sports = (await sql<{ key: string }[]>`select key from sports where key <> 'generic' order by key`).map((s) => s.key);
+    expect(sports.length, "PREMISE: the catalog is synced (sync:sports)").toBeGreaterThanOrEqual(2);
+    let checked = 0;
+    for (const sport of sports) {
+      const r = await composedWaiting({ sport });
+      r.tick(LOST_MS); await hold(r, "waiting");
+      expect(await tickOf(r), sport).toMatchObject({ failReason: "camera_never_live" });
+      await expectCreditReturned(r, sport);
+      checked++;
+    }
+    expect(checked).toBe(sports.length);
+  });
+
+  // ---- I1: the organiser's countdown (W24: shown IFF the end fires) -------------------------------------------------
+  const countdownOf = async (r: Composed) => {
+    await sql`update fixture_stream_sessions set ingest_polled_at = null where id = ${r.sessionId}`;
+    return (await currentSession(r.auth, r.fixtureId, r.deps))!.countdown;
+  };
+
+  it("I1, the lost camera: the organiser sees the SAME countdown a passthrough session shows — nothing inside the quiet hold, from it `phone_lost` counting down from the shorter silence, and the session ENDS at exactly the deadline it names", async () => {
+    const r = await composedLive();
+    r.tick(MIN); await r.beat("reconnecting");
+    r.tick(QUIET_MS - 1); await hold(r);
+    expect(await countdownOf(r), "29.999 s into the outage").toBeNull();
+    r.tick(1); await hold(r);
+    const c = await countdownOf(r);
+    // The phone's last beat was MIN + QUIET ago, the run QUIET ago: the end needs both clocks, so it counts from the SHORTER.
+    expect(c, "30 s in").toEqual({ kind: "live", reason: "phone_lost", elapsedMs: QUIET_MS, remainingMs: LOST_MS - QUIET_MS });
+    expect(StreamLostCountdown.safeParse(c).success, "the wire schema declares this shape").toBe(true);
+    // The deadline it names is the end: 1 ms before, live; at it, ended.
+    r.tick(c!.remainingMs - 1); await hold(r);
+    expect((await tickOf(r))?.state, "1 ms before the named deadline").toBe("live");
+    expect((await countdownOf(r))?.remainingMs, "1 ms left").toBe(1);
+    r.tick(1); await hold(r);
+    expect(await tickOf(r), "at the named deadline").toMatchObject({ endReason: "phone_lost" });
+  });
+
+  it("I1, shown IFF the end fires: a `connected` word, an `unknown` one, a phone that still beats, an outage inside the quiet hold, and a claim held by another reader each show NOTHING — and none of them ends at the limit (the pair of the case above)", async () => {
+    const setups: [string, (r: Composed) => Promise<void>][] = [
+      ["a connected read", async (r) => r.ingest.setState(r.cam, "connected")],
+      ["an unknown read", async (r) => r.ingest.setState(r.cam, "unknown")],
+    ];
+    let hidden = 0;
+    for (const [why, setup] of setups) {
+      const r = await composedLive();
+      r.tick(MIN); await r.beat("reconnecting");
+      r.tick(QUIET_MS); await hold(r);
+      await setup(r);
+      expect(await countdownOf(r), why).toBeNull();
+      r.tick(LOST_MS); await hold(r);
+      expect((await tickOf(r))?.state, `${why}: nothing ends at the limit`).toBe("live");
+      hidden++;
+    }
+    // The phone still beats (its last beat is inside the quiet hold): W19 cannot fire, so there is no countdown (O5).
+    const beating = await composedLive();
+    beating.tick(MIN); await beating.beat("reconnecting");
+    beating.tick(10 * MIN); await hold(beating); await beating.phoneBeat();
+    beating.tick(QUIET_MS - 1000); await hold(beating);
+    expect(await countdownOf(beating), "a phone that beat 29 s ago").toBeNull();
+    hidden++;
+    // An outage inside the quiet hold.
+    const young = await composedLive();
+    young.tick(LOST_MS * 2); await young.beat("live");
+    young.tick(1000); await young.beat("reconnecting");
+    young.tick(QUIET_MS - 1000); await hold(young);
+    expect(await countdownOf(young), "an outage 29 s old, the phone long silent").toBeNull();
+    hidden++;
+    // Another reader holds the claim: this poll has no fresh word, so it shows nothing — and a tick in the same state, AT the
+    // limit, cannot end it either (the tick that did not claim decides nothing).
+    const held = await composedLive();
+    held.tick(MIN); await held.beat("reconnecting");
+    held.tick(5 * MIN); await hold(held);
+    await sql`update fixture_stream_sessions set ingest_polled_at = ${held.deps.now()} where id = ${held.sessionId}`;
+    expect((await currentSession(held.auth, held.fixtureId, held.deps))!.countdown, "no fresh word on this poll").toBeNull();
+    held.tick(LOST_MS); await hold(held);
+    await sql`update fixture_stream_sessions set ingest_polled_at = ${held.deps.now()} where id = ${held.sessionId}`;
+    expect((await tickOf(held, "sweep", { claimHeld: true }))?.state, "and the tick that did not claim cannot end it, past the limit").toBe("live");
+    hidden++;
+    expect(hidden, "anti-vacuity: five hidden cases").toBe(5);
+    // The pair: the same session with the claim free and the word `disconnected` ENDS at once (the read is the third clause).
+    expect(await tickOf(held), "the same clocks, a claim of its own").toMatchObject({ endReason: "phone_lost" });
+  });
+
+  it("I1, never live: the countdown names `camera_never_live` from the quiet hold after go-live, counting down to the limit from go-live, and the session ends at exactly the deadline it names, refunded; a `live` at minute 10 takes it away", async () => {
+    const r = await composedWaiting();
+    r.tick(QUIET_MS - 1); await hold(r, "waiting");
+    expect(await countdownOf(r), "29.999 s after go-live").toBeNull();
+    r.tick(1); await hold(r, "waiting");
+    const c = await countdownOf(r);
+    expect(c, "30 s after go-live").toEqual({ kind: "live", reason: "camera_never_live", elapsedMs: QUIET_MS, remainingMs: LOST_MS - QUIET_MS });
+    expect(StreamLostCountdown.safeParse(c).success).toBe(true);
+    r.tick(c!.remainingMs - 1); await hold(r, "waiting");
+    expect((await tickOf(r))?.state, "1 ms before the deadline").toBe("live");
+    r.tick(1); await hold(r, "waiting");
+    expect(await tickOf(r), "at the deadline").toMatchObject({ failReason: "camera_never_live" });
+    await expectCreditReturned(r, "I1");
+    // The other side: the camera appears at minute 10 — no countdown, ever.
+    const seen = await composedWaiting();
+    seen.tick(10 * MIN); await seen.beat("live");
+    seen.tick(5 * MIN); await seen.beat("live"); await seen.phoneBeat();
+    expect(await countdownOf(seen), "a live phase at minute 10 → this end cannot fire").toBeNull();
+  });
+
+  it("never-live across a RETRY: attempt 2 also says only `waiting`, six minutes later — the end is still counted from go-live (the log began with the session), at exactly the limit, refunded once", async () => {
+    const r = await composedWaiting();
+    r.tick(6 * MIN);
+    await sql`update fixture_stream_sessions set runner_attempts = 2, beat_window_at = ${r.deps.now()} where id = ${r.sessionId}`;
+    const att2 = await mintRelayToken({ sid: r.sessionId, scope: "relay-job", expiresAt: new Date(Date.now() + 3_600_000), attempt: 2 });
+    await r.beat("waiting", att2);
+    expect((await phaseEvents(r.sessionId)).map((e) => [e.attempt, e.to_state]), "PREMISE: the log holds attempt 1's `waiting` and attempt 2's own").toEqual([[1, "waiting"], [2, "waiting"]]);
+    r.tick(r.liveAt.getTime() + LOST_MS - 1 - r.deps.now().getTime()); await r.beat("waiting", att2);
+    expect((await tickOf(r))?.state, "1 ms short of the limit since GO-LIVE").toBe("live");
+    expect(await refunds(r.sessionId)).toBe(0);
+    r.tick(1); await r.beat("waiting", att2);
+    expect(await tickOf(r), "the limit since go-live, though attempt 2 is only nine minutes old").toMatchObject({ failReason: "camera_never_live" });
+    await expectCreditReturned(r, "retry");
+  });
+
+  it("never-live is judged only on a log that is WHOLE: a beat that reported NO phase between two `waiting`s (a compositor that stopped saying) means the camera is not known absent — no end at the limit and no countdown (the pair of the clean `waiting`-only log, which does both)", async () => {
+    const r = await composedWaiting();
+    r.tick(MIN); await r.beat(null);
+    r.tick(MIN); await r.beat("waiting");
+    expect((await phaseEvents(r.sessionId)).map((e) => e.to_state), "PREMISE: waiting, none, waiting").toEqual(["waiting", null, "waiting"]);
+    r.tick(QUIET_MS); await hold(r, "waiting");
+    expect(await countdownOf(r), "past the quiet hold, no countdown: the end will not fire").toBeNull();
+    r.tick(LOST_MS); await hold(r, "waiting");
+    expect((await tickOf(r))?.state, "and the limit ends nothing").toBe("live");
+    expect(await refunds(r.sessionId)).toBe(0);
+  });
+
+  it("never-live after a STAFF refund: the end returns nothing more (the ledger is the authority, not 'a live session consumed'), the event row says nothing was owed, and the balance holds", async () => {
+    const r = await composedWaiting();
+    await refundCredits({ orgId: r.orgId, delta: 1, sessionId: r.sessionId, createdBy: await rigUser(), note: "goodwill first", idempotencyKey: randomUUID() });
+    const balance = await creditBalance(sql, r.orgId);
+    expect(balance, "PREMISE: the staff refund returned the go-live consume").toBe(r.balanceBefore);
+    r.tick(LOST_MS); await hold(r, "waiting");
+    expect(await tickOf(r), "the end still happens").toMatchObject({ failReason: "camera_never_live" });
+    expect((await ledgerOf(r.sessionId)).map((x) => [x.reason, x.delta, x.created_by === null]), "consume, the staff's refund, and no second").toEqual([["consume", -1, true], ["refund", 1, false]]);
+    expect(await creditBalance(sql, r.orgId), "no credit was manufactured").toBe(balance);
+    expect(await refundEventsOf(r.sessionId), "nothing was owed: delta 0, no ledger row").toEqual([{ delta: 0, balanceAfter: balance, ledgerId: null }]);
+  });
+
+  // ---- m1 (review): the phase-change decision must be taken on the LOCKED row --------------------------------------------
+  /** How many backends wait, directly or down a chain, on the one `pid` holds — a lock queue on the session row. */
+  async function queuedBehind(pid: number, want: number): Promise<number> {
+    let n = 0;
+    for (let i = 0; i < 150 && n < want; i++) {
+      await new Promise((res) => setTimeout(res, 20));
+      [{ n }] = await sql<{ n: number }[]>`
+        with recursive chain(pid) as (
+          select ${pid}::int
+          union
+          select a.pid from pg_stat_activity a join chain c on c.pid = any(pg_blocking_pids(a.pid))
+        ) select (count(*) - 1)::int as n from chain`;
+    }
+    return n;
+  }
+
+  it("m1: two beats race for the row — each was peeked against the SAME stored phase, and the second's phase-change decision is taken on the row the first LEFT, so the log ends on the phase the stored beat has (both orders)", async () => {
+    let staged = 0;
+    for (const [start, first, second] of [["live", "reconnecting", "live"], ["reconnecting", "live", "reconnecting"]] as const) {
+      const r = await composedLive();
+      if (start === "reconnecting") { r.tick(1000); await r.beat("reconnecting"); }
+      expect((await sql<{ p: string }[]>`select last_heartbeat->>'programmePhase' as p from fixture_stream_sessions where id = ${r.sessionId}`)[0]!.p, "PREMISE: the stored phase both beats will peek").toBe(start);
+      r.tick(1000);
+      let release!: () => void;
+      const mayCommit = new Promise<void>((res) => (release = res));
+      let signalHeld!: (pid: number) => void;
+      const held = new Promise<number>((res) => (signalHeld = res));
+      const holder = sql.begin(async (tx) => {
+        const [{ pid }] = await tx<{ pid: number }[]>`select pg_backend_pid() as pid`;
+        await tx`select id from fixture_stream_sessions where id = ${r.sessionId} for update`;
+        signalHeld(pid);
+        await mayCommit;
+      });
+      const holderPid = await held;
+      const a = r.beat(first);
+      expect(await queuedBehind(holderPid, 1), `${first}: the race was not staged — the first beat never queued on the row`).toBeGreaterThanOrEqual(1);
+      const b = r.beat(second);
+      expect(await queuedBehind(holderPid, 2), `${second}: the race was not staged — the second beat never queued behind it`).toBeGreaterThanOrEqual(2);
+      release();
+      await holder;
+      await Promise.all([a, b]);
+      const log = (await phaseEvents(r.sessionId)).map((e) => e.to_state);
+      expect(log.at(-1), `${start}, then ${first}, then ${second}: the log ends on the phase the STORED beat has`).toBe(second);
+      expect((await sql<{ p: string }[]>`select last_heartbeat->>'programmePhase' as p from fixture_stream_sessions where id = ${r.sessionId}`)[0]!.p).toBe(second);
+      // …and the rule acts on that log: `live` last → survives the limit; `reconnecting` last → ends a limit after ITS beat.
+      r.tick(LOST_MS); await r.beat(second);
+      if (second === "live") expect((await tickOf(r))?.state, "the camera is live: nothing ends").toBe("live");
+      else expect(await tickOf(r), "the camera is lost: the run began at the second beat").toMatchObject({ endReason: "phone_lost" });
+      staged++;
+    }
+    expect(staged).toBe(2);
+  });
+
+  // ---- minor: the camera facts are read only when a rule could fire ---------------------------------------------------
+  it("minor: a healthy `live` composed session's tick runs ONE statement fewer than the same tick over one whose latest phase is `reconnecting` — the camera facts are read only when a rule could fire", async () => {
+    const healthy = await composedLive();
+    const outage = await composedLive();
+    for (const r of [healthy, outage]) r.tick(MIN);
+    await healthy.beat("live");
+    await outage.beat("reconnecting");
+    const cost = async (r: Composed) => {
+      await sql`update fixture_stream_sessions set ingest_polled_at = null where id = ${r.sessionId}`;
+      const before = statementCount();
+      await tickSession(r.sessionId, r.deps, "sweep");
+      return statementCount() - before;
+    };
+    await cost(healthy); await cost(outage);   // warm-up: plans, caches
+    const a = await cost(healthy);
+    const b = await cost(outage);
+    expect(a, "anti-vacuity: the tick ran statements at all").toBeGreaterThan(3);
+    expect(b - a, "the one statement is the camera-facts read").toBe(1);
+    // …and a phase that cannot decide anything (`frozen`, `final`) is as cheap as `live`.
+    let cheap = 0;
+    for (const phase of PROGRAMME_PHASES.filter((p) => p !== "reconnecting" && p !== "waiting")) {
+      const r = await composedLive();
+      r.tick(MIN); await r.beat(phase);
+      await cost(r);
+      expect(await cost(r), `${phase}: no facts read`).toBe(a);
+      cheap++;
+    }
+    expect(cheap, "anti-vacuity").toBeGreaterThanOrEqual(2);
   });
 });

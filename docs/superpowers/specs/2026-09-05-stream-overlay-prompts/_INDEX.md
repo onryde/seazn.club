@@ -10,6 +10,11 @@ Decision log and session status. Read `_RULES.md` beside this file first.
 > folder (ffmpeg x11grab + Chromium + colorkey, a TS supervisor). `R2-compositor.md` here is
 > historical; do not build from it. The remaining compositor phases are R4 (R3 is the native
 > capture apps).
+>
+> **R2008, 2026-10-19 (owner ruling "apply rec").** A composed stream whose camera is lost for 15 min
+> ends `phone_lost`; one whose camera never appears ends `camera_never_live` 15 min after go-live
+> and the match credit is refunded. Both read the compositor's `programmePhase` log
+> (`programme_phase` events). Spec: `../2026-10-01-capture-qr-v2-design.md` §17.15.
 
 - **Design of record:** `../2026-09-05-stream-overlay-design.md` (owner-approved
   in chat 2026-09-05: design "I am ok with design", spec "approve"; committed
