@@ -1149,8 +1149,16 @@ test("R2006 Option C: the score by default; Camera only and back; a style and ti
 const SCORE_CARD_WIDTHS = [320, 360, 375, 390, 430, 768, 834, 1280] as const;
 
 /** Every overhang inside the score card except the thumbnails' own fit-by-scale canvases (a 1920 px canvas scaled into
- *  its cell — the R2006 grid test in stream-overlay.spec.ts measures that canvas against its cell at every width). */
+ *  its cell — the R2006 grid test in stream-overlay.spec.ts measures that canvas against its cell at every width).
+ *  The scan runs on the SETTLED card: opening Score timing rotates its chevron over a 150 ms transition, and a 16 px
+ *  box at 45° is 22.6 px wide, so a frame sampled mid-turn reads `summary 240px content in 238px` at 320. CI measured
+ *  exactly that frame (run 39289405808); nothing is clipped once the turn ends. So every FINITE animation in the card
+ *  is awaited first; an infinite one (a pulse) would never settle and is not what this scan is about. */
 async function expectScoreCardUnclipped(page: Page, label: string): Promise<number> {
+  await page.locator('[data-testid="stream-ready"]').evaluate(async (root) => {
+    const finite = root.getAnimations({ subtree: true }).filter((a) => a.effect?.getComputedTiming().iterations !== Infinity);
+    await Promise.all(finite.map((a) => a.finished.catch(() => null)));
+  });
   const notInThumb = (sel: string) => `${sel}:not([data-testid="ovl-preview"] *):not([data-testid="ovl-preview"])`;
   const { clipped, scrollable } = await overflowingIn(
     page,
@@ -1213,11 +1221,14 @@ for (const width of SCORE_CARD_WIDTHS) {
     await expectScoreCardUnclipped(page, `${width}px default`);
     await expectNoHorizontalScroll(page);
     await summary.click();
+    // Scanned straight after the tap, while the chevron is still turning, so the helper's settle wait is exercised on
+    // every run. With the wait removed, one local run went red at 390, 430 and 1280 (CI's own red was 320): whichever
+    // widths happen to sample mid-turn.
+    await expectScoreCardUnclipped(page, `${width}px timing open`);
     const input = page.getByTestId("stream-timing-input");
     await expectReachable(page, input, "the timing input", width);
     await expectReachable(page, page.getByTestId("stream-timing-reset"), "Reset", width);
     reached += 2;
-    await expectScoreCardUnclipped(page, `${width}px timing open`);
     await expectNoHorizontalScroll(page);
     console.log(`${width}px: ${reached} controls reached`);
     expect(reached, "every option, every scene, the summary, Go live, the link, the input and Reset").toBe(ids.length + scenes.length + 3 + 2);
