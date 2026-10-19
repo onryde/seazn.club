@@ -5,39 +5,25 @@
 // confirmed 2026-09-10. The design canvas the sheet was drawn on is gone, so
 // the sheet is the authority and nothing here invents a value it does not state.
 //
-// THE REGISTRY IS THE POINT. The style strip renders `templatesForSport(sportKey)`
-// in registry order and opens on `defaultTemplateFor(sportKey)`. Three themes
-// today, four when a fourth lands — with no edit to this file. There is
-// deliberately NO theme id written as a literal anywhere below, not even for
-// the "this style is opaque" caption: that caption is looked up as
-// `stream.preview.<id>` and rendered only where the dictionary declares one, so
-// a future opaque theme ships its caption as a dictionary key rather than as a
-// branch here.
+// THE REGISTRY IS THE POINT. The score style picker (stream-template-picker.tsx) renders
+// `templatesForSport(sportKey)` in registry order and opens on the fixture's STORED style resolved through
+// `resolveTemplate` (the sport's default when none is stored). There is deliberately NO theme id written as a literal
+// anywhere below.
 //
-// The preview is the REAL `<OverlayStage>`, never a picture of one: same
-// component, same projection, same themes as the OBS browser source. Two
-// consequences worth knowing before editing:
-//
-//   * `fit` is FALSE here. The stage's own `useLayoutEffect` then leaves
-//     `scale(1)` on `.ovl-canvas`, so the reduction is applied to the WRAPPER
-//     below (the prop's own doc says exactly this). A transform on that
-//     wrapper also makes it the containing block for `.ovl-canvas`'s
-//     `position: absolute`, which is what keeps §3's `bottom: 54px` bar
-//     measured against 1080 authored pixels rather than against the strip.
-//   * `initial` is SEEDED FROM THE ROW and upgraded by one fetch of the same
-//     overlay endpoint the stage itself polls. The seed is why a fixture whose
-//     public endpoint is unreachable still previews instead of showing an
-//     empty strip.
+// R2006 (owner ruling 2026-10-19, "Option C"): the picker replaced the OBS tab's style strip AND its big preview — each
+// option's thumbnail is the real `<OverlayPreview>` (the one render function, D6), so nothing is lost. Its data is
+// SEEDED FROM THE ROW and upgraded by one fetch of the same overlay endpoint the stage itself polls; the seed is why a
+// fixture whose public endpoint is unreachable still previews. The same picker sits in the Phone tab's score card, the
+// score being the default there: one stored style per fixture, read by the OBS URL and the composed session alike.
 import {
   Component, Fragment, useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode,
 } from "react";
-import { Check, ChevronRight, CircleAlert, Copy, ExternalLink, RefreshCw, RotateCcw, TriangleAlert, X } from "lucide-react";
+import { Check, ChevronRight, CircleAlert, Copy, ExternalLink, Info, RefreshCw, RotateCcw, TriangleAlert, X } from "lucide-react";
 import dynamic from "next/dynamic";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { OverlayStage } from "@/components/overlay/overlay-stage";
-import { defaultTemplateFor, templatesForSport, type TemplateId } from "@/components/overlay/template-registry";
+import { resolveTemplate, templatesForSport, type TemplateId } from "@/components/overlay/template-registry";
 import { fetchOverlayFixture, type OverlayLiveData } from "@/components/public-site/live-score-data";
-import { useDict, useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
+import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { fetchRelayCheckoutClientSecret } from "@/lib/billing-checkout-client";
 import { captureQrV2Text, type CaptureQrV2 } from "@/lib/capture-qr";
@@ -48,12 +34,15 @@ import { D3Warning, PhoneStripView, SignalChain } from "./stream-signal-chain";
 import { SeaznQrImage, SeaznQrPlaceholder } from "./seazn-qr-image";
 import { useSharedPhoneSession } from "./stream-session-provider";
 import { useTabReturn } from "./use-tab-return";
+import { ScoreLiveSummary, ScoreTiming, useStreamPrefs } from "./stream-score-settings";
+import { StreamTemplatePicker, type TemplatePreviewData } from "./stream-template-picker";
 import type { MessageKey } from "@/lib/messages";
 import { overlayStartLabel, type OverlaySideInput } from "@/lib/overlay-model";
 import { OVERLAY_KEY_PARAM } from "@/lib/realtime-purpose";
 import { decidedOutcomeTemplates } from "@/lib/scoring-vocab";
 import { formatMinor, type Currency } from "@/lib/currency";
 import { chainFor, phoneDot } from "@/lib/stream-chain";
+import { DEFAULT_STREAM_PREFS, effectiveStreamMode, type StreamPrefs } from "@/lib/stream-settings";
 import { renderSeaznQr, seaznQrModules, type SeaznQr } from "@/lib/seazn-qr";
 import {
   STREAM_CREDIT_PACKS, streamPackAmountMinor, streamPackPerMatchMinor, type StreamPackSize,
@@ -96,7 +85,7 @@ import {
 import { streamUrlSchema } from "@/lib/stream-url";
 import { fmtNumber, fmtTime } from "@/lib/format";
 // TYPES only: `@/server/**` is server code, and a runtime import from a client island breaks the build.
-import type { StreamPhone, StreamSessionCurrent, StreamTarget } from "@/server/api-v1/schemas";
+import type { StreamMode, StreamPhone, StreamSessionCurrent, StreamTarget } from "@/server/api-v1/schemas";
 
 // I2: the embedded-checkout sheet, and Stripe.js with it, is its own chunk — never fetched with the fixtures tab.
 // `@stripe/stripe-js` injects js.stripe.com as an IMPORT side effect, and this panel ships on every organiser fixtures
@@ -128,52 +117,6 @@ export class CheckoutSheetBoundary extends Component<{ onFail: () => void; child
   override render() {
     return this.state.failed ? null : this.props.children;
   }
-}
-
-/** The authored canvas every theme is drawn on — the OBS browser-source size
- *  `overlay-stage.tsx` fixes and `_THEMES.md` measures every inset against. */
-export const CANVAS_W = 1920;
-export const CANVAS_H = 1080;
-
-/**
- * §8's preview strip is capped at 640 CSS px wide, and that is the ONLY thing
- * 640 still means here.
- *
- * §8's OBS-link copy and this panel's width maths rest on a 640-px preview, so
- * the strip does not grow past it on a wide console; below it the strip is
- * whatever the card gives it, and the scale FOLLOWS (see `previewScaleFor`).
- * The cap is what makes the sheet's "at a 640 px strip this still resolves to
- * 640/1920, so nothing changes on desktop" true by construction rather than by
- * luck about the card's width.
- */
-export const PREVIEW_MAX_W_PX = 640;
-
-/**
- * §8, SECOND correction 2026-09-10: **scale to the container**, never to a
- * constant — `scale(w/1920)` for the measured strip width `w`, in a strip
- * `w × 1080/1920` tall.
- *
- * Why a fixed scale could not work, and why the 360-px ruling below fixed only
- * half of it: `scale(640/1920)` paints a 640 CSS px canvas however wide the
- * strip actually is. The panel is ~296 px wide at a 320 px viewport, so about a
- * THIRD of the frame was visible, and §3's bar — which spans x ≈ 24→616 in
- * canvas px and is **cricket's default theme** — had its score cells cropped
- * off the right edge with nothing to scroll to reach them. Same defect as the
- * 96-px strip, one axis over, missed because the first ruling reasoned about
- * height alone.
- *
- * The earlier owner ruling (360 px, 2026-09-10, on the W1 Task 6 finding) is
- * NOT lost: 360 is `PREVIEW_MAX_W_PX × 1080/1920`, so a 640-px strip is still
- * 360 tall and still shows all 1080 authored px. It is now a consequence of the
- * aspect ratio instead of a number of its own, which is the point — the whole
- * canvas is visible at EVERY width, not just at the one that was measured.
- *
- * A pure function so the invariant is testable in `environment: "node"`, where
- * there is no layout and nothing can be measured.
- */
-export function previewScaleFor(stripWidth: number): number {
-  const w = Number.isFinite(stripWidth) && stripWidth > 0 ? stripWidth : PREVIEW_MAX_W_PX;
-  return Math.min(w, PREVIEW_MAX_W_PX) / CANVAS_W;
 }
 
 /** True when stream code `a` was issued AFTER `b` (both ISO instants off the same server). An instant that does not
@@ -228,6 +171,16 @@ export interface StreamPanelContext {
    *  and every pack checkout is refused. The Phone tab shows that instead of buy tiles and Go live; the stop probe
    *  stays, so a stream left over from before still has its way out. */
   relayDisabled: boolean;
+  /** R2006 (owner ruling 2026-10-19, "Option C"): the score can stream on this deployment — `streaming.relay` and R2001's
+   *  `composedUnavailable()` (server/stream-panel-context.ts `relayOffer`). False: Go live streams the camera only, with
+   *  a one-line reason, and is never blocked. */
+  composedAvailable: boolean;
+  /** R2006: each listed fixture's STORED score preferences (mode, template, delay; null = the default), keyed by
+   *  fixture as `overlayKeys` is. A fixture missing here reads as all defaults. */
+  streamPrefs: Record<string, StreamPrefs>;
+  /** R2006: config.ts `RELAY_OVERLAY_DELAY_DEFAULT_MS` — the delay a composed session serves when the fixture sets none.
+   *  Score timing's "Default {seconds}s" and its reset value; the panel never types the number. */
+  overlayDelayDefaultMs: number;
   sportKey: string;
   overlayDict: Record<string, string>;
   /** The org the fixture belongs to — the stream-targets and relay-checkout routes address it. */
@@ -285,7 +238,6 @@ export function FixtureStreamPanel({
   openedByReturn?: boolean;
 }) {
   const msg = useMsg();
-  const dict = useDict() as Record<string, unknown>;
   const locale = useLocaleOrDefault();
 
   const themes = templatesForSport(stream.sportKey);
@@ -330,22 +282,19 @@ export function FixtureStreamPanel({
     },
     [returnedHere],
   );
-  // OPENS ON the sport's own default, resolved through the registry — a lazy
-  // initialiser so a re-render never re-seeds it over the organiser's choice.
-  const [style, setStyle] = useState<TemplateId>(() => defaultTemplateFor(stream.sportKey));
+  // R2006: the fixture's STORED score preferences (mode, style, timing) — seeded from the page's read, each change shown
+  // at once and saved; a failed save shows the stored value again. ONE copy for both tabs, so the OBS URL, the Phone
+  // tab's score card and its Go live never disagree about the style.
+  const prefs = useStreamPrefs(fixture.id, stream.streamPrefs[fixture.id] ?? DEFAULT_STREAM_PREFS);
+  // OPENS ON the stored style resolved through the registry (the sport's own default when none is stored, a retired
+  // one's replacement) — never a second rule here.
+  const style: TemplateId = resolveTemplate(prefs.prefs.overlayTemplate, stream.sportKey).id;
   const [copied, setCopied] = useState(false);
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [live, setLive] = useState<OverlayLiveData | null>(null);
-  // §8's second correction: the preview scales to the STRIP'S OWN WIDTH, so
-  // that width has to be measured. `null` until the first observation, and
-  // `previewScaleFor` falls back to the cap — which is exactly the constant
-  // this panel used to ship, so the pre-measurement frame is never worse than
-  // the old behaviour.
-  const stripRef = useRef<HTMLDivElement | null>(null);
-  const [stripWidth, setStripWidth] = useState<number | null>(null);
 
   // The browser's own origin, read as an EXTERNAL STORE rather than seeded
   // into state from an effect: `react-hooks/set-state-in-effect` refuses the
@@ -380,32 +329,12 @@ export function FixtureStreamPanel({
     };
   }, [fixture.id]);
 
-  // Measure the strip, never the viewport: the panel sits in a card inside a
-  // run-sheet row, so the window's width says nothing useful about it.
-  //
-  // `ResizeObserver` fires an initial observation for every element it is given,
-  // so there is no synchronous `measure()` here — that would be a setState in an
-  // effect body, which `react-hooks/set-state-in-effect` refuses (see `origin`
-  // above for the same constraint). `tab` is the dependency because the strip
-  // only exists on the OBS tab: leaving it out attaches the observer to a node
-  // that is gone the moment an organiser opens Phone and comes back.
-  useEffect(() => {
-    const el = stripRef.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver((entries) => {
-      const box = entries[0]?.contentRect;
-      if (box) setStripWidth(box.width);
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [shownTab]);
-
-  const previewScale = previewScaleFor(stripWidth ?? PREVIEW_MAX_W_PX);
-
   // RT: the row's OWN key rides the URL the organiser pastes into OBS — never another fixture's, and none when the page
   // minted none (the overlay then polls).
   const overlayKey = stream.overlayKeys[fixture.id];
-  const overlayUrl = `${origin}/overlay/fixtures/${fixture.id}?style=${style}${
+  // R2006 (spec §4.4): `template=` — the canonical parameter; the page reads `?style=` forever (R2007), but the panel no
+  // longer writes it.
+  const overlayUrl = `${origin}/overlay/fixtures/${fixture.id}?template=${style}${
     overlayKey ? `&${OVERLAY_KEY_PARAM}=${encodeURIComponent(overlayKey)}` : ""
   }`;
 
@@ -422,11 +351,26 @@ export function FixtureStreamPanel({
     venueTz: tz,
   };
 
-  // Declared by the DICTIONARY, never by a theme name: a style whose canvas is
-  // opaque hides the green-field stand-in entirely, which reads as a broken
-  // preview unless it is captioned. A theme that needs no caption ships no key.
-  const captionKey = `stream.preview.${style}`;
-  const caption = typeof dict[captionKey] === "string" ? msg(captionKey as MessageKey) : null;
+  // R2006: every thumbnail renders THIS fixture — its snapshot (the seed until the fetch lands), sides, start label and
+  // the page's overlay dictionary.
+  const previewData: TemplatePreviewData = {
+    sportKey: stream.sportKey,
+    snapshot: live ?? seed,
+    sides: [sideOf(fixture.home_entrant_id, "home"), sideOf(fixture.away_entrant_id, "away")],
+    startLabel: overlayStartLabel(fixture.scheduled_at, locale, tz),
+    dict: stream.overlayDict,
+    decidedTemplates: decidedOutcomeTemplates(msg, stream.sportKey),
+  };
+  const picker = (where: "obs" | "phone") => (
+    <StreamTemplatePicker
+      templates={themes}
+      selected={style}
+      onPick={(id) => prefs.save("overlayTemplate", id)}
+      preview={previewData}
+      idPrefix={`stream-${where}-${fixture.id}`}
+      saveFailed={prefs.failed === "overlayTemplate"}
+    />
+  );
 
   async function copy() {
     try {
@@ -463,29 +407,6 @@ export function FixtureStreamPanel({
       setBusy(false);
     }
   }
-
-  // §8's tab grammar, shared by BOTH strips so the two cannot drift.
-  //
-  // Written MOBILE-FIRST rather than as `max-md:` overrides, deliberately:
-  // every branch in this panel is "base = phone, `md:` = the §8 desktop
-  // value", so no phone rule ever has to out-order a desktop one in the
-  // generated CSS. `max-md:static` beating a base `absolute` was the one
-  // place that would have depended on Tailwind's utility sort, and no unit
-  // test in this repo can see a cascade.
-  //
-  // The tightest row on this surface is three 44px style tabs at 320 (plus
-  // the OBS/Phone pair above them). `flex-wrap` + `grow basis-0` + a 4rem
-  // floor is what makes that safe for ANY number of themes: three fit one row
-  // inside the card's ~246px at 320, a fourth wraps to a second row, and a
-  // tab whose label is too long wraps its TEXT (`leading-tight`) rather than
-  // widening. There is no N at which the strip can put a horizontal scrollbar
-  // on the panel.
-  const tabClass = (selected: boolean) =>
-    `min-h-11 min-w-[4rem] grow basis-0 rounded-md px-2.5 py-1 text-xs font-medium leading-tight transition md:min-h-0 md:min-w-0 md:grow-0 md:basis-auto ${
-      selected
-        ? "bg-purple-100 text-purple-800"
-        : "text-slate-600 hover:bg-purple-50 hover:text-purple-700"
-    }`;
 
   // Spec §3.1 / mockup option-a (T9b): the segmented Phone | OBS overlay switch. 44 px on a phone, 36 at ≥ 768.
   const modeTabClass = (selected: boolean) =>
@@ -543,79 +464,9 @@ export function FixtureStreamPanel({
 
       {shownTab === "obs" ? (
         <>
-          <div
-            role="tablist"
-            aria-label={msg("stream.styles.label")}
-            className="mt-3 flex flex-wrap gap-1.5"
-          >
-            {themes.map((theme) => (
-              <button
-                key={theme.id}
-                type="button"
-                role="tab"
-                aria-selected={style === theme.id}
-                data-stream-style={theme.id}
-                data-testid={`stream-tab-${theme.id}`}
-                onClick={() => setStyle(theme.id)}
-                className={tabClass(style === theme.id)}
-              >
-                {msg(theme.labelKey as MessageKey)}
-              </button>
-            ))}
-          </div>
-
-          {/* §8 as corrected: the strip is `w` wide and `w × 1080/1920` tall,
-              and the canvas below is scaled to the SAME `w`, so the whole
-              authored 1920×1080 frame is visible at every viewport instead of
-              at the one width somebody measured. The ratio is an
-              `aspect-ratio`, not a pixel height, so there is no second number
-              to drift: 640 → 360 falls out of it, which is the owner's own
-              strip figure. `overflow-hidden` is a backstop only now — the
-              canvas exactly fills the box, give or take the 1-px border. */}
-          <div
-            ref={stripRef}
-            data-testid="stream-preview"
-            aria-hidden
-            className="relative mt-3 w-full overflow-hidden rounded-lg border border-purple-100"
-            style={{
-              maxWidth: PREVIEW_MAX_W_PX,
-              aspectRatio: `${CANVAS_W} / ${CANVAS_H}`,
-              background: "linear-gradient(180deg, #3d7a3a, #2e6a2d)",
-            }}
-          >
-            <div
-              data-testid="stream-preview-canvas"
-              className="absolute left-0 top-0"
-              style={{
-                width: CANVAS_W,
-                height: CANVAS_H,
-                transform: `scale(${previewScale})`,
-                transformOrigin: "top left",
-              }}
-            >
-              <OverlayStage
-                // Remount when the first real payload lands: `useLiveFixture`
-                // seeds its state ONCE, so a changed `initial` prop is
-                // otherwise ignored for the life of the island.
-                key={live === null ? "seed" : "live"}
-                fixtureId={fixture.id}
-                initial={live ?? seed}
-                // m6/R1 (RT): no realtime, no declared purpose, no key — the console preview never mints a token.
-                realtime={false}
-                sportKey={stream.sportKey}
-                style={style}
-                sides={[sideOf(fixture.home_entrant_id, "home"), sideOf(fixture.away_entrant_id, "away")]}
-                startLabel={overlayStartLabel(fixture.scheduled_at, locale, tz)}
-                dict={stream.overlayDict}
-                decidedTemplates={decidedOutcomeTemplates(msg, stream.sportKey)}
-              />
-            </div>
-          </div>
-          {caption !== null && (
-            <p data-testid="stream-preview-note" className="mt-1 text-[11px] text-slate-600">
-              {caption}
-            </p>
-          )}
+          {/* R2006 (Option C): the score style picker replaces the style strip and the big preview — each option's
+              thumbnail IS the preview, at its own width. */}
+          <div className="mt-3 min-w-0">{picker("obs")}</div>
 
           <div className="relative mt-3">
             <input
@@ -723,6 +574,28 @@ export function FixtureStreamPanel({
               phoneLostMinutes={stream.phoneLostMinutes}
               autoStopMinutes={stream.autoStopMinutes}
               tz={tz}
+              score={{
+                available: stream.composedAvailable,
+                stored: prefs.prefs.streamMode,
+                template: style,
+                sportKey: stream.sportKey,
+                editor: (
+                  <>
+                    {picker("phone")}
+                    <div className="mt-3 border-t border-purple-100 pt-1">
+                      <ScoreTiming
+                        idPrefix={`stream-timing-${fixture.id}`}
+                        storedMs={prefs.prefs.overlayDelayMs}
+                        defaultMs={stream.overlayDelayDefaultMs}
+                        onSave={(ms) => prefs.save("overlayDelayMs", ms)}
+                        saveFailed={prefs.failed === "overlayDelayMs"}
+                      />
+                    </div>
+                  </>
+                ),
+                modeFailed: prefs.failed === "streamMode",
+                onMode: (m) => prefs.save("streamMode", m),
+              }}
             />
           )}
         </div>
@@ -759,6 +632,27 @@ const MANAGE_DESTINATIONS_HREF = "/directory?tab=streaming";
 const LINK = "font-medium text-purple-700 underline decoration-purple-300 underline-offset-2 hover:decoration-purple-700";
 
 type CreateError = { code: CreateFailureCode; holder: CreateErrorHolder | null };
+
+/**
+ * R2006 (owner ruling 2026-10-19, "Option C"): what the Phone tab knows of the score — handed down by the panel, which
+ * owns the stored preferences (`useStreamPrefs`) and the preview data.
+ *  - `available`: the score can stream on this deployment (StreamPanelContext.composedAvailable). False: Go live streams
+ *    the camera only, with a one-line reason — never blocked, never an option the API would refuse.
+ *  - `stored`: the fixture's stored mode (null: never chosen — the score). The effective mode is
+ *    `effectiveStreamMode(stored, available)`, the SAME rule the phone's start and the automatic start resolve.
+ *  - `template`: the style the picker shows (resolved), sent as Go live's `themeId` for a score stream.
+ *  - `editor`: Ready's score card body — the picker and Score timing (pre-live only).
+ */
+export interface PhoneScore {
+  available: boolean;
+  stored: StreamMode | null;
+  template: TemplateId;
+  sportKey: string;
+  editor: ReactNode;
+  /** The last Camera only / Add the score back did not save — the stored mode shows again, and a line says so. */
+  modeFailed: boolean;
+  onMode: (mode: StreamMode) => void;
+}
 /** D13: which sentence a refused checkout gets — keyed on the route's STATUS (`CheckoutSecretResult` has no code). */
 type CheckoutError = "owner" | "unknown";
 
@@ -835,6 +729,7 @@ export function PhoneTab({
   phoneLostMinutes,
   autoStopMinutes,
   tz,
+  score,
 }: {
   fixtureId: string;
   orgId: string;
@@ -848,6 +743,8 @@ export function PhoneTab({
   autoStopMinutes: number;
   /** PR-2 T12: the venue zone — the takeover notice's clock, as the row's. */
   tz: string;
+  /** R2006: the score's availability, the stored mode and Ready's score card (the panel's). */
+  score: PhoneScore;
 }) {
   const msg = useMsg();
   // T9b: the page's ONE session (StreamSessionProvider, mounted by the console) — the Stream button's dot reads it too.
@@ -1200,9 +1097,13 @@ export function PhoneTab({
     setBusy(true);
     setCreateError(null);
     try {
+      // R2006 (Option C): the mode the tab SHOWS — the score unless the organiser chose Camera only or this deployment
+      // cannot run it (the same rule the phone's start and the automatic start resolve, `effectiveStreamMode`) — and,
+      // for the score, the style the picker shows.
+      const mode = effectiveStreamMode(score.stored, score.available);
       await apiV1(`/api/v1/fixtures/${fixtureId}/stream-sessions`, {
         method: "POST",
-        json: { mode: "passthrough", targetId: chosen },
+        json: mode === "composed" ? { mode, targetId: chosen, themeId: score.template } : { mode, targetId: chosen },
       });
       // n-6: the start saved its destination — a pick that did not save is no longer news, at Ready after it either.
       setPickFailed(false);
@@ -1343,6 +1244,7 @@ export function PhoneTab({
           setCheckoutError(null);
         }}
         onTileIntent={onTileIntent}
+        score={score}
       />
       {sheet}
     </>
@@ -1758,6 +1660,8 @@ export interface PhoneTabBodyProps {
   onShowBuy: () => void;
   /** M2: a hand is on a credit tile (pointerenter, focus, touchstart) — warm the checkout sheet's chunk now. */
   onTileIntent: () => void;
+  /** R2006 (Option C): the score — its availability, the stored mode, Ready's score card. */
+  score: PhoneScore;
 }
 
 const PILL: Record<PhoneTabState, string> = {
@@ -1894,6 +1798,9 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   // before stream codes) is drawn as the panel was: no phone strip, no code, the §3.2 chain.
   const ready = readyStateOf(p.phone, p.view);
   const legacy = p.phone?.legacy ?? false;
+  // R2006 (Option C): what Go live — and the automatic start — will stream: the score unless the organiser chose Camera
+  // only, or this deployment cannot run it. The server's own rule (`effectiveStreamMode`), never a second copy.
+  const scoreMode = effectiveStreamMode(p.score.stored, p.score.available);
   const matchOver = state === "idle" && ready === "code_ended";
   const forced = state === "idle" && p.balance < 1 && !p.restart?.free && !matchOver;
   const buyCard = !p.planGate && (forced || p.showBuy);
@@ -2101,6 +2008,9 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   // latch, final review I-1), else the paired phone in Operator (the beat's mode). One line, the latch first.
   const autoNote = autoSwitchNote(p.phone, autoOn);
   const autoNoteId = autoNote?.kind === "wontStart" ? `stream-auto-wont-start-${p.fixtureId}` : `stream-auto-operator-${p.fixtureId}`;
+  // R2006 (Option C): while on, the switch says what the automatic start will stream — the same mode Go live shows.
+  const autoModeId = `stream-auto-mode-${p.fixtureId}`;
+  const autoDescribedBy = [autoHintId, autoModeId, ...(autoNote ? [autoNoteId] : [])].join(" ");
   const autoSwitch = (
     <div data-testid="stream-auto" className="mt-3">
       <button
@@ -2109,7 +2019,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
         data-testid="stream-auto-switch"
         aria-checked={autoOn}
         aria-labelledby={autoTitleId}
-        aria-describedby={autoOn ? (autoNote ? `${autoHintId} ${autoNoteId}` : autoHintId) : undefined}
+        aria-describedby={autoOn ? autoDescribedBy : undefined}
         disabled={p.autoPending !== null}
         onClick={() => p.onToggleAuto(!autoOn)}
         className="flex min-h-11 w-full items-start gap-3 rounded-lg bg-white p-3 text-left ring-1 ring-purple-100 disabled:cursor-wait"
@@ -2133,6 +2043,12 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
           )}
         </span>
       </button>
+      {autoOn && (
+        <p id={autoModeId} data-testid="stream-auto-mode" data-mode={scoreMode} className="mt-1 flex gap-1.5 px-1 text-xs text-slate-600">
+          <Info aria-hidden className="mt-px h-3.5 w-3.5 shrink-0 text-slate-500" strokeWidth={1.8} />
+          <span className="min-w-0">{msg(scoreMode === "composed" ? "stream.auto.startsWithScore" : "stream.auto.startsCameraOnly")}</span>
+        </p>
+      )}
       {autoNote && (
         <p
           id={autoNoteId}
@@ -2153,6 +2069,20 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   );
   // §7.1: Live's read-only line — only when the server says §7.3 will stop this session (B7 review M-3), the server's delay.
   const autoLive = state === "live" && autoStopLine(p.phone, state);
+  // R2006 (Option C): Ready's score card — the style picker and Score timing while the score is on; one line once the
+  // organiser chose Camera only; nothing where the score cannot stream (the reason sits above Go live instead).
+  const scoreBlock = !p.score.available ? null : scoreMode === "composed" ? (
+    <div data-testid="stream-score" className="min-w-0 rounded-lg bg-white p-3 ring-1 ring-purple-100">
+      {p.score.editor}
+    </div>
+  ) : (
+    <p data-testid="stream-camera-only" className="min-w-0 rounded-lg bg-white px-3 py-2.5 text-sm text-slate-700 ring-1 ring-purple-100">
+      <span className="font-medium text-slate-800">{msg("stream.mode.cameraOnlyTitle")}</span> {msg("stream.mode.cameraOnlyBody")}
+    </p>
+  );
+  // R2006: a running SCORE session's own style and timing (its create copied them) — read-only, and the honest line that
+  // its destination is not watched yet (Owed 26: the chain's destination node is neutral for the same reason).
+  const liveOverlay = p.view?.mode === "composed" ? p.view.overlay : null;
   // §7.4 "behind a tap" (Q-D): the phone's data used and app version, after the runner's chips in Details (Live/Ending).
   const extraChips = phoneDetails(p.phone);
 
@@ -2223,9 +2153,12 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
       {state === "idle" && !buyCard && !matchOver && (
         // Option B rev 2 (§6.12): the destination; the code card beside it from 768 (370 px, equal columns from 1024),
         // below it on a phone; then the restart line, Go live and the credits line under the picker.
+        // R2006 (Option C, owner-approved mock): the score card spans both columns between that row and Go live.
         <div
           data-testid="stream-ready"
-          className="mt-4 grid items-start gap-4 md:grid-cols-[minmax(0,1fr)_370px] md:grid-rows-[auto_1fr] lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]"
+          className={`mt-4 grid items-start gap-4 md:grid-cols-[minmax(0,1fr)_370px] lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] ${
+            scoreBlock ? "md:grid-rows-[auto_auto_1fr]" : "md:grid-rows-[auto_1fr]"
+          }`}
         >
           <div className="min-w-0 md:col-start-1 md:row-start-1">
             <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
@@ -2329,7 +2262,9 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
             )}
             {autoSwitch}
           </div>
-          <div className={ready === "no_phone" ? "min-w-0 md:col-start-2 md:row-start-1 md:row-span-2" : "min-w-0 md:col-start-2 md:row-start-1 md:row-span-2 md:mt-6"}>
+          <div
+            className={`min-w-0 md:col-start-2 md:row-start-1 ${scoreBlock ? "" : "md:row-span-2"} ${ready === "no_phone" ? "" : "md:mt-6"}`}
+          >
             {ready === "no_phone" ? (
               <div data-testid="stream-code-card" className="min-w-0 rounded-lg bg-white p-3 ring-1 ring-purple-100">
                 <p className="text-sm font-semibold text-slate-900">{msg("stream.code.scan")}</p>
@@ -2339,12 +2274,21 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
               codeDisclosure
             )}
           </div>
-          <div className="min-w-0 space-y-4 md:col-start-1 md:row-start-2">
+          {scoreBlock && <div className="min-w-0 md:col-span-2 md:row-start-2">{scoreBlock}</div>}
+          <div className={`min-w-0 space-y-4 md:col-start-1 ${scoreBlock ? "md:row-start-3" : "md:row-start-2"}`}>
             {restartEl}
             <div>
+              {!p.score.available && (
+                // Owner ruling (Option C): the score cannot stream here — one line, and Go live still streams the camera.
+                <p data-testid="stream-score-unavailable" className="mb-2 flex gap-1.5 text-xs text-slate-600">
+                  <Info aria-hidden className="mt-px h-3.5 w-3.5 shrink-0 text-slate-500" strokeWidth={1.8} />
+                  <span className="min-w-0">{msg("stream.mode.unavailable")}</span>
+                </p>
+              )}
               <button
                 type="button"
                 data-testid="stream-go-live"
+                data-mode={scoreMode}
                 // T8: only a LOADED, non-empty list can start — `targetList` is empty while the read is pending or failed, so a
                 // failed or pending read offers nothing to stream to, and neither does a selection left over from before.
                 // Mockup state 5: a destination another match holds cannot start until it is picked again or freed.
@@ -2356,6 +2300,26 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
               >
                 {msg("stream.phone.goLive")}
               </button>
+              {p.score.available && (
+                // Option C: the secondary choice is a small link under the ONE Go live — Camera only, or the score back.
+                <div className="flex justify-center">
+                  <button
+                    type="button"
+                    data-testid="stream-mode-toggle"
+                    data-to={scoreMode === "composed" ? "passthrough" : "composed"}
+                    disabled={p.busy}
+                    onClick={() => p.score.onMode(scoreMode === "composed" ? "passthrough" : "composed")}
+                    className={`${LINK} inline-flex min-h-11 items-center text-sm disabled:cursor-not-allowed disabled:opacity-60 md:min-h-9`}
+                  >
+                    {msg(scoreMode === "composed" ? "stream.mode.cameraOnly" : "stream.mode.addScore")}
+                  </button>
+                </div>
+              )}
+              {p.score.modeFailed && (
+                <p data-testid="stream-mode-error" role="alert" className="mt-1 text-center text-sm text-red-700">
+                  {msg("stream.mode.saveFailed")}
+                </p>
+              )}
               {creditsLine}
             </div>
           </div>
@@ -2411,6 +2375,20 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
             <p data-testid="stream-ending" className="text-xs text-slate-600">
               {msg("stream.phone.ending", { destination: p.view.target.label })}
             </p>
+          )}
+          {state === "live" && p.view.mode === "composed" && (
+            <div className="space-y-2">
+              <p data-testid="stream-live-unmonitored" className="flex gap-1.5 text-xs text-slate-600">
+                <Info aria-hidden className="mt-px h-3.5 w-3.5 shrink-0 text-slate-500" strokeWidth={1.8} />
+                <span className="min-w-0">{msg("stream.live.deliveryUnmonitored", { platform: platformName(msg, p.view.target.kind) })}</span>
+              </p>
+              {liveOverlay && (
+                <ScoreLiveSummary
+                  templateLabel={msg(resolveTemplate(liveOverlay.themeId, p.score.sportKey).labelKey as MessageKey)}
+                  delayMs={liveOverlay.delayMs}
+                />
+              )}
+            </div>
           )}
           {/* §3.3 (T9a): the health chips are Details — closed by default; the chain above carries the state. */}
           <details data-testid="stream-details" className="group rounded-lg border border-slate-200 bg-white">

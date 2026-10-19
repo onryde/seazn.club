@@ -38,8 +38,11 @@ import { EmbeddedCheckoutProvider } from "@stripe/react-stripe-js";
 import { renderIsland, propsOf, walk, expandWithHooks, textOf } from "@/components/__tests__/_hook-harness";
 import { Modal } from "@/components/modal";
 import { UpgradeGate } from "@/components/upgrade-gate";
-import { OverlayStage } from "@/components/overlay/overlay-stage";
-import { defaultTemplateFor, templatesForSport } from "@/components/overlay/template-registry";
+import { defaultTemplateFor, resolveTemplate, templatesForSport } from "@/components/overlay/template-registry";
+import { OVERLAY_SCENES } from "@/components/overlay/overlay-scenes";
+import { decidedOutcomeTemplates } from "@/lib/scoring-vocab";
+import { StreamTemplatePicker } from "@/components/v2/stream-template-picker";
+import { ScoreLiveSummary, ScoreTiming } from "@/components/v2/stream-score-settings";
 import { ApiV1Error } from "@/lib/client-v1";
 import { CaptureQrV2, captureQrV2Text } from "@/lib/capture-qr";
 import { messages, type MessageKey } from "@/lib/messages";
@@ -47,6 +50,7 @@ import { STREAM_CREDIT_PACKS, streamPack, streamPackPriceAmounts } from "@/lib/s
 import { SUPPORTED_CURRENCIES, formatMinor } from "@/lib/currency";
 import { LOCALES } from "@/lib/i18n-constants";
 import { OVERLAY_KEY_PARAM } from "@/lib/realtime-purpose";
+import { RELAY_OVERLAY_DELAY_DEFAULT_MS } from "@/server/relay/config";
 import {
   END_REASON_KEYS,
   FAIL_REASON_KEYS,
@@ -75,11 +79,8 @@ import {
   PhoneTabBody,
   StreamCredits,
   StreamCreditsBody,
-  CANVAS_H,
-  CANVAS_W,
-  PREVIEW_MAX_W_PX,
-  previewScaleFor,
   codeIsNewer,
+  type PhoneScore,
   type PhoneTabBodyProps,
   type TargetsState,
   type StreamPanelContext,
@@ -202,6 +203,9 @@ function ctx(o: Partial<StreamPanelContext> = {}): StreamPanelContext {
     phoneCapture: true,
     phoneLostMinutes: 20,
     autoStopMinutes: 3,
+    composedAvailable: false,
+    streamPrefs: {},
+    overlayDelayDefaultMs: RELAY_OVERLAY_DELAY_DEFAULT_MS,
     ...o,
   };
 }
@@ -228,12 +232,6 @@ const byTestId = (tree: ReactElement[], id: string): ReactElement | undefined =>
 const allTestIds = (tree: ReactElement[], id: string): ReactElement[] =>
   tree.filter((el) => attr(el, "data-testid") === id);
 
-/** The style strip's tabs, in DOM order, by the attribute that marks them —
- *  never by a `stream-tab-` testid prefix, which `stream-tab-obs` also matches. */
-const styleTabs = (tree: ReactElement[]): ReactElement[] =>
-  tree.filter((el) => typeof attr(el, "data-stream-style") === "string");
-const styleIds = (tree: ReactElement[]): string[] =>
-  styleTabs(tree).map((el) => String(attr(el, "data-stream-style")));
 
 const click = (el: ReactElement | undefined): void => {
   const onClick = el && (propsOf(el).onClick as (() => void) | undefined);
@@ -250,11 +248,6 @@ function fakeClick(found: { focus: () => void } | null) {
   return { event, selectors };
 }
 
-const stageOf = (tree: ReactElement[]): ReactElement => {
-  const stage = tree.find((el) => el.type === OverlayStage);
-  if (!stage) throw new Error("no <OverlayStage> in the panel — the preview is not the real stage");
-  return stage;
-};
 
 /** The binding sheet itself — `live-cell-cap.test.ts`'s own path shape. */
 const SHEET_PATH = join(
@@ -297,40 +290,101 @@ beforeEach(() => {
   router.replace.mockReset();
 });
 
-describe("the style strip is built from the registry", () => {
-  // A sport whose default differs from another's, so an ordering/selection
-  // mistake cannot hide behind one lucky constant (AGENTS.md class 19).
+// ─── R2006 (owner ruling 2026-10-19, "Option C"; overlay templates spec §4.4 D5–D7): the score style picker ──────────
+// It replaced the OBS tab's style strip AND its big preview. Every expectation is DERIVED from `templatesForSport` /
+// `defaultTemplateFor` / `resolveTemplate` and `OVERLAY_SCENES` — never a list typed here (AGENTS.md class 19).
+const pickerOf = (tree: ReactElement[]): ReactElement => {
+  const all = tree.filter((el) => el.type === StreamTemplatePicker);
+  expect(all, "exactly one score style picker in the panel").toHaveLength(1);
+  return all[0]!;
+};
+const pickerProps = (tree: ReactElement[]) =>
+  propsOf(pickerOf(tree)) as unknown as Parameters<typeof StreamTemplatePicker>[0];
+const linkOf = (tree: ReactElement[]) => new URL(String(propsOf(byTestId(tree, "stream-link")!).value), "http://origin.test");
+
+describe("R2006 P3: the OBS tab's picker is built from the registry and opens on the STORED style", () => {
+  // A sport whose default differs from another's, so a selection mistake cannot hide behind one lucky constant.
   it("premise: two sports really do open on different themes", () => {
     expect(defaultTemplateFor("cricket")).not.toBe(defaultTemplateFor("football"));
   });
 
   it.each(["football", "cricket", "badminton"])(
-    "%s renders exactly the themes templatesForSport returns, in registry order",
+    "%s: the picker is handed exactly templatesForSport, in registry order, and opens on the sport's default with nothing stored",
     (sportKey) => {
-      const tree = open({ sportKey }).tree();
+      const props = pickerProps(open({ sportKey }).tree());
       const expected = templatesForSport(sportKey).map((t) => t.id);
       expect(expected.length, "premise: the registry offers more than one theme").toBeGreaterThan(1);
-      expect(styleIds(tree)).toEqual(expected);
+      expect(props.templates.map((t) => t.id)).toEqual(expected);
+      expect(props.selected).toBe(defaultTemplateFor(sportKey));
     },
   );
 
-  it("labels every style tab from the registry's own labelKey, never English typed here", () => {
-    const tree = open({ sportKey: "football" }).tree();
-    for (const theme of templatesForSport("football")) {
-      const tab = byTestId(tree, `stream-tab-${theme.id}`);
-      expect(tab, `no tab for ${theme.id}`).toBeDefined();
-      const label = (messages as Record<string, string>)[theme.labelKey];
-      expect(label, `${theme.labelKey} is missing from the ui catalog`).toBeTypeOf("string");
-      expect(JSON.stringify(propsOf(tab!).children)).toContain(label);
+  it("the style strip and the big preview are gone (Option C item 4): no style tablist, no stage strip, no caption", () => {
+    const tree = open().tree();
+    let checked = 0;
+    for (const id of ["stream-preview", "stream-preview-canvas", "stream-preview-note"]) {
+      expect(byTestId(tree, id), id).toBeUndefined();
+      checked++;
     }
+    expect(tree.filter((el) => typeof attr(el, "data-stream-style") === "string"), "no style tab").toEqual([]);
+    // The only tablist left is the Phone/OBS switch (its two tabs); the style tabs were role=tab too.
+    expect(tree.filter((el) => attr(el, "role") === "tab").map((el) => attr(el, "data-testid")), "no style tab").toEqual(["stream-tab-phone", "stream-tab-obs"]);
+    expect(checked).toBe(3);
+    // The positive pair: the OBS tab still renders — its link and its picker.
+    expect(byTestId(tree, "stream-link")).toBeDefined();
+    expect(pickerOf(tree)).toBeDefined();
   });
 
-  it("the OBS/Phone pair is NOT part of the style strip", () => {
-    const tree = open().tree();
-    expect(styleIds(tree)).not.toContain("obs");
-    expect(styleIds(tree)).not.toContain("phone");
-    expect(byTestId(tree, "stream-tab-obs"), "the OBS tab").toBeDefined();
-    expect(byTestId(tree, "stream-tab-phone"), "the Phone tab").toBeDefined();
+  it("opens on the fixture's STORED style — the non-default one — and the OBS link carries it as template=, never style=", () => {
+    const other = templatesForSport("football").find((t) => t.id !== defaultTemplateFor("football"))!;
+    const tree = open({ sportKey: "football", streamPrefs: { [FIXTURE.id]: { streamMode: null, overlayTemplate: other.id, overlayDelayMs: null } } }).tree();
+    expect(pickerProps(tree).selected).toBe(other.id);
+    expect(linkOf(tree).searchParams.get("template")).toBe(other.id);
+    expect(linkOf(tree).searchParams.has("style"), "the panel no longer writes ?style=").toBe(false);
+  });
+
+  it("a stored id the registry does not offer resolves as the overlay page resolves it (resolveTemplate) — never a dead selection", () => {
+    const tree = open({ sportKey: "cricket", streamPrefs: { [FIXTURE.id]: { streamMode: null, overlayTemplate: "nope", overlayDelayMs: null } } }).tree();
+    expect(pickerProps(tree).selected).toBe(resolveTemplate("nope", "cricket").id);
+    expect(pickerProps(tree).selected, "premise: that is the sport's default").toBe(defaultTemplateFor("cricket"));
+  });
+
+  it("another fixture's stored style is never this row's", () => {
+    const other = templatesForSport("football").find((t) => t.id !== defaultTemplateFor("football"))!;
+    const tree = open({ streamPrefs: { "f-other": { streamMode: null, overlayTemplate: other.id, overlayDelayMs: null } } }).tree();
+    expect(pickerProps(tree).selected).toBe(defaultTemplateFor("football"));
+  });
+
+  it("a pick is saved at once — PUT stream-settings { overlayTemplate } alone — and moves the selection AND the OBS link", async () => {
+    const island = open({ sportKey: "football" });
+    const other = templatesForSport("football").find((t) => t.id !== defaultTemplateFor("football"))!;
+    pickerProps(island.tree()).onPick(other.id);
+    expect(apiV1).toHaveBeenCalledWith(`/api/v1/fixtures/${FIXTURE.id}/stream-settings`, { method: "PUT", json: { overlayTemplate: other.id } });
+    expect(pickerProps(island.tree()).selected).toBe(other.id);
+    expect(linkOf(island.tree()).searchParams.get("template")).toBe(other.id);
+    await vi.waitFor(() => expect(pickerProps(island.tree()).saveFailed).toBe(false));
+  });
+
+  it("a pick whose save FAILS goes back to the stored style and says so; the next pick clears the line", async () => {
+    const island = open({ sportKey: "football" });
+    const other = templatesForSport("football").find((t) => t.id !== defaultTemplateFor("football"))!;
+    apiV1.mockRejectedValueOnce(new Error("offline"));
+    pickerProps(island.tree()).onPick(other.id);
+    await vi.waitFor(() => expect(pickerProps(island.tree()).saveFailed).toBe(true));
+    expect(pickerProps(island.tree()).selected, "the stored style again").toBe(defaultTemplateFor("football"));
+    expect(linkOf(island.tree()).searchParams.get("template")).toBe(defaultTemplateFor("football"));
+    pickerProps(island.tree()).onPick(other.id);
+    expect(pickerProps(island.tree()).saveFailed).toBe(false);
+    expect(pickerProps(island.tree()).selected).toBe(other.id);
+  });
+
+  it("every thumbnail renders THIS fixture: the row's seed (its status, the venue zone), the resolved entrant names, the page's overlay dictionary", () => {
+    const props = pickerProps(open({ overlayDict: { "overlay.vs": "contre" } }).tree());
+    expect(props.preview.sides.map((x) => x.name)).toEqual([ENTRANTS.e1, ENTRANTS.e2]);
+    expect(props.preview.snapshot.status, "seeded from the row, so a dead endpoint still previews").toBe(FIXTURE.status);
+    expect(props.preview.snapshot.venueTz, "the VENUE zone, never the org zone").toBe(TZ);
+    expect(props.preview.dict).toEqual({ "overlay.vs": "contre" });
+    expect(props.preview.sportKey).toBe("football");
   });
 
   it("capture-qr-v2 OFF (owner 2026-10-04): no Phone/OBS switch at all — the OBS overlay shows directly, the Phone tab's container never mounts, and the stop probe keeps a leftover stream stoppable", () => {
@@ -345,7 +399,7 @@ describe("the style strip is built from the registry", () => {
     expect(off.find((el) => el.type === PhoneTab), "the phone container").toBeUndefined();
     // The OBS tab's own content, without a tap.
     expect(textAt(off, "stream-lead")).toBe(m("stream.line"));
-    expect(styleTabs(off).length, "the OBS style strip").toBeGreaterThan(0);
+    expect(pickerOf(off), "the OBS tab's picker").toBeDefined();
     // The routes are not gated: a stream a phone already started keeps its way out.
     const probe = off.find((el) => el.type === PhoneStopProbe);
     expect(propsOf(probe!).fixtureId).toBe(FIXTURE.id);
@@ -356,39 +410,6 @@ describe("the style strip is built from the registry", () => {
     expect(on.find((el) => el.type === PhoneTab)).toBeDefined();
     expect(on.find((el) => el.type === PhoneStopProbe)).toBeUndefined();
     expect(byTestId(on, "stream-lead"), "the OBS lead is the OBS tab's").toBeUndefined();
-  });
-
-  it("every style tab is a real tab (role + aria-selected), exactly one selected", () => {
-    const tabs = styleTabs(open().tree());
-    for (const tab of tabs) expect(attr(tab, "role")).toBe("tab");
-    expect(tabs.filter((t) => attr(t, "aria-selected") === true)).toHaveLength(1);
-  });
-});
-
-describe("the strip OPENS on the sport's own default, not merely on something", () => {
-  it.each(["football", "cricket", "badminton", "tennis", "volleyball"])(
-    "%s opens on defaultTemplateFor",
-    (sportKey) => {
-      const tree = open({ sportKey }).tree();
-      const selected = styleTabs(tree).find((t) => attr(t, "aria-selected") === true);
-      expect(String(attr(selected!, "data-stream-style"))).toBe(defaultTemplateFor(sportKey));
-    },
-  );
-
-  it.each(["football", "cricket"])("%s hands the preview the same default", (sportKey) => {
-    const stage = stageOf(open({ sportKey }).tree());
-    expect(propsOf(stage).style).toBe(defaultTemplateFor(sportKey));
-    expect(propsOf(stage).sportKey).toBe(sportKey);
-  });
-
-  it("selecting another style moves BOTH the preview and the OBS link", () => {
-    const island = open({ sportKey: "football" });
-    const other = templatesForSport("football").find((t) => t.id !== defaultTemplateFor("football"))!;
-    click(styleTabs(island.tree()).find((t) => attr(t, "data-stream-style") === other.id));
-    expect(propsOf(stageOf(island.tree())).style).toBe(other.id);
-    expect(String(propsOf(byTestId(island.tree(), "stream-link")!).value)).toContain(
-      `?style=${other.id}`,
-    );
   });
 });
 
@@ -401,7 +422,8 @@ describe("RT: the OBS URL the panel copies carries THIS fixture's signed overlay
       const link = String(propsOf(byTestId(island.tree(), "stream-link")!).value);
       const url = new URL(link, "http://origin.test");
       expect(url.pathname).toBe(`/overlay/fixtures/${FIXTURE.id}`);
-      expect(url.searchParams.get("style")).toBe(defaultTemplateFor("football"));
+      expect(url.searchParams.get("template")).toBe(defaultTemplateFor("football"));
+      expect(url.searchParams.has("style"), "R2006: the panel no longer writes ?style=").toBe(false);
       expect(url.searchParams.get(OVERLAY_KEY_PARAM), "the key, under the route's own parameter name").toBe(ctx().overlayKeys[FIXTURE.id]);
       await (propsOf(byTestId(island.tree(), "stream-copy")!).onClick as () => Promise<void>)();
       expect(writes, "Copy puts the keyed URL on the clipboard").toEqual([link]);
@@ -414,154 +436,90 @@ describe("RT: the OBS URL the panel copies carries THIS fixture's signed overlay
     const island = open({ overlayKeys: { "f-other": "KEY_other" } });
     const url = new URL(String(propsOf(byTestId(island.tree(), "stream-link")!).value), "http://origin.test");
     expect(url.searchParams.has(OVERLAY_KEY_PARAM)).toBe(false);
-    expect(url.searchParams.get("style"), "the positive pair: the rest of the link is intact").toBe(defaultTemplateFor("football"));
+    expect(url.searchParams.get("template"), "the positive pair: the rest of the link is intact").toBe(defaultTemplateFor("football"));
   });
 });
 
-describe("the preview is the real stage, seeded from the row", () => {
-  it("renders <OverlayStage> inside the strip, on the row's own fixture", () => {
-    const tree = open().tree();
-    expect(byTestId(tree, "stream-preview"), "the 360px strip").toBeDefined();
-    const stage = stageOf(tree);
-    expect(propsOf(stage).fixtureId).toBe(FIXTURE.id);
-    expect(propsOf(stage).fit, "the console preview scales its own wrapper").toBeFalsy();
-    expect(propsOf(stage).realtime, "the console never opens a realtime channel").toBe(false);
-    // RT (m6/R1): nor does it DECLARE the overlay purpose or carry the key — `realtime={false}` means what it says, and
-    // the preview never mints a token. Absent as props, not merely falsy: the stage passes them straight to the hook.
-    expect("realtimePurpose" in propsOf(stage), "the preview declares no realtime purpose").toBe(false);
-    expect("overlayKey" in propsOf(stage), "the preview carries no overlay key").toBe(false);
-    const initial = propsOf(stage).initial as { status: string; venueTz: string };
-    expect(initial.status, "seeded from the row, so a dead endpoint still previews").toBe(
-      FIXTURE.status,
-    );
-    expect(initial.venueTz, "the VENUE zone, never the org zone").toBe(TZ);
+describe("R2006 P3/P4: StreamTemplatePicker — one radio per template, real thumbnails, a scene toggle that moves them all", () => {
+  const PREVIEW = {
+    sportKey: "football",
+    snapshot: { status: "in_play", summary: null, outcome: null, lastSeq: null, venueTz: TZ },
+    sides: [{ id: "e1", name: ENTRANTS.e1 }, { id: "e2", name: ENTRANTS.e2 }] as [{ id: string; name: string }, { id: string; name: string }],
+    startLabel: null,
+    dict: {},
+    decidedTemplates: decidedOutcomeTemplates((k: string) => k, "football"),
+  } as unknown as Parameters<typeof StreamTemplatePicker>[0]["preview"];
+  const props = (over: Partial<Parameters<typeof StreamTemplatePicker>[0]> = {}): Parameters<typeof StreamTemplatePicker>[0] => ({
+    templates: templatesForSport("football"), selected: defaultTemplateFor("football"), onPick: () => {}, preview: PREVIEW,
+    idPrefix: "t", saveFailed: false, ...over,
   });
+  const optionsOf = (tree: ReactElement[]) => tree.filter((el) => typeof propsOf(el).def === "object" && "scene" in propsOf(el));
 
-  it("hands the stage the entrant names the row already resolved", () => {
-    const stage = stageOf(open().tree());
-    const sides = propsOf(stage).sides as { id: string; name: string }[];
-    expect(sides.map((s) => s.name)).toEqual([ENTRANTS.e1, ENTRANTS.e2]);
-  });
-
-  // _THEMES.md §8, SECOND correction 2026-09-10: **scale to the container**.
-  // The first correction (owner ruling, 360px strip) fixed the vertical half
-  // only — at a FIXED `scale(640/1920)` the panel still painted a 640px canvas
-  // however wide the strip actually was, so at a 320px viewport (~296px panel)
-  // about a third of the frame was visible and §3's bar — cricket's default —
-  // had its score cells cropped off the right edge with nothing to scroll to.
-  //
-  // 360 is not lost: it is 640 × 1080/1920, so a capped 640px strip is still
-  // 360 tall. It is a consequence of the aspect ratio now instead of a number
-  // of its own.
-  //
-  // WHAT THIS FILE CANNOT SEE: node has no layout, so nothing here measures a
-  // strip or proves the observer fires. `previewScaleFor` is the pure half;
-  // `stream-overlay.spec.ts`'s "§8: the preview scales to the strip" opens the
-  // real console at three viewports and compares the painted canvas box with
-  // the strip's own.
-  it("the sheet binds a CONTAINER scale, not a constant", () => {
-    // Derived from `_THEMES.md`, so a further amendment moves this test rather
-    // than leaving it pinning a superseded value — which is exactly what the
-    // pair of assertions this replaced had become.
-    const sheet = readFileSync(SHEET_PATH, "utf8");
-    const row = sheet.split("\n").find((l) => l.includes("| live preview |"));
-    expect(row, "§8 no longer has a `live preview` row").toBeDefined();
-    expect(row!, "the sheet must still bind scale-to-container").toMatch(/scale\(w\/1920\)/);
-  });
-
-  it("the whole authored canvas is visible at EVERY width, not just at one", () => {
-    // The invariant, stated the way the sheet states it: authored px across the
-    // strip = 1920 at any `w`. A constant satisfies this at exactly one width.
-    for (const w of [214, 296, 375, 512, PREVIEW_MAX_W_PX]) {
-      expect(w / previewScaleFor(w), `authored px across a ${w}px strip`).toBeCloseTo(CANVAS_W, 6);
+  it("P3: one role=radio option per templatesForSport entry, each thumbnail an ovl-preview of THIS fixture's sides, exactly one checked", () => {
+    const html = renderToStaticMarkup(<StreamTemplatePicker {...props()} />);
+    const ids = templatesForSport("football").map((t) => t.id);
+    const thumbs = [...html.matchAll(/data-testid="ovl-preview" data-template="([^"]+)"/g)].map((x) => x[1]);
+    expect(thumbs, "one real preview per option, in registry order").toEqual(ids);
+    const radios = [...html.matchAll(/role="radio" aria-checked="(true|false)" data-testid="stream-template-([^"]+)"/g)];
+    expect(radios.map((r) => r[2])).toEqual(ids);
+    expect(radios.filter((r) => r[1] === "true").map((r) => r[2])).toEqual([defaultTemplateFor("football")]);
+    for (const name of [ENTRANTS.e1, ENTRANTS.e2]) {
+      expect(html.split(name).length - 1, `${name} in every thumbnail`).toBeGreaterThanOrEqual(ids.length);
     }
+    // Labels from the registry's own labelKey — never English typed here.
+    for (const t of templatesForSport("football")) expect(html).toContain((messages as Record<string, string>)[t.labelKey]);
   });
 
-  it("the differential — a phone-width strip is NOT the desktop number", () => {
-    // The regression this exists for. `640/1920` is what shipped, and it is
-    // what a reverted implementation would return at 296 as well.
-    expect(previewScaleFor(296), "the defect: 296px of strip painting 640px of canvas").not.toBe(
-      PREVIEW_MAX_W_PX / CANVAS_W,
-    );
-    expect(previewScaleFor(296)).toBe(296 / CANVAS_W);
-    // ...and desktop is unchanged, which is what §8's OBS-link copy rests on.
-    expect(previewScaleFor(PREVIEW_MAX_W_PX)).toBe(PREVIEW_MAX_W_PX / CANVAS_W);
-    expect(PREVIEW_MAX_W_PX * (CANVAS_H / CANVAS_W), "the owner's 360px strip still falls out").toBe(
-      360,
-    );
+  it("P3: tapping another option asks for it; tapping the selected one asks for nothing", () => {
+    const onPick = vi.fn();
+    const island = renderIsland(StreamTemplatePicker, props({ onPick }));
+    const other = templatesForSport("football").find((t) => t.id !== defaultTemplateFor("football"))!;
+    const opts = optionsOf(island.tree());
+    expect(opts).toHaveLength(templatesForSport("football").length);
+    (propsOf(opts.find((o) => (propsOf(o).def as { id: string }).id === other.id)!).onPick as () => void)();
+    (propsOf(opts.find((o) => (propsOf(o).def as { id: string }).id === defaultTemplateFor("football"))!).onPick as () => void)();
+    expect(onPick.mock.calls).toEqual([[other.id]]);
   });
 
-  it("the strip is capped at §8's 640, and a degenerate measurement falls back to it", () => {
-    expect(previewScaleFor(900), "a wide console must not inflate the graphic").toBe(
-      PREVIEW_MAX_W_PX / CANVAS_W,
-    );
-    for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
-      expect(previewScaleFor(bad), `${bad} must not paint a zero-scale canvas`).toBe(
-        PREVIEW_MAX_W_PX / CANVAS_W,
-      );
+  it("P4: each scene segment sets data-scene on EVERY thumbnail, and starts on the first declared scene", () => {
+    const island = renderIsland(StreamTemplatePicker, props());
+    const sceneOf = (o: ReactElement) => /data-scene="([^"]+)"/.exec(renderToStaticMarkup(o))?.[1];
+    expect(optionsOf(island.tree()).map(sceneOf).every((x) => x === OVERLAY_SCENES[0].id)).toBe(true);
+    let checked = 0;
+    for (const scene of [...OVERLAY_SCENES].reverse()) {
+      click(byTestId(island.tree(), `stream-scene-${scene.id}`));
+      const opts = optionsOf(island.tree());
+      expect(opts.length).toBeGreaterThan(0);
+      expect(opts.map(sceneOf), scene.id).toEqual(opts.map(() => scene.id));
+      expect(attr(byTestId(island.tree(), `stream-scene-${scene.id}`)!, "aria-checked")).toBe(true);
+      checked++;
     }
+    console.log(`scenes checked: ${checked}`);
+    expect(checked).toBe(OVERLAY_SCENES.length);
+    expect(checked).toBeGreaterThan(0);
   });
 
-  it("the strip is MEASURED and the canvas renders at that scale — not a constant nothing reads", () => {
-    const tree = open().tree();
-    const strip = byTestId(tree, "stream-preview");
-    const style = propsOf(strip!).style as Record<string, unknown>;
-    // The pinned pixel height is the thing the correction removed: the strip's
-    // height follows its own width now, so there is no second number to drift.
-    expect(style.height, "a pinned pixel height is a fixed scale wearing a hat").toBeUndefined();
-    expect(style.aspectRatio).toBe(`${CANVAS_W} / ${CANVAS_H}`);
-    expect(style.maxWidth).toBe(PREVIEW_MAX_W_PX);
-    // A ref on the strip is what makes the scale a MEASUREMENT. Without it
-    // nothing observes the box and `previewScaleFor` can only ever be handed
-    // its own fallback — the constant, back again, with a function around it.
-    expect(propsOf(strip!).ref, "nothing measures the strip").toBeDefined();
-    const canvas = byTestId(tree, "stream-preview-canvas");
-    const cstyle = propsOf(canvas!).style as Record<string, unknown>;
-    expect(cstyle.width).toBe(CANVAS_W);
-    expect(cstyle.height).toBe(CANVAS_H);
-    // Unmeasured (no layout here), so this is the fallback — but it must be
-    // the FUNCTION's fallback, not a literal beside it.
-    expect(cstyle.transform).toBe(`scale(${previewScaleFor(PREVIEW_MAX_W_PX)})`);
-    expect(String(propsOf(strip!).className), "no h-24 (96px) left behind").not.toMatch(/\bh-\d/);
-  });
-});
-
-describe("the opaque-preview caption is dictionary-driven, not theme-named", () => {
-  const captionKeyFor = (id: string) => `stream.preview.${id}`;
-  const en = uiDict("en");
-  const withCaption = templatesForSport("football")
-    .map((t) => t.id)
-    .filter((id) => typeof en[captionKeyFor(id)] === "string");
-
-  it("bar and bug declare no opaque caption — only a future opaque theme would", () => {
-    // 2026-09-12: slate retired as a theme; match card is a transparent layer.
-    // The caption mechanism remains: `stream.preview.<id>` when a theme needs it.
-    expect(withCaption).toEqual([]);
-  });
-
-  it("every declared caption exists in all four locales", () => {
-    for (const locale of ["en", "fr", "es", "nl"]) {
-      const dict = uiDict(locale);
-      for (const id of withCaption) {
-        expect(typeof dict[captionKeyFor(id)], `${locale} is missing ${captionKeyFor(id)}`).toBe(
-          "string",
-        );
-      }
+  it("switch heights (owner ruling 2026-10-19): every scene segment is 44 px on a phone and 36 px from 768; every option keeps the 44 px floor", () => {
+    const tree = renderIsland(StreamTemplatePicker, props()).tree();
+    let checked = 0;
+    for (const scene of OVERLAY_SCENES) {
+      const cls = String(attr(byTestId(tree, `stream-scene-${scene.id}`)!, "className")).split(/\s+/);
+      expect(cls, scene.id).toContain("min-h-11");
+      expect(cls, scene.id).toContain("md:min-h-9");
+      checked++;
     }
+    const html = renderToStaticMarkup(<StreamTemplatePicker {...props()} />);
+    const optionClasses = [...html.matchAll(/role="radio"[^>]*data-testid="stream-template-[^"]+"[^>]*class="([^"]+)"/g)].map((x) => x[1]!.split(/\s+/));
+    expect(optionClasses).toHaveLength(templatesForSport("football").length);
+    for (const cls of optionClasses) expect(cls).toContain("min-h-11");
+    expect(checked + optionClasses.length).toBe(OVERLAY_SCENES.length + templatesForSport("football").length);
   });
 
-  it("shows the caption for a theme that declares one and for no other", () => {
-    for (const theme of templatesForSport("football")) {
-      const island = open({ sportKey: "football" });
-      click(styleTabs(island.tree()).find((t) => attr(t, "data-stream-style") === theme.id));
-      const note = byTestId(island.tree(), "stream-preview-note");
-      if (withCaption.includes(theme.id)) {
-        expect(note, `${theme.id} declares a caption`).toBeDefined();
-        expect(JSON.stringify(propsOf(note!).children)).toContain(en[captionKeyFor(theme.id)]);
-      } else {
-        expect(note, `${theme.id} declares no caption`).toBeUndefined();
-      }
-    }
+  it("a failed save says so under the options; none by default", () => {
+    expect(renderToStaticMarkup(<StreamTemplatePicker {...props()} />)).not.toContain("stream-template-error");
+    const html = renderToStaticMarkup(<StreamTemplatePicker {...props({ saveFailed: true })} />);
+    expect(html).toContain('data-testid="stream-template-error"');
+    expect(html).toContain(m("stream.template.saveFailed").replace("'", "&#x27;"));
   });
 });
 
@@ -641,7 +599,7 @@ const MATCH_OVER = readModel({ finished: true, phone: null, code: { issuedAt: "2
 const LEGACY = readModel({ legacy: true, phone: null, code: null });
 
 const session = (over: Partial<StreamSessionView> = {}): StreamSessionView => ({
-  id: "s1", fixtureId: "f-1", mode: "passthrough", state: "warming", desiredState: "live",
+  id: "s1", fixtureId: "f-1", mode: "passthrough", overlay: null, state: "warming", desiredState: "live",
   failReason: null, health: null, ingest: { state: "disconnected", protocol: null }, output: null,
   balance: 2, startedAt: null, endedAt: null, replayUrl: null,
   target: { id: "t1", kind: "youtube", label: "Club" }, fixtureDecided: false, fixtureHeld: false, endReason: null, creditUsed: false,
@@ -816,9 +774,12 @@ describe("the Phone tab reads the §5.3 gate, then hands the container the conte
 
   it("the OBS tab's own body is gone while Phone is selected, and comes back", () => {
     const island = phone({ relayEntitled: true });
-    expect(byTestId(island.tree(), "stream-preview")).toBeUndefined();
+    // R2006: the OBS body is its link and its picker (the big preview is gone).
+    expect(byTestId(island.tree(), "stream-link")).toBeUndefined();
+    expect(island.tree().filter((el) => el.type === StreamTemplatePicker)).toHaveLength(0);
     click(byTestId(island.tree(), "stream-tab-obs"));
-    expect(byTestId(island.tree(), "stream-preview")).toBeDefined();
+    expect(byTestId(island.tree(), "stream-link")).toBeDefined();
+    expect(island.tree().filter((el) => el.type === StreamTemplatePicker)).toHaveLength(1);
     expect(byTestId(island.tree(), "stream-phone-gate")).toBeUndefined();
   });
 });
@@ -843,16 +804,14 @@ describe("phone first — the 44px floor is the BASE, not an override", () => {
     };
     for (const relayEntitled of [false, true]) {
       const island = open({ relayEntitled });
-      for (const tab of styleTabs(island.tree())) check(tab, `style tab ${attr(tab, "data-stream-style")}`);
+      // R2006: the style strip is gone; the picker's options and segments carry their own floor (its describe above).
       for (const id of ["stream-tab-obs", "stream-tab-phone", "stream-link", "stream-copy", "stream-url-input", "stream-save"]) {
         check(byTestId(island.tree(), id), id);
       }
       // The Phone tab's own controls live in `PhoneTabBody`; their floor is swept state by state below.
     }
-    // The positive pair: without it an empty tree passes every check above. Two passes × (the registry's style tabs +
-    // the six OBS-tab controls) — derived from the registry, so a fourth theme moves the floor with it.
-    expect(seen.length, "nothing was checked").toBe(2 * (templatesForSport("football").length + 6));
-    expect(seen.length).toBeGreaterThanOrEqual(16);
+    // The positive pair: without it an empty tree passes every check above. Two passes × the six OBS-tab controls.
+    expect(seen.length, "nothing was checked").toBe(2 * 6);
   });
 
 });
@@ -929,10 +888,10 @@ describe("the return opens the panel on the Phone tab — on the fixture page's 
       expect(attr(tabs[0]!, "aria-selected"), "Phone is selected").toBe(true);
       expect(attr(tabs[1]!, "aria-selected"), "OBS is not").toBe(false);
       expect(byTestId(tree, "stream-phone-gate"), "the Phone tab's body is what shows").toBeDefined();
-      expect(byTestId(tree, "stream-preview"), "…and the OBS preview is not").toBeUndefined();
+      expect(byTestId(tree, "stream-link"), "…and the OBS link is not").toBeUndefined();
       expect(textOf(tabs[1]!)).toBe(m("stream.tab.obs"));
       click(byTestId(tree, "stream-tab-obs"));
-      expect(byTestId(island.tree(), "stream-preview"), "OBS overlay opens on a tap").toBeDefined();
+      expect(byTestId(island.tree(), "stream-link"), "OBS overlay opens on a tap").toBeDefined();
     }
   });
 
@@ -994,6 +953,12 @@ describe("the return opens the panel on the Phone tab — on the fixture page's 
 
 // ─── PhoneTabBody: every §8a / §8b state from the projection alone ──────────────────────────────────────────────────
 const NOW = new Date("2026-09-14T12:00:00Z");
+/** R2006: the score where this deployment cannot run it — the states below predate the score and stream the camera
+ *  only, as every one of them did. The score's own states set `available` (the R2006 describes). */
+const SCORE_OFF: PhoneScore = {
+  available: false, stored: null, template: defaultTemplateFor("football"), sportKey: "football", editor: null,
+  modeFailed: false, onMode: () => {},
+};
 const BODY: PhoneTabBodyProps = {
   fixtureId: "f-1", view: null, balance: 0, targets: { status: "ok", list: [] }, busy: false, createError: null, checkoutError: null,
   selectedTargetId: null, phone: readModel(), code: { status: "loading" }, codeOpen: false, now: NOW, copied: false, showBuy: false,
@@ -1002,7 +967,7 @@ const BODY: PhoneTabBodyProps = {
   onToggleAuto: () => {}, onDismissTakeover: () => {},
   onSelectTarget: () => {}, onRetryTargets: () => {}, onGoLive: () => {}, onStop: () => {}, onCancel: () => {},
   onBuy: () => {}, onAgain: () => {}, onCopy: () => {}, onToggleCode: () => {}, onReissue: () => {}, onRetryCode: () => {},
-  onShowBuy: () => {}, onTileIntent: () => {},
+  onShowBuy: () => {}, onTileIntent: () => {}, score: SCORE_OFF,
 };
 /** A loaded list — what most states render with. */
 const ok = (list: StreamTarget[]): TargetsState => ({ status: "ok", list });
@@ -2495,7 +2460,8 @@ describe("PhoneTabBody — PR-2: the switch, the phone's line, the refusal, the 
         expect(described, `${name}: the switch names it`).toContain(attr(line!, "id"));
         expect(tree.indexOf(byTestId(tree, "stream-auto-switch")!), `${name}: under the switch`).toBeLessThan(tree.indexOf(line!));
       }
-      expect(described.length, `${name}: the caption, and at most ONE note`).toBe(phone.auto!.enabled ? (want !== null || operator ? 2 : 1) : 0);
+      // R2006: while on, the caption, the mode line (what the automatic start streams), and at most ONE note.
+      expect(described.length, `${name}: the caption, the mode line, and at most ONE note`).toBe(phone.auto!.enabled ? (want !== null || operator ? 3 : 2) : 0);
       checked++;
     }
     expect(checked).toBe(rows.length);
@@ -2737,7 +2703,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     code?: () => unknown;
     reissue?: () => unknown;
   };
-  const TAB = { fixtureId: "f-1", orgId: "o-1", streamBalance: 3, streamSplit: null, monthlyAllowance: 0, currency: "eur" as const, phoneLostMinutes: 20, autoStopMinutes: 3, tz: "Europe/London" };
+  const TAB = { fixtureId: "f-1", orgId: "o-1", streamBalance: 3, streamSplit: null, monthlyAllowance: 0, currency: "eur" as const, phoneLostMinutes: 20, autoStopMinutes: 3, tz: "Europe/London", score: SCORE_OFF };
   const CURRENT = "GET /api/v1/fixtures/f-1/stream-sessions/current";
   const PHONE = "GET /api/v1/fixtures/f-1/stream-phone";
   const ENSURE = "POST /api/v1/fixtures/f-1/stream-code";
@@ -2943,6 +2909,36 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(post?.[1]?.json).toEqual({ mode: "passthrough", targetId: "t2" });
     expect(bodyOf(island).view?.state).toBe("warming");
     expect(bodyOf(island).createError).toBeNull();
+  });
+
+  // R2006 (owner ruling 2026-10-19, "Option C"): the organiser's Go live streams the mode the tab SHOWS — the score by
+  // default, Camera only when the organiser chose it, the camera when the deployment cannot run the score — and, for
+  // the score, the style the picker shows. Expected values are the RULING's (a table), never `effectiveStreamMode`.
+  it("R2006: Go live's mode — the score by default (with the shown style), Camera only, the score back, and the camera where the score cannot stream", async () => {
+    const shown = templatesForSport("football").find((t) => t.id !== defaultTemplateFor("football"))!.id;
+    const rows: [string, Pick<PhoneScore, "available" | "stored">, unknown][] = [
+      ["never chosen, available", { available: true, stored: null }, { mode: "composed", targetId: "t1", themeId: shown }],
+      ["Camera only", { available: true, stored: "passthrough" }, { mode: "passthrough", targetId: "t1" }],
+      ["the score back", { available: true, stored: "composed" }, { mode: "composed", targetId: "t1", themeId: shown }],
+      ["the score asked for, unavailable", { available: false, stored: "composed" }, { mode: "passthrough", targetId: "t1" }],
+      ["never chosen, unavailable", { available: false, stored: null }, { mode: "passthrough", targetId: "t1" }],
+    ];
+    let checked = 0;
+    for (const [name, score, want] of rows) {
+      apiV1.mockClear();
+      const s = serve({ current: null, targets: TARGETS });
+      s.create = () => { s.current = session(); return { sessionId: "s1" }; };
+      const island = track(renderIsland(PhoneTab, { ...TAB, score: { ...SCORE_OFF, ...score, template: shown } }));
+      await settle();
+      bodyOf(island).onSelectTarget("t1");
+      bodyOf(island).onGoLive();
+      await settle();
+      const post = apiV1.mock.calls.find(([url, o]) => url === "/api/v1/fixtures/f-1/stream-sessions" && o?.method === "POST");
+      expect(post?.[1]?.json, name).toEqual(want);
+      expect(bodyOf(island).createError, `${name}: never blocked`).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(rows.length);
   });
 
   it("§6.12 polling: the read model is read at mount and every STREAM_POLL_MS while the tab is open — at idle too, where `current` rests — and never after it closes", async () => {
@@ -4715,5 +4711,247 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
       expect(byTestId(gated, "stream-buy-pack-5"), "…and no tiles to buy what the plan refused").toBeUndefined();
       expect(lazySheet(island.tree())).toBeUndefined();
     });
+  });
+});
+
+// ─── R2006 (owner ruling 2026-10-19, "Option C"): the score on the Phone tab ───────────────────────────────────────────
+// The score is the DEFAULT: the style picker and Score timing above ONE Go live, "Camera only (no score)" a small link
+// under it, "Add the score back" once chosen. Where the score cannot stream, one line says so and Go live streams the
+// camera — never blocked. Expected values are the RULING's, written out here; the mode rule is never re-derived from
+// `effectiveStreamMode`.
+describe("R2006: PhoneTabBody — the score card, Camera only, the score back, and the unavailable line", () => {
+  const READY = { view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1" } as const;
+  const EDITOR = <span data-testid="score-editor-marker" />;
+  const score = (o: Partial<PhoneScore>): PhoneScore => ({ ...SCORE_OFF, editor: EDITOR, ...o });
+  type Want = { card: "score" | "camera" | null; mode: "composed" | "passthrough"; link: "passthrough" | "composed" | null; unavailable: boolean };
+  const RULING: [string, Partial<PhoneScore>, Want][] = [
+    ["never chosen, available", { available: true, stored: null }, { card: "score", mode: "composed", link: "passthrough", unavailable: false }],
+    ["Camera only", { available: true, stored: "passthrough" }, { card: "camera", mode: "passthrough", link: "composed", unavailable: false }],
+    ["the score back", { available: true, stored: "composed" }, { card: "score", mode: "composed", link: "passthrough", unavailable: false }],
+    ["never chosen, unavailable", { available: false, stored: null }, { card: null, mode: "passthrough", link: null, unavailable: true }],
+    ["Camera only, unavailable", { available: false, stored: "passthrough" }, { card: null, mode: "passthrough", link: null, unavailable: true }],
+    ["the score asked for, unavailable", { available: false, stored: "composed" }, { card: null, mode: "passthrough", link: null, unavailable: true }],
+  ];
+
+  it("every stored mode × availability: the card, Go live's mode, the link and the reason line are the ruling's", () => {
+    let checked = 0;
+    const enabledness = new Set<unknown>();
+    for (const [name, o, want] of RULING) {
+      const tree = body({ ...READY, score: score(o) });
+      const card = byTestId(tree, "stream-score") ? "score" : byTestId(tree, "stream-camera-only") ? "camera" : null;
+      expect(card, `${name}: the card`).toBe(want.card);
+      expect(card === "score" ? byTestId(tree, "score-editor-marker") !== undefined : true, `${name}: the editor inside the score card`).toBe(true);
+      const goLive = byTestId(tree, "stream-go-live")!;
+      expect(attr(goLive, "data-mode"), `${name}: Go live's mode`).toBe(want.mode);
+      enabledness.add(attr(goLive, "disabled"));
+      const link = byTestId(tree, "stream-mode-toggle");
+      expect(link ? attr(link, "data-to") : null, `${name}: the link`).toBe(want.link);
+      if (link) expect(textOf(link), name).toBe(m(want.link === "passthrough" ? "stream.mode.cameraOnly" : "stream.mode.addScore"));
+      expect(byTestId(tree, "stream-score-unavailable") !== undefined, `${name}: the reason line`).toBe(want.unavailable);
+      if (want.unavailable) expect(textAt(tree, "stream-score-unavailable"), name).toBe(m("stream.mode.unavailable"));
+      checked++;
+    }
+    console.log(`score ruling rows checked: ${checked}`);
+    expect(checked).toBe(RULING.length);
+    // Never blocked: Go live is enabled in every row (the same answer, whatever the mode or availability).
+    expect([...enabledness], "Go live's disabled state never depends on the score").toEqual([false]);
+  });
+
+  it("the Camera only text, and the order on a phone: the score card BETWEEN the destination row and Go live", () => {
+    const cam = body({ ...READY, score: score({ available: true, stored: "passthrough" }) });
+    expect(textAt(cam, "stream-camera-only")).toBe(`${m("stream.mode.cameraOnlyTitle")} ${m("stream.mode.cameraOnlyBody")}`);
+    const tree = body({ ...READY, score: score({ available: true, stored: null }) });
+    const at = (id: string) => tree.indexOf(byTestId(tree, id)!);
+    expect(at("stream-target")).toBeLessThan(at("stream-score"));
+    expect(at("stream-score")).toBeLessThan(at("stream-go-live"));
+    expect(at("stream-go-live")).toBeLessThan(at("stream-mode-toggle"));
+  });
+
+  it("the link asks for the OTHER mode, and a failed save says so", () => {
+    const onMode = vi.fn();
+    click(byTestId(body({ ...READY, score: score({ available: true, stored: null, onMode }) }), "stream-mode-toggle"));
+    click(byTestId(body({ ...READY, score: score({ available: true, stored: "passthrough", onMode }) }), "stream-mode-toggle"));
+    expect(onMode.mock.calls).toEqual([["passthrough"], ["composed"]]);
+    expect(byTestId(body({ ...READY, score: score({ available: true }) }), "stream-mode-error")).toBeUndefined();
+    expect(textAt(body({ ...READY, score: score({ available: true, modeFailed: true }) }), "stream-mode-error")).toBe(m("stream.mode.saveFailed"));
+  });
+
+  it("switch heights (owner ruling 2026-10-19): the link is 44 px on a phone and 36 px from 768", () => {
+    const cls = String(attr(byTestId(body({ ...READY, score: score({ available: true }) }), "stream-mode-toggle")!, "className")).split(/\s+/);
+    expect(cls).toContain("min-h-11");
+    expect(cls).toContain("md:min-h-9");
+  });
+
+  it("the automatic switch, while on, says what it will start with — the same mode Go live shows; off, it says nothing", () => {
+    const on = readModel({ auto: { enabled: true, refusal: null, wontStart: null, stopApplies: null } });
+    let checked = 0;
+    for (const [name, o, want] of RULING) {
+      const tree = body({ ...READY, phone: on, score: score(o) });
+      const line = byTestId(tree, "stream-auto-mode");
+      expect(line, name).toBeDefined();
+      expect(attr(line!, "data-mode"), name).toBe(want.mode);
+      expect(attr(line!, "data-mode"), `${name}: the same as Go live`).toBe(attr(byTestId(tree, "stream-go-live")!, "data-mode"));
+      expect(textAt(tree, "stream-auto-mode"), name).toBe(m(want.mode === "composed" ? "stream.auto.startsWithScore" : "stream.auto.startsCameraOnly"));
+      expect(String(attr(byTestId(tree, "stream-auto-switch")!, "aria-describedby")).split(" "), `${name}: the switch names it`).toContain(attr(line!, "id"));
+      checked++;
+    }
+    expect(checked).toBe(RULING.length);
+    const off = readModel({ auto: { enabled: false, refusal: null, wontStart: null, stopApplies: null } });
+    expect(byTestId(body({ ...READY, phone: off, score: score({ available: true }) }), "stream-auto-mode")).toBeUndefined();
+  });
+
+  it("a live SCORE session: the honest delivery line (the destination's platform), its OWN style and timing read-only, 'Set before going live'; a camera session shows none of it", () => {
+    const bar = templatesForSport("football").find((t) => t.id !== defaultTemplateFor("football"))!;
+    const live = (o: Partial<StreamSessionView>) =>
+      session({ state: "live", startedAt: "2026-09-14T11:50:00Z", ingest: { state: "connected", protocol: "srt" }, ...o });
+    const tree = body({ view: live({ mode: "composed", overlay: { themeId: bar.id, delayMs: 2500 } }), balance: 1, score: score({ available: true, stored: "passthrough" }) });
+    expect(textAt(tree, "stream-live-unmonitored")).toBe(m("stream.live.deliveryUnmonitored", { platform: platformName(m, "youtube") }));
+    expect(textAt(tree, "stream-live-unmonitored"), "the ruling's own sentence for a YouTube destination").toBe("YouTube delivery isn't monitored for score streams yet");
+    const summary = tree.find((el) => el.type === ScoreLiveSummary);
+    expect(propsOf(summary!)).toEqual({ templateLabel: m(bar.labelKey as MessageKey), delayMs: 2500 });
+    // The session's own values, not the settings: the stored mode above is Camera only, and nothing here reads it.
+    const html = renderToStaticMarkup(summary!);
+    expect(html).toContain(m("stream.timing.value", { seconds: "2.5" }));
+    expect(html).toContain(m("stream.timing.lockedLive"));
+    // A null themeId (none stored at create) resolves to the sport's default, as the Machine's overlayUrl does.
+    const dflt = body({ view: live({ mode: "composed", overlay: { themeId: null, delayMs: 0 } }), balance: 1, score: score({ available: true }) });
+    expect(propsOf(dflt.find((el) => el.type === ScoreLiveSummary)!)).toEqual({ templateLabel: m(resolveTemplate(null, "football").labelKey as MessageKey), delayMs: 0 });
+    const cam = body({ view: live({ mode: "passthrough", overlay: null }), balance: 1, score: score({ available: true }) });
+    expect(byTestId(cam, "stream-live-unmonitored")).toBeUndefined();
+    expect(cam.find((el) => el.type === ScoreLiveSummary)).toBeUndefined();
+    // The editable controls are Ready's alone: never beside a running session.
+    expect(byTestId(tree, "score-editor-marker")).toBeUndefined();
+    expect(byTestId(tree, "stream-mode-toggle")).toBeUndefined();
+  });
+});
+
+describe("R2006: ScoreTiming — 0–30 s in tenths, the server's default, Reset; and the panel saves each change", () => {
+  const timing = (o: Partial<Parameters<typeof ScoreTiming>[0]> = {}) =>
+    renderIsland(ScoreTiming, { idPrefix: "t", storedMs: null, defaultMs: RELAY_OVERLAY_DELAY_DEFAULT_MS, onSave: () => {}, saveFailed: false, ...o });
+  const type = (island: ReturnType<typeof timing>, value: string) => {
+    (propsOf(byTestId(island.tree(), "stream-timing-input")!).onChange as (e: { target: { value: string } }) => void)({ target: { value } });
+    (propsOf(byTestId(island.tree(), "stream-timing-input")!).onBlur as () => void)();
+  };
+  const secs = (ms: number) => (ms / 1000).toFixed(1);
+
+  it("unset: the summary is the SERVER's default (never a typed number), marked default; Reset is off; the help names the default", () => {
+    const t = timing().tree();
+    expect(textAt(t, "stream-timing-value")).toBe(m("stream.timing.value", { seconds: secs(RELAY_OVERLAY_DELAY_DEFAULT_MS) }));
+    expect(byTestId(t, "stream-timing-default")).toBeDefined();
+    expect(attr(byTestId(t, "stream-timing-reset")!, "disabled")).toBe(true);
+    expect(textAt(t, "stream-timing-help")).toBe(m("stream.timing.help", { seconds: secs(RELAY_OVERLAY_DELAY_DEFAULT_MS) }));
+    // A different server default moves every one of them (the panel never types the number).
+    const other = timing({ defaultMs: 4200 }).tree();
+    expect(textAt(other, "stream-timing-value")).toBe(m("stream.timing.value", { seconds: "4.2" }));
+  });
+
+  it("0 is a real override: 0.0 s, not marked default, Reset on", () => {
+    const t = timing({ storedMs: 0 }).tree();
+    expect(textAt(t, "stream-timing-value")).toBe(m("stream.timing.value", { seconds: "0.0" }));
+    expect(byTestId(t, "stream-timing-default")).toBeUndefined();
+    expect(attr(byTestId(t, "stream-timing-reset")!, "disabled")).toBe(false);
+    expect(attr(byTestId(t, "stream-timing-input")!, "value")).toBe("0.0");
+  });
+
+  it("the input's bounds are the schema's: min 0, max 30, step 0.1", () => {
+    const input = byTestId(timing().tree(), "stream-timing-input")!;
+    expect([attr(input, "min"), attr(input, "max"), attr(input, "step"), attr(input, "type")]).toEqual([0, 30, 0.1, "number"]);
+  });
+
+  it("the sequence: set 2.5 → saves 2500; out of bounds or not a number → refused inline, nothing saved; blank → put back; Reset → null; the default typed over unset → nothing", () => {
+    const onSave = vi.fn();
+    const island = timing({ onSave });
+    type(island, "2.5");
+    expect(onSave.mock.calls).toEqual([[2500]]);
+    let refused = 0;
+    for (const bad of ["31", "-1", "30.1", "abc"]) {
+      type(island, bad);
+      expect(byTestId(island.tree(), "stream-timing-invalid"), bad).toBeDefined();
+      expect(attr(byTestId(island.tree(), "stream-timing-input")!, "aria-invalid"), bad).toBe(true);
+      refused++;
+    }
+    expect(refused).toBe(4);
+    expect(onSave.mock.calls, "nothing out of bounds was saved").toEqual([[2500]]);
+    type(island, "");
+    expect(attr(byTestId(island.tree(), "stream-timing-input")!, "value"), "blank puts the value in force back").toBe(secs(RELAY_OVERLAY_DELAY_DEFAULT_MS));
+    type(island, "30");
+    expect(onSave.mock.calls.at(-1)).toEqual([30_000]);
+    type(island, "2.55");
+    expect(onSave.mock.calls.at(-1), "tenths of a second").toEqual([2600]);
+    const before = onSave.mock.calls.length;
+    type(island, secs(RELAY_OVERLAY_DELAY_DEFAULT_MS));
+    expect(onSave.mock.calls.length, "the default typed over an unset delay saves nothing").toBe(before);
+    const set = timing({ storedMs: 2500, onSave });
+    click(byTestId(set.tree(), "stream-timing-reset"));
+    expect(onSave.mock.calls.at(-1)).toEqual([null]);
+  });
+
+  it("the panel: a timing change PUTs { overlayDelayMs } alone, Reset PUTs null, and a failed save puts the stored value back and says so", async () => {
+    const island = openPanel({ relayEntitled: true, composedAvailable: true, streamPrefs: { [FIXTURE.id]: { streamMode: null, overlayTemplate: null, overlayDelayMs: 1500 } } });
+    const timingOf = () => {
+      const tab = island.tree().find((el) => el.type === PhoneTab)!;
+      const editor = (propsOf(tab).score as PhoneScore).editor as ReactElement;
+      return propsOf(walk(editor).find((el) => el.type === ScoreTiming)!) as unknown as Parameters<typeof ScoreTiming>[0];
+    };
+    expect(timingOf().storedMs, "seeded from the stored preference").toBe(1500);
+    expect(timingOf().defaultMs).toBe(RELAY_OVERLAY_DELAY_DEFAULT_MS);
+    timingOf().onSave(2500);
+    expect(apiV1).toHaveBeenLastCalledWith(`/api/v1/fixtures/${FIXTURE.id}/stream-settings`, { method: "PUT", json: { overlayDelayMs: 2500 } });
+    expect(timingOf().storedMs).toBe(2500);
+    timingOf().onSave(null);
+    expect(apiV1).toHaveBeenLastCalledWith(`/api/v1/fixtures/${FIXTURE.id}/stream-settings`, { method: "PUT", json: { overlayDelayMs: null } });
+    expect(timingOf().storedMs).toBeNull();
+    apiV1.mockRejectedValueOnce(new Error("offline"));
+    timingOf().onSave(0);
+    expect(timingOf().storedMs, "shown at once").toBe(0);
+    await vi.waitFor(() => expect(timingOf().saveFailed).toBe(true));
+    expect(timingOf().storedMs, "the stored value again").toBeNull();
+  });
+});
+
+describe("R2006: the panel hands the Phone tab the score — availability, the stored mode, the shown style — and saves Camera only", () => {
+  const scoreOf = (island: ReturnType<typeof openPanel>) => propsOf(island.tree().find((el) => el.type === PhoneTab)!).score as PhoneScore;
+
+  it("availability is the context's (composedAvailable), the stored mode the page's read, the style the picker's", () => {
+    const other = templatesForSport("football").find((t) => t.id !== defaultTemplateFor("football"))!;
+    let checked = 0;
+    for (const available of [true, false]) {
+      for (const stored of [null, "passthrough", "composed"] as const) {
+        const s = scoreOf(openPanel({ relayEntitled: true, composedAvailable: available, streamPrefs: { [FIXTURE.id]: { streamMode: stored, overlayTemplate: other.id, overlayDelayMs: null } } }));
+        expect([s.available, s.stored, s.template, s.sportKey], `${available} × ${stored}`).toEqual([available, stored, other.id, "football"]);
+        checked++;
+      }
+    }
+    expect(checked).toBe(6);
+    // A fixture with nothing stored: never chosen, the sport's default style.
+    const none = scoreOf(openPanel({ relayEntitled: true, composedAvailable: true }));
+    expect([none.stored, none.template]).toEqual([null, defaultTemplateFor("football")]);
+  });
+
+  it("the sequence: Camera only → PUT { streamMode: passthrough }, shown at once; Add the score back → PUT { streamMode: composed }; a failed save puts the stored mode back and says so", async () => {
+    const island = openPanel({ relayEntitled: true, composedAvailable: true });
+    scoreOf(island).onMode("passthrough");
+    expect(apiV1).toHaveBeenLastCalledWith(`/api/v1/fixtures/${FIXTURE.id}/stream-settings`, { method: "PUT", json: { streamMode: "passthrough" } });
+    expect(scoreOf(island).stored).toBe("passthrough");
+    scoreOf(island).onMode("composed");
+    expect(apiV1).toHaveBeenLastCalledWith(`/api/v1/fixtures/${FIXTURE.id}/stream-settings`, { method: "PUT", json: { streamMode: "composed" } });
+    expect(scoreOf(island).stored).toBe("composed");
+    apiV1.mockRejectedValueOnce(new Error("offline"));
+    scoreOf(island).onMode("passthrough");
+    expect(scoreOf(island).stored, "shown at once").toBe("passthrough");
+    await vi.waitFor(() => expect(scoreOf(island).modeFailed).toBe(true));
+    expect(scoreOf(island).stored, "the stored mode again").toBe("composed");
+  });
+
+  it("the Phone tab's score card holds the SAME picker the OBS tab shows (one stored style), and only one is ever mounted", () => {
+    const island = openPanel({ relayEntitled: true, composedAvailable: true });
+    const editor = scoreOf(island).editor as ReactElement;
+    const inCard = walk(editor).filter((el) => el.type === StreamTemplatePicker);
+    expect(inCard).toHaveLength(1);
+    expect(island.tree().filter((el) => el.type === StreamTemplatePicker), "the OBS picker is not mounted beside it").toHaveLength(0);
+    click(byTestId(island.tree(), "stream-tab-obs"));
+    expect(island.tree().find((el) => el.type === PhoneTab), "the Phone tab is gone on OBS").toBeUndefined();
+    expect(island.tree().filter((el) => el.type === StreamTemplatePicker)).toHaveLength(1);
+    expect(pickerProps(island.tree()).selected).toBe((propsOf(inCard[0]!) as { selected: string }).selected);
   });
 });

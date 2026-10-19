@@ -14,13 +14,15 @@ export type ChainWord =
   // Capture QR v2 §6.12 (T11): the phone node's own words once the phone has a read model.
   | "paired" | "notAnswering" | "starting" | "reconnecting"
   // Owner ruling 2026-10-08: the Seazn node while the server's health verdict is `stalled` (live, the input up).
-  | "waitingVideo";
+  | "waitingVideo"
+  // R2006 (owner ruling 2026-10-19, Owed 26): a composed session's destination while live — not observed, so neutral.
+  | "sending";
 export interface ChainNode { tone: NodeTone; word: ChainWord; mark: "dot" | "bang" | null }
 export interface Chain { phone: ChainNode; link1: LinkStyle; seazn: ChainNode; link2: LinkStyle; dest: ChainNode }
 
 const node = (tone: NodeTone, word: ChainWord, mark: ChainNode["mark"] = null): ChainNode => ({ tone, word, mark });
 
-type ChainView = Pick<StreamSessionView, "state" | "ingest" | "output">;
+type ChainView = Pick<StreamSessionView, "mode" | "state" | "ingest" | "output">;
 
 /** Capture QR v2 (T11): the phone's facts from the `stream-phone` read model, and the server's countdown (`current`).
  *  Passed only for a v2 session — a LEGACY one (C-1, pairing_id null) passes none and draws today's chain exactly. */
@@ -89,8 +91,12 @@ export function phoneDot({ phone, countdown }: CaptureFacts): PhoneDot {
 }
 
 /** The destination half while live: ok → flowing + red Live; not ok under 30 s (or not yet read) → animated + amber
- *  Connecting; not ok for 30 s or more (D3) → amber dashes + amber "!" Not receiving. */
+ *  Connecting; not ok for 30 s or more (D3) → amber dashes + amber "!" Not receiving.
+ *  R2006 (owner ruling 2026-10-19, Owed 26): a COMPOSED session's destination is fed by the Machine and nothing reads it
+ *  yet (the server sends no `output` for composed), so it is neutral — slate "Sending", Seazn sending to it — whatever
+ *  the view carries. An amber "Connecting" would never resolve; a red "Live" would claim what nobody checked. */
 function destinationHalf(view: ChainView): Pick<Chain, "link2" | "dest"> {
+  if (view.mode === "composed") return { link2: "flowing", dest: node("slate", "sending") };
   if (view.output?.state === "ok") return { link2: "flowing", dest: node("red", "live", "dot") };
   if (destinationWarning(view)) return { link2: "problem", dest: node("amber", "notReceiving", "bang") };
   return { link2: "connecting", dest: node("amber", "connecting") };

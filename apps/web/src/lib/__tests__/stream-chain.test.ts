@@ -7,7 +7,7 @@
 // One sport is not a question here: the chain reads no sport (the relay is sport-agnostic).
 import { describe, expect, it } from "vitest";
 import { ACTIVE_STATES, TERMINAL_STATES } from "@/server/relay/domain/session";
-import { StreamIngest, StreamLostCountdown, StreamOutput, StreamSessionState, type StreamPhone, type StreamSessionCurrent } from "@/server/api-v1/schemas";
+import { StreamIngest, StreamLostCountdown, StreamMode, StreamOutput, StreamSessionState, type StreamPhone, type StreamSessionCurrent } from "@/server/api-v1/schemas";
 import { OUTPUT_WARNING_AFTER_MS, phoneStrip } from "@/lib/stream-session-view";
 import { chainFor, phoneDot, type Chain, type ChainNode, type LinkStyle, type PhoneDot } from "../stream-chain";
 import { HEALTH_REASONS } from "@/server/relay/domain/health-reasons";
@@ -16,8 +16,10 @@ type State = (typeof StreamSessionState.options)[number];
 type IngestWord = (typeof StreamIngest.shape.state.options)[number];
 type OutputWord = (typeof StreamOutput.shape.state.options)[number];
 
-/** A projection literal: only the three fields the chain reads. `elapsedMs` is the SERVER's measure (M6). */
-const v = (state: State, ingest: IngestWord | null, output: OutputWord | null, elapsedMs = 0) => ({
+/** A projection literal: only the fields the chain reads. `elapsedMs` is the SERVER's measure (M6). `mode` defaults to
+ *  passthrough — the §3.2 table's session; R2006's composed rows name it. */
+const v = (state: State, ingest: IngestWord | null, output: OutputWord | null, elapsedMs = 0, mode: StreamMode = "passthrough") => ({
+  mode,
   state,
   ingest: ingest ? { state: ingest, protocol: "srt" as const } : null,
   output: output ? { state: output, since: "2026-09-30T12:00:00.000Z", elapsedMs } : null,
@@ -162,8 +164,11 @@ describe("chainFor — spec §3.2, row by row", () => {
   });
 });
 
-/** The §3.2 table as a function of its four inputs — the rulebook, typed once, for the sweep. */
-function specRow(state: State, ingest: IngestWord | null, output: OutputWord | null, warned: boolean): Chain | null {
+/** The §3.2 table as a function of its four inputs — the rulebook, typed once, for the sweep. R2006 (owner ruling
+ *  2026-10-19, Owed 26): a COMPOSED session's destination is not observed (its output is the Machine's, and the server
+ *  reads none — `output` is null for composed), so live it is NEUTRAL — slate "Sending", Seazn sending to it — never an
+ *  amber "Connecting" that would never resolve. */
+function specRow(state: State, ingest: IngestWord | null, output: OutputWord | null, warned: boolean, mode: StreamMode = "passthrough"): Chain | null {
   if (state === "completed" || state === "failed") return null;
   if (state === "requested" || state === "provisioning" || state === "warming") {
     return { phone: n("amber", "waiting"), link1: "connecting", seazn: n("amber", "waiting"), link2: "idle", dest: n("slate", "notLive") };
@@ -173,7 +178,8 @@ function specRow(state: State, ingest: IngestWord | null, output: OutputWord | n
   }
   // live
   const half: Pick<Chain, "link2" | "dest"> =
-    output === "ok" ? { link2: "flowing", dest: n("red", "live", "dot") }
+    mode === "composed" ? { link2: "flowing", dest: n("slate", "sending") }
+    : output === "ok" ? { link2: "flowing", dest: n("red", "live", "dot") }
       : output !== null && warned ? { link2: "problem", dest: n("amber", "notReceiving", "bang") }
         : { link2: "connecting", dest: n("amber", "connecting") };
   const stale = ingest !== null && ingest !== "connected";
@@ -216,6 +222,51 @@ describe("chainFor — the whole input space against the table", () => {
     expect(warnedRows, "the D3 row really was reached by the sweep").toBeGreaterThan(0);
     expect(phoneBangRows, "the '!' on the phone was reached by the sweep").toBeGreaterThan(0);
     expect(destBangRows, "…and the '!' on the destination too").toBeGreaterThan(0);
+  });
+});
+
+describe("R2006 — a composed session's destination is neutral, never Connecting (Owed 26)", () => {
+  it("every session state × phone ingest × side of the 30 s line, composed, with the output the server sends a composed session (none) matches the table", () => {
+    const ingests: (IngestWord | null)[] = [null, ...StreamIngest.shape.state.options];
+    const elapsed = [0, W - 1, W, W * 10];
+    let checked = 0;
+    let neutralRows = 0;
+    for (const state of StreamSessionState.options) {
+      for (const ingest of ingests) {
+        for (const ms of elapsed) {
+          const expected = specRow(state, ingest, null, ms >= W, "composed");
+          expect(chainFor(v(state, ingest, null, ms, "composed")), `composed · ${state} · ingest ${ingest} · ${ms} ms`).toEqual(expected);
+          if (expected?.dest.word === "sending") neutralRows++;
+          checked++;
+        }
+      }
+    }
+    console.log(`composed chain rows checked: ${checked}`);
+    expect(checked, "anti-vacuity").toBe(StreamSessionState.options.length * ingests.length * elapsed.length);
+    expect(neutralRows, "the neutral live row was reached, with and without a phone signal").toBe(ingests.length * elapsed.length);
+  });
+
+  it("composed live is NOT the passthrough answer for the same facts: neither Connecting nor red Live, and no '!' on the destination", () => {
+    const composed = chainFor(v("live", "connected", null, 0, "composed"))!;
+    const passthrough = chainFor(v("live", "connected", null, 0, "passthrough"))!;
+    expect(passthrough.dest, "PREMISE: the passthrough row for an unread output is amber Connecting").toEqual(n("amber", "connecting"));
+    expect(composed.dest).toEqual(n("slate", "sending"));
+    expect(composed.link2).toBe("flowing");
+  });
+
+  it("an assumption made a guard: a composed view carrying an output word (the server sends none) still draws the neutral node for every word", () => {
+    let checked = 0;
+    for (const output of StreamOutput.shape.state.options) {
+      for (const ms of [0, W * 10]) {
+        expect(chainFor(v("live", "connected", output, ms, "composed"))!.dest, `${output} · ${ms}`).toEqual(n("slate", "sending"));
+        checked++;
+      }
+    }
+    expect(checked).toBe(StreamOutput.shape.state.options.length * 2);
+  });
+
+  it("every StreamMode is swept somewhere in this file", () => {
+    expect([...StreamMode.options].sort()).toEqual(["composed", "passthrough"]);
   });
 });
 
