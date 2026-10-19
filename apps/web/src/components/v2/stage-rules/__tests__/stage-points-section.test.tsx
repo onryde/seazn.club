@@ -71,6 +71,18 @@ describe("I3: the walkover SCORE is shown on goal sports and hidden on the sport
     expect(has(html, "stage-points-award-w") || has(html, "stage-points-award-l") || has(html, "stage-points-award"), "no score input").toBe(false);
   });
 
+  it("carrom and the board games (chess keeps half-points) show the walkover points and NO score box either", () => {
+    for (const key of ["carrom", "boardgame"]) {
+      const m = sport(key);
+      const variant = Object.keys(m.variants).find((v) => divisionExpressible(m, m.variants[v]).ok)!;
+      expect(variant, `${key}: an expressible variant exists`).toBeDefined();
+      expect(pointsRuleAwardReachesTable(m), `${key}: premise, the engine's table never reads a walkover score`).toBe(false);
+      const html = render(m, variant, { base: { win: 2, draw: 1, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 2, loserPoints: 0 } });
+      expect(has(html, "stage-points-walkover-w"), `${key}: walkover points`).toBe(true);
+      expect(has(html, "stage-points-award-w") || has(html, "stage-points-award-l"), `${key}: no score box`).toBe(false);
+    }
+  });
+
   it("sweep: every expressible sport and variant shows the score iff the engine's table reads it", () => {
     let shown = 0;
     let hidden = 0;
