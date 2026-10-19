@@ -14,7 +14,7 @@ import { describe, expect, it, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { getLimit, invalidateOrgEntitlements } from "@/lib/entitlements";
-import { buildRuleOverride, setRuleValue } from "@/lib/match-rules";
+import { buildRuleOverride, configKeysFor, setRuleValue, STAGE_RULES_SPORTS } from "@/lib/match-rules";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { appendEvent } from "@/server/engine-db";
 import { resolveModule } from "@/server/engine-db";
@@ -167,6 +167,44 @@ describe.skipIf(!HAS_DB)("putStageRules (design §T3)", () => {
       code: "SPORT_NOT_SUPPORTED",
     });
   }, 30_000);
+
+  // Review of PR #986: the Match rules clock is the division's alone on an online (Lichess) division. A stage cannot carry
+  // one: the per-stage format is only for the four sets-based sports, whose rule fields emit no `clock`, and a chess stage is
+  // refused at the sport gate before any key is looked at - so the Lichess challenge (guard.ts onlinePlayClock, which reads
+  // divisions.config.clock only) can never be built on a stage-level clock. The consumer's half is
+  // external-play-guard.test.ts ("a stage's rules never reach the Lichess clock").
+  it("chess: a Lichess division's stage refuses a clock (and any rules) at the sport gate - nothing written to the stage or the division", async () => {
+    const auth = await seedOrg();
+    const { divisionId } = await seedDivision(auth, "boardgame", "classical", 0, {
+      variant: "classical",
+      clock: { base: 600, increment: 5 },
+      onlinePlay: "lichess",
+    });
+    const stageId = await seedStage(auth, divisionId, 1);
+    let refused = 0;
+    for (const rules of [{ clock: { base: 60, increment: 0 } }, { clock: { base: 600, increment: 5 } }, { variant: "blitz" }, {}]) {
+      await expect(putStageRules(auth, stageId, { rules }), JSON.stringify(rules)).rejects.toMatchObject({
+        status: 400,
+        code: "SPORT_NOT_SUPPORTED",
+      });
+      refused += 1;
+    }
+    expect(refused, "anti-vacuity: every fragment was refused").toBe(4);
+    expect(await stageConfig(stageId), "the stage holds no rules").not.toHaveProperty("rules");
+    const [div] = await sql<{ config: { clock?: unknown; onlinePlay?: string } }[]>`select config from divisions where id = ${divisionId}`;
+    expect(div!.config.clock, "and the division's clock is as it was").toEqual({ base: 600, increment: 5 });
+  }, 30_000);
+
+  it("the four sports that DO take stage rules emit no `clock` key - so no stage fragment of any of them can set one", () => {
+    let checked = 0;
+    for (const sport of STAGE_RULES_SPORTS) {
+      expect(configKeysFor(sport).has("clock"), `${sport} must not emit a clock`).toBe(false);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: the registry's four").toBe(4);
+    expect(STAGE_RULES_SPORTS.has("boardgame"), "chess is not among them").toBe(false);
+    expect(configKeysFor("boardgame").has("clock"), "the premise: chess's own rule fields DO emit one (the division's)").toBe(true);
+  });
 
   it("422s when the MERGED config fails the module schema", async () => {
     const auth = await seedOrg();

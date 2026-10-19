@@ -170,6 +170,16 @@ describe("the sport gate", () => {
     expect(html).not.toContain('data-testid="stage-format"');
   });
 
+  it("review of PR #986: chess - a Lichess division included - has no per-stage match format row, so no free stage clock or delay is ever offered there", () => {
+    // The Match rules grid of a chess division carries the clock fields (time, increment, delay). The stage's own editor
+    // mounts the same MatchRuleFields, so it must never mount for chess: the Lichess clock is the division's alone
+    // (server: stage-rules.test.ts, external-play-guard.test.ts).
+    const lichess = { variant: "classical", clock: { base: 600, increment: 5 }, onlinePlay: "lichess" };
+    const html = panel({ sportKey: "boardgame", divisionConfig: lichess });
+    expect(html).not.toContain('data-testid="stage-format"');
+    expect(panel({ sportKey: "badminton" }), "the positive: the same panel for a sets-based sport DOES render the row").toContain('data-testid="stage-format"');
+  });
+
   it("renders nothing when the page passes no sport at all", () => {
     const html = panel({ sportKey: undefined });
     expect(html).not.toContain('data-testid="stage-format"');

@@ -41,6 +41,24 @@ describe.skipIf(!process.env.DATABASE_URL)("loadOnlinePlayFixture (the online-pl
     expect(await loadOnlinePlayFixture(s.fixtureId)).toBeNull();
   });
 
+  // Review of PR #986: the Lichess clock is the DIVISION's. A stage's own rules (the per-stage match format) never feed it -
+  // even a clock fragment that got onto a stage by a route the product refuses (stage-rules.test.ts: SPORT_NOT_SUPPORTED).
+  it("a stage's rules never reach the Lichess clock: a clock fragment written onto the stage by SQL leaves the challenge's clock the division's", async () => {
+    const s = await seedOnlineChessFixture({
+      onlinePlay: "lichess",
+      divisionStarted: true,
+      scheduledAt: T,
+      linked: true,
+      clock: { base: 600, increment: 5 },
+    });
+    // 10+5 is Lichess's {limit 600 s, increment 5 s} - the rulebook's number, typed from the control's own name.
+    expect((await loadOnlinePlayFixture(s.fixtureId))?.clock, "premise: the division's clock, before any stage rule").toEqual({ limit: 600, increment: 5 });
+    await sql`update stages set config = config || ${sql.json({ rules: { clock: { base: 60, increment: 0 } } })} where id = ${s.stageId}`;
+    const [row] = await sql<{ config: { rules?: { clock?: { base: number } } } }[]>`select config from stages where id = ${s.stageId}`;
+    expect(row!.config.rules?.clock?.base, "premise: the stage really holds a 1+0 clock now").toBe(60);
+    expect((await loadOnlinePlayFixture(s.fixtureId))?.clock, "and the challenge's clock is still 10+5").toEqual({ limit: 600, increment: 5 });
+  });
+
   it("unstarted division ⇒ null (scoreEvent would refuse)", async () => {
     const s = await seedOnlineChessFixture({
       onlinePlay: "lichess",
