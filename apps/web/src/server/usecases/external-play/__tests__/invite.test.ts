@@ -577,7 +577,7 @@ describe.skipIf(!HAS_DB)("invites and resend in timed batches", () => {
   // Final review M-5: the mail keyed its "opens for check-in at HH:MM" paragraph on the BOARD being in a later batch, not on that
   // batch still being shut when the mail is SENT. A resend after the batch opened told the player their check-in "opens at" a time
   // that had already passed, and gave no sign it was open now.
-  it("[reader:resend] (M-5) a resend after the board's batch has OPENED says nothing about when it opens; before it, it still does; at the opening exactly, it is open", async () => {
+  it("(M-5, a resend) a resend after the board's batch has OPENED says nothing about when it opens; before it, it still does; at the opening exactly, it is open", async () => {
     const r = await seedRound();
     await open(r, OPENED);
     const opensAt = batchStart(2);
@@ -607,7 +607,7 @@ describe.skipIf(!HAS_DB)("invites and resend in timed batches", () => {
     expect(opensAt.getTime(), "premise: the resends past the opening are inside the batch's own window").toBeLessThan(deadline.getTime());
   });
 
-  it("[reader:resend] (M-5) batch 0 never named an opening, and still does not, whenever it is resent - even on a clock far enough behind the stamp that its window has not opened", async () => {
+  it("(M-5, a resend) batch 0 never named an opening, and still does not, whenever it is resent - even on a clock far enough behind the stamp that its window has not opened", async () => {
     const r = await seedRound();
     await open(r, OPENED);
     let checked = 0;
