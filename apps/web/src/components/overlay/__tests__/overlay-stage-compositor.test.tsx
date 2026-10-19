@@ -220,6 +220,27 @@ describe("the compositor host", () => {
     expect(live.calls.at(-1)).toEqual(["f1", { sid: "s1", st: "tok" }]);
   });
 
+  // Review round 1, item 4: fallback B's phase is the compositor's NOW. A delayed page (`?delay=`, the composed
+  // session's own) presents the SCORE `delayMs` late, but must read the phase off the newest RECEIVED snapshot — a
+  // stage that read it off the presented (`data`) one would air Reconnecting a whole delay after the camera dropped.
+  it("delayMs > 0: the web phase is read off the newest RECEIVED snapshot, not the delayed presented one", async () => {
+    const DELAY = 10_000;
+    vi.stubGlobal("fetch", () => Promise.reject(new TypeError("connection refused")));
+    const island = renderIsland<OverlayStageProps>(
+      OverlayStage,
+      props({ host: "compositor", delayMs: DELAY, relay: { sid: "s1", st: "tok" }, initial: snap({ programmePhase: "live" }) }),
+    );
+    await vi.advanceTimersByTimeAsync(DELAY + 500);
+    expect(lines, "premise: three refusals put the page on the web channel").toContain("seazn:phase-channel=web");
+    expect(lines, "premise: the delay matured (ready fires on the first drawn snapshot)").toContain("seazn:ready");
+    expect(scenesOf(island.tree()), "premise: live, no scene").toEqual([]);
+    live.next = () => snap({ lastSeq: 2, programmePhase: "reconnecting" });
+    const before = live.calls.length;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(live.calls.length - before, "premise: one poll answered").toBe(1);
+    expect(scenesOf(island.tree()), "the phase arrived with the poll, not a delay later").toEqual(["reconnecting"]);
+  });
+
   it("OBS (no host): no console line, NO loopback request, and the default 15 s poll with no relay access", async () => {
     renderIsland<OverlayStageProps>(OverlayStage, props());
     await vi.advanceTimersByTimeAsync(0);

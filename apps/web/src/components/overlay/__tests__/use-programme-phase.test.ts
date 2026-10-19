@@ -106,6 +106,21 @@ describe("useProgrammePhase", () => {
     expect(calls.length).toBeGreaterThanOrEqual(6);
   });
 
+  // Review round 1, item 5: the status is the authority, never the body. The test above's 503 has an EMPTY body, which
+  // the JSON parse would refuse anyway, so it could not tell a status check from a parse failure. A non-200 whose body
+  // IS a valid reply (a proxy's error page passing one through, a server answering 503 with its last phase) must still
+  // count as a failure: three of them fall back to web, and their phase is never adopted.
+  it("a non-200 with a VALID {phase, seq} body is still a failure: never adopted, three fall back to web", async () => {
+    const valid = (seq: number, status: number) => async () =>
+      new Response(JSON.stringify({ phase: "reconnecting", seq }), { status });
+    replies.push(valid(1, 503), valid(2, 500), valid(3, 404), json({ phase: "live", seq: 9 }));
+    mount({ enabled: true, webPhase: null });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(calls, "three non-200 answers, then web: no fourth request").toHaveLength(3);
+    expect(latest).toEqual({ phase: null, channel: "web" });
+    expect(channelLines()).toEqual(["seazn:phase-channel=web"]);
+  });
+
   it("a reply that never comes is aborted at the long poll's hold + 2 s and counts as a failure", async () => {
     mount({ enabled: true, webPhase: null });
     await vi.advanceTimersByTimeAsync(12_000 - 1);
