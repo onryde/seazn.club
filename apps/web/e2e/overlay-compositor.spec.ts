@@ -103,6 +103,24 @@ const sessionsThisTest: { request: Page["request"]; fixtureId: string; sid: stri
 
 /** Stop a session as the organiser does, then send the compositor's own last beat (`stopped`, C06's `ended` exit): a
  *  composed session's `ending` is the RUNNER's (domain/session.ts), so without its Machine's final beat it holds. */
+/** `disposeFakePhones()`, minus one harness artefact. The fake phone beats every POLL_STARTING_SECONDS (5 s) through
+ *  Playwright's worker-global keep-alive pool, and the server reaps an idle socket at 6 s, so now and then a background
+ *  beat lands on a reaped socket and reads `ECONNRESET` before the server sees it. A real phone drops a beat the same
+ *  way and the next one covers it, and this file's subject is the overlay page, not the phone's contract — so a beat
+ *  lost to a reset is counted and printed, and EVERY other background error (a refused beat, a contract break) still
+ *  fails the test. */
+async function disposePhones(): Promise<void> {
+  try {
+    await disposeFakePhones();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const entries = msg.split(/\n(?=phone [0-9a-f]{8}: )/).slice(1);
+    const real = entries.filter((e) => !/: Error: apiRequestContext\.post: read ECONNRESET$/.test(e.split("\n")[0]!));
+    if (entries.length === 0 || real.length > 0) throw err;
+    console.log(`fake phone: ${entries.length} background beat(s) lost to a reaped keep-alive socket (read ECONNRESET), tolerated`);
+  }
+}
+
 async function endSession(s: { request: Page["request"]; fixtureId: string; sid: string }): Promise<void> {
   await stopAndBeat(s);
   await expect
@@ -222,7 +240,7 @@ async function beat(page: Page, c: Composed, programmePhase: Phase): Promise<voi
 
 test.afterEach(async () => {
   try {
-    await disposeFakePhones();
+    await disposePhones();
   } finally {
     try {
       for (const s of sessionsThisTest.splice(0)) await endSession(s);
@@ -646,7 +664,7 @@ test("E4 another sport — cricket (template=bar) and badminton (template=bug): 
     // One session at a time on the pool: end this sport's before the next one's, and give the pool back between them
     // so no hold here outlasts POOL_HOLD (the next sport's `composedSession` takes it again).
     for (const s of sessionsThisTest.splice(0)) await endSession(s);
-    await disposeFakePhones();
+    await disposePhones();
     await releaseStreamSlot();
   }
   console.log(`E4 sports checked: ${sports}`);
