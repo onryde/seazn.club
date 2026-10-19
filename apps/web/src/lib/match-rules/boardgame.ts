@@ -69,7 +69,7 @@ export const BOARDGAME_RULES: RuleField[] = [
     key: "tiebreakRungs",
     edits: ["tiebreakRungs"],
     label: "Tie-break games, in order",
-    help: "Played in this order after a drawn knockout game. Leave blank to play all three.",
+    help: "Played in this order after a drawn knockout game, until one side wins. Remove every game and a drawn game waits for you to decide.",
     kind: "sequence",
     emptyValue: NO_TIEBREAK_GAMES,
     options: [

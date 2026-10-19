@@ -12,14 +12,23 @@ import enUi from "@/dictionaries/en/ui.json";
 import type { Dict } from "@/lib/i18n-constants";
 import { SPORT_RULES } from "@/lib/match-rules";
 import { stageFieldsFor } from "@/lib/rule-scope";
+import { stageDefaultsFor } from "@seazn/engine/sport";
+import { resolvedStageCfg } from "../stage-row-model";
 import { StageRuleFields } from "../stage-rule-fields";
 
 const KINDS = ["league", ...BRACKET_KINDS] as StageKind[];
-const render = (sportKey: string, kind: StageKind, values: Record<string, string> = {}, divisionConfig: Record<string, unknown> = {}, variant: string | null = null): string => {
+const render = (
+  sportKey: string,
+  kind: StageKind,
+  values: Record<string, string> = {},
+  divisionConfig: Record<string, unknown> = {},
+  variant: string | null = null,
+  resolved: Record<string, unknown> | null = null,
+): string => {
   const mod = builtinModules.find((m) => m.key === sportKey)!;
   return renderToStaticMarkup(
     <DictProvider dict={enUi as Dict} locale="en">
-      <StageRuleFields sportKey={sportKey} module={mod} kind={kind} variant={variant} values={values} onChange={() => undefined} disabled={false} divisionConfig={divisionConfig} />
+      <StageRuleFields sportKey={sportKey} module={mod} kind={kind} variant={variant} values={values} onChange={() => undefined} disabled={false} divisionConfig={divisionConfig} resolved={resolved} />
     </DictProvider>,
   );
 };
@@ -131,5 +140,63 @@ describe("the abandon field follows the engine's declarations (carries 'share on
     expect(after).not.toMatch(/<option value="share" disabled=""/);
     expect(after).not.toContain("stage-abandon-unavailable");
     expect(after).toMatch(/<option value="share"/);
+  });
+});
+
+// Review M-4: the kicks of a shoot-out (and the minutes of an overtime) mean nothing while their decider is off, and a
+// period sport's save drops them silently. The row holds the field and says why. Static markup: whether the control is
+// disabled and the caption is there; the pairing itself is the engine's `detailOf`, pinned in the model test.
+describe("a decider's detail is held while the decider is off, with the reason beside it (M-4)", () => {
+  const blockOf = (markup: string, top: string): string => {
+    const start = markup.indexOf(`data-testid="stage-rule-field-${top}"`);
+    expect(start, `${top} is rendered`).toBeGreaterThan(-1);
+    const next = markup.indexOf('data-testid="stage-rule-field-', start + 10);
+    return markup.slice(start, next === -1 ? undefined : next);
+  };
+  const held = (block: string): boolean => /<input[^>]*\sdisabled(=""|\s|>)/.test(block);
+
+  it("football knockout: kicks held (with the reason) while the shoot-out is off, free while it is on", () => {
+    const mod = builtinModules.find((m) => m.key === "football")!;
+    const division = mod.configSchema.parse(mod.variants["11-a-side"]) as Record<string, unknown>;
+    const at = (rules: Record<string, unknown>) => render("football", "knockout", {}, division, "11-a-side", resolvedStageCfg(mod, division, "knockout", rules));
+    const off = at({ shootout: false });
+    expect(held(blockOf(off, "shootoutAttempts"))).toBe(true);
+    expect(off).toContain('data-testid="stage-rule-detail-off-shootoutAttempts"');
+    expect(off).toContain("Only used when Penalty shootout is on");
+    const on = at({ shootout: true });
+    expect(held(blockOf(on, "shootoutAttempts"))).toBe(false);
+    expect(on).not.toContain("stage-rule-detail-off-");
+    // Nothing else is held: the half length stays editable with the shoot-out off.
+    expect(held(blockOf(off, "halfMinutes"))).toBe(false);
+  });
+
+  it("every period sport's detail: held with its decider off, free with it on (counted)", () => {
+    let checked = 0;
+    for (const c of [
+      { sport: "hockey", variant: "fih-outdoor", detail: "shootout", decider: "shootout" },
+      { sport: "icehockey", variant: "iihf", detail: "shootout", decider: "shootout" },
+      { sport: "icehockey", variant: "iihf", detail: "overtime", decider: "overtime" },
+    ]) {
+      const mod = builtinModules.find((m) => m.key === c.sport)!;
+      const division = mod.configSchema.parse(mod.variants[c.variant]) as Record<string, unknown>;
+      const preset = stageDefaultsFor(mod, "knockout", c.variant);
+      const detailField = SPORT_RULES[c.sport]!.find((f) => f.edits.some((e) => e.startsWith(`${c.detail}.`)))!;
+      const markup = (rules: Record<string, unknown>) => render(c.sport, "knockout", {}, division, c.variant, resolvedStageCfg(mod, division, "knockout", rules));
+      const top = detailField.edits[0]!.split(".")[0]!;
+      // both a detail field and the decider's switch share the top segment (`shootout`): look at the detail's caption instead
+      expect(markup({ ...preset, [c.decider]: false }), `${c.sport}.${detailField.key} off`).toContain(`stage-rule-detail-off-${top}`);
+      expect(markup({ ...preset }), `${c.sport}.${detailField.key} on`).not.toContain("stage-rule-detail-off-");
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("a stage whose cfg the schema refuses holds nothing, and a sport with no detail holds nothing (empty case)", () => {
+    expect(render("football", "knockout", {}, {}, "11-a-side", null)).not.toContain("stage-rule-detail-off-");
+    const mod = builtinModules.find((m) => m.key === "badminton")!;
+    const division = mod.configSchema.parse(Object.values(mod.variants)[0]) as Record<string, unknown>;
+    const markup = render("badminton", "league", {}, division, null, resolvedStageCfg(mod, division, "league", {}));
+    expect(markup).not.toContain("stage-rule-detail-off-");
+    expect(held(markup)).toBe(false);
   });
 });

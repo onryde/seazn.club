@@ -31,7 +31,7 @@ export function DecidersNotice({
   if (mode === null) return null;
   return (
     <p
-      role="note"
+      role="status"
       data-testid={mode === "off" ? "stage-deciders-off" : "stage-deciders-level"}
       className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-snug text-amber-900"
     >

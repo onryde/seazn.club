@@ -27,7 +27,8 @@ import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict
 import { useNow } from "@/components/public-site/match-centre/use-now";
 import { seedingErrorMessage } from "@/lib/seeding-error";
 import { scoringErrorText } from "@/lib/scoring-vocab";
-import type { Locale } from "@/lib/i18n-constants";
+import type { Dict, Locale } from "@/lib/i18n-constants";
+import { rulesChipText } from "@/lib/rules-line";
 import type { MessageKey } from "@/lib/messages";
 import {
   DEFAULT_MATCH_MINUTES,
@@ -50,7 +51,7 @@ import { sportLabel } from "@/lib/scoring-vocab";
 import type { StageKind } from "@seazn/engine/core";
 import { DecidersNotice } from "@/components/v2/stage-rules/deciders-off-notice";
 import { StageRuleFields } from "@/components/v2/stage-rules/stage-rule-fields";
-import { isStagePreset, resolvedStageCfg, stageFormatSaveFragment } from "@/components/v2/stage-rules/stage-row-model";
+import { isStagePreset, resolvedStageCfg, stageFormatSaveFragment, stageSummaryClauses } from "@/components/v2/stage-rules/stage-row-model";
 import { Modal } from "@/components/modal";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { DocumentsMenu } from "@/components/v2/board/documents-menu";
@@ -309,6 +310,9 @@ interface Props {
    *  will actually be played at, which for an inherited stage lives entirely
    *  in the division. Never used to hydrate the EDITOR (see StageFormatRow). */
   divisionConfig?: Record<string, unknown>;
+  /** The public dictionary's rules-line slice (`rulesLineDict`: the `format.rules.*` keys). The format row's chips are the
+   *  public line's own clauses, which live in the PUBLIC dictionary, not the console's; absent, the row shows no chips. */
+  ruleDict?: Dict;
   /** Stage ids whose match format is LOCKED, resolved server-side by
    *  `formatLockedStageIds` (usecases/stage-rules.ts) from the same predicate
    *  the PUT refuses on. Deliberately a server fact rather than anything
@@ -483,7 +487,7 @@ export function boardSlotOptionsFor(
  *  whole panel every second. */
 const RUN_SHEET_NOW_TICK_MS = 60_000;
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, variantKey = null, divisionConfig = {}, formatLockedStageIds = [], tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, openRounds, onlineAwaitsStart = false, arbiterHref = null }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, variantKey = null, divisionConfig = {}, ruleDict, formatLockedStageIds = [], tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, openRounds, onlineAwaitsStart = false, arbiterHref = null }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -1274,6 +1278,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     kind={stage.kind as StageKind}
                     variantKey={variantKey}
                     divisionConfig={divisionConfig}
+                    ruleDict={ruleDict}
                     stageConfig={stage.config}
                     locked={formatLockedStageIds.includes(stage.id)}
                     canEdit={canEdit}
@@ -2233,6 +2238,8 @@ function AddMatchForm({
  *    because "Best of 3 · Same as division" has to state the number the stage
  *    will actually be played at, and an inherited stage's own fragment is
  *    empty.
+ *  - The CHIPS under it (review I-1) say the same effective format in the public line's own words: the stage's division
+ *    and its rules resolved (`resolvedStageCfg`), described by the public describers (`stageSummaryClauses`).
  *  - The EDITOR hydrates the FRAGMENT ONLY (`stage.config.rules`). In a
  *    fragment a key's ABSENCE means "inherit the division". Hydrating the
  *    editor from the merge would arrive with every field filled, and the first
@@ -2251,6 +2258,7 @@ function StageFormatRow({
   kind,
   variantKey,
   divisionConfig,
+  ruleDict,
   stageConfig,
   locked,
   canEdit,
@@ -2263,6 +2271,7 @@ function StageFormatRow({
   kind: StageKind;
   variantKey: string | null;
   divisionConfig: Record<string, unknown>;
+  ruleDict: Dict | undefined;
   stageConfig: Record<string, unknown>;
   locked: boolean;
   canEdit: boolean;
@@ -2304,18 +2313,33 @@ function StageFormatRow({
     () => (sportModule === null ? null : resolvedStageCfg(sportModule, divisionConfig, kind, noticeRules)),
     [sportModule, divisionConfig, kind, noticeRules],
   );
+  // The chips say what the stage plays NOW (its saved rules), not the edit in progress: the editor below is where an edit
+  // is read back.
+  const chips = useMemo(
+    () =>
+      sportModule === null || ruleDict === undefined
+        ? []
+        : stageSummaryClauses(sportKey, sportModule, kind, resolvedStageCfg(sportModule, divisionConfig, kind, rules)),
+    [sportModule, ruleDict, sportKey, kind, divisionConfig, rules],
+  );
+  // Focus follows the editor: it lands on the editor when it opens (the Edit button it came from is gone while editing)
+  // and returns to the Edit button when it closes.
+  const editorRef = useRef<HTMLDivElement>(null);
+  const editRef = useRef<HTMLButtonElement>(null);
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    if (open) editorRef.current?.focus();
+    else if (wasOpen.current) editRef.current?.focus();
+    wasOpen.current = open;
+  }, [open]);
 
   if (sportModule === null) return null;
 
   const readOnly = locked || !canEdit;
   const state = locked ? "locked" : overridden ? "overridden" : "inherited";
-  const clause = msg(
-    locked
-      ? "schedule.stageFormat.locked"
-      : overridden
-        ? "schedule.stageFormat.overridden"
-        : "schedule.stageFormat.inherited",
-  );
+  // A locked stage states it ONCE, in the lock line below (S4): the header then carries the format alone.
+  const clause = locked ? null : msg(overridden ? "schedule.stageFormat.overridden" : "schedule.stageFormat.inherited");
+  const summary = headline === null ? clause : clause === null ? headline : `${headline} · ${clause}`;
   const preset = overridden && isStagePreset(sportModule, kind, variantKey, rules);
 
   function openEditor() {
@@ -2379,9 +2403,11 @@ function StageFormatRow({
           <span className="text-xs font-semibold text-slate-800">
             {msg("schedule.stageFormat.heading")}
           </span>
-          <span className="min-w-0 text-xs text-slate-600" data-testid="stage-format-summary">
-            {headline === null ? clause : `${headline} · ${clause}`}
-          </span>
+          {summary !== null && (
+            <span className="min-w-0 text-xs text-slate-600" data-testid="stage-format-summary">
+              {summary}
+            </span>
+          )}
           {preset && (
             <span
               className="rounded-full border border-teal-700/30 bg-teal-50 px-2 py-0.5 text-[11px] text-teal-900"
@@ -2390,14 +2416,16 @@ function StageFormatRow({
               {msg("stageRules.preset.knockout", { sport: sportLabel(sportKey, msg) })}
             </span>
           )}
-          {!locked && canEdit && (
+          {/* Hidden while editing: the editor's own Cancel (beside Save) is the one way out, so the row never offers two. */}
+          {!locked && canEdit && !open && (
             <button
+              ref={editRef}
               type="button"
               className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
               data-testid="stage-format-edit"
-              onClick={() => (open ? setOpen(false) : openEditor())}
+              onClick={openEditor}
             >
-              {msg(open ? "schedule.cancel" : "schedule.stageFormat.edit")}
+              {msg("schedule.stageFormat.edit")}
             </button>
           )}
           {readOnly && (
@@ -2422,6 +2450,18 @@ function StageFormatRow({
             </button>
           )}
         </div>
+        {chips.length > 0 && ruleDict !== undefined && (
+          <ul className="mt-2 flex min-w-0 flex-wrap gap-1.5" aria-label={msg("schedule.stageFormat.heading")} data-testid="stage-format-chips">
+            {chips.map((chip, i) => (
+              <li
+                key={`${chip.key}:${i}`}
+                className="max-w-full break-words rounded-xl border border-slate-300 bg-white px-2.5 py-0.5 text-[11.5px] leading-snug text-slate-700"
+              >
+                {rulesChipText(ruleDict, chip)}
+              </li>
+            ))}
+          </ul>
+        )}
         {locked && (
           // S4 (owner pick A on the locks mockup): say it before they try. The server still refuses if anyone gets past
           // it (STAGE_FORMAT_LOCKED), and the scorer can still change one unstarted match.
@@ -2442,7 +2482,14 @@ function StageFormatRow({
       </div>
 
       {open && (
-        <div className="space-y-3 border-b border-dashed border-slate-200 bg-slate-50/60 px-4 py-3" data-testid="stage-format-editor">
+        <div
+          ref={editorRef}
+          tabIndex={-1}
+          role="group"
+          aria-label={msg("schedule.stageFormat.heading")}
+          className="space-y-3 border-b border-dashed border-slate-200 bg-slate-50/60 px-4 py-3 focus:outline-none"
+          data-testid="stage-format-editor"
+        >
           {/* `inherited`: the fragment's blanks fall back to the DIVISION, so a stage that names no best-of but
               inherits best of 1 still gets the single "Points to win" field (owner ruling 2026-09-25). */}
           <StageRuleFields
@@ -2454,6 +2501,7 @@ function StageFormatRow({
             onChange={setValues}
             disabled={saving || readOnly}
             divisionConfig={divisionConfig}
+            resolved={resolved}
           />
           <DecidersNotice module={sportModule} kind={kind} resolved={resolved} />
           {!readOnly && (
@@ -2470,6 +2518,7 @@ function StageFormatRow({
               <button
                 type="button"
                 className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
+                data-testid="stage-format-cancel"
                 disabled={saving}
                 onClick={() => setOpen(false)}
               >
@@ -2558,7 +2607,7 @@ export function stageFormatHeadline(
   if (raw === undefined) return null;
   // The saved value may be valid while THIS sport's picker does not offer it —
   // badminton offers [1,3,5] while `{"bestOf":7}` is a perfectly good config
-  // (D9). `ruleOptionLabel` borrows the label from a peer in-scope sport that
+  // (D9). `ruleOptionLabel` borrows the label from a peer sport that
   // does offer it, so the line reads "Best of 7 · Stage override" as the
   // design table specifies without assembling an English string here. It is
   // the SAME lookup `MatchRuleFields` labels its synthetic option with: the

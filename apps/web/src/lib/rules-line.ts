@@ -32,3 +32,21 @@ export function rulesLineText(dict: Dict, line: readonly RulesClause[]): string 
   const text = line.map((clause) => t(dict, clause.key, clause.params)).join(RULES_LINE_JOINER);
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
+
+/** The keys a rules line reads from the PUBLIC dictionary: every clause is a `format.rules.*` key. */
+export const RULES_LINE_DICT_PREFIX = "format.rules.";
+
+/** The slice of the public dictionary a rules line needs (`format.rules.*`), for a client island that is not the public
+ *  site - the stage format row's chips (W2c Task 17) - so the whole 85 KB dictionary does not cross the RSC boundary. */
+export function rulesLineDict(dict: Dict): Dict {
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(dict)) if (key.startsWith(RULES_LINE_DICT_PREFIX)) out[key] = dict[key];
+  return out;
+}
+
+/** One clause as a chip's text: the same words the public line says, its first letter capitalised (a chip stands alone;
+ *  a clause is written to sit mid-sentence, so it begins lowercase). */
+export function rulesChipText(dict: Dict, clause: RulesClause): string {
+  const text = t(dict, clause.key, clause.params);
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}

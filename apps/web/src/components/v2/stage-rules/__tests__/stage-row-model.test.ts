@@ -7,16 +7,22 @@ import { BRACKET_KINDS, DRAW_KINDS, StageKind } from "@seazn/engine/core";
 import { bracketMayEndLevel, deciderKeysFor, stageDefaultsFor, stageKeysFor, type AnySportModule } from "@seazn/engine/sport";
 import { declaredCfgs } from "@seazn/engine/testkit";
 import { SPORT_RULES } from "@/lib/match-rules";
-import { DECIDER_DESCRIBED_KEYS, deciderIsOn, describeDeciders } from "@/server/public-site/describe-rules";
+import { DECIDER_DESCRIBED_KEYS, deciderIsOn, describeAbandon, describeDeciders, matchRulesLine } from "@/server/public-site/describe-rules";
+import enPublic from "@/dictionaries/en/public.json";
+import type { Dict } from "@/lib/i18n-constants";
+import { rulesChipText } from "@/lib/rules-line";
 import { decidersOffRules } from "@/lib/stage-decider-off";
 import {
   abandonOptionStates,
   decidersAllOff,
   decidersMayEndLevel,
   deciderNotice,
+  deciderOfDetail,
+  detailIsInert,
   resolvedStageCfg,
   stageFieldsShown,
   stageSections,
+  stageSummaryClauses,
 } from "../stage-row-model";
 
 const sport = (key: string): AnySportModule => {
@@ -185,6 +191,168 @@ describe("deciderNotice names its mode (football knockout, from the engine's dec
   });
 });
 
+describe("which knockout setups leave a level match behind a decider - the RULEBOOKS' answer, not the declaration's (M-6)", () => {
+  // Each row is a setup and the notice the rulebook gives it: a decider that cannot end level (a shoot-out is sudden death,
+  // every chess tie-break game names a winner, carrom's extra board is played to a result) leaves nothing to hold; extra time, an
+  // overtime and a super over whose tie stands can all end level (their own proof is the engine folds in `can-end-level.test.ts`); no decider
+  // at all holds every level match. The setups are built from the engine's own stage defaults and `decidersOffRules`.
+  const rows: { sport: string; name: string; rules: (m: AnySportModule) => Record<string, unknown>; expected: "off" | "level" | null }[] = [
+    { sport: "football", name: "extra time alone", rules: (m) => ({ ...stageDefaultsFor(m, "knockout", "11-a-side"), shootout: false }), expected: "level" },
+    { sport: "football", name: "penalties alone", rules: (m) => ({ ...stageDefaultsFor(m, "knockout", "11-a-side"), extraTime: { enabled: false, halfMinutes: 15 } }), expected: null },
+    { sport: "football", name: "extra time then penalties", rules: (m) => stageDefaultsFor(m, "knockout", "11-a-side"), expected: null },
+    { sport: "football", name: "no decider", rules: (m) => decidersOffRules(m, "11-a-side", "knockout"), expected: "off" },
+    { sport: "icehockey", name: "overtime alone", rules: (m) => ({ ...stageDefaultsFor(m, "knockout", "iihf"), shootout: false }), expected: "level" },
+    { sport: "icehockey", name: "overtime then shoot-out", rules: (m) => stageDefaultsFor(m, "knockout", "iihf"), expected: null },
+    { sport: "icehockey", name: "shoot-out alone", rules: (m) => ({ ...stageDefaultsFor(m, "knockout", "iihf"), overtime: false }), expected: null },
+    { sport: "icehockey", name: "no decider", rules: (m) => decidersOffRules(m, "iihf", "knockout"), expected: "off" },
+    { sport: "hockey", name: "shoot-out", rules: (m) => stageDefaultsFor(m, "knockout", "fih-outdoor"), expected: null },
+    { sport: "hockey", name: "no decider", rules: (m) => decidersOffRules(m, "fih-outdoor", "knockout"), expected: "off" },
+    { sport: "cricket", name: "a super over repeated until decided (the default)", rules: (m) => stageDefaultsFor(m, "knockout", "t20"), expected: null },
+    { sport: "cricket", name: "a super over whose tie stands (shared)", rules: (m) => ({ ...stageDefaultsFor(m, "knockout", "t20"), superOverStillTied: "shared" }), expected: "level" },
+    { sport: "cricket", name: "a super over decided on boundaries, equal boundaries tie", rules: (m) => ({ ...stageDefaultsFor(m, "knockout", "t20"), superOverStillTied: "boundary_count" }), expected: "level" },
+    { sport: "cricket", name: "no super over", rules: (m) => decidersOffRules(m, "t20", "knockout"), expected: "off" },
+    { sport: "carrom", name: "the extra board its bracket forces", rules: () => ({}), expected: null },
+    { sport: "boardgame", name: "an empty rung list", rules: () => ({ tiebreakRungs: [] }), expected: "off" },
+    { sport: "boardgame", name: "armageddon last (always a winner)", rules: () => ({ tiebreakRungs: ["rapid", "armageddon"] }), expected: null },
+    // BG-KO-3: every tie-break event names a winner, so a list of ONE game of any kind settles the match.
+    { sport: "boardgame", name: "a rapid game alone (its result names a winner)", rules: () => ({ tiebreakRungs: ["rapid"] }), expected: null },
+  ];
+
+  it("each setup gets the notice the rulebook gives it (counted; every mode appears)", () => {
+    const seen = new Set<string>();
+    for (const row of rows) {
+      const m = sport(row.sport);
+      const variant = Object.keys(m.variants)[0]!;
+      const division = m.configSchema.parse(m.variants[variant]) as Record<string, unknown>;
+      const cfg = resolvedStageCfg(m, division, "knockout", row.rules(m));
+      expect(cfg, `${row.sport}: ${row.name} resolves`).not.toBeNull();
+      expect(deciderNotice(m, "knockout", cfg!), `${row.sport}: ${row.name}`).toBe(row.expected);
+      seen.add(String(row.expected));
+    }
+    expect(seen, "off, level and none each occur").toEqual(new Set(["off", "level", "null"]));
+    expect(rows.length).toBe(18);
+  });
+});
+
+describe("a detail of a decider is held while its decider is off - the pairing is the engine's `detailOf` (M-4)", () => {
+  // The rulebook's pairs (the same table the engine's sweep pins): field key -> the decider it only means something under.
+  const PAIRS: Record<string, Record<string, string>> = {
+    football: { shootoutAttempts: "shootout" },
+    hockey: { shootoutAttempts: "shootout" },
+    icehockey: { overtimeMinutes: "overtime", shootoutAttempts: "shootout" },
+  };
+
+  it("exactly the rulebook's fields are details, every other field of every sport is not (counted)", () => {
+    let details = 0;
+    let others = 0;
+    for (const m of builtinModules)
+      for (const f of SPORT_RULES[m.key] ?? []) {
+        const expected = PAIRS[m.key]?.[f.key] ?? null;
+        expect(deciderOfDetail(m, f), `${m.key}.${f.key}`).toBe(expected);
+        if (expected === null) others++;
+        else details++;
+      }
+    expect(details).toBe(Object.values(PAIRS).reduce((n, p) => n + Object.keys(p).length, 0));
+    expect(others, "the rest of the field tables were walked").toBeGreaterThan(details);
+  });
+
+  it("football: the kicks are held while the shoot-out is off, and free while it is on (positive pair)", () => {
+    const kicks = SPORT_RULES.football!.find((f) => f.key === "shootoutAttempts")!;
+    const division = football.configSchema.parse(football.variants["11-a-side"]) as Record<string, unknown>;
+    const at = (rules: Record<string, unknown>) => resolvedStageCfg(football, division, "knockout", rules);
+    expect(detailIsInert(football, kicks, at({ shootout: false }))).toBe(true);
+    expect(detailIsInert(football, kicks, at({ shootout: true }))).toBe(false);
+  });
+
+  it("the period sports: switching the shoot-out (or the overtime) off holds its length; a switch itself is never held (positive pairs)", () => {
+    for (const [key, variant, detail, decider] of [
+      ["hockey", "fih-outdoor", "shootoutAttempts", "shootout"],
+      ["icehockey", "iihf", "shootoutAttempts", "shootout"],
+      ["icehockey", "iihf", "overtimeMinutes", "overtime"],
+    ] as const) {
+      const m = sport(key);
+      const division = m.configSchema.parse(m.variants[variant]) as Record<string, unknown>;
+      const field = SPORT_RULES[key]!.find((f) => f.key === detail)!;
+      const preset = stageDefaultsFor(m, "knockout", variant);
+      const on = resolvedStageCfg(m, division, "knockout", preset);
+      const off = resolvedStageCfg(m, division, "knockout", { ...preset, [decider]: false });
+      expect(detailIsInert(m, field, off), `${key}.${detail} with ${decider} off`).toBe(true);
+      expect(detailIsInert(m, field, on), `${key}.${detail} with ${decider} on`).toBe(false);
+      const switchField = SPORT_RULES[key]!.find((f) => f.key === decider)!;
+      expect(detailIsInert(m, switchField, off), `${key}.${decider} is the switch, not a detail`).toBe(false);
+    }
+  });
+
+  it("a cfg the schema refuses holds nothing, and a module that declares no pairing holds nothing", () => {
+    const kicks = SPORT_RULES.football!.find((f) => f.key === "shootoutAttempts")!;
+    expect(detailIsInert(football, kicks, null)).toBe(false);
+    const bare = { ...football, ruleKeys: { ...football.ruleKeys, shootoutAttempts: { scope: "match", matchBound: "shorter" } } } as unknown as AnySportModule;
+    expect(deciderOfDetail(bare, kicks), "premise: no detailOf, no pairing").toBeNull();
+    expect(detailIsInert(bare, kicks, { shootout: false })).toBe(false);
+  });
+});
+
+describe("the collapsed row's chips: the stage's EFFECTIVE format in the public line's own words (I-1)", () => {
+  const dict = enPublic as Dict;
+  const division = football.configSchema.parse(football.variants["11-a-side"]) as Record<string, unknown>;
+  const chipsFor = (rules: Record<string, unknown>, kind: StageKind = "knockout") =>
+    stageSummaryClauses("football", football, kind, resolvedStageCfg(football, division, kind, rules));
+
+  it("a stage override that differs from the division shows the override, and the inherited stage shows the division's", () => {
+    const divisionMinutes = (division.extraTime as { halfMinutes: number }).halfMinutes;
+    const stageMinutes = divisionMinutes + 5;
+    expect(chipsFor({ extraTime: { enabled: true, halfMinutes: stageMinutes } }), "override").toContainEqual({ key: "format.rules.decider.extraTime", params: { n: stageMinutes } });
+    expect(chipsFor({ extraTime: { enabled: true, halfMinutes: stageMinutes } }), "the division's number is not said").not.toContainEqual({ key: "format.rules.decider.extraTime", params: { n: divisionMinutes } });
+    expect(chipsFor({ extraTime: { enabled: true, halfMinutes: divisionMinutes } }), "inherited").toContainEqual({ key: "format.rules.decider.extraTime", params: { n: divisionMinutes } });
+    // A half length override reaches the format chip; kicks reach the penalties chip.
+    expect(chipsFor({ halfMinutes: 30 })).toContainEqual({ key: "format.rules.period.halves", params: { minutes: 30 } });
+    expect(chipsFor({ shootout: true, shootoutAttempts: 3 })).toContainEqual({ key: "format.rules.decider.penalties", params: { n: 3 } });
+  });
+
+  it("the abandon policy is always said, in the stage's own value", () => {
+    expect(chipsFor({})).toContainEqual({ key: "format.rules.abandon.replay" });
+    expect(chipsFor({ abandonPolicy: "award" })).toContainEqual({ key: "format.rules.abandon.award" });
+    expect(chipsFor({ abandonPolicy: "award" })).not.toContainEqual({ key: "format.rules.abandon.replay" });
+  });
+
+  it("a decider that is off is not a chip, and a refused cfg says nothing (empty case)", () => {
+    const off = chipsFor({ extraTime: { enabled: false, halfMinutes: 15 }, shootout: false });
+    expect(off.some((c) => c.key === "format.rules.decider.extraTime" || c.key === "format.rules.decider.penalties")).toBe(false);
+    expect(off, "a bracket stage with no decider says so, as the public line does").toContainEqual({ key: "format.rules.decider.none" });
+    expect(stageSummaryClauses("football", football, "knockout", null)).toEqual([]);
+  });
+
+  it("over every sport, declared cfg and stage kind: it is the public line plus the abandon clause, and every clause has words (counted)", () => {
+    let checked = 0;
+    let withChips = 0;
+    const sportsWithChips = new Set<string>();
+    for (const m of builtinModules)
+      for (const { cfg } of declaredCfgs(m))
+        for (const kind of ["league", "knockout"] as StageKind[]) {
+          const resolved = resolvedStageCfg(m, cfg as Record<string, unknown>, kind, {});
+          expect(resolved, `${m.key}/${kind}`).not.toBeNull();
+          const chips = stageSummaryClauses(m.key, m, kind, resolved);
+          // The public composer, given a division that plays the same abandon policy, says everything but the abandon clause.
+          const expected = [...(matchRulesLine(m.key, m, resolved, resolved, kind) ?? []), ...describeAbandon(m, resolved)];
+          expect(chips, `${m.key}/${kind}`).toEqual(expected);
+          for (const c of chips) {
+            expect(c.key.startsWith("format.rules."), `${m.key}: ${c.key}`).toBe(true);
+            const text = rulesChipText(dict, c);
+            expect(text, `${m.key}: ${c.key} has words in the public dictionary`).not.toBe(c.key);
+            expect(text.charAt(0), `${m.key}: a chip is capitalised`).toBe(text.charAt(0).toUpperCase());
+          }
+          if (chips.length > 0) {
+            withChips++;
+            sportsWithChips.add(m.key);
+          }
+          checked++;
+        }
+    expect(checked).toBe(builtinModules.reduce((n, m) => n + declaredCfgs(m).length * 2, 0));
+    expect(withChips).toBeGreaterThan(0);
+    expect([...sportsWithChips].sort(), "every sport has a stage kind that says something").toEqual(builtinModules.map((m) => m.key).sort());
+  });
+});
+
 describe("the notice and the public line agree, and the engine's declaration says when a level match can remain (M-3)", () => {
   it("over every declared cfg, bracket kind and the every-decider-off setup: allOff <=> the public line says none; level <=> the engine says so (counted)", () => {
     let checked = 0;
@@ -216,8 +384,12 @@ describe("the notice and the public line agree, and the engine's declaration say
           const says = describeDeciders(m, kind, cfg).some((c) => c.key === "format.rules.decider.none");
           expect(off, `${m.key} ${name} ${kind}: the notice and the public line disagree on "no decider"`).toBe(says);
           const may = decidersMayEndLevel(m, kind, cfg);
-          // The engine's own declaration is the oracle: a level match remains exactly when a decider is on and it says so.
-          expect(may, `${m.key} ${name} ${kind}`).toBe(!off && bracketMayEndLevel(m, kind, cfg));
+          // The engine's own declaration is the oracle, read DIRECTLY (not through `bracketMayEndLevel`, which is what the
+          // notice calls): the sport's `canEndLevel` over the cfg with its bracket overlay laid on. A level match remains
+          // exactly when a decider is on and the declaration says one can.
+          const forced = typeof m.bracketDeciders === "function" ? (m.bracketDeciders(cfg as never) as Record<string, unknown>) : {};
+          const declared = m.canEndLevel === undefined ? false : m.canEndLevel({ ...cfg, ...forced } as never);
+          expect(may, `${m.key} ${name} ${kind}`).toBe(!off && declared);
           // Whatever the notice calls "off", the engine must agree a level match can then stand.
           if (off) expect(bracketMayEndLevel(m, kind, cfg), `${m.key} ${name} ${kind}: held, but the engine says it cannot end level`).toBe(true);
           expect(deciderNotice(m, kind, cfg)).toBe(off ? "off" : may ? "level" : null);

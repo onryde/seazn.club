@@ -20,8 +20,11 @@ vi.mock("@/server/page-auth", () => pageAuth);
 vi.mock("@/server/usecases/stages", () => stagesSpies);
 
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: vi.fn(async () => "en") }));
+// W2c Task 17: the PUBLIC dictionary carries the rules-line clauses the stage format row's chips are worded from; the double
+// holds one of them and one key that is not a clause, so the slice the page hands the panel can be told from the whole.
+const PUBLIC_DICT = { "format.rules.decider.extraTime": "extra time (2 × {n} min)", "landing.title": "not a rules-line key" };
 vi.mock("@/lib/i18n", () => ({
-  getDictionary: vi.fn(async () => ({})),
+  getDictionary: vi.fn(async (_locale: unknown, ns: string) => (ns === "public" ? PUBLIC_DICT : {})),
   t: (_dict: unknown, key: string) => key,
 }));
 vi.mock("@/server/usecases/divisions", () => ({
@@ -149,7 +152,7 @@ const renderTab = () =>
     searchParams: Promise.resolve({ tab: "fixtures" }),
   });
 
-type PanelProps = { phase?: string; awaitingSettle?: readonly string[] };
+type PanelProps = { phase?: string; awaitingSettle?: readonly string[]; ruleDict?: Record<string, string> };
 
 describe("the division page reads an abandoned final awaiting its settle as owed work (fix round 1, M3/M10)", () => {
   beforeEach(() => {
@@ -180,5 +183,25 @@ describe("the division page reads an abandoned final awaiting its settle as owed
     expect(props.awaitingSettle).toEqual([FINAL.id]);
     expect(deskSpies.listFixturesAwaitingSettle).toHaveBeenCalledTimes(1);
     expect(deskSpies.listFixturesAwaitingSettle.mock.calls[0]![1], "asked about THIS division").toBe("div-1");
+  });
+});
+
+describe("the fixtures tab hands the stage format row the rules-line words (W2c Task 17, review I-1)", () => {
+  beforeEach(() => {
+    pageAuth.requireDivisionPage.mockReset().mockResolvedValue(PAGE);
+    stagesSpies.listStages.mockReset().mockResolvedValue([KO_STAGE]);
+    stagesSpies.getSeedProposal.mockReset();
+    stagesSpies.getStageRosterDrift.mockReset().mockResolvedValue({ ghosts: [], unplaced: [] });
+    fixtureSpies.listDivisionFixtures.mockReset().mockResolvedValue([FINAL]);
+    deskSpies.listFixturesAwaitingSettle.mockReset().mockResolvedValue(new Set());
+  });
+
+  it("StagesPanel gets the format.rules.* slice of the PUBLIC dictionary and nothing else of it", async () => {
+    const panel = find(await renderTab(), StagesPanel);
+    expect(panel, "the fixtures tab mounts StagesPanel").not.toBeNull();
+    const props = panel!.props as PanelProps;
+    expect(props.ruleDict, "the seam is wired: the chips have words to resolve against").toBeDefined();
+    expect(props.ruleDict).toEqual({ "format.rules.decider.extraTime": PUBLIC_DICT["format.rules.decider.extraTime"] });
+    expect(Object.hasOwn(props.ruleDict!, "landing.title"), "a key that is not a clause is not sent").toBe(false);
   });
 });

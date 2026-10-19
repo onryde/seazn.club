@@ -20,7 +20,8 @@ import { BEST_OF_ONE_PAIR } from "@/lib/match-rules/best-of-one";
 import type { MessageKey } from "@/lib/messages";
 import { moduleFor, stageFieldsFor } from "@/lib/rule-scope";
 import { liveStageCfg, offByFalse } from "@/lib/stage-decider-off";
-import { deciderIsOn } from "@/server/public-site/describe-rules";
+import { deciderIsOn, describeAbandon, describeDeciders, describeMatchRules } from "@/server/public-site/describe-rules";
+import type { RulesClause } from "@/lib/rules-line";
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const topOf = (path: string): string => path.split(".")[0]!;
@@ -44,7 +45,7 @@ export interface StageSection {
 /**
  * The shown fields in the row's sections, in the order they appear: Match format, Deciders, If abandoned (Points is the
  * stage points screen's, Task 18). A field is the abandon section's when it edits `abandonPolicy`, a DECIDER's when
- * every key it edits is a decider the engine declares for this stage or a bounded detail of one (`matchBound`: the kicks
+ * every key it edits is a decider the engine declares for this stage or a detail of one (`detailOf`: the kicks
  * of a shoot-out, the minutes of an overtime), else the format's. Read from the engine's `ruleKeys`, never a list of
  * field names. A section no field falls in is absent, not empty.
  */
@@ -52,7 +53,7 @@ export function stageSections(module: AnySportModule, kind: StageKind, variant: 
   const deciders = new Set(deciderKeysFor(module, kind, variant).map(topOf));
   const bounded = new Set(
     Object.entries(module.ruleKeys ?? {})
-      .filter(([, fact]) => fact.matchBound !== undefined)
+      .filter(([, fact]) => fact.detailOf !== undefined)
       .map(([key]) => topOf(key)),
   );
   const sectionOf = (f: RuleField): StageSectionId => {
@@ -65,6 +66,59 @@ export function stageSections(module: AnySportModule, kind: StageKind, variant: 
   return (["format", "deciders", "abandon"] as const)
     .map((id) => ({ id, fields: shown.filter((f) => sectionOf(f) === id) }))
     .filter((s) => s.fields.length > 0);
+}
+
+/**
+ * The decider a field is a DETAIL of (the kicks of a shoot-out, the minutes of an overtime), as the engine declares it
+ * (`RuleKeyFact.detailOf`): every key the field edits must name the SAME decider. Null for any other field, including one
+ * that edits a decider's own key (a switch is not a detail) and one the engine declares nothing for.
+ */
+export function deciderOfDetail(module: AnySportModule, field: RuleField): string | null {
+  const facts = module.ruleKeys ?? {};
+  let owner: string | null = null;
+  for (const key of field.edits) {
+    const of = Object.hasOwn(facts, key) ? facts[key]!.detailOf : undefined;
+    if (of === undefined || (owner !== null && owner !== of)) return null;
+    owner = of;
+  }
+  return owner;
+}
+
+/**
+ * Review M-4: a detail whose decider is OFF in the resolved cfg means nothing there, and for the period sports a save
+ * drops it silently (switching the shoot-out off writes `shootout: null`, taking its kicks with it). The row holds such a
+ * field instead. Read through `deciderIsOn`, the public line's own table, so the editor and the line agree on "off"; a cfg
+ * the schema refuses (null) holds nothing, and a decider no describer knows is never read as off.
+ */
+export function detailIsInert(module: AnySportModule, field: RuleField, resolved: Record<string, unknown> | null): boolean {
+  const decider = deciderOfDetail(module, field);
+  return decider !== null && resolved !== null && !deciderIsOn(module, decider, resolved);
+}
+
+// ---------------------------------------------------------------------------
+// The collapsed row's chips (review I-1).
+// ---------------------------------------------------------------------------
+
+/**
+ * The EFFECTIVE format of a stage as clauses, for the collapsed row's chips: what the stage plays under its division and
+ * its own rules (`resolvedStageCfg`), worded by the public line's own describers - the format (`describeMatchRules`),
+ * how a tied match ends (`describeDeciders`, for this `kind`) and the abandon policy (`describeAbandon`) - so the row and
+ * the public pages can never word one format two ways. The abandon clause is always said here (the public line says it only
+ * where the stage changed it), because the row is where the organiser reads what happens. Nothing for a cfg the schema
+ * refuses, and nothing a describer has no words for: no table of clauses is kept here.
+ */
+export function stageSummaryClauses(
+  sportKey: string,
+  module: AnySportModule,
+  kind: StageKind,
+  resolved: Record<string, unknown> | null,
+): RulesClause[] {
+  if (resolved === null) return [];
+  return [
+    ...(describeMatchRules(sportKey, module, resolved) ?? []),
+    ...describeDeciders(module, kind, resolved),
+    ...describeAbandon(module, resolved),
+  ];
 }
 
 // ---------------------------------------------------------------------------
@@ -156,12 +210,9 @@ export function abandonOptionStates(module: AnySportModule, values: Record<strin
   const base = Object.values(module.variants)[0] ?? {};
   return (module.abandonOptions ?? []).map((value) => {
     const parsed = module.configSchema.safeParse({ ...base, ...values, abandonPolicy: value });
-    const reasonKey = parsed.success
-      ? null
-      : (parsed.error.issues
-          .filter((i) => i.path.length === 1 && i.path[0] === "abandonPolicy")
-          .map((i) => SHARE_REASONS.get(i.message))
-          .find((k) => k !== undefined) ?? null);
+    // The two share refusals are raised only on `abandonPolicy` (generic.ts, carrom.ts), and the lookup is keyed on their
+    // exact sentences, so any other issue the schema reports finds no reason and the option stays offered.
+    const reasonKey = parsed.success ? null : (parsed.error.issues.map((i) => SHARE_REASONS.get(i.message)).find((k) => k !== undefined) ?? null);
     return { value, disabled: reasonKey !== null, reasonKey };
   });
 }
@@ -214,10 +265,8 @@ export function stageFormatSaveFragment(
   values: Record<string, string>,
   inherited: Record<string, unknown> = {},
 ): Record<string, unknown> {
-  const untouched =
-    Object.keys(opened).length === Object.keys(values).length && Object.keys(opened).every((k) => opened[k] === values[k]);
-  if (untouched) return alignBestOfOnePoints(sportKey, stored, inherited);
-
+  // Nothing touched needs no branch of its own: `now` and `before` build the same, so `out` is empty and the last line
+  // re-sends the stored fragment verbatim.
   const sportModule = moduleFor(sportKey);
   const now = buildRuleOverride(sportKey, values, inherited);
   const before = buildRuleOverride(sportKey, opened, inherited);

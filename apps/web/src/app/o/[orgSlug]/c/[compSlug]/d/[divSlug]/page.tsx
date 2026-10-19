@@ -9,6 +9,7 @@ import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
 import { sportLabel } from "@/lib/scoring-vocab";
 import { variantWord } from "@/lib/variant-label-keys";
+import { rulesLineDict } from "@/lib/rules-line";
 import { requireDivisionPage } from "@/server/page-auth";
 import { getDivision, listVariantOptions } from "@/server/usecases/divisions";
 import { divisionConsumesSlotOnArchive } from "@/server/usecases/division-slots";
@@ -464,6 +465,9 @@ export default async function DivisionPage({
   // locale — and so do the pool labels below. Loaded only on the tab that
   // draws them, like `standings`.
   const publicDict = tab === "standings" ? await getDictionary(locale, "public") : {};
+  // The fixtures tab's stage format rows say each stage's effective rules as chips, in the PUBLIC line's own clauses
+  // (`format.rules.*`, W2c Task 17): only that slice crosses into the client panel.
+  const ruleDict = tab === "fixtures" ? rulesLineDict(await getDictionary(locale, "public")) : undefined;
 
   // Standings per table stage (+ per pool), with pool labels.
   const tableStages = stages.filter((s) => TABLE_KINDS.has(s.kind));
@@ -850,6 +854,7 @@ export default async function DivisionPage({
               sportKey={division.sport_key}
               variantKey={division.variant_key}
               divisionConfig={(division.config ?? {}) as Record<string, unknown>}
+              ruleDict={ruleDict}
               formatLockedStageIds={formatLockedStages}
               tz={scheduleSettings.tz}
               // The GOVERNING clock, resolved here exactly as the schedule page

@@ -14,7 +14,7 @@ import type { StageKind } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
 import type { MessageKey } from "@/lib/messages";
 import { RuleFieldControl, type OptionState } from "./rule-field-control";
-import { abandonOptionStates, stageSections, type StageSectionId } from "./stage-row-model";
+import { abandonOptionStates, deciderOfDetail, detailIsInert, stageSections, type StageSectionId } from "./stage-row-model";
 
 const SECTION_TITLE: Record<StageSectionId, MessageKey> = {
   format: "stageRules.section.format",
@@ -34,6 +34,7 @@ export function StageRuleFields({
   onChange,
   disabled,
   divisionConfig,
+  resolved,
 }: {
   sportKey: string;
   module: AnySportModule;
@@ -43,6 +44,9 @@ export function StageRuleFields({
   onChange: (next: Record<string, string>) => void;
   disabled: boolean;
   divisionConfig: Record<string, unknown>;
+  /** The cfg this stage would play with the edit (`resolvedStageCfg`), or null when the schema refuses it. A decider's
+   *  detail (the kicks of a shoot-out) is held while the decider is off in it (review M-4). */
+  resolved: Record<string, unknown> | null;
 }) {
   const msg = useMsg();
   const reasonId = useId();
@@ -81,6 +85,10 @@ export function StageRuleFields({
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {s.fields.map((field) => {
                 const set = (values[field.key] ?? "") !== "";
+                // A decider's detail while that decider is off: held, with the reason beside it (the decider is named by
+                // the label of the field that switches it).
+                const inert = detailIsInert(module, field, resolved);
+                const switchLabel = inert ? sections.flatMap((x) => x.fields).find((f) => f.edits.length === 1 && f.edits[0] === deciderOfDetail(module, field))?.label : undefined;
                 return (
                   <div
                     key={field.key}
@@ -93,7 +101,7 @@ export function StageRuleFields({
                       field={field}
                       value={values[field.key] ?? ""}
                       onEdit={(raw) => edit(field.key, raw)}
-                      disabled={disabled}
+                      disabled={disabled || inert}
                       inherited={divisionConfig}
                       optionStates={s.id === "abandon" ? optionStates : undefined}
                       describedBy={s.id === "abandon" && reasons.length > 0 ? reasonId : undefined}
@@ -101,6 +109,11 @@ export function StageRuleFields({
                     <span className={`mt-1 block text-[11px] ${set ? "text-teal-800" : "text-slate-600"}`}>
                       {msg(set ? "stageRules.source.stage" : "stageRules.source.division")}
                     </span>
+                    {inert && switchLabel !== undefined && (
+                      <span className="mt-1 block text-[11px] text-slate-600" data-testid={`stage-rule-detail-off-${topSegment(field)}`}>
+                        {msg("stageRules.detail.off", { decider: switchLabel })}
+                      </span>
+                    )}
                     {s.id === "abandon" && reasons.length > 0 && (
                       <ul id={reasonId} className="mt-1 space-y-0.5 text-[11px] text-slate-600">
                         {reasons.map(([value, state]) => (

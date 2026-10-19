@@ -31,6 +31,10 @@ import { BRACKET_KINDS } from "@seazn/engine/core";
 import { stageDefaultsFor } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { decidersOffRules, mergedStageRules, stageRulesOverlay } from "@/lib/stage-decider-off";
+import { declaredCfgs } from "@seazn/engine/testkit";
+import enPublic from "@/dictionaries/en/public.json";
+import type { Dict } from "@/lib/i18n-constants";
+import { rulesChipText, rulesLineDict } from "@/lib/rules-line";
 
 // Same two mocks every `stages-panel-*.test.tsx` uses — this panel is rendered
 // bare, with no provider tree.
@@ -130,8 +134,12 @@ describe("the three states of the Match format row", () => {
     });
     expect(html).toContain('data-stage-format-state="locked"');
     const row = formatRow(html);
-    expect(row).toContain("Locked");
     expect(row).toContain("Best of 1");
+    // M-2: the lock is stated ONCE, in the lock line; the header carries the format alone, no state clause.
+    expect(row).not.toContain("Stage override");
+    expect(row).not.toContain("Same as division");
+    expect(row).not.toContain("Locked");
+    expect(html.match(/has started/g)?.length, "one statement of the lock").toBe(1);
     expect(row).not.toContain('data-testid="stage-format-edit"');
     expect(row).not.toContain('data-testid="stage-format-clear"');
   });
@@ -217,6 +225,7 @@ describe("the lock line (S4) and the read-only view", () => {
     const html = panel({ stages: stageWith({ bestOf: 1 }), formatLockedStageIds: [STAGE_ID] });
     expect(html).toContain('data-testid="stage-format-locked"');
     expect(html).toContain("This stage has started");
+    expect(html.match(/has started/g)?.length, "one statement of the lock (M-2)").toBe(1);
     expect(html).toContain("See the fixtures");
     expect(html).toContain('data-testid="stage-format-view"'); // read the rules without being able to change them
     expect(html).not.toContain('data-testid="stage-format-edit"');
@@ -246,6 +255,9 @@ describe("the deciders notice on the row reads the RESOLVED cfg (carry G1) and t
     const offHtml = panel({ sportKey: "football", divisionConfig: footballDivision, stages: koStage(off) });
     expect(offHtml).toContain('data-testid="stage-deciders-off"');
     expect(offHtml).not.toContain('data-testid="stage-deciders-level"');
+    // M-5: the notice appears while the organiser edits, so it is a status (announced), not a note.
+    expect(offHtml).toMatch(/role="status"[^>]*data-testid="stage-deciders-off"/);
+    expect(offHtml).not.toContain('role="note"');
     const preset = stageDefaultsFor(mod("football"), "knockout", null);
     expect(Object.keys(preset).length, "premise: football declares a knockout preset").toBeGreaterThan(0);
     const presetHtml = panel({ sportKey: "football", divisionConfig: footballDivision, stages: koStage(preset) });
@@ -277,6 +289,76 @@ describe("the deciders notice on the row reads the RESOLVED cfg (carry G1) and t
     expect(panel({ sportKey: "boardgame", divisionConfig: chessDivision, stages: koStage({ tiebreakRungs: one }) })).not.toContain(
       'data-testid="stage-deciders-off"',
     );
+  });
+});
+
+describe("the collapsed row's chips say the stage's EFFECTIVE format in the public line's words (I-1)", () => {
+  const ruleDict = rulesLineDict(enPublic as Dict);
+  const football = builtinModules.find((m) => m.key === "football")!;
+  // A division that plays extra time (15-minute halves), so a stage that inherits it has a chip to show and a stage that
+  // sets its own number has a different one.
+  const divisionMinutes = 15;
+  const division = {
+    ...(football.configSchema.parse(football.variants["11-a-side"]) as Record<string, unknown>),
+    extraTime: { enabled: true, halfMinutes: divisionMinutes },
+  };
+  const stage = (rules: Record<string, unknown> | null, kind = "knockout"): Record<string, unknown>[] => [
+    { id: STAGE_ID, seq: 1, kind, name: "KO", config: rules === null ? {} : { rules }, progression: null, status: "active" },
+  ];
+  const chip = (key: string, params?: Record<string, string | number>): string => rulesChipText(ruleDict, { key, params });
+  const chipsOf = (html: string): string[] => {
+    const start = html.indexOf('data-testid="stage-format-chips"');
+    if (start === -1) return [];
+    const list = html.slice(start, html.indexOf("</ul>", start));
+    return [...list.matchAll(/<li[^>]*>([^<]*)<\/li>/g)].map((m) => m[1]!.replace(/&#x27;/g, "'"));
+  };
+  const withChips = (over: Record<string, unknown>): string =>
+    panel({ sportKey: "football", divisionConfig: division, ruleDict, ...over });
+
+  it("rulesLineDict keeps exactly the rules-line keys, so the whole public dictionary does not cross into the client", () => {
+    const keys = Object.keys(ruleDict);
+    expect(keys.length).toBeGreaterThan(0);
+    expect(keys.every((k) => k.startsWith("format.rules."))).toBe(true);
+    expect(keys.length).toBe(Object.keys(enPublic).filter((k) => k.startsWith("format.rules.")).length);
+    expect(keys.length, "and it is a slice, not the whole dictionary").toBeLessThan(Object.keys(enPublic).length);
+  });
+
+  it("a stage override that differs from the division shows the OVERRIDE; the inherited stage shows the division's", () => {
+    const stageMinutes = divisionMinutes + 5;
+    const overridden = chipsOf(withChips({ stages: stage({ extraTime: { enabled: true, halfMinutes: stageMinutes } }) }));
+    expect(overridden).toContain(chip("format.rules.decider.extraTime", { n: stageMinutes }));
+    expect(overridden).not.toContain(chip("format.rules.decider.extraTime", { n: divisionMinutes }));
+    const inherited = chipsOf(withChips({ stages: stage(null) }));
+    expect(inherited, "a football knockout with no rules plays the division's extra time").toContain(chip("format.rules.decider.extraTime", { n: divisionMinutes }));
+    // the abandon policy is always said, in the stage's value
+    expect(overridden).toContain(chip("format.rules.abandon.replay"));
+    expect(chipsOf(withChips({ stages: stage({ abandonPolicy: "award" }) }))).toContain(chip("format.rules.abandon.award"));
+  });
+
+  it("a locked stage still shows its chips, and a viewer reads them too", () => {
+    expect(chipsOf(withChips({ stages: stage({ halfMinutes: 30 }), formatLockedStageIds: [STAGE_ID] }))).toContain(chip("format.rules.period.halves", { minutes: 30 }));
+    expect(chipsOf(withChips({ stages: stage({ halfMinutes: 30 }), canEdit: false }))).toContain(chip("format.rules.period.halves", { minutes: 30 }));
+  });
+
+  it("no dictionary slice, no chips - and the row still renders (the page owns passing it)", () => {
+    const html = withChips({ ruleDict: undefined, stages: stage({ halfMinutes: 30 }) });
+    expect(html).not.toContain('data-testid="stage-format-chips"');
+    expect(html).toContain('data-testid="stage-format-edit"');
+  });
+
+  it("every sport says something for its stage, in the real dictionary's words, never a raw key (counted)", () => {
+    let rendered = 0;
+    const withAny = new Set<string>();
+    for (const m of builtinModules)
+      for (const kind of ["league", "knockout"]) {
+        const cfg = declaredCfgs(m)[0]!.cfg as Record<string, unknown>;
+        const chips = chipsOf(panel({ sportKey: m.key, divisionConfig: cfg, ruleDict, stages: stage(null, kind) }));
+        rendered++;
+        for (const c of chips) expect(c.startsWith("format.rules."), `${m.key}/${kind}: a raw key ${c}`).toBe(false);
+        if (chips.length > 0) withAny.add(m.key);
+      }
+    expect(rendered).toBe(builtinModules.length * 2);
+    expect([...withAny].sort(), "every sport has chips on at least one stage kind").toEqual(builtinModules.map((m) => m.key).sort());
   });
 });
 
