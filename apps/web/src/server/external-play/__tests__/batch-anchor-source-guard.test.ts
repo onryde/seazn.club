@@ -12,6 +12,12 @@
 //      inside the call that turns it into an anchor (`boardAnchor(...)`, `anchorOfRow(...)`).
 //   3. THE CONSTANTS. `DEADLINE_AFTER_MS`, `WINDOW_OPEN_LEAD_MS` and `EMAIL_LEAD_MS` are used in arithmetic nowhere but window.ts
 //      (a reader may print `DEADLINE_AFTER_MS / 60_000` as a count of minutes, the one listed exception).
+//   4. THE STAMP'S WRITERS. `stampFixtureCheckIn` (me.ts) keeps a COUNTED check-in only when it is handed the board's window; called
+//      without one it re-stamps, and a late tap then moves a counted check-in past the deadline, so `noShow` forfeits by both
+//      (the build review's I-1 shipped exactly so, from a second caller that never passed a window). Every production call is
+//      counted per file against a pinned table, and each call's arguments must name `window`: a third caller fails the count, a
+//      caller that drops the window fails the argument check. (me.ts's own call hands `{}` for a fixture whose round was never opened,
+//      deliberately - a ternary on `open`; the check reads the call's text, so that branch is the one place it cannot see.)
 // And the table of READERS (the spec names 15; the scan found a 16th - openRound's re-invite skip; the build's review found a 17th - the
 // QR self check-in, which hands the stamp the board's window) is closed over the tests: each
 // reader id appears in exactly one test title as `[reader:<id>]`, and no title carries an id that is not in the table.
@@ -129,6 +135,26 @@ export function consumerCalls(src: string): Call[] {
 
 const STAMP = /\b(roundOpenedAt|openedAt|round_opened_at)\b/;
 
+/** Every production file that calls `stampFixtureCheckIn`, with its pinned count (the definition in me.ts is not a call). */
+const STAMP_WRITERS: readonly { file: string; calls: number }[] = [
+  { file: "server/usecases/external-play/room.ts", calls: 1 },
+  { file: "server/usecases/me.ts", calls: 1 },
+];
+
+/** Every call of `stampFixtureCheckIn` in `src` (definition and comments excluded), with its balanced argument text. */
+export function stampCalls(src: string): { args: string; line: number }[] {
+  const { live } = lex(src);
+  const out: { args: string; line: number }[] = [];
+  const re = /\bstampFixtureCheckIn\(/g;
+  for (let m = re.exec(live); m !== null; m = re.exec(live)) {
+    if (/function\s+$/.test(live.slice(Math.max(0, m.index - 24), m.index))) continue; // the definition
+    const args = argsAt(live, m.index + m[0].length - 1);
+    if (args === null) continue;
+    out.push({ args, line: live.slice(0, m.index).split("\n").length });
+  }
+  return out;
+}
+
 /** Calls whose argument names the round's stamp outside an anchor-making call. */
 export function rawStampCalls(src: string): Call[] {
   return consumerCalls(src).filter((c) => STAMP.test(withoutAnchorCalls(c.args)));
@@ -176,7 +202,48 @@ describe("the scanner (anti-vacuity: it must see what it guards)", () => {
   });
 });
 
+describe("the check-in stamp's writers: the scanner (it must see what it guards)", () => {
+  const GOOD = `
+    import { stampFixtureCheckIn } from "@/server/usecases/me";
+    export async function stampFixtureCheckIn(person, fixture, org, opts = {}) { return opts; }
+    // stampFixtureCheckIn(p, f, o) in a comment is nothing
+    await stampFixtureCheckIn(p, f, o, { at: now, window: { opensAt, deadline } });
+    return stampFixtureCheckIn(p, f, o, open ? { window: windowFor(open.anchor) } : {});
+  `;
+  it("counts the live calls, skips the definition, the import and the comment, and passes a fixture that hands a window", () => {
+    const calls = stampCalls(GOOD);
+    expect(calls.length, "calls seen").toBe(2);
+    for (const c of calls) expect(c.args, `line ${c.line}`).toMatch(/\bwindow\b/);
+  });
+  it("its mutants fail: a call with no options, with only `at`, and with an empty object name no window", () => {
+    for (const bad of ["stampFixtureCheckIn(p, f, o);", "stampFixtureCheckIn(p, f, o, { at: now });", "stampFixtureCheckIn(p, f, o, {});"]) {
+      const calls = stampCalls(bad);
+      expect(calls.length, bad).toBe(1);
+      expect(calls[0]!.args, bad).not.toMatch(/\bwindow\b/);
+    }
+  });
+});
+
 describe("the production tree", () => {
+  it("every stampFixtureCheckIn call is in the pinned table and hands the board's window (a new writer, or a dropped window, fails here)", () => {
+    const found = new Map<string, number>();
+    const unwindowed: string[] = [];
+    let calls = 0;
+    for (const rel of allSources) {
+      const src = read(rel);
+      if (!/\bstampFixtureCheckIn\b/.test(src)) continue;
+      for (const c of stampCalls(src)) {
+        found.set(rel, (found.get(rel) ?? 0) + 1);
+        calls += 1;
+        if (!/\bwindow\b/.test(c.args)) unwindowed.push(`${rel}:${c.line}`);
+      }
+    }
+    expect(Object.fromEntries([...found].sort())).toEqual(Object.fromEntries(STAMP_WRITERS.map((w) => [w.file, w.calls] as const).sort()));
+    expect(unwindowed, "calls that name no window").toEqual([]);
+    expect(calls, "anti-vacuity: the scan saw the calls").toBe(STAMP_WRITERS.reduce((n, w) => n + w.calls, 0));
+    expect(calls).toBeGreaterThan(0);
+  });
+
   it("every consumer call site is in the pinned table, with its pinned count (a new reader fails here)", () => {
     let calls = 0;
     const found = new Map<string, number>();
