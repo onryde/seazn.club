@@ -1073,6 +1073,7 @@ async function renderMatchRooms(): Promise<Segment[]> {
     frozen: null,
     canAct: true,
     otherAccount: null,
+    account: { state: "ok" },
     onlineChessOff: false,
     boardClosed: false,
     creation: null,

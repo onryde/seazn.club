@@ -46,6 +46,7 @@ import {
   NotOpenedCard,
   OffForClubCard,
   RelinkCard,
+  WrongAccountCard,
   RepairingCard,
   RevokedNotice,
   SeatHeldNotice,
@@ -307,6 +308,7 @@ export function RoomShell({
           checkingCamera={checkingCamera}
           startBudgetSpent={cameraStarting && !checkingCamera}
           relinkHref={relinkHref}
+          selfPath={selfPath}
           locale={locale}
           t={t}
           plural={plural}
@@ -379,6 +381,7 @@ export function Screen({
   checkingCamera = false,
   startBudgetSpent = false,
   relinkHref,
+  selfPath = null,
   locale,
   t,
   plural,
@@ -398,6 +401,9 @@ export function Screen({
   /** D23-fix: the seat answered `camera_starting` and the room's own poll budget on it is spent — nothing left to wait for. */
   startBudgetSpent?: boolean;
   relinkHref: string;
+  /** This page's own path and query (the personal link included): where "Switch account" signs back in to. Absent ⇒ the
+   *  room's canonical path, which a session identity reads without the link. */
+  selfPath?: string | null;
   locale: string;
   t: RoomT;
   plural: ReturnType<typeof usePlural>;
@@ -555,6 +561,8 @@ export function Screen({
     }
     case "relink":
       return <RelinkCard relinkHref={relinkHref} t={t} />;
+    case "wrongAccount":
+      return <WrongAccountCard name={snap.you.name} email={screen.viewerEmail} next={selfPath ?? `${snap.links.fixture}/play`} t={t} />;
     case "notOpened":
       return <NotOpenedCard t={t} />;
     case "batchWait":

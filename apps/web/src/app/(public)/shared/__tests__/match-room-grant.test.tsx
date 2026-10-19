@@ -42,6 +42,7 @@ const SNAP: RoomSnapshot = {
   frozen: null,
   canAct: false,
   otherAccount: null,
+  account: { state: "ok" },
   onlineChessOff: false,
   boardClosed: false,
   creation: null,

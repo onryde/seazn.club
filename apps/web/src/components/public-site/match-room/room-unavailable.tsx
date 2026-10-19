@@ -6,7 +6,7 @@
 // the re-pair card, headerless for the same reason, never card 7's "it may
 // belong to other players", and re-asking the page until the board is paired
 // again (RepairingRefresh).
-import { RepairingCard, UnavailableCard } from "./room-cards";
+import { NoAccountCard, RepairingCard, UnavailableCard } from "./room-cards";
 import type { RoomT } from "./room-copy";
 import { RepairingRefresh } from "./room-repairing-refresh";
 
@@ -26,6 +26,16 @@ export function RoomRepairingHeaderless({ t }: { t: RoomT }) {
     <div data-testid="match-room" data-screen="repairing" className={HEADERLESS}>
       <RepairingCard t={t} />
       <RepairingRefresh />
+    </div>
+  );
+}
+
+/** A VERIFIED personal link for a seat tied to no Seazn account (the server's 409 ROOM_SEAT_NO_ACCOUNT): no seat to read, so
+ *  the card is headerless like card 7 - calm, with no Lichess prompt and no sign-in to offer. */
+export function RoomNoAccountHeaderless({ fixtureHref, t }: { fixtureHref: string; t: RoomT }) {
+  return (
+    <div data-testid="match-room" data-screen="noAccount" className={HEADERLESS}>
+      <NoAccountCard fixtureHref={fixtureHref} t={t} />
     </div>
   );
 }

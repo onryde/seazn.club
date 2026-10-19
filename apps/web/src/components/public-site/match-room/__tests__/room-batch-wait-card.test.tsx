@@ -133,6 +133,7 @@ describe("the screen: a stamped round whose batch has not opened is the batch wa
       frozen: null,
       canAct: false,
       otherAccount: null,
+      account: { state: "ok" },
       onlineChessOff: false,
       boardClosed: false,
       creation: null,

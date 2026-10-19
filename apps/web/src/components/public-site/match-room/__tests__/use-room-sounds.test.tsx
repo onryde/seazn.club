@@ -50,6 +50,7 @@ function snap(g: RoomGame | null, at = T0): RoomSnapshot {
     frozen: null,
     canAct: true,
     otherAccount: null,
+    account: { state: "ok" },
     onlineChessOff: false,
     boardClosed: false,
     creation: null,

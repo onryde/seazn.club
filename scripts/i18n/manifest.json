@@ -2182,7 +2182,13 @@
     "divset.timeControl.choose": "a166205906c66804",
     "divset.timeControl.help": "eccaf70fd1bad208",
     "divset.timeControl.unsupported": "a495305af1926920",
-    "externalPlay.openRound.startFirst": "bed7105c59d6756c"
+    "externalPlay.openRound.startFirst": "bed7105c59d6756c",
+    "externalPlay.room.state.wrongAccount.title": "609a627c6b93a764",
+    "externalPlay.room.state.wrongAccount.body": "9d175c8caeb19d69",
+    "externalPlay.room.state.wrongAccount.switch": "fedce010cffcb86e",
+    "externalPlay.room.state.wrongAccount.failed": "6e34beff85266a69",
+    "externalPlay.room.state.noAccount.title": "805df327bff3dfc3",
+    "externalPlay.room.state.noAccount.body": "ac5ccbbf96150135"
   },
   "fr": {
     "app.name": "fb56d648fbb9ae92",
@@ -4367,7 +4373,13 @@
     "divset.timeControl.choose": "a166205906c66804",
     "divset.timeControl.help": "eccaf70fd1bad208",
     "divset.timeControl.unsupported": "a495305af1926920",
-    "externalPlay.openRound.startFirst": "bed7105c59d6756c"
+    "externalPlay.openRound.startFirst": "bed7105c59d6756c",
+    "externalPlay.room.state.wrongAccount.title": "609a627c6b93a764",
+    "externalPlay.room.state.wrongAccount.body": "9d175c8caeb19d69",
+    "externalPlay.room.state.wrongAccount.switch": "fedce010cffcb86e",
+    "externalPlay.room.state.wrongAccount.failed": "6e34beff85266a69",
+    "externalPlay.room.state.noAccount.title": "805df327bff3dfc3",
+    "externalPlay.room.state.noAccount.body": "ac5ccbbf96150135"
   },
   "nl": {
     "app.name": "fb56d648fbb9ae92",
@@ -6552,6 +6564,12 @@
     "divset.timeControl.choose": "a166205906c66804",
     "divset.timeControl.help": "eccaf70fd1bad208",
     "divset.timeControl.unsupported": "a495305af1926920",
-    "externalPlay.openRound.startFirst": "bed7105c59d6756c"
+    "externalPlay.openRound.startFirst": "bed7105c59d6756c",
+    "externalPlay.room.state.wrongAccount.title": "609a627c6b93a764",
+    "externalPlay.room.state.wrongAccount.body": "9d175c8caeb19d69",
+    "externalPlay.room.state.wrongAccount.switch": "fedce010cffcb86e",
+    "externalPlay.room.state.wrongAccount.failed": "6e34beff85266a69",
+    "externalPlay.room.state.noAccount.title": "805df327bff3dfc3",
+    "externalPlay.room.state.noAccount.body": "ac5ccbbf96150135"
   }
 }

@@ -41,6 +41,7 @@ function snap(over: Partial<RoomSnapshot> = {}): RoomSnapshot {
     frozen: null,
     canAct: true,
     otherAccount: null,
+    account: { state: "ok" },
     onlineChessOff: false,
     boardClosed: false,
     creation: null,
@@ -348,5 +349,59 @@ describe("cameraEnds (T17B fix 2, D8a)", () => {
     expect(cameraEnds(st({ game: GAME, frozen: "you", canAct: false, result }))).toBe(true);
     expect(cameraEnds(st({ game: GAME, canAct: false, result }))).toBe(true);
     expect(cameraEnds(st({ result }, { seat: refused("camera_lost") }))).toBe(true);
+  });
+});
+
+// Owner staging test 2026-10-19: a personal link opened while signed in as ANOTHER account. The two screens that offer
+// "Link Lichess" (card 8, and seam A's notice) would link the WRONG account, so they give way to the wrong-account card -
+// and ONLY they do: every other screen is the seat's, whoever is looking.
+describe("the wrong-account card stands where the Lichess link prompt would", () => {
+  const WRONG: Partial<RoomSnapshot> = { account: { state: "wrong_account", viewerEmail: "bob@example.test" } };
+  /** Every way the room reaches a Lichess link prompt, each as a state the reducer can really hold. */
+  const PROMPTS: { why: string; want: "relink" | "revoked"; state: (over: Partial<RoomSnapshot>) => RoomState }[] = [
+    { why: "the seat call refused with lichess_link_required", want: "relink", state: (o) => st(o, { seat: refused("lichess_link_required") }) },
+    { why: "the seat call refused with lichess_reconsent_required", want: "relink", state: (o) => st(o, { seat: refused("lichess_reconsent_required") }) },
+    { why: "an act's token was refused (error relink)", want: "relink", state: (o) => st(o, { error: "relink" }) },
+    { why: "Lichess narrowed the grant (grantRefused, P10)", want: "relink", state: (o) => st(o, { grantRefused: true }) },
+    { why: "the viewer's own seat is frozen", want: "revoked", state: (o) => st({ game: GAME, frozen: "you", canAct: false, ...o }) },
+    { why: "the game is on another Lichess account", want: "revoked", state: (o) => st({ game: GAME, canAct: false, otherAccount: "ada_recorded", ...o }) },
+  ];
+
+  it("each prompt, as the seat's own account sees it (the pair), is the prompt; as another account sees it, the wrong-account card carrying that viewer's email", () => {
+    let checked = 0;
+    for (const p of PROMPTS) {
+      expect(roomScreen(p.state({})).kind, `${p.why}: the pair - not mismatched`).toBe(p.want);
+      expect(roomScreen(p.state({ account: { state: "ok" } })).kind, `${p.why}: ok`).toBe(p.want);
+      expect(roomScreen(p.state(WRONG)), p.why).toEqual({ kind: "wrongAccount", viewerEmail: "bob@example.test" });
+      checked += 1;
+    }
+    expect(checked).toBe(PROMPTS.length);
+    expect(new Set(PROMPTS.map((p) => p.want)), "anti-vacuity: both prompt screens reached").toEqual(new Set(["relink", "revoked"]));
+  });
+
+  it("no other screen changes: a mismatched viewer still sees the check-in, a live board, a result, the window cards - the card replaces the prompt, not the room", () => {
+    const rest: { why: string; state: RoomState; kind: string }[] = [
+      { why: "the check-in", state: st(WRONG), kind: "checkin" },
+      { why: "a live board", state: st({ ...WRONG, game: GAME }), kind: "live" },
+      { why: "a held board", state: st({ ...WRONG, game: GAME, canAct: false }), kind: "held" },
+      { why: "a result", state: st({ ...WRONG, result: { outcome: "won", method: "time", score: "1-0" } }), kind: "over" },
+      { why: "not opened", state: st({ ...WRONG, phase: "not_opened" }), kind: "notOpened" },
+      { why: "the window closed", state: st({ ...WRONG, phase: "closed" }), kind: "closed" },
+      { why: "creating", state: st({ ...WRONG, creation: { state: "creating" } }), kind: "creating" },
+      { why: "a camera refusal", state: st(WRONG, { seat: refused("camera_required") }), kind: "cameraRequired" },
+      { why: "a re-pair", state: st(WRONG, { repairing: true }), kind: "repairing" },
+      { why: "not found", state: st(WRONG, { notFound: true }), kind: "unavailable" },
+    ];
+    let checked = 0;
+    for (const r of rest) {
+      expect(roomScreen(r.state).kind, r.why).toBe(r.kind);
+      checked += 1;
+    }
+    expect(checked).toBe(rest.length);
+  });
+
+  it("a result outranks the prompt for a mismatched viewer too: the frozen seat that finished reads how it ended, not the card", () => {
+    const over = st({ ...WRONG, game: GAME, frozen: "you", canAct: false, result: { outcome: "lost", method: "time", score: "0-1" } });
+    expect(roomScreen(over).kind).toBe("over");
   });
 });

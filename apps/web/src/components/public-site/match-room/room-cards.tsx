@@ -4,6 +4,7 @@
 import Link from "next/link";
 import type { RoomT } from "./room-copy";
 import { SeatWaitNote } from "./seat-wait-note";
+import { SwitchAccountButton } from "./switch-account-button";
 
 const ICON = {
   clock: (
@@ -97,7 +98,7 @@ export function StateCard({
           {ICON[icon]}
         </svg>
       ) : null}
-      <h1 className="m-0 text-[17px] font-semibold">{title}</h1>
+      <h1 className="m-0 text-[17px] font-semibold [overflow-wrap:anywhere]">{title}</h1>
       {children}
       {action ? <div className="mt-auto flex flex-col pt-2">{action}</div> : null}
     </section>
@@ -313,6 +314,52 @@ export function RelinkCard({ relinkHref, t }: { relinkHref: string; t: RoomT }) 
     >
       <p className="m-0 text-xs leading-[1.45] text-[#4a3a6b]">{t("settings.account.lichess.consent.body")}</p>
       <p className="m-0 text-xs leading-[1.4] text-[#6b5b8a]">{t("settings.account.lichess.consent.scopes")}</p>
+    </StateCard>
+  );
+}
+
+/** The signed-in account is not the seat's (owner staging test 2026-10-19): who this board is for, who the page sees, and the
+ *  one way out - sign out and back in. Stands where card 8's "Link Lichess" would, which would link the wrong account. The
+ *  seat account's email is never shown, full or masked: `name` is the seat's player, `email` the VIEWER's own. */
+export function WrongAccountCard({ name, email, next, t }: { name: string; email: string; next: string; t: RoomT }) {
+  return (
+    <StateCard
+      testId="room-state-wrong-account"
+      icon="lock"
+      title={t("externalPlay.room.state.wrongAccount.title", { name })}
+      action={
+        <SwitchAccountButton
+          next={next}
+          label={t("externalPlay.room.state.wrongAccount.switch")}
+          failedLabel={t("externalPlay.room.state.wrongAccount.failed")}
+          className={PRIMARY}
+        />
+      }
+    >
+      <p data-testid="room-wrong-account-body" className="m-0 text-sm leading-[1.45] text-[#4a3a6b] [overflow-wrap:anywhere]">
+        {t("externalPlay.room.state.wrongAccount.body", { email })}
+      </p>
+    </StateCard>
+  );
+}
+
+/** The link is valid but the seat is tied to no Seazn account (owner staging test 2026-10-19): calm, no Lichess prompt, no
+ *  sign-in to offer - the organiser ties the seat. Headerless, like card 7: there is no seat to describe. */
+export function NoAccountCard({ fixtureHref, t }: { fixtureHref: string | null; t: RoomT }) {
+  return (
+    <StateCard
+      testId="room-state-no-account"
+      icon="lock"
+      title={t("externalPlay.room.state.noAccount.title")}
+      action={
+        fixtureHref ? (
+          <Link href={fixtureHref} className={OUTLINE} data-testid="room-back-to-fixture">
+            {t("externalPlay.room.backToFixture")}
+          </Link>
+        ) : undefined
+      }
+    >
+      <Body>{t("externalPlay.room.state.noAccount.body")}</Body>
     </StateCard>
   );
 }

@@ -177,6 +177,16 @@ export type RoomResult = {
   through?: "me" | "opponent";
 };
 
+/** GET and POST room's answer (409) to a holder of a VALID personal link for this board whose seat is tied to no Seazn
+ *  account (owner staging test 2026-10-19). There is no seat to read - a seat is a person with a solo user - so there is
+ *  no snapshot; the page shows the room's calm "ask the organiser" card instead of the one 404, which would say "may
+ *  belong to other players". Only after the link itself verified: a probe still learns nothing. */
+export const ROOM_SEAT_NO_ACCOUNT = "ROOM_SEAT_NO_ACCOUNT";
+
+/** Every state of `RoomSnapshot.account`, as a VALUE so a sweep enumerates the domain instead of retyping it. */
+export const ROOM_ACCOUNT_STATES = ["ok", "wrong_account"] as const;
+export type RoomAccount = { state: "ok" } | { state: "wrong_account"; viewerEmail: string };
+
 export type RoomSnapshot = {
   fixtureId: string;
   /** The server's clock when this was composed — the client derives its
@@ -235,6 +245,13 @@ export type RoomSnapshot = {
    *  whenever you may act, or another reason comes first (a frozen seat, a
    *  held, finished or withdrawn board). */
   otherAccount: string | null;
+  /** Whose seat this is and who is looking (owner staging test 2026-10-19), decided on the SERVER from the seat's solo
+   *  user and the viewer's session. "ok" is today's flow (signed out, or the seat's own account). "wrong_account": the
+   *  viewer is signed in as someone else - the room says whose board this is (`you.name`) and whose session it sees
+   *  (`viewerEmail`, the VIEWER's own - the seat account's email is never on the wire, full or masked). The room shows
+   *  that INSTEAD of the Lichess link prompt and nowhere else - linking Lichess there would link the wrong account.
+   *  (A seat tied to no account has no snapshot at all: ROOM_SEAT_NO_ACCOUNT.) */
+  account: RoomAccount;
   /** No game on file and the club is not offered online chess (T20). The
    *  client renders a plain state and STOPS polling. */
   onlineChessOff: boolean;

@@ -2,9 +2,7 @@
 
 import { LogOut } from "lucide-react";
 import { useRouter } from "next/navigation";
-import posthog from "posthog-js";
-import { api } from "@/lib/client";
-import { clearAnalyticsIdentity } from "@/lib/analytics-identity";
+import { signOutClient } from "@/lib/sign-out-client";
 
 /** `label` is the localized "Sign out" copy, resolved by the server parent and
  *  passed in (client islands can't import the server-only t()). */
@@ -13,17 +11,9 @@ export function LogoutButton({ label }: { label: string }) {
   return (
     <button
       onClick={async () => {
-        await api("/api/auth/logout", { method: "POST" });
-        // Kill the analytics identity BEFORE the (soft) navigation — the
-        // cached identify payload and posthog distinct id would otherwise
-        // outlive the session and misattribute the next user in this tab
-        // (task-8 review, Critical). Guarded: must never block logout.
-        try {
-          clearAnalyticsIdentity();
-          if (posthog.__loaded) posthog.reset();
-        } catch {
-          /* analytics teardown is best-effort */
-        }
+        // The session ends and the analytics identity dies BEFORE the (soft) navigation (task-8 review, Critical) -
+        // both in the shared sign-out (lib/sign-out-client.ts), which the match room's Switch account uses too.
+        await signOutClient();
         // Land on the marketing home, not the login form — signing out is
         // "leave the console", not "start a new session".
         router.push("/");

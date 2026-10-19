@@ -5,12 +5,21 @@ import "server-only";
 // refused as themselves. Otherwise the caller's SESSION: `requireUser` reads
 // the session cookie only, so an API key can never become a room identity
 // (the routes are NEVER_KEY_ROUTES in key-scopes.ts as well).
+//
+// A token also carries WHO IS LOOKING when the browser is signed in (`viewer`): the link works for whoever holds it, so
+// the room compares the viewer's account with the seat's to tell the seat's own account from another (owner staging test
+// 2026-10-19) - it never decides whose seat this is. Best effort and fail-open: a failed session read is a signed-out
+// viewer, the room as it was, never a 500 on a player's poll.
 import { requireUser } from "@/lib/auth";
+import { roomViewer } from "@/server/usecases/external-play/room-viewer";
 import type { RoomIdentity } from "@/server/usecases/external-play/room";
 
 export async function matchRoomIdentity(req: Request): Promise<RoomIdentity> {
   const token = new URL(req.url).searchParams.get("t");
-  if (token) return { kind: "token", token };
+  if (token) {
+    const viewer = await roomViewer();
+    return viewer ? { kind: "token", token, viewer } : { kind: "token", token };
+  }
   const user = await requireUser();
   return { kind: "session", userId: user.id };
 }
