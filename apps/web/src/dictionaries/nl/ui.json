@@ -5769,6 +5769,7 @@
   "stream.template.title": "Scorestijl",
   "stream.template.scenes": "Voorbeeld",
   "stream.template.saveFailed": "De scorestijl kon niet worden opgeslagen. Probeer het opnieuw.",
+  "stream.template.nextStream": "Geldt voor de volgende stream.",
   "stream.timing.title": "Timing van de score",
   "stream.timing.value": "{seconds} s",
   "stream.timing.default": "standaard",

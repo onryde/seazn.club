@@ -32,7 +32,7 @@ import { loadCheckoutSheet } from "./stream-checkout-sheet-loader";
 import { PlatformMark, platformName } from "./stream-platform-mark";
 import { D3Warning, PhoneStripView, SignalChain } from "./stream-signal-chain";
 import { SeaznQrImage, SeaznQrPlaceholder } from "./seazn-qr-image";
-import { useSharedPhoneSession } from "./stream-session-provider";
+import { useProvidedPhoneSession, useSharedPhoneSession } from "./stream-session-provider";
 import { useTabReturn } from "./use-tab-return";
 import { ScoreLiveSummary, ScoreTiming, useStreamPrefs } from "./stream-score-settings";
 import { StreamTemplatePicker, type TemplatePreviewData } from "./stream-template-picker";
@@ -75,6 +75,7 @@ import {
   takeoverLineKey,
   takeoverNotice,
   phoneTabState,
+  composedSessionOpen,
   readyStateOf,
   restartLine,
   type CreateFailureCode,
@@ -293,6 +294,10 @@ export function FixtureStreamPanel({
   // OPENS ON the stored style resolved through the registry (the sport's own default when none is stored, a retired
   // one's replacement) — never a second rule here.
   const style: TemplateId = resolveTemplate(prefs.prefs.overlayTemplate, stream.sportKey).id;
+  // PR #989 review m1: the page's ONE session (the console's provider — read, never a poll of its own). While a composed
+  // one is up, the OBS tab's grid says a pick applies to the next stream: the running session copied its style.
+  const pageSession = useProvidedPhoneSession(fixture.id);
+  const nextStreamOnly = composedSessionOpen(pageSession?.view ?? null);
   const [copied, setCopied] = useState(false);
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(false);
@@ -375,6 +380,8 @@ export function FixtureStreamPanel({
       preview={previewData}
       idPrefix={`stream-${where}-${fixture.id}`}
       saveFailed={prefs.failed === "overlayTemplate"}
+      // The Phone tab's editor is Ready's alone (a running session shows its read-only summary there instead).
+      note={where === "obs" && nextStreamOnly ? msg("stream.template.nextStream") : null}
     />
   );
 
@@ -584,6 +591,7 @@ export function FixtureStreamPanel({
                 available: stream.composedAvailable,
                 stored: prefs.prefs.streamMode,
                 template: style,
+                delayMs: prefs.prefs.overlayDelayMs,
                 sportKey: stream.sportKey,
                 editor: (
                   <>
@@ -647,12 +655,15 @@ type CreateError = { code: CreateFailureCode; holder: CreateErrorHolder | null }
  *  - `stored`: the fixture's stored mode (null: never chosen — the score). The effective mode is
  *    `effectiveStreamMode(stored, available)`, the SAME rule the phone's start and the automatic start resolve.
  *  - `template`: the style the picker shows (resolved), sent as Go live's `themeId` for a score stream.
+ *  - `delayMs`: the score timing Score timing shows (null: the server's default), sent as Go live's `overlayDelayMs` for
+ *    a score stream — so a delay typed just before Go live streams even while its own save is still in flight (m2).
  *  - `editor`: Ready's score card body — the picker and Score timing (pre-live only).
  */
 export interface PhoneScore {
   available: boolean;
   stored: StreamMode | null;
   template: TemplateId;
+  delayMs: number | null;
   sportKey: string;
   editor: ReactNode;
   /** The last Camera only / Add the score back did not save — the stored mode shows again, and a line says so. */
@@ -1105,11 +1116,15 @@ export function PhoneTab({
     try {
       // R2006 (Option C): the mode the tab SHOWS — the score unless the organiser chose Camera only or this deployment
       // cannot run it (the same rule the phone's start and the automatic start resolve, `effectiveStreamMode`) — and,
-      // for the score, the style the picker shows.
+      // for the score, the style the picker shows and the timing Score timing shows (m2: carried, so Go live never races
+      // the timing's own save — the session copies what the organiser saw).
       const mode = effectiveStreamMode(score.stored, score.available);
       await apiV1(`/api/v1/fixtures/${fixtureId}/stream-sessions`, {
         method: "POST",
-        json: mode === "composed" ? { mode, targetId: chosen, themeId: score.template } : { mode, targetId: chosen },
+        json:
+          mode === "composed"
+            ? { mode, targetId: chosen, themeId: score.template, overlayDelayMs: score.delayMs }
+            : { mode, targetId: chosen },
       });
       // n-6: the start saved its destination — a pick that did not save is no longer news, at Ready after it either.
       setPickFailed(false);

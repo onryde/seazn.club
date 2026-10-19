@@ -90,6 +90,16 @@ export function phoneTabState(view: StreamSessionView | null): PhoneTabState {
   }
 }
 
+/** PR #989 review m1: a composed session is up for this fixture — provisioning, warming, live or ending
+ *  (`phoneTabState`; a positive list, so a state added later reads as not open until it is named here). The OBS tab's
+ *  score style grid then says a pick applies to the NEXT stream: the running one copied its style at create and never
+ *  moves with the settings. */
+export function composedSessionOpen(view: StreamSessionView | null): boolean {
+  if (!view || view.mode !== "composed") return false;
+  const at = phoneTabState(view);
+  return at === "provisioning" || at === "warming" || at === "live" || at === "ending";
+}
+
 export const STATE_PILL_KEYS: Record<PhoneTabState, MessageKey> = {
   idle: "stream.phone.state.idle",
   provisioning: "stream.phone.state.provisioning",

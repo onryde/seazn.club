@@ -5769,6 +5769,7 @@
   "stream.template.title": "Style du score",
   "stream.template.scenes": "Aperçu",
   "stream.template.saveFailed": "Impossible d'enregistrer le style du score. Réessayez.",
+  "stream.template.nextStream": "S'applique au prochain direct.",
   "stream.timing.title": "Synchronisation du score",
   "stream.timing.value": "{seconds} s",
   "stream.timing.default": "par défaut",

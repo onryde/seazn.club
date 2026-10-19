@@ -41,7 +41,7 @@ import { UpgradeGate } from "@/components/upgrade-gate";
 import { defaultTemplateFor, resolveTemplate, templatesForSport } from "@/components/overlay/template-registry";
 import { OVERLAY_SCENES } from "@/components/overlay/overlay-scenes";
 import { decidedOutcomeTemplates } from "@/lib/scoring-vocab";
-import { StreamTemplatePicker } from "@/components/v2/stream-template-picker";
+import { StreamTemplatePicker, radioIndexForKey } from "@/components/v2/stream-template-picker";
 import { ScoreLiveSummary, ScoreTiming } from "@/components/v2/stream-score-settings";
 import { overlaySideCodes, type OverlaySideInput } from "@/lib/overlay-model";
 import { ApiV1Error } from "@/lib/client-v1";
@@ -59,10 +59,12 @@ import {
   STREAM_POLL_MS,
   TAKEOVER_NOTICE_MS,
   TARGET_REMOVED,
+  composedSessionOpen,
   type StreamSessionView,
 } from "@/lib/stream-session-view";
 import { HEALTH_REASONS } from "@/server/relay/domain/health-reasons";
-import { StreamLostCountdown, StreamTargetKind, type StreamPhone, type StreamTarget } from "@/server/api-v1/schemas";
+import { StreamLostCountdown, StreamSessionState, StreamTargetKind, type StreamPhone, type StreamTarget } from "@/server/api-v1/schemas";
+import { ACTIVE_STATES } from "@/server/relay/domain/session";
 import { resolveStreamTarget, type SavedStreamTarget } from "@/lib/stream-destinations";
 import { STREAM_TARGET_TABLE, STREAM_TARGET_TABLE_ROWS, rowName } from "@/lib/__tests__/_stream-target-table";
 import { PlatformMark, platformName } from "@/components/v2/stream-platform-mark";
@@ -145,6 +147,14 @@ vi.mock("@/lib/stripe-browser", () => ({ stripePromise: stripe.promise }));
 const checkout = vi.hoisted(() => ({ fetch: vi.fn() }));
 vi.mock("@/lib/billing-checkout-client", () => ({
   fetchRelayCheckoutClientSecret: (args: unknown) => checkout.fetch(args),
+}));
+
+// PR #989 review m1: the page's ONE session as the console's provider hands it to the panel — none (no provider, as the
+// bare harness renders the panel) unless a test seats one. Only the reader is doubled; the Phone tab's own poll is real.
+const provided = vi.hoisted(() => ({ view: null as StreamSessionView | null }));
+vi.mock("@/components/v2/stream-session-provider", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/v2/stream-session-provider")>()),
+  useProvidedPhoneSession: () => (provided.view === null ? null : { view: provided.view }),
 }));
 
 const confirmMock = vi.hoisted(() => vi.fn<(opts: unknown) => Promise<boolean>>(async () => true));
@@ -290,6 +300,7 @@ beforeEach(() => {
   fetchOverlayFixture.mockClear();
   searchParamsMock.set(new URLSearchParams(""));
   router.replace.mockReset();
+  provided.view = null;
 });
 
 // ─── R2006 (owner ruling 2026-10-19, "Option C"; overlay templates spec §4.4 D5–D7): the score style picker ──────────
@@ -980,7 +991,7 @@ const NOW = new Date("2026-09-14T12:00:00Z");
 /** R2006: the score where this deployment cannot run it — the states below predate the score and stream the camera
  *  only, as every one of them did. The score's own states set `available` (the R2006 describes). */
 const SCORE_OFF: PhoneScore = {
-  available: false, stored: null, template: defaultTemplateFor("football"), sportKey: "football", editor: null,
+  available: false, stored: null, template: defaultTemplateFor("football"), delayMs: null, sportKey: "football", editor: null,
   modeFailed: false, onMode: () => {},
 };
 const BODY: PhoneTabBodyProps = {
@@ -2937,15 +2948,19 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
 
   // R2006 (owner ruling 2026-10-19, "Option C"): the organiser's Go live streams the mode the tab SHOWS — the score by
   // default, Camera only when the organiser chose it, the camera when the deployment cannot run the score — and, for
-  // the score, the style the picker shows. Expected values are the RULING's (a table), never `effectiveStreamMode`.
-  it("R2006: Go live's mode — the score by default (with the shown style), Camera only, the score back, and the camera where the score cannot stream", async () => {
+  // the score, the style the picker shows and the timing Score timing shows (PR #989 review m2: carried, so Go live
+  // never races the timing's own save; null is the server's default, sent as null). Expected values are the RULING's
+  // (a table), never `effectiveStreamMode`.
+  it("R2006: Go live's mode — the score by default (with the shown style and timing), Camera only, the score back, and the camera where the score cannot stream", async () => {
     const shown = templatesForSport("football").find((t) => t.id !== defaultTemplateFor("football"))!.id;
-    const rows: [string, Pick<PhoneScore, "available" | "stored">, unknown][] = [
-      ["never chosen, available", { available: true, stored: null }, { mode: "composed", targetId: "t1", themeId: shown }],
-      ["Camera only", { available: true, stored: "passthrough" }, { mode: "passthrough", targetId: "t1" }],
-      ["the score back", { available: true, stored: "composed" }, { mode: "composed", targetId: "t1", themeId: shown }],
-      ["the score asked for, unavailable", { available: false, stored: "composed" }, { mode: "passthrough", targetId: "t1" }],
-      ["never chosen, unavailable", { available: false, stored: null }, { mode: "passthrough", targetId: "t1" }],
+    const rows: [string, Pick<PhoneScore, "available" | "stored" | "delayMs">, unknown][] = [
+      ["never chosen, available", { available: true, stored: null, delayMs: 2500 }, { mode: "composed", targetId: "t1", themeId: shown, overlayDelayMs: 2500 }],
+      ["the score at the server's default timing", { available: true, stored: null, delayMs: null }, { mode: "composed", targetId: "t1", themeId: shown, overlayDelayMs: null }],
+      ["a 0 s timing is a real one", { available: true, stored: null, delayMs: 0 }, { mode: "composed", targetId: "t1", themeId: shown, overlayDelayMs: 0 }],
+      ["Camera only", { available: true, stored: "passthrough", delayMs: 2500 }, { mode: "passthrough", targetId: "t1" }],
+      ["the score back", { available: true, stored: "composed", delayMs: 2500 }, { mode: "composed", targetId: "t1", themeId: shown, overlayDelayMs: 2500 }],
+      ["the score asked for, unavailable", { available: false, stored: "composed", delayMs: 2500 }, { mode: "passthrough", targetId: "t1" }],
+      ["never chosen, unavailable", { available: false, stored: null, delayMs: 2500 }, { mode: "passthrough", targetId: "t1" }],
     ];
     let checked = 0;
     for (const [name, score, want] of rows) {
@@ -4852,9 +4867,13 @@ describe("R2006: PhoneTabBody — the score card, Camera only, the score back, a
 describe("R2006: ScoreTiming — 0–30 s in tenths, the server's default, Reset; and the panel saves each change", () => {
   const timing = (o: Partial<Parameters<typeof ScoreTiming>[0]> = {}) =>
     renderIsland(ScoreTiming, { idPrefix: "t", storedMs: null, defaultMs: RELAY_OVERLAY_DELAY_DEFAULT_MS, onSave: () => {}, saveFailed: false, ...o });
-  const type = (island: ReturnType<typeof timing>, value: string) => {
+  /** Types `value` and leaves the field. `badInput`: the browser refused the text (`validity.badInput`), so the field
+   *  reports "" — the shape a "2,5" takes in an en-locale browser (m8). */
+  const type = (island: ReturnType<typeof timing>, value: string, badInput = false) => {
     (propsOf(byTestId(island.tree(), "stream-timing-input")!).onChange as (e: { target: { value: string } }) => void)({ target: { value } });
-    (propsOf(byTestId(island.tree(), "stream-timing-input")!).onBlur as () => void)();
+    (propsOf(byTestId(island.tree(), "stream-timing-input")!).onBlur as (e: { currentTarget: { validity: { badInput: boolean } } }) => void)({
+      currentTarget: { validity: { badInput } },
+    });
   };
   const secs = (ms: number) => (ms / 1000).toFixed(1);
 
@@ -4908,6 +4927,28 @@ describe("R2006: ScoreTiming — 0–30 s in tenths, the server's default, Reset
     const set = timing({ storedMs: 2500, onSave });
     click(byTestId(set.tree(), "stream-timing-reset"));
     expect(onSave.mock.calls.at(-1)).toEqual([null]);
+  });
+
+  it("m8 (PR #989 review): a number the BROWSER refused (it reports \"\" with validity.badInput) is refused aloud — the invalid line, nothing saved, the text left for the organiser to fix; Enter judges the same way; a truly blank field is still put back", () => {
+    const onSave = vi.fn();
+    const island = timing({ storedMs: 2500, onSave });
+    type(island, "", true);
+    expect(byTestId(island.tree(), "stream-timing-invalid"), "refused aloud").toBeDefined();
+    expect(attr(byTestId(island.tree(), "stream-timing-input")!, "aria-invalid")).toBe(true);
+    expect(attr(byTestId(island.tree(), "stream-timing-input")!, "value"), "never the stored value silently put back").toBe("");
+    expect(onSave).not.toHaveBeenCalled();
+    // Enter commits through the same judgement.
+    const enter = timing({ storedMs: 2500, onSave });
+    (propsOf(byTestId(enter.tree(), "stream-timing-input")!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "" } });
+    (propsOf(byTestId(enter.tree(), "stream-timing-input")!).onKeyDown as (e: unknown) => void)({
+      key: "Enter", preventDefault: () => {}, currentTarget: { validity: { badInput: true } },
+    });
+    expect(byTestId(enter.tree(), "stream-timing-invalid"), "Enter: refused aloud").toBeDefined();
+    // The positive pair: a field the organiser emptied (no bad input) is put back, with no line.
+    type(island, "", false);
+    expect(byTestId(island.tree(), "stream-timing-invalid")).toBeUndefined();
+    expect(attr(byTestId(island.tree(), "stream-timing-input")!, "value")).toBe(secs(2500));
+    expect(onSave).not.toHaveBeenCalled();
   });
 
   it("the panel: a timing change PUTs { overlayDelayMs } alone, Reset PUTs null, and a failed save puts the stored value back and says so", async () => {
@@ -4977,5 +5018,280 @@ describe("R2006: the panel hands the Phone tab the score — availability, the s
     expect(island.tree().find((el) => el.type === PhoneTab), "the Phone tab is gone on OBS").toBeUndefined();
     expect(island.tree().filter((el) => el.type === StreamTemplatePicker)).toHaveLength(1);
     expect(pickerProps(island.tree()).selected).toBe((propsOf(inCard[0]!) as { selected: string }).selected);
+  });
+});
+
+// ─── PR #989 review: the stored preferences under real timing (I2, m2, m3), the next-stream line (m1), the keyboard (m6) ──
+describe("PR #989 review: useStreamPrefs — the newest save lands (I2), a newer page read re-seeds (m3), Go live carries the shown timing (m2)", () => {
+  type Deferred = { url: string; json: unknown; resolve: (v: unknown) => void; reject: (e: unknown) => void };
+  /** Every settings PUT waits for the test to answer it; everything else answers {} at once. */
+  const deferSettings = (): Deferred[] => {
+    const held: Deferred[] = [];
+    apiV1.mockImplementation((url, o) => {
+      if (url.endsWith("/stream-settings") && o?.method === "PUT") {
+        return new Promise((resolve, reject) => held.push({ url, json: o.json, resolve, reject }));
+      }
+      return Promise.resolve({});
+    });
+    return held;
+  };
+  /** The route's answer (`StreamSettings`): every field as stored, with `over` the ones this save wrote. */
+  const answer = (over: Record<string, unknown>) => ({ targetId: null, autoStream: false, streamMode: null, overlayTemplate: null, overlayDelayMs: null, ...over });
+  const flush = () => new Promise<void>((r) => setImmediate(r));
+  const two = () => {
+    const def = defaultTemplateFor("football");
+    const other = templatesForSport("football").find((t) => t.id !== def)!.id;
+    return { def, other };
+  };
+
+  it("I2 success: pick A then B; B answers first, then A's slower answer lands — the selection and the OBS link stay on B", async () => {
+    const held = deferSettings();
+    const { def, other } = two();
+    const island = open({ sportKey: "football" });
+    pickerProps(island.tree()).onPick(other); // A
+    pickerProps(island.tree()).onPick(def); // B
+    expect(held.map((h) => h.json), "two saves in flight, in order").toEqual([{ overlayTemplate: other }, { overlayTemplate: def }]);
+    held[1]!.resolve(answer({ overlayTemplate: def }));
+    await flush();
+    expect(pickerProps(island.tree()).selected).toBe(def);
+    held[0]!.resolve(answer({ overlayTemplate: other }));
+    await flush();
+    expect(pickerProps(island.tree()).selected, "the overtaken answer never lands").toBe(def);
+    expect(linkOf(island.tree()).searchParams.get("template")).toBe(def);
+    expect(pickerProps(island.tree()).saveFailed).toBe(false);
+  });
+
+  it("I2 failure: pick A then B; B saves, then A fails late — nothing reverts and no line shows; the positive pair: the NEWEST save failing does both", async () => {
+    const held = deferSettings();
+    const { def, other } = two();
+    const island = open({ sportKey: "football" });
+    pickerProps(island.tree()).onPick(other); // A
+    pickerProps(island.tree()).onPick(def); // B
+    held[1]!.resolve(answer({ overlayTemplate: def }));
+    await flush();
+    held[0]!.reject(new Error("offline"));
+    await flush();
+    expect(pickerProps(island.tree()).selected, "the overtaken failure never reverts").toBe(def);
+    expect(pickerProps(island.tree()).saveFailed, "and never says so").toBe(false);
+    // Positive pair: a newest save that fails puts the value before it back and says so.
+    pickerProps(island.tree()).onPick(other);
+    held[2]!.reject(new Error("offline"));
+    await flush();
+    expect(pickerProps(island.tree()).selected).toBe(def);
+    expect(pickerProps(island.tree()).saveFailed).toBe(true);
+  });
+
+  it("I2: the same holds for the timing and the mode (one rule per field, never shared across fields)", async () => {
+    const held = deferSettings();
+    const island = openPanel({ relayEntitled: true, composedAvailable: true });
+    const scoreOf = () => propsOf(island.tree().find((el) => el.type === PhoneTab)!).score as PhoneScore;
+    const timingOf = () => propsOf(walk(scoreOf().editor as ReactElement).find((el) => el.type === ScoreTiming)!) as unknown as Parameters<typeof ScoreTiming>[0];
+    timingOf().onSave(1000);
+    timingOf().onSave(2000);
+    scoreOf().onMode("passthrough"); // a save of ANOTHER field, in flight beside them
+    held[1]!.resolve(answer({ overlayDelayMs: 2000 }));
+    held[0]!.resolve(answer({ overlayDelayMs: 1000 }));
+    await flush();
+    expect(timingOf().storedMs, "the timing's newest").toBe(2000);
+    held[2]!.reject(new Error("offline"));
+    await flush();
+    expect(scoreOf().stored, "the mode's own failure reverts the mode alone").toBeNull();
+    expect(scoreOf().modeFailed).toBe(true);
+    expect(timingOf().storedMs).toBe(2000);
+  });
+
+  it("m3: a newer page read moves a field it MOVED with no save in flight; a field with a save in flight keeps the organiser's choice; a read that moved nothing changes nothing", async () => {
+    const held = deferSettings();
+    const ctxWith = (p: StreamPanelContext["streamPrefs"][string]) => ctx({ relayEntitled: true, composedAvailable: true, streamPrefs: { [FIXTURE.id]: p } });
+    const props = (p: StreamPanelContext["streamPrefs"][string]) => ({ fixture: FIXTURE, entrantNames: ENTRANTS, tz: TZ, stream: ctxWith(p) });
+    const island = renderIsland(FixtureStreamPanel, props({ streamMode: null, overlayTemplate: null, overlayDelayMs: 1500 }));
+    const scoreOf = () => propsOf(island.tree().find((el) => el.type === PhoneTab)!).score as PhoneScore;
+    const timingOf = () => propsOf(walk(scoreOf().editor as ReactElement).find((el) => el.type === ScoreTiming)!) as unknown as Parameters<typeof ScoreTiming>[0];
+    let checked = 0;
+    // The empty case first: a read that moved nothing (a new object, the same values) changes nothing and saves nothing.
+    island.rerender(props({ streamMode: null, overlayTemplate: null, overlayDelayMs: 1500 }));
+    expect([scoreOf().stored, timingOf().storedMs]).toEqual([null, 1500]);
+    checked++;
+    // Moved, nothing in flight: taken (another organiser chose Camera only and 2 s).
+    island.rerender(props({ streamMode: "passthrough", overlayTemplate: null, overlayDelayMs: 2000 }));
+    expect([scoreOf().stored, timingOf().storedMs], "a newer read is shown").toEqual(["passthrough", 2000]);
+    checked++;
+    // A save in flight: the organiser's own newer choice holds against a read that moved that field — the other field,
+    // with nothing in flight, still moves.
+    timingOf().onSave(2500);
+    island.rerender(props({ streamMode: "composed", overlayTemplate: null, overlayDelayMs: 3000 }));
+    expect(timingOf().storedMs, "the in-flight choice holds").toBe(2500);
+    expect(scoreOf().stored, "the field with nothing in flight moves").toBe("composed");
+    checked++;
+    held[0]!.resolve(answer({ overlayDelayMs: 2500 }));
+    await flush();
+    expect(timingOf().storedMs, "settled: the save's own answer").toBe(2500);
+    // The read the copy was last seeded with, again (a refresh that began before the save landed): nothing moves.
+    island.rerender(props({ streamMode: "composed", overlayTemplate: null, overlayDelayMs: 3000 }));
+    expect(timingOf().storedMs).toBe(2500);
+    checked++;
+    // A later read that moved it is taken again — the settled field is no longer held.
+    island.rerender(props({ streamMode: "composed", overlayTemplate: null, overlayDelayMs: 4000 }));
+    expect(timingOf().storedMs).toBe(4000);
+    checked++;
+    expect(held, "no read ever saved anything").toHaveLength(1);
+    expect(checked).toBe(5);
+  });
+
+  it("m2 (the panel's half): a timing typed just before Go live is the score's delayMs at once, while its own PUT is still in flight — Go live sends it (the Go live table above), so the session never waits on the save", () => {
+    const held = deferSettings();
+    const island = openPanel({ relayEntitled: true, composedAvailable: true, streamPrefs: { [FIXTURE.id]: { streamMode: null, overlayTemplate: null, overlayDelayMs: 4000 } } });
+    const scoreOf = () => propsOf(island.tree().find((el) => el.type === PhoneTab)!).score as PhoneScore;
+    expect(scoreOf().delayMs, "seeded").toBe(4000);
+    const timing = propsOf(walk(scoreOf().editor as ReactElement).find((el) => el.type === ScoreTiming)!) as unknown as Parameters<typeof ScoreTiming>[0];
+    timing.onSave(2500);
+    expect(held, "the PUT is in flight").toHaveLength(1);
+    expect(scoreOf().delayMs, "what Go live sends").toBe(2500);
+    timing.onSave(null);
+    expect(scoreOf().delayMs, "Reset: the server's default, sent as null").toBeNull();
+  });
+});
+
+describe("PR #989 review m1: while a composed session is open, the OBS tab's grid says a pick applies to the next stream", () => {
+  it("composedSessionOpen: open exactly for the domain's ACTIVE states of a composed session — every state of both modes swept", () => {
+    let checked = 0;
+    for (const state of StreamSessionState.options) {
+      for (const mode of ["composed", "passthrough"] as const) {
+        const want = mode === "composed" && ACTIVE_STATES.includes(state);
+        expect(composedSessionOpen(session({ state, mode })), `${mode} ${state}`).toBe(want);
+        checked++;
+      }
+    }
+    expect(checked).toBe(StreamSessionState.options.length * 2);
+    expect(ACTIVE_STATES.length, "premise: the domain names active states").toBeGreaterThan(0);
+    expect(composedSessionOpen(null), "no session").toBe(false);
+  });
+
+  it("the OBS grid carries the line under an open composed session — never under a passthrough one, a finished one or none; the Phone tab's editor never does", () => {
+    const noteOf = (tree: ReactElement[]) => pickerProps(tree).note ?? null;
+    const line = m("stream.template.nextStream");
+    expect(noteOf(open().tree()), "no session (the empty case)").toBeNull();
+    let checked = 0;
+    for (const [name, view, want] of [
+      ["composed, live", session({ mode: "composed", state: "live" }), line],
+      ["composed, warming", session({ mode: "composed", state: "warming" }), line],
+      ["passthrough, live", session({ mode: "passthrough", state: "live" }), null],
+      ["composed, completed", session({ mode: "composed", state: "completed" }), null],
+    ] as const) {
+      provided.view = view;
+      expect(noteOf(open().tree()), name).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    provided.view = session({ mode: "composed", state: "live" });
+    const phone = openPanel({ relayEntitled: true, composedAvailable: true });
+    const editor = (propsOf(phone.tree().find((el) => el.type === PhoneTab)!).score as PhoneScore).editor as ReactElement;
+    const inCard = walk(editor).find((el) => el.type === StreamTemplatePicker)!;
+    expect((propsOf(inCard) as { note?: string | null }).note ?? null, "the Phone tab's picker").toBeNull();
+  });
+
+  it("the picker renders the line it is handed, under the title, and nothing without one", () => {
+    const base = { templates: templatesForSport("football"), selected: defaultTemplateFor("football"), onPick: () => {}, idPrefix: "t", saveFailed: false };
+    const preview = pickerProps(open().tree()).preview;
+    expect(renderToStaticMarkup(<StreamTemplatePicker {...base} preview={preview} />)).not.toContain("stream-template-note");
+    const html = renderToStaticMarkup(<StreamTemplatePicker {...base} preview={preview} note={m("stream.template.nextStream")} />);
+    expect(html).toContain(`data-testid="stream-template-note"`);
+    expect(html).toContain(m("stream.template.nextStream"));
+  });
+});
+
+describe("PR #989 review m6: both radiogroups are one tab stop each, and the arrows move and select (WAI-ARIA radio group)", () => {
+  it("radioIndexForKey: arrows wrap both ways, Home/End jump, other keys are the browser's; none checked starts at an end; an empty group handles nothing", () => {
+    const rows: [string, number, number, number | null][] = [
+      ["ArrowRight", 0, 3, 1], ["ArrowDown", 1, 3, 2], ["ArrowRight", 2, 3, 0],
+      ["ArrowLeft", 2, 3, 1], ["ArrowUp", 1, 3, 0], ["ArrowLeft", 0, 3, 2],
+      ["Home", 2, 3, 0], ["End", 0, 3, 2],
+      ["Tab", 1, 3, null], [" ", 1, 3, null], ["Enter", 1, 3, null],
+      ["ArrowRight", -1, 3, 0], ["ArrowLeft", -1, 3, 2],
+      ["ArrowRight", 0, 0, null],
+    ];
+    let checked = 0;
+    for (const [key, index, count, want] of rows) {
+      expect(radioIndexForKey(key, index, count), `${key} at ${index} of ${count}`).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(rows.length);
+  });
+
+  const preview = () => pickerProps(open().tree()).preview;
+  const keyOn = (group: ReactElement, key: string) => {
+    const focused: number[] = [];
+    const radios = Array.from({ length: 8 }, (_, i) => ({ focus: () => focused.push(i) }));
+    let prevented = false;
+    (propsOf(group).onKeyDown as (e: unknown) => void)({
+      key,
+      preventDefault: () => { prevented = true; },
+      currentTarget: { querySelectorAll: (sel: string) => (sel === '[role="radio"]' ? radios : []) },
+    });
+    return { focused, prevented };
+  };
+
+  it("the template group: exactly one tab stop — the checked option — and an arrow PICKS the next in registry order and moves focus to it", () => {
+    const templates = templatesForSport("football");
+    expect(templates.length, "premise: more than one option").toBeGreaterThan(1);
+    const onPick = vi.fn();
+    const island = renderIsland(StreamTemplatePicker, { templates, selected: templates[0]!.id, onPick, preview: preview(), idPrefix: "t", saveFailed: false });
+    const html = renderToStaticMarkup(<StreamTemplatePicker templates={templates} selected={templates[1]!.id} onPick={() => {}} preview={preview()} idPrefix="t" saveFailed={false} />);
+    const stops = [...html.matchAll(/data-testid="stream-template-([^"]+)" data-template="[^"]+" tabindex="(-?\d)"/g)].map((x) => [x[1], x[2]]);
+    expect(stops, "every option carries a tabindex").toHaveLength(templates.length);
+    expect(stops.filter(([, t]) => t === "0").map(([id]) => id), "one tab stop: the checked option").toEqual([templates[1]!.id]);
+    const group = byTestId(island.tree(), "stream-template-group")!;
+    const right = keyOn(group, "ArrowRight");
+    expect(onPick.mock.calls).toEqual([[templates[1]!.id]]);
+    expect(right).toEqual({ focused: [1], prevented: true });
+    const end = keyOn(byTestId(island.tree(), "stream-template-group")!, "End");
+    expect(onPick.mock.calls.at(-1)).toEqual([templates[templates.length - 1]!.id]);
+    expect(end.focused).toEqual([templates.length - 1]);
+    // Tab is the browser's: nothing picked, nothing prevented, focus untouched.
+    const calls = onPick.mock.calls.length;
+    expect(keyOn(byTestId(island.tree(), "stream-template-group")!, "Tab")).toEqual({ focused: [], prevented: false });
+    expect(onPick.mock.calls.length).toBe(calls);
+    // A key that lands on the option already checked (Home on the first) asks for nothing — and still holds focus there.
+    const home = keyOn(byTestId(island.tree(), "stream-template-group")!, "Home");
+    expect(onPick.mock.calls.length, "the checked option is never re-saved").toBe(calls);
+    expect(home.focused).toEqual([0]);
+  });
+
+  it("the scene group: one tab stop — the checked scene — and an arrow moves the scene (aria-checked) and focus", () => {
+    const island = renderIsland(StreamTemplatePicker, { templates: templatesForSport("football"), selected: defaultTemplateFor("football"), onPick: () => {}, preview: preview(), idPrefix: "t", saveFailed: false });
+    const tabStops = () => OVERLAY_SCENES.filter((s) => attr(byTestId(island.tree(), `stream-scene-${s.id}`)!, "tabIndex") === 0).map((s) => s.id);
+    expect(OVERLAY_SCENES.length, "premise: more than one scene").toBeGreaterThan(1);
+    expect(tabStops()).toEqual([OVERLAY_SCENES[0].id]);
+    const moved = keyOn(byTestId(island.tree(), "stream-scene-group")!, "ArrowRight");
+    expect(moved.focused).toEqual([1]);
+    expect(attr(byTestId(island.tree(), `stream-scene-${OVERLAY_SCENES[1]!.id}`)!, "aria-checked")).toBe(true);
+    expect(tabStops(), "the tab stop follows the selection").toEqual([OVERLAY_SCENES[1]!.id]);
+    keyOn(byTestId(island.tree(), "stream-scene-group")!, "ArrowLeft");
+    expect(tabStops()).toEqual([OVERLAY_SCENES[0].id]);
+  });
+});
+
+describe("PR #989 review m1: useProvidedPhoneSession — the provider's session for THIS fixture, never a poll of its own", () => {
+  it("under a provider for the fixture: its session; under one for ANOTHER fixture, or none: null — and it never reads", async () => {
+    // The REAL module (this file doubles the reader for the panel's tests), rendered by React itself: the provider's own
+    // hook seeded through its unit-test seam, the reader inside it.
+    const real = await vi.importActual<typeof import("@/components/v2/stream-session-provider")>("@/components/v2/stream-session-provider");
+    const seen: (string | null)[] = [];
+    const Probe = ({ fixtureId }: { fixtureId: string }) => {
+      const s = real.useProvidedPhoneSession(fixtureId);
+      seen.push(s === null ? null : `${s.view?.mode}:${s.view?.state}`);
+      return null;
+    };
+    const view = session({ mode: "composed", state: "live" });
+    apiV1.mockClear();
+    renderToStaticMarkup(
+      <real.StreamSessionProvider fixtureId="f-1" initialView={view}>
+        <Probe fixtureId="f-1" />
+        <Probe fixtureId="f-2" />
+      </real.StreamSessionProvider>,
+    );
+    renderToStaticMarkup(<Probe fixtureId="f-1" />);
+    expect(seen).toEqual(["composed:live", null, null]);
+    expect(apiV1, "a reader never reads").not.toHaveBeenCalled();
   });
 });

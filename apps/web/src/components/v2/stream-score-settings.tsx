@@ -7,11 +7,12 @@
 //    `streamPrefs`), each change shown at once and saved through the ONE settings route (PUT …/stream-settings, a body
 //    naming only that field). A save that fails puts the stored value back — the value the phone's start and the
 //    automatic start will read — and says so; only the newest save of a field lands, so a slow older answer never
-//    overwrites a newer choice.
+//    overwrites a newer choice. A newer page read (a refresh after another tab or organiser changed a preference)
+//    re-seeds every field it MOVED that has no save in flight (PR #989 review m3).
 //  - `ScoreTiming` edits the delay before going live: 0–30 s in steps of 0.1, null = the server's default (handed in,
 //    never typed), 0 a real override. `ScoreLiveSummary` is the read-only pair a running composed session shows: a
 //    running session never moves, so it reads the SESSION's own copy, not the settings.
-import { useCallback, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { ChevronRight, RotateCcw } from "lucide-react";
 import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { apiV1 } from "@/lib/client-v1";
@@ -20,41 +21,53 @@ import { OVERLAY_DELAY_MAX_MS, type StreamPrefs } from "@/lib/stream-settings";
 
 export type PrefKey = keyof StreamPrefs;
 
+const PREF_KEYS: readonly PrefKey[] = ["streamMode", "overlayTemplate", "overlayDelayMs"];
+const NONE_IN_FLIGHT: Readonly<Record<PrefKey, number>> = { streamMode: 0, overlayTemplate: 0, overlayDelayMs: 0 };
+
 /** The panel's copy of the stored preferences, and one saver per field. `failed` names the field whose last save did
  *  not land (it shows the stored value again); a later save of any field clears it. */
 export function useStreamPrefs(fixtureId: string, initial: StreamPrefs) {
   const [prefs, setPrefs] = useState<StreamPrefs>(initial);
   const [failed, setFailed] = useState<PrefKey | null>(null);
-  // The value each field stands at NOW, for the callbacks below (a save's answer settles against the state as it is
-  // when it lands, never as it was when it was asked).
-  const current = useRef<StreamPrefs>(initial);
-  const seq = useRef<Record<PrefKey, number>>({ streamMode: 0, overlayTemplate: 0, overlayDelayMs: 0 });
-  const put = (next: StreamPrefs) => {
-    current.current = next;
-    setPrefs(next);
+  // m3 (PR #989 review): the page's read this copy was last seeded from, and how many saves of each field are in flight.
+  const [seed, setSeed] = useState<StreamPrefs>(initial);
+  const [inFlight, setInFlight] = useState<Record<PrefKey, number>>(NONE_IN_FLIGHT);
+  // Each field's newest save — read only in a save's own answer, so an older answer can tell it was overtaken.
+  const seq = useRef<Record<PrefKey, number>>({ ...NONE_IN_FLIGHT });
+  // A newer page read moves every field it MOVED whose saves have all settled — adjusted in render against the read it
+  // was drawn from, never by an effect. A field with a save in flight keeps the organiser's own newer choice, and a read
+  // that did not move a field (a refresh carrying the value this copy was seeded with) leaves the shown value alone.
+  const moved = PREF_KEYS.filter((k) => initial[k] !== seed[k]);
+  if (moved.length > 0) {
+    setSeed(initial);
+    const take = moved.filter((k) => inFlight[k] === 0);
+    if (take.length > 0) setPrefs((p) => ({ ...p, ...Object.fromEntries(take.map((k) => [k, initial[k]])) }));
+  }
+  const save = <K extends PrefKey>(key: K, value: StreamPrefs[K]) => {
+    // No "same value" guard here (m4): every caller offers only a change — the picker skips the selected option, Score
+    // timing the delay already in force, and the mode controls exist only for the mode not in force.
+    const before = prefs[key];
+    const n = ++seq.current[key];
+    const settled = () => setInFlight((c) => ({ ...c, [key]: c[key] - 1 }));
+    setPrefs((p) => ({ ...p, [key]: value }));
+    setInFlight((c) => ({ ...c, [key]: c[key] + 1 }));
+    setFailed(null);
+    void apiV1<StreamPrefs>(`/api/v1/fixtures/${fixtureId}/stream-settings`, { method: "PUT", json: { [key]: value } }).then(
+      (answer) => {
+        settled();
+        // The server's answer is the stored value (a template it resolved, a delay it kept) — newest save only.
+        if (seq.current[key] !== n || !answer || !(key in answer)) return;
+        setPrefs((p) => ({ ...p, [key]: answer[key] }));
+      },
+      () => {
+        settled();
+        // An overtaken save that fails says nothing: the newer choice is the one on screen and in flight.
+        if (seq.current[key] !== n) return;
+        setPrefs((p) => ({ ...p, [key]: before }));
+        setFailed(key);
+      },
+    );
   };
-  const save = useCallback(
-    <K extends PrefKey>(key: K, value: StreamPrefs[K]) => {
-      const before = current.current[key];
-      if (before === value) return;
-      const n = ++seq.current[key];
-      put({ ...current.current, [key]: value });
-      setFailed(null);
-      void apiV1<StreamPrefs>(`/api/v1/fixtures/${fixtureId}/stream-settings`, { method: "PUT", json: { [key]: value } }).then(
-        (answer) => {
-          // The server's answer is the stored value (a template it resolved, a delay it kept) — newest save only.
-          if (seq.current[key] !== n || !answer || !(key in answer)) return;
-          put({ ...current.current, [key]: answer[key] });
-        },
-        () => {
-          if (seq.current[key] !== n) return;
-          put({ ...current.current, [key]: before });
-          setFailed(key);
-        },
-      );
-    },
-    [fixtureId],
-  );
   return { prefs, failed, save };
 }
 
@@ -99,11 +112,14 @@ export function ScoreTiming(p: {
     setDraft(inputText(effective));
     setInvalid(false);
   }
-  const commit = () => {
+  /** `badInput`: the BROWSER refused what was typed (`validity.badInput` — "2,5" in an en-locale browser). The field
+   *  then reports "" although the organiser typed something, so it is refused aloud, never silently put back (m8). */
+  const commit = (badInput: boolean) => {
     const ms = parseDelayInput(draft);
     if (ms === null) {
-      setInvalid(draft.trim() !== "");
-      if (draft.trim() === "") setDraft(inputText(effective));
+      const typed = badInput || draft.trim() !== "";
+      setInvalid(typed);
+      if (!typed) setDraft(inputText(effective));
       return;
     }
     setInvalid(false);
@@ -153,11 +169,11 @@ export function ScoreTiming(p: {
               aria-describedby={invalid ? `${helpId} ${errorId}` : helpId}
               aria-invalid={invalid || undefined}
               onChange={(e) => setDraft(e.target.value)}
-              onBlur={commit}
+              onBlur={(e) => commit(e.currentTarget.validity.badInput)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   e.preventDefault();
-                  commit();
+                  commit(e.currentTarget.validity.badInput);
                 }
               }}
               className={`min-h-11 w-24 min-w-0 rounded-md border bg-white px-3 text-sm tabular-nums text-slate-800 outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-200 md:min-h-9 ${

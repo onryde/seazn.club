@@ -7189,6 +7189,7 @@ export type DictionaryKey =
   | "stream.takeover.lineWaiting"
   | "stream.takeover.lineWaitingNoModel"
   | "stream.target.kind.other"
+  | "stream.template.nextStream"
   | "stream.template.saveFailed"
   | "stream.template.scenes"
   | "stream.template.title"

@@ -5769,6 +5769,7 @@
   "stream.template.title": "Score style",
   "stream.template.scenes": "Preview",
   "stream.template.saveFailed": "Couldn't save the score style. Try again.",
+  "stream.template.nextStream": "Applies to the next stream.",
   "stream.timing.title": "Score timing",
   "stream.timing.value": "{seconds} s",
   "stream.timing.default": "default",

@@ -14,7 +14,10 @@
 //    clipping scan has nothing to exempt (AGENTS.md class 23).
 //  - Tap targets: every option is a full card; every segment is 44 px tall on a phone and 36 px from 768 (owner ruling
 //    2026-10-19, "switch heights").
-import { useCallback, useState } from "react";
+//  - Keyboard (PR #989 review m6): both radiogroups are ONE tab stop each — the checked radio is tabbable, the rest are
+//    not (roving tabindex) — and the arrow keys move and select within the group, wrapping, as the WAI-ARIA radio group
+//    pattern expects; Home/End jump to the ends.
+import { useCallback, useState, type KeyboardEvent } from "react";
 import { Check } from "lucide-react";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { OverlayPreview } from "@/components/overlay/overlay-preview";
@@ -39,6 +42,42 @@ export interface TemplatePreviewData {
  *  it (`overflow-hidden`), and the first observation replaces it with the cell's own width. */
 export const THUMB_FALLBACK_W_PX = 240;
 
+/**
+ * WAI-ARIA radio group keys: the arrows move AND select, wrapping at both ends; Home/End jump to the ends; any other key
+ * is the browser's (so Tab still leaves the group). `index` is the checked radio's (-1: none checked, as the first is
+ * then the tab stop). Null: not a key the group handles. Pure, so it is testable without a DOM.
+ */
+export function radioIndexForKey(key: string, index: number, count: number): number | null {
+  if (count <= 0) return null;
+  const at = index < 0 ? 0 : index;
+  switch (key) {
+    case "ArrowRight":
+    case "ArrowDown":
+      return index < 0 ? 0 : (at + 1) % count;
+    case "ArrowLeft":
+    case "ArrowUp":
+      return index < 0 ? count - 1 : (at - 1 + count) % count;
+    case "Home":
+      return 0;
+    case "End":
+      return count - 1;
+    default:
+      return null;
+  }
+}
+
+/** The group's key handler: picks the radio the key lands on and moves DOM focus to it — focus must follow the
+ *  selection, or the ring stays on a radio that is no longer checked while another carries `tabIndex` 0. */
+function radioGroupKeys(index: number, count: number, pick: (next: number) => void) {
+  return (e: KeyboardEvent<HTMLElement>) => {
+    const next = radioIndexForKey(e.key, index, count);
+    if (next === null) return;
+    e.preventDefault();
+    pick(next); // the template pick skips the option already checked (`pickTemplate`); a scene re-set is a no-op
+    e.currentTarget.querySelectorAll<HTMLElement>('[role="radio"]')[next]?.focus();
+  };
+}
+
 /** The cell's measured content width — a callback ref, so the observer follows the node that exists. */
 function useCellWidth(): [(el: HTMLElement | null) => (() => void) | undefined, number | null] {
   const [w, setW] = useState<number | null>(null);
@@ -57,6 +96,8 @@ function useCellWidth(): [(el: HTMLElement | null) => (() => void) | undefined, 
 function TemplateOption(p: {
   def: OverlayTemplateDef;
   selected: boolean;
+  /** The group's one tab stop (roving tabindex): the checked option, or the first when none is. */
+  tabStop: boolean;
   onPick: () => void;
   scene: SceneId;
   preview: TemplatePreviewData;
@@ -70,6 +111,7 @@ function TemplateOption(p: {
       aria-checked={p.selected}
       data-testid={`stream-template-${p.def.id}`}
       data-template={p.def.id}
+      tabIndex={p.tabStop ? 0 : -1}
       onClick={p.onPick}
       className={`flex min-h-11 w-full min-w-0 flex-col gap-1.5 rounded-lg bg-white p-1.5 text-left transition motion-reduce:transition-none ${
         p.selected ? "ring-2 ring-purple-600" : "ring-1 ring-purple-100 hover:ring-purple-300"
@@ -116,9 +158,17 @@ export function StreamTemplatePicker(p: {
   idPrefix: string;
   /** The last pick did not save — the picker shows the stored style again, and says so. */
   saveFailed: boolean;
+  /** A line under the title (PR #989 review m1): the OBS tab's grid while a composed session is open says a pick applies
+   *  to the NEXT stream — a running session never moves (stream-sessions.ts copies the style at create). */
+  note?: string | null;
 }) {
   const msg = useMsg();
   const [scene, setScene] = useState<SceneId>(OVERLAY_SCENES[0].id);
+  const sceneAt = OVERLAY_SCENES.findIndex((s) => s.id === scene);
+  const templateAt = p.templates.findIndex((def) => def.id === p.selected);
+  const pickTemplate = (id: TemplateId) => {
+    if (p.selected !== id) p.onPick(id);
+  };
   const titleId = `${p.idPrefix}-template-title`;
   const sceneId = `${p.idPrefix}-template-scenes`;
   return (
@@ -126,17 +176,29 @@ export function StreamTemplatePicker(p: {
       <p id={titleId} className="text-sm font-medium text-slate-800">
         {msg("stream.template.title")}
       </p>
+      {p.note && (
+        <p data-testid="stream-template-note" className="mt-0.5 text-xs text-slate-600">
+          {p.note}
+        </p>
+      )}
       <div className="mt-2 flex min-w-0 flex-col gap-1 md:flex-row md:items-center md:gap-3">
         <span id={sceneId} className="text-xs text-slate-600">
           {msg("stream.template.scenes")}
         </span>
-        <div role="radiogroup" aria-labelledby={sceneId} className="grid grid-cols-2 gap-1 rounded-lg bg-slate-100 p-1 md:flex md:w-fit">
-          {OVERLAY_SCENES.map((s) => (
+        <div
+          role="radiogroup"
+          aria-labelledby={sceneId}
+          data-testid="stream-scene-group"
+          onKeyDown={radioGroupKeys(sceneAt, OVERLAY_SCENES.length, (i) => setScene(OVERLAY_SCENES[i]!.id))}
+          className="grid grid-cols-2 gap-1 rounded-lg bg-slate-100 p-1 md:flex md:w-fit"
+        >
+          {OVERLAY_SCENES.map((s, i) => (
             <button
               key={s.id}
               type="button"
               role="radio"
               aria-checked={scene === s.id}
+              tabIndex={i === (sceneAt < 0 ? 0 : sceneAt) ? 0 : -1}
               data-testid={`stream-scene-${s.id}`}
               onClick={() => setScene(s.id)}
               className={`min-h-11 min-w-11 rounded-md px-3 text-xs font-medium leading-tight md:min-h-9 ${
@@ -151,16 +213,17 @@ export function StreamTemplatePicker(p: {
       <div
         role="radiogroup"
         aria-labelledby={titleId}
+        data-testid="stream-template-group"
+        onKeyDown={radioGroupKeys(templateAt, p.templates.length, (i) => pickTemplate(p.templates[i]!.id))}
         className="mt-3 grid grid-cols-1 gap-3 min-[375px]:grid-cols-2 md:grid-cols-[repeat(2,minmax(0,280px))]"
       >
-        {p.templates.map((def) => (
+        {p.templates.map((def, i) => (
           <TemplateOption
             key={def.id}
             def={def}
             selected={p.selected === def.id}
-            onPick={() => {
-              if (p.selected !== def.id) p.onPick(def.id);
-            }}
+            tabStop={i === (templateAt < 0 ? 0 : templateAt)}
+            onPick={() => pickTemplate(def.id)}
             scene={scene}
             preview={p.preview}
           />

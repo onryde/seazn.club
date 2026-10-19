@@ -5769,6 +5769,7 @@
   "stream.template.title": "Estilo del marcador",
   "stream.template.scenes": "Vista previa",
   "stream.template.saveFailed": "No se pudo guardar el estilo del marcador. Inténtalo de nuevo.",
+  "stream.template.nextStream": "Se aplica a la próxima transmisión.",
   "stream.timing.title": "Sincronización del marcador",
   "stream.timing.value": "{seconds} s",
   "stream.timing.default": "predeterminado",
