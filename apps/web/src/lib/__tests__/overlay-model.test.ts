@@ -36,14 +36,14 @@ import { foldMatch, isLevelOutcome, MatchOutcome, type EventEnvelope } from "@se
 import { defaultLineupPair, makeEnvelope, SIM_CONFIGS } from "@seazn/engine/testkit";
 import { builtinModules } from "@seazn/engine/sports";
 import { V3_SKINS } from "@/components/v2/scorepad/v3/registry";
-import { DISCIPLINE_LABEL_KEYS } from "@/lib/public-site";
+import { DISCIPLINE_LABEL_KEYS, disambiguatedShorts, teamShortOf } from "@/lib/public-site";
 import {
   DISCIPLINE_CLASS_TONE,
   disciplineTone,
   overlayModel,
   nameLadder,
+  overlaySideCodes,
   overlayStartLabel,
-  shortCode,
   splitLine,
   type OverlayMsg,
 } from "@/lib/overlay-model";
@@ -119,15 +119,18 @@ const project = (key: string, data: LiveFixtureData | OverlayLiveData, startLabe
 const CRICKET_BALL = (over: number, ball: number, runs: number) =>
   ["cricket.ball", { over, ballInOver: ball, striker: "H-p1", nonStriker: "H-p2", bowler: "A-p1", runs: { bat: runs } }] as const;
 
-describe("shortCode / splitLine", () => {
-  it("upper-cases the first three letters when the entrant has no short name", () => {
-    expect(shortCode({ id: "H", name: "Milton Keynes Rovers" })).toBe("MIL");
-    expect(shortCode({ id: "A", name: "ab" })).toBe("AB");
-    expect(shortCode({ id: "A", name: "  " })).toBe("—");
+describe("overlaySideCodes / splitLine", () => {
+  it("with no producer code, resolves the PAIR by the public site's rule (`disambiguatedShorts`, team rule)", () => {
+    const sides = [{ id: "H", name: "Milton Keynes Rovers" }, { id: "A", name: "ab" }] as const;
+    expect(overlaySideCodes(sides)).toEqual(disambiguatedShorts({ name: sides[0].name, isPerson: false }, { name: sides[1].name, isPerson: false }));
   });
 
-  it("prefers an explicit short name, upper-cased", () => {
-    expect(shortCode({ id: "H", name: "Milton Keynes Rovers", short: "mkr" })).toBe("MKR");
+  it("a side with no letters to its name reads the em dash — the overlay's own no-name glyph — beside a resolved code", () => {
+    expect(overlaySideCodes([{ id: "H", name: "  " }, { id: "A", name: "Riverside" }])).toEqual(["—", teamShortOf("Riverside")]);
+  });
+
+  it("prefers the producer's code, upper-cased", () => {
+    expect(overlaySideCodes([{ id: "H", name: "Milton Keynes Rovers", short: "mkr" }, { id: "A", name: "Riverside", short: "RIV" }])).toEqual(["MKR", "RIV"]);
   });
 
   it("splits a kernel side line into its value and its trailing meta", () => {
@@ -137,24 +140,21 @@ describe("shortCode / splitLine", () => {
 });
 
 describe("nameLadder — `_THEMES.md` §1's one size step (W2-F45)", () => {
-  it("is TWO rungs today, because no short name reaches the public payload", () => {
-    // The production shape. `public_entrants_v` carries `display_name` and a
-    // `team_display` blob with no `short_name` (W1 watch-list 6, resolved to
-    // the code), so `short` is absent on every real side.
-    expect(nameLadder({ id: "H", name: "Milton Keynes Rovers" })).toEqual([
-      "Milton Keynes Rovers",
-      "MIL",
-    ]);
+  it("is TWO rungs on air: the name, then the side's code", () => {
+    // The production shape. Both page doors pass the match centre's / relay read's resolved code as `short`
+    // (page-facts.ts), so the short name and the code are one value and the ladder is [name, code].
+    expect(nameLadder({ id: "H", name: "Milton Keynes Rovers", short: "MIL" }, "MIL")).toEqual(["Milton Keynes Rovers", "MIL"]);
+    expect(nameLadder({ id: "H", name: "Milton Keynes Rovers" }, "MIL")).toEqual(["Milton Keynes Rovers", "MIL"]);
   });
 
-  it("is THREE rungs once an entrant has a short name, and the MIDDLE one is it", () => {
+  it("is THREE rungs once a short name differs from the code, and the MIDDLE one is it", () => {
     // The rung the bar steps to before the code, and the case that tells a
     // real ladder from a full-name-or-code toggle: the short name is neither
     // of the other two.
-    expect(nameLadder({ id: "H", name: "Milton Keynes Rovers", short: "Rovers" })).toEqual([
+    expect(nameLadder({ id: "H", name: "Milton Keynes Rovers", short: "Rovers" }, "MKR")).toEqual([
       "Milton Keynes Rovers",
       "Rovers",
-      "MIL",
+      "MKR",
     ]);
   });
 
@@ -162,32 +162,32 @@ describe("nameLadder — `_THEMES.md` §1's one size step (W2-F45)", () => {
     // A ladder whose steps are invisible is a ladder that appears to have
     // more room to give than it has. Both directions: a short name equal to
     // the full name, and one that already IS the code.
-    expect(nameLadder({ id: "H", name: "RIV", short: "RIV" })).toEqual(["RIV"]);
-    expect(nameLadder({ id: "H", name: "Riverside", short: "RIV" })).toEqual(["Riverside", "RIV"]);
+    expect(nameLadder({ id: "H", name: "RIV", short: "RIV" }, "RIV")).toEqual(["RIV"]);
+    expect(nameLadder({ id: "H", name: "Riverside", short: "RIV" }, "RIV")).toEqual(["Riverside", "RIV"]);
   });
 
   it("keeps a short name that differs only in CASE from the code", () => {
-    // `shortCode` upper-cases an explicit short name; the ladder does NOT —
-    // "Riv" and "RIV" are two different things on air, and folding them would
-    // silently upper-case the middle rung.
-    expect(nameLadder({ id: "H", name: "Riverside Athletic", short: "Riv" })).toEqual([
+    // The code is upper-cased; the ladder's short-name rung is NOT — "Riv" and
+    // "RIV" are two different things on air, and folding them would silently
+    // upper-case the middle rung.
+    expect(nameLadder({ id: "H", name: "Riverside Athletic", short: "Riv" }, "RIV")).toEqual([
       "Riverside Athletic",
       "Riv",
       "RIV",
     ]);
   });
 
-  it("the last rung is derived from the NAME, never from the short name", () => {
-    // Against `shortCode`, whose answer here is "MKR". If the ladder reused it
-    // the bottom rung would be four letters on some sides and three on others,
-    // and a short name longer than the code would be the shortest thing
-    // available.
-    expect(shortCode({ id: "H", name: "Milton Keynes Rovers", short: "mkr" })).toBe("MKR");
-    expect(nameLadder({ id: "H", name: "Milton Keynes Rovers", short: "mkr" }).at(-1)).toBe("MIL");
+  it("the last rung is the side's CODE — the one the bug, the tiles and the Result card show — never a code of its own", () => {
+    // It used to be three letters off the side's own name (`threeLetterCode`), whatever the other side was called:
+    // Harlow and Harrow both stepped down to HAR, and two players both to PLA while the bug read ONE / TWO. The
+    // bottom rung is now whatever code the pair resolved (owner ruling 2026-10-19: one disambiguated pair for
+    // every consumer).
+    expect(nameLadder({ id: "H", name: "Harlow" }, "HARL").at(-1)).toBe("HARL");
+    expect(nameLadder({ id: "H", name: "Player One", short: "ONE" }, "ONE").at(-1)).toBe("ONE");
   });
 
   it("an unnameable side still has a rung — the em dash, not an empty string", () => {
-    expect(nameLadder({ id: "H", name: "  " })).toEqual(["  ", "—"]);
+    expect(nameLadder({ id: "H", name: "  " }, "—")).toEqual(["  ", "—"]);
   });
 
   it("reaches the MODEL, so the bar reads it rather than deriving it again", () => {
@@ -198,7 +198,7 @@ describe("nameLadder — `_THEMES.md` §1's one size step (W2-F45)", () => {
       sportKey: "football",
       data: { lastSeq: null, venueTz: "UTC", status: "in_play" } as OverlayLiveData,
       sides: [
-        { id: "H", name: "Milton Keynes Rovers", short: "Rovers" },
+        { id: "H", name: "Milton Keynes Rovers", short: "mkr" },
         { id: "A", name: "Riverside" },
       ],
       startLabel: null,
@@ -206,10 +206,83 @@ describe("nameLadder — `_THEMES.md` §1's one size step (W2-F45)", () => {
       msg: keyMsg,
       decidedTemplates: TEMPLATES,
     });
+    // A producer's short is the side's code (upper-cased), so the code is also the bottom rung.
     expect(model.sides.map((s) => s.ladder)).toEqual([
-      ["Milton Keynes Rovers", "Rovers", "MIL"],
-      ["Riverside", "RIV"],
+      ["Milton Keynes Rovers", "mkr", "MKR"],
+      ["Riverside", teamShortOf("Riverside")],
     ]);
+  });
+});
+
+// Owner ruling 2026-10-19 (fix/overlay-team-code-disambiguation): the overlay's side codes come from the PUBLIC SITE's
+// one rule (`disambiguatedShorts`), resolved for the two sides together — never a three-letter code per side, which aired
+// "HAR won 4–3 on penalties" between Harlow and Harrow. Every expected value below is that function run on the same
+// pair; nothing is typed in. Every sport in the registry, both winners, every name shape the brief names.
+const CODE_CASES: readonly (readonly [string, string, string])[] = [
+  ["colliding prefixes, one word", "Harlow", "Harrow"],
+  ["colliding prefixes, a shared first word", "Manchester United", "Manchester City"],
+  ["identical names", "Ashgrove Rovers", "Ashgrove Rovers"],
+  ["identical only after normalisation", "Ashgrove Rovers", "ASHGROVE rovers"],
+  ["one-word against multi-word", "Harlow", "Harlow Town"],
+  ["short names (under three letters)", "Al", "Ab"],
+  ["one letter each, identical", "A", "A"],
+  ["non-Latin (Greek), colliding", "Ολυμπιακός", "Ολυμπία"],
+  ["non-Latin (Cyrillic), a shared first word", "Спартак Москва", "Спартак Тамбов"],
+  ["non-Latin (Japanese)", "東京ヴェルディ", "東京ユナイテッド"],
+  ["non-Latin (Arabic), one-word against multi-word", "الأهلي", "الأهلي طرابلس"],
+];
+
+describe("overlayModel — side codes are the public site's pair (owner ruling 2026-10-19)", () => {
+  it("every sport × every name shape × both winners: the bug's codes, the bar's last rung and the short Result rung are disambiguatedShorts' pair", () => {
+    let checked = 0;
+    let collidedUnderOldRule = 0;
+    for (const mod of builtinModules) {
+      for (const [shape, a, b] of CODE_CASES) {
+        const expected = disambiguatedShorts({ name: a, isPerson: false }, { name: b, isPerson: false });
+        for (const winner of ["H", "A"] as const) {
+          const at = `${mod.key} / ${shape} (${a} v ${b}) / ${winner} wins`;
+          const model = overlayModel({
+            sportKey: mod.key,
+            data: { lastSeq: null, venueTz: "UTC", ...payload(mod.key, [], "decided", { kind: "win", winner, method: "regulation" }) } as OverlayLiveData,
+            sides: [{ id: "H", name: a }, { id: "A", name: b }],
+            startLabel: null,
+            clockLabel: null,
+            msg: keyMsg,
+            decidedTemplates: TEMPLATES,
+          });
+          expect(model.sides.map((s) => s.short), at).toEqual(expected);
+          expect(model.sides[0].short, `${at}: the two codes differ`).not.toBe(model.sides[1].short);
+          expect(model.sides.map((s) => s.ladder.at(-1)), `${at}: the bar's tightest rung is the same code`).toEqual(expected);
+          const code = expected[winner === "H" ? 0 : 1];
+          expect(model.resultShort, `${at}: the short Result rung names the winner by its own code`).toBe(`WIN ${code} REG`);
+          expect(model.header.period, `${at}: the context line carries the same short sentence`).toBe(model.resultShort);
+          checked++;
+        }
+        // The premise each case exists for: how many of these pairs the retired per-side rule could not tell apart.
+        if (mod === builtinModules[0] && a.replace(/[^\p{L}\p{N}]/gu, "").slice(0, 3).toUpperCase() === b.replace(/[^\p{L}\p{N}]/gu, "").slice(0, 3).toUpperCase()) collidedUnderOldRule++;
+      }
+    }
+    expect(checked, "every registry sport × every case × both winners").toBe(builtinModules.length * CODE_CASES.length * 2);
+    expect(builtinModules.length, "anti-vacuity: the registry").toBeGreaterThanOrEqual(11);
+    expect(collidedUnderOldRule, "the cases that aired one code for both sides before this fix").toBeGreaterThanOrEqual(7);
+  });
+
+  it("a producer's codes (both page doors pass the match centre's pair, persons included) are honoured as given, and the bar steps down to THEM", () => {
+    // Two players: the match centre resolves them by surname (ONE / TWO). Before this fix the bar's bottom rung was
+    // three letters off each name — PLA and PLA — while the bug read ONE / TWO.
+    const [one, two] = disambiguatedShorts({ name: "Player One", isPerson: true }, { name: "Player Two", isPerson: true });
+    const model = overlayModel({
+      sportKey: "tennis",
+      data: { lastSeq: null, venueTz: "UTC", status: "in_play" } as OverlayLiveData,
+      sides: [{ id: "H", name: "Player One", short: one }, { id: "A", name: "Player Two", short: two }],
+      startLabel: null,
+      clockLabel: null,
+      msg: keyMsg,
+      decidedTemplates: TEMPLATES,
+    });
+    expect(model.sides.map((s) => s.short)).toEqual([one, two]);
+    expect(model.sides.map((s) => s.ladder.at(-1))).toEqual([one, two]);
+    expect(one).not.toBe(two);
   });
 });
 
@@ -834,7 +907,7 @@ describe("overlayModel — §3's decided/void context line (fix round 5, I2)", (
     // §3:330-333 — "the band carries `resultMsg`'s full sentence, the context
     // line carries the same sentence with the winner reduced to the short name
     // the cell already uses… Both come from `resultMsg`; only the winner token
-    // differs." `shortCode("Milton Keynes Rovers")` is "MIL".
+    // differs." The pair's code for "Milton Keynes Rovers" (against Northbridge) is "MIL".
     expect(model.result, "the detail band's own full sentence is unchanged").toBe(
       "WIN Milton Keynes Rovers REG",
     );
