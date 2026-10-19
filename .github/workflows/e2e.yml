@@ -176,7 +176,7 @@ jobs:
     # changing the split. That derivation was made for TWO rest legs, predicting
     # 128 / 126 / 115s against a perfect-split floor of 123s.
     #
-    # THREE REST LEGS since 2026-09-27 (owner request), because "rest" grew out
+    # (SUPERSEDED 2026-10-19, FOUR rest legs, below.) THREE REST LEGS since 2026-09-27 (owner request), because "rest" grew out
     # from under that prediction: each of the two shards ran 344 tests, the
     # heavy leg 38. Measured Playwright step / whole job:
     #
@@ -280,9 +280,9 @@ jobs:
     # Why a fourth rest leg now, after the paragraph above argued against one:
     # that paragraph's trigger — "a rest leg is once more the slowest in a
     # run" — is exactly what happened, and replaying every option over real
-    # costs, four legs cannot be brought under ~650s of step whichever files
-    # are carved (the best the search found was 625s, by also carving two
-    # unrelated specs as filler), while plain 4/4 count shards with no
+    # costs, three rest legs plus heavy cannot be brought under ~650s of step
+    # whichever files are carved (the best the search found was 625s, by also
+    # carving two unrelated specs as filler), while plain 4/4 count shards with no
     # carve-out replay at 913s. Replayed step now: heavy 446s, rest 279 / 558 /
     # 472 / 419s, against 936-1050s measured for the old 2/3. That is one more
     # setup (~2.5 runner-min of ~110 a run), and it leaves room for the chess
@@ -294,13 +294,24 @@ jobs:
     #   parallel 1/4  416s / 4.5m   2/4  729s / 9.5m   3/4  497s / 5.9m
     #   parallel 4/4  599s / 7.5m   heavy 575s / 7.0m
     #
-    # Replayed steps were 279 / 557 / 469 / 418 / 446s. The slowest leg is 2/4
+    # Replayed steps were the 279 / 558 / 472 / 419s (rest) and 446s (heavy)
+    # above; an earlier draft of this paragraph carried a second set that
+    # disagreed with it by 1-3s and is dropped rather than reconciled. The
+    # slowest leg is 2/4
     # (match-room 257s + overlay-compositor 140s of test starts) at 12.2 min
     # start to end, 7.8 min under the cap; on the first attempt it was heavy at
     # 14.7 and on the original split 2/3 at 17.7-20+. On a slow day (steps
     # +30%, setup 240s — an estimate, not a measurement) 2/4 is ~16.4 min. The
     # workflow's wall clock is unchanged: walkthrough 1/3 ran 1118s on the
     # same run, so the parallel legs are not its floor.
+    #
+    # FORECAST RISK, from the #997 review: the one 5.1-minute test in
+    # player-stats-stale-version is the 11th test of 3/4, about TEN tests from
+    # the 2/4 boundary. Roughly 21 tests added to files that sort after it, or
+    # removed from before it, or a carve-out of a file that sorts before "pl"
+    # (match-room, say), moves it into 2/4 beside match-room and
+    # overlay-compositor, which lands near 1000s of job time: the original
+    # failure. Re-list `--shard=2/4` after any carve-out or large spec growth.
     #
     # `timeout-minutes: 20` STAYS. It is a cost guard against a hung job, and
     # the data does not show a shard that cannot be brought under ~15 min.
