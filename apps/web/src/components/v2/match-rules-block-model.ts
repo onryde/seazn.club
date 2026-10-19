@@ -19,11 +19,12 @@
 // stored override carries that no field edits (a replace must not drop it silently).
 import type { StageKind } from "@seazn/engine/core";
 import { ruleKeyOwning, type AnySportModule, type RuleKeyFact } from "@seazn/engine/sport";
-import { alignBestOfOnePoints, visibleRuleFields, type RuleField } from "@/lib/match-rules";
+import type { MatchRulesState } from "@/lib/fixture-status";
+import { visibleRuleFields, type RuleField } from "@/lib/match-rules";
 import { buildFragment, matchFieldsFor, type RuleContext } from "@/lib/rule-scope";
 import { detailIsInert } from "./stage-rules/stage-row-model";
 
-export type MatchRulesState = "unstarted" | "live" | "locked";
+export type { MatchRulesState } from "@/lib/fixture-status";
 
 /** What crosses from the server page to the client block: JSON only (the loader's `fields` hold functions and are rebuilt
  *  on the client from the sport). */
@@ -228,8 +229,9 @@ export function matchFragment(
   // `build`/`read` never use the labels: the words only decorate the options.
   const all = allAdapted(ctx, stageResolved, { off: "", halfMinutes: () => "" });
   const sent = all.filter((f) => !f.held && matchSource(f.field.key, values, stageValues) === "match");
-  // On a best of 1 the one points field writes both keys (`BEST_OF_ONE_PAIR`), as the stage and division editors do.
-  const built = alignBestOfOnePoints(ctx.sportKey, buildFragment(sent.map((f) => f.field), values, stageResolved), stageResolved);
+  // Built over EVERY field, the best-of-1 shadow key too: `setRuleValue` keeps the pair equal in the values, so a changed
+  // "Points to win" writes both keys (`BEST_OF_ONE_PAIR`), as the stage and division editors do - no later alignment needed.
+  const built = buildFragment(sent.map((f) => f.field), values, stageResolved);
   if (storedOverride === null) return built;
   // Top-level keys some match field edits: those are the form's to say. Any other key the override carries stays.
   const edited = new Set(all.flatMap((a) => a.field.edits.map((k) => k.split(".")[0]!)));

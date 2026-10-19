@@ -21,6 +21,11 @@ export type FixtureStatusValue = (typeof FIXTURE_STATUSES)[number];
  *  reader that must agree with the lock (the live-fixture transport) imports the SAME set instead of copying it. */
 export const LOCKED_FIXTURE_STATUSES: ReadonlySet<string> = new Set(["finalized", "cancelled"]);
 
+/** Where a match stands for the fixture console's "Match rules" block (`loadFixtureMatchRules`): not yet played; under way
+ *  (played, or decided without play with a scored award - a correction refits it); decided without play with NO award to
+ *  refit (a bye: every change is refused); or finished (`LOCKED_FIXTURE_STATUSES`). */
+export type MatchRulesState = "unstarted" | "live" | "decided" | "locked";
+
 /** Settled but not locked: the match has ended (a result, a walkover or an abandonment), yet the ledger still takes a
  *  write — an undo reopens it. Every status that is neither open (scheduled, in_play, the held needs_decision) nor
  *  locked. `server/usecases/carried-forward.ts` reads it as `SETTLED_OPEN_STATUSES`; the live-fixture transport reads

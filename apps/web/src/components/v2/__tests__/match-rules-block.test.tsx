@@ -132,10 +132,11 @@ describe("the block in each state (badminton league)", () => {
   });
 
   it("each state exposes exactly its own controls (counted)", () => {
-    const states: MatchRulesState[] = ["unstarted", "live", "locked"];
+    const states: MatchRulesState[] = ["unstarted", "live", "decided", "locked"];
     const want: Record<MatchRulesState, { fields: boolean; save: boolean; correct: boolean; locked: boolean }> = {
       unstarted: { fields: true, save: true, correct: false, locked: false },
       live: { fields: false, save: false, correct: true, locked: false },
+      decided: { fields: false, save: false, correct: false, locked: true },
       locked: { fields: false, save: false, correct: false, locked: true },
     };
     let checked = 0;
@@ -145,9 +146,25 @@ describe("the block in each state (badminton league)", () => {
       expect(has(html, "match-rules-save"), `${state} save`).toBe(want[state].save);
       expect(has(html, "match-rules-correct"), `${state} correct`).toBe(want[state].correct);
       expect(has(html, "match-rules-locked"), `${state} locked`).toBe(want[state].locked);
+      expect(has(html, "match-rules-cancel"), `${state}: Cancel exists only inside a correction in progress`).toBe(false);
       checked++;
     }
-    expect(checked).toBe(3);
+    expect(checked).toBe(4);
+  });
+
+  /** The markup `renderToStaticMarkup` writes for a sentence: its text with the HTML-significant characters escaped. */
+  const esc = (t: string): string => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#x27;");
+
+  it("a bye (decided without play) says so, not that the match is finished - words from the app's own refusal sentences", () => {
+    const html = render({ ...base, state: "decided" });
+    expect(html).toContain('data-state="decided"');
+    expect(html).toContain('data-reason="decided"');
+    expect(html).toContain(esc(EN["rules.err.fixtureDecidedWithoutPlay"]!));
+    expect(html, "not the finished-match sentence").not.toContain(esc(EN["matchRules.locked"]!));
+    const finished = render({ ...base, state: "locked" });
+    expect(finished).toContain('data-reason="finished"');
+    expect(finished).toContain(esc(EN["matchRules.locked"]!));
+    expect(html, "no form").not.toMatch(/<(select|input)\b/);
   });
 
   it("an empty stage line says nothing about the stage (no 'From the stage:' with nothing after it)", () => {

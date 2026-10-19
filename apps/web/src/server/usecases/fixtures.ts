@@ -23,12 +23,13 @@ import { disciplineEnforcedForFixture, gateLineupSuspensions } from "./disciplin
 import { resolveFixtureCfg, resolveModule } from "@/server/engine-db";
 import { liveCfg, stageForfeitAward } from "@/server/engine-db/fixture-cfg";
 import { formatStanding } from "@/server/engine-db/format-standing";
-import { LOCKED_FIXTURE_STATUSES } from "@/lib/fixture-status";
+import { LOCKED_FIXTURE_STATUSES, type MatchRulesState } from "@/lib/fixture-status";
+import { isScoredAward } from "@/server/engine-db/awarded-state";
 import { matchFieldsFor } from "@/lib/rule-scope";
 import type { RuleField } from "@/lib/match-rules";
 import { benchRefusal, lineupCatalogFor } from "./lineup-catalog";
 import { validateLineup, type AnySportModule, type LineupIssue, type PositionCatalog } from "@seazn/engine/sport";
-import type { ForfeitAward, Lineup, StageKind } from "@seazn/engine/core";
+import type { ForfeitAward, Lineup, MatchOutcome, StageKind } from "@seazn/engine/core";
 import { log } from "@/server/logger";
 import type { Dict } from "@/lib/i18n-constants";
 import { formatLineOf } from "@/server/engine-db/rules-version";
@@ -186,6 +187,21 @@ async function readPadRules(auth: AuthCtx, fixtureId: string) {
 }
 
 /**
+ * Where a match stands for the block, by the writer's own predicates (`fixture-rules.ts`). `standing` is null for a match the
+ * writer refuses first (`LOCKED_FIXTURE_STATUSES`): `locked`. A match decided without play and credited no score - a bye -
+ * is `decided`: `assertAwardFits` refuses every change to it (FIXTURE_FORMAT_LOCKED, reason decided). Otherwise `live` once
+ * played or decided without play with a scored award (a correction refits it), else `unstarted`.
+ */
+export function matchRulesState(
+  outcome: MatchOutcome | null,
+  standing: { played: boolean; decidedWithoutPlay: boolean } | null,
+): MatchRulesState {
+  if (standing === null) return "locked";
+  if (standing.decidedWithoutPlay && !isScoredAward(outcome)) return "decided";
+  return standing.played || standing.decidedWithoutPlay ? "live" : "unstarted";
+}
+
+/**
  * W2c Task 19 (S2, X-SR-2, X-SR-3, X-SR-5) - what the fixture console's "Match rules" block reads: the format the match's
  * STAGE resolves to, the match's own override over it, the format it plays by now, the fields one match may change, and
  * where the match stands.
@@ -212,7 +228,7 @@ export interface FixtureMatchRules {
   readonly stageResolved: Record<string, unknown>;
   readonly effective: Record<string, unknown>;
   readonly fields: readonly RuleField[];
-  readonly state: "unstarted" | "live" | "locked";
+  readonly state: MatchRulesState;
 }
 
 const isCfgObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -229,6 +245,7 @@ export async function loadFixtureMatchRules(auth: AuthCtx, fixtureId: string, di
     const [row] = await tx<
       {
         status: string;
+        outcome: MatchOutcome | null;
         config_snapshot: unknown;
         rules_override: unknown;
         division_config: unknown;
@@ -239,7 +256,7 @@ export async function loadFixtureMatchRules(auth: AuthCtx, fixtureId: string, di
         stage_kind: string | null;
       }[]
     >`
-      select f.status, f.config_snapshot, f.rules_override, d.config as division_config, d.sport_key, d.module_version,
+      select f.status, f.outcome, f.config_snapshot, f.rules_override, d.config as division_config, d.sport_key, d.module_version,
              d.variant_key, s.config as stage_config, s.kind as stage_kind
         from fixtures f
         join divisions d on d.id = f.division_id
@@ -263,7 +280,7 @@ export async function loadFixtureMatchRules(auth: AuthCtx, fixtureId: string, di
       stageResolved,
       effective,
       fields: matchFieldsFor({ module: sportModule, stageKind, variant: row.variant_key }),
-      state: standing === null ? "locked" : standing.played || standing.decidedWithoutPlay ? "live" : "unstarted",
+      state: matchRulesState(row.outcome, standing),
     };
   });
 }

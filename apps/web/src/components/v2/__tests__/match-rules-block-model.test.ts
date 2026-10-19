@@ -208,6 +208,20 @@ describe("the other bounded keys: a number a match may only shorten opens at its
     const g = matchFormFields(ctx, noOt, hydrateMatchValues(ctx, noOt, noOt, LABELS), LABELS).find((x) => x.field.key === "overtimeMinutes")!;
     expect(g.held, "no overtime in the stage: the minutes mean nothing, and a match cannot add one").toBe(true);
   });
+
+  it("an overtime the stage plays with NO minutes written has no ceiling to bound by: the field is held, never offered with an undefined max", () => {
+    const ctx = ctxOf("icehockey", "knockout", null);
+    const m = mod("icehockey");
+    const base = variantCfg("icehockey", Object.keys(m.variants)[0]!);
+    // The guard's own premise: the stage plays overtime (so the detail is not inert) and writes no number for its minutes.
+    const stage = { ...base, overtime: { kind: "sudden_death", skaters: 3 } };
+    const f = matchFormFields(ctx, stage, hydrateMatchValues(ctx, stage, stage, LABELS), LABELS).find((x) => x.field.key === "overtimeMinutes")!;
+    expect(f.bound).toBe("shorter");
+    expect(f.held, "no number to shorten: held").toBe(true);
+    expect(Number.isNaN(f.field.min), "and no NaN floor leaks into the control").toBe(false);
+    const curated = matchFieldsFor(ctx).find((x) => x.key === "overtimeMinutes")!;
+    expect(f.field.max, "the curated field is left as it is - no ceiling invented from nothing").toBe(curated.max);
+  });
 });
 
 describe("the fragment is what differs from the stage - and nothing else", () => {

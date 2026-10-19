@@ -137,7 +137,7 @@
         "files": [
           "src/server/usecases/__tests__/fixture-match-rules-loader.test.ts"
         ],
-        "name": "a walkover recorded but not finalized is live"
+        "name": "decided WITHOUT play"
       }
     ]
   },
@@ -452,7 +452,7 @@
         "files": [
           "src/components/v2/__tests__/match-rules-block-model.test.ts"
         ],
-        "name": "ice hockey overtime minutes (a nested key)"
+        "name": "an overtime the stage plays with NO minutes written"
       }
     ]
   },
@@ -543,21 +543,6 @@
           "src/components/v2/__tests__/match-rules-block-model.test.ts"
         ],
         "name": "badminton: untouched sends nothing"
-      }
-    ]
-  },
-  {
-    "id": "t19-model-no-align",
-    "file": "apps/web/src/components/v2/match-rules-block-model.ts",
-    "find": "alignBestOfOnePoints(ctx.sportKey, buildFragment(sent.map((f) => f.field), values, stageResolved), stageResolved)",
-    "replace": "buildFragment(sent.map((f) => f.field), values, stageResolved)",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/v2/__tests__/match-rules-block-model.test.ts"
-        ],
-        "name": "best of 1: ONE 'Points to win' field"
       }
     ]
   },
@@ -692,7 +677,7 @@
         "files": [
           "src/components/v2/__tests__/match-rules-block.test.tsx"
         ],
-        "name": "locked (finished)"
+        "name": "locked .finished.: the lock sentence"
       }
     ]
   },
@@ -729,8 +714,8 @@
   {
     "id": "t19-block-cancel-everywhere",
     "file": "apps/web/src/components/v2/match-rules-block.tsx",
-    "find": "{state === \"live\" && (\n              <button type=\"button\" disabled={saving} onClick={cancel}",
-    "replace": "{true && (\n              <button type=\"button\" disabled={saving} onClick={cancel}",
+    "find": "{state === \"live\" && (\n              <button type=\"button\" data-testid=\"match-rules-cancel\"",
+    "replace": "{true && (\n              <button type=\"button\" data-testid=\"match-rules-cancel\"",
     "killers": [
       {
         "cwd": "apps/web",
@@ -817,21 +802,6 @@
     ]
   },
   {
-    "id": "t19-block-no-reseed",
-    "file": "apps/web/src/components/v2/match-rules-block.tsx",
-    "find": "key={blockSeedKey(props)}",
-    "replace": "key=\"fixed\"",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/v2/__tests__/match-rules-block.test.tsx"
-        ],
-        "name": "unstarted, no override"
-      }
-    ]
-  },
-  {
     "id": "t19-console-block-never",
     "file": "apps/web/src/components/v2/fixture-console.tsx",
     "find": "{matchRules && (",
@@ -873,6 +843,81 @@
           "src/components/v2/__tests__/fixture-console-match-rules.test.tsx"
         ],
         "name": "an override in force shows on the closed phone row too"
+      }
+    ]
+  },
+  {
+    "id": "t19-state-bye-live",
+    "file": "apps/web/src/server/usecases/fixtures.ts",
+    "find": "if (standing.decidedWithoutPlay && !isScoredAward(outcome)) return \"decided\";",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/fixture-match-rules-loader.test.ts"
+        ],
+        "name": "decided WITHOUT play"
+      }
+    ]
+  },
+  {
+    "id": "t19-state-award-decided",
+    "file": "apps/web/src/server/usecases/fixtures.ts",
+    "find": "if (standing.decidedWithoutPlay && !isScoredAward(outcome)) return \"decided\";",
+    "replace": "if (standing.decidedWithoutPlay) return \"decided\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/fixture-match-rules-loader.test.ts"
+        ],
+        "name": "decided WITHOUT play"
+      }
+    ]
+  },
+  {
+    "id": "t19-block-decided-sentence",
+    "file": "apps/web/src/components/v2/match-rules-block.tsx",
+    "find": "{msg(state === \"decided\" ? FIXTURE_LOCK_KEYS.decided : \"matchRules.locked\")}",
+    "replace": "{msg(\"matchRules.locked\")}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block.test.tsx"
+        ],
+        "name": "a bye (decided without play) says so"
+      }
+    ]
+  },
+  {
+    "id": "t19-block-decided-form",
+    "file": "apps/web/src/components/v2/match-rules-block.tsx",
+    "find": "const locked = state === \"locked\" || state === \"decided\";",
+    "replace": "const locked = state === \"locked\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block.test.tsx"
+        ],
+        "name": "each state exposes exactly its own controls"
+      }
+    ]
+  },
+  {
+    "id": "t19-model-no-number-held-reason",
+    "file": "apps/web/src/components/v2/match-rules-block-model.ts",
+    "find": "if (!isLength(ceiling)) return { field, bound: owned.bound, held: true };",
+    "replace": "if (!isLength(ceiling)) return { field, bound: owned.bound, held: inert };",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block-model.test.ts"
+        ],
+        "name": "an overtime the stage plays with NO minutes written"
       }
     ]
   }

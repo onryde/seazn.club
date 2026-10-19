@@ -12,9 +12,11 @@ import { FIXTURE_STATUSES, LOCKED_FIXTURE_STATUSES } from "@/lib/fixture-status"
 import { getDictionary } from "@/lib/i18n";
 import { matchFieldsFor } from "@/lib/rule-scope";
 import { appendEvent } from "@/server/engine-db";
-import { seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
+import { declaredVariant, seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
+import { fixtureRow, playBadminton, rowsOf, type FixtureRow } from "@/server/engine-db/__tests__/helpers/w2b-rig";
 import { loadFixtureMatchRules } from "../fixtures";
 import { writeFixtureRulesOverride } from "../fixture-rules";
+import { withdrawEntrantCascade } from "../withdrawal";
 import { seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -116,18 +118,56 @@ describe.skipIf(!HAS_DB)("loadFixtureMatchRules", () => {
     expect(open, "some statuses are not locked").toBeGreaterThan(0);
   });
 
-  it("a walkover recorded but not finalized is live (decided without play) - the writer's own 'started' agrees", async () => {
+  it("a forfeit EVENT recorded (not finalized) is live - played - and the writer's own 'started' agrees", async () => {
     const b = await seedBracket({ sport: "badminton", variant: "short", stageKind: "league", entrants: 2 });
     const id = b.fixtureIds[0]!;
     const dict = await getDictionary("en", "public");
     expect((await loadFixtureMatchRules(b.auth, id, dict)).state, "premise: nothing recorded").toBe("unstarted");
     const [fx] = await sql<{ home_entrant_id: string }[]>`select home_entrant_id from fixtures where id = ${id}`;
     await appendEvent(b.auth.orgId, id, 0, { type: "core.forfeit", payload: { by: fx!.home_entrant_id, reason: "walkover" } });
-    const state = (await loadFixtureMatchRules(b.auth, id, dict)).state;
-    expect(state, "a forfeit is play the format must fit: live, not unstarted").toBe("live");
-    // The writer reports the same fact: the write is a live correction (`started`).
+    expect((await loadFixtureMatchRules(b.auth, id, dict)).state, "a forfeit is play the format must fit: live, not unstarted").toBe("live");
     const out = await writeFixtureRulesOverride(b.auth, [id], null);
     expect(out.fixtures[0]!.started, "the writer's started").toBe(true);
+  });
+
+  it("decided WITHOUT play (no event, no frozen cfg): a scored award is live - a correction refits it - and a bye is 'decided', which the writer refuses on", async () => {
+    const dict = await getDictionary("en", "public");
+    // Ruling 116 through the real producers (W2b Task 16's chain): line a is played, its winner withdraws while her next tie
+    // waits, line b is played, the arriving side walks over her dead seat - an award no event records.
+    const k = await seedBracket({ sport: "badminton", variant: declaredVariant("badminton", "bwf"), stageKind: "knockout", entrants: 8 });
+    const rows = await rowsOf(k.stageId);
+    const first = Math.min(...rows.map((r) => r.round_no));
+    const r1 = rows.filter((r) => r.round_no === first && r.home_entrant_id && r.away_entrant_id);
+    const a = r1.find((x) => r1.some((y) => y.id !== x.id && y.winner_to_fixture !== null && y.winner_to_fixture === x.winner_to_fixture))!;
+    const sib = r1.find((y) => y.id !== a.id && y.winner_to_fixture === a.winner_to_fixture)!;
+    const parentId = a.winner_to_fixture!;
+    const w1 = (await playBadminton(k.auth, a.id, true)).home_entrant_id!;
+    await withdrawEntrantCascade(k.auth, w1);
+    await playBadminton(k.auth, sib.id, true);
+    const walkover: FixtureRow = await fixtureRow(parentId);
+    const [snap] = await sql<{ config_snapshot: unknown }[]>`select config_snapshot from fixtures where id = ${parentId}`;
+    const events = await sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${parentId}`;
+    expect(events[0]!.n, "premise: no event records the walkover").toBe(0);
+    expect(walkover.outcome, "premise: an outcome stands").not.toBeNull();
+    expect(snap!.config_snapshot, "premise: nothing froze its cfg, so it is not 'played'").toBeNull();
+    expect((await loadFixtureMatchRules(k.auth, parentId, dict)).state, "decided without play, credited a score: a correction refits it").toBe("live");
+    expect((await writeFixtureRulesOverride(k.auth, [parentId], null)).fixtures[0]!.started, "the writer: started").toBe(true);
+
+    // A bye (an odd draw): decided without play and credited no score - the writer refuses every change to it.
+    const odd = await seedBracket({ sport: "badminton", variant: declaredVariant("badminton", "bwf"), stageKind: "knockout", entrants: 6 });
+    const byes = (await rowsOf(odd.stageId)).filter((r) => r.outcome?.reason === "bye");
+    expect(byes.length, "premise: the odd draw has byes").toBeGreaterThan(0);
+    for (const bye of byes) {
+      expect((await loadFixtureMatchRules(odd.auth, bye.id, dict)).state, "a bye").toBe("decided");
+      await expect(writeFixtureRulesOverride(odd.auth, [bye.id], { bestOf: 1 })).rejects.toMatchObject({
+        code: "FIXTURE_FORMAT_LOCKED",
+        extra: { reason: "decided" },
+      });
+    }
+    // The played matches of the same draw are not byes.
+    const played = (await rowsOf(odd.stageId)).filter((r) => r.outcome === null && r.home_entrant_id && r.away_entrant_id);
+    expect(played.length, "premise: the odd draw also has real matches").toBeGreaterThan(0);
+    expect((await loadFixtureMatchRules(odd.auth, played[0]!.id, dict)).state, "a real, unplayed match").toBe("unstarted");
   });
 
   it("another sport (football knockout): the fields are the match keys only - no stage-only decider", async () => {

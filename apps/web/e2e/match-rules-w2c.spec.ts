@@ -247,6 +247,13 @@ test("X-SR-5 correct a live match's format: a fitting change saves, bumps the ru
   await expect(block.getByTestId("stage-rule-field-bestOf")).toHaveCount(0);
   await block.getByTestId("match-rules-correct").click();
   await expect(block.getByTestId("match-rules-warning"), "the form says the match so far is kept").toHaveText(L["matchRules.correctWarning"]!);
+  // Cancel walks the correction back: the form closes, nothing is written, and reopening shows the format as it was.
+  await selectOf(block, "bestOf").selectOption("5");
+  await block.getByTestId("match-rules-cancel").click();
+  await expect(block.getByTestId("match-rules-save"), "Cancel closes the form").toHaveCount(0);
+  expect((await rulesOf(request, id)).cfg.bestOf, "Cancel wrote nothing").toBe(before.rules.cfg.bestOf);
+  await block.getByTestId("match-rules-correct").click();
+  await expect(selectOf(block, "bestOf"), "reopened at the format the match plays").toHaveValue(String(before.rules.cfg.bestOf));
   await selectOf(block, "bestOf").selectOption("5");
   await save(page, block);
   await expect(block.getByTestId("match-rules-overridden")).toBeVisible({ timeout: STEP_MS });
@@ -349,6 +356,32 @@ test("X-SR-3 a finished match shows the lock and no form - and the server refuse
 // Another family: a period sport whose decider is a NESTED key bounded to shorter (ice hockey overtime), and a sport with
 // nothing to change for one match (generic).
 // ---------------------------------------------------------------------------------------------------------------------
+test("X-SR-3 a bye (decided without play) is locked in its own words - not 'finished' - and the server refuses the same change", async ({ page, request }) => {
+  test.setTimeout(150_000);
+  // Three entrants in a knockout: one seed has no opponent, so its tie is a bye (decided without play, no score credited).
+  const s = await seed(request, "badminton", { label: "bye", kind: "knockout", entrants: 3 });
+  let byeId: string | null = null;
+  let real = 0;
+  for (const id of s.fixtureIds) {
+    const f = await apiJson<{ outcome: { reason?: string } | null }>(request, `/api/v1/fixtures/${id}`);
+    expect(f.status, `GET fixture: ${JSON.stringify(f.error)}`).toBe(200);
+    if (f.data!.outcome?.reason === "bye") byeId = id;
+    else real++;
+  }
+  expect(byeId, "the premise: an odd draw has a bye").not.toBeNull();
+  expect(real, "the premise: and a match that is not one").toBeGreaterThan(0);
+
+  const block = await openConsole(page, await fixturePath(request, byeId!));
+  await expect(block).toHaveAttribute("data-state", "decided");
+  await expect(block.getByTestId("match-rules-locked")).toHaveAttribute("data-reason", "decided");
+  await expect(block.getByTestId("match-rules-locked")).toHaveText(L["rules.err.fixtureDecidedWithoutPlay"]!);
+  await expect(block.locator("select, input, button"), "nothing to change on a bye").toHaveCount(0);
+
+  const refused = await apiJson<unknown>(request, `/api/v1/fixtures/${byeId!}/rules`, "PUT", { rules: { bestOf: 1 } });
+  expect(refused.status, "the server refuses the same change").toBe(409);
+  expect(refused.error?.code).toBe("FIXTURE_FORMAT_LOCKED");
+});
+
 test("another sport (ice hockey knockout): overtime minutes open at the stage's, accept shorter, refuse longer; the rest of the overtime object is kept", async ({ page, request }) => {
   test.setTimeout(180_000);
   const m = mod("icehockey");

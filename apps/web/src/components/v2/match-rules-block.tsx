@@ -17,6 +17,7 @@ import { useId, useMemo, useState } from "react";
 import { apiV1 } from "@/lib/client-v1";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { settingsSaveErrorText } from "@/lib/config-issue-copy";
+import { FIXTURE_LOCK_KEYS } from "@/lib/rule-errors";
 import { moduleFor } from "@/lib/rule-scope";
 import { setRuleValue } from "@/lib/match-rules";
 import { RuleFieldControl } from "./stage-rules/rule-field-control";
@@ -69,7 +70,8 @@ function MatchRulesBlockBody({ fixtureId, sportKey, stageKind, variant, stageLin
   if (ctx === null) return null;
   const fields = matchFormFields(ctx, stageResolved, values, labels);
   const dirty = matchFormDirty(opened, values);
-  const locked = state === "locked";
+  // Finished, or decided without play with no award to refit (a bye): either way the writer refuses every change.
+  const locked = state === "locked" || state === "decided";
   // A finished match has no form (X-SR-3); a live one opens it only on "Correct format" (X-SR-5); an unstarted one always.
   const formOpen = state === "unstarted" || (state === "live" && correcting);
 
@@ -139,8 +141,8 @@ function MatchRulesBlockBody({ fixtureId, sportKey, stageKind, variant, stageLin
       )}
 
       {locked && (
-        <p data-testid="match-rules-locked" className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-700">
-          {msg("matchRules.locked")}
+        <p data-testid="match-rules-locked" data-reason={state === "decided" ? "decided" : "finished"} className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-700">
+          {msg(state === "decided" ? FIXTURE_LOCK_KEYS.decided : "matchRules.locked")}
         </p>
       )}
 
@@ -201,7 +203,7 @@ function MatchRulesBlockBody({ fixtureId, sportKey, stageKind, variant, stageLin
               {msg(saving ? "schedule.saving" : "schedule.save")}
             </button>
             {state === "live" && (
-              <button type="button" disabled={saving} onClick={cancel} className="btn btn-ghost min-h-11">
+              <button type="button" data-testid="match-rules-cancel" disabled={saving} onClick={cancel} className="btn btn-ghost min-h-11">
                 {msg("schedule.cancel")}
               </button>
             )}
