@@ -59,9 +59,10 @@
 // A credential also rides a request BODY, which no URL rule sees: the POST that spends a one-time token sends it as JSON
 // (`{ token, next }`), so a Sentry error on that route carries the working credential in `request.data`. A Sentry event
 // whose request URL or transaction names such a route loses its body, the way a capture route's does (`isCaptureEvent`):
-// the POST routes in `BODY_TOKEN_ROUTES` (sign-in consume, email verification, password reset, email-change
-// confirmation, funnel claim, a registrant's withdraw / checkout / resend) and every route with a secret in its path
-// (`SECRET_PATH_PREFIXES`: the invite and claim accepts, check-in, revoke). Only a Sentry event has a body to drop.
+// the POST routes in `BODY_CREDENTIAL_ROUTES` (sign-in consume, email verification, password reset, email-change
+// confirmation, funnel claim, a registrant's withdraw / checkout / resend, and the two whose body is a PASSWORD: log-in
+// and sign-up) and every route with a secret in its path (`SECRET_PATH_PREFIXES`: the invite and claim accepts,
+// check-in, revoke). Only a Sentry event has a body to drop.
 import type * as Sentry from "@sentry/nextjs";
 import type { CaptureResult } from "posthog-js";
 import { OVERLAY_KEY_PARAM } from "./realtime-purpose";
@@ -320,11 +321,13 @@ function isOneTimeTokenEvent(event: Event): boolean {
  * The POST routes that read a CREDENTIAL from the request body, as Next route templates (`[id]` is one path segment):
  * the sign-in consume `{ token, next }`, the email verification `{ token, next }`, the password reset `{ token,
  * password }` (the new password is in it too), the email-change confirmation (its token rides the query; any body goes
- * with it), the funnel claim `{ token }`, and the registrant's access-token calls (withdraw, checkout, resend). A route
- * whose secret is in its PATH is not listed: `SECRET_PATH_PREFIXES` covers it. Exported so a test can compare the list
- * with the route files, which are where it comes from.
+ * with it), the funnel claim `{ token }`, the registrant's access-token calls (withdraw, checkout, resend), and the
+ * routes whose body is a PASSWORD: log-in and sign-up `{ email, password, next }`. A password is a standing credential
+ * rather than a one-time token, but it leaks the same way. A route whose secret is in its PATH is not listed:
+ * `SECRET_PATH_PREFIXES` covers it. Exported so a test can compare the list with the route files, which are where it
+ * comes from: a route that takes a token or a password in its body and is missing here fails that test.
  */
-export const BODY_TOKEN_ROUTES = [
+export const BODY_CREDENTIAL_ROUTES = [
   "/api/auth/magic-link/consume",
   "/api/auth/verify-email",
   "/api/auth/reset-password",
@@ -334,12 +337,14 @@ export const BODY_TOKEN_ROUTES = [
   "/api/v1/public/registrations/[id]/withdraw",
   "/api/v1/public/registrations/by-ref/[ref]/withdraw",
   "/api/v1/public/registrations/groups/[id]/resend",
+  "/api/auth/login",
+  "/api/auth/signup",
 ] as const;
 const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /** A route template as a regex source: a `[param]` segment is any one segment (a real id, or the literal `[id]` of a transaction). */
 const routePattern = (route: string) => route.split("/").map((seg) => (/^\[.+\]$/.test(seg) ? "[^/?#\\s]+" : escapeRegExp(seg))).join("\\/");
 /** A body-credential route's event: the route ends the URL (a query string or fragment may follow), so `/verify-emails` is not it. */
-const BODY_ROUTE_EVENT = new RegExp(`(?:${BODY_TOKEN_ROUTES.map(routePattern).join("|")})\\/?(?:[?#]|$)`);
+const BODY_ROUTE_EVENT = new RegExp(`(?:${BODY_CREDENTIAL_ROUTES.map(routePattern).join("|")})\\/?(?:[?#]|$)`);
 /** The same prefixes as `SECRET_PATH`, not global (a global regex's `lastIndex` makes `test` stateful), for an event's URL or transaction. */
 const SECRET_PATH_EVENT = new RegExp(`(?:${prefixAlternation("\\/")})[^/?#\\s"'<>]+`);
 function holdsCredentialBody(event: Event): boolean {
@@ -381,7 +386,8 @@ function dropOneTimeToken<E extends Event>(event: E): E {
  * frames and span data. A capture route's event also loses its Bearer and its
  * request body (A18); a one-time-token route's event also loses the token in
  * its bare `request.query_string`; the event of a route that takes a credential
- * in its body (`BODY_TOKEN_ROUTES`) or in its path loses `request.data`.
+ * in its body (`BODY_CREDENTIAL_ROUTES`: a token or a password) or in its path
+ * loses `request.data`.
  */
 export function scrubSentryEvent<E extends Event>(event: E): E {
   const scrubbed = scrubScoreTokens(event);

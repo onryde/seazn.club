@@ -4,9 +4,10 @@
 // error on that route carries the working credential in `request.data` after the URL has been scrubbed. The scrubber
 // drops the body of an event whose request URL or transaction names such a route, the way a capture route's event is
 // recognised (`isCaptureEvent`, A18):
-//  - the POST routes that read a credential from the body (`BODY_TOKEN_ROUTES`): the sign-in consume, the email
+//  - the POST routes that read a credential from the body (`BODY_CREDENTIAL_ROUTES`): the sign-in consume, the email
 //    verification, the password reset (its body also holds the NEW password), the email-change confirmation, the funnel
-//    claim, and the registrant's access-token calls (withdraw, checkout, resend);
+//    claim, and the registrant's access-token calls (withdraw, checkout, resend); and the routes whose body is a PASSWORD,
+//    log-in and sign-up (a standing credential rather than a one-time token, but the same leak);
 //  - every route whose PATH carries a secret (`SECRET_PATH_PREFIXES`): `/api/invites/<token>/accept|claim`,
 //    `/api/claims/<token>/accept`, `/api/checkin/<token>`, `/api/orgs/<id>/invites/<token>/revoke`.
 //
@@ -14,6 +15,9 @@
 //  - the body credentials: every `app/api/**/route.ts` that names a `token` AND reads a request body is found by a scan, and
 //    must carry a verdict in BODY_VERDICTS (a credential, or why its body is not one). A new route that takes a token in
 //    its body fails the first test until it takes a side; a verdict whose route is gone fails too;
+//  - the passwords: every body-reading route whose schema has a password field (inline, or an exported schema found by
+//    scanning src, aliases followed) is derived the same way, so a new change-password or set-password route fails the
+//    table-equality test until it is listed; the detector itself is proved on synthetic route sources;
 //  - the path secrets: `secretRoutes()` + `VERDICTS` (_route-scan.ts), the same table scrub-path-secrets.test.ts sweeps;
 //  - the link routes: `linkBuilders()` (every `<path>?token=${…}` the app emails); the ones under /api/ are routes too.
 // The scrubber's own table is exported and must equal what the scan derives, in both directions.
@@ -38,14 +42,14 @@ vi.mock("@/lib/db", async (importOriginal) => ({
 }));
 
 import { USER_ID } from "./_fake-sql";
-import { APP_DIR, VERDICTS, linkBuilders, NOT_ONE_TIME, secretRoutes } from "./_route-scan";
+import { APP_DIR, SRC_DIR, VERDICTS, linkBuilders, NOT_ONE_TIME, secretRoutes } from "./_route-scan";
 import { createLoginLink } from "@/lib/login-link";
 import { createVerificationToken } from "@/lib/verification";
 import { createPasswordResetToken } from "@/lib/password-reset";
 import { createInvite } from "@/server/usecases/invites";
 import { mintCheckinToken } from "@/server/usecases/checkin-token";
 import { mintClaimSecret } from "@/server/usecases/person-claims";
-import { BODY_TOKEN_ROUTES, scrubSentryEvent } from "../scrub-score-url";
+import { BODY_CREDENTIAL_ROUTES, scrubSentryEvent } from "../scrub-score-url";
 
 const ORIGIN = "https://seazn.club";
 const MINTS = 12;
@@ -117,8 +121,8 @@ const BODY_VERDICTS: Record<string, true | string> = {
   "api/v1/public/registrations/groups/[id]/resend": true,
   "api/auth/change-email": "the body is the new address; the token is minted and emailed, never received",
   "api/auth/forgot-password": "the body is an email address; the token is minted and emailed, never received",
-  "api/auth/login": "the body is the email and the password, a standing credential rather than a one-time token; its `next` is scrubbed in place",
-  "api/auth/signup": "the body is the sign-up form; the verification token is minted and emailed, never received; its `next` is scrubbed in place",
+  "api/auth/login": "no token in the body (the verification token is minted and emailed); its PASSWORD is dropped by the password scan below",
+  "api/auth/signup": "no token in the body (the verification token is minted and emailed); its PASSWORD is dropped by the password scan below",
   "api/auth/magic-link": "the body is an email and a `next`; the token is minted and emailed, never received; a `next` secret path is scrubbed in place",
   "api/funnel/start": "the body is an email and the draft; the claim token is minted and emailed, never received",
   "api/orgs/[id]/invites": "the body is the invite's role, email and limits; the token is only in the response",
@@ -139,9 +143,73 @@ const pathOf = (key: string) =>
     .map((seg) => (seg === "[ref]" ? "AB12CD34" : /^\[.*\]$/.test(seg) ? "00000000-0000-4000-8000-000000000001" : seg))
     .join("/");
 
+// ---- which routes read a PASSWORD from their body ---------------------------------------------------------------------
+
+/** A zod field named like a password: `password: z.`, `new_password: z.`, `currentPassword: z.`. Not `password_hash: string`. */
+const PASSWORD_FIELD = /\b\w*[pP]assword\b\s*:\s*z\b/;
+/** A body destructured straight off the request: `const { email, password } = await req.json()`. */
+const PASSWORD_DESTRUCTURED = /\{[^}]*\b\w*[pP]assword\b[^}]*\}\s*=\s*(?:await\s+)?(?:req|request)\.json\(\)/;
+
+/** The exported schemas that carry a password field, and every `export const X = <one of them>` alias, to a fixed point. */
+function passwordSchemaNames(sources: string[]): string[] {
+  const defs: { name: string; text: string }[] = [];
+  for (const source of sources) {
+    const parts = source.split(/\n(?=export const \w+\s*=)/);
+    for (const part of parts) {
+      const m = /^(?:\n)?export const (\w+)\s*=/.exec(part);
+      if (m) defs.push({ name: m[1]!, text: part });
+    }
+  }
+  const known = new Set(defs.filter((d) => PASSWORD_FIELD.test(d.text)).map((d) => d.name));
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const d of defs) {
+      if (!known.has(d.name) && [...known].some((k) => new RegExp(`\\b${k}\\b`).test(d.text))) {
+        known.add(d.name);
+        grew = true;
+      }
+    }
+  }
+  return [...known].sort();
+}
+
+/** A route file takes a password in its body: it reads a body AND (a password field inline, a destructured one, or a password schema by name). */
+function holdsPassword(text: string, schemas: string[]): boolean {
+  if (!READS_BODY.test(text)) return false;
+  return PASSWORD_FIELD.test(text) || PASSWORD_DESTRUCTURED.test(text) || schemas.some((s) => new RegExp(`\\b${s}\\b`).test(text));
+}
+
+function sourceFiles(dir: string, out: string[] = []): string[] {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name !== "__tests__" && entry.name !== "node_modules") sourceFiles(full, out);
+    } else if (/\.tsx?$/.test(entry.name) && !/\.(test|spec)\./.test(entry.name)) out.push(full);
+  }
+  return out;
+}
+
+/** Every `app/api/**\/route.ts` that takes a password in its body, by its directory under app/. */
+function passwordRoutes(): { key: string; schemas: string[] }[] {
+  const texts = sourceFiles(SRC_DIR).map((f) => fs.readFileSync(f, "utf8")).filter((s) => /assword/.test(s));
+  const schemas = passwordSchemaNames(texts);
+  const found: { key: string; schemas: string[] }[] = [];
+  const walk = (dir: string) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name === "route.ts" && holdsPassword(fs.readFileSync(full, "utf8"), schemas)) found.push({ key: path.relative(APP_DIR, dir), schemas });
+    }
+  };
+  walk(path.join(APP_DIR, "api"));
+  return found.sort((a, b) => a.key.localeCompare(b.key));
+}
+
 const readers = bodyReaders();
+const passwordBodies = passwordRoutes();
+const passwordKeys = new Set(passwordBodies.map((r) => r.key));
 const credentialReaders = readers.filter((r) => BODY_VERDICTS[r.key] === true);
-const innocentReaders = readers.filter((r) => typeof BODY_VERDICTS[r.key] === "string");
+const innocentReaders = readers.filter((r) => typeof BODY_VERDICTS[r.key] === "string" && !passwordKeys.has(r.key));
 /** The links the app emails that land on an API route (not a page): `/api/auth/change-email/confirm`. */
 const apiLinkRoutes = [...linkBuilders().keys()].filter((r) => r.startsWith("/api/") && !(r in NOT_ONE_TIME));
 
@@ -155,13 +223,42 @@ describe("which routes take a credential in their body: found from the route fil
     ).toEqual(Object.keys(BODY_VERDICTS).sort((a, b) => a.localeCompare(b)));
   });
 
-  it("the scrubber's table is exactly the credential readers plus the API routes a link lands on", () => {
-    const derived = [...credentialReaders.map((r) => `/${r.key}`), ...apiLinkRoutes].sort();
-    expect(derived.length).toBeGreaterThanOrEqual(9);
-    expect([...BODY_TOKEN_ROUTES].sort()).toEqual(derived);
-    for (const route of BODY_TOKEN_ROUTES) {
+  it("the password scan found the routes (anti-vacuity): log-in, sign-up and the password reset, and nothing that only mentions a password", () => {
+    const keys = passwordBodies.map((r) => r.key);
+    expect(keys).toEqual(expect.arrayContaining(["api/auth/login", "api/auth/signup", "api/auth/reset-password"]));
+    expect(keys.length).toBeGreaterThanOrEqual(3);
+    // magic-link/consume and forgot-password mention a password in prose or a function name; neither takes one.
+    for (const not of ["api/auth/magic-link/consume", "api/auth/forgot-password", "api/users/me"]) expect(keys, not).not.toContain(not);
+    expect(passwordBodies[0]!.schemas, "the exported schemas are found, with their aliases").toEqual(expect.arrayContaining(["loginSchema", "signupSchema"]));
+  });
+
+  it("the scrubber's table is exactly the credential readers, the password routes and the API routes a link lands on", () => {
+    const derived = [...new Set([...credentialReaders.map((r) => `/${r.key}`), ...passwordBodies.map((r) => `/${r.key}`), ...apiLinkRoutes])].sort();
+    expect(derived.length).toBeGreaterThanOrEqual(11);
+    expect([...BODY_CREDENTIAL_ROUTES].sort()).toEqual(derived);
+    for (const route of BODY_CREDENTIAL_ROUTES) {
       expect(fs.existsSync(path.join(APP_DIR, route, "route.ts")), `${route} is a real route handler`).toBe(true);
     }
+  });
+});
+
+describe("the password detector, on synthetic route sources (so a new password route is found)", () => {
+  const reads = "const body = await req.json();\n";
+  it("finds an inline field, a renamed field, a destructured body and an imported schema, and follows an alias", () => {
+    expect(holdsPassword(`${reads}const s = z.object({ new_password: z.string() });`, [])).toBe(true);
+    expect(holdsPassword(`${reads}const s = z.object({ currentPassword: z.string().min(6) });`, [])).toBe(true);
+    expect(holdsPassword("const { current_password, next } = await req.json();", [])).toBe(true);
+    expect(holdsPassword("const input = await parseBody(req, SetPassword);", ["SetPassword"])).toBe(true);
+    const sources = [
+      "export const SetPassword = z.object({\n  password: z.string(),\n}).strict();\nexport const SetPasswordAlias = SetPassword;\nexport const Rename = z.object({\n  name: z.string(),\n});",
+    ];
+    expect(passwordSchemaNames(sources)).toEqual(["SetPassword", "SetPasswordAlias"]);
+  });
+  it("ignores a hash column, prose, a route that reads no body, and a schema with no password", () => {
+    expect(holdsPassword(`${reads}select password_hash: string | null`, [])).toBe(false);
+    expect(holdsPassword(`${reads}// passwordless sign-in\nconst s = z.object({ email: z.string() });`, ["SetPassword"])).toBe(false);
+    expect(holdsPassword("const s = z.object({ password: z.string() }); return Response.json({});", [])).toBe(false);
+    expect(passwordSchemaNames(["export const Rename = z.object({\n  name: z.string(),\n});"])).toEqual([]);
   });
 });
 
@@ -171,31 +268,31 @@ type Request = NonNullable<Event["request"]>;
 const requestOf = (out: Event): Request => out.request ?? {};
 
 /** The three ways an event reaches `beforeSend` naming a route: the request URL, the URL with a query string, the transaction alone. */
-const FORMS: { name: string; event: (route: { key: string; url: string }, token: string) => Event }[] = [
+const FORMS: { name: string; event: (route: { key: string; url: string }, body: Record<string, unknown>) => Event }[] = [
   {
     name: "request URL, a JSON string body",
-    event: ({ url }, token) => ({
+    event: ({ url }, body) => ({
       event_id: "e1",
-      request: { method: "POST", url: `${ORIGIN}${url}`, headers: { "content-type": "application/json" }, data: JSON.stringify({ token, next: "/dashboard" }) },
+      request: { method: "POST", url: `${ORIGIN}${url}`, headers: { "content-type": "application/json" }, data: JSON.stringify(body) },
     }),
   },
   {
     name: "request URL with a query string, an object body",
-    event: ({ url }, token) => ({ event_id: "e2", request: { method: "POST", url: `${ORIGIN}${url}?utm_source=mail`, data: { token, registration_id: "r-1" } } }),
+    event: ({ url }, body) => ({ event_id: "e2", request: { method: "POST", url: `${ORIGIN}${url}?utm_source=mail`, data: body } }),
   },
   {
     name: "the transaction alone, no request URL",
-    event: ({ key }, token) => ({ event_id: "e3", transaction: `POST /${key}`, request: { method: "POST", data: { token, password: "correct-horse-1" } } }),
+    event: ({ key }, body) => ({ event_id: "e3", transaction: `POST /${key}`, request: { method: "POST", data: body } }),
   },
 ];
 
 /** What every dropped event must satisfy, and the failures it collects instead of asserting 100s of times. */
-function checkDropped(label: string, input: Event, token: string, failures: string[]): void {
+function checkDropped(label: string, input: Event, secret: string, failures: string[]): void {
   const snapshot = structuredClone(input);
   const out = scrubSentryEvent(input);
   if (JSON.stringify(input) !== JSON.stringify(snapshot)) failures.push(`${label}: the input was mutated`);
   if (Object.hasOwn(requestOf(out), "data")) failures.push(`${label}: request.data survived`);
-  if (JSON.stringify(out).includes(token)) failures.push(`${label}: the token is still in the event`);
+  if (JSON.stringify(out).includes(secret)) failures.push(`${label}: the secret is still in the event`);
   if (requestOf(out).method !== "POST") failures.push(`${label}: the rest of the request was not kept`);
   if (JSON.stringify(scrubSentryEvent(out)) !== JSON.stringify(out)) failures.push(`${label}: not idempotent`);
 }
@@ -207,7 +304,7 @@ describe("an event on a route that takes a credential in its body loses its body
     for (const reader of credentialReaders) {
       for (const token of BODY_WITNESSES) {
         for (const form of FORMS) {
-          checkDropped(`${reader.key} / ${form.name}`, form.event({ key: reader.key, url: pathOf(reader.key) }, token), token, failures);
+          checkDropped(`${reader.key} / ${form.name}`, form.event({ key: reader.key, url: pathOf(reader.key) }, { token, next: "/dashboard" }), token, failures);
           checked++;
         }
       }
@@ -224,13 +321,36 @@ describe("an event on a route that takes a credential in its body loses its body
     for (const route of apiLinkRoutes) {
       for (const token of BODY_WITNESSES) {
         for (const form of FORMS) {
-          checkDropped(`${route} / ${form.name}`, form.event({ key: route.slice(1), url: route }, token), token, failures);
+          checkDropped(`${route} / ${form.name}`, form.event({ key: route.slice(1), url: route }, { token, next: "/dashboard" }), token, failures);
           checked++;
         }
       }
     }
     expect(failures.slice(0, 5), `${failures.length} of ${checked} failed`).toEqual([]);
     expect(checked).toBe(apiLinkRoutes.length * BODY_WITNESSES.length * FORMS.length);
+  });
+});
+
+/** What people type: a passphrase, a symbol-heavy one, and one with non-ASCII letters (JSON does not escape those). */
+const PASSWORDS = ["correct-horse-battery-1", "Tr0ub4dor&3-xyz", "pässwörd-ß-123"];
+
+describe("an event on a route that takes a PASSWORD in its body loses its body", () => {
+  it("every password route x every password x every form", () => {
+    expect(passwordBodies.length).toBeGreaterThanOrEqual(3);
+    const failures: string[] = [];
+    let checked = 0;
+    for (const route of passwordBodies) {
+      for (const password of PASSWORDS) {
+        for (const form of FORMS) {
+          const body = { email: "a@example.test", password, next: "/dashboard" };
+          checkDropped(`${route.key} / ${form.name}`, form.event({ key: route.key, url: pathOf(route.key) }, body), password, failures);
+          checked++;
+        }
+      }
+    }
+    expect(failures.slice(0, 5), `${failures.length} of ${checked} failed`).toEqual([]);
+    expect(checked).toBe(passwordBodies.length * PASSWORDS.length * FORMS.length);
+    expect(checked).toBeGreaterThanOrEqual(27);
   });
 });
 
@@ -255,7 +375,7 @@ describe("an event on a route that carries a secret in its PATH loses its body",
         for (const secret of [secrets[0]!, secrets[MINTS - 1]!]) {
           for (const form of FORMS) {
             // The secret is in the URL (scrubbed to `[token]`), and ALSO the body carries it: the body must go.
-            const event = form.event({ key: handler.key, url: handler.url(secret) }, secret);
+            const event = form.event({ key: handler.key, url: handler.url(secret) }, { token: secret });
             checkDropped(`${handler.key} / ${form.name}`, event, secret, failures);
             checked++;
           }
@@ -279,7 +399,7 @@ describe("the same body on any other route is kept (the positive pair)", () => {
   });
 
   it("every body reader that is NOT a credential keeps its body, by URL and by transaction", () => {
-    expect(innocentReaders.length).toBeGreaterThanOrEqual(12);
+    expect(innocentReaders.length).toBeGreaterThanOrEqual(11);
     let checked = 0;
     for (const reader of innocentReaders) {
       expect(requestOf(scrubSentryEvent(keep(`${ORIGIN}${pathOf(reader.key)}`))).data, `${reader.key} (${BODY_VERDICTS[reader.key]}): by URL`).toEqual(body);
@@ -307,6 +427,10 @@ describe("the same body on any other route is kept (the positive pair)", () => {
       `${ORIGIN}/api/auth/magic-link/consumed`,
       `${ORIGIN}/api/auth/reset-password/strength`,
       `${ORIGIN}/api/funnel/claim-all`,
+      `${ORIGIN}/api/auth/logins`,
+      `${ORIGIN}/api/auth/login-history`,
+      `${ORIGIN}/api/auth/signup-options`,
+      `${ORIGIN}/api/auth/login/google`,
       `${ORIGIN}/api/v1/public/registrations/00000000-0000-4000-8000-000000000001/withdrawn`,
       `${ORIGIN}/api/v1/public/registrations/00000000-0000-4000-8000-000000000001`,
       `${ORIGIN}/api/v1/public/registrations/by-ref/AB12CD34`,
@@ -317,7 +441,7 @@ describe("the same body on any other route is kept (the positive pair)", () => {
       `${ORIGIN}/dashboard`,
     ];
     for (const url of urls) expect(requestOf(scrubSentryEvent(keep(url))).data, url).toEqual(body);
-    for (const transaction of ["POST /api/auth/verify-emails", "POST /api/funnel/claim-all", "POST /api/orgs/[id]/invites"]) {
+    for (const transaction of ["POST /api/auth/verify-emails", "POST /api/funnel/claim-all", "POST /api/orgs/[id]/invites", "POST /api/auth/login-history"]) {
       expect(requestOf(scrubSentryEvent(keep(undefined, transaction))).data, transaction).toEqual(body);
     }
   });
