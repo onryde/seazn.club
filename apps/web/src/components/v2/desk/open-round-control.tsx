@@ -30,6 +30,7 @@ import {
   OPEN_ROUND_REFUSAL_KEYS,
   OPEN_ROUND_SKIP_KEYS,
   RESEND_REFUSAL_KEYS,
+  type OpenRoundBatch,
   type OpenRoundPairing,
   type OpenRoundView,
 } from "@/lib/open-round";
@@ -84,6 +85,20 @@ function inviteState(p: OpenRoundPairing, tz: string, msg: Msg, plural: Plural) 
 }
 
 const boardLabel = (p: OpenRoundPairing, msg: Msg) => msg("arbiter.boardNo", { n: p.boardNo });
+
+/** The check-in groups to draw (spec §3.2.1, "What the organiser sees"): a round that staggers over more than one group,
+ *  with the times to draw. A single group has one deadline and the "open until" line already says it; an unopened round
+ *  has no times yet (`opensAt`/`closesAt` are null, and its span is in the confirmation); a 'reopen' press restamps the
+ *  window, so the old times are not the truth. Null means nothing to draw, never an empty list. */
+function timedBatches(round: OpenRoundView): (OpenRoundBatch & { opensAt: string; closesAt: string })[] | null {
+  if (round.press === "reopen" || !round.staggered || round.batches.length < 2) return null;
+  const timed = round.batches.flatMap((b) => (b.opensAt !== null && b.closesAt !== null ? [{ ...b, opensAt: b.opensAt, closesAt: b.closesAt }] : []));
+  return timed.length === round.batches.length ? timed : null;
+}
+
+/** A group's boards: "Boards 11–20", or "Board 21" for a group of one. */
+const batchBoards = (b: OpenRoundBatch, msg: Msg) =>
+  b.fromBoard === b.toBoard ? msg("arbiter.boardNo", { n: b.fromBoard }) : msg("runsheet.round.batchBoards", { from: b.fromBoard, to: b.toBoard });
 
 /** The confirmation's body: who this press reaches and what starts. Exported for its static test. */
 export function OpenRoundConfirmBody({ round, tz }: { round: OpenRoundView; tz: string }) {
@@ -216,6 +231,9 @@ export function OpenRoundControl({ round, tz }: { round: OpenRoundView; tz: stri
   const cta = round.press === "reinvite" ? plural("runsheet.round.inviteCta", owed) : msg("runsheet.round.openCta");
   const confirmLabel = round.press === "reinvite" ? plural("runsheet.round.inviteCta", owed) : plural("runsheet.round.confirmCta", owed);
   const notice = state.notice ? openNoticeText(state.notice, round, msg, plural) : null;
+  // Each group has its OWN deadline: group 0's no-shows reach the organiser before the last group has even opened, so a
+  // staggered round draws the groups and not the one "open until" line, which could only name the last group's close.
+  const batches = timedBatches(round);
 
   return (
     <section
@@ -244,7 +262,7 @@ export function OpenRoundControl({ round, tz }: { round: OpenRoundView; tz: stri
           {plural("runsheet.round.pairedLede", round.pairings.length, { players: owed })}
         </p>
       )}
-      {round.state === "open" && round.deadlineAt !== null && round.press !== "reopen" && (
+      {round.state === "open" && round.deadlineAt !== null && round.press !== "reopen" && batches === null && (
         <p className={`mt-0.5 text-xs ${MUTED}`}>{msg("runsheet.round.openUntil", { time: fmtTime(tz, round.deadlineAt) })}</p>
       )}
       {canPress && (
@@ -263,6 +281,33 @@ export function OpenRoundControl({ round, tz }: { round: OpenRoundView; tz: stri
           {notice.map((line, i) => (
             <p key={i}>{line}</p>
           ))}
+        </div>
+      )}
+
+      {batches !== null && (
+        <div className="mt-3 min-w-0" data-testid="open-round-batches">
+          <p className={`text-xs ${MUTED}`}>{msg("runsheet.round.batchesLede")}</p>
+          <ul aria-label={msg("runsheet.round.batchesLabel", { round: round.roundNo })} className="mt-1 min-w-0 divide-y divide-[#e7e3f3] rounded-lg border border-[#e7e3f3] bg-[#faf9ff] px-3">
+            {batches.map((b, i) => (
+              <li
+                key={i}
+                data-testid={`open-round-batch-${i}`}
+                data-opens-at={b.opensAt}
+                data-closes-at={b.closesAt}
+                className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5 py-2"
+              >
+                <span data-field="boards" className={`min-w-28 shrink-0 text-sm font-semibold ${INK}`}>
+                  {batchBoards(b, msg)}
+                </span>
+                <span data-field="opens" className={`text-xs ${SOFT}`}>
+                  {msg("runsheet.round.batchOpens", { time: fmtTime(tz, b.opensAt) })}
+                </span>
+                <span data-field="closes" className={`text-xs ${SOFT}`}>
+                  {msg("runsheet.round.batchCloses", { time: fmtTime(tz, b.closesAt) })}
+                </span>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 

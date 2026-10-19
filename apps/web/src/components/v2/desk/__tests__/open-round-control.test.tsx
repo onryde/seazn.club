@@ -13,8 +13,8 @@ import nlUi from "@/dictionaries/nl/ui.json";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import { fmtTime } from "@/lib/format";
 import { messages } from "@/lib/messages";
-import type { OpenRoundPairing, OpenRoundView } from "@/lib/open-round";
-import { CHECKIN_BATCH_GAP_MS, DEADLINE_AFTER_MS } from "@/server/external-play/window";
+import type { OpenRoundBatch, OpenRoundPairing, OpenRoundView } from "@/lib/open-round";
+import { CHECKIN_BATCH_GAP_MS, CHECKIN_BATCH_SIZE, DEADLINE_AFTER_MS } from "@/server/external-play/window";
 import { OpenRoundConfirmBody, OpenRoundControl } from "../open-round-control";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
@@ -269,5 +269,146 @@ describe("OpenRoundConfirmBody — what will happen, stated before it happens", 
       [3, esc(en["runsheet.round.confirmEarlierInPlay.other"]!.replace("{round}", "3").replace("{count}", "4"))],
     ]);
     expect(h, "a note, not a refusal: the press stays").toMatch(/data-testid="open-round-earlier"[^>]*role="note"|role="note"[^>]*data-testid="open-round-earlier"/);
+  });
+});
+
+// ─── The check-in groups an opened, staggered round lists (final review I-1; spec §3.2.1, "What the organiser sees") ────────
+// The view has computed `batches` since the capacity build and its test pins the numbers, but nothing drew them, so the
+// desk read "open until 14:14" - the LAST group's deadline - while group 0's no-shows were already reaching the organiser.
+// Single-sport by construction: online play, and so the batches, exist only for `boardgame`.
+describe("OpenRoundControl - the check-in groups of an opened, staggered round (final review I-1)", () => {
+  const S = CHECKIN_BATCH_SIZE;
+  const OPENED_MS = Date.parse(OPENED);
+  /** The view builder's input: batch i is boards i*S+1..(i+1)*S, opening i gaps after the press and closing a window later. */
+  const batchesOf = (n: number): OpenRoundBatch[] =>
+    Array.from({ length: n }, (_, i) => ({
+      fromBoard: i * S + 1,
+      toBoard: (i + 1) * S,
+      offsetMs: i * CHECKIN_BATCH_GAP_MS,
+      opensAt: new Date(OPENED_MS + i * CHECKIN_BATCH_GAP_MS).toISOString(),
+      closesAt: new Date(OPENED_MS + i * CHECKIN_BATCH_GAP_MS + DEADLINE_AFTER_MS).toISOString(),
+    }));
+  const OPENED_ROUND = (batches: OpenRoundBatch[], o: Partial<OpenRoundView> = {}): OpenRoundView =>
+    ROUND({
+      state: "open",
+      openedAt: OPENED,
+      press: "none",
+      staggered: batches.length > 1,
+      batches,
+      staggerSpanMinutes: Math.ceil(((batches.length - 1) * CHECKIN_BATCH_GAP_MS) / 60_000),
+      deadlineAt: batches[batches.length - 1]!.closesAt,
+      pairings: [P(1, { owedSeats: 0, invitedAt: OPENED })],
+      ...o,
+    });
+  const dicts: [Locale, Dict][] = [["en", messages as unknown as Dict], ["es", esUi], ["fr", frUi], ["nl", nlUi]];
+  const at = (d: Dict, key: string) => (d as unknown as Record<string, string>)[key]!;
+  const fill = (s: string, vars: Record<string, string | number>) =>
+    Object.entries(vars).reduce((acc, [k, v]) => acc.replaceAll(`{${k}}`, String(v)), s);
+  const render = (round: OpenRoundView, locale: Locale, dict: Dict) =>
+    renderToStaticMarkup(
+      <DictProvider dict={dict} locale={locale}>
+        <OpenRoundControl round={round} tz={TZ} />
+      </DictProvider>,
+    );
+  /** The rows as drawn: index, the three fields' text, and the ISO instants the row carries. */
+  const rowsOf = (h: string) =>
+    [...h.matchAll(/<li([^>]*data-testid="open-round-batch-(\d+)"[^>]*)>(.*?)<\/li>/gs)].map((m) => {
+      const attr = (name: string) => new RegExp(`${name}="([^"]*)"`).exec(m[1]!)?.[1];
+      const field = (name: string) => new RegExp(`data-field="${name}"[^>]*>([^<]*)<`).exec(m[3]!)?.[1];
+      return {
+        i: Number(m[2]),
+        opensAt: attr("data-opens-at"),
+        closesAt: attr("data-closes-at"),
+        boards: field("boards"),
+        opens: field("opens"),
+        closes: field("closes"),
+      };
+    });
+  /** What a row must read for batch `b` in a dictionary: from the input and the dictionary, never from the component. */
+  const expected = (b: OpenRoundBatch, d: Dict) => ({
+    boards: esc(
+      b.fromBoard === b.toBoard
+        ? fill(at(d, "arbiter.boardNo"), { n: b.fromBoard })
+        : fill(at(d, "runsheet.round.batchBoards"), { from: b.fromBoard, to: b.toBoard }),
+    ),
+    opens: esc(fill(at(d, "runsheet.round.batchOpens"), { time: fmtTime(TZ, b.opensAt!) })),
+    closes: esc(fill(at(d, "runsheet.round.batchCloses"), { time: fmtTime(TZ, b.closesAt!) })),
+  });
+
+  it.each([2, 3, 10])("%s groups: one row per group, each with ITS boards, its opening and its closing, in all four locales", (n) => {
+    const batches = batchesOf(n);
+    let checked = 0;
+    for (const [locale, dict] of dicts) {
+      const rows = rowsOf(render(OPENED_ROUND(batches), locale, dict));
+      expect(rows, `${locale}: one row per batch`).toHaveLength(n);
+      rows.forEach((row, i) => {
+        const want = expected(batches[i]!, dict);
+        expect(row.i, `${locale}: rows in batch order`).toBe(i);
+        expect([row.boards, row.opens, row.closes], `${locale}: row ${i}`).toEqual([want.boards, want.opens, want.closes]);
+        expect([row.opensAt, row.closesAt], `${locale}: row ${i} instants`).toEqual([batches[i]!.opensAt, batches[i]!.closesAt]);
+        expect(`${row.boards}${row.opens}${row.closes}`, `${locale}: row ${i} has no unfilled placeholder`).not.toMatch(/\{[a-z]+\}/);
+        checked += 1;
+      });
+    }
+    expect(checked, "anti-vacuity: rows checked").toBe(4 * n);
+  });
+
+  it("a group of one board reads 'Board n', not 'Boards n-n'", () => {
+    const batches = [...batchesOf(2), { ...batchesOf(3)[2]!, fromBoard: 2 * S + 1, toBoard: 2 * S + 1 }];
+    const rows = rowsOf(render(OPENED_ROUND(batches), "en", messages as unknown as Dict));
+    expect(rows).toHaveLength(3);
+    expect(rows[2]!.boards).toBe(esc(t("arbiter.boardNo", { n: 2 * S + 1 })));
+    expect(rows[0]!.boards).toBe(esc(t("runsheet.round.batchBoards", { from: 1, to: S })));
+  });
+
+  it("the earlier group's deadline is on the card: no single 'open until' that names only the LAST group's close", () => {
+    const batches = batchesOf(3);
+    const h = renderToStaticMarkup(<OpenRoundControl round={OPENED_ROUND(batches)} tz={TZ} />);
+    const openUntil = esc(en["runsheet.round.openUntil"]!.split("{time}")[0]!);
+    expect(h, "the single line that read the last group's deadline as the round's").not.toContain(openUntil);
+    const rows = rowsOf(h);
+    expect(rows.length, "premise: more than one group").toBeGreaterThan(1);
+    // Premise: the first group closes strictly before the last, so a single line could not have told them apart.
+    expect(Date.parse(rows[0]!.closesAt!)).toBeLessThan(Date.parse(rows[rows.length - 1]!.closesAt!));
+    expect(h).toContain(esc(fmtTime(TZ, batches[0]!.closesAt!)));
+    expect(h).toContain(esc(en["runsheet.round.batchesLede"]!));
+  });
+
+  it("the empty case and the pair: no groups (a round with no batches, one batch, a staggered flag over one batch, or two batches the flag does not stagger) draw no list and keep the 'open until' line", () => {
+    const one = batchesOf(1);
+    const cases: [string, OpenRoundView][] = [
+      ["no batches at all", OPENED_ROUND(one, { batches: [], staggered: false })],
+      ["one batch, not staggered", OPENED_ROUND(one, { staggered: false })],
+      ["one batch under a staggered flag", OPENED_ROUND(one, { staggered: true })],
+      // The confirmation reads the same pair of facts (staggered AND more than one batch): a round it would call
+      // unstaggered ("they can check in straight away") must not draw groups either.
+      ["two batches under an unstaggered flag", OPENED_ROUND(batchesOf(2), { staggered: false })],
+    ];
+    let checked = 0;
+    for (const [name, round] of cases) {
+      const h = renderToStaticMarkup(<OpenRoundControl round={round} tz={TZ} />);
+      expect(rowsOf(h), name).toEqual([]);
+      expect(h, name).not.toContain('data-testid="open-round-batches"');
+      expect(h, `${name}: the one deadline is the truth`).toContain(esc(t("runsheet.round.openUntil", { time: fmtTime(TZ, round.deadlineAt!) })));
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity").toBe(4);
+  });
+
+  it("no times to draw, no rows: a round not yet opened, and one opened but reaching nobody ('reopen'), list nothing", () => {
+    const unopened = batchesOf(3).map((b) => ({ ...b, opensAt: null, closesAt: null }));
+    const paired = ROUND({ staggered: true, batches: unopened, staggerSpanMinutes: 4 });
+    const reopen = OPENED_ROUND(batchesOf(3), { press: "reopen" });
+    for (const round of [paired, reopen]) {
+      const h = renderToStaticMarkup(<OpenRoundControl round={round} tz={TZ} />);
+      expect(rowsOf(h), `${round.state}/${round.press}`).toEqual([]);
+      expect(h).not.toContain('data-testid="open-round-batches"');
+    }
+  });
+
+  it("a re-invite press on a staggered round still lists every group (the card shows the groups; the confirm names the earliest deadline)", () => {
+    const batches = batchesOf(3);
+    const round = OPENED_ROUND(batches, { press: "reinvite", pairings: [P(1, { owedSeats: 1, invitedAt: OPENED })] });
+    expect(rowsOf(renderToStaticMarkup(<OpenRoundControl round={round} tz={TZ} />))).toHaveLength(3);
   });
 });

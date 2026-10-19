@@ -38,6 +38,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CONSENT_KEY, CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION } from "../src/lib/consent";
 import { routes } from "../src/lib/routes";
+import { CHECKIN_BATCH_GAP_MS, CHECKIN_BATCH_SIZE, DEADLINE_AFTER_MS } from "../src/server/external-play/window";
 import { apiJson, loginUi, withDb } from "./helpers";
 import {
   CLOCK,
@@ -416,6 +417,96 @@ test.describe("online chess — the organiser's desk", () => {
     await page.getByTestId("open-round-confirm-cancel").click();
     await expect(second).toHaveCount(0);
     expect(await opens(), "Cancel opened nothing: round 1's open is still the only one").toBe(1);
+  });
+
+  // Final review I-1 (spec §3.2.1, "What the organiser sees"): the view has always carried each check-in group's boards,
+  // opening and closing, and the control drew none of it - the desk read one "open until", the LAST group's deadline,
+  // while the first group's no-shows were already reaching the organiser. A round of CHECKIN_BATCH_SIZE + 1 boards (so
+  // two groups) on a required-camera division staggers; this drives it through the product and reads the page.
+  test("Open round, staggered (I-1): an opened round lists its check-in groups - the boards, the opening and the closing of EACH - instead of one 'open until'", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(300_000);
+    const boardCount = CHECKIN_BATCH_SIZE + 1;
+    const names = Array.from({ length: 2 * boardCount }, (_, i) => `Group Player ${String(i + 1).padStart(2, "0")}`);
+    const r = await seedOnlineRound(request, names, { stage: "swiss", camera: "required" });
+    expect(r.boards.length, "premise: more boards than one group holds").toBe(boardCount);
+    // The e2e servers send no mail, so the open above reached nobody and the control would read 'reopen' (which draws no
+    // groups: that press restamps the window). What a delivered invite leaves is written the way invite.ts leaves it -
+    // a stamp per seat and the bridge row bound to THIS open - so the round reads as a real, invited one; the sent path
+    // itself is vitest's (external-play-open-round*.test.ts).
+    const stamped = await withDb(
+      (sql) => sql`
+        update fixture_external_play ep
+           set round_open_id = o.id, white_emailed_at = now(), black_emailed_at = now()
+          from fixtures f join stage_round_opens o on o.stage_id = f.stage_id and o.round_no = f.round_no
+         where ep.fixture_id = f.id and f.stage_id = ${r.stageId} and f.round_no = 1`,
+    );
+    expect(stamped.count, "every board's bridge row was stamped as invited").toBe(boardCount);
+
+    // The groups on file: board numbers by rank among the round's rows, and the stamp the open wrote.
+    const groups = await withDb(async (sql) => {
+      const rows = await sql<{ seq: number }[]>`
+        select seq_in_round as seq from fixtures where stage_id = ${r.stageId} and round_no = 1 order by seq_in_round, id`;
+      const [open] = await sql<{ openedAt: Date }[]>`
+        select opened_at as "openedAt" from stage_round_opens where stage_id = ${r.stageId} and round_no = 1`;
+      const out: { from: number; to: number; opensAt: string; closesAt: string }[] = [];
+      for (let i = 0; i * CHECKIN_BATCH_SIZE < rows.length; i++) {
+        const slice = rows.slice(i * CHECKIN_BATCH_SIZE, (i + 1) * CHECKIN_BATCH_SIZE);
+        const opens = open!.openedAt.getTime() + i * CHECKIN_BATCH_GAP_MS;
+        out.push({ from: slice[0]!.seq, to: slice[slice.length - 1]!.seq, opensAt: new Date(opens).toISOString(), closesAt: new Date(opens + DEADLINE_AFTER_MS).toISOString() });
+      }
+      return out;
+    });
+    expect(groups.length, "premise: the round is two groups, the second a single board").toBe(2);
+    expect(groups[1]!.from, "premise: the last group is one board").toBe(groups[1]!.to);
+
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(r.fixturesTab);
+    const control = page
+      .getByTestId("open-round")
+      .filter({ has: page.getByRole("heading", { name: fill("runsheet.round.heading", { round: 1 }) }) });
+    await expect(control).toHaveAttribute("data-state", "open", { timeout: 30_000 });
+    await expect(control).toHaveAttribute("data-press", "none");
+    const list = control.getByTestId("open-round-batches");
+    await expect(list).toBeVisible();
+    await expect(list).toContainText(uiEn["runsheet.round.batchesLede"]!);
+
+    const timePart = (key: string) => uiEn[key]!.split("{time}")[0]!;
+    let checked = 0;
+    for (const [i, g] of groups.entries()) {
+      const row = control.getByTestId(`open-round-batch-${i}`);
+      await expect(row).toBeVisible();
+      await expect(row).toHaveAttribute("data-opens-at", g.opensAt);
+      await expect(row).toHaveAttribute("data-closes-at", g.closesAt);
+      await expect(row.locator('[data-field="boards"]')).toHaveText(
+        g.from === g.to ? fill("arbiter.boardNo", { n: g.from }) : fill("runsheet.round.batchBoards", { from: g.from, to: g.to }),
+      );
+      // The clock text is the viewer's local time; its shape is checked here, its value is the attribute above.
+      await expect(row.locator('[data-field="opens"]')).toHaveText(new RegExp(`^${timePart("runsheet.round.batchOpens")}\\d{1,2}:\\d{2}`));
+      await expect(row.locator('[data-field="closes"]')).toHaveText(new RegExp(`^${timePart("runsheet.round.batchCloses")}\\d{1,2}:\\d{2}`));
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: groups read").toBe(2);
+    await expect(control.locator('[data-testid^="open-round-batch-"]'), "one row per group, no more").toHaveCount(groups.length);
+    expect(Date.parse(groups[0]!.closesAt), "premise: group 0 closes before the last group does").toBeLessThan(Date.parse(groups[1]!.closesAt));
+    await expect(control.getByText(timePart("runsheet.round.openUntil")), "the single 'open until' that named only the last group's close").toHaveCount(0);
+
+    // The rows are text, never clipped: no sideways page scroll, and the list itself holds its width, at each width.
+    for (const width of [320, 768, 1280]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.waitForTimeout(150);
+      const fit = await list.evaluate((el) => {
+        const box = el.getBoundingClientRect();
+        const kids = [...el.querySelectorAll("li")].flatMap((li) => [li, ...li.children]);
+        return { overflow: kids.filter((k) => k.getBoundingClientRect().right > box.right + 1).length, right: box.right, view: document.documentElement.clientWidth };
+      });
+      expect(fit.overflow, `no row paints past the list at ${width}px`).toBe(0);
+      expect(fit.right, `the list fits the viewport at ${width}px`).toBeLessThanOrEqual(fit.view);
+    }
+    expect(await noSidewaysScroll(page)).toBe(3);
+    await shoot(page, "open-round-groups");
   });
 
   test("the queue: a held board settled from it, a flagged board let go on — and the run sheet's chips point at both", async ({
