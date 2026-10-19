@@ -48,6 +48,7 @@
 // EMPTY — which is settled by attempting the write, not by reading an audit
 // endpoint and guessing its envelope shape.
 import { readFileSync } from "node:fs";
+import { signInByMagicLink } from "./seed-signin.ts";
 
 /** `seed:demo --phase=setup` mints its accounts with a RANDOM suffix and records
  *  the one it chose in this file. So the operator account cannot be hardcoded
@@ -87,7 +88,6 @@ if (!EMAIL) {
   );
   process.exit(1);
 }
-const PASSWORD = process.env.SEED_PASSWORD ?? "smokepass123";
 const ONLY = arg("sport", "all");
 
 /** Only the fields this script reads. The API returns a great deal more; naming
@@ -587,7 +587,7 @@ const TENNIS: Showcase = {
 const ALL: Showcase[] = [CRICKET, FOOTBALL, TENNIS];
 
 async function main() {
-  await call<unknown>("/api/auth/login", "POST", { email: EMAIL, password: PASSWORD });
+  await signInByMagicLink(call, EMAIL);
 
   const chosen = ONLY === "all" ? ALL : ALL.filter((s) => s.sport === ONLY);
   if (chosen.length === 0) {
