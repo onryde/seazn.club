@@ -4,7 +4,7 @@
 // api/invites, api/claims, api/checkin). A competition or club slug is free text: `/o/x/c/join/d/claim` is a perfectly good
 // address, and an unanchored `/join/` rule turned it into `/o/x/c/join/[token]/claim`, and dropped the request body of a
 // Sentry event on it. The rule now starts at the start of a path: the start of the string, after whitespace or a
-// delimiter (a transaction name's `GET `, a quote, `=`, `&`, `?`, `:`, `{`, `|`, a backtick), after an origin (with its
+// delimiter (a transaction name's `GET `, a quote, `=`, `&`, `?`, `:`, `{`, `|`, `[`, a backtick), after an origin (with its
 // scheme in any letter case, or protocol-relative: `//host`), or after the marketing locale prefix (`/fr`), and for the
 // URL-encoded form after the encoded equivalents at any depth.
 //
@@ -85,7 +85,13 @@ describe("a slug named like a secret route is not a secret (probes built by the 
         ["brace", `{${url}}`],
         ["pipe", `a|${url}`],
         ["backtick", `\`${url}\``],
+        ["bracket", `[${url}]`],
         ...[1, 2, 3].flatMap((depth): [string, string][] => [
+          // A `[` / `%5B` or a space / `%20` right before the path is a delimiter now: a slug must still not become a root.
+          [`encoded bracket depth ${depth}`, `${ORIGIN}/x?ret=${encode(`[${url}]`, depth)}`],
+          [`encoded space depth ${depth}`, `${ORIGIN}/x?ret=${encode(`a ${url}`, depth)}`],
+          [`bracket, then encoded depth ${depth}`, `[${encode(url, depth)}]`],
+          [`space, then encoded depth ${depth}`, `a ${encode(url, depth)}`],
           [`login next= (upper-case scheme) depth ${depth}`, `${ORIGIN}/login?next=${encode(`HTTPS://seazn.club${url}`, depth)}`],
           [`login next= (protocol-relative) depth ${depth}`, `${ORIGIN}/login?next=${encode(`//seazn.club${url}`, depth)}`],
           [`login next= depth ${depth}`, `${ORIGIN}/login?next=${encode(url, depth)}`],
@@ -99,7 +105,7 @@ describe("a slug named like a secret route is not a secret (probes built by the 
       }
     }
     expect(failures.slice(0, 5), `${failures.length} of ${checked} changed`).toEqual([]);
-    expect(checked).toBe(all.length * 27);
+    expect(checked).toBe(all.length * 40);
   });
 
   it("a Sentry event on such a URL keeps its URL, its transaction and its request body", () => {
@@ -174,6 +180,7 @@ describe("the anchor still finds a real secret at a route root, in every context
         ["brace", `{${p}}`],
         ["pipe", `a|${p}`],
         ["backtick", `\`${p}\``],
+        ["bracket", `[${p}]`],
         ["next=", `${ORIGIN}/login?next=${p}`],
         ["&next=", `${ORIGIN}/login?lang=en&next=${p}`],
         ...LOCALES.map((l): [string, string] => [`locale ${l}`, `${ORIGIN}/${l}${p}`]),
@@ -188,11 +195,15 @@ describe("the anchor still finds a real secret at a route root, in every context
           [`encoded brace depth ${depth}`, `${ORIGIN}/x?ret=${encode(`{${p}}`, depth)}`],
           [`encoded pipe depth ${depth}`, `${ORIGIN}/x?ret=${encode(`a|${p}`, depth)}`],
           [`encoded backtick depth ${depth}`, `${ORIGIN}/x?ret=${encode(`\`${p}\``, depth)}`],
+          [`encoded bracket (%5B) depth ${depth}`, `${ORIGIN}/x?ret=${encode(`[${p}]`, depth)}`],
+          [`encoded space (%20) depth ${depth}`, `${ORIGIN}/x?ret=${encode(`a ${p}`, depth)}`],
           // A plain delimiter right before an ENCODED path (the encoded rule takes the plain set too).
           [`colon, then encoded depth ${depth}`, `url:${encode(p, depth)}`],
           [`brace, then encoded depth ${depth}`, `{${encode(p, depth)}}`],
           [`pipe, then encoded depth ${depth}`, `a|${encode(p, depth)}`],
           [`backtick, then encoded depth ${depth}`, `\`${encode(p, depth)}\``],
+          [`bracket, then encoded depth ${depth}`, `[${encode(p, depth)}]`],
+          [`space, then encoded depth ${depth}`, `a ${encode(p, depth)}`],
         ]),
       ];
       for (const [form, input] of forms) {
@@ -204,7 +215,7 @@ describe("the anchor still finds a real secret at a route root, in every context
       }
     }
     expect(failures.slice(0, 5), `${failures.length} of ${checked} failed`).toEqual([]);
-    expect(checked).toBe(7 * (8 + 8 + LOCALES.length + 12 + 18 + 12));
+    expect(checked).toBe(7 * (17 + LOCALES.length + 3 * 18));
   });
 
   it("the same word one level down is not the root: a segment before it takes it off the root, for every route", async () => {

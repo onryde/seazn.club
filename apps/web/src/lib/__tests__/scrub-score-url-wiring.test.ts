@@ -23,6 +23,7 @@ import { createVerificationToken } from "@/lib/verification";
 import { generateRefCode } from "@/lib/ref-code";
 import { USER_ID } from "./_fake-sql";
 import { clientSpanDetails, otelTraceData, outgoingBreadcrumb, serverSpanDetails, transaction } from "./_sdk-span-data";
+import { credentialPages, setReplay } from "./_replay-fixtures";
 
 // Only the Postgres round trip is a stand-in: the real minters (`createLoginLink`, `createVerificationToken`) run on it.
 vi.mock("@/lib/db", async (importOriginal) => ({
@@ -36,7 +37,7 @@ vi.mock("@sentry/nextjs", () => ({
   consoleLoggingIntegration: vi.fn(() => ({ name: "ConsoleLogs" })),
   pinoIntegration: vi.fn(() => ({ name: "Pino" })),
   captureRouterTransitionStart: vi.fn(),
-  getReplay: vi.fn(),
+  getClient: vi.fn(),
 }));
 
 const TOKEN = "dl_Q2hvb3NlIGEgcmVhbGx5IGxvbmcgcmFuZG9tIHRva2Vu_Ab-9";
@@ -249,29 +250,42 @@ describe("Sentry client (sentry.client.config.ts; not loaded by the Turbopack bu
     expect(Object.keys(replayOptions).sort()).toEqual(["beforeAddRecordingEvent", "block", "blockAllMedia", "maskAllText"]);
   });
 
-  it("runs the replay on an ordinary page, and not at all on a page whose URL holds a credential", async () => {
-    vi.stubGlobal("window", { location: { href: "https://seazn.club/dashboard" } });
-    const ordinary = (await sentryInitOptions("../../../sentry.client.config")).integrations as { name: string }[];
-    expect(ordinary.map((i) => i.name)).toContain("Replay");
+  it("runs the replay on an ordinary page", async () => {
+    vi.stubGlobal("window", { location: new URL("https://seazn.club/dashboard") });
+    const integrations = (await sentryInitOptions("../../../sentry.client.config")).integrations as { name: string }[];
+    expect(integrations.map((i) => i.name)).toContain("Replay");
     const Sentry = await import("@sentry/nextjs");
     expect(vi.mocked(Sentry.replayIntegration)).toHaveBeenCalledTimes(1);
+  });
 
-    vi.resetModules();
-    vi.clearAllMocks();
-    vi.stubGlobal("window", { location: { href: PAGE } });
-    const secret = (await sentryInitOptions("../../../sentry.client.config")).integrations as { name: string }[];
-    const Sentry2 = await import("@sentry/nextjs");
-    expect(vi.mocked(Sentry2.replayIntegration)).not.toHaveBeenCalled();
-    expect(secret.map((i) => i.name)).not.toContain("Replay");
-    // Everything else the config sets up is still there on that page: the scrubbers, the console logs.
-    expect(secret.map((i) => i.name)).toEqual(ordinary.map((i) => i.name).filter((n) => n !== "Replay"));
+  // The page's FULL href is what the guard reads: a sign-in link's token is in the query, a hash can follow, and a claim sits
+  // under a locale prefix or in a login `next=`. Every credential page the scrubber knows, each from a fresh import of the
+  // config (the check runs once, when the module loads).
+  it("does not run the replay at all on any page whose URL holds a credential (every credential page, query and hash included)", async () => {
+    const pages = await credentialPages();
+    expect(pages.length, "anti-vacuity: pages checked").toBeGreaterThanOrEqual(12);
+    vi.stubGlobal("window", { location: new URL("https://seazn.club/dashboard") });
+    const ordinary = ((await sentryInitOptions("../../../sentry.client.config")).integrations as { name: string }[]).map((i) => i.name);
+    expect(ordinary).toContain("Replay");
+    for (const p of pages) {
+      vi.resetModules();
+      vi.clearAllMocks();
+      // A real `Location` shape (href, origin, pathname, search, hash), so a check that read only part of it would not hide behind a stub.
+      // The one page recorded as a router href (path only) is resolved against the origin.
+      vi.stubGlobal("window", { location: new URL(p.url, "https://seazn.club") });
+      const integrations = (await sentryInitOptions("../../../sentry.client.config")).integrations as { name: string }[];
+      const Sentry = await import("@sentry/nextjs");
+      expect(vi.mocked(Sentry.replayIntegration), `${p.name}: no replay is built`).not.toHaveBeenCalled();
+      // Everything else the config sets up is still there on that page: the scrubbers, the console logs.
+      expect(integrations.map((i) => i.name), p.name).toEqual(ordinary.filter((n) => n !== "Replay"));
+    }
   });
 
   it("stops the replay when a recorded navigation names a credential page, and keeps it for any other", async () => {
     await sentryInitOptions("../../../sentry.client.config");
     const Sentry = await import("@sentry/nextjs");
     const stop = vi.fn(async () => undefined);
-    vi.mocked(Sentry.getReplay).mockReturnValue({ stop } as never);
+    setReplay({ stop });
     const hook = (vi.mocked(Sentry.replayIntegration).mock.calls[0]![0] as Options).beforeAddRecordingEvent;
     const nav = (to: string) => replaySpanFrame(to, "navigation.push", { previous: "/" });
     expect(run(hook, nav("/dashboard"))).not.toBeNull();
@@ -294,7 +308,7 @@ describe("Sentry router hook (src/instrumentation-client.ts, onRouterTransitionS
   it("stops the replay before the app navigates to a credential page, and still reports the transition", async () => {
     const { hook, Sentry } = await routerHook();
     const stop = vi.fn(async () => undefined);
-    vi.mocked(Sentry.getReplay).mockReturnValue({ stop } as never);
+    setReplay({ stop });
     hook(`/score/${TOKEN}`, "push");
     await settle();
     expect(stop).toHaveBeenCalledTimes(1);
@@ -304,7 +318,7 @@ describe("Sentry router hook (src/instrumentation-client.ts, onRouterTransitionS
   it("leaves the replay running for any other navigation, and still reports the transition", async () => {
     const { hook, Sentry } = await routerHook();
     const stop = vi.fn(async () => undefined);
-    vi.mocked(Sentry.getReplay).mockReturnValue({ stop } as never);
+    setReplay({ stop });
     hook("/dashboard", "replace");
     await settle();
     expect(stop).not.toHaveBeenCalled();

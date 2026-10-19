@@ -15,8 +15,7 @@
 //    navigates to one (`onRouterTransitionStart`), and it is stopped when the replay's own navigation frame names one (a
 //    redirect the router did not announce).
 // Once stopped it stays stopped for that page load; the next load samples afresh.
-import * as Sentry from "@sentry/nextjs";
-import type { ReplayFrameEvent } from "@sentry/nextjs";
+import { getClient, type ReplayFrameEvent } from "@sentry/nextjs";
 import { holdsCredential, scrubRecordingEvent } from "@/lib/scrub-score-url";
 
 /** The elements the replay blocks: the class PostHog replay already blocks (components/v2/seazn-qr-image.tsx, the painters scan). */
@@ -27,8 +26,19 @@ export interface StoppableReplay {
   stop(): Promise<void>;
 }
 
-/** The Replay integration of the initialised client, or undefined when Sentry is not initialised. The client entry of @sentry/nextjs exports `getReplay` (pinned in sentry-replay-guard.test). */
-const currentReplay = (): StoppableReplay | undefined => Sentry.getReplay();
+// @sentry/nextjs re-exports `Integration` from neither its client nor its server entry; the client's own lookup type is the way in.
+type ClientIntegration = NonNullable<ReturnType<NonNullable<ReturnType<typeof getClient>>["getIntegrationByName"]>>;
+
+/** The name the Replay integration registers under (`replayIntegration()` returns `name: "Replay"`; pinned in sentry-replay-guard.test). */
+export const REPLAY_INTEGRATION_NAME = "Replay";
+
+/**
+ * The Replay integration of the initialised client, or undefined when Sentry is not initialised (the case today: see
+ * instrumentation-client.ts). This is `getReplay()`'s own body, spelled out on purpose: importing `getReplay` references
+ * @sentry/replay and rrweb (~23 KB gzipped), and this module is in the first-load chunk of every page through
+ * instrumentation-client.ts. `getClient` and the integration lookup pull none of it.
+ */
+const currentReplay = (): StoppableReplay | undefined => getClient()?.getIntegrationByName<ClientIntegration & StoppableReplay>(REPLAY_INTEGRATION_NAME);
 
 /** May the replay run on this page? `undefined` is no page at all (the server), which never records. */
 export function replayMayRunAt(href: string | undefined): boolean {

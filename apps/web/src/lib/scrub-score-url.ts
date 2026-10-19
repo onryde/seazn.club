@@ -175,15 +175,15 @@ const LOCALE_PREFIX = LOCALES.join("|");
 /**
  * Where a route root may start, consumed as the front of the match (no lookbehind: it is a syntax error in Safari before
  * 16.4, and this module loads in every browser): the start of the string, whitespace or a delimiter (a transaction
- * name's `GET `, a quote or backtick, `=`, `&`, `?`, `#`, `:`, `{`, `|`), or an origin; then an optional locale prefix. An origin
+ * name's `GET `, a quote or backtick, `=`, `&`, `?`, `#`, `:`, `{`, `[`, `|`), or an origin; then an optional locale prefix. An origin
  * is `//host` (`https://host:3000`, `HTTPS://host`, protocol-relative `//host`: the scheme needs no pattern of its own, so
  * its letter case cannot matter). A `/` that follows a path segment (`/o/x/join/…`) is not a root.
  */
-const ROUTE_ROOT = `(?:^|[\\s"'\`<>=(,;&?#:{|]|\\/\\/[^/\\s"'<>?#]+)(?:\\/(?:${LOCALE_PREFIX}))?`;
+const ROUTE_ROOT = `(?:^|[\\s"'\`<>=(,;&?#:{|\\[]|\\/\\/[^/\\s"'<>?#]+)(?:\\/(?:${LOCALE_PREFIX}))?`;
 /** The same root inside a URL-ENCODED string, at any depth, either hex case: the start, a plain delimiter, an encoded one
- *  (`=` `&` `?` `,` `:` `{` `|` backtick), an encoded origin (`%2F%2Fhost`: `https%3A%2F%2Fhost%3A3000`, `HTTPS%3A…`,
+ *  (`=` `&` `?` `,` `:` `{` `[` `|` backtick, and a space: `%20`), an encoded origin (`%2F%2Fhost`: `https%3A%2F%2Fhost%3A3000`, `HTTPS%3A…`,
  *  protocol-relative), then the encoded locale prefix. */
-const ENCODED_ROUTE_ROOT = `(?:^|[\\s"'\`<>=(,;&?#:{|]|%(?:25)*(?:3[Dd]|26|3[Ff]|2[Cc]|3[Aa]|7[Bb]|7[Cc]|60)|%(?:25)*2[Ff]%(?:25)*2[Ff](?:[^%/\\s"'<>?#&]|%(?:25)*3[Aa])+)(?:%(?:25)*2[Ff](?:${LOCALE_PREFIX}))?`;
+const ENCODED_ROUTE_ROOT = `(?:^|[\\s"'\`<>=(,;&?#:{|\\[]|%(?:25)*(?:3[Dd]|26|3[Ff]|2[Cc]|3[Aa]|7[Bb]|7[Cc]|60|5[Bb]|20)|%(?:25)*2[Ff]%(?:25)*2[Ff](?:[^%/\\s"'<>?#&]|%(?:25)*3[Aa])+)(?:%(?:25)*2[Ff](?:${LOCALE_PREFIX}))?`;
 /** The routes with each `/` spelled as given and `[id]` as one segment: `\/claim\/` plain, `%(?:25)*2[Ff]claim%(?:25)*2[Ff]` encoded. */
 const prefixAlternation = (slash: string, segment = "[^/?#\\s\"'<>]+") =>
   SECRET_PATH_ROUTES.map((r) =>

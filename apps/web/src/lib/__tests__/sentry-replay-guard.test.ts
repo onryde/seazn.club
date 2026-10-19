@@ -11,29 +11,28 @@
 // There is no DOM in this suite, so the recorder itself (rrweb) is not run: the premises it can only be read from are PINNED to
 // the installed source, and the parts that can run for real (the `replayIntegration` constructor, `BrowserClient`,
 // `httpContextIntegration`, `core.prepareEvent`) do.
-import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplayFrameEvent } from "@sentry/nextjs";
-import { routes } from "@/lib/routes";
-import { createLoginLink } from "@/lib/login-link";
-import { createVerificationToken } from "@/lib/verification";
-import { mintClaimSecret } from "@/server/usecases/person-claims";
-import { createInvite } from "@/server/usecases/invites";
-import { mintCheckinToken } from "@/server/usecases/checkin-token";
-import { mintMatchRoomToken } from "@/server/usecases/match-room-token";
-import { REPLAY_BLOCK_SELECTORS, recordingEventHook, replayMayRunAt, stopReplayBeforeNavigatingTo, type StoppableReplay } from "@/lib/replay-guard";
+import {
+  REPLAY_BLOCK_SELECTORS,
+  REPLAY_INTEGRATION_NAME,
+  recordingEventHook,
+  replayMayRunAt,
+  stopReplayBeforeNavigatingTo,
+  type StoppableReplay,
+} from "@/lib/replay-guard";
 import { holdsCredential, scrubScoreTokensIntegration, scrubScoreUrl } from "@/lib/scrub-score-url";
-import { USER_ID } from "./_fake-sql";
+import { ORIGIN, TOKEN, credentialPages, setReplay } from "./_replay-fixtures";
 
 vi.mock("@/lib/db", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/db")>()),
   sql: (await import("./_fake-sql")).fakeSql,
 }));
-vi.mock("@sentry/nextjs", () => ({ getReplay: vi.fn(), captureRouterTransitionStart: vi.fn() }));
+vi.mock("@sentry/nextjs", () => ({ getClient: vi.fn(), captureRouterTransitionStart: vi.fn() }));
 
 // ---- the installed SDK, loaded through the packages that depend on it (this also bypasses the mock above) ----
 const fromNextjs = createRequire(createRequire(import.meta.url).resolve("@sentry/nextjs"));
@@ -53,38 +52,6 @@ const replayEntry = createRequire(fromReact.resolve("@sentry/browser")).resolve(
 const REPLAY_SRC = readFileSync(replayEntry, "utf8");
 const REPLAY_PKG = JSON.parse(readFileSync(path.join(path.dirname(replayEntry), "../../../package.json"), "utf8")) as { name: string; version: string };
 const nextjsClientEntry = fromNextjs(path.join(path.dirname(fromNextjs.resolve("@sentry/nextjs")), "index.client.js")) as Record<string, unknown>;
-
-const ORIGIN = "https://seazn.club";
-const TOKEN = "dl_Q2hvb3NlIGEgcmVhbGx5IGxvbmcgcmFuZG9tIHRva2Vu_Ab-9";
-const ORG = "00000000-0000-4000-8000-000000000002";
-const FIXTURE = "00000000-0000-4000-8000-000000000003";
-
-/** Every page whose URL holds a credential, built from the real minters and builders. `secret` is what must never be recorded. */
-async function credentialPages(): Promise<{ name: string; url: string; secrets: string[] }[]> {
-  const claim = mintClaimSecret();
-  const invite = (await createInvite(ORG, USER_ID, { role: "admin", max_uses: 1 })).token;
-  const checkin = await mintCheckinToken(FIXTURE, new Date(Date.now() + 3600_000));
-  const login = await createLoginLink(USER_ID);
-  const verify = await createVerificationToken(USER_ID);
-  const room = await mintMatchRoomToken({ fixtureId: randomUUID(), personId: randomUUID(), roundOpenId: randomUUID(), roundOpenedAt: new Date().toISOString() });
-  const play = routes.sharedFixturePlay("chess-club", "autumn-open", "open", randomUUID(), room);
-  const pages = [
-    { name: "device-link scorer page", url: `${ORIGIN}/score/${TOKEN}`, secrets: [TOKEN] },
-    { name: "profile claim", url: `${ORIGIN}${routes.claim(claim)}`, secrets: [claim] },
-    { name: "profile claim under a locale prefix", url: `${ORIGIN}/fr${routes.claim(claim)}`, secrets: [claim] },
-    { name: "claim, as a router href (path only)", url: routes.claim(claim), secrets: [claim] },
-    { name: "org invite", url: `${ORIGIN}/join/${invite}`, secrets: [invite] },
-    { name: "day check-in", url: `${ORIGIN}${routes.checkin(checkin)}`, secrets: [checkin] },
-    { name: "sign-in link", url: `${ORIGIN}/magic-link?token=${login}`, secrets: [login] },
-    { name: "sign-in link with a next", url: `${ORIGIN}/magic-link?token=${login}&next=%2Fdashboard`, secrets: [login] },
-    { name: "email verification", url: `${ORIGIN}/verify-email?token=${verify}`, secrets: [verify] },
-    { name: "personal match room", url: `${ORIGIN}${play}`, secrets: [room] },
-    { name: "sign-in carrying a claim in next", url: `${ORIGIN}/login?next=${encodeURIComponent(routes.claim(claim))}`, secrets: [claim] },
-    { name: "claim with a hash", url: `${ORIGIN}${routes.claim(claim)}#top`, secrets: [claim] },
-  ];
-  for (const p of pages) for (const s of p.secrets) expect(p.url, `premise: ${p.name} carries its secret`).toContain(s);
-  return pages;
-}
 
 /** Pages that carry no credential: the replay may run on them. */
 const ORDINARY_PAGES = [
@@ -170,13 +137,17 @@ describe("premises: where @sentry/replay writes a page URL (pinned to the instal
     expect(REPLAY_SRC).toMatch(/blockSelector: getOption\(block, \[/);
   });
 
-  it("is stopped with the integration's public stop(), found with getReplay(); a repeated stop is a no-op", () => {
+  it("is stopped with the integration's public stop(), found by name on the client as getReplay() does; a repeated stop is a no-op", () => {
+    // replay-guard spells out getReplay()'s body (getClient()?.getIntegrationByName("Replay")) instead of importing getReplay,
+    // which would drag @sentry/replay and rrweb into every page's first-load chunk.
     expect(REPLAY_SRC).toMatch(/function getReplay\(\) \{\s*const client = core\.getClient\(\);\s*return client\?\.getIntegrationByName\("Replay"\);/);
+    expect(REPLAY_INTEGRATION_NAME).toBe("Replay");
+    expect(browser.replayIntegration({}).name, "the real integration registers under that name").toBe(REPLAY_INTEGRATION_NAME);
     expect(REPLAY_SRC).toMatch(/async stop\(\{\s*forceFlush = false,\s*reason\s*\} = \{\}\) \{\s*if \(!this\._isEnabled\) \{\s*return;\s*\}/);
   });
 
-  it("is reachable from @sentry/nextjs's CLIENT entry, which sentry.client.config.ts is bundled with", () => {
-    expect(typeof nextjsClientEntry.getReplay).toBe("function");
+  it("is reachable from @sentry/nextjs's client entry: getClient (the guard) and replayIntegration (a client init, which is not wired today)", () => {
+    expect(typeof nextjsClientEntry.getClient).toBe("function");
     expect(typeof nextjsClientEntry.replayIntegration).toBe("function");
   });
 });
@@ -302,13 +273,33 @@ describe("recordingEventHook (beforeAddRecordingEvent)", () => {
     expect(replay.stop).not.toHaveBeenCalled();
   });
 
-  it("is safe with no replay at all (Sentry not initialised) and with a stop() that rejects", async () => {
+  it("is safe with no replay at all (Sentry not initialised)", async () => {
     const [first] = await credentialPages();
+    setReplay(undefined);
     expect(recordingEventHook(historyFrame(first!.url), undefined)).toBeNull();
-    const failing = fakeReplay(() => Promise.reject(new Error("stop failed")));
-    expect(recordingEventHook(historyFrame(first!.url), failing)).toBeNull();
     await flush();
-    expect(failing.stop).toHaveBeenCalledTimes(1);
+  });
+
+  // vitest reports an unhandled rejection as a run error (exit 1) while the JSON still says "passed": the run goes red and
+  // no test does. A listener turns it into a failing assertion in the test that caused it.
+  it("swallows a stop() that rejects or throws: no unhandled rejection escapes", async () => {
+    const [first] = await credentialPages();
+    const seen: unknown[] = [];
+    const onUnhandled = (reason: unknown) => void seen.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      for (const stop of [() => Promise.reject(new Error("stop rejected")), () => { throw new Error("stop threw"); }]) {
+        const failing = fakeReplay(stop as () => Promise<void>);
+        expect(recordingEventHook(historyFrame(first!.url), failing)).toBeNull();
+        expect(stopReplayBeforeNavigatingTo(first!.url, failing)).toBe(true);
+        await flush();
+        await flush();
+        expect(failing.stop).toHaveBeenCalledTimes(2);
+      }
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+    expect(seen.map(String)).toEqual([]);
   });
 
   it("does not throw on a frame shape it does not know (a throw makes the SDK drop the frame without a word)", async () => {
@@ -328,15 +319,14 @@ describe("recordingEventHook (beforeAddRecordingEvent)", () => {
     expect(replay.stop).not.toHaveBeenCalled();
   });
 
-  it("asks the replay found by getReplay() to stop when none is passed", async () => {
-    const Sentry = await import("@sentry/nextjs");
+  it("asks the client's Replay integration (found by name) to stop when none is passed", async () => {
     const [first] = await credentialPages();
     const replay = fakeReplay();
-    vi.mocked(Sentry.getReplay).mockReturnValue(replay as never);
+    setReplay(replay);
     expect(recordingEventHook(historyFrame(first!.url))).toBeNull();
     await flush();
     expect(replay.stop).toHaveBeenCalledTimes(1);
-    vi.mocked(Sentry.getReplay).mockReturnValue(undefined);
+    setReplay(undefined);
     expect(recordingEventHook(historyFrame(first!.url))).toBeNull();
     await flush();
     expect(replay.stop, "no replay found: nothing more to stop").toHaveBeenCalledTimes(1);
@@ -361,24 +351,25 @@ describe("stopReplayBeforeNavigatingTo (onRouterTransitionStart)", () => {
     expect(pages.length + ORDINARY_PAGES.length).toBeGreaterThanOrEqual(22);
   });
 
-  it("calls stop() on a REAL Replay integration, and on the one getReplay() returns", async () => {
-    const Sentry = await import("@sentry/nextjs");
+  it("calls stop() on a REAL Replay integration, and on the one the client holds", async () => {
     const [first] = await credentialPages();
     const real = browser.replayIntegration({ maskAllText: true });
     const stop = vi.spyOn(real, "stop");
     expect(stopReplayBeforeNavigatingTo(first!.url, real)).toBe(true);
     await flush();
     expect(stop).toHaveBeenCalledTimes(1);
-    vi.mocked(Sentry.getReplay).mockReturnValue(real as never);
+    setReplay(real);
     expect(stopReplayBeforeNavigatingTo(first!.url)).toBe(true);
     await flush();
     expect(stop).toHaveBeenCalledTimes(2);
   });
 
-  it("does nothing, and does not throw, when Sentry has no replay (not initialised, or the server build)", async () => {
-    const Sentry = await import("@sentry/nextjs");
+  it("does nothing, and does not throw, when Sentry has no client (not initialised: today's state) or the client has no Replay", async () => {
+    const { getClient } = await import("@sentry/nextjs");
     const [first] = await credentialPages();
-    vi.mocked(Sentry.getReplay).mockReturnValue(undefined);
+    setReplay(undefined);
+    expect(stopReplayBeforeNavigatingTo(first!.url)).toBe(true);
+    vi.mocked(getClient).mockReturnValue({ getIntegrationByName: () => undefined } as never);
     expect(stopReplayBeforeNavigatingTo(first!.url)).toBe(true);
     await flush();
   });
