@@ -32,6 +32,17 @@ import {
   type ArbiterDecisionState,
   type SettleChoice,
 } from "./arbiter-decision";
+import {
+  extendBoardLabel,
+  extendClosesLine,
+  extendFailureText,
+  extendRoundLabel,
+  extendRoundLines,
+  initialRoundExtend,
+  roundExtendRunner,
+  roundExtendUi,
+  type RoundExtendState,
+} from "./checkin-extend-ui";
 import { ArbiterGuardError, joinArbiter, type ArbiterCameras, type ArbiterSeat, type ArbiterTileView } from "./arbiter-camera";
 import { arbiterWatchRelease, makeArbiterSerial, type ArbiterJoinAnswer, type ArbiterSide } from "./arbiter-watch";
 import {
@@ -87,6 +98,8 @@ export type ArbiterScreenProps = {
    *  (the page then loads no round at all). */
   requested: "unavailable" | "own" | null;
   decision: ArbiterDecisionState;
+  /** Spec §3.2.2: the round-wide "+5 min" - whether a request is in flight and the answer to the last one. */
+  roundExtend: RoundExtendState;
   video: ArbiterVideoView;
   /** Which player's pane is on screen (or being switched to), by colour. The meeting is the SIDE's; the panel maps. */
   shown: ArbiterSeat;
@@ -100,6 +113,10 @@ export type ArbiterScreenProps = {
     goOn(flagIds: readonly string[]): void;
     toggleSettle(): void;
     settle(choice: SettleChoice): void;
+    /** "+5 min" on the board on screen (spec §3.2.2). */
+    extend(): void;
+    /** "+5 min to the round": every board of it whose check-in is open. */
+    extendRound(): void;
     override(): void;
     retryVideo(): void;
     /** The White/Black switch (§5.6.4): watch the other player. */
@@ -219,6 +236,9 @@ export function ArbiterScreen(p: ArbiterScreenProps) {
       </header>
 
       {p.requested === null && p.round !== null && <RoundNotes round={p.round} slugs={p.slugs} f={f} />}
+      {p.requested === null && p.round !== null && (
+        <RoundExtend round={p.round} state={p.roundExtend} requestBusy={p.decision.busy !== null} onExtend={p.on.extendRound} f={f} />
+      )}
 
       {p.requested !== null ? (
         <RequestedNotice body={f.t(p.requested === "own" ? "arbiter.requested.own" : "arbiter.requested.unavailable")} slugs={p.slugs} f={f} />
@@ -324,7 +344,7 @@ export function ArbiterScreen(p: ArbiterScreenProps) {
                 <p className={`m-0 text-[13px] ${SOFT}`}>{f.t("arbiter.flags.none")}</p>
               )}
             </section>
-            <Decision board={board} decision={p.decision} slugs={p.slugs} on={p.on} f={f} headingId={ids.decide} />
+            <Decision board={board} decision={p.decision} roundBusy={p.roundExtend.busy} slugs={p.slugs} on={p.on} f={f} headingId={ids.decide} />
             {showsOutageCard(board, p.video) && (
               <section aria-labelledby={ids.outage} className="order-6 flex min-w-0 flex-col gap-2 rounded-xl border border-[#f5d27a] bg-[#fef3c7] p-3 text-[#713f12]">
                 <span className="text-[11px] font-semibold tracking-[0.06em] uppercase">{f.t("arbiter.outage.eyebrow")}</span>
@@ -384,6 +404,55 @@ function RoundNotes({ round, slugs, f }: { round: ArbiterRound; slugs: ArbiterSc
         </div>
       )}
       {hidden && <p className={`m-0 min-w-0 text-[13px] leading-[1.45] ${MUTED}`}>{f.plural("arbiter.ownHidden", round.ownBoards)}</p>}
+    </div>
+  );
+}
+
+/** Spec §3.2.2: "+5 min to the round" at the top of the panel - one press gives every board of the round whose check-in is open
+ *  five more minutes, and the answer says how many and why the rest were left alone. Offered while at least one board would
+ *  accept it (the server's own count, `round.extendableBoards`) and, once pressed, for as long as its answer is on screen. */
+function RoundExtend({
+  round,
+  state,
+  requestBusy,
+  onExtend,
+  f,
+}: {
+  round: ArbiterRound;
+  state: RoundExtendState;
+  requestBusy: boolean;
+  onExtend: () => void;
+  f: Fmt;
+}) {
+  const lines =
+    state.notice === null ? [] : state.notice.kind === "answered" ? extendRoundLines(state.notice.result, f) : [extendFailureText(state.notice.code, f)];
+  if (round.extendableBoards === 0 && lines.length === 0 && !state.busy) return null;
+  return (
+    <div data-testid="arbiter-extend-round" className="mx-auto flex w-full max-w-[1232px] min-w-0 flex-col items-start gap-1.5 px-4 pt-3 lg:px-6 lg:pt-5">
+      {(round.extendableBoards > 0 || state.busy) && (
+        <>
+          <button
+            type="button"
+            data-testid="arbiter-extend-round-cta"
+            onClick={onExtend}
+            disabled={state.busy || requestBusy}
+            aria-busy={state.busy || undefined}
+            className={`${BUTTON_QUIET} w-full lg:w-auto`}
+          >
+            {state.busy ? f.t("externalPlay.checkinExtend.busy") : extendRoundLabel(f)}
+          </button>
+          {round.extendableBoards > 0 && (
+            <p className={`m-0 text-xs leading-[1.45] ${MUTED}`}>{f.plural("externalPlay.checkinExtend.roundHint", round.extendableBoards)}</p>
+          )}
+        </>
+      )}
+      <div role="status" data-testid="arbiter-extend-round-notice" className={`flex min-w-0 flex-col gap-0.5 text-[13px] leading-[1.45] ${SOFT}`}>
+        {lines.map((line, i) => (
+          <p key={i} className="m-0">
+            {line}
+          </p>
+        ))}
+      </div>
     </div>
   );
 }
@@ -663,6 +732,7 @@ function OtherReports({ round, board, f }: { round: ArbiterRound; board: Arbiter
 function Decision({
   board,
   decision,
+  roundBusy,
   slugs,
   on,
   f,
@@ -670,6 +740,8 @@ function Decision({
 }: {
   board: ArbiterBoard;
   decision: ArbiterDecisionState;
+  /** The round-wide "+5 min" is in flight: one request at a time across the panel. */
+  roundBusy: boolean;
   slugs: ArbiterScreenProps["slugs"];
   on: ArbiterScreenProps["on"];
   f: Fmt;
@@ -687,8 +759,10 @@ function Decision({
   // The reducer owns "a notice belongs to the board on screen" (R4: a switch
   // clears it, an answer for the board left behind shows nothing).
   const notice = decision.notice;
-  if (!canResync && !canGoOn && !canSettle && notice === null) return null;
-  const busy = decision.busy !== null;
+  // Spec §3.2.2: offered only on what the server's own reading of the board said it would accept now.
+  const extend = board.checkin !== null && board.checkin.canExtend ? board.checkin : null;
+  if (!canResync && !canGoOn && !canSettle && extend === null && notice === null) return null;
+  const busy = decision.busy !== null || roundBusy;
   const guidance = settleGuidance(board);
   return (
     <section aria-labelledby={headingId} className="order-5 flex min-w-0 flex-col gap-2 border-t border-[#e7e3f3] pt-3 lg:pt-3.5">
@@ -696,6 +770,23 @@ function Decision({
         <span className="lg:hidden">{f.t("arbiter.decide.headingBoard", { n: board.boardNo })}</span>
         <span className="max-lg:hidden">{f.t("arbiter.decide.heading")}</span>
       </h2>
+      {extend !== null && (
+        <>
+          <button
+            type="button"
+            data-testid="arbiter-extend-board"
+            onClick={on.extend}
+            disabled={busy}
+            aria-busy={decision.busy?.kind === "extend" || undefined}
+            className={BUTTON_QUIET}
+          >
+            {decision.busy?.kind === "extend" ? f.t("externalPlay.checkinExtend.busy") : extendBoardLabel(extend.extensionsLeft, f)}
+          </button>
+          <p data-testid="arbiter-extend-closes" data-deadline-at={extend.deadlineAt} className={`m-0 text-xs leading-[1.45] ${MUTED}`}>
+            {extendClosesLine(extend.deadlineAt, f)}
+          </p>
+        </>
+      )}
       {canResync && (
         <button type="button" onClick={on.resync} disabled={busy} aria-busy={decision.busy?.kind === "resync" || undefined} className={BUTTON_QUIET}>
           {f.t("arbiter.decide.resync")}
@@ -822,6 +913,7 @@ export function ArbiterPanel({
   // says so rather than opening another. With nothing asked for, the first.
   const firstBoard = initialFixtureId ?? round?.boards[0]?.fixtureId ?? null;
   const [decision, dispatch] = useReducer(arbiterDecision, firstBoard, initialArbiterDecision);
+  const [roundExtend, dispatchRound] = useReducer(roundExtendUi, undefined, initialRoundExtend);
   // A navigation that lands on this same panel (the notice's "current round"
   // link, back/forward) brings a new target with the SAME instance: follow
   // it, adjusting during render (React's "previous props" pattern). A board
@@ -932,6 +1024,16 @@ export function ArbiterPanel({
     [router],
   );
 
+  const roundRunner = useMemo(
+    () =>
+      roundExtendRunner({
+        dispatch: dispatchRound,
+        post: (path, body) => apiV1(path, { method: "POST", ...(body === undefined ? {} : { json: body }) }),
+        refresh: () => router.refresh(),
+      }),
+    [router],
+  );
+
   const select = useCallback(
     (fixtureId: string) => {
       dispatch({ type: "select", boardId: fixtureId });
@@ -949,6 +1051,7 @@ export function ArbiterPanel({
       round={round}
       requested={requested}
       decision={decision}
+      roundExtend={roundExtend}
       video={video}
       shown={shown}
       nowMs={nowMs}
@@ -967,6 +1070,12 @@ export function ArbiterPanel({
         },
         override: () => {
           if (decision.boardId) void runner.override(decision.boardId);
+        },
+        extend: () => {
+          if (board) void runner.extend(board.fixtureId, board.boardNo);
+        },
+        extendRound: () => {
+          if (round) void roundRunner.extend(round.stageId, round.roundNo);
         },
         retryVideo: () => setAttempt((n) => n + 1),
         switchTo: (seat) => {

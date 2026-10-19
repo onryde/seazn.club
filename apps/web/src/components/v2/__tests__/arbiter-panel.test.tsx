@@ -19,6 +19,15 @@ import fr from "@/dictionaries/fr/ui.json";
 import nl from "@/dictionaries/nl/ui.json";
 import type { ArbiterBoard, ArbiterFlag, ArbiterRound, ArbiterSideMeeting, NoResultOffer } from "@/lib/arbiter-view";
 import { initialArbiterDecision, type ArbiterDecisionState } from "../arbiter-decision";
+import { initialRoundExtend } from "../checkin-extend-ui";
+import {
+  CHECKIN_EXTEND_MAX,
+  CHECKIN_EXTEND_STEP_MINUTES,
+  EXTEND_REFUSALS,
+  EXTEND_REFUSAL_CODES,
+  type CheckinExtendRoundResult,
+  type CheckinExtendState,
+} from "@/lib/checkin-extend";
 import {
   ArbiterPanel,
   ArbiterScreen,
@@ -86,6 +95,7 @@ function board(over: Partial<ArbiterBoard> & Pick<ArbiterBoard, "fixtureId" | "b
     whiteSide: "home",
     tiebreakOwed: false,
     noResultOffer: { kind: "void" },
+    checkin: null,
     flags: [],
     ...over,
   };
@@ -99,6 +109,7 @@ const ROUND: ArbiterRound = {
   timeControl: "10+5",
   ownBoards: 0,
   current: true,
+  extendableBoards: 0,
   boards: [
     board({ fixtureId: "f1", boardNo: 1, white: { name: "Ada Okonkwo", personId: "a" }, black: { name: "Tomasz Wieczorek", personId: "b" }, state: { kind: "live", moveNo: 23 } }),
     board({
@@ -133,11 +144,12 @@ function props(over: Partial<ArbiterScreenProps> = {}): ArbiterScreenProps {
     round: ROUND,
     requested: null,
     decision: initialArbiterDecision("f3"),
+    roundExtend: initialRoundExtend(),
     video: WATCHING,
     shown: "white",
     nowMs: NOW,
     slugs: { org: "club", comp: "autumn", div: "open" },
-    on: { select: noop, resync: noop, goOn: noop, toggleSettle: noop, settle: noop, override: noop, retryVideo: noop, switchTo: noop },
+    on: { select: noop, resync: noop, goOn: noop, toggleSettle: noop, settle: noop, extend: noop, extendRound: noop, override: noop, retryVideo: noop, switchTo: noop },
     ...over,
   };
 }
@@ -1086,6 +1098,169 @@ describe("your decision", () => {
   });
 });
 
+// ── the check-in extension (spec 2026-10-09 §3.2.2) ─────────────────────────────────────────────────────────────────────────────
+describe("the check-in extension: +5 min on a board and on the round", () => {
+  const DEADLINE = at(19, 50);
+  const checkin = (over: Partial<CheckinExtendState> = {}): CheckinExtendState => ({
+    canExtend: true,
+    refusal: null,
+    extensionsLeft: CHECKIN_EXTEND_MAX,
+    deadlineAt: DEADLINE,
+    ...over,
+  });
+  /** Board f3 (the one on screen) carries `c`; the round says it has `extendable` boards to reach. */
+  const withCheckin = (c: CheckinExtendState | null, extendable = 0, rest: Partial<ArbiterScreenProps> = {}) =>
+    props({
+      round: { ...ROUND, extendableBoards: extendable, boards: ROUND.boards.map((b) => (b.fixtureId === "f3" ? { ...b, checkin: c } : b)) },
+      ...rest,
+    });
+  const label = (left: number, locale: keyof typeof LOCALES = "en") =>
+    (LOCALES[locale] as Record<string, string>)["externalPlay.checkinExtend.board"]!.replace("{minutes}", String(CHECKIN_EXTEND_STEP_MINUTES)).replace("{left}", String(left));
+  const BOARD_BTN = /<button[^>]*data-testid="arbiter-extend-board"[^>]*>(.*?)<\/button>/;
+  const ROUND_BTN = /<button[^>]*data-testid="arbiter-extend-round-cta"[^>]*>(.*?)<\/button>/;
+  const result = (over: Partial<CheckinExtendRoundResult> = {}): CheckinExtendRoundResult => ({
+    extended: 6,
+    skipped: { closed: 0, gameStarted: 2, capReached: 0 },
+    notOpenYet: 0,
+    ownBoards: 0,
+    failed: 0,
+    addedMinutes: CHECKIN_EXTEND_STEP_MINUTES,
+    ...over,
+  });
+
+  it("the empty case first: a board with no check-in to extend, and a round with nothing extendable, offer no button and no bar", () => {
+    for (const c of [null, checkin({ canExtend: false, refusal: "closed", extensionsLeft: 2 })]) {
+      const h = html(withCheckin(c));
+      expect(h, JSON.stringify(c)).not.toContain('data-testid="arbiter-extend-board"');
+      expect(h).not.toContain('data-testid="arbiter-extend-round"');
+    }
+  });
+
+  it("a board whose press the server would accept: '+5 min (N left)' with the presses it has left, and when its check-in closes", () => {
+    let checked = 0;
+    for (let left = 1; left <= CHECKIN_EXTEND_MAX; left++) {
+      const h = html(withCheckin(checkin({ extensionsLeft: left })));
+      expect(text(BOARD_BTN.exec(h)![1]!), `${left} left`).toBe(label(left));
+      expect(h).toContain(`data-deadline-at="${DEADLINE}"`);
+      expect(text(h)).toContain("Check-in closes 19:50");
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity").toBe(CHECKIN_EXTEND_MAX);
+    expect(label(CHECKIN_EXTEND_MAX), "premise: the label carries the step in minutes").toContain(`+${CHECKIN_EXTEND_STEP_MINUTES} min`);
+  });
+
+  it("never offered on a refusal: every reason the server gives, counted", () => {
+    let checked = 0;
+    for (const refusal of EXTEND_REFUSALS) {
+      const h = html(withCheckin(checkin({ canExtend: false, refusal, extensionsLeft: refusal === "cap_reached" ? 0 : 2 })));
+      expect(h, refusal).not.toContain('data-testid="arbiter-extend-board"');
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: every refusal").toBe(EXTEND_REFUSALS.length);
+  });
+
+  it("in every locale the label is that locale's own, with both slots filled", () => {
+    let checked = 0;
+    for (const locale of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
+      const h = html(withCheckin(checkin({ extensionsLeft: 2 })), locale);
+      expect(text(BOARD_BTN.exec(h)![1]!), locale).toBe(label(2, locale));
+      expect(text(BOARD_BTN.exec(h)![1]!), locale).not.toMatch(/[{}]/);
+      checked += 1;
+    }
+    expect(checked).toBe(4);
+    expect(label(2, "fr"), "premise: the locales differ").not.toBe(label(2, "en"));
+  });
+
+  it("one request at a time: any request in flight, or the round's press, disables it; its own request says so", () => {
+    const own = html(withCheckin(checkin(), 0, { decision: { ...initialArbiterDecision("f3"), busy: { kind: "extend", boardId: "f3" } } }));
+    expect(own).toMatch(/<button[^>]*data-testid="arbiter-extend-board"[^>]*disabled=""/);
+    expect(own).toMatch(/<button[^>]*data-testid="arbiter-extend-board"[^>]*aria-busy="true"/);
+    expect(text(BOARD_BTN.exec(own)![1]!)).toBe(EN["externalPlay.checkinExtend.busy"]);
+    const other = html(withCheckin(checkin(), 0, { decision: { ...initialArbiterDecision("f3"), busy: { kind: "resync", boardId: "f3" } } }));
+    expect(other).toMatch(/<button[^>]*data-testid="arbiter-extend-board"[^>]*disabled=""/);
+    expect(text(BOARD_BTN.exec(other)![1]!), "another request: the label stays").toBe(label(CHECKIN_EXTEND_MAX));
+    const round = html(withCheckin(checkin(), 4, { roundExtend: { busy: true, notice: null } }));
+    expect(round).toMatch(/<button[^>]*data-testid="arbiter-extend-board"[^>]*disabled=""/);
+    expect(html(withCheckin(checkin()))).not.toMatch(/<button[^>]*data-testid="arbiter-extend-board"[^>]*disabled=""/);
+  });
+
+  it("the round bar: '+5 min to the round' and how many boards it reaches (one, and more); none when nothing is extendable", () => {
+    const one = html(withCheckin(null, 1));
+    expect(text(ROUND_BTN.exec(one)![1]!)).toBe(EN["externalPlay.checkinExtend.round"]!.replace("{minutes}", String(CHECKIN_EXTEND_STEP_MINUTES)));
+    expect(text(one)).toContain(EN["externalPlay.checkinExtend.roundHint.one"]!.replace("{count}", "1"));
+    const many = html(withCheckin(null, 6));
+    expect(text(many)).toContain(EN["externalPlay.checkinExtend.roundHint.other"]!.replace("{count}", "6"));
+    expect(html(withCheckin(null, 0))).not.toContain("arbiter-extend-round");
+  });
+
+  it("the round's answer says how many were extended and why the rest were left alone - only the reasons that happened", () => {
+    const answered = (r: CheckinExtendRoundResult) => text(html(withCheckin(null, 0, { roundExtend: { busy: false, notice: { kind: "answered", result: r } } })));
+    const t = answered(result());
+    expect(t, "6 boards, 2 skipped because a game started").toContain(EN["externalPlay.checkinExtend.notice.round.other"]!.replace("{minutes}", "5").replace("{count}", "6"));
+    expect(t).toContain(EN["externalPlay.checkinExtend.skip.gameStarted.other"]!.replace("{count}", "2"));
+    expect(t, "a reason that did not happen is not said").not.toContain("check-in closed");
+    // The brief's own sentence.
+    expect(t).toContain("Added 5 minutes to 6 boards.");
+    expect(t).toContain("2 boards skipped: game started");
+    const every = answered(
+      result({ extended: 1, skipped: { closed: 1, gameStarted: 1, capReached: 1 }, notOpenYet: 1, ownBoards: 1, failed: 1 }),
+    );
+    for (const key of ["closed", "gameStarted", "capReached", "notOpenYet", "ownBoards", "failed"]) {
+      expect(every, key).toContain(EN[`externalPlay.checkinExtend.skip.${key}.one`]!.replace("{count}", "1"));
+    }
+    expect(every).toContain(EN["externalPlay.checkinExtend.notice.round.one"]!.replace("{minutes}", "5").replace("{count}", "1"));
+    expect(answered(result({ extended: 0, skipped: { closed: 3, gameStarted: 0, capReached: 0 } })), "nothing extended").toContain(
+      EN["externalPlay.checkinExtend.notice.roundNone"]!,
+    );
+  });
+
+  it("the answer stays on screen after the count drops to zero (every board capped), and a refusal is said in words, never a code", () => {
+    const stays = text(html(withCheckin(null, 0, { roundExtend: { busy: false, notice: { kind: "answered", result: result({ extended: 3, skipped: { closed: 0, gameStarted: 0, capReached: 0 } }) } } })));
+    expect(stays).toContain("Added 5 minutes to 3 boards.");
+    expect(stays, "no button with nothing to extend").not.toContain(EN["externalPlay.checkinExtend.round"]!.replace("{minutes}", "5"));
+    const failed = (code: string) => text(html(withCheckin(null, 2, { roundExtend: { busy: false, notice: { kind: "failed", code } } })));
+    expect(failed("ROUND_NOT_OPEN")).toContain(EN["externalPlay.checkinExtend.refused.roundNotOpen"]!);
+    expect(failed("SOMETHING_ELSE")).toContain(EN["externalPlay.checkinExtend.refused.failed"]!);
+    expect(failed("SOMETHING_ELSE")).not.toContain("SOMETHING_ELSE");
+  });
+
+  it("the round press is disabled while any request is in flight, and says so while its own is", () => {
+    const busyOwn = html(withCheckin(null, 2, { roundExtend: { busy: true, notice: null } }));
+    expect(busyOwn).toMatch(/<button[^>]*data-testid="arbiter-extend-round-cta"[^>]*disabled=""/);
+    expect(text(ROUND_BTN.exec(busyOwn)![1]!)).toBe(EN["externalPlay.checkinExtend.busy"]);
+    const behind = html(withCheckin(null, 2, { decision: { ...initialArbiterDecision("f3"), busy: { kind: "goOn", boardId: "f3" } } }));
+    expect(behind).toMatch(/<button[^>]*data-testid="arbiter-extend-round-cta"[^>]*disabled=""/);
+    expect(html(withCheckin(null, 2))).not.toMatch(/<button[^>]*data-testid="arbiter-extend-round-cta"[^>]*disabled=""/);
+  });
+
+  it("a board's answer is its notice: the new closing time on success, the door's own words on each refusal - in every locale", () => {
+    const board = ROUND.boards.find((b) => b.fixtureId === "f3")!;
+    const noticeText = (n: ArbiterDecisionState["notice"], locale: keyof typeof LOCALES) => text(html(withCheckin(checkin(), 0, { decision: { ...initialArbiterDecision("f3"), notice: n } }), locale));
+    let checked = 0;
+    for (const locale of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
+      const d = LOCALES[locale] as Record<string, string>;
+      const ok = noticeText(
+        { boardId: "f3", kind: "extended", boardNo: board.boardNo, result: { fixtureId: "f3", extensions: 1, extensionsLeft: 2, addedMinutes: 5, deadlineAt: at(19, 55) } },
+        locale,
+      );
+      expect(ok, locale).toContain(d["externalPlay.checkinExtend.notice.board"]!.replace("{minutes}", "5").replace("{n}", String(board.boardNo)).replace("{time}", "19:55"));
+      checked += 1;
+      const codes: [string, string][] = [
+        ...EXTEND_REFUSALS.map((r): [string, string] => [EXTEND_REFUSAL_CODES[r], d[`externalPlay.checkinExtend.refused.${{ not_playable: "notPlayable", game_started: "gameStarted", closed: "closed", not_open: "notOpen", cap_reached: "capReached" }[r]}`]!]),
+        ["ARBITER_PLAYS_THIS_BOARD", d["externalPlay.checkinExtend.refused.playsThis"]!],
+        ["ROUND_NOT_OPEN", d["externalPlay.checkinExtend.refused.roundNotOpen"]!],
+        ["UNKNOWN", d["externalPlay.checkinExtend.refused.failed"]!],
+      ];
+      for (const [code, sentence] of codes) {
+        expect(sentence, `${locale} ${code}: the sentence exists`).toBeTruthy();
+        expect(noticeText({ boardId: "f3", kind: "extend_failed", code }, locale), `${locale} ${code}`).toContain(sentence);
+        checked += 1;
+      }
+    }
+    expect(checked, "anti-vacuity: (1 + 5 refusals + 3 others) x 4 locales").toBe((1 + EXTEND_REFUSALS.length + 3) * 4);
+  });
+});
+
 describe("the outage card", () => {
   it("only during a video outage on a required, playable board not already let go — the whole table", () => {
     const POLICIES = ["off", "optional", "required"] as const;
@@ -1269,6 +1444,9 @@ describe("every locale", () => {
       withSides("open", "none"),
       withSides("open", "open", { cameraPolicy: "off" }, { video: { kind: "none" } }),
       props({ round: { ...ROUND, current: false, ownBoards: 1 } }),
+      // §3.2.2: the extension's button, bar and answers.
+      props({ round: { ...ROUND, extendableBoards: 3, boards: ROUND.boards.map((b) => (b.fixtureId === "f3" ? { ...b, checkin: { canExtend: true, refusal: null, extensionsLeft: 2, deadlineAt: at(19, 50) } } : b)) } }),
+      props({ roundExtend: { busy: false, notice: { kind: "answered", result: { extended: 2, skipped: { closed: 1, gameStarted: 1, capReached: 1 }, notOpenYet: 1, ownBoards: 1, failed: 1, addedMinutes: 5 } } } }),
       props({ round: { ...ROUND, ownBoards: 2 } }),
       props({ round: null, requested: "unavailable", decision: initialArbiterDecision("x"), video: { kind: "idle" } }),
       props({ round: null, requested: "own", decision: initialArbiterDecision("x"), video: { kind: "idle" } }),
@@ -1304,7 +1482,7 @@ describe("every locale", () => {
         checked++;
       }
     }
-    expect(checked, "anti-vacuity: 22 states in 4 locales").toBe(4 * 22);
+    expect(checked, "anti-vacuity: 24 states in 4 locales").toBe(4 * 24);
   });
 
   it("the source never asks for the arbiter's own camera or microphone", () => {

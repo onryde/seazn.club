@@ -9,9 +9,14 @@
 // requests like the others (they used to write nothing). The go-on closes
 // exactly the flags on screen when it was pressed (controller ruling A); a
 // settle that finishes the board closes the disclosure.
+//
+// Spec §3.2.2: "+5 min" on a board's check-in is a request like the others (kind `extend`), one at a time, and its answer is the
+// board's notice. The round-wide press is not a board's: it has its own tiny reducer (checkin-extend-ui.ts) beside this one.
 import { ApiV1Error } from "@/lib/client-v1";
+import type { CheckinExtendBoardResult } from "@/lib/checkin-extend";
+import { extendBoardPath } from "./checkin-extend-ui";
 
-export type ArbiterRequestKind = "resync" | "override" | "goOn" | "settle";
+export type ArbiterRequestKind = "resync" | "override" | "goOn" | "settle" | "extend";
 
 /** The buttons of "Settle the result now…" (resolve.ts RESOLVE_KINDS:
  *  restated here because a client component cannot import server code).
@@ -29,7 +34,10 @@ export type ArbiterNotice =
   | { boardId: string; kind: "settled"; status: "finished" | "tiebreak_owed" }
   | { boardId: string; kind: "settle_failed"; code: string }
   | { boardId: string; kind: "overridden" }
-  | { boardId: string; kind: "override_failed"; code: string };
+  | { boardId: string; kind: "override_failed"; code: string }
+  /** The board's check-in was given more time; `boardNo` is the number the arbiter reads it by. */
+  | { boardId: string; kind: "extended"; boardNo: number; result: CheckinExtendBoardResult }
+  | { boardId: string; kind: "extend_failed"; code: string };
 
 export type ArbiterDecisionState = {
   /** The board on screen (a fixture id), or none. */
@@ -49,18 +57,21 @@ export type ArbiterDecisionAction =
   | { type: "override"; boardId: string }
   | { type: "goOn"; boardId: string }
   | { type: "settle"; boardId: string }
+  | { type: "extend"; boardId: string }
   | { type: "toggleSettle" }
   | { type: "resyncDone"; boardId: string; outcome: { ok: true; read: boolean; adopted: number } | Failed }
   | { type: "overrideDone"; boardId: string; outcome: { ok: true } | Failed }
   | { type: "goOnDone"; boardId: string; outcome: { ok: true; closed: number; stillOpen: number } | Failed }
-  | { type: "settleDone"; boardId: string; outcome: { ok: true; status: "finished" | "tiebreak_owed" } | Failed };
+  | { type: "settleDone"; boardId: string; outcome: { ok: true; status: "finished" | "tiebreak_owed" } | Failed }
+  | { type: "extendDone"; boardId: string; boardNo: number; outcome: { ok: true; result: CheckinExtendBoardResult } | Failed };
 
-type Done = Extract<ArbiterDecisionAction, { type: "resyncDone" | "overrideDone" | "goOnDone" | "settleDone" }>;
+type Done = Extract<ArbiterDecisionAction, { type: "resyncDone" | "overrideDone" | "goOnDone" | "settleDone" | "extendDone" }>;
 const KIND_OF_DONE: Record<Done["type"], ArbiterRequestKind> = {
   resyncDone: "resync",
   overrideDone: "override",
   goOnDone: "goOn",
   settleDone: "settle",
+  extendDone: "extend",
 };
 
 export function initialArbiterDecision(boardId: string | null): ArbiterDecisionState {
@@ -76,6 +87,7 @@ export function arbiterDecision(s: ArbiterDecisionState, a: ArbiterDecisionActio
     case "override":
     case "goOn":
     case "settle":
+    case "extend":
       if (s.boardId === null || s.busy !== null) return s;
       // A press that raced a switch is still THE request in flight, so its
       // answer frees the panel (R3); it shows nothing on this board (R4).
@@ -86,7 +98,8 @@ export function arbiterDecision(s: ArbiterDecisionState, a: ArbiterDecisionActio
     case "resyncDone":
     case "overrideDone":
     case "goOnDone":
-    case "settleDone": {
+    case "settleDone":
+    case "extendDone": {
       const kind = KIND_OF_DONE[a.type];
       if (s.busy === null || s.busy.kind !== kind || s.busy.boardId !== a.boardId) return s;
       if (a.boardId !== s.boardId) return { ...s, busy: null };
@@ -109,6 +122,10 @@ function noticeFor(a: Done): ArbiterNotice {
       return a.outcome.ok ? { boardId, kind: "went_on", stillOpen: a.outcome.stillOpen } : { boardId, kind: "go_on_failed", code: a.outcome.code };
     case "settleDone":
       return a.outcome.ok ? { boardId, kind: "settled", status: a.outcome.status } : { boardId, kind: "settle_failed", code: a.outcome.code };
+    case "extendDone":
+      return a.outcome.ok
+        ? { boardId, kind: "extended", boardNo: a.boardNo, result: a.outcome.result }
+        : { boardId, kind: "extend_failed", code: a.outcome.code };
   }
 }
 
@@ -174,6 +191,17 @@ export function decisionRunner(deps: {
           return { type: "goOnDone", boardId, outcome: { ok: true, closed: r.closed, stillOpen: r.stillOpen } };
         },
         (code) => ({ type: "goOnDone", boardId, outcome: { ok: false, code } }),
+      ),
+    /** "+5 min" on one board's check-in. `boardNo` is the number the answer names the board by. */
+    extend: (boardId: string, boardNo: number) =>
+      run(
+        "extend",
+        boardId,
+        async () => {
+          const result = (await deps.post(extendBoardPath(boardId))) as CheckinExtendBoardResult;
+          return { type: "extendDone", boardId, boardNo, outcome: { ok: true, result } };
+        },
+        (code) => ({ type: "extendDone", boardId, boardNo, outcome: { ok: false, code } }),
       ),
     settle: (boardId: string, kind: SettleChoice) =>
       run(

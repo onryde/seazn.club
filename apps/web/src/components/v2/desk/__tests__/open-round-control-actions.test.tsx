@@ -16,6 +16,7 @@ import { plural as pluralRuntime, t as tRuntime } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
 import type { OpenRoundPairing, OpenRoundView } from "@/lib/open-round";
 import { DEADLINE_AFTER_MS } from "@/server/external-play/window";
+import { CHECKIN_EXTEND_STEP_MINUTES } from "@/lib/checkin-extend";
 
 const router = vi.hoisted(() => ({ refresh: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
@@ -71,6 +72,7 @@ const ROUND = (o: Partial<OpenRoundView> = {}): OpenRoundView => ({
   press: "open",
   earlierInPlay: [],
   pairings: [P(1), P(2)],
+  extendableBoards: 0,
   ...o,
 });
 const OPENED_AT = "2026-10-16T18:04:00.000Z";
@@ -227,5 +229,86 @@ describe("Resend — on its own pairing", () => {
       checked += 1;
     }
     expect(checked, "anti-vacuity: answers checked").toBe(7);
+  });
+});
+
+// Spec 2026-10-09 §3.2.2: "+5 min to the round" on the control of an OPEN round - through the real component, reducer and runner.
+describe("+5 min to the round - on the control of an open round", () => {
+  const EXTENDABLE = (extendableBoards: number) => ({ ...INVITED, extendableBoards });
+  const extendNotice = (tree: ReactElement[]) => byTestId(tree, "open-round-extend-notice").map((n) => textOf(n)).join("|");
+  const RESULT = {
+    extended: 6,
+    skipped: { closed: 0, gameStarted: 2, capReached: 0 },
+    notOpenYet: 0,
+    ownBoards: 0,
+    failed: 0,
+    addedMinutes: CHECKIN_EXTEND_STEP_MINUTES,
+  };
+
+  it("the empty case first: no extendable board, no button; a round not yet opened offers none either", () => {
+    expect(byTestId(mount(EXTENDABLE(0)).tree(), "open-round-extend-cta")).toHaveLength(0);
+    expect(byTestId(mount(ROUND({ extendableBoards: 4 })).tree(), "open-round-extend-cta"), "a paired round is not open: nothing to extend").toHaveLength(0);
+    expect(byTestId(mount(EXTENDABLE(0)).tree(), "open-round-extend")).toHaveLength(0);
+  });
+
+  it("offered on an open round with extendable boards: the label, and the count of boards it reaches", () => {
+    const ui = mount(EXTENDABLE(6));
+    const cta = byTestId(ui.tree(), "open-round-extend-cta");
+    expect(cta).toHaveLength(1);
+    expect(textOf(cta[0]!)).toBe(en["externalPlay.checkinExtend.round"]!.replace("{minutes}", String(CHECKIN_EXTEND_STEP_MINUTES)));
+    expect(textOf(byTestId(ui.tree(), "open-round-extend")[0]!)).toContain(pl("externalPlay.checkinExtend.roundHint", 6));
+  });
+
+  it("sends ONE request with THIS round's number to the extend route, however many taps; the answer is the round's extend notice and the page refreshes", async () => {
+    const ui = mount(EXTENDABLE(6));
+    click(byTestId(ui.tree(), "open-round-extend-cta")[0]);
+    click(byTestId(ui.tree(), "open-round-extend-cta")[0]);
+    expect(net.calls.map((c) => [c.url, c.json])).toEqual([["/api/v1/stages/s1/extend-checkin", { roundNo: 2 }]]);
+    expect(propsOf(byTestId(ui.tree(), "open-round-extend-cta")[0]!).disabled, "held while in flight").toBe(true);
+    expect(propsOf(byTestId(ui.tree(), "open-round-cta")[0] ?? byTestId(ui.tree(), "open-round-resend-f1")[0]!).disabled, "so is every other control").toBe(true);
+    net.calls[0]!.resolve(RESULT);
+    await flush();
+    expect(extendNotice(ui.tree())).toBe(`Added ${CHECKIN_EXTEND_STEP_MINUTES} minutes to 6 boards. ${pl("externalPlay.checkinExtend.skip.gameStarted", 2)}`);
+    expect(router.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("the answer survives the refresh, even when nothing is left to extend; a second press clears it first", async () => {
+    const ui = mount(EXTENDABLE(6));
+    click(byTestId(ui.tree(), "open-round-extend-cta")[0]);
+    net.calls[0]!.resolve(RESULT);
+    await flush();
+    ui.rerender({ round: EXTENDABLE(0), tz: "Europe/London" });
+    expect(extendNotice(ui.tree())).toContain("Added 5 minutes to 6 boards.");
+    expect(byTestId(ui.tree(), "open-round-extend-cta"), "everything capped: no button").toHaveLength(0);
+    ui.rerender({ round: EXTENDABLE(3), tz: "Europe/London" });
+    click(byTestId(ui.tree(), "open-round-extend-cta")[0]);
+    expect(extendNotice(ui.tree()), "cleared while the next is in flight").toBe("");
+  });
+
+  it("each refusal reads in words, never the code: the round not open, any other error", async () => {
+    const cases: [ApiV1Error, string][] = [
+      [new ApiV1Error("x", 409, "ROUND_NOT_OPEN"), en["externalPlay.checkinExtend.refused.roundNotOpen"]!],
+      [new ApiV1Error("x", 403, "ARBITER_NOT_ORGANISER"), en["externalPlay.checkinExtend.refused.failed"]!],
+      [new ApiV1Error("x", 500, "INTERNAL"), en["externalPlay.checkinExtend.refused.failed"]!],
+    ];
+    let checked = 0;
+    for (const [err, expected] of cases) {
+      net.calls.length = 0;
+      const ui = mount(EXTENDABLE(2));
+      click(byTestId(ui.tree(), "open-round-extend-cta")[0]);
+      net.calls[0]!.reject(err);
+      await flush();
+      expect(extendNotice(ui.tree()), err.code).toBe(expected);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity").toBe(cases.length);
+  });
+
+  it("a Resend in flight holds it: one request at a time across the control", () => {
+    const ui = mount(EXTENDABLE(2));
+    click(byTestId(ui.tree(), "open-round-resend-f1")[0]);
+    expect(propsOf(byTestId(ui.tree(), "open-round-extend-cta")[0]!).disabled).toBe(true);
+    click(byTestId(ui.tree(), "open-round-extend-cta")[0]);
+    expect(net.calls.map((c) => c.url), "the +5 min tap behind it sent nothing").toEqual(["/api/v1/fixtures/f1/external-play/resend"]);
   });
 });

@@ -7,6 +7,7 @@ import { useLocale, usePlural, useT } from "@/components/i18n/dict-provider";
 import { fullMoveOf, timelineSegments, type ArbiterBoard, type ArbiterFlag, type CameraOffReport, type NoResultOffer } from "@/lib/arbiter-view";
 import { formatTimeOfDay } from "@/components/public-site/match-room/room-time";
 import type { ArbiterNotice, SettleChoice } from "./arbiter-decision";
+import { extendBoardSentence, extendFailureText } from "./checkin-extend-ui";
 
 export const MUTED = "text-[#6b5b8a]";
 export const SOFT = "text-[#4a3a6b]";
@@ -247,6 +248,10 @@ export function noticeSentence(n: ArbiterNotice, f: Fmt, over = false): string {
                         n.code === "NO_RESULT_CHANGED"
                         ? f.t("arbiter.notice.noResultChanged")
                         : f.t("arbiter.notice.failed");
+    case "extended":
+      return extendBoardSentence(n.result, n.boardNo, f);
+    case "extend_failed":
+      return extendFailureText(n.code, f);
     case "overridden":
       return f.t("arbiter.notice.overridden");
     case "override_failed":

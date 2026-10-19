@@ -34,6 +34,7 @@ const ROUND = (stageId: string, fixtureId: string): OpenRoundView => ({
   press: "open",
   earlierInPlay: [],
   pairings: [{ fixtureId, boardNo: 1, whiteName: "Ada", blackName: "Bo", invitedAt: null, owedSeats: 2, canResend: false }],
+  extendableBoards: 0,
 });
 const PROPS = {
   divisionId: "d1", competitionId: "c1", orgSlug: "org", compSlug: "comp", divSlug: "div",
