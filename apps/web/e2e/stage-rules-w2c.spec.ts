@@ -19,8 +19,13 @@ import { TAG, apiJson, divisionPath, seedScoredDivision } from "./helpers";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
 import { SPORT_RULES, type RuleField } from "../src/lib/match-rules";
 import { stageFieldsFor } from "../src/lib/rule-scope";
+import { rulesChipText } from "../src/lib/rules-line";
 
 const L = JSON.parse(readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8")) as Record<string, string>;
+
+/** The PUBLIC dictionary: the stage row's chips are worded from its `format.rules.*` clauses, the public rules line's own. */
+const PUB = JSON.parse(readFileSync(fileURLToPath(new URL("../src/dictionaries/en/public.json", import.meta.url)), "utf8")) as Record<string, string>;
+const chipText = (key: string, params?: Record<string, string | number>): string => rulesChipText(PUB, { key, params });
 
 const STEP_MS = 20_000;
 /** Per sport: a competition, a division, a stage, a page load, an edit, a save, a read, a clear, a read. */
@@ -370,4 +375,128 @@ test("the row is on the page for every bracket kind of a bracket sport", async (
     seen++;
   }
   expect(seen).toBe(BRACKET_KINDS.size);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Fix round 1 (review I-1, M-4): the collapsed row says the stage's EFFECTIVE format as chips, and the kicks of a shoot-out
+// are held, with the reason, while the shoot-out is off.
+// ---------------------------------------------------------------------------------------------------------------------
+test("football knockout: the chips say what the stage plays after each save, and the kicks are held while the shoot-out is off", async ({ page, request }) => {
+  test.setTimeout(150_000);
+  const { divisionId, stageId } = await seedStage(request, "football", { label: "chips" });
+  // The kicks the new stage starts with are the engine's knockout preset, read back from what the API stored.
+  const preset = await storedRules(request, divisionId, stageId);
+  const presetKicks = preset?.shootoutAttempts;
+  expect(typeof presetKicks, "the knockout preset carries the kicks").toBe("number");
+  const newKicks = presetKicks === 3 ? 4 : 3;
+  const shootoutLabel = SPORT_RULES.football!.find((f) => f.key === "shootout")!.label;
+
+  const row = await openRow(page, request, divisionId, stageId);
+  const chips = row.getByTestId("stage-format-chips");
+  await expect(chips, "the collapsed row carries the chips").toBeVisible({ timeout: STEP_MS });
+  await expect(chips).toContainText(chipText("format.rules.decider.penalties", { n: presetKicks as number }));
+  await expect(chips, "the abandon policy is always said").toContainText(chipText("format.rules.abandon.replay"));
+
+  await openEditor(row);
+  const kicks = row.getByTestId("stage-rule-field-shootoutAttempts").locator("input");
+  const shootout = row.getByTestId("stage-rule-field-shootout").locator("select");
+  const held = row.getByTestId("stage-rule-detail-off-shootoutAttempts");
+  // Positive pair first: with the shoot-out on, the kicks are a live control and nothing explains a hold.
+  await expect(kicks).toBeEnabled();
+  await expect(held).toHaveCount(0);
+  await shootout.selectOption("off");
+  await expect(kicks, "the kicks mean nothing with no shoot-out").toBeDisabled();
+  await expect(held).toHaveText(L["stageRules.detail.off"]!.replace("{decider}", shootoutLabel));
+  await expect(row.getByTestId("stage-rule-field-halfMinutes").locator("input"), "a field that is not a detail stays editable").toBeEnabled();
+  await shootout.selectOption("on");
+  await expect(kicks).toBeEnabled();
+  await expect(held).toHaveCount(0);
+
+  // A save moves the chips to the stage's own value, and the division's / old value is gone from them.
+  await kicks.fill(String(newKicks));
+  await row.getByTestId("stage-format-save").click();
+  await expect(row.getByTestId("stage-format-editor")).toHaveCount(0, { timeout: STEP_MS });
+  await expect(chips).toContainText(chipText("format.rules.decider.penalties", { n: newKicks }), { timeout: STEP_MS });
+  await expect(chips).not.toContainText(chipText("format.rules.decider.penalties", { n: presetKicks as number }));
+  expect((await storedRules(request, divisionId, stageId))?.shootoutAttempts).toBe(newKicks);
+
+  // Switch the shoot-out off and save: the penalties chip is gone with it.
+  await openEditor(row);
+  await row.getByTestId("stage-rule-field-shootout").locator("select").selectOption("off");
+  await row.getByTestId("stage-format-save").click();
+  await expect(row.getByTestId("stage-format-editor")).toHaveCount(0, { timeout: STEP_MS });
+  await expect(chips).not.toContainText(chipText("format.rules.decider.penalties", { n: newKicks }), { timeout: STEP_MS });
+  expect((await storedRules(request, divisionId, stageId))?.shootout).toBe(false);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Fix round 1 (review M-2, M-3, M-5): the lock is stated once; one Cancel, beside Save; focus follows the editor.
+// ---------------------------------------------------------------------------------------------------------------------
+test("a locked stage says it is locked once; an open editor has one Cancel and focus follows it", async ({ page, request }) => {
+  test.setTimeout(150_000);
+  const { divisionId, stageId } = await seedScoredDivision(request);
+  const row = await openRow(page, request, divisionId, stageId);
+  const sentence = L["stageRules.locked"]!;
+  const said = (await row.innerText()).split(sentence).length - 1;
+  expect(said, "the lock sentence appears once in the row").toBe(1);
+  for (const text of await row.getByTestId("stage-format-summary").allInnerTexts()) expect(text, "the header carries the format alone").not.toMatch(/locked/i);
+  await expect(row.getByTestId("stage-format-chips"), "a locked stage still reads its format as chips").toBeVisible();
+
+  // An editable stage: closed, the row offers Edit and no Cancel; open, Edit is gone and Cancel is the one way out.
+  const fresh = await seedStage(request, "generic", { label: "cancel", kind: "league", variant: "score" });
+  const row2 = await openRow(page, request, fresh.divisionId, fresh.stageId);
+  const cancels = row2.getByRole("button", { name: L["schedule.cancel"]!, exact: true });
+  await expect(cancels).toHaveCount(0);
+  await expect(row2.getByTestId("stage-format-edit")).toBeVisible();
+  await openEditor(row2);
+  await expect.soft(row2.getByTestId("stage-format-edit"), "Edit is gone while editing").toHaveCount(0);
+  await expect(cancels, "one Cancel, not two").toHaveCount(1);
+  await expect(row2.getByTestId("stage-format-cancel")).toBeVisible();
+  await expect.soft(row2.getByTestId("stage-format-editor"), "focus lands on the editor it opened").toBeFocused();
+  await row2.getByTestId("stage-format-cancel").click();
+  await expect(row2.getByTestId("stage-format-editor")).toHaveCount(0, { timeout: STEP_MS });
+  await expect.soft(row2.getByTestId("stage-format-edit"), "focus returns to the Edit button").toBeFocused();
+  expect(await storedRules(request, fresh.divisionId, fresh.stageId), "Cancel saved nothing").toBeNull();
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Fix round 1 (review I-2): the DIVISION door's "Use the default order" removes a stored tie-break list.
+// ---------------------------------------------------------------------------------------------------------------------
+test("chess division Settings: 'Use the default order' removes the stored tie-break list from the division's config", async ({ page, request }) => {
+  test.setTimeout(150_000);
+  const m = builtinModules.find((x) => x.key === "boardgame")!;
+  const seq = SPORT_RULES.boardgame!.find((f) => f.kind === "sequence")!;
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `W2c T17 division-reset ${TAG}-${Math.random().toString(36).slice(2, 6)}`,
+    visibility: "private",
+  });
+  expect(comp.status, `competition: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
+  const stored = [TIEBREAK_RUNGS[1]!];
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "Chess reset",
+    sport_key: "boardgame",
+    variant_key: Object.keys(m.variants)[0]!,
+    config: { tiebreakRungs: stored },
+  });
+  expect(div.status, `division: ${JSON.stringify(div.error)}`).toBeLessThan(300);
+  const configOf = async (): Promise<Record<string, unknown>> => {
+    const res = await apiJson<{ config: Record<string, unknown> }>(request, `/api/v1/divisions/${div.data!.id}`);
+    expect(res.status).toBe(200);
+    return res.data!.config;
+  };
+  expect((await configOf()).tiebreakRungs, "premise: the division stores its own list").toEqual(stored);
+
+  await page.goto(await divisionPath(request, div.data!.id, "?tab=settings"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  await page.getByRole("button", { name: /Format/ }).click();
+  const list = page.getByTestId(`stage-rule-sequence-${seq.key}`);
+  await expect(list, "the division door shows the ordered list").toBeVisible({ timeout: STEP_MS });
+  await expect(page.getByTestId(`stage-rule-sequence-${seq.key}-item-0`)).toContainText(seq.options!.find((o) => o.value === stored[0])!.label);
+  await page.getByTestId(`stage-rule-sequence-${seq.key}-reset`).click();
+  await page.getByRole("button", { name: L["divset.saveRules"]!, exact: true }).click();
+  await expect.poll(async () => Object.hasOwn(await configOf(), "tiebreakRungs"), { timeout: STEP_MS, message: "the saved list is gone from the division" }).toBe(false);
+  // The positive pair: nothing else was lost by the save.
+  const after = await configOf();
+  expect(Object.keys(after).length, "the rest of the config survives the save").toBeGreaterThan(0);
 });

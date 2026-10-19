@@ -113,7 +113,8 @@ export function stageSummaryClauses(
   kind: StageKind,
   resolved: Record<string, unknown> | null,
 ): RulesClause[] {
-  if (resolved === null) return [];
+  // A cfg the schema refuses (null) says nothing: every describer parses what it is given and answers empty for a refusal,
+  // so no guard of its own is kept here (pinned: "a refused cfg says nothing").
   return [
     ...(describeMatchRules(sportKey, module, resolved) ?? []),
     ...describeDeciders(module, kind, resolved),

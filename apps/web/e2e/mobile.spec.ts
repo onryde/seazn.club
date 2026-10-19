@@ -5716,7 +5716,7 @@ test("W2c stage format row at every width: sections, the deciders notice and the
   const editorControls = (row: Locator) =>
     row
       .getByTestId("stage-format-editor")
-      .locator('[data-testid^="stage-rule-field-"], [data-testid^="stage-rule-sequence-"], [data-testid="stage-format-save"], [data-testid="stage-deciders-off"], [data-testid="stage-deciders-level"]')
+      .locator('[data-testid^="stage-rule-field-"], [data-testid^="stage-rule-sequence-"], [data-testid="stage-format-save"], [data-testid="stage-format-cancel"], [data-testid="stage-deciders-off"], [data-testid="stage-deciders-level"]')
       .evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")));
 
   // --- football: the sections, the selects, the notice -------------------------------------------------------------
@@ -5727,10 +5727,19 @@ test("W2c stage format row at every width: sections, the deciders notice and the
   await expect(row).toBeVisible({ timeout: 20_000 });
   await assertTapFloor(row.getByTestId("stage-format-edit"), "Edit rules");
   await expectNoHorizontalScroll(page);
+  // Fix round 1 (I-1): the collapsed row says the stage's format as chips, they wrap inside the row, and none is clipped.
+  const chips = row.getByTestId("stage-format-chips");
+  await expect(chips, `the chips are on the collapsed row at ${projectWidth}`).toBeVisible();
+  expect(await chips.locator("li").count(), "the chips are a list of clauses").toBeGreaterThan(1);
+  const collapsedClip = await overflowingIn(page, `[data-testid="stage-format-row-${fb.stageId}"]`, "*", "the stage rules row is missing");
+  expect(collapsedClip.clipped, `nothing in the collapsed row is clipped at ${projectWidth}`).toEqual([]);
   if (shots) await row.screenshot({ path: `${shots}/collapsed-${projectWidth}.png` });
   await row.getByTestId("stage-format-edit").click();
   const editor = row.getByTestId("stage-format-editor");
   await expect(editor).toBeVisible();
+  // M-3: while editing, Cancel is the one way out and Edit is gone.
+  await expect(row.getByTestId("stage-format-edit")).toHaveCount(0);
+  await assertTapFloor(row.getByTestId("stage-format-cancel"), "football Cancel");
   const interactive = editor.locator("select, input, button");
   const n = await interactive.count();
   expect(n, "the editor has controls to measure").toBeGreaterThan(4);
@@ -5740,6 +5749,9 @@ test("W2c stage format row at every width: sections, the deciders notice and the
   await row.getByTestId("stage-rule-field-shootout").locator("select").selectOption("off");
   const notice = row.getByTestId("stage-deciders-off");
   await expect(notice).toBeVisible();
+  // M-4: the kicks are held with the reason beside them, and the caption fits at this width.
+  await expect(row.getByTestId("stage-rule-field-shootoutAttempts").locator("input")).toBeDisabled();
+  await expect(row.getByTestId("stage-rule-detail-off-shootoutAttempts")).toBeVisible();
   const clip = await overflowingIn(page, `[data-testid="stage-format-row-${fb.stageId}"]`, "*", "the stage rules row is missing");
   expect(clip.clipped, `nothing in the row is clipped at ${projectWidth}`).toEqual([]);
   await expectNoHorizontalScroll(page);
@@ -5786,4 +5798,33 @@ test("W2c stage format row at every width: sections, the deciders notice and the
   const chessHere = await editorControls(crow);
   await page.setViewportSize({ width: 1280, height: 900 });
   expect(chessHere, `the chess editor's control set at ${projectWidth} vs 1280`).toEqual(await editorControls(crow));
+  await page.setViewportSize({ width: projectWidth, height: page.viewportSize()!.height });
+
+  // --- the DIVISION door: the same ordered list in the division's Settings (review I-2), phone-first too ---------------------
+  const dcomp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `W2c T17 division-seq ${TAG}-${testInfo.project.name}`,
+    visibility: "private",
+  });
+  expect(dcomp.status, `competition: ${JSON.stringify(dcomp.error)}`).toBeLessThan(300);
+  const ddiv = await apiJson<{ id: string }>(request, `/api/v1/competitions/${dcomp.data!.id}/divisions`, "POST", {
+    name: "division sequence",
+    sport_key: "boardgame",
+    variant_key: "blitz",
+    config: { tiebreakRungs: ["rapid", "blitz"] },
+  });
+  expect(ddiv.status, `division: ${JSON.stringify(ddiv.error)}`).toBeLessThan(300);
+  await page.goto(await divisionPath(page.request, ddiv.data!.id, "?tab=settings"), { waitUntil: "load" });
+  await page.getByRole("button", { name: /Format/ }).click();
+  const dlist = page.getByTestId("stage-rule-sequence-tiebreakRungs");
+  await expect(dlist).toBeVisible({ timeout: 20_000 });
+  const ditems = dlist.locator("li");
+  expect(await ditems.count(), "the division's stored list, two rungs").toBe(2);
+  for (let i = 0; i < 2; i++) {
+    const buttons = ditems.nth(i).locator("button");
+    for (let j = 0; j < (await buttons.count()); j++) if (!(await buttons.nth(j).isDisabled())) await assertTapFloor(buttons.nth(j), `division rung ${i} button ${j}`);
+  }
+  await assertTapFloor(page.getByTestId("stage-rule-sequence-tiebreakRungs-reset"), "division use default order");
+  await expectNoHorizontalScroll(page);
+  if (shots) await dlist.screenshot({ path: `${shots}/division-sequence-${projectWidth}.png` });
 });

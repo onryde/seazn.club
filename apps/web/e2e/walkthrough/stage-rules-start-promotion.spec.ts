@@ -171,6 +171,10 @@ function stageSheet(page: Page, heading: string) {
  *  clause — assembled the way `StageFormatRow` assembles it
  *  (`${stageFormatHeadline(...)} · ${clause}`), from the SAME option-label
  *  lookup, so neither half is a string typed into this file. */
+/** A locked stage's header carries the format alone: the lock is stated once, in the lock line below it (T17 review M-2). */
+function lockedSummary(bestOf: number): string {
+  return ruleOptionLabel(SPORT, "bestOf", String(bestOf)) ?? String(bestOf);
+}
 function summaryLine(bestOf: number, clauseKey: string): string {
   const headline = ruleOptionLabel(SPORT, "bestOf", String(bestOf)) ?? String(bestOf);
   return `${headline} · ${L[clauseKey]}`;
@@ -502,7 +506,7 @@ test("the format lock is per stage: the played stage refuses, the stage that has
     { timeout: STEP_MS },
   );
   await expect(league.getByTestId("stage-format-summary")).toHaveText(
-    summaryLine(LEAGUE_BEST_OF, "schedule.stageFormat.locked"),
+    lockedSummary(LEAGUE_BEST_OF),
   );
   await expect(league.getByTestId("stage-format-edit")).toHaveCount(0);
   await expect(league.getByTestId("stage-format-clear")).toHaveCount(0);
@@ -523,7 +527,7 @@ test("the format lock is per stage: the played stage refuses, the stage that has
   );
   // The locked card did not move while its neighbour was being edited.
   await expect(league.getByTestId("stage-format-summary")).toHaveText(
-    summaryLine(LEAGUE_BEST_OF, "schedule.stageFormat.locked"),
+    lockedSummary(LEAGUE_BEST_OF),
   );
 
   // The same two directions on the endpoint itself, one call apart, so the
@@ -723,7 +727,7 @@ test("best of 1: ONE 'Points to win' field — on a stage that overrides to it, 
   expect(heldRefreshes.length, "the hold caught the save's refresh: the reopen below is mid-refresh").toBeGreaterThan(0);
   await finals.getByTestId("stage-format-edit").click();
   await expect(single).toHaveValue(String(BO1_POINTS));
-  await finals.getByTestId("stage-format-edit").click(); // the toggle now reads Cancel
+  await finals.getByTestId("stage-format-cancel").click(); // while the editor is open, its Cancel is the only way out
   releaseRefresh();
   await page.unroute("**/*");
 

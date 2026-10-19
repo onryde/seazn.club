@@ -340,6 +340,16 @@ describe("the collapsed row's chips say the stage's EFFECTIVE format in the publ
     expect(chipsOf(withChips({ stages: stage({ halfMinutes: 30 }), canEdit: false }))).toContain(chip("format.rules.period.halves", { minutes: 30 }));
   });
 
+  it("a stage whose stored rules the schema refuses says nothing: no empty chip list", () => {
+    // `bestOf: "x"` is no cfg the engine takes, so there is no effective format to state.
+    const html = withChips({ sportKey: "badminton", divisionConfig: {}, stages: stage({ bestOf: "x" }, "league") });
+    expect(html).toContain('data-testid="stage-format-row-');
+    expect(html).not.toContain('data-testid="stage-format-chips"');
+    // positive pair: the same sport and stage with valid rules does say its format
+    const ok = withChips({ sportKey: "badminton", divisionConfig: {}, stages: stage({ bestOf: 3 }, "league") });
+    expect(ok).toContain('data-testid="stage-format-chips"');
+  });
+
   it("no dictionary slice, no chips - and the row still renders (the page owns passing it)", () => {
     const html = withChips({ ruleDict: undefined, stages: stage({ halfMinutes: 30 }) });
     expect(html).not.toContain('data-testid="stage-format-chips"');

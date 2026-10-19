@@ -88,13 +88,14 @@ export function StageRuleFields({
                 // A decider's detail while that decider is off: held, with the reason beside it (the decider is named by
                 // the label of the field that switches it).
                 const inert = detailIsInert(module, field, resolved);
-                const switchLabel = inert ? sections.flatMap((x) => x.fields).find((f) => f.edits.length === 1 && f.edits[0] === deciderOfDetail(module, field))?.label : undefined;
+                const decider = inert ? deciderOfDetail(module, field) : null;
+                const switchLabel = decider === null ? undefined : sections.flatMap((x) => x.fields).find((f) => f.edits[0] === decider)?.label;
                 return (
                   <div
                     key={field.key}
                     data-testid={`stage-rule-field-${topSegment(field)}`}
                     data-source={set ? "stage" : "division"}
-                    className={`min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2 ${field.kind === "sequence" ? "sm:col-span-2 lg:col-span-3" : ""}`}
+                    className={`min-w-0 rounded-lg border border-slate-200 px-3 py-2 ${inert ? "bg-slate-50 [&_input]:bg-slate-100" : "bg-white"} ${field.kind === "sequence" ? "sm:col-span-2 lg:col-span-3" : ""}`}
                   >
                     <RuleFieldControl
                       sportKey={sportKey}

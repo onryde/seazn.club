@@ -283,6 +283,21 @@ describe("a detail of a decider is held while its decider is off - the pairing i
     }
   });
 
+  it("a field editing several keys is a detail only when EVERY key names the same decider (the guards are reached)", () => {
+    // No shipped field edits two paired keys, so the rule is pinned on a module built to declare them: a, b -> the shoot-out,
+    // c -> extra time, plain -> no pairing.
+    const fact = (detailOf?: string) => ({ scope: "match", matchBound: "shorter", ...(detailOf === undefined ? {} : { detailOf }) });
+    const mod = { ...football, ruleKeys: { ...football.ruleKeys, a: fact("shootout"), b: fact("shootout"), c: fact("extraTime"), plain: fact() } } as unknown as AnySportModule;
+    const field = (edits: string[]) => ({ key: "x", edits, label: "x", help: "", kind: "number", build: () => ({}), read: () => undefined }) as unknown as (typeof SPORT_RULES)[string][number];
+    expect(deciderOfDetail(mod, field(["a", "b"])), "both name the shoot-out").toBe("shootout");
+    expect(deciderOfDetail(mod, field(["a", "c"])), "two different deciders").toBeNull();
+    expect(deciderOfDetail(mod, field(["c", "a"])), "...whichever comes first").toBeNull();
+    expect(deciderOfDetail(mod, field(["a", "plain"])), "one key with no pairing").toBeNull();
+    expect(deciderOfDetail(mod, field(["plain", "a"])), "...in either order").toBeNull();
+    expect(deciderOfDetail(mod, field(["notDeclaredAtAll"])), "a key the module does not declare").toBeNull();
+    expect(deciderOfDetail(mod, field([])), "a field that edits nothing").toBeNull();
+  });
+
   it("a cfg the schema refuses holds nothing, and a module that declares no pairing holds nothing", () => {
     const kicks = SPORT_RULES.football!.find((f) => f.key === "shootoutAttempts")!;
     expect(detailIsInert(football, kicks, null)).toBe(false);
