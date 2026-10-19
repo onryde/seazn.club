@@ -1823,6 +1823,7 @@ jobs:
           RELAY_DRIVERS: fake
           ENV_NAME: ci
           CAPTURE_QR_V2_ALWAYS: "1"
+          ONLINE_CHESS_ALWAYS: "1"
         run: |
           node apps/web/.next/standalone/apps/web/server.js > composed-server.log 2>&1 &
           up=""
