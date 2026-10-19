@@ -423,3 +423,31 @@ describe("R2004 PR 0 — the stop grace and the two stop signals", () => {
     expect(config.RUNNER_PLATFORM_STOP_SIGNAL).not.toBe(config.RUNNER_STOP_SIGNAL);
   });
 });
+
+// R2004 decision 3 (compositor ADR 0005): the composed Machine's output profile. The numbers are the CONTRACT's — read
+// from the shared fixtures web and the compositor both test against, never typed here and never read from config — so
+// a profile that drifts from what the compositor's OutputProfile accepts reds in this file.
+describe("relayOutputProfile — RELAY_OUTPUT_PROFILE, the composed output the Machine renders (R2004)", () => {
+  const FIXTURES = resolve(import.meta.dirname, "../../../../../../docs/contracts/fixtures/relay-job.v1");
+  const fixtureOutput = (name: string): unknown => (JSON.parse(readFileSync(resolve(FIXTURES, name), "utf8")) as { output: unknown }).output;
+
+  it("each profile deep-equals its contract fixture's `output`; unset and blank are 720p", () => {
+    const p720 = fixtureOutput("session-composed-720p.json");
+    const p1080 = fixtureOutput("session-composed-1080p.json");
+    expect(p720, "PREMISE: the fixtures carry two different profiles").not.toEqual(p1080);
+    expect(config.relayOutputProfile({ RELAY_OUTPUT_PROFILE: "720p" })).toEqual(p720);
+    expect(config.relayOutputProfile({ RELAY_OUTPUT_PROFILE: "1080p" })).toEqual(p1080);
+    expect(config.relayOutputProfile({}), "unset → the default").toEqual(p720);
+    expect(config.relayOutputProfile({ RELAY_OUTPUT_PROFILE: "  " }), "blank → the default").toEqual(p720);
+    // Two calls never share an object a caller could mutate into the next session's facts.
+    const a = config.relayOutputProfile({});
+    (a as { width: number }).width = 1;
+    expect(config.relayOutputProfile({})).toEqual(p720);
+  });
+
+  it("any other value is refused by name — a typo never silently streams the default", () => {
+    for (const bad of ["1080", "720P", "4k", "full"]) {
+      expect(() => config.relayOutputProfile({ RELAY_OUTPUT_PROFILE: bad }), bad).toThrow(/RELAY_OUTPUT_PROFILE must be "720p" or "1080p"/);
+    }
+  });
+});

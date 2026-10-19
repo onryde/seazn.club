@@ -5701,6 +5701,7 @@
   "stream.fail.machine_crash": "De relay is onverwacht gestopt. Probeer het opnieuw.",
   "stream.fail.machine_refused": "De relay heeft de instellingen van deze stream geweigerd. Probeer het opnieuw en neem contact op met support als het nog eens gebeurt.",
   "stream.fail.target_rejected": "De bestemming weigerde de streamsleutel. Op een nieuw YouTube-kanaal kan livestreamen ongeveer 24 uur duren om te activeren.",
+  "stream.fail.output_failed": "De stream kon niet met je bestemming worden verbonden en is daarom gestopt. Probeer het over een minuut opnieuw.",
   "stream.fail.no_credits": "Er was geen tegoed meer toen de stream startte. Koop tegoed en probeer het opnieuw.",
   "stream.fail.machine_create_failed": "De relay kon niet starten. Probeer het over een minuut.",
   "stream.fail.machine_boot_timeout": "De relay startte niet op tijd. Probeer het opnieuw.",

@@ -44,6 +44,12 @@ const REFUSAL_LADDER = [
   [{ headroomMinutes: 299 }, "storage_exhausted"],           // C3: headroom < max_duration refuses
 ] as const;
 
+// R2004 (owner ruling 2026-10-18, option (a)): BOTH of a composed session's inputs record — the camera (A) keeps its HLS
+// for the phone's delivery watch, the programme (B) is the product — so a composed start reserves room for TWO
+// recordings of the full match. The numbers are the ruling's ("2 × MAX_DURATION_MINUTES"), typed here, never read from
+// the reservation helper; `OK.maxDurationMinutes` is 300.
+const COMPOSED_OK = { ...OK, mode: "composed" as Mode };
+
 describe("admit — the §6.3 gates, in order", () => {
   it("everything satisfied → ok (the empty case: no refusal)", () => {
     expect(admit(OK)).toEqual({ ok: true });
@@ -56,6 +62,14 @@ describe("admit — the §6.3 gates, in order", () => {
   });
   it("headroom EXACTLY max_duration admits (boundary)", () => {
     expect(admit({ ...OK, headroomMinutes: 300 })).toEqual({ ok: true });
+  });
+  it("R2004: a COMPOSED start needs room for TWO recordings — 599 refuses storage_exhausted where passthrough admits, 600 admits (the boundary); passthrough's own boundary does not move", () => {
+    expect(admit({ ...COMPOSED_OK, headroomMinutes: 599 })).toMatchObject({ ok: false, refusal: "storage_exhausted" });
+    expect(admit({ ...OK, headroomMinutes: 599 }), "the differential: passthrough records once").toEqual({ ok: true });
+    expect(admit({ ...COMPOSED_OK, headroomMinutes: 600 })).toEqual({ ok: true });
+    expect(admit({ ...COMPOSED_OK, headroomMinutes: 300 }), "one recording's room is not enough").toMatchObject({ refusal: "storage_exhausted" });
+    expect(admit({ ...OK, headroomMinutes: 300 })).toEqual({ ok: true });
+    expect(admit({ ...OK, headroomMinutes: 299 })).toMatchObject({ refusal: "storage_exhausted" });
   });
   it("ORDER: two refusals true at once yield the earlier — balance 0 AND no headroom → no_credits, not storage_exhausted", () => {
     expect(admit({ ...OK, balance: 0, headroomMinutes: 0 })).toMatchObject({ refusal: "no_credits" });
@@ -163,12 +177,15 @@ describe("admit — R2001: composed_unavailable, first on the ladder", () => {
   });
 
   it("composed + AVAILABLE → the existing ladder answers exactly as for passthrough, gate by gate; and everything satisfied → ok", () => {
-    expect(admit({ ...OK, mode: "composed", composedUnavailable: false })).toEqual({ ok: true });
+    // R2004: the base has room for a composed session's TWO recordings (600 = 2 × OK's 300), so every gate below is the
+    // only thing refusing; the storage boundary itself is the "R2004: a COMPOSED start needs room for TWO" test's.
+    const ROOM = { headroomMinutes: 600 };
+    expect(admit({ ...OK, ...ROOM, mode: "composed", composedUnavailable: false })).toEqual({ ok: true });
     let checked = 0;
     for (const [over, refusal] of GATES_AFTER) {
-      const composed = admit({ ...OK, ...over, mode: "composed", composedUnavailable: false });
+      const composed = admit({ ...OK, ...ROOM, ...over, mode: "composed", composedUnavailable: false });
       expect(composed, refusal).toMatchObject({ ok: false, refusal });
-      expect(composed, `${refusal}: composed answers as passthrough does`).toEqual(admit({ ...OK, ...over, mode: "passthrough", composedUnavailable: false }));
+      expect(composed, `${refusal}: composed answers as passthrough does`).toEqual(admit({ ...OK, ...ROOM, ...over, mode: "passthrough", composedUnavailable: false }));
       checked++;
     }
     expect(checked, "anti-vacuity: every gate after the new one").toBe(REFUSAL_LADDER.length - 1);
@@ -205,7 +222,7 @@ describe("admit — R2001: composed_unavailable, first on the ladder", () => {
       const label = JSON.stringify(c);
       const want = c.refused ? { ok: false, refusal: "composed_unavailable" } : { ok: true };
       expect(admitMode(c), label).toEqual(want);
-      expect(admit({ ...OK, ...c }), `${label}: admit agrees`).toEqual(want);
+      expect(admit({ ...OK, headroomMinutes: 600, ...c }), `${label}: admit agrees`).toEqual(want);   // R2004: room for composed's two recordings
       checked++;
     }
     expect(checked).toBe(4);
@@ -219,13 +236,15 @@ describe("decide — legal edges", () => {
     expect(d.events).toEqual([{ type: "SessionProvisioning" }]);
     expect(d.effects).toEqual([]);
   });
-  it("provisioning → warming: passthrough adds ONE output (C9); composed adds none — its Machine is the runner sub-machine's (Task 2C)", () => {
+  it("provisioning → warming: passthrough adds ONE output (C9); composed adds ONE too since R2004 — on its programme input, so the destination key never reaches the Machine", () => {
     const p = decide(S({ state: "provisioning" }), { type: "provisioned" }, T0);
     expect(p.next.state).toBe("warming");
     expect(p.effects).toEqual([{ type: "add_output" }]);
+    // R2004 (spec §5.3): the Machine publishes to Cloudflare Input B and the destination is an Output on B. Which input
+    // the output attaches to is the usecase's (stream-sessions.ts runEffects); the domain says only that there is one.
     const c = decide(S({ state: "provisioning", mode: "composed" }), { type: "provisioned" }, T0);
     expect(c.next.state).toBe("warming");
-    expect(c.effects).toEqual([]);
+    expect(c.effects).toEqual([{ type: "add_output" }]);
     expect(c.events).toEqual([{ type: "SessionWarming" }]);
   });
   it("warming → live on ingest_connected (passthrough) with the consume effect (m1's domain twin); composed goes live only through the runner's callback (Task 2C)", () => {
@@ -419,6 +438,7 @@ describe("a session whose fixture was deleted (fixtureId null)", () => {
 const PASSTHROUGH_COMMANDS: Command[] = [
   { type: "provision" }, { type: "provisioned" }, { type: "ingest_connected" }, { type: "credit_refused" },
   { type: "target_rejected" }, { type: "stop", reason: "stopped" }, { type: "complete" }, { type: "relay_disabled" },
+  { type: "output_failed" },
 ];
 const ALL_STATES: SessionState[] = [...ACTIVE_STATES, ...TERMINAL_STATES];
 
@@ -444,6 +464,9 @@ const PASSTHROUGH_LEGAL: Record<string, SessionState> = {
   "warming × relay_disabled": "failed",
   "live × relay_disabled": "failed",
   "ending × relay_disabled": "failed",
+  // R2004 review I3: the add_output effect failed — from the two states the add can return into.
+  "warming × output_failed": "failed",
+  "live × output_failed": "failed",
 };
 
 describe("decide — relay_disabled (M10, Task 14b review): a deployment with no relay ends a leftover session as failed", () => {
@@ -832,6 +855,32 @@ describe("decide — a composed session's Machine events go through the runner t
     expect(passthrough.events).toEqual([{ type: "SessionEnded", reason: "no_credits" }]);
   });
 
+  // R2004, PR #981 review I3: the add_output effect THREW. Mutant: delete the composed branch → red (the Machine keeps
+  // booting toward a go-live nobody sees).
+  it("R2004 I3: output_failed tears a COMPOSED Machine down like the credit refusal — the SIGINT stop, desiredState ending, failed(output_failed) with no end reason; no Machine, nothing torn; passthrough just fails; from warming and live only", () => {
+    const d = decide(C(), { type: "output_failed" }, T0);
+    expect(d.next).toMatchObject({ state: "failed", failReason: "output_failed", desiredState: "ending", endReason: null, endedAt: T0, runner: { state: "stopping", stopRequestedAt: T0 } });
+    expect(d.effects).toEqual([STOP_EFFECT]);
+    expect(d.events).toEqual([{ type: "RunnerChanged", from: "booting", to: "stopping", trigger: "session_stop" }, { type: "SessionEnded", reason: "output_failed" }]);
+    const bare = decide(C({ runner: RUNNER_NONE }), { type: "output_failed" }, T0);
+    expect(bare.next).toMatchObject({ state: "failed", failReason: "output_failed", runner: RUNNER_NONE });
+    expect(bare.effects).toEqual([]);
+    const passthrough = decide(S({ state: "warming" }), { type: "output_failed" }, T0);
+    expect(passthrough.next).toMatchObject({ state: "failed", failReason: "output_failed", endedAt: T0 });
+    expect(passthrough.effects).toEqual([]);
+    expect(passthrough.events).toEqual([{ type: "SessionEnded", reason: "output_failed" }]);
+    // From live too (a passthrough phone can connect while the add is still out), never consuming.
+    const live = decide(S({ state: "live", startedAt: T0 }), { type: "output_failed" }, T0);
+    expect(live.next.state).toBe("failed");
+    expect(live.effects.filter((e) => e.type === "consume_credit")).toEqual([]);
+    let refused = 0;
+    for (const state of ["requested", "provisioning", "ending", "completed", "failed"] as const) {
+      expect(() => decide(S({ state }), { type: "output_failed" }, T0), state).toThrow();
+      refused++;
+    }
+    expect(refused).toBe(5);
+  });
+
   // Task 2C carry C5 (M6 from the Task 2B review): F19's backstop completed an `ending` session over an UNMARKED creating
   // runner — a create still in flight — so the Machine it later made was caught only by the daily orphan sweep.
   it("C5 (M6): an ending_timeout over an UNMARKED creating runner MARKS the stop instead of completing blind — the grace then ends it on a lazy read, and a late create_ok is destroyed, never booted", () => {
@@ -1068,7 +1117,7 @@ describe("decide — a composed session's Machine events go through the runner t
     : t === "create_ok" ? [{ type: "create_ok", machineId: "m9" }]
     : [{ type: t } as RunnerTrigger]);
   const EXPIRIES: Expiry["kind"][] = ["none", "requested_timeout", "provision_timeout", "warming_timeout", "wall_clock", "stale_beat", "grace_expired", "ending_timeout"];
-  const SESSION_COMMANDS: Command[] = [{ type: "provision" }, { type: "provisioned" }, { type: "ingest_connected" }, { type: "credit_refused" }, { type: "target_rejected" }, { type: "stop", reason: "stopped" }, { type: "complete" }];
+  const SESSION_COMMANDS: Command[] = [{ type: "provision" }, { type: "provisioned" }, { type: "ingest_connected" }, { type: "credit_refused" }, { type: "target_rejected" }, { type: "stop", reason: "stopped" }, { type: "complete" }, { type: "output_failed" }];
   const commandsFor = (s: Session): Command[] => [
     ...triggers(s.runner).map((trigger): Command => ({ type: "runner", trigger })),
     ...EXPIRIES.map((kind): Command => ({ type: "expire", expiry: { kind } } as Command)),
@@ -1094,6 +1143,7 @@ describe("decide — a composed session's Machine events go through the runner t
       ["ending × ending_timeout (C5)", C({ state: "ending", desiredState: "ending", endReason: "stopped", startedAt: T0, endingAt: T0, runner: CREATING }), { type: "expire", expiry: { kind: "ending_timeout" } }],
       ["warming × warming_timeout", C({ state: "warming", runner: CREATING }), { type: "expire", expiry: { kind: "warming_timeout" } }],
       ["warming × credit_refused", C({ state: "warming", runner: CREATING }), { type: "credit_refused" }],
+      ["warming × output_failed", C({ state: "warming", runner: CREATING }), { type: "output_failed" }],
       ["provisioning × provision_timeout", C({ state: "provisioning", runner: CREATING }), { type: "expire", expiry: { kind: "provision_timeout" } }],
     ];
     let decisions = 0, keptCellsTaken = 0;
@@ -1447,7 +1497,7 @@ describe("C1 (lane C final review): a passthrough session that holds an output R
   const COMMANDS: Record<Command["type"], Command[]> = {
     provision: [{ type: "provision" }], provisioned: [{ type: "provisioned" }], ingest_connected: [{ type: "ingest_connected" }],
     credit_refused: [{ type: "credit_refused" }], target_rejected: [{ type: "target_rejected" }], stop: [{ type: "stop", reason: "stopped" }],
-    complete: [{ type: "complete" }], relay_disabled: [{ type: "relay_disabled" }],
+    complete: [{ type: "complete" }], relay_disabled: [{ type: "relay_disabled" }], output_failed: [{ type: "output_failed" }],
     expire: Object.values(EXPIRIES).map((expiry) => ({ type: "expire" as const, expiry })),
     runner: [{ type: "runner", trigger: { type: "observed", state: "destroyed" } }],
   };
@@ -1459,6 +1509,8 @@ describe("C1 (lane C final review): a passthrough session that holds an output R
     "requested × expire:requested_timeout", "provisioning × expire:provision_timeout",
     "warming × credit_refused", "warming × target_rejected", "warming × expire:warming_timeout",
     "live × target_rejected", "live × complete",
+    // R2004 review I3: the add_output failure fails the session from either state it can be in when the add returns.
+    "warming × output_failed", "live × output_failed",
     // m-5 (controller ruling, capture QR v2 T7): a passthrough live session with no first ingest is judged by the warming rule.
     "live × expire:warming_timeout",
     "ending × complete", "ending × expire:ending_timeout",
@@ -1513,17 +1565,59 @@ describe("C1 (lane C final review): a passthrough session that holds an output R
     expect(d.effects).toEqual([{ type: "release_output" }, { type: "fill_replay" }]);
   });
 
-  it("a COMPOSED session never releases a passthrough output, even on a row that somehow holds one: the Machine is its teardown", () => {
-    let entries = 0;
+  // R2004: a composed session now holds an output too — on its programme input (Input B) — and nothing but its removal
+  // stops Cloudflare simulcasting B to the destination, so the same ONE predicate releases it. The runner sub-machine's
+  // own teardown stops the Machine, not the output. Every runner state, so the cells a composed session reaches through
+  // its runner (a crash, a boot timeout, a grace) are walked too.
+  it("R2004: a COMPOSED session that holds an output releases it exactly once on entering a terminal state, and never otherwise — every active state × every runner state × every command", () => {
+    let entries = 0, released = 0, legal = 0;
     for (const state of ACTIVE_STATES) {
-      for (const c of Object.values(COMMANDS).flat()) {
-        let d;
-        try { d = decide(S({ state, mode: "composed", outputUid: "out-1" }), c, T0); } catch { continue; }
-        if (isTerminal(d.next.state)) entries++;
-        expect(releases(d.effects), `${state} × ${label(c)}`).toBe(0);
+      for (const runnerState of RUNNER_STATES) {
+        for (const outputUid of [null, "out-1"]) {
+          for (const c of Object.values(COMMANDS).flat()) {
+            const cell = `${state} × runner ${runnerState} × ${label(c)} (output ${outputUid ?? "none"})`;
+            let d;
+            try { d = decide(S({ state, mode: "composed", outputUid, runner: { ...RUNNER_NONE, state: runnerState } }), c, T0); } catch { continue; }
+            legal++;
+            const enters = isTerminal(d.next.state);
+            if (enters) entries++;
+            const want = enters && outputUid !== null ? 1 : 0;
+            expect(releases(d.effects), cell).toBe(want);
+            released += want;
+          }
+        }
       }
     }
-    expect(entries).toBeGreaterThan(0);
+    expect(entries, "anti-vacuity: composed cells entered a terminal state").toBeGreaterThan(0);
+    expect(released, "every terminal entry released when it held an output").toBe(entries / 2);
+    expect(legal).toBeGreaterThan(entries);
+  });
+
+  // The other half: a TERMINAL composed session still takes runner cleanup triggers (C27 — its Machine may be dying), so
+  // a predicate keyed on the outcome alone would re-emit the release on every one of them. Entering, not being, terminal.
+  it("R2004: a TERMINAL composed session never re-emits the release — every terminal state × every runner state × every cleanup trigger and command", () => {
+    let checked = 0, decided = 0;
+    // Every Machine trigger in every payload flavour (the observed states, the three create_failed cells).
+    const machine: RunnerTrigger[] = RUNNER_TRIGGER_TYPES.flatMap((t): RunnerTrigger[] =>
+      t === "observed" ? OBSERVED_STATES.map((state) => ({ type: "observed" as const, state }))
+      : t === "create_failed" ? [true, false].flatMap((retryable) => [false, true].map((outcomeUnknown) => ({ type: "create_failed" as const, retryable, outcomeUnknown })))
+      : t === "create_started" ? [{ type: "create_started", name: "relay-s1-r2", attempt: 2 }]
+      : t === "create_ok" ? [{ type: "create_ok", machineId: "m9" }]
+      : [{ type: t } as RunnerTrigger]);
+    const triggers: Command[] = [...Object.values(COMMANDS).flat(), ...machine.map((trigger): Command => ({ type: "runner", trigger }))];
+    for (const state of TERMINAL_STATES) {
+      for (const runnerState of RUNNER_STATES) {
+        for (const c of triggers) {
+          checked++;
+          let d;
+          try { d = decide(S({ state, mode: "composed", outputUid: "out-1", runner: { ...RUNNER_NONE, state: runnerState }, endedAt: T0 }), c, T0); } catch { continue; }
+          decided++;
+          expect(releases(d.effects), `${state} × runner ${runnerState} × ${label(c)}`).toBe(0);
+        }
+      }
+    }
+    expect(checked).toBe(TERMINAL_STATES.length * RUNNER_STATES.length * triggers.length);
+    expect(decided, "anti-vacuity: some terminal composed cells DECIDE (the cleanup triggers), so the no-release claim was tested").toBeGreaterThan(0);
   });
 
   it("a TERMINAL passthrough session never re-emits the release: every command on it throws or decides nothing to release", () => {

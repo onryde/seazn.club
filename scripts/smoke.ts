@@ -61,7 +61,7 @@ import { pdfLinkUris } from "../apps/web/e2e/pdf-uris.ts";
 import { sitemapWindowOverride } from "../apps/web/src/lib/sitemap-window.ts";
 // captureV2's automatic stop advances time past the SAME default delay the server runs (the relay's one authority for
 // its numbers). The module is import-free, so it loads under `--experimental-strip-types` (proven before relying on it).
-import { AUTO_STOP_AFTER_RESULT_SECONDS } from "../apps/web/src/server/relay/config.ts";
+import { AUTO_STOP_AFTER_RESULT_SECONDS, MAX_DURATION_MINUTES, RELAY_OVERLAY_DELAY_DEFAULT_MS } from "../apps/web/src/server/relay/config.ts";
 
 const BASE = process.env.SMOKE_BASE ?? "http://localhost:3000";
 
@@ -19437,7 +19437,9 @@ async function captureV2Suite(): Promise<void> {
     console.log("SKIP  capture-v2 suite (DATABASE_URL not set — the plan change needs SQL)");
     return;
   }
-  const EXPECTED_STEPS = 26;
+  // R2004: an environment naming a compositor image runs the composed Go live AND its Stop (two steps) where the
+  // imageless one runs the single 503 refusal.
+  const EXPECTED_STEPS = process.env.RELAY_IMAGE ? 27 : 26;
   let steps = 0;
   const step = (label: string, cond: boolean) => {
     check(`capture-v2 smoke: ${label}`, cond);
@@ -19570,14 +19572,41 @@ async function captureV2Suite(): Promise<void> {
       );
       // 2c. R2001: a COMPOSED Go live on a deployment with no compositor image is 503 composed_unavailable, refused at the
       // start's entry — no session row, input, credit or runner is created. A smoke server sets no RELAY_IMAGE (CI's smoke job, ci-local.sh and
-      // seazn-env alike); a smoke environment that starts naming one owes this step its positive answer instead. The phone
+      // seazn-env alike); a smoke environment that names one gets the positive answer instead (R2004, below). The phone
       // is paired and answering again, so the passthrough Go live in step 3 is what admits.
       const composed = await v1(owner, `/api/v1/fixtures/${fx.fixtureId}/stream-sessions`, "POST", { mode: "composed", targetId });
-      const [{ n: composedRows }] = await quiet<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where fixture_id = ${fx.fixtureId}`;
-      step(
-        `a composed Go live with no compositor image → 503 composed_unavailable, no session row (got ${composed.status} ${composed.json.error?.code ?? ""}, rows ${composedRows})`,
-        composed.status === 503 && composed.json.error?.code === "composed_unavailable" && composedRows === 0,
-      );
+      if (process.env.RELAY_IMAGE) {
+        // R2004: this environment names a compositor image (the server's and this process's env agree), so the composed
+        // Go live is ADMITTED, and over real HTTP it provisions what the compositor needs: the camera input (with its
+        // SRT playback credential, sealed) and the programme input, the destination output on the PROGRAMME (the
+        // session's output input), two matches of storage reserved (owner ruling 2026-10-18, option (a): both record),
+        // and the default overlay delay copied in. Then its Stop, and the next read of the fake Machine completes it, so
+        // the passthrough Go live in step 3 admits on the same fixture.
+        const csid = (composed.json.data as { sessionId?: string } | undefined)?.sessionId ?? null;
+        const ins = csid ? await quiet<{ role: string; ingest_input_id: string | null; playback: boolean }[]>`
+          select role, ingest_input_id, (playback_srt_url is not null) as playback from fixture_stream_inputs where session_id = ${csid} order by role` : [];
+        const [srow] = csid ? await quiet<{ ingest_input_uid: string | null; output_uid: string | null; reserved_minutes: number; overlay_delay_ms: number }[]>`
+          select ingest_input_uid, output_uid, reserved_minutes, overlay_delay_ms from fixture_stream_sessions where id = ${csid}` : [];
+        step(
+          `R2004: a composed Go live with a compositor image → 201, a camera input (playback stored) and a programme input, the output on the programme, ${2 * MAX_DURATION_MINUTES} minutes reserved, the default delay copied (got ${composed.status} ${composed.json.error?.code ?? ""}, inputs ${ins.map((i) => `${i.role}${i.playback ? "+playback" : ""}`).join(",")}, output input ${srow?.ingest_input_uid === ins[1]?.ingest_input_id ? "programme" : "other"}, reserved ${srow?.reserved_minutes}, delay ${srow?.overlay_delay_ms})`,
+          composed.status === 201 && ins.length === 2 && ins[0].role === "camera" && ins[0].playback && ins[1].role === "programme" && !ins[1].playback
+            && !!ins[1].ingest_input_id && srow?.ingest_input_uid === ins[1].ingest_input_id && srow?.output_uid != null
+            && srow?.reserved_minutes === 2 * MAX_DURATION_MINUTES && srow?.overlay_delay_ms === RELAY_OVERLAY_DELAY_DEFAULT_MS,
+        );
+        const cstop = csid ? await v1(owner, `/api/v1/fixtures/${fx.fixtureId}/stream-sessions/${csid}/stop`, "POST") : null;
+        let cstate: string | undefined;
+        for (let i = 0; i < 10 && cstate !== "completed"; i++) {
+          const cur = await v1(owner, `/api/v1/fixtures/${fx.fixtureId}/stream-sessions/current`, "GET");
+          cstate = (cur.json.data as { id?: string; state?: string } | null | undefined)?.id === csid ? (cur.json.data as { state?: string }).state : cstate;
+        }
+        step(`R2004: the composed session's Stop → 200, and it completes (got ${cstop?.status}, ${cstate})`, cstop?.status === 200 && cstate === "completed");
+      } else {
+        const [{ n: composedRows }] = await quiet<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where fixture_id = ${fx.fixtureId}`;
+        step(
+          `a composed Go live with no compositor image → 503 composed_unavailable, no session row (got ${composed.status} ${composed.json.error?.code ?? ""}, rows ${composedRows})`,
+          composed.status === 503 && composed.json.error?.code === "composed_unavailable" && composedRows === 0,
+        );
+      }
     } finally {
       await quiet.end();
     }

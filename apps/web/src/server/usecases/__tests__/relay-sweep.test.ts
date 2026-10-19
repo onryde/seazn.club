@@ -43,7 +43,7 @@ import { seedOrg, startedDivisionWithFixture } from "./_rig";
 import { grantCredits } from "../stream-credits";
 import { saveStreamSettings } from "../stream-codes";
 import { createStreamTarget } from "../stream-targets";
-import { type SessionDeps, createSession, currentSession, heartbeat, stopSession } from "../stream-sessions";
+import { type SessionDeps, createSession, currentSession, heartbeat, stopSession, storageReservations } from "../stream-sessions";
 import { type BackstopBucket, SweepScopeEmpty, backstopOutcome, isOrphan, sweepSessionLockKey, sweepStreamSessions } from "../relay-sweep";
 
 const sentry = vi.hoisted(() => ({ captureError: vi.fn() }));
@@ -149,6 +149,7 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
     const runner = new FakeRunner();
     const listMachines = vi.spyOn(runner, "list");
     const listVideos = vi.spyOn(ingest, "listVideos");
+    const listInputVideos = vi.spyOn(ingest, "listInputVideos");
     const at = new Date();
     const deps: SessionDeps = { drivers: { ingest, runner }, now: () => at, appUrl: "x" };
     const res = await sweepStreamSessions(deps, { orgIds: [auth.orgId] });
@@ -161,8 +162,10 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
       foreignRunnersSkipped: 0, runnerGoneDeferred: 0, foreignVideosSkipped: 0,
       videosListed: 0, listingTruncated: false, videosDeleted: 0, videosDeferred: 0, inputsDeleted: 0, inputsDeferred: 0, retentionFailed: 0,
       videosSeen: 0, recordingsFinalised: 0, summariesWritten: 0, samplesDeleted: 0,
+      cameraInputsCleared: 0, cameraRecordingsDeleted: 0, cameraRecordingsDeferred: 0, cameraRecordingsRefused: 0, cameraListingsTruncated: 0,   // R2004 1c
     });
     expect(listMachines).not.toHaveBeenCalled();   // no composed session in scope ever held a runner
+    expect(listInputVideos, "R2004 1c: no ended composed session, no camera listed").not.toHaveBeenCalled();
     expect(listVideos).toHaveBeenCalledTimes(1);
     // Headroom is the ACCOUNT's, not the scope's — other files reserve from the same pool concurrently — so it is bounded
     // (nothing is stored; reservations only subtract) and equated with the snapshot the run wrote, never with a literal.
@@ -1194,6 +1197,8 @@ describe("relay sweep — pure parts", () => {
     // Neither is an outcome the backstop's reconcile produces (the poll and the go-live consume do): a visit that sees one
     // raced another request, and it is counted apart rather than folded into a timeout or a crash.
     target_rejected: "otherFailures", no_credits: "otherFailures",
+    // R2004 review I3: the organiser's create produces it (the add_output effect failing), never the reconcile.
+    output_failed: "otherFailures",
     // M10: produced by the organiser's poll on a deployment with no relay — where the sweep does not run at all.
     relay_disabled: "otherFailures",
   };
@@ -1282,5 +1287,243 @@ describe("relay sweep — pure parts", () => {
   it("an EMPTY scope is refused by name — `org_id in ()` is not a query, and an empty list must never read as 'everything'", async () => {
     const deps: SessionDeps = { drivers: { ingest: new FakeIngest(), runner: new FakeRunner() }, now: () => new Date(), appUrl: "x" };
     await expect(sweepStreamSessions(deps, { orgIds: [] })).rejects.toBeInstanceOf(SweepScopeEmpty);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// R2004, owner ruling 2026-10-18 option (a): BOTH inputs of a composed session record — the camera (A) because
+// Cloudflare serves an input's HLS only while it records and the phone's delivery watch reads A's, the programme (B)
+// because its recording is the product. A's recordings are deleted at the FIRST sweep after the session ends
+// (phase 1c), idempotently, retried on failure, never touching B's; the extra reservation is released only once A's
+// recordings are gone. Every session here ends through the REAL path (stop → the Machine destroyed → completed).
+// ---------------------------------------------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("R2004: an ended composed session's CAMERA recordings (owner ruling 2026-10-18, option (a))", () => {
+  /** Inputs by role, as the rows hold them. */
+  async function inputsOf(sid: string) {
+    const rows = await sql<{ role: string; ingest_input_id: string; recordings_deleted_at: Date | null }[]>`
+      select role, ingest_input_id, recordings_deleted_at from fixture_stream_inputs where session_id = ${sid} order by role`;
+    expect(rows.map((x) => x.role), "premise: a composed session holds a camera and a programme input").toEqual(["camera", "programme"]);
+    return { camera: rows[0]!, programme: rows[1]! };
+  }
+  /** A composed rig gone live, its recordings made, then ended through the real stop. */
+  async function endedComposed(videos: { camera: string[]; programme: string[] }) {
+    const r = await rig("composed");
+    await goLive(r);
+    const { camera, programme } = await inputsOf(r.sessionId);
+    for (const v of videos.camera) r.ingest.addVideo({ videoId: v, inputId: camera.ingest_input_id, createdAt: justBefore(), inProgress: false });
+    for (const v of videos.programme) r.ingest.addVideo({ videoId: v, inputId: programme.ingest_input_id, createdAt: justBefore(), inProgress: false });
+    await stopSession(r.auth, r.fixtureId, r.sessionId, r.deps);
+    await currentSession(r.auth, r.fixtureId, r.deps);
+    expect((await r.state()).state, "premise: the session ended").toBe("completed");
+    return { r, cameraId: camera.ingest_input_id, programmeId: programme.ingest_input_id };
+  }
+  const reservedFor = async (r: Rig) => (await storageReservations(sql, r.deps.now())).filter((x) => x.sessionId === r.sessionId).map((x) => x.minutes);
+  const camera1c = (res: Awaited<ReturnType<typeof sweep>>) => ({
+    cleared: res.cameraInputsCleared, deleted: res.cameraRecordingsDeleted, deferred: res.cameraRecordingsDeferred, refused: res.cameraRecordingsRefused,
+  });
+
+  it("A's recordings go at the FIRST sweep after the end and B's are kept; the camera row is marked; a second sweep asks the provider nothing; the reservation is released only by that delete", async () => {
+    const { r, cameraId, programmeId } = await endedComposed({ camera: ["va1", "va2"], programme: ["vb1"] });
+    expect(await reservedFor(r), "ended, A not yet deleted: the camera's share is still reserved").toEqual([MAX_DURATION_MINUTES]);
+    const listed = vi.spyOn(r.ingest, "listInputVideos");
+    const first = await sweep(r);
+    expect(camera1c(first)).toEqual({ cleared: 1, deleted: 2, deferred: 0, refused: 0 });
+    expect([...r.ingest.deletedVideos].sort(), "A's two, never B's").toEqual(["va1", "va2"]);
+    expect(listed.mock.calls.map(([id]) => id), "only the CAMERA input is listed").toEqual([cameraId]);
+    expect((await r.ingest.listInputVideos(programmeId)).map((v) => v.videoId), "B's recording is the product: kept").toEqual(["vb1"]);
+    const rows = await inputsOf(r.sessionId);
+    expect(rows.camera.recordings_deleted_at).toBeInstanceOf(Date);
+    expect(rows.programme.recordings_deleted_at, "the programme row is never marked").toBeNull();
+    expect(await reservedFor(r), "A's recordings gone: the reservation is released").toEqual([]);
+    listed.mockClear();
+    const second = await sweep(r);
+    expect(camera1c(second), "a re-run is a no-op").toEqual({ cleared: 0, deleted: 0, deferred: 0, refused: 0 });
+    expect(listed, "and asks the provider nothing").not.toHaveBeenCalled();
+    expect([...r.ingest.deletedVideos].sort()).toEqual(["va1", "va2"]);
+  });
+
+  // Review I1: ONE cause per session. Together the two causes covered for each other — either `remaining++` deleted and
+  // the other still held the row unmarked (M6/M8 survived) — so each is its own session, with nothing else to defer.
+  it("a recording still FINALISING (409) is the only thing left: the row stays unmarked and the reservation held; the next sweep deletes it, marks, and releases (mutant: the 409 branch forgets to count it → red)", async () => {
+    const { r } = await endedComposed({ camera: ["va1", "va2"], programme: ["vb1"] });
+    r.ingest.scriptDeleteVideo("va2", ["in_progress"]);
+    const first = await sweep(r);
+    expect(camera1c(first)).toEqual({ cleared: 0, deleted: 1, deferred: 1, refused: 0 });
+    expect(r.ingest.deletedVideos, "va1 went; va2 is still finalising").toEqual(["va1"]);
+    expect((await inputsOf(r.sessionId)).camera.recordings_deleted_at, "unmarked: tomorrow retries").toBeNull();
+    expect(await reservedFor(r), "release only after the delete").toEqual([MAX_DURATION_MINUTES]);
+    r.tick(DAY_MS);
+    const second = await sweep(r);
+    expect(camera1c(second)).toEqual({ cleared: 1, deleted: 1, deferred: 0, refused: 0 });
+    expect([...r.ingest.deletedVideos].sort()).toEqual(["va1", "va2"]);
+    expect(await reservedFor(r)).toEqual([]);
+  });
+
+  it("a DELETE that THROWS is the only thing left: reported once, the row stays unmarked and the reservation held; the next sweep deletes it, marks, and releases (mutant: the catch forgets to count it → red)", async () => {
+    const { r } = await endedComposed({ camera: ["va1", "va3"], programme: ["vb1"] });
+    const real = r.ingest.deleteVideo.bind(r.ingest);
+    let thrown = 0;
+    const flaky = Object.assign(Object.create(r.ingest) as FakeIngest, {
+      async deleteVideo(id: string) { if (id === "va3" && thrown === 0) { thrown++; throw new Error("cloudflare delete video: HTTP 503"); } return real(id); },
+    });
+    sentry.captureError.mockClear();
+    const first = await sweep(r, { ingest: flaky });
+    expect(thrown, "anti-vacuity: the delete DID fail").toBe(1);
+    expect(camera1c(first)).toEqual({ cleared: 0, deleted: 1, deferred: 1, refused: 0 });
+    expect(r.ingest.deletedVideos).toEqual(["va1"]);
+    expect((await inputsOf(r.sessionId)).camera.recordings_deleted_at, "unmarked: tomorrow retries").toBeNull();
+    expect(await reservedFor(r), "release only after the delete").toEqual([MAX_DURATION_MINUTES]);
+    expect(sentry.captureError.mock.calls.filter(([, c]) => (c as { route?: string }).route === "relay.sweep.camera_recordings"), "the failure is reported").toHaveLength(1);
+    r.tick(DAY_MS);
+    const second = await sweep(r, { ingest: flaky });
+    expect(camera1c(second)).toEqual({ cleared: 1, deleted: 1, deferred: 0, refused: 0 });
+    expect([...r.ingest.deletedVideos].sort()).toEqual(["va1", "va3"]);
+    expect(await reservedFor(r)).toEqual([]);
+  });
+
+  it("review I2: a FULL page of camera recordings may have a tail — what it listed is deleted, but nothing is marked that pass and the reservation is held; the next, short listing finishes and marks (mutant: a full page is read as the whole set → red)", async () => {
+    const { r } = await endedComposed({ camera: ["va1", "va2", "va3"], programme: ["vb1"] });
+    const PAGE = 2;
+    expect(PAGE, "the case needs more recordings than a page").toBeLessThan(3);
+    const small = Object.assign(Object.create(r.ingest) as FakeIngest, { capabilities: { ...r.ingest.capabilities, listVideosPageLimit: PAGE } });
+    const first = await sweep(r, { ingest: small });
+    expect(camera1c(first), "the page's two deleted, nothing deferred or refused").toEqual({ cleared: 0, deleted: 2, deferred: 0, refused: 0 });
+    expect(first.cameraListingsTruncated).toBe(1);
+    expect((await inputsOf(r.sessionId)).camera.recordings_deleted_at, "a full page is never the whole set: unmarked").toBeNull();
+    expect(await reservedFor(r)).toEqual([MAX_DURATION_MINUTES]);
+    r.tick(DAY_MS);
+    const second = await sweep(r, { ingest: small });
+    expect(camera1c(second)).toEqual({ cleared: 1, deleted: 1, deferred: 0, refused: 0 });
+    expect(second.cameraListingsTruncated).toBe(0);
+    expect([...r.ingest.deletedVideos].sort()).toEqual(["va1", "va2", "va3"]);
+    expect((await r.ingest.listInputVideos((await inputsOf(r.sessionId)).programme.ingest_input_id)).map((v) => v.videoId), "B's kept").toEqual(["vb1"]);
+    expect(await reservedFor(r)).toEqual([]);
+  });
+
+  it("a camera listing that FAILS is reported and retried — nothing deleted, nothing marked — and the rest of the sweep still runs", async () => {
+    const { r } = await endedComposed({ camera: ["va1"], programme: [] });
+    const down = Object.assign(Object.create(r.ingest) as FakeIngest, { async listInputVideos(): Promise<never> { throw new Error("cloudflare list input videos: HTTP 503"); } });
+    const first = await sweep(r, { ingest: down });
+    expect(camera1c(first)).toEqual({ cleared: 0, deleted: 0, deferred: 0, refused: 0 });
+    expect(first.videosListed, "retention still listed").toBeGreaterThan(0);
+    expect((await inputsOf(r.sessionId)).camera.recordings_deleted_at).toBeNull();
+    expect(await reservedFor(r)).toEqual([MAX_DURATION_MINUTES]);
+    expect(camera1c(await sweep(r))).toEqual({ cleared: 1, deleted: 1, deferred: 0, refused: 0 });
+  });
+
+  const refusalReports = () => sentry.captureError.mock.calls.filter(([, c]) => (c as { route?: string }).route === "relay.sweep.camera_recordings");
+  const refusalRows = async (sessionId: string) =>
+    (await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_events where session_id = ${sessionId} and source = 'sweep' and type = 'camera_recordings_refused'`)[0]!.n;
+
+  it("the B-guard: a listing under the camera that returns a recording of ANOTHER input (the programme's) never deletes it — refused, reported ONCE per session (not once per recording per day), the row left unmarked and the reservation held (mutant: drop the per-video input check → red)", async () => {
+    const { r, cameraId, programmeId } = await endedComposed({ camera: ["va1"], programme: ["vb1", "vb2"] });
+    // A provider listing that mixes inputs: the guard must not trust the filter.
+    const mixed = Object.assign(Object.create(r.ingest) as FakeIngest, {
+      async listInputVideos(id: string) { return [...await r.ingest.listInputVideos(id), ...await r.ingest.listInputVideos(programmeId)]; },
+    });
+    sentry.captureError.mockClear();
+    const res = await sweep(r, { ingest: mixed });
+    expect(camera1c(res)).toEqual({ cleared: 0, deleted: 1, deferred: 0, refused: 2 });
+    expect(r.ingest.deletedVideos, "B's recordings are never deleted").toEqual(["va1"]);
+    expect((await r.ingest.listInputVideos(programmeId)).map((v) => v.videoId)).toEqual(["vb1", "vb2"]);
+    expect(refusalReports(), "ONE report for the session, naming both refused recordings").toHaveLength(1);
+    expect(refusalReports()[0]![1]).toMatchObject({ extra: { sessionId: r.sessionId, cameraInput: cameraId, refusedCount: 2,
+      refused: [{ videoId: "vb1", videoInput: programmeId }, { videoId: "vb2", videoInput: programmeId }] } });
+    expect(await refusalRows(r.sessionId), "the ledger remembers the report").toBe(1);
+    expect((await inputsOf(r.sessionId)).camera.recordings_deleted_at).toBeNull();
+    expect(await reservedFor(r)).toEqual([MAX_DURATION_MINUTES]);
+    // The next day: still refused, still unmarked — and SILENT (the second call, the state transition the rule is about).
+    r.tick(DAY_MS);
+    const again = await sweep(r, { ingest: mixed });
+    expect(camera1c(again)).toEqual({ cleared: 0, deleted: 0, deferred: 0, refused: 2 });
+    expect(refusalReports(), "no second report for the same session").toHaveLength(1);
+    expect(await refusalRows(r.sessionId)).toBe(1);
+    expect((await inputsOf(r.sessionId)).camera.recordings_deleted_at).toBeNull();
+  });
+
+  it("review I2: a recording whose liveInput is ABSENT (the schema makes it optional) is refused like a foreign one — never deleted, never marked, reported once per session; a SECOND session's refusal is reported again (mutant: an absent liveInput is trusted as the camera's → red)", async () => {
+    let checked = 0;
+    sentry.captureError.mockClear();
+    for (const nth of [1, 2]) {
+      const { r, cameraId } = await endedComposed({ camera: [], programme: ["vb1"] });
+      r.ingest.addVideo({ videoId: `vx${nth}`, inputId: null, createdAt: justBefore(), inProgress: false });
+      const unnamed = Object.assign(Object.create(r.ingest) as FakeIngest, {
+        // The filtered listing returned it under the camera, with no liveInput of its own (the fixture's `v_cam_unnamed`).
+        async listInputVideos(id: string) { return id === cameraId ? (await r.ingest.listVideos({ createdBefore: new Date(Date.now() + DAY_MS) })).filter((v) => v.inputId === null) : r.ingest.listInputVideos(id); },
+      });
+      for (const day of [0, 1]) {
+        if (day) r.tick(DAY_MS);
+        const res = await sweep(r, { ingest: unnamed });
+        expect(camera1c(res), `session ${nth} day ${day}`).toEqual({ cleared: 0, deleted: 0, deferred: 0, refused: 1 });
+        expect(r.ingest.deletedVideos, "never deleted").toEqual([]);
+        expect((await inputsOf(r.sessionId)).camera.recordings_deleted_at, "never marked").toBeNull();
+        expect(await reservedFor(r)).toEqual([MAX_DURATION_MINUTES]);
+        checked++;
+      }
+      expect(refusalReports(), `one report per session — ${nth} after session ${nth}`).toHaveLength(nth);
+      expect(refusalReports()[nth - 1]![1]).toMatchObject({ extra: { sessionId: r.sessionId, cameraInput: cameraId, refused: [{ videoId: `vx${nth}`, videoInput: null }] } });
+    }
+    expect(checked, "anti-vacuity: two sessions × two days").toBe(4);
+  });
+
+  it("the SELECTION: a RUNNING composed session's camera, an ended PASSTHROUGH session's input and every PROGRAMME input are never listed; an empty camera (it recorded nothing) is marked at once", async () => {
+    const running = await rig("composed");
+    await goLive(running);
+    const pass = await rig("passthrough");
+    await stopSession(pass.auth, pass.fixtureId, pass.sessionId, pass.deps);
+    expect((await pass.state()).state, "premise: the passthrough session ended").toBe("completed");
+    const { r: empty, cameraId } = await endedComposed({ camera: [], programme: [] });
+    const ingest = new FakeIngest();
+    const listed = vi.spyOn(ingest, "listInputVideos");
+    const shared = Object.assign(Object.create(ingest) as FakeIngest, {});
+    const res = await sweep(empty, { orgIds: [running.orgId, pass.orgId, empty.orgId], ingest: shared });
+    expect(listed.mock.calls.map(([id]) => id), "the ended composed camera alone").toEqual([cameraId]);
+    expect(camera1c(res)).toEqual({ cleared: 1, deleted: 0, deferred: 0, refused: 0 });
+    expect((await inputsOf(empty.sessionId)).camera.recordings_deleted_at, "nothing to delete: marked").toBeInstanceOf(Date);
+    expect((await inputsOf(running.sessionId)).camera.recordings_deleted_at, "the running session's camera is untouched").toBeNull();
+  });
+
+  it("test 6: teardown deletes BOTH inputs, each input's recordings first — through the real sweep, past retention", async () => {
+    const { r, cameraId, programmeId } = await endedComposed({ camera: ["va1"], programme: ["vb1"] });
+    const old = new Date(Date.now() - (RECORDING_RETENTION_DAYS + 1) * DAY_MS);
+    await sql`update fixture_stream_sessions set ended_at = ${old} where id = ${r.sessionId}`;
+    const order: string[] = [];
+    const real = { deleteVideo: r.ingest.deleteVideo.bind(r.ingest), deleteInput: r.ingest.deleteInput.bind(r.ingest) };
+    const logging = Object.assign(Object.create(r.ingest) as FakeIngest, {
+      async deleteVideo(id: string) { order.push(`video:${id}`); return real.deleteVideo(id); },
+      async deleteInput(id: string) { order.push(`input:${id}`); return real.deleteInput(id); },
+    });
+    // The programme's recording is a match's worth old — past retention, like the session's end.
+    const vb1 = (await r.ingest.listInputVideos(programmeId))[0]!;
+    expect(vb1.videoId).toBe("vb1");
+    r.ingest.addVideo({ ...vb1, videoId: "vb2", createdAt: old.toISOString(), inProgress: false });
+    await r.ingest.deleteVideo("vb1");   // keep one OLD programme recording, the shape retention meets
+    order.length = 0;
+    const res = await sweep(r, { ingest: logging });
+    expect(res).toMatchObject({ cameraRecordingsDeleted: 1, videosDeleted: 1, inputsDeleted: 2 });
+    for (const [video, input] of [["va1", cameraId], ["vb2", programmeId]] as const) {
+      expect(order, `${input}: its recording deleted`).toContain(`video:${video}`);
+      expect(order, `${input}: deleted`).toContain(`input:${input}`);
+      expect(order.indexOf(`video:${video}`), `${input}: the recording before the input (C2)`).toBeLessThan(order.indexOf(`input:${input}`));
+    }
+    const left = await sql<{ ingest_input_id: string | null }[]>`select ingest_input_id from fixture_stream_inputs where session_id = ${r.sessionId}`;
+    expect(left.map((x) => x.ingest_input_id), "both rows let go of their provider ids").toEqual([null, null]);
+  });
+
+  it("C1 for composed: a session whose output release FAILED at its end is released FROM THE PROGRAMME input by the daily pass, once", async () => {
+    const r = await rig("composed");
+    await goLive(r);
+    const { programme } = await inputsOf(r.sessionId);
+    const [{ out }] = await sql<{ out: string | null }[]>`select output_uid as out from fixture_stream_sessions where id = ${r.sessionId}`;
+    expect(out, "premise: the composed session holds an output").not.toBeNull();
+    const remove = vi.spyOn(r.ingest, "removeOutput").mockRejectedValueOnce(new Error("cloudflare remove output: HTTP 503"));
+    await stopSession(r.auth, r.fixtureId, r.sessionId, r.deps);
+    await currentSession(r.auth, r.fixtureId, r.deps);
+    expect((await r.state()).state).toBe("completed");
+    expect(remove, "the end's own release was tried, and failed").toHaveBeenCalledTimes(1);
+    expect(await sweep(r)).toMatchObject({ outputsReleased: 1, outputReleasesFailed: 0 });
+    expect(remove.mock.calls.map(([input, uid]) => [input, uid]), "B's output, removed from B").toEqual([[programme.ingest_input_id, out], [programme.ingest_input_id, out]]);
+    expect(await sweep(r)).toMatchObject({ outputsReleased: 0, outputReleasesFailed: 0 });
+    expect(remove).toHaveBeenCalledTimes(2);
   });
 });

@@ -33,19 +33,20 @@ import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { STREAM_PLATFORM_PRESETS } from "@/lib/stream-destinations";
 import { PHASE_CHANNELS, PROGRAMME_PHASES } from "@/lib/relay-phase";
 import {
-  MAX_DURATION_MINUTES, RELAY_EXIT_REFUSED, RELAY_HEARTBEAT_INTERVAL_MS, RUNNER_CRASH_CAP, RUNNER_INPLACE_RESTARTS, RUNNER_MAX_ATTEMPTS, RUNNER_OBSERVE_SLACK_SECONDS,
+  MAX_DURATION_MINUTES, RELAY_EXIT_REFUSED, RELAY_HEARTBEAT_INTERVAL_MS, RELAY_OVERLAY_DELAY_DEFAULT_MS, RUNNER_CRASH_CAP, RUNNER_INPLACE_RESTARTS, RUNNER_MAX_ATTEMPTS, RUNNER_OBSERVE_SLACK_SECONDS,
   RUNNER_RESTART_STUCK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS, STALE_HEARTBEAT_SECONDS_COMPOSED, WARMING_TIMEOUT_MINUTES,
 } from "@/server/relay/config";
 import { BEAT_EXIT_REASONS, failReasonFromExit, type BeatExitReason, type ExitInfo } from "@/server/relay/domain/runner";
 import { setRelayDriversForTest } from "@/server/relay/drivers";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
+import type { IngestCredentials } from "@/server/relay/ports";
 import { pairPresentPhone, rigUser } from "@/server/relay/__tests__/_session-rig";
 import { recordEvent, recordSample } from "@/server/relay/telemetry";
 import { mintRelayToken, verifyRelayToken } from "@/server/relay/tokens";
 import { log } from "@/server/logger";
 import { GET as facts } from "@/app/api/internal/relay/sessions/[sid]/route";
 import { POST as beat } from "@/app/api/internal/relay/sessions/[sid]/heartbeat/route";
-import { seedOrg, startedDivisionWithFixture } from "./_rig";
+import { makeCommunityRig, seedOrg, startedDivisionWithFixture } from "./_rig";
 import { grantCredits } from "../stream-credits";
 import { createStreamTarget } from "../stream-targets";
 import { createSession, defaultDeps, sessionFactsForJob, stopSession } from "../stream-sessions";
@@ -81,11 +82,23 @@ const ROOMY_STORAGE_MINUTES = 100_000_000;
 
 type Mode = "composed" | "passthrough";
 
-async function session(mode: Mode = "composed") {
-  const seeded = await seedOrg();
+/** R2004: what a session is created WITH — a sport other than the rig's generic one (a real community division of that
+ *  sport), the fixture's stream settings as the organiser left them before the Go live, and the body's own theme. */
+type SessionOpts = { sport?: string; settings?: { overlay_delay_ms?: number | null; overlay_template?: string | null }; themeId?: string };
+
+async function session(mode: Mode = "composed", opts: SessionOpts = {}) {
+  let auth: Awaited<ReturnType<typeof seedOrg>>["auth"];
+  let fixtureId: string;
   // A8: the organiser who starts a stream is a REAL users row (the actor guard refuses a null userId with 403).
-  const auth = { ...seeded.auth, userId: await rigUser() };
-  const { fixtureId } = await startedDivisionWithFixture(auth);
+  if (opts.sport) {
+    const c = await makeCommunityRig(opts.sport);
+    auth = { ...c.auth, userId: await rigUser() };
+    fixtureId = c.fixtureId;
+  } else {
+    const seeded = await seedOrg();
+    auth = { ...seeded.auth, userId: await rigUser() };
+    ({ fixtureId } = await startedDivisionWithFixture(auth));
+  }
   for (const key of ["streaming.overlay", "streaming.relay"]) {
     await sql`insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason) values (${auth.orgId}, ${key}, true, 'r1 unit')
               on conflict (org_id, feature_key) do update set bool_value = true`;
@@ -97,15 +110,28 @@ async function session(mode: Mode = "composed") {
   // The fake ingest never connects inside a test: a passthrough session stays `warming` until the test moves it.
   const ingest = new FakeIngest({ connectAfterMs: 10 * 60_000 });
   ingest.storage = { totalStorageMinutes: 0, totalStorageMinutesLimit: ROOMY_STORAGE_MINUTES, videoCount: 0 };
+  // R2004: the provider's OWN answers, by role — the expected credentials of the facts come from here, never from the
+  // route under test or the rows it reads.
+  const inputs: { role: string; creds: IngestCredentials }[] = [];
+  const createInput = ingest.createLiveInput.bind(ingest);
+  ingest.createLiveInput = async (spec) => {
+    const creds = await createInput(spec);
+    inputs.push({ role: spec.role ?? "camera", creds });
+    return creds;
+  };
   const runner = new FakeRunner();
   setRelayDriversForTest({ ingest, runner });
+  if (opts.settings) {
+    await sql`insert into fixture_stream_settings (fixture_id, org_id, overlay_delay_ms, overlay_template)
+              values (${fixtureId}, ${auth.orgId}, ${opts.settings.overlay_delay_ms ?? null}, ${opts.settings.overlay_template ?? null})`;
+  }
   await pairPresentPhone(fixtureId);   // A7 (capture QR v2 T6): W5 refuses a Go live with no present phone
-  const { sessionId } = await createSession(auth, fixtureId, { mode, targetId: target.id }, defaultDeps("http://app.test"));
+  const { sessionId } = await createSession(auth, fixtureId, { mode, targetId: target.id, ...(opts.themeId ? { themeId: opts.themeId } : {}) }, defaultDeps("http://app.test"));
   // A passthrough session has no Machine, so no runner ever mints its job token; the 410 case mints one the same way.
   const jobToken = mode === "composed"
     ? runner.created[0]!.jobToken
     : await mintRelayToken({ sid: sessionId, scope: "relay-job", expiresAt: new Date(Date.now() + 60 * 60_000) });
-  return { auth, fixtureId, sessionId, jobToken, streamKey, ingest, runner };
+  return { auth, fixtureId, sessionId, jobToken, streamKey, ingest, runner, inputs };
 }
 
 const ctx = (sid: string) => ({ params: Promise.resolve({ sid }) });
@@ -178,10 +204,17 @@ describe.skipIf(!HAS_DB)("internal relay routes", () => {
     const body = (await json(ok)) as { ok: boolean; data: { sessionId: string; fixtureId: string; mode: string; maxDurationMinutes: number; target: { url: string; streamKey: string }; pageToken: string } };
     expect(body.ok).toBe(true);
     expect(body.data).toMatchObject({ sessionId: s.sessionId, fixtureId: s.fixtureId, mode: "composed", maxDurationMinutes: MAX_DURATION_MINUTES });
-    // The DECRYPTED destination, compared with what the organiser saved (the key) and the platform's preset url (D6:
-    // the server fills it) — not with anything the route computed.
-    expect(body.data.target.streamKey).toBe(s.streamKey);
-    expect(body.data.target.url).toBe(STREAM_PLATFORM_PRESETS.youtube);
+    // R2004: a composed Machine publishes to the session's PROGRAMME input — the provider's own answer for it, decrypted —
+    // and never sees the destination, which is a Cloudflare output on that input.
+    const programme = s.inputs.find((i) => i.role === "programme")!.creds;
+    expect(body.data.target).toEqual({ url: programme.rtmps.url, streamKey: programme.rtmps.streamKey });
+    expect(JSON.stringify(body), "the destination key is nowhere in a composed body").not.toContain(s.streamKey);
+    // Passthrough keeps today's shape: the DECRYPTED destination, compared with what the organiser saved (the key) and
+    // the platform's preset url (D6: the server fills it) — not with anything the route computed.
+    const p = await session("passthrough");
+    const pt = (await json(await getFacts(p.sessionId, { token: p.jobToken }))) as { data: { target: { url: string; streamKey: string } } };
+    expect(pt.data.target.streamKey).toBe(p.streamKey);
+    expect(pt.data.target.url).toBe(STREAM_PLATFORM_PRESETS.youtube);
     // The page token is judged by the REAL verifier: a page credential for this sid, and never a job one.
     await expect(verifyRelayToken(body.data.pageToken, { sid: s.sessionId, scope: "relay-page" })).resolves.toMatchObject({ sid: s.sessionId });
     await expect(verifyRelayToken(body.data.pageToken, { sid: s.sessionId, scope: "relay-job" })).rejects.toMatchObject({ status: 401 });
@@ -340,7 +373,8 @@ describe.skipIf(!HAS_DB)("internal relay routes", () => {
     const s = await session();
     const ok = await getFacts(s.sessionId, { token: s.jobToken });
     expect(ok.status).toBe(200);
-    expect(((await json(ok)) as { data: { target: { streamKey: string } } }).data.target.streamKey).toBe(s.streamKey);
+    // R2004: composed facts carry the programme input's decrypted key (a secret all the same), never the destination's.
+    expect(((await json(ok)) as { data: { target: { streamKey: string } } }).data.target.streamKey).toBe(s.inputs.find((i) => i.role === "programme")!.creds.rtmps.streamKey);
     expectNoStore(ok, "200");
     const refused = await getFacts(s.sessionId);
     expect(refused.status).toBe(401);
@@ -408,7 +442,15 @@ describe.skipIf(!HAS_DB)("internal relay routes", () => {
     expect((await samples(s.sessionId)).map((r) => r.fps)).toEqual([12, 12]);
     const f1 = ((await json(await getFacts(s.sessionId, { token: s.jobToken }))) as { data: Record<string, unknown> }).data;
     const f2 = ((await json(await getFacts(s.sessionId, { token: s.jobToken }))) as { data: Record<string, unknown> }).data;
-    expect({ ...f2, pageToken: null }).toEqual({ ...f1, pageToken: null });
+    // The page token is minted per read (its iat moves with the clock's second), and a composed overlayUrl carries it as
+    // `st` — so both are compared as "the read's own token", and everything else must be identical.
+    const minted = (f: Record<string, unknown>) => {
+      const u = new URL(String(f.overlayUrl));
+      expect(u.searchParams.get("st"), "the URL's st is this read's page token").toBe(f.pageToken);
+      u.searchParams.set("st", "<page token>");
+      return { ...f, pageToken: null, overlayUrl: u.toString() };
+    };
+    expect(minted(f2)).toEqual(minted(f1));
     expect(Object.keys(f1).length).toBeGreaterThan(1);
   });
 
@@ -744,28 +786,75 @@ describe.skipIf(!HAS_DB)("R2002: the relay-job.v1 contract through the internal 
     expect((await newestRaw(t.sessionId)).raw, "samples.raw").toHaveProperty("exitDetail", "signature [redacted] rejected");
   });
 
+  // R2004 review m1: through the ROUTE, a composed Machine's exit detail that echoes the credentials it HOLDS — the
+  // programme input's stream key, the camera's SRT passphrase and stream id — or an RTMPS key path is scrubbed in both
+  // stores. The expected secrets are the PROVIDER's own answers (the rig's `inputs`), never the rows the handler reads.
+  it("R2004 m1: a composed final beat's exitDetail loses the programme key, the camera's SRT passphrase and stream id, and everything after /live/ — in both stores", async () => {
+    // One fresh session per credential, so each beat is that session's FIRST final beat.
+    const picks = [
+      ["programme key", (i: Awaited<ReturnType<typeof session>>["inputs"]) => i.find((x) => x.role === "programme")!.creds.rtmps.streamKey],
+      ["SRT passphrase", (i: Awaited<ReturnType<typeof session>>["inputs"]) => i.find((x) => x.role === "camera")!.creds.srtPlayback!.passphrase],
+      ["SRT stream id", (i: Awaited<ReturnType<typeof session>>["inputs"]) => i.find((x) => x.role === "camera")!.creds.srtPlayback!.streamId],
+    ] as const;
+    let checked = 0;
+    for (const [name, pick] of picks) {
+      const t = await session("composed");
+      const value = pick(t.inputs);
+      expect(value.length, `${name}: premise — long enough to be a pattern`).toBeGreaterThanOrEqual(10);
+      const detail = `sink failed (${value}) twice`;
+      expect((await postBeat(t.sessionId, { state: "stopped", exitReason: "refused", exitDetail: detail }, { token: t.jobToken })).status, name).toBe(200);
+      expect(await lastHeartbeat(t.sessionId), `${name}: last_heartbeat`).toHaveProperty("exitDetail", "sink failed ([redacted]) twice");
+      expect((await newestRaw(t.sessionId)).raw, `${name}: samples.raw`).toHaveProperty("exitDetail", "sink failed ([redacted]) twice");
+      checked++;
+    }
+    expect(checked, "anti-vacuity: all three credentials").toBe(3);
+    const u = await session("composed");
+    const { url } = u.inputs.find((i) => i.role === "programme")!.creds.rtmps;
+    expect(url, "premise: the provider's RTMPS url ends at its key path").toMatch(/\/live\/$/);
+    expect((await postBeat(u.sessionId, { state: "stopped", exitReason: "refused", exitDetail: `publish ${url}someotherkey123 EOF` }, { token: u.jobToken })).status).toBe(200);
+    expect(await lastHeartbeat(u.sessionId), "the key path is cut").toHaveProperty("exitDetail", `publish ${url}`);
+  });
+
   // Review M4: Session.fixtureId is `string | null` — V410 `on delete set null`, the session outlives its fixture. The
-  // runtime witness: the Machine's own GET after the fixture is gone, in both modes.
-  it("review M4: delete the fixture mid-session and GET facts answers fixtureId null — still a strict RelayJobSession", async () => {
+  // runtime witness: the Machine's own GET after the fixture is gone. PASSTHROUGH answers fixtureId null, a strict
+  // RelayJobSession. COMPOSED is refused (#981 follow-up, C07 review; coordinator decision): its facts carry the overlay
+  // page `/overlay/fixtures/<fixtureId>`, and a null there reached the compositor as `/overlay/fixtures/null`, which C07
+  // accepted. Refused 404 FIXTURE_GONE: C07's GET table (seazn.club.compositor crates/adapters/src/control_http.rs, branch
+  // feat/c07-control-plane) maps 401/404/410 to `Refused`, which exits 78 — fatal config, never restarted.
+  it("review M4 + #981 follow-up: delete the fixture mid-session — passthrough's GET facts answers fixtureId null (strict); composed's is refused 404 FIXTURE_GONE, and no URL it ever served names null", async () => {
     let checked = 0;
     for (const mode of ["composed", "passthrough"] as const) {
       const x = await session(mode);
       const before = ((await json(await getFacts(x.sessionId, { token: x.jobToken }))) as { data: Record<string, unknown> }).data;
       expect(before.fixtureId, `${mode}: the positive pair — before, the fixture's id`).toBe(x.fixtureId);
+      if (mode === "composed") {
+        const overlay = new URL(String(before.overlayUrl));
+        expect(overlay.pathname, "the overlay page names the session's fixture").toBe(`/overlay/fixtures/${x.fixtureId}`);
+        expect(String(before.overlayUrl), "never a null or undefined in the URL").not.toMatch(/null|undefined/);
+      }
       await sql`delete from fixtures where id = ${x.fixtureId}`;
       const [{ fixture_id }] = await sql<{ fixture_id: string | null }[]>`select fixture_id from fixture_stream_sessions where id = ${x.sessionId}`;
       expect(fixture_id, `${mode}: premise — the session row survives with a null fixture`).toBeNull();
       const res = await getFacts(x.sessionId, { token: x.jobToken });
-      expect(res.status, mode).toBe(200);
-      const data = ((await json(res)) as { data: Record<string, unknown> }).data;
-      expect(data, mode).toHaveProperty("fixtureId", null);
-      expect(RelayJobSession.parse(data), `${mode}: parse keeps every key`).toEqual(data);
+      const body = (await json(res)) as { ok: boolean; code?: string; data?: Record<string, unknown> };
+      if (mode === "composed") {
+        expect(res.status, "composed: refused with a status C07 maps to Refused (exit 78)").toBe(404);
+        expect(body).toMatchObject({ ok: false, code: "FIXTURE_GONE" });
+        expect(JSON.stringify(body), "no overlay URL, no credential, no null path").not.toMatch(/overlay\/fixtures|streamKey|passphrase/);
+        expect(res.headers.get("cache-control"), "the refusal is private too").toBe("private, no-store");
+        // The second call: still refused (the fixture does not come back), never a 200 on a retry.
+        expect((await getFacts(x.sessionId, { token: x.jobToken })).status, "the second GET").toBe(404);
+      } else {
+        expect(res.status, mode).toBe(200);
+        expect(body.data, mode).toHaveProperty("fixtureId", null);
+        expect(RelayJobSession.parse(body.data), `${mode}: parse keeps every key`).toEqual(body.data);
+      }
       checked++;
     }
     expect(checked).toBe(2);
   });
 
-  it("GET facts is a STRICT RelayJobSession: passthrough carries no composed-only key; composed carries none either until R2004 serves them (R2004 turns that half around)", async () => {
+  it("GET facts is a STRICT RelayJobSession: passthrough carries no composed-only key; composed carries EVERY one (R2004 turned that half around)", async () => {
     let checked = 0;
     for (const mode of ["passthrough", "composed"] as const) {
       const x = await session(mode);
@@ -776,7 +865,10 @@ describe.skipIf(!HAS_DB)("R2002: the relay-job.v1 contract through the internal 
       const parsed = RelayJobSession.parse(body.data);
       expect(parsed, `${mode}: parse keeps every key`).toEqual(body.data);
       expect(parsed).toMatchObject({ sessionId: x.sessionId, fixtureId: x.fixtureId, mode });
-      for (const k of COMPOSED_ONLY) expect(body.data, `${mode}: ${k}`).not.toHaveProperty(k);
+      for (const k of COMPOSED_ONLY) {
+        if (mode === "composed") expect(body.data, `${mode}: ${k}`).toHaveProperty(k);
+        else expect(body.data, `${mode}: ${k}`).not.toHaveProperty(k);
+      }
       checked++;
     }
     expect(checked).toBe(2);
@@ -1525,6 +1617,55 @@ describe.skipIf(!HAS_DB)("owner 2026-10-18: a ladder step-down on a composed bea
     }
   });
 
+  // #980 review, carried into R2004: Fly restarts a crashed compositor IN PLACE — the same Machine, the same attempt
+  // (runner-fly.ts on-failure). The crashed process's FINAL beat is `stopped` and reports no rung, so a dedupe that read
+  // only the stored beat would take the restarted process's first beat — on the very rung its predecessor held — as a
+  // fresh step, and alarm a Machine ops were already told about. The size did not change; neither did the rung.
+  it("#980 carried: an IN-PLACE crash restart (same attempt, same Machine) whose restarted process beats the rung its predecessor held does NOT re-alarm; a real step after it still alarms", async () => {
+    const warn = vi.spyOn(log, "warn");
+    try {
+      const s = await playingSession();
+      const m1 = (await row(s.sessionId)).machine_id!;
+      expect((await postBeat(s.sessionId, { state: "playing", rung: "full" }, { token: s.jobToken })).status).toBe(200);
+      expect((await postBeat(s.sessionId, { state: "playing", rung: "overlay_half_rate" }, { token: s.jobToken })).status).toBe(200);
+      expect(reportsFor(s.sessionId), "the step: one alarm").toHaveLength(1);
+      // The crash: its final beat, then Fly's in-place restart of the SAME Machine (the R2003b crash-loop test's path).
+      expect((await postBeat(s.sessionId, stoppedBeat("fatal"), { token: s.jobToken })).status).toBe(200);
+      expect(await lastHeartbeat(s.sessionId), "premise: the stored beat is the final one, with no rung").not.toHaveProperty("rung");
+      s.runner.setObserved(m1, "pending", CRASH_EXIT, { since: new Date(), count: 1 });
+      expect((await getFacts(s.sessionId, { token: s.jobToken })).status).toBe(200);
+      s.runner.setObserved(m1, "running");
+      expect(await row(s.sessionId), "premise: still attempt 1's Machine, one crash counted").toMatchObject({ state: "live", machine_id: m1, runner_crash_count: 1 });
+      expect(s.runner.created, "premise: no retry — an in-place restart").toHaveLength(1);
+      // The restarted process's beats on the rung the attempt already alarmed: nothing new.
+      expect((await postBeat(s.sessionId, { state: "starting", rung: "overlay_half_rate" }, { token: s.jobToken })).status).toBe(200);
+      expect((await postBeat(s.sessionId, { state: "playing", rung: "overlay_half_rate" }, { token: s.jobToken })).status).toBe(200);
+      expect(reportsFor(s.sessionId), "an in-place restart on the same rung is no new step").toHaveLength(1);
+      expect(warningsFor(warn, s.sessionId), "the log agrees").toHaveLength(1);
+      // The positive pair: the restarted process climbs, then steps again — a real step, a second alarm.
+      expect((await postBeat(s.sessionId, { state: "playing", rung: "full" }, { token: s.jobToken })).status).toBe(200);
+      expect((await postBeat(s.sessionId, { state: "playing", rung: "overlay_half_rate" }, { token: s.jobToken })).status).toBe(200);
+      expect(reportsFor(s.sessionId), "a step after the restart alarms").toHaveLength(2);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("#980 carried, the other order: a restarted process whose first beat is `full` and whose next steps down alarms — the final beat is read THROUGH, never as the bottom rung", async () => {
+    const s = await playingSession();
+    const m1 = (await row(s.sessionId)).machine_id!;
+    expect((await postBeat(s.sessionId, { state: "playing", rung: "overlay_half_rate" }, { token: s.jobToken })).status).toBe(200);
+    expect(reportsFor(s.sessionId)).toHaveLength(1);
+    expect((await postBeat(s.sessionId, stoppedBeat("fatal"), { token: s.jobToken })).status).toBe(200);
+    s.runner.setObserved(m1, "pending", CRASH_EXIT, { since: new Date(), count: 1 });
+    expect((await getFacts(s.sessionId, { token: s.jobToken })).status).toBe(200);
+    s.runner.setObserved(m1, "running");
+    expect((await postBeat(s.sessionId, { state: "starting", rung: "full" }, { token: s.jobToken })).status).toBe(200);
+    expect(reportsFor(s.sessionId), "a restarted process on full: no alarm").toHaveLength(1);
+    expect((await postBeat(s.sessionId, { state: "playing", rung: "overlay_half_rate" }, { token: s.jobToken })).status).toBe(200);
+    expect(reportsFor(s.sessionId), "its step is a step").toHaveLength(2);
+  });
+
   it("#980 review M1: the dedupe reads the STORED beat, so it survives a web restart — a bottom rung stored by SQL (no beat through this process), then the same rung, alarms nothing; the next ENTRY still alarms", async () => {
     const s = await session();
     // A previous web process stored this attempt's stepped beat (and alarmed it); this process has never seen the session.
@@ -1560,5 +1701,120 @@ describe.skipIf(!HAS_DB)("owner 2026-10-18: a ladder step-down on a composed bea
       sentry.captureError.mockImplementation(() => undefined);
       error.mockRestore();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// R2004 (compositor plan task R2004; overlay templates spec 2026-10-15 §4.4 and §6): a composed Machine READS the
+// camera (Input A) over SRT playback and PUBLISHES to its own programme input (Input B); the destination is a
+// Cloudflare output on B. The facts the Machine GETs say so, through the REAL route. Expected credentials are the
+// provider's own create answers (`session().inputs`), expected profile values the contract's fixtures, expected
+// template ids spec §3's default rule — never the route's own output.
+// ---------------------------------------------------------------------------------------------------------------
+const contractSession = (name: string) => JSON.parse(readFileSync(resolve(CONTRACT_FIXTURES, `${name}.json`), "utf8")) as Record<string, unknown>;
+type Facts = { overlayDelayMs: number; overlayUrl: string; themeId: string | null; pageToken: string; target: { url: string; streamKey: string };
+  input: { protocol: string; url: string; streamId: string; passphrase: string }; output: Record<string, number>; heartbeatIntervalMs: number };
+async function factsOf(s: { sessionId: string; jobToken: string }): Promise<Facts> {
+  const res = await getFacts(s.sessionId, { token: s.jobToken });
+  expect(res.status).toBe(200);
+  return ((await json(res)) as { data: Facts }).data;
+}
+const templateOf = (f: Facts) => new URL(f.overlayUrl).searchParams.get("template");
+async function columnsOf(sid: string) {
+  const [r] = await sql<{ overlay_delay_ms: number; theme_id: string | null }[]>`select overlay_delay_ms, theme_id from fixture_stream_sessions where id = ${sid}`;
+  return r!;
+}
+
+describe.skipIf(!HAS_DB)("R2004: a composed session's facts — Input A to read, Input B to publish to, the overlay page to render", () => {
+  it("test 3: the INPUT is camera A's SRT PLAYBACK and the TARGET is programme B's RTMPS — the destination key appears nowhere in the body", async () => {
+    const s = await session();
+    expect(s.inputs.map((i) => i.role), "premise: the camera, then the programme").toEqual(["camera", "programme"]);
+    const camera = s.inputs[0]!.creds;
+    const programme = s.inputs[1]!.creds;
+    const res = await getFacts(s.sessionId, { token: s.jobToken });
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text, "the destination key never reaches the Machine").not.toContain(s.streamKey);
+    const data = (JSON.parse(text) as { data: Facts }).data;
+    expect(data.input).toEqual({ protocol: "srt", url: camera.srtPlayback!.url, streamId: camera.srtPlayback!.streamId, passphrase: camera.srtPlayback!.passphrase });
+    expect(data.input.streamId, "PLAYBACK, not the phone's ingest stream id").not.toBe(camera.srt.streamId);
+    expect(data.target).toEqual({ url: programme.rtmps.url, streamKey: programme.rtmps.streamKey });
+    expect(data.target.streamKey, "B's key, not the camera's").not.toBe(camera.rtmps.streamKey);
+    const fixture = contractSession("session-composed-720p");
+    expect(data.output, "the default profile is the contract's 720p session").toEqual(fixture.output);
+    expect(data.heartbeatIntervalMs).toBe(fixture.heartbeatIntervalMs);
+    expect(RelayJobSession.parse(data), "a strict contract session").toEqual(data);
+  });
+
+  it("test 4: the EFFECTIVE delay is copied at create — no setting → RELAY_OVERLAY_DELAY_DEFAULT_MS; 0 is a real 0, in the body and the URL; 2500 stays 2500 after the setting moves to 4000; a passthrough create stores 0", async () => {
+    expect(RELAY_OVERLAY_DELAY_DEFAULT_MS, "premise: the provisional default the C00 owner session measured (2026-10-15)").toBe(3100);
+    const delayIn = (f: Facts) => new URL(f.overlayUrl).searchParams.get("delay");
+    const unset = await session();
+    expect((await factsOf(unset)).overlayDelayMs).toBe(RELAY_OVERLAY_DELAY_DEFAULT_MS);
+    expect((await columnsOf(unset.sessionId)).overlay_delay_ms).toBe(RELAY_OVERLAY_DELAY_DEFAULT_MS);
+    const noRow = await session("composed", { settings: { overlay_delay_ms: null } });
+    expect((await factsOf(noRow)).overlayDelayMs, "a settings row with a null delay is the default too").toBe(RELAY_OVERLAY_DELAY_DEFAULT_MS);
+    const zero = await session("composed", { settings: { overlay_delay_ms: 0 } });
+    const z = await factsOf(zero);
+    expect(z.overlayDelayMs, "0 is an override, never 'unset'").toBe(0);
+    expect(delayIn(z)).toBe("0");
+    const kept = await session("composed", { settings: { overlay_delay_ms: 2500 } });
+    await sql`update fixture_stream_settings set overlay_delay_ms = 4000 where fixture_id = ${kept.fixtureId}`;
+    const k = await factsOf(kept);
+    expect(k.overlayDelayMs, "a running session never moves").toBe(2500);
+    expect(delayIn(k)).toBe("2500");
+    expect((await columnsOf(kept.sessionId)).overlay_delay_ms).toBe(2500);
+    const pass = await session("passthrough", { settings: { overlay_delay_ms: 2500 } });
+    expect((await columnsOf(pass.sessionId)).overlay_delay_ms, "passthrough has no compositor to delay").toBe(0);
+    expect((await factsOf(pass)).overlayDelayMs).toBe(0);
+  });
+
+  it("test 8: the overlay URL is the app's overlay page with exactly FIVE params — sid, st, host=compositor, delay, template — and `st` verifies as THIS session's relay-page token", async () => {
+    const s = await session();
+    const f = await factsOf(s);
+    const u = new URL(f.overlayUrl);
+    expect(`${u.origin}${u.pathname}`).toBe(`http://app.test/overlay/fixtures/${s.fixtureId}`);
+    const keys = [...u.searchParams.keys()];
+    expect([...keys].sort()).toEqual(["delay", "host", "sid", "st", "template"]);
+    expect(keys, "each exactly once").toHaveLength(5);
+    expect(u.searchParams.get("sid")).toBe(s.sessionId);
+    expect(u.searchParams.get("host")).toBe("compositor");
+    expect(u.searchParams.get("delay")).toBe(String(f.overlayDelayMs));
+    expect(u.searchParams.get("template"), "a generic fixture opens on spec §3's non-cricket default").toBe("bug");
+    const st = u.searchParams.get("st")!;
+    await expect(verifyRelayToken(st, { sid: s.sessionId, scope: "relay-page" })).resolves.toMatchObject({ sid: s.sessionId });
+    await expect(verifyRelayToken(st, { sid: s.sessionId, scope: "relay-job" }), "never a job credential").rejects.toMatchObject({ status: 401 });
+    const other = await session();
+    await expect(verifyRelayToken(st, { sid: other.sessionId, scope: "relay-page" }), "never another session's").rejects.toMatchObject({ status: 401 });
+  });
+
+  it("test 9: the overlay URL's template follows the STORED choice, resolved — null + cricket → bar, null + badminton → bug, 'bar' + football → bar, a retired 'gone' + football → bug (and the create does not throw)", async () => {
+    // Spec §3's default rule, typed: cricket opens on the bar, every other sport on the bug.
+    const cases: [sport: string, stored: string | null, want: string][] = [
+      ["cricket", null, "bar"], ["badminton", null, "bug"], ["football", "bar", "bar"], ["football", "gone", "bug"],
+    ];
+    let checked = 0;
+    for (const [sport, stored, want] of cases) {
+      const s = await session("composed", { sport, settings: { overlay_template: stored } });
+      expect(templateOf(await factsOf(s)), `${sport} + ${String(stored)}`).toBe(want);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every case ran").toBe(cases.length);
+  });
+
+  it("test 10: the template choice is COPIED at create — 'bar' stays 'bar' after the setting moves to 'bug' (facts and theme_id); a passthrough create copies it too; the body's themeId wins over the setting", async () => {
+    const s = await session("composed", { settings: { overlay_template: "bar" } });
+    await sql`update fixture_stream_settings set overlay_template = 'bug' where fixture_id = ${s.fixtureId}`;
+    const f = await factsOf(s);
+    expect(templateOf(f), "a running session never moves").toBe("bar");
+    expect(f.themeId).toBe("bar");
+    expect((await columnsOf(s.sessionId)).theme_id).toBe("bar");
+    const pass = await session("passthrough", { settings: { overlay_template: "bar" } });
+    expect((await columnsOf(pass.sessionId)).theme_id, "passthrough copies the choice too").toBe("bar");
+    const body = await session("composed", { settings: { overlay_template: "bar" }, themeId: "bug" });
+    expect((await columnsOf(body.sessionId)).theme_id, "the body's themeId wins").toBe("bug");
+    expect(templateOf(await factsOf(body))).toBe("bug");
+    const none = await session();
+    expect((await columnsOf(none.sessionId)).theme_id, "no choice anywhere: null, resolved at the URL").toBeNull();
   });
 });

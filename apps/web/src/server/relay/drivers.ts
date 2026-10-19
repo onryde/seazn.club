@@ -6,7 +6,7 @@
 import { sql } from "@/lib/db";
 import { captureError } from "@/lib/sentry";
 import { log } from "@/server/logger";
-import { liveRunnerIdentity, relayDriverMode } from "./config";
+import { liveRunnerIdentity, relayDriverMode, relayOutputProfile } from "./config";
 import { FakeIngest, FakeRunner } from "./fakes";
 import { CloudflareIngest } from "./ingest-cf";
 import {
@@ -44,7 +44,7 @@ export function disabledRelayDrivers(): RelayDrivers {
       throw new RelayDriversDisabled();
     },
     createLiveInput: refuse, inputStatus: refuse, addOutput: refuse, outputState: refuse, removeOutput: refuse,
-    deleteInput: refuse, storageUsage: refuse, listVideos: refuse, deleteVideo: refuse,
+    deleteInput: refuse, storageUsage: refuse, listVideos: refuse, listInputVideos: refuse, deleteVideo: refuse,
   };
   const runner: RunnerProvider = {
     get listSettleMs(): number {
@@ -143,7 +143,8 @@ export function relayUnavailable(): boolean {
 }
 
 /** R2001: can this deployment run a COMPOSED session? Unavailable when the relay itself is (`relayUnavailable()`), when
- *  RELAY_IMAGE is unset or empty (the compositor image FlyRunner's constructor refuses to start without), and (I1, review
+ *  RELAY_IMAGE is unset or empty (the compositor image FlyRunner's constructor refuses to start without), when
+ *  RELAY_OUTPUT_PROFILE is set to anything the facts refuse (R2004 review m5), and (I1, review
  *  of PR #965) on a LIVE deployment whose runner could not be built: FLY_API_TOKEN unset or empty, or
  *  `liveRunnerIdentity()` refusing (FLY_RELAY_APP unset or the retired shared default, ENV_NAME unset), the constructor's
  *  other two refusals. Before this a composed start was admitted on such a deployment, wrote its session row, opened its
@@ -155,6 +156,14 @@ export function relayUnavailable(): boolean {
  *  image. A fake deployment's runner needs none of the Fly configuration. */
 export function composedUnavailable(): boolean {
   if (relayUnavailable() || !process.env.RELAY_IMAGE) return true;
+  // R2004 review m5: a RELAY_OUTPUT_PROFILE the job facts would refuse (`relayOutputProfile` throws on anything but
+  // 720p/1080p/unset) makes every composed Machine's facts read fail AFTER the session, its inputs and its Machine exist.
+  // Asked here instead, on the same R2001 shape as the runner's own refusals: the deployment cannot run composed.
+  try {
+    relayOutputProfile();
+  } catch {
+    return true;
+  }
   if (override || relayDriverMode() !== "live") return false;
   if (!process.env.FLY_API_TOKEN) return true;
   try {

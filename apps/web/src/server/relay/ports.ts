@@ -16,11 +16,20 @@ export type IngestMode = "passthrough" | "composed";
 export type IngestProtocol = "srt" | "rtmps";
 export type IngestState = "connected" | "disconnected" | "unknown";
 export interface IngestTarget { url: string; streamKey: string }
-export interface IngestCreateSpec { sessionId: string; slot: number }
+/** R2004: which of a session's inputs a row is. A passthrough session has one, the `camera` (the phone publishes to it).
+ *  A composed session has two: the `camera` (Input A; the compositor reads it over SRT playback) and the `programme`
+ *  (Input B; the compositor publishes to it, and the destination output attaches to it). */
+export type InputRole = "camera" | "programme";
+/** `role` absent is the camera, so the passthrough create is the call it always was. */
+export interface IngestCreateSpec { sessionId: string; slot: number; role?: InputRole }
 export interface IngestCredentials {
   inputId: string;
   srt: { url: string; streamId: string; passphrase: string };
   rtmps: { url: string; streamKey: string };
+  /** R2004: the input's SRT PLAYBACK credential (Cloudflare's `srtPlayback`): how the compositor READS the camera. The url
+   *  is bare and the secrets ride as separate fields, like `srt`. `null` when the provider returned none: a composed
+   *  provisioning refuses a camera input without one by name, and nothing else reads it. */
+  srtPlayback: { url: string; streamId: string; passphrase: string } | null;
 }
 export interface IngestStatus {
   /** G-a (controller ruling 2026-10-01): `null` when the read carries NO evidence about video either way — Cloudflare's
@@ -75,7 +84,7 @@ export interface IngestProvider {
   readonly capabilities: IngestCapabilities;
   createLiveInput(spec: IngestCreateSpec): Promise<IngestCredentials>;
   inputStatus(inputId: string, meta?: ProviderCallMeta): Promise<IngestStatus>;   // C5: the per-input GET
-  addOutput(inputId: string, target: IngestTarget, meta?: ProviderCallMeta): Promise<string>; // passthrough only, exactly once; RETURNS the output's uid (Dg → sessions.output_uid). Output ERROR codes are dropped: the output object carries only uid, url, streamKey, enabled (API docs 2026-09-14)
+  addOutput(inputId: string, target: IngestTarget, meta?: ProviderCallMeta): Promise<string>; // the session's output input (passthrough: the camera; composed: the programme, R2004), exactly once; RETURNS the output's uid (Dg → sessions.output_uid). Output ERROR codes are dropped: the output object carries only uid, url, streamKey, enabled (API docs 2026-09-14)
   /** target_rejected source; D3. `null` is "NOT READ" (B5 re-review 2, m-2): the provider answered, but with a failed
    *  envelope or no result — not evidence about the destination, so the poll records nothing for it and decides nothing
    *  on it. `unknown` stays the word for a read that SUCCEEDED and said nothing usable (no status yet, an unseen word). */
@@ -87,6 +96,9 @@ export interface IngestProvider {
   deleteInput(inputId: string): Promise<void>;                    // LEAKS recordings (C2) — videos first
   storageUsage(): Promise<StorageUsage>;                          // C3: raw usage; headroom is the usecase's
   listVideos(opts: { createdBefore: Date }): Promise<IngestVideo[]>;
+  /** R2004 (owner ruling 2026-10-18, option (a)): the recordings ONE input made. The daily sweep deletes a composed
+   *  session's camera recordings with it once the session has ended — never the programme's. */
+  listInputVideos(inputId: string, meta?: ProviderCallMeta): Promise<IngestVideo[]>;
   deleteVideo(videoId: string): Promise<DeleteVideoResult>;       // 409/10046 → "in_progress"
 }
 export type RunnerSpec = {

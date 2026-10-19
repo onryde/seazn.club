@@ -288,7 +288,7 @@ describe.skipIf(!HAS_DB)("POST/GET …/stream-sessions over HTTP", () => {
     const made = await create(o.fixtureId, { mode: "composed", targetId: o.target.id });
     expect(made.status).toBe(201);
     expect(await sessionsOn(o.fixtureId)).toBe(1);
-    expect(createInput).toHaveBeenCalledTimes(1);
+    expect(createInput, "R2004: a composed start makes the camera input and the programme input").toHaveBeenCalledTimes(2);
     expect(storageRead.mock.calls.length).toBeGreaterThan(0);
     expect(o.runner.created).toHaveLength(1);
     // Complete it, as the composed case above does: an `ending` row left behind is a storage reservation for every pool test.

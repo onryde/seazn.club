@@ -5701,6 +5701,7 @@
   "stream.fail.machine_crash": "El relé se detuvo de forma inesperada. Inténtalo de nuevo.",
   "stream.fail.machine_refused": "El relé rechazó la configuración de esta emisión. Inténtalo de nuevo y contacta con soporte si vuelve a ocurrir.",
   "stream.fail.target_rejected": "El destino rechazó la clave. En un canal de YouTube nuevo, la emisión en directo puede tardar unas 24 horas en activarse.",
+  "stream.fail.output_failed": "No se pudo conectar la emisión con tu destino, así que se detuvo. Inténtalo de nuevo en un minuto.",
   "stream.fail.no_credits": "No quedaban créditos al iniciar la emisión. Compra créditos e inténtalo de nuevo.",
   "stream.fail.machine_create_failed": "No se pudo iniciar el relé. Inténtalo en un minuto.",
   "stream.fail.machine_boot_timeout": "El relé no arrancó a tiempo. Inténtalo de nuevo.",

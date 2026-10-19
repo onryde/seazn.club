@@ -5,6 +5,7 @@
 // persist `next`, log `events`, run `effects` through the ports. No I/O, no
 // clock: `now` is an argument. Domain events are records in an array — there
 // is no bus, because nothing present subscribes.
+import { reservationMinutes } from "./credits";
 import type { DbEndReason } from "./end-reason";
 import type { Expiry } from "./expiry";
 import {
@@ -12,7 +13,9 @@ import {
 } from "./runner";
 
 export type SessionState = "requested" | "provisioning" | "warming" | "live" | "ending" | "completed" | "failed";
-export type FailReason = "no_inbound_timeout" | "provision_timeout" | "admission_timeout" | "target_rejected" | "no_credits" | "relay_disabled" | RunnerFailReason;
+/** `output_failed` (R2004, PR #981 review I3): the destination output could not be ADDED at provisioning — the session
+ *  had no destination, so it fails closed rather than broadcast to nobody and be charged for it. */
+export type FailReason = "no_inbound_timeout" | "provision_timeout" | "admission_timeout" | "target_rejected" | "output_failed" | "no_credits" | "relay_disabled" | RunnerFailReason;
 export type Mode = "passthrough" | "composed";
 
 export const ACTIVE_STATES: readonly SessionState[] = ["requested", "provisioning", "warming", "live", "ending"];
@@ -126,7 +129,8 @@ export function admit(i: AdmitInput): { ok: true } | { ok: false; refusal: Admit
   if (i.phone === "silent") return { ok: false, refusal: "phone_not_responding" };
   if (i.balance < 1 && !i.restartWithinReuseWindow) return { ok: false, refusal: "no_credits" };   // I2: ONLY this gate is waived
   if (!i.targetBelongsToOrg) return { ok: false, refusal: "target_not_found" };
-  if (i.headroomMinutes < i.maxDurationMinutes) return { ok: false, refusal: "storage_exhausted" };
+  // R2004: room for every recording the session makes — two for composed (owner ruling 2026-10-18, option (a)).
+  if (i.headroomMinutes < reservationMinutes(i.mode, i.maxDurationMinutes)) return { ok: false, refusal: "storage_exhausted" };
   return { ok: true };
 }
 
@@ -135,7 +139,7 @@ export type Command =
   | { type: "provision" } | { type: "provisioned" }
   | { type: "ingest_connected" } | { type: "credit_refused" }
   | { type: "target_rejected" } | { type: "stop"; reason: StopReason } | { type: "complete" }
-  | { type: "relay_disabled" }
+  | { type: "relay_disabled" } | { type: "output_failed" }
   | { type: "expire"; expiry: Expiry }
   | { type: "runner"; trigger: RunnerTrigger };
 
@@ -149,7 +153,7 @@ export type Effect =
   | { type: "consume_credit" } | { type: "add_output" }
   | { type: "runner"; effect: RunnerEffect } | { type: "retry_runner" }
   | { type: "complete_now" } | { type: "fill_replay" }
-  | { type: "release_output" };   // C1: remove the passthrough output — never the input (deleting it leaks recordings, C2)
+  | { type: "release_output" };   // C1: remove the session's output — never the input (deleting it leaks recordings, C2)
 
 export interface Decision { next: Session; events: DomainEvent[]; effects: Effect[] }
 
@@ -335,7 +339,11 @@ export const RUNNER_CLEANUP_TRIGGERS: readonly RunnerTrigger["type"][] = ["creat
  *  every passthrough command on one. The release goes FIRST, ahead of the replay fill, so a failing later effect cannot
  *  skip it. Killer: session.test.ts "C1 (lane C final review) … the sweep". */
 const releasesOutput = (before: Session, d: Decision): boolean =>
-  before.mode === "passthrough" && before.outputUid !== null && isTerminal(d.next.state);
+  // R2004: both modes hold an output now (composed's on its programme input). ENTERING a terminal state, never being in
+  // one: a terminal composed session still takes its runner's cleanup triggers (C27), and each of those lands terminal
+  // again. A passthrough decision never starts terminal (decideCell refuses every command there), so for passthrough the
+  // first conjunct is the predicate it always was.
+  !isTerminal(before.state) && before.outputUid !== null && isTerminal(d.next.state);
 
 export function decide(s: Session, c: Command, now: Date): Decision {
   const d = decideCell(s, c, now);
@@ -359,7 +367,7 @@ function decideCell(s: Session, c: Command, now: Date): Decision {
       return {
         next: { ...s, state: "warming" },
         events: [{ type: "SessionWarming" }],
-        effects: s.mode === "passthrough" ? [{ type: "add_output" }] : [],   // C9: exactly one output, passthrough only
+        effects: [{ type: "add_output" }],   // C9: exactly one output — passthrough's on its camera input, composed's on its programme input (R2004)
       };
     case "ingest_connected":
       if (s.state !== "warming" || s.mode !== "passthrough") throw illegal();
@@ -381,6 +389,19 @@ function decideCell(s: Session, c: Command, now: Date): Decision {
     case "target_rejected":
       if (s.state !== "warming" && s.state !== "live") throw illegal();
       return fail(s, "target_rejected", now);
+    case "output_failed":
+      // R2004, PR #981 review I3 (coordinator ruling, money): the add_output effect `provisioned` emits THREW — the
+      // session has no destination. Fail closed: a composed session's Machine is already up (provisioning's first
+      // composed edge created it), so it is torn down exactly as a composed credit refusal tears it down — the runner's
+      // `session_stop` step, then fail, dropping the stop step's SessionEnding (P1-F-b) — with desiredState `ending`
+      // so nothing re-wants it live. From `live` too: a passthrough phone can connect while the add is still out.
+      if (s.state !== "warming" && s.state !== "live") throw illegal();
+      if (s.mode === "composed" && s.runner.state !== "none") {
+        const torn = runner(s, { type: "session_stop" }, now, illegal);
+        const f = fail({ ...torn.next, desiredState: "ending" }, "output_failed", now);
+        return { next: f.next, events: [...torn.events.filter(keptBeforeFailure), ...f.events], effects: [...torn.effects, ...f.effects] };
+      }
+      return fail(s, "output_failed", now);
     case "stop":
       // §5.3: `ending × stop` stays identity — the FIRST reason wins.
       if (s.state === "ending") return identity(s);

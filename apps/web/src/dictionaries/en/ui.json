@@ -5701,6 +5701,7 @@
   "stream.fail.machine_crash": "The relay stopped unexpectedly. Try again.",
   "stream.fail.machine_refused": "The relay refused this stream's setup. Try again, and contact support if it happens again.",
   "stream.fail.target_rejected": "The destination refused the stream key. On a new YouTube channel, live streaming can take about 24 hours to unlock.",
+  "stream.fail.output_failed": "The stream could not be connected to your destination, so it was stopped. Try again in a minute.",
   "stream.fail.no_credits": "No match credits were left when the stream started. Buy credits and try again.",
   "stream.fail.machine_create_failed": "The relay could not be started. Try again in a minute.",
   "stream.fail.machine_boot_timeout": "The relay did not start in time. Try again.",

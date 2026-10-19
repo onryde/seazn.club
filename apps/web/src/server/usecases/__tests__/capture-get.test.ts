@@ -26,6 +26,7 @@ import {
 import { readFirstInput } from "@/server/relay/secret-columns";
 import { fitText, getCode, holdWindowFor } from "../capture-phone";
 import { reissueStreamCode, saveStreamSettings } from "../stream-codes";
+import { createSession } from "../stream-sessions";
 import { captureRig, override, phoneId, type CaptureRig } from "./_capture-rig";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -311,6 +312,68 @@ describe.skipIf(!HAS_DB)("getCode — each field from its §6.4 source", () => {
     expect(defaultTemplateFor("cricket"), "PREMISE: the two sports open on different themes").not.toBe(defaultTemplateFor("generic"));
     const r = await captureRig({ sport: "cricket" });
     expect((await get(r, null)).overlayUrl).toBe(`${ORIGIN}/overlay/fixtures/${r.fixtureId}?style=${defaultTemplateFor("cricket")}&key=${encodeURIComponent(overlayKeyFor(r.fixtureId)!)}`);
+  });
+
+  // R2004 change 7 (review m10): the descriptor's overlayUrl resolves the fixture's STORED template choice
+  // (fixture_stream_settings.overlay_template) when no session has a copy of its own. The expected ids are spec §3's
+  // default rule (cricket → bar, every other sport → bug), typed here — never read from the registry.
+  it("R2004 test 11: with no session the overlayUrl follows the STORED choice — cricket + 'bug' → style=bug; no choice → cricket's default, bar; a retired id → the default; a session's own copy still wins", async () => {
+    const r = await captureRig({ sport: "cricket" });
+    const key = encodeURIComponent(overlayKeyFor(r.fixtureId)!);
+    const styleOf = async () => new URL((await get(r, null)).overlayUrl!).searchParams.get("style");
+    expect(await styleOf(), "no stored choice: cricket's default").toBe("bar");
+    await sql`insert into fixture_stream_settings (fixture_id, org_id, overlay_template) values (${r.fixtureId}, ${r.auth.orgId}, 'bug')
+              on conflict (fixture_id) do update set overlay_template = excluded.overlay_template`;
+    expect((await get(r, null)).overlayUrl).toBe(`${ORIGIN}/overlay/fixtures/${r.fixtureId}?style=bug&key=${key}`);
+    await sql`update fixture_stream_settings set overlay_template = 'gone' where fixture_id = ${r.fixtureId}`;
+    expect(await styleOf(), "an id no registry holds resolves to the sport's default, never the raw id").toBe("bar");
+    await sql`update fixture_stream_settings set overlay_template = null where fixture_id = ${r.fixtureId}`;
+    expect(await styleOf(), "cleared: the default again").toBe("bar");
+    // A session's own copy (theme_id) is the running stream's choice and still wins over the stored one.
+    await sql`update fixture_stream_settings set overlay_template = 'bar' where fixture_id = ${r.fixtureId}`;
+    const mine = phoneId("mine");
+    const sid = await r.start(mine);
+    await sql`update fixture_stream_sessions set theme_id = 'bug' where id = ${sid}`;
+    expect(new URL((await get(r, mine)).overlayUrl!).searchParams.get("style")).toBe("bug");
+  });
+
+  // R2004: a composed session holds a programme input beside the camera; the phone's playbackUrl is the CAMERA's (its own
+  // delivery watch reads it), never the programme's — whatever the slot order.
+  it("R2004: a composed session's playbackUrl names the CAMERA input, never the programme input — also when the programme row sits on a LOWER slot", async () => {
+    vi.stubEnv("RELAY_IMAGE", "registry.fly.io/seazn-relay:capture-get-test");
+    const r = await captureRig();
+    const mine = phoneId("mine");
+    await r.pair(mine);
+    const { sessionId } = await createSession(r.auth, r.fixtureId, { mode: "composed", targetId: r.target.id }, r.deps);
+    const rows = await sql<{ role: string; slot: number; ingest_input_id: string }[]>`
+      select role, slot, ingest_input_id from fixture_stream_inputs where session_id = ${sessionId} order by role`;
+    expect(rows.map((x) => x.role), "PREMISE: both inputs exist").toEqual(["camera", "programme"]);
+    const camera = rows[0]!;
+    const programme = rows[1]!;
+    // Both roads to the uid: the session's OWN phone (served its cred, the uid read with it) and any other reader of
+    // the code (no cred; the uid read on its own).
+    const other = phoneId("other");
+    const playback = async (phone: string) => {
+      const body = await get(r, phone);
+      if (body.state === "waiting") throw new Error(`PREMISE: a session shape, got ${body.state}`);
+      expect("cred" in body, `PREMISE: ${phone === mine ? "the" : "no"} cred road`).toBe(phone === mine);
+      return body.playbackUrl;
+    };
+    const want = `https://${FAKE_PLAYBACK_HOST}/${camera.ingest_input_id}/manifest/video.m3u8`;
+    let checked = 0;
+    for (const phone of [mine, other]) {
+      expect(await playback(phone)).toBe(want);
+      checked++;
+    }
+    // The order cannot decide it: the camera moved to slot 1, the programme left on slot 0.
+    await sql`update fixture_stream_inputs set slot = 1 where session_id = ${sessionId} and role = 'camera'`;
+    for (const phone of [mine, other]) {
+      const url = await playback(phone);
+      expect(url, "still the camera").toBe(want);
+      expect(url).not.toContain(programme.ingest_input_id);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: both roads, both slot orders").toBe(4);
   });
 
   it("origin: OAUTH_BASE_URL, else NEXT_PUBLIC_BASE_URL, else deps.appUrl — never the request's host", async () => {

@@ -44,8 +44,9 @@ const ENC_COLUMNS = [
 
 /** The relay's stream columns: only server/relay/** may name them. `tok_enc` is the stream
  *  code's sealed tok (capture QR v2 §6.1, V430): RELAY_KEK, opened by crypto.ts, SQL in
- *  secret-columns.ts. */
-const STREAM_COLUMNS = ["ingest_rtmps_key_enc", "ingest_srt_key_enc", "rtmp_enc", "tok_enc"];
+ *  secret-columns.ts. `playback_srt_key_enc` (R2004, V462) seals a composed camera's SRT playback `{ passphrase,
+ *  streamId }`, the ingest SRT envelope's twin. */
+const STREAM_COLUMNS = ["ingest_rtmps_key_enc", "ingest_srt_key_enc", "playback_srt_key_enc", "rtmp_enc", "tok_enc"];   // R2004 (V462): a composed camera's SRT playback credential
 /** Scorer sheets §4.1: the sealed device-link secret, named by exactly one file. */
 const DEVICE_LINK_COLUMNS = ["secret_enc"];
 const DEVICE_LINK_OWNER = "server/usecases/device-links.ts";

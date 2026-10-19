@@ -107,6 +107,29 @@ export type ErrorReporter = (err: unknown, context?: { route?: string; extra?: R
  *  recording is never negative and never 0 px, so nothing true is lost. */
 const measured = (n: number | null | undefined): number | null => (typeof n === "number" && n > 0 ? n : null);
 
+/** A Stream video object, as both listings return it (the fields this adapter reads). */
+type CfVideo = {
+  uid: string; created: string; liveInput?: string | null;
+  status?: { state?: string; errorReasonCode?: string | null };
+  duration?: number; size?: number; input?: { width?: number; height?: number } | null;
+};
+/** One mapping for both listings, so the per-input listing cannot drift from the account one (Dd). */
+function videoOf(v: CfVideo): IngestVideo {
+  return {
+    videoId: v.uid,
+    inputId: v.liveInput ?? null,
+    createdAt: v.created,
+    inProgress: v.status?.state === "live-inprogress",
+    // Dd — every fact the video object carries. No codec field exists.
+    durationSeconds: measured(v.duration),
+    sizeBytes: measured(v.size),
+    width: measured(v.input?.width),
+    height: measured(v.input?.height),
+    state: v.status?.state ?? "unknown",
+    errorReasonCode: v.status?.errorReasonCode ?? null,
+  };
+}
+
 export class CloudflareIngest implements IngestProvider {
   readonly capabilities: IngestCapabilities = {
     timeoutSeconds: INGEST_TIMEOUT_SECONDS,
@@ -234,6 +257,8 @@ export class CloudflareIngest implements IngestProvider {
       uid: string;
       rtmps: { url: string; streamKey: string };
       srt: { url: string; streamId: string; passphrase: string };
+      /** R2004: the SRT PLAYBACK credential (OpenAPI `srtPlayback`) — how the compositor reads the camera. */
+      srtPlayback?: { url?: string; streamId?: string; passphrase?: string } | null;
       /** The settings ECHO. `recording` comes back as
        *  { allowedOrigins, hideLiveViewerCount, mode, requireSignedURLs,
        *  timeoutSeconds } — the retention key is NOT in it (U1-S1), and a
@@ -241,7 +266,9 @@ export class CloudflareIngest implements IngestProvider {
       recording?: { timeoutSeconds?: number | null } | null;
       deleteRecordingAfterDays?: number | null;
     }>("POST", "/live_inputs", {
-      meta: { name: `seazn-session-${spec.sessionId}-slot-${spec.slot}` },
+      // R2004: a programme input (the composed session's Input B) says so in its name; the camera's name is unchanged.
+      // Both record (owner ruling 2026-10-18, option (a)), so the settings below are the same for both roles.
+      meta: { name: `seazn-session-${spec.sessionId}-${spec.role === "programme" ? "programme-" : ""}slot-${spec.slot}` },
       // U1-S1, MEASURED 2026-09-10: `deleteRecordingAfterDays` is a TOP-LEVEL
       // SIBLING of `recording`, never a member of it. Nested, Cloudflare answers
       // HTTP 200 / success:true, echoes a `recording` block that does not carry
@@ -253,7 +280,7 @@ export class CloudflareIngest implements IngestProvider {
       deleteRecordingAfterDays: DELETE_RECORDING_AFTER_DAYS,
     }, { operation: "createLiveInput", ids: [], sessionId: spec.sessionId, subjectOf: (result) => result?.uid ?? null });
     if (!r.json.success || !r.json.result) this.fail("create live input", r);
-    const { uid, rtmps, srt } = r.json.result;
+    const { uid, rtmps, srt, srtPlayback } = r.json.result;
     // The rule U1-S1, U1-S4 and U1-S8 imply: EVERY setting we send is read back
     // and compared, because all three silent-acceptance traps answer 200. A
     // mismatch is an ERROR and not a warning — `IngestCredentials` has no
@@ -289,6 +316,10 @@ export class CloudflareIngest implements IngestProvider {
       inputId: uid,
       srt: { url: srt.url, streamId: srt.streamId, passphrase: srt.passphrase },
       rtmps: { url: rtmps.url, streamKey: rtmps.streamKey },
+      // All three fields or none: a partial playback credential is not one, and it is never filled from the ingest pair.
+      srtPlayback: srtPlayback?.url && srtPlayback.streamId && srtPlayback.passphrase
+        ? { url: srtPlayback.url, streamId: srtPlayback.streamId, passphrase: srtPlayback.passphrase }
+        : null,
     };
   }
 
@@ -476,28 +507,27 @@ export class CloudflareIngest implements IngestProvider {
   }
 
   async listVideos(opts: { createdBefore: Date }): Promise<IngestVideo[]> {
-    const r = await this.call<{
-      uid: string; created: string; liveInput?: string | null;
-      status?: { state?: string; errorReasonCode?: string | null };
-      duration?: number; size?: number; input?: { width?: number; height?: number } | null;
-    }[]>(
+    const r = await this.call<CfVideo[]>(
       "GET", `?end=${encodeURIComponent(opts.createdBefore.toISOString())}&limit=${LIST_VIDEOS_PAGE_LIMIT}`, undefined,
       { operation: "listVideos", ids: [] },
     );
     if (!r.json.success || !r.json.result) this.fail("list videos", r);
-    return r.json.result.map((v) => ({
-      videoId: v.uid,
-      inputId: v.liveInput ?? null,
-      createdAt: v.created,
-      inProgress: v.status?.state === "live-inprogress",
-      // Dd — every fact the video object carries. No codec field exists.
-      durationSeconds: measured(v.duration),
-      sizeBytes: measured(v.size),
-      width: measured(v.input?.width),
-      height: measured(v.input?.height),
-      state: v.status?.state ?? "unknown",
-      errorReasonCode: v.status?.errorReasonCode ?? null,
-    }));
+    return r.json.result.map(videoOf);
+  }
+
+  /** R2004 (owner ruling 2026-10-18, option (a); PR #981 review I2): ONE input's recordings — the account listing
+   *  filtered by input, `GET /accounts/{account_id}/stream?live_input_id=<uid>&limit=<page>` ("List videos" in
+   *  Cloudflare's API OpenAPI document: `live_input_id` "filter by live input ID", `limit` 1..1000, default 1000;
+   *  fetched 2026-10-18, pinned in __tests__/cf-stream-list-videos.fixture.ts). The documented operation, where the
+   *  first build called the undocumented `/live_inputs/{uid}/videos`. The same page bound as `listVideos`, so a FULL page
+   *  means "there may be more" to the sweep that reads it. Mapped exactly as `listVideos` maps, `inputId` included: it is
+   *  the video's own `liveInput` — optional in the schema, so null when absent — never the id this call asked about,
+   *  so the sweep's guard on it is a check and not an echo. */
+  async listInputVideos(inputId: string, meta: ProviderCallMeta = {}): Promise<IngestVideo[]> {
+    const r = await this.call<CfVideo[]>("GET", `?live_input_id=${encodeURIComponent(inputId)}&limit=${LIST_VIDEOS_PAGE_LIMIT}`, undefined,
+      { operation: "listInputVideos", ids: [inputId], subjectId: inputId, sessionId: meta.sessionId ?? null });
+    if (!r.json.success || !r.json.result) this.fail("list input videos", r);
+    return r.json.result.map(videoOf);
   }
 
   async deleteVideo(videoId: string): Promise<DeleteVideoResult> {

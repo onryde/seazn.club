@@ -16,7 +16,7 @@ import { DESTINATION_NOT_ALLOWED, TARGET_UNREADABLE } from "@/lib/stream-destina
 import { captureError } from "@/lib/sentry";
 import { getDictionary, t, toLocale } from "@/lib/i18n";
 import { OVERLAY_KEY_PARAM } from "@/lib/realtime-purpose";
-import { defaultTemplateFor } from "@/components/overlay/template-registry";
+import { resolveTemplate } from "@/components/overlay/template-registry";
 import { CaptureRefusalError, codeEnded } from "@/server/api-v1/capture-http";
 import {
   CaptureDescriptor, CaptureWaiting, type CaptureBeat, type CaptureBeatAnswer, type CaptureCred, type CaptureStartBody,
@@ -129,6 +129,8 @@ type FixtureCtx = {
   fixture_no: number; status: string; scheduled_at: Date | null; finished_at: Date | null; competition_id: string;
   sport_key: string; tz: string; default_locale: string | null; home_name: string | null; away_name: string | null;
   auto_stream: boolean;
+  /** R2004 change 7: the organiser's stored template choice (V462), null = the sport default. */
+  overlay_template: string | null;
 };
 
 /**
@@ -149,7 +151,7 @@ export async function captureCommon(
     select f.fixture_no, f.status, f.scheduled_at, f.finished_at, d.competition_id, d.sport_key,
            coalesce(ss.tz, o.timezone, 'UTC') as tz, o.default_locale,
            h.display_name as home_name, a.display_name as away_name,
-           coalesce(st.auto_stream, false) as auto_stream
+           coalesce(st.auto_stream, false) as auto_stream, st.overlay_template
       from fixtures f
       join divisions d on d.id = f.division_id
       join organizations o on o.id = d.org_id
@@ -173,7 +175,9 @@ export async function captureCommon(
   if (await hasFeature(c.orgId, "streaming.overlay", ctx.competition_id)) {
     const key = overlayKeyFor(c.fixtureId);
     keyed = key !== null;
-    const theme = s.themeId ?? defaultTemplateFor(ctx.sport_key);
+    // R2004 change 7 (review m10): the session's own copy wins (a running stream's choice), else the fixture's STORED
+    // choice — RESOLVED, so a retired or removed id opens on the sport default and never reaches the page raw.
+    const theme = resolveTemplate(s.themeId ?? ctx.overlay_template, ctx.sport_key).id;
     overlayUrl = `${origin}/overlay/fixtures/${c.fixtureId}?style=${encodeURIComponent(theme)}${key !== null ? `&${OVERLAY_KEY_PARAM}=${encodeURIComponent(key)}` : ""}`;
   }
 
@@ -279,7 +283,7 @@ async function sessionDescriptor(
 /** The input's provider uid, for `playbackUrl` — no secret is opened for it. */
 async function inputUidOf(sessionId: string): Promise<string | null> {
   const [row] = await sql<{ ingest_input_id: string | null }[]>`
-    select ingest_input_id from fixture_stream_inputs where session_id = ${sessionId} order by slot asc limit 1`;
+    select ingest_input_id from fixture_stream_inputs where session_id = ${sessionId} and role = 'camera' order by slot asc limit 1`;   // R2004: the phone's own input, never a composed session's programme
   return row?.ingest_input_id ?? null;
 }
 

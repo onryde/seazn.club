@@ -34,7 +34,7 @@ import { STREAM_PLATFORM_PRESETS, TARGET_UNREADABLE } from "@/lib/stream-destina
 import { routes } from "@/lib/routes";
 import { admit, holdStateOf, type AdmitInput, type SessionState } from "@/server/relay/domain/session";
 import { pairPresentPhone, resealTargetDestination, rigTarget, rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
-import { KEY_HINT_CHARS, KEY_HINT_MIN_LENGTH, archiveStreamTarget, lockStreamTarget, readTargetSecret } from "@/server/relay/secret-columns";
+import { KEY_HINT_CHARS, KEY_HINT_MIN_LENGTH, archiveStreamTarget, lockStreamTarget, readFirstInput, readTargetSecret } from "@/server/relay/secret-columns";
 import { mintRelayToken } from "@/server/relay/tokens";
 import {
   CLOUDFLARE_STORED_MICROS_PER_MINUTE, CODE_GRACE_AFTER_FINISH_MINUTES, CREDIT_REUSE_HOURS, ENDING_TIMEOUT_SECONDS, EST_COST_CURRENCY, FLY_BILLING_SECONDS_PER_MONTH, FLY_RELAY_APP_RETIRED_DEFAULT,
@@ -863,7 +863,11 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     expect(r.runner.created[0]!.attempt).toBe(1);
     const jobToken = r.runner.created[0]!.jobToken;
     const facts = await sessionFactsForJob(sessionId, jobToken, r.deps);
-    expect(facts.target).toEqual({ url: STREAM_PLATFORM_PRESETS.youtube, streamKey: "yt-key" });
+    // R2004: the Machine publishes to the session's PROGRAMME input (B) — the destination is a Cloudflare output on B, so
+    // its key is never in the facts.
+    const programme = (await sql.begin((tx) => readFirstInput(tx, sessionId, "programme")))!;
+    expect(facts.target).toEqual({ url: "rtmps://fake.ingest.invalid:443/live/", streamKey: programme.rtmps!.streamKey });
+    expect(JSON.stringify(facts), "the destination key never reaches the Machine").not.toContain("yt-key");
     expect(facts.mode).toBe("composed");
     expect(facts.pageToken.split(".")).toHaveLength(3);
     const pageToken = await mintRelayToken({ sid: sessionId, scope: "relay-page", expiresAt: new Date(Date.now() + 60_000) });
@@ -1074,6 +1078,9 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     const gate: boolean[] = [];
     const ingest = Object.assign(Object.create(r.ingest) as FakeIngest, {
       createLiveInput: async (spec: Parameters<FakeIngest["createLiveInput"]>[0]) => {
+        // R2004: a composed start makes two inputs (camera, then programme); the gate is read around the FIRST — the
+        // one between admission and the runner create this helper exists for. The programme create passes through.
+        if (spec.role === "programme") return r.ingest.createLiveInput(spec);
         gate.push(composedUnavailable());
         drift();
         gate.push(composedUnavailable());
@@ -2069,7 +2076,12 @@ describe.skipIf(!HAS_DB)("data captured (ruling 13) — history beside the state
       select runner_attempts, guest_cpus, guest_memory_mb, guest_cpu_class, machine_region, machine_seconds from fixture_stream_sessions where id = ${sessionId}`;
     expect(f).toEqual({ runner_attempts: 1, guest_cpus: RUNNER_DEFAULT_GUEST.cpus, guest_memory_mb: RUNNER_DEFAULT_GUEST.memoryMb, guest_cpu_class: RUNNER_DEFAULT_GUEST.cpuClass, machine_region: RUNNER_DEFAULT_REGION, machine_seconds: 120 });
     const effects = await sql<{ type: string; result: string }[]>`select type, result from fixture_stream_events where session_id = ${sessionId} and kind = 'effect' order by seq`;
-    expect(effects.map((e) => `${e.type}:${e.result}`)).toEqual(["create_live_input:ok", "create_machine:ok", "stop_machine:ok", "fill_replay:ok"]);
+    // R2004: two inputs (camera, then programme); the Machine is asked for as provisioning's first composed edge, and the
+    // destination output is added on the programme at `provisioned` — composed now holds an output like passthrough
+    // does, released at the completion before the replay fill.
+    expect(effects.map((e) => `${e.type}:${e.result}`)).toEqual([
+      "create_live_input:ok", "create_live_input:ok", "create_machine:ok", "add_output:ok", "stop_machine:ok", "release_output:ok", "fill_replay:ok",
+    ]);
     const rt = await sql<{ type: string; from_state: string; to_state: string }[]>`select type, from_state, to_state from fixture_stream_events where session_id = ${sessionId} and kind = 'runner_transition' order by seq`;
     expect(rt.map((x) => `${x.from_state}-${x.type}->${x.to_state}`)).toEqual([
       "none-create_started->creating", "creating-create_ok->booting", "booting-callback_playing->playing", "playing-session_stop->stopping", "stopping-observed->exited", "exited-observed->destroyed",
@@ -3458,7 +3470,7 @@ describe.skipIf(!HAS_DB)("stream sessions — the destination guard (one live se
       ingestSpy.mockRestore();
     }
     const expected = mode === "composed"
-      ? [`destroy:${machine}`, `input:${made.sessionId}`, `create:${made.sessionId}`]
+      ? [`destroy:${machine}`, `input:${made.sessionId}`, `input:${made.sessionId}`, `create:${made.sessionId}`]   // R2004: camera, then programme
       : [`destroy:${machine}`, `input:${made.sessionId}`];
     expect(order).toEqual(expected);
     expect((await r.row(made.sessionId)).state).not.toBe("failed");
