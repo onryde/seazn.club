@@ -160,6 +160,22 @@ export function buildRuleOverride(
 }
 
 /**
+ * The config keys an ORDERED-LIST field (`kind: "sequence"`) edits whose raw value is BLANK: lists the organiser reset to
+ * the engine's default ("Use the default order"). A blank is omitted by `buildRuleOverride` like any other, which is right
+ * where the base is a stage's rules FRAGMENT (an absent key means "inherit") but wrong where the base is the division's
+ * whole saved config (an omitted key rides along and the reset does nothing): the division door removes these keys
+ * explicitly. Only a sequence field is read this way - a blank number or select keeps what is saved (F5's rule stands).
+ */
+export function clearedSequenceKeys(sportKey: string, values: Record<string, string>): string[] {
+  const keys: string[] = [];
+  for (const field of rulesFor(sportKey)) {
+    if (field.kind !== "sequence") continue;
+    if ((values[field.key] ?? "") === "") keys.push(...field.edits);
+  }
+  return keys;
+}
+
+/**
  * Initial `ruleValues` for MatchRuleFields, derived from the division's
  * saved config through the SAME field list `buildRuleOverride` uses — so a
  * field whose `build` nests/renames/scales its value only has to teach its

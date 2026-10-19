@@ -13,7 +13,7 @@ import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import enUi from "@/dictionaries/en/ui.json";
 import type { Dict } from "@/lib/i18n-constants";
-import { SPORT_RULES, buildRuleOverride, hydrateRuleValues, visibleRuleFields } from "@/lib/match-rules";
+import { SPORT_RULES, buildRuleOverride, clearedSequenceKeys, hydrateRuleValues, visibleRuleFields } from "@/lib/match-rules";
 import { moveSequenceItem, sequenceItems, sequenceValue } from "../stage-rules/sequence-field";
 import { MatchRuleFields } from "../match-rules";
 
@@ -148,5 +148,23 @@ describe("a stored rung list survives a save through the editor, the empty list 
       expect(buildRuleOverride("boardgame", hydrateRuleValues("boardgame", saved)), JSON.stringify(list)).toEqual(saved);
       expect(save({ variant: "blitz", ...saved }), JSON.stringify(list)).toEqual({ variant: "blitz", ...saved });
     }
+  });
+});
+
+// W2c Task 17, fix round 1 (I-2): which keys the division door removes on a reset. The door's PATCH itself is pinned in
+// `division-format-patch.test.ts`; this is the field-table half.
+describe("clearedSequenceKeys: a blank ordered list is a reset, nothing else is", () => {
+  it("a blank or absent list names its key; a list, the empty token and every non-sequence sport name nothing (counted)", () => {
+    expect(clearedSequenceKeys("boardgame", {})).toEqual(["tiebreakRungs"]);
+    expect(clearedSequenceKeys("boardgame", { tiebreakRungs: "" })).toEqual(["tiebreakRungs"]);
+    expect(clearedSequenceKeys("boardgame", { tiebreakRungs: "rapid" })).toEqual([]);
+    expect(clearedSequenceKeys("boardgame", { tiebreakRungs: TIEBREAK.emptyValue! }), "'no tie-break games' is a value, not a reset").toEqual([]);
+    let others = 0;
+    for (const [sport, fields] of Object.entries(SPORT_RULES)) {
+      if (fields.some((f) => f.kind === "sequence")) continue;
+      expect(clearedSequenceKeys(sport, {}), `${sport}: a blank number or select keeps what is saved`).toEqual([]);
+      others++;
+    }
+    expect(others, "sports without a sequence field were walked").toBeGreaterThan(0);
   });
 });

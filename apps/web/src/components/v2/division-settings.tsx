@@ -13,7 +13,8 @@ import { divisionAccent, monogram } from "@/lib/division-hue";
 import { SWISS_ROUNDS_REQUIRED_CODE } from "@/lib/swiss-shell";
 import { ONLINE_CHESS_DISABLED_CODE } from "@/lib/online-chess";
 import { CAMERA_POLICIES, type CameraPolicy } from "@/lib/camera-policy";
-import { MatchRuleFields, buildRuleOverride, hydrateRuleValues, SPORT_RULES } from "./match-rules";
+import { MatchRuleFields, hydrateRuleValues, SPORT_RULES } from "./match-rules";
+import { divisionFormatPatch } from "./division-format-patch";
 import {
   LICHESS_CLOCK_FIELD_KEYS,
   selectedTimeControlKey,
@@ -698,72 +699,25 @@ export function DivisionSettings({
 
   const applyFormat = () =>
     run(async () => {
-      // The server merges preset + override, but presets only carry the
-      // variant-identity keys (resultMode/allowDraws) — schema-required keys
-      // like progressScore live in the division's current config. Base the
-      // override on that valid snapshot; on a variant change, drop the
-      // identity keys so the new preset wins them.
-      const override: Record<string, unknown> = {
-        ...((division.config as Record<string, unknown>) ?? {}),
-      };
-      if (variantKey !== division.variant_key) {
-        delete override.resultMode;
-        delete override.allowDraws;
-      }
-      // R3.5/Task Q — buildRuleOverride can return a nested `{ points: {...} }`
-      // (football's shootoutWin/shootoutLoss). A bare Object.assign of the
-      // whole rule override would REPLACE override.points wholesale, dropping
-      // whatever of the existing config's points (win/draw/loss, or a
-      // shootout half the organiser isn't touching right now) the rule
-      // fields didn't themselves resend. Merge points separately; everything
-      // else a rule field returns is a fine top-level Object.assign, exactly
-      // as before.
-      // `division.config` as the inherited config: a blank best-of here keeps
-      // the saved one (the `{...config}` base above), so it is also what
-      // decides whether the single best-of-1 points field applies.
-      const { points: rulePoints, ...ruleOverrideRest } = buildRuleOverride(
-        division.sport_key,
-        ruleValues,
-        (division.config as Record<string, unknown>) ?? {},
-      );
-      Object.assign(override, ruleOverrideRest);
-      if (rulePoints && typeof rulePoints === "object") {
-        const mergedPoints: Record<string, unknown> = {
-          ...((override.points as Record<string, unknown>) ?? {}),
-          ...(rulePoints as Record<string, unknown>),
-        };
-        // R3.5 review F5 — a rule field's build()/buildOnBlank() (currently
-        // only match-rules.tsx's shootoutPointsPatch) can ask to DELETE a key
-        // from the nested object by setting it to `undefined` rather than
-        // omitting it — omitting it would leave whatever `override.points`
-        // already carried forward from the `{...division.config}` base at
-        // the top of this function untouched. Resolve those markers into a
-        // real deletion here, so the PATCH body (and any `toEqual`/
-        // `toHaveProperty` assertion on it) is a clean object rather than
-        // one holding `undefined`-valued keys.
-        for (const key of Object.keys(mergedPoints)) {
-          if (mergedPoints[key] === undefined) delete mergedPoints[key];
-        }
-        override.points = mergedPoints;
-      }
-      if (pointsFieldKeys.some((k) => pointsValues[k] !== undefined && pointsValues[k] !== "")) {
-        // Spread whatever survived above (shootout points included) rather
-        // than replacing override.points outright, and write only the keys
-        // THIS sport's schema actually declares — see editablePointsKeys.
-        const pointsPatch: Record<string, unknown> = { ...((override.points as Record<string, unknown>) ?? {}) };
-        for (const key of pointsFieldKeys) {
-          const raw = pointsValues[key];
-          pointsPatch[key] = raw === undefined || raw === "" ? (cfg.points?.[key] ?? 0) : Number(raw);
-        }
-        override.points = pointsPatch;
-      }
+      let advanced: Record<string, unknown> | null = null;
       if (advancedText.trim() !== "") {
         try {
-          Object.assign(override, JSON.parse(advancedText));
+          advanced = JSON.parse(advancedText) as Record<string, unknown>;
         } catch {
           throw new Error(msg("divset.invalidJson"));
         }
       }
+      const override = divisionFormatPatch({
+        sportKey: division.sport_key,
+        divisionConfig: (division.config as Record<string, unknown>) ?? {},
+        savedVariantKey: division.variant_key,
+        variantKey,
+        ruleValues,
+        pointsFieldKeys,
+        pointsValues,
+        savedPoints: cfg.points,
+        advanced,
+      });
       if (division.sport_key === "boardgame") {
         if (onlinePlay === "lichess") override.onlinePlay = "lichess";
         else delete override.onlinePlay;
