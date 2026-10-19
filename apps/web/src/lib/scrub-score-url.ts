@@ -17,6 +17,12 @@
 // (the code) and the other half as `Authorization: Bearer <tok>`; the beat's body names the code again. Every string's
 // `/capture/codes/<code>` becomes `/capture/codes/[code]` (plain or encoded), and a capture route's Sentry event also
 // loses its Bearer (`Bearer [tok]`) and its request body. Every other event keeps its headers and body.
+//
+// R2005 (review round 1, item 1): the compositor's relay PAGE token rides its URL the same way — the composed session's
+// `overlayUrl` (`/overlay/fixtures/{id}?sid=…&st=…&host=compositor…`) and the relay page's live-data poll, sent every
+// STREAM_POLL_MS (`overlayPollPath`: `/api/v1/public/fixtures/{id}/overlay?sid=…&st=…`). A `relay-page` token opens a
+// NON-public fixture's overlay until its session ends, so every `st=` QUERY PARAMETER value becomes `[st]`, plain or
+// URL-encoded, by the `key=` rules. `sid` names a session and is not a credential: it stays.
 import type * as Sentry from "@sentry/nextjs";
 import type { CaptureResult } from "posthog-js";
 import { OVERLAY_KEY_PARAM } from "./realtime-purpose";
@@ -51,16 +57,24 @@ const BARE_TOKEN = /dl_[A-Za-z0-9_-]{32,}/g;
 const OVERLAY_KEY_QUERY = new RegExp(`((?:^|[?&])${OVERLAY_KEY_PARAM}=)[^&#\\s"'<>]+`, "g");
 /** The same parameter URL-ENCODED inside another URL: `%3Fkey%3D` / `%26key%3D`, at any encoding depth, either hex case. */
 const ENCODED_OVERLAY_KEY = new RegExp(`(%(?:25)*(?:3[Ff]|26)${OVERLAY_KEY_PARAM}%(?:25)*3[Dd])[^%&#\\s"'<>]+`, "g");
+/** The relay page token's query parameter (R2005): the name `relayParamsOf` reads and both producers write. */
+const RELAY_PAGE_TOKEN_PARAM = "st";
+/** `st=` as a query parameter, by `OVERLAY_KEY_QUERY`'s rules: never inside another name (`test=`, `best=`). */
+const RELAY_PAGE_TOKEN_QUERY = new RegExp(`((?:^|[?&])${RELAY_PAGE_TOKEN_PARAM}=)[^&#\\s"'<>]+`, "g");
+/** The same parameter URL-ENCODED inside another URL: `%3Fst%3D` / `%26st%3D`, at any encoding depth, either hex case. */
+const ENCODED_RELAY_PAGE_TOKEN = new RegExp(`(%(?:25)*(?:3[Ff]|26)${RELAY_PAGE_TOKEN_PARAM}%(?:25)*3[Dd])[^%&#\\s"'<>]+`, "g");
 /** A capture code in a phone route's path: everything up to the next `/`, `?`, `#`, quote, angle bracket or space. */
 const CAPTURE_PATH = /(\/capture\/codes\/)[^/?#\s"'<>]+/g;
 /** The same path URL-ENCODED inside another URL, at any encoding depth, either hex case. */
 const ENCODED_CAPTURE_PATH = /(%(?:25)*2[Ff]capture%(?:25)*2[Ff]codes%(?:25)*2[Ff])[^%&/?#\s"'<>]+/g;
 /** Cheap pre-check: nothing any of the patterns could match. */
-const MAYBE_TOKEN = new RegExp(`\\/score\\/|%(?:25)*2[Ff]score%|dl_|${OVERLAY_KEY_PARAM}=|${OVERLAY_KEY_PARAM}%|\\/capture\\/codes\\/|capture%(?:25)*2[Ff]codes%`);
+const MAYBE_TOKEN = new RegExp(
+  `\\/score\\/|%(?:25)*2[Ff]score%|dl_|${OVERLAY_KEY_PARAM}=|${OVERLAY_KEY_PARAM}%|${RELAY_PAGE_TOKEN_PARAM}=|${RELAY_PAGE_TOKEN_PARAM}%|\\/capture\\/codes\\/|capture%(?:25)*2[Ff]codes%`,
+);
 
 /** One string: `/score/<token>` (plain or encoded) becomes `/score/[token]`, a bare `dl_…` secret becomes `dl_[token]`,
- *  an overlay `key=` query value (plain or encoded) becomes `[key]`, and a capture code in `/capture/codes/<code>`
- *  (plain or encoded) becomes `[code]`. */
+ *  an overlay `key=` query value (plain or encoded) becomes `[key]`, a relay page token's `st=` value (plain or
+ *  encoded) becomes `[st]`, and a capture code in `/capture/codes/<code>` (plain or encoded) becomes `[code]`. */
 export function scrubScoreUrl(value: string): string {
   if (!MAYBE_TOKEN.test(value)) return value;
   return value
@@ -69,6 +83,8 @@ export function scrubScoreUrl(value: string): string {
     .replace(BARE_TOKEN, "dl_[token]")
     .replace(OVERLAY_KEY_QUERY, "$1[key]")
     .replace(ENCODED_OVERLAY_KEY, "$1[key]")
+    .replace(RELAY_PAGE_TOKEN_QUERY, "$1[st]")
+    .replace(ENCODED_RELAY_PAGE_TOKEN, "$1[st]")
     .replace(CAPTURE_PATH, "$1[code]")
     .replace(ENCODED_CAPTURE_PATH, "$1[code]");
 }

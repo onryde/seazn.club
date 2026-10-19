@@ -132,11 +132,15 @@ export async function fetchLiveFixture(fixtureId: string): Promise<LiveFixtureDa
  *  route answers through the same check — `programmePhase` for fallback B, and a fixture that is not public. Without
  *  them the request is byte-for-byte today's. */
 export async function fetchOverlayFixture(fixtureId: string, relay?: { sid: string; st: string }): Promise<OverlayLiveData> {
-  const path = `/api/v1/public/fixtures/${fixtureId}/overlay`;
-  const q = relay ? `?${new URLSearchParams({ sid: relay.sid, st: relay.st }).toString()}` : "";
-  return api<OverlayLiveData>(`${path}${q}`, {
+  return api<OverlayLiveData>(overlayPollPath(fixtureId, relay), {
     cache: "no-store",
   });
+}
+
+/** The overlay poll's path. Exported for the telemetry scrub's test (`st` is a credential on every poll). */
+export function overlayPollPath(fixtureId: string, relay?: { sid: string; st: string }): string {
+  const path = `/api/v1/public/fixtures/${fixtureId}/overlay`;
+  return relay ? `${path}?${new URLSearchParams({ sid: relay.sid, st: relay.st }).toString()}` : path;
 }
 
 export { OVERLAY_REALTIME_PURPOSE, type RealtimePurpose };
