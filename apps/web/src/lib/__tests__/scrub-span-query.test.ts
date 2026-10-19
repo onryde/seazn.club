@@ -34,13 +34,12 @@ import { NOT_ONE_TIME, linkBuilders } from "./_route-scan";
 import { clientSpanDetails, otelTraceData, outgoingBreadcrumb, outgoingRequestSpanData, serverSpanDetails, transaction, type SpanData } from "./_sdk-span-data";
 import { createInvite } from "@/server/usecases/invites";
 import { createLoginLink } from "@/lib/login-link";
-import { createPasswordResetToken } from "@/lib/password-reset";
 import { createVerificationToken } from "@/lib/verification";
 import { SPAN_URL_KEYS, scrubSentryEvent } from "../scrub-score-url";
 
 const ORIGIN = "https://seazn.club";
 const oneTimeRoutes = [...linkBuilders().keys()].filter((r) => !(r in NOT_ONE_TIME)).sort();
-const tokens = [await createLoginLink(USER_ID), await createVerificationToken(USER_ID), await createPasswordResetToken(USER_ID)];
+const tokens = [await createLoginLink(USER_ID), await createVerificationToken(USER_ID)];
 const NEXT = "next=%2Fdashboard%3Ffrom%3Dmail";
 
 const json = (v: unknown) => JSON.stringify(v);
@@ -68,7 +67,7 @@ describe("the premise: the SDK's own helpers write the bare query, with its ?, w
     expect(data["http.query"]).toBe(`?token=${tokens[0]!}&${NEXT}`);
   });
   it("the one-time routes come from the app's link builders", () => {
-    expect(oneTimeRoutes).toEqual(expect.arrayContaining(["/magic-link", "/verify-email", "/reset-password", "/start/claim", "/admin/impersonate", "/api/auth/change-email/confirm"]));
+    expect(oneTimeRoutes).toEqual(expect.arrayContaining(["/magic-link", "/verify-email", "/start/claim", "/admin/impersonate", "/api/auth/change-email/confirm"]));
   });
 });
 
@@ -159,7 +158,7 @@ describe("a one-time route's span data loses the token in its bare query", () =>
     }
     expect(failures.slice(0, 5), `${failures.length} of ${checked} failed`).toEqual([]);
     expect(checked).toBe(oneTimeRoutes.length * tokens.length * 8);
-    expect(checked).toBeGreaterThanOrEqual(100);
+    expect(checked).toBeGreaterThanOrEqual(80);
   });
 
   it("the query without its ? (a Sentry query_string style value) loses the token too", () => {
@@ -197,14 +196,14 @@ describe("the positive pair: queries that are not a one-time token are left alon
 });
 
 describe("a serialised request body in a span's data goes with the route's body", () => {
-  const password = "correct-horse-battery-1";
-  const body = JSON.stringify({ email: "a@example.test", password });
-  it("log-in: the trace data's http.request.body.data is dropped; an ordinary POST keeps it", () => {
-    const login = out(
-      transaction({ name: "POST /api/auth/login", traceData: { ...serverSpanDetails(`${ORIGIN}/api/auth/login`, "/api/auth/login", "POST").data, "http.request.body.data": body } }),
+  const signInToken = tokens[0]!;
+  const body = JSON.stringify({ token: signInToken, next: "/dashboard" });
+  it("the sign-in consume: the trace data's http.request.body.data is dropped; an ordinary POST keeps it", () => {
+    const consume = out(
+      transaction({ name: "POST /api/auth/magic-link/consume", traceData: { ...serverSpanDetails(`${ORIGIN}/api/auth/magic-link/consume`, "/api/auth/magic-link/consume", "POST").data, "http.request.body.data": body } }),
     );
-    expect(Object.hasOwn(login.contexts.trace.data, "http.request.body.data")).toBe(false);
-    expect(json(login)).not.toContain(password);
+    expect(Object.hasOwn(consume.contexts.trace.data, "http.request.body.data")).toBe(false);
+    expect(json(consume)).not.toContain(signInToken);
     const ordinary = out(
       transaction({ name: "POST /api/v1/x", traceData: { ...serverSpanDetails(`${ORIGIN}/api/v1/x`, "/api/v1/x", "POST").data, "http.request.body.data": body } }),
     );
@@ -227,16 +226,16 @@ describe("a serialised request body in a span's data goes with the route's body"
     );
     expect(ordinary.spans[0]!.data["http.request.body.data"], "an ordinary route keeps its span body (the positive pair)").toBe(inviteBody);
   });
-  it("a child span of the password route (named by its own url) loses it, in a transaction for another route", () => {
+  it("a child span of the sign-in consume (named by its own url) loses it, in a transaction for another route", () => {
     const result = out(
       transaction({
         name: "GET /dashboard",
         traceData: otelTraceData(`${ORIGIN}/dashboard`),
-        spans: [{ description: "POST /api/auth/signup", data: { ...clientSpanDetails(`${ORIGIN}/api/auth/signup`, "POST").data, "http.request.body.data": body } }],
+        spans: [{ description: "POST /api/auth/magic-link/consume", data: { ...clientSpanDetails(`${ORIGIN}/api/auth/magic-link/consume`, "POST").data, "http.request.body.data": body } }],
       }),
     );
     expect(Object.hasOwn(result.spans[0]!.data, "http.request.body.data")).toBe(false);
-    expect(json(result)).not.toContain(password);
+    expect(json(result)).not.toContain(signInToken);
   });
 });
 
@@ -290,8 +289,8 @@ describe("every key that names a span's request pins the span to its route, each
   });
 
   it.each(KEYS)("%s alone names a route that takes a credential in its body: the serialised body goes", (key) => {
-    const body = JSON.stringify({ email: "a@example.test", password: "correct-horse-battery-1" });
-    const data = spanNamedBy(key, `${ORIGIN}/api/auth/login`, "/api/auth/login", { "http.request.body.data": body });
+    const body = JSON.stringify({ token: tokens[0]!, next: "/dashboard" });
+    const data = spanNamedBy(key, `${ORIGIN}/api/auth/magic-link/consume`, "/api/auth/magic-link/consume", { "http.request.body.data": body });
     expect(Object.hasOwn(data, "http.request.body.data"), key).toBe(false);
   });
 

@@ -1,5 +1,5 @@
 // Test-only stand-in for the `sql` tag, shared by the scrub suites that need a REAL minted credential without a
-// database: `createLoginLink`, `createVerificationToken`, `createPasswordResetToken` and `createImpersonationToken`
+// database: `createLoginLink`, `createVerificationToken` and `createImpersonationToken`
 // each mint their token (`crypto.randomBytes(..).toString(..)`) and then insert it; `createInvite` mints the org-invite token and
 // reads the inserted row back. With this in place of `sql`, the
 // real minter runs end to end; only the Postgres round trip is a stand-in, and the row it would have written is
@@ -21,8 +21,8 @@ export function fakeSql(strings: TemplateStringsArray, ...values: unknown[]): Pr
   const text = strings.join("?").replace(/\s+/g, " ");
   const insert = /insert into (\w+)/i.exec(text);
   if (insert) inserts.push({ table: insert[1]!, values });
-  // signup's `insert into users … returning id` and forgot-password's `select id from users`: one user exists.
-  if (/insert into users/i.test(text) || /select id from users/i.test(text)) return Promise.resolve([{ id: USER_ID }]);
+  // The staff resend-verification route reads its target first: one unverified user exists.
+  if (/select id, email, email_verified from users/i.test(text)) return Promise.resolve([{ id: USER_ID, email: "unverified@example.test", email_verified: false }]);
   // createInvite's `insert … returning`: the row it just wrote, columns (org_id, role, email, token, created_by, expires_at, max_uses).
   if (/insert into org_invites/i.test(text)) {
     const [org_id, role, email, token, , expires_at, max_uses] = values;
