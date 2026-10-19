@@ -42,7 +42,7 @@ import {
   type ParticipantToken,
 } from "@/server/external-play/video/realtimekit";
 import { anchorOfRow, boardExtraSql, boardRankSql, roundOpenAt } from "@/server/external-play/round-open";
-import { bridgeGameOnFile, extendRefusal, extensionsLeft, windowFor } from "@/server/external-play/window";
+import { bridgeGameOnFile, checkInCounts, extendRefusal, extensionsLeft, windowFor } from "@/server/external-play/window";
 import type { CheckinExtendState } from "@/lib/checkin-extend";
 import { EDITOR_ROLES } from "@/lib/types";
 import { ARBITER_JOIN_LIMIT, ARBITER_RESYNC_LIMIT, rateLimit } from "@/lib/rate-limit";
@@ -200,9 +200,25 @@ export async function loadArbiterRound(
   // M4: every board is read at once (its sides, its colours, its result, its
   // flags) — never one board after another. Promise.all keeps board order.
   const listed = [...rows.entries()].filter(([, r]) => !own.has(r.fixtureId));
-  const boards: ArbiterBoard[] = await Promise.all(
+  const built: ArbiterBoard[] = await Promise.all(
     listed.map(([, r]) => boardOf(auth, r, { limitMs, policy, flagRows, now })),
   );
+  // SPIKE (variant C): who has checked in, per seat - one read for the round, judged by the sweep's own rule (`checkInCounts`).
+  const avail =
+    listed.length === 0
+      ? []
+      : await sql<{ fixtureId: string; personId: string; at: Date | null }[]>`
+          select fixture_id as "fixtureId", person_id as "personId", checked_in_at as at from fixture_availability
+           where fixture_id in ${sql(listed.map(([, r]) => r.fixtureId))}`;
+  const boards: ArbiterBoard[] = built.map((b, i) => {
+    const r = listed[i]![1];
+    const anchor = r.openedAt === null ? null : anchorOfRow({ openedAt: r.openedAt, rank: r.rank, staggered: r.staggered === true, extraMs: r.extraMs });
+    const seatIn = (personId: string | null) => {
+      if (anchor === null || personId === null) return false;
+      return checkInCounts(avail.find((a) => a.fixtureId === b.fixtureId && a.personId === personId)?.at ?? null, anchor);
+    };
+    return { ...b, checkedIn: { white: seatIn(b.white.personId), black: seatIn(b.black.personId) } };
+  });
   return {
     stageId: round.stageId,
     stageName: round.stageName,

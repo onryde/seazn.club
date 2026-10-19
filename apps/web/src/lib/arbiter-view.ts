@@ -170,6 +170,9 @@ export type ArbiterBoard = {
   checkin: CheckinExtendState | null;
   /** Open flags only: a flag the organiser closed has had its review. */
   flags: ArbiterFlag[];
+  /** SPIKE (variant C): who has checked in, per seat, counted against the board's own window (`checkInCounts`, the sweep's own
+   *  reading). The loader had no per-seat check-in; undefined where it was not read (the Flagged list). */
+  checkedIn?: { white: boolean; black: boolean };
 };
 
 /** One player's camera meeting as the board list reads it (D16, §5.6.4): `open` can be watched, `ended` has been torn

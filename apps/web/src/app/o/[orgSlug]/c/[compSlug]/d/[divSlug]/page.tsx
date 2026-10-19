@@ -60,6 +60,8 @@ import { EntrantsPanel } from "@/components/v2/entrants-panel";
 import { entrantListLocked } from "@/lib/open-entry-stages";
 import { StagesPanel } from "@/components/v2/stages-panel";
 import { ExternalPlayNeedsResultQueue } from "@/components/v2/external-play-needs-result-queue";
+import { SpikeUnmatchedLine } from "@/components/v2/spike/arbiter-round-spike";
+import { parseSpike, spikeAttention } from "@/components/v2/spike/spike-helpers";
 import {
   listFlaggedExternalPlay,
   listNeedsOrganiserExternalPlay,
@@ -103,11 +105,11 @@ export default async function DivisionPage({
   searchParams,
 }: {
   params: Promise<{ orgSlug: string; compSlug: string; divSlug: string }>;
-  searchParams: Promise<{ tab?: string }>;
+  searchParams: Promise<{ tab?: string; spike?: string | string[] }>;
 }) {
   const [
     { orgSlug, compSlug, divSlug },
-    { tab: rawTab },
+    { tab: rawTab, spike: rawSpike },
   ] = await Promise.all([
     params,
     searchParams,
@@ -561,6 +563,16 @@ export default async function DivisionPage({
   // (The queue no longer offers the invite resend: the server refuses it for every held board — 409 BOARD_HELD.)
   const onlineChessOn =
     division.sport_key === "boardgame" && tab === "settings" && canEdit ? await onlineChessOffered(auth) : false;
+  // SPIKE (?spike=a|b): the round controls live in the Arbiter Panel; this tab keeps one line per round (and a red one for
+  // Held/Flagged boards no listed round claims). Needs the round list, so only where the Open round control would render.
+  const spikeVariant = parseSpike(rawSpike);
+  const spikeLines =
+    spikeVariant !== null && openRounds !== undefined
+      ? spikeAttention(
+          { held: needsOrganiserExternalPlay, flagged: flaggedExternalPlay.boards, ownFlagged: flaggedExternalPlay.ownBoards },
+          Object.values(openRounds).flat(),
+        )
+      : null;
 
   // T15: the way into the arbiter panel — organisers, only where there is a
   // board to watch (an online chess division with fixtures); it renders
@@ -824,7 +836,8 @@ export default async function DivisionPage({
                 <span className="min-w-0 text-sm text-slate-600">{t(dict, "arbiter.entry.body")}</span>
               </div>
             )}
-            {onlineDesk && (
+            {spikeLines !== null && <SpikeUnmatchedLine count={spikeLines.unmatched} href={arbiterHref} />}
+            {onlineDesk && spikeLines === null && (
               // Mounted for every chess desk, even with nothing held: the queue keeps the answer to the last decision
               // on screen after the refresh that takes its row away (it renders nothing when there is neither).
               <div className="mb-4 empty:hidden">
@@ -870,6 +883,7 @@ export default async function DivisionPage({
               openRounds={openRounds}
               onlineAwaitsStart={onlineAwaitsStart}
               arbiterHref={arbiterHref}
+              spikeLines={spikeLines === null ? null : spikeLines.byRound}
             />
           </>
         )}

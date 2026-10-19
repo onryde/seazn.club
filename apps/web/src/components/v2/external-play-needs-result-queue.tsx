@@ -42,6 +42,8 @@ export type ExternalPlayQueueProps = {
   /** Flagged boards the viewer plays on: hidden from them (C1), counted. */
   ownFlagged: number;
   slugs: { org: string; comp: string; div: string };
+  /** SPIKE: sits in the arbiter panel's side column - one list column at every width, drawn as a card. */
+  stacked?: boolean;
 };
 
 const CHIP = "self-start rounded-full px-2.5 py-[3px] text-xs font-semibold";
@@ -83,7 +85,7 @@ function rowNotice(fixtureId: string, decision: ArbiterDecisionState, over: bool
   );
 }
 
-export function ExternalPlayNeedsResultQueue({ held, flagged, ownFlagged, slugs }: ExternalPlayQueueProps) {
+export function ExternalPlayNeedsResultQueue({ held, flagged, ownFlagged, slugs, stacked = false }: ExternalPlayQueueProps) {
   const router = useRouter();
   const [decision, dispatch] = useReducer(arbiterDecision, null, initialArbiterDecision);
   // Flag times of day render after mount: the server's timezone is not the
@@ -226,7 +228,11 @@ export function ExternalPlayNeedsResultQueue({ held, flagged, ownFlagged, slugs 
   };
 
   return (
-    <section data-testid="external-play-needs-result-queue" aria-labelledby="external-play-queue-title" className="flex min-w-0 flex-col gap-3">
+    <section
+      data-testid="external-play-needs-result-queue"
+      aria-labelledby="external-play-queue-title"
+      className={`flex min-w-0 flex-col gap-3${stacked ? " rounded-xl border border-[#f1c4c0] bg-white p-3" : ""}`}
+    >
       <div className="min-w-0">
         <h2 id="external-play-queue-title" className="m-0 text-[17px] font-semibold text-[#2e1065]">
           {f.t("externalPlay.queue.title")}
@@ -234,7 +240,7 @@ export function ExternalPlayNeedsResultQueue({ held, flagged, ownFlagged, slugs 
         <p className={`m-0 mt-0.5 text-sm leading-[1.45] ${SOFT}`}>{f.t("externalPlay.queue.help")}</p>
       </div>
       {status}
-      <div className="grid min-w-0 grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+      <div className={`grid min-w-0 grid-cols-1 items-start gap-4${stacked ? "" : " lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]"}`}>
         {held.length > 0 && (
           <div data-testid="external-play-held" className="flex min-w-0 flex-col gap-2.5">
             <h3 className={LIST_HEADING}>{f.t("externalPlay.queue.heldHeading", { count: held.length })}</h3>

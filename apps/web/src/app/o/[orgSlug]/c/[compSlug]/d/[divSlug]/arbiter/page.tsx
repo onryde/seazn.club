@@ -9,17 +9,27 @@ export const dynamic = "force-dynamic";
 import { notFound } from "next/navigation";
 import { requireDivisionPage } from "@/server/page-auth";
 import { getDivision } from "@/server/usecases/divisions";
-import { arbiterRequestedRound, loadArbiterRound } from "@/server/usecases/external-play";
+import {
+  arbiterRequestedRound,
+  listFlaggedExternalPlay,
+  listNeedsOrganiserExternalPlay,
+  listOpenRounds,
+  loadArbiterRound,
+  onlineChessOffered,
+} from "@/server/usecases/external-play";
+import { getScheduleSettings } from "@/server/usecases/schedule";
 import { ArbiterPanel } from "@/components/v2/arbiter-panel";
+import { parseSpike, type SpikeRoundData } from "@/components/v2/spike/spike-helpers";
 
 export default async function DivisionArbiterPage({
   params,
   searchParams,
 }: {
   params: Promise<{ orgSlug: string; compSlug: string; divSlug: string }>;
-  searchParams: Promise<{ fixture?: string | string[] }>;
+  searchParams: Promise<{ fixture?: string | string[]; spike?: string | string[] }>;
 }) {
-  const [{ orgSlug, compSlug, divSlug }, { fixture }] = await Promise.all([params, searchParams]);
+  const [{ orgSlug, compSlug, divSlug }, { fixture, spike: rawSpike }] = await Promise.all([params, searchParams]);
+  const variant = parseSpike(rawSpike);
   const page = await requireDivisionPage(orgSlug, compSlug, divSlug, { tail: "/arbiter" });
   if (!page.canEdit) notFound();
   const division = await getDivision(page.auth, page.division.id);
@@ -35,8 +45,21 @@ export default async function DivisionArbiterPage({
     requested !== null
       ? null
       : await loadArbiterRound(page.auth, page.division.id, asked?.kind === "round" ? { round: { stageId: asked.stageId, roundNo: asked.roundNo } } : {});
+  // SPIKE: the data the Fixtures tab's Open round control and Held/Flagged queue read, read here for the panel's side column.
+  // The same gate the tab uses: an open STARTS play, so only while the club is offered online chess.
+  let spike: { variant: NonNullable<typeof variant>; data: SpikeRoundData } | null = null;
+  if (variant !== null && (await onlineChessOffered(page.auth))) {
+    const [rounds, held, flagged, settings] = await Promise.all([
+      listOpenRounds(page.auth, page.division.id),
+      listNeedsOrganiserExternalPlay(page.auth, page.division.id),
+      listFlaggedExternalPlay(page.auth, page.division.id),
+      getScheduleSettings(page.auth, page.division.id),
+    ]);
+    spike = { variant, data: { rounds, queue: { held, flagged: flagged.boards, ownFlagged: flagged.ownBoards }, tz: settings.tz } };
+  }
   return (
     <ArbiterPanel
+      spike={spike}
       round={round}
       requested={requested}
       slugs={{ org: orgSlug, comp: compSlug, div: divSlug }}

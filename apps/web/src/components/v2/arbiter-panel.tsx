@@ -22,6 +22,9 @@ import Link from "@/components/ui/console-link";
 import { routes } from "@/lib/routes";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { boardIsOver, offersSettle, type ArbiterBoard, type ArbiterFlag, type ArbiterRound } from "@/lib/arbiter-view";
+import { SpikeRoundCard, SpikeRoundFold } from "./spike/arbiter-round-spike";
+import { SpikeCheckInScope, SpikeCheckInWaiting, SpikePairingsPreview, SpikeRoundColumn } from "./spike/arbiter-round-column";
+import { roundPhaseOf, type RoundPhase, type SpikeRoundData, type SpikeVariant } from "./spike/spike-helpers";
 import { extendEdgesOf, watchedWindows } from "@/lib/checkin-extend";
 import { formatClock, remainingMs } from "@/components/public-site/match-room/clock-math";
 import { browserBandPollDeps, startBandPolling } from "./desk/band-poll";
@@ -116,6 +119,8 @@ export type ArbiterScreenProps = {
   /** The viewer's clock; null before mount (no time of day is painted). */
   nowMs: number | null;
   slugs: { org: string; comp: string; div: string };
+  /** SPIKE (?spike=a|b): the round card, placed by `variant`. Absent = the panel as shipped. */
+  spike?: { variant: SpikeVariant; slot: ReactNode; /** C: the second half (waiting boards / paired boards), placed in the room the column leaves. */ slot2?: ReactNode; phase?: RoundPhase } | null;
   on: {
     select(fixtureId: string): void;
     resync(): void;
@@ -246,12 +251,34 @@ export function ArbiterScreen(p: ArbiterScreenProps) {
       </header>
 
       {p.requested === null && p.round !== null && <RoundNotes round={p.round} slugs={p.slugs} f={f} />}
-      {p.requested === null && p.round !== null && (
+      {p.requested === null && p.round !== null && !p.spike && (
         <RoundExtend round={p.round} state={p.roundExtend} requestBusy={p.decision.busy !== null} nowMs={p.nowMs} onExtend={p.on.extendRound} f={f} />
       )}
 
       {p.requested !== null ? (
         <RequestedNotice body={f.t(p.requested === "own" ? "arbiter.requested.own" : "arbiter.requested.unavailable")} slugs={p.slugs} f={f} />
+      ) : p.round === null && p.spike ? (
+        <main
+          className={`mx-auto flex w-full min-w-0 max-w-[1232px] flex-col gap-4 px-4 pt-3 pb-6 ${
+            p.spike.variant === "c"
+              ? "md:grid md:grid-cols-[minmax(0,1fr)_320px] md:items-start md:gap-6 md:p-6"
+              : `lg:grid lg:items-start lg:gap-6 lg:p-6 ${p.spike.variant === "a" ? "lg:grid-cols-[minmax(0,1fr)_320px]" : "lg:grid-cols-[288px_minmax(0,1fr)]"}`
+          }`}
+        >
+          {p.spike.variant === "b" && <div className="min-w-0">{p.spike.slot}</div>}
+          <div className="flex min-w-0 flex-col gap-2">
+            <h2 className="m-0 text-[17px] font-semibold">{f.t("arbiter.empty.title")}</h2>
+            {/* SPIKE_COPY: the shipped body says "from the run sheet", which is no longer where a round opens. */}
+            <p className={`m-0 max-w-prose text-sm leading-[1.5] ${SOFT}`}>
+              Boards appear here once you open a round. Flags are recorded whether or not anyone is watching.
+            </p>
+            {p.spike.variant === "c" && p.spike.slot2}
+          </div>
+          {(p.spike.variant === "a" || p.spike.variant === "c") && (
+            // C on a phone: Open round is the only action, so the column leads; the paired-boards preview follows it.
+            <div className={`min-w-0 ${p.spike.variant === "c" ? "max-md:order-first" : ""}`}>{p.spike.slot}</div>
+          )}
+        </main>
       ) : p.round === null ? (
         <EmptyNotice title={f.t("arbiter.empty.title")} body={f.t("arbiter.empty.body")} />
       ) : p.round.boards.length === 0 && p.round.ownBoards > 0 ? (
@@ -264,7 +291,17 @@ export function ArbiterScreen(p: ArbiterScreenProps) {
         // so, never another board opened in its place.
         <RequestedNotice body={f.t("arbiter.requested.unavailable")} slugs={p.slugs} f={f} />
       ) : (
-        <main className="mx-auto flex w-full min-w-0 max-w-[1232px] flex-col gap-3 px-4 pt-3 pb-6 lg:grid lg:grid-cols-[248px_minmax(0,1fr)_320px] lg:items-start lg:gap-6 lg:p-6">
+        <main
+          className={`mx-auto flex w-full min-w-0 max-w-[1232px] flex-col gap-3 px-4 pt-3 pb-6 ${
+            // SPIKE variant C keeps its side column from `md` (768): a two-column grid (board picker on top, camera | round column),
+            // growing the left board list at `lg` as the shipped panel does. A and B (and the panel as shipped) stay one column
+            // until `lg`.
+            p.spike?.variant === "c"
+              ? "md:grid md:grid-cols-[minmax(0,1fr)_320px] md:items-start md:gap-6 md:p-6 lg:grid-cols-[248px_minmax(0,1fr)_320px]"
+              : `lg:grid lg:items-start lg:gap-6 lg:p-6 ${p.spike?.variant === "b" ? "lg:grid-cols-[288px_minmax(0,1fr)_320px]" : "lg:grid-cols-[248px_minmax(0,1fr)_320px]"}`
+          }`}
+        >
+          <SpikeLeft slot={p.spike?.variant === "b" ? p.spike.slot : null}>
           <nav aria-labelledby={ids.boards} className="hidden min-w-0 flex-col gap-1.5 lg:flex">
             <h2 id={ids.boards} className={`m-0 mb-1 text-xs font-semibold tracking-[0.06em] uppercase ${MUTED}`}>
               {f.t("arbiter.boardsHeading")}
@@ -291,7 +328,7 @@ export function ArbiterScreen(p: ArbiterScreenProps) {
             })}
           </nav>
 
-          <label className={`flex min-w-0 flex-col gap-1.5 text-[13px] font-semibold lg:hidden ${SOFT}`}>
+          <label className={`flex min-w-0 flex-col gap-1.5 text-[13px] font-semibold md:col-span-2 lg:hidden ${SOFT}`}>
             {f.t("arbiter.boardPicker")}
             <select
               value={board.fixtureId}
@@ -305,10 +342,11 @@ export function ArbiterScreen(p: ArbiterScreenProps) {
               ))}
             </select>
           </label>
-          <p className={`m-0 text-xs leading-[1.45] lg:hidden ${MUTED}`}>{f.t("arbiter.watchOnly")}</p>
+          <p className={`m-0 text-xs leading-[1.45] md:col-span-2 lg:hidden ${MUTED}`}>{f.t("arbiter.watchOnly")}</p>
+          </SpikeLeft>
 
           {/* centre column (desktop) */}
-          <div className="contents min-w-0 lg:flex lg:flex-col lg:gap-3.5">
+          <div className={`contents min-w-0 ${p.spike?.variant === "c" ? "md:flex md:flex-col md:gap-3.5" : "lg:flex lg:flex-col lg:gap-3.5"}`}>
             <div className="order-1 flex min-w-0 items-center justify-between gap-2 lg:items-baseline lg:gap-3">
               <h2 id={ids.board} className="m-0 min-w-0 text-xl font-semibold max-lg:sr-only">
                 {f.t("arbiter.boardNo", { n: board.boardNo })} · {board.white.name} <span className={`font-medium ${MUTED}`}>{f.t("arbiter.vs")}</span>{" "}
@@ -330,11 +368,26 @@ export function ArbiterScreen(p: ArbiterScreenProps) {
                 {f.t("arbiter.tile.retry")}
               </button>
             )}
+            {/* SPIKE variant C: the boards still waiting take the room under the camera (md and up); on a phone they follow the
+                countdown, above the board picker. Orders: phone -2 (hero) / -1 (this) / 0 (picker) ...; md: this sits at 3, between the
+                camera block (2) and the other reports (4). */}
+            {p.spike?.variant === "c" && p.spike.slot2 && (
+              <div className="min-w-0 max-md:order-[-1] md:order-3">{p.spike.slot2}</div>
+            )}
             <OtherReports round={p.round} board={board} f={f} />
           </div>
 
           {/* right column (desktop) */}
-          <div className="contents min-w-0 lg:flex lg:flex-col lg:gap-3.5">
+          <div className={`contents min-w-0 ${p.spike?.variant === "c" ? "md:flex md:flex-col md:gap-3.5" : "lg:flex lg:flex-col lg:gap-3.5"}`}>
+            {/* SPIKE variant C: the phase-adaptive round column tops the right column from `md`. On a phone it is FIRST (above the
+                board picker) while boards are checking in, and otherwise sits where its DOM puts it - after the picker and the
+                watch-only line (order 0), before the camera's order-1. */}
+            {p.spike?.variant === "c" && (
+              <div className={`min-w-0 md:order-first ${p.spike.phase === "checkin" ? "max-md:order-[-2]" : ""}`}>{p.spike.slot}</div>
+            )}
+            {/* SPIKE variant A: the round card tops the right column on a desktop (`lg:order-first`) and closes the phone's
+                stack (`max-lg:order-7`, past the outage card's order-6): flags and the decision stay under the camera. */}
+            {p.spike?.variant === "a" && <div className="min-w-0 max-lg:order-7 lg:order-first">{p.spike.slot}</div>}
             <section aria-labelledby={ids.flags} className="order-3 flex min-w-0 flex-col gap-2.5 border-t border-[#e7e3f3] pt-3 lg:border-t-0 lg:pt-0">
               <h2 id={ids.flags} className="m-0 text-[17px] font-semibold">
                 <span className="lg:hidden">{f.t("arbiter.flags.headingThis")}</span>
@@ -376,6 +429,18 @@ export function ArbiterScreen(p: ArbiterScreenProps) {
           </div>
         </main>
       )}
+    </div>
+  );
+}
+
+/** SPIKE variant B: the left column is the board list AND, under it, the round card. Below `lg` the wrapper is `contents`, so
+ *  on a phone the folded card is the next thing under the board picker (all order 0, so DOM order), above the camera's order-1. */
+function SpikeLeft({ slot, children }: { slot: ReactNode; children: ReactNode }) {
+  if (slot === null) return <>{children}</>;
+  return (
+    <div className="contents min-w-0 lg:flex lg:flex-col lg:gap-6">
+      {children}
+      <div className="min-w-0">{slot}</div>
     </div>
   );
 }
@@ -942,11 +1007,14 @@ export function ArbiterPanel({
   requested,
   slugs,
   initialFixtureId,
+  spike = null,
 }: {
   round: ArbiterRound | null;
   requested: ArbiterScreenProps["requested"];
   slugs: ArbiterScreenProps["slugs"];
   initialFixtureId: string | null;
+  /** SPIKE (?spike=a|b): the round controls' data and where to put them. */
+  spike?: { variant: SpikeVariant; data: SpikeRoundData } | null;
 }) {
   const router = useRouter();
   // I3: the board asked for, EXACTLY — absent from the round, the screen
@@ -1090,10 +1158,43 @@ export function ArbiterPanel({
     [slugs],
   );
 
-  return (
+  // SPIKE: the card is the fixtures tab's own OpenRoundControl + queue, mounted here. Variant B folds it on a phone - except
+  // before any round is open, when it is the only thing on the screen and stays open.
+  const onScreen = round === null ? null : { stageId: round.stageId, roundNo: round.roundNo };
+  const spikePhase = roundPhaseOf(round);
+  const spikeSlot =
+    spike === null || requested !== null ? null : spike.variant === "c" ? (
+      <SpikeRoundColumn round={round} data={spike.data} slugs={slugs} nowMs={nowMs} phase={spikePhase} />
+    ) : (
+      <SpikeRoundCard data={spike.data} slugs={slugs} onScreen={onScreen} />
+    );
+  // Variant C's second half: the waiting boards (check-in) or the paired boards (before open), laid where the room is.
+  const spikeView = round === null || spike === null ? null : (spike.data.rounds.find((r) => r.stageId === round.stageId && r.roundNo === round.roundNo) ?? null);
+  const spikeNext =
+    spike === null ? null : (spike.data.rounds.find((r) => r.state === "paired" && !(round !== null && r.stageId === round.stageId && r.roundNo === round.roundNo)) ?? null);
+  const spikeSlot2 =
+    spike === null || spike.variant !== "c" || requested !== null
+      ? null
+      : spikePhase === "checkin"
+        ? <SpikeCheckInWaiting />
+        : spikePhase === "before" && spikeNext !== null
+          ? <SpikePairingsPreview view={spikeNext} />
+          : null;
+  const spikeProp =
+    spike === null || spikeSlot === null
+      ? null
+      : {
+          variant: spike.variant,
+          phase: spikePhase,
+          slot2: spikeSlot2,
+          slot: spike.variant === "b" && round !== null ? <SpikeRoundFold data={spike.data} onScreen={onScreen}>{spikeSlot}</SpikeRoundFold> : spikeSlot,
+        };
+
+  const screen = (
     <ArbiterScreen
       round={round}
       requested={requested}
+      spike={spikeProp}
       decision={decision}
       roundExtend={roundExtend}
       video={video}
@@ -1127,5 +1228,13 @@ export function ArbiterPanel({
         },
       }}
     />
+  );
+  // SPIKE variant C, check-in: the hero (side column) and the waiting list (under the camera) share one press/Resend/+5 state.
+  return spike !== null && spike.variant === "c" && requested === null && round !== null && spikePhase === "checkin" ? (
+    <SpikeCheckInScope round={round} view={spikeView} tz={spike.data.tz} nowMs={nowMs}>
+      {screen}
+    </SpikeCheckInScope>
+  ) : (
+    screen
   );
 }

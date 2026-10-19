@@ -57,7 +57,7 @@ const BUTTON_PRIMARY =
 const BUTTON_QUIET =
   "inline-flex min-h-11 items-center justify-center rounded-lg border border-[#e7e3f3] bg-white px-3 text-sm font-medium text-[#5b21b6] hover:bg-[#f5f3ff] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7c3aed] disabled:opacity-60";
 
-const owedPlayers = (round: OpenRoundView) => round.pairings.reduce((n, p) => n + p.owedSeats, 0);
+export const owedPlayers = (round: OpenRoundView) => round.pairings.reduce((n, p) => n + p.owedSeats, 0);
 
 /** Seats this round's open already invited: two per board minus what it still owes, on the boards with a stamp. */
 const alreadyInvitedPlayers = (round: OpenRoundView) =>
@@ -190,7 +190,7 @@ function openNoticeText(n: OpenRoundNotice, round: OpenRoundView, msg: Msg, plur
   ];
 }
 
-function resendNoticeText(n: ResendNotice, msg: Msg, plural: Plural): string {
+export function resendNoticeText(n: ResendNotice, msg: Msg, plural: Plural): string {
   if (n.kind === "resent") return n.emailed > 0 ? plural("runsheet.round.resent", n.emailed) : msg("runsheet.round.resentNone");
   if (n.code === "WINDOW_CLOSED" || n.code === "BOARD_HELD") return msg(RESEND_REFUSAL_KEYS[n.code] as MessageKey);
   if (n.code === ONLINE_GAME_EXISTS_CODE) return msg("externalPlay.resend.gameExists");
@@ -199,7 +199,10 @@ function resendNoticeText(n: ResendNotice, msg: Msg, plural: Plural): string {
   return msg("runsheet.round.resendFailed");
 }
 
-export function OpenRoundControl({ round, tz }: { round: OpenRoundView; tz: string }) {
+/** SPIKE (variant C): the control's whole state and handlers, lifted out of the component so the arbiter panel's phase-adaptive
+ *  round column can lay the SAME press, "+5 min to the round", Resend and confirmation out differently by phase. Nothing is
+ *  forked: OpenRoundControl below is this hook plus its markup, as before. */
+export function useOpenRound(round: OpenRoundView, tz: string) {
   const msg = useMsg();
   const plural = useMsgPlural();
   const router = useRouter();
@@ -211,18 +214,6 @@ export function OpenRoundControl({ round, tz }: { round: OpenRoundView; tz: stri
     () => openRoundRunner({ dispatch, post: (path, body) => apiV1(path, { method: "POST", json: body }), refresh: () => router.refresh() }),
     [router],
   );
-
-  // The reader never sends a round with no pairing (openRound: no_fixtures); a guard, not a comment.
-  if (round.pairings.length === 0) {
-    return (
-      <p className={`px-4 py-3 text-sm ${MUTED}`} data-testid="open-round-empty">
-        {msg("externalPlay.openRound.noFixtures")}
-      </p>
-    );
-  }
-
-  // One (stage, round) per control on a page: a stable id, no useId.
-  const headingId = `open-round-${round.stageId}-${round.roundNo}`;
   const owed = owedPlayers(round);
   const canPress = round.press !== "none";
   const stateLine =
@@ -261,6 +252,46 @@ export function OpenRoundControl({ round, tz }: { round: OpenRoundView; tz: stri
   // Each group has its OWN deadline: group 0's no-shows reach the organiser before the last group has even opened, so a
   // staggered round draws the groups and not the one "open until" line, which could only name the last group's close.
   const batches = timedBatches(round);
+  return { msg, plural, state, dispatch, runner, clockMs, owed, canPress, stateLine, title, cta, confirmLabel, notice, copy, extendLines, reach, offersExtend, why, batches };
+}
+
+export type OpenRoundCtl = ReturnType<typeof useOpenRound>;
+
+/** The open confirmation (who the press reaches), bound to a control's state. */
+export function OpenRoundConfirm({ round, tz, ctl }: { round: OpenRoundView; tz: string; ctl: OpenRoundCtl }) {
+  const { msg, state, dispatch, runner } = ctl;
+  return (
+    <ConfirmDialog
+      open={state.confirming}
+      testId="open-round-confirm"
+      title={ctl.title}
+      confirmLabel={ctl.confirmLabel}
+      confirmVariant="primary"
+      cancelLabel={msg("confirm.cancel")}
+      busy={state.busy !== null}
+      onConfirm={() => void runner.open(round.stageId, round.roundNo)}
+      onCancel={() => dispatch({ type: "cancel" })}
+    >
+      <OpenRoundConfirmBody round={round} tz={tz} />
+    </ConfirmDialog>
+  );
+}
+
+export function OpenRoundControl({ round, tz }: { round: OpenRoundView; tz: string }) {
+  const ctl = useOpenRound(round, tz);
+  const { msg, plural, state, dispatch, runner, owed, canPress, stateLine, cta, notice, copy, extendLines, reach, offersExtend, why, batches } = ctl;
+
+  // The reader never sends a round with no pairing (openRound: no_fixtures); a guard, not a comment.
+  if (round.pairings.length === 0) {
+    return (
+      <p className={`px-4 py-3 text-sm ${MUTED}`} data-testid="open-round-empty">
+        {msg("externalPlay.openRound.noFixtures")}
+      </p>
+    );
+  }
+
+  // One (stage, round) per control on a page: a stable id, no useId.
+  const headingId = `open-round-${round.stageId}-${round.roundNo}`;
 
   return (
     <section
@@ -402,19 +433,7 @@ export function OpenRoundControl({ round, tz }: { round: OpenRoundView; tz: stri
         })}
       </ul>
 
-      <ConfirmDialog
-        open={state.confirming}
-        testId="open-round-confirm"
-        title={title}
-        confirmLabel={confirmLabel}
-        confirmVariant="primary"
-        cancelLabel={msg("confirm.cancel")}
-        busy={state.busy !== null}
-        onConfirm={() => void runner.open(round.stageId, round.roundNo)}
-        onCancel={() => dispatch({ type: "cancel" })}
-      >
-        <OpenRoundConfirmBody round={round} tz={tz} />
-      </ConfirmDialog>
+      <OpenRoundConfirm round={round} tz={tz} ctl={ctl} />
     </section>
   );
 }

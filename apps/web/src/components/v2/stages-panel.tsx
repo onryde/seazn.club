@@ -97,6 +97,8 @@ import { swissPairingMenuFor } from "@/lib/swiss-pairing-menu";
 import { buildRunSheet, isBye, type RunSheetFixture, type RunSheetOnlinePlay } from "@/lib/run-sheet-groups";
 import { RunSheet, type RunSheetFilter } from "@/components/v2/desk/run-sheet";
 import { OpenRoundControl } from "@/components/v2/desk/open-round-control";
+import { SpikeRoundLine } from "@/components/v2/spike/arbiter-round-spike";
+import { spikeRoundKey } from "@/components/v2/spike/spike-helpers";
 import { isOnlineGameExists, type OpenRoundView } from "@/lib/open-round";
 import { OnlineGameExistsNotice } from "@/components/v2/online-game-exists-notice";
 // Competition Desk W3 (Task 2) — the stage rail takes the three header
@@ -365,6 +367,9 @@ interface Props {
   /** T16 (T19 carry) — where a refused Unpair / Rebuild sends the organiser when an online game stands behind a board
    *  it would clear (409 ONLINE_GAME_EXISTS): the arbiter panel, which settles it. Null ⇒ the notice alone. */
   arbiterHref?: string | null;
+  /** SPIKE (?spike=a|b): when set, each online round is ONE line (boards needing a decision, by round) linking to the arbiter
+   *  panel, in place of the Open round control. */
+  spikeLines?: Record<string, number> | null;
 }
 
 // PROMPT-66: stage kinds that accept an ad-hoc match (standings fold every
@@ -479,7 +484,7 @@ export function boardSlotOptionsFor(
  *  whole panel every second. */
 const RUN_SHEET_NOW_TICK_MS = 60_000;
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, divisionConfig = {}, formatLockedStageIds = [], tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, openRounds, onlineAwaitsStart = false, arbiterHref = null }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, divisionConfig = {}, formatLockedStageIds = [], tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, openRounds, onlineAwaitsStart = false, arbiterHref = null, spikeLines = null }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -1299,9 +1304,13 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     boards wait on it. The page hands `openRounds` down only while the club is offered online chess
                     (an open STARTS play, T20); a viewer never gets one. */}
                 {canEdit &&
-                  (openRounds?.[stage.id] ?? []).map((r) => (
-                    <OpenRoundControl key={`${r.stageId}:${r.roundNo}`} round={r} tz={tz} />
-                  ))}
+                  (openRounds?.[stage.id] ?? []).map((r) =>
+                    spikeLines === null ? (
+                      <OpenRoundControl key={`${r.stageId}:${r.roundNo}`} round={r} tz={tz} />
+                    ) : (
+                      <SpikeRoundLine key={`${r.stageId}:${r.roundNo}`} round={r} attention={spikeLines[spikeRoundKey(r)] ?? 0} href={arbiterHref} />
+                    ),
+                  )}
                 {/* The same slot, before there is anything to open: an online division that has not started. One line,
                     on the first stage only — the start is the division's, not a stage's. */}
                 {canEdit && onlineAwaitsStart && stage.seq === Math.min(...stages.map((s) => s.seq)) && (
