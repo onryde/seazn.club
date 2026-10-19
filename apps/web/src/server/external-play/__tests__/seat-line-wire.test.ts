@@ -56,15 +56,45 @@ const cadenceMs = (position: number, need: number, pool: number, busy = false): 
 };
 /** Tokens the pool must hold before the stay at `position` can be admitted. */
 const tokensToAdmit = (position: number, need: number) => (position - 1) * AHEAD + need;
-/** The estimate as the rulebook states it. */
-const etaOf = (position: number, need: number, pool: number, busy = false) =>
-  Math.ceil(Math.max(0, tokensToAdmit(position, need) - pool) / RTK_BUDGET_REFILL_PER_S + cadenceMs(position, need, pool, busy) / 1_000);
 
 describe("etaS: the time to ADMISSION - the place ahead at its worst case, the stay's own at its own need, plus a poll's trail (final review M-2)", () => {
+  // Hand-computed from spec §5.7.9's own figures, NOT from a helper that retypes its formula (re-review m-4): a retyped formula
+  // freezes whatever the spec text said when it was written. The premise pins the constants these numbers rest on to the spec's
+  // figures (a place ahead "(24)" = 21 + 3; the front stay's cadence clamp [2 s, 3 s]; near places 1 to 5 at 3 s, behind at 5 s;
+  // a refill of 2 tokens a second); if one is changed on purpose, this table is recomputed by hand, not by the formula.
+  it("premise: the constants the hand-computed table rests on are the spec's figures", () => {
+    expect([LINE_RESERVATION, LINE_RECHECK_COST, RTK_BUDGET_REFILL_PER_S]).toEqual([21, 3, 2]);
+    expect(LINE_RESERVATION + LINE_RECHECK_COST, "the spec's priced place ahead: 24").toBe(24);
+    expect([LINE_POLL_MIN_MS, LINE_POLL_MS, LINE_POLL_SLOW_MS, LINE_NEAR_POSITIONS]).toEqual([2_000, 3_000, 5_000, 5]);
+  });
+
+  it("the table, worked by hand (tokens to admit = places ahead x 24 + own need; seconds = (tokens - pool) / 2 + the poll; rounded up)", () => {
+    // [label, position, need, pool, busy, etaS, working]
+    const table: [string, number, number, number, boolean, number, string][] = [
+      ["the spec's case: completing at the front, pool 22 (was told 0 s)", 1, 24, 22, false, 3, "short 24-22 = 2 -> 1 s; front cadence = 1 s clamped up to 2 s; 1 + 2 = 3"],
+      ["front, plain, dry pool", 1, 21, 0, false, 14, "short 21 -> 10.5 s; cadence clamped down to 3 s; 13.5 -> 14"],
+      ["front, pool exactly covers", 1, 21, 21, false, 2, "short 0; cadence floor 2 s; 0 + 2 = 2 (never 0)"],
+      ["front, one token short", 1, 21, 20, false, 3, "short 1 -> 0.5 s; cadence floor 2 s; 2.5 -> 3"],
+      ["second place, dry pool", 2, 21, 0, false, 26, "24 + 21 = 45 -> 22.5 s; near cadence 3 s; 25.5 -> 26"],
+      ["the last near place (5)", 5, 21, 0, false, 62, "4 x 24 + 21 = 117 -> 58.5 s; near cadence 3 s; 61.5 -> 62"],
+      ["the first slow place (6)", 6, 21, 0, false, 76, "5 x 24 + 21 = 141 -> 70.5 s; slow cadence 5 s; 75.5 -> 76"],
+      ["a completing stay at place 3 and a pool in the hole", 3, 24, -6, false, 42, "2 x 24 + 24 = 72; 72 + 6 = 78 -> 39 s; near cadence 3 s; 42"],
+      ["busy answer at the front: the floor is the trail", 1, 21, 0, true, 13, "10.5 s; busy cadence 2 s; 12.5 -> 13"],
+      ["a pool far past the place: only the trail of a slow place", 7, 21, 1_000, false, 5, "short < 0 -> 0 s; slow cadence 5 s; 5"],
+    ];
+    let checked = 0;
+    for (const [label, position, need, pool, busy, want, working] of table) {
+      expect(lineWire({ ...base, position, need, pool, busy }).etaS, `${label} (${working})`).toBe(want);
+      checked += 1;
+    }
+    expect(checked, "rows checked").toBe(table.length);
+    expect(table.length, "anti-vacuity: the table is not empty").toBeGreaterThanOrEqual(10);
+  });
+
   it("the empty case first: a pool that already covers the place leaves only the poll's trail, never 0 (the stay is admitted at its NEXT poll)", () => {
     for (const pool of [LINE_RESERVATION, 10 * LINE_RESERVATION]) {
       const got = lineWire({ ...base, position: 1, pool }).etaS;
-      expect(got, `pool ${pool}`).toBe(Math.ceil(cadenceMs(1, LINE_RESERVATION, pool) / 1_000));
+      expect(got, `pool ${pool}: the front stay's cadence floor, 2 s, and nothing else`).toBe(2);
       expect(got, "a held stay is never told it is admitted now").toBeGreaterThan(0);
     }
   });
@@ -77,7 +107,7 @@ describe("etaS: the time to ADMISSION - the place ahead at its worst case, the s
     const waitS = (need - pool) / RTK_BUDGET_REFILL_PER_S;
     expect(waitS, "premise: a real wait for the pool").toBeGreaterThan(0);
     expect(got, "at least the wait for the pool").toBeGreaterThanOrEqual(Math.ceil(waitS));
-    expect(got, "and the poll that admits it").toBe(Math.ceil(waitS + cadenceMs(1, need, pool) / 1_000));
+    expect(got, "the wait for the pool (2 tokens at 2 a second: 1 s) and the poll that admits it (the 2 s floor), by hand").toBe(3);
     // The wrong answer's constant: the old formula (position x LINE_RESERVATION - pool) said 0 here.
     expect(Math.max(0, 1 * LINE_RESERVATION - pool), "premise: the old pricing said 0 s").toBe(0);
     expect(got).toBeGreaterThan(0);
@@ -87,8 +117,8 @@ describe("etaS: the time to ADMISSION - the place ahead at its worst case, the s
     const at = (pool: number) => lineWire({ ...base, position: 1, pool, need: LINE_RESERVATION }).etaS;
     const exact = at(LINE_RESERVATION);
     const short = at(LINE_RESERVATION - 1);
-    expect(exact).toBe(etaOf(1, LINE_RESERVATION, LINE_RESERVATION));
-    expect(short).toBe(etaOf(1, LINE_RESERVATION, LINE_RESERVATION - 1));
+    expect(exact, "covered: only the 2 s floor of the poll").toBe(2);
+    expect(short, "one token short: 0.5 s of refill and the 2 s floor, 2.5 rounded up").toBe(3);
     expect(short, "one token short is not the same as covered").toBeGreaterThan(exact);
   });
 
@@ -101,7 +131,7 @@ describe("etaS: the time to ADMISSION - the place ahead at its worst case, the s
     expect(AHEAD, "premise: the ahead price is more than the plain reservation").toBeGreaterThan(LINE_RESERVATION);
   });
 
-  it("is an upper bound by the rulebook: at the refill rate the pool reaches what the place is promised no later than etaS, and etaS holds the poll's trail (swept, counted)", () => {
+  it("is an upper bound by the rulebook: at the refill rate the pool reaches what the place is promised no later than etaS, and etaS holds the poll's trail (swept, counted; the exact numbers are the hand-computed table above)", () => {
     let checked = 0;
     for (const position of [1, 2, 3, 7]) {
       for (const need of [LINE_RESERVATION, COMPLETING]) {
@@ -111,7 +141,6 @@ describe("etaS: the time to ADMISSION - the place ahead at its worst case, the s
             const label = `position ${position} need ${need} pool ${pool} busy ${busy}`;
             expect(got, `${label}: the pool has grown to what is promised`).toBeGreaterThanOrEqual(Math.ceil((tokensToAdmit(position, need) - pool) / RTK_BUDGET_REFILL_PER_S));
             expect(got, `${label}: at least the poll's trail`).toBeGreaterThanOrEqual(Math.ceil(cadenceMs(position, need, pool, busy) / 1_000));
-            expect(got, `${label}: exactly the rulebook's number`).toBe(etaOf(position, need, pool, busy));
             checked += 1;
           }
         }
