@@ -43,6 +43,7 @@ import { OVERLAY_SCENES } from "@/components/overlay/overlay-scenes";
 import { decidedOutcomeTemplates } from "@/lib/scoring-vocab";
 import { StreamTemplatePicker } from "@/components/v2/stream-template-picker";
 import { ScoreLiveSummary, ScoreTiming } from "@/components/v2/stream-score-settings";
+import { threeLetterCode, type OverlaySideInput } from "@/lib/overlay-model";
 import { ApiV1Error } from "@/lib/client-v1";
 import { CaptureQrV2, captureQrV2Text } from "@/lib/capture-qr";
 import { messages, type MessageKey } from "@/lib/messages";
@@ -206,6 +207,7 @@ function ctx(o: Partial<StreamPanelContext> = {}): StreamPanelContext {
     composedAvailable: false,
     streamPrefs: {},
     overlayDelayDefaultMs: RELAY_OVERLAY_DELAY_DEFAULT_MS,
+    overlaySides: {},
     ...o,
   };
 }
@@ -385,6 +387,25 @@ describe("R2006 P3: the OBS tab's picker is built from the registry and opens on
     expect(props.preview.snapshot.venueTz, "the VENUE zone, never the org zone").toBe(TZ);
     expect(props.preview.dict).toEqual({ "overlay.vs": "contre" });
     expect(props.preview.sportKey).toBe("football");
+  });
+
+  it("I3 (PR #987 review): every thumbnail names the sides as the overlay AIRS them — the context's overlaySides (codes included), never the organiser's names re-coded", () => {
+    // What the overlay page's loader airs for a person pair (server/stream-panel-preview-sides.test.ts derives these from
+    // `relayOverlayPageFacts` itself): surnames, where the names re-coded as teams would read LEE / VIK.
+    const aired: [OverlaySideInput, OverlaySideInput] = [
+      { id: "e1", name: "Lee Chong Wei", short: "WEI", colour: null },
+      { id: "e2", name: "Viktor Axelsen", short: "AXE", colour: null },
+    ];
+    const props = pickerProps(open({ overlaySides: { [FIXTURE.id]: aired } }).tree());
+    expect(props.preview.sides, "the aired sides, as handed").toEqual(aired);
+    const html = renderToStaticMarkup(<StreamTemplatePicker {...props} />);
+    const codes = [...html.matchAll(/<span class="ovl-bug-code">([^<]*)<\/span>/g)].map((x) => x[1]);
+    expect(codes.length, "premise: a bug thumbnail draws both codes").toBeGreaterThanOrEqual(2);
+    expect(codes.slice(0, 2)).toEqual(["WEI", "AXE"]);
+    expect(codes, "never the names re-coded as teams").not.toContain(threeLetterCode("Lee Chong Wei"));
+    // Another fixture's aired sides are never this row's: the fallback is the row's own names.
+    const other = pickerProps(open({ overlaySides: { "f-other": aired } }).tree());
+    expect(other.preview.sides.map((x) => x.name)).toEqual([ENTRANTS.e1, ENTRANTS.e2]);
   });
 
   it("capture-qr-v2 OFF (owner 2026-10-04): no Phone/OBS switch at all — the OBS overlay shows directly, the Phone tab's container never mounts, and the stop probe keeps a leftover stream stoppable", () => {

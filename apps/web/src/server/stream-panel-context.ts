@@ -14,6 +14,8 @@ import { preferredCurrency } from "@/lib/currency-server";
 import { isServerFeatureEnabled } from "@/lib/posthog-server";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { overlayKeyFor } from "@/server/overlay/overlay-key";
+import { relayOverlayPageFacts } from "@/server/overlay/page-facts";
+import type { OverlaySideInput } from "@/lib/overlay-model";
 import { overlayDictOf } from "@/lib/overlay-dict";
 import { DEFAULT_STREAM_PREFS, type StreamPrefs } from "@/lib/stream-settings";
 import { AUTO_STOP_AFTER_RESULT_SECONDS, PHONE_LOST_LIVE_MINUTES, RELAY_OVERLAY_DELAY_DEFAULT_MS, tunable } from "@/server/relay/config";
@@ -83,6 +85,19 @@ async function phoneCaptureOffered(auth: AuthCtx): Promise<boolean> {
 }
 
 const NO_STORED_PREFS: Record<string, StreamPrefs> = {};
+type PreviewSides = Record<string, [OverlaySideInput, OverlaySideInput]>;
+const NO_PREVIEW_SIDES: PreviewSides = {};
+
+/** I3 (PR #987 review): the sides the style grid's thumbnails render — the AIRED sides, read through the overlay page's
+ *  own loader (`relayOverlayPageFacts`: the composed session's door; the public door OBS opens masks names and
+ *  disambiguates codes by the same rules, page-facts.ts header). So a person pair previews the codes it airs (Lee Chong
+ *  Wei v Viktor Axelsen: WEI / AXE, never the names re-coded as teams), a masked name previews masked, and whatever the
+ *  overlay's side rule becomes, the preview follows it. The relay door reads the base tables unfiltered, so a fixture
+ *  that is not `orgId`'s is dropped here — the panel never previews another org's sides. */
+export async function overlayPreviewSides(orgId: string, fixtureIds: readonly string[]): Promise<PreviewSides> {
+  const facts = await Promise.all(fixtureIds.map(async (id) => [id, await relayOverlayPageFacts(id)] as const));
+  return Object.fromEntries(facts.flatMap(([id, f]) => (f !== null && f.org.id === orgId ? [[id, f.sides] as const] : [])));
+}
 
 export async function loadStreamPanelContext(args: {
   auth: AuthCtx;
@@ -120,11 +135,13 @@ export async function loadStreamPanelContext(args: {
   // The capture-qr-v2 flag rides the same Promise.all: an independent read, only with the panel (`entitled`).
   const relayOn = relayEntitled && !relayDisabled;
   // R2006: the listed fixtures' stored score preferences — one read, only with the panel (`entitled`).
-  const [credits, currency, phoneCapture, storedPrefs] = await Promise.all([
+  // I3: the aired sides for the preview — only with the panel.
+  const [credits, currency, phoneCapture, storedPrefs, previewSides] = await Promise.all([
     relayOn ? relayCredits(auth, auth.orgId) : null,
     relayOn ? preferredCurrency(auth.orgId) : ("gbp" as const),
     entitled ? phoneCaptureOffered(auth) : false,
     entitled ? streamPrefsOf(auth.orgId, args.fixtureIds) : NO_STORED_PREFS,
+    entitled ? overlayPreviewSides(auth.orgId, args.fixtureIds) : NO_PREVIEW_SIDES,
   ]);
   return {
     entitled,
@@ -137,6 +154,8 @@ export async function loadStreamPanelContext(args: {
     // R2006: the delay a composed session serves when the fixture sets none — the number the session create copies
     // (stream-sessions.ts), so the panel's "Default {seconds}s" is the server's, never a typed one. No read.
     overlayDelayDefaultMs: RELAY_OVERLAY_DELAY_DEFAULT_MS,
+    // I3: each listed fixture's sides as the overlay airs them (`overlayPreviewSides`).
+    overlaySides: previewSides,
     // Streaming R1 lane D: the Phone tab's routes address the org, and its idle state needs the balance before any
     // session exists (C1). Read only when the relay is entitled and running — otherwise the tab shows its switched-off
     // or unavailable state (fixture-stream-panel.tsx), which reads no balance.

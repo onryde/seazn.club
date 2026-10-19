@@ -181,6 +181,10 @@ export interface StreamPanelContext {
   /** R2006: config.ts `RELAY_OVERLAY_DELAY_DEFAULT_MS` — the delay a composed session serves when the fixture sets none.
    *  Score timing's "Default {seconds}s" and its reset value; the panel never types the number. */
   overlayDelayDefaultMs: number;
+  /** I3 (PR #987 review): each listed fixture's sides as the overlay AIRS them — names masked and codes disambiguated by
+   *  the overlay page's own loader (server/stream-panel-context.ts `overlayPreviewSides`). The style grid's thumbnails
+   *  render these, so a person pair previews the codes it airs. A fixture absent here previews the row's own names. */
+  overlaySides: Record<string, [OverlaySideInput, OverlaySideInput]>;
   sportKey: string;
   overlayDict: Record<string, string>;
   /** The org the fixture belongs to — the stream-targets and relay-checkout routes address it. */
@@ -356,7 +360,9 @@ export function FixtureStreamPanel({
   const previewData: TemplatePreviewData = {
     sportKey: stream.sportKey,
     snapshot: live ?? seed,
-    sides: [sideOf(fixture.home_entrant_id, "home"), sideOf(fixture.away_entrant_id, "away")],
+    // I3: the AIRED sides (the overlay page's own loader), so the codes are the ones that go out; the row's own names
+    // only when the loader answered nothing for this fixture.
+    sides: stream.overlaySides[fixture.id] ?? [sideOf(fixture.home_entrant_id, "home"), sideOf(fixture.away_entrant_id, "away")],
     startLabel: overlayStartLabel(fixture.scheduled_at, locale, tz),
     dict: stream.overlayDict,
     decidedTemplates: decidedOutcomeTemplates(msg, stream.sportKey),
