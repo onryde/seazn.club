@@ -174,7 +174,8 @@ const PARALLEL_SLICE = process.env.E2E_PARALLEL_SLICE;
 // "stream", "rest" (the catch-all: it ignores the two carve-outs and nothing
 // else, so a new walkthrough spec joins it with no list to edit), unset = the
 // whole directory, which is what every local run takes. e2e.yml's e2e-parallel
-// matrix carries the measurements; e2e-ci-wiring.test.ts pins the partition.
+// matrix carries the measurements (run 39332874412: job 650 / 684 / 718 / 551s,
+// the slowest 12.0 min); e2e-ci-wiring.test.ts pins the partition.
 // ANCHORED ON `e2e/` deliberately. Playwright matches `testMatch`/`testIgnore`
 // against the file's ABSOLUTE path, not a path relative to `testDir`, so a
 // bare /walkthrough\// also matches every checkout that happens to live under

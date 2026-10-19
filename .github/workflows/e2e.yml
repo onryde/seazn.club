@@ -412,8 +412,26 @@ jobs:
           # selected twice, none dropped (3 count shards 121 / 122 / 118; four
           # legs 31 / 31 / 154 / 145, setup excluded).
           #
-          # NO MEASURED NUMBERS YET: the replay above is a prediction. The
-          # measured legs of the dispatch that proved it are recorded below.
+          # MEASURED, run 39332874412 (PR #998 dispatch, 13/13 jobs green, no
+          # failure or flake). Job / Playwright step / setup before the step:
+          #
+          #   capture      650s / 492s / 154s    (replayed 477s)
+          #   stream       684s / 525s / 154s    (replayed 535s)
+          #   rest 1/2     718s / 557s / 155s    (replayed 606s)
+          #   rest 2/2     551s / 391s / 155s    (replayed 382s)
+          #
+          # The slowest walkthrough leg is rest 1/2 at 12.0 min, against 18.6
+          # for the old 1/3 on run 39326082029; the slowest of the whole
+          # run is parallel 2/4 at 730s (12.2 min), so the walkthrough legs are
+          # no longer the cap's neighbour. CI ran exactly the listed counts: 33,
+          # 33, 156 and 147 tests, which is the `--list` count including the two
+          # setup tests, and rest 1/2 (the shard that holds event-pass.spec.ts)
+          # ran its money-path check while the other three printed the notice.
+          # Replay error was -3% / +2% / +9% / -2% (step). The runner-time cost
+          # is 2603 job-seconds against 2529 for the three-way cut (+3%): one
+          # more setup, paid for by no leg being within a minute of the cap.
+          # On a slow day (steps +30%, setup 240s, an estimate and not a
+          # measurement) rest 1/2 is ~16.1 min; the old 1/3 was over the cap.
           #
           # (SUPERSEDED, see above.) SHARDED THREE WAYS 2026-09-22 (owner ruling), replacing the single
           # `--workers=3` leg this block used to describe. The file has grown
