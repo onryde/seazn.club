@@ -8,7 +8,7 @@ Organisers add players to their club directory; claiming links that entry to you
 
 ## How claiming works
 
-An organiser sends you a **claim invite** by email. Open the link in that email and tap **Claim and sign in**: you're signed in as the invited address (we create your account if you don't have one) and the profile is yours, in one step — no password and no second email. Nothing happens until you tap. The link works for 14 days and for one profile, and it signs you in, so treat the email like a sign-in email and don't forward it. Signing in accepts our [Terms of Service](/legal/terms) and [Privacy Policy](/legal/privacy) — the notice sits under the button.
+An organiser sends you a **claim invite** by email. Open the link in that email and tap **Claim and sign in**: you're signed in as the invited address (we create your account if you don't have one) and the profile is yours, in one step — no password and no second email. Nothing happens until you tap. The link works for 14 days and for one profile, but it only signs you in for 72 hours after it was sent — treat the email like a sign-in email and don't forward it. After 72 hours, opening it asks you to sign in with the invited address first (a magic link, no password), then tap **This is me**, exactly like the link below. Signing in accepts our [Terms of Service](/legal/terms) and [Privacy Policy](/legal/privacy) — the notice sits under the button.
 
 Were you handed a link or QR code by the organiser instead of the email? That one asks you to sign in first: use **that same email address** (a magic link, no password), then tap **This is me**.
 

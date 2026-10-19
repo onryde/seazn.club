@@ -12,7 +12,7 @@ In **Directory → Players**, choose **Invite to claim…** next to a player and
 
 There are two different links, on purpose:
 
-- **The link in the email** signs the player in. They open it, tap **Claim and sign in**, and they're signed in as the invited address (an account is created if that address has none) with the profile claimed — no password and no second email. Opening the email proves the address is theirs, so nothing else is asked. Nothing happens until they tap, so a mail scanner previewing the link can't use it up.
+- **The link in the email** signs the player in. They open it, tap **Claim and sign in**, and they're signed in as the invited address (an account is created if that address has none) with the profile claimed — no password and no second email. Opening the email proves the address is theirs, so nothing else is asked. Nothing happens until they tap, so a mail scanner previewing the link can't use it up. It signs people in for 72 hours after it is sent; after that it still finds the profile, but the player has to sign in first, like the copyable link below. Sending a new invite starts the 72 hours again. If the address already has an account that was never verified, claiming clears its password (the player can set a new one with **Forgot password**).
 - **The copyable link and QR in your console** is for you to hand over yourself. Whoever opens it has to sign in first, and **only an account signed in with that exact address can accept it** — so a link you pasted into a group chat doesn't move the profile to someone else.
 
 Tell players to treat the invite email like a sign-in email and not forward it.
