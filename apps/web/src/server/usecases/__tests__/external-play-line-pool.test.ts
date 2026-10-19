@@ -6,11 +6,14 @@
 // a stated level at that instant (`setBucket`), so no refill hides a shortfall. Every expected number is the declaration it follows:
 // LINE_RESERVATION and LINE_RECHECK_COST are read from the module that declares them and the sums are made HERE from raw rows -
 // never from the code under test's own arithmetic. Single sport, deliberately: the gate does not know a sport.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sql } from "@/lib/db";
 import {
   ADMIT_HOLD_MS,
   LINE_ABANDON_AFTER_MS,
+  LINE_COMPLETING_LEVEL,
   LINE_READ_CALLS,
   LINE_RECHECK_COST,
   LINE_RELEASE_GRACE_MS,
@@ -270,6 +273,23 @@ describe.skipIf(!DB)("a new arrival joins the tail (test 17)", () => {
     const row = await stayRow(a.fixtureId, a.home.personId);
     expect([row!.queued_at, row!.admitted_at]).toEqual([null, null]);
     expect(row!.last_gate).toBe("passed");
+  });
+});
+
+// ─── LINE_COMPLETING_LEVEL is derived, never typed (spec §5.7.3 constants row) ───────────────────────────────────────────────
+// No database: the constant's value and the text of its declaration. The value alone cannot tell a typed 7 from the sum while the three
+// terms still add up to 7; the declaration's text can, so a literal fails here the day it is typed, not the day `LINE_READ_CALLS` moves.
+describe("LINE_COMPLETING_LEVEL is the seating claim's own spend plus the opponent's re-verify (test 37 (e), the constants row)", () => {
+  it("equals LINE_READ_CALLS + LINE_TOKEN_CALLS + LINE_RECHECK_COST, and sits above the re-verify's price alone", () => {
+    expect(LINE_COMPLETING_LEVEL).toBe(LINE_READ_CALLS + LINE_TOKEN_CALLS + LINE_RECHECK_COST);
+    expect(LINE_COMPLETING_LEVEL, "above LINE_RECHECK_COST: the two checks differ").toBeGreaterThan(LINE_RECHECK_COST);
+  });
+  it("is declared as that sum of the three constants in seat-line.ts, not as a literal", () => {
+    const src = readFileSync(join(import.meta.dirname, "..", "..", "external-play", "seat-line.ts"), "utf8");
+    const decl = /export const LINE_COMPLETING_LEVEL\s*=\s*([^;]+);/.exec(src);
+    expect(decl, "the declaration was found").not.toBeNull();
+    const terms = decl![1]!.split("+").map((t) => t.trim()).sort();
+    expect(terms).toEqual(["LINE_READ_CALLS", "LINE_RECHECK_COST", "LINE_TOKEN_CALLS"]);
   });
 });
 
