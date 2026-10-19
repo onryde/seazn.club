@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { NEXT_PATH_MAX_LENGTH } from "@/lib/types";
 import { sql } from "@/lib/db";
 import { createSession, postAuthLanding } from "@/lib/auth";
 import { handler } from "@/lib/http";
@@ -9,18 +10,18 @@ import { headers } from "next/headers";
 // `next` is the post-verify redirect the emailed link carries (a signup from
 // the invite, claim, check-in or login page). Without this key `.strict()`
 // 400s every link that carries one. Two outcomes, on purpose:
-//  - a STRING of up to 500 characters passes here and is re-validated by
+//  - a STRING of up to NEXT_PATH_MAX_LENGTH characters passes here and is re-validated by
 //    postAuthLanding's safeNextPath. An unsafe string (an absolute or
 //    protocol-relative URL, a backslash authority, `javascript:`) is IGNORED,
 //    and the user gets the default landing;
-//  - anything else, i.e. a string over 500 characters or a non-string (null,
+//  - anything else, i.e. a string over that length or a non-string (null,
 //    a number, an array, an object), fails this schema with a 400 before the
 //    token is read, so the link itself stays usable.
-// 500 is signupSchema's bound, and signup is what put `next` into the link.
+// That bound is signupSchema's (lib/types.ts), and signup is what put `next` into the link.
 const schema = z
   .object({
     token: z.string().min(10),
-    next: z.string().max(500).optional(),
+    next: z.string().max(NEXT_PATH_MAX_LENGTH).optional(),
   })
   .strict();
 

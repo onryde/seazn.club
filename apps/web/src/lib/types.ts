@@ -114,12 +114,27 @@ export interface InvitePreview {
 
 // ---- request payload schemas -------------------------------------------------
 
+/** The longest `next` (post-auth return path) any sign-in step accepts, in characters. ONE bound for the whole
+ *  chain: the login page, the password login and signup, the magic-link request and its consume, and the
+ *  verify-email link all carry the SAME string, and a bound that differs between two of them 400s the person at the
+ *  later one. It is a sanity bound, not the open-redirect guard: `safeNextPath` (lib/auth.ts) is that, and it
+ *  re-validates every `next` after this schema.
+ *
+ *  Sized from the longest real thing that rides in it: the match room's "Link Lichess" nests the room path, with its
+ *  ~370-character personal token, inside the Lichess start URL, and that start URL is what a signed-out player is
+ *  bounced through login with. Measured from the real builders: ~550 characters with ordinary slugs and ~800 with
+ *  the widest legal ones (80 characters each), which the old bound of 500 refused at the first step. 2048 leaves the
+ *  widest real link well over twice the room, and is short enough that the start's `seazn_lichess_oauth_next` cookie
+ *  (the room path, URL-encoded: ~700 bytes at the widest) stays far under a cookie's 4 KB.
+ *  `lichess-link-login-round-trip.test.ts` derives all of this from the real builders. */
+export const NEXT_PATH_MAX_LENGTH = 2048;
+
 export const loginSchema = z.object({
   email: z.string().email().max(120),
   password: z.string().min(6).max(100),
   /** Post-auth redirect carried through invite links; validated server-side
    *  by safeNextPath. Without this key .strict() 400s every invite signup. */
-  next: z.string().max(500).optional(),
+  next: z.string().max(NEXT_PATH_MAX_LENGTH).optional(),
 }).strict();
 
 export const signupSchema = loginSchema;

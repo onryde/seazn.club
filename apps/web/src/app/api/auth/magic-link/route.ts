@@ -7,6 +7,7 @@ import { createLoginLink } from "@/lib/login-link";
 import { baseUrl } from "@/lib/oauth";
 import { mayExposeDevLink } from "@/lib/dev-links";
 import { z } from "zod";
+import { NEXT_PATH_MAX_LENGTH } from "@/lib/types";
 import { rateLimit, EMAIL_LIMIT } from "@/lib/rate-limit";
 import { headers } from "next/headers";
 
@@ -15,7 +16,7 @@ import { headers } from "next/headers";
 const schema = z
   .object({
     email: z.string().email().max(120),
-    next: z.string().max(500).optional(),
+    next: z.string().max(NEXT_PATH_MAX_LENGTH).optional(),
   })
   .strict();
 

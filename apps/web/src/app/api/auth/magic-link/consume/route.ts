@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { NEXT_PATH_MAX_LENGTH } from "@/lib/types";
 import { createSession, postAuthLanding } from "@/lib/auth";
 import { handler } from "@/lib/http";
 import { consumeLoginLink } from "@/lib/login-link";
@@ -10,7 +11,7 @@ import { headers } from "next/headers";
 const schema = z
   .object({
     token: z.string().min(10),
-    next: z.string().max(500).optional(),
+    next: z.string().max(NEXT_PATH_MAX_LENGTH).optional(),
   })
   .strict();
 
