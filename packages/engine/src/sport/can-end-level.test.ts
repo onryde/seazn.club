@@ -203,6 +203,23 @@ describe("bracketMayEndLevel: the helper the web asks", () => {
     expect(bracketMayEndLevel(football, null, off), "no stage kind (the division level) makes no claim").toBe(false);
   });
 
+  it("lays the sport's bracketDeciders over the cfg: a drawn-game carrom division is not level in a knockout, the extra board decides it", () => {
+    const carrom = sport("carrom");
+    const drawn = carrom.configSchema.parse({ ...Object.values(carrom.variants)[0], tieBoard: "draw", abandonPolicy: "share" }) as Record<string, unknown>;
+    expect(carrom.canEndLevel!(drawn as never), "premise: asked of the raw cfg the declaration says a drawn game stands").toBe(true);
+    expect((carrom.bracketDeciders(drawn as never) as Record<string, unknown>).tieBoard, "premise: the overlay forces the extra board").toBe("extra");
+    let checked = 0;
+    for (const kind of BRACKET_KINDS) {
+      expect(bracketMayEndLevel(carrom, kind, drawn), `${kind}`).toBe(false);
+      checked++;
+    }
+    for (const kind of DRAW_KINDS) {
+      expect(bracketMayEndLevel(carrom, kind, drawn), `${kind} (a table)`).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(BRACKET_KINDS.size + DRAW_KINDS.size);
+  });
+
   it("a module that declares no decider makes no claim, whatever the cfg", () => {
     const badminton = sport("badminton");
     expect(deciderKeysFor(badminton, "knockout", null)).toEqual([]);

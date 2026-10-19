@@ -117,6 +117,74 @@ describe("the deciders notice reads the RESOLVED cfg (carry G1) and treats chess
   });
 });
 
+describe("the bracket overlay reaches the notice by BOTH routes, each alone (carry G1)", () => {
+  const carrom = sport("carrom");
+  const drawnDivision = (): Record<string, unknown> =>
+    carrom.configSchema.parse({ ...Object.values(carrom.variants)[0], tieBoard: "draw", abandonPolicy: "share" }) as Record<string, unknown>;
+
+  it("the resolved cfg IS the cfg the bracket plays: the sport's overlay is laid over the division's (every sport that has one, counted)", () => {
+    let checked = 0;
+    let differs = 0;
+    for (const m of builtinModules) {
+      if (typeof m.bracketDeciders !== "function") continue;
+      for (const { cfg } of declaredCfgs(m)) {
+        const parsed = m.configSchema.parse(cfg) as Record<string, unknown>;
+        const resolved = resolvedStageCfg(m, parsed, "knockout", null)!;
+        const overlay = m.bracketDeciders(parsed as never) as Record<string, unknown>;
+        expect(resolved, `${m.key}`).toMatchObject(overlay);
+        if (Object.entries(overlay).some(([k, v]) => JSON.stringify(parsed[k]) !== JSON.stringify(v))) differs++;
+        checked++;
+      }
+    }
+    expect(checked, "sports with an overlay were walked").toBeGreaterThan(0);
+    expect(differs, "and at least one cfg where the overlay CHANGES the division's value (else the sweep proves nothing)").toBeGreaterThan(0);
+    // The witness: a drawn-game carrom division plays the extra board in a bracket.
+    expect(resolvedStageCfg(carrom, drawnDivision(), "knockout", null)!.tieBoard).toBe("extra");
+    expect(resolvedStageCfg(carrom, drawnDivision(), "league", null)!.tieBoard, "a table stage keeps the division's").toBe("draw");
+  });
+
+  it("the notice's own read lays the overlay too: the RAW drawn-game carrom cfg answers as the resolved one, in every bracket kind", () => {
+    let checked = 0;
+    for (const kind of BRACKETS) {
+      const raw = drawnDivision();
+      const resolved = resolvedStageCfg(carrom, raw, kind, null)!;
+      expect(decidersAllOff(carrom, kind, raw), `${kind} raw`).toBe(false);
+      expect(decidersAllOff(carrom, kind, raw), `${kind}: raw = resolved`).toBe(decidersAllOff(carrom, kind, resolved));
+      expect(deciderNotice(carrom, kind, raw), `${kind}`).toBe(deciderNotice(carrom, kind, resolved));
+      checked++;
+    }
+    expect(checked).toBe(BRACKETS.length);
+  });
+
+  it("a decider the overlay forces ON counts even where its key is not declared for the kind: another applicable decider being off does not hold the match (a double)", () => {
+    // football with `shootout` declared for table stages only, and an overlay that forces it on: in a knockout the only
+    // DECLARED decider is extra time, which is off - but the overlay plays a shoot-out, so nothing is held.
+    const ruleKeys = { ...football.ruleKeys, extraTime: { ...football.ruleKeys!.extraTime!, appliesTo: { stageKinds: ["knockout"] } }, shootout: { ...football.ruleKeys!.shootout!, appliesTo: { stageKinds: ["league"] } } };
+    const forcing = { ...football, ruleKeys, bracketDeciders: () => ({ shootout: true }) } as unknown as AnySportModule;
+    const quiet = { ...forcing, bracketDeciders: () => ({}) } as unknown as AnySportModule;
+    expect(deciderKeysFor(forcing, "knockout", null), "premise: only extra time is declared for a knockout").toEqual(["extraTime"]);
+    expect(deciderKeysFor(forcing, null, null), "premise: the shoot-out is declared, for tables").toContain("shootout");
+    const allOff = { ...(football.configSchema.parse(football.variants["11-a-side"]) as Record<string, unknown>), shootout: false, extraTime: { enabled: false, halfMinutes: 15 } };
+    expect(decidersAllOff(quiet, "knockout", allOff), "control: with no overlay the one declared decider is off, so the match is held").toBe(true);
+    expect(decidersAllOff(forcing, "knockout", allOff), "the forced shoot-out is a decider the stage plays").toBe(false);
+  });
+});
+
+describe("deciderNotice names its mode (football knockout, from the engine's declarations)", () => {
+  const division = football.configSchema.parse(football.variants["11-a-side"]) as Record<string, unknown>;
+  const withRules = (rules: Record<string, unknown>) => resolvedStageCfg(football, division, "knockout", rules)!;
+  const OFF = { enabled: false, halfMinutes: 15 };
+  const ON = { enabled: true, halfMinutes: 15 };
+
+  it("every decider off -> 'off'; extra time alone -> 'level'; a shoot-out -> none; a league -> none (each mode and the empty case)", () => {
+    expect(deciderNotice(football, "knockout", withRules({ shootout: false, extraTime: OFF }))).toBe("off");
+    expect(deciderNotice(football, "knockout", withRules({ shootout: false, extraTime: ON }))).toBe("level");
+    expect(deciderNotice(football, "knockout", withRules({ shootout: true, extraTime: OFF }))).toBeNull();
+    expect(deciderNotice(football, "knockout", withRules({ shootout: true, extraTime: ON }))).toBeNull();
+    expect(deciderNotice(football, "league", resolvedStageCfg(football, division, "league", { shootout: false, extraTime: OFF })!)).toBeNull();
+  });
+});
+
 describe("the notice and the public line agree, and the engine's declaration says when a level match can remain (M-3)", () => {
   it("over every declared cfg, bracket kind and the every-decider-off setup: allOff <=> the public line says none; level <=> the engine says so (counted)", () => {
     let checked = 0;
@@ -232,6 +300,7 @@ describe("the stage sections: every shown field is in exactly one section (count
   it("format, deciders and abandon partition the shown fields, and the abandon field is the abandon section's", () => {
     let fields = 0;
     let withDeciders = 0;
+    let withAbandon = 0;
     for (const m of builtinModules)
       for (const kind of ["league", ...BRACKET_KINDS] as StageKind[]) {
         const shown = stageFieldsShown(m, kind, null);
@@ -240,6 +309,12 @@ describe("the stage sections: every shown field is in exactly one section (count
         expect(placed.sort(), `${m.key}/${kind}`).toEqual(shown.map((f) => f.key).sort());
         for (const s of sections) expect(s.fields.length, `${m.key}/${kind}/${s.id} is empty`).toBeGreaterThan(0);
         for (const f of sections.find((s) => s.id === "abandon")?.fields ?? []) expect(f.edits[0]!.split(".")[0]).toBe("abandonPolicy");
+        // The other direction, from the engine's declaration: a shown field that edits `abandonPolicy` IS in the abandon
+        // section (the loop above is empty if the section is missing, so it cannot say that on its own).
+        for (const f of shown.filter((x) => x.edits.some((e) => e.split(".")[0] === "abandonPolicy"))) {
+          expect(sections.find((s) => s.fields.includes(f))?.id, `${m.key}/${kind}: ${f.key}`).toBe("abandon");
+          withAbandon++;
+        }
         const decidersTop = new Set(deciderKeysFor(m, kind, null));
         for (const f of sections.find((s) => s.id === "deciders")?.fields ?? []) {
           // A deciders field edits a decider key, or a bounded detail of one (`matchBound`: the kicks of a shoot-out).
@@ -251,5 +326,16 @@ describe("the stage sections: every shown field is in exactly one section (count
       }
     expect(fields).toBeGreaterThan(builtinModules.length);
     expect(withDeciders, "some bracket stage has deciders to show").toBeGreaterThan(0);
+    expect(withAbandon, "some stage has an abandon field to place").toBeGreaterThan(0);
+  });
+
+  it("football knockout: the kicks of a shoot-out sit WITH the deciders, the half length with the match format, the abandon policy by itself (the placement ruling)", () => {
+    const sections = stageSections(football, "knockout", null);
+    const tops = (id: string) => (sections.find((s) => s.id === id)?.fields ?? []).flatMap((f) => f.edits.map((e) => e.split(".")[0]!));
+    expect(sections.map((s) => s.id), "the order the row shows them in").toEqual(["format", "deciders", "abandon"]);
+    expect(tops("deciders").sort()).toEqual(["extraTime", "shootout", "shootoutAttempts"]);
+    expect(tops("abandon")).toEqual(["abandonPolicy"]);
+    expect(tops("format")).toContain("halfMinutes");
+    expect(tops("format")).not.toContain("shootoutAttempts");
   });
 });

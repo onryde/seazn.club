@@ -419,6 +419,34 @@ describe("what a Save actually PUTs", () => {
     expect(mergedStageRules(stored, fragment)).toBeNull(); // the endpoint stores null (no rules) - the organiser's own clear
   });
 
+  it("a field whose blank build is a delete marker (a top-level undefined) is sent as null - JSON drops an undefined, and the key would silently survive", () => {
+    // No stage-visible field of a shipped sport builds a top-level undefined today (football's shoot-out points do, but
+    // nested under `points`, which is the stage points screen's), so the guard is reached through a registered stand-in.
+    const GONE = "__t17_delete_marker";
+    SPORT_RULES[GONE] = [
+      {
+        key: "gone",
+        edits: ["gone"],
+        label: "Gone",
+        kind: "number",
+        build: (v) => ({ gone: Number(v) }),
+        buildOnBlank: () => ({ gone: undefined }),
+        read: (config) => (typeof config.gone === "number" ? String(config.gone) : undefined),
+      },
+    ];
+    try {
+      const stored = { gone: 5, keep: 1 };
+      const opened = stageFormatEditorValues(GONE, { rules: stored });
+      expect(opened, "premise: the stand-in hydrates what it built").toEqual({ gone: "5" });
+      const fragment = stageFormatSaveFragment(GONE, stored, opened, { gone: "" });
+      expect(Object.hasOwn(fragment, "gone"), "the key is named").toBe(true);
+      expect(fragment.gone).toBeNull();
+      expect(JSON.parse(JSON.stringify(fragment))).toEqual({ gone: null });
+    } finally {
+      delete SPORT_RULES[GONE];
+    }
+  });
+
   it("an edit with no net effect re-sends the stored fragment, never an empty one", () => {
     const stored = { bestOf: 3 };
     const opened = stageFormatEditorValues("badminton", { rules: stored });
