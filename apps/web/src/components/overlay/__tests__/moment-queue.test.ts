@@ -406,6 +406,48 @@ describe("A3 — moments during scenes (the stage's rule: momentsFireIn ? enqueu
     expect(reduce(INITIAL, { type: "discard", moments: [] })).toBe(INITIAL);
   });
 
+  // Owner ruling (4), 2026-10-19, relayed by the coordinator (PR #982 review round 1, item 8): when Final arrives, a
+  // moment already QUEUED must not play under it. The stage dispatches `flush` on the edge into a scene whose
+  // `momentsFire` is false; the slab already on air keeps its own run (the test below).
+  it("flush drops every QUEUED moment, each stays seen; the slab on air is untouched; an empty queue is no change", () => {
+    let s = deliver(INITIAL, "live", [m(1), m(2), m(3)], 0);
+    expect(s.current, "premise: one on air").toEqual(m(1));
+    expect(s.queue, "premise: two queued behind it").toEqual([m(2), m(3)]);
+    const flushed = reduce(s, { type: "flush" });
+    expect(flushed.queue).toEqual([]);
+    expect(flushed.current).toEqual(m(1));
+    expect(flushed.phase).toBe(s.phase);
+    expect(flushed.deadline).toBe(s.deadline);
+    expect(flushed.seen, "dropped, never forgotten: a re-sent window cannot queue them again").toEqual(expect.arrayContaining(["2:goal", "3:goal"]));
+    expect(flushed.revision).toBeGreaterThan(s.revision);
+    expect(reduce(flushed, { type: "flush" }), "nothing queued: the same state, so no re-render and no timer").toBe(flushed);
+    expect(reduce(INITIAL, { type: "flush" })).toBe(INITIAL);
+  });
+
+  it("the sequence: queued, then Final — nothing queued plays; Final, then undo, then a new moment — it plays", () => {
+    // Live: a goal on air and a second queued behind it.
+    let s = deliver(INITIAL, "live", [m(1), m(2)], 0);
+    // Final arrives (the stage's edge): the queue is flushed, and the poll under Final re-sends the window.
+    s = reduce(s, { type: "flush" });
+    s = deliver(s, "final", [m(1), m(2)], 100);
+    const aired: string[] = [];
+    for (let now = 200; now <= 20_000; now += 50) {
+      s = tick(s, now);
+      if (s.current !== null && !aired.includes(`${s.current.seq}`)) aired.push(`${s.current.seq}`);
+    }
+    expect(aired, "only the slab already on air ran out; the queued goal never played").toEqual(["1"]);
+    expect(s).toMatchObject(IDLE);
+    // The phase leaves Final (the page shows no scene again); the scorer's undo strikes goal 2 from the live window,
+    // which forgets it; then a NEW goal arrives, and it plays.
+    s = reduce(s, { type: "sync", live: [m(1)], now: 20_100, ...T });
+    expect(s.seen, "undo forgets the struck goal").not.toContain("2:goal");
+    s = deliver(s, null, [m(1), m(4)], 20_200);
+    expect(s).toMatchObject({ current: m(4), phase: "in" });
+    // And the re-scored goal 2 (the same identity, after the undo) is new again too.
+    s = deliver(s, null, [m(1), m(4), m(2)], 20_300);
+    expect(s.queue).toEqual([m(2)]);
+  });
+
   it("a slab already on air when Final arrives finishes its own run; only NEW moments are dropped", () => {
     let s = deliver(INITIAL, "live", [m(1)], 0);
     s = deliver(s, "final", [m(1), m(2)], 100);

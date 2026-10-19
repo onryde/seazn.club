@@ -191,6 +191,49 @@ describe("moments follow the active scene (change 7)", () => {
   });
 });
 
+describe("Final flushes the queue (owner ruling 4, 2026-10-19)", () => {
+  const goalAt = (seq: number) => ({ seq, type: "football.goal", at: new Date(NOW).toISOString(), payload: { side: 0 as const } });
+  const onAir = (tree: ReactElement[]) => {
+    const child = propsOf(byTestId(tree, "ovl-moment-slot")[0]!).children as ReactElement | null | undefined;
+    return child ? (propsOf(child).moment as { seq: number }).seq : null;
+  };
+  /** Step the fake clock 250 ms at a time (past a poll) until a slab is on air; every seq seen on the way is recorded. */
+  const until = async (island: { tree: () => ReactElement[] }, want: number, seen: Set<number>) => {
+    for (let t = 0; t < 20_000; t += 250) {
+      await vi.advanceTimersByTimeAsync(250);
+      const seq = onAir(island.tree());
+      if (seq !== null) seen.add(seq);
+      if (seq === want) return true;
+    }
+    return false;
+  };
+  it("a goal queued behind another never plays once Final arrives; leave Final, undo, a new goal — it plays", async () => {
+    const base = props({ snapshotOnly: true, sceneOverride: "live" });
+    const island = renderIsland<OverlayStageProps>(OverlayStage, base);
+    // Two goals in one poll: goal 2 airs, goal 3 queues behind it.
+    island.rerender({ ...base, initial: snap({ lastSeq: 3, recent: [goalAt(2), goalAt(3)] }) });
+    expect(await until(island, 2, new Set()), "premise: goal 2 airs").toBe(true);
+    // Final arrives while goal 2 is still on air and goal 3 is queued.
+    const final = { ...base, sceneOverride: "final" as const, initial: snap({ lastSeq: 3, recent: [goalAt(2), goalAt(3)] }) };
+    island.rerender(final);
+    const seen = new Set<number>();
+    for (let t = 0; t < 30_000; t += 250) {
+      await vi.advanceTimersByTimeAsync(250);
+      const seq = onAir(island.tree());
+      if (seq !== null) seen.add(seq);
+    }
+    expect([...seen], "goal 2 ran out its own run; goal 3 never played under Final").toEqual([2]);
+    expect(onAir(island.tree())).toBeNull();
+    // Leave Final; the scorer's undo strikes goal 3 (the window drops it); then a new goal 4 — it plays.
+    island.rerender({ ...base, initial: snap({ lastSeq: 4, recent: [goalAt(2)] }) });
+    await vi.advanceTimersByTimeAsync(20_000);
+    island.rerender({ ...base, initial: snap({ lastSeq: 5, recent: [goalAt(2), goalAt(4)] }) });
+    const after = new Set<number>();
+    expect(await until(island, 4, after), "the new goal airs").toBe(true);
+    expect([...after], "and only it: goal 2 stays shown-once, goal 3 stays struck").toEqual([4]);
+  });
+});
+
 describe("the compositor host", () => {
   it("ready once, then the beat every 2 s — through a scene change (reconnecting → live) and back", async () => {
     phases.push({ phase: "live", seq: 0 }, { phase: "reconnecting", seq: 1 });

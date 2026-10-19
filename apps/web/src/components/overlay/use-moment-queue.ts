@@ -34,6 +34,12 @@ export function useMomentQueue(
   const holdMs = OVERLAY_MOMENT_HOLD_MS;
   const [state, dispatch] = useReducer(momentQueueReducer, INITIAL);
 
+  // Owner ruling (4), 2026-10-19: on the edge INTO a discarding scene (Final), every moment already queued is dropped,
+  // so none of them plays under it. Keyed on `discard` alone: it fires when Final arrives, not on every poll under it.
+  useEffect(() => {
+    if (discard) dispatch({ type: "flush" });
+  }, [discard]);
+
   // `incoming` is a fresh array on every poll even when nothing changed, so the
   // effect is keyed on the moments' IDENTITIES rather than the array. The
   // reducer would drop the repeats anyway (it remembers what it has shown);

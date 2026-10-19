@@ -55,7 +55,11 @@ export type QueueAction =
   | { type: "sync"; live: readonly OverlayMoment[]; now: number; foldMs: number; holdMs: number }
   /** R2005 (spec §4.8, D14): a scene whose `momentsFire` is false (Final) marks every new moment SEEN and queues none
    *  of them, so none can air later either — not when the scene ends, not on the next poll. */
-  | { type: "discard"; moments: readonly OverlayMoment[] };
+  | { type: "discard"; moments: readonly OverlayMoment[] }
+  /** Owner ruling (4), 2026-10-19 (PR #982 review round 1, item 8): Final arrives — a moment already QUEUED must not
+   *  play under it. The queue is dropped; every dropped id stays SEEN (a re-sent window cannot queue it again, while a
+   *  scorer's undo still forgets it through `sync`). The slab already on air keeps its own run. */
+  | { type: "flush" };
 
 
 export const INITIAL: MomentQueueState = {
@@ -142,6 +146,12 @@ export function momentQueueReducer(
     }
 
     return { ...state, queue, seen, revision };
+  }
+
+  if (action.type === "flush") {
+    // Nothing queued: the same state, so a re-render under Final arms no timer and re-renders nothing.
+    if (state.queue.length === 0) return state;
+    return { ...state, queue: [], revision: state.revision + 1 };
   }
 
   if (action.type === "discard") {
