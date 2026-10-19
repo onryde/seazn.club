@@ -35,6 +35,9 @@ import {
   type OpenRoundView,
 } from "@/lib/open-round";
 import { ConfirmDialog } from "../confirm-dialog";
+import { extendEdgesOf, liveExtendableCount, liveRoundRefusals, roundWhy } from "@/lib/checkin-extend";
+import { extendFailureText, extendHelperLine, extendRoundLabel, extendRoundLines, roundWhyLine, type ExtendCopy } from "../checkin-extend-ui";
+import { useExtendClock } from "../use-extend-clock";
 import {
   initialOpenRoundUi,
   openRoundRunner,
@@ -201,6 +204,9 @@ export function OpenRoundControl({ round, tz }: { round: OpenRoundView; tz: stri
   const plural = useMsgPlural();
   const router = useRouter();
   const [state, dispatch] = useReducer(openRoundUi, undefined, initialOpenRoundUi);
+  // The ticking clock for "+5 min" (owner, 2026-10-19: only inside a board's check-in window, to the millisecond, not up to a poll late).
+  // Runs only while there is a window to watch: the round is open and some board's window is still ahead or running.
+  const clockMs = useExtendClock(round.state === "open" && round.extendWindows.length > 0, extendEdgesOf(round.extendWindows));
   const runner = useMemo(
     () => openRoundRunner({ dispatch, post: (path, body) => apiV1(path, { method: "POST", json: body }), refresh: () => router.refresh() }),
     [router],
@@ -236,6 +242,22 @@ export function OpenRoundControl({ round, tz }: { round: OpenRoundView; tz: stri
   const cta = round.press === "reinvite" ? plural("runsheet.round.inviteCta", owed) : msg("runsheet.round.openCta");
   const confirmLabel = round.press === "reinvite" ? plural("runsheet.round.inviteCta", owed) : plural("runsheet.round.confirmCta", owed);
   const notice = state.notice ? openNoticeText(state.notice, round, msg, plural) : null;
+  // Spec §3.2.2: "+5 min to the round" - offered while a board of it would accept it (the server's own count), and its answer
+  // stays on screen after the count drops (every board capped, say).
+  const copy: ExtendCopy = { t: (key, vars) => msg(key as MessageKey, vars), plural, hm: (iso) => fmtTime(tz, iso) };
+  const extendLines =
+    state.extendNotice === null
+      ? null
+      : state.extendNotice.kind === "answered"
+        ? extendRoundLines(state.extendNotice.result, copy)
+        : [extendFailureText(state.extendNotice.code, copy)];
+  // The server's count (`extendableBoards`) stands until the viewer's clock is known; after that the windows it handed over are counted
+  // against the ticking clock, so the button leaves the screen at the deadline and arrives at an opening without a refresh.
+  const reach = clockMs === null ? round.extendableBoards : liveExtendableCount(round.extendWindows, clockMs);
+  const offersExtend = round.state === "open" && reach > 0;
+  // Where the button is not offered, the reason stands in its place (owner, 2026-10-19), from the same two facts the count is made of:
+  // the windows on the ticking clock and the server's tally of every other board. Nothing for a round not opened or one with no boards.
+  const why = round.state === "open" && !offersExtend ? roundWhy(liveRoundRefusals(round.extendRefusals, round.extendWindows, clockMs)) : null;
   // Each group has its OWN deadline: group 0's no-shows reach the organiser before the last group has even opened, so a
   // staggered round draws the groups and not the one "open until" line, which could only name the last group's close.
   const batches = timedBatches(round);
@@ -280,6 +302,37 @@ export function OpenRoundControl({ round, tz }: { round: OpenRoundView; tz: stri
         >
           {cta}
         </button>
+      )}
+      {(offersExtend || extendLines !== null || why !== null) && (
+        <div data-testid="open-round-extend" className="mt-2 flex min-w-0 flex-col items-start gap-1">
+          {offersExtend && (
+            <>
+              <button
+                type="button"
+                data-testid="open-round-extend-cta"
+                disabled={state.busy !== null}
+                aria-busy={state.busy?.kind === "extend" || undefined}
+                onClick={() => void runner.extend(round.stageId, round.roundNo)}
+                className={`${BUTTON_QUIET} w-full sm:w-auto`}
+              >
+                {state.busy?.kind === "extend" ? msg("externalPlay.checkinExtend.busy") : extendRoundLabel(copy)}
+              </button>
+              <p data-testid="open-round-extend-helper" className={`text-xs ${MUTED}`}>
+                {extendHelperLine(copy)} {plural("externalPlay.checkinExtend.roundHint", reach)}
+              </p>
+            </>
+          )}
+          {why !== null && (
+            <p data-testid="open-round-extend-why" data-why={why.code} className={`text-sm ${SOFT}`}>
+              {roundWhyLine(why, copy)}
+            </p>
+          )}
+          <div role="status" data-testid="open-round-extend-notice" className={`flex min-w-0 flex-col gap-0.5 text-sm ${SOFT}`}>
+            {(extendLines ?? []).map((line, i) => (
+              <p key={i}>{line}</p>
+            ))}
+          </div>
+        </div>
       )}
       {notice !== null && (
         <div role="status" data-testid="open-round-notice" className={`mt-2 space-y-0.5 text-sm ${SOFT}`}>

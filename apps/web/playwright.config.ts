@@ -31,7 +31,7 @@ const AUTH_STATE = "e2e/.auth/pro.json";
 const SERIAL_SPECS =
   /(journey-pro|journey-community|org-management|billing|billing-states|billing-groups|billing-groups-journey|members-roles|scorer|device-links|division-delete|pricing-v3|player-accounts|fixture-config-snapshot|public-dashboards)\.spec\.ts/;
 
-// --- how e2e.yml splits the `parallel` project across four jobs -------------
+// --- how e2e.yml splits the `parallel` project across five jobs -------------
 //
 // Playwright's own `--shard` splits by TEST COUNT over a CONTIGUOUS run of
 // test groups in file order (`filterForShard` in the runner: it sums
@@ -48,9 +48,9 @@ const SERIAL_SPECS =
 // wall-clock floor — the run finished when it finished.
 //
 // E2E_PARALLEL_SLICE moves the expensive files into a leg of their own and
-// lets the other three shard the remainder:
+// lets the others shard the remainder:
 //   "heavy"  -> only PARALLEL_HEAVY
-//   "rest"   -> everything except PARALLEL_HEAVY, then --shard=N/3
+//   "rest"   -> everything except PARALLEL_HEAVY, then --shard=N/4
 //   unset    -> the whole project, unchanged — every local run, and
 //               `npm run test:e2e`, take this path
 //
@@ -78,6 +78,43 @@ const SERIAL_SPECS =
 // leg (84-117s) no longer balances against it. e2e.yml's e2e-parallel comment
 // carries the measurements.
 //
+// Revisited 2026-10-19, after `parallel 2/3` ran into e2e.yml's 20-minute
+// `timeout-minutes` and was cancelled with nothing failing (main push run
+// 39312115708, PR dispatch 39310280257). The three "rest" shards held EQUAL
+// test counts (288) and unequal cost — 371 / 776 / 608s of test starts on run
+// 39300823701 — because the files that grew sit side by side in the alphabet
+// and so all landed in 2/3: match-room (53 tests, 243s of that shard's wall
+// clock), overlay-compositor, overlay-gallery, online-chess-desk, and
+// player-stats-stale-version, ONE test of 5.1 min that waits out an ISR
+// window and cannot be divided. Count sharding cannot see any of that, which
+// is what the heavy leg is for.
+//
+// The first attempt carved match-room, online-chess-desk and overlay-gallery
+// out and kept three "rest" shards. Run 39320198519 measured that heavy leg at
+// 727s of step (880s of job), the slowest of the run: overlay-gallery's check
+// 4c is ONE 332s test (every Result card in four locales), invisible to a
+// reading of the log's start timestamps because it runs beside many short
+// tests, and in heavy it started 6.5 min in, behind match-room. The leg's own
+// JSON report, uploaded because two tests flaked, gave every test's duration.
+// A replay over those durations puts that split at 719s, against 727s
+// measured; that is the model to trust.
+//
+// So PARALLEL_HEAVY holds six files now (the "three files" above is the
+// original derivation) — scorepad-v3-cricket, marketing-ai-demo, board-v3
+// plus online-chess-desk and overlay-gallery — and "rest" is sharded FOUR ways
+// in e2e.yml. Replayed step: heavy 446s, rest 279 / 558 / 472 / 419s; measured
+// on run 39326082029, job time 575s heavy and 416 / 729 / 497 / 599s rest, the
+// slowest 12.2 min against the 20-minute cap. Two files that cost as much are
+// deliberately NOT carved:
+//   * overlay-compositor — overlay-compositor-e2e-wiring.test.ts pins it in
+//     "rest".
+//   * player-stats-stale-version — alphabetically it would start after the
+//     gallery's tests and be the leg's tail. In "rest" it sits where a shard
+//     has a shard's worth of other work to overlap it with.
+// And match-room stays in "rest" too: its 53 tests are small (the longest is
+// 48s), so count shards split it well, and carved out it makes heavy 719s.
+// e2e.yml's e2e-parallel comment carries the measurements.
+//
 // "rest" is a CATCH-ALL by construction: it ignores PARALLEL_HEAVY and nothing
 // else. A new spec file therefore joins the sharded remainder automatically.
 // Only a file NAMED here can leave it — which is the whole reason this is a
@@ -86,7 +123,7 @@ const SERIAL_SPECS =
 // it. apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts pins that property,
 // and proves every file named here is real — a typo would otherwise give the
 // heavy leg fewer tests than it thinks and go green while they run nowhere.
-const PARALLEL_HEAVY = /(scorepad-v3-cricket|marketing-ai-demo|board-v3)\.spec\.ts/;
+const PARALLEL_HEAVY = /(scorepad-v3-cricket|marketing-ai-demo|board-v3|online-chess-desk|overlay-gallery)\.spec\.ts/;
 const PARALLEL_SLICE = process.env.E2E_PARALLEL_SLICE;
 
 // --- the walkthrough leg ---------------------------------------------------

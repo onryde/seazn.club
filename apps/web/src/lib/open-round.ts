@@ -8,6 +8,7 @@
 // also compiled under tsconfig.scripts.json (nodenext), which refuses an
 // extensionless specifier — the convention of every file in that chain.
 import type { DictionaryKey } from "./i18n-keys.ts";
+import type { ExtendTally, ExtendWindow } from "./checkin-extend.ts";
 
 /** Why a round was NOT opened. Each is refused before anything is written —
  *  no stamp, no invite. */
@@ -94,6 +95,18 @@ export type OpenRoundView = {
   scheduledAt: string | null;
   press: OpenRoundPress;
   pairings: OpenRoundPairing[];
+  /** Spec §3.2.2: how many of this round's boards a round-wide "+N min" would extend right now (check-in open, no game on
+   *  file, under the cap, not a board the viewer plays on). 0 before the open. The control offers the button above zero. */
+  extendableBoards: number;
+  /** Spec §3.2.2 (owner, 2026-10-19: +5 only inside the check-in window): for each board a round-wide press could reach if only the
+   *  clock allowed it, the instants it is allowed between. The control counts them on its ticking clock, so the button appears at a
+   *  board's opening and goes at its deadline without waiting for the next refresh. `extendableBoards` is this list at the snapshot. */
+  extendWindows: ExtendWindow[];
+  /** The rest of the round's boards (not the viewer's own), counted by the reason the server gave each at the snapshot: every board that
+   *  is NOT in `extendWindows` - a board that is over, one with a game on file, one that is closed, one with no extensions left. With the
+   *  windows, the sentence that stands where the round button is not offered ("Game started", "Check-in has closed", "No board's
+   *  check-in is open right now"): `window boards + the sum of this = the round's boards`. All zero before the open. */
+  extendRefusals: ExtendTally;
   /** T16 fix round 1, R1 — this stage's EARLIER rounds that still have games in play (a paired board still to be
    *  played), lowest round first; empty when none. Opening is still allowed (the organiser drives; D8 never blocks):
    *  the confirmation names them so the press is made knowingly. */

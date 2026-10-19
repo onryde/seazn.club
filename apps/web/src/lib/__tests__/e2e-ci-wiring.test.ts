@@ -10,8 +10,8 @@
 //
 // WHAT CAN GO WRONG, and why each is worth a test rather than a comment:
 //
-//  1. `e2e.yml` runs the `parallel` project as FOUR jobs — one "heavy" leg
-//     naming a handful of expensive files, and three "rest" legs sharding
+//  1. `e2e.yml` runs the `parallel` project as FIVE jobs — one "heavy" leg
+//     naming a handful of expensive files, and four "rest" legs sharding
 //     everything else. "rest" is a CATCH-ALL by construction (it ignores
 //     PARALLEL_HEAVY and nothing else), which is the ONLY reason a new spec
 //     file joins CI without anybody editing a list. Turn that into
@@ -648,10 +648,10 @@ describe("e2e CI wiring", () => {
     // spec. The matrix carries the project name per leg for this reason.
     expect(yml, "e2e.yml dispatches no walkthrough leg").toContain("project: walkthrough");
     expect(yml, "the matrix must pass its project through to Playwright").toContain("--project=${{ matrix.project }}");
-    // The three "rest" legs shard between themselves; the heavy leg does not.
+    // The four "rest" legs shard between themselves; the heavy leg does not.
     // Read per matrix leg rather than as a bare substring: the walkthrough
-    // legs carry `--shard=N/3` too, so `toContain("--shard=1/3")` would stay
-    // green with every rest leg deleted.
+    // legs carry `--shard=N/3`, so a bare `toContain("--shard=1/3")` would be
+    // satisfied by them and a rest leg deleted or re-cut would go unseen.
     const legs = yml
       .split(/\n\s*- group: /)
       .slice(1)
@@ -660,10 +660,11 @@ describe("e2e CI wiring", () => {
         args: /\n\s*args: *(.*)/.exec(block)?.[1]?.trim() ?? "",
       }));
     const restArgs = legs.filter((l) => l.slice === "rest").map((l) => l.args).sort();
-    expect(restArgs, "e2e.yml must shard the rest slice three ways, one leg per shard").toEqual([
-      "--shard=1/3",
-      "--shard=2/3",
-      "--shard=3/3",
+    expect(restArgs, "e2e.yml must shard the rest slice four ways, one leg per shard").toEqual([
+      "--shard=1/4",
+      "--shard=2/4",
+      "--shard=3/4",
+      "--shard=4/4",
     ]);
     const heavyArgs = legs.filter((l) => l.slice === "heavy").map((l) => l.args);
     expect(heavyArgs, "exactly one heavy leg").toHaveLength(1);

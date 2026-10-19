@@ -16,6 +16,7 @@ import { messages } from "@/lib/messages";
 import type { OpenRoundBatch, OpenRoundPairing, OpenRoundView } from "@/lib/open-round";
 import { CHECKIN_BATCH_GAP_MS, CHECKIN_BATCH_SIZE, DEADLINE_AFTER_MS } from "@/server/external-play/window";
 import { OpenRoundConfirmBody, OpenRoundControl } from "../open-round-control";
+import { emptyExtendTally } from "@/lib/checkin-extend";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 
@@ -57,6 +58,9 @@ const ROUND = (o: Partial<OpenRoundView> = {}): OpenRoundView => ({
   press: "open",
   earlierInPlay: [],
   pairings: [P(1), P(2), P(3)],
+  extendableBoards: 0,
+  extendWindows: [],
+  extendRefusals: emptyExtendTally(),
   ...o,
 });
 const html = (round: OpenRoundView) => renderToStaticMarkup(<OpenRoundControl round={round} tz={TZ} />);

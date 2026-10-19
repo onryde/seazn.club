@@ -22,23 +22,27 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { isRoundPaired } from "@/lib/division-phase";
 import type { OpenRoundBatch, OpenRoundPairing, OpenRoundPress, OpenRoundView } from "@/lib/open-round";
+import { emptyExtendTally, type ExtendTally, type ExtendWindow } from "@/lib/checkin-extend";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { stageCameraPolicy } from "@/server/external-play/camera-policy";
 import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
-import { boardRankSql, roundKey, roundOpensOfDivisions, type RoundOpenRow } from "@/server/external-play/round-open";
+import { boardExtraSql, boardRankSql, roundKey, roundOpensOfDivisions, type RoundOpenRow } from "@/server/external-play/round-open";
 import {
   CHECKIN_BATCH_GAP_MS,
-  CHECKIN_BATCH_SIZE,
   DEADLINE_AFTER_MS,
   batchCount,
   batchOfRank,
   boardAnchor,
+  bridgeGameOnFile,
+  extendRefusal,
+  extendWindowOf,
   roomPhase,
   windowFor,
 } from "@/server/external-play/window";
 import { loadSideNames, whiteSideOf, type Side } from "./guard";
 import { bridgeTakesInvites } from "./invite";
 import { isPlayableFixtureStatus } from "./preflight";
+import { fixturesSeating } from "./seated";
 
 type Row = {
   fixtureId: string;
@@ -57,6 +61,11 @@ type Row = {
   bridgeStatus: string | null;
   challengeId: string | null;
   createSentAt: Date | null;
+  /** A live mint claim is a game in flight (`bridgeGameOnFile`); with the challenge and the marker it is what refuses an extension. */
+  mintClaimedAt: Date | null;
+  /** The board's check-in extension so far (spec §3.2.2): the milliseconds added to its deadline, and how many presses made them. */
+  extraMs: number;
+  extensions: number;
   roundOpenId: string | null;
   whiteEmailedAt: Date | null;
   blackEmailedAt: Date | null;
@@ -117,6 +126,8 @@ export async function listOpenRounds(
            f.seq_in_round as "seq", ${boardRankSql(sql)} as "rank", f.status,
            f.home_entrant_id as "homeEntrantId", f.away_entrant_id as "awayEntrantId", f.scheduled_at as "scheduledAt",
            ep.status as "bridgeStatus", ep.challenge_id as "challengeId", ep.create_sent_at as "createSentAt",
+           ep.mint_claimed_at as "mintClaimedAt", ${boardExtraSql(sql)} as "extraMs",
+           coalesce(ep.checkin_extensions, 0)::int as extensions,
            ep.round_open_id as "roundOpenId", ep.white_emailed_at as "whiteEmailedAt",
            ep.black_emailed_at as "blackEmailedAt", ep.white_side as "whiteSide"
       from fixtures f
@@ -173,9 +184,11 @@ export async function listOpenRounds(
     // Spec §3.2.1: each board's window is its OWN batch's. The round is closed when its LAST batch has closed (rank
     // order, so the last row's anchor is the latest); a re-invite is offered only while some board it would still invite
     // has a window that has not closed - openRound skips the rest, and would answer already_open if nothing is left.
-    const anchorOf = (b: Row) => boardAnchor(open!.roundOpenedAt, b.rank, open!.staggered);
-    const lastRank = Math.max(...group.map((r) => r.rank));
-    const closed = open !== null && roomPhase(now, boardAnchor(open.roundOpenedAt, lastRank, open.staggered)) === "closed";
+    // Spec §3.2.2: ...and each carries its own check-in extension, so the round is closed when the board whose (extended)
+    // deadline is LATEST has closed - not simply the last batch's, which a longer extension on an earlier board can outlast.
+    const anchorOf = (b: Row) => boardAnchor(open!.roundOpenedAt, b.rank, open!.staggered, b.extraMs);
+    const latestDeadline = open === null ? null : Math.max(...group.map((r) => windowFor(anchorOf(r)).deadline.getTime()));
+    const closed = open !== null && now.getTime() >= latestDeadline!;
     const owedOpen = open === null ? owed : boards.reduce((n, b) => n + (roomPhase(now, anchorOf(b)) === "closed" ? 0 : owedSeats(b, open)), 0);
     let press: OpenRoundPress;
     if (open === null) press = "open";
@@ -212,6 +225,10 @@ export async function listOpenRounds(
     }
   }
 
+  // Spec §3.2.2: a board the viewer plays on is never extended by them (C1), so it is not counted among the boards a
+  // round-wide press would reach.
+  const own = auth.userId === null || shownBoards.length === 0 ? new Set<string>() : await fixturesSeating(auth.userId, shownBoards.map((b) => b.fixtureId));
+
   const out: OpenRoundView[] = [];
   for (const f of shown) {
     const pairings: OpenRoundPairing[] = [];
@@ -239,31 +256,34 @@ export async function listOpenRounds(
     const nBatches = staggered ? batchCount(f.group.length) : 1;
     for (let i = 0; i < nBatches; i++) {
       const slice = staggered ? f.group.filter((r) => batchOfRank(r.rank) === i) : f.group;
-      // The batch's own anchor (its first board's), so its start and deadline come from window.ts and from nowhere else.
-      const anchor = f.open === null ? null : boardAnchor(f.open.roundOpenedAt, staggered ? i * CHECKIN_BATCH_SIZE : 0, staggered);
-      const w = anchor === null ? null : windowFor(anchor);
-      const start = anchor === null ? null : anchor.at;
+      // The batch's start and deadline come from window.ts and from nowhere else: its start from the anchor of its first board,
+      // its close from its boards' own (extended) deadlines - the latest among them (spec §3.2.2: a board of the batch can
+      // have been given more time than its neighbours, and the batch is open until the last of them has closed).
+      const first = f.open === null ? null : boardAnchor(f.open.roundOpenedAt, staggered ? slice[0]!.rank : 0, staggered);
+      const open = f.open;
+      const closes = open === null ? null : new Date(Math.max(...slice.map((r) => windowFor(boardAnchor(open.roundOpenedAt, r.rank, staggered, r.extraMs)).deadline.getTime())));
       batches.push({
         fromBoard: slice[0]!.seq,
         toBoard: slice[slice.length - 1]!.seq,
         offsetMs: staggered ? i * CHECKIN_BATCH_GAP_MS : 0,
-        opensAt: start?.toISOString() ?? null,
-        closesAt: w?.deadline.toISOString() ?? null,
+        opensAt: first?.at.toISOString() ?? null,
+        closesAt: closes?.toISOString() ?? null,
       });
     }
     // The deadline a re-invite names is the earliest among the boards it would still invite (never later than the truth);
-    // otherwise the LAST batch's, when the round as a whole closes.
-    const lastClose = batches[batches.length - 1]!.closesAt;
-    let deadlineAt = openedAt === null ? null : lastClose;
+    // otherwise the round's LAST close - the latest of its batches' - when the round as a whole closes.
+    const closings = batches.flatMap((b) => (b.closesAt === null ? [] : [new Date(b.closesAt).getTime()]));
+    let deadlineAt = openedAt === null || closings.length === 0 ? null : new Date(Math.max(...closings)).toISOString();
     if (f.open !== null && f.press === "reinvite") {
       const open = f.open;
       const ahead = f.boards
         .filter((b) => owedSeats(b, open) > 0)
-        .map((b) => windowFor(boardAnchor(open.roundOpenedAt, b.rank, open.staggered)).deadline)
+        .map((b) => windowFor(boardAnchor(open.roundOpenedAt, b.rank, open.staggered, b.extraMs)).deadline)
         .filter((d) => d.getTime() > now.getTime());
       if (ahead.length > 0) deadlineAt = new Date(Math.min(...ahead.map((d) => d.getTime()))).toISOString();
     }
     const times = f.boards.map((b) => b.scheduledAt?.getTime()).filter((t): t is number => t !== undefined);
+    const extend = extendReach(f, own, now);
     const view: OpenRoundView = {
       stageId: f.stageId,
       stageName: f.stageName,
@@ -278,9 +298,50 @@ export async function listOpenRounds(
       scheduledAt: times.length === 0 ? null : new Date(Math.min(...times)).toISOString(),
       press: f.press,
       pairings,
+      // Spec §3.2.2: how many boards a "+N min to the round" would extend right now - the same rule the door asks, board by board -
+      // and the windows the screen counts on its ticking clock (every board that only the clock stands between and a press).
+      extendableBoards: extend.extendableBoards,
+      extendWindows: extend.windows,
+      extendRefusals: extend.refusals,
       earlierInPlay: (inPlay.get(f.stageId) ?? []).filter((x) => x.roundNo < f.roundNo).sort((a, b) => a.roundNo - b.roundNo),
     };
     out.push(view);
   }
   return out;
+}
+
+/** Spec §3.2.2: what a round-wide press reaches. `extendableBoards` is the count `extendRefusal` accepts at `now` (the board the viewer
+ *  plays on excluded: a round press leaves it alone, C1); `windows` is, per such board, the instants it is extendable between, for every
+ *  board that nothing but the clock stands in the way of - so the screen can keep the count true as time passes; and `refusals` counts
+ *  every OTHER board by the reason it gave, so the screen can say why a round has nothing to extend. Every board the viewer does not
+ *  play on is in exactly one of the two (the DB test counts them). All empty before the open. */
+function extendReach(
+  f: { open: RoundOpenRow | null; boards: Paired[] },
+  own: ReadonlySet<string>,
+  now: Date,
+): { extendableBoards: number; windows: ExtendWindow[]; refusals: ExtendTally } {
+  const open = f.open;
+  const refusals = emptyExtendTally();
+  if (open === null) return { extendableBoards: 0, windows: [], refusals };
+  let extendableBoards = 0;
+  const windows: ExtendWindow[] = [];
+  for (const b of f.boards) {
+    if (own.has(b.fixtureId)) continue;
+    const facts = {
+      now,
+      anchor: boardAnchor(open.roundOpenedAt, b.rank, open.staggered, b.extraMs),
+      extensions: b.extensions,
+      playable: isPlayableFixtureStatus(b.status) && b.bridgeStatus !== "finished",
+      gameOnFile: bridgeGameOnFile(
+        { status: b.bridgeStatus ?? "pending", challengeId: b.challengeId, createSentAt: b.createSentAt, mintClaimedAt: b.mintClaimedAt },
+        now,
+      ),
+    };
+    const refusal = extendRefusal(facts);
+    if (refusal === null) extendableBoards += 1;
+    const w = extendWindowOf(facts);
+    if (w !== null) windows.push(w);
+    else if (refusal !== null) refusals[refusal] += 1;
+  }
+  return { extendableBoards, windows, refusals };
 }

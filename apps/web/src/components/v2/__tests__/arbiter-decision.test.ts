@@ -22,9 +22,12 @@
 //   R6 The settle disclosure belongs to its board: switching closes it, and
 //      so does a settle that FINISHES the board (a tie-break owed keeps it
 //      open: the winner is still to pick).
+//   R7 (spec 2026-10-09 §3.2.2) "+5 min" on a board's check-in is a request like the others: R1, R3 and R4 hold for it, and its
+//      answer is the board's notice - the new closing time, or the door's own code.
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { ApiV1Error } from "@/lib/client-v1";
+import type { CheckinExtendBoardResult } from "@/lib/checkin-extend";
 import {
   arbiterDecision,
   decisionRunner,
@@ -33,6 +36,7 @@ import {
   type ArbiterDecisionState,
 } from "../arbiter-decision";
 
+const EXTENDED: CheckinExtendBoardResult = { fixtureId: "b1", extensions: 1, extensionsLeft: 2, addedMinutes: 5, deadlineAt: "2026-10-19T19:55:00.000Z" };
 const run = (s: ArbiterDecisionState, ...actions: ArbiterDecisionAction[]) => actions.reduce(arbiterDecision, s);
 const on = (boardId: string | null) => initialArbiterDecision(boardId);
 
@@ -45,18 +49,20 @@ describe("transitions", () => {
       { type: "override", boardId: "b1" },
       { type: "goOn", boardId: "b1" },
       { type: "settle", boardId: "b1" },
+      { type: "extend", boardId: "b1" },
       { type: "toggleSettle" },
       { type: "resyncDone", boardId: "b1", outcome: { ok: true, read: true, adopted: 2 } },
       { type: "overrideDone", boardId: "b1", outcome: { ok: true } },
       { type: "goOnDone", boardId: "b1", outcome: { ok: true, closed: 1, stillOpen: 0 } },
       { type: "settleDone", boardId: "b1", outcome: { ok: true, status: "finished" } },
+      { type: "extendDone", boardId: "b1", boardNo: 1, outcome: { ok: true, result: EXTENDED } },
     ];
     let checked = 0;
     for (const a of actions) {
       expect(arbiterDecision(s0, a), a.type).toBe(s0);
       checked++;
     }
-    expect(checked).toBe(9);
+    expect(checked).toBe(11);
   });
 
   it("resync: in flight, then answered with what it adopted", () => {
@@ -144,6 +150,43 @@ describe("transitions", () => {
     expect([landed.busy, landed.notice, landed.settleOpen]).toEqual([null, null, true]);
   });
 
+  it("R7: '+5 min' is a request: in flight, answered with the new closing time, refused by the door's code - and R1/R3/R4 hold for it", () => {
+    const s = run(on("b1"), { type: "extend", boardId: "b1" });
+    expect(s.busy).toEqual({ kind: "extend", boardId: "b1" });
+    expect(run(s, { type: "extendDone", boardId: "b1", boardNo: 3, outcome: { ok: true, result: EXTENDED } })).toEqual({
+      boardId: "b1",
+      busy: null,
+      settleOpen: false,
+      notice: { boardId: "b1", kind: "extended", boardNo: 3, result: EXTENDED },
+    });
+    expect(run(s, { type: "extendDone", boardId: "b1", boardNo: 3, outcome: { ok: false, code: "CHECKIN_EXTEND_CAP" } }).notice).toEqual({
+      boardId: "b1",
+      kind: "extend_failed",
+      code: "CHECKIN_EXTEND_CAP",
+    });
+    // R1: a second extend, and every other kind, are refused behind it - and an extend is refused behind every other kind.
+    let refused = 0;
+    for (const a of [{ type: "extend", boardId: "b1" }, { type: "resync", boardId: "b1" }, { type: "goOn", boardId: "b1" }, { type: "settle", boardId: "b1" }, { type: "override", boardId: "b1" }] as const) {
+      expect(arbiterDecision(s, a), `behind an extend: ${a.type}`).toBe(s);
+      const other = run(on("b1"), { type: a.type === "extend" ? "resync" : a.type, boardId: "b1" });
+      expect(arbiterDecision(other, { type: "extend", boardId: "b1" }), `an extend behind: ${a.type}`).toBe(other);
+      refused += 1;
+    }
+    expect(refused, "anti-vacuity").toBe(5);
+    // R3: another kind's answer, another board's, and a stray one are all ignored.
+    expect(arbiterDecision(s, { type: "resyncDone", boardId: "b1", outcome: { ok: true, read: true, adopted: 1 } })).toBe(s);
+    expect(arbiterDecision(s, { type: "extendDone", boardId: "b2", boardNo: 2, outcome: { ok: true, result: EXTENDED } })).toBe(s);
+    const idle = on("b1");
+    expect(arbiterDecision(idle, { type: "extendDone", boardId: "b1", boardNo: 1, outcome: { ok: true, result: EXTENDED } })).toBe(idle);
+    // R4: a press that raced a switch shows nothing on the board now on screen, and its answer frees the panel.
+    const left = run(on("b1"), { type: "extend", boardId: "b1" }, { type: "select", boardId: "b2" });
+    const landed = run(left, { type: "extendDone", boardId: "b1", boardNo: 1, outcome: { ok: true, result: EXTENDED } });
+    expect([landed.busy, landed.notice, landed.boardId]).toEqual([null, null, "b2"]);
+    // …and the disclosure of a settle is not the extend's to touch.
+    const open = run(on("b1"), { type: "toggleSettle" }, { type: "extend", boardId: "b1" }, { type: "extendDone", boardId: "b1", boardNo: 1, outcome: { ok: true, result: EXTENDED } });
+    expect(open.settleOpen).toBe(true);
+  });
+
   it("override: answered OK, or refused with Task 8's code", () => {
     const ok = run(on("b1"), { type: "override", boardId: "b1" }, { type: "overrideDone", boardId: "b1", outcome: { ok: true } });
     expect(ok.notice).toEqual({ boardId: "b1", kind: "overridden" });
@@ -170,6 +213,7 @@ const action: fc.Arbitrary<ArbiterDecisionAction> = fc.oneof(
   { arbitrary: board.map((boardId) => ({ type: "override" as const, boardId })), weight: 2 },
   { arbitrary: board.map((boardId) => ({ type: "goOn" as const, boardId })), weight: 2 },
   { arbitrary: board.map((boardId) => ({ type: "settle" as const, boardId })), weight: 2 },
+  { arbitrary: board.map((boardId) => ({ type: "extend" as const, boardId })), weight: 3 },
   { arbitrary: fc.constant({ type: "toggleSettle" as const }), weight: 2 },
   {
     arbitrary: fc.tuple(board, fc.boolean(), fc.nat(5)).map(([boardId, read, adopted]) => ({
@@ -196,6 +240,15 @@ const action: fc.Arbitrary<ArbiterDecisionAction> = fc.oneof(
     weight: 3,
   },
   {
+    arbitrary: fc.tuple(board, fc.boolean()).map(([boardId, ok]) => ({
+      type: "extendDone" as const,
+      boardId,
+      boardNo: 1,
+      outcome: ok ? { ok: true as const, result: EXTENDED } : { ok: false as const, code: "CHECKIN_CLOSED" },
+    })),
+    weight: 3,
+  },
+  {
     arbitrary: fc.tuple(board, fc.constantFrom("finished", "tiebreak_owed", "refused")).map(([boardId, r]) => ({
       type: "settleDone" as const,
       boardId,
@@ -217,16 +270,24 @@ const chunk: fc.Arbitrary<ArbiterDecisionAction[]> = fc.oneof(
     ]),
     weight: 2,
   },
+  // The same for '+5 min' (R7): the press and its answer back to back, so its landing is reached by construction.
+  {
+    arbitrary: fc.tuple(board, fc.boolean()).map(([boardId, ok]): ArbiterDecisionAction[] => [
+      { type: "extend", boardId },
+      { type: "extendDone", boardId, boardNo: 1, outcome: ok ? { ok: true, result: EXTENDED } : { ok: false, code: "CHECKIN_CLOSED" } },
+    ]),
+    weight: 2,
+  },
 );
 
 /** The reference model: the rules above as the smallest state that states
  *  them — a selected board and at most one request. */
-type Model = { selected: string | null; inflight: { kind: "resync" | "override" | "goOn" | "settle"; boardId: string } | null };
-const DONE_KIND = { resyncDone: "resync", overrideDone: "override", goOnDone: "goOn", settleDone: "settle" } as const;
+type Model = { selected: string | null; inflight: { kind: "resync" | "override" | "goOn" | "settle" | "extend"; boardId: string } | null };
+const DONE_KIND = { resyncDone: "resync", overrideDone: "override", goOnDone: "goOn", settleDone: "settle", extendDone: "extend" } as const;
 
 describe("the sequence sweep: the rules hold after every step", () => {
   it("random sequences over three boards (anti-vacuity: every rule's interesting branch is reached)", () => {
-    const seen = { steps: 0, accepted: 0, racedPress: 0, refusedBusy: 0, staleIgnored: 0, landedHere: 0, landedElsewhere: 0, switches: 0, settledClosed: 0 };
+    const seen = { extendsAccepted: 0, extendsLanded: 0, steps: 0, accepted: 0, racedPress: 0, refusedBusy: 0, staleIgnored: 0, landedHere: 0, landedElsewhere: 0, switches: 0, settledClosed: 0 };
     fc.assert(
       fc.property(fc.option(board, { nil: null }), fc.array(chunk, { minLength: 1, maxLength: 30 }).map((c) => c.flat()), (start, actions) => {
         let s = initialArbiterDecision(start);
@@ -248,12 +309,14 @@ describe("the sequence sweep: the rules hold after every step", () => {
             case "override":
             case "goOn":
             case "settle":
+            case "extend":
               if (m.selected === null) expect(s, "R2").toBe(before);
               else if (m.inflight !== null) {
                 expect(s, "R1").toBe(before);
                 seen.refusedBusy++;
               } else {
                 m.inflight = { kind: a.type, boardId: a.boardId };
+                if (a.type === "extend") seen.extendsAccepted++;
                 if (a.boardId === m.selected) expect(s.notice, "a new request clears this board's notice").toBeNull();
                 else {
                   expect(s.notice, "a raced press leaves this board's notice").toEqual(before.notice);
@@ -269,7 +332,8 @@ describe("the sequence sweep: the rules hold after every step", () => {
             case "resyncDone":
             case "overrideDone":
             case "goOnDone":
-            case "settleDone": {
+            case "settleDone":
+            case "extendDone": {
               const kind = DONE_KIND[a.type];
               const answers = m.inflight !== null && m.inflight.kind === kind && m.inflight.boardId === a.boardId;
               if (!answers) {
@@ -284,6 +348,7 @@ describe("the sequence sweep: the rules hold after every step", () => {
                   expect(s.settleOpen, "R6").toBe(finishes ? false : before.settleOpen);
                   if (finishes) seen.settledClosed++;
                   seen.landedHere++;
+                  if (a.type === "extendDone") seen.extendsLanded++;
                 } else {
                   expect(s.notice, "R4: answered off-screen").toEqual(before.notice);
                   seen.landedElsewhere++;
@@ -359,6 +424,36 @@ describe("the runner: what reaches the network", () => {
     ]);
     expect(h.state.notice).toEqual({ boardId: "b1", kind: "settled", status: "finished" });
     expect(h.refreshed).toBe(2);
+  });
+
+  it("R7: '+5 min' posts NOTHING in the body to the board's extend route, once; its answer is the board's notice, named by board number, and the page refreshes", async () => {
+    let release!: (v: unknown) => void;
+    const h = harness(() => new Promise((r) => (release = r)));
+    const first = h.runner.extend("b 1", 4);
+    expect(await h.runner.extend("b 1", 4), "the second tap").toBe(false);
+    expect(await h.runner.resync("b 1"), "any other request behind it").toBe(false);
+    expect(h.sent).toEqual([{ path: "/api/v1/fixtures/b%201/external-play/extend-checkin", body: undefined }]);
+    release(EXTENDED);
+    expect(await first).toBe(true);
+    expect(h.state.notice, "the state was for b1, not 'b 1': a press for another board lands off-screen").toBeNull();
+    expect(h.state.busy).toBeNull();
+    expect(h.refreshed).toBe(1);
+    const own = harness(() => Promise.resolve(EXTENDED));
+    await own.runner.extend("b1", 4);
+    expect(own.state.notice).toEqual({ boardId: "b1", kind: "extended", boardNo: 4, result: EXTENDED });
+    expect(own.refreshed).toBe(1);
+  });
+
+  it("R7: a refused '+5 min' carries the door's code, frees the panel, and does not refresh; a thrown non-API error is UNKNOWN", async () => {
+    const h = harness(() => Promise.reject(new ApiV1Error("x", 409, "CHECKIN_CLOSED")));
+    await h.runner.extend("b1", 1);
+    expect(h.state.notice).toEqual({ boardId: "b1", kind: "extend_failed", code: "CHECKIN_CLOSED" });
+    expect(h.state.busy).toBeNull();
+    expect(h.refreshed).toBe(0);
+    const n = harness(() => Promise.reject(new TypeError("network")));
+    await n.runner.extend("b1", 1);
+    expect(n.state.notice).toEqual({ boardId: "b1", kind: "extend_failed", code: "UNKNOWN" });
+    expect(await n.runner.extend("b1", 1), "the runner is free again").toBe(true);
   });
 
   it("a refusal carries the route's code, frees the panel, and does not refresh", async () => {

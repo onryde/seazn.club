@@ -41,7 +41,9 @@ import {
   removeParticipant,
   type ParticipantToken,
 } from "@/server/external-play/video/realtimekit";
-import { roundOpenAt } from "@/server/external-play/round-open";
+import { anchorOfRow, boardExtraSql, boardRankSql, roundOpenAt } from "@/server/external-play/round-open";
+import { bridgeGameOnFile, extendRefusal, extensionsLeft, windowFor } from "@/server/external-play/window";
+import type { CheckinExtendState } from "@/lib/checkin-extend";
 import { EDITOR_ROLES } from "@/lib/types";
 import { ARBITER_JOIN_LIMIT, ARBITER_RESYNC_LIMIT, rateLimit } from "@/lib/rate-limit";
 import { log } from "@/server/logger";
@@ -71,6 +73,16 @@ type BoardRow = {
   bridgeStatus: string | null;
   needsReason: string | null;
   challengeId: string | null;
+  /** The facts that make a game "on file" beside the challenge (a sent create, a live mint claim): `bridgeGameOnFile`. */
+  createSentAt: Date | null;
+  mintClaimedAt: Date | null;
+  /** The board's round open (null: the round was never opened) and its place in it, for the check-in extension's reading
+   *  (spec §3.2.2): the stamp, the stored `staggered` flag, the zero-based rank and the board's extension so far. */
+  openedAt: Date | null;
+  staggered: boolean | null;
+  rank: number;
+  extraMs: number;
+  extensions: number;
   whiteSide: Side | null;
   moveCount: number | null;
   whiteMs: number | null;
@@ -142,8 +154,9 @@ export async function arbiterRequestedRound(auth: AuthCtx, divisionId: string, f
 export async function loadArbiterRound(
   auth: AuthCtx,
   divisionId: string,
-  opts: { round?: { stageId: string; roundNo: number } } = {},
+  opts: { round?: { stageId: string; roundNo: number }; now?: Date } = {},
 ): Promise<ArbiterRound | null> {
+  const now = opts.now ?? new Date();
   const [division] = await sql<{ config: { clock?: BoardgameClockInput } | null }[]>`
     select d.config from divisions d
       join competitions c on c.id = d.competition_id
@@ -188,9 +201,18 @@ export async function loadArbiterRound(
   // flags) — never one board after another. Promise.all keeps board order.
   const listed = [...rows.entries()].filter(([, r]) => !own.has(r.fixtureId));
   const boards: ArbiterBoard[] = await Promise.all(
-    listed.map(([, r]) => boardOf(auth, r, { limitMs, policy, flagRows })),
+    listed.map(([, r]) => boardOf(auth, r, { limitMs, policy, flagRows, now })),
   );
-  return { stageId: round.stageId, stageName: round.stageName, roundNo: round.roundNo, timeControl, boards, ownBoards: own.size, current };
+  return {
+    stageId: round.stageId,
+    stageName: round.stageName,
+    roundNo: round.roundNo,
+    timeControl,
+    boards,
+    ownBoards: own.size,
+    current,
+    extendableBoards: boards.filter((b) => b.checkin?.canExtend === true).length,
+  };
 }
 
 /** A board with open flags, wherever it sits in the division (T16's
@@ -231,7 +253,7 @@ export async function listFlaggedExternalPlay(
   const boards = await Promise.all(
     listed.map(async (r): Promise<FlaggedBoard> => {
       const policy = await fixtureCameraPolicy(r.fixtureId);
-      const board = await boardOf(auth, r, { limitMs, policy, flagRows });
+      const board = await boardOf(auth, r, { limitMs, policy, flagRows, now: null });
       return { ...board, roundNo: r.roundNo, stageName: r.stageName };
     }),
   );
@@ -252,6 +274,9 @@ function boardRows(auth: AuthCtx, where: postgres.Fragment, opts: { cancelled: b
            f.status as "fixtureStatus",
            f.home_entrant_id as "homeEntrantId", f.away_entrant_id as "awayEntrantId",
            ep.status as "bridgeStatus", ep.needs_reason as "needsReason", ep.challenge_id as "challengeId", ep.white_side as "whiteSide",
+           ep.create_sent_at as "createSentAt", ep.mint_claimed_at as "mintClaimedAt",
+           o.opened_at as "openedAt", o.staggered, ${boardRankSql(sql)} as rank, ${boardExtraSql(sql)} as "extraMs",
+           coalesce(ep.checkin_extensions, 0)::int as extensions,
            ep.move_count as "moveCount", ep.white_ms as "whiteMs", ep.black_ms as "blackMs",
            ep.last_move_at as "lastMoveAt", ep.started_at as "startedAt", ep.finished_at as "finishedAt",
            ep.game_over_at as "gameOverAt", ep.video_override_at as "overrideAt",
@@ -265,6 +290,7 @@ function boardRows(auth: AuthCtx, where: postgres.Fragment, opts: { cancelled: b
       from fixtures f
       join stages s on s.id = f.stage_id
       left join fixture_external_play ep on ep.fixture_id = f.id
+      left join stage_round_opens o on o.stage_id = f.stage_id and o.round_no = f.round_no
       left join fixture_video_meetings mh on mh.fixture_id = f.id and mh.side = 'home'
       left join fixture_video_meetings ma on ma.fixture_id = f.id and ma.side = 'away'
      where ${where}
@@ -319,7 +345,7 @@ function cameraReportOf(fixtureId: string, sides: { home: ArbiterSideMeeting; aw
 async function boardOf(
   auth: AuthCtx,
   r: BoardRow,
-  ctx: { limitMs: number; policy: CameraPolicy; flagRows: readonly FlagRow[] },
+  ctx: { limitMs: number; policy: CameraPolicy; flagRows: readonly FlagRow[]; now: Date | null },
 ): Promise<ArbiterBoard> {
   const { limitMs, policy, flagRows } = ctx;
   const [sides, whiteSide] = await Promise.all([
@@ -415,7 +441,34 @@ async function boardOf(
       reason: r.needsReason === null ? null : readNeedsReason(r.needsReason),
       edges: { winner_to_fixture: r.winnerToFixture, loser_to_fixture: r.loserToFixture },
     }),
+    checkin: ctx.now === null ? null : checkinOf(r, ctx.now),
     flags,
+  };
+}
+
+/** Spec §3.2.2: one board's check-in as the panel reads it - the deadline it is on (window.ts, with the board's own extension),
+ *  how many presses it has left, and whether a press would be accepted NOW: `extendRefusal`, the same rule the door asks, so the
+ *  panel never offers a press the server refuses. null for a board whose round was never opened (no window to extend). */
+function checkinOf(r: BoardRow, now: Date): CheckinExtendState | null {
+  if (r.openedAt === null) return null;
+  const anchor = anchorOfRow({ openedAt: r.openedAt, rank: r.rank, staggered: r.staggered === true, extraMs: r.extraMs });
+  const refusal = extendRefusal({
+    now,
+    anchor,
+    extensions: r.extensions,
+    playable: isPlayableFixtureStatus(r.fixtureStatus) && r.bridgeStatus !== "finished",
+    gameOnFile: bridgeGameOnFile(
+      { status: r.bridgeStatus ?? "pending", challengeId: r.challengeId, createSentAt: r.createSentAt, mintClaimedAt: r.mintClaimedAt },
+      now,
+    ),
+  });
+  const w = windowFor(anchor);
+  return {
+    canExtend: refusal === null,
+    refusal,
+    extensionsLeft: extensionsLeft(r.extensions),
+    opensAt: w.opensAt.toISOString(),
+    deadlineAt: w.deadline.toISOString(),
   };
 }
 
@@ -509,7 +562,7 @@ export function mayWatchBoards(role: string | null): boolean {
   return role !== null && (EDITOR_ROLES as readonly string[]).includes(role);
 }
 
-function requireWatcher(auth: AuthCtx): string {
+export function requireWatcher(auth: AuthCtx): string {
   if (auth.via !== "session" || auth.userId === null) {
     throw new HttpError(403, "Watching a board needs a signed-in organiser", "ARBITER_NEEDS_SESSION");
   }

@@ -426,7 +426,13 @@ describe.skipIf(!DB)("concurrent admission, with a barrier (test 14 (d), the re-
     const key = scene();
     const h = await holdReservation(key, sceneAt(0)); // the line is ACTIVE (an admitted stay), so a fresh arrival is a candidate
     void h;
-    const boards = await Promise.all(Array.from({ length: N }, () => seedBoard()));
+    // Seeded ONE AT A TIME, never `Promise.all`: `createEntrants` on an online (Lichess) division asks the POOLED `sql` for the
+    // Lichess-link check while its `withTenant` transaction already holds a connection (lib/db.ts "the nesting guard"). With the
+    // pool at max 5, five of these N = 6 seeds inside that transaction at once pin every slot and wait for a sixth that cannot
+    // exist - a permanent hang (the test's 60 s timeout, then the hook's 30 s), seen on ~1 run in 10 on a clean DB on commits
+    // that never touched this file. The claims below are the thing under test and still start in the same millisecond.
+    const boards: Awaited<ReturnType<typeof seedBoard>>[] = [];
+    for (let i = 0; i < N; i++) boards.push(await seedBoard());
     const when = sceneAt(1_000);
     await setBucket(key, L + M * L, when); // beyond the held reservation, exactly M more are promised
     let arrived = 0;

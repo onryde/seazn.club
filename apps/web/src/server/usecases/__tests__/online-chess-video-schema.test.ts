@@ -366,6 +366,72 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V451)", () => {
     });
   });
 
+  // V465 (spec 2026-10-09 §3.2.2): the arbiter's check-in extension. Every write is rolled back.
+  describe("V465: the check-in extension - fixture_external_play.checkin_extra_ms / checkin_extensions, and the checkin_extend audit kind", () => {
+    const COHERENCE = "fixture_external_play_checkin_extend_check";
+    /** A bridge row for the suite's fixture carrying `cols`, then `after` run on it - all rolled back. */
+    const bridge = (cols: { ms?: number; n?: number } = {}, after?: (tx: typeof sql) => Promise<unknown>) => (tx: typeof sql) =>
+      tx`insert into fixture_external_play (fixture_id, org_id, scheduled_at_basis, checkin_extra_ms, checkin_extensions)
+         values (${fixtureId}, ${orgId}, now(), ${cols.ms ?? 0}, ${cols.n ?? 0})`.then(() => after?.(tx));
+
+    it("both columns are not-null integers that read zero for a row that predates them", async () => {
+      const cols = await sql<{ column_name: string; data_type: string; is_nullable: string; column_default: string | null }[]>`
+        select column_name, data_type, is_nullable, column_default from information_schema.columns
+         where table_schema = current_schema() and table_name = 'fixture_external_play'
+           and column_name in ('checkin_extra_ms', 'checkin_extensions') order by column_name`;
+      expect(cols).toEqual([
+        { column_name: "checkin_extensions", data_type: "smallint", is_nullable: "NO", column_default: "0" },
+        { column_name: "checkin_extra_ms", data_type: "integer", is_nullable: "NO", column_default: "0" },
+      ]);
+      expect(await rolledBack(async (tx) => {
+        await bridge()(tx);
+        const [r] = await tx<{ ms: number; n: number }[]>`select checkin_extra_ms as ms, checkin_extensions as n from fixture_external_play where fixture_id = ${fixtureId}`;
+        expect(r, "a row inserted without them reads 0 and 0").toEqual({ ms: 0, n: 0 });
+      })).toEqual({ accepted: true });
+    });
+
+    it("the two columns are non-negative and zero TOGETHER - each way round refused by the one named check, the coherent pairs accepted (counted)", async () => {
+      const refused: [string, { ms?: number; n?: number }][] = [
+        ["time without a count", { ms: 300_000, n: 0 }],
+        ["a count without time", { ms: 0, n: 1 }],
+        ["negative time", { ms: -300_000, n: 1 }],
+        ["a negative count", { ms: 300_000, n: -1 }],
+        ["both negative", { ms: -1, n: -1 }],
+      ];
+      let checked = 0;
+      for (const [why, cols] of refused) {
+        expect(await rolledBack(bridge(cols)), why).toEqual({ accepted: false, code: CHECK_VIOLATION, constraint: COHERENCE });
+        checked += 1;
+      }
+      // The positive pairs the refusals are measured against. The cap is a product constant in code, not a CHECK: a row past it is
+      // accepted here (a constant retuned in code must never need a migration), and judged by `extendRefusal`.
+      for (const [why, cols] of [["untouched", {}], ["one press", { ms: 300_000, n: 1 }], ["past any cap", { ms: 3_000_000, n: 10 }]] as const) {
+        expect(await rolledBack(bridge(cols)), why).toEqual({ accepted: true });
+        checked += 1;
+      }
+      expect(checked, "anti-vacuity").toBe(8);
+    });
+
+    it("an UPDATE is judged the same way: moving only one of the two columns is refused", async () => {
+      expect(await rolledBack(bridge({}, (tx) => tx`update fixture_external_play set checkin_extra_ms = 300000 where fixture_id = ${fixtureId}`)), "time alone")
+        .toMatchObject({ accepted: false, code: CHECK_VIOLATION, constraint: COHERENCE });
+      expect(await rolledBack(bridge({}, (tx) => tx`update fixture_external_play set checkin_extensions = 1 where fixture_id = ${fixtureId}`)), "count alone")
+        .toMatchObject({ accepted: false, code: CHECK_VIOLATION, constraint: COHERENCE });
+      expect(await rolledBack(bridge({}, (tx) => tx`update fixture_external_play set checkin_extra_ms = 300000, checkin_extensions = 1 where fixture_id = ${fixtureId}`)), "both together")
+        .toEqual({ accepted: true });
+    });
+
+    it("checkin_extend is an audit kind and needs its fixture; an unknown kind is still refused by the kind check, a kindless fixture by the shape check", async () => {
+      const row = (kind: string, fixture: string | null) => (tx: typeof sql) =>
+        tx`insert into online_chess_audit (org_id, fixture_id, kind, actor_user_id, note) values (${orgId}, ${fixture}, ${kind}, ${userId}, '{}')`;
+      expect(await rolledBack(row("checkin_extend", fixtureId)), "the new kind, with its board").toEqual({ accepted: true });
+      expect(await rolledBack(row("video_override", fixtureId)), "the old kind is not displaced").toEqual({ accepted: true });
+      expect(await rolledBack(row("checkin_extend", null)), "no board").toEqual({ accepted: false, code: CHECK_VIOLATION, constraint: "online_chess_audit_shape_check" });
+      expect(await rolledBack(row("checkin_extension", fixtureId)), "a near-miss spelling").toEqual({ accepted: false, code: CHECK_VIOLATION, constraint: "online_chess_audit_kind_check" });
+      expect(await rolledBack(row("policy_downgrade", fixtureId)), "a retired kind stays retired").toEqual({ accepted: false, code: CHECK_VIOLATION, constraint: "online_chess_audit_kind_check" });
+    });
+  });
+
   it("a participant cannot exist without a meeting", async () => {
     // Anti-vacuity: the fixture this case uses is REAL and is not the one that
     // has a meeting — otherwise the rejection below would prove nothing.

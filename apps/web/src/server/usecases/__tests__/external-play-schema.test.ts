@@ -182,7 +182,7 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V451/V452)", (
     })).toEqual({ accepted: true, row: { status: "accepted", needs_reason: null } });
   });
 
-  it("fixture_external_play has exactly the design §3 + D12 columns (V451, V453, V454)", async () => {
+  it("fixture_external_play has exactly the design §3 + D12 columns (V451, V453, V454, V465)", async () => {
     // D12 adds round_open_id ONLY: the invite stamps are the pre-existing
     // per-seat white_emailed_at / black_emailed_at — no second invite column.
     // V453 drops url_white / url_black: under D3 there is no per-colour
@@ -193,10 +193,11 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V451/V452)", (
     // round 1, ruling M7) the seat a token_revoked hold froze, (T13,
     // carry M4) the sweep's count of consecutive reads that told it nothing,
     // and (T13 fix round 1) the game's first-read end (I1) and the move T10
-    // is submitting (I4).
+    // is submitting (I4). V465 adds the arbiter's check-in extension (spec §3.2.2): the milliseconds
+    // added to the board's deadline and the number of presses that made them.
     expect(await columns("fixture_external_play")).toEqual([
       "black_draw_offer_ply", "black_emailed_at", "black_lichess_id", "black_ms",
-      "challenge_id", "clock_increment_s", "create_sent_at", "created_at",
+      "challenge_id", "checkin_extensions", "checkin_extra_ms", "clock_increment_s", "create_sent_at", "created_at",
       "draw_offer_by", "expires_at", "finished_at", "fixture_id", "game_over_at", "last_error",
       "last_move_at", "last_polled_at", "mint_claimed_at", "move_count", "moves_uci",
       "needs_reason", "org_id", "pending_move_at", "pending_move_ply", "pending_move_uci",

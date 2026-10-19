@@ -81,7 +81,7 @@ import {
 import { boardOpenFor } from "@/server/external-play/round-open";
 import { assertTimeControl, type TimeControl } from "@/server/external-play/time-controls";
 import type { BoardErrorCode, NeedsReason } from "@/server/external-play/types";
-import { LICHESS_TIMEOUT_MS, MINT_CLAIM_STALE_MS, boardCap, windowFor, type BoardAnchor } from "@/server/external-play/window";
+import { LICHESS_TIMEOUT_MS, MINT_CLAIM_STALE_MS, boardCap, windowFor } from "@/server/external-play/window";
 import { boardPhase } from "@/server/external-play/seat-line";
 import { countedCheckIns } from "./check-ins";
 import { log } from "@/server/logger";
@@ -261,7 +261,6 @@ export async function createGameIfReady(
     homeEntrantId: f.homeEntrantId,
     awayEntrantId: f.awayEntrantId,
     scheduledAt: f.scheduledAt,
-    anchor: open.anchor,
     whiteSide,
     white: { userId: whiteSide === "home" ? homeUserId : awayUserId, lichessId: whiteLichess.id },
     black: {
@@ -325,8 +324,6 @@ type CreationPlan = {
   awayEntrantId: string;
   /** The board's start time as planned; `null` ⇒ none (ruling 2026-10-10). */
   scheduledAt: Date | null;
-  /** The BOARD's anchor (spec §3.2.1): its window, not the round's, decides whether a create is still allowed. */
-  anchor: BoardAnchor;
   whiteSide: Side;
   white: { userId: string; lichessId: string };
   black: { userId: string; lichessId: string; username: string };
@@ -370,13 +367,19 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined): 
   }
   // DEADLINE_AFTER_MS is the deadline to have the game created (spec §3.6), measured at
   // the create, not where it joined the queue.
-  // The same allowance as createGameIfReady's, judged at the dequeue (spec §5.7.8).
-  const dequeuePhase = await boardPhase(claimAt, { fixtureId, anchor: plan.anchor }, {
+  // The same allowance as createGameIfReady's, judged at the dequeue (spec §5.7.8). The board's window is read HERE, at the dequeue,
+  // not carried over from the plan (spec §3.2.2): an arbiter's +5 minutes that landed while the create waited in the queue has moved
+  // the deadline, and judging the plan's snapshot would refuse a create the board is still owed - or, past it, size the row's expiry
+  // from a deadline the players are no longer on. A round that was un-opened while the create waited has no window: refused.
+  const open = await boardOpenFor(sql, fixtureId);
+  if (!open) return { stage: "refused" };
+  const anchor = open.anchor;
+  const dequeuePhase = await boardPhase(claimAt, { fixtureId, anchor }, {
     personId: null,
     bothOnly: true,
     facts: async () => {
       const both = await loadSides(g);
-      const ci = await countedCheckIns(g, both.home, both.away, plan.anchor);
+      const ci = await countedCheckIns(g, both.home, both.away, anchor);
       return { own: false, both: ci.home && ci.away };
     },
   });
@@ -531,7 +534,10 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined): 
 
   // A game created PAST the deadline (spec §5.7.8: both players' check-ins count and the board's cap has not passed) is expected
   // to run from its creation; the row's expiry is the deadline for a create inside the window, the board's cap for one past it.
-  const readyExpiresAt = claimAt.getTime() < windowFor(plan.anchor).deadline.getTime() ? windowFor(plan.anchor).deadline : boardCap(plan.anchor);
+  // Sized from the anchor read at the dequeue, BEFORE the claim above: an extension that landed before that read is in it. One that
+  // lands between that read and the claim is not (it is the claim that makes a game on file, `bridgeGameOnFile`, and an extension
+  // is refused from then on), so the expiry stays on the deadline the board had a moment earlier - never later than the board's own.
+  const readyExpiresAt = claimAt.getTime() < windowFor(anchor).deadline.getTime() ? windowFor(anchor).deadline : boardCap(anchor);
 
   // Ready: create + accept. T10's first accepted move flips it to `live`;
   // nothing here writes 'live'. white_side and BOTH Lichess ids are what T8's

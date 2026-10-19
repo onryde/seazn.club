@@ -47,7 +47,7 @@ import {
   type RealtimeKitDeps,
 } from "@/server/external-play/video/realtimekit";
 import { EDITOR_ROLES } from "@/lib/types";
-import { anchorOfRow, boardRankSql } from "@/server/external-play/round-open";
+import { anchorOfRow, boardExtraSql, boardOpenFor, boardRankSql, lockCheckinWindow } from "@/server/external-play/round-open";
 import { liveMintClaimSince, windowFor, type BoardAnchor } from "@/server/external-play/window";
 import { boardPhase } from "@/server/external-play/seat-line";
 import { getFixtureState, listEvents } from "../fixtures";
@@ -202,8 +202,8 @@ async function bothCameFor(fixtureId: string, anchor: BoardAnchor): Promise<{ ow
 
 /** The anchor of a sweep candidate row that carries its round's stamp, the board's rank (`boardRankSql`) and the round's
  *  stored `staggered` flag; `null` for a board whose round was never opened. */
-function candidateAnchor(c: { openedAt: Date | null; rank: number; staggered: boolean | null }): BoardAnchor | null {
-  return c.openedAt === null ? null : anchorOfRow({ openedAt: c.openedAt, rank: c.rank, staggered: c.staggered === true });
+function candidateAnchor(c: { openedAt: Date | null; rank: number; staggered: boolean | null; extraMs: number }): BoardAnchor | null {
+  return c.openedAt === null ? null : anchorOfRow({ openedAt: c.openedAt, rank: c.rank, staggered: c.staggered === true, extraMs: c.extraMs });
 }
 
 /** T8's predicate, as the SQL list the candidate queries filter on — derived,
@@ -220,6 +220,9 @@ function codeOf(err: unknown): string {
 
 type Pass = {
   now: Date;
+  /** TEST SEAM made visible: the pass's `now` was handed in (`SweepDeps.now`), so a test owns the decision clock of the window
+   *  judgements too. Production hands none, and those judgements read the DATABASE's clock (`anchorIfClosedNow`). */
+  fixedNow: boolean;
   orgIds: readonly string[] | undefined;
   report: SweepReport;
   /** I-1: the budget's clock, read at the pass's start and before each network row. */
@@ -374,8 +377,8 @@ type NoShowCandidate = BridgeFacts & { fixtureId: string; openedAt: Date; anchor
 async function noShowCandidates(pass: Pass): Promise<NoShowCandidate[]> {
   // Millisecond stamps, as a JS Date holds them, so the I3 takeover compares
   // like with like whatever precision a writer used.
-  const rows = await sql<(Omit<NoShowCandidate, "anchor"> & { rank: number; staggered: boolean })[]>`
-    select f.id as "fixtureId", o.opened_at as "openedAt", o.staggered, ${boardRankSql(sql)} as rank,
+  const rows = await sql<(Omit<NoShowCandidate, "anchor"> & { rank: number; extraMs: number; staggered: boolean })[]>`
+    select f.id as "fixtureId", o.opened_at as "openedAt", o.staggered, ${boardRankSql(sql)} as rank, ${boardExtraSql(sql)} as "extraMs",
            ep.status as "bridgeStatus", ep.challenge_id as "challengeId",
            date_trunc('milliseconds', ep.create_sent_at) as "createSentAt",
            date_trunc('milliseconds', ep.mint_claimed_at) as "mintClaimedAt"
@@ -393,10 +396,35 @@ async function noShowCandidates(pass: Pass): Promise<NoShowCandidate[]> {
   return rows.map((r) => ({ ...r, anchor: anchorOfRow(r) }));
 }
 
-async function noShow(pass: Pass, c: NoShowCandidate): Promise<void> {
+/** Spec §3.2.2: the board's anchor as it stands NOW, with the clock the judgement was made on, read under the board's check-in-window
+ *  lock - or `null` when the board's deadline has NOT passed on that clock. The candidate query read the board's extension some time
+ *  ago; an arbiter's +5 minutes committed since (or in flight at this moment - the lock waits for it) moves the deadline, and a
+ *  destructive judgement - a walkover, ending the players' rooms - on the candidate's stale anchor would undo it. Holds the lock
+ *  only for the read: an extension arriving after it reads its own clock after taking the lock, and that clock is not before
+ *  this one, so it finds the deadline passed and is refused (checkin-extend.ts) - it cannot move the deadline back under a
+ *  judgement already made. THE CLOCK is the database's (`clock_timestamp()`, read after the lock - the extension reads the same
+ *  one the same way): a machine clock that runs ahead of it would otherwise find the deadline passed while the extension, on the
+ *  database's clock, still found it open and extended it - a walkover over a board that had just been given more time. A pass
+ *  that was handed its clock (a test's) judges on that. */
+async function anchorIfClosedNow(pass: Pass, fixtureId: string): Promise<{ anchor: BoardAnchor; now: Date } | null> {
+  return sql.begin(async (tx) => {
+    await lockCheckinWindow(tx, fixtureId);
+    const open = await boardOpenFor(tx, fixtureId);
+    if (open === null) return null;
+    const now = pass.fixedNow ? pass.now : (await tx<{ now: Date }[]>`select clock_timestamp() as now`)[0]!.now;
+    return now.getTime() < playableWindow(open.anchor).deadline.getTime() ? null : { anchor: open.anchor, now };
+  });
+}
+
+async function noShow(pass: Pass, cand: NoShowCandidate): Promise<void> {
+  // Cheap, lock-free first look: the candidate's own anchor. A board still inside its window needs no lock; one past it is
+  // re-read under the window lock (an extension may have landed since the candidate query).
+  if (pass.now.getTime() < playableWindow(cand.anchor).deadline.getTime()) return;
+  if (gameMayBeOnFile(pass, cand)) return;
+  const fresh = await anchorIfClosedNow(pass, cand.fixtureId);
+  if (fresh === null) return;
+  const c: NoShowCandidate = { ...cand, anchor: fresh.anchor };
   const { deadline } = playableWindow(c.anchor);
-  if (pass.now.getTime() < deadline.getTime()) return;
-  if (gameMayBeOnFile(pass, c)) return;
   // THE guard (spec §6): online play still on, a boardgame, both entrants.
   // An organiser who switched online play off after the open has taken the
   // board back to the table.
@@ -408,7 +436,7 @@ async function noShow(pass: Pass, c: NoShowCandidate): Promise<void> {
   // side (the call budget was holding them in line; they arrived in time) is not judged until the board's cap, and nor is a
   // board whose two players both came while its create is still owed (T9 can still recover a sent create there, so the
   // unknown-create hold waits for the cap too). At the cap, and after, it is judged normally.
-  const held = await boardPhase(pass.now, { fixtureId: c.fixtureId, anchor: c.anchor }, { personId: null, facts: { own: false, both: came.home && came.away } });
+  const held = await boardPhase(fresh.now, { fixtureId: c.fixtureId, anchor: c.anchor }, { personId: null, facts: { own: false, both: came.home && came.away } });
   if (held === "open") return;
   if (c.createSentAt !== null) {
     await holdUnknownCreate(pass, c, deadline);
@@ -581,8 +609,8 @@ type RetryCandidate = { fixtureId: string; openedAt: Date; anchor: BoardAnchor; 
 
 async function retryCandidates(pass: Pick<Pass, "now" | "orgIds">): Promise<RetryCandidate[]> {
   const gracedBefore = new Date(pass.now.getTime() - STRANDED_CREATE_AFTER_MS);
-  const rows = await sql<(Omit<RetryCandidate, "anchor"> & { rank: number; staggered: boolean })[]>`
-    select f.id as "fixtureId", o.opened_at as "openedAt", o.staggered, ${boardRankSql(sql)} as rank,
+  const rows = await sql<(Omit<RetryCandidate, "anchor"> & { rank: number; extraMs: number; staggered: boolean })[]>`
+    select f.id as "fixtureId", o.opened_at as "openedAt", o.staggered, ${boardRankSql(sql)} as rank, ${boardExtraSql(sql)} as "extraMs",
            ep.last_error as "lastError"
       from fixtures f
       join divisions d on d.id = f.division_id
@@ -693,10 +721,10 @@ type TeardownCandidate = BridgeFacts & {
 };
 
 async function teardownCandidates(pass: Pass): Promise<TeardownCandidate[]> {
-  const rows = await sql<(Omit<TeardownCandidate, "anchor"> & { rank: number; staggered: boolean | null })[]>`
+  const rows = await sql<(Omit<TeardownCandidate, "anchor"> & { rank: number; extraMs: number; staggered: boolean | null })[]>`
     select m.fixture_id as "fixtureId", m.side, m.meeting_id as "meetingId", f.status as "fixtureStatus",
            ep.status as "bridgeStatus", ep.challenge_id as "challengeId", ep.create_sent_at as "createSentAt",
-           ep.mint_claimed_at as "mintClaimedAt", o.opened_at as "openedAt", o.staggered, ${boardRankSql(sql)} as rank,
+           ep.mint_claimed_at as "mintClaimedAt", o.opened_at as "openedAt", o.staggered, ${boardRankSql(sql)} as rank, ${boardExtraSql(sql)} as "extraMs",
            (f.home_entrant_id is not null and f.away_entrant_id is not null
             and (m.home_entrant_id, m.away_entrant_id) is distinct from (f.home_entrant_id, f.away_entrant_id)
             and not coalesce(${gameEvidenceOn(pass.now)}, false)) as "retirable"
@@ -716,9 +744,13 @@ async function meetingIsDone(pass: Pass, c: TeardownCandidate): Promise<boolean>
   if (c.anchor === null) return false;
   const { deadline } = playableWindow(c.anchor);
   if (pass.now.getTime() < deadline.getTime() || gameMayBeOnFile(pass, c)) return false;
+  // Spec §3.2.2: the candidate's deadline may be stale (an arbiter's +5 minutes since the query): ending the players' rooms on
+  // "nobody played" is judged on the board's anchor as it stands now, read under the board's check-in-window lock.
+  const fresh = await anchorIfClosedNow(pass, c.fixtureId);
+  if (fresh === null) return false;
   // Spec §5.7.8: "nobody played" is not true of a board the check-in line (or a create still owed) is holding open past its
   // deadline: those players' rooms stay up until the board's cap.
-  const held = await boardPhase(pass.now, { fixtureId: c.fixtureId, anchor: c.anchor }, { personId: null, facts: () => bothCameFor(c.fixtureId, c.anchor!) });
+  const held = await boardPhase(fresh.now, { fixtureId: c.fixtureId, anchor: fresh.anchor }, { personId: null, facts: () => bothCameFor(c.fixtureId, fresh.anchor) });
   return held !== "open";
 }
 
@@ -866,11 +898,11 @@ type ReconcileCandidate = {
 };
 
 async function reconcileCandidates(pass: Pass): Promise<ReconcileCandidate[]> {
-  const rows = await sql<(Omit<ReconcileCandidate, "anchor"> & { rank: number; staggered: boolean | null })[]>`
+  const rows = await sql<(Omit<ReconcileCandidate, "anchor"> & { rank: number; extraMs: number; staggered: boolean | null })[]>`
     select ep.fixture_id as "fixtureId", ep.status as "bridgeStatus", ep.challenge_id as "gameId",
            ep.started_at as "startedAt", date_trunc('milliseconds', ep.last_polled_at) as "lastPolledAt",
            ep.sweep_no_truth_reads as "noTruthReads", o.opened_at as "openedAt", o.staggered,
-           ${boardRankSql(sql)} as rank, d.config->'clock' as clock, ep.updated_at as "gameCreatedAt"
+           ${boardRankSql(sql)} as rank, ${boardExtraSql(sql)} as "extraMs", d.config->'clock' as clock, ep.updated_at as "gameCreatedAt"
       from fixture_external_play ep
       join fixtures f on f.id = ep.fixture_id
       join divisions d on d.id = f.division_id
@@ -1433,6 +1465,7 @@ async function runPass(deps: SweepDeps): Promise<SweepReport> {
   const clock = deps.wallClock ?? Date.now;
   const pass: Pass = {
     now: deps.now ?? new Date(),
+    fixedNow: deps.now !== undefined,
     orgIds: deps.orgIds,
     report,
     clock,
