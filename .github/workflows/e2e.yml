@@ -281,9 +281,22 @@ jobs:
     # unrelated specs as filler), while plain 4/4 count shards with no
     # carve-out replay at 913s. Replayed step now: heavy 446s, rest 279 / 558 /
     # 472 / 419s, against 936-1050s measured for the old 2/3. That is one more
-    # setup (~2.5 runner-min of ~110 a run) for ~3.5 min more headroom on the
-    # slowest leg, and it leaves room for the chess and overlay specs to keep
-    # growing. A prediction until the run that carries this change is read.
+    # setup (~2.5 runner-min of ~110 a run), and it leaves room for the chess
+    # and overlay specs to keep growing.
+    #
+    # MEASURED, run 39326082029 (PR dispatch of this change; job / Playwright
+    # step, nothing failed or flaked):
+    #
+    #   parallel 1/4  416s / 4.5m   2/4  729s / 9.5m   3/4  497s / 5.9m
+    #   parallel 4/4  599s / 7.5m   heavy 575s / 7.0m
+    #
+    # Replayed steps were 279 / 557 / 469 / 418 / 446s. The slowest leg is 2/4
+    # (match-room 257s + overlay-compositor 140s of test starts) at 12.2 min
+    # start to end, 7.8 min under the cap; on the first attempt it was heavy at
+    # 14.7 and on the original split 2/3 at 17.7-20+. On a slow day (steps
+    # +30%, setup 240s — an estimate, not a measurement) 2/4 is ~16.4 min. The
+    # workflow's wall clock is unchanged: walkthrough 1/3 ran 1118s on the
+    # same run, so the parallel legs are not its floor.
     #
     # `timeout-minutes: 20` STAYS. It is a cost guard against a hung job, and
     # the data does not show a shard that cannot be brought under ~15 min.

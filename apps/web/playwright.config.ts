@@ -102,8 +102,10 @@ const SERIAL_SPECS =
 // So PARALLEL_HEAVY holds six files now (the "three files" above is the
 // original derivation) — scorepad-v3-cricket, marketing-ai-demo, board-v3
 // plus online-chess-desk and overlay-gallery — and "rest" is sharded FOUR ways
-// in e2e.yml. Replayed step: heavy 446s, rest 279 / 558 / 472 / 419s. Two
-// files that cost as much are deliberately NOT carved:
+// in e2e.yml. Replayed step: heavy 446s, rest 279 / 558 / 472 / 419s; measured
+// on run 39326082029, job time 575s heavy and 416 / 729 / 497 / 599s rest, the
+// slowest 12.2 min against the 20-minute cap. Two files that cost as much are
+// deliberately NOT carved:
 //   * overlay-compositor — overlay-compositor-e2e-wiring.test.ts pins it in
 //     "rest".
 //   * player-stats-stale-version — alphabetically it would start after the
