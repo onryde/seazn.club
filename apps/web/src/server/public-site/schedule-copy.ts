@@ -11,7 +11,7 @@
 // `division.filter.showFor` were added for it.
 import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
-import type { ScheduleCopy } from "@/components/public-site/schedule";
+import type { ScheduleCopy, ScheduleWatchCopy } from "@/components/public-site/schedule";
 
 /**
  * @param dict the PUBLIC dictionary, in the org's locale.
@@ -23,6 +23,7 @@ export function publicScheduleCopy(dict: Dict, ui: (key: "schedule.tbd") => stri
     allEntrants: t(dict, "division.filter.allEntrants"),
     live: t(dict, "matchesHub.live"),
     ended: t(dict, "matchesHub.ended"),
+    roundOpened: t(dict, "division.roundOpened"),
     // W2a: the SAME words the match centre's status line uses for a held fixture (Task 7), so the bracket card and the
     // page it opens cannot describe one match two ways.
     held: t(dict, "matchCentre.status.needs_decision"),
@@ -36,5 +37,26 @@ export function publicScheduleCopy(dict: Dict, ui: (key: "schedule.tbd") => stri
     // group's first timed match (a DST boundary can change the abbreviation).
     timesIn: t(dict, "division.timesIn"),
     empty: t(dict, "division.scheduleEmpty"),
+  };
+}
+
+/** T16 fix round 1, I4 — the online watch links' words (ui keys; the canvas's "Watch live", "Final position",
+ *  "Round not opened yet"), from the org-locale lookup the division page already holds. */
+export function publicWatchCopy(
+  ui: (
+    key:
+      | "externalPlay.watch.list.live"
+      | "externalPlay.watch.list.final"
+      | "externalPlay.watch.list.noResult"
+      | "externalPlay.watch.list.notOpened"
+      | "externalPlay.watch.list.starting",
+  ) => string,
+): ScheduleWatchCopy {
+  return {
+    live: ui("externalPlay.watch.list.live"),
+    final: ui("externalPlay.watch.list.final"),
+    noResult: ui("externalPlay.watch.list.noResult"),
+    notOpened: ui("externalPlay.watch.list.notOpened"),
+    starting: ui("externalPlay.watch.list.starting"),
   };
 }

@@ -56,3 +56,7 @@ export {
 export { suspensionConfirmedTemplate, type SuspensionConfirmedArgs } from "./suspension-confirmed";
 export { suspensionServedTemplate, type SuspensionServedArgs } from "./suspension-served";
 export { reportSubmittedTemplate, incidentsPhrase, type ReportSubmittedArgs } from "./report-submitted";
+export {
+  externalPlayInviteTemplate,
+  type ExternalPlayInviteArgs,
+} from "./external-play-invite";

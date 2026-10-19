@@ -73,8 +73,12 @@ export function fixtureSubheading(
   startTime: string | null | undefined,
   timeTbdLabel: string = "Time TBD",
   timeNotRecordedLabel: string = "Time not recorded",
+  roundOpenedLabel: string | null = null,
 ): string {
   if (startTime) return startTime;
+  // T17 fix round 2, V1: an online board with no start time says when its round opened, whatever the status — the
+  // same line before the first move and after it, so the board below never moves when the header folds live.
+  if (roundOpenedLabel) return roundOpenedLabel;
   if (status === "in_play") return "";
   return PLAYED_STATUSES.has(status) ? timeNotRecordedLabel : timeTbdLabel;
 }
@@ -100,7 +104,12 @@ export function fixtureSubheading(
 export function fixtureSubheadingLine(
   doc: MatchCentreDocT | undefined,
   fallbackStatus: string,
-  labels: { timeTbd: string; timeNotRecorded: string },
+  labels: {
+    timeTbd: string;
+    timeNotRecorded: string;
+    /** V1: "Round opened 11:42", already formatted — an online board whose round is open; absent otherwise. */
+    roundOpened?: string | null;
+  },
 ): string | null {
   const parts = [
     fixtureSubheading(
@@ -109,6 +118,7 @@ export function fixtureSubheadingLine(
       doc?.startTime,
       labels.timeTbd,
       labels.timeNotRecorded,
+      labels.roundOpened ?? null,
     ),
     doc?.venueName ?? null,
     doc?.courtName ?? null,

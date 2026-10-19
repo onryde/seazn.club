@@ -86,6 +86,7 @@ import { posterImageDataUrl } from "@/server/og/poster-image";
 import { publicFixture } from "@/server/usecases/public";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { venueTzRow } from "@/server/venue-tz";
+import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
 import {
   getPublicCompetition,
   getPublicFixture,
@@ -572,11 +573,31 @@ describe.skipIf(!HAS_DB)("match-centre loaders — identical to the pre-T4 loade
   });
 
   it("getPublicFixture: every fixture's page document equals the pre-T4 one", async () => {
+    // `externalPlay` (the chess online-play bridge) joined the document on the
+    // chess branch after this oracle was frozen. The scene seeds no bridge row
+    // — asserted, so the null below is the seed's fact, not the loader's.
+    const [{ n: bridgeRows }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from fixture_external_play
+       where fixture_id = any(${sweep.map((f) => f.id)}::uuid[])`;
+    expect(bridgeRows, "the identity scene seeds no online-play bridge row").toBe(0);
     for (const f of sweep) {
       const division = divisionOf(f.slug);
       const body = await getPublicFixtureBodyBefore(shell, division, f.id);
       expect(body, f.id).not.toBeNull();
-      const before = { org: shell.org, competition: shell.competition, division, ...body! };
+      // `roundOpened` / `roundOpenedAt` (chess T16) and `pairedWhiteSide` (chess T17 round B, option B) joined it the
+      // same way: read only for a division that plays online, which no division of this scene does — asserted, so
+      // false/null are the scene's facts.
+      expect(supportsOnlinePlay(division.sport_key) && readOnlinePlay(division.config) === "lichess", f.slug).toBe(false);
+      const before = {
+        org: shell.org,
+        competition: shell.competition,
+        division,
+        ...body!,
+        externalPlay: null,
+        roundOpened: false,
+        roundOpenedAt: null,
+        pairedWhiteSide: null,
+      };
       expectIdentical(await getPublicFixture(scene.orgSlug, scene.compSlug, f.slug, f.id), before, `${f.slug} ${f.id}`);
     }
     // A fixture of another division is still not this division's.

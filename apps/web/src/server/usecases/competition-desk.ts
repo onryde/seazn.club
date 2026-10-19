@@ -5,7 +5,9 @@
 // (existing card-grid aggregates) with Task 1's pure division-phase
 // resolver; nothing here duplicates their queries.
 import "server-only";
-import { withTenant } from "@/lib/db";
+import { sql, withTenant } from "@/lib/db";
+import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
+import { roundKey, roundOpensOfDivisions } from "@/server/external-play/round-open";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { ScheduleConfig } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
@@ -183,6 +185,7 @@ type FixtureRaw = {
   scheduled_at: string | null;
   fixture_no: number;
   stage_id: string;
+  round_no: number | null;
   /** The row's own entrant ids, paired with the slot labels below — the
    *  inputs `fixtureAwaitsSeedDraw` reads. `home`/`away` are the joined
    *  DISPLAY NAMES and answer a different question (what to print). */
@@ -320,7 +323,7 @@ export async function getCompetitionDesk(
     // table; EXPLAIN ANALYZE before/after in fix-round-b-report.md.
     const fixtures = ids.length
       ? await tx<FixtureRaw[]>`
-          select f.id, f.division_id, f.status, f.scheduled_at, f.fixture_no, f.stage_id,
+          select f.id, f.division_id, f.status, f.scheduled_at, f.fixture_no, f.stage_id, f.round_no,
                  -- The draw fact's raw inputs (fixtureAwaitsSeedDraw): an
                  -- unfilled SEED slot still carries its {key, params, seed}
                  -- descriptor, an unfilled sibling-fed slot has none unless
@@ -413,6 +416,12 @@ export async function getCompetitionDesk(
     return { orgTz: resolveVenueTz(null, org?.timezone), stages, fixtures, settings, fixturesWithOfficial };
   });
   const fixturesWithScorer = new Set(fixturesWithOfficial.map((a) => a.fixture_id));
+  // T16 fix round 1, R4 (D12): which online rounds are open. stage_round_opens is SEALED (no app_user grant), so it is
+  // read with the privileged client, for these divisions only — the ones listDivisions just proved are this org's.
+  const onlineIds = new Set(
+    divisions.filter((d) => supportsOnlinePlay(d.sport_key) && readOnlinePlay(d.config) === "lichess").map((d) => d.id),
+  );
+  const openedRounds = await roundOpensOfDivisions(sql, [...onlineIds]);
 
   const nowIso = now.toISOString();
   const out = new Map<string, DeskDivision>();
@@ -505,6 +514,8 @@ export async function getCompetitionDesk(
       awaitsSeedDraw: fixtureAwaitsSeedDraw(x),
       // W2a (addendum 9): a recorded abandon that decided nobody, in a BRACKET stage — see `fixtureAwaitsSettle`.
       awaitsSettle: fixtureAwaitsSettle(stageKindById.get(x.stage_id), x),
+      awaitsRoundOpen:
+        onlineIds.has(d.id) && x.round_no !== null && !openedRounds.has(roundKey(x.stage_id, x.round_no)),
     }));
     const input = {
       divisionStatus: d.status as DivisionStatus,

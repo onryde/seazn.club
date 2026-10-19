@@ -48,7 +48,7 @@ import { executeRevalidates } from "next/dist/server/revalidation-utils";
 import { defaultConfig } from "next/dist/server/config-shared";
 import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { competitionTag, divisionTag, orgTag } from "@/server/public-site/data";
+import { competitionTag, divisionTag, orgTag } from "@/server/public-site/cache-tags";
 import { createCompetition } from "../competitions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";

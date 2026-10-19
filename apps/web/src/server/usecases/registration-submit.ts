@@ -52,6 +52,9 @@ import {
   seasonStartYearFrom,
   type EligibilityIssue,
 } from "./registration-eligibility";
+import { divisionPlaysOnline } from "@/server/external-play/online-play";
+import { assertUserHasLichessForOnlinePlay } from "./external-accounts";
+import { onlineChessOffered } from "./external-play/online-chess-flag";
 
 // ---------------------------------------------------------------------------
 // Input / output shapes
@@ -305,12 +308,15 @@ interface EntryDivisionCtx {
   org_name: string;
   org_currency: string;
   charges_enabled: boolean;
+  sport_key: string;
+  config: unknown;
 }
 
 async function loadEntryDivisionCtx(divisionId: string): Promise<EntryDivisionCtx> {
   const [row] = await sql<EntryDivisionCtx[]>`
     select d.id, d.competition_id, d.org_id, d.category, d.age_min, d.age_max,
            d.age_cutoff_month, d.age_cutoff_day, d.eligibility_note,
+           d.sport_key, d.config,
            d.name as division_name,
            c.slug as comp_slug, c.name as comp_name, c.visibility as comp_visibility, c.starts_on,
            o.slug as org_slug, o.name as org_name, o.currency as org_currency,
@@ -553,6 +559,22 @@ export async function submitRegistrationGroup(
       seasonYear,
     );
     if (issues.length > 0) throw eligibilityError(issues);
+
+    // T20: the Lichess link is demanded only while the club is offered online chess (the PostHog flag
+    // `online-chess`): with it off, nobody is asked to link an account for a feature they cannot see.
+    // M7 (T16 fix round 1): asked AS THE CLUB (`userId: null`), exactly as the entries step's public read
+    // (registrations.ts publicRegistrationInfo) asked when it told this registrant a link is needed — so the notice
+    // and this demand cannot disagree. The person is still the one whose link is checked.
+    if (divisionPlaysOnline(divCtx) && (await onlineChessOffered({ orgId: divCtx.org_id, userId: null }))) {
+      if (!entry.registering_self) {
+        throw new HttpError(
+          422,
+          "Sign in and link your Lichess account to register for online play",
+          "LICHESS_LINK_REQUIRED",
+        );
+      }
+      await assertUserHasLichessForOnlinePlay(ctx.sessionUserId ?? null);
+    }
 
     const answers = validateAnswers(settings.form_fields ?? [], entry.answers ?? {});
     const displayName = entryDisplayName(entry, players, input.contact);
@@ -1211,6 +1233,11 @@ export async function joinTeamEntry(
     seasonStartYearFrom(divCtx.starts_on),
   );
   if (issues.length > 0) throw eligibilityError(issues);
+
+  // T20: as at submit — no Lichess link is demanded while the club is not offered online chess, asked as the club (M7).
+  if (divisionPlaysOnline(divCtx) && (await onlineChessOffered({ orgId: divCtx.org_id, userId: null }))) {
+    await assertUserHasLichessForOnlinePlay(ctx.sessionUserId ?? null);
+  }
 
   const minor = !!input.player.dob && isMinor(input.player.dob, now);
   if (minor && !(input.guardian_consent && input.guardian_name?.trim())) {

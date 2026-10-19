@@ -174,7 +174,7 @@ import {
   areTagsStale,
 } from "next/dist/server/lib/incremental-cache/tags-manifest.external";
 import { sql } from "@/lib/db";
-import { competitionTag, divisionTag } from "@/server/public-site/data";
+import { competitionTag, divisionTag } from "@/server/public-site/cache-tags";
 import { fireDivisionRevalidate, fireScoreRevalidate } from "@/server/public-site/revalidate";
 import { scoreEvent } from "../scoring";
 import { importEvents } from "../event-import";

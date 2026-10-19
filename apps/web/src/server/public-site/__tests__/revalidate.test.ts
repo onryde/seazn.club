@@ -10,12 +10,6 @@ const revalidateTag = vi.hoisted(() => vi.fn());
 const revalidatePath = vi.hoisted(() => vi.fn());
 vi.mock("next/cache", () => ({ revalidateTag, revalidatePath }));
 vi.mock("@/lib/cache", () => ({ cacheDelPattern: vi.fn() }));
-vi.mock("@/server/public-site/data", () => ({
-  divisionTag: (id: string) => `division:${id}`,
-  competitionTag: (id: string) => `competition:${id}`,
-  orgTag: (slug: string) => `org-public:${slug}`,
-  DISCOVERY_TAG: "discovery",
-}));
 const broadcastRevalidate = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("@/lib/peer-revalidate", () => ({ broadcastRevalidate }));
 // Task 7: CDN purge fires alongside the peer broadcast at the same seam —

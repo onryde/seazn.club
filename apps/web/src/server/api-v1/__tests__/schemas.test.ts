@@ -23,6 +23,8 @@ import {
   PatchFixture,
   PutRegistrationSettings,
   RestoreCompetitionScheduleResult,
+  RoomAct,
+  RoomActOut,
   SetTeamSquad,
 } from "../schemas";
 
@@ -944,5 +946,69 @@ describe("the apply results' counts are never negative", () => {
     expect(ApplyCompetitionScheduleResult.safeParse(joint).success).toBe(true);
     expect(ApplyScheduleResult.safeParse({ ...single, [field]: -1 }).success).toBe(false);
     expect(ApplyCompetitionScheduleResult.safeParse({ ...joint, [field]: -1 }).success).toBe(false);
+  });
+});
+
+describe("RoomAct / RoomActOut (T14 — the match room's act route)", () => {
+  it("RoomAct accepts the four play actions and refuses a takeback or an unknown kind", () => {
+    const ok = [
+      { kind: "move", uci: "e2e4" },
+      { kind: "move", uci: "e7e8q" },
+      { kind: "resign" },
+      { kind: "draw", accept: true },
+      { kind: "draw", accept: false },
+      { kind: "abort" },
+    ];
+    let checked = 0;
+    for (const body of ok) {
+      expect(RoomAct.safeParse(body).success, JSON.stringify(body)).toBe(true);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: accepted actions").toBe(6);
+    const bad = [
+      { kind: "takeback" },
+      { kind: "move" },
+      { kind: "move", uci: "e2" },
+      { kind: "move", uci: "e2e4qq" },
+      { kind: "draw" },
+      { kind: "resign", extra: 1 },
+    ];
+    let refused = 0;
+    for (const body of bad) {
+      expect(RoomAct.safeParse(body).success, JSON.stringify(body)).toBe(false);
+      refused += 1;
+    }
+    expect(refused, "anti-vacuity: refused bodies").toBe(6);
+  });
+
+  it("RoomActOut carries every PlayResult shape T10 answers — ended, unreplayable, and the two grant refusals", () => {
+    const ok = [
+      { ok: true, applied: true },
+      { ok: true, applied: false },
+      { ok: true, applied: true, ended: true },
+      { ok: false, reconcile: true, reason: "not_your_turn_or_over" },
+      { ok: false, reconcile: true, reason: "unavailable" },
+      { ok: false, reconcile: true, reason: "unreplayable" },
+      { ok: false, reconcile: false, reason: "lichess_link_required" },
+      { ok: false, reconcile: false, reason: "lichess_reconsent_required" },
+    ];
+    let checked = 0;
+    for (const body of ok) {
+      expect(RoomActOut.safeParse(body).success, JSON.stringify(body)).toBe(true);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: answers accepted").toBe(8);
+    const bad = [
+      { ok: true, applied: true, ended: false },
+      { ok: false, reconcile: true, reason: "lichess_link_required" },
+      { ok: false, reconcile: false, reason: "unavailable" },
+      { ok: false, reconcile: true, reason: "made_up" },
+    ];
+    let refused = 0;
+    for (const body of bad) {
+      expect(RoomActOut.safeParse(body).success, JSON.stringify(body)).toBe(false);
+      refused += 1;
+    }
+    expect(refused, "anti-vacuity: answers refused").toBe(4);
   });
 });

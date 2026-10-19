@@ -116,7 +116,7 @@ const drawableStage = (o: Partial<PhaseStage> = {}) =>
        timing: "setup", sourceReady: true, ...o });
 const fxt = (o: Partial<PhaseFixture> = {}): PhaseFixture => ({
   id: "f1", status: "decided", scheduledAt: FUTURE, startedAt: null, eventCount: 0, matchMinutes: 90,
-  hasScorer: true, stageId: "s1", awaitsSeedDraw: false, awaitsSettle: false, ...o,
+  hasScorer: true, stageId: "s1", awaitsSeedDraw: false, awaitsSettle: false, awaitsRoundOpen: false, ...o,
 });
 const awaitsDraw = (o: Partial<PhaseFixture> = {}) =>
   fxt({ id: "tbd1", stageId: "fin", awaitsSeedDraw: true, status: "scheduled", scheduledAt: null, ...o });

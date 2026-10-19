@@ -31,9 +31,13 @@ import type { StageKind } from "@/server/api-v1/schemas";
 import { anyOptedOut, isPersonNameMasked, resolvePersonDisplayName } from "@/lib/name-display";
 import { cachedIfFound } from "./cache-found";
 import { loadMatchCentre } from "./match-centre-load";
+import { competitionTag, divisionTag, orgTag, personTag } from "./cache-tags";
 import { variantLabel } from "./variant-label";
 import type { MatchCentreDocT } from "./match-centre-schema";
 import type { PlayerMatchLine, PlayerUpcomingRow } from "./public-player-matches";
+import { loadPublicExternalPlay, loadPublicPairedWhiteSide, loadPublicRoundOpenedAt } from "@/server/usecases/external-play-read";
+import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
+import type { PublicExternalPlay } from "@/server/external-play/public-view";
 
 /**
  * `{count}`-pluralized org-default-locale copy — the `public-site/data.ts`
@@ -165,14 +169,6 @@ export async function withCourtVenueName<T extends { id: string }>(
 export const REVALIDATE_FAST = 30; // competition / division / fixture pages
 export const REVALIDATE_SLOW = 300; // entrant / player pages
 
-export const divisionTag = (divisionId: string) => `division:${divisionId}`;
-export const competitionTag = (competitionId: string) => `competition:${competitionId}`;
-export const orgTag = (orgSlug: string) => `org-public:${orgSlug}`;
-/** One person's public card entries — at every competition URL, allowed or
- *  refused. Fired by every write to what a card shows about them
- *  (`firePersonRevalidate`); nothing else carries it. */
-export const personTag = (personId: string) => `pub-person:${personId}`;
-
 /** Next keeps at most this many tags on one cache entry and drops the rest
  *  with nothing but a console line (`validateTags`, next/dist/lib/constants).
  *  Pinned against Next's own value by the person-writes revalidate suite. */
@@ -199,9 +195,6 @@ export function playerCardTags(
   }
   return [...fixed, ...orderedDivisionIds.slice(0, room).map(divisionTag)];
 }
-/** One shared tag for every discovery surface (doc 15, PROMPT-19). */
-export const DISCOVERY_TAG = "discovery";
-
 export type Visibility = "public" | "unlisted";
 
 export interface PublicOrg {
@@ -1153,6 +1146,16 @@ export async function getPublicFixture(
    *  not substitute `division.name` (a different noun on air). Null when the
    *  stage row is missing. */
   stageName: string | null;
+  /** Online Lichess play bridge (chess external-play 2026-09-15), or null. */
+  externalPlay: PublicExternalPlay | null;
+  /** T16 — an online board's round has been opened (D12). Always false for a
+   *  division that does not play online (no read is made for it). */
+  roundOpened: boolean;
+  /** When it was opened (Match details), or null — the same read. */
+  roundOpenedAt: string | null;
+  /** Option B (owner ruling 2026-10-13) — which entrant plays White as the pairing stands: the names on the start
+   *  position before a game is on file. Null for a division that does not play online (no read is made for it). */
+  pairedWhiteSide: "home" | "away" | null;
 } | null> {
   if (!/^[0-9a-f-]{36}$/i.test(fixtureId)) return null;
   const found = await findPublicDivision(orgSlug, compSlug, divSlug);
@@ -1266,7 +1269,7 @@ export async function getPublicFixture(
           // variant, in the org's locale; the catalog name above only for a
           // variant the map does not name, the key after that.
           formatLabel: variantLabel(
-            { sportKey: division.sport_key, variantKey: division.variant_key, storedName: variantRow?.name ?? null },
+            { sportKey: division.sport_key, variantKey: division.variant_key, storedName: variantRow?.name ?? null, config: division.config },
             (key) => msgFor(locale, key),
           ),
           tz: tzRow?.division_tz ?? null,
@@ -1295,6 +1298,14 @@ export async function getPublicFixture(
         // an audience in neither.
         venueTz: resolveVenueTz(tzRow?.division_tz, tzRow?.org_tz),
         stageName: stageRow?.name ?? null,
+        externalPlay: await loadPublicExternalPlay(fixtureId),
+        ...(await (async () => {
+          if (!(supportsOnlinePlay(division.sport_key) && readOnlinePlay(division.config) === "lichess")) {
+            return { roundOpened: false, roundOpenedAt: null, pairedWhiteSide: null };
+          }
+          const [at, pairedWhiteSide] = await Promise.all([loadPublicRoundOpenedAt(fixtureId), loadPublicPairedWhiteSide(fixtureId)]);
+          return { roundOpened: at !== null, roundOpenedAt: at, pairedWhiteSide };
+        })()),
       };
     },
     // v2 (owner decision 2026-09-16): `matchCentre.header.statusLine` for a
@@ -1315,7 +1326,25 @@ export async function getPublicFixture(
     // v4 (W2b Task 13, review M-1): the document gained the forfeit tag and
     // sentence and the set sports' credited summary; a v3 entry would show a
     // walkover as a bare "Forfeited" over a played 0 — 0.
-    ["pub-fixture-v4", fixtureId],
+    //
+    // v5 (chess T9, 2026-10-09; renumbered over W2b's v4 at the 2026-10-13
+    // rebase): `externalPlay` is `{ status }` alone — the lichess.org play URLs
+    // went with D3, and `lastError` is operator text. A v4 entry written
+    // before the chess branch has no `externalPlay` at all.
+    //
+    // v6 (chess T16, 2026-10-13): `externalPlay` gained `watch`, the view-only
+    // board. A `-v5` entry has none, so for a REVALIDATE_FAST window the page
+    // would say "not started" over a game being played.
+    //
+    // v7 (chess T16 fix round 1, 2026-10-13): `externalPlay` gained `decided`,
+    // `hold`, `result` and `watch.moves`. A `-v6` entry has none, so a fixture
+    // decided on the pad would read its stale hold under the printed result.
+    //
+    // v8 (chess T17 round B, 2026-10-13): `pairedWhiteSide`, the start position's colours (option B). A `-v7` entry
+    // has none, so the board before the first move would name each side by its colour only. The same round (C)
+    // names an online chess division's format by its time control (variant-label.ts), so a `-v7` entry also
+    // carries the declared clock family's word in its header — "Classical" over a 10+5 game.
+    ["pub-fixture-v8", fixtureId],
     { tags: [divisionTag(division.id)], revalidate: REVALIDATE_FAST },
   );
   if (!detail) return null;

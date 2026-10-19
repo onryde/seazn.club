@@ -55,6 +55,8 @@ describe("W2b PF-1 (loop D carry-in): every summary reader in apps/web goes thro
     }
     expect(bare, `${files.length} files scanned`).toEqual([]);
     expect(readers.sort()).toEqual([
+      // Chess T10 (rebase onto W2b, I-1): the match room's game-over card folds Start + the deciding event.
+      "apps/web/src/components/public-site/match-room/room-snapshot.ts",
       "apps/web/src/components/v2/scorepad/use-pad-pipeline.ts",
       "apps/web/src/server/engine-db/append-event.ts",
       // R116-2: the module's own summary of an award no event recorded (ruling 116's walkover) — the fold of an empty
@@ -95,7 +97,9 @@ describe("finding 1: every fold-outcome reader goes through outcomeOf", () => {
     // R116-2: `awardedMatchState` refuses a walkover whose fold decides other than the stored award. Ruling 120: the
     // testkit's `afterStartEvents` keeps only a sport event that leaves the match undecided after a Start, through
     // outcomeOf (shared by the ruling-114 and ruling-120 sweeps).
+    // Chess T10 (rebase onto W2b, I-1): the match room's game-over card folds Start + the deciding event (room-snapshot.ts).
     expect(readers.sort()).toEqual([
+      "apps/web/src/components/public-site/match-room/room-snapshot.ts",
       "apps/web/src/server/engine-db/append-event.ts",
       "apps/web/src/server/engine-db/awarded-state.ts",
       "apps/web/src/server/engine-db/fold.ts",

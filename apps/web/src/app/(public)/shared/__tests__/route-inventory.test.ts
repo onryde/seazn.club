@@ -52,6 +52,10 @@ const PAGES_BEFORE_K1 = [
   "/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]",
 ].sort();
 
+/** Pages added AFTER the move, typed out: T14's match room, in the kiosk
+ *  group (a full-screen room with its own header, like the boards). */
+const PAGES_ADDED = ["/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/play"];
+
 const ROUTES_BEFORE_K1 = [
   "/shared/[orgSlug]/news/[postSlug]/story.png",
   "/shared/[orgSlug]/[competitionSlug]/poster.pdf",
@@ -60,11 +64,13 @@ const ROUTES_BEFORE_K1 = [
 ].sort();
 
 const PRESENT = ["/shared/[orgSlug]/[competitionSlug]/present", "/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/present"];
+/** Every page that lives outside the org chrome layout. */
+const KIOSK = [...PRESENT, ...PAGES_ADDED];
 
 describe("/shared route inventory across the K-1 kiosk move", () => {
-  it("serves exactly the page URLs it served before the move", () => {
+  it("serves exactly the page URLs it served before the move, plus the ones added since", () => {
     const pages = entries().filter((e) => e.kind === "page").map((e) => e.url).sort();
-    expect(pages).toEqual(PAGES_BEFORE_K1);
+    expect(pages).toEqual([...PAGES_BEFORE_K1, ...PAGES_ADDED].sort());
   });
 
   it("serves exactly the route-handler URLs it served before the move", () => {
@@ -83,9 +89,9 @@ describe("/shared route inventory across the K-1 kiosk move", () => {
     expect(dupes).toEqual([]);
   });
 
-  it("both /present pages sit in the (kiosk) group, outside the org chrome layout's directory", () => {
-    const present = entries().filter((e) => e.kind === "page" && PRESENT.includes(e.url));
-    expect(present.map((e) => e.url).sort()).toEqual([...PRESENT].sort());
+  it("both /present pages and the match room sit in the (kiosk) group, outside the org chrome layout's directory", () => {
+    const present = entries().filter((e) => e.kind === "page" && KIOSK.includes(e.url));
+    expect(present.map((e) => e.url).sort()).toEqual([...KIOSK].sort());
     for (const e of present) {
       expect(e.file, `${e.url} is under the kiosk group`).toMatch(/^shared\/\(kiosk\)\/\[orgSlug\]\//);
       expect(e.file.startsWith("shared/[orgSlug]/"), `${e.url} is not under [orgSlug]/layout.tsx`).toBe(false);
@@ -93,7 +99,7 @@ describe("/shared route inventory across the K-1 kiosk move", () => {
   });
 
   it("every other page stays under the org chrome layout", () => {
-    const rest = entries().filter((e) => e.kind === "page" && !PRESENT.includes(e.url));
+    const rest = entries().filter((e) => e.kind === "page" && !KIOSK.includes(e.url));
     expect(rest.length).toBe(PAGES_BEFORE_K1.length - PRESENT.length);
     for (const e of rest) expect(e.file, e.url).toMatch(/^shared\/\[orgSlug\]\//);
   });

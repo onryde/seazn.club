@@ -91,6 +91,18 @@ const HAND_CHECKED_DYNAMIC: Record<string, number> = {
   // `const path = `/api/v1/orgs/${orgId}/stream-targets/${t.id}`` — one literal
   // shared by the row's Remove (DELETE) and Rename/Replace (PATCH)
   "src/components/v2/stream-destinations-panel.tsx": 2,
+  // Online chess (traced 2026-10-13, re-traced D16). (1) `makeArbiterSerial({ join, send })` (arbiter-watch.ts) — `join` POSTs
+  // `/api/v1/fixtures/${id}/external-play/arbiter` with `{ side }` and `send` is `arbiterWatchRelease`'s DELETE of
+  // `/api/v1/fixtures/${id}/external-play/arbiter/${participantId}` (both routes exist, POST and DELETE).
+  // (2) `decisionRunner({ post: (path, body) => apiV1(path, …) })` — arbiter-decision.ts builds every path as
+  // `/api/v1/fixtures/${id}/external-play/${tail}`, tail ∈ resync | video-override | flags/close | resolve (each a POST
+  // route that exists).
+  "src/components/v2/arbiter-panel.tsx": 2,
+  // `openRoundRunner({ post: (path, body) => apiV1(path, …) })` — open-round-state.ts posts only
+  // `/api/v1/stages/${stageId}/open-round` and `/api/v1/fixtures/${id}/external-play/resend` (both POST routes exist).
+  "src/components/v2/desk/open-round-control.tsx": 1,
+  // The same `decisionRunner` post as the arbiter panel's (2) above.
+  "src/components/v2/external-play-needs-result-queue.tsx": 1,
 };
 
 describe("apiV1 call paths", () => {

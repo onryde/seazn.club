@@ -801,6 +801,9 @@ jobs:
       AUTH_SECRET: ci-only-insecure-secret-please-change-in-prod-0123456789
       # CI-only envelope key for sealed device-link secrets (scorer sheets §4.1). Never a real key.
       DEVICE_LINK_KEK: 0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0
+      # CI-only envelope key for players' Lichess tokens (chess design §3.1). A DIFFERENT
+      # value from DEVICE_LINK_KEK on purpose: one key must not open the other's rows.
+      LICHESS_TOKEN_KEK: 9a8b7c6d5e4f30211203f4e5d6c7b8a99a8b7c6d5e4f30211203f4e5d6c7b8a9
       NEXT_PUBLIC_SUPABASE_URL: ""
       NEXT_TELEMETRY_DISABLED: "1"
       # v4 AI smoke (scripts/smoke.ts v4AiSuite): point the server's
@@ -832,7 +835,13 @@ jobs:
       # would eventually disagree — at which point the reconciliation reports the
       # other job's files as "listed but not run", and that reads as "the gate is
       # broken" rather than "the globs drifted".
-      USECASES_EXCLUDE: "**/server/usecases/__tests__/[i-z]*"
+      #
+      # The letter split is by TEST FILE name at any depth under usecases/, so a
+      # nested `usecases/<area>/__tests__/` lands in exactly one job too. The
+      # `.test.*` anchor is load-bearing: vitest's exclude also prunes a matching
+      # DIRECTORY, and a bare `[a-h]*` swallowed `external-play/` whole, so its
+      # [i-z] tests ran in neither job (measured with `vitest list`, 2026-10-11).
+      USECASES_EXCLUDE: "**/server/usecases/**/[i-z]*.test.*"
 
     steps:
       - uses: actions/checkout@v5
@@ -1202,6 +1211,9 @@ jobs:
       AUTH_SECRET: ci-only-insecure-secret-please-change-in-prod-0123456789
       # CI-only envelope key for sealed device-link secrets (scorer sheets §4.1). Never a real key.
       DEVICE_LINK_KEK: 0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0
+      # CI-only envelope key for players' Lichess tokens (chess design §3.1). A DIFFERENT
+      # value from DEVICE_LINK_KEK on purpose: one key must not open the other's rows.
+      LICHESS_TOKEN_KEK: 9a8b7c6d5e4f30211203f4e5d6c7b8a99a8b7c6d5e4f30211203f4e5d6c7b8a9
       NEXT_PUBLIC_SUPABASE_URL: ""
       NEXT_TELEMETRY_DISABLED: "1"
       # NOT set here, deliberately, unlike smoke-db: no STRIPE_SECRET_KEY and no
@@ -1212,7 +1224,7 @@ jobs:
       # This job's HALF of src/server/usecases — the complement of smoke-db's.
       # Read by both the run and its reconciliation; see smoke-db's copy for why
       # it is one variable rather than two literals.
-      USECASES_EXCLUDE: "**/server/usecases/__tests__/[a-h]*"
+      USECASES_EXCLUDE: "**/server/usecases/**/[a-h]*.test.*"
 
     steps:
       - uses: actions/checkout@v5
@@ -1411,8 +1423,14 @@ jobs:
       # through the real overlay route into the mounted OverlayStage — the only
       # producer-to-consumer proof that an undo takes the end card down. Same
       # guard, same first push.
+      # Online chess (2026-10-13): `your-board-route` (src/components/public-site)
+      # and `online-game-exists-route` (src/components/v2) drive their routes
+      # against a seeded division, so both are DB-gated, and both sit outside
+      # src/server|lib|app — the guard named them.
+      # `open-round-batches-reachability` (src/components/v2/desk) drives the organiser's
+      # check-in groups through the real producer and a seeded board - the guard named it.
       - name: DB-gated suites outside src/server|lib|app (real Postgres)
-        run: npm test --workspace apps/web -- --reporter=default --reporter=json --outputFile=vitest-results-outliers.json src/components/__tests__/upgrade-gate-pass-features.test.ts src/components/v2/__tests__/public-quota-degraded-numbers.test.tsx src/config/__tests__/stripe-plans-ladder.test.ts src/demo/ai-templates/__capture__/__tests__/seeds.test.ts src/demo/ai-templates/__capture__/capture.test.ts src/__tests__/stripe-connect-fixture-drift.test.ts src/components/overlay/__tests__/overlay-stage-undo-reopens.test.tsx
+        run: npm test --workspace apps/web -- --reporter=default --reporter=json --outputFile=vitest-results-outliers.json src/components/__tests__/upgrade-gate-pass-features.test.ts src/components/v2/__tests__/public-quota-degraded-numbers.test.tsx src/config/__tests__/stripe-plans-ladder.test.ts src/demo/ai-templates/__capture__/__tests__/seeds.test.ts src/demo/ai-templates/__capture__/capture.test.ts src/__tests__/stripe-connect-fixture-drift.test.ts src/components/overlay/__tests__/overlay-stage-undo-reopens.test.tsx src/components/public-site/__tests__/your-board-route.test.tsx src/components/v2/__tests__/online-game-exists-route.test.tsx src/components/v2/desk/__tests__/open-round-batches-reachability.test.tsx
 
       # The DB-gated suites under src/app. src/lib is NOT repeated here — and
       # note the original reason still holds under the split, for a different
@@ -1482,6 +1500,9 @@ jobs:
       AUTH_SECRET: ci-only-insecure-secret-please-change-in-prod-0123456789
       # CI-only envelope key for sealed device-link secrets (scorer sheets §4.1). Never a real key.
       DEVICE_LINK_KEK: 0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0
+      # CI-only envelope key for players' Lichess tokens (chess design §3.1). A DIFFERENT
+      # value from DEVICE_LINK_KEK on purpose: one key must not open the other's rows.
+      LICHESS_TOKEN_KEK: 9a8b7c6d5e4f30211203f4e5d6c7b8a99a8b7c6d5e4f30211203f4e5d6c7b8a9
       NEXT_PUBLIC_SUPABASE_URL: ""
       NEXT_TELEMETRY_DISABLED: "1"
       SCHEDULING_AI_BASE_URL: "http://127.0.0.1:4319"
@@ -1713,6 +1734,9 @@ jobs:
           # (fallback false, and CI has no PostHog); the override shows it to every spec and walkthrough.
           # Exactly "1". Staging and prod never set it.
           CAPTURE_QR_V2_ALWAYS: "1"
+          # Online chess: what starts it is behind the PostHog flag online-chess (fallback false); the
+          # override offers it to every spec and walkthrough. Exactly "1". Staging and prod never set it.
+          ONLINE_CHESS_ALWAYS: "1"
         run: |
           rm -rf apps/web/.next/standalone/apps/web/.next/static
           cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static

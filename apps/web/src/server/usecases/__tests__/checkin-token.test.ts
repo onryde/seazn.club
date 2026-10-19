@@ -4,6 +4,8 @@
 import { describe, expect, it } from "vitest";
 import { SignJWT } from "jose";
 import { mintCheckinToken, verifyCheckinToken } from "../checkin-token";
+import { mintMatchRoomToken } from "../match-room-token";
+import { authSecretKey } from "../signing-key";
 
 const FIXTURE = "3b1a8dc4-9f10-4d5e-b0c7-0e6f6a2f9a11";
 
@@ -66,5 +68,23 @@ describe("check-in tokens (PROMPT-53)", () => {
     await expect(verifyCheckinToken(sessionish)).rejects.toMatchObject({
       code: "CHECKIN_INVALID",
     });
+  });
+
+  it("refuses a token with valid typ and claims but signed HS384 with the real secret (algorithm confusion)", async () => {
+    const hs384 = await new SignJWT({ fid: FIXTURE })
+      .setProtectedHeader({ alg: "HS384", typ: "seazn-checkin" })
+      .setExpirationTime("1h")
+      .sign(authSecretKey());
+    await expect(verifyCheckinToken(hs384)).rejects.toMatchObject({ code: "CHECKIN_INVALID" });
+  });
+
+  it("refuses a match-room token (different typ)", async () => {
+    const matchRoom = await mintMatchRoomToken({
+      fixtureId: FIXTURE,
+      personId: "p1",
+      roundOpenId: "ro1",
+      roundOpenedAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    await expect(verifyCheckinToken(matchRoom)).rejects.toMatchObject({ code: "CHECKIN_INVALID" });
   });
 });

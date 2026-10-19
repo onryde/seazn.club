@@ -224,11 +224,22 @@ function reportNesting(what: string): void {
 export async function withTenant<T>(
   orgId: string,
   fn: (tx: Tx) => Promise<T>,
+  opts: {
+    /** Runs FIRST, on this transaction's own connection and BEFORE the role
+     *  drops to app_user — never after it. For the rare write whose guard
+     *  must read a SEALED table (no app_user grant) or take a lock inside the
+     *  same transaction as the write it guards: a pooled read instead would
+     *  be a second connection (the nesting above), and a read before the
+     *  transaction is stale by the time the write commits. Keep it to reads
+     *  and locks; everything it does runs with the pool's own privileges. */
+    privilegedPrelude?: (tx: Tx) => Promise<void>;
+  } = {},
 ): Promise<T> {
   // postgres types begin() as Promise<UnwrapPromiseArray<T>>; for non-array T
   // this equals T at runtime but TS can't prove it — safe cast.
   const run = (): Promise<T> =>
     getClient().begin(async (tx) => {
+      if (opts.privilegedPrelude) await opts.privilegedPrelude(tx);
       await tx`select set_config('app.current_org', ${orgId}, true)`;
       await tx`set local role app_user`;
       return fn(tx);

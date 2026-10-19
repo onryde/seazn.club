@@ -35,6 +35,9 @@ import { followRosterEdit, type RosterNamePerson } from "@/lib/entrant-roster-na
 import { dropNamedPublicDocuments, fireScoreRevalidate } from "@/server/public-site/revalidate";
 import { retireCompetitionPlayerMatches } from "@/server/public-site/player-matches-cache-keys";
 import { log } from "@/server/logger";
+import { readOnlinePlay } from "@/server/external-play/online-play";
+import { onlineChessOffered } from "./external-play/online-chess-flag";
+import { assertPersonIdsLinkedForOnlinePlay } from "./external-accounts";
 
 type Tx = postgres.TransactionSql;
 type MemberInput = z.infer<typeof EntrantMemberInput>;
@@ -223,8 +226,8 @@ async function insertMembers(
       insert into entrant_members (entrant_id, person_id, squad_number,
                                    default_position_key, is_captain, roles)
       values (${entrantId}, ${m.person_id}, ${m.squad_number ?? null},
-              ${m.default_position_key ?? null}, ${m.is_captain},
-              ${tx.json(m.roles as never)})`;
+              ${m.default_position_key ?? null}, ${m.is_captain ?? false},
+              ${tx.json((m.roles ?? []) as never)})`;
   }
   return warnings;
 }
@@ -280,8 +283,8 @@ export async function createEntrants(
   // below — an Event Pass lifts this cap for one competition, so dropping the
   // scope would change the answer. Authorisation is unaffected: the division is
   // read under RLS inside the transaction, which 404s for a foreign org.
-  const [ref] = await sql<{ competition_id: string }[]>`
-    select competition_id from divisions where id = ${divisionId}`;
+  const [ref] = await sql<{ competition_id: string; config: unknown }[]>`
+    select competition_id, config from divisions where id = ${divisionId}`;
   // The plan LOOKUP is resolved out here; the COUNT stays inside the
   // transaction with the insert (doc 10 §2 rule 1). `getLimit` queries the
   // pooled `sql` proxy, and `withTenant` pins a pooled connection for its whole
@@ -291,10 +294,21 @@ export async function createEntrants(
     "entrants.per_division.max",
     ref?.competition_id,
   );
+  // T20: a Lichess link is demanded of an online division's players only while the club is offered online chess
+  // (the PostHog flag `online-chess`). A remote call, so asked out here and only for a division this read sees online;
+  // the division read under RLS inside the transaction still decides whether it IS online. `null` ⇒ not asked — the
+  // division turned online in between, which only a club offered online chess can do — so the link is demanded.
+  const onlineChessOn = readOnlinePlay(ref?.config) === "lichess" ? await onlineChessOffered(auth) : null;
   const { rows, competitionId } = await withTenant(auth.orgId, async (tx) => {
     const [division] = await tx<
-      { status: string; competition_id: string; sport_key: string; module_version: string }[]
-    >`select status, competition_id, sport_key, module_version
+      {
+        status: string;
+        competition_id: string;
+        sport_key: string;
+        module_version: string;
+        config: unknown;
+      }[]
+    >`select status, competition_id, sport_key, module_version, config
       from divisions where id = ${divisionId}`;
     if (!division) throw new HttpError(404, "division not found");
     assertNotFrozen(frozen, division.competition_id);
@@ -385,6 +399,13 @@ export async function createEntrants(
       // (cap 1) or pair (cap 2). Reuse the already-loaded `eff` (loaded once for
       // the batch) — same 422 ENTRANT_ROSTER_TOO_BIG as the early check.
       assertRosterFits(eff, input.kind ?? eff.defaultKind, members.length);
+
+      if (onlineChessOn !== false && readOnlinePlay(division.config) === "lichess" && members.length > 0) {
+        await assertPersonIdsLinkedForOnlinePlay(
+          auth.orgId,
+          members.map((m) => m.person_id),
+        );
+      }
 
       let row: EntrantRow;
       try {

@@ -14,7 +14,7 @@ export default function PrivacyPage() {
       <MarketingNav />
       <main className="mx-auto max-w-3xl px-4 py-16">
         <h1 className="mb-2 text-3xl font-bold text-purple-900">Privacy Policy</h1>
-        <p className="mb-8 text-sm text-slate-400">Last updated: 4 August 2026</p>
+        <p className="mb-8 text-sm text-slate-400">Last updated: 15 October 2026</p>
         <div className="prose prose-slate max-w-none space-y-6 text-sm text-slate-700">
 
           <section>
@@ -62,38 +62,48 @@ export default function PrivacyPage() {
           </section>
 
           <section>
-            <h2 className="mb-2 text-lg font-semibold text-slate-800">6. Sub-processors</h2>
+            <h2 className="mb-2 text-lg font-semibold text-slate-800">6. Online chess: camera video and your Lichess account</h2>
+            <p>When a competition is played online, each player links a Lichess account and plays from a match room on seazn.club with their camera on.</p>
+            <ul className="mt-2 list-disc space-y-1 pl-5">
+              <li><strong>Your Lichess account:</strong> we store your Lichess username and the OAuth token you grant us, encrypted at rest. We use the token only to play your online games at Lichess: creating them, sending your moves and reading their state. Unlinking the account deletes the token and asks Lichess to revoke it. The game itself is played at Lichess under your own account, and Lichess&rsquo;s privacy policy applies to it.</li>
+              <li><strong>Your camera:</strong> during a match your camera video is carried by Cloudflare RealtimeKit (see the <Link href="/legal/sub-processors" className="text-purple-600 underline">sub-processors list</Link>). Your opponent can&rsquo;t see your camera. The competition&rsquo;s organisers, acting as arbiters, can watch both players&rsquo; cameras live. We do not record the video.</li>
+              <li><strong>Camera on or off:</strong> after the match, Cloudflare tells us when each player&rsquo;s camera was on. We use it only to flag long gaps to the organiser, who decides what, if anything, follows. The flags are kept with the competition&#x27;s records.</li>
+            </ul>
+          </section>
+
+          <section>
+            <h2 className="mb-2 text-lg font-semibold text-slate-800">7. Sub-processors</h2>
             <p>We share data with trusted sub-processors to operate the service. See our <Link href="/legal/sub-processors" className="text-purple-600 underline">sub-processors list</Link> for details.</p>
           </section>
 
           <section>
-            <h2 className="mb-2 text-lg font-semibold text-slate-800">7. Data retention</h2>
+            <h2 className="mb-2 text-lg font-semibold text-slate-800">8. Data retention</h2>
             <p>Account data is retained for the life of your account plus 30 days after deletion. Tournament records may be anonymised rather than deleted at your request. Billing records are retained for 7 years for tax compliance.</p>
             <p className="mt-2">Scheduling instructions you preview but do not run are deleted within the hour; a preview you did run is kept for 30 days so a disputed plan can be re-checked.</p>
           </section>
 
           <section>
-            <h2 className="mb-2 text-lg font-semibold text-slate-800">8. Your rights (GDPR)</h2>
+            <h2 className="mb-2 text-lg font-semibold text-slate-800">9. Your rights (GDPR)</h2>
             <p>You have the right to access, correct, or delete your personal data. You can export your data from Settings → Account → Export my data. To exercise other rights, email us at privacy@seazn.club. We respond within 30 days.</p>
           </section>
 
           <section>
-            <h2 className="mb-2 text-lg font-semibold text-slate-800">9. Cookies</h2>
+            <h2 className="mb-2 text-lg font-semibold text-slate-800">10. Cookies</h2>
             <p>We use essential session cookies plus, with your consent, PostHog analytics cookies. No advertising cookies. See our <Link href="/legal/cookie-policy" className="text-purple-600 underline">Cookie Policy</Link>.</p>
           </section>
 
           <section>
-            <h2 className="mb-2 text-lg font-semibold text-slate-800">10. Security</h2>
+            <h2 className="mb-2 text-lg font-semibold text-slate-800">11. Security</h2>
             <p>Data is encrypted in transit (TLS) and at rest. Passwords are hashed with bcrypt. Access is controlled by row-level security policies at the database level. Staff access is logged and audited.</p>
           </section>
 
           <section>
-            <h2 className="mb-2 text-lg font-semibold text-slate-800">11. Changes</h2>
+            <h2 className="mb-2 text-lg font-semibold text-slate-800">12. Changes</h2>
             <p>We will notify you by email of material changes to this policy at least 14 days in advance.</p>
           </section>
 
           <section>
-            <h2 className="mb-2 text-lg font-semibold text-slate-800">12. Contact</h2>
+            <h2 className="mb-2 text-lg font-semibold text-slate-800">13. Contact</h2>
             <p>Privacy questions: <a href="mailto:privacy@seazn.club" className="text-purple-600 underline">privacy@seazn.club</a></p>
           </section>
         </div>

@@ -162,6 +162,7 @@ function authority(): { resultMissing: number[]; unscheduled: number } {
       stageId: f.stage_id,
       awaitsSeedDraw: false,
       awaitsSettle: false,
+      awaitsRoundOpen: false,
     })),
     now: new Date(NOW_MS).toISOString(),
     tz: TZ,

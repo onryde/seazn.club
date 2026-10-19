@@ -109,10 +109,8 @@ import nlPublic from "@/dictionaries/nl/public.json";
 import { resolveLatestModule } from "@/server/engine-db";
 import { twoSidedBracket } from "@seazn/engine/scheduling/bracket-layout";
 import { registry, type AnySportModule } from "@seazn/engine/sport";
+import { competitionTag, divisionTag, orgTag } from "../cache-tags";
 import {
-  competitionTag,
-  divisionTag,
-  orgTag,
   REVALIDATE_FAST,
   type PublicCompetition,
   type PublicDivision,
@@ -413,7 +411,12 @@ describe("hubHeader — all eleven fields, from the summary alone", () => {
   it("round-trips MatchCentreHeader (the schema W1 declares, reused whole)", () => {
     const header = hubHeader(F({ id: "f1" }), SIDES(), "football", "2026-09-05T12:00:00.000Z");
     expect(MatchCentreHeader.safeParse(header).success).toBe(true);
-    expect(Object.keys(header).sort()).toEqual(Object.keys(MatchCentreHeader.shape).sort());
+    // Every field but `onlineStarting` (T17 owner change, 2026-10-13): that one is present ONLY on an online chess
+    // board whose round is open with no move yet, read by the match centre alone — the hub keeps its scheduled
+    // reading, so its header never carries the key.
+    const ONLY_WHEN_STARTING = "onlineStarting";
+    expect(Object.keys(MatchCentreHeader.shape), "premise: the schema declares it").toContain(ONLY_WHEN_STARTING);
+    expect(Object.keys(header).sort()).toEqual(Object.keys(MatchCentreHeader.shape).filter((k) => k !== ONLY_WHEN_STARTING).sort());
   });
 
   it("scoreLines are matched to each side BY ENTRANT ID, not by array position", () => {

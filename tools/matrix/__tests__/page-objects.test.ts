@@ -1018,11 +1018,23 @@ describe("the console, the run sheet and the public page", () => {
 
   it("every link a run-sheet row renders goes to the fixture console, so the identity link is a true fallback for a Set-time row", () => {
     const row = src(`${V2}/desk/run-sheet-row.tsx`);
-    const hrefs = [...row.matchAll(/href=\{(`[^`]*`|[^}]+)\}/g)].map((m) => m[1]);
-    // The identity link, the run-sheet action link, and the stream chip, which
-    // opens the same console with its Stream panel up (`?stream=open`).
-    expect(hrefs).toEqual(["href", "`${href}?stream=open`", "href"]);
-    for (const h of hrefs) expect(h === "href" || h.startsWith("`${href}?"), `${h} leaves the fixture console`).toBe(true);
+    // Online chess (Lichess external play) adds links that leave the console ON PURPOSE, and only on an online-play
+    // row: the camera / connection / off-Seazn chips open the arbiter panel through `chipLink` (whose own `href`
+    // param is the arbiter's), and the held chip jumps to the organiser queue on the same page. Split them off by
+    // their own shapes first — `chipLink`'s body is not the row's, and its calls must all pass `arbiterHref` under
+    // `onlinePlay` — then hold every remaining link to the console rule.
+    const body = row.slice(row.indexOf("export function RunSheetRow("));
+    expect(row.slice(row.indexOf("function chipLink("), row.indexOf("export function RunSheetRow(")), "chipLink renders its own href").toContain("<Link href={href}");
+    const chips = [...body.matchAll(/\{onlinePlay[^\n]*&&\s*\(\s*chipLink\(\{\s*href: (\w+)/g)].map((m) => m[1]);
+    expect(chips, "every arbiter chip, gated on onlinePlay").toEqual(["arbiterHref", "arbiterHref", "arbiterHref"]);
+    expect(body.match(/chipLink\(/g)?.length, "no chipLink call outside an onlinePlay gate").toBe(chips.length);
+    expect(row, "the queue chip needs an online-play hold").toContain("const onlineHeld = !held && (onlinePlay?.held ?? null) !== null;");
+    const ONLINE_QUEUE = "`#${queueRowAnchor(fixture.id)}`";
+    const hrefs = [...body.matchAll(/href=\{(`[^`]*`|[^}]+)\}/g)].map((m) => m[1]);
+    // The identity link, the run-sheet action link, the stream chip, which
+    // opens the same console with its Stream panel up (`?stream=open`), and the online held chip.
+    expect(hrefs).toEqual(["href", "`${href}?stream=open`", ONLINE_QUEUE, "href"]);
+    for (const h of hrefs.filter((x) => x !== ONLINE_QUEUE)) expect(h === "href" || h.startsWith("`${href}?"), `${h} leaves the fixture console`).toBe(true);
     expect(src(`${V2}/stages-panel.tsx`)).toContain("hrefFor={(f) => routes.fixture(orgSlug, compSlug, divSlug, f.fixture_no)}");
     // set_time is the one row action that is a <button>, not a link.
     expect(row).toMatch(/<button\s+type="button"\s+data-row-action="set_time"/);

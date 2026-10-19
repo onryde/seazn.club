@@ -662,6 +662,57 @@ describe("LiveScoreBody — the empty state says what will happen, per status (T
   }
 });
 
+// T17 fix round 2, V2 — an online chess game being played. Nothing marks such a fixture in play (it stays
+// `scheduled` until its result is written), so R3 (match-centre.ts) folds its DOCUMENT's header live while the raw
+// status is still `scheduled` — and this panel, reading the raw status, said "…once the match starts" under a LIVE
+// header over a game being watched. The fold is the only way a scheduled fixture's document reads live, and it is
+// sport-blind (match-centre.ts), so one sport's document stands for it here.
+describe("LiveScoreBody — the Summary under an online game being played (V2)", () => {
+  const emptyTemplates: DecidedOutcomeTemplates = { tie: "", plain: "", shootoutPlain: "", byMethod: {} };
+  const headerOf = (status: string) => ({ header: { status } });
+  const sentence = (data: unknown): string =>
+    renderToStaticMarkup(
+      <LiveScoreBody
+        data={data as never}
+        entrantNames={{ home: "Ada", away: "Bo" }}
+        sportKey="boardgame"
+        decidedTemplates={emptyTemplates}
+        dict={en as Dict}
+        suppressScorebug
+      />,
+    ).match(/data-testid="mc-summary-empty"[^>]*>([^<]*)</)?.[1] ?? "";
+
+  it("empty case first: a scheduled board whose document is not live keeps the not-started sentence", () => {
+    expect(sentence({ status: "scheduled", summary: null, outcome: null, match_centre: headerOf("scheduled") }))
+      .toBe(en["matchCentre.empty.beforeStart"]);
+    expect(sentence({ status: "scheduled", summary: null, outcome: null }), "no document").toBe(en["matchCentre.empty.beforeStart"]);
+  });
+
+  it("a scheduled board whose document reads live (R3) says the game is on the live board — never 'once the match starts'", () => {
+    const text = sentence({ status: "scheduled", summary: null, outcome: null, match_centre: headerOf("in_play") });
+    expect(text).toBe(en["matchCentre.empty.onlineInPlay"]);
+    expect(text).not.toBe(en["matchCentre.empty.beforeStart"]);
+    expect(text, "and not the scored-sport promise of highlights").not.toBe(en["matchCentre.empty.inPlay"]);
+  });
+
+  it("the other arms are untouched: a fixture really in play, and a decided one", () => {
+    expect(sentence({ status: "in_play", summary: null, outcome: null, match_centre: headerOf("in_play") }))
+      .toBe(en["matchCentre.empty.inPlay"]);
+    expect(sentence({ status: "decided", summary: null, outcome: null, match_centre: headerOf("decided") }))
+      .toBe(en["matchCentre.empty.noDetail"]);
+  });
+
+  it("all four locales carry their own sentence for it — counted", () => {
+    let checked = 0;
+    for (const d of [en, es, fr, nl] as Record<string, string>[]) {
+      expect(d["matchCentre.empty.onlineInPlay"], "present").toBeTruthy();
+      expect(d["matchCentre.empty.onlineInPlay"], "its own words").not.toBe(d["matchCentre.empty.beforeStart"]);
+      checked += 1;
+    }
+    expect(checked).toBe(4);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Accessibility (whole-branch review) — THE NAME CELL IS THE ROW HEADER.
 // ---------------------------------------------------------------------------

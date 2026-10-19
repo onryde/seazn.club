@@ -1,0 +1,24 @@
+17:59:21Z === (1) EXPORT LAG on a live 10+5 game ===
+17:59:21Z create http=200 id=Cq2oQ5C7
+17:59:27Z after ply 1 (e2e4 http=200): export-anon=[ERR] export-white=[1 started] board-stream=[1 started]
+17:59:32Z after ply 2 (e7e5 http=200): export-anon=[ERR] export-white=[2 started] board-stream=[2 started]
+17:59:36Z after ply 3 (g1f3 http=200): export-anon=[ERR] export-white=[3 started] board-stream=[3 started]
+17:59:40Z after ply 4 (b8c6 http=200): export-anon=[ERR] export-white=[4 started] board-stream=[4 started]
+17:59:45Z after ply 5 (f1c4 http=200): export-anon=[ERR] export-white=[5 started] board-stream=[5 started]
+17:59:49Z after ply 6 (g8f6 http=200): export-anon=[ERR] export-white=[5 started] board-stream=[6 started]
+17:59:54Z after ply 7 (d2d3 http=200): export-anon=[ERR] export-white=[5 started] board-stream=[7 started]
+17:59:58Z after ply 8 (f8c5 http=200): export-anon=[ERR] export-white=[5 started] board-stream=[8 started]
+18:00:03Z ply 8 + 5s: export-anon=[ERR] export-white=[5 started]
+18:00:05Z after resign: export-anon=[ERR]
+18:00:05Z === (3) 10+0 and 15+0 playable ===
+18:00:23Z 10+0: id=t2NsZaZR white-move http=200 black-move http=200
+18:00:40Z 15+0: id=a03eINh0 white-move http=200 black-move http=200
+18:00:40Z === (2) PER-CHALLENGER CREATION LIMIT (7 rapid creates, each cancelled) ===
+18:01:45Z create #1 http=200 id=sSwXVcaG 
+18:01:46Z create #2 http=200 id=2KPF0Coy 
+18:01:46Z create #3 http=200 id=JPca5AOz 
+18:01:46Z create #4 http=200 id=Qoer1GFE 
+18:01:46Z create #5 http=200 id=wQoTgph9 
+18:01:47Z create #6 http=429 id=none {"error":"Too many requests. Try again later."}
+18:01:47Z create #7 http=429 id=none {"error":"Too many requests. Try again later."}
+18:01:47Z SPIKE DONE

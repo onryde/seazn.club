@@ -3,7 +3,7 @@ import "server-only";
 // variant config and PINS the sport module version (doc 02 §4) so a running
 // division always replays under the rules it started with.
 import type postgres from "postgres";
-import { sql, withTenant } from "@/lib/db";
+import { sql, withTenant, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { assertWithinLimit, getLimit, requireFeature, passLockReason } from "@/lib/entitlements";
 import { EngineError } from "@seazn/engine/core";
@@ -43,6 +43,26 @@ import {
 // for their own `tags` — one copy, imported, not re-implemented (a court
 // tagged "clay" must match a division requiring "Clay").
 import { normalizeTags } from "./venues";
+import {
+  applyOnlinePlayToConfig,
+  assertOnlinePlayValue,
+  readOnlinePlay,
+  withoutDivisionMetaKeys,
+} from "@/server/external-play/online-play";
+import {
+  assertCameraPolicyForSport,
+  assertCameraPolicyValue,
+  assertPolicyChange,
+  CAMERA_POLICY_CHANGED,
+  effectivePolicy,
+  readCameraPolicy,
+  type CameraPolicy,
+} from "@/server/external-play/camera-policy";
+import { anyRoundOpened } from "@/server/external-play/round-open";
+import { assertTimeControl } from "@/server/external-play/time-controls";
+import type { BoardgameClockInput } from "@/server/external-play/clock";
+import { assertOnlineChessOffered, onlineChessDisabled, onlineChessOffered } from "./external-play/online-chess-flag";
+import { audit } from "./audit";
 
 export interface DivisionRow {
   id: string;
@@ -101,6 +121,10 @@ export interface DivisionRow {
    *  `stages.required_court_tags` (the sibling V367 column, wired the same
    *  pass — CRUD for the stage side still does not exist). */
   required_court_tags: string[];
+  /** V451 online-chess camera requirement for this division; null = inherit
+   *  the competition's (NOT NULL floor). Resolved per fixture, with the stage
+   *  level, by camera-policy.ts's fixtureCameraPolicy. */
+  camera_policy: CameraPolicy | null;
 }
 
 const COLS = [
@@ -109,7 +133,7 @@ const COLS = [
   "age_cutoff_day", "eligibility_note", "status",
   "officials_hide_names", "scheduling_mode", "auto_progress", "auto_posts", "show_seeds", "schedule_locked",
   "archived_at", "created_at", "seq", "youth", "player_name_display", "logo_url",
-  "logo_storage_path", "required_court_tags",
+  "logo_storage_path", "required_court_tags", "camera_policy",
 ] as const;
 
 /** Variant choices for the Settings tab's format editor (v8) — system
@@ -223,6 +247,12 @@ export async function createDivision(
     "divisions.per_competition.max",
     competitionId,
   );
+  // T20: a division created online STARTS online play, so the club must be offered it (the PostHog flag
+  // `online-chess`). Asked only when online play is asked for, and out here for the same reason as the reads above:
+  // it is a remote call, never made while a tenant transaction holds a pooled connection.
+  if ((input.config as Record<string, unknown> | undefined)?.onlinePlay === "lichess") {
+    await assertOnlineChessOffered(auth);
+  }
 
   const row = await withTenant(auth.orgId, async (tx) => {
     const [comp] = await tx`select 1 from competitions where id = ${competitionId}`;
@@ -271,6 +301,30 @@ export async function createDivision(
         issues: parsed.error.issues,
       });
     }
+    const finalConfig = parsed.data as Record<string, unknown>;
+    const inputCfg = input.config as Record<string, unknown>;
+    const onlinePlay =
+      inputCfg && "onlinePlay" in inputCfg
+        ? assertOnlinePlayValue(input.sport_key, inputCfg.onlinePlay)
+        : readOnlinePlay(null);
+    applyOnlinePlayToConfig(finalConfig, onlinePlay);
+    const incomingEntrants = inputCfg?.entrants;
+    if (incomingEntrants != null && typeof incomingEntrants === "object") {
+      finalConfig.entrants = incomingEntrants;
+    }
+    // T6: a column, not a config key — absent ⇒ null ⇒ inherit, exactly like
+    // every division created before the column existed. No round can be open
+    // on a division that does not exist yet, so there is nothing to gate and
+    // nothing changed to audit.
+    const cameraPolicy = assertCameraPolicyValue(input.camera_policy);
+    assertCameraPolicyForSport(input.sport_key, cameraPolicy);
+    // T5-I1/T6 (M12): a division played online must have a clock the Board
+    // API will actually play, and the organiser learns that HERE, at setup —
+    // a 1+0 is CREATED by Lichess and then every move is refused, so a later
+    // check would only fire at round open. Over-the-board chess is untouched.
+    if (readOnlinePlay(finalConfig) === "lichess") {
+      assertTimeControl(finalConfig.clock as BoardgameClockInput | undefined);
+    }
 
     // Shared by both slug paths so the generated one can be RETRIED against
     // the unique index — `q` is the savepoint, and replaces `tx` inside it.
@@ -291,13 +345,15 @@ export async function createDivision(
       const [row] = await q<DivisionRow[]>`
         insert into divisions (competition_id, name, slug, sport_key, variant_key, config,
                                module_version, tiebreakers, category, age_min, age_max,
-                               age_cutoff_month, age_cutoff_day, eligibility_note, youth)
+                               age_cutoff_month, age_cutoff_day, eligibility_note, youth,
+                               camera_policy)
         values (${competitionId}, ${input.name}, ${slug}, ${input.sport_key}, ${input.variant_key},
-                ${q.json(parsed.data as never)}, ${sport.module_version},
+                ${q.json(finalConfig as never)}, ${sport.module_version},
                 ${input.tiebreakers ? q.json(input.tiebreakers as never) : null},
                 ${input.category ?? null}, ${input.age_min ?? null}, ${ageMax},
                 ${input.age_cutoff_month ?? null}, ${input.age_cutoff_day ?? null},
-                ${input.eligibility_note ?? null}, ${deriveYouth(ageMax)})
+                ${input.eligibility_note ?? null}, ${deriveYouth(ageMax)},
+                ${cameraPolicy})
         returning ${q(COLS)}`;
       return row!;
     };
@@ -600,9 +656,7 @@ function canonicalJson(value: unknown): string {
 }
 
 function withoutEntrants(config: Record<string, unknown>): Record<string, unknown> {
-  const rest: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(config)) if (k !== "entrants") rest[k] = v;
-  return rest;
+  return withoutDivisionMetaKeys(config);
 }
 
 // Keys on the constraint NAME, not just the Postgres 23514 code — divisions
@@ -678,6 +732,27 @@ export async function patchDivision(
   if (patch.auto_posts === true) {
     await requireFeature(auth.orgId, "news.auto", competitionId);
   }
+  // T20: turning online play ON starts online play, so the club must be offered it (the PostHog flag `online-chess`).
+  // Asked out here — a remote call, never made inside the tenant transaction — and only when the patch names
+  // 'lichess', the one value that can turn it on. Whether it DOES turn it on (the stored value was not 'lichess') is
+  // judged inside, on the row; `null` ⇒ not asked, and a patch that turns it on without an answer is refused.
+  const onlineOffered =
+    (patch.config as Record<string, unknown> | undefined)?.onlinePlay === "lichess"
+      ? await onlineChessOffered(auth)
+      : null;
+  // T6 / D9: the camera requirement. Validated before anything is read. The
+  // round-open question is asked INSIDE the write's own transaction (review
+  // M9, fix round 1), in withTenant's privileged prelude: stage_round_opens is
+  // sealed, so as app_user the read is refused 42501 (round-open.ts), and a
+  // pooled read inside the tenant transaction is the pool self-deadlock
+  // above. The prelude first takes the division lock openRound takes, so an
+  // open and this gate are serialised: an open that commits first is seen
+  // here, and one that starts later waits for this write to commit. Read
+  // before the transaction (as it was), a tightening could commit just after
+  // an open had.
+  const cameraPolicyNamed = patch.camera_policy !== undefined;
+  const incomingCamera = cameraPolicyNamed ? assertCameraPolicyValue(patch.camera_policy) : null;
+  let roundOpened = false;
   let previousSlug: string | null = null;
   let previousCompetitionId: string | null = null;
   // The public player page masks each opponent's name by their division's
@@ -703,8 +778,65 @@ export async function patchDivision(
   // The stored name a rename replaces: a changed name moves the division in the
   // public competition shell (`expireCompetitionShell`), a re-sent one does not.
   let nameBefore: string | undefined;
+  const cameraGate = async (ptx: Tx) => {
+    await ptx`select pg_advisory_xact_lock(hashtext(${"division:" + id}))`;
+    roundOpened = await anyRoundOpened(ptx, id, new Date());
+  };
   const row = await withTenant(auth.orgId, async (tx) => {
     const effective: Record<string, unknown> = { ...patch };
+    if (cameraPolicyNamed) {
+      // The stored value this write replaces, under the same `for no key
+      // update` the masking/seeds reads below use, plus the competition floor
+      // it inherits when it is null.
+      const [cur] = await tx<
+        {
+          sport_key: string;
+          competition_id: string;
+          camera_policy: string | null;
+          competition_policy: string;
+        }[]
+      >`
+        select d.sport_key, d.competition_id, d.camera_policy,
+               c.camera_policy as competition_policy
+          from divisions d
+          join competitions c on c.id = d.competition_id
+         where d.id = ${id}
+           for no key update of d`;
+      if (!cur) throw new HttpError(404, "division not found");
+      assertCameraPolicyForSport(cur.sport_key, incomingCamera);
+      const storedCamera = readCameraPolicy(cur.camera_policy);
+      // Only a real CHANGE of the stored value is gated and audited: a re-send
+      // of the current value must never 409 or leave a row.
+      if (incomingCamera !== storedCamera) {
+        // The gate judges what PLAYERS get (the division-level effective
+        // policy), not the stored values: clearing 'off' to inherit a
+        // 'required' competition is a tightening even though null has no rank.
+        const floor = readCameraPolicy(cur.competition_policy);
+        const effectiveFrom = effectivePolicy({ stage: null, division: storedCamera, competition: floor });
+        const effectiveTo = effectivePolicy({ stage: null, division: incomingCamera, competition: floor });
+        assertPolicyChange({ from: effectiveFrom, to: effectiveTo, windowOpened: roundOpened });
+        // Same transaction as the write it describes (ruling Q2: one row in
+        // competition_events per change), so a refused or rolled-back change
+        // can never leave a row saying it happened.
+        await audit(
+          tx,
+          cur.competition_id,
+          auth.orgId,
+          CAMERA_POLICY_CHANGED,
+          {
+            divisionId: id,
+            stageId: null,
+            from: storedCamera,
+            to: incomingCamera,
+            effectiveFrom,
+            effectiveTo,
+            roundOpened,
+          },
+          auth.userId,
+        );
+      }
+      effective.camera_policy = incomingCamera;
+    }
     if (patch.youth !== undefined || patch.player_name_display !== undefined || patch.age_max !== undefined) {
       [maskingBefore] = await tx<{ youth: boolean; player_name_display: string | null }[]>`
         select youth, player_name_display from divisions where id = ${id} for no key update`;
@@ -868,11 +1000,50 @@ export async function patchDivision(
       if (incomingEntrants != null && typeof incomingEntrants === "object") {
         finalConfig.entrants = incomingEntrants;
       }
+      const patchCfg = patch.config as Record<string, unknown> | undefined;
+      if (patchCfg && "onlinePlay" in patchCfg) {
+        applyOnlinePlayToConfig(
+          finalConfig,
+          assertOnlinePlayValue(current.sport_key, patchCfg.onlinePlay),
+        );
+      } else {
+        applyOnlinePlayToConfig(finalConfig, readOnlinePlay(current.config));
+      }
       if (locked) {
         const nonEntrantsChanged =
           canonicalJson(withoutEntrants(finalConfig)) !==
           canonicalJson(withoutEntrants((current.config ?? {}) as Record<string, unknown>));
         if (nonEntrantsChanged) throw formatLocked();
+      }
+      // T5-I1/T6 (M12): the setup gate for an online clock, as on create.
+      // AFTER the lock so a locked division keeps answering 409 for any
+      // format change, never 400. Judged on the FINAL config, and only when
+      // the clock or online play CHANGES against the stored row: a save that
+      // re-sends both as stored (the Entrants save re-sends the whole config
+      // through one of the format lock's two doors — withoutDivisionMetaKeys
+      // lets `entrants` AND `onlinePlay` change on a locked division) must not
+      // be refused for a clock saved before this gate existed: on a locked
+      // division the only repair, changing the clock, is itself 409, so that
+      // save would be refused for good (review T6-I1). The other door is why
+      // this is not simply `!locked`: online play switched ON over a stored
+      // pre-gate clock on a locked division must still be judged (N-1).
+      const storedConfig = (current.config ?? {}) as Record<string, unknown>;
+      // T20: only the off → lichess transition starts online play. A re-send of a stored 'lichess' (every Entrants
+      // and format save re-sends the whole config) and turning it off are never gated, so a club whose flag goes
+      // off can still save, and switch online play off, on a division already online. After the lock (409 keeps
+      // its precedence for a format change), before the clock (the feature is not offered at all).
+      if (
+        readOnlinePlay(finalConfig) === "lichess" &&
+        readOnlinePlay(storedConfig) !== "lichess" &&
+        onlineOffered !== true
+      ) {
+        throw onlineChessDisabled();
+      }
+      const clockOrOnlineChanged =
+        canonicalJson(finalConfig.clock ?? null) !== canonicalJson(storedConfig.clock ?? null) ||
+        readOnlinePlay(finalConfig) !== readOnlinePlay(storedConfig);
+      if (clockOrOnlineChanged && readOnlinePlay(finalConfig) === "lichess") {
+        assertTimeControl(finalConfig.clock as BoardgameClockInput | undefined);
       }
       // Narrowing the allowed kinds must not orphan entrants that already exist:
       // an active entrant of a kind the new model no longer accepts would become
@@ -958,7 +1129,7 @@ export async function patchDivision(
         return update(slug === before!.slug ? effective : { ...effective, slug }, sp);
       },
     );
-  }).catch((err: unknown) => {
+  }, cameraPolicyNamed ? { privilegedPrelude: cameraGate } : {}).catch((err: unknown) => {
     // Race backstop for the AGE BAND — READ COMMITTED means two concurrent
     // PATCHes can each pass the merge-and-validate guard above against a
     // stale read, then both write; whichever commits second still hits

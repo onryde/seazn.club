@@ -15,7 +15,7 @@ import Link from "@/components/ui/console-link";
 import { ClientTime } from "@/components/client-time";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
-import { useMsg } from "@/components/i18n/dict-provider";
+import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { DateTimeField } from "../shared/datetime-field";
 import { resolveSlotLabel } from "@/lib/slot-label";
@@ -27,7 +27,8 @@ import { seatLabel, type FeedLabelPair } from "@/lib/schedule-board";
 import { courtDisplayName } from "@/components/v2/board/types";
 import { courtOptionsFor, type Venue } from "@/components/v2/shared/court-multi-picker";
 import { canEditFixtureTime, fixtureRowAction, hasAssignedScorer, type RowAction } from "@/lib/fixture-row-action";
-import { isBye, type RunSheetFixture } from "@/lib/run-sheet-groups";
+import { isBye, type RunSheetFixture, type RunSheetOnlinePlay } from "@/lib/run-sheet-groups";
+import { queueRowAnchor } from "@/components/v2/external-play-held-copy";
 import type { HoldState } from "@/server/relay/domain/session";
 import { fixtureStatusLabel, VOID_STATUSES } from "@/components/v2/stages-panel";
 import { outcomeTagWords, outcomeText, outcomeTextParts, splitResultTail } from "@/lib/outcome-text";
@@ -99,6 +100,44 @@ export function scheduleErrorKey(err: unknown): MessageKey {
   return SCHEDULE_ERROR_FALLBACK_KEY;
 }
 
+/** T16 — a flag chip: amber (the desk's attention tone for evidence), 44 px on phones. */
+const CHIP_FLAG =
+  "inline-flex shrink-0 items-center gap-1 rounded-full bg-[#fef3c7] px-2 py-0.5 text-xs font-semibold text-[#713f12] max-md:min-h-11 md:order-first";
+/** T16 fix round 1, I3 — a quiet chip: a fact that is nobody's fault (OUR side's camera connection), 44 px on phones. */
+const CHIP_QUIET =
+  "inline-flex shrink-0 items-center gap-1 rounded-full border border-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700 max-md:min-h-11 md:order-first";
+
+/** A chip that leads somewhere when the page handed it a destination; without one it is plain text — the evidence
+ *  still shows. A plain function, not a component: it is part of the row's own markup. */
+function chipLink({
+  href,
+  testId,
+  state,
+  label,
+  className,
+  children,
+}: {
+  href: string | undefined;
+  testId: string;
+  state: string;
+  label: string;
+  className: string;
+  children: React.ReactNode;
+}) {
+  if (href === undefined) {
+    return (
+      <span data-testid={testId} data-state={state} className={className}>
+        {children}
+      </span>
+    );
+  }
+  return (
+    <Link href={href} data-testid={testId} data-state={state} aria-label={label} className={className}>
+      {children}
+    </Link>
+  );
+}
+
 export function RunSheetRow({
   fixture,
   href,
@@ -115,6 +154,8 @@ export function RunSheetRow({
   streamState,
   awaitsSettle = false,
   feedLabels,
+  onlinePlay,
+  arbiterHref,
 }: {
   fixture: RunSheetFixture;
   href: string;
@@ -161,6 +202,11 @@ export function RunSheetRow({
    *  (false on a billing-frozen page) — the chip replaced the frozen page's stop probes, so it must show there. The
    *  organiser gate is the page's: a viewer is never handed a state. */
   streamState?: HoldState;
+  /** T16 — this online chess board's camera policy, OPEN flags by kind, and hold (`listRunSheetOnlinePlay`, read by
+   *  the division page for an organiser; a viewer is never handed one). Absent = not an online board. */
+  onlinePlay?: RunSheetOnlinePlay;
+  /** T16 — the arbiter panel opened on this board: where a flag chip leads. */
+  arbiterHref?: string;
   /** W2a fix round 1 (M10) — this fixture is a recorded abandon awaiting its settle (stored `abandoned`): held, like
    *  a `needs_decision` one — the chip and Settle. From the division page's `listFixturesAwaitingSettle`. */
   awaitsSettle?: boolean;
@@ -184,6 +230,8 @@ export function RunSheetRow({
   feedLabels?: Record<string, FeedLabelPair>;
 }) {
   const msg = useMsg();
+  // The non-throwing plural reader, like `useMsg`: the stages-panel suites render this row bare (no DictProvider).
+  const plural = useMsgPlural();
   const router = useRouter();
   const [editing, setEditing] = useState(false);
   // The typed value. Seeded EMPTY here and re-seeded from the STORED instant
@@ -329,6 +377,9 @@ export function RunSheetRow({
   const struck = voided && !awaitsSettle;
   // The held chip's one condition, read by the chip and by the phone line it changes (loop R M7(d)).
   const held = fixture.status === "needs_decision" || awaitsSettle;
+  // T16: an online board held for the organiser (sweep or result writer) — the same chip, leading to its card in the
+  // online-play queue above the sheet, where it is settled. A fixture already held by the engine keeps that chip.
+  const onlineHeld = !held && (onlinePlay?.held ?? null) !== null;
 
   // The sub-line: ONE computed string, ONE guard below.
   //
@@ -585,7 +636,7 @@ export function RunSheetRow({
           {/* Loop H F1: the device pad's scan-confirm pattern (`device-score-pad.tsx`) — a `min-w-0 truncate` span for
               what may shorten, a `shrink-0 whitespace-pre` span for what may not (`whitespace-pre` keeps the tail's
               leading space, which a flex item would otherwise drop). */}
-          <p className={`flex min-w-0 flex-1 text-xs text-slate-500 md:hidden${held ? " max-md:basis-full" : ""}`}>
+          <p className={`flex min-w-0 flex-1 text-xs text-slate-500 md:hidden${held || onlineHeld ? " max-md:basis-full" : ""}`}>
             <span className="min-w-0 truncate">{phoneLine.lead}</span>
             {phoneLine.tail !== "" && (
               <span className="shrink-0 whitespace-pre">
@@ -614,6 +665,77 @@ export function RunSheetRow({
             >
               <span aria-hidden className={`inline-block h-1.5 w-1.5 rounded-full ${streamState === "live" ? "bg-red-600" : "bg-amber-500"}`} />
               {msg(streamState === "live" ? "runsheet.stream.live" : "runsheet.stream.waiting")}
+            </Link>
+          )}
+          {/* T16 (canvas RunSheet): an online board's camera and flags. A flag is evidence for the organiser, so its
+              chip leads to the arbiter panel on this board; "Camera ok" is a fact, not a control. */}
+          {onlinePlay && onlinePlay.cameraFlagCount > 0 && (
+            chipLink({
+              href: arbiterHref,
+              testId: "run-sheet-camera-chip",
+              state: "flagged",
+              label: msg("runsheet.online.flagName", {
+                chip: plural("runsheet.camera.flag", onlinePlay.cameraFlagCount),
+                match: `${home} ${msg("schedule.vs")} ${away}`,
+              }),
+              className: CHIP_FLAG,
+              children: plural("runsheet.camera.flag", onlinePlay.cameraFlagCount),
+            })
+          )}
+          {onlinePlay && onlinePlay.cameraFlagCount === 0 && onlinePlay.cameraPolicy === "required" && onlinePlay.live && (
+            <span
+              data-testid="run-sheet-camera-chip"
+              data-state="ok"
+              className="inline-flex shrink-0 items-center gap-1 rounded-full border border-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700 md:order-first"
+            >
+              <span aria-hidden className="inline-block h-1.5 w-1.5 rounded-full bg-green-600" />
+              {msg("runsheet.camera.ok")}
+            </span>
+          )}
+          {/* I3: our safeguard's connection — reviewed in the same panel, but never the amber evidence chip, and on its
+              own it leaves "Camera ok" standing (the player's camera was not lost). */}
+          {onlinePlay && onlinePlay.connectionProblemCount > 0 && (
+            chipLink({
+              href: arbiterHref,
+              testId: "run-sheet-connection-chip",
+              state: "ours",
+              label: msg("runsheet.online.flagName", {
+                chip: msg("arbiter.flag.connection.chipPlain"),
+                match: `${home} ${msg("schedule.vs")} ${away}`,
+              }),
+              className: CHIP_QUIET,
+              children: msg("arbiter.flag.connection.chipPlain"),
+            })
+          )}
+          {onlinePlay && onlinePlay.offSeaznFlagCount > 0 && (
+            chipLink({
+              href: arbiterHref,
+              testId: "run-sheet-off-seazn-chip",
+              state: "flagged",
+              label: msg("runsheet.online.flagName", { chip: msg("arbiter.flag.outOfBand.chip"), match: `${home} ${msg("schedule.vs")} ${away}` }),
+              className: CHIP_FLAG,
+              children: msg("arbiter.flag.outOfBand.chip"),
+            })
+          )}
+          {/* D12 (T16): a round nobody has opened — nobody invited, nobody can take a seat. A fact, not a control:
+              the round is opened from its stage card above. */}
+          {onlinePlay?.unopened && (
+            <span
+              data-testid="run-sheet-round-unopened"
+              className="inline-flex shrink-0 items-center gap-1 rounded-full border border-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700 md:order-first"
+            >
+              {msg("runsheet.round.notOpenedChip")}
+            </span>
+          )}
+          {onlineHeld && (
+            <Link
+              href={`#${queueRowAnchor(fixture.id)}`}
+              data-testid="run-sheet-online-held-chip"
+              data-reason={onlinePlay?.held ?? undefined}
+              aria-label={msg("runsheet.online.heldName", { match: `${home} ${msg("schedule.vs")} ${away}` })}
+              className="badge inline-flex shrink-0 items-center normal-case bg-red-50 text-red-700 max-md:min-h-11 md:order-first"
+            >
+              {msg("score.status.needs_decision")}
             </Link>
           )}
           {/* W2a Task 11 (finding 25): a HELD bracket fixture says so, in the desk's red attention tone (attention

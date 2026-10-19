@@ -1,0 +1,281 @@
+// T15 — the arbiter panel's view of one opened round (chess design §5.3:
+// "An arbiter, when assigned, joins receive-only and sees both players' tiles
+// for a chosen fixture, plus that fixture's flags" - amended by D16, §5.6.4: one
+// player's tile at a time, a switch between the two, plus that fixture's flags).
+//
+// Shared by the server loader (usecases/external-play/arbiter.ts) and the
+// client panel (components/v2/arbiter-panel.tsx), so it imports nothing that
+// is server-only. The two note readers below read the evidence notes the
+// flags' PRODUCERS write — reconcile (out_of_band_play) and the sweep's job 5
+// (camera_lost, and multiple_devices — T17B fix 2, D9). They are strict: a note they cannot read is null and the
+// panel says so in general words, never a guessed number. The duration of a
+// `camera_connection_problems` flag is NEVER read from its note (controller
+// addendum 2026-10-12): the loader reads it from fixture_video_guard_faults.
+
+export type ArbiterColour = "white" | "black";
+/** What the organiser's settle offers in place of a winner (I-3, fix rounds 2 and 3) — the server's one reading
+ *  (`noResultOffer`, server/usecases/external-play/no-result.ts), carried on the panel's board and the queue's row and
+ *  never re-derived on the client:
+ *   - "void": "No result", an abandon — only in a league or a group's round-robin, where a void holds nothing up;
+ *   - "double_walkover": both players stayed away — W2b's double walkover, wherever W2b takes one;
+ *   - "refused": neither is offered, and `why` names the sentence said in its place: a knockout game needs a winner,
+ *     a Swiss round needs every game decided before the next is paired. */
+export type NoResultOffer =
+  | { kind: "void" }
+  | { kind: "double_walkover" }
+  | { kind: "refused"; why: "knockout" | "swiss" };
+export type ArbiterCameraPolicy = "off" | "optional" | "required";
+
+/** Where one board stands, as the run sheet would say it. */
+export type ArbiterBoardState =
+  /** No game yet: the players are still arriving. */
+  | { kind: "checking_in" }
+  /** A game exists at Lichess, nobody has moved. */
+  | { kind: "starting" }
+  | { kind: "live"; moveNo: number }
+  /** Held for the organiser (fixture_external_play.status = needs_organiser). */
+  | { kind: "on_hold" }
+  /** Over: a result written (score White first, "1–0"), or settled without one. `noResult` (I-3): the board was
+   *  abandoned — VOID, nobody's result — and has no score. */
+  | { kind: "result"; score: string | null; noResult: boolean }
+  /** T16 fix round 1, R4 — the fixture was cancelled: no result will come, but its OPEN flags are still the organiser's
+   *  to review. Only the Flagged list carries one; the round panel lists no cancelled board. */
+  | { kind: "cancelled" };
+
+/** No game to watch, settle or let go on: a result is in, or the board was cancelled. */
+export function boardIsOver(state: ArbiterBoardState): boolean {
+  return state.kind === "result" || state.kind === "cancelled";
+}
+
+/** Whether the panel offers "Settle the result now…" on this board: never on a board that is over; through the
+ *  resolve route when an online game is on file and still to be decided (`canSettle`), else on the board's match page
+ *  when it has one. One predicate for the panel and the tests that drive the loader into it (T16 fix round 3, N4: an
+ *  online game over, its result voided on the pad, is settled on the pad — never offered here). */
+export function offersSettle(board: Pick<ArbiterBoard, "state" | "canSettle" | "fixtureNo">): boolean {
+  return !boardIsOver(board.state) && (board.canSettle || board.fixtureNo !== null);
+}
+
+export type ArbiterPlayer = {
+  name: string;
+  /** The seat's ONE player (guard.ts `loadSides`), or null when the side has
+   *  no single player. The cameras are the join route's answer, not this. */
+  personId: string | null;
+};
+
+export type ArbiterClock = {
+  whiteMs: number;
+  blackMs: number;
+  /** When those values were true (the last accepted move), or null. */
+  asOf: string | null;
+  running: boolean;
+  turn: ArbiterColour;
+};
+
+export type CameraOffInterval = { from: string; to: string; confirmedByEvents: boolean };
+
+/** The sweep's camera report (job 5), as its note states it. */
+export type CameraOffReport = {
+  offSeconds: number;
+  windowSeconds: number;
+  intervals: CameraOffInterval[];
+  connections: number;
+  sessions: number;
+};
+
+export type ArbiterFlag =
+  | {
+      id: string;
+      kind: "out_of_band_play";
+      at: string;
+      /** 1-based plies; null when the note could not be read. */
+      plies: { from: number; to: number } | null;
+    }
+  | {
+      id: string;
+      kind: "camera_lost";
+      at: string;
+      personName: string | null;
+      report: CameraOffReport | null;
+      /** The match window's start (the first move), for the timeline. */
+      windowFrom: string | null;
+    }
+  | {
+      id: string;
+      kind: "camera_connection_problems";
+      at: string;
+      personName: string | null;
+      /** From fixture_video_guard_faults over job 5's window, never from the
+       *  note. Both null when there is no match window to read them over. */
+      seconds: number | null;
+      stamps: number | null;
+    }
+  | {
+      id: string;
+      /** T17B fix 2, D9: the player was connected from more than one place
+       *  at the same time in the match. Evidence, never a block. */
+      kind: "multiple_devices";
+      at: string;
+      personName: string | null;
+      /** From the sweep's note; null when it could not be read. */
+      report: MultipleDevicesReport | null;
+    };
+
+/** The sweep's job-5 multiple_devices note, as it states it (D9). */
+export type MultipleDevicesReport = {
+  /** The most connections at one instant: always 2 or more. */
+  devices: number;
+  /** Total seconds with two or more connected at once. */
+  seconds: number;
+  /** Where they overlapped, in order. */
+  intervals: { from: string; to: string }[];
+};
+
+export type ArbiterBoard = {
+  fixtureId: string;
+  /** The per-division ordinal (`/f/{no}`), for the fixture page link. */
+  fixtureNo: number | null;
+  boardNo: number;
+  white: ArbiterPlayer;
+  black: ArbiterPlayer;
+  state: ArbiterBoardState;
+  clock: ArbiterClock | null;
+  cameraPolicy: ArbiterCameraPolicy;
+  /** An organiser already let this board play without video (D11). */
+  videoOverridden: boolean;
+  /** Required boards that have begun: is the sweep's camera report still to
+   *  come ("pending"), or settled? null when there is none to expect. */
+  cameraReport: "pending" | "settled" | null;
+  /** D16: a board has a camera meeting PER PLAYER; this says which of them can be watched, so the panel's White/Black
+   *  switch is never blind. `none` is no row, or a row an earlier pairing left. */
+  sides: { home: ArbiterSideMeeting; away: ArbiterSideMeeting };
+  /** A game is on file at Lichess and the board is not over. */
+  canResync: boolean;
+  /** Still to be played (no result, not settled): the video override applies. */
+  playable: boolean;
+  /** T16: still to be played AND an online board on file (a bridge row) —
+   *  "Settle the result now…" settles it through the resolve route. */
+  canSettle: boolean;
+  /** T16: which side plays White. The settle buttons name the players by
+   *  colour; the server settles by side. */
+  whiteSide: "home" | "away";
+  /** T16: a drawn knockout game waits for the organiser to pick who goes
+   *  through (held `tiebreak_owed`): the settle offers a winner only. */
+  tiebreakOwed: boolean;
+  /** I-3: what the settle offers in place of a winner — No result, a double walkover, or neither (and why). */
+  noResultOffer: NoResultOffer;
+  /** Open flags only: a flag the organiser closed has had its review. */
+  flags: ArbiterFlag[];
+};
+
+/** One player's camera meeting as the board list reads it (D16, §5.6.4): `open` can be watched, `ended` has been torn
+ *  down, `none` has not started (the player has not arrived). `endedAt`/`evidenceAt` are ISO, from that side's own row. */
+export type ArbiterSideMeeting = {
+  state: "none" | "open" | "ended";
+  endedAt: string | null;
+  evidenceAt: string | null;
+};
+
+export type ArbiterRound = {
+  stageId: string;
+  stageName: string;
+  roundNo: number;
+  /** "10+5" — the division's clock. */
+  timeControl: string | null;
+  /** Never a board the viewer plays on (C1, D7). */
+  boards: ArbiterBoard[];
+  /** How many of the round's boards were left out because the viewer plays
+   *  on them: every board left out ⇒ the panel says "you're playing"; some
+   *  ⇒ one line says why the board numbers skip (N3). */
+  ownBoards: number;
+  /** This is the division's most recently OPENED round (D12). false ⇒ a
+   *  `?fixture=` pinned an earlier round while a newer one is open, and the
+   *  panel offers the way to it (N1). */
+  current: boolean;
+};
+
+const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
+
+/** reconcile.ts `outOfBandEvidence`:
+ *  "ply N (uci) played at Lichess, not through Seazn; …" or
+ *  "plies A-B (uci …) played at Lichess, not through Seazn; …". */
+export function parseOutOfBandNote(note: string | null): { from: number; to: number } | null {
+  if (note === null) return null;
+  const m = /^(?:ply (\d+)|plies (\d+)-(\d+)) \([a-h1-8qrbn ]+\) played at Lichess, not through Seazn; /.exec(note);
+  if (!m) return null;
+  const from = Number(m[1] ?? m[2]);
+  const to = Number(m[1] ?? m[3]);
+  if (!Number.isInteger(from) || !Number.isInteger(to) || from < 1 || to < from) return null;
+  return { from, to };
+}
+
+/** The move a ply belongs to (FIDE: move N is White's ply 2N-1, Black's 2N). */
+export function fullMoveOf(ply: number): number {
+  return Math.ceil(ply / 2);
+}
+
+/** The move being played after a ledger of `plies` (the "Live · move N" label). */
+export function boardMoveNo(plies: number): number {
+  return Math.floor(plies / 2) + 1;
+}
+
+/** sweep.ts job 5 (`readCameraEvidence`):
+ *  "camera off {s} s of {w} s in the match: {from} to {to}[ (its own off/on
+ *  events agree)]; …; from {n} camera connection[s] over {m} session[s];
+ *  camera required". */
+export function parseCameraLostNote(note: string | null): CameraOffReport | null {
+  if (note === null) return null;
+  const m =
+    /^camera off (\d+) s of (\d+) s in the match: (.+); from (\d+) camera connections? over (\d+) sessions?; camera required$/.exec(
+      note,
+    );
+  if (!m) return null;
+  const offSeconds = Number(m[1]);
+  const windowSeconds = Number(m[2]);
+  if (offSeconds > windowSeconds) return null;
+  const intervals: CameraOffInterval[] = [];
+  for (const part of m[3]!.split("; ")) {
+    const iv = /^(\S+) to (\S+?)( \(its own off\/on events agree\))?$/.exec(part);
+    if (!iv || !ISO.test(iv[1]!) || !ISO.test(iv[2]!)) return null;
+    if (Date.parse(iv[2]!) < Date.parse(iv[1]!)) return null;
+    intervals.push({ from: iv[1]!, to: iv[2]!, confirmedByEvents: iv[3] !== undefined });
+  }
+  if (intervals.length === 0) return null;
+  return { offSeconds, windowSeconds, intervals, connections: Number(m[4]), sessions: Number(m[5]) };
+}
+
+/** sweep.ts job 5 (`readCameraEvidence`, T17B fix 2, D9):
+ *  "{n} camera connections at once for {s} s in the match: {from} to {to};
+ *  …; camera required". n is 2 or more — one is never "at once". */
+export function parseMultipleDevicesNote(note: string | null): MultipleDevicesReport | null {
+  if (note === null) return null;
+  const m = /^(\d+) camera connections at once for (\d+) s in the match: (.+); camera required$/.exec(note);
+  if (!m) return null;
+  const devices = Number(m[1]);
+  if (devices < 2) return null;
+  const intervals: { from: string; to: string }[] = [];
+  for (const part of m[3]!.split("; ")) {
+    const iv = /^(\S+) to (\S+)$/.exec(part);
+    if (!iv || !ISO.test(iv[1]!) || !ISO.test(iv[2]!)) return null;
+    if (Date.parse(iv[2]!) < Date.parse(iv[1]!)) return null;
+    intervals.push({ from: iv[1]!, to: iv[2]! });
+  }
+  return { devices, seconds: Number(m[2]), intervals };
+}
+
+/** The off intervals as positions on a bar the length of the match window. */
+export function timelineSegments(a: {
+  windowFrom: string | null;
+  windowSeconds: number;
+  intervals: readonly CameraOffInterval[];
+}): { leftPct: number; widthPct: number }[] {
+  if (a.windowFrom === null || a.windowSeconds <= 0) return [];
+  const start = Date.parse(a.windowFrom);
+  if (Number.isNaN(start)) return [];
+  const span = a.windowSeconds * 1000;
+  const clamp = (ms: number) => Math.min(span, Math.max(0, ms - start));
+  return a.intervals.map((iv) => {
+    const left = clamp(Date.parse(iv.from));
+    const right = clamp(Date.parse(iv.to));
+    return { leftPct: (left / span) * 100, widthPct: ((right - left) / span) * 100 };
+  });
+}

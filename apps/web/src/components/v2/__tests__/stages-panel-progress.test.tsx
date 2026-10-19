@@ -153,6 +153,19 @@ describe("stage card body — fixtures progress (owner-approved 'Option A')", ()
   // lookup or the segment count to assert. `stage-progress-bar` is instead
   // pinned ABSENT below, and the counts line's own suppression math (which
   // this test never touched) is what the tests around it still cover.
+  it("D12: an online board whose round nobody has opened is counted 'not opened' — and the clause is absent at zero", () => {
+    const unopened = {
+      f3: { cameraPolicy: "off", cameraFlagCount: 0, connectionProblemCount: 0, offSeaznFlagCount: 0, held: null, live: false, unopened: true },
+      f4: { cameraPolicy: "off", cameraFlagCount: 0, connectionProblemCount: 0, offSeaznFlagCount: 0, held: null, live: true, unopened: false },
+    } as const;
+    const counts = progressCounts(renderToStaticMarkup(<StagesPanel {...PROPS} onlinePlay={unopened} />))!;
+    expect(counts).toContain(en["schedule.progress.notOpened.one"]!.replace("{count}", "1"));
+    const bare = progressCounts(renderToStaticMarkup(<StagesPanel {...PROPS} />))!;
+    expect(bare, "the positive pair: the same line renders").toContain(en["schedule.progress.inPlay.one"]!);
+    expect(bare).not.toContain(en["schedule.progress.notOpened.one"]!.replace("{count}", "1"));
+    expect(bare).not.toContain("0 not opened");
+  });
+
   it("stage-progress-bar no longer renders at all — the bar was removed, not merely emptied", () => {
     const html = renderToStaticMarkup(<StagesPanel {...PROPS} />);
     // Review m5: the positive half. Without it a StagesPanel that rendered

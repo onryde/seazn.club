@@ -71,7 +71,7 @@ describe("R3 failure counters ↔ the usecases' return types", () => {
         checked++;
       }
     }
-    expect(checked, "counters checked").toBe(7);   // T7b: + stream-tick's data.failed
+    expect(checked, "counters checked").toBe(9);   // T7b: + stream-tick's data.failed; I-1: + external-play's two
   });
 
   it("the scan reads CODE, not prose: a field named only in a block or line comment is not declared; the same field in a type is", () => {

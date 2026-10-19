@@ -380,5 +380,15 @@
   "soloSignUpAssigned.preheader": "L'organisation vous a affecté à {teamName}.",
   "soloSignUpAssigned.title": "Vous avez une équipe",
   "soloSignUpAssigned.intro": "Bonjour {playerName}, l'organisation vous a affecté à {teamName} en {divisionName} pour {competitionName}. Rien d'autre à faire : votre équipe vous contactera.",
-  "soloSignUpAssigned.viewStatus": "Vous pouvez consulter votre inscription ici : {url}"
+  "soloSignUpAssigned.viewStatus": "Vous pouvez consulter votre inscription ici : {url}",
+  "externalPlayInvite.subject": "La ronde {roundNo} est ouverte — votre partie contre {opponentName}",
+  "externalPlayInvite.preheader": "Prenez place sur Seazn avant {deadline}.",
+  "externalPlayInvite.title": "Votre ronde est ouverte",
+  "externalPlayInvite.body": "L'organisateur a ouvert la ronde {roundNo}. Votre partie d'échecs en ligne contre <strong>{opponentName}</strong> peut se jouer dès maintenant.",
+  "externalPlayInvite.bodyLater": "L'organisateur a ouvert la ronde {roundNo}. Votre partie d'échecs en ligne contre <strong>{opponentName}</strong> sera accessible à <strong>{opens}</strong>.",
+  "externalPlayInvite.deadline": "Ouvrez la partie sur Seazn et prenez place avant <strong>{deadline}</strong>.",
+  "externalPlayInvite.button": "Ouvrir la partie",
+  "externalPlayInvite.footer": "Vous recevez ceci car vous êtes inscrit dans une division d'échecs en ligne chez {orgName} sur Seazn Club.",
+  "externalPlayInvite.text": "La ronde {roundNo} est ouverte. Votre partie contre {opponentName} peut se jouer dès maintenant. Prenez place avant {deadline} : {fixtureUrl}",
+  "externalPlayInvite.textLater": "La ronde {roundNo} est ouverte. Votre partie contre {opponentName} sera accessible à {opens}. Prenez place avant {deadline} : {fixtureUrl}"
 }

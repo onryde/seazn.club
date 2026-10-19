@@ -36,7 +36,8 @@ export interface Job {
 /** The hourly trigger. Daily and weekly rows hang off it, and it alone runs the inactive probe. */
 export const TRIGGER_CRON = "17 * * * *";
 
-/** Capture QR v2 §6.11 (W22): stream-tick's own trigger. With the hourly one, 2 per env, 4 of the Free plan's 5. */
+/** Capture QR v2 §6.11 (W22): stream-tick's own trigger. With the hourly one, 2 per env, 4 of the Free plan's 5.
+ *  The external-play sweep (chess in-page design §4) shares it: same cadence, no new trigger. */
 export const STREAM_TICK_CRON = "*/5 * * * *";
 
 export const JOBS: readonly Job[] = [
@@ -101,6 +102,23 @@ export const JOBS: readonly Job[] = [
     retry: false,
     manual: true,
     failureCounts: ["data.failed"],
+  },
+  // Chess in-page board design §4: "The 5-minute cron … is NOT optional". One pass of the external-play sweep: the
+  // deadline no-show, the mint retry after a 429, meeting teardown, the reconcile of every game on file, camera evidence
+  // and ending arbiter watches. Every one of them happens when no page is open, so without this row none of them runs.
+  // Never retried: the next firing, 5 minutes later, IS the retry, and the sweep's pass lock answers an overlapping
+  // re-send with `skipped`. Final review I-1: SweepReport.failed (fixtures whose action threw) and .skipped (1 when
+  // another pass held the lock — a pass that overlaps the next firing ran for five minutes) are both failures.
+  // `deferred` is not: a budget ran out (the pass's, or reconcile's own slice of it) or the per-pass cap on settling
+  // reads was reached (D20), and the next firing reaches the rest — one counter for all three causes.
+  {
+    id: "external-play",
+    path: "/api/cron/external-play",
+    trigger: STREAM_TICK_CRON,
+    due: { kind: "every" },
+    retry: false,
+    manual: true,
+    failureCounts: ["data.failed", "data.skipped"],
   },
 ];
 

@@ -24,6 +24,8 @@ import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import type { LiveFixtureData } from "@/components/public-site/live-score-data";
 import { useLiveFixtureSnapshot } from "@/components/public-site/match-centre/live-fixture-channel";
+import { useRoundOpenedAt } from "@/components/public-site/match-centre/round-open-channel";
+import { formatWatchTime } from "@/components/public-site/match-centre/watch-parts";
 import { fixtureSubheadingLine } from "./fixture-subheading";
 
 export interface MatchCentreSubheadingProps {
@@ -33,13 +35,27 @@ export interface MatchCentreSubheadingProps {
    *  after `MatchCentre` unmounts). */
   initial: LiveFixtureData;
   dict: PublicDict;
+  /** T17 fix round 2, V1 — an online board only: the page's own round-open instant (null while the round is not
+   *  open) and how Match details formats it. The watch panel's live answer (`round-open-channel`) wins once it has
+   *  one, so a viewer who loaded before the open sees it arrive. */
+  roundOpen?: { at: string | null; timeZone: string; locale: string };
 }
 
-export function MatchCentreSubheading({ fixtureId, initial, dict }: MatchCentreSubheadingProps) {
+export function MatchCentreSubheading({ fixtureId, initial, dict, roundOpen }: MatchCentreSubheadingProps) {
   const live = useLiveFixtureSnapshot(fixtureId) ?? initial;
+  const published = useRoundOpenedAt(fixtureId);
+  const openedAt = roundOpen === undefined ? null : published !== undefined ? published : roundOpen.at;
   const line = fixtureSubheadingLine(live.match_centre, live.status, {
     timeTbd: t(dict, "matchCentre.status.timeTbd"),
     timeNotRecorded: t(dict, "matchCentre.status.timeNotRecorded"),
+    // The same time Match details prints (formatWatchTime, the venue's zone); an instant that cannot be read is left
+    // out — the old line, never a crash on a public page.
+    roundOpened:
+      roundOpen !== undefined && openedAt !== null && !Number.isNaN(Date.parse(openedAt))
+        ? t(dict, "matchCentre.status.roundOpened", {
+            time: formatWatchTime(openedAt, roundOpen.timeZone, roundOpen.locale, false),
+          })
+        : null,
   });
   // Null, not an empty paragraph: a fixture with neither a time nor a venue
   // gets no line at all rather than a 20px gap under the title.

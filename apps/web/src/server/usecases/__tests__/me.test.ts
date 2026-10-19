@@ -16,6 +16,7 @@ import {
   listMyFixtures,
   setMyAvailability,
   checkInToFixture,
+  stampFixtureCheckIn,
   listMyPersons,
   listMyPlayerStats,
   setMyConsent,
@@ -263,6 +264,42 @@ describe.skipIf(!HAS_DB)("player home /me (PROMPT-53)", () => {
     // No claimed person on the fixture → null (claim-first interstitial).
     const stranger = await makeUser("stranger");
     expect(await checkInToFixture(stranger, f1.id)).toBeNull();
+  });
+
+  it("stampFixtureCheckIn: inserts status 'in' + checked_in_at, re-stamps checked_in_at later on a second call, and (no identity guard at this layer) accepts a person/org unrelated to the fixture", async () => {
+    const { owner, orgId } = await seedOrg("stamp");
+    const { fixtures } = await rig(owner);
+    const [f1] = fixtures;
+    const solo = await createPerson(owner, { full_name: "Solo", consent: {}, dob: null } as never);
+
+    // First call: fresh row, defaults to 'in'.
+    const first = await stampFixtureCheckIn(solo.id, f1.id, orgId);
+    expect(first.status).toBe("in");
+    expect(first.checked_in_at).not.toBeNull();
+
+    // Second call, 5ms later: the upsert's `set checked_in_at = now()` always
+    // re-stamps (R6 — confirmed against the SQL, not the brief's premise).
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const second = await stampFixtureCheckIn(solo.id, f1.id, orgId);
+    expect(second.status).toBe("in");
+    expect(new Date(second.checked_in_at!).getTime()).toBeGreaterThan(
+      new Date(first.checked_in_at!).getTime(),
+    );
+
+    // A person from a different org, on a fixture they have no roster spot
+    // on, still gets stamped: stampFixtureCheckIn trusts its caller-supplied
+    // personId/fixtureId/orgId outright. The identity guard (is this person
+    // actually rostered on this fixture, in this org) lives entirely in
+    // myPersonOnFixture, which only checkInToFixture calls — Task 8's
+    // signed-link caller must run the equivalent check itself before calling
+    // stampFixtureCheckIn. No guard is added here.
+    const other = await seedOrg("stamp-other");
+    const otherRig = await rig(other.owner);
+    const otherPerson = otherRig.persons[0];
+    const unrelated = await stampFixtureCheckIn(otherPerson.id, f1.id, other.orgId);
+    expect(unrelated.person_id).toBe(otherPerson.id);
+    expect(unrelated.fixture_id).toBe(f1.id);
+    expect(unrelated.status).toBe("in");
   });
 
   it("listMyPlayerStats: my snapshots labelled via the module model, isolated per user (G6)", async () => {

@@ -3054,6 +3054,21 @@
                             "items": {
                               "type": "string"
                             }
+                          },
+                          "camera_policy": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "off",
+                                  "optional",
+                                  "required"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -3081,7 +3096,8 @@
                           "show_seeds",
                           "archived_at",
                           "created_at",
-                          "required_court_tags"
+                          "required_court_tags",
+                          "camera_policy"
                         ],
                         "additionalProperties": false
                       }
@@ -3124,7 +3140,8 @@
                       "created_at": "example",
                       "required_court_tags": [
                         "example"
-                      ]
+                      ],
+                      "camera_policy": "off"
                     }
                   ],
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
@@ -3275,7 +3292,7 @@
         ]
       },
       "post": {
-        "summary": "Create a division (pins sport module version)",
+        "summary": "Create a division (pins sport module version). With onlinePlay 'lichess', 403 ONLINE_CHESS_DISABLED unless the club is offered online chess (the PostHog flag `online-chess`), and 400 INVALID_TIME_CONTROL unless config.clock is one of the curated Board API controls (error.controls lists them); camera_policy null or absent inherits the competition's, and a non-off value on a sport that cannot play online is 422 CAMERA_POLICY_SPORT",
         "tags": [
           "divisions"
         ],
@@ -3428,6 +3445,21 @@
                       {
                         "type": "string",
                         "maxLength": 2000
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "camera_policy": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "off",
+                          "optional",
+                          "required"
+                        ]
                       },
                       {
                         "type": "null"
@@ -3663,6 +3695,21 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "camera_policy": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "off",
+                                "optional",
+                                "required"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -3690,7 +3737,8 @@
                         "show_seeds",
                         "archived_at",
                         "created_at",
-                        "required_court_tags"
+                        "required_court_tags",
+                        "camera_policy"
                       ],
                       "additionalProperties": false
                     },
@@ -3731,7 +3779,8 @@
                     "created_at": "example",
                     "required_court_tags": [
                       "example"
-                    ]
+                    ],
+                    "camera_policy": "off"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -3784,6 +3833,50 @@
           },
           "401": {
             "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Error",
             "content": {
               "application/json": {
                 "schema": {
@@ -4197,6 +4290,21 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "camera_policy": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "off",
+                                "optional",
+                                "required"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -4224,7 +4332,8 @@
                         "show_seeds",
                         "archived_at",
                         "created_at",
-                        "required_court_tags"
+                        "required_court_tags",
+                        "camera_policy"
                       ],
                       "additionalProperties": false
                     },
@@ -4265,7 +4374,8 @@
                     "created_at": "example",
                     "required_court_tags": [
                       "example"
-                    ]
+                    ],
+                    "camera_policy": "off"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -4415,7 +4525,7 @@
         ]
       },
       "patch": {
-        "summary": "Update a division (format edits 409 FORMAT_LOCKED once fixtures exist)",
+        "summary": "Update a division (format edits 409 FORMAT_LOCKED once fixtures exist). Turning onlinePlay on (a stored value other than 'lichess' patched to 'lichess') is 403 ONLINE_CHESS_DISABLED unless the club is offered online chess (the PostHog flag `online-chess`); re-sending a stored 'lichess', or turning it off, is never refused for that. With onlinePlay 'lichess' in the final config, 400 INVALID_TIME_CONTROL unless config.clock is one of the curated Board API controls (error.controls lists them). camera_policy is editable at any time, but once a round of the division has been opened it can only be relaxed: a tightening of the effective policy is 409 POLICY_LOCKED. Every change of the stored camera_policy is audited",
         "tags": [
           "divisions"
         ],
@@ -4632,6 +4742,21 @@
                       "minLength": 1,
                       "maxLength": 40
                     }
+                  },
+                  "camera_policy": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "off",
+                          "optional",
+                          "required"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 },
                 "additionalProperties": false
@@ -4857,6 +4982,21 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "camera_policy": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "off",
+                                "optional",
+                                "required"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -4884,7 +5024,8 @@
                         "show_seeds",
                         "archived_at",
                         "created_at",
-                        "required_court_tags"
+                        "required_court_tags",
+                        "camera_policy"
                       ],
                       "additionalProperties": false
                     },
@@ -4925,7 +5066,8 @@
                     "created_at": "example",
                     "required_court_tags": [
                       "example"
-                    ]
+                    ],
+                    "camera_policy": "off"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -5022,6 +5164,50 @@
           },
           "402": {
             "description": "Plan upgrade required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Error",
             "content": {
               "application/json": {
                 "schema": {
@@ -5669,6 +5855,21 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "camera_policy": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "off",
+                                "optional",
+                                "required"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -5696,7 +5897,8 @@
                         "show_seeds",
                         "archived_at",
                         "created_at",
-                        "required_court_tags"
+                        "required_court_tags",
+                        "camera_policy"
                       ],
                       "additionalProperties": false
                     },
@@ -5737,7 +5939,8 @@
                     "created_at": "example",
                     "required_court_tags": [
                       "example"
-                    ]
+                    ],
+                    "camera_policy": "off"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -6157,6 +6360,21 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "camera_policy": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "off",
+                                "optional",
+                                "required"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -6184,7 +6402,8 @@
                         "show_seeds",
                         "archived_at",
                         "created_at",
-                        "required_court_tags"
+                        "required_court_tags",
+                        "camera_policy"
                       ],
                       "additionalProperties": false
                     },
@@ -6225,7 +6444,8 @@
                     "created_at": "example",
                     "required_court_tags": [
                       "example"
-                    ]
+                    ],
+                    "camera_policy": "off"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -16153,7 +16373,7 @@
     },
     "/api/v1/stages/{id}/unpair": {
       "post": {
-        "summary": "Unpair latest Swiss round (shells kept) — clears sides on the highest fully seated round when it has no played results; Pair-minted bye awards do not block. 422 when the stage is not `swiss`",
+        "summary": "Unpair latest Swiss round (shells kept) — clears sides on the highest fully seated round when it has no played results; Pair-minted bye awards do not block. 422 when the stage is not `swiss`; 409 ONLINE_GAME_EXISTS when an online (Lichess) game exists, or may exist, on a board it would clear — nothing changes, void the game first",
         "tags": [
           "stages"
         ],
@@ -16312,6 +16532,50 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
             "content": {
               "application/json": {
                 "schema": {
@@ -39056,6 +39320,10 @@
                                   },
                                   "updatedAt": {
                                     "type": "string"
+                                  },
+                                  "onlineStarting": {
+                                    "type": "boolean",
+                                    "const": true
                                   }
                                 },
                                 "required": [
@@ -41538,6 +41806,10 @@
                                 },
                                 "updatedAt": {
                                   "type": "string"
+                                },
+                                "onlineStarting": {
+                                  "type": "boolean",
+                                  "const": true
                                 }
                               },
                               "required": [
@@ -43338,6 +43610,146 @@
             "required": false,
             "schema": {
               "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {},
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {},
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/v1/public/fixtures/{id}/board": {
+      "get": {
+        "summary": "An online chess board's view-only state, polled by the public fixture page: whether the fixture's round is open, and the board's public snapshot (status; the position the move ledger stands at, the last move, whose turn, the ply, the clocks as of the last move and whether they run, whether the game is over, and which entrant plays White), or null before the board has one. Never a Lichess id, link or draw offer. 404 for a fixture the public cannot see. Spends the 300-a-minute poll bucket",
+        "tags": [
+          "public"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
             }
           }
         ],
@@ -52196,6 +52608,17 @@
                                     "type": "null"
                                   }
                                 ]
+                              },
+                              "online_play": {
+                                "type": "boolean"
+                              },
+                              "camera_policy": {
+                                "type": "string",
+                                "enum": [
+                                  "off",
+                                  "optional",
+                                  "required"
+                                ]
                               }
                             },
                             "required": [
@@ -52225,7 +52648,9 @@
                               "requires_gender",
                               "youth",
                               "form_fields",
-                              "eligibility_note"
+                              "eligibility_note",
+                              "online_play",
+                              "camera_policy"
                             ],
                             "additionalProperties": false
                           }
@@ -52297,7 +52722,9 @@
                             "required": true
                           }
                         ],
-                        "eligibility_note": "example"
+                        "eligibility_note": "example",
+                        "online_play": true,
+                        "camera_policy": "off"
                       }
                     ]
                   },

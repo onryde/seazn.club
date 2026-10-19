@@ -36,6 +36,8 @@ import { playerLinkId } from "@/lib/name-display";
 import { courtLabelsByOrg } from "./cross-org-court-labels";
 import { omit } from "@/lib/omit";
 import { activeAbandonReasonSql } from "@/server/engine-db/recorded-abandon";
+import { boardOpenFor } from "@/server/external-play/round-open";
+import { windowFor } from "@/server/external-play/window";
 
 export type AvailabilityStatus = "in" | "out" | "maybe";
 
@@ -258,10 +260,55 @@ export async function setMyAvailability(
 }
 
 /**
- * QR self check-in: stamp presence. A fresh row defaults the RSVP to 'in'
- * (turning up answers the question); an existing answer is never clobbered.
- * Returns null when the caller has no claimed person on the fixture — the
- * route turns that into the claim-first interstitial.
+ * The person-level check-in stamp: insert-or-re-stamp fixture_availability
+ * for `personId` on `fixtureId`. A fresh row defaults the RSVP to 'in'
+ * (turning up answers the question); an existing status is never clobbered
+ * (the upsert's `set` list omits `status`), but `checked_in_at` is always
+ * re-stamped to `now()` on every call, including a second one.
+ *
+ * Tenant context: like the rest of this file, this runs on the unscoped
+ * superuser `sql` client, never `withTenant` — fixture_availability's RLS
+ * policy only ever gated app_user writes (V276/V351), and the /me lane has
+ * always bypassed it. `orgId` here is a plain column value, not an RLS
+ * context, so it is NOT re-derived or verified against `fixtureId` — the
+ * caller (today: checkInToFixture's `myPersonOnFixture` lookup; the match
+ * room in Task 8, from a signed-link-resolved person) owns proving personId
+ * legitimately belongs to fixtureId/orgId before calling this.
+ */
+export async function stampFixtureCheckIn(
+  personId: string,
+  fixtureId: string,
+  orgId: string,
+  opts: { at?: Date; window?: { opensAt: Date; deadline: Date } } = {},
+): Promise<AvailabilityRow> {
+  // Spec §5.7.8 - a check-in counts only inside the board's window, so a re-stamp must not move a COUNTED one out of it. With
+  // a `window`, the conflict update KEEPS an existing stamp that lies inside it (`opensAt <= stamp < deadline`, the window's own
+  // edges, window.ts `roomPhase`) and otherwise stamps `at`. `at` is the instant to stamp, `now()` unless a seat granted under
+  // the deadline protection dates it at the player's arrival. With no window it is today's: re-stamped on every call.
+  const stamp = opts.at ? sql`${opts.at}::timestamptz` : sql`now()`;
+  const w = opts.window;
+  const [row] = await sql<AvailabilityRow[]>`
+    insert into fixture_availability (fixture_id, person_id, org_id, status, checked_in_at)
+    values (${fixtureId}, ${personId}, ${orgId}, 'in', ${stamp})
+    on conflict (fixture_id, person_id) do update
+      set checked_in_at = ${
+        w
+          ? sql`case when fixture_availability.checked_in_at >= ${w.opensAt}::timestamptz
+                      and fixture_availability.checked_in_at < ${w.deadline}::timestamptz
+                     then fixture_availability.checked_in_at else ${stamp} end`
+          : stamp
+      }, updated_at = now()
+    returning ${sql(FA_COLS)}`;
+  return row;
+}
+
+/**
+ * QR self check-in: resolves the caller's claimed person on the fixture,
+ * then stamps presence via stampFixtureCheckIn (with the board's window when
+ * the fixture's round has been opened: a counted online check-in is kept, the
+ * capacity build's I-1). Returns null when the
+ * caller has no claimed person on the fixture — the route turns that into
+ * the claim-first interstitial.
  */
 export async function checkInToFixture(
   userId: string,
@@ -272,13 +319,13 @@ export async function checkInToFixture(
   if (mine.fixture_status === "finalized" || mine.fixture_status === "cancelled") {
     throw new HttpError(422, `This match is ${mine.fixture_status} — check-in is closed`);
   }
-  const [row] = await sql<AvailabilityRow[]>`
-    insert into fixture_availability (fixture_id, person_id, org_id, status, checked_in_at)
-    values (${fixtureId}, ${mine.person_id}, ${mine.org_id}, 'in', now())
-    on conflict (fixture_id, person_id) do update
-      set checked_in_at = now(), updated_at = now()
-    returning ${sql(FA_COLS)}`;
-  return row;
+  // Spec §5.7.8 - an online board's check-in counts only inside its window, so the QR must not move a COUNTED one out of it. A scan
+  // after the deadline would otherwise turn a player who came into one who never did, and the no-show sweep would forfeit BOTH sides
+  // instead of giving the player who came the walkover. A fixture whose round has been opened can reach an online board (`openRound`
+  // is the only writer of `stage_round_opens`), and the page shows this QR for any scheduled board, so it is handed the board's window,
+  // exactly as `claimRoomSeat` hands it. Any other fixture keeps today's re-stamp.
+  const open = await boardOpenFor(sql, fixtureId);
+  return stampFixtureCheckIn(mine.person_id, fixtureId, mine.org_id, open ? { window: windowFor(open.anchor) } : {});
 }
 
 export interface FixtureAvailability {

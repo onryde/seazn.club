@@ -1,0 +1,22 @@
+10:23:00Z accounts white=sudeshnavirata black=ashokhein
+10:23:00Z === A. time-control refusals (does the Board API refuse the fastest clocks?) ===
+10:23:00Z [A 0+1] ACCEPTED as challenge Of4wq1ar — cancelling
+10:23:01Z [A 60+0] ACCEPTED as challenge OfoC90fo — cancelling
+10:23:01Z [A 120+1] ACCEPTED as challenge dSwfeB6F — cancelling
+10:23:01Z [A 180+0] ACCEPTED as challenge ivr870jR — cancelling
+10:23:01Z === B. promotion (fromPosition: white pawn on e7) ===
+10:23:04Z [B] game uurowbYP
+10:23:04Z [B] move e7e8q -> http= body=
+10:23:06Z [B] export: unparseable
+10:23:06Z [B] also trying a malformed promotion suffix on a finished/other turn:
+10:23:06Z [B-bad] move e7e8x -> http= body=
+10:23:08Z [B-after-resign] export: unparseable
+10:23:08Z === C. stalemate (fromPosition: Qf6->f7 stalemates the lone black king) ===
+10:23:08Z [C] CHALLENGE REFUSED -> {"global":["Invalid FEN"],"error":{"global":["Invalid FEN"]}}
+10:23:08Z === D. resign, plus rejected moves (out-of-turn and illegal) ===
+10:23:08Z [D] CHALLENGE REFUSED -> {"error":"Too many requests. Try again later."}
+10:23:08Z === E. draw offer: what does the export show while an offer is PENDING? ===
+10:23:08Z [E] CHALLENGE REFUSED -> {"error":"Too many requests. Try again later."}
+10:23:08Z === F. rate limit: 8 rapid move posts in one game ===
+10:23:08Z [F] CHALLENGE REFUSED -> {"error":"Too many requests. Try again later."}
+10:23:08Z BATTERY DONE — log at /private/tmp/claude-501/-Users-ashokhein-github-seazn-club/38963af5-435d-4eea-8377-67b968cc471d/scratchpad/spike-battery.log

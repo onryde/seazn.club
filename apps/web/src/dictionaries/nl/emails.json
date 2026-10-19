@@ -380,5 +380,15 @@
   "soloSignUpAssigned.preheader": "De organisatie heeft je bij {teamName} ingedeeld.",
   "soloSignUpAssigned.title": "Je hebt een team",
   "soloSignUpAssigned.intro": "Hoi {playerName}, de organisatie heeft je ingedeeld bij {teamName} in {divisionName} van {competitionName}. Je hoeft verder niets te doen; je team neemt contact met je op.",
-  "soloSignUpAssigned.viewStatus": "Je inschrijving bekijk je hier: {url}"
+  "soloSignUpAssigned.viewStatus": "Je inschrijving bekijk je hier: {url}",
+  "externalPlayInvite.subject": "Ronde {roundNo} is geopend — je partij tegen {opponentName}",
+  "externalPlayInvite.preheader": "Neem je plaats in op Seazn vóór {deadline}.",
+  "externalPlayInvite.title": "Je ronde is geopend",
+  "externalPlayInvite.body": "De organisator heeft ronde {roundNo} geopend. Je online schaakpartij tegen <strong>{opponentName}</strong> kan nu gespeeld worden.",
+  "externalPlayInvite.bodyLater": "De organisator heeft ronde {roundNo} geopend. Je online schaakpartij tegen <strong>{opponentName}</strong> gaat open om <strong>{opens}</strong>.",
+  "externalPlayInvite.deadline": "Open de partij op Seazn en neem je plaats in vóór <strong>{deadline}</strong>.",
+  "externalPlayInvite.button": "Partij openen",
+  "externalPlayInvite.footer": "Je ontvangt dit omdat je bent ingeschreven in een online schaakdivisie bij {orgName} op Seazn Club.",
+  "externalPlayInvite.text": "Ronde {roundNo} is geopend. Je partij tegen {opponentName} kan nu gespeeld worden. Neem je plaats in vóór {deadline}: {fixtureUrl}",
+  "externalPlayInvite.textLater": "Ronde {roundNo} is geopend. Je partij tegen {opponentName} gaat open om {opens}. Neem je plaats in vóór {deadline}: {fixtureUrl}"
 }

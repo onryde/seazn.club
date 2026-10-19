@@ -57,6 +57,7 @@ const COPY: ScheduleCopy = {
   calendar: "(calendar)",
   timesIn: "(times in {zone})",
   empty: "(empty)",
+  roundOpened: "(opened)",
 };
 const LOCALE = "en";
 // N1e e1 made stage order a prop, and N1f f2 the stage NAMES; these cases

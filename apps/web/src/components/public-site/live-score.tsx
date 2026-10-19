@@ -207,13 +207,22 @@ export function LiveScoreBody({
   // will start; every other status is over, or held, and gets `noDetail`.
   const hasSecondaryContent =
     (showBreakdown && sideIds.length === 2) || periods !== null || discipline !== null;
+  //
+  // T17 fix round 2, V2 — a FOURTH fact: an online chess game being played. Its fixture stays `scheduled` until the
+  // result is written, and only its DOCUMENT reads live (R3, match-centre.ts — the one way a scheduled fixture's
+  // header folds to in_play), so the raw status alone said "…once the match starts" under a LIVE header. Nothing
+  // fills this panel during an online game either: the moves are on the live board, so it says where to look. Read
+  // inside the will-start arm, a live header can only be that fold (R3 lifts only `scheduled`).
   const willStart = data.status === "scheduled" || data.status === "postponed";
+  const onlineInPlay = data.match_centre?.header.status === "in_play";
   const emptyStateKey = hasSecondaryContent
     ? null
     : inPlay
       ? "matchCentre.empty.inPlay"
       : willStart
-        ? "matchCentre.empty.beforeStart"
+        ? onlineInPlay
+          ? "matchCentre.empty.onlineInPlay"
+          : "matchCentre.empty.beforeStart"
         : "matchCentre.empty.noDetail";
 
   return (

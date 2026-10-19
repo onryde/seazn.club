@@ -58,13 +58,20 @@ export interface CourtCardProps {
 /** Exhaustive on `header.status` — a `never` check in `default` means a new
  *  status value added to the schema fails to COMPILE here rather than
  *  silently falling through to "no chip". */
-function statusChip(status: MatchCentreHeaderT["status"], dict: PublicDict): { testId: string; text: string } | null {
+function statusChip(
+  status: MatchCentreHeaderT["status"],
+  dict: PublicDict,
+  onlineStarting: MatchCentreHeaderT["onlineStarting"],
+): { testId: string; text: string } | null {
   switch (status) {
     case "in_play":
       return { testId: "mc-live-pill", text: t(dict, "matchCentre.status.live") };
     case "decided":
       return { testId: "mc-result-chip", text: t(dict, "matchCentre.status.decided") };
     case "scheduled":
+      // T17 owner change (2026-10-13): an online board whose round is open with no move yet. Read here, under
+      // `scheduled` only — the flag never reaches another state's chip.
+      if (onlineStarting === true) return { testId: "mc-starting-pill", text: t(dict, "matchCentre.status.starting") };
       return { testId: "mc-result-chip", text: t(dict, "matchCentre.status.scheduled") };
     case "other":
       // No chip — `header.statusLine` below is expected to name the reason
@@ -110,7 +117,8 @@ export function CourtCard({ header, dict }: CourtCardProps) {
   // key form invents a key nobody should author.
   const phaseLabel =
     header.phase === null ? null : (lookupPhaseTerm(dict, header.phase) ?? header.phase);
-  const chip = statusChip(header.status, dict);
+  const chip = statusChip(header.status, dict, header.onlineStarting);
+  const starting = chip?.testId === "mc-starting-pill";
   return (
     <div
       data-testid="mc-court-card"
@@ -123,11 +131,17 @@ export function CourtCard({ header, dict }: CourtCardProps) {
             className={
               chip.testId === "mc-live-pill"
                 ? "mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.22em] text-emerald-300"
-                : "mb-3 text-[11px] font-semibold uppercase tracking-[0.22em] text-court-muted"
+                : starting
+                  ? // Between Scheduled (a muted word, no dot) and Live (green, a filled pulsing dot): the full-strength
+                    // word beside an EMPTY green ring — the clock not yet pressed. Nothing moves until a move does.
+                    "mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.22em] text-court-ink"
+                  : "mb-3 text-[11px] font-semibold uppercase tracking-[0.22em] text-court-muted"
             }
           >
             {inPlay ? (
               <span className={`h-2 w-2 rounded-full bg-emerald-400${header.live ? " animate-live-pulse" : ""}`} />
+            ) : starting ? (
+              <span aria-hidden className="h-2 w-2 shrink-0 rounded-full border-[1.5px] border-emerald-400" />
             ) : null}
             {chip.text}
             {/* The period kernel's live pair, restored: both were dropped when

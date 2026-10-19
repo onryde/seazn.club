@@ -1,0 +1,51 @@
+10:26:37Z accounts white=sudeshnavirata black=ashokhein
+10:26:37Z === B. promotion (fromPosition: white pawn on e7) ===
+10:27:09Z [B] game EsNVWKfh
+10:27:10Z [B] move e7e8q -> http=200 body={"ok":true}
+10:27:12Z [B] export: status=started winner=None moves=e8=Q
+10:27:12Z [B] also trying a malformed promotion suffix on a finished/other turn:
+10:27:12Z [B-bad] move e7e8x -> http=400 body={"error":"Not your turn, or game already over"}
+10:27:14Z [B-after-resign] export: status=aborted winner=None moves=e8=Q
+10:27:14Z === C. stalemate (fromPosition: Qb1-b6 stalemates Ka8; black NOT in check beforehand) ===
+10:27:46Z [C] game RBVAgwAl
+10:27:47Z [C] move b1b6 -> http=200 body={"ok":true}
+10:27:49Z [C] export: status=stalemate winner=None moves=Qb6
+10:27:49Z === D. resign, plus rejected moves (out-of-turn and illegal) ===
+10:28:21Z [D] game XEpcNrR0
+10:28:21Z [D] move e2e4 -> http=200 body={"ok":true}
+10:28:21Z [D] out-of-turn: white moves again while it is black's turn
+10:28:21Z [D-outofturn] move d2d4 -> http=400 body={"error":"Not your turn, or game already over"}
+10:28:21Z [D] illegal: black plays a move that is not legal
+10:28:21Z [D-illegal] move e7e6xx -> http=200 body={"ok":true}
+10:28:21Z [D] move e7e5 -> http=400 body={"error":"Not your turn, or game already over"}
+10:28:21Z [D] resign -> {"ok":true}
+10:28:24Z [D] export: status=resign winner=black moves=e4 e6
+10:28:24Z === E. draw offer: what does the export show while an offer is PENDING? ===
+10:28:56Z [E] game QbFCQzuF
+10:28:56Z [E] move e2e4 -> http=200 body={"ok":true}
+10:28:56Z [E] move e7e5 -> http=200 body={"ok":true}
+10:28:56Z [E] white offers draw -> {"ok":true}
+10:28:58Z [E] export WHILE OFFER PENDING (full body, looking for any draw-offer field):
+{"id":"QbFCQzuF","rated":false,"variant":"standard","speed":"rapid","perf":"rapid","createdAt":1791541734490,"lastMoveAt":1791541736701,"status":"started","source":"friend","players":{"white":{"user":{"name":"sudeshnavirata","id":"sudeshnavirata"},"rating":1500,"provisional":true},"black":{"user":{"name":"ashokhein","id":"ashokhein"},"rating":1500,"provisional":true}},"opening":{"eco":"C20","name":"King's Pawn Game","ply":2},"clocks":[60000,60000],"clock":{"initial":600,"increment":5,"totalTime":800},"division":{}}
+10:28:58Z [E] black accepts -> {"ok":true}
+10:29:01Z [E] export: status=draw winner=None moves=e4 e5
+10:29:01Z === F. rate limit: 8 rapid move posts in one game ===
+10:29:33Z [F] game TVSCksV1
+10:29:33Z [F] 1 e2e4 -> http=200
+10:29:33Z [F] 2 e7e5 -> http=200
+10:29:33Z [F] 3 g1f3 -> http=200
+10:29:33Z [F] 4 b8c6 -> http=200
+10:29:33Z [F] 5 f1c4 -> http=200
+10:29:33Z [F] 6 g8f6 -> http=200
+10:29:34Z [F] 7 e1g1 -> http=200
+10:29:34Z [F] 8 f8c5 -> http=200
+10:29:36Z [F] export: status=resign winner=black moves=e4 e5 Nf3 Nc6 Bc4 Nf6 O-O Bc5
+10:29:36Z BATTERY DONE — log at /private/tmp/claude-501/-Users-ashokhein-github-seazn-club/38963af5-435d-4eea-8377-67b968cc471d/scratchpad/spike-battery2.log
+10:29:36Z === A (last, after the real tests). Does the Board API refuse PLAY on the fastest clocks? ===
+10:30:06Z [A 0+1] challenge accepted at creation: V9xtq7be — now accepting and trying a BOARD move
+10:30:08Z [A 0+1] move e2e4 -> http=400 body={"error":"This game cannot be played with the Board API."}
+10:30:10Z [A 0+1] export: status=started winner=None moves=
+10:30:41Z [A 60+0] challenge accepted at creation: Stp7XgoT — now accepting and trying a BOARD move
+10:30:43Z [A 60+0] move e2e4 -> http=400 body={"error":"This game cannot be played with the Board API."}
+10:30:45Z [A 60+0] export: status=started winner=None moves=
+10:30:45Z BATTERY DONE (v2)

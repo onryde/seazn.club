@@ -1,0 +1,651 @@
+import "server-only";
+// Lichess Board API client (design §3.3-§3.5). Token-authenticated, one HTTP
+// call per function, nothing long-lived — see the timeout note below.
+//
+// Every classification here is a MEASURED response, 2026-10-09:
+//   M6  400 "Not your turn, or game already over" — ONE message, TWO states.
+//       It means reconcile; it never means assume.
+//   M12 400 "This game cannot be played with the Board API." — on a challenge
+//       Lichess ACCEPTED at creation. Mapped separately from M6 because a
+//       field configured on a bullet clock would otherwise read to every
+//       player as "your turn ended".
+//   M3  429 "Too many requests. Try again later." — creation only (M4: moves
+//       are not rate-limited at speed).
+// An unrecognised 400 is `unavailable`, never an acceptance: a body we have
+// not measured is a body we do not understand.
+//
+// Creation alone splits its failures in two (Task 3-5 review T3-I2): a 4xx is
+// lila REFUSING, so nothing exists; a timeout, network error, 5xx, or a 2xx
+// with no usable id is `outcome_unknown`, because a challenge may exist.
+import { LICHESS_TIMEOUT_MS } from "../window";
+import { UCI_RE, assertUci } from "./uci";
+import {
+  isLichessStatus, type BoardCall, type BoardErrorCode, type BoardGameFull, type GameSnapshot,
+} from "../types";
+
+const DEFAULT_BASE = "https://lichess.org";
+
+export type BoardApiDeps = { fetch?: typeof fetch; baseUrl?: string };
+
+/** One of the caller's outgoing challenges, as the recovery lookup needs it.
+ *  MEASURED 2026-10-13 (T17 live probe; __fixtures__/lichess/challenge-list-
+ *  white.json): every field read here is present, with these types. The match
+ *  fields (T9 N1) are null when unreadable — the matcher, not the parser,
+ *  decides what an unreadable one means. There is no `createdAt` (measured
+ *  absent; also lila modules/challenge/src/main/JsonView.scala at c91f1d09d). */
+export type OutgoingChallenge = {
+  id: string;
+  /** `challenger.id` — the token's own account for every entry of `out[]`. */
+  challengerId: string | null;
+  destUserId: string | null;
+  status: string;
+  rated: boolean | null;
+  /** `variant.key` ("standard" for ours). */
+  variantKey: string | null;
+  /** `timeControl` (lila: clock ⇒ limit/increment in SECONDS; correspondence
+   *  and unlimited carry neither). */
+  timeControl: { type: string; limit: number | null; increment: number | null } | null;
+  /** The challenger's colour choice — `white` for every challenge we send. */
+  color: string | null;
+};
+/** The static facts of a game, from its public export (T9 N1). MEASURED
+ *  (spike-battery2.log, 2026-10-09): `rated`, `variant` (a string),
+ *  `clock.initial` / `clock.increment` in SECONDS, `createdAt` epoch ms. These
+ *  never change during a game, so the export's mid-game delay (M16: moves and
+ *  status lag) does not touch them. null = not readable. */
+export type GameMeta = {
+  gameId: string;
+  rated: boolean | null;
+  variant: string | null;
+  clockInitialSeconds: number | null;
+  clockIncrementSeconds: number | null;
+  createdAtMs: number | null;
+};
+/** One of the caller's ongoing games, from the caller's side. */
+export type OngoingGame = { gameId: string; color: "white" | "black"; opponentId: string | null };
+type Listed<T> = { ok: true } & T | { ok: false; code: BoardErrorCode; raw: string };
+/** One read of the board stream (`readGameStream`). */
+export type GameStreamRead = { ok: true; game: BoardGameFull } | { ok: false; code: BoardErrorCode; raw: string };
+
+/** A first line longer than this is not a gameFull we can read (a 300-ply
+ *  game's line is ~2 KB). A cap, so a misbehaving body cannot grow a buffer
+ *  until the timeout fires. */
+const STREAM_LINE_MAX = 64 * 1024;
+
+/** `nb`'s maximum on /api/account/playing (lichess-org/api spec). A page this
+ *  full cannot prove a game is absent. */
+const ONGOING_PAGE = 50;
+
+const isRecord = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
+const nonEmpty = (v: unknown): v is string => typeof v === "string" && v !== "";
+const boolOrNull = (v: unknown): boolean | null => (typeof v === "boolean" ? v : null);
+const numOrNull = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+const strOrNull = (v: unknown): string | null => (nonEmpty(v) ? v : null);
+
+/** The match fields of one ChallengeJson entry (T9 N1), each null when it
+ *  cannot be read. */
+function challengeMatchFields(c: Record<string, unknown>): Omit<OutgoingChallenge, "id" | "destUserId" | "status"> {
+  const tc = c.timeControl;
+  return {
+    challengerId: isRecord(c.challenger) ? strOrNull(c.challenger.id) : null,
+    rated: boolOrNull(c.rated),
+    variantKey: isRecord(c.variant) ? strOrNull(c.variant.key) : null,
+    timeControl: isRecord(tc) && nonEmpty(tc.type)
+      ? { type: tc.type, limit: numOrNull(tc.limit), increment: numOrNull(tc.increment) }
+      : null,
+    color: strOrNull(c.color),
+  };
+}
+
+/** Every item or nothing: one entry we cannot read could be the very game a
+ *  recovery is looking for, so it fails the whole list (`null`). */
+function readOutgoing(raw: string): OutgoingChallenge[] | null {
+  let parsed: unknown;
+  try { parsed = JSON.parse(raw); } catch { return null; }
+  if (!isRecord(parsed) || !Array.isArray(parsed.out)) return null;
+  const out: OutgoingChallenge[] = [];
+  for (const c of parsed.out) {
+    if (!isRecord(c) || !nonEmpty(c.id) || typeof c.status !== "string") return null;
+    if (c.destUser === null) {
+      out.push({ id: c.id, destUserId: null, status: c.status, ...challengeMatchFields(c) });
+      continue;
+    }
+    if (!isRecord(c.destUser) || !nonEmpty(c.destUser.id)) return null;
+    out.push({ id: c.id, destUserId: c.destUser.id, status: c.status, ...challengeMatchFields(c) });
+  }
+  return out;
+}
+
+function readOngoing(raw: string): OngoingGame[] | null {
+  let parsed: unknown;
+  try { parsed = JSON.parse(raw); } catch { return null; }
+  if (!isRecord(parsed) || !Array.isArray(parsed.nowPlaying)) return null;
+  const games: OngoingGame[] = [];
+  for (const g of parsed.nowPlaying) {
+    if (!isRecord(g) || !nonEmpty(g.gameId)) return null;
+    if (g.color !== "white" && g.color !== "black") return null;
+    if (!isRecord(g.opponent)) return null;
+    const id = g.opponent.id;
+    if (id !== null && !nonEmpty(id)) return null;
+    games.push({ gameId: g.gameId, color: g.color, opponentId: id });
+  }
+  return games;
+}
+
+const playerId = (p: unknown): string | null => (isRecord(p) ? strOrNull(p.id) : null);
+
+/** The first line of the board stream, parsed — or null for anything that is
+ *  not a readable `gameFull`. Shape from lila BotJsonView.scala (46d24871f,
+ *  read 2026-10-11) and the recorded lines (`gamefull-*.ndjson`): `id`,
+ *  `white`/`black` `{id}`, and `state` `{moves, wtime, btime, winc, status}`
+ *  with `winner`, `wdraw` and `bdraw` written only when they apply. Every
+ *  move must be UCI: M5's class of surprise (a string Lichess would read
+ *  differently from us) never reaches the ledger. */
+function readGameFull(line: string): BoardGameFull | null {
+  let parsed: unknown;
+  try { parsed = JSON.parse(line); } catch { return null; }
+  if (!isRecord(parsed) || parsed.type !== "gameFull" || !nonEmpty(parsed.id) || !isRecord(parsed.state)) return null;
+  return readState(parsed.state, { gameId: parsed.id, whiteId: playerId(parsed.white), blackId: playerId(parsed.black) });
+}
+
+/** A later line of an open board stream (T17B fix 2, D11): `gameState` — the state object `gameFull` carries, on its
+ *  own (lila BotJsonView `gameState`) — read onto the game the first line named. `skip` for a line of another kind
+ *  (chatLine, opponentGone: nothing a result reads); null for a `gameState` that cannot be read. */
+function readGameStateLine(line: string, ids: Pick<BoardGameFull, "gameId" | "whiteId" | "blackId">): BoardGameFull | "skip" | null {
+  let parsed: unknown;
+  try { parsed = JSON.parse(line); } catch { return null; }
+  if (!isRecord(parsed)) return null;
+  if (parsed.type !== "gameState") return "skip";
+  return readState(parsed, ids);
+}
+
+function readState(st: Record<string, unknown>, ids: Pick<BoardGameFull, "gameId" | "whiteId" | "blackId">): BoardGameFull | null {
+  if (typeof st.moves !== "string" || typeof st.status !== "string") return null;
+  const wtime = numOrNull(st.wtime);
+  const btime = numOrNull(st.btime);
+  const winc = numOrNull(st.winc);
+  if (wtime === null || btime === null || winc === null || wtime < 0 || btime < 0 || winc < 0) return null;
+  const moves = st.moves.trim();
+  const movesUci = moves === "" ? [] : moves.split(/\s+/);
+  if (!movesUci.every((m) => UCI_RE.test(m))) return null;
+  const common: Omit<BoardGameFull, "status"> = {
+    ...ids,
+    movesUci,
+    whiteMs: wtime,
+    blackMs: btime,
+    incrementMs: winc,
+    winner: st.winner === "white" || st.winner === "black" ? st.winner : null,
+    drawOffer: { white: st.wdraw === true, black: st.bdraw === true },
+  };
+  return isLichessStatus(st.status)
+    ? { ...common, status: st.status }
+    : { ...common, status: "unrecognised", rawStatus: st.status };
+}
+
+/** The first non-blank line of an NDJSON body, or null (the body ended, the
+ *  line outgrew STREAM_LINE_MAX, or `signal` fired). The body is CANCELLED
+ *  on every way out, so the connection closes behind the one line we read.
+ *  Racing the signal as well as relying on fetch's own abort is what makes
+ *  the timeout hold for a body that ignores it. */
+async function firstLine(body: ReadableStream<Uint8Array> | null, signal: AbortSignal): Promise<string | null> {
+  let first: string | null = null;
+  await eachLine(body, signal, (line) => {
+    first = line;
+    return "stop";
+  });
+  return first;
+}
+
+/** Every non-blank line of an NDJSON body, in order, to `take` — until it answers "stop", the body ends (its last,
+ *  unterminated line included), a line outgrows STREAM_LINE_MAX, or `signal` fires. The body is CANCELLED on every way
+ *  out. `firstLine` is this, stopped at the first. */
+async function eachLine(
+  body: ReadableStream<Uint8Array> | null,
+  signal: AbortSignal,
+  take: (line: string) => "more" | "stop",
+): Promise<void> {
+  if (body === null) return;
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  const aborted = new Promise<never>((_, reject) => {
+    if (signal.aborted) reject(signal.reason);
+    else signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+  });
+  aborted.catch(() => {}); // settled by the race below, or after we are done
+  let buffer = "";
+  try {
+    for (;;) {
+      const { value, done } = await Promise.race([reader.read(), aborted]);
+      if (value) buffer += decoder.decode(value, { stream: true });
+      let nl = buffer.indexOf("\n");
+      while (nl >= 0) {
+        const line = buffer.slice(0, nl).trim();
+        buffer = buffer.slice(nl + 1);
+        if (line !== "" && take(line) === "stop") return;
+        nl = buffer.indexOf("\n");
+      }
+      if (buffer.length > STREAM_LINE_MAX) return;
+      if (done) {
+        const rest = (buffer + decoder.decode()).trim();
+        if (rest !== "") take(rest);
+        return;
+      }
+    }
+  } catch {
+    return;
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+}
+
+/** T17B fix 2, D11 — the settling read's body. The first line must be a readable `gameFull` (else `unavailable`, as
+ *  ever, within LICHESS_TIMEOUT_MS); then the stream stays open up to `holdMs` while Lichess's own CheckOnline tick
+ *  (lila GameStateStream.scala:118-124, 7 s after the stream opened) can flag the side to move and push the final
+ *  state. Each `gameState` line replaces the state in hand; the read ends at the first FINAL one (any status but
+ *  `created`/`started`), at a state line it cannot read (keeping the last good one — never a guessed game), when
+ *  the stream ends, or when the hold runs out. Bounded: `closer` aborts the race when the hold expires. */
+async function settlingRead(
+  body: ReadableStream<Uint8Array> | null,
+  signal: AbortSignal,
+  holdMs: number,
+  closer: AbortController,
+): Promise<GameStreamRead> {
+  let game: BoardGameFull | null = null;
+  let firstRaw = "";
+  let hold: ReturnType<typeof setTimeout> | null = null;
+  try {
+    await eachLine(body, signal, (line) => {
+      if (game === null) {
+        game = readGameFull(line);
+        if (game === null) {
+          firstRaw = line.slice(0, 500);
+          return "stop";
+        }
+        if (game.status !== "created" && game.status !== "started") return "stop";
+        hold = setTimeout(() => closer.abort(), holdMs);
+        return "more";
+      }
+      const next = readGameStateLine(line, game);
+      if (next === "skip") return "more";
+      if (next === null) return "stop";
+      game = next;
+      return next.status === "created" || next.status === "started" ? "more" : "stop";
+    });
+  } finally {
+    if (hold !== null) clearTimeout(hold);
+  }
+  if (game === null) return { ok: false, code: "unavailable", raw: firstRaw };
+  return { ok: true, game };
+}
+
+/** M6 and M12 are both 400s. Matched on the measured sentence, not on a
+ *  substring that could drift: `includes`, so a trailing-field change in the
+ *  JSON envelope does not silently reclassify a known state as unknown. */
+const M6_MESSAGE = "Not your turn, or game already over";
+const M12_MESSAGE = "This game cannot be played with the Board API.";
+
+function classifyBoardError(status: number, raw: string): BoardErrorCode {
+  if (status === 429) return "rate_limited";
+  if (status === 401 || status === 403) return "unauthorized";
+  if (status === 400) {
+    if (raw.includes(M12_MESSAGE)) return "unplayable_time_control";
+    if (raw.includes(M6_MESSAGE)) return "not_your_turn_or_over";
+  }
+  return "unavailable";
+}
+
+/** Creation's failure classes. Status 0 is `call()`'s marker for a thrown
+ *  fetch — the network failing or the 10s timeout firing — and neither, nor a
+ *  5xx, proves lila did not commit the challenge before the failure. */
+function classifyCreateError(status: number, raw: string): BoardErrorCode {
+  if (status === 0 || status >= 500) return "outcome_unknown";
+  return classifyBoardError(status, raw);
+}
+
+/**
+ * One side's latest clock, in ms, from the export's `clocks` array — or null
+ * when that side has no recorded state (never 0, which would read as a flag).
+ *
+ * `clocks` is one entry PER PLY, not one per side: lila builds it as
+ * `interleave(history(firstMover), history(other))` (`bothClockStates`,
+ * modules/core/src/main/game/data.scala, lichess-org/lila 7b53d2671, read
+ * 2026-10-09). Every game we create is standard chess from the initial
+ * position (`variant: "standard"` below), so White moved first: White's states
+ * are the even indices, Black's the odd ones, and a side's CURRENT clock is
+ * its LAST state. Indices 0 and 1 are each side's clock after its FIRST move —
+ * which the recorded two-ply fixture cannot tell apart from "the current pair".
+ */
+function latestClockMs(clocks: unknown[], parity: 0 | 1): number | null {
+  const last = clocks.length - 1;
+  const index = last % 2 === parity ? last : last - 1;
+  if (index < 0) return null;
+  const centis = clocks[index];
+  return typeof centis === "number" ? centis * 10 : null;
+}
+
+export function createBoardApi(deps: BoardApiDeps = {}) {
+  const base = (deps.baseUrl ?? process.env.LICHESS_BASE_URL ?? DEFAULT_BASE).replace(/\/$/, "");
+  const fetchFn = deps.fetch ?? fetch;
+
+  /** Every call in this module — creation, accept, move, resign, draw, abort,
+   *  export — is a single request under LICHESS_TIMEOUT_MS (10s). There are no
+   *  long reads here BY DESIGN (§4: the streaming service was removed because
+   *  our server submits both players' moves). The ONE stream this module
+   *  opens is `readGameStream` (spec §3.5, amended 5903962d4): it takes the
+   *  first line and closes, under the same 10s bound. If you are about to keep
+   *  a stream open for its later events, this timeout will cut it off at ten
+   *  seconds and the failure will look like a flaky network — do not raise
+   *  the timeout. `keepAliveStream` is never sent. */
+  async function call(
+    path: string,
+    init: { method: "POST" | "GET"; token?: string; body?: URLSearchParams },
+  ): Promise<{ status: number; raw: string }> {
+    const headers: Record<string, string> = { Accept: "application/json" };
+    if (init.token) headers.Authorization = `Bearer ${init.token}`;
+    if (init.body) headers["Content-Type"] = "application/x-www-form-urlencoded";
+    try {
+      const r = await fetchFn(`${base}${path}`, {
+        method: init.method,
+        headers,
+        ...(init.body ? { body: init.body.toString() } : {}),
+        signal: AbortSignal.timeout(LICHESS_TIMEOUT_MS),
+      });
+      return { status: r.status, raw: await r.text().catch(() => "") };
+    } catch {
+      // Network error, or the AbortSignal firing. Same outcome as a 5xx, never
+      // an uncaught throw into a usecase holding a claim.
+      return { status: 0, raw: "" };
+    }
+  }
+
+  const asCall = ({ status, raw }: { status: number; raw: string }): BoardCall =>
+    status >= 200 && status < 300
+      ? { ok: true }
+      : { ok: false, code: classifyBoardError(status, raw), raw };
+
+  return {
+    async createChallengeToUser(a: {
+      whiteToken: string; blackUsername: string;
+      limitSeconds: number; incrementSeconds: number;
+    }): Promise<{ ok: true; challengeId: string } | { ok: false; code: BoardErrorCode; raw: string }> {
+      // Colour is READ from the pairing (global constraint): White's token
+      // challenges Black's username, so `color=white` is a statement of who is
+      // calling, not an allocation. Unrated only. Standard only (§12).
+      const body = new URLSearchParams({
+        "clock.limit": String(a.limitSeconds),
+        "clock.increment": String(a.incrementSeconds),
+        rated: "false",
+        color: "white",
+        variant: "standard",
+      });
+      const out = await call(`/api/challenge/${encodeURIComponent(a.blackUsername)}`, {
+        method: "POST", token: a.whiteToken, body,
+      });
+      if (out.status < 200 || out.status >= 300) {
+        return { ok: false, code: classifyCreateError(out.status, out.raw), raw: out.raw };
+      }
+      // A 200 whose body is not a JSON object (a proxy's HTML page, a literal
+      // `null`) is not a created game either — and it must not THROW: the
+      // caller holds a claim, and a challenge may already exist at Lichess.
+      // Only the parse sits inside the try, so each of the two guards is
+      // independently load-bearing (and independently mutation-tested).
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(out.raw || "{}");
+      } catch {
+        parsed = undefined;
+      }
+      const id = parsed !== null && typeof parsed === "object"
+        ? (parsed as { id?: unknown }).id
+        : undefined;
+      if (typeof id !== "string" || id === "") {
+        // A 200 with no id is not a game we can record — returning ok would let
+        // T9 write `challenge_id = undefined` — but Lichess DID answer 2xx, so
+        // the challenge may exist. Unknown, not a definite failure.
+        return { ok: false, code: "outcome_unknown", raw: out.raw };
+      }
+      return { ok: true, challengeId: id };
+    },
+
+    async acceptChallenge(a: { blackToken: string; challengeId: string }): Promise<BoardCall> {
+      return asCall(await call(
+        `/api/challenge/${encodeURIComponent(a.challengeId)}/accept`,
+        { method: "POST", token: a.blackToken },
+      ));
+    },
+
+    async submitMove(a: { token: string; gameId: string; uci: string }): Promise<BoardCall> {
+      // M5: assert BEFORE the call. Lichess would accept `e7e6xx` with a 200
+      // and play `e7e6`, so there is no downstream place to catch this.
+      const uci = assertUci(a.uci);
+      return asCall(await call(
+        `/api/board/game/${encodeURIComponent(a.gameId)}/move/${uci}`,
+        { method: "POST", token: a.token },
+      ));
+    },
+
+    async resignGame(a: { token: string; gameId: string }): Promise<BoardCall> {
+      // M9: a resign after one move lands as `aborted` with no winner, after
+      // two as `resign`. This call reports ok only; the reconcile decides what
+      // happened.
+      return asCall(await call(
+        `/api/board/game/${encodeURIComponent(a.gameId)}/resign`,
+        { method: "POST", token: a.token },
+      ));
+    },
+
+    async offerOrAcceptDraw(a: {
+      token: string; gameId: string; accept: boolean;
+    }): Promise<BoardCall> {
+      return asCall(await call(
+        `/api/board/game/${encodeURIComponent(a.gameId)}/draw/${a.accept ? "yes" : "no"}`,
+        { method: "POST", token: a.token },
+      ));
+    },
+
+    async abortGame(a: { token: string; gameId: string }): Promise<BoardCall> {
+      return asCall(await call(
+        `/api/board/game/${encodeURIComponent(a.gameId)}/abort`,
+        { method: "POST", token: a.token },
+      ));
+    },
+
+    /** Cancel a challenge the token's owner SENT — and, if it was accepted but
+     *  not yet played, abort the game (lila apiCancel; it accepts board:play
+     *  and challenge:write). MEASURED 2026-10-10 (t9/lookup-spike.log): on an
+     *  accepted game with no move, 200 {"ok":true}, and the game left White's
+     *  ongoing list. T9 uses it to close a stray game it could not record —
+     *  one call for both the unaccepted challenge and the accepted game, which
+     *  /api/board/game/{id}/abort cannot do (a challenge is not yet a game). */
+    async cancelChallenge(a: { token: string; challengeId: string }): Promise<BoardCall> {
+      return asCall(await call(
+        `/api/challenge/${encodeURIComponent(a.challengeId)}/cancel`,
+        { method: "POST", token: a.token },
+      ));
+    },
+
+    /** Recovery lookup A (T9 fix round 1, I2): the caller's OUTGOING
+     *  challenges. GET /api/challenge is gated on `challenge:read` (lila
+     *  `apiList = ScopedBody(_.Challenge.Read, _.Web.Mobile)`) — MEASURED
+     *  2026-10-10 with a board:play + challenge:write token: 403
+     *  {"error":"Missing scope: challenge:read"}. PLAY_SCOPES carries it since
+     *  spec §3.1's 2026-10-10 amendment; a link made before that re-consents.
+     *  Success body MEASURED 2026-10-13 (T17 live probe): {in, out} of
+     *  ChallengeJson, no `createdAt`; an unaccepted challenge leaves `out[]`
+     *  within ~30-36 s (status `offline`, still acceptable). `destUser` may be
+     *  null (an open challenge, spec). */
+    async listOutgoingChallenges(token: string): Promise<Listed<{ challenges: OutgoingChallenge[] }>> {
+      const out = await call("/api/challenge", { method: "GET", token });
+      if (out.status < 200 || out.status >= 300) {
+        return { ok: false, code: classifyBoardError(out.status, out.raw), raw: out.raw };
+      }
+      const challenges = readOutgoing(out.raw);
+      return challenges === null ? { ok: false, code: "unavailable", raw: out.raw } : { ok: true, challenges };
+    },
+
+    /** Recovery lookup B: the caller's ongoing games (no scope needed).
+     *  MEASURED 2026-10-10: each entry carries `gameId` (equal to the id of
+     *  the challenge that made it), `color` from the caller's side, and
+     *  `opponent.id` — an accepted challenge appears here, an unaccepted one
+     *  does not. `complete` is false on a full page: absence is then
+     *  unproven. */
+    async listOngoingGames(token: string): Promise<Listed<{ games: OngoingGame[]; complete: boolean }>> {
+      const out = await call(`/api/account/playing?nb=${ONGOING_PAGE}`, { method: "GET", token });
+      if (out.status < 200 || out.status >= 300) {
+        return { ok: false, code: classifyBoardError(out.status, out.raw), raw: out.raw };
+      }
+      const games = readOngoing(out.raw);
+      return games === null
+        ? { ok: false, code: "unavailable", raw: out.raw }
+        : { ok: true, games, complete: games.length < ONGOING_PAGE };
+    },
+
+    /** The reconcile read (§3.5). `clocks=true` because M11 makes this the
+     *  authority on both clocks; `pgnInJson=false` because we read `moves`.
+     *  No Authorization header — the export is public. null on 404, on a 5xx,
+     *  and on any body missing id or a string status: a reconcile must retry
+     *  rather than write a result from a shape it did not recognise. A STRING
+     *  status Lichess has not declared is not null — it comes back as
+     *  `status: "unrecognised"` with the word in `rawStatus`, because the game
+     *  is real and retrying cannot make the status known (T3-I1).
+     *
+     *  A game STILL IN PLAY is exported late. For a requester lila does not
+     *  trust — and this call is unauthenticated — `applyDelay` withholds the
+     *  last 3 plies of BOTH `moves` and `clocks` once the game is past 5 plies
+     *  (`delayMovesBy = 3`, `delayKeepsFirstMoves = 5`, lila
+     *  modules/game/src/main/PgnDump.scala at 7b53d2671; read from source on
+     *  2026-10-09, NOT measured). So mid-game, `movesSan` is a lower bound on
+     *  what has been played and the clocks are a few plies stale; only a
+     *  finished game's export is complete. A shorter `movesSan` than our own
+     *  ledger is therefore not a takeback, and a stale clock is not a flag. */
+    async exportGame(gameId: string): Promise<GameSnapshot | null> {
+      const out = await call(
+        `/game/export/${encodeURIComponent(gameId)}?clocks=true&pgnInJson=false`,
+        { method: "GET" },
+      );
+      if (out.status < 200 || out.status >= 300) return null;
+      let parsed: unknown;
+      try { parsed = JSON.parse(out.raw); } catch { return null; }
+      // A literal `null` parses cleanly and would then throw on `.id`.
+      if (parsed === null || typeof parsed !== "object") return null;
+      const json = parsed as {
+        id?: unknown; status?: unknown; winner?: unknown; moves?: unknown;
+        clocks?: unknown; clock?: { increment?: unknown };
+      };
+      if (typeof json.id !== "string" || typeof json.status !== "string") return null;
+      const clocks: unknown[] = Array.isArray(json.clocks) ? json.clocks : [];
+      const moves = typeof json.moves === "string" ? json.moves.trim() : "";
+      const status = json.status;
+      const common: Omit<GameSnapshot, "status"> = {
+        gameId: json.id,
+        winner: json.winner === "white" || json.winner === "black" ? json.winner : null,
+        movesSan: moves === "" ? [] : moves.split(/\s+/),
+        // M11: `clocks` is CENTISECONDS (`[60000,60000]` beside
+        // `clock.initial: 600`), so ×10 to ms. Absent ⇒ null, never 0 — a 0
+        // would read to T11 as a flag.
+        whiteMs: latestClockMs(clocks, 0),
+        blackMs: latestClockMs(clocks, 1),
+        increment: typeof json.clock?.increment === "number" ? json.clock.increment : 0,
+      };
+      // Validated, never cast: the 14 statuses are LICHESS_STATUSES (types.ts).
+      return isLichessStatus(status)
+        ? { ...common, status }
+        : { ...common, status: "unrecognised", rawStatus: status };
+    },
+
+    /** THE reconcile read (spec §3.5, amended 5903962d4): open the game's
+     *  Board API stream with a PLAYER's token, take the first line
+     *  (`gameFull`), close. The export STALLS mid-game (M16, re-measured
+     *  2026-10-11: 5 plies against the stream's 8 at the same instant), so
+     *  this is the only source of mid-game moves, clocks and status.
+     *  A first-line read never flags an expired clock: lila flags it from an
+     *  OPEN stream's CheckOnline tick, 7 s in (T17B fix 2, D11 — the T11
+     *  "settles on the NEXT read" premise was false, game x0JKlePc). `holdMs`
+     *  keeps the stream open that long for the settling read.
+     *
+     *  Bounded by LICHESS_TIMEOUT_MS like every call here, and the body is
+     *  cancelled once the line is in: nothing stays open (§4). A refusal
+     *  keeps its class (401/403 `unauthorized` — the token is gone; 429
+     *  `rate_limited`); a 404, a 5xx, a thrown fetch, a timeout and any first
+     *  line that is not a readable `gameFull` are `unavailable`, never a
+     *  guessed game. `raw` is the error body only — never the token. */
+    async readGameStream(a: { token: string; gameId: string; holdMs?: number }): Promise<GameStreamRead> {
+      const closer = new AbortController();
+      const holdMs = a.holdMs ?? 0;
+      // A settling read (T17B fix 2, D11): the whole read is bounded by LICHESS_TIMEOUT_MS plus the hold, and the hold
+      // itself (settlingRead) ends it once the first line is in.
+      const signal =
+        holdMs > 0
+          ? AbortSignal.any([AbortSignal.timeout(LICHESS_TIMEOUT_MS + holdMs), closer.signal])
+          : AbortSignal.any([AbortSignal.timeout(LICHESS_TIMEOUT_MS), closer.signal]);
+      try {
+        let r: Response;
+        try {
+          r = await fetchFn(`${base}/api/board/game/stream/${encodeURIComponent(a.gameId)}`, {
+            method: "GET",
+            headers: { Accept: "application/x-ndjson", Authorization: `Bearer ${a.token}` },
+            signal,
+          });
+        } catch {
+          return { ok: false, code: "unavailable", raw: "" };
+        }
+        if (r.status < 200 || r.status >= 300) {
+          const raw = await r.text().catch(() => "");
+          return { ok: false, code: classifyBoardError(r.status, raw), raw };
+        }
+        if (holdMs <= 0) {
+          const line = await firstLine(r.body, signal);
+          if (line === null) return { ok: false, code: "unavailable", raw: "" };
+          const game = readGameFull(line);
+          return game === null ? { ok: false, code: "unavailable", raw: line.slice(0, 500) } : { ok: true, game };
+        }
+        return await settlingRead(r.body, signal, holdMs, closer);
+      } finally {
+        closer.abort();
+      }
+    },
+
+    /** The static facts a crash recovery verifies an ongoing-game candidate on
+     *  (T9 N1). The MEASURED request: GET /game/export/{id}?moves=false,
+     *  Accept: application/json, no Authorization (spike-battery2.log; the
+     *  body is __fixtures__/lichess/export-live-clocks.json). A refusal keeps
+     *  its class; a body that is not THIS game (no id, another id) is
+     *  `unavailable`; a fact that cannot be read is null, never defaulted —
+     *  the caller holds on null, it never adopts on a guess. */
+    async exportGameMeta(gameId: string): Promise<Listed<{ meta: GameMeta }>> {
+      const out = await call(`/game/export/${encodeURIComponent(gameId)}?moves=false`, { method: "GET" });
+      if (out.status < 200 || out.status >= 300) {
+        return { ok: false, code: classifyBoardError(out.status, out.raw), raw: out.raw };
+      }
+      let parsed: unknown;
+      try { parsed = JSON.parse(out.raw); } catch { return { ok: false, code: "unavailable", raw: out.raw }; }
+      if (!isRecord(parsed) || parsed.id !== gameId) return { ok: false, code: "unavailable", raw: out.raw };
+      const clock = isRecord(parsed.clock) ? parsed.clock : {};
+      return {
+        ok: true,
+        meta: {
+          gameId,
+          rated: boolOrNull(parsed.rated),
+          variant: strOrNull(parsed.variant),
+          clockInitialSeconds: numOrNull(clock.initial),
+          clockIncrementSeconds: numOrNull(clock.increment),
+          createdAtMs: numOrNull(parsed.createdAt),
+        },
+      };
+    },
+  };
+}
+
+const defaultApi = createBoardApi();
+export const createChallengeToUser = defaultApi.createChallengeToUser;
+export const acceptChallenge = defaultApi.acceptChallenge;
+export const submitMove = defaultApi.submitMove;
+export const resignGame = defaultApi.resignGame;
+export const offerOrAcceptDraw = defaultApi.offerOrAcceptDraw;
+export const abortGame = defaultApi.abortGame;
+export const exportGame = defaultApi.exportGame;
+export const cancelChallenge = defaultApi.cancelChallenge;
+export const listOutgoingChallenges = defaultApi.listOutgoingChallenges;
+export const exportGameMeta = defaultApi.exportGameMeta;
+export const listOngoingGames = defaultApi.listOngoingGames;
+export const readGameStream = defaultApi.readGameStream;

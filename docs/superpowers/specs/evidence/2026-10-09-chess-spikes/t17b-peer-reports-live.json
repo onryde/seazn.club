@@ -1,0 +1,97 @@
+{
+  "_provenance": "Recorded 2026-10-14 13:36Z, T17B live staging (stg build a7134be67), from GET /accounts/{account}/realtime/kit/{app}/sessions/peer-report/{peer_id} DURING the live session (left_at null). Two peers of ONE player participant (black), same session row: 'denied' = peer 36088431, whose browser DENIED the camera (the peer left at 13:35:57 on a reload); 'on' = peer 8ee62f43, the reload with the camera allowed, publishing. REDACTED as peer-report-recorded.json: only participant ids/times and peer_report.metadata.events/sdk fields kept; pc_metadata, candidate_pairs, ip_information, device_info, browser_metadata and every *_devices_updates removed; quality kept only as the video_producer SAMPLE COUNT (the live report had 0 for 'denied', 37 for 'on').",
+  "peers": {
+    "denied": {
+      "peer_id": "36088431-0ca9-4f5e-bfe9-426273d84dc2",
+      "video_producer_samples": 0,
+      "data": {
+        "participant": {
+          "id": "88a8c452-f781-4a72-961c-e21daa86748a",
+          "session_id": "4e1d5deb-3300-48e5-82c0-c05e41a893b7",
+          "user_id": "aaa0acef-2243-472e-ab14-c8259425bd8f",
+          "role": "player",
+          "joined_at": "2026-10-14T13:27:27.825Z",
+          "left_at": null,
+          "duration": 5.702516666666667,
+          "peer_report": {
+            "metadata": {
+              "events": [
+                {
+                  "name": "audio_off",
+                  "timestamp": "2026-10-14T13:34:49.060Z"
+                },
+                {
+                  "name": "video_on",
+                  "timestamp": "2026-10-14T13:34:49.060Z"
+                },
+                {
+                  "name": "media_permission",
+                  "metadata": {
+                    "device_type": "VIDEO",
+                    "permission": "DENIED"
+                  },
+                  "timestamp": "2026-10-14T13:34:49.060Z"
+                },
+                {
+                  "name": "video_off",
+                  "timestamp": "2026-10-14T13:34:49.060Z"
+                },
+                {
+                  "name": "precall_begin",
+                  "timestamp": "2026-10-14T13:34:49.061Z"
+                }
+              ],
+              "sdk_name": "web-core",
+              "sdk_version": "2.0.2",
+              "room_view_type": "groupCall"
+            }
+          }
+        }
+      }
+    },
+    "on": {
+      "peer_id": "8ee62f43-b2e5-46c0-8790-220211fa7b59",
+      "video_producer_samples": 37,
+      "data": {
+        "participant": {
+          "id": "88a8c452-f781-4a72-961c-e21daa86748a",
+          "session_id": "4e1d5deb-3300-48e5-82c0-c05e41a893b7",
+          "user_id": "aaa0acef-2243-472e-ab14-c8259425bd8f",
+          "role": "player",
+          "joined_at": "2026-10-14T13:27:27.825Z",
+          "left_at": null,
+          "duration": 5.702516666666667,
+          "peer_report": {
+            "metadata": {
+              "events": [
+                {
+                  "name": "audio_off",
+                  "timestamp": "2026-10-14T13:36:03.011Z"
+                },
+                {
+                  "name": "video_on",
+                  "timestamp": "2026-10-14T13:36:03.011Z"
+                },
+                {
+                  "name": "media_permission",
+                  "metadata": {
+                    "device_type": "VIDEO",
+                    "permission": "ACCEPTED"
+                  },
+                  "timestamp": "2026-10-14T13:36:03.011Z"
+                },
+                {
+                  "name": "precall_begin",
+                  "timestamp": "2026-10-14T13:36:03.011Z"
+                }
+              ],
+              "sdk_name": "web-core",
+              "sdk_version": "2.0.2",
+              "room_view_type": "groupCall"
+            }
+          }
+        }
+      }
+    }
+  }
+}

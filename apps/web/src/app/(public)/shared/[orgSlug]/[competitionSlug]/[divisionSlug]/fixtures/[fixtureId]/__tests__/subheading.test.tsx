@@ -33,6 +33,7 @@ import {
   useLiveFixtureSnapshot,
 } from "@/components/public-site/match-centre/live-fixture-channel";
 import { MatchCentre } from "@/components/public-site/match-centre/match-centre";
+import { clearRoundOpenedAt, publishRoundOpenedAt } from "@/components/public-site/match-centre/round-open-channel";
 import enPublic from "@/dictionaries/en/public.json";
 import { MatchCentreSubheading } from "../subheading";
 
@@ -127,6 +128,8 @@ beforeEach(() => {
   // The channel is module state shared by every test in this file.
   clearLiveFixture(FIXTURE_ID);
   clearLiveFixture("someone-else");
+  clearRoundOpenedAt(FIXTURE_ID);
+  clearRoundOpenedAt("someone-else");
 });
 
 describe("MatchCentreSubheading — first paint", () => {
@@ -316,5 +319,61 @@ describe("the channel is wired at the PUBLISHING end too", () => {
       dict,
     });
     expect(textOf(island.tree())).toContain("14:30");
+  });
+});
+
+// T17 fix round 2, V1 — an online board's line says when its round opened, the fact Match details shows, from the
+// round's open onward: so the first move (which folds the header live, R3) changes nothing above the board. The time
+// is the venue's: 10:42 UTC on 13 Oct 2026 is 11:42 in London (BST, UTC+1) and 06:42 in New York (EDT, UTC−4).
+describe("MatchCentreSubheading — an online board's round-open line (V1)", () => {
+  const AT = "2026-10-13T10:42:00.000Z";
+  const LONDON = { at: AT, timeZone: "Europe/London", locale: "en" };
+  const NO_TIME = payload({ scheduled_at: null, venue_name: null, court_name: null });
+  const label = (time: string) => (enPublic as Record<string, string>)["matchCentre.status.roundOpened"]!.replace("{time}", time);
+
+  it("premise: the label is a dictionary sentence carrying the time", () => {
+    expect((enPublic as Record<string, string>)["matchCentre.status.roundOpened"]).toContain("{time}");
+  });
+
+  it("empty case first: not an online board (no roundOpen) ⇒ the old line, whatever is published", () => {
+    const island = renderIsland(MatchCentreSubheading, { fixtureId: FIXTURE_ID, initial: NO_TIME, dict });
+    expect(textOf(island.tree())).toBe("Time TBD");
+    publishRoundOpenedAt(FIXTURE_ID, AT);
+    expect(textOf(island.tree())).toBe("Time TBD");
+  });
+
+  it("first paint: the page's own round-open, in the venue's time zone", () => {
+    const london = renderIsland(MatchCentreSubheading, { fixtureId: FIXTURE_ID, initial: NO_TIME, dict, roundOpen: LONDON });
+    expect(textOf(london.tree())).toBe(label("11:42"));
+    const ny = renderIsland(MatchCentreSubheading, {
+      fixtureId: FIXTURE_ID, initial: NO_TIME, dict, roundOpen: { ...LONDON, timeZone: "America/New_York" },
+    });
+    expect(textOf(ny.tree())).toBe(label("06:42"));
+  });
+
+  it("the first move moves nothing: the same line before it and after the header folds live", () => {
+    const island = renderIsland(MatchCentreSubheading, { fixtureId: FIXTURE_ID, initial: NO_TIME, dict, roundOpen: LONDON });
+    const before = textOf(island.tree());
+    publishLiveFixture(FIXTURE_ID, { ...NO_TIME, match_centre: { ...NO_TIME.match_centre!, header: { ...NO_TIME.match_centre!.header, status: "in_play" } } });
+    expect(textOf(island.tree())).toBe(before);
+    expect(before).toBe(label("11:42"));
+  });
+
+  it("a viewer who loaded BEFORE the round opened: the panel's published open reaches the line with no reload", () => {
+    const island = renderIsland(MatchCentreSubheading, {
+      fixtureId: FIXTURE_ID, initial: NO_TIME, dict, roundOpen: { ...LONDON, at: null },
+    });
+    expect(textOf(island.tree()), "before the open").toBe("Time TBD");
+    publishRoundOpenedAt("someone-else", AT);
+    expect(textOf(island.tree()), "another board's open").toBe("Time TBD");
+    publishRoundOpenedAt(FIXTURE_ID, AT);
+    expect(textOf(island.tree()), "after the open").toBe(label("11:42"));
+  });
+
+  it("an instant it cannot read is left out — the old line, never a crash", () => {
+    const island = renderIsland(MatchCentreSubheading, {
+      fixtureId: FIXTURE_ID, initial: NO_TIME, dict, roundOpen: { ...LONDON, at: "not a time" },
+    });
+    expect(textOf(island.tree())).toBe("Time TBD");
   });
 });

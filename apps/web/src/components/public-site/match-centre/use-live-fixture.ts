@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchLiveFixture, fetchPublicRealtimeToken, type LiveFixtureData, type RealtimePurpose } from "../live-score-data";
 import { FIXTURE_STATUSES, LOCKED_FIXTURE_STATUSES, SETTLED_FIXTURE_STATUSES } from "@/lib/fixture-status";
+import { publishBoardPush } from "./live-board-channel";
 
 export const POLL_MS = 15_000;
 
@@ -313,6 +314,12 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
           .on("broadcast", { event: "state_changed" }, () => {
             if (debounce) clearTimeout(debounce);
             debounce = setTimeout(refresh, 250);
+          })
+          // T16 — an online chess board's move, pushed to spectators
+          // (lib/realtime publishRoomBroadcast): relayed to the watch island,
+          // which cannot open this channel a second time.
+          .on("broadcast", { event: "board_state" }, (msg: { payload?: unknown }) => {
+            publishBoardPush(fixtureId, msg.payload);
           })
           .subscribe((status: string) => {
             if (!cancelled) setSubscribed(status === "SUBSCRIBED");

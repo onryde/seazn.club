@@ -1,0 +1,9 @@
+{
+  "id": "cJ4wPz9L",
+  "rated": false,
+  "status": "created",
+  "players": {
+    "white": { "user": { "id": "lichess-home", "name": "Lichess-Home" } },
+    "black": { "user": { "id": "lichess-away", "name": "Lichess-Away" } }
+  }
+}

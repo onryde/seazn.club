@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { handleManual } from "../src/manual";
 import { RUN_DEADLINE_MS, runDue, type Env, type RunDeps } from "../src/run";
-import { TRIGGER_CRON } from "../src/schedule";
+import { JOBS, TRIGGER_CRON } from "../src/schedule";
 
 const MONDAY_0817 = new Date("2026-09-28T08:17:00Z");
 const TUESDAY_1417 = new Date("2026-09-29T14:17:00Z");
@@ -205,9 +205,10 @@ describe("runDue: the R4 trigger seam", () => {
   it("a second trigger runs only its own rows: never news-digest or an hourly row, even at Monday 08:05", async () => {
     const h = harness();
     const results = await runDue(MONDAY_0805, EVERY_5, env(), h.deps);
-    expect(results.map((r) => r.job)).toEqual(["stream-tick"]);
-    expect(h.posts()).toEqual(["https://seazn.club/api/cron/stream-tick"]);
-    expect(h.lines.at(-1)).toMatchObject({ event: "run", cron: EVERY_5, jobs: 1 });
+    // The */5 rows, in table order: stream-tick (capture QR v2 §6.11) and the external-play sweep (chess in-page §4).
+    expect(results.map((r) => r.job)).toEqual(["stream-tick", "external-play"]);
+    expect(h.posts()).toEqual(["https://seazn.club/api/cron/stream-tick", "https://seazn.club/api/cron/external-play"]);
+    expect(h.lines.at(-1)).toMatchObject({ event: "run", cron: EVERY_5, jobs: 2 });
   });
 
   it("while inactive, a non-hourly trigger does nothing at all (the probe is hourly only)", async () => {
@@ -222,11 +223,14 @@ describe("R2 (option S): stream-tick's failures reach Sentry at most once per UT
   const HOUR = Date.parse("2026-09-28T08:00:00Z");
   const slot = (i: number) => new Date(HOUR + i * 5 * 60_000);
   const failing = () => new Response("down", { status: 500 });
+  /** stream-tick's row alone: these cases are about ITS throttle. The external-play row shares the trigger, and the
+   *  case after "the pair" runs both. */
+  const TICK_ONLY = JOBS.filter((j) => j.id === "stream-tick");
 
   it("failing on all 12 firings of one hour: exactly ONE event (the :00 slot), and 11 job lines that say sentryThrottled", async () => {
     const h = harness(failing);
     let firings = 0;
-    for (let i = 0; i < 12; i++, firings++) await runDue(slot(i), EVERY_5, env(), h.deps);
+    for (let i = 0; i < 12; i++, firings++) await runDue(slot(i), EVERY_5, env(), h.deps, TICK_ONLY);
     expect(firings).toBe(12);
     expect(h.posts(), "every firing still ran the job").toHaveLength(12);
     expect(h.events().map((e) => e.tags.job)).toEqual(["stream-tick"]);
@@ -242,7 +246,7 @@ describe("R2 (option S): stream-tick's failures reach Sentry at most once per UT
   it("288 firings over 24 h, every one failing: 24 events — one per UTC hour", async () => {
     const h = harness(failing);
     let firings = 0;
-    for (let i = 0; i < 288; i++, firings++) await runDue(slot(i), EVERY_5, env(), h.deps);
+    for (let i = 0; i < 288; i++, firings++) await runDue(slot(i), EVERY_5, env(), h.deps, TICK_ONLY);
     expect(firings, "firings checked").toBe(288);
     expect(h.events()).toHaveLength(24);
     expect(h.lines.filter((l) => l.event === "job" && l.sentryThrottled === true)).toHaveLength(288 - 24);
@@ -250,21 +254,36 @@ describe("R2 (option S): stream-tick's failures reach Sentry at most once per UT
 
   it("the pair: a failure ONLY at :05 sends nothing and logs sentryThrottled; a failure ONLY at :00 sends one event", async () => {
     const at05 = harness(failing);
-    const r05 = await runDue(slot(1), EVERY_5, env(), at05.deps);
+    const r05 = await runDue(slot(1), EVERY_5, env(), at05.deps, TICK_ONLY);
     expect(r05).toEqual([expect.objectContaining({ job: "stream-tick", status: "error", sentryThrottled: true })]);
     expect(r05[0]!.sentryDelivered, "no event was attempted").toBeUndefined();
     expect(at05.events()).toEqual([]);
     expect(at05.lines.find((l) => l.event === "job")).toMatchObject({ job: "stream-tick", status: "error", sentryThrottled: true });
     const at00 = harness(failing);
-    await runDue(slot(0), EVERY_5, env(), at00.deps);
+    await runDue(slot(0), EVERY_5, env(), at00.deps, TICK_ONLY);
     expect(at00.events().map((e) => e.tags.job)).toEqual(["stream-tick"]);
   });
 
   it("an OK job at a throttled slot is not marked: sentryThrottled only ever names a suppressed failure", async () => {
     const h = harness();
-    const [r] = await runDue(slot(1), EVERY_5, env(), h.deps);
+    const [r] = await runDue(slot(1), EVERY_5, env(), h.deps, TICK_ONLY);
     expect(r).toMatchObject({ job: "stream-tick", status: "ok" });
     expect(r!.sentryThrottled).toBeUndefined();
+  });
+
+  it("both */5 rows failing every firing of one hour: ONE event per row, each from the :00 slot (the throttle is per job, so the external-play sweep failing beside stream-tick is still heard)", async () => {
+    const h = harness(failing);
+    let firings = 0;
+    for (let i = 0; i < 12; i++, firings++) await runDue(slot(i), EVERY_5, env(), h.deps);
+    expect(firings).toBe(12);
+    expect(h.posts(), "both rows ran on every firing").toHaveLength(24);
+    expect(h.events().map((e) => e.tags.job)).toEqual(["stream-tick", "external-play"]);
+    const jobLines = h.lines.filter((l) => l.event === "job");
+    expect(jobLines.filter((l) => l.sentryThrottled === true), "throttled: 11 slots × 2 rows").toHaveLength(22);
+    expect(jobLines.filter((l) => l.sentryDelivered === true).map((l) => [l.job, l.scheduledTime])).toEqual([
+      ["stream-tick", slot(0).toISOString()],
+      ["external-play", slot(0).toISOString()],
+    ]);
   });
 
   it("R6: a MANUAL run is never throttled — one failing at :07 sends its event", async () => {
