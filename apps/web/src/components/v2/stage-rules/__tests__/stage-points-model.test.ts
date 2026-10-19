@@ -1,0 +1,312 @@
+// W2c Task 18 (review I9) - the decisions the stage points section makes live in a pure helper with unit killers, never in
+// a browser. Expected values come from the SERVER's own door (`refuseStagePoints`) and the engine's declarations
+// (`pointsRuleExpressible`, `pointsRuleAwardReachesTable`, `validatePointsRule`, `applyPointsRule`), never from a table
+// typed here; every sweep reports how many items it checked and zero is a failure.
+import { describe, expect, it } from "vitest";
+import { builtinModules } from "@seazn/engine/sports";
+import { StageKind } from "@seazn/engine/core";
+import { PointsRule, applyPointsRule, pointsRuleAwardReachesTable, pointsRuleExpressible } from "@seazn/engine/competition";
+import type { AnySportModule } from "@seazn/engine/sport";
+import { refuseStagePoints } from "@/server/usecases/stage-rules-merge";
+import {
+  BONUS_KINDS,
+  PARAM_BONUS_KINDS,
+  divisionBasePoints,
+  divisionExpressible,
+  draftFromStored,
+  draftIsDirty,
+  offeredBonusKinds,
+  offersWalkoverScore,
+  parseNumber,
+  pointsSectionState,
+  previewClauses,
+  ruleFromDraft,
+  stageTakesPoints,
+  storedHasCustomParts,
+  storedPointsRule,
+  type PointsDraft,
+} from "../stage-points-model";
+
+const sport = (key: string): AnySportModule => {
+  const m = builtinModules.find((x) => x.key === key);
+  if (!m) throw new Error(`no builtin module ${key}`);
+  return m;
+};
+const generic = sport("generic");
+const badminton = sport("badminton");
+const football = sport("football");
+
+/** Every (sport, variant, division config) the registry ships: the config a division of that variant stores. */
+const DIVISIONS = builtinModules.flatMap((m) => Object.keys(m.variants).map((variant) => ({ m, variant, cfg: m.variants[variant] as Record<string, unknown> })));
+
+/** The server's answer to a rule on a league stage: undefined when it takes it, else the refusal's code/field. */
+function serverAnswer(m: AnySportModule, cfg: unknown, rule: PointsRule, kind: StageKind = "league"): { code?: string; field?: string } | undefined {
+  try {
+    refuseStagePoints(m, kind, cfg, rule);
+    return undefined;
+  } catch (e) {
+    const err = e as { code?: string; extra?: { field?: string }; message: string };
+    return { code: err.code, field: err.extra?.field };
+  }
+}
+
+const BASE = { win: 3, draw: 1, loss: 0 };
+const plain = (): PointsRule => ({ base: BASE, bonuses: [] });
+
+describe("stage points model (I9 killers for t18)", () => {
+  it("pointsSectionState: inexpressible first, then the gate, then the editor - all four pairs (Community org sees the gate)", () => {
+    const rows: [boolean, boolean, string][] = [
+      [true, true, "editor"],
+      [false, true, "gate"], // Community org sees the gate
+      [true, false, "inexpressible"],
+      [false, false, "inexpressible"], // an ice-hockey stage says why before it asks for Pro
+    ];
+    let checked = 0;
+    for (const [canCustom, expressible, want] of rows) {
+      expect(pointsSectionState(canCustom, expressible), `(${canCustom}, ${expressible})`).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("the section is mounted on table stages only: the server's own door refuses every other kind (sweep of every StageKind)", () => {
+    let checked = 0;
+    let tables = 0;
+    for (const kind of StageKind.options) {
+      const refused = serverAnswer(generic, { resultMode: "win_loss", allowDraws: true, points: { w: 3, d: 1, l: 0 } }, plain(), kind);
+      const serverTakes = refused === undefined || refused.field !== "points";
+      expect(stageTakesPoints(kind), `${kind}: the section follows the server`).toBe(serverTakes);
+      if (stageTakesPoints(kind)) tables++;
+      checked++;
+    }
+    expect(checked, "every stage kind").toBe(StageKind.options.length);
+    expect(tables, "and some of them are table kinds").toBeGreaterThan(0);
+    expect(tables, "and some are not").toBeLessThan(checked);
+  });
+
+  it("Q1: the section's pre-check says what the server's door says, for every sport and variant", () => {
+    let expressible = 0;
+    let split = 0;
+    for (const { m, variant, cfg } of DIVISIONS) {
+      const ui = divisionExpressible(m, cfg);
+      const server = serverAnswer(m, cfg, plain());
+      expect(server?.code === "POINTS_RULE_INEXPRESSIBLE", `${m.key}/${variant}: server refuses as inexpressible`).toBe(!ui.ok);
+      if (ui.ok) expressible++;
+      else {
+        split++;
+        expect(ui.keys.length, `${m.key}/${variant}: the split keys are named`).toBeGreaterThan(0);
+      }
+    }
+    expect(expressible + split, "every division swept").toBe(DIVISIONS.length);
+    expect(expressible, "some divisions are expressible").toBeGreaterThan(0);
+    expect(split, "and some split their points (ice hockey, hockey shoot-out, cricket, indoor volleyball)").toBeGreaterThan(0);
+  });
+
+  it("I3: the walkover SCORE is offered exactly where the server accepts it, for every sport (set sports, goal sports, both)", () => {
+    let offered = 0;
+    let hidden = 0;
+    for (const m of builtinModules) {
+      const cfg = m.variants[Object.keys(m.variants)[0]!] as Record<string, unknown>;
+      const withScore: PointsRule = { ...plain(), forfeit: { winnerPoints: 2, loserPoints: 0, awardScore: [3, 0] } };
+      const answer = serverAnswer(m, cfg, withScore);
+      if (answer?.code === "POINTS_RULE_INEXPRESSIBLE") continue; // asked first; the score is moot where nothing can be saved
+      const serverRefusesScore = answer?.field === "points.forfeit.awardScore";
+      expect(offersWalkoverScore(m), `${m.key}: the input is shown iff the server takes the score`).toBe(!serverRefusesScore);
+      expect(offersWalkoverScore(m), `${m.key}: the engine's declaration`).toBe(pointsRuleAwardReachesTable(m));
+      if (offersWalkoverScore(m)) offered++;
+      else hidden++;
+    }
+    expect(offered, "goal sports reach the table").toBeGreaterThan(0);
+    expect(hidden, "set sports, carrom and the board games do not").toBeGreaterThan(0);
+  });
+
+  it("every rule the section builds is one the server takes: all expressible sports, with a walkover pair, a score, and every offered bonus kind", () => {
+    let saved = 0;
+    let bonusesChecked = 0;
+    for (const { m, variant, cfg } of DIVISIONS) {
+      if (!divisionExpressible(m, cfg).ok) continue;
+      const draft = draftFromStored(m, cfg, null);
+      const offered = offeredBonusKinds(m, cfg);
+      const filled: PointsDraft = {
+        ...draft,
+        useDivision: false,
+        walkoverW: "4",
+        walkoverL: "1",
+        awardW: "7",
+        awardL: "0",
+        bonuses: offered.map((when) => ({ when, param: "2", points: "1" })),
+      };
+      const built = ruleFromDraft(m, filled);
+      expect(built.ok, `${m.key}/${variant}: the filled draft is a rule`).toBe(true);
+      if (!built.ok || built.rule === null) continue;
+      expect(serverAnswer(m, cfg, built.rule), `${m.key}/${variant}: the server takes what the section sends`).toBeUndefined();
+      expect(built.rule.forfeit?.awardScore !== undefined, `${m.key}/${variant}: the score leaves only where the table reads it`).toBe(offersWalkoverScore(m));
+      saved++;
+      bonusesChecked += built.rule.bonuses.length;
+    }
+    expect(saved, "expressible divisions swept").toBeGreaterThan(10);
+    expect(bonusesChecked, "bonus rows swept").toBeGreaterThan(0);
+  });
+
+  it("the bonus kinds offered are the ones the server's metrics check takes; a margin bonus on a sport with no scores is refused by the server and not offered", () => {
+    let withMargins = 0;
+    let without = 0;
+    for (const { m, variant, cfg } of DIVISIONS) {
+      if (!divisionExpressible(m, cfg).ok) continue;
+      const offered = new Set(offeredBonusKinds(m, cfg));
+      for (const when of PARAM_BONUS_KINDS) {
+        const answer = serverAnswer(m, cfg, { ...plain(), bonuses: [{ when, param: 1, points: 1 }] });
+        expect(offered.has(when), `${m.key}/${variant}: ${when} offered iff the server takes it (${JSON.stringify(answer)})`).toBe(answer === undefined);
+      }
+      if (offered.has("loss_margin_lte")) withMargins++;
+      else without++;
+    }
+    expect(withMargins, "generic has for/against").toBeGreaterThan(0);
+    expect(without, "badminton and football emit no for/against metric").toBeGreaterThan(0);
+  });
+
+  it("a draw bonus is offered only where the sport can draw; a no-result bonus only where the sport records one; the rest everywhere", () => {
+    expect(offeredBonusKinds(football, football.variants["11-a-side"]), "football draws").toContain("draw");
+    expect(offeredBonusKinds(badminton, badminton.variants.bwf), "badminton cannot draw").not.toContain("draw");
+    for (const { m, cfg } of DIVISIONS) {
+      if (!divisionExpressible(m, cfg).ok) continue;
+      expect(offeredBonusKinds(m, cfg), `${m.key}: a walkover bonus is a bonus on every sport`).toEqual(expect.arrayContaining(["forfeit_win", "forfeit_loss"]));
+      expect(offeredBonusKinds(m, cfg), `${m.key}: no sport that reaches this editor records a no-result`).not.toContain("no_result");
+    }
+  });
+
+  it("the kinds that read a threshold are the ones the engine's fold reads it for (probe over the engine's own applyPointsRule)", () => {
+    const winner = { entrantId: "a", played: 1, won: 1, drawn: 0, lost: 0, points: 0, metrics: { for: 5, against: 3, diff: 2 } };
+    const loser = { entrantId: "b", played: 1, won: 0, drawn: 0, lost: 1, points: 0, metrics: { for: 3, against: 5, diff: -2 } };
+    const drawn = [{ ...winner, won: 0, drawn: 1, metrics: { for: 2, against: 2, diff: 0 } }, { ...loser, lost: 0, drawn: 1, metrics: { for: 2, against: 2, diff: 0 } }];
+    const probes = [
+      { outcome: { kind: "win", winner: "a", loser: "b" } as const, pair: [winner, loser], played: true },
+      { outcome: { kind: "draw" } as const, pair: drawn, played: true },
+      { outcome: { kind: "no_result" } as const, pair: drawn, played: true },
+      { outcome: { kind: "award", winner: "a", loser: "b", reason: "walkover" } as const, pair: [winner, loser], played: false },
+    ];
+    const pointsFor = (when: PointsRule["bonuses"][number]["when"], param: number): number[] =>
+      probes.flatMap((p) => (applyPointsRule(p.outcome, p.pair as never, { base: BASE, bonuses: [{ when, param, points: 1 }] }, p.played, undefined) as unknown as { points: number }[]).map((d) => d.points));
+    const reading = BONUS_KINDS.filter((when) => JSON.stringify(pointsFor(when, 0)) !== JSON.stringify(pointsFor(when, 1000)));
+    expect(BONUS_KINDS.length, "the engine's enum has its kinds").toBe(7);
+    expect([...reading].sort()).toEqual([...PARAM_BONUS_KINDS].sort());
+    expect(reading.length, "and the probe saw some").toBeGreaterThan(0);
+    expect(reading.length, "and not all").toBeLessThan(BONUS_KINDS.length);
+  });
+
+  it("the division's base numbers: what the sport pays, from its own config (rulebook spot checks), and never invented", () => {
+    const b = (m: AnySportModule, v: string) => divisionBasePoints(m, m.variants[v]);
+    expect(b(football, "11-a-side")).toEqual({ win: 3, draw: 1, loss: 0 });
+    expect(b(generic, "win_loss"), "generic writes w/d/l").toEqual({ win: 3, draw: 1, loss: 0 });
+    expect(b(badminton, "bwf"), "a set sport's one-pair map; no draw").toEqual({ win: 2, draw: null, loss: 0 });
+    expect(b(sport("tennis"), "tour"), "tennis pays win and loss").toEqual({ win: 2, draw: null, loss: 0 });
+    expect(b(sport("boardgame"), "classical"), "chess keeps `scoring` (half-points)").toEqual({ win: 2, draw: 1, loss: 0 });
+    let swept = 0;
+    for (const { m, variant, cfg } of DIVISIONS) {
+      if (!divisionExpressible(m, cfg).ok) continue;
+      const base = divisionBasePoints(m, cfg);
+      expect(base.win, `${m.key}/${variant}: a win`).not.toBeNull();
+      expect(base.loss, `${m.key}/${variant}: a loss`).not.toBeNull();
+      swept++;
+    }
+    expect(swept).toBeGreaterThan(10);
+  });
+
+  it("an unchecked 'Use the division's points' starts from the division's numbers, and a sport that cannot draw sends draw 0", () => {
+    const d = draftFromStored(badminton, badminton.variants.bwf, null);
+    expect(d).toMatchObject({ useDivision: true, win: "2", draw: "0", loss: "0" });
+    const built = ruleFromDraft(badminton, { ...d, useDivision: false });
+    expect(built).toEqual({ ok: true, rule: { base: { win: 2, draw: 0, loss: 0 }, bonuses: [] } });
+  });
+
+  it("round trip: a stored rule opens as the draft that rebuilds it (key order is not part of it)", () => {
+    const rules: [AnySportModule, PointsRule][] = [
+      [football, { base: BASE, bonuses: [], forfeit: { winnerPoints: 4, loserPoints: 1, awardScore: [3, 0] } }],
+      [generic, { base: { win: 2.5, draw: 1, loss: -1 }, bonuses: [{ points: 1, when: "loss_margin_lte", param: 7 }, { when: "forfeit_loss", points: -1 }], forfeit: { loserPoints: 0, winnerPoints: 3 } }],
+      [badminton, { base: { win: 2, draw: 0, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 1 } }],
+    ];
+    for (const [m, rule] of rules) {
+      const draft = draftFromStored(m, {}, rule);
+      expect(draft.useDivision).toBe(false);
+      const out = ruleFromDraft(m, draft);
+      expect(out.ok && out.rule !== null && !draftIsDirty(m, draft, rule), `${m.key}: not dirty after opening`).toBe(true);
+      expect(JSON.parse(JSON.stringify(out.ok ? out.rule : null))).toEqual(JSON.parse(JSON.stringify(PointsRule.parse(rule))));
+    }
+  });
+
+  it("a blank box is not zero; zero is a number; a word is neither (the Number('') trap)", () => {
+    expect(parseNumber("")).toBeNull();
+    expect(parseNumber("   ")).toBeNull();
+    expect(parseNumber("0")).toBe(0);
+    expect(parseNumber("-1.5")).toBe(-1.5);
+    expect(parseNumber("abc")).toBeNull();
+    const d = { ...draftFromStored(football, football.variants["11-a-side"], null), useDivision: false };
+    expect(ruleFromDraft(football, { ...d, loss: "" })).toEqual({ ok: false, problem: "number" });
+    expect(ruleFromDraft(football, { ...d, loss: "0" }).ok).toBe(true);
+  });
+
+  it("the walkover row is both numbers or neither; a score alone pays the base win and loss; the score never leaves a sport that does not read it", () => {
+    const d = { ...draftFromStored(football, football.variants["11-a-side"], null), useDivision: false };
+    expect(ruleFromDraft(football, d)).toMatchObject({ ok: true, rule: { base: BASE } });
+    expect((ruleFromDraft(football, d) as { rule: PointsRule }).rule.forfeit, "no walkover row by default").toBeUndefined();
+    expect(ruleFromDraft(football, { ...d, walkoverW: "4" })).toEqual({ ok: false, problem: "walkover" });
+    expect(ruleFromDraft(football, { ...d, walkoverL: "0" })).toEqual({ ok: false, problem: "walkover" });
+    expect(ruleFromDraft(football, { ...d, walkoverW: "4", walkoverL: "0" })).toMatchObject({ ok: true, rule: { forfeit: { winnerPoints: 4, loserPoints: 0 } } });
+    expect(ruleFromDraft(football, { ...d, awardW: "3" })).toEqual({ ok: false, problem: "score" });
+    expect(ruleFromDraft(football, { ...d, awardW: "3", awardL: "0" })).toMatchObject({ ok: true, rule: { forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [3, 0] } } });
+    const set = { ...draftFromStored(badminton, badminton.variants.bwf, null), useDivision: false, awardW: "21", awardL: "0" };
+    const noRow = ruleFromDraft(badminton, set) as { rule: PointsRule };
+    expect(noRow.rule.forfeit, "a score on a set sport is dropped, and with it the row it would have created").toBeUndefined();
+    const withRow = ruleFromDraft(badminton, { ...set, walkoverW: "3", walkoverL: "0" }) as { rule: PointsRule };
+    expect(withRow.rule.forfeit).toEqual({ winnerPoints: 3, loserPoints: 0 });
+  });
+
+  it("a threshold kind needs its number; a kind that reads none sends none; a bonus needs its points", () => {
+    const d = { ...draftFromStored(generic, generic.variants.win_loss, null), useDivision: false };
+    const rule = (bonuses: PointsDraft["bonuses"]) => ruleFromDraft(generic, { ...d, bonuses });
+    expect(rule([{ when: "loss_margin_lte", param: "", points: "1" }])).toEqual({ ok: false, problem: "bonus" });
+    expect(rule([{ when: "loss_margin_lte", param: "7", points: "" }])).toEqual({ ok: false, problem: "bonus" });
+    expect(rule([{ when: "loss_margin_lte", param: "7", points: "1" }])).toMatchObject({ ok: true, rule: { bonuses: [{ when: "loss_margin_lte", param: 7, points: 1 }] } });
+    const noParam = rule([{ when: "forfeit_win", param: "99", points: "1" }]) as { rule: PointsRule };
+    expect(noParam.rule.bonuses, "a stale threshold on a kind that reads none is not sent").toEqual([{ when: "forfeit_win", points: 1 }]);
+  });
+
+  it("'Use the division's points' is points: null, and it is dirty only against a stored rule", () => {
+    const own: PointsRule = { base: BASE, bonuses: [] };
+    const inherit = draftFromStored(football, football.variants["11-a-side"], null);
+    expect(ruleFromDraft(football, inherit)).toEqual({ ok: true, rule: null });
+    expect(draftIsDirty(football, inherit, null), "nothing stored, nothing changed").toBe(false);
+    expect(draftIsDirty(football, inherit, undefined)).toBe(false);
+    expect(draftIsDirty(football, inherit, own), "a stored rule, 'use the division' checked: a save clears it").toBe(true);
+    const opened = draftFromStored(football, football.variants["11-a-side"], own);
+    expect(draftIsDirty(football, opened, own)).toBe(false);
+    expect(draftIsDirty(football, { ...opened, win: "4" }, own)).toBe(true);
+    expect(draftIsDirty(football, { ...opened, win: "" }, own), "an invalid draft is never 'unchanged'").toBe(true);
+    expect(draftIsDirty(football, { ...inherit, useDivision: false }, null), "unchecking with nothing stored pins the division's numbers: a change").toBe(true);
+    // jsonb gives keys back in its own order
+    expect(draftIsDirty(football, opened, { bonuses: [], base: { loss: 0, win: 3, draw: 1 } })).toBe(false);
+  });
+
+  it("what the gate withholds: a stored walkover row or any bonus", () => {
+    expect(storedHasCustomParts(null)).toBe(false);
+    expect(storedHasCustomParts({ base: BASE, bonuses: [] })).toBe(false);
+    expect(storedHasCustomParts({ base: BASE, bonuses: [], forfeit: { winnerPoints: 2, loserPoints: 0 } })).toBe(true);
+    expect(storedHasCustomParts({ base: BASE, bonuses: [{ when: "draw", points: 1 }] })).toBe(true);
+    expect(storedPointsRule({ base: { win: "x" } }), "a hand-edited row is no rule").toBeNull();
+  });
+
+  it("the preview says the walkover score only where the sport's table reads it, and nothing for a draft that is not a rule yet", () => {
+    const forfeit = { walkoverW: "4", walkoverL: "1", awardW: "3", awardL: "0" };
+    const goal = { ...draftFromStored(football, football.variants["11-a-side"], null), useDivision: false, ...forfeit };
+    const set = { ...draftFromStored(badminton, badminton.variants.bwf, null), useDivision: false, ...forfeit };
+    expect(previewClauses(football, {}, goal).map((c) => c.key)).toEqual(["format.points.base", "format.points.forfeit", "format.points.forfeitScore"]);
+    expect(previewClauses(badminton, {}, set).map((c) => c.key), "another sport family").toEqual(["format.points.base", "format.points.forfeit"]);
+    expect(previewClauses(football, {}, { ...goal, win: "" })).toEqual([]);
+    expect(previewClauses(football, football.variants["11-a-side"], draftFromStored(football, football.variants["11-a-side"], null)).map((c) => c.key), "inheriting: the division's base").toEqual(["format.points.base"]);
+  });
+
+  it("anti-vacuity: the registry the sweeps walk is the engine's, and it is not small", () => {
+    expect(DIVISIONS.length).toBeGreaterThan(20);
+    expect(pointsRuleExpressible(football.variants["11-a-side"]).ok).toBe(true);
+  });
+});
