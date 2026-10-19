@@ -62,6 +62,14 @@ const hm = (text: string): string => {
   if (!m) throw new Error(`no HH:MM in ${JSON.stringify(text)}`);
   return m[1]!;
 };
+/** "HH:MM" plus n minutes (mod a day), for comparing a time the page printed with the one it should print - in the page's own zone. */
+const plusMinutes = (t: string, n: number): string => {
+  const [h, m] = t.split(":").map(Number) as [number, number];
+  const total = (h * 60 + m + n) % (24 * 60);
+  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+};
+/** A time without its leading zero, so "09:05" and "9:05" compare equal. */
+const plain = (t: string): string => t.replace(/^0/, "");
 const boardLabel = (left: number) => fill("externalPlay.checkinExtend.board", { minutes: CHECKIN_EXTEND_STEP_MINUTES, left });
 const roundLabel = fill("externalPlay.checkinExtend.round", { minutes: CHECKIN_EXTEND_STEP_MINUTES });
 
@@ -300,13 +308,15 @@ test.describe("the check-in extension", () => {
       "anti-vacuity: widths x (two buttons + page)",
     ).toBe(WIDTHS.length * 3);
 
-    // ... and ROUND press, then BOARD press: the board's answer, naming the board's LIVE closing time; the round's is gone.
+    // ... and ROUND press, then BOARD press (the third: the cap): the board's answer, naming the board's LIVE closing time (five minutes
+    // past the line it read just before); the round's is gone, and the press, now spent, gives way to its reason.
     await page.setViewportSize({ width: 1280, height: 900 });
+    const closesBefore = hm(await closes.innerText());
     await page.getByTestId("arbiter-extend-board").click();
     await expect(boardNotice).toHaveText(lineRe("externalPlay.checkinExtend.notice.board", { minutes: CHECKIN_EXTEND_STEP_MINUTES, n: 1 }));
     await expect(roundNotice, "the round's answer is cleared by the board press").toHaveText("");
-    await deadlineIs(3);
-    await expect.poll(async () => hm(await boardNotice.innerText()), { message: "the answer names the board's live closing time" }).toBe(hm(await closes.innerText()));
+    expect(plain(hm(await boardNotice.innerText())), "the answer names the board's closing time, five minutes past the line it read").toBe(plain(plusMinutes(closesBefore, CHECKIN_EXTEND_STEP_MINUTES)));
+    await expect(page.getByTestId("arbiter-extend-why"), "at the cap the press gives way to its reason").toHaveText(uiEn["externalPlay.checkinExtend.why.capReached"]!);
     expect(await extensionOf(b1.fixtureId)).toEqual({ ms: 3 * CHECKIN_EXTEND_STEP_MS, n: 3 });
 
     // The Fixtures tab: the control with its round press and, after a press, its answer. Board 1 is at the cap, so the press reaches
