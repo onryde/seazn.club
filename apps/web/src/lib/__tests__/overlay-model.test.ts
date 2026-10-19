@@ -36,7 +36,7 @@ import { foldMatch, isLevelOutcome, MatchOutcome, type EventEnvelope } from "@se
 import { defaultLineupPair, makeEnvelope, SIM_CONFIGS } from "@seazn/engine/testkit";
 import { builtinModules } from "@seazn/engine/sports";
 import { V3_SKINS } from "@/components/v2/scorepad/v3/registry";
-import { DISCIPLINE_LABEL_KEYS, disambiguatedShorts, teamShortOf } from "@/lib/public-site";
+import { BADGE_MAX_CHARS, DISCIPLINE_LABEL_KEYS, disambiguatedShorts, teamShortOf } from "@/lib/public-site";
 import {
   DISCIPLINE_CLASS_TONE,
   disciplineTone,
@@ -122,7 +122,24 @@ const CRICKET_BALL = (over: number, ball: number, runs: number) =>
 describe("overlaySideCodes / splitLine", () => {
   it("with no producer code, resolves the PAIR by the public site's rule (`disambiguatedShorts`, team rule)", () => {
     const sides = [{ id: "H", name: "Milton Keynes Rovers" }, { id: "A", name: "ab" }] as const;
-    expect(overlaySideCodes(sides)).toEqual(disambiguatedShorts({ name: sides[0].name, isPerson: false }, { name: sides[1].name, isPerson: false }));
+    expect(overlaySideCodes(sides)).toEqual(disambiguatedShorts({ name: sides[0].name, isPerson: false, seated: true }, { name: sides[1].name, isPerson: false, seated: true }));
+  });
+
+  it("with no producer code, two sides sharing three letters read two codes (Harlow / Harrow -> HARL / HARR, by hand)", () => {
+    expect(overlaySideCodes([{ id: "H", name: "Harlow" }, { id: "A", name: "Harrow" }])).toEqual(["HARL", "HARR"]);
+  });
+
+  it("two empty seats (the doors' and the console's \"—\") read the em dash twice — never an ordinal (#987 review I1)", () => {
+    expect(overlaySideCodes([{ id: "home", name: "—" }, { id: "away", name: "—" }])).toEqual(["—", "—"]);
+  });
+
+  // #987 review M4 — the producer's codes are honoured AS GIVEN, even when they are equal. That is deliberate, not an
+  // unguarded assumption: two placeholder seats read the team rule on each side (WIN / WIN for "Winner of Group A" /
+  // "… B", `disambiguatedShorts`), which is the public site's answer for them, and the staff gallery's `?code=` stress
+  // puts one code on both sides on purpose. A guard that re-resolved equal codes would hand those seats the ordinals
+  // (WIN1 / WIN2) the review refused. Two SEATED entrants cannot arrive equal: both doors resolve them as a pair.
+  it("honours two EQUAL producer codes as given — the placeholder pair's answer, not re-resolved into ordinals", () => {
+    expect(overlaySideCodes([{ id: "home", name: "—", short: "WIN" }, { id: "away", name: "—", short: "WIN" }])).toEqual(["WIN", "WIN"]);
   });
 
   it("a side with no letters to its name reads the em dash — the overlay's own no-name glyph — beside a resolved code", () => {
@@ -186,6 +203,14 @@ describe("nameLadder — `_THEMES.md` §1's one size step (W2-F45)", () => {
     expect(nameLadder({ id: "H", name: "Player One", short: "ONE" }, "ONE").at(-1)).toBe("ONE");
   });
 
+  // #987 review M5 — the bar's tightest rung is the side's code at most BADGE_MAX_CHARS wide: the rung that must fit
+  // when nothing else does. Every production code is within it already; a longer producer short (a declared short
+  // name, the gallery's `?code=` stress) keeps its own middle rung and is cut to four at the bottom.
+  it("caps the last rung at BADGE_MAX_CHARS characters (ROVERS -> ROVE), keeping the short name as the middle rung", () => {
+    expect(nameLadder({ id: "H", name: "Milton Keynes Rovers", short: "Rovers" }, "ROVERS")).toEqual(["Milton Keynes Rovers", "Rovers", "ROVE"]);
+    expect(BADGE_MAX_CHARS, "premise: the ceiling the cap reads").toBe(4);
+  });
+
   it("an unnameable side still has a rung — the em dash, not an empty string", () => {
     expect(nameLadder({ id: "H", name: "  " }, "—")).toEqual(["  ", "—"]);
   });
@@ -238,7 +263,7 @@ describe("overlayModel — side codes are the public site's pair (owner ruling 2
     let collidedUnderOldRule = 0;
     for (const mod of builtinModules) {
       for (const [shape, a, b] of CODE_CASES) {
-        const expected = disambiguatedShorts({ name: a, isPerson: false }, { name: b, isPerson: false });
+        const expected = disambiguatedShorts({ name: a, isPerson: false, seated: true }, { name: b, isPerson: false, seated: true });
         for (const winner of ["H", "A"] as const) {
           const at = `${mod.key} / ${shape} (${a} v ${b}) / ${winner} wins`;
           const model = overlayModel({

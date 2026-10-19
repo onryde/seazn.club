@@ -6,6 +6,7 @@
 // All eleven sports render through this. Board game, carrom and generic come
 // out with `cells: []` and `detail: []` — a designed state, not an error.
 import {
+  BADGE_MAX_CHARS,
   battingEntrantId,
   chaseBalls,
   chaseNeed,
@@ -280,12 +281,22 @@ const EM_DASH = "—";
  * Harrow as HAR and HAR, and "HAR won 4–3 on penalties" named nobody.
  *
  * A producer's code (`OverlaySideInput.short`) wins, upper-cased: both page doors pass the match centre's pair, which
- * knows whether an entrant is a person. Without one, the names are resolved as TEAMS — the match centre's own
- * treatment of a side whose kind it does not know (`buildSides`, match-centre-load.ts). A side with no letters to its
- * name reads the em dash, the overlay's own no-name glyph, rather than the match centre's "?".
+ * knows whether an entrant is a person and whether a seat holds one. Without one, the names are resolved as SEATED
+ * TEAMS: every name the model is handed without a code is an entrant's (the staff gallery's, the organiser console's),
+ * or the em dash of an empty seat, which has no letters and so never widens. A side with no letters to its name reads
+ * the em dash, the overlay's own no-name glyph, rather than the match centre's "?".
+ *
+ * The producer's codes are honoured AS GIVEN, even when the two are equal (#987 review M4) — deliberately, not as an
+ * unchecked assumption: two placeholder seats read the team rule on each side (WIN / WIN for "Winner of Group A" /
+ * "… B"), which is the public site's answer for them, and the gallery's `?code=` stress puts one code on both sides on
+ * purpose. Re-resolving equal codes would hand those seats the ordinals (WIN1 / WIN2) the review refused. Two seated
+ * entrants cannot arrive equal: both doors resolve them as a pair (`disambiguatedShorts`).
  */
 export function overlaySideCodes(sides: readonly [OverlaySideInput, OverlaySideInput]): [string, string] {
-  const [a, b] = disambiguatedShorts({ name: sides[0].name, isPerson: false }, { name: sides[1].name, isPerson: false });
+  const [a, b] = disambiguatedShorts(
+    { name: sides[0].name, isPerson: false, seated: true },
+    { name: sides[1].name, isPerson: false, seated: true },
+  );
   const codeOf = (side: OverlaySideInput, resolved: string): string => {
     const explicit = side.short?.trim();
     if (explicit) return explicit.toUpperCase();
@@ -320,7 +331,9 @@ export function nameLadder(side: OverlaySideInput, code: string): readonly strin
   const rungs = [
     side.name,
     ...(explicit === undefined || explicit === "" ? [] : [explicit]),
-    code,
+    // The rung that must fit when nothing else does: at most `BADGE_MAX_CHARS` characters (code points), the ladder's
+    // own bound (#987 review M5). Every production code is within it; a longer producer short keeps its middle rung.
+    Array.from(code).slice(0, BADGE_MAX_CHARS).join(""),
   ];
   return rungs.filter((rung, i) => rungs.indexOf(rung) === i);
 }
