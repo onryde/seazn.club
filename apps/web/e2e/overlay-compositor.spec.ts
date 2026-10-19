@@ -25,7 +25,7 @@ import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { SignJWT } from "jose";
-import { TAG, addEntrantsViaApi, apiJson, createStageAndGenerate } from "./helpers";
+import { TAG, addEntrantsViaApi, apiJson, createStageAndGenerate, expectNoHorizontalScroll, overflowingIn } from "./helpers";
 import {
   grantRigPackCredits,
   seedCricketOverlayFixture,
@@ -1066,17 +1066,24 @@ test("R2006 Option C: the score by default; Camera only and back; a style and ti
   await expect(page.getByTestId("stream-timing-value")).toHaveText(en("stream.timing.value", { seconds: "2.5" }));
 
   // 5. Go live streams what the tab shows: the score, the picked style — and the Machine's facts carry style AND timing.
+  // PR #989 review m2, the race itself: a NEW timing typed and Go live tapped straight away — no Enter, so the timing's
+  // own save fires on the input's blur, in the same gesture as the POST. Go live carries the timing it showed, so the
+  // session streams 1.5 s whichever request lands first.
+  await page.getByTestId("stream-timing").locator("summary").click();
+  await input.fill("1.5");
+  const racedPut = page.waitForResponse(SETTINGS_PUT(rig.fixtureId));
   const posted = page.waitForRequest((r) => r.method() === "POST" && new URL(r.url()).pathname === `/api/v1/fixtures/${rig.fixtureId}/stream-sessions`);
   const created = page.waitForResponse((r) => r.request().method() === "POST" && new URL(r.url()).pathname === `/api/v1/fixtures/${rig.fixtureId}/stream-sessions`);
   await page.getByTestId("stream-go-live").click();
-  expect((await posted).postDataJSON()).toEqual({ mode: "composed", targetId, themeId: other });
+  expect((await posted).postDataJSON(), "Go live names the timing it showed").toEqual({ mode: "composed", targetId, themeId: other, overlayDelayMs: 1500 });
+  expect((await racedPut).request().postDataJSON(), "the blur saved the same timing").toEqual({ overlayDelayMs: 1500 });
   const createdRes = await created;
   const answer = (await createdRes.json()) as { data?: { sessionId?: string } };
   // Pushed BEFORE any assertion: a failed check must still end the session, or its reservation outlives the test.
   if (answer.data?.sessionId) sessionsThisTest.push({ request: page.request, fixtureId: rig.fixtureId, sid: answer.data.sessionId });
   expect(createdRes.status(), `Go live is accepted: ${JSON.stringify(answer)}`).toBeLessThan(300);
   const sid = answer.data!.sessionId!;
-  expect(await sessionModeOf(sid)).toMatchObject({ mode: "composed", start_cause: "organiser", theme_id: other, overlay_delay_ms: 2500 });
+  expect(await sessionModeOf(sid)).toMatchObject({ mode: "composed", start_cause: "organiser", theme_id: other, overlay_delay_ms: 1500 });
   const jobToken = await jobTokenFor(sid);
   let overlayUrl: URL | null = null;
   await expect
@@ -1088,7 +1095,7 @@ test("R2006 Option C: the score by default; Camera only and back; a style and ti
     }, { message: "the composed session's facts never carried an overlayUrl", timeout: cycleMs(FAKE_CONNECT_MS), intervals: [1_000] })
     .toBe(true);
   expect(overlayUrl!.searchParams.get("template"), "the Machine renders the picked style").toBe(other);
-  expect(overlayUrl!.searchParams.get("delay"), "…at the set timing").toBe("2500");
+  expect(overlayUrl!.searchParams.get("delay"), "…at the timing the tab showed").toBe("1500");
 
   // 6. Live: the Machine plays; the panel says delivery is not monitored, shows the session's OWN style and timing
   // read-only, and offers neither the editor nor the mode link. A settings change now never moves the running session.
@@ -1103,7 +1110,7 @@ test("R2006 Option C: the score by default; Camera only and back; a style and ti
     .toBe("live");
   await expect(page.getByTestId("stream-live-unmonitored")).toHaveText(en("stream.live.deliveryUnmonitored", { platform: "YouTube" }), { timeout: POLL_WAIT_MS });
   await expect(page.getByTestId("stream-live-template")).toHaveText(otherLabel);
-  await expect(page.getByTestId("stream-live-timing")).toHaveText(en("stream.timing.value", { seconds: "2.5" }));
+  await expect(page.getByTestId("stream-live-timing")).toHaveText(en("stream.timing.value", { seconds: "1.5" }));
   await expect(page.getByTestId("stream-live-timing-locked")).toHaveText(en("stream.timing.lockedLive"));
   await expect(page.getByTestId("stream-timing"), "no editable timing while live").toHaveCount(0);
   await expect(page.getByTestId("stream-mode-toggle"), "no mode link while live").toHaveCount(0);
@@ -1112,9 +1119,166 @@ test("R2006 Option C: the score by default; Camera only and back; a style and ti
   const moved = await apiJson(page.request, `/api/v1/fixtures/${rig.fixtureId}/stream-settings`, "PUT", { overlayDelayMs: 0 });
   expect(moved.status).toBe(200);
   await page.waitForTimeout(STREAM_POLL_MS + 1_000);
-  await expect(page.getByTestId("stream-live-timing"), "a running session keeps its own timing").toHaveText(en("stream.timing.value", { seconds: "2.5" }));
-  expect((await sessionModeOf(sid))!.overlay_delay_ms).toBe(2500);
+  await expect(page.getByTestId("stream-live-timing"), "a running session keeps its own timing").toHaveText(en("stream.timing.value", { seconds: "1.5" }));
+  expect((await sessionModeOf(sid))!.overlay_delay_ms).toBe(1500);
+
+  // 7. PR #989 review m1: the OBS tab's grid stays editable while the score is on air, and says a pick applies to the
+  // NEXT stream — read from the page's ONE session (the console's provider), the real producer of that fact.
+  await page.getByTestId("stream-tab-obs").click();
+  const obsNote = page.getByTestId("stream-template-picker").getByTestId("stream-template-note");
+  await expect(obsNote).toHaveText(en("stream.template.nextStream"));
+  await page.getByTestId("stream-tab-phone").click();
+  await expect(page.getByTestId("stream-live-template"), "back on the Phone tab: the running session's own style").toHaveText(otherLabel);
+  // The positive pair: once the session has ended, the line goes.
+  await endNow(page, rig.fixtureId, sid);
+  await expect.poll(async () => (await apiJson<{ state: string } | null>(page.request, `/api/v1/fixtures/${rig.fixtureId}/stream-sessions/current`)).data?.state, { timeout: POLL_WAIT_MS }).toMatch(/^(completed|failed)$/);
+  await page.getByTestId("stream-tab-obs").click();
+  await expect(page.getByTestId("stream-template-picker")).toBeVisible();
+  await expect(obsNote, "no session up: no line").toHaveCount(0, { timeout: STREAM_POLL_MS * 3 });
 });
+
+// ---------------------------------------------------------------------------------------------------------------------
+// R2006 brief Step 3 (PR #989 review I3): the Phone tab's score card at every width the matrix covers, plus 1280 —
+// on THIS leg, because only a deployment that can run the score renders the card at all (mobile.spec.ts runs imageless,
+// so its seven projects never see it). At each width: every control is reachable (a 44 px target below 768 and 36 px
+// from it, hit-tested with elementFromPoint — paint is not a tap), nothing inside the card is clipped (`overflowingIn`'s
+// split: a reachable scrolling box is a feature and must be focusable; any other overhang is a defect), no page scroll;
+// and the sequence the brief names — Camera only and back, a style and 2.5 s that survive a reload, Reset, Go live —
+// with the mode read back through the API.
+// ---------------------------------------------------------------------------------------------------------------------
+const SCORE_CARD_WIDTHS = [320, 360, 375, 390, 430, 768, 834, 1280] as const;
+
+/** Every overhang inside the score card except the thumbnails' own fit-by-scale canvases (a 1920 px canvas scaled into
+ *  its cell — the R2006 grid test in stream-overlay.spec.ts measures that canvas against its cell at every width). */
+async function expectScoreCardUnclipped(page: Page, label: string): Promise<number> {
+  const notInThumb = (sel: string) => `${sel}:not([data-testid="ovl-preview"] *):not([data-testid="ovl-preview"])`;
+  const { clipped, scrollable } = await overflowingIn(
+    page,
+    '[data-testid="stream-ready"]',
+    ["button", "div", "span", "p", "summary", "label", "input"].map(notInThumb).join(","),
+    "the Ready card was not in the DOM",
+  );
+  expect(clipped, `${label}: clipped inside the Ready card`).toEqual([]);
+  for (const box of scrollable) expect(box, `${label}: a scrolling box inside the card is not keyboard-reachable`).toMatch(/tabindex=0$/);
+  const scanned = await page.locator('[data-testid="stream-ready"]').evaluate((root) => root.querySelectorAll("button,div,span,p,summary,label,input").length);
+  expect(scanned, `${label}: the scan saw the card`).toBeGreaterThan(20);
+  return scanned;
+}
+
+/** The control is a real target where a finger lands: scrolled to, tall enough, and on top at its centre. */
+async function expectReachable(page: Page, loc: import("@playwright/test").Locator, label: string, width: number): Promise<void> {
+  await loc.scrollIntoViewIfNeeded();
+  const r = await loc.evaluate((el) => {
+    const box = el.getBoundingClientRect();
+    const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+    return { h: box.height, w: box.width, own: hit !== null && (el === hit || el.contains(hit)) };
+  });
+  const floor = width < 768 ? 44 : 36;
+  expect(r.h, `${width}px ${label}: a ${floor}px target (${r.w}×${r.h})`).toBeGreaterThanOrEqual(floor);
+  expect(r.own, `${width}px ${label}: a tap at its centre lands on it`).toBe(true);
+}
+
+for (const width of SCORE_CARD_WIDTHS) {
+  test(`R2006 Step 3 at ${width}px: the Phone tab's score card is reachable and unclipped; Camera only and back; a style and 2.5 s survive a reload; Reset; Go live streams the score`, async ({ page }) => {
+    test.setTimeout(SEED_MS + POOL_HOLD.holdMs + 90_000);
+    const { rig, path, targetId } = await streamRig(page);
+    await pairPhoneOnFixture(page, path);
+    await page.setViewportSize({ width, height: 900 });
+    await openReady(page, path);
+    const card = page.getByTestId("stream-score");
+    const picker = card.getByTestId("stream-template-picker");
+    const options = picker.locator('[role="radio"][data-template]');
+    const checked = picker.locator('[role="radio"][data-template][aria-checked="true"]');
+    const toggle = page.getByTestId("stream-mode-toggle");
+    const goLive = page.getByTestId("stream-go-live");
+    await expect(card, "the score is the default here").toBeVisible();
+    await expect(goLive).toHaveAttribute("data-mode", "composed");
+
+    // Reachable and unclipped — the default card, then with Score timing open (its input and Reset are inside).
+    const ids = await options.evaluateAll((els) => els.map((el) => el.getAttribute("data-template")!));
+    expect(ids.length, "a choice needs at least two templates").toBeGreaterThanOrEqual(2);
+    let reached = 0;
+    for (const id of ids) { await expectReachable(page, picker.locator(`[role="radio"][data-template="${id}"]`), `option ${id}`, width); reached++; }
+    const scenes = await picker.locator('[data-testid^="stream-scene-"][role="radio"]').evaluateAll((els) => els.map((el) => el.getAttribute("data-testid")!));
+    expect(scenes.length, "premise: the scene toggle has segments").toBeGreaterThanOrEqual(2);
+    for (const scene of scenes) {
+      await expectReachable(page, page.getByTestId(scene), scene, width);
+      reached++;
+    }
+    const summary = page.getByTestId("stream-timing").locator("summary");
+    await expectReachable(page, summary, "the Score timing summary", width);
+    await expectReachable(page, goLive, "Go live", width);
+    await expectReachable(page, toggle, "Camera only", width);
+    reached += 3;
+    await expectScoreCardUnclipped(page, `${width}px default`);
+    await expectNoHorizontalScroll(page);
+    await summary.click();
+    const input = page.getByTestId("stream-timing-input");
+    await expectReachable(page, input, "the timing input", width);
+    await expectReachable(page, page.getByTestId("stream-timing-reset"), "Reset", width);
+    reached += 2;
+    await expectScoreCardUnclipped(page, `${width}px timing open`);
+    await expectNoHorizontalScroll(page);
+    console.log(`${width}px: ${reached} controls reached`);
+    expect(reached, "every option, every scene, the summary, Go live, the link, the input and Reset").toBe(ids.length + scenes.length + 3 + 2);
+
+    // Camera only, then the score back — the link is the secondary choice under the one Go live.
+    let put = page.waitForResponse(SETTINGS_PUT(rig.fixtureId));
+    await toggle.click();
+    expect((await put).request().postDataJSON()).toEqual({ streamMode: "passthrough" });
+    await expect(page.getByTestId("stream-camera-only")).toBeVisible();
+    await expect(card).toHaveCount(0);
+    await expectReachable(page, toggle, "Add the score back", width);
+    await expectScoreCardUnclipped(page, `${width}px camera only`);
+    await expectNoHorizontalScroll(page);
+    put = page.waitForResponse(SETTINGS_PUT(rig.fixtureId));
+    await toggle.click();
+    expect((await put).request().postDataJSON()).toEqual({ streamMode: "composed" });
+    await expect(card).toBeVisible();
+
+    // A style and 2.5 s, saved, surviving a reload.
+    const before = await checked.getAttribute("data-template");
+    const other = ids.find((id) => id !== before)!;
+    put = page.waitForResponse(SETTINGS_PUT(rig.fixtureId));
+    await picker.locator(`[role="radio"][data-template="${other}"]`).click();
+    expect((await put).request().postDataJSON()).toEqual({ overlayTemplate: other });
+    if (!(await input.isVisible())) await summary.click();
+    put = page.waitForResponse(SETTINGS_PUT(rig.fixtureId));
+    await input.fill("2.5");
+    await input.press("Enter");
+    expect((await put).request().postDataJSON()).toEqual({ overlayDelayMs: 2500 });
+    await openReady(page, path);
+    await expect(checked, `${width}px: the style after a reload`).toHaveAttribute("data-template", other);
+    await expect(page.getByTestId("stream-timing-value"), `${width}px: 2.5 s after a reload`).toHaveText(en("stream.timing.value", { seconds: "2.5" }));
+    await expect(page.getByTestId("stream-timing-default")).toHaveCount(0);
+
+    // Reset: the server's default again.
+    await summary.click();
+    put = page.waitForResponse(SETTINGS_PUT(rig.fixtureId));
+    await page.getByTestId("stream-timing-reset").click();
+    expect((await put).request().postDataJSON()).toEqual({ overlayDelayMs: null });
+    await expect(page.getByTestId("stream-timing-default"), "Reset: the default").toBeVisible();
+
+    // Go live: the score, read back through the organiser's own API.
+    const posted = page.waitForRequest((r) => r.method() === "POST" && new URL(r.url()).pathname === `/api/v1/fixtures/${rig.fixtureId}/stream-sessions`);
+    const created = page.waitForResponse((r) => r.request().method() === "POST" && new URL(r.url()).pathname === `/api/v1/fixtures/${rig.fixtureId}/stream-sessions`);
+    await goLive.click();
+    expect((await posted).postDataJSON()).toEqual({ mode: "composed", targetId, themeId: other, overlayDelayMs: null });
+    const res = await created;
+    const made = (await res.json()) as { data?: { sessionId?: string } };
+    if (made.data?.sessionId) sessionsThisTest.push({ request: page.request, fixtureId: rig.fixtureId, sid: made.data.sessionId });
+    expect(res.status(), `${width}px Go live: ${JSON.stringify(made)}`).toBeLessThan(300);
+    const current = await apiJson<{ mode: string; overlay: { themeId: string | null; delayMs: number } | null }>(
+      page.request, `/api/v1/fixtures/${rig.fixtureId}/stream-sessions/current`,
+    );
+    expect(current.data?.mode, `${width}px: the API reads the score`).toBe("composed");
+    expect(current.data?.overlay?.themeId).toBe(other);
+    // The settings route answers PUT only, so the stored row is read where the start paths read it.
+    const [stored] = await withDb((sql) => sql<{ stream_mode: string | null; overlay_template: string | null; overlay_delay_ms: number | null }[]>`
+      select stream_mode, overlay_template, overlay_delay_ms from fixture_stream_settings where fixture_id = ${rig.fixtureId}`);
+    expect(stored, `${width}px: the stored preferences`).toEqual({ stream_mode: "composed", overlay_template: other, overlay_delay_ms: null });
+  });
+}
 
 /** End a session this test started and wait until it is terminal, so the next start on the fixture is not refused. */
 async function endNow(page: Page, fixtureId: string, sid: string): Promise<void> {

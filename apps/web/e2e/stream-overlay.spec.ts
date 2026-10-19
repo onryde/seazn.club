@@ -1016,6 +1016,68 @@ test.describe("R2006: the OBS tab's score style grid", () => {
       await owner.close();
     }
   });
+
+  // PR #989 review m6: the WAI-ARIA radio group pattern, in a real browser — focus is what a keyboard user has, and only
+  // a browser moves it. Each group is ONE tab stop (the checked radio); the arrows move AND select, wrapping; Tab leaves.
+  test("the keyboard: each radiogroup is one tab stop; the arrows move focus and the selection, wrapping; a keyboard pick is saved", async ({ browser }) => {
+    test.setTimeout(90_000);
+    const owner = await browser.newContext();
+    const page = await owner.newPage();
+    try {
+      await signInAs(page, rig.ownerEmail);
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await openFixture(page, rig);
+      await streamControl(page).click();
+      await page.locator('[data-testid="stream-tab-obs"]').click();
+      const picker = page.locator('[data-testid="stream-template-picker"]');
+      const ids = await picker.locator('[role="radio"][data-template]').evaluateAll((els) => els.map((el) => el.getAttribute("data-template")!));
+      expect(ids.length, "premise: at least two templates").toBeGreaterThanOrEqual(2);
+      const focused = () => page.evaluate(() => {
+        const el = document.activeElement as HTMLElement | null;
+        return el?.getAttribute("data-template") ?? el?.getAttribute("data-testid") ?? el?.tagName ?? null;
+      });
+      const tabStops = (group: string) => page.locator(`[data-testid="${group}"] [role="radio"][tabindex="0"]`);
+      await expect(tabStops("stream-scene-group"), "the scene group: one tab stop").toHaveCount(1);
+      await expect(tabStops("stream-template-group"), "the template group: one tab stop").toHaveCount(1);
+      const start = (await picker.locator('[role="radio"][data-template][aria-checked="true"]').getAttribute("data-template"))!;
+
+      // Scenes: from the checked scene, ArrowRight moves the scene and focus; Tab goes to the CHECKED template (the
+      // template group's only stop), never to its first option by default.
+      const scenes = OVERLAY_SCENES.map((x) => `stream-scene-${x.id}`);
+      await page.getByTestId(scenes[0]!).focus();
+      await page.keyboard.press("ArrowRight");
+      await expect(page.getByTestId(scenes[1]!)).toHaveAttribute("aria-checked", "true");
+      expect(await focused(), "focus follows the scene").toBe(scenes[1]);
+      await page.keyboard.press("Tab");
+      expect(await focused(), "Tab lands on the checked template").toBe(start);
+
+      // Templates: ArrowRight picks the next option in order (wrapping), focus follows, and the pick is saved.
+      const next = ids[(ids.indexOf(start) + 1) % ids.length]!;
+      const saved = page.waitForResponse((r) => r.request().method() === "PUT" && new URL(r.url()).pathname === `/api/v1/fixtures/${rig.fixtureId}/stream-settings`);
+      await page.keyboard.press("ArrowRight");
+      const res = await saved;
+      expect(res.status()).toBe(200);
+      expect(res.request().postDataJSON(), "a keyboard pick is a pick").toEqual({ overlayTemplate: next });
+      await expect(picker.locator(`[role="radio"][data-template="${next}"]`)).toHaveAttribute("aria-checked", "true");
+      expect(await focused(), "focus follows the selection").toBe(next);
+      await expect(tabStops("stream-template-group"), "still one tab stop — now the new selection").toHaveCount(1);
+      await expect(tabStops("stream-template-group")).toHaveAttribute("data-template", next);
+      // Wrap: ArrowLeft from the first option lands on the last.
+      await page.keyboard.press("Home");
+      await expect(picker.locator(`[role="radio"][data-template="${ids[0]}"]`)).toHaveAttribute("aria-checked", "true");
+      await page.keyboard.press("ArrowLeft");
+      await expect(picker.locator(`[role="radio"][data-template="${ids[ids.length - 1]}"]`)).toHaveAttribute("aria-checked", "true");
+      expect(await focused()).toBe(ids[ids.length - 1]);
+      // Tab leaves the group: the next stop is not a template; Shift+Tab comes back to the checked one.
+      await page.keyboard.press("Tab");
+      expect(ids, "Tab leaves the template group").not.toContain(await focused());
+      await page.keyboard.press("Shift+Tab");
+      expect(await focused(), "Shift+Tab returns to the checked template").toBe(ids[ids.length - 1]);
+    } finally {
+      await apiJson(page.request, `/api/v1/fixtures/${rig.fixtureId}/stream-settings`, "PUT", { overlayTemplate: null }).catch(() => undefined);
+      await owner.close();
+    }
+  });
 });
 
 // ===========================================================================
