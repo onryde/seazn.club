@@ -1,4 +1,7 @@
 // Pure helpers for the public dashboard (PROMPT-12).
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
 import {
@@ -11,6 +14,7 @@ import {
   setBreakdown,
   stripLiveSetPoints,
   teamShortOf,
+  teamShortCandidates,
   personShortCandidates,
   disambiguatedShorts,
   BADGE_MAX_CHARS,
@@ -345,6 +349,84 @@ describe("competitionChip (spectator status vocabulary)", () => {
   });
 });
 
+/** A team side whose seat holds a real entrant — the only kind of side the team ladder widens. */
+const team = (name: string) => ({ name, isPerson: false, seated: true });
+/** A placeholder seat: a slot sentence, a bye, TBD, the overlay doors' "—", the "?" of an entrant the read lost. */
+const placeholder = (name: string) => ({ name, isPerson: false, seated: false });
+
+// #987 review I1 — the placeholder sentences, from every locale's own dictionary (never typed in): every `slot.*`
+// sentence the bracket and progression write, the match centre's feeder sentences, and TBD. Each is filled twice, once
+// per seat, with params that differ between the seats (Group A / Group B, R1·3 / R1·4, match 1 / match 2) — the shape
+// two real placeholder seats of one fixture take.
+const DICT_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../dictionaries");
+const LOCALES = readdirSync(DICT_ROOT).filter((d) => statSync(join(DICT_ROOT, d)).isDirectory());
+function placeholderSentences(): Array<readonly [string, string]> {
+  const out: Array<readonly [string, string]> = [];
+  for (const locale of LOCALES) {
+    const ui = JSON.parse(readFileSync(join(DICT_ROOT, locale, "ui.json"), "utf8")) as Record<string, string>;
+    const pub = JSON.parse(readFileSync(join(DICT_ROOT, locale, "public.json"), "utf8")) as Record<string, string>;
+    for (const [key, text] of Object.entries(ui)) if (key.startsWith("slot.") || key === "bracket.tbd") out.push([`${locale} ${key}`, text]);
+    for (const [key, text] of Object.entries(pub)) if (key.startsWith("knockout.feeder")) out.push([`${locale} ${key}`, text]);
+  }
+  return out;
+}
+const fillSeat = (template: string, seat: 0 | 1) =>
+  template.replace(/\{(\w+)\}/g, (_, param: string) => (param === "g" ? ["A", "B"][seat]! : param === "ext" ? ["R1·3", "R1·4"][seat]! : String(seat + 1)));
+
+describe("disambiguatedShorts — a PLACEHOLDER seat is never widened (#987 review I1)", () => {
+  // The team ladder exists to tell two CLUBS apart. A placeholder is not a club: its sentence's second word is a
+  // preposition ("of", "de", "van", "du"), so the ladder could never separate two of them and every colliding pair fell
+  // to the positional tie-break — "No. 3 in Group A" / "No. 3 in Group B" read NO31 / NO32 ("No. 31"?), the relay
+  // door's two empty seats "?1" / "?2", an upcoming final's share card WIN1 v WIN2. Ordinals that read as data. A
+  // placeholder keeps exactly what it read before the ladder: the team rule, `teamShortOf`, on each side.
+  it("every placeholder pair in every locale reads the team rule on each side — marked as a placeholder or left unmarked", () => {
+    const sentences = placeholderSentences();
+    const pairs: Array<readonly [string, string, string]> = [
+      ...sentences.map(([where, template]) => [where, fillSeat(template, 0), fillSeat(template, 1)] as const),
+      ["the overlay doors' two empty seats", "—", "—"],
+      ["two entrants the read cannot find", "?", "?"],
+    ];
+    let checked = 0;
+    let collided = 0;
+    let gateHolds = 0;
+    for (const [where, a, b] of pairs) {
+      const before = [teamShortOf(a), teamShortOf(b)];
+      expect(disambiguatedShorts(placeholder(a), placeholder(b)), `${where}: "${a}" / "${b}"`).toEqual(before);
+      expect(disambiguatedShorts({ name: a, isPerson: false }, { name: b, isPerson: false }), `${where}: an UNMARKED side is a placeholder`).toEqual(before);
+      checked++;
+      if (before[0] === before[1]) collided++;
+      // The witness that the gate is what keeps them: the same two sentences as SEATED teams read something else.
+      const seated = disambiguatedShorts(team(a), team(b));
+      if (seated[0] !== before[0] || seated[1] !== before[1]) gateHolds++;
+    }
+    console.log(`[I1] locales ${LOCALES.length}, placeholder sentences ${sentences.length}, pairs ${checked}, colliding under the team rule ${collided}, read differently if seated ${gateHolds}`);
+    expect(LOCALES.length, "anti-vacuity: the locales").toBeGreaterThanOrEqual(4);
+    expect(sentences.length, "anti-vacuity: every locale's placeholder sentences").toBeGreaterThanOrEqual(LOCALES.length * 10);
+    expect(checked).toBe(pairs.length);
+    expect(collided, "premise: placeholder pairs DO collide under the team rule").toBeGreaterThan(20);
+    expect(gateHolds, "the gate is load-bearing: seated, these pairs would widen or take an ordinal").toBeGreaterThan(20);
+  });
+
+  it("a MIXED pair — a seated team facing a placeholder it collides with — reads the team rule on each side, both ways round", () => {
+    let checked = 0;
+    let collided = 0;
+    for (const [where, template] of placeholderSentences()) {
+      const slotSide = fillSeat(template, 1);
+      // A real club whose name starts as the sentence does ("Winner of Group A United"), so the two collide.
+      const club = `${fillSeat(template, 0)} United`;
+      const before = [teamShortOf(club), teamShortOf(slotSide)] as const;
+      expect(disambiguatedShorts(team(club), placeholder(slotSide)), `${where}: home seated`).toEqual(before);
+      expect(disambiguatedShorts(placeholder(slotSide), team(club)), `${where}: away seated`).toEqual([before[1], before[0]]);
+      checked++;
+      if (before[0] === before[1]) collided++;
+    }
+    // The hand-made case: a club called "Winners United" against "Winner of Group B" — both WIN, as before.
+    expect(disambiguatedShorts(team("Winners United"), placeholder("Winner of Group B"))).toEqual(["WIN", "WIN"]);
+    expect(checked, "anti-vacuity: mixed pairs").toBeGreaterThan(20);
+    expect(collided, "premise: the mixed pairs collide under the team rule").toBeGreaterThan(20);
+  });
+});
+
 // R11 fix round, C9 — the match-centre court card abbreviates every entrant
 // to three letters. The TEAM rule (`teamShortOf`, unchanged: first three
 // compacted letters of the whole name) already disambiguates in practice
@@ -513,33 +595,64 @@ describe("teamShortOf / personShortCandidates / disambiguatedShorts (R11 fix rou
   // codes from this function (owner ruling 2026-10-19: one implementation), and an overlay that airs "HAR won 4–3 on
   // penalties" between Harlow and Harrow has not said who won. C9's own words were "team entrants keep today's
   // behaviour WHERE IT ALREADY DISAMBIGUATES": every team pair that already differs still reads exactly as before (the
-  // sweep below counts them); only a colliding pair widens.
-  it("disambiguatedShorts: two TEAMS that collide under the team rule widen until they differ ('Blazers United'/'Blazers Town' no longer both 'BLA')", () => {
+  // sweep below counts them); only a colliding pair of two SEATED entrants widens (#987 review I1: a placeholder never
+  // does — see the describe below).
+  it("disambiguatedShorts: two seated TEAMS that collide under the team rule widen until they differ ('Blazers United'/'Blazers Town' no longer both 'BLA')", () => {
     expect(teamShortOf("Blazers United"), "premise: the team rule alone collides").toBe(teamShortOf("Blazers Town"));
-    const [home, away] = disambiguatedShorts(
-      { name: "Blazers United", isPerson: false },
-      { name: "Blazers Town", isPerson: false },
-    );
+    const [home, away] = disambiguatedShorts(team("Blazers United"), team("Blazers Town"));
     expect(home).not.toBe(away);
   });
 
-  // The team ladder's rungs, each as `teamShortCandidates` declares it: the team rule, then one letter wider, then the
-  // first word's initial with the second word's first two letters.
+  // The team ladder's rungs, each typed here from the convention it implements (never read back from the function): the
+  // team rule (three letters of the compacted name), one letter wider, the first word's initial with the second word's
+  // first two letters, then the first four letters of the LAST word.
   it("disambiguatedShorts: colliding TEAMS take the first rung where they differ — one letter wider, then initial + second word", () => {
     // One word each, sharing three letters: the fourth letter is the first that differs.
-    expect(disambiguatedShorts({ name: "Harlow", isPerson: false }, { name: "Harrow", isPerson: false })).toEqual(["HARL", "HARR"]);
+    expect(disambiguatedShorts(team("Harlow"), team("Harrow"))).toEqual(["HARL", "HARR"]);
     // Sharing their whole first word: one letter wider still collides, the second word does not.
-    expect(disambiguatedShorts({ name: "Manchester United", isPerson: false }, { name: "Manchester City", isPerson: false })).toEqual(["MUN", "MCI"]);
+    expect(disambiguatedShorts(team("Manchester United"), team("Manchester City"))).toEqual(["MUN", "MCI"]);
     // One-word against multi-word, sharing a first word: the one-word side has no second word to draw on and stays on
     // its widest rung, while the other side moves to its initials.
-    const [solo, town] = disambiguatedShorts({ name: "Harlow", isPerson: false }, { name: "Harlow Town", isPerson: false });
-    expect(solo).not.toBe(town);
-    expect([solo, town]).toEqual(["HARL", "HTO"]);
+    expect(disambiguatedShorts(team("Harlow"), team("Harlow Town"))).toEqual(["HARL", "HTO"]);
+  });
+
+  // #987 review M1 — the rung before the tie-break: a shared first word AND a second word that starts the same (or a
+  // shared prefix word, "FC", "1. FC") used to end on REA1 / REA2, INT1 / INT2, FCB1 / FCB2, 1FC1 / 1FC2. The LAST word
+  // is where these clubs differ. Every expected code is the last word's first four letters, worked by hand.
+  it("disambiguatedShorts: a shared first word whose second word starts the same reads the LAST word's first four letters (Real Madrid / Real Mallorca -> MADR / MALL)", () => {
+    expect(disambiguatedShorts(team("Real Madrid"), team("Real Mallorca"))).toEqual(["MADR", "MALL"]);
+    expect(disambiguatedShorts(team("Inter Milan"), team("Inter Miami"))).toEqual(["MILA", "MIAM"]);
+    expect(disambiguatedShorts(team("FC Barcelona"), team("FC Bayern"))).toEqual(["BARC", "BAYE"]);
+    expect(disambiguatedShorts(team("1. FC Köln"), team("1. FC Kaiserslautern"))).toEqual(["KÖLN", "KAIS"]);
+  });
+
+  // #987 review M3 — the ladder is POSITIONAL: rung i is the same rung for every name, so the pair loop compares like
+  // with like. It used to dedupe, so "Ab C" (whose four-letter rung IS its three-letter one) lost a rung and its
+  // initials ("AC") competed against the other side's four letters ("ABCD"). A rung a name cannot draw (one word has no
+  // second or last word) repeats the rung before it.
+  it("teamShortCandidates: one rung per position, every name the same length — a rung a name cannot draw repeats the one before it", () => {
+    expect(teamShortCandidates("Real Madrid")).toEqual(["REA", "REAL", "RMA", "MADR"]);
+    expect(teamShortCandidates("Harlow")).toEqual(["HAR", "HARL", "HARL", "HARL"]);
+    expect(teamShortCandidates("Ab C")).toEqual(["ABC", "ABC", "AC", "C"]);
+    expect(disambiguatedShorts(team("Ab C"), team("Abc Def")), "the four-letter rung against the four-letter rung").toEqual(["ABC", "ABCD"]);
+  });
+
+  // #987 review M2 — the initial rung sliced UTF-16 code units, so a first word starting with an astral letter (CJK
+  // Ext-B 𠮷, as in the surname 𠮷田) kept a lone high surrogate: "�KI". Every rung, and the team rule itself, slices by
+  // code point.
+  it("teamShortCandidates / teamShortOf: slice by code point — an astral letter is one character, never half of one", () => {
+    expect(teamShortCandidates("𠮷田 Kickers")).toEqual(["𠮷田K", "𠮷田KI", "𠮷KI", "KICK"]);
+    for (const rung of teamShortCandidates("𠮷田 Kickers")) {
+      expect(hasUnpairedSurrogate(rung), rung).toBe(false);
+      expect(Array.from(rung).length, rung).toBeLessThanOrEqual(BADGE_MAX_CHARS);
+    }
+    expect(disambiguatedShorts(team("𠮷田 Kickers"), team("𠮷田 Knights"))).toEqual(["𠮷田KI", "𠮷田KN"]);
+    expect(teamShortOf("AB𠮷 United"), "the team rule's own three letters").toBe("AB𠮷");
   });
 
   it("disambiguatedShorts: identical TEAM names (and names identical only after normalisation) take the positional tie-break, still a badge-width label", () => {
     for (const [a, b] of [["Ashgrove Rovers", "Ashgrove Rovers"], ["Ashgrove Rovers", "ASHGROVE rovers"], ["Al", "Al"]] as const) {
-      const [home, away] = disambiguatedShorts({ name: a, isPerson: false }, { name: b, isPerson: false });
+      const [home, away] = disambiguatedShorts(team(a), team(b));
       expect(home, `${a} / ${b}`).not.toBe(away);
       // Built from each side's OWN team-rule code — the tie-break's declared shape (`${first}1` / `${first}2`).
       expect([home, away], `${a} / ${b}`).toEqual([`${teamShortOf(a)}1`, `${teamShortOf(b)}2`]);
@@ -548,26 +661,55 @@ describe("teamShortOf / personShortCandidates / disambiguatedShorts (R11 fix rou
   });
 
   it("disambiguatedShorts: a TEAM side in a MIXED pair keeps the team rule exactly — only a pair of two teams widens the team side", () => {
-    const [person, team] = disambiguatedShorts({ name: "Harriet Lowe", isPerson: true }, { name: "Lowestoft Town", isPerson: false });
-    expect(team).toBe(teamShortOf("Lowestoft Town"));
-    expect(person).not.toBe(team);
+    const [person, teamSide] = disambiguatedShorts({ name: "Harriet Lowe", isPerson: true }, team("Lowestoft Town"));
+    expect(teamSide).toBe(teamShortOf("Lowestoft Town"));
+    expect(person).not.toBe(teamSide);
+  });
+
+  // #987 review I2 — the empty case first. A name with no letters or digits has no code to widen: it reads "?", the
+  // match centre's no-code glyph, exactly as before the team ladder existed — never an ordinal ("?1" / "?2" invents a
+  // fact), and never "undefined1", which a ladder that came back empty would spell.
+  it("teamShortCandidates / disambiguatedShorts: the EMPTY case — a letterless name is ['?'], and reads '?' against anything", () => {
+    for (const blank of ["—", "", "  ", "🙂", "?", "– —"]) {
+      expect(teamShortCandidates(blank), JSON.stringify(blank)).toEqual(["?"]);
+    }
+    expect(disambiguatedShorts(team("—"), team("—"))).toEqual(["?", "?"]);
+    expect(disambiguatedShorts(team(""), team(""))).toEqual(["?", "?"]);
+    expect(disambiguatedShorts(team("🙂"), team("🙂"))).toEqual(["?", "?"]);
+    expect(disambiguatedShorts(team("—"), team("Harlow"))).toEqual(["?", "HAR"]);
+    expect(disambiguatedShorts(team("Harlow"), team("🙂"))).toEqual(["HAR", "?"]);
   });
 
   // The C9 contract, swept rather than sampled: a team pair that ALREADY differs under the team rule reads exactly as it
   // did (both codes are `teamShortOf`, today's rule), and a colliding pair always ends different and badge-width. Names
-  // are generated around a shared stem so collisions are common, and both kinds are counted — a sweep whose generator
-  // never collides proves nothing about the widening.
-  it("disambiguatedShorts: TEAM pairs, swept — a pair that already differs is unchanged; a colliding pair always ends different, at most BADGE_MAX_CHARS wide", () => {
+  // are generated around a shared stem so collisions are common, and one name in ten is LETTERLESS (review I2: the old
+  // generator could never make one). All three kinds are counted — a sweep whose generator never reaches a kind proves
+  // nothing about it.
+  it("disambiguatedShorts: seated TEAM pairs, swept — a pair that already differs is unchanged; a colliding pair always ends different and badge-width; a letterless side reads '?'", () => {
     const word = fc.stringMatching(/^[A-Za-zÀ-ÿΑ-Ωα-ω0-9]{1,9}$/);
-    const name = fc.tuple(fc.constantFrom("Har", "Man", "Ash", "U12", "Ολυ", "St."), word, fc.array(word, { maxLength: 2 })).map(([stem, w, rest]) => [`${stem}${w}`, ...rest].join(" "));
+    const lettered = fc.tuple(fc.constantFrom("Har", "Man", "Ash", "U12", "Ολυ", "St."), word, fc.array(word, { maxLength: 2 })).map(([stem, w, rest]) => [`${stem}${w}`, ...rest].join(" "));
+    const letterless = fc.constantFrom("—", "", "  ", "🙂", "?", "– —", "🙂 🙂");
+    const name = fc.oneof({ weight: 9, arbitrary: lettered }, { weight: 1, arbitrary: letterless });
+    const hasCode = (n: string) => /[\p{L}\p{N}]/u.test(n);
     let unchanged = 0;
     let widened = 0;
+    let blank = 0;
     fc.assert(
       fc.property(name, name, (a, b) => {
-        const [home, away] = disambiguatedShorts({ name: a, isPerson: false }, { name: b, isPerson: false });
+        const [home, away] = disambiguatedShorts(team(a), team(b));
+        for (const [n, code] of [[a, home], [b, away]] as const) {
+          expect(code, `${n} -> ${code}`).not.toContain("undefined");
+          expect(code.length, `${n} -> ${code}`).toBeGreaterThan(0);
+          expect(Array.from(code).length, `${n} -> ${code}`).toBeLessThanOrEqual(BADGE_MAX_CHARS);
+        }
+        if (!hasCode(a) || !hasCode(b)) {
+          expect([home, away], `${a} / ${b}: a letterless side reads "?", and the other side its team rule`).toEqual([teamShortOf(a), teamShortOf(b)]);
+          if (!hasCode(a)) expect(home).toBe("?");
+          if (!hasCode(b)) expect(away).toBe("?");
+          blank++;
+          return;
+        }
         expect(home, `${a} / ${b}`).not.toBe(away);
-        expect(home.length, `${a} -> ${home}`).toBeLessThanOrEqual(BADGE_MAX_CHARS);
-        expect(away.length, `${b} -> ${away}`).toBeLessThanOrEqual(BADGE_MAX_CHARS);
         if (teamShortOf(a) !== teamShortOf(b)) {
           expect([home, away], `${a} / ${b}: already distinct, so unchanged`).toEqual([teamShortOf(a), teamShortOf(b)]);
           unchanged++;
@@ -579,6 +721,7 @@ describe("teamShortOf / personShortCandidates / disambiguatedShorts (R11 fix rou
     );
     expect(unchanged, "anti-vacuity: pairs that already differed").toBeGreaterThan(100);
     expect(widened, "anti-vacuity: pairs that collided and had to widen").toBeGreaterThan(100);
+    expect(blank, "anti-vacuity: pairs with a letterless side").toBeGreaterThan(50);
   });
 
   it("disambiguatedShorts: a PERSON side against a TEAM side (mixed kinds, defensive — does not occur in practice) resolves each independently and still differs when they would otherwise collide", () => {

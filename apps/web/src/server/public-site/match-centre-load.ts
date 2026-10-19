@@ -153,13 +153,16 @@ async function maskSideNames(
 }
 
 /**
- * A `Side.short` abbreviation — 3 characters for a TEAM (`teamShortOf`), up to
- * `BADGE_MAX_CHARS` for a PERSON, because the disambiguation tie-break appends
- * an ordinal to a 3-character stem (`AND1`/`AND2`). The Task 6 contract note
+ * A `Side.short` abbreviation — up to `BADGE_MAX_CHARS` (4) characters, for a
+ * TEAM as for a PERSON: the team rule is three (`teamShortOf`), but two seated
+ * teams it cannot tell apart widen to four (HARL / HARR), and the
+ * disambiguation tie-break appends an ordinal to a 3-character stem
+ * (`AND1`/`AND2`). The Task 6 contract note
  * said "clamped to 3 characters by the BUILDER; the tile has overflow-hidden",
- * and that is no longer true of the person branch: the R11 cosmetic round
- * raised the person ceiling to 4 and made the Timeline/Sets chips size to
- * their content. Any consumer that still budgets 3 and clips is relying on a
+ * and that is no longer true: the R11 cosmetic round raised the person
+ * ceiling to 4 and made the Timeline/Sets chips size to their content, and
+ * fix/overlay-team-code-disambiguation brought teams to the same ceiling.
+ * Any consumer that still budgets 3 and clips is relying on a
  * retired contract — `summary-tab.tsx`'s performer chip was one, and was fixed
  * with this note rather than left to clip if a person-entrant sport ever
  * reaches it. No `short_name` reaches the public surface
@@ -175,10 +178,11 @@ async function maskSideNames(
  * both sides read identically on the court card. `disambiguatedShorts`
  * (`@/lib/public-site`) resolves BOTH sides together instead, preferring the
  * surname for a person and widening only as far as needed to differ. Team
- * entrants keep this exact rule wherever it already disambiguates (the C9
- * brief's words); two teams it does NOT tell apart — Harlow / Harrow, both HAR
- * — widen through `teamShortCandidates` (fix/overlay-team-code-disambiguation:
- * the stream overlay airs these codes, and reads them from this function).
+ * entrants keep the team rule wherever it already disambiguates (the C9
+ * brief's words); two SEATED teams it does NOT tell apart — Harlow / Harrow,
+ * both HAR — widen through `teamShortCandidates`
+ * (fix/overlay-team-code-disambiguation: the stream overlay airs these codes).
+ * A placeholder seat (a slot sentence, the "?" of a lost entrant) never widens.
  */
 interface SidePre {
   entrantId: string;
@@ -186,6 +190,9 @@ interface SidePre {
   colour: string | null;
   badgeUrl: string | null;
   isPerson: boolean;
+  /** The seat holds an entrant the read returned; a slot sentence or the lost entrant's "?" is a placeholder, which
+   *  `disambiguatedShorts` never widens (#987 review I1). */
+  seated: boolean;
 }
 
 interface SideRow {
@@ -288,14 +295,14 @@ function buildSides(
     seat: "home" | "away",
   ): SidePre => {
     if (entrantId === null) {
-      return { entrantId: "", name: slot(slotLabel, seat), colour: null, badgeUrl: null, isPerson: false };
+      return { entrantId: "", name: slot(slotLabel, seat), colour: null, badgeUrl: null, isPerson: false, seated: false };
     }
     const row = byId.get(entrantId);
     // Defensive fallback (contract notes: "never a blank row") — an
     // entrant a stale ledger/lineup reference names but the view no longer
     // returns (deleted, or its division/competition dropped out of
     // public/unlisted visibility since the fixture was scored).
-    if (!row) return { entrantId, name: "?", colour: null, badgeUrl: null, isPerson: false };
+    if (!row) return { entrantId, name: "?", colour: null, badgeUrl: null, isPerson: false, seated: false };
     const name = masked.get(entrantId) ?? row.display_name;
     const colors = row.team_display?.colors as { home_primary?: string } | null | undefined;
     return {
@@ -307,6 +314,7 @@ function buildSides(
       colour: colors?.home_primary ?? null,
       badgeUrl: resolveEntrantBadge({ badge_url: row.badge_url, team_logo_path: row.team_display?.logo_path ?? null }),
       isPerson: row.kind !== "team",
+      seated: true,
     };
   };
 
