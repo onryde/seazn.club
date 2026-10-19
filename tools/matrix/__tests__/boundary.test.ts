@@ -202,7 +202,7 @@ describe("tools/matrix import boundary", () => {
   // The expected API is the public surface the single-file module exported (the Task 1 brief's interface list), not
   // anything read back from the code under test.
   const MATCH_RULES_API = [
-    "SINGLE_SET_POINTS_LABEL", "SPORT_RULES", "STAGE_RULES_SPORTS", "alignBestOfOnePoints", "borrowOptionLabel",
+    "SINGLE_SET_POINTS_LABEL", "SPORT_RULES", "alignBestOfOnePoints", "borrowOptionLabel",
     "buildRuleOverride", "configKeysFor", "hydrateRuleValues", "keysEmittedBy", "ruleOptionLabel", "setRuleValue",
     "showsOnePointsField", "visibleRuleFields",
   ];

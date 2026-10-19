@@ -3977,7 +3977,7 @@
     {
       "scenario": "P6",
       "kind": "inapplicable",
-      "reason": "the sport has no per-stage rules (STAGE_RULES_SPORTS)",
+      "reason": "the sport has no best-of for a stage to override (the per-stage best-of final is for the four sets-based sports)",
       "count": 147,
       "cells": {
         "league": [

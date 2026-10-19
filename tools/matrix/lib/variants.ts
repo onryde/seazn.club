@@ -80,8 +80,9 @@ export function factorsFor(sport: string): Factor[] {
   return [
     { name: "row", levels: ROW_KEYS.map((r) => ({ cls: r, raw: r })) },
     { name: "preset", levels: offlineVariantOrder(sport).map((v) => ({ cls: v, raw: v })) },
-    // The fields the editor SHOWS: `visibleRuleFields` hides a sequence field until its control exists (Task 17), and
-    // `buildVariant` refuses a value for a field that is not shown, so such a field is no factor the editor can express.
+    // The fields with boundary classes. A sequence field (an ordered list: chess's tie-break rungs) IS shown by the editor
+    // since W2c Task 17 built its control, but it is neither a bound nor an option set, so it has no boundary classes and
+    // is no variant factor; its states (default order, empty, reordered) are covered by the sequence field's own tests.
     ...(SPORT_RULES[sport] ?? []).filter((f) => f.kind !== "sequence").map((f) => ({ name: f.key, levels: levelsOf(f) })),
   ];
 }

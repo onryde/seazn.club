@@ -113,19 +113,22 @@ describe("boundary classes (from SPORT_RULES — the engine schema is unbounded)
     expect(() => levelsOf({ key: "x", label: "x", edits: [], kind: "number", min: 0, max: Infinity, build: () => ({}) } as RuleField)).toThrow(FieldUnbounded);
     expect(() => levelsOf({ key: "x", label: "x", edits: [], kind: "number", min: Number.NaN, max: 5, build: () => ({}) } as RuleField)).toThrow(FieldUnbounded);
   });
-  it("W2c Task 8 fix round 1: a sequence field (chess's tie-break rung list) has no boundary classes, and the editor shows none, so it is no variant factor", () => {
+  it("W2c Task 8 fix round 1 / Task 17: a sequence field (chess's tie-break rung list) has no boundary classes, so it is no variant factor even though the editor now shows it", () => {
     // An ordered list is not a bound or an option set, so `levelsOf` refuses it by name rather than answering undefined...
     const rungs = SPORT_RULES.boardgame!.find((f) => f.kind === "sequence")!;
     expect(rungs, "precondition: the table holds a sequence field").toBeDefined();
     expect(() => levelsOf(rungs)).toThrow(FieldUnbounded);
-    // ...and the factors are the fields the editor SHOWS (visibleRuleFields hides it until Task 17), over every sport.
+    // ...and the factors are every field the editor shows EXCEPT the sequence ones (shown since Task 17), over every sport.
     let factors = 0;
+    let sequencesShown = 0;
     for (const sport of SPORT_KEYS) {
       const fs = factorsFor(sport);
-      const shown = visibleRuleFields(sport, {}).map((f) => f.key);
-      expect(fs.slice(2).map((f) => f.name), sport).toEqual(shown);
+      const visible = visibleRuleFields(sport, {});
+      sequencesShown += visible.filter((f) => f.kind === "sequence").length;
+      expect(fs.slice(2).map((f) => f.name), sport).toEqual(visible.filter((f) => f.kind !== "sequence").map((f) => f.key));
       for (const f of fs) { expect(f.levels.length, `${sport}.${f.name}`).toBeGreaterThan(0); factors++; }
     }
+    expect(sequencesShown, "the editor really shows the sequence field now").toBe(1);
     expect(factors).toBeGreaterThan(SPORT_KEYS.length * 2);
     expect(factorsFor("boardgame").some((f) => f.name === rungs.key)).toBe(false);
   });

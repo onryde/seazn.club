@@ -425,6 +425,17 @@ const DECIDERS: Record<string, DeciderDescriber> = {
 export const DECIDER_DESCRIBED_KEYS: readonly string[] = Object.keys(DECIDERS);
 
 /**
+ * Whether decider `key` is ON in `c` - the PARSED, bracket-resolved config - read through the very table `describeDeciders`
+ * says its clauses from. The stage editor's "a level match waits for you" notice asks THIS (W2c Task 17, carry 13b), so
+ * the editor and the public line can never disagree about whether a decider is on. Chess's rung list is on unless it is
+ * EMPTY (`effectiveRungs`: absent plays every rung, `[]` plays none); a decider no describer knows is never read as off,
+ * the same rule `describeDeciders` applies, because saying "none" over it would be a lie.
+ */
+export function deciderIsOn(module_: AnySportModule, key: string, c: Record<string, unknown>): boolean {
+  return !Object.hasOwn(DECIDERS, key) || DECIDERS[key]!(c, module_) !== null;
+}
+
+/**
  * How a tied match ends in a stage of this `kind`, as clauses - from the engine's own declarations
  * (`deciderKeysFor`) and the parsed, BRACKET-RESOLVED config:
  *  - a decider that is ON is said, with its numbers (the stage's, never the division's);

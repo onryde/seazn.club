@@ -22,6 +22,13 @@ export interface RuleField {
   max?: number;
   options?: { value: string; label: string }[];
   /**
+   * A `sequence` field only (W2c Task 17): the raw value that stands for the EMPTY list. A blank raw value means "unset"
+   * everywhere in the editor, so a list the organiser has emptied on purpose ("no tie-break games": a drawn game is held
+   * for the organiser) needs a token of its own, and the control that edits the list has to be able to write it. Absent
+   * on a field whose empty list means nothing.
+   */
+  emptyValue?: string;
+  /**
    * Maps the entered value onto the override object (top-level key).
    * `values` is the full raw form snapshot for this sport — read a sibling
    * key from it when one field must assemble a nested object that several

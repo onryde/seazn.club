@@ -1,7 +1,7 @@
 // Carrom's curated match-rule fields. Client-safe: no "use client", no JSX, no
 // `@/components` or `@/server` import.
 import { carrom } from "@seazn/engine/sports/carrom";
-import { abandonOptions } from "./shared.ts";
+import { abandonOptions, readBool, readNumber, readText } from "./shared.ts";
 import type { RuleField } from "./types.ts";
 
 export const CARROM_RULES: RuleField[] = [
@@ -30,6 +30,7 @@ export const CARROM_RULES: RuleField[] = [
       if (!values.queenCapAt && gameTo < 22) override.queenCapAt = gameTo;
       return override;
     },
+    read: readNumber("gameTo"),
   },
   {
     key: "maxBoards",
@@ -40,6 +41,7 @@ export const CARROM_RULES: RuleField[] = [
     min: 1,
     max: 20,
     build: (v) => ({ maxBoards: Number(v) }),
+    read: readNumber("maxBoards"),
   },
   {
     key: "bestOf",
@@ -48,6 +50,7 @@ export const CARROM_RULES: RuleField[] = [
     kind: "select",
     options: [1, 3, 5].map((n) => ({ value: String(n), label: `Best of ${n}` })),
     build: (v) => ({ bestOf: Number(v) }),
+    read: readNumber("bestOf"),
   },
   {
     key: "queenPoints",
@@ -57,6 +60,7 @@ export const CARROM_RULES: RuleField[] = [
     min: 0,
     max: 10,
     build: (v) => ({ queenPoints: Number(v) }),
+    read: readNumber("queenPoints"),
   },
   {
     key: "queenCapAt",
@@ -67,6 +71,7 @@ export const CARROM_RULES: RuleField[] = [
     min: 1,
     max: 50,
     build: (v) => ({ queenCapAt: Number(v) }),
+    read: readNumber("queenCapAt"),
   },
   {
     key: "queenFollowsBoard",
@@ -75,6 +80,7 @@ export const CARROM_RULES: RuleField[] = [
     help: "House rule — skips tracking who covered the queen (ICF requires it).",
     kind: "bool",
     build: (v) => ({ queenFollowsBoard: v === "on" }),
+    read: readBool("queenFollowsBoard"),
   },
   {
     key: "tieBoard",
@@ -86,6 +92,7 @@ export const CARROM_RULES: RuleField[] = [
       { value: "draw", label: "Drawn game (house rule; enables league draws)" },
     ],
     build: (v) => ({ tieBoard: v }),
+    read: readText("tieBoard"),
   },
   {
     key: "abandon",
@@ -94,5 +101,6 @@ export const CARROM_RULES: RuleField[] = [
     kind: "select",
     options: abandonOptions(carrom),
     build: (v) => ({ abandonPolicy: v }),
+    read: readText("abandonPolicy"),
   },
 ];

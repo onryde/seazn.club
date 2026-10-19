@@ -1,7 +1,7 @@
 // The generic (sport-agnostic) curated match-rule fields. Client-safe: no "use
 // client", no JSX, no `@/components` or `@/server` import.
 import { generic } from "@seazn/engine/sports/generic";
-import { abandonOptions } from "./shared.ts";
+import { abandonOptions, readBool, readText } from "./shared.ts";
 import type { RuleField } from "./types.ts";
 
 export const GENERIC_RULES: RuleField[] = [
@@ -15,6 +15,7 @@ export const GENERIC_RULES: RuleField[] = [
       { value: "score", label: "Two-number score" },
     ],
     build: (v) => ({ resultMode: v }),
+    read: readText("resultMode"),
   },
   {
     key: "allowDraws",
@@ -23,6 +24,7 @@ export const GENERIC_RULES: RuleField[] = [
     help: "Ignored in knockout, double-elim and stepladder stages.",
     kind: "bool",
     build: (v) => ({ allowDraws: v === "on" }),
+    read: readBool("allowDraws"),
   },
   {
     key: "abandon",
@@ -31,5 +33,6 @@ export const GENERIC_RULES: RuleField[] = [
     kind: "select",
     options: abandonOptions(generic),
     build: (v) => ({ abandonPolicy: v }),
+    read: readText("abandonPolicy"),
   },
 ];

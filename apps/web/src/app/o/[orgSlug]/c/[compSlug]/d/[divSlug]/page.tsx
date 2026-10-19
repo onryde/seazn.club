@@ -848,6 +848,7 @@ export default async function DivisionPage({
               rosterDrift={rosterDrift}
               canEdit={editable}
               sportKey={division.sport_key}
+              variantKey={division.variant_key}
               divisionConfig={(division.config ?? {}) as Record<string, unknown>}
               formatLockedStageIds={formatLockedStages}
               tz={scheduleSettings.tz}

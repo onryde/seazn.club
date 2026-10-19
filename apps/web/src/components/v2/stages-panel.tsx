@@ -40,18 +40,17 @@ import { feedLabels, type FeedRow } from "@/lib/schedule-board";
 import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
 import { parseRoundRoleKey } from "@seazn/engine/competition";
 import { TagChipInput } from "@/components/ui/tag-chip-input";
-// Per-stage match format (design §T5, D7). `MatchRuleFields` is mounted
-// UNCHANGED — the same grid the division builder and Settings tab render, so
-// the three format editors cannot drift. The table itself comes from
-// `@/lib/match-rules` via the same re-export.
-import { MatchRuleFields } from "@/components/v2/match-rules";
-import {
-  STAGE_RULES_SPORTS,
-  alignBestOfOnePoints,
-  buildRuleOverride,
-  hydrateRuleValues,
-  ruleOptionLabel,
-} from "@/lib/match-rules";
+// Per-stage rules row (design §T5, D7; W2c Task 17). The fields come from the engine's `ruleKeys` through
+// `stage-rules/stage-rule-fields.tsx`, which renders the SAME `RuleFieldControl` the division builder and Settings tab
+// do, so the format editors cannot drift. The table itself comes from `@/lib/match-rules`.
+import { hydrateRuleValues, ruleOptionLabel } from "@/lib/match-rules";
+import { moduleFor } from "@/lib/rule-scope";
+import { mergedStageRules } from "@/lib/stage-decider-off";
+import { sportLabel } from "@/lib/scoring-vocab";
+import type { StageKind } from "@seazn/engine/core";
+import { DecidersNotice } from "@/components/v2/stage-rules/deciders-off-notice";
+import { StageRuleFields } from "@/components/v2/stage-rules/stage-rule-fields";
+import { isStagePreset, resolvedStageCfg, stageFormatSaveFragment } from "@/components/v2/stage-rules/stage-row-model";
 import { Modal } from "@/components/modal";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { DocumentsMenu } from "@/components/v2/board/documents-menu";
@@ -297,13 +296,14 @@ interface Props {
    *  predate this field. */
   rosterDrift?: Record<string, RosterDrift>;
   canEdit: boolean;
-  /** The division's sport — gates the per-stage "Match format" row, which
-   *  renders only for `STAGE_RULES_SPORTS` (the server 400s
-   *  `SPORT_NOT_SUPPORTED` for anything else). Optional for the same reason
-   *  `venues`/`phase` are: a dozen pre-existing `stages-panel-*.test.tsx`
-   *  files build props without it, and an absent sport renders no row, which
-   *  is the safe direction. */
+  /** The division's sport. Every sport has the per-stage rules row since W2c Task 17 (which fields it shows is the
+   *  engine's `ruleKeys`, not a list of sports here). Optional for the same reason `venues`/`phase` are: a dozen
+   *  pre-existing `stages-panel-*.test.tsx` files build props without it, and an absent sport renders no row, which is
+   *  the safe direction. */
   sportKey?: string;
+  /** The division's variant key (`divisions.variant_key`): narrows the stage's rule fields and names its preset. Null
+   *  or absent is "not narrowed", the engine's own rule. */
+  variantKey?: string | null;
   /** The division's `config` — the base the stage's `rules` fragment overlays.
    *  Needed because the format row's SUMMARY must state the number the stage
    *  will actually be played at, which for an inherited stage lives entirely
@@ -483,7 +483,7 @@ export function boardSlotOptionsFor(
  *  whole panel every second. */
 const RUN_SHEET_NOW_TICK_MS = 60_000;
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, divisionConfig = {}, formatLockedStageIds = [], tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, openRounds, onlineAwaitsStart = false, arbiterHref = null }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, variantKey = null, divisionConfig = {}, formatLockedStageIds = [], tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, openRounds, onlineAwaitsStart = false, arbiterHref = null }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -599,6 +599,28 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
   // tick, so the NOW line and "result missing" advance on their own. Declared
   // above the empty-stages early return, as every hook must be.
   const nowMs = useNow(RUN_SHEET_NOW_TICK_MS);
+
+  /** Show one stage's fixtures in the run sheet: filter it to the stage, and scroll it into view. The stage card's "View
+   *  N fixtures" control and the rules row's lock line ("See the fixtures") are the same gesture. */
+  function showStageFixtures(stageId: string) {
+        setStageFilter(stageId);
+        // ...and clear the TYPE filter in the same gesture.
+        // The label counts `stageFixtures.length`, which is the
+        // whole stage — but `keep()` in run-sheet.tsx ANDs the
+        // stage dimension with the type ladder, and on match day
+        // `filter` initialises to "today". A knockout stage
+        // playing tomorrow therefore advertised "View 12
+        // fixtures" and delivered "No fixtures match Today":
+        // the control promised 12 and showed 0. Sending the
+        // organiser somewhere empty is worse than not offering
+        // the trip, so the control makes its own label true.
+        setFilter("all");
+        requestAnimationFrame(() => {
+          document
+            .querySelector('[data-testid="run-sheet"]')
+            ?.scrollIntoView({ block: "start", behavior: "smooth" });
+        });
+  }
 
   async function undoLast() {
     setError(null);
@@ -1231,29 +1253,32 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     just below. */}
                 {!canEdit && unscheduledBadge}
 
-                {/* Per-stage match format (design 2026-09-17 §T5, owner ruling
-                    D7 "Option A", 2026-09-18): one collapsed line in the card
-                    body, Edit expands `MatchRuleFields` in place on the
-                    `AddMatchForm` precedent above. Deliberately NOT on
-                    StageRail — that rail is a list of irreversible stage
-                    actions (Generate / Complete / Delete) and Best-of is a
-                    reversible setting the API refuses outright once the stage
-                    has started. Adds NO width-conditional classes: the field
-                    grid's own small-screen column rule does the phone
-                    stacking, so this card keeps its property of having no
-                    phone branch at all. (Spelling the class names out here
-                    would feed the Tailwind scanner, which reads comments and
-                    emits junk CSS for anything class-shaped.) */}
-                {sportKey !== undefined && STAGE_RULES_SPORTS.has(sportKey) && (
+                {/* Per-stage rules (design 2026-09-17 §T5, owner ruling D7 "Option A",
+                    2026-09-18; W2c Task 17 extends the row to every sport, owner
+                    pick A on mockup S1): one collapsed line in the card body, Edit
+                    expands the grouped fields in place on the `AddMatchForm`
+                    precedent above. Deliberately NOT on StageRail — that rail is a
+                    list of irreversible stage actions (Generate / Complete /
+                    Delete) and the rules are a reversible setting the API refuses
+                    outright once the stage has started. One DOM at every width:
+                    the field sections are plain blocks and each section's grid
+                    stacks on a phone, so this card keeps its property of having no
+                    phone branch at all. (Spelling the class names out here would
+                    feed the Tailwind scanner, which reads comments and emits junk
+                    CSS for anything class-shaped.) */}
+                {sportKey !== undefined && (
                   <StageFormatRow
                     msg={msg}
                     stageId={stage.id}
                     sportKey={sportKey}
+                    kind={stage.kind as StageKind}
+                    variantKey={variantKey}
                     divisionConfig={divisionConfig}
                     stageConfig={stage.config}
                     locked={formatLockedStageIds.includes(stage.id)}
                     canEdit={canEdit}
                     onSaved={() => router.refresh()}
+                    onSeeFixtures={() => showStageFixtures(stage.id)}
                   />
                 )}
 
@@ -1349,25 +1374,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                   <button
                     type="button"
                     data-testid="stage-view-fixtures"
-                    onClick={() => {
-                      setStageFilter(stage.id);
-                      // ...and clear the TYPE filter in the same gesture.
-                      // The label counts `stageFixtures.length`, which is the
-                      // whole stage — but `keep()` in run-sheet.tsx ANDs the
-                      // stage dimension with the type ladder, and on match day
-                      // `filter` initialises to "today". A knockout stage
-                      // playing tomorrow therefore advertised "View 12
-                      // fixtures" and delivered "No fixtures match Today":
-                      // the control promised 12 and showed 0. Sending the
-                      // organiser somewhere empty is worse than not offering
-                      // the trip, so the control makes its own label true.
-                      setFilter("all");
-                      requestAnimationFrame(() => {
-                        document
-                          .querySelector('[data-testid="run-sheet"]')
-                          ?.scrollIntoView({ block: "start", behavior: "smooth" });
-                      });
-                    }}
+                    onClick={() => showStageFixtures(stage.id)}
                     className="flex min-h-11 w-full items-center gap-1 px-4 py-2 text-left text-xs font-semibold text-purple-700 hover:text-purple-800"
                   >
                     {msgPlural("schedule.stage.viewFixtures", stageFixtures.length)}
@@ -2215,7 +2222,8 @@ function AddMatchForm({
 }
 
 /**
- * The stage card's "Match format" row (design §T5, owner ruling D7 "Option A").
+ * The stage card's rules row (design §T5, owner ruling D7 "Option A"; W2c Task 17 extends it to every sport and adds
+ * Deciders, If abandoned and the lock line, owner pick A on mockup S1 and S4).
  *
  * THE SUBTLE PART, and the reason this component exists rather than a few
  * inline lines: `hydrateRuleValues` is called with TWO DIFFERENT INPUTS here,
@@ -2233,26 +2241,36 @@ function AddMatchForm({
  *
  * A future reader will see one function called twice and want to simplify it.
  * Don't.
+ *
+ * What a Save sends is only what the organiser CHANGED, and the endpoint merges it (`stageFormatSaveFragment`).
  */
 function StageFormatRow({
   msg,
   stageId,
   sportKey,
+  kind,
+  variantKey,
   divisionConfig,
   stageConfig,
   locked,
   canEdit,
   onSaved,
+  onSeeFixtures,
 }: {
   msg: Msg;
   stageId: string;
   sportKey: string;
+  kind: StageKind;
+  variantKey: string | null;
   divisionConfig: Record<string, unknown>;
   stageConfig: Record<string, unknown>;
   locked: boolean;
   canEdit: boolean;
   onSaved: () => void;
+  /** The lock line's link: show this stage's fixtures in the run sheet. */
+  onSeeFixtures: () => void;
 }) {
+  const module = useMemo(() => moduleFor(sportKey), [sportKey]);
   const [open, setOpen] = useState(false);
   const [values, setValues] = useState<Record<string, string>>({});
   /** What the editor was opened with — the save path diffs against this so
@@ -2276,7 +2294,20 @@ function StageFormatRow({
   // SUMMARY — effective config. See the header.
   const effective = useMemo(() => ({ ...divisionConfig, ...rules }), [divisionConfig, rules]);
   const headline = stageFormatHeadline(sportKey, effective);
+  // The rules this stage would store if Save were pressed now, for the notice while the editor is open: the stored
+  // rules with the fragment a Save would send merged in (the endpoint's own merge, `mergedStageRules`).
+  const noticeRules = useMemo(
+    () => (open ? (mergedStageRules(rules, stageFormatSaveFragment(sportKey, rules, opened, values, divisionConfig)) ?? {}) : rules),
+    [open, rules, sportKey, opened, values, divisionConfig],
+  );
+  const resolved = useMemo(
+    () => (module === null ? null : resolvedStageCfg(module, divisionConfig, kind, noticeRules)),
+    [module, divisionConfig, kind, noticeRules],
+  );
 
+  if (module === null) return null;
+
+  const readOnly = locked || !canEdit;
   const state = locked ? "locked" : overridden ? "overridden" : "inherited";
   const clause = msg(
     locked
@@ -2285,6 +2316,7 @@ function StageFormatRow({
         ? "schedule.stageFormat.overridden"
         : "schedule.stageFormat.inherited",
   );
+  const preset = overridden && isStagePreset(module, kind, variantKey, rules);
 
   function openEditor() {
     // FRAGMENT, never `effective`. See the header. The fragment IN FORCE: what the last save answered while the props
@@ -2300,10 +2332,9 @@ function StageFormatRow({
     setSaving(true);
     setError(null);
     try {
-      // Always a fragment object, NEVER `null`: `{rules: null}` clears the
-      // override and is reserved for the explicit "Use division format"
-      // control below. A Save that reached it would turn "I changed one field"
-      // into "I cleared everything".
+      // Always a non-empty fragment object, NEVER `null` or `{}`: either clears the override and is reserved for the
+      // explicit "Use division rules" control below. A Save that reached it would turn "I changed one field" into "I
+      // cleared everything" (`stageFormatSaveFragment` falls back to the stored fragment rather than send an empty one).
       const out = await apiV1<{ rules: Record<string, unknown> | null }>(`/api/v1/stages/${stageId}/rules`, {
         method: "PUT",
         json: { rules: stageFormatSaveFragment(sportKey, rules, opened, values, divisionConfig) },
@@ -2338,7 +2369,7 @@ function StageFormatRow({
   }
 
   return (
-    <>
+    <div data-testid={`stage-format-row-${stageId}`}>
       <div
         className="border-b border-slate-100 px-4 py-3"
         data-testid="stage-format"
@@ -2351,7 +2382,15 @@ function StageFormatRow({
           <span className="min-w-0 text-xs text-slate-600" data-testid="stage-format-summary">
             {headline === null ? clause : `${headline} · ${clause}`}
           </span>
-          {canEdit && !locked && (
+          {preset && (
+            <span
+              className="rounded-full border border-teal-700/30 bg-teal-50 px-2 py-0.5 text-[11px] text-teal-900"
+              data-testid="stage-format-preset"
+            >
+              {msg("stageRules.preset.knockout", { sport: sportLabel(sportKey, msg) })}
+            </span>
+          )}
+          {!locked && canEdit && (
             <button
               type="button"
               className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
@@ -2359,6 +2398,16 @@ function StageFormatRow({
               onClick={() => (open ? setOpen(false) : openEditor())}
             >
               {msg(open ? "schedule.cancel" : "schedule.stageFormat.edit")}
+            </button>
+          )}
+          {readOnly && (
+            <button
+              type="button"
+              className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
+              data-testid="stage-format-view"
+              onClick={() => (open ? setOpen(false) : openEditor())}
+            >
+              {msg(open ? "schedule.close" : "stageRules.view")}
             </button>
           )}
           {canEdit && !locked && overridden && !open && (
@@ -2373,48 +2422,66 @@ function StageFormatRow({
             </button>
           )}
         </div>
+        {locked && (
+          // S4 (owner pick A on the locks mockup): say it before they try. The server still refuses if anyone gets past
+          // it (STAGE_FORMAT_LOCKED), and the scorer can still change one unstarted match.
+          <p className="mt-2 text-xs text-slate-700" data-testid="stage-format-locked">
+            <span aria-hidden="true">🔒 </span>
+            {msg("stageRules.locked")}.{" "}
+            <button type="button" className="font-semibold text-purple-700 underline underline-offset-2" onClick={onSeeFixtures}>
+              {msg("stageRules.lockedLink")}
+            </button>
+          </p>
+        )}
         {error !== null && !open && <p className="mt-1 text-xs text-red-600">{error}</p>}
+        {!open && (
+          <div className="mt-2">
+            <DecidersNotice module={module} kind={kind} resolved={resolved} />
+          </div>
+        )}
       </div>
 
       {open && (
-        <div className="border-b border-dashed border-slate-200 bg-slate-50/60 px-4 py-3">
-          {/* `MatchRuleFields` unchanged, and unwrapped: its own
-              `grid gap-4 sm:grid-cols-3` is what stacks these fields on a
-              phone, so nothing here needs a width class. */}
-          {/* `inherited`: the fragment's blanks fall back to the DIVISION, so
-              a stage that names no best-of but inherits best of 1 still gets
-              the single "Points to win" field (owner ruling 2026-09-25). */}
-          <MatchRuleFields
+        <div className="space-y-3 border-b border-dashed border-slate-200 bg-slate-50/60 px-4 py-3" data-testid="stage-format-editor">
+          {/* `inherited`: the fragment's blanks fall back to the DIVISION, so a stage that names no best-of but
+              inherits best of 1 still gets the single "Points to win" field (owner ruling 2026-09-25). */}
+          <StageRuleFields
             sportKey={sportKey}
+            module={module}
+            kind={kind}
+            variant={variantKey}
             values={values}
             onChange={setValues}
-            disabled={saving}
-            inherited={divisionConfig}
+            disabled={saving || readOnly}
+            divisionConfig={divisionConfig}
           />
-          <div className="mt-3 flex flex-wrap items-center gap-3">
-            <button
-              type="button"
-              className="btn btn-primary min-h-11 px-3 py-1.5 text-xs"
-              data-testid="stage-format-save"
-              disabled={saving}
-              onClick={() => void save()}
-            >
-              {saving ? msg("schedule.working") : msg("schedule.stageFormat.save")}
-            </button>
-            <button
-              type="button"
-              className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
-              disabled={saving}
-              onClick={() => setOpen(false)}
-            >
-              {msg("schedule.cancel")}
-            </button>
-          </div>
-          <p className="mt-1 text-xs text-slate-500">{msg("schedule.stageFormat.hint")}</p>
-          {error !== null && <p className="mt-1 text-xs text-red-600">{error}</p>}
+          <DecidersNotice module={module} kind={kind} resolved={resolved} />
+          {!readOnly && (
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                className="btn btn-primary min-h-11 px-3 py-1.5 text-xs"
+                data-testid="stage-format-save"
+                disabled={saving}
+                onClick={() => void save()}
+              >
+                {saving ? msg("schedule.working") : msg("schedule.stageFormat.save")}
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
+                disabled={saving}
+                onClick={() => setOpen(false)}
+              >
+                {msg("schedule.cancel")}
+              </button>
+            </div>
+          )}
+          {!readOnly && <p className="text-xs text-slate-500">{msg("schedule.stageFormat.hint")}</p>}
+          {error !== null && <p className="text-xs text-red-600">{error}</p>}
         </div>
       )}
-    </>
+    </div>
   );
 }
 
@@ -2465,42 +2532,11 @@ export function stageFormatEditorValues(
 }
 
 /**
- * The fragment a Save actually PUTs, diffed against what the editor OPENED
- * with. "The organiser touched nothing" must never produce a clear.
- *
- * `buildRuleOverride` is not a total inverse of the stored fragment: a stored
- * value that no field can hydrate — a tennis `set` whose shape matches none of
- * the three declared options, say — comes back from `hydrateRuleValues` as
- * `undefined`, so a rebuilt fragment would silently DROP it. On the division
- * editor that is cosmetic, because its PATCH is built over a `{...config}`
- * base. Here it is data loss: this endpoint takes a FRAGMENT, where an omitted
- * key means "inherit the division".
- *
- * So when nothing was touched, the stored fragment is re-sent verbatim — a
- * genuine no-op. Only an actual edit goes through `buildRuleOverride`.
- * Clearing is NOT reachable from here at all; `{rules: null}` belongs to the
- * explicit "Use division format" control.
- *
- * One exception to "verbatim" (owner ruling 2026-09-25): on an effective best
- * of 1 the editor shows a single points field reading `finalSetTo`, and every
- * save writes that number to both keys — so a stored pair that disagrees is
- * aligned even when nothing was touched (`alignBestOfOnePoints`). `inherited`
- * is the division config, for the stage that names no best-of of its own.
+ * The fragment a Save PUTs. It lives in `stage-rules/stage-row-model.ts` (pure, with its unit killers) and is
+ * re-exported so the panel's tests and the row keep one import. See there for the rules: only what changed, a blanked
+ * field as null, an untouched save re-sends the stored fragment verbatim, never an empty one.
  */
-export function stageFormatSaveFragment(
-  sportKey: string,
-  stored: Record<string, unknown>,
-  opened: Record<string, string>,
-  values: Record<string, string>,
-  inherited: Record<string, unknown> = {},
-): Record<string, unknown> {
-  const untouched =
-    Object.keys(opened).length === Object.keys(values).length &&
-    Object.keys(opened).every((k) => opened[k] === values[k]);
-  return untouched
-    ? alignBestOfOnePoints(sportKey, stored, inherited)
-    : buildRuleOverride(sportKey, values, inherited);
-}
+export { stageFormatSaveFragment };
 
 /**
  * "Best of 3" for the summary line — the `bestOf` field's OWN option label,

@@ -87,20 +87,16 @@ export function showsOnePointsField(
  *  best of 1 — the table without `setTo` and with `finalSetTo` relabelled. The
  *  table is never mutated; the relabelled field is a copy.
  *
- *  A `sequence` field (an ordered list, chess's tie-break rungs) is NOT shown:
- *  the control that edits one is W2c Task 17's, and until it exists the grid
- *  would render it as a single `<select>`, so an organiser could save a list of
- *  one rung — which dead-ends the scorer on a drawn knockout game (the pad
- *  offers only that rung). It stays in the table, so `hydrateRuleValues` and
- *  `buildRuleOverride` still carry a saved list through every save (an editor
- *  that hides a field must not drop what it holds). TASK 17 OWNS UN-HIDING IT:
- *  delete the `sequence` filter below when its control lands. */
+ *  A `sequence` field (an ordered list, chess's tie-break rungs) IS shown, since W2c Task 17 built the control that
+ *  edits one (`components/v2/stage-rules/sequence-field.tsx`). Until then it was filtered out: the grid would have
+ *  rendered it as a single `<select>`, so an organiser could save a list of one rung, which dead-ends the scorer on a
+ *  drawn knockout game (the pad offers only that rung). */
 export function visibleRuleFields(
   sportKey: string,
   values: Record<string, string>,
   inherited: Record<string, unknown> = {},
 ): RuleField[] {
-  const fields = rulesFor(sportKey).filter((f) => f.kind !== "sequence");
+  const fields = rulesFor(sportKey);
   if (!showsOnePointsField(sportKey, values, inherited)) return fields;
   return fields
     .filter((f) => f.key !== BEST_OF_ONE_PAIR.shadow)
@@ -183,14 +179,6 @@ export function hydrateRuleValues(sportKey: string, config: unknown): Record<str
   return values;
 }
 
-/** The four sports whose stages may override match format (design D2a). */
-export const STAGE_RULES_SPORTS: ReadonlySet<string> = new Set([
-  "tennis",
-  "badminton",
-  "tabletennis",
-  "volleyball",
-]);
-
 /** Every value a field can produce, so a build() that BRANCHES on its value
  *  cannot hide a config key behind an option we never probed. */
 function probeValuesFor(field: RuleField): string[] {
@@ -223,7 +211,7 @@ export function configKeysFor(sportKey: string): ReadonlySet<string> {
 
 /**
  * The picker label for a stored option VALUE — this sport's own if it declares
- * one, otherwise a peer in-scope sport's.
+ * one, otherwise a peer sport's.
  *
  * Two surfaces show a value the sport's own picker cannot offer: the stage
  * card's summary line (`stageFormatHeadline`) and the synthetic `<option>`
@@ -242,11 +230,13 @@ export function configKeysFor(sportKey: string): ReadonlySet<string> {
  * in-scope sport declares at all, such as 9, which falls through to the bare
  * value.
  *
- * The borrow is deliberately narrow. It happens only BETWEEN the four
- * stage-rules sports, and only from a peer that labels the FIELD identically —
- * so the day a sport relabels `bestOf`, the line falls back to the bare value
- * instead of rendering another sport's noun. (Carrom calls it "Best of
- * (games)"; it is out of scope and out of the loop either way.) Returns
+ * The borrow is deliberately narrow. It happens only from a peer that labels
+ * the FIELD identically — so the day a sport relabels `bestOf`, the line falls
+ * back to the bare value instead of rendering another sport's noun. (Carrom
+ * calls it "Best of (games)", so it neither lends to nor borrows from the set
+ * sports.) Until W2c Task 17 the peers were the four stage-rules sports
+ * (`STAGE_RULES_SPORTS`, deleted with the gate); every sport is a peer now, and
+ * the identical-label rule is what keeps that safe. Returns
  * `undefined` rather than a string when nothing declares the value, because
  * inventing copy for a value the table does not declare is a second lie — the
  * caller renders the raw value.
@@ -260,8 +250,7 @@ export function ruleOptionLabel(
   if (field === undefined) return undefined;
   const own = field.options?.find((o) => o.value === value)?.label;
   if (own !== undefined) return own;
-  if (!STAGE_RULES_SPORTS.has(sportKey)) return undefined;
-  const peers = [...STAGE_RULES_SPORTS]
+  const peers = Object.keys(SPORT_RULES)
     .filter((k) => k !== sportKey)
     .flatMap((k) => rulesFor(k).filter((f) => f.key === fieldKey));
   return borrowOptionLabel(field, peers, value);

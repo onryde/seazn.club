@@ -1,7 +1,7 @@
 // Football's curated match-rule fields. Client-safe: no "use client", no JSX,
 // no `@/components` or `@/server` import.
 import { football } from "@seazn/engine/sports/football";
-import { abandonOptions } from "./shared.ts";
+import { abandonOptions, readBool, readNumber, readText, readShape } from "./shared.ts";
 import type { RuleField } from "./types.ts";
 
 /** R3.5 review F5 — the shoot-out points pair's shared "what should be
@@ -40,6 +40,10 @@ export function shootoutPointsPatch(values: Record<string, string>): Record<stri
   };
 }
 
+/** Football's extra time as the field writes it: two extra halves of 15 minutes, on or off. `read` holds only that exact
+ *  shape (a hand-edited 20-minute extra time hydrates blank rather than being rounded to "on" and rewritten). */
+const EXTRA_TIME = { on: { enabled: true, halfMinutes: 15 }, off: { enabled: false, halfMinutes: 15 } } as const;
+
 export const FOOTBALL_RULES: RuleField[] = [
   {
     key: "halfMinutes",
@@ -49,6 +53,7 @@ export const FOOTBALL_RULES: RuleField[] = [
     min: 5,
     max: 60,
     build: (v) => ({ halfMinutes: Number(v) }),
+    read: readNumber("halfMinutes"),
   },
   {
     key: "extraTime",
@@ -56,7 +61,8 @@ export const FOOTBALL_RULES: RuleField[] = [
     label: "Extra time",
     help: "Knockout fixtures only.",
     kind: "bool",
-    build: (v) => ({ extraTime: { enabled: v === "on", halfMinutes: 15 } }),
+    build: (v) => ({ extraTime: { ...EXTRA_TIME[v === "on" ? "on" : "off"] } }),
+    read: (config) => readShape(EXTRA_TIME, config.extraTime),
   },
   {
     key: "shootout",
@@ -65,6 +71,7 @@ export const FOOTBALL_RULES: RuleField[] = [
     help: "Penalties decide a level knockout match.",
     kind: "bool",
     build: (v) => ({ shootout: v === "on" }),
+    read: readBool("shootout"),
   },
   // W2c FB-SO-1 — the kicks each side takes before sudden death. A match-scope key the engine bounds 1–10. A blank box is
   // 5 (the engine's SHOOTOUT_ATTEMPTS_DEFAULT; the stage's own value, once Task 12 writes the knockout preset into a new
@@ -78,6 +85,7 @@ export const FOOTBALL_RULES: RuleField[] = [
     min: 1,
     max: 10,
     build: (v) => ({ shootoutAttempts: Number(v) }),
+    read: readNumber("shootoutAttempts"),
   },
   // R3.5/Task I — cfg.points.shootoutWin/shootoutLoss have worked in the
   // engine since spec 04 (standingsDelta, football.ts) but had ZERO
@@ -144,6 +152,7 @@ export const FOOTBALL_RULES: RuleField[] = [
     min: 5,
     max: 11,
     build: (v) => ({ teamSize: Number(v) }),
+    read: readNumber("teamSize"),
   },
   {
     key: "maxSubs",
@@ -154,6 +163,7 @@ export const FOOTBALL_RULES: RuleField[] = [
     min: 0,
     max: 10,
     build: (v) => ({ maxSubs: Number(v) }),
+    read: readNumber("maxSubs"),
   },
   {
     key: "subWindows",
@@ -164,6 +174,7 @@ export const FOOTBALL_RULES: RuleField[] = [
     min: 0,
     max: 10,
     build: (v) => ({ subWindows: Number(v) }),
+    read: readNumber("subWindows"),
   },
   {
     key: "sinBinMinutes",
@@ -173,6 +184,7 @@ export const FOOTBALL_RULES: RuleField[] = [
     min: 1,
     max: 15,
     build: (v) => ({ sinBinMinutes: Number(v) }),
+    read: readNumber("sinBinMinutes"),
   },
   {
     key: "abandon",
@@ -181,5 +193,6 @@ export const FOOTBALL_RULES: RuleField[] = [
     kind: "select",
     options: abandonOptions(football),
     build: (v) => ({ abandonPolicy: v }),
+    read: readText("abandonPolicy"),
   },
 ];

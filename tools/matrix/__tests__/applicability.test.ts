@@ -13,10 +13,11 @@ import { EngineError, StageKind } from "@seazn/engine/core";
 import { BRACKET_STAGE_KINDS, withdrawTableEntrant } from "@seazn/engine/competition";
 import { generatePagePlayoff, generateStepladder } from "@seazn/engine/scheduling";
 import { describe, expect, it } from "vitest";
-import { configKeysFor } from "../../../apps/web/src/lib/match-rules/index.ts";
+import { SPORT_RULES, configKeysFor } from "../../../apps/web/src/lib/match-rules/index.ts";
+import { stageKeysFor } from "@seazn/engine/sport";
 import { ROW_KEYS, SPORT_KEYS, stagesForRow, type RowKey } from "../lib/catalogue.ts";
 import {
-  ABANDON_RESULTS, DECIDERS, LEVEL_PROBES, MissingRule, RULES, TABLE_KINDS, UnknownScenario, UnresolvedFeeder, cellFacts, decide, gapReason, planL3, rowCounts, scenarioCounts, stageFactsOf,
+  ABANDON_RESULTS, DECIDERS, LEVEL_PROBES, MissingRule, P6_SPORTS, RULES, TABLE_KINDS, UnknownScenario, UnresolvedFeeder, cellFacts, decide, gapReason, planL3, rowCounts, scenarioCounts, stageFactsOf,
   type CellFacts, type PlannedCase, type Rule, type WitnessCell,
 } from "../lib/applicability.ts";
 import { foldStream } from "../lib/fold.ts";
@@ -783,5 +784,33 @@ describe("cellFacts", () => {
     }
     expect(judged).toBe(SPORT_KEYS.length);
     expect(cellFacts("ko_plate", "generic").stages[1]!.takes).toEqual(["roundLosers"]);
+  });
+});
+
+// W2c Task 17 deleted `STAGE_RULES_SPORTS` (the stage rules API now takes every sport), which P6 used as its population.
+// P6 is the per-stage BEST-OF override, so its population is the sports that have a best-of for a stage to set. The set is
+// a constant in applicability.ts; this pins it to the engine's and the web table's declarations, so it cannot drift.
+describe("P6 (the per-stage best-of override) applies to the sports that have a best-of stage rule", () => {
+  // carrom declares `bestOf` as a stage key and has a field for it, but the matrix has no best-of-final body for it (its
+  // match is frames, not sets); named here so a NEW sport with a best-of stage field is a failure to decide, not a silent drop.
+  const NOT_YET = ["carrom"];
+
+  it("the rule applies exactly to P6_SPORTS across the whole registry (counted)", () => {
+    let judged = 0;
+    for (const s of SPORT_KEYS) {
+      expect(RULES.P6!.when(cellFacts("knockout", s)), s).toBe(P6_SPORTS.has(s));
+      judged++;
+    }
+    expect(judged).toBe(SPORT_KEYS.length);
+    expect(P6_SPORTS.size).toBeGreaterThan(0);
+    expect(P6_SPORTS.size).toBeLessThan(SPORT_KEYS.length);
+  });
+
+  it("P6_SPORTS plus the named gaps are exactly the sports whose stage keys include bestOf and that have a field for it", () => {
+    const withBestOf = SPORT_KEYS.filter(
+      (s) => stageKeysFor(sportModule(s), "knockout", null).includes("bestOf") && (SPORT_RULES[s] ?? []).some((f) => f.key === "bestOf"),
+    );
+    expect([...withBestOf].sort()).toEqual([...P6_SPORTS, ...NOT_YET].sort());
+    for (const s of NOT_YET) expect(P6_SPORTS.has(s), s).toBe(false);
   });
 });

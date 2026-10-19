@@ -6,7 +6,7 @@
 // guards live in applicability.test.ts. Pure and deterministic (R11).
 import { BRACKET_STAGE_KINDS } from "@seazn/engine/competition";
 import { StageKind } from "@seazn/engine/core";
-import { STAGE_RULES_SPORTS, showsOnePointsField } from "../../../apps/web/src/lib/match-rules/index.ts";
+import { showsOnePointsField } from "../../../apps/web/src/lib/match-rules/index.ts";
 import { ROW_KEYS, SPORT_KEYS, cellId, stagesForRow, type RowKey } from "./catalogue.ts";
 import { isLonePagePlayoff } from "./field-size.ts";
 import { expectedGate, type FormatGate } from "./format-gates-copy.ts";
@@ -268,6 +268,12 @@ const rule = (when: Predicate, reason: string, keep: W | readonly [W, ...W[]], d
   return Object.freeze({ when, reason, variantDependent, witness: Object.freeze({ keep: cellOf(first), alsoKeep: Object.freeze(rest.map(cellOf)), drop: cellOf(drop) }) });
 };
 
+/** P6 is the per-stage BEST-OF override ("a best-of-3 final"): it runs for the four sets-based sports, whose match
+ *  format is a best-of the stage can set. It used to read `STAGE_RULES_SPORTS`, the list of sports the stage rules API
+ *  took; W2c Task 17 opened the stage rules to every sport and deleted the list, but this scenario is about the best-of
+ *  override, so its population stays these four (a test pins each to a sport whose stage rule fields carry `bestOf`). */
+export const P6_SPORTS: ReadonlySet<string> = new Set(["badminton", "tabletennis", "tennis", "volleyball"]);
+const P6_REASON = "the sport has no best-of for a stage to override (the per-stage best-of final is for the four sets-based sports)";
 const T = "league|generic";
 const KO = "knockout|generic";
 const LADDER = "ladder|generic";
@@ -333,7 +339,7 @@ export const RULES: Readonly<Record<string, Rule>> = Object.freeze({
   P2: rule(tableFed, "no later stage fed by a points table: nothing qualifies from a table", "groups_ko|generic", "qualifying_main|generic"),
   P3: ALWAYS, P4: ALWAYS, P5a: ALWAYS,
   P5b: rule(hasKind("swiss"), "Pair next round (and its undo, /unpair) exists only for swiss stages", "swiss|generic", T),
-  P6: rule((f) => STAGE_RULES_SPORTS.has(f.sport), "the sport has no per-stage rules (STAGE_RULES_SPORTS)", "knockout|badminton", "knockout|football"),
+  P6: rule((f) => P6_SPORTS.has(f.sport), P6_REASON, "knockout|badminton", "knockout|football"),
   P7: rule(ranked, "bracket-only row: there is no rank table to override", T, KO),
   Q1a: rule(tableFed, "no later stage fed by a points table: no qualifier is decided by lots", "groups_ko|generic", "ko_plate|generic"),
   Q1b: rule(tableFed, "no later stage fed by a points table: no qualifier is decided by the organiser", "groups_ko|generic", KO),

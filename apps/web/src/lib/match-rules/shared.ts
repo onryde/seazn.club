@@ -18,6 +18,33 @@ export const readNumber =
   (config: Record<string, unknown>): string | undefined =>
     typeof config[key] === "number" ? String(config[key]) : undefined;
 
+/** The inverse of `{ <key>: v === "on" }`: "on" / "off" for a boolean the config carries, blank for anything else (a
+ *  string "true" is not a boolean, and a missing key is not "off"). */
+export const readBool =
+  (key: string) =>
+  (config: Record<string, unknown>): string | undefined =>
+    config[key] === true ? "on" : config[key] === false ? "off" : undefined;
+
+/** The inverse of `{ <key>: v }` for a select whose value is a string: the string the config carries, else blank. */
+export const readText =
+  (key: string) =>
+  (config: Record<string, unknown>): string | undefined =>
+    typeof config[key] === "string" ? config[key] : undefined;
+
+/** The nested object at `key`, or undefined when the config carries anything else there (null, an array, a scalar). */
+export function recordAt(config: Record<string, unknown>, key: string): Record<string, unknown> | undefined {
+  const v = config[key];
+  return typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined;
+}
+
+/** The inverse of a `build` that writes one NUMBER leaf of a nested object (`periods.minutes`, `clock.increment`). */
+export const readNestedNumber =
+  (key: string, leaf: string) =>
+  (config: Record<string, unknown>): string | undefined => {
+    const n = recordAt(config, key)?.[leaf];
+    return typeof n === "number" ? String(n) : undefined;
+  };
+
 /**
  * `shapes[v] ?? fallback` is NOT a fall-through for an inherited key: a plain
  * object answers `constructor`, `toString` and friends from `Object.prototype`,
