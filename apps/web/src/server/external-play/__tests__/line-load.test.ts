@@ -44,6 +44,7 @@ import {
   judgeCosts,
   nettingOwed,
   peakPerSecond,
+  warningStats,
   poolOf,
   slowBound,
   stayCosts,
@@ -353,6 +354,21 @@ describe("ETA shown against the wait that happened, and the busiest second", () 
     expect(etaStats([]).medianShownOverActual).toBeNull();
     // A zero wait is out of the median: ratios 0.5 and 2 give 0.5 (the lower middle), not the 2 an Infinity would pull in.
     expect(etaStats([{ shownS: 10, actualS: 20 }, { shownS: 40, actualS: 20 }, { shownS: 10, actualS: 0 }]).medianShownOverActual).toBe(0.5);
+  });
+
+  it("the mayTimeOut warning as the players saw it: answers with a line, answers that warned, players who saw it at least once; an answer with no line is not counted (hand-counted)", () => {
+    const line = (mayTimeOut: boolean) => ({ line: { mayTimeOut } });
+    const none = { line: null };
+    const got = warningStats([
+      [none, line(false), line(true), line(true)], // two warned answers, one player
+      [line(false), line(false)], // never warned
+      [none, none], // never held: no line at all
+      [line(true)], // a second player who saw it
+    ]);
+    expect(got).toEqual({ answersWithALine: 6, warnedAnswers: 3, playersWithALine: 3, playersWarned: 2 });
+    // The empty case: nobody was held, and the report says so as zeros rather than as a missing figure.
+    expect(warningStats([])).toEqual({ answersWithALine: 0, warnedAnswers: 0, playersWithALine: 0, playersWarned: 0 });
+    expect(warningStats([[none], []])).toEqual({ answersWithALine: 0, warnedAnswers: 0, playersWithALine: 0, playersWarned: 0 });
   });
 
   it("the peak a second: the busiest whole second and how many seconds had any request", () => {

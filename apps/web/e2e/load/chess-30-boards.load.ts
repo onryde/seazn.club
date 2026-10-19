@@ -129,6 +129,7 @@ import {
   drainOf,
   dryArrivalSpreadS,
   etaStats,
+  warningStats,
   gateLevels,
   heldStays,
   judgeCosts,
@@ -1153,7 +1154,7 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
     const perPlayerCalls = requiredPlayers > 0 ? checkInCalls / requiredPlayers : null;
     const netting = perPlayerCalls === null ? false : nettingOwed(pace.meanS, perPlayerCalls, LOAD_LIMITS.rtkRefillPerS);
 
-    // The ETA a player was shown against the wait that happened (the ETA ends at ADMISSION and is an upper bound, §5.7.9).
+    // The ETA a player was shown against the wait that happened (the ETA ends at ADMISSION and is a conservative estimate, §5.7.9).
     const etaItems = players.flatMap((p) => {
       const t = stayOfPlayer.get(p);
       const firstLine = p.claimLog.find((c) => c.line);
@@ -1263,7 +1264,7 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
       nettingOwed: netting,
       timeToLastSeatS,
       bound: bound ? { ...bound, perPlayer: Math.round(bound.perPlayer * 100) / 100, lag: Math.round(bound.lag * 10) / 10, lagSpec: Math.round(bound.lagSpec * 10) / 10, bound: Math.round(bound.bound * 10) / 10, withinBound: timeToLastSeatS === null ? null : timeToLastSeatS <= bound.bound } : null,
-      eta: { ...eta, items: etaItems.length },
+      eta: { ...eta, items: etaItems.length, warnings: warningStats(players.map((p) => p.claimLog)) },
       busiestSecond: busiest,
       peakTransactionsPerSecond: Math.round(peakXactPerS * 10) / 10,
       line: { rows: lineRows.total, stamped: lineRows.stamped, stampedOnOffOrOptional: stampedOffOrOptional, heldStays: held, minGateLevel: gateLevel?.min ?? null, gateDecisionsWithLevel: gateLevel?.decisions ?? 0 },

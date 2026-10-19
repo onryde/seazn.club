@@ -339,8 +339,8 @@ export function nettingOwed(meanIntervalS: number | null, perPlayer: number, ref
 
 // ───────────────────────────────────────────────────────────────────────────────────────────────────────── ETA shown
 
-/** The ETA a player was first shown against the wait that happened (both seconds; the ETA ends at ADMISSION and is an upper bound by
- *  construction, §5.7.9). `ratios` is shown / actual for the players whose actual wait was above zero. */
+/** The ETA a player was first shown against the wait that happened (both seconds; the ETA ends at ADMISSION and is a conservative
+ *  estimate, not an upper bound by construction: §5.7.9, final review M-2). `ratios` is shown / actual for the players whose actual wait was above zero. */
 export function etaStats(items: readonly { shownS: number; actualS: number }[]): {
   players: number;
   medianShownOverActual: number | null;
@@ -350,9 +350,32 @@ export function etaStats(items: readonly { shownS: number; actualS: number }[]):
   return {
     players: items.length,
     medianShownOverActual: ratios.length === 0 ? null : ratios[Math.max(1, Math.ceil(0.5 * ratios.length)) - 1]!,
-    // The ETA is an UPPER bound: a wait longer than it was shown is a violation, reported.
+    // A wait longer than the ETA shown is reported, not hidden: the ETA is conservative (§5.7.9), and these are the players it fell short for.
     exceeded: items.filter((x) => x.actualS > x.shownS).length,
   };
+}
+
+/** The `mayTimeOut` warning as the players were shown it (spec 5.7.9: it rides on the ETA, so an optimistic ETA delays it). `logs` is
+ *  each player's answers in order; an answer with no `line` (the player was not held) is not counted. Reported with its denominators,
+ *  so "0 warnings" over "0 answers" cannot pass for "0 warnings" over a run where the line formed. */
+export function warningStats(logs: readonly (readonly { line: { mayTimeOut: boolean } | null }[])[]): {
+  answersWithALine: number;
+  warnedAnswers: number;
+  playersWithALine: number;
+  playersWarned: number;
+} {
+  let answersWithALine = 0;
+  let warnedAnswers = 0;
+  let playersWithALine = 0;
+  let playersWarned = 0;
+  for (const log of logs) {
+    const lines = log.flatMap((c) => (c.line ? [c.line] : []));
+    answersWithALine += lines.length;
+    warnedAnswers += lines.filter((l) => l.mayTimeOut).length;
+    if (lines.length > 0) playersWithALine += 1;
+    if (lines.some((l) => l.mayTimeOut)) playersWarned += 1;
+  }
+  return { answersWithALine, warnedAnswers, playersWithALine, playersWarned };
 }
 
 /** Requests per second: the busiest second and how many requests it held. */
