@@ -16,7 +16,7 @@
 //     re-runs token, seat and Lichess reads, so the poll must stop on it.
 import type { CameraAnswer, RoomActAnswer, RoomActBody, RoomClaimAnswer, SeatAnswer } from "./room-api";
 import { optimisticAfterDrop, type OptimisticClock } from "./clock-math";
-import { ROOM_BEING_REPAIRED, type Colour, type LineWire, type RoomGame, type RoomSnapshot } from "./room-snapshot";
+import { ROOM_BEING_REPAIRED, ROOM_SEAT_NO_ACCOUNT, type Colour, type LineWire, type RoomGame, type RoomSnapshot } from "./room-snapshot";
 import { lineOf } from "./line-view";
 
 /** Lichess statuses past which the game is over (LICHESS_STATUSES minus the
@@ -108,6 +108,10 @@ export type RoomState = {
   /** Fix round 4b: the last read (or seat call) found the board being re-paired — it names nobody for now. The
    *  room reads on; the next answered read or seat call says where the player stands. */
   repairing: boolean;
+  /** Review m2 (PR #986): a read or a check-in found the seat tied to no Seazn account (409 ROOM_SEAT_NO_ACCOUNT) - the
+   *  account was untied while the page stayed open. There is no snapshot to read, so the room stops (nothing a poll could
+   *  hear but the same word) and shows its own card; a snapshot that lands (a reload's read) says the seat is back. */
+  noAccount: boolean;
   /** Spec §5.7.3, §6.1 (2): why the player is at the back of the line again. The server says it ONCE, on the first queued
    *  answer of the replacement stay (`line.left`); the card keeps saying it for as long as the line card shows, and the
    *  moment a seat answer is anything but `queued` it is gone. */
@@ -162,6 +166,7 @@ export function initialRoomState(snap: RoomSnapshot, receivedAt: number, grantRe
     grantRefused,
     optimistic: null,
     repairing: false,
+    noAccount: false,
     lineLeft: null,
   };
 }
@@ -241,7 +246,7 @@ export function roomReducer(s: RoomState, e: RoomEvent): RoomState {
   switch (e.type) {
     case "snapshot": {
       const merged = mergeSnapshot(s, e.snap, e.receivedAt);
-      return endNotices(s, merged === s ? s : { ...merged, notFound: false, repairing: false }, true);
+      return endNotices(s, merged === s ? s : { ...merged, notFound: false, repairing: false, noAccount: false }, true);
     }
     case "broadcast":
       return endNotices(s, applyBroadcast(s, e.b, e.receivedAt), false);
@@ -265,7 +270,7 @@ export function roomReducer(s: RoomState, e: RoomEvent): RoomState {
       const queued = lineOf(seat);
       const lineLeft = queued === null ? null : (queued.left ?? s.lineLeft);
       const relink = seat !== null && !seat.seated && (seat.reason === "lichess_link_required" || seat.reason === "lichess_reconsent_required");
-      return { ...merged, seat, lineLeft, pending: s.pending?.kind === "seat" ? null : s.pending, error: relink ? "relink" : null, repairing: false };
+      return { ...merged, seat, lineLeft, pending: s.pending?.kind === "seat" ? null : s.pending, error: relink ? "relink" : null, repairing: false, noAccount: false };
     }
     case "camera_answered": {
       // Only the seat that asked is changed: a seat that has since been refused, or replaced by a claim that carried its
@@ -342,6 +347,8 @@ export const ROOM_REFUSAL_STATUSES: readonly number[] = [401, 403, 404];
  *  409 — reads on, as ever. */
 function roomCallFailed(s: RoomState, status: number, code: string | null): RoomState {
   if (status === 409 && code === ROOM_BEING_REPAIRED) return { ...s, repairing: true };
+  // Review m2: the seat has no account - a card, and the room stops: no read could bring a snapshot.
+  if (status === 409 && code === ROOM_SEAT_NO_ACCOUNT) return { ...s, noAccount: true, polling: false };
   const refused = ROOM_REFUSAL_STATUSES.includes(status);
   return {
     ...s,

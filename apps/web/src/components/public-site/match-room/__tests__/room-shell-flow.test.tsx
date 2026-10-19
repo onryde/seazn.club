@@ -1077,6 +1077,60 @@ describe("fix round 4b: the room reads on through a re-pair, and stops only on a
   });
 });
 
+// Review m2 (PR #986), through the real transport: the account is untied while the page stays open, so a poll (or the
+// check-in) is answered 409 ROOM_SEAT_NO_ACCOUNT. The room shows the no-account card and stops reading; it never polls on
+// forever with a Check in that silently does nothing.
+describe("review m2: a seat tied to no account, met after load", () => {
+  const noAccount = () =>
+    new Response(JSON.stringify({ ok: false, error: { code: "ROOM_SEAT_NO_ACCOUNT", message: "x" }, requestId: "r" }), { status: 409 });
+  const gets = () => calls.filter((c) => c.method === "GET").length;
+
+  it("a poll that hears it: the card in place of the check-in, and no read after it", async () => {
+    getAnswer = () => snap();
+    const island = renderIsland(RoomShell, { initial: snap(), token: "tok", selfPath: "/x" });
+    await settle();
+    expect(screenOf(island), "premise - the check-in, before").toBe("checkin");
+    getAnswer = noAccount;
+    await settle(IDLE_POLL_MS);
+    expect(screenOf(island)).toBe("noAccount");
+    const stoppedAt = gets();
+    for (let i = 0; i < 3; i += 1) await settle(IDLE_POLL_MS);
+    expect(gets(), "the room stopped: nothing more is read").toBe(stoppedAt);
+    expect(screenOf(island), "and the card stays").toBe("noAccount");
+    island.unmount();
+  });
+
+  it("a check-in sent into it: the card at once, the room stopped - not a dead button", async () => {
+    getAnswer = () => snap();
+    const island = renderIsland(RoomShell, { initial: snap(), token: "tok", selfPath: "/x" });
+    await settle();
+    seatAnswers = [noAccount];
+    await roomOf(island).claim();
+    await settle();
+    expect(seatPosts(), "premise - the check-in went").toBe(1);
+    expect(screenOf(island), "the seat's own answer: the card").toBe("noAccount");
+    const stoppedAt = gets();
+    for (let i = 0; i < 3; i += 1) await settle(IDLE_POLL_MS);
+    expect(gets(), "no read after it").toBe(stoppedAt);
+    expect(seatPosts(), "and no second check-in").toBe(1);
+    island.unmount();
+  });
+
+  it("the other 409 still reads on: the re-pair gap is 'repairing' and polling, so the new case did not widen the old", async () => {
+    getAnswer = () => snap();
+    const island = renderIsland(RoomShell, { initial: snap(), token: "tok", selfPath: "/x" });
+    await settle();
+    getAnswer = () =>
+      new Response(JSON.stringify({ ok: false, error: { code: "ROOM_BEING_REPAIRED", message: "x" }, requestId: "r" }), { status: 409 });
+    await settle(IDLE_POLL_MS);
+    expect(screenOf(island)).toBe("repairing");
+    const before = gets();
+    await settle(IDLE_POLL_MS);
+    expect(gets() - before, "still polling").toBe(1);
+    island.unmount();
+  });
+});
+
 // T17B fix 2 (D8a), measured on stg: after the checkmate both cameras kept publishing (white 45 → 71.6 MB) until the
 // sweep's teardown six minutes later, with no <video> on the page. Ruling: when the room reaches a closed or result
 // phase the client leaves the meeting at once (its leave stops every local track: camera-loader.test.ts). The other

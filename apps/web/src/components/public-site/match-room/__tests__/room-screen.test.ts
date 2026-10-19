@@ -278,6 +278,26 @@ describe("roomScreen", () => {
   });
 });
 
+describe("roomScreen — a seat tied to no account, met after load (review m2)", () => {
+  it("its own card in place of the room, whatever the room was showing - check-in, live, a camera refusal, a re-pair - and the 404 still outranks it", () => {
+    let checked = 0;
+    for (const [why, s] of [
+      ["the check-in", st({}, { noAccount: true })],
+      ["a live board", st({ game: GAME }, { noAccount: true })],
+      ["a camera refusal", st({}, { noAccount: true, seat: refused("camera_required") })],
+      ["a Lichess re-link", st({}, { noAccount: true, seat: refused("lichess_link_required") })],
+      ["a board being re-paired", st({}, { noAccount: true, repairing: true })],
+    ] as const) {
+      expect(roomScreen(s).kind, why).toBe("noAccount");
+      expect(roomScreen({ ...s, noAccount: false }).kind, `${why}: the positive`).not.toBe("noAccount");
+      checked += 1;
+    }
+    expect(checked).toBe(5);
+    expect(roomScreen(st({}, { noAccount: true, notFound: true })).kind, "the room's 404 outranks it").toBe("unavailable");
+    expect(roomScreen(st({})).kind, "the empty case: nothing met ⇒ the check-in").toBe("checkin");
+  });
+});
+
 describe("roomScreen — the camera settling (room-shell's context)", () => {
   it("fix round 4b: a board being re-paired shows its own card in place of the (stale) board — check-in, live or held alike — but a stop outranks it", () => {
     let checked = 0;
@@ -391,6 +411,7 @@ describe("the wrong-account card stands where the Lichess link prompt would", ()
       { why: "a camera refusal", state: st(WRONG, { seat: refused("camera_required") }), kind: "cameraRequired" },
       { why: "a re-pair", state: st(WRONG, { repairing: true }), kind: "repairing" },
       { why: "not found", state: st(WRONG, { notFound: true }), kind: "unavailable" },
+      { why: "no account (review m2)", state: st(WRONG, { noAccount: true }), kind: "noAccount" },
     ];
     let checked = 0;
     for (const r of rest) {

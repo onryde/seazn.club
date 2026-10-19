@@ -13,6 +13,7 @@ import type { SeatRefusal } from "./room-snapshot";
 
 export type RoomScreen =
   | { kind: "unavailable" } // card 7
+  | { kind: "noAccount" } // review m2: the seat is tied to no Seazn account (met after load; the page paints it on first load)
   | { kind: "repairing" } // fix round 4b: the organiser is re-pairing the round
   | { kind: "offForClub" } // seam B
   | { kind: "revoked" } // seam A
@@ -91,6 +92,8 @@ export function roomScreen(s: RoomState, ctx: ScreenContext = {}): RoomScreen {
 function baseScreen(s: RoomState, ctx: ScreenContext): RoomScreen {
   const snap = s.snap;
   if (s.notFound) return { kind: "unavailable" };
+  // Review m2: the seat has no account - nothing of the snapshot in hand is the viewer's to act on.
+  if (s.noAccount) return { kind: "noAccount" };
   // Fix round 4b: the board is being re-paired — the snapshot in hand is the OLD pairing (its opponent, its
   // window), so nothing of it is shown until a read of the re-paired board lands.
   if (s.repairing) return { kind: "repairing" };

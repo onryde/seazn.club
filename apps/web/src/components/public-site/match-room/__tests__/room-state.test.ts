@@ -22,7 +22,7 @@ import {
 import type { RoomActBody } from "../room-api";
 import { RoomAct, RoomActOut } from "@/server/api-v1/schemas";
 import { ROUTES } from "@/server/api-v1/openapi";
-import { ROOM_BEING_REPAIRED, type RoomGame, type RoomSnapshot } from "../room-snapshot";
+import { ROOM_BEING_REPAIRED, ROOM_SEAT_NO_ACCOUNT, type RoomGame, type RoomSnapshot } from "../room-snapshot";
 
 // A fixed opening, played by chess.js: FENS[i] is the board after i plies.
 const SCRIPT = ["e2e4", "e7e5", "g1f3", "b8c6", "f1c4", "g8f6", "d2d3", "f8c5"];
@@ -582,6 +582,48 @@ describe("fix round 4b: a board being re-paired never stops the room; a refusal 
     expect([answered.repairing, answered.pending]).toEqual([false, null]);
     const signedOut = roomReducer(sent, { type: "seat_failed", status: 401, code: "UNAUTHORIZED" });
     expect([signedOut.polling, signedOut.notFound, signedOut.pending]).toEqual([false, true, null]);
+  });
+});
+
+// Review m2 (PR #986): a seat tied to no Seazn account is the server's 409 ROOM_SEAT_NO_ACCOUNT. The page paints it on the
+// first load; the room can also MEET it after load (the account untied while the page stayed open), on a read or on a
+// check-in. Like a refusal it stops the room - there is no snapshot to read, and a poll would hear the same word - but it
+// is its own card, not the "not available" 404.
+describe("a seat tied to no account, met after load: the card, the room stopped, and nothing else disturbed", () => {
+  const noAccountRead: RoomEvent = { type: "fetch_failed", status: 409, code: ROOM_SEAT_NO_ACCOUNT };
+
+  it("the empty case: a fresh room has met no such answer", () => {
+    expect(initialRoomState(snap(), T0).noAccount).toBe(false);
+  });
+
+  it("a read that says so ⇒ noAccount, polling OFF, not 'gone', not 're-paired'; a second the same; only a snapshot (a reload's read) ends it", () => {
+    const s1 = roomReducer(initialRoomState(snap(), T0), noAccountRead);
+    expect([s1.noAccount, s1.polling, s1.notFound, s1.repairing, s1.error]).toEqual([true, false, false, false, null]);
+    expect(roomReducer(s1, noAccountRead).noAccount, "a second the same").toBe(true);
+    const back = roomReducer(s1, { type: "snapshot", snap: snap({ serverNow: iso(T0 + 30_000) }), receivedAt: T0 + 30_000 });
+    expect(back.noAccount, "a snapshot lands: the seat has an account again").toBe(false);
+  });
+
+  it("the code is the 409's alone, and it is not a re-pair: other statuses with that code read on, and the re-pair gap still is one", () => {
+    const s = initialRoomState(snap(), T0);
+    for (const status of [400, 404, 429, 500]) {
+      const n = roomReducer(s, { type: "fetch_failed", status, code: ROOM_SEAT_NO_ACCOUNT });
+      expect(n.noAccount, `${status} with the code`).toBe(false);
+    }
+    const gap = roomReducer(s, { type: "fetch_failed", status: 409, code: ROOM_BEING_REPAIRED });
+    expect([gap.repairing, gap.noAccount, gap.polling], "the re-pair gap is unchanged").toEqual([true, false, true]);
+  });
+
+  it("the seat call answers alike: the card, the call over, polling off; a later seat answer with a snapshot ends it", () => {
+    const sent = roomReducer(initialRoomState(snap(), T0), { type: "seat_sent" });
+    const met = roomReducer(sent, { type: "seat_failed", status: 409, code: ROOM_SEAT_NO_ACCOUNT });
+    expect([met.noAccount, met.pending, met.polling, met.notFound]).toEqual([true, null, false, false]);
+    const answered = roomReducer(roomReducer(met, { type: "seat_sent" }), {
+      type: "seat_answered",
+      answer: { snapshot: snap({ serverNow: iso(T0 + 5_000) }), seat: { seated: true, participant: null }, create: null },
+      receivedAt: T0 + 5_000,
+    });
+    expect([answered.noAccount, answered.pending]).toEqual([false, null]);
   });
 });
 

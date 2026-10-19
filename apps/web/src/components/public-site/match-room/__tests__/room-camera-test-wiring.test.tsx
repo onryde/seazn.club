@@ -407,6 +407,8 @@ describe("D23-fix: the cover ends when the room knows the camera is not coming (
     relink: "ends",
     // The signed-in account is not the seat's: a card, no tile coming up for the viewer - a cover would resurface as a false "Connecting…".
     wrongAccount: "ends",
+    // A seat with no account met after load: a calm card, no tile coming up - the same reasoning as every card.
+    noAccount: "ends",
     over: "ends",
     held: "ends",
     live: "keeps",

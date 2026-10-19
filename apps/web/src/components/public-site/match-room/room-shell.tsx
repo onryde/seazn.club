@@ -44,6 +44,7 @@ import {
   MoveNoticeView,
   BatchWaitCard,
   NotOpenedCard,
+  NoAccountCard,
   OffForClubCard,
   RelinkCard,
   WrongAccountCard,
@@ -496,6 +497,8 @@ export function Screen({
   switch (screen.kind) {
     case "unavailable":
       return <UnavailableCard fixtureHref={snap.links.fixture} t={t} />;
+    case "noAccount":
+      return <NoAccountCard fixtureHref={snap.links.fixture} t={t} />;
     case "repairing":
       return <RepairingCard t={t} />;
     case "offForClub":
