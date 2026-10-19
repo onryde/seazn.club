@@ -406,16 +406,24 @@ async function expectCardFits(page: Page, step: string): Promise<void> {
     if (card === null) return { lines: 0, cut: ["no card element"] };
     const cut: string[] = [];
     if (card.scrollHeight > card.clientHeight + 1) cut.push(`the card hides ${card.scrollHeight - card.clientHeight}px of content`);
+    // The card's KIND from its own attributes, never from the class under test: an "A vs B" card is the Upcoming one
+    // (`data-slate-state="warming"`) or the Reconnecting scene card.
+    const slate = card.closest('[data-testid="ovl-slate"]');
+    const pairingCard = slate?.getAttribute("data-card") === "reconnecting" || (!slate?.hasAttribute("data-card") && slate?.getAttribute("data-slate-state") === "warming");
     let lines = 0;
     for (const el of card.querySelectorAll<HTMLElement>("*")) {
       const own = [...el.childNodes].some((n) => n.nodeType === Node.TEXT_NODE && (n.textContent ?? "").trim() !== "");
       if (!own) continue;
       lines++;
       const cs = getComputedStyle(el);
-      // A line-clamped box yields on purpose, with its own ellipsis (the headline): that is a fit, not a cut.
-      const clamped = (cs as CSSStyleDeclaration & { webkitLineClamp?: string }).webkitLineClamp;
-      if (clamped !== undefined && clamped !== "" && clamped !== "none") continue;
-      if (el.scrollHeight > el.clientHeight + 1 && cs.overflowY !== "visible") {
+      // Review round 1, item 2: ONE clamp is a fit — the headline of an "A vs B" card, the yield that card is built
+      // around, with its own ellipsis. Any other clamped box is a cut, hiding text or not: a Result headline is the
+      // outcome sentence and is never clamped, whatever class it carries.
+      const clamp = (cs as CSSStyleDeclaration & { webkitLineClamp?: string }).webkitLineClamp;
+      const clamped = clamp !== undefined && clamp !== "" && clamp !== "none";
+      if (clamped && pairingCard && el.getAttribute("data-testid") === "ovl-slate-headline") continue;
+      if (clamped) cut.push(`"${(el.textContent ?? "").slice(0, 32)}" is line-clamped (${clamp}), and only the pairing may be`);
+      else if (el.scrollHeight > el.clientHeight + 1 && cs.overflowY !== "visible") {
         cut.push(`"${(el.textContent ?? "").slice(0, 32)}" is cut to ${el.clientHeight}px of ${el.scrollHeight}px`);
       }
     }

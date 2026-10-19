@@ -1,4 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
+import { readdirSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { signInStaff } from "./overlay-kit";
 
 // THE STAFF OVERLAY GALLERY (R2007; spec 2026-10-15 §4.5 and §4.8). Every template × sport × scene × state, every
@@ -17,6 +19,8 @@ import { signInStaff } from "./overlay-kit";
 //   8. figures              no crease figure or ball glyph is ellipsised, clipped or out of its entry, at every frame,
 //                           and the striker's mark leads its name (review a and confirm pass, PR #974)
 //   8b. squeeze             with one batter's name made hostile, every figure still sits whole inside its own entry
+//   4c. Result headline     the outcome sentence is NEVER clamped: every locale × every `fixture.decidedBy.*` sentence
+//                           with a 43-character winner, in every Result-card cell (R2005 review round 1, item 2)
 // The cells are `galleryCells(OVERLAY_TEMPLATES, …)` — the gallery's one cell source — so a template or scene added to
 // the registry is swept here with no edit. Every check prints its count, and zero checked fails it. The per-check
 // verdicts are `expect.soft`, so one run reports EVERY check that fails rather than stopping at the first.
@@ -468,6 +472,74 @@ test.describe("the staff overlay gallery (R2007)", () => {
       frames++;
     }
     expect(frames, "frames checked").toBe(3);
+  });
+
+  // R2005 review round 1, item 2 (coordinator ruling): the 2-line clamp is the "A vs B" headline's yield ONLY — the
+  // name pills under the tiles carry each side. The Result headline is the outcome sentence ("… won 4–3 on penalties",
+  // "… advanced by organiser decision"), and a clamp would cut the very words that say how the match was decided. So
+  // in every Result-card cell, every locale's every `fixture.decidedBy.*` sentence, with a 43-character winner, must
+  // compute no line clamp and hide none of its own text. The sentences come from the dictionaries on disk (every
+  // locale directory), the cells from the page — nothing here is a list typed for the test.
+  test("check 4c: a Result headline is never clamped — every locale × every decided sentence, a 43-character winner", async ({ page }) => {
+    test.setTimeout(300_000);
+    await signInStaff(page);
+    const WINNER = "Haruto Fujimoto and Kenji Watanabe-Yamamoto";
+    expect(WINNER.length).toBe(43);
+    const dictRoot = fileURLToPath(new URL("../src/dictionaries/", import.meta.url));
+    const locales = readdirSync(dictRoot, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+    const sentences: { locale: string; key: string; text: string }[] = [];
+    for (const locale of locales) {
+      const ui = JSON.parse(readFileSync(`${dictRoot}${locale}/ui.json`, "utf8")) as Record<string, string>;
+      for (const [key, template] of Object.entries(ui)) {
+        if (!key.startsWith("fixture.decidedBy.")) continue;
+        sentences.push({ locale, key, text: template.replaceAll("{winner}", WINNER).replaceAll("{score}", "4–3") });
+      }
+    }
+    expect(locales.length, "anti-vacuity: the locales read").toBeGreaterThanOrEqual(4);
+    expect(sentences.length, "anti-vacuity: the decided sentences read").toBeGreaterThanOrEqual(locales.length * 10);
+    await openGallery(page);
+    const read = await page.evaluate((rows) => {
+      const out = { cells: 0, checked: 0, clamped: [] as string[], cardsHiding: 0, hidingBy: {} as Record<string, number>, longest: 0 };
+      const cells = [...document.querySelectorAll<HTMLElement>("[data-gallery-cell]")].filter((cell) =>
+        cell.querySelector('[data-testid="ovl-slate"][data-slate-state="ended"]:not([data-card])'),
+      );
+      for (const cell of cells) {
+        const h = cell.querySelector<HTMLElement>('[data-testid="ovl-slate-headline"]');
+        const card = cell.querySelector<HTMLElement>('[data-testid="ovl-slate-card"]');
+        if (!h || !card) continue;
+        out.cells++;
+        const original = h.textContent;
+        for (const r of rows) {
+          h.textContent = r.text;
+          const cs = getComputedStyle(h) as CSSStyleDeclaration & { webkitLineClamp?: string; lineClamp?: string };
+          const clamp = [cs.webkitLineClamp, cs.lineClamp].filter((v) => v !== undefined && v !== "" && v !== "none");
+          const hidden = h.scrollHeight - h.clientHeight;
+          // Layout px (`scrollHeight`), never the preview's scaled `getBoundingClientRect`: the content's own height.
+          const lines = Math.round(h.scrollHeight / parseFloat(cs.lineHeight));
+          out.longest = Math.max(out.longest, lines);
+          // Hidden text needs a box that hides it: on an `overflow: visible` box `scrollHeight` also counts the glyphs'
+          // own content area past `line-height: 1.04` (~4 px here), which is painted, not hidden.
+          if (clamp.length > 0 || (hidden > 1 && cs.overflowY !== "visible")) {
+            out.clamped.push(`${cell.dataset.galleryCell} ${r.locale} ${r.key}: clamp ${clamp.join("/") || "none"}, hides ${hidden}px`);
+          }
+          if (card.scrollHeight > card.clientHeight + 1) {
+            out.cardsHiding++;
+            const by = `${cell.dataset.template}/${cell.dataset.sport}`;
+            out.hidingBy[by] = (out.hidingBy[by] ?? 0) + 1;
+          }
+          out.checked++;
+        }
+        h.textContent = original;
+      }
+      return out;
+    }, sentences);
+    console.log(
+      `[4c] locales ${locales.length} (${locales.join(", ")}), sentences ${sentences.length}, Result cells ${read.cells}, headlines checked ${read.checked}, clamped ${read.clamped.length}, longest ${read.longest} lines; cards that then hide content (R2007 region limit, not this check's verdict): ${read.cardsHiding} ${JSON.stringify(read.hidingBy)}`,
+    );
+    expect(read.cells, "anti-vacuity: Result-card cells found").toBeGreaterThan(0);
+    expect(read.checked, "every sentence in every cell").toBe(read.cells * sentences.length);
+    expect(read.longest, "anti-vacuity: the sweep reached a headline past the old two-line clamp").toBeGreaterThan(2);
+    expect.soft(read.clamped.slice(0, 20), `Result headlines clamped (${read.clamped.length})`).toEqual([]);
   });
 
   test("check 6: no preview fetches or subscribes — nothing leaves the page for 16 s (longer than POLL_MS)", async ({ page }) => {

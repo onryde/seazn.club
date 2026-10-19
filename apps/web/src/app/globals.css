@@ -1805,15 +1805,18 @@ body {
   flex: none;
   line-height: 1;
 }
-/* R2005: the headline is what yields on a long pairing — at most two lines, the second ellipsised. Two 43-character
-   names ran it to three, which (with the Reconnecting card's status line) overflowed the bar's 636 px card region; the
-   name pills under the tiles still carry each side. `flex: none` for the pill's reason: a clamped box is overflow: hidden. */
+/* `flex: none`: the headline is never a flex-shrink target (the pill's reason, above). */
 .ovl-slate-headline { font-size: 64px; font-weight: 800; letter-spacing: 0.02em;
                        color: var(--sport-ink); text-transform: uppercase;
-                       line-height: 1.04; max-width: 1400px;
-                       display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
-                       overflow: hidden; flex: none;
+                       line-height: 1.04; max-width: 1400px; flex: none;
                        text-shadow: 0 2px 14px color-mix(in srgb, var(--sport-board) 75%, transparent); }
+/* R2005: an "A vs B" headline (the Upcoming and Reconnecting cards) is what yields on a long pairing — at most two
+   lines, the second ellipsised. Two 43-character names ran it to three, which (with the Reconnecting card's status
+   line) overflowed the bar's 636 px card region; the name pills under the tiles still carry each side. ONLY the
+   pairing: the Result headline is the outcome sentence, and a clamp would cut the words that say how the match was
+   decided (review round 1, item 2 — gallery check 4c holds every locale's every decided sentence unclamped). */
+.ovl-slate-headline--pairing { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
+                                overflow: hidden; }
 .ovl-slate-line { font-size: 30px; font-weight: 500;
                    color: color-mix(in srgb, var(--sport-ink) 70%, transparent); }
 .ovl-slate-matchup {

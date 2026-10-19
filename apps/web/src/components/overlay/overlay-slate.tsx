@@ -129,7 +129,11 @@ export function OverlayMatchCard({
             {metaPill(cardState, model, msg)}
           </span>
 
-          <span data-testid="ovl-slate-headline" className="ovl-slate-headline ovl-display">
+          {/* Only the pairing clamps (`--pairing`): the Result headline is the outcome sentence and is never cut. */}
+          <span
+            data-testid="ovl-slate-headline"
+            className={`ovl-slate-headline${cardState === "warming" ? " ovl-slate-headline--pairing" : ""} ovl-display`}
+          >
             {cardState === "warming"
               ? msg("overlay.slate.warmingHeadlineVs", { home: home.name, away: away.name })
               : (model.result ?? msg("overlay.slate.endedHeadline"))}
@@ -274,7 +278,10 @@ function SceneMatchCard({
               {pill}
             </span>
           ) : null}
-          <span data-testid="ovl-slate-headline" className="ovl-slate-headline ovl-display">
+          <span
+            data-testid="ovl-slate-headline"
+            className={`ovl-slate-headline${reconnecting ? " ovl-slate-headline--pairing" : ""} ovl-display`}
+          >
             {reconnecting
               ? msg("overlay.slate.warmingHeadlineVs", { home: home.name, away: away.name })
               : msg("overlay.scene.ended.title")}
