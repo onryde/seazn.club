@@ -5,12 +5,12 @@
 //
 //  - `useStreamPrefs` holds the three as the panel shows them: seeded from the page's read (StreamPanelContext
 //    `streamPrefs`), each change shown at once and saved through the ONE settings route (PUT …/stream-settings, a body
-//    naming only that field). A save that fails puts the stored value back — the value the phone's start and the
-//    automatic start will read — and says so; only the newest save of a field lands, so a slow older answer never
-//    overwrites a newer choice. Every page read and every save's answer is folded in by the settings row's `revision`
-//    (PR #989 confirm N1): a field takes a read only when it is NEWER than the one the field last took, so a refresh
-//    that left the server before a save landed cannot put the older value back, and a failed save shows what the
-//    server is known to hold now. A field with a save in flight keeps the organiser's own choice on screen (m3).
+//    naming only that field). Every page read and every save's answer is folded in by the settings row's `revision`
+//    (PR #989 confirm N1): a field takes a read only when it is NEWER than the one the field last took. The panel
+//    therefore converges on the server's LAST write — the value the phone's start and the automatic start will read —
+//    even when that is an older save whose write happened to commit last; a refresh that left the server before a
+//    save landed cannot put the older value back. Until the newest save of a field settles, the field shows the
+//    organiser's own choice (m3); a newest save that fails shows what the server is known to hold now, and says so.
 //  - `ScoreTiming` edits the delay before going live: 0–30 s in steps of 0.1, null = the server's default (handed in,
 //    never typed), 0 a real override. `ScoreLiveSummary` is the read-only pair a running composed session shows: a
 //    running session never moves, so it reads the SESSION's own copy, not the settings.

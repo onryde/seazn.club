@@ -229,16 +229,23 @@ function open(o: Partial<StreamPanelContext> = {}) {
   click(byTestId(island.tree(), "stream-tab-obs"));
   return island;
 }
-/** PUT …/stream-settings answers as the route does: the whole row after the write, at the next revision (PR #989
- *  confirm N1 — an answer is a read the panel folds in). Any other call answers {} at once. A test's own
- *  `mockRejectedValueOnce` still takes precedence for the next call. */
-function answerSettingsLikeTheRoute(start: { streamMode: string | null; overlayTemplate: string | null; overlayDelayMs: number | null }) {
+/** PUT …/stream-settings answers as the route does: the whole row after the write (an answer is a read the panel
+ *  folds in, PR #989 confirm N1), at the revision the TEST names for that write — the n-th PUT answers `revisions[n]`.
+ *  The fake never bumps on its own: whether a write moves the revision is the server's contract, pinned per writer in
+ *  stream-start-mode.test.ts, and a client test that leans on an automatic bump cannot see a writer that forgot one.
+ *  A PUT past the list throws. Any other call answers {} at once; a test's own `mockRejectedValueOnce` still takes
+ *  precedence for the next call. */
+function answerSettingsLikeTheRoute(
+  start: { streamMode: string | null; overlayTemplate: string | null; overlayDelayMs: number | null },
+  revisions: readonly number[],
+) {
   const stored: Record<string, unknown> = { targetId: null, autoStream: false, ...start };
-  let revision = 1;
+  let n = 0;
   apiV1.mockImplementation(async (url: string, o?: { method?: string; json?: unknown }) => {
     if (!url.endsWith("/stream-settings") || o?.method !== "PUT") return {};
+    if (n >= revisions.length) throw new Error(`answerSettingsLikeTheRoute: PUT ${n + 1} has no revision (${revisions.length} named)`);
     Object.assign(stored, o.json as Record<string, unknown>);
-    return { ...stored, revision: ++revision };
+    return { ...stored, revision: revisions[n++] };
   });
 }
 
@@ -4965,7 +4972,7 @@ describe("R2006: ScoreTiming — 0–30 s in tenths, the server's default, Reset
   });
 
   it("the panel: a timing change PUTs { overlayDelayMs } alone, Reset PUTs null, and a failed save puts the stored value back and says so", async () => {
-    answerSettingsLikeTheRoute({ streamMode: null, overlayTemplate: null, overlayDelayMs: 1500 });
+    answerSettingsLikeTheRoute({ streamMode: null, overlayTemplate: null, overlayDelayMs: 1500 }, [2, 3]);
     const island = openPanel({ relayEntitled: true, composedAvailable: true, streamPrefs: { [FIXTURE.id]: { streamMode: null, overlayTemplate: null, overlayDelayMs: 1500, revision: 1 } } });
     const timingOf = () => {
       const tab = island.tree().find((el) => el.type === PhoneTab)!;
@@ -5008,7 +5015,7 @@ describe("R2006: the panel hands the Phone tab the score — availability, the s
   });
 
   it("the sequence: Camera only → PUT { streamMode: passthrough }, shown at once; Add the score back → PUT { streamMode: composed }; a failed save puts the stored mode back and says so", async () => {
-    answerSettingsLikeTheRoute({ streamMode: null, overlayTemplate: null, overlayDelayMs: null });
+    answerSettingsLikeTheRoute({ streamMode: null, overlayTemplate: null, overlayDelayMs: null }, [2, 3]);
     const island = openPanel({ relayEntitled: true, composedAvailable: true });
     scoreOf(island).onMode("passthrough");
     expect(apiV1).toHaveBeenLastCalledWith(`/api/v1/fixtures/${FIXTURE.id}/stream-settings`, { method: "PUT", json: { streamMode: "passthrough" } });
@@ -5212,6 +5219,52 @@ describe("PR #989 review: useStreamPrefs — the newest save lands (I2), a newer
       checked++;
     }
     expect(checked).toBe(2);
+  });
+
+  it("PR #989 review R3: the newest save SUCCEEDS with an answer OLDER than a read that arrived while it was out — the newer read is shown, never the save's own value; both orders", async () => {
+    // This organiser saves 2 s, written at r=20; another organiser's 4 s lands at r=40; the page refresh at r=40 reaches
+    // the panel before this save's answer does. The server holds 4 s, and so must the card (Go live sends what it shows).
+    let checked = 0;
+    // Order 1: the newer read arrives while the save is out, then the save's older answer.
+    {
+      const held = deferSettings();
+      const { reread, timingOf } = readRig(row({ overlayDelayMs: 1000 }, 10));
+      timingOf().onSave(2000);
+      reread(row({ overlayDelayMs: 4000 }, 40));
+      expect(timingOf().storedMs, "in flight: the organiser's choice").toBe(2000);
+      held[0]!.resolve(answer({ overlayDelayMs: 2000 }, 20));
+      await flush();
+      expect(timingOf().storedMs, "order 1: settled on the server's last write, 4 s — not the save's 2 s").toBe(4000);
+      expect(timingOf().saveFailed, "it succeeded: no failure line").toBe(false);
+      checked++;
+    }
+    // Order 2: the save's answer first (shown), then the newer read moves it.
+    {
+      const held = deferSettings();
+      const { reread, timingOf } = readRig(row({ overlayDelayMs: 1000 }, 10));
+      timingOf().onSave(2000);
+      held[0]!.resolve(answer({ overlayDelayMs: 2000 }, 20));
+      await flush();
+      expect(timingOf().storedMs, "order 2: the save's answer").toBe(2000);
+      reread(row({ overlayDelayMs: 4000 }, 40));
+      expect(timingOf().storedMs, "then the newer read").toBe(4000);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("an answer at the revision the panel already holds is NOT newer — the settled field shows what that revision holds — which is why every server writer must bump the revision (pinned per writer in stream-start-mode.test.ts)", async () => {
+    const held = deferSettings();
+    const { timingOf } = readRig(row({ overlayDelayMs: 1000 }, 10));
+    timingOf().onSave(2000);
+    held[0]!.resolve(answer({ overlayDelayMs: 2000 }, 10)); // a write that forgot its bump
+    await flush();
+    expect(timingOf().storedMs, "the un-bumped answer is not taken").toBe(1000);
+    // The positive pair: the same answer one revision on is taken.
+    timingOf().onSave(2000);
+    held[1]!.resolve(answer({ overlayDelayMs: 2000 }, 11));
+    await flush();
+    expect(timingOf().storedMs).toBe(2000);
   });
 
   it("the NEWEST save fails while an older save of the field is still out: the failure shows at once what the server is known to hold, and says so; the older's late answer then lands, the server's newest", async () => {

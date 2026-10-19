@@ -11,12 +11,13 @@
 // fixture started once, plus the unavailable deployment with the score asked for. Two sports: the mode reads no sport.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomBytes } from "node:crypto";
-import { sql } from "@/lib/db";
+import { templatesForSport } from "@/components/overlay/template-registry";
+import { sql, type Tx } from "@/lib/db";
 import { CaptureBeat } from "@/server/api-v1/capture-schemas";
 import type { CreateStreamSession, PutStreamSettings, StreamMode } from "@/server/api-v1/schemas";
 import { RELAY_OVERLAY_DELAY_DEFAULT_MS } from "@/server/relay/config";
 import { postBeat, postStart } from "../capture-phone";
-import { saveStreamSettings, startModeFor, streamPrefsOf, writeOverlayDelay } from "../stream-codes";
+import { markAutoStartBlocked, saveStreamSettings, startModeFor, streamPrefsOf, writeOverlayDelay, writeOverlayTemplate, writeStreamMode } from "../stream-codes";
 import { createSession, currentSession, sessionFactsForJob } from "../stream-sessions";
 import { captureRig, phoneId, type CaptureRig } from "./_capture-rig";
 import { startedDivisionWithFixture } from "./_rig";
@@ -252,47 +253,136 @@ describe.skipIf(!HAS_DB)("R2006: the panel reads — the stored preferences (str
   });
 });
 
-describe.skipIf(!HAS_DB)("PR #989 confirm N1: the settings row's revision orders every read and answer", () => {
-  it("every write answers a strictly higher revision — an identical write included — and the page's read carries the latest", async () => {
+describe.skipIf(!HAS_DB)("PR #989: the settings row's revision — a counter every writer bumps under the row lock (V466) — orders every read and answer", () => {
+  /** The fixture's sport, read from its division (the writer checks the style against it), and two styles it offers. */
+  const stylesOf = async (fixtureId: string): Promise<{ sportKey: string; styleA: string; styleB: string }> => {
+    const [row] = await sql<{ sport_key: string }[]>`
+      select d.sport_key from fixtures f join divisions d on d.id = f.division_id where f.id = ${fixtureId}`;
+    const ids = templatesForSport(row!.sport_key).map((t) => t.id);
+    expect(ids.length, `PREMISE: ${row!.sport_key} offers two styles`).toBeGreaterThanOrEqual(2);
+    return { sportKey: row!.sport_key, styleA: ids[0]!, styleB: ids[1]! };
+  };
+  const revisionOf = async (fixtureId: string): Promise<number | null> => {
+    const [row] = await sql<{ revision: number }[]>`select revision::float8 as revision from fixture_stream_settings where fixture_id = ${fixtureId}`;
+    return row?.revision ?? null;
+  };
+
+  it("EVERY writer through the settings route answers a strictly higher revision — the pick, the switch, the mode, the style and the timing, an identical write included — and the page's read carries the latest", async () => {
     const r = await captureRig();
-    const bodies: PutStreamSettings[] = [
-      { autoStream: true }, { streamMode: "passthrough" }, { overlayDelayMs: 1500 }, { overlayDelayMs: 1500 }, { streamMode: null },
+    const { styleA, styleB } = await stylesOf(r.fixtureId);
+    // One body per writer saveStreamSettings drives, each twice (the identical second write is still a write).
+    const bodies: { writer: string; body: PutStreamSettings }[] = [
+      { writer: "writeAutoStream", body: { autoStream: true } },
+      { writer: "writeAutoStream", body: { autoStream: true } },
+      { writer: "writeStreamSettings (the pick)", body: { targetId: r.target.id } },
+      { writer: "writeStreamSettings (the pick)", body: { targetId: r.target.id } },
+      { writer: "writeStreamMode", body: { streamMode: "passthrough" } },
+      { writer: "writeStreamMode", body: { streamMode: "passthrough" } },
+      { writer: "writeOverlayTemplate", body: { overlayTemplate: styleA } },
+      { writer: "writeOverlayTemplate", body: { overlayTemplate: styleA } },
+      { writer: "writeOverlayTemplate", body: { overlayTemplate: styleB } },
+      { writer: "writeOverlayDelay", body: { overlayDelayMs: 1500 } },
+      { writer: "writeOverlayDelay", body: { overlayDelayMs: 1500 } },
+      { writer: "writeStreamMode", body: { streamMode: null } },
     ];
-    const revisions: number[] = [];
-    for (const body of bodies) {
+    expect(await revisionOf(r.fixtureId), "the empty case first: no row, no revision").toBeNull();
+    let prev = Number.NEGATIVE_INFINITY;
+    const covered = new Set<string>();
+    for (const { writer, body } of bodies) {
       const answer = await saveStreamSettings(r.auth, r.fixtureId, body);
-      expect(typeof answer.revision, `${JSON.stringify(body)}: a revision`).toBe("number");
-      revisions.push(answer.revision!);
+      expect(typeof answer.revision, `${writer} ${JSON.stringify(body)}: a revision`).toBe("number");
+      expect(answer.revision!, `${writer} ${JSON.stringify(body)} answers newer than the write before it`).toBeGreaterThan(prev);
+      expect(await revisionOf(r.fixtureId), `${writer}: the answer is the row's revision`).toBe(answer.revision);
+      prev = answer.revision!;
+      covered.add(writer);
     }
-    expect(revisions, "one revision per write").toHaveLength(bodies.length);
-    for (let i = 1; i < revisions.length; i++) expect(revisions[i]!, `write ${i + 1} reads newer than write ${i}`).toBeGreaterThan(revisions[i - 1]!);
+    expect([...covered].sort(), "every writer the route drives was driven").toEqual(
+      ["writeAutoStream", "writeOverlayDelay", "writeOverlayTemplate", "writeStreamMode", "writeStreamSettings (the pick)"]);
     expect((await streamPrefsOf(r.auth.orgId, [r.fixtureId]))[r.fixtureId]).toEqual({
-      streamMode: null, overlayTemplate: null, overlayDelayMs: 1500, revision: revisions.at(-1),
+      streamMode: null, overlayTemplate: styleB, overlayDelayMs: 1500, revision: prev,
     });
   });
 
-  it("two overlapping writes: the one that COMMITS last reads highest, though its transaction began first (clock_timestamp after the row lock, not now())", async () => {
+  it("the A12 Stop stamp bumps the revision on its FIRST stamp only (a later Stop is a true no-op), and a row it creates starts above no row", async () => {
     const r = await captureRig();
-    await saveStreamSettings(r.auth, r.fixtureId, { overlayDelayMs: 1000 });
+    await markAutoStartBlocked(r.auth.orgId, r.fixtureId, new Date(), r.auth.userId);
+    const created = await revisionOf(r.fixtureId);
+    expect(created, "a row the Stop created has a revision").not.toBeNull();
+    const before = (await saveStreamSettings(r.auth, r.fixtureId, { autoStream: true })).revision!;
+    expect(before, "a later write lands above it").toBeGreaterThan(created!);
+    const r2 = await captureRig();
+    await saveStreamSettings(r2.auth, r2.fixtureId, { autoStream: true });
+    const unstamped = (await revisionOf(r2.fixtureId))!;
+    await markAutoStartBlocked(r2.auth.orgId, r2.fixtureId, new Date(), r2.auth.userId);
+    const stamped = (await revisionOf(r2.fixtureId))!;
+    expect(stamped, "the first Stop on an existing row bumps it").toBeGreaterThan(unstamped);
+    await markAutoStartBlocked(r2.auth.orgId, r2.fixtureId, new Date(), r2.auth.userId);
+    expect(await revisionOf(r2.fixtureId), "a second Stop writes nothing, so the revision stays").toBe(stamped);
+  });
+
+  // Two writers on ONE row, the second WAITING on the first's row lock: the waiter's bump is taken after the lock, so it
+  // reads the holder's committed revision and lands above it. Swept over every preference writer (mode, style, timing).
+  type Styles = Awaited<ReturnType<typeof stylesOf>>;
+  /** Each preference writer, writing a value of its own — the holder's, then the waiter's (they differ, so both land). */
+  const PREFERENCE_WRITERS: readonly {
+    name: string;
+    write: (tx: Tx, r: CaptureRig, st: Styles, turn: "holder" | "waiter") => Promise<void>;
+  }[] = [
+    { name: "writeStreamMode", write: (tx, r, _st, turn) =>
+      writeStreamMode(tx, { orgId: r.auth.orgId, fixtureId: r.fixtureId, streamMode: turn === "holder" ? "passthrough" : "composed", updatedBy: r.auth.userId }) },
+    { name: "writeOverlayTemplate", write: (tx, r, st, turn) =>
+      writeOverlayTemplate(tx, { orgId: r.auth.orgId, fixtureId: r.fixtureId, sportKey: st.sportKey, overlayTemplate: turn === "holder" ? st.styleA : st.styleB, updatedBy: r.auth.userId }) },
+    { name: "writeOverlayDelay", write: (tx, r, _st, turn) =>
+      writeOverlayDelay(tx, { orgId: r.auth.orgId, fixtureId: r.fixtureId, overlayDelayMs: turn === "holder" ? 2000 : 3000, updatedBy: r.auth.userId }) },
+  ];
+
+  it("the lock sweep covers every preference writer (anti-vacuity: an empty table would run no case)", () => {
+    expect(PREFERENCE_WRITERS.map((w) => w.name)).toEqual(["writeStreamMode", "writeOverlayTemplate", "writeOverlayDelay"]);
+  });
+
+  it.each(PREFERENCE_WRITERS.map((w) => [w.name, w] as const))("%s: a write that WAITED on another's row lock reads above it (the bump is taken under the lock)", async (_name, w) => {
+    const r = await captureRig();
+    const styles = await stylesOf(r.fixtureId);
+    await saveStreamSettings(r.auth, r.fixtureId, { autoStream: false }); // the row exists: both writes take the update path
     let release!: () => void;
     const gate = new Promise<void>((res) => { release = res; });
-    let begun!: () => void;
-    const began = new Promise<void>((res) => { begun = res; });
-    // The late writer's transaction starts FIRST (its now() is fixed here), then waits while another write commits.
-    const late = sql.begin(async (tx) => {
-      await tx`select now()`;
-      begun();
+    let held!: () => void;
+    const holding = new Promise<void>((res) => { held = res; });
+    let holderRevision = 0;
+    // The holder writes and keeps its transaction (and the row lock) open until released.
+    const holder = sql.begin(async (tx) => {
+      await w.write(tx, r, styles, "holder");
+      const [row] = await tx<{ revision: number }[]>`select revision::float8 as revision from fixture_stream_settings where fixture_id = ${r.fixtureId}`;
+      holderRevision = row!.revision;
+      held();
       await gate;
-      await writeOverlayDelay(tx, { orgId: r.auth.orgId, fixtureId: r.fixtureId, overlayDelayMs: 2000, updatedBy: r.auth.userId });
     });
-    await began;
-    await new Promise((res) => setTimeout(res, 20));
-    const early = await saveStreamSettings(r.auth, r.fixtureId, { streamMode: "passthrough" });
+    await holding;
+    // The waiter, on its own connection: it names its backend so the test can SEE it wait on the lock.
+    let waiterPid = 0;
+    let waiterRevision = 0;
+    let waiterStarted!: () => void;
+    const started = new Promise<void>((res) => { waiterStarted = res; });
+    const waiter = sql.begin(async (tx) => {
+      const [me] = await tx<{ pid: number }[]>`select pg_backend_pid() as pid`;
+      waiterPid = me!.pid;
+      waiterStarted();
+      await w.write(tx, r, styles, "waiter");
+      const [row] = await tx<{ revision: number }[]>`select revision::float8 as revision from fixture_stream_settings where fixture_id = ${r.fixtureId}`;
+      waiterRevision = row!.revision;
+    });
+    await started;
+    let waited = false;
+    for (let i = 0; i < 200 && !waited; i++) {
+      const [a] = await sql<{ wait_event_type: string | null }[]>`select wait_event_type from pg_stat_activity where pid = ${waiterPid}`;
+      waited = a?.wait_event_type === "Lock";
+      if (!waited) await new Promise((res) => setTimeout(res, 10));
+    }
+    expect(waited, "PREMISE: the waiter blocked on the holder's row lock").toBe(true);
     release();
-    await late;
-    const read = (await streamPrefsOf(r.auth.orgId, [r.fixtureId]))[r.fixtureId]!;
-    expect(read, "both writes landed").toMatchObject({ streamMode: "passthrough", overlayDelayMs: 2000 });
-    expect(read.revision!, "the last commit reads newer than the write it followed").toBeGreaterThan(early.revision!);
+    await holder;
+    await waiter;
+    expect(waiterRevision, "the waiter's bump is taken after the lock: above the holder's").toBeGreaterThan(holderRevision);
+    expect(await revisionOf(r.fixtureId), "and the row reads the waiter's").toBe(waiterRevision);
   });
 });
-
