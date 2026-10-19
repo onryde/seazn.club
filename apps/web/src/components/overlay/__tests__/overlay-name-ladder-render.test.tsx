@@ -92,15 +92,18 @@ describe("the bar renders §1's ladder", () => {
   it("carries THREE when the entrant has a short name, with the short name in the middle", () => {
     // The rung `public_entrants_v` cannot feed yet. Driving it here is what
     // keeps the middle of the ladder from being a seam nothing has ever
-    // rendered on the day that view grows a `short_name`.
+    // rendered on the day that view grows a `short_name`. The bottom rung is
+    // the side's CODE — the producer's short, upper-cased, the same code the
+    // bug and the tiles show (fix/overlay-team-code-disambiguation) — so a
+    // short name that differs from it only in case keeps its own rung.
     const html = render([
-      { id: "home", name: "Milton Keynes Rovers", short: "Rovers" },
+      { id: "home", name: "Milton Keynes Rovers", short: "mkr" },
       { id: "away", name: "Northbridge Athletic" },
     ]);
     expect(probes(html)).toEqual([
       "Milton Keynes Rovers",
-      "Rovers",
-      "MIL",
+      "mkr",
+      "MKR",
       "Northbridge Athletic",
       "NOR",
     ]);

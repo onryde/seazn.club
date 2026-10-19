@@ -3,14 +3,48 @@
 // so the stream matches the app. `cells[].value` is always "home–away" by
 // construction in `overlayModel`, so each row renders its own half of it —
 // that split lives here, in the renderer, rather than widening the model.
+import { useLayoutEffect, useRef, useState } from "react";
 import type { OverlayDetailLine, OverlayModel, OverlayMsg } from "@/lib/overlay-model";
 import { detailCopy, detailEntryClass } from "./overlay-detail-copy";
 import { strikerLineOf } from "@/lib/overlay-cricket";
+import { codeFitScale } from "./name-ladder";
 
 const halfOf = (value: string, row: 0 | 1): string => {
   const parts = value.split("–");
   return parts[row] ?? value;
 };
+
+/**
+ * The row's code, fitted to `.ovl-bug-code`'s 96 px column (#987 confirm pass N2; `codeFitScale` says why and how).
+ * Both widths are read from the COMPUTED style — layout px, sub-pixel, and blind to any transform (this one, or a
+ * gallery preview's) — so the scale it applies never feeds back into the width it is computed from. Observed, because
+ * the face can load after the first measurement and change the code's width under it.
+ */
+function BugCode({ code }: { code: string }) {
+  const columnRef = useRef<HTMLSpanElement>(null);
+  const inkRef = useRef<HTMLSpanElement>(null);
+  const [scale, setScale] = useState(1);
+  useLayoutEffect(() => {
+    const column = columnRef.current;
+    const ink = inkRef.current;
+    if (column === null || ink === null) return;
+    const measure = () =>
+      setScale(codeFitScale(parseFloat(getComputedStyle(ink).width), parseFloat(getComputedStyle(column).width)));
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(ink);
+    observer.observe(column);
+    return () => observer.disconnect();
+  }, [code]);
+  return (
+    <span ref={columnRef} className="ovl-bug-code" data-code-scale={scale < 1 ? scale.toFixed(3) : undefined}>
+      <span ref={inkRef} className="ovl-bug-code-ink" style={scale < 1 ? { transform: `scale(${scale})` } : undefined}>
+        {code}
+      </span>
+    </span>
+  );
+}
 
 export function OverlayBug({
   model,
@@ -80,7 +114,7 @@ export function OverlayBug({
             className={`ovl-bug-row ovl-display${model.focus ? " ovl-bug-row--hero" : ""}${side.led ? " ovl-side-led" : ""}${model.voided ? " ovl-voided" : ""}`}
           >
             {side.led ? <span data-testid="ovl-led" className="ovl-led" /> : null}
-            <span className="ovl-bug-code">{side.short}</span>
+            <BugCode code={side.short} />
             {side.serving ? <span className="ovl-serve-dot" /> : null}
             {model.cellsKind === "sets" ? (
               <span data-testid="ovl-cells" className="ovl-bug-cells">

@@ -9,7 +9,7 @@
 // three rungs whose middle one DIFFERS from the last, so a picker that
 // collapsed the ladder to "full or code" cannot pass.
 import { describe, expect, it } from "vitest";
-import { NAME_RUNG_HYSTERESIS_PX, pickNameRung } from "../name-ladder";
+import { NAME_RUNG_HYSTERESIS_PX, codeFitScale, pickNameRung } from "../name-ladder";
 
 // "Riverside Athletic Club" / "Riverside" / "RIV" at 45px Barlow Condensed,
 // rounded from the measured frame — the shape of a real ladder, not a scale.
@@ -79,5 +79,35 @@ describe("pickNameRung", () => {
       // one rung down and back.
       expect(pickNameRung(LADDER, 210, 1)).toBe(1);
     });
+  });
+});
+
+// #987 confirm pass N2 — the bug's code column (`_THEMES.md` §4: 48/600 in a 96 px column). The widths are the face's
+// own, measured with fontkit in Barlow Condensed SemiBold at 48 px (never this function's output): HARL 86.8, WWW 95.8,
+// TOWN 99.1, WOME 100.4, ÆÆÆÆ 141.1 — the widest four the face has. The gallery's check 4d drives the component that
+// applies it, at 1920, 844 and 390.
+describe("codeFitScale", () => {
+  const COLUMN = 96;
+  it("draws a code that fits exactly as before — three letters and a narrow four alike, the boundary included", () => {
+    expect(codeFitScale(86.8, COLUMN)).toBe(1);
+    expect(codeFitScale(95.8, COLUMN)).toBe(1);
+    expect(codeFitScale(COLUMN, COLUMN)).toBe(1);
+  });
+  it("scales a code wider than the column down to EXACTLY the column, never past it", () => {
+    const cases = [99.1, 100.4, 141.1];
+    for (const natural of cases) {
+      const scale = codeFitScale(natural, COLUMN);
+      expect(scale, `${natural}`).toBeLessThan(1);
+      expect(natural * scale, `${natural} drawn at the column's width`).toBeCloseTo(COLUMN, 6);
+    }
+    expect(cases.length, "anti-vacuity: wide codes checked").toBe(3);
+  });
+  it("keeps the worst Latin code (ÆÆÆÆ) above the 30 px text floor (D9) once scaled from 48 px", () => {
+    expect(48 * codeFitScale(141.1, COLUMN)).toBeGreaterThanOrEqual(30);
+  });
+  it("never shrinks a code whose boxes are not measured (a box not laid out reads 0, or NaN)", () => {
+    for (const [natural, room] of [[0, COLUMN], [120, 0], [Number.NaN, COLUMN], [120, Number.NaN], [Number.POSITIVE_INFINITY, COLUMN], [-5, COLUMN]] as const) {
+      expect(codeFitScale(natural, room), `${natural} in ${room}`).toBe(1);
+    }
   });
 });

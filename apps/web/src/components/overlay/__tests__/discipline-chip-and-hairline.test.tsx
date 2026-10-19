@@ -90,8 +90,8 @@ const BASE_MODEL: OverlayModel = {
   voided: false,
   header: { context: "Live", period: "2nd half" },
   sides: [
-    { short: "MIL", name: "Milton Keynes Rovers", ladder: nameLadder({ id: "x", name: "Milton Keynes Rovers" }), big: "2", led: false, serving: false },
-    { short: "NOR", name: "Northbridge Athletic", ladder: nameLadder({ id: "x", name: "Northbridge Athletic" }), big: "1", led: true, serving: false },
+    { short: "MIL", name: "Milton Keynes Rovers", ladder: nameLadder({ id: "x", name: "Milton Keynes Rovers" }, "MIL"), big: "2", led: false, serving: false },
+    { short: "NOR", name: "Northbridge Athletic", ladder: nameLadder({ id: "x", name: "Northbridge Athletic" }, "NOR"), big: "1", led: true, serving: false },
   ],
   cellsKind: "none",
   cells: [],

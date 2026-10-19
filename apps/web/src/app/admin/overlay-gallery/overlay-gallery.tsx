@@ -6,7 +6,8 @@
 import Link from "@/components/ui/console-link";
 import { t } from "@/lib/i18n-runtime";
 import { momentsFor, type OverlayMoment } from "@/lib/overlay-moments";
-import { shortCode, type OverlayMsg, type OverlaySideInput } from "@/lib/overlay-model";
+import { overlaySideCodes, type OverlayMsg, type OverlaySideInput } from "@/lib/overlay-model";
+import { forfeitTag, NO_LEDGER } from "@/lib/forfeit-tag";
 import type { DecidedOutcomeTemplates } from "@/lib/scoring-vocab";
 import type { OverlayLiveData } from "@/components/public-site/live-score-data";
 import { OverlayPreview } from "@/components/overlay/overlay-preview";
@@ -58,11 +59,26 @@ function cellData(
   if (cell.momentSampleId === null) return { snapshot, moment: undefined };
   const sample = GALLERY_MOMENT_SAMPLES.find((s) => s.id === cell.momentSampleId);
   if (sample === undefined) throw new Error(`overlay gallery: no moment sample ${cell.momentSampleId}`);
-  // The REAL derivation, over the stage's own side codes: the slab a broadcast would raise for this event.
-  const codes: [string, string] = [shortCode(props.sides[0]), shortCode(props.sides[1])];
+  // The REAL derivation, over the stage's own side codes (the pair, `overlaySideCodes`): the slab a broadcast would
+  // raise for this event.
+  const codes = overlaySideCodes(props.sides);
   const moment = momentsFor(sample.sportKey, [sample.event], sample.event.seq - 1, msg, codes)[0];
   if (moment === undefined) throw new Error(`overlay gallery: sample ${sample.id} raises no moment`);
   return { snapshot, moment };
+}
+
+/**
+ * Which side a cell's decided-result sentence names — its outcome's winner, when the result templates word it (a
+ * credited result reads the forfeit copy instead, which the stress mode does not force). Read off the cell's SNAPSHOT —
+ * the fold's own outcome — never off the overlay model the cell renders: gallery check 4c counts the Result cards the
+ * forced sentence must reach by it, and reads the code of THAT side, so a short rung naming the wrong side reds.
+ */
+function decidedWinnerIndex(snapshot: OverlayLiveData, sides: OverlayGalleryProps["sides"]): 0 | 1 | null {
+  const outcome = snapshot.outcome as { kind?: unknown; winner?: unknown } | null | undefined;
+  if (!outcome || (outcome.kind !== "win" && outcome.kind !== "award") || typeof outcome.winner !== "string") return null;
+  if (forfeitTag(outcome, NO_LEDGER, { home_entrant_id: sides[0].id, away_entrant_id: sides[1].id }) !== null) return null;
+  const at = sides.findIndex((s) => s.id === outcome.winner);
+  return at === 0 || at === 1 ? at : null;
 }
 
 function cellState(cell: GalleryCell, ui: Record<string, string>, moment: OverlayMoment | undefined): string {
@@ -133,6 +149,7 @@ export function OverlayGallery(props: OverlayGalleryProps) {
                 if (def === undefined) throw new Error(`overlay gallery: no template ${cell.templateId}`);
                 const { snapshot, moment } = cellData(cell, props, msg);
                 const scene = OVERLAY_SCENES.find((s) => s.id === cell.scene);
+                const winner = decidedWinnerIndex(snapshot, props.sides);
                 return (
                   <figure
                     key={cell.key}
@@ -143,6 +160,7 @@ export function OverlayGallery(props: OverlayGalleryProps) {
                     data-snapshot={cell.snapshot}
                     data-moment={cell.momentSampleId ?? ""}
                     data-result-status={cell.resultStatus ?? ""}
+                    data-result-winner={winner ?? ""}
                     data-slab-placement={def.slabPlacement}
                     data-safe-area={JSON.stringify(def.sceneCardSafeArea)}
                     className="m-0 space-y-1.5"

@@ -64,6 +64,70 @@ export async function seedOverlayRig(visibility: "public" | "private" | "unliste
   };
 }
 
+/** The eight clubs of `seedOverlayKnockoutRig`. Every name shares "WIN" (the team rule) and "WINN" (one letter wider),
+ *  so EVERY pairing collides through two rungs and resolves at the third — the first word's initial and the second
+ *  word's first two letters, typed here by hand from that convention (never read back from the ladder). */
+export const KNOCKOUT_CLUB_CODES: Readonly<Record<string, string>> = {
+  "Winners United": "WUN",
+  "Winners Athletic": "WAT",
+  "Winners Town": "WTO",
+  "Winners Rovers": "WRO",
+  "Winners Borough": "WBO",
+  "Winners City": "WCI",
+  "Winners Dynamo": "WDY",
+  "Winners Eagles": "WEA",
+};
+
+export interface OverlayKnockoutRig {
+  orgId: string;
+  /** A quarter-final: two seated clubs. */
+  seated: { id: string; names: [string, string] };
+  /** A semi-final waiting on two quarter-finals: two placeholder seats. */
+  placeholder: string;
+  /** The other semi-final, its HOME seat filled raw with `mixedHome` and its away seat still a placeholder. */
+  mixed: string;
+  mixedHome: string;
+}
+
+/** #987 review I1/M7 — a PUBLIC eight-club TEAM knockout, unplayed, the org entitled to `streaming.overlay`: the side
+ *  codes of a seated pair, a placeholder pair and a mixed pair, read through both overlay doors. The mixed seat is
+ *  written raw BEFORE any read, so no cached public read of that fixture predates it. */
+export async function seedOverlayKnockoutRig(): Promise<OverlayKnockoutRig> {
+  const { auth } = await seedOrg("pro");
+  await sql`update organizations set default_locale = 'en' where id = ${auth.orgId}`;
+  const competition = await createCompetition(auth, { ends_on: "2030-12-31", name: "Relay Codes Cup", visibility: "public", branding: {} });
+  const division = await createDivision(auth, competition.id, { name: "Open", sport_key: "generic", variant_key: "score", config: GENERIC_CONFIG });
+  const clubs = Object.keys(KNOCKOUT_CLUB_CODES);
+  await createEntrants(
+    auth,
+    division.id,
+    clubs.map((display_name, i) => ({ kind: "team" as const, display_name, seed: i + 1, members: [] })),
+  );
+  const [stage] = await createStages(auth, division.id, { seq: 1, kind: "knockout", name: "Knockout", config: {} });
+  await generateStageFixtures(auth, stage!.id);
+  const rows = await sql<{ id: string; round_no: number; home_entrant_id: string | null; away_entrant_id: string | null }[]>`
+    select id, round_no, home_entrant_id, away_entrant_id from fixtures where stage_id = ${stage!.id} order by round_no, seq_in_round`;
+  const entrants = await sql<{ id: string; display_name: string }[]>`select id, display_name from entrants where division_id = ${division.id}`;
+  const nameOf = new Map(entrants.map((e) => [e.id, e.display_name]));
+  const quarter = rows.find((r) => r.round_no === 1 && r.home_entrant_id !== null && r.away_entrant_id !== null);
+  const semis = rows.filter((r) => r.round_no === 2 && r.home_entrant_id === null && r.away_entrant_id === null);
+  if (!quarter || semis.length < 2) throw new Error(`seedOverlayKnockoutRig: unexpected draw ${JSON.stringify(rows)}`);
+  const mixedHome = "Winners United";
+  const mixedHomeId = entrants.find((e) => e.display_name === mixedHome)!.id;
+  await sql`update fixtures set home_entrant_id = ${mixedHomeId} where id = ${semis[1]!.id}`;
+  await sql`insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
+            values (${auth.orgId}, 'streaming.overlay', true, '#987 overlay codes rig')
+            on conflict (org_id, feature_key) do update set bool_value = true`;
+  await invalidateOrgEntitlements(auth.orgId);
+  return {
+    orgId: auth.orgId,
+    seated: { id: quarter.id, names: [nameOf.get(quarter.home_entrant_id!)!, nameOf.get(quarter.away_entrant_id!)!] },
+    placeholder: semis[0]!.id,
+    mixed: semis[1]!.id,
+    mixedHome,
+  };
+}
+
 /** Every session this rig seated, so the file's teardown can end them (`endRelaySessions`). */
 const seated = new Set<string>();
 
