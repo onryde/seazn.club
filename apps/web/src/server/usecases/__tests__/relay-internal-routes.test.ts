@@ -15,6 +15,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { randomBytes, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { decodeJwt } from "jose";
 
 // The sample writer, passed through untouched — one test makes it fail ONCE, to prove a telemetry failure can never
 // cost a beat its lifecycle half (Task 11 review I1b). Every other test runs the real writer.
@@ -47,7 +48,7 @@ import { log } from "@/server/logger";
 import { GET as facts } from "@/app/api/internal/relay/sessions/[sid]/route";
 import { POST as beat } from "@/app/api/internal/relay/sessions/[sid]/heartbeat/route";
 import { makeCommunityRig, seedOrg, startedDivisionWithFixture } from "./_rig";
-import { grantCredits } from "../stream-credits";
+import { grantCredits, orgMoneyLockKey } from "../stream-credits";
 import { createStreamTarget } from "../stream-targets";
 import { createSession, defaultDeps, heartbeat, sessionFactsForJob, stopSession } from "../stream-sessions";
 
@@ -486,9 +487,10 @@ describe.skipIf(!HAS_DB)("internal relay routes", () => {
       state: "live", runner_state: "lost",
       runner_exit_code: OOM_EXIT.exitCode, runner_oom_killed: OOM_EXIT.oomKilled, runner_requested_stop: OOM_EXIT.requestedStop,
     });
-    // The lost Machine is still up and still beating — through the ROUTE this time.
+    // The lost Machine is still up and still beating — through the ROUTE this time, on its OWN job token (attempt 2's;
+    // #983 r1: attempt 1's would be a superseded Machine's, a sample only, and prove nothing about this path).
     setRelayDriversForTest({ ingest: s.ingest, runner: s.runner });
-    const late = await postBeat(s.sessionId, { state: "playing", fps: 30 }, { token: s.jobToken });
+    const late = await postBeat(s.sessionId, { state: "playing", fps: 30 }, { token: s.runner.created[1]!.jobToken });
     expect(late.status).toBe(200);
     expect(await row(s.sessionId), "the beat route never writes the exit columns").toMatchObject({
       runner_exit_code: OOM_EXIT.exitCode, runner_oom_killed: OOM_EXIT.oomKilled, runner_requested_stop: OOM_EXIT.requestedStop,
@@ -1139,10 +1141,11 @@ describe.skipIf(!HAS_DB)("R2003: the final beat's exit reason through the heartb
     expect((await read()).status).toBe(200);
     expect(await row(s.sessionId), "booting, unbeaten for 30 s: alive").toMatchObject({ state: "live", runner_state: "booting", machine_id: r2.machine_id });
     expect(s.runner.created).toHaveLength(RUNNER_MAX_ATTEMPTS);
-    // it plays, then crashes too, and never comes back
-    expect((await postBeat(s.sessionId, { state: "playing" }, { token: s.jobToken })).status).toBe(200);
+    // it plays, then crashes too, and never comes back — on ITS OWN job token (#983 r1: attempt 1's is a superseded Machine's)
+    const token2 = s.runner.created[1]!.jobToken;
+    expect((await postBeat(s.sessionId, { state: "playing" }, { token: token2 })).status).toBe(200);
     expect((await row(s.sessionId)).runner_state).toBe("playing");
-    expect((await postBeat(s.sessionId, stoppedBeat("fatal"), { token: s.jobToken })).status).toBe(200);
+    expect((await postBeat(s.sessionId, stoppedBeat("fatal"), { token: token2 })).status).toBe(200);
     expect((await row(s.sessionId)).runner_state, "the second fatal is record only too").toBe("playing");
     await ageBeat(s.sessionId, STALE_HEARTBEAT_SECONDS_COMPOSED);
     const ended = await read();
@@ -1406,12 +1409,14 @@ describe.skipIf(!HAS_DB)("R2003b: the crash-loop cap through the heartbeat and f
     expect(s.runner.destroyed, "lost at the window: torn down").toEqual([m1]);
     expect(s.runner.created, "the ONE retry").toHaveLength(RUNNER_MAX_ATTEMPTS);
     expect(await row(s.sessionId), "the replacement carries the session's crash, not the attempt's evidence").toMatchObject({ state: "live", runner_state: "booting", runner_crash_count: 1, runner_crash_beats: 0, runner_crash_exits: 0 });
-    expect((await postBeat(s.sessionId, { state: "playing" }, { token: s.jobToken })).status).toBe(200);
+    // #983 r1: the replacement beats on ITS OWN job token (attempt 2) — attempt 1's would be a superseded Machine's.
+    const token2 = s.runner.created[1]!.jobToken;
+    expect((await postBeat(s.sessionId, { state: "playing" }, { token: token2 })).status).toBe(200);
     for (let k = 2; k <= RUNNER_CRASH_CAP; k++) {
-      expect((await postBeat(s.sessionId, stoppedBeat("fatal"), { token: s.jobToken })).status, `crash ${k}`).toBe(200);
+      expect((await postBeat(s.sessionId, stoppedBeat("fatal"), { token: token2 })).status, `crash ${k}`).toBe(200);
       if (k < RUNNER_CRASH_CAP) {
         expect(await row(s.sessionId), `crash ${k}`).toMatchObject({ state: "live", runner_crash_count: k });
-        expect((await postBeat(s.sessionId, { state: "playing" }, { token: s.jobToken })).status).toBe(200);
+        expect((await postBeat(s.sessionId, { state: "playing" }, { token: token2 })).status).toBe(200);
       }
     }
     expect(await row(s.sessionId)).toMatchObject({ state: "failed", fail_reason: "machine_crash", runner_crash_count: RUNNER_CRASH_CAP });
@@ -1607,13 +1612,15 @@ describe.skipIf(!HAS_DB)("owner 2026-10-18: a ladder step-down on a composed bea
       const second = (await row(s.sessionId)).machine_id!;
       expect(second, "premise: a new Machine").not.toBe(first);
       // The replacement's FIRST beat is already on the bottom rung — the very word attempt 1's last beat stored. Compared
-      // against that stored beat it reads as "held", and a short Machine on its new attempt would never alarm.
-      expect((await postBeat(s.sessionId, { state: "starting", rung: "overlay_half_rate" }, { token: s.jobToken })).status).toBe(200);
+      // against that stored beat it reads as "held", and a short Machine on its new attempt would never alarm. It beats on
+      // ITS OWN job token (#983 r1: attempt 1's is a superseded Machine's, and alarms nothing).
+      const token2 = s.runner.created[1]!.jobToken;
+      expect((await postBeat(s.sessionId, { state: "starting", rung: "overlay_half_rate" }, { token: token2 })).status).toBe(200);
       const reports = reportsFor(s.sessionId);
       expect(reports, "attempt 2's step is its own alarm").toHaveLength(2);
       expect(reports[1]![1]).toMatchObject({ route: ROUTE, extra: { sessionId: s.sessionId, rung: "overlay_half_rate", previousRung: null, attempt: 2, machineId: second } });
       // …and attempt 2 then holds its bottom: no third alarm.
-      expect((await postBeat(s.sessionId, { state: "playing", rung: "overlay_half_rate" }, { token: s.jobToken })).status).toBe(200);
+      expect((await postBeat(s.sessionId, { state: "playing", rung: "overlay_half_rate" }, { token: token2 })).status).toBe(200);
       expect(reportsFor(s.sessionId), "the new attempt's bottom holds").toHaveLength(2);
       expect(warningsFor(warn, s.sessionId), "the log agrees").toHaveLength(2);
     } finally {
@@ -1858,7 +1865,7 @@ describe.skipIf(!HAS_DB)("Owed 37: a late beat never overwrites the final stoppe
   const LATE: RelayHeartbeat = { state: "playing", fps: 23, egressBytes: LATE_EGRESS };
 
   // What a late periodic beat meets after each final, from the rulings: R2003 (no reason → lost → the ONE retry, a NEW
-  // attempt; ended / deadline complete the session; refused fails it), R2003b (fatal → Fly restarts the compositor IN
+  // attempt — the late beat's token names the OLD one, #983 r1; ended / deadline complete the session; refused fails it), R2003b (fatal → Fly restarts the compositor IN
   // PLACE on the SAME attempt, and the restarted process beats again — AGENTS.md class 13: a guard must not skip that
   // legitimate arrival), and stoppedBeatTrigger's own record (signalled is exit 0, which Fly never restarts; session_gone
   // is a run whose session is already over) — after those two no live process of this attempt is left to beat.
@@ -1870,7 +1877,7 @@ describe.skipIf(!HAS_DB)("Owed 37: a late beat never overwrites the final stoppe
     signalled: "late_dropped", session_gone: "late_dropped",
   };
 
-  it("final, then a late periodic beat — every exit reason from a PLAYING runner, and ended / signalled while our own stop is STOPPING it: the stored final stays whole (last_heartbeat, heartbeat_at, egress) wherever no live process of the attempt is left; a terminal session answers 410 and writes nothing; a restart in place and a new attempt still write (count reported)", async () => {
+  it("final, then a late periodic beat — every exit reason from a PLAYING runner, and ended / signalled while our own stop is STOPPING it: the stored final stays whole (last_heartbeat, heartbeat_at, egress) wherever no live process of the attempt is left — attempt 1's late beat after a retry included; a terminal session answers 410 and writes nothing; a restart in place and the NEW attempt's own beat still write (count reported)", async () => {
     expect(Object.keys(AFTER_FINAL).sort(), "every exit reason is decided").toEqual([...BEAT_EXIT_REASONS, "absent", "null"].sort());
     const cases: (readonly [label: string, reason: keyof typeof AFTER_FINAL, from: "playing" | "stopping", want: AfterFinal])[] = [
       // Our own Stop: the SIGINT holds the Final scene and the compositor's final beat lands while the runner is stopping —
@@ -1901,31 +1908,41 @@ describe.skipIf(!HAS_DB)("Owed 37: a late beat never overwrites the final stoppe
       const res = await postBeat(s.sessionId, LATE, { token: s.jobToken });
       const after = await beatFacts(s.sessionId);
       const late = (await samples(s.sessionId)).slice(samplesBefore);
-      if (want === "late_dropped") {
+      if (want === "late_dropped" || want === "new_attempt") {
         expect(res.status, label).toBe(200);
         expect(after, `${label}: the final survives whole`).toEqual(stored);
         expect(late, `${label}: the late beat is still a sample`).toEqual([{ source: "heartbeat", fps: LATE.fps, bitrate_kbps: null }]);
-        // The guard drops a NON-final beat only: the final itself, replayed (its lane retried the POST), is the same
-        // fact and still writes — heartbeat_at moves to the replay.
-        expect((await postBeat(s.sessionId, final, { token: s.jobToken })).status, `${label}: the replayed final`).toBe(200);
-        const replayed = await beatFacts(s.sessionId);
-        expect(replayed.lastHeartbeat, `${label}: the replayed final`).toEqual(final);
-        expect(replayed.heartbeatAt, `${label}: the replayed final is written`).not.toBe(stored.heartbeatAt);
+        if (want === "late_dropped") {
+          // The guard drops a NON-final beat only: the final itself, replayed (its lane retried the POST), is the same
+          // fact and still writes — heartbeat_at moves to the replay.
+          expect((await postBeat(s.sessionId, final, { token: s.jobToken })).status, `${label}: the replayed final`).toBe(200);
+          const replayed = await beatFacts(s.sessionId);
+          expect(replayed.lastHeartbeat, `${label}: the replayed final`).toEqual(final);
+          expect(replayed.heartbeatAt, `${label}: the replayed final is written`).not.toBe(stored.heartbeatAt);
+        } else {
+          // #983 r1: attempt 1's late beat (its token names attempt 1) is a superseded Machine's — attempt 2 stays as the
+          // retry left it. Attempt 2's OWN first beat, on attempt 2's token, then writes as sent: its count is its own.
+          expect(s.runner.created, `${label}: premise — the ONE retry booted attempt 2`).toHaveLength(RUNNER_MAX_ATTEMPTS);
+          expect((await row(s.sessionId)).runner_state, `${label}: attempt 2 is still booting`).toBe("booting");
+          const own: RelayHeartbeat = { state: "starting", egressBytes: LATE_EGRESS };
+          expect((await postBeat(s.sessionId, own, { token: s.runner.created[1]!.jobToken })).status, `${label}: attempt 2's beat`).toBe(200);
+          const mine = await beatFacts(s.sessionId);
+          expect(mine.lastHeartbeat, `${label}: attempt 2's own beat is written`).toEqual(own);
+          expect(mine.heartbeatAt, `${label}: and it holds the stale window off`).not.toBe(stored.heartbeatAt);
+          expect(mine.egress, `${label}: a new attempt's count is its own, lower or not`).toBe(LATE_EGRESS);
+        }
       } else if (want === "over_410") {
         expect(res.status, label).toBe(410);
         expect(after, `${label}: a terminal session writes nothing`).toEqual(stored);
         expect(late, `${label}: …not even a sample`).toEqual([]);
       } else {
+        // same_attempt_restart: the restarted process beats on the SAME attempt's token — indistinguishable from a late
+        // beat of the crashed one without a seq, and written.
         expect(res.status, label).toBe(200);
         expect(after.lastHeartbeat, `${label}: the next process's beat is written`).toEqual(LATE);
         expect(after.heartbeatAt, `${label}: and it holds the stale window off`).not.toBe(stored.heartbeatAt);
-        if (want === "same_attempt_restart") {
-          expect(s.runner.created, `${label}: premise — no retry, the same attempt`).toHaveLength(1);
-          expect(after.egress, `${label}: the SAME attempt's count never goes backwards`).toBe(Math.max(FINAL_EGRESS, LATE_EGRESS));
-        } else {
-          expect(s.runner.created, `${label}: premise — the ONE retry booted attempt 2`).toHaveLength(RUNNER_MAX_ATTEMPTS);
-          expect(after.egress, `${label}: a new attempt's count is its own, lower or not`).toBe(LATE_EGRESS);
-        }
+        expect(s.runner.created, `${label}: premise — no retry, the same attempt`).toHaveLength(1);
+        expect(after.egress, `${label}: the SAME attempt's count never goes backwards`).toBe(Math.max(FINAL_EGRESS, LATE_EGRESS));
       }
       seen.add(want);
       checked++;
@@ -2002,5 +2019,112 @@ describe.skipIf(!HAS_DB)("Owed 37: a late beat never overwrites the final stoppe
     }
     expect(checked).toBe(steps.length);
     expect(s.runner.created, "no third Machine").toHaveLength(RUNNER_MAX_ATTEMPTS);
+  });
+
+  // #983 review r1 (coordinator ruling): the beat_window_at anchor cannot tell attempt 1's LATE beat, received after the
+  // retry moved the anchor, from attempt 2's first one — and the late one used to drive callback_playing on attempt 2's
+  // runner: booting → playing cut its stale window from the boot allowance to the played one (expiry.ts
+  // staleWindowSeconds), and a 15–30 s cold start then failed the session with the retry already spent. Each attempt's
+  // job token now names its attempt (`att`), and a beat for an older one than runner_attempts is a sample only.
+  it("#983 r1: attempt 1's LATE beats after the retry — a periodic one that stepped down, then its final retried on its lane — leave attempt 2 BOOTING with its boot allowance intact: no row write, no runner transition, no state move, no sizing alarm, one sample each", async () => {
+    const s = await playingSession();
+    const m1 = (await row(s.sessionId)).machine_id!;
+    expect((await postBeat(s.sessionId, { state: "playing", rung: "full", egressBytes: PREV_EGRESS }, { token: s.jobToken })).status).toBe(200);
+    // Attempt 1's final gives no reason: lost → torn down → the ONE retry (R2003).
+    const final = { ...stoppedBeat("absent"), egressBytes: FINAL_EGRESS };
+    expect((await postBeat(s.sessionId, final, { token: s.jobToken })).status).toBe(200);
+    expect(s.runner.created, "premise: attempt 2 booted").toHaveLength(RUNNER_MAX_ATTEMPTS);
+    // The real producer (createRunner) minted each Machine its OWN token, naming its attempt.
+    expect(s.runner.created.map((c) => decodeJwt(c.jobToken).att), "one token per attempt").toEqual([1, 2]);
+    const m2 = (await row(s.sessionId)).machine_id!;
+    expect(m2, "premise: a new Machine").not.toBe(m1);
+    expect(await row(s.sessionId), "premise").toMatchObject({ state: "live", runner_state: "booting", machine_id: m2 });
+    const stored = await beatFacts(s.sessionId);
+    const transitions = async () => (await sql<{ n: number }[]>`
+      select count(*)::int as n from fixture_stream_events where session_id = ${s.sessionId} and kind = 'runner_transition'`)[0]!.n;
+    const alarms = () => sentry.captureError.mock.calls.filter(([, c]) => (c as { route?: string } | undefined)?.route === "relay.sizing_alarm"
+      && (c as { extra?: { sessionId?: string } }).extra?.sessionId === s.sessionId).length;
+    const t0 = await transitions(), a0 = alarms(), samples0 = (await samples(s.sessionId)).length;
+    const late: [label: string, body: RelayHeartbeat][] = [
+      ["a periodic beat that stepped down", { state: "playing", fps: 23, rung: "overlay_half_rate", egressBytes: LATE_EGRESS }],
+      ["its final, retried on its lane", final as RelayHeartbeat],
+    ];
+    let checked = 0;
+    for (const [label, body] of late) {
+      expect((await postBeat(s.sessionId, body, { token: s.jobToken })).status, label).toBe(200);
+      expect(await row(s.sessionId), `${label}: attempt 2 untouched`).toMatchObject({ state: "live", runner_state: "booting", machine_id: m2 });
+      expect(await beatFacts(s.sessionId), `${label}: no row write`).toEqual(stored);
+      expect(await transitions(), `${label}: no runner transition`).toBe(t0);
+      expect(alarms(), `${label}: no sizing alarm`).toBe(a0);
+      checked++;
+    }
+    expect(checked).toBe(late.length);
+    expect((await samples(s.sessionId)).length - samples0, "each late beat is still a sample").toBe(late.length);
+    // The boot allowance is intact: unbeaten past the PLAYED window, inside the boot allowance, attempt 2 still boots.
+    const quiet = STALE_HEARTBEAT_SECONDS_COMPOSED + BEAT_S;
+    expect(quiet, "premise: past the played window, inside the boot allowance").toBeLessThan(STALE_HEARTBEAT_SECONDS);
+    await ageBeat(s.sessionId, quiet);
+    expect((await getFacts(s.sessionId, { token: s.runner.created[1]!.jobToken })).status).toBe(200);
+    expect(await row(s.sessionId), `attempt 2, unbeaten for ${quiet} s: still booting`).toMatchObject({ state: "live", runner_state: "booting", machine_id: m2 });
+    expect(s.runner.destroyed, "only attempt 1's Machine was torn down").toEqual([m1]);
+    // The positive pair: attempt 2's own beat, on its own token, plays it.
+    expect((await postBeat(s.sessionId, { state: "playing" }, { token: s.runner.created[1]!.jobToken })).status).toBe(200);
+    expect(await row(s.sessionId)).toMatchObject({ state: "live", runner_state: "playing", machine_id: m2 });
+  });
+
+  it("#983 r1, the callback's own locked row: attempt 1's beat, CURRENT at its write, whose callback meets attempt 2 (a retry lands between the two) moves nothing — `playing` plays nothing, a final with no reason loses nothing; the replacement stays booting (count reported)", async () => {
+    // The window is the gap between the beat's write and its callback. Postgres queues advisory-lock waiters in arrival
+    // order (stream-sessions.test.ts "m1 RACE (the beat, between its two applies)"): the test holds the org lock; the
+    // beat writes (row lock only) and queues on it with its expiry; a second writer — the retry, as SQL — queues behind
+    // the beat; release: the expiry commits, the callback queues behind the writer, and meets attempt 2.
+    const cases: [label: string, body: RelayHeartbeat][] = [
+      ["playing → callback_playing", { state: "playing", fps: 30 }],
+      ["a final with no reason → lost", { state: "stopped" }],
+    ];
+    let checked = 0;
+    for (const [label, body] of cases) {
+      const s = await playingSession();
+      const m1 = (await row(s.sessionId)).machine_id!;
+      let release!: () => void;
+      const mayCommit = new Promise<void>((res) => (release = res));
+      let signalHeld!: (pid: number) => void;
+      const held = new Promise<number>((res) => (signalHeld = res));
+      const holder = sql.begin(async (tx) => {
+        const [{ pid }] = await tx<{ pid: number }[]>`select pg_backend_pid() as pid`;
+        await tx`select pg_advisory_xact_lock(hashtext(${orgMoneyLockKey(s.auth.orgId)}))`;
+        signalHeld(pid);
+        await mayCommit;
+      });
+      const holderPid = await held;
+      const beatOut = postBeat(s.sessionId, body, { token: s.jobToken });
+      expect(await queuedBehind(holderPid, 1), `${label}: the race was not staged — the beat never queued on the org lock`).toBeGreaterThanOrEqual(1);
+      expect(await lastHeartbeat(s.sessionId), `${label}: premise — the beat was CURRENT at its write, so written`).toEqual(body);
+      const writer = sql.begin(async (tx) => {
+        await tx`select pg_advisory_xact_lock(hashtext(${orgMoneyLockKey(s.auth.orgId)}))`;
+        await tx`update fixture_stream_sessions set runner_attempts = runner_attempts + 1, runner_state = 'booting' where id = ${s.sessionId}`;
+      });
+      expect(await queuedBehind(holderPid, 2), `${label}: the race was not staged — the retry never queued behind the beat`).toBeGreaterThanOrEqual(2);
+      release();
+      await holder;
+      await writer;
+      expect((await beatOut).status, `${label}: answered, never a 500`).toBe(200);
+      expect(await row(s.sessionId), `${label}: attempt 2 untouched by attempt 1's callback`).toMatchObject({ state: "live", runner_state: "booting", machine_id: m1 });
+      expect(s.runner.destroyed, `${label}: nothing torn down`).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+  });
+
+  it("#983 r1: a job token WITHOUT an attempt claim (minted before this deploy, the session in flight across it) keeps today's behaviour — after the retry its beat still writes and plays the runner", async () => {
+    const s = await playingSession();
+    expect((await postBeat(s.sessionId, stoppedBeat("absent"), { token: s.jobToken })).status).toBe(200);
+    expect(s.runner.created, "premise: attempt 2 booted").toHaveLength(RUNNER_MAX_ATTEMPTS);
+    expect((await row(s.sessionId)).runner_state, "premise").toBe("booting");
+    const legacy = await mintRelayToken({ sid: s.sessionId, scope: "relay-job", expiresAt: new Date(Date.now() + 60 * 60_000) });
+    expect(decodeJwt(legacy).att, "premise: the pre-deploy shape").toBeUndefined();
+    const body: RelayHeartbeat = { state: "playing", fps: 29 };
+    expect((await postBeat(s.sessionId, body, { token: legacy })).status).toBe(200);
+    expect(await lastHeartbeat(s.sessionId), "written, as today").toEqual(body);
+    expect((await row(s.sessionId)).runner_state, "and it drives callback_playing, as today").toBe("playing");
   });
 });

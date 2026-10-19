@@ -990,8 +990,9 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     expect(await r.row(sessionId)).toMatchObject({
       state: "live", runner_state: "lost", runner_exit_code: OOM_EXIT.exitCode, runner_oom_killed: OOM_EXIT.oomKilled, runner_requested_stop: OOM_EXIT.requestedStop,
     });
-    // The lost runner's Machine is still up and still beating — recorded, answered, never fed to the table (T10-b).
-    expect(await heartbeat(sessionId, jobToken, { state: "playing", fps: 30 }, r.deps)).toEqual({ desiredState: "live" });
+    // The lost runner's Machine is still up and still beating — recorded, answered, never fed to the table (T10-b). It is
+    // attempt 2's Machine, so it beats on attempt 2's job token (#983 r1: attempt 1's would be a superseded Machine's).
+    expect(await heartbeat(sessionId, r.runner.created[1]!.jobToken, { state: "playing", fps: 30 }, r.deps)).toEqual({ desiredState: "live" });
     expect(await r.row(sessionId)).toMatchObject({ runner_exit_code: OOM_EXIT.exitCode, runner_oom_killed: OOM_EXIT.oomKilled });
     // `lost × observed(failed)` only stays (the table re-issues a lost runner's teardown on a STALE beat, never on a look),
     // so the teardown is re-issued the way production re-issues it: the beat window runs out. Age BOTH anchors (G1).
