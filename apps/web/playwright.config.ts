@@ -54,6 +54,7 @@ const SERIAL_SPECS =
 //   unset    -> the whole project, unchanged — every local run, and
 //               `npm run test:e2e`, take this path
 //
+// (SUPERSEDED 2026-10-19, see "So PARALLEL_HEAVY holds five files now" below.)
 // PARALLEL_HEAVY holds three files, not one, and the count is derived rather
 // than chosen. Carving out only the cricket spec leaves the remainder's own
 // alphabetical first half heavy (marketing-ai-demo, ai-architect, board-v3,
@@ -99,7 +100,7 @@ const SERIAL_SPECS =
 // A replay over those durations puts that split at 719s, against 727s
 // measured; that is the model to trust.
 //
-// So PARALLEL_HEAVY holds six files now (the "three files" above is the
+// So PARALLEL_HEAVY holds five files now (the "three files" above is the
 // original derivation) — scorepad-v3-cricket, marketing-ai-demo, board-v3
 // plus online-chess-desk and overlay-gallery — and "rest" is sharded FOUR ways
 // in e2e.yml. Replayed step: heavy 446s, rest 279 / 558 / 472 / 419s; measured
@@ -110,7 +111,15 @@ const SERIAL_SPECS =
 //     "rest".
 //   * player-stats-stale-version — alphabetically it would start after the
 //     gallery's tests and be the leg's tail. In "rest" it sits where a shard
-//     has a shard's worth of other work to overlap it with.
+//     has a shard's worth of other work to overlap it with. FORECAST RISK,
+//     from the #997 review: its one 5.1-minute test is the 11th test of rest
+//     3/4, about TEN tests from the 2/4 boundary. Roughly 21 tests added to
+//     files that sort after it, or removed from before it, or a carve-out of
+//     a file that sorts before "pl" (match-room, say), moves it into 2/4
+//     beside match-room and overlay-compositor — already the slowest leg at
+//     729s — which lands near 1000s of job time, the original failure. Re-list
+//     (`E2E_PARALLEL_SLICE=rest npx playwright test --list --project=parallel
+//     --shard=2/4`) after any carve-out or large spec growth.
 // And match-room stays in "rest" too: its 53 tests are small (the longest is
 // 48s), so count shards split it well, and carved out it makes heavy 719s.
 // e2e.yml's e2e-parallel comment carries the measurements.
@@ -153,6 +162,20 @@ const PARALLEL_SLICE = process.env.E2E_PARALLEL_SLICE;
 // wall clock bought for isolation and a legible failure. If it ever needs
 // winning back, tennis-mtb is the whole lever — one test, ~174s, most of it
 // deliberate waits clearing the pad's double-submit guard.
+//
+// RE-CUT 2026-10-19. The estimates above are from the 18-spec directory and
+// are history: the directory is 361 tests now, tennis-mtb is one test of 98s,
+// and a three-way COUNT shard measured 960 / 228 / 900s of Playwright step
+// (job 1118 / 362 / 1049s) against a 20-minute cap. Two groups of files hold
+// 48% of the directory's 5690 worker-seconds — stream-relay (31 tests, 1372s)
+// and capture-phone + capture-panel-pr2 + capture-auto (31 tests, 1367s) — so
+// e2e.yml now runs FOUR legs: those two groups whole, and the remaining 299
+// tests sharded two ways. E2E_WALKTHROUGH_SLICE picks the leg: "capture",
+// "stream", "rest" (the catch-all: it ignores the two carve-outs and nothing
+// else, so a new walkthrough spec joins it with no list to edit), unset = the
+// whole directory, which is what every local run takes. e2e.yml's e2e-parallel
+// matrix carries the measurements (run 39332874412: job 650 / 684 / 718 / 551s,
+// the slowest 12.0 min); e2e-ci-wiring.test.ts pins the partition.
 // ANCHORED ON `e2e/` deliberately. Playwright matches `testMatch`/`testIgnore`
 // against the file's ABSOLUTE path, not a path relative to `testDir`, so a
 // bare /walkthrough\// also matches every checkout that happens to live under
@@ -161,6 +184,18 @@ const PARALLEL_SLICE = process.env.E2E_PARALLEL_SLICE;
 // suite, `helpers.ts` included, and Playwright then rejected every spec with
 // `test file "ai-architect.spec.ts" should not import test file "helpers.ts"`.
 const WALKTHROUGH = /[\\/]e2e[\\/]walkthrough[\\/]/;
+
+// Walkthrough carve-outs, selected by E2E_WALKTHROUGH_SLICE (see the block
+// above the project for the measurements and the reasoning). "capture" and
+// "stream" each select ONE group of files; "rest" ignores both and is the
+// catch-all; unset runs the whole directory, which is what a local run wants.
+const WALKTHROUGH_CAPTURE = /walkthrough[\\/]capture-(phone|panel-pr2|auto)\.spec\.ts/;
+const WALKTHROUGH_STREAM = /walkthrough[\\/]stream-relay\.spec\.ts/;
+const WALKTHROUGH_SLICE = process.env.E2E_WALKTHROUGH_SLICE;
+const WALKTHROUGH_SLICE_MATCH: Record<string, RegExp> = {
+  capture: WALKTHROUGH_CAPTURE,
+  stream: WALKTHROUGH_STREAM,
+};
 
 export default defineConfig({
   testDir: "./e2e",
@@ -211,7 +246,12 @@ export default defineConfig({
     // WALKTHROUGH above for why, and for what it costs.
     {
       name: "walkthrough",
-      testMatch: WALKTHROUGH,
+      testMatch: WALKTHROUGH_SLICE && WALKTHROUGH_SLICE in WALKTHROUGH_SLICE_MATCH
+        ? WALKTHROUGH_SLICE_MATCH[WALKTHROUGH_SLICE]
+        : WALKTHROUGH,
+      ...(WALKTHROUGH_SLICE === "rest"
+        ? { testIgnore: [WALKTHROUGH_CAPTURE, WALKTHROUGH_STREAM] }
+        : {}),
       use: { ...devices["Desktop Chrome"], storageState: AUTH_STATE },
       dependencies: ["setup"],
     },

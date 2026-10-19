@@ -16,8 +16,8 @@
 #     `postgres:16` / `placement-service:ci` containers. The Dockerfile itself
 #     therefore stays gated only by CI. --placement-image opts into the image.
 #   * GHA `background:`/`wait:` parallelism collapses to sequential.
-#   * Playwright runs UNSHARDED (a superset of CI's 4 `parallel` legs — heavy
-#     plus rest 1..3/3 — and its 3 mobile legs).
+#   * Playwright runs UNSHARDED (a superset of CI's 5 `parallel` legs — heavy
+#     plus rest 1..4/4 — and its 3 mobile legs).
 #   * macOS arm64, not ubuntu-latest x64 — wall-clock budget assertions differ.
 #   * The server listens on a derived 33xx port, never 3000 (owner rule), and
 #     is addressed as `localhost`, never 127.0.0.1 (secure cookies 401 on the
@@ -455,7 +455,7 @@ e2e_job() { # $1=label-suffix  $2...=playwright args
     sh -c "cd '$REPO/apps/web' && npx playwright test $*"
 }
 
-# CI runs this as a "heavy" leg plus a "rest" slice sharded 1..3/3
+# CI runs this as a "heavy" leg plus a "rest" slice sharded 1..4/4
 # (E2E_PARALLEL_SLICE); locally we run the whole project (a superset).
 job_e2e_parallel() { e2e_job e2e-par "--project=parallel"; }
 job_e2e_serial()   { e2e_job e2e-ser "--project=serial --workers=1"; }

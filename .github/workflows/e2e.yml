@@ -73,6 +73,10 @@ name: E2E
 # and a fourth rest leg, not a longer timeout; see the same comment for the
 # measurements, and for the first attempt that was not enough.
 #
+# 2026-10-19, later the same day: the walkthrough leg was the next one at the
+# cap (walkthrough 1/3 18.6-19.1 min, 3/3 17.5-18). It is now FOUR legs, cut by
+# file rather than by count; see the walkthrough block in e2e-parallel's matrix.
+#
 # Each job independently migrates its own fresh Postgres and mints its own
 # `setup`-project org — GitHub Actions `services:` are job-scoped, so there
 # is no live database or server to share across jobs (see ci.yml's
@@ -172,7 +176,7 @@ jobs:
     # changing the split. That derivation was made for TWO rest legs, predicting
     # 128 / 126 / 115s against a perfect-split floor of 123s.
     #
-    # THREE REST LEGS since 2026-09-27 (owner request), because "rest" grew out
+    # (SUPERSEDED 2026-10-19, FOUR rest legs, below.) THREE REST LEGS since 2026-09-27 (owner request), because "rest" grew out
     # from under that prediction: each of the two shards ran 344 tests, the
     # heavy leg 38. Measured Playwright step / whole job:
     #
@@ -276,9 +280,9 @@ jobs:
     # Why a fourth rest leg now, after the paragraph above argued against one:
     # that paragraph's trigger — "a rest leg is once more the slowest in a
     # run" — is exactly what happened, and replaying every option over real
-    # costs, four legs cannot be brought under ~650s of step whichever files
-    # are carved (the best the search found was 625s, by also carving two
-    # unrelated specs as filler), while plain 4/4 count shards with no
+    # costs, three rest legs plus heavy cannot be brought under ~650s of step
+    # whichever files are carved (the best the search found was 625s, by also
+    # carving two unrelated specs as filler), while plain 4/4 count shards with no
     # carve-out replay at 913s. Replayed step now: heavy 446s, rest 279 / 558 /
     # 472 / 419s, against 936-1050s measured for the old 2/3. That is one more
     # setup (~2.5 runner-min of ~110 a run), and it leaves room for the chess
@@ -290,7 +294,10 @@ jobs:
     #   parallel 1/4  416s / 4.5m   2/4  729s / 9.5m   3/4  497s / 5.9m
     #   parallel 4/4  599s / 7.5m   heavy 575s / 7.0m
     #
-    # Replayed steps were 279 / 557 / 469 / 418 / 446s. The slowest leg is 2/4
+    # Replayed steps were the 279 / 558 / 472 / 419s (rest) and 446s (heavy)
+    # above; an earlier draft of this paragraph carried a second set that
+    # disagreed with it by 1-3s and is dropped rather than reconciled. The
+    # slowest leg is 2/4
     # (match-room 257s + overlay-compositor 140s of test starts) at 12.2 min
     # start to end, 7.8 min under the cap; on the first attempt it was heavy at
     # 14.7 and on the original split 2/3 at 17.7-20+. On a slow day (steps
@@ -298,18 +305,24 @@ jobs:
     # workflow's wall clock is unchanged: walkthrough 1/3 ran 1118s on the
     # same run, so the parallel legs are not its floor.
     #
+    # FORECAST RISK, from the #997 review: the one 5.1-minute test in
+    # player-stats-stale-version is the 11th test of 3/4, about TEN tests from
+    # the 2/4 boundary. Roughly 21 tests added to files that sort after it, or
+    # removed from before it, or a carve-out of a file that sorts before "pl"
+    # (match-room, say), moves it into 2/4 beside match-room and
+    # overlay-compositor, which lands near 1000s of job time: the original
+    # failure. Re-list `--shard=2/4` after any carve-out or large spec growth.
+    #
     # `timeout-minutes: 20` STAYS. It is a cost guard against a hung job, and
     # the data does not show a shard that cannot be brought under ~15 min.
     # Raising it would have hidden this: 2/3 had been 14.7-20+ min on every
     # main push since 07:45 that morning before one lost to it.
     #
-    # NEXT LEG TO WATCH, outside this split: walkthrough 1/3 ran 1000-1147s
-    # on main pushes of 10-19 (19.1 min on run 39288837798, 18.8 on
-    # 39320198519) and 3/3 850-1083s, under the same cap. On run 39300823701
-    # the test starts of 1/3 were capture-phone 260s, capture-panel-pr2 110s,
-    # event-pass 86s; of 3/3, stream-relay 411s. That is the leg that will be
-    # cancelled next, and it is the walkthrough shard cut, not PARALLEL_HEAVY,
-    # that would need to move.
+    # THE LEG THAT WAS NEXT TO BE CANCELLED, outside this split: walkthrough
+    # 1/3 ran 1000-1147s on main pushes of 10-19 (19.1 min on run
+    # 39288837798, 18.8 on 39320198519) and 3/3 850-1083s, under the same cap.
+    # That is the walkthrough cut, not PARALLEL_HEAVY, and it was re-cut the
+    # same day: see the walkthrough block in the matrix below.
     strategy:
       fail-fast: false # one leg's failure must not hide another's
       matrix:
@@ -348,8 +361,79 @@ jobs:
           # broke". `slice` is irrelevant to this project and left empty
           # deliberately: E2E_PARALLEL_SLICE only selects between the parallel
           # project's own halves, and setting it here would imply otherwise.
+          # This project has its OWN key, `walkthrough_slice`, passed to the
+          # config as E2E_WALKTHROUGH_SLICE; the wiring test reads the
+          # `slice: rest` legs to pin the four-way parallel shard, so
+          # re-using `slice` here would put these legs among them.
           #
-          # SHARDED THREE WAYS 2026-09-22 (owner ruling), replacing the single
+          # RE-CUT 2026-10-19 INTO FOUR LEGS, BY FILE. Everything below the
+          # next rule is the 2026-09-22 three-way count shard, kept for its
+          # reasoning; its CUT is superseded. Three count shards measured, on
+          # run 39326082029 (Playwright step / whole job, setup 148s):
+          #
+          #   1/3  960s / 1118s   2/3  228s / 362s   3/3  900s / 1049s
+          #
+          # and 1000-1147s / 850-1083s on the earlier main pushes of the day,
+          # against `timeout-minutes: 20` (1200s). Two legs at 18-19 min and
+          # one at 6 is the shape of a count shard over a suite whose cost sits
+          # in a handful of files: Playwright splits by TEST COUNT and is blind
+          # to cost. The per-test durations (results.json of the failed or
+          # flaky runs, averaged over six of them) put 48% of the whole
+          # directory's 5690 worker-seconds in two groups of files:
+          #
+          #   stream-relay.spec.ts                       31 tests  1372s  (B5 frame @1280 246s, @320 129s,
+          #                                                                @768 127s, D3 130s)
+          #   capture-phone + capture-panel-pr2 +
+          #   capture-auto                                31 tests  1367s  (W22 155s, W23 139s, T10/T11 101s)
+          #
+          # Tennis-mtb, which the older paragraphs below treat as the floor, is
+          # one test of 98s now.
+          #
+          # THE CUT: those two groups each get a leg, and the remaining 299
+          # tests are sharded two ways. `walkthrough_slice` (E2E_WALKTHROUGH_
+          # SLICE in apps/web/playwright.config.ts) is "capture", "stream" or
+          # "rest"; "rest" is a CATCH-ALL that ignores the two carve-outs and
+          # nothing else, so a new walkthrough file joins it without anyone
+          # editing a list. Replayed Playwright step on a three-worker
+          # first-free scheduler (it reproduced 960 / 228 / 900 as 920 / 215 /
+          # 889, i.e. -1% to -4%):
+          #
+          #   capture 477s   stream 535s   rest 1/2 606s   rest 2/2 382s
+          #
+          # which is a ~13 min job at the 148s setup, 7 min under the cap. The
+          # same replay, rejected: `--shard=N/4` 709 / 304 / 203 / 764s (the
+          # slowest ~16 min, over the ~15 this was cut for), `/5` 651 / 321 /
+          # 53 / 211 / 729s (five setups, one leg of 53s) and `/6` 569 / 355 /
+          # 117 / 99 / 262 / 638s (six setups, and stream-relay split across
+          # two legs).
+          #
+          # Selection was proven exactly-once from `playwright test --list` per
+          # leg, before and after: 361 walkthrough tests either way, none
+          # selected twice, none dropped (3 count shards 121 / 122 / 118; four
+          # legs 31 / 31 / 154 / 145, setup excluded).
+          #
+          # MEASURED, run 39332874412 (PR #998 dispatch, 13/13 jobs green, no
+          # failure or flake). Job / Playwright step / setup before the step:
+          #
+          #   capture      650s / 492s / 154s    (replayed 477s)
+          #   stream       684s / 525s / 154s    (replayed 535s)
+          #   rest 1/2     718s / 557s / 155s    (replayed 606s)
+          #   rest 2/2     551s / 391s / 155s    (replayed 382s)
+          #
+          # The slowest walkthrough leg is rest 1/2 at 12.0 min, against 18.6
+          # for the old 1/3 on run 39326082029; the slowest of the whole
+          # run is parallel 2/4 at 730s (12.2 min), so the walkthrough legs are
+          # no longer the cap's neighbour. CI ran exactly the listed counts: 33,
+          # 33, 156 and 147 tests, which is the `--list` count including the two
+          # setup tests, and rest 1/2 (the shard that holds event-pass.spec.ts)
+          # ran its money-path check while the other three printed the notice.
+          # Replay error was -3% / +2% / +9% / -2% (step). The runner-time cost
+          # is 2603 job-seconds against 2529 for the three-way cut (+3%): one
+          # more setup, paid for by no leg being within a minute of the cap.
+          # On a slow day (steps +30%, setup 240s, an estimate and not a
+          # measurement) rest 1/2 is ~16.1 min; the old 1/3 was over the cap.
+          #
+          # (SUPERSEDED, see above.) SHARDED THREE WAYS 2026-09-22 (owner ruling), replacing the single
           # `--workers=3` leg this block used to describe. The file has grown
           # well past the eighteen specs the old comment was derived from, and
           # the old derivation is superseded rather than merely restated — read
@@ -404,53 +488,63 @@ jobs:
           # arithmetic above (~307s + ~106s setup) that shard, not e2e-mobile,
           # is this workflow's floor now. The file header is corrected to match.
           #
-          # CONVENTION, NOT A GUARANTEE: `slug` is kept unique across the whole
-          # matrix and free of "/", because upload-artifact@v4 rejects the slash
-          # and FAILS THE JOB on a duplicate name. Nothing enforces it —
-          # `e2e-ci-wiring.test.ts` pins the shard args and the project name but
-          # does not parse slugs — so a fourth shard added by hand is unguarded
-          # and the next duplicate is found by a failed upload, not by a test.
-          # `group` is the human label and may contain the slash, as
-          # `parallel 1/4` above already does.
+          # `slug` is kept unique across the whole matrix and free of "/",
+          # because upload-artifact@v4 rejects the slash and FAILS THE JOB on a
+          # duplicate name. `e2e-ci-wiring.test.ts` now pins both (it did not
+          # when this block was written: the walkthrough legs went from three to
+          # four on a promise). `group` is the human label and may contain the
+          # slash, as `parallel 1/4` above already does.
           #
-          # THREE THINGS THAT WENT FROM 1x TO 3x with this split, because every
-          # shard carries `project: walkthrough` and the conditions below key on
-          # that. Read these before diagnosing a red as a product defect:
+          # THREE THINGS THAT WENT FROM 1x TO 3x with the first split, and are
+          # 4x now, because every leg carries `project: walkthrough` and the
+          # conditions below key on that. Read these before diagnosing a red as
+          # a product defect:
           #
-          #   * `stripe:sync` now runs three times concurrently against one
+          #   * `stripe:sync` runs four times concurrently against one
           #     Stripe test account. It MUST — the step writes price ids into
-          #     each shard's own Postgres — and its own comment below traces
+          #     each leg's own Postgres — and its own comment below traces
           #     what the concurrency does and what is left unverified.
-          #   * three `stripe listen` forwarders run against that same account.
+          #   * four `stripe listen` forwarders run against that same account.
           #     Each posts to its own server with its own minted secret, so the
-          #     shard holding a money spec is served correctly; the other two
-          #     also receive that shard's events and post them to a server whose
+          #     leg holding a money spec is served correctly; the other three
+          #     also receive that leg's events and post them to a server whose
           #     database has none of those rows. Noise, not a failure — but it is
           #     where to look first if a money spec reds naming an id nothing in
           #     its own DB owns.
           #   * the "Connect walkthrough not configured" `::warning::` is now
-          #     emitted up to three times for one missing secret. Cosmetic; do
-          #     not read three warnings as three problems.
+          #     emitted up to four times for one missing secret. Cosmetic; do
+          #     not read four warnings as four problems.
           #
-          # The Event Pass money-path check below was BROKEN by this split and
-          # is repaired in the same commit — see its own comment. It is the
-          # pattern to look for when adding a fourth shard: any step that reads
-          # the Playwright JSON report sees only ITS OWN shard's tests.
-          - group: walkthrough 1/3
-            slug: walkthrough-1
+          # The Event Pass money-path check below was BROKEN by the first split
+          # and is repaired in the same commit — see its own comment. It is the
+          # pattern to look for when adding a leg: any step that reads the
+          # Playwright JSON report sees only ITS OWN leg's tests. It keys on the
+          # FILE, so it is correct for this cut too: event-pass.spec.ts lands in
+          # "rest" 1/2 and the other three legs report a notice.
+          - group: walkthrough capture
+            slug: walkthrough-capture
             project: walkthrough
             slice: ""
-            args: --workers=3 --shard=1/3
-          - group: walkthrough 2/3
-            slug: walkthrough-2
+            walkthrough_slice: capture
+            args: --workers=3
+          - group: walkthrough stream
+            slug: walkthrough-stream
             project: walkthrough
             slice: ""
-            args: --workers=3 --shard=2/3
-          - group: walkthrough 3/3
-            slug: walkthrough-3
+            walkthrough_slice: stream
+            args: --workers=3
+          - group: walkthrough rest 1/2
+            slug: walkthrough-rest-1
             project: walkthrough
             slice: ""
-            args: --workers=3 --shard=3/3
+            walkthrough_slice: rest
+            args: --workers=3 --shard=1/2
+          - group: walkthrough rest 2/2
+            slug: walkthrough-rest-2
+            project: walkthrough
+            slice: ""
+            walkthrough_slice: rest
+            args: --workers=3 --shard=2/2
 
     services:
       postgres:
@@ -996,6 +1090,8 @@ jobs:
         env:
           PLAYWRIGHT_BASE: http://localhost:3000
           E2E_PARALLEL_SLICE: ${{ matrix.slice }}
+          # Only the walkthrough legs set a value; the parallel legs read an empty string, which the config treats as unset.
+          E2E_WALKTHROUGH_SLICE: ${{ matrix.walkthrough_slice }}
           SUPABASE_JWT_SIGNING_KEY_B64: ${{ env.SUPABASE_JWT_SIGNING_KEY_B64 }}
           # The same value the server was started with (see "Start server"): the spec's waits derive from it.
           FAKE_INGEST_CONNECT_AFTER_MS: "10000"
@@ -1015,11 +1111,11 @@ jobs:
       # when the test step above failed, so it reports the real cause instead
       # of being skipped itself and reading as "not applicable".
       #
-      # SHARD-AWARE since the walkthrough leg was split three ways
-      # (2026-09-22). This step's `if:` is on `matrix.project`, so it now runs
-      # on all THREE shards — but `event-pass.spec.ts` lands in exactly one of
-      # them, and Playwright's JSON report only ever contains that shard's own
-      # tests. Written as it was, the two shards without the file would hit the
+      # LEG-AWARE since the walkthrough leg was split (2026-09-22; re-cut into
+      # four by file 2026-10-19). This step's `if:` is on `matrix.project`, so
+      # it runs on every walkthrough leg — but `event-pass.spec.ts` lands in
+      # exactly one of them, and Playwright's JSON report only ever contains
+      # that leg's own tests. Written as it was, the legs without the file would hit the
       # `seen.length !== want.length` branch and FAIL THE JOB with "money-path
       # tests not found in the report" on every push to `main`. That is not a
       # hazard, it is a deterministic red, and it is the shape of defect this
@@ -1032,7 +1128,7 @@ jobs:
       # Deliberately NOT relaxed to "titles missing is fine": that would go
       # vacuous the moment somebody renamed them, which is the failure this
       # whole step exists to prevent. The remaining hole — the spec FILE being
-      # deleted outright, after which all three shards go quiet — is closed
+      # deleted outright, after which every leg goes quiet — is closed
       # elsewhere: `event-pass.spec.ts` is named in `WALKTHROUGH_SPECS`
       # (apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts), a pure unit test
       # that runs in every job and reds on a deletion.
