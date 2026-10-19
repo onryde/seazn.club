@@ -23,7 +23,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { HttpError } from "@/lib/errors";
 import { getDictionary, t } from "@/lib/i18n";
 import { toLocale } from "@/lib/i18n-constants";
-import { lichessFlashCode } from "@/lib/lichess-link";
+import { lichessFlashCode, lichessLanding } from "@/lib/lichess-link";
 import { routes } from "@/lib/routes";
 import { publicOrgOrNull } from "@/server/public-site/org-guard";
 import { readRoom, roomGrantDowngraded, type RoomIdentity } from "@/server/usecases/external-play/room";
@@ -137,11 +137,14 @@ export default async function MatchRoomPage({
 
   // The fixture is found by id; the slugs in the path are the fixture's own
   // or a stale copy (a renamed competition). Land on the canonical room.
+  const selfPath = `${snapshot.links.fixture}/play${token ? `?t=${encodeURIComponent(token)}` : ""}`;
   if (!snapshot.links.fixture.startsWith(`/shared/${orgSlug}/${competitionSlug}/${divisionSlug}/`)) {
-    redirect(`${snapshot.links.fixture}/play${token ? `?t=${encodeURIComponent(token)}` : ""}`);
+    // PR #990 review, M4a: the callback lands on the path the link was STARTED from, which is the stale copy when the
+    // competition was renamed in between - so the redirect keeps the outcome (the code alone, after `t=`, the way the
+    // callback builds its own landing) or the owner's silent loop returns on exactly this path.
+    redirect(lichessFlash === null ? selfPath : lichessLanding(selfPath, lichessFlash));
   }
 
-  const selfPath = `${snapshot.links.fixture}/play${token ? `?t=${encodeURIComponent(token)}` : ""}`;
   return (
     <DictProvider dict={ui} locale={locale}>
       <RoomShell initial={snapshot} token={token} selfPath={selfPath} grantRefused={grantRefused} lichessFlash={lichessFlash ?? undefined} />

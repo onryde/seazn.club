@@ -17,7 +17,7 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePlural, useLocale, useT } from "@/components/i18n/dict-provider";
-import { lichessFlashCode, lichessLinkStartHref, type LichessFlashCode } from "@/lib/lichess-link";
+import { lichessLinkStartHref, type LichessFailureCode, type LichessFlashCode } from "@/lib/lichess-link";
 import { moverFlagAt, optimisticOwnMs, type OptimisticClock } from "./clock-math";
 import { ClockBar, ClocksStrip } from "./clocks-strip";
 import { SoundToggle, type SoundSwitch } from "./sound-toggle";
@@ -31,6 +31,7 @@ import { GameOver } from "./game-over";
 import { RoomHeader } from "./room-header";
 import { useRoomSounds, useSoundSwitch } from "./use-room-sounds";
 import { useStripLichessParam } from "./use-strip-lichess-param";
+import { heldFlashFrom, nextHeldFlash, onFlashScreen } from "./room-held-flash";
 import {
   CameraBlockedCard,
   CameraCard,
@@ -188,10 +189,11 @@ export function RoomShell({
   const plural = usePlural();
   const locale = useLocale();
   const room = useRoom(initial, token, grantRefused);
-  // The outcome is held for the page's life: the address bar loses `lichess=` as soon as it has been read, and a
-  // refresh of the server page (the stripped address) must not take the sentence off the card it was read for. The
-  // narrowing is the shared one, so a value that is not one of ours is no outcome here either.
-  const [flash] = useState<LichessFlashCode | null>(() => lichessFlashCode(lichessFlash));
+  // The outcome is HELD while the page lives: the address bar loses `lichess=` as soon as it has been read, and a refresh
+  // of the server page (the stripped address) must not take the sentence off the card it was read for. Only a failure is
+  // held, and only for as long as its card stands (room-held-flash.ts): a `linked` landing, or a failure the screen has
+  // since moved on from, must never show above a LATER revoke / re-consent card. Adjusted below, once the screen is known.
+  const [held, setHeld] = useState(() => heldFlashFrom(lichessFlash));
   useStripLichessParam();
   const { state } = room;
   const snap = state.snap;
@@ -294,6 +296,11 @@ export function RoomShell({
     camera.status === "gave_up" ||
     (camera.status === "live" && retries < SEAT_RETRIES);
   const screen = roomScreen(state, { cameraSettling });
+  // Render-phase adjustment (the sanctioned adjust-state-on-change pattern): the held outcome follows the screen.
+  const onCard = onFlashScreen(screen.kind);
+  const nextHeld = nextHeldFlash(held, onCard);
+  if (nextHeld !== held) setHeld(nextHeld);
+  const flash = onCard ? nextHeld.code : null;
 
   const tryAgain = useCallback(() => {
     setRetry({ for: participantId, n: 0 });
@@ -417,9 +424,9 @@ export function Screen({
   /** This page's own path and query (the personal link included): where "Switch account" signs back in to. Absent ⇒ the
    *  room's canonical path, which a session identity reads without the link. */
   selfPath?: string | null;
-  /** How the Lichess link the player just tried went (`?lichess=`): said on card 8 and on seam A's notice, the two
-   *  places that offer the link again. Nothing else draws it. */
-  lichessFlash?: LichessFlashCode | null;
+  /** How the Lichess link the player just tried FAILED (`?lichess=`, held by the shell - room-held-flash.ts): said on card 8
+   *  and on seam A's notice, the two places that offer the link again. Nothing else draws it, and a success never is one. */
+  lichessFlash?: LichessFailureCode | null;
   locale: string;
   t: RoomT;
   plural: ReturnType<typeof usePlural>;

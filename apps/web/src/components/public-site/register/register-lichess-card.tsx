@@ -60,9 +60,9 @@ export function RegisterLichessCard({
   const plural = usePlural();
   const locale = useLocaleOrDefault();
   const names = new Intl.ListFormat(locale, { style: "long", type: "conjunction" }).format(divisions);
-  // A `linked` outcome is shown as the linked row itself; any other outcome is a failure to say. "linked" with no
-  // account on file (a stale or hand-typed URL) is not a success to announce.
-  const failure = state.flash !== "linked" ? state.flash : null;
+  // A `linked` outcome is shown as the linked row itself; the notice says only a failure. "linked" with no account on
+  // file (a stale or hand-typed URL) is not a success to announce - the notice draws nothing for it, which is the ONE
+  // place that rule lives (components/lichess-flash-notice.tsx, shared with the match room).
   return (
     <section
       data-testid="register-lichess-card"
@@ -97,7 +97,7 @@ export function RegisterLichessCard({
           <p className="m-0 text-xs leading-[1.45] text-[#4a3a6b]">{t("settings.account.lichess.consent.body")}</p>
           <p className="m-0 text-xs leading-[1.4] text-[#6b5b8a]">{t("settings.account.lichess.consent.scopes")}</p>
           {/* The same notice the match room's link card says it with: the sentence, and for already_linked the next step. */}
-          {failure !== null && <LichessFlashNotice code={failure} testId="register-lichess-flash" />}
+          <LichessFlashNotice code={state.flash} testId="register-lichess-flash" />
           {state.configured ? (
             <>
               <a

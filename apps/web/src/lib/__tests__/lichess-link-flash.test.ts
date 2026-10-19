@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   LICHESS_FLASH_CODES,
   LICHESS_FLASH_NEXT_KEYS,
+  lichessFailureCode,
   lichessFlashCode,
   lichessFlashKey,
   lichessFlashNextKey,
@@ -156,5 +157,76 @@ describe("withoutLichessParam - the address bar after the outcome has been read"
     // The empty value, and the bare name.
     expect(withoutLichessParam("/p?t=1&lichess=")).toBe("/p?t=1");
     expect(withoutLichessParam("/p?t=1&lichess")).toBe("/p?t=1");
+  });
+});
+
+// PR #990 review, I1: the room (and the registration card) say only what FAILED. A `linked` landing is no sentence a
+// stale page may keep above a later revoke or re-consent card ("Lichess account linked." over "Your Lichess link was
+// revoked"), so the narrowing the cards read through refuses it - one rule, in one place.
+describe("lichessFailureCode - the outcomes a card may SAY", () => {
+  it("every reported code except linked comes back as itself; linked, junk and the empty case are none", () => {
+    let said = 0;
+    for (const code of LICHESS_FLASH_CODES) {
+      if (code === "linked") continue;
+      expect(lichessFailureCode(code), code).toBe(code);
+      said++;
+    }
+    expect(said, "anti-vacuity: every failure code").toBe(LICHESS_FLASH_CODES.length - 1);
+    expect(said).toBeGreaterThanOrEqual(6);
+    let refused = 0;
+    for (const v of ["linked", undefined, null, "", "Linked", "already_linked ", "<script>", "made-up"]) {
+      expect(lichessFailureCode(v), JSON.stringify(v)).toBeNull();
+      refused++;
+    }
+    expect(refused).toBe(8);
+  });
+
+  it("it is the room's narrowing minus linked: whatever lichessFlashCode refuses, this refuses too", () => {
+    let checked = 0;
+    for (const v of [undefined, null, "", "x", "Linked"]) {
+      expect(lichessFlashCode(v)).toBeNull();
+      expect(lichessFailureCode(v)).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(5);
+  });
+});
+
+// PR #990 review, M3: a revoked-notice whose game is on ONE specific Lichess account (`otherAccount`) already says
+// "sign in to Lichess as X, then link it again". The generic already_linked next step ends "or switch to a different
+// account on Lichess" - which contradicts it, so that case has its own next step: the way out that keeps the account.
+describe("lichessFlashNextKey - where the game is on one specific Lichess account", () => {
+  it("already_linked has a game-account step distinct from the generic one, in all four locales, with no way to 'switch'", () => {
+    const generic = lichessFlashNextKey("already_linked");
+    const game = lichessFlashNextKey("already_linked", { gameAccount: true });
+    expect(game).toBe("settings.account.lichess.flashNext.already_linked_game");
+    expect(game).not.toBe(generic);
+    let checked = 0;
+    const words = new Set<string>();
+    for (const loc of LOCALES) {
+      const g = DICTS[loc][game!];
+      expect(typeof g === "string" && g.trim().length > 0, loc).toBe(true);
+      expect(g, `${loc}: differs from the generic step`).not.toBe(DICTS[loc][generic!]);
+      expect(g, `${loc}: no interpolation slot, no address`).not.toMatch(/\{\w+\}|@/);
+      words.add(g!);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    expect(words.size, "four languages, four sentences").toBe(4);
+    expect(DICTS.en[game!], "the English step does not offer a different Lichess account").not.toMatch(/different|another|switch/i);
+    expect(DICTS.en[generic!], "while the generic one does (that is what the game case must not say)").toMatch(/different/i);
+  });
+
+  it("without the flag the key is the generic one; every code with a generic step has a game-account step (no fall-through to 'switch')", () => {
+    let checked = 0;
+    for (const code of Object.keys(LICHESS_FLASH_NEXT_KEYS)) {
+      expect(lichessFlashNextKey(code, { gameAccount: false }), code).toBe(lichessFlashNextKey(code));
+      expect(lichessFlashNextKey(code, { gameAccount: true }), `${code}: a game-account step of its own`).not.toBe(lichessFlashNextKey(code));
+      checked++;
+    }
+    expect(checked, "anti-vacuity: at least one next step swept").toBeGreaterThanOrEqual(1);
+    // A code with no next step has none in either case; junk is none.
+    expect(lichessFlashNextKey("token", { gameAccount: true })).toBeNull();
+    expect(lichessFlashNextKey("<script>", { gameAccount: true })).toBeNull();
   });
 });

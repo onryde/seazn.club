@@ -3,7 +3,8 @@
 // `?lichess=`, and the same Re-link card came back - so the player looped for ever.
 //
 // This is what the room PAINTS for the outcome (real dictionaries, every locale): the outcome sentence on the link /
-// re-link card, an error tone for a failure and a quiet confirmation for `linked`, and for already_linked the next step.
+// re-link card in an error tone (a `linked` landing says nothing here: it must never stand over a later revoke), and for
+// already_linked the next step.
 // The page's read of the param is page.test.tsx's, the strip of the address bar is room-lichess-strip.test.tsx's, and
 // the real browser is match-room.spec.ts's.
 import { describe, expect, it } from "vitest";
@@ -154,14 +155,18 @@ describe("the link / re-link card says how the Lichess link went", () => {
     expect(posOf(html, "lichess-flash")).toBeLessThan(posOf(html, "room-revoked-relink"));
   });
 
-  it("linked: a quiet confirmation on the card (a status, not an alert), with no next step", () => {
+  // PR #990 review, I1: the room says only what FAILED. A `linked` landing has no sentence on either card - the room
+  // holds the outcome for the page's life, and "Lichess account linked." must never stand above a LATER "Your Lichess
+  // link was revoked" (the sequence is room-lichess-flash-sequence.test.tsx's). The register card refuses it for the
+  // same reason (register-lichess-card.test.tsx).
+  it("linked: NOTHING on either card - not a status, not a sentence - and the card is exactly what it is with no outcome", () => {
     let checked = 0;
     for (const state of [relinkState(), revokedState()]) {
       const html = paint(state, "linked");
-      expect(html).toContain(esc(en["settings.account.lichess.flash.linked"]));
-      expect(html).toContain('data-tone="ok"');
-      expect(html).not.toMatch(/role="alert"/);
-      expect(html).not.toContain('data-testid="lichess-flash-next"');
+      expect(html).toBe(paint(state, null));
+      expect(html).not.toContain(esc(en["settings.account.lichess.flash.linked"]));
+      for (const id of FLASH_IDS) expect(ids(html), id).not.toContain(id);
+      expect(html).toMatch(/room-relink|room-revoked-relink/);
       checked++;
     }
     expect(checked).toBe(2);
@@ -296,15 +301,18 @@ describe("the whole shell hands the outcome to the card (the seam, driven throug
     expect(html).not.toContain(esc(en["settings.account.lichess.flash.already_linked"]));
   });
 
-  it("linked paints the confirmation, an unknown code paints nothing - through the shell, in every locale", () => {
+  it("linked and an unknown code paint nothing - through the shell, on card 8 and on seam A, in every locale", () => {
     let checked = 0;
     for (const locale of Object.keys(LOCALES) as Locale[]) {
-      const ok = paintShell("linked", locale);
-      expect(ok, `${locale}: linked`).toContain(esc(d(locale)["settings.account.lichess.flash.linked"]!));
-      expect(paintShell("made-up", locale), `${locale}: unknown`).toBe(paintShell(null, locale));
-      checked++;
+      for (const over of [{}, { game: GAME, frozen: "you", canAct: false } as Partial<RoomSnapshot>]) {
+        const linked = paintShell("linked", locale, over);
+        expect(linked, `${locale}: linked`).not.toContain(esc(d(locale)["settings.account.lichess.flash.linked"]!));
+        expect(linked, `${locale}: linked is exactly the card with no outcome`).toBe(paintShell(null, locale, over));
+        expect(paintShell("made-up", locale, over), `${locale}: unknown`).toBe(paintShell(null, locale, over));
+        checked++;
+      }
     }
-    expect(checked).toBe(4);
+    expect(checked, "anti-vacuity: 4 locales x 2 cards").toBe(8);
   });
 
   it("a revoked-link room (seam A) opened with the outcome says it on the notice", () => {
@@ -312,5 +320,85 @@ describe("the whole shell hands the outcome to the card (the seam, driven throug
     expect(screenOf(html)).toBe("revoked");
     expect(html).toContain(esc(en["settings.account.lichess.flash.already_linked"]));
     expect(ids(html)).toContain("room-revoked-relink");
+  });
+});
+
+// PR #990 review, M3: seam A's notice, when the game is on ONE specific Lichess account (`otherAccount`), already says
+// "sign in to Lichess as X, then link it again". The generic already_linked next step ends "or switch to a different
+// account on Lichess" - offering the one thing that notice rules out. So that combination carries the game-account
+// next step instead: unlink it from the other Seazn account, then link it here. One coherent instruction per case.
+describe("seam A with the game on one Lichess account: the outcome's next step agrees with the notice", () => {
+  const ACCOUNT = "ada_plays";
+  const onAccount = () => revokedState({ otherAccount: ACCOUNT, frozen: null });
+  const blockOf = (html: string) => /data-testid="lichess-flash"[\s\S]*?data-testid="lichess-flash-next"[^>]*>[^<]*<\/p>/.exec(html)?.[0] ?? "";
+  const accountLine = (locale: Locale) => (d(locale)["externalPlay.room.state.revoked.otherAccount"] ?? "").replaceAll("{username}", ACCOUNT);
+
+  it("the premise: the screen is seam A because of the account, not a frozen seat", () => {
+    expect(roomScreen(onAccount()).kind).toBe("revoked");
+    expect(onAccount().snap.frozen).toBeNull();
+    expect(onAccount().snap.otherAccount).toBe(ACCOUNT);
+  });
+
+  it("already_linked + otherAccount: the GAME-ACCOUNT next step, not the generic one - in every locale", () => {
+    let checked = 0;
+    for (const locale of Object.keys(LOCALES) as Locale[]) {
+      const html = paint(onAccount(), "already_linked", locale);
+      expect(html, `${locale}: the game-account step`).toContain(esc(d(locale)["settings.account.lichess.flashNext.already_linked_game"]!));
+      expect(html, `${locale}: the generic step (which offers a different account) is NOT there`).not.toContain(esc(d(locale)["settings.account.lichess.flashNext.already_linked"]!));
+      expect(html, `${locale}: the outcome sentence`).toContain(esc(d(locale)["settings.account.lichess.flash.already_linked"]!));
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("the notice still says which account the game is on (once, in its own line) - and the outcome block names nobody", () => {
+    let checked = 0;
+    for (const locale of Object.keys(LOCALES) as Locale[]) {
+      const html = paint(onAccount(), "already_linked", locale);
+      expect(html, locale).toContain(esc(accountLine(locale)));
+      // The notice's own line may repeat the name (it is what the player signs in with); everywhere else it must not appear.
+      expect(html.split(ACCOUNT).length - 1, `${locale}: only in the notice's own line`).toBe(accountLine(locale).split(ACCOUNT).length - 1);
+      const block = blockOf(html);
+      expect(block, locale).not.toBe("");
+      expect(block, `${locale}: not in the outcome block`).not.toContain(ACCOUNT);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("the order reads as one instruction: the outcome and its step, then the game's account line, then the one action", () => {
+    const html = paint(onAccount(), "already_linked");
+    expect(posOf(html, "room-revoked-notice")).toBeLessThan(posOf(html, "lichess-flash"));
+    expect(posOf(html, "lichess-flash-next")).toBeLessThan(posOf(html, "room-revoked-account"));
+    expect(posOf(html, "room-revoked-account")).toBeLessThan(posOf(html, "room-revoked-relink"));
+  });
+
+  it("the English step keeps the account (unlink it elsewhere, then link it here) and offers no other Lichess account", () => {
+    const step = en["settings.account.lichess.flashNext.already_linked_game"];
+    expect(step).toMatch(/unlink it in Settings/i);
+    expect(step).toMatch(/link it here/i);
+    expect(step).not.toMatch(/different|another|switch/i);
+    // The notice's line is "sign in to Lichess as {username}, then link it again": the step is the part that comes first.
+    expect(en["externalPlay.room.state.revoked.otherAccount"]).toMatch(/sign in to Lichess as \{username\}/i);
+  });
+
+  it("without the account (a frozen seat) the generic step stands - the game is not tied to one account there", () => {
+    const html = paint(revokedState(), "already_linked");
+    expect(html).toContain(esc(en["settings.account.lichess.flashNext.already_linked"]));
+    expect(html).not.toContain(esc(en["settings.account.lichess.flashNext.already_linked_game"]));
+  });
+
+  it("a failure with no next step stays one line on this notice too, and the account line follows it", () => {
+    const html = paint(onAccount(), "token");
+    expect(html).toContain(esc(en["settings.account.lichess.flash.token"]));
+    expect(ids(html)).not.toContain("lichess-flash-next");
+    expect(ids(html)).toContain("room-revoked-account");
+  });
+
+  it("through the whole shell: a game on another account, landed with already_linked, paints the game-account step", () => {
+    const html = paintShell("already_linked", "en", { game: GAME, otherAccount: ACCOUNT, canAct: false });
+    expect(screenOf(html)).toBe("revoked");
+    expect(html).toContain(esc(en["settings.account.lichess.flashNext.already_linked_game"]));
+    expect(html).not.toContain(esc(en["settings.account.lichess.flashNext.already_linked"]));
   });
 });

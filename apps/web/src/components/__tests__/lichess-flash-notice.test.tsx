@@ -1,7 +1,8 @@
 // The outcome of a Lichess linking flow (`?lichess=<code>`), said on the page the player lands on. One component for the
 // match room's link/re-link card and the registration stepper's Lichess card, so the two cannot drift: the outcome
-// sentence, in an error tone for a failure and a quiet confirmation for `linked`, and - for the one failure the player
-// can only fix elsewhere (already_linked: that Lichess account belongs to ANOTHER Seazn account) - the next step.
+// sentence, in an error tone, and - for the one failure the player can only fix elsewhere (already_linked: that Lichess
+// account belongs to ANOTHER Seazn account) - the next step. It says only what FAILED (PR #990 review, I1): a `linked`
+// landing is no sentence a held page may keep above a later revoke card, so it draws nothing.
 //
 // Painted with the REAL dictionaries in every locale; the codes come from the module's own declaration. Never derives an
 // expected sentence from the component: it is read from the dictionary by key.
@@ -48,13 +49,10 @@ describe("LichessFlashNotice", () => {
     expect(next).toMatch(/different/i);
   });
 
-  it("linked: a quiet confirmation (a status, not an alert), and no next step", () => {
-    const html = paint("linked");
-    expect(html).toContain(esc(EN["settings.account.lichess.flash.linked"]!));
-    expect(html).toMatch(/role="status"/);
-    expect(html).not.toMatch(/role="alert"/);
-    expect(html).toContain('data-tone="ok"');
-    expect(html).not.toContain("lichess-flash-next");
+  it("linked: NOTHING - a held 'linked' must never stand over a later revoke or re-consent card", () => {
+    expect(paint("linked")).toBe("");
+    expect(paint("linked", "es")).toBe("");
+    expect(paint("linked", "en", "register-lichess-flash")).toBe("");
   });
 
   it("every other failure is an alert carrying its own sentence and NO next step - the next step is already_linked's alone", () => {
@@ -124,6 +122,39 @@ describe("LichessFlashNotice", () => {
       checked++;
     }
     expect(checked).toBe(4);
+  });
+
+  // PR #990 review, M3: where the board is on ONE specific Lichess account the host says so, and the generic step's
+  // "switch to a different account" would contradict it.
+  it("gameAccount: already_linked's next step is the game-account one (keeps the account), in every locale; the sentence is unchanged", () => {
+    let checked = 0;
+    for (const locale of Object.keys(LOCALES) as Locale[]) {
+      const d = dictOf(locale);
+      const html = renderToStaticMarkup(
+        <DictProvider dict={LOCALES[locale] as unknown as Dict} locale={locale}>
+          <LichessFlashNotice code="already_linked" gameAccount />
+        </DictProvider>,
+      );
+      expect(html, `${locale}: sentence`).toContain(esc(d["settings.account.lichess.flash.already_linked"]!));
+      expect(html, `${locale}: game-account step`).toContain(esc(d["settings.account.lichess.flashNext.already_linked_game"]!));
+      expect(html, `${locale}: not the generic step`).not.toContain(esc(d["settings.account.lichess.flashNext.already_linked"]!));
+      const text = unescapeText(html.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
+      expect(text, `${locale}: exactly the two sentences`).toBe(`${d["settings.account.lichess.flash.already_linked"]} ${d["settings.account.lichess.flashNext.already_linked_game"]}`.replace(/\s+/g, " "));
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("gameAccount changes nothing for a failure with no next step, and nothing for an absent code", () => {
+    const withFlag = (code: string | null) =>
+      renderToStaticMarkup(
+        <DictProvider dict={en as unknown as Dict} locale="en">
+          <LichessFlashNotice code={code} gameAccount />
+        </DictProvider>,
+      );
+    expect(withFlag("token")).toBe(paint("token"));
+    expect(withFlag(null)).toBe("");
+    expect(withFlag("linked")).toBe("");
   });
 
   it("takes the host's test id (the register card keeps its own), and derives the next step's from it", () => {

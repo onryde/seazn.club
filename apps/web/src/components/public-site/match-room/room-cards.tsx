@@ -3,7 +3,7 @@
 // a body and, where the state has one, an action at the bottom.
 import Link from "next/link";
 import { LichessFlashNotice } from "@/components/lichess-flash-notice";
-import type { LichessFlashCode } from "@/lib/lichess-link";
+import type { LichessFailureCode } from "@/lib/lichess-link";
 import type { RoomT } from "./room-copy";
 import { SeatWaitNote } from "./seat-wait-note";
 import { SwitchAccountButton } from "./switch-account-button";
@@ -304,7 +304,7 @@ export function RepairingCard({ t }: { t: RoomT }) {
 /** 8 · Lichess needs re-linking: the account page's own consent copy. `flash` is how the link the player just tried
  *  went (`?lichess=`, the shell read it): said first, above the consent copy, so a refused link is never a silent
  *  return to this same card (owner staging test 2026-10-19). Nothing is drawn for none. */
-export function RelinkCard({ relinkHref, flash = null, t }: { relinkHref: string; flash?: LichessFlashCode | null; t: RoomT }) {
+export function RelinkCard({ relinkHref, flash = null, t }: { relinkHref: string; flash?: LichessFailureCode | null; t: RoomT }) {
   return (
     <StateCard
       testId="room-state-relink"
@@ -511,8 +511,10 @@ export function RevokedNotice({
 }: {
   relinkHref: string;
   otherAccount?: string | null;
-  /** How the link the player just tried went (`?lichess=`): said above the notice's own words, as on card 8. */
-  flash?: LichessFlashCode | null;
+  /** How the link the player just tried FAILED (`?lichess=`): said above the notice's own words, as on card 8. When the
+   *  game is on one specific Lichess account (`otherAccount`) its next step keeps that account - the notice's own line
+   *  says to sign in to Lichess as it, so the generic "switch to a different account" would contradict it. */
+  flash?: LichessFailureCode | null;
   t: RoomT;
 }) {
   return (
@@ -522,7 +524,7 @@ export function RevokedNotice({
       role="status"
       className="flex min-w-0 flex-col gap-1.5 rounded-xl border border-[#f5d27a] bg-[#fef3c7] p-3 text-[#713f12] md:gap-2 md:p-3.5"
     >
-      <LichessFlashNotice code={flash} />
+      <LichessFlashNotice code={flash} gameAccount={otherAccount !== null} />
       {otherAccount !== null ? (
         <span data-testid="room-revoked-account" className="min-w-0 text-[15px] font-semibold leading-[1.35] [overflow-wrap:anywhere] md:text-base">
           {t("externalPlay.room.state.revoked.otherAccount", { username: otherAccount })}
