@@ -44,7 +44,7 @@ import { streamRig } from "@/server/relay/__tests__/_session-rig";
 import { PASS_KEYS } from "@/lib/currency";
 import {
   NoCreditsError, consumeForSession, creditBalance, creditBreakdown, ensureMonthlyStreamGrant,
-  grantMonthlyStreamCredits, lockOrg, recordPurchase, recordStreamPackRefund, refundCredits, revokeCredits, streamMonthlyDeltaKey,
+  grantMonthlyStreamCredits, lockOrg, recordPurchase, recordStreamPackRefund, refundConsumeForSession, refundCredits, revokeCredits, streamMonthlyDeltaKey,
   streamMonthlyGrantKey, streamMonthlyPeriod, streamMonthlyRate,
 } from "../stream-credits";
 
@@ -555,5 +555,99 @@ describe.skipIf(!HAS_DB)("monthly stream credits — sequences", () => {
     expect((await rows(r.orgId)).filter((x) => x.reason === "grant"), "nothing granted on the corrupt bucket").toHaveLength(0);
     const reported = sentry.captureError.mock.calls.filter(([e, ctx]) => (e as { code?: string }).code === "ledger_negative" && (ctx as { orgId?: string }).orgId === r.orgId);
     expect(reported).toHaveLength(1);
+  });
+});
+
+// R2008 (owner ruling 2026-10-19): the SYSTEM's refund of a session's go-live consume — what a composed stream that went live
+// and never had a camera is returned. The SAME ledger, bucket and cap as the staff refund; written by no staff member.
+describe.skipIf(!HAS_DB)("refundConsumeForSession — R2008: the platform returns a consume it should not have taken", () => {
+  const system = (r: Awaited<ReturnType<typeof rig>>, sessionId: string) =>
+    sql.begin((tx) => refundConsumeForSession(tx, { orgId: r.orgId, sessionId, note: "R2008 unit" }));
+  const full = (orgId: string, sessionId: string) =>
+    sql<(Row & { created_by: string | null; note: string | null })[]>`
+      select reason, bucket, delta, balance_after, idempotency_key, session_id, created_by, note
+        from org_stream_credits where org_id = ${orgId} and session_id = ${sessionId} order by created_at, balance_after desc`;
+
+  it("a consume is returned to the bucket it was drawn from — a MONTHLY credit to monthly, a bought one to pack — as ONE row with no staff member and no key; balance_after is the org total plus one", async () => {
+    const r = await rig(null);
+    const R = await rateOf("community");
+    await ensureMonthlyStreamGrant(r.orgId, JAN);
+    await buy(r.orgId, 1);
+    const sessions: { sessionId: string; bucket: string }[] = [];
+    for (let i = 0; i < R + 1; i++) sessions.push(await consume(r));   // R from the free month, then the bought one
+    expect([sessions[0]!.bucket, sessions.at(-1)!.bucket], "PREMISE: the two buckets the differential needs").toEqual(["monthly", "pack"]);
+    expect(await creditBreakdown(sql, r.orgId)).toEqual({ monthly: 0, pack: 0, total: 0 });
+    let checked = 0;
+    for (const [i, c] of [sessions[0]!, sessions.at(-1)!].entries()) {
+      const before = await creditBreakdown(sql, r.orgId);
+      const out = await system(r, c.sessionId);
+      expect(out, `${c.bucket}: written`).toMatchObject({ refunded: true, delta: 1, balance: before.total + 1 });
+      expect(await full(r.orgId, c.sessionId), `${c.bucket}: the session's rows`).toEqual([
+        expect.objectContaining({ reason: "consume", delta: -1, bucket: c.bucket }),
+        { reason: "refund", delta: 1, bucket: c.bucket, balance_after: before.total + 1, idempotency_key: null, session_id: c.sessionId, created_by: null, note: "R2008 unit" },
+      ]);
+      const after = await creditBreakdown(sql, r.orgId);
+      expect(after[c.bucket as "monthly" | "pack"], `${c.bucket}: that bucket gained exactly one`).toBe(before[c.bucket as "monthly" | "pack"] + 1);
+      expect(after.total, "…and the total is creditBalance's").toBe(await creditBalance(sql, r.orgId));
+      checked += i + 1;
+    }
+    expect(checked, "anti-vacuity: both buckets were returned").toBe(3);
+  });
+
+  it("EXACTLY ONCE: a second call writes nothing, whoever called first; a session with NO consume (a free restart) is owed nothing; and a staff refund after the system's is the ordinary cap's 422", async () => {
+    const r = await rig(null);
+    await ensureMonthlyStreamGrant(r.orgId, JAN);
+    const c = await consume(r);
+    const n0 = await rowCount(r.orgId);
+    expect(await system(r, c.sessionId)).toMatchObject({ refunded: true });
+    expect(await rowCount(r.orgId), "one row").toBe(n0 + 1);
+    expect(await system(r, c.sessionId), "SECOND CALL").toMatchObject({ refunded: false, delta: 0, ledgerId: null });
+    expect(await rowCount(r.orgId), "the second call wrote nothing").toBe(n0 + 1);
+    await expect(refundCredits({ ...staff(r), delta: 1, sessionId: c.sessionId }), "the staff cap sees the system's refund").rejects.toMatchObject({ status: 422, code: "refund_exceeds_consumed" });
+    // A staff refund FIRST: the system writes none.
+    const d = await consume(r);
+    await refundCredits({ ...staff(r), delta: 1, sessionId: d.sessionId });
+    const n1 = await rowCount(r.orgId);
+    expect(await system(r, d.sessionId), "after a staff refund").toMatchObject({ refunded: false });
+    expect(await rowCount(r.orgId)).toBe(n1);
+    // A session that never consumed (a free restart writes no row): nothing owed.
+    const free = await r.session(r.fixtureIds[1]!, "completed");
+    expect(await system(r, free), "no consume").toMatchObject({ refunded: false, delta: 0 });
+    expect(await rowCount(r.orgId)).toBe(n1);
+    // The balance: two refunds in all (the system's for c, the staff's for d), never a third.
+    expect((await rows(r.orgId)).filter((x) => x.reason === "refund")).toHaveLength(2);
+  });
+
+  it("a session whose consumes span two buckets is refused by name (the staff writer's guard, shared), and nothing is written (k7)", async () => {
+    const r = await rig(null);
+    const s = await r.session(r.fixtureIds[0]!, "completed");
+    await sql`insert into org_stream_credits (org_id, delta, reason, bucket, session_id, balance_after) values (${r.orgId}, 2, 'purchase', 'pack', null, 2)`;
+    await sql`insert into org_stream_credits (org_id, delta, reason, bucket, session_id, balance_after) values (${r.orgId}, -1, 'consume', 'monthly', ${s}, 1)`;
+    await sql`insert into org_stream_credits (org_id, delta, reason, bucket, session_id, balance_after) values (${r.orgId}, -1, 'consume', 'pack', ${s}, 0)`;
+    const n = await rowCount(r.orgId);
+    await expect(system(r, s)).rejects.toMatchObject({ status: 500, code: "refund_bucket_ambiguous" });
+    expect(await rowCount(r.orgId)).toBe(n);
+  });
+
+  it("A7: it takes the org's money lock FIRST — a refund issued while another writer holds the lock waits for it, and lands after", async () => {
+    const r = await rig(null);
+    await ensureMonthlyStreamGrant(r.orgId, JAN);
+    const c = await consume(r);
+    let release!: () => void;
+    const mayCommit = new Promise<void>((res) => (release = res));
+    let signalHeld!: (pid: number) => void;
+    const held = new Promise<number>((res) => (signalHeld = res));
+    const holder = sql.begin(async (tx) => {
+      const [{ pid }] = await tx<{ pid: number }[]>`select pg_backend_pid() as pid`;
+      await lockOrg(tx, r.orgId);
+      signalHeld(pid);
+      await mayCommit;
+    });
+    const holderPid = await held;
+    const refund = system(r, c.sessionId);
+    expect(await advisoryWaitersBehind(holderPid, 1), "the refund queued on the org's money lock").toBe(1);
+    release();
+    await holder;
+    expect(await refund).toMatchObject({ refunded: true });
   });
 });
