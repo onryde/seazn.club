@@ -114,11 +114,15 @@ export interface InvitePreview {
 
 // ---- request payload schemas -------------------------------------------------
 
-/** The longest `next` (post-auth return path) any sign-in step accepts, in characters. ONE bound for the whole
- *  chain: the login page, the password login and signup, the magic-link request and its consume, and the
- *  verify-email link all carry the SAME string, and a bound that differs between two of them 400s the person at the
- *  later one. It is a sanity bound, not the open-redirect guard: `safeNextPath` (lib/auth.ts) is that, and it
- *  re-validates every `next` after this schema.
+/** The longest `next` (post-auth return path) a sign-in REQUEST BODY may carry, in characters. ONE bound shared by every
+ *  zod schema that takes a `next`: loginSchema (login and signup), magic-link, magic-link/consume and verify-email, so
+ *  the same string is never accepted at one step and 400ed at the next. `next-path-bound-sources.test.ts` pins that
+ *  every such schema uses this constant and no other `.max(`.
+ *
+ *  It is not the whole chain's bound, and it is not the open-redirect guard. The login page (`/login?next=`), the Google
+ *  start (`/api/auth/google?next=`) and the Lichess start (`/api/auth/lichess?next=`) read `next` from the query string
+ *  with no length check at all; they, like every schema here, rely on `safeNextPath` (lib/auth.ts), which re-validates
+ *  every `next` before anything redirects to it. That, and only that, is the guard.
  *
  *  Sized from the longest real thing that rides in it: the match room's "Link Lichess" nests the room path, with its
  *  ~370-character personal token, inside the Lichess start URL, and that start URL is what a signed-out player is
