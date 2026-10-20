@@ -1013,7 +1013,7 @@ SPEC §13.5 (class 1: drive the seam through its real producer and consumer), §
 
 ### Task 15 + 16 (one loop): The stage editor — "Tie-breaks" section and the widened "Points" section (wave 5; UI, Option A)
 
-SPEC §9, D11, D3, OC1, OC2, B2 (SO row), D10(b), §10 copy. **Invoke `frontend-design:frontend-design` and apply it** in the house theme (owner: mocks are layout only). Before building, the orchestrator shows the owner the section at 1280 in TWO layout options within Option A's constraints (memory: show 2+ UI options), then builds the chosen one. Rule rows X-TB-1, X-TB-2, X-TB-3, X-PT-3.
+SPEC §9, D11, D3, OC1, OC2, B2 (SO row), D10(b), §10 copy. **Invoke `frontend-design:frontend-design` and apply it** in the house theme (owner: mocks are layout only). **No second options round (owner, 2026-10-20):** Option A (D11) is the chosen layout; build it directly, correctness-first. Rule rows X-TB-1, X-TB-2, X-TB-3, X-PT-3.
 
 **Files:**
 - Create: `W/components/v2/stage-rules/stage-tiebreaks-model.ts` (pure; every guard lives here so it has a unit killer), `W/components/v2/stage-rules/stage-tiebreaks-section.tsx`.
@@ -1214,4 +1214,4 @@ The rows, their ids and their wording are SPEC Appendix A, signed in Task 0. Eac
 
 ## Execution handoff
 
-Plan complete and saved to `docs/superpowers/plans/2026-10-20-format-matrix-w2d.md`. The owner chooses the execution method. Recommended: **subagent-driven**, because 21 build tasks hand exact interfaces to one another across engine, migration and web, a shipped mistake moves a public table, and the wave-end reviews and walkthroughs are owner rules.
+**Owner-approved 2026-10-20.** Execution method: **subagent-driven** (owner chose it, 2026-10-20). A fresh implementer per task, a fresh reviewer before the next task, a walkthrough per task group, and a whole-branch review at the end. Starts at Task 0 once W2c merges.
