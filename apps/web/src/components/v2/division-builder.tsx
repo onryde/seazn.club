@@ -6,7 +6,7 @@
 // override object, validated server-side by the pinned module's configSchema.
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { MatchRuleFields, SPORT_RULES, buildRuleOverride } from "./match-rules";
+import { MatchRuleFields, buildRuleOverride, rulesFor } from "./match-rules";
 import {
   STAGE_TEMPLATES,
   applyStandingsCarry,
@@ -663,7 +663,7 @@ export function DivisionBuilder({
             </select>
           </label>
         </div>
-        {(SPORT_RULES[sportKey] ?? []).length > 0 && (
+        {rulesFor(sportKey).length > 0 && (
           <div className="border-t border-slate-100 pt-4">
             <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">
               {msg("wizard.matchRules")}
