@@ -203,9 +203,11 @@ describe("tools/matrix import boundary", () => {
   // anything read back from the code under test.
   const MATCH_RULES_API = [
     "SINGLE_SET_POINTS_LABEL", "SPORT_RULES", "alignBestOfOnePoints", "borrowOptionLabel",
-    "buildRuleOverride", "clearedSequenceKeys", "configKeysFor", "hydrateRuleValues", "keysEmittedBy", "ruleOptionLabel", "setRuleValue",
+    "buildRuleOverride", "clearedSequenceKeys", "configKeysFor", "hydrateRuleValues", "keysEmittedBy", "ruleOptionLabel", "rulesFor", "setRuleValue",
     "showsOnePointsField", "visibleRuleFields",
   ];
+  // `rulesFor` joined the public surface in the W2c batch-6 fix round (T20-2): the settings form reads a sport's fields
+  // through it instead of `SPORT_RULES[key] ?? []`, whose prototype-key answer is a function that cannot be iterated.
   it("the match-rules directory is a tree plain node can load: every relative import names its .ts, and node loads the whole public API", () => {
     const dir = join(REPO, MATCH_RULES_DIR);
     const files = readdirSync(dir).filter((f) => f.endsWith(".ts")).sort();
