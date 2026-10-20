@@ -268,9 +268,14 @@ async function drive(group: string, consumers: Consumer[], expectedCount: number
   expect(consumers.length, `${group}: the consumers of the list (the number in spec §5.7.2)`).toBe(expectedCount);
   let driven = 0;
   const seen = new Set<string>();
+  const buckets = new Set<string>();
   for (const c of consumers) {
     for (const state of STATES) {
       const s = await scene(state, c.kind, { mint: c.mint });
+      // A guard, not a comment: every scene reads a line of its own. Two on one bucket see each other's stays, and a stay left
+      // live by the one before turns a "served" answer into "the line is active" - which is how CI once failed this table.
+      expect(buckets.has(s.w.key), `${group} ${c.n} for a ${state} stay: the scene shares a bucket (a line) with an earlier scene`).toBe(false);
+      buckets.add(s.w.key);
       const got = await c.probe(s);
       const want = COUNTS[state] ? c.counted : c.not;
       expect(got, `${group} ${c.n} (${c.name}) for a ${state} stay`).toBe(want);
@@ -279,6 +284,7 @@ async function drive(group: string, consumers: Consumer[], expectedCount: number
     }
   }
   expect(driven, `${group}: stays driven`).toBe(expectedCount * STATES.length);
+  expect(buckets.size, `${group}: one bucket per stay driven`).toBe(driven);
   // Anti-vacuity: a consumer that answered the same thing for every state would pass both halves of the table only by accident -
   // except the create allowance, which is MEANT not to move.
   for (const c of consumers) {
