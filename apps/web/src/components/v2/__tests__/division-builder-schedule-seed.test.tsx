@@ -223,18 +223,22 @@ describe("DivisionBuilder — scheduling step date/time controls", () => {
 describe("DivisionBuilder — venue list gate", () => {
   // P9 scope item 5: the free-text "+ Add venue" button is gone — the court
   // multi-picker's own checkboxes are how an organiser adds a court now. The
-  // Pro gate survives as a SELECTION CAP (maxSelected={1}) plus the same
-  // hint + upgrade gate copy, no longer paired with a button to hide.
-  it("shows no Pro hint when the org has scheduling.constraints", () => {
+  // gate survives as a SELECTION CAP (maxSelected={1}) plus the same hint +
+  // gate copy, no longer paired with a button to hide. `scheduling.constraints`
+  // is granted on every plan, so the gate is the override-only card (V469).
+  it("shows no switched-off hint when the org has scheduling.constraints", () => {
     const html = render(true);
     expect(html).not.toContain(msg("wizard.venuesProHint", { venue: "pitch" }));
   });
 
-  it("shows the Pro hint + upgrade gate without the feature", () => {
+  it("shows the switched-off hint + override-only gate without the feature", () => {
     const html = render(false);
     expect(html).toContain(msg("wizard.venuesProHint", { venue: "pitch" }));
-    // The same paywall component the schedule settings panel uses.
-    expect(html).toContain("/settings/billing");
+    // The same gate component the schedule settings panel uses — its
+    // override-only arm, which sells nothing: no plan sells this key back.
+    expect(html).toContain('data-feature="scheduling.constraints"');
+    expect(html).toContain("data-override-only");
+    expect(html).not.toContain("/settings/billing");
   });
 
   it("points at the Directory instead of an empty control when the org has no courts", () => {

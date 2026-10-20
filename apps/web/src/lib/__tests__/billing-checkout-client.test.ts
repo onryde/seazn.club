@@ -232,7 +232,7 @@ describe("fetchRelayCheckoutClientSecret", () => {
 
   it("carries the 402 paywall refusal back as a status, with the server's sentence", async () => {
     const fetchFn = vi.fn().mockResolvedValue(
-      jsonResponse({ ok: false, error: "This plan does not include phone streaming" }, 402),
+      jsonResponse({ ok: false, error: "Phone streaming is switched off for this organisation" }, 402),
     );
     const r = await fetchRelayCheckoutClientSecret(
       { orgId: "org-1", fixtureId: "fx-1", pack: 1 },

@@ -380,12 +380,11 @@ export default async function SettingsPage({
                         }
                       />
                     ) : (
-                      <p className="flex items-center gap-2 text-sm text-slate-500">
-                        <PlanBadge feature="branding" />
-                        {t(dict, "settings.upgrade.logo")}{" "}
-                        <Link href={routes.billing(orgSlug)} className="text-purple-600 underline">
-                          {t(dict, "settings.upgrade.link")}
-                        </Link>
+                      // `branding` is granted on every plan (V310), so only a staff
+                      // override reaches this branch — nothing on sale lifts it, so
+                      // no plan badge and no billing link.
+                      <p className="text-sm text-slate-500" data-override-only data-feature="branding">
+                        {t(dict, "settings.logo.switchedOff")}
                       </p>
                     )}
                   </div>

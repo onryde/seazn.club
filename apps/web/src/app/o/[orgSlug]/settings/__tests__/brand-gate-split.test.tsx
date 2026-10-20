@@ -129,8 +129,8 @@ describe("settings → organisation: logo and brand colour are gated separately 
     // settings.upgrade.brandColor (dictionaries/en/ui.json:480) was dead code
     // the moment both gates read `branding`. This is it becoming reachable.
     expect(html).toContain("Brand color requires");
-    // …and the logo upsell must NOT appear — logos are free now.
-    expect(html).not.toContain("Org logo requires");
+    // …and the logo refusal must NOT appear — logos are free now.
+    expect(html).not.toContain("Your own logo is switched off for this organisation.");
   });
 
   it("a Pro org gets both — with the badge key OFF, as V396 leaves it", async () => {
@@ -161,13 +161,14 @@ describe("settings → organisation: logo and brand colour are gated separately 
 
   // The inverse pairing can't happen from a plan row today, but it is what
   // proves the two gates are genuinely independent rather than one flag read
-  // twice: colour on, logo off must render colour and upsell the logo.
+  // twice: colour on, logo off must render colour and say the logo is switched
+  // off (a staff override — no plan sells it back).
   it("honours the keys independently when only dashboard.theme is granted", async () => {
     grant({ branding: false, "dashboard.theme": true });
     const html = await render();
 
     expect(html).not.toContain("org-logo-uploader");
-    expect(html).toContain("Org logo requires");
+    expect(html).toContain("Your own logo is switched off for this organisation.");
     expect(html).toContain("org-brand-color-picker");
   });
 });
