@@ -1954,6 +1954,19 @@ jobs:
           path: apps/web/playwright-report
           retention-days: 7
 
+      # R2008 free-gaps (owner ruling 2026-10-20): mobile.spec.ts renders the never-live countdown strip and failed card in
+      # fr and en, refunded and charged, and writes the panel's picture for each to test-results/never-live-copy/ so the
+      # copy's fit is SEEN, not estimated. Always uploaded (a green run is the one whose pictures get looked at); never
+      # committed. `slug` is this matrix's artifact-safe name, as above.
+      - name: Upload never-live copy-fit screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: never-live-copy-${{ matrix.slug }}
+          path: apps/web/test-results/never-live-copy
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Dev server log (on failure)
         if: failure()
         run: cat dev-server.log || true
