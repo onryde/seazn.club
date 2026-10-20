@@ -30,7 +30,8 @@ import {
   lockLineFor,
   lockSentence,
   mergeLocks,
-  refusedFieldLabel,
+  refusedLines,
+  type RefusedLine,
 } from "./division-settings-locks";
 import { refusedFieldsOf, type RefusedField } from "@/lib/rule-errors";
 import {
@@ -590,6 +591,9 @@ export function DivisionSettings({
   // landed and the list what did not); a 409 is a save where nothing landed (the red error, plus the list).
   const [refusedList, setRefusedList] = useState<RefusedField[]>([]);
   const [partialSave, setPartialSave] = useState(false);
+  // Which save the notices belong to: the rules save (inside the Format group, directly under its Save) or any other (the foot
+  // of the page, where they always were). One home per save, so each notice - and its testid - renders once.
+  const [rulesSave, setRulesSave] = useState(false);
   // Fields a save refused that the page did not know were locked (a stage started after it loaded). Dropped when the page's
   // own list changes - the refresh after that save carries them - so a stage deleted since does not leave a stale lock.
   const [learnedLocks, setLearnedLocks] = useState<RefusedField[]>([]);
@@ -637,13 +641,33 @@ export function DivisionSettings({
     };
   }, [orgId]);
 
-  async function run(fn: () => Promise<void | RefusedField[]>, done: string) {
+  // A refusal keeps what is STORED, so the control it locks must show that again, not what was typed (a locked box reading
+  // 13 over a stored 11 says the save worked). Only the refused controls are reset: whatever else was typed stands.
+  const restoreRefused = (refused: readonly RefusedField[]) => {
+    if (lockLineFor("variant_key", refused) !== undefined) setVariantKey(division.variant_key);
+    if (lockLineFor("points", refused) !== undefined) setPointsValues(hydratePointsValues(division.sport_key, cfg.points));
+    const stored = hydrateRuleValues(division.sport_key, division.config);
+    const covered = (Object.hasOwn(SPORT_RULES, division.sport_key) ? SPORT_RULES[division.sport_key]! : []).filter(
+      (f) => lockLineFor(f.key, refused, f.edits) !== undefined,
+    );
+    setRuleValues((prev) => {
+      const next = { ...prev };
+      for (const f of covered) {
+        if (Object.hasOwn(stored, f.key)) next[f.key] = stored[f.key]!;
+        else delete next[f.key];
+      }
+      return next;
+    });
+  };
+
+  async function run(fn: () => Promise<void | RefusedField[]>, done: string, rules = false) {
     setBusy(true);
     setError(null);
     setPaywallFeature(null);
     setNotice(null);
     setRefusedList([]);
     setPartialSave(false);
+    setRulesSave(rules);
     try {
       const refused = await fn();
       if (refused !== undefined && refused.length > 0) {
@@ -651,6 +675,7 @@ export function DivisionSettings({
         setPartialSave(true);
         setRefusedList(refused);
         setLearnedLocks((prev) => mergeLocks(prev, refused));
+        restoreRefused(refused);
       } else {
         setNotice(done);
       }
@@ -686,6 +711,7 @@ export function DivisionSettings({
         if (refused !== null) {
           setRefusedList(refused);
           setLearnedLocks((prev) => mergeLocks(prev, refused));
+          restoreRefused(refused);
         }
       }
     } finally {
@@ -702,18 +728,47 @@ export function DivisionSettings({
     </p>
   );
 
-  // What a save kept, one line per field: the field's own label and the stage that holds it. Used by the partial-save
-  // notice (a 200) and under the refusal (a 409), so the two say it the same way.
-  const refusedItems = (list: readonly RefusedField[]) => (
+  // What a save kept, one line per CONTROL the organiser can see (never a raw config key): the control's own label and the
+  // stage that holds it. Used by the partial-save notice (a 200) and under the refusal (a 409), so the two say it the same way.
+  const keptLines = refusedLines(division.sport_key, refusedList, msg, pointsFieldKeys.length > 0);
+  const refusedItems = (lines: readonly RefusedLine[]) => (
     <ul className="mt-1 space-y-0.5">
-      {list.map((r) => (
-        <li key={r.field} data-testid={`division-refused-${r.field}`}>
-          <span className="font-medium">{refusedFieldLabel(division.sport_key, r.field, msg)}</span>
+      {lines.map((l) => (
+        <li key={l.id} data-testid={`division-refused-${l.id}`}>
+          <span className="font-medium">{l.label}</span>
           {": "}
-          {lockSentence(r, msg)}
+          {lockSentence(l.lock, msg)}
         </li>
       ))}
     </ul>
+  );
+
+  // What the last save says. It renders in ONE place: inside the Format group directly under "Save match rules" when the rules
+  // save made it (the organiser's eyes are on that button), at the foot of the page for every other save.
+  const saveFeedback = (
+    <>
+      {notice && (
+        <p role="status" className="rounded-md bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
+          {notice}
+        </p>
+      )}
+      {partialSave && refusedList.length > 0 && (
+        <div role="status" className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800" data-testid="division-partial-save">
+          <p className="font-medium">{msg(RULE_LOCK_PARTIAL_KEY, { n: keptLines.length })}</p>
+          {refusedItems(keptLines)}
+        </div>
+      )}
+      {error && (
+        <p role="alert" className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-600">
+          {error}
+        </p>
+      )}
+      {error && refusedList.length > 0 && (
+        <div role="status" className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-600" data-testid="division-refused-list">
+          {refusedItems(keptLines)}
+        </div>
+      )}
+    </>
   );
 
   const saveName = () =>
@@ -801,7 +856,7 @@ export function DivisionSettings({
         json: { variant_key: variantKey, config: override },
       });
       return refusedFieldsOf(saved) ?? [];
-    }, msg("divset.notice.rulesSaved"));
+    }, msg("divset.notice.rulesSaved"), true);
 
   // Sends ONLY camera_policy, so it works on a format-locked division (any
   // variant_key in the patch is 409 FORMAT_LOCKED once fixtures exist). On a
@@ -1242,6 +1297,7 @@ export function DivisionSettings({
             {msg("divset.saveRules")}
           </button>
         )}
+        {rulesSave && saveFeedback}
         <p className="text-[11px] text-slate-500">{msg("divset.rulesNote")}</p>
       </Group>
 
@@ -1505,19 +1561,7 @@ export function DivisionSettings({
       </Group>
 
       {paywallFeature && <UpgradeGate feature={paywallFeature} viewerPlan={viewerPlan} />}
-      {notice && <p className="rounded-md bg-emerald-50 px-3 py-2 text-xs text-emerald-700">{notice}</p>}
-      {partialSave && refusedList.length > 0 && (
-        <div className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800" data-testid="division-partial-save">
-          <p className="font-medium">{msg(RULE_LOCK_PARTIAL_KEY, { n: refusedList.length })}</p>
-          {refusedItems(refusedList)}
-        </div>
-      )}
-      {error && <p className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-600">{error}</p>}
-      {error && refusedList.length > 0 && (
-        <div className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-600" data-testid="division-refused-list">
-          {refusedItems(refusedList)}
-        </div>
-      )}
+      {!rulesSave && saveFeedback}
     </div>
   );
 }

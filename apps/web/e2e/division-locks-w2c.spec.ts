@@ -95,6 +95,9 @@ async function openFormat(page: Page, request: APIRequestContext, divisionId: st
 /** The variant picker. By role and a leading name: `getByLabel("Variant")` also matches a rule field whose help text says "variant". */
 const variantPicker = (page: Page) => page.getByRole("combobox", { name: new RegExp(`^${L["divset.variant"]!}`) });
 
+/** The Format card: what a rules save says renders inside it, directly under its Save button (T20 review I-1). */
+const formatCard = (page: Page) => page.getByRole("button", { name: /^Format/ }).locator("xpath=ancestor::section[1]");
+
 /** The control of one rule field of a sport, by the label the form prints. */
 const fieldControl = (page: Page, sport: string, key: string) => {
   const f = SPORT_RULES[sport]!.find((x) => x.key === key)!;
@@ -209,6 +212,10 @@ test("a stage starts after the page loaded: a mixed save says what landed and na
   // The notice: some landed, which were kept and why - and it does NOT say the rules were saved.
   const partial = page.getByTestId("division-partial-save");
   await expect(partial).toBeVisible({ timeout: STEP_MS });
+  // ...where the organiser is looking: in the viewport right after Save (not 700px down the page), inside the Format card.
+  await expect(partial).toBeInViewport();
+  await expect(formatCard(page).getByTestId("division-partial-save")).toBeVisible();
+  await expect(partial).toHaveAttribute("role", "status");
   await expect(partial).toContainText(say("ruleLock.partialSave", { n: 1 }));
   const kept = page.getByTestId("division-refused-setTo");
   await expect(kept).toContainText(labelOf("badminton", "setTo"));
@@ -230,6 +237,9 @@ test("a stage starts after the page loaded: a mixed save says what landed and na
   await expect(fieldControl(page, "badminton", "setTo")).toBeDisabled();
   await expect(fieldControl(page, "badminton", "cap")).toBeEnabled();
   await expect(page.getByTestId("division-locked-cap")).toHaveCount(0);
+  // The locked box shows what is STORED, not the value that was typed and kept out (T20 review I-2) - before any reload.
+  await expect(fieldControl(page, "badminton", "setTo")).toHaveValue(String(before.setTo));
+  await expect(fieldControl(page, "badminton", "cap")).toHaveValue(String(newCap));
 
   // A reload reads the lock from the server: the same lines, with the stored values the notice promised.
   await openFormat(page, request, rig.divisionId);
@@ -259,8 +269,12 @@ test("a stage starts after the page loaded: a save of ONLY locked fields is refu
   await fieldControl(page, "badminton", "finalSetTo").fill(String(Number(before.finalSetTo) + 2));
   await page.getByRole("button", { name: L["divset.saveRules"]! }).click();
 
-  // The refusal is said in the reader's words, naming the stage; BOTH refused fields are listed.
-  await expect(page.getByText(say("rules.err.divisionFormatLocked", { stage: "Pool A" }))).toBeVisible({ timeout: STEP_MS });
+  // The refusal is said in the reader's words, naming the stage; BOTH refused fields are listed - in the viewport, inside the card.
+  const refusal = page.getByText(say("rules.err.divisionFormatLocked", { stage: "Pool A" }));
+  await expect(refusal).toBeVisible({ timeout: STEP_MS });
+  await expect(refusal).toBeInViewport();
+  await expect(formatCard(page).getByText(say("rules.err.divisionFormatLocked", { stage: "Pool A" }))).toBeVisible();
+  await expect(page.getByTestId("division-refused-list")).toBeInViewport();
   for (const key of ["setTo", "finalSetTo"]) {
     const item = page.getByTestId(`division-refused-${key}`);
     await expect(item, `${key} is listed`).toBeVisible();
@@ -271,8 +285,43 @@ test("a stage starts after the page loaded: a save of ONLY locked fields is refu
   const after = await storedConfig(request, rig.divisionId);
   expect([after.setTo, after.finalSetTo], "nothing landed").toEqual([before.setTo, before.finalSetTo]);
 
-  // And the form locks them from then on.
+  // And the form locks them from then on - and the locked boxes show the stored values, not what was typed (review I-2).
   await expect(page.getByTestId("division-locked-setTo")).toBeVisible();
   await expect(page.getByTestId("division-locked-finalSetTo")).toBeVisible();
   await expect(fieldControl(page, "badminton", "setTo")).toBeDisabled();
+  await expect(fieldControl(page, "badminton", "setTo")).toHaveValue(String(before.setTo));
+  await expect(fieldControl(page, "badminton", "finalSetTo")).toHaveValue(String(before.finalSetTo));
+});
+
+test("a stage starts after the page loaded: a changed variant is refused, the picker goes back to the stored variant, and the list names controls (not config keys)", async ({ page, request }) => {
+  test.setTimeout(180_000);
+  const rig = await seedLeague(request, "badminton", "short", "stale-variant");
+  await startDivision(request, rig.divisionId);
+  await openFormat(page, request, rig.divisionId);
+  await expect(page.locator('[data-testid^="division-locked-"]'), "premise: nothing locked on load").toHaveCount(0);
+  const picker = variantPicker(page);
+  const values = await picker.locator("option").evaluateAll((os) => (os as HTMLOptionElement[]).map((o) => o.value));
+  const other = values.find((v) => v !== "short");
+  expect(other, "premise: badminton offers a second variant").toBeDefined();
+  await startMatch(request, rig.fixtureIds[0]!);
+
+  await picker.selectOption(other!);
+  await expect(picker, "premise: the chosen variant is on screen").toHaveValue(other!);
+  await page.getByRole("button", { name: L["divset.saveRules"]! }).click();
+
+  const list = page.getByTestId("division-refused-list");
+  await expect(list).toBeVisible({ timeout: STEP_MS });
+  await expect(list).toBeInViewport();
+  await expect(page.getByTestId("division-refused-variant_key")).toContainText(L["divset.variant"]!);
+  // Every line is a control the organiser can see: the variant, a rule field's label, the points boxes, or the grouped line.
+  const allowed = new Set([L["divset.variant"]!, L["divset.standingsPoints"]!, L["ruleLock.otherSettings"]!, ...SPORT_RULES.badminton!.map((f) => f.label)]);
+  const labels = await list.locator("li > span").allTextContents();
+  expect(labels.length, "the list names something").toBeGreaterThan(0);
+  for (const label of labels) expect(allowed.has(label.trim()), `"${label}" is a control's name, not a raw config key`).toBe(true);
+
+  // Nothing landed, and the picker shows the variant that is STORED - before any reload (review I-2).
+  expect((await apiJson<{ variant_key: string }>(request, `/api/v1/divisions/${rig.divisionId}`)).data!.variant_key).toBe("short");
+  await expect(picker).toHaveValue("short");
+  await expect(picker).toBeDisabled();
+  await expect(page.getByTestId("division-locked-variant_key")).toBeVisible();
 });

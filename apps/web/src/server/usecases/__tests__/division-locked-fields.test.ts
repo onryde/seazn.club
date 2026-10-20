@@ -166,7 +166,7 @@ describe.skipIf(!HAS_DB)("W2c T20 the settings form's locks, loaded from the sam
     expect(await divisionLockedFields(r.auth, randomUUID()), "and an unknown id").toEqual([]);
   });
 
-  it("every sport, a started league: the variant, the cascade and every field the form shows are locked, by the engine's own table/format split", async () => {
+  it("every sport, a started league: the variant and every field the form shows are locked, by the engine's own table/format split", async () => {
     let sports = 0;
     let judged = 0;
     let tableJudged = 0;
@@ -177,7 +177,9 @@ describe.skipIf(!HAS_DB)("W2c T20 the settings form's locks, loaded from the sam
       const locks = byField(await divisionLockedFields(g.auth, g.divisionId));
       const table = tableRuleKeys(m, variant);
       expect(locks.variant_key, `${m.key}: variant`).toMatchObject({ code: "DIVISION_FORMAT_LOCKED", stageName: g.stage.name });
-      expect(locks.tiebreakers, `${m.key}: cascade`).toMatchObject({ code: "DIVISION_TABLE_RULES_LOCKED", stageName: g.stage.name });
+      // The standings cascade (`tiebreakers`) is not asserted here: the form has no control for it, so no sport's entry is
+      // rendered anywhere (T20 review M-1). The loader still computes it and badminton's test above pins that; the sweep
+      // returns to it when a tiebreakers control exists.
       const keys = formKeys(m.key);
       expect(keys.length, `${m.key}: the form edits at least one key`).toBeGreaterThan(0);
       for (const k of keys) {

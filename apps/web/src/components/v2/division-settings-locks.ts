@@ -49,13 +49,46 @@ export function lockSentence(lock: RefusedField, m: Msg): string {
   return m(RULE_LOCK_KEYS[lock.code], { stage: lock.stageName });
 }
 
+/** One line of "what the save kept": the name the organiser knows the control by, and the refusal that explains it. */
+export interface RefusedLine {
+  /** Becomes the line's testid suffix: the refusal's own field, or "other" for the grouped line. */
+  id: string;
+  label: string;
+  lock: RefusedField;
+}
+
 /**
- * The name a refused field is listed under: the variant picker's, the label of the form field that edits the key, or the
- * key itself when the form has no field for it (an API-only key, a future one) rather than a name made up here.
+ * What a save kept, one line per CONTROL the organiser can see, never one per config key (M-4): the variant picker, each
+ * rule field that edits a refused key (its own label), the standings-points boxes when this division has them. A refused
+ * key the form has no control for (a table rule such as `pointsMap`, the cascade a variant change drags along, an API-only
+ * key) is not named by its raw key: all of them are ONE line, "Other format settings", worded by the first of them. So a
+ * refused variant reads as the handful of settings the organiser sees, not as the length of its cascade.
+ *
+ * `pointsBox`: this division edits its standings points in the form (the `points` key is then that group, not "other").
  */
-export function refusedFieldLabel(sportKey: string, field: string, m: Msg): string {
-  if (field === "variant_key") return m("divset.variant");
+export function refusedLines(sportKey: string, refused: readonly RefusedField[], m: Msg, pointsBox: boolean): RefusedLine[] {
   const fields = Object.hasOwn(SPORT_RULES, sportKey) ? SPORT_RULES[sportKey]! : [];
-  const named = fields.find((f) => f.key === field) ?? fields.find((f) => f.edits.some((e) => topOf(e) === field));
-  return named?.label ?? field;
+  const lines: RefusedLine[] = [];
+  const listed = new Set<string>();
+  let other: RefusedLine | undefined;
+  for (const r of refused) {
+    if (r.field === "variant_key") {
+      lines.push({ id: r.field, label: m("divset.variant"), lock: r });
+      continue;
+    }
+    if (r.field === "points" && pointsBox) {
+      lines.push({ id: r.field, label: m("divset.standingsPoints"), lock: r });
+      continue;
+    }
+    const named = fields.find((f) => f.key === r.field) ?? fields.find((f) => f.edits.some((e) => topOf(e) === r.field));
+    if (named === undefined) {
+      other ??= { id: "other", label: m("ruleLock.otherSettings"), lock: r };
+      continue;
+    }
+    if (listed.has(named.key)) continue; // two refusals for one control (a field that edits two keys): one line
+    listed.add(named.key);
+    lines.push({ id: r.field, label: named.label, lock: r });
+  }
+  if (other !== undefined) lines.push(other);
+  return lines;
 }

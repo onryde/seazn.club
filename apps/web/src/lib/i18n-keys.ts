@@ -5899,6 +5899,7 @@ export type DictionaryKey =
   | "routeError.title"
   | "ruleLock.DIVISION_FORMAT_LOCKED"
   | "ruleLock.DIVISION_TABLE_RULES_LOCKED"
+  | "ruleLock.otherSettings"
   | "ruleLock.partialSave"
   | "rules.default"
   | "rules.err.divisionFormatLocked"
