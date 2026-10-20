@@ -4,11 +4,11 @@
 -- Why a column: Fly's `restart_count` counts every non-zero exit in its window — restarts included — and the tally floors an
 -- attempt's crash exits at it (F-007). "Restart, restart, crash" in one window then reads restart_count 2 on the crash's final
 -- exit, a floor of 3 crashes, and RUNNER_CRASH_CAP (3) fails the session after ONE crash. The tally has to remember that this
--- attempt has READ a restart's exit (server/relay/domain/runner.ts `CrashTally.restartSeen`, the only writer is
--- stream-sessions.ts `persist`, which writes what `decide` returned) so the floor stops counting it. Nothing in the existing
--- columns can say so: the newest exit is the only one an observation carries.
+-- attempt has SEEN a restart — its `restart` final beat, or its exit 75 (server/relay/domain/runner.ts
+-- `CrashTally.restartSeen`, the only writer is stream-sessions.ts `persist`, which writes what `decide` returned) — so the
+-- floor stops counting it. Nothing in the existing columns can say so: the newest exit is the only one an observation carries.
 --
---   * runner_crash_restart_seen — THIS attempt has read an exit 75. Idempotent (a re-read sets it again); reset with the
+--   * runner_crash_restart_seen — THIS attempt has seen a restart. Idempotent (a repeat sets it again); reset with the
 --                                 attempt's other per-attempt evidence when the next attempt is created (a replacement
 --                                 Machine has a Fly window of its own). The session's count does not depend on it.
 --

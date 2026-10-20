@@ -2551,12 +2551,14 @@ export async function heartbeat(sessionId: string, token: string, body: RelayHea
   // the composed stale window takes it lost → destroyed → the one retry); the crash that reaches the cap fails the session
   // machine_crash and tears the Machine down. It is not a teardown trigger, so it reaches a still-running session only:
   // `decide` refuses it on a terminal one (it would 500 the Machine's beat).
-  // Owed 66: `restart` — the compositor's own in-place restart (exit 75) — is record only (stoppedBeatTrigger → null) like a
-  // `signalled` one: no trigger, so no count; Fly restarts the process on the SAME attempt and its beats hold the stale window.
+  // Owed 66: `restart` — the compositor's own in-place restart (exit 75) — is `callback_restarted`: NEVER a crash and never
+  // counted; Fly restarts the process on the SAME attempt and its beats hold the stale window. The runner only NOTES it
+  // (`restartSeen`: this attempt's restart-count floor is dropped, review m1) — from the beat, which goes out before the exit
+  // 75 and so does not wait for a read of it. Like `callback_crashed` it is not a teardown trigger: a still-running session only.
   const stopped = s.mode === "composed" && body.state === "stopped" ? stoppedBeatTrigger(body.exitReason) : null;
   if (stopped && (s.runner.state === "stopping" || s.runner.state === "playing" || s.runner.state === "booting")) {
     s = (await apply(sessionId, (cur) => (cur.mode === "composed" && (cur.runner.state === "stopping" || cur.runner.state === "playing" || cur.runner.state === "booting")
-      && (stopped.type !== "callback_crashed" || !isTerminal(cur.state)) && !supersededAttempt(att, cur.runner.attempt)
+      && (stopped.type === "callback_stopped" || !isTerminal(cur.state)) && !supersededAttempt(att, cur.runner.attempt)
       ? { type: "runner", trigger: stopped } : null), deps)) ?? s;
   }
   return { desiredState: s.desiredState };
