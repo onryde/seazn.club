@@ -292,22 +292,27 @@ describe("relay request schemas refuse what they must", () => {
       { kind: "live", reason: "phone_lost", elapsedMs: 31_000, remainingMs: 869_000 },
       { kind: "warming", reason: "no_inbound_timeout", elapsedMs: 31_000, remainingMs: 569_000 },
       { kind: "warming", reason: "phone_lost", elapsedMs: 60_000, remainingMs: 30_000 },
+      // R2008 + free-gaps (owner ruling 2026-10-20): a composed session's never-live end, in both its tellings (credit comes back / charge stands).
+      { kind: "live", reason: "camera_never_live", elapsedMs: 40_000, remainingMs: 860_000 },
+      { kind: "live", reason: "camera_never_live_charged", elapsedMs: 40_000, remainingMs: 860_000 },
     ]) {
       expect(S.StreamSessionCurrent.safeParse({ ...current, countdown: ok }).success, JSON.stringify(ok)).toBe(true);
       acceptedCountdowns++;
     }
-    expect(acceptedCountdowns).toBe(3);
+    expect(acceptedCountdowns).toBe(5);
     let refusedCountdowns = 0;
     for (const bad of [
       { kind: "lost", reason: "phone_lost", elapsedMs: 0, remainingMs: 0 }, { kind: "live", reason: "phone_lost", elapsedMs: -1, remainingMs: 0 },
       { kind: "warming", reason: "no_inbound_timeout", elapsedMs: 0, remainingMs: 1.5 }, { kind: "live", reason: "phone_lost", elapsedMs: 0, remainingMs: 0, at: "x" },
       { kind: "live", elapsedMs: 0, remainingMs: 0 }, { kind: "warming", elapsedMs: 0, remainingMs: 0 },
       { kind: "live", reason: "no_inbound_timeout", elapsedMs: 0, remainingMs: 0 }, { kind: "warming", reason: "stopped", elapsedMs: 0, remainingMs: 0 },
+      // a never-live end belongs to a session that went live: it is never a `warming` countdown.
+      { kind: "warming", reason: "camera_never_live_charged", elapsedMs: 0, remainingMs: 0 },
     ]) {
       expect(S.StreamSessionCurrent.safeParse({ ...current, countdown: bad }).success, JSON.stringify(bad)).toBe(false);
       refusedCountdowns++;
     }
-    expect(refusedCountdowns).toBe(8);
+    expect(refusedCountdowns).toBe(9);
     // T6: startCause is REQUIRED and closed — the panel names who started the broadcast from it.
     const withoutStartCause: Record<string, unknown> = { ...current };
     delete withoutStartCause.startCause;

@@ -135,6 +135,17 @@ export const FAIL_REASON_KEYS: Record<StreamFailReason, MessageKey> = {
   relay_disabled: "stream.fail.relay_disabled",
 };
 
+/** The failed card's sentence. `camera_never_live` has two true tellings (free-gaps, owner ruling 2026-10-20): the credit was
+ *  returned, or none was taken (`FAIL_REASON_KEYS`: "you weren't charged") — or the fixture's never-live refund was already
+ *  spent and the charge STANDS. The session's own ledger says which (`creditUsed`: its consume still stands net), the same
+ *  fact the chip beside it reads, so the card cannot say "not charged" next to "1 credit used". Every other reason, and a
+ *  row with none (V410's column is nullable text), is as before. */
+export function failReasonKey(v: { failReason: StreamFailReason | null; creditUsed: boolean }): MessageKey {
+  if (v.failReason === null) return "stream.fail.unknown";
+  if (v.failReason === "camera_never_live" && v.creditUsed) return "stream.fail.camera_never_live_charged";
+  return FAIL_REASON_KEYS[v.failReason];
+}
+
 /** How a COMPLETED session ended — shown as a chip in the ended state. */
 export const END_REASON_KEYS: Record<StreamEndReason, MessageKey> = {
   stopped: "stream.phone.ended.reason.stopped",
@@ -406,6 +417,8 @@ export const COUNTDOWN_KEYS = {
   "warming.phone_lost": "stream.phone.countdown.warming.phone_lost",
   "live.phone_lost": "stream.phone.countdown.live.phone_lost",
   "live.camera_never_live": "stream.phone.countdown.live.camera_never_live",   // R2008
+  // Free-gaps (owner ruling 2026-10-20): the same end when the fixture's never-live refund is already spent — the charge stands.
+  "live.camera_never_live_charged": "stream.phone.countdown.live.camera_never_live_charged",
 } as const satisfies Record<CountdownCombo, MessageKey>;
 
 export function countdownKey(c: StreamLostCountdown): MessageKey {

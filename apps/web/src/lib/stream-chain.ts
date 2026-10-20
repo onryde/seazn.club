@@ -24,6 +24,12 @@ export interface Chain { phone: ChainNode; link1: LinkStyle; seazn: ChainNode; l
 
 const node = (tone: NodeTone, word: ChainWord, mark: ChainNode["mark"] = null): ChainNode => ({ tone, word, mark });
 
+/** R2008: the cancellation of a composed session whose camera never appeared — in either of its two tellings (free-gaps, owner
+ *  ruling 2026-10-20: the credit comes back / none was taken, or the charge stands). They differ in the sentence's MONEY only, so
+ *  everything that draws the phone — the node's word, the "!", the dot — treats them as one. */
+export const isNeverLiveCountdown = (c: StreamLostCountdown | null | undefined): boolean =>
+  c?.reason === "camera_never_live" || c?.reason === "camera_never_live_charged";
+
 type ChainView = Pick<StreamSessionView, "mode" | "state" | "ingest" | "output">;
 
 /** Capture QR v2 (T11): the phone's facts from the `stream-phone` read model, and the server's countdown (`current`).
@@ -68,7 +74,7 @@ function capturePhone(view: ChainView | null, row: Chain, capture: CaptureFacts)
       }
       // R2008 (m-C2): the never-live countdown is about a camera that never connected — nothing to reconnect, so the node
       // says what the strip says (waiting), with the "!" as every countdown has it.
-      if (capture.countdown?.reason === "camera_never_live") return node("amber", "waitingCamera", "bang");
+      if (isNeverLiveCountdown(capture.countdown)) return node("amber", "waitingCamera", "bang");
       const bang = capture.countdown !== null || (d3Warning(view) === "phone" && reconnectReasonOf(capture.phone) === null);
       return node("amber", "reconnecting", bang ? "bang" : null);
     }
@@ -88,7 +94,7 @@ export type PhoneDot = "lime" | "amber" | "slate";
  * the timeout with the read model unread says nothing of a phone (slate).
  */
 export function phoneDot({ phone, countdown }: CaptureFacts): PhoneDot {
-  if (countdown?.reason === "phone_lost" || countdown?.reason === "camera_never_live") return "amber";
+  if (countdown?.reason === "phone_lost" || isNeverLiveCountdown(countdown)) return "amber";
   if (!phone) return "slate";
   if (countdown) return "lime";
   // PR-2 §7.4: a HELD phone the server calls not responding is amber here too — the node says "Not answering" (W8 warns).

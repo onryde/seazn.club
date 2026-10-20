@@ -36,7 +36,7 @@ import {
   type ReadyState, type StreamSessionView,
   TARGET_REMOVED, canGoLive, countdownKey, createErrorCode, createErrorHolder, createErrorIsNotFound, createErrorText, d3Warning,
   destinationWarning, durationLabel, elapsedLabel, healthChips, outputElapsedMs, phoneNoSignal, phoneStrip, phoneTabState,
-  readyStateOf, reconnectReasonOf, restartLine,
+  readyStateOf, reconnectReasonOf, restartLine, failReasonKey,
   AUTO_REFUSAL_KEYS, AUTO_REFUSAL_REMEDY, AUTO_WONT_START_KEY, HEALTH_KEYS, NOT_READY_KEYS, TAKEOVER_NOTICE_MS, autoOperatorHint, autoRefusalStrip, autoStopLine, autoSwitchNote,
   healthLine, phoneDetails, takeoverLineKey, takeoverNotice, type PhoneLinePart, type TakeoverAct,
   PRESENCE_WATCH_START, W5_REFUSAL_CODES, isW5Refusal, presenceAfterRefusal, readClearsW5, type CreateFailureCode, type PresenceWatch,
@@ -753,8 +753,8 @@ describe("the countdown copy and its durations (W24, T11)", () => {
     return (reason.options ?? [reason.value!]).map((r) => [o.shape.kind.value, r] as const);
   });
 
-  it("one key per (kind, reason) the union declares — 4 — each in all four locales, with the placeholders its kind needs", () => {
-    expect(combos).toHaveLength(4);
+  it("one key per (kind, reason) the union declares — 5 — each in all four locales, with the placeholders its kind needs", () => {
+    expect(combos).toHaveLength(5);
     let checked = 0;
     for (const [kind, reason] of combos) {
       const key = countdownKey({ kind, reason, elapsedMs: 0, remainingMs: 0 } as never);
@@ -768,7 +768,7 @@ describe("the countdown copy and its durations (W24, T11)", () => {
         checked++;
       }
     }
-    expect(checked).toBe(4 * LOCALES.length);
+    expect(checked).toBe(5 * LOCALES.length);
     expect(msg("stream.phone.countdown.live.phone_lost")).toBe("No video from the phone for {elapsed} — the stream ends in {remaining} if it doesn't come back.");
     // R2008 (confirm review m-C1): the never-live lines claim only what is true in every case — refunded, a free restart (nothing
     // was taken) and a staff refund first: the organiser was not charged. They never say a credit "was returned".
@@ -778,6 +778,47 @@ describe("the countdown copy and its durations (W24, T11)", () => {
       expect(dict(l)[k], `${l} ${k}`).not.toMatch(/return|devuel|rend[uo]|teruggegeven|terug/i);
     }
     expect(msg("stream.phone.countdown.warming.no_inbound_timeout")).toBe("No video from the phone yet — the stream is cancelled in {remaining} if it doesn't arrive.");
+  });
+
+  // Free-gaps (owner ruling 2026-10-20): when the fixture's never-live refund is spent the end leaves the charge standing, so the
+  // lines for THAT end must say "charged" — and none of them may say "not charged" (the failure this pair exists to prevent).
+  it("the never-live CHARGED lines say the money truthfully in all four locales: they name the charge, say why, never claim 'not charged' — and the plain ones still never claim a charge", () => {
+    expect(msg("stream.phone.countdown.live.camera_never_live_charged")).toBe("No video has reached the stream yet — it is cancelled in {remaining} if none arrives. You will still be charged: a no-camera stream of this match was already refunded.");
+    expect(msg("stream.fail.camera_never_live_charged")).toBe("No video ever reached the stream, so it was cancelled. You were still charged: a no-camera stream of this match was already refunded. Check the phone's camera and try again.");
+    const CHARGED = /charged|cobr|factur|betaal/i;                                   // en · es · fr · nl: "you are charged"
+    const NOT_CHARGED = /won't be charged|weren't charged|no se te cobr|rien ne vous|zonder kosten|betaalt niets|je betaalt niets/i;
+    const charged = ["stream.phone.countdown.live.camera_never_live_charged", "stream.fail.camera_never_live_charged"] as const;
+    const plain = ["stream.phone.countdown.live.camera_never_live", "stream.fail.camera_never_live"] as const;
+    let checked = 0;
+    for (const l of LOCALES) {
+      for (const k of charged) {
+        expect(dict(l)[k], `${l} ${k}: names the charge`).toMatch(CHARGED);
+        expect(dict(l)[k], `${l} ${k}: never claims 'not charged'`).not.toMatch(NOT_CHARGED);
+        checked++;
+      }
+      // …and the differential: the plain pair DOES claim 'not charged' (the matcher can tell the two apart), so the check above bites.
+      for (const k of plain) { expect(dict(l)[k], `${l} ${k}: the matcher sees a 'not charged' claim`).toMatch(NOT_CHARGED); checked++; }
+    }
+    expect(checked).toBe(4 * LOCALES.length);
+    expect(dict("en")["stream.phone.countdown.live.camera_never_live_charged"]).toContain("{remaining}");
+    for (const l of LOCALES) expect(dict(l)["stream.phone.countdown.live.camera_never_live_charged"], `${l}: remaining`).toContain("{remaining}");
+  });
+
+  it("failReasonKey: the card says 'charged' for a never-live failure EXACTLY when its credit was used; every other reason, and a row with none, is the map's — every reason x both credit states", () => {
+    let checked = 0;
+    let charged = 0;
+    for (const failReason of [...StreamFailReason.options, null]) for (const creditUsed of [false, true]) {
+      const key = failReasonKey({ failReason, creditUsed });
+      const want = failReason === null ? "stream.fail.unknown"
+        : failReason === "camera_never_live" && creditUsed ? "stream.fail.camera_never_live_charged"
+        : FAIL_REASON_KEYS[failReason];
+      expect(key, `${failReason} credit ${creditUsed}`).toBe(want);
+      if (key === "stream.fail.camera_never_live_charged") charged++;
+      checked++;
+    }
+    expect(checked).toBe((StreamFailReason.options.length + 1) * 2);
+    expect(charged, "the charged line is reachable by exactly one combination").toBe(1);
+    expect(failReasonKey({ failReason: "camera_never_live", creditUsed: false }), "refunded or free: the plain line").toBe("stream.fail.camera_never_live");
   });
 
   it("durationLabel is the locale's own short duration (the oracle: Intl.DurationFormat) — every locale, the boundaries, zero", () => {

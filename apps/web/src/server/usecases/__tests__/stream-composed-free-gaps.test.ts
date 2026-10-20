@@ -145,7 +145,6 @@ async function rig(o: { credits: number; fixtures?: 1 | 2 }) {
   return { auth, orgId: auth.orgId, fixtureId, fixtureIds, target, deps, runner, ingest, tick, composed, beat, reach, stop, current, consumes, refundsOf, ledgerOf,
     balance, neverLiveEnd, countdownOf, tickAfterGoLive, passthrough, programmeLiveRows, stateOf };
 }
-type Rig = Awaited<ReturnType<typeof rig>>;
 
 // ===========================================================================================================================
 // GAP 2

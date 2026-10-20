@@ -1468,7 +1468,7 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
       return reasons.map((r) => ({ kind: o.shape.kind.value, reason: r, elapsedMs: 40_000, remainingMs: 20_000 }) as Countdown);
     });
     /** Where each kind is served: `warming` before any video; `live` in live AND in a warming reconnect (§5.4). */
-    const states = (c: Countdown): ("warming" | "live")[] => (c.kind === "warming" ? ["warming"] : c.reason === "camera_never_live" ? ["live"] : ["live", "warming"]);   // a never-live end (R2008) is live only
+    const states = (c: Countdown): ("warming" | "live")[] => (c.kind === "warming" ? ["warming"] : c.reason === "camera_never_live" || c.reason === "camera_never_live_charged" ? ["live"] : ["live", "warming"]);   // a never-live end (R2008) is live only
     let checked = 0;
     let lost = 0;
     for (const countdown of wire) for (const state of states(countdown)) {
@@ -1477,9 +1477,9 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
       const html = renderToStaticMarkup(<PhoneTabBody {...BODY} view={view} balance={2} phone={readModel({ phone: facts({ state: "publishing" }) })} />);
       const sentence = m(`stream.phone.countdown.${countdown.kind}.${countdown.reason}` as MessageKey).split("{")[0]!;
       expect(html, `${where}: the strip's sentence`).toContain(esc(sentence));
-      const isLost = countdown.reason === "phone_lost" || countdown.reason === "camera_never_live";
+      const isLost = countdown.reason === "phone_lost" || countdown.reason === "camera_never_live" || countdown.reason === "camera_never_live_charged";
       // R2008 (m-C2): a camera that NEVER connected is "waiting for camera", not "reconnecting" — rendered, node word included.
-      const neverLive = countdown.reason === "camera_never_live";
+      const neverLive = countdown.reason === "camera_never_live" || countdown.reason === "camera_never_live_charged";
       // Read off the PHONE NODE only: "Waiting for camera" is also the phone's own state label elsewhere in the panel.
       const phoneNode = html.match(/data-node="phone"[^]*?data-node="seazn"/)?.[0] ?? "";
       expect(phoneNode, `${where}: PREMISE: the phone node rendered`).not.toBe("");
@@ -1492,8 +1492,8 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
       if (isLost) lost++;
       checked++;
     }
-    expect(checked, "warming timeout, ask 10, W19 in live and in a warming reconnect, R2008's never-live end in live").toBe(5);
-    expect(lost).toBe(4);
+    expect(checked, "warming timeout, ask 10, W19 in live and in a warming reconnect, R2008's never-live end in live — plain and charged").toBe(6);
+    expect(lost).toBe(5);
     // The positive pair, no countdown: the same present phone's dot is lime (the read model) — the dot moved above
     // because of the countdown, not because the fold always paints amber.
     const quiet = renderToStaticMarkup(<PhoneTabBody {...BODY} view={session()} balance={2} phone={readModel({ phone: facts({ state: "publishing" }) })} />);
@@ -1785,9 +1785,9 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
         checked++;
       }
     }
-    // 2 restart + 8 code + 4 countdown + 5 paused + 5 phone sentences + phone_not_paired + phone_not_responding (owner
-    // ruling 2026-10-09).
-    expect(keys.length, "PREMISE: the sweep found §6.12's keys").toBe(26);
+    // 2 restart + 8 code + 5 countdown (free-gaps added the charged never-live end) + 5 paused + 5 phone sentences +
+    // phone_not_paired + phone_not_responding (owner ruling 2026-10-09).
+    expect(keys.length, "PREMISE: the sweep found §6.12's keys").toBe(27);
     expect(checked).toBe(keys.length * LOCALES.length);
     expect(sentences).toBeGreaterThan(0);
     // The countdown sentences name the time left; the live one also the time gone (W24).
@@ -1920,6 +1920,19 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     const tree = body({ view: session({ state: "failed", failReason: null }), balance: 1 });
     expect(textAt(tree, "stream-fail-reason")).toBe(m("stream.fail.unknown"));
     expect(m("stream.fail.unknown"), "the premise: the two sentences differ").not.toBe(m(FAIL_REASON_KEYS.machine_crash));
+  });
+
+  // Free-gaps (owner ruling 2026-10-20): a never-live failure whose credit was NOT returned must not say "you weren't charged" next to
+  // the "1 credit used" chip — the card reads the same fact the chip does (`creditUsed`).
+  it("a never-live failure: the card says 'not charged' when no credit was used and 'charged' when one was — never the same sentence for both, and never beside a chip that contradicts it", () => {
+    const plain = body({ view: session({ state: "failed", failReason: "camera_never_live", creditUsed: false }), balance: 1 });
+    const charged = body({ view: session({ state: "failed", failReason: "camera_never_live", creditUsed: true }), balance: 1 });
+    expect(textAt(plain, "stream-fail-reason")).toBe(m("stream.fail.camera_never_live"));
+    expect(textAt(charged, "stream-fail-reason")).toBe(m("stream.fail.camera_never_live_charged"));
+    expect(m("stream.fail.camera_never_live_charged"), "PREMISE: the two sentences differ").not.toBe(m("stream.fail.camera_never_live"));
+    // Another reason with a credit used keeps ITS sentence (only a never-live failure is re-worded).
+    expect(textAt(body({ view: session({ state: "failed", failReason: "output_failed", creditUsed: true }), balance: 1 }), "stream-fail-reason"))
+      .toBe(m(FAIL_REASON_KEYS.output_failed));
   });
 
   it("m12: ending disables EVERY control — Buy more and an open chooser's tiles and Close included", () => {
