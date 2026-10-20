@@ -1866,7 +1866,7 @@
   "format.explainer.generating": "Genereren…",
   "format.explainer.fullGuide": "Volledige gids in het helpcentrum →",
   "format.carry.label": "Stand overdragen naar volgende fase",
-  "format.carry.help": "Neem punten (of volledige records) van fase 1 mee naar fase 2. Pro-functie.",
+  "format.carry.help": "Neem punten (of volledige records) van fase 1 mee naar fase 2.",
   "format.carry.none": "Niet overdragen",
   "format.carry.points": "Alleen punten",
   "format.carry.full": "Volledige records",

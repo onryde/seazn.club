@@ -5075,7 +5075,6 @@ export type DictionaryKey =
   | "pricing.matrix.section.scoring"
   | "pricing.matrix.sponsors.monetize"
   | "pricing.matrix.sponsors.tiers"
-  | "pricing.matrix.stages.per_division.max"
   | "pricing.matrix.standings.carry_over"
   | "pricing.matrix.standings.custom_points"
   | "pricing.matrix.stats.player"

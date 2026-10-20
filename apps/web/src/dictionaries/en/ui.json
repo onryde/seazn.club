@@ -1866,7 +1866,7 @@
   "format.explainer.generating": "Generating…",
   "format.explainer.fullGuide": "Full guide in the help centre →",
   "format.carry.label": "Carry standings into next stage",
-  "format.carry.help": "Bring Phase-1 points (or full records) into Phase 2. Pro feature.",
+  "format.carry.help": "Bring Phase-1 points (or full records) into Phase 2.",
   "format.carry.none": "Do not carry",
   "format.carry.points": "Points only",
   "format.carry.full": "Full records",

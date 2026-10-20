@@ -1074,7 +1074,8 @@ describe("RR-1: the case orgs' plan must grant every gate a planned case touches
   it("final batch FB-7: a case whose stages fire BOTH gates needs both — gatesNeeded takes every gate a row fires, not the first (task 10 review m-6)", () => {
     const spec = (row: string, deny?: readonly string[]) => ({ caseId: `${row}|generic|score|${deny === undefined ? "LIFECYCLE" : "DENIED"}`, row, sport: "generic", variant: "score", scenario: deny === undefined ? "LIFECYCLE" : "DENIED", canary: false, ...(deny === undefined ? {} : { deny }) }) as never;
     // No row needs both today (format-gates-copy.test.ts sweeps them), so the stages are injected.
-    const bothStages = () => [{ kind: DOUBLE_ELIM_KINDS[0]! }, { kind: "league", config: { placements: [] } }];
+    // An advanced KIND, not a placements key: V469 took config keys out of the advanced gate.
+    const bothStages = () => [{ kind: DOUBLE_ELIM_KINDS[0]! }, { kind: ADVANCED_KINDS[0]! }];
     expect(gatesNeeded([spec("x")], bothStages).map((g) => [g.gate, g.path])).toEqual([["formats.double_elim", "allowed"], ["formats.advanced", "allowed"]]);
     // The pairs: a real gated row needs exactly its one gate; a DENIED case needs what it denies.
     expect(gatesNeeded([spec("double_elim")]).map((g) => g.gate)).toEqual([gateOf("double_elim")]);

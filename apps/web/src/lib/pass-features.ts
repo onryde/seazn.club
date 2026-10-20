@@ -46,7 +46,10 @@ export const PASS_FEATURES = new Set([
   "discipline.enforced",
   "scoring.device_links",
   "scoring.audit_export",
-  "stages.per_division.max",
+  // `stages.per_division.max` LEFT this set at V469 ("all stages are free",
+  // owner ruling 2026-10-20): unlimited on every plan, so the pass no longer
+  // beats the community row and a pass CTA offering more stages would sell
+  // something already free.
   "schedule.checkpoints.max",
   // V396 (entitlements v18 W2 T15, owner ruling 2026-09-03): the three share
   // loops became paid on Free while both pass rungs kept them, so all three

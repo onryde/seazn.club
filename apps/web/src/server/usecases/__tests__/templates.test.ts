@@ -535,18 +535,40 @@ describe.skipIf(!HAS_DB)("createFromTemplate — quota caps (P4 review finding 2
     expect(await competitionCount(auth.orgId)).toBe(before);
   });
 
-  it("regression: a division with 3 stages (over Community's stages.per_division.max=2) is refused by PaymentRequiredError, leaving nothing behind", async () => {
-    await seedTemplateSportCatalog();
-    const { auth } = await seedOrg("community");
-    const before = await competitionCount(auth.orgId);
-    const overStageCap = SLAM_STAGE_TEMPLATE({});
-    overStageCap.divisions[0]!.stages = [
+  // "All stages are free" (owner ruling 2026-10-20, V469): the stage count is
+  // unlimited on every plan, so Community's old cap of 2 no longer refuses a
+  // 3-stage division. The cap CALL in createFromTemplate is kept for a staff
+  // override, and the second case is what proves it still shuts — and still
+  // leaves nothing behind when it does.
+  const threeStageTemplate = (): CompetitionTemplate => {
+    const t = SLAM_STAGE_TEMPLATE({});
+    t.divisions[0]!.stages = [
       { i18nNameKey: "templates.stage.mainDraw", kind: "knockout" },
       { i18nNameKey: "templates.stage.mainDraw", kind: "knockout" },
       { i18nNameKey: "templates.stage.mainDraw", kind: "knockout" },
     ];
+    return t;
+  };
+
+  it("a division with 3 stages (past Community's old stages.per_division.max of 2) instantiates on Community — free since V469", async () => {
+    await seedTemplateSportCatalog();
+    const { auth } = await seedOrg("community");
+    const before = await competitionCount(auth.orgId);
+    const created = await instantiateTemplate(auth, threeStageTemplate(), { name: "ThreeStages", ends_on: "2030-12-31" });
+    expect(created.divisions[0]!.stages).toHaveLength(3);
+    expect(await competitionCount(auth.orgId)).toBe(before + 1);
+  });
+
+  it("regression: a staff override capping stages.per_division.max at 2 still refuses a 3-stage division by PaymentRequiredError, leaving nothing behind", async () => {
+    await seedTemplateSportCatalog();
+    const { auth } = await seedOrg("community");
+    await sql`
+      insert into org_entitlement_overrides (org_id, feature_key, int_value, reason)
+      values (${auth.orgId}, 'stages.per_division.max', 2, 'test')`;
+    await invalidateOrgEntitlements(auth.orgId);
+    const before = await competitionCount(auth.orgId);
     await expect(
-      instantiateTemplate(auth, overStageCap, { name: "OverStageCap", ends_on: "2030-12-31" }),
+      instantiateTemplate(auth, threeStageTemplate(), { name: "OverStageCap", ends_on: "2030-12-31" }),
     ).rejects.toMatchObject({ status: 402, featureKey: "stages.per_division.max" });
     expect(await competitionCount(auth.orgId)).toBe(before);
   });
@@ -575,7 +597,12 @@ describe.skipIf(!HAS_DB)(
       expect(await competitionCount(auth.orgId)).toBe(before);
     });
 
-    it("regression: a synthetic stage with config.placements set (the advanced-formats gate shared with stages.ts, not a hand-copy) on a community org is refused, leaving nothing behind", async () => {
+    // "All stages are free" (owner ruling 2026-10-20, V469): config.placements
+    // LEFT the advanced-formats gate, so the template path must now accept it
+    // on Community — and the SAME org is still refused an americano stage, the
+    // pair that proves this path reads the shared gate (format-gates.ts) and
+    // not a hand-copy that kept the old terms, or one that lost the kind ones.
+    it("a synthetic stage with config.placements set instantiates on a community org — free since V469", async () => {
       await seedTemplateSportCatalog();
       const { auth } = await seedOrg("community");
       const before = await competitionCount(auth.orgId);
@@ -583,9 +610,18 @@ describe.skipIf(!HAS_DB)(
         kind: "group",
         config: { placements: [{ from: 1, to: 2 }] },
       });
+      await instantiateTemplate(auth, template, { name: "Placements free", ends_on: "2030-12-31" });
+      expect(await competitionCount(auth.orgId)).toBe(before + 1);
+    });
+
+    it("regression: a synthetic americano stage (the advanced-formats gate shared with stages.ts, not a hand-copy) on a community org is refused, leaving nothing behind", async () => {
+      await seedTemplateSportCatalog();
+      const { auth } = await seedOrg("community");
+      const before = await competitionCount(auth.orgId);
+      const template = SLAM_STAGE_TEMPLATE({ kind: "americano", config: {} });
       await expect(
-        instantiateTemplate(auth, template, { name: "Placements gated", ends_on: "2030-12-31" }),
-      ).rejects.toMatchObject({ featureKey: "formats.advanced" });
+        instantiateTemplate(auth, template, { name: "Americano gated", ends_on: "2030-12-31" }),
+      ).rejects.toMatchObject({ status: 402, featureKey: "formats.advanced" });
       expect(await competitionCount(auth.orgId)).toBe(before);
     });
   },
@@ -615,7 +651,8 @@ describe.skipIf(!HAS_DB)(
       { key: "americano-night", plan: "pro" as const, kinds: ["americano"] }, // needs formats.advanced
       { key: "box-league", plan: "community" as const, kinds: ["group"] },
       { key: "euro24", plan: "community" as const, kinds: ["group", "knockout"] },
-      { key: "t20-super8", plan: "pro" as const, kinds: ["group", "group", "knockout"] }, // 3 stages > community's stages.per_division.max (2)
+      // 3 stages: past community's OLD stages.per_division.max of 2 — Community since V469 ("all stages are free").
+      { key: "t20-super8", plan: "community" as const, kinds: ["group", "group", "knockout"] },
       { key: "league-playoff", plan: "pro" as const, kinds: ["league", "page_playoff"] }, // needs formats.double_elim
     ])(
       "$key instantiates to exactly 1 division with the pinned stage kind(s) $kinds",
@@ -677,7 +714,7 @@ describe.skipIf(!HAS_DB)("createFromTemplate — seeding persistence (P7/D1b T3)
 
   it("t20-super8's TWO `timing:\"setup\"` stages (super8 + knockout) both persist, snake and rank_order placements alike", async () => {
     await seedTemplateSportCatalog();
-    const { auth } = await seedOrg("pro"); // 3 stages > community's stages.per_division.max
+    const { auth } = await seedOrg("community"); // 3 stages — free on Community since V469
     const result = await createFromTemplate(auth, {
       template_key: "t20-super8",
       name: `t20-seeding-${randomUUID().slice(0, 6)}`,

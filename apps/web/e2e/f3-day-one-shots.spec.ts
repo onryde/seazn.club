@@ -269,10 +269,9 @@ test("F3 Task 5c — pending-seed-proposal dot on the Fixtures tab, visible from
 
   // Two stages in one call: groups (4 pools of 2) feed a knockout via the
   // unified `progression` field (timing: "setup", topNPerGroup(2)) — the
-  // exact shape stage-progression.spec.ts already proves end to end. Two
-  // stages sits exactly at Community's stages.per_division.max (2), and 8
-  // entrants is well under its entrants.per_division.max (32), so this
-  // needs no plan upgrade.
+  // exact shape stage-progression.spec.ts already proves end to end. The
+  // stage count is free on every plan (V469), and 8 entrants is well under
+  // Community's entrants.per_division.max, so this needs no plan upgrade.
   const stages = await apiJson<{ id: string; kind: string }[]>(
     page.request,
     `/api/v1/divisions/${divisionId}/stages`,

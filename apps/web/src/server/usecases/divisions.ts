@@ -734,24 +734,22 @@ export async function patchDivision(
   id: string,
   patch: PatchDivision,
 ): Promise<PatchDivisionResult> {
-  // Both gates below resolve against THIS division's competition, so one
-  // lookup serves them: `formats.advanced` has always been pass-lifted, and
-  // V396 made `news.auto` pass-lifted too (false on Free, granted on both
-  // Event Pass rungs). On the pooled proxy and BEFORE `withTenant` opens —
-  // `requireFeature` is a pooled read and issuing one inside a tenant
-  // transaction is the pool self-deadlock (lib/db.ts).
-  const needsCompetition = patch.auto_progress === true || patch.auto_posts === true;
-  const competitionId = needsCompetition
-    ? (
-        await sql<{ competition_id: string }[]>`
-          select competition_id from divisions where id = ${id}`
-      )[0]?.competition_id
-    : undefined;
-  // Jul3/08 §8: auto-advance is part of the advanced-formats Pro layer (or
-  // an Event Pass on this division's competition, v3/07 §3).
-  if (patch.auto_progress === true) {
-    await requireFeature(auth.orgId, "formats.advanced", competitionId);
-  }
+  // The gate below resolves against THIS division's competition: V396 made
+  // `news.auto` pass-lifted (false on Free, granted on both Event Pass rungs).
+  // On the pooled proxy and BEFORE `withTenant` opens — `requireFeature` is a
+  // pooled read and issuing one inside a tenant transaction is the pool
+  // self-deadlock (lib/db.ts).
+  //
+  // `auto_progress` used to ask for `formats.advanced` here (Jul3/08 §8). The
+  // owner's "all stages are free" ruling (2026-10-20, V469) made auto-advance
+  // free on every plan, so turning it ON needs no plan at all.
+  const competitionId =
+    patch.auto_posts === true
+      ? (
+          await sql<{ competition_id: string }[]>`
+            select competition_id from divisions where id = ${id}`
+        )[0]?.competition_id
+      : undefined;
   // SPEC-2: turning auto-drafted news ON is Pro `news.auto` — or an Event Pass
   // on this competition since V396; turning it off is always allowed (a
   // downgraded org can quiet its toggle).

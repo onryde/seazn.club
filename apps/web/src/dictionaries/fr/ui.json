@@ -1866,7 +1866,7 @@
   "format.explainer.generating": "Génération…",
   "format.explainer.fullGuide": "Guide complet dans le centre d'aide →",
   "format.carry.label": "Reporter le classement à l'étape suivante",
-  "format.carry.help": "Reporter les points (ou les fiches complètes) de la phase 1 vers la phase 2. Fonctionnalité Pro.",
+  "format.carry.help": "Reporter les points (ou les fiches complètes) de la phase 1 vers la phase 2.",
   "format.carry.none": "Ne pas reporter",
   "format.carry.points": "Points uniquement",
   "format.carry.full": "Fiches complètes",

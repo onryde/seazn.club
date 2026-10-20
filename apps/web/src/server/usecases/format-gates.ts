@@ -39,14 +39,15 @@ export function stageNeedsDoubleElimGate(kind: string): boolean {
   return kind === "double_elim" || kind === "page_playoff";
 }
 
-/** Jul3/08 §8: new kinds + custom byes + cross-stage feeds + placements are
- *  the advanced-formats Pro layer; basic RR/KO/group+KO stays Community. */
+/** The advanced-formats layer (Pro and the Event Pass) is the americano and
+ *  ladder stage KINDS — nothing else.
+ *
+ *  Jul3/08 §8 also put a stage's custom `byes`, `cross_feeds` and `placements`
+ *  config behind this gate. The owner's "all stages are free" ruling
+ *  (2026-10-20, V469) made all three free on every plan, so the gate reads the
+ *  kind alone. `config` stays on the input on purpose: both call sites pass
+ *  the real stage, so a later config-shaped term can be written here without
+ *  re-threading a narrower type through createStages and createFromTemplate. */
 export function stageNeedsAdvancedFormatsGate(stage: StageFormatGateInput): boolean {
-  return (
-    stage.kind === "americano" ||
-    stage.kind === "ladder" ||
-    stage.config?.byes !== undefined ||
-    stage.config?.cross_feeds !== undefined ||
-    stage.config?.placements !== undefined
-  );
+  return stage.kind === "americano" || stage.kind === "ladder";
 }

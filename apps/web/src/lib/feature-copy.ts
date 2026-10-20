@@ -39,7 +39,11 @@ export const FEATURE_REASONS: Record<string, string> = {
   "competitions.max_active": "Your plan's active-competition limit is reached.",
   "divisions.per_competition.max": "Adding another division needs a bigger plan.",
   "entrants.per_division.max": "This division is at your plan's entrant limit.",
-  "stages.per_division.max": "Adding another stage needs a bigger plan.",
+  // "All stages are free" (owner ruling 2026-10-20, V469): the stage count is
+  // unlimited on every plan, so "needs a bigger plan" would send a reader to
+  // buy an upgrade that changes nothing. The only refusal left is a staff
+  // `org_entitlement_overrides` cap on this one organisation.
+  "stages.per_division.max": "This division has reached the stage limit set for your organisation.",
   // W3 fix round 2 (item 4): was "Double-elimination brackets are a Pro
   // format." — false since V393's growth cell made `formats.double_elim`
   // true on COMMUNITY (and every plan). The only refusal this gate can still
@@ -53,8 +57,12 @@ export const FEATURE_REASONS: Record<string, string> = {
   // "is a Pro feature" reasons were fixed for: `formats.advanced` is granted
   // to BOTH pass rungs, live, not just Pro, so a reason naming only Pro sends
   // a pass holder to buy an upgrade they already hold.
-  "formats.advanced":
-    "Americano, ladders, custom brackets, cross-stage feeds and auto-advance are on Pro and the Event Pass.",
+  //
+  // "All stages are free" (owner ruling 2026-10-20, V469): custom brackets
+  // (byes), cross-stage feeds, placements and auto-advance left this gate —
+  // free on every plan — so the sentence names only the two KINDS the gate
+  // still refuses (format-gates.ts `stageNeedsAdvancedFormatsGate`).
+  "formats.advanced": "Americano and ladders are on Pro and the Event Pass.",
   // Sport depth.
   //
   // W1 (entitlements v18, owner ruling 2026-08-30): the three fidelity keys —
@@ -95,6 +103,8 @@ export const FEATURE_REASONS: Record<string, string> = {
   // the seven; FALSE for four. Community is `false` on `stats.player`,
   // `discipline.enforced`, `scoring.audit_export` and `standings.carry_over`,
   // so every free org reaches those four strings on the ordinary path.
+  // (Since then `stats.player` (V399) and `standings.carry_over` (V469) went
+  // true on community too, and took the override wording.)
   //
   // Which makes the comment's own warning land on itself: "a sentence nobody
   // can reach is exactly where a falsehood survives — no customer complains, no
@@ -126,7 +136,10 @@ export const FEATURE_REASONS: Record<string, string> = {
   "discipline.enforced": "Automatic suspension tracking is on Pro and the Event Pass.",
   "tiebreakers.custom": "Custom tiebreaker order is switched off for this organisation.",
   "standings.custom_points": "Bonus-point rules and forfeit points are switched off for this organisation — plain win/draw/loss points work on every plan.",
-  "standings.carry_over": "Carrying Phase-1 standings into Phase 2 is a Pro feature.",
+  // "All stages are free" (owner ruling 2026-10-20, V469): granted on every
+  // plan, so the only refusal left is an explicit override deny — the same
+  // wording as the other override-only reasons above.
+  "standings.carry_over": "Carrying Phase-1 standings into Phase 2 is switched off for this organisation.",
   // `eligibility.enforced` has NO rows in plan_entitlements at all, so no
   // plan grants or denies it and "a Pro feature" described a paywall that
   // does not exist. Kept rather than deleted — the key is still passed to

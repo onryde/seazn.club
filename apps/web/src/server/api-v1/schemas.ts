@@ -504,7 +504,8 @@ export const PatchDivision = z
     status: DivisionStatus,
     /** Hide official names on all public reads (Jul3/02, 25 Jun). */
     officials_hide_names: z.boolean(),
-    /** Jul3/08 §5: progression fires without a button (Pro formats.advanced). */
+    /** Jul3/08 §5: progression fires without a button (free on every plan
+     *  since V469; was Pro `formats.advanced`). */
     auto_progress: z.boolean(),
     /** SPEC-2: draft a news post when results land (Pro `news.auto` on write). */
     auto_posts: z.boolean(),
@@ -1075,10 +1076,11 @@ export const ProgressionSchema = z
     // the old QualificationSpec.carry: this plan's own grounding said no
     // shipped writer sets it (true for format-templates.ts/the catalogue),
     // but custom-points.test.ts exercises it end to end against a
-    // hand-built stage graph, and it backs a MARKETED Pro entitlement
+    // hand-built stage graph, and it backs a MARKETED entitlement
     // (standings.carry_over — feature-copy.ts's paywall copy,
-    // pricing.matrix.standings.carry_over in all 4 marketing dictionaries).
-    // Deleting it would silently break a paid, advertised feature.
+    // pricing.matrix.standings.carry_over in all 4 marketing dictionaries;
+    // free on every plan since V469). Deleting it would silently break an
+    // advertised feature.
     // Accepted on BOTH timings as of F6. Applied in seedNextStage for
     // `on_complete` and in confirmSeedProposal for `setup`. computeSeedProposal
     // refuses a non-real source at propose time (HttpError 422

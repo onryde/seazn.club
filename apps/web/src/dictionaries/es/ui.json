@@ -1866,7 +1866,7 @@
   "format.explainer.generating": "Generando…",
   "format.explainer.fullGuide": "Guía completa en el centro de ayuda →",
   "format.carry.label": "Trasladar la clasificación a la siguiente fase",
-  "format.carry.help": "Lleva los puntos (o los registros completos) de la Fase 1 a la Fase 2. Función Pro.",
+  "format.carry.help": "Lleva los puntos (o los registros completos) de la Fase 1 a la Fase 2.",
   "format.carry.none": "No trasladar",
   "format.carry.points": "Solo puntos",
   "format.carry.full": "Registros completos",

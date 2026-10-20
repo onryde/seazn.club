@@ -3,9 +3,12 @@
 // gate FIRST, then the advanced gate, before any insert (stages.ts:373-382),
 // and each gate reads every stage of the POST. format-gates-copy.test.ts pins
 // both bodies term by term, their order and the `some` over stages.
+//
+// The advanced gate reads the stage KIND only. Its config terms (custom byes,
+// cross_feeds, placements) were retired by the owner's "all stages are free"
+// ruling (2026-10-20, V469), so a config key never gates a POST.
 export const DOUBLE_ELIM_KINDS: readonly string[] = Object.freeze(["double_elim", "page_playoff"]);
 export const ADVANCED_KINDS: readonly string[] = Object.freeze(["americano", "ladder"]);
-export const ADVANCED_CONFIG_KEYS: readonly string[] = Object.freeze(["byes", "cross_feeds", "placements"]);
 
 export type FormatGate = "formats.double_elim" | "formats.advanced";
 
@@ -16,7 +19,7 @@ export type GateStage = { kind: string; config?: Readonly<Record<string, unknown
 export function expectedGates(stages: readonly GateStage[]): FormatGate[] {
   const out: FormatGate[] = [];
   if (stages.some((s) => DOUBLE_ELIM_KINDS.includes(s.kind))) out.push("formats.double_elim");
-  if (stages.some((s) => ADVANCED_KINDS.includes(s.kind) || ADVANCED_CONFIG_KEYS.some((k) => s.config?.[k] !== undefined))) out.push("formats.advanced");
+  if (stages.some((s) => ADVANCED_KINDS.includes(s.kind))) out.push("formats.advanced");
   return out;
 }
 
