@@ -283,6 +283,9 @@ describe("a save that keeps part of what was sent says so (the 200 with refused[
       expect(textOf(item)).toContain(r.stageName);
     }
     expect(tree.map((e) => textOf(e)).join("\n"), "the 'saved' notice is not shown over a value that snapped back").not.toContain(L("divset.notice.rulesSaved"));
+    // Each kept field is listed ONCE: the list belongs to the partial block, and the red refusal block is for a refusal.
+    expect(testIdsStartingWith(tree, "division-refused-"), "one list, in the order the server gave").toEqual(refusedTwo.map((r) => `division-refused-${r.field}`));
+    expect(byTestId(tree, "division-refused-list"), "no red refusal list beside a partial save").toBeUndefined();
   });
 
   it("the refused fields are locked from then on, with their lines, even though the page did not know (a stage started after it loaded)", async () => {
@@ -344,6 +347,33 @@ describe("a save that keeps part of what was sent says so (the 200 with refused[
     const tree = island.tree();
     expect(textOf(byTestId(tree, "division-partial-save"))).toContain(L("ruleLock.partialSave", { n: 1 }, esUi as Record<string, string>));
     expect(textOf(byTestId(tree, "division-refused-setTo"))).toContain(L("ruleLock.DIVISION_FORMAT_LOCKED", { stage: "Grupo A" }, esUi as Record<string, string>));
+  });
+});
+
+describe("what the form learned from a save is dropped once the page knows better", () => {
+  it("a fresh page list that CHANGES replaces it (a stage deleted since: the learned lock must not outlive it), and one that only re-arrives does not", async () => {
+    net.patch.body = { id: "d1", refused: [lock("setTo")] };
+    const island = mount();
+    clickButton(island.tree(), L("divset.saveRules"));
+    await flush();
+    expect(propsOf(ruleFieldsEl(island.tree())).lockedFields, "learned from the save").toEqual([lock("setTo")]);
+
+    // router.refresh() hands the form a NEW array with the same content: the learned lock stands.
+    island.rerender(props({ lockedFields: [] }));
+    expect(propsOf(ruleFieldsEl(island.tree())).lockedFields, "same content, new identity: nothing dropped").toEqual([lock("setTo")]);
+
+    // The page now says something else is locked (and not setTo): its list stands alone, the learned one is gone.
+    island.rerender(props({ lockedFields: [lock("cap")] }));
+    expect(propsOf(ruleFieldsEl(island.tree())).lockedFields).toEqual([lock("cap")]);
+    expect(byTestId(island.tree(), "division-locked-setTo")).toBeUndefined();
+  });
+
+  it("the page's own lock wins over a learned one for the same field (the stage it names stands)", async () => {
+    net.patch.body = { id: "d1", refused: [lock("setTo", { stageName: "Pool Learned", stageId: "stage-z" })] };
+    const island = mount({ lockedFields: [lock("setTo", { stageName: "Pool Page" })] });
+    clickButton(island.tree(), L("divset.saveRules"));
+    await flush();
+    expect(propsOf(ruleFieldsEl(island.tree())).lockedFields).toEqual([lock("setTo", { stageName: "Pool Page" })]);
   });
 });
 

@@ -6,8 +6,10 @@ import { closeOpenContexts } from "./spectator-public-helpers";
 import { dictString, publicJson, spectator, uiString, type W2Locale } from "./spectator-w2-kit";
 
 // v8 acceptance (spec 2026-07-13): the division Settings tab collects
-// general/format/sharing/danger; the format locks once fixtures exist (UI
-// read-only + PATCH 409 FORMAT_LOCKED); cards wear their identity — sport
+// general/format/sharing/danger; the stage STRUCTURE locks once fixtures exist
+// (UI note + PUT 409 FORMAT_LOCKED) while the match RULES lock per field once a
+// stage that plays by them has STARTED (W2c Task 20: UI lock line + PATCH 409
+// DIVISION_FORMAT_LOCKED naming the field); cards wear their identity — sport
 // banner on competitions. Divisions on the competition page moved off that
 // card grid onto DivisionLedger in W1 (competition-desk, 2026-09-02): logo
 // or the sport emoji, never a letter monogram — see the test below.
@@ -35,7 +37,7 @@ test.afterEach(async () => {
   await closeOpenContexts();
 });
 
-test("settings tab: sections render, rename works, format locks with fixtures", async ({
+test("settings tab: sections render, rename works, structure locks with fixtures, rules lock once a stage has started", async ({
   page,
   request,
 }) => {
@@ -77,34 +79,73 @@ test("settings tab: sections render, rename works, format locks with fixtures", 
   await expect(page.getByTestId("division-settings")).toHaveCount(0);
   await expect(page.getByText("Danger zone")).toHaveCount(0);
 
-  // Generate fixtures on the new structure → the format is history.
+  // Generate fixtures on the new structure. W2c Task 20 (S4): that locks the STRUCTURE (replaceStages refuses on any fixture
+  // row) and nothing else - the match rules lock per field and per STARTED stage that inherits them, so until a match is
+  // started they stay editable. (This test used to pin "fixtures exist => PATCH 409 FORMAT_LOCKED".)
   await apiJson(
     request,
     `/api/v1/divisions/${rig.divisionId}/entrants`,
     "POST",
     ["Alpha", "Bravo", "Cara", "Drew"].map((n, i) => ({ kind: "individual", display_name: n, seed: i + 1 })),
   );
-  const stagesNow = await apiJson<{ id: string }[]>(request, `/api/v1/divisions/${rig.divisionId}/stages`);
-  await apiJson(request, `/api/v1/stages/${stagesNow.data![0]!.id}/generate`, "POST");
+  const stagesNow = await apiJson<{ id: string; name: string }[]>(request, `/api/v1/divisions/${rig.divisionId}/stages`);
+  const firstStage = stagesNow.data![0]!;
+  const gen = await apiJson<{ fixtures: { id: string }[] }>(request, `/api/v1/stages/${firstStage.id}/generate`, "POST");
+  expect(gen.data!.fixtures.length, "premise: the first stage has fixtures").toBeGreaterThan(0);
 
-  // Renames regenerate the slug — resolve the current one before navigating.
+  // Renames regenerate the slug - resolve the current one before navigating.
   const fresh = await apiJson<{ slug: string }>(request, `/api/v1/divisions/${rig.divisionId}`);
-  await page.goto(`/o/${org.slug}/c/${rig.compSlug}/d/${fresh.data!.slug}?tab=settings`);
+  const settingsUrl = `/o/${org.slug}/c/${rig.compSlug}/d/${fresh.data!.slug}?tab=settings`;
+  const lockLines = page.locator('[data-testid^="division-locked-"]');
+  await page.goto(settingsUrl);
   await page.getByRole("button", { name: /Format/ }).click();
+  // The structure is locked and says so; the structure controls are gone.
   await expect(page.getByTestId("format-locked")).toBeVisible();
-  await expect(page.getByText("Format is locked — fixtures exist")).toBeVisible();
+  await expect(page.getByTestId("format-locked")).toContainText(uiString("en", "divset.lockedNotePre").split("(")[0]!.trim());
+  await expect(page.getByTestId("format-template")).toHaveCount(0);
+  // Fixtures exist but no stage has started: the RULES are open - no lock line, the variant is editable...
+  await expect(lockLines, "no stage has started: nothing is locked").toHaveCount(0);
+  const variant = page.getByRole("combobox", { name: new RegExp(`^${uiString("en", "divset.variant")}`) });
+  await expect(variant).toBeEnabled();
+  // ...and a DIFFERENT variant saves (a no-op re-send of the stored one would pass on a lock that refuses nothing).
+  await variant.selectOption("win_loss");
+  await page.getByRole("button", { name: "Save match rules" }).click();
+  await expect(page.getByText("Match rules saved.")).toBeVisible();
+  const afterSave = await apiJson<{ variant_key: string }>(request, `/api/v1/divisions/${rig.divisionId}`);
+  expect(afterSave.data!.variant_key, "the new variant landed").toBe("win_loss");
 
-  const res = await page.request.patch(`/api/v1/divisions/${rig.divisionId}`, {
-    data: { variant_key: "score" },
-  });
-  expect(res.status()).toBe(409);
-  expect(((await res.json()) as { error?: { code?: string } }).error?.code).toBe("FORMAT_LOCKED");
-
+  // The structure door is shut for good.
   const swap = await page.request.put(`/api/v1/divisions/${rig.divisionId}/stages`, {
     data: [{ seq: 1, kind: "league", name: "L", config: {}, progression: null }],
   });
   expect(swap.status()).toBe(409);
   expect(((await swap.json()) as { error?: { code?: string } }).error?.code).toBe("FORMAT_LOCKED");
+
+  // Start the division, then a match: the stage that plays it now holds the rules. The page says so BEFORE anyone types...
+  const divStarted = await apiJson(request, `/api/v1/divisions/${rig.divisionId}/start`, "POST");
+  expect(divStarted.status, JSON.stringify(divStarted.error)).toBeLessThan(300);
+  const started = await apiJson(request, `/api/v1/fixtures/${gen.data!.fixtures[0]!.id}/events`, "POST", {
+    expected_seq: 0,
+    type: "core.start",
+    payload: {},
+  });
+  expect(started.status, JSON.stringify(started.error)).toBeLessThan(300);
+  await page.goto(settingsUrl);
+  await page.getByRole("button", { name: /Format/ }).click();
+  const variantLine = page.getByTestId("division-locked-variant_key");
+  await expect(variantLine).toBeVisible();
+  await expect(variantLine).toContainText(uiString("en", "ruleLock.DIVISION_FORMAT_LOCKED", { stage: firstStage.name }));
+  await expect(page.getByRole("combobox", { name: new RegExp(`^${uiString("en", "divset.variant")}`) })).toBeDisabled();
+  // ...and the server agrees: the same variant change that landed above is now refused, naming the field.
+  const refused = await page.request.patch(`/api/v1/divisions/${rig.divisionId}`, { data: { variant_key: "score" } });
+  expect(refused.status()).toBe(409);
+  const refusedBody = (await refused.json()) as { error?: { code?: string; refused?: { field: string; stageName: string }[] } };
+  expect(refusedBody.error?.code).toBe("DIVISION_FORMAT_LOCKED");
+  // The variant is refused first, and so is every key the other variant's preset would have changed with it (the points here):
+  // nothing of a refused variant may land. Each names the stage that holds it.
+  const refusedList = refusedBody.error?.refused ?? [];
+  expect(refusedList[0]?.field, "the variant heads the list").toBe("variant_key");
+  expect(refusedList.map((r) => r.stageName), "every refused field names the started stage").toEqual(refusedList.map(() => firstStage.name));
 });
 
 test("cards wear their identity: sport banner on comps, sport-emoji avatar on division ledger rows", async ({

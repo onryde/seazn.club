@@ -7235,6 +7235,35 @@ async function w2cStageRulesSuite(): Promise<void> {
       (tableLocked ? "" : ` — got ${r.status} ${JSON.stringify(r.json.error ?? r.json.data)}`),
     tableLocked,
   );
+  // Task 20's owed check (S4, X-SR-4 UI half) — the SAME locked key beside a field that lands is NOT a 409: the save is
+  // applied per field, answers 200 and names what it kept in `refused[]` (the settings form reads it to say "saved, but
+  // ..." instead of "saved" over a value that snapped back). The rename landing and the cascade staying as stored are
+  // both read back from the division, so a 200 that dropped the rename — or applied the cascade — fails here.
+  const renamed = `W2c Singles Renamed ${tag}`;
+  const mixed = await v1(owner, `/api/v1/divisions/${divisionId}`, "PATCH", { name: renamed, tiebreakers: ["h2h_points"] });
+  const mixedRow = mixed.json.data as { name?: string; refused?: { field?: string; code?: string; stageName?: string }[] } | undefined;
+  const afterMixed = v1data<{ name: string; tiebreakers: unknown }>(await v1(owner, `/api/v1/divisions/${divisionId}`));
+  const mixedOk =
+    mixed.status === 200 &&
+    mixedRow?.name === renamed &&
+    mixedRow.refused?.length === 1 &&
+    mixedRow.refused[0]?.field === "tiebreakers" &&
+    mixedRow.refused[0]?.code === "DIVISION_TABLE_RULES_LOCKED" &&
+    mixedRow.refused[0]?.stageName === "Pool A" &&
+    afterMixed.name === renamed &&
+    afterMixed.tiebreakers == null;
+  check(
+    "w2c: a mixed division save answers 200, lands the rename and names the kept cascade in refused[]" +
+      (mixedOk ? "" : ` — got ${mixed.status} ${JSON.stringify(mixed.json.error ?? mixed.json.data)} / stored ${JSON.stringify(afterMixed)}`),
+    mixedOk,
+  );
+  // The sequence: a save AFTER the partial one is plain — nothing kept, no `refused` on the row.
+  const next = await v1(owner, `/api/v1/divisions/${divisionId}`, "PATCH", { name: `${renamed} 2` });
+  const nextRow = next.json.data as { name?: string; refused?: unknown } | undefined;
+  check(
+    "w2c: the save after a partial one carries no refused[]",
+    next.status === 200 && nextRow?.name === `${renamed} 2` && (nextRow.refused === undefined || (Array.isArray(nextRow.refused) && nextRow.refused.length === 0)),
+  );
   await w2cFixtureRulesChecks(owner, fixtureId, unstartedId);
   await w2cStageRulesEverySportChecks(owner);
   await w2cStagePresetChecks(owner);

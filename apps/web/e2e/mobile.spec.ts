@@ -42,6 +42,7 @@ import {
 } from "./scorepad-a11y-kit";
 import { V3_SKIN_CASES, type V3SkinRosterSlot } from "./v3-skin-catalog";
 import { WIDTH_MATRIX_CLOCK_SPORTS } from "./v3-width-matrix-coverage";
+import { SPORT_RULES } from "../src/lib/match-rules";
 import { FLOOR_MS, ROUTE_CHECK_MS } from "./spectator-w2-kit";
 import { withDb } from "./rs007-money-kit";
 import { STORAGE_KEY as GAME_2048_STORAGE_KEY, type GameState as Game2048State } from "../src/games/2048/state";
@@ -6086,4 +6087,69 @@ test("W2c match rules block at every width: the fold opens, the controls hold th
   await expect(block.getByTestId("match-rules-locked")).toBeVisible();
   await expect(block.locator("select, input, button")).toHaveCount(0);
   await fits("locked");
+});
+
+// W2c Task 20 (S4): the division settings' lock lines at every width. A started stage makes the match-rule fields read-only and
+// puts one line under each ("Locked: Pool A has started and plays this format"). The lines are plain text in the existing
+// field grid - no second phone tree - so the evidence is that every line is on screen, readable (its text is not clipped by its
+// own box), inside the viewport, that nothing scrolls the page sideways, and that the SET of lines (membership, order, repeats)
+// is the one 1280 shows. Owner 2026-10-20: the settings tab is being redesigned, so no design bar here beyond "readable, no
+// scroll, same set".
+test("W2c division lock lines at every width: each line is on screen and readable, nothing scrolls, and the line set matches 1280", async ({
+  page,
+  request,
+}, testInfo) => {
+  test.setTimeout(240_000);
+  const projectWidth = page.viewportSize()!.width;
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `W2c T20 ${TAG}-${testInfo.project.name}`,
+    visibility: "private",
+  });
+  expect(comp.status, `competition: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "Lock lines widths",
+    sport_key: "badminton",
+    variant_key: "short",
+  });
+  expect(div.status, `division: ${JSON.stringify(div.error)}`).toBeLessThan(300);
+  const added = await addEntrantsViaApi(request, div.data!.id, ["Ms Alpha", "Ms Bravo", "Ms Charlie"].map((n) => `${n} ${TAG}-${testInfo.project.name}`));
+  expect(added.ids).toHaveLength(3);
+  const { fixtureIds } = await createStageAndGenerate(request, div.data!.id, { kind: "league", name: "Pool A" });
+  expect(fixtureIds.length, "a league of three plays three matches").toBe(3);
+  const divStarted = await apiJson(request, `/api/v1/divisions/${div.data!.id}/start`, "POST");
+  expect(divStarted.status, JSON.stringify(divStarted.error)).toBeLessThan(300);
+  const started = await apiJson(request, `/api/v1/fixtures/${fixtureIds[0]!}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
+  expect(started.status, JSON.stringify(started.error)).toBe(201);
+
+  await page.goto(await divisionPath(request, div.data!.id, "?tab=settings"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  await expect(page.getByTestId("division-settings")).toBeVisible({ timeout: 20_000 });
+  await page.getByRole("button", { name: /^Format/ }).click();
+
+  const lines = page.locator('[data-testid^="division-locked-"]');
+  // One per badminton field plus the variant (the fields are the form's own table, not a number typed here).
+  const expectedLines = SPORT_RULES.badminton!.length + 1;
+  await expect(lines, "every locked field says so").toHaveCount(expectedLines, { timeout: 20_000 });
+  const ids = (): Promise<string[]> => lines.evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")!));
+  const here = await ids();
+
+  for (let i = 0; i < expectedLines; i++) {
+    const line = lines.nth(i);
+    await line.scrollIntoViewIfNeeded();
+    await expect(line, `line ${here[i]} is visible at ${projectWidth}`).toBeVisible();
+    expect((await line.innerText()).trim().length, `line ${here[i]} has words`).toBeGreaterThan(10);
+    const box = (await line.boundingBox())!;
+    expect(box.x, `${here[i]} starts inside the viewport`).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width, `${here[i]} ends inside the viewport`).toBeLessThanOrEqual(page.viewportSize()!.width);
+    const clip = await line.evaluate((el) => el.scrollWidth - el.clientWidth);
+    expect(clip, `${here[i]}'s words are not clipped by their own box`).toBeLessThanOrEqual(1);
+  }
+  await expectNoHorizontalScroll(page);
+  const dims = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
+  expect(dims.scroll, `scrollWidth ${dims.scroll} within clientWidth ${dims.client} at ${projectWidth}`).toBeLessThanOrEqual(dims.client);
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  expect(here, `the lock line set at ${projectWidth} vs 1280: membership, order, repeats`).toEqual(await ids());
+  await page.setViewportSize({ width: projectWidth, height: page.viewportSize()!.height });
 });
