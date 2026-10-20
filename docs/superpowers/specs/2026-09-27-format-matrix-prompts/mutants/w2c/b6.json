@@ -1,0 +1,322 @@
+[
+ {
+  "id": "b6-i1-ledger-row-anchor-lost",
+  "file": "apps/web/src/lib/__tests__/status-set-ledger.ts",
+  "find": "anchor: \"map | \\\"finished\\\"; const LOCK_KEY = :: cancelled,decided\"",
+  "replace": "anchor: \"map | \\\"finished\\\"; const LOCK_KEY_X = :: cancelled,decided\"",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/status-set-sweep.test.ts"
+    ],
+    "name": "found at least one set, and every found set is in the ledger"
+   }
+  ]
+ },
+ {
+  "id": "b6-m1-writer-always-finished",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "lockedRefusal(id, row.status === \"cancelled\" ? \"cancelled\" : \"finished\")",
+  "replace": "lockedRefusal(id, \"finished\")",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "saying finished; cancelled"
+   }
+  ]
+ },
+ {
+  "id": "b6-m1-refusal-text-ignores-cancelled",
+  "file": "apps/web/src/lib/rule-errors.ts",
+  "find": "isLockReason(x.reason) ? x.reason : \"finished\"",
+  "replace": "x.reason === \"decided\" ? \"decided\" : \"finished\"",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/rule-errors-copy.test.ts"
+    ],
+    "name": "a cancelled match's lock says cancelled"
+   }
+  ]
+ },
+ {
+  "id": "b6-m1-cancelled-key-is-finished-sentence",
+  "file": "apps/web/src/lib/rule-errors.ts",
+  "find": "  cancelled: \"matchRules.lockedCancelled\",\n  decided:",
+  "replace": "  cancelled: \"rules.err.fixtureFormatLocked\",\n  decided:",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/rule-errors-copy.test.ts"
+    ],
+    "name": "a cancelled match's lock says cancelled"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/rule-errors-copy.test.ts"
+    ],
+    "name": "each key is present"
+   }
+  ]
+ },
+ {
+  "id": "b6-m2-state-ignores-verdict",
+  "file": "apps/web/src/server/usecases/fixtures.ts",
+  "find": "if (!award.ok) return \"decided\";",
+  "replace": "if (false as boolean) return \"decided\";",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-match-rules-loader.test.ts"
+    ],
+    "name": "every row of the table"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-match-rules-loader.test.ts"
+    ],
+    "name": "batch-6 M-2: a scored award its own fold cannot reproduce"
+   }
+  ]
+ },
+ {
+  "id": "b6-m2-loader-never-asks",
+  "file": "apps/web/src/server/usecases/fixtures.ts",
+  "find": "await awardRefitVerdict(tx, fixtureId) : null;",
+  "replace": "({ ok: true } as const) : null;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-match-rules-loader.test.ts"
+    ],
+    "name": "batch-6 M-2: a scored award its own fold cannot reproduce"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-match-rules-loader.test.ts"
+    ],
+    "name": "batch-6 M-2: the block and the writer agree"
+   }
+  ]
+ },
+ {
+  "id": "b6-m2-null-guard-removed",
+  "file": "apps/web/src/server/usecases/fixtures.ts",
+  "find": "    if (award === null) throw new Error(\"matchRulesState: a scored award decided without play needs awardFit's verdict (awardRefitVerdict)\");\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-match-rules-loader.test.ts"
+    ],
+    "name": "broken assumption, refused by name"
+   }
+  ]
+ },
+ {
+  "id": "b6-t192-line-ignores-chip",
+  "file": "apps/web/src/components/v2/match-rules-block-model.ts",
+  "find": "playedAs: a.overridden && a.override !== null && a.effectiveLine !== \"\"",
+  "replace": "playedAs: a.override !== null && a.effectiveLine !== \"\"",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/match-rules-block-model.test.ts"
+    ],
+    "name": "every state of the sequence"
+   }
+  ]
+ },
+ {
+  "id": "b6-t192-block-reads-page-for-line",
+  "file": "apps/web/src/components/v2/match-rules-block.tsx",
+  "find": "{badges.playedAs && (",
+  "replace": "{override !== null && effectiveLine !== \"\" && (",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/match-rules-block-model.test.ts"
+    ],
+    "name": "the block renders the chip and the line from this one function"
+   }
+  ]
+ },
+ {
+  "id": "b6-t201-names-from-whole-table",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "refusedLines(visibleRuleFields(division.sport_key, ruleValues, inheritedCfg),",
+  "replace": "refusedLines(rulesFor(division.sport_key),",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-locks.test.ts"
+    ],
+    "name": "the form's call site names from visibleRuleFields"
+   }
+  ]
+ },
+ {
+  "id": "b6-t201-hidden-twin-not-mapped",
+  "file": "apps/web/src/components/v2/division-settings-locks.ts",
+  "find": "(r.field === BEST_OF_ONE_PAIR.shadow ? fields.find((f) => f.key === BEST_OF_ONE_PAIR.shown) : undefined)",
+  "replace": "undefined",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-locks.test.ts"
+    ],
+    "name": "a refusal of either key of the pair is ONE line"
+   }
+  ]
+ },
+ {
+  "id": "b6-t202-index-not-rulesfor",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "const covered = rulesFor(division.sport_key).filter",
+  "replace": "const covered = (SPORT_RULES[division.sport_key] ?? []).filter",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-locks.test.ts"
+    ],
+    "name": "the form's call site names from visibleRuleFields"
+   }
+  ]
+ },
+ {
+  "id": "b6-t181-reason-dropped",
+  "file": "apps/web/src/server/api-v1/http.ts",
+  "find": "        reason: featureReason(err.featureKey),\n        ...err.extra,",
+  "replace": "        ...err.extra,",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/http.test.ts"
+    ],
+    "name": "maps PaymentRequiredError"
+   }
+  ]
+ },
+ {
+  "id": "b6-i4-advanced-gate-call-deleted",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "  if (advanced) await requireFeature(auth.orgId, \"formats.advanced\", divComp?.competition_id);\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/denied.test.ts"
+    ],
+    "name": "the stage batch checks two gates"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/format-gates-copy.test.ts"
+    ],
+    "name": "the stage batch checks the double-elim gate before"
+   }
+  ]
+ },
+ {
+  "id": "b6-i4-double-elim-gate-call-deleted",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "    await requireFeature(auth.orgId, \"formats.double_elim\", divComp?.competition_id);\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/denied.test.ts"
+    ],
+    "name": "the stage batch checks two gates"
+   }
+  ]
+ },
+ {
+  "id": "b6-i4-gate-order-swapped",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "  if (inputs.some((s) => stageNeedsDoubleElimGate(s.kind))) {\n    await requireFeature(auth.orgId, \"formats.double_elim\", divComp?.competition_id);\n  }\n  // Jul3/08 §8: new kinds + custom byes + cross-stage feeds + placements are\n  // the advanced-formats Pro layer; basic RR/KO/group+KO stays Community.\n  // Shared with createFromTemplate (usecases/templates.ts, D1a) via\n  // usecases/format-gates.ts — see that file's header for why it's a\n  // standalone module rather than this usecase calling the other.\n  const advanced = inputs.some((s) => stageNeedsAdvancedFormatsGate({ kind: s.kind, config: s.config }));\n  if (advanced) await requireFeature(auth.orgId, \"formats.advanced\", divComp?.competition_id);\n",
+  "replace": "  const advanced = inputs.some((s) => stageNeedsAdvancedFormatsGate({ kind: s.kind, config: s.config }));\n  if (advanced) await requireFeature(auth.orgId, \"formats.advanced\", divComp?.competition_id);\n  if (inputs.some((s) => stageNeedsDoubleElimGate(s.kind))) {\n    await requireFeature(auth.orgId, \"formats.double_elim\", divComp?.competition_id);\n  }\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/format-gates-copy.test.ts"
+    ],
+    "name": "the stage batch checks the double-elim gate before"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/denied.test.ts"
+    ],
+    "name": "the stage batch checks two gates"
+   }
+  ]
+ },
+ {
+  "id": "b6-i4-create-stages-stops-asking",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "select competition_id from divisions where id = ${divisionId}`;\n  const stageCap = await assertStageBatchGates(auth, divComp, inputs);",
+  "replace": "select competition_id from divisions where id = ${divisionId}`;\n  const stageCap: number | null = null;",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/format-gates-copy.test.ts"
+    ],
+    "name": "the stage batch checks the double-elim gate before"
+   }
+  ]
+ },
+ {
+  "id": "b6-i4-replace-stages-stops-asking",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "  // R-T13-2: every gate `createStages` asks of the batch. Pooled reads, so between the two transactions, never in one.\n  const stageCap = await assertStageBatchGates(auth, divComp, inputs);",
+  "replace": "  // R-T13-2: every gate `createStages` asks of the batch. Pooled reads, so between the two transactions, never in one.\n  const stageCap: number | null = null;",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/format-gates-copy.test.ts"
+    ],
+    "name": "the stage batch checks the double-elim gate before"
+   }
+  ]
+ },
+ {
+  "id": "b6-i5-single-sport-reason-removed",
+  "file": "packages/engine/src/competition/points-w2c.test.ts",
+  "find": "// single-sport: the three ledgers only supply the played fact to the points arithmetic below, which is sport-independent (a generic-shaped pair); the played fact through every sport's own producer is swept by \"X-PT-1 through every sport's own producer\".\nconst football = mod(\"football\");",
+  "replace": "const football = mod(\"football\");",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/ci-wiring.test.ts"
+    ],
+    "name": "run the way CI runs it"
+   }
+  ]
+ }
+]
