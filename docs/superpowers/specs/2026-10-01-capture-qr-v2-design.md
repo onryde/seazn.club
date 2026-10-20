@@ -2145,6 +2145,22 @@ logged phase is written, because it ends that run and a compositor bug must neve
   unchanged (a composed session keeps its camera share until the daily sweep). A log that began later than one composed stale-beat
   window after `startedAt` (a deploy that landed mid-broadcast) is not judged, so no session is refunded on evidence this build
   never saw.
+- **Both ways a composed stream could run for free, closed (R2008 free-gaps, owner ruling 2026-10-20 "fix both gap").**
+  (1) *Composed restarts count toward W23's three.* `first_ingest_at` is written only by the passthrough poll, so a composed
+  restart used to reach "video" never and was free for the whole window. A composed session now counts as having reached video
+  when a compositor beat reported the camera `live` (a `programme_phase` row with `to_state = 'live'`: the evidence the refund
+  above reads, one definition in `relay/telemetry.ts`); a session counts once however often its camera drops and returns, and one
+  whose camera never appeared never counts. `restartAllowance` is still the one authority (admission, the consume and the
+  organiser's "used of 3" all ask it); `first_ingest_at` keeps its meaning for its other readers.
+  (2) *The never-live refund is bounded.* The platform returns at most `NEVER_LIVE_REFUNDS_PER_WINDOW` (1) never-live credit per
+  fixture per `CREDIT_REUSE_HOURS` (the reuse rule's window, not a second constant). A later never-live end inside it still ends
+  the stream, and **the charge stands** (the refund is withheld, written nowhere, and the session's `refund_credit` event says
+  `reason: refund_capped`). "An earlier refund" is the platform's own (`created_by` null) on an earlier session of the same fixture
+  that failed `camera_never_live`; a staff refund is goodwill and never spends the allowance. A free restart that is never-live has
+  nothing taken, so nothing is owed and "you weren't charged" is still true. The copy follows the money, from the SAME answer the
+  end acts on (`neverLiveRefundStanding`): the countdown is `camera_never_live_charged` when the charge will stand, and the failed
+  card says "you were still charged" exactly when the session's own credit was used (`creditUsed`). After a charged never-live end
+  its consume stands and opens a new 24 h window, so later restarts are free as W23 says; those that never reach video do not count.
 
 **W24 for composed (review I1).** The countdown shows if and only if the end fires at that deadline, as ruled 2026-10-04: the
 never-live end counts down from the quiet hold after go-live (`RECONNECT_QUIET_SECONDS`, 30) with no word needed; the
