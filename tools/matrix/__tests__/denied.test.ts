@@ -1,12 +1,11 @@
 // ⛔ denied (ruling 24). The fake product's gate table is read from the
 // PRODUCT's own source — each gate function's `kind === "…"` terms
-// (usecases/format-gates.ts) keyed by the feature createStages requires after
-// it, in createStages' order (usecases/stages.ts) — never from expectedGate,
-// the copy the scenario reads. The 402 envelope the scenario expects is pinned
-// against api-v1/http.ts the same way.
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+// (usecases/format-gates.ts) keyed by the feature the stage batch requires after
+// it, in the batch's order (usecases/stages.ts `assertStageBatchGates`, which
+// createStages and replaceStages both call: the scan FOLLOWS that call, see
+// product-gates-source.ts) — never from expectedGate, the copy the scenario
+// reads. The 402 envelope the scenario expects is pinned against api-v1/http.ts
+// the same way.
 import { describe, expect, it } from "vitest";
 import { ROW_KEYS, SPORT_KEYS, stagesForRow, type RowKey, type StagePostBody } from "../lib/catalogue.ts";
 import { RefusedCall, type StageRef, type StagesProbe } from "../lib/driver/types.ts";
@@ -15,29 +14,13 @@ import { DENIED_CHECKS, DeniedMisuse, PAYMENT_REFUSAL, denied } from "../lib/sce
 import type { CaseSpec, ScenarioContext } from "../lib/scenarios/types.ts";
 import { sportModule } from "../lib/sport-cfg.ts";
 import { FakeDeniedDriver } from "./fake-driver.ts";
+import { BATCH_CALLERS, BATCH_GATES_FN, STAGES_PATH, bodyOf, exportedStageGateFns, productFormatGates, readProduct } from "./product-gates-source.ts";
 
-const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-const read = (p: string): string => readFileSync(resolve(REPO, p), "utf8");
-const bodyOf = (src: string, head: string): string => {
-  const at = src.indexOf(head);
-  if (at < 0) throw new Error(`denied.test: ${head} not found`);
-  const end = src.indexOf("\n}\n", at);
-  if (end < 0) throw new Error(`denied.test: ${head} has no closing brace`);
-  return src.slice(at, end);
-};
+const read = readProduct;
 
-/** The product's gates in createStages order: which feature each requires and
- *  which stage kinds its body names. */
-function productGates(): { fn: string; key: string; kinds: string[] }[] {
-  const create = bodyOf(read("apps/web/src/server/usecases/stages.ts"), "export async function createStages(");
-  const gates = read("apps/web/src/server/usecases/format-gates.ts");
-  return [...create.matchAll(/(stageNeeds\w+Gate)\([\s\S]*?requireFeature\(auth\.orgId, "([^"]+)"/g)].map((m) => ({
-    fn: m[1] ?? "",
-    key: m[2] ?? "",
-    kinds: [...bodyOf(gates, `export function ${m[1] ?? ""}(`).matchAll(/kind === "([a-z_]+)"/g)].map((k) => k[1] ?? ""),
-  }));
-}
-const GATES = productGates();
+/** The product's gates in the order the stage batch asks them (`assertStageBatchGates`, followed from createStages): which
+ *  feature each requires and which stage kinds its body names. */
+const GATES = productFormatGates();
 /** kind → feature_key, in the order the product checks (a kind named by two
  *  gates answers the first). The fake refuses by this table, first entry first. */
 const DENY: ReadonlyMap<string, string> = (() => {
@@ -45,7 +28,7 @@ const DENY: ReadonlyMap<string, string> = (() => {
   for (const g of GATES) for (const k of g.kinds) if (!m.has(k)) m.set(k, g.key);
   return m;
 })();
-/** The product's gate for a row: the first gate, in createStages order, one of whose kinds the row posts. */
+/** The product's gate for a row: the first gate, in the batch's order, one of whose kinds the row posts. */
 const productGateOf = (row: RowKey): string | null => GATES.find((g) => stagesForRow(row).some((s) => g.kinds.includes(s.kind)))?.key ?? null;
 
 /** api-v1's answer to a PaymentRequiredError, as http.ts spells it. */
@@ -69,10 +52,26 @@ const check = (out: Awaited<ReturnType<typeof denied.run>>, id: (typeof DENIED_C
 };
 
 describe("the product's gate table (the fake's source of truth)", () => {
-  it("createStages checks two gates, double_elim first, each naming at least one kind (ruling 24)", () => {
+  it("the stage batch checks two gates, double_elim first, each naming at least one kind (ruling 24)", () => {
+    // Anti-vacuity first: a scan that found NO gate is a scan that lost them (W2c T13 fix round 1 moved them out of
+    // createStages, and 15 tests then ran against an empty table), never an ungated product.
+    expect(GATES.length, "the scan found the product's gates").toBeGreaterThan(0);
     expect(GATES.map((g) => g.key)).toEqual(["formats.double_elim", "formats.advanced"]);
     for (const g of GATES) expect(g.kinds.length, g.fn).toBeGreaterThan(0);
     expect(DENY.size).toBe(new Set(GATES.flatMap((g) => g.kinds)).size);
+  });
+  it("the scan reads every gate function the product exports, none twice, and both batch callers ask them", () => {
+    // Equal to the exported set: a stage gate added to format-gates.ts but never asked by the batch (or asked twice) reds.
+    expect(GATES.map((g) => g.fn).sort()).toEqual(exportedStageGateFns().sort());
+    expect(exportedStageGateFns().length).toBeGreaterThan(0);
+    // The follow: createStages AND replaceStages call the one gates function, so the PUT is gated by the table the POST is.
+    const src = read(STAGES_PATH);
+    let callers = 0;
+    for (const c of BATCH_CALLERS) {
+      expect(bodyOf(src, `export async function ${c}(`), `${c} asks ${BATCH_GATES_FN}`).toContain(`${BATCH_GATES_FN}(`);
+      callers++;
+    }
+    expect(callers).toBe(2);
   });
   it("the 402 the scenario expects is api-v1's PaymentRequiredError answer, and it carries feature_key", () => {
     expect(HTTP_402.code, "api-v1/http.ts PaymentRequiredError branch moved").toMatch(/^[A-Z_]+$/);

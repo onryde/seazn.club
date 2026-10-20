@@ -40,6 +40,7 @@ const mod = (key: string): AnySportModule => {
 };
 const ev = (id: string, type: string, voids?: string) => ({ id, type, ...(voids === undefined ? {} : { voids }) });
 // The played fact is read from ledgers through the ONE authority, never typed in.
+// single-sport: the three ledgers only supply the played fact to the points arithmetic below, which is sport-independent (a generic-shaped pair); the played fact through every sport's own producer is swept by "X-PT-1 through every sport's own producer".
 const football = mod("football");
 const NOTHING = playRecorded([ev("1", "core.start"), ev("2", "core.forfeit")], football);
 const SOMETHING = playRecorded([ev("1", "core.start"), ev("2", "football.goal"), ev("3", "core.forfeit")], football);
