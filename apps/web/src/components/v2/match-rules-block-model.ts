@@ -249,6 +249,18 @@ export function matchFragment(
   return { ...kept, ...built };
 }
 
+/**
+ * Batch-6 T19-2 - the "Format changed" chip and the "This match: ..." line, from ONE answer. The chip says THAT the match
+ * carries its own format: the block's own `overridden`, which a save or a reset updates at once. The line says WHAT it plays:
+ * the page's describer line (`effectiveLine`) over the page's `override`, which only a refresh (`router.refresh()`) brings.
+ * Reading them from different sources let a reset drop the chip while the line went on describing the old format; the line
+ * now needs the block's own answer AND the page's, so it is never up without its chip. (A first save shows the chip before
+ * the line - the page's line is still the stage's, and no line is better than the wrong one.)
+ */
+export function ownFormatBadges(a: { overridden: boolean; override: Record<string, unknown> | null; effectiveLine: string }): { chip: boolean; playedAs: boolean } {
+  return { chip: a.overridden, playedAs: a.overridden && a.override !== null && a.effectiveLine !== "" };
+}
+
 /** What the block re-seeds on: the facts a refreshed page can change under it (`router.refresh()` after a save, a tab
  *  return). A new key remounts the block from the page's truth. */
 export function blockSeedKey(p: Pick<MatchRulesBlockProps, "override" | "state" | "effective" | "stageResolved">): string {

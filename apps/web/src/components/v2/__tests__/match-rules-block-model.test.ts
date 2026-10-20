@@ -5,6 +5,7 @@
 // `ruleKeyOwning` (the declared scope and bound of each key), and the module's `configSchema` - never from the model, and
 // never from a table typed here. AGENTS.md failure class 19: a reachable control is not a correctly seeded one - the
 // extra-time field must open at the stage's value, not at the field's own default (15).
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   checkFixtureOverride,
@@ -26,6 +27,7 @@ import {
   matchFragment,
   matchRulesBlockProps,
   offersMatchRules,
+  ownFormatBadges,
   matchSource,
   type MatchFormCtx,
   type MatchFormLabels,
@@ -489,5 +491,46 @@ describe("the page seam: what crosses from the server page to the console is JSO
     expect(JSON.parse(JSON.stringify(props))).toEqual(props);
     expect(loaded.fields.length, "premise: the loader's fields are function-valued, so a leak would not survive JSON").toBeGreaterThan(0);
     expect(typeof loaded.fields[0]!.build).toBe("function");
+  });
+});
+
+// Batch-6 T19-2: after "Use stage rules" the chip dropped at once (the block's own `overridden`) while the "This match: ..."
+// line lingered until `router.refresh()` (it read the page's `override` and `effectiveLine`, which still describe the old
+// format). Both now come from ONE function over ONE set of inputs, so they cannot disagree.
+describe("ownFormatBadges: the chip and the played-as line change together", () => {
+  const stageLevel = null;
+  const own = { bestOf: 1 };
+  it("every state of the sequence: the page's answer, a reset before the refresh lands, a first save, no words, no override (counted)", () => {
+    const rows: { label: string; in: Parameters<typeof ownFormatBadges>[0]; chip: boolean; playedAs: boolean }[] = [
+      // Empty case first: the match carries no format of its own - nothing to say, either way.
+      { label: "no override on the page or here", in: { overridden: false, override: stageLevel, effectiveLine: "Best of 3 to 21" }, chip: false, playedAs: false },
+      { label: "the page says it carries its own format", in: { overridden: true, override: own, effectiveLine: "Best of 1 to 21" }, chip: true, playedAs: true },
+      // The bug: Reset cleared `overridden` at once; the page's props still carried the old override and its line.
+      { label: "reset, before router.refresh() lands: the page still describes the old format", in: { overridden: false, override: own, effectiveLine: "Best of 1 to 21" }, chip: false, playedAs: false },
+      // A first save: the chip is true at once, but the page's line is still the STAGE's - not what the match now plays.
+      { label: "first save, before the refresh: the page's line is the stage's", in: { overridden: true, override: stageLevel, effectiveLine: "Best of 3 to 21" }, chip: true, playedAs: false },
+      { label: "the describer has no words for it: the chip still says it differs, the line says nothing", in: { overridden: true, override: own, effectiveLine: "" }, chip: true, playedAs: false },
+    ];
+    let checked = 0;
+    for (const r of rows) {
+      const got = ownFormatBadges(r.in);
+      expect(got.chip, `${r.label}: chip`).toBe(r.chip);
+      expect(got.playedAs, `${r.label}: line`).toBe(r.playedAs);
+      // The invariant the fix is for: the line is never shown without the chip (it states WHAT, the chip says THAT).
+      if (got.playedAs) expect(got.chip, `${r.label}: a line without its chip`).toBe(true);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every row was asked").toBe(rows.length);
+    expect(rows.some((r) => r.chip && r.playedAs) && rows.some((r) => !r.chip && !r.playedAs) && rows.some((r) => r.chip && !r.playedAs), "all three outcomes are witnessed").toBe(true);
+  });
+
+  it("the block renders the chip and the line from this one function (the wiring, not the fixture)", () => {
+    const src = readFileSync(new URL("../match-rules-block.tsx", import.meta.url), "utf8");
+    expect(src, "the component computes both from ownFormatBadges").toMatch(/const badges = ownFormatBadges\(\{[^}]*\boverridden\b[^}]*\boverride\b[^}]*\beffectiveLine\b[^}]*\}\)/);
+    expect(src, "the chip is gated on badges.chip").toMatch(/\{badges\.chip && \(\s*<span\s+data-testid="match-rules-overridden"/);
+    expect(src, "the line is gated on badges.playedAs").toMatch(/\{badges\.playedAs && \(\s*<p data-testid="match-rules-played-as"/);
+    // And neither is gated on a page prop or the local flag directly any more (two sources is the bug).
+    expect(src).not.toMatch(/\{override !== null && effectiveLine/);
+    expect(src).not.toMatch(/\{overridden && \(\s*<span\s+data-testid="match-rules-overridden"/);
   });
 });

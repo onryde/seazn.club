@@ -29,6 +29,7 @@ import {
   matchFormFields,
   matchFragment,
   matchSource,
+  ownFormatBadges,
   type MatchFormCtx,
   type MatchFormLabels,
   type MatchRulesBlockProps,
@@ -84,6 +85,8 @@ function MatchRulesBlockBody({ fixtureId, sportKey, stageKind, variant, stageLin
   const lockReason: LockReason = state === "decided" ? "decided" : cancelled ? "cancelled" : "finished";
   // A finished match has no form (X-SR-3); a live one opens it only on "Correct format" (X-SR-5); an unstarted one always.
   const formOpen = state === "unstarted" || (state === "live" && correcting);
+  // The chip and the played-as line from one answer, so a reset drops them together (batch-6 T19-2).
+  const badges = ownFormatBadges({ overridden, override, effectiveLine });
 
   async function put(rules: Record<string, unknown> | null, then: () => void) {
     setSaving(true);
@@ -134,7 +137,7 @@ function MatchRulesBlockBody({ fixtureId, sportKey, stageKind, variant, stageLin
         <h2 id={`${formId}-title`} className="text-sm font-semibold text-slate-700">
           {msg("matchRules.title")}
         </h2>
-        {overridden && (
+        {badges.chip && (
           <span
             data-testid="match-rules-overridden"
             className="rounded-full bg-teal-50 px-2 py-0.5 text-xs font-medium text-teal-800"
@@ -152,8 +155,9 @@ function MatchRulesBlockBody({ fixtureId, sportKey, stageKind, variant, stageLin
 
       {/* The format this match plays (or played) whenever it carries its own: the chip alone says THAT it differs, not WHAT it
           plays - in a finished or live-closed match nothing else on the card does (review I2). The page's `override` and its
-          `effectiveLine` are one answer (a refresh brings both), so the line follows the page, as the form re-seeds from it. */}
-      {override !== null && effectiveLine !== "" && (
+          `effectiveLine` are one answer (a refresh brings both); the chip is the block's own, which a reset clears at once, so
+          `ownFormatBadges` takes both and the line drops with the chip (batch-6 T19-2). */}
+      {badges.playedAs && (
         <p data-testid="match-rules-played-as" className="min-w-0 text-xs font-medium text-slate-800 [overflow-wrap:anywhere]">
           {msg("matchRules.playedAs", { format: effectiveLine })}
         </p>
