@@ -278,6 +278,32 @@ describe("buildRelayCheckoutParams", () => {
   });
 });
 
+describe("buildRelayCheckoutParams — a purchase made from Settings has no fixture", () => {
+  const settings = buildRelayCheckoutParams({
+    priceId: "price_x",
+    orgId: "org-1",
+    pack: streamPack(20)!,
+    returnUrl: "https://seazn.club/o/a/settings/credits?kind=stream&checkout=success&session_id={CHECKOUT_SESSION_ID}",
+    currency: "gbp",
+    customerEmail: "o@example.com",
+  });
+  it("stamps the same webhook contract minus the fixture — the KEY is absent, not present-and-undefined", () => {
+    expect(settings.metadata).toEqual({ kind: "stream_credits", org_id: "org-1", pack: "20", credits: "20" });
+    expect(Object.keys(settings.metadata!)).not.toContain("fixture_id");
+    expect(settings.payment_intent_data?.metadata).toEqual({ kind: "stream_credits", org_id: "org-1", pack: "20" });
+    expect(settings.return_url).toContain("kind=stream");
+  });
+  it("hashes to a different idempotency key than the same pack bought for a fixture, so one never answers the other", () => {
+    const forFixture = buildRelayCheckoutParams({
+      priceId: "price_x", orgId: "org-1", fixtureId: "fx-1", pack: streamPack(20)!,
+      returnUrl: settings.return_url!, currency: "gbp", customerEmail: "o@example.com",
+    });
+    expect(relayCheckoutIdempotencyKey(settings, 7)).not.toBe(relayCheckoutIdempotencyKey(forFixture, 7));
+    // and a fixture-less request is stable: the same params, the same bucket, the same key
+    expect(relayCheckoutIdempotencyKey(settings, 7)).toBe(relayCheckoutIdempotencyKey({ ...settings }, 7));
+  });
+});
+
 // `pnpm stripe:sync` (scripts/stripe-sync.ts) writes ONE Stripe price per pack carrying a
 // `currency_options` entry per non-GBP currency. If that key set ever falls
 // short of what the platform quotes, `preferredCurrency` hands

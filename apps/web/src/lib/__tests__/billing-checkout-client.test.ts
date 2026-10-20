@@ -214,6 +214,22 @@ describe("fetchRelayCheckoutClientSecret", () => {
     expect(JSON.parse(init.body as string)).toEqual({ orgId: "org-1", fixtureId: "fx-1", pack: 5 });
   });
 
+  it("a Settings purchase posts the org, pack and returnTo — and NO fixtureId (the route picks the return page from the shape)", async () => {
+    const fetchFn = vi.fn().mockResolvedValue(
+      jsonResponse({ ok: true, data: { client_secret: "cs_s" } }),
+    );
+    const r = await fetchRelayCheckoutClientSecret(
+      { orgId: "org-1", pack: 20, returnTo: "settings" },
+      fetchFn as unknown as typeof fetch,
+    );
+    expect(r).toEqual({ ok: true, clientSecret: "cs_s" });
+    const [path, init] = fetchFn.mock.calls[0]!;
+    expect(path).toBe("/api/billing/relay-checkout");
+    const body = JSON.parse(init.body as string);
+    expect(body).toEqual({ orgId: "org-1", pack: 20, returnTo: "settings" });
+    expect(Object.keys(body)).not.toContain("fixtureId");
+  });
+
   it("carries the 402 paywall refusal back as a status, with the server's sentence", async () => {
     const fetchFn = vi.fn().mockResolvedValue(
       jsonResponse({ ok: false, error: "This plan does not include phone streaming" }, 402),

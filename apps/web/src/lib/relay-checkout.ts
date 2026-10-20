@@ -28,7 +28,9 @@ const INTEGRATION_IDENTIFIER = "seazn_stream_credits_rlyq8kzt";
 export function buildRelayCheckoutParams(args: {
   priceId: string;
   orgId: string;
-  fixtureId: string;
+  /** The fixture whose Stream panel the buyer was in — absent when the pack is bought from Settings → Credits, which has
+   *  no fixture. Informational only: the webhook and the reconcile read `org_id`, `pack` and `credits`, never this. */
+  fixtureId?: string;
   pack: StreamCreditPack;
   returnUrl: string;
   /** The billing entity's LOCKED currency — Stripe forbids mixing currencies
@@ -51,7 +53,9 @@ export function buildRelayCheckoutParams(args: {
     metadata: {
       kind: "stream_credits",
       org_id: args.orgId,
-      fixture_id: args.fixtureId,
+      // Present only with a fixture. An undefined VALUE would still be a key (Object.keys, canonicalJson), so it is
+      // spread in or left out, never assigned.
+      ...(args.fixtureId ? { fixture_id: args.fixtureId } : {}),
       pack: String(args.pack.size),
       credits: String(args.pack.credits),
     },
@@ -147,7 +151,8 @@ export function relayCheckoutIdempotencyKey(params: Stripe.Checkout.SessionCreat
  */
 export async function createRelayCheckout(args: {
   orgId: string;
-  fixtureId: string;
+  /** Absent for a purchase made from Settings → Credits (see `buildRelayCheckoutParams`). */
+  fixtureId?: string;
   size: StreamPackSize;
   returnUrl: string;
   currency?: string;

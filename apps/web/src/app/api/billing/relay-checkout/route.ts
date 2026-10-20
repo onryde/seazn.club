@@ -28,27 +28,32 @@ function stripeRequestError(err: unknown): { type: string; code?: string; reques
   };
 }
 
-const schema = z
-  .object({
-    orgId: z.string().uuid(),
-    fixtureId: z.string().uuid(),
-    pack: z.union([z.literal(1), z.literal(5), z.literal(20)]),
-  })
-  .strict();
+const pack = z.union([z.literal(1), z.literal(5), z.literal(20)]);
+/** Exactly ONE return is named, by the body's own shape: a fixture (the Stream panel on that fixture's page — Stripe
+ *  returns the buyer there) or `returnTo: "settings"` (Settings → Credits → Streaming, which has no fixture). Two strict
+ *  objects in a union, so a body that names both — or neither — matches neither and is a 400: the route never has to
+ *  pick which return the buyer meant. */
+const schema = z.union([
+  z.object({ orgId: z.string().uuid(), fixtureId: z.string().uuid(), pack }).strict(),
+  z.object({ orgId: z.string().uuid(), pack, returnTo: z.literal("settings") }).strict(),
+]);
 
 /**
  * POST /api/billing/relay-checkout — an EMBEDDED one-time Checkout Session for
  * a match-credit pack (streaming R1, design §5.2 / §5.3; owner 2026-09-14:
  * "inbuilt as other"). Returns `{ client_secret }` exactly as
- * credit-pack-checkout/route.ts does; `return_url` is the organiser FIXTURE page
- * (spec 2026-09-30 §2) with `?stream=open&checkout=success&session_id={CHECKOUT_SESSION_ID}`.
+ * credit-pack-checkout/route.ts does. `return_url` depends on where the buyer started: the organiser FIXTURE page
+ * (spec 2026-09-30 §2) with `?stream=open&checkout=success&session_id={CHECKOUT_SESSION_ID}` for a fixture purchase, or
+ * Settings → Credits → Streaming (`?kind=stream&checkout=success&session_id={CHECKOUT_SESSION_ID}`) for a body that
+ * names `returnTo: "settings"` instead of a fixture.
  *
  * Gate order, and why (P7, recorded at Task 0): `requireBillingOwner` — the
  * Stripe customer, the locked currency and the payer's card belong to the
  * BILLING GROUP, exactly as credit-pack-checkout/route.ts reasons. The body's
  * `orgId` must EQUAL the resolved org (400): the resolver reads a cookie, and
- * a stale one must not buy credits for a different organisation. Then the
- * fixture must be that org's (404, never "forbidden"). Then — BEFORE any
+ * a stale one must not buy credits for a different organisation. Then, for a
+ * fixture purchase, the fixture must be that org's (404, never "forbidden");
+ * a Settings purchase has no fixture and its entitlements resolve for the org. Then — BEFORE any
  * Stripe call — the deployment must have a relay at all (503
  * `ingest_unavailable`, Task 14b review I2), and the org's resolved
  * `streaming.overlay` and `streaming.relay` must both be true — the two keys
@@ -70,14 +75,33 @@ export async function POST(req: Request) {
     const body = schema.parse(await req.json());
     if (body.orgId !== orgId) throw new HttpError(400, "orgId does not match the billing organisation");
 
-    const [fx] = await sql<{ competition_id: string; org_slug: string; comp_slug: string; div_slug: string; fixture_no: number }[]>`
-      select c.id as competition_id, o.slug as org_slug, c.slug as comp_slug, d.slug as div_slug, f.fixture_no
-        from fixtures f
-        join divisions d on d.id = f.division_id
-        join competitions c on c.id = d.competition_id
-        join organizations o on o.id = c.org_id
-       where f.id = ${body.fixtureId} and o.id = ${orgId}`;
-    if (!fx) throw new HttpError(404, "fixture not found");
+    // Where the buyer lands afterwards, and which competition's entitlements the gates below read. A fixture purchase
+    // is scoped to its competition (an Event Pass grants for the competition it was bought for); a Settings purchase has
+    // none, so it resolves for the org — the way the Directory's Streaming tab does.
+    let competitionId: string | undefined;
+    let fixtureId: string | undefined;
+    let landing: string;
+    if ("fixtureId" in body) {
+      const [fx] = await sql<{ competition_id: string; org_slug: string; comp_slug: string; div_slug: string; fixture_no: number }[]>`
+        select c.id as competition_id, o.slug as org_slug, c.slug as comp_slug, d.slug as div_slug, f.fixture_no
+          from fixtures f
+          join divisions d on d.id = f.division_id
+          join competitions c on c.id = d.competition_id
+          join organizations o on o.id = c.org_id
+         where f.id = ${body.fixtureId} and o.id = ${orgId}`;
+      if (!fx) throw new HttpError(404, "fixture not found");
+      competitionId = fx.competition_id;
+      fixtureId = body.fixtureId;
+      // Spec 2026-09-30 §2: the panel lives on the fixture page now, so the pack checkout returns THERE. `stream=open`
+      // opens the Stream panel on its Phone tab; the fixture page reconciles `session_id` before reading the balance.
+      landing = `${routes.fixture(fx.org_slug, fx.comp_slug, fx.div_slug, fx.fixture_no)}?stream=open&checkout=success&session_id={CHECKOUT_SESSION_ID}`;
+    } else {
+      // The slug of the RESOLVED org (`orgId`, equal to the body's by the check above — never the body's own), so the
+      // return can only ever land on the buyer's own Credits tab. The tab reconciles `session_id` before it reads.
+      const [org] = await sql<{ slug: string }[]>`select slug from organizations where id = ${orgId}`;
+      if (!org) throw new HttpError(404, "organisation not found");
+      landing = `${routes.creditsStream(org.slug)}&checkout=success&session_id={CHECKOUT_SESSION_ID}`;
+    }
 
     // I2 (Task 14b review): a deployment with no relay (R5 — RELAY_DRIVERS unset in production, drivers.ts
     // `disabledRelayDrivers`) refuses every start with this same 503, so a pack sold meanwhile is real money for a
@@ -92,8 +116,8 @@ export async function POST(req: Request) {
     // m5 (lane-close review): the same TWO keys createSession admits on, in admit's order — without the overlay no start
     // is admitted whatever the relay says, so a pack sold then is a credit nothing can spend.
     const [overlay, relay] = await Promise.all([
-      hasFeature(orgId, "streaming.overlay", fx.competition_id),
-      hasFeature(orgId, "streaming.relay", fx.competition_id),
+      hasFeature(orgId, "streaming.overlay", competitionId),
+      hasFeature(orgId, "streaming.relay", competitionId),
     ]);
     if (!overlay) {
       throw new HttpError(402, "This plan does not include the stream overlay", "plan_lacks_overlay");
@@ -104,9 +128,7 @@ export async function POST(req: Request) {
 
     const [sub] = await sql<{ stripe_customer_id: string | null }[]>`
       select stripe_customer_id from subscriptions where id = ${subscriptionId}`;
-    // Spec 2026-09-30 §2: the panel lives on the fixture page now, so the pack checkout returns THERE. `stream=open`
-    // opens the Stream panel on its Phone tab; the fixture page reconciles `session_id` before reading the balance.
-    const fixturePage = `${baseUrl(req)}${routes.fixture(fx.org_slug, fx.comp_slug, fx.div_slug, fx.fixture_no)}`;
+    const returnUrl = `${baseUrl(req)}${landing}`;
     const currency = await preferredCurrency(orgId, req);
     let session: Awaited<ReturnType<typeof createRelayCheckout>>;
     try {
@@ -115,9 +137,9 @@ export async function POST(req: Request) {
         // above, and keeping the resolver's value means a future relaxation of
         // that check cannot quietly turn the body into the authority.
         orgId,
-        fixtureId: body.fixtureId,
+        fixtureId,
         size: body.pack,
-        returnUrl: `${fixturePage}?stream=open&checkout=success&session_id={CHECKOUT_SESSION_ID}`,
+        returnUrl,
         currency,
         customerId: sub?.stripe_customer_id,
         customerEmail: user.email,
