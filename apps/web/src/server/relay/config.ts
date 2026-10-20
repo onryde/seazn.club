@@ -243,6 +243,12 @@ export const CREDIT_REUSE_HOURS = 24;
 /** W23 (capture QR v2, owner 2026-10-01): inside one reuse window, the first THREE restarts that reach video are free;
  *  the 4th pays at live and opens a new window (O4). domain/credits.ts `restartIsFree` is the rule. */
 export const FREE_RESTARTS_PER_WINDOW = 3;
+/** R2008 free-gaps (owner ruling 2026-10-20, "fix both gap"): the platform returns AT MOST ONE never-live credit per fixture per
+ *  reuse window (CREDIT_REUSE_HOURS). A composed stream that went live and never had a camera is cancelled and refunded
+ *  (`camera_never_live`); without a bound a deliberately camera-less score stream could loop start → 15 min → refund → start for
+ *  nothing. The next never-live end inside the window still ends the stream, and the charge stands. domain/credits.ts
+ *  `neverLiveRefundCapped` is the rule. */
+export const NEVER_LIVE_REFUNDS_PER_WINDOW = 1;
 /** §9.1: SRT buffer 1.5–2.5 s, pinned; carried in the QR payload as latencyMs. */
 export const SRT_LATENCY_MS = 2000;
 /** m-c (B5 re-review 3; controller ruling 2026-10-01): how many CONSECUTIVE failed outputs reads (`outputState` → null,
