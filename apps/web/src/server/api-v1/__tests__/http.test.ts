@@ -8,6 +8,7 @@ import { interpolate } from "@/lib/i18n-runtime";
 import { scoringErrorText } from "@/lib/scoring-vocab";
 import { LEVEL_RESULT_REASON } from "@/lib/level-result-reason";
 import { AuthError, HttpError, PaymentRequiredError } from "@/lib/errors";
+import { featureReason } from "@/lib/feature-copy";
 import { ApiV1Error } from "@/lib/client-v1";
 import { LOCALIZED_CONFIG_ISSUES, settingsSaveErrorText } from "@/lib/config-issue-copy";
 import { SHARE_NEEDS_DRAWN_GAME, SHARE_NEEDS_DRAWS } from "@seazn/engine/sport";
@@ -501,10 +502,15 @@ describe("v1 envelope", () => {
     });
     expect(res.status).toBe(402);
     const json = await body(res);
-    const error = json.error as { code: string; feature: string; feature_key: string };
+    const error = json.error as { code: string; feature: string; feature_key: string; reason: unknown };
     expect(error.code).toBe("PAYMENT_REQUIRED");
     expect(error.feature).toBe("api.access");
     expect(error.feature_key).toBe("api.access");
+    // Batch-6 T18-1: the upgrade-moment contract's human sentence (`<UpgradeGate>` shows it) is on the envelope, a string,
+    // and the one `featureReason` says for that feature.
+    expect(typeof error.reason, "the envelope carries a reason").toBe("string");
+    expect((error.reason as string).length, "and it is not empty").toBeGreaterThan(0);
+    expect(error.reason).toBe(featureReason("api.access"));
   });
 
   it("maps AuthError → 401 and HttpError → its status", async () => {
