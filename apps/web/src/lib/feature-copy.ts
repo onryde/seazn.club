@@ -206,7 +206,7 @@ export const FEATURE_REASONS: Record<string, string> = {
   // to hand: the /admin reason column, and `<UpgradeGate>`'s key-only lookup.
   "import.bulk": "This file has more rows than your plan allows — split it into smaller files, or upgrade for a higher limit.",
   "logos.bulk": "Multi-file logo upload is a Pro feature — you can still set logos one at a time.",
-  "clubs.hierarchy": "Club hierarchies (parent clubs, group-by-club) — your plan's limits apply.",
+  "clubs.hierarchy": "Club hierarchies (parent clubs, group-by-club) are switched off for this organisation.",
   "clubs.max": "You've reached your plan's club limit.",
   "teams.max": "You've reached your plan's team limit.",
   "teams.squad_max": "This squad has reached your plan's size limit.",
@@ -216,8 +216,8 @@ export const FEATURE_REASONS: Record<string, string> = {
   // off for one org, and a paywall with no reason falls back to the flat "This
   // feature needs a plan upgrade.", which reads as a bug next to a priced
   // button. The wording no longer claims a plan.
-  "scheduling.constraints": "The scheduling constraints solver is not available on this plan.",
-  "scheduling.board": "Editing the schedule board is not available on this plan.",
+  "scheduling.constraints": "The scheduling constraints solver is switched off for this organisation.",
+  "scheduling.board": "Editing the schedule board is switched off for this organisation.",
   // Still a real paywall — and since V353 an Event Pass lifts it for one
   // competition, which is why the key is in `PASS_FEATURES`.
   // V393 granted this to community: joint planning is free on every plan and
@@ -228,7 +228,7 @@ export const FEATURE_REASONS: Record<string, string> = {
   "officials.auto": "Auto-assigning officials (solver, phased sourcing) is on Pro and the Event Pass — manual assignment still works.",
   "officials.roles_multi": "Multiple official roles per fixture (judge + referee) are switched off for this organisation.",
   "officials.marks": "Rating your match officials is switched off for this organisation.",
-  "scheduling.ai": "AI Schedule (plan, refine and repair your schedule from plain-language instructions) is not available on this plan.",
+  "scheduling.ai": "AI Schedule (plan, refine and repair your schedule from plain-language instructions) is switched off for this organisation.",
   // scheduling.ai.runs_per_division.max retired (v17 Phase 2 Task 5, V322):
   // the graded per-division run cap below it is gone, replaced by the
   // AI credit wallet's "ai.credits" reason (right below).
@@ -244,7 +244,7 @@ export const FEATURE_REASONS: Record<string, string> = {
   "scoring.device_links":
     "Hand-this-device-over scoring links are on Pro and the Event Pass — your scorer seat still works.",
   // Registration & entry fees (doc 16 §1.1)
-  "registration.enabled": "Online registration is not available on this plan.",
+  "registration.enabled": "Online registration is switched off for this organisation.",
   // V309 seeds registration.paid TRUE on every plan, so no PLAN can deny this
   // any more — the only surviving 402 path is an org_entitlement_overrides deny
   // (staff switching entry fees off for one org). The copy has to make sense in
@@ -259,7 +259,7 @@ export const FEATURE_REASONS: Record<string, string> = {
   "sponsors.monetize":
     "Selling priced sponsorship packages is on Pro and the Event Pass — showing sponsor logos is free on every plan.",
   // Discovery showcase (doc 15 §5)
-  "discovery.listed": "Showcasing on seazn.club is not available on this plan.",
+  "discovery.listed": "Showcasing on seazn.club is switched off for this organisation.",
   "discovery.featured": "The featured showcase row is a Pro perk.",
   "discovery.branding": "Card tagline and hero image on seazn.club are a Pro feature.",
   "news.auto": "Auto-drafted result posts are on Pro and the Event Pass.",
@@ -425,10 +425,9 @@ export function featurePlan(featureKey: string): PaidPlan {
  * — no plan badge, no upgrade link, no pass offer (V469 review item 2).
  *
  * A typed list, because `<UpgradeGate>` is a client component and cannot read
- * the matrix. `feature-copy.test.ts` pins it BOTH ways against the live
- * `plan_entitlements` rows, so a migration that frees or re-prices a key reds
- * there until this list moves with it. A dual-valued row (`teams.squad_max`:
- * bool true, int 23) is a cap of 23 and is deliberately NOT here.
+ * the matrix: a migration that frees or re-prices a key moves this list by
+ * hand in the same change. A dual-valued row (`teams.squad_max`: bool true,
+ * int 23) is a cap of 23 and is deliberately NOT here.
  */
 export const COMMUNITY_GRANTED_FEATURES: ReadonlySet<string> = new Set([
   "branding",

@@ -1,6 +1,6 @@
 // Tiny plan pill shown on any gated button/panel so users see the required
 // tier before they click (doc 10 §3). Server- and client-safe (no hooks).
-import { featurePlan, type PaidPlan } from "@/lib/feature-copy";
+import { COMMUNITY_GRANTED_FEATURES, featurePlan, type PaidPlan } from "@/lib/feature-copy";
 
 // Entitlements v18: `pro_plus` retired (V393); the above-Pro badge now reads
 // "Enterprise" for the Contact-us conversation (design §4). Both are
@@ -17,6 +17,11 @@ const LABEL: Record<PaidPlan, string> = {
 };
 
 export function PlanBadge({ plan, feature }: { plan?: PaidPlan; feature?: string }) {
+  // A key Community already grants is free on every plan (owner ruling
+  // 2026-10-20: what is free shows no gate) — naming Pro on it would sell the
+  // reader something their free plan already has. Driven by the list, so a key
+  // that becomes free sheds its badge everywhere at once.
+  if (plan === undefined && feature !== undefined && COMMUNITY_GRANTED_FEATURES.has(feature)) return null;
   const p = plan ?? featurePlan(feature ?? "");
   return (
     <span

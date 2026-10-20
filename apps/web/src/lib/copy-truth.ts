@@ -3109,7 +3109,7 @@ export function localePassUncoveredFaults(
  *  - `formats.advanced`: "americano" / "ladders", the examples the fixed
  *    copy uses instead (design doc
  *    2026-09-02-entitlements-v18-three-tier-design.md §2: "americano,
- *    ladders, custom brackets, feeds"). Community does NOT grant this row, so
+ *    ladders" — the stage kinds it gates since V469). Community does NOT grant this row, so
  *    these phrases must NEVER fault — carrying them here is what makes the
  *    rule DISCRIMINATING rather than a blanket "double elim" ban: it proves
  *    the guard is judging the MATRIX, not pattern-matching a banned word,

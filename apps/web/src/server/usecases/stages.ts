@@ -5343,9 +5343,9 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
     // `ProgressionTieFlag.descriptors` carries sourceIndex (widened to
     // SourcedSlot — progression.ts). Reachable today: createStages/
     // replaceStages persist a multi-source `setup` progression with no
-    // progression-aware gate (format-gates.ts checks kind/byes/cross_feeds/
-    // placements only); progression-multi-source.test.ts exercises it end to
-    // end.
+    // progression-aware gate (format-gates.ts checks the stage kind only —
+    // V469 freed byes/cross_feeds/placements); progression-multi-source.test.ts
+    // exercises it end to end.
     //
     // F3 round-3 review, Task 2 — that alone still collides for two bestNth
     // rules on the SAME source at the same position but a different nth

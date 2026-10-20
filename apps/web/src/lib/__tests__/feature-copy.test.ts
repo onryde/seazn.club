@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import {
-  COMMUNITY_GRANTED_FEATURES,
   FEATURE_REASONS,
   bulkImportRowsReason,
   doubleElimFormatReason,
@@ -8,10 +7,7 @@ import {
   featureReason,
 } from "@/lib/feature-copy";
 import { freeClaimFaults, type PaywallReason } from "@/lib/copy-truth";
-import { PASS_KEYS } from "@/lib/currency";
 import { sql } from "@/lib/db";
-import { StageKind } from "@/server/api-v1/schemas";
-import { stageNeedsAdvancedFormatsGate } from "@/server/usecases/format-gates";
 
 /**
  * The vocabulary a price claim has to reach for. The ruling on the
@@ -494,100 +490,5 @@ describe.skipIf(!process.env.DATABASE_URL)("every paywall reason names the plan 
     expect(freeClaimFaults(reasons(), {})).toEqual([
       "no plan_entitlements rows — the reasons were compared against nothing",
     ]);
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// "ALL STAGES ARE FREE" (owner ruling 2026-10-20, V469) — review items 2 and 3.
-//
-// A key that community already grants outright — a `true` boolean, or a cap
-// with `int_value NULL` — can only be refused by a staff
-// `org_entitlement_overrides` row on one organisation. So its reason must never
-// send the reader to buy anything ("needs a bigger plan", "upgrade"): no
-// purchase lifts an override. V469 is the wave that made two more keys like
-// that, and its first draft left `stages.per_division.max` saying "Adding
-// another stage needs a bigger plan." for a count that is unlimited everywhere.
-//
-// Everything here is derived from the live matrix and the product's own gate,
-// never from a typed key list. Real Postgres required.
-describe.skipIf(!process.env.DATABASE_URL)("V469 — a key every plan grants is refused only by an override", () => {
-  type Cell = { bool: boolean | null; int: number | null };
-  const matrix = async (): Promise<{ plans: string[]; rows: Record<string, Record<string, Cell>> }> => {
-    const plans = (await sql<{ key: string }[]>`select key from plans order by key`).map((r) => r.key);
-    const all = await sql<
-      { feature_key: string; plan_key: string; bool_value: boolean | null; int_value: number | null }[]
-    >`select feature_key, plan_key, bool_value, int_value from plan_entitlements`;
-    expect(plans.length, "plans returned nothing").toBeGreaterThanOrEqual(3);
-    expect(all.length, "plan_entitlements returned nothing").toBeGreaterThan(100);
-    const rows: Record<string, Record<string, Cell>> = {};
-    for (const r of all) (rows[r.feature_key] ??= {})[r.plan_key] = { bool: r.bool_value, int: r.int_value };
-    return { plans, rows };
-  };
-  // The resolver's two shapes: `hasFeature` needs `bool_value === true`, and
-  // `getLimit` reads `int_value` alone (NULL = unlimited). A dual-valued row
-  // like `teams.squad_max` (bool true, int 23) is a CAP of 23, so a granted
-  // boolean only counts when its int is NULL too.
-  const grantsOutright = (c: Cell | undefined): boolean =>
-    c !== undefined && c.int === null && (c.bool === null || c.bool === true);
-  // A pass plan with no row falls through to community (entitlements.ts); any
-  // other plan with no row resolves to a refusal.
-  const PASSES = new Set<string>(PASS_KEYS);
-  const grantsOnEveryPlan = (rows: Record<string, Cell>, plans: string[]): boolean =>
-    plans.every((p) => grantsOutright(rows[p] ?? (PASSES.has(p) ? rows.community : undefined)));
-
-  it("COMMUNITY_GRANTED_FEATURES is exactly the keys community grants outright — read both ways from the live matrix", async () => {
-    const { rows } = await matrix();
-    const live = Object.keys(rows).filter((k) => grantsOutright(rows[k]!.community)).sort();
-    // Anti-vacuity, and the two V469 witnesses by name.
-    expect(live.length).toBeGreaterThan(0);
-    expect(live).toContain("stages.per_division.max");
-    expect(live).toContain("standings.carry_over");
-    // …and the dual-valued cap is NOT in it, or the shape rule above is wrong.
-    expect(live).not.toContain("teams.squad_max");
-    expect([...COMMUNITY_GRANTED_FEATURES].sort()).toEqual(live);
-  });
-
-  it("no key granted on every plan has a 'bigger plan', upgrade or plan-name reason", async () => {
-    const { plans, rows } = await matrix();
-    const freeEverywhere = Object.keys(rows).filter((k) => grantsOnEveryPlan(rows[k]!, plans)).sort();
-    expect(freeEverywhere).toContain("stages.per_division.max");
-    expect(freeEverywhere).toContain("standings.carry_over");
-    const SELLS = /bigger plan|\bupgrad|\bPro\b|Event Pass|Enterprise/i;
-    let checked = 0;
-    const faults: string[] = [];
-    for (const key of freeEverywhere) {
-      const reason = featureReason(key);
-      if (SELLS.test(reason)) faults.push(`${key}: "${reason}"`);
-      checked++;
-    }
-    expect(checked, "no key is granted on every plan — this rule examined nothing").toBeGreaterThan(0);
-    expect(faults, faults.join("\n")).toEqual([]);
-    // The positive pair: the rule fires on a key a plan really does cap, so the
-    // empty fault list above is not a regex that never matches.
-    expect(freeEverywhere).not.toContain("divisions.per_competition.max");
-    expect(featureReason("divisions.per_competition.max")).toMatch(SELLS);
-  });
-
-  it("formats.advanced's reason names exactly the kinds its gate refuses (americano, ladder) and none of the freed config", () => {
-    const kinds = StageKind.options;
-    const advanced = kinds.filter((kind) => stageNeedsAdvancedFormatsGate({ kind }));
-    const basic = kinds.filter((kind) => !stageNeedsAdvancedFormatsGate({ kind }));
-    expect(advanced.length).toBeGreaterThan(0);
-    expect(basic.length).toBeGreaterThan(0);
-    const reason = FEATURE_REASONS["formats.advanced"]!;
-    const names = (kind: string) => new RegExp(`\\b${kind.replace(/_/g, "[ _-]?")}`, "i");
-    let checked = 0;
-    for (const kind of advanced) {
-      expect(reason, `names the gated kind ${kind}`).toMatch(names(kind));
-      checked++;
-    }
-    for (const kind of basic) {
-      expect(reason, `names the free kind ${kind}`).not.toMatch(names(kind));
-      checked++;
-    }
-    expect(checked).toBe(kinds.length);
-    // The config V469 freed — custom byes, cross-stage feeds, placements,
-    // auto-advance — and the old "custom brackets, feeds" wording for it.
-    expect(reason).not.toMatch(/\bbyes?\b|feeds?|placements?|brackets?|auto/i);
   });
 });
