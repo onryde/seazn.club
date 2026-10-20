@@ -43,7 +43,7 @@ export function engineValueFor(m: AnySportModule, variant: string, top: string):
 
 
 /** Every fragment the editor's builders write for `top` that the sport's schema accepts on the variant's preset. */
-function editorFragments(m: AnySportModule, variant: string, top: string): Record<string, unknown>[] {
+export function editorFragments(m: AnySportModule, variant: string, top: string): Record<string, unknown>[] {
   const base = m.variants[variant] as Record<string, unknown>;
   const out: Record<string, unknown>[] = [];
   for (const f of SPORT_RULES[m.key] ?? []) {
@@ -56,17 +56,27 @@ function editorFragments(m: AnySportModule, variant: string, top: string): Recor
   return out;
 }
 
-/** The first (key, fragment) a `kind` stage can save that CHANGES what the division resolves for that key - the engine's
- *  parse of the preset with and without it - or null when the sport has none. A save of the value a division already has
- *  moves nothing, and a sweep over such saves would pass whether or not the endpoint re-wrote anything. */
-export function movingFragment(m: AnySportModule, variant: string, kind: Parameters<typeof stageTopKeysFor>[1]): { key: string; frag: Record<string, unknown> } | null {
+/** Every (key, fragment) a `kind` stage can save that CHANGES what the division resolves for that key - the engine's parse
+ *  of the preset with and without it - one per key, in the engine's declaration order. A save of the value a division
+ *  already has moves nothing, and a sweep over such saves would pass whether or not the endpoint re-wrote anything. */
+export function movingFragments(m: AnySportModule, variant: string, kind: Parameters<typeof stageTopKeysFor>[1]): { key: string; frag: Record<string, unknown> }[] {
   const base = m.variants[variant] as Record<string, unknown>;
   const was = m.configSchema.parse(base) as Record<string, unknown>;
+  const out: { key: string; frag: Record<string, unknown> }[] = [];
   for (const key of stageTopKeysFor(m, kind, variant)) {
     for (const frag of editorFragments(m, variant, key)) {
       const now = m.configSchema.parse({ ...base, ...frag }) as Record<string, unknown>;
-      if (canonicalJson(now[key]) !== canonicalJson(was[key])) return { key, frag };
+      if (canonicalJson(now[key]) !== canonicalJson(was[key])) {
+        out.push({ key, frag });
+        break;
+      }
     }
   }
-  return null;
+  return out;
+}
+
+/** The first (key, fragment) a `kind` stage can save that CHANGES what the division resolves for that key, or null when the
+ *  sport has none. */
+export function movingFragment(m: AnySportModule, variant: string, kind: Parameters<typeof stageTopKeysFor>[1]): { key: string; frag: Record<string, unknown> } | null {
+  return movingFragments(m, variant, kind)[0] ?? null;
 }
