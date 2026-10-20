@@ -6,10 +6,12 @@ import "server-only";
 // (spec §4.3). Two things live here because two writers need them: the stage PUT (`stage-rules.ts`) asks only "has
 // this stage started", the division PATCH (`divisions.ts`) asks "which started stages depend on the thing I am
 // changing".
-import type { Tx } from "@/lib/db";
+import { withTenant, type Tx } from "@/lib/db";
 import type { RefusedField } from "@/lib/rule-errors";
 import { DRAW_KINDS, forbidsLevelResult, type StageKind } from "@seazn/engine/core";
-import { pointsKeysFor, type AnySportModule } from "@seazn/engine/sport";
+import { pointsKeysFor, sportTopKeys, type AnySportModule } from "@seazn/engine/sport";
+import type { AuthCtx } from "@/server/api-v1/auth";
+import { resolveModule } from "@/server/engine-db";
 import { playedSql } from "@/server/engine-db/format-standing";
 
 /**
@@ -133,4 +135,27 @@ export async function divisionRefusals(
     if (s) out.push({ field: key, code: table ? "DIVISION_TABLE_RULES_LOCKED" : "DIVISION_FORMAT_LOCKED", stageId: s.id, stageName: s.name });
   }
   return out;
+}
+
+/**
+ * W2c Task 20 (S4) - the division settings form's locks, read BEFORE the organiser types: every field of the division that a
+ * save would refuse today, each naming the first started stage that depends on it. It is the save's own question
+ * (`divisionRefusals`), asked as "what if this key changed?" for every key the engine declares for the sport (its rule keys'
+ * top segments, plus the table keys of this variant) with the variant and the cascade, against the division as stored. The
+ * page hands the list to the form (`lockedFields`); a save's own `refused` is the fallback for a stage that started after
+ * the page loaded. Empty when nothing has started, so a division with fixtures and no started stage locks nothing (the
+ * old "any fixture exists" predicate, `lib/format-lock.ts`, over-locked it), and for a division this session cannot see.
+ */
+export async function divisionLockedFields(auth: AuthCtx, divisionId: string): Promise<RefusedField[]> {
+  return withTenant(auth.orgId, async (tx) => {
+    const [d] = await tx<{ sport_key: string; module_version: string; variant_key: string; config: Record<string, unknown> | null }[]>`
+      select sport_key, module_version, variant_key, config from divisions where id = ${divisionId}`;
+    if (!d) return [];
+    const sport = resolveModule(d.sport_key, d.module_version);
+    const configKeys = [...new Set([...sportTopKeys(sport), ...tableRuleKeys(sport, d.variant_key)])];
+    return divisionRefusals(
+      tx, divisionId, { configKeys, variant: true, tiebreakers: true },
+      { module: sport, variantKey: d.variant_key, divisionConfig: d.config ?? {} },
+    );
+  });
 }

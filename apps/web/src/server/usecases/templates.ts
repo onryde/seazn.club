@@ -365,10 +365,12 @@ export async function instantiateTemplate(
           // the existing Generate action (stages.ts's
           // generateProgressionSetupFixtures, which already handles them).
           // This split matters, not just defers work: a fixture row
-          // anywhere in the division trips replaceStages'/patchDivision's
-          // FORMAT_LOCKED guard (stages.ts :276-281, divisions.ts :563) —
-          // generating eagerly here would freeze the division's
-          // format/variant before a single entrant exists.
+          // anywhere in the division trips replaceStages' structure lock
+          // (`formatAlreadyLocked`, stages.ts) - generating eagerly here
+          // would freeze the division's stage structure before a single
+          // entrant exists. (patchDivision no longer locks on a fixture row:
+          // the rules lock per field and per STARTED stage that inherits them,
+          // `divisionRefusals`, rule-locks.ts - W2c.)
           stageResults.push({ id: stage!.id, fixtureCount: 0 });
         }
         divisionResults.push({ id: divisionId, stages: stageResults });

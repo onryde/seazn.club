@@ -10,8 +10,11 @@
 // W2c Task 17: one field's CONTROL (number / Default-On-Off / select / the
 // ordered list) lives in `stage-rules/rule-field-control.tsx`, shared with the
 // stage format row so the two editors cannot drift; this file keeps the grid.
+import { useMsg } from "@/components/i18n/dict-provider";
 import { setRuleValue, visibleRuleFields } from "@/lib/match-rules";
+import type { RefusedField } from "@/lib/rule-errors";
 import { RuleFieldControl } from "@/components/v2/stage-rules/rule-field-control";
+import { lockLineFor, lockSentence } from "./division-settings-locks";
 
 export type { RuleField } from "@/lib/match-rules";
 export {
@@ -30,6 +33,7 @@ export function MatchRuleFields({
   disabled = false,
   inherited,
   omit,
+  lockedFields = [],
 }: {
   sportKey: string;
   values: Record<string, string>;
@@ -44,26 +48,40 @@ export function MatchRuleFields({
   /** Field keys another control stands in for (chess under Online play = Lichess: the clock picker). Their values
    *  stay in `values` and are still built on save — they are only not drawn. */
   omit?: readonly string[];
+  /** W2c Task 20 (S4): the fields a started stage locks (`divisionLockedFields`, plus whatever a save has since refused).
+   *  A locked field renders read-only with its lock line - said before the organiser types, not after Save. Matched by the
+   *  field's own key or any engine key it edits (`lockLineFor`). Left out by the division builder, which has no stage yet. */
+  lockedFields?: readonly RefusedField[];
 }) {
+  const msg = useMsg();
   const fields = visibleRuleFields(sportKey, values, inherited).filter((f) => !omit?.includes(f.key));
   if (fields.length === 0) return null;
   const edit = (key: string, raw: string) =>
     onChange(setRuleValue(sportKey, values, key, raw, inherited));
   return (
     <div className="grid gap-4 sm:grid-cols-3">
-      {fields.map((field) => (
-        // An ordered list needs the row's width; a number or a picker sits in a column.
-        <div key={field.key} className={field.kind === "sequence" ? "sm:col-span-3" : undefined}>
-          <RuleFieldControl
-            sportKey={sportKey}
-            field={field}
-            value={values[field.key] ?? ""}
-            onEdit={(raw) => edit(field.key, raw)}
-            disabled={disabled}
-            inherited={inherited}
-          />
-        </div>
-      ))}
+      {fields.map((field) => {
+        const lock = lockLineFor(field.key, lockedFields, field.edits);
+        return (
+          // An ordered list needs the row's width; a number or a picker sits in a column.
+          <div key={field.key} className={field.kind === "sequence" ? "sm:col-span-3" : undefined}>
+            <RuleFieldControl
+              sportKey={sportKey}
+              field={field}
+              value={values[field.key] ?? ""}
+              onEdit={(raw) => edit(field.key, raw)}
+              disabled={disabled || lock !== undefined}
+              inherited={inherited}
+            />
+            {lock !== undefined && (
+              <p className="mt-1 text-[11px] leading-snug text-slate-700" data-testid={`division-locked-${field.key}`}>
+                <span aria-hidden="true">🔒 </span>
+                {lockSentence(lock, msg)}
+              </p>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

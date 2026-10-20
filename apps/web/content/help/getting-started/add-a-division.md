@@ -18,7 +18,7 @@ A **division** is a single draw inside your competition: "Men's A", "U14 Mixed",
 
 ## Common questions
 
-**Can I change the format later?** Yes, up until the division starts. After that the structure is locked so results stay fair.
+**Can I change the format later?** Yes, in two steps. The structure (league, knockout, groups + knockout…) can change until fixtures exist. The match rules (best of, points to win, standings points) stay editable until a stage that plays by them has started; after that each locked field says which stage holds it, so results stay fair ([division settings](/help/divisions/settings)).
 
 **How many entrants can I add?** Per division: **64** on Community, **256** on Pro, unlimited on Enterprise. An [Event Pass](/help/billing/event-pass) lifts one competition on its own, to **128** entrants per division.
 

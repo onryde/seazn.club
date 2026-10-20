@@ -18,6 +18,7 @@ import { listStages, getStandings, getSeedProposal, getStageRosterDrift } from "
 import { listStageQualificationMeta, type StageQualMetaRow } from "@/server/usecases/stage-qualification";
 import { divisionQualification, qualificationFixtures } from "@/server/public-site/division-qualification";
 import { formatLockedStageIds } from "@/server/usecases/stage-rules";
+import { divisionLockedFields } from "@/server/usecases/rule-locks";
 // From the DB-free module, not through the server-only usecase above: this
 // page's tests mock `@/server/usecases/stages` wholesale, and a mocked
 // predicate is a second copy of the rule (F3 ultrareview finding 9 was a
@@ -54,7 +55,7 @@ import { EmbedSnippet } from "@/components/v2/embed-snippet";
 import { DivisionSettings } from "@/components/v2/division-settings";
 import { competitionCameraPolicy } from "@/server/external-play/camera-policy";
 import type { StageDraft } from "@/lib/format-templates";
-import { formatLocked } from "@/lib/format-lock";
+import { formatAlreadyLocked } from "@/lib/format-already-locked";
 import { resolveLogoUrl } from "@/server/public-site/data";
 import { EntrantsPanel } from "@/components/v2/entrants-panel";
 import { entrantListLocked } from "@/lib/open-entry-stages";
@@ -1047,7 +1048,10 @@ export default async function DivisionPage({
             orgId={auth.orgId}
             onlineChessOffered={onlineChessOn}
             variants={await listVariantOptions(auth, division.sport_key)}
-            locked={formatLocked([{ fixture_count: fixtures.length }])}
+            // W2c Task 20 (S4): two locks, two sources. The stage STRUCTURE locks on any fixture row (replaceStages); the
+            // RULES lock per field and per STARTED stage that inherits them - the same read the save asks (patchDivision).
+            structureLocked={formatAlreadyLocked(fixtures.length)}
+            lockedFields={await divisionLockedFields(auth, id)}
             stages={stages.map((st) => ({
               name: st.name,
               kind: st.kind,

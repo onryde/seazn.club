@@ -596,7 +596,9 @@ async function assertFormatUnlocked(tx: Tx, divisionId: string): Promise<void> {
 
 /** Replace the division's whole stage graph (v8 Settings → Format: League /
  *  Knockout / Groups + Knockout…). Allowed only while no stage owns fixtures
- *  — the same FORMAT_LOCKED rule as patchDivision's variant/config guard.
+ *  - FORMAT_LOCKED, division-wide, on ANY fixture row. That is the STRUCTURE's lock only: patchDivision's variant/config
+ *  guard is a different, narrower one (per field and per STARTED stage that inherits it - `divisionRefusals`,
+ *  rule-locks.ts), so a division with fixtures and no started stage can still change its rules.
  *  The delete and every insert run in ONE transaction (R-T13-3): any refusal
  *  the recreate raises — a rules or points fragment (`stageConfigsAtCreate`),
  *  the frozen competition, the stage cap, a database CHECK, a progression
