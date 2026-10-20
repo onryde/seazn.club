@@ -6,9 +6,10 @@
 //    (two copies of one fact: the catalogue is read back, not retyped);
 //  - a live credential never survives past a retryable status (body CHECK, counted over every other status);
 //  - a lease exists exactly while a row is `sending` (both directions);
-//  - a NEW row for the same kind + ref + recipient (case-insensitive) supersedes every older non-terminal row, scrubs
-//    its body and lease, and touches nothing else. The act is the SECOND insert: the older rows are seeded and read
-//    back first (controller ruling R3);
+//  - a NEW row for the same kind + ref + recipient (case-insensitive) IN THE SAME ORGANISATION supersedes every older
+//    non-terminal row, scrubs its body and lease, and touches nothing else (controller ruling 2026-10-20: the trigger
+//    is security definer, so it fences tenants itself; two org-less sign-in links still replace each other). The act
+//    is the SECOND insert: the older rows are seeded and read back first (ruling R3);
 //  - app_user can enqueue and nothing else: the replace runs as the trigger's definer, so a tenant insert still
 //    supersedes the older row although the tenant holds no UPDATE.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -254,6 +255,16 @@ describe.skipIf(!HAS_DB)("email_outbox (V468)", () => {
       accepted++;
     }
     expect(accepted).toBe(RETRYABLE_STATUSES.length);
+    // And a retryable row with NO body is accepted: the CHECK is "no body outside retryable", not "a body inside it".
+    // Pinned on purpose (controller ruling 2026-10-20, plan Task 3): with no KEK and no Resend key (local dev, CI) the
+    // sender enqueues a queued row with a null body and the attempt ends it dead 'no_api_key'; a body that is missing
+    // while a key IS set ends it dead 'body_missing'. A "must hold a body" CHECK would refuse those inserts.
+    let bodyless = 0;
+    for (const s of RETRYABLE_STATUSES) {
+      expect(await attempt(row({ status: s, body: null, lease: s === "sending" })), `status ${s} without a body`).toEqual({ accepted: true });
+      bodyless++;
+    }
+    expect(bodyless).toBe(RETRYABLE_STATUSES.length);
   });
 
   it("refuses lease_until unless status = 'sending', and 'sending' without a lease", async () => {
@@ -315,7 +326,7 @@ describe.skipIf(!HAS_DB)("email_outbox (V468)", () => {
 
   // ---- the replace trigger ---------------------------------------------------------------------------------------
 
-  it("a new row for the same kind+ref+recipient replaces every older REPLACEABLE row, nulls its body and lease, and leaves terminal rows, other recipients, other refs and other kinds alone", async () => {
+  it("a new row for the same kind+ref+recipient+org replaces every older REPLACEABLE row, nulls its body and lease, and leaves terminal rows, other recipients, other refs, other kinds and other orgs alone", async () => {
     const R = newRef();
     const ANN = "Ann@x.test";
 
@@ -329,6 +340,9 @@ describe.skipIf(!HAS_DB)("email_outbox (V468)", () => {
       ["other kind", { ref: R, to: ANN, kind: "chess_invite" }],
       ["other ref_id", { ref: newRef(), to: ANN }],
       ["other ref_type", { ref: R, refType: "other_type", to: ANN }],
+      // Same kind, ref and recipient, another TENANT: the definer trigger bypasses RLS, so only its own predicate keeps
+      // this row from being superseded (and its body nulled) by a different org's insert.
+      ["other org", { ref: R, to: ANN, org: otherOrgId }],
     ];
     const controls = await seedHistory(controlSeeds.map(([, s]) => s));
 
@@ -367,6 +381,27 @@ describe.skipIf(!HAS_DB)("email_outbox (V468)", () => {
     expect(after.get(newId)!.body_sealed).not.toBeNull();
   });
 
+  it("org-less rows (the sign-in link) replace each other, and an org-less row and an org's row of the same key never replace one another", async () => {
+    const R = newRef();
+    const ANN = "ann@x.test";
+
+    // The sign-in link's own case: two org-less rows, the newer replaces the older (NULL is not distinct from NULL).
+    const first = await row({ ref: R, to: ANN, org: null });
+    expect(await statusOf(first)).toBe("queued");
+    const second = await row({ ref: R, org: null, to: "ANN@x.test" });
+    expect(await statusOf(first), "org-less older row replaced by an org-less newer one").toBe("replaced");
+    expect(await statusOf(second)).toBe("queued");
+
+    // Neither direction crosses the org-less / org line.
+    const withOrg = await row({ ref: R, to: ANN, org: orgId });
+    expect(await statusOf(second), "an org's insert leaves the org-less row alone").toBe("queued");
+    expect(await statusOf(withOrg)).toBe("queued");
+    const orglessAgain = await row({ ref: R, to: ANN, org: null });
+    expect(await statusOf(withOrg), "an org-less insert leaves the org's row alone").toBe("queued");
+    expect(await statusOf(second), "but replaces the older org-less one").toBe("replaced");
+    expect(await statusOf(orglessAgain)).toBe("queued");
+  });
+
   it("the first row for a key replaces nothing, and a chain of three leaves only the last live", async () => {
     const R = newRef();
     const a = await row({ ref: R, to: "chain@x.test" });
@@ -390,11 +425,14 @@ describe.skipIf(!HAS_DB)("email_outbox (V468)", () => {
 
   it("app_user may INSERT inside withTenant without RETURNING, and the replace trigger still runs", async () => {
     const R = newRef();
-    const [queued, sending] = await seedHistory([
+    const [queued, sending, foreign] = await seedHistory([
       { ref: R, to: "Zed@x.test", status: "queued", body: BODY },
       { ref: R, to: "Zed@x.test", status: "sending", body: BODY, lease: true },
+      // Another tenant's pending row for the same key: the tenant insert below must not reach it through the trigger.
+      { ref: R, to: "Zed@x.test", status: "queued", body: BODY, org: otherOrgId },
     ]);
     expect(await statusOf(queued!)).toBe("queued");
+    expect(await statusOf(foreign!)).toBe("queued");
     expect((await stored([sending!])).get(sending!)!.lease_until).not.toBeNull();
 
     const newId = randomUUID();
@@ -407,6 +445,10 @@ describe.skipIf(!HAS_DB)("email_outbox (V468)", () => {
       expect(after.get(id)!.lease_until).toBeNull();
     }
     expect(after.get(newId)!.status).toBe("queued");
+    // The definer trigger bypasses RLS, so it is the fence: the other org's row keeps its status AND its credential.
+    const theirs = (await stored([foreign!])).get(foreign!)!;
+    expect(theirs.status).toBe("queued");
+    expect(theirs.body_sealed).not.toBeNull();
   });
 
   it("app_user cannot SELECT, UPDATE or DELETE email_outbox (42501 each), nor read an insert back, nor insert for another org or for none", async () => {

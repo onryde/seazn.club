@@ -21,11 +21,15 @@
 -- webhook and the status read all run as the privileged role. The policy scopes the insert to the caller's org, so an
 -- org-less row (the sign-in link has no org) can only be written by the privileged role.
 --
--- REPLACE ON INSERT. A new row for the same kind + ref + recipient (case-insensitive) supersedes every older
--- non-terminal row: the sign-in link, because a newer link deletes the older unused one so retrying the older row
--- would mail a dead link; the chess invite, because the older room token still works and retrying it would mail the
--- player a second invite. The supersede is a trigger so no writer can forget it, and it is SECURITY DEFINER with a
--- pinned search_path (the V451 shape) because the tenant caller holds no UPDATE.
+-- REPLACE ON INSERT. A new row for the same kind + ref + recipient (case-insensitive) in the same organisation
+-- supersedes every older non-terminal row: the sign-in link, because a newer link deletes the older unused one so
+-- retrying the older row would mail a dead link; the chess invite, because the older room token still works and
+-- retrying it would mail the player a second invite. The supersede is a trigger so no writer can forget it, and it
+-- is SECURITY DEFINER with a pinned search_path (the V451 shape) because the tenant caller holds no UPDATE.
+-- Because it runs as the definer it bypasses RLS, so it must fence tenants itself: it matches `org_id` too
+-- (`is not distinct from`, so two org-less sign-in links still replace each other). Without that fence an
+-- app_user in one org could supersede, and null the body of, another org's pending row by naming its ref and
+-- recipient.
 create table email_outbox (
   -- Client-generated. Also the idempotency key sent to the provider, so a retry of the same row can never mail twice.
   id              uuid primary key,
@@ -39,7 +43,11 @@ create table email_outbox (
   meta            jsonb not null default '{}'::jsonb,
   recipient       text not null,
   subject         text not null,
-  -- The sealed html + text envelope. Present only while status is queued or sending.
+  -- The sealed html + text envelope. Present only while status is queued or sending (a CHECK below). Deliberately NOT
+  -- required there: where no KEK is configured AND no Resend key is (local dev, CI), the sender writes a queued row
+  -- with no body and the attempt ends it `dead` ('no_api_key'); a body that is missing while a key IS set ends it
+  -- `dead` ('body_missing'). A "must hold a body" CHECK would refuse those rows at enqueue and fail the caller's
+  -- transaction in exactly the environments that cannot send.
   body_sealed     bytea,
   -- Transactional mail ignores the marketing suppression list; the caller decides, so there is no default.
   transactional   boolean not null,
@@ -101,6 +109,7 @@ begin
      set status = 'replaced', body_sealed = null, lease_until = null, status_at = now()
    where kind = new.kind and ref_type = new.ref_type and ref_id = new.ref_id
      and lower(recipient) = lower(new.recipient) and id <> new.id
+     and org_id is not distinct from new.org_id
      and status in ('queued', 'sending', 'sent', 'delayed');
   return new;
 end $$;
