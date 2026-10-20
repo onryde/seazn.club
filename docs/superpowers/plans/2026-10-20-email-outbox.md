@@ -20,11 +20,12 @@
 - **Statuses (spec), exactly 12:** `queued sending sent delayed delivered bounced complained failed suppressed expired dead replaced`.
 - **Result handling (spec):** 2xx → `sent`; 429 / 5xx / timeout / network → retry; 400 / 403 / 422 → `dead`; 409 `concurrent_idempotent_requests` → retry; 409 `invalid_idempotent_request` → `dead` + `log.error`.
 - **Credentials at rest (spec):** body sealed with the Lichess-token KEK; `app_user` gets INSERT only; no `RETURNING` on the insert; metadata rows deleted after 90 days. This plan nulls the body as soon as a row leaves `queued`/`sending` (stricter than "terminal": nothing re-sends a `sent` row), enforced by a CHECK.
-- **Cadence (owner ruling 2026-10-20):** prod `* * * * *`; stg on the existing `*/5 * * * *` tick, no new stg trigger. This uses the 5th of the Free plan's 5 cron triggers (stg 2 + prod 3).
+- **Cadence (owner ruling 2026-10-20; controller ruling on the shape, same day):** prod runs the outbox every minute, and stg on the existing 5-minute tick. **No new trigger on either env.** Prod's `*/5 * * * *` is REPLACED by `* * * * *`. That one trigger runs the outbox on every firing and the existing 5-minute jobs (`stream-tick`, `external-play`) only when the SCHEDULED minute is `% 5 === 0`, so a late run neither skips nor double-fires. Stg keeps `*/5 * * * *`, and runs the outbox and the 5-minute jobs on it. The count stays at 2 triggers per env, 4 of the Free plan's 5.
 - **Webhook signature (spec):** `RESEND_WEBHOOK_SECRET` unset ⇒ 401 unless `NODE_ENV !== "production"` (stg and every harness server run `NODE_ENV=production`, so they refuse too).
 - **Copy:** no new user-facing strings and no dictionary keys. `retrying` is a count in a JSON response only; the UI keeps showing what it shows today.
 - **Do not move** the funnel claim email (`funnel/start/route.ts`) or any other `send*Email` caller (phase 3). `send()`'s existing callers must behave exactly as today.
 - **Pool nesting:** `dispatchNow` and every outbox read/write run on the pooled `sql` AFTER the caller's transaction closes; never inside `withTenant` (see `lib/db.ts:216-250`, #996). Only `enqueueEmail` / `extendEmailExpiry` take the caller's `Tx`.
+- **Send clock:** production judges every expiry on the real current time. An injected `now` is only the existing test clock seam (`deps.now`), and no production caller may pass a past time; `dispatchNow` enforces this in production (Task 3).
 - **Tests (TEST-STRATEGY.md, binding):** anti-vacuity (every sweep asserts its checked count; zero is a failure); expected values derived from the spec's rulebook or from the constants, never from the code under test; every guard added is mutated once (record the mutation and that a test went red in the commit body); sequence tests owed: retry-then-success, success-then-late-webhook, replaced-then-retry, expiry, a second send/second call, empty input.
 - **DB tests** use `describe.skipIf(!HAS_DB)` with `const HAS_DB = !!process.env.DATABASE_URL;` (CI unit shards have none). Stand up the DB with the `seazn-local-env` skill (`db:apply` AND `sync:sports`; confirm `show data_directory` is yours).
 - **Scoped tests only, never the full suite.** Verify recipe (`$OUT` = your own subdirectory of the session scratchpad, never shared):
@@ -226,7 +227,11 @@ export async function attemptClaimed(row: ClaimedRow): Promise<{ outcome: Attemp
 export async function dispatchNow(ids: readonly string[], opts?: { now?: Date }): Promise<Map<string, AttemptOutcome>>;
 ```
 - Behaviour decided here, not left open:
-  - `dispatchNow` makes **first attempts only**. It claims `status = 'queued' and attempts = 0 and expires_at > $now`, setting `sending`, `attempts = 1` and `lease_until = now() + LEASE_MS`. It never reads `next_attempt_at`. Any id it cannot claim is `deferred`: already taken, replaced, or a second call. `opts.now` (default `new Date()`) is the caller's clock, used only for the expiry test. Callers with a `deps.now` pass it. This is why the caller's clock is used: the chess suites open rounds on clocks up to 30 min in the past (`open-round.test.ts:503`, `invite.test.ts:315`), and judging expiry on the DB clock would expire every invite they write. The worker, which has no caller, uses the DB's `now()`.
+  - `dispatchNow` makes **first attempts only**. It claims `status = 'queued' and attempts = 0 and expires_at > $now`, setting `sending`, `attempts = 1` and `lease_until = now() + LEASE_MS`. It never reads `next_attempt_at`. Any id it cannot claim is `deferred`: already taken, replaced, or a second call. The expiry clock (controller ruling 2026-10-20):
+    - **Production judges expiry on the real current time.** `opts.now` exists only as the existing test clock seam, the same `deps.now` that `openRound` and `resendExternalPlayNotice` already take, and in production it is undefined (`deps.now ?? new Date()`).
+    - **No production caller may pass a past time.** This is a rule, enforced by a guard: when `process.env.NODE_ENV === "production"`, `dispatchNow` uses `max(opts.now ?? real, real)`, where `real = new Date()`, and calls `log.error` once if `opts.now` was more than 60 s behind. So a stale injected clock can never make a send late; a clock ahead of real time can only expire a row early, which is the safe direction.
+    - Why the seam exists at all: the chess suites (vitest, `NODE_ENV=test`) open rounds on clocks up to 30 min in the past (`open-round.test.ts:503`, `invite.test.ts:315`), and judging expiry on the real or DB clock there would expire every invite they write.
+    - The worker, which has no caller, uses the DB's `now()`.
   - Before claiming, `dispatchNow` marks its ids that are `queued` with `expires_at <= $now` as `expired` (body null), then runs the hooks.
   - When `RESEND_API_KEY` is unset, the row goes `dead` with `last_error = 'no_api_key'`, and `deliver` is never called. Keep today's `"[email] RESEND_API_KEY not set — would send …"` warning. A `body_sealed` that is null (or fails to open) while a key IS set goes `dead`, with `last_error` set to `'body_missing'` (or `'body_unreadable'`).
   - `deliver` is called with `idempotencyKey(id)` and `tags: { outbox: id }`. A `deliver` that throws counts as `{ reason: "network" }`.
@@ -272,6 +277,8 @@ it("422 → dead, body null, afterEndedBadly called once with that row", …);
 it("409 invalid_idempotent_request → dead + log.error; 409 concurrent_idempotent_requests → retrying", …);
 it("a deliver that throws → retrying", …);
 it("expired before the first attempt → expired, deliver never called, hook called", …);   // expiry (sequence)
+it("in production a past injected clock is overridden: expires_at between the stale now and the real now → expired, deliver never called, log.error once", …);   // vi.stubEnv("NODE_ENV", "production")
+it("the test seam still works outside production: the same row and stale now → delivered", …);
 it("no RESEND_API_KEY → dead 'no_api_key', deliver never called, would-send warning", …);
 it("a body that will not open → dead 'body_unreadable', deliver never called", …);      // Review Focus 4
 it("a second dispatchNow on the same id → deferred, deliver called once in total", …);   // second send
@@ -283,8 +290,8 @@ it("dispatchNow([]) → empty map and zero statements", …);
 ```
 - [ ] **Step 3: Run, verify FAIL** (modules missing).
 - [ ] **Step 4: Implement** the modules to the interfaces and behaviour above. `seal.ts` calls `sealWith`/`openWith("LICHESS_TOKEN_KEK", …)` from `server/relay/crypto.ts:64-79` on `JSON.stringify(body)`. `enqueue.ts` generates the id with `randomUUID()` and inserts with no `returning`. `hooks.ts` imports nothing from `server/usecases`.
-- [ ] **Step 5: Run, verify PASS** (`t` = 5 + 2 + 16) + typecheck.
-- [ ] **Step 6: Mutate once each** — (a) drop `and status = 'sending'` from the `sent` update (the in-flight replace test must red); (b) drop the `attempts = 0` claim predicate (second-send test reds); (c) drop the 429 break (the 429 test reds); (d) make `nextAttemptAt` return a date at `MAX_ATTEMPTS`. Restore each.
+- [ ] **Step 5: Run, verify PASS** (`t` = 5 + 2 + 18) + typecheck.
+- [ ] **Step 6: Mutate once each** — (a) drop `and status = 'sending'` from the `sent` update (the in-flight replace test must red); (b) drop the `attempts = 0` claim predicate (second-send test reds); (c) drop the 429 break (the 429 test reds); (d) make `nextAttemptAt` return a date at `MAX_ATTEMPTS`; (e) drop the production `max(…)` (the production-clock test reds). Restore each.
 - [ ] **Step 7: Commit** — `feat(email-outbox): enqueue in the caller's transaction, first attempt after commit`.
 
 ---
@@ -311,7 +318,11 @@ export async function runOutboxTick(opts?: { sleep?: (ms: number) => Promise<voi
 // cron-worker schedule.ts
 export type EnvName = "stg" | "prod";
 export const MINUTE_CRON = "* * * * *";
+export const FIVE_MINUTES = 5;                                                // the 5-minute jobs' period, in minutes
+/** The one fast trigger per env. It REPLACES prod's `*/5`; stg keeps it. */
+export const FAST_TRIGGER: Readonly<Record<EnvName, string>> = { prod: MINUTE_CRON, stg: STREAM_TICK_CRON };
 // Job.trigger: string | Readonly<Record<EnvName, string>>
+// Due gains { kind: "minuteMod"; every: number }: due when scheduledTime.getUTCMinutes() % every === 0
 export function triggerFor(job: Job, env: string): string;                    // throws `triggerFor: no trigger for env "<x>" on job <id>`
 export function triggersOf(env: string, jobs?: readonly Job[]): string[];
 export function dueJobs(scheduledTime: Date, cron: string, env: string, jobs?: readonly Job[]): Job[];
@@ -324,7 +335,13 @@ export function dueJobs(scheduledTime: Date, cron: string, env: string, jobs?: r
   5. Stop at the first 429. Rows left unclaimed count toward `deferred`, read as a count of rows due now.
   6. Run `afterEndedBadly` for every row ended in steps 1-3.
   7. `failed` counts rows whose attempt threw inside our own code, which is caught per row.
-- Job row: `{ id: "email-outbox", path: "/api/cron/email-outbox", trigger: { prod: MINUTE_CRON, stg: STREAM_TICK_CRON }, due: { kind: "every" }, retry: false, manual: true, failureCounts: ["data.failed"] }`. It is never retried, because the next firing is the retry and skip-locked plus the lease make an overlap safe. `firstSlotOfHour` learns `* * * * *` (true only at minute 0). `runDue` passes `env.ENV_NAME`. Prod's `wrangler.json` crons become `["17 * * * *", "*/5 * * * *", "* * * * *"]`, and stg is unchanged. Update the comment at `schedule.ts:39-40` to read "5 of the Free plan's 5".
+- Schedule rows:
+  - New row: `{ id: "email-outbox", path: "/api/cron/email-outbox", trigger: FAST_TRIGGER, due: { kind: "every" }, retry: false, manual: true, failureCounts: ["data.failed"] }`. It is never retried, because the next firing is the retry and skip-locked plus the lease make an overlap safe.
+  - The existing `stream-tick` and `external-play` rows change to `trigger: FAST_TRIGGER, due: { kind: "minuteMod", every: FIVE_MINUTES }`. Their `retry`, `manual` and `failureCounts` are unchanged.
+  - On stg every `*/5` firing has minute `% 5 === 0`, so they run exactly as today. On prod they run on the minute-trigger firings whose SCHEDULED minute is a multiple of 5: `dueJobs` is keyed on `scheduledTime`, never `Date.now()`, so a late invocation runs its own slot's jobs once and only once.
+- `firstSlotOfHour` learns `* * * * *` (true only at minute 0), so the Sentry throttle still raises at most one event per job per hour. `runDue` passes `env.ENV_NAME`.
+- `wrangler.json`: prod crons become `["17 * * * *", "* * * * *"]` (the `*/5` entry is replaced, not added to), and stg is unchanged. Update the comment at `schedule.ts:39-40`: still 2 per env, 4 of the Free plan's 5; prod's fast trigger is the minute one.
+- Deploy note for the PR: prod's `*/5` trigger disappears in the same deploy that adds `* * * * *`, so there is no window in which the 5-minute jobs fire twice or not at all.
 
 - [ ] **Step 1: Write the failing web tests**
 ```ts
@@ -343,26 +360,36 @@ it("503 when CRON_SECRET is unset, 401 on a wrong secret, 200 with the report un
 ```
 - [ ] **Step 2: Write the failing cron-worker tests**
 ```ts
-it("email-outbox runs every minute on prod and on the 5-minute tick on stg", () => {
-  const job = JOBS.find((j) => j.id === "email-outbox")!;
-  expect(triggerFor(job, "prod")).toBe(MINUTE_CRON);
-  expect(triggerFor(job, "stg")).toBe(STREAM_TICK_CRON);
+it("a simulated hour: prod runs the 5-minute jobs 12 times and the outbox 60; stg runs both 12", () => {
+  // Fire every trigger of the env at each scheduled minute it matches. The tiny matcher understands the table's three
+  // shapes (`M * * * *`, `* * * * *`, `*/N * * * *`) and refuses any other by name.
+  const counts = (env: EnvName) => tally(env, HOUR_START);   // job id → firings over minutes 0..59
+  const fiveMin = 60 / FIVE_MINUTES;                         // 12, from the constant
+  const stgTick = 60 / Number(/^\*\/(\d+) /.exec(STREAM_TICK_CRON)![1]);   // 12, from the constant
+  for (const id of ["stream-tick", "external-play"]) {
+    expect(counts("prod")[id], `prod ${id}`).toBe(fiveMin);
+    expect(counts("stg")[id], `stg ${id}`).toBe(fiveMin);
+  }
+  expect(counts("prod")["email-outbox"]).toBe(60);          // MINUTE_CRON: every minute
+  expect(counts("stg")["email-outbox"]).toBe(stgTick);
+  expect(Object.keys(counts("prod")).length, "jobs tallied").toBeGreaterThanOrEqual(3);
 });
-it("prod's */5 firing does not also run email-outbox (no double run at :05)", …);
+it("a late invocation runs its SCHEDULED slot: scheduled :05 delivered at :06 runs the 5-minute jobs; scheduled :06 delivered at :10 does not", …);
+it("prod's triggers are exactly the hourly and the minute one: the */5 entry is gone, not doubled", () =>
+  expect(triggersOf("prod").sort()).toEqual([TRIGGER_CRON, MINUTE_CRON].sort()));
+it("the trigger count is unchanged: 2 per env", () => {
+  expect(triggersOf("stg").length).toBe(2);
+  expect(triggersOf("prod").length).toBe(2);
+});
 it("triggerFor refuses an unknown env by name", …);
 it("firstSlotOfHour('* * * * *') is true at minute 0 only", …);
-it("the account's distinct triggers across both envs stay within the Free plan's 5", () => {
-  const total = triggersOf("stg").length + triggersOf("prod").length;
-  expect(total).toBeGreaterThan(0);
-  expect(total).toBeLessThanOrEqual(5);
-});
 // drift.test.ts: the wrangler check compares each env with triggersOf(env); the counters total becomes 10
 ```
 - [ ] **Step 3: Run both suites, verify FAIL.**
 - [ ] **Step 4: Implement** `worker.ts` and the route. The route copies the auth block of `app/api/cron/external-play/route.ts:28-33` and returns `runOutboxTick()`. Then make the cron-worker changes. In `run.ts`, existing callers of `triggersOf()` / `dueJobs()` gain the env argument. Update `run.test.ts` and `index.test.ts` call sites to match, and change no assertion other than that.
 - [ ] **Step 5: Smoke** — add `emailOutboxCronSmoke()` to `scripts/smoke.ts`, beside `externalPlayOtBSmoke` (`scripts/smoke.ts:21598`): a wrong secret answers 401 or 503; with `CRON_SECRET` set, the right secret answers 200 with `data.failed === 0` and a number for every report key. Wire it into the run list the way `externalPlayOtBSmoke` is.
 - [ ] **Step 6: Run, verify PASS** — web paths (`t` = 10). Cron worker: `cd <WT>/apps/cron-worker && rtk proxy npx vitest run test/schedule.test.ts test/drift.test.ts test/run.test.ts test/index.test.ts --reporter=json --outputFile=$OUT/t4-cron.json`. Typecheck both packages.
-- [ ] **Step 7: Mutate** — (a) remove `skip locked` (the parallel test reds); (b) map stg to `MINUTE_CRON` (the cadence test reds). Restore both.
+- [ ] **Step 7: Mutate** — (a) remove `skip locked` (the parallel test reds); (b) map stg to `MINUTE_CRON` (the simulated-hour test reds); (c) make `minuteMod` read `new Date()` instead of `scheduledTime` (the late-invocation test reds); (d) drop the `minuteMod` due from `stream-tick` (prod's count reads 60, not 12). Restore each.
 - [ ] **Step 8: Commit** — `feat(email-outbox): retry worker on prod's minute and stg's 5-minute tick`.
 
 ---

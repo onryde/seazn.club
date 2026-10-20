@@ -121,9 +121,15 @@ so a crashed attempt becomes due again.
 
 *My call:* **`replaced`.** Writing a new row for the same `kind` +
 `ref` + recipient marks every older non-terminal row `replaced` (body
-nulled) in the same transaction. A new sign-in link deletes the older unused
-link (`login-link.ts:13`) and a Resend re-mints the room token, so retrying
-the older row would deliver a dead link.
+nulled) in the same transaction. The reason differs by kind. For the sign-in
+link it prevents a **dead link**: a new link deletes the older unused one
+(`login-link.ts:13`), so retrying the older row would deliver a link that no
+longer works. For the chess invite it prevents a **duplicate email**: the
+match-room token is a stateless JWT whose expiry is pinned to the round's open
+and which nothing revokes (`server/usecases/match-room-token.ts:1-12,29-40`), so
+the older row's link would still work, and retrying it would send the player a
+second invite. (Corrected 2026-10-20; this paragraph used to say a Resend
+re-mints the room token and kills the older link, which is false.)
 
 ### Credentials at rest
 
