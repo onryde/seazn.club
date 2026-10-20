@@ -42,9 +42,10 @@ import { sql, statementCount } from "@/lib/db";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { streamRig } from "@/server/relay/__tests__/_session-rig";
 import { PASS_KEYS } from "@/lib/currency";
+import { CREDIT_REUSE_HOURS } from "@/server/relay/config";
 import {
   NoCreditsError, consumeForSession, creditBalance, creditBreakdown, ensureMonthlyStreamGrant,
-  grantMonthlyStreamCredits, lockOrg, recordPurchase, recordStreamPackRefund, refundConsumeForSession, refundCredits, revokeCredits, streamMonthlyDeltaKey,
+  grantMonthlyStreamCredits, lockOrg, neverLiveRefundStanding, recordPurchase, recordStreamPackRefund, refundConsumeForSession, refundCredits, revokeCredits, streamMonthlyDeltaKey,
   streamMonthlyGrantKey, streamMonthlyPeriod, streamMonthlyRate,
 } from "../stream-credits";
 
@@ -561,8 +562,11 @@ describe.skipIf(!HAS_DB)("monthly stream credits — sequences", () => {
 // R2008 (owner ruling 2026-10-19): the SYSTEM's refund of a session's go-live consume — what a composed stream that went live
 // and never had a camera is returned. The SAME ledger, bucket and cap as the staff refund; written by no staff member.
 describe.skipIf(!HAS_DB)("refundConsumeForSession — R2008: the platform returns a consume it should not have taken", () => {
-  const system = (r: Awaited<ReturnType<typeof rig>>, sessionId: string) =>
-    sql.begin((tx) => refundConsumeForSession(tx, { orgId: r.orgId, sessionId, note: "R2008 unit" }));
+  const system = (r: Awaited<ReturnType<typeof rig>>, sessionId: string, now: Date = new Date()) =>
+    sql.begin(async (tx) => {
+      const [s] = await tx<{ fixture_id: string | null }[]>`select fixture_id from fixture_stream_sessions where id = ${sessionId}`;
+      return refundConsumeForSession(tx, { orgId: r.orgId, sessionId, fixtureId: s!.fixture_id, note: "R2008 unit" }, now);
+    });
   const full = (orgId: string, sessionId: string) =>
     sql<(Row & { created_by: string | null; note: string | null })[]>`
       select reason, bucket, delta, balance_after, idempotency_key, session_id, created_by, note
@@ -669,5 +673,102 @@ describe.skipIf(!HAS_DB)("refundConsumeForSession — R2008: the platform return
     release();
     await holder;
     expect(await refund).toMatchObject({ refunded: true });
+  });
+
+  // R2008 free-gaps (owner ruling 2026-10-20): at most NEVER_LIVE_REFUNDS_PER_WINDOW platform refunds of a never-live session per
+  // FIXTURE per CREDIT_REUSE_HOURS. The session-level sequences are in stream-composed-free-gaps.test.ts; this is the LEDGER, case by
+  // case, on the writer and on the standing the countdown also reads — each guard in the "earlier refund" query defeated by a case.
+  describe("the cap — one never-live refund per fixture per reuse window", () => {
+    const NOW = new Date("2031-05-10T12:00:00Z");
+    const WINDOW_MIN = CREDIT_REUSE_HOURS * 60;
+    /** An earlier session of `fixture` that failed `reason`, consumed a credit and had it returned `ageMin` minutes before NOW,
+     *  by the platform (its own writer, the first on a clean ledger so never capped) or by a staff member. */
+    async function earlier(r: Awaited<ReturnType<typeof rig>>, fixture: string, o: { reason: string; by: "platform" | "staff"; ageMin: number }): Promise<string> {
+      const sid = await r.session(fixture, "failed");
+      await sql`update fixture_stream_sessions set fail_reason = ${o.reason} where id = ${sid}`;
+      await sql.begin((tx) => consumeForSession(tx, { orgId: r.orgId, fixtureId: null, sessionId: sid }));
+      if (o.by === "platform") expect(await system(r, sid, NOW), "PREMISE: the first refund on a clean ledger is written").toMatchObject({ refunded: true });
+      else await refundCredits({ ...staff(r), delta: 1, sessionId: sid });
+      await sql`update org_stream_credits set created_at = ${NOW}::timestamptz - make_interval(mins => ${o.ageMin}) where session_id = ${sid} and reason = 'refund'`;
+      return sid;
+    }
+    /** The session being judged: it consumed a credit (or, `consumed: false`, was a free restart that took nothing). */
+    async function judged(r: Awaited<ReturnType<typeof rig>>, fixture: string, consumed = true): Promise<string> {
+      const sid = await r.session(fixture, "failed");
+      await sql`update fixture_stream_sessions set fail_reason = 'camera_never_live' where id = ${sid}`;
+      if (consumed) await sql.begin((tx) => consumeForSession(tx, { orgId: r.orgId, fixtureId: null, sessionId: sid }));
+      return sid;
+    }
+    const standing = (r: Awaited<ReturnType<typeof rig>>, sessionId: string, fixtureId: string | null) =>
+      neverLiveRefundStanding(sql, { orgId: r.orgId, sessionId, fixtureId }, NOW);
+    const ledgerRows = async (orgId: string) => (await rowCount(orgId));
+
+    it("the window holds a platform never-live refund of THIS fixture a minute inside → withheld: nothing written, the standing says the charge stands; a minute past → refunded", async () => {
+      let checked = 0;
+      for (const [label, ageMin, capped] of [["a minute inside", WINDOW_MIN - 1, true], ["a minute past", WINDOW_MIN + 1, false]] as const) {
+        const r = await rig(null);
+        await buy(r.orgId, 4);
+        const fa = r.fixtureIds[0]!;
+        await earlier(r, fa, { reason: "camera_never_live", by: "platform", ageMin });
+        const sid = await judged(r, fa);
+        expect(await standing(r, sid, fa), `${label}: the standing`).toMatchObject({ owed: 1, capped, willRefund: !capped, chargeStands: capped });
+        const n = await ledgerRows(r.orgId);
+        const out = await system(r, sid, NOW);
+        expect(out, `${label}: the writer`).toMatchObject(capped ? { refunded: false, delta: 0, ledgerId: null, withheld: true } : { refunded: true, delta: 1, withheld: false });
+        expect(await ledgerRows(r.orgId), `${label}: rows written`).toBe(n + (capped ? 0 : 1));
+        checked++;
+      }
+      expect(checked).toBe(2);
+    });
+
+    it("what is NOT an earlier never-live refund: another fixture's, a staff member's, one on a session that failed for another reason, and — for a session with no fixture — any at all", async () => {
+      let checked = 0;
+      // ANOTHER FIXTURE: A's refund does not cap B.
+      const other = await rig(null);
+      await buy(other.orgId, 4);
+      await earlier(other, other.fixtureIds[0]!, { reason: "camera_never_live", by: "platform", ageMin: 1 });
+      const onB = await judged(other, other.fixtureIds[1]!);
+      expect(await standing(other, onB, other.fixtureIds[1]!), "another fixture").toMatchObject({ capped: false, willRefund: true });
+      expect(await system(other, onB, NOW), "…and the writer").toMatchObject({ refunded: true });
+      checked++;
+      // A STAFF refund (created_by set) is the staff's goodwill: it never spends the platform's allowance.
+      const staffR = await rig(null);
+      await buy(staffR.orgId, 4);
+      await earlier(staffR, staffR.fixtureIds[0]!, { reason: "camera_never_live", by: "staff", ageMin: 1 });
+      const afterStaff = await judged(staffR, staffR.fixtureIds[0]!);
+      expect(await standing(staffR, afterStaff, staffR.fixtureIds[0]!), "a staff refund").toMatchObject({ capped: false, willRefund: true });
+      checked++;
+      // A platform refund of a session that did NOT fail never-live is not a never-live refund.
+      const reason = await rig(null);
+      await buy(reason.orgId, 4);
+      await earlier(reason, reason.fixtureIds[0]!, { reason: "output_failed", by: "platform", ageMin: 1 });
+      const afterOther = await judged(reason, reason.fixtureIds[0]!);
+      expect(await standing(reason, afterOther, reason.fixtureIds[0]!), "another failure's refund").toMatchObject({ capped: false, willRefund: true });
+      checked++;
+      // A session with NO fixture has no window to be capped in — however full this fixture's is (a fixture-less one is not asked).
+      const none = await rig(null);
+      await buy(none.orgId, 4);
+      await earlier(none, none.fixtureIds[0]!, { reason: "camera_never_live", by: "platform", ageMin: 1 });
+      const fixtureless = await judged(none, none.fixtureIds[0]!);
+      expect(await standing(none, fixtureless, none.fixtureIds[0]!), "PREMISE: with its fixture the window is full").toMatchObject({ capped: true });
+      expect(await standing(none, fixtureless, null), "without one it is not").toMatchObject({ capped: false, willRefund: true });
+      checked++;
+      expect(checked).toBe(4);
+    });
+
+    it("the three answers, and only three: nothing owed (a free restart, a refund already made) is neither refunded nor charged — even in a full window; owed in a room is refunded; owed in a full window is charged", async () => {
+      const r = await rig(null);
+      await buy(r.orgId, 6);
+      const fa = r.fixtureIds[0]!;
+      const free = await judged(r, fa, false);                                          // took nothing
+      expect(await standing(r, free, fa), "a free restart, window EMPTY").toMatchObject({ owed: 0, capped: false, willRefund: false, chargeStands: false });
+      const owedInRoom = await judged(r, fa);
+      expect(await standing(r, owedInRoom, fa), "owed, window empty").toMatchObject({ owed: 1, willRefund: true, chargeStands: false });
+      await earlier(r, fa, { reason: "camera_never_live", by: "platform", ageMin: 1 });  // the window is full from here on
+      expect(await standing(r, owedInRoom, fa), "owed, window FULL").toMatchObject({ owed: 1, capped: true, willRefund: false, chargeStands: true });
+      expect(await standing(r, free, fa), "a free restart, window FULL: still nothing owed, so still 'not charged'").toMatchObject({ owed: 0, capped: true, willRefund: false, chargeStands: false });
+      await refundCredits({ ...staff(r), delta: 1, sessionId: owedInRoom });
+      expect(await standing(r, owedInRoom, fa), "a staff refund made it nothing owed, window FULL").toMatchObject({ owed: 0, willRefund: false, chargeStands: false });
+    });
   });
 });

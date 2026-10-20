@@ -37,8 +37,10 @@ import { HttpError } from "@/lib/errors";
 import { utcMonthStart } from "@/lib/credits";
 import { orgPlanKey } from "@/lib/entitlements";
 import { isPassKey, type PassKey } from "@/lib/currency";
-import { InsufficientCredits, credit, debit, restartIsFree, withinReuseWindow } from "@/server/relay/domain/credits";
-import { FREE_RESTARTS_PER_WINDOW } from "@/server/relay/config";
+import { InsufficientCredits, credit, debit, neverLiveRefundCapped, restartIsFree, withinReuseWindow } from "@/server/relay/domain/credits";
+import type { FailReason } from "@/server/relay/domain/session";
+import { FREE_RESTARTS_PER_WINDOW, NEVER_LIVE_REFUNDS_PER_WINDOW } from "@/server/relay/config";
+import { sessionsWhoseCameraWasLive } from "@/server/relay/telemetry";
 import { captureError } from "@/lib/sentry";
 import { log } from "@/server/logger";
 // TYPE-ONLY, as lib/credits.ts does: admin-adjustments-log.ts VALUE-imports
@@ -157,8 +159,9 @@ export type RestartAllowance = { windowOpen: boolean; used: number; limit: numbe
 /** W23 — the ONE authority admission, `consumeForSession` and the organiser's projection all ask (A9), so the three can
  *  never disagree. The window is `reuseWindowOpen`'s: a consume that stands, inside CREDIT_REUSE_HOURS; that consume's
  *  session is the ANCHOR. `used` counts this fixture's sessions created after the anchor that REACHED VIDEO
- *  (first_ingest_at set) — a restart stopped before its phone sent anything never counts, and a session counts once
- *  however often its phone changes or its ingest drops. `excludeSessionId` is the session asking about itself
+ *  (a passthrough session: first_ingest_at set; a composed one: the compositor reported the camera `live` — R2008 free-gaps)
+ *  — a restart stopped before its phone sent anything, or whose camera never appeared, never counts, and a session counts
+ *  once however often its phone changes or its ingest drops. `excludeSessionId` is the session asking about itself
  *  (`consumeForSession` at its own go-live): it is not one of its own restarts. A paid 4th consumes and so becomes the
  *  next anchor (O4). */
 export async function restartAllowance(
@@ -170,14 +173,18 @@ export async function restartAllowance(
   const anchor = await standingConsume(exec, args);
   const windowOpen = withinReuseWindow(anchor ? new Date(anchor.created_at) : null, now);
   if (!anchor || !windowOpen) return { windowOpen: false, used: 0, limit, free: false };
-  const [counted] = await exec<{ used: number }[]>`
-    select count(*)::int as used from fixture_stream_sessions s
+  const since = await exec<{ id: string; ingested: boolean }[]>`
+    select s.id, s.first_ingest_at is not null as ingested from fixture_stream_sessions s
      where s.org_id = ${args.orgId} and s.fixture_id = ${args.fixtureId}
-       and s.first_ingest_at is not null
        and s.id <> ${anchor.session_id}
        and (${args.excludeSessionId}::uuid is null or s.id <> ${args.excludeSessionId})
        and s.created_at > (select created_at from fixture_stream_sessions where id = ${anchor.session_id})`;
-  const used = counted?.used ?? 0;   // count(*) always answers one row
+  // REACHED VIDEO (R2008 free-gaps, owner ruling 2026-10-20): a passthrough session did when its phone's input connected
+  // (`first_ingest_at` — only the passthrough poll writes it); a COMPOSED one never has it, so it did when the compositor's
+  // beats said the camera was LIVE (`sessionsWhoseCameraWasLive`, the evidence R2008's refund reads). The two are disjoint
+  // by construction — only a session with no first ingest is asked — so a session counts once.
+  const used = since.filter((s) => s.ingested).length
+    + (await sessionsWhoseCameraWasLive(exec, since.filter((s) => !s.ingested).map((s) => s.id))).size;
   return { windowOpen, used, limit, free: restartIsFree({ windowOpen, used }, limit) };
 }
 
@@ -573,7 +580,7 @@ export interface StaffCreditResult { id: string; balance: number; applied: boole
  *  consume drew from. ONE read for both refund writers — the staff refund (`staffRow`) and the system refund
  *  (`refundConsumeForSession`) — so the cap and the bucket can never be judged two ways. The CALLER holds the org's money
  *  lock. */
-async function sessionCreditStanding(tx: Tx, orgId: string, sessionId: string): Promise<{ consumed: number; refunded: number; buckets: StreamCreditBucket[] }> {
+async function sessionCreditStanding(tx: Executor, orgId: string, sessionId: string): Promise<{ consumed: number; refunded: number; buckets: StreamCreditBucket[] }> {
   const [s] = await tx<{ consumed: number; refunded: number; buckets: StreamCreditBucket[] | null }[]>`
     select coalesce(-sum(delta) filter (where reason = 'consume'), 0)::int as consumed,
            coalesce(sum(delta) filter (where reason = 'refund'), 0)::int as refunded,
@@ -704,6 +711,38 @@ async function staffRow(kind: StaffKind, args: StaffCreditArgs & { sessionId?: s
   }) as Promise<StaffCreditResult>;
 }
 
+/** The `fail_reason` that marks a never-live end (domain/session.ts `FailReason`) — the join key for "an earlier never-live refund". */
+const NEVER_LIVE_FAIL_REASON: FailReason = "camera_never_live";
+
+/** What the never-live end owes this session, and whether the platform will pay it — the ONE authority the end
+ *  (`refundConsumeForSession`, under the org's money lock) and the organiser's countdown (`currentSession`, unlocked and advisory,
+ *  as admission is against `consumeForSession`) both ask, so the line the panel shows and the money the end moves cannot disagree.
+ *  R2008 free-gaps (owner ruling 2026-10-20, "fix both gap"). Three answers, and only three:
+ *  - nothing is owed (`owed` 0): a free restart took nothing, or a staff refund already returned it — "you weren't charged" is
+ *    true, and the end writes no refund;
+ *  - owed and the window has room (`willRefund`): the credit is returned at the end;
+ *  - owed and the window is FULL (`chargeStands`): a never-live credit for this FIXTURE was already returned inside
+ *    CREDIT_REUSE_HOURS (NEVER_LIVE_REFUNDS_PER_WINDOW of them), so the stream still ends but its charge stands.
+ *  "An earlier never-live refund" is the PLATFORM's own: a refund row with no staff member (`created_by` null) on an earlier
+ *  session of this fixture that failed `camera_never_live`. A staff refund is the staff's goodwill and never spends the allowance;
+ *  a session of another fixture (or another org) is another stream. The window is the reuse rule's own (`withinReuseWindow`,
+ *  through `neverLiveRefundCapped`). A session with no fixture (fixture_id is `on delete set null`) has none to match, so
+ *  no earlier refund and no cap — as `standingConsume` has no window for it. */
+export async function neverLiveRefundStanding(
+  exec: Executor, args: { orgId: string; sessionId: string; fixtureId: string | null }, now: Date,
+): Promise<{ owed: number; buckets: StreamCreditBucket[]; capped: boolean; willRefund: boolean; chargeStands: boolean }> {
+  const standing = await sessionCreditStanding(exec, args.orgId, args.sessionId);
+  const owed = standing.consumed - standing.refunded;
+  const priorAts = args.fixtureId === null ? [] : (await exec<{ at: string }[]>`
+    select r.created_at as at
+      from org_stream_credits r join fixture_stream_sessions s on s.id = r.session_id
+     where r.org_id = ${args.orgId} and r.reason = 'refund' and r.created_by is null
+       and s.fixture_id = ${args.fixtureId} and s.fail_reason = ${NEVER_LIVE_FAIL_REASON}
+     order by r.created_at desc limit ${NEVER_LIVE_REFUNDS_PER_WINDOW}`).map((r) => new Date(r.at));
+  const capped = neverLiveRefundCapped(priorAts, now, NEVER_LIVE_REFUNDS_PER_WINDOW);
+  return { owed, buckets: standing.buckets, capped, willRefund: owed >= 1 && !capped, chargeStands: owed >= 1 && capped };
+}
+
 /** R2008 (owner ruling 2026-10-19): the SYSTEM's refund of one session's go-live consume — a composed stream that went live
  *  and never had a camera, which the viewer never saw. The same ledger, reason, bucket and cap as the staff refund
  *  (`staffRow`'s linked branch, through `sessionCreditStanding` and `drawnBucketOf`), written by no staff member: no
@@ -712,22 +751,24 @@ async function staffRow(kind: StaffKind, args: StaffCreditArgs & { sessionId?: s
  *  EXACTLY ONCE, by state and not by key: a session whose consume was never written (a free restart, or one refused for
  *  credits) has nothing to return, and one whose consumes are all refunded already (a staff refund first, or a second
  *  call) writes nothing — `refunded < consumed` is the only way a row is written. A free restart is also why the caller
- *  cannot assume a consume: the session's own ledger is read, never "a live session consumed". */
+ *  cannot assume a consume: the session's own ledger is read, never "a live session consumed".
+ *  BOUNDED (free-gaps, owner ruling 2026-10-20): at most NEVER_LIVE_REFUNDS_PER_WINDOW such refunds per fixture per reuse window
+ *  (`neverLiveRefundStanding`, the same answer the countdown shows). A refund the window has no room for is WITHHELD — nothing
+ *  is written and the result says so (`withheld`), so the session's history can tell it from "nothing was owed". */
 export async function refundConsumeForSession(
-  tx: Tx, args: { orgId: string; sessionId: string; note: string },
-): Promise<{ refunded: boolean; delta: number; balance: number; ledgerId: string | null }> {
+  tx: Tx, args: { orgId: string; sessionId: string; fixtureId: string | null; note: string }, now: Date,
+): Promise<{ refunded: boolean; delta: number; balance: number; ledgerId: string | null; withheld: boolean }> {
   await lockOrg(tx, args.orgId);
   const split = await creditBreakdown(tx, args.orgId);
-  const standing = await sessionCreditStanding(tx, args.orgId, args.sessionId);
-  const owed = standing.consumed - standing.refunded;
-  if (owed < 1) return { refunded: false, delta: 0, balance: split.total, ledgerId: null };
+  const standing = await neverLiveRefundStanding(tx, args, now);
+  if (!standing.willRefund) return { refunded: false, delta: 0, balance: split.total, ledgerId: null, withheld: standing.chargeStands };
   const bucket = drawnBucketOf(standing.buckets);
-  const { balanceAfter } = credit(split.total, owed);
+  const { balanceAfter } = credit(split.total, standing.owed);
   const [row] = await tx<{ id: string }[]>`
     insert into org_stream_credits (org_id, delta, reason, bucket, session_id, balance_after, note)
-    values (${args.orgId}, ${owed}, 'refund', ${bucket}, ${args.sessionId}, ${balanceAfter}, ${args.note})
+    values (${args.orgId}, ${standing.owed}, 'refund', ${bucket}, ${args.sessionId}, ${balanceAfter}, ${args.note})
     returning id`;
-  return { refunded: true, delta: owed, balance: balanceAfter, ledgerId: row!.id };
+  return { refunded: true, delta: standing.owed, balance: balanceAfter, ledgerId: row!.id, withheld: false };
 }
 
 export async function grantCredits(args: StaffCreditArgs): Promise<StaffCreditResult> {

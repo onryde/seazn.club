@@ -137,7 +137,7 @@ export function composedNeverLive(i: {
  *  end is timed from: since warming entry for the timeout, since the last beat for ask 10, the shorter of the two silences
  *  for W19 (and for the composed camera-gone), since the session went live for never-live. */
 export type LostCountdown =
-  | { kind: "live"; reason: "phone_lost" | "camera_never_live"; elapsedMs: number; remainingMs: number }
+  | { kind: "live"; reason: "phone_lost" | "camera_never_live" | "camera_never_live_charged"; elapsedMs: number; remainingMs: number }
   | { kind: "warming"; reason: "no_inbound_timeout" | "phone_lost"; elapsedMs: number; remainingMs: number };
 
 type Word = "connected" | "disconnected" | "unknown";
@@ -197,12 +197,17 @@ export function lostCountdown(i: {
 /** The compositor's evidence about a composed session's camera, as the countdown needs it — `cameraFactsOf`'s columns. */
 export type ComposedCountdownCamera = {
   startedAt: Date | null; liveOnceAt: Date | null; reconnectingSince: Date | null; waitedOnly: boolean; logBeganAt: Date | null;
+  /** R2008 free-gaps (owner ruling 2026-10-20): the never-live end will NOT return the credit — something was taken and the
+   *  fixture's window already holds a never-live refund (stream-credits.ts `neverLiveRefundStanding`, the answer the end itself
+   *  acts on). Only the never-live countdown reads it. */
+  chargeStands: boolean;
 };
 
 /** R2008, I1: W24 for a composed session — shown IF AND ONLY IF the end it counts to will fire at that deadline, and named
  *  by that end. Two ends, mutually exclusive on `liveOnceAt`:
  *  - never live (`composedNeverLive`): from the quiet hold after the session went live, counting `lostMinutes` from then.
- *    It reads no word and no phone, so the countdown needs neither.
+ *    It reads no word and no phone, so the countdown needs neither. It is `camera_never_live` while the end returns the credit
+ *    (or took none) and `camera_never_live_charged` when the end will leave the charge standing (`chargeStands`).
  *  - camera gone (`composedCameraLost`): only on a FRESH `disconnected` read, as W19's (m-3 — `connected`, `unknown`, a
  *    carried word and a failed read show nothing), counting from the SHORTER of the phone's silence and the reconnecting run
  *    because the end needs both, and only past the quiet hold on that shorter one (O5: a phone that still beats cannot be
@@ -211,7 +216,9 @@ function composedCountdown(i: ComposedCountdownCamera & { state: SessionState; p
   const limitMs = lostMinutes * 60_000;
   if (neverLiveArmed(i)) {
     const elapsedMs = since(i.startedAt, now);
-    return elapsedMs < quietMs ? null : { kind: "live", reason: "camera_never_live", elapsedMs, remainingMs: Math.max(0, limitMs - elapsedMs) };
+    // …and it names which of the two ends it counts to: the one that returns the credit (or took none), or the one whose
+    // charge stands — so the line the organiser reads is true of the end that will fire.
+    return elapsedMs < quietMs ? null : { kind: "live", reason: i.chargeStands ? "camera_never_live_charged" : "camera_never_live", elapsedMs, remainingMs: Math.max(0, limitMs - elapsedMs) };
   }
   const elapsedMs = cameraGoneElapsedMs(i, now);
   if (elapsedMs === null || elapsedMs < quietMs || i.read.fresh !== "disconnected") return null;
