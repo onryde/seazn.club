@@ -89,6 +89,8 @@ interface Row {
   // R2003b (V450): the crash tally (domain/runner.ts CrashTally) — the session's count, this attempt's two bounds, the newest exit's instant
   runner_crash_count: number; runner_crash_beats: number; runner_crash_exits: number; runner_crash_exit_at: string | null;
   runner_crash_restart_seen: boolean;   // V467 (Owed 66): this attempt has read an in-place restart's exit — the restart-count floor is dropped
+  // Owed 67 (V468): the restart tally (domain/runner.ts RestartTally) — the session's count, this attempt's two bounds, the newest exit's instant
+  runner_restart_count: number; runner_restart_beats: number; runner_restart_exits: number; runner_restart_exit_at: string | null;
   created_by: string; created_at: string;
   output_uid: string | null;   // C1: the domain's proof an output exists to release (Session.outputUid)
   start_cause: Session["startCause"];   // capture QR v2 §5.3 (V430)
@@ -103,7 +105,8 @@ const cols = () => sql`id, fixture_id, org_id, mode, state, desired_state, fail_
   target_id, machine_id, last_heartbeat, heartbeat_at, beat_window_at, started_at, ended_at, ending_at, max_duration_minutes,
   runner_retries, runner_attempts, runner_state, runner_name, runner_stop_requested_at,
   runner_exit_code, runner_oom_killed, runner_requested_stop, created_by, created_at, output_uid, start_cause, warming_at,
-  ingest_read_failed, runner_crash_count, runner_crash_beats, runner_crash_exits, runner_crash_exit_at, runner_crash_restart_seen`;
+  ingest_read_failed, runner_crash_count, runner_crash_beats, runner_crash_exits, runner_crash_exit_at, runner_crash_restart_seen,
+  runner_restart_count, runner_restart_beats, runner_restart_exits, runner_restart_exit_at`;
 
 const d = (s: string | null): Date | null => (s ? new Date(s) : null);
 
@@ -142,7 +145,9 @@ function toSession(r: Row): Session {
       machineId: r.machine_id, stopRequestedAt: d(r.runner_stop_requested_at), lastExit: exitOf(r),
       // R2003b: dropping a column here (or from cols()) is silent to tsc — undefined reads as no crashes, and the cap never
       // fires; relay-internal-routes.test.ts "R2003b … the SEQUENCE" is the witness (its count crosses requests).
-      crashes: { count: r.runner_crash_count, beats: r.runner_crash_beats, exits: r.runner_crash_exits, exitAt: d(r.runner_crash_exit_at), restartSeen: r.runner_crash_restart_seen },
+      crashes: { count: r.runner_crash_count, beats: r.runner_crash_beats, exits: r.runner_crash_exits, exitAt: d(r.runner_crash_exit_at), restartSeen: r.runner_crash_restart_seen,
+        // Owed 67: the same silent-to-tsc trap — a dropped column reads undefined → the restart cap never fires; the route test's sequence is the witness.
+        restarts: { count: r.runner_restart_count, beats: r.runner_restart_beats, exits: r.runner_restart_exits, exitAt: d(r.runner_restart_exit_at) } },
     },
   };
 }
@@ -184,6 +189,8 @@ async function persist(tx: Tx, s: Session): Promise<void> {
            runner_crash_count = ${s.runner.crashes.count}, runner_crash_beats = ${s.runner.crashes.beats},
            runner_crash_exits = ${s.runner.crashes.exits}, runner_crash_exit_at = ${s.runner.crashes.exitAt},
            runner_crash_restart_seen = ${s.runner.crashes.restartSeen},
+           runner_restart_count = ${s.runner.crashes.restarts.count}, runner_restart_beats = ${s.runner.crashes.restarts.beats},
+           runner_restart_exits = ${s.runner.crashes.restarts.exits}, runner_restart_exit_at = ${s.runner.crashes.restarts.exitAt},
            started_at = ${s.startedAt}, ended_at = ${s.endedAt}, beat_window_at = ${s.beatWindowAt}
      where id = ${s.id}`;
   // G1: beat_window_at IS written — the stale-beat arm and the retry arm move it, and nothing else can persist it.

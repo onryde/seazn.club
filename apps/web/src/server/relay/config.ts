@@ -179,6 +179,20 @@ export const RUNNER_RESTART_STUCK_SECONDS = 10;
  *  (R2003b review m1). A slow loop (each crash past the ~330 s refill, restart_count back to 1) is counted one exit at a
  *  time, including on a `running` read after Fly already restarted it (review I2). */
 export const RUNNER_CRASH_CAP = 3;
+/** Owed 67 (OWNER RULING 2026-10-20): a session SURVIVES this many in-place self-restarts of its compositor (final beat
+ *  `restart`, exit 75 — RELAY_EXIT_RESTART); the NEXT one ends it. "Cap the compositor's in-place self-restarts at 6 per stream
+ *  session. When the 7th restart arrives, the session ends." Why a cap is owed: a restart is not a crash (Owed 66 stopped
+ *  RUNNER_CRASH_CAP counting them), so a compositor stuck restarting itself every ~165 s had NO bound and cost the viewers a
+ *  ~15 s outage every few minutes for the rest of the stream.
+ *
+ *  NOTE the difference in meaning from RUNNER_CRASH_CAP, whose value is the count that ENDS the session (the 3rd crash): this
+ *  one is the count a session SURVIVES (domain/runner.ts `restartsCapped`: `count > RUNNER_RESTART_CAP`), so the 7th restart is
+ *  the one that ends it. Per SESSION, not per attempt and not per Fly window (the count spans the ONE retry, like the crash
+ *  count, and Fly's 5-minute window refills — the very thing that left a slow loop uncapped). Counted once per restart however
+ *  it is seen — its final beat, its exit 75, or both (`RestartTally`). The session ends through the crash cap's own path
+ *  (`crashCappedNow`: failed `machine_crash`, the Machine force-destroyed, no retry spent), so the organiser's copy and the
+ *  money are exactly the crash cap's. */
+export const RUNNER_RESTART_CAP = 6;
 /** R0-memo.md:346–354: `q` on stdin is discarded under -nostdin; the stop is a SIGNAL. OUR stop — the organiser's or the
  *  deadline's — and since R2004 PR 0 (coordinator decision I4, 2026-10-15) the R2 compositor reads it as "hold the Final
  *  scene, then drain". Always sent EXPLICITLY: Fly falls back to the Machine's `stop_config.signal` (below) for a stop that
@@ -210,8 +224,8 @@ export const RELAY_EXIT_REFUSED = 78;
  *  The compositor restarts itself on a dead CEF zygote, repeated GPU-process deaths or 3 leaked teardowns: it sends a final
  *  beat saying `exitReason: "restart"`, then exits 75, and Fly's `on-failure` restarts the process on the SAME Machine. It
  *  is NOT a crash: R2003b's tally never counts it (domain/runner.ts `crashExitSeen`), neither as an exit nor through Fly's
- *  restart count. Fly still charges it to `max_retries` (Owed 67, the owner's question), so `RUNNER_INPLACE_RESTARTS`
- *  bounds restarts and crashes together; this PR puts no cap of its own on restarts. */
+ *  restart count. Fly still charges it to `max_retries`, so `RUNNER_INPLACE_RESTARTS` bounds restarts and crashes together
+ *  inside one window; across windows a session's restarts are capped by RUNNER_RESTART_CAP (Owed 67). */
 export const RELAY_EXIT_RESTART = 75;
 /** Compositor ADR 0006 / `_FINDINGS.md` F-002 (C00 owner session, 2026-10-15): the camera→compositor delay measured
  *  IN-CHAIN (the overlay's clock against the camera's, 3083 and 3105 ms). The default `overlayDelayMs` a composed
