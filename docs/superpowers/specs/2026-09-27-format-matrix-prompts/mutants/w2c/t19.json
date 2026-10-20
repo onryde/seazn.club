@@ -677,7 +677,7 @@
         "files": [
           "src/components/v2/__tests__/match-rules-block.test.tsx"
         ],
-        "name": "locked .finished.: the lock sentence"
+        "name": "locked .finished. with an override: the lock sentence"
       }
     ]
   },
@@ -879,7 +879,7 @@
   {
     "id": "t19-block-decided-sentence",
     "file": "apps/web/src/components/v2/match-rules-block.tsx",
-    "find": "{msg(state === \"decided\" ? FIXTURE_LOCK_KEYS.decided : \"matchRules.locked\")}",
+    "find": "{msg(LOCK_KEY[lockReason])}",
     "replace": "{msg(\"matchRules.locked\")}",
     "killers": [
       {
@@ -985,6 +985,276 @@
           "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/f/[no]/__tests__/stream-mount.test.tsx"
         ],
         "name": "a sport with nothing to change for one match"
+      }
+    ]
+  },
+  {
+    "id": "t19-model-no-align",
+    "file": "apps/web/src/components/v2/match-rules-block-model.ts",
+    "find": "const built = alignBestOfOnePoints(ctx.sportKey, buildFragment(sent.map((f) => f.field), values, stageResolved), stageResolved);",
+    "replace": "const built = buildFragment(sent.map((f) => f.field), values, stageResolved);",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block-model.test.ts"
+        ],
+        "name": "best of 1 reached from a best of 3 override that set the pair APART"
+      }
+    ]
+  },
+  {
+    "id": "t19-loader-effective-line-stage",
+    "file": "apps/web/src/server/usecases/fixtures.ts",
+    "find": "effectiveLine: formatLineOf(row.sport_key, sportModule, effective, row.stage_kind, row.division_config, dict) ?? \"\",",
+    "replace": "effectiveLine: formatLineOf(row.sport_key, sportModule, stageRaw, row.stage_kind, row.division_config, dict) ?? \"\",",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/fixture-match-rules-loader.test.ts"
+        ],
+        "name": "override -> started -> finalized -> reset"
+      }
+    ]
+  },
+  {
+    "id": "t19-loader-effective-line-empty",
+    "file": "apps/web/src/server/usecases/fixtures.ts",
+    "find": "effectiveLine: formatLineOf(row.sport_key, sportModule, effective, row.stage_kind, row.division_config, dict) ?? \"\",",
+    "replace": "effectiveLine: \"\",",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/fixture-match-rules-loader.test.ts"
+        ],
+        "name": "override -> started -> finalized -> reset"
+      }
+    ]
+  },
+  {
+    "id": "t19-loader-stage-line-dict-ignored",
+    "file": "apps/web/src/server/usecases/fixtures.ts",
+    "find": "stageLine: formatLineOf(row.sport_key, sportModule, stageRaw, row.stage_kind, row.division_config, dict) ?? \"\",",
+    "replace": "stageLine: formatLineOf(row.sport_key, sportModule, stageRaw, row.stage_kind, row.division_config, {} as Dict) ?? \"\",",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/fixture-match-rules-loader.test.ts"
+        ],
+        "name": "M4 - the stage's line and the played line are said in the reader's language"
+      }
+    ]
+  },
+  {
+    "id": "t19-lines-locale-blind",
+    "file": "apps/web/src/lib/rules-line.ts",
+    "find": "const text = line.map((clause) => t(dict, clause.key, clause.params)).join(RULES_LINE_JOINER);",
+    "replace": "const text = line.map((clause) => clause.key).join(RULES_LINE_JOINER);",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/fixture-match-rules-loader.test.ts"
+        ],
+        "name": "M4 - the stage's line and the played line are said in the reader's language"
+      }
+    ]
+  },
+  {
+    "id": "t19-loader-cancelled-never",
+    "file": "apps/web/src/server/usecases/fixtures.ts",
+    "find": "cancelled: row.status === \"cancelled\",",
+    "replace": "cancelled: false,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/fixture-match-rules-loader.test.ts"
+        ],
+        "name": "the lock is the writer's own predicate"
+      }
+    ]
+  },
+  {
+    "id": "t19-loader-cancelled-any-lock",
+    "file": "apps/web/src/server/usecases/fixtures.ts",
+    "find": "cancelled: row.status === \"cancelled\",",
+    "replace": "cancelled: LOCKED_FIXTURE_STATUSES.has(row.status),",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/fixture-match-rules-loader.test.ts"
+        ],
+        "name": "the lock is the writer's own predicate"
+      }
+    ]
+  },
+  {
+    "id": "t19-mapper-drops-effective-line",
+    "file": "apps/web/src/components/v2/match-rules-block-model.ts",
+    "find": "    effectiveLine: r.effectiveLine,\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block-model.test.ts"
+        ],
+        "name": "the mapper keeps the eleven facts"
+      }
+    ]
+  },
+  {
+    "id": "t19-mapper-drops-cancelled",
+    "file": "apps/web/src/components/v2/match-rules-block-model.ts",
+    "find": "    cancelled: r.cancelled,\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block-model.test.ts"
+        ],
+        "name": "the mapper keeps the eleven facts"
+      }
+    ]
+  },
+  {
+    "id": "t19-block-played-as-never",
+    "file": "apps/web/src/components/v2/match-rules-block.tsx",
+    "find": "{override !== null && effectiveLine !== \"\" && (",
+    "replace": "{false && (",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block.test.tsx"
+        ],
+        "name": "locked .finished. with an override: the lock sentence"
+      }
+    ]
+  },
+  {
+    "id": "t19-block-played-as-always",
+    "file": "apps/web/src/components/v2/match-rules-block.tsx",
+    "find": "{override !== null && effectiveLine !== \"\" && (",
+    "replace": "{effectiveLine !== \"\" && (",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block.test.tsx"
+        ],
+        "name": "the played format is stated in EVERY state"
+      }
+    ]
+  },
+  {
+    "id": "t19-block-played-as-empty-line",
+    "file": "apps/web/src/components/v2/match-rules-block.tsx",
+    "find": "{override !== null && effectiveLine !== \"\" && (",
+    "replace": "{override !== null && (",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block.test.tsx"
+        ],
+        "name": "an override whose format the describer has no words for states nothing"
+      }
+    ]
+  },
+  {
+    "id": "t19-block-cancelled-as-finished",
+    "file": "apps/web/src/components/v2/match-rules-block.tsx",
+    "find": "const lockReason: LockReason = state === \"decided\" ? \"decided\" : cancelled ? \"cancelled\" : \"finished\";",
+    "replace": "const lockReason: LockReason = state === \"decided\" ? \"decided\" : \"finished\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block.test.tsx"
+        ],
+        "name": "a CANCELLED match says it was cancelled"
+      }
+    ]
+  },
+  {
+    "id": "t19-block-key-dropped",
+    "file": "apps/web/src/components/v2/match-rules-block.tsx",
+    "find": "<MatchRulesBlockBody key={blockSeedKey(props)} {...props} />",
+    "replace": "<MatchRulesBlockBody {...props} />",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block.test.tsx"
+        ],
+        "name": "the block is keyed on blockSeedKey"
+      }
+    ]
+  },
+  {
+    "id": "t19-error-block-not-localized",
+    "file": "apps/web/src/components/v2/match-rules-block.tsx",
+    "find": "setError(rulesWriteErrorText(err, msg));",
+    "replace": "setError(String(err));",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/rules-write-error-text.test.ts"
+        ],
+        "name": "match-rules-block.tsx: each rules PUT has a catch on the helper"
+      }
+    ]
+  },
+  {
+    "id": "t19-error-stage-clear-not-localized",
+    "file": "apps/web/src/components/v2/stages-panel.tsx",
+    "find": "never the wire's English.\n      setError(rulesWriteErrorText(err, msg));",
+    "replace": "never the wire's English.\n      setError(String(err));",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/rules-write-error-text.test.ts"
+        ],
+        "name": "stages-panel.tsx: each rules PUT has a catch on the helper"
+      }
+    ]
+  },
+  {
+    "id": "t19-error-helper-no-fallback",
+    "file": "apps/web/src/lib/config-issue-copy.ts",
+    "find": "return settingsSaveErrorText(err, msg, msg(\"schedule.error.failed\"));",
+    "replace": "return settingsSaveErrorText(err, msg, \"\");",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/rules-write-error-text.test.ts"
+        ],
+        "name": "an error that is not a rule refusal keeps its message"
+      }
+    ]
+  },
+  {
+    "id": "t19-model-fragment-empty-sweep",
+    "file": "apps/web/src/components/v2/match-rules-block-model.ts",
+    "find": "  if (storedOverride === null) return built;\n",
+    "replace": "  if (storedOverride === null) return {};\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-block-model.test.ts"
+        ],
+        "name": "each match field's offered options and number extremes"
       }
     ]
   }
