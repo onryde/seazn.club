@@ -1104,7 +1104,7 @@ SPEC §5.7, §6 W6/W8/B2, §9 public table, D10(b), anti-goal 3. Rule rows X-TB-
 
 ### Task 18: Hockey — the goal type becomes a required pad choice (wave 5, after Task 17)
 
-SPEC §5.6 `field_goals` row, B3; plan finding PF-2. **Invoke `frontend-design:frontend-design`**; phone composition rules apply (one DOM, `max-md:` branches; control-set diff at 320 vs 1280). Before building, the orchestrator shows the owner two options (A: the goal tap opens the kind chips and the soft-commit timer waits until one is chosen; B: the goal tile splits into Field goal / Penalty corner / Penalty stroke), then builds the chosen one. Rule row HK-TB-2.
+SPEC §5.6 `field_goals` row, B3; plan finding PF-2. **Invoke `frontend-design:frontend-design`**; phone composition rules apply (one DOM, `max-md:` branches; control-set diff at 320 vs 1280). **Owner chose option A (2026-10-20, after a clickable mockup):** the goal tap opens the kind chips (Field goal / Penalty corner / Penalty stroke), and the soft-commit timer waits until one is chosen; Cancel drops the goal. Option B (three goal tiles per side) was rejected. Rule row HK-TB-2.
 
 **Files:**
 - Modify: `E/sports/period/kernel.ts` — preset flag `goalKindRequired: boolean` (hockey true; ice hockey false); in `applyGoal :1094`, `if (strict && state.cfg.goalKindRequired && payload.kind === undefined) throw GOAL_KIND_REQUIRED`. **Strict only** (PF-2): replay stays lenient, so the frozen golden hockey streams with `{"by":"H"}` still fold (an untyped legacy goal counts as a field goal, B3's definition).
