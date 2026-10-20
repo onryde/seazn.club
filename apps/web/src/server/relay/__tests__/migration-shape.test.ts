@@ -656,7 +656,9 @@ describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", (
   // R2003b (V450): the crash tally's four columns. Every existing row reads "nothing counted" (0/0/0/null), and the table
   // holds the domain's invariant — the session's count includes the current attempt's — so a write that breaks it is
   // refused, beside its accepted twin. The CHECK's name is the migration's.
-  it("runner_crash_* (V450, R2003b): three smallint NOT NULL DEFAULT 0 counts and a nullable timestamptz; a new row reads 0/0/0/null; negatives and a count below either bound are REFUSED, the tally the domain writes is accepted", async () => {
+  // V467 (Owed 66) adds the fifth, `runner_crash_restart_seen`: this attempt has read an in-place restart's exit (75), so the
+  // restart-count floor stops counting it. A boolean NOT NULL DEFAULT false: every existing row reads "no restart seen".
+  it("runner_crash_* (V450, R2003b; V467, Owed 66): three smallint NOT NULL DEFAULT 0 counts, a nullable timestamptz and a boolean NOT NULL DEFAULT false; a new row reads 0/0/0/null/false; negatives and a count below either bound are REFUSED, the tally the domain writes is accepted", async () => {
     const r = await rig();
     const shapes = await sql<{ column_name: string; data_type: string; is_nullable: string; column_default: string | null }[]>`
       select column_name, data_type, is_nullable, column_default from information_schema.columns
@@ -667,11 +669,13 @@ describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", (
       { column_name: "runner_crash_count", data_type: "smallint", is_nullable: "NO", column_default: "0" },
       { column_name: "runner_crash_exit_at", data_type: "timestamp with time zone", is_nullable: "YES", column_default: null },
       { column_name: "runner_crash_exits", data_type: "smallint", is_nullable: "NO", column_default: "0" },
+      { column_name: "runner_crash_restart_seen", data_type: "boolean", is_nullable: "NO", column_default: "false" },
     ]);
     const sid = await insertSession(r, "live");
-    const [fresh] = await sql<{ c: number; b: number; e: number; at: Date | null }[]>`
-      select runner_crash_count as c, runner_crash_beats as b, runner_crash_exits as e, runner_crash_exit_at as at from fixture_stream_sessions where id = ${sid}`;
-    expect(fresh).toEqual({ c: 0, b: 0, e: 0, at: null });
+    const [fresh] = await sql<{ c: number; b: number; e: number; at: Date | null; seen: boolean }[]>`
+      select runner_crash_count as c, runner_crash_beats as b, runner_crash_exits as e, runner_crash_exit_at as at, runner_crash_restart_seen as seen
+        from fixture_stream_sessions where id = ${sid}`;
+    expect(fresh).toEqual({ c: 0, b: 0, e: 0, at: null, seen: false });
     const write = (c: number, b: number, e: number) =>
       sql`update fixture_stream_sessions set runner_crash_count = ${c}, runner_crash_beats = ${b}, runner_crash_exits = ${e}, runner_crash_exit_at = now() where id = ${sid}`;
     let refused = 0;

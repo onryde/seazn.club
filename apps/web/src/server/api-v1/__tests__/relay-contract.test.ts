@@ -29,6 +29,7 @@ import { z } from "zod";
 import Ajv2020 from "ajv/dist/2020";
 import addFormats from "ajv-formats";
 import * as S from "../schemas";
+import { RELAY_EXIT_REFUSED, RELAY_EXIT_RESTART } from "@/server/relay/config";
 import {
   PHASE_CHANNELS, PROGRAMME_PHASES, RELAY_PHASE_LONG_POLL_MAX_MS, RELAY_PHASE_PATH, RELAY_PHASE_PORT, parseRelayPhaseReply,
   type RelayPhaseReply as LibPhaseReply,
@@ -48,7 +49,7 @@ const parses = (twin: Twin, value: unknown): boolean => twin.safeParse(value).su
 
 /** `shasum -a 256 docs/contracts/relay-job.v1.json`. A contract change is a DELIBERATE bump: it moves this constant in
  *  the same commit, and the compositor re-vendors the file (C07's pin moves with it). */
-const SHA256 = "fc99d44899ee543cfe36c48902573501f815d68b4ec7c2e4bbb50d096608dc50";
+const SHA256 = "e656867729c9a0a05476ab85501dc61255db6a8826d75c74c195c34ff7f06a23";
 
 // ---------------------------------------------------------------------------------------------------------------
 // The rulebook, typed from the compositor's declarations — never read off the twin.
@@ -75,8 +76,9 @@ const SPEC_BEAT: Record<string, string[]> = {
   // air, so the ladder is `full → overlay_half_rate` and the bottom holds. `fast_preset` is retired (RETIRED_RUNG below).
   rung: ["full", "overlay_half_rate"],
   // The final beat's why (owner scope addition 2026-10-15): C06 lifecycle.rs `ExitReason { Ended, Deadline, Signalled,
-  // SessionGone, Refused, Fatal }`, snake_case on the wire.
-  exitReason: ["ended", "deadline", "signalled", "session_gone", "refused", "fatal"],
+  // SessionGone, Refused, Fatal }`, snake_case on the wire, plus C11b's `Restart` (compositor `docs/_INDEX.md` Owed 66,
+  // 2026-10-20): the in-place restart, which exits 75 and is not a crash.
+  exitReason: ["ended", "deadline", "signalled", "session_gone", "refused", "fatal", "restart"],
   // Overlay templates spec 2026-10-15 §4.3 (D10): the page reads its phase from the compositor's loopback endpoint (A),
   // or from this beat through its data poll (B, `web`); R2005 reports which one is live.
   phaseChannel: ["loopback", "web"],
@@ -134,7 +136,7 @@ const OVERLAY_PATH = (fixtureId: string) => `/overlay/fixtures/${fixtureId}`;
 /** Per fixture prefix: its $def, its twin and the exact count (never 0). First match wins. */
 const ROUTES: [prefix: string, def: string, count: number][] = [
   ["session-", "session", 6],
-  ["heartbeat-", "heartbeat", 9],
+  ["heartbeat-", "heartbeat", 10],
   ["reply-", "heartbeatReply", 2],
   // R2007 PR B: the compositor's loopback reply (never "reply-": that prefix is the web heartbeat's 200).
   ["phase-reply-", "phaseReply", 2],
@@ -286,7 +288,7 @@ describe("the relay-job.v1 contract (docs/contracts/relay-job.v1.json)", () => {
       total += count;
     }
     expect(names.length, "every fixture was routed").toBe(total);
-    expect(total).toBe(19);
+    expect(total).toBe(20);
     // Every REFUSED entry names a fixture that exists and was swept (a stale entry would excuse nothing, silently).
     expect(refusedSeen).toBe(Object.keys(REFUSED).length);
     expect(refusedSeen).toBe(2);
@@ -307,6 +309,9 @@ describe("the relay-job.v1 contract (docs/contracts/relay-job.v1.json)", () => {
     for (const name of ["heartbeat-final-fatal", "heartbeat-invalid-exit-reason", "heartbeat-invalid-exit-while-playing"]) expect(existsSync(resolve(FIXTURES, `${name}.json`)), name).toBe(true);
     expect(fixture("heartbeat-final-fatal")).toEqual({ state: "stopped", exitReason: "fatal", exitDetail: "programme start failed: cefsrc not found" });
     expect(fixture("heartbeat-invalid-exit-reason")).toMatchObject({ exitReason: "crashed" });
+    // Owed 66: the in-place restart's final beat, as C11b writes it (`restart in place: <cause>`, domain cef_health.rs).
+    expect(existsSync(resolve(FIXTURES, "heartbeat-final-restart.json")), "heartbeat-final-restart").toBe(true);
+    expect(fixture("heartbeat-final-restart")).toEqual({ state: "stopped", exitReason: "restart", exitDetail: "restart in place: a CEF zygote is gone (gen 1)" });
     // R2007 PR B's four, by name and content: the final hold on the primary channel; a channel outside the two words (a
     // one-field edit of the hold, so its refusal is that field's alone); the loopback reply in `final`, and one with a
     // key the strict reply refuses.
@@ -410,7 +415,26 @@ describe("the relay-job.v1 contract (docs/contracts/relay-job.v1.json)", () => {
       const outsider = field === "state" ? { state: "healthy" } : { state: EXIT_FIELDS.includes(field) ? "stopped" : "playing", [field]: "Live" };
       expect(parses(S.RelayHeartbeat, outsider), `${field}: an outsider`).toBe(false);
     }
-    expect(words).toBe(4 + 5 + 3 + 3 + 4 + 2 + 6 + 2);
+    expect(words).toBe(4 + 5 + 3 + 3 + 4 + 2 + 7 + 2);
+  });
+
+  // Owed 66: the contract says what each reason's exit code is ("fatal exits 70" was the one sentence the interim — `fatal`
+  // with exit 75 — broke). The codes are the compositor's (C06 Global Constraints "Exit codes"; C11b: Restart 75), typed
+  // here; web's two named codes must equal them, so the lifecycle's branches and the published sentence cannot drift.
+  it("Owed 66: exitReason's prose states every reason's exit code — clean reasons 0, refused 78, fatal 70, restart 75 — and web's named codes are the same numbers (counted)", () => {
+    const EXIT_CODES: Record<string, number> = { ended: 0, deadline: 0, signalled: 0, session_gone: 0, refused: 78, fatal: 70, restart: 75 };
+    expect(Object.keys(EXIT_CODES).sort(), "every word of the vocabulary has a code").toEqual([...SPEC_BEAT.exitReason!].sort());
+    const prose = String(propOf(defOf(contract(), "heartbeat"), "exitReason").description);
+    let stated = 0;
+    for (const [reason, code] of Object.entries(EXIT_CODES).filter(([, c]) => c !== 0)) {
+      expect(prose, `${reason} exits ${code}`).toContain(`${reason} exits ${code}`);
+      stated++;
+    }
+    expect(prose, "the clean reasons exit 0").toContain("ended, deadline, signalled and session_gone exit 0");
+    stated++;
+    expect(stated).toBe(4);
+    expect(RELAY_EXIT_REFUSED, "web's refusal code is the contract's").toBe(EXIT_CODES.refused);
+    expect(RELAY_EXIT_RESTART, "web's restart code is the contract's").toBe(EXIT_CODES.restart);
   });
 
   it("owner 2026-10-18: the ladder's bottom is overlay_half_rate — the retired fast_preset is refused by the twin AND the published bytes, beside the two rungs both admit", () => {
@@ -436,7 +460,7 @@ describe("the relay-job.v1 contract (docs/contracts/relay-job.v1.json)", () => {
       expect(JSON.stringify(fixture(name)), name).not.toContain(RETIRED_RUNG);
       vectors++;
     }
-    expect(vectors, "anti-vacuity: every vector read").toBe(19);
+    expect(vectors, "anti-vacuity: every vector read").toBe(20);
   });
 
   it("optional-versus-null and absent-versus-zero: each field R2 adds is optional and nullable (file and twin); counters are whole and non-negative, a present 0 admitted; only `state` is required", () => {

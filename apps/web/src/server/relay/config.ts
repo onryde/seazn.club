@@ -206,6 +206,13 @@ export const STALE_HEARTBEAT_SECONDS_COMPOSED = (3 * RELAY_HEARTBEAT_INTERVAL_MS
  *  replacement would be refused the same way, so a runner that exits with it never spends the ONE retry
  *  (domain/runner.ts `afterLostDestroyed`). */
 export const RELAY_EXIT_REFUSED = 78;
+/** Compositor C11b (`ExitReason::Restart`, `docs/_INDEX.md` Owed 56 / 66): the IN-PLACE RESTART's exit — sysexits' EX_TEMPFAIL.
+ *  The compositor restarts itself on a dead CEF zygote, repeated GPU-process deaths or 3 leaked teardowns: it sends a final
+ *  beat saying `exitReason: "restart"`, then exits 75, and Fly's `on-failure` restarts the process on the SAME Machine. It
+ *  is NOT a crash: R2003b's tally never counts it (domain/runner.ts `crashExitSeen`), neither as an exit nor through Fly's
+ *  restart count. Fly still charges it to `max_retries` (Owed 67, the owner's question), so `RUNNER_INPLACE_RESTARTS`
+ *  bounds restarts and crashes together; this PR puts no cap of its own on restarts. */
+export const RELAY_EXIT_RESTART = 75;
 /** Compositor ADR 0006 / `_FINDINGS.md` F-002 (C00 owner session, 2026-10-15): the camera→compositor delay measured
  *  IN-CHAIN (the overlay's clock against the camera's, 3083 and 3105 ms). The default `overlayDelayMs` a composed
  *  session serves when its fixture sets no override (R2004 writes `settings ?? this` at create; the override is

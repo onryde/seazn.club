@@ -385,6 +385,13 @@ describe("R2003 — restart and beat constants", () => {
     expect(config.RUNNER_INPLACE_RESTARTS).toBe(2);
     expect(config.RELAY_EXIT_REFUSED).toBe(78);
   });
+  // Compositor `_INDEX.md` Owed 66 / C11b decision (2): the in-place restart exits 75 (sysexits' EX_TEMPFAIL), after a final
+  // beat saying `restart`. Typed from the compositor's declaration, never read off the constant; distinct from every other
+  // code the lifecycle branches on (0 clean, 70 fatal, 78 refused), or `crashExitSeen` could not tell them apart.
+  it("RELAY_EXIT_RESTART is the compositor's in-place restart exit (75, EX_TEMPFAIL), distinct from clean 0, fatal 70 and refused 78", () => {
+    expect(config.RELAY_EXIT_RESTART, "compositor C11b: ExitReason::Restart").toBe(75);
+    expect(new Set([0, 70, config.RELAY_EXIT_REFUSED, config.RELAY_EXIT_RESTART]).size).toBe(4);
+  });
   // R2003b (owner approval 2026-10-16): "fail the session as machine_crash after 3 fatal crashes per session". F-007 is
   // why a cap is owed (Fly's window refills after ~330 s, so in-place restarts alone never end a slow crash loop), and it
   // fixes the cap's relation to the in-place budget: Fly restarts RUNNER_INPLACE_RESTARTS crashes per window and declines

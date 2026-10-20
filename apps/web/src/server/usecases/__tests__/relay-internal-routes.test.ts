@@ -35,7 +35,7 @@ import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { STREAM_PLATFORM_PRESETS } from "@/lib/stream-destinations";
 import { PHASE_CHANNELS, PROGRAMME_PHASES } from "@/lib/relay-phase";
 import {
-  MAX_DURATION_MINUTES, RELAY_EXIT_REFUSED, RELAY_HEARTBEAT_INTERVAL_MS, RELAY_OVERLAY_DELAY_DEFAULT_MS, RUNNER_CRASH_CAP, RUNNER_INPLACE_RESTARTS, RUNNER_MAX_ATTEMPTS, RUNNER_OBSERVE_SLACK_SECONDS,
+  MAX_DURATION_MINUTES, RELAY_EXIT_REFUSED, RELAY_EXIT_RESTART, RELAY_HEARTBEAT_INTERVAL_MS, RELAY_OVERLAY_DELAY_DEFAULT_MS, RUNNER_CRASH_CAP, RUNNER_INPLACE_RESTARTS, RUNNER_MAX_ATTEMPTS, RUNNER_OBSERVE_SLACK_SECONDS,
   RUNNER_RESTART_STUCK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS, STALE_HEARTBEAT_SECONDS_COMPOSED, WARMING_TIMEOUT_MINUTES,
 } from "@/server/relay/config";
 import { BEAT_EXIT_REASONS, failReasonFromExit, type BeatExitReason, type ExitInfo } from "@/server/relay/domain/runner";
@@ -179,9 +179,10 @@ async function row(sid: string) {
     state: string; fail_reason: string | null; end_reason: string | null; desired_state: string; heartbeat_at: string | null;
     runner_state: string; machine_id: string | null;
     runner_exit_code: number | null; runner_oom_killed: boolean | null; runner_requested_stop: boolean | null;
-    runner_crash_count: number; runner_crash_beats: number; runner_crash_exits: number;
+    runner_crash_count: number; runner_crash_beats: number; runner_crash_exits: number; runner_crash_restart_seen: boolean;
   }[]>`select state, fail_reason, end_reason, desired_state, heartbeat_at, runner_state, machine_id,
-              runner_exit_code, runner_oom_killed, runner_requested_stop, runner_crash_count, runner_crash_beats, runner_crash_exits
+              runner_exit_code, runner_oom_killed, runner_requested_stop, runner_crash_count, runner_crash_beats, runner_crash_exits,
+              runner_crash_restart_seen
          from fixture_stream_sessions where id = ${sid}`;
   return r!;
 }
@@ -1079,6 +1080,8 @@ describe.skipIf(!HAS_DB)("R2003: the final beat's exit reason through the heartb
     absent: "retry", null: "retry",
     ended: "ends:stopped", deadline: "ends:max_duration",
     fatal: "record", signalled: "record", session_gone: "record",
+    // Owed 66: the in-place restart is recorded and moves nothing — least of all the crash count (asserted below)
+    restart: "record",
     refused: "refused",
   };
 
@@ -1546,6 +1549,83 @@ describe.skipIf(!HAS_DB)("R2003b: the crash-loop cap through the heartbeat and f
 });
 
 // ---------------------------------------------------------------------------------------------------------------
+// Owed 66 through the REAL routes (compositor `docs/_INDEX.md`, C11b): the in-place restart — final beat `restart`, exit
+// 75, Fly restarting the process on the SAME Machine — is recorded and never counted as a crash. The tally round-trips
+// V450's columns and V467's `runner_crash_restart_seen` request to request, so a count that survives IS the witness.
+// ---------------------------------------------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("Owed 66: the in-place restart is not a crash, through the heartbeat and facts routes", () => {
+  const RESTART_EXIT: ExitInfo = { exitCode: RELAY_EXIT_RESTART, oomKilled: false, requestedStop: false };   // C11b: ExitReason::Restart
+
+  it("restart, restart, crash in ONE Fly window: ONE crash counted, the session LIVES on the ONE retry (the replacement carries 1, its restart evidence cleared) — and the SAME final exit with no restart before it is the 3 crashes F-007 measured and fails the session (the differential)", async () => {
+    const s = await playingSession();
+    const m1 = (await row(s.sessionId)).machine_id!;
+    const read = async () => getFacts(s.sessionId, { token: s.jobToken });
+    const t0 = Date.now();
+    expect((await row(s.sessionId)).runner_crash_restart_seen, "premise: nothing read yet").toBe(false);
+    for (let k = 1; k <= RUNNER_INPLACE_RESTARTS; k++) {
+      expect((await postBeat(s.sessionId, stoppedBeat("restart"), { token: s.jobToken })).status, `restart ${k}: its beat`).toBe(200);
+      s.runner.setObserved(m1, "pending", RESTART_EXIT, { since: new Date(t0 + k * 10), count: k });   // F-007: exit k carries restart_count k
+      expect((await read()).status, `restart ${k}: its exit`).toBe(200);
+      expect((await read()).status, `restart ${k}: its exit, read again`).toBe(200);
+      s.runner.setObserved(m1, "running");
+      expect((await postBeat(s.sessionId, { state: "playing" }, { token: s.jobToken })).status, `restart ${k}: the restarted process beats`).toBe(200);
+      expect(await row(s.sessionId), `after restart ${k}`).toMatchObject({
+        state: "live", runner_state: "playing", machine_id: m1, fail_reason: null,
+        runner_crash_count: 0, runner_crash_beats: 0, runner_crash_exits: 0, runner_crash_restart_seen: true,
+      });
+      expect(await lastHeartbeat(s.sessionId), `restart ${k}: the restarted process's beat is the stored one`).toMatchObject({ state: "playing" });
+      expect(s.runner.destroyed, `after restart ${k}`).toEqual([]);
+    }
+    // the crash: Fly's FINAL exit for the window (restart_count max_retries, not restarted)
+    s.runner.setObserved(m1, "stopped", CRASH_EXIT, { final: RUNNER_INPLACE_RESTARTS }, new Date(t0 + 30));
+    expect((await read()).status, "the crash's read: the session is still live").toBe(200);
+    expect(await row(s.sessionId), "ONE crash; lost at once (Fly will not restart it), so the ONE retry boots a replacement").toMatchObject({
+      state: "live", runner_state: "booting", fail_reason: null, runner_crash_count: 1, runner_crash_beats: 0, runner_crash_exits: 0, runner_crash_restart_seen: false,
+    });
+    expect(s.runner.destroyed).toEqual([m1]);
+    expect(s.runner.created, "the ONE retry").toHaveLength(RUNNER_MAX_ATTEMPTS);
+    expect(await crashCounts(s.sessionId), "the ledger: the crash, once").toEqual([1]);
+
+    // the differential: no restart before it → the floor reads 3 crashes and the cap fails the session on that one read
+    const d = await playingSession();
+    const dm = (await row(d.sessionId)).machine_id!;
+    d.runner.setObserved(dm, "stopped", CRASH_EXIT, { final: RUNNER_INPLACE_RESTARTS }, new Date(t0 + 30));
+    expect((await getFacts(d.sessionId, { token: d.jobToken })).status).toBe(410);
+    expect(await row(d.sessionId)).toMatchObject({ state: "failed", fail_reason: "machine_crash", runner_crash_count: RUNNER_INPLACE_RESTARTS + 1, runner_crash_restart_seen: false });
+  });
+
+  it("the INTERIM beat (`fatal` + exit 75, until the compositor re-vendors): each is one counted crash by its BEAT, the exit 75 beside it adds no exit crash, so two interim restarts are 2 and the third `fatal` fails machine_crash — today's behaviour, held on purpose", async () => {
+    const s = await playingSession();
+    const m1 = (await row(s.sessionId)).machine_id!;
+    const t0 = Date.now();
+    for (let k = 1; k < RUNNER_CRASH_CAP; k++) {
+      expect((await postBeat(s.sessionId, stoppedBeat("fatal"), { token: s.jobToken })).status, `interim ${k}: its beat`).toBe(200);
+      s.runner.setObserved(m1, "pending", RESTART_EXIT, { since: new Date(t0 + k * 10), count: k });
+      expect((await getFacts(s.sessionId, { token: s.jobToken })).status, `interim ${k}: its exit`).toBe(200);
+      s.runner.setObserved(m1, "running");
+      expect((await postBeat(s.sessionId, { state: "playing" }, { token: s.jobToken })).status).toBe(200);
+      expect(await row(s.sessionId), `after interim ${k}`).toMatchObject({ state: "live", runner_crash_count: k, runner_crash_beats: k, runner_crash_exits: 0, runner_crash_restart_seen: true });
+    }
+    expect((await postBeat(s.sessionId, stoppedBeat("fatal"), { token: s.jobToken })).status).toBe(200);
+    expect(await row(s.sessionId)).toMatchObject({ state: "failed", fail_reason: "machine_crash", runner_crash_count: RUNNER_CRASH_CAP });
+  });
+
+  it("an exit 75 alone (its beat lost) moves no count and no ledger row; a SECOND read of it changes nothing — only the restart-seen bit is set", async () => {
+    const s = await playingSession();
+    const m1 = (await row(s.sessionId)).machine_id!;
+    s.runner.setObserved(m1, "running", RESTART_EXIT, { restarted: 1 }, new Date(Date.now() - 5_000));
+    let checked = 0;
+    for (let i = 0; i < 2; i++) {
+      expect((await getFacts(s.sessionId, { token: s.jobToken })).status, `read ${i}`).toBe(200);
+      expect(await row(s.sessionId), `read ${i}`).toMatchObject({ state: "live", runner_state: "playing", runner_crash_count: 0, runner_crash_exits: 0, runner_crash_restart_seen: true });
+      checked++;
+    }
+    expect(await crashCounts(s.sessionId)).toEqual([]);
+    expect(checked).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
 // Owner 2026-10-18 (compositor `docs/_INDEX.md` Owed 20): any production step-down is a SIZING alarm. The compositor's
 // ladder is `full → overlay_half_rate` and the bottom holds (the score is never taken off air), so a beat whose rung is
 // not `full` says the Machine is short of CPU, and ops raise its size (compositor C17 runbook). The web side, which
@@ -1911,6 +1991,9 @@ describe.skipIf(!HAS_DB)("Owed 37: a late beat never overwrites the final stoppe
     absent: "new_attempt", null: "new_attempt",
     ended: "over_410", deadline: "over_410", refused: "over_410",
     fatal: "same_attempt_restart",
+    // Owed 66: Fly restarts an exit-75 run IN PLACE on the SAME attempt as well, and the restarted process's beats are what
+    // hold the stale window off — the guard must not drop them (AGENTS.md class 13: an idempotency guard skipping a legitimate arrival)
+    restart: "same_attempt_restart",
     signalled: "late_dropped", session_gone: "late_dropped",
   };
 
