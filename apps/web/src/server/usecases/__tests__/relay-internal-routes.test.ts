@@ -36,7 +36,7 @@ import { STREAM_PLATFORM_PRESETS } from "@/lib/stream-destinations";
 import { PHASE_CHANNELS, PROGRAMME_PHASES } from "@/lib/relay-phase";
 import {
   MAX_DURATION_MINUTES, RELAY_EXIT_REFUSED, RELAY_EXIT_RESTART, RELAY_HEARTBEAT_INTERVAL_MS, RELAY_OVERLAY_DELAY_DEFAULT_MS, RUNNER_CRASH_CAP, RUNNER_INPLACE_RESTARTS, RUNNER_MAX_ATTEMPTS, RUNNER_OBSERVE_SLACK_SECONDS,
-  RUNNER_RESTART_STUCK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS, STALE_HEARTBEAT_SECONDS_COMPOSED, WARMING_TIMEOUT_MINUTES,
+  RUNNER_RESTART_CAP, RUNNER_RESTART_STUCK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS, STALE_HEARTBEAT_SECONDS_COMPOSED, WARMING_TIMEOUT_MINUTES,
 } from "@/server/relay/config";
 import { BEAT_EXIT_REASONS, failReasonFromExit, type BeatExitReason, type ExitInfo } from "@/server/relay/domain/runner";
 import { setRelayDriversForTest } from "@/server/relay/drivers";
@@ -180,9 +180,10 @@ async function row(sid: string) {
     runner_state: string; machine_id: string | null;
     runner_exit_code: number | null; runner_oom_killed: boolean | null; runner_requested_stop: boolean | null;
     runner_crash_count: number; runner_crash_beats: number; runner_crash_exits: number; runner_crash_restart_seen: boolean;
+    runner_restart_count: number; runner_restart_beats: number; runner_restart_exits: number;   // Owed 67 (V468)
   }[]>`select state, fail_reason, end_reason, desired_state, heartbeat_at, runner_state, machine_id,
               runner_exit_code, runner_oom_killed, runner_requested_stop, runner_crash_count, runner_crash_beats, runner_crash_exits,
-              runner_crash_restart_seen
+              runner_crash_restart_seen, runner_restart_count, runner_restart_beats, runner_restart_exits
          from fixture_stream_sessions where id = ${sid}`;
   return r!;
 }
@@ -1118,6 +1119,8 @@ describe.skipIf(!HAS_DB)("R2003: the final beat's exit reason through the heartb
           // R2003b: the runner is untouched either way, but a fatal run is ONE crash on the row; signalled / session_gone none
           expect(after.runner_crash_count, `${label}: crashes counted`).toBe(reason === "fatal" ? 1 : 0);
           expect(after.runner_crash_restart_seen, `${label}: only the restart beat notes a restart`).toBe(reason === "restart");
+          // Owed 67: …and counts it (once); no other reason moves the restart tally
+          expect(after.runner_restart_count, `${label}: only the restart beat counts a restart`).toBe(reason === "restart" ? 1 : 0);
         } else {
           expect(after, label).toMatchObject({ state: "failed", fail_reason: "machine_refused" });
           expect(s.runner.created, `${label}: never a retry`).toHaveLength(1);
@@ -1407,6 +1410,14 @@ async function crashCounts(sid: string): Promise<number[]> {
   return rows.map((r) => r.n);
 }
 
+/** Owed 67: the ledger's restart counts, in order: the `restartsCounted` each runner_transition carried (session.ts eventRowsOf). */
+async function restartCounts(sid: string): Promise<number[]> {
+  const rows = await sql<{ n: number }[]>`
+    select (payload->>'restartsCounted')::int as n from fixture_stream_events
+     where session_id = ${sid} and kind = 'runner_transition' and payload ? 'restartsCounted' order by seq`;
+  return rows.map((r) => r.n);
+}
+
 describe.skipIf(!HAS_DB)("R2003b: the crash-loop cap through the heartbeat and facts routes", () => {
   it("the SEQUENCE: crash 1 → restarted → crash 2 → restarted → crash 3 FAILS machine_crash — each crash seen by its fatal beat AND its exit counts once; the Machine is torn down at the cap, no retry is spent, the next read is 410", async () => {
     expect(RUNNER_CRASH_CAP, "owner approval 2026-10-16").toBe(3);
@@ -1611,7 +1622,7 @@ describe.skipIf(!HAS_DB)("Owed 66: the in-place restart is not a crash, through 
     expect(await row(d.sessionId)).toMatchObject({ state: "failed", fail_reason: "machine_crash", runner_crash_count: RUNNER_INPLACE_RESTARTS + 1, runner_crash_restart_seen: false });
   });
 
-  it("review m1/m3: a restart whose EXIT no read ever saw is noted by its BEAT — restart, restart (beats only; the next exit overwrites the 75 as the newest), then the crash's final exit (restart_count 2, not restarted): ONE crash and the session lives on the ONE retry; the ledger names the beat `callback_restarted`, never a crash; a re-sent beat changes nothing", async () => {
+  it("review m1/m3: a restart whose EXIT no read ever saw is noted by its BEAT — restart, restart (beats only; the next exit overwrites the 75 as the newest), then the crash's final exit (restart_count 2, not restarted): ONE crash and the session lives on the ONE retry; the ledger names the beat `callback_restarted`, never a crash", async () => {
     const s = await playingSession();
     const m1 = (await row(s.sessionId)).machine_id!;
     const t0 = Date.now();
@@ -1653,17 +1664,220 @@ describe.skipIf(!HAS_DB)("Owed 66: the in-place restart is not a crash, through 
     expect(await row(s.sessionId)).toMatchObject({ state: "failed", fail_reason: "machine_crash", runner_crash_count: RUNNER_CRASH_CAP });
   });
 
-  it("an exit 75 alone (its beat lost) moves no count and no ledger row; a SECOND read of it changes nothing — only the restart-seen bit is set", async () => {
+  it("an exit 75 alone (its beat lost) moves no CRASH count and no crash ledger row; it is ONE restart on the first read (Owed 67) and a SECOND read of it changes nothing — and the restart-seen bit is set", async () => {
     const s = await playingSession();
     const m1 = (await row(s.sessionId)).machine_id!;
     s.runner.setObserved(m1, "running", RESTART_EXIT, { restarted: 1 }, new Date(Date.now() - 5_000));
     let checked = 0;
     for (let i = 0; i < 2; i++) {
       expect((await getFacts(s.sessionId, { token: s.jobToken })).status, `read ${i}`).toBe(200);
-      expect(await row(s.sessionId), `read ${i}`).toMatchObject({ state: "live", runner_state: "playing", runner_crash_count: 0, runner_crash_exits: 0, runner_crash_restart_seen: true });
+      expect(await row(s.sessionId), `read ${i}`).toMatchObject({ state: "live", runner_state: "playing", runner_crash_count: 0, runner_crash_exits: 0, runner_crash_restart_seen: true, runner_restart_count: 1, runner_restart_exits: 1, runner_restart_beats: 0 });
       checked++;
     }
     expect(await crashCounts(s.sessionId)).toEqual([]);
+    expect(await restartCounts(s.sessionId), "the ledger: the restart, once, never the re-read").toEqual([1]);
+    expect(checked).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// Owed 67 through the REAL routes (OWNER RULING 2026-10-20): the compositor's in-place self-restarts are capped at
+// RUNNER_RESTART_CAP per stream SESSION and the next one ends it — through the crash cap's own path (failed machine_crash,
+// torn down, no retry, the same money). Each restart's evidence arrives the way production's does: its final beat on the
+// heartbeat route, its exit 75 on the next read of the Machine (the facts route's reconcile → the fake provider). Every
+// request loads the row and persists it, so a count surviving request to request IS the witness that V468's columns
+// round-trip (cols → toSession → persist). Expected counts are the restarts each test makes.
+// ---------------------------------------------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("Owed 67: the restart cap through the heartbeat and facts routes", () => {
+  const RESTART_EXIT: ExitInfo = { exitCode: RELAY_EXIT_RESTART, oomKilled: false, requestedStop: false };   // C11b: ExitReason::Restart
+  /** Restart k's instant: NOW, plus k ms so each is later than the last (the exit's identity). Never a fixed base — a restart
+   *  window older than RUNNER_RESTART_STUCK_SECONDS is a loss after all, so a base taken at collection time reds a slow run. */
+  const instant = (k: number) => new Date(Date.now() + k);
+  type Played = Awaited<ReturnType<typeof playingSession>>;
+  /** The ledger's credit rows for one session, as `reason:delta` in order — the money a session's end moved. */
+  async function moneyOf(sid: string): Promise<string[]> {
+    return (await sql<{ reason: string; delta: number }[]>`select reason, delta from org_stream_credits where session_id = ${sid} order by created_at, id`)
+      .map((r) => `${r.reason}:${r.delta}`);
+  }
+  /** Restart k of a session, delivered whole: its evidence in the order given, then the restarted process's own beat. Only for a
+   *  restart the session SURVIVES (the one that ends it is asserted inline, since its requests answer 200/410 differently). */
+  async function restartOnce(s: Played, machine: string, k: number, evidence: "beat then exit" | "exit then beat" | "beat" | "exit", token = s.jobToken): Promise<void> {
+    const sendBeat = async () => expect((await postBeat(s.sessionId, stoppedBeat("restart"), { token })).status, `restart ${k}: its beat`).toBe(200);
+    const readExit = async () => {
+      // F-007: Fly restarts the process in place — the exit carries its instant (distinct per restart, taken NOW so it is
+      // inside RUNNER_RESTART_STUCK_SECONDS) and the window's restart count
+      s.runner.setObserved(machine, "pending", RESTART_EXIT, { since: instant(k), count: 1 });
+      expect((await getFacts(s.sessionId, { token: s.jobToken })).status, `restart ${k}: its exit`).toBe(200);
+      expect((await getFacts(s.sessionId, { token: s.jobToken })).status, `restart ${k}: its exit, read again`).toBe(200);
+    };
+    if (evidence === "beat then exit") { await sendBeat(); await readExit(); }
+    else if (evidence === "exit then beat") { await readExit(); await sendBeat(); }
+    else if (evidence === "beat") await sendBeat();
+    else await readExit();
+    s.runner.setObserved(machine, "running");
+    expect((await postBeat(s.sessionId, { state: "playing" }, { token })).status, `restart ${k}: the restarted process beats`).toBe(200);
+  }
+  const ledgerOfRestarts = (made: number): number[] => Array.from({ length: made }, (_, i) => i + 1);
+
+  it("the SEQUENCE: restarts 1..RUNNER_RESTART_CAP are survived — each seen by its beat AND its exit counts ONCE, the re-read never — and the NEXT restart's beat FAILS machine_crash: torn down at once, no retry spent, the next read 410, and a later restart beat or exit moves nothing", async () => {
+    expect(RUNNER_RESTART_CAP, "owner ruling 2026-10-20").toBe(6);
+    expect(RUNNER_MAX_ATTEMPTS, "premise: attempt 1 has a retry the cap must not spend").toBeGreaterThan(1);
+    const s = await playingSession();
+    const m1 = (await row(s.sessionId)).machine_id!;
+    for (let k = 1; k <= RUNNER_RESTART_CAP; k++) {
+      await restartOnce(s, m1, k, "beat then exit");
+      expect(await row(s.sessionId), `after restart ${k}`).toMatchObject({
+        state: "live", runner_state: "playing", machine_id: m1, fail_reason: null,
+        runner_crash_count: 0, runner_restart_count: k, runner_restart_beats: k, runner_restart_exits: k,
+      });
+      expect(s.runner.destroyed, `after restart ${k}: nothing torn down`).toEqual([]);
+    }
+    expect((await postBeat(s.sessionId, stoppedBeat("restart"), { token: s.jobToken })).status, "restart RUNNER_RESTART_CAP + 1: its beat").toBe(200);
+    // the teardown ran after commit and the fake confirmed the DELETE (destroy_ok): destroyed, and still failed — no retry
+    expect(await row(s.sessionId)).toMatchObject({ state: "failed", fail_reason: "machine_crash", runner_state: "destroyed", runner_crash_count: 0, runner_restart_count: RUNNER_RESTART_CAP + 1 });
+    expect(s.runner.destroyed, "torn down at the cap, once").toEqual([m1]);
+    expect(s.runner.created, "no retry, though attempt 1 had one").toHaveLength(1);
+    // restart 7's own exit and a later restart beat: the session is over — 410, nothing written
+    s.runner.setObserved(m1, "pending", RESTART_EXIT, { since: instant(RUNNER_RESTART_CAP + 2), count: 1 });
+    expect((await getFacts(s.sessionId, { token: s.jobToken })).status, "over").toBe(410);
+    expect((await postBeat(s.sessionId, stoppedBeat("restart"), { token: s.jobToken })).status, "a restart beat on the ended session").toBe(410);
+    expect(await row(s.sessionId), "…moves nothing").toMatchObject({ state: "failed", fail_reason: "machine_crash", runner_restart_count: RUNNER_RESTART_CAP + 1 });
+    expect(await restartCounts(s.sessionId), "the ledger: one row per counted restart, never the re-reads").toEqual(ledgerOfRestarts(RUNNER_RESTART_CAP + 1));
+    expect(await crashCounts(s.sessionId), "…and no counted crash").toEqual([]);
+  });
+
+  it("each restart seen by its EXIT alone (its beat lost) counts once too: RUNNER_RESTART_CAP are survived, and the read of the NEXT one fails machine_crash — torn down, no retry; the same restarts seen by their BEATS alone (exits never read) end it on the beat", async () => {
+    // exits alone
+    const s = await playingSession();
+    const m1 = (await row(s.sessionId)).machine_id!;
+    for (let k = 1; k <= RUNNER_RESTART_CAP; k++) {
+      await restartOnce(s, m1, k, "exit");
+      expect(await row(s.sessionId), `exits alone, after restart ${k}`).toMatchObject({ state: "live", runner_state: "playing", runner_restart_count: k, runner_restart_beats: 0, runner_restart_exits: k });
+    }
+    s.runner.setObserved(m1, "pending", RESTART_EXIT, { since: instant(RUNNER_RESTART_CAP + 1), count: 1 });
+    expect((await getFacts(s.sessionId, { token: s.jobToken })).status, "the read that exceeds the allowance ends the session").toBe(410);
+    expect(await row(s.sessionId)).toMatchObject({ state: "failed", fail_reason: "machine_crash", runner_state: "destroyed", runner_restart_count: RUNNER_RESTART_CAP + 1, runner_restart_exits: RUNNER_RESTART_CAP + 1 });
+    expect(s.runner.destroyed).toEqual([m1]);
+    expect(s.runner.created, "no retry").toHaveLength(1);
+    expect(await restartCounts(s.sessionId)).toEqual(ledgerOfRestarts(RUNNER_RESTART_CAP + 1));
+    // beats alone
+    const b = await playingSession();
+    const mb = (await row(b.sessionId)).machine_id!;
+    for (let k = 1; k <= RUNNER_RESTART_CAP; k++) await restartOnce(b, mb, k, "beat");
+    expect(await row(b.sessionId), "beats alone: the allowance survived").toMatchObject({ state: "live", runner_restart_count: RUNNER_RESTART_CAP, runner_restart_beats: RUNNER_RESTART_CAP, runner_restart_exits: 0 });
+    expect((await postBeat(b.sessionId, stoppedBeat("restart"), { token: b.jobToken })).status).toBe(200);
+    expect(await row(b.sessionId)).toMatchObject({ state: "failed", fail_reason: "machine_crash", runner_restart_count: RUNNER_RESTART_CAP + 1, runner_restart_beats: RUNNER_RESTART_CAP + 1 });
+  });
+
+  it("ONE restart seen both ways counts once in EITHER order — its exit first then its beat, and its beat first then its exit — and the count is the same on the row and in the ledger", async () => {
+    let checked = 0;
+    for (const order of ["beat then exit", "exit then beat"] as const) {
+      const s = await playingSession();
+      const m1 = (await row(s.sessionId)).machine_id!;
+      await restartOnce(s, m1, 1, order);
+      expect(await row(s.sessionId), order).toMatchObject({ state: "live", runner_restart_count: 1, runner_restart_beats: 1, runner_restart_exits: 1 });
+      expect(await restartCounts(s.sessionId), `${order}: the ledger`).toEqual([1]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("per SESSION, not per attempt: restarts seen by their beats, the restarted process never beats again, lost at the composed window → the ONE retry carries the count with the attempt's evidence cleared → the rest of the allowance is survived on the replacement (seen by exits) → the next ends the session THERE, and no third Machine is created", async () => {
+    const before = Math.floor(RUNNER_RESTART_CAP / 2);
+    const s = await playingSession();
+    const m1 = (await row(s.sessionId)).machine_id!;
+    for (let k = 1; k <= before; k++) await restartOnce(s, m1, k, "beat");
+    await advance(s.sessionId, STALE_HEARTBEAT_SECONDS_COMPOSED);
+    expect((await getFacts(s.sessionId, { token: s.jobToken })).status).toBe(200);
+    expect(s.runner.destroyed, "lost at the window: torn down").toEqual([m1]);
+    expect(s.runner.created, "the ONE retry").toHaveLength(RUNNER_MAX_ATTEMPTS);
+    expect(await row(s.sessionId), "the replacement carries the session's restarts, not the attempt's evidence").toMatchObject({
+      state: "live", runner_state: "booting", runner_restart_count: before, runner_restart_beats: 0, runner_restart_exits: 0,
+    });
+    const token2 = s.runner.created[1]!.jobToken;
+    expect((await postBeat(s.sessionId, { state: "playing" }, { token: token2 })).status).toBe(200);
+    const m2 = (await row(s.sessionId)).machine_id!;
+    for (let k = before + 1; k <= RUNNER_RESTART_CAP; k++) {
+      await restartOnce(s, m2, k, "exit", token2);
+      expect(await row(s.sessionId), `restart ${k} (the session's ${k}th)`).toMatchObject({ state: "live", runner_state: "playing", machine_id: m2, runner_restart_count: k, runner_restart_beats: 0, runner_restart_exits: k - before });
+    }
+    expect(RUNNER_RESTART_CAP + 1 - before, "premise: the replacement ALONE sees no more than the allowance").toBeLessThanOrEqual(RUNNER_RESTART_CAP);
+    // the ending restart is seen by the same kind of evidence as the replacement's others (its exit): MAX of the two bounds
+    // would hide a lone beat behind three exits — the pinned mixed-evidence residual (runner.test.ts), not this test's subject
+    s.runner.setObserved(m2, "pending", RESTART_EXIT, { since: instant(RUNNER_RESTART_CAP + 1), count: 1 });
+    expect((await getFacts(s.sessionId, { token: token2 })).status, "the read that exceeds the allowance ends the session").toBe(410);
+    expect(await row(s.sessionId)).toMatchObject({ state: "failed", fail_reason: "machine_crash", runner_restart_count: RUNNER_RESTART_CAP + 1 });
+    expect(s.runner.created, "no third Machine").toHaveLength(RUNNER_MAX_ATTEMPTS);
+    expect(s.runner.destroyed, "the replacement is torn down at the cap").toEqual([m1, m2]);
+  });
+
+  it("the two caps are INDEPENDENT through the routes: RUNNER_CRASH_CAP - 1 fatal beats and RUNNER_RESTART_CAP restarts interleaved leave the session live with each count its own; the next CRASH ends it, and (a fresh session) so does the next RESTART", async () => {
+    const crashesAllowed = RUNNER_CRASH_CAP - 1;
+    let checked = 0;
+    for (const ender of ["fatal", "restart"] as const) {
+      const s = await playingSession();
+      const m1 = (await row(s.sessionId)).machine_id!;
+      const events: ("fatal" | "restart")[] = [];
+      for (let c = crashesAllowed, r = RUNNER_RESTART_CAP; c + r > 0;) { if (r > 0) { events.push("restart"); r--; } if (c > 0) { events.push("fatal"); c--; } }
+      let crashes = 0, restarts = 0;
+      for (const ev of events) {
+        if (ev === "fatal") {
+          expect((await postBeat(s.sessionId, stoppedBeat("fatal"), { token: s.jobToken })).status).toBe(200);
+          expect((await postBeat(s.sessionId, { state: "playing" }, { token: s.jobToken })).status).toBe(200);
+          crashes++;
+        } else { restarts++; await restartOnce(s, m1, restarts, "beat then exit"); }
+        expect(await row(s.sessionId), `${ender}: after ${ev}`).toMatchObject({ state: "live", runner_state: "playing", runner_crash_count: crashes, runner_restart_count: restarts });
+        checked++;
+      }
+      expect({ crashes, restarts }, "premise: both allowances are used up").toEqual({ crashes: crashesAllowed, restarts: RUNNER_RESTART_CAP });
+      expect((await postBeat(s.sessionId, stoppedBeat(ender), { token: s.jobToken })).status).toBe(200);
+      expect(await row(s.sessionId), ender).toMatchObject({
+        state: "failed", fail_reason: "machine_crash", runner_state: "destroyed",
+        runner_crash_count: ender === "fatal" ? RUNNER_CRASH_CAP : crashesAllowed, runner_restart_count: ender === "restart" ? RUNNER_RESTART_CAP + 1 : RUNNER_RESTART_CAP,
+      });
+      expect(s.runner.created, `${ender}: no retry`).toHaveLength(1);
+      checked++;
+    }
+    expect(checked).toBe(2 * (RUNNER_CRASH_CAP - 1 + RUNNER_RESTART_CAP + 1));
+  });
+
+  it("a restart arriving during OUR OWN stop is a no-op: at the allowance's edge, the organiser stops the session, the restart that would have exceeded it (its beat, then its exit) changes nothing, and the stop COMPLETES stopped — it is not turned into a failure", async () => {
+    const s = await playingSession();
+    const m1 = (await row(s.sessionId)).machine_id!;
+    for (let k = 1; k <= RUNNER_RESTART_CAP; k++) await restartOnce(s, m1, k, "beat");
+    // a real Machine takes its flush to exit after the SIGINT; the fake would report it stopped at once, so this stop is
+    // ACCEPTED and nothing more — the restart then lands while `stopping`
+    const slowStop = Object.assign(Object.create(s.runner) as FakeRunner, { async stop() { /* signalled; still flushing */ } });
+    setRelayDriversForTest({ ingest: s.ingest, runner: slowStop });
+    await stopSession(s.auth, s.fixtureId, s.sessionId, defaultDeps("http://app.test"));
+    expect(await row(s.sessionId), "premise: our stop is in flight at the allowance's edge").toMatchObject({ runner_state: "stopping", runner_restart_count: RUNNER_RESTART_CAP });
+    expect((await postBeat(s.sessionId, stoppedBeat("restart"), { token: s.jobToken })).status).toBe(200);
+    s.runner.setObserved(m1, "running", RESTART_EXIT, { restarted: 1 }, instant(1));
+    expect((await getFacts(s.sessionId, { token: s.jobToken })).status).toBe(200);
+    expect(await row(s.sessionId), "the restart during the stop").toMatchObject({ runner_state: "stopping", fail_reason: null, runner_restart_count: RUNNER_RESTART_CAP });
+    s.runner.setObserved(m1, "destroyed", { exitCode: 0, oomKilled: false, requestedStop: true });
+    let reads = 0;
+    while (!["completed", "failed"].includes((await row(s.sessionId)).state) && reads < 4) { await getFacts(s.sessionId, { token: s.jobToken }); reads++; }
+    expect(await row(s.sessionId)).toMatchObject({ state: "completed", end_reason: "stopped", fail_reason: null, runner_restart_count: RUNNER_RESTART_CAP });
+    expect(s.runner.created).toHaveLength(1);
+  });
+
+  // "Charging and refunds follow exactly what a crash-cap end does today": same signal, same effects, same rows. Witnessed on
+  // the ledger of a session that went LIVE (it consumed its credit) and of one that never did (warming: nothing to consume).
+  it("the money is the crash cap's, row for row: a restart-capped session and a crash-capped one end with the SAME credit rows — live (the go-live consume stands, no refund) and still warming (nothing consumed, nothing refunded)", async () => {
+    let checked = 0;
+    for (const phase of ["live", "warming"] as const) {
+      const crash = phase === "live" ? await playingSession() : await session();
+      const restart = phase === "live" ? await playingSession() : await session();
+      for (let k = 1; k <= RUNNER_CRASH_CAP; k++) expect((await postBeat(crash.sessionId, stoppedBeat("fatal"), { token: crash.jobToken })).status).toBe(200);
+      for (let k = 1; k <= RUNNER_RESTART_CAP + 1; k++) expect((await postBeat(restart.sessionId, stoppedBeat("restart"), { token: restart.jobToken })).status).toBe(200);
+      expect(await row(crash.sessionId), `${phase}: crash-capped`).toMatchObject({ state: "failed", fail_reason: "machine_crash", runner_state: "destroyed" });
+      expect(await row(restart.sessionId), `${phase}: restart-capped`).toMatchObject({ state: "failed", fail_reason: "machine_crash", runner_state: "destroyed" });
+      const crashMoney = await moneyOf(crash.sessionId);
+      expect(await moneyOf(restart.sessionId), `${phase}: the same credit rows`).toEqual(crashMoney);
+      expect(crashMoney, `${phase}: premise — the crash cap's own money`).toEqual(phase === "live" ? ["consume:-1"] : []);
+      checked++;
+    }
     expect(checked).toBe(2);
   });
 });

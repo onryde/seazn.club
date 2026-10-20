@@ -62,6 +62,16 @@ describe("sanitise — allowlist", () => {
     expect(sanitise(row!.payload)).toEqual(row!.payload);
     expect(Object.keys(row!.payload).filter((k) => !ALLOWED_KEYS.has(k))).toEqual([]);
   });
+  it("Owed 67: a counted restart's runner_transition payload survives WHOLE — `restartsCounted` included (the payload is the REAL eventRowsOf's, never a typed copy)", () => {
+    const live: Session = { id: "s1", fixtureId: "f1", orgId: "o1", mode: "composed", state: "live", desiredState: "live", failReason: null, endReason: null,
+      runner: { ...RUNNER_NONE, state: "playing", attempt: 1, name: "relay-s1-r1", machineId: "m1" }, runnerRetries: 0, createdAt: new Date(0), startedAt: new Date(0),
+      endedAt: null, heartbeatAt: new Date(0), beatWindowAt: null, endingAt: null, maxDurationMinutes: 300, outputUid: null, startCause: "organiser", warmingAt: null };
+    const c: Command = { type: "runner", trigger: { type: "callback_restarted" } };
+    const [row] = eventRowsOf(live, decide(live, c, new Date(1)), c).filter((r) => r.kind === "runner_transition");
+    expect(row!.payload, "premise: the step counted a restart").toHaveProperty("restartsCounted", 1);
+    expect(sanitise(row!.payload)).toEqual(row!.payload);
+    expect(Object.keys(row!.payload).filter((k) => !ALLOWED_KEYS.has(k))).toEqual([]);
+  });
   it("capture QR v2 T6: the create action's pairingId and startCause survive — the operator start is traceable to the pairing that made it", () => {
     const written = { pairingId: "6f1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", startCause: "operator", mode: "passthrough", targetId: "t1" };
     expect(sanitise(written)).toEqual(written);
