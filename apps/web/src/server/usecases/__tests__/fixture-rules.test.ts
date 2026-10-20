@@ -22,6 +22,7 @@ import {
 import { checkFixtureOverride, deciderKeysFor, fixtureKeysFor, sportTopKeys, type AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { declaredCfgs, lineupFromCatalog, makeEnvelope } from "@seazn/engine/testkit";
+import en from "@/dictionaries/en/ui.json";
 import { canonicalJson } from "@/lib/canonical-json";
 import { sql, withTenant } from "@/lib/db";
 import { appendEvent } from "@/server/engine-db";
@@ -556,17 +557,25 @@ describe.skipIf(!HAS_DB)("X-SR-5 P5 correction of a started match", () => {
     expect((await row(id)).config_snapshot).toMatchObject({ bestOf: 1 });
   });
 
-  it("finalized → FIXTURE_FORMAT_LOCKED; cancelled likewise", async () => {
+  it("finalized → FIXTURE_FORMAT_LOCKED saying finished; cancelled → the same code saying cancelled (batch-6 M-1)", async () => {
+    // The sentence per status is read off the en dictionary (the server's English IS the en copy); the `reason` the wire
+    // carries is the contract a client says it with (`ruleRefusalText`): a cancelled match is not "finished".
+    const EN = en as Record<string, string>;
+    const want = {
+      finalized: { reason: "finished", message: EN["rules.err.fixtureFormatLocked"]! },
+      cancelled: { reason: "cancelled", message: EN["matchRules.lockedCancelled"]! },
+    } as const;
+    expect(want.cancelled.message, "the premise: the two sentences differ").not.toBe(want.finalized.message);
     let checked = 0;
-    for (const status of ["finalized", "cancelled"]) {
+    for (const status of ["finalized", "cancelled"] as const) {
       const b = await badmintonLeague();
       await sql`update fixtures set status = ${status} where id = ${b.fixtureIds[0]!}`;
       await expect(writeFixtureRulesOverride(b.auth, [b.fixtureIds[0]!], { bestOf: 1 })).rejects.toMatchObject({
         status: 409,
         code: "FIXTURE_FORMAT_LOCKED",
-        // Batch-3 M1: why it is locked, for a client to say it with; the sentence says finished.
-        extra: { fixture_id: b.fixtureIds[0], reason: "finished" },
-        message: "This match is finished — its format is locked.",
+        // Batch-3 M1: why it is locked, for a client to say it with.
+        extra: { fixture_id: b.fixtureIds[0], reason: want[status].reason },
+        message: want[status].message,
       });
       checked++;
     }

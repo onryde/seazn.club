@@ -39,7 +39,7 @@ export type { MatchRulesBlockProps, MatchRulesState } from "./match-rules-block-
 type LockReason = "decided" | "cancelled" | "finished";
 const LOCK_KEY = {
   decided: FIXTURE_LOCK_KEYS.decided,
-  cancelled: "matchRules.lockedCancelled",
+  cancelled: FIXTURE_LOCK_KEYS.cancelled,
   finished: "matchRules.locked",
 } as const satisfies Record<LockReason, MessageKey>;
 

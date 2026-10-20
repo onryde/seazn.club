@@ -198,7 +198,7 @@ function overrideFor(
 }
 
 // Batch-3 M1: each refusal carries the facts a client says it with (`lib/rule-errors.ts` `ruleRefusalText`): why a match
-// is locked (`reason`: finished, or decided without play — a bye, an award its format cannot re-score), and which fit
+// is locked (`reason`: finished, cancelled, or decided without play — a bye, an award its format cannot re-score), and which fit
 // reason refused it (`fit_reason`, absent for the engine's own sentence).
 const lockedRefusal = (id: string, lock: FixtureLockReason) =>
   new HttpError(RULE_ERROR_STATUS.FIXTURE_FORMAT_LOCKED, ruleErrorMessage("FIXTURE_FORMAT_LOCKED", { lock }), "FIXTURE_FORMAT_LOCKED", {
@@ -291,7 +291,8 @@ export async function writeFixtureRulesOverride(
       if (!row) throw new HttpError(404, "fixture not found", undefined, { fixture_id: id });
       assertNotFrozen(frozen, row.competition_id);
       // (1)
-      if (LOCKED_FIXTURE_STATUSES.has(row.status)) throw lockedRefusal(id, "finished");
+      // Batch-6 M-1: a cancelled match says cancelled (it was never finished); every other locked status is finished.
+      if (LOCKED_FIXTURE_STATUSES.has(row.status)) throw lockedRefusal(id, row.status === "cancelled" ? "cancelled" : "finished");
       const m = resolveModule(row.sport_key, row.module_version);
       // The stage's format (`division ⊕ stage.rules ⊕ bracketDeciders`), as the resolver builds it for this row.
       const stageResolved = liveCfg(row.division_config, { kind: row.stage_kind, config: row.stage_config }, m);

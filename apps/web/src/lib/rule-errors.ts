@@ -56,14 +56,18 @@ export const RULE_ERROR_KEYS = {
   FIXTURE_RULES_CHANGED: "rules.err.fixtureRulesChanged",
 } as const satisfies Record<RuleErrorCode, MessageKey>;
 
-/** Why a match's format is locked (`FIXTURE_FORMAT_LOCKED`'s `extra.reason`): FINISHED (finalized or cancelled), or
+/** Why a match's format is locked (`FIXTURE_FORMAT_LOCKED`'s `extra.reason`): FINISHED (finalized), CANCELLED (batch-6
+ *  M-1: a called-off match is not a finished one, and the sentence must not say so; the match block's own sentence), or
  *  DECIDED without play where no correction applies — a bye, or an award its current format cannot re-score (the
  *  batch-3 review: neither is a finished match, and the sentence must not say so). */
 export const FIXTURE_LOCK_KEYS = {
   finished: "rules.err.fixtureFormatLocked",
+  cancelled: "matchRules.lockedCancelled",
   decided: "rules.err.fixtureDecidedWithoutPlay",
 } as const satisfies Record<string, MessageKey>;
 export type FixtureLockReason = keyof typeof FIXTURE_LOCK_KEYS;
+/** A reason this app can say (an older or newer server's other value reads as finished, the pre-M-1 default). */
+const isLockReason = (r: unknown): r is FixtureLockReason => typeof r === "string" && Object.hasOwn(FIXTURE_LOCK_KEYS, r);
 
 /** The sentences the codes' own sentences are built with. */
 export const RULE_ERROR_SUPPORT_KEYS = {
@@ -216,7 +220,7 @@ export function ruleRefusalText(code: string | undefined, extra: Readonly<Record
       return typeof stage === "string" ? sentence(code, { stage }, m) : null;
     }
     case "FIXTURE_FORMAT_LOCKED":
-      return sentence(code, { lock: x.reason === "decided" ? "decided" : "finished" }, m);
+      return sentence(code, { lock: isLockReason(x.reason) ? x.reason : "finished" }, m);
     case "FORMAT_DOES_NOT_FIT_PLAY": {
       const fit = typeof x.fit_reason === "string" && Object.hasOwn(FORMAT_FIT_REASON_KEYS, x.fit_reason)
         ? m(FORMAT_FIT_REASON_KEYS[x.fit_reason as FormatFitReason])

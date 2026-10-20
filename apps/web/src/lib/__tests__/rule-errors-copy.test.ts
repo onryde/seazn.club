@@ -47,7 +47,7 @@ describe("every W2c refusal code has a key, in all four locales", () => {
     expect(CODES.length, "anti-vacuity: the code table is not empty").toBeGreaterThan(0);
     expect(Object.keys(RULE_ERROR_KEYS).sort()).toEqual([...CODES].sort());
     expect(Object.keys(FORMAT_FIT_REASON_KEYS).sort()).toEqual(Object.keys(FORMAT_FIT_REASONS).sort());
-    expect(Object.keys(FIXTURE_LOCK_KEYS).sort()).toEqual(["decided", "finished"]);
+    expect(Object.keys(FIXTURE_LOCK_KEYS).sort()).toEqual(["cancelled", "decided", "finished"]);
   });
 
   it("each key is present, non-empty, translated, and carries the en placeholders in es/fr/nl (counted)", () => {
@@ -91,6 +91,7 @@ describe("the server's English is the en dictionary", () => {
       ["DIVISION_FORMAT_LOCKED", { stage: "Pool A" }, say(RULE_ERROR_KEYS.DIVISION_FORMAT_LOCKED, { stage: "Pool A" })],
       ["FIXTURE_FORMAT_LOCKED", {}, say(FIXTURE_LOCK_KEYS.finished)],
       ["FIXTURE_FORMAT_LOCKED", { lock: "decided" }, say(FIXTURE_LOCK_KEYS.decided)],
+      ["FIXTURE_FORMAT_LOCKED", { lock: "cancelled" }, say(FIXTURE_LOCK_KEYS.cancelled)],
       ["FORMAT_DOES_NOT_FIT_PLAY", {}, say(RULE_ERROR_KEYS.FORMAT_DOES_NOT_FIT_PLAY)],
       ["FORMAT_DOES_NOT_FIT_PLAY", { reason: FORMAT_FIT_REASONS.ends }, FORMAT_FIT_REASONS.ends],
       ["RULE_NOT_SETTABLE", { field: "bestOf" }, say(RULE_ERROR_KEYS.RULE_NOT_SETTABLE, { field: "bestOf" })],
@@ -128,6 +129,7 @@ describe("ruleRefusalText — the client reads the code and its extra, in the re
       ["DIVISION_FORMAT_LOCKED", { refused: [{ field: "bestOf", code: "DIVISION_FORMAT_LOCKED", stageId: "s", stageName: "Finals" }] }, sayEs(RULE_ERROR_KEYS.DIVISION_FORMAT_LOCKED, { stage: "Finals" })],
       ["FIXTURE_FORMAT_LOCKED", { fixture_id: "f", reason: "finished" }, sayEs(FIXTURE_LOCK_KEYS.finished)],
       ["FIXTURE_FORMAT_LOCKED", { fixture_id: "f", reason: "decided" }, sayEs(FIXTURE_LOCK_KEYS.decided)],
+      ["FIXTURE_FORMAT_LOCKED", { fixture_id: "f", reason: "cancelled" }, sayEs(FIXTURE_LOCK_KEYS.cancelled)],
       ["FORMAT_DOES_NOT_FIT_PLAY", { fixture_id: "f", fit_reason: "ends" }, sayEs(FORMAT_FIT_REASON_KEYS.ends)],
       ["FORMAT_DOES_NOT_FIT_PLAY", { fixture_id: "f", fixture_no: 7, fit_reason: "result" }, sayEs(RULE_ERROR_SUPPORT_KEYS.matchSays, { match: sayEs(RULE_ERROR_SUPPORT_KEYS.match, { n: 7 }), reason: sayEs(FORMAT_FIT_REASON_KEYS.result) })],
       // The engine's own sentence (no fit reason): nothing this app can say better — the caller shows the message.
@@ -160,6 +162,26 @@ describe("ruleRefusalText — the client reads the code and its extra, in the re
     expect([...seen].sort(), "anti-vacuity: every code was asked").toEqual([...CODES].sort());
     expect(localized, "both answers are witnessed").toBe(table.filter((r) => r[2] !== null).length);
     expect(localized).toBeGreaterThan(0);
+  });
+
+  it("a cancelled match's lock says cancelled, never finished, in every locale (batch-6 M-1, counted)", () => {
+    let checked = 0;
+    for (const [loc, dict] of LOCALES) {
+      const d = dict as unknown as Record<string, string>;
+      const m = (key: string, vars: Record<string, string | number> = {}) =>
+        d[key]!.replace(/\{(\w+)\}/g, (h, name: string) => (name in vars ? String(vars[name]) : h));
+      const got = ruleRefusalText("FIXTURE_FORMAT_LOCKED", { fixture_id: "f", reason: "cancelled" }, m as never);
+      // The sentence is the dictionary's own cancelled lock (the match block's), read off the key the lock names.
+      expect(got, `${loc} cancelled`).toBe(d["matchRules.lockedCancelled"]);
+      expect(FIXTURE_LOCK_KEYS.cancelled, "the lock key IS the block's cancelled sentence").toBe("matchRules.lockedCancelled");
+      expect(got, `${loc} is not the finished sentence`).not.toBe(d[FIXTURE_LOCK_KEYS.finished]);
+      // And the other two reasons keep their own sentences (the sequence: a finished lock after a cancelled one).
+      expect(ruleRefusalText("FIXTURE_FORMAT_LOCKED", { reason: "finished" }, m as never), `${loc} finished`).toBe(d[FIXTURE_LOCK_KEYS.finished]);
+      expect(ruleRefusalText("FIXTURE_FORMAT_LOCKED", { reason: "decided" }, m as never), `${loc} decided`).toBe(d[FIXTURE_LOCK_KEYS.decided]);
+      expect(ruleRefusalText("FIXTURE_FORMAT_LOCKED", { reason: "something-new" }, m as never), `${loc} unknown reason keeps the old default`).toBe(d[FIXTURE_LOCK_KEYS.finished]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: all four locales").toBe(4);
   });
 
   it("empty case first: no code, an unknown code, or a missing param is null (the caller keeps its own copy)", () => {
