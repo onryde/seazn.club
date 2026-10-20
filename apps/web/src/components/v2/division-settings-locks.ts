@@ -5,7 +5,8 @@
 // fields to those refusals and words them: no second opinion about what is locked.
 //
 // Client-safe: no `server-only`, no JSX. The sentences are the dictionary's (`ruleLock.*`), said in the reader's language.
-import { SPORT_RULES } from "@/lib/match-rules";
+import type { RuleField } from "@/lib/match-rules";
+import { BEST_OF_ONE_PAIR } from "@/lib/match-rules/best-of-one";
 import type { MessageKey } from "@/lib/messages";
 import type { RefusedField } from "@/lib/rule-errors";
 
@@ -64,10 +65,14 @@ export interface RefusedLine {
  * key) is not named by its raw key: all of them are ONE line, "Other format settings", worded by the first of them. So a
  * refused variant reads as the handful of settings the organiser sees, not as the length of its cascade.
  *
+ * `fields` is what the form SHOWS (`visibleRuleFields`, over the values and inherited config its grid reads), not the sport's
+ * whole table (batch-6 T20-1): on best of 1 the points pair collapses to one control and the other is hidden, so a line must
+ * never name a control the organiser cannot see. One control writes both keys of the pair, so a refusal of the HIDDEN key is
+ * a refusal of the visible one - one line, not "other settings".
+ *
  * `pointsBox`: this division edits its standings points in the form (the `points` key is then that group, not "other").
  */
-export function refusedLines(sportKey: string, refused: readonly RefusedField[], m: Msg, pointsBox: boolean): RefusedLine[] {
-  const fields = Object.hasOwn(SPORT_RULES, sportKey) ? SPORT_RULES[sportKey]! : [];
+export function refusedLines(fields: readonly RuleField[], refused: readonly RefusedField[], m: Msg, pointsBox: boolean): RefusedLine[] {
   const lines: RefusedLine[] = [];
   const listed = new Set<string>();
   let other: RefusedLine | undefined;
@@ -80,7 +85,11 @@ export function refusedLines(sportKey: string, refused: readonly RefusedField[],
       lines.push({ id: r.field, label: m("divset.standingsPoints"), lock: r });
       continue;
     }
-    const named = fields.find((f) => f.key === r.field) ?? fields.find((f) => f.edits.some((e) => topOf(e) === r.field));
+    const named =
+      fields.find((f) => f.key === r.field) ??
+      fields.find((f) => f.edits.some((e) => topOf(e) === r.field)) ??
+      // The hidden twin of a collapsed pair (best of 1): the visible control writes it too.
+      (r.field === BEST_OF_ONE_PAIR.shadow ? fields.find((f) => f.key === BEST_OF_ONE_PAIR.shown) : undefined);
     if (named === undefined) {
       other ??= { id: "other", label: m("ruleLock.otherSettings"), lock: r };
       continue;

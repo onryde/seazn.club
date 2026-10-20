@@ -17,7 +17,8 @@ import { divisionAccent, monogram } from "@/lib/division-hue";
 import { SWISS_ROUNDS_REQUIRED_CODE } from "@/lib/swiss-shell";
 import { ONLINE_CHESS_DISABLED_CODE } from "@/lib/online-chess";
 import { CAMERA_POLICIES, type CameraPolicy } from "@/lib/camera-policy";
-import { MatchRuleFields, hydrateRuleValues, SPORT_RULES } from "./match-rules";
+import { MatchRuleFields, hydrateRuleValues, rulesFor } from "./match-rules";
+import { visibleRuleFields } from "@/lib/match-rules";
 import { divisionFormatPatch } from "./division-format-patch";
 import {
   LICHESS_CLOCK_FIELD_KEYS,
@@ -371,7 +372,7 @@ const POINTS_KEY_CONCEPT: Record<string, { order: number; labelKey: MessageKey }
 
 function editablePointsKeys(sportKey: string, points: Record<string, unknown> | undefined): string[] {
   if (!points) return [];
-  const dedicated = new Set((SPORT_RULES[sportKey] ?? []).map((f) => f.key));
+  const dedicated = new Set(rulesFor(sportKey).map((f) => f.key));
   return Object.keys(points)
     .filter((k) => !dedicated.has(k) && POINTS_KEY_CONCEPT[k])
     .sort((a, b) => POINTS_KEY_CONCEPT[a]!.order - POINTS_KEY_CONCEPT[b]!.order);
@@ -499,6 +500,9 @@ export function DivisionSettings({
   // the saved config's OWN points shape, not the sport key (see
   // editablePointsKeys above).
   const pointsFieldKeys = editablePointsKeys(division.sport_key, cfg.points);
+  // The saved config the rule fields fall back to. ONE value read by the grid (`MatchRuleFields`) and by the "kept" lines
+  // (`refusedLines`), so both see the same visible controls (batch-6 T20-1: best of 1 hides one of the points pair).
+  const inheritedCfg = (division.config as Record<string, unknown>) ?? {};
   const [pointsValues, setPointsValues] = useState<Record<string, string>>(() =>
     hydratePointsValues(division.sport_key, cfg.points),
   );
@@ -647,7 +651,7 @@ export function DivisionSettings({
     if (lockLineFor("variant_key", refused) !== undefined) setVariantKey(division.variant_key);
     if (lockLineFor("points", refused) !== undefined) setPointsValues(hydratePointsValues(division.sport_key, cfg.points));
     const stored = hydrateRuleValues(division.sport_key, division.config);
-    const covered = (SPORT_RULES[division.sport_key] ?? []).filter((f) => lockLineFor(f.key, refused, f.edits) !== undefined);
+    const covered = rulesFor(division.sport_key).filter((f) => lockLineFor(f.key, refused, f.edits) !== undefined);
     setRuleValues((prev) => {
       const next = { ...prev };
       for (const f of covered) {
@@ -728,7 +732,7 @@ export function DivisionSettings({
 
   // What a save kept, one line per CONTROL the organiser can see (never a raw config key): the control's own label and the
   // stage that holds it. Used by the partial-save notice (a 200) and under the refusal (a 409), so the two say it the same way.
-  const keptLines = refusedLines(division.sport_key, refusedList, msg, pointsFieldKeys.length > 0);
+  const keptLines = refusedLines(visibleRuleFields(division.sport_key, ruleValues, inheritedCfg), refusedList, msg, pointsFieldKeys.length > 0);
   const refusedItems = (lines: readonly RefusedLine[]) => (
     <ul className="mt-1 space-y-0.5">
       {lines.map((l) => (
@@ -1254,7 +1258,7 @@ export function DivisionSettings({
           values={ruleValues}
           onChange={setRuleValues}
           disabled={!canEdit}
-          inherited={(division.config as Record<string, unknown>) ?? {}}
+          inherited={inheritedCfg}
           lockedFields={locks}
           omit={lichessClock ? LICHESS_CLOCK_FIELD_KEYS : undefined}
         />

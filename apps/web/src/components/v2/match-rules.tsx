@@ -19,6 +19,7 @@ import { lockLineFor, lockSentence } from "./division-settings-locks";
 export type { RuleField } from "@/lib/match-rules";
 export {
   SPORT_RULES,
+  rulesFor,
   buildRuleOverride,
   hydrateRuleValues,
   configKeysFor,

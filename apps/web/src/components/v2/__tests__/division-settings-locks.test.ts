@@ -5,8 +5,10 @@
 // line per control the organiser can see). Where each expected value comes from: the refusal shapes are `RefusedField`'s own, the
 // fields and the keys they edit are the SPORT_RULES table (the declaration the form renders), and every sentence is read
 // from the en dictionary - none is typed here.
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { SPORT_RULES } from "@/lib/match-rules";
+import { SPORT_RULES, SINGLE_SET_POINTS_LABEL, rulesFor, visibleRuleFields } from "@/lib/match-rules";
+import { BEST_OF_ONE_PAIR } from "@/lib/match-rules/best-of-one";
 import type { RefusedField } from "@/lib/rule-errors";
 import { msg as enMsg } from "@/lib/messages";
 import enUi from "@/dictionaries/en/ui.json";
@@ -120,7 +122,9 @@ describe("lockSentence", () => {
 });
 
 describe("refusedLines", () => {
-  const sayLines = (sport: string, list: RefusedField[], pointsBox = false) => refusedLines(sport, list, enMsg, pointsBox);
+  // The controls the form shows for a division at these values: `visibleRuleFields`, as the form's own grid reads it (batch-6 T20-1).
+  const sayLines = (sport: string, list: RefusedField[], pointsBox = false, values: Record<string, string> = {}) =>
+    refusedLines(visibleRuleFields(sport, values, {}), list, enMsg, pointsBox);
 
   it("the empty case: nothing refused is no line", () => {
     expect(sayLines("badminton", [])).toEqual([]);
@@ -178,5 +182,90 @@ describe("refusedLines", () => {
       }
     }
     expect(found, "the registry declares a control whose config key is not its own key").toBeGreaterThan(0);
+  });
+});
+
+// Batch-6 T20-1: a save's "kept" lines name the controls the organiser can SEE. On best of 1 the form collapses the points
+// pair to ONE field ("Points to win", bound to finalSetTo) and hides `setTo`; naming from the full SPORT_RULES table put
+// the hidden control's label ("Points to win a set") on screen. One control writes both keys, so a refusal of either is
+// one line under the visible control.
+describe("refusedLines on best of 1 (the points pair collapses to one control)", () => {
+  const sayLines = (sport: string, list: RefusedField[], values: Record<string, string>) =>
+    refusedLines(visibleRuleFields(sport, values, {}), list, enMsg, false);
+  /** Sports that declare the collapsing pair: derived from the table, as `best-of-one.ts` derives it. */
+  const PAIR_SPORTS = Object.entries(SPORT_RULES)
+    .filter(([, fs]) => ["bestOf", BEST_OF_ONE_PAIR.shown, BEST_OF_ONE_PAIR.shadow].every((k) => fs.some((f) => f.key === k)))
+    .map(([sport]) => sport);
+
+  it("the sports that collapse are found, and each hides the shadow control on best of 1 (anti-vacuity)", () => {
+    expect(PAIR_SPORTS.length, "the table declares at least one pair sport").toBeGreaterThan(0);
+    let checked = 0;
+    for (const sport of PAIR_SPORTS) {
+      const shown = visibleRuleFields(sport, { bestOf: "1" }, {});
+      expect(shown.some((f) => f.key === BEST_OF_ONE_PAIR.shadow), `${sport}: the shadow is hidden on best of 1`).toBe(false);
+      expect(shown.find((f) => f.key === BEST_OF_ONE_PAIR.shown)?.label, `${sport}: the shown field is relabelled`).toBe(SINGLE_SET_POINTS_LABEL);
+      checked++;
+    }
+    expect(checked).toBe(PAIR_SPORTS.length);
+  });
+
+  it("a refusal of either key of the pair is ONE line, under the visible control's label - never the hidden control's (every pair sport, counted)", () => {
+    let checked = 0;
+    for (const sport of PAIR_SPORTS) {
+      const hidden = SPORT_RULES[sport]!.find((f) => f.key === BEST_OF_ONE_PAIR.shadow)!;
+      expect(hidden.label, `${sport}: the premise - the hidden control is named differently`).not.toBe(SINGLE_SET_POINTS_LABEL);
+      for (const list of [
+        [refusal(BEST_OF_ONE_PAIR.shadow), refusal(BEST_OF_ONE_PAIR.shown)],
+        [refusal(BEST_OF_ONE_PAIR.shown), refusal(BEST_OF_ONE_PAIR.shadow)],
+        [refusal(BEST_OF_ONE_PAIR.shadow)],
+        [refusal(BEST_OF_ONE_PAIR.shown)],
+      ]) {
+        const lines = sayLines(sport, list, { bestOf: "1" });
+        expect(lines.map((l) => l.label), `${sport} ${list.map((r) => r.field).join("+")}`).toEqual([SINGLE_SET_POINTS_LABEL]);
+        expect(lines.some((l) => l.label === hidden.label), `${sport}: the hidden control is never named`).toBe(false);
+        checked++;
+      }
+    }
+    expect(checked).toBe(PAIR_SPORTS.length * 4);
+  });
+
+  it("the other direction: at best of 3 the same refusals name each control by its own label, and a sport without the pair is untouched", () => {
+    for (const sport of PAIR_SPORTS) {
+      const labelOf = (key: string) => SPORT_RULES[sport]!.find((f) => f.key === key)!.label;
+      const lines = sayLines(sport, [refusal(BEST_OF_ONE_PAIR.shadow), refusal(BEST_OF_ONE_PAIR.shown)], { bestOf: "3" });
+      expect(lines.map((l) => l.label), sport).toEqual([labelOf(BEST_OF_ONE_PAIR.shadow), labelOf(BEST_OF_ONE_PAIR.shown)]);
+    }
+    // A sport that names `setTo` without the pair (no bestOf/finalSetTo) must not borrow the pair's shown field.
+    const others = Object.keys(SPORT_RULES).filter((s) => !PAIR_SPORTS.includes(s));
+    expect(others.length).toBeGreaterThan(0);
+    for (const sport of others) {
+      const lines = sayLines(sport, [refusal(BEST_OF_ONE_PAIR.shadow)], { bestOf: "1" });
+      const own = SPORT_RULES[sport]!.find((f) => f.key === BEST_OF_ONE_PAIR.shadow);
+      expect(lines.map((l) => l.id), sport).toEqual([own === undefined ? "other" : BEST_OF_ONE_PAIR.shadow]);
+    }
+  });
+
+  it("the form's call site names from visibleRuleFields over the SAME values and inherited config its grid renders (the wiring, not the helper)", () => {
+    const src = readFileSync(new URL("../division-settings.tsx", import.meta.url), "utf8");
+    expect(src).toMatch(/refusedLines\(\s*visibleRuleFields\(division\.sport_key, ruleValues, inheritedCfg\)/);
+    expect(src, "the grid reads the same inherited config").toMatch(/inherited=\{inheritedCfg\}/);
+    expect(src, "no crash-trap index into the table (T20-2)").not.toMatch(/SPORT_RULES\[[^\]]+\]\s*\?\?/);
+  });
+});
+
+// Batch-6 T20-2: the form reads a sport's fields through `rulesFor`, not `SPORT_RULES[key] ?? []` (a prototype key answers
+// the Object constructor there, and iterating it throws).
+describe("rulesFor: the crash-proof read of a sport's fields", () => {
+  it("a sport the table declares answers its fields; anything else - a prototype key, an unknown sport, the empty string - answers none (counted)", () => {
+    let checked = 0;
+    for (const [sport, fields] of Object.entries(SPORT_RULES)) {
+      expect(rulesFor(sport), sport).toBe(fields);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: the table is not empty").toBeGreaterThan(0);
+    for (const key of ["constructor", "__proto__", "toString", "hasOwnProperty", "valueOf", "", "no-such-sport"]) {
+      expect(() => [...rulesFor(key)], `${key} does not throw when iterated`).not.toThrow();
+      expect(rulesFor(key), key).toEqual([]);
+    }
   });
 });

@@ -51,7 +51,7 @@ export { SINGLE_SET_POINTS_LABEL } from "./best-of-one.ts";
 /** The same trap one level up, where it is a CRASH rather than a wrong value:
  *  `SPORT_RULES["constructor"] ?? []` answers the Object constructor, and
  *  `for (const f of <Function>)` throws "function is not iterable". */
-function rulesFor(sportKey: string): RuleField[] {
+export function rulesFor(sportKey: string): RuleField[] {
   return ownOr<RuleField[]>(SPORT_RULES, sportKey, []);
 }
 
