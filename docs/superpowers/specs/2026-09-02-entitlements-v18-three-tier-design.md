@@ -143,7 +143,7 @@ Rationale is one line per changed row; unchanged rows say "keep".
 | `competitions.max_active` | **3** | ∞ | +1 | +1 | ∞ | R6; Pro headline stays "unlimited competitions" |
 | `dashboard.public.max` | **2** | **10** | – | – | ∞ | W2 T15, owner ruling 2026-09-03: Free 3 -> 2, Pro loses "unlimited". Org-level, so a pass cannot lift it — but a PASSED competition no longer counts against it, and neither does an archived one: `assertPublicQuota` was a flat row count with no status filter and no pass exclusion, so it metered history rather than live surfaces. Free's third active competition is what the create-path degrade (T15/F) exists for: 3 active competitions, 2 public dashboards, and a create that is never blocked |
 | `divisions.per_competition.max` | 4 | **20** | 10 | 20 | ∞ | R2: bounded; 20 is a federation |
-| `stages.per_division.max` | 2 | **6** | **4** | **4** | ∞ | pass today falls to Free's 2, which blocks a plate/bowl |
+| `stages.per_division.max` | **∞** | ∞ | ∞ | ∞ | ∞ | **2026-10-20 owner: all stages free (V469).** Was 2 / 6 / 4 / 4 / ∞ ("pass today falls to Free's 2, which blocks a plate/bowl"). V469 upserts `int_value = NULL` on every `plans` row, both pass rungs included, so the count is unlimited everywhere; an `org_entitlement_overrides` cap is the only refusal left, which is why the gate call in `createStages`/`createFromTemplate` stays. The pricing row goes with it (an all-∞ row sells nothing, the `officials.per_fixture.max` precedent) |
 | `entrants.per_division.max` | 64 | 256 | 128 | **512** | ∞ | R2; size pack +32 stays |
 | `teams.max` | 8 | **100** | – | – | ∞ | R4 |
 | `teams.squad_max` | **23** | **40** | – | – | ∞ | Free = one matchday squad, Pro = season roster. 23 is the engine's own largest matchday squad, not a guess: `football.ts` declares `lineup: { size: 11, benchMax: 12 }` and `icehockey.ts` `{ size: 6, benchMax: 17 }`, both 23; cricket is 15 and volleyball 14, so they already fit. At 20 a football or ice-hockey club could not register its first full squad on Free at all (W2 T12; the earlier "rugby 23" rationale cited a sport the engine catalogue does not carry). Pass rows (20 = Free) were no-ops and are dropped |
@@ -165,11 +165,11 @@ Rationale is one line per changed row; unchanged rows say "keep".
 
 | key | Free | Pro | Pass M | Pass L | Ent | why |
 |---|---|---|---|---|---|---|
-| `formats.advanced` | F | T | T | T | T | keep (americano, ladders, custom brackets, feeds) — pass trigger |
+| `formats.advanced` | F | T | T | T | T | keep (americano, ladders) — pass trigger. **2026-10-20 owner: all stages free (V469)**: custom brackets (`byes`, `placements`), cross-stage feeds (`cross_feeds`) and `auto_progress` left this key and are free on every plan; it now gates the americano and ladder stage KINDS only (`stageNeedsAdvancedFormatsGate`, ladder challenges included) |
 | `formats.double_elim` | **T** | T | T | T | T | growth: double-elim is the club-night format for racquet sports; gating it makes Free feel broken on night one |
 | `standings.custom_points` | **T** | T | T | T | T | correctness: bonus and forfeit points are how rugby and cricket tables are *right* |
 | `tiebreakers.custom` | **T** | T | T | T | T | correctness: wrong tiebreak order = wrong table |
-| `standings.carry_over` | F | T | – | – | T | keep (multi-phase leagues are Pro-sized). **Pass cells corrected 2026-09-03**: they read T, but no pass row has ever existed and Free is F, so a passed competition has never had carry-over — the row's own "Pro-sized" rationale and the §3 Event Pass card (which never lists it) both agree. Separately: nothing in the product emits `carry` at all, so this is a SOLD Pro feature with no control — F6 / issue #625, not this programme |
+| `standings.carry_over` | **T** | T | T | T | T | **2026-10-20 owner: all stages free (V469).** Was F / T / – / – / T ("keep (multi-phase leagues are Pro-sized)"; pass cells corrected 2026-09-03 to no row, because no pass row had ever existed and Free was F). V469 upserts `bool_value = true` on every `plans` row, the two pass rungs included — they get a row for the first time — so carry-over is free everywhere, same shape as `stats.player` (W3-A) and `formats.double_elim`: an explicit `org_entitlement_overrides` deny is the only refusal left, and the gate call stays for it |
 | `discipline.enforced` (suspensions) | F | T | **T** | **T** | T | owner asked. Automation = leverage, stays paid; a weekend cup with cards needs it, so the pass gets it |
 
 ### Scheduling & officials
@@ -302,8 +302,9 @@ Ladder rules that every number below satisfies and that
 
 1. Pass M < Pass L < Pro annual.
 2. **Pass M < one MONTH of Pro** — added W3. Pass M is a strict SUBSET of Pro
-   (10 divisions vs 20, 128 entrants vs 256, 4 stages vs 6, 5 restore points
-   vs 10, a 4% entry-fee rate vs 2%), so a rung dearer than a month of the
+   (10 divisions vs 20, 128 entrants vs 256, 5 restore points vs 10, a 4%
+   entry-fee rate vs 2%; it was also 4 stages vs 6 until V469 made stages
+   unlimited on every plan, 2026-10-20), so a rung dearer than a month of the
    plan that dominates it is a product nobody rational buys. Its absence is
    what let $15 M ship against $12/month Pro: every other bound compared the
    rungs against the ANNUAL price, where $15 < $99 passes comfortably.

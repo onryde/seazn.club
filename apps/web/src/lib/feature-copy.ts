@@ -145,6 +145,16 @@ export const FEATURE_REASONS: Record<string, string> = {
   // does not exist. Kept rather than deleted — the key is still passed to
   // `featureReason` — and reworded to the refusal that is actually possible.
   "eligibility.enforced": "Enforced eligibility locks are switched off for this organisation.",
+  // V469 review item 3: four keys granted on EVERY plan had no reason at all, so
+  // their override-only refusal fell back to "This feature needs a plan
+  // upgrade." — an upsell nothing on sale can satisfy. `branding` (V310, the
+  // org's own logo), `import.events` (V396, the batch score-event importer) and
+  // both streaming keys (V426) are refused only by a staff override now, and
+  // say so, like the other override-only reasons above.
+  branding: "Your own club logo is switched off for this organisation.",
+  "import.events": "Importing score events from a file is switched off for this organisation.",
+  "streaming.overlay": "Live-stream score overlays are switched off for this organisation.",
+  "streaming.relay": "Streaming to your own channels is switched off for this organisation.",
   // Public & realtime
   // The number is NOT written here, for the same reason `import.bulk` stopped
   // writing its own: this sentence said "one public dashboard at a time"
@@ -405,3 +415,42 @@ export type PaidPlan = "pro" | "enterprise";
 export function featurePlan(featureKey: string): PaidPlan {
   return ENTERPRISE_FEATURES.has(featureKey) ? "enterprise" : "pro";
 }
+
+/**
+ * Keys COMMUNITY already grants outright — a `true` boolean with no cap, or a
+ * cap with `int_value NULL` (unlimited). Since community is the floor every org
+ * resolves to, no plan can refuse one of these: the only refusal left is a staff
+ * `org_entitlement_overrides` row on one organisation, and nothing on sale lifts
+ * that. `<UpgradeGate>` therefore renders them with the override sentence alone
+ * — no plan badge, no upgrade link, no pass offer (V469 review item 2).
+ *
+ * A typed list, because `<UpgradeGate>` is a client component and cannot read
+ * the matrix. `feature-copy.test.ts` pins it BOTH ways against the live
+ * `plan_entitlements` rows, so a migration that frees or re-prices a key reds
+ * there until this list moves with it. A dual-valued row (`teams.squad_max`:
+ * bool true, int 23) is a cap of 23 and is deliberately NOT here.
+ */
+export const COMMUNITY_GRANTED_FEATURES: ReadonlySet<string> = new Set([
+  "branding",
+  "clubs.hierarchy",
+  "cricket.dls",
+  "discovery.listed",
+  "exports",
+  "formats.double_elim",
+  "import.events",
+  "officials.marks",
+  "officials.roles_multi",
+  "registration.enabled",
+  "registration.paid",
+  "scheduling.ai",
+  "scheduling.board",
+  "scheduling.constraints",
+  "scheduling.multi_division",
+  "stages.per_division.max",
+  "standings.carry_over",
+  "standings.custom_points",
+  "stats.player",
+  "streaming.overlay",
+  "streaming.relay",
+  "tiebreakers.custom",
+]);

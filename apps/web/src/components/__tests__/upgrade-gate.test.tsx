@@ -44,7 +44,7 @@ import {
 import type { PassLockReason } from "@/lib/entitlements";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { t } from "@/lib/i18n-runtime";
-import { featureReason } from "@/lib/feature-copy";
+import { COMMUNITY_GRANTED_FEATURES, featureReason } from "@/lib/feature-copy";
 import uiEn from "@/dictionaries/en/ui.json";
 import type { Dict } from "@/lib/i18n-constants";
 
@@ -929,3 +929,57 @@ describe("UpgradeGate — the streaming gates never name Enterprise (V426)", () 
     expect(render(<Gate feature="api.write" compact />)).toMatch(/Enterprise/);
   });
 });
+
+// "All stages are free" (owner ruling 2026-10-20, V469) — review item 2. A key
+// Community already grants outright (`stages.per_division.max`,
+// `standings.carry_over`, and every other key in COMMUNITY_GRANTED_FEATURES,
+// which feature-copy.test.ts pins both ways against the live matrix) can only be
+// refused by a staff override on this one organisation. Nothing on sale lifts
+// that, so the gate shows the override sentence and NOTHING that sells: no plan
+// badge, no "See plans & upgrade →", no pill "Upgrade →", no Go Pro, no pass CTA.
+// Swept over every such key, both viewer tiers, pill and card, inside a
+// competition (where a pass would otherwise be offered) and at org level.
+describe("UpgradeGate — a key Community already grants sells nothing (V469)", () => {
+  const SELLS = /Pro ✦|Enterprise ◆|See plans|Upgrade →|Go Pro|data-pass-cta|data-pass-gate/;
+
+  it("renders the override sentence with no badge and no upgrade path, for every community-granted key", () => {
+    const keys = [...COMMUNITY_GRANTED_FEATURES];
+    expect(keys).toContain("stages.per_division.max");
+    expect(keys).toContain("standings.carry_over");
+    const plans: ViewerPlan[] = ["community", "pro"];
+    let checked = 0;
+    for (const feature of keys) {
+      for (const viewerPlan of plans) {
+        for (const compact of [true, false]) {
+          for (const [path, provider] of [["/o/riverside/c/summer-league/d/main", true], ["/o/riverside/settings", false]] as const) {
+            pathname = path;
+            const html = render(<Gate feature={feature} viewerPlan={viewerPlan} compact={compact} />, {
+              provider,
+              paidPlan: viewerPlan !== "community" && provider,
+            });
+            const where = `${feature} · ${viewerPlan} · ${compact ? "pill" : "card"} · ${path}`;
+            expect(html, where).toContain(`data-feature="${feature}"`);
+            expect(html, where).toContain("data-override-only");
+            expect(html, where).toContain(escapeHtml(featureReason(feature)));
+            expect(html, where).not.toMatch(SELLS);
+            checked++;
+          }
+        }
+      }
+    }
+    expect(checked).toBe(keys.length * plans.length * 2 * 2);
+  });
+
+  it("the positive control: a key a plan really caps still wears the badge and the upgrade link", () => {
+    pathname = "/o/riverside/settings";
+    const html = render(<Gate feature="divisions.per_competition.max" />);
+    expect(html).toContain("Pro ✦");
+    expect(html).toContain("See plans &amp; upgrade →");
+    expect(html).not.toContain("data-override-only");
+  });
+});
+
+/** renderToStaticMarkup escapes text; compare a reason the way it is served. */
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#x27;");
+}

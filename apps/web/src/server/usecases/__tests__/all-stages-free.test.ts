@@ -185,6 +185,34 @@ describe.skipIf(!HAS_DB)("all stages are free (owner ruling 2026-10-20, V469)", 
     expect(stored!.config.byes).toEqual([byes.entrants[2]!.id]);
     const { created } = await generateStageFixtures(auth, ko!.id);
     expect(created).toBeGreaterThan(0);
+    // WHO holds the bye is the point of the config: seed 3, the entrant the
+    // organiser named — and every one-seated row of the bracket is theirs.
+    const byeHolders = async (stageId: string) =>
+      (
+        await sql<{ seated: string }[]>`
+          select coalesce(home_entrant_id, away_entrant_id)::text as seated from fixtures
+          where stage_id = ${stageId} and (home_entrant_id is null) <> (away_entrant_id is null)`
+      ).map((r) => r.seated);
+    const custom = await byeHolders(ko!.id);
+    expect(custom.length, "the custom-bye bracket seated no bye at all").toBeGreaterThan(0);
+    expect(new Set(custom)).toEqual(new Set([byes.entrants[2]!.id]));
+    // The control: the SAME three entrants with no `byes` key give the bye to
+    // seed 1 (the top seed takes the bye), so seed 3 above is the config at
+    // work and not the bracket's default.
+    // A second community org: this one is at Community's active-competition
+    // cap once the three divisions below exist.
+    const { auth: control } = await seedOrg("community");
+    const plain = await seedDivision(control, ["B1", "B2", "B3"]);
+    const [plainKo] = await createStages(control, plain.division.id, {
+      seq: 1,
+      kind: "knockout",
+      name: "Default byes",
+      config: {},
+    } as never);
+    await generateStageFixtures(control, plainKo!.id);
+    const fallback = await byeHolders(plainKo!.id);
+    expect(fallback.length).toBeGreaterThan(0);
+    expect(new Set(fallback)).toEqual(new Set([plain.entrants[0]!.id]));
 
     // Cross-stage feed: a CL quarter-final loser drops into the EL.
     const feeds = await seedDivision(auth, ["F1", "F2", "F3", "F4"]);
@@ -200,6 +228,11 @@ describe.skipIf(!HAS_DB)("all stages are free (owner ruling 2026-10-20, V469)", 
       { seq: 2, kind: "knockout", name: "EL", config: {} },
     ] as never);
     expect(fed).toHaveLength(2);
+    const [fedRow] = await sql<{ config: { cross_feeds?: unknown } }[]>`
+      select config from stages where id = ${(fed as { id: string }[])[0]!.id}`;
+    expect(fedRow!.config.cross_feeds).toEqual([
+      { from_ext_key: "se-r0-i0", side: "loser", to_stage_seq: 2, to_ext_key: "se-r0-i0", slot: 1 },
+    ]);
 
     // Placement game: the winner of the first match is ranked 1st, the loser 2nd.
     const placed = await seedDivision(auth, ["P1", "P2"]);
@@ -209,7 +242,9 @@ describe.skipIf(!HAS_DB)("all stages are free (owner ruling 2026-10-20, V469)", 
       name: "Placement",
       config: { placements: { "rr-r1-c1": [1, 2] } },
     } as never);
-    expect(placement).toBeDefined();
+    const [placedRow] = await sql<{ config: { placements?: unknown } }[]>`
+      select config from stages where id = ${placement!.id}`;
+    expect(placedRow!.config.placements).toEqual({ "rr-r1-c1": [1, 2] });
   });
 
   it("formats.advanced still guards the americano and ladder KINDS on community (402) — and pro creates both", async () => {

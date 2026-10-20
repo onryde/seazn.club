@@ -19,7 +19,8 @@ import "server-only";
 export interface StageFormatGateInput {
   kind: string;
   // Real `stages.config` (and TemplateStage.config) is jsonb and carries far
-  // more than the three keys this gate reads — points, groups,
+  // more than the three keys this gate used to read before V469 (it reads
+  // the kind alone now) — points, groups,
   // scheduleDefaults, thirdPlace, sport-specific extras, … — so it is typed
   // as the open record it actually is, not narrowed to only the keys this
   // function happens to read. A narrower object type here (previously
