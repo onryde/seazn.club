@@ -81,12 +81,13 @@ describe("email outbox vocabularies (constants.ts)", () => {
 
 type Outcome =
   | { accepted: true }
-  | { accepted: false; code: string | undefined; constraint: string | undefined; message: string };
+  | { accepted: false; code: string | undefined; constraint: string | undefined; column: string | undefined; message: string };
 
 const attempt = (p: Promise<unknown>): Promise<Outcome> =>
   p.then(() => ({ accepted: true as const })).catch(
-    (err: { code?: string; constraint_name?: string; message?: string }) => ({
-      accepted: false as const, code: err.code, constraint: err.constraint_name, message: err.message ?? "",
+    (err: { code?: string; constraint_name?: string; column_name?: string; message?: string }) => ({
+      accepted: false as const, code: err.code, constraint: err.constraint_name, column: err.column_name,
+      message: err.message ?? "",
     }),
   );
 
@@ -303,6 +304,32 @@ describe.skipIf(!HAS_DB)("email_outbox (V468)", () => {
     expect(await attempt(row({ attempts: 0, refType: "x", ref: `${RUN}-x`, to: "a@b" }))).toEqual({ accepted: true });
   });
 
+  it("refuses a row that omits a required column (23502 names it), and accepts the same row with all of them", async () => {
+    const full = {
+      id: randomUUID(), kind: "magic_link", ref_type: "login", ref_id: newRef(), org_id: orgId,
+      recipient: `${randomUUID()}@x.test`, subject: "subject", transactional: true,
+      expires_at: new Date(Date.now() + 3_600_000),
+    };
+    const insertOmitting = (omit: string | null): Promise<unknown> => {
+      const values: Record<string, string | boolean | Date> = { ...full, id: randomUUID() };
+      if (omit !== null) delete values[omit];
+      return sql`insert into email_outbox ${sql(values)}`;
+    };
+    // The pair first: with nothing omitted the builder's insert goes in, so a refusal below is the omitted column's.
+    expect(await attempt(insertOmitting(null))).toEqual({ accepted: true });
+    // `transactional` has no default on purpose (the caller must decide whether the suppression list applies), and
+    // `expires_at` is what ends a row nobody sent; the rest identify and address it.
+    const required = ["kind", "ref_type", "ref_id", "recipient", "subject", "transactional", "expires_at"];
+    let refused = 0;
+    for (const col of required) {
+      expect(await attempt(insertOmitting(col)), `omitting ${col}`).toMatchObject({
+        accepted: false, code: "23502", column: col,
+      });
+      refused++;
+    }
+    expect(refused).toBe(required.length);
+  });
+
   it("provider_id is unique when present and free when absent", async () => {
     const pid = `re_${randomUUID()}`;
     await row({ providerId: pid });
@@ -453,6 +480,12 @@ describe.skipIf(!HAS_DB)("email_outbox (V468)", () => {
 
   it("app_user cannot SELECT, UPDATE or DELETE email_outbox (42501 each), nor read an insert back, nor insert for another org or for none", async () => {
     const victim = await row();
+    // Org B's pending row. The "another org, same key" insert below names exactly this key, so the replace trigger (a
+    // BEFORE ROW trigger, which runs before the policy's WITH CHECK) matches it and supersedes it - and the refusal
+    // that follows must roll that back. Asserting the row afterwards is the witness that the statement was atomic.
+    const SAME_KEY = { ref: newRef(), to: "Pat@x.test" };
+    const [theirs] = await seedHistory([{ ...SAME_KEY, status: "queued", body: BODY, org: otherOrgId }]);
+    expect(await statusOf(theirs!)).toBe("queued");
     const denied: Array<[string, (tx: typeof sql) => Promise<unknown>, RegExp]> = [
       ["select", (tx) => tx`select id from email_outbox limit 1`, /permission denied for table email_outbox/],
       // `where false`, not `where id = …`: a WHERE that names a column needs SELECT, so a WHERE-by-id statement is refused
@@ -468,6 +501,11 @@ describe.skipIf(!HAS_DB)("email_outbox (V468)", () => {
         /permission denied for table email_outbox/,
       ],
       ["insert for another org", (tx) => insertRow(tx, { org: otherOrgId }), /row-level security policy/],
+      [
+        "insert for another org, with that org's pending row's key",
+        (tx) => insertRow(tx, { ...SAME_KEY, to: "pat@X.test", org: otherOrgId }),
+        /row-level security policy/,
+      ],
       ["insert with no org", (tx) => insertRow(tx, { org: null }), /row-level security policy/],
     ];
     let checked = 0;
@@ -478,10 +516,14 @@ describe.skipIf(!HAS_DB)("email_outbox (V468)", () => {
       checked++;
     }
     expect(checked).toBe(denied.length);
-    expect(checked).toBe(6);
+    expect(checked).toBe(7);
     // Refused, not silently empty: the victim is exactly as it was.
     const [v] = await sql<{ attempts: number }[]>`select attempts from email_outbox where id = ${victim}`;
     expect(v?.attempts).toBe(0);
+    // And the other org's pending row survived the refused insert that named its key: status AND credential.
+    const survivor = (await stored([theirs!])).get(theirs!)!;
+    expect(survivor.status).toBe("queued");
+    expect(survivor.body_sealed).not.toBeNull();
   });
 
   it("app_user holds exactly the INSERT privilege on email_outbox (the other six are checked in the catalogue)", async () => {
@@ -508,6 +550,22 @@ describe.skipIf(!HAS_DB)("email_outbox (V468)", () => {
     expect(policies).toHaveLength(1);
     expect(policies[0]).toMatchObject({ policyname: "email_outbox_enqueue", cmd: "INSERT", roles: ["app_user"] });
     expect(policies[0]!.with_check).toMatch(/org_id = current_org_id\(\)/);
+  });
+
+  it("the replace trigger function is SECURITY DEFINER with a pinned search_path (schema first, pg_temp last)", async () => {
+    const fns = await sql<{ prosecdef: boolean; proconfig: string[] | null; owner: string }[]>`
+      select p.prosecdef, p.proconfig, pg_get_userbyid(p.proowner) as owner
+        from pg_proc p
+       where p.proname = 'email_outbox_replace_older' and p.pronamespace = current_schema()::regnamespace`;
+    expect(fns).toHaveLength(1);
+    const fn = fns[0]!;
+    // Definer: the tenant caller holds no UPDATE, so an invoker function could not supersede anything.
+    expect(fn.prosecdef).toBe(true);
+    // A definer function with no pinned search_path runs with the CALLER's, so a tenant that puts its own schema first
+    // could shadow `email_outbox` (or a function the body calls) and have the owner's privileges run its code.
+    const [schema] = await sql<{ s: string }[]>`select current_schema() as s`;
+    expect(fn.proconfig, "search_path is set on the function").not.toBeNull();
+    expect(fn.proconfig).toEqual([`search_path=${schema!.s}, pg_temp`]);
   });
 
   // ---- the table it replaces -------------------------------------------------------------------------------------

@@ -78,7 +78,7 @@
 - Produces (constants.ts):
   - `OUTBOX_KINDS = ["magic_link", "chess_invite"] as const`; `type OutboxKind`
   - `OUTBOX_STATUSES` (the 12, spec order); `type OutboxStatus`
-  - `RETRYABLE_STATUSES = ["queued", "sending"]` (the only statuses that may hold a body)
+  - `RETRYABLE_STATUSES = ["queued", "sending"]` (the only statuses that may hold a body: "may", not "must" - Task 3's keyless path enqueues a bodiless `queued` row that ends `dead 'no_api_key'`, and the schema test pins that such a row is accepted)
   - `REPLACEABLE_STATUSES = ["queued", "sending", "sent", "delayed"]` (non-terminal)
   - `LIVE_STATUSES = ["queued", "sending", "sent", "delayed", "delivered"]` (can still deliver)
   - `ENDED_BADLY_STATUSES = ["bounced", "complained", "failed", "suppressed", "expired", "dead"]`
@@ -96,15 +96,16 @@ it("accepts every declared status and refuses an undeclared one", async () => {
 });
 it("refuses a body on any status outside RETRYABLE_STATUSES (checked count = 10)", …);   // constraint email_outbox_body_only_while_retryable
 it("refuses lease_until unless status = 'sending', and 'sending' without a lease", …);   // email_outbox_lease_only_while_sending
-it("a new row for the same kind+ref+recipient replaces every older REPLACEABLE row, nulls its body and lease, and leaves terminal rows, other recipients and other kinds alone", async () => {
-  // seed one row per OUTBOX_STATUSES for ref R / "Ann@x.test", plus: same ref other recipient (queued), same ref other kind (queued)
-  await row({ ref: R, to: "ann@X.test" });                       // differs only in case
-  const replaced = await idsWithStatus("replaced", R);
-  expect(replaced.length).toBe(REPLACEABLE_STATUSES.length + 1); // +1: the seeded 'replaced' row stays replaced
-  // every originally-REPLACEABLE row now has body_sealed null and lease_until null; the delivered/dead/... rows are byte-identical; other recipient + other kind still 'queued'
+it("a new row for the same kind+ref+recipient+org replaces every older REPLACEABLE row, nulls its body and lease, and leaves terminal rows, other recipients, other refs, other kinds and other orgs alone", async () => {
+  // seed (trigger off, via session_replication_role = replica) one row per OUTBOX_STATUSES for ref R / "Ann@x.test", plus five queued
+  // controls that each differ from the key in exactly one part: recipient, kind, ref_id, ref_type, org. Read them back (R3), THEN:
+  await row({ ref: R, to: "ann@X.test" });                       // the act: the second insert; differs only in case
+  // 4 REPLACEABLE rows -> 'replaced', +1 for the seeded 'replaced' row that stays replaced; body and lease null; terminal rows and
+  // controls compare equal as whole-row to_jsonb snapshots before/after.
 });
-it("app_user may INSERT inside withTenant without RETURNING, and the replace trigger still runs", …);
-it("app_user cannot SELECT, UPDATE or DELETE email_outbox (42501 each), nor insert for another org", …);
+it("org-less rows (the sign-in link) replace each other, and an org-less row and an org's row of the same key never replace one another", …);   // `is not distinct from`, not `=`
+it("app_user may INSERT inside withTenant without RETURNING, and the replace trigger still runs", …);   // incl. another org's pending row for the same key surviving
+it("app_user cannot SELECT, UPDATE or DELETE email_outbox (42501 each), nor insert for another org - including with the key of that org's pending row, which keeps its status and body (the refusal rolls the supersede back)", …);
 it("email_queue is gone", async () => {
   expect((await sql`select to_regclass('email_queue') as t`)[0].t).toBeNull();
 });
@@ -114,7 +115,7 @@ it("email_queue is gone", async () => {
 
 - [ ] **Step 3: Write `V468__email_outbox.sql`**
   - Header comment: why (spec link), what replaces `email_queue` (created by both `v1-baseline/V028` and `deltas/V104`, read and written nowhere — `git grep -n email_queue` shows only those two files), and the INSERT-only stance.
-  - `drop table if exists email_queue;` then the table above with CHECKs: `kind in (…2)`, `status in (…12)`, `attempts >= 0`, `ref_type <> ''`, `ref_id <> ''`, `recipient <> ''`, the two named constraints from Step 1.
+  - `drop table if exists email_queue;` then the table above with CHECKs: `kind in (…2)`, `status in (…12)`, `attempts >= 0`, `ref_type <> ''`, `ref_id <> ''`, `recipient <> ''`, the two named constraints from Step 1. Constraint names as built (later tasks assert on them): `email_outbox_kind_valid`, `email_outbox_status_valid`, `email_outbox_attempts_nonneg`, `email_outbox_ref_type_nonempty`, `email_outbox_ref_id_nonempty`, `email_outbox_recipient_nonempty`, `email_outbox_body_only_while_retryable`, `email_outbox_lease_only_while_sending`. `kind`, `ref_type`, `ref_id`, `recipient`, `subject`, `transactional` (NO default: the caller decides) and `expires_at` are NOT NULL.
   - Indexes: `email_outbox_due_idx (next_attempt_at) where status = 'queued'`; `email_outbox_lease_idx (lease_until) where status = 'sending'`; unique `email_outbox_provider_idx (provider_id) where provider_id is not null`; `email_outbox_ref_idx (ref_type, ref_id, created_at desc)`; `email_outbox_created_idx (created_at)`; `email_outbox_replace_idx (kind, ref_type, ref_id, lower(recipient)) where status in ('queued','sending','sent','delayed')`.
   - Replace trigger, `security definer` + pinned search_path (the V451 shape, `V451__online_chess_board_and_camera.sql:161-170`), because an `app_user` caller holds no UPDATE:
 
@@ -127,16 +128,18 @@ begin
      set status = 'replaced', body_sealed = null, lease_until = null, status_at = now()
    where kind = new.kind and ref_type = new.ref_type and ref_id = new.ref_id
      and lower(recipient) = lower(new.recipient) and id <> new.id
+     and org_id is not distinct from new.org_id
      and status in ('queued', 'sending', 'sent', 'delayed');
   return new;
 end $$;
 create trigger email_outbox_replace_older before insert on email_outbox
   for each row execute function email_outbox_replace_older();
 ```
+  - The `org_id` line is the tenant fence (controller ruling 2026-10-20): the function is `security definer`, so it bypasses RLS and would otherwise let one org's insert supersede another org's pending row. `is not distinct from`, never `=`: two org-less sign-in links must still replace each other.
   - `enable` + `force row level security`; `create policy email_outbox_enqueue on email_outbox for insert to app_user with check (org_id = current_org_id());` `grant insert on email_outbox to app_user;` (no select/update/delete).
 
-- [ ] **Step 4: Apply and run** — `db:apply` against your DB (skill §), then the verify recipe. Expected: all pass; `t` = 6.
-- [ ] **Step 5: Mutate once each** — (a) drop `lower()` from the trigger; (b) remove `'delayed'` from the trigger's status list; (c) drop the body CHECK. Each must red a named test; restore.
+- [ ] **Step 4: Apply and run** — `db:apply` against your DB (skill §), then the verify recipe. Expected: all pass. The file holds 22 tests (4 DB-free vocabulary tests + 18 `describe.skipIf(!HAS_DB)`), not the six sketched above (ruling R3: the count is whatever the file holds); with `DATABASE_URL=` it is 4 passed, 18 skipped, 0 failed.
+- [ ] **Step 5: Mutate once each** — (a) drop `lower()` from the trigger; (b) remove `'delayed'` from the trigger's status list (anchor the pattern on the trigger's `and status in (`: the partial index repeats the same list, and a substitution without `/g` hits the first match, the index); (c) drop the body CHECK; (d) drop `org_id is not distinct from new.org_id` (and, separately, make it `org_id = new.org_id`); (e) drop `set search_path` from the function; (f) drop `not null` on `expires_at`. Each must red a named test; restore.
 - [ ] **Step 6: Commit** — `feat(db): V468 email_outbox replaces the unused email_queue`.
 
 ---
