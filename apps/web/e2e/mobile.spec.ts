@@ -5342,6 +5342,10 @@ async function nlStage(page: Page, fixtureId: string, staged: { current: Record<
 async function nlOpenPanel(page: Page, path: string): Promise<Locator> {
   await page.goto(path, { waitUntil: "load" });
   await dismissCookieBanner(page);
+  // The app header is sticky, so a panel scrolled into view for its picture (or for the hit-tests below) is painted over by
+  // it: back in flow, the crop and the occlusion checks judge the PANEL, as stream-phone-panel.capture.ts does. Nothing in
+  // the panel's own layout moves.
+  await page.addStyleTag({ content: "header { position: static !important; }" });
   const control = page.locator('[data-role="fixture-stream"]:visible, [data-role="fixture-stream-phone"]:visible');
   await expect(control, "exactly one visible Stream control").toHaveCount(1, { timeout: 30_000 });
   await control.click();
@@ -5356,6 +5360,7 @@ async function nlOpenPanel(page: Page, path: string): Promise<Locator> {
  *  CLIPS (`overflow` hidden/clip), and `el` itself does not hide content below its own box. A scrolling ancestor
  *  (`auto`/`scroll`) is a feature — its content is reachable — and is skipped on that axis. Returns the line count. */
 async function nlExpectFits(el: Locator, label: string): Promise<number> {
+  await el.scrollIntoViewIfNeeded();
   const verdict = await el.evaluate((node) => {
     const own = node as HTMLElement;
     const vw = document.documentElement.clientWidth;
@@ -5382,6 +5387,18 @@ async function nlExpectFits(el: Locator, label: string): Promise<number> {
       }
       if (clipsX && (left < box.left - 0.5 || right > box.right + 0.5)) {
         problems.push(`${name(a)} clips horizontally: text ${left.toFixed(1)}..${right.toFixed(1)}, box ${box.left.toFixed(1)}..${box.right.toFixed(1)}`);
+      }
+    }
+    // Nothing paints over the copy: the topmost element at the middle of its first and of its last painted line is the
+    // copy's own box (or inside it) — a hit-test, not a box (a sticky bar or a sheet edge over the last line is not "fit").
+    if (bottom - top <= window.innerHeight) {
+      const byTop = [...rects].sort((a, b) => a.top - b.top);
+      for (const [which, r] of [["first", byTop[0]!], ["last", byTop[byTop.length - 1]!]] as const) {
+        const x = Math.min(Math.max(r.left + r.width / 2, 0), vw - 1);
+        const y = r.top + r.height / 2;
+        const hit = document.elementFromPoint(x, y);
+        if (y < 0 || y > window.innerHeight) problems.push(`the ${which} line is outside the viewport (y ${y.toFixed(1)}) after scrolling to it`);
+        else if (!(hit && (own === hit || own.contains(hit)))) problems.push(`the ${which} line is covered by ${hit ? name(hit as HTMLElement) : "nothing"}`);
       }
     }
     return { problems, lines: new Set(rects.map((r) => Math.round(r.top))).size };
