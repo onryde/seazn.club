@@ -647,9 +647,7 @@ export function DivisionSettings({
     if (lockLineFor("variant_key", refused) !== undefined) setVariantKey(division.variant_key);
     if (lockLineFor("points", refused) !== undefined) setPointsValues(hydratePointsValues(division.sport_key, cfg.points));
     const stored = hydrateRuleValues(division.sport_key, division.config);
-    const covered = (Object.hasOwn(SPORT_RULES, division.sport_key) ? SPORT_RULES[division.sport_key]! : []).filter(
-      (f) => lockLineFor(f.key, refused, f.edits) !== undefined,
-    );
+    const covered = (SPORT_RULES[division.sport_key] ?? []).filter((f) => lockLineFor(f.key, refused, f.edits) !== undefined);
     setRuleValues((prev) => {
       const next = { ...prev };
       for (const f of covered) {

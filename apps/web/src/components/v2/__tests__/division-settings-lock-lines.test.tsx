@@ -538,6 +538,19 @@ describe("a refusal keeps the STORED value, and the locked control shows it agai
     });
   }
 
+  it("a field refused through the config key it EDITS goes back to its stored value (generic: the abandon field, refused as abandonPolicy)", async () => {
+    const abandon = SPORT_RULES.generic!.find((f) => f.key === "abandon")!;
+    const stored = abandon.options!.map((o) => o.value);
+    expect(stored.length, "premise: the abandon field offers a choice").toBeGreaterThan(1);
+    const island = mount({}, "generic", "score", { resultMode: "score", allowDraws: true, abandonPolicy: "share" });
+    const values = typed(island, { abandon: "replay" });
+    expect(values().abandon, "premise: the typed choice is on screen").toBe("replay");
+    net.patch.fail = { status: 409, code: "DIVISION_FORMAT_LOCKED", message: "x", extra: { refused: [lock("abandonPolicy")] } };
+    clickButton(island.tree(), L("divset.saveRules"));
+    await flush();
+    expect(values().abandon, "back to the stored choice").toBe("share");
+  });
+
   it("a refused VARIANT goes back to the stored variant, and a variant that was not refused stays as chosen", async () => {
     const island = mount();
     (propsOf(variantSelect(island.tree())).onChange as (e: { target: { value: string } }) => void)({ target: { value: "other" } });
@@ -568,6 +581,19 @@ describe("a refusal keeps the STORED value, and the locked control shows it agai
     expect(boxes().map((b) => propsOf(b).value), "the three stored values, in the form's order").toEqual(["3", "1", "0"]);
     // and the list names the boxes as the group the organiser sees, not by the raw `points` key
     expect(textOf(byTestId(island.tree(), "division-refused-points"))).toContain(L("divset.standingsPoints"));
+  });
+
+  it("a refusal of another field leaves the typed points as they are (football)", async () => {
+    const points = { win: 3, draw: 1, loss: 0 };
+    const other = SPORT_RULES.football!.find((f) => f.key !== "points" && !f.edits.map(topOf).includes("points"))!;
+    const island = mount({}, "football", "standard", { points });
+    const boxes = () => island.tree().filter((e) => e.type === "input" && propsOf(e).min === 0 && propsOf(e).max === 99);
+    (propsOf(boxes()[0]!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "9" } });
+    net.patch.fail = { status: 409, code: "DIVISION_FORMAT_LOCKED", message: "x", extra: { refused: [lock(topOf(other.edits[0]!))] } };
+    clickButton(island.tree(), L("divset.saveRules"));
+    await flush();
+    expect(testIdsStartingWith(island.tree(), "division-refused-"), "premise: the refusal was heard").not.toEqual([]);
+    expect(propsOf(boxes()[0]!).value, "the typed points stand").toBe("9");
   });
 
   it("a refused field the division never stored (it inherits the variant's default) goes back to BLANK, not to the typed value", async () => {
