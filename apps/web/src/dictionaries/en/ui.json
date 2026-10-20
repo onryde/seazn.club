@@ -6602,7 +6602,7 @@
   "matchRules.correctLive": "Correct format",
   "matchRules.correctWarning": "The match so far is kept; the new format applies from here",
   "matchRules.locked": "This match is finished — its format is locked",
-  "matchRules.lockedCancelled": "This match was cancelled — its format is locked",
+  "matchRules.lockedCancelled": "This match was cancelled — its format is locked.",
   "matchRules.heldOff": "The stage has this off — a match can only switch it off or shorten it",
   "matchRules.halfMinutes": "{n} min each half",
   "runSheet.formatChanged": "Format changed",

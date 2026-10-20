@@ -184,6 +184,22 @@ describe("ruleRefusalText — the client reads the code and its extra, in the re
     expect(checked, "anti-vacuity: all four locales").toBe(4);
   });
 
+  it("every sentence a fixture lock can say ends with a full stop, in every locale (Task 22: the cancelled one lacked it)", () => {
+    // The refusal sentences are read as sentences (a Save error), and the house style of the codes' own sentences is a closing
+    // period. The set is the lock table's own, so a fourth reason joins the sweep by being declared.
+    let checked = 0;
+    for (const [loc, dict] of LOCALES) {
+      const d = dict as unknown as Record<string, string>;
+      for (const [reason, key] of Object.entries(FIXTURE_LOCK_KEYS)) {
+        expect(d[key], `${loc} ${reason} (${key}) exists`).toBeTypeOf("string");
+        expect(d[key]!.endsWith("."), `${loc} ${reason} (${key}) ends with a full stop: ${JSON.stringify(d[key])}`).toBe(true);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: three reasons x four locales").toBe(Object.keys(FIXTURE_LOCK_KEYS).length * LOCALES.length);
+    expect(checked).toBeGreaterThanOrEqual(12);
+  });
+
   it("empty case first: no code, an unknown code, or a missing param is null (the caller keeps its own copy)", () => {
     expect(ruleRefusalText(undefined, {}, msg)).toBeNull();
     expect(ruleRefusalText("PLAYED", {}, msg)).toBeNull();

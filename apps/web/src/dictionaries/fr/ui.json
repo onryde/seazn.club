@@ -6602,7 +6602,7 @@
   "matchRules.correctLive": "Corriger le format",
   "matchRules.correctWarning": "Le jeu déjà joué est conservé ; le nouveau format s'applique à partir de maintenant",
   "matchRules.locked": "Cette rencontre est terminée — son format est verrouillé",
-  "matchRules.lockedCancelled": "Cette rencontre a été annulée — son format est verrouillé",
+  "matchRules.lockedCancelled": "Cette rencontre a été annulée — son format est verrouillé.",
   "matchRules.heldOff": "La phase l'a désactivé — une rencontre ne peut que le désactiver ou le raccourcir",
   "matchRules.halfMinutes": "{n} min par mi-temps",
   "runSheet.formatChanged": "Format modifié",

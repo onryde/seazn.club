@@ -6602,7 +6602,7 @@
   "matchRules.correctLive": "Format corrigeren",
   "matchRules.correctWarning": "Wat al gespeeld is blijft behouden; het nieuwe format geldt vanaf nu",
   "matchRules.locked": "Deze wedstrijd is afgelopen — het format ligt vast",
-  "matchRules.lockedCancelled": "Deze wedstrijd is geannuleerd — het format ligt vast",
+  "matchRules.lockedCancelled": "Deze wedstrijd is geannuleerd — het format ligt vast.",
   "matchRules.heldOff": "De fase heeft dit uitgeschakeld — een wedstrijd kan het alleen uitschakelen of inkorten",
   "matchRules.halfMinutes": "{n} min per helft",
   "runSheet.formatChanged": "Format gewijzigd",

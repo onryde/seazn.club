@@ -6602,7 +6602,7 @@
   "matchRules.correctLive": "Corregir el formato",
   "matchRules.correctWarning": "Se conserva lo jugado hasta ahora; el nuevo formato se aplica a partir de aquí",
   "matchRules.locked": "Este partido ha terminado: su formato está bloqueado",
-  "matchRules.lockedCancelled": "Este partido se canceló: su formato está bloqueado",
+  "matchRules.lockedCancelled": "Este partido se canceló: su formato está bloqueado.",
   "matchRules.heldOff": "La fase lo tiene desactivado: un partido solo puede desactivarlo o acortarlo",
   "matchRules.halfMinutes": "{n} min cada parte",
   "runSheet.formatChanged": "Formato cambiado",
