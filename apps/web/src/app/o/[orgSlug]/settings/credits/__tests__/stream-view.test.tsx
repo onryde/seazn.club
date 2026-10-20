@@ -14,6 +14,7 @@
 //   V5 offer           show the tiles whatever the offer                          → "with Stream off the tiles are replaced by the reason"
 //   V6 empty           render the table for zero rows                             → "an empty ledger says so, and offers no export"
 //   V7 pager           drop the cursor encode / the Latest link                   → "the pager"
+//   V11 change colour  swap the spend / gain colours                              → "shows the date, the change with its sign, the balance after"
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { readFileSync } from "node:fs";
@@ -101,6 +102,9 @@ describe("BillingStreamCredits — a history row", () => {
     expect(out).toContain('<time dateTime="2026-10-01T00:00:00.000Z">Oct 1, 2026</time>');
     expect(out).toContain(">-1<");
     expect(out).toContain(">+5<");
+    // a spend is quiet, a gain is green (V11) — read off the cell that carries the number
+    expect(out).toMatch(/text-slate-700">-1</);
+    expect(out).toMatch(/text-emerald-700">\+5</);
     expect(out).toContain('href="/o/riverside/c/autumn/d/open/f/3"');
     expect(out).toContain("Hawks v Owls");
     expect(out).toContain("Autumn League");

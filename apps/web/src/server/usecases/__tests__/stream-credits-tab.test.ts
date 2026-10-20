@@ -11,6 +11,8 @@
 //   T4 period           drop `created_at >= periodStart` from the used query    → "last month's free credit used is not this month's"
 //   T5 cap              `Math.max(allowance, granted)` → `allowance`             → "after a mid-month downgrade the meter still counts the credits the month was granted"
 //   T6 audience         delete `assertCanReadStreamHistory`                     → "an API key and another org are refused"
+//   T7 upper clamp      drop `Math.min(freeAllowance, …)` from freeUsed          → "the meter never reads past its own scale"
+//   T8 lower clamp      drop `Math.max(0, …)` from freeUsed                       → "a refund written twice against one match cannot take the meter below nothing"
 import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { sql } from "@/lib/db";
@@ -91,6 +93,42 @@ describe.skipIf(!HAS_DB)("getStreamCreditsTab", () => {
     expect(view.freeUsed).toBe(rate);        // not rate + 1
     expect([view.monthly, view.pack]).toEqual([0, 2]);
     expect(view.total).toBe(2);
+    // The clamp to the allowance would hide a bought-credit match counted as a free one (two used of one allowed reads as
+    // one of one). A top-up the org was given earlier this month under a richer plan lifts the allowance past the count,
+    // so the unclamped number shows: one free match used, never two. (T2: drop the bucket filter → 2; T7 is the clamp.)
+    await sql`
+      insert into org_stream_credits (org_id, delta, reason, bucket, balance_after, idempotency_key)
+      values (${r.orgId}, 4, 'grant', 'monthly', ${view.total + 4}, ${`stream-monthly:${r.orgId}:top-up-test`})`;
+    const toppedUp = await getStreamCreditsTab(auth(r.orgId), r.orgId);
+    expect(toppedUp.freeAllowance, "the allowance is past the count, so the clamp cannot hide it").toBe(rate + 4);
+    expect(toppedUp.freeUsed, "one match on a free credit, one on a bought one").toBe(rate);
+  });
+
+  it("a refund written twice against one match cannot take the meter below nothing (T8)", async () => {
+    const r = await streamRig();
+    const fx = r.fixtureIds[0]!;
+    const s = await r.session(fx);
+    await getStreamCreditsTab(auth(r.orgId), r.orgId);   // the grant
+    await sql.begin((tx) => consumeForSession(tx, { orgId: r.orgId, fixtureId: fx, sessionId: s }));
+    await sql.begin((tx) => refundConsumeForSession(tx, { orgId: r.orgId, sessionId: s, note: "R2008 test" }));
+    // A second credit-back against the same match (a staff refund linked to it): net used is 1 - 2 = -1 before the clamp.
+    await sql`
+      insert into org_stream_credits (org_id, delta, reason, bucket, session_id, balance_after)
+      values (${r.orgId}, 1, 'refund', 'monthly', ${s}, 0)`;
+    const view = await getStreamCreditsTab(auth(r.orgId), r.orgId);
+    expect(view.freeUsed).toBe(0);
+  });
+
+  it("the meter never reads past its own scale: more free matches on the ledger than the month granted is 'all used', not 'N of M' with N > M (T7)", async () => {
+    const r = await streamRig();
+    const first = await getStreamCreditsTab(auth(r.orgId), r.orgId);   // this month's grant: M
+    // Hand-written: no writer spends a free credit the month did not grant, so the surplus can only be written raw.
+    await sql`
+      insert into org_stream_credits (org_id, delta, reason, bucket, balance_after)
+      select ${r.orgId}, -1, 'consume', 'monthly', 0 from generate_series(1, ${first.freeAllowance + 2}::int)`;
+    const view = await getStreamCreditsTab(auth(r.orgId), r.orgId);
+    expect(view.freeAllowance).toBeGreaterThan(0);
+    expect(view.freeUsed).toBe(view.freeAllowance);
   });
 
   it("last month's free credit used is not this month's (T4)", async () => {

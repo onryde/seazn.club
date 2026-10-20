@@ -6,7 +6,8 @@
 //
 // Mutant table (each killed by the named test; run once by hand, see the PR):
 //   H1 org scope        drop `where c.org_id = ${orgId}`                         → "only THIS org's rows"
-//   H2 tenant join      drop `s.org_id = c.org_id` from the session join         → "a ledger row linked to ANOTHER org's session shows no fixture"
+//   H2 tenant join      drop `s.org_id = c.org_id` from the session join         → "each tenancy join guard holds on its own" (the session's org alone)
+//   H13 tenant join     drop `comp.org_id = c.org_id` from the competition join  → "each tenancy join guard holds on its own" (the competition's org alone)
 //   H3 order            `c.created_at desc, c.id desc` → asc                      → "newest first" + the pagination sweep
 //   H4 keyset           `<` → `<=` in the cursor predicate                        → "the pages tile the ledger"
 //   H5 cursor precision cursor built from the JS Date instead of the text column  → "the pages tile the ledger" (µs-spaced ties)
@@ -25,7 +26,7 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { routes } from "@/lib/routes";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { rigUser, streamRig } from "@/server/relay/__tests__/_session-rig";
+import { rigTarget, rigUser, streamRig } from "@/server/relay/__tests__/_session-rig";
 import {
   consumeForSession, ensureMonthlyStreamGrant, grantCredits, grantPassStreamCredits, recordPurchase,
   recordStreamPackRefund, refundConsumeForSession, refundCredits, revokeCredits, streamPassCredits,
@@ -310,6 +311,40 @@ describe.skipIf(!HAS_DB)("listStreamCreditHistory — every writer's row, throug
       values (${a.orgId}, -1, 'consume', 'pack', ${sessionOfA}, 0)`;
     const own = await listStreamCreditHistory(sessionAuth(a.orgId), a.orgId);
     expect(own.rows[0]!.fixture).not.toBeNull();
+  });
+
+  it("each tenancy join guard holds on its own: a session of org A on a fixture of org B's competition names no match to EITHER org (H2, H13)", async () => {
+    // The test above cannot tell the two guards apart: with the session's org guard dropped, the competition's org guard
+    // still nulls the fixture, and the other way round — two guards covering for each other, so each is untested. This
+    // row is the one only ONE guard can refuse: a session whose org is A but whose fixture is B's.
+    const a = await streamRig();
+    const b = await streamRig();
+    const fixtureOfB = b.fixtureIds[0]!;
+    const targetOfA = await rigTarget(a.orgId);
+    const [cross] = await sql<{ id: string }[]>`
+      insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, created_by, sport_key, competition_id, division_id, entitlement_via_override)
+      select f.id, ${a.orgId}, 'passthrough', 'completed', ${targetOfA}, ${a.createdBy}, d.sport_key, d.competition_id, f.division_id, true
+        from fixtures f join divisions d on d.id = f.division_id where f.id = ${fixtureOfB}
+      returning id`;
+    expect(cross, "the cross-org session was written").toBeDefined();
+    await sql`
+      insert into org_stream_credits (org_id, delta, reason, bucket, session_id, balance_after)
+      values (${b.orgId}, -1, 'consume', 'pack', ${cross!.id}, 0), (${a.orgId}, -1, 'consume', 'pack', ${cross!.id}, 0)`;
+    // B's ledger row names a session that is A's: refused by the session's org (the competition BELONGS to B, so only the
+    // session guard stands between this row and B's own match).
+    const asB = await listStreamCreditHistory(sessionAuth(b.orgId), b.orgId);
+    expect(asB.rows).toHaveLength(1);
+    expect(asB.rows[0]!.fixture, "H2: the session is another org's").toBeNull();
+    // A's ledger row names A's own session, whose fixture is in B's competition: refused by the competition's org (the
+    // session passes the first guard, so only the competition guard stands between this row and B's competition name).
+    const asA = await listStreamCreditHistory(sessionAuth(a.orgId), a.orgId);
+    expect(asA.rows).toHaveLength(1);
+    expect(asA.rows[0]!.fixture, "H13: the competition is another org's").toBeNull();
+    // positive pair: B's own session on B's own fixture links, so a null above is a refusal and not a broken join.
+    const own = await b.session(fixtureOfB);
+    await sql`insert into org_stream_credits (org_id, delta, reason, bucket, session_id, balance_after) values (${b.orgId}, -1, 'consume', 'pack', ${own}, 0)`;
+    const again = await listStreamCreditHistory(sessionAuth(b.orgId), b.orgId);
+    expect(again.rows.filter((x) => x.fixture !== null)).toHaveLength(1);
   });
 
   it("no staff identity, note or key leaves the reader (H9) — the row's keys are exactly the organiser's", async () => {

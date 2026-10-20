@@ -112,7 +112,7 @@ test.describe("settings shell", () => {
     await page.goto("/settings/billing");
     // Scoped to the rail's own landmark, and matched EXACTLY. Two other links
     // to the same route are in play — the billing page's own "Manage AI
-    // credits" and the rail's own "AI Credits" nav item — and Playwright's
+    // credits" and the rail's own "Credits" nav item — and Playwright's
     // `name` is a substring match, so anything looser resolves to several.
     const rail = page.getByRole("complementary");
     // Anchored, because the balance is whatever this environment's org has.
