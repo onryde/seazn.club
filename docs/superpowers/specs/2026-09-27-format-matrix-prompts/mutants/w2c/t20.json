@@ -148,10 +148,10 @@
   ]
  },
  {
-  "id": "t20-label-variant",
+  "id": "t20-lines-variant",
   "file": "apps/web/src/components/v2/division-settings-locks.ts",
-  "find": "if (field === \"variant_key\") return m(\"divset.variant\");",
-  "replace": "",
+  "find": "if (r.field === \"variant_key\") {",
+  "replace": "if (false) {",
   "killers": [
    {
     "cwd": "apps/web",
@@ -163,9 +163,9 @@
   ]
  },
  {
-  "id": "t20-label-edits",
+  "id": "t20-lines-edits",
   "file": "apps/web/src/components/v2/division-settings-locks.ts",
-  "find": " ?? fields.find((f) => f.edits.some((e) => topOf(e) === field));",
+  "find": " ?? fields.find((f) => f.edits.some((e) => topOf(e) === r.field));",
   "replace": ";",
   "killers": [
    {
@@ -185,10 +185,10 @@
   ]
  },
  {
-  "id": "t20-label-fallback",
+  "id": "t20-lines-named-label",
   "file": "apps/web/src/components/v2/division-settings-locks.ts",
-  "find": "return named?.label ?? field;",
-  "replace": "return named?.label ?? \"\";",
+  "find": "lines.push({ id: r.field, label: named.label, lock: r });",
+  "replace": "lines.push({ id: r.field, label: r.field, lock: r });",
   "killers": [
    {
     "cwd": "apps/web",
@@ -196,6 +196,118 @@
      "src/components/v2/__tests__/division-settings-locks.test.ts"
     ],
     "name": "the variant, a rule field by its key"
+   }
+  ]
+ },
+ {
+  "id": "t20-lines-points",
+  "file": "apps/web/src/components/v2/division-settings-locks.ts",
+  "find": "if (r.field === \"points\" && pointsBox) {",
+  "replace": "if (r.field === \"points\") {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-locks.test.ts"
+    ],
+    "name": "is the standings-points boxes when this division has them"
+   }
+  ]
+ },
+ {
+  "id": "t20-lines-points-never",
+  "file": "apps/web/src/components/v2/division-settings-locks.ts",
+  "find": "if (r.field === \"points\" && pointsBox) {",
+  "replace": "if (false) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-locks.test.ts"
+    ],
+    "name": "is the standings-points boxes when this division has them"
+   }
+  ]
+ },
+ {
+  "id": "t20-lines-other-first",
+  "file": "apps/web/src/components/v2/division-settings-locks.ts",
+  "find": "other ??= {",
+  "replace": "other = {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-locks.test.ts"
+    ],
+    "name": "is NEVER named by its raw key"
+   }
+  ]
+ },
+ {
+  "id": "t20-lines-other-push",
+  "file": "apps/web/src/components/v2/division-settings-locks.ts",
+  "find": "if (other !== undefined) lines.push(other);",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-locks.test.ts"
+    ],
+    "name": "is NEVER named by its raw key"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "a refused variant with its cascade reads as the controls"
+   }
+  ]
+ },
+ {
+  "id": "t20-lines-other-label",
+  "file": "apps/web/src/components/v2/division-settings-locks.ts",
+  "find": "label: m(\"ruleLock.otherSettings\")",
+  "replace": "label: r.field",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-locks.test.ts"
+    ],
+    "name": "is NEVER named by its raw key"
+   }
+  ]
+ },
+ {
+  "id": "t20-lines-dedupe",
+  "file": "apps/web/src/components/v2/division-settings-locks.ts",
+  "find": "if (listed.has(named.key)) continue;",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-locks.test.ts"
+    ],
+    "name": "are one line"
+   }
+  ]
+ },
+ {
+  "id": "t20-lines-listed-add",
+  "file": "apps/web/src/components/v2/division-settings-locks.ts",
+  "find": "listed.add(named.key);",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-locks.test.ts"
+    ],
+    "name": "are one line"
    }
   ]
  },
@@ -442,8 +554,8 @@
  {
   "id": "t20-ui-409-learn",
   "file": "apps/web/src/components/v2/division-settings.tsx",
-  "find": "          setRefusedList(refused);\n          setLearnedLocks((prev) => mergeLocks(prev, refused));\n        }\n      }\n    } finally {",
-  "replace": "          setRefusedList(refused);\n        }\n      }\n    } finally {",
+  "find": "          setLearnedLocks((prev) => mergeLocks(prev, refused));\n          restoreRefused(refused);\n        }\n      }\n    } finally {",
+  "replace": "          restoreRefused(refused);\n        }\n      }\n    } finally {",
   "killers": [
    {
     "cwd": "apps/web",
@@ -457,8 +569,8 @@
  {
   "id": "t20-ui-200-learn",
   "file": "apps/web/src/components/v2/division-settings.tsx",
-  "find": "        setRefusedList(refused);\n        setLearnedLocks((prev) => mergeLocks(prev, refused));\n      } else {",
-  "replace": "        setRefusedList(refused);\n      } else {",
+  "find": "        setLearnedLocks((prev) => mergeLocks(prev, refused));\n        restoreRefused(refused);\n      } else {",
+  "replace": "        restoreRefused(refused);\n      } else {",
   "killers": [
    {
     "cwd": "apps/web",
@@ -472,8 +584,8 @@
  {
   "id": "t20-ui-reset-partial",
   "file": "apps/web/src/components/v2/division-settings.tsx",
-  "find": "    setRefusedList([]);\n    setPartialSave(false);\n    try {",
-  "replace": "    setRefusedList([]);\n    try {",
+  "find": "    setPartialSave(false);\n    setRulesSave(rules);",
+  "replace": "    setRulesSave(rules);",
   "killers": [
    {
     "cwd": "apps/web",
@@ -487,8 +599,8 @@
  {
   "id": "t20-ui-reset-list",
   "file": "apps/web/src/components/v2/division-settings.tsx",
-  "find": "    setRefusedList([]);\n    setPartialSave(false);\n    try {",
-  "replace": "    setPartialSave(false);\n    try {",
+  "find": "    setRefusedList([]);\n    setPartialSave(false);\n    setRulesSave(rules);",
+  "replace": "    setPartialSave(false);\n    setRulesSave(rules);",
   "killers": [
    {
     "cwd": "apps/web",
@@ -691,6 +803,306 @@
      "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/__tests__/settings-locks-wiring.test.tsx"
     ],
     "name": "structureLocked follows the fixtures"
+   }
+  ]
+ },
+ {
+  "id": "t20-fr-restore-variant",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "if (lockLineFor(\"variant_key\", refused) !== undefined) setVariantKey(division.variant_key);",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "a refused VARIANT goes back to the stored variant"
+   }
+  ]
+ },
+ {
+  "id": "t20-fr-restore-variant-always",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "if (lockLineFor(\"variant_key\", refused) !== undefined) setVariantKey(division.variant_key);",
+  "replace": "setVariantKey(division.variant_key);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "a refused VARIANT goes back to the stored variant"
+   }
+  ]
+ },
+ {
+  "id": "t20-fr-restore-points",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "if (lockLineFor(\"points\", refused) !== undefined) setPointsValues(hydratePointsValues(division.sport_key, cfg.points));",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "the standings points boxes go back to the stored points"
+   }
+  ]
+ },
+ {
+  "id": "t20-fr-restore-points-always",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "if (lockLineFor(\"points\", refused) !== undefined) setPointsValues(",
+  "replace": "if (true) setPointsValues(",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "a refusal of another field leaves the typed points"
+   }
+  ]
+ },
+ {
+  "id": "t20-fr-restore-none",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "(f) => lockLineFor(f.key, refused, f.edits) !== undefined);",
+  "replace": "(f) => false);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "the refused field shows what is stored"
+   }
+  ]
+ },
+ {
+  "id": "t20-fr-restore-all",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "(f) => lockLineFor(f.key, refused, f.edits) !== undefined);",
+  "replace": "(f) => true);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "the refused field shows what is stored"
+   }
+  ]
+ },
+ {
+  "id": "t20-fr-restore-edits",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "(f) => lockLineFor(f.key, refused, f.edits) !== undefined);",
+  "replace": "(f) => lockLineFor(f.key, refused) !== undefined);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "refused through the config key it EDITS"
+   }
+  ]
+ },
+ {
+  "id": "t20-fr-restore-blank",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "        else delete next[f.key];\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "goes back to BLANK"
+   }
+  ]
+ },
+ {
+  "id": "t20-fr-restore-409",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "          setLearnedLocks((prev) => mergeLocks(prev, refused));\n          restoreRefused(refused);\n        }\n      }\n    } finally {",
+  "replace": "          setLearnedLocks((prev) => mergeLocks(prev, refused));\n        }\n      }\n    } finally {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "the refused field shows what is stored"
+   }
+  ]
+ },
+ {
+  "id": "t20-fr-restore-200",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "        setLearnedLocks((prev) => mergeLocks(prev, refused));\n        restoreRefused(refused);\n      } else {",
+  "replace": "        setLearnedLocks((prev) => mergeLocks(prev, refused));\n      } else {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "the refused field shows what is stored"
+   }
+  ]
+ },
+ {
+  "id": "t20-fr-scope-state",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "    setRulesSave(rules);\n    try {",
+  "replace": "    setRulesSave(false);\n    try {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "each of a rules save's four outcomes renders ONCE"
+   }
+  ]
+ },
+ {
+  "id": "t20-fr-scope-caller",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "}, msg(\"divset.notice.rulesSaved\"), true);",
+  "replace": "}, msg(\"divset.notice.rulesSaved\"));",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "each of a rules save's four outcomes renders ONCE"
+   }
+  ]
+ },
+ {
+  "id": "t20-fr-in-group",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "        {rulesSave && saveFeedback}\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "each of a rules save's four outcomes renders ONCE"
+   }
+  ]
+ },
+ {
+  "id": "t20-fr-foot-always",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "      {!rulesSave && saveFeedback}",
+  "replace": "      {saveFeedback}",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "each of a rules save's four outcomes renders ONCE"
+   }
+  ]
+ },
+ {
+  "id": "t20-fr-foot-never",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "      {!rulesSave && saveFeedback}",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "keeps its error at the foot of the page"
+   }
+  ]
+ },
+ {
+  "id": "t20-fr-role-partial",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "<div role=\"status\" className=\"rounded-md bg-amber-50",
+  "replace": "<div className=\"rounded-md bg-amber-50",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "each of a rules save's four outcomes renders ONCE"
+   }
+  ]
+ },
+ {
+  "id": "t20-fr-role-error",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "<p role=\"alert\" className=\"rounded-md bg-red-50",
+  "replace": "<p className=\"rounded-md bg-red-50",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "each of a rules save's four outcomes renders ONCE"
+   }
+  ]
+ },
+ {
+  "id": "t20-fr-count",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "{ n: keptLines.length }",
+  "replace": "{ n: refusedList.length }",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "a refused variant with its cascade reads as the controls"
+   }
+  ]
+ },
+ {
+  "id": "t20-fr-pointsbox",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "refusedLines(division.sport_key, refusedList, msg, pointsFieldKeys.length > 0)",
+  "replace": "refusedLines(division.sport_key, refusedList, msg, false)",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "the standings points boxes go back to the stored points"
+   }
+  ]
+ },
+ {
+  "id": "t20-fr-lines-used",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "{refusedItems(keptLines)}\n        </div>\n      )}\n      {error && (",
+  "replace": "{refusedItems([])}\n        </div>\n      )}\n      {error && (",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "names EACH refused field"
    }
   ]
  }
