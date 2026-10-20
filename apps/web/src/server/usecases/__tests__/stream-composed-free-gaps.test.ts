@@ -95,6 +95,12 @@ async function rig(o: { credits: number; fixtures?: 1 | 2 }) {
     heartbeat(s.sessionId, s.token, phase === null ? { state: "playing" } : { state: "playing", programmePhase: phase }, deps);
   const stateOf = async (sid: string) =>
     (await sql<{ state: string; fail_reason: string | null; end_reason: string | null }[]>`select state, fail_reason, end_reason from fixture_stream_sessions where id = ${sid}`)[0]!;
+  /** The compositor's beat while its OUTPUT to the platform has not connected (supervisor.rs `health()`: pipeline running, sink not
+   *  connected → `starting`), which still carries the programme phase — so `starting` + `live` is a real beat, and the session
+   *  has not gone on air (only a `playing` beat takes it live). */
+  const beatStarting = (s: Live, phase: Phase) => heartbeat(s.sessionId, s.token, { state: "starting", programmePhase: phase }, deps);
+  const startedAtOf = async (sid: string) =>
+    (await sql<{ started_at: string | null }[]>`select started_at from fixture_stream_sessions where id = ${sid}`)[0]!.started_at;
   /** The first playing beat takes the session live (and decides its credit). `live`: the camera is in; `waiting`: it is not. */
   const reach = async (s: Live, phase: Phase) => {
     await beat(s, phase);
@@ -142,8 +148,8 @@ async function rig(o: { credits: number; fixtures?: 1 | 2 }) {
   };
   const programmeLiveRows = async (sid: string) =>
     (await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_events where session_id = ${sid} and type = 'programme_phase' and to_state = 'live'`)[0]!.n;
-  return { auth, orgId: auth.orgId, fixtureId, fixtureIds, target, deps, runner, ingest, tick, composed, beat, reach, stop, current, consumes, refundsOf, ledgerOf,
-    balance, neverLiveEnd, countdownOf, tickAfterGoLive, passthrough, programmeLiveRows, stateOf };
+  return { auth, orgId: auth.orgId, fixtureId, fixtureIds, target, deps, runner, ingest, tick, composed, beat, beatStarting, startedAtOf, reach, stop, current, consumes,
+    refundsOf, ledgerOf, balance, neverLiveEnd, countdownOf, tickAfterGoLive, passthrough, programmeLiveRows, stateOf };
 }
 
 // ===========================================================================================================================
@@ -214,6 +220,34 @@ describe.skipIf(!HAS_DB)("GAP 2: composed restarts that reach video count toward
     expect(await r.programmeLiveRows(s.sessionId), "PREMISE: the log holds three `live` rows for the one session").toBe(3);
     expect((await r.current()).restart, "one counted restart").toMatchObject({ used: 1, free: true });
     expect(await r.consumes()).toBe(1);
+  });
+
+  it("ON AIR (review I1): a composed attempt whose compositor said `starting` with the camera `live` (its output never connected, so it never went on air) never counts — however many; the same attempt with ONE `playing` beat does", async () => {
+    const r = await rig({ credits: 3 });
+    const s0 = await r.composed();
+    await r.reach(s0, "live");
+    await r.stop(s0);
+    // The dark attempts: the log holds a camera-`live` row, the session never took a `playing` beat. More than W23's three of
+    // them — the overcharge was the working attempt that FOLLOWED a window's worth of these paying for what is free.
+    let dark = 0;
+    for (let i = 0; i < FREE_RESTARTS_PER_WINDOW + 1; i++) {
+      const s = await r.composed();
+      await r.beatStarting(s, "live");
+      expect(await r.programmeLiveRows(s.sessionId), `PREMISE: dark attempt ${i + 1} logged the camera live`).toBe(1);
+      expect(await r.startedAtOf(s.sessionId), `PREMISE: dark attempt ${i + 1} never went on air`).toBeNull();
+      await r.stop(s);
+      expect((await r.current()).restart, `after dark attempt ${i + 1}`).toMatchObject({ used: 0, free: true });
+      dark++;
+    }
+    expect(dark, "anti-vacuity: the dark attempts ran").toBe(FREE_RESTARTS_PER_WINDOW + 1);
+    // The pair: the SAME opening beat, then ONE `playing` beat — on air, so it counts, and (as the first counted restart) is free.
+    const on = await r.composed();
+    await r.beatStarting(on, "live");
+    await r.reach(on, "live");
+    expect(await r.startedAtOf(on.sessionId), "PREMISE: the playing beat took it on air").not.toBeNull();
+    expect(await r.consumes(), "the working attempt took nothing: the dark ones before it counted for nothing").toBe(1);
+    await r.stop(on);
+    expect((await r.current()).restart, "one counted restart: the one that went on air").toMatchObject({ used: 1, free: true });
   });
 
   it("AGREEMENT: at every step of the boundary sequence, admission's waiver, consumeForSession's decision and the projection's `restart.free` are all equal — five steps compared, composed", async () => {
@@ -290,7 +324,12 @@ describe.skipIf(!HAS_DB)("GAP 1: the platform returns at most one never-live cre
     expect((await r.ledgerOf(s2.sessionId)).map((x) => [x.reason, x.delta]), "S2's ledger: the consume stands").toEqual([["consume", -1]]);
     expect(await r.balance(), "S2: one credit spent").toBe(bal0 - 1);
     expect(await r.current(), "S2: what the panel reads").toMatchObject({ state: "failed", failReason: "camera_never_live", creditUsed: true });
-    const declined = await sql<{ payload: Record<string, unknown> }[]>`select payload from fixture_stream_events where session_id = ${s2.sessionId} and type = 'refund_credit'`;
+    const declined = await sql<{ payload: Record<string, unknown>; result: string | null }[]>`select payload, result from fixture_stream_events where session_id = ${s2.sessionId} and type = 'refund_credit'`;
+    // (review m2) a refund that was NOT written claims no success: the column holds 'ok' | 'failed' | null (V410's check), and a
+    // declined refund is neither a success nor a failure, so it is null — the `reason` below says why.
+    expect(declined.map((e) => e.result), "a declined refund does not record itself as 'ok'").toEqual([null]);
+    const returned = await sql<{ result: string | null }[]>`select result from fixture_stream_events where session_id = ${s1.sessionId} and type = 'refund_credit'`;
+    expect(returned.map((e) => e.result), "…and a refund that was written still does (the positive pair)").toEqual(["ok"]);
     expect(declined.map((e) => e.payload), "the session's history names the refund the platform declined").toEqual([
       { delta: 0, balanceAfter: bal0 - 1, ledgerId: null, reason: "refund_capped" },
     ]);
@@ -341,6 +380,34 @@ describe.skipIf(!HAS_DB)("GAP 1: the platform returns at most one never-live cre
       checked++;
     }
     expect(checked).toBe(2);
+  });
+
+  it("THE OLD ONE (review I2): with TWO earlier platform refunds on the fixture — one two windows old, one a minute old — the newest decides: the next never-live end is capped, and the countdown says so", async () => {
+    const r = await rig({ credits: 4 });
+    const s1 = await r.composed();
+    await r.reach(s1, "waiting");
+    await r.neverLiveEnd(s1);
+    expect(await r.refundsOf(s1.sessionId), "PREMISE: S1 was refunded").toBe(1);
+    // S1's refund ages out of the window (re-dated against the rig's clock, the `now` the end judges on)…
+    await sql`update org_stream_credits set created_at = ${r.deps.now()}::timestamptz - make_interval(mins => ${2 * WINDOW_MIN}) where session_id = ${s1.sessionId} and reason = 'refund'`;
+    // …so S2 is refunded again, and S2's refund is the fresh one. (S1's and S2's consumes were both returned, so neither stands:
+    // S3 below pays at go-live.)
+    const s2 = await r.composed();
+    await r.reach(s2, "waiting");
+    await r.neverLiveEnd(s2);
+    expect(await r.refundsOf(s2.sessionId), "PREMISE: S2 was refunded, S1's refund being a window old").toBe(1);
+    await sql`update org_stream_credits set created_at = ${r.deps.now()}::timestamptz - make_interval(mins => 1) where session_id = ${s2.sessionId} and reason = 'refund'`;
+    const priors = await sql<{ n: number }[]>`
+      select count(*)::int as n from org_stream_credits c join fixture_stream_sessions s on s.id = c.session_id
+       where c.org_id = ${r.orgId} and s.fixture_id = ${r.fixtureId} and c.reason = 'refund' and c.created_by is null`;
+    expect(priors[0]!.n, "PREMISE: two platform refunds sit on this fixture's ledger").toBe(2);
+    const s3 = await r.composed();
+    await r.reach(s3, "waiting");
+    expect(await r.consumes(), "PREMISE: S3 paid at go-live (no consume of S1 or S2 stands)").toBe(3);
+    expect((await r.countdownOf(s3))?.reason, "S3: the fresh refund caps it, however old the other is").toBe("camera_never_live_charged");
+    await r.neverLiveEnd(s3);
+    expect(await r.refundsOf(s3.sessionId), "S3's refund is withheld").toBe(0);
+    expect((await r.current()).creditUsed, "S3 spent its credit").toBe(true);
   });
 
   it("THE FIXTURE: the cap is per fixture — a refund on fixture A does not cap fixture B's no-camera end in the same org", async () => {

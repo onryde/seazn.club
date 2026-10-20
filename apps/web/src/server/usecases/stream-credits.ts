@@ -159,7 +159,7 @@ export type RestartAllowance = { windowOpen: boolean; used: number; limit: numbe
 /** W23 — the ONE authority admission, `consumeForSession` and the organiser's projection all ask (A9), so the three can
  *  never disagree. The window is `reuseWindowOpen`'s: a consume that stands, inside CREDIT_REUSE_HOURS; that consume's
  *  session is the ANCHOR. `used` counts this fixture's sessions created after the anchor that REACHED VIDEO
- *  (a passthrough session: first_ingest_at set; a composed one: the compositor reported the camera `live` — R2008 free-gaps)
+ *  (a passthrough session: first_ingest_at set; a composed one: the compositor reported the camera `live` AND it went on air — R2008 free-gaps)
  *  — a restart stopped before its phone sent anything, or whose camera never appeared, never counts, and a session counts
  *  once however often its phone changes or its ingest drops. `excludeSessionId` is the session asking about itself
  *  (`consumeForSession` at its own go-live): it is not one of its own restarts. A paid 4th consumes and so becomes the
@@ -173,18 +173,22 @@ export async function restartAllowance(
   const anchor = await standingConsume(exec, args);
   const windowOpen = withinReuseWindow(anchor ? new Date(anchor.created_at) : null, now);
   if (!anchor || !windowOpen) return { windowOpen: false, used: 0, limit, free: false };
-  const since = await exec<{ id: string; ingested: boolean }[]>`
-    select s.id, s.first_ingest_at is not null as ingested from fixture_stream_sessions s
+  const since = await exec<{ id: string; ingested: boolean; on_air: boolean }[]>`
+    select s.id, s.first_ingest_at is not null as ingested, s.started_at is not null as on_air from fixture_stream_sessions s
      where s.org_id = ${args.orgId} and s.fixture_id = ${args.fixtureId}
        and s.id <> ${anchor.session_id}
        and (${args.excludeSessionId}::uuid is null or s.id <> ${args.excludeSessionId})
        and s.created_at > (select created_at from fixture_stream_sessions where id = ${anchor.session_id})`;
   // REACHED VIDEO (R2008 free-gaps, owner ruling 2026-10-20): a passthrough session did when its phone's input connected
   // (`first_ingest_at` — only the passthrough poll writes it); a COMPOSED one never has it, so it did when the compositor's
-  // beats said the camera was LIVE (`sessionsWhoseCameraWasLive`, the evidence R2008's refund reads). The two are disjoint
-  // by construction — only a session with no first ingest is asked — so a session counts once.
+  // beats said the camera was LIVE (`sessionsWhoseCameraWasLive`, the evidence R2008's refund reads) AND the attempt went on
+  // air (`started_at`, stamped with the go-live that decides the credit). The second half is review I1: the compositor reports
+  // `starting` — output to the platform not connected — while its programme phase is already `live`, so a camera-live row alone
+  // is an attempt that never reached a viewer, and counting it charged the attempt that finally worked for what W23 makes free
+  // ("a Go live that never got video never counts"). The two kinds are disjoint by construction — only a session with no first
+  // ingest is asked — so a session counts once.
   const used = since.filter((s) => s.ingested).length
-    + (await sessionsWhoseCameraWasLive(exec, since.filter((s) => !s.ingested).map((s) => s.id))).size;
+    + (await sessionsWhoseCameraWasLive(exec, since.filter((s) => !s.ingested && s.on_air).map((s) => s.id))).size;
   return { windowOpen, used, limit, free: restartIsFree({ windowOpen, used }, limit) };
 }
 
@@ -733,12 +737,14 @@ export async function neverLiveRefundStanding(
 ): Promise<{ owed: number; buckets: StreamCreditBucket[]; capped: boolean; willRefund: boolean; chargeStands: boolean }> {
   const standing = await sessionCreditStanding(exec, args.orgId, args.sessionId);
   const owed = standing.consumed - standing.refunded;
+  // EVERY prior platform refund of the fixture reaches `neverLiveRefundCapped`, which is the one place that counts the ones inside
+  // the window: the query must not truncate first (a `limit` with the wrong end of the order picks an aged-out refund and reads
+  // "room" — review I2). A fixture's lifetime of platform never-live refunds is a handful.
   const priorAts = args.fixtureId === null ? [] : (await exec<{ at: string }[]>`
     select r.created_at as at
       from org_stream_credits r join fixture_stream_sessions s on s.id = r.session_id
      where r.org_id = ${args.orgId} and r.reason = 'refund' and r.created_by is null
-       and s.fixture_id = ${args.fixtureId} and s.fail_reason = ${NEVER_LIVE_FAIL_REASON}
-     order by r.created_at desc limit ${NEVER_LIVE_REFUNDS_PER_WINDOW}`).map((r) => new Date(r.at));
+       and s.fixture_id = ${args.fixtureId} and s.fail_reason = ${NEVER_LIVE_FAIL_REASON}`).map((r) => new Date(r.at));
   const capped = neverLiveRefundCapped(priorAts, now, NEVER_LIVE_REFUNDS_PER_WINDOW);
   return { owed, buckets: standing.buckets, capped, willRefund: owed >= 1 && !capped, chargeStands: owed >= 1 && capped };
 }

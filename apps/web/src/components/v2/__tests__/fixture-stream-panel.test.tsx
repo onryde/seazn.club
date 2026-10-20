@@ -1922,9 +1922,9 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     expect(m("stream.fail.unknown"), "the premise: the two sentences differ").not.toBe(m(FAIL_REASON_KEYS.machine_crash));
   });
 
-  // Free-gaps (owner ruling 2026-10-20): a never-live failure whose credit was NOT returned must not say "you weren't charged" next to
-  // the "1 credit used" chip — the card reads the same fact the chip does (`creditUsed`).
-  it("a never-live failure: the card says 'not charged' when no credit was used and 'charged' when one was — never the same sentence for both, and never beside a chip that contradicts it", () => {
+  // Free-gaps (owner ruling 2026-10-20): a never-live failure whose credit was NOT returned must not say "you weren't charged" — the
+  // sentence follows the session's own ledger (`creditUsed`, the fact the ended card's "credit used" chip reads).
+  it("a never-live failure: the card says 'not charged' when no credit was used and 'charged' when one was — never the same sentence for both; the sentence follows the session's own ledger (`creditUsed`)", () => {
     const plain = body({ view: session({ state: "failed", failReason: "camera_never_live", creditUsed: false }), balance: 1 });
     const charged = body({ view: session({ state: "failed", failReason: "camera_never_live", creditUsed: true }), balance: 1 });
     expect(textAt(plain, "stream-fail-reason")).toBe(m("stream.fail.camera_never_live"));

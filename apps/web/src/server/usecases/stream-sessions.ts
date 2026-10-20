@@ -429,7 +429,9 @@ export async function apply(
       // BOUNDED (free-gaps, owner ruling 2026-10-20): one never-live refund per fixture per reuse window — a refund the window
       // has no room for is withheld, and the event says so (`reason`), where delta 0 alone would read as "nothing was owed".
       const r = await refundConsumeForSession(tx, { orgId: before.orgId, sessionId, fixtureId: before.fixtureId, note: "R2008: the stream went live and its camera never appeared — credit returned" }, now);
-      await recordEvent(tx, { sessionId, orgId: before.orgId, source: "domain", kind: "effect", type: "refund_credit", result: "ok", occurredAt: now,
+      // `result` is 'ok' | 'failed' | null (V410's check): a refund the window had no room for succeeded at nothing and failed at
+      // nothing — it was declined — so it claims neither (null), and the payload's `reason` says why (review m2).
+      await recordEvent(tx, { sessionId, orgId: before.orgId, source: "domain", kind: "effect", type: "refund_credit", result: r.withheld ? null : "ok", occurredAt: now,
         payload: { delta: r.delta, balanceAfter: r.balance, ledgerId: r.ledgerId, ...(r.withheld ? { reason: "refund_capped" } : {}) } });
     }
     logDecision(before, dec, now);
