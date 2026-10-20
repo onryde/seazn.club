@@ -400,6 +400,14 @@ describe("R2003 — restart and beat constants", () => {
     expect(config.RUNNER_CRASH_CAP, "owner approval 2026-10-16").toBe(3);
     expect(config.RUNNER_CRASH_CAP).toBe(config.RUNNER_INPLACE_RESTARTS + 1);
   });
+  // Owed 67 (OWNER RULING 2026-10-20): "cap the compositor's in-place self-restarts at 6 per stream session. When the 7th
+  // restart arrives, the session ends." The ruling's own numbers, typed here — a session SURVIVES 6 and the 7th ends it, so
+  // the constant is the survivable count (unlike RUNNER_CRASH_CAP, whose value is the count that ends a session).
+  it("RUNNER_RESTART_CAP is the owner's 6 (2026-10-20): six restarts are survived and the seventh ends the session", () => {
+    const SURVIVED = 6, ENDS_AT = 7;   // the ruling's words
+    expect(config.RUNNER_RESTART_CAP, "owner ruling 2026-10-20").toBe(SURVIVED);
+    expect(config.RUNNER_RESTART_CAP + 1, "the restart that ends the session").toBe(ENDS_AT);
+  });
 });
 
 // R2004 PR 0 — the stop contract. Each figure is typed from its SOURCE, never read back off config.ts or the compositor's

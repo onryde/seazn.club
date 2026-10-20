@@ -3,7 +3,7 @@
 // mutant killers are recorded per edge in the PR table.
 import { describe, expect, it } from "vitest";
 import {
-  ENDING_TIMEOUT_SECONDS, MAX_DURATION_MINUTES, RUNNER_CRASH_CAP, RUNNER_MAX_ATTEMPTS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS, STALE_HEARTBEAT_SECONDS_COMPOSED,
+  ENDING_TIMEOUT_SECONDS, MAX_DURATION_MINUTES, RELAY_EXIT_RESTART, RUNNER_CRASH_CAP, RUNNER_MAX_ATTEMPTS, RUNNER_RESTART_CAP, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS, STALE_HEARTBEAT_SECONDS_COMPOSED,
 } from "../../config";
 import { evaluate, type Expiry } from "../expiry";
 import {
@@ -570,6 +570,40 @@ describe("decide — a composed session's Machine events go through the runner t
     }
     // crash 1 (its beat); its exit read twice (the same crash: no row carries a count); crash 2; a playing beat; crash 3
     expect(seen).toEqual([1, undefined, undefined, 2, undefined, RUNNER_CRASH_CAP]);
+    expect(s).toMatchObject({ state: "failed", failReason: "machine_crash" });
+  });
+
+  // Owed 67: the same witness for restarts — `restartsCounted` on the runner_transition of the step that MOVED the restart count
+  // (a restart's beat, or its exit's first read), on no other row, and never `crashCount` for a restart. The expected counts are
+  // the restarts the sequence makes; the one past RUNNER_RESTART_CAP fails the session machine_crash in the same decision.
+  it("Owed 67: restartsCounted rides the runner_transition whose step moved the restart count — never a re-read, never a crash — and the restart past RUNNER_RESTART_CAP fails the session machine_crash in the same decision", () => {
+    let s = C({ state: "live", startedAt: T0, runner: { ...BOOTING, state: "playing" } });
+    const seenRestarts: (number | undefined)[] = [];
+    const seenCrashes: (number | undefined)[] = [];
+    const restart = { type: "runner", trigger: { type: "callback_restarted" } } as const;
+    const exitOf = (at: Date) => ({ type: "runner", trigger: { type: "observed", state: "running", exit: { exitCode: RELAY_EXIT_RESTART, oomKilled: false, requestedStop: false }, restarting: false, restartingSince: null, exitAt: at, restartCount: 1 } }) as const;
+    const events: Command[] = [];
+    const expected: (number | undefined)[] = [];
+    for (let k = 1; k <= RUNNER_RESTART_CAP + 1; k++) {
+      const at = new Date(T0.getTime() + k * 1000);
+      // restart k: its beat (moves the count to k), then its exit read twice (the SAME restart: moves nothing)
+      if (k > RUNNER_RESTART_CAP) { events.push(restart); expected.push(k); break; }   // the one that ends the session: its beat is the last command
+      events.push(restart, exitOf(at), exitOf(at));
+      expected.push(k, undefined, undefined);
+      if (k === RUNNER_RESTART_CAP) { events.push({ type: "runner", trigger: { type: "callback_playing" } }); expected.push(undefined); }
+    }
+    for (const c of events) {
+      const d = decide(s, c, T0);
+      const rows = eventRowsOf(s, d, c).filter((r) => r.kind === "runner_transition");
+      expect(rows, JSON.stringify(c)).toHaveLength(1);
+      seenRestarts.push(rows[0]!.payload.restartsCounted as number | undefined);
+      seenCrashes.push(rows[0]!.payload.crashCount as number | undefined);
+      s = d.next;
+      if (seenRestarts.length < events.length) expect(s.state, "survived until the last restart").toBe("live");
+    }
+    expect(events.length, "anti-vacuity").toBe(3 * RUNNER_RESTART_CAP + 1 + 1);
+    expect(seenRestarts).toEqual(expected);
+    expect(seenCrashes.filter((x) => x !== undefined), "a restart is no crash: crashCount never rides its rows").toEqual([]);
     expect(s).toMatchObject({ state: "failed", failReason: "machine_crash" });
   });
 

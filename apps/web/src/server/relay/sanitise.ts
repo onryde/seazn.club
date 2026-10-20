@@ -28,6 +28,8 @@ export const ALLOWED_KEYS: ReadonlySet<string> = new Set([
   "rung", "scoreStale",
   // R2003b: a runner_transition's crash count (domain/session.ts eventRowsOf) — a number.
   "crashCount",
+  // Owed 67: …and its session's restart count (the compositor's in-place restarts, capped by RUNNER_RESTART_CAP) — a number.
+  "restartsCounted",
   // …and its final beat's why (owner 2026-10-15): an enum word and compositor-redacted text (cut at `?` like any string).
   "exitReason", "exitDetail",
   // R2007 PR B (overlay templates spec 2026-10-15 §4.3): which channel the overlay page reads its phase from — an enum word.
