@@ -13,14 +13,14 @@
 import { describe, expect, it } from "vitest";
 import { RelayHeartbeat } from "@/server/api-v1/schemas";
 import {
-  MAX_DURATION_MINUTES, RELAY_EXIT_REFUSED, RELAY_HEARTBEAT_INTERVAL_MS, RUNNER_INPLACE_RESTARTS, RUNNER_MAX_ATTEMPTS, RUNNER_OBSERVE_SLACK_SECONDS,
+  MAX_DURATION_MINUTES, RELAY_EXIT_REFUSED, RELAY_EXIT_RESTART, RELAY_HEARTBEAT_INTERVAL_MS, RUNNER_INPLACE_RESTARTS, RUNNER_MAX_ATTEMPTS, RUNNER_OBSERVE_SLACK_SECONDS,
   RUNNER_CRASH_CAP, RUNNER_RESTART_STUCK_SECONDS,
   RUNNER_STOP_GRACE_SECONDS, RUNNER_STOP_SIGNAL, STALE_HEARTBEAT_SECONDS, STALE_HEARTBEAT_SECONDS_COMPOSED, WARMING_TIMEOUT_MINUTES,
 } from "../../config";
 import { evaluate } from "../expiry";
 import {
   BEAT_EXIT_REASONS, CRASHES_NONE, InvalidRunnerTransition, MACHINE_MINUTES_BOUND, OBSERVED_STATES, RUNNER_NONE, RUNNER_STATES, RUNNER_TABLE,
-  RUNNER_TRIGGER_TYPES, failReasonFromExit, machineNameFor, stepRunner, stoppedBeatTrigger,
+  RUNNER_TRIGGER_TYPES, failReasonFromExit, machineNameFor, restartsInPlaceAfter, stepRunner, stoppedBeatTrigger,
   type BeatExitReason, type CrashTally, type ExitInfo, type Runner, type RunnerEffect, type RunnerState, type RunnerTrigger, type SessionSignal,
 } from "../runner";
 import { InvalidTransition, decide, isTerminal, type Command, type Session } from "../session";
@@ -41,6 +41,7 @@ const SAMPLE: Record<Exclude<RunnerTrigger["type"], "create_started">, RunnerTri
   callback_playing: { type: "callback_playing" },
   callback_stopped: { type: "callback_stopped" },
   callback_crashed: { type: "callback_crashed" },
+  callback_restarted: { type: "callback_restarted" },
   observed: { type: "observed", state: "running" },
   stale_beat: { type: "stale_beat" },
   deadline: { type: "deadline" },
@@ -56,6 +57,9 @@ const SAMPLE: Record<Exclude<RunnerTrigger["type"], "create_started">, RunnerTri
 const REFUSED_EXIT: ExitInfo = { exitCode: RELAY_EXIT_REFUSED, oomKilled: false, requestedStop: false };
 /** A plain crash (F-007's probes exit 1). */
 const CRASH_EXIT: ExitInfo = { exitCode: 1, oomKilled: false, requestedStop: false };
+/** Owed 66: the compositor's in-place restart exit (C11b: `ExitReason::Restart`, EX_TEMPFAIL) — a non-zero exit Fly restarts
+ *  like any failure, and the one exit that is NOT a crash. */
+const RESTART_EXIT: ExitInfo = { exitCode: RELAY_EXIT_RESTART, oomKilled: false, requestedStop: false };
 const triggersFor = (r: Runner): RunnerTrigger[] => RUNNER_TRIGGER_TYPES.flatMap((t): RunnerTrigger[] =>
   t === "observed" ? [
       ...OBSERVED_STATES.map((state) => ({ type: "observed" as const, state })),
@@ -75,6 +79,8 @@ const triggersFor = (r: Runner): RunnerTrigger[] => RUNNER_TRIGGER_TYPES.flatMap
       // observation that moves the crash tally. ONE fixed instant on purpose: a second read of it is the same crash, so the
       // walks see the dedupe; distinct crashes and the cap through exits are the R2003b sweep's (it mints fresh instants).
       { type: "observed" as const, state: "pending", exit: CRASH_EXIT, restarting: true, restartingSince: T0, exitAt: T0, restartCount: 1 },
+      // Owed 66: the in-place restart's exit (75) — the one observation that sets `restartSeen` and counts no crash.
+      { type: "observed" as const, state: "pending", exit: RESTART_EXIT, restarting: true, restartingSince: T0, exitAt: T0, restartCount: 1, exitRestarted: true },
     ]
   // R2003: both flavours of a stopped beat — a plain one, and the final beat that said its run was refused
   : t === "callback_stopped" ? [{ type: "callback_stopped" }, { type: "callback_stopped", refused: true },
@@ -94,7 +100,8 @@ const nodeKey = (r: Runner): string =>
   `${r.state}:${r.attempt}:${r.stopRequestedAt !== null ? "marked" : "unmarked"}${r.lastExit?.exitCode === RELAY_EXIT_REFUSED ? ":refused-exit" : ""}` +   // R2003: afterLostDestroyed branches on it
   // R2003b: the cap reads the session's count, and the next count depends on this attempt's two bounds and on whether an
   // exit identity is held (the one fixed exit instant triggersFor carries is fresh only while none is).
-  `:crashes ${r.crashes.count}/${r.crashes.beats}/${r.crashes.exits}${r.crashes.exitAt ? "@" : ""}`;
+  // Owed 66: and the restart-count floor branches on whether this attempt has read an in-place restart's exit.
+  `:crashes ${r.crashes.count}/${r.crashes.beats}/${r.crashes.exits}${r.crashes.exitAt ? "@" : ""}${r.crashes.restartSeen ? ":restart-seen" : ""}`;
 const confirmedDestroy = (t: RunnerTrigger): boolean => t.type === "destroy_ok" || (t.type === "observed" && t.state === "destroyed");
 
 describe("RUNNER_TABLE — the parity sweep (every cell, from the exported tables)", () => {
@@ -555,8 +562,8 @@ function finalBeat(w: Sim, at: number, exitReason: BeatExitReason | undefined): 
   w.s = { ...w.s, heartbeatAt: sec(at) };
   tick(w, at);
   const t = stoppedBeatTrigger(exitReason);
-  // R2003b: a crash beat is not a teardown trigger — the route hands it to a session that is still running, never a terminal one
-  if (t && (ACTIVE_RUNNER(w.s.runner.state) || w.s.runner.state === "stopping") && (t.type !== "callback_crashed" || !isTerminal(w.s.state))) feed(w, { type: "runner", trigger: t }, at);
+  // R2003b: a crash (or restart) beat is not a teardown trigger — the route hands it to a session that is still running, never a terminal one
+  if (t && (ACTIVE_RUNNER(w.s.runner.state) || w.s.runner.state === "stopping") && (t.type === "callback_stopped" || !isTerminal(w.s.state))) feed(w, { type: "runner", trigger: t }, at);
 }
 const observe = (w: Sim, at: number, state: (typeof OBSERVED_STATES)[number], exit: ExitInfo | null = null) =>
   feed(w, { type: "runner", trigger: { type: "observed", state, exit } }, at);
@@ -564,7 +571,7 @@ const observe = (w: Sim, at: number, state: (typeof OBSERVED_STATES)[number], ex
 describe("R2003 — the final beat's exit reason (stoppedBeatTrigger): what each reason asks of the lifecycle", () => {
   // The oracle is the controller's ruling (2026-10-15) and the orchestrator's I2 decision (PR #967 review: an `ended` or
   // `deadline` beat ENDS the session — no retry), typed here — never read off the function under test.
-  type Routed = "callback_stopped" | "ends:stopped" | "ends:max_duration" | "refused" | "crashed" | "record_only";
+  type Routed = "callback_stopped" | "ends:stopped" | "ends:max_duration" | "refused" | "crashed" | "restarted" | "record_only";
   const RULED: Record<BeatExitReason | "absent" | "null", Routed> = {
     absent: "callback_stopped", null: "callback_stopped",      // a legacy runner's beat: today's behaviour, unchanged
     ended: "ends:stopped",                                     // the compositor finished: a normal stop, respected
@@ -572,6 +579,10 @@ describe("R2003 — the final beat's exit reason (stoppedBeatTrigger): what each
     // R2003b (owner approval 2026-10-16): a fatal run is a CRASH, counted toward RUNNER_CRASH_CAP — below it the lifecycle
     // still only records it (on-failure ≤ RUNNER_INPLACE_RESTARTS restarts it in place on the SAME attempt).
     fatal: "crashed",
+    // Owed 66 (compositor C11b, the coordinator's dispatch): the in-place restart is NOT a crash — nothing is counted, like a
+    // platform stop: Fly restarts the process on the SAME attempt and the restarted process beats again. Review m1: the
+    // lifecycle hears it once, to NOTE it (`restartSeen`), under a trigger of its own — never `callback_crashed`.
+    restart: "restarted",
     signalled: "record_only",                                  // a stop someone else asked for (exit 0): never a crash, never counted
     session_gone: "record_only",
     refused: "refused",                                        // the exit-78 outcome: failed, never a retry
@@ -587,12 +598,13 @@ describe("R2003 — the final beat's exit reason (stoppedBeatTrigger): what each
       const t = stoppedBeatTrigger(input);
       const got: Routed = t === null ? "record_only"
         : t.type === "callback_crashed" ? "crashed"
+        : t.type === "callback_restarted" ? "restarted"
         : t.type !== "callback_stopped" ? (() => { throw new Error(`${label}: ${t.type} is not a stopped beat's trigger`); })()
         : t.refused === true ? "refused"
         : t.endReason !== undefined ? `ends:${t.endReason}` as Routed
         : "callback_stopped";
       expect(got, label).toBe(RULED[label]);
-      if (t !== null) expect(t.type, label).toBe(got === "crashed" ? "callback_crashed" : "callback_stopped");
+      if (t !== null) expect(t.type, label).toBe(got === "crashed" ? "callback_crashed" : got === "restarted" ? "callback_restarted" : "callback_stopped");
       checked++;
     }
     expect(checked).toBe(BEAT_EXIT_REASONS.length + 2);
@@ -1021,7 +1033,7 @@ const crashAt = (n: number) => new Date(T0.getTime() + n * 60_000);
  *  per-window restart count (F-007: restarting exit k carries restart_count k; the final one restarting false).
  *  `exitRestarted` is the exit's own record, by default the same as `restarting`; a read after the restart COMPLETED
  *  (running, or a Machine torn down after it) passes restarting false with exitRestarted true. */
-const crashExit = (state: (typeof OBSERVED_STATES)[number], exitAt: Date, restartCount: number | null, restarting = true, exit: ExitInfo = CRASH_EXIT, exitRestarted: boolean | null = restarting): RunnerTrigger =>
+const crashExit = (state: (typeof OBSERVED_STATES)[number], exitAt: Date, restartCount: number | null, restarting: boolean | null = true, exit: ExitInfo = CRASH_EXIT, exitRestarted: boolean | null = restarting): RunnerTrigger =>
   ({ type: "observed", state, exit, restarting, restartingSince: restarting ? exitAt : null, exitAt, restartCount, exitRestarted });
 const CRASHED: RunnerTrigger = { type: "callback_crashed" };
 const tally = (over: Partial<CrashTally>): CrashTally => ({ ...CRASHES_NONE, ...over });
@@ -1032,7 +1044,7 @@ describe("R2003b — the crash-loop cap: RUNNER_CRASH_CAP fatal crashes per SESS
     expect(stoppedBeatTrigger("fatal")).toEqual({ type: "callback_crashed" });
     expect(stoppedBeatTrigger("signalled"), "a stop someone else asked for is never a crash").toBeNull();
     expect(stoppedBeatTrigger("session_gone")).toBeNull();
-    expect(RUNNER_NONE.crashes, "a runner starts with nothing counted").toEqual({ count: 0, beats: 0, exits: 0, exitAt: null });
+    expect(RUNNER_NONE.crashes, "a runner starts with nothing counted").toEqual({ count: 0, beats: 0, exits: 0, exitAt: null, restartSeen: false });
   });
 
   it("the SEQUENCE through decide: crash 1 → in-place restart → crash 2 → restart → crash 3 → failed machine_crash; the Machine is force-destroyed at the cap and NO retry is spent, though attempt 1 still had one", () => {
@@ -1116,6 +1128,10 @@ describe("R2003b — the crash-loop cap: RUNNER_CRASH_CAP fatal crashes per SESS
       ["a requested stop (0)", { exitCode: 0, oomKilled: false, requestedStop: true }, false],
       ["a requested stop killed past its grace (143)", { exitCode: 143, oomKilled: false, requestedStop: true }, false],
       ["the refusal (78)", REFUSED_EXIT, false],
+      // Owed 66: the in-place restart (C11b, exit 75) is not a crash; its neighbours are (the exact code, not a range)
+      ["the in-place restart (75)", RESTART_EXIT, false],
+      ["a code just below the restart's (74)", { exitCode: RELAY_EXIT_RESTART - 1, oomKilled: false, requestedStop: false }, true],
+      ["a code just above the restart's (76)", { exitCode: RELAY_EXIT_RESTART + 1, oomKilled: false, requestedStop: false }, true],
     ];
     let counted = 0, notCounted = 0;
     for (const [label, exit, isCrash] of CASES) {
@@ -1124,8 +1140,8 @@ describe("R2003b — the crash-loop cap: RUNNER_CRASH_CAP fatal crashes per SESS
       expect(step.next.crashes.count, label).toBe(isCrash ? 1 : 0);
       if (isCrash) counted++; else notCounted++;
     }
-    expect(counted).toBe(3);
-    expect(notCounted).toBe(4);
+    expect(counted).toBe(5);
+    expect(notCounted).toBe(5);
   });
 
   it("a platform stop is never a crash: RUNNER_CRASH_CAP + 1 `signalled` final beats leave a live session live, its count 0; the same number of `fatal` ones fails it (the differential)", () => {
@@ -1169,7 +1185,7 @@ describe("R2003b — the crash-loop cap: RUNNER_CRASH_CAP fatal crashes per SESS
     let checked = 0;
     for (const state of ["stopped", "pending"] as const) {
       const restarting = stepRunner(inState("playing"), crashExit(state, crashAt(1), null, true, CODELESS), crashAt(1));
-      expect(restarting.next.crashes, `${state}, restarting`).toEqual({ count: 1, beats: 0, exits: 1, exitAt: crashAt(1) });
+      expect(restarting.next.crashes, `${state}, restarting`).toEqual({ count: 1, beats: 0, exits: 1, exitAt: crashAt(1), restartSeen: false });
       const notRestarting = stepRunner(inState("playing"), crashExit(state, crashAt(1), null, false, CODELESS), crashAt(1));
       expect(notRestarting.next.crashes, `${state}, not restarting`).toEqual(CRASHES_NONE);
       checked++;
@@ -1267,7 +1283,7 @@ describe("R2003b — the crash-loop cap: RUNNER_CRASH_CAP fatal crashes per SESS
     for (const state of ["stopped", "pending"] as const) for (const from of ["playing", "booting"] as const) {
       const short = R({ ...inState(from), crashes: tally({ count: RUNNER_CRASH_CAP - 1, exits: RUNNER_CRASH_CAP - 1, exitAt: crashAt(1) }) });
       expect(stepRunner(short, crashExit(state, crashAt(2), 1), crashAt(2)), `${from} × ${state}`).toEqual({
-        next: { ...short, state: "lost", lastExit: CRASH_EXIT, crashes: { count: RUNNER_CRASH_CAP, beats: 0, exits: RUNNER_CRASH_CAP, exitAt: crashAt(2) } },
+        next: { ...short, state: "lost", lastExit: CRASH_EXIT, crashes: { count: RUNNER_CRASH_CAP, beats: 0, exits: RUNNER_CRASH_CAP, exitAt: crashAt(2), restartSeen: false } },
         effects: [{ type: "force_destroy" }], signal: { type: "failed", reason: "machine_crash" },
       });
       checked++;
@@ -1279,7 +1295,7 @@ describe("R2003b — the crash-loop cap: RUNNER_CRASH_CAP fatal crashes per SESS
     for (const state of ["running", "stopping", "destroying", "unknown"] as const) for (const from of ["playing", "booting"] as const) {
       const short = R({ ...inState(from), crashes: tally({ count: RUNNER_CRASH_CAP - 1, exits: RUNNER_CRASH_CAP - 1, exitAt: crashAt(1) }) });
       expect(stepRunner(short, crashExit(state, crashAt(2), 1, false, CRASH_EXIT, true), crashAt(2)), `${from} × ${state}`).toEqual({
-        next: { ...short, state: "lost", lastExit: state === "running" ? short.lastExit : CRASH_EXIT, crashes: { count: RUNNER_CRASH_CAP, beats: 0, exits: RUNNER_CRASH_CAP, exitAt: crashAt(2) } },
+        next: { ...short, state: "lost", lastExit: state === "running" ? short.lastExit : CRASH_EXIT, crashes: { count: RUNNER_CRASH_CAP, beats: 0, exits: RUNNER_CRASH_CAP, exitAt: crashAt(2), restartSeen: false } },
         effects: [{ type: "force_destroy" }], signal: { type: "failed", reason: "machine_crash" },
       });
       checked++;
@@ -1341,14 +1357,19 @@ describe("R2003b — the crash-loop cap: RUNNER_CRASH_CAP fatal crashes per SESS
   // counted; never more counted than the crashes the world MADE (no double count — signalled made none); never fewer than
   // the beats, or the distinct crash exits, the lifecycle was handed (no evidence dropped).
   it("crash_cap_sweep: every order of crash+beat / silent crash / signalled stop / restart done / observe / wait / destroy_ok / late retry — no create at the cap, the cap fails at once, nothing counted twice or dropped (orders checked reported; zero is a failure)", () => {
-    type Ev = "crash_beat" | "crash_silent" | "signalled" | "restart_done" | "observe" | "wait_played" | "destroy_ok" | "late_retry";
-    const ALPHABET: readonly Ev[] = ["crash_beat", "crash_silent", "signalled", "restart_done", "observe", "wait_played", "destroy_ok", "late_retry"];
+    // Owed 66: `restart_polled` is the compositor's in-place restart — its `restart` beat (noted, never counted), exit 75 (which
+    // Fly counts in its window like any non-zero exit) and the read that follows it before the next exit. `restart_unread`
+    // is the same restart WITHOUT that read (review m1): the exit is there for the next exit to overwrite as the newest, and
+    // only the beat has noted it. A restart MAKES no crash, so `made` does not move; the oracles below then say a restart is
+    // never counted, in any order.
+    type Ev = "crash_beat" | "crash_silent" | "restart_polled" | "restart_unread" | "signalled" | "restart_done" | "observe" | "wait_played" | "destroy_ok" | "late_retry";
+    const ALPHABET: readonly Ev[] = ["crash_beat", "crash_silent", "restart_polled", "restart_unread", "signalled", "restart_done", "observe", "wait_played", "destroy_ok", "late_retry"];
     const DEPTH = 6;
     // `restartCount` / `exitRestarted`: the newest exit's own record, as F-007 measured it (restarting exit k: k, true; the
     // window's final exit: max_retries, false — 2 after 3 crashes)
-    interface Machine { name: string; alive: boolean; restarting: boolean; windowCrashes: number; exit: ExitInfo | null; exitAt: number | null; restartCount: number | null; exitRestarted: boolean | null }
+    interface Machine { name: string; alive: boolean; restarting: boolean; windowCrashes: number; restarts: number; unread?: boolean; exit: ExitInfo | null; exitAt: number | null; restartCount: number | null; exitRestarted: boolean | null }
     interface World { s: Session; at: number; machines: Machine[]; destroyFor: string | null; made: number; beats: number; beaten: Set<string>; exits: Set<string>; path: Ev[] }
-    let orders = 0, createsChecked = 0, capped = 0, cappedOnRetry = 0, dedupes = 0, signalledStops = 0, runningExits = 0, checks = 0;
+    let orders = 0, createsChecked = 0, capped = 0, cappedOnRetry = 0, dedupes = 0, signalledStops = 0, runningExits = 0, checks = 0, restartsPolled = 0, restartsUnread = 0, crashesAfterRestart = 0, cappedAfterRestart = 0, crashesAfterUnread = 0;
     const violations: string[] = [];
     const current = (w: World) => w.machines.find((m) => m.name === w.s.runner.name) ?? null;
     const clone = (w: World): World => ({ ...w, machines: w.machines.map((m) => ({ ...m })), beaten: new Set(w.beaten), exits: new Set(w.exits), path: [...w.path] });
@@ -1365,7 +1386,7 @@ describe("R2003b — the crash-loop cap: RUNNER_CRASH_CAP fatal crashes per SESS
         if (e.type === "runner" && e.effect.type === "create_machine") {
           createsChecked++;
           if (countBefore >= RUNNER_CRASH_CAP || w.s.runner.crashes.count >= RUNNER_CRASH_CAP) violations.push(`${w.path.join(" → ")}: create ${w.s.runner.name} at ${w.s.runner.crashes.count} crashes`);
-          w.machines.push({ name: w.s.runner.name!, alive: true, restarting: false, windowCrashes: 0, exit: null, exitAt: null, restartCount: null, exitRestarted: null });
+          w.machines.push({ name: w.s.runner.name!, alive: true, restarting: false, windowCrashes: 0, restarts: 0, exit: null, exitAt: null, restartCount: null, exitRestarted: null });
           step(w, { type: "runner", trigger: { type: "create_ok", machineId: `m-${w.s.runner.name}` } });
         }
         if (e.type === "retry_runner") step(w, { type: "runner", trigger: { type: "create_started", name: machineNameFor(SID, w.s.runner.attempt + 1), attempt: w.s.runner.attempt + 1 } });
@@ -1373,14 +1394,16 @@ describe("R2003b — the crash-loop cap: RUNNER_CRASH_CAP fatal crashes per SESS
     };
     const expire = (w: World) => { const x = evaluate(w.s, sec(w.at)); if (x.kind !== "none") step(w, { type: "expire", expiry: x }); };
     /** The route: a beat on a terminal row is 410 and writes nothing; otherwise heartbeat_at, the expiry, then the trigger. */
-    const finalBeatOf = (w: World, reason: BeatExitReason) => {
-      if (isTerminal(w.s.state)) return;
+    const finalBeatOf = (w: World, reason: BeatExitReason): boolean => {
+      if (isTerminal(w.s.state)) return false;
       w.s = { ...w.s, heartbeatAt: sec(w.at) };
       expire(w);
       const t = stoppedBeatTrigger(reason);
-      if (!t || isTerminal(w.s.state) || !(ACTIVE_RUNNER(w.s.runner.state) || w.s.runner.state === "stopping")) return;
-      if (t.type === "callback_crashed" && ACTIVE_RUNNER(w.s.runner.state)) w.beats++;   // handed to a runner that counts it
+      if (!t || isTerminal(w.s.state) || !(ACTIVE_RUNNER(w.s.runner.state) || w.s.runner.state === "stopping")) return false;
+      const handed = ACTIVE_RUNNER(w.s.runner.state);   // a booting/playing runner is the one that counts (or notes) the beat
+      if (t.type === "callback_crashed" && handed) w.beats++;
       step(w, { type: "runner", trigger: t });
+      return handed;
     };
     const crash = (w: World, m: Machine, beats: boolean) => {
       const handed = w.beats;
@@ -1395,6 +1418,29 @@ describe("R2003b — the crash-loop cap: RUNNER_CRASH_CAP fatal crashes per SESS
       if (m.windowCrashes <= RUNNER_INPLACE_RESTARTS) Object.assign(m, { restarting: true, restartCount: m.windowCrashes, exitRestarted: true });
       else Object.assign(m, { alive: false, restarting: false, restartCount: RUNNER_INPLACE_RESTARTS, exitRestarted: false });
     };
+    /** reconcileSession: the expiry, then ONE observation of the Machine the row names (runner-fly.ts observe). */
+    const observeOnce = (w: World): void => {
+      expire(w);
+      const r = w.s.runner;
+      if (r.state === "none" || r.state === "destroyed" || r.state === "creating" || !r.machineId) return;
+      const seen = current(w);
+      const trigger: RunnerTrigger = !seen ? { type: "observed", state: "destroyed", exit: null, restarting: false, restartingSince: null, exitAt: null, restartCount: null }
+        // R2003b review I2: a running Machine reports its newest exit too (the run before this one)
+        : seen.alive && !seen.restarting ? { type: "observed", state: "running", exit: seen.exit, restarting: false, restartingSince: null,
+            exitAt: seen.exitAt === null ? null : sec(seen.exitAt), restartCount: seen.restartCount, exitRestarted: seen.exitRestarted }
+        : { type: "observed", state: seen.alive ? "pending" : "destroyed", exit: seen.exit, restarting: seen.restarting,
+            restartingSince: seen.restarting ? sec(seen.exitAt!) : null, exitAt: seen.exitAt === null ? null : sec(seen.exitAt), restartCount: seen.restartCount, exitRestarted: seen.exitRestarted };
+      const counts = r.state === "booting" || r.state === "playing" || r.state === "lost";
+      if (counts && seen && seen.exit === CRASH_EXIT && seen.exitAt !== null) {
+        const id = `${seen.name}@${seen.exitAt}`;
+        if (w.exits.has(id) || w.beaten.has(id)) dedupes++;   // this crash was handed over already: by its beat, or this exit
+        if (seen.alive && !seen.restarting) runningExits++;   // I2: handed over by a read after its restart completed
+        if (seen.restarts > 0) crashesAfterRestart++;           // Owed 66: a crash read in a window that held a restart
+        if (seen.unread) crashesAfterUnread++;                  // …and one that held a restart whose exit no read ever saw (review m1: only its beat noted it)
+        w.exits.add(id);
+      }
+      step(w, { type: "runner", trigger });
+    };
     const apply = (w0: World, ev: Ev): World => {
       const w = clone(w0);
       w.path.push(ev);
@@ -1403,6 +1449,24 @@ describe("R2003b — the crash-loop cap: RUNNER_CRASH_CAP fatal crashes per SESS
       switch (ev) {
         case "crash_beat": case "crash_silent":
           if (m?.alive) { m.restarting = false; crash(w, m, ev === "crash_beat"); }   // a restarting Machine came back, then died again
+          break;
+        case "restart_polled": case "restart_unread":   // Owed 66: `restart` final beat (noted), exit 75 as Fly records it, and (polled) the read that follows
+          if (m?.alive) {
+            m.restarting = false;
+            const handed = finalBeatOf(w, "restart");
+            // The RESIDUAL (review m3), not this sweep's claim: a `restart` beat no booting/playing runner was handed (the stale
+            // window had already taken it `lost`) notes nothing, and with its exit never read that is the pre-fix over-count.
+            // The polled restart is read straight after, so its exit notes it either way; the unread one is skipped.
+            if (ev === "restart_unread" && !handed) break;
+            m.windowCrashes++;   // Fly counts every non-zero exit in its window, 75 included
+            m.restarts++;
+            if (ev === "restart_polled") restartsPolled++; else { restartsUnread++; m.unread = true; }
+            m.exit = RESTART_EXIT;
+            m.exitAt = w.at;
+            if (m.windowCrashes <= RUNNER_INPLACE_RESTARTS) Object.assign(m, { restarting: true, restartCount: m.windowCrashes, exitRestarted: true });
+            else Object.assign(m, { alive: false, restarting: false, restartCount: RUNNER_INPLACE_RESTARTS, exitRestarted: false });
+            if (ev === "restart_polled") observeOnce(w);
+          }
           break;
         case "signalled":   // a platform stop: SIGTERM → the `signalled` drain → exit 0, which Fly never restarts
           if (m?.alive) {
@@ -1414,27 +1478,7 @@ describe("R2003b — the crash-loop cap: RUNNER_CRASH_CAP fatal crashes per SESS
         case "restart_done":   // F-007: ~1.4 s after the exit Fly has the process running again; the exit stays its newest
           if (m?.alive && m.restarting) m.restarting = false;
           break;
-        case "observe": {   // reconcileSession: the expiry, then ONE observation of the Machine the row names (runner-fly.ts observe)
-          expire(w);
-          const r = w.s.runner;
-          if (r.state === "none" || r.state === "destroyed" || r.state === "creating" || !r.machineId) break;
-          const seen = current(w);
-          const trigger: RunnerTrigger = !seen ? { type: "observed", state: "destroyed", exit: null, restarting: false, restartingSince: null, exitAt: null, restartCount: null }
-            // R2003b review I2: a running Machine reports its newest exit too (the run before this one)
-            : seen.alive && !seen.restarting ? { type: "observed", state: "running", exit: seen.exit, restarting: false, restartingSince: null,
-                exitAt: seen.exitAt === null ? null : sec(seen.exitAt), restartCount: seen.restartCount, exitRestarted: seen.exitRestarted }
-            : { type: "observed", state: seen.alive ? "pending" : "destroyed", exit: seen.exit, restarting: seen.restarting,
-                restartingSince: seen.restarting ? sec(seen.exitAt!) : null, exitAt: seen.exitAt === null ? null : sec(seen.exitAt), restartCount: seen.restartCount, exitRestarted: seen.exitRestarted };
-          const counts = r.state === "booting" || r.state === "playing" || r.state === "lost";
-          if (counts && seen && seen.exit === CRASH_EXIT && seen.exitAt !== null) {
-            const id = `${seen.name}@${seen.exitAt}`;
-            if (w.exits.has(id) || w.beaten.has(id)) dedupes++;   // this crash was handed over already: by its beat, or this exit
-            if (seen.alive && !seen.restarting) runningExits++;   // I2: handed over by a read after its restart completed
-            w.exits.add(id);
-          }
-          step(w, { type: "runner", trigger });
-          break;
-        }
+        case "observe": observeOnce(w); break;
         case "wait_played": expire(w); break;
         case "destroy_ok":
           if (w.destroyFor !== null && w.destroyFor === w.s.runner.name) {
@@ -1460,13 +1504,13 @@ describe("R2003b — the crash-loop cap: RUNNER_CRASH_CAP fatal crashes per SESS
     const walk = (w: World, depth: number): void => {
       if (depth === DEPTH) {
         orders++;
-        if (w.s.runner.crashes.count >= RUNNER_CRASH_CAP) { capped++; if (w.s.runner.attempt > 1) cappedOnRetry++; }
+        if (w.s.runner.crashes.count >= RUNNER_CRASH_CAP) { capped++; if (w.s.runner.attempt > 1) cappedOnRetry++; if (w.path.includes("restart_polled")) cappedAfterRestart++; }
         return;
       }
       for (const ev of ALPHABET) walk(apply(w, ev), depth + 1);
     };
-    walk({ s: liveComposed(), at: 0, machines: [{ name: machineNameFor(SID, 1), alive: true, restarting: false, windowCrashes: 0, exit: null, exitAt: null, restartCount: null, exitRestarted: null }], destroyFor: null, made: 0, beats: 0, beaten: new Set(), exits: new Set(), path: [] }, 0);
-    console.info(`R2003b crash_cap_sweep — orders checked: ${orders}, oracle checks: ${checks}, creates checked: ${createsChecked}, orders ending capped: ${capped} (${cappedOnRetry} on the retry), dedupe chances: ${dedupes}, signalled stops: ${signalledStops}, crash exits read while running: ${runningExits}`);
+    walk({ s: liveComposed(), at: 0, machines: [{ name: machineNameFor(SID, 1), alive: true, restarting: false, windowCrashes: 0, restarts: 0, exit: null, exitAt: null, restartCount: null, exitRestarted: null }], destroyFor: null, made: 0, beats: 0, beaten: new Set(), exits: new Set(), path: [] }, 0);
+    console.info(`R2003b crash_cap_sweep — orders checked: ${orders}, oracle checks: ${checks}, creates checked: ${createsChecked}, orders ending capped: ${capped} (${cappedOnRetry} on the retry, ${cappedAfterRestart} with a restart), dedupe chances: ${dedupes}, signalled stops: ${signalledStops}, crash exits read while running: ${runningExits}, restarts polled: ${restartsPolled}, restarts unread: ${restartsUnread}, crashes read after a restart: ${crashesAfterRestart}, after an unread one: ${crashesAfterUnread}`);
     expect(violations.slice(0, 5), `${violations.length} violations`).toEqual([]);
     expect(orders, "anti-vacuity: every order of the alphabet was walked").toBe(ALPHABET.length ** DEPTH);
     expect(createsChecked, "a create was reached and checked").toBeGreaterThan(0);
@@ -1475,5 +1519,288 @@ describe("R2003b — the crash-loop cap: RUNNER_CRASH_CAP fatal crashes per SESS
     expect(dedupes, "one crash was handed over twice").toBeGreaterThan(0);
     expect(signalledStops, "a platform stop was exercised").toBeGreaterThan(0);
     expect(runningExits, "a crash was read only after its restart completed (I2)").toBeGreaterThan(0);
+    expect(restartsPolled, "Owed 66: an in-place restart was exercised").toBeGreaterThan(0);
+    expect(restartsUnread, "Owed 66 review m1: …and one whose exit no read saw before the next exit").toBeGreaterThan(0);
+    expect(crashesAfterUnread, "…and a crash exit was read in such a window (only the restart's BEAT could have dropped the floor there)").toBeGreaterThan(0);
+    expect(crashesAfterRestart, "Owed 66: …and a crash was read in a window that held one (the restart-count floor's case)").toBeGreaterThan(0);
+    expect(cappedAfterRestart, "Owed 66: …and the cap is still reached in orders that held a restart").toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Owed 66 (compositor `docs/_INDEX.md`, C11b "as built" decision (2) and (5)): the compositor RESTARTS ITSELF IN PLACE on a
+// dead CEF zygote, repeated GPU-process deaths or 3 leaked teardowns. It sends a final beat (`exitReason: restart`) and
+// exits 75; Fly's `on-failure` restarts the process on the SAME Machine. That is not a crash, but R2003b counted it three
+// ways — the `fatal` beat, the non-zero exit, and Fly's `restart_count` floor — so RUNNER_CRASH_CAP failed the session at the
+// third restart-or-crash. Expected counts below are the crashes each scenario MAKES (a restart makes none); the exit codes
+// are the compositor's (C06: Fatal 70, Refused 78; C11b: Restart 75), never read off the code under test.
+// What it deliberately does NOT do: cap the restarts. A slow loop of them has no cap (the row's owner question).
+// ---------------------------------------------------------------------------------------------------------------------
+describe("Owed 66 — the in-place restart (final beat `restart`, exit 75) is recorded and never counted as a crash", () => {
+  /** An observation of the in-place restart's exit: Fly restarting it (k-th exit of the window carries restart_count k). */
+  const restartExit = (state: (typeof OBSERVED_STATES)[number], exitAt: Date, restartCount: number | null, restarting = true, exitRestarted: boolean | null = restarting): RunnerTrigger =>
+    crashExit(state, exitAt, restartCount, restarting, RESTART_EXIT, exitRestarted);
+
+  it("the word: `restart` is in the beat vocabulary and routes to its OWN trigger (never a crash, never a stop — the ledger names what happened); `signalled` stays record only and `fatal` keeps counting — the empty case (no reason) and every reason are checked", () => {
+    expect(BEAT_EXIT_REASONS).toContain("restart");
+    expect(stoppedBeatTrigger("restart"), "noted, never counted: not `callback_crashed`").toEqual({ type: "callback_restarted" });
+    expect(stoppedBeatTrigger("signalled"), "the differential: a platform stop is still record only").toBeNull();
+    expect(stoppedBeatTrigger("fatal"), "the differential: a fatal run is still one crash").toEqual({ type: "callback_crashed" });
+    expect(stoppedBeatTrigger(undefined), "the empty case: no reason is today's lost → retry").toEqual({ type: "callback_stopped" });
+    // The Owed 37 guard (`closesAttempt`) asks one more question of the word: does a process of THIS attempt come back to
+    // beat? The rulings, typed: Fly restarts a fatal run AND a restart IN PLACE on the same attempt; every other reason
+    // ends the run, the attempt or the session (R2003 / R2003b / this row).
+    const COMES_BACK: Record<BeatExitReason | "absent" | "null", boolean> = {
+      absent: false, null: false, ended: false, deadline: false, signalled: false, session_gone: false, refused: false,
+      fatal: true, restart: true,
+    };
+    expect(Object.keys(COMES_BACK).sort(), "every reason is decided").toEqual([...BEAT_EXIT_REASONS, "absent", "null"].sort());
+    let checked = 0;
+    for (const [label, want] of Object.entries(COMES_BACK)) {
+      const reason = label === "absent" ? undefined : label === "null" ? null : label as BeatExitReason;
+      expect(restartsInPlaceAfter(reason), label).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(BEAT_EXIT_REASONS.length + 2);
+  });
+
+  it("the row's sequence: restart, restart, crash in ONE Fly window is ONE crash, and the session LIVES — lost → destroyed → the ONE retry (the replacement carries the 1, not 3); without the restarts' evidence the same final exit is the 3 crashes F-007 measured", () => {
+    const w = sim();
+    let at = 0;
+    for (let k = 1; k <= RUNNER_INPLACE_RESTARTS; k++) {
+      at += 20;
+      finalBeat(w, at, "restart");                                                      // the compositor's own word: noted, never counted
+      feed(w, { type: "runner", trigger: restartExit("pending", sec(at), k) }, at);     // F-007: exit k of the window carries restart_count k
+      feed(w, { type: "runner", trigger: restartExit("pending", sec(at), k) }, at);     // …read again: the same exit
+      beat(w, at += BEAT_S, "starting");
+      beat(w, at += BEAT_S, "playing");
+      expect(w.s, `after restart ${k}`).toMatchObject({ state: "live", failReason: null, runner: { state: "playing", attempt: 1, crashes: { count: 0, beats: 0, exits: 0, restartSeen: true } } });
+      expect(w.effects, `after restart ${k}: nothing torn down`).toEqual([]);
+    }
+    // the crash: Fly's FINAL exit for the window (restarting false, restart_count max_retries — F-007 M1/M3)
+    at += 20;
+    feed(w, { type: "runner", trigger: crashExit("stopped", sec(at), RUNNER_INPLACE_RESTARTS, false, CRASH_EXIT, false) }, at);
+    expect(w.s, "ONE crash — not RUNNER_CRASH_CAP").toMatchObject({ state: "live", failReason: null, runner: { state: "lost", attempt: 1, crashes: { count: 1, exits: 1 } } });
+    expect(w.effects, "Fly will not restart it: the lost Machine is torn down").toEqual(["force_destroy"]);
+    feed(w, { type: "runner", trigger: { type: "destroy_ok" } }, at + 1);
+    expect(w.creates.map((c) => c.attempt), "the ONE retry").toEqual([2]);
+    expect(w.s, "the session lives; the replacement starts from 1 crash with its own (empty) evidence").toMatchObject({
+      state: "live", failReason: null, runner: { state: "booting", attempt: 2, crashes: { count: 1, beats: 0, exits: 0, restartSeen: false } },
+    });
+    // the differential: the SAME final exit with no restart evidence is the 3 crashes (the floor still protects a beat-less loop)
+    const noEvidence = stepRunner(inState("playing"), crashExit("stopped", sec(at), RUNNER_INPLACE_RESTARTS, false, CRASH_EXIT, false), sec(at));
+    expect(noEvidence.next.crashes.count, "F-007: restart_count 2 on the final exit after 3 crashes").toBe(RUNNER_INPLACE_RESTARTS + 1);
+    expect(noEvidence.signal).toEqual({ type: "failed", reason: "machine_crash" });
+  });
+
+  it("three REAL crashes still reach the cap with restarts between them — counts 0,1,1,2,2,3 over restart, crash, restart, crash, restart, crash — and the third crash fails machine_crash, torn down, no retry (each crash seen by its beat AND its exit, each restart by its beat AND its exit)", () => {
+    const w = sim();
+    let at = 0;
+    const counts: number[] = [];
+    const cycle = (kind: "restart" | "crash", n: number) => {
+      at += 20;
+      if (kind === "restart") {
+        finalBeat(w, at, "restart");
+        feed(w, { type: "runner", trigger: restartExit("pending", sec(at), 1) }, at);   // a SLOW loop: Fly's window refilled, restart_count 1 each time
+      } else {
+        finalBeat(w, at, "fatal");
+        if (n < RUNNER_CRASH_CAP) feed(w, { type: "runner", trigger: crashExit("pending", sec(at), 1) }, at);   // the same crash's exit
+      }
+      counts.push(w.s.runner.crashes.count);
+      if (!isTerminal(w.s.state)) { beat(w, at += BEAT_S, "starting"); beat(w, at += BEAT_S, "playing"); }
+    };
+    cycle("restart", 0); cycle("crash", 1); cycle("restart", 1); cycle("crash", 2); cycle("restart", 2); cycle("crash", RUNNER_CRASH_CAP);
+    expect(counts, "a restart moves nothing; each crash moves the count by exactly one").toEqual([0, 1, 1, 2, 2, RUNNER_CRASH_CAP]);
+    expect(w.s).toMatchObject({ state: "failed", failReason: "machine_crash", runner: { state: "lost", attempt: 1, crashes: { count: RUNNER_CRASH_CAP, restartSeen: true } } });
+    expect(w.effects, "torn down at the cap, once").toEqual(["force_destroy"]);
+    expect(w.creates, "no retry, though attempt 1 had one").toEqual([]);
+  });
+
+  it("a SLOW beat-less crash loop that has seen a restart is still counted by its exits, one per distinct exit (the floor is dropped, the identity count is not): restart, then 3 silent crashes fail machine_crash on the third", () => {
+    let r = inState("playing");
+    r = stepRunner(r, restartExit("running", crashAt(1), 1, false, true), crashAt(1)).next;
+    expect(r.crashes, "premise: a restart was read").toMatchObject({ count: 0, restartSeen: true });
+    const counts: number[] = [];
+    let last: ReturnType<typeof stepRunner> | null = null;
+    for (let k = 2; k <= RUNNER_CRASH_CAP + 1; k++) {
+      // a runtime crash Fly restarted at once, read by the restarted process's own GET: running, the previous run's exit
+      last = stepRunner(r, crashExit("running", crashAt(k), 1, false, CRASH_EXIT, true), crashAt(k));
+      r = last.next;
+      counts.push(r.crashes.count);
+      expect(last.signal === null, `crash ${k - 1}`).toBe(k - 1 < RUNNER_CRASH_CAP);
+      if (last.signal) break;
+    }
+    expect(counts).toEqual([1, 2, RUNNER_CRASH_CAP]);
+    expect(last!.signal).toEqual({ type: "failed", reason: "machine_crash" });
+  });
+
+  it("the INTERIM beat (`fatal` + exit 75 — what the compositor sends until it re-vendors the contract) counts as a crash by its BEAT exactly as before, the exit 75 beside it adds no second crash, and an exit 75 whose beat never arrived counts nothing; so interim restarts still reach the cap, one each", () => {
+    const w = sim();
+    let at = 0;
+    for (let k = 1; k < RUNNER_CRASH_CAP; k++) {
+      at += 20;
+      finalBeat(w, at, "fatal");                                                           // interim: `fatal`, exitDetail `restart in place: …`
+      feed(w, { type: "runner", trigger: restartExit("pending", sec(at), k) }, at);       // …and the exit is 75
+      feed(w, { type: "runner", trigger: restartExit("pending", sec(at), k) }, at);
+      beat(w, at += BEAT_S, "starting");
+      beat(w, at += BEAT_S, "playing");
+      expect(w.s.runner.crashes, `interim restart ${k}`).toMatchObject({ count: k, beats: k, exits: 0, restartSeen: true });
+    }
+    at += 20;
+    finalBeat(w, at, "fatal");
+    expect(w.s).toMatchObject({ state: "failed", failReason: "machine_crash", runner: { crashes: { count: RUNNER_CRASH_CAP } } });
+    // the beat lost (best-effort, never retried): the exit 75 alone is no crash, where before this row it was one
+    const beatless = stepRunner(inState("playing"), restartExit("pending", sec(1), 1), sec(1));
+    expect(beatless.next.crashes.count).toBe(0);
+    expect(stepRunner(inState("playing"), crashExit("pending", sec(1), 1), sec(1)).next.crashes.count, "the differential: a crash exit is one").toBe(1);
+  });
+
+  it("exit 75 is exempted BEFORE the provider's restart flags are read: restarting now, restarted and read running, Fly's final exit, no record either way — none counts, and the same flags on a crash exit do (the differential); the unrecorded read (stopped, restarting null) makes no claim on EITHER exit: the runner stays, nothing is counted, nothing is noted", () => {
+    // claims: does the read say anything about the exit? F-007 race: `stopped` read before the provider recorded the exit
+    // (restarting null) is not knowable yet — the stale window decides — so it claims nothing, a 75 or a crash alike.
+    const FLAGS: [state: (typeof OBSERVED_STATES)[number], restarting: boolean | null, exitRestarted: boolean | null, claims: boolean][] = [
+      ["pending", true, true, true], ["stopped", true, true, true], ["running", false, true, true], ["stopped", false, false, true], ["destroyed", false, false, true],
+      ["destroying", false, null, true], ["stopping", false, null, true],
+      ["stopped", null, null, false],   // review m2: the unrecorded read
+    ];
+    let checked = 0, claimed = 0;
+    for (const [state, restarting, exitRestarted, claims] of FLAGS) {
+      const label = `${state}/${restarting}/${exitRestarted}`;
+      const restart = stepRunner(inState("playing"), crashExit(state, crashAt(1), null, restarting, RESTART_EXIT, exitRestarted), crashAt(1));
+      expect(restart.next.crashes.count, `${label}: restart`).toBe(0);
+      expect(restart.next.crashes.exits, `${label}: restart`).toBe(0);
+      expect(restart.next.crashes.restartSeen, `${label}: restart — noted only when the read claims the exit`).toBe(claims);
+      const crash = stepRunner(inState("playing"), crashExit(state, crashAt(1), null, restarting, CRASH_EXIT, exitRestarted), crashAt(1));
+      expect(crash.next.crashes.count, `${label}: crash`).toBe(claims ? 1 : 0);
+      if (!claims) {
+        expect(restart.next.state, `${label}: restart — no claim, the runner stays`).toBe("playing");
+        expect(crash.next.state, `${label}: crash — no claim, the runner stays`).toBe("playing");
+        claimed++;
+      }
+      checked++;
+    }
+    expect(checked).toBe(FLAGS.length);
+    expect(claimed, "the unrecorded read was exercised").toBe(1);
+  });
+
+  it("the restart-count FLOOR counts crash restarts only: once this attempt has read a restart, a final exit with F-007's restart_count 2 is ONE crash (its own exit), a restarting one is one, an exit with no identity is none; with no restart read it is 3 / 2 / 2 as before", () => {
+    const MEASURED = { final: RUNNER_INPLACE_RESTARTS };   // F-007 M1/M3: restart_count 2 on the final exit after 3 crashes
+    const CASES: [label: string, trigger: RunnerTrigger, withoutRestart: number, withRestart: number][] = [
+      ["Fly's final exit (restart_count 2, not restarted)", crashExit("stopped", crashAt(5), MEASURED.final, false, CRASH_EXIT, false), MEASURED.final + 1, 1],
+      ["a restarting exit (restart_count 2)", crashExit("pending", crashAt(5), MEASURED.final), MEASURED.final, 1],
+      ["a restarting exit (restart_count 1)", crashExit("pending", crashAt(5), 1), 1, 1],
+      ["an exit with no identity (restart_count 2, no instant)", { ...(crashExit("pending", crashAt(5), MEASURED.final) as Extract<RunnerTrigger, { type: "observed" }>), exitAt: null }, MEASURED.final, 0],
+    ];
+    let checked = 0;
+    for (const [label, trigger, without, withIt] of CASES) {
+      for (const from of ["playing", "booting"] as const) {
+        const none = stepRunner(R({ ...inState(from), crashes: tally({ restartSeen: false }) }), trigger, crashAt(5)).next.crashes;
+        const seen = stepRunner(R({ ...inState(from), crashes: tally({ restartSeen: true }) }), trigger, crashAt(5)).next.crashes;
+        expect(none.count, `${from}: ${label}: no restart read`).toBe(without);
+        expect(seen.count, `${from}: ${label}: a restart read`).toBe(withIt);
+        expect(seen.restartSeen, `${from}: ${label}: the bit stays`).toBe(true);
+        checked++;
+      }
+    }
+    expect(checked).toBe(CASES.length * 2);
+    expect(RUNNER_INPLACE_RESTARTS + 1, "premise: the cap is one more than Fly's restarts, so the unfixed floor caps on ONE crash").toBe(RUNNER_CRASH_CAP);
+  });
+
+  it("review m1 — the `restart` BEAT notes the restart on its own: booting and playing set `restartSeen` and move nothing else (the session's count and this attempt's bounds carry), a second one changes nothing; stopping, exited and lost take it as a no-op; none/creating/destroyed refuse it — every state is checked", () => {
+    const BEAT: RunnerTrigger = { type: "callback_restarted" };
+    const held = tally({ count: 1, beats: 1, exits: 0, exitAt: crashAt(1) });   // a non-trivial tally: one crash already counted
+    const states = ["booting", "playing", "stopping", "exited", "lost", "none", "creating", "destroyed"] as const;
+    expect([...states].sort(), "every runner state is decided").toEqual([...RUNNER_STATES].sort());
+    let noted = 0, noop = 0, refused = 0;
+    for (const from of states) {
+      const before = R({ ...inState(from), crashes: held });
+      if (from === "booting" || from === "playing") {
+        const step = stepRunner(before, BEAT, T0);
+        expect(step.next, from).toEqual({ ...before, crashes: { ...held, restartSeen: true } });
+        expect(step.effects, `${from}: nothing torn down or created`).toEqual([]);
+        expect(step.signal, `${from}: the session hears nothing`).toBeNull();
+        expect(stepRunner(step.next, BEAT, T0), `${from}: a second one changes nothing`).toEqual(step);
+        noted++;
+      } else if (from === "stopping" || from === "exited" || from === "lost") {
+        expect(stepRunner(before, BEAT, T0), `${from}: a no-op`).toEqual({ next: before, effects: [], signal: null });
+        noop++;
+      } else {
+        expect(() => stepRunner(before, BEAT, T0), from).toThrow(InvalidRunnerTransition);
+        refused++;
+      }
+    }
+    expect([noted, noop, refused]).toEqual([2, 3, 3]);
+    // the differential: a CRASH beat from the same state moves the count — the restart beat is not that
+    expect(stepRunner(R({ ...inState("playing"), crashes: held }), CRASHED, T0).next.crashes.count, "a fatal beat is a second crash").toBe(2);
+    expect(stepRunner(R({ ...inState("playing"), crashes: held }), BEAT, T0).next.crashes.count, "a restart beat is none").toBe(1);
+  });
+
+  it("review m1/m3 — a restart whose exit 75 NO read ever saw is noted by its BEAT: restart, restart (beats only), then the crash's final exit (restart_count 2, not restarted) before any read is ONE crash and the session lives on the ONE retry; with the beat lost as well the same exit is the 3 crashes (the residual, pinned, for that window only)", () => {
+    const w = sim();
+    let at = 0;
+    for (let k = 1; k <= RUNNER_INPLACE_RESTARTS; k++) {
+      at += 20;
+      finalBeat(w, at, "restart");                      // the beat goes out before the exit; the exit is never read
+      beat(w, at += BEAT_S, "starting");
+      beat(w, at += BEAT_S, "playing");
+      expect(w.s.runner.crashes, `after restart ${k}`).toEqual({ ...CRASHES_NONE, restartSeen: true });
+    }
+    at += 20;
+    feed(w, { type: "runner", trigger: crashExit("stopped", sec(at), RUNNER_INPLACE_RESTARTS, false, CRASH_EXIT, false) }, at);   // the FIRST exit anyone reads
+    expect(w.s, "ONE crash — not the 3 the unnoted floor reads").toMatchObject({ state: "live", failReason: null, runner: { state: "lost", attempt: 1, crashes: { count: 1, exits: 1 } } });
+    feed(w, { type: "runner", trigger: { type: "destroy_ok" } }, at + 1);
+    expect(w.creates.map((c) => c.attempt), "the ONE retry").toEqual([2]);
+    // the residual: no beat (lost, best-effort) and no read — nothing noted the restarts, so the floor stands
+    const residual = stepRunner(inState("playing"), crashExit("stopped", sec(at), RUNNER_INPLACE_RESTARTS, false, CRASH_EXIT, false), sec(at));
+    expect(residual.next.crashes.count, "the pre-fix over-count, for that window only").toBe(RUNNER_INPLACE_RESTARTS + 1);
+    expect(residual.signal).toEqual({ type: "failed", reason: "machine_crash" });
+  });
+
+  it("an exit 75 read on any state that carries an exit sets `restartSeen` and counts nothing — from playing, booting and lost, each state, a re-read changing nothing; no other exit sets it (clean 0, a crash, OOM, the refusal 78, 74, 76, no exit) and a stop in flight ignores it", () => {
+    const NOT_RESTARTS: [string, ExitInfo | null][] = [
+      ["no exit", null], ["clean (0)", { exitCode: 0, oomKilled: false, requestedStop: false }], ["a crash (1)", CRASH_EXIT],
+      ["OOM-killed (137)", { exitCode: 137, oomKilled: true, requestedStop: false }], ["the refusal (78)", REFUSED_EXIT],
+      ["74", { exitCode: RELAY_EXIT_RESTART - 1, oomKilled: false, requestedStop: false }], ["76", { exitCode: RELAY_EXIT_RESTART + 1, oomKilled: false, requestedStop: false }],
+    ];
+    let seen = 0, unset = 0;
+    for (const from of ["playing", "booting", "lost"] as const) {
+      for (const [state, restarting] of [["pending", true], ["stopped", true], ["running", false], ["destroying", false], ["unknown", false], ["failed", false], ["destroyed", false]] as const) {
+        const t = crashExit(state, crashAt(1), 1, restarting, RESTART_EXIT, restarting || state === "running");
+        const first = stepRunner(inState(from), t, crashAt(1));
+        expect(first.next.crashes, `${from} × ${state}`).toEqual({ ...CRASHES_NONE, restartSeen: true });
+        const again = stepRunner(first.next, t, crashAt(1));
+        expect(again.next.crashes, `${from} × ${state}: read again`).toEqual({ ...CRASHES_NONE, restartSeen: true });
+        seen++;
+      }
+      for (const [label, exit] of NOT_RESTARTS) {
+        const step = stepRunner(inState(from), crashExit("pending", crashAt(1), 1, true, exit as ExitInfo, true), crashAt(1));
+        expect(step.next.crashes.restartSeen, `${from} × ${label}`).toBe(false);
+        unset++;
+      }
+    }
+    for (const stop of ["stopping", "exited"] as const) {   // after OUR stop: nothing on this runner is tallied
+      expect(stepRunner(inState(stop), restartExit("stopped", crashAt(1), 1, false, false), crashAt(1)).next.crashes, stop).toEqual(CRASHES_NONE);
+    }
+    expect(seen).toBe(3 * 7);
+    expect(unset).toBe(3 * NOT_RESTARTS.length);
+  });
+
+  it("a restart Fly will NOT restart (its window's third exit is a 75 — the row's Owed 67) is a LOSS, not a crash: lost → torn down → the ONE retry, nothing counted; the replacement's tally starts clean (restartSeen reset) with the session's count carried", () => {
+    const w = sim();
+    feed(w, { type: "runner", trigger: restartExit("stopped", sec(10), RUNNER_INPLACE_RESTARTS, false, false) }, 10);
+    expect(w.s.runner, "a loss, uncounted").toMatchObject({ state: "lost", crashes: { count: 0, exits: 0, restartSeen: true } });
+    expect(w.effects).toEqual(["force_destroy"]);
+    feed(w, { type: "runner", trigger: { type: "destroy_ok" } }, 11);
+    expect(w.creates.map((c) => c.attempt), "the ONE retry").toEqual([2]);
+    expect(w.s).toMatchObject({ state: "live", failReason: null, runner: { state: "booting", attempt: 2, crashes: { count: 0, beats: 0, exits: 0, restartSeen: false } } });
+    // the reset is the new attempt's: its floor is back, so the 3-crash final exit (F-007) caps it again
+    const capped = stepRunner(R({ ...inState("playing"), attempt: 2, crashes: w.s.runner.crashes }), crashExit("stopped", sec(30), RUNNER_INPLACE_RESTARTS, false, CRASH_EXIT, false), sec(30));
+    expect(capped.signal).toEqual({ type: "failed", reason: "machine_crash" });
+  });
+
+  it("create_started clears THIS attempt's restart evidence and keeps the session's crash count — a retry boots a new Machine with its own Fly window", () => {
+    const destroyed = R({ state: "destroyed", attempt: 1, name: "relay-s1-r1", machineId: "m1", crashes: tally({ count: 1, beats: 1, exits: 1, exitAt: crashAt(1), restartSeen: true }) });
+    const next = stepRunner(destroyed, { type: "create_started", name: machineNameFor(SID, 2), attempt: 2 }, T0).next;
+    expect(next.crashes).toEqual({ count: 1, beats: 0, exits: 0, exitAt: crashAt(1), restartSeen: false });
   });
 });

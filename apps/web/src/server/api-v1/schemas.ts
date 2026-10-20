@@ -1952,12 +1952,13 @@ export const RelayHeartbeat = z
     // R2007 PR B (overlay templates spec 2026-10-15 §4.3): which channel the overlay page reads its phase from — the
     // compositor's loopback endpoint, or this beat through its data poll. R2005 reports it; stored as sent, like the rest.
     phaseChannel: z.enum(PHASE_CHANNELS).nullish(),
-    // The FINAL beat's why (owner, 2026-10-15): C06's `ExitReason`, snake_case. A record of what the Machine said, kept
+    // The FINAL beat's why (owner, 2026-10-15): C06's `ExitReason`, snake_case, plus C11b's `restart` (the in-place restart,
+    // exit 75 — compositor `docs/_INDEX.md` Owed 66; domain/runner.ts BEAT_EXIT_REASONS pins this equal). A record of what the Machine said, kept
     // in the two beat stores only — never the runner's exit columns (A5: those are persisted from the OBSERVED exit), and
     // nothing here reacts to it (R2003 owns what a stopped beat does). exitDetail is compositor-redacted human text,
     // never parsed, and scrubbed again before it is stored (stream-sessions.ts `heartbeat`). Its max counts UTF-16
     // units; the contract publishes maxLength 100 (code points), the bound under which any text fits (review M1).
-    exitReason: z.enum(["ended", "deadline", "signalled", "session_gone", "refused", "fatal"]).nullish(),
+    exitReason: z.enum(["ended", "deadline", "signalled", "session_gone", "refused", "fatal", "restart"]).nullish(),
     exitDetail: z.string().max(200).nullish(),
   })
   .strict()

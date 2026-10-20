@@ -15,7 +15,7 @@
 // expiry policy hands it to a live composed session whose runner is playing or
 // booting, or carries no stop mark while the session still wants to be live —
 // which is any state — and a null cell would throw on every lazy read of that row.
-import { MAX_DURATION_MINUTES, RELAY_EXIT_REFUSED, RUNNER_CRASH_CAP, RUNNER_MAX_ATTEMPTS, RUNNER_RESTART_STUCK_SECONDS, RUNNER_STOP_GRACE_SECONDS, RUNNER_STOP_SIGNAL, WARMING_TIMEOUT_MINUTES } from "../config";
+import { MAX_DURATION_MINUTES, RELAY_EXIT_REFUSED, RELAY_EXIT_RESTART, RUNNER_CRASH_CAP, RUNNER_MAX_ATTEMPTS, RUNNER_RESTART_STUCK_SECONDS, RUNNER_STOP_GRACE_SECONDS, RUNNER_STOP_SIGNAL, WARMING_TIMEOUT_MINUTES } from "../config";
 
 export const RUNNER_STATES = ["none", "creating", "booting", "playing", "stopping", "exited", "destroyed", "lost"] as const;
 export type RunnerState = (typeof RUNNER_STATES)[number];
@@ -40,8 +40,15 @@ export interface CrashTally {
   exits: number;
   /** The provider's instant of the newest crash exit counted — the identity a re-read of the same exit is matched on. */
   exitAt: Date | null;
+  /** Owed 66: THIS attempt has seen the compositor restart itself in place — its `restart` final beat (`callback_restarted`) or
+   *  that restart's exit (75, RELAY_EXIT_RESTART), whichever the lifecycle heard first. Fly's `restart_count` counts every
+   *  non-zero exit in its window, restarts included, so once one was seen the count no longer says how many CRASHES the window
+   *  held, and the restart-count floor (`withCrashExit`) is dropped for the rest of the attempt: crashes are then counted by
+   *  their own identified exits and beats alone. Idempotent (a repeat sets it again), reset with the attempt's other evidence
+   *  (`createStarted`: a replacement Machine has a Fly window of its own). */
+  restartSeen: boolean;
 }
-export const CRASHES_NONE: CrashTally = { count: 0, beats: 0, exits: 0, exitAt: null };
+export const CRASHES_NONE: CrashTally = { count: 0, beats: 0, exits: 0, exitAt: null, restartSeen: false };
 
 export interface Runner {
   state: RunnerState;
@@ -56,7 +63,7 @@ export interface Runner {
 export const RUNNER_NONE: Runner = { state: "none", attempt: 0, name: null, machineId: null, stopRequestedAt: null, lastExit: null, crashes: CRASHES_NONE };
 
 export const RUNNER_TRIGGER_TYPES = [
-  "create_started", "create_ok", "create_failed", "callback_playing", "callback_stopped", "callback_crashed", "observed",
+  "create_started", "create_ok", "create_failed", "callback_playing", "callback_stopped", "callback_crashed", "callback_restarted", "observed",
   "stale_beat", "deadline", "session_stop", "grace_expired", "destroy_ok", "orphan_listed",
 ] as const;
 export type RunnerTrigger =
@@ -76,6 +83,11 @@ export type RunnerTrigger =
   | { type: "callback_stopped"; refused?: true; endReason?: RunnerEndReason }
   // R2003b: the compositor's final beat said `fatal` — one crash of this attempt's run (`stoppedBeatTrigger`).
   | { type: "callback_crashed" }
+  // Owed 66 review m1: the compositor's final beat said `restart` — its own in-place restart, NOT a crash (`stoppedBeatTrigger`).
+  // Its own trigger rather than a flag on `callback_crashed`, so the ledger's `runner_transition` row says what happened. It
+  // counts nothing; the one thing it does is note the restart (`restartSeen`) from the BEAT, which goes out before the exit 75
+  // and so does not wait for a read of it.
+  | { type: "callback_restarted" }
   // R2003 / F-007: `restarting` — the provider is restarting this Machine in place (ports.ts RunnerObservation), since
   // `restartingSince`; `null` — down, but the provider has not recorded that exit yet (no claim). Optional: absent is
   // every observation before F-007, read as "not restarting" (today's rule) — so absent and null are NOT the same.
@@ -114,7 +126,7 @@ export interface RunnerStep { next: Runner; effects: RunnerEffect[]; signal: Ses
 /** R2002's `RelayHeartbeat.exitReason` (C06's exit reason, snake_case): WHY the compositor sent its one final
  *  `state: stopped` beat. The domain's own declaration — it imports nothing but ../config — and runner.test.ts pins it
  *  equal to the schema's enum, so the two cannot drift. */
-export const BEAT_EXIT_REASONS = ["ended", "deadline", "signalled", "session_gone", "refused", "fatal"] as const;
+export const BEAT_EXIT_REASONS = ["ended", "deadline", "signalled", "session_gone", "refused", "fatal", "restart"] as const;
 export type BeatExitReason = (typeof BEAT_EXIT_REASONS)[number];
 
 /** R2003 (controller ruling, 2026-10-15; R2003b, owner approval 2026-10-16): what a COMPOSED runner's stopped beat asks of
@@ -130,6 +142,15 @@ export type BeatExitReason = (typeof BEAT_EXIT_REASONS)[number];
  *    again on the SAME attempt; if it does not, the composed stale window takes it `lost` → force_destroy → destroyed →
  *    the ONE retry. A stop here force-destroyed the Machine Fly was restarting and spent the retry on a cold start that
  *    splits the organiser's YouTube broadcast (F-004 addendum: 15–30 s). AT the cap the session fails machine_crash.
+ *  - `restart` → `callback_restarted`, and NEVER a crash (compositor C11b, Owed 66): the compositor restarts ITSELF in place (a dead
+ *    CEF zygote, repeated GPU-process deaths, 3 leaked teardowns) and exits 75; Fly restarts the process on the SAME Machine,
+ *    the restarted process beats again, and the composed stale window covers one that does not come back — exactly `fatal`'s
+ *    road below the cap, without the count. The lifecycle hears it only to NOTE the restart (`restartSeen`: from then on this
+ *    attempt's restart-count floor is dropped, `withCrashExit`), from the beat that goes out BEFORE the exit 75 — so the note
+ *    does not wait for a read of an exit that the next exit may overwrite (review m1). It was sent as `fatal` until the
+ *    contract carried a word of its own (that interim beat still arrives from a compositor that has not re-vendored, and is
+ *    still a counted crash by its beat; its exit 75 is not, `crashExitSeen`). No cap on restarts here: that is the owner's
+ *    question (compositor `_INDEX.md` Owed 66 and 67).
  *  - `signalled` → record only, and NEVER a crash: the run drained on a stop someone else asked for (C06: SIGTERM, exit 0)
  *    — Fly does not restart exit 0, so it cannot loop, and counting it would let host maintenance fail a session.
  *  - `session_gone` → record only: web said 410, so the session is already over and its own path ends the runner.
@@ -141,8 +162,17 @@ export function stoppedBeatTrigger(exitReason: BeatExitReason | null | undefined
     case "deadline": return { type: "callback_stopped", endReason: "max_duration" };
     case "refused": return { type: "callback_stopped", refused: true };
     case "fatal": return { type: "callback_crashed" };
+    case "restart": return { type: "callback_restarted" };
     case "signalled": case "session_gone": return null;
   }
+}
+
+/** Does Fly bring a process of THIS attempt back after a final beat with this reason (so its later beats must still be
+ *  written, and a non-final beat after it is not a straggler)? `fatal` and `restart` — both restarted in place on the SAME
+ *  Machine (`on-failure`); every other reason ends the run, the attempt or the session (`stoppedBeatTrigger`), and no reason
+ *  is the legacy runner whose retry is a NEW attempt. The Owed 37 guard (stream-sessions.ts `closesAttempt`) reads it. */
+export function restartsInPlaceAfter(exitReason: BeatExitReason | null | undefined): boolean {
+  return exitReason === "fatal" || exitReason === "restart";
 }
 
 export class InvalidRunnerTransition extends Error {
@@ -192,11 +222,18 @@ const retryLeft = (r: Runner): boolean => r.attempt < RUNNER_MAX_ATTEMPTS;
 const attemptCrashes = (c: CrashTally): number => Math.max(c.beats, c.exits);
 /** The tally with this attempt's bounds moved: the session's count moves by exactly what the attempt's max moved. */
 const recount = (c: CrashTally, beats: number, exits: number, exitAt: Date | null): CrashTally =>
-  ({ count: c.count + Math.max(beats, exits) - attemptCrashes(c), beats, exits, exitAt });
+  ({ ...c, count: c.count + Math.max(beats, exits) - attemptCrashes(c), beats, exits, exitAt });
 const crashCapped = (r: Runner): boolean => r.crashes.count >= RUNNER_CRASH_CAP;
 /** A fatal final beat: one more crash seen by its beat. */
 const withCrashBeat = (r: Runner): Runner => ({ ...r, crashes: recount(r.crashes, r.crashes.beats + 1, r.crashes.exits, r.crashes.exitAt) });
-/** Does this observation show a CRASH exit — a run Fly restarts in place? Never the refusal (78, its own path), and never
+/** Owed 66: the compositor's in-place restart exit (C11b, 75). Fly restarts it like any non-zero exit, but it is not a crash. */
+const restartExit = (exit: ExitInfo | null | undefined): boolean => exit?.exitCode === RELAY_EXIT_RESTART;
+/** Owed 66: this attempt has seen the compositor restart itself in place — by its `restart` beat or by its exit 75, whichever
+ *  the lifecycle hears first. Idempotent; the safe direction (it only ever DROPS the restart-count floor, `withCrashExit`). */
+const noteRestart = (r: Runner): Runner => (r.crashes.restartSeen ? r : { ...r, crashes: { ...r.crashes, restartSeen: true } });
+/** Does this observation show a CRASH exit — a run Fly restarts in place? Never the refusal (78, its own path), never the
+ *  compositor's own in-place restart (75, Owed 66: checked BEFORE the restart flags below, which it satisfies — Fly restarts
+ *  it like a failure), and never
  *  a stop that was ASKED for: checked before the restart record (R2003b review m3), since whether Fly marks a requested
  *  restart `restarting` is unmeasured, and a stop someone asked for is not a crash whatever the provider does next.
  *  Then a restart says so (in flight, or the exit's own record: Fly restarts only a failure); otherwise the exit itself,
@@ -204,6 +241,7 @@ const withCrashBeat = (r: Runner): Runner => ({ ...r, crashes: recount(r.crashes
 function crashExitSeen(t: Extract<RunnerTrigger, { type: "observed" }>): boolean {
   const exit = t.exit ?? null;
   if (refusedExit(exit)) return false;
+  if (restartExit(exit)) return false;
   if (exit?.requestedStop === true) return false;
   if (t.restarting === true || t.exitRestarted === true) return true;
   return exit !== null && (exit.oomKilled === true || (exit.exitCode !== null && exit.exitCode !== 0));
@@ -212,15 +250,29 @@ function crashExitSeen(t: Extract<RunnerTrigger, { type: "observed" }>): boolean
  *  of the same exit is the same crash); and never below what the provider's restart count proves about this Machine's
  *  window. F-007: restarting exit k carries restart_count k, so k crashes; the FINAL exit (Fly will not restart it,
  *  `exitRestarted` false) carries restart_count max_retries and is itself one more crash (R2003b review m1). Idempotent
- *  under re-reads (a max). Nothing it cannot identify counts. */
+ *  under re-reads (a max). Nothing it cannot identify counts.
+ *
+ *  Owed 66: Fly's restart count counts EVERY non-zero exit in its window, the compositor's in-place restarts (exit 75) with
+ *  the crashes — so "restart, restart, crash" in one window reads restart_count 2 on the crash's final exit, a floor of 3
+ *  crashes, the cap on ONE crash. A restart is therefore noted (`restartSeen`) — by an observed exit 75 (never a crash,
+ *  `crashExitSeen`) or by the `restart` beat (`callback_restarted`) — and once this attempt has noted one the floor is
+ *  dropped: from then on a crash counts only by its own identified exit (the instant check above) or its beat. That is the
+ *  safe direction — the cap can fire a crash late, never a restart early. The cost is a fast beat-less crash loop after a
+ *  restart, which the floor would have caught for the rest of the attempt; the attempt's loss and the ONE retry (a new
+ *  attempt, a new Fly window, the floor back) still bound it.
+ *  Known gap, recorded rather than hidden: a restart whose `restart` beat was lost (best-effort, never retried) AND whose
+ *  exit 75 was never read before the next exit replaced it as the newest (two exits between two reads) is noted by
+ *  neither, and its Fly count still reaches the floor — the pre-fix behaviour, for that window only. */
 function withCrashExit(r: Runner, t: RunnerTrigger): Runner {
-  if (t.type !== "observed" || !crashExitSeen(t)) return r;
-  const c = r.crashes;
+  if (t.type !== "observed") return r;
+  const noted: Runner = restartExit(t.exit) ? noteRestart(r) : r;
+  if (!crashExitSeen(t)) return noted;
+  const c = noted.crashes;
   const fresh = t.exitAt != null && (c.exitAt === null || t.exitAt.getTime() > c.exitAt.getTime());
   const rc = t.restartCount;
-  const floor = typeof rc === "number" && Number.isInteger(rc) && rc >= 0 ? rc + (t.exitRestarted === false ? 1 : 0) : 0;
+  const floor = c.restartSeen ? 0 : typeof rc === "number" && Number.isInteger(rc) && rc >= 0 ? rc + (t.exitRestarted === false ? 1 : 0) : 0;
   const exits = Math.max(fresh ? c.exits + 1 : c.exits, floor);
-  return { ...r, crashes: recount(c, c.beats, exits, fresh ? t.exitAt! : c.exitAt) };
+  return { ...noted, crashes: recount(c, c.beats, exits, fresh ? t.exitAt! : c.exitAt) };
 }
 /** R2003b review m4: the reason the cap fails a session with — the CAPPING crash's: `machine_oom` when its exit says the
  *  Machine ran out of memory (the organiser's copy then says so), else `machine_crash`. A crash seen by its beat has no
@@ -355,6 +407,10 @@ const crashedWhileActive: Cell = (r) => {
   return crashCapped(c) ? crashCappedNow(c, null) : stay(c);
 };
 
+/** Owed 66 review m1: booting/playing × a `restart` final beat — counted as nothing, and noted. Fly restarts the process on the
+ *  SAME attempt (the lifecycle stays as it was; the restarted process's beats hold the stale window). */
+const restartedWhileActive: Cell = (r) => stay(noteRestart(r));
+
 function observedWhileStopping(r: Runner, t: RunnerTrigger): RunnerStep {
   if (t.type !== "observed") throw new InvalidRunnerTransition(r.state, t.type);
   switch (t.state) {
@@ -371,14 +427,14 @@ const createStarted: Cell = (r, t) => {
   // stray retry_runner can ask, and `decide` already refuses it on the failed session. This holds if that ever changes.
   if (crashCapped(r)) throw new InvalidRunnerTransition(r.state, t.type);
   // The new attempt's evidence starts empty; the session's count (and the newest exit identity) carry.
-  const crashes: CrashTally = { ...r.crashes, beats: 0, exits: 0 };
+  const crashes: CrashTally = { ...r.crashes, beats: 0, exits: 0, restartSeen: false };
   return { next: { ...r, state: "creating", attempt: t.attempt, name: t.name, machineId: null, stopRequestedAt: null, crashes }, effects: [{ type: "persist_intent" }, { type: "create_machine" }], signal: null };
 };
 
 export const RUNNER_TABLE: Record<RunnerState, Record<RunnerTrigger["type"], RunnerCell>> = {
   none: {
     create_started: createStarted, create_ok: null, create_failed: null, callback_playing: null, callback_stopped: null,
-    callback_crashed: null, observed: null,
+    callback_crashed: null, callback_restarted: null, observed: null,
     // C1: a live composed session with NO runner is a corrupt row. Fail it (a stale heartbeat is `machine_crash`) —
     // a throw here would 500 every read of it forever. There is no name to tear down.
     stale_beat: (r) => ({ next: r, effects: [], signal: { type: "failed", reason: "machine_crash" } }),
@@ -404,7 +460,7 @@ export const RUNNER_TABLE: Record<RunnerState, Record<RunnerTrigger["type"], Run
       const canRetry = t.retryable && retryLeft(r);
       return { next: { ...r, state: "destroyed" }, effects: [], signal: canRetry ? { type: "retry" } : { type: "failed", reason: "machine_create_failed" } };
     },
-    callback_playing: null, callback_stopped: null, callback_crashed: null,
+    callback_playing: null, callback_stopped: null, callback_crashed: null, callback_restarted: null,
     observed: (r, t) => {
       if (t.type !== "observed") return stay(r);
       // crash-safe reconcile (invariant 4): the Machine exists under our name → adopt it, no second create
@@ -428,6 +484,7 @@ export const RUNNER_TABLE: Record<RunnerState, Record<RunnerTrigger["type"], Run
     callback_playing: (r) => ({ next: { ...r, state: "playing" }, effects: [], signal: { type: "went_live" } }),
     callback_stopped: stoppedWhileActive,
     callback_crashed: crashedWhileActive,
+    callback_restarted: restartedWhileActive,
     observed: observedFrom("booting"),
     stale_beat: (r, t) => toLost(r, t),                            // only reachable for a replacement booting in a LIVE session (expiry.ts)
     deadline: (r, _t, now) => toStopping(r, "max_duration", now),
@@ -441,6 +498,7 @@ export const RUNNER_TABLE: Record<RunnerState, Record<RunnerTrigger["type"], Run
     callback_playing: (r) => ({ next: r, effects: [], signal: { type: "went_live" } }),
     callback_stopped: stoppedWhileActive,
     callback_crashed: crashedWhileActive,
+    callback_restarted: restartedWhileActive,
     observed: observedFrom("playing"),
     stale_beat: (r, t) => toLost(r, t),
     deadline: (r, _t, now) => toStopping(r, "max_duration", now),
@@ -452,6 +510,7 @@ export const RUNNER_TABLE: Record<RunnerState, Record<RunnerTrigger["type"], Run
     callback_playing: (r) => stay(r),
     callback_stopped: (r) => ({ next: { ...r, state: "exited" }, effects: [], signal: null }),
     callback_crashed: (r) => stay(r),                              // R2003: our stop is ending it — record only, never counted
+    callback_restarted: (r) => stay(r),                            // …nor noted: nothing on a runner we are stopping is tallied
     observed: observedWhileStopping,
     stale_beat: (r) => stay(r), deadline: (r) => stay(r), session_stop: (r) => stay(r),
     grace_expired: (r) => forceDestroyed(r),
@@ -460,7 +519,7 @@ export const RUNNER_TABLE: Record<RunnerState, Record<RunnerTrigger["type"], Run
   },
   exited: {
     create_started: null, create_ok: null, create_failed: null, callback_playing: null,
-    callback_stopped: (r) => stay(r), callback_crashed: (r) => stay(r),
+    callback_stopped: (r) => stay(r), callback_crashed: (r) => stay(r), callback_restarted: (r) => stay(r),
     observed: (r, t) => (t.type === "observed" && t.state === "destroyed" ? { next: { ...r, state: "destroyed" }, effects: [], signal: { type: "completed" } } : stay(withExit(r, t))),
     stale_beat: (r) => stay(r), deadline: (r) => stay(r), session_stop: (r) => stay(r),
     grace_expired: (r) => forceDestroyed(r),
@@ -473,7 +532,7 @@ export const RUNNER_TABLE: Record<RunnerState, Record<RunnerTrigger["type"], Run
     create_ok: destroyLateCreate, create_failed: (r) => stay(r),
     callback_playing: null,
     // The teardown is already out. The heartbeat route never hands a crash beat to a lost runner; a stray one records nothing.
-    callback_stopped: (r) => stay(r), callback_crashed: (r) => stay(r),
+    callback_stopped: (r) => stay(r), callback_crashed: (r) => stay(r), callback_restarted: (r) => stay(r),
     // R2003b: a crash exit read here is still this attempt's crash (Fly restarts the Machine our DELETE has not reached yet):
     // counted, and the observation that CROSSES the cap fails the session — once; the teardown is already issued.
     observed: (r, t) => {
@@ -498,7 +557,7 @@ export const RUNNER_TABLE: Record<RunnerState, Record<RunnerTrigger["type"], Run
     create_started: createStarted,                                  // the retry — only from here (invariant 1)
     create_ok: destroyLateCreate,
     create_failed: (r) => stay(r),
-    callback_playing: null, callback_stopped: null, callback_crashed: null,
+    callback_playing: null, callback_stopped: null, callback_crashed: null, callback_restarted: null,
     observed: (r) => stay(r),
     // C1: destroyed and still wanted live — the process died before `retry_runner` ran. Re-signal the ONE retry
     // while the cap allows (the session's retry arm refuses it once the session is ending), else fail.

@@ -38,7 +38,7 @@ import { isPresent } from "@/server/relay/domain/pairing";
 import { steppedDownTo } from "@/server/relay/domain/ladder";
 import { autoStopApplies, autoStopVerdict, type PhoneMode } from "@/server/relay/domain/auto-stream";
 import { codeStatus } from "@/server/relay/domain/stream-code";
-import { InvalidRunnerTransition, machineNameFor, stoppedBeatTrigger, type ExitInfo, type RunnerEffect } from "@/server/relay/domain/runner";
+import { InvalidRunnerTransition, machineNameFor, restartsInPlaceAfter, stoppedBeatTrigger, type ExitInfo, type RunnerEffect } from "@/server/relay/domain/runner";
 import { evaluate, runnerDeadlineOf, warmingTimedOut, type Expiry } from "@/server/relay/domain/expiry";
 import {
   type Ask10Phone, cameraEvidenceMatters, composedCameraLost, composedCameraWatched, composedNeverLive, livePhoneLost, lostCountdown, programmePhaseRowMatters,
@@ -88,6 +88,7 @@ interface Row {
   runner_exit_code: number | null; runner_oom_killed: boolean | null; runner_requested_stop: boolean | null;
   // R2003b (V450): the crash tally (domain/runner.ts CrashTally) — the session's count, this attempt's two bounds, the newest exit's instant
   runner_crash_count: number; runner_crash_beats: number; runner_crash_exits: number; runner_crash_exit_at: string | null;
+  runner_crash_restart_seen: boolean;   // V467 (Owed 66): this attempt has read an in-place restart's exit — the restart-count floor is dropped
   created_by: string; created_at: string;
   output_uid: string | null;   // C1: the domain's proof an output exists to release (Session.outputUid)
   start_cause: Session["startCause"];   // capture QR v2 §5.3 (V430)
@@ -102,7 +103,7 @@ const cols = () => sql`id, fixture_id, org_id, mode, state, desired_state, fail_
   target_id, machine_id, last_heartbeat, heartbeat_at, beat_window_at, started_at, ended_at, ending_at, max_duration_minutes,
   runner_retries, runner_attempts, runner_state, runner_name, runner_stop_requested_at,
   runner_exit_code, runner_oom_killed, runner_requested_stop, created_by, created_at, output_uid, start_cause, warming_at,
-  ingest_read_failed, runner_crash_count, runner_crash_beats, runner_crash_exits, runner_crash_exit_at`;
+  ingest_read_failed, runner_crash_count, runner_crash_beats, runner_crash_exits, runner_crash_exit_at, runner_crash_restart_seen`;
 
 const d = (s: string | null): Date | null => (s ? new Date(s) : null);
 
@@ -141,7 +142,7 @@ function toSession(r: Row): Session {
       machineId: r.machine_id, stopRequestedAt: d(r.runner_stop_requested_at), lastExit: exitOf(r),
       // R2003b: dropping a column here (or from cols()) is silent to tsc — undefined reads as no crashes, and the cap never
       // fires; relay-internal-routes.test.ts "R2003b … the SEQUENCE" is the witness (its count crosses requests).
-      crashes: { count: r.runner_crash_count, beats: r.runner_crash_beats, exits: r.runner_crash_exits, exitAt: d(r.runner_crash_exit_at) },
+      crashes: { count: r.runner_crash_count, beats: r.runner_crash_beats, exits: r.runner_crash_exits, exitAt: d(r.runner_crash_exit_at), restartSeen: r.runner_crash_restart_seen },
     },
   };
 }
@@ -182,6 +183,7 @@ async function persist(tx: Tx, s: Session): Promise<void> {
            runner_requested_stop = ${s.runner.lastExit?.requestedStop ?? null},
            runner_crash_count = ${s.runner.crashes.count}, runner_crash_beats = ${s.runner.crashes.beats},
            runner_crash_exits = ${s.runner.crashes.exits}, runner_crash_exit_at = ${s.runner.crashes.exitAt},
+           runner_crash_restart_seen = ${s.runner.crashes.restartSeen},
            started_at = ${s.startedAt}, ended_at = ${s.endedAt}, beat_window_at = ${s.beatWindowAt}
      where id = ${s.id}`;
   // G1: beat_window_at IS written — the stale-beat arm and the retry arm move it, and nothing else can persist it.
@@ -2549,10 +2551,14 @@ export async function heartbeat(sessionId: string, token: string, body: RelayHea
   // the composed stale window takes it lost → destroyed → the one retry); the crash that reaches the cap fails the session
   // machine_crash and tears the Machine down. It is not a teardown trigger, so it reaches a still-running session only:
   // `decide` refuses it on a terminal one (it would 500 the Machine's beat).
+  // Owed 66: `restart` — the compositor's own in-place restart (exit 75) — is `callback_restarted`: NEVER a crash and never
+  // counted; Fly restarts the process on the SAME attempt and its beats hold the stale window. The runner only NOTES it
+  // (`restartSeen`: this attempt's restart-count floor is dropped, review m1) — from the beat, which goes out before the exit
+  // 75 and so does not wait for a read of it. Like `callback_crashed` it is not a teardown trigger: a still-running session only.
   const stopped = s.mode === "composed" && body.state === "stopped" ? stoppedBeatTrigger(body.exitReason) : null;
   if (stopped && (s.runner.state === "stopping" || s.runner.state === "playing" || s.runner.state === "booting")) {
     s = (await apply(sessionId, (cur) => (cur.mode === "composed" && (cur.runner.state === "stopping" || cur.runner.state === "playing" || cur.runner.state === "booting")
-      && (stopped.type !== "callback_crashed" || !isTerminal(cur.state)) && !supersededAttempt(att, cur.runner.attempt)
+      && (stopped.type === "callback_stopped" || !isTerminal(cur.state)) && !supersededAttempt(att, cur.runner.attempt)
       ? { type: "runner", trigger: stopped } : null), deps)) ?? s;
   }
   return { desiredState: s.desiredState };
@@ -2604,15 +2610,15 @@ function storedBeatIsThisAttempt(row: Pick<Row, "beat_window_at" | "heartbeat_at
 }
 
 /** Owed 37: a stored beat that is a FINAL after which no live process of this attempt is left to beat. Every stopped beat
- *  but one: a `fatal` final is a crash Fly restarts IN PLACE on the SAME attempt (R2003b, `stoppedBeatTrigger` →
- *  callback_crashed, runner-fly.ts `on-failure`), and the restarted process's beats are what hold the composed stale
- *  window off — so they must still write (AGENTS.md class 13). A late beat of the crashed process is indistinguishable
- *  from them without a seq, and writes too. The rest (R2003): no reason tears the Machine down (its retry is a NEW
- *  attempt), `ended` / `deadline` / `refused` end the session, `signalled` is exit 0 (Fly never restarts it), and
- *  `session_gone` is a run whose session is already over. */
+ *  but two: a `fatal` final is a crash, and a `restart` final (Owed 66) the compositor's own in-place restart — Fly restarts
+ *  both IN PLACE on the SAME attempt (R2003b / `restartsInPlaceAfter`, runner-fly.ts `on-failure`), and the restarted
+ *  process's beats are what hold the composed stale window off — so they must still write (AGENTS.md class 13). A late
+ *  beat of the exited process is indistinguishable from them without a seq, and writes too. The rest (R2003): no reason
+ *  tears the Machine down (its retry is a NEW attempt), `ended` / `deadline` / `refused` end the session, `signalled` is
+ *  exit 0 (Fly never restarts it), and `session_gone` is a run whose session is already over. */
 function closesAttempt(stored: Row["last_heartbeat"]): boolean {
   if (stored?.state !== "stopped") return false;
-  return stoppedBeatTrigger(stored.exitReason as RelayHeartbeat["exitReason"])?.type !== "callback_crashed";
+  return !restartsInPlaceAfter(stored.exitReason as RelayHeartbeat["exitReason"]);
 }
 
 /** The relay sizing alarm (owner ruling 2026-10-18, compositor `docs/_INDEX.md` Owed 20: "no lite mode; if CPU impacts,
