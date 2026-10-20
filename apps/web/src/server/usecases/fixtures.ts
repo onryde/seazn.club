@@ -24,7 +24,7 @@ import { resolveFixtureCfg, resolveModule } from "@/server/engine-db";
 import { liveCfg, stageForfeitAward } from "@/server/engine-db/fixture-cfg";
 import { formatStanding } from "@/server/engine-db/format-standing";
 import { LOCKED_FIXTURE_STATUSES, type MatchRulesState } from "@/lib/fixture-status";
-import { isScoredAward } from "@/server/engine-db/awarded-state";
+import { awardFit, isScoredAward, loadAward, type AwardFitVerdict } from "@/server/engine-db/awarded-state";
 import { matchFieldsFor } from "@/lib/rule-scope";
 import type { RuleField } from "@/lib/match-rules";
 import { benchRefusal, lineupCatalogFor } from "./lineup-catalog";
@@ -188,17 +188,35 @@ async function readPadRules(auth: AuthCtx, fixtureId: string) {
 
 /**
  * Where a match stands for the block, by the writer's own predicates (`fixture-rules.ts`). `standing` is null for a match the
- * writer refuses first (`LOCKED_FIXTURE_STATUSES`): `locked`. A match decided without play and credited no score - a bye -
- * is `decided`: `assertAwardFits` refuses every change to it (FIXTURE_FORMAT_LOCKED, reason decided). Otherwise `live` once
- * played or decided without play with a scored award (a correction refits it), else `unstarted`.
+ * writer refuses first (`LOCKED_FIXTURE_STATUSES`): `locked`. A match decided without play is `decided` when the writer
+ * refuses every change to it (FIXTURE_FORMAT_LOCKED, reason decided): a bye (no score to refit), or - batch-6 M-2 - a scored
+ * award `awardFit` says is locked (its own fold cannot reproduce it, so there is nothing to fit a correction against).
+ * Otherwise `live` once played or decided without play with a scored award a correction refits, else `unstarted`.
+ *
+ * `award` is `awardFit`'s verdict (`awardRefitVerdict`) and is asked for exactly the scored award decided without play: null
+ * for every other match. Any refusal it gives is a lock here - the question is asked of the format the award plays now, for
+ * which the corrected-format reasons cannot arise.
  */
 export function matchRulesState(
   outcome: MatchOutcome | null,
   standing: { played: boolean; decidedWithoutPlay: boolean } | null,
+  award: AwardFitVerdict | null,
 ): MatchRulesState {
   if (standing === null) return "locked";
-  if (standing.decidedWithoutPlay && !isScoredAward(outcome)) return "decided";
+  if (standing.decidedWithoutPlay) {
+    if (!isScoredAward(outcome)) return "decided";
+    if (award === null) throw new Error("matchRulesState: a scored award decided without play needs awardFit's verdict (awardRefitVerdict)");
+    if (!award.ok) return "decided";
+  }
   return standing.played || standing.decidedWithoutPlay ? "live" : "unstarted";
+}
+
+/** Batch-6 M-2: the writer's own question of an award (`fixture-rules.ts` `assertAwardFits`: `loadAward`, then `awardFit`),
+ *  asked of the format the award plays NOW (a no-op correction), so only the lock is left to answer: does the award's fold
+ *  reproduce it? One reader, so the block never offers a correction the writer will always refuse. */
+export async function awardRefitVerdict(tx: postgres.TransactionSql, fixtureId: string): Promise<AwardFitVerdict> {
+  const award = await loadAward(tx, fixtureId);
+  return awardFit(award.module, award.cfg, award.cfg, award.lineups, award.outcome, { fixtureId, recordedAt: new Date().toISOString() });
 }
 
 /**
@@ -213,7 +231,8 @@ export function matchRulesState(
  *
  * `state` is the WRITER's own reading (`fixture-rules.ts`): `locked` is exactly the statuses it refuses on
  * (`LOCKED_FIXTURE_STATUSES`, step 1); otherwise a match is `live` when it counts as started there (`formatStanding`: played
- * or decided without play, step 7) and `unstarted` when neither.
+ * or decided without play, step 7) and `unstarted` when neither. A match decided without play is `decided`, not `live`, when
+ * the writer's `awardFit` refuses every change to it (a bye, or a scored award its own fold cannot reproduce: batch-6 M-2).
  *
  * `fields` holds functions (`build`/`read`) and so never crosses to a client component: the page hands the client the
  * serialisable rest, and the block rebuilds the same list from `sportKey`/`stageKind`/`variant` (`matchFieldsFor`).
@@ -277,6 +296,7 @@ export async function loadFixtureMatchRules(auth: AuthCtx, fixtureId: string, di
     const stageResolved = parsedCfg(sportModule, stageRaw);
     const effective = parsedCfg(sportModule, resolveFixtureCfg(row, row.division_config, stage, sportModule));
     const standing = LOCKED_FIXTURE_STATUSES.has(row.status) ? null : await formatStanding(tx, fixtureId);
+    const award = standing?.decidedWithoutPlay && isScoredAward(row.outcome) ? await awardRefitVerdict(tx, fixtureId) : null;
     return {
       sportKey: row.sport_key,
       stageKind,
@@ -287,7 +307,7 @@ export async function loadFixtureMatchRules(auth: AuthCtx, fixtureId: string, di
       effective,
       effectiveLine: formatLineOf(row.sport_key, sportModule, effective, row.stage_kind, row.division_config, dict) ?? "",
       fields: matchFieldsFor({ module: sportModule, stageKind, variant: row.variant_key }),
-      state: matchRulesState(row.outcome, standing),
+      state: matchRulesState(row.outcome, standing, award),
       cancelled: row.status === "cancelled",
     };
   });

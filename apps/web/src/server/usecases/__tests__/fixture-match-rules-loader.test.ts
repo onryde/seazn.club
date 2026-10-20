@@ -4,9 +4,11 @@
 // from the rulebook's lock set (`LOCKED_FIXTURE_STATUSES`, the set the writer itself refuses on) and from the
 // writer's own results - never from the loader. Real Postgres (`describe.skipIf(!HAS_DB)`); every case seeds its own
 // division through the usecases.
+import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { fixtureKeysFor, stageKeysFor, type AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
+import { forEachSportAsync } from "@seazn/engine/testkit";
 import { sql } from "@/lib/db";
 import { FIXTURE_STATUSES, LOCKED_FIXTURE_STATUSES } from "@/lib/fixture-status";
 import { getDictionary } from "@/lib/i18n";
@@ -15,7 +17,7 @@ import { appendEvent } from "@/server/engine-db";
 import { formatLineOf } from "@/server/engine-db/rules-version";
 import { declaredVariant, seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
 import { fixtureRow, playBadminton, rowsOf, type FixtureRow } from "@/server/engine-db/__tests__/helpers/w2b-rig";
-import { loadFixtureMatchRules } from "../fixtures";
+import { loadFixtureMatchRules, matchRulesState } from "../fixtures";
 import { writeFixtureRulesOverride } from "../fixture-rules";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { seedOrg } from "./_seed";
@@ -42,6 +44,35 @@ async function divisionConfigOf(divisionId: string): Promise<unknown> {
 }
 const parsedVariant = (key: string, variant: string): Record<string, unknown> =>
   mod(key).configSchema.parse(mod(key).variants[variant]) as Record<string, unknown>;
+
+// Batch-6 M-2: the block's `decided` state is the writer's refusal, so it is `awardFit`'s verdict and not only "no score" -
+// pure (no DB), so a run without a database still pins the table, its empty cases and its guard.
+describe("matchRulesState: where a match stands for the block, by the writer's own predicates", () => {
+  const scored = { kind: "award", winner: "w", loser: "l", reason: "withdrew" } as never;
+  const bye = { kind: "award", winner: "w", loser: null, reason: "bye" } as never;
+  const noPlay = { played: false, decidedWithoutPlay: true };
+  it("every row of the table, the empty case first (counted)", () => {
+    const rows: [string, ReturnType<typeof matchRulesState>, string][] = [
+      ["a locked status (no standing read)", matchRulesState(null, null, null), "locked"],
+      ["nothing recorded, nothing decided", matchRulesState(null, { played: false, decidedWithoutPlay: false }, null), "unstarted"],
+      ["played", matchRulesState(null, { played: true, decidedWithoutPlay: false }, null), "live"],
+      ["a bye: decided without play, no score", matchRulesState(bye, noPlay, null), "decided"],
+      ["a scored award awardFit keeps", matchRulesState(scored, noPlay, { ok: true }), "live"],
+      ["a scored award its own fold cannot reproduce (awardFit: locked)", matchRulesState(scored, noPlay, { ok: false, code: "FIXTURE_FORMAT_LOCKED" }), "decided"],
+      ["a scored award awardFit refuses even for the format it plays now (does-not-fit): nothing to correct", matchRulesState(scored, noPlay, { ok: false, code: "FORMAT_DOES_NOT_FIT_PLAY", reason: "x" }), "decided"],
+    ];
+    let checked = 0;
+    for (const [label, got, want] of rows) {
+      expect(got, label).toBe(want);
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(7);
+  });
+
+  it("a scored award decided without play with no awardFit verdict is a broken assumption, refused by name", () => {
+    expect(() => matchRulesState(scored, noPlay, null)).toThrow(/awardFit/);
+  });
+});
 
 describe.skipIf(!HAS_DB)("loadFixtureMatchRules", () => {
   it("unstarted with no override: state unstarted, override null, effective = the stage's parsed format, the fields are the match fields", async () => {
@@ -220,6 +251,50 @@ describe.skipIf(!HAS_DB)("loadFixtureMatchRules", () => {
     const played = (await rowsOf(odd.stageId)).filter((r) => r.outcome === null && r.home_entrant_id && r.away_entrant_id);
     expect(played.length, "premise: the odd draw also has real matches").toBeGreaterThan(0);
     expect((await loadFixtureMatchRules(odd.auth, played[0]!.id, dict)).state, "a real, unplayed match").toBe("unstarted");
+  });
+
+  it("batch-6 M-2: a scored award its own fold cannot reproduce is 'decided' - not 'live' - and flips back to 'live' once repaired (every sport, counted)", async () => {
+    const dict = await getDictionary("en", "public");
+    // Raw seed (the writer's own M-2 fixture, fixture-rules.test.ts): an award naming a winner who holds neither seat. A
+    // walkover folds to the OTHER side, so the stored award is not what its own format decides (`awardFit`:
+    // FIXTURE_FORMAT_LOCKED). The expectation is the engine's fact about a walkover, not the loader's reading. Repairing the
+    // winner to the opposite side flips the answer: the sequence, both directions.
+    let flipped = 0;
+    const checked = await forEachSportAsync(async ({ key, module: m }) => {
+      const variant = declaredVariant(key, Object.keys(m.variants)[0]!);
+      const b = await seedBracket({ sport: key, variant, stageKind: "league", entrants: 2 });
+      const id = b.fixtureIds[0]!;
+      const [fx] = await sql<{ home_entrant_id: string; away_entrant_id: string }[]>`
+        select home_entrant_id, away_entrant_id from fixtures where id = ${id}`;
+      const award = (winner: string) => sql.json({ kind: "award", winner, loser: fx!.away_entrant_id, reason: "withdrew" });
+      await sql`update fixtures set status = 'forfeited', outcome = ${award(randomUUID())} where id = ${id}`;
+      expect((await loadFixtureMatchRules(b.auth, id, dict)).state, `${key}: an award its fold cannot reproduce`).toBe("decided");
+      await sql`update fixtures set outcome = ${award(fx!.home_entrant_id)} where id = ${id}`;
+      expect((await loadFixtureMatchRules(b.auth, id, dict)).state, `${key}: the repaired award`).toBe("live");
+      flipped++;
+    });
+    expect(checked, "anti-vacuity: every sport was asked").toBe(builtinModules.length);
+    expect(flipped).toBe(checked);
+  }, 180_000);
+
+  it("batch-6 M-2: the block and the writer agree - the state 'decided' is exactly where the writer refuses a change (badminton; the sweep above asks the loader across the registry)", async () => {
+    const dict = await getDictionary("en", "public");
+    const b = await seedBracket({ sport: "badminton", variant: "short", stageKind: "league", entrants: 2 });
+    const id = b.fixtureIds[0]!;
+    const [fx] = await sql<{ home_entrant_id: string; away_entrant_id: string }[]>`
+      select home_entrant_id, away_entrant_id from fixtures where id = ${id}`;
+    const award = (winner: string) => sql.json({ kind: "award", winner, loser: fx!.away_entrant_id, reason: "withdrew" });
+    await sql`update fixtures set status = 'forfeited', outcome = ${award(randomUUID())} where id = ${id}`;
+    expect((await loadFixtureMatchRules(b.auth, id, dict)).state).toBe("decided");
+    await expect(writeFixtureRulesOverride(b.auth, [id], { bestOf: 1 })).rejects.toMatchObject({
+      status: 409,
+      code: "FIXTURE_FORMAT_LOCKED",
+      extra: { reason: "decided" },
+    });
+    // Repaired: the block offers the correction again, and the writer no longer refuses on the lock.
+    await sql`update fixtures set outcome = ${award(fx!.home_entrant_id)} where id = ${id}`;
+    expect((await loadFixtureMatchRules(b.auth, id, dict)).state).toBe("live");
+    await expect(writeFixtureRulesOverride(b.auth, [id], null)).resolves.toMatchObject({ fixtures: [{ id, started: true }] });
   });
 
   it("another sport (football knockout): the fields are the match keys only - no stage-only decider", async () => {
