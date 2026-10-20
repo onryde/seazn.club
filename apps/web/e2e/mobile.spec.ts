@@ -1,5 +1,7 @@
 import { test, expect, type Page, type Locator, type APIRequestContext } from "@playwright/test";
-import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import AxeBuilder from "@axe-core/playwright";
 import {
@@ -5243,4 +5245,271 @@ test("match room (online chess): a live board is the opponent's clock, a full-wi
   } finally {
     await ctx.close();
   }
+});
+
+// ---------------------------------------------------------------------------
+// R2008 free-gaps (owner ruling 2026-10-20) — the never-live COPY FITS a phone.
+//
+// The end of a composed stream whose camera never appeared now has two true tellings: the credit is returned (or none was
+// taken), or the fixture's never-live refund is already spent and the CHARGE STANDS. Each has a countdown sentence in the
+// Phone strip and a sentence on the failed card (`camera_never_live` / `camera_never_live_charged`), and French is the
+// longest of the four locales. This block renders BOTH variants in fr and en, at this project's width (it runs under all
+// seven), and asserts that nothing is clipped, nothing scrolls the page sideways, the whole sentence is the shipped one,
+// and the control a person needs next (Stop on the live card, Try again on the failed one) is under the finger — by
+// `elementFromPoint`, because a box is paint and a hit-test is what is on top (AGENTS.md class 2).
+//
+// WHAT IS STAGED: the two reads the panel polls (`stream-sessions/current` and `stream-phone`) are answered with the
+// session the server would serve at each moment — a 15-minute clock cannot be waited for here, and the server's own
+// choice of line is proven by the DB suites (stream-composed-free-gaps.test.ts). The copy, the layout, the fixture page
+// and the panel are the product's own. The expected sentences come from the dictionaries by KEY, never typed here.
+//
+// Lives in mobile.spec.ts for the reason the P6 block above does: a new file would run desktop-only. Screenshots go to
+// test-results/never-live-copy/ (never committed; e2e.yml's e2e-mobile job uploads the directory as an artifact).
+// ---------------------------------------------------------------------------
+const NL_SHOTS_DIR = join(process.cwd(), "test-results", "never-live-copy");
+const nlDict = (locale: "en" | "fr"): Record<string, string> =>
+  JSON.parse(readFileSync(fileURLToPath(new URL(`../src/dictionaries/${locale}/ui.json`, import.meta.url)), "utf8")) as Record<string, string>;
+const flat = (t: string): string => t.replace(/\s+/g, " ").trim();
+/** The two tellings, typed from the ruling: the countdown reason on the wire, and the dictionary key each surface reads. */
+const NL_VARIANTS = [
+  { variant: "refunded", reason: "camera_never_live", strip: "stream.phone.countdown.live.camera_never_live", fail: "stream.fail.camera_never_live", creditUsed: false },
+  { variant: "charged", reason: "camera_never_live_charged", strip: "stream.phone.countdown.live.camera_never_live_charged", fail: "stream.fail.camera_never_live_charged", creditUsed: true },
+] as const;
+const NL_LOCALES = ["fr", "en"] as const;
+const NL_SESSION_ID = "00000000-0000-4000-8000-0000000000a1";
+
+/** A fresh two-entrant league and its one fixture on the shared Pro org, plus a destination to name in the session. */
+async function nlRig(page: Page, request: APIRequestContext): Promise<{ fixturePath: string; fixtureId: string; targetId: string }> {
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31", name: `Never Live ${TAG}-${projectTag()}`, visibility: "public",
+  });
+  expect(comp.status, "competition").toBe(201);
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "Never Live Cup", sport_key: "generic", variant_key: "score", config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+  });
+  expect(div.status, "division").toBe(201);
+  await addEntrantsViaApi(request, div.data!.id, ["Riverside Raptors", "Northgate Nomads"]);
+  const { fixtureIds } = await createStageAndGenerate(request, div.data!.id);
+  expect(fixtureIds, "a league of two plays once").toHaveLength(1);
+  const org = await activeOrg(page);
+  const listed = await apiJson<{ id: string }[]>(request, `/api/v1/orgs/${org.id}/stream-targets`);
+  let targetId = listed.data?.[0]?.id;
+  if (!targetId) {
+    const made = await apiJson<{ id: string }>(request, `/api/v1/orgs/${org.id}/stream-targets`, "POST", {
+      kind: "youtube", label: "Riverside TV", streamKey: `e2e-${TAG}-${projectTag()}`,
+    });
+    expect([200, 201], `a destination: ${JSON.stringify(made.error)}`).toContain(made.status);
+    targetId = made.data!.id;
+  }
+  return { fixturePath: await fixturePath(request, fixtureIds[0]!), fixtureId: fixtureIds[0]!, targetId };
+}
+
+/** The `current` read as the server serves it (the wire's fields, StreamSessionCurrent), with `over` laid on top. */
+function nlSession(rig: { fixtureId: string; targetId: string }, over: Record<string, unknown>): Record<string, unknown> {
+  const now = Date.now();
+  return {
+    id: NL_SESSION_ID, fixtureId: rig.fixtureId, mode: "composed", overlay: { themeId: null, delayMs: 0 }, state: "live", desiredState: "live",
+    failReason: null, health: null, ingest: { state: "disconnected", protocol: null }, output: null, balance: 2,
+    startedAt: new Date(now - 5 * 60_000).toISOString(), endedAt: null, replayUrl: null,
+    target: { id: rig.targetId, kind: "youtube", label: "Riverside TV" }, fixtureDecided: false, fixtureHeld: false, endReason: null,
+    creditUsed: true, startCause: "organiser", restart: null, countdown: null, ...over,
+  };
+}
+/** The `stream-phone` read model with a paired, present phone (the panel's strip reads the session for a countdown). */
+function nlPhoneRead(): Record<string, unknown> {
+  const at = new Date().toISOString();
+  return {
+    code: { issuedAt: at, state: "active", endCause: null },
+    phone: {
+      present: true, silent: false, notResponding: false, model: "Pixel 8", appVersion: "capture/2", mode: "operator", state: "publishing",
+      notReady: null, notReadyShown: false, health: null, startFailed: null, lastBeatAt: at, elapsedMs: 5_000,
+      beat: { battery: null, bitrateKbps: null, delivery: null, thermal: null, dataUsedMB: null }, farPoll: false,
+    },
+    destination: null, lastTakeover: null, auto: null, legacy: false, finished: false, session: null,
+  };
+}
+
+/** Answer the panel's two polls with `staged` (a mutable box, so one route serves every scenario of a test). */
+async function nlStage(page: Page, fixtureId: string, staged: { current: Record<string, unknown> | null }): Promise<void> {
+  const envelope = (data: unknown) => ({ ok: true, data, requestId: "e2e-staged" });
+  await page.route(`**/api/v1/fixtures/${fixtureId}/stream-sessions/current`, (route) =>
+    route.request().method() === "GET" ? route.fulfill({ json: envelope(staged.current) }) : route.fallback());
+  await page.route(`**/api/v1/fixtures/${fixtureId}/stream-phone`, (route) =>
+    route.request().method() === "GET" ? route.fulfill({ json: envelope(nlPhoneRead()) }) : route.fallback());
+}
+
+/** The fixture page, its Stream control (one visible twin), and the Phone tab. */
+async function nlOpenPanel(page: Page, path: string): Promise<Locator> {
+  await page.goto(path, { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  // The app header is sticky, so a panel scrolled into view for its picture (or for the hit-tests below) is painted over by
+  // it: back in flow, the crop and the occlusion checks judge the PANEL, as stream-phone-panel.capture.ts does. Nothing in
+  // the panel's own layout moves.
+  await page.addStyleTag({ content: "header { position: static !important; }" });
+  const control = page.locator('[data-role="fixture-stream"]:visible, [data-role="fixture-stream-phone"]:visible');
+  await expect(control, "exactly one visible Stream control").toHaveCount(1, { timeout: 30_000 });
+  await control.click();
+  const scope = page.locator('[data-role="fixture-stream-body"]');
+  await expect(scope).toBeAttached({ timeout: 30_000 });
+  const phoneTab = scope.getByTestId("stream-tab-phone");
+  if (await phoneTab.count()) await phoneTab.click();
+  return scope;
+}
+
+/** The whole sentence is on screen: every painted line of `el`'s text is inside the viewport and inside every ancestor that
+ *  CLIPS (`overflow` hidden/clip), and `el` itself does not hide content below its own box. A scrolling ancestor
+ *  (`auto`/`scroll`) is a feature — its content is reachable — and is skipped on that axis. Returns the line count. */
+async function nlExpectFits(el: Locator, label: string): Promise<number> {
+  await el.scrollIntoViewIfNeeded();
+  const verdict = await el.evaluate((node) => {
+    const own = node as HTMLElement;
+    const vw = document.documentElement.clientWidth;
+    const range = document.createRange();
+    range.selectNodeContents(own);
+    const rects = Array.from(range.getClientRects()).filter((r) => r.width > 0 && r.height > 0);
+    if (rects.length === 0) return { problems: ["no painted text"], lines: 0 };
+    const left = Math.min(...rects.map((r) => r.left));
+    const right = Math.max(...rects.map((r) => r.right));
+    const top = Math.min(...rects.map((r) => r.top));
+    const bottom = Math.max(...rects.map((r) => r.bottom));
+    const problems: string[] = [];
+    if (left < -0.5 || right > vw + 0.5) problems.push(`text spans ${left.toFixed(1)}..${right.toFixed(1)} outside the ${vw}px viewport`);
+    if (own.scrollHeight > own.clientHeight + 1) problems.push(`scrollHeight ${own.scrollHeight} > clientHeight ${own.clientHeight}`);
+    const name = (a: HTMLElement) => `${a.tagName.toLowerCase()}${a.getAttribute("data-testid") ? `[${a.getAttribute("data-testid")}]` : ""}`;
+    for (let a: HTMLElement | null = own; a; a = a.parentElement) {
+      const cs = getComputedStyle(a);
+      const clipsX = cs.overflowX === "hidden" || cs.overflowX === "clip";
+      const clipsY = cs.overflowY === "hidden" || cs.overflowY === "clip";
+      if (!clipsX && !clipsY) continue;
+      const box = a.getBoundingClientRect();
+      if (clipsY && (top < box.top - 0.5 || bottom > box.bottom + 0.5)) {
+        problems.push(`${name(a)} clips vertically: text ${top.toFixed(1)}..${bottom.toFixed(1)}, box ${box.top.toFixed(1)}..${box.bottom.toFixed(1)}`);
+      }
+      if (clipsX && (left < box.left - 0.5 || right > box.right + 0.5)) {
+        problems.push(`${name(a)} clips horizontally: text ${left.toFixed(1)}..${right.toFixed(1)}, box ${box.left.toFixed(1)}..${box.right.toFixed(1)}`);
+      }
+    }
+    // Nothing paints over the copy: the topmost element at the middle of its first and of its last painted line is the
+    // copy's own box (or inside it) — a hit-test, not a box (a sticky bar or a sheet edge over the last line is not "fit").
+    if (bottom - top <= window.innerHeight) {
+      const byTop = [...rects].sort((a, b) => a.top - b.top);
+      for (const [which, r] of [["first", byTop[0]!], ["last", byTop[byTop.length - 1]!]] as const) {
+        const x = Math.min(Math.max(r.left + r.width / 2, 0), vw - 1);
+        const y = r.top + r.height / 2;
+        const hit = document.elementFromPoint(x, y);
+        if (y < 0 || y > window.innerHeight) problems.push(`the ${which} line is outside the viewport (y ${y.toFixed(1)}) after scrolling to it`);
+        else if (!(hit && (own === hit || own.contains(hit)))) problems.push(`the ${which} line is covered by ${hit ? name(hit as HTMLElement) : "nothing"}`);
+      }
+    }
+    return { problems, lines: new Set(rects.map((r) => Math.round(r.top))).size };
+  });
+  expect(verdict.problems, `${label}: the copy is fully visible`).toEqual([]);
+  expect(verdict.lines, `${label}: anti-vacuity, some text was painted`).toBeGreaterThan(0);
+  return verdict.lines;
+}
+
+/** The control is under a finger: scrolled to, its centre is inside the viewport and the topmost element there is the
+ *  control (or a descendant) — not a sticky bar, the sheet's edge or a banner. */
+async function nlExpectReachable(control: Locator, label: string): Promise<void> {
+  await expect(control, `${label}: the control is rendered`).toBeVisible({ timeout: 30_000 });
+  await control.scrollIntoViewIfNeeded();
+  const verdict = await control.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const x = r.left + r.width / 2;
+    const y = r.top + r.height / 2;
+    const top = document.elementFromPoint(x, y);
+    const topName = top ? `${top.tagName.toLowerCase()}${top.getAttribute("data-testid") ? `[${top.getAttribute("data-testid")}]` : ""}` : "nothing";
+    return { inside: x >= 0 && y >= 0 && x <= window.innerWidth && y <= window.innerHeight, hit: top === el || (top !== null && el.contains(top)), topName };
+  });
+  expect(verdict.inside, `${label}: the centre of the control is inside the viewport`).toBe(true);
+  expect(verdict.hit, `${label}: the topmost element at the control's centre is ${verdict.topName}`).toBe(true);
+}
+
+/** Save the panel's picture and prove the gate has not gone vacuous (AGENTS.md class 10): it exists and differs. */
+async function nlShoot(scope: Locator, name: string, shas: Map<string, string>): Promise<void> {
+  mkdirSync(NL_SHOTS_DIR, { recursive: true });
+  const file = join(NL_SHOTS_DIR, `${projectTag()}-${name}.png`);
+  await scope.screenshot({ path: file, animations: "disabled" });
+  expect(existsSync(file), `${name}: the screenshot was written`).toBe(true);
+  const sha = createHash("sha256").update(readFileSync(file)).digest("hex");
+  const twin = shas.get(sha);
+  expect(twin, `${name}: pixel-identical to ${twin} — a state that never opened`).toBeUndefined();
+  shas.set(sha, name);
+}
+
+test("R2008 free-gaps: the never-live COUNTDOWN strip fits and Stop stays reachable — refunded and charged, fr and en", async ({ page, request, baseURL }) => {
+  test.setTimeout(240_000);
+  const rig = await nlRig(page, request);
+  const staged: { current: Record<string, unknown> | null } = { current: null };
+  await nlStage(page, rig.fixtureId, staged);
+  const shas = new Map<string, string>();
+  const sentences = new Set<string>();
+  let checked = 0;
+  for (const locale of NL_LOCALES) {
+    await page.context().addCookies([{ name: "seazn_locale", value: locale, url: baseURL! }]);
+    const dict = nlDict(locale);
+    for (const v of NL_VARIANTS) {
+      const tag = `${projectTag()} ${locale} ${v.variant}`;
+      staged.current = nlSession(rig, {
+        state: "live", creditUsed: true,
+        countdown: { kind: "live", reason: v.reason, elapsedMs: 5 * 60_000, remainingMs: 10 * 60_000 },
+      });
+      const scope = await nlOpenPanel(page, rig.fixturePath);
+      const strip = scope.getByTestId("stream-phone-strip");
+      await expect(strip, `${tag}: the countdown strip`).toBeVisible({ timeout: 30_000 });
+      const copy = dict[v.strip]!;
+      const [head, tail] = copy.split("{remaining}") as [string, string];
+      const got = flat((await strip.textContent()) ?? "");
+      expect(got.startsWith(flat(head)), `${tag}: the strip opens with the shipped sentence — ${got}`).toBe(true);
+      expect(got.endsWith(flat(tail)), `${tag}: the strip ends with the shipped sentence — ${got}`).toBe(true);
+      const remaining = got.slice(flat(head).length, got.length - flat(tail).length).trim();
+      expect(remaining.length, `${tag}: a time is named between them (${remaining})`).toBeGreaterThan(0);
+      sentences.add(got);
+      const lines = await nlExpectFits(strip, `${tag} strip`);
+      await expectNoHorizontalScroll(page);
+      await nlExpectReachable(scope.getByTestId("stream-stop").first(), `${tag} Stop`);
+      await nlShoot(scope, `${locale}-${v.variant}-strip`, shas);
+      console.log(`[never-live strip ${tag}] ${got.length} chars, ${lines} lines, remaining "${remaining}"`);
+      checked++;
+    }
+  }
+  expect(checked, "anti-vacuity: both locales x both tellings").toBe(NL_LOCALES.length * NL_VARIANTS.length);
+  expect(sentences.size, "four different sentences were shown").toBe(4);
+});
+
+test("R2008 free-gaps: the never-live FAILED card fits and Try again stays reachable — refunded and charged, fr and en", async ({ page, request, baseURL }) => {
+  test.setTimeout(240_000);
+  const rig = await nlRig(page, request);
+  const staged: { current: Record<string, unknown> | null } = { current: null };
+  await nlStage(page, rig.fixtureId, staged);
+  const shas = new Map<string, string>();
+  const sentences = new Set<string>();
+  let checked = 0;
+  for (const locale of NL_LOCALES) {
+    await page.context().addCookies([{ name: "seazn_locale", value: locale, url: baseURL! }]);
+    const dict = nlDict(locale);
+    for (const v of NL_VARIANTS) {
+      const tag = `${projectTag()} ${locale} ${v.variant}`;
+      const now = Date.now();
+      staged.current = nlSession(rig, {
+        state: "failed", desiredState: "ending", failReason: "camera_never_live", creditUsed: v.creditUsed,
+        startedAt: new Date(now - 17 * 60_000).toISOString(), endedAt: new Date(now - 2 * 60_000).toISOString(),
+        endReason: "failed", countdown: null,
+      });
+      const scope = await nlOpenPanel(page, rig.fixturePath);
+      const card = scope.getByTestId("stream-fail-reason");
+      await expect(card, `${tag}: the failed card`).toBeVisible({ timeout: 30_000 });
+      const got = flat((await card.textContent()) ?? "");
+      expect(got, `${tag}: the card says the shipped sentence`).toBe(flat(dict[v.fail]!));
+      sentences.add(got);
+      const lines = await nlExpectFits(card, `${tag} fail card`);
+      await expectNoHorizontalScroll(page);
+      await nlExpectReachable(scope.getByTestId("stream-retry"), `${tag} Try again`);
+      await nlShoot(scope, `${locale}-${v.variant}-fail`, shas);
+      console.log(`[never-live fail ${tag}] ${got.length} chars, ${lines} lines`);
+      checked++;
+    }
+  }
+  expect(checked, "anti-vacuity: both locales x both tellings").toBe(NL_LOCALES.length * NL_VARIANTS.length);
+  expect(sentences.size, "four different sentences were shown").toBe(4);
 });

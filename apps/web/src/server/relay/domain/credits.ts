@@ -37,6 +37,16 @@ export function restartIsFree(a: { windowOpen: boolean; used: number }, limit: n
   return a.windowOpen && a.used < limit;
 }
 
+/** R2008 free-gaps (owner ruling 2026-10-20): the platform's never-live refund is bounded — at most `limit` per fixture per reuse
+ *  window. `priorRefundAts` are the instants of the fixture's EARLIER never-live refunds (any order, any age); only those inside
+ *  the window (the reuse rule's own `withinReuseWindow`, so one boundary for both) count. Capped = the window already holds
+ *  `limit` of them, so this end is NOT refunded. No earlier refund is never capped (the empty case). A limit that is not a
+ *  positive integer is refused by name: read as 0 or NaN it would cap everything, or nothing. */
+export function neverLiveRefundCapped(priorRefundAts: readonly Date[], now: Date, limit: number): boolean {
+  positiveInt(limit, "neverLiveRefundCapped: limit");
+  return priorRefundAts.filter((at) => withinReuseWindow(at, now)).length >= limit;
+}
+
 /** R2004 (owner ruling 2026-10-18, option (a)): how many recordings a session of each mode makes while it runs. A composed
  *  session's camera input (A) keeps recording — Cloudflare serves an input's HLS only while it records, and the phone's
  *  delivery watch reads A's — and its programme input (B) records the product. Passthrough records its one input. */

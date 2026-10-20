@@ -39651,7 +39651,8 @@
                                           "type": "string",
                                           "enum": [
                                             "phone_lost",
-                                            "camera_never_live"
+                                            "camera_never_live",
+                                            "camera_never_live_charged"
                                           ]
                                         },
                                         "elapsedMs": {
@@ -40401,7 +40402,8 @@
                                       "type": "string",
                                       "enum": [
                                         "phone_lost",
-                                        "camera_never_live"
+                                        "camera_never_live",
+                                        "camera_never_live_charged"
                                       ]
                                     },
                                     "elapsedMs": {

@@ -403,13 +403,16 @@ describe("W24 — the Phone node, link 1, the strip and the fold's dot agree for
     // because of the phone's camera, so the node, link 1 and the dot say what a lost phone says.
     // The node does NOT say "Reconnecting…": the camera never connected (confirm review m-C2). The "!", link 1 and the dot are a lost phone's.
     "live.camera_never_live": { key: "stream.phone.countdown.live.camera_never_live", node: n("amber", "waitingCamera", "bang"), link1: "problem", dot: "amber" },
+    // Free-gaps (owner ruling 2026-10-20): the SAME end when the charge will stand — only the sentence differs (it says the money),
+    // never the phone's story: the camera never connected, whatever the ledger will do about the credit.
+    "live.camera_never_live_charged": { key: "stream.phone.countdown.live.camera_never_live_charged", node: n("amber", "waitingCamera", "bang"), link1: "problem", dot: "amber" },
   };
   /** The reasons that are about a lost phone: the '!', link 1's `problem` and the amber dot go with exactly these. */
-  const LOST: readonly string[] = ["phone_lost", "camera_never_live"];
+  const LOST: readonly string[] = ["phone_lost", "camera_never_live", "camera_never_live_charged"];
   /** The states each (kind, reason) is served in: `warming` before any video; `live` in live AND in a warming reconnect —
    *  except a NEVER-live end, which only a session that already went live can have (R2008). */
   const STATES = (kind: Countdown["kind"], reason: Countdown["reason"]): readonly ("live" | "warming")[] =>
-    kind === "warming" ? ["warming"] : reason === "camera_never_live" ? ["live"] : ["live", "warming"];
+    kind === "warming" ? ["warming"] : reason === "camera_never_live" || reason === "camera_never_live_charged" ? ["live"] : ["live", "warming"];
   const projection = (state: "live" | "warming", countdown: Countdown | null) => ({
     ...v(state, "disconnected", countdown?.kind === "live" ? "unknown" : null, W),
     countdown,
@@ -446,10 +449,10 @@ describe("W24 — the Phone node, link 1, the strip and the fold's dot agree for
       }
     }
     // warming.no_inbound_timeout ×1 state, warming.phone_lost ×1, live.phone_lost ×2 (live, warming reconnect),
-    // live.camera_never_live ×1 (live only); ×2 phones.
+    // live.camera_never_live ×1 (live only), live.camera_never_live_charged ×1 (live only); ×2 phones.
     expect(checked).toBe(WIRE.reduce((sum, [k, r]) => sum + STATES(k, r).length, 0) * 2);
-    expect(checked).toBe(10);
-    expect(lost, "every lost row was reached").toBe(8);
+    expect(checked).toBe(12);
+    expect(lost, "every lost row was reached").toBe(10);
   });
 
   it("the empty case: warming with NO countdown — the strip leads with 'Waiting' alone and the node is Starting with no mark, even with the read model saying silent", () => {

@@ -15,6 +15,11 @@ Decision log and session status. Read `_RULES.md` beside this file first.
 > ends `phone_lost`; one whose camera never appears ends `camera_never_live` 15 min after go-live
 > and the match credit is refunded. Both read the compositor's `programmePhase` log
 > (`programme_phase` events). Spec: `../2026-10-01-capture-qr-v2-design.md` §17.15.
+>
+> **R2008 free-gaps, 2026-10-20 (owner ruling "fix both gap").** A composed restart that reached video (a `live`
+> programme phase, and the attempt went on air) now counts toward W23's three free restarts, and the never-live refund is capped at one per
+> fixture per `CREDIT_REUSE_HOURS`; a second never-live end in the window still ends the stream and the charge
+> stands, and the copy says so (`camera_never_live_charged`). Same spec section.
 
 - **Design of record:** `../2026-09-05-stream-overlay-design.md` (owner-approved
   in chat 2026-09-05: design "I am ok with design", spec "approve"; committed

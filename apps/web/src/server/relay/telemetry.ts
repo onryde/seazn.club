@@ -145,6 +145,26 @@ export async function latestLiveRung(exec: Exec, sessionId: string, since: strin
   return r?.rung ?? null;
 }
 
+/** R2008 (owner ruling 2026-10-19): the `type` of the event the beat route writes when the compositor's programme phase CHANGES,
+ *  and the phase that says the camera is IN. ONE definition of "the camera was live" for every reader of the log: the
+ *  composed phone-lost rules (`cameraFactsOf`'s `live_once_at`, stream-sessions.ts) and W23's restart count
+ *  (`sessionsWhoseCameraWasLive`, below) — so the refund and the allowance can never disagree about whether video arrived. */
+export const PROGRAMME_PHASE_EVENT = "programme_phase";
+export const CAMERA_LIVE_PHASE = "live";
+
+/** R2008 free-gaps (owner ruling 2026-10-20): which of these sessions had a beat that reported the camera LIVE — a composed
+ *  session's "reached video", as `first_ingest_at` is a passthrough one's. A READ, kept beside the writer of the same table
+ *  (stream-credits.ts `restartAllowance` may not name a capture table itself — enc-boundary claim 4). A session counts once
+ *  however many `live` rows its log holds (the camera dropped and returned); an empty list answers an empty set, with no
+ *  statement made. */
+export async function sessionsWhoseCameraWasLive(exec: Exec, sessionIds: readonly string[]): Promise<Set<string>> {
+  if (sessionIds.length === 0) return new Set();
+  const rows = await exec<{ session_id: string }[]>`
+    select distinct session_id from fixture_stream_events
+     where session_id = any(${sessionIds as string[]}::uuid[]) and type = ${PROGRAMME_PHASE_EVENT} and to_state = ${CAMERA_LIVE_PHASE}`;
+  return new Set(rows.map((r) => r.session_id));
+}
+
 export interface ProviderCallInput {
   sessionId?: string | null;
   provider: "cloudflare" | "fly" | "stripe";

@@ -49,7 +49,7 @@ import {
 } from "@/lib/stream-credit-packs";
 import {
   END_REASON_KEYS,
-  FAIL_REASON_KEYS,
+  failReasonKey,
   STATE_PILL_KEYS,
   PRESENCE_WATCH_START,
   STREAM_POLL_MS,
@@ -2514,7 +2514,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
             className="rounded-lg border border-red-200 bg-red-50 p-3 text-[13px] text-red-800"
           >
             {/* m11: V410's fail_reason is a nullable text column with no CHECK — a row with none is not a machine crash. */}
-            {msg(p.view.failReason ? FAIL_REASON_KEYS[p.view.failReason] : "stream.fail.unknown")}
+            {msg(failReasonKey(p.view))}
           </p>
           <button
             type="button"

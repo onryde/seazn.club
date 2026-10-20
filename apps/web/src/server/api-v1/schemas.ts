@@ -1644,8 +1644,10 @@ const countdownClock = { elapsedMs: z.number().int().nonnegative(), remainingMs:
  *  `warming` the warming timeout (`no_inbound_timeout`) or ask 10's `phone_lost`, whichever lands first. */
 export const StreamLostCountdown = z.discriminatedUnion("kind", [
   // R2008: a COMPOSED live session's countdown names the end it counts to — W19's `phone_lost` (the camera was in and is
-  // gone) or the never-live cancellation (`camera_never_live`: no camera ever appeared; the credit is returned).
-  z.object({ kind: z.literal("live"), reason: z.enum(["phone_lost", "camera_never_live"]), ...countdownClock }).strict(),
+  // gone) or the never-live cancellation (`camera_never_live`: no camera ever appeared; the credit is returned, or none was taken —
+  // `camera_never_live_charged`: the same cancellation when the fixture's window already holds a never-live refund, so the charge
+  // stands; owner ruling 2026-10-20). The two differ only in what the organiser is told about the money.
+  z.object({ kind: z.literal("live"), reason: z.enum(["phone_lost", "camera_never_live", "camera_never_live_charged"]), ...countdownClock }).strict(),
   z.object({ kind: z.literal("warming"), reason: z.enum(["no_inbound_timeout", "phone_lost"]), ...countdownClock }).strict(),
 ]);
 export type StreamLostCountdown = z.infer<typeof StreamLostCountdown>;

@@ -3,8 +3,8 @@
 // ever see it). C3's arithmetic is pure here so the differential is a
 // millisecond test, and Task 10's DB test proves the SAME function is wired.
 import { describe, expect, it } from "vitest";
-import { CREDIT_REUSE_HOURS, FREE_RESTARTS_PER_WINDOW } from "../../config";
-import { InsufficientCredits, RECORDINGS_PER_SESSION, credit, debit, headroomAfterReservations, reservationMinutes, restartIsFree, withinReuseWindow } from "../credits";
+import { CREDIT_REUSE_HOURS, FREE_RESTARTS_PER_WINDOW, NEVER_LIVE_REFUNDS_PER_WINDOW } from "../../config";
+import { InsufficientCredits, RECORDINGS_PER_SESSION, credit, debit, headroomAfterReservations, neverLiveRefundCapped, reservationMinutes, restartIsFree, withinReuseWindow } from "../credits";
 
 describe("debit / credit", () => {
   it("debit 1 from 1 → 0 (exactly zero is allowed); from 0 → InsufficientCredits", () => {
@@ -89,5 +89,39 @@ describe("restartIsFree (W23: three free restarts per reuse window)", () => {
     expect(() => restartIsFree({ windowOpen: true, used: Number.NaN }, 3)).toThrow(/used/);
     expect(() => restartIsFree({ windowOpen: true, used: 0 }, 0)).toThrow(/limit/);
     expect(restartIsFree({ windowOpen: true, used: 0 }, 1), "the positive pair").toBe(true);
+  });
+});
+
+// R2008 free-gaps (owner ruling 2026-10-20, "fix both gap"): the platform returns AT MOST ONE never-live credit per fixture per
+// reuse window. The number is the ruling's, pinned here against the constant; the rows below take their limit from it. The
+// window is the reuse rule's own (`withinReuseWindow`, CREDIT_REUSE_HOURS), so its boundary is the one pinned above.
+describe("neverLiveRefundCapped (R2008 free-gaps: one never-live refund per fixture per reuse window)", () => {
+  const now = new Date("2026-10-20T10:00:00Z");
+  const ago = (seconds: number) => new Date(now.getTime() - seconds * 1000);
+  const WINDOW_S = CREDIT_REUSE_HOURS * 3600;
+  it("the ruling's number: NEVER_LIVE_REFUNDS_PER_WINDOW is one", () => {
+    expect(NEVER_LIVE_REFUNDS_PER_WINDOW).toBe(1);
+  });
+  it("the EMPTY case first: with no earlier refund nothing is capped — the first never-live end of a fixture is always refunded", () => {
+    expect(neverLiveRefundCapped([], now, NEVER_LIVE_REFUNDS_PER_WINDOW)).toBe(false);
+  });
+  it("one earlier refund: a second inside the window is capped; one exactly a window ago is not (the reuse rule's own boundary, from the constant)", () => {
+    expect(neverLiveRefundCapped([ago(0)], now, NEVER_LIVE_REFUNDS_PER_WINDOW), "just now").toBe(true);
+    expect(neverLiveRefundCapped([ago(WINDOW_S - 1)], now, NEVER_LIVE_REFUNDS_PER_WINDOW), "a second inside").toBe(true);
+    expect(neverLiveRefundCapped([ago(WINDOW_S)], now, NEVER_LIVE_REFUNDS_PER_WINDOW), "exactly the window").toBe(false);
+    expect(neverLiveRefundCapped([ago(WINDOW_S + 1)], now, NEVER_LIVE_REFUNDS_PER_WINDOW), "a second past").toBe(false);
+  });
+  it("only refunds INSIDE the window count, whatever order they come in — a limit of 2 is the differential (one inside, one past is not capped; two inside is)", () => {
+    expect(neverLiveRefundCapped([ago(WINDOW_S + 5), ago(60)], now, 1)).toBe(true);
+    expect(neverLiveRefundCapped([ago(60), ago(WINDOW_S + 5)], now, 1)).toBe(true);
+    expect(neverLiveRefundCapped([ago(WINDOW_S + 5), ago(WINDOW_S + 9)], now, 1)).toBe(false);
+    expect(neverLiveRefundCapped([ago(WINDOW_S + 5), ago(60)], now, 2), "one inside of two allowed").toBe(false);
+    expect(neverLiveRefundCapped([ago(120), ago(60)], now, 2), "two inside of two allowed").toBe(true);
+  });
+  it("a limit that is not a positive integer is refused by name — read as 0 or NaN it would cap everything, or nothing", () => {
+    for (const bad of [0, -1, 1.5, Number.NaN]) {
+      expect(() => neverLiveRefundCapped([], now, bad), String(bad)).toThrow(/neverLiveRefundCapped: limit/);
+    }
+    expect(neverLiveRefundCapped([], now, 1), "the positive pair").toBe(false);
   });
 });

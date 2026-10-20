@@ -490,8 +490,8 @@ describe("composedNeverLive / lostCountdown (composed) — R2008: the never-live
     const cfg = { lostMinutes: PHONE_LOST_LIVE_MINUTES, warmingMinutes: WARMING_TIMEOUT_MINUTES, quietSeconds: RECONNECT_QUIET_SECONDS, silentFloorSeconds: FLOOR };
     const BEATING = { hasCurrentPairing: true, lastBeatAt: ago(S), answeredPollSeconds: POLL_STARTING_SECONDS, heardGoLive: true };
     const DOWN: CountdownRead = { fresh: "disconnected", served: "disconnected", failed: false };
-    const camera = (over: Partial<{ startedAt: Date | null; liveOnceAt: Date | null; reconnectingSince: Date | null; waitedOnly: boolean; logBeganAt: Date | null }>) =>
-      ({ startedAt: ago(LOST_MS), liveOnceAt: null, reconnectingSince: null, waitedOnly: true, logBeganAt: ago(LOST_MS), ...over });
+    const camera = (over: Partial<{ startedAt: Date | null; liveOnceAt: Date | null; reconnectingSince: Date | null; waitedOnly: boolean; logBeganAt: Date | null; chargeStands: boolean }>) =>
+      ({ startedAt: ago(LOST_MS), liveOnceAt: null, reconnectingSince: null, waitedOnly: true, logBeganAt: ago(LOST_MS), chargeStands: false, ...over });
     const composed = (cam: ReturnType<typeof camera>, over: object = {}) => ({
       state: "live" as const, firstIngestAt: null, warmingAt: ago(LOST_MS * 3), phoneBeatAt: ago(LOST_MS), read: DOWN, lastConnectedSampleAt: null,
       phone: BEATING, camera: cam, ...over,
@@ -533,6 +533,46 @@ describe("composedNeverLive / lostCountdown (composed) — R2008: the never-live
       expect(off).toHaveLength(7);
       // The pair: the same session with none of them is counting.
       expect(lostCountdown(composed(camera(old)), NOW, cfg)?.reason).toBe("camera_never_live");
+    });
+
+    // Free-gaps (owner ruling 2026-10-20): the never-live countdown names WHICH never-live end it counts to — the one that returns the
+    // credit (or took none), or the one whose charge stands — from the same answer the end acts on (`chargeStands`).
+    it("never-live, the charge stands: the SAME clocks and the same quiet hold, named `camera_never_live_charged` — and it shows in exactly the cases the plain one does, and no others", () => {
+      let shown = 0, silent = 0;
+      for (const ageMs of [0, S, QUIET_MS - S]) {
+        expect(lostCountdown(composed(camera({ startedAt: ago(ageMs), logBeganAt: ago(ageMs), chargeStands: true })), NOW, cfg), `${ageMs} ms in`).toBeNull();
+        silent++;
+      }
+      for (const ageMs of [QUIET_MS, 5 * MIN, LOST_MS - S, LOST_MS, LOST_MS + 2 * MIN]) {
+        const cam = camera({ startedAt: ago(ageMs), logBeganAt: ago(ageMs) });
+        const plain = lostCountdown(composed(cam), NOW, cfg);
+        const charged = lostCountdown(composed({ ...cam, chargeStands: true }), NOW, cfg);
+        expect(charged, `${ageMs} ms in`).toEqual({ kind: "live", reason: "camera_never_live_charged", elapsedMs: ageMs, remainingMs: Math.max(0, LOST_MS - ageMs) });
+        expect(charged, "only the name differs").toEqual({ ...plain, reason: "camera_never_live_charged" });
+        shown++;
+      }
+      // …and where the plain one is off (the iff's other side), the charged one is off too: a flag cannot raise a countdown.
+      const old = { startedAt: ago(LOST_MS), logBeganAt: ago(LOST_MS), chargeStands: true };
+      for (const [why, over, extra] of [
+        ["a live phase at minute 10", { ...old, liveOnceAt: ago(LOST_MS - 10 * MIN) }, {}],
+        ["other phases in the log", { ...old, waitedOnly: false }, {}],
+        ["a log that began late", { ...old, logBeganAt: ago(MIN) }, {}],
+        ["not live (ending)", old, { state: "ending" }],
+      ] as [string, Partial<ReturnType<typeof camera>>, object][]) {
+        expect(lostCountdown(composed(camera(over), extra), NOW, cfg), why).toBeNull();
+        silent++;
+      }
+      expect({ shown, silent }).toEqual({ shown: 5, silent: 7 });
+    });
+
+    it("camera gone: `chargeStands` is read by the never-live countdown ALONE — a lost camera counts down `phone_lost` whichever way the flag points", () => {
+      const lost = camera({ liveOnceAt: ago(LOST_MS * 3), reconnectingSince: ago(5 * MIN), waitedOnly: false, logBeganAt: ago(LOST_MS * 3) });
+      let checked = 0;
+      for (const chargeStands of [false, true]) {
+        expect(lostCountdown(composed({ ...lost, chargeStands }, { phoneBeatAt: ago(5 * MIN) }), NOW, cfg), `chargeStands ${chargeStands}`).toEqual({ kind: "live", reason: "phone_lost", elapsedMs: 5 * MIN, remainingMs: LOST_MS - 5 * MIN });
+        checked++;
+      }
+      expect(checked).toBe(2);
     });
 
     it("camera gone (W19's composed analogue): needs a FRESH `disconnected` — `connected`, `unknown`, a carried word and a failed read each show nothing, as W19's does", () => {
@@ -655,7 +695,7 @@ describe("cameraEvidenceMatters / programmePhaseRowMatters / composedCameraWatch
     let due = 0, notDue = 0;
     for (const beatAge of ages) {
       for (const runAge of ages) {
-        const camera = { startedAt: ago(LOST_MS * 4), liveOnceAt: ago(LOST_MS * 4), reconnectingSince: ago(runAge), waitedOnly: false, logBeganAt: ago(LOST_MS * 4) };
+        const camera = { startedAt: ago(LOST_MS * 4), liveOnceAt: ago(LOST_MS * 4), reconnectingSince: ago(runAge), waitedOnly: false, logBeganAt: ago(LOST_MS * 4), chargeStands: false };
         const i = { state: "live" as const, firstIngestAt: null, warmingAt: null, phoneBeatAt: ago(beatAge), read: { fresh: "disconnected" as const, served: "disconnected" as const, failed: false }, lastConnectedSampleAt: null, phone: { hasCurrentPairing: true, lastBeatAt: ago(S), answeredPollSeconds: POLL_STARTING_SECONDS, heardGoLive: true }, camera };
         const shows = lostCountdown(i, NOW, cfg) !== null;
         const watched = composedCameraWatched({ state: "live", phoneBeatAt: ago(beatAge), liveOnceAt: camera.liveOnceAt, reconnectingSince: camera.reconnectingSince }, NOW, RECONNECT_QUIET_SECONDS);

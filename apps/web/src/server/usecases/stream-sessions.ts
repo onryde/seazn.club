@@ -51,13 +51,13 @@ import {
   TargetSecretUnreadableError, lockStreamTarget, readCameraPlayback, readFirstInput, readTargetSecret, storeInputCredentials, storePlaybackCredentials, wipeStreamCodeTok,
 } from "@/server/relay/secret-columns";
 import { scrubBeatText } from "@/server/relay/sanitise";
-import { latestLiveRung, recordEvent, recordSample, recordStorageSnapshot, type EventSource } from "@/server/relay/telemetry";
+import { CAMERA_LIVE_PHASE, PROGRAMME_PHASE_EVENT, latestLiveRung, recordEvent, recordSample, recordStorageSnapshot, type EventSource } from "@/server/relay/telemetry";
 import { mintRelayToken, relayTokenExpiry, verifyRelayToken } from "@/server/relay/tokens";
 import { log } from "@/server/logger";
 import { captureError } from "@/lib/sentry";
 import {
   NoCreditsError, consumeForSession, creditBalance, creditBreakdown, ensureMonthlyStreamGrant, ensureMonthlyStreamGrantWithRate,
-  lockOrg, refundConsumeForSession, restartAllowance, streamMonthlyRate, type StreamCreditBreakdown,
+  lockOrg, neverLiveRefundStanding, refundConsumeForSession, restartAllowance, streamMonthlyRate, type StreamCreditBreakdown,
 } from "./stream-credits";
 import { DestinationNotAllowedError, TargetUnreadableError } from "./stream-targets";
 import { holderHref, holderRows, wireHolder, type TargetHolder } from "./stream-target-holders";
@@ -426,9 +426,13 @@ export async function apply(
       // failure and the refund commit together or neither does, so a session is never failed with its credit still taken
       // nor refunded while still live. The ledger decides whether anything is owed (a free restart consumed nothing; a staff
       // refund may have returned it already), so the effect never assumes a consume; the event row records which it was (delta 0 and no ledger id: nothing was owed).
-      const r = await refundConsumeForSession(tx, { orgId: before.orgId, sessionId, note: "R2008: the stream went live and its camera never appeared — credit returned" });
-      await recordEvent(tx, { sessionId, orgId: before.orgId, source: "domain", kind: "effect", type: "refund_credit", result: "ok", occurredAt: now,
-        payload: { delta: r.delta, balanceAfter: r.balance, ledgerId: r.ledgerId } });
+      // BOUNDED (free-gaps, owner ruling 2026-10-20): one never-live refund per fixture per reuse window — a refund the window
+      // has no room for is withheld, and the event says so (`reason`), where delta 0 alone would read as "nothing was owed".
+      const r = await refundConsumeForSession(tx, { orgId: before.orgId, sessionId, fixtureId: before.fixtureId, note: "R2008: the stream went live and its camera never appeared — credit returned" }, now);
+      // `result` is 'ok' | 'failed' | null (V410's check): a refund the window had no room for succeeded at nothing and failed at
+      // nothing — it was declined — so it claims neither (null), and the payload's `reason` says why (review m2).
+      await recordEvent(tx, { sessionId, orgId: before.orgId, source: "domain", kind: "effect", type: "refund_credit", result: r.withheld ? null : "ok", occurredAt: now,
+        payload: { delta: r.delta, balanceAfter: r.balance, ledgerId: r.ledgerId, ...(r.withheld ? { reason: "refund_capped" } : {}) } });
     }
     logDecision(before, dec, now);
     return { session: dec.next, effects: dec.effects.filter((e) => e.type !== "consume_credit" && e.type !== "refund_credit") };
@@ -2062,7 +2066,7 @@ async function cameraFactsOf(exec: Tx | typeof sql, sessionId: string): Promise<
     ), brk as (
       select coalesce(max(seq), 0) as seq from ev where to_state is distinct from 'reconnecting' and to_state is distinct from 'waiting'
     )
-    select (select min(occurred_at) from ev where to_state = 'live') as live_once_at,
+    select (select min(occurred_at) from ev where to_state = ${CAMERA_LIVE_PHASE}) as live_once_at,
            (select min(occurred_at) from ev) as log_began_at,
            coalesce((select bool_and(coalesce(to_state = 'waiting', false)) from ev), false) as waited_only,
            case when l.to_state in ('reconnecting', 'waiting') and l.attempt = s.runner_attempts
@@ -2307,17 +2311,25 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
   // end and its reason; lostCountdown gates each end on what it reads). Ask 10's clock is the tick's own mapping. A session with no phone (C-1: pairing_id null) has no phone rules, so it has no
   // countdown either.
   const facts = await phoneFactsOf(sql, row.id);
-  const countdown = facts?.has_phone ? lostCountdown({
-    state: row.state, firstIngestAt: facts.first_ingest_at, warmingAt: d(row.warming_at), phoneBeatAt: facts.phone_beat_at,
-    read: { fresh: freshIngest, served: ingestState?.state ?? null, failed: phoneReadFailed }, lastConnectedSampleAt: facts.last_connected_at,
-    phone: ask10PhoneOf(facts),
+  const countdownOf = (chargeStands: boolean) => lostCountdown({
+    state: row.state, firstIngestAt: facts!.first_ingest_at, warmingAt: d(row.warming_at), phoneBeatAt: facts!.phone_beat_at,
+    read: { fresh: freshIngest, served: ingestState?.state ?? null, failed: phoneReadFailed }, lastConnectedSampleAt: facts!.last_connected_at,
+    phone: ask10PhoneOf(facts!),
     // R2008, I1: a composed session's countdown is built from the camera facts THIS tick judged on (null: no rule could fire).
-    camera: camera && { startedAt: d(row.started_at), liveOnceAt: camera.live_once_at, reconnectingSince: camera.reconnecting_since, waitedOnly: camera.waited_only, logBeganAt: camera.log_began_at },
+    camera: camera && { startedAt: d(row.started_at), liveOnceAt: camera.live_once_at, reconnectingSince: camera.reconnecting_since, waitedOnly: camera.waited_only, logBeganAt: camera.log_began_at, chargeStands },
   }, deps.now(), {
     silentFloorSeconds: tunable("PHONE_SILENT_FLOOR_SECONDS", PHONE_SILENT_FLOOR_SECONDS),
     lostMinutes: tunable("PHONE_LOST_LIVE_MINUTES", PHONE_LOST_LIVE_MINUTES), warmingMinutes: WARMING_TIMEOUT_MINUTES,
     quietSeconds: RECONNECT_QUIET_SECONDS,
-  }) : null;
+  });
+  let countdown = facts?.has_phone ? countdownOf(false) : null;
+  // Free-gaps (owner ruling 2026-10-20): a never-live countdown asks the SAME question the end acts on — will the credit come back
+  // (or was none taken), or does the charge stand? — and only a never-live countdown pays for the ledger read. It re-names itself
+  // with the answer; every other countdown is untouched.
+  if (countdown?.kind === "live" && countdown.reason === "camera_never_live") {
+    const standing = await neverLiveRefundStanding(sql, { orgId: row.org_id, sessionId: row.id, fixtureId: row.fixture_id }, deps.now());
+    if (standing.chargeStands) countdown = countdownOf(true);
+  }
   return {
     id: row.id, fixtureId, mode: row.mode, state: row.state, desiredState: row.desired_state, failReason: row.fail_reason,
     overlay: row.mode === "composed" ? { themeId: row.theme_id, delayMs: row.overlay_delay_ms } : null,
@@ -2432,9 +2444,6 @@ async function beatSecretsOf(sessionId: string, mode: string, token: string): Pr
   }
 }
 
-/** R2008 (owner ruling 2026-10-19): the type of the event the beat route writes when the compositor's programme phase
- *  CHANGES — what the composed phone-lost rule (`cameraFactsOf`, below) reads. */
-const PROGRAMME_PHASE_EVENT = "programme_phase";
 
 /** The programme phase the STORED beat carries (whatever attempt wrote it), null when it carries none. */
 const storedPhaseOf = (row: Row): string | null =>
