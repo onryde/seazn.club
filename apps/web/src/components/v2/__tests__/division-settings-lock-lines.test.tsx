@@ -329,6 +329,37 @@ describe("a save that keeps part of what was sent says so (the 200 with refused[
     expect(byTestId(island.tree(), "division-refused-setTo"), "the earlier list is gone").toBeUndefined();
   });
 
+  it("the sequence: after a partial save, a later 409 is a refusal and not a second partly saved - the flag belongs to ONE save", async () => {
+    const island = mount();
+    net.patch.body = { id: "d1", refused: refusedTwo };
+    clickButton(island.tree(), L("divset.saveRules"));
+    await flush();
+    expect(byTestId(island.tree(), "division-partial-save"), "premise: the first save was partial").toBeDefined();
+
+    net.patch.fail = { status: 409, code: "DIVISION_FORMAT_LOCKED", message: "x", extra: { refused: [lock("winBy")] } };
+    clickButton(island.tree(), L("divset.saveRules"));
+    await flush();
+    const tree = island.tree();
+    expect(byTestId(tree, "division-partial-save"), "nothing landed in the second save: it is not 'partly saved'").toBeUndefined();
+    expect(testIdsStartingWith(tree, "division-refused-"), "the refusal lists this save's field only").toEqual(["division-refused-list", "division-refused-winBy"]);
+  });
+
+  it("the sequence: after a partial save, a later failure that names no field shows its error alone - the earlier list is not carried over", async () => {
+    const island = mount();
+    net.patch.body = { id: "d1", refused: refusedTwo };
+    clickButton(island.tree(), L("divset.saveRules"));
+    await flush();
+    expect(testIdsStartingWith(island.tree(), "division-refused-"), "premise: the first save listed its fields").not.toEqual([]);
+
+    net.patch.fail = { status: 500, code: "INTERNAL", message: "an unrelated server failure", extra: {} };
+    clickButton(island.tree(), L("divset.saveRules"));
+    await flush();
+    const tree = island.tree();
+    expect(tree.map((e) => textOf(e)).join("\n"), "premise: the failure shows its own error").toContain("an unrelated server failure");
+    expect(testIdsStartingWith(tree, "division-refused-"), "no field line under an error that names none").toEqual([]);
+    expect(byTestId(tree, "division-partial-save")).toBeUndefined();
+  });
+
   it("another sport family: generic's abandon field is named by its label though the refusal names the config key", async () => {
     net.patch.body = { id: "d1", refused: [lock("abandonPolicy")] };
     const island = mount({}, "generic", "score", { resultMode: "score", allowDraws: true });

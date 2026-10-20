@@ -41,9 +41,9 @@ async function seedOrg(): Promise<AuthCtx> {
   return { orgId, via: "session", userId: null, role: "owner", keyId: null };
 }
 
-async function seedDivision(auth: AuthCtx, sport: string, variant: string) {
+async function seedDivision(auth: AuthCtx, sport: string, variant: string, config: Record<string, unknown> = {}) {
   const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Lf " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
-  return createDivision(auth, comp.id, { name: "Open", slug: "o-" + randomUUID().slice(0, 6), sport_key: sport, variant_key: variant, config: {} });
+  return createDivision(auth, comp.id, { name: "Open", slug: "o-" + randomUUID().slice(0, 6), sport_key: sport, variant_key: variant, config });
 }
 
 /** A division with a league stage "Pool A" (2 entrants), generated and NOT started; `second` adds an empty "Pool B" after it. */
@@ -61,9 +61,9 @@ const start = (auth: AuthCtx, fixtureId: string) => appendEvent(auth.orgId, fixt
 
 /** A division with ONE stage of `kind` that has started: the thinnest row the lock's started predicate reads (a frozen
  *  config snapshot) - only the lock is under test, so any sport and kind can be had without a lineup. */
-async function startedStageOfKind(sport: string, variant: string, kind: StageKind) {
+async function startedStageOfKind(sport: string, variant: string, kind: StageKind, config: Record<string, unknown> = {}) {
   const auth = await seedOrg();
-  const d = await seedDivision(auth, sport, variant);
+  const d = await seedDivision(auth, sport, variant, config);
   const [stage] = await createStages(auth, d.id, { seq: 1, kind, name: `K-${kind}`, config: kind === "swiss" ? { rounds: 3 } : {}, progression: null });
   await sql`insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, fixture_no, config_snapshot)
             values (${stage!.id}, ${d.id}, ${auth.orgId}, 1, 1, 1, ${sql.json({} as never)})`;
@@ -169,6 +169,8 @@ describe.skipIf(!HAS_DB)("W2c T20 the settings form's locks, loaded from the sam
   it("every sport, a started league: the variant, the cascade and every field the form shows are locked, by the engine's own table/format split", async () => {
     let sports = 0;
     let judged = 0;
+    let tableJudged = 0;
+    let tableWithoutBox = 0;
     for (const m of builtinModules) {
       const variant = Object.keys(m.variants)[0]!;
       const g = await startedStageOfKind(m.key, variant, "league");
@@ -182,10 +184,38 @@ describe.skipIf(!HAS_DB)("W2c T20 the settings form's locks, loaded from the sam
         expect(locks[k]?.code, `${m.key}.${k}`).toBe(table.has(k) ? "DIVISION_TABLE_RULES_LOCKED" : "DIVISION_FORMAT_LOCKED");
         judged++;
       }
+      // The table keys the form has no box for (an API client sends them) are named too: the save refuses `pointsMap` on
+      // a started table whether or not the sport's form edits it, so the loader must say so for every sport.
+      for (const k of table) {
+        expect(locks[k]?.code, `${m.key}.${k} (a table rule, with or without a form box)`).toBe("DIVISION_TABLE_RULES_LOCKED");
+        tableJudged++;
+        if (!keys.includes(k)) tableWithoutBox++;
+      }
       sports++;
     }
     expect(sports, "the whole registry").toBe(builtinModules.length);
     expect(judged, "the sweep judged the sports' fields").toBeGreaterThan(builtinModules.length * 2);
+    expect(tableJudged, "the sweep judged every sport's table keys").toBeGreaterThanOrEqual(builtinModules.length);
+    expect(tableWithoutBox, "some sport's table key has no form box (football's pointsMap): the API-only keys are judged").toBeGreaterThan(0);
+  });
+
+  it("a division whose OWN config makes the bracket force a key (generic, abandonPolicy share): open on a started knockout, locked on a started league", async () => {
+    const generic = builtinModules.find((m) => m.key === "generic")!;
+    const variant = Object.keys(generic.variants)[0]!;
+    const shared = { resultMode: "score", allowDraws: true, abandonPolicy: "share" };
+    // The premise is the engine's own declaration: the key is forced by THIS config and by no other.
+    expect(Object.keys(generic.bracketDeciders(generic.configSchema.parse(shared) as never)), "premise: share forces abandonPolicy on a bracket").toContain("abandonPolicy");
+    expect(Object.keys(generic.bracketDeciders(generic.configSchema.parse({ resultMode: "score", allowDraws: true }) as never)), "premise: the default forces nothing").not.toContain("abandonPolicy");
+
+    const ko = await startedStageOfKind("generic", variant, "knockout", shared);
+    expect((await getDivision(ko.auth, ko.divisionId)).config, "premise: the division stored the config").toMatchObject(shared);
+    expect(byField(await divisionLockedFields(ko.auth, ko.divisionId)).abandonPolicy, "a knockout plays the forced value, never the division's").toBeUndefined();
+
+    const defaults = await startedStageOfKind("generic", variant, "knockout", { resultMode: "score", allowDraws: true });
+    expect(byField(await divisionLockedFields(defaults.auth, defaults.divisionId)).abandonPolicy, "the default config forces nothing: the knockout inherits it").toMatchObject({ code: "DIVISION_FORMAT_LOCKED" });
+
+    const league = await startedStageOfKind("generic", variant, "league", shared);
+    expect(byField(await divisionLockedFields(league.auth, league.divisionId)).abandonPolicy, "a league reads the division's value whatever a bracket forces").toMatchObject({ code: "DIVISION_FORMAT_LOCKED" });
   });
 
   it("every sport, a started KNOCKOUT: no table to protect (no cascade, no table key), the match format locked except what the stage forces or sets itself (its preset)", async () => {

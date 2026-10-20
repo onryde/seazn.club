@@ -1,0 +1,697 @@
+[
+ {
+  "id": "t20-lockline-find",
+  "file": "apps/web/src/components/v2/division-settings-locks.ts",
+  "find": "return lockedFields.find((r) => names.has(r.field));",
+  "replace": "return undefined;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-locks.test.ts"
+    ],
+    "name": "locks the division format with its name"
+   }
+  ]
+ },
+ {
+  "id": "t20-lockline-edits",
+  "file": "apps/web/src/components/v2/division-settings-locks.ts",
+  "find": "const names = new Set([fieldKey, ...edits.map(topOf)]);",
+  "replace": "const names = new Set([fieldKey]);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-locks.test.ts"
+    ],
+    "name": "edits SEVERAL keys"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "a locked key disables every field that edits it"
+   }
+  ]
+ },
+ {
+  "id": "t20-lockline-fieldkey",
+  "file": "apps/web/src/components/v2/division-settings-locks.ts",
+  "find": "const names = new Set([fieldKey, ...edits.map(topOf)]);",
+  "replace": "const names = new Set([...edits.map(topOf)]);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-locks.test.ts"
+    ],
+    "name": "edits SEVERAL keys"
+   }
+  ]
+ },
+ {
+  "id": "t20-lockline-top",
+  "file": "apps/web/src/components/v2/division-settings-locks.ts",
+  "find": "const topOf = (path: string): string => path.split(\".\")[0]!;",
+  "replace": "const topOf = (path: string): string => path;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-locks.test.ts"
+    ],
+    "name": "edits SEVERAL keys"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-locks.test.ts"
+    ],
+    "name": "swept"
+   }
+  ]
+ },
+ {
+  "id": "t20-merge-dedupe",
+  "file": "apps/web/src/components/v2/division-settings-locks.ts",
+  "find": "if (!out.some((o) => o.field === r.field)) out.push(r);",
+  "replace": "out.push(r);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-locks.test.ts"
+    ],
+    "name": "one entry per field"
+   }
+  ]
+ },
+ {
+  "id": "t20-merge-base-wins",
+  "file": "apps/web/src/components/v2/division-settings-locks.ts",
+  "find": "if (!out.some((o) => o.field === r.field)) out.push(r);",
+  "replace": "{ const i = out.findIndex((o) => o.field === r.field); if (i >= 0) out[i] = r; else out.push(r); }",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-locks.test.ts"
+    ],
+    "name": "one entry per field"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "own lock wins over a learned one"
+   }
+  ]
+ },
+ {
+  "id": "t20-sentence-code",
+  "file": "apps/web/src/components/v2/division-settings-locks.ts",
+  "find": "return m(RULE_LOCK_KEYS[lock.code], { stage: lock.stageName });",
+  "replace": "return m(RULE_LOCK_KEYS.DIVISION_FORMAT_LOCKED, { stage: lock.stageName });",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-locks.test.ts"
+    ],
+    "name": "each code says its own dictionary sentence"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "the table code says the table sentence"
+   }
+  ]
+ },
+ {
+  "id": "t20-sentence-stage",
+  "file": "apps/web/src/components/v2/division-settings-locks.ts",
+  "find": "return m(RULE_LOCK_KEYS[lock.code], { stage: lock.stageName });",
+  "replace": "return m(RULE_LOCK_KEYS[lock.code], { stage: lock.stageId });",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-locks.test.ts"
+    ],
+    "name": "each code says its own dictionary sentence"
+   }
+  ]
+ },
+ {
+  "id": "t20-label-variant",
+  "file": "apps/web/src/components/v2/division-settings-locks.ts",
+  "find": "if (field === \"variant_key\") return m(\"divset.variant\");",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-locks.test.ts"
+    ],
+    "name": "the variant, a rule field by its key"
+   }
+  ]
+ },
+ {
+  "id": "t20-label-edits",
+  "file": "apps/web/src/components/v2/division-settings-locks.ts",
+  "find": " ?? fields.find((f) => f.edits.some((e) => topOf(e) === field));",
+  "replace": ";",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-locks.test.ts"
+    ],
+    "name": "the variant, a rule field by its key"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "another sport family"
+   }
+  ]
+ },
+ {
+  "id": "t20-label-fallback",
+  "file": "apps/web/src/components/v2/division-settings-locks.ts",
+  "find": "return named?.label ?? field;",
+  "replace": "return named?.label ?? \"\";",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-locks.test.ts"
+    ],
+    "name": "the variant, a rule field by its key"
+   }
+  ]
+ },
+ {
+  "id": "t20-loader-absent",
+  "file": "apps/web/src/server/usecases/rule-locks.ts",
+  "find": "    if (!d) return [];\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-locked-fields.test.ts"
+    ],
+    "name": "another organisation"
+   }
+  ]
+ },
+ {
+  "id": "t20-loader-variant",
+  "file": "apps/web/src/server/usecases/rule-locks.ts",
+  "find": "{ configKeys, variant: true, tiebreakers: true },",
+  "replace": "{ configKeys, variant: false, tiebreakers: true },",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-locked-fields.test.ts"
+    ],
+    "name": "a started league stage that inherits everything"
+   }
+  ]
+ },
+ {
+  "id": "t20-loader-cascade",
+  "file": "apps/web/src/server/usecases/rule-locks.ts",
+  "find": "{ configKeys, variant: true, tiebreakers: true },",
+  "replace": "{ configKeys, variant: true, tiebreakers: false },",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-locked-fields.test.ts"
+    ],
+    "name": "a started league stage that inherits everything"
+   }
+  ]
+ },
+ {
+  "id": "t20-loader-table-keys",
+  "file": "apps/web/src/server/usecases/rule-locks.ts",
+  "find": "[...new Set([...sportTopKeys(sport), ...tableRuleKeys(sport, d.variant_key)])]",
+  "replace": "[...new Set([...sportTopKeys(sport)])]",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-locked-fields.test.ts"
+    ],
+    "name": "every sport, a started league"
+   }
+  ]
+ },
+ {
+  "id": "t20-loader-rule-keys",
+  "file": "apps/web/src/server/usecases/rule-locks.ts",
+  "find": "[...new Set([...sportTopKeys(sport), ...tableRuleKeys(sport, d.variant_key)])]",
+  "replace": "[...new Set([...tableRuleKeys(sport, d.variant_key)])]",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-locked-fields.test.ts"
+    ],
+    "name": "a started league stage that inherits everything"
+   }
+  ]
+ },
+ {
+  "id": "t20-loader-config",
+  "file": "apps/web/src/server/usecases/rule-locks.ts",
+  "find": "divisionConfig: d.config ?? {} }",
+  "replace": "divisionConfig: {} }",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-locked-fields.test.ts"
+    ],
+    "name": "OWN config makes the bracket force a key"
+   }
+  ]
+ },
+ {
+  "id": "t20-ui-variant-disabled",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "disabled={!canEdit || variantLock !== undefined}",
+  "replace": "disabled={!canEdit}",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "the variant is read-only with its line"
+   }
+  ]
+ },
+ {
+  "id": "t20-ui-points-disabled",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "disabled={!canEdit || pointsLock !== undefined}",
+  "replace": "disabled={!canEdit}",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "the standings points boxes are read-only"
+   }
+  ]
+ },
+ {
+  "id": "t20-ui-points-line",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "{pointsLock !== undefined && lockLine(pointsLock, \"division-locked-points\")}",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "the standings points boxes are read-only"
+   }
+  ]
+ },
+ {
+  "id": "t20-ui-variant-line",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "{variantLock !== undefined && lockLine(variantLock, \"division-locked-variant_key\")}",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "the variant is read-only with its line"
+   }
+  ]
+ },
+ {
+  "id": "t20-ui-locks-passed",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "lockedFields={locks}",
+  "replace": "lockedFields={lockedFields}",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "locked from then on"
+   }
+  ]
+ },
+ {
+  "id": "t20-ui-locks-merged",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "const locks = mergeLocks(lockedFields, learnedLocks);",
+  "replace": "const locks = lockedFields;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "locked from then on"
+   }
+  ]
+ },
+ {
+  "id": "t20-ui-partial-cond",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "if (refused !== undefined && refused.length > 0) {",
+  "replace": "if (false) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "names EACH refused field"
+   }
+  ]
+ },
+ {
+  "id": "t20-ui-partial-empty",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "if (refused !== undefined && refused.length > 0) {",
+  "replace": "if (refused !== undefined) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "a save with nothing refused says"
+   }
+  ]
+ },
+ {
+  "id": "t20-ui-read-refused",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "return refusedFieldsOf(saved) ?? [];",
+  "replace": "return [];",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "names EACH refused field"
+   }
+  ]
+ },
+ {
+  "id": "t20-ui-409-list",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "const refused = err instanceof ApiV1Error ? refusedFieldsOf(err.extra) : null;",
+  "replace": "const refused: RefusedField[] | null = null;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "a save refused outright"
+   }
+  ]
+ },
+ {
+  "id": "t20-ui-409-learn",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "          setRefusedList(refused);\n          setLearnedLocks((prev) => mergeLocks(prev, refused));\n        }\n      }\n    } finally {",
+  "replace": "          setRefusedList(refused);\n        }\n      }\n    } finally {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "BOTH refused fields are listed"
+   }
+  ]
+ },
+ {
+  "id": "t20-ui-200-learn",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "        setRefusedList(refused);\n        setLearnedLocks((prev) => mergeLocks(prev, refused));\n      } else {",
+  "replace": "        setRefusedList(refused);\n      } else {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "locked from then on"
+   }
+  ]
+ },
+ {
+  "id": "t20-ui-reset-partial",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "    setRefusedList([]);\n    setPartialSave(false);\n    try {",
+  "replace": "    setRefusedList([]);\n    try {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "a later 409 is a refusal"
+   }
+  ]
+ },
+ {
+  "id": "t20-ui-reset-list",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "    setRefusedList([]);\n    setPartialSave(false);\n    try {",
+  "replace": "    setPartialSave(false);\n    try {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "a later failure that names no field"
+   }
+  ]
+ },
+ {
+  "id": "t20-ui-learned-drop",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "    setSyncedLockedSignature(lockedSignature);\n    setLearnedLocks([]);",
+  "replace": "    setSyncedLockedSignature(lockedSignature);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "a fresh page list that CHANGES replaces it"
+   }
+  ]
+ },
+ {
+  "id": "t20-ui-learned-always",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "if (lockedSignature !== syncedLockedSignature) {",
+  "replace": "if (lockedFields !== undefined) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "locked from then on"
+   }
+  ]
+ },
+ {
+  "id": "t20-ui-summary",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "${variantLock ? msg(\"divset.variantLocked\"",
+  "replace": "${false ? msg(\"divset.variantLocked\"",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "the variant is read-only with its line"
+   }
+  ]
+ },
+ {
+  "id": "t20-ui-structure",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "{structureLocked ? (",
+  "replace": "{false ? (",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "a division with fixtures and NO started stage"
+   }
+  ]
+ },
+ {
+  "id": "t20-ui-partial-block",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "{partialSave && refusedList.length > 0 && (",
+  "replace": "{refusedList.length > 0 && (",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "a save refused outright"
+   }
+  ]
+ },
+ {
+  "id": "t20-ui-refusal-block",
+  "file": "apps/web/src/components/v2/division-settings.tsx",
+  "find": "{error && refusedList.length > 0 && (",
+  "replace": "{refusedList.length > 0 && (",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "names EACH refused field"
+   }
+  ]
+ },
+ {
+  "id": "t20-grid-disabled",
+  "file": "apps/web/src/components/v2/match-rules.tsx",
+  "find": "disabled={disabled || lock !== undefined}",
+  "replace": "disabled={disabled}",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "a locked key disables every field that edits it"
+   }
+  ]
+ },
+ {
+  "id": "t20-grid-edits",
+  "file": "apps/web/src/components/v2/match-rules.tsx",
+  "find": "lockLineFor(field.key, lockedFields, field.edits)",
+  "replace": "lockLineFor(field.key, lockedFields)",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "a locked key disables every field that edits it"
+   }
+  ]
+ },
+ {
+  "id": "t20-grid-line",
+  "file": "apps/web/src/components/v2/match-rules.tsx",
+  "find": "{lock !== undefined && (",
+  "replace": "{false && (",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "a locked key disables every field that edits it"
+   }
+  ]
+ },
+ {
+  "id": "t20-grid-testid",
+  "file": "apps/web/src/components/v2/match-rules.tsx",
+  "find": "data-testid={`division-locked-${field.key}`}",
+  "replace": "data-testid={`division-locked-${lock.field}`}",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/division-settings-lock-lines.test.tsx"
+    ],
+    "name": "a locked key disables every field that edits it"
+   }
+  ]
+ },
+ {
+  "id": "t20-page-loader",
+  "file": "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx",
+  "find": "lockedFields={await divisionLockedFields(auth, id)}",
+  "replace": "lockedFields={[]}",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/__tests__/settings-locks-wiring.test.tsx"
+    ],
+    "name": "lockedFields is what the loader answered"
+   }
+  ]
+ },
+ {
+  "id": "t20-page-structure",
+  "file": "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx",
+  "find": "structureLocked={formatAlreadyLocked(fixtures.length)}",
+  "replace": "structureLocked={false}",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/__tests__/settings-locks-wiring.test.tsx"
+    ],
+    "name": "structureLocked follows the fixtures"
+   }
+  ]
+ },
+ {
+  "id": "t20-page-structure-loader",
+  "file": "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx",
+  "find": "structureLocked={formatAlreadyLocked(fixtures.length)}",
+  "replace": "structureLocked={(await divisionLockedFields(auth, id)).length > 0}",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/__tests__/settings-locks-wiring.test.tsx"
+    ],
+    "name": "structureLocked follows the fixtures"
+   }
+  ]
+ }
+]
