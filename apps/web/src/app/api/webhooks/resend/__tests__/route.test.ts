@@ -7,7 +7,7 @@
 // The signatures are made here from Svix's own rule, not by the route's code: the signed content is
 // `<svix-id>.<svix-timestamp>.<raw body>`, the key is the base64 text after `whsec_`, the MAC is HMAC-SHA256, and the header
 // holds one or more space-separated `v1,<base64>` entries. Svix accepts a timestamp up to 5 minutes either side of now.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { createHmac, randomBytes } from "node:crypto";
 import { NextRequest } from "next/server";
 
@@ -20,6 +20,20 @@ vi.mock("@/server/email-outbox/provider-events", () => ({ applyProviderEvent: ap
 const logMock = vi.hoisted(() => ({ error: vi.fn(), warn: vi.fn(), info: vi.fn() }));
 vi.mock("@/server/logger", () => ({ log: logMock }));
 
+// The comparison must be node's constant-time one. Wrapped (not replaced) so it still compares: the spy records each call's
+// buffer lengths, which also proves it is never handed two buffers of different length (that throws).
+const tseSpy = vi.hoisted(() => vi.fn<(a: number, b: number) => void>());
+vi.mock("node:crypto", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:crypto")>();
+  return {
+    ...actual,
+    timingSafeEqual: (a: NodeJS.ArrayBufferView, b: NodeJS.ArrayBufferView) => {
+      tseSpy(a.byteLength, b.byteLength);
+      return actual.timingSafeEqual(a, b);
+    },
+  };
+});
+
 import { POST } from "../route";
 
 const KEY_BYTES = randomBytes(24);
@@ -27,6 +41,8 @@ const SECRET = `whsec_${KEY_BYTES.toString("base64")}`;
 const OTHER_KEY_BYTES = randomBytes(24);
 /** Svix's tolerance, from its documentation: 5 minutes either side of the receiver's clock. */
 const TOLERANCE_S = 5 * 60;
+/** Svix sends one signature, or two while a secret is being rotated; the cap is a ruling (round 1, Task 5 review): eight. */
+const MAX_SIGNATURES = 8;
 const T0 = new Date("2026-10-23T12:00:00.000Z");
 const NOW_S = Math.floor(T0.getTime() / 1000);
 
@@ -50,7 +66,12 @@ function post(body: string, h: Hdr = {}): Promise<Response> {
 }
 const bodyOf = async (res: Response): Promise<Record<string, unknown>> => (await res.json()) as Record<string, unknown>;
 
+/** How many HMACs the route computed: it must be one per request however many signatures the header carries. */
+let signSpy: MockInstance<SubtleCrypto["sign"]>;
+
 beforeEach(() => {
+  signSpy = vi.spyOn(crypto.subtle, "sign");
+  tseSpy.mockClear();
   vi.stubEnv("RESEND_WEBHOOK_SECRET", SECRET);
   vi.stubEnv("NODE_ENV", "test");
   vi.useFakeTimers({ toFake: ["Date"] });
@@ -66,6 +87,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllEnvs();
+  signSpy.mockRestore();
 });
 
 describe("the secret policy (no secret configured)", () => {
@@ -78,7 +100,10 @@ describe("the secret policy (no secret configured)", () => {
     const body = event("email.bounced");
     const res = await post(body, { id: null, ts: null, sig: null });
     expect(res.status).toBe(401);
+    // The caller learns nothing about the configuration: the body is the bad-signature body, byte for byte. The LOG says which.
+    expect(await bodyOf(res)).toEqual({ error: "invalid signature" });
     expect(logMock.error).toHaveBeenCalledTimes(1);
+    expect(String(logMock.error.mock.calls[0]![0])).toContain("RESEND_WEBHOOK_SECRET is not set");
     expect(suppressMock).not.toHaveBeenCalled();
     expect(applyMock).not.toHaveBeenCalled();
     // Even a request that carries a perfectly good signature for SOME key is refused: there is nothing to verify it against.
@@ -156,6 +181,53 @@ describe("the Svix signature", () => {
     }
   });
 
+  it("the comparison is node's constant-time timingSafeEqual, on equal-length buffers: used for a good signature, never handed a wrong-length one", async () => {
+    const body = event("email.delivered");
+    expect((await post(body)).status).toBe(200);
+    expect(tseSpy).toHaveBeenCalledTimes(1);
+    expect(tseSpy.mock.calls[0]![0]).toBe(tseSpy.mock.calls[0]![1]);
+    expect(tseSpy.mock.calls[0]![0]).toBe(32); // an HMAC-SHA256
+    tseSpy.mockClear();
+    // A short, a long and an empty candidate are refused by length before any comparison is attempted.
+    for (const sig of ["v1,AAAA", `v1,${"A".repeat(200)}`, "v1,"]) expect((await post(body, { sig })).status).toBe(401);
+    expect(tseSpy).not.toHaveBeenCalled();
+  });
+
+  it("pre-auth cost: ONE HMAC per request however many signatures the header lists (all eight wrong -> one MAC, a match in the last slot -> 200)", async () => {
+    const body = event("email.delivered");
+    const bad = (i: number) => sign(`wrong_${i}`, NOW_S, body);
+    signSpy.mockClear();
+    expect((await post(body, { sig: Array.from({ length: MAX_SIGNATURES }, (_v, i) => bad(i)).join(" ") })).status).toBe(401);
+    expect(signSpy).toHaveBeenCalledTimes(1);
+    signSpy.mockClear();
+    const lastIsGood = [...Array.from({ length: MAX_SIGNATURES - 1 }, (_v, i) => bad(i)), sign("msg_1", NOW_S, body)].join(" ");
+    expect((await post(body, { sig: lastIsGood })).status).toBe(200);
+    expect(signSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("pre-auth cost: more than eight signatures is refused with NO HMAC computed (4000 entries, and nine with the good one first)", async () => {
+    const body = event("email.bounced");
+    const good = sign("msg_1", NOW_S, body);
+    signSpy.mockClear();
+    const flood = Array.from({ length: 4000 }, (_v, i) => sign(`flood_${i}`, NOW_S, body)).join(" ");
+    expect((await post(body, { sig: flood })).status).toBe(401);
+    expect(signSpy).not.toHaveBeenCalled();
+    expect(tseSpy).not.toHaveBeenCalled();
+
+    // The cap is on the COUNT: a genuine signature among nine is still refused, and the eighth entry is the last one read.
+    const nine = [good, ...Array.from({ length: MAX_SIGNATURES }, (_v, i) => sign(`n_${i}`, NOW_S, body))].join(" ");
+    expect(nine.split(" ").length).toBe(MAX_SIGNATURES + 1);
+    expect((await post(body, { sig: nine })).status).toBe(401);
+    expect(signSpy).not.toHaveBeenCalled();
+    expect(suppressMock).not.toHaveBeenCalled();
+    expect(applyMock).not.toHaveBeenCalled();
+
+    // Anti-vacuity: the same header trimmed to the cap is accepted, so the refusals above are about the count alone.
+    const eight = [good, ...Array.from({ length: MAX_SIGNATURES - 1 }, (_v, i) => sign(`n_${i}`, NOW_S, body))].join(" ");
+    expect((await post(body, { sig: eight })).status).toBe(200);
+    expect(signSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("a secret that is not valid base64 is refused (401), not a crash, and an error is logged", async () => {
     vi.stubEnv("RESEND_WEBHOOK_SECRET", "whsec_!!!not base64!!!");
     const res = await post(event("email.delivered"));
@@ -167,6 +239,55 @@ describe("the Svix signature", () => {
   it("the whsec_ prefix is optional in the configured secret, as before", async () => {
     vi.stubEnv("RESEND_WEBHOOK_SECRET", KEY_BYTES.toString("base64"));
     expect((await post(event("email.delivered"))).status).toBe(200);
+  });
+});
+
+describe("a signature failure is logged once, by svix-id, and nothing else", () => {
+  const body = event("email.complained", { email_id: "re_w1", to: ["secret-person@example.test"] });
+  const good = () => sign("msg_1", NOW_S, body);
+  const PRODUCERS: [string, () => Promise<Response>][] = [
+    ["a wrong signature", () => post(body, { sig: sign("msg_1", NOW_S, body, OTHER_KEY_BYTES) })],
+    ["a missing signature header", () => post(body, { sig: null })],
+    ["a missing timestamp header", () => post(body, { ts: null })],
+    ["a stale timestamp", () => post(body, { ts: NOW_S - TOLERANCE_S - 1, sig: sign("msg_1", NOW_S - TOLERANCE_S - 1, body) })],
+    ["a non-numeric timestamp", () => post(body, { ts: "NaN", sig: sign("msg_1", "NaN", body) })],
+    ["too many signatures", () => post(body, { sig: Array.from({ length: MAX_SIGNATURES + 1 }, () => good()).join(" ") })],
+    ["a body changed after signing", () => post(`${body} `, { sig: good() })],
+  ];
+
+  it.each(PRODUCERS)("%s -> 401 and exactly ONE warn line naming only the svix-id", async (_n, make) => {
+    const res = await make();
+    expect(res.status).toBe(401);
+    expect(logMock.warn).toHaveBeenCalledTimes(1);
+    expect(logMock.warn.mock.calls[0]![0]).toEqual({ svixId: "msg_1" });
+    expect(String(logMock.warn.mock.calls[0]![1])).toContain("signature");
+  });
+
+  it("a missing svix-id is logged as null, and an absurdly long one is cut (a header is attacker-controlled)", async () => {
+    await post(body, { id: null });
+    expect(logMock.warn.mock.calls[0]![0]).toEqual({ svixId: null });
+    logMock.warn.mockClear();
+    await post(body, { id: "m".repeat(5000), sig: "v1,AAAA" });
+    expect(logMock.warn).toHaveBeenCalledTimes(1);
+    const logged = (logMock.warn.mock.calls[0]![0] as { svixId: string }).svixId;
+    expect(logged.length).toBeGreaterThan(0);
+    expect(logged.length).toBeLessThanOrEqual(128);
+  });
+
+  it("nothing a caller sent or the server holds reaches any log line: no payload, no recipient, no signature, no secret", async () => {
+    const sigHeader = sign("msg_1", NOW_S, body, OTHER_KEY_BYTES);
+    await post(body, { sig: sigHeader });
+    await post(body, { ts: "1e3", sig: good() });
+    const everything = JSON.stringify([logMock.error.mock.calls, logMock.warn.mock.calls, logMock.info.mock.calls]);
+    expect(logMock.warn).toHaveBeenCalledTimes(2); // positive pair: the lines being scanned exist
+    for (const secret of ["secret-person", "re_w1", "email.complained", sigHeader.slice(3), good().slice(3), SECRET, KEY_BYTES.toString("base64")]) {
+      expect(everything, secret.slice(0, 12)).not.toContain(secret);
+    }
+  });
+
+  it("a verified request logs no signature warning (the pair of the tests above)", async () => {
+    expect((await post(body)).status).toBe(200);
+    expect(logMock.warn).not.toHaveBeenCalled();
   });
 });
 
@@ -236,11 +357,25 @@ describe("the work, in order", () => {
     },
   );
 
-  it("a failing suppression write is logged and does not stop the row from moving (existing behaviour kept)", async () => {
+  it.each([
+    ["email.bounced", "bounce"],
+    ["email.complained", "complaint"],
+  ])("%s: 'suppressed' is logged only when the write SUCCEEDED; a failing write logs an error instead, and the answer stays 200 with the row still moving", async (type, kind) => {
+    const suppressedLines = () => logMock.info.mock.calls.filter((c) => /suppressed/.test(String(c[1]))).length;
+    // Success: the info line, no error.
+    expect((await post(event(type))).status).toBe(200);
+    expect(suppressedLines()).toBe(1);
+    expect(logMock.error).not.toHaveBeenCalled();
+    logMock.info.mockClear();
+    applyMock.mockClear();
+
+    // Failure: no "suppressed" claim, one error naming the failed write; still 200 and still applied (existing behaviour).
     suppressMock.mockRejectedValue(new Error("db down"));
-    const res = await post(event("email.bounced"));
+    const res = await post(event(type));
     expect(res.status).toBe(200);
-    expect(logMock.error).toHaveBeenCalled();
+    expect(suppressedLines()).toBe(0);
+    expect(logMock.error).toHaveBeenCalledTimes(1);
+    expect(String(logMock.error.mock.calls[0]![1])).toContain(`suppress ${kind} failed`);
     expect(applyMock).toHaveBeenCalledTimes(1);
   });
 

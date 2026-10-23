@@ -12,7 +12,7 @@
 // Three groups: the vocabulary (no database), the transition matrix (every status x every event, on a real Postgres), and the
 // sequences the house rules owe (a duplicate, an out-of-order pair, two events racing, a webhook that beats the send's own
 // response, the outbox tag found through the REAL transport's request body).
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql, statementCount } from "@/lib/db";
 
@@ -20,7 +20,7 @@ const logMock = vi.hoisted(() => ({ error: vi.fn(), warn: vi.fn(), info: vi.fn()
 vi.mock("@/server/logger", () => ({ log: logMock }));
 
 import { dispatchNow } from "../attempt";
-import { OUTBOX_KINDS, OUTBOX_STATUSES, OUTBOX_TAG_NAME, type OutboxStatus } from "../constants";
+import { OUTBOX_KINDS, OUTBOX_STATUSES, OUTBOX_TAG_NAME, type OutboxKind, type OutboxStatus } from "../constants";
 import { enqueueEmail } from "../enqueue";
 import { KIND_HOOKS, type EndedRow } from "../hooks";
 import { PROVIDER_EVENT_STATUS, STATUS_RANK, UNMOVABLE_STATUSES, applyProviderEvent } from "../provider-events";
@@ -120,8 +120,15 @@ describe("the vocabulary (no database)", () => {
 });
 
 describe.skipIf(!HAS_DB)("Resend delivery events on the outbox row (DB)", () => {
-  const savedHooks = {} as Record<(typeof OUTBOX_KINDS)[number], (typeof KIND_HOOKS)[(typeof OUTBOX_KINDS)[number]]>;
-  const hookSpy = vi.fn<(row: EndedRow) => Promise<void>>(async () => {});
+  const savedHooks = {} as Record<OutboxKind, (typeof KIND_HOOKS)[OutboxKind]>;
+  // One spy PER KIND (round 1): with a single shared spy a webhook that fired the wrong kind's hook would still read as
+  // "the hook ran". `hookSpy` is the default kind's (rows seed as magic_link unless a test says otherwise).
+  const spies = Object.fromEntries(OUTBOX_KINDS.map((k) => [k, vi.fn<(row: EndedRow) => Promise<void>>(async () => {})])) as Record<
+    OutboxKind,
+    Mock<(row: EndedRow) => Promise<void>>
+  >;
+  const hookSpy = spies.magic_link;
+  const anyHookCalls = (): number => OUTBOX_KINDS.reduce((n, k) => n + spies[k].mock.calls.length, 0);
 
   type Row = {
     id: string;
@@ -151,7 +158,7 @@ describe.skipIf(!HAS_DB)("Resend delivery events on the outbox row (DB)", () => 
    * body and a lease while `sending`, neither otherwise. `status_at` is an hour old so a move is visible as a fresher time
    * and an ignored event as an unchanged one.
    */
-  async function seed(status: OutboxStatus, over: { providerId?: string | null; statusAt?: Date } = {}): Promise<{ id: string; providerId: string | null }> {
+  async function seed(status: OutboxStatus, over: { providerId?: string | null; statusAt?: Date; kind?: OutboxKind } = {}): Promise<{ id: string; providerId: string | null }> {
     const id = randomUUID();
     const providerId = over.providerId === undefined ? pid(randomUUID()) : over.providerId;
     const retryable = status === "queued" || status === "sending";
@@ -160,7 +167,7 @@ describe.skipIf(!HAS_DB)("Resend delivery events on the outbox row (DB)", () => 
         (id, kind, ref_type, ref_id, meta, recipient, subject, body_sealed, transactional, status, attempts, lease_until,
          expires_at, provider_id, status_at)
       values
-        (${id}, 'magic_link', 'login', ${`${RUN}-${randomUUID()}`}, ${sql.json({ seat: "white" })}, ${`${randomUUID()}@x.test`},
+        (${id}, ${over.kind ?? "magic_link"}, ${over.kind === "chess_invite" ? "board_seat" : "login"}, ${`${RUN}-${randomUUID()}`}, ${sql.json({ seat: "white" })}, ${`${randomUUID()}@x.test`},
          'Your sign-in link', ${retryable ? Buffer.from("sealed-body") : null}, true, ${status}, ${status === "queued" ? 0 : 1},
          ${status === "sending" ? new Date(Date.now() + 120_000) : null}, now() + interval '15 minutes', ${providerId},
          ${over.statusAt ?? new Date(Date.now() - 3_600_000)})`;
@@ -170,7 +177,7 @@ describe.skipIf(!HAS_DB)("Resend delivery events on the outbox row (DB)", () => 
   const movedJustNow = (r: Row): boolean => Date.now() - r.status_at.getTime() < 60_000;
 
   const hooksOn = () => {
-    for (const k of OUTBOX_KINDS) KIND_HOOKS[k] = { onEndedBadly: hookSpy };
+    for (const k of OUTBOX_KINDS) KIND_HOOKS[k] = { onEndedBadly: spies[k] };
   };
 
   beforeAll(async () => {
@@ -186,7 +193,7 @@ describe.skipIf(!HAS_DB)("Resend delivery events on the outbox row (DB)", () => 
     logMock.error.mockClear();
     logMock.warn.mockClear();
     logMock.info.mockClear();
-    hookSpy.mockClear();
+    for (const k of OUTBOX_KINDS) spies[k].mockClear();
     for (const k of OUTBOX_KINDS) savedHooks[k] = KIND_HOOKS[k];
     hooksOn();
   });
@@ -259,14 +266,23 @@ describe.skipIf(!HAS_DB)("Resend delivery events on the outbox row (DB)", () => 
 
   // ---- the kind hook --------------------------------------------------------------------------------------------------
 
-  it.each(FINAL_EVENTS)("a move into the status of %s runs the kind's afterEndedBadly hook once, with the row's ids and meta and no recipient", async (ev) => {
-    const { id, providerId } = await seed("sent");
-    expect(await applyProviderEvent(ev, { email_id: providerId })).toBe("moved");
-    expect(hookSpy).toHaveBeenCalledTimes(1);
-    const arg = hookSpy.mock.calls[0]![0];
-    const row = await get(id);
-    expect(arg).toEqual({ id, kind: "magic_link", refType: "login", refId: row.ref_id, status: EVENT_TO_STATUS[ev], meta: { seat: "white" } });
-    expect(JSON.stringify(arg)).not.toContain(row.recipient);
+  it.each(FINAL_EVENTS)("a move into the status of %s runs the row's OWN kind's hook once (every kind), with the row's ids and meta and no recipient", async (ev) => {
+    let checked = 0;
+    for (const kind of OUTBOX_KINDS) {
+      for (const k of OUTBOX_KINDS) spies[k].mockClear();
+      const { id, providerId } = await seed("sent", { kind });
+      expect(await applyProviderEvent(ev, { email_id: providerId }), kind).toBe("moved");
+      const row = await get(id);
+      expect(spies[kind], kind).toHaveBeenCalledTimes(1);
+      expect(spies[kind].mock.calls[0]![0], kind).toEqual({ id, kind, refType: row.ref_type, refId: row.ref_id, status: EVENT_TO_STATUS[ev], meta: { seat: "white" } });
+      expect(JSON.stringify(spies[kind].mock.calls[0]![0])).not.toContain(row.recipient);
+      // Kind-correct: no OTHER kind's hook heard about this row.
+      for (const other of OUTBOX_KINDS.filter((o) => o !== kind)) expect(spies[other], `${kind} row must not fire ${other}`).not.toHaveBeenCalled();
+      expect(anyHookCalls()).toBe(1);
+      checked++;
+    }
+    expect(checked).toBe(OUTBOX_KINDS.length);
+    expect(OUTBOX_KINDS.length).toBeGreaterThanOrEqual(2); // a second kind really exists to be confused with the first
   });
 
   it("a move into delivered or delayed does not run the hook; an ignored duplicate of a bad ending does not run it again", async () => {
@@ -420,18 +436,76 @@ describe.skipIf(!HAS_DB)("Resend delivery events on the outbox row (DB)", () => 
     expect(checked).toBe(24);
   });
 
-  it("two events racing for one row cannot regress it: delivered and delayed fired together always end delivered (20 rows, both orders)", async () => {
-    const rows = await Promise.all(Array.from({ length: 20 }, () => seed("sent")));
-    const results = await Promise.all(
-      rows.map(async ({ providerId }, i) => {
-        const fire = i % 2 === 0 ? ["email.delivered", "email.delivery_delayed"] : ["email.delivery_delayed", "email.delivered"];
-        return Promise.all(fire.map((ev) => applyProviderEvent(ev, { email_id: providerId })));
-      }),
-    );
-    for (const [i, r] of rows.entries()) expect((await get(r.id)).status, `row ${i}`).toBe("delivered");
-    // Anti-vacuity: every row saw at least one real move (the winner), and the statements really overlapped on some of them.
-    expect(results.length).toBe(20);
-    expect(results.every((pair) => pair.includes("moved"))).toBe(true);
+  describe("two events racing for one row (a real overlap, not a hope)", () => {
+    /** Poll until `ok()` or fail after ~8 s: a barrier that never opens must fail the test, not hang it. */
+    const until = async (what: string, ok: () => Promise<boolean>): Promise<void> => {
+      for (let i = 0; i < 160; i++) {
+        if (await ok()) return;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      throw new Error(`timed out waiting for ${what}`);
+    };
+    /** Webhook UPDATEs currently blocked on a row lock (the statement text is this module's own, so no other suite matches). */
+    const blockedUpdates = async (): Promise<number> => {
+      const [r] = await sql<{ n: number }[]>`
+        select count(*)::int as n from pg_stat_activity
+         where wait_event_type = 'Lock' and query like '%update email_outbox%status_at = greatest(status_at, now())%'`;
+      return r!.n;
+    };
+
+    /**
+     * Another connection holds the row's lock; `first` and then `second` are fired and BOTH are seen waiting at their UPDATE
+     * (so their finds, which read no lock, have already run against the same `sent` row); only then is the lock released.
+     * Each UPDATE re-reads the row after its wait, which is what the where clause's status rule is for.
+     */
+    async function race(first: EventName, second: EventName) {
+      const { id, providerId } = await seed("sent");
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      let locked!: () => void;
+      const hasLock = new Promise<void>((r) => (locked = r));
+      const blocker = sql.begin(async (tx) => {
+        await tx`select id from email_outbox where id = ${id} for update`;
+        locked();
+        await gate;
+      });
+      try {
+        await hasLock;
+        const base = await blockedUpdates();
+        const a = applyProviderEvent(first, { email_id: providerId });
+        await until("the first UPDATE to block", async () => (await blockedUpdates()) === base + 1);
+        const b = applyProviderEvent(second, { email_id: providerId });
+        await until("the second UPDATE to block", async () => (await blockedUpdates()) === base + 2);
+        const bothBlocked = (await blockedUpdates()) - base; // read just before the release: the overlap really happened
+        release();
+        await blocker;
+        return { id, results: await Promise.all([a, b]), bothBlocked };
+      } finally {
+        release();
+        await blocker.catch(() => undefined);
+      }
+    }
+
+    it.each([
+      // delayed's UPDATE runs first (sent -> delayed), delivered's re-reads `delayed` and moves it up: both move.
+      ["email.delivery_delayed", "email.delivered", ["moved", "moved"], "delivered"],
+      // delivered's UPDATE runs first; delayed's re-reads `delivered` and must NOT move it back: one move, one ignore.
+      ["email.delivered", "email.delivery_delayed", ["moved", "ignored"], "delivered"],
+      // a final status beats a delivered, whichever UPDATE ran first.
+      ["email.complained", "email.delivered", ["moved", "ignored"], "complained"],
+      ["email.delivered", "email.complained", ["moved", "moved"], "complained"],
+      // two events of the SAME rank: a final status never moves again, so the second must lose, not overwrite the first.
+      ["email.bounced", "email.complained", ["moved", "ignored"], "bounced"],
+      ["email.complained", "email.bounced", ["moved", "ignored"], "complained"],
+      // the same event twice at once (Resend's retry overlapping the first delivery of it): one move, one ignore.
+      ["email.delivered", "email.delivered", ["moved", "ignored"], "delivered"],
+    ] as [EventName, EventName, string[], OutboxStatus][])("%s then %s, both blocked at their UPDATE together -> %j and the row ends %s", async (first, second, expected, ends) => {
+      const { id, results, bothBlocked } = await race(first, second);
+      // Anti-vacuity: the two statements were genuinely waiting on the same row at the same moment.
+      expect(bothBlocked).toBe(2);
+      expect(results).toEqual(expected);
+      expect((await get(id)).status).toBe(ends);
+    });
   });
 
   it("status_at never moves backwards: a row whose status_at is ahead of the database clock keeps the later time when it moves", async () => {

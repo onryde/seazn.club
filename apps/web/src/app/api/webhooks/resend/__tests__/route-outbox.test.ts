@@ -37,20 +37,21 @@ describe.skipIf(!HAS_DB)("POST /api/webhooks/resend against the real outbox and 
     return new Response(JSON.stringify({ id: messageId }), { status: 200 });
   });
 
-  /** A signed delivery of `type` for a message, exactly as Svix would send it (fresh id and timestamp per attempt). */
-  async function webhook(type: string, data: Record<string, unknown>): Promise<Response> {
+  /** A signed delivery of `type` for a message, as Svix would send it: the bytes of one HTTP request, reusable to replay it. */
+  type Signed = { body: string; headers: Record<string, string> };
+  function signed(type: string, data: Record<string, unknown>): Signed {
     const body = JSON.stringify({ type, created_at: new Date().toISOString(), data });
     const id = `msg_${randomUUID()}`;
     const ts = Math.floor(Date.now() / 1000);
     const sig = `v1,${createHmac("sha256", KEY_BYTES).update(`${id}.${ts}.${body}`).digest("base64")}`;
-    return POST(
-      new NextRequest("http://localhost/api/webhooks/resend", {
-        method: "POST",
-        headers: { "svix-id": id, "svix-timestamp": String(ts), "svix-signature": sig },
-        body,
-      }),
-    );
+    return { body, headers: { "svix-id": id, "svix-timestamp": String(ts), "svix-signature": sig } };
   }
+  /** One POST of exactly those bytes (a new request object each time, the same headers and body). */
+  const postSigned = (s: Signed): Promise<Response> =>
+    POST(new NextRequest("http://localhost/api/webhooks/resend", { method: "POST", headers: s.headers, body: s.body }));
+  /** A fresh signed delivery (new svix-id and timestamp per call). */
+  const webhook = (type: string, data: Record<string, unknown>): Promise<Response> => postSigned(signed(type, data));
+  const rowOf = async (id: string) => (await sql`select * from email_outbox where id = ${id}`)[0]!;
 
   async function sendOne(): Promise<{ id: string; to: string }> {
     const to = `${RUN}-${randomUUID()}@x.test`;
@@ -152,6 +153,31 @@ describe.skipIf(!HAS_DB)("POST /api/webhooks/resend against the real outbox and 
     expect(await suppressionsFor(stranger)).toEqual([{ email: stranger, type: "bounce", provider_id: `re_${RUN}_nobody` }]);
     expect(hookSpy).not.toHaveBeenCalled();
   });
+
+  it.each(["email.complained", "email.bounced", "email.delivered"])(
+    "the SAME signed request, byte for byte, posted twice (Resend retried it): the second is a no-op - %s",
+    async (type) => {
+      const { id, to } = await sendOne();
+      const req = signed(type, { email_id: messageId, to: [to] });
+      const replay = { body: req.body, headers: { ...req.headers } };
+
+      expect((await postSigned(req)).status).toBe(200);
+      const afterFirst = await rowOf(id);
+      const suppressionAfterFirst = await suppressionsFor(to);
+      const hooksAfterFirst = hookSpy.mock.calls.length;
+      expect(afterFirst.status).toBe(type.replace("email.", "")); // the first really moved the row: delivered | complained | bounced
+      expect(hooksAfterFirst).toBe(type === "email.delivered" ? 0 : 1);
+
+      expect(replay).toEqual(req); // anti-vacuity: the replay IS the same bytes (same svix-id, timestamp, signature, body)
+      expect((await postSigned(replay)).status).toBe(200);
+      // Nothing about the row changed (status_at included: a second UPDATE would have refreshed it), nothing re-suppressed,
+      // no second hook.
+      expect(await rowOf(id)).toEqual(afterFirst);
+      expect(await suppressionsFor(to)).toEqual(suppressionAfterFirst);
+      expect(suppressionAfterFirst.length).toBe(type === "email.delivered" ? 0 : 1);
+      expect(hookSpy.mock.calls.length).toBe(hooksAfterFirst);
+    },
+  );
 
   it("an unsigned request moves nothing and suppresses nothing, however well-formed the event", async () => {
     const { id, to } = await sendOne();
