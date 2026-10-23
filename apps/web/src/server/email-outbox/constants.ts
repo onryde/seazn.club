@@ -108,9 +108,18 @@ export const PACING_HEADROOM_MS = 100;
 /** At least this long between the start of one attempt and the next one: Resend's floor plus headroom (600 ms). */
 export const MIN_SEND_INTERVAL_MS = RESEND_MIN_INTERVAL_MS + PACING_HEADROOM_MS;
 
-/** A tick stops claiming once it has run this long: under prod's 60 s cadence, and (with one more pacing wait and one
+/** A tick stops claiming once it has run this long less the hook reserve (`HOOK_RESERVE_MS`); the hooks may run to this
+ *  mark. Under prod's 60 s cadence, and (with one more pacing wait and one
  *  more request, `SEND_TIMEOUT_MS`) under the cron Worker's 60 s per-job timeout, which route.test.ts derives. */
 export const TICK_BUDGET_MS = 40_000;
+
+/** The share of the tick budget kept back for the kind hooks and the re-drive (hook starvation, Task 4 review): the SEND
+ *  loop stops at `budget * (1 - HOOK_RESERVE_FRACTION)`, so a send backlog (or a slow Resend) can never use the whole tick
+ *  and defer every hook for ever. A fraction and not a fixed time, so an injected shorter budget keeps the proportion. */
+export const HOOK_RESERVE_FRACTION = 0.25;
+
+/** The reserve at the default budget: sends stop at `TICK_BUDGET_MS - HOOK_RESERVE_MS` (30 s), hooks may run to 40 s. */
+export const HOOK_RESERVE_MS = TICK_BUDGET_MS * HOOK_RESERVE_FRACTION;
 
 /** Rows each of the worker's two ending statements (expire, exhaust) ends at most in one tick (M2, Task 4 review). Every
  *  ended row costs a kind hook afterwards, so an unbounded statement after an outage would turn one tick into minutes of
