@@ -2,13 +2,12 @@
 // than off the row's own `pin` declaration.
 //
 // Why it exists: auth.ts resolves a pinned key's competition by looking the
-// row's `resourceId` up in the table its `pin` names, and a miss returns null,
-// which falls through on purpose (the handler 404s a missing row, so the pin
-// adds no existence oracle). A row that declares the WRONG pin kind therefore
-// misses on every lookup and the pin waves every request through — a key
-// pinned to competition A reads or writes competition B. The guards built on
-// this helper derive the kind independently of the declaration, so a wrong
-// declaration cannot agree with itself.
+// row's `resourceId` up in the table its `pin` names. A row that declares the
+// WRONG pin kind misses on every lookup — which, until auth.ts failed closed
+// (2026-10-23), waved every request through, so a key pinned to competition A
+// read or wrote competition B. The guards built on this helper derive the kind
+// independently of the declaration, so a wrong declaration cannot agree with
+// itself.
 import { existsSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";

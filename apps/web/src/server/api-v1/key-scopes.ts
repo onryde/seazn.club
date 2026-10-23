@@ -45,7 +45,7 @@ interface RouteRule {
   path: string;
   scope: KeyScope;
   /** How to resolve the owning competition for pinned keys (403 on rules without one: org-wide surface). MUST be the
-   *  kind owning the id (`/fixtures/:id/…` → `fixture`): a wrong kind misses every lookup and fails OPEN (auth.ts). */
+   *  kind owning the id (`/fixtures/:id/…` → `fixture`): a wrong kind misses every lookup — auth.ts fails closed. */
   pin?: PinKind;
 }
 

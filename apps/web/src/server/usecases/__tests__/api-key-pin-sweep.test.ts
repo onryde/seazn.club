@@ -1,22 +1,31 @@
 // API-key competition pins, swept at runtime over EVERY pinned key route.
 //
 // auth.ts resolves a pinned key's competition by looking the URL's resource id
-// up in the table the key-route row's `pin` names. A miss is null, and null
-// falls through by design: the handler 404s a missing row, so the pin adds no
-// existence oracle. A row that declares the WRONG kind therefore misses on
-// every lookup, and a key pinned to competition A reads or writes competition
-// B. key-scopes.test.ts pins each row's declaration statically; this file
-// proves the behaviour with real rows and the real resolver:
+// up in the table the key-route row's `pin` names, and it FAILS CLOSED: a
+// lookup that finds nothing is refused exactly like a foreign competition.
+// (Until 2026-10-23 a miss fell through, so a row declaring the WRONG kind, or
+// a resolver join bug, missed on every lookup and let a key pinned to
+// competition A read or write competition B.) key-scopes.test.ts pins each
+// row's declaration statically, api-key-pin-fail-closed.test.ts pins the null
+// branch without a DB, and this file proves it with real rows and the real
+// resolver:
 //
 //  1. the auth door, every pinned row: B's resource is refused by the pin, A's
-//     is let through (the positive pair), and B is refused again afterwards;
+//     is let through, and B is refused again afterwards. Under fail-closed the
+//     POSITIVE half is the one a wrong kind or a broken join reds — as a
+//     lockout of A's own resources rather than a leak of B's;
 //  2. the REAL route handler, every pinned row: B's resource is never served
 //     and nothing of B's is written. Handlers that parse the body before they
 //     authenticate answer 400 to the empty body instead — told apart from a
 //     pin that let B through by a control call with a key that does not exist
-//     — and are counted, not hidden; their pin is the one (1) proves;
+//     — and are pinned as an EXACT list, so a handler that drops or moves its
+//     auth call is caught; their pin is the one (1) proves;
 //  3. the sequence: a withdrawn entrant, a withdrawn registration and an
-//     archived division in B still resolve to B — "withdrawn" is not "missing".
+//     archived division still resolve — the key pinned to their competition
+//     still reaches them, a key pinned elsewhere is still refused;
+//  4. the one pinned route whose handler does not look its own resource up
+//     first (POST /pools/:id/clear-entrants, requireAuth) answers a missing
+//     pool and another org's pool alike — no existence oracle.
 //
 // The resource each row is probed with is created by the kind its URL
 // ADDRESSES (addressedKind), never by the row's declared pin: seeding the
@@ -39,6 +48,7 @@ import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 import { seedRegistration } from "./_registration-fixtures";
+import { POST as clearPoolEntrantsPOST } from "@/app/api/v1/pools/[id]/clear-entrants/route";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -49,6 +59,43 @@ const PINNED = KEY_ROUTE_RULES.filter((r) => r.pin);
 
 /** Well-formed (`sc_` prefix, so it reaches the key lookup) and unknown. */
 const NO_SUCH_KEY = `sc_${"0".repeat(43)}`;
+
+/**
+ * Pinned handlers that answer an empty body 400 BEFORE they authenticate
+ * (the #376 ordering — routed, not fixed here). Exact, so a handler that drops
+ * or reorders its auth call is caught: leaving this list means its 400 became
+ * a 403 (moved auth first — delete the line), joining it means its auth moved
+ * after the parse (or went away).
+ */
+const VALIDATES_BEFORE_AUTH = [
+  "PATCH /competitions/:id",
+  "POST /competitions/:id/divisions",
+  "POST /competitions/:id/schedule/ai-plan",
+  "POST /competitions/:id/schedule/ai-preview",
+  "POST /competitions/:id/schedule/apply",
+  "POST /competitions/:id/schedule/restore",
+  "PATCH /divisions/:id",
+  "POST /divisions/:id/checkpoints",
+  "POST /divisions/:id/officials/ai-plan",
+  "POST /divisions/:id/officials/apply",
+  "POST /divisions/:id/officials/auto",
+  "POST /divisions/:id/restore",
+  "POST /divisions/:id/schedule/ai-plan",
+  "POST /divisions/:id/schedule/ai-preview",
+  "POST /divisions/:id/stages",
+  "PUT /divisions/:id/stages",
+  "PATCH /entrants/:id",
+  "PATCH /fixtures/:id",
+  "PUT /fixtures/:id/stream",
+  "POST /fixtures/:id/events",
+  "POST /fixtures/:id/finalize",
+  "PUT /fixtures/:id/lineups/:entrantId",
+  "PATCH /fixtures/:id/officials",
+  "POST /stages/:id/challenges",
+  "POST /stages/:id/fixtures",
+  "POST /stages/:id/officials/source",
+  "POST /stages/:id/standings/override",
+];
 
 /** One live resource of every pin kind, all inside one competition. */
 type World = Record<string, string>;
@@ -116,7 +163,7 @@ function concretePath(path: string, idSegment: number, id: string): string {
     .join("/");
 }
 
-function keyed(secret: string, method: string, path: string): Request {
+function keyed(secret: string, method: string, path: string, body: unknown = {}): Request {
   const withBody = method !== "GET" && method !== "HEAD";
   return new Request(`https://test.local/api/v1${path}`, {
     method,
@@ -124,7 +171,7 @@ function keyed(secret: string, method: string, path: string): Request {
       authorization: `Bearer ${secret}`,
       ...(withBody ? { "content-type": "application/json" } : {}),
     },
-    ...(withBody ? { body: "{}" } : {}),
+    ...(withBody ? { body: JSON.stringify(body) } : {}),
   });
 }
 
@@ -311,27 +358,64 @@ describe.skipIf(!HAS_DB)("API-key competition pins hold on every pinned key rout
     );
     expect(failures, failures.join("\n")).toEqual([]);
     expect(rowsFingerprinted, "every handler call was bracketed by a fingerprint").toBe(PINNED.length);
-    expect(refusedByPin.length, "anti-vacuity: handlers that reached the pin").toBeGreaterThan(0);
-    expect(refusedByPin.length + refusedBeforeAuth.length).toBe(PINNED.length);
+    const exact = new Set(VALIDATES_BEFORE_AUTH);
+    expect([...refusedBeforeAuth].sort(), "validate-before-auth handlers, exactly").toEqual([...exact].sort());
+    expect(
+      [...refusedByPin].sort(),
+      "every other pinned handler reaches the pin",
+    ).toEqual(PINNED.map((r) => `${r.method} ${r.path}`).filter((l) => !exact.has(l)).sort());
   });
 
-  it("withdrawn / archived is not missing: B's withdrawn entrant and registration and archived division stay refused", async () => {
+  it("withdrawn / archived is not missing: C's own key still reaches its withdrawn entrant and registration and archived division; A's key is still refused", async () => {
     const C = await seedWorld(auth, "C");
     await sql`update entrants set status = 'withdrawn' where id = ${C.entrant}`;
     await sql`update registrations set status = 'withdrawn', withdrawn_at = now() where id = ${C.registration}`;
     await sql`update divisions set archived_at = now() where id = ${C.division}`;
-    const secret = await pinnedToA("pin sweep withdrawn");
+    const foreignKey = await pinnedToA("pin sweep withdrawn, A");
+    const ownKey = (await createApiKey(auth, { name: "pin sweep withdrawn, C", scopes: ["manage"], competition_id: C.competition }))
+      .secret;
     let checked = 0;
     for (const kind of ["entrant", "registration", "division"]) {
       const rule = PINNED.find((r) => addressedKind(r.method, r.path).kind === kind);
       expect(rule, `a pinned row addresses a ${kind}`).toBeDefined();
       const { idSegment } = addressedKind(rule!.method, rule!.path);
+      const path = concretePath(rule!.path, idSegment, C[kind]!);
+      // Fail-closed turns a resolver that skips withdrawn rows into a lockout:
+      // the OWN key is the half that sees it.
+      const ctx = await requireOrgAuth(keyed(ownKey, rule!.method, path), auth.orgId, "read");
+      expect(ctx.via, `${rule!.method} ${rule!.path}: C's own key`).toBe("api_key");
       await expect(
-        requireOrgAuth(keyed(secret, rule!.method, concretePath(rule!.path, idSegment, C[kind]!)), auth.orgId, "read"),
-        `${rule!.method} ${rule!.path}`,
+        requireOrgAuth(keyed(foreignKey, rule!.method, path), auth.orgId, "read"),
+        `${rule!.method} ${rule!.path}: A's key`,
       ).rejects.toMatchObject({ status: 403, message: PIN_REFUSAL });
       checked += 1;
     }
     expect(checked).toBe(3);
+  });
+
+  it("POST /pools/:id/clear-entrants answers a missing pool and another org's pool alike — no existence oracle", async () => {
+    // The one pinned route whose handler authenticates with requireAuth (org
+    // from the key) instead of looking its own resource up first, so the pin
+    // is the first thing that sees the id. The resolver's lookups are not
+    // org-scoped: fail-open answered another org's pool 403 and a missing one
+    // 404 — telling a pinned key which uuids exist anywhere.
+    const other = await seedOrg("pro");
+    const X = await seedWorld(other.auth, "X");
+    const secret = await pinnedToA("pin sweep oracle");
+    const ask = async (poolId: string) => {
+      const res = await clearPoolEntrantsPOST(keyed(secret, "POST", `/pools/${poolId}/clear-entrants`, { confirm: true }), {
+        params: Promise.resolve({ id: poolId }),
+      });
+      const body = (await res.json()) as { error?: { message?: string } };
+      return { status: res.status, message: body.error?.message ?? null };
+    };
+    const before = await fingerprint(X.competition);
+    const foreignOrg = await ask(X.pool);
+    const missing = await ask(randomUUID());
+    const after = await fingerprint(X.competition);
+    expect(foreignOrg, "another org's pool").toEqual({ status: 403, message: PIN_REFUSAL });
+    expect(missing, "a pool that does not exist answers the same").toEqual(foreignOrg);
+    expect(before.n).toBeGreaterThan(0);
+    expect(after, "nothing of the other org's was written").toEqual(before);
   });
 });

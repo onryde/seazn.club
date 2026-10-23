@@ -94,9 +94,9 @@ async function apiKeyRateLimit(key: ApiKeyRow): Promise<void> {
   }
 }
 
-// Pinned keys (api_keys.competition_id): resolve the addressed resource's competition. A missing row falls through (the
-// handler 404s it, so the pin adds no existence oracle) — safe ONLY while each row's `pin` is the kind its URL addresses,
-// else every lookup misses and B leaks to a key pinned to A. Guarded: key-scopes.test.ts + api-key-pin-sweep.test.ts.
+// Pinned keys (api_keys.competition_id) FAIL CLOSED: an id resolving to no competition (missing, malformed, wrong pin
+// kind, join bug) gets the same 403 as a foreign one, so missing and foreign answer alike. Out of scope: resourceOrg
+// routes answer another org's id 401 but a missing one 404 (unpinned keys too). Tests: api-key-pin-*, key-scopes.
 async function resolvePinCompetition(pin: PinKind, id: string): Promise<string | null> {
   if (!UUID_RE.test(id)) return null;
   switch (pin) {
@@ -167,7 +167,7 @@ async function apiKeyAuth(req: Request, token: string, orgId: string | null): Pr
       );
     }
     const owner = await resolvePinCompetition(match.pin, match.resourceId);
-    if (owner !== null && owner !== key.competition_id) {
+    if (owner === null || owner !== key.competition_id) {
       throw new HttpError(403, "This key is pinned to a different competition.");
     }
   }

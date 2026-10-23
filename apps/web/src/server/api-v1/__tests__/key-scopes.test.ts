@@ -129,14 +129,14 @@ describe("matchKeyRoute", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Pin kinds — the fail-open guard. auth.ts resolves a pinned key's competition
-// by looking the row's resourceId up in the table its `pin` names; a miss is
-// null, and null falls through on purpose (the handler 404s a missing row, so
-// the pin adds no existence oracle). A row that declares the WRONG kind
-// therefore misses on every lookup and a key pinned to competition A reaches
-// competition B. The expected kind is read off the URL (addressedKind), never
-// off the row. The runtime half — real rows, real resolver — is
-// usecases/__tests__/api-key-pin-sweep.test.ts.
+// Pin kinds. auth.ts resolves a pinned key's competition by looking the row's
+// resourceId up in the table its `pin` names. A row that declares the WRONG
+// kind misses on every lookup: before 2026-10-23 a miss fell through and a key
+// pinned to competition A reached competition B; auth.ts now fails closed, so
+// the same row locks pinned keys out of the route instead. Either way the
+// declaration is wrong, and this refuses it. The expected kind is read off the
+// URL (addressedKind), never off the row. The null branch is pinned DB-free in
+// api-key-pin-fail-closed.test.ts; real rows in usecases/__tests__/api-key-pin-sweep.test.ts.
 // ---------------------------------------------------------------------------
 
 describe("every pinned row's pin kind is the kind its URL addresses", () => {
@@ -151,7 +151,7 @@ describe("every pinned row's pin kind is the kind its URL addresses", () => {
       }
       checked += 1;
     }
-    expect(wrong, `pinned rows whose lookup misses on every request (pin fails open):\n${wrong.join("\n")}`).toEqual([]);
+    expect(wrong, `pinned rows whose lookup misses on every request:\n${wrong.join("\n")}`).toEqual([]);
     expect(checked, "anti-vacuity: pinned rows checked").toBeGreaterThan(0);
   });
 
