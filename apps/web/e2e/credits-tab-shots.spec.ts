@@ -53,7 +53,7 @@ async function declineCookies(page: Page): Promise<void> {
 
 /** `page.goto`, then answer the cookie prompt: every navigation here is a fresh page load. */
 async function open(page: Page, url: string): Promise<void> {
-  await open(page, url);
+  await page.goto(url, { waitUntil: "load" });
   await declineCookies(page);
 }
 

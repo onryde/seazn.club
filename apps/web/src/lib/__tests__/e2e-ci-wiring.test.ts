@@ -35,6 +35,7 @@
 // wiring guard worth having at all.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
 import { sitemapWindowOverride } from "../sitemap-window";
 import { FakeIngest } from "../../server/relay/fakes";
@@ -1747,5 +1748,113 @@ describe("e2e.yml: an always() artifact upload overwrites its own earlier attemp
     expect(always.some((st) => st.includes("Upload never-live copy-fit screenshots")), "…the never-live one among them").toBe(true);
     const without = always.filter((st) => !/^ {10}overwrite: true\s*$/m.test(st)).map((st) => /- name: (.*)/.exec(st)?.[1] ?? "(unnamed)");
     expect(without, "an always() upload with no `overwrite: true`").toEqual([]);
+  });
+});
+
+// A helper that calls ITSELF as its first act is a spec that dies with `RangeError: Maximum call stack size exceeded` on its
+// first navigation, and nothing that reads the file notices: the credits shots spec's `open()` helper did exactly that when a
+// replace-all rewrote `page.goto(...)` inside the helper's own body (review of #1002). tsc and eslint accept it; collection
+// (`playwright test --list`) never runs it; the whole spec is red in CI's `parallel` project. This is the static guard.
+describe("e2e: a helper does not call itself as a bare statement of its own body", () => {
+  const ts: typeof import("typescript") = createRequire(import.meta.url)("typescript");
+
+  /** The functions of `text` (declarations, and arrows/function expressions bound to a name) whose body has a DIRECT statement
+   *  that is a call to the function's own name (an `await` or parentheses around it still count). A guarded or returned call
+   *  is not a direct expression statement, so a deliberate recursion is not caught. */
+  function bareSelfCalls(file: string, text: string): { fns: number; hits: string[] } {
+    const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    let fns = 0;
+    const hits: string[] = [];
+    const unwrap = (e: import("typescript").Expression): import("typescript").Expression => {
+      let cur = e;
+      while (ts.isAwaitExpression(cur) || ts.isParenthesizedExpression(cur)) cur = cur.expression;
+      return cur;
+    };
+    const check = (name: string, body: import("typescript").Node | undefined) => {
+      if (!body || !ts.isBlock(body)) return;
+      fns += 1;
+      for (const st of body.statements) {
+        if (!ts.isExpressionStatement(st)) continue;
+        const call = unwrap(st.expression);
+        if (ts.isCallExpression(call) && ts.isIdentifier(call.expression) && call.expression.text === name) {
+          hits.push(`${file}:${sf.getLineAndCharacterOfPosition(st.getStart(sf)).line + 1} ${name}()`);
+        }
+      }
+    };
+    const visit = (n: import("typescript").Node): void => {
+      if (ts.isFunctionDeclaration(n) && n.name) check(n.name.text, n.body);
+      else if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer && (ts.isArrowFunction(n.initializer) || ts.isFunctionExpression(n.initializer))) check(n.name.text, n.initializer.body);
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+    return { fns, hits };
+  }
+
+  const e2eFiles = (): string[] => {
+    const out: string[] = [];
+    const walk = (dir: string): void => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const p = join(dir, e.name);
+        if (e.isDirectory()) { if (e.name !== "node_modules") walk(p); }
+        else if (e.name.endsWith(".ts")) out.push(p);
+      }
+    };
+    walk(E2E_DIR);
+    return out;
+  };
+
+  it("the detector sees the bug it exists for, however it is spelled — and leaves a guarded or returned recursion alone", () => {
+    const bad = [
+      "async function open(page, url) { await open(page, url); }",
+      "async function open(page, url) {\n  open(page, url);\n}",
+      "const open = async (page, url) => { await (open(page, url)); };",
+      "const open = async function (page, url) { await open(page, url); };",
+    ];
+    for (const src of bad) expect(bareSelfCalls("x.ts", src).hits, src).toHaveLength(1);
+    const fine = [
+      "async function open(page, url) { await page.goto(url); }",
+      "async function walk(n) { if (n > 0) { await walk(n - 1); } }",
+      "async function walk(n) { return n > 0 ? walk(n - 1) : 0; }",
+      "async function a(page) { await b(page); }\nasync function b(page) { await page.goto('/'); }",
+    ];
+    for (const src of fine) expect(bareSelfCalls("x.ts", src).hits, src).toEqual([]);
+  });
+
+  it("no e2e file has one — the whole suite scanned, with the count stated", () => {
+    const files = e2eFiles();
+    let fns = 0;
+    const hits: string[] = [];
+    for (const f of files) {
+      const r = bareSelfCalls(f.slice(WEB.length + 1), readFileSync(f, "utf8"));
+      fns += r.fns;
+      hits.push(...r.hits);
+    }
+    expect(files.length, "anti-vacuity: the e2e directory was walked").toBeGreaterThan(50);
+    expect(fns, "anti-vacuity: functions were examined").toBeGreaterThan(100);
+    expect(hits).toEqual([]);
+  });
+
+  it("the credits shots spec's navigation helper really navigates: `open` calls page.goto, and every navigation in the spec goes through it", () => {
+    const text = readFileSync(join(E2E_DIR, "credits-tab-shots.spec.ts"), "utf8");
+    const sf = ts.createSourceFile("credits-tab-shots.spec.ts", text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    const gotos: string[] = [];   // the enclosing function of each `page.goto(...)`
+    let opens = 0;                // calls of `open(page, …)` outside the helper itself
+    const enclosing = (n: import("typescript").Node): string => {
+      for (let p: import("typescript").Node | undefined = n.parent; p; p = p.parent) {
+        if (ts.isFunctionDeclaration(p) && p.name) return p.name.text;
+      }
+      return "<test>";
+    };
+    const visit = (n: import("typescript").Node): void => {
+      if (ts.isCallExpression(n)) {
+        const callee = n.expression;
+        if (ts.isPropertyAccessExpression(callee) && callee.name.text === "goto") gotos.push(enclosing(n));
+        if (ts.isIdentifier(callee) && callee.text === "open" && enclosing(n) !== "open") opens += 1;
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+    expect(gotos, "page.goto appears once in the file, inside the `open` helper").toEqual(["open"]);
+    expect(opens, "anti-vacuity: the spec navigates through the helper").toBeGreaterThanOrEqual(6);
   });
 });
