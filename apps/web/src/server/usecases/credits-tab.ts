@@ -134,7 +134,7 @@ function actionKey(source: string, delta: number, reason: string | null): string
  *  caller: sampling `now` here independently would, for a request straddling
  *  UTC midnight on the 1st, measure to a boundary that had already passed and
  *  report 0 days left instead of a full fresh month. */
-function daysUntilMonthReset(periodStart: Date, now: Date): number {
+export function daysUntilMonthReset(periodStart: Date, now: Date): number {
   const next = Date.UTC(periodStart.getUTCFullYear(), periodStart.getUTCMonth() + 1, 1);
   return Math.max(0, Math.ceil((next - now.getTime()) / 86_400_000));
 }

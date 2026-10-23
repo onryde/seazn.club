@@ -43,6 +43,12 @@ vi.mock("@/components/org-payment-instructions", () => ({
 vi.mock("@/components/billing-credits", () => ({
   BillingCredits: () => <div data-testid="credits-panel" />,
 }));
+// The Credits page now has a Streaming side too (`?kind=stream`). These tests are about the sidebar and the AI side — the
+// default, which every old link opens — so the Streaming side's data modules are stubbed; credits/__tests__/page.test.tsx
+// is the one that drives that side.
+vi.mock("@/server/usecases/stream-credits-tab", () => ({ getStreamCreditsTab: vi.fn() }));
+vi.mock("@/server/usecases/stream-credits-checkout", () => ({ reconcileStreamCreditsReturn: vi.fn() }));
+vi.mock("@/components/billing-stream-credits", () => ({ BillingStreamCredits: () => <div data-testid="stream-credits-panel" /> }));
 
 import { getDictionary } from "@/lib/i18n";
 import { SettingsShell, SETTINGS_TABS, navContext } from "../_components/settings-nav";
@@ -185,7 +191,7 @@ describe("route-owning Settings pages mount the sidebar", () => {
 
   it("Credits does for a member", async () => {
     const out = await html(
-      await CreditsSettingsPage({ params: Promise.resolve({ orgSlug: "riverside" }) }),
+      await CreditsSettingsPage({ params: Promise.resolve({ orgSlug: "riverside" }), searchParams: Promise.resolve({}) }),
     );
     expect(out).toContain("credits-panel");
     expect(out).toContain("/o/riverside/settings?tab=organization");
@@ -194,7 +200,7 @@ describe("route-owning Settings pages mount the sidebar", () => {
   it("Credits does NOT for a payer arriving from the bill", async () => {
     requireBillingPage.mockResolvedValue({ org: ORG, user: { id: "u9" }, viaPayer: true });
     const out = await html(
-      await CreditsSettingsPage({ params: Promise.resolve({ orgSlug: "riverside" }) }),
+      await CreditsSettingsPage({ params: Promise.resolve({ orgSlug: "riverside" }), searchParams: Promise.resolve({}) }),
     );
 
     expect(out).toContain("credits-panel");

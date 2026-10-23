@@ -1,6 +1,6 @@
 ---
-title: AI credits
-description: AI scheduling and officials run on prepaid credits, not a per-plan cap. Every plan gets a monthly grant that resets; bought packs and Event Pass credits never expire; a billing group shares one wallet.
+title: AI and match credits
+description: Two kinds of prepaid credit live on the Credits page in Settings. AI credits pay for AI scheduling and officials; match credits pay for streaming a match from a phone. Each has a monthly free allowance that resets, packs and Event Pass credits that never expire, and a history you can export.
 order: 5
 ---
 
@@ -8,7 +8,7 @@ order: 5
 
 AI features — **AI scheduling** and **AI officials** — spend **credits**, on every plan. What a run costs depends on how big the job is: credits buy the model a **thinking budget** (1 credit → up to 32K tokens, 2 → 64K, 3 → 128K), the console shows the price before anything is spent, and you can adjust it. Scheduling several divisions in one run gets a batch discount of one credit. [AI Schedule](/help/scheduling/ai-scheduling) explains the sizing in full.
 
-The **Credits** tab on your billing page (Plan & Billing → AI credits) is the home for your wallet: your balance, this month's grant, your packs, and the run history.
+The **Credits** page in your organisation's **Settings** is the home for your wallet. It has two sides, switched at the top — **AI** and **Streaming**. This article starts with the AI side; [match credits](#match-credits-streaming) are further down.
 
 ## Your monthly grant
 
@@ -54,5 +54,26 @@ The Credits tab also has your **Invite & earn** card, with your own shareable li
 - When that organisation goes on to run its **first paid competition**, **you earn 20 credits**.
 
 Both grants land straight in the credit wallet, on top of whatever the plan already grants. Referral earnings are bounded by a lifetime cap shared with other earned-credit rewards, so a very active referrer eventually tops out — the card always shows how many organisations you've referred and how many credits you've earned so far.
+
+## Match credits (Streaming)
+
+Streaming a match from a phone spends a different currency: **match credits**. One credit streams one match, for up to 5 hours. They are not AI credits — the two balances, the two histories and the two sets of packs are separate, and a credit of one kind can't pay for the other.
+
+Open **Settings → Credits** and switch to **Streaming**. You'll see:
+
+- **Balance** — how many match credits the organisation holds right now.
+- **Free this month** — if your plan includes free match credits, how many of this month's you have used. They are spent **first**, and **unused ones expire at the end of the month**.
+- **Bought credits** — packs you buy, and credits an **Event Pass** adds. These **never expire**, and are only touched once the free ones for the month are gone.
+- **Credit history** — every change, newest first, with the balance after it. Each row for a match names it and links to its page.
+
+To buy more, pick a pack of **1, 5 or 20 matches** on the Streaming side and pay. Larger packs cost less per match. When Stripe sends you back to the page it checks the payment for you: if it has cleared, the credits are in your balance and the page says so; if the payment is still processing (a delayed payment method, for instance), the page says that instead, and the credits appear as soon as it clears. If the payment went through but we can't match it to a credit pack, the page says it couldn't confirm the purchase — contact support, quoting your receipt, and we'll add the credits by hand. Only an organisation on a plan with phone streaming can buy packs; an organisation without one still sees the credits it holds and its history.
+
+### When a credit comes back
+
+A credit is spent when the stream **goes live**. If it goes live and the phone's camera **never connects**, the platform returns the credit to you automatically — the history shows it as **Refund: camera never connected**, on a row of its own, so that match costs you nothing. Seazn support can also refund or adjust credits by hand; those rows say so. If a pack you bought is refunded on your card (or lost in a dispute), the credits it gave are taken back and the history says **Pack refunded**.
+
+### History and export
+
+The history shows 25 rows to a page; use **Older** and **Latest** to move through it. **Export** downloads the whole history as a CSV — one line per change, with the date, the kind of change, the change in credits, the balance after it, the match's fixture number, the match, and the competition. A side that is not decided yet appears as **TBD**.
 
 See also [Plans at a glance](/help/billing/plans) and [Billing groups](/help/billing/groups).

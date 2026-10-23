@@ -14,6 +14,12 @@ export const routes = {
   billing: (org: Slug) => `/o/${org}/settings/billing`,
   /** AI-credit wallet home — its own Settings tab (moved off the billing page). */
   credits: (org: Slug) => `/o/${org}/settings/credits`,
+  /** The same tab on its Streaming (match-credit) side. The default side (AI) keeps the bare `credits` URL, so
+   *  every existing link to the tab still lands where it did. Query keys beyond `kind` (checkout return,
+   *  history cursor) are appended with `&` by their owners. */
+  creditsStream: (org: Slug) => `/o/${org}/settings/credits?kind=stream`,
+  /** The Streaming side's history as CSV (the AI side's lives under /settings/billing/credits.csv). */
+  creditsStreamCsv: (org: Slug) => `/o/${org}/settings/credits/stream.csv`,
   /** Purchasable add-ons — extra organisations today (SPEC-6 §A5, v17 gap
    *  #293). Plural so the seat and size-pack rows, which have no UI yet, can
    *  land here without a rename. `lib/feature-copy.ts`'s 402 offer names this

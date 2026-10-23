@@ -27,6 +27,14 @@
 //                           → "m1: a LIVE deployment missing a Cloudflare secret refuses with 503…"
 //   RT10 m5 overlay key      the `streaming.overlay` gate deleted (lane-close review m5)
 //                           → "m5: refuses an org whose streaming.overlay is switched OFF…"
+//   RT12 settings return    the `returnTo: "settings"` branch's return_url → the fixture page, or `kind=stream` dropped
+//                           → "from Settings → Credits the checkout returns to the Streaming side…"
+//   RT13 one shape only     the body schema accepts fixtureId AND returnTo together (z.union → loose object)
+//                           → "exactly one return is named"
+//   RT14 settings gates     the org-level `hasFeature` reads dropped from the settings branch
+//                           → "a Settings purchase meets the same gates as a fixture one"
+//   RT15 settings org slug  the slug read from the body / a constant instead of the resolved org
+//                           → "from Settings → Credits the checkout returns to the Streaming side…"
 //   RT11 drift refusal       the `instanceof StreamPackPriceDriftError` branch deleted (parked c)
 //                           → "the drift guard's refusal is a 502 checkout_unavailable, answered WITHOUT a second report…"
 import { describe, expect, it, vi } from "vitest";
@@ -173,6 +181,91 @@ describe.skipIf(!HAS_DB)("POST /api/billing/relay-checkout", () => {
     );
     expect(args.returnUrl, "no longer the division's fixtures tab").not.toContain("tab=fixtures");
     expect(args.returnUrl, "the page IS the fixture — no fixture param").not.toContain("fixture=");
+  });
+
+  it("RT12/RT15: from Settings → Credits the checkout returns to the Streaming side of THAT org's Credits tab — no fixture is asked for or sent, and the fixture return is untouched beside it", async () => {
+    const rig = await streamRig();
+    await callerFor(rig.orgId);
+    const [o] = await sql<{ slug: string }[]>`select slug from organizations where id = ${rig.orgId}`;
+
+    const res = await post({ orgId: rig.orgId, pack: 20, returnTo: "settings" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, data: { client_secret: "cs_rly_secret_1" } });
+    expect(createRelayCheckoutMock).toHaveBeenCalledTimes(1);
+    const args = createRelayCheckoutMock.mock.calls[0]![0] as { orgId: string; fixtureId?: string; size: number; returnUrl: string; currency?: string };
+    expect(args.orgId).toBe(rig.orgId);
+    expect(args.size).toBe(20);
+    expect(args.fixtureId, "a Settings purchase has no fixture").toBeUndefined();
+    expect(args.currency).toBe("eur");
+    const base = new URL(args.returnUrl).origin;
+    expect(args.returnUrl).toBe(`${base}${routes.creditsStream(o!.slug)}&checkout=success&session_id={CHECKOUT_SESSION_ID}`);
+    expect(args.returnUrl, "not the fixture page").not.toContain("/f/");
+    expect(args.returnUrl, "not the Phone-tab opener").not.toContain("stream=open");
+
+    // beside it, the SAME org buying from a fixture still returns to the fixture page (the panel's flow is intact)
+    createRelayCheckoutMock.mockClear();
+    expect((await post({ orgId: rig.orgId, fixtureId: rig.fixtureIds[0]!, pack: 5 })).status).toBe(200);
+    const fx = createRelayCheckoutMock.mock.calls[0]![0] as { fixtureId?: string; returnUrl: string };
+    expect(fx.fixtureId).toBe(rig.fixtureIds[0]);
+    expect(fx.returnUrl).toContain("stream=open&checkout=success");
+    expect(fx.returnUrl).not.toContain("kind=stream");
+  });
+
+  it("RT13: exactly one return is named — a body with neither a fixture nor returnTo, with both, or with another returnTo is a 400 and opens nothing", async () => {
+    const rig = await streamRig();
+    await callerFor(rig.orgId);
+    const fixtureId = rig.fixtureIds[0]!;
+    let checked = 0;
+    for (const body of [
+      { orgId: rig.orgId, pack: 5 },
+      { orgId: rig.orgId, fixtureId, pack: 5, returnTo: "settings" },
+      { orgId: rig.orgId, pack: 5, returnTo: "billing" },
+      { orgId: rig.orgId, pack: 5, returnTo: "settings", credits: 500 },
+    ]) {
+      const res = await post(body);
+      expect([res.status, JSON.stringify(body)]).toEqual([400, JSON.stringify(body)]);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    expect(createRelayCheckoutMock).not.toHaveBeenCalled();
+  });
+
+  it("RT14: a Settings purchase meets the same gates as a fixture one — the body's org must be the resolved org, the deployment must be able to stream, and a plan switched off is a 402 before Stripe", async () => {
+    // another organisation named in the body
+    const rig = await streamRig();
+    const other = await streamRig();
+    await callerFor(rig.orgId);
+    expect((await post({ orgId: other.orgId, pack: 5, returnTo: "settings" })).status).toBe(400);
+    expect(createRelayCheckoutMock).not.toHaveBeenCalled();
+
+    // a plan (override) that switched the relay or the overlay off
+    for (const key of ["streaming.relay", "streaming.overlay"]) {
+      const off = await streamRig();
+      await sql`
+        insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
+        values (${off.orgId}, ${key}, false, 'RT14 settings gate')`;
+      await callerFor(off.orgId);
+      const res = await post({ orgId: off.orgId, pack: 1, returnTo: "settings" });
+      expect([key, res.status]).toEqual([key, 402]);
+      expect(await res.json()).toMatchObject({ ok: false, code: key === "streaming.relay" ? "plan_lacks_relay" : "plan_lacks_overlay" });
+      expect(createRelayCheckoutMock).not.toHaveBeenCalled();
+    }
+
+    // a deployment that cannot stream
+    const dep = await streamRig();
+    await callerFor(dep.orgId);
+    setRelayDriversForTest(disabledRelayDrivers());
+    try {
+      const res = await post({ orgId: dep.orgId, pack: 1, returnTo: "settings" });
+      expect(res.status).toBe(503);
+      expect(await res.json()).toMatchObject({ ok: false, code: "ingest_unavailable" });
+      expect(createRelayCheckoutMock).not.toHaveBeenCalled();
+    } finally {
+      setRelayDriversForTest(null);
+    }
+    // the positive pair: the same org, drivers back, buys
+    expect((await post({ orgId: dep.orgId, pack: 1, returnTo: "settings" })).status).toBe(200);
+    expect(createRelayCheckoutMock).toHaveBeenCalledTimes(1);
   });
 
   it("refuses an org whose streaming.relay is switched OFF by an override with 402 plan_lacks_relay, and never calls Stripe (V426: the only way the gate is reachable)", async () => {

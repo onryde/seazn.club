@@ -129,7 +129,12 @@ export async function fetchCreditPackCheckoutClientSecret(
  *  refusal is `status === 402`: `CheckoutSecretResult` carries no `code`, so
  *  a caller testing `result.code` would compare undefined to undefined. */
 export function fetchRelayCheckoutClientSecret(
-  args: { orgId: string; fixtureId: string; pack: 1 | 5 | 20 },
+  args:
+    // From a fixture's Stream panel: Stripe returns the buyer to that fixture's page.
+    | { orgId: string; fixtureId: string; pack: 1 | 5 | 20 }
+    // From Settings → Credits → Streaming, which has no fixture: Stripe returns the buyer to that screen. Exactly one of
+    // the two shapes — the route refuses a body that carries both.
+    | { orgId: string; pack: 1 | 5 | 20; returnTo: "settings" },
   fetchFn: typeof fetch = fetch,
 ): Promise<CheckoutSecretResult> {
   return fetchClientSecret("/api/billing/relay-checkout", args, fetchFn);

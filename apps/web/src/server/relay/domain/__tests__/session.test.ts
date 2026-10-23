@@ -1,6 +1,8 @@
 // The session aggregate (design §6.3 gates, §6.4 transitions), PURE. Fast:
 // no DB, no fakes, milliseconds. Every edge is its own `it`; the domain
 // mutant killers are recorded per edge in the PR table.
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
 import {
   ENDING_TIMEOUT_SECONDS, MAX_DURATION_MINUTES, RELAY_EXIT_RESTART, RUNNER_CRASH_CAP, RUNNER_MAX_ATTEMPTS, RUNNER_RESTART_CAP, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS, STALE_HEARTBEAT_SECONDS_COMPOSED,
@@ -1704,14 +1706,49 @@ describe("decide — R2008: expire × camera_never_live fails a composed LIVE se
     expect(refused).toBe(ALL_STATES.length * 2 - 1);
   });
 
+  // Every command the sweep below tries on every state x mode, other than the one cell itself (NEVER_LIVE).
+  const SWEEP_COMMANDS: Command[] = [
+    { type: "provision" }, { type: "provisioned" }, { type: "ingest_connected" }, { type: "credit_refused" }, { type: "target_rejected" },
+    { type: "stop", reason: "stopped" }, { type: "stop", reason: "phone_lost" }, { type: "complete" }, { type: "relay_disabled" }, { type: "output_failed" },
+    ...(["none", "requested_timeout", "provision_timeout", "warming_timeout", "wall_clock", "stale_beat", "grace_expired", "ending_timeout"] as const)
+      .map((kind): Command => ({ type: "expire", expiry: { kind } })),
+    { type: "runner", trigger: { type: "callback_playing" } }, { type: "runner", trigger: { type: "callback_crashed" } },
+  ];
+
+  it("the sweep below tries every command and every expiry the domain DECLARES — a new command or expiry kind is not silently outside it (review I2)", () => {
+    // The declared sets, read off the type declarations with the TypeScript parser (the domain's own words), not retyped here.
+    const ts: typeof import("typescript") = createRequire(import.meta.url)("typescript");
+    const union = (file: string, alias: string, discriminant: string): string[] => {
+      const sf = ts.createSourceFile(file, readFileSync(new URL(file, import.meta.url), "utf8"), ts.ScriptTarget.Latest, true);
+      const out: string[] = [];
+      sf.forEachChild((n) => {
+        if (!ts.isTypeAliasDeclaration(n) || n.name.text !== alias || !ts.isUnionTypeNode(n.type)) return;
+        for (const member of n.type.types) {
+          if (!ts.isTypeLiteralNode(member)) continue;
+          for (const m of member.members) {
+            if (ts.isPropertySignature(m) && m.name.getText(sf) === discriminant && m.type && ts.isLiteralTypeNode(m.type) && ts.isStringLiteral(m.type.literal)) out.push(m.type.literal.text);
+          }
+        }
+      });
+      return out;
+    };
+    const declaredCommands = union("../session.ts", "Command", "type");
+    const declaredExpiries = union("../expiry.ts", "Expiry", "kind");
+    expect(declaredCommands.length, "anti-vacuity: the Command union was read").toBeGreaterThan(8);
+    expect(declaredExpiries.length, "anti-vacuity: the Expiry union was read").toBeGreaterThan(8);
+    const swept = new Set<string>([...SWEEP_COMMANDS.map((c) => c.type), NEVER_LIVE.type]);
+    expect([...declaredCommands].filter((t) => !swept.has(t)), "a declared command the sweep never tries").toEqual([]);
+    expect([...swept].filter((t) => !declaredCommands.includes(t)), "a swept command the domain does not declare").toEqual([]);
+    const sweptExpiries = new Set<string>([
+      ...SWEEP_COMMANDS.flatMap((c) => (c.type === "expire" ? [c.expiry.kind] : [])),
+      ...(NEVER_LIVE.type === "expire" ? [NEVER_LIVE.expiry.kind] : []),
+    ]);
+    expect([...declaredExpiries].filter((k) => !sweptExpiries.has(k)), "a declared expiry kind the sweep never tries").toEqual([]);
+    expect([...sweptExpiries].filter((k) => !declaredExpiries.includes(k)), "a swept expiry kind the domain does not declare").toEqual([]);
+  });
+
   it("refund_credit is emitted by that one cell and by no other: every state x mode x command (and every other expiry) that decides emits none", () => {
-    const others: Command[] = [
-      { type: "provision" }, { type: "provisioned" }, { type: "ingest_connected" }, { type: "credit_refused" }, { type: "target_rejected" },
-      { type: "stop", reason: "stopped" }, { type: "stop", reason: "phone_lost" }, { type: "complete" }, { type: "relay_disabled" }, { type: "output_failed" },
-      ...(["none", "requested_timeout", "provision_timeout", "warming_timeout", "wall_clock", "stale_beat", "grace_expired", "ending_timeout"] as const)
-        .map((kind): Command => ({ type: "expire", expiry: { kind } })),
-      { type: "runner", trigger: { type: "callback_playing" } }, { type: "runner", trigger: { type: "callback_crashed" } },
-    ];
+    const others = SWEEP_COMMANDS;
     let decided = 0, checked = 0;
     for (const state of ALL_STATES) {
       for (const mode of ["passthrough", "composed"] as const) {
