@@ -113,6 +113,21 @@ export const PACING_HEADROOM_MS = 100;
 /** At least this long between the start of one attempt and the next one: Resend's floor plus headroom (600 ms). */
 export const MIN_SEND_INTERVAL_MS = RESEND_MIN_INTERVAL_MS + PACING_HEADROOM_MS;
 
+/**
+ * How long `dispatchNow` (the in-request first attempts a route runs right after its transaction commits) keeps claiming
+ * rows, measured from the start of the call; once it has elapsed, every id not yet claimed stays `queued` with `attempts`
+ * untouched (exactly what the first-429 stop leaves) and the worker sends it, paced.
+ *
+ * Why 10 s: the sends are paced at `MIN_SEND_INTERVAL_MS` (600 ms, inside Resend's 2 requests a second), so a call can
+ * make ceil(10 000 / 600) = 17 attempts in it. That answers a normal club round in the request (a chess round is two
+ * seats a board, so 8 boards, on one address per seat) while bounding what pacing can add to the organiser's wait for the
+ * answer: the paced waits stop at 10 s, plus at most one request still in flight (`SEND_TIMEOUT_MS`, 15 s, only when
+ * Resend hangs; a healthy send is a few hundred ms). A bigger round is not lost: its tail reads `retrying` in the
+ * response and the worker (every minute in production, 20 rows a tick at the same pacing) sends it. The FIRST attempt of
+ * a call is never held back by this budget: a single-row call (the sign-in link) behaves exactly as it did before pacing.
+ */
+export const DISPATCH_NOW_BUDGET_MS = 10_000;
+
 /** A tick stops claiming once it has run this long less the hook reserve (`HOOK_RESERVE_MS`); the hooks may run to this
  *  mark. Under prod's 60 s cadence, and (with one more pacing wait and one
  *  more request, `SEND_TIMEOUT_MS`) under the cron Worker's 60 s per-job timeout, which route.test.ts derives. */

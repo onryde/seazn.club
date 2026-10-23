@@ -15,13 +15,19 @@ import "server-only";
 // and a row whose lease lapsed and was re-claimed (attempts + 1, still `sending`) is not touched by the first attempt's
 // late result. Whatever the attempt returned, only the attempt that still owns the row may write it.
 //
+// Paced (Task 7): Resend allows 2 requests a second, and a request that sends a whole round of invites would burst past it
+// and be answered 429. `dispatchNow` therefore starts consecutive attempts at least `MIN_SEND_INTERVAL_MS` apart (the same
+// constant, and the same start-to-start rule, as the worker's tick), never sleeps before its first attempt (a single-row call,
+// the sign-in link, is unchanged), and stops claiming once `DISPATCH_NOW_BUDGET_MS` has elapsed since it began: the ids it did
+// not reach stay `queued` with attempts untouched, exactly as after a 429, and the worker sends them.
+//
 // Never late: expiry is judged by the REAL clock at the moment of each claim and again at the start of each attempt, not
 // once per call. A call that sends several rows can take longer than the later rows have left.
 import { sql } from "@/lib/db";
 import { checkSendable, type DeliverResult } from "@/lib/email";
 import { log } from "@/server/logger";
 import { INVALID_IDEMPOTENT_REQUEST, classifyResult, nextAttemptAt, type Verdict } from "./classify";
-import { LEASE_MS, OUTBOX_TAG_NAME, idempotencyKey, type OutboxKind } from "./constants";
+import { DISPATCH_NOW_BUDGET_MS, LEASE_MS, MIN_SEND_INTERVAL_MS, OUTBOX_TAG_NAME, idempotencyKey, type OutboxKind } from "./constants";
 import { afterEndedBadly, type EndedRow } from "./hooks";
 import { outboxRoleOk } from "./role-check";
 import { openBody } from "./seal";
@@ -314,6 +320,27 @@ const endedExpired = (r: ExpiredRecord): EndedRow => ({
 });
 
 /**
+ * Is `dispatchNow` pacing its sends? Always in production. Outside it, the test config (vitest.config.ts) sets
+ * `EMAIL_OUTBOX_DISPATCH_UNPACED=1` so the chess suites, which open rounds of dozens of seats against a replaced transport,
+ * do not sleep for real; the file that proves the pacing (dispatch-pacing.test.ts) switches it back on. Nothing else sets it, and
+ * a production process ignores it, so it can never un-pace the real thing.
+ */
+function pacingOn(): boolean {
+  return process.env.NODE_ENV === "production" || process.env.EMAIL_OUTBOX_DISPATCH_UNPACED !== "1";
+}
+
+const realSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+export type DispatchOptions = {
+  /** The clock expiry is judged on (see effectiveNow). */
+  now?: Date;
+  /** Wait this long between sends. Default: a real timer. The test seam for the pacing (as `runOutboxTick`'s). */
+  sleep?: (ms: number) => Promise<void>;
+  /** A monotonic clock in ms behind the pacing and the budget. Default `performance.now()`. The test seam for both. */
+  nowMs?: () => number;
+};
+
+/**
  * Attempt the first send of each id, in order, and say what happened to each. Call it AFTER the caller's transaction
  * has committed (never inside `withTenant`: it uses the pooled client). It does not throw: the rows are durable, so a
  * failure here defers them to the worker rather than failing a request that already committed.
@@ -325,10 +352,19 @@ const endedExpired = (r: ExpiredRecord): EndedRow => ({
  *    and attempted, in the order given. A row that expired while earlier rows were being sent fails its claim and is
  *    ended `expired` instead; one claimed but expired by the time its attempt starts is ended by `attemptClaimed`. A
  *    repeated id finds its first outcome already recorded and is skipped;
+ *  - consecutive attempts start at least `MIN_SEND_INTERVAL_MS` apart (measured from the START of the previous attempt, so a
+ *    slow send owes less wait). The first attempt of a call never waits, so a one-row call is not slowed. The wait comes
+ *    BEFORE the claim, so a row is not leased while it waits and its expiry is judged when it is really about to be sent;
+ *  - once `DISPATCH_NOW_BUDGET_MS` has elapsed since the call began, no further id is claimed (still `queued`, attempts 0,
+ *    outcome `deferred`): a call is not held for ever by a large round. A wait that would itself end past the budget is not
+ *    started. The first attempt of a call is never held back by the budget;
  *  - after the first 429 the remaining ids are not claimed at all (still `queued`, attempts 0, outcome `deferred`);
  *  - the kind hooks run once at the end, for every row that ended badly in this call.
  */
-export async function dispatchNow(ids: readonly string[], opts: { now?: Date } = {}): Promise<Map<string, AttemptOutcome>> {
+export async function dispatchNow(ids: readonly string[], opts: DispatchOptions = {}): Promise<Map<string, AttemptOutcome>> {
+  const sleep = opts.sleep ?? realSleep;
+  const nowMs = opts.nowMs ?? (() => performance.now());
+  const startedAt = nowMs();
   const outcomes = new Map<string, AttemptOutcome>();
 
   // A malformed id is answered without touching the database; an empty (or all-malformed) call issues no statement.
@@ -362,12 +398,26 @@ export async function dispatchNow(ids: readonly string[], opts: { now?: Date } =
       ended.push(endedExpired(r));
     }
 
+    const paced = pacingOn();
     let rateLimited = false;
+    let budgetSpent = false;
+    let lastAttemptStartedAt: number | null = null;
     for (const id of valid) {
       if (outcomes.has(id)) continue;
-      if (rateLimited) {
+      if (rateLimited || budgetSpent) {
         outcomes.set(id, "deferred");
         continue;
+      }
+      if (lastAttemptStartedAt !== null) {
+        // Every attempt but the first: start no sooner than one interval after the previous one STARTED (Resend limits requests
+        // per second, and a slow request already used its share), and only if the wait itself still ends inside the budget.
+        const wait = paced ? Math.max(0, MIN_SEND_INTERVAL_MS - (nowMs() - lastAttemptStartedAt)) : 0;
+        if (nowMs() - startedAt + wait >= DISPATCH_NOW_BUDGET_MS) {
+          budgetSpent = true;
+          outcomes.set(id, "deferred");
+          continue;
+        }
+        if (wait > 0) await sleep(wait);
       }
       // The clock is read again for every row: sending the earlier ones took time.
       const rowNow = effectiveNow(opts.now);
@@ -391,6 +441,7 @@ export async function dispatchNow(ids: readonly string[], opts: { now?: Date } =
         continue;
       }
       const claimed = toClaimedRow(rec);
+      lastAttemptStartedAt = nowMs();
       try {
         const res = await attemptClaimed(claimed, { now: opts.now });
         outcomes.set(id, res.outcome);
