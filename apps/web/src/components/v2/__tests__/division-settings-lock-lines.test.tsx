@@ -15,6 +15,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { SPORT_RULES } from "@/lib/match-rules";
 import type { RefusedField } from "@/lib/rule-errors";
+import { variantWordKey } from "@/lib/variant-label-keys";
 import enUi from "@/dictionaries/en/ui.json";
 import esUi from "@/dictionaries/es/ui.json";
 
@@ -230,7 +231,12 @@ describe("the settings island: what is locked, before the organiser types", () =
     expect(line).toBeDefined();
     expect(textOf(line)).toContain(L("ruleLock.DIVISION_FORMAT_LOCKED", { stage: "Pool A" }));
     const group = tree.find((e) => propsOf(e).title === L("divset.format"))!;
-    expect(String(propsOf(group).summary)).toContain(L("divset.variantLocked", { variant: "short" }));
+    // The summary names the variant in words (main's #986 summary), so the lock wraps that word, never the stored key.
+    const wordKey = variantWordKey("badminton", "short");
+    expect(wordKey, "premise: the variant has a word in the label table").toBeDefined();
+    const word = L(wordKey!);
+    expect(word, "premise: the word differs from the stored key, so this pins the word").not.toBe("short");
+    expect(String(propsOf(group).summary)).toContain(L("divset.variantLocked", { variant: word }));
     // the rule fields carry the lock list the page handed down
     expect(propsOf(ruleFieldsEl(tree)).lockedFields).toEqual([lock("variant_key")]);
   });

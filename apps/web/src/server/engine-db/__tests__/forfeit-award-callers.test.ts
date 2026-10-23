@@ -10,12 +10,16 @@
 //   awarded-state.ts             offers - an award no event records (reached below by a rule written with raw SQL)
 //   event-import.ts              does not: the dry run reads only "does it fold, does it decide", and the writer it feeds offers
 //   components/v2/scorepad/module-client.ts   the pad's in-browser fold, a documented residual (see the report)
+//   components/public-site/match-room/room-snapshot.ts   main's chess game-over card (#986): the board game only, which
+//                                is offered no award by construction (no `awardScoreKeys`) - pinned below, not assumed
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
+import { boardgame } from "@seazn/engine/sports/boardgame";
+import { forfeitAwardOffer, pointsRuleAwardReachesTable } from "@seazn/engine/competition";
 import { sql } from "@/lib/db";
 import { rebuildState } from "../rebuild";
 import { fixtureRow, post } from "./helpers/w2b-rig";
@@ -81,7 +85,13 @@ const LEDGER: Record<string, { folds: number; offering: number; why: string }> =
   "server/engine-db/awarded-state.ts": { folds: 1, offering: 1, why: "awardedMatchState" },
   "server/usecases/event-import.ts": { folds: 1, offering: 0, why: "the dry run: folds-and-decides only; the append it feeds offers" },
   "components/v2/scorepad/module-client.ts": { folds: 2, offering: 0, why: "the pad's in-browser fold (residual, see the report)" },
+  "components/public-site/match-room/room-snapshot.ts": {
+    folds: 1,
+    offering: 0,
+    why: "the chess match room's game-over card folds the board game only, and the one offer gives the board game no award (pinned below)",
+  },
 };
+const ROOM_SNAPSHOT = "components/public-site/match-room/room-snapshot.ts";
 
 describe("every production fold of a fixture's ledger is on the ledger, and the ones that must offer the award do", () => {
   it("the source scan: exactly the ledger's files fold, with the ledger's counts", () => {
@@ -99,6 +109,24 @@ describe("every production fold of a fixture's ledger is on the ledger, and the 
 
   it("the ledger names a reason for every site that does not offer", () => {
     for (const [file, v] of Object.entries(LEDGER)) if (v.offering < v.folds) expect(v.why.length, file).toBeGreaterThan(20);
+  });
+
+  it("the match room offers nothing because there is nothing to offer: it folds the board game alone, and the offer is undefined for it", () => {
+    // Rebase onto main (#986): the room's card is a fold W2c never saw. Not offering is right only while BOTH hold - the
+    // card folds `boardgame` and nothing else, and the engine's one offer never awards the board game a score (it
+    // declares no `awardScoreKeys`). Either premise breaking reds here instead of silently dropping a stage's award.
+    const calls = foldCalls(readFileSync(join(SRC, ROOM_SNAPSHOT), "utf8"));
+    expect(calls.length, "the room folds once").toBe(1);
+    expect(calls[0], "the room folds the board game, and only it").toMatch(/^foldMatchWithStoppage\(\s*boardgame,/);
+    expect(pointsRuleAwardReachesTable(boardgame), "premise: an award never reaches a board game's table").toBe(false);
+    const AWARDS: [number, number][] = [[1, 0], [0, 0], [7, 1]];
+    let offered = 0;
+    for (const awardScore of AWARDS) {
+      const rule = { forfeit: { winnerPoints: 1, loserPoints: 0, awardScore } };
+      expect(forfeitAwardOffer(rule, boardgame), JSON.stringify(awardScore)).toBeUndefined();
+      offered++;
+    }
+    expect(offered, "anti-vacuity: awards offered to the board game").toBe(AWARDS.length);
   });
 });
 
