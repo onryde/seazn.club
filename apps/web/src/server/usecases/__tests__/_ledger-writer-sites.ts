@@ -144,13 +144,34 @@ export interface RefundEmission {
 
 /** Every object literal that IS the domain effect `{ type: "refund_credit" }` — a `type` property with that value and no
  *  `sessionId` (the event row the use-case records carries one; the effect never does). Spread and extra keys still count. */
+/** An expression with the type-level and grouping wrappers peeled off: `x as const`, `x satisfies T`, `<T>x`, `x!`, `(x)` are
+ *  all the value `x` at run time, and a scan that stops at the wrapper misses a literal written that way. */
+export function unwrapExpression(e: TS.Expression): TS.Expression {
+  let cur = e;
+  for (;;) {
+    if (ts.isAsExpression(cur) || ts.isSatisfiesExpression(cur) || ts.isTypeAssertionExpression(cur) || ts.isNonNullExpression(cur) || ts.isParenthesizedExpression(cur)) cur = cur.expression;
+    else return cur;
+  }
+}
+
+/** A property's name as a string when it is statically known: `type`, `"type"`, `["type"]`, `[`type`]`. */
+function propertyKey(name: TS.PropertyName): string | null {
+  if (ts.isIdentifier(name) || ts.isStringLiteralLike(name)) return name.text;
+  if (ts.isComputedPropertyName(name)) {
+    const inner = unwrapExpression(name.expression);
+    return ts.isStringLiteralLike(inner) ? inner.text : null;
+  }
+  return null;
+}
+
 export function refundEmissions(sf: TS.SourceFile): RefundEmission[] {
   const out: RefundEmission[] = [];
   const visit = (node: TS.Node): void => {
     if (ts.isObjectLiteralExpression(node)) {
-      const prop = (name: string) => node.properties.find((p): p is TS.PropertyAssignment => ts.isPropertyAssignment(p) && p.name.getText(sf).replace(/^["']|["']$/g, "") === name);
+      const prop = (name: string) => node.properties.find((p): p is TS.PropertyAssignment => ts.isPropertyAssignment(p) && propertyKey(p.name) === name);
       const type = prop("type");
-      const isRefund = type !== undefined && ts.isStringLiteralLike(type.initializer) && type.initializer.text === "refund_credit";
+      const value = type === undefined ? undefined : unwrapExpression(type.initializer);
+      const isRefund = value !== undefined && ts.isStringLiteralLike(value) && value.text === "refund_credit";
       const shorthandSession = node.properties.some((p) => ts.isShorthandPropertyAssignment(p) && p.name.text === "sessionId");
       if (isRefund && prop("sessionId") === undefined && !shorthandSession) {
         let label: string | null = null;

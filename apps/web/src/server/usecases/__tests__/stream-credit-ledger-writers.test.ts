@@ -23,6 +23,7 @@
 //   W7 second emitter emit { type: "refund_credit" } from another cell                           -> "one emitter"
 //   W8 wrong cell     move the emission out of `case "camera_never_live"`                        -> same test
 //   W9 scanner        loosen LEDGER_WRITE (drop the quote / schema / newline handling)           -> "the scanners see the evasions"
+//   W10 wrapped       drop the as/satisfies/cast/non-null/paren unwrapping, or the computed-key reading -> "an emission is found however the literal is wrapped"
 import { describe, expect, it } from "vitest";
 import {
   LEDGER_WRITER_SITES, ledgerWrites, nameUses, parseSource, productionSourceFiles, readSource, refundEmissions,
@@ -104,6 +105,34 @@ describe("the scanners see the evasions (W9) — each run on a synthetic source"
     expect(uses('import { refundConsumeForSession } from "./a"; function g() { if (fx.some((e) => e.type === "refund_credit")) { refundConsumeForSession(1); } }')
       .find((u) => u.kind === "call")?.underIf).toContain('"refund_credit"');
     expect(uses('import { refundConsumeForSession } from "./a"; function g() { refundConsumeForSession(1); }').find((u) => u.kind === "call")?.underIf).toBeNull();
+  });
+
+  it("an emission is found however the literal is wrapped or the key spelled — as const, satisfies, a cast, a non-null, parentheses, a template, a computed key (W10)", () => {
+    const emit = (value: string, key = "type") => `function decide() { switch (c) { case "x": return { effects: [{ ${key}: ${value} }] }; } }`;
+    const forms: [string, string][] = [
+      ["plain", emit('"refund_credit"')],
+      ["as const", emit('"refund_credit" as const')],
+      ["satisfies", emit('"refund_credit" satisfies Effect["type"]')],
+      ["angle-bracket cast", emit('<const>"refund_credit"')],
+      ["non-null", emit('"refund_credit"!')],
+      ["parenthesised", emit('("refund_credit")')],
+      ["nested wrappers", emit('(("refund_credit" as const)!) satisfies string')],
+      ["template literal", emit("`refund_credit`")],
+      ["template literal as const", emit("`refund_credit` as const")],
+      ["quoted key", emit('"refund_credit"', '"type"')],
+      ["computed key", emit('"refund_credit"', '["type"]')],
+      ["computed template key", emit('"refund_credit"', "[`type`]")],
+    ];
+    let checked = 0;
+    for (const [name, src] of forms) {
+      expect(refundEmissions(parseSource("x.ts", src)).map((e) => e.caseLabel), name).toEqual(['"x"']);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: every spelling was judged").toBe(forms.length);
+    // and a wrapped value that is NOT the refund effect is still not one
+    for (const src of [emit('"consume_credit" as const'), emit('("other")'), emit("`refund_credits`")]) {
+      expect(refundEmissions(parseSource("x.ts", src)), src).toEqual([]);
+    }
   });
 
   it("an emission of the refund effect is found with its case — and an event row that merely names the type is not one", () => {
