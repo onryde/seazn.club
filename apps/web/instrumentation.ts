@@ -16,6 +16,12 @@ export async function register() {
     // serves nothing at all rather than faking at its first stream. Sentry is initialised first, so the refusal is reported.
     const { relayDriverMode } = await import("@/server/relay/config");
     relayDriverMode();
+    // The email outbox seals every queued body under EMAIL_OUTBOX_KEK, and a sign-in request that cannot be queued answers
+    // 500. A deployment with a Resend key and no (or the published sample) key would find out from the first person who tried
+    // to sign in, so say it now: one error line, and an alert. Unlike the relay check this does not stop the boot.
+    const { reportOutboxReadiness, outboxReadinessMessage } = await import("@/server/email-outbox/readiness");
+    const outboxProblem = reportOutboxReadiness();
+    if (outboxProblem) Sentry.captureMessage(outboxReadinessMessage(outboxProblem), "error");
     // A public page's 404 or 5xx must never be stored by a CDN or a browser (owner ruling 2026-10-14). Next sends an
     // ISR route's 404 with the found page's `s-maxage`, and nothing short of the response itself can see the status;
     // see the module for why, and what it leaves to Next's own cache.

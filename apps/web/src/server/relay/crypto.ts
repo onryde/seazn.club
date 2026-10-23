@@ -1,4 +1,4 @@
-// server/relay/crypto.ts — AES-256-GCM envelope (design §6.2), keyed by RELAY_KEK (stream keys) or DEVICE_LINK_KEK (device-link secrets, scorer sheets §4.1).
+// server/relay/crypto.ts — AES-256-GCM envelope (design §6.2), keyed by RELAY_KEK (stream keys), DEVICE_LINK_KEK (device-link secrets, scorer sheets §4.1), LICHESS_TOKEN_KEK (Lichess tokens) or EMAIL_OUTBOX_KEK (queued email bodies).
 // The ONLY module that turns a plaintext credential into a *_enc column value and back
 // (enc-boundary.test.ts holds every other file to that). Layout, one buffer:
 //
@@ -32,13 +32,16 @@ const HEADER_LEN = 1 + IV_LEN + KEY_LEN + TAG_LEN + IV_LEN + TAG_LEN; // 89
  *  or a pasted trailing newline. Neither message echoes the value. */
 const KEK_HEX = /^[0-9a-f]{64}$/i;
 
-/** The three envelope keys. Separate on purpose (scorer sheets §4.1; chess
- *  design §3.1): a leaked RELAY_KEK opens stream keys, a leaked
- *  DEVICE_LINK_KEK opens printed scoring QRs, a leaked LICHESS_TOKEN_KEK
- *  opens players' Lichess tokens — and none of them opens another. The last
- *  one is the sharpest: that token can submit moves in games that are not
- *  ours, so it must not ride on a key that is also printed on paper. */
-export type KekName = "RELAY_KEK" | "DEVICE_LINK_KEK" | "LICHESS_TOKEN_KEK";
+/** The four envelope keys. Separate on purpose (scorer sheets §4.1; chess
+ *  design §3.1; email outbox, owner ruling R13): a leaked RELAY_KEK opens stream
+ *  keys, a leaked DEVICE_LINK_KEK opens printed scoring QRs, a leaked
+ *  LICHESS_TOKEN_KEK opens players' Lichess tokens, a leaked EMAIL_OUTBOX_KEK
+ *  opens queued email bodies (sign-in links) — and none of them opens another.
+ *  The Lichess one is the sharpest: that token can submit moves in games that
+ *  are not ours, so it must not ride on a key that is also printed on paper.
+ *  The outbox has its own so that rotating the Lichess key can never strand
+ *  queued email. */
+export type KekName = "RELAY_KEK" | "DEVICE_LINK_KEK" | "LICHESS_TOKEN_KEK" | "EMAIL_OUTBOX_KEK";
 
 function kek(name: KekName): Buffer {
   const hex = process.env[name];

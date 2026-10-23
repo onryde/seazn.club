@@ -38,7 +38,7 @@ describe.skipIf(!HAS_DB)("dispatchNow without outbox write access", () => {
     await sql.end({ timeout: 2 }).catch(() => undefined);
   });
   beforeEach(() => {
-    vi.stubEnv("LICHESS_TOKEN_KEK", "ab".repeat(32));
+    vi.stubEnv("EMAIL_OUTBOX_KEK", "ab".repeat(32));
     vi.stubEnv("RESEND_API_KEY", "re_test");
     logMock.error.mockClear();
     deliverMock.mockReset();

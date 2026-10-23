@@ -4,7 +4,7 @@
 
 **Goal:** Queue the sign-in link and the online-chess round invite in a Postgres outbox written in the caller's transaction, attempt each at once after commit, retry with backoff from a cron worker, and record Resend delivery status per row.
 
-**Architecture:** One table `email_outbox` (V469, replacing the unused `email_queue`), sealed bodies under the existing `LICHESS_TOKEN_KEK` envelope, and a server module `apps/web/src/server/email-outbox/` with four entry points: `enqueueEmail` (on the caller's `Tx`), `dispatchNow` (first attempt, after commit), `runOutboxTick` (retry worker behind `/api/cron/email-outbox`) and `applyProviderEvent` (the Resend webhook). Per-kind side effects (the chess seat stamp) hang off a lookup table of kind hooks, so the core never imports a usecase.
+**Architecture:** One table `email_outbox` (V469, replacing the unused `email_queue`), sealed bodies under the outbox's own `EMAIL_OUTBOX_KEK` (the existing envelope helper, a key of its own: owner ruling R13, 2026-10-23), and a server module `apps/web/src/server/email-outbox/` with four entry points: `enqueueEmail` (on the caller's `Tx`), `dispatchNow` (first attempt, after commit), `runOutboxTick` (retry worker behind `/api/cron/email-outbox`) and `applyProviderEvent` (the Resend webhook). Per-kind side effects (the chess seat stamp) hang off a lookup table of kind hooks, so the core never imports a usecase.
 
 **Tech Stack:** Next.js route handlers, postgres.js (`sql`, `Tx`, `tx.savepoint`), Flyway SQL migrations, AES-256-GCM envelope (`server/relay/crypto.ts`), Resend REST API, Cloudflare cron Worker (`apps/cron-worker`), vitest (node env), Playwright (CI dispatch only), `scripts/smoke.ts`.
 
@@ -19,7 +19,7 @@
 - **Expiry (spec):** sign-in link 15 min (`TTL_MINUTES`, `lib/login-link.ts:6`); chess invite = that board's check-in deadline (`windowFor(anchor).deadline`, `server/external-play/window.ts:67`).
 - **Statuses (spec), exactly 12:** `queued sending sent delayed delivered bounced complained failed suppressed expired dead replaced`.
 - **Result handling (spec):** 2xx → `sent`; 429 / 5xx / timeout / network → retry; 400 / 403 / 422 → `dead`; 409 `concurrent_idempotent_requests` → retry; 409 `invalid_idempotent_request` → `dead` + `log.error`.
-- **Credentials at rest (spec):** body sealed with the Lichess-token KEK; `app_user` gets INSERT only; no `RETURNING` on the insert; metadata rows deleted after 90 days. This plan nulls the body as soon as a row leaves `queued`/`sending` (stricter than "terminal": nothing re-sends a `sent` row), enforced by a CHECK.
+- **Credentials at rest (spec):** body sealed with the outbox's own `EMAIL_OUTBOX_KEK` (R13: prod has no `LICHESS_TOKEN_KEK`, and rotating the Lichess key must never strand queued email; no fallback to it; the published sample key is refused under `NODE_ENV=production`; a boot check in `instrumentation.ts` reports a missing key before a user hits sign-in); `app_user` gets INSERT only; no `RETURNING` on the insert; metadata rows deleted after 90 days. This plan nulls the body as soon as a row leaves `queued`/`sending` (stricter than "terminal": nothing re-sends a `sent` row), enforced by a CHECK.
 - **Cadence (owner ruling 2026-10-20; controller ruling on the shape, same day):** prod runs the outbox every minute, and stg on the existing 5-minute tick. **No new trigger on either env.** Prod's `*/5 * * * *` is REPLACED by `* * * * *`. That one trigger runs the outbox on every firing and the existing 5-minute jobs (`stream-tick`, `external-play`) only when the SCHEDULED minute is `% 5 === 0`, so a late run neither skips nor double-fires. Stg keeps `*/5 * * * *`, and runs the outbox and the 5-minute jobs on it. The count stays at 2 triggers per env, 4 of the Free plan's 5.
 - **Webhook signature (spec):** `RESEND_WEBHOOK_SECRET` unset ⇒ 401 unless `NODE_ENV !== "production"` (stg and every harness server run `NODE_ENV=production`, so they refuse too).
 - **Copy:** no new user-facing strings and no dictionary keys. `retrying` is a count in a JSON response only; the UI keeps showing what it shows today.
@@ -50,7 +50,7 @@
 |---|---|
 | `db/migration/deltas/V469__email_outbox.sql` | drop `email_queue`; table, CHECKs, indexes, replace trigger, RLS + INSERT-only grant |
 | `apps/web/src/server/email-outbox/constants.ts` | kinds, statuses, status groups, schedule, lease, batch, pacing, retention, key format |
-| `apps/web/src/server/email-outbox/seal.ts` | seal/open `{html,text}` under `LICHESS_TOKEN_KEK` |
+| `apps/web/src/server/email-outbox/seal.ts` | seal/open `{html,text}` under `EMAIL_OUTBOX_KEK` (plus the shared `outboxKeyProblem` rule) |
 | `apps/web/src/server/email-outbox/classify.ts` | pure: `SendResult` → `sent/retry/dead/suppressed`; `nextAttemptAt` |
 | `apps/web/src/server/email-outbox/transport.ts` | the one test seam: `deliver()` → `sendWithResult()` |
 | `apps/web/src/server/email-outbox/enqueue.ts` | `enqueueEmail`, `extendEmailExpiry` (caller's `Tx`) |
@@ -189,8 +189,8 @@ it("regression: an existing sender (sendVerificationEmail) still resolves true o
 **Files:**
 - Modify: `apps/web/src/server/email-outbox/constants.ts` (add schedule constants)
 - Create: `seal.ts`, `classify.ts`, `transport.ts`, `enqueue.ts`, `attempt.ts`, `hooks.ts`, `index.ts` under `apps/web/src/server/email-outbox/`
-- Modify: `apps/web/src/server/external-play/secrets.ts:1-9` (comment: it is no longer the only module naming `LICHESS_TOKEN_KEK`; the outbox seals under it per spec)
-- Test: `__tests__/classify.test.ts`, `__tests__/seal.test.ts` (pure), `__tests__/dispatch.test.ts` (DB; `vi.mock("@/server/email-outbox/transport")`; `vi.stubEnv` `LICHESS_TOKEN_KEK = "ab".repeat(32)`, `RESEND_API_KEY = "re_test"`)
+- Modify: `apps/web/src/server/external-play/secrets.ts:1-9` (comment only; under R13 the outbox does NOT share `LICHESS_TOKEN_KEK`, so this module stays the only one naming it)
+- Test: `__tests__/classify.test.ts`, `__tests__/seal.test.ts` (pure), `__tests__/dispatch.test.ts` (DB; `vi.mock("@/server/email-outbox/transport")`; `vi.stubEnv` `EMAIL_OUTBOX_KEK = "ab".repeat(32)`, `RESEND_API_KEY = "re_test"`)
 
 **Interfaces:**
 - Consumes: Task 1 table + constants; Task 2 `sendWithResult`, `SendResult`.
@@ -292,7 +292,7 @@ it("non-transactional to a suppressed address → suppressed, deliver never call
 it("dispatchNow([]) → empty map and zero statements", …);
 ```
 - [ ] **Step 3: Run, verify FAIL** (modules missing).
-- [ ] **Step 4: Implement** the modules to the interfaces and behaviour above. `seal.ts` calls `sealWith`/`openWith("LICHESS_TOKEN_KEK", …)` from `server/relay/crypto.ts:64-79` on `JSON.stringify(body)`. `enqueue.ts` generates the id with `randomUUID()` and inserts with no `returning`. `hooks.ts` imports nothing from `server/usecases`.
+- [ ] **Step 4: Implement** the modules to the interfaces and behaviour above. `seal.ts` calls `sealWith`/`openWith("EMAIL_OUTBOX_KEK", …)` from `server/relay/crypto.ts:64-79` on `JSON.stringify(body)`. `enqueue.ts` generates the id with `randomUUID()` and inserts with no `returning`. `hooks.ts` imports nothing from `server/usecases`.
 - [ ] **Step 5: Run, verify PASS** (`t` = 5 + 2 + 18) + typecheck.
 - [ ] **Step 6: Mutate once each** — (a) drop `and status = 'sending'` from the `sent` update (the in-flight replace test must red); (b) drop the `attempts = 0` claim predicate (second-send test reds); (c) drop the 429 break (the 429 test reds); (d) make `nextAttemptAt` return a date at `MAX_ATTEMPTS`; (e) drop the production `max(…)` (the production-clock test reds). Restore each.
 - [ ] **Step 7: Commit** — `feat(email-outbox): enqueue in the caller's transaction, first attempt after commit`.
@@ -537,7 +537,7 @@ export async function chessInviteEndedBadly(row: EndedRow): Promise<void>;
     - `retry` → status 503;
     - `throws` → it throws;
     - otherwise it pushes `{ to, fixtureUrl, deadlineLabel, opensLabel, locale }` onto `mail.sent` and returns `{ ok: true, providerId }`.
-  - `stubOutboxEnv()` (`beforeEach`) stubs `LICHESS_TOKEN_KEK` and `RESEND_API_KEY`.
+  - `stubOutboxEnv()` (`beforeEach`) stubs `EMAIL_OUTBOX_KEK` and `RESEND_API_KEY`.
   - Staged hooks that targeted `../invite` `sendFixtureInvite` / `releaseSeat` now target `queueFixtureInvite` and `../seat-stamp` `releaseSeat`.
   - Expected behaviour changes, each made by name in the diff:
     - `{ opened: true, invited, skipped }` gains `retrying: 0`;

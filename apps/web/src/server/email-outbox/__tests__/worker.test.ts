@@ -262,7 +262,7 @@ describe.skipIf(!HAS_DB)("the email outbox retry worker (DB)", () => {
     await sql.end({ timeout: 2 }).catch(() => undefined);
   });
   beforeEach(() => {
-    vi.stubEnv("LICHESS_TOKEN_KEK", KEK);
+    vi.stubEnv("EMAIL_OUTBOX_KEK", KEK);
     vi.stubEnv("RESEND_API_KEY", API_KEY);
     clock = 0;
     sleeps.length = 0;

@@ -80,7 +80,7 @@ describe.skipIf(!HAS_DB)("the outbox through the real transport (fetch is the on
     await sql.end({ timeout: 2 }).catch(() => undefined);
   });
   beforeEach(() => {
-    vi.stubEnv("LICHESS_TOKEN_KEK", KEK);
+    vi.stubEnv("EMAIL_OUTBOX_KEK", KEK);
     vi.stubEnv("RESEND_API_KEY", API_KEY);
     calls.length = 0;
     messages.clear();

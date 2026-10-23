@@ -171,7 +171,7 @@ describe.skipIf(!HAS_DB)("the email outbox core (DB)", () => {
   });
 
   beforeEach(() => {
-    vi.stubEnv("LICHESS_TOKEN_KEK", KEK);
+    vi.stubEnv("EMAIL_OUTBOX_KEK", KEK);
     vi.stubEnv("RESEND_API_KEY", API_KEY);
     logMock.error.mockClear();
     logMock.warn.mockClear();
@@ -257,7 +257,7 @@ describe.skipIf(!HAS_DB)("the email outbox core (DB)", () => {
     });
 
     it("an unusable KEK with a Resend key set REFUSES, the caller sees the error, and its transaction leaves nothing", async () => {
-      vi.stubEnv("LICHESS_TOKEN_KEK", "");
+      vi.stubEnv("EMAIL_OUTBOX_KEK", "");
       const m = msg();
       let seen: unknown;
       await sql
@@ -273,7 +273,7 @@ describe.skipIf(!HAS_DB)("the email outbox core (DB)", () => {
     });
 
     it("an unusable KEK with NO Resend key queues a bodiless row (dev/CI), which later dies 'no_api_key'", async () => {
-      vi.stubEnv("LICHESS_TOKEN_KEK", undefined);
+      vi.stubEnv("EMAIL_OUTBOX_KEK", undefined);
       vi.stubEnv("RESEND_API_KEY", undefined);
       const id = await queue();
       expect((await get(id)).body_sealed).toBeNull();
@@ -500,10 +500,10 @@ describe.skipIf(!HAS_DB)("the email outbox core (DB)", () => {
     });
 
     it("a body that is missing while a key is set -> dead 'body_missing'; deliver never called", async () => {
-      vi.stubEnv("LICHESS_TOKEN_KEK", undefined);
+      vi.stubEnv("EMAIL_OUTBOX_KEK", undefined);
       vi.stubEnv("RESEND_API_KEY", undefined);
       const id = await queue(); // bodiless: the box could neither seal nor send
-      vi.stubEnv("LICHESS_TOKEN_KEK", KEK);
+      vi.stubEnv("EMAIL_OUTBOX_KEK", KEK);
       vi.stubEnv("RESEND_API_KEY", API_KEY);
       expect((await get(id)).body_sealed).toBeNull();
       expect((await dispatchNow([id])).get(id)).toBe("dead");
@@ -517,7 +517,7 @@ describe.skipIf(!HAS_DB)("the email outbox core (DB)", () => {
       await sql`update email_outbox set body_sealed = ${Buffer.from("not an envelope at all, but long enough to pass a length check ".repeat(3))} where id = ${damaged}`;
       const rotated = await queue();
       // Seal under the current KEK (done), then open under another.
-      vi.stubEnv("LICHESS_TOKEN_KEK", OTHER_KEK);
+      vi.stubEnv("EMAIL_OUTBOX_KEK", OTHER_KEK);
       const out = await dispatchNow([damaged, rotated]);
       expect([out.get(damaged), out.get(rotated)]).toEqual(["dead", "dead"]);
       for (const id of [damaged, rotated]) {

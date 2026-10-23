@@ -136,8 +136,15 @@ re-mints the room token and kills the older link, which is false.)
 The body of these two kinds contains a live credential (a sign-in token; a
 match-room token valid 24 h). So:
 
-- the body columns are **encrypted** with the existing application KEK (the
-  one Lichess tokens use; it is on stg and prod);
+- the body columns are **encrypted** under a key of the outbox's own,
+  `EMAIL_OUTBOX_KEK` (owner ruling R13, 2026-10-23). It is not the Lichess key:
+  prod has no `LICHESS_TOKEN_KEK`, and rotating the Lichess key must never strand
+  queued email. There is **no fallback** to any other key. The sample key
+  published in `apps/web/.env.example` is **refused** when `NODE_ENV=production`.
+  A box with a Resend key and no usable key refuses to queue (a sign-in request
+  answers a generic 500 and rolls back), and the app says so at boot
+  (`instrumentation.ts`) before any user hits it. The owner sets the secret on
+  stg and prod before the deploy;
 - the body is **nulled** as soon as the row reaches any terminal state;
 - the table is **not readable by `app_user`**. *My call:* `app_user` gets
   INSERT only (no SELECT, UPDATE or DELETE), so phase-3 callers inside
@@ -252,7 +259,7 @@ words.
 ## Left to the builder
 
 - Exact column types and names, indexes, the lease length, the batch size per
-  tick, the encryption helper's shape (reuse the Lichess-token one).
+  tick, the encryption helper's shape (reuse the envelope helper in `server/relay/crypto.ts`).
 - Whether the funnel-start route and the magic-link route share one helper.
 - How the e2e and dev link-capture keeps working (the constraint is that it
   does).

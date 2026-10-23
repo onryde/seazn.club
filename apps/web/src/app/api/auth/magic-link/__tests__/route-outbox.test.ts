@@ -140,7 +140,7 @@ describe.skipIf(!HAS_DB)("POST /api/auth/magic-link writes the token and the out
     await sql.end({ timeout: 2 }).catch(() => undefined);
   });
   beforeEach(() => {
-    vi.stubEnv("LICHESS_TOKEN_KEK", KEK);
+    vi.stubEnv("EMAIL_OUTBOX_KEK", KEK);
     vi.stubEnv("RESEND_API_KEY", API_KEY);
     vi.stubEnv("RESEND_WEBHOOK_SECRET", WEBHOOK_SECRET);
     vi.stubEnv("OAUTH_BASE_URL", ORIGIN);
@@ -345,7 +345,7 @@ describe.skipIf(!HAS_DB)("POST /api/auth/magic-link writes the token and the out
     expect(firstRow!.status, "premise: the first request was sent").toBe("sent");
     calls.length = 0;
 
-    vi.stubEnv("LICHESS_TOKEN_KEK", undefined); // the Resend key is still set: OutboxKeyUnavailableError
+    vi.stubEnv("EMAIL_OUTBOX_KEK", undefined); // the Resend key is still set: OutboxKeyUnavailableError
     const second = await post({ email });
     expect(second.status).toBe(500);
     expect(second.json.ok).toBe(false);
@@ -365,7 +365,7 @@ describe.skipIf(!HAS_DB)("POST /api/auth/magic-link writes the token and the out
   });
 
   it("committed <=> queued: for a first-time address a refused request leaves no token and no row", async () => {
-    vi.stubEnv("LICHESS_TOKEN_KEK", undefined);
+    vi.stubEnv("EMAIL_OUTBOX_KEK", undefined);
     const email = newEmail();
     const res = await post({ email });
     expect(res.status).toBe(500);

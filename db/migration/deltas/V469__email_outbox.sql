@@ -10,7 +10,7 @@
 -- data is carried over.
 --
 -- THE BODY IS A LIVE CREDENTIAL. A sign-in link and a match-room link both work as bearer tokens, so `body_sealed`
--- holds the rendered email only as an envelope sealed by the application KEK (the one Lichess tokens use), and only
+-- holds the rendered email only as an envelope sealed by the outbox's own key (EMAIL_OUTBOX_KEK), and only
 -- while the row can still be retried (queued, sending). Every other status must have no body: the CHECK is the
 -- database's own refusal to keep a credential once a row is finished, whatever the application forgets to null.
 -- `meta` is the non-secret companion (ids, stamps) a kind's hooks read; it never carries a token.

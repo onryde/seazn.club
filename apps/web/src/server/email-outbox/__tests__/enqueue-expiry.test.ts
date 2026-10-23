@@ -57,7 +57,7 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(T0);
   vi.stubEnv("RESEND_API_KEY", "");
-  vi.stubEnv("LICHESS_TOKEN_KEK", "");
+  vi.stubEnv("EMAIL_OUTBOX_KEK", "");
 });
 afterEach(() => {
   vi.useRealTimers();

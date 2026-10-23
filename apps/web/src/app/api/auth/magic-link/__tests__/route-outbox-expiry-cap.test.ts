@@ -49,7 +49,7 @@ describe.skipIf(!HAS_DB)("POST /api/auth/magic-link when the expiry cap refuses 
     await sql.end({ timeout: 2 }).catch(() => undefined);
   });
   beforeEach(() => {
-    vi.stubEnv("LICHESS_TOKEN_KEK", "ab".repeat(32));
+    vi.stubEnv("EMAIL_OUTBOX_KEK", "ab".repeat(32));
     vi.stubEnv("RESEND_API_KEY", "re_t6_cap");
     vi.stubEnv("OAUTH_BASE_URL", "https://signin.test");
     fetchStub.mockClear();

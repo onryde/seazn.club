@@ -83,7 +83,7 @@ describe.skipIf(!HAS_DB)("POST /api/webhooks/resend against the real outbox and 
     await sql.end({ timeout: 2 }).catch(() => undefined);
   });
   beforeEach(() => {
-    vi.stubEnv("LICHESS_TOKEN_KEK", KEK);
+    vi.stubEnv("EMAIL_OUTBOX_KEK", KEK);
     vi.stubEnv("RESEND_API_KEY", "re_t5_route");
     vi.stubEnv("RESEND_WEBHOOK_SECRET", SECRET);
     vi.stubEnv("NODE_ENV", "test");
