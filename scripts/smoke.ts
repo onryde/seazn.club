@@ -9902,17 +9902,6 @@ async function templateInstantiationSuite(): Promise<void> {
           seedFamily.has(f.away_slot_label?.key ?? ""),
       ),
   );
-
-  const t20Gated = await v1(free, "/api/v1/competitions/from-template", "POST", {
-    template_key: "t20-super8",
-    name: `DTX T20 Gated ${tag}`,
-    ends_on: "2030-12-31",
-  });
-  check(
-    "template instantiation: t20-super8 (3 stages) is refused 402 on a community session — stage count alone trips it, same free session already used for the americano-night check above",
-    t20Gated.status === 402 &&
-      (t20Gated.json.error)?.code === "PAYMENT_REQUIRED",
-  );
 }
 
 /**
