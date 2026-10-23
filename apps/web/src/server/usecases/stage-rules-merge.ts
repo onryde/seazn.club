@@ -21,6 +21,7 @@ import { withoutNulls } from "@/lib/stage-decider-off";
 import { configIssuesOf } from "@/lib/config-issue-copy";
 import { HttpError } from "@/lib/errors";
 import { RULE_ERROR_STATUS, ruleErrorMessage } from "@/lib/rule-errors";
+import { divisionOnlyStageKeys } from "@/lib/online-time-control";
 
 /**
  * The allowlist, over the keys AS SENT (null-valued ones included): checked BEFORE any null strip, because the other
@@ -31,12 +32,18 @@ import { RULE_ERROR_STATUS, ruleErrorMessage } from "@/lib/rule-errors";
  * and variant (including every points key, which belongs to the Points section) is `RULE_NOT_SETTABLE` (400,
  * `extra.field`). The keys are the CONFIG keys the engine declares, never the editor's form keys (tennis's `setType`
  * is a form key whose build writes `set`: `setType` is unknown here).
+ *
+ * Rebase ruling D1 (2026-10-23): a key the DIVISION keeps for itself (`divisionOnlyStageKeys`: an online chess
+ * division's clock and clock family, which the Lichess challenge reads off the division alone) is `RULE_NOT_SETTABLE`
+ * too, whatever the engine allows a stage of this kind. `divisionConfig` is the config the stage will play under: the
+ * stored one for a stage save or a create, the one about to be written for a division save.
  */
 export function refuseUnsettableKeys(
   module: AnySportModule,
   sportKey: string,
   kind: StageKind,
   variantKey: string | null,
+  divisionConfig: unknown,
   sent: Iterable<string>,
 ): void {
   const declared = sportTopKeys(module);
@@ -47,6 +54,23 @@ export function refuseUnsettableKeys(
       throw new HttpError(
         RULE_ERROR_STATUS.RULE_NOT_SETTABLE,
         ruleErrorMessage("RULE_NOT_SETTABLE", { field: key, reason: "not for this stage's format" }),
+        "RULE_NOT_SETTABLE",
+        { field: key },
+      );
+  }
+  refuseDivisionOnlyKeys(sportKey, divisionConfig, sent);
+}
+
+/** D1's half of the allowlist, on its own for a division save that keeps the variant (the full re-ask is the variant's,
+ *  `refuseInvalidatedStageRules`): the first key sent that the division keeps for itself, by name. */
+function refuseDivisionOnlyKeys(sportKey: string, divisionConfig: unknown, sent: Iterable<string>): void {
+  const kept = divisionOnlyStageKeys(sportKey, divisionConfig);
+  if (kept.size === 0) return;
+  for (const key of sent) {
+    if (kept.has(key))
+      throw new HttpError(
+        RULE_ERROR_STATUS.RULE_NOT_SETTABLE,
+        ruleErrorMessage("RULE_NOT_SETTABLE", { field: key, reason: "an online (Lichess) division plays its own clock in every stage" }),
         "RULE_NOT_SETTABLE",
         { field: key },
       );
@@ -175,6 +199,10 @@ export function divisionSaveRefusal(p: StageRulesProblem, sportKey: string, stag
  * The keys a stage may set depend on its variant (`stageTopKeysFor`), so a change re-asks the ALLOWLIST first, over the
  * keys each stage stores: a t20 stage's `superOver: false` under a test-match division is a key nothing can remove
  * (`{superOver: null}` is itself refused there). RULE_NOT_SETTABLE (400), naming the stage and the key.
+ *
+ * Rebase ruling D1 (2026-10-23): a save that keeps the variant still asks every stage's stored keys the division's own
+ * question (`divisionOnlyStageKeys`, under the config about to be written): online play turned on over a stage that holds
+ * a clock is refused by name, so the organiser clears the stage's clock first rather than leave one no game plays.
  */
 export async function refuseInvalidatedStageRules(
   tx: Tx,
@@ -191,23 +219,18 @@ export async function refuseInvalidatedStageRules(
     if (!isObj(s.rules)) continue;
     const rules = withoutNulls(s.rules);
     if (Object.keys(rules).length === 0) continue;
-    if (nextVariant !== null) refuseKeysForStage(module, sportKey, s, nextVariant, Object.keys(rules));
+    if (nextVariant !== null) namingStage(s, () => refuseUnsettableKeys(module, sportKey, s.kind, nextVariant, nextDivisionConfig, Object.keys(rules)));
+    else namingStage(s, () => refuseDivisionOnlyKeys(sportKey, nextDivisionConfig, Object.keys(rules)));
     const problem = stageRulesProblem(module, nextDivisionConfig, rules, setsBestOf(rules));
     if (problem !== null) throw divisionSaveRefusal(problem, sportKey, s);
   }
 }
 
-/** `refuseUnsettableKeys` for one stage under a division save, its refusal naming the stage (`stage_id`, `stage_name`)
- *  the way `divisionSaveRefusal` does: the organiser is told which stage to clear the key on. */
-function refuseKeysForStage(
-  module: AnySportModule,
-  sportKey: string,
-  stage: { id: string; name: string; kind: StageKind },
-  variant: string,
-  keys: readonly string[],
-): void {
+/** An allowlist refusal for one stage under a division save, naming the stage (`stage_id`, `stage_name`) the way
+ *  `divisionSaveRefusal` does: the organiser is told which stage to clear the key on. */
+function namingStage(stage: { id: string; name: string }, refuse: () => void): void {
   try {
-    refuseUnsettableKeys(module, sportKey, stage.kind, variant, keys);
+    refuse();
   } catch (e) {
     if (!(e instanceof HttpError)) throw e;
     throw new HttpError(e.status, `${stage.name}: ${e.message}`, e.code, { ...e.extra, stage_id: stage.id, stage_name: stage.name });

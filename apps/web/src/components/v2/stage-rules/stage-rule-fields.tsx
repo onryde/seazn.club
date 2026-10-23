@@ -10,6 +10,7 @@
 import { useId, useMemo } from "react";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { buildRuleOverride, setRuleValue, visibleRuleFields, type RuleField } from "@/lib/match-rules";
+import { divisionOnlyStageKeys } from "@/lib/online-time-control";
 import type { StageKind } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
 import type { MessageKey } from "@/lib/messages";
@@ -53,11 +54,16 @@ export function StageRuleFields({
   const sections = useMemo(() => stageSections(module, kind, variant), [module, kind, variant]);
   // The fields the grid shows: the engine's stage fields, through the same best-of-1 fold as the division editor (one
   // "Points to win", the shadow key hidden).
+  // Rebase ruling D1: a field that edits a key the DIVISION keeps for itself (an online chess division's clock and clock
+  // family) is not drawn - the stage save refuses it with the same answer (`divisionOnlyStageKeys`).
   const visible = useMemo(() => {
+    const kept = divisionOnlyStageKeys(sportKey, divisionConfig);
     const byKey = new Map(visibleRuleFields(sportKey, values, divisionConfig).map((f) => [f.key, f] as const));
     return sections.map((s) => ({
       id: s.id,
-      fields: s.fields.map((f) => byKey.get(f.key)).filter((f): f is RuleField => f !== undefined),
+      fields: s.fields
+        .map((f) => byKey.get(f.key))
+        .filter((f): f is RuleField => f !== undefined && !f.edits.some((path) => kept.has(path.split(".")[0]!))),
     }));
   }, [sportKey, values, divisionConfig, sections]);
   // The abandon select's unavailable options (owner P-5), judged against the cfg this stage would play with the edit.

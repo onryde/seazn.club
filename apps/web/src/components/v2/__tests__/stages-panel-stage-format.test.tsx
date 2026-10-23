@@ -18,6 +18,9 @@ import {
   stageRulesInForce,
 } from "@/components/v2/stages-panel";
 import { MatchRuleFields } from "@/components/v2/match-rules";
+import { StageRuleFields } from "@/components/v2/stage-rules/stage-rule-fields";
+import { DictProvider } from "@/components/i18n/dict-provider";
+import enUi from "@/dictionaries/en/ui.json";
 import {
   SPORT_RULES,
   buildRuleOverride,
@@ -27,7 +30,7 @@ import {
 } from "@/lib/match-rules";
 import { pointsTheOnlyGameIsPlayedTo } from "@/lib/__tests__/_single-game-target";
 import { badminton } from "@seazn/engine/sports/setbased";
-import { BRACKET_KINDS } from "@seazn/engine/core";
+import { BRACKET_KINDS, type StageKind } from "@seazn/engine/core";
 import { stageDefaultsFor } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { decidersOffRules, mergedStageRules, stageRulesOverlay } from "@/lib/stage-decider-off";
@@ -199,17 +202,40 @@ describe("the row is offered for EVERY sport (W2c Task 17: the STAGE_RULES_SPORT
     expect(rendered).toBeGreaterThan(builtinModules.length * 2);
   });
 
-  // PENDING REWRITE (rebase 2026-10-23, ruling D1): main's chess test below pins the pre-W2c gate (no stage row for
-  // chess). W2c Task 17 offers the row for every sport; the test is rewritten at the tip to pin D1: on a Lichess
-  // division the stage row hides the clock fields, and the rungs stay editable.
-  it("review of PR #986: chess - a Lichess division included - has no per-stage match format row, so no free stage clock or delay is ever offered there", () => {
-    // The Match rules grid of a chess division carries the clock fields (time, increment, delay). The stage's own editor
-    // mounts the same MatchRuleFields, so it must never mount for chess: the Lichess clock is the division's alone
-    // (server: stage-rules.test.ts, external-play-guard.test.ts).
+  // Rebase ruling D1 (2026-10-23) - rewrites PR #986's chess test, which pinned the pre-W2c gate (no stage row for chess;
+  // W2c Task 17 offers the row for every sport). Its intent stands: no free stage clock is ever offered on a Lichess division.
+  it("review of PR #986, ruling D1: a Lichess chess division has the stage row, and its editor draws no clock or clock family - the rungs stay; over the board every field is there (counted)", () => {
+    // The Match rules grid of a chess division carries the clock fields (time, increment, delay) and the clock family. The
+    // row's editor is StageRuleFields: on a Lichess division it must never offer them, because the Lichess clock is the
+    // division's alone (server: stage-rules.test.ts D1, external-play-guard.test.ts). The tie-break rungs are the stage's.
     const lichess = { variant: "classical", clock: { base: 600, increment: 5 }, onlinePlay: "lichess" };
-    const html = panel({ sportKey: "boardgame", divisionConfig: lichess });
-    expect(html).not.toContain('data-testid="stage-format"');
-    expect(panel({ sportKey: "badminton" }), "the positive: the same panel for a sets-based sport DOES render the row").toContain('data-testid="stage-format"');
+    const overTheBoard = { variant: "classical", clock: { base: 600, increment: 5 } };
+    expect(panel({ sportKey: "boardgame", divisionConfig: lichess }), "the row renders for chess (W2c Task 17)").toContain('data-testid="stage-format"');
+    const chess = builtinModules.find((m) => m.key === "boardgame")!;
+    const blocks = (kind: StageKind, variant: string | null, divisionConfig: Record<string, unknown>) =>
+      [
+        ...renderToStaticMarkup(
+          <DictProvider dict={enUi as Dict} locale="en">
+            <StageRuleFields sportKey="boardgame" module={chess} kind={kind} variant={variant} values={{}} onChange={() => undefined} disabled={false} divisionConfig={divisionConfig} resolved={null} />
+          </DictProvider>,
+        ).matchAll(/data-testid="stage-rule-field-([A-Za-z]+)"/g),
+      ].map((m) => m[1]!).sort();
+    // The keys the picker stands in for, typed from the ruling (the challenge reads `clock`; the picker writes the family).
+    const DIVISION_ONLY = new Set(["clock", "variant"]);
+    let cells = 0;
+    let clockBlocks = 0;
+    for (const kind of ["league", ...BRACKET_KINDS] as StageKind[]) {
+      for (const variant of [null, ...Object.keys(chess.variants)]) {
+        const all = blocks(kind, variant, overTheBoard);
+        const online = blocks(kind, variant, lichess);
+        expect(online, `${kind}/${variant}: Lichess draws every field but the division's`).toEqual(all.filter((k) => !DIVISION_ONLY.has(k)));
+        clockBlocks += all.filter((k) => DIVISION_ONLY.has(k)).length;
+        cells++;
+      }
+    }
+    expect(cells, "anti-vacuity: every kind and variant").toBe((1 + BRACKET_KINDS.size) * (1 + Object.keys(chess.variants).length));
+    expect(clockBlocks, "the positive pair: over the board the clock fields ARE drawn").toBeGreaterThan(0);
+    expect(blocks("knockout", "classical", lichess), "a knockout keeps its rungs on Lichess").toEqual(["tiebreakRungs"]);
   });
 
   it("renders nothing when the page passes no sport at all, or a sport the registry does not ship", () => {

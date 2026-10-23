@@ -9,7 +9,7 @@
 //
 // `@/server/external-play/time-controls` is pure (no `server-only`, no I/O) and is read by VALUE here: the options must
 // be the catalogue itself, never a retyped copy that could drift from what the gate accepts.
-import { buildRuleOverride } from "@/lib/match-rules";
+import { buildRuleOverride, rulesFor } from "@/lib/match-rules";
 import { variantWord, variantWordKey } from "@/lib/variant-label-keys";
 import type { MessageKey } from "@/lib/messages";
 import {
@@ -28,6 +28,29 @@ export const LICHESS_CLOCK_FIELD_KEYS: readonly string[] = [
   "clockIncrementSeconds",
   "clockDelaySeconds",
 ];
+
+/** Rebase ruling D1 (2026-10-23) - the CONFIG keys the picker's fields write (`variant` and `clock`), read off those
+ *  fields' own `edits` so the keys cannot drift from the fields the picker stands in for. */
+export const LICHESS_CLOCK_CONFIG_KEYS: ReadonlySet<string> = new Set(
+  rulesFor("boardgame")
+    .filter((f) => LICHESS_CLOCK_FIELD_KEYS.includes(f.key))
+    .flatMap((f) => f.edits.map((path) => path.split(".")[0]!)),
+);
+const NO_KEYS: ReadonlySet<string> = new Set();
+
+/**
+ * Rebase ruling D1 (2026-10-23): on a division that plays online (chess, Online play = Lichess) the clock is the
+ * DIVISION's alone. The challenge is built from `divisions.config.clock` only (`guard.ts` `onlinePlayClock`), so a stage's
+ * own clock - or the clock family the picker writes beside it - would be an inert seam: saved, shown, never played.
+ * The keys a stage of THIS division may not set; none for any other division (over-the-board chess keeps its stage
+ * clock). The ONE answer both halves read: the stage save's allowlist refuses them (`refuseUnsettableKeys`,
+ * RULE_NOT_SETTABLE) and the stage editor does not draw them (`StageRuleFields`). Client-safe, so it restates the
+ * server's `divisionPlaysOnline` (server-only); stage-rules.test.ts sweeps the two against each other.
+ */
+export function divisionOnlyStageKeys(sportKey: string, divisionConfig: unknown): ReadonlySet<string> {
+  const onlinePlay = (divisionConfig as { onlinePlay?: unknown } | null | undefined)?.onlinePlay;
+  return sportKey === "boardgame" && onlinePlay === "lichess" ? LICHESS_CLOCK_CONFIG_KEYS : NO_KEYS;
+}
 
 /** The clock a save of these form values would leave in the config: what the fields build, else the stored clock.
  *  The fields' own builder decides ("Leave blank to skip a clock override entirely" — a blank time per side builds no

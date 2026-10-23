@@ -180,7 +180,7 @@ export async function putStageRules(
 
     if (input.rules !== undefined) {
       const rules = input.rules;
-      if (rules !== null) refuseUnsettableKeys(module_, stage.sport_key, stage.stage_kind, stage.variant_key, Object.keys(rules));
+      if (rules !== null) refuseUnsettableKeys(module_, stage.sport_key, stage.stage_kind, stage.variant_key, stage.division_config, Object.keys(rules));
 
       // The merge is computed here, on the JS side, from the rules read under the lock above, and written whole: every
       // stage writer takes that lock, so nothing moves in between.

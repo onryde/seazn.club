@@ -100,7 +100,7 @@ export function validatedStageConfig(
     }
   }
   const sent = isObj(config.rules) ? config.rules : {};
-  refuseUnsettableKeys(module, sportKey, kind, variant, Object.keys(sent));
+  refuseUnsettableKeys(module, sportKey, kind, variant, divisionConfig, Object.keys(sent));
   const out = withStageDefaults(module, kind, variant, config, carried);
   if (isObj(out.rules)) {
     const problem = stageRulesProblem(module, divisionConfig, out.rules, setsBestOf(sent));
