@@ -113,6 +113,7 @@ describe.skipIf(!HAS_DB)("POST /api/auth/magic-link writes the token and the out
       select id, kind, ref_type, ref_id, org_id, meta, recipient, subject, transactional, status, attempts, expires_at,
              last_error, provider_id, body_sealed is null as cleared
         from email_outbox where lower(recipient) = lower(${email}) order by created_at, id`;
+  const accountCount = async (email: string): Promise<number> => (await sql<{ n: number }[]>`select count(*)::int as n from users where email = ${email}`)[0]!.n;
   const userIdOf = async (email: string) => (await sql<{ id: string }[]>`select id from users where email = ${email}`)[0]!.id;
   const linksOf = (userId: string) =>
     sql<{ token: string; expires_at: Date; used: boolean }[]>`select token, expires_at, used from login_links where user_id = ${userId} order by created_at, id`;
@@ -129,12 +130,14 @@ describe.skipIf(!HAS_DB)("POST /api/auth/magic-link writes the token and the out
     return WEBHOOK(new NextRequest("http://localhost/api/webhooks/resend", { method: "POST", headers: { "svix-id": id, "svix-timestamp": String(ts), "svix-signature": sig }, body }));
   };
 
-  /** Every place a log line could go, as one string with Errors expanded (JSON.stringify renders an Error as {}). */
+  /** JSON with Errors expanded (JSON.stringify renders an Error as {}). */
+  const expanded = (v: unknown): string =>
+    JSON.stringify(v, (_k, x: unknown) => (x instanceof Error ? { name: x.name, message: x.message, stack: x.stack, cause: String(x.cause) } : x));
+  /** Every place a log line could go, as one string with Errors expanded. */
   const allLogged = (): string =>
-    JSON.stringify(
-      [logMock.error, logMock.warn, logMock.info, logMock.debug, ...(["log", "info", "warn", "error", "debug"] as const).map((m) => vi.mocked(console[m]))].map((m) => m.mock.calls),
-      (_k, v: unknown) => (v instanceof Error ? { name: v.name, message: v.message, stack: v.stack, cause: String(v.cause) } : v),
-    );
+    expanded([logMock.error, logMock.warn, logMock.info, logMock.debug, ...(["log", "info", "warn", "error", "debug"] as const).map((m) => vi.mocked(console[m]))].map((m) => m.mock.calls));
+  /** Everything handed to Sentry, Errors expanded. */
+  const allCaptured = (): string => expanded(sentryMock.captureException.mock.calls);
 
   /** What the global handler() answers for an unexpected failure that is not an Error: the app's own generic 500. The two
    *  outbox refusals must answer exactly this, so the expected body is taken from the handler, not typed here. */
@@ -373,7 +376,7 @@ describe.skipIf(!HAS_DB)("POST /api/auth/magic-link writes the token and the out
     expect(second.json.data).toBeUndefined();
     expect(second.raw, "a refused request exposes no link").not.toContain("login_url");
 
-    // The token written before the refusal rolled back WITH it, and so did the delete of the older link.
+    // Nothing was written: the older link was not deleted, no new token exists.
     const links = await linksOf(userId);
     expect(links.map((l) => l.token)).toEqual([firstLink!.token]);
     expect(links[0]!.token).toBe(tokenOf(first.json.data?.login_url));
@@ -384,13 +387,13 @@ describe.skipIf(!HAS_DB)("POST /api/auth/magic-link writes the token and the out
     expect(calls, "nothing was sent for the refused request").toHaveLength(0);
   });
 
-  it("committed <=> queued: for a first-time address a refused request leaves no token and no row", async () => {
+  it("a first-time address on a box that cannot queue leaves nothing at all: no account, no token, no row", async () => {
     vi.stubEnv("EMAIL_OUTBOX_KEK", undefined);
     const email = newEmail();
     const res = await post({ email });
     expect(res.status).toBe(500);
-    const userId = await userIdOf(email); // the account itself was made before the link, as it always was
-    expect(await linksOf(userId)).toHaveLength(0);
+    // The readiness check runs BEFORE the account is resolved (M5), so a refused request does not even make the user.
+    expect(await accountCount(email)).toBe(0);
     expect(await rowsFor(email)).toHaveLength(0);
     expect(calls).toHaveLength(0);
   });
@@ -398,8 +401,11 @@ describe.skipIf(!HAS_DB)("POST /api/auth/magic-link writes the token and the out
   // Concern 1 (controller ruling): the refusal is the operator's problem, so it is logged and captured with its real cause;
   // the caller, anonymous, gets the generic answer. The negative half (no variable name in the body) is vacuous without this
   // positive half (the cause went somewhere), so they sit together.
-  it("a refused request names its real cause to the operator (log + Sentry) and nothing to the caller", async () => {
-    vi.stubEnv("EMAIL_OUTBOX_KEK", undefined);
+  it("a refused request names its real cause to the operator (log + Sentry) and nothing to the caller, and no secret VALUE reaches any of them", async () => {
+    // A malformed-but-recognisable key: it is SET during the request (so a refusal that echoed process.env.EMAIL_OUTBOX_KEK would
+    // leak it) and it is unusable (so the request is refused). The Resend key is set too.
+    const BAD_KEK = `${KEK}zz`;
+    vi.stubEnv("EMAIL_OUTBOX_KEK", BAD_KEK);
     const email = newEmail();
     const res = await post({ email });
     expect(res.status).toBe(GENERIC.status);
@@ -412,8 +418,15 @@ describe.skipIf(!HAS_DB)("POST /api/auth/magic-link writes the token and the out
     expect((fields as { err: Error }).err.message).toMatch(/EMAIL_OUTBOX_KEK/);
     expect(sentryMock.captureException).toHaveBeenCalledTimes(1);
     expect(sentryMock.captureException.mock.calls[0]![0]).toBe((fields as { err: Error }).err);
-    // And no value of any secret anywhere in what was logged.
-    for (const secret of [KEK, API_KEY]) expect(allLogged()).not.toContain(secret);
+    // And no value of any secret anywhere in what was logged, captured, or answered. The positive halves are asserted above
+    // (the log line fired, Sentry was called), so each search runs over a non-empty haystack.
+    expect(allLogged().length).toBeGreaterThan(0);
+    expect(allCaptured().length).toBeGreaterThan(0);
+    for (const secret of [BAD_KEK, KEK, API_KEY]) {
+      expect(allLogged(), `log has ${secret.slice(0, 6)}`).not.toContain(secret);
+      expect(allCaptured(), `sentry has ${secret.slice(0, 6)}`).not.toContain(secret);
+      expect(res.raw, `body has ${secret.slice(0, 6)}`).not.toContain(secret);
+    }
   });
 
   it("the published sample key under NODE_ENV=production is refused the same way: generic 500 to the caller, the sample named to the operator, nothing queued", async () => {
@@ -430,8 +443,14 @@ describe.skipIf(!HAS_DB)("POST /api/auth/magic-link writes the token and the out
     const [fields] = logMock.error.mock.calls[0]!;
     expect((fields as { err: Error }).err.message).toMatch(/sample/i);
     expect(sentryMock.captureException).toHaveBeenCalledTimes(1);
+    // The sample VALUE is in the environment of this request, so these two searches are real: neither the log nor Sentry may hold it.
+    expect(allLogged()).toMatch(/sample/i);
+    expect(allCaptured()).toMatch(/sample/i);
+    expect(allLogged()).not.toContain(sample!);
+    expect(allLogged()).not.toContain(sample!.toUpperCase());
+    expect(allCaptured()).not.toContain(sample!);
     expect(await rowsFor(email)).toHaveLength(0);
-    expect(await linksOf(await userIdOf(email))).toHaveLength(0);
+    expect(await accountCount(email)).toBe(0);
     expect(calls).toHaveLength(0);
     // The control: the same key is accepted outside production, so the refusal above is the production gate and nothing else.
     vi.stubEnv("NODE_ENV", "test");
@@ -464,6 +483,67 @@ describe.skipIf(!HAS_DB)("POST /api/auth/magic-link writes the token and the out
     expect(sentryMock.captureException).toHaveBeenCalled();
   });
 
+  // M5 (review): the readiness check runs BEFORE the route branches on the account. Otherwise a misconfigured box would answer a
+  // live address with the generic 500 and a deleted-account address with the normal 200, and the difference would tell an
+  // anonymous caller which addresses hold an account.
+  const holders = async (): Promise<{ live: string; gone: string; fresh: string }> => {
+    const live = newEmail();
+    expect((await post({ email: live })).status, "premise: the live address is signed in on a configured box").toBe(200);
+    const gone = newEmail();
+    await sql`insert into users (email, display_name, email_verified, deleted_at) values (${gone}, 'Gone', false, now())`;
+    return { live, gone, fresh: newEmail() };
+  };
+
+  it("a box that cannot queue answers a live account, a deleted account and a first-time address IDENTICALLY (generic 500), and creates no account", async () => {
+    const { live, gone, fresh } = await holders();
+    calls.length = 0;
+    logMock.error.mockClear();
+    sentryMock.captureException.mockClear();
+    vi.stubEnv("EMAIL_OUTBOX_KEK", undefined); // the Resend key is still set
+    const answers: { status: number; raw: string }[] = [];
+    for (const email of [live, gone, fresh]) {
+      const r = await post({ email });
+      answers.push({ status: r.status, raw: r.raw });
+      expect(r.json, email).toEqual(GENERIC.body);
+    }
+    expect(answers).toHaveLength(3);
+    expect(new Set(answers.map((a) => `${a.status} ${a.raw}`)).size, "one answer for all three").toBe(1);
+    expect(answers[0]!.status).toBe(GENERIC.status);
+    expect(await accountCount(fresh), "a refused request does not make the account").toBe(0);
+    expect(await rowsFor(gone)).toHaveLength(0);
+    expect(calls, "nothing was sent").toHaveLength(0);
+    // Each refusal reached the operator: three log lines and three Sentry events, not a silent 200 for the deleted address.
+    expect(logMock.error).toHaveBeenCalledTimes(3);
+    expect(sentryMock.captureException).toHaveBeenCalledTimes(3);
+  });
+
+  it("the same three addresses on a configured box get one identical 200 in the production shape (the answer is unchanged by the readiness check)", async () => {
+    // Production shape: no dev link. (Outside production a dev server hands the link back for an address it queued, which a
+    // deleted account never gets; that is the existing dev-only capture, not something the readiness check decides.)
+    vi.stubEnv("NODE_ENV", "production");
+    const live = newEmail();
+    await post({ email: live });
+    const gone = newEmail();
+    await sql`insert into users (email, display_name, email_verified, deleted_at) values (${gone}, 'Gone', false, now())`;
+    const answers: { status: number; raw: string }[] = [];
+    for (const email of [live, gone, newEmail()]) {
+      const r = await post({ email });
+      answers.push({ status: r.status, raw: r.raw });
+      expect(r.json, email).toEqual({ ok: true, data: { message: MESSAGE } });
+    }
+    expect(answers).toHaveLength(3);
+    expect(new Set(answers.map((a) => `${a.status} ${a.raw}`)).size).toBe(1);
+    expect(answers[0]!.status).toBe(200);
+    expect(logMock.error).not.toHaveBeenCalled();
+  });
+
+  it("a malformed request still answers 400 on a box that cannot queue (the check is for valid requests, and says nothing about any address)", async () => {
+    vi.stubEnv("EMAIL_OUTBOX_KEK", undefined);
+    const res = await post({ email: newEmail(), unexpected: true });
+    expect(res.status).toBe(400);
+    expect(res.json.error).toBe("Invalid input");
+  });
+
   it("committed <=> queued, at the commit: a transaction that fails AFTER the row was written leaves no new row, does not replace the earlier one, and sends nothing", async () => {
     const email = newEmail();
     await post({ email });
@@ -490,6 +570,11 @@ describe.skipIf(!HAS_DB)("POST /api/auth/magic-link writes the token and the out
     }
 
     expect(res.status).toBe(500);
+    // The 500 is the injected fault and nothing else: handler() words an Error by its message, and Sentry got that same error. An
+    // unrelated early failure would leave the state assertions below true and fail here.
+    expect(res.json.error).toMatch(/refused at commit/);
+    expect(sentryMock.captureException).toHaveBeenCalledTimes(1);
+    expect((sentryMock.captureException.mock.calls[0]![0] as Error).message).toMatch(/refused at commit/);
     expect(res.raw).not.toContain("login_url");
     expect((await rowsFor(email)).map((r) => [r.id, r.status]), "no new row; the earlier row was not replaced").toEqual([[first!.id, "sent"]]);
     expect((await linksOf(userId)).map((l) => l.token), "the earlier link survived").toEqual([firstLink!.token]);

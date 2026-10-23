@@ -8,7 +8,7 @@ import { stampTermsAcceptance } from "@/lib/legal";
 import { magicLinkEmail } from "@/lib/email";
 import { issueLoginLink } from "@/lib/login-link";
 import { sql } from "@/lib/db";
-import { OutboxExpiryTooLongError, OutboxKeyUnavailableError, dispatchNow, enqueueEmail } from "@/server/email-outbox";
+import { OutboxExpiryTooLongError, OutboxKeyUnavailableError, dispatchNow, enqueueEmail, outboxKeyProblem } from "@/server/email-outbox";
 import { baseUrl } from "@/lib/oauth";
 import { mayExposeDevLink } from "@/lib/dev-links";
 import { z } from "zod";
@@ -20,6 +20,14 @@ import { headers } from "next/headers";
  *  (lib/http.ts). The route builds the same response itself for the two outbox refusals, whose own messages name an
  *  environment variable; the generic-500 cases in route-outbox.test.ts check the two stay equal. */
 const GENERIC_SERVER_ERROR = "Server error";
+
+/** The answer to a request the outbox refused. The operator gets the real cause, in the log and in Sentry; the caller, anonymous,
+ *  gets the generic answer and never a variable name or a bound. A returned `Response` passes through `handler()` untouched. */
+function refused(err: Error) {
+  log.error({ err }, "magic-link: the sign-in email could not be queued; the request was refused, nothing was kept");
+  Sentry.captureException(err);
+  return NextResponse.json({ ok: false, error: GENERIC_SERVER_ERROR }, { status: 500 });
+}
 
 // `next` is the post-login redirect (e.g. /join/{token} invite pages send it);
 // it is re-validated by safeNextPath before use.
@@ -40,6 +48,13 @@ export async function POST(req: Request) {
     const body = schema.parse(await req.json());
     const { email } = body;
     const next = safeNextPath(body.next);
+
+    // Is this box able to queue the email at all? Asked BEFORE the account is looked at, so that a box that cannot (no usable
+    // outbox key) answers every address the same way. Asked after, a live address would get the generic 500 and an address held
+    // by a deleted account the usual 200, and that difference would tell an anonymous caller which addresses have an account.
+    // It is also the same rule `enqueueEmail` applies, so nothing is written for a request that is going to be refused.
+    const keyProblem = outboxKeyProblem();
+    if (keyProblem) return refused(new OutboxKeyUnavailableError(keyProblem));
 
     const userId = await resolveOrCreateUser(email);
 
@@ -70,13 +85,8 @@ export async function POST(req: Request) {
           return { id, link };
         });
       } catch (err) {
-        // The outbox refused the row (see enqueueEmail). The operator needs the real cause, in the log and in Sentry; the
-        // person who asked for a link, anonymous, gets the generic answer and never a variable name or a bound.
-        if (err instanceof OutboxKeyUnavailableError || err instanceof OutboxExpiryTooLongError) {
-          log.error({ err }, "magic-link: the sign-in email could not be queued; the request was refused and rolled back");
-          Sentry.captureException(err);
-          return NextResponse.json({ ok: false, error: GENERIC_SERVER_ERROR }, { status: 500 });
-        }
+        // The outbox refused the row (see enqueueEmail): the expiry bound, or a key refusal the pre-check above did not foresee.
+        if (err instanceof OutboxKeyUnavailableError || err instanceof OutboxExpiryTooLongError) return refused(err);
         throw err;
       }
       const { id, link } = queued;

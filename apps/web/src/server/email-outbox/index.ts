@@ -12,7 +12,7 @@ export {
   type ClaimedRow,
 } from "./attempt";
 export { KIND_HOOKS, afterEndedBadly, type EndedRow, type KindHook } from "./hooks";
-export { OutboxKeyUnavailableError } from "./seal";
+export { OutboxKeyUnavailableError, outboxKeyProblem, type OutboxKeyProblem } from "./seal";
 export { classifyResult, nextAttemptAt, type Verdict } from "./classify";
 export { outboxRoleOk } from "./role-check";
 export { PROVIDER_EVENT_STATUS, applyProviderEvent, type ProviderEventResult, type ProviderEventType } from "./provider-events";
