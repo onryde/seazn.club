@@ -83,7 +83,26 @@ export const RULE_ERROR_SUPPORT_KEYS = {
   /** FORMAT_DOES_NOT_FIT_PLAY whose reason is the ENGINE's own sentence (no `fit_reason`): "The match so far doesn't fit
    *  that format: {reason}" - the frame is the reader's language, the reason the engine's (W2c Task 19). */
   formatDoesNotFitPlayBecause: "rules.err.formatDoesNotFitPlayBecause",
+  /** DIVISION_FORMAT_LOCKED when the stage's matches take no format of their own (final review M2): the sport declares
+   *  no match-scope key for that stage (`fixtureKeysFor` is empty, chess today), so the sentence does not send the
+   *  organiser to change individual matches. The emitter says which (`extra.match_edits`). */
+  divisionFormatLockedNoMatchEdits: "rules.err.divisionFormatLockedNoMatchEdits",
+  /** A refusal naming the stage it is about ("{stage}: {reason}"): RULE_NOT_SETTABLE under a division save carries the
+   *  stage's name (`extra.stage_name`, final review M1), and the server's English is the same composition. */
+  stageSays: "rules.err.stageSays",
 } as const satisfies Record<string, MessageKey>;
+
+/** Why a key is not settable, as its emitter names it (`extra.reason`, a code, never English), each with its reason in the
+ *  reader's language (final review M1). `online_division`: rebase ruling D1, the key belongs to an online (Lichess)
+ *  division (its clock and clock family), never to one of its stages. Another or no reason reads as the plain sentence. */
+export const RULE_NOT_SETTABLE_REASON_KEYS = {
+  online_division: "rules.err.notSettable.onlineDivision",
+} as const satisfies Record<string, MessageKey>;
+export type RuleNotSettableReason = keyof typeof RULE_NOT_SETTABLE_REASON_KEYS;
+const isNotSettableReason = (r: unknown): r is RuleNotSettableReason =>
+  typeof r === "string" && Object.hasOwn(RULE_NOT_SETTABLE_REASON_KEYS, r);
+/** The server's English for a not-settable reason: the en dictionary's, as every other refusal sentence. */
+export const notSettableReasonEn = (r: RuleNotSettableReason): string => enMsg(RULE_NOT_SETTABLE_REASON_KEYS[r]);
 
 /**
  * W2c Task 13 — the division points a stage PointsRule cannot express, by their config key (the engine's
@@ -160,6 +179,9 @@ export interface RuleErrorParams {
   keys?: readonly string[];
   /** FIXTURE_RULES_CHANGED: the corrected format as the public describer says it, in the sentence's language. */
   format?: string;
+  /** DIVISION_FORMAT_LOCKED: whether the stage's matches can take a format of their own (default true). False drops the
+   *  advice to change individual unstarted matches (final review M2). */
+  matchEdits?: boolean;
 }
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
@@ -171,10 +193,12 @@ function sentence(code: RuleErrorCode, p: RuleErrorParams, m: Msg): string {
       return m(FIXTURE_LOCK_KEYS[p.lock ?? "finished"]);
     case "FORMAT_DOES_NOT_FIT_PLAY":
       return p.reason ?? m(RULE_ERROR_KEYS.FORMAT_DOES_NOT_FIT_PLAY);
-    case "RULE_NOT_SETTABLE":
-      return p.reason
+    case "RULE_NOT_SETTABLE": {
+      const said = p.reason
         ? m(RULE_ERROR_SUPPORT_KEYS.ruleNotSettableBecause, { field: p.field ?? "", reason: p.reason })
         : m(RULE_ERROR_KEYS.RULE_NOT_SETTABLE, { field: p.field ?? "" });
+      return p.stage !== undefined ? m(RULE_ERROR_SUPPORT_KEYS.stageSays, { stage: p.stage, reason: said }) : said;
+    }
     case "POINTS_RULE_INEXPRESSIBLE": {
       // The keys by their labels; a key with no label (none today: swept) by its config key rather than dropped.
       const reason = p.keys !== undefined
@@ -185,9 +209,12 @@ function sentence(code: RuleErrorCode, p: RuleErrorParams, m: Msg): string {
     case "FIXTURE_HAS_OWN_FORMAT":
     case "FIXTURE_OWN_FORMAT_NO_LONGER_FITS":
       return m(RULE_ERROR_KEYS[code], { match: p.match ?? m(RULE_ERROR_SUPPORT_KEYS.thisMatch) });
+    case "DIVISION_FORMAT_LOCKED":
+      return p.matchEdits === false
+        ? m(RULE_ERROR_SUPPORT_KEYS.divisionFormatLockedNoMatchEdits, { stage: p.stage ?? "" })
+        : m(RULE_ERROR_KEYS[code], { stage: p.stage ?? "" });
     case "STAGE_FORMAT_LOCKED":
     case "DIVISION_TABLE_RULES_LOCKED":
-    case "DIVISION_FORMAT_LOCKED":
       return m(RULE_ERROR_KEYS[code], { stage: p.stage ?? "" });
     case "FIXTURE_RULES_CHANGED":
       return p.format !== undefined
@@ -203,8 +230,10 @@ const isCode = (code: string): code is RuleErrorCode => Object.hasOwn(RULE_ERROR
 
 /**
  * A rule-lock refusal in the reader's language, read off its code and the facts its emitter puts in `extra`:
- * `refused[0].stageName` (the division save), `stage_name` (the stage save), `fixture_no` (the match's number on the board), `reason` (why a match is
- * locked), `fit_reason` (which fit reason), `field`, `keys` (the points a stage rule cannot express). Null when it is not a rule-lock code, or when the sentence needs a
+ * `refused[0].stageName` (the division save), `stage_name` (the stage save; and the stage a division save's RULE_NOT_SETTABLE is
+ * about), `fixture_no` (the match's number on the board), `reason` (why a match is locked; why a key is not settable),
+ * `fit_reason` (which fit reason), `field`, `keys` (the points a stage rule cannot express), `match_edits` (whether a locked
+ * stage's matches take a format of their own). Null when it is not a rule-lock code, or when the sentence needs a
  * fact the refusal does not carry — and for an engine's own reason (no `fit_reason`), which this app cannot say better:
  * the caller then keeps its own copy.
  */
@@ -217,7 +246,7 @@ export function ruleRefusalText(code: string | undefined, extra: Readonly<Record
     case "DIVISION_FORMAT_LOCKED": {
       const first: unknown = Array.isArray(x.refused) ? x.refused[0] : undefined;
       const stage = typeof first === "object" && first !== null ? (first as { stageName?: unknown }).stageName : undefined;
-      return typeof stage === "string" ? sentence(code, { stage }, m) : null;
+      return typeof stage === "string" ? sentence(code, { stage, matchEdits: x.match_edits !== false }, m) : null;
     }
     case "FIXTURE_FORMAT_LOCKED":
       return sentence(code, { lock: isLockReason(x.reason) ? x.reason : "finished" }, m);
@@ -229,7 +258,17 @@ export function ruleRefusalText(code: string | undefined, extra: Readonly<Record
       return match === undefined ? fit : m(RULE_ERROR_SUPPORT_KEYS.matchSays, { match, reason: fit });
     }
     case "RULE_NOT_SETTABLE":
-      return typeof x.field === "string" ? sentence(code, { field: x.field }, m) : null;
+      return typeof x.field === "string"
+        ? sentence(
+            code,
+            {
+              field: x.field,
+              reason: isNotSettableReason(x.reason) ? m(RULE_NOT_SETTABLE_REASON_KEYS[x.reason]) : undefined,
+              stage: typeof x.stage_name === "string" ? x.stage_name : undefined,
+            },
+            m,
+          )
+        : null;
     case "POINTS_RULE_INEXPRESSIBLE": {
       // W2c Task 13: the stage PUT, the create door and the division save send the split keys. Only keys this app can
       // name: anything else is the server's to say (null: the caller keeps the message).

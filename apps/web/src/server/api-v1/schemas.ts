@@ -1545,9 +1545,11 @@ export const CloseExternalPlayFlagsOut = z.object({
  *  move, draw offer/answer, resignation or abort, forwarded by T10's `act`.
  *  The uci length bound is a cheap first gate only: the strict UCI check is
  *  T3's `assertUci` (M5), server-side, and a suffixless promotion is refused
- *  there with 400 INVALID_UCI. No takeback: Lichess's Board API has none. */
+ *  there with 400 INVALID_UCI. No takeback: Lichess's Board API has none.
+ *  `uci` carries a real move as its published example (final review M6): the generic example word, cut to the
+ *  5-character bound, published "examp". */
 export const RoomAct = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("move"), uci: z.string().min(4).max(5) }).strict(),
+  z.object({ kind: z.literal("move"), uci: z.string().min(4).max(5).meta({ examples: ["e2e4"] }) }).strict(),
   z.object({ kind: z.literal("resign") }).strict(),
   z.object({ kind: z.literal("draw"), accept: z.boolean() }).strict(),
   z.object({ kind: z.literal("abort") }).strict(),

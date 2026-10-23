@@ -4,7 +4,7 @@ description: Starting locks the setup; from then every score updates standings a
 order: 6
 ---
 
-When the draw is ready, press **Start**. Starting locks entrants. The stage structure was already locked once fixtures existed, and from the first scored match the rules that stage plays by lock too — from here the results are what change, not the setup ([why](/help/divisions/lifecycle)).
+When the draw is ready, press **Start**. Starting locks entrants. The stage structure was already locked once fixtures existed, and from the first scored match (or, in an online chess division, from the moment a round is opened) the rules that stage plays by lock too — from here the results are what change, not the setup ([why](/help/divisions/lifecycle)).
 
 ## Scoring a match
 

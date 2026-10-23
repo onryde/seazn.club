@@ -21,6 +21,7 @@ import {
   RULE_ERROR_KEYS,
   RULE_ERROR_STATUS,
   RULE_ERROR_SUPPORT_KEYS,
+  RULE_NOT_SETTABLE_REASON_KEYS,
   fitReasonOf,
   ruleErrorMessage,
   ruleRefusalText,
@@ -57,6 +58,7 @@ describe("every W2c refusal code has a key, in all four locales", () => {
       ...Object.values(FIXTURE_LOCK_KEYS),
       ...Object.values(RULE_ERROR_SUPPORT_KEYS),
       ...Object.values(POINTS_SPLIT_LABEL_KEYS),
+      ...Object.values(RULE_NOT_SETTABLE_REASON_KEYS),
     ]);
     let checked = 0;
     for (const key of keys)
@@ -89,6 +91,9 @@ describe("the server's English is the en dictionary", () => {
       ["STAGE_FORMAT_LOCKED", { stage: "Pool A" }, say(RULE_ERROR_KEYS.STAGE_FORMAT_LOCKED, { stage: "Pool A" })],
       ["DIVISION_TABLE_RULES_LOCKED", { stage: "Pool A" }, say(RULE_ERROR_KEYS.DIVISION_TABLE_RULES_LOCKED, { stage: "Pool A" })],
       ["DIVISION_FORMAT_LOCKED", { stage: "Pool A" }, say(RULE_ERROR_KEYS.DIVISION_FORMAT_LOCKED, { stage: "Pool A" })],
+      // Final review M2: no advice to change individual matches where a match takes no format of its own.
+      ["DIVISION_FORMAT_LOCKED", { stage: "Pool A", matchEdits: false }, say(RULE_ERROR_SUPPORT_KEYS.divisionFormatLockedNoMatchEdits, { stage: "Pool A" })],
+      ["DIVISION_FORMAT_LOCKED", { stage: "Pool A", matchEdits: true }, say(RULE_ERROR_KEYS.DIVISION_FORMAT_LOCKED, { stage: "Pool A" })],
       ["FIXTURE_FORMAT_LOCKED", {}, say(FIXTURE_LOCK_KEYS.finished)],
       ["FIXTURE_FORMAT_LOCKED", { lock: "decided" }, say(FIXTURE_LOCK_KEYS.decided)],
       ["FIXTURE_FORMAT_LOCKED", { lock: "cancelled" }, say(FIXTURE_LOCK_KEYS.cancelled)],
@@ -96,6 +101,8 @@ describe("the server's English is the en dictionary", () => {
       ["FORMAT_DOES_NOT_FIT_PLAY", { reason: FORMAT_FIT_REASONS.ends }, FORMAT_FIT_REASONS.ends],
       ["RULE_NOT_SETTABLE", { field: "bestOf" }, say(RULE_ERROR_KEYS.RULE_NOT_SETTABLE, { field: "bestOf" })],
       ["RULE_NOT_SETTABLE", { field: "bestOf", reason: "it is set per stage" }, say(RULE_ERROR_SUPPORT_KEYS.ruleNotSettableBecause, { field: "bestOf", reason: "it is set per stage" })],
+      // Final review M1: a refusal about one stage names it ("{stage}: {reason}"), as the division save's re-ask says it.
+      ["RULE_NOT_SETTABLE", { field: "clock", reason: say(RULE_NOT_SETTABLE_REASON_KEYS.online_division), stage: "Finals" }, say(RULE_ERROR_SUPPORT_KEYS.stageSays, { stage: "Finals", reason: say(RULE_ERROR_SUPPORT_KEYS.ruleNotSettableBecause, { field: "clock", reason: say(RULE_NOT_SETTABLE_REASON_KEYS.online_division) }) })],
       ["POINTS_RULE_INEXPRESSIBLE", { reason: "x" }, say(RULE_ERROR_KEYS.POINTS_RULE_INEXPRESSIBLE, { reason: "x" })],
       // W2c Task 13: the split keys are named by their labels, never by the raw config key.
       ["POINTS_RULE_INEXPRESSIBLE", { keys: ["otWin", "otLoss"] }, say(RULE_ERROR_KEYS.POINTS_RULE_INEXPRESSIBLE, { reason: say(RULE_ERROR_SUPPORT_KEYS.pointsSplit, { fields: [say(POINTS_SPLIT_LABEL_KEYS.otWin), say(POINTS_SPLIT_LABEL_KEYS.otLoss)].join(", ") }) })],
@@ -127,6 +134,9 @@ describe("ruleRefusalText — the client reads the code and its extra, in the re
       ["STAGE_FORMAT_LOCKED", { stage_name: "Pool A" }, sayEs(RULE_ERROR_KEYS.STAGE_FORMAT_LOCKED, { stage: "Pool A" })],
       ["DIVISION_TABLE_RULES_LOCKED", { refused: [{ field: "tiebreakers", code: "DIVISION_TABLE_RULES_LOCKED", stageId: "s", stageName: "Pool A" }] }, sayEs(RULE_ERROR_KEYS.DIVISION_TABLE_RULES_LOCKED, { stage: "Pool A" })],
       ["DIVISION_FORMAT_LOCKED", { refused: [{ field: "bestOf", code: "DIVISION_FORMAT_LOCKED", stageId: "s", stageName: "Finals" }] }, sayEs(RULE_ERROR_KEYS.DIVISION_FORMAT_LOCKED, { stage: "Finals" })],
+      // Final review M2: `match_edits: false` (the stage's matches take no format of their own) drops the advice.
+      ["DIVISION_FORMAT_LOCKED", { refused: [{ field: "clock", code: "DIVISION_FORMAT_LOCKED", stageId: "s", stageName: "Finals" }], match_edits: false }, sayEs(RULE_ERROR_SUPPORT_KEYS.divisionFormatLockedNoMatchEdits, { stage: "Finals" })],
+      ["DIVISION_FORMAT_LOCKED", { refused: [{ field: "bestOf", code: "DIVISION_FORMAT_LOCKED", stageId: "s", stageName: "Finals" }], match_edits: true }, sayEs(RULE_ERROR_KEYS.DIVISION_FORMAT_LOCKED, { stage: "Finals" })],
       ["FIXTURE_FORMAT_LOCKED", { fixture_id: "f", reason: "finished" }, sayEs(FIXTURE_LOCK_KEYS.finished)],
       ["FIXTURE_FORMAT_LOCKED", { fixture_id: "f", reason: "decided" }, sayEs(FIXTURE_LOCK_KEYS.decided)],
       ["FIXTURE_FORMAT_LOCKED", { fixture_id: "f", reason: "cancelled" }, sayEs(FIXTURE_LOCK_KEYS.cancelled)],
@@ -135,6 +145,12 @@ describe("ruleRefusalText — the client reads the code and its extra, in the re
       // The engine's own sentence (no fit reason): nothing this app can say better — the caller shows the message.
       ["FORMAT_DOES_NOT_FIT_PLAY", { fixture_id: "f" }, null],
       ["RULE_NOT_SETTABLE", { fixture_id: "f", field: "bestOf" }, sayEs(RULE_ERROR_KEYS.RULE_NOT_SETTABLE, { field: "bestOf" })],
+      // Final review M1: the online division's reason, by its code, in the reader's language; and the stage a division
+      // save's refusal is about. A reason code this app does not know reads as the plain sentence (never as raw text).
+      ["RULE_NOT_SETTABLE", { field: "clock", reason: "online_division" }, sayEs(RULE_ERROR_SUPPORT_KEYS.ruleNotSettableBecause, { field: "clock", reason: sayEs(RULE_NOT_SETTABLE_REASON_KEYS.online_division) })],
+      ["RULE_NOT_SETTABLE", { field: "clock", reason: "online_division", stage_id: "s", stage_name: "Finals" }, sayEs(RULE_ERROR_SUPPORT_KEYS.stageSays, { stage: "Finals", reason: sayEs(RULE_ERROR_SUPPORT_KEYS.ruleNotSettableBecause, { field: "clock", reason: sayEs(RULE_NOT_SETTABLE_REASON_KEYS.online_division) }) })],
+      ["RULE_NOT_SETTABLE", { field: "clock", stage_id: "s", stage_name: "Finals" }, sayEs(RULE_ERROR_SUPPORT_KEYS.stageSays, { stage: "Finals", reason: sayEs(RULE_ERROR_KEYS.RULE_NOT_SETTABLE, { field: "clock" }) })],
+      ["RULE_NOT_SETTABLE", { field: "clock", reason: "some_future_reason" }, sayEs(RULE_ERROR_KEYS.RULE_NOT_SETTABLE, { field: "clock" })],
       ["POINTS_RULE_INEXPRESSIBLE", {}, null],
       // W2c Task 13: its emitter sends the split keys; a key with no label is one this app cannot say (null: the message).
       ["POINTS_RULE_INEXPRESSIBLE", { keys: ["shootoutWin", "shootoutLoss"] }, sayEs(RULE_ERROR_KEYS.POINTS_RULE_INEXPRESSIBLE, { reason: sayEs(RULE_ERROR_SUPPORT_KEYS.pointsSplit, { fields: [sayEs(POINTS_SPLIT_LABEL_KEYS.shootoutWin), sayEs(POINTS_SPLIT_LABEL_KEYS.shootoutLoss)].join(", ") }) })],

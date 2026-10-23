@@ -20,7 +20,7 @@ import { stageScopedCfg } from "@/server/engine-db/stage-cfg";
 import { withoutNulls } from "@/lib/stage-decider-off";
 import { configIssuesOf } from "@/lib/config-issue-copy";
 import { HttpError } from "@/lib/errors";
-import { RULE_ERROR_STATUS, ruleErrorMessage } from "@/lib/rule-errors";
+import { RULE_ERROR_STATUS, notSettableReasonEn, ruleErrorMessage } from "@/lib/rule-errors";
 import { divisionOnlyStageKeys } from "@/lib/online-time-control";
 
 /**
@@ -62,7 +62,9 @@ export function refuseUnsettableKeys(
 }
 
 /** D1's half of the allowlist, on its own for a division save that keeps the variant (the full re-ask is the variant's,
- *  `refuseInvalidatedStageRules`): the first key sent that the division keeps for itself, by name. */
+ *  `refuseInvalidatedStageRules`): the first key sent that the division keeps for itself, by name. The refusal carries its
+ *  reason as a CODE (`extra.reason: "online_division"`, final review M1), which a client says in the reader's language
+ *  (`ruleRefusalText`); the message is the en dictionary's sentence for it. */
 function refuseDivisionOnlyKeys(sportKey: string, divisionConfig: unknown, sent: Iterable<string>): void {
   const kept = divisionOnlyStageKeys(sportKey, divisionConfig);
   if (kept.size === 0) return;
@@ -70,9 +72,9 @@ function refuseDivisionOnlyKeys(sportKey: string, divisionConfig: unknown, sent:
     if (kept.has(key))
       throw new HttpError(
         RULE_ERROR_STATUS.RULE_NOT_SETTABLE,
-        ruleErrorMessage("RULE_NOT_SETTABLE", { field: key, reason: "an online (Lichess) division plays its own clock in every stage" }),
+        ruleErrorMessage("RULE_NOT_SETTABLE", { field: key, reason: notSettableReasonEn("online_division") }),
         "RULE_NOT_SETTABLE",
-        { field: key },
+        { field: key, reason: "online_division" },
       );
   }
 }

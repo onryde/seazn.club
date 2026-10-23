@@ -5420,7 +5420,14 @@
                         },
                         "field": {
                           "type": "string",
-                          "description": "On RULE_NOT_SETTABLE (400): the stage's own rules key the new variant cannot carry"
+                          "description": "On RULE_NOT_SETTABLE (400): the stage's own rules key the new variant (or online play) cannot carry"
+                        },
+                        "reason": {
+                          "type": "string",
+                          "enum": [
+                            "online_division"
+                          ],
+                          "description": "On RULE_NOT_SETTABLE (400): why, as a code - `online_division` when the key (clock, clock family) is the division's own once it plays online (Lichess)"
                         },
                         "stage_id": {
                           "type": "string",
@@ -5684,6 +5691,10 @@
                             ],
                             "additionalProperties": false
                           }
+                        },
+                        "match_edits": {
+                          "type": "boolean",
+                          "description": "On DIVISION_FORMAT_LOCKED (409): whether the first refused stage's matches can take a format of their own (the sport declares a match-scope key for it); false = the message does not suggest changing individual matches"
                         },
                         "fixture_id": {
                           "type": "string",
@@ -25309,7 +25320,7 @@
     },
     "/api/v1/stages/{id}/rules": {
       "put": {
-        "summary": "Per-stage match-format override (design 2026-09-17; every sport since W2c) — Best-of-1 in the league/Swiss stage and Best-of-3 in the playoff of the same division, an extra-time length on a knockout. What a stage can set is the SPORT'S declaration for the stage's kind and variant, not a list kept here: a key the sport never declares is 400 UNKNOWN_RULE_KEY, a declared key this stage cannot set (a league-only key on a knockout, a knockout-only decider on a table stage) or any points key is 400 RULE_NOT_SETTABLE (`field` names it). Keys are the CONFIG keys, not the editor's form keys: tennis takes `set`, `game` and `tiebreak`, NOT `setType`, `noAd` or `tiebreakWinBy`. The body is a FRAGMENT that MERGES into the stage's stored rules: a key it omits is kept, a key it names is replaced, a null VALUE removes that key (\"inherit\" is key ABSENCE — a stored null would be copied over the division's value by the overlay), `false` switches OFF a decider the sport turns off with no value at all (ice-hockey `overtime` and `shootout`, the hockey `shootout`; football's `shootout` and cricket's `superOver` take `false` as themselves; anywhere else it is 422 CONFIG_INVALID), an empty list is a value (chess `tiebreakRungs: []`, held for the organiser), and `rules: null` or `{}` clears every key back to the division format. The merged `{division config + rules}` is validated through the sport module's own configSchema (422 CONFIG_INVALID) while only the merged rules are stored. A `bestOf` in the body is additionally refused 422 POINTS_MAP_INCOMPLETE when the division's `pointsMap` cannot answer every final set score that `bestOf` can reach — `pointsMap` is looked up by the exact \"W-L\" score (else \"*\", else it throws) and is NOT itself overridable per stage; the refusal names the missing scores. A save that would leave an unstarted match's OWN format (`PUT /fixtures/{id}/rules`) unable to fit the stage is 409 FIXTURE_OWN_FORMAT_NO_LONGER_FITS, naming the match (`fixture_id`, `fixture_no`, `field`) — never a silent drop; the same refusal comes from a division config save. Walkovers no event records are re-scored under the new format in the same transaction (409 FORMAT_DOES_NOT_FIT_PLAY if one cannot hold). The stage's own POINTS ride the same PUT (W2c ST-G8): the body is `{rules?, points?}`, at least one sent, each arm left as stored when omitted, any other key 400. `points` is the engine's PointsRule (`base` win/draw/loss, `bonuses`, a `forfeit` row with an optional walkover `awardScore`) written WHOLE to the stage's `config.points` — a second save replaces it — and `points: null` removes it, back to the division's points. Refused by name: a bracket stage (no table) 400 RULE_NOT_SETTABLE (`field` `points`); a division whose own points a stage rule cannot express (an overtime or shoot-out split, a tie or no-result, a set-score table paying more than one pair) 422 POINTS_RULE_INEXPRESSIBLE (`keys` names the split keys); a walkover `awardScore` on a sport whose table never reads it (the set sports, carrom, the board games) 400 RULE_NOT_SETTABLE (`field` `points.forfeit.awardScore`); a bonus reading a score the sport does not emit 422 CONFIG_INVALID; bonuses or a forfeit row without `standings.custom_points` 402 PAYMENT_REQUIRED (the base sentence is free). A decider at the body's TOP level (any whole decider a sport declares, e.g. `shootout`, `superOver`, `tiebreakRungs`) is 400 VALIDATION, naming the key (`field`) and where it goes (`rules.<key>`). Editable until the first fixture in THAT stage has a frozen config snapshot or a score event, then 409 STAGE_FORMAT_LOCKED — a monotonic pair, deliberately not `fixtures.status`, which moves backwards when a start is voided. The answer is the stage's `rules` and `points` as stored",
+        "summary": "Per-stage match-format override (design 2026-09-17; every sport since W2c) — Best-of-1 in the league/Swiss stage and Best-of-3 in the playoff of the same division, an extra-time length on a knockout. What a stage can set is the SPORT'S declaration for the stage's kind and variant, not a list kept here: a key the sport never declares is 400 UNKNOWN_RULE_KEY, a declared key this stage cannot set (a league-only key on a knockout, a knockout-only decider on a table stage) or any points key is 400 RULE_NOT_SETTABLE (`field` names it). On an online (Lichess) division the clock and its clock family (`clock`, `variant`) are the division's own, never a stage's: either key is 400 RULE_NOT_SETTABLE (`field`, `reason: online_division`), and the Lichess challenge plays the division's clock in every stage. Keys are the CONFIG keys, not the editor's form keys: tennis takes `set`, `game` and `tiebreak`, NOT `setType`, `noAd` or `tiebreakWinBy`. The body is a FRAGMENT that MERGES into the stage's stored rules: a key it omits is kept, a key it names is replaced, a null VALUE removes that key (\"inherit\" is key ABSENCE — a stored null would be copied over the division's value by the overlay), `false` switches OFF a decider the sport turns off with no value at all (ice-hockey `overtime` and `shootout`, the hockey `shootout`; football's `shootout` and cricket's `superOver` take `false` as themselves; anywhere else it is 422 CONFIG_INVALID), an empty list is a value (chess `tiebreakRungs: []`, held for the organiser), and `rules: null` or `{}` clears every key back to the division format. The merged `{division config + rules}` is validated through the sport module's own configSchema (422 CONFIG_INVALID) while only the merged rules are stored. A `bestOf` in the body is additionally refused 422 POINTS_MAP_INCOMPLETE when the division's `pointsMap` cannot answer every final set score that `bestOf` can reach — `pointsMap` is looked up by the exact \"W-L\" score (else \"*\", else it throws) and is NOT itself overridable per stage; the refusal names the missing scores. A save that would leave an unstarted match's OWN format (`PUT /fixtures/{id}/rules`) unable to fit the stage is 409 FIXTURE_OWN_FORMAT_NO_LONGER_FITS, naming the match (`fixture_id`, `fixture_no`, `field`) — never a silent drop; the same refusal comes from a division config save. Walkovers no event records are re-scored under the new format in the same transaction (409 FORMAT_DOES_NOT_FIT_PLAY if one cannot hold). The stage's own POINTS ride the same PUT (W2c ST-G8): the body is `{rules?, points?}`, at least one sent, each arm left as stored when omitted, any other key 400. `points` is the engine's PointsRule (`base` win/draw/loss, `bonuses`, a `forfeit` row with an optional walkover `awardScore`) written WHOLE to the stage's `config.points` — a second save replaces it — and `points: null` removes it, back to the division's points. Refused by name: a bracket stage (no table) 400 RULE_NOT_SETTABLE (`field` `points`); a division whose own points a stage rule cannot express (an overtime or shoot-out split, a tie or no-result, a set-score table paying more than one pair) 422 POINTS_RULE_INEXPRESSIBLE (`keys` names the split keys); a walkover `awardScore` on a sport whose table never reads it (the set sports, carrom, the board games) 400 RULE_NOT_SETTABLE (`field` `points.forfeit.awardScore`); a bonus reading a score the sport does not emit 422 CONFIG_INVALID; bonuses or a forfeit row without `standings.custom_points` 402 PAYMENT_REQUIRED (the base sentence is free). A decider at the body's TOP level (any whole decider a sport declares, e.g. `shootout`, `superOver`, `tiebreakRungs`) is 400 VALIDATION, naming the key (`field`) and where it goes (`rules.<key>`). Editable until the first fixture in THAT stage has a frozen config snapshot or a score event, then 409 STAGE_FORMAT_LOCKED — a monotonic pair, deliberately not `fixtures.status`, which moves backwards when a start is voided. The answer is the stage's `rules` and `points` as stored",
         "tags": [
           "stages"
         ],
@@ -55858,7 +55869,10 @@
                       "uci": {
                         "type": "string",
                         "minLength": 4,
-                        "maxLength": 5
+                        "maxLength": 5,
+                        "examples": [
+                          "e2e4"
+                        ]
                       }
                     },
                     "required": [
@@ -55914,7 +55928,7 @@
               },
               "example": {
                 "kind": "move",
-                "uci": "examp"
+                "uci": "e2e4"
               }
             }
           }

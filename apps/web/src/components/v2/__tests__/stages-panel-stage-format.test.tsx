@@ -30,7 +30,7 @@ import {
 } from "@/lib/match-rules";
 import { pointsTheOnlyGameIsPlayedTo } from "@/lib/__tests__/_single-game-target";
 import { badminton } from "@seazn/engine/sports/setbased";
-import { BRACKET_KINDS, type StageKind } from "@seazn/engine/core";
+import { BRACKET_KINDS, StageKind } from "@seazn/engine/core";
 import { stageDefaultsFor } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { decidersOffRules, mergedStageRules, stageRulesOverlay } from "@/lib/stage-decider-off";
@@ -224,7 +224,12 @@ describe("the row is offered for EVERY sport (W2c Task 17: the STAGE_RULES_SPORT
     const DIVISION_ONLY = new Set(["clock", "variant"]);
     let cells = 0;
     let clockBlocks = 0;
-    for (const kind of ["league", ...BRACKET_KINDS] as StageKind[]) {
+    // Final review M4: EVERY stage kind the engine declares (group, swiss and americano too), never a list typed here.
+    const KINDS = StageKind.options;
+    expect(KINDS, "premise: the table kinds beyond league are in the sweep").toEqual(expect.arrayContaining(["group", "swiss", "americano"]));
+    const kindsSeen = new Set<StageKind>();
+    for (const kind of KINDS) {
+      kindsSeen.add(kind);
       for (const variant of [null, ...Object.keys(chess.variants)]) {
         const all = blocks(kind, variant, overTheBoard);
         const online = blocks(kind, variant, lichess);
@@ -233,7 +238,8 @@ describe("the row is offered for EVERY sport (W2c Task 17: the STAGE_RULES_SPORT
         cells++;
       }
     }
-    expect(cells, "anti-vacuity: every kind and variant").toBe((1 + BRACKET_KINDS.size) * (1 + Object.keys(chess.variants).length));
+    expect(kindsSeen.size, "anti-vacuity: every stage kind").toBe(KINDS.length);
+    expect(cells, "anti-vacuity: every kind and variant").toBe(KINDS.length * (1 + Object.keys(chess.variants).length));
     expect(clockBlocks, "the positive pair: over the board the clock fields ARE drawn").toBeGreaterThan(0);
     expect(blocks("knockout", "classical", lichess), "a knockout keeps its rungs on Lichess").toEqual(["tiebreakRungs"]);
   });

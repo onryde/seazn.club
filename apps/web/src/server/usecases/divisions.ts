@@ -6,8 +6,8 @@ import type postgres from "postgres";
 import { sql, withTenant, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { assertWithinLimit, getLimit, requireFeature, passLockReason } from "@/lib/entitlements";
-import { EngineError } from "@seazn/engine/core";
-import { effectiveEntrantModel, type EntrantKind } from "@seazn/engine/sport";
+import { EngineError, type StageKind } from "@seazn/engine/core";
+import { effectiveEntrantModel, fixtureKeysFor, type EntrantKind } from "@seazn/engine/sport";
 import { resolveModule } from "@/server/engine-db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import {
@@ -1153,11 +1153,21 @@ export async function patchDivision(
       const tiebreakersApplied = tiebreakersChanged && !refusedFields.has("tiebreakers");
       if (refused.length > 0 && !otherColumn && !configApplied && !tiebreakersApplied) {
         const first = refused[0]!;
+        // Final review M2: the format-lock sentence sends the organiser to change individual unstarted matches - advice
+        // only a stage whose matches take a format of their own can follow. Read off the sport's declaration for that
+        // stage's kind and the division's variant (`fixtureKeysFor`: no match-scope key, chess today, means none), and
+        // said to a client as `match_edits`.
+        let matchEdits: boolean | undefined;
+        if (first.code === "DIVISION_FORMAT_LOCKED") {
+          const [lockedStage] = await tx<{ kind: StageKind }[]>`select kind from stages where id = ${first.stageId}`;
+          const module_ = sportModule ?? resolveModule(current.sport_key, current.module_version);
+          matchEdits = fixtureKeysFor(module_, lockedStage?.kind ?? null, current.variant_key).length > 0;
+        }
         throw new HttpError(
           RULE_ERROR_STATUS[first.code],
-          ruleErrorMessage(first.code, { stage: first.stageName, field: first.field }),
+          ruleErrorMessage(first.code, { stage: first.stageName, field: first.field, matchEdits }),
           first.code,
-          { refused },
+          matchEdits === undefined ? { refused } : { refused, match_edits: matchEdits },
         );
       }
 
