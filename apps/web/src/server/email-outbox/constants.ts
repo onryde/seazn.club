@@ -47,3 +47,30 @@ export const ENDED_BADLY_STATUSES: readonly OutboxStatus[] = [
   "expired",
   "dead",
 ];
+
+// ---------------------------------------------------------------------------
+// The send schedule (spec "Goals", "Sending"). Typed here once; every bound that depends on it is derived in
+// classify.test.ts, so a change to a number moves the bound with it.
+// ---------------------------------------------------------------------------
+
+/** Wait after attempt n before attempt n + 1: 1 min, 5 min, 15 min, 1 h, 6 h (spec "Goals"). */
+export const RETRY_DELAYS_MS: readonly number[] = [1, 5, 15, 60, 360].map((minutes) => minutes * 60_000);
+
+/** Attempts in all: the first, plus one per delay. After the last the row is `dead`. */
+export const MAX_ATTEMPTS = RETRY_DELAYS_MS.length + 1;
+
+/** Abort one request to Resend after this long (reported as a network failure, so the row retries). */
+export const SEND_TIMEOUT_MS = 15_000;
+
+/** How long a claimed row stays `sending` before the worker may take it again (a crashed attempt becomes due). */
+export const LEASE_MS = 2 * 60_000;
+
+/** Resend honours an Idempotency-Key for 24 h; a retry past that could mail twice. */
+export const RESEND_IDEMPOTENCY_TTL_MS = 24 * 3_600_000;
+
+/** The slowest worker cadence (stg, owner ruling 2026-10-20): a retry is picked up at most this late. */
+export const STG_TICK_MS = 5 * 60_000;
+
+/** The Resend `Idempotency-Key` for a row: the same row always sends under the same key, so an overlapping retry and a
+ *  slow first attempt produce one email (spec "Goals", "Never twice"). */
+export const idempotencyKey = (id: string): string => `email-outbox/${id}`;
