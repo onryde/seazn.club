@@ -10,9 +10,9 @@ import "server-only";
 //     at once), and when the answer is no it logs an error and SKIPS the tick, reporting `failed: 1` so the cron Worker's
 //     failure counter hears about it;
 //  1. ends `expired` the rows that are `queued`, or `sending` with a lapsed lease, whose `expires_at` has passed (the body
-//     goes with them: a late sign-in link is worse than none);
+//     goes with them: a late sign-in link is worse than none), the longest-expired first, at most ENDING_BATCH_SIZE;
 //  2. ends `dead` ('attempts_exhausted') the `sending` rows with a lapsed lease that have spent MAX_ATTEMPTS: the last
-//     attempt crashed and there is none left to reclaim it with;
+//     attempt crashed and there is none left to reclaim it with. Same bound, longest-lapsed first;
 //  3. claims one due row at a time, up to WORKER_BATCH_SIZE, and attempts it (`attemptClaimed`, the same function
 //     `dispatchNow` uses, so the rules live in one place). A claim takes a `queued` row whose time has come OR a `sending`
 //     row whose lease has lapsed (R9: a 2xx whose recording write failed leaves exactly such a row, and re-sending it under
@@ -22,9 +22,11 @@ import "server-only";
 //     (Resend: 2 requests a second), and stops claiming when the budget (TICK_BUDGET_MS) is spent, when the batch is full,
 //     or at the first 429;
 //  5. counts, as `deferred`, the rows that were due right now and were not taken;
-//  6. runs the kind hooks (`afterEndedBadly`) for every row steps 1-3 ended, plus (R9) every badly-ended row whose effect a
-//     kind says was never applied (`findUnappliedEndings`): a process that dies between a terminal write and its hook
-//     leaves such a row, and the next tick finishes the job.
+//  6. runs the kind hooks (`afterEndedBadly`), one row at a time, for every row steps 1-3 ended, plus (R9) every
+//     badly-ended row whose effect a kind says was never applied (`findUnappliedEndings`): a process that dies between a
+//     terminal write and its hook leaves such a row, and the next tick finishes the job. The hooks and the re-drive count
+//     against the SAME budget (M2): once TICK_BUDGET_MS is spent no further hook runs and the finder is not asked, and what
+//     was skipped is exactly what the finder reports next tick (a hook is idempotent and recomputes from state).
 //
 // Overlap is safe: skip locked keeps two ticks off the same row, and the lease keeps the second off a row the first is
 // still sending. A row that is claimed but whose attempt throws in OUR code (the post-send write failed) is left `sending`
@@ -32,7 +34,16 @@ import "server-only";
 import { sql } from "@/lib/db";
 import { log } from "@/server/logger";
 import { attemptClaimed, endedRowFor, errFields, toClaimedRow, type AttemptOutcome, type ClaimedRecord } from "./attempt";
-import { LEASE_MS, MAX_ATTEMPTS, MIN_SEND_INTERVAL_MS, REDRIVE_LIMIT, TICK_BUDGET_MS, WORKER_BATCH_SIZE, type OutboxKind } from "./constants";
+import {
+  ENDING_BATCH_SIZE,
+  LEASE_MS,
+  MAX_ATTEMPTS,
+  MIN_SEND_INTERVAL_MS,
+  REDRIVE_LIMIT,
+  TICK_BUDGET_MS,
+  WORKER_BATCH_SIZE,
+  type OutboxKind,
+} from "./constants";
 import { afterEndedBadly, findUnappliedEndings, type EndedRow } from "./hooks";
 import { outboxRoleOk } from "./role-check";
 
@@ -86,22 +97,40 @@ const endedAs =
   (status: "expired" | "dead") =>
   (r: EndedRecord): EndedRow => ({ id: r.id, kind: r.kind, refType: r.ref_type, refId: r.ref_id, status, meta: r.meta });
 
-/** Step 1. `queued` rows, and `sending` rows whose lease lapsed, past `expires_at`: ended unsent, body and lease gone. */
+/** Step 1. `queued` rows, and `sending` rows whose lease lapsed, past `expires_at`: ended unsent, body and lease gone. At
+ *  most ENDING_BATCH_SIZE, the longest-expired first; `skip locked` leaves a row another tick is ending to that tick. */
 function expirePastDue(onlyIds: readonly string[] | undefined): Promise<EndedRecord[]> {
   return sql<EndedRecord[]>`
-    update email_outbox
+    with picked as (
+      select id from email_outbox
+       where (status = 'queued' or (status = 'sending' and lease_until < now())) and expires_at <= now() ${scopeOf(onlyIds)}
+       order by expires_at, id
+       limit ${ENDING_BATCH_SIZE}
+       for update skip locked
+    )
+    update email_outbox o
        set status = 'expired', body_sealed = null, lease_until = null, status_at = now()
-     where (status = 'queued' or (status = 'sending' and lease_until < now())) and expires_at <= now() ${scopeOf(onlyIds)}
-    returning id, kind, ref_type, ref_id, meta`;
+      from picked
+     where o.id = picked.id
+    returning o.id, o.kind, o.ref_type, o.ref_id, o.meta`;
 }
 
-/** Step 2. A lapsed `sending` row with every attempt spent: nothing is left to reclaim it with. */
+/** Step 2. A lapsed `sending` row with every attempt spent: nothing is left to reclaim it with. Bounded like step 1, the
+ *  longest-lapsed lease first. */
 function endExhausted(onlyIds: readonly string[] | undefined): Promise<EndedRecord[]> {
   return sql<EndedRecord[]>`
-    update email_outbox
+    with picked as (
+      select id from email_outbox
+       where status = 'sending' and lease_until < now() and attempts >= ${MAX_ATTEMPTS} ${scopeOf(onlyIds)}
+       order by lease_until, id
+       limit ${ENDING_BATCH_SIZE}
+       for update skip locked
+    )
+    update email_outbox o
        set status = 'dead', body_sealed = null, lease_until = null, last_error = 'attempts_exhausted', status_at = now()
-     where status = 'sending' and lease_until < now() and attempts >= ${MAX_ATTEMPTS} ${scopeOf(onlyIds)}
-    returning id, kind, ref_type, ref_id, meta`;
+      from picked
+     where o.id = picked.id
+    returning o.id, o.kind, o.ref_type, o.ref_id, o.meta`;
 }
 
 /**
@@ -228,16 +257,32 @@ export async function runOutboxTick(opts: RunOutboxTickOptions = {}): Promise<Ou
   }
   if (!drained) report.deferred = await countDue(opts.onlyIds);
 
-  // R9: rows a previous tick ended whose hook never ran or never finished, found from each kind's own state. A row this
-  // tick ended is also found by its kind's query (its hook has not run yet), so drive each id once.
-  const seen = new Set(ended.map((r) => r.id));
-  for (const row of await findUnappliedEndings(REDRIVE_LIMIT)) {
-    if (!seen.has(row.id)) {
-      seen.add(row.id);
-      ended.push(row);
+  // Step 6. Hooks, one row at a time, against the tick's budget (M2): a row this tick ended first, then (R9) the rows a
+  // previous tick ended whose hook never ran or never finished, found from each kind's own state. A row this tick ended is
+  // also found by its kind's query (its hook has not run yet), so each id is driven once. A hook skipped for the budget is
+  // not lost: it is still unapplied, so the finder reports it next tick.
+  const overBudget = (): boolean => nowMs() - startedAt >= budgetMs;
+  const handled = new Set<string>();
+  let skippedHooks = 0;
+  const drive = async (rows: readonly EndedRow[]): Promise<void> => {
+    for (const row of rows) {
+      if (handled.has(row.id)) continue;
+      handled.add(row.id);
+      if (overBudget()) {
+        skippedHooks++;
+        continue;
+      }
+      await afterEndedBadly([row]);
     }
+  };
+  await drive(ended);
+  if (!overBudget()) await drive(await findUnappliedEndings(REDRIVE_LIMIT));
+  if (skippedHooks > 0) {
+    log.warn(
+      { skippedHooks },
+      "email outbox: the tick budget was spent before every kind hook ran; the skipped hooks are re-driven by the next tick",
+    );
   }
-  await afterEndedBadly(ended);
 
   if (report.claimed + report.expired + report.dead + report.deferred > 0) log.info({ ...report }, "email outbox: tick");
   return report;

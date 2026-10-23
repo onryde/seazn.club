@@ -112,5 +112,10 @@ export const MIN_SEND_INTERVAL_MS = RESEND_MIN_INTERVAL_MS + PACING_HEADROOM_MS;
  *  more request, `SEND_TIMEOUT_MS`) under the cron Worker's 60 s per-job timeout, which route.test.ts derives. */
 export const TICK_BUDGET_MS = 40_000;
 
+/** Rows each of the worker's two ending statements (expire, exhaust) ends at most in one tick (M2, Task 4 review). Every
+ *  ended row costs a kind hook afterwards, so an unbounded statement after an outage would turn one tick into minutes of
+ *  hooks. The oldest go first and the rest drain over the next ticks. */
+export const ENDING_BATCH_SIZE = 100;
+
 /** Badly-ended rows a tick re-drives at most (a kind's `findUnapplied`): a backlog drains over several ticks. */
 export const REDRIVE_LIMIT = 50;

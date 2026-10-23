@@ -31,6 +31,7 @@ vi.mock("@/server/email-outbox/transport", () => ({ deliver: deliverMock }));
 import { attemptClaimed, dispatchNow, toClaimedRow, type ClaimedRecord, type ClaimedRow } from "../attempt";
 import {
   ENDED_BADLY_STATUSES,
+  ENDING_BATCH_SIZE,
   LEASE_MS,
   MAX_ATTEMPTS,
   MIN_SEND_INTERVAL_MS,
@@ -818,6 +819,92 @@ describe.skipIf(!HAS_DB)("the email outbox retry worker (DB)", () => {
 
   // ---- hooks ------------------------------------------------------------------------------------------------------------
 
+  describe("M2 (Task 4 review): the two ending statements are bounded", () => {
+    const LATE = 3;
+    const ended = (ids: string[]) => sql<{ id: string; status: string }[]>`select id, status from email_outbox where id = any(${ids}::uuid[])`;
+
+    it("expiry: at most ENDING_BATCH_SIZE rows a tick, the longest-expired first; the rest drain on later ticks and every hook runs once", async () => {
+      // The LATE rows are created first, so heap order would favour them: only an ORDER BY on expires_at leaves them for last.
+      const late: string[] = [];
+      for (let i = 0; i < LATE; i++) late.push(await queue());
+      const early: string[] = [];
+      for (let i = 0; i < ENDING_BATCH_SIZE; i++) early.push(await queue());
+      await sql`update email_outbox set expires_at = now() - interval '1 minute' where id = any(${late}::uuid[])`;
+      await sql`update email_outbox set expires_at = now() - interval '1 hour' where id = any(${early}::uuid[])`;
+      const all = [...late, ...early];
+
+      expect(await tick(all)).toEqual({ ...ZERO, expired: ENDING_BATCH_SIZE });
+      expect(hookSpy).toHaveBeenCalledTimes(ENDING_BATCH_SIZE);
+      expect((await ended(late)).map((r) => r.status), "the latest-expired rows wait").toEqual(Array(LATE).fill("queued"));
+      expect((await ended(early)).every((r) => r.status === "expired")).toBe(true);
+
+      expect(await tick(all)).toEqual({ ...ZERO, expired: LATE });
+      expect(hookSpy).toHaveBeenCalledTimes(ENDING_BATCH_SIZE + LATE);
+      expect(await tick(all), "drained").toEqual(ZERO);
+      expect(new Set(hookSpy.mock.calls.map((c) => (c[0] as EndedRow).id)).size, "each row's hook ran once").toBe(all.length);
+    });
+
+    it("exhaustion: the same bound and order on the dead statement (the longest-lapsed lease first)", async () => {
+      const late: string[] = [];
+      for (let i = 0; i < LATE; i++) late.push(await queue());
+      const early: string[] = [];
+      for (let i = 0; i < ENDING_BATCH_SIZE; i++) early.push(await queue());
+      for (const id of [...late, ...early]) await strand(id, MAX_ATTEMPTS);
+      await sql`update email_outbox set lease_until = now() - interval '1 minute' where id = any(${late}::uuid[])`;
+      await sql`update email_outbox set lease_until = now() - interval '1 hour' where id = any(${early}::uuid[])`;
+      const all = [...late, ...early];
+
+      expect(await tick(all)).toEqual({ ...ZERO, dead: ENDING_BATCH_SIZE });
+      expect(hookSpy).toHaveBeenCalledTimes(ENDING_BATCH_SIZE);
+      expect((await ended(late)).map((r) => r.status)).toEqual(Array(LATE).fill("sending"));
+      expect(await tick(all)).toEqual({ ...ZERO, dead: LATE });
+      expect(await tick(all), "drained").toEqual(ZERO);
+      expect(hookSpy).toHaveBeenCalledTimes(ENDING_BATCH_SIZE + LATE);
+      const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from email_outbox where id = any(${all}::uuid[]) and last_error = 'attempts_exhausted'`;
+      expect(n).toBe(all.length);
+    });
+
+    it("skip locked: a row another transaction holds is passed over by BOTH ending statements, not waited for", async () => {
+      const heldExpiring = await queue();
+      const heldExhausted = await queue();
+      const freeExpiring = await queue();
+      const freeExhausted = await queue();
+      await sql`update email_outbox set expires_at = now() - interval '1 second' where id in (${heldExpiring}, ${freeExpiring})`;
+      for (const id of [heldExhausted, freeExhausted]) await strand(id, MAX_ATTEMPTS);
+      const all = [heldExpiring, heldExhausted, freeExpiring, freeExhausted];
+      await sql.begin(async (tx) => {
+        await tx`select id from email_outbox where id in (${heldExpiring}, ${heldExhausted}) for update`;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const blocked = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("the tick blocked on a row another transaction holds")), 4_000);
+        });
+        try {
+          expect(await Promise.race([tick(all), blocked])).toEqual({ ...ZERO, expired: 1, dead: 1 });
+        } finally {
+          clearTimeout(timer);
+        }
+      });
+      expect((await get(heldExpiring)).status, "the held expiring row was left for later").toBe("queued");
+      expect((await get(heldExhausted)).status, "the held exhausted row was left for later").toBe("sending");
+      expect(await tick(all), "released: the next tick ends both").toEqual({ ...ZERO, expired: 1, dead: 1 });
+    });
+
+    it("the two statements have a bound each: ENDING_BATCH_SIZE + 1 expired and as many dead in one tick end ENDING_BATCH_SIZE of each", async () => {
+      const expiring: string[] = [];
+      const exhausted: string[] = [];
+      for (let i = 0; i <= ENDING_BATCH_SIZE; i++) {
+        expiring.push(await queue());
+        exhausted.push(await queue());
+      }
+      await sql`update email_outbox set expires_at = now() - interval '1 second' where id = any(${expiring}::uuid[])`;
+      for (const id of exhausted) await strand(id, MAX_ATTEMPTS);
+      const all = [...expiring, ...exhausted];
+      expect(await tick(all)).toEqual({ ...ZERO, expired: ENDING_BATCH_SIZE, dead: ENDING_BATCH_SIZE });
+      expect(await tick(all)).toEqual({ ...ZERO, expired: 1, dead: 1 });
+      expect(await tick(all)).toEqual(ZERO);
+    });
+  });
+
   describe("hooks", () => {
     it("run for every row the tick ended - expired, exhausted and an attempt that went dead - once each, with the row's identity and meta", async () => {
       const mkSeat = (stamp: string) => ({ kind: "chess_invite" as const, refType: "fixture_seat", refId: `${RUN}-${stamp}`, meta: { stamp } });
@@ -977,6 +1064,61 @@ describe.skipIf(!HAS_DB)("the email outbox retry worker (DB)", () => {
         const report = await tick([id, live]);
         expect(report).toEqual({ ...ZERO, claimed: 1, sent: 1, expired: 1 });
         expect(logMock.error).toHaveBeenCalled();
+      });
+
+      it("M2: hooks count against the tick budget; the ones skipped are re-driven by the next tick, each hook exactly once", async () => {
+        const HOOK_MS = 1_000;
+        const N = 5;
+        const SPENT_AFTER = 3;
+        const ids: string[] = [];
+        for (let i = 0; i < N; i++) {
+          const id = await seat();
+          ids.push(id);
+          mine.push(id);
+          await expireNow(id);
+        }
+        const ran: string[] = [];
+        KIND_HOOKS.chess_invite = {
+          onEndedBadly: async (row) => {
+            clock += HOOK_MS; // a hook costs time on the tick's clock
+            ran.push(row.id);
+            applied.add(row.id);
+          },
+          findUnapplied: finder,
+        };
+        // The budget is spent after SPENT_AFTER hooks: the rows are ended (cheap, bounded) but only three hooks run.
+        const report = await tick(ids, { budgetMs: SPENT_AFTER * HOOK_MS });
+        expect(report).toEqual({ ...ZERO, expired: N });
+        expect(ran, "hooks run until the budget is reached").toHaveLength(SPENT_AFTER);
+        expect(finder, "budget spent: the re-drive is not even asked").not.toHaveBeenCalled();
+        expect(logMock.warn, "the skipped hooks are said out loud, once").toHaveBeenCalledTimes(1);
+        expect(logMock.warn.mock.calls[0]![0]).toMatchObject({ skippedHooks: N - SPENT_AFTER });
+
+        // The next tick ends nothing new; the finder (the kind's own state) hands back the two unapplied rows.
+        expect(await tick(ids, { budgetMs: SPENT_AFTER * HOOK_MS })).toEqual(ZERO);
+        expect(finder).toHaveBeenCalledTimes(1);
+        expect(ran).toHaveLength(N);
+        expect(new Set(ran).size, "every row's hook ran exactly once").toBe(N);
+        expect(logMock.warn, "nothing skipped the second time").toHaveBeenCalledTimes(1);
+
+        await tick(ids);
+        expect(ran, "applied: quiet").toHaveLength(N);
+      });
+
+      it("M2: a tick whose budget is already spent still ends rows (a bounded statement) but runs no hook and asks no finder; the next tick does both", async () => {
+        const id = await seat();
+        mine.push(id);
+        await expireNow(id);
+        expect(await tick([id], { budgetMs: 0 })).toEqual({ ...ZERO, expired: 1 });
+        expect((await get(id)).status).toBe("expired");
+        expect(hookSpy).not.toHaveBeenCalled();
+        expect(finder).not.toHaveBeenCalled();
+        expect(logMock.warn).toHaveBeenCalledTimes(1);
+        expect(logMock.warn.mock.calls[0]![0]).toMatchObject({ skippedHooks: 1 });
+
+        expect(await tick([id])).toEqual(ZERO);
+        expect(hookSpy, "re-driven on the next tick").toHaveBeenCalledTimes(1);
+        expect(finder).toHaveBeenCalledTimes(1);
       });
 
       it("a row that did NOT end badly is never re-driven: the finder is only asked about endings, and a live row is untouched", async () => {
