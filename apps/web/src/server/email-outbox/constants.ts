@@ -95,8 +95,18 @@ export const idempotencyKey = (id: string): string => `email-outbox/${id}`;
  *  left over is reached by the next tick. */
 export const WORKER_BATCH_SIZE = 20;
 
-/** Resend allows 2 requests a second: at least this long between one attempt and the next claim. */
-export const MIN_SEND_INTERVAL_MS = 500;
+/** Resend's rate limit: 2 requests a second. */
+export const RESEND_REQUESTS_PER_SECOND = 2;
+
+/** The shortest gap between two requests that stays inside that limit. */
+export const RESEND_MIN_INTERVAL_MS = 1000 / RESEND_REQUESTS_PER_SECOND;
+
+/** Added to Resend's floor so the pacing is never AT the limit: a timer that fires a few ms early, a request that starts
+ *  late, or a clock step cannot push two requests inside one 500 ms window (M1, Task 4 review). */
+export const PACING_HEADROOM_MS = 100;
+
+/** At least this long between the start of one attempt and the next one: Resend's floor plus headroom (600 ms). */
+export const MIN_SEND_INTERVAL_MS = RESEND_MIN_INTERVAL_MS + PACING_HEADROOM_MS;
 
 /** A tick stops claiming once it has run this long: under prod's 60 s cadence, and (with one more pacing wait and one
  *  more request, `SEND_TIMEOUT_MS`) under the cron Worker's 60 s per-job timeout, which route.test.ts derives. */

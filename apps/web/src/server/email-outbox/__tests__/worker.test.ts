@@ -35,8 +35,11 @@ import {
   MAX_ATTEMPTS,
   MIN_SEND_INTERVAL_MS,
   OUTBOX_KINDS,
+  PACING_HEADROOM_MS,
   REDRIVE_LIMIT,
   RESEND_IDEMPOTENCY_TTL_MS,
+  RESEND_MIN_INTERVAL_MS,
+  RESEND_REQUESTS_PER_SECOND,
   RETRY_DELAYS_MS,
   SEND_TIMEOUT_MS,
   STG_TICK_MS,
@@ -137,8 +140,19 @@ describe("the schedule the worker keeps (no database)", () => {
       expect(Number.isInteger(n) && n > 0, name).toBe(true);
     }
     expect((WORKER_BATCH_SIZE - 1) * MIN_SEND_INTERVAL_MS).toBeLessThan(TICK_BUDGET_MS);
-    // Resend's limit is 2 requests a second.
-    expect(1000 / MIN_SEND_INTERVAL_MS).toBeLessThanOrEqual(2);
+    // Resend's limit is 2 requests a second; the pacing is STRICTLY under it (see the headroom test below).
+    expect(1000 / MIN_SEND_INTERVAL_MS).toBeLessThan(RESEND_REQUESTS_PER_SECOND);
+  });
+
+  it("M1 (Task 4 review): the pacing is Resend's own floor PLUS headroom, so a timer that fires early cannot breach the limit", () => {
+    // Resend's floor between two requests, from its rate (2 a second), and a headroom that is a named, positive number.
+    expect(RESEND_MIN_INTERVAL_MS).toBe(1000 / RESEND_REQUESTS_PER_SECOND);
+    expect(PACING_HEADROOM_MS).toBeGreaterThan(0);
+    expect(MIN_SEND_INTERVAL_MS).toBe(RESEND_MIN_INTERVAL_MS + PACING_HEADROOM_MS);
+    // Strictly slower than the provider allows: at the pacing, requests per second are under the limit.
+    expect(1000 / MIN_SEND_INTERVAL_MS).toBeLessThan(RESEND_REQUESTS_PER_SECOND);
+    // The reviewer's ruling (M1): 600 ms. A pinned ruling, not a value read back from the code under test.
+    expect(MIN_SEND_INTERVAL_MS).toBe(600);
   });
 });
 
