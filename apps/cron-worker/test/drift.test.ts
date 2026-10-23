@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import { describe, expect, it } from "vitest";
-import { JOBS, triggersOf } from "../src/schedule";
+import { JOBS, MINUTE_CRON, STREAM_TICK_CRON, triggersOf } from "../src/schedule";
 
 const REPO = join(__dirname, "../../..");
 const WEB_API = join(REPO, "apps/web/src/app/api");
@@ -71,7 +71,7 @@ describe("R3 failure counters ↔ the usecases' return types", () => {
         checked++;
       }
     }
-    expect(checked, "counters checked").toBe(9);   // T7b: + stream-tick's data.failed; I-1: + external-play's two
+    expect(checked, "counters checked").toBe(10);   // T7b: + stream-tick's data.failed; I-1: + external-play's two; outbox: + data.failed
   });
 
   it("the scan reads CODE, not prose: a field named only in a block or line comment is not declared; the same field in a type is", () => {
@@ -91,7 +91,17 @@ describe("wrangler.json ↔ schedule drift guard", () => {
   const cfg = JSON.parse(readFileSync(join(__dirname, "../wrangler.json"), "utf8"));
 
   it.each(["stg", "prod"])("%s registers exactly the triggers the table uses (R4)", (env) => {
-    expect([...cfg.env[env].triggers.crons].sort()).toEqual(triggersOf().sort());
+    expect([...cfg.env[env].triggers.crons].sort()).toEqual(triggersOf(env).sort());
+  });
+
+  // Owner ruling 2026-10-20: prod's fast trigger is the minute one and it REPLACES */5 (2 triggers per env, 4 of the Free
+  // plan's 5); stg keeps */5 and adds nothing. wrangler.json is replaced whole on deploy, so no window fires either twice.
+  it("prod registers the minute trigger and no */5; stg registers */5 and no minute trigger", () => {
+    expect(cfg.env.prod.triggers.crons).toContain(MINUTE_CRON);
+    expect(cfg.env.prod.triggers.crons).not.toContain(STREAM_TICK_CRON);
+    expect(cfg.env.stg.triggers.crons).toContain(STREAM_TICK_CRON);
+    expect(cfg.env.stg.triggers.crons).not.toContain(MINUTE_CRON);
+    for (const env of ["stg", "prod"]) expect(cfg.env[env].triggers.crons.length, `${env} trigger count`).toBe(2);
   });
 
   // Owner 2026-10-01: ACTIVE is "true" by default in both envs, and stays the kill switch ("false" runs no job).

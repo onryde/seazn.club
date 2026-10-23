@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
 import type { Env } from "../src/run";
-import { TRIGGER_CRON } from "../src/schedule";
+import { FAST_TRIGGER, FIVE_MINUTES, TRIGGER_CRON } from "../src/schedule";
 
 // The Worker entry is the seam between Cloudflare (controller.cron / scheduledTime) and runDue.
 // A pure runDue test cannot see it, so this drives the real default export.
@@ -49,6 +49,35 @@ describe("worker.scheduled", () => {
       "/api/funnel/remind",
     ]);
     expect(net.lines.filter((l) => l.event === "job").map((l) => l.scheduledTime)).toEqual(Array(3).fill("2026-09-29T14:17:00.000Z"));
+  });
+
+  it("the env decides the fast trigger: stg's */5 slot runs the three fast rows; prod's minute trigger runs the outbox every minute and the 5-minute jobs only on a multiple of five", async () => {
+    const prodEnv: Env = { ...env, ENV_NAME: "prod", BASE_URL: "https://seazn.club" };
+    const HOUR = Date.parse("2026-09-28T08:00:00Z");
+    const FAST = ["/api/cron/stream-tick", "/api/cron/external-play", "/api/cron/email-outbox"];
+
+    const stg = stubNetwork(0);
+    await worker.scheduled!(controller(FAST_TRIGGER.stg, HOUR + FIVE_MINUTES * 60_000), env);
+    expect(stg.done, "stg").toEqual(FAST);
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+
+    const prodFive = stubNetwork(0);
+    await worker.scheduled!(controller(FAST_TRIGGER.prod, HOUR + FIVE_MINUTES * 60_000), prodEnv);
+    expect(prodFive.done, "prod, a multiple of five").toEqual(FAST);
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+
+    const prodOther = stubNetwork(0);
+    await worker.scheduled!(controller(FAST_TRIGGER.prod, HOUR + (FIVE_MINUTES + 1) * 60_000), prodEnv);
+    expect(prodOther.done, "prod, any other minute").toEqual(["/api/cron/email-outbox"]);
+    // The pair: a trigger the env does not use runs nothing.
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    const wrong = stubNetwork(0);
+    await worker.scheduled!(controller(FAST_TRIGGER.stg, HOUR), prodEnv);
+    expect(wrong.done).toEqual([]);
+    expect(wrong.lines).toEqual([expect.objectContaining({ event: "unknown-trigger", cron: FAST_TRIGGER.stg, env: "prod" })]);
   });
 
   it("an unknown trigger is refused by name and calls nothing", async () => {

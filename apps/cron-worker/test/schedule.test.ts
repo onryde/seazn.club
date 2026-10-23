@@ -1,17 +1,38 @@
-import { describe, expect, it } from "vitest";
-import { JOBS, STREAM_TICK_CRON, TRIGGER_CRON, dueJobs, firstSlotOfHour, triggersOf, type Job } from "../src/schedule";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  FAST_TRIGGER,
+  FIVE_MINUTES,
+  JOBS,
+  MINUTE_CRON,
+  STREAM_TICK_CRON,
+  TRIGGER_CRON,
+  dueJobs,
+  firstSlotOfHour,
+  triggerFor,
+  triggersOf,
+  type EnvName,
+  type Job,
+} from "../src/schedule";
 
 // Expected values come from the spec's table (§4) and the 2026-10-01 rulings
 // (§13), never from JOBS itself.
 const at = (iso: string) => new Date(iso);
-const ids = (d: Date, cron = TRIGGER_CRON, jobs: readonly Job[] = JOBS) => dueJobs(d, cron, jobs).map((j) => j.id);
+/** The environments the Worker is deployed to (wrangler.json's `env` keys), typed from the ruling, never read from JOBS. */
+const ENVS: readonly EnvName[] = ["stg", "prod"];
+const ids = (d: Date, cron = TRIGGER_CRON, env: string = "prod", jobs: readonly Job[] = JOBS) =>
+  dueJobs(d, cron, env, jobs).map((j) => j.id);
 const HOURLY = ["registrations", "billing-events", "funnel-remind"];
 /** Capture QR v2 §6.11 (W22): the stream-tick trigger, every 5 minutes. Typed from the spec, never read from JOBS. */
 const EVERY_5 = "*/5 * * * *";
+/** The 2026-10-20 owner ruling: prod's fast trigger is the minute one (the email outbox's worker runs every minute there). */
+const EVERY_MINUTE = "* * * * *";
 /** Chess in-page board design §4: "The 5-minute cron stays what it is … but it is NOT optional" — the external-play
- *  sweep (T+20 no-show, mint retry, meeting teardown, reconcile, camera evidence). Typed from the spec, never read from
- *  JOBS. The `*\/5` rows, in table order. */
-const EVERY_5_ROWS = ["stream-tick", "external-play"];
+ *  sweep (T+20 no-show, mint retry, meeting teardown, reconcile, camera evidence). The email outbox's worker
+ *  (owner ruling 2026-10-20) rides the same one fast trigger per env. Typed from the specs, never read from JOBS. The
+ *  fast-trigger rows, in table order. */
+const FAST_ROWS = ["stream-tick", "external-play", "email-outbox"];
+/** The two rows that are the 5-minute jobs: on prod they hang off the minute trigger and run on every fifth minute. */
+const FIVE_MINUTE_JOBS = ["stream-tick", "external-play"];
 /** A well-formed trigger no row names. */
 const UNKNOWN = "*/7 * * * *";
 
@@ -62,26 +83,43 @@ describe("dueJobs on the hourly trigger", () => {
 
 describe("dueJobs is keyed on the firing trigger (R4)", () => {
   it("a trigger no row names selects nothing", () => {
-    expect(ids(at("2026-09-28T08:05:00Z"), UNKNOWN)).toEqual([]);
-    expect(ids(at("2026-09-28T08:17:00Z"), "")).toEqual([]);
+    for (const env of ENVS) {
+      expect(ids(at("2026-09-28T08:05:00Z"), UNKNOWN, env), env).toEqual([]);
+      expect(ids(at("2026-09-28T08:17:00Z"), "", env), env).toEqual([]);
+    }
   });
 
-  it("the stream-tick row is in the table exactly once, on the spec's */5 trigger (W22)", () => {
+  it("the fast trigger is one per env: stg keeps the spec's */5, prod's is the minute trigger that REPLACES it (owner ruling 2026-10-20)", () => {
     expect(STREAM_TICK_CRON).toBe(EVERY_5);
+    expect(MINUTE_CRON).toBe(EVERY_MINUTE);
+    expect(FAST_TRIGGER).toEqual({ stg: EVERY_5, prod: EVERY_MINUTE });
+    expect(Object.keys(FAST_TRIGGER).sort()).toEqual([...ENVS].sort());
+    expect(FIVE_MINUTES).toBe(5);
+  });
+
+  it("the stream-tick row is in the table exactly once, on the env's fast trigger, due on every fifth minute (W22)", () => {
     expect(JOBS.filter((j) => j.id === "stream-tick")).toEqual([
-      { id: "stream-tick", path: "/api/cron/stream-tick", trigger: EVERY_5, due: { kind: "every" }, retry: false, manual: true, failureCounts: ["data.failed"] },
+      {
+        id: "stream-tick",
+        path: "/api/cron/stream-tick",
+        trigger: FAST_TRIGGER,
+        due: { kind: "minuteMod", every: FIVE_MINUTES },
+        retry: false,
+        manual: true,
+        failureCounts: ["data.failed"],
+      },
     ]);
   });
 
-  it("the external-play row is in the table exactly once, on the spec's */5 trigger (chess in-page design §4)", () => {
+  it("the external-play row is in the table exactly once, on the env's fast trigger, due on every fifth minute (chess in-page design §4)", () => {
     expect(JOBS.filter((j) => j.id === "external-play")).toEqual([
       // Never retried: the next firing, 5 minutes later, IS the retry, and the sweep's pass lock answers an overlapping
       // re-send with `skipped`. Final review I-1: a failed fixture and a skipped pass are both failures to the monitor.
       {
         id: "external-play",
         path: "/api/cron/external-play",
-        trigger: EVERY_5,
-        due: { kind: "every" },
+        trigger: FAST_TRIGGER,
+        due: { kind: "minuteMod", every: FIVE_MINUTES },
         retry: false,
         manual: true,
         failureCounts: ["data.failed", "data.skipped"],
@@ -89,13 +127,190 @@ describe("dueJobs is keyed on the firing trigger (R4)", () => {
     ]);
   });
 
+  it("the email-outbox row is in the table exactly once, on the env's fast trigger, due on EVERY firing, never retried (spec 'The retry worker')", () => {
+    expect(JOBS.filter((j) => j.id === "email-outbox")).toEqual([
+      // Never retried: the next firing IS the retry, and skip-locked claims plus the lease make an overlap safe.
+      {
+        id: "email-outbox",
+        path: "/api/cron/email-outbox",
+        trigger: FAST_TRIGGER,
+        due: { kind: "every" },
+        retry: false,
+        manual: true,
+        failureCounts: ["data.failed"],
+      },
+    ]);
+  });
+
   it("a second trigger runs ONLY its own rows: never news-digest or an hourly row, even at Monday 08:05", () => {
-    expect(ids(at("2026-09-28T08:05:00Z"), EVERY_5)).toEqual(EVERY_5_ROWS);
+    expect(ids(at("2026-09-28T08:05:00Z"), FAST_TRIGGER.stg, "stg")).toEqual(FAST_ROWS);
+    expect(ids(at("2026-09-28T08:05:00Z"), FAST_TRIGGER.prod, "prod")).toEqual(FAST_ROWS);
     expect(ids(at("2026-09-28T08:17:00Z"), TRIGGER_CRON)).toEqual([...HOURLY, "news-digest"]);
   });
 
-  it("triggersOf lists each distinct trigger once: the hourly one and stream-tick's (spec §6.11: 4 of the account's 5 once both envs deploy)", () => {
-    expect(triggersOf()).toEqual(["17 * * * *", EVERY_5]);
+  it("each env answers only to its OWN fast trigger: prod ignores stg's */5 and stg ignores the minute trigger", () => {
+    expect(ids(at("2026-09-28T08:05:00Z"), EVERY_5, "prod")).toEqual([]);
+    expect(ids(at("2026-09-28T08:05:00Z"), EVERY_MINUTE, "stg")).toEqual([]);
+  });
+
+  it("on prod's minute trigger the 5-minute jobs run on minutes divisible by 5 and the outbox on every minute", () => {
+    let checked = 0;
+    for (let m = 0; m < 60; m++) {
+      const want = m % FIVE_MINUTES === 0 ? FAST_ROWS : ["email-outbox"];
+      expect(ids(new Date(Date.UTC(2026, 8, 28, 8, m)), MINUTE_CRON, "prod"), `:${m}`).toEqual(want);
+      checked++;
+    }
+    expect(checked).toBe(60);
+  });
+
+  describe("keyed on the SCHEDULED minute, never the wall clock", () => {
+    afterEach(() => vi.useRealTimers());
+
+    it("scheduled :05 delivered at :06 runs the 5-minute jobs; scheduled :06 delivered at :10 does not", () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(at("2026-09-28T08:06:00Z"));
+      expect(ids(at("2026-09-28T08:05:00Z"), MINUTE_CRON, "prod")).toEqual(FAST_ROWS);
+      vi.setSystemTime(at("2026-09-28T08:10:00Z"));
+      expect(ids(at("2026-09-28T08:06:00Z"), MINUTE_CRON, "prod")).toEqual(["email-outbox"]);
+      // Anti-vacuity: the fake clock is the one the code would have read.
+      expect(new Date().getUTCMinutes()).toBe(10);
+    });
+  });
+
+  it("a minuteMod row whose period is not a whole number of minutes in 1..59 is refused by name, never silently never-due", () => {
+    let refused = 0;
+    for (const every of [0, -5, 2.5, Number.NaN, 60]) {
+      const bad: Job = { ...JOBS.find((j) => j.id === "stream-tick")!, trigger: MINUTE_CRON, due: { kind: "minuteMod", every } };
+      expect(() => dueJobs(at("2026-09-28T08:05:00Z"), MINUTE_CRON, "prod", [bad]), String(every)).toThrow(/minuteMod/);
+      refused++;
+    }
+    expect(refused).toBe(5);
+  });
+
+  it("triggersOf lists each distinct trigger once: stg the hourly and */5, prod the hourly and the minute one (2 per env: 4 of the account's 5)", () => {
+    expect(triggersOf("stg")).toEqual([TRIGGER_CRON, EVERY_5]);
+    expect(triggersOf("prod")).toEqual([TRIGGER_CRON, EVERY_MINUTE]);
+  });
+
+  it("prod's triggers are exactly the hourly and the minute one: the */5 entry is gone, not doubled", () => {
+    expect(triggersOf("prod").sort()).toEqual([TRIGGER_CRON, MINUTE_CRON].sort());
+    expect(triggersOf("prod")).not.toContain(STREAM_TICK_CRON);
+  });
+
+  it("the trigger count is unchanged: 2 per env", () => {
+    let checked = 0;
+    for (const env of ENVS) {
+      expect(triggersOf(env).length, env).toBe(2);
+      checked++;
+    }
+    expect(checked).toBe(ENVS.length);
+  });
+
+  it("triggersOf refuses an env a per-env row does not name, by name", () => {
+    expect(() => triggersOf("qa")).toThrow('triggerFor: no trigger for env "qa" on job stream-tick');
+  });
+});
+
+describe("triggerFor", () => {
+  const row = (id: string) => JOBS.find((j) => j.id === id)!;
+
+  it("a per-env row resolves to its env's trigger", () => {
+    for (const id of ["stream-tick", "external-play", "email-outbox"]) {
+      expect(triggerFor(row(id), "stg"), `${id} stg`).toBe(EVERY_5);
+      expect(triggerFor(row(id), "prod"), `${id} prod`).toBe(EVERY_MINUTE);
+    }
+  });
+
+  it("a plain-string row is the same trigger in every env, including one it has never heard of", () => {
+    expect(triggerFor(row("registrations"), "stg")).toBe(TRIGGER_CRON);
+    expect(triggerFor(row("registrations"), "prod")).toBe(TRIGGER_CRON);
+    expect(triggerFor(row("registrations"), "qa")).toBe(TRIGGER_CRON);
+  });
+
+  it("refuses an unknown env by name, naming the job", () => {
+    expect(() => triggerFor(row("email-outbox"), "qa")).toThrow('triggerFor: no trigger for env "qa" on job email-outbox');
+    expect(() => triggerFor(row("stream-tick"), "")).toThrow('triggerFor: no trigger for env "" on job stream-tick');
+  });
+
+  it("an env spelled like an Object.prototype member is unknown, not inherited", () => {
+    let refused = 0;
+    for (const env of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
+      expect(() => triggerFor(row("email-outbox"), env), env).toThrow(/triggerFor: no trigger for env/);
+      refused++;
+    }
+    expect(refused).toBe(4);
+  });
+
+  it("every per-env row names exactly the deployed envs (a third env, or a missing one, is a table error)", () => {
+    const perEnv = JOBS.filter((j) => typeof j.trigger !== "string");
+    expect(perEnv.map((j) => j.id), "per-env rows checked").toEqual(FAST_ROWS);
+    for (const j of perEnv) expect(Object.keys(j.trigger).sort(), j.id).toEqual([...ENVS].sort());
+  });
+});
+
+/** A just-big-enough crontab matcher for the three shapes the table uses (`M * * * *`, `* * * * *`, `*\/N * * * *`);
+ *  anything else is refused BY NAME, so a new trigger shape cannot be silently counted as zero firings. */
+function firesAt(cron: string, minute: number): boolean {
+  if (cron === "* * * * *") return true;
+  const every = /^\*\/(\d+) \* \* \* \*$/.exec(cron);
+  if (every) return minute % Number(every[1]) === 0;
+  const fixed = /^(\d+) \* \* \* \*$/.exec(cron);
+  if (fixed) return minute === Number(fixed[1]);
+  throw new Error(`firesAt: cannot match trigger ${JSON.stringify(cron)}`);
+}
+/** Firings per hour of a trigger, in closed form (so the tally below is checked against arithmetic, not against itself). */
+const firingsPerHour = (cron: string): number => {
+  if (cron === "* * * * *") return 60;
+  const every = /^\*\/(\d+) \* \* \* \*$/.exec(cron);
+  if (every) return 60 / Number(every[1]);
+  throw new Error(`firingsPerHour: cannot count trigger ${JSON.stringify(cron)}`);
+};
+
+describe("a simulated hour: how many times each job actually runs (derived from the constants)", () => {
+  // 08:00 UTC on a Tuesday: no daily or weekly row is due, so only the every-firing and fast rows count.
+  const HOUR_START = Date.parse("2026-09-29T08:00:00Z");
+  /** job id -> firings over minutes 0..59: every trigger of the env fires at each scheduled minute it matches. */
+  function tally(env: EnvName): Record<string, number> {
+    const counts: Record<string, number> = {};
+    for (let m = 0; m < 60; m++) {
+      const scheduled = new Date(HOUR_START + m * 60_000);
+      for (const cron of triggersOf(env)) {
+        if (!firesAt(cron, m)) continue;
+        for (const id of ids(scheduled, cron, env)) counts[id] = (counts[id] ?? 0) + 1;
+      }
+    }
+    return counts;
+  }
+
+  it("the matcher understands the table's shapes and refuses any other by name (anti-vacuity for the tally)", () => {
+    expect(firesAt("* * * * *", 7)).toBe(true);
+    expect(firesAt("*/5 * * * *", 10)).toBe(true);
+    expect(firesAt("*/5 * * * *", 11)).toBe(false);
+    expect(firesAt("17 * * * *", 17)).toBe(true);
+    expect(firesAt("17 * * * *", 18)).toBe(false);
+    expect(() => firesAt("0 9 * * 1", 0)).toThrow(/firesAt/);
+    expect(() => firesAt("*/5 9 * * *", 0)).toThrow(/firesAt/);
+  });
+
+  it("prod runs the 5-minute jobs 12 times and the outbox 60; stg runs both 12", () => {
+    const prod = tally("prod");
+    const stg = tally("stg");
+    const fiveMin = 60 / FIVE_MINUTES; // 12, from the constant
+    const stgTick = firingsPerHour(STREAM_TICK_CRON); // 12, from the constant
+    const minute = firingsPerHour(MINUTE_CRON); // 60, from the constant
+    for (const id of FIVE_MINUTE_JOBS) {
+      expect(prod[id], `prod ${id}`).toBe(fiveMin);
+      expect(stg[id], `stg ${id}`).toBe(fiveMin);
+    }
+    expect(prod["email-outbox"], "prod email-outbox").toBe(minute);
+    expect(stg["email-outbox"], "stg email-outbox").toBe(stgTick);
+    // The hourly rows are untouched by any of this: once an hour on both envs.
+    for (const id of HOURLY) {
+      expect(prod[id], `prod ${id}`).toBe(1);
+      expect(stg[id], `stg ${id}`).toBe(1);
+    }
+    expect(Object.keys(prod).length, "prod jobs tallied").toBeGreaterThanOrEqual(3);
+    expect(Object.keys(stg).length, "stg jobs tallied").toBe(Object.keys(prod).length);
   });
 });
 
@@ -105,13 +320,14 @@ describe("JOBS table", () => {
     expect(new Set(JOBS.map((j) => j.path)).size).toBe(JOBS.length);
   });
 
-  it("retry is off for exactly news-digest (P3/D7), relay-sweep (R1), stream-tick and external-play (each one's next firing is the retry); every job may be run by hand (R1, R2)", () => {
-    expect(JOBS.filter((j) => !j.retry).map((j) => j.id)).toEqual(["relay-sweep", "news-digest", "stream-tick", "external-play"]);
+  it("retry is off for exactly news-digest (P3/D7), relay-sweep (R1), stream-tick, external-play and email-outbox (each one's next firing is the retry); every job may be run by hand (R1, R2)", () => {
+    expect(JOBS.filter((j) => !j.retry).map((j) => j.id)).toEqual(["relay-sweep", "news-digest", "stream-tick", "external-play", "email-outbox"]);
     expect(JOBS.filter((j) => !j.manual)).toEqual([]);
   });
 
   it("every daily or weekly row hangs off the hourly trigger (on a faster one its hour test would pass every tick)", () => {
-    const timed = JOBS.filter((j) => j.due.kind !== "every");
+    // `minuteMod` is not a timed-of-day row: it is the slower of two jobs sharing a FAST trigger (pinned by the simulated hour).
+    const timed = JOBS.filter((j) => j.due.kind === "daily" || j.due.kind === "weekly");
     expect(timed.map((j) => j.id), "rows checked").toEqual([
       "ai-previews",
       "relay-sweep",
@@ -137,18 +353,34 @@ describe("JOBS table", () => {
       // Final review I-1: SweepReport.failed (fixtures whose action threw) and .skipped (1 when another pass held the
       // lock). `deferred` is NOT a failure (the pass budget ran out; the next firing reaches the rest).
       "external-play": ["data.failed", "data.skipped"],
+      // The outbox worker's OutboxTickReport.failed — rows whose attempt threw in our own code, or a tick that could not
+      // run (role check). `deferred` is NOT a failure (the next minute reaches those rows).
+      "email-outbox": ["data.failed"],
     });
   });
 });
 
 describe("firstSlotOfHour (R2 option S: one Sentry event per job per UTC hour)", () => {
-  it("every trigger the table uses is one it can judge (anti-vacuity: at least the two triggers)", () => {
+  it("every trigger either env uses is one it can judge (anti-vacuity: the hourly, */5 and the minute trigger)", () => {
     let checked = 0;
-    for (const t of triggersOf()) {
-      expect(() => firstSlotOfHour(t, at("2026-09-28T08:00:00Z")), t).not.toThrow();
-      checked++;
+    for (const env of ENVS) {
+      for (const t of triggersOf(env)) {
+        expect(() => firstSlotOfHour(t, at("2026-09-28T08:00:00Z")), `${env} ${t}`).not.toThrow();
+        checked++;
+      }
     }
-    expect(checked).toBeGreaterThanOrEqual(2);
+    expect(new Set(ENVS.flatMap((e) => triggersOf(e))).size, "distinct triggers").toBeGreaterThanOrEqual(3);
+    expect(checked).toBe(ENVS.length * 2);
+  });
+
+  it("every minute: only the :00 slot is the hour's first, so a job on the minute trigger raises at most one event an hour", () => {
+    const truths: number[] = [];
+    for (let m = 0; m < 60; m++) if (firstSlotOfHour(MINUTE_CRON, new Date(Date.UTC(2026, 8, 28, 8, m, 30)))) truths.push(m);
+    expect(truths).toEqual([0]);
+    // The slot, not the wall clock, decides: a late :00 invocation is handed :00; one scheduled :01 is never first.
+    expect(firstSlotOfHour(MINUTE_CRON, at("2026-09-28T09:00:00Z"))).toBe(true);
+    expect(firstSlotOfHour(MINUTE_CRON, at("2026-09-28T09:01:00Z"))).toBe(false);
+    expect(firstSlotOfHour(MINUTE_CRON, at("2026-09-28T09:59:59Z"))).toBe(false);
   });
 
   it("the hourly trigger fires once an hour, so every firing is its hour's first", () => {

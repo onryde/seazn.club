@@ -1,5 +1,5 @@
 import { callJob, userAgent, type CallDeps, type CallOutcome } from "./call";
-import { JOBS, TRIGGER_CRON, dueJobs, firstSlotOfHour, triggersOf, type Job } from "./schedule";
+import { JOBS, TRIGGER_CRON, dueJobs, firstSlotOfHour, triggerFor, triggersOf, type Job } from "./schedule";
 import { captureJobFailure, parseDsn } from "./sentry";
 
 export interface Env {
@@ -58,7 +58,7 @@ export async function runJobs(
   const results: JobResult[] = [];
   for (const job of jobs) {
     const result: JobResult = { job: job.id, ...(await callJob(job, target, deps, deadline)) };
-    if (result.status !== "ok" && ctx.run === "scheduled" && !firstSlotOfHour(job.trigger, scheduledTime)) {
+    if (result.status !== "ok" && ctx.run === "scheduled" && !firstSlotOfHour(triggerFor(job, env.ENV_NAME), scheduledTime)) {
       result.sentryThrottled = true;
     } else if (dsn && result.status !== "ok") {
       result.sentryDelivered = await captureJobFailure(deps.fetch, dsn, {
@@ -96,7 +96,7 @@ export async function runDue(
 ): Promise<JobResult[]> {
   // R4: a trigger no row names is config drift (a dashboard-added cron, or
   // wrangler.json ahead of the table). Refuse it BY NAME and never guess.
-  if (!triggersOf(jobs).includes(cron)) {
+  if (!triggersOf(env.ENV_NAME, jobs).includes(cron)) {
     deps.log({ event: "unknown-trigger", level: "error", env: env.ENV_NAME, cron, scheduledTime: scheduledTime.toISOString() });
     return [];
   }
@@ -107,7 +107,7 @@ export async function runDue(
     if (cron === TRIGGER_CRON) await probe(scheduledTime, env, deps);
     return [];
   }
-  return runJobs(dueJobs(scheduledTime, cron, jobs), scheduledTime, env, deps, { run: "scheduled", cron });
+  return runJobs(dueJobs(scheduledTime, cron, env.ENV_NAME, jobs), scheduledTime, env, deps, { run: "scheduled", cron });
 }
 
 async function probe(scheduledTime: Date, env: Env, deps: RunDeps): Promise<void> {

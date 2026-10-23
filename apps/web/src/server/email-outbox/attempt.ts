@@ -287,7 +287,7 @@ function warnIfStaleClock(injected: Date | undefined): void {
   }
 }
 
-const errFields = (err: unknown): { errName: string; errCode?: unknown; errMessage: string } => ({
+export const errFields = (err: unknown): { errName: string; errCode?: unknown; errMessage: string } => ({
   errName: err instanceof Error ? err.name : typeof err,
   errCode: (err as { code?: unknown } | null)?.code,
   errMessage: (err instanceof Error ? err.message : String(err)).slice(0, 200),

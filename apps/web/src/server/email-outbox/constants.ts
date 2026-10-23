@@ -74,3 +74,21 @@ export const STG_TICK_MS = 5 * 60_000;
 /** The Resend `Idempotency-Key` for a row: the same row always sends under the same key, so an overlapping retry and a
  *  slow first attempt produce one email (spec "Goals", "Never twice"). */
 export const idempotencyKey = (id: string): string => `email-outbox/${id}`;
+
+// ---------------------------------------------------------------------------
+// The retry worker's tick (spec "The retry worker"): bounded work per tick, paced for Resend's rate limit.
+// ---------------------------------------------------------------------------
+
+/** Rows one tick claims at most. At a few hundred emails a day this is a ceiling, not a throughput target; what is
+ *  left over is reached by the next tick. */
+export const WORKER_BATCH_SIZE = 20;
+
+/** Resend allows 2 requests a second: at least this long between one attempt and the next claim. */
+export const MIN_SEND_INTERVAL_MS = 500;
+
+/** A tick stops claiming once it has run this long: under prod's 60 s cadence, and (with one more pacing wait and one
+ *  more request, `SEND_TIMEOUT_MS`) under the cron Worker's 60 s per-job timeout, which route.test.ts derives. */
+export const TICK_BUDGET_MS = 40_000;
+
+/** Badly-ended rows a tick re-drives at most (a kind's `findUnapplied`): a backlog drains over several ticks. */
+export const REDRIVE_LIMIT = 50;
