@@ -62,13 +62,24 @@ export const STAGE_POINTS_REPLACES: ReadonlySet<string> = new Set(["points", "po
  * W2c batch-3 I1: the predicate is `format-standing.ts`'s PLAYED, the one definition the per-match writer reads too. A
  * match DECIDED WITHOUT PLAY (a walkover no event records) locks nothing: a save re-writes its score instead
  * (`award-rewrite.ts`).
+ *
+ * Rebase ruling D2 (2026-10-23): OR an OPENED round. Online (Lichess) chess appends nothing and freezes no snapshot until
+ * a result lands, so PLAYED alone left a running Lichess round's stage - and the division fields it inherits, the clock
+ * among them - editable under players already invited. An open is monotonic too (re-stamped, never deleted but with
+ * its stage). It is read through `stage_ids_with_opened_round` (V469, security definer: `stage_round_opens` is sealed),
+ * scoped to the transaction's tenant (unscoped in a privileged transaction, never "none"). Over the board nothing is
+ * opened, so the lock still waits for the first event there. PLAYED itself is unchanged: its other readers (the
+ * per-match writer's fit, the award re-write) ask about play, not about the lock.
  */
 export async function lockedStageIdsAmong(tx: Tx, stageIds: readonly string[]): Promise<Set<string>> {
   if (stageIds.length === 0) return new Set();
+  const ids = stageIds as string[];
   const rows = await tx<{ stage_id: string }[]>`
     select distinct f.stage_id from fixtures f
-     where f.stage_id = any(${stageIds as string[]}::uuid[])
-       and ${playedSql(tx, "f")}`;
+     where f.stage_id = any(${ids}::uuid[])
+       and ${playedSql(tx, "f")}
+    union
+    select opened.stage_id from stage_ids_with_opened_round(${ids}::uuid[]) as opened(stage_id)`;
   return new Set(rows.map((r) => r.stage_id));
 }
 
