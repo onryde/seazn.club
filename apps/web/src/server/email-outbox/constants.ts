@@ -71,6 +71,18 @@ export const RESEND_IDEMPOTENCY_TTL_MS = 24 * 3_600_000;
 /** The slowest worker cadence (stg, owner ruling 2026-10-20): a retry is picked up at most this late. */
 export const STG_TICK_MS = 5 * 60_000;
 
+/** Kept between a row's `expires_at` and the end of Resend's key life: a lease that lapses just before the last allowed
+ *  moment is noticed by the slowest tick (`STG_TICK_MS`), and its re-send still lands inside the key's life. At least one
+ *  lease; the tick cadence is added so the whole "crash, wait out the lease, wait for the next tick" fits. */
+export const EXPIRY_MARGIN_MS = LEASE_MS + STG_TICK_MS;
+
+/** The furthest out a row's `expires_at` may be at enqueue time (I1, Task 4 review). A row is claimable until its
+ *  `expires_at`, and the worker re-sends an ambiguous row under the SAME key; if a row could outlive the key, that re-send
+ *  could mail twice. `enqueueEmail` refuses anything further out, so the guarantee holds by construction instead of by
+ *  every caller remembering it. The two phase-1 kinds sit far inside it: a sign-in link lives 15 min, a chess invite until
+ *  its board's check-in deadline. */
+export const MAX_EXPIRY_MS = RESEND_IDEMPOTENCY_TTL_MS - EXPIRY_MARGIN_MS;
+
 /** The Resend `Idempotency-Key` for a row: the same row always sends under the same key, so an overlapping retry and a
  *  slow first attempt produce one email (spec "Goals", "Never twice"). */
 export const idempotencyKey = (id: string): string => `email-outbox/${id}`;

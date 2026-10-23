@@ -4,11 +4,13 @@ import { sql } from "@/lib/db";
 
 // Short TTL: a login link is a live credential, so it should not linger.
 const TTL_MINUTES = 15;
+/** The same TTL in ms: the outbox row for the sign-in email expires with the link (never later: a late link is worse than none). */
+export const LOGIN_LINK_TTL_MS = TTL_MINUTES * 60_000;
 
 /** Issue a single-use passwordless sign-in token for a user. */
 export async function createLoginLink(userId: string): Promise<string> {
   const token = crypto.randomBytes(32).toString("base64url");
-  const expiresAt = new Date(Date.now() + TTL_MINUTES * 60_000).toISOString();
+  const expiresAt = new Date(Date.now() + LOGIN_LINK_TTL_MS).toISOString();
   // Only one live link per user — invalidate any earlier unused ones.
   await sql`delete from login_links where user_id = ${userId} and used = false`;
   await sql`

@@ -8,7 +8,7 @@ import "server-only";
 //  - the replace trigger supersedes older non-terminal rows for the same kind + ref + recipient on this very insert.
 import { randomUUID } from "node:crypto";
 import type { Tx, sql } from "@/lib/db";
-import type { OutboxKind } from "./constants";
+import { MAX_EXPIRY_MS, type OutboxKind } from "./constants";
 import { sealBody } from "./seal";
 
 export type OutboxMessage = {
@@ -24,17 +24,37 @@ export type OutboxMessage = {
   text: string;
   /** Transactional mail ignores the marketing suppression list (the sign-in link must always be tried). */
   transactional: boolean;
-  /** After this the email is worthless; the row ends `expired`, unsent. */
+  /** After this the email is worthless; the row ends `expired`, unsent. At most `MAX_EXPIRY_MS` from now: further out
+   *  and `enqueueEmail` refuses with `OutboxExpiryTooLongError`. */
   expiresAt: Date;
   /** Non-secret data a kind's hooks need later (ids, stamps). Never a token, never a body. */
   meta?: Record<string, string>;
 };
 
+/** Raised by `enqueueEmail` when `expiresAt` is further out than `MAX_EXPIRY_MS` (or is not a date): such a row could be
+ *  re-sent after Resend's idempotency key died. Names the kind and ref type and the bound; never the address or the body. */
+export class OutboxExpiryTooLongError extends Error {
+  readonly code = "EMAIL_OUTBOX_EXPIRY_TOO_LONG";
+  readonly maxMs = MAX_EXPIRY_MS;
+  constructor(kind: OutboxKind, refType: string) {
+    super(
+      `email outbox: a ${kind} email (${refType}) expires further out than ${MAX_EXPIRY_MS} ms (Resend's idempotency key ` +
+        "life less a margin), or its expiry is not a date, so a retry could be sent twice; refusing to queue the email",
+    );
+    this.name = "OutboxExpiryTooLongError";
+  }
+}
+
 /**
- * Insert one queued row on `db` and return its id (client-made). Throws `OutboxKeyUnavailableError` BEFORE any
- * statement when the box can send mail but cannot seal the body, so the caller's transaction refuses as a whole.
+ * Insert one queued row on `db` and return its id (client-made). Throws, BEFORE any statement, so the caller's
+ * transaction refuses as a whole:
+ *  - `OutboxExpiryTooLongError` when `expiresAt` is more than `MAX_EXPIRY_MS` from now (or not a date);
+ *  - `OutboxKeyUnavailableError` when the box can send mail but cannot seal the body.
+ * A past `expiresAt` is accepted: that row simply ends `expired`, unsent.
  */
 export async function enqueueEmail(db: Tx | typeof sql, m: OutboxMessage): Promise<string> {
+  // `!(x <= max)` and not `x > max`: an Invalid Date is NaN, and NaN compares false both ways.
+  if (!(m.expiresAt.getTime() - Date.now() <= MAX_EXPIRY_MS)) throw new OutboxExpiryTooLongError(m.kind, m.refType);
   const id = randomUUID();
   const sealed = sealBody({ html: m.html, text: m.text });
   await db`
