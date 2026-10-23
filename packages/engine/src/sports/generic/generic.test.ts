@@ -566,3 +566,51 @@ describe("generic padSpec — settle-from-tally is gated on state.running, not a
     expect(evalPadGate(gate, { state: liveState, summary: generic.summary(liveState) })).toBe(true);
   });
 });
+
+// W2c Task 22 (MD-1). `awardedLine` reads a stage rule's award only `state.forfeitAward !== undefined`, then trusts that the
+// outcome is an award and its reason is a forfeit reason (stryker-equivalent.json records the two re-checks beside it as
+// redundant). Both premises are the module's own: this pins them rather than leaving them as comments.
+describe("generic - a held stage award always sits beside an award outcome with a forfeit reason", () => {
+  const AWARD: [number, number] = [3, 1];
+  const withAward = () => foldMatch(generic, scoreCfg, lineups, stream(["core.forfeit", { by: "A", reason: "walkover" }]), { forfeitAward: AWARD });
+
+  it("the offer is held with the award outcome it was folded into, and no later event can separate them", () => {
+    const state = withAward();
+    expect(state.forfeitAward, "the offer is held").toEqual(AWARD);
+    expect(state.outcome).toMatchObject({ kind: "award", reason: "walkover" });
+    // Every other event the module takes: refused once decided, or an annotation / the finalize that leaves outcome alone.
+    const later: Array<[string, unknown]> = [
+      ["core.start", {}],
+      ["generic.result", { winnerId: "H" }],
+      ["generic.score", { by: "H", points: 1 }],
+      ["core.forfeit", { by: "H", reason: "walkover" }],
+      ["core.abandon", { reason: "rain" }],
+      ["core.note", { text: "n" }],
+      ["core.award", { person: "p1", key: "motm" }],
+      ["core.finalize", {}],
+    ];
+    let accepted = 0;
+    let refused = 0;
+    for (const [type, payload] of later) {
+      let next: typeof state | null = null;
+      try {
+        next = generic.apply(state, makeEnvelope(9, { type, payload }) as Parameters<typeof generic.apply>[1]);
+      } catch {
+        refused++;
+        continue;
+      }
+      accepted++;
+      expect(next.forfeitAward, type).toEqual(AWARD);
+      expect(next.outcome, type).toEqual(state.outcome);
+    }
+    expect(accepted, "events the decided module takes (the annotations and the finalize)").toBeGreaterThan(0);
+    expect(refused, "events it refuses").toBeGreaterThan(0);
+    expect(accepted + refused).toBe(later.length);
+  });
+
+  it("a bye is not a forfeit reason: core.forfeit refuses it, so an award is never held beside a bye", () => {
+    expect(() => fold(scoreCfg, stream(["core.forfeit", { by: "A", reason: "bye" }]))).toThrowError(expect.objectContaining({ code: "INVALID_EVENT" }));
+    expect(AWARD_REASONS).toContain("bye");
+    expect(AWARD_REASONS.filter((r) => r !== "bye").length, "the four forfeit reasons").toBe(4);
+  });
+});

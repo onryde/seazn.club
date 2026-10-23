@@ -524,22 +524,118 @@
       "reason": "officialScore reads the MODULE state's own outcome; the fold writes an award there only from a core.forfeit, whose reasons never include the system-only \"bye\", and ruling 104 (no core.forfeit was ever stored) rules out a legacy reason-less one, so `state.outcome` is never a bye and the conjunct is always true."
     },
     {
+      "mutant": "src/sports/period/kernel.ts:2612:9 ConditionalExpression → false",
+      "original": "preset.abandonOptions === undefined",
+      "line": "...(preset.abandonOptions === undefined ? {} : { abandonOptions: preset.abandonOptions }),",
+      "reason": "Both builtin period presets declare a list (hockey.ts, icehockey.ts; makePeriodModule has no other production caller), so the condition is already false for every builtin; for a hand-built preset with none the mutant gives the module an own `abandonOptions: undefined`, and every reader reads `module.abandonOptions ?? []` (web match-rules/shared.ts, stage-row-model.ts, describe-rules.ts; the engine reads the preset, not the module), so the offer is the same empty list (period.test.ts 'a preset that declares no abandon list' passes under it)."
+    },
+    {
       "mutant": "src/sports/setbased/kernel.ts:2348:27 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "let next = reason === \"walkover\" || state.sets.length === 0 ? null : state.sets.length;",
       "reason": "An admitted walkover's state has no sets (rulings 112, 114; set-kernel events refuse outside \"live\"; 6,000 admitted walkovers measured), so `state.sets.length === 0` already makes `next` null for it."
     },
     {
-      "mutant": "src/competition/points.ts:67:70 ConditionalExpression → true",
-      "original": "outcome.kind === \"win\"",
-      "line": "outcome.kind === \"award\" ? awardReasonOf(outcome) === \"walkover\" : outcome.kind === \"win\" && outcome.method === \"walkover\";",
-      "reason": "The guard exists for TypeScript narrowing only: past the award branch the remaining MatchOutcome kinds (draw, tie, no_result, double_walkover; core/types.ts:169-197) declare no `method`, so `outcome.method === \"walkover\"` is already false for every one of them and the mutant answers the same (W2c Task 9)."
-    },
-    {
       "mutant": "src/competition/points.ts:73:39 ConditionalExpression → true",
       "original": "outcome.kind === \"win\"",
       "line": "return outcome.kind === \"award\" || (outcome.kind === \"win\" && (outcome.method === \"walkover\" || outcome.method === \"forfeit\"));",
       "reason": "The guard exists for TypeScript narrowing only: past the award arm the remaining MatchOutcome kinds (draw, tie, no_result, double_walkover; core/types.ts:169-197) declare no `method`, so the method test is already false for every one of them and the mutant answers the same (W2c Task 9)."
+    },
+    {
+      "mutant": "src/sport/module.ts:530:73 MethodExpression → unioned.options.some(o => typeof o === \"object\" && o !== null)",
+      "original": "unioned.options.every((o) => typeof o === \"object\" && o !== null)",
+      "line": "if (Array.isArray(unioned.options) && unioned.options.length > 0 && unioned.options.every((o) => typeof o === \"object\" && o !== null)) {",
+      "reason": "`some` differs from `every` only on a MIXED options array; a zod `.options` is all schemas (union, discriminatedUnion) or all enum values (strings, or numbers for a numeric enum), never schemas and values together, and the empty array never reaches it (`length > 0` first, killed by module.test.ts 'the empty case'), so the two agree on every schema the walk can meet."
+    },
+    {
+      "mutant": "src/sport/module.ts:530:102 LogicalOperator → typeof o === \"object\" || o !== null",
+      "original": "typeof o === \"object\" && o !== null",
+      "line": "if (Array.isArray(unioned.options) && unioned.options.length > 0 && unioned.options.every((o) => typeof o === \"object\" && o !== null)) {",
+      "reason": "`||` differs from `&&` only for a non-null non-object option, i.e. an enum's strings: the mutant then reads the enum as a union of string branches, each a leaf, so fieldsNamed throws the same `is not an object schema` message (same prefix, same path) the enum itself would (module.test.ts 'an enum is still a leaf' passes under it)."
+    },
+    {
+      "mutant": "src/sport/module.ts:530:102 ConditionalExpression → true",
+      "original": "typeof o === \"object\" && o !== null",
+      "line": "if (Array.isArray(unioned.options) && unioned.options.length > 0 && unioned.options.every((o) => typeof o === \"object\" && o !== null)) {",
+      "reason": "Names two mutants, the whole test and its `typeof o === \"object\"` operand, each made `true`; with options never null (union options are schemas, enum values strings or numbers) both are true for every element exactly as the LogicalOperator `||` mutant beside this entry is, so they read an enum as a union of leaf branches and fieldsNamed throws the same `is not an object schema` message at the same path (module.test.ts 'an enum is still a leaf' passes under both: the 4,478-test related run, W2c Task 22)."
+    },
+    {
+      "mutant": "src/sport/module.ts:530:127 ConditionalExpression → true",
+      "original": "o !== null",
+      "line": "if (Array.isArray(unioned.options) && unioned.options.length > 0 && unioned.options.every((o) => typeof o === \"object\" && o !== null)) {",
+      "reason": "Differs from `o !== null` only for a null option, and zod `.options` never holds null: a union's are schemas, an enum's are its string or number values (`typeof null === \"object\"` is the only case the operand exists for)."
+    },
+    {
+      "mutant": "src/sports/generic/generic.ts:242:43 ConditionalExpression → false",
+      "original": "outcome?.kind !== \"award\"",
+      "line": "if (state.forfeitAward === undefined || outcome?.kind !== \"award\") return null;",
+      "reason": "A generic state holds a forfeitAward only beside the award outcome written with it (the core.forfeit arm of apply sets both in one object, and every other event is refused or leaves the outcome alone once decided: sports/generic/generic.test.ts, 'a held stage award always sits beside an award outcome'), so `outcome?.kind !== \"award\"` is false whenever the first operand lets the line run; the check only narrows the type for awardReasonOf."
+    },
+    {
+      "mutant": "src/sports/generic/generic.ts:242:43 OptionalChaining → outcome.kind",
+      "original": "outcome?.kind",
+      "line": "if (state.forfeitAward === undefined || outcome?.kind !== \"award\") return null;",
+      "reason": "A generic state holds a forfeitAward only beside the award outcome written with it (sports/generic/generic.test.ts, 'a held stage award always sits beside an award outcome'), so whenever this line runs past `state.forfeitAward === undefined` the outcome is non-null and `outcome.kind` reads the same value as `outcome?.kind`; the null the `?.` guards never reaches it."
+    },
+    {
+      "mutant": "src/sports/generic/generic.ts:244:7 ConditionalExpression → false",
+      "original": "reason === \"bye\"",
+      "line": "if (reason === \"bye\") return null;",
+      "reason": "The condition is never true where it runs: awardedLine passes line 242 only with a held forfeitAward, which only generic's core.forfeit arm writes (generic.ts:677, `git grep -n forfeitAward packages/engine/src/sports/generic` names no other writer), and a core.forfeit's reason is a FORFEIT_REASON, never `bye` (CoreForfeit refuses it: sports/generic/generic.test.ts, 'a bye is not a forfeit reason'); a bye is the system's award and is never folded through apply. Mutating it to `false` removes a branch nothing takes. It stays to narrow AwardReason to ForfeitReason for genericForfeitCredit."
+    },
+    {
+      "mutant": "src/sports/generic/generic.ts:244:18 StringLiteral → \"\"",
+      "original": "\"bye\"",
+      "line": "if (reason === \"bye\") return null;",
+      "reason": "`reason === \"\"` is false for every reason that reaches this line, exactly as `reason === \"bye\"` is: a held forfeitAward comes only from a core.forfeit, whose reason is one of the four FORFEIT_REASONS (CoreForfeit refuses `bye`: sports/generic/generic.test.ts, 'a bye is not a forfeit reason'), so neither form ever returns null here."
+    },
+    {
+      "mutant": "src/competition/points.ts:96:7 ConditionalExpression → true",
+      "original": "m.for !== undefined",
+      "line": "if (m.for !== undefined && m.against !== undefined) return m.for - m.against;",
+      "reason": "Names two mutants, the whole test and its `m.for !== undefined` operand, each made `true`: they differ from the original only for a delta without `diff` and without one or both of for/against (NaN for 0). No sport declares one side of the generic score without the other (competition/points-md1.test.ts, 'premise: every sport declares the generic score keys ... all together or not at all'), the ones that declare it credit for, against and diff on every delta (same file, 'each decided walk's deltas ...'; applyPointsRule's award writes all three together), so every delta of a score sport returns `diff` on the line above; and the margin is read only by the loss_margin_lte / win_margin_gte bonuses, which validatePointsRule refuses for a sport without the score (killed, points-md1.test.ts 'score-reading kinds') and the web validates on every write."
+    },
+    {
+      "mutant": "src/competition/points.ts:96:7 LogicalOperator → m.for !== undefined || m.against !== undefined",
+      "original": "m.for !== undefined && m.against !== undefined",
+      "line": "if (m.for !== undefined && m.against !== undefined) return m.for - m.against;",
+      "reason": "Differs only for a delta without `diff` that carries exactly one of for/against (NaN for 0). No sport declares one side of the generic score without the other (competition/points-md1.test.ts, 'premise: every sport declares the generic score keys ... all together or not at all'), the ones that declare it credit for, against and diff on every delta (same file, 'each decided walk's deltas ...'; applyPointsRule's award writes all three together), so every delta of a score sport returns `diff` on the line above; and the margin is read only by the loss_margin_lte / win_margin_gte bonuses, which validatePointsRule refuses for a sport without the score (killed, points-md1.test.ts 'score-reading kinds') and the web validates on every write."
+    },
+    {
+      "mutant": "src/competition/points.ts:96:30 ConditionalExpression → true",
+      "original": "m.against !== undefined",
+      "line": "if (m.for !== undefined && m.against !== undefined) return m.for - m.against;",
+      "reason": "The mutant differs only for a delta that carries `for` and no `against` (and no `diff`): it would read the margin NaN instead of 0. No sport declares one side of the generic score without the other (competition/points-md1.test.ts, 'premise: every sport declares the generic score keys ... all together or not at all'), the one that declares them credits all three on every delta (same file, 'each decided walk's deltas ...'), and applyPointsRule's award writes all three together."
+    },
+    {
+      "mutant": "src/competition/points.ts:129:11 ConditionalExpression → true",
+      "original": "f !== undefined",
+      "line": "f !== undefined &&",
+      "reason": "A TypeScript narrowing guard: with `f` undefined the last conjunct `f >= (b.param ?? 0) * a` is `undefined >= <number or NaN>`, which is false, so the bonus is not paid either way."
+    },
+    {
+      "mutant": "src/competition/points.ts:130:11 ConditionalExpression → true",
+      "original": "a !== undefined",
+      "line": "a !== undefined &&",
+      "reason": "A TypeScript narrowing guard: with `a` undefined `(b.param ?? 0) * a` is NaN and `f >= NaN` is false, so the bonus is not paid either way."
+    },
+    {
+      "mutant": "src/competition/points.ts:329:7 ConditionalExpression → false",
+      "original": "locks.length === 0",
+      "line": "if (locks.length === 0) return [...ranked];",
+      "reason": "With no locks the mutant re-stamps every row `{...row, rank}` from a free list of 1..n in table order, and every ranked row already carries exactly that rank (rankStandings writes `row.rank = index + 1`, tiebreakers.ts), so the rows are equal (competition/points-md1.test.ts, 'the empty case', passes under it); the one production caller, stage.ts:252, calls only with `poolLocks.length > 0`."
+    },
+    {
+      "mutant": "src/competition/points.ts:338:9 LogicalOperator → rank < 1 && rank > n",
+      "original": "rank < 1 || rank > n",
+      "line": "if (rank < 1 || rank > n || out[rank - 1] !== null) {",
+      "reason": "The last operand already refuses every rank outside 1..n: `out` holds null at indices 0..n-1 only, so for any other rank (below 1, above n, fractional, NaN) `out[rank - 1]` is undefined and `!== null` throws the same CONFIG_INVALID; the range test is redundant, so weakening it changes nothing."
+    },
+    {
+      "mutant": "src/competition/points.ts:338:21 ConditionalExpression → false",
+      "original": "rank > n",
+      "line": "if (rank < 1 || rank > n || out[rank - 1] !== null) {",
+      "reason": "A rank above n reads `out[rank - 1]` past the array's end, which is undefined, so `out[rank - 1] !== null` throws the same CONFIG_INVALID without it (competition/points-md1.test.ts, 'a lock outside 1..n ...', rank n + 1)."
     }
   ]
 }

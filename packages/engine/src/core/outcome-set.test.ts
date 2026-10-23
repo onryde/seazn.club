@@ -30,6 +30,15 @@ describe("W2b outcome set (spec §5.1)", () => {
     }
     expect(checked).toBe(6);
   });
+  it("X-WO-1: `method` is declared by the win outcome ALONE (the premise competition/points.ts leans on when it reads `outcome.method`)", () => {
+    // `isWalkover` and `forfeitShaped` read `outcome.method` after a `kind === "win"` test, and TypeScript only narrows to the
+    // win arm; Task 9 judged the `kind === "win"` tests redundant (points.ts:67 and :73, equivalent mutants; :73 is recorded in
+    // stryker-equivalent.json, :67's key also names a killed mutant, so MD-1 left it in the denominator) because no other kind
+    // carries a method. This pins that premise from the schema's own shapes: a kind that gains a `method` makes both stale.
+    const withMethod = MatchOutcome.options.filter((o) => "method" in o.shape).map((o) => o.shape.kind.value);
+    expect(MatchOutcome.options.length, "kinds inspected").toBe(OUTCOME_KINDS.length);
+    expect(withMethod).toEqual(["win"]);
+  });
   it("X-BR-1: a double walkover is not level — never held, never settleable (f-w2 must #1)", () => {
     expect(isLevelOutcome({ kind: "double_walkover" } as never)).toBe(false);
   });

@@ -132,6 +132,29 @@ describe("I5 q4_stands is a hockey option only", () => {
     expect(icehockey.configSchema.safeParse({ ...preset, periods: { count: 4, minutes: 12 }, abandonPolicy: "q4_stands" }).success).toBe(false);
   });
 
+  it("each refusal names the abandonPolicy field and says why (MD-1: the issue's code, path and wording are the contract, not just 'it failed')", () => {
+    // The wording is the sport's own text, written out here; a refusal that flagged no field, or the wrong one, would leave
+    // the organiser's editor with nothing to point at.
+    const issuesOf = (r: { success: boolean; error?: { issues: { code: string; message: string; path: PropertyKey[] }[] } }) =>
+      r.success ? null : r.error!.issues.map((i) => [i.code, i.message, i.path]);
+    // I5: a policy outside the sport's own list, whatever the period count.
+    const ice = Object.values(icehockey.variants)[0] as Record<string, unknown>;
+    expect(issuesOf(icehockey.configSchema.safeParse({ ...ice, periods: { count: 4, minutes: 12 }, abandonPolicy: "q4_stands" }))).toEqual([
+      ["custom", 'This sport does not offer "q4_stands" for an abandoned match.', ["abandonPolicy"]],
+    ]);
+    // HK-AB-2: the 4th-quarter rule needs a four-period format; hockey offers the policy, so only the period count refuses it.
+    const hkPreset = hockey.variants["fih-shootout"] as Record<string, unknown>;
+    expect(hkPreset["abandonPolicy"], "premise: the preset is the q4_stands one").toBe("q4_stands");
+    expect(hockey.configSchema.safeParse(hkPreset).success, "the positive pair: the four-period default accepts it").toBe(true);
+    expect(issuesOf(hockey.configSchema.safeParse({ ...hkPreset, periods: { count: 2, minutes: 35 } }))).toEqual([
+      ["custom", "The 4th-quarter rule needs four periods.", ["abandonPolicy"]],
+    ]);
+    // P-5 (generic): the same shape, so one assertion more than the message and path above.
+    expect(issuesOf(generic.configSchema.safeParse({ ...generic.variants["score"], allowDraws: false, abandonPolicy: "share" }))).toEqual([
+      ["custom", SHARE_NEEDS_DRAWS, ["abandonPolicy"]],
+    ]);
+  });
+
   it("football's enum is unchanged: it parses replay and award, and refuses q4_stands and share", () => {
     expect(football.abandonOptions).toEqual(["replay", "award"]);
     const parses = (policy: string) => football.configSchema.safeParse({ abandonPolicy: policy }).success;
@@ -375,7 +398,7 @@ describe("P9 sweep: every offered option folds an abandon, with the result its r
         expect(accepting.length, `${m.key}: no variant accepts its own option ${policy}`).toBeGreaterThan(0);
         const cfg = m.configSchema.parse({ ...(accepting[0] as object), ...knobs, abandonPolicy: policy });
         const lineups = defaultLineupPair(m.positions);
-        const s = foldMatch(m as never, cfg as never, lineups, evs([...LEAD[m.key]!, ABANDON])) as { outcome: { kind: string } | null; phase: string };
+        const s: { outcome: { kind: string } | null; phase: string } = foldMatch(m as never, cfg as never, lineups, evs([...LEAD[m.key]!, ABANDON]));
         // The rows: replay and a q4_stands abandon before the 4th quarter leave nobody decided; award is the leader's win
         // (FB-AB-1); share is a draw (CA-AB-2, GN-AB-2).
         const decided = policy === "award" ? "win" : policy === "share" ? "draw" : null;

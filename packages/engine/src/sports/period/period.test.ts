@@ -770,6 +770,28 @@ describe("S8/#417 W6 — shotTracking gates `<key>.shot` per preset", () => {
     expect(spec.panels.some((p) => p.actions.some((a) => a.type === "testsport.shot"))).toBe(false);
   });
 
+  // MD-1 (W2c Task 22): the empty case of `PeriodPreset.setPieceKinds` - a preset that declares none seeds the cfg with none.
+  // Hockey ("pc", "stroke") and ice hockey ("ps") both declare theirs, so only a preset built like this one reaches it.
+  it("a preset that declares no set pieces seeds the cfg with none (the empty case), and hockey and icehockey seed their own", () => {
+    expect(noShotsModule.configSchema.parse({}).setPieceKinds).toEqual([]);
+    expect(hockey.configSchema.parse({}).setPieceKinds).toEqual(["pc", "stroke"]);
+    expect(icehockey.configSchema.parse({}).setPieceKinds).toEqual(["ps"]);
+  });
+
+  // MD-1 (W2c Task 22): the empty case of `PeriodPreset.abandonOptions`, whose declaration reads "omitted ⇒ `replay` and
+  // `award`, and the module offers none; the schema refuses any other". Hockey and ice hockey both declare a list, so only
+  // a preset built like this one reaches the default (kernel.ts DEFAULT_ABANDON_OPTIONS).
+  it("a preset that declares no abandon list takes replay and award, refuses the rest, and offers the organiser none", () => {
+    const accepted = (["replay", "award", "q4_stands", "share"] as const).filter(
+      (abandonPolicy) => noShotsModule.configSchema.safeParse({ abandonPolicy }).success,
+    );
+    expect(accepted).toEqual(["replay", "award"]);
+    expect(noShotsModule.abandonOptions ?? [], "the module offers none").toEqual([]);
+    // The positive pair: a declared list is the module's offer, verbatim.
+    expect(hockey.abandonOptions).toEqual(["replay", "award", "q4_stands"]);
+    expect(icehockey.abandonOptions).toEqual(["replay", "award"]);
+  });
+
   it("hockey and icehockey, by contrast, both opted in", () => {
     expect(hockey.padSpec!(hockey.configSchema.parse({})).fidelity["hockey.shot"]).toBe(3);
     expect(icehockey.padSpec!(icehockey.configSchema.parse({})).fidelity["icehockey.shot"]).toBe(3);

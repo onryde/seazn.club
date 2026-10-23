@@ -315,6 +315,29 @@ describe("isPathRequired through a union", () => {
     expect(() => isPathRequired(withEnum, "kind.a")).toThrow(/not an object schema/);
     expect(() => isPathRequired(withEnum, "kind.a")).toThrow(/must not walk past a leaf value\)$/);
   });
+
+  it("the empty case: a union or an enum with NO options is a leaf, not a union of nothing - it names the leaf, never a missing field", () => {
+    // `[]` is an array whose every element is an object (vacuously), so a reader that skipped the length check would read
+    // it as a union with no branches and report `no field ... found` for a key that nothing could ever declare. The key is
+    // not missing from this schema; there is no object here to look in - the leaf diagnosis, like the enum's above.
+    let checked = 0;
+    for (const empty of [z.union([]), z.enum([] as never)]) {
+      expect(empty.options, "premise: the schema reads as an empty options array").toEqual([]);
+      for (const schema of [empty, z.strictObject({ k: empty })]) {
+        const path = schema === empty ? "a" : "k.a";
+        let message = "";
+        try {
+          isPathRequired(schema, path);
+        } catch (err) {
+          message = (err as Error).message;
+        }
+        expect(message, `${path}`).toMatch(/is not an object schema and does not wrap one, so nothing can be resolved beneath it/);
+        expect(message, `${path}`).not.toMatch(/no field "a" found/);
+        checked++;
+      }
+    }
+    expect(checked, "schemas walked").toBe(4);
+  });
 });
 
 describe("stampAttributionRequired", () => {
