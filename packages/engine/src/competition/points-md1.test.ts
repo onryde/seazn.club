@@ -245,6 +245,7 @@ describe("MD-1 points.ts: a sport that declares the score credits all of it on e
     expect(sports, "sports that declare the score").toBeGreaterThan(0);
     expect(sports).toBeLessThanOrEqual(visited);
     expect(deltas, "deltas checked").toBeGreaterThan(0);
-    expect(kinds.size, `outcome kinds walked: ${[...kinds].join(", ")}`).toBeGreaterThan(1);
+    // The title's three kinds, each walked: the award is the one the points.ts:96:7 equivalents lean on.
+    expect([...kinds], `outcome kinds walked: ${[...kinds].join(", ")}`).toEqual(expect.arrayContaining(["win", "draw", "award"]));
   });
 });
