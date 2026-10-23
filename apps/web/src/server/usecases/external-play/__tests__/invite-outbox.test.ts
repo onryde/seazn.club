@@ -22,7 +22,9 @@ import { boardOpenFor } from "@/server/external-play/round-open";
 import {
   ENDED_BADLY_STATUSES,
   LIVE_STATUSES,
+  DISPATCH_NOW_BUDGET_MS,
   MAX_ATTEMPTS,
+  MIN_SEND_INTERVAL_MS,
   OUTBOX_STATUSES,
   RETRY_DELAYS_MS,
   RETRYABLE_STATUSES,
@@ -76,6 +78,25 @@ vi.mock("@/server/email-outbox/transport", async () => {
   };
 });
 
+// dispatchNow's pacing clock and sleep, handed through the REAL open and resend (the routes pass neither): a test that sets
+// them runs the whole round on a fake clock, with no waiting.
+const pacing = vi.hoisted(() => ({
+  nowMs: null as null | (() => number),
+  sleep: null as null | ((ms: number) => Promise<void>),
+}));
+vi.mock("@/server/email-outbox/attempt", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/email-outbox/attempt")>();
+  return {
+    ...actual,
+    dispatchNow: (ids: readonly string[], opts: Parameters<typeof actual.dispatchNow>[1] = {}) =>
+      actual.dispatchNow(ids, {
+        ...opts,
+        ...(pacing.nowMs ? { nowMs: pacing.nowMs } : {}),
+        ...(pacing.sleep ? { sleep: pacing.sleep } : {}),
+      }),
+  };
+});
+
 // A seat the test makes neither claim nor hold a stamp (the resend's loud guard).
 const race = vi.hoisted(() => ({ claimFalseFor: new Set<string>() }));
 vi.mock("../seat-stamp", async (importOriginal) => {
@@ -88,7 +109,7 @@ vi.mock("../seat-stamp", async (importOriginal) => {
 });
 
 import { openRound } from "../open-round";
-import { resendExternalPlayNotice, seatOutcome } from "../invite";
+import { latestStatuses, resendExternalPlayNotice, seatOutcome } from "../invite";
 import { CHESS_SEAT_REF_TYPE, STAMP_COLUMN, chessSeatRef } from "../seat-stamp";
 import {
   seedOnlineChessRound,
@@ -112,6 +133,8 @@ beforeEach(() => {
   mail.renderedOfSet = 0;
   mail.holdFirst = null;
   mail.afterDeliver = null;
+  pacing.nowMs = null;
+  pacing.sleep = null;
   stubOutboxEnv();
   vi.stubEnv("RESEND_WEBHOOK_SECRET", WEBHOOK_SECRET);
 });
@@ -386,6 +409,21 @@ describe.skipIf(!HAS_DB)("openRound writes the invite rows beside the stamps", (
     expect((await rowsOf(b.fixtureId)).filter((x) => x.status === "replaced"), "and no row was written only to be replaced").toHaveLength(0);
   });
 
+  it("two members who are the SAME user (an identical address twice) also get ONE email", async () => {
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
+    const b = r.boards[0]!;
+    // The same login as a second person of the entrant (another lane: one player person per user and org): the same string twice.
+    const [u] = await sql<{ id: string }[]>`select id from users where email = ${b.home.email}`;
+    const [p] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name, user_id, lane) values (${r.orgId}, 'Same login', ${u!.id}, 'official') returning id`;
+    await sql`insert into entrant_members (entrant_id, person_id, org_id) values (${b.home.entrantId}, ${p!.id}, ${r.orgId})`;
+
+    expect(await open(r, OPENED)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+    const homeColour = await colourOf(b.fixtureId, b.home.email);
+    expect(await rowsForSeat(b.fixtureId, homeColour), "one row for the address, not two").toHaveLength(1);
+    expect(mail.sent.filter((m) => m.to === b.home.email), "one email delivered to it").toHaveLength(1);
+  });
+
   it("a seat with no address at all: no row, reported send_failed, and the seat is released at once", async () => {
     const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
     const b = r.boards[0]!;
@@ -512,6 +550,71 @@ describe.skipIf(!HAS_DB)("the first attempt: accepted, retried later, or refused
       const bridge = await bridgeOf(b.fixtureId);
       expect([bridge.white_emailed_at, bridge.black_emailed_at].every((s) => s !== null), "every seat stays stamped").toBe(true);
     }
+  });
+
+  it("a round larger than the dispatch budget: the seats the dispatch never reached read retrying, stay stamped and queued, and the worker sends them", async () => {
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 4 });
+    const seats = r.boards.length * SEATS_PER_BOARD;
+    // The test config runs unpaced; this test switches the pacing on and runs it on a fake clock (no real waiting).
+    vi.stubEnv("EMAIL_OUTBOX_DISPATCH_UNPACED", "");
+    let t = 0;
+    const sleeps: number[] = [];
+    pacing.nowMs = () => t;
+    pacing.sleep = async (ms) => {
+      sleeps.push(ms);
+      t += ms;
+    };
+    // The provider is slow on its THIRD answer: that one request takes the whole budget.
+    const SLOW_SEND = 3;
+    let sends = 0;
+    mail.afterDeliver = async () => {
+      sends += 1;
+      if (sends === SLOW_SEND) t += DISPATCH_NOW_BUDGET_MS;
+    };
+    // The real clock: the worker below judges expiry on the database's time, so the window must still be running.
+    const res = await open(r);
+    expect(res, "the seats reached are invited, the rest are retrying - and none is called failed").toEqual({
+      opened: true,
+      invited: SLOW_SEND,
+      retrying: seats - SLOW_SEND,
+      skipped: [],
+    });
+    expect(sleeps, "one interval before each attempt but the first, and none after the budget was spent").toEqual(
+      Array.from({ length: SLOW_SEND - 1 }, () => MIN_SEND_INTERVAL_MS),
+    );
+    const rows = (await Promise.all(r.boards.map((b) => rowsOf(b.fixtureId)))).flat();
+    expect(rows).toHaveLength(seats);
+    const unreached = rows.filter((x) => x.status === "queued");
+    expect(rows.filter((x) => x.status === "sent")).toHaveLength(SLOW_SEND);
+    expect(unreached, "anti-vacuity: some rows were beyond the budget").toHaveLength(seats - SLOW_SEND);
+    expect(unreached.every((x) => x.attempts === 0), "never claimed: attempts untouched").toBe(true);
+    for (const b of r.boards) {
+      const bridge = await bridgeOf(b.fixtureId);
+      expect([bridge.white_emailed_at, bridge.black_emailed_at].every((x) => x !== null), "every seat stays stamped").toBe(true);
+    }
+    // They are due now (a first attempt is immediate), so the worker sends them; a re-open has nobody left to invite.
+    mail.afterDeliver = null;
+    expect(await tick(unreached.map((x) => x.id))).toMatchObject({ sent: unreached.length });
+    expect((await Promise.all(r.boards.map((b) => rowsOf(b.fixtureId)))).flat().every((x) => x.status === "sent")).toBe(true);
+    expect(await open(r)).toEqual({ opened: false, reason: "already_open", skipped: [] });
+  });
+
+  it("the same budget bounds a resend: the seat it never reached reads retrying, not failed", async () => {
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
+    const b = r.boards[0]!;
+    await open(r);
+    vi.stubEnv("EMAIL_OUTBOX_DISPATCH_UNPACED", "");
+    let t = 0;
+    pacing.nowMs = () => t;
+    pacing.sleep = async (ms) => {
+      t += ms;
+    };
+    let sends = 0;
+    mail.afterDeliver = async () => {
+      sends += 1;
+      if (sends === 1) t += DISPATCH_NOW_BUDGET_MS; // the first send spends the budget: the second seat is never claimed
+    };
+    expect(await resend(r, b.fixtureId)).toEqual({ emailed: 1, retrying: SEATS_PER_BOARD - 1 });
   });
 
   it("R11: a webhook that marks the row delivered BEFORE the dispatch returns still counts the seat as invited, not retrying", async () => {
@@ -902,6 +1005,57 @@ describe.skipIf(!HAS_DB)("the organiser's Resend writes a fresh row each time", 
     expect(await rowsOf(b.fixtureId), "the refused resend queued nothing").toHaveLength(rowsBefore);
     expect(mail.sent.filter((m) => m.to === b.away.email), "and mailed nobody").toHaveLength(1); // only the open's mail
   });
+
+  it("a resend whose queueing THROWS for a seat it claimed un-stamps that seat in the same transaction; a seat invited before keeps its stamp", async () => {
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
+    const b = r.boards[0]!;
+    mail.fail.add(b.home.email);
+    await open(r, OPENED); // home is refused for good and released; away is invited and stamped
+    mail.fail.clear();
+    const awayColour = await colourOf(b.fixtureId, b.away.email);
+    const homeColour = awayColour === "white" ? "black" : "white";
+    const awayStamp = stampOf(await bridgeOf(b.fixtureId), awayColour)!;
+    expect(awayStamp, "premise: the away seat is stamped").not.toBeNull();
+    expect(stampOf(await bridgeOf(b.fixtureId), homeColour), "premise: the home seat was released").toBeNull();
+    const rowsBefore = (await rowsOf(b.fixtureId)).length;
+
+    // Both seats fail to queue (the render throws inside each seat's savepoint). Home was CLAIMED by this resend; away was not.
+    mail.renderThrows.add(b.home.email).add(b.away.email);
+    expect(await resend(r, b.fixtureId, new Date(OPENED.getTime() + MIN))).toEqual({ emailed: 0, retrying: 0 });
+    const bridge = await bridgeOf(b.fixtureId);
+    expect(stampOf(bridge, homeColour), "the seat the resend claimed is un-stamped with nothing queued for it").toBeNull();
+    expect(stampOf(bridge, awayColour)?.getTime(), "the seat invited before keeps the stamp it had").toBe(awayStamp.getTime());
+    expect(await rowsOf(b.fixtureId), "the savepoints took every row of the failed queueing back").toHaveLength(rowsBefore);
+
+    // The failure is the call's, not the seat's: the next resend, with rendering back, claims home again and mails both.
+    mail.renderThrows.clear();
+    mail.sent.length = 0;
+    expect(await resend(r, b.fixtureId, new Date(OPENED.getTime() + 2 * MIN))).toEqual({ emailed: 2, retrying: 0 });
+    expect(mail.sent.map((m) => m.to).sort()).toEqual([b.home.email, b.away.email].sort());
+    expect(stampOf(await bridgeOf(b.fixtureId), homeColour), "claimed afresh").not.toBeNull();
+  });
+
+  it("the status read answers with the newest NON-replaced row, even when a replaced row sorts newest (a transaction that began earlier commits later)", async () => {
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
+    const b = r.boards[0]!;
+    await open(r, OPENED);
+    const colour = await colourOf(b.fixtureId, b.home.email);
+    const [older] = await rowsForSeat(b.fixtureId, colour);
+    expect(await resend(r, b.fixtureId, new Date(OPENED.getTime() + MIN))).toEqual({ emailed: 2, retrying: 0 });
+    const seat = await rowsForSeat(b.fixtureId, colour);
+    const newer = seat.find((x) => x.status !== "replaced")!;
+    expect(seat, "premise: the resend wrote a second row for the seat").toHaveLength(2);
+    expect(await statusOf(older!.id), "premise: the older row was superseded").toBe("replaced");
+    expect(newer.status, "premise: the live row is the one the provider took").toBe("sent");
+
+    // The replace trigger supersedes by key, not by clock: a request whose transaction BEGAN first but committed last writes a row
+    // with the OLDER created_at that replaces the newer-stamped one. Reproduce exactly that ordering.
+    await sql`update email_outbox set created_at = created_at + interval '1 hour' where id = ${older!.id}`;
+    const answers = await latestStatuses([older!.id, newer.id]);
+    expect(answers.get(older!.id), "the replaced row asks about its recipient: the live row answers").toBe(newer.status);
+    expect(answers.get(newer.id)).toBe(newer.status);
+    expect(seatOutcome([answers.get(newer.id)!]), "so the seat reads invited, not failed (a replaced row carries no information)").toBe("invited");
+  });
 });
 
 // ===========================================================================
@@ -1014,6 +1168,32 @@ describe.skipIf(!HAS_DB)("R9 - a crash between the terminal write and the hook i
       const found = (await findUnappliedEndings(500)).filter((x) => x.id === loneRows.find((y) => y.recipient === lone.boards[0]!.home.email)!.id);
       expect(found).toHaveLength(1);
       expect(found[0]).toMatchObject({ kind: "chess_invite", refType: "fixture_seat", status: "bounced" });
+    });
+
+    it("rows of an OLDER stamp - even a delivered one - do not hold a newer stamp: its own dead row is reported, and the re-drive releases the seat", async () => {
+      const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
+      const b = r.boards[0]!;
+      await open(r, OPENED);
+      const colour = await colourOf(b.fixtureId, b.home.email);
+      const [first] = await rowsForSeat(b.fixtureId, colour);
+      await providerEvent(first!, "email.delivered"); // the old stamp's mail arrived (a delivered row is never replaced)
+      const newer = new Date(OPENED.getTime() + MIN);
+      const col = colour === "white" ? "white_emailed_at" : "black_emailed_at";
+      await sql`update fixture_external_play set ${sql(col)} = ${newer} where fixture_id = ${b.fixtureId}`;
+      mail.fail.add(b.home.email);
+      const seen = wrapHook(() => true); // the process dies before the hook releases the seat
+      expect(await resend(r, b.fixtureId, new Date(OPENED.getTime() + 2 * MIN))).toEqual({ emailed: 1, retrying: 0 });
+      const fresh = (await rowsForSeat(b.fixtureId, colour)).find((x) => x.id !== first!.id)!;
+      expect(fresh.status, "premise: the newer stamp's row ended badly").toBe("dead");
+      expect(fresh.meta.stampedAt, "premise: it rides on the newer stamp").toBe(newer.toISOString());
+      expect(await statusOf(first!.id), "premise: the older stamp's row is delivered, live").toBe("delivered");
+      expect(seen, "premise: the hook ran and died").toEqual([fresh.id]);
+      expect(stampOf(await bridgeOf(b.fixtureId), colour), "premise: nothing released the seat").not.toBeNull();
+
+      expect((await findUnappliedEndings(500)).map((x) => x.id), "the older stamp's delivered row holds nothing of the newer stamp").toContain(fresh.id);
+      KIND_HOOKS.chess_invite = realChessHook;
+      await tick([]);
+      expect(stampOf(await bridgeOf(b.fixtureId), colour), "the re-drive released it").toBeNull();
     });
 
     it("applied endings are excluded in SQL BEFORE the limit, so they cannot starve an unapplied one", async () => {
