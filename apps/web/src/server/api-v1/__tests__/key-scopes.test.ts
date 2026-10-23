@@ -15,6 +15,7 @@ import {
   keyRank,
   v1Path,
 } from "../key-scopes";
+import { addressedKind } from "./_key-route-addressing";
 
 describe("scope ranking", () => {
   it("read < score < manage, legacy write ⇒ manage", () => {
@@ -124,6 +125,49 @@ describe("matchKeyRoute", () => {
   it("accepts full URLs and bare paths", () => {
     expect(v1Path("https://seazn.club/api/v1/teams")).toBe("/teams");
     expect(matchKeyRoute("GET", "https://seazn.club/api/v1/teams")?.scope).toBe("read");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pin kinds — the fail-open guard. auth.ts resolves a pinned key's competition
+// by looking the row's resourceId up in the table its `pin` names; a miss is
+// null, and null falls through on purpose (the handler 404s a missing row, so
+// the pin adds no existence oracle). A row that declares the WRONG kind
+// therefore misses on every lookup and a key pinned to competition A reaches
+// competition B. The expected kind is read off the URL (addressedKind), never
+// off the row. The runtime half — real rows, real resolver — is
+// usecases/__tests__/api-key-pin-sweep.test.ts.
+// ---------------------------------------------------------------------------
+
+describe("every pinned row's pin kind is the kind its URL addresses", () => {
+  it("pin === the collection that owns the resourceId slot, for EVERY pinned row", () => {
+    const wrong: string[] = [];
+    let checked = 0;
+    for (const rule of KEY_ROUTE_RULES) {
+      if (!rule.pin) continue;
+      const { kind } = addressedKind(rule.method, rule.path);
+      if (kind !== rule.pin) {
+        wrong.push(`${rule.method} ${rule.path}: declares pin '${rule.pin}' but its id is a ${kind} id`);
+      }
+      checked += 1;
+    }
+    expect(wrong, `pinned rows whose lookup misses on every request (pin fails open):\n${wrong.join("\n")}`).toEqual([]);
+    expect(checked, "anti-vacuity: pinned rows checked").toBeGreaterThan(0);
+  });
+
+  it("reads the id's OWNER, not the last collection in the path", () => {
+    // The right answer differs from the wrong one here: a guard that read the
+    // last collection would say `lineup` / `checkpoint`.
+    expect(addressedKind("GET", "/fixtures/:id/lineups/:entrantId")).toEqual({ kind: "fixture", idSegment: 2 });
+    expect(addressedKind("DELETE", "/divisions/:id/checkpoints/:checkpointId")).toEqual({
+      kind: "division",
+      idSegment: 2,
+    });
+  });
+
+  it("refuses — never skips — a row it cannot read", () => {
+    expect(() => addressedKind("GET", "/clubs/:id")).toThrow(/no resourceId/); // unpinned
+    expect(() => addressedKind("POST", "/divisions/:id/frobnicate")).toThrow(/does not match its own template/);
   });
 });
 
