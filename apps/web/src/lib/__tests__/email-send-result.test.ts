@@ -232,6 +232,70 @@ describe("sendWithResult — failure", () => {
     expect(error).toHaveBeenCalledWith(`[email] send failed (500) to ${msg.to}: boom`);
   });
 
+  // Ruling R8: the outbox must not log Resend's raw response text (it can echo what was sent). It asks deliver() for
+  // `{ logDetail: false }`; every other caller keeps the line above byte for byte.
+  describe("deliver with { logDetail: false } (the outbox's logging)", () => {
+    const RAW = "RAW-PROVIDER-DETAIL echo https://seazn.club/verify?token=SECRET";
+
+    it("logs the status and the error name only: not Resend's message, not the recipient", async () => {
+      fetchMock.mockImplementation(async () => json(500, { statusCode: 500, name: "internal_server_error", message: RAW }));
+      const result = await deliver(msg, KEY, { logDetail: false });
+      expect(error).toHaveBeenCalledTimes(1);
+      expect(error).toHaveBeenCalledWith("[email] send failed (500) internal_server_error");
+      const logged = JSON.stringify(error.mock.calls);
+      expect(logged).not.toContain("RAW-PROVIDER");
+      expect(logged).not.toContain("SECRET");
+      expect(logged).not.toContain(msg.to);
+      // The result still carries the detail for the caller to classify on; it is the LOG that stops short.
+      expect(result).toMatchObject({ ok: false, reason: "http", status: 500, errorName: "internal_server_error" });
+    });
+
+    it("a body with no error name logs a placeholder, and a name that is not a token is sanitised", async () => {
+      fetchMock.mockImplementationOnce(async () => new Response(RAW, { status: 503 }));
+      await deliver(msg, KEY, { logDetail: false });
+      fetchMock.mockImplementationOnce(async () => json(422, { name: `bad\nname ${"x".repeat(200)}`, message: RAW }));
+      await deliver(msg, KEY, { logDetail: false });
+      const lines = (error.mock.calls as unknown[][]).map((c) => String(c[0]));
+      expect(lines[0]).toBe("[email] send failed (503) unknown");
+      expect(lines[1]).toMatch(/^\[email\] send failed \(422\) bad\?name\?x+$/);
+      expect(lines[1]!.length).toBeLessThan(120);
+      expect(JSON.stringify(error.mock.calls)).not.toContain("RAW-PROVIDER");
+    });
+
+    it("a network failure logs the cause, not the error object (whose stack and cause can carry anything)", async () => {
+      fetchMock.mockImplementation(async () => {
+        throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNRESET" }, secretField: RAW });
+      });
+      await deliver(msg, KEY, { logDetail: false });
+      expect(error).toHaveBeenCalledTimes(1);
+      expect(error).toHaveBeenCalledWith("[email] send error: fetch failed (ECONNRESET)");
+      expect(JSON.stringify(error.mock.calls)).not.toContain("RAW-PROVIDER");
+    });
+
+    it("a network failure's summary is one printable line, capped: a newline and non-ASCII become '?', and 200 characters at most", async () => {
+      fetchMock.mockImplementation(async () => {
+        throw new TypeError(`bad\nline \u00e9${"x".repeat(300)}`);
+      });
+      await deliver(msg, KEY, { logDetail: false });
+      expect(error).toHaveBeenCalledTimes(1);
+      const line = String((error.mock.calls as unknown[][])[0]![0]);
+      const prefix = "[email] send error: ";
+      expect(line.startsWith(`${prefix}bad?line ?xxx`)).toBe(true);
+      expect(line).not.toMatch(/[^\x20-\x7e]/);
+      expect(line.length).toBe(prefix.length + 200);
+    });
+
+    it("the option is off by default and for sendWithResult: today's lines are unchanged (the two pins above stay green)", async () => {
+      fetchMock.mockImplementation(async () => new Response("boom", { status: 500 }));
+      await deliver(msg, KEY);
+      await deliver(msg, KEY, {});
+      await deliver(msg, KEY, { logDetail: true });
+      await sendWithResult(msg);
+      const lines = (error.mock.calls as unknown[][]).map((c) => String(c[0]));
+      expect(lines).toEqual(Array(4).fill(`[email] send failed (500) to ${msg.to}: boom`));
+    });
+  });
+
   it("a fetch that rejects is network, carrying the error's message", async () => {
     fetchMock.mockImplementation(async () => {
       throw new TypeError("fetch failed");

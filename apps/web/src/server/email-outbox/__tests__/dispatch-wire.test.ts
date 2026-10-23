@@ -4,7 +4,7 @@
 // consumer: enqueueEmail -> dispatchNow -> attemptClaimed -> checkSendable -> transport.deliver -> email.deliver -> fetch.
 //
 // The fetch stub is the provider: one message per Idempotency-Key, errors in Resend's `{ statusCode, name, message }` shape.
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { suppress } from "@/lib/email";
@@ -27,6 +27,7 @@ describe.skipIf(!HAS_DB)("the outbox through the real transport (fetch is the on
   const calls: Call[] = [];
   const messages = new Map<string, string>(); // Idempotency-Key -> Resend message id
   let respond: (call: Call) => Response | Promise<Response>;
+  let errorSpy: MockInstance<typeof console.error>;
 
   const fetchStub = vi.fn(async (url: string, init: RequestInit) => {
     const call: Call = {
@@ -86,7 +87,7 @@ describe.skipIf(!HAS_DB)("the outbox through the real transport (fetch is the on
     fetchStub.mockClear();
     respond = accept;
     vi.stubGlobal("fetch", fetchStub);
-    vi.spyOn(console, "error").mockImplementation(() => {});
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
   });
   afterEach(() => {
@@ -136,6 +137,21 @@ describe.skipIf(!HAS_DB)("the outbox through the real transport (fetch is the on
       checked++;
     }
     expect(checked).toBe(cases.length);
+  });
+
+  it("R8: the outbox never logs Resend's raw response text: console.error gets the status and error name only (and the legacy line would have carried the text)", async () => {
+    const id = await queue();
+    respond = () => resendError(500, "internal_server_error"); // its message is `RAW-PROVIDER-MESSAGE <SECRET>`
+    await dispatchNow([id]);
+    // The positive half: the failure IS logged, so an empty log cannot pass the negative half.
+    expect(errorSpy).toHaveBeenCalledWith("[email] send failed (500) internal_server_error");
+    const logged = JSON.stringify(errorSpy.mock.calls);
+    expect(logged).not.toContain("RAW-PROVIDER");
+    expect(logged).not.toContain(SECRET);
+    expect(logged).not.toContain(API_KEY);
+    // Control for the probe: the raw text really was in the response the transport read.
+    const sample = await resendError(500, "x").text();
+    expect(sample).toContain("RAW-PROVIDER-MESSAGE");
   });
 
   it("a network failure -> retrying with the cause code; the body of the exception is not stored", async () => {

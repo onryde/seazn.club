@@ -20,5 +20,6 @@ export type DeliverMessage = {
 };
 
 export async function deliver(m: DeliverMessage, apiKey: string): Promise<DeliverResult> {
-  return postToResend({ ...m, timeoutMs: SEND_TIMEOUT_MS }, apiKey);
+  // logDetail: false (R8): a failed request logs its status and Resend's error name, never the raw response text.
+  return postToResend({ ...m, timeoutMs: SEND_TIMEOUT_MS }, apiKey, { logDetail: false });
 }

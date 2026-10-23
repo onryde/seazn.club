@@ -14,3 +14,4 @@ export {
 export { KIND_HOOKS, afterEndedBadly, type EndedRow, type KindHook } from "./hooks";
 export { OutboxKeyUnavailableError } from "./seal";
 export { classifyResult, nextAttemptAt, type Verdict } from "./classify";
+export { outboxRoleOk } from "./role-check";

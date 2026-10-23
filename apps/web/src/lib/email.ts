@@ -194,12 +194,24 @@ function errorNameOf(text: string): string | null {
   }
 }
 
+/** What a failed request writes to the server log. */
+export interface DeliverLogging {
+  /** Default true: today's lines, which carry the recipient and Resend's raw response text (that text can echo what was
+   *  sent, a sign-in link included). The email outbox passes false (ruling R8): it logs the status and Resend's error
+   *  NAME only. Every other caller keeps today's lines byte for byte. */
+  logDetail?: boolean;
+}
+
+/** A provider-supplied token reduced to something safe to put in one log line. */
+const logToken = (s: string, max: number): string => s.replace(/[^A-Za-z0-9_.-]/g, "?").slice(0, max);
+
 /**
  * POST one message to Resend. Does NOT consult the suppression list or the
  * environment's API key — that is `checkSendable`'s job, done once by the
  * caller. Never throws.
  */
-export async function deliver(opts: SendOptions, apiKey: string): Promise<DeliverResult> {
+export async function deliver(opts: SendOptions, apiKey: string, logging: DeliverLogging = {}): Promise<DeliverResult> {
+  const logDetail = logging.logDetail !== false;
   try {
     const body: Record<string, unknown> = {
       from: from(),
@@ -230,13 +242,15 @@ export async function deliver(opts: SendOptions, apiKey: string): Promise<Delive
     });
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
-      console.error(`[email] send failed (${res.status}) to ${opts.to}: ${detail}`);
-      return { ok: false, reason: "http", status: res.status, errorName: errorNameOf(detail), detail };
+      const errorName = errorNameOf(detail);
+      if (logDetail) console.error(`[email] send failed (${res.status}) to ${opts.to}: ${detail}`);
+      else console.error(`[email] send failed (${res.status}) ${errorName === null ? "unknown" : logToken(errorName, 80)}`);
+      return { ok: false, reason: "http", status: res.status, errorName, detail };
     }
     const parsed = (await readJson(res)) as { id?: unknown } | null;
     return { ok: true, providerId: typeof parsed?.id === "string" ? parsed.id : null };
   } catch (err) {
-    console.error(`[email] send error to ${opts.to}:`, err);
+    if (logDetail) console.error(`[email] send error to ${opts.to}:`, err);
     // AbortSignal.timeout() rejects fetch with a DOMException named TimeoutError.
     const name = (err as { name?: unknown } | null)?.name;
     let detail: string;
@@ -250,6 +264,8 @@ export async function deliver(opts: SendOptions, apiKey: string): Promise<Delive
     } else {
       detail = String(err);
     }
+    // The summary line, not the error object: its stack and cause can carry anything.
+    if (!logDetail) console.error(`[email] send error: ${detail.replace(/[^\x20-\x7e]/g, "?").slice(0, 200)}`);
     return { ok: false, reason: "network", detail };
   }
 }

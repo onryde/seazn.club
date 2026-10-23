@@ -792,6 +792,33 @@ describe.skipIf(!HAS_DB)("the email outbox core (DB)", () => {
       expect(hookSpy).not.toHaveBeenCalled();
     });
 
+    it("a stale write after a re-claim changes nothing: the lease lapsed and the worker took the row (attempts + 1), so attempt 1's result is dropped (2xx, 500, 422)", async () => {
+      const results: Array<[string, DeliverResult]> = [
+        ["2xx", { ok: true, providerId: pid("stale") }],
+        ["500", http(500, "internal_server_error")],
+        ["422", http(422, "validation_error")],
+      ];
+      let checked = 0;
+      for (const [label, result] of results) {
+        const id = await queue();
+        deliverMock.mockImplementationOnce(async () => {
+          // Still 'sending', but it is attempt 2's now: a fresh claim bumps attempts and renews the lease.
+          await sql`update email_outbox set attempts = attempts + 1, lease_until = now() + interval '2 minutes'
+                     where id = ${id} and status = 'sending'`;
+          return result;
+        });
+        const out = await dispatchNow([id]);
+        const r = await get(id);
+        expect([r.status, r.attempts, r.provider_id, r.sent_at, r.last_error], label).toEqual(["sending", 2, null, null, null]);
+        expect(r.body_sealed, label).not.toBeNull();
+        expect(r.lease_until, label).not.toBeNull();
+        expect(out.get(id), label).toBe("deferred");
+        checked++;
+      }
+      expect(checked).toBe(3);
+      expect(hookSpy).not.toHaveBeenCalled();
+    });
+
     it("expired before the first attempt -> expired, body nulled, deliver never called, the hook runs once with status expired", async () => {
       const m = msg({ expiresAt: new Date(Date.now() - 1_000), kind: "chess_invite", refType: "fixture_seat", orgId });
       const id = await queue(m);
@@ -886,6 +913,101 @@ describe.skipIf(!HAS_DB)("the email outbox core (DB)", () => {
       const out = await dispatchNow([live, dead]);
       expect([out.get(live), out.get(dead)]).toEqual(["sent", "expired"]);
       expect(logMock.error).not.toHaveBeenCalled();
+    });
+
+    it("never late, mid-call: the real clock moves while an earlier row is attempted, and a later row that has since expired is not sent, is ended expired, and was never claimed", async () => {
+      vi.stubEnv("NODE_ENV", "production");
+      const T0 = new Date("2026-10-23T12:00:00.000Z");
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(T0);
+      const a = await queue({ expiresAt: new Date(T0.getTime() + 10 * MIN), kind: "chess_invite", refType: "fixture_seat", orgId });
+      const b = await queue({ expiresAt: new Date(T0.getTime() + 5 * MIN), kind: "chess_invite", refType: "fixture_seat", orgId });
+      deliverMock.mockImplementationOnce(async () => {
+        vi.setSystemTime(new Date(T0.getTime() + 6 * MIN)); // sending A took six minutes; B's window closed at five
+        return { ok: true, providerId: pid("a-slow") };
+      });
+      const out = await dispatchNow([a, b]);
+      expect([out.get(a), out.get(b)]).toEqual(["sent", "expired"]);
+      expect(deliverMock).toHaveBeenCalledTimes(1);
+      expect(callsTo().map((c) => c.tags.outbox)).toEqual([a]);
+      const rb = await get(b);
+      // attempts 0 is the claim predicate's witness: with it dropped B is claimed first (attempts 1) and only then expired.
+      expect([rb.status, rb.attempts, rb.body_sealed, rb.lease_until]).toEqual(["expired", 0, null, null]);
+      expect(hookSpy.mock.calls.map((c) => [c[0].id, c[0].status])).toEqual([[b, "expired"]]);
+    });
+
+    it("the same mid-call advance with an injected clock in production: the injected time never rescues a late row", async () => {
+      vi.stubEnv("NODE_ENV", "production");
+      const T0 = new Date("2026-10-23T12:00:00.000Z");
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(T0);
+      const a = await queue({ expiresAt: new Date(T0.getTime() + 10 * MIN) });
+      const b = await queue({ expiresAt: new Date(T0.getTime() + 5 * MIN) });
+      deliverMock.mockImplementationOnce(async () => {
+        vi.setSystemTime(new Date(T0.getTime() + 6 * MIN));
+        return { ok: true, providerId: pid("a-slow-2") };
+      });
+      const out = await dispatchNow([a, b], { now: T0 }); // the caller's clock is frozen at the start of the call
+      expect([out.get(a), out.get(b)]).toEqual(["sent", "expired"]);
+      expect(deliverMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("attemptClaimed judges expiry itself (the worker's path): a claimed row past expires_at is ended expired, deliver never called", async () => {
+      vi.stubEnv("NODE_ENV", "production");
+      const T0 = new Date("2026-10-23T12:00:00.000Z");
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(T0);
+      const late = await queue({ expiresAt: new Date(T0.getTime() + 2 * MIN) });
+      const fine = await queue({ expiresAt: new Date(T0.getTime() + 20 * MIN) });
+      const claimedLate = await claimForRetry(late);
+      const claimedFine = await claimForRetry(fine);
+      vi.setSystemTime(new Date(T0.getTime() + 3 * MIN)); // the claim was at T0; the attempt starts three minutes later
+      const l = await attemptClaimed(claimedLate);
+      expect(l).toEqual({ outcome: "expired", verdict: null, rateLimited: false });
+      expect(deliverMock).not.toHaveBeenCalled();
+      const rl = await get(late);
+      expect([rl.status, rl.attempts, rl.body_sealed, rl.lease_until]).toEqual(["expired", 1, null, null]);
+      expect(endedRowFor(claimedLate, l.outcome)).toMatchObject({ id: late, status: "expired" });
+      // The control: the other row, same clock, is sent (so the check is not "everything expires").
+      expect((await attemptClaimed(claimedFine)).outcome).toBe("sent");
+    });
+
+    it("attemptClaimed takes an injected clock too (the test seam): ahead of real time it expires a row early", async () => {
+      const id = await queue({ expiresAt: new Date(Date.now() + MIN) });
+      const claimed = await claimForRetry(id);
+      expect((await attemptClaimed(claimed, { now: new Date(Date.now() + 2 * MIN) })).outcome).toBe("expired");
+      expect(deliverMock).not.toHaveBeenCalled();
+    });
+
+    it("attemptClaimed in production also ignores a stale injected clock: a row past expiry in real time is expired though the injected time says it is fine", async () => {
+      vi.stubEnv("NODE_ENV", "production");
+      const id = await queue({ expiresAt: new Date(Date.now() - 5 * MIN) });
+      const claimed = await claimForRetry(id);
+      const out = await attemptClaimed(claimed, { now: new Date(Date.now() - 30 * MIN) });
+      expect(out.outcome).toBe("expired");
+      expect(deliverMock).not.toHaveBeenCalled();
+    });
+
+    it("attemptClaimed expires a row at exactly expires_at, like the SQL statements do (<=, not <)", async () => {
+      const id = await queue({ expiresAt: new Date(Date.now() + 10 * MIN) });
+      const claimed = await claimForRetry(id);
+      const edge = await attemptClaimed(claimed, { now: claimed.expiresAt });
+      expect(edge.outcome).toBe("expired");
+      // One millisecond earlier it is still sendable (so the boundary is the line, not a wide margin).
+      const id2 = await queue({ expiresAt: new Date(Date.now() + 10 * MIN) });
+      const claimed2 = await claimForRetry(id2);
+      expect((await attemptClaimed(claimed2, { now: new Date(claimed2.expiresAt.getTime() - 1) })).outcome).toBe("sent");
+    });
+
+    it("an expiry found as an attempt begins is fenced like every other write: after a re-claim the stale attempt changes nothing", async () => {
+      const id = await queue({ expiresAt: new Date(Date.now() + MIN) });
+      const stale = await claimForRetry(id); // attempt 1
+      await sql`update email_outbox set attempts = attempts + 1, lease_until = now() + interval '2 minutes' where id = ${id}`; // re-claimed: attempt 2
+      const out = await attemptClaimed(stale, { now: new Date(Date.now() + 5 * MIN) });
+      expect(out.outcome).toBe("deferred");
+      const r = await get(id);
+      expect([r.status, r.attempts]).toEqual(["sending", 2]);
+      expect(r.body_sealed).not.toBeNull();
     });
 
     it("the 60 s tolerance, pinned on a frozen Date: exactly 60 s behind is silent, 60.001 s behind logs once", async () => {

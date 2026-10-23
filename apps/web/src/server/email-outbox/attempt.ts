@@ -10,14 +10,20 @@ import "server-only";
 // opens the sealed body, then hands the plaintext and the gate's key to the transport. The `SendGate` and Resend's raw
 // `detail` are never logged or stored; `last_error` is `http <status> <name>` or `network <cause>`, capped at 200.
 //
-// Every update after the send is conditional on `status = 'sending'`: a row superseded while its attempt was in flight
-// (the replace trigger moves a `sending` row to `replaced`) stays `replaced`, whatever the attempt returned.
+// Every update after the send is conditional on `status = 'sending' and attempts = <this attempt's number>`: a row
+// superseded while its attempt was in flight (the replace trigger moves a `sending` row to `replaced`) stays `replaced`,
+// and a row whose lease lapsed and was re-claimed (attempts + 1, still `sending`) is not touched by the first attempt's
+// late result. Whatever the attempt returned, only the attempt that still owns the row may write it.
+//
+// Never late: expiry is judged by the REAL clock at the moment of each claim and again at the start of each attempt, not
+// once per call. A call that sends several rows can take longer than the later rows have left.
 import { sql } from "@/lib/db";
 import { checkSendable, type DeliverResult } from "@/lib/email";
 import { log } from "@/server/logger";
 import { INVALID_IDEMPOTENT_REQUEST, classifyResult, nextAttemptAt, type Verdict } from "./classify";
 import { LEASE_MS, idempotencyKey, type OutboxKind } from "./constants";
 import { afterEndedBadly, type EndedRow } from "./hooks";
+import { outboxRoleOk } from "./role-check";
 import { openBody } from "./seal";
 import { deliver } from "./transport";
 
@@ -76,10 +82,11 @@ export function toClaimedRow(r: ClaimedRecord): ClaimedRow {
   };
 }
 
-/** The row a kind hook is given when an attempt ended the row badly; null for any other outcome. (A row that expired
- *  was ended by an UPDATE, not an attempt, so its caller builds that EndedRow from the statement's RETURNING.) */
+/** The row a kind hook is given when an attempt ended the row badly (dead, suppressed, or found expired as the attempt
+ *  began); null for any other outcome. (A row expired by a statement before any claim is built by that statement's caller
+ *  from its RETURNING.) */
 export function endedRowFor(row: ClaimedRow, outcome: AttemptOutcome): EndedRow | null {
-  if (outcome !== "dead" && outcome !== "suppressed") return null;
+  if (outcome !== "dead" && outcome !== "suppressed" && outcome !== "expired") return null;
   return { id: row.id, kind: row.kind, refType: row.refType, refId: row.refId, status: outcome, meta: row.meta };
 }
 
@@ -111,7 +118,7 @@ async function markSent(row: ClaimedRow, providerId: string | null): Promise<boo
     update email_outbox
        set status = 'sent', provider_id = ${providerId}, sent_at = now(), body_sealed = null, lease_until = null,
            status_at = now()
-     where id = ${row.id} and status = 'sending'
+     where id = ${row.id} and status = 'sending' and attempts = ${row.attempts}
     returning id`;
   return done.length > 0;
 }
@@ -121,7 +128,7 @@ async function markRetry(row: ClaimedRow, next: Date, lastError: string | null):
     update email_outbox
        set status = 'queued', next_attempt_at = ${next}, lease_until = null, last_error = ${lastError},
            status_at = now()
-     where id = ${row.id} and status = 'sending'
+     where id = ${row.id} and status = 'sending' and attempts = ${row.attempts}
     returning id`;
   return done.length > 0;
 }
@@ -131,7 +138,17 @@ async function markEnded(row: ClaimedRow, status: "dead" | "suppressed", lastErr
   const done = await sql`
     update email_outbox
        set status = ${status}, body_sealed = null, lease_until = null, last_error = ${lastError}, status_at = now()
-     where id = ${row.id} and status = 'sending'
+     where id = ${row.id} and status = 'sending' and attempts = ${row.attempts}
+    returning id`;
+  return done.length > 0;
+}
+
+/** The email is worthless now: end it unsent, body and lease gone (the V469 CHECKs insist on both). */
+async function markExpired(row: ClaimedRow): Promise<boolean> {
+  const done = await sql`
+    update email_outbox
+       set status = 'expired', body_sealed = null, lease_until = null, status_at = now()
+     where id = ${row.id} and status = 'sending' and attempts = ${row.attempts}
     returning id`;
   return done.length > 0;
 }
@@ -145,9 +162,19 @@ export type AttemptResult = { outcome: AttemptOutcome; verdict: Verdict | null; 
 /**
  * Attempt one claimed row once and record the result. Never throws on a send failure (those are results); a database
  * failure on the recording write propagates, and the row is left `sending` with its lease for the worker to reclaim.
- * `outcome` is `deferred` when the row was no longer ours by the time the write ran (replaced mid-flight).
+ * `outcome` is `deferred` when the row was no longer ours by the time the write ran (replaced mid-flight, or re-claimed
+ * by a later attempt).
+ *
+ * The first thing it does is judge expiry, on the real clock (`opts.now` is the test seam, see effectiveNow): the row may
+ * have waited since it was claimed (the worker paces its sends), and a late email is worse than none. An expired row is
+ * ended `expired` without a request, a gate lookup or a body open.
  */
-export async function attemptClaimed(row: ClaimedRow): Promise<AttemptResult> {
+export async function attemptClaimed(row: ClaimedRow, opts: { now?: Date } = {}): Promise<AttemptResult> {
+  if (row.expiresAt.getTime() <= effectiveNow(opts.now).getTime()) {
+    const applied = await markExpired(row);
+    return { outcome: applied ? "expired" : "deferred", verdict: null, rateLimited: false };
+  }
+
   // R5/R8: the gate first. The body stays sealed until the gate says yes.
   const gate = await checkSendable({ to: row.recipient, subject: row.subject, transactional: row.transactional });
   if (!gate.ok) {
@@ -234,24 +261,30 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const STALE_CLOCK_TOLERANCE_MS = 60_000;
 
 /**
- * The time a row's expiry is judged against. Production judges expiry on the REAL current time; `injected` is the test
- * clock seam only (the same `deps.now` openRound and resendExternalPlayNotice take; chess suites open rounds on clocks
- * 30 minutes in the past, and judging them on real time there would expire every invite they write). So in production
- * the injected time can only move the clock forward, which expires a row early, the safe direction; a stale one can
- * never make a send late. Passing a clock more than 60 s behind is logged once.
+ * The time a row's expiry is judged against, read FRESH each time it is asked (a call that sends several rows can take
+ * longer than the later rows have left). Production judges expiry on the REAL current time; `injected` is the test clock
+ * seam only (the same `deps.now` openRound and resendExternalPlayNotice take; chess suites open rounds on clocks 30 minutes
+ * in the past, and judging them on real time there would expire every invite they write). So in production the injected
+ * time can only move the clock forward, which expires a row early, the safe direction; a stale one can never make a send
+ * late.
  */
 function effectiveNow(injected: Date | undefined): Date {
   const real = new Date();
   if (injected === undefined) return real;
   if (process.env.NODE_ENV !== "production") return injected;
-  const behindMs = real.getTime() - injected.getTime();
+  return injected.getTime() > real.getTime() ? injected : real;
+}
+
+/** In production, passing a clock more than 60 s behind real time is a caller bug: say so, once per call. */
+function warnIfStaleClock(injected: Date | undefined): void {
+  if (injected === undefined || process.env.NODE_ENV !== "production") return;
+  const behindMs = Date.now() - injected.getTime();
   if (behindMs > STALE_CLOCK_TOLERANCE_MS) {
     log.error(
       { behindMs },
       "email outbox: dispatchNow was given a clock more than 60 s behind real time; production judges expiry on real time",
     );
   }
-  return injected.getTime() > real.getTime() ? injected : real;
 }
 
 const errFields = (err: unknown): { errName: string; errCode?: unknown; errMessage: string } => ({
@@ -262,15 +295,36 @@ const errFields = (err: unknown): { errName: string; errCode?: unknown; errMessa
 
 type ExpiredRecord = { id: string; kind: OutboxKind; ref_type: string; ref_id: string; meta: Record<string, string> };
 
+/** End every `queued` row among `ids` that is past `expires_at` as of `now`: expired, body and lease gone. */
+function expireQueued(ids: readonly string[], now: Date): Promise<ExpiredRecord[]> {
+  return sql<ExpiredRecord[]>`
+    update email_outbox
+       set status = 'expired', body_sealed = null, lease_until = null, status_at = now()
+     where id = any(${ids as string[]}::uuid[]) and status = 'queued' and expires_at <= ${now}
+    returning id, kind, ref_type, ref_id, meta`;
+}
+
+const endedExpired = (r: ExpiredRecord): EndedRow => ({
+  id: r.id,
+  kind: r.kind,
+  refType: r.ref_type,
+  refId: r.ref_id,
+  status: "expired",
+  meta: r.meta,
+});
+
 /**
  * Attempt the first send of each id, in order, and say what happened to each. Call it AFTER the caller's transaction
  * has committed (never inside `withTenant`: it uses the pooled client). It does not throw: the rows are durable, so a
  * failure here defers them to the worker rather than failing a request that already committed.
  *
- *  - ids that are `queued` and already past `expires_at` become `expired` (body nulled). That one statement is the only
- *    expiry guard: the claim below does not repeat it (a second copy could never fire, so nothing could test it);
- *  - the rest are claimed one at a time (`queued`, `attempts = 0`) and attempted, in the order given; a repeated id finds
- *    its first outcome already recorded and is skipped;
+ *  - if the database role cannot write the outbox (role-check.ts) every id is `deferred` and an error is logged, on every
+ *    call: it fails closed and says why;
+ *  - ids that are `queued` and already past `expires_at` become `expired` (body nulled);
+ *  - the rest are claimed one at a time (`queued`, `attempts = 0`, `expires_at` still ahead on the clock AS OF THE CLAIM)
+ *    and attempted, in the order given. A row that expired while earlier rows were being sent fails its claim and is
+ *    ended `expired` instead; one claimed but expired by the time its attempt starts is ended by `attemptClaimed`. A
+ *    repeated id finds its first outcome already recorded and is skipped;
  *  - after the first 429 the remaining ids are not claimed at all (still `queued`, attempts 0, outcome `deferred`);
  *  - the kind hooks run once at the end, for every row that ended badly in this call.
  */
@@ -288,21 +342,24 @@ export async function dispatchNow(ids: readonly string[], opts: { now?: Date } =
     }
   }
   if (malformed > 0) log.error({ malformed }, "email outbox: dispatchNow ignored ids that are not uuids");
+  if (valid.length === 0) return outcomes;
 
   const ended: EndedRow[] = [];
   try {
-    const now = effectiveNow(opts.now);
+    warnIfStaleClock(opts.now);
 
-    if (valid.length > 0) {
-      const expired = await sql<ExpiredRecord[]>`
-        update email_outbox
-           set status = 'expired', body_sealed = null, lease_until = null, status_at = now()
-         where id = any(${valid}::uuid[]) and status = 'queued' and expires_at <= ${now}
-        returning id, kind, ref_type, ref_id, meta`;
-      for (const r of expired) {
-        outcomes.set(r.id, "expired");
-        ended.push({ id: r.id, kind: r.kind, refType: r.ref_type, refId: r.ref_id, status: "expired", meta: r.meta });
-      }
+    if (!(await outboxRoleOk())) {
+      log.error(
+        { rows: valid.length },
+        "email outbox: the database role is neither superuser nor BYPASSRLS, so it cannot write email_outbox; nothing was sent and every row stays queued",
+      );
+      for (const id of valid) outcomes.set(id, "deferred");
+      return outcomes;
+    }
+
+    for (const r of await expireQueued(valid, effectiveNow(opts.now))) {
+      outcomes.set(r.id, "expired");
+      ended.push(endedExpired(r));
     }
 
     let rateLimited = false;
@@ -312,20 +369,30 @@ export async function dispatchNow(ids: readonly string[], opts: { now?: Date } =
         outcomes.set(id, "deferred");
         continue;
       }
+      // The clock is read again for every row: sending the earlier ones took time.
+      const rowNow = effectiveNow(opts.now);
       const [rec] = await sql<ClaimedRecord[]>`
         update email_outbox
            set status = 'sending', attempts = attempts + 1, lease_until = now() + make_interval(secs => ${LEASE_MS / 1000}),
                status_at = now()
-         where id = ${id} and status = 'queued' and attempts = 0
+         where id = ${id} and status = 'queued' and attempts = 0 and expires_at > ${rowNow}
         returning id, kind, ref_type, ref_id, org_id, meta, recipient, subject, body_sealed, transactional,
                   attempts, expires_at, lease_until`;
       if (!rec) {
-        outcomes.set(id, "deferred");
+        // Not ours to start (taken, replaced, already attempted), or its window closed while earlier rows were sent:
+        // the latter is ended now rather than left queued for a worker that would only expire it.
+        const [late] = await expireQueued([id], rowNow);
+        if (late) {
+          outcomes.set(id, "expired");
+          ended.push(endedExpired(late));
+        } else {
+          outcomes.set(id, "deferred");
+        }
         continue;
       }
       const claimed = toClaimedRow(rec);
       try {
-        const res = await attemptClaimed(claimed);
+        const res = await attemptClaimed(claimed, { now: opts.now });
         outcomes.set(id, res.outcome);
         const endedRow = endedRowFor(claimed, res.outcome);
         if (endedRow) ended.push(endedRow);
