@@ -344,6 +344,8 @@ export async function listDivisionFixtures(auth: AuthCtx, divisionId: string): P
              ${hasActiveAbandonSql(tx, "f", { expunge: true })} as expunged,
              ${activeAbandonReasonSql(tx, "f")} as abandon_reason,
              ${hasActiveAbandonSql(tx, "f")} as has_active_abandon,
+             -- Rebase ruling D3: that abandon is the organiser's online No result (the settle; the line is not held).
+             ${hasActiveAbandonSql(tx, "f", { noResult: true })} as no_result,
              -- W2c Task 19 (S4): the match plays a format of its own (the run sheet's "Format changed" chip).
              f.rules_override is not null as format_changed
       from fixtures f

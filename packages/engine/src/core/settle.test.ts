@@ -399,8 +399,11 @@ describe("X-AB-5 (owner P-7, ruling 130): the stage-aware settle precondition - 
   it("a TABLE stage offers a settle for an active abandon that decided nobody - and for nothing else (every table kind, counted)", () => {
     // [facts, expected]: the row is "An abandoned match in a Swiss stage holds the next round until the organiser settles it";
     // a draw in a table is a RESULT the standings credit, a win is decided, and an expunge left the table altogether.
-    const cases: Array<[string, { outcome: typeof nobody | typeof draw | typeof win; abandoned: boolean; expunged?: boolean }, boolean]> = [
+    const cases: Array<[string, { outcome: typeof nobody | typeof draw | typeof win; abandoned: boolean; expunged?: boolean; noResult?: boolean }, boolean]> = [
       ["abandoned, no outcome", { outcome: nobody, abandoned: true }, true],
+      // Rebase ruling D3: the organiser's No result (online chess I-3) IS the settle - the abandon it writes is owed nothing more.
+      ["the organiser's No result", { outcome: nobody, abandoned: true, noResult: true }, false],
+      ["noResult false reads as a plain abandon", { outcome: nobody, abandoned: true, noResult: false }, true],
       ["abandoned, a shared draw", { outcome: draw, abandoned: true }, false],
       ["abandoned, a leader's win", { outcome: win, abandoned: true }, false],
       ["a played draw, no abandon", { outcome: draw, abandoned: false }, false],
@@ -418,8 +421,11 @@ describe("X-AB-5 (owner P-7, ruling 130): the stage-aware settle precondition - 
   });
 
   it("a BRACKET stage keeps the kernel's own precondition: a level result or an abandon with nobody decided is settleable, a win is not (every bracket kind, counted)", () => {
-    const cases: Array<[string, { outcome: typeof nobody | typeof draw | typeof win; abandoned: boolean }, boolean]> = [
+    const cases: Array<[string, { outcome: typeof nobody | typeof draw | typeof win; abandoned: boolean; noResult?: boolean }, boolean]> = [
       ["level", { outcome: draw, abandoned: false }, true],
+      // Rebase ruling D3 leaves the knockout arm alone: No result is refused before any write in a bracket kind
+      // (KNOCKOUT_NEEDS_WINNER), so the marker can only reach here by hand - and changes nothing.
+      ["abandoned with the No result marker", { outcome: nobody, abandoned: true, noResult: true }, true],
       ["abandoned, no outcome", { outcome: nobody, abandoned: true }, true],
       ["a win", { outcome: win, abandoned: false }, false],
       ["undecided, not abandoned", { outcome: nobody, abandoned: false }, false],
@@ -432,6 +438,23 @@ describe("X-AB-5 (owner P-7, ruling 130): the stage-aware settle precondition - 
       }
     expect(checked).toBe(BRACKET_KINDS.size * cases.length);
     expect(BRACKET_KINDS.size + DRAW_KINDS.size).toBe(StageKind.options.length); // every kind was visited, by one half or the other
+  });
+
+  it("rebase ruling D3: core.abandon carries the organiser's No result as `noResult: true`, and only as true", () => {
+    const schema = CORE_EVENT_SCHEMAS["core.abandon"];
+    const cases: Array<[unknown, boolean]> = [
+      [{ reason: "x" }, true],
+      [{ reason: "x", noResult: true }, true],
+      [{ reason: "x", noResult: false }, false],
+      [{ reason: "x", noResult: "yes" }, false],
+      [{ noResult: true }, false],
+    ];
+    let checked = 0;
+    for (const [payload, ok] of cases) {
+      expect(schema.safeParse(payload).success, JSON.stringify(payload)).toBe(ok);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
   });
 
   it("no stage at all (a fixture outside any stage) reads as a table: only an abandon with nobody decided", () => {

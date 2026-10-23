@@ -18,7 +18,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import { BRACKET_KINDS, DRAW_KINDS, foldMatch, foldMatchWithStoppage, outcomeOf, playRecorded, StageKind } from "@seazn/engine/core";
+import { BRACKET_KINDS, DRAW_KINDS, EngineError, foldMatch, foldMatchWithStoppage, outcomeOf, playRecorded, StageKind } from "@seazn/engine/core";
 import type { StandingsRow } from "@seazn/engine/competition";
 import { boardgame } from "@seazn/engine/sports/boardgame";
 import EN from "@/dictionaries/en/ui.json";
@@ -47,9 +47,11 @@ import { HOLD_REASONS, holdForOrganiser, holdOwedTiebreak, holdRefusedNoShow, ti
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
-import { getFixtureState } from "../fixtures";
+import { getFixtureState, listDivisionFixtures } from "../fixtures";
 import { startDivision } from "../schedule";
 import { completeStage, createStages, generateStageFixtures } from "../stages";
+import { getCompetitionDesk, listFixturesAwaitingSettle } from "../competition-desk";
+import { abandonNoResult, needsDecision } from "@/components/v2/needs-decision";
 import { scoreEvent } from "../scoring";
 import { makeUser } from "./_seed";
 import { seedOnlineChessRound, seedOnlineSwiss, seedOwner, seedPlayer, type SeedOnlineChessRoundResult, type SeedRoundBoard } from "./_external-play-seed";
@@ -320,10 +322,11 @@ describe.runIf(HAS_DB)("resolveExternalPlay — a held board, settled", () => {
       expect(await resolveExternalPlay(r.owner, b.fixtureId, "no_result"), String(hold)).toEqual({ status: "finished" });
 
       const ledger = await ledgerOf(b.fixtureId);
-      expect(ledger.map((e) => [e.type, e.payload]), `${hold}: one abandon, no Start`).toEqual([["core.abandon", { reason: text }]]);
+      // Rebase ruling D3: the abandon carries the organiser's No result marker - it IS the settle in a table stage.
+      expect(ledger.map((e) => [e.type, e.payload]), `${hold}: one abandon, no Start`).toEqual([["core.abandon", { reason: text, noResult: true }]]);
       expect(ledger[0]!.recorded_by, "the ledger names who settled").toBe(r.ownerUserId);
       expect(played(ledger), `${hold}: still nothing played`).toBe(false);
-      expect(engineFold(b, "core.abandon", { reason: text }).outcome, "premise: the engine's fold of an abandon decides nobody").toBeNull();
+      expect(engineFold(b, "core.abandon", { reason: text, noResult: true }).outcome, "premise: the engine's fold of an abandon decides nobody").toBeNull();
       expect(await fixtureOf(b.fixtureId), String(hold)).toEqual({ status: "abandoned", outcome: null });
       expect(await bridgeOf(b.fixtureId), String(hold)).toMatchObject({ status: "finished", needs_reason: null });
       expect(await listNeedsOrganiserExternalPlay(r.owner, r.divisionId), `${hold}: not the queue's any more`).toEqual([]);
@@ -393,7 +396,7 @@ describe.runIf(HAS_DB)("resolveExternalPlay — a held board, settled", () => {
     const fr = abandonReasonText(FR, "not_started");
     expect(fr, "premise: the differential — French copy, not the English").not.toBe(abandonReasonText(EN, "not_started"));
     await resolveExternalPlay(r.owner, b.fixtureId, "no_result");
-    expect((await ledgerOf(b.fixtureId)).map((e) => e.payload)).toEqual([{ reason: fr }]);
+    expect((await ledgerOf(b.fixtureId)).map((e) => e.payload)).toEqual([{ reason: fr, noResult: true }]);
   });
 
   it("I-3 both absent (no_show_both, double_walkover_blocked): No result stays W2b's double walkover — `core.forfeit {by: both, reason: walkover}`, no Start — read by the panel as the engine's own lines", async () => {
@@ -442,7 +445,7 @@ describe.runIf(HAS_DB)("resolveExternalPlay — a held board, settled", () => {
       const ledger = await ledgerOf(b.fixtureId);
       expect(ledger.map((e) => [e.type, e.payload]), kind).toEqual([
         ["core.start", {}],
-        ["core.abandon", { reason: abandonReasonText(EN, "fair_play") }],
+        ["core.abandon", { reason: abandonReasonText(EN, "fair_play"), noResult: true }],
       ]);
       expect(played(ledger), `${kind}: the Start stands`).toBe(true);
       expect(await fixtureOf(b.fixtureId), kind).toEqual({ status: "abandoned", outcome: null });
@@ -907,6 +910,123 @@ describe.runIf(HAS_DB)("resolveExternalPlay — what No result means, per stage 
     expect((await completeStage(l.owner, l.stageId)).completed, "premise: five games still to play").toBe(false);
     for (const b of rest) expect(await resolveExternalPlay(l.owner, b.id, "home_wins")).toEqual({ status: "finished" });
     expect((await completeStage(l.owner, l.stageId)).completed, "the void holds nothing up").toBe(true);
+  });
+});
+
+// Rebase ruling D3 (2026-10-23, option A): the organiser's No result on an online board in a league or group round-robin
+// IS the settle. W2c's table hold (X-AB-5: an abandon that decided nobody is owed the organiser's settle) reads the
+// abandon's `noResult` marker through its ONE predicate (`settleAppliesInTable` <- `rowAwaitsSettle` / `settleOffered`),
+// so the completion, the desk and the console all follow. A plain abandon still holds, exactly as before. Single sport by
+// construction: only chess plays online; the predicate itself is swept over every stage kind in settle.test.ts and
+// row-awaits-settle.test.ts.
+describe.runIf(HAS_DB)("rebase ruling D3: the organiser's No result is the settle; a plain abandon still holds", () => {
+  async function competitionOf(divisionId: string): Promise<string> {
+    const [d] = await sql<{ competition_id: string }[]>`select competition_id from divisions where id = ${divisionId}`;
+    return d!.competition_id;
+  }
+  /** The desk's red needs-decision row for the division: the fixtures it names (none: []). */
+  async function deskHeld(auth: AuthCtx, divisionId: string): Promise<string[]> {
+    const desk = await getCompetitionDesk(auth, await competitionOf(divisionId));
+    return [...(desk.divisions.get(divisionId)?.attention.find((a) => a.kind === "needs_decision")?.fixtureIds ?? [])].sort();
+  }
+  /** The console's block, fed what the console is fed: the fixture's live outcome and state and its ledger rows. */
+  async function consoleHolds(fixtureId: string): Promise<boolean> {
+    const [f] = await sql<{ outcome: unknown; state: unknown }[]>`
+      select f.outcome, m.state from fixtures f left join match_states m on m.fixture_id = f.id where f.id = ${fixtureId}`;
+    return needsDecision(boardgame, { outcome: f!.outcome, state: f!.state ?? null, stageKind: "league", events: await ledgerOf(fixtureId) });
+  }
+  const seqOf = async (fixtureId: string) =>
+    (await sql<{ s: number }[]>`select coalesce(max(seq), 0)::int as s from score_events where fixture_id = ${fixtureId}`)[0]!.s;
+
+  it("the empty case: a league nobody abandoned holds nothing on the desk, the division page or the console", async () => {
+    const l = await seedRealTable("league", 4);
+    const boards = await sql<{ id: string }[]>`select id from fixtures where stage_id = ${l.stageId} order by round_no, seq_in_round`;
+    expect(boards.length, "premise: six games").toBe(6);
+    expect(await deskHeld(l.owner, l.divisionId)).toEqual([]);
+    expect([...(await listFixturesAwaitingSettle(l.owner, l.divisionId))]).toEqual([]);
+    let checked = 0;
+    for (const b of boards) {
+      expect(await consoleHolds(b.id), b.id).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(boards.length);
+    expect(abandonNoResult([]), "no ledger, no No result").toBe(false);
+  });
+
+  it("the differential: in one league the No result board is settled and a plain abandon is held - by the desk, the division page, the console and the completion; No result twice writes nothing, and no settle is taken after it", async () => {
+    const l = await seedRealTable("league", 4);
+    const boards = await sql<{ id: string; home_entrant_id: string }[]>`
+      select id, home_entrant_id from fixtures where stage_id = ${l.stageId} order by round_no, seq_in_round`;
+    const [voided, plain, ...rest] = [...boards] as [(typeof boards)[number], (typeof boards)[number], ...(typeof boards)[number][]];
+    for (const b of [voided, ...rest]) {
+      await bridgeFor(l.orgId, b.id);
+      await holdForOrganiser({ fixtureId: b.id, reason: "not_started", detail: "TEST" });
+    }
+
+    expect(await resolveExternalPlay(l.owner, voided.id, "no_result")).toEqual({ status: "finished" });
+    const voidLedger = await ledgerOf(voided.id);
+    expect(voidLedger.map((e) => [e.type, e.payload.noResult]), "premise: the No result's own abandon, marked").toEqual([["core.abandon", true]]);
+    // The contrast: an abandon recorded on the pad (no marker) - W2c's hold, unchanged.
+    await scoreEvent(l.owner, plain.id, { expected_seq: 0, type: "core.abandon", payload: { reason: "Power cut" } });
+    expect(await fixtureOf(plain.id)).toEqual({ status: "abandoned", outcome: null });
+    expect(await fixtureOf(voided.id), "stored alike").toEqual({ status: "abandoned", outcome: null });
+
+    expect(await deskHeld(l.owner, l.divisionId), "the desk holds the plain abandon only").toEqual([plain.id]);
+    expect([...(await listFixturesAwaitingSettle(l.owner, l.divisionId))], "the division page too").toEqual([plain.id]);
+    expect(await consoleHolds(voided.id), "the console offers no settle on the No result board").toBe(false);
+    expect(await consoleHolds(plain.id), "and still offers it on the plain abandon").toBe(true);
+    // The console's qualification line reads the same fact off its fixture list (true on the No result board only).
+    const listed = new Map((await listDivisionFixtures(l.owner, l.divisionId)).map((f) => [f.id, f]));
+    expect([voided.id, plain.id].map((id) => [listed.get(id)?.has_active_abandon, listed.get(id)?.no_result]), "the console's list").toEqual([
+      [true, true],
+      [true, false],
+    ]);
+
+    // A second No result, and a settle after it: each refused, nothing written.
+    expect(await codeOf(resolveExternalPlay(l.owner, voided.id, "no_result")), "No result twice").toEqual([409, "ALREADY_RESOLVED"]);
+    await expect(
+      scoreEvent(l.owner, voided.id, { expected_seq: await seqOf(voided.id), type: "core.settle", payload: { winner: voided.home_entrant_id, method: "organiser" } }),
+      "a settle after the No result",
+    ).rejects.toMatchObject({ code: "SETTLE_NOT_APPLICABLE" });
+    expect((await ledgerOf(voided.id)).map((e) => e.id), "nothing written by either").toEqual(voidLedger.map((e) => e.id));
+
+    for (const b of rest) expect(await resolveExternalPlay(l.owner, b.id, "home_wins")).toEqual({ status: "finished" });
+    // Completion names the plain abandon alone: the No result board holds nothing up.
+    const refusal = await completeStage(l.owner, l.stageId).then(
+      () => null,
+      (err: unknown) => err,
+    );
+    expect(refusal, "the plain abandon still holds the league").toBeInstanceOf(EngineError);
+    expect((refusal as EngineError).code).toBe("STAGE_NOT_READY");
+    expect(((refusal as EngineError).data as { abandoned: { fixtureId: string }[] }).abandoned.map((a) => a.fixtureId)).toEqual([plain.id]);
+
+    // The organiser settles the plain abandon (W2c's own door): now the league completes.
+    await scoreEvent(l.owner, plain.id, { expected_seq: await seqOf(plain.id), type: "core.settle", payload: { winner: plain.home_entrant_id, method: "organiser" } });
+    expect(await deskHeld(l.owner, l.divisionId), "nothing held").toEqual([]);
+    expect((await completeStage(l.owner, l.stageId)).completed).toBe(true);
+  });
+
+  it("only the organiser's No result may write the marker: the same abandon sent through the scoring door is refused, nothing written", async () => {
+    const l = await seedRealTable("league", 4);
+    const [b] = await sql<{ id: string }[]>`select id from fixtures where stage_id = ${l.stageId} order by round_no, seq_in_round limit 1`;
+    await expect(
+      scoreEvent(l.owner, b!.id, { expected_seq: 0, type: "core.abandon", payload: { reason: "Forged", noResult: true } }),
+    ).rejects.toMatchObject({ code: "INVALID_EVENT", data: { reason: "no_result_only" } });
+    expect(await ledgerOf(b!.id)).toEqual([]);
+  });
+
+  it("a voided No result is no longer a settle: the board is live again and nothing reads it as decided", async () => {
+    const l = await seedRealTable("league", 4);
+    const [b] = await sql<{ id: string }[]>`select id from fixtures where stage_id = ${l.stageId} order by round_no, seq_in_round limit 1`;
+    await bridgeFor(l.orgId, b!.id);
+    await holdForOrganiser({ fixtureId: b!.id, reason: "not_started", detail: "TEST" });
+    expect(await resolveExternalPlay(l.owner, b!.id, "no_result")).toEqual({ status: "finished" });
+    const [abandon] = await ledgerOf(b!.id);
+    expect(abandonNoResult(await ledgerOf(b!.id)), "premise: read as the No result").toBe(true);
+    await scoreEvent(l.owner, b!.id, { expected_seq: await seqOf(b!.id), type: "core.void", payload: { event_id: abandon!.id } });
+    expect(abandonNoResult(await ledgerOf(b!.id)), "a voided abandon is no settle").toBe(false);
+    expect((await fixtureOf(b!.id)).status, "playable again").not.toBe("abandoned");
+    expect(await deskHeld(l.owner, l.divisionId)).toEqual([]);
   });
 });
 

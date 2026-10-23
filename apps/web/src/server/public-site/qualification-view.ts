@@ -89,6 +89,9 @@ export interface QualFixture {
    *  Absent (an older cached document) is UNKNOWN, not false: `buildQualificationView` shows no status while an
    *  abandoned, result-less row could be either (`abandonUnknown`). */
   has_active_abandon?: boolean;
+  /** Rebase ruling D3: that abandon is the organiser's online No result (`PublicFixture.no_result`) - already the
+   *  settle, never held. Absent reads as a plain abandon. */
+  no_result?: boolean;
   /** W2c X-PT-1: was anything played before its forfeit — `playRecorded` of its ledger under the division's module, the
    *  fact the standings fold hands `applyPointsRule` (`engine-db/forfeit-played.ts`, read by `qualificationFixtures`).
    *  Loaded only under a stage rule that scores forfeits, for a two-seated forfeit; false where it is not loaded (and a
@@ -180,6 +183,7 @@ function statusIn(kind: string, f: QualFixture) {
     outcome: f.outcome,
     has_active_abandon: f.has_active_abandon === true,
     expunged: f.expunged,
+    no_result: f.no_result === true,
   });
 }
 const settledIn = (kind: string, f: QualFixture) => SETTLED_FIXTURE_STATUSES.has(statusIn(kind, f));
@@ -187,7 +191,7 @@ const settledIn = (kind: string, f: QualFixture) => SETTLED_FIXTURE_STATUSES.has
  *  generator's - and the row cannot say. Only a row the held predicate WOULD take (were the fact true) is ambiguous. */
 const abandonUnknown = (kind: string, f: QualFixture) =>
   f.has_active_abandon === undefined &&
-  rowAwaitsSettle(kind, { status: f.status, outcome: f.outcome, has_active_abandon: true, expunged: f.expunged });
+  rowAwaitsSettle(kind, { status: f.status, outcome: f.outcome, has_active_abandon: true, expunged: f.expunged, no_result: f.no_result === true });
 const outcomeKind = (f: Pick<QualFixture, "outcome">): string | undefined =>
   f.outcome && typeof f.outcome === "object" ? (f.outcome as { kind?: string }).kind : undefined;
 

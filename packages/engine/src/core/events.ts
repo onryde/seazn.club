@@ -71,7 +71,7 @@ export const CoreForfeit = z
   });
 // W2b (plan D5): `expunge: true` marks an abandon written by the withdrawal cascade — the match leaves the table
 // entirely (`outcomeOf` reads null while it is active). `true` or absent; never `false`.
-export const CoreAbandon = z.strictObject({ reason: z.string().min(1), expunge: z.literal(true).optional() });
+export const CoreAbandon = z.strictObject({ reason: z.string().min(1), expunge: z.literal(true).optional(), noResult: z.literal(true).optional() });
 
 /** The one reader for a `core.forfeit` payload. Every sport module used to cast
  *  it inline as `{ by: string }`, which is why the REQUIRED `reason` was
@@ -188,10 +188,10 @@ export function settleApplies(module: { awaitingDecider?(state: never): boolean 
  *  exception is an ABANDONED match that decided nobody (no effective outcome), which has no result to turn into a win,
  *  stays out of the table and, in a Swiss stage, holds the next round - the organiser's settle is how it is decided.
  *  An EXPUNGE abandon (W2b D5, a withdrawal's) also folds to no outcome but took the match out of the table altogether:
- *  nothing is owed on it, so it is never offered. `abandoned` is the ACTIVE `core.abandon` of the ledger. */
-export interface TableSettleFacts { readonly outcome: MatchOutcome | null; readonly abandoned: boolean; readonly expunged?: boolean }
+ *  nothing is owed on it, so it is never offered. `abandoned` is the ACTIVE `core.abandon` of the ledger. `noResult` (rebase ruling D3): that abandon IS the organiser's No result (`core.abandon{noResult: true}`, online chess I-3), already the settle - owed nothing more. */
+export interface TableSettleFacts { readonly outcome: MatchOutcome | null; readonly abandoned: boolean; readonly expunged?: boolean; readonly noResult?: boolean }
 export function settleAppliesInTable(f: TableSettleFacts): boolean {
-  return f.abandoned && f.expunged !== true && f.outcome === null;
+  return f.abandoned && f.expunged !== true && f.noResult !== true && f.outcome === null;
 }
 
 /** THE stage-aware settle offer: ONE entry for the server's append guard (a table stage's settle) and the console's
@@ -201,7 +201,7 @@ export function settleAppliesInTable(f: TableSettleFacts): boolean {
 export function settleOffered(
   module: { awaitingDecider?(state: never): boolean },
   stageKind: string | null | undefined,
-  f: SettleFacts & { readonly expunged?: boolean },
+  f: SettleFacts & { readonly expunged?: boolean; readonly noResult?: boolean },
 ): boolean {
   return forbidsLevelResult(stageKind) ? settleApplies(module, f) : settleAppliesInTable(f);
 }

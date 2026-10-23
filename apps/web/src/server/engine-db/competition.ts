@@ -289,6 +289,9 @@ interface FixtureRow {
   /** X-AB-5: that active abandon is a withdrawal's EXPUNGE (owner ruling 105) — the match left the table, nothing is
    *  owed on it, so it never holds a completion. */
   expunged: boolean;
+  /** Rebase ruling D3: that active abandon is the organiser's online No result - already the settle, so it never
+   *  holds a table stage's completion either. */
+  no_result: boolean;
   /** The match's number within its round - names a held match in the refusal (`completeStageIfReady`). */
   seq_in_round: number;
   /** W2b D20 — the feed edges, so the bracket read can assert a double walkover seated nobody. */
@@ -339,7 +342,8 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
            f.outcome, f.config_snapshot, f.rules_override, f.ext_key, m.state,
            f.winner_to_fixture, f.winner_to_slot, f.loser_to_fixture, f.loser_to_slot, f.seq_in_round,
            ${hasActiveAbandonSql(tx)} as has_active_abandon,
-           ${hasActiveAbandonSql(tx, "f", { expunge: true })} as expunged
+           ${hasActiveAbandonSql(tx, "f", { expunge: true })} as expunged,
+           ${hasActiveAbandonSql(tx, "f", { noResult: true })} as no_result
     from fixtures f left join match_states m on m.fixture_id = f.id
     where f.stage_id = ${stageId}
     order by f.round_no, f.seq_in_round

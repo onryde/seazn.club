@@ -168,9 +168,14 @@ function boardChanged(): HttpError {
 
 /** A settle's ledger write. A ledger conflict is the board changing under the organiser (`boardChanged`), never a
  *  bare engine error. */
-async function settleWrite(auth: AuthCtx, fixtureId: string, input: Parameters<typeof scoreEvent>[2]): Promise<void> {
+async function settleWrite(
+  auth: AuthCtx,
+  fixtureId: string,
+  input: Parameters<typeof scoreEvent>[2],
+  opts: Parameters<typeof scoreEvent>[3] = {},
+): Promise<void> {
   try {
-    await scoreEvent(auth, fixtureId, input);
+    await scoreEvent(auth, fixtureId, input, opts);
   } catch (err) {
     if (err instanceof EngineError && err.code === "SEQ_CONFLICT") throw boardChanged();
     throw err;
@@ -287,7 +292,7 @@ export async function resolveExternalPlay(
       type: event.type,
       payload: event.payload,
       idempotency_key: decisionKey(fixtureId, fs.last_seq, kind),
-    });
+    }, event.type === "core.abandon" ? { writer: "organiser_no_result" } : {});
     await close();
     endTheGame({ kind: "void" });
     return { status: "finished" };

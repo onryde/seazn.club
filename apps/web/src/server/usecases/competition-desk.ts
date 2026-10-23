@@ -149,7 +149,7 @@ export function defaultMatchMinutes(): number {
  *  and the division page's phase, so the two authorities cannot disagree about one division. */
 export function fixtureAwaitsSettle(
   stageKind: string | undefined,
-  f: { status: string; outcome: unknown; has_active_abandon: boolean; expunged?: boolean },
+  f: { status: string; outcome: unknown; has_active_abandon: boolean; expunged?: boolean; no_result: boolean },
 ): boolean {
   return rowAwaitsSettle(stageKind, f);
 }
@@ -158,9 +158,10 @@ export function fixtureAwaitsSettle(
  *  ledger fact). Only `abandoned` rows are probed, so a division with none pays one indexed scan and no ledger read. */
 export async function listFixturesAwaitingSettle(auth: AuthCtx, divisionId: string): Promise<ReadonlySet<string>> {
   const rows = await withTenant(auth.orgId, (tx) =>
-    tx<{ id: string; status: string; outcome: unknown; kind: string; has_active_abandon: boolean; expunged: boolean }[]>`
+    tx<{ id: string; status: string; outcome: unknown; kind: string; has_active_abandon: boolean; expunged: boolean; no_result: boolean }[]>`
       select f.id, f.status, f.outcome, s.kind, ${hasActiveAbandonSql(tx)} as has_active_abandon,
-             ${hasActiveAbandonSql(tx, "f", { expunge: true })} as expunged
+             ${hasActiveAbandonSql(tx, "f", { expunge: true })} as expunged,
+             ${hasActiveAbandonSql(tx, "f", { noResult: true })} as no_result
         from fixtures f join stages s on s.id = f.stage_id
        where f.division_id = ${divisionId} and f.status = 'abandoned'`,
   );
@@ -224,6 +225,8 @@ type FixtureRaw = {
   /** W2c X-AB-5: that abandon is a withdrawal's EXPUNGE (`hasActiveAbandonSql`'s expunge probe) - a table stage's match
    *  taken out of the table is owed no settle. */
   expunged: boolean;
+  /** Rebase ruling D3: that abandon is the organiser's online No result (the noResult probe) - already the settle. */
+  no_result: boolean;
 };
 type SettingsRaw = { division_id: string; tz: string | null; match_minutes: number | null };
 /** F4 (#707 Task 4) — fixtures with a non-declined scoring official, read
@@ -344,6 +347,7 @@ export async function getCompetitionDesk(
                  f.home_slot_label, f.away_slot_label, f.outcome,
                  ${hasActiveAbandonSql(tx)} as has_active_abandon,
                  ${hasActiveAbandonSql(tx, "f", { expunge: true })} as expunged,
+                 ${hasActiveAbandonSql(tx, "f", { noResult: true })} as no_result,
                  h.display_name as home, a.display_name as away,
                  coalesce(e.n, 0)::int as event_count, e.started_at, e.started_at_key,
                  ms.summary->>'headline' as headline

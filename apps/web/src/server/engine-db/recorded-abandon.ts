@@ -24,14 +24,19 @@ type Tx = postgres.TransactionSql;
  * `{ expunge: true }` (W2b D5, owner ruling 105 / loop-F M-10): only an active abandon that carries `expunge: true` —
  * a withdrawal's expunge (`withdrawal.ts` `expungeAbandon`), which took the match out of the table altogether, so
  * nothing is owed on it. The same probe, one more clause: never a second copy of the ledger rule.
+ *
+ * `{ noResult: true }` (rebase ruling D3): only an active abandon that IS the organiser's online No result
+ * (`core.abandon{noResult: true}`, external-play/no-result.ts; writer-gated in append-event.ts) - already the
+ * organiser's settle, so a table stage owes it nothing more (`rowAwaitsSettle`).
  */
 /** `postgres.Sql` (a transaction is one too): the public loaders read it on the pool, outside a transaction. */
-export function hasActiveAbandonSql(tx: postgres.Sql | Tx, on = "f", opts: { expunge?: true } = {}) {
+export function hasActiveAbandonSql(tx: postgres.Sql | Tx, on = "f", opts: { expunge?: true; noResult?: true } = {}) {
   const f = tx(on);
   const expunged = opts.expunge === true ? tx`and a.payload ->> 'expunge' = 'true'` : tx``;
+  const noResult = opts.noResult === true ? tx`and a.payload ->> 'noResult' = 'true'` : tx``;
   return tx`(${f}.status = 'abandoned' and exists (
     select 1 from score_events a
-    where ${activeAbandonOf(tx, on)} ${expunged}))`;
+    where ${activeAbandonOf(tx, on)} ${expunged} ${noResult}))`;
 }
 
 /** The one ledger rule both probes share: `a` is a `core.abandon` of the row `f` that no `core.void` targets. */
@@ -72,16 +77,24 @@ export function activeAbandonReasonSql(tx: postgres.Sql | Tx, on = "f") {
  * (stored `abandoned`, told apart from the generator's void only by the ledger) that the engine's `settleOffered`
  * says is settleable in this stage kind - a bracket's held abandon, or a TABLE stage's abandon that decided nobody
  * (a Swiss board holds the next round). A withdrawal's EXPUNGE (`expunged`) took the match out of the table and is
- * owed nothing. ONE predicate shared with the server's settle guard and the console's block (`settleOffered`).
+ * owed nothing; nor is the organiser's online No result (`no_result`, rebase ruling D3: that abandon IS the settle).
+ * ONE predicate shared with the server's settle guard and the console's block (`settleOffered`). `no_result` is
+ * REQUIRED so no reader can forget to ask: an omitted fact would silently hold every No result board again.
  */
 export function rowAwaitsSettle(
   stageKind: string | null | undefined,
-  f: { status: string; outcome: unknown; has_active_abandon: boolean; expunged?: boolean },
+  f: { status: string; outcome: unknown; has_active_abandon: boolean; expunged?: boolean; no_result: boolean },
 ): boolean {
   return (
     f.status === "abandoned" &&
     f.has_active_abandon &&
-    settleOffered({}, stageKind, { outcome: f.outcome as MatchOutcome | null, abandoned: true, expunged: f.expunged === true, state: null })
+    settleOffered({}, stageKind, {
+      outcome: f.outcome as MatchOutcome | null,
+      abandoned: true,
+      expunged: f.expunged === true,
+      noResult: f.no_result,
+      state: null,
+    })
   );
 }
 
@@ -96,7 +109,7 @@ export function rowAwaitsSettle(
  */
 export function completionEngineStatus(
   stageKind: string | null | undefined,
-  f: { status: string; outcome: unknown; has_active_abandon: boolean; expunged?: boolean },
+  f: { status: string; outcome: unknown; has_active_abandon: boolean; expunged?: boolean; no_result: boolean },
 ): FixtureStatus {
   return rowAwaitsSettle(stageKind, f) ? "in_play" : engineFixtureStatus(f.status);
 }

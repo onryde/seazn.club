@@ -47,8 +47,9 @@ export interface LoadersScene {
   compSlug: string;
   /** The cup league's abandoned matches (batch-5 Q3): one with an ACTIVE abandon carrying a reason, one whose abandon
    *  was voided, one a withdrawal's EXPUNGE. Without them the loaders' three abandon carries (`expunged`,
-   *  `abandon_reason`, `has_active_abandon`) read false on every row and a hard-wired false passes the diff. */
-  abandoned: { active: string; voided: string; expunged: string };
+   *  `abandon_reason`, `has_active_abandon`) read false on every row and a hard-wired false passes the diff.
+   *  Rebase ruling D3 adds `noResult`: the organiser's online "No result" (`no_result`, the fourth carry). */
+  abandoned: { active: string; voided: string; expunged: string; noResult: string };
   cup: SceneDivision;
   bracket: SceneDivision;
   draft: SceneDivision;
@@ -162,7 +163,7 @@ export async function seedLoadersScene(): Promise<LoadersScene> {
   await score(auth, playable[1]!.id, [{ type: "core.start", payload: {} }]); // in play
   // Abandoned matches, through the real write path: an active abandon with a reason (a level game, so the reader keeps
   // its reason), an abandon the organiser then voided, and a withdrawal's expunge (the cascade's own writer).
-  const abandonedIds = { active: playable[2]!.id, voided: playable[3]!.id, expunged: playable[4]!.id };
+  const abandonedIds = { active: playable[2]!.id, voided: playable[3]!.id, expunged: playable[4]!.id, noResult: playable[5]!.id };
   await scoreEvent(auth, abandonedIds.active, { expected_seq: 0, type: "core.start", payload: {} } as never);
   await scoreEvent(auth, abandonedIds.active, { expected_seq: 1, type: "core.abandon", payload: { reason: "floodlights failed" } } as never);
   await scoreEvent(auth, abandonedIds.voided, { expected_seq: 0, type: "core.start", payload: {} } as never);
@@ -174,6 +175,14 @@ export async function seedLoadersScene(): Promise<LoadersScene> {
     abandonedIds.expunged,
     { expected_seq: 1, type: "core.abandon", payload: { reason: "withdrew", expunge: true } } as never,
     { writer: "withdrawal_cascade" },
+  );
+  // Rebase ruling D3: the organiser's online "No result" (its own writer, as resolveExternalPlay writes it).
+  await scoreEvent(auth, abandonedIds.noResult, { expected_seq: 0, type: "core.start", payload: {} } as never);
+  await scoreEvent(
+    auth,
+    abandonedIds.noResult,
+    { expected_seq: 1, type: "core.abandon", payload: { reason: "No result", noResult: true } } as never,
+    { writer: "organiser_no_result" },
   );
   // Withdrawn after the start: its fixtures stay, its name still publishes.
   const westgate = cupEntrants.find((e) => e.display_name === "Westgate")!;

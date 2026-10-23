@@ -1656,6 +1656,19 @@ describe("a match held for settle is still open (X-AB-5; the public table reads 
       expect(kindsOf(must(view(build(plain("A", "B", { expunged: true })))))).toEqual(CLOSED);
     });
 
+    it(`${name}: rebase ruling D3 - the organiser's online No result IS the settle: closed, while the same abandon unmarked is held`, () => {
+      expect(kindsOf(must(view(build(plain("A", "B", { no_result: true })))))).toEqual(CLOSED);
+      expect(kindsOf(must(view(build(plain("A", "B", { no_result: false })))))).toEqual(HELD);
+      // The table's last match: No result finishes the stage (no view), where a plain abandon still shows one.
+      const LAST = [row("A", 1, 2, 2, [2, 0]), row("C", 2, 2, 3, [2, 1]), row("B", 3, 1, 2, [1, 1]), row("D", 4, 0, 3, [0, 3])];
+      const lastOne = (ab: QualFixture): Scene => {
+        const sc = build(ab, LAST);
+        return { ...sc, fixtures: sc.fixtures.map((f) => (f.status === "scheduled" ? { ...won(3, "C", "D"), pool_id: f.pool_id } : f)) };
+      };
+      expect(view(lastOne(plain("A", "B", { no_result: true }))), "No result: the stage is complete").toBeNull();
+      expect(view(lastOne(plain("A", "B"))), "plain: still open").not.toBeNull();
+    });
+
     it(`${name}: a generator's void (no ledger entry) and an abandon that RECORDED a result stay closed`, () => {
       let checked = 0;
       for (const closed of [

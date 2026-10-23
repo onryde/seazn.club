@@ -338,6 +338,7 @@ export async function withdrawEntrantCascade(
             outcome: f.outcome,
             has_active_abandon: active.length > 0,
             expunged: active.some((e) => (e.payload as { expunge?: unknown } | null)?.expunge === true),
+            no_result: active.some((e) => (e.payload as { noResult?: unknown } | null)?.noResult === true),
           });
           if (owed) out.left_to_organiser.push(f.id);
         }

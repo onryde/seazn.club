@@ -61,4 +61,24 @@ describe.skipIf(!HAS_DB)("a league withdrawal's report and the boards already ex
     const third = await withdrawEntrantCascade(t.auth, C);
     expect(third.left_to_organiser, "the scorer's abandon on C-D is reported").toEqual([cd.id]);
   }, 180_000);
+
+  // Rebase ruling D3: the organiser's online "No result" IS the settle, so a board carrying it is owed nothing. The marker
+  // is sport-generic (the engine's core.abandon), so this runs on a generic league - the chess door is
+  // external-play-resolve.test.ts's. Written by its own writer, as resolveExternalPlay writes it.
+  it("rebase ruling D3: a board the organiser closed with No result is not reported; the plain abandon beside it is", async () => {
+    const t = await seedBracket({ sport: "generic", variant: "score", stageKind: "league", entrants: 4 });
+    const all = await boardsOf(t.stageId);
+    expect(all).toHaveLength(6);
+    const ids = [...new Set(all.flatMap((b) => [b.home, b.away]))];
+    const [A, B, C] = ids as [string, string, string];
+    const between = (x: string, y: string) => all.find((b) => [b.home, b.away].includes(x) && [b.home, b.away].includes(y))!;
+    const [ab, ac] = [between(A, B), between(A, C)];
+    for (const b of [ab, ac]) await scoreEvent(t.auth, b.id, { expected_seq: 0, type: "core.start", payload: {} });
+    await scoreEvent(t.auth, ab.id, { expected_seq: 1, type: "core.abandon", payload: { reason: "No result", noResult: true } }, { writer: "organiser_no_result" });
+    await scoreEvent(t.auth, ac.id, { expected_seq: 1, type: "core.abandon", payload: { reason: "rain" } });
+    const stored = await boardsOf(t.stageId);
+    expect([ab, ac].map((b) => stored.find((x) => x.id === b.id)!.status), "rig: both stored abandoned alike").toEqual(["abandoned", "abandoned"]);
+    const out = await withdrawEntrantCascade(t.auth, A);
+    expect(out.left_to_organiser, "only the plain abandon is owed a settle").toEqual([ac.id]);
+  }, 180_000);
 });

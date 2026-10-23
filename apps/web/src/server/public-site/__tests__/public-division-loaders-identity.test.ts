@@ -162,7 +162,13 @@ async function readPublicDivisionDetailBefore(division: PublicDivision) {
            (public_fixtures_v.status = 'abandoned' and exists (
              select 1 from score_events a
               where a.fixture_id = public_fixtures_v.id and a.type = 'core.abandon'
-                and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id))) as has_active_abandon
+                and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id))) as has_active_abandon,
+           -- Rebase ruling D3, carried the same way: the organiser's online "No result" (the marker on an active
+           -- core.abandon), written out by hand.
+           (public_fixtures_v.status = 'abandoned' and exists (
+             select 1 from score_events a
+              where a.fixture_id = public_fixtures_v.id and a.type = 'core.abandon' and a.payload ->> 'noResult' = 'true'
+                and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id))) as no_result
     from public_fixtures_v where division_id = ${division.id}
     order by round_no, seq_in_round`.then((rows) => rows.map(normalizeFixtureBefore));
   const fixtures = await withCourtVenueNames(rawFixtures);
@@ -245,7 +251,12 @@ async function embedDivisionDataBefore(divisionId: string) {
              (public_fixtures_v.status = 'abandoned' and exists (
                select 1 from score_events a
                 where a.fixture_id = public_fixtures_v.id and a.type = 'core.abandon'
-                  and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id))) as has_active_abandon
+                  and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id))) as has_active_abandon,
+             -- Rebase ruling D3: the same carry as readPublicDivisionDetailBefore.
+             (public_fixtures_v.status = 'abandoned' and exists (
+               select 1 from score_events a
+                where a.fixture_id = public_fixtures_v.id and a.type = 'core.abandon' and a.payload ->> 'noResult' = 'true'
+                  and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id))) as no_result
       from public_fixtures_v where division_id = ${divisionId}
       order by round_no, seq_in_round`
       .then((rows) => rows.map(isoBefore))
@@ -379,10 +390,17 @@ describe.skipIf(!HAS_DB)("readPublicDivisionDetail — identical to the pre-T4 r
     expect(expunged!.abandon_reason ?? null, "an expunge took the match off the table: no reason to state").toBeNull();
     expect(voided!.status, "a voided abandon leaves the match playable again").not.toBe("abandoned");
     expect({ x: voided!.expunged, h: voided!.has_active_abandon, r: voided!.abandon_reason ?? null }, "a voided abandon carries nothing").toEqual({ x: false, h: false, r: null });
-    // …and every other match carries false/null on all three (the negative pair: the carries are not stuck true).
-    const others = cup.fixtures.filter((f) => ![scene.abandoned.active, scene.abandoned.expunged].includes(f.id));
+    // Rebase ruling D3: the fourth carry, `no_result`, true on the organiser's online "No result" only — a plain
+    // abandon, an expunge and a voided abandon all read false (a loader hard-wiring it either way reds here).
+    const noResult = row(scene.abandoned.noResult);
+    expect(noResult, "the cup holds the No result match").toBeDefined();
+    expect(noResult!.status).toBe("abandoned");
+    expect({ n: noResult!.no_result, x: noResult!.expunged, h: noResult!.has_active_abandon }, "the organiser's No result").toEqual({ n: true, x: false, h: true });
+    expect([active, expunged, voided].map((f) => f!.no_result), "a plain abandon, an expunge, a voided abandon: no No result").toEqual([false, false, false]);
+    // …and every other match carries false/null on all four (the negative pair: the carries are not stuck true).
+    const others = cup.fixtures.filter((f) => ![scene.abandoned.active, scene.abandoned.expunged, scene.abandoned.noResult].includes(f.id));
     expect(others.length).toBeGreaterThan(0);
-    expect(others.every((f) => f.expunged !== true && f.has_active_abandon !== true), "only the two abandoned matches carry").toBe(true);
+    expect(others.every((f) => f.expunged !== true && f.has_active_abandon !== true && f.no_result !== true), "only the three abandoned matches carry").toBe(true);
   });
 
   it("the pre-T4 fixtures statement leaves tied rows in PHYSICAL order when it walks the index (why the order now ends on stage seq and id)", async () => {

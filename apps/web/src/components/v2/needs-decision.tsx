@@ -34,6 +34,17 @@ export function abandonExpunged(events: readonly LedgerRow[]): boolean {
   );
 }
 
+/** Rebase ruling D3: an active abandon that IS the organiser's online No result (`core.abandon{noResult: true}`) - already
+ *  the settle, so a table stage owes it nothing more. Read from the payload the way the server's settle guard does. */
+export function abandonNoResult(events: readonly LedgerRow[]): boolean {
+  return events.some(
+    (e) =>
+      e.type === "core.abandon" &&
+      !events.some((v) => v.voids_event_id === e.id) &&
+      (e.payload as { noResult?: unknown } | null | undefined)?.noResult === true,
+  );
+}
+
 /** Controller ruling C12 + W2c P-7 / X-AB-5: the engine's stage-aware settle offer (`settleOffered`) fed the same facts
  *  the server's settle guard reads. A bracket kind: the kernel's precondition. A table stage: an active abandon that
  *  decided nobody, a withdrawal's expunge aside. */
@@ -45,6 +56,7 @@ export function needsDecision(
     outcome: f.outcome as MatchOutcome | null,
     abandoned: hasActiveAbandon(f.events),
     expunged: abandonExpunged(f.events),
+    noResult: abandonNoResult(f.events),
     state: f.state,
   });
 }

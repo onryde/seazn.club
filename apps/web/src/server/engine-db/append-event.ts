@@ -58,14 +58,16 @@ export interface AppendInput {
    *  `rules_version` is refused FIXTURE_RULES_CHANGED before anything is written. Absent is never checked: the console
    *  chrome, the americano panel, the withdrawal cascade, finalize, the settle and the importer never send it. */
   rulesVersion?: number;
-  /** W2b PF-2 — which server writer is appending. Set ONLY by the withdrawal cascade (`withdrawal.ts`, through
-   *  `scoreEvent`'s internal options, never a request field): `reason: "withdrew"` and `core.abandon{expunge:true}`
-   *  are cascade-only events, refused from every other writer — the console, a device link, the API, the importer. */
+  /** W2b PF-2 — which server writer is appending. Set ONLY by the withdrawal cascade (`withdrawal.ts`) and the organiser's
+   *  online No result (`external-play/resolve.ts`), through `scoreEvent`'s internal options, never a request field:
+   *  `reason: "withdrew"` and `core.abandon{expunge:true}` are the cascade's alone, `core.abandon{noResult:true}` the No
+   *  result's alone (rebase ruling D3) - each refused from every other writer: the console, a device link, the API, the importer. */
   writer?: CascadeWriter;
 }
 
-/** The one writer that may record the cascade-only events (PF-2). */
-export type CascadeWriter = "withdrawal_cascade";
+/** The server writers that may record a writer-only event: the withdrawal cascade (PF-2) and the organiser's online No
+ *  result (rebase ruling D3). */
+export type CascadeWriter = "withdrawal_cascade" | "organiser_no_result";
 
 export interface AppendResult {
   seq: number;
@@ -220,6 +222,8 @@ export const RETIRED_ON_WRITE_SPORT_EVENTS: Readonly<Record<string, { field: str
  * - D15: a retired sport-event value (`RETIRED_ON_WRITE_SPORT_EVENTS`) — INVALID_EVENT, `chess_forfeit_method_retired`.
  * - PF-2: `core.forfeit{reason:"withdrew"}` and `core.abandon{expunge:true}` from any writer but the withdrawal
  *   cascade — INVALID_EVENT, `cascade_only`.
+ * - Rebase ruling D3: `core.abandon{noResult:true}` (the organiser's No result, which a table stage reads as already
+ *   settled) from any writer but the online No result — INVALID_EVENT, `no_result_only`.
  * - PF-1 (server half): the cascade's `withdrew` over a stored result is admitted only on a HELD row
  *   (`needs_decision`); the engine's admission is stage-blind, and a league draw is a result standings credit —
  *   ALREADY_DECIDED, `withdrew_over_result`.
@@ -254,6 +258,12 @@ function assertW2bWriteGuards(
     throw new EngineError("INVALID_EVENT", "only a withdrawal records this — withdraw the entrant instead", {
       fixtureId: fixture.id,
       reason: "cascade_only",
+    });
+  }
+  if (candidate.type === "core.abandon" && payload.noResult === true && writer !== "organiser_no_result") {
+    throw new EngineError("INVALID_EVENT", "only the organiser's No result on an online board records this", {
+      fixtureId: fixture.id,
+      reason: "no_result_only",
     });
   }
   if (withdrew && fixture.outcome !== null && fixture.status !== "needs_decision") {
@@ -477,10 +487,13 @@ export async function appendEventInTx(
     // (shared points, a leader's win) does not.
     if (!forbidsLevelResult(stageKind)) {
       const before = foldMatchWithStoppage(sportModule, cfg, lineups, prior, { strictFromSeq: candidate.seq });
+      const activeAbandons = resolveVoids(prior).filter((e) => e.type === "core.abandon");
       const offered = settleOffered(sportModule, stageKind, {
         outcome: outcomeOf(sportModule, before),
-        abandoned: resolveVoids(prior).some((e) => e.type === "core.abandon"),
+        abandoned: activeAbandons.length > 0,
         expunged: before.expunged === true,
+        // Rebase ruling D3: the organiser's No result is already the settle (`noResult`, read off the payload).
+        noResult: activeAbandons.some((e) => (e.payload as { noResult?: unknown } | null)?.noResult === true),
         state: before.state,
       });
       if (!offered) {
