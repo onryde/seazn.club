@@ -15,6 +15,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { expandWithHooks, propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { MatchRuleFields } from "@/components/v2/match-rules";
+import { RuleFieldControl } from "@/components/v2/stage-rules/rule-field-control";
 import { DivisionSettings } from "@/components/v2/division-settings";
 import { SPORT_RULES } from "@/lib/match-rules";
 import { HttpError } from "@/lib/errors";
@@ -65,7 +66,8 @@ const propsFor = (config: Cfg, onlineChessOffered = true, sport = "boardgame") =
     },
     orgId: "org1",
     variants: [{ key: sport === "boardgame" ? "classical" : "standard", name: "Standard" }],
-    locked: false,
+    structureLocked: false,
+    lockedFields: [],
     stages: [],
     canEdit: true,
     divisionPathPrefix: "/o/org/c/comp/d/",
@@ -106,7 +108,11 @@ function choose(island: Island, key: string) {
 function freeFieldLabels(island: Island): string[] {
   const grid = island.tree().find((n) => n.type === MatchRuleFields);
   if (!grid) return [];
+  // W2c: each field is a `RuleFieldControl` (stage-rules/rule-field-control.tsx) and its label lives inside it, so the
+  // grid is expanded one level further, as the browser renders it.
   return walk(expandWithHooks(MatchRuleFields, grid.props as Parameters<typeof MatchRuleFields>[0]))
+    .filter((n) => n.type === RuleFieldControl)
+    .flatMap((c) => walk(expandWithHooks(RuleFieldControl, c.props as Parameters<typeof RuleFieldControl>[0])))
     .filter((n) => n.type === "span" && propsOf(n).className === "label")
     .map((n) => textOf(n).trim());
 }
@@ -114,6 +120,7 @@ const TIME_LABEL = "Time per side (minutes)";
 const INCREMENT_LABEL = "Increment per move (seconds, Fischer)";
 const DELAY_LABEL = "Move delay (seconds, Bronstein/US delay)";
 const FAMILY_LABEL = "Clock family";
+const RUNGS_LABEL = "Tie-break games, in order";
 
 async function save(island: Island) {
   const button = island.tree().find((n) => n.type === "button" && textOf(n).trim() === "Save match rules");
@@ -194,18 +201,21 @@ describe("Online play = Lichess: the clock is a picker of the supported controls
     for (const label of [TIME_LABEL, INCREMENT_LABEL, DELAY_LABEL, FAMILY_LABEL]) {
       expect(free, `${label} is replaced by the picker`).not.toContain(label);
     }
-    // Every boardgame rule field is one the picker replaces today; a field added later must be a deliberate choice.
+    // Every boardgame rule field is one the picker replaces, except W2c's tie-break rungs (BG-KO-3): not a clock, so the
+    // grid still draws it under Lichess (rebase ruling D1, 2026-10-23: the rungs stay the organiser's). A field added later
+    // must be a deliberate choice.
     expect(SPORT_RULES.boardgame!.map((f) => f.key).sort()).toEqual(
-      ["clockBaseMinutes", "clockDelaySeconds", "clockIncrementSeconds", "variant"],
+      ["clockBaseMinutes", "clockDelaySeconds", "clockIncrementSeconds", "tiebreakRungs", "variant"],
     );
+    expect(free, "the one field the picker does not stand in for").toEqual([RUNGS_LABEL]);
   });
 
   it("Online play = Off keeps the free fields and no picker (the control is a Lichess aid, not a replacement)", () => {
     const island = mount({ variant: "classical" });
     expect(picker(island), "no picker while Off").toBeUndefined();
     const free = freeFieldLabels(island);
-    expect(free, "anti-vacuity: the grid renders its fields").toHaveLength(4);
-    expect(free).toEqual(expect.arrayContaining([TIME_LABEL, INCREMENT_LABEL, DELAY_LABEL, FAMILY_LABEL]));
+    expect(free, "anti-vacuity: the grid renders its fields").toHaveLength(5);
+    expect(free).toEqual(expect.arrayContaining([TIME_LABEL, INCREMENT_LABEL, DELAY_LABEL, FAMILY_LABEL, RUNGS_LABEL]));
   });
 
   it("another sport never gets the picker, even with a stray onlinePlay in its config; its rule fields are untouched", () => {
