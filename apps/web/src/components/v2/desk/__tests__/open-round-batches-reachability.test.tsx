@@ -7,7 +7,9 @@
 //
 // Every expected value comes from the rows on file (`fixtures`, `stage_round_opens`) and the window constants - never
 // from the view or the component under test. Single-sport by construction: online play exists only for `boardgame`.
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DeliverMessage } from "@/server/email-outbox/transport";
+import { stubOutboxEnv, type SentInvite } from "@/server/usecases/__tests__/_invite-mail";
 import { renderToStaticMarkup } from "react-dom/server";
 import { sql } from "@/lib/db";
 import { fmtTime } from "@/lib/format";
@@ -16,11 +18,19 @@ import type { OpenRoundView } from "@/lib/open-round";
 import { CHECKIN_BATCH_GAP_MS, CHECKIN_BATCH_SIZE, DEADLINE_AFTER_MS } from "@/server/external-play/window";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
-// The email seam, as open-round-view.test.ts: the real `send` no-ops without RESEND_API_KEY.
+// The email seam, as open-round-view.test.ts: the invite goes through the email outbox and its replaced transport.
+const mail = vi.hoisted(() => ({ sent: [] as SentInvite[], fail: new Set<string>() }));
 vi.mock("@/lib/email", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/email")>();
-  return { ...actual, sendExternalPlayInviteEmail: vi.fn(async () => true) };
+  const h = await import("@/server/usecases/__tests__/_invite-mail");
+  return { ...actual, externalPlayInviteEmail: h.renderInviteForTest };
 });
+// The invite is queued on the email outbox and sent after commit through its one network seam; the provider's answer is ours.
+vi.mock("@/server/email-outbox/transport", async () => {
+  const h = await import("@/server/usecases/__tests__/_invite-mail");
+  return { deliver: (msg: DeliverMessage) => h.deliverForTest(mail, msg) };
+});
+beforeEach(() => stubOutboxEnv());
 
 import { openRound } from "@/server/usecases/external-play/open-round";
 import { listOpenRounds } from "@/server/usecases/external-play/open-round-view";

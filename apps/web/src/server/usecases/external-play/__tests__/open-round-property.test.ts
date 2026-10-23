@@ -25,29 +25,28 @@
 // against a model whose expectation is computed BEFORE each call.
 //
 // Single-sport by necessity: online play exists only for boardgame.
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DeliverMessage } from "@/server/email-outbox/transport";
+import { stubOutboxEnv, type SentInvite } from "@/server/usecases/__tests__/_invite-mail";
 import fc from "fast-check";
 import { sql } from "@/lib/db";
 import { boardAnchor, DEADLINE_AFTER_MS, roomPhase } from "@/server/external-play/window";
 
 const mail = vi.hoisted(() => ({
-  sent: [] as { to: string; fixtureUrl: string }[],
+  sent: [] as SentInvite[],
   failOnce: new Set<string>(),
 }));
 vi.mock("@/lib/email", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/email")>();
-  return {
-    ...actual,
-    sendExternalPlayInviteEmail: vi.fn(
-      async (to: string, args: Parameters<typeof actual.sendExternalPlayInviteEmail>[1]) => {
-        if (mail.failOnce.has(to)) return false;
-        mail.sent.push({ to, fixtureUrl: args.fixtureUrl });
-        return true;
-      },
-    ),
-  };
+  const h = await import("@/server/usecases/__tests__/_invite-mail");
+  return { ...actual, externalPlayInviteEmail: h.renderInviteForTest };
 });
-
+// The invite is queued on the email outbox and sent after commit through its one network seam; the provider's answer is ours.
+vi.mock("@/server/email-outbox/transport", async () => {
+  const h = await import("@/server/usecases/__tests__/_invite-mail");
+  return { deliver: (msg: DeliverMessage) => h.deliverForTest({ sent: mail.sent, fail: mail.failOnce }, msg) };
+});
+beforeEach(() => stubOutboxEnv());
 // T9's Lichess calls, module-mocked as T9's own suite does.
 const board = vi.hoisted(() => ({
   createChallengeToUser: vi.fn(),
@@ -421,18 +420,18 @@ describe.skipIf(!HAS_DB)("openRound — interleavings property", () => {
             const failing = pending.filter((x) => mail.failOnce.has(x.email));
             const sendable = pending.filter((x) => !mail.failOnce.has(x.email));
             const failedBoards = [...new Set(failing.map((x) => x.fixtureId))].sort();
-            let want: { opened: boolean; reason?: string; invited?: number; skipped: string[] };
+            let want: { opened: boolean; reason?: string; invited?: number; retrying?: number; skipped: string[] };
             let nextStamp = m.stampAt;
             let path: keyof typeof paths;
             if (m.stampAt === null) {
-              want = { opened: true, invited: sendable.length, skipped: failedBoards.map((f) => `${f}:send_failed`) };
+              want = { opened: true, invited: sendable.length, retrying: 0, skipped: failedBoards.map((f) => `${f}:send_failed`) };
               nextStamp = m.clock;
               path = "firstOpen";
             } else if (pending.length === 0) {
               want = { opened: false, reason: "already_open", skipped: [] };
               path = "alreadyOpen";
             } else if (m.reached.size === 0) {
-              want = { opened: true, invited: sendable.length, skipped: failedBoards.map((f) => `${f}:send_failed`) };
+              want = { opened: true, invited: sendable.length, retrying: 0, skipped: failedBoards.map((f) => `${f}:send_failed`) };
               nextStamp = m.clock;
               path = "reopenedFresh";
             } else if (m.clock.getTime() > m.stampAt.getTime() + DEADLINE_AFTER_MS) {
@@ -440,7 +439,7 @@ describe.skipIf(!HAS_DB)("openRound — interleavings property", () => {
               want = { opened: false, reason: "already_open", skipped: boards.map((f) => `${f}:window_closed`) };
               path = "windowClosed";
             } else {
-              want = { opened: true, invited: sendable.length, skipped: failedBoards.map((f) => `${f}:send_failed`) };
+              want = { opened: true, invited: sendable.length, retrying: 0, skipped: failedBoards.map((f) => `${f}:send_failed`) };
               path = "reinvited";
               if (resetting.some((f) => sendable.some((x) => x.fixtureId === f))) paths.resetReinvited += 1;
             }
@@ -453,6 +452,7 @@ describe.skipIf(!HAS_DB)("openRound — interleavings property", () => {
               opened: res.opened,
               ...("reason" in res ? { reason: res.reason } : {}),
               ...("invited" in res ? { invited: res.invited } : {}),
+              ...("retrying" in res ? { retrying: res.retrying } : {}),
               skipped: ("skipped" in res ? res.skipped : []).map((k) => `${k.fixtureId}:${k.reason}`).sort(),
             };
             expect(got, `${path} at step ${steps}`).toEqual(want);

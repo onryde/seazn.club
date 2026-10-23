@@ -17,6 +17,8 @@
 // Single-sport by construction: online play exists only for `boardgame` (guard.ts `d.sport_key = 'boardgame'`); nothing here
 // branches on sport.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DeliverMessage } from "@/server/email-outbox/transport";
+import { stubOutboxEnv, type SentInvite } from "@/server/usecases/__tests__/_invite-mail";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
@@ -36,22 +38,19 @@ import { boardOpenFor, lockCheckinWindow } from "@/server/external-play/round-op
 import { backendPid, pollWaitersBehind } from "../external-play/__tests__/_lock-waiters";
 import { loadOnlinePlayFixture } from "../external-play/guard";
 
-// The email seam (as open-round.test.ts): the real `send` no-ops without RESEND_API_KEY and would report every invite failed.
-const mail = vi.hoisted(() => ({
-  sent: [] as { to: string; fixtureUrl: string; deadlineLabel: string; opensLabel: string | undefined; locale: string }[],
-}));
+// The email seam (as open-round.test.ts): the invite goes through the email outbox and its replaced transport.
+const mail = vi.hoisted(() => ({ sent: [] as SentInvite[], fail: new Set<string>() }));
 vi.mock("@/lib/email", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/email")>();
-  return {
-    ...actual,
-    sendExternalPlayInviteEmail: vi.fn(
-      async (to: string, args: Parameters<typeof actual.sendExternalPlayInviteEmail>[1], locale: string) => {
-        mail.sent.push({ to, fixtureUrl: args.fixtureUrl, deadlineLabel: args.deadlineLabel, opensLabel: args.opensLabel, locale });
-        return true;
-      },
-    ),
-  };
+  const h = await import("@/server/usecases/__tests__/_invite-mail");
+  return { ...actual, externalPlayInviteEmail: h.renderInviteForTest };
 });
+// The invite is queued on the email outbox and sent after commit through its one network seam; the provider's answer is ours.
+vi.mock("@/server/email-outbox/transport", async () => {
+  const h = await import("@/server/usecases/__tests__/_invite-mail");
+  return { deliver: (msg: DeliverMessage) => h.deliverForTest(mail, msg) };
+});
+beforeEach(() => stubOutboxEnv());
 vi.mock("@/lib/sentry", () => ({ captureError: vi.fn() }));
 // The gap between the extension's read of a board with NO bridge row and its making of one (race rule, checkin-extend.ts): the real
 // `ensureBridgeRow` runs on its own connection, so a create that mints the row AND claims it can land in front of it. The seam lets a
@@ -765,7 +764,7 @@ describe.skipIf(!HAS_DB)("every reader of a board's window sees the extension", 
     const { r, b, id } = await oneBoard();
     const send = async (now: Date) => {
       mail.sent.length = 0;
-      expect(await resendExternalPlayNotice(r.owner, id, ORIGIN, { now })).toEqual({ emailed: 2 });
+      expect(await resendExternalPlayNotice(r.owner, id, ORIGIN, { now })).toEqual({ emailed: 2, retrying: 0 });
       return mail.sent.filter((m) => [b.home.email, b.away.email].includes(m.to));
     };
     const fmt = (when: Date, locale: string) =>
@@ -783,8 +782,8 @@ describe.skipIf(!HAS_DB)("every reader of a board's window sees the extension", 
     const { r, id } = await oneBoard();
     expect(await refusal(resendExternalPlayNotice(r.owner, id, ORIGIN, { now: P }))).toEqual({ status: 409, code: "WINDOW_CLOSED" });
     await press(r.owner, id);
-    expect(await resendExternalPlayNotice(r.owner, id, ORIGIN, { now: P })).toEqual({ emailed: 2 });
-    expect(await resendExternalPlayNotice(r.owner, id, ORIGIN, { now: at(deadlineAfter(1), -1) })).toEqual({ emailed: 2 });
+    expect(await resendExternalPlayNotice(r.owner, id, ORIGIN, { now: P })).toEqual({ emailed: 2, retrying: 0 });
+    expect(await resendExternalPlayNotice(r.owner, id, ORIGIN, { now: at(deadlineAfter(1), -1) })).toEqual({ emailed: 2, retrying: 0 });
     expect(await refusal(resendExternalPlayNotice(r.owner, id, ORIGIN, { now: deadlineAfter(1) }))).toEqual({ status: 409, code: "WINDOW_CLOSED" });
   });
 

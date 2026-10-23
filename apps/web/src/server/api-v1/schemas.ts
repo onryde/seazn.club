@@ -2537,9 +2537,9 @@ export type OpenRoundInput = z.infer<typeof OpenRoundInput>;
 export const OpenRoundSkip = z.object({ fixtureId: Uuid, reason: z.enum(OPEN_ROUND_SKIP_REASONS) });
 
 /** `invited` counts SEATS whose invite the mail provider accepted (two per
- *  board), never boards. Every refusal wrote nothing. */
+ *  board), never boards; `retrying` counts the seats whose invite is queued and still being tried. Every refusal wrote nothing. */
 export const OpenRoundResult = z.union([
-  z.object({ opened: z.literal(true), invited: z.number().int(), skipped: z.array(OpenRoundSkip) }),
+  z.object({ opened: z.literal(true), invited: z.number().int(), retrying: z.number().int(), skipped: z.array(OpenRoundSkip) }),
   z.object({ opened: z.literal(false), reason: z.literal("already_open"), skipped: z.array(OpenRoundSkip) }),
   z.object({ opened: z.literal(false), reason: z.enum(OPEN_ROUND_REFUSALS) }),
 ]);

@@ -10,6 +10,8 @@
 // Single-sport by construction: online play exists only for `boardgame`
 // (`supportsOnlinePlay`); the not-online case below is the other sports' answer.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DeliverMessage } from "@/server/email-outbox/transport";
+import { stubOutboxEnv } from "@/server/usecases/__tests__/_invite-mail";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
@@ -18,21 +20,20 @@ import type { OpenRoundView } from "@/lib/open-round";
 import { appendEvent } from "@/server/engine-db";
 import { CHECKIN_BATCH_GAP_MS, CHECKIN_BATCH_SIZE, DEADLINE_AFTER_MS } from "@/server/external-play/window";
 
-// The email seam, as open-round.test.ts: the real `send` no-ops without
-// RESEND_API_KEY and would report every invite as failed. `fail` names
-// recipients whose send the provider refuses.
+// The email seam, as open-round.test.ts: the invite is queued on the email outbox and the provider's answer is ours.
+// `fail` names recipients whose send the provider refuses for good.
 const mail = vi.hoisted(() => ({ sent: [] as string[], fail: new Set<string>() }));
 vi.mock("@/lib/email", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/email")>();
-  return {
-    ...actual,
-    sendExternalPlayInviteEmail: vi.fn(async (to: string) => {
-      if (mail.fail.has(to)) return false;
-      mail.sent.push(to);
-      return true;
-    }),
-  };
+  const h = await import("@/server/usecases/__tests__/_invite-mail");
+  return { ...actual, externalPlayInviteEmail: h.renderInviteForTest };
 });
+// The invite is queued on the email outbox and sent after commit through its one network seam; the provider's answer is ours.
+vi.mock("@/server/email-outbox/transport", async () => {
+  const h = await import("@/server/usecases/__tests__/_invite-mail");
+  return { deliver: (msg: DeliverMessage) => h.deliverToAddresses(mail, msg) };
+});
+beforeEach(() => stubOutboxEnv());
 
 import { openRound } from "../open-round";
 import { listOpenRounds } from "../open-round-view";
@@ -170,7 +171,7 @@ describe.skipIf(!HAS_DB)("listOpenRounds — what the Open round control reads",
 
   it("opened: each pairing's invite time is the stamp on file; nothing left to press; the round leaves once its window closes", async () => {
     const r = await seedOnlineChessRound({ fixtures: 2 });
-    expect(await press(r, 1, T0)).toEqual({ opened: true, invited: 4, skipped: [] });
+    expect(await press(r, 1, T0)).toEqual({ opened: true, invited: 4, retrying: 0, skipped: [] });
 
     const v = roundOf(await view(r, at(MIN)), 1);
     expect(v.state).toBe("open");
@@ -196,7 +197,7 @@ describe.skipIf(!HAS_DB)("listOpenRounds — what the Open round control reads",
     const r = await seedOnlineChessRound({ fixtures: 2 });
     const b2 = r.boards[1]!;
     mail.fail.add(b2.away.email);
-    expect(await press(r, 1, T0)).toEqual({ opened: true, invited: 3, skipped: [{ fixtureId: b2.fixtureId, reason: "send_failed" }] });
+    expect(await press(r, 1, T0)).toEqual({ opened: true, invited: 3, retrying: 0, skipped: [{ fixtureId: b2.fixtureId, reason: "send_failed" }] });
 
     const v = roundOf(await view(r, at(2 * MIN)), 1);
     expect(v.press).toBe("reinvite");
@@ -210,7 +211,7 @@ describe.skipIf(!HAS_DB)("listOpenRounds — what the Open round control reads",
 
     mail.fail.clear();
     const res = await expectPressAgrees(r, v, at(2 * MIN));
-    expect(res).toEqual({ opened: true, invited: 1, skipped: [] });
+    expect(res).toEqual({ opened: true, invited: 1, retrying: 0, skipped: [] });
     expect(roundOf(await view(r, at(3 * MIN)), 1).press).toBe("none");
   });
 
@@ -240,7 +241,7 @@ describe.skipIf(!HAS_DB)("listOpenRounds — what the Open round control reads",
     expect(v.press).toBe("reopen");
     expect(v.pairings[0]).toMatchObject({ owedSeats: 2, invitedAt: null, canResend: false });
     mail.fail.clear();
-    expect(await expectPressAgrees(r, v, late)).toEqual({ opened: true, invited: 2, skipped: [] });
+    expect(await expectPressAgrees(r, v, late)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
     expect(roundOf(await view(r, late), 1).deadlineAt, "the window restarted at the press").toBe(
       new Date(late.getTime() + DEADLINE_AFTER_MS).toISOString(),
     );
@@ -261,7 +262,7 @@ describe.skipIf(!HAS_DB)("listOpenRounds — what the Open round control reads",
     const owed = v.pairings.filter((p) => p.owedSeats > 0);
     expect(owed.map((p) => [p.fixtureId, p.owedSeats])).toEqual([[added.fixture_id, 2]]);
     mail.sent.length = 0;
-    expect(await expectPressAgrees(r, v, at(MIN))).toEqual({ opened: true, invited: 2, skipped: [] });
+    expect(await expectPressAgrees(r, v, at(MIN))).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
     expect(mail.sent.sort()).toEqual([late.home.email, late.away.email].sort());
   });
 

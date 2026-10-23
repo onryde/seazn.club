@@ -24,8 +24,11 @@ export type OpenRoundSkip = { fixtureId: string; reason: OpenRoundSkipReason };
 export type OpenRoundResult =
   /** This call stamped the round, or invited (or tried to invite) someone not
    *  yet invited. `invited` counts SEATS whose invite was accepted by the
-   *  provider — two per board — never boards. */
-  | { opened: true; invited: number; skipped: OpenRoundSkip[] }
+   *  provider — two per board — never boards. `retrying` counts the seats whose
+   *  invite is queued and not yet accepted (the provider is down or rate
+   *  limiting): they stay stamped and the mail worker keeps trying, so they are
+   *  neither invited yet nor skipped. */
+  | { opened: true; invited: number; retrying: number; skipped: OpenRoundSkip[] }
   /** Already open and nothing left that can be invited. `skipped` names the
    *  boards that could not be (a closed window). */
   | { opened: false; reason: "already_open"; skipped: OpenRoundSkip[] }

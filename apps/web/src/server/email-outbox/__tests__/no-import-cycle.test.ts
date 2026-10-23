@@ -21,8 +21,17 @@ const SRC = resolve(import.meta.dirname, "../../.."); // apps/web/src
 const CORE_DIR = join(SRC, "server/email-outbox");
 const USECASES_DIR = join(SRC, "server/usecases");
 
-/** The only usecase-tree files hooks.ts may import (paths relative to src/). Task 7 adds the chess hook leaf here. */
-const ALLOWED_HOOK_LEAVES: readonly string[] = [];
+/** The only usecase-tree files hooks.ts may import (paths relative to src/), and the only ones a leaf may reach: the chess hook
+ *  (invite-outbox-hook.ts) and the seat-stamp module it shares with invite.ts (the predicate and the release, moved out of invite.ts
+ *  so neither imports the other). A leaf is allowed to reach the other leaves and nothing else of the usecase tree. */
+const ALLOWED_HOOK_LEAVES: readonly string[] = [
+  "server/usecases/external-play/invite-outbox-hook.ts",
+  "server/usecases/external-play/seat-stamp.ts",
+];
+
+/** The one core file a leaf may read: pure declarations (the status vocabularies), no imports of its own. The test below asserts
+ *  it has none, so "pure" is checked and not claimed. */
+const PURE_CORE_FILE = "server/email-outbox/constants.ts";
 
 type Graph = Map<string, string[]>;
 
@@ -131,11 +140,15 @@ function coreFiles(): string[] {
   return out.sort();
 }
 
-/** What a hook leaf reaches that a leaf must not: the outbox core or another usecase module. */
-function leafViolations(graph: Graph, leaf: string): string[] {
+/** What a hook leaf reaches that a leaf must not: the outbox core or another usecase module. The other allowed leaves and the pure
+ *  core file (`pure`) are the only exceptions. */
+function leafViolations(graph: Graph, leaf: string, allowed: readonly string[], pure: string): string[] {
   const reach = closureOf(graph, [leaf]);
   reach.delete(leaf);
-  return [...reach].filter((f) => f.startsWith("server/email-outbox/") || f.startsWith("server/usecases/")).sort();
+  return [...reach]
+    .filter((f) => f.startsWith("server/email-outbox/") || f.startsWith("server/usecases/"))
+    .filter((f) => !allowed.includes(f) && f !== pure)
+    .sort();
 }
 
 /** The runtime import graph reachable from `roots`, keyed by path relative to src/. */
@@ -217,8 +230,29 @@ describe("the import-graph walker", () => {
       ["server/usecases/y/clean.ts", ["lib/util2.ts"]],
       ["lib/util2.ts", []],
     ]);
-    expect(leafViolations(g, "server/usecases/x/leaf.ts")).toEqual(["server/email-outbox/enqueue.ts", "server/usecases/x/other.ts"]);
-    expect(leafViolations(g, "server/usecases/y/clean.ts")).toEqual([]);
+    expect(leafViolations(g, "server/usecases/x/leaf.ts", [], "server/email-outbox/constants.ts")).toEqual([
+      "server/email-outbox/enqueue.ts",
+      "server/usecases/x/other.ts",
+    ]);
+    expect(leafViolations(g, "server/usecases/y/clean.ts", [], "server/email-outbox/constants.ts")).toEqual([]);
+  });
+
+  it("leafViolations lets a leaf reach another allowed leaf and the pure core file, and nothing else of either tree", () => {
+    const g: Graph = new Map([
+      ["server/usecases/x/leaf.ts", ["server/usecases/x/shared-leaf.ts", "server/email-outbox/constants.ts", "server/usecases/x/usecase.ts"]],
+      ["server/usecases/x/shared-leaf.ts", []],
+      ["server/email-outbox/constants.ts", []],
+      ["server/usecases/x/usecase.ts", ["server/email-outbox/index.ts"]],
+      ["server/email-outbox/index.ts", []],
+    ]);
+    const allowed = ["server/usecases/x/leaf.ts", "server/usecases/x/shared-leaf.ts"];
+    // The usecase and what it reaches are still named; the allowed leaf and constants.ts are not.
+    expect(leafViolations(g, "server/usecases/x/leaf.ts", allowed, "server/email-outbox/constants.ts")).toEqual([
+      "server/email-outbox/index.ts",
+      "server/usecases/x/usecase.ts",
+    ]);
+    // Without the exception the same leaf is flagged for all four: the allowance is what clears them.
+    expect(leafViolations(g, "server/usecases/x/leaf.ts", [], "none").length).toBe(4);
   });
 
   it("closureOf follows edges and includes the roots", () => {
@@ -273,14 +307,27 @@ describe("the outbox core's imports (ruling R1)", () => {
     expect(cyclesThrough(graph, roots)).toEqual([]);
   });
 
-  it("each allowed hook leaf is a leaf: it reaches neither the core nor another usecase module", () => {
-    // Empty until Task 7 registers the chess hook leaf; the predicate itself is exercised on synthetic graphs above.
+  it("each allowed hook leaf is a leaf: it reaches neither the core (but the pure constants) nor a usecase module other than the allowed leaves", () => {
     let checked = 0;
     for (const leaf of ALLOWED_HOOK_LEAVES) {
       expect(graph.has(leaf), `${leaf} is part of the walked graph`).toBe(true);
-      expect(leafViolations(graph, leaf), leaf).toEqual([]);
+      expect(leafViolations(graph, leaf, ALLOWED_HOOK_LEAVES, PURE_CORE_FILE), leaf).toEqual([]);
       checked++;
     }
+    // Anti-vacuity: the two leaves of the chess invite, and the shared one really is reached from the hook (not just listed).
     expect(checked).toBe(ALLOWED_HOOK_LEAVES.length);
+    expect(checked).toBeGreaterThanOrEqual(2);
+    expect(closureOf(graph, ["server/usecases/external-play/invite-outbox-hook.ts"]).has("server/usecases/external-play/seat-stamp.ts")).toBe(true);
+  });
+
+  it("the pure core file a leaf may read imports nothing at all, and the seat-stamp leaf imports no local module", () => {
+    expect(graph.has(PURE_CORE_FILE)).toBe(true);
+    expect(graph.get(PURE_CORE_FILE)).toEqual([]);
+    expect(graph.has("server/usecases/external-play/seat-stamp.ts")).toBe(true);
+    expect(graph.get("server/usecases/external-play/seat-stamp.ts")).toEqual([]);
+  });
+
+  it("hooks.ts imports every allowed hook leaf that is not reached through another (the chess hook is registered, not just present)", () => {
+    expect(graph.get("server/email-outbox/hooks.ts")).toContain("server/usecases/external-play/invite-outbox-hook.ts");
   });
 });

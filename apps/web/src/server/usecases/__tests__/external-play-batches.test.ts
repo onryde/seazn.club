@@ -6,7 +6,9 @@
 // written from how each round was BUILT (which rows exist and what their `(seq_in_round, id)` are) and the §3.2.1 rule that
 // every row counts - never read back from the code under test.
 import { randomUUID } from "node:crypto";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DeliverMessage } from "@/server/email-outbox/transport";
+import { stubOutboxEnv, type SentInvite } from "@/server/usecases/__tests__/_invite-mail";
 import { forEachSport } from "@seazn/engine/testkit";
 import { sql } from "@/lib/db";
 import { withdrawEntrantCascade } from "../withdrawal";
@@ -26,10 +28,18 @@ import { seedOnlineChessRound, seedOnlineChessRoundWithRankedBoard } from "./_ex
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
+const mail = vi.hoisted(() => ({ sent: [] as SentInvite[], fail: new Set<string>() }));
 vi.mock("@/lib/email", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/email")>();
-  return { ...actual, sendExternalPlayInviteEmail: vi.fn(async () => true) };
+  const h = await import("@/server/usecases/__tests__/_invite-mail");
+  return { ...actual, externalPlayInviteEmail: h.renderInviteForTest };
 });
+// The invite is queued on the email outbox and sent after commit through its one network seam; the provider's answer is ours.
+vi.mock("@/server/email-outbox/transport", async () => {
+  const h = await import("@/server/usecases/__tests__/_invite-mail");
+  return { deliver: (msg: DeliverMessage) => h.deliverForTest(mail, msg) };
+});
+beforeEach(() => stubOutboxEnv());
 
 afterAll(async () => {
   if (HAS_DB) await sql.end({ timeout: 2 }).catch(() => undefined);

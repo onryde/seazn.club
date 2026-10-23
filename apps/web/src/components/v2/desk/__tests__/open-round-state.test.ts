@@ -25,7 +25,7 @@ import {
   type OpenRoundUiState,
 } from "../open-round-state";
 
-const OPENED: OpenRoundResult = { opened: true, invited: 4, skipped: [] };
+const OPENED: OpenRoundResult = { opened: true, invited: 4, retrying: 0, skipped: [] };
 const EXTENDED: CheckinExtendRoundResult = {
   extended: 6,
   skipped: { closed: 1, gameStarted: 2, capReached: 0 },

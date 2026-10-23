@@ -2,6 +2,8 @@
 // over HTTP: who may open (and resend), and that a refused caller writes no
 // stamp and mails nobody. The usecase's own behaviour is open-round.test.ts's.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DeliverMessage } from "@/server/email-outbox/transport";
+import { stubOutboxEnv } from "@/server/usecases/__tests__/_invite-mail";
 import { randomUUID } from "node:crypto";
 
 const authState = vi.hoisted(() => ({ userId: "" }));
@@ -31,17 +33,18 @@ vi.mock("@/server/api-v1/auth", async (importOriginal) => {
     },
   };
 });
-const mail = vi.hoisted(() => ({ sent: [] as string[] }));
+const mail = vi.hoisted(() => ({ sent: [] as string[], fail: new Set<string>() }));
 vi.mock("@/lib/email", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/email")>();
-  return {
-    ...actual,
-    sendExternalPlayInviteEmail: vi.fn(async (to: string) => {
-      mail.sent.push(to);
-      return true;
-    }),
-  };
+  const h = await import("@/server/usecases/__tests__/_invite-mail");
+  return { ...actual, externalPlayInviteEmail: h.renderInviteForTest };
 });
+// The invite is queued on the email outbox and sent after commit through its one network seam; the provider's answer is ours.
+vi.mock("@/server/email-outbox/transport", async () => {
+  const h = await import("@/server/usecases/__tests__/_invite-mail");
+  return { deliver: (msg: DeliverMessage) => h.deliverToAddresses(mail, msg) };
+});
+beforeEach(() => stubOutboxEnv());
 
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
@@ -90,7 +93,7 @@ describe.skipIf(!HAS_DB)("POST /stages/{id}/open-round", () => {
     authState.userId = r.ownerUserId;
     const res = await read(await openRoute(post(`/stages/${r.stageId}/open-round`, { roundNo: 1 }), ctx(r.stageId)));
     expect(res.status).toBe(200);
-    expect(res.body.data).toEqual({ opened: true, invited: 2, skipped: [] });
+    expect(res.body.data).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
     expect(await stamps(r.stageId)).toHaveLength(1);
     expect(mail.sent).toHaveLength(2);
   });
@@ -190,7 +193,7 @@ describe.skipIf(!HAS_DB)("POST /fixtures/{id}/external-play/resend", () => {
     authState.userId = r.ownerUserId;
     const res = await read(await resendRoute(post(`/fixtures/${f}/external-play/resend`, {}), ctx(f)));
     expect(res.status).toBe(200);
-    expect(res.body.data).toEqual({ emailed: 2 });
+    expect(res.body.data).toEqual({ emailed: 2, retrying: 0 });
     expect(mail.sent).toHaveLength(2);
   });
 });

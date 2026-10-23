@@ -369,20 +369,18 @@ export async function sendOfficialAssignedEmail(
   });
 }
 
-/** D12 (T19): the organiser opened the round — sent once per player, per
- *  board, per pairing. Transactional: an invite starts a clock against the
- *  player, so the suppression list must not swallow it. */
-export async function sendExternalPlayInviteEmail(
+/** D12 (T19): the organiser opened the round - sent once per player, per board, per pairing. RENDERED here and not sent: the
+ *  invite is queued on the email outbox in the open's transaction (a transactional email: an invite starts a clock against the
+ *  player, so the suppression list must not swallow it) and sent after commit. There is no direct sender for it any more (a
+ *  second path would skip the outbox's replace rule, its retry and the release of a seat whose mail ended badly). `to` is not
+ *  part of the content: it is kept so the call reads like the other builders. */
+export async function externalPlayInviteEmail(
   to: string,
   args: ExternalPlayInviteArgs,
   locale: Locale = "en",
-): Promise<boolean> {
+): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({
-    to,
-    transactional: true,
-    ...externalPlayInviteTemplate(args, dict),
-  });
+  return externalPlayInviteTemplate(args, dict);
 }
 
 /** A match the official is assigned to changed time/venue. */

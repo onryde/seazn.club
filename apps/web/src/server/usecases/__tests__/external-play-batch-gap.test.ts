@@ -10,6 +10,8 @@
 //
 // Single-sport by construction: online play exists only for `boardgame` (the registry sweep is in external-play-batches.test.ts).
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DeliverMessage } from "@/server/email-outbox/transport";
+import { stubOutboxEnv, type SentInvite } from "@/server/usecases/__tests__/_invite-mail";
 import { sql } from "@/lib/db";
 import {
   CHECKIN_BATCH_GAP_MS as DEFAULT_GAP,
@@ -28,21 +30,18 @@ const MIN = 60_000;
  *  default is a minute-scale wrong, not a rounding one. */
 const MOCK_GAP = DEFAULT_GAP / 2;
 
-const mail = vi.hoisted(() => ({
-  sent: [] as { to: string; deadlineLabel: string; opensLabel: string | undefined; locale: string }[],
-}));
+const mail = vi.hoisted(() => ({ sent: [] as SentInvite[], fail: new Set<string>() }));
 vi.mock("@/lib/email", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/email")>();
-  return {
-    ...actual,
-    sendExternalPlayInviteEmail: vi.fn(
-      async (to: string, args: Parameters<typeof actual.sendExternalPlayInviteEmail>[1], locale: string) => {
-        mail.sent.push({ to, deadlineLabel: args.deadlineLabel, opensLabel: args.opensLabel, locale });
-        return true;
-      },
-    ),
-  };
+  const h = await import("@/server/usecases/__tests__/_invite-mail");
+  return { ...actual, externalPlayInviteEmail: h.renderInviteForTest };
 });
+// The invite is queued on the email outbox and sent after commit through its one network seam; the provider's answer is ours.
+vi.mock("@/server/email-outbox/transport", async () => {
+  const h = await import("@/server/usecases/__tests__/_invite-mail");
+  return { deliver: (msg: DeliverMessage) => h.deliverForTest(mail, msg) };
+});
+beforeEach(() => stubOutboxEnv());
 
 const lichess = vi.hoisted(() => ({
   createChallengeToUser: vi.fn(),

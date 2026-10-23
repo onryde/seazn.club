@@ -2,6 +2,8 @@
 // body's shape, and that a refused caller changes no deadline. The rule and the mixed-round counts are
 // external-play-checkin-extend.test.ts's; this file is the door.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DeliverMessage } from "@/server/email-outbox/transport";
+import { stubOutboxEnv, type SentInvite } from "@/server/usecases/__tests__/_invite-mail";
 import { randomUUID } from "node:crypto";
 
 const authState = vi.hoisted(() => ({ userId: "" }));
@@ -29,10 +31,18 @@ vi.mock("@/server/api-v1/auth", async (importOriginal) => {
     },
   };
 });
+const mail = vi.hoisted(() => ({ sent: [] as SentInvite[], fail: new Set<string>() }));
 vi.mock("@/lib/email", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/email")>();
-  return { ...actual, sendExternalPlayInviteEmail: vi.fn(async () => true) };
+  const h = await import("@/server/usecases/__tests__/_invite-mail");
+  return { ...actual, externalPlayInviteEmail: h.renderInviteForTest };
 });
+// The invite is queued on the email outbox and sent after commit through its one network seam; the provider's answer is ours.
+vi.mock("@/server/email-outbox/transport", async () => {
+  const h = await import("@/server/usecases/__tests__/_invite-mail");
+  return { deliver: (msg: DeliverMessage) => h.deliverForTest(mail, msg) };
+});
+beforeEach(() => stubOutboxEnv());
 vi.mock("@/lib/sentry", () => ({ captureError: vi.fn() }));
 
 import { sql } from "@/lib/db";

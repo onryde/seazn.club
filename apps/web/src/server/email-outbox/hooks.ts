@@ -2,9 +2,10 @@
 // every row for the stamp has ended badly). A lookup table, not an if-chain, so the core never names a kind.
 //
 // Ruling R1: this module imports no usecase. A kind's hook lives in a LEAF module (it imports no usecase that imports
-// the outbox) and is registered in KIND_HOOKS below; Task 7 registers the chess hook. no-import-cycle.test.ts fails on
-// an import path from the core back to the core.
+// the outbox) and is registered in KIND_HOOKS below; the chess hook is invite-outbox-hook.ts. no-import-cycle.test.ts
+// fails on an import path from the core back to the core, and names the leaves this file may import.
 import { log } from "@/server/logger";
+import { chessInviteEndedBadly, findUnappliedChessEndings } from "@/server/usecases/external-play/invite-outbox-hook";
 import { ENDED_BADLY_STATUSES, OUTBOX_KINDS, type OutboxKind, type OutboxStatus } from "./constants";
 
 /** What a hook is told about the row that ended: ids and the non-secret `meta`; never a body, never a recipient. */
@@ -32,10 +33,12 @@ export type KindHook = {
   findUnapplied?: (limit: number) => Promise<EndedRow[]>;
 };
 
-/** One entry per kind (the type makes a third kind a compile error here). Both are empty until a kind needs a hook. */
+/** One entry per kind (the type makes a third kind a compile error here). The sign-in link needs no hook; the chess invite
+ *  releases its seat stamp once every email for the stamp has ended badly, and the worker re-drives a release that was never
+ *  applied (R9). */
 export const KIND_HOOKS: Record<OutboxKind, KindHook> = {
   magic_link: {},
-  chess_invite: {},
+  chess_invite: { onEndedBadly: chessInviteEndedBadly, findUnapplied: findUnappliedChessEndings },
 };
 
 /** Does this kind have a hook to run for a row that ended badly? (A kind with none is not "skipped" when a tick runs out of

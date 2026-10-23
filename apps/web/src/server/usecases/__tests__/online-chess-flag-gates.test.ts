@@ -13,6 +13,8 @@
 //
 // Single-sport by construction: online play exists only for `boardgame` (online-play.ts `supportsOnlinePlay`).
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DeliverMessage } from "@/server/email-outbox/transport";
+import { stubOutboxEnv } from "@/server/usecases/__tests__/_invite-mail";
 import { randomUUID } from "node:crypto";
 
 const flags = vi.hoisted(() => ({
@@ -27,19 +29,20 @@ vi.mock("@/lib/posthog-server", async (importOriginal) => {
   };
 });
 
-// The invite sender: the real `send` no-ops without RESEND_API_KEY (vitest.config strips it), which would report every
-// invite as failed — replaced exactly as open-round.test.ts replaces it.
-const mail = vi.hoisted(() => ({ sent: [] as string[] }));
+// The invite's email seam: queued on the outbox, sent through its transport, which is replaced exactly as open-round.test.ts
+// replaces it. `mail.sent` holds the addresses the provider accepted.
+const mail = vi.hoisted(() => ({ sent: [] as string[], fail: new Set<string>() }));
 vi.mock("@/lib/email", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/email")>();
-  return {
-    ...actual,
-    sendExternalPlayInviteEmail: vi.fn(async (to: string) => {
-      mail.sent.push(to);
-      return true;
-    }),
-  };
+  const h = await import("@/server/usecases/__tests__/_invite-mail");
+  return { ...actual, externalPlayInviteEmail: h.renderInviteForTest };
 });
+// The invite is queued on the email outbox and sent after commit through its one network seam; the provider's answer is ours.
+vi.mock("@/server/email-outbox/transport", async () => {
+  const h = await import("@/server/usecases/__tests__/_invite-mail");
+  return { deliver: (msg: DeliverMessage) => h.deliverToAddresses(mail, msg) };
+});
+beforeEach(() => stubOutboxEnv());
 
 // The Lichess Board API, module-mocked at its boundary as T9's and T12's suites do. Every default REFUSES, so a case
 // that reaches Lichess without saying what Lichess answers fails loudly.
@@ -335,7 +338,7 @@ describe.skipIf(!HAS_DB)("gate: opening a round", () => {
       flagIs(s);
       const opened = openRound({ stageId: r.stageId, roundNo: 1, actorUserId: r.ownerUserId });
       if (s.offered) {
-        expect(await opened, s.label).toEqual({ opened: true, invited: 2, skipped: [] });
+        expect(await opened, s.label).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
         expect(await stampCount(r), s.label).toBe(1);
         expect(mail.sent.length, s.label).toBe(2);
       } else {
@@ -379,7 +382,7 @@ describe.skipIf(!HAS_DB)("gate: re-sending a board's invite", () => {
       flagIs(s);
       const resent = resendExternalPlayNotice(r.owner, b.fixtureId, ORIGIN);
       if (s.offered) {
-        expect(await resent, s.label).toEqual({ emailed: 2 });
+        expect(await resent, s.label).toEqual({ emailed: 2, retrying: 0 });
         expect(mail.sent.sort(), s.label).toEqual([b.home.email, b.away.email].sort());
       } else {
         expect(await refusal(resent), s.label).toEqual(DISABLED);
