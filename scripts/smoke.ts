@@ -1261,6 +1261,10 @@ async function main() {
   // a tick report. Keyless-safe (nothing is sent without a RESEND_API_KEY on the server); no org of its own.
   await emailOutboxCronSmoke();
 
+  // Email outbox, phase 1 (Task 5): the Resend webhook fails closed. The smoke server is a production build, so an event with
+  // no valid signature is refused whether or not RESEND_WEBHOOK_SECRET is set. Keyless; touches no org.
+  await resendWebhookSmoke();
+
   // Chess in-page board T14: the match room's neutral card and its API's
   // refusals. Keyless; one signed-in stranger.
   await matchRoomSuite();
@@ -22377,6 +22381,37 @@ async function emailOutboxCronSmoke(): Promise<void> {
     body.ok === true && KEYS.every((k) => typeof body.data?.[k] === "number"),
   );
   check("email-outbox: the tick reports failed 0 (the role can write the outbox and no attempt threw)", body.data?.failed === 0);
+}
+
+/**
+ * Email outbox, phase 1 (Task 5) smoke: POST /api/webhooks/resend refuses an event it cannot verify.
+ * The smoke server runs in production mode, so both configurations answer 401: no RESEND_WEBHOOK_SECRET (the route fails
+ * closed in production) and a secret with no valid Svix signature (unsigned, or signed with the wrong key). A 200 here would
+ * mean anyone who knows the URL can suppress an address or mark an email delivered.
+ */
+async function resendWebhookSmoke(): Promise<void> {
+  const body = JSON.stringify({
+    type: "email.bounced",
+    data: { email_id: "re_smoke_unsigned", to: ["smoke-webhook@example.invalid"] },
+  });
+  const unsigned = await fetch(`${BASE}/api/webhooks/resend`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body,
+  });
+  check("resend-webhook: an unsigned event is refused (401)", unsigned.status === 401);
+
+  const forged = await fetch(`${BASE}/api/webhooks/resend`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "svix-id": "msg_smoke_forged",
+      "svix-timestamp": String(Math.floor(Date.now() / 1000)),
+      "svix-signature": "v1,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+    },
+    body,
+  });
+  check("resend-webhook: an event with a forged signature is refused (401)", forged.status === 401);
 }
 
 /**
