@@ -16,9 +16,9 @@ import "server-only";
 // late result. Whatever the attempt returned, only the attempt that still owns the row may write it.
 //
 // Paced (Task 7): Resend allows 2 requests a second, and a request that sends a whole round of invites would burst past it
-// and be answered 429. `dispatchNow` therefore starts consecutive attempts at least `MIN_SEND_INTERVAL_MS` apart (the same
-// constant, and the same start-to-start rule, as the worker's tick), never sleeps before its first attempt (a single-row call,
-// the sign-in link, is unchanged), and stops claiming once `DISPATCH_NOW_BUDGET_MS` has elapsed since it began: the ids it did
+// and be answered 429. `dispatchNow` therefore starts consecutive requests at least `MIN_SEND_INTERVAL_MS` apart (the same
+// constant, and the same start-to-start rule, as the worker's tick; a row refused before any request left starts no interval),
+// never sleeps before its first request (a single-row call, the sign-in link, is unchanged), and stops claiming once `DISPATCH_NOW_BUDGET_MS` has elapsed since it began: the ids it did
 // not reach stay `queued` with attempts untouched, exactly as after a 429, and the worker sends them.
 //
 // Never late: expiry is judged by the REAL clock at the moment of each claim and again at the start of each attempt, not
@@ -163,7 +163,12 @@ async function markExpired(row: ClaimedRow): Promise<boolean> {
 // attemptClaimed
 // ---------------------------------------------------------------------------
 
-export type AttemptResult = { outcome: AttemptOutcome; verdict: Verdict | null; rateLimited: boolean };
+/**
+ * `requestMade` is true exactly when the transport was called: a row refused before that (expired as the attempt began, the gate
+ * said no key or suppressed, the body missing or unreadable) made no request and used none of the provider's rate. The first
+ * attempt dispatcher's pacing counts requests, not rows. A transport that throws counts as made: the request may have left.
+ */
+export type AttemptResult = { outcome: AttemptOutcome; verdict: Verdict | null; rateLimited: boolean; requestMade: boolean };
 
 /**
  * Attempt one claimed row once and record the result. Never throws on a send failure (those are results); a database
@@ -178,7 +183,7 @@ export type AttemptResult = { outcome: AttemptOutcome; verdict: Verdict | null; 
 export async function attemptClaimed(row: ClaimedRow, opts: { now?: Date } = {}): Promise<AttemptResult> {
   if (row.expiresAt.getTime() <= effectiveNow(opts.now).getTime()) {
     const applied = await markExpired(row);
-    return { outcome: applied ? "expired" : "deferred", verdict: null, rateLimited: false };
+    return { outcome: applied ? "expired" : "deferred", verdict: null, rateLimited: false, requestMade: false };
   }
 
   // R5/R8: the gate first. The body stays sealed until the gate says yes.
@@ -187,12 +192,12 @@ export async function attemptClaimed(row: ClaimedRow, opts: { now?: Date } = {})
     const verdict = classifyResult(gate); // "dead" (no key) or "suppressed"
     const status = verdict === "suppressed" ? "suppressed" : "dead";
     const applied = await markEnded(row, status, gate.reason);
-    return { outcome: applied ? status : "deferred", verdict, rateLimited: false };
+    return { outcome: applied ? status : "deferred", verdict, rateLimited: false, requestMade: false };
   }
 
   if (row.bodySealed === null) {
     const applied = await markEnded(row, "dead", "body_missing");
-    return { outcome: applied ? "dead" : "deferred", verdict: null, rateLimited: false };
+    return { outcome: applied ? "dead" : "deferred", verdict: null, rateLimited: false, requestMade: false };
   }
   let body: { html: string; text: string };
   try {
@@ -200,7 +205,7 @@ export async function attemptClaimed(row: ClaimedRow, opts: { now?: Date } = {})
   } catch {
     // A rotated KEK or a damaged byte. Dead, not retried: it would fail the same way every time (Review Focus 4).
     const applied = await markEnded(row, "dead", "body_unreadable");
-    return { outcome: applied ? "dead" : "deferred", verdict: null, rateLimited: false };
+    return { outcome: applied ? "dead" : "deferred", verdict: null, rateLimited: false, requestMade: false };
   }
 
   let result: DeliverResult;
@@ -237,22 +242,22 @@ export async function attemptClaimed(row: ClaimedRow, opts: { now?: Date } = {})
   switch (verdict) {
     case "sent": {
       const applied = await markSent(row, result.ok ? result.providerId : null);
-      return { outcome: applied ? "sent" : "deferred", verdict, rateLimited: false }; // a 2xx is not a 429
+      return { outcome: applied ? "sent" : "deferred", verdict, rateLimited: false, requestMade: true }; // a 2xx is not a 429
     }
     case "retry": {
       const next = nextAttemptAt(row.attempts, new Date());
       if (next === null) {
         // Every attempt is spent. The last error stays on the row as the reason.
         const applied = await markEnded(row, "dead", lastError);
-        return { outcome: applied ? "dead" : "deferred", verdict, rateLimited };
+        return { outcome: applied ? "dead" : "deferred", verdict, rateLimited, requestMade: true };
       }
       const applied = await markRetry(row, next, lastError);
-      return { outcome: applied ? "retrying" : "deferred", verdict, rateLimited };
+      return { outcome: applied ? "retrying" : "deferred", verdict, rateLimited, requestMade: true };
     }
     case "dead":
     case "suppressed": {
       const applied = await markEnded(row, verdict, lastError);
-      return { outcome: applied ? verdict : "deferred", verdict, rateLimited };
+      return { outcome: applied ? verdict : "deferred", verdict, rateLimited, requestMade: true };
     }
   }
 }
@@ -352,9 +357,11 @@ export type DispatchOptions = {
  *    and attempted, in the order given. A row that expired while earlier rows were being sent fails its claim and is
  *    ended `expired` instead; one claimed but expired by the time its attempt starts is ended by `attemptClaimed`. A
  *    repeated id finds its first outcome already recorded and is skipped;
- *  - consecutive attempts start at least `MIN_SEND_INTERVAL_MS` apart (measured from the START of the previous attempt, so a
- *    slow send owes less wait). The first attempt of a call never waits, so a one-row call is not slowed. The wait comes
- *    BEFORE the claim, so a row is not leased while it waits and its expiry is judged when it is really about to be sent;
+ *  - consecutive REQUESTS start at least `MIN_SEND_INTERVAL_MS` apart (measured from the START of the previous request, so a
+ *    slow send owes less wait). The first request of a call never waits, so a one-row call is not slowed. Only a request
+ *    starts an interval (`AttemptResult.requestMade`): rows refused before one left (no key, suppressed, expired) owe nothing, so a
+ *    call that sends nothing never sleeps. The wait comes BEFORE the claim, so a row is not leased while it waits and its
+ *    expiry is judged when it is really about to be sent;
  *  - once `DISPATCH_NOW_BUDGET_MS` has elapsed since the call began, no further id is claimed (still `queued`, attempts 0,
  *    outcome `deferred`): a call is not held for ever by a large round. A wait that would itself end past the budget is not
  *    started. The first attempt of a call is never held back by the budget;
@@ -441,16 +448,21 @@ export async function dispatchNow(ids: readonly string[], opts: DispatchOptions 
         continue;
       }
       const claimed = toClaimedRow(rec);
-      lastAttemptStartedAt = nowMs();
+      const attemptStartedAt = nowMs();
       try {
         const res = await attemptClaimed(claimed, { now: opts.now });
+        // The interval is the provider's: only a request starts one. A row refused before any request left (no key, suppressed,
+        // expired as it began) leaves the previous request's start as the one the next wait is measured from, so a call that
+        // sends nothing never sleeps.
+        if (res.requestMade) lastAttemptStartedAt = attemptStartedAt;
         outcomes.set(id, res.outcome);
         const endedRow = endedRowFor(claimed, res.outcome);
         if (endedRow) ended.push(endedRow);
         if (res.rateLimited) rateLimited = true;
       } catch (err) {
         // The send may have happened; the row is left `sending` with its lease and the worker reclaims it when the
-        // lease lapses (under the same idempotency key, so at most one email).
+        // lease lapses (under the same idempotency key, so at most one email). So it counts as a request for the pacing.
+        lastAttemptStartedAt = attemptStartedAt;
         log.error({ outboxId: id, ...errFields(err) }, "email outbox: recording an attempt failed; the worker will reclaim the row");
         outcomes.set(id, "deferred");
       }

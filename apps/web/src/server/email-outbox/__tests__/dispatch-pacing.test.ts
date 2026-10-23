@@ -6,7 +6,10 @@
 //  - once DISPATCH_NOW_BUDGET_MS has elapsed since the call began, no further row is claimed: it stays `queued`, attempts
 //    untouched, outcome `deferred` (what the first-429 stop leaves too), and the worker sends it. The FIRST attempt of a call is
 //    never held back by the budget;
-//  - production cannot be unpaced; the escape the test config uses (EMAIL_OUTBOX_DISPATCH_UNPACED) is refused there.
+//  - the interval is owed to the provider, so only a request counts: a row refused before any request left (no API key,
+//    suppressed, expired as its attempt began) starts no interval and adds no wait (fix round 1, C2);
+//  - production cannot be unpaced; the escape the test config uses (EMAIL_OUTBOX_DISPATCH_UNPACED) is refused there;
+//  - the production DEFAULTS of the two seams (a real timer, `performance.now()`) are driven with nothing injected (fix round 1, I1).
 //
 // Every expected number comes from the constants (MIN_SEND_INTERVAL_MS, DISPATCH_NOW_BUDGET_MS) and the test's own fake
 // clock; nothing waits for real. The fake clock is `t`: `sleep(ms)` advances it by `ms`, and a send advances it by whatever
@@ -21,7 +24,8 @@ vi.mock("@/server/logger", () => ({ log: logMock }));
 const deliverMock = vi.hoisted(() => vi.fn());
 vi.mock("@/server/email-outbox/transport", () => ({ deliver: deliverMock }));
 
-import { dispatchNow } from "../attempt";
+import { suppress } from "@/lib/email";
+import { attemptClaimed, dispatchNow, toClaimedRow, type ClaimedRecord, type ClaimedRow } from "../attempt";
 import { DISPATCH_NOW_BUDGET_MS, MIN_SEND_INTERVAL_MS, OUTBOX_KINDS, type OutboxKind } from "../constants";
 import { enqueueEmail, type OutboxMessage } from "../enqueue";
 import { KIND_HOOKS } from "../hooks";
@@ -38,6 +42,7 @@ type Row = { status: string; attempts: number; lease_until: Date | null; body_se
 
 describe.skipIf(!HAS_DB)("dispatchNow - pacing and the budget (DB)", () => {
   const created: string[] = [];
+  const suppressedAddresses: string[] = [];
   const saved = {} as Record<OutboxKind, (typeof KIND_HOOKS)[OutboxKind]>;
 
   // The fake clock and what happened on it, in order.
@@ -55,7 +60,7 @@ describe.skipIf(!HAS_DB)("dispatchNow - pacing and the budget (DB)", () => {
   };
   const nowMs = (): number => t;
 
-  async function queueN(n: number): Promise<string[]> {
+  async function queueN(n: number, over: Partial<OutboxMessage> = {}): Promise<string[]> {
     const ids: string[] = [];
     for (let i = 0; i < n; i++) {
       const m: OutboxMessage = {
@@ -69,6 +74,7 @@ describe.skipIf(!HAS_DB)("dispatchNow - pacing and the budget (DB)", () => {
         text: "x",
         transactional: true,
         expiresAt: new Date(Date.now() + 15 * MIN),
+        ...over,
       };
       const id = await enqueueEmail(sql, m);
       created.push(id);
@@ -85,6 +91,7 @@ describe.skipIf(!HAS_DB)("dispatchNow - pacing and the budget (DB)", () => {
   });
   afterAll(async () => {
     await sql`delete from email_outbox where ref_id like ${`${RUN}-%`}`;
+    if (suppressedAddresses.length > 0) await sql`delete from email_suppressions where email in ${sql(suppressedAddresses)}`;
     await sql.end({ timeout: 2 }).catch(() => undefined);
   });
   beforeEach(() => {
@@ -162,6 +169,154 @@ describe.skipIf(!HAS_DB)("dispatchNow - pacing and the budget (DB)", () => {
     expect(out.get(done!)).toBe("deferred");
     expect(out.get(fresh!)).toBe("sent");
     expect(sleeps, "the only attempt of the call is its first").toHaveLength(0);
+  });
+
+  it("C2 - a call that makes no request owes no wait: N rows with no API key mean zero sleeps (the CI and e2e shape)", async () => {
+    vi.stubEnv("RESEND_API_KEY", undefined);
+    const ids = await queueN(4);
+    const out = await dispatchNow(ids, { sleep, nowMs });
+    expect(ids.map((id) => out.get(id)), "anti-vacuity: every row was attempted and refused at the gate").toEqual(ids.map(() => "dead"));
+    expect(deliverMock, "no request left").not.toHaveBeenCalled();
+    expect(sleeps, "refusals start no interval, so nothing waits").toEqual([]);
+  });
+
+  it("C2 - a row refused before any request does not delay the first real one, and the real requests stay MIN_SEND_INTERVAL_MS apart around a refusal", async () => {
+    const to = `${randomUUID()}@suppressed.test`;
+    suppressedAddresses.push(to);
+    await suppress(to, "manual");
+    const refusedAhead = (await queueN(1, { to, transactional: false }))[0]!;
+    const [real0, real1] = await queueN(2);
+    const refusedBetween = (await queueN(1, { to, transactional: false }))[0]!;
+    const real2 = (await queueN(1))[0]!;
+    const out = await dispatchNow([refusedAhead, real0!, real1!, refusedBetween, real2], { sleep, nowMs });
+    expect([refusedAhead, refusedBetween].map((id) => out.get(id)), "premise: both were refused at the gate").toEqual(["suppressed", "suppressed"]);
+    expect([real0!, real1!, real2].map((id) => out.get(id))).toEqual(["sent", "sent", "sent"]);
+    expect(starts, "anti-vacuity: exactly the three real rows made a request").toHaveLength(3);
+    expect(events[0], "the first real request is not held back by the refusal ahead of it").toBe("send");
+    for (let i = 1; i < starts.length; i++) {
+      expect(starts[i]! - starts[i - 1]!, `request ${i} started too soon after request ${i - 1}`).toBeGreaterThanOrEqual(MIN_SEND_INTERVAL_MS);
+    }
+    expect(sleeps.length, "a wait is owed only between two requests").toBeLessThanOrEqual(starts.length - 1);
+  });
+
+  describe("attemptClaimed says whether a request left (what the pacing counts)", () => {
+    /** Claim one queued row the way the worker does (sending, attempts + 1, a lease) and return it as the attempt is handed it. */
+    async function claimed(over: Partial<OutboxMessage> = {}): Promise<ClaimedRow> {
+      const [id] = await queueN(1, over);
+      const [rec] = await sql<ClaimedRecord[]>`
+        update email_outbox
+           set status = 'sending', attempts = attempts + 1, lease_until = now() + interval '2 minutes', status_at = now()
+         where id = ${id!} and status = 'queued'
+        returning id, kind, ref_type, ref_id, org_id, meta, recipient, subject, body_sealed, transactional,
+                  attempts, expires_at, lease_until`;
+      return toClaimedRow(rec!);
+    }
+    const http = (status: number, errorName: string) => ({ ok: false, reason: "http", status, errorName, detail: "x" });
+
+    it("is true exactly when the transport was called, for every way an attempt can end", async () => {
+      const suppressedTo = `${randomUUID()}@suppressed.test`;
+      suppressedAddresses.push(suppressedTo);
+      await suppress(suppressedTo, "manual");
+      type Case = { name: string; requestMade: boolean; run: () => Promise<Awaited<ReturnType<typeof attemptClaimed>>> };
+      const cases: Case[] = [
+        { name: "2xx", requestMade: true, run: async () => attemptClaimed(await claimed()) },
+        {
+          name: "503 (retry later)",
+          requestMade: true,
+          run: async () => {
+            deliverMock.mockResolvedValueOnce(http(503, "service_unavailable"));
+            return attemptClaimed(await claimed());
+          },
+        },
+        {
+          name: "429",
+          requestMade: true,
+          run: async () => {
+            deliverMock.mockResolvedValueOnce(http(429, "rate_limit_exceeded"));
+            return attemptClaimed(await claimed());
+          },
+        },
+        {
+          name: "422 (dead for good)",
+          requestMade: true,
+          run: async () => {
+            deliverMock.mockResolvedValueOnce(http(422, "validation_error"));
+            return attemptClaimed(await claimed());
+          },
+        },
+        {
+          name: "the transport throws (the request may have left)",
+          requestMade: true,
+          run: async () => {
+            deliverMock.mockRejectedValueOnce(new Error("boom"));
+            return attemptClaimed(await claimed());
+          },
+        },
+        {
+          name: "no API key",
+          requestMade: false,
+          run: async () => {
+            vi.stubEnv("RESEND_API_KEY", undefined);
+            return attemptClaimed(await claimed());
+          },
+        },
+        { name: "suppressed", requestMade: false, run: async () => attemptClaimed(await claimed({ to: suppressedTo, transactional: false })) },
+        {
+          name: "expired as the attempt begins",
+          requestMade: false,
+          run: async () => attemptClaimed(await claimed(), { now: new Date(Date.now() + 60 * MIN) }),
+        },
+        {
+          name: "the body is missing",
+          requestMade: false,
+          run: async () => attemptClaimed({ ...(await claimed()), bodySealed: null }),
+        },
+        {
+          name: "the body cannot be opened",
+          requestMade: false,
+          run: async () => attemptClaimed({ ...(await claimed()), bodySealed: new Uint8Array([1, 2, 3]) }),
+        },
+      ];
+      let checked = 0;
+      for (const c of cases) {
+        deliverMock.mockClear();
+        vi.stubEnv("RESEND_API_KEY", "re_test");
+        const res = await c.run();
+        expect(res.requestMade, c.name).toBe(c.requestMade);
+        expect(deliverMock.mock.calls.length > 0, `${c.name}: requestMade must agree with whether the transport was called`).toBe(c.requestMade);
+        checked += 1;
+      }
+      expect(checked, "anti-vacuity: every case ran").toBe(cases.length);
+      expect(cases.filter((c) => c.requestMade).length, "both classes are represented").toBeGreaterThan(0);
+      expect(cases.filter((c) => !c.requestMade).length).toBeGreaterThan(0);
+    });
+  });
+
+  // I1: the two production defaults. Everything above injects both seams; this runs with NEITHER, on real timers.
+  it("I1 - with nothing injected, the real timer and the real clock hold consecutive requests MIN_SEND_INTERVAL_MS apart, start to start", async () => {
+    const SEND_TOOK_MS = 400; // < the interval: the wait owed after it is the remainder, measured on the real monotonic clock
+    const TIMER_SLACK_MS = 10; // a Node timer may fire a millisecond or so early
+    const marks: { start: number; end: number }[] = [];
+    deliverMock.mockReset();
+    deliverMock.mockImplementation(async (m: { tags: Record<string, string> }) => {
+      const start = performance.now();
+      await new Promise((r) => setTimeout(r, SEND_TOOK_MS));
+      marks.push({ start, end: performance.now() });
+      return { ok: true, providerId: `re_${m.tags.outbox}` };
+    });
+    const ids = await queueN(2);
+    const out = await dispatchNow(ids); // no sleep, no nowMs
+    expect(ids.map((id) => out.get(id))).toEqual(["sent", "sent"]);
+    expect(marks, "anti-vacuity: two requests were made").toHaveLength(2);
+    const startToStart = marks[1]!.start - marks[0]!.start;
+    expect(startToStart, "the default sleep really waits").toBeGreaterThanOrEqual(MIN_SEND_INTERVAL_MS - TIMER_SLACK_MS);
+    // Start to start, not end to start: the first send used SEND_TOOK_MS of the interval, so only the rest was owed. A default
+    // clock that does not tell time (a constant) would owe the whole interval again after the send, and the gap from the first
+    // request's END to the second's START would be MIN_SEND_INTERVAL_MS instead of the remainder.
+    const owedAfterSend = marks[1]!.start - marks[0]!.end;
+    expect(owedAfterSend, "the default clock measures from the START of the previous request").toBeLessThan(
+      MIN_SEND_INTERVAL_MS - SEND_TOOK_MS / 2,
+    );
   });
 
   it("the budget: past DISPATCH_NOW_BUDGET_MS the rest is never claimed - queued, attempts 0, no lease, body kept, outcome deferred", async () => {

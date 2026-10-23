@@ -550,7 +550,7 @@ describe.skipIf(!HAS_DB)("the email outbox core (DB)", () => {
       const r1 = await claimForRetry(id);
       expect(r1.attempts).toBe(2);
       const second = await attemptClaimed(r1);
-      expect(second).toEqual({ outcome: "sent", verdict: "sent", rateLimited: false });
+      expect(second).toEqual({ outcome: "sent", verdict: "sent", rateLimited: false, requestMade: true });
 
       const r = await get(id);
       expect([r.status, r.attempts, r.body_sealed, r.lease_until]).toEqual(["sent", 2, null, null]);
@@ -963,7 +963,7 @@ describe.skipIf(!HAS_DB)("the email outbox core (DB)", () => {
       const claimedFine = await claimForRetry(fine);
       vi.setSystemTime(new Date(T0.getTime() + 3 * MIN)); // the claim was at T0; the attempt starts three minutes later
       const l = await attemptClaimed(claimedLate);
-      expect(l).toEqual({ outcome: "expired", verdict: null, rateLimited: false });
+      expect(l).toEqual({ outcome: "expired", verdict: null, rateLimited: false, requestMade: false });
       expect(deliverMock).not.toHaveBeenCalled();
       const rl = await get(late);
       expect([rl.status, rl.attempts, rl.body_sealed, rl.lease_until]).toEqual(["expired", 1, null, null]);
