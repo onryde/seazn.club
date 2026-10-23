@@ -75,6 +75,7 @@ type Row = {
   expires_at: Date;
   last_error: string | null;
   provider_id: string | null;
+  status_at: Date;
 };
 
 const http = (status: number, errorName: string | null): DeliverResult => ({
@@ -184,6 +185,12 @@ describe.skipIf(!HAS_DB)("the email outbox retry worker (DB)", () => {
   const lapse = async (id: string): Promise<void> => {
     await sql`update email_outbox set lease_until = now() - interval '1 second' where id = ${id} and status = 'sending'`;
   };
+  /** A row whose last status change was long ago, so a tick that moves it must move `status_at` too. */
+  const age = async (...ids: string[]): Promise<void> => {
+    await sql`update email_outbox set status_at = now() - interval '1 hour' where id = any(${ids}::uuid[])`;
+  };
+  /** Did a status change just now? (`status_at` is what phase 2 reads as "when".) */
+  const movedJustNow = (r: Row): boolean => Date.now() - r.status_at.getTime() < 60_000;
   const expireNow = async (id: string): Promise<void> => {
     await sql`update email_outbox set expires_at = now() - interval '1 second' where id = ${id}`;
   };
@@ -305,6 +312,7 @@ describe.skipIf(!HAS_DB)("the email outbox retry worker (DB)", () => {
       const spent = await queue({ meta: { stamp: "s-spent" } });
       await strand(last, MAX_ATTEMPTS - 1);
       await strand(spent, MAX_ATTEMPTS);
+      await age(spent);
       const report = await tick([last, spent]);
       expect(report).toEqual({ ...ZERO, claimed: 1, sent: 1, dead: 1 });
 
@@ -313,19 +321,54 @@ describe.skipIf(!HAS_DB)("the email outbox retry worker (DB)", () => {
       expect([a.status, a.attempts]).toEqual(["sent", MAX_ATTEMPTS]);
       const b = await get(spent);
       expect([b.status, b.attempts, b.body_sealed, b.lease_until, b.last_error]).toEqual(["dead", MAX_ATTEMPTS, null, null, "attempts_exhausted"]);
+      expect(movedJustNow(b), "ending it moves status_at").toBe(true);
       expect(hookSpy).toHaveBeenCalledTimes(1);
       expect(hookSpy.mock.calls[0]![0]).toMatchObject({ id: spent, status: "dead", meta: { stamp: "s-spent" } });
+    });
+
+    it("a row whose attempt is IN FLIGHT (live lease) is never expired or ended dead by a tick, even past its time or at the attempt ceiling", async () => {
+      const lastAttempt = await queue();
+      const pastTime = await queue();
+      await sql`
+        update email_outbox
+           set status = 'sending', attempts = ${MAX_ATTEMPTS}, lease_until = now() + interval '1 minute'
+         where id = ${lastAttempt}`;
+      await sql`
+        update email_outbox
+           set status = 'sending', attempts = 1, lease_until = now() + interval '1 minute', expires_at = now() - interval '1 second'
+         where id = ${pastTime}`;
+      expect(await tick([lastAttempt, pastTime])).toEqual(ZERO);
+      expect(deliverMock).not.toHaveBeenCalled();
+      expect(hookSpy).not.toHaveBeenCalled();
+      const rows = await Promise.all([lastAttempt, pastTime].map(get));
+      expect(rows.map((r) => [r.status, r.body_sealed === null])).toEqual([["sending", false], ["sending", false]]);
+      // The pair: once those leases lapse, both are ended (the control that the rows were reachable).
+      await lapse(lastAttempt);
+      await lapse(pastTime);
+      expect(await tick([lastAttempt, pastTime])).toEqual({ ...ZERO, dead: 1, expired: 1 });
+    });
+
+    it("a row that has spent every attempt is never claimed again, even one left `queued` (it can only be ended by its expiry)", async () => {
+      const id = await queue();
+      await sql`update email_outbox set attempts = ${MAX_ATTEMPTS} where id = ${id}`;
+      await makeDue(id);
+      expect(await tick([id])).toEqual(ZERO);
+      expect(deliverMock).not.toHaveBeenCalled();
+      const r = await get(id);
+      expect([r.status, r.attempts]).toEqual(["queued", MAX_ATTEMPTS]);
     });
 
     it("a row past expires_at is expired by the tick and never delivered, body gone, and the hook runs", async () => {
       const id = await queue({ meta: { stamp: "s-exp" }, refType: "fixture_seat", refId: `${RUN}-seat-exp`, kind: "chess_invite" });
       const live = await queue();
       await expireNow(id);
+      await age(id);
       const report = await tick([id, live]);
       expect(report).toEqual({ ...ZERO, claimed: 1, sent: 1, expired: 1 });
       expect(sent().map(idOf), "the expired row was never sent").toEqual([live]);
       const r = await get(id);
       expect([r.status, r.body_sealed, r.lease_until]).toEqual(["expired", null, null]);
+      expect(movedJustNow(r), "the expiry moves status_at").toBe(true);
       expect(hookSpy).toHaveBeenCalledTimes(1);
       expect(hookSpy.mock.calls[0]![0]).toEqual({
         id,
@@ -588,15 +631,18 @@ describe.skipIf(!HAS_DB)("the email outbox retry worker (DB)", () => {
       await makeDue(c, 120);
       await makeDue(b, 60);
       await sql`update email_outbox set next_attempt_at = now() + interval '10 minutes' where id = ${future}`;
-      // Two rows due at the very same instant: the lower id goes first.
-      const t1 = await queue();
-      const t2 = await queue();
+      // Rows due at the very same instant: the lower id goes first. Random uuids make heap (insertion) order differ from id
+      // order with probability 1 - 1/8!, so a claim with no id tiebreak cannot pass this by luck.
+      const TIED = 8;
+      const tied: string[] = [];
+      for (let i = 0; i < TIED; i++) tied.push(await queue());
       const same = new Date(Date.now() - 30_000);
-      await sql`update email_outbox set next_attempt_at = ${same} where id in (${t1}, ${t2})`;
+      await sql`update email_outbox set next_attempt_at = ${same} where id = any(${tied}::uuid[])`;
 
-      const report = await tick([a, b, c, future, t1, t2]);
-      expect(report).toEqual({ ...ZERO, claimed: 5, sent: 5 });
-      expect(sent().map(idOf)).toEqual([a, c, b, ...[t1, t2].sort()]);
+      const report = await tick([a, b, c, future, ...tied]);
+      expect(report).toEqual({ ...ZERO, claimed: 3 + TIED, sent: 3 + TIED });
+      expect(sent().map(idOf)).toEqual([a, c, b, ...[...tied].sort()]);
+      expect(tied.length, "the tie group is the size the odds assume").toBe(TIED);
       expect((await get(future)).attempts, "a row ahead of its time is not taken").toBe(0);
     });
 
@@ -607,12 +653,14 @@ describe.skipIf(!HAS_DB)("the email outbox retry worker (DB)", () => {
         seen.push(await get(idOf(m)));
         return { ok: true, providerId: pid(idOf(m)) };
       });
+      await age(id);
       const before = Date.now();
       await tick([id]);
       expect(seen).toHaveLength(1);
       const mid = seen[0]!;
       expect([mid.status, mid.attempts]).toEqual(["sending", 1]);
       expect(mid.body_sealed).not.toBeNull();
+      expect(movedJustNow(mid), "the claim moves status_at").toBe(true);
       expect(Math.abs(mid.lease_until!.getTime() - (before + LEASE_MS))).toBeLessThan(10_000);
 
       // The same on a RETRY: attempts 1 -> 2 in the claim.

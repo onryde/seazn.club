@@ -164,20 +164,31 @@ describe("findUnappliedEndings", () => {
     KIND_HOOKS.chess_invite = { findUnapplied: async () => [row({ id: "a" }), row({ id: "b" }), row({ id: "c" })] };
     KIND_HOOKS.magic_link = {};
     expect((await findUnappliedEndings(2)).map((r) => r.id)).toEqual(["a", "b"]);
+    const asked = vi.fn(async () => [row({ id: "z" })]);
+    KIND_HOOKS.chess_invite = { findUnapplied: asked };
     expect(await findUnappliedEndings(0)).toEqual([]);
+    expect(asked, "a limit of nothing asks for nothing").not.toHaveBeenCalled();
   });
 
-  it("a finder that throws is logged by name and does not stop the other kinds' finders", async () => {
-    KIND_HOOKS.chess_invite = {
+  // Both orders: a throw must not stop the kinds AFTER it, and must not discard the rows of the kinds BEFORE it. With two
+  // kinds each order exercises one of those (the loop runs the vocabulary's order, so the first kind has a successor and the
+  // last has a predecessor).
+  const [FIRST_KIND, LAST_KIND] = [OUTBOX_KINDS[0], OUTBOX_KINDS[OUTBOX_KINDS.length - 1]!] as [OutboxKind, OutboxKind];
+  it.each([
+    { throwing: FIRST_KIND, healthy: LAST_KIND },
+    { throwing: LAST_KIND, healthy: FIRST_KIND },
+  ])("a finder that throws ($throwing) is logged by name and does not stop or lose the other kind's rows ($healthy)", async ({ throwing, healthy }) => {
+    expect(FIRST_KIND, "two distinct kinds, or the order cases below are one case").not.toBe(LAST_KIND);
+    KIND_HOOKS[throwing] = {
       findUnapplied: async () => {
         throw new Error("SECRET-LEAK finder blew up");
       },
     };
-    KIND_HOOKS.magic_link = { findUnapplied: async () => [row({ id: "m1", kind: "magic_link", status: "dead" })] };
+    KIND_HOOKS[healthy] = { findUnapplied: async () => [row({ id: "h1", kind: healthy, status: "dead" })] };
     const found = await findUnappliedEndings(10);
-    expect(found.map((r) => r.id)).toEqual(["m1"]);
+    expect(found.map((r) => r.id)).toEqual(["h1"]);
     expect(logMock.error).toHaveBeenCalledTimes(1);
-    expect(logMock.error.mock.calls[0]![0]).toMatchObject({ kind: "chess_invite" });
+    expect(logMock.error.mock.calls[0]![0]).toMatchObject({ kind: throwing });
     expect(JSON.stringify(logMock.error.mock.calls), "raw error text is not logged").not.toContain("SECRET-LEAK");
   });
 
