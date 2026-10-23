@@ -44,8 +44,8 @@ interface RouteRule {
   /** Path template relative to /api/v1, `:x` matches one segment. */
   path: string;
   scope: KeyScope;
-  /** How to resolve the owning competition for pinned keys; a pinned key is
-   *  403 on rules without one (org-wide surface). */
+  /** How to resolve the owning competition for pinned keys (403 on rules without one: org-wide surface). MUST be the
+   *  kind owning the id (`/fixtures/:id/…` → `fixture`): a wrong kind misses every lookup — auth.ts fails closed. */
   pin?: PinKind;
 }
 
