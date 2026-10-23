@@ -29,7 +29,7 @@ import { streamPassGrantKey } from "@/server/usecases/stream-credits";
 export const STREAM_LEDGER_REASONS = ["purchase", "consume", "refund", "grant", "revoke", "expire"] as const;
 export type StreamLedgerReason = (typeof STREAM_LEDGER_REASONS)[number];
 
-/** Every plain-words kind a history row can wear — the i18n keys `stream.credits.history.kind.*` are one per entry
+/** Every plain-words kind a history row can wear — the i18n keys `settings.credits.stream.kind.*` are one per entry
  *  (a test holds the four dictionaries to this list). `other` is the unmapped door: no writer reaches it, the
  *  reader REPORTS any row that does, and a test fails if a real writer's row lands on it. */
 export const STREAM_HISTORY_KINDS = [
@@ -75,8 +75,12 @@ export interface HistoryClassifyInput {
  *             recordStreamPackRefund key stream_pack_refund:* → packRefund
  *   refund    staffRow('refund')  created_by set   → refundStaff
  *             refundConsumeForSession (session, no author) → refundNoCamera
- * `refundConsumeForSession` has ONE production caller today (the R2008 never-live cancel); a second must add a
- * discriminator here, and the call-site test fails until it does.
+ * `refundNoCamera` is read off a SHAPE (a refund, no author, a session), not off anything the writer stamps — so it is
+ * only honest while `refundConsumeForSession` is the one thing that writes that shape, and it is pinned there:
+ * stream-credit-ledger-writers.test.ts holds (a) the nine insert sites in stream-credits.ts to a registry, (b) the
+ * `{ type: "refund_credit" }` effect to a single emitter, the domain's `camera_never_live` cell, and (c) the function to a
+ * single caller (the use-case's `refund_credit` handler), under any import alias. A second refund writer fails those
+ * tests until it is given its own discriminator here and its own kind.
  */
 export function streamHistoryKind(row: HistoryClassifyInput): StreamHistoryKind {
   switch (row.reason) {
@@ -151,11 +155,29 @@ function encodeCursor(at: string, notExpiry: boolean, id: string): string {
   return Buffer.from(`${at}|${notExpiry ? "t" : "f"}|${id}`).toString("base64url");
 }
 
+/** The cursor's instant is a REAL one: the shape check above accepts `2026-13-45 99:99:99+99`, which postgres refuses
+ *  (22008) AFTER the audience gate — an error screen for a hand-edited link, where a 400 `cursor_invalid` belongs. So the
+ *  calendar is checked here: month 1-12, a day the month has (leap years included), a clock the day has, and an offset
+ *  postgres takes (up to 15:59). Any real `created_at::text` passes. */
+function isRealInstant(at: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})(?:\.\d{1,6})?(?:Z|[+-](\d{2})(?::(\d{2}))?)$/.exec(at);
+  if (!m) return false;
+  const [year, month, day, hour, minute, second] = m.slice(1, 7).map(Number) as [number, number, number, number, number, number];
+  const offsetHours = m[7] === undefined ? 0 : Number(m[7]);
+  const offsetMinutes = m[8] === undefined ? 0 : Number(m[8]);
+  if (year < 1 || month < 1 || month > 12) return false;
+  const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  const daysInMonth = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]!;
+  if (day < 1 || day > daysInMonth) return false;
+  if (hour > 23 || minute > 59 || second > 59) return false;
+  return offsetHours <= 15 && offsetMinutes <= 59;
+}
+
 function decodeCursor(raw: string): { at: string; notExpiry: boolean; id: string } {
   const bad = () => new HttpError(400, "That history page link is not valid", "cursor_invalid");
   const parts = Buffer.from(raw, "base64url").toString("utf8").split("|");
   const [at, flag, id] = parts;
-  if (parts.length !== 3 || !at || !TS.test(at) || (flag !== "t" && flag !== "f") || !id || !UUID.test(id)) throw bad();
+  if (parts.length !== 3 || !at || !TS.test(at) || !isRealInstant(at) || (flag !== "t" && flag !== "f") || !id || !UUID.test(id)) throw bad();
   return { at, notExpiry: flag === "t", id };
 }
 
@@ -246,19 +268,12 @@ export async function listStreamCreditHistory(
 
   const hasMore = rows.length > limit;
   const page = hasMore ? rows.slice(0, limit) : rows;
+  const unmapped: HistoryDbRow[] = [];
   const mapped = page.map((r): StreamHistoryRow => {
     const kind = streamHistoryKind({
       reason: r.reason, bucket: r.bucket, byStaff: r.by_staff, sessionId: r.session_id, idempotencyKey: r.idempotency_key,
     });
-    if (kind === "other") {
-      // A row the classifier has no branch for: shown under the neutral label, never under a real one, and
-      // reported — a new writer or reason needs a mapping, and this is how it is noticed. The report names the row
-      // and the facts the classifier read, never a note or an author.
-      log.error({ orgId, ledgerId: r.id, reason: r.reason, bucket: r.bucket }, "stream credit history: an org_stream_credits row has no mapping");
-      captureError(new Error(`org_stream_credits row ${r.id} (reason ${r.reason}, bucket ${r.bucket}) has no history mapping`), {
-        orgId, route: "settings.credits.stream_history.unmapped_row",
-      });
-    }
+    if (kind === "other") unmapped.push(r);
     const fixture: StreamHistoryFixture | null =
       r.fixture_no !== null && r.comp_slug !== null && r.div_slug !== null && r.comp_name !== null
         ? {
@@ -268,6 +283,19 @@ export async function listStreamCreditHistory(
         : null;
     return { id: r.id, dateIso: new Date(r.created_at).toISOString(), kind, delta: r.delta, balanceAfter: r.balance_after, fixture };
   });
+  if (unmapped.length > 0) {
+    // A row the classifier has no branch for: shown under the neutral label, never under a real one, and reported — a new
+    // writer or reason needs a mapping, and this is how it is noticed. ONCE per read, with the count: one bad writer on
+    // a 1000-row export, or a page refreshed all day, is one event to triage, not one per row per read. The report names
+    // the rows (a handful) and the facts the classifier read, never a note or an author.
+    const sample = unmapped.slice(0, 5).map((r) => ({ ledgerId: r.id, reason: r.reason, bucket: r.bucket }));
+    log.error({ orgId, count: unmapped.length, sample }, "stream credit history: org_stream_credits rows have no mapping");
+    const first = unmapped[0]!;
+    captureError(
+      new Error(`${unmapped.length} org_stream_credits row(s) have no history mapping (first: ${first.id}, reason ${first.reason}, bucket ${first.bucket})`),
+      { orgId, route: "settings.credits.stream_history.unmapped_row", extra: { count: unmapped.length, sample } },
+    );
+  }
   const last = page[page.length - 1];
   return { rows: mapped, nextCursor: hasMore && last ? encodeCursor(last.cursor_at, last.not_expiry, last.id) : null };
 }

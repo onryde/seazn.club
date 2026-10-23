@@ -16,11 +16,13 @@
 //   H8 org match        delete the org-mismatch refusal                           → "another organisation's session is a 404"
 //   H9 staff identity   add `createdBy` to the mapped row                         → "no staff identity, note or key leaves the reader"
 //   H10 reason map      swap two branches of the classifier                       → "every writer's row lands on its own kind"
-//   H12 rollover tie    drop `(c.reason <> 'expire') desc` from the order (and the cursor key)  → "every writer's row lands on its own kind" (the chain and the tie)
+//   H12 rollover tie    drop `(c.reason <> 'expire') desc` from the order           → "the rollover's tie" (fixed ids whose `id desc` order is wrong: deterministic, 3 runs)
+//   H14 cursor flag    drop the flag from the cursor predicate / swap it on encode / misread it on decode → "the rollover's tie" (a page ending exactly on the expiry or the grant)
 //   H11 unmapped        classifier `default` returns a mapped kind                → "a row no writer produces is reported and never wears a real label"
+//   H15 report once     report per unmapped row instead of once per read          → "many unmapped rows are ONE report, with the count"
+//   H16 month / day     drop the month range, or the day-of-month check           → "a cursor whose instant does not exist is refused" (month 13, Feb 31, 2027-02-29, 2100-02-29)
+//   H17 clock / offset  drop the hour/minute/second range, or the offset ceiling → same test (25:00, 99 seconds, +99)
 import { randomUUID } from "node:crypto";
-import { readdirSync, readFileSync } from "node:fs";
-import { join, relative } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
@@ -28,9 +30,10 @@ import { routes } from "@/lib/routes";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { rigTarget, rigUser, streamRig } from "@/server/relay/__tests__/_session-rig";
 import {
-  consumeForSession, ensureMonthlyStreamGrant, grantCredits, grantPassStreamCredits, recordPurchase,
+  consumeForSession, ensureMonthlyStreamGrant, grantCredits, grantMonthlyStreamCredits, grantPassStreamCredits, recordPurchase,
   recordStreamPackRefund, refundConsumeForSession, refundCredits, revokeCredits, streamPassCredits,
 } from "@/server/usecases/stream-credits";
+import { LEDGER_WRITER_SITES } from "./_ledger-writer-sites";
 
 const { captureErrorMock } = vi.hoisted(() => ({ captureErrorMock: vi.fn() }));
 vi.mock("@/lib/sentry", async (importOriginal) => ({
@@ -39,7 +42,7 @@ vi.mock("@/lib/sentry", async (importOriginal) => ({
 }));
 
 import {
-  STREAM_HISTORY_KINDS, STREAM_HISTORY_MAX_LIMIT, STREAM_LEDGER_REASONS, listStreamCreditHistory, streamHistoryKind,
+  STREAM_HISTORY_KINDS, STREAM_HISTORY_MAX_LIMIT, STREAM_LEDGER_REASONS, cursorFromQuery, listStreamCreditHistory, streamHistoryKind,
   type StreamHistoryKind,
 } from "../stream-credit-history";
 
@@ -48,6 +51,44 @@ const HAS_DB = !!process.env.DATABASE_URL;
 const sessionAuth = (orgId: string, role: AuthCtx["role"] = "viewer"): AuthCtx => ({ orgId, via: "session", userId: null, role, keyId: null });
 
 beforeEach(() => captureErrorMock.mockClear());
+
+describe("the cursor's calendar (no DB) — a link that names an instant that does not exist is not one of ours (m2)", () => {
+  const cursor = (at: string, flag = "t", id = "11111111-1111-4111-8111-111111111111") => Buffer.from(`${at}|${flag}|${id}`).toString("base64url");
+
+  it("an instant postgres would refuse (22008) is not a cursor — month 13, Feb 31, a non-leap Feb 29, hour 25, second 99, an offset of +99", () => {
+    const real = ["2026-10-20 09:00:00.123456+00", "2026-12-31 23:59:59+00", "2026-01-01 00:00:00Z", "2026-10-20 09:00:00+05:30", "2026-10-20 09:00:00-15:59"];
+    let judged = 0;
+    for (const at of real) { expect(cursorFromQuery(cursor(at)), `${at} is real`).toBe(cursor(at)); judged += 1; }
+    // leap days: 2028 and 2000 had a Feb 29, 2027 and 2100 did not
+    for (const at of ["2028-02-29 00:00:00+00", "2000-02-29 00:00:00+00"]) { expect(cursorFromQuery(cursor(at)), at).toBe(cursor(at)); judged += 1; }
+    const fake = [
+      "2026-13-01 00:00:00+00",   // month 13
+      "2026-00-10 00:00:00+00",   // month 0
+      "2026-02-31 00:00:00+00",   // Feb 31
+      "2026-04-31 00:00:00+00",   // April has 30
+      "2026-06-00 00:00:00+00",   // day 0
+      "2027-02-29 00:00:00+00",   // not a leap year
+      "2100-02-29 00:00:00+00",   // a century that is not a leap year
+      "2026-10-20 25:00:00+00",   // hour 25
+      "2026-10-20 09:60:00+00",   // minute 60
+      "2026-10-20 09:00:99+00",   // second 99
+      "2026-10-20 09:00:00+99",   // offset +99
+      "2026-10-20 09:00:00+16",   // offset past postgres' 15:59
+      "2026-10-20 09:00:00+05:99", // offset minutes 99
+      "0000-10-20 09:00:00+00",   // there is no year 0
+    ];
+    for (const at of fake) { expect(cursorFromQuery(cursor(at)), `${at} is not real`).toBeUndefined(); judged += 1; }
+    expect(judged, "anti-vacuity: every instant was judged").toBe(21);
+  });
+
+  it("the flag and the id are still held to their shapes", () => {
+    const at = "2026-10-20 09:00:00+00";
+    expect(cursorFromQuery(cursor(at, "x"))).toBeUndefined();
+    expect(cursorFromQuery(cursor(at, "t", "not-a-uuid"))).toBeUndefined();
+    expect(cursorFromQuery(Buffer.from(`${at}|t`).toString("base64url"))).toBeUndefined();
+    expect(cursorFromQuery(cursor(at, "f"))).toBe(cursor(at, "f"));
+  });
+});
 
 describe("streamHistoryKind — the pure map (no DB)", () => {
   const base = { reason: "grant", bucket: "pack", byStaff: false, sessionId: null, idempotencyKey: null };
@@ -93,34 +134,6 @@ describe("streamHistoryKind — the pure map (no DB)", () => {
   });
 });
 
-describe("the classifier's one assumption about a writer, held to the tree", () => {
-  const SRC = join(process.cwd(), "src");
-  const walk = (dir: string): string[] =>
-    readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
-      const p = join(dir, e.name);
-      if (e.isDirectory()) return e.name === "__tests__" || e.name === "node_modules" ? [] : walk(p);
-      return /\.tsx?$/.test(e.name) ? [p] : [];
-    });
-
-  it("refundConsumeForSession has exactly ONE production call — the R2008 never-live cancel — because an author-less, session-linked refund reads as \"the camera never connected\"", () => {
-    const calls: string[] = [];
-    let scanned = 0;
-    for (const file of walk(SRC)) {
-      scanned += 1;
-      readFileSync(file, "utf8").split("\n").forEach((line, i) => {
-        const code = line.trim();
-        if (code.startsWith("//") || code.startsWith("*") || code.startsWith("/*")) return;
-        if (/\brefundConsumeForSession\(/.test(code) && !/function refundConsumeForSession\(/.test(code)) {
-          calls.push(`${relative(SRC, file)}:${i + 1}`);
-        }
-      });
-    }
-    expect(scanned, "the scan walked the source tree").toBeGreaterThan(200);
-    // A second caller must give its refunds their own discriminator in streamHistoryKind (and a kind), then update this list.
-    expect(calls.map((c) => c.replace(/:\d+$/, ""))).toEqual(["server/usecases/stream-sessions.ts"]);
-  });
-});
-
 describe.skipIf(!HAS_DB)("the reader's reason set is the DB constraint's", () => {
   it("STREAM_LEDGER_REASONS equals org_stream_credits_reason_check, read from pg_constraint", async () => {
     const rows = await sql<{ def: string }[]>`
@@ -160,7 +173,18 @@ describe.skipIf(!HAS_DB)("listStreamCreditHistory — every writer's row, throug
     const s1 = await r.session(fx1);
     const intent = `pi_${randomUUID()}`;
     const expected = new Map<string, { kind: StreamHistoryKind; sign: 1 | -1; reason: string }>();
-    const note = (id: string, kind: StreamHistoryKind, sign: 1 | -1, reason: string) => expected.set(id, { kind, sign, reason });
+    // Every row is noted AGAINST the writer site that wrote it (_ledger-writer-sites.ts — nine of them, scanned out of
+    // stream-credits.ts by stream-credit-ledger-writers.test.ts). The matrix is not a hand-kept list of "the writers I
+    // remembered": it must drive all nine, and every row must wear the shape its own site declares.
+    const drove = new Map<string, string[]>();
+    const note = (site: string, id: string, kind: StreamHistoryKind, sign: 1 | -1, reason: string) => {
+      const declared = LEDGER_WRITER_SITES.find((x) => x.key === site);
+      expect(declared, `site ${site} is in the registry`).toBeDefined();
+      expect(declared!.kinds, `${site} shows as ${kind}`).toContain(kind);
+      expect(declared!.reasons, `${site} writes a ${reason}`).toContain(reason);
+      drove.set(site, [...(drove.get(site) ?? []), id]);
+      expected.set(id, { kind, sign, reason });
+    };
     const byKey = async (key: string) => (await sql<{ id: string }[]>`select id from org_stream_credits where org_id = ${r.orgId} and idempotency_key = ${key}`)[0]!.id;
 
     // 1. a bought 5-pack, with the Stripe link the webhook writes
@@ -168,48 +192,53 @@ describe.skipIf(!HAS_DB)("listStreamCreditHistory — every writer's row, throug
       orgId: r.orgId, delta: 5, stripeEventId: `cs_${randomUUID()}`,
       link: { checkoutSessionId: null, paymentIntentId: intent, pack: "seazn_stream_pack_5", amountMinor: 2500, currency: "gbp" },
     });
-    note(bought.id, "packPurchase", 1, "purchase");
+    note("purchase", bought.id, "packPurchase", 1, "purchase");
     // 2. this month's free grant
     const now = new Date();
     const granted = await ensureMonthlyStreamGrant(r.orgId, now);
     expect(granted, "the community plan grants a free monthly credit — the monthly bucket is under test").toBeGreaterThan(0);
-    const [monthlyRow] = await sql<{ id: string }[]>`select id from org_stream_credits where org_id = ${r.orgId} and reason = 'grant' and bucket = 'monthly'`;
-    note(monthlyRow!.id, "monthlyGrant", 1, "grant");
+    const [monthlyRow] = await sql<{ id: string }[]>`select id from org_stream_credits where org_id = ${r.orgId} and reason = 'grant' and bucket = 'monthly' and idempotency_key not like '%:to-%'`;
+    note("monthly-grant", monthlyRow!.id, "monthlyGrant", 1, "grant");
     // 3. a match streamed on the free credit (monthly is drawn first), 4. one on the bought pack
     const c0 = await sql.begin((tx) => consumeForSession(tx, { orgId: r.orgId, fixtureId: fx0, sessionId: s0 }));
-    note(c0.ledgerId!, "streamUsed", -1, "consume");
+    note("consume", c0.ledgerId!, "streamUsed", -1, "consume");
     const c1 = await sql.begin((tx) => consumeForSession(tx, { orgId: r.orgId, fixtureId: fx1, sessionId: s1 }));
-    note(c1.ledgerId!, "streamUsed", -1, "consume");
+    note("consume", c1.ledgerId!, "streamUsed", -1, "consume");
+    // 4b. a mid-month upgrade: the plan now grants two more than this month has, so the rollover writes a TOP-UP of exactly
+    //     the difference (review I3) — a third monthly-grant row, under its own key, that the matrix once never drove.
+    expect(await grantMonthlyStreamCredits(r.orgId, granted + 2, now), "the top-up is the difference").toBe(2);
+    const [topUpRow] = await sql<{ id: string }[]>`select id from org_stream_credits where org_id = ${r.orgId} and reason = 'grant' and bucket = 'monthly' and idempotency_key like '%:to-%'`;
+    note("monthly-topup", topUpRow!.id, "monthlyGrant", 1, "grant");
     // 5. the platform returns the first (R2008: the camera never connected)
-    const sysRefund = await sql.begin((tx) => refundConsumeForSession(tx, { orgId: r.orgId, sessionId: s0, note: "R2008 test" }));
-    note(sysRefund.ledgerId!, "refundNoCamera", 1, "refund");
+    const sysRefund = await sql.begin((tx) => refundConsumeForSession(tx, { orgId: r.orgId, sessionId: s0, fixtureId: fx0, note: "R2008 test" }, new Date()));
+    note("never-live-refund", sysRefund.ledgerId!, "refundNoCamera", 1, "refund");
     // 6. a staff refund linked to the second session, 7. a staff goodwill refund
     const linked = await refundCredits({ orgId: r.orgId, delta: 1, createdBy: staff, note: "linked", idempotencyKey: `k-${randomUUID()}`, sessionId: s1 });
-    note(linked.id, "refundStaff", 1, "refund");
+    note("staff", linked.id, "refundStaff", 1, "refund");
     const goodwill = await refundCredits({ orgId: r.orgId, delta: 1, createdBy: staff, note: "goodwill", idempotencyKey: `k-${randomUUID()}`, sessionId: null });
-    note(goodwill.id, "refundStaff", 1, "refund");
+    note("staff", goodwill.id, "refundStaff", 1, "refund");
     // 8. a staff grant, 9. a staff revoke
     const sg = await grantCredits({ orgId: r.orgId, delta: 2, createdBy: staff, note: "pilot", idempotencyKey: `k-${randomUUID()}` });
-    note(sg.id, "staffAdjust", 1, "grant");
+    note("staff", sg.id, "staffAdjust", 1, "grant");
     const sr = await revokeCredits({ orgId: r.orgId, delta: 1, createdBy: staff, note: "oops", idempotencyKey: `k-${randomUUID()}` });
-    note(sr.id, "staffAdjust", -1, "revoke");
+    note("staff", sr.id, "staffAdjust", -1, "revoke");
     // 10. an Event Pass's one-off credits
     expect(await streamPassCredits("event_pass"), "the Event Pass rung grants match credits").toBeGreaterThan(0);
     const anchor = `pi_pass_${randomUUID()}`;
     expect(await grantPassStreamCredits({ orgId: r.orgId, passKey: "event_pass", anchor })).toBeGreaterThan(0);
-    note(await byKey(`stream-pass:${anchor}`), "passGrant", 1, "grant");
+    note("event-pass", await byKey(`stream-pass:${anchor}`), "passGrant", 1, "grant");
     // 11. the Stripe claw-back of the bought pack
     const claw = await recordStreamPackRefund({ paymentIntentId: intent, via: "refund", reference: "ch_test" });
     expect(claw.applied, "the claw-back wrote its row").toBe(true);
-    note(await byKey(`stream_pack_refund:${intent}`), "packRefund", -1, "revoke");
+    note("pack-clawback", await byKey(`stream_pack_refund:${intent}`), "packRefund", -1, "revoke");
     // 12. next month: the unspent free credit expires, and the new month's arrives
     const nextMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 15));
     await ensureMonthlyStreamGrant(r.orgId, nextMonth);
     const [expireRow] = await sql<{ id: string }[]>`select id from org_stream_credits where org_id = ${r.orgId} and reason = 'expire'`;
-    note(expireRow!.id, "expired", -1, "expire");
+    note("monthly-expire", expireRow!.id, "expired", -1, "expire");
     const [newGrant] = await sql<{ id: string }[]>`
-      select id from org_stream_credits where org_id = ${r.orgId} and reason = 'grant' and bucket = 'monthly' and id <> ${monthlyRow!.id}`;
-    note(newGrant!.id, "monthlyGrant", 1, "grant");
+      select id from org_stream_credits where org_id = ${r.orgId} and reason = 'grant' and bucket = 'monthly' and id <> ${monthlyRow!.id} and idempotency_key not like '%:to-%'`;
+    note("monthly-grant", newGrant!.id, "monthlyGrant", 1, "grant");
 
     const page = await listStreamCreditHistory(sessionAuth(r.orgId), r.orgId, { limit: 50 });
     // Anti-vacuity: every ledger row came back, all of them were judged, and the judged set covers every reason.
@@ -223,6 +252,29 @@ describe.skipIf(!HAS_DB)("listStreamCreditHistory — every writer's row, throug
       expect(row.kind, `${want!.reason} row ${row.id}`).toBe(want!.kind);
       expect(Math.sign(row.delta)).toBe(want!.sign);
     }
+    // All nine writer sites were driven, and every row wears the shape the site that wrote it declares — reason, bucket, author,
+    // session link and idempotency-key format. A row attributed to the wrong site, or a site the matrix forgot, fails here.
+    expect([...drove.keys()].sort(), "the matrix drives every writer site").toEqual(LEDGER_WRITER_SITES.map((x) => x.key).sort());
+    expect(LEDGER_WRITER_SITES).toHaveLength(9);
+    const shapes = await sql<{ id: string; reason: string; bucket: string; by_staff: boolean; session_id: string | null; idempotency_key: string | null }[]>`
+      select id, reason, bucket, (created_by is not null) as by_staff, session_id, idempotency_key from org_stream_credits where org_id = ${r.orgId}`;
+    let shaped = 0;
+    for (const [siteKey, ids] of drove) {
+      const declared = LEDGER_WRITER_SITES.find((x) => x.key === siteKey)!;
+      for (const id of ids) {
+        const row = shapes.find((x) => x.id === id);
+        expect(row, `${siteKey}: row ${id} is in the ledger`).toBeDefined();
+        expect(declared.reasons, `${siteKey}: reason ${row!.reason}`).toContain(row!.reason);
+        expect(declared.buckets, `${siteKey}: bucket ${row!.bucket}`).toContain(row!.bucket);
+        expect(row!.by_staff, `${siteKey}: authored by staff`).toBe(declared.byStaff);
+        if (declared.session === "always") expect(row!.session_id, `${siteKey}: session`).not.toBeNull();
+        if (declared.session === "never") expect(row!.session_id, `${siteKey}: session`).toBeNull();
+        if (declared.key_shape) expect(row!.idempotency_key, `${siteKey}: key`).toMatch(declared.key_shape);
+        else expect(row!.idempotency_key, `${siteKey}: key`).toBeNull();
+        shaped += 1;
+      }
+    }
+    expect(shaped, "anti-vacuity: every ledger row was shape-checked against its site").toBe(total);
     const reasonsSeen = new Set([...expected.values()].map((e) => e.reason));
     expect([...reasonsSeen].sort()).toEqual([...STREAM_LEDGER_REASONS].sort());
     expect(captureErrorMock, "no real writer's row reaches the unmapped door").not.toHaveBeenCalled();
@@ -371,6 +423,30 @@ describe.skipIf(!HAS_DB)("listStreamCreditHistory — every writer's row, throug
     expect(String((captureErrorMock.mock.calls[0]![0] as Error).message)).toContain("org_stream_credits");
   });
 
+  it("many unmapped rows are ONE report per read, carrying the count — not one per row per read (H15)", async () => {
+    const r = await streamRig();
+    for (let i = 1; i <= 3; i += 1) {
+      await sql`insert into org_stream_credits (org_id, delta, reason, bucket, balance_after) values (${r.orgId}, 1, 'grant', 'pack', ${i})`;
+    }
+    const { rows } = await listStreamCreditHistory(sessionAuth(r.orgId), r.orgId);
+    expect(rows.map((x) => x.kind), "anti-vacuity: three unmapped rows were read").toEqual(["other", "other", "other"]);
+    expect(captureErrorMock).toHaveBeenCalledTimes(1);
+    const [err, ctx] = captureErrorMock.mock.calls[0]! as [Error, { orgId: string; extra: { count: number; sample: unknown[] } }];
+    expect(err.message).toContain("3 org_stream_credits row(s)");
+    expect(ctx.orgId).toBe(r.orgId);
+    expect(ctx.extra.count).toBe(3);
+    expect(ctx.extra.sample).toHaveLength(3);
+    // a second read is a second report (the problem is still there) — once per read
+    await listStreamCreditHistory(sessionAuth(r.orgId), r.orgId);
+    expect(captureErrorMock).toHaveBeenCalledTimes(2);
+    // …and a page of mapped rows reports nothing
+    const clean = await streamRig();
+    await recordPurchase({ orgId: clean.orgId, delta: 5, stripeEventId: `cs_${randomUUID()}` });
+    captureErrorMock.mockClear();
+    await listStreamCreditHistory(sessionAuth(clean.orgId), clean.orgId);
+    expect(captureErrorMock).not.toHaveBeenCalled();
+  });
+
   it("an EMPTY ledger reads { rows: [], nextCursor: null } — the empty set, stated", async () => {
     const r = await streamRig();
     expect(await listStreamCreditHistory(sessionAuth(r.orgId), r.orgId)).toEqual({ rows: [], nextCursor: null });
@@ -407,6 +483,62 @@ describe.skipIf(!HAS_DB)("listStreamCreditHistory — every writer's row, throug
       expect(seen).toEqual(all);            // no dupes, no gaps, newest first
     });
 
+    it("the rollover's tie: the expiry lists BELOW the grant it was written with, whatever their ids say — and a page that ends on either row never repeats one (H12, H14)", async () => {
+      // The month turning writes an expiry and the new grant in ONE transaction: the same created_at to the microsecond. The
+      // ids here are chosen so that `id desc` ALONE gets the order wrong (the expiry's id is the largest possible, the
+      // grant's the smallest) — the random ids the writers' own rows get would be a coin flip. The expected order is the
+      // order the rows were WRITTEN in (the expiry, then the grant), newest first, written out by hand.
+      const r = await streamRig();
+      const hex = () => randomUUID().replace(/-/g, "").slice(0, 12);
+      const expiryId = `ffffffff-ffff-4fff-8fff-${hex()}`;
+      const grantId = `00000000-0000-4000-8000-${hex()}`;
+      const purchaseId = randomUUID();
+      const septemberId = randomUUID();
+      const tie = "2026-10-01 00:00:00.123456+00";
+      await sql`
+        insert into org_stream_credits (id, org_id, delta, reason, bucket, balance_after, idempotency_key, created_at) values
+          (${septemberId}, ${r.orgId}, 1, 'grant', 'monthly', 1, ${`stream-monthly:${r.orgId}:2026-09`}, '2026-09-01 00:00:01+00'),
+          (${expiryId}, ${r.orgId}, -1, 'expire', 'monthly', 0, null, ${tie}::text::timestamptz),
+          (${grantId}, ${r.orgId}, 1, 'grant', 'monthly', 1, ${`stream-monthly:${r.orgId}:2026-10`}, ${tie}::text::timestamptz),
+          (${purchaseId}, ${r.orgId}, 2, 'purchase', 'pack', 3, null, '2026-10-05 12:00:00+00')`;
+      const [tied] = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_credits where org_id = ${r.orgId} and id in (${expiryId}, ${grantId}) group by created_at having count(*) = 2`;
+      expect(tied?.n, "PREMISE: the expiry and the grant share a created_at to the microsecond").toBe(2);
+      expect(expiryId > grantId, "PREMISE: `id desc` alone would list the expiry first").toBe(true);
+
+      const expected = [purchaseId, grantId, expiryId, septemberId];   // newest first; the expiry below the grant
+      const whole = await listStreamCreditHistory(sessionAuth(r.orgId), r.orgId, { limit: 50 });
+      expect(whole.rows.map((x) => x.id), "one page").toEqual(expected);
+      // The chain a reader follows down the page: each snapshot is the next-older one plus the row's own change.
+      for (let i = 0; i < whole.rows.length - 1; i += 1) {
+        expect(whole.rows[i + 1]!.balanceAfter + whole.rows[i]!.delta, `row ${i}`).toBe(whole.rows[i]!.balanceAfter);
+      }
+
+      // Every page size: limit 1 and 3 end a page on the tie rows themselves (3 ends exactly on the EXPIRY), 2 starts one on it.
+      let boundariesOnTie = 0;
+      for (const limit of [1, 2, 3]) {
+        const seen: string[] = [];
+        let cursor: string | undefined;
+        let pages = 0;
+        do {
+          const page = await listStreamCreditHistory(sessionAuth(r.orgId), r.orgId, { limit, cursor });
+          pages += 1;
+          seen.push(...page.rows.map((x) => x.id));
+          const last = page.rows[page.rows.length - 1]!;
+          if (page.nextCursor && (last.id === expiryId || last.id === grantId)) {
+            boundariesOnTie += 1;
+            // The cursor's flag is the row's own: `f` after the expiry, `t` after anything else (the tie-break's whole content).
+            const [, flag] = Buffer.from(page.nextCursor, "base64url").toString("utf8").split("|");
+            expect(flag, `a page ending on ${last.id === expiryId ? "the expiry" : "the grant"}`).toBe(last.id === expiryId ? "f" : "t");
+          }
+          cursor = page.nextCursor ?? undefined;
+        } while (cursor && pages < 6);
+        expect(seen, `limit ${limit}: every row once, in order`).toEqual(expected);
+        expect(new Set(seen).size, `limit ${limit}: no row repeated`).toBe(expected.length);
+        expect(pages).toBe(Math.ceil(expected.length / limit));
+      }
+      expect(boundariesOnTie, "anti-vacuity: pages really did end on the tie rows").toBeGreaterThanOrEqual(3);
+    });
+
     it("a ledger of exactly one page has no next page — not an empty one (H6)", async () => {
       const r = await streamRig();
       await tiedLedger(r.orgId, 4);
@@ -430,7 +562,12 @@ describe.skipIf(!HAS_DB)("listStreamCreditHistory — every writer's row, throug
       const b = await streamRig();
       await tiedLedger(a.orgId, 6);
       await tiedLedger(b.orgId, 2, 2);   // older than any cursor A's pages hand out, so B's reader has rows to return
-      for (const bad of ["", "not-base64!!", Buffer.from("nope").toString("base64url"), Buffer.from("2026-01-01|not-a-uuid").toString("base64url")]) {
+      const aUuid = "11111111-1111-4111-8111-111111111111";
+      const withAt = (at: string) => Buffer.from(`${at}|t|${aUuid}`).toString("base64url");
+      for (const bad of [
+        "", "not-base64!!", Buffer.from("nope").toString("base64url"), Buffer.from("2026-01-01|not-a-uuid").toString("base64url"),
+        withAt("2026-13-01 00:00:00+00"), withAt("2026-02-31 00:00:00+00"), withAt("2026-10-20 09:00:00+99"),   // shaped right, no such instant (m2)
+      ]) {
         await expect(listStreamCreditHistory(sessionAuth(a.orgId), a.orgId, { cursor: bad })).rejects.toMatchObject({ status: 400, code: "cursor_invalid" });
       }
       // A's cursor handed to B's reader: B's two rows are older than the cursor, so they come back — and nothing of A's does.

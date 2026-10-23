@@ -70,7 +70,7 @@ describe.skipIf(!HAS_DB)("getStreamCreditsTab", () => {
     const used = await getStreamCreditsTab(auth(r.orgId), r.orgId);
     expect(used.freeUsed).toBe(1);
     expect(used.monthly).toBe(used.freeAllowance - 1);
-    await sql.begin((tx) => refundConsumeForSession(tx, { orgId: r.orgId, sessionId: s, note: "R2008 test" }));
+    await sql.begin((tx) => refundConsumeForSession(tx, { orgId: r.orgId, sessionId: s, fixtureId: fx, note: "R2008 test" }, new Date()));
     const refunded = await getStreamCreditsTab(auth(r.orgId), r.orgId);
     expect(refunded.freeUsed, "T3: the refund nets the consume it reverses").toBe(0);
     expect(refunded.monthly).toBe(refunded.freeAllowance);
@@ -110,7 +110,7 @@ describe.skipIf(!HAS_DB)("getStreamCreditsTab", () => {
     const s = await r.session(fx);
     await getStreamCreditsTab(auth(r.orgId), r.orgId);   // the grant
     await sql.begin((tx) => consumeForSession(tx, { orgId: r.orgId, fixtureId: fx, sessionId: s }));
-    await sql.begin((tx) => refundConsumeForSession(tx, { orgId: r.orgId, sessionId: s, note: "R2008 test" }));
+    await sql.begin((tx) => refundConsumeForSession(tx, { orgId: r.orgId, sessionId: s, fixtureId: fx, note: "R2008 test" }, new Date()));
     // A second credit-back against the same match (a staff refund linked to it): net used is 1 - 2 = -1 before the clamp.
     await sql`
       insert into org_stream_credits (org_id, delta, reason, bucket, session_id, balance_after)
