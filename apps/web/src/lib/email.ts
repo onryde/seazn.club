@@ -239,7 +239,17 @@ export async function deliver(opts: SendOptions, apiKey: string): Promise<Delive
     console.error(`[email] send error to ${opts.to}:`, err);
     // AbortSignal.timeout() rejects fetch with a DOMException named TimeoutError.
     const name = (err as { name?: unknown } | null)?.name;
-    const detail = name === "TimeoutError" ? "timeout" : err instanceof Error ? err.message : String(err);
+    let detail: string;
+    if (name === "TimeoutError") {
+      detail = "timeout";
+    } else if (err instanceof Error) {
+      // undici reports every socket failure as "fetch failed"; the useful part
+      // (ECONNRESET, ENOTFOUND, ...) is err.cause.code.
+      const code = (err.cause as { code?: unknown } | null | undefined)?.code;
+      detail = typeof code === "string" ? `${err.message} (${code})` : err.message;
+    } else {
+      detail = String(err);
+    }
     return { ok: false, reason: "network", detail };
   }
 }

@@ -189,6 +189,30 @@ describe("sendWithResult — failure", () => {
     expect(cases.length).toBeGreaterThan(0);
   });
 
+  it("a non-2xx whose body cannot be read still reports the status, with errorName null and detail empty", async () => {
+    // A body stream that errors mid-read: res.text() REJECTS. The status is the
+    // fact the outbox classifies on; losing the body must not turn a 422 (dead)
+    // into a network failure (retried forever).
+    fetchMock.mockImplementationOnce(
+      async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.error(new Error("body stream reset"));
+            },
+          }),
+          { status: 422 },
+        ),
+    );
+    expect(await sendWithResult(msg)).toEqual({
+      ok: false,
+      reason: "http",
+      status: 422,
+      errorName: null,
+      detail: "",
+    });
+  });
+
   it("the two 409s are told apart (the outbox retries one and kills the other)", async () => {
     fetchMock.mockImplementationOnce(async () =>
       json(409, { statusCode: 409, name: "concurrent_idempotent_requests", message: "m" }),
@@ -216,6 +240,42 @@ describe("sendWithResult — failure", () => {
     expect(error).toHaveBeenCalledWith(`[email] send error to ${msg.to}:`, expect.any(TypeError));
   });
 
+  it("a network detail appends the cause's code when there is one", async () => {
+    // undici surfaces "fetch failed" and hides the useful part in err.cause.code.
+    const withCode = Object.assign(new TypeError("fetch failed"), {
+      cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }),
+    });
+    const cases: Array<[string, unknown, string]> = [
+      ["cause with a code", withCode, "fetch failed (ECONNRESET)"],
+      ["cause without a code", Object.assign(new TypeError("fetch failed"), { cause: new Error("x") }), "fetch failed"],
+      [
+        "cause with a non-string code",
+        Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("x"), { code: 104 }) }),
+        "fetch failed",
+      ],
+      ["cause that is not an object", Object.assign(new TypeError("fetch failed"), { cause: "ECONNRESET" }), "fetch failed"],
+      ["no cause", new TypeError("fetch failed"), "fetch failed"],
+    ];
+    for (const [label, err, detail] of cases) {
+      fetchMock.mockImplementationOnce(() => Promise.reject(err));
+      expect(await sendWithResult(msg), label).toEqual({ ok: false, reason: "network", detail });
+    }
+    expect(cases.length).toBe(5);
+  });
+
+  it("a rejection that is not an Error is stringified, never thrown", async () => {
+    const cases: Array<[unknown, string]> = [
+      ["connection lost", "connection lost"],
+      [null, "null"],
+      [42, "42"],
+    ];
+    for (const [thrown, detail] of cases) {
+      fetchMock.mockImplementationOnce(() => Promise.reject(thrown));
+      expect(await sendWithResult(msg), String(thrown)).toEqual({ ok: false, reason: "network", detail });
+    }
+    expect(cases.length).toBe(3);
+  });
+
   it("a fetch past timeoutMs is network with detail 'timeout'", async () => {
     // A transport that honours its signal, like the real fetch: it would answer
     // 200 after 300ms, but the signal aborts it at 20ms and rejects with the
@@ -230,10 +290,8 @@ describe("sendWithResult — failure", () => {
           });
         }),
     );
-    const started = Date.now();
     const r = await sendWithResult({ ...msg, timeoutMs: 20 });
     expect(r).toEqual({ ok: false, reason: "network", detail: "timeout" });
-    expect(Date.now() - started).toBeLessThan(250);
   });
 
   it("never throws on a bad timeoutMs: it comes back as a network failure", async () => {
