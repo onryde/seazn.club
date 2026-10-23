@@ -20,7 +20,7 @@ import { STREAM_HISTORY_CSV_HEADER } from "../src/server/usecases/stream-credit-
 //
 // The Streaming side is walked two ways: with a realistic ledger (every row kind, a long entrant name, past one page, the
 // export, the buy tiles opening the checkout), and for an org whose plan does not stream (the empty state). Each at 1280,
-// 768 and 320 with no horizontal page scroll — the ledger and the pack tiles are exactly where a long name or a 3-up grid
+// 768 and 320 (the ledger also at 1024, where the table starts) with no horizontal page scroll — the ledger and the pack tiles are exactly where a long name or a 3-up grid
 // would push the page wider.
 test.use({ storageState: { cookies: [], origins: [] } });
 
@@ -28,7 +28,37 @@ const SHOTS =
   process.env.CREDITS_SHOTS_DIR ??
   resolve(process.cwd(), "../../.superpowers/sdd/shots/credits-tab");
 
+// ---------------------------------------------------------------------------------------------------------------------
+// The cookie banner. These pages are walked as a first-time visitor (own empty storageState), so the consent prompt
+// mounts over the page at hydration and would sit on top of every picture and every hit-test. Answer it the way a visitor
+// who declines does: tap Reject. (Not Accept, and not a seeded localStorage key — the tap is the product's own path.)
+// ---------------------------------------------------------------------------------------------------------------------
+const BANNER_WAIT_MS = 5_000;
+const asked = new WeakSet<Page>();
+
+/** Tap the banner's Reject if there is one. The banner mounts from an effect AFTER hydration, so `goto` can return
+ *  before it exists: the first call per page waits for it; after that a banner is only acted on when already showing
+ *  (the choice is stored, so it does not come back). A page that never shows one costs the wait once. */
+async function declineCookies(page: Page): Promise<void> {
+  const banner = page.getByTestId("cookie-consent");
+  if (!asked.has(page)) {
+    asked.add(page);
+    await banner.waitFor({ state: "visible", timeout: BANNER_WAIT_MS }).catch(() => {});
+  }
+  if (await banner.isVisible()) {
+    await banner.getByRole("button", { name: "Reject", exact: true }).click();
+    await expect(banner, "the cookie banner is gone after Reject").toHaveCount(0);
+  }
+}
+
+/** `page.goto`, then answer the cookie prompt: every navigation here is a fresh page load. */
+async function open(page: Page, url: string): Promise<void> {
+  await open(page, url);
+  await declineCookies(page);
+}
+
 async function shot(page: Page, name: string): Promise<void> {
+  await declineCookies(page);   // belt and braces: never a picture with the banner over it
   const path = resolve(SHOTS, `${name}.png`);
   await page.screenshot({ path, fullPage: true });
   // Also on the test itself, so the HTML report carries it whenever the run uploads one.
@@ -163,12 +193,12 @@ test("Credits tab, AI side: nav entry, the switch, desktop + mobile, axe", async
   // and the rail's plan header carries a second link to the same route
   // reading "10 AI credits". Without it this resolves to two elements and
   // fails strict mode — which is what it did.
-  await page.goto(`/o/${org.slug}/settings?tab=organization`, { waitUntil: "load" });
+  await open(page, `/o/${org.slug}/settings?tab=organization`);
   await expect(page.getByRole("link", { name: en("settings.nav.credits"), exact: true })).toBeVisible();
   await shot(page, "settings-nav-desktop");
 
   // The page, desktop: it opens on the AI side (every old link did), with the switch naming it.
-  await page.goto(`/o/${org.slug}/settings/credits`, { waitUntil: "load" });
+  await open(page, `/o/${org.slug}/settings/credits`);
   await expect(page.getByRole("heading", { level: 1, name: en("settings.nav.credits") })).toBeVisible();
   await expect(page.getByTestId("credits-kind-ai")).toHaveAttribute("aria-current", "page");
   await expect(page.getByTestId("credits-kind-stream")).not.toHaveAttribute("aria-current", "page");
@@ -208,8 +238,8 @@ const LONG_HOME = "The Extraordinarily Long Named Riverside Hockey Club First XI
 const LONG_AWAY = "Northern Counties Veterans Over-Fifties Reserve Squad (Mixed)";
 const PAGE_SIZE = 25;
 
-test("Credits tab, Streaming side: the ledger, the pager, the export and the buy tiles — no page scroll at 1280, 768 and 320", async ({ page }) => {
-  test.setTimeout(budget({ seeds: 1, navs: 12, acts: 25 }));
+test("Credits tab, Streaming side: the ledger, the pager, the export and the buy tiles — no page scroll at 1280, 1024, 768 and 320", async ({ page }) => {
+  test.setTimeout(budget({ seeds: 1, navs: 14, acts: 30 }));
 
   const rig = await seedOverlayFixture(page);
   const seed = await withDb(async (sql) => {
@@ -223,7 +253,7 @@ test("Credits tab, Streaming side: the ledger, the pager, the export and the buy
 
   // --- 1280: the Streaming side, reached through the switch ---------------------------------------------------------
   await page.setViewportSize({ width: 1280, height: 900 });
-  await page.goto(`/o/${rig.orgSlug}/settings/credits`, { waitUntil: "load" });
+  await open(page, `/o/${rig.orgSlug}/settings/credits`);
   await expect(page.getByTestId("credits-kind-ai")).toHaveAttribute("aria-current", "page");
   await page.getByTestId("credits-kind-stream").click();
   await expect(page).toHaveURL(/\/settings\/credits\?kind=stream$/);
@@ -302,6 +332,8 @@ test("Credits tab, Streaming side: the ledger, the pager, the export and the buy
   expect(lines, "every ledger row, past the first page").toHaveLength(ledger.rows + 1);
   const streamed = lines.find((l) => l.split(",")[1] === "streamUsed");
   expect(streamed, "a streamUsed row names its match").toContain(`${LONG_HOME} v ${LONG_AWAY}`);
+  // …and its fixture number, the column that still names the match when a side is undecided.
+  expect(streamed!.split(",")[STREAM_HISTORY_CSV_HEADER.indexOf("fixture_no")], "the fixture_no column").toBe(String(fx!.fixture_no));
 
   // --- the pager ---------------------------------------------------------------------------------------------------
   await expect(page.getByTestId("credits-stream-latest")).toHaveCount(0);
@@ -314,19 +346,20 @@ test("Credits tab, Streaming side: the ledger, the pager, the export and the buy
   await expect(page).toHaveURL(/\/settings\/credits\?kind=stream$/);
   await expect(rows).toHaveCount(PAGE_SIZE);
   // a hand-edited cursor is the latest page, not an error screen
-  await page.goto(`/o/${rig.orgSlug}/settings/credits?kind=stream&before=not-a-cursor`, { waitUntil: "load" });
+  await open(page, `/o/${rig.orgSlug}/settings/credits?kind=stream&before=not-a-cursor`);
   await expect(rows).toHaveCount(PAGE_SIZE);
 
-  // --- the layout at 1280, 768 and 320 -----------------------------------------------------------------------------
+  // --- the layout at 1280, 1024, 768 and 320 ----------------------------------------------------------------------
   let measured = 0;
-  for (const width of [1280, 768, 320]) {
+  for (const width of [1280, 1024, 768, 320]) {
     await page.setViewportSize({ width, height: 900 });
-    await page.goto(`/o/${rig.orgSlug}/settings/credits?kind=stream`, { waitUntil: "load" });
+    await open(page, `/o/${rig.orgSlug}/settings/credits?kind=stream`);
     await expect(rows).toHaveCount(PAGE_SIZE);
     await expectNoPageScroll(page, `Streaming side at ${width}`);
 
-    // One DOM, two shapes: the column header row is the wide shape's, absent below md.
-    await expect(page.getByRole("columnheader")).toHaveCount(width >= 768 ? 5 : 0);
+    // One DOM, two shapes: the column header row is the wide shape's, absent below lg (1024). At 768 the Settings rail leaves
+    // the card ~490px, which is cards' room, not a five-column table's.
+    await expect(page.getByRole("columnheader")).toHaveCount(width >= 1024 ? 5 : 0);
 
     // Every row, and the long match line inside it, stays inside the viewport.
     const boxes = await page.evaluate(() => {
@@ -357,7 +390,7 @@ test("Credits tab, Streaming side: the ledger, the pager, the export and the buy
     await page.evaluate(() => window.scrollTo(0, 0));
     await shot(page, `stream-populated-${width}`);
   }
-  expect(measured, "anti-vacuity: the layout probes measured rows at all three widths").toBeGreaterThan(PAGE_SIZE * 3);
+  expect(measured, "anti-vacuity: the layout probes measured rows at all four widths").toBeGreaterThan(PAGE_SIZE * 4);
 
   // --- the buy tiles open the checkout, asking for a return to Settings ---------------------------------------------
   const pack = STREAM_CREDIT_PACKS.find((p) => p.popular) ?? STREAM_CREDIT_PACKS[0]!;
@@ -415,7 +448,7 @@ test("Credits tab, Streaming side: a plan without phone streaming shows the reas
 
   for (const width of [1280, 768, 320]) {
     await page.setViewportSize({ width, height: 900 });
-    await page.goto(`/o/${org.slug}/settings/credits?kind=stream`, { waitUntil: "load" });
+    await open(page, `/o/${org.slug}/settings/credits?kind=stream`);
     await expect(page.getByTestId("credits-stream-balance")).toHaveText(credits(0));
     await expect(page.getByTestId("credits-stream-notice")).toHaveText(en("settings.credits.stream.notIncluded"));
     await expect(page.getByTestId("credits-stream-empty")).toHaveText(en("settings.credits.stream.empty"));

@@ -1731,3 +1731,21 @@ describe("the online-chess fixture servers' wiring", () => {
     expect(checked, "vars checked").toBe(7);
   });
 });
+
+// An upload that runs under `always()` writes the SAME artifact name on a re-run of a failed job ("re-run failed jobs"
+// re-executes the job in the same run); upload-artifact@v4 answers a duplicate name with a 409 and fails the job unless the
+// step says `overwrite: true`. The never-live copy-fit upload (#1001) was written without it, and matrix-truth.yml and
+// mutation.yml's always() uploads already carry it (review of #1002, extra b).
+describe("e2e.yml: an always() artifact upload overwrites its own earlier attempt", () => {
+  it("every `if: always()` upload-artifact step sets `overwrite: true` — and there is at least the never-live one to hold", () => {
+    const yml = readFileSync(join(REPO_ROOT, ".github/workflows/e2e.yml"), "utf8");
+    // steps start at the 6-space dash of a job's `steps:` list
+    const steps = yml.split(/\n(?=      - )/);
+    const always = steps.filter((st) => /^ {8}if: always\(\)\s*$/m.test(st) && /uses: actions\/upload-artifact@/.test(st));
+    expect(steps.length, "anti-vacuity: the step splitter found the workflow's steps").toBeGreaterThan(40);
+    expect(always.length, "anti-vacuity: an always() upload exists").toBeGreaterThan(0);
+    expect(always.some((st) => st.includes("Upload never-live copy-fit screenshots")), "…the never-live one among them").toBe(true);
+    const without = always.filter((st) => !/^ {10}overwrite: true\s*$/m.test(st)).map((st) => /- name: (.*)/.exec(st)?.[1] ?? "(unnamed)");
+    expect(without, "an always() upload with no `overwrite: true`").toEqual([]);
+  });
+});

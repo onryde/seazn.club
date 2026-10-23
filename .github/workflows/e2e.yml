@@ -1966,6 +1966,9 @@ jobs:
           path: apps/web/test-results/never-live-copy
           if-no-files-found: warn
           retention-days: 7
+          # An `always()` upload under a fixed name: a "re-run failed jobs" would otherwise 409 on the artifact the first
+          # attempt already wrote, as matrix-truth.yml / mutation.yml's uploads note.
+          overwrite: true
 
       - name: Dev server log (on failure)
         if: failure()
