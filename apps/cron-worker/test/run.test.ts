@@ -260,7 +260,97 @@ describe("runDue: the R4 trigger seam", () => {
   it("an env name the table does not know is refused by name, before any call (a misnamed ENV_NAME is a loud failure, not a silent no-op)", async () => {
     const h = harness();
     await expect(runDue(MONDAY_0805, FAST_PROD, env({ ENV_NAME: "qa" }), h.deps)).rejects.toThrow(/triggerFor: no trigger for env "qa"/);
-    expect(h.calls).toEqual([]);
+    expect(h.posts()).toEqual([]);
+  });
+
+  describe("M3 (Task 4 review): an unknown ENV_NAME says so before it throws", () => {
+    const SECRET = "cron-secret-Env8-distinctive";
+    const KEY = "dsnkeyEnv8distinctive";
+    const bad = (over: Partial<Env> = {}): Env => env({ ENV_NAME: "qa", CRON_SECRET: SECRET, SENTRY_DSN: `https://${KEY}@o1.ingest.sentry.io/9`, ...over });
+    const refused = (h: ReturnType<typeof harness>, cron: string, e: Env, at = MONDAY_0805) =>
+      runDue(at, cron, e, h.deps).then(
+        () => {
+          throw new Error("runDue resolved for an unknown env");
+        },
+        (err: unknown) => err as Error,
+      );
+
+    it("writes ONE error line naming the env, the trigger and the slot BEFORE the rejection, and calls no job", async () => {
+      const h = harness();
+      const err = await refused(h, FAST_PROD, bad());
+      expect(err.message).toMatch(/triggerFor: no trigger for env "qa"/);
+      expect(h.lines).toEqual([
+        expect.objectContaining({ event: "unknown-env", level: "error", env: "qa", cron: FAST_PROD, scheduledTime: MONDAY_0805.toISOString() }),
+      ]);
+      expect(String(h.lines[0]!.error)).toContain('no trigger for env "qa"');
+      expect(h.posts(), "no job was called").toEqual([]);
+    });
+
+    it("raises one Sentry event on the HOURLY trigger (the cron-worker job, the bad env named) and none on a faster trigger: one an hour, not sixty", async () => {
+      const hourly = harness();
+      await refused(hourly, TRIGGER_CRON, bad(), MONDAY_0817);
+      expect(hourly.events()).toHaveLength(1);
+      expect(hourly.events()[0]).toMatchObject({ level: "error", environment: "qa", tags: { job: "cron-worker", reason: "degraded", run: "scheduled" } });
+      expect(String(hourly.sentry()[0]!.init!.body)).toContain("unknown-env");
+
+      // The same misconfiguration on every minute of an hour: only the hourly trigger's firing pages.
+      const fast = harness();
+      for (let minute = 0; minute < 60; minute++) await refused(fast, FAST_PROD, bad(), new Date(Date.UTC(2026, 8, 28, 8, minute)));
+      expect(fast.lines.filter((l) => l.event === "unknown-env"), "an error line every firing").toHaveLength(60);
+      expect(fast.sentry(), "and no event from a faster trigger").toEqual([]);
+    });
+
+    it("the Sentry event is DELIVERED (its response awaited) before the rejection, not left in flight for the runtime to drop", async () => {
+      const h = harness();
+      let delivered = false;
+      const slow = {
+        ...h.deps,
+        fetch: (async (url: string, init?: RequestInit) => {
+          const res = await h.deps.fetch(url as never, init);
+          if (isSentry(url)) {
+            await new Promise((r) => setTimeout(r, 5)); // the response arrives a moment later
+            delivered = true;
+          }
+          return res;
+        }) as typeof fetch,
+      };
+      await runDue(MONDAY_0817, TRIGGER_CRON, bad(), slow).catch(() => undefined);
+      expect(h.sentry(), "an event was sent").toHaveLength(1);
+      expect(delivered, "and it finished before runDue rejected").toBe(true);
+    });
+
+    it("with no DSN there is a log line and no Sentry call; with a Sentry that answers 500 the ORIGINAL error still surfaces", async () => {
+      const none = harness();
+      const e1 = await refused(none, TRIGGER_CRON, bad({ SENTRY_DSN: undefined }), MONDAY_0817);
+      expect(e1.message).toMatch(/no trigger for env "qa"/);
+      expect(none.sentry()).toEqual([]);
+      expect(none.lines).toHaveLength(1);
+
+      const down = harness(undefined, () => new Response("down", { status: 500 }));
+      const e2 = await refused(down, TRIGGER_CRON, bad(), MONDAY_0817);
+      expect(e2.message, "not a Sentry error").toMatch(/no trigger for env "qa"/);
+      expect(down.sentry(), "it did try").toHaveLength(1);
+    });
+
+    it("neither the log line nor the Sentry envelope carries CRON_SECRET or the DSN key", async () => {
+      const h = harness();
+      await refused(h, TRIGGER_CRON, bad(), MONDAY_0817);
+      expect(h.lines.length, "a line was written").toBe(1);
+      expect(h.sentry().length, "an event was sent").toBe(1);
+      expect(h.sentry()[0]!.url, "the key really is used (positive pair)").toContain(KEY);
+      const envelopes = String(h.sentry()[0]!.init!.body);
+      for (const needle of [SECRET, KEY]) {
+        expect(JSON.stringify(h.lines), needle).not.toContain(needle);
+        expect(envelopes, needle).not.toContain(needle);
+      }
+    });
+
+    it("a KNOWN env is untouched: no unknown-env line, jobs run as before (the pair)", async () => {
+      const h = harness();
+      await runDue(MONDAY_0805, FAST_PROD, env(), h.deps);
+      expect(h.lines.some((l) => l.event === "unknown-env")).toBe(false);
+      expect(h.posts().length).toBeGreaterThan(0);
+    });
   });
 
   it("while inactive, a non-hourly trigger does nothing at all (the probe is hourly only)", async () => {

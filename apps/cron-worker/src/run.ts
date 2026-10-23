@@ -86,6 +86,32 @@ export async function runJobs(
   return results;
 }
 
+/**
+ * M3 (Task 4 review): an ENV_NAME the table has no trigger for is a misconfigured Worker, and `triggersOf` throws for it.
+ * The throw alone reaches only Cloudflare's own invocation log, so say it here first: an error line on every firing, and
+ * one Sentry event an hour (only the hourly trigger's firing sends it, so a Worker that fires every minute is one event an
+ * hour, not sixty). Best-effort like every Sentry call here: it never throws, and the caller rethrows the ORIGINAL error.
+ */
+async function reportUnknownEnv(scheduledTime: Date, cron: string, env: Env, deps: RunDeps, err: unknown): Promise<void> {
+  deps.log({
+    event: "unknown-env",
+    level: "error",
+    env: env.ENV_NAME,
+    cron,
+    scheduledTime: scheduledTime.toISOString(),
+    error: err instanceof Error ? err.message : String(err),
+  });
+  const dsn = parseDsn(env.SENTRY_DSN);
+  if (!dsn || cron !== TRIGGER_CRON) return;
+  await captureJobFailure(deps.fetch, dsn, {
+    environment: env.ENV_NAME,
+    run: "scheduled",
+    failure: { job: "cron-worker", status: "degraded", httpStatus: null, attempts: 0, ms: 0, degraded: { "unknown-env": 1 } },
+    eventId: deps.uuid().replace(/-/g, ""),
+    nowMs: deps.now(),
+  });
+}
+
 /** The `scheduled` handler's body: one invocation of one trigger. */
 export async function runDue(
   scheduledTime: Date,
@@ -96,7 +122,14 @@ export async function runDue(
 ): Promise<JobResult[]> {
   // R4: a trigger no row names is config drift (a dashboard-added cron, or
   // wrangler.json ahead of the table). Refuse it BY NAME and never guess.
-  if (!triggersOf(env.ENV_NAME, jobs).includes(cron)) {
+  let triggers: string[];
+  try {
+    triggers = triggersOf(env.ENV_NAME, jobs);
+  } catch (err) {
+    await reportUnknownEnv(scheduledTime, cron, env, deps, err);
+    throw err;
+  }
+  if (!triggers.includes(cron)) {
     deps.log({ event: "unknown-trigger", level: "error", env: env.ENV_NAME, cron, scheduledTime: scheduledTime.toISOString() });
     return [];
   }
