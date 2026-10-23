@@ -94,9 +94,9 @@ async function apiKeyRateLimit(key: ApiKeyRow): Promise<void> {
   }
 }
 
-// Pinned keys (api_keys.competition_id): resolve the owning competition of
-// the addressed resource. A missing row falls through — the handler 404s it
-// with its usual message, so the pin adds no existence oracle.
+// Pinned keys (api_keys.competition_id): resolve the addressed resource's competition. A missing row falls through (the
+// handler 404s it, so the pin adds no existence oracle) — safe ONLY while each row's `pin` is the kind its URL addresses,
+// else every lookup misses and B leaks to a key pinned to A. Guarded: key-scopes.test.ts + api-key-pin-sweep.test.ts.
 async function resolvePinCompetition(pin: PinKind, id: string): Promise<string | null> {
   if (!UUID_RE.test(id)) return null;
   switch (pin) {
