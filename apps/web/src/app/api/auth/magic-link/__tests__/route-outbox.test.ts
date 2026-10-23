@@ -13,6 +13,8 @@
 // Sport: not applicable. Sign-in is sport-agnostic.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { NextRequest } from "next/server";
 import { sql } from "@/lib/db";
 import emailsEn from "@/dictionaries/en/emails.json";
@@ -27,13 +29,19 @@ vi.mock("next/headers", () => ({
 }));
 const logMock = vi.hoisted(() => ({ error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() }));
 vi.mock("@/server/logger", () => ({ log: logMock }));
+const sentryMock = vi.hoisted(() => ({ captureException: vi.fn() }));
+vi.mock("@sentry/nextjs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@sentry/nextjs")>()),
+  captureException: sentryMock.captureException,
+}));
 
 import { POST } from "../route";
+import { handler } from "@/lib/http";
 import { POST as WEBHOOK } from "@/app/api/webhooks/resend/route";
 import { suppress } from "@/lib/email";
 import { consumeLoginLink, LOGIN_LINK_TTL_MS } from "@/lib/login-link";
 import { idempotencyKey } from "@/server/email-outbox/constants";
-import { openBody, OutboxKeyUnavailableError } from "@/server/email-outbox/seal";
+import { openBody } from "@/server/email-outbox/seal";
 import { runOutboxTick } from "@/server/email-outbox/worker";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -128,8 +136,17 @@ describe.skipIf(!HAS_DB)("POST /api/auth/magic-link writes the token and the out
       (_k, v: unknown) => (v instanceof Error ? { name: v.name, message: v.message, stack: v.stack, cause: String(v.cause) } : v),
     );
 
+  /** What the global handler() answers for an unexpected failure that is not an Error: the app's own generic 500. The two
+   *  outbox refusals must answer exactly this, so the expected body is taken from the handler, not typed here. */
+  let GENERIC: { status: number; body: Envelope };
+
   beforeAll(async () => {
     await sql`select 1`; // the pool is built before any env is stubbed
+    const res = await handler(async () => {
+      throw "not an Error";
+    });
+    GENERIC = { status: res.status, body: (await res.json()) as Envelope };
+    expect(GENERIC, "premise: the handler's generic answer is a 500 with an error string").toEqual({ status: 500, body: { ok: false, error: expect.any(String) } });
   });
   afterAll(async () => {
     if (emails.length > 0) {
@@ -149,7 +166,7 @@ describe.skipIf(!HAS_DB)("POST /api/auth/magic-link writes the token and the out
     seenAtSend.length = 0;
     messages.clear();
     fetchStub.mockClear();
-    for (const m of [logMock.error, logMock.warn, logMock.info, logMock.debug]) m.mockClear();
+    for (const m of [logMock.error, logMock.warn, logMock.info, logMock.debug, sentryMock.captureException]) m.mockClear();
     respond = accept;
     vi.stubGlobal("fetch", fetchStub);
     for (const m of ["log", "info", "warn", "error", "debug"] as const) vi.spyOn(console, m).mockImplementation(() => {});
@@ -336,7 +353,10 @@ describe.skipIf(!HAS_DB)("POST /api/auth/magic-link writes the token and the out
 
   // ---- a request that cannot be queued is not half done ----------------------------------------------------------
 
-  it("committed <=> queued: a box that can send but cannot seal refuses the request, and leaves the earlier link and mail untouched", async () => {
+  /** What an anonymous caller must never read in a refusal: a variable name, the sample, the bound, or any outbox vocabulary. */
+  const LEAKS = /KEK|RESEND|outbox|\.env|sample|NODE_ENV|openssl|expiry|MAX_|bound/i;
+
+  it("committed <=> queued: a box that can send but cannot seal refuses the request with the GENERIC 500, and leaves the earlier link and mail untouched", async () => {
     const email = newEmail();
     const first = await post({ email });
     const userId = await userIdOf(email);
@@ -348,8 +368,8 @@ describe.skipIf(!HAS_DB)("POST /api/auth/magic-link writes the token and the out
     vi.stubEnv("EMAIL_OUTBOX_KEK", undefined); // the Resend key is still set: OutboxKeyUnavailableError
     const second = await post({ email });
     expect(second.status).toBe(500);
-    expect(second.json.ok).toBe(false);
-    expect(second.json.error).toBe(new OutboxKeyUnavailableError().message);
+    expect(second.json, "exactly the app's generic 500 body").toEqual(GENERIC.body);
+    expect(second.raw, "an anonymous caller is never told which variable is missing").not.toMatch(LEAKS);
     expect(second.json.data).toBeUndefined();
     expect(second.raw, "a refused request exposes no link").not.toContain("login_url");
 
@@ -373,6 +393,75 @@ describe.skipIf(!HAS_DB)("POST /api/auth/magic-link writes the token and the out
     expect(await linksOf(userId)).toHaveLength(0);
     expect(await rowsFor(email)).toHaveLength(0);
     expect(calls).toHaveLength(0);
+  });
+
+  // Concern 1 (controller ruling): the refusal is the operator's problem, so it is logged and captured with its real cause;
+  // the caller, anonymous, gets the generic answer. The negative half (no variable name in the body) is vacuous without this
+  // positive half (the cause went somewhere), so they sit together.
+  it("a refused request names its real cause to the operator (log + Sentry) and nothing to the caller", async () => {
+    vi.stubEnv("EMAIL_OUTBOX_KEK", undefined);
+    const email = newEmail();
+    const res = await post({ email });
+    expect(res.status).toBe(GENERIC.status);
+    expect(res.json).toEqual(GENERIC.body);
+    expect(res.raw).not.toMatch(LEAKS);
+    // The operator side.
+    expect(logMock.error).toHaveBeenCalledTimes(1);
+    const [fields] = logMock.error.mock.calls[0]!;
+    expect((fields as { err: Error }).err).toBeInstanceOf(Error);
+    expect((fields as { err: Error }).err.message).toMatch(/EMAIL_OUTBOX_KEK/);
+    expect(sentryMock.captureException).toHaveBeenCalledTimes(1);
+    expect(sentryMock.captureException.mock.calls[0]![0]).toBe((fields as { err: Error }).err);
+    // And no value of any secret anywhere in what was logged.
+    for (const secret of [KEK, API_KEY]) expect(allLogged()).not.toContain(secret);
+  });
+
+  it("the published sample key under NODE_ENV=production is refused the same way: generic 500 to the caller, the sample named to the operator, nothing queued", async () => {
+    const sample = /^EMAIL_OUTBOX_KEK=([0-9a-f]{64})$/m.exec(readFileSync(resolve(__dirname, "../../../../../../.env.example"), "utf8"))?.[1];
+    expect(sample, "premise: the example file publishes a key").toMatch(/^[0-9a-f]{64}$/);
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("EMAIL_OUTBOX_KEK", sample);
+    const email = newEmail();
+    const res = await post({ email });
+    expect(res.status).toBe(GENERIC.status);
+    expect(res.json).toEqual(GENERIC.body);
+    expect(res.raw).not.toMatch(LEAKS);
+    expect(res.raw).not.toContain(sample!);
+    const [fields] = logMock.error.mock.calls[0]!;
+    expect((fields as { err: Error }).err.message).toMatch(/sample/i);
+    expect(sentryMock.captureException).toHaveBeenCalledTimes(1);
+    expect(await rowsFor(email)).toHaveLength(0);
+    expect(await linksOf(await userIdOf(email))).toHaveLength(0);
+    expect(calls).toHaveLength(0);
+    // The control: the same key is accepted outside production, so the refusal above is the production gate and nothing else.
+    vi.stubEnv("NODE_ENV", "test");
+    const ok = await post({ email: newEmail() });
+    expect(ok.status).toBe(200);
+  });
+
+  it("an error that is NOT an outbox refusal still goes through the global handler (the route's catch is narrow, not a blanket)", async () => {
+    // Break the database write that follows the minting inside the same transaction: the user id is not a uuid-shaped
+    // existing row, so the token insert fails with a foreign-key error, which is neither refusal class.
+    const email = newEmail();
+    await post({ email });
+    const userId = await userIdOf(email);
+    calls.length = 0;
+    logMock.error.mockClear();
+    sentryMock.captureException.mockClear();
+    const fn = `t6_boom_${RUN.replace(/-/g, "_")}`;
+    await sql.unsafe(`create function ${fn}() returns trigger language plpgsql as $$ begin raise exception 'T6-UNRELATED-DB-FAULT'; end $$`);
+    await sql.unsafe(`create trigger ${fn} before insert on login_links for each row when (new.user_id = '${userId}') execute function ${fn}()`);
+    let res: Awaited<ReturnType<typeof post>>;
+    try {
+      res = await post({ email });
+    } finally {
+      await sql.unsafe(`drop trigger if exists ${fn} on login_links`);
+      await sql.unsafe(`drop function if exists ${fn}()`);
+    }
+    expect(res.status).toBe(500);
+    // handler() words an Error by its message; that is the existing global behaviour and this task leaves it alone.
+    expect(res.json.error).toMatch(/T6-UNRELATED-DB-FAULT/);
+    expect(sentryMock.captureException).toHaveBeenCalled();
   });
 
   it("committed <=> queued, at the commit: a transaction that fails AFTER the row was written leaves no new row, does not replace the earlier one, and sends nothing", async () => {

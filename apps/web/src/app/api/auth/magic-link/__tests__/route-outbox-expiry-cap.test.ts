@@ -20,6 +20,11 @@ vi.mock("next/headers", () => ({
 }));
 const logMock = vi.hoisted(() => ({ error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() }));
 vi.mock("@/server/logger", () => ({ log: logMock }));
+const sentryMock = vi.hoisted(() => ({ captureException: vi.fn() }));
+vi.mock("@sentry/nextjs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@sentry/nextjs")>()),
+  captureException: sentryMock.captureException,
+}));
 vi.mock("@/server/email-outbox/constants", async (importOriginal) => {
   const real = await importOriginal<typeof import("@/server/email-outbox/constants")>();
   const { LOGIN_LINK_TTL_MS } = await import("@/lib/login-link");
@@ -29,7 +34,7 @@ vi.mock("@/server/email-outbox/constants", async (importOriginal) => {
 import { POST } from "../route";
 import { consumeLoginLink, createLoginLink, LOGIN_LINK_TTL_MS } from "@/lib/login-link";
 import { MAX_EXPIRY_MS } from "@/server/email-outbox/constants";
-import { OutboxExpiryTooLongError } from "@/server/email-outbox/enqueue";
+import { handler } from "@/lib/http";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const RUN = `mlcap-${randomUUID().slice(0, 8)}`;
@@ -66,7 +71,16 @@ describe.skipIf(!HAS_DB)("POST /api/auth/magic-link when the expiry cap refuses 
     expect(MAX_EXPIRY_MS).toBeLessThan(LOGIN_LINK_TTL_MS);
   });
 
-  it("the request fails as a whole: 500, the refusal's message, no link exposed, and the token row (and the delete of the older one) rolled back", async () => {
+  it("the request fails as a whole: the GENERIC 500 (no bound, no outbox vocabulary), no link exposed, and the token row (and the delete of the older one) rolled back", async () => {
+    // The app's own generic answer, taken from the global handler for an unexpected non-Error failure.
+    const generic = await handler(async () => {
+      throw "not an Error";
+    });
+    const genericBody = await generic.json();
+    expect(generic.status, "premise: the handler's generic answer is a 500").toBe(500);
+    logMock.error.mockClear();
+    sentryMock.captureException.mockClear();
+
     const email = `${RUN}-${randomUUID().slice(0, 8)}@x.test`;
     emails.push(email);
     // A user with an older unused link, made directly: the route must not delete it when it refuses.
@@ -81,11 +95,17 @@ describe.skipIf(!HAS_DB)("POST /api/auth/magic-link when the expiry cap refuses 
       }),
     );
     const raw = await res.text();
-    const json = JSON.parse(raw) as { ok: boolean; error?: string; data?: unknown };
     expect(res.status).toBe(500);
-    expect(json.ok).toBe(false);
-    expect(json.error).toBe(new OutboxExpiryTooLongError("magic_link", "user").message);
+    expect(JSON.parse(raw)).toEqual(genericBody);
+    expect(raw, "an anonymous caller is told nothing of the bound or the outbox").not.toMatch(/outbox|expir|MAX_|magic_link|bound|KEK/i);
     expect(raw).not.toContain("login_url");
+    // The operator is told the real cause: in the log and in Sentry, one each.
+    expect(logMock.error).toHaveBeenCalledTimes(1);
+    const err = (logMock.error.mock.calls[0]![0] as { err: Error }).err;
+    expect(err.name).toBe("OutboxExpiryTooLongError");
+    expect(err.message).toMatch(/expiry/i);
+    expect(sentryMock.captureException).toHaveBeenCalledTimes(1);
+    expect(sentryMock.captureException.mock.calls[0]![0]).toBe(err);
 
     const links = await sql<{ token: string }[]>`select token from login_links where user_id = ${userId}`;
     expect(links.map((l) => l.token), "no new token; the older one survived the refused request").toEqual([older]);
