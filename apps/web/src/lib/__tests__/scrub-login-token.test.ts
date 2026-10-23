@@ -57,6 +57,12 @@ vi.mock("@/lib/auth", async (importOriginal) => ({
   requireOrgRole: vi.fn(async () => ({ user: { id: (await import("./_fake-sql")).USER_ID }, role: "admin" })),
 }));
 const mail = vi.hoisted(() => ({ sent: [] as { to: string; link: string }[] }));
+// The sign-in link is RENDERED by the route (`magicLinkEmail`) and queued; this records the address and link it was asked to
+// render, which is what the old sender recorded. The outbox itself has its own suites; here it is a stand-in (no database).
+vi.mock("@/server/email-outbox", () => ({
+  enqueueEmail: vi.fn(async () => (await import("node:crypto")).randomUUID()),
+  dispatchNow: vi.fn(async () => new Map()),
+}));
 vi.mock("@/lib/email", async (importOriginal) => {
   const record = vi.fn(async (to: string, link: string) => {
     mail.sent.push({ to, link });
@@ -64,7 +70,10 @@ vi.mock("@/lib/email", async (importOriginal) => {
   });
   return {
     ...(await importOriginal<typeof import("@/lib/email")>()),
-    sendMagicLinkEmail: record,
+    magicLinkEmail: vi.fn(async (to: string, link: string) => {
+      mail.sent.push({ to, link });
+      return { subject: "s", html: "", text: "" };
+    }),
     sendVerificationEmail: record,
     sendInviteEmail: vi.fn(async (to: string, _org: string, link: string) => {
       mail.sent.push({ to, link });

@@ -208,6 +208,8 @@ async function main() {
   // GDPR (spec 2026-07-14): requesting the magic link under the clickwrap
   // notice stamps terms acceptance on the account.
   await checkTermsStamp(`delivered+admin_${tag}@resend.dev`);
+  // Email outbox, phase 1 (Task 6): the same request queued its sign-in email on the outbox.
+  await checkSignInOutbox(`delivered+admin_${tag}@resend.dev`);
   const org = { id: ver.org_id };
 
   // --- Competition lifecycle guards (v2 service layer) ---
@@ -8963,6 +8965,33 @@ async function checkTermsStamp(email: string): Promise<void> {
     const [row] = await sql<{ terms_accepted_at: Date | null; terms_version: string | null }[]>`
       select terms_accepted_at, terms_version from users where email = ${email}`;
     check("auth terms acceptance stamped", !!row?.terms_accepted_at && !!row?.terms_version);
+  } finally {
+    await sql.end();
+  }
+}
+
+/** Email outbox, phase 1 (Task 6): the magic-link request wrote exactly one `magic_link` row for the address, in the same
+ *  transaction as its token, and the attempt made in the request has left no credential-bearing body behind. The smoke server
+ *  has no Resend key, so the row is `dead` (`no_api_key`); a run against a server that can send would see it `sent`. Either
+ *  way it is neither waiting (`queued`/`sending`) nor holding its sealed body. */
+async function checkSignInOutbox(email: string): Promise<void> {
+  const url = process.env.DATABASE_URL;
+  if (!url) return; // keyless run: nothing to assert against
+  const isLocal = /@(localhost|127\.0\.0\.1)[:/]/.test(url);
+  const sql = postgres(url, {
+    connection: { search_path: process.env.DB_SCHEMA ?? "seazn_club" },
+    ssl: process.env.DATABASE_SSL === "disable" ? false : isLocal ? false : "require",
+    prepare: !url.includes(":6543"),
+    max: 1,
+  });
+  try {
+    const rows = await sql<{ status: string; cleared: boolean }[]>`
+      select status, body_sealed is null as cleared
+        from email_outbox
+       where kind = 'magic_link' and lower(recipient) = lower(${email})`;
+    check("sign-in email: one outbox row for the address", rows.length === 1);
+    check("sign-in email: its attempt was made in the request (not waiting)", !!rows[0] && !["queued", "sending"].includes(rows[0].status));
+    check("sign-in email: no sealed body is left on the row", rows[0]?.cleared === true);
   } finally {
     await sql.end();
   }

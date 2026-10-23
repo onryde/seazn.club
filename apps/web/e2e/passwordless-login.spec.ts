@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { PROD_TARGET } from "./helpers";
+import { PROD_TARGET, withDb } from "./helpers";
 
 // Exercises the login UI itself, so it runs in a fresh, unauthenticated context
 // (override the shared Pro storage state).
@@ -39,6 +39,19 @@ test("passwordless login: emailing a link creates the account and signs in", asy
 
   const cookies = await page.context().cookies();
   expect(cookies.some((c) => c.name === "seazn_session")).toBeTruthy();
+
+  // The sign-in email went through the email outbox, one row for this address. Its attempt has been made by the time the
+  // response came back, so the row is no longer waiting and no longer holds the (credential-bearing) body. A server with no
+  // Resend key (CI) ends the row `dead`; one with a key (a developer's) has sent it. Neither is `queued` or `sending`.
+  const rows = await withDb(
+    (sql) => sql<{ status: string; cleared: boolean }[]>`
+      select status, body_sealed is null as cleared
+        from email_outbox
+       where kind = 'magic_link' and lower(recipient) = lower(${email})`,
+  );
+  expect(rows).toHaveLength(1);
+  expect(rows[0]!.cleared).toBe(true);
+  expect(["dead", "sent", "delivered"]).toContain(rows[0]!.status);
 });
 
 // Invite pages (/join/{token}) send a `next` redirect with the email — both

@@ -60,9 +60,11 @@ vi.mock("next/navigation", () => ({ useRouter: () => router, redirect: vi.fn() }
 const mail = vi.hoisted(() => ({ sent: [] as { to: string; link: string }[] }));
 vi.mock("@/lib/email", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/email")>()),
-  sendMagicLinkEmail: vi.fn(async (to: string, link: string) => {
+  // The route RENDERS the sign-in email and queues it on the outbox (the real outbox, on the real database: with no Resend key
+  // in the test environment the row simply ends `dead`). This records what it was asked to render.
+  magicLinkEmail: vi.fn(async (to: string, link: string) => {
     mail.sent.push({ to, link });
-    return true;
+    return { subject: "s", html: "", text: "" };
   }),
 }));
 
@@ -261,6 +263,7 @@ beforeEach(() => {
 
 afterAll(async () => {
   if (!HAS_DB || made.length === 0) return;
+  await sql`delete from email_outbox where ref_type = 'user' and ref_id = any(${made})`;
   await sql`delete from organizations where created_by = any(${made})`;
   await sql`delete from subscriptions where owner_user_id = any(${made})`;
   await sql`delete from users where id = any(${made})`;

@@ -294,13 +294,22 @@ export async function sendVerificationEmail(
   return send({ to, transactional: true, ...verificationTemplate(link, dict) });
 }
 
-export async function sendMagicLinkEmail(
+/** What an email says: the part of a message that is not who it goes to. */
+export type EmailContent = { subject: string; html: string; text: string };
+
+/**
+ * The sign-in email, RENDERED and not sent. The sign-in route (`api/auth/magic-link`) queues what this returns on the email
+ * outbox, in the same transaction as the token it carries, and sends it after commit; there is no direct sender for this
+ * email any more (a second path would skip the outbox's replace rule and its retry). `to` is not part of the content: it is
+ * kept so the call reads like the other builders and a test double can record who the link was for.
+ */
+export async function magicLinkEmail(
   to: string,
   link: string,
   locale: Locale = "en",
-): Promise<boolean> {
+): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, transactional: true, ...magicLinkTemplate(link, dict) });
+  return magicLinkTemplate(link, dict);
 }
 
 /** Funnel claim link (v3/07 §6) — transactional: it doubles as sign-in. */
