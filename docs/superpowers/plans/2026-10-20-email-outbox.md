@@ -4,7 +4,7 @@
 
 **Goal:** Queue the sign-in link and the online-chess round invite in a Postgres outbox written in the caller's transaction, attempt each at once after commit, retry with backoff from a cron worker, and record Resend delivery status per row.
 
-**Architecture:** One table `email_outbox` (V468, replacing the unused `email_queue`), sealed bodies under the existing `LICHESS_TOKEN_KEK` envelope, and a server module `apps/web/src/server/email-outbox/` with four entry points: `enqueueEmail` (on the caller's `Tx`), `dispatchNow` (first attempt, after commit), `runOutboxTick` (retry worker behind `/api/cron/email-outbox`) and `applyProviderEvent` (the Resend webhook). Per-kind side effects (the chess seat stamp) hang off a lookup table of kind hooks, so the core never imports a usecase.
+**Architecture:** One table `email_outbox` (V469, replacing the unused `email_queue`), sealed bodies under the existing `LICHESS_TOKEN_KEK` envelope, and a server module `apps/web/src/server/email-outbox/` with four entry points: `enqueueEmail` (on the caller's `Tx`), `dispatchNow` (first attempt, after commit), `runOutboxTick` (retry worker behind `/api/cron/email-outbox`) and `applyProviderEvent` (the Resend webhook). Per-kind side effects (the chess seat stamp) hang off a lookup table of kind hooks, so the core never imports a usecase.
 
 **Tech Stack:** Next.js route handlers, postgres.js (`sql`, `Tx`, `tx.savepoint`), Flyway SQL migrations, AES-256-GCM envelope (`server/relay/crypto.ts`), Resend REST API, Cloudflare cron Worker (`apps/cron-worker`), vitest (node env), Playwright (CI dispatch only), `scripts/smoke.ts`.
 
@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - **Worktree:** `/Users/ashokhein/github/seazn.club/.claude/worktrees/email-outbox`, branch `feat/email-outbox`. Every shell command starts `cd <that path>[/apps/web] &&` in the SAME call; use `/usr/bin/git`. Never `git stash` (stack shared with the main checkout).
-- **Migration number:** `V468__email_outbox.sql` (origin/main max was V467 on 2026-10-20). Re-check at PR time: `/usr/bin/git fetch -q origin main && /usr/bin/git ls-tree --name-only origin/main db/migration/deltas/ | sort -V | tail -1`; if it moved, renumber (an unmerged migration is amended, never corrected forward). **No Flyway `outOfOrder`.** When it merges, tell the W2c and r2 sessions the number taken (send the fact, not an approval).
+- **Migration number:** `V469__email_outbox.sql` (origin/main max was V468 on 2026-10-23). Re-check at PR time: `/usr/bin/git fetch -q origin main && /usr/bin/git ls-tree --name-only origin/main db/migration/deltas/ | sort -V | tail -1`; if it moved, renumber (an unmerged migration is amended, never corrected forward). **No Flyway `outOfOrder`.** When it merges, tell the W2c and r2 sessions the number taken (send the fact, not an approval).
 - **Retry schedule (spec):** 1 min, 5 min, 15 min, 1 h, 6 h after the previous attempt; 6 attempts in all; then `dead`.
 - **Idempotency key (spec):** `email-outbox/<id>`; Resend keeps it 24 h; the whole retry span must stay well under that, pinned by a test derived from the schedule constant.
 - **Expiry (spec):** sign-in link 15 min (`TTL_MINUTES`, `lib/login-link.ts:6`); chess invite = that board's check-in deadline (`windowFor(anchor).deadline`, `server/external-play/window.ts:67`).
@@ -48,7 +48,7 @@
 
 | Path | Responsibility |
 |---|---|
-| `db/migration/deltas/V468__email_outbox.sql` | drop `email_queue`; table, CHECKs, indexes, replace trigger, RLS + INSERT-only grant |
+| `db/migration/deltas/V469__email_outbox.sql` | drop `email_queue`; table, CHECKs, indexes, replace trigger, RLS + INSERT-only grant |
 | `apps/web/src/server/email-outbox/constants.ts` | kinds, statuses, status groups, schedule, lease, batch, pacing, retention, key format |
 | `apps/web/src/server/email-outbox/seal.ts` | seal/open `{html,text}` under `LICHESS_TOKEN_KEK` |
 | `apps/web/src/server/email-outbox/classify.ts` | pure: `SendResult` → `sent/retry/dead/suppressed`; `nextAttemptAt` |
@@ -67,10 +67,10 @@
 
 ---
 
-### Task 1: Migration V468 — `email_outbox`, replace trigger, INSERT-only grant
+### Task 1: Migration V469 — `email_outbox`, replace trigger, INSERT-only grant
 
 **Files:**
-- Create: `db/migration/deltas/V468__email_outbox.sql`
+- Create: `db/migration/deltas/V469__email_outbox.sql`
 - Create: `apps/web/src/server/email-outbox/constants.ts`
 - Test: `apps/web/src/server/email-outbox/__tests__/outbox-schema.test.ts`
 
@@ -113,7 +113,7 @@ it("email_queue is gone", async () => {
 
 - [ ] **Step 2: Run to verify they fail** — verify recipe on the test path. Expected: FAIL (`relation "email_outbox" does not exist`).
 
-- [ ] **Step 3: Write `V468__email_outbox.sql`**
+- [ ] **Step 3: Write `V469__email_outbox.sql`**
   - Header comment: why (spec link), what replaces `email_queue` (created by both `v1-baseline/V028` and `deltas/V104`, read and written nowhere — `git grep -n email_queue` shows only those two files), and the INSERT-only stance.
   - `drop table if exists email_queue;` then the table above with CHECKs: `kind in (…2)`, `status in (…12)`, `attempts >= 0`, `ref_type <> ''`, `ref_id <> ''`, `recipient <> ''`, the two named constraints from Step 1. Constraint names as built (later tasks assert on them): `email_outbox_kind_valid`, `email_outbox_status_valid`, `email_outbox_attempts_nonneg`, `email_outbox_ref_type_nonempty`, `email_outbox_ref_id_nonempty`, `email_outbox_recipient_nonempty`, `email_outbox_body_only_while_retryable`, `email_outbox_lease_only_while_sending`. `kind`, `ref_type`, `ref_id`, `recipient`, `subject`, `transactional` (NO default: the caller decides) and `expires_at` are NOT NULL.
   - Indexes: `email_outbox_due_idx (next_attempt_at) where status = 'queued'`; `email_outbox_lease_idx (lease_until) where status = 'sending'`; unique `email_outbox_provider_idx (provider_id) where provider_id is not null`; `email_outbox_ref_idx (ref_type, ref_id, created_at desc)`; `email_outbox_created_idx (created_at)`; `email_outbox_replace_idx (kind, ref_type, ref_id, lower(recipient)) where status in ('queued','sending','sent','delayed')`.
@@ -140,7 +140,7 @@ create trigger email_outbox_replace_older before insert on email_outbox
 
 - [ ] **Step 4: Apply and run** — `db:apply` against your DB (skill §), then the verify recipe. Expected: all pass. The file holds 22 tests (4 DB-free vocabulary tests + 18 `describe.skipIf(!HAS_DB)`), not the six sketched above (ruling R3: the count is whatever the file holds); with `DATABASE_URL=` it is 4 passed, 18 skipped, 0 failed.
 - [ ] **Step 5: Mutate once each** — (a) drop `lower()` from the trigger; (b) remove `'delayed'` from the trigger's status list (anchor the pattern on the trigger's `and status in (`: the partial index repeats the same list, and a substitution without `/g` hits the first match, the index); (c) drop the body CHECK; (d) drop `org_id is not distinct from new.org_id` (and, separately, make it `org_id = new.org_id`); (e) drop `set search_path` from the function; (f) drop `not null` on `expires_at`. Each must red a named test; restore.
-- [ ] **Step 6: Commit** — `feat(db): V468 email_outbox replaces the unused email_queue`.
+- [ ] **Step 6: Commit** — `feat(db): V469 email_outbox replaces the unused email_queue`.
 
 ---
 

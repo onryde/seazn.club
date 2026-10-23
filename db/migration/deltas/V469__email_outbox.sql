@@ -1,4 +1,4 @@
--- V468 — the email outbox (phase 1): one durable row per transactional email, written on the caller's own
+-- V469 — the email outbox (phase 1): one durable row per transactional email, written on the caller's own
 -- transaction, sent after commit and retried by a worker. Spec: docs/superpowers/specs/2026-10-19-email-outbox-design.md.
 --
 -- WHY. Today a sign-in link or a chess invite is mailed inline, and a failed or lost send is invisible: the player
