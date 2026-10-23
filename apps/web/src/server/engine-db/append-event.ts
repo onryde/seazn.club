@@ -107,9 +107,9 @@ interface FixtureRow {
   /** V347 — the resolved cfg this fixture was SCORED under; null until its
    *  first event. See `fixture-cfg.ts` for why it exists. */
   config_snapshot: unknown;
-  /** W2c (V463) — this match's own format override; resolved last, frozen with the rest at the first event. */
+  /** W2c (V469) — this match's own format override; resolved last, frozen with the rest at the first event. */
   rules_override: unknown;
-  /** W2c (V463) — how many times a correction re-froze this match's format (Task 15: a pad sends the one it loaded). */
+  /** W2c (V469) — how many times a correction re-froze this match's format (Task 15: a pad sends the one it loaded). */
   rules_version: number;
   /** W2b D19 — the feed graph: a double walkover needs a next match to send nobody to. */
   winner_to_fixture: string | null;

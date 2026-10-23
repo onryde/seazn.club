@@ -5,6 +5,9 @@
 -- V450 and the V451-V461 the chess session has reserved for its own deltas; then to V463 on 2026-10-18, because
 -- r2 PR #981 holds V462 (V462__relay_composed_stream_input_b.sql) and merges first. Chess and r2 must still
 -- merge first, or this moves again.
+-- Then to V469 on 2026-10-23, at the pre-PR rebase onto origin/main 5c78df031a: chess and r2 have merged and main's
+-- tail is V468__stream_runner_restart_tally.sql. Open PR #1005 also holds V469 (V469__all_stages_free.sql): whichever
+-- merges second takes the next free number.
 --
 -- W2c (spec §4.3): a fixture's own match-format override — engine ruleKeys of
 -- scope "match" only, written by writeFixtureRulesOverride alone. Null = the
