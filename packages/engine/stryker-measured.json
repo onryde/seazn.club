@@ -15,10 +15,15 @@
       "phaseSeconds": 2538
     },
     "competition-2": {
-      "mutants": 300,
-      "wallSeconds": 2698,
-      "dryRunSeconds": 151,
-      "phaseSeconds": 2522
+      "mutants": 404,
+      "wallSeconds": 1697,
+      "dryRunSeconds": 156,
+      "phaseSeconds": 1512,
+      "run": {
+        "id": 39405446403,
+        "job": 118570214604,
+        "sha": "99f86e0b3"
+      }
     },
     "competition-3": {
       "mutants": 306,
@@ -90,14 +95,14 @@
       "phaseSeconds": 41
     },
     "modules-2": {
-      "mutants": 237,
-      "wallSeconds": 212,
-      "dryRunSeconds": 107,
-      "phaseSeconds": 73,
+      "mutants": 439,
+      "wallSeconds": 898,
+      "dryRunSeconds": 221,
+      "phaseSeconds": 651,
       "run": {
-        "id": 38418462240,
-        "job": 115369237484,
-        "sha": "04bfa54f9"
+        "id": 39405548125,
+        "job": 118571520262,
+        "sha": "99f86e0b3"
       }
     },
     "modules-3": {
@@ -262,10 +267,15 @@
       "phaseSeconds": 4161
     },
     "sports-football-4": {
-      "mutants": 379,
-      "wallSeconds": 6136,
-      "dryRunSeconds": 171,
-      "phaseSeconds": 5934
+      "mutants": 418,
+      "wallSeconds": 7049,
+      "dryRunSeconds": 135,
+      "phaseSeconds": 6891,
+      "run": {
+        "id": 39405555798,
+        "job": 118574351503,
+        "sha": "99f86e0b3"
+      }
     },
     "sports-football-5": {
       "mutants": 338,
@@ -274,10 +284,15 @@
       "phaseSeconds": 10868
     },
     "sports-football-6": {
-      "mutants": 388,
-      "wallSeconds": 6857,
-      "dryRunSeconds": 167,
-      "phaseSeconds": 6662
+      "mutants": 443,
+      "wallSeconds": 4946,
+      "dryRunSeconds": 161,
+      "phaseSeconds": 4759,
+      "run": {
+        "id": 39405559752,
+        "job": 118572430371,
+        "sha": "99f86e0b3"
+      }
     },
     "sports-period-2": {
       "mutants": 388,
@@ -304,14 +319,14 @@
       "phaseSeconds": 5181
     },
     "sports-period-6": {
-      "mutants": 351,
-      "wallSeconds": 3159,
-      "dryRunSeconds": 106,
-      "phaseSeconds": 3013,
+      "mutants": 394,
+      "wallSeconds": 9223,
+      "dryRunSeconds": 187,
+      "phaseSeconds": 9002,
       "run": {
-        "id": 38418599409,
-        "job": 115369749527,
-        "sha": "04bfa54f9"
+        "id": 39405563513,
+        "job": 118574449251,
+        "sha": "99f86e0b3"
       }
     },
     "sports-period-7": {
@@ -403,25 +418,25 @@
       "phaseSeconds": 10893
     },
     "sports-other-1": {
-      "mutants": 553,
-      "wallSeconds": 6763,
-      "dryRunSeconds": 128,
-      "phaseSeconds": 6595,
+      "mutants": 664,
+      "wallSeconds": 8594,
+      "dryRunSeconds": 137,
+      "phaseSeconds": 8429,
       "run": {
-        "id": 38442545546,
-        "job": 115452654306,
-        "sha": "3b580141b"
+        "id": 39405567566,
+        "job": 118574446626,
+        "sha": "99f86e0b3"
       }
     },
     "sports-other-2": {
-      "mutants": 415,
-      "wallSeconds": 7162,
-      "dryRunSeconds": 166,
-      "phaseSeconds": 6958,
+      "mutants": 467,
+      "wallSeconds": 6819,
+      "dryRunSeconds": 185,
+      "phaseSeconds": 6606,
       "run": {
-        "id": 38442591965,
-        "job": 115452785555,
-        "sha": "3b580141b"
+        "id": 39405571358,
+        "job": 118574525143,
+        "sha": "99f86e0b3"
       }
     },
     "sports-other-3": {
@@ -442,10 +457,15 @@
       }
     },
     "sports-other-5": {
-      "mutants": 407,
-      "wallSeconds": 11924,
-      "dryRunSeconds": 169,
-      "phaseSeconds": 11728
+      "mutants": 463,
+      "wallSeconds": 4918,
+      "dryRunSeconds": 207,
+      "phaseSeconds": 4685,
+      "run": {
+        "id": 39405575258,
+        "job": 118574545062,
+        "sha": "99f86e0b3"
+      }
     },
     "sports-other-6": {
       "mutants": 410,
@@ -555,7 +575,7 @@
       }
     },
     "sports-cricket-10": {
-      "mutants": 373,
+      "mutants": 401,
       "lost": 0,
       "parts": {
         "sports-cricket-10": {
@@ -571,15 +591,15 @@
           }
         },
         "sports-cricket-16": {
-          "mutants": 248,
+          "mutants": 276,
           "basis": "measured",
-          "wallSeconds": 6661,
-          "dryRunSeconds": 179,
-          "phaseSeconds": 6457,
+          "wallSeconds": 9211,
+          "dryRunSeconds": 213,
+          "phaseSeconds": 8964,
           "run": {
-            "id": 37532639397,
-            "job": 112505671221,
-            "sha": "0920dbf5e"
+            "id": 39405551586,
+            "job": 118572338555,
+            "sha": "99f86e0b3"
           }
         }
       }
