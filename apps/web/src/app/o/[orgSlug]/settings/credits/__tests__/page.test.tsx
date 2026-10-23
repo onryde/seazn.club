@@ -178,15 +178,15 @@ describe("Settings → Credits → Streaming: what the page hands the view", () 
   });
 
   it("the notice says whether the credits are already in the balance (P7); no return, no notice", async () => {
-    // Three honest answers, each its own notice: in the balance, still processing, and nothing of this org's (a foreign or
+    // Four honest answers, each its own notice: in the balance, still processing, unconfirmed (terminal), and nothing of this org's (a foreign or
     // hand-edited session id, another kind of checkout, one never completed) — which says nothing at all (m3).
     let judged = 0;
-    for (const [outcome, notice] of [["granted", "paid"], ["processing", "processing"], ["not_ours", "none"]] as const) {
+    for (const [outcome, notice] of [["granted", "paid"], ["processing", "processing"], ["unconfirmed", "unconfirmed"], ["not_ours", "none"]] as const) {
       reconcile.mockResolvedValue(outcome);
       expect(await render({ kind: "stream", checkout: "success", session_id: "cs_1" }), outcome).toContain(`data-notice="${notice}"`);
       judged += 1;
     }
-    expect(judged, "anti-vacuity: all three outcomes were judged").toBe(3);
+    expect(judged, "anti-vacuity: all four outcomes were judged").toBe(4);
     expect(await render({ kind: "stream" })).toContain('data-notice="none"');
   });
 

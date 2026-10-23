@@ -6452,6 +6452,7 @@
   "settings.credits.stream.unavailable": "La diffusion depuis le téléphone est indisponible pour le moment : impossible d'acheter des crédits de match. Votre solde et votre historique sont ci-dessous.",
   "settings.credits.stream.paid": "Paiement reçu. Vos crédits de match sont sur votre solde.",
   "settings.credits.stream.processing": "Votre paiement est en cours de traitement. Vos crédits de match apparaîtront sur votre solde dès qu'il sera validé.",
+  "settings.credits.stream.unconfirmed": "Nous n'avons pas pu confirmer cet achat. Contactez le support si vous avez été débité.",
   "settings.credits.stream.history": "Historique des crédits",
   "settings.credits.stream.col.match": "Match",
   "settings.credits.stream.col.balance": "Solde après",

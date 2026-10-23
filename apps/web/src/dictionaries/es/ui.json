@@ -6452,6 +6452,7 @@
   "settings.credits.stream.unavailable": "La transmisión desde el móvil no está disponible ahora mismo, así que no se pueden comprar créditos de partido. Tu saldo y tu historial aparecen abajo.",
   "settings.credits.stream.paid": "Pago recibido. Tus créditos de partido ya están en tu saldo.",
   "settings.credits.stream.processing": "Tu pago se está procesando. Tus créditos de partido aparecerán en tu saldo en cuanto se confirme.",
+  "settings.credits.stream.unconfirmed": "No pudimos confirmar esta compra. Contacta con soporte si se te ha cobrado.",
   "settings.credits.stream.history": "Historial de créditos",
   "settings.credits.stream.col.match": "Partido",
   "settings.credits.stream.col.balance": "Saldo después",

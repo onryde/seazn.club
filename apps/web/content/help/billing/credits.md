@@ -66,7 +66,7 @@ Open **Settings → Credits** and switch to **Streaming**. You'll see:
 - **Bought credits** — packs you buy, and credits an **Event Pass** adds. These **never expire**, and are only touched once the free ones for the month are gone.
 - **Credit history** — every change, newest first, with the balance after it. Each row for a match names it and links to its page.
 
-To buy more, pick a pack of **1, 5 or 20 matches** on the Streaming side and pay. Larger packs cost less per match. When Stripe sends you back to the page it checks the payment for you: if it has cleared, the credits are in your balance and the page says so; if the payment is still processing (a delayed payment method, for instance), the page says that instead, and the credits appear as soon as it clears. Only an organisation on a plan with phone streaming can buy packs; an organisation without one still sees the credits it holds and its history.
+To buy more, pick a pack of **1, 5 or 20 matches** on the Streaming side and pay. Larger packs cost less per match. When Stripe sends you back to the page it checks the payment for you: if it has cleared, the credits are in your balance and the page says so; if the payment is still processing (a delayed payment method, for instance), the page says that instead, and the credits appear as soon as it clears. If the payment went through but we can't match it to a credit pack, the page says it couldn't confirm the purchase — contact support, quoting your receipt, and we'll add the credits by hand. Only an organisation on a plan with phone streaming can buy packs; an organisation without one still sees the credits it holds and its history.
 
 ### When a credit comes back
 

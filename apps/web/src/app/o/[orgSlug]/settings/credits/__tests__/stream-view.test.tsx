@@ -45,7 +45,7 @@ const view = (over: Partial<StreamCreditsTabView> = {}): StreamCreditsTabView =>
   ...over,
 });
 
-async function markup(v: StreamCreditsTabView, loc: Loc = "en", extra: { notice?: "paid" | "processing" | null; cursor?: string } = {}): Promise<string> {
+async function markup(v: StreamCreditsTabView, loc: Loc = "en", extra: { notice?: "paid" | "processing" | "unconfirmed" | null; cursor?: string } = {}): Promise<string> {
   const dict = await getDictionary(loc, "ui");
   return renderToStaticMarkup(
     <BillingStreamCredits
@@ -228,14 +228,28 @@ describe("BillingStreamCredits — buying", () => {
     expect(processing, "a payment that has not cleared is not 'received'").not.toContain("Payment received");
     expect(processing).toContain('data-testid="credits-stream-processing"');
     expect(processing).not.toContain('data-testid="credits-stream-paid"');
+    const unconfirmed = await markup(view(), "en", { notice: "unconfirmed" });
+    expect(unconfirmed).toContain("We couldn&#x27;t confirm this purchase. Contact support if you were charged.");
+    expect(unconfirmed, "an unconfirmed purchase is not 'received' and does not promise credits").not.toMatch(/Payment received|will appear|still processing/);
+    expect(unconfirmed).toContain('data-testid="credits-stream-unconfirmed"');
+    // The tone says it before the words do: success is green, still-waiting is amber, and "could not confirm" is neither.
+    const tone = (out: string, id: string) => /<p role="status" data-testid="credits-stream-(?:paid|processing|unconfirmed)" class="[^"]*">/.exec(out)?.[0] ?? `no ${id}`;
+    expect(tone(await markup(view(), "en", { notice: "paid" }), "paid")).toContain("border-emerald-200");
+    expect(tone(processing, "processing")).toContain("border-amber-200");
+    expect(tone(unconfirmed, "unconfirmed")).toContain("border-rose-200");
+    expect(tone(unconfirmed, "unconfirmed"), "an unconfirmed purchase must not look like success or like waiting").not.toMatch(/emerald|amber/);
     const nothing = await markup(view());
     expect(nothing).not.toContain('data-testid="credits-stream-paid"');
     expect(nothing).not.toContain('data-testid="credits-stream-processing"');
+    expect(nothing).not.toContain('data-testid="credits-stream-unconfirmed"');
     // all four locales carry both sentences, and neither is the other
     for (const loc of LOCALES) {
       const d = dictFile(loc);
       expect(d["settings.credits.stream.processing"], loc).toBeTruthy();
       expect(d["settings.credits.stream.processing"], loc).not.toBe(d["settings.credits.stream.paid"]);
+      expect(d["settings.credits.stream.unconfirmed"], loc).toBeTruthy();
+      expect(d["settings.credits.stream.unconfirmed"], loc).not.toBe(d["settings.credits.stream.processing"]);
+      expect(await markup(view(), loc, { notice: "unconfirmed" }), loc).toContain(esc(d["settings.credits.stream.unconfirmed"]!));
       expect(await markup(view(), loc, { notice: "processing" }), loc).toContain(esc(d["settings.credits.stream.processing"]!));
       expect(d["settings.credits.stream.paidPending"], `${loc}: the old key is gone`).toBeUndefined();
     }

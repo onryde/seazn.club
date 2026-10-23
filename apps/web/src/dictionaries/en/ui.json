@@ -6452,6 +6452,7 @@
   "settings.credits.stream.unavailable": "Phone streaming is unavailable right now, so match credits can't be bought. Your balance and history are below.",
   "settings.credits.stream.paid": "Payment received. Your match credits are in your balance.",
   "settings.credits.stream.processing": "Your payment is still processing. Your match credits will appear in your balance as soon as it clears.",
+  "settings.credits.stream.unconfirmed": "We couldn't confirm this purchase. Contact support if you were charged.",
   "settings.credits.stream.history": "Credit history",
   "settings.credits.stream.col.match": "Match",
   "settings.credits.stream.col.balance": "Balance after",

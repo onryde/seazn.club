@@ -8,8 +8,17 @@ import { routes } from "@/lib/routes";
 
 /** What the page learned from the buyer's return from Stripe: `paid` — the credits are in the balance below; `processing` —
  *  it is this org's checkout but the payment has not cleared (or the ledger not been written) yet, so the credits arrive a
- *  moment later. `null` — this is not a return, or the session was not this org's: say nothing. */
-export type StreamPurchaseNotice = "paid" | "processing" | null;
+ *  moment later; `unconfirmed` — it is this org's and paid, but nothing will grant it without staff, so the page says it could
+ *  not confirm the purchase rather than promise credits. `null` — this is not a return, or the session was not this org's:
+ *  say nothing. */
+export type StreamPurchaseNotice = "paid" | "processing" | "unconfirmed" | null;
+
+/** The return notice's copy key and tone — literal keys, so the dictionary-usage scans see each one used. */
+const NOTICE: Record<Exclude<StreamPurchaseNotice, null>, { key: TKey; tone: string }> = {
+  paid: { key: "settings.credits.stream.paid", tone: "border-emerald-200 bg-emerald-50 text-emerald-900" },
+  processing: { key: "settings.credits.stream.processing", tone: "border-amber-200 bg-amber-50 text-amber-900" },
+  unconfirmed: { key: "settings.credits.stream.unconfirmed", tone: "border-rose-200 bg-rose-50 text-rose-900" },
+};
 
 interface Props {
   view: StreamCreditsTabView;
@@ -132,12 +141,10 @@ export function BillingStreamCredits({ view, dict, locale, orgId, orgSlug, curre
       {notice && (
         <p
           role="status"
-          data-testid={notice === "paid" ? "credits-stream-paid" : "credits-stream-processing"}
-          className={`mb-4 rounded-lg border px-3 py-2 text-sm ${
-            notice === "paid" ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-amber-200 bg-amber-50 text-amber-900"
-          }`}
+          data-testid={`credits-stream-${notice}`}
+          className={`mb-4 rounded-lg border px-3 py-2 text-sm ${NOTICE[notice].tone}`}
         >
-          {t(dict, notice === "paid" ? "settings.credits.stream.paid" : "settings.credits.stream.processing")}
+          {t(dict, NOTICE[notice].key)}
         </p>
       )}
 

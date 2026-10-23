@@ -6423,6 +6423,7 @@ export type DictionaryKey =
   | "settings.credits.stream.tbd"
   | "settings.credits.stream.title"
   | "settings.credits.stream.unavailable"
+  | "settings.credits.stream.unconfirmed"
   | "settings.emailChange.error"
   | "settings.emailChange.expired"
   | "settings.emailChange.invalid"

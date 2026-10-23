@@ -6452,6 +6452,7 @@
   "settings.credits.stream.unavailable": "Streamen vanaf telefoon is nu niet beschikbaar, dus je kunt geen wedstrijdcredits kopen. Je saldo en geschiedenis staan hieronder.",
   "settings.credits.stream.paid": "Betaling ontvangen. Je wedstrijdcredits staan op je saldo.",
   "settings.credits.stream.processing": "Je betaling wordt nog verwerkt. Je wedstrijdcredits staan op je saldo zodra die is afgerond.",
+  "settings.credits.stream.unconfirmed": "We konden deze aankoop niet bevestigen. Neem contact op met support als er geld is afgeschreven.",
   "settings.credits.stream.history": "Creditgeschiedenis",
   "settings.credits.stream.col.match": "Wedstrijd",
   "settings.credits.stream.col.balance": "Saldo erna",

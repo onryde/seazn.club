@@ -23,7 +23,7 @@ import { sql } from "@/lib/db";
 import { seedOrg } from "./_rig";
 import { runEvent } from "../billing-events";
 import { creditBalance } from "../stream-credits";
-import { reconcileStreamCreditsCheckout, reconcileStreamCreditsReturn, type StreamReturnOutcome } from "../stream-credits-checkout";
+import { fulfilStreamCreditsCheckout, reconcileStreamCreditsCheckout, reconcileStreamCreditsReturn, type StreamReturnOutcome } from "../stream-credits-checkout";
 import { buildRelayCheckoutParams } from "@/lib/relay-checkout";
 import { streamPack } from "@/lib/stream-credit-packs";
 import { sendStreamCreditGrantFailedAlertEmail } from "@/lib/email";
@@ -247,6 +247,8 @@ describe.skipIf(!HAS_DB)("reconcileStreamCreditsCheckout — the return render l
 //   R3 status           drop the complete check                                 → "an open or expired session is not_ours"
 //   R4 404              treat every Stripe error as processing                  → "an id Stripe has never heard of is not_ours"
 //   R5 unsettled        return granted for a complete-but-unpaid session        → "complete but unpaid is processing"
+//   R8 refused          a terminal no-grant answers processing, not unconfirmed → "paid but nothing grantable / already recorded for another org"
+//   R9 unsettled limb   an unpaid session answers unconfirmed                   → "complete but unpaid (a delayed method)"
 //   R6 wrapper          the boolean true for processing                         → "the boolean is true exactly for granted"
 describe.skipIf(!HAS_DB)("reconcileStreamCreditsReturn — what the page may honestly say about a return", () => {
   beforeEach(() => {
@@ -283,7 +285,9 @@ describe.skipIf(!HAS_DB)("reconcileStreamCreditsReturn — what the page may hon
       { name: "this org's paid session", id: `cs_r_paid_${tag}`, session: relaySession(mine, `cs_r_paid_${tag}`), want: "granted" },
       { name: "a no-payment-required (100% off) session", id: `cs_r_free_${tag}`, session: relaySession(mine, `cs_r_free_${tag}`, { payment_status: "no_payment_required" }), want: "granted" },
       { name: "complete but unpaid (a delayed method)", id: `cs_r_unpaid_${tag}`, session: relaySession(mine, `cs_r_unpaid_${tag}`, { payment_status: "unpaid" }), want: "processing" },
-      { name: "paid but nothing grantable (no snapshot, no pack)", id: `cs_r_ungrant_${tag}`, session: ungranted(`cs_r_ungrant_${tag}`), want: "processing" },
+      // TERMINAL: nothing will ever be granted from these without staff, so "processing" would be a lie (review of #1002).
+      { name: "paid but nothing grantable (no snapshot, no pack)", id: `cs_r_ungrant_${tag}`, session: ungranted(`cs_r_ungrant_${tag}`), want: "unconfirmed" },
+      { name: "paid, and the session id is already recorded for another organisation", id: `cs_r_collide_${tag}`, session: relaySession(mine, `cs_r_collide_${tag}`), want: "unconfirmed" },
       { name: "a Stripe outage on the read", id: `cs_r_outage_${tag}`, session: null, reject: new Error("socket hang up"), want: "processing" },
       { name: "an id Stripe has never heard of", id: `cs_r_unknown_${tag}`, session: null, want: "not_ours" },
       // Stripe's own not-found carries both fields; either alone is still a not-found, and each limb of the test is its own comparison.
@@ -298,6 +302,9 @@ describe.skipIf(!HAS_DB)("reconcileStreamCreditsReturn — what the page may hon
     for (const c of cases) {
       if (c.session) stripeHolds.set(c.id, c.session);
     }
+    // the collision case: the OTHER org's webhook already wrote this session id (the table-wide unique stripe_event_id), so
+    // this org's writer refuses it — terminal
+    expect(await runEvent(completedEvent(relaySession(other, `cs_r_collide_${tag}`))), "the other org's webhook granted it").toBe(true);
     let checked = 0;
     const seen = new Set<StreamReturnOutcome>();
     for (const c of cases) {
@@ -311,10 +318,34 @@ describe.skipIf(!HAS_DB)("reconcileStreamCreditsReturn — what the page may hon
       expect(await reconcileStreamCreditsCheckout(mine, c.id), `${c.name} (boolean)`).toBe(c.want === "granted");
     }
     expect(checked, "anti-vacuity: every case was judged").toBe(cases.length);
-    expect([...seen].sort(), "anti-vacuity: all three answers were reached").toEqual(["granted", "not_ours", "processing"]);
+    expect([...seen].sort(), "anti-vacuity: all four answers were reached").toEqual(["granted", "not_ours", "processing", "unconfirmed"]);
     // only the two granted sessions moved the ledger — one row each, once, however many returns
     expect((await purchaseRows(mine)).map((r) => r.stripe_event_id).sort()).toEqual([`cs_r_free_${tag}`, `cs_r_paid_${tag}`].sort());
-    expect(await purchaseRows(other), "another org's session granted nobody anything").toEqual([]);
+    expect((await purchaseRows(other)).map((r) => r.stripe_event_id), "another org's own purchase is its own, and nothing else landed there").toEqual([`cs_r_collide_${tag}`]);
+  });
+
+  it("the webhook's boolean fulfil is true only when the ledger holds the purchase — unpaid and terminal refusals are both false", async () => {
+    const mine = (await seedOrg()).auth.orgId;
+    const other = (await seedOrg()).auth.orgId;
+    const tag = mine.slice(0, 8);
+    const undone = relaySession(mine, `cs_f_ungrant_${tag}`);
+    const noSnapshot = { ...undone, metadata: { ...undone.metadata, pack: "999", credits: undefined } } as unknown as Stripe.Checkout.Session;
+    const collide = relaySession(mine, `cs_f_collide_${tag}`);
+    expect(await runEvent(completedEvent(relaySession(other, collide.id))), "the other org's webhook recorded the id first").toBe(true);
+    const cases: [string, Stripe.Checkout.Session, boolean][] = [
+      ["paid", relaySession(mine, `cs_f_paid_${tag}`), true],
+      ["no payment required", relaySession(mine, `cs_f_free_${tag}`, { payment_status: "no_payment_required" }), true],
+      ["unpaid", relaySession(mine, `cs_f_unpaid_${tag}`, { payment_status: "unpaid" }), false],
+      ["paid, nothing grantable", noSnapshot, false],
+      ["paid, id recorded for another org", collide, false],
+    ];
+    let checked = 0;
+    for (const [name, session, want] of cases) {
+      expect(await fulfilStreamCreditsCheckout(mine, session, { alertStaff: false }), name).toBe(want);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: every case judged").toBe(cases.length);
+    expect((await purchaseRows(mine)).map((r) => r.stripe_event_id).sort()).toEqual([`cs_f_free_${tag}`, `cs_f_paid_${tag}`].sort());
   });
 
   it("the payment lands after the first return: `processing` becomes `granted` on the next, with exactly one row", async () => {
