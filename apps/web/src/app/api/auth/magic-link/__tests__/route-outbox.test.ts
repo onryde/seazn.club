@@ -375,6 +375,38 @@ describe.skipIf(!HAS_DB)("POST /api/auth/magic-link writes the token and the out
     expect(calls).toHaveLength(0);
   });
 
+  it("committed <=> queued, at the commit: a transaction that fails AFTER the row was written leaves no new row, does not replace the earlier one, and sends nothing", async () => {
+    const email = newEmail();
+    await post({ email });
+    const userId = await userIdOf(email);
+    const [first] = await rowsFor(email);
+    const [firstLink] = await linksOf(userId);
+    expect(first!.status, "premise: the first request was sent").toBe("sent");
+    calls.length = 0;
+
+    // A constraint trigger that fails the transaction at COMMIT, for this user's next token only (a random uuid, so it is
+    // inert for every other test sharing the database). By then the outbox row has been written: whatever handle wrote it
+    // decides whether that row survives, and whether the replace trigger already marked the earlier row `replaced`.
+    const fn = `t6_refuse_commit_${RUN.replace(/-/g, "_")}`;
+    await sql.unsafe(`create function ${fn}() returns trigger language plpgsql as $$ begin raise exception 'refused at commit'; end $$`);
+    await sql.unsafe(
+      `create constraint trigger ${fn} after insert on login_links deferrable initially deferred for each row when (new.user_id = '${userId}') execute function ${fn}()`,
+    );
+    let res: Awaited<ReturnType<typeof post>>;
+    try {
+      res = await post({ email });
+    } finally {
+      await sql.unsafe(`drop trigger if exists ${fn} on login_links`);
+      await sql.unsafe(`drop function if exists ${fn}()`);
+    }
+
+    expect(res.status).toBe(500);
+    expect(res.raw).not.toContain("login_url");
+    expect((await rowsFor(email)).map((r) => [r.id, r.status]), "no new row; the earlier row was not replaced").toEqual([[first!.id, "sent"]]);
+    expect((await linksOf(userId)).map((l) => l.token), "the earlier link survived").toEqual([firstLink!.token]);
+    expect(calls, "nothing was sent").toHaveLength(0);
+  });
+
   // ---- sequences --------------------------------------------------------------------------------------------------
 
   it("two requests in a row after a failed first send: the first row is replaced and its link is dead; only the second link is ever delivered, by the request and by the worker", async () => {
