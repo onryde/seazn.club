@@ -21,7 +21,7 @@ import { sql } from "@/lib/db";
 import { checkSendable, type DeliverResult } from "@/lib/email";
 import { log } from "@/server/logger";
 import { INVALID_IDEMPOTENT_REQUEST, classifyResult, nextAttemptAt, type Verdict } from "./classify";
-import { LEASE_MS, idempotencyKey, type OutboxKind } from "./constants";
+import { LEASE_MS, OUTBOX_TAG_NAME, idempotencyKey, type OutboxKind } from "./constants";
 import { afterEndedBadly, type EndedRow } from "./hooks";
 import { outboxRoleOk } from "./role-check";
 import { openBody } from "./seal";
@@ -207,7 +207,7 @@ export async function attemptClaimed(row: ClaimedRow, opts: { now?: Date } = {})
         text: body.text,
         transactional: row.transactional,
         idempotencyKey: idempotencyKey(row.id),
-        tags: { outbox: row.id },
+        tags: { [OUTBOX_TAG_NAME]: row.id },
       },
       gate.apiKey,
     );

@@ -83,6 +83,11 @@ export const EXPIRY_MARGIN_MS = LEASE_MS + STG_TICK_MS;
  *  its board's check-in deadline. */
 export const MAX_EXPIRY_MS = RESEND_IDEMPOTENCY_TTL_MS - EXPIRY_MARGIN_MS;
 
+/** The name of the Resend message tag that carries a row's id (`{ outbox: <row id> }`). The sender attaches it (attempt.ts) and
+ *  the webhook reads it (provider-events.ts) to find a row whose 2xx never recorded Resend's message id: one fact, two
+ *  modules, so it is typed once here. */
+export const OUTBOX_TAG_NAME = "outbox";
+
 /** The Resend `Idempotency-Key` for a row: the same row always sends under the same key, so an overlapping retry and a
  *  slow first attempt produce one email (spec "Goals", "Never twice"). */
 export const idempotencyKey = (id: string): string => `email-outbox/${id}`;

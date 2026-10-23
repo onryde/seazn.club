@@ -15,3 +15,4 @@ export { KIND_HOOKS, afterEndedBadly, type EndedRow, type KindHook } from "./hoo
 export { OutboxKeyUnavailableError } from "./seal";
 export { classifyResult, nextAttemptAt, type Verdict } from "./classify";
 export { outboxRoleOk } from "./role-check";
+export { PROVIDER_EVENT_STATUS, applyProviderEvent, type ProviderEventResult, type ProviderEventType } from "./provider-events";
