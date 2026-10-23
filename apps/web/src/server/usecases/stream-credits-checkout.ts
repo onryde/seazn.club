@@ -145,31 +145,56 @@ export async function fulfilStreamCreditsCheckout(
   return false;
 }
 
+/** What a return from Stripe told us about THIS org's purchase — the three things the page can honestly say:
+ *  - `granted`    the ledger holds the purchase (written now, or already by the webhook): "your credits are in your balance";
+ *  - `processing` it is this org's match-credit checkout and it is complete, but nothing is in the ledger yet (a delayed
+ *                 payment method, a webhook still to come, a Stripe or database hiccup): "your payment is processing";
+ *  - `not_ours`   nothing of this org's was paid on this session — another org's, another kind of checkout, one that never
+ *                 completed or has expired, or an id Stripe has never heard of (the URL is caller-supplied): SAY NOTHING. */
+export type StreamReturnOutcome = "granted" | "processing" | "not_ours";
+
+/** Stripe answers an id it does not hold with a 404 / `resource_missing` — a hand-edited or stale `session_id`. */
+function stripeNeverHeardOf(err: unknown): boolean {
+  const e = err as { statusCode?: unknown; code?: unknown } | null;
+  return e?.statusCode === 404 || e?.code === "resource_missing";
+}
+
 /**
- * Reconcile-on-return (G1): read the Checkout Session straight from Stripe and, only when it is a COMPLETE match-credit
- * checkout that names THIS org, fulfil it through the webhook's own path. Best-effort, idempotent, and it NEVER throws —
- * it runs inside the return render, and a throw there would 500 the page the buyer is coming back to; a failure only
- * means the webhook grants instead, a moment later.
+ * Reconcile-on-return (G1), told apart three ways for the page that has to say something: read the Checkout Session straight
+ * from Stripe and, only when it is a COMPLETE match-credit checkout that names THIS org, fulfil it through the webhook's own
+ * path. Best-effort, idempotent, and it NEVER throws — it runs inside the return render, and a throw there would 500 the page
+ * the buyer is coming back to; a failure only means the webhook grants instead, a moment later.
  *
- * Three refusals of its own, each ahead of the settled gate inside `fulfilStreamCreditsCheckout`, and each a separate
- * comparison so each is killable on its own:
+ * Refusals of its own, each ahead of the settled gate inside `fulfilStreamCreditsCheckout`, and each a separate comparison
+ * so each is killable on its own — all `not_ours`:
  *   * not `kind: "stream_credits"` — a plan, pass or AI-pack session is not this ledger's (disjoint discriminators, the
  *     same rule the webhook's dispatch keeps);
  *   * `metadata.org_id` is not the caller's org — `session_id` arrives in a URL, so it is caller-supplied; without this
- *     a club could be granted credits for a session another club paid for;
+ *     a club could be granted credits for a session another club paid for (or be told it paid for it);
  *   * `status` is not `complete` — `status` and `payment_status` are separate fields, and the webhook never needs this
- *     check because Stripe only sends it completed sessions. A retrieve can return one still open.
+ *     check because Stripe only sends it completed sessions. A retrieve can return one still open (or expired): nothing
+ *     was paid, so nothing is said;
+ *   * Stripe has no such session (404).
+ * A complete session of this org's that the ledger does not hold yet is `processing`, however it got there: unpaid (a
+ * delayed method), a settled one the writer could not record, a Stripe outage on the read, a database fault.
  */
-export async function reconcileStreamCreditsCheckout(orgId: string, sessionId: string): Promise<boolean> {
+export async function reconcileStreamCreditsReturn(orgId: string, sessionId: string): Promise<StreamReturnOutcome> {
   try {
     const session = await getStripe().checkout.sessions.retrieve(sessionId);
-    if (session.metadata?.kind !== "stream_credits") return false;
-    if (session.metadata.org_id !== orgId) return false;
-    if (session.status !== "complete") return false;
+    if (session.metadata?.kind !== "stream_credits") return "not_ours";
+    if (session.metadata.org_id !== orgId) return "not_ours";
+    if (session.status !== "complete") return "not_ours";
     // N4: logs, never pages — the webhook's delivery of this session is the one alert.
-    return await fulfilStreamCreditsCheckout(orgId, session, { alertStaff: false });
+    return (await fulfilStreamCreditsCheckout(orgId, session, { alertStaff: false })) ? "granted" : "processing";
   } catch (err) {
+    if (stripeNeverHeardOf(err)) return "not_ours";
     log.error({ err, orgId, sessionId }, "billing: stream_credits reconcile-on-return failed — the webhook will grant");
-    return false;
+    return "processing";
   }
+}
+
+/** `reconcileStreamCreditsReturn` for the callers that only ask "is the purchase in the ledger?" (the fixture page's Stream
+ *  panel). True exactly when the outcome is `granted`. */
+export async function reconcileStreamCreditsCheckout(orgId: string, sessionId: string): Promise<boolean> {
+  return (await reconcileStreamCreditsReturn(orgId, sessionId)) === "granted";
 }

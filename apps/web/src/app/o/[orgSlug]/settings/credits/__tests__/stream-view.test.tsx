@@ -45,7 +45,7 @@ const view = (over: Partial<StreamCreditsTabView> = {}): StreamCreditsTabView =>
   ...over,
 });
 
-async function markup(v: StreamCreditsTabView, loc: Loc = "en", extra: { notice?: "paid" | "pending" | null; cursor?: string } = {}): Promise<string> {
+async function markup(v: StreamCreditsTabView, loc: Loc = "en", extra: { notice?: "paid" | "processing" | null; cursor?: string } = {}): Promise<string> {
   const dict = await getDictionary(loc, "ui");
   return renderToStaticMarkup(
     <BillingStreamCredits
@@ -121,18 +121,31 @@ describe("BillingStreamCredits — a history row", () => {
     expect(half).not.toContain("Match 12");
   });
 
-  it("is ONE structure: a table with five column headers and one row per ledger row, the header row hidden below md", async () => {
+  it("is ONE structure: a table with five column headers and one row per ledger row of exactly five cells, the header row and the empty-match placeholder hidden below lg", async () => {
     const rows = [row({ id: "1" }), row({ id: "2" }), row({ id: "3", fixture: null, kind: "monthlyGrant", delta: 5 })];
     const out = await markup(view({ history: { rows, nextCursor: null } }));
     expect(out).toContain('role="table"');
     expect((out.match(/role="columnheader"/g) ?? []).length).toBe(5);
     expect((out.match(/data-testid="credits-stream-row"/g) ?? []).length).toBe(rows.length);
-    expect((out.match(/<div role="rowgroup" class="max-md:hidden">/g) ?? []).length, "the header rowgroup, phone-hidden").toBe(1);
-    // each row has exactly five cells
-    for (const m of out.split('data-testid="credits-stream-row"').slice(1)) {
-      const rowHtml = m.split('data-testid="credits-stream-row"')[0]!;
-      expect((rowHtml.match(/role="cell"/g) ?? []).length).toBeLessThanOrEqual(5);
+    expect((out.match(/<div role="rowgroup" class="max-lg:hidden">/g) ?? []).length, "the header rowgroup, hidden below lg").toBe(1);
+    // each row has EXACTLY five cells — a row with a match and a row without one alike, so the columns line up under the headers
+    const chunks = out.split('data-testid="credits-stream-row"').slice(1);
+    expect(chunks).toHaveLength(rows.length);
+    for (const [i, chunk] of chunks.entries()) {
+      expect((chunk.match(/role="cell"/g) ?? []).length, `row ${i + 1}`).toBe(5);
     }
+    // the row with no match keeps its column: a dash that is hidden on the stacked card (it has nothing to say there)
+    expect(chunks[2]).toContain('<div role="cell" class="text-sm text-slate-500 max-lg:hidden">—</div>');
+    expect(chunks[0]).not.toContain("—");
+  });
+
+  it("the table starts at lg, not md: the Settings rail leaves a 768px card ~490px wide, too narrow for five columns (m4)", async () => {
+    const out = await markup(view({ history: { rows: [row()], nextCursor: null } }));
+    expect(out, "the wide shape is lg's").toMatch(/lg:grid-cols-\[7rem_minmax\(0,1\.2fr\)_minmax\(0,1\.6fr\)_4rem_6rem\]/);
+    // …and no md-keyed class survives in the HISTORY (the pack tiles above it are a different grid and keep theirs)
+    const history = out.split('data-testid="credits-stream-history"')[1] ?? "";
+    expect(history.length, "anti-vacuity: the history section was found").toBeGreaterThan(200);
+    expect(history, "no md-keyed layout class survives in the history").not.toMatch(/(?:^|[\s"])(?:max-)?md:/);
   });
 });
 
@@ -210,8 +223,22 @@ describe("BillingStreamCredits — buying", () => {
 
   it("the return from Stripe is announced, in the words that match whether the credits are in", async () => {
     expect(await markup(view(), "en", { notice: "paid" })).toContain("Payment received. Your match credits are in your balance.");
-    expect(await markup(view(), "en", { notice: "pending" })).toContain("will appear in your balance within a minute");
-    expect(await markup(view())).not.toContain('data-testid="credits-stream-paid"');
+    const processing = await markup(view(), "en", { notice: "processing" });
+    expect(processing).toContain("Your payment is still processing.");
+    expect(processing, "a payment that has not cleared is not 'received'").not.toContain("Payment received");
+    expect(processing).toContain('data-testid="credits-stream-processing"');
+    expect(processing).not.toContain('data-testid="credits-stream-paid"');
+    const nothing = await markup(view());
+    expect(nothing).not.toContain('data-testid="credits-stream-paid"');
+    expect(nothing).not.toContain('data-testid="credits-stream-processing"');
+    // all four locales carry both sentences, and neither is the other
+    for (const loc of LOCALES) {
+      const d = dictFile(loc);
+      expect(d["settings.credits.stream.processing"], loc).toBeTruthy();
+      expect(d["settings.credits.stream.processing"], loc).not.toBe(d["settings.credits.stream.paid"]);
+      expect(await markup(view(), loc, { notice: "processing" }), loc).toContain(esc(d["settings.credits.stream.processing"]!));
+      expect(d["settings.credits.stream.paidPending"], `${loc}: the old key is gone`).toBeUndefined();
+    }
   });
 });
 

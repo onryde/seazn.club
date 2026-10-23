@@ -6451,7 +6451,7 @@
   "settings.credits.stream.notIncluded": "Phone streaming isn't on this plan, so match credits can't be bought. Credits you already hold, and their history, are below.",
   "settings.credits.stream.unavailable": "Phone streaming is unavailable right now, so match credits can't be bought. Your balance and history are below.",
   "settings.credits.stream.paid": "Payment received. Your match credits are in your balance.",
-  "settings.credits.stream.paidPending": "Payment received. Your match credits will appear in your balance within a minute.",
+  "settings.credits.stream.processing": "Your payment is still processing. Your match credits will appear in your balance as soon as it clears.",
   "settings.credits.stream.history": "Credit history",
   "settings.credits.stream.col.match": "Match",
   "settings.credits.stream.col.balance": "Balance after",

@@ -47,7 +47,7 @@ vi.mock("@/components/billing-credits", () => ({
 // default, which every old link opens — so the Streaming side's data modules are stubbed; credits/__tests__/page.test.tsx
 // is the one that drives that side.
 vi.mock("@/server/usecases/stream-credits-tab", () => ({ getStreamCreditsTab: vi.fn() }));
-vi.mock("@/server/usecases/stream-credits-checkout", () => ({ reconcileStreamCreditsCheckout: vi.fn() }));
+vi.mock("@/server/usecases/stream-credits-checkout", () => ({ reconcileStreamCreditsReturn: vi.fn() }));
 vi.mock("@/components/billing-stream-credits", () => ({ BillingStreamCredits: () => <div data-testid="stream-credits-panel" /> }));
 
 import { getDictionary } from "@/lib/i18n";

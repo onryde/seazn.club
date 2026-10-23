@@ -6417,7 +6417,7 @@ export type DictionaryKey =
   | "settings.credits.stream.older"
   | "settings.credits.stream.pages"
   | "settings.credits.stream.paid"
-  | "settings.credits.stream.paidPending"
+  | "settings.credits.stream.processing"
   | "settings.credits.stream.resets.one"
   | "settings.credits.stream.resets.other"
   | "settings.credits.stream.tbd"

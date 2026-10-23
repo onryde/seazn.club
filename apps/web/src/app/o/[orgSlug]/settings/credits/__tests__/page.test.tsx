@@ -11,7 +11,7 @@
 //   P4 reconcile gate   reconcile on any `checkout` value / with no session id     → "only a success return with a session id is reconciled"
 //   P5 cursor           hand `sp.before` to the reader unchecked                   → "a hand-edited before is the latest page, a real one is passed on"
 //   P6 who reads        read as a different actor / org than the page resolved     → "the Streaming side reads as the page's own actor, for the page's own org"
-//   P7 notice           invert paid / pending                                      → "the notice says whether the credits are already in the balance"
+//   P7 notice           invert paid / processing, or show a notice for `not_ours`  → "the notice says whether the credits are already in the balance"
 //   P8 payer            show the rail to a payer who is not a member               → "a payer who is not a member gets the Streaming side without the rail"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prerender } from "react-dom/static";
@@ -37,7 +37,7 @@ vi.mock("@/lib/resolve-locale", () => ({ resolveLocale }));
 vi.mock("@/lib/currency-server", () => ({ preferredCurrency }));
 vi.mock("@/server/usecases/credits-tab", () => ({ getCreditsTab }));
 vi.mock("@/server/usecases/stream-credits-tab", () => ({ getStreamCreditsTab }));
-vi.mock("@/server/usecases/stream-credits-checkout", () => ({ reconcileStreamCreditsCheckout: reconcile }));
+vi.mock("@/server/usecases/stream-credits-checkout", () => ({ reconcileStreamCreditsReturn: reconcile }));
 vi.mock("@/lib/entitlements", () => ({ orgPlanKey }));
 vi.mock("@/lib/credits", () => ({ walletIdFor, balance }));
 vi.mock("@/components/billing-credits", () => ({ BillingCredits: () => <div data-testid="ai-credits-panel" /> }));
@@ -178,10 +178,15 @@ describe("Settings → Credits → Streaming: what the page hands the view", () 
   });
 
   it("the notice says whether the credits are already in the balance (P7); no return, no notice", async () => {
-    reconcile.mockResolvedValue(true);
-    expect(await render({ kind: "stream", checkout: "success", session_id: "cs_1" })).toContain('data-notice="paid"');
-    reconcile.mockResolvedValue(false);
-    expect(await render({ kind: "stream", checkout: "success", session_id: "cs_1" })).toContain('data-notice="pending"');
+    // Three honest answers, each its own notice: in the balance, still processing, and nothing of this org's (a foreign or
+    // hand-edited session id, another kind of checkout, one never completed) — which says nothing at all (m3).
+    let judged = 0;
+    for (const [outcome, notice] of [["granted", "paid"], ["processing", "processing"], ["not_ours", "none"]] as const) {
+      reconcile.mockResolvedValue(outcome);
+      expect(await render({ kind: "stream", checkout: "success", session_id: "cs_1" }), outcome).toContain(`data-notice="${notice}"`);
+      judged += 1;
+    }
+    expect(judged, "anti-vacuity: all three outcomes were judged").toBe(3);
     expect(await render({ kind: "stream" })).toContain('data-notice="none"');
   });
 

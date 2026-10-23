@@ -6,10 +6,10 @@ import { BuyStreamCredits } from "@/components/buy-stream-credits";
 import type { Currency } from "@/lib/currency";
 import { routes } from "@/lib/routes";
 
-/** What the page learned from the buyer's return from Stripe: `paid` — the payment was fulfilled on the way in (the credits
- *  are in the balance below); `pending` — Stripe says the session is not settled yet, so the webhook will grant it a moment
- *  later. `null` — this is not a return. */
-export type StreamPurchaseNotice = "paid" | "pending" | null;
+/** What the page learned from the buyer's return from Stripe: `paid` — the credits are in the balance below; `processing` —
+ *  it is this org's checkout but the payment has not cleared (or the ledger not been written) yet, so the credits arrive a
+ *  moment later. `null` — this is not a return, or the session was not this org's: say nothing. */
+export type StreamPurchaseNotice = "paid" | "processing" | null;
 
 interface Props {
   view: StreamCreditsTabView;
@@ -71,16 +71,16 @@ function HistoryRow({ row, dict, locale }: { row: StreamHistoryRow; dict: Dict; 
       role="row"
       data-testid="credits-stream-row"
       data-kind={row.kind}
-      className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-3 gap-y-1 border-b border-purple-50 py-3 last:border-0 md:grid-cols-[7rem_minmax(0,1.2fr)_minmax(0,1.6fr)_4rem_6rem] md:items-center"
+      className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-3 gap-y-1 border-b border-purple-50 py-3 last:border-0 lg:grid-cols-[7rem_minmax(0,1.2fr)_minmax(0,1.6fr)_4rem_6rem] lg:items-center"
     >
-      <div role="cell" className="text-xs text-slate-500 max-md:order-4 md:text-sm">
+      <div role="cell" className="text-xs text-slate-500 max-lg:order-4 lg:text-sm">
         <time dateTime={row.dateIso}>{fmtDay(row.dateIso, locale)}</time>
       </div>
-      <div role="cell" className="min-w-0 text-sm font-medium text-slate-800 max-md:order-1">
+      <div role="cell" className="min-w-0 text-sm font-medium text-slate-800 max-lg:order-1">
         {activityLabel(dict, locale, row)}
       </div>
       {row.fixture ? (
-        <div role="cell" className="min-w-0 max-md:order-3 max-md:col-span-2">
+        <div role="cell" className="min-w-0 max-lg:order-3 max-lg:col-span-2">
           {/* The hit area is the full 44px without taking the room: the padding is paid back by the negative margin. */}
           <Link href={row.fixture.href} className="-my-3 block truncate py-3 text-sm text-purple-700 hover:underline">
             {fixtureLabel(dict, row.fixture)}
@@ -88,18 +88,18 @@ function HistoryRow({ row, dict, locale }: { row: StreamHistoryRow; dict: Dict; 
           <span className="block truncate text-xs text-slate-500">{row.fixture.competitionName}</span>
         </div>
       ) : (
-        <div role="cell" className="text-sm text-slate-500 max-md:hidden">
+        <div role="cell" className="text-sm text-slate-500 max-lg:hidden">
           —
         </div>
       )}
       <div
         role="cell"
-        className={`text-right text-sm font-semibold tabular-nums max-md:order-2 ${row.delta < 0 ? "text-slate-700" : "text-emerald-700"}`}
+        className={`text-right text-sm font-semibold tabular-nums max-lg:order-2 ${row.delta < 0 ? "text-slate-700" : "text-emerald-700"}`}
       >
         {row.delta > 0 ? `+${row.delta}` : row.delta}
       </div>
-      <div role="cell" className="text-right text-xs tabular-nums text-slate-500 max-md:order-5 md:text-sm">
-        <span className="md:hidden">{t(dict, "settings.credits.stream.col.balance")}: </span>
+      <div role="cell" className="text-right text-xs tabular-nums text-slate-500 max-lg:order-5 lg:text-sm">
+        <span className="lg:hidden">{t(dict, "settings.credits.stream.col.balance")}: </span>
         {row.balanceAfter}
       </div>
     </div>
@@ -111,8 +111,9 @@ function HistoryRow({ row, dict, locale }: { row: StreamHistoryRow; dict: Dict; 
  * allowance, the packs to buy and the ledger as the organiser reads it. The twin of `BillingCredits` (the AI wallet) in the
  * same card / eyebrow / balance-box idiom, so the two sides of the tab read as one screen.
  *
- * The history is ONE DOM: stacked two-line cards below `md`, a five-column table from `md` up, ordered with `max-md:order-*`
- * (never a second tree). It scrolls with the page — nothing here is a scroll region — and a long competition or entrant
+ * The history is ONE DOM: stacked two-line cards below `lg` (1024), a five-column table from `lg` up, ordered with `max-lg:order-*`
+ * (never a second tree). The cut is `lg`, not `md`: the Settings rail takes 176px beside the page, so at 768 the card is
+ * ~490px wide and a five-column grid left the Activity column ~60px; from 1024 the card is 744px and Activity gets ~180px. It scrolls with the page — nothing here is a scroll region — and a long competition or entrant
  * name truncates inside `min-w-0` all the way up the chain.
  */
 export function BillingStreamCredits({ view, dict, locale, orgId, orgSlug, currency, notice, cursor }: Props) {
@@ -131,10 +132,12 @@ export function BillingStreamCredits({ view, dict, locale, orgId, orgSlug, curre
       {notice && (
         <p
           role="status"
-          data-testid="credits-stream-paid"
-          className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900"
+          data-testid={notice === "paid" ? "credits-stream-paid" : "credits-stream-processing"}
+          className={`mb-4 rounded-lg border px-3 py-2 text-sm ${
+            notice === "paid" ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-amber-200 bg-amber-50 text-amber-900"
+          }`}
         >
-          {t(dict, notice === "paid" ? "settings.credits.stream.paid" : "settings.credits.stream.paidPending")}
+          {t(dict, notice === "paid" ? "settings.credits.stream.paid" : "settings.credits.stream.processing")}
         </p>
       )}
 
@@ -204,7 +207,7 @@ export function BillingStreamCredits({ view, dict, locale, orgId, orgSlug, curre
           </p>
         ) : (
           <div role="table" aria-label={t(dict, "settings.credits.stream.history")} data-testid="credits-stream-history">
-            <div role="rowgroup" className="max-md:hidden">
+            <div role="rowgroup" className="max-lg:hidden">
               <div
                 role="row"
                 className="grid grid-cols-[7rem_minmax(0,1.2fr)_minmax(0,1.6fr)_4rem_6rem] gap-x-3 border-b border-purple-100 py-2 text-xs font-medium text-slate-500"

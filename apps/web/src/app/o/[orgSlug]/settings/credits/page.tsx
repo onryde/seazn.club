@@ -13,7 +13,7 @@ import { CreditsKindSwitch, creditsKindOf } from "@/components/credits-kind-swit
 import { getCreditsTab } from "@/server/usecases/credits-tab";
 import { getStreamCreditsTab } from "@/server/usecases/stream-credits-tab";
 import { cursorFromQuery } from "@/server/usecases/stream-credit-history";
-import { reconcileStreamCreditsCheckout } from "@/server/usecases/stream-credits-checkout";
+import { reconcileStreamCreditsReturn } from "@/server/usecases/stream-credits-checkout";
 import { creditPackOptions } from "@/lib/currency";
 import { preferredCurrency } from "@/lib/currency-server";
 import { resolveLocale } from "@/lib/resolve-locale";
@@ -47,9 +47,12 @@ export default async function CreditsSettingsPage({
   if (kind === "stream") {
     // Back from Stripe: reconcile the session BEFORE the balance is read, so the credits are on the page even when this
     // render beats the webhook (best-effort, idempotent, never throws). Only a `checkout=success` return with a session id.
+    // Three honest answers: in the balance, still processing, or nothing of this org's was paid on that id (a foreign or
+    // hand-edited `session_id`, another kind of checkout, one never completed) — and that last one says nothing at all.
     let notice: StreamPurchaseNotice = null;
     if (sp.checkout === "success" && typeof sp.session_id === "string" && sp.session_id !== "") {
-      notice = (await reconcileStreamCreditsCheckout(orgId, sp.session_id)) ? "paid" : "pending";
+      const outcome = await reconcileStreamCreditsReturn(orgId, sp.session_id);
+      notice = outcome === "granted" ? "paid" : outcome === "processing" ? "processing" : null;
     }
     const cursor = cursorFromQuery(sp.before);
     const view = await getStreamCreditsTab(auth, orgId, { cursor });

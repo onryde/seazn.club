@@ -6451,7 +6451,7 @@
   "settings.credits.stream.notIncluded": "La diffusion depuis le téléphone n'est pas incluse dans cette formule : impossible d'acheter des crédits de match. Vos crédits actuels et leur historique sont ci-dessous.",
   "settings.credits.stream.unavailable": "La diffusion depuis le téléphone est indisponible pour le moment : impossible d'acheter des crédits de match. Votre solde et votre historique sont ci-dessous.",
   "settings.credits.stream.paid": "Paiement reçu. Vos crédits de match sont sur votre solde.",
-  "settings.credits.stream.paidPending": "Paiement reçu. Vos crédits de match apparaîtront sur votre solde d'ici une minute.",
+  "settings.credits.stream.processing": "Votre paiement est en cours de traitement. Vos crédits de match apparaîtront sur votre solde dès qu'il sera validé.",
   "settings.credits.stream.history": "Historique des crédits",
   "settings.credits.stream.col.match": "Match",
   "settings.credits.stream.col.balance": "Solde après",

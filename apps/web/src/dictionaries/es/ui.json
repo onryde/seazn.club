@@ -6451,7 +6451,7 @@
   "settings.credits.stream.notIncluded": "La transmisión desde el móvil no está incluida en este plan, así que no se pueden comprar créditos de partido. Los créditos que ya tienes y su historial aparecen abajo.",
   "settings.credits.stream.unavailable": "La transmisión desde el móvil no está disponible ahora mismo, así que no se pueden comprar créditos de partido. Tu saldo y tu historial aparecen abajo.",
   "settings.credits.stream.paid": "Pago recibido. Tus créditos de partido ya están en tu saldo.",
-  "settings.credits.stream.paidPending": "Pago recibido. Tus créditos de partido aparecerán en tu saldo en un minuto.",
+  "settings.credits.stream.processing": "Tu pago se está procesando. Tus créditos de partido aparecerán en tu saldo en cuanto se confirme.",
   "settings.credits.stream.history": "Historial de créditos",
   "settings.credits.stream.col.match": "Partido",
   "settings.credits.stream.col.balance": "Saldo después",
