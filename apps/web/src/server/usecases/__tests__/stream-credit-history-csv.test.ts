@@ -3,6 +3,8 @@
 //   C2 number bypass   route numbers through the text guard           → "a spend's change is a number a spreadsheet can sum"
 //   C3 quoting         drop the quote rule                            → "a name with a comma, a quote or a newline is quoted"
 //   C4 column set      reorder or drop a column                       → "the header and every row carry the same columns, in order"
+//   C5 fixture number  drop the fixture_no column's value             → "a side not yet decided is TBD … the fixture number always names the match"
+//   C6 undecided       drop the TBD fallback / the both-undecided empty → same test
 import { describe, expect, it } from "vitest";
 import { STREAM_HISTORY_KINDS, type StreamHistoryRow } from "../stream-credit-history";
 import { STREAM_HISTORY_CSV_HEADER, csvCell, streamHistoryCsv } from "../stream-credit-history-csv";
@@ -27,14 +29,24 @@ describe("streamHistoryCsv", () => {
 
   it("a row that moved for a match names it; a row that did not leaves the two columns empty", () => {
     const [, withMatch, without] = parse(streamHistoryCsv([row(), row({ kind: "packPurchase", delta: 5, balanceAfter: 5, fixture: null })]));
-    expect(withMatch).toEqual(["2026-10-20T09:00:00.000Z", "streamUsed", "-1", "4", "Hawks v Owls", "Autumn League"]);
-    expect(without).toEqual(["2026-10-20T09:00:00.000Z", "packPurchase", "5", "5", "", ""]);
+    expect(withMatch).toEqual(["2026-10-20T09:00:00.000Z", "streamUsed", "-1", "4", "3", "Hawks v Owls", "Autumn League"]);
+    expect(without).toEqual(["2026-10-20T09:00:00.000Z", "packPurchase", "5", "5", "", "", ""]);
   });
 
-  it("a side not yet decided is an empty name either side of the v, never the word undefined or null", () => {
-    const csv = streamHistoryCsv([row({ fixture: { homeName: "Hawks", awayName: null, fixtureNo: 1, competitionName: "L", href: "/x" } })]);
-    expect(csv).toContain("Hawks v ,");
-    expect(csv).not.toMatch(/undefined|null/);
+  it("a side not yet decided is TBD, never a dangling `v`, the word undefined or null — and the fixture number always names the match (C5, C6)", () => {
+    const f = (homeName: string | null, awayName: string | null) => ({ homeName, awayName, fixtureNo: 12, competitionName: "L", href: "/x" });
+    const cells = (home: string | null, away: string | null) => parse(streamHistoryCsv([row({ fixture: f(home, away) })]))[1]!;
+    expect(cells("Hawks", null).slice(4)).toEqual(["12", "Hawks v TBD", "L"]);
+    expect(cells(null, "Owls").slice(4)).toEqual(["12", "TBD v Owls", "L"]);
+    // nothing decided: no name to give, but the number still says which match
+    expect(cells(null, null).slice(4)).toEqual(["12", "", "L"]);
+    expect(cells("", "").slice(4), "an empty name is undecided too").toEqual(["12", "", "L"]);
+    expect(cells("", "Owls").slice(4), "an empty home name is undecided, not blank").toEqual(["12", "TBD v Owls", "L"]);
+    expect(cells("Hawks", "").slice(4), "an empty away name is undecided, not blank").toEqual(["12", "Hawks v TBD", "L"]);
+    // positive pair: both decided
+    expect(cells("Hawks", "Owls").slice(4)).toEqual(["12", "Hawks v Owls", "L"]);
+    const all = streamHistoryCsv([row({ fixture: f("Hawks", null) }), row({ fixture: f(null, null) })]);
+    expect(all).not.toMatch(/undefined|null| v ,|v$/m);
   });
 
   it("a spend's change is a number a spreadsheet can sum — a bare -1, not the text '-1 (C2)", () => {

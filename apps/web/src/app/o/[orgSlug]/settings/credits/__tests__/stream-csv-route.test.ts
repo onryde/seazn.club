@@ -70,7 +70,7 @@ describe.skipIf(!HAS_DB)("GET settings/credits/stream.csv", () => {
     expect(res.headers.get("content-disposition")).toBe('attachment; filename="stream-credits.csv"');
     const lines = (await res.text()).split("\r\n");
     expect(lines[0]).toBe([...STREAM_HISTORY_CSV_HEADER].join(","));
-    expect(lines.slice(1).map((l) => l.split(",").slice(1))).toEqual([["packPurchase", "5", "5", "", ""]]);
+    expect(lines.slice(1).map((l) => l.split(",").slice(1))).toEqual([["packPurchase", "5", "5", "", "", ""]]);
   });
 
   it("an org with an empty ledger exports the header alone", async () => {

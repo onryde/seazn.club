@@ -5,7 +5,16 @@
 import type { StreamHistoryRow } from "@/server/usecases/stream-credit-history";
 
 /** `activity` is the history kind key (`packPurchase`, `streamUsed`, …) — stable, never the localised label. */
-export const STREAM_HISTORY_CSV_HEADER = ["date", "activity", "change", "balance_after", "match", "competition"] as const;
+export const STREAM_HISTORY_CSV_HEADER = ["date", "activity", "change", "balance_after", "fixture_no", "match", "competition"] as const;
+
+/** A side not yet decided (a bracket slot, a TBD entrant) — the same word the screen shows, so a row never reads `Hawks v `. */
+const UNDECIDED = "TBD";
+
+/** `Hawks v Owls`; one undecided side is `Hawks v TBD`; both undecided is empty — the row's `fixture_no` names the match. */
+function matchName(f: { homeName: string | null; awayName: string | null }): string {
+  if (!f.homeName && !f.awayName) return "";
+  return `${f.homeName || UNDECIDED} v ${f.awayName || UNDECIDED}`;
+}
 
 /** One CSV cell.
  *  TEXT starting with = + - @ (or a leading tab/CR) is executed as a formula by Excel and Sheets, and the entrant and
@@ -27,7 +36,8 @@ export function streamHistoryCsv(rows: readonly StreamHistoryRow[]): string {
       r.kind,
       r.delta,
       r.balanceAfter,
-      r.fixture ? `${r.fixture.homeName ?? ""} v ${r.fixture.awayName ?? ""}` : "",
+      r.fixture ? r.fixture.fixtureNo : "",
+      r.fixture ? matchName(r.fixture) : "",
       r.fixture?.competitionName ?? "",
     ]),
   ];
