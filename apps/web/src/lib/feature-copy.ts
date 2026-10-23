@@ -151,7 +151,7 @@ export const FEATURE_REASONS: Record<string, string> = {
   // org's own logo), `import.events` (V396, the batch score-event importer) and
   // both streaming keys (V426) are refused only by a staff override now, and
   // say so, like the other override-only reasons above.
-  branding: "Your own club logo is switched off for this organisation.",
+  branding: "Your own logo is switched off for this organisation.",
   "import.events": "Importing score events from a file is switched off for this organisation.",
   "streaming.overlay": "Live-stream score overlays are switched off for this organisation.",
   "streaming.relay": "Streaming to your own channels is switched off for this organisation.",

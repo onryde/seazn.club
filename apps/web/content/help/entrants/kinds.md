@@ -24,7 +24,7 @@ The sport sets the starting shape, so most divisions need no thought here:
 
 To change the shape for one division, open its **Settings → Entrants**. You can widen the kinds it accepts, or turn squad numbers and the captain marker on or off. These are entrant settings, not format — they **stay editable after fixtures exist**, so you can open a division up to teams mid-season. The one guard: you can't remove a kind while an entrant of that kind is still registered — withdraw it first.
 
-## Clubs (Pro)
+## Clubs
 
 Clubs group teams across divisions — "Riverside CC" can field a team in three divisions and share one badge. Club badges cascade to teams automatically; a team can override with its own.
 

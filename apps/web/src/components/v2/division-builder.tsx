@@ -463,7 +463,7 @@ export function DivisionBuilder({
       try {
         await putSeed(buildScheduleSeed(seedInput));
       } catch {
-        // A multi-venue list needs Pro; without it the PUT 402s and the whole
+        // A multi-venue list can be refused by a staff override; then the PUT 402s and the whole
         // tab (dates + match length too) would vanish silently. Retry with a
         // single venue so everything else still lands.
         try {
@@ -1070,7 +1070,7 @@ export function DivisionBuilder({
             removeLabelFor={(n) => msg("boardset.removeVenue", { venue, n })}
           />
           {!constraintsAllowed && (
-            // Pre-empt the 402: a >1 court selection is Pro (doc 12 §5), and
+            // Pre-empt the 402: a staff override can refuse a >1 court selection, and
             // the server refuses the whole settings PUT if the wizard sends
             // one. `maxSelected={1}` above stops the organiser from picking
             // a second court in the first place; this just explains why.

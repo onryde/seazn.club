@@ -9,7 +9,7 @@ Constraints are the rules the auto-scheduler plays by. They live in the division
 ## The basics (all plans)
 
 - **Play hours** — when the venue is yours, per day.
-- **Courts** — what your court is called. More than one court in parallel is Pro.
+- **Courts** — what your courts are called, and how many run in parallel.
 - **Match length** — how long a fixture blocks a court, derived from the sport but overridable.
 
 Every time on these screens is picked from a list rather than typed to the minute. On the settings and constraints screens that list is the **quarter hours** — 9:00, 9:15, 9:30 — the times a timetable is normally built from. Dates keep their usual calendar picker.
@@ -18,7 +18,7 @@ When you set the time on an individual match — the **Schedule** button on a fi
 
 Registration opening and closing times are quarter hours too, plus **23:59**, so "entry closes at the end of Friday" stays sayable.
 
-## Finer control (Pro)
+## Finer control (all plans)
 
 - **Multiple courts** — run matches in parallel across a venue.
 - **Rest gaps** — minimum minutes between an entrant's matches.
