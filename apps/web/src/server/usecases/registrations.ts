@@ -5722,9 +5722,9 @@ export async function listRegistrations(
       // exported — B's contact names, emails, answers and payment state. The
       // pin is the entire boundary that endpoint sells.
       //
-      // 404, not 403: the repo's existing convention for a pin miss is that it
-      // adds no existence oracle (same comment at `resolvePinCompetition`), and
-      // a caller who may not scope to this division must not learn it exists.
+      // 404, not 403: the division is same-org (`withTenant`), and a caller
+      // who may not scope this division to that competition must not learn
+      // it exists. (The path pin itself fails closed with 403 in `apiKeyAuth`.)
       if (filters.competition_id && division.competition_id !== filters.competition_id) {
         throw new HttpError(404, "division not found");
       }
