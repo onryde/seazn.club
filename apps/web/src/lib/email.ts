@@ -105,34 +105,101 @@ export async function suppress(
 }
 
 // ---------------------------------------------------------------------------
-// Core send — never throws; returns true on provider acceptance.
-// Checks suppression list for non-transactional mail (pass transactional=true
+// Core send — never throws.
+//
+// `send()` (private, below) stays the boolean every existing sender uses.
+// `sendWithResult` is the typed form the email outbox calls: it also carries an
+// Idempotency-Key, Resend's message id, the status + error name on failure and
+// an optional timeout. Both are built from the same two halves, which the
+// outbox's attemptClaimed calls directly so the rules live in one place:
+//   - checkSendable: is this send allowed at all (API key, suppression)?
+//   - deliver:       POST to Resend, no re-check.
+// Suppression applies to non-transactional mail only (pass transactional=true
 // to bypass the list for critical auth emails like the sign-in link).
 // ---------------------------------------------------------------------------
 
-interface SendOptions {
+export interface SendOptions {
   to: string;
   subject: string;
   html: string;
   text: string;
   transactional?: boolean; // true = bypass suppression check
+  /** Resend `Idempotency-Key` (max 256 chars, honoured for 24 h): the same key
+   *  with the same payload returns the original response instead of sending
+   *  again. Omitted = no header, exactly as today. */
+  idempotencyKey?: string;
+  /** Resend message tags, sent as `[{ name, value }]`. */
+  tags?: Readonly<Record<string, string>>;
+  /** Abort the request after this many ms (reported as a network failure with
+   *  detail "timeout"). Omitted = no timeout, exactly as today. */
+  timeoutMs?: number;
 }
 
-async function send(opts: SendOptions): Promise<boolean> {
-  const key = process.env.RESEND_API_KEY;
-  if (!key) {
+/** Why a send was refused before any request was made. */
+export type SendBlocked = { ok: false; reason: "no_api_key" | "suppressed" };
+
+/** The gate's answer: sendable (with the key to use) or blocked (with why). */
+export type SendGate = { ok: true; apiKey: string } | SendBlocked;
+
+/** What a request to Resend produced (the part of SendResult after the gate). */
+export type DeliverResult =
+  | { ok: true; providerId: string | null }
+  | { ok: false; reason: "http"; status: number; errorName: string | null; detail: string }
+  | { ok: false; reason: "network"; detail: string }; // includes "timeout"
+
+export type SendResult = DeliverResult | SendBlocked;
+
+/**
+ * The single "may we send this at all" decision: the API key must be set, and a
+ * non-transactional address must not be on the suppression list. Order and log
+ * lines are today's: key first (so a keyless dev box never touches the DB),
+ * then suppression, and a failing suppression lookup counts as "not suppressed".
+ */
+export async function checkSendable(
+  opts: Pick<SendOptions, "to" | "subject" | "transactional">,
+): Promise<SendGate> {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) {
     console.warn(`[email] RESEND_API_KEY not set — would send "${opts.subject}" to ${opts.to}`);
-    return false;
+    return { ok: false, reason: "no_api_key" };
   }
 
   if (!opts.transactional) {
     const suppressed = await isSuppressed(opts.to).catch(() => false);
     if (suppressed) {
       console.warn(`[email] suppressed: ${opts.to}`);
-      return false;
+      return { ok: false, reason: "suppressed" };
     }
   }
 
+  return { ok: true, apiKey };
+}
+
+/** `res.json()` that survives an empty / non-JSON body (and a stub with no json()). */
+async function readJson(res: Response): Promise<unknown> {
+  try {
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+/** Resend's error `name` from a non-2xx body (`{statusCode,name,message}`), else null. */
+function errorNameOf(text: string): string | null {
+  try {
+    const name = (JSON.parse(text) as { name?: unknown } | null)?.name;
+    return typeof name === "string" ? name : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * POST one message to Resend. Does NOT consult the suppression list or the
+ * environment's API key — that is `checkSendable`'s job, done once by the
+ * caller. Never throws.
+ */
+export async function deliver(opts: SendOptions, apiKey: string): Promise<DeliverResult> {
   try {
     const body: Record<string, unknown> = {
       from: from(),
@@ -143,22 +210,49 @@ async function send(opts: SendOptions): Promise<boolean> {
     };
     const rt = replyTo();
     if (rt) body.reply_to = rt;
+    if (opts.tags && Object.keys(opts.tags).length > 0) {
+      body.tags = Object.entries(opts.tags).map(([name, value]) => ({ name, value }));
+    }
+
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    };
+    if (opts.idempotencyKey) headers["Idempotency-Key"] = opts.idempotencyKey;
 
     const res = await fetch(RESEND_ENDPOINT, {
       method: "POST",
-      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify(body),
+      // Only when asked for: a caller that passes no timeoutMs gets the request
+      // it always got. (Built inside the try: a bad value must not throw.)
+      ...(opts.timeoutMs !== undefined ? { signal: AbortSignal.timeout(opts.timeoutMs) } : {}),
     });
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
       console.error(`[email] send failed (${res.status}) to ${opts.to}: ${detail}`);
-      return false;
+      return { ok: false, reason: "http", status: res.status, errorName: errorNameOf(detail), detail };
     }
-    return true;
+    const parsed = (await readJson(res)) as { id?: unknown } | null;
+    return { ok: true, providerId: typeof parsed?.id === "string" ? parsed.id : null };
   } catch (err) {
     console.error(`[email] send error to ${opts.to}:`, err);
-    return false;
+    // AbortSignal.timeout() rejects fetch with a DOMException named TimeoutError.
+    const name = (err as { name?: unknown } | null)?.name;
+    const detail = name === "TimeoutError" ? "timeout" : err instanceof Error ? err.message : String(err);
+    return { ok: false, reason: "network", detail };
   }
+}
+
+/** Gate, then deliver. The typed result the email outbox is built on. */
+export async function sendWithResult(opts: SendOptions): Promise<SendResult> {
+  const gate = await checkSendable(opts);
+  if (!gate.ok) return gate;
+  return deliver(opts, gate.apiKey);
+}
+
+async function send(opts: SendOptions): Promise<boolean> {
+  return (await sendWithResult(opts)).ok;
 }
 
 // ---------------------------------------------------------------------------
