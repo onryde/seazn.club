@@ -38,6 +38,10 @@ export const KIND_HOOKS: Record<OutboxKind, KindHook> = {
   chess_invite: {},
 };
 
+/** Does this kind have a hook to run for a row that ended badly? (A kind with none is not "skipped" when a tick runs out of
+ *  budget: there was nothing to run.) */
+export const hasEndedBadlyHook = (kind: OutboxKind): boolean => KIND_HOOKS[kind]?.onEndedBadly !== undefined;
+
 /**
  * Run each row's kind hook. A hook that throws is logged and never rethrown, and the rows after it still run: the
  * caller is a request that already committed, or a worker that must move on to the next row. A row whose status is not

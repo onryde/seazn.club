@@ -14,7 +14,7 @@ const logMock = vi.hoisted(() => ({ error: vi.fn(), warn: vi.fn(), info: vi.fn()
 vi.mock("@/server/logger", () => ({ log: logMock }));
 
 import { ENDED_BADLY_STATUSES, OUTBOX_KINDS, OUTBOX_STATUSES, type OutboxKind } from "../constants";
-import { KIND_HOOKS, afterEndedBadly, findUnappliedEndings, type EndedRow } from "../hooks";
+import { KIND_HOOKS, afterEndedBadly, findUnappliedEndings, hasEndedBadlyHook, type EndedRow } from "../hooks";
 
 const row = (over: Partial<EndedRow> = {}): EndedRow => ({
   id: "00000000-0000-4000-8000-000000000001",
@@ -211,6 +211,23 @@ describe("findUnappliedEndings", () => {
     KIND_HOOKS.magic_link = {};
     await expect(findUnappliedEndings(10)).resolves.toEqual([]);
     expect(logMock.error).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("hasEndedBadlyHook", () => {
+  it("is true for a kind with an onEndedBadly hook and false otherwise; a finder alone is not a hook (every kind checked)", () => {
+    let checked = 0;
+    for (const kind of OUTBOX_KINDS) {
+      KIND_HOOKS[kind] = {};
+      expect(hasEndedBadlyHook(kind), `${kind}: empty`).toBe(false);
+      KIND_HOOKS[kind] = { findUnapplied: async () => [] };
+      expect(hasEndedBadlyHook(kind), `${kind}: finder only`).toBe(false);
+      KIND_HOOKS[kind] = { onEndedBadly: async () => {} };
+      expect(hasEndedBadlyHook(kind), `${kind}: hook`).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(OUTBOX_KINDS.length);
+    expect(checked).toBeGreaterThan(0);
   });
 });
 

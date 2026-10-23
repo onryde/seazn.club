@@ -31,6 +31,7 @@ vi.mock("@/server/email-outbox/transport", () => ({ deliver: deliverMock }));
 import { attemptClaimed, dispatchNow, toClaimedRow, type ClaimedRecord, type ClaimedRow } from "../attempt";
 import {
   ENDED_BADLY_STATUSES,
+  CLAIM_CUTOFF_MS,
   ENDING_BATCH_SIZE,
   HOOK_RESERVE_FRACTION,
   HOOK_RESERVE_MS,
@@ -48,6 +49,7 @@ import {
   STG_TICK_MS,
   TICK_BUDGET_MS,
   WORKER_BATCH_SIZE,
+  claimCutoffMs,
   idempotencyKey,
   type OutboxKind,
 } from "../constants";
@@ -63,8 +65,9 @@ const MIN = 60_000;
 /** A provider id unique to this run: provider_id is unique across the table. */
 const pid = (s: string): string => `re_${s}_${RUN}`;
 
-/** The `budgetMs` for which the SEND loop's share (the budget less the hook reserve) is `sendMs`. */
-const budgetFor = (sendMs: number): number => sendMs / (1 - HOOK_RESERVE_FRACTION);
+/** The `budgetMs` for which the CLAIM cut-off (the budget less the hook reserve, one send timeout and one pacing wait) is
+ *  `cutoffMs`: claims start while the tick's elapsed time is under it. */
+const budgetFor = (cutoffMs: number): number => (cutoffMs + SEND_TIMEOUT_MS + MIN_SEND_INTERVAL_MS) / (1 - HOOK_RESERVE_FRACTION);
 
 const ZERO: OutboxTickReport = { claimed: 0, sent: 0, retried: 0, dead: 0, suppressed: 0, expired: 0, failed: 0, deferred: 0 };
 const REPORT_KEYS = Object.keys(ZERO).sort();
@@ -156,10 +159,21 @@ describe("the schedule the worker keeps (no database)", () => {
     expect(HOOK_RESERVE_MS).toBe(TICK_BUDGET_MS * HOOK_RESERVE_FRACTION);
     // The controller's ruling: a quarter of the budget. A pinned ruling, not read back from the code under test.
     expect(HOOK_RESERVE_FRACTION).toBe(0.25);
-    // The sends keep a real share: at least a full batch's pacing waits fit in the part the reserve leaves them.
-    expect((WORKER_BATCH_SIZE - 1) * MIN_SEND_INTERVAL_MS).toBeLessThan(TICK_BUDGET_MS - HOOK_RESERVE_MS);
+    // The sends keep a real share: a full batch's pacing waits fit before the claim cut-off.
+    expect((WORKER_BATCH_SIZE - 1) * MIN_SEND_INTERVAL_MS).toBeLessThan(CLAIM_CUTOFF_MS);
     // A round of the bounded ending statements' hooks at a generous per-hook cost fits in the reserve.
     expect(HOOK_RESERVE_MS / (2 * ENDING_BATCH_SIZE + WORKER_BATCH_SIZE)).toBeGreaterThanOrEqual(25);
+  });
+
+  it("N1 (Task 4 re-review): the claim cut-off is the budget less the reserve, one send timeout and one pacing wait; it is positive and leaves the whole reserve", () => {
+    // Written out from the controller's rule, independent of the helper under test.
+    expect(CLAIM_CUTOFF_MS).toBe(TICK_BUDGET_MS - HOOK_RESERVE_MS - SEND_TIMEOUT_MS - MIN_SEND_INTERVAL_MS);
+    expect(claimCutoffMs(TICK_BUDGET_MS)).toBe(CLAIM_CUTOFF_MS);
+    expect(CLAIM_CUTOFF_MS).toBeGreaterThan(0);
+    // The last attempt can start one pacing wait after its claim and run to the timeout: it still ends before the reserve.
+    expect(CLAIM_CUTOFF_MS + MIN_SEND_INTERVAL_MS + SEND_TIMEOUT_MS + HOOK_RESERVE_MS).toBeLessThanOrEqual(TICK_BUDGET_MS);
+    // Scales with an injected budget the same way (the reserve is a fraction).
+    expect(claimCutoffMs(2 * TICK_BUDGET_MS)).toBe(2 * TICK_BUDGET_MS * (1 - HOOK_RESERVE_FRACTION) - SEND_TIMEOUT_MS - MIN_SEND_INTERVAL_MS);
   });
 
   it("M1 (Task 4 review): the pacing is Resend's own floor PLUS headroom, so a timer that fires early cannot breach the limit", () => {
@@ -587,12 +601,13 @@ describe.skipIf(!HAS_DB)("the email outbox retry worker (DB)", () => {
       expect(await tick(ids)).toEqual({ ...ZERO, claimed: 1, sent: 1, deferred: 2 });
     });
 
-    it("the send loop stops at TICK_BUDGET_MS less the hook reserve, to the millisecond (default budget)", async () => {
-      const sendBudget = TICK_BUDGET_MS - HOOK_RESERVE_MS;
-      // AT the send share: one attempt, the second claim is refused.
+    it("the send loop stops claiming at CLAIM_CUTOFF_MS (the budget less the reserve, a send timeout and a pacing wait), to the millisecond", async () => {
+      const cutoff = TICK_BUDGET_MS - HOOK_RESERVE_MS - SEND_TIMEOUT_MS - MIN_SEND_INTERVAL_MS;
+      expect(cutoff, "anti-vacuity: a real, positive cut-off").toBeGreaterThan(MIN_SEND_INTERVAL_MS);
+      // AT the cut-off: one attempt, the second claim is refused.
       const atIds = [await queue(), await queue(), await queue()];
       deliverMock.mockImplementation(async (m: Sent) => {
-        clock += sendBudget;
+        clock += cutoff;
         return { ok: true, providerId: pid(idOf(m)) };
       });
       expect(await tick(atIds)).toEqual({ ...ZERO, claimed: 1, sent: 1, deferred: 2 });
@@ -601,41 +616,78 @@ describe.skipIf(!HAS_DB)("the email outbox retry worker (DB)", () => {
       deliverMock.mockReset();
       const underIds = [await queue(), await queue(), await queue()];
       deliverMock.mockImplementation(async (m: Sent) => {
-        clock += sendBudget - 1;
+        clock += cutoff - 1;
         return { ok: true, providerId: pid(idOf(m)) };
       });
       expect(await tick(underIds)).toEqual({ ...ZERO, claimed: 2, sent: 2, deferred: 1 });
     });
 
-    it("hook starvation: sends that would use the WHOLE budget still leave the hooks to run in the same tick", async () => {
-      const HOOK_MS = 500;
-      const DELIVER_MS = 1_000; // slower than the pacing interval, so no waits blur the arithmetic
-      const BUDGET = 8 * DELIVER_MS;
-      const due = [];
-      for (let i = 0; i < 12; i++) due.push(await queue()); // far more than the budget can send
+    // N1 (Task 4 re-review): the reserve has to survive an attempt IN FLIGHT at the cut-off, not just the claims before it.
+    // The old check stopped claiming at budget * 0.75 (30 s): a claim at 29.998 s followed by a send of 15 s ends at 45 s,
+    // past the whole 40 s budget, and every hook is skipped. Each case below puts the hooks behind such a send.
+    const OLD_CUTOFF_MS = TICK_BUDGET_MS - HOOK_RESERVE_MS;
+    it.each([
+      { name: "every send takes the whole SEND_TIMEOUT_MS", sendMs: SEND_TIMEOUT_MS },
+      { name: "every send takes just under the timeout, timed so the old cut-off lets a THIRD claim start at 29.998 s", sendMs: OLD_CUTOFF_MS / 2 - 1 },
+    ])("N1: slow sends cannot eat the hook reserve: $name, and the hooks still run in the same tick", async ({ sendMs }) => {
+      expect(sendMs, "a send that really can take this long").toBeLessThanOrEqual(SEND_TIMEOUT_MS);
+      const HOOK_MS = 4_000;
+      const due: string[] = [];
+      for (let i = 0; i < 6; i++) due.push(await queue());
       const ending: string[] = [];
       for (let i = 0; i < 3; i++) ending.push(await queue({ kind: "chess_invite", refType: "fixture_seat" }));
       for (const id of ending) await expireNow(id);
       const ran: string[] = [];
+      let sendsEndedAt: number | null = null;
       KIND_HOOKS.chess_invite = {
         onEndedBadly: async (row) => {
+          sendsEndedAt ??= clock; // the first hook starts the moment the sends are over
           clock += HOOK_MS;
           ran.push(row.id);
         },
       };
       deliverMock.mockImplementation(async (m: Sent) => {
-        clock += DELIVER_MS;
+        clock += sendMs;
         return { ok: true, providerId: pid(idOf(m)) };
       });
 
-      const sendShare = BUDGET * (1 - HOOK_RESERVE_FRACTION);
-      const wouldSend = Math.ceil(sendShare / DELIVER_MS); // claims start while elapsed < the send share
-      const report = await tick([...due, ...ending], { budgetMs: BUDGET });
-      expect(wouldSend, "anti-vacuity: the sends really are capped below what the whole budget would allow").toBeLessThan(BUDGET / DELIVER_MS);
-      expect(report).toEqual({ ...ZERO, claimed: wouldSend, sent: wouldSend, expired: ending.length, deferred: due.length - wouldSend });
-      expect(ran.sort(), "every hook ran in the SAME tick").toEqual([...ending].sort());
+      const claims = Math.ceil(CLAIM_CUTOFF_MS / sendMs); // claims start while elapsed < the cut-off (sendMs > the pacing wait)
+      const report = await tick([...due, ...ending]); // the real default budget
+      expect(report).toEqual({ ...ZERO, claimed: claims, sent: claims, expired: ending.length, deferred: due.length - claims });
+      expect(claims, "anti-vacuity: the new cut-off really cuts claims the old one allowed").toBeLessThan(Math.ceil(OLD_CUTOFF_MS / sendMs));
+      expect(sendsEndedAt, "the sends ended inside the send share").toBeLessThanOrEqual(TICK_BUDGET_MS - HOOK_RESERVE_MS);
+      expect([...ran].sort(), "every hook ran in the SAME tick").toEqual([...ending].sort());
       expect(logMock.warn, "none was skipped").not.toHaveBeenCalled();
-      expect(clock, "and the tick stayed inside its budget").toBeLessThanOrEqual(BUDGET);
+      expect(clock, "and the tick stayed inside its budget").toBeLessThanOrEqual(TICK_BUDGET_MS);
+    });
+
+    it("N1: the pacing wait before the last attempt counts: a claim just under the cut-off still ends its slow send inside the send share", async () => {
+      const cutoff = 2.5 * MIN_SEND_INTERVAL_MS;
+      const budget = budgetFor(cutoff);
+      expect(claimCutoffMs(budget), "the arithmetic reproduces the cut-off exactly").toBe(cutoff);
+      // Fast sends (0 ms) march on at one pacing wait apiece; the attempt that STARTS at 4 pacing waits is the slow one.
+      const SLOW_FROM = 4 * MIN_SEND_INTERVAL_MS;
+      const ids: string[] = [];
+      for (let i = 0; i < 8; i++) ids.push(await queue());
+      const ending = await queue({ kind: "chess_invite", refType: "fixture_seat" });
+      await expireNow(ending);
+      let sendsEndedAt: number | null = null;
+      KIND_HOOKS.chess_invite = {
+        onEndedBadly: async () => {
+          sendsEndedAt ??= clock;
+        },
+      };
+      deliverMock.mockImplementation(async (m: Sent) => {
+        if (clock >= SLOW_FROM) clock += SEND_TIMEOUT_MS;
+        return { ok: true, providerId: pid(idOf(m)) };
+      });
+      // Claims happen at 0, 0, 1, 2 pacing waits (all < 2.5) and the 5th at 3 is refused: 1 + ceil(2.5) = 4 attempts, the last
+      // starting at 3 waits, before the slow one. A cut-off without the pacing term would take a 5th, starting at 4 waits.
+      const claims = 1 + Math.ceil(cutoff / MIN_SEND_INTERVAL_MS);
+      const report = await tick([...ids, ending], { budgetMs: budget });
+      expect(report.claimed).toBe(claims);
+      expect(sendsEndedAt, "the hook ran").not.toBeNull();
+      expect(sendsEndedAt!).toBeLessThanOrEqual(budget * (1 - HOOK_RESERVE_FRACTION));
     });
 
     it("stops at the first 429: nothing else is claimed, the rest stay queued untouched and count in deferred", async () => {
@@ -955,6 +1007,26 @@ describe.skipIf(!HAS_DB)("the email outbox retry worker (DB)", () => {
       expect((await get(heldExpiring)).status, "the held expiring row was left for later").toBe("queued");
       expect((await get(heldExhausted)).status, "the held exhausted row was left for later").toBe("sending");
       expect(await tick(all), "released: the next tick ends both").toEqual({ ...ZERO, expired: 1, dead: 1 });
+    });
+
+    it("N2 (Task 4 re-review): only rows whose kind HAS a hook count as skipped; a skipped magic_link row (no hook) raises no warning", async () => {
+      KIND_HOOKS.magic_link = {};
+      KIND_HOOKS.chess_invite = { onEndedBadly: hookSpy };
+      const noHook = [await queue(), await queue()]; // magic_link: nothing to run, so nothing to skip
+      for (const id of noHook) await expireNow(id);
+      expect(await tick(noHook, { budgetMs: 0 })).toEqual({ ...ZERO, expired: 2 });
+      expect(logMock.warn, "nothing with a hook was skipped").not.toHaveBeenCalled();
+
+      // The pair (a negative needs its positive): rows of a kind WITH a hook, skipped the same way, do raise it, and the
+      // count is theirs alone.
+      const withHook = await queue({ kind: "chess_invite", refType: "fixture_seat" });
+      const plain = await queue();
+      await expireNow(withHook);
+      await expireNow(plain);
+      expect(await tick([withHook, plain], { budgetMs: 0 })).toEqual({ ...ZERO, expired: 2 });
+      expect(logMock.warn).toHaveBeenCalledTimes(1);
+      expect(logMock.warn.mock.calls[0]![0]).toMatchObject({ skippedHooks: 1 });
+      expect(hookSpy, "and nothing ran: the budget was spent").not.toHaveBeenCalled();
     });
 
     it("the two statements have a bound each: ENDING_BATCH_SIZE + 1 expired and as many dead in one tick end ENDING_BATCH_SIZE of each", async () => {

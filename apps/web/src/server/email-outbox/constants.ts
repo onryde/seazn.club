@@ -118,8 +118,21 @@ export const TICK_BUDGET_MS = 40_000;
  *  and defer every hook for ever. A fraction and not a fixed time, so an injected shorter budget keeps the proportion. */
 export const HOOK_RESERVE_FRACTION = 0.25;
 
-/** The reserve at the default budget: sends stop at `TICK_BUDGET_MS - HOOK_RESERVE_MS` (30 s), hooks may run to 40 s. */
+/** The reserve at the default budget (10 s of 40 s): the sends are over by `TICK_BUDGET_MS - HOOK_RESERVE_MS`, hooks may
+ *  run to `TICK_BUDGET_MS`. */
 export const HOOK_RESERVE_MS = TICK_BUDGET_MS * HOOK_RESERVE_FRACTION;
+
+/**
+ * The elapsed time after which the send loop claims nothing more (N1, Task 4 re-review). A claim just under it can still
+ * wait out one pacing interval and then run a request to its timeout, so the cut-off is the send share of the budget
+ * (the budget less the hook reserve) LESS `MIN_SEND_INTERVAL_MS` and `SEND_TIMEOUT_MS`: the last attempt ends inside the
+ * send share, and the reserve is whole. One formula, for the injected budgets of the tests and for the default.
+ */
+export const claimCutoffMs = (budgetMs: number): number =>
+  budgetMs * (1 - HOOK_RESERVE_FRACTION) - SEND_TIMEOUT_MS - MIN_SEND_INTERVAL_MS;
+
+/** `claimCutoffMs` at the default budget: 40 s less the 10 s reserve, the 15 s timeout and the 0.6 s pacing = 14.4 s. */
+export const CLAIM_CUTOFF_MS = claimCutoffMs(TICK_BUDGET_MS);
 
 /** Rows each of the worker's two ending statements (expire, exhaust) ends at most in one tick (M2, Task 4 review). Every
  *  ended row costs a kind hook afterwards, so an unbounded statement after an outage would turn one tick into minutes of

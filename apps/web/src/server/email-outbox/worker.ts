@@ -19,9 +19,9 @@ import "server-only";
 //     the SAME idempotency key yields one provider message), sets `sending`, `attempts + 1` and a lease in the claiming
 //     statement (R10: the post-send writes are fenced on that attempt number), and skips rows another tick holds;
 //  4. before each attempt but the first waits out the rest of MIN_SEND_INTERVAL_MS since the previous attempt began
-//     (Resend: 2 requests a second), and stops claiming when the SEND share of the budget is spent (TICK_BUDGET_MS less
-//     the HOOK_RESERVE_FRACTION kept for step 6, so sends can never starve the hooks), when the batch is full, or at the
-//     first 429;
+//     (Resend: 2 requests a second), and stops claiming at the claim cut-off (`claimCutoffMs`: the budget less the
+//     HOOK_RESERVE_FRACTION kept for step 6, one send timeout and one pacing wait, so an attempt in flight at the cut-off
+//     still ends before the reserve and sends can never starve the hooks), when the batch is full, or at the first 429;
 //  5. counts, as `deferred`, the rows that were due right now and were not taken;
 //  6. runs the kind hooks (`afterEndedBadly`), one row at a time, for every row steps 1-3 ended, plus (R9) every
 //     badly-ended row whose effect a kind says was never applied (`findUnappliedEndings`): a process that dies between a
@@ -37,16 +37,16 @@ import { log } from "@/server/logger";
 import { attemptClaimed, endedRowFor, errFields, toClaimedRow, type AttemptOutcome, type ClaimedRecord } from "./attempt";
 import {
   ENDING_BATCH_SIZE,
-  HOOK_RESERVE_FRACTION,
   LEASE_MS,
   MAX_ATTEMPTS,
   MIN_SEND_INTERVAL_MS,
   REDRIVE_LIMIT,
   TICK_BUDGET_MS,
   WORKER_BATCH_SIZE,
+  claimCutoffMs,
   type OutboxKind,
 } from "./constants";
-import { afterEndedBadly, findUnappliedEndings, type EndedRow } from "./hooks";
+import { afterEndedBadly, findUnappliedEndings, hasEndedBadlyHook, type EndedRow } from "./hooks";
 import { outboxRoleOk } from "./role-check";
 
 /**
@@ -70,8 +70,8 @@ export type OutboxTickReport = {
 export type RunOutboxTickOptions = {
   /** Wait this long. Default: a real timer. The test seam for pacing. */
   sleep?: (ms: number) => Promise<void>;
-  /** The whole tick's budget. Sends stop at `budgetMs * (1 - HOOK_RESERVE_FRACTION)`; hooks and the re-drive stop at
-   *  `budgetMs`. Default TICK_BUDGET_MS. */
+  /** The whole tick's budget. Claims stop at `claimCutoffMs(budgetMs)`, leaving the hook reserve whole; hooks and the
+   *  re-drive stop at `budgetMs`. Default TICK_BUDGET_MS. */
   budgetMs?: number;
   /** A monotonic clock in ms, behind the pacing and the budget. Default `performance.now()`. The test seam for both. */
   nowMs?: () => number;
@@ -209,8 +209,9 @@ export async function runOutboxTick(opts: RunOutboxTickOptions = {}): Promise<Ou
   }
 
   const startedAt = nowMs();
-  // The sends stop here; the hooks (step 6) may run on to `budgetMs`, so they always have the reserve to themselves.
-  const sendBudgetMs = budgetMs * (1 - HOOK_RESERVE_FRACTION);
+  // No claim after this: an attempt started just before it can wait out a pacing interval and run to its timeout, and it
+  // must still end inside the send share, so the hooks (step 6, which may run on to `budgetMs`) have the reserve whole.
+  const cutoffMs = claimCutoffMs(budgetMs);
   const ended: EndedRow[] = [];
 
   const expired = await expirePastDue(opts.onlyIds);
@@ -224,7 +225,7 @@ export async function runOutboxTick(opts: RunOutboxTickOptions = {}): Promise<Ou
   let drained = false;
   let lastAttemptStartedAt: number | null = null;
   for (let i = 0; i < WORKER_BATCH_SIZE; i++) {
-    if (nowMs() - startedAt >= sendBudgetMs) break;
+    if (nowMs() - startedAt >= cutoffMs) break;
     const rec = await claimOne(opts.onlyIds);
     if (!rec) {
       drained = true;
@@ -274,7 +275,7 @@ export async function runOutboxTick(opts: RunOutboxTickOptions = {}): Promise<Ou
       if (handled.has(row.id)) continue;
       handled.add(row.id);
       if (overBudget()) {
-        skippedHooks++;
+        if (hasEndedBadlyHook(row.kind)) skippedHooks++; // a kind with no hook had nothing to skip
         continue;
       }
       await afterEndedBadly([row]);
