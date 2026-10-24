@@ -255,7 +255,7 @@ field (baseline format 2, tree format 3) is *newly recorded* and follows owner r
 above). With the source moving in the same diff, the new field would record the NEW rule and every older field
 could not see it, so the sport owes a **minor** (`N newly recorded stream(s) of player stats while the change
 touches fold source: <paths> (land the stats field alone, or raise FOLD_MINOR)`), not a major: the stats
-field cannot make a phone disagree with the server. A harness-only rewrite of an EXISTING field stays a
+field cannot make a phone disagree with the server. `STATS_FOLD_VERSION` must rise then too (below). A harness-only rewrite of an EXISTING field stays a
 **major** (D34, owner ruling Q6).
 
 The report prints ` stats-only N` after `recorded N` only when N is above zero.
@@ -273,9 +273,16 @@ is independent of the epoch pair: a major or a minor that rose does not settle i
   (`statsMoved` in the report row), not only the stats-only ones that owe the sport's minor.
 - **It never falls**: a lower number than the baseline's is a violation whatever else changed
   (`STATS_FOLD_VERSION went down (a -> b)`).
-- **It is owed nothing** by a stream that **gains** its stats (a 2 -> 3 reformat, with or without fold source touched:
-  nothing stored was computed differently) or by a stream that is **removed or re-recorded** (its input changed, so
-  its old and new stats are not comparable; its sport owes the major instead).
+- **It is owed by a stream that GAINS its stats (a 2 -> 3 reformat) only when the change touches fold source**, as
+  the sport then owes its minor (the classifier is the same, see "Corpus format 3"): the line is
+  `STATS_FOLD_VERSION must rise: N stream(s) (<sports>) newly record player stats while the change touches fold
+  source: <paths> (land the stats field alone, or raise STATS_FOLD_VERSION)`. With the source moving in the same
+  diff, the stats the recorder wrote were folded by code this change may have moved, and a snapshot stored under
+  the old number would go on being served as the old fold computed it. A data-only reformat of an untouched tree
+  (the recorder ran the baseline's own code) owes it nothing: nothing stored was computed differently. A stream that
+  gains the kernel fields beside its stats counts here too, and a major that rose does not pay it.
+- **It is owed nothing** by a stream that is **removed or re-recorded** (its input changed, so its old and new stats
+  are not comparable; its sport owes the major instead), nor by a baseline with no stats module (below).
 - **It is read by its exact declaration**, never imported (`stats.ts` has imports of its own): one line,
   `export const STATS_FOLD_VERSION = <positive integer>;`, at the start of a line, once. The guard **fails closed**: a
   tree whose file is missing, or whose constant cannot be read that way (a type annotation, a second declaration, `0`,
@@ -286,7 +293,9 @@ is independent of the epoch pair: a major or a minor that rose does not settle i
   unbumped stats change through by moving the file in the same PR: exit 2, as for a moved epoch table.
 
 The report gains one line, `fold-epoch: STATS_FOLD_VERSION: a -> b, player stats moved in N stream(s) (<sports>)`
-(plus ` - VIOLATION: ...`), and the summary line ends `, STATS_FOLD_VERSION a -> b`.
+(plus `, newly recorded in M stream(s) (<sports>) under touched fold source` when M is above zero, and
+` - VIOLATION: ...`), and the summary line ends `, STATS_FOLD_VERSION a -> b`. The count of violations in the summary
+line includes the stats line when it is one.
 
 The reformat itself (`REFORMAT_GOLDEN=1`, 2 -> 3) is **data only and lands in its own commit**: every stream gains
 `playerStats`, the corpus gains `format: 3`, every other byte is unchanged, and `fold-epoch:check --against <the
@@ -324,7 +333,7 @@ depending on who computes what moved:
 | format 2 -> 1: the corpus is format 1 where the baseline's was format 2 (its streams matched or re-recorded alike) | red; no bump settles it |
 | format 3: only a recorded `playerStats` differs, on a stream both sides record (the server's leaderboard fold moved; nothing a phone computes did) | **minor**, plus `STATS_FOLD_VERSION` must rise (`src/stats/stats.ts`, enforced since GF-3 T1, independent of the epoch pair: a major bump does not settle it) |
 | format 3: the stream gains `playerStats` for the first time, nothing it held moved, and the change touches no fold source | nothing |
-| the same, but the change touches fold source (see "Corpus format 3") | **minor** |
+| the same, but the change touches fold source (see "Corpus format 3") | **minor**, plus `STATS_FOLD_VERSION` must rise |
 | format 3 -> 2 or 1: the corpus fell to an earlier format | red; no bump settles it |
 | streams only appended (`EXTEND_GOLDEN`) | nothing |
 
@@ -499,7 +508,10 @@ hand in the same PR; no tool will tell you):
   rule only reachable through a ctx the recorder does not build (it builds the
   fixture's own two team sheets and nothing else). Those owe a **manual minor**, raised by hand in the PR (`FOLD_MINOR`); no tool will tell you.
   `STATS_FOLD_VERSION` is owed by hand for them too: the guard enforces its rise only for
-  a move it can SEE in the recorded rows.
+  a move it can SEE in the recorded rows. It does not see a stats-rule change whose every moved
+  stream is ALSO re-recorded in the same PR either: a re-recorded stream is not compared (its
+  input changed, so its old and new stats are not comparable), the sport owes its major for
+  the re-record, and the `STATS_FOLD_VERSION` rise is owed by hand.
   The parts of the server's leaderboard the recorder does not run, each read from
   the code and each owing the same manual minor when it changes:
   - `sumPlayerStats` and the division re-derivation of ratio metrics
