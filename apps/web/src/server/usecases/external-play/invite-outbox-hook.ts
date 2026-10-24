@@ -16,7 +16,15 @@ import "server-only";
 //   - complained                                  the mail ARRIVED and the player marked it spam: NEVER releases the seat;
 //   - bounced                                     releases, even after `delivered` (a late bounce: the inbox refused the mail);
 //   - failed, suppressed, dead, expired           release;
-//   - replaced                                    ignored: a newer row for the same recipient carries the outcome.
+//   - replaced, with a provider id                a newer row superseded a mail Resend ACCEPTED (M1, below): the seat stays stamped;
+//   - replaced, without one                       ignored: a newer row for the same recipient carries the outcome.
+//
+// M1 (final review). The replace rule supersedes a `sent` row, and a row stays `sent` for as long as the provider's `email.delivered`
+// is not subscribed, so a resend that then dies would leave the hook looking at a dead row beside a replaced one and release a seat
+// whose FIRST invite the provider took. The mail went out; the stamp stands (the same spirit as a complaint: the player may well
+// hold it). The clause is on `replaced` rows ONLY: a `bounced`, `failed` or `suppressed` row carries the provider's id too and
+// still releases (R12). The cost, accepted: a first mail that bounced later but was replaced before the bounce keeps the seat
+// stamped, and the organiser can Reinvite.
 //
 // A seat is left alone when a game exists, or may exist, behind its board (`bridgeTakesInvites`, Review Focus 3): a stamp there is
 // no longer an invite's record, and releasing it would unbind a row a game stands behind.
@@ -35,6 +43,15 @@ import {
 
 /** The statuses of a row that keep its seat stamped: every live one, and a complaint (it arrived; see the header). */
 export const SEAT_HOLDING_STATUSES: readonly OutboxStatus[] = [...LIVE_STATUSES, "complained"];
+
+/**
+ * THE RULE for "this email keeps its seat's stamp", in one place: both the hook and the finder (`findUnappliedChessEndings`, so a
+ * row it reports is one the hook will release) ask it. A holding status, or a `replaced` row the provider had already accepted (it
+ * has a provider id: M1, see the header). Written unqualified and parenthesised on purpose: inside the finder's `not exists`
+ * subselect an unqualified column binds to the row being tested (`s`), and the `or` must not escape into the caller's `and` chain.
+ */
+const holdsSeat = () =>
+  sql`(status = any(${SEAT_HOLDING_STATUSES as OutboxStatus[]}::text[]) or (status = 'replaced' and provider_id is not null))`;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** `Date.prototype.toISOString()`'s shape, the only one `queueFixtureInvite` writes; checked in SQL too (see the finder). */
@@ -84,9 +101,9 @@ export async function chessInviteEndedBadly(row: EndedRow): Promise<void> {
       select id from email_outbox
        where kind = 'chess_invite' and ref_type = ${CHESS_SEAT_REF_TYPE} and ref_id = ${ref}
          and meta->>'stampedAt' = ${seat.stampedAt.toISOString()}
-         and status = any(${SEAT_HOLDING_STATUSES as OutboxStatus[]}::text[])
+         and ${holdsSeat()}
        limit 1`;
-    if (held) return; // an email for this stamp can still arrive, or did
+    if (held) return; // an email for this stamp can still arrive, did, or (M1) was accepted before a newer one replaced it
     await releaseSeat(tx, seat.fixtureId, seat.colour, seat.stampedAt);
   });
 }
@@ -124,7 +141,7 @@ export async function findUnappliedChessEndings(limit: number): Promise<EndedRow
              select 1 from email_outbox s
               where s.kind = 'chess_invite' and s.ref_type = o.ref_type and s.ref_id = o.ref_id
                 and s.meta->>'stampedAt' = o.meta->>'stampedAt'
-                and s.status = any(${SEAT_HOLDING_STATUSES as OutboxStatus[]}::text[]))
+                and ${holdsSeat()})
          order by o.ref_id, o.meta->>'stampedAt', o.status_at, o.id
       ) d
      order by d.status_at, d.id

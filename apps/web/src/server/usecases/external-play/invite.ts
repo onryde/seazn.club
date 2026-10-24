@@ -284,7 +284,10 @@ export async function dispatchAndClassify(seatRowIds: readonly (readonly string[
  *     without its rows. A seat invited before is re-mailed and keeps its stamp;
  *     the outbox's replace rule supersedes its older unfinished row for the
  *     same address, while a DELIVERED older row stays and keeps the seat
- *     stamped. A claimed seat whose rows all end badly is released by the
+ *     stamped - and so does a replaced row the provider had already ACCEPTED
+ *     (it carries the provider's id: the first invite went out, M1), so a
+ *     resend that then fails never un-invites a player who holds a working
+ *     link. A claimed seat whose rows all end badly is released by the
  *     outbox's chess hook, so the round's next open retries it.
  *
  * Returns the seats the provider took (`emailed`) and the seats still being tried (`retrying`, queued behind a retry or a rate

@@ -1179,6 +1179,107 @@ describe.skipIf(!HAS_DB)("the organiser's Resend writes a fresh row each time", 
     expect(stampOf(await bridgeOf(b.fixtureId), colour), "a delivered row keeps the seat stamped").not.toBeNull();
   });
 
+  // M1 (final review): the replace rule supersedes a `sent` row (V470: queued, sending, sent, delayed), and `sent` is where a row
+  // STAYS on a deployment whose webhook is not subscribed to `email.delivered`. So a resend that then fails would leave the hook
+  // looking at a dead row and a replaced one - and release a seat whose FIRST invite Resend had accepted. A replaced row that carries
+  // the provider's id is mail that went out: it keeps the stamp. (A `bounced` / `failed` row carries the id too and still releases
+  // - R12 - which is why the clause is on `replaced` rows only.)
+  describe("M1 - a resend that fails does not release a seat whose first invite Resend accepted", () => {
+    it("the resend's row is refused at once: the seat stays stamped, and the replaced row is the one that carries the provider's id", async () => {
+      const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
+      const b = r.boards[0]!;
+      await open(r, OPENED);
+      const colour = await colourOf(b.fixtureId, b.home.email);
+      const [first] = await rowsForSeat(b.fixtureId, colour);
+      expect(first!.status, "premise: the open's mail was accepted and stays 'sent' (no delivered event arrives)").toBe("sent");
+      expect(first!.provider_id, "premise: it carries Resend's id").not.toBeNull();
+
+      mail.fail.add(b.home.email);
+      expect(await resend(r, b.fixtureId, new Date(OPENED.getTime() + MIN))).toEqual({ emailed: 1, retrying: 0 });
+      const seat = await rowsForSeat(b.fixtureId, colour);
+      expect(seat.map((x) => x.status).sort(), "the first row was replaced, the new one is dead").toEqual(["dead", "replaced"]);
+      expect((await freshRow(first!.id)).provider_id, "the replaced row keeps the id Resend gave it").toBe(first!.provider_id);
+      expect(stampOf(await bridgeOf(b.fixtureId), colour), "the first invite went out: the seat stays stamped").not.toBeNull();
+    });
+
+    it("through the real webhook: the resend's mail is accepted and then BOUNCES - the replaced first mail still holds the seat", async () => {
+      const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
+      const b = r.boards[0]!;
+      await open(r, OPENED);
+      const colour = await colourOf(b.fixtureId, b.home.email);
+      const [first] = await rowsForSeat(b.fixtureId, colour);
+      expect(await resend(r, b.fixtureId, new Date(OPENED.getTime() + MIN))).toEqual({ emailed: 2, retrying: 0 });
+      const second = (await rowsForSeat(b.fixtureId, colour)).find((x) => x.id !== first!.id)!;
+      expect(second.status, "premise: the resend's row was accepted too").toBe("sent");
+      expect(await statusOf(first!.id), "premise: and it replaced the first").toBe("replaced");
+
+      await providerEvent(second, "email.bounced");
+      expect(await statusOf(second.id)).toBe("bounced");
+      expect(stampOf(await bridgeOf(b.fixtureId), colour), "the first mail was accepted: a bounce of the second does not release").not.toBeNull();
+    });
+
+    it("through the real worker: the resend's row retries until it is dead - the replaced first mail still holds the seat", async () => {
+      const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
+      const b = r.boards[0]!;
+      const opened = new Date(); // the real clock: the tick judges expiry on the database's own time
+      await open(r, opened);
+      const colour = await colourOf(b.fixtureId, b.home.email);
+      const [first] = await rowsForSeat(b.fixtureId, colour);
+      mail.retry.add(b.home.email);
+      expect(await resend(r, b.fixtureId, new Date(opened.getTime() + 1000))).toEqual({ emailed: 1, retrying: 1 });
+      const second = (await rowsForSeat(b.fixtureId, colour)).find((x) => x.id !== first!.id)!;
+      expect(second.status, "premise: the resend's row is queued behind a 503").toBe("queued");
+
+      await makeLastAttempt(second.id);
+      expect(await tick([second.id])).toMatchObject({ dead: 1 });
+      expect(await statusOf(second.id)).toBe("dead");
+      expect(stampOf(await bridgeOf(b.fixtureId), colour), "the first mail was accepted: the worker's death of the second does not release").not.toBeNull();
+    });
+
+    it("a seat whose only rows never reached Resend is still released, beside a seat that did: each seat is judged on its own rows", async () => {
+      const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
+      const b = r.boards[0]!;
+      mail.retry.add(b.home.email); // the home seat's first mail never leaves (503): its row is queued, with no provider id
+      await open(r, OPENED);
+      const homeColour = await colourOf(b.fixtureId, b.home.email);
+      const awayColour = homeColour === "white" ? "black" : "white";
+      const [homeFirst] = await rowsForSeat(b.fixtureId, homeColour);
+      const [awayFirst] = await rowsForSeat(b.fixtureId, awayColour);
+      expect([homeFirst!.status, homeFirst!.provider_id], "premise: the home seat's first row was never accepted").toEqual(["queued", null]);
+      expect([awayFirst!.status, awayFirst!.provider_id !== null], "premise: the away seat's first row was accepted").toEqual(["sent", true]);
+
+      mail.retry.clear();
+      mail.fail.add(b.home.email).add(b.away.email); // the resend's rows are both refused for good
+      await resend(r, b.fixtureId, new Date(OPENED.getTime() + MIN));
+      expect((await rowsForSeat(b.fixtureId, homeColour)).map((x) => x.status).sort()).toEqual(["dead", "replaced"]);
+      expect((await rowsForSeat(b.fixtureId, awayColour)).map((x) => x.status).sort()).toEqual(["dead", "replaced"]);
+      expect((await freshRow(homeFirst!.id)).provider_id, "the home seat's replaced row never had an id").toBeNull();
+      expect(stampOf(await bridgeOf(b.fixtureId), homeColour), "nothing of the home seat reached Resend: released").toBeNull();
+      expect(stampOf(await bridgeOf(b.fixtureId), awayColour), "the away seat's first mail was accepted: kept").not.toBeNull();
+    });
+
+    it("the clause is scoped to the seat's own stamp: a replaced, accepted row of an OLDER stamp holds nothing of a newer one", async () => {
+      const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
+      const b = r.boards[0]!;
+      await open(r, OPENED);
+      const colour = await colourOf(b.fixtureId, b.home.email);
+      const [old] = await rowsForSeat(b.fixtureId, colour);
+      // The old stamp's accepted mail is replaced by a newer row of the SAME stamp, then the seat is re-stamped (what a reset plus a
+      // re-open does; SQL stands in for it): the old stamp's replaced row must not hold the new stamp.
+      await resend(r, b.fixtureId, new Date(OPENED.getTime() + MIN));
+      expect(await statusOf(old!.id), "premise: the old stamp's accepted row is replaced").toBe("replaced");
+      const newer = new Date(OPENED.getTime() + 2 * MIN);
+      const col = colour === "white" ? "white_emailed_at" : "black_emailed_at";
+      await sql`update fixture_external_play set ${sql(col)} = ${newer} where fixture_id = ${b.fixtureId}`;
+      // Every row of the old stamp now ends badly or is replaced; the new stamp has one row, refused for good.
+      mail.fail.add(b.home.email);
+      await resend(r, b.fixtureId, new Date(OPENED.getTime() + 3 * MIN));
+      const fresh = (await rowsForSeat(b.fixtureId, colour)).find((x) => x.meta.stampedAt === newer.toISOString() && x.status === "dead");
+      expect(fresh, "premise: the newer stamp's row ended badly").toBeDefined();
+      expect(stampOf(await bridgeOf(b.fixtureId), colour), "the newer stamp has no accepted mail of its own: released").toBeNull();
+    });
+  });
+
   it("a resend whose send is retried later counts as retrying; a seat it claimed afresh carries the resend's own stamp", async () => {
     const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
     const b = r.boards[0]!;
@@ -1429,6 +1530,34 @@ describe.skipIf(!HAS_DB)("R9 - a crash between the terminal write and the hook i
       KIND_HOOKS.chess_invite = realChessHook;
       await tick([]);
       expect(stampOf(await bridgeOf(b.fixtureId), colour), "the re-drive released it").toBeNull();
+    });
+
+    it("M1: a dead resend row beside a replaced, ACCEPTED first row is not an unapplied ending (the hook keeps that seat); beside a replaced row never accepted it is", async () => {
+      const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
+      const b = r.boards[0]!;
+      mail.retry.add(b.home.email); // the home seat's first mail is never accepted (queued, no provider id); the away seat's is
+      await open(r, OPENED);
+      const homeColour = await colourOf(b.fixtureId, b.home.email);
+      const awayColour = homeColour === "white" ? "black" : "white";
+      mail.retry.clear();
+      mail.fail.add(b.home.email).add(b.away.email);
+      const seen = wrapHook(() => true); // the process dies before any hook finishes: the finder is all that is left
+      await resend(r, b.fixtureId, new Date(OPENED.getTime() + MIN));
+      KIND_HOOKS.chess_invite = realChessHook;
+      const homeDead = (await rowsForSeat(b.fixtureId, homeColour)).find((x) => x.status === "dead")!;
+      const awayDead = (await rowsForSeat(b.fixtureId, awayColour)).find((x) => x.status === "dead")!;
+      expect(seen.sort(), "premise: the hook ran (and died) for both dead rows").toEqual([homeDead.id, awayDead.id].sort());
+      expect(stampOf(await bridgeOf(b.fixtureId), homeColour), "premise: nothing released the home seat").not.toBeNull();
+      expect(stampOf(await bridgeOf(b.fixtureId), awayColour), "premise: nor the away seat").not.toBeNull();
+
+      const reported = (await findUnappliedEndings(500)).map((x) => x.id);
+      expect(reported, "home: its first mail never reached Resend, so its dead row is an ending nobody applied").toContain(homeDead.id);
+      expect(reported, "away: its first mail was accepted, so the hook would not release it - reporting it would re-drive it for ever").not.toContain(awayDead.id);
+
+      await tick([]); // the re-drive: the same facts the finder used
+      expect(stampOf(await bridgeOf(b.fixtureId), homeColour), "the re-drive released the home seat").toBeNull();
+      expect(stampOf(await bridgeOf(b.fixtureId), awayColour), "and left the away seat to its accepted mail").not.toBeNull();
+      expect((await findUnappliedEndings(500)).map((x) => x.id), "nothing of this board is left unapplied").not.toContain(homeDead.id);
     });
 
     it("applied endings are excluded in SQL BEFORE the limit, so they cannot starve an unapplied one", async () => {
