@@ -36,7 +36,7 @@ export const extendBoardPath = (fixtureId: string) => `/api/v1/fixtures/${encode
 export const extendRoundPath = (stageId: string) => `/api/v1/stages/${encodeURIComponent(stageId)}/extend-checkin`;
 
 /** The button's label: "+5 min (2 left)". */
-export const extendBoardLabel = (left: number, c: ExtendCopy) => c.t("externalPlay.checkinExtend.board", { minutes: CHECKIN_EXTEND_STEP_MINUTES, left });
+export const extendBoardLabel = (left: number, c: Pick<ExtendCopy, "t">) => c.t("externalPlay.checkinExtend.board", { minutes: CHECKIN_EXTEND_STEP_MINUTES, left });
 export const extendRoundLabel = (c: ExtendCopy) => c.t("externalPlay.checkinExtend.round", { minutes: CHECKIN_EXTEND_STEP_MINUTES });
 
 /** "Check-in closes 19:14" - the deadline a board is on. Null before the viewer's clock is known. */

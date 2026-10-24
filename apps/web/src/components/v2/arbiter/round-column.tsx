@@ -1,15 +1,18 @@
 "use client";
 
 // The Arbiter Panel's round column (spec 2026-10-24-arbiter-round-column-design.md): the one box that answers "what does this
-// round want from me now". This file draws two phases and one list that belongs to the second:
+// round want from me now". This file draws three phases and one list that belongs to the second. The queue (round-queue-cards.tsx,
+// the boards that need a decision) is the aside's FIRST child in every one of them, and no CSS order is used inside the aside:
+// source order is visual order.
 //
 //   BEFORE   the round is paired and nobody is invited: one block for each round the organiser can open, with the press, its
 //            confirmation, the answer, and a read-only list of the pairings;
 //   CHECK-IN the round is open and some board is still `checking_in`: the HERO (the countdown to the next board closing, who has
 //            checked in, what is already playing, the round's own +5 and reinvite press, the staggered groups) and, placed by the
-//            panel under the camera, the WAITING LIST (the seats that are not here, each seat's invite words, Resend, a board's +5).
-//
-// The playing phase draws in a later task; until then it renders nothing, so the panel is unchanged.
+//            panel under the camera, the WAITING LIST (the seats that are not here, each seat's invite words, Resend, a board's +5);
+//   PLAYING  no board is checking in: the STATUS ("14 of 20 boards playing", the finished clause, and the round bar the panel hands
+//            over) and, below it, the NEXT round's press - quiet while any board plays, with every earlier-in-play warning shown
+//            inline, and primary once every board on screen is over.
 //
 // What a BEFORE block presses is its OWN round. Each block calls `useOpenRound(view)` itself (R1 holds per round). The handle the
 // panel shares for the round ON SCREEN (`openRound`, C9) is for the check-in hero and the waiting list: both press the same
@@ -28,7 +31,7 @@ import { fmtTime } from "@/lib/format";
 import { INVITE_WORD_KEYS, type SeatInviteWord } from "@/lib/invite-status";
 import type { MessageKey } from "@/lib/messages";
 import type { OpenRoundView } from "@/lib/open-round";
-import { checkinClock, checkinTally, nextRoundViews, openWindowBoards, roundColumnPhase, viewOfRound } from "@/lib/round-column";
+import { checkinClock, checkinTally, nextRoundViews, openWindowBoards, playingTally, roundColumnPhase, viewOfRound } from "@/lib/round-column";
 import { routes } from "@/lib/routes";
 import type { FlaggedBoard } from "@/server/usecases/external-play/arbiter";
 import type { NeedsOrganiserExternalPlayRow } from "@/server/usecases/external-play/queue";
@@ -38,6 +41,7 @@ import { ConfirmDialog } from "../confirm-dialog";
 import { OpenRoundConfirmBody, openNoticeText, owedPlayers, resendNoticeText, timedBatches } from "../desk/open-round-control";
 import type { OpenRoundUiState } from "../desk/open-round-state";
 import { useOpenRound, type OpenRoundHandle } from "../desk/use-open-round";
+import { RoundQueueCards } from "./round-queue-cards";
 
 /** What the arbiter page hands the column, read once per poll. */
 export type RoundColumnData = {
@@ -79,14 +83,28 @@ const ASIDE_CLASS = "flex min-w-0 flex-col gap-3 max-md:order-[-1] md:col-start-
 export function RoundColumn(p: RoundColumnProps) {
   const msg = useMsg();
   const phase = roundColumnPhase(p.round, p.requested);
-  // Before and check-in are drawn here. "none" is the panel's notice standing alone (spec §5.2 rule 1); playing is a later task's.
-  if (phase !== "before" && phase !== "checkin") return null;
+  // "none" is the panel's notice standing alone (spec §5.2 rule 1): no column, and no queue with it.
+  if (phase === "none") return null;
+
+  // First in the aside in every phase, ahead of the phase block: source order is visual order (C10). It renders nothing at all
+  // when there is nothing to decide.
+  const queue = (
+    <RoundQueueCards
+      round={p.round}
+      held={p.data.held}
+      flagged={p.data.flagged}
+      ownFlagged={p.data.ownFlagged}
+      slugs={p.slugs}
+      onSelect={p.on.select}
+    />
+  );
 
   if (phase === "checkin") {
     // `checking_in` boards on screen mean a round on screen; a named refusal rather than an assumption.
     if (p.round === null) return null;
     return (
       <aside aria-label={msg("arbiter.column.label")} data-testid="arbiter-round-column" data-phase={phase} className={ASIDE_CLASS}>
+        {queue}
         <CheckinHero
           round={p.round}
           view={viewOfRound(p.data.views, p.round)}
@@ -101,13 +119,32 @@ export function RoundColumn(p: RoundColumnProps) {
 
   // A named refusal, not an assumption: a view with no pairing has nothing to open or to list. `listOpenRounds` never sends one
   // (open-round-view.ts skips a group with no playable board: `live.length === 0`, "openRound: no_fixtures"), but its type allows
-  // it, and a block with an Open round press over "0 boards" is worse than none - it falls to the "nothing paired" line below,
-  // which is true. Filtered BEFORE the stage count, so a stage with no block does not make the others name theirs.
+  // it, and a block with an Open round press over "0 boards" is worse than none - in the before phase it falls to the "nothing
+  // paired" line below, which is true. Filtered BEFORE the stage count, so a stage with no block does not make the others name theirs.
   const views = nextRoundViews(p.data.views, p.round).filter((v) => v.pairings.length > 0);
   // The stage is named only when more than one STAGE has a block (spec §5.4), not when more than one block exists.
   const showStage = new Set(views.map((v) => v.stageId)).size > 1;
+
+  if (phase === "playing") {
+    if (p.round === null) return null;
+    // Primary needs every board on screen over. With no board on screen at all (a round whose every board is the organiser's own)
+    // the empty set would satisfy "every board is over" vacuously, and nobody can say it is: `total > 0` keeps the press quiet.
+    const { total, finished } = playingTally(p.round.boards);
+    const primary = total > 0 && finished === total;
+    return (
+      <aside aria-label={msg("arbiter.column.label")} data-testid="arbiter-round-column" data-phase={phase} className={ASIDE_CLASS}>
+        {queue}
+        <PlayingStatus round={p.round} roundExtend={p.roundExtend} />
+        {views.map((view) => (
+          <NextRoundBlock key={`${view.stageId}:${view.roundNo}`} view={view} tz={p.data.tz} showStage={showStage} playing={{ primary }} />
+        ))}
+      </aside>
+    );
+  }
+
   return (
     <aside aria-label={msg("arbiter.column.label")} data-testid="arbiter-round-column" data-phase={phase} className={ASIDE_CLASS}>
+      {queue}
       {p.data.awaitsStart ? (
         // Before Start `listOpenRounds` answers [], so "nothing paired" would also be true: the start line wins (pre-flight A8),
         // and no press is offered even if a view arrived.
@@ -132,11 +169,49 @@ export function RoundColumn(p: RoundColumnProps) {
   );
 }
 
-/** One open-able round with a handle of its own: the thin hook wrapper around the pure view. */
-function NextRoundBlock({ view, tz, showStage }: { view: OpenRoundView; tz: string; showStage: boolean }) {
-  const handle = useOpenRound(view);
-  return <OpenRoundBlockView view={view} state={handle.state} tz={tz} showStage={showStage} on={{ ask: handle.ask, cancel: handle.cancel, open: handle.open }} />;
+// ---- playing: the status ----------------------------------------------------------------------------------------------------------
+
+/** The playing phase's status (spec §5.5): "14 of 20 boards playing" and the finished clause over the boards on screen, then the
+ *  round bar the panel hands over (its why line and last answer: C13). A round with no board on screen (every board is the
+ *  organiser's own) prints no count at all - never "0 of 0" - and keeps the heading and the bar. A zero finished clause is not
+ *  printed (desk _RULES: an empty cell is not information). The count agrees with the TOTAL ("1 of 1 board"). */
+function PlayingStatus({ round, roundExtend }: { round: ArbiterRound; roundExtend: ReactNode }) {
+  const msg = useMsg();
+  const plural = useMsgPlural();
+  const { playing, total, finished } = playingTally(round.boards);
+  return (
+    <section aria-labelledby="arbiter-column-status-heading" data-testid="arbiter-column-status" className={`flex min-w-0 flex-col gap-3 ${CARD_BOX}`}>
+      <h2 id="arbiter-column-status-heading" className={`m-0 min-w-0 text-base font-semibold break-words ${INK}`}>
+        {msg("runsheet.round.heading", { round: round.roundNo })}
+      </h2>
+      {total > 0 && (
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <p data-testid="arbiter-column-playing" className={`m-0 text-[15px] ${CLOCK_FACE} ${INK}`}>
+            {plural("arbiter.column.playing", total, { count: playing, total })}
+          </p>
+          {finished > 0 && (
+            <p data-testid="arbiter-column-finished" className={`m-0 text-sm ${MUTED}`}>
+              {plural("arbiter.column.finished", finished)}
+            </p>
+          )}
+        </div>
+      )}
+      {roundExtend}
+    </section>
+  );
 }
+
+/** One open-able round with a handle of its own: the thin hook wrapper around the pure view. */
+function NextRoundBlock({ view, tz, showStage, playing }: { view: OpenRoundView; tz: string; showStage: boolean; playing?: PlayingEmphasis }) {
+  const handle = useOpenRound(view);
+  return (
+    <OpenRoundBlockView view={view} state={handle.state} tz={tz} showStage={showStage} on={{ ask: handle.ask, cancel: handle.cancel, open: handle.open }} playing={playing} />
+  );
+}
+
+/** The next round while a round is on screen (spec §5.5): the press is quiet until every board on screen is over, the earlier
+ *  rounds still in play are named inline beside it, and the pairings list (the before phase's) is not drawn. */
+export type PlayingEmphasis = { primary: boolean };
 
 /** C25: pure (state in, markup out): one view's heading, lede, press, confirmation and notice, then its pairings. */
 export function OpenRoundBlockView({
@@ -145,12 +220,15 @@ export function OpenRoundBlockView({
   tz,
   showStage,
   on,
+  playing,
 }: {
   view: OpenRoundView;
   state: OpenRoundUiState;
   tz: string;
   showStage: boolean;
   on: { ask(): void; cancel(): void; open(): void };
+  /** Set in the playing phase (the next round beside a round on screen); absent in the before phase. */
+  playing?: PlayingEmphasis;
 }) {
   const msg = useMsg();
   const plural = useMsgPlural();
@@ -182,14 +260,33 @@ export function OpenRoundBlockView({
         <p className={`m-0 text-[13px] leading-[1.45] ${MUTED}`}>{plural("runsheet.round.pairedLede", boards, { players: boards * 2 })}</p>
       </div>
 
+      {/* Playing phase: every round still in play, one sentence each and NOT only in the confirmation, so the press is made
+          knowingly. A warning, never a block (D8: the organiser drives). Amber is the spec's caution pair. */}
+      {playing && canOpen && view.earlierInPlay.length > 0 && (
+        <div
+          role="note"
+          data-testid="arbiter-column-earlier"
+          className="flex min-w-0 flex-col gap-0.5 rounded-lg border border-[#f5d27a] bg-[#fef3c7] px-3 py-2 text-[13px] leading-[1.45] text-[#713f12]"
+        >
+          {view.earlierInPlay.map((e) => (
+            <span key={e.roundNo} data-earlier-round={e.roundNo} className="min-w-0 break-words">
+              {plural("runsheet.round.confirmEarlierInPlay", e.games, { round: e.roundNo })}
+            </span>
+          ))}
+        </div>
+      )}
+
       {canOpen && (
         <button
           type="button"
-          data-testid="arbiter-column-open-cta"
+          // The before phase's press and the playing phase's are the same press (same hook, same confirmation); the playing one
+          // wears its own test id and says whether it is the primary action of the column right now.
+          data-testid={playing ? "arbiter-column-next" : "arbiter-column-open-cta"}
+          data-primary={playing ? String(playing.primary) : undefined}
           disabled={state.busy !== null}
           aria-busy={state.busy?.kind === "open" || undefined}
           onClick={on.ask}
-          className={BUTTON_PRIMARY}
+          className={playing && !playing.primary ? `${BUTTON_QUIET} w-full sm:w-auto` : BUTTON_PRIMARY}
         >
           {msg("runsheet.round.openCta")}
         </button>
@@ -205,32 +302,38 @@ export function OpenRoundBlockView({
         </div>
       )}
 
-      <p id={captionId} className={`m-0 text-xs font-semibold ${MUTED}`}>
-        {msg("runsheet.round.pairingsLabel", { round: view.roundNo })}
-      </p>
-      {/* A scrolling region a keyboard can reach (AGENTS class 23): focusable, a region, named. A long round scrolls here rather
-          than pushing the rest of the page away. Its name is the caption above it, and with more than one stage the block's
-          heading first: two stages can share a round number, and two landmarks must not share a name. */}
-      <div
-        role="region"
-        tabIndex={0}
-        aria-labelledby={showStage ? `${headingId} ${captionId}` : captionId}
-        data-testid="arbiter-column-pairings"
-        className="max-h-[40vh] min-w-0 overflow-y-auto rounded-lg border border-[#e7e3f3]"
-      >
-        <ul className="m-0 min-w-0 list-none divide-y divide-[#e7e3f3] p-0">
-          {view.pairings.map((p) => (
-            <li key={p.fixtureId} data-testid={`arbiter-column-pairing-${p.fixtureId}`} className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5 px-3 py-2">
-              <span className={`min-w-16 shrink-0 text-xs font-semibold ${MUTED}`}>{msg("arbiter.boardNo", { n: p.boardNo })}</span>
-              <span data-field="names" className="min-w-0 flex-1 basis-40 text-sm break-words">
-                <span className={`font-medium ${INK}`}>{p.whiteName}</span>
-                <span className={`mx-1.5 ${MUTED}`}>{msg("schedule.vs")}</span>
-                <span className={`font-medium ${INK}`}>{p.blackName}</span>
-              </span>
-            </li>
-          ))}
-        </ul>
-      </div>
+      {/* The before phase lists the pairings. Beside a round on screen the confirmation already names who is invited, so the list is
+          left out (spec §5.5). */}
+      {!playing && (
+        <>
+          <p id={captionId} className={`m-0 text-xs font-semibold ${MUTED}`}>
+            {msg("runsheet.round.pairingsLabel", { round: view.roundNo })}
+          </p>
+          {/* A scrolling region a keyboard can reach (AGENTS class 23): focusable, a region, named. A long round scrolls here rather
+              than pushing the rest of the page away. Its name is the caption above it, and with more than one stage the block's
+              heading first: two stages can share a round number, and two landmarks must not share a name. */}
+          <div
+            role="region"
+            tabIndex={0}
+            aria-labelledby={showStage ? `${headingId} ${captionId}` : captionId}
+            data-testid="arbiter-column-pairings"
+            className="max-h-[40vh] min-w-0 overflow-y-auto rounded-lg border border-[#e7e3f3]"
+          >
+            <ul className="m-0 min-w-0 list-none divide-y divide-[#e7e3f3] p-0">
+              {view.pairings.map((p) => (
+                <li key={p.fixtureId} data-testid={`arbiter-column-pairing-${p.fixtureId}`} className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5 px-3 py-2">
+                  <span className={`min-w-16 shrink-0 text-xs font-semibold ${MUTED}`}>{msg("arbiter.boardNo", { n: p.boardNo })}</span>
+                  <span data-field="names" className="min-w-0 flex-1 basis-40 text-sm break-words">
+                    <span className={`font-medium ${INK}`}>{p.whiteName}</span>
+                    <span className={`mx-1.5 ${MUTED}`}>{msg("schedule.vs")}</span>
+                    <span className={`font-medium ${INK}`}>{p.blackName}</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </>
+      )}
 
       <ConfirmDialog
         open={canOpen && state.confirming}
@@ -253,7 +356,7 @@ export function OpenRoundBlockView({
 
 /** "07:42": whole minutes and seconds left to `atIso`, rounded UP, so a clock that is still counting never reads 00:00 (the board
  *  closes AT its deadline, and one millisecond short of it there is still a second on the face). Minutes are not capped. */
-export function countdownText(atIso: string, nowMs: number): string {
+function countdownText(atIso: string, nowMs: number): string {
   const seconds = Math.max(0, Math.ceil((Date.parse(atIso) - nowMs) / 1000));
   const two = (n: number) => String(n).padStart(2, "0");
   return `${two(Math.floor(seconds / 60))}:${two(seconds % 60)}`;
@@ -461,8 +564,8 @@ export function WaitingList({ boards, view, openRound, nowMs, on }: WaitingListP
   const { state } = openRound;
   const rows = openWindowBoards(boards, nowMs).filter((b) => !(b.seats !== null && b.seats.white.here && b.seats.black.here));
   if (rows.length === 0) return null;
-  // The extend label reads the step and the presses left from the dictionary; it needs no clock face.
-  const copy = { t: (key: string, vars?: Record<string, string | number>) => msg(key as MessageKey, vars), plural, hm: () => null };
+  // The extend label reads the step and the presses left from the dictionary: it needs the plain lookup and nothing else.
+  const copy = { t: (key: string, vars?: Record<string, string | number>) => msg(key as MessageKey, vars) };
 
   return (
     <section aria-labelledby="arbiter-waiting-heading" data-testid="arbiter-waiting" className={`flex flex-col gap-2 ${CARD_BOX}`}>

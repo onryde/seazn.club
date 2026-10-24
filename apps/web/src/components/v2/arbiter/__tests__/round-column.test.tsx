@@ -113,7 +113,9 @@ const COLUMN = (o: Partial<RoundColumnProps> = {}): RoundColumnProps => ({
   roundExtend: null,
   ...o,
 });
-const column = (o: Partial<RoundColumnProps> = {}) => renderToStaticMarkup(<RoundColumn {...COLUMN(o)} />);
+// The column mounts the queue, which formats through `useFmt` and so needs a DictProvider (the panel is always inside one).
+const underEnglish = (node: ReactNode) => renderToStaticMarkup(<DictProvider dict={enUi as unknown as Dict} locale="en">{node}</DictProvider>);
+const column = (o: Partial<RoundColumnProps> = {}) => underEnglish(<RoundColumn {...COLUMN(o)} />);
 
 const NO_ON = { ask: () => {}, cancel: () => {}, open: () => {} };
 const block = (view: OpenRoundView, state: Partial<OpenRoundUiState> = {}, showStage = false) =>
@@ -176,11 +178,14 @@ describe("RoundColumn: phase none and not-before", () => {
     expect(checked, "anti-vacuity: requests checked").toBe(2);
   });
 
-  it("a round on screen is not the before phase: no before block, no start line, no empty line", () => {
-    // Tasks 6 and 7 draw the check-in and playing columns; until then this witnesses only that the BEFORE branch does not leak.
+  it("a round on screen is not the before phase: the playing column, with no before marker, no start line, no empty line and no before-phase press", () => {
+    // Tasks 6 and 7 draw the check-in and playing columns. A view waiting to open is still offered while a round plays (as the NEXT
+    // round, `arbiter-column-next`); what must not leak is the before branch: its marker, its two empty lines and its press testid.
     const h = column({ round: ON_SCREEN, data: DATA({ views: [VIEW({ roundNo: 2 })] }) });
     expect(h).not.toContain('data-phase="before"');
-    for (const id of ["arbiter-column-open", "arbiter-column-start-first", "arbiter-column-nothing"]) expect(h, id).not.toContain(ATTR(id));
+    expect(h).toContain('data-phase="playing"');
+    for (const id of ["arbiter-column-start-first", "arbiter-column-nothing", "arbiter-column-open-cta"]) expect(h, id).not.toContain(ATTR(id));
+    expect(count(h, "arbiter-column-next"), "the offered round is the playing phase's next-round press").toBe(1);
   });
 });
 
@@ -1055,10 +1060,10 @@ describe("WaitingList: who is not here", () => {
     expect([...h.matchAll(/data-testid="arbiter-waiting-row" data-fixture-id="([^"]+)"/g)].map((m) => m[1])).toEqual([now.fixtureId]);
     expect(h).not.toContain(later.fixtureId);
     expect(textIn(h, "arbiter-waiting-heading")).toBe(esc(pl("arbiter.column.waiting", 1)));
-    // At the later group's opening the same page lists both, in board order.
+    // At the later group's opening (+15 min) the first board's window has already closed (+8 min), so the list now holds the later
+    // group alone: the earlier board leaves it at its deadline as the later one joins at its opening.
     const opened = wl({ boards: [now, later], nowMs: NOW + 15 * MIN });
     expect([...opened.matchAll(/data-testid="arbiter-waiting-row" data-fixture-id="([^"]+)"/g)].map((m) => m[1])).toEqual([later.fixtureId]);
-    // (the first board's window closed at +8 min, so at +15 only the later group is waited on)
   });
 
   it("waiting seat not here: 'Not here yet' and one chip per invite word; seat here: 'Here' and no invite chip", () => {
@@ -1391,7 +1396,7 @@ describe("WaitingList: layout rules", () => {
     expect(h.split(long).length - 1, "both names are in the markup in full").toBe(2);
   });
 
-  it("no dash or arrow in the markup, and every region it opens is named", () => {
+  it("no dash or arrow in the markup, and the list opens no scroll region of its own (any it opened would owe tabindex)", () => {
     const b = checking(OPEN(), seat(false, ["sent", "not_delivered"]), seat(false, ["not_invited"]));
     const h = wl({ boards: [b], view: VIEW({ state: "open", press: "reinvite", pairings: [P(b.boardNo, { fixtureId: b.fixtureId, canResend: true })] }) });
     for (const code of [0x2013, 0x2014, 0x2192, 0x2190, 0x2197]) expect(h, `U+${code.toString(16)}`).not.toContain(String.fromCharCode(code));
@@ -1489,5 +1494,473 @@ describe("the check-in keys, in four locales", () => {
       }
     }
     expect(checked, "anti-vacuity: 14 keys x 4 locales").toBe(56);
+  });
+});
+
+// ==== PLAYING: the status, the next round and the queue's place (plan Task 7, spec §5.5 and §5.6) ================================
+//
+// Boards are built here by state, and every expected count is the number of boards BUILT, never read back from `playingTally`.
+
+const over = (o: Partial<ArbiterBoard> = {}) => board({ state: { kind: "result", score: "1-0", noResult: false }, ...o });
+const voided = (o: Partial<ArbiterBoard> = {}) => board({ state: { kind: "result", score: null, noResult: true }, ...o });
+const starting = (o: Partial<ArbiterBoard> = {}) => board({ state: { kind: "starting" }, ...o });
+const held = (o: Partial<ArbiterBoard> = {}) => board({ state: { kind: "on_hold" }, ...o });
+/** Round 2 of stage s1 is on screen, so a view of round 3 is the NEXT round and a view of round 2 is the one already open. */
+const R2 = (boards: ArbiterBoard[], o: Partial<ArbiterRound> = {}) => ROUND(boards, { roundNo: 2, ...o });
+const NEXT = (o: Partial<OpenRoundView> = {}) => VIEW({ roundNo: 3, ...o });
+const playingColumn = (boards: ArbiterBoard[], o: Partial<RoundColumnProps> = {}) => column({ round: R2(boards), nowMs: NOW, ...o });
+const nextTag = (h: string) => tagOf(h, "arbiter-column-next");
+const BAR = <div data-testid="arbiter-extend-round">the round bar</div>;
+
+describe("RoundColumn: the playing status", () => {
+  it("the landmark: the same aside in the playing phase, one real box placed like the before phase, holding the status", () => {
+    const h = playingColumn([playing()]);
+    const root = tagOf(h, "arbiter-round-column")!;
+    expect(root).toMatch(/^<aside\b/);
+    expect(root).toContain('data-phase="playing"');
+    expect(root).toContain(`aria-label="${esc(en["arbiter.column.label"]!)}"`);
+    expect(classOf(root)).toMatch(/(^|\s)max-md:order-\[-1\](\s|$)/);
+    expect(classOf(root)).toMatch(/(^|\s)md:col-start-2(\s|$)/);
+    expect(classOf(root)).not.toMatch(/(^|\s)(max-md:|md:)?contents(\s|$)/);
+    expect(count(h, "arbiter-column-status")).toBe(1);
+    for (const id of ["arbiter-checkin-hero", "arbiter-column-start-first", "arbiter-column-nothing"]) expect(h, id).not.toContain(ATTR(id));
+  });
+
+  it("'14 of 20 boards playing': starting and live count, a held board and a finished one do not; the finished clause is the finished boards", () => {
+    const boards = [
+      ...Array.from({ length: 12 }, () => playing()),
+      ...Array.from({ length: 2 }, () => starting()),
+      ...Array.from({ length: 2 }, () => over()),
+      voided(),
+      ...Array.from({ length: 3 }, () => held()),
+    ];
+    expect(boards.length, "premise: 20 boards on screen").toBe(20);
+    const h = playingColumn(boards);
+    expect(textIn(h, "arbiter-column-playing")).toBe(esc(pl("arbiter.column.playing", 20, { count: 14, total: 20 })));
+    expect(textIn(h, "arbiter-column-playing")).toContain("14");
+    expect(textIn(h, "arbiter-column-playing")).toContain("20");
+    // Three finished: two results and one void (a void is over, "no result"); the three held boards are neither.
+    expect(textIn(h, "arbiter-column-finished")).toBe(esc(pl("arbiter.column.finished", 3)));
+  });
+
+  it("the finished clause is shown only above zero, and the playing line is the plural of the TOTAL", () => {
+    const none = playingColumn([playing(), starting()]);
+    expect(none).not.toContain(ATTR("arbiter-column-finished"));
+    expect(textIn(none, "arbiter-column-playing")).toBe(esc(pl("arbiter.column.playing", 2, { count: 2, total: 2 })));
+    // One board: the singular. It is the total that agrees ("1 of 1 board"), and a lone board of several still reads "boards".
+    expect(textIn(playingColumn([playing()]), "arbiter-column-playing")).toBe(esc(pl("arbiter.column.playing", 1, { count: 1, total: 1 })));
+    expect(textIn(playingColumn([playing(), over()]), "arbiter-column-playing")).toBe(esc(pl("arbiter.column.playing", 2, { count: 1, total: 2 })));
+    expect(pl("arbiter.column.playing", 1, { count: 1, total: 1 })).not.toBe(pl("arbiter.column.playing", 2, { count: 1, total: 2 }));
+    // One finished board: the singular of the finished clause.
+    expect(textIn(playingColumn([playing(), over()]), "arbiter-column-finished")).toBe(esc(pl("arbiter.column.finished", 1)));
+  });
+
+  it("every board over: '0 of 3 boards playing' beside '3 boards finished' (a total above zero is a real count)", () => {
+    const h = playingColumn([over(), over(), over()]);
+    expect(textIn(h, "arbiter-column-playing")).toBe(esc(pl("arbiter.column.playing", 3, { count: 0, total: 3 })));
+    expect(textIn(h, "arbiter-column-finished")).toBe(esc(pl("arbiter.column.finished", 3)));
+  });
+
+  it("boards [] (a round whose every board is your own): no counts at all, and never '0 of 0'", () => {
+    const h = column({ round: R2([], { ownBoards: 4 }), nowMs: NOW, roundExtend: BAR });
+    expect(h).toContain('data-phase="playing"');
+    for (const id of ["arbiter-column-playing", "arbiter-column-finished"]) expect(h, id).not.toContain(ATTR(id));
+    expect(h).not.toContain(esc(pl("arbiter.column.playing", 0, { count: 0, total: 0 })));
+    expect(h).not.toContain(esc(pl("arbiter.column.finished", 0)));
+    // The status block itself stays: it carries the round's heading and the round bar (the empty case still has a round on screen).
+    expect(count(h, "arbiter-column-status")).toBe(1);
+    expect(inner(h, "arbiter-column-status")).toContain(ATTR("arbiter-extend-round"));
+  });
+
+  it("the block is named by the round: its heading, and it carries no countdown, no tally bar and no waiting list", () => {
+    const h = playingColumn([playing()]);
+    const tag = tagOf(h, "arbiter-column-status")!;
+    expect(tag).toMatch(/^<section\b/);
+    expect(nameOf(h, tag)).toBe(esc(t("runsheet.round.heading", { round: 2 })));
+    for (const id of ["arbiter-checkin-clock", "arbiter-checkin-tally", "arbiter-waiting"]) expect(h, id).not.toContain(ATTR(id));
+    expect(h).not.toContain('role="progressbar"');
+    expect(h).not.toContain('role="timer"');
+  });
+
+  it("the playing block hosts the round bar's node: once, inside the status (C13)", () => {
+    const h = playingColumn([playing()], { roundExtend: BAR });
+    expect(count(h, "arbiter-extend-round"), "exactly one bar").toBe(1);
+    expect(inner(h, "arbiter-column-status")).toContain(ATTR("arbiter-extend-round"));
+    // ...and with none handed over (the panel mounts it elsewhere on that path), nothing stands in its place.
+    expect(playingColumn([playing()], { roundExtend: null })).not.toContain(ATTR("arbiter-extend-round"));
+  });
+});
+
+describe("RoundColumn: the next round while boards play", () => {
+  const EARLIER = [
+    { roundNo: 1, games: 1 },
+    { roundNo: 2, games: 6 },
+  ];
+
+  it("quiet while boards play, and EVERY earlier-in-play entry inline, one sentence each (the singular and the plural differ)", () => {
+    const h = playingColumn([playing(), over()], { data: DATA({ views: [NEXT({ earlierInPlay: EARLIER })] }) });
+    expect(count(h, "arbiter-column-next"), "the press is offered").toBe(1);
+    expect(textIn(h, "arbiter-column-next")).toBe(esc(en["runsheet.round.openCta"]!));
+    expect(nextTag(h)).toContain('data-primary="false"');
+    expect(nextTag(h)).toMatch(/^<button\b/);
+    // Quiet = the panel's outline button, not the primary fill.
+    expect(classOf(nextTag(h)!)).toContain("border-[#c9bdf0]");
+    expect(classOf(nextTag(h)!)).not.toContain("bg-[#7c3aed]");
+    const earlier = inner(h, "arbiter-column-earlier")!;
+    const sentences = [...earlier.matchAll(/<span\b[^>]*data-earlier-round="(\d+)"[^>]*>([^<]*)<\/span>/g)].map((m) => [m[1], m[2]]);
+    expect(sentences).toEqual([
+      ["1", esc(pl("runsheet.round.confirmEarlierInPlay", 1, { round: 1 }))],
+      ["2", esc(pl("runsheet.round.confirmEarlierInPlay", 6, { round: 2 }))],
+    ]);
+    expect(pl("runsheet.round.confirmEarlierInPlay", 1, { round: 1 }), "premise: one game and six games read differently").not.toBe(
+      pl("runsheet.round.confirmEarlierInPlay", 6, { round: 1 }).replace("6", "1"),
+    );
+    expect(tagOf(h, "arbiter-column-earlier")).toContain('role="note"');
+    // The warning is BESIDE the press: before it, in the same block.
+    expect(h.indexOf(ATTR("arbiter-column-earlier"))).toBeLessThan(h.indexOf(ATTR("arbiter-column-next")));
+  });
+
+  it("no earlier round in play: no warning at all (the empty case)", () => {
+    const h = playingColumn([playing()], { data: DATA({ views: [NEXT({ earlierInPlay: [] })] }) });
+    expect(count(h, "arbiter-column-next")).toBe(1);
+    expect(h).not.toContain(ATTR("arbiter-column-earlier"));
+  });
+
+  it("every board over: the SAME button is primary (data-primary, the accent fill)", () => {
+    const views = [NEXT({ earlierInPlay: [] })];
+    const h = playingColumn([over(), over(), voided()], { data: DATA({ views }) });
+    expect(nextTag(h)).toContain('data-primary="true"');
+    expect(nextTag(h)).toMatch(/^<button\b/);
+    expect(classOf(nextTag(h)!)).toContain("bg-[#7c3aed]");
+    expect(textIn(h, "arbiter-column-next")).toBe(esc(en["runsheet.round.openCta"]!));
+    // Primary does not drop the warning when an earlier round still has games.
+    const warned = playingColumn([over()], { data: DATA({ views: [NEXT({ earlierInPlay: [{ roundNo: 1, games: 2 }] })] }) });
+    expect(nextTag(warned)).toContain('data-primary="true"');
+    expect(count(warned, "arbiter-column-earlier")).toBe(1);
+  });
+
+  it("primary needs EVERY board over: one live board, one starting board, one HELD board, or no board on screen at all keeps it quiet", () => {
+    const views = [NEXT()];
+    const cases: [string, ArbiterBoard[]][] = [
+      ["one live board", [over(), over(), playing()]],
+      ["one starting board", [over(), starting()]],
+      ["one held board", [over(), over(), held()]],
+      ["every board is the organiser's own (nothing on screen to call over)", []],
+    ];
+    let checked = 0;
+    for (const [what, boards] of cases) {
+      const h = playingColumn(boards, { data: DATA({ views }) });
+      expect(nextTag(h), what).toContain('data-primary="false"');
+      expect(classOf(nextTag(h)!), what).not.toContain("bg-[#7c3aed]");
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: cases checked").toBe(4);
+    // The positive pair: take the live board away and the very same view turns primary.
+    expect(nextTag(playingColumn([over(), over()], { data: DATA({ views }) }))).toContain('data-primary="true"');
+  });
+
+  it("the next round is not the round on screen, and a view the reader does not offer (press other than open) has no press", () => {
+    const h = playingColumn([playing()], {
+      data: DATA({ views: [VIEW({ roundNo: 2, press: "open" }), NEXT({ press: "none" }), NEXT({ roundNo: 4, press: "open" })] }),
+    });
+    expect(count(h, "arbiter-column-next")).toBe(1);
+    expect(h).toContain(esc(t("runsheet.round.heading", { round: 4 })));
+    expect(h, "round 3 has no open press").not.toContain(`data-round-no="3"`);
+    expect(h, "the round on screen is not offered to open").not.toContain(`data-round-no="2"`);
+  });
+
+  it("a pinned older round never offers the next round's press; the same views on the current round do", () => {
+    const views = [NEXT({ earlierInPlay: EARLIER })];
+    const pinned = column({ round: R2([playing()], { current: false }), nowMs: NOW, data: DATA({ views }) });
+    for (const id of ["arbiter-column-next", "arbiter-column-earlier", "arbiter-column-open"]) expect(pinned, id).not.toContain(ATTR(id));
+    expect(pinned, "the status still stands").toContain(ATTR("arbiter-column-status"));
+    const current = column({ round: R2([playing()], { current: true }), nowMs: NOW, data: DATA({ views }) });
+    expect(count(current, "arbiter-column-next")).toBe(1);
+  });
+
+  it("no view to open: nothing is printed in its place (no 'nothing paired' line, no start line)", () => {
+    const h = playingColumn([playing()], { data: DATA({ views: [] }) });
+    for (const id of ["arbiter-column-next", "arbiter-column-open", "arbiter-column-nothing", "arbiter-column-start-first"]) expect(h, id).not.toContain(ATTR(id));
+  });
+
+  it("two stages with a round to open: each block is its own press, names its stage and carries its own warning", () => {
+    const a = NEXT({ stageId: "s1", stageName: "Swiss Open", earlierInPlay: [{ roundNo: 2, games: 4 }] });
+    const b = NEXT({ stageId: "s2", stageName: "Rapid Playoff", roundNo: 5, earlierInPlay: [] });
+    const h = playingColumn([playing()], { data: DATA({ views: [a, b] }) });
+    expect(count(h, "arbiter-column-next")).toBe(2);
+    expect(count(h, "arbiter-column-earlier"), "only the first stage has games in play").toBe(1);
+    const blocks = h.split(ATTR("arbiter-column-open") + " ").slice(1);
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]).toContain("Swiss Open");
+    expect(blocks[0]).toContain(ATTR("arbiter-column-earlier"));
+    expect(blocks[1]).toContain("Rapid Playoff");
+    expect(blocks[1]).not.toContain(ATTR("arbiter-column-earlier"));
+  });
+
+  it("the playing block keeps the heading and the lede and leaves the pairings list to the before phase", () => {
+    const h = playingColumn([playing()], { data: DATA({ views: [NEXT({ pairings: [P(1), P(2)] })] }) });
+    expect(h).toContain(esc(t("runsheet.round.heading", { round: 3 })));
+    expect(h).toContain(esc(pl("runsheet.round.pairedLede", 2, { players: 4 })));
+    expect(h).not.toContain(ATTR("arbiter-column-pairings"));
+    expect(h).not.toContain(ATTR("arbiter-column-pairing-f1"));
+  });
+
+  it("it keeps the confirmation: asked, the run sheet's dialog names who is invited and the earlier games again", () => {
+    const view = NEXT({ earlierInPlay: EARLIER });
+    const h = renderToStaticMarkup(
+      <OpenRoundBlockView view={view} state={{ ...initialOpenRoundUi(), confirming: true }} tz={TZ} showStage={false} on={NO_ON} playing={{ primary: false }} />,
+    );
+    expect(h).toContain(ATTR("arbiter-column-confirm"));
+    expect(h).toContain(ATTR("open-round-earlier"));
+    expect(count(h, "arbiter-column-next")).toBe(1);
+  });
+
+  it("every control is 44px tall and the warning wraps (break-words) in a min-w-0 chain", () => {
+    const h = playingColumn([playing()], { data: DATA({ views: [NEXT({ earlierInPlay: EARLIER })] }) });
+    expect(classOf(nextTag(h)!).split(/\s+/)).toContain("min-h-11");
+    const earlier = tagOf(h, "arbiter-column-earlier")!;
+    expect(classOf(earlier).split(/\s+/)).toContain("min-w-0");
+    const spans = [...inner(h, "arbiter-column-earlier")!.matchAll(/<span\b[^>]*data-earlier-round[^>]*>/g)].map((m) => m[0]);
+    expect(spans, "anti-vacuity: both sentences").toHaveLength(2);
+    for (const s of spans) expect(classOf(s).split(/\s+/), s).toContain("break-words");
+    expect(classOf(nextTag(h)!)).not.toMatch(/(^|\s)truncate(\s|$)/);
+  });
+});
+
+describe("RoundColumn: the next round presses ITS OWN round (the seam, through the real hook)", () => {
+  beforeEach(() => {
+    net.calls.length = 0;
+    router.refresh.mockReset();
+  });
+  const S1 = NEXT({ stageId: "s1", stageName: "Swiss", roundNo: 3, earlierInPlay: [{ roundNo: 2, games: 3 }] });
+  const S2 = NEXT({ stageId: "s2", stageName: "Rapid", roundNo: 5, pairings: [P(7), P(8)] });
+
+  it("the playing wrapper hands the pure view its `playing` emphasis, and asking/opening sends ONE open-round for this block's stage", () => {
+    const { handle, spies } = sharedHandle();
+    const ui = renderIsland(RoundColumn, COLUMN({ round: R2([playing()]), nowMs: NOW, data: DATA({ views: [S1, S2] }), openRound: handle }));
+    const blocks = wrappers(ui.tree());
+    expect(blocks, "anti-vacuity: one wrapper per next round").toHaveLength(2);
+    const [a, b] = blocks.map(mountBlock) as [ReturnType<typeof mountBlock>, ReturnType<typeof mountBlock>];
+    expect(propsOf(blocks[0]!).playing, "quiet while a board plays").toEqual({ primary: false });
+
+    b.read().on.ask();
+    expect(b.read().state.confirming).toBe(true);
+    expect(a.read().state.confirming, "the first block is its own round").toBe(false);
+    b.read().on.open();
+    b.read().on.open();
+    expect(net.calls.map((c) => [c.url, c.json])).toEqual([["/api/v1/stages/s2/open-round", { roundNo: 5 }]]);
+    // The shared handle is the round ON SCREEN's; the next round's block must never borrow it.
+    for (const [name, spy] of Object.entries(spies)) expect(spy, name).not.toHaveBeenCalled();
+  });
+
+  it("every board over flips the emphasis the wrapper hands down; the press is unchanged", () => {
+    const ui = renderIsland(RoundColumn, COLUMN({ round: R2([over(), over()]), nowMs: NOW, data: DATA({ views: [S1] }) }));
+    const [w] = wrappers(ui.tree());
+    expect(propsOf(w!).playing).toEqual({ primary: true });
+  });
+});
+
+describe("RoundColumn: the queue is the aside's first child in every phase", () => {
+  const CARD_DATA = (round: ArbiterRound | null) =>
+    DATA({
+      views: [NEXT({ press: "open" }), VIEW({ roundNo: 1, press: "open" })],
+      held: [
+        {
+          fixtureId: "h1",
+          fixtureNo: 1,
+          homeName: "Ada L.",
+          awayName: "Bo M.",
+          scheduledAt: null,
+          reason: "aborted",
+          lastError: null,
+          whiteSide: "home",
+          revokedSeat: null,
+          roundNo: round?.roundNo ?? 1,
+          boardNo: 4,
+          stageName: "Swiss",
+          canResync: false,
+          seated: false,
+          noResultOffer: { kind: "void" },
+        },
+      ],
+      ownFlagged: 1,
+    });
+  const asideInner = (h: string) => {
+    const i = inner(h, "arbiter-round-column");
+    if (i === null) throw new Error("no aside in the markup");
+    return i;
+  };
+
+  it("before, check-in and playing: the first element inside the aside is the queue, ahead of the phase block", () => {
+    const checkinRound = ROUND([checking(OPEN(), seat(true), seat(false))]);
+    const phases: [string, RoundColumnProps][] = [
+      ["before", COLUMN({ round: null, data: CARD_DATA(null), nowMs: NOW })],
+      ["checkin", COLUMN({ round: checkinRound, data: CARD_DATA(checkinRound), nowMs: NOW })],
+      ["playing", COLUMN({ round: R2([playing()]), data: CARD_DATA(R2([])), nowMs: NOW })],
+    ];
+    const phaseBlock: Record<string, string> = { before: "arbiter-column-open", checkin: "arbiter-checkin-hero", playing: "arbiter-column-status" };
+    let checked = 0;
+    for (const [phase, props] of phases) {
+      const h = column(props);
+      expect(tagOf(h, "arbiter-round-column"), phase).toContain(`data-phase="${phase}"`);
+      const first = /^<([a-z0-9]+)\b[^>]*>/.exec(asideInner(h))!;
+      expect(first[0], `${phase}: the first child`).toContain(ATTR("arbiter-column-queue"));
+      expect(h.indexOf(ATTR("arbiter-column-queue")), phase).toBeLessThan(h.indexOf(ATTR(phaseBlock[phase]!)));
+      expect(count(h, "arbiter-column-queue"), `${phase}: one queue`).toBe(1);
+      expect(count(h, "arbiter-column-card"), `${phase}: its card`).toBe(1);
+      expect(textIn(h, "arbiter-column-own-flagged"), `${phase}: C11, the line is rendered through the column`).toBe(esc(pl("externalPlay.queue.ownFlagged", 1)));
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: three phases").toBe(3);
+  });
+
+  it("with nothing to decide the queue is absent in every phase and the phase block is the first child", () => {
+    const checkinRound = ROUND([checking(OPEN(), seat(true), seat(false))]);
+    const propsByPhase: [string, RoundColumnProps][] = [
+      ["before", COLUMN({ round: null, nowMs: NOW })],
+      ["checkin", COLUMN({ round: checkinRound, nowMs: NOW })],
+      ["playing", COLUMN({ round: R2([playing()]), nowMs: NOW })],
+    ];
+    for (const [phase, props] of propsByPhase) {
+      const h = column(props);
+      expect(h, phase).not.toContain(ATTR("arbiter-column-queue"));
+      expect(asideInner(h), phase).not.toMatch(/^<[a-z0-9]+\b[^>]*arbiter-column-queue/);
+    }
+  });
+
+  it("inside the aside no CSS order is used: source order is visual order (C10)", () => {
+    const checkinRound = ROUND([checking(OPEN(), seat(true), seat(false))]);
+    const cases: RoundColumnProps[] = [
+      COLUMN({ round: null, data: CARD_DATA(null), nowMs: NOW }),
+      COLUMN({ round: checkinRound, data: CARD_DATA(checkinRound), nowMs: NOW }),
+      COLUMN({ round: R2([playing()]), data: CARD_DATA(R2([])), nowMs: NOW }),
+    ];
+    let scanned = 0;
+    for (const props of cases) {
+      const body = asideInner(column(props));
+      for (const m of body.matchAll(/class="([^"]*)"/g)) {
+        expect(m[1], m[1]).not.toMatch(/(^|\s)(?:[\w-]+:)*-?order-/);
+        scanned += 1;
+      }
+    }
+    expect(scanned, "anti-vacuity: class strings scanned").toBeGreaterThan(30);
+  });
+
+  it("the column hands the queue its round, its rows, its slugs and the panel's select", () => {
+    const onSelect = vi.fn();
+    const data = CARD_DATA(R2([playing({ fixtureId: "h1" })]));
+    const ui = renderIsland(RoundColumn, COLUMN({ round: R2([playing({ fixtureId: "h1" })]), data, on: { select: onSelect, extendBoard: () => {} }, nowMs: NOW }));
+    const queueEl = ui.tree().find((n) => typeof n.type === "function" && propsOf(n).held !== undefined && propsOf(n).onSelect !== undefined)!;
+    expect(queueEl, "the queue is mounted by the column").toBeDefined();
+    const p = propsOf(queueEl);
+    expect(p.held).toBe(data.held);
+    expect(p.flagged).toBe(data.flagged);
+    expect(p.ownFlagged).toBe(1);
+    expect(p.slugs).toBe(SLUGS);
+    expect((p.round as ArbiterRound).roundNo).toBe(2);
+    (p.onSelect as (id: string) => void)("h1");
+    expect(onSelect).toHaveBeenCalledWith("h1");
+  });
+});
+
+describe("the playing column under another locale: every word comes from that dictionary", () => {
+  const fill = (s: string, vars: Record<string, string | number>) => Object.entries(vars).reduce((acc, [k, v]) => acc.replaceAll(`{${k}}`, String(v)), s);
+  const under = (dict: Dict, locale: Locale, node: ReactNode) => renderToStaticMarkup(<DictProvider dict={dict} locale={locale}>{node}</DictProvider>);
+
+  it.each([["es", esUi], ["fr", frUi], ["nl", nlUi]] as [Locale, Dict][])("%s: status, finished clause and the next round's warning", (locale, dict) => {
+    const d = dict as unknown as Record<string, string>;
+    const props = COLUMN({
+      round: R2([playing(), playing(), over()]),
+      nowMs: NOW,
+      data: DATA({ views: [NEXT({ earlierInPlay: [{ roundNo: 2, games: 3 }] })] }),
+    });
+    const h = under(dict, locale, <RoundColumn {...props} />);
+    const expected: Record<string, string> = {
+      playing: fill(d["arbiter.column.playing.other"]!, { count: 2, total: 3 }),
+      finished: fill(d["arbiter.column.finished.one"]!, { count: 1 }),
+      earlier: fill(d["runsheet.round.confirmEarlierInPlay.other"]!, { round: 2, count: 3 }),
+      cta: d["runsheet.round.openCta"]!,
+    };
+    for (const [what, text] of Object.entries(expected)) expect(h, `${locale} ${what}`).toContain(esc(text));
+    expect(d["arbiter.column.playing.other"], `${locale} is translated`).not.toBe(en["arbiter.column.playing.other"]);
+    expect(h, `${locale}: English leaked`).not.toContain(esc(pl("arbiter.column.playing", 3, { count: 2, total: 3 })));
+    expect(Object.keys(expected).length, "anti-vacuity: words checked").toBe(4);
+  });
+});
+
+describe("the playing column: layout rules", () => {
+  it("no dash or arrow in the markup, every control is 44px, and no scroller is left unreachable", () => {
+    const h = playingColumn([playing(), over()], {
+      roundExtend: BAR,
+      data: DATA({ views: [NEXT({ earlierInPlay: [{ roundNo: 1, games: 2 }, { roundNo: 2, games: 1 }] })] }),
+    });
+    for (const code of [0x2013, 0x2014, 0x2192, 0x2190, 0x2197]) expect(h, `U+${code.toString(16)}`).not.toContain(String.fromCharCode(code));
+    const controls = [...h.matchAll(/<(?:button|a)\b[^>]*>/g)].map((m) => m[0]);
+    expect(controls.length, "anti-vacuity: the next-round press is the one control").toBe(1);
+    for (const c of controls) expect(classOf(c).split(/\s+/), c).toContain("min-h-11");
+    for (const tag of h.match(SCROLLERS) ?? []) expect(tag, tag).toContain('tabindex="0"');
+  });
+
+  it("the status block is a min-w-0 box that wraps (a long heading cannot push the column wider)", () => {
+    const h = playingColumn([playing()]);
+    expect(classOf(tagOf(h, "arbiter-column-status")!).split(/\s+/)).toContain("min-w-0");
+    expect(classOf(tagOf(h, "arbiter-round-column")!).split(/\s+/)).toContain("min-w-0");
+  });
+});
+
+describe("the queue under another locale, through the column that mounts it", () => {
+  const fill = (s: string, vars: Record<string, string | number>) => Object.entries(vars).reduce((acc, [k, v]) => acc.replaceAll(`{${k}}`, String(v)), s);
+  const under = (dict: Dict, locale: Locale, node: ReactNode) => renderToStaticMarkup(<DictProvider dict={dict} locale={locale}>{node}</DictProvider>);
+  const heldRow = (fixtureId: string, boardNo: number | null): RoundColumnData["held"][number] => ({
+    fixtureId,
+    fixtureNo: 1,
+    homeName: "Ada L.",
+    awayName: "Bo M.",
+    scheduledAt: null,
+    reason: "aborted",
+    lastError: null,
+    whiteSide: "home",
+    revokedSeat: null,
+    roundNo: 2,
+    boardNo,
+    stageName: "Swiss",
+    canResync: false,
+    seated: false,
+    noResultOffer: { kind: "void" },
+  });
+  const flaggedBoard = (fixtureId: string, state: ArbiterBoard["state"]): RoundColumnData["flagged"][number] => ({
+    ...board({ fixtureId, boardNo: 7, state, flags: [{ id: `${fixtureId}-a`, kind: "out_of_band_play", at: iso(NOW), plies: null }, { id: `${fixtureId}-b`, kind: "out_of_band_play", at: iso(NOW), plies: null }] }),
+    roundNo: 2,
+    stageName: "Swiss",
+  });
+
+  it.each([["es", esUi], ["fr", frUi], ["nl", nlUi]] as [Locale, Dict][])("%s: the title, both Review words, Mark as reviewed, the flag count and the ownFlagged line", (locale, dict) => {
+    const d = dict as unknown as Record<string, string>;
+    const round = R2([playing({ fixtureId: "h1" })]);
+    const props = COLUMN({
+      round,
+      nowMs: NOW,
+      data: DATA({
+        held: [heldRow("h1", 4), heldRow("h2", null)],
+        flagged: [flaggedBoard("g1", { kind: "cancelled" })],
+        ownFlagged: 2,
+      }),
+    });
+    const h = under(dict, locale, <RoundColumn {...props} />);
+    const expected: Record<string, string> = {
+      title: fill(d["arbiter.column.queue.other"]!, { count: 3 }),
+      review: fill(d["arbiter.column.review"]!, { board: 4 }),
+      reviewThis: d["arbiter.column.reviewThis"]!,
+      markReviewed: d["externalPlay.queue.markReviewed"]!,
+      flags: fill(d["arbiter.flagCount.other"]!, { count: 2 }),
+      ownFlagged: fill(d["externalPlay.queue.ownFlagged.other"]!, { count: 2 }),
+    };
+    for (const [what, text] of Object.entries(expected)) expect(h, `${locale} ${what}`).toContain(esc(text));
+    // Premises: these differ from the English, so containing them proves the locale was used; and none of the English leaked.
+    for (const key of ["arbiter.column.queue.other", "arbiter.column.review", "arbiter.column.reviewThis"]) expect(d[key], `${locale} ${key} is translated`).not.toBe(en[key]);
+    for (const text of [pl("arbiter.column.queue", 3), t("arbiter.column.review", { board: 4 }), en["arbiter.column.reviewThis"]!]) {
+      expect(h, `${locale}: English leaked`).not.toContain(esc(text));
+    }
+    expect(Object.keys(expected).length, "anti-vacuity: words checked").toBe(6);
   });
 });

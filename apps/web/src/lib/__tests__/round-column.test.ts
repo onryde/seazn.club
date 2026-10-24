@@ -724,14 +724,19 @@ describe("nextRoundViews", () => {
 // The set, the clock and the tally must give the same answer from it, or the first paint disagrees with itself.
 
 describe("no clock yet (nowMs null): the snapshot's refusal stands as the window's verdict", () => {
-  /** What each declared refusal says about the board's window at the snapshot. `not_open` and `closed` are the window's own words;
-   *  `cap_reached` is only ever judged INSIDE the window (window.ts `extendRefusal` judges closed and not_open before the cap);
-   *  `game_started` and `not_playable` are the board's own state, which says nothing about the window (a board that is over is
-   *  not `checking_in` at all). Typed as a Record over the declared list, so a sixth refusal cannot be added without choosing. */
+  /** What each declared refusal says about the board's window at the snapshot. The window has exactly two words of its own:
+   *  `not_open` (still ahead) and `closed` (past). Every other verdict says nothing against it:
+   *   - `cap_reached` is only ever judged INSIDE the window (window.ts `extendRefusal` judges closed and not_open before the cap);
+   *   - `game_started` is the board's state, and a create marker can be on file while the board is still `checking_in`;
+   *   - `not_playable` is a board that is over, which is never `checking_in` at all (arbiter.ts `boardOf` gives a playable board
+   *     with no game that state). That row is UNREACHABLE through `openWindowBoards`; it was `false` while the rule listed it
+   *     as shut, and is `true` since the rule was simplified to "shut iff not_open or closed" (Task 6 review m8). It is kept
+   *     so that a sixth refusal word cannot be added without choosing, and so that the simplification is stated, not implied.
+   *  Typed as a Record over the declared list, so a new refusal cannot be added without choosing. */
   const SNAPSHOT_SAYS_OPEN: Record<ExtendRefusal, boolean> = {
     not_open: false,
     closed: false,
-    not_playable: false,
+    not_playable: true,
     game_started: true,
     cap_reached: true,
   };
@@ -779,10 +784,16 @@ describe("no clock yet (nowMs null): the snapshot's refusal stands as the window
     const open = checkingIn(openNow(8), { white: seat(true), black: seat(false) });
     const ahead = checkingIn(checkin(15 * MIN, 25 * MIN, { refusal: "not_open", canExtend: false }), { white: seat(true), black: seat(true) });
     const closed = checkingIn(pastDeadline(), { white: seat(false), black: seat(false) });
-    const boards = [open, ahead, closed];
+    // Inside its window with no presses left: the server judges the cap only INSIDE the window (window.ts `extendRefusal`), so at the
+    // snapshot instant its refusal is `cap_reached` and the window is open - the reading a ticking clock gives it too.
+    const capped = checkingIn(checkin(-10 * MIN, 8 * MIN, { refusal: "cap_reached", canExtend: false, extensionsLeft: 0 }), { white: seat(true), black: seat(false) });
+    const boards = [open, ahead, closed, capped];
     expect(openWindowBoards(boards, null)).toEqual(openWindowBoards(boards, NOW));
     expect(checkinClock(boards, null)).toEqual(checkinClock(boards, NOW));
     expect(checkinTally(boards, null)).toEqual(checkinTally(boards, NOW));
-    expect(openWindowBoards(boards, NOW), "anti-vacuity: the compared set is not empty").toHaveLength(1);
+    expect(openWindowBoards(boards, NOW), "anti-vacuity: the compared set is not empty").toHaveLength(2);
+    expect(openWindowBoards(boards, NOW), "the capped board is in the compared set, not skipped").toContain(capped);
+    expect(openWindowBoards(boards, null)).toContain(capped);
+    expect(checkinTally(boards, null), "both open boards' four seats are counted, the capped one included").toMatchObject({ here: 2, seats: 4 });
   });
 });

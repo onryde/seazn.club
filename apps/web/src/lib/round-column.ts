@@ -9,7 +9,7 @@
 // edge of it itself.
 import type { ArbiterBoard, ArbiterBoardState, ArbiterRound } from "./arbiter-view.ts";
 import { boardIsOver } from "./arbiter-view.ts";
-import type { CheckinExtendState, ExtendRefusal } from "./checkin-extend.ts";
+import type { CheckinExtendState } from "./checkin-extend.ts";
 import { inExtendWindow, liveExtendRefusal } from "./checkin-extend.ts";
 import type { OpenRoundView } from "./open-round.ts";
 import type { FlaggedBoard } from "@/server/usecases/external-play/arbiter";
@@ -38,15 +38,13 @@ export function roundColumnPhase(round: ArbiterRound | null, requested: "unavail
 export type OpenWindowBoard = ArbiterBoard & { checkin: CheckinExtendState };
 
 /** No clock yet (`nowMs` null - the server render and the first client paint): the SNAPSHOT's word stands, as every other reader of a
- *  window reads it (`boardExtendOffer`, `liveExtendableBoards`). `refusal` says where the board's window was when the page was read:
- *  `not_open` (still ahead) and `closed` (past) are the window's own words, `not_playable` is a board that is over; every other
- *  verdict - none, `cap_reached` (judged only INSIDE the window, window.ts `extendRefusal`), `game_started` (the board's state, not
- *  the window's) - leaves the window open. */
-const SNAPSHOT_SAYS_NOT_OPEN: readonly (ExtendRefusal | null)[] = ["not_open", "closed", "not_playable"];
-
-/** Is the board's window open at `nowMs`? `inExtendWindow` is the one authority for an instant; null falls back to the snapshot. */
+ *  window reads it (`boardExtendOffer`, `liveExtendableBoards`). `refusal` says where the board's window was when the page was read,
+ *  and the window has exactly two words of its own: `not_open` (still ahead) and `closed` (past). Every other verdict - none,
+ *  `cap_reached` (judged only INSIDE the window, window.ts `extendRefusal`), `game_started` (the board's state, not the window's:
+ *  a create marker can be on file while the board is still `checking_in`) and `not_playable` (a board that is over, which
+ *  `openWindowBoards` has already left out by state) - says nothing against the window, so the window is open. */
 function windowOpen(c: CheckinExtendState, nowMs: number | null): boolean {
-  return nowMs === null ? !SNAPSHOT_SAYS_NOT_OPEN.includes(c.refusal) : inExtendWindow(c, nowMs);
+  return nowMs === null ? c.refusal !== "not_open" && c.refusal !== "closed" : inExtendWindow(c, nowMs);
 }
 
 /** The `checking_in` boards whose window is open now (`inExtendWindow` over `board.checkin`): the tally's set AND the waiting
