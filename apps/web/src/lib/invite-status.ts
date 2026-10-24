@@ -80,6 +80,11 @@ const foldMailbox = (address: string): string => address.trim().toLowerCase();
  *    previous player's rows are still there and must not read as the new player's.
  *  - A `replaced` row is dropped (it has no word); a live row for the same recipient still answers.
  *  - `rows` is the newest row per recipient, as `latestEmailStatus` returns it. Callers pass RAW addresses.
+ *  - If two live rows still fold to one mailbox, the LATER one in `rows` answers, so a caller orders its rows oldest
+ *    first (newest last). It can happen: that query de-duplicates on `lower(recipient)` and does not trim, so
+ *    `" A@x "` and `"a@x"` are two rows to SQL and one mailbox here.
+ *  - A mailbox with no row of its own gets no word while a sibling mailbox has one: the seat shows only the mail that
+ *    exists (spec 6.2 item 3). "Not delivered" and "Not invited" speak for a seat with NO mail left (items 4 and 5).
  *  - No mail left for the seat: "Not delivered" if the seat is stamped (a held stamp with no mail is the same as every row
  *    having ended badly, which is what `seatOutcome([])` says), otherwise "Not invited".
  */

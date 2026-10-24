@@ -6433,7 +6433,7 @@
   "arbiter.invite.sent": "Verzonden",
   "arbiter.invite.delivered": "Afgeleverd",
   "arbiter.invite.delayed": "Vertraagd",
-  "arbiter.invite.bounced": "Teruggekaatst",
+  "arbiter.invite.bounced": "Onbestelbaar",
   "arbiter.invite.notDelivered": "Niet afgeleverd",
   "arbiter.invite.help": "Afgeleverd betekent dat de mailserver van de speler de uitnodiging heeft geaccepteerd. Het betekent niet dat de speler de uitnodiging heeft gelezen.",
   "externalPlay.room.state.revoked.title": "Je Lichess-koppeling is ingetrokken, dus we kunnen je zetten niet spelen.",

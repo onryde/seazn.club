@@ -180,13 +180,35 @@ describe("seatInviteWords", () => {
     ).toEqual(["delivered"]);
   });
 
-  it("every status through the seat, one row each: the word is inviteWordOf's, and `replaced` falls to the stamp", () => {
+  it("two mailboxes, one row: exactly that row's word, no chip for the rowless sibling (spec 6.2 item 3)", () => {
+    const rows = [{ recipient: "a@x", status: "sent" as const }];
+    // Stamped or not, and whichever side of the mailbox list the rowless address sits on.
+    expect(seatInviteWords({ rows, mailboxes: ["a@x", "b@x"], stamped: true })).toEqual(["sent"]);
+    expect(seatInviteWords({ rows, mailboxes: ["b@x", "a@x"], stamped: true })).toEqual(["sent"]);
+    expect(seatInviteWords({ rows, mailboxes: ["a@x", "b@x"], stamped: false })).toEqual(["sent"]);
+    // The stamp speaks only for a seat with NO mail left: two rowless mailboxes are still one word, not two.
+    expect(seatInviteWords({ rows: [], mailboxes: ["a@x", "b@x"], stamped: true })).toEqual(["not_delivered"]);
+    expect(seatInviteWords({ rows: [], mailboxes: ["a@x", "b@x"], stamped: false })).toEqual(["not_invited"]);
+  });
+
+  it("two live rows folding to one mailbox: the later row in `rows` answers (callers pass newest last)", () => {
+    // The two words differ, so the test can tell which row won; both orders are driven.
+    const padded = { recipient: " A@x ", status: "delivered" as const };
+    const plain = { recipient: "a@x", status: "bounced" as const };
+    expect(seatInviteWords({ rows: [padded, plain], mailboxes: ["a@x"], stamped: true })).toEqual(["bounced"]);
+    expect(seatInviteWords({ rows: [plain, padded], mailboxes: ["a@x"], stamped: true })).toEqual(["delivered"]);
+    // One word either way, never one per row.
+    expect(seatInviteWords({ rows: [padded, plain], mailboxes: ["a@x"], stamped: true })).toHaveLength(1);
+  });
+
+  it("every status through the seat, one row each: the word is spec 6.1's, and `replaced` falls to the stamp", () => {
+    // Expected from the typed spec table, not from inviteWordOf; `replaced` is not in the table, so it falls to the stamp.
+    const specWord: Partial<Record<OutboxStatus, InviteWord>> = SPEC_6_1;
     let checked = 0;
     for (const status of OUTBOX_STATUSES) {
       const rows = [{ recipient: "p@x", status }];
       const got = seatInviteWords({ rows, mailboxes: ["p@x"], stamped: true });
-      const word = inviteWordOf(status);
-      expect(got, status).toEqual([word ?? "not_delivered"]);
+      expect(got, status).toEqual([specWord[status] ?? "not_delivered"]);
       checked += 1;
     }
     expect(checked, "anti-vacuity: every status of the outbox vocabulary").toBe(OUTBOX_STATUSES.length);
