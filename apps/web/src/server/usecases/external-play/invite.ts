@@ -26,7 +26,7 @@ import { appOrigin, externalPlayInviteEmail } from "@/lib/email";
 import { toLocale } from "@/lib/i18n-constants";
 import { routes } from "@/lib/routes";
 import { log } from "@/server/logger";
-import { LIVE_STATUSES, RETRYABLE_STATUSES, dispatchNow, enqueueEmail, type OutboxStatus } from "@/server/email-outbox";
+import { LIVE_STATUSES, RETRYABLE_STATUSES, dispatchNow, enqueueEmail, latestStatusesOfRows, type OutboxStatus } from "@/server/email-outbox";
 import { errFields } from "@/server/email-outbox/err-fields";
 import { mintMatchRoomToken } from "@/server/usecases/match-room-token";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -239,22 +239,12 @@ export function seatOutcome(statuses: readonly OutboxStatus[]): SeatOutcome {
 
 /** The status NOW of the newest non-replaced row for each of these rows' kind, ref and recipient (the recipient compared as the
  *  replace rule compares it, case-insensitively). A row the caller wrote and a newer one another request wrote for the same
- *  recipient answer alike: the newer row is what the recipient's mail is. */
-export async function latestStatuses(ids: readonly string[]): Promise<Map<string, OutboxStatus>> {
-  if (ids.length === 0) return new Map();
-  const rows = await sql<{ id: string; status: OutboxStatus }[]>`
-    select o.id, l.status
-      from email_outbox o
-      join lateral (
-        select x.status from email_outbox x
-         where x.kind = o.kind and x.ref_type = o.ref_type and x.ref_id = o.ref_id
-           and lower(x.recipient) = lower(o.recipient) and x.status <> 'replaced'
-         order by x.created_at desc, x.id desc
-         limit 1
-      ) l on true
-     where o.id = any(${ids as string[]}::uuid[])`;
-  return new Map(rows.map((r) => [r.id, r.status]));
-}
+ *  recipient answer alike: the newer row is what the recipient's mail is.
+ *
+ *  The rule lives in ONE place, the outbox's status module (`latestStatusesOfRows`, which shares its "not replaced" and "newest
+ *  first" fragments with `latestEmailStatus`, the arbiter's read): a second copy of it here would be a second authority for what
+ *  "the latest email" means. Kept as this name and signature for the invite's callers. */
+export const latestStatuses = (ids: readonly string[]): Promise<Map<string, OutboxStatus>> => latestStatusesOfRows(ids);
 
 /**
  * After the caller's transaction has committed: send each queued row once, in the request (`dispatchNow`, the open's own clock

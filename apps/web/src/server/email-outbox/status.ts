@@ -10,6 +10,19 @@ import "server-only";
 import { sql, type Tx } from "@/lib/db";
 import { PURGE_BATCH, RETENTION_DAYS, type OutboxKind, type OutboxStatus } from "./constants";
 
+// THE RULE for "which row is the email a recipient has about a thing", in one place. Two reads need it and their call shapes
+// differ - `latestEmailStatus` asks by (organisation, ref type, refs) and answers per recipient; `latestStatusesOfRows` asks by row
+// id (the rows a request has just written, whose org it owns) and answers per row - so they cannot be one statement, but they
+// share these two fragments and so cannot disagree about what "latest" means:
+//  - `current`: a `replaced` row is never the answer, even when it is the newest on the clock (the V469 replace trigger supersedes
+//    by KEY, not by time, so the row that carries the outcome is the newest one that is not replaced);
+//  - `newestFirst`: "newest" is `created_at`, ties by `id` - never `status_at`, which moves with every status change and says
+//    nothing about which email is the latest.
+// Both are written unqualified on purpose: inside `latestStatusesOfRows`' lateral subselect an unqualified column binds to the inner
+// table (`x`), the one being ranked, and not to the outer row.
+const current = () => sql`status <> 'replaced'`;
+const newestFirst = () => sql`created_at desc, id desc`;
+
 /** One recipient's latest email about one thing. `at` is when its status last changed (`status_at`). */
 export type EmailStatusRow = { refId: string; recipient: string; kind: OutboxKind; status: OutboxStatus; at: Date };
 
@@ -31,9 +44,33 @@ export async function latestEmailStatus(
            ref_id as "refId", recipient, kind, status, status_at as "at"
       from email_outbox
      where org_id = ${orgId} and ref_type = ${refType} and ref_id = any(${refIds as string[]}::text[])
-       and status <> 'replaced'
-     order by ref_id, lower(recipient), created_at desc, id desc`;
+       and ${current()}
+     order by ref_id, lower(recipient), ${newestFirst()}`;
   return rows.map((r) => ({ refId: r.refId, recipient: r.recipient, kind: r.kind, status: r.status, at: r.at }));
+}
+
+/**
+ * The status NOW of the newest non-replaced row for each of these ROWS' kind, ref and recipient (the recipient compared as the
+ * replace rule compares it, case-insensitively), keyed by the row asked about. A row the caller wrote and a newer one another
+ * request wrote for the same recipient answer alike: the newer row is what the recipient's mail is. The same rule as
+ * `latestEmailStatus` (the `current` and `newestFirst` fragments above); asked by row id because its caller (the chess invite, in the
+ * request that just queued the rows) holds ids, not an organisation, and has no need of the org fence: they are its own rows.
+ * Empty `ids` answers an empty map and issues no statement.
+ */
+export async function latestStatusesOfRows(ids: readonly string[]): Promise<Map<string, OutboxStatus>> {
+  if (ids.length === 0) return new Map();
+  const rows = await sql<{ id: string; status: OutboxStatus }[]>`
+    select o.id, l.status
+      from email_outbox o
+      join lateral (
+        select x.status from email_outbox x
+         where x.kind = o.kind and x.ref_type = o.ref_type and x.ref_id = o.ref_id
+           and lower(x.recipient) = lower(o.recipient) and ${current()}
+         order by ${newestFirst()}
+         limit 1
+      ) l on true
+     where o.id = any(${ids as string[]}::uuid[])`;
+  return new Map(rows.map((r) => [r.id, r.status]));
 }
 
 /** Exactly RETENTION_DAYS of 24 h, in seconds: an `interval '90 days'` would shift by an hour across a DST change in the session's
