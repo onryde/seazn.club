@@ -14,13 +14,14 @@
 // branches on sport.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
-import { sql } from "@/lib/db";
+import { sql, statementCount } from "@/lib/db";
 import type { ArbiterBoard } from "@/lib/arbiter-view";
 import { OUTBOX_STATUSES, type OutboxStatus } from "@/server/email-outbox/constants";
 import { boardAnchor, checkInCounts, windowFor } from "@/server/external-play/window";
 import { log } from "@/server/logger";
 import { stampFixtureCheckIn } from "../me";
 import { scoreEvent } from "../scoring";
+import { getFixtureState } from "../fixtures";
 import { mintOrgOwnerAuth } from "../external-play/auth";
 
 // Nothing here may reach the network: the keyless gate ends a row before the transport is asked, and this replaces the transport
@@ -41,11 +42,18 @@ vi.mock("@/server/email-outbox/status", async (importOriginal) => {
   return { ...actual, latestEmailStatus: vi.fn(actual.latestEmailStatus) };
 });
 
+// The check-in read, wrapped the same way: the round is read ONCE, never per board.
+vi.mock("../external-play/check-ins", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../external-play/check-ins")>();
+  return { ...actual, checkedInAtOfBoards: vi.fn(actual.checkedInAtOfBoards) };
+});
+
 import { latestEmailStatus } from "@/server/email-outbox/status";
 import { listFlaggedExternalPlay, loadArbiterRound } from "../external-play/arbiter";
+import { checkedInAtOfBoards } from "../external-play/check-ins";
 import { resendExternalPlayNotice } from "../external-play/invite";
 import { openRound } from "../external-play/open-round";
-import { CHESS_SEAT_REF_TYPE, STAMP_COLUMN, chessSeatRef, type Colour } from "../external-play/seat-stamp";
+import { CHESS_SEAT_REF_TYPE, STAMP_COLUMN, chessSeatRef, seatStampBound, type Colour } from "../external-play/seat-stamp";
 import { generateStageFixtures, unpairSwissRound } from "../stages";
 import {
   seedOnlineChessRound,
@@ -167,6 +175,7 @@ describe.runIf(HAS_DB)("loadArbiterRound seats: the empty case and the boards th
     expect(boards.map((b) => b.state.kind), "premise: not one board is in check-in").toEqual(["starting", "live", "on_hold"]);
     expect(boards.map((b) => b.seats)).toEqual([null, null, null]);
     expect(vi.mocked(latestEmailStatus), "the outbox is not read for a round with no board in check-in").toHaveBeenCalledTimes(0);
+    expect(vi.mocked(checkedInAtOfBoards), "nor are the check-ins").toHaveBeenCalledTimes(0);
   });
 
   it("a board past check-in (starting, live, on hold, result) carries seats null; the board in check-in beside them carries its seats", async () => {
@@ -185,7 +194,46 @@ describe.runIf(HAS_DB)("loadArbiterRound seats: the empty case and the boards th
     // The positive pair: the null above is the state's doing, not the loader's failure to read anything.
     expect(boards[0]!.fixtureId).toBe(inCheckIn!.fixtureId);
     expect(boards[0]!.seats).not.toBeNull();
+    // The reads were asked about the one board in check-in and nobody else's.
+    expect(vi.mocked(latestEmailStatus).mock.calls.map((c) => [...c[2]].sort())).toEqual([
+      [chessSeatRef(inCheckIn!.fixtureId, "black"), chessSeatRef(inCheckIn!.fixtureId, "white")].sort(),
+    ]);
+    expect(vi.mocked(checkedInAtOfBoards).mock.calls.map((c) => [...c[0]])).toEqual([[inCheckIn!.fixtureId]]);
+  });
+
+  it("one read per round, not per board: several boards in check-in cost ONE outbox read and ONE check-in read, and each board keeps its own facts", async () => {
+    const r = await openedRound(4);
+    const [a, b, c, past] = r.boards;
+    await putGame(past!.fixtureId, "starting");
+    // Each board's own facts, so a batch that mixed boards up would show: b's White mail was delivered; c's Black player is here.
+    const [bWhite] = await rowsOf(r.orgId, b!.fixtureId, "white");
+    await setStatus(bWhite!.id, "delivered");
+    await stampFixtureCheckIn(c!.away.personId, c!.fixtureId, r.orgId);
+    vi.mocked(latestEmailStatus).mockClear();
+    vi.mocked(checkedInAtOfBoards).mockClear();
+    const boards = await boardsOf(r);
+    expect(boards.map((x) => x.state.kind), "premise: three boards in check-in and one past it").toEqual([
+      "checking_in",
+      "checking_in",
+      "checking_in",
+      "starting",
+    ]);
     expect(vi.mocked(latestEmailStatus), "ONE outbox read for the whole round").toHaveBeenCalledTimes(1);
+    expect(vi.mocked(checkedInAtOfBoards), "ONE check-in read for the whole round").toHaveBeenCalledTimes(1);
+    // ... asked about exactly the three boards in check-in, both seats of each.
+    const inCheckIn = [a!, b!, c!];
+    expect([...vi.mocked(latestEmailStatus).mock.calls[0]![2]].sort()).toEqual(
+      inCheckIn.flatMap((x) => (["white", "black"] as const).map((col) => chessSeatRef(x.fixtureId, col))).sort(),
+    );
+    expect([...vi.mocked(checkedInAtOfBoards).mock.calls[0]![0]].sort()).toEqual(inCheckIn.map((x) => x.fixtureId).sort());
+    const seatFacts = (x: ArbiterBoard) =>
+      x.seats === null ? null : { white: [x.seats.white.here, ...x.seats.white.invites], black: [x.seats.black.here, ...x.seats.black.invites] };
+    expect(boards.map(seatFacts)).toEqual([
+      { white: [false, "not_delivered"], black: [false, "not_delivered"] },
+      { white: [false, "delivered"], black: [false, "not_delivered"] },
+      { white: [false, "not_delivered"], black: [true, "not_delivered"] },
+      null,
+    ]);
   });
 
   it("the Flagged list carries seats null, even for a board in check-in, and reads no outbox", async () => {
@@ -196,11 +244,13 @@ describe.runIf(HAS_DB)("loadArbiterRound seats: the empty case and the boards th
     // The positive pair: the round's own view of this very board has its seats.
     expect((await seatsOf(r, b.fixtureId)).white.invites.length, "premise: the round view reads this board's seats").toBeGreaterThan(0);
     vi.mocked(latestEmailStatus).mockClear();
+    vi.mocked(checkedInAtOfBoards).mockClear();
     const { boards } = await listFlaggedExternalPlay(r.owner, r.divisionId);
     expect(boards.map((x) => x.fixtureId)).toEqual([b.fixtureId]);
     expect(boards[0]!.state, "premise: the flagged board is still in check-in").toEqual({ kind: "checking_in" });
     expect(boards[0]!.seats).toBeNull();
     expect(vi.mocked(latestEmailStatus), "the Flagged list has no second pass").toHaveBeenCalledTimes(0);
+    expect(vi.mocked(checkedInAtOfBoards)).toHaveBeenCalledTimes(0);
   });
 });
 
@@ -519,5 +569,113 @@ describe.runIf(HAS_DB)("loadArbiterRound seats: one bad row does not fail the pa
     } finally {
       error.mockRestore();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+describe.runIf(HAS_DB)("loadArbiterRound seats: the sequence of a board's states", () => {
+  it("settled on the pad, then voided: the board is back in check-in and its seats are derived afresh from the rows and check-ins of NOW", async () => {
+    const r = await openedRound(1);
+    const b = r.boards[0]!;
+    const auth = await mintOrgOwnerAuth(r.orgId);
+    expect(await seatsOf(r, b.fixtureId), "premise: in check-in, nothing delivered, nobody here").toEqual({
+      white: { here: false, invites: ["not_delivered"] },
+      black: { here: false, invites: ["not_delivered"] },
+    });
+
+    // Settled on the pad: no longer in check-in, so no seats.
+    await scoreEvent(auth, b.fixtureId, { expected_seq: 0, type: "core.start", payload: {} });
+    await scoreEvent(auth, b.fixtureId, { expected_seq: 1, type: "boardgame.result", payload: { winner: b.home.entrantId } });
+    const settled = (await boardsOf(r))[0]!;
+    expect(settled.state, "premise: the result is on the board").toMatchObject({ kind: "result" });
+    expect(settled.seats).toBeNull();
+
+    // While it is settled the mail moves on and a player checks in.
+    const [white] = await rowsOf(r.orgId, b.fixtureId, "white");
+    await setStatus(white!.id, "delivered");
+    await stampFixtureCheckIn(b.home.personId, b.fixtureId, r.orgId);
+
+    // The result is voided on the pad: the fixture is open again and, with no game on file, the board is back in check-in.
+    const [decided] = await sql<{ id: string }[]>`
+      select id from score_events where fixture_id = ${b.fixtureId} and type = 'boardgame.result' order by seq desc limit 1`;
+    const fs = await getFixtureState(r.owner, b.fixtureId);
+    await scoreEvent(auth, b.fixtureId, { expected_seq: fs.last_seq, type: "core.void", payload: { event_id: decided!.id } });
+    expect(await seatsOf(r, b.fixtureId), "the seats of NOW: the delivered mail, the player who checked in meanwhile").toEqual({
+      white: { here: true, invites: ["delivered"] },
+      black: { here: false, invites: ["not_delivered"] },
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// seatStampBound is pure, so its table needs no database. Each row is written from the rule ("the row names the open on screen, and
+// THAT colour's stamp is set"), and the last two rows are the colour independence the loader's "Not invited" vs "Not delivered" hangs on.
+describe("seatStampBound: the table", () => {
+  const STAMP = new Date("2026-10-24T12:00:00.000Z");
+  const row = (o: { open: string | null; white?: boolean; black?: boolean }) => ({
+    roundOpenId: o.open,
+    whiteEmailedAt: o.white ? STAMP : null,
+    blackEmailedAt: o.black ? STAMP : null,
+  });
+  const TABLE: [string, ReturnType<typeof row>, string | null, Colour, boolean][] = [
+    ["the round on screen has no open: nothing is bound (both stamped)", row({ open: "A", white: true, black: true }), null, "white", false],
+    ["no open on screen, black asked", row({ open: "A", white: true, black: true }), null, "black", false],
+    ["a row bound to no open, none on screen, stamped: still not bound (null is not a match)", row({ open: null, white: true }), null, "white", false],
+    ["a row bound to no open, an open on screen", row({ open: null, white: true, black: true }), "A", "white", false],
+    ["the row names ANOTHER open (white)", row({ open: "B", white: true, black: true }), "A", "white", false],
+    ["the row names ANOTHER open (black)", row({ open: "B", white: true, black: true }), "A", "black", false],
+    ["same open, only the OTHER colour stamped (asked white)", row({ open: "A", black: true }), "A", "white", false],
+    ["same open, only the OTHER colour stamped (asked black)", row({ open: "A", white: true }), "A", "black", false],
+    ["same open, this colour stamped (white)", row({ open: "A", white: true }), "A", "white", true],
+    ["same open, this colour stamped (black)", row({ open: "A", black: true }), "A", "black", true],
+    ["same open, both stamped (white)", row({ open: "A", white: true, black: true }), "A", "white", true],
+    ["same open, both stamped (black)", row({ open: "A", white: true, black: true }), "A", "black", true],
+    ["same open, neither stamped", row({ open: "A" }), "A", "white", false],
+  ];
+
+  it("answers each row of the table", () => {
+    let checked = 0;
+    for (const [name, r, openId, colour, expected] of TABLE) {
+      expect(seatStampBound(r, openId, colour), name).toBe(expected);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: the whole table was asked").toBe(TABLE.length);
+    // Both answers are in the table, or it could not tell a constant from the rule.
+    expect(TABLE.some((t) => t[4])).toBe(true);
+    expect(TABLE.some((t) => !t[4])).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+describe("checkedInAtOfBoards: nothing to ask about", () => {
+  // No database: an empty id list is answered without a statement. With no DATABASE_URL a stray statement would THROW, and with one the
+  // counter pins it, so the test means the same in both modes (as status.test.ts does for latestEmailStatus).
+  it("empty ids answers an empty map and issues no statement", async () => {
+    const before = statementCount();
+    const answer = await checkedInAtOfBoards([]);
+    expect(answer).toEqual(new Map());
+    expect(statementCount() - before).toBe(0);
+  });
+});
+
+describe.runIf(HAS_DB)("checkedInAtOfBoards: one read, grouped by board", () => {
+  it("a non-empty ask is ONE statement (the counter is live), and the answer is fixture -> person -> stamp, absent for a board nobody checked in on", async () => {
+    const r = await openedRound(3);
+    const [one, two, nobody] = r.boards;
+    const t1 = new Date("2026-10-24T12:01:00.000Z");
+    const t2 = new Date("2026-10-24T12:02:00.000Z");
+    await stampFixtureCheckIn(one!.home.personId, one!.fixtureId, r.orgId, { at: t1 });
+    await stampFixtureCheckIn(one!.away.personId, one!.fixtureId, r.orgId, { at: t2 });
+    await stampFixtureCheckIn(two!.home.personId, two!.fixtureId, r.orgId, { at: t2 });
+    const before = statementCount();
+    const answer = await checkedInAtOfBoards([one!.fixtureId, two!.fixtureId, nobody!.fixtureId]);
+    expect(statementCount() - before, "one statement for three boards").toBe(1);
+    expect(answer).toEqual(
+      new Map([
+        [one!.fixtureId, new Map([[one!.home.personId, t1], [one!.away.personId, t2]])],
+        [two!.fixtureId, new Map([[two!.home.personId, t2]])],
+      ]),
+    );
+    expect(answer.has(nobody!.fixtureId)).toBe(false);
   });
 });

@@ -497,11 +497,18 @@ async function withSeats(
   auth: AuthCtx,
   built: readonly { row: BoardRow; board: ArbiterBoard; white: SidePlayer; black: SidePlayer }[],
 ): Promise<ArbiterBoard[]> {
-  // A board whose round was never opened has no window to be here in (and cannot be on screen: the round is read from its open), so
-  // it takes no seats, like the `checkin` it also lacks.
+  // A board whose round was never opened has no window to be here in, so it takes no seats, like the `checkin` it also lacks. It
+  // cannot be on screen (the round is chosen from `stage_round_opens` and the board joins that same row, which no product writer
+  // deletes; a stage's deletion takes its fixtures with it), so this is a guard and not a branch: if it ever fires the seats stay
+  // null, and we say so. Unreachable from a real seed, hence no test.
   const inCheckIn = built.flatMap((b) => {
+    if (b.board.state.kind !== "checking_in") return [];
     const anchor = anchorOf(b.row);
-    return b.board.state.kind === "checking_in" && anchor !== null ? [{ ...b, anchor }] : [];
+    if (anchor === null) {
+      log.warn({ fixtureId: b.row.fixtureId }, "arbiter: a board in check-in has no round open to anchor its window; its seats stay unread");
+      return [];
+    }
+    return [{ ...b, anchor }];
   });
   if (inCheckIn.length === 0) return built.map((b) => b.board);
 
@@ -527,7 +534,9 @@ async function withSeats(
       const rows = rowsByRef.get(refId) ?? [];
       const stamped = seatStampBound(row, row.openId, colour);
       // A held stamp with no mail at all is an anomaly (the stamp is released when every row ends badly, and a stamped seat was
-      // queued with a row): say so, and the seat reads "Not delivered".
+      // queued with a row): say so, and the seat reads "Not delivered". Scoped to a ref with NO rows on purpose: a stamped seat whose
+      // only rows are a PREVIOUS player's mailbox (a player swapped after the invite) is reachable in normal use, reads "Not delivered"
+      // quietly, and would otherwise log a warning on every refresh of the panel.
       if (stamped && rows.length === 0) {
         log.warn({ fixtureId: row.fixtureId, colour, refId }, "arbiter: a seat is stamped for this open but has no invite mail on file; it reads Not delivered");
       }
