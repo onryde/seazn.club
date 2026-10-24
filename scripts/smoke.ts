@@ -22404,7 +22404,7 @@ async function emailOutboxCronSmoke(): Promise<void> {
     return;
   }
   const body = (await right.json().catch(() => ({}))) as { ok?: boolean; data?: Record<string, unknown> };
-  const KEYS = ["claimed", "sent", "retried", "dead", "suppressed", "expired", "failed", "deferred"] as const;
+  const KEYS = ["claimed", "sent", "retried", "dead", "suppressed", "expired", "failed", "deferred", "purged"] as const;
   check(
     "email-outbox: cron runs a tick and answers a number for every report key",
     body.ok === true && KEYS.every((k) => typeof body.data?.[k] === "number"),
