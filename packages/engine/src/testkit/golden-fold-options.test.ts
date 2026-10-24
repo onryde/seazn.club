@@ -18,7 +18,9 @@ import type { AnySportModule } from "../sport/module.ts";
 import { builtinModules } from "../sports/index.ts";
 import { forEachSport } from "./for-each-sport.ts";
 import {
+  corpusStateDiff,
   foldOptionsProblem,
+  formatCorpusStateDiff,
   readCorpus,
   recomputeKernel,
   recomputeStats,
@@ -29,6 +31,7 @@ import {
   type GoldenEvent,
   type GoldenFoldOptions,
   type GoldenStream,
+  type StreamStateDiff,
 } from "./golden.ts";
 import { BRANCH_SEED_BASE } from "./golden-branches.ts";
 import { sweepBudget } from "./golden-budget.ts";
@@ -630,6 +633,21 @@ describe("extendFoldOptions - the append path", () => {
     const football = sport("football");
     const base = committedBefore("football");
     expect(() => extendFoldOptions(football, { ...base, configs: {}, streams: [] })).toThrow(/football records no config/);
+  });
+});
+
+describe("the recomputation a reviewer is told to run is the whole input of the stream", () => {
+  it("a re-baseline report that cannot name a moved key prints the recompute line with the corpus format and the stream's foldOptions", () => {
+    const football = sport("football");
+    const corpus = readCorpus("football");
+    const quiet = corpusStateDiff(corpus, corpus, football);
+    expect(formatCorpusStateDiff(quiet), "the empty case: nothing moved, no hint").not.toContain("recomputeStream");
+    const digestOnly: StreamStateDiff = {
+      index: 0, config: "default", seed: 1, changedSteps: [3], digestOnlySteps: [3], reformattedSteps: [], changedStateKeys: [],
+      outcomeMoved: false, summaryMoved: false, deltasMoved: false, summaryStepsMoved: [], overlayKeysMoved: [], statsKeysMoved: [], eventsMoved: false,
+    };
+    const report = formatCorpusStateDiff({ ...quiet, streams: [digestOnly], changedStreams: 1, changedStates: 1, digestOnlyStates: 1 });
+    expect(report).toContain("recomputeStream(module, corpus.configs[stream.config], stream.events, stream.lineups, corpusFormat(corpus), stream.foldOptions).states[N]");
   });
 });
 

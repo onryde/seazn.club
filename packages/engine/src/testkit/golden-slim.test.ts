@@ -357,6 +357,8 @@ describe("stepMismatch — exact at an anchor, digest everywhere else", () => {
     expect(hit).toContain("digest");
     expect(hit).toContain("recomputeStream");
     expect(hit).toContain("stream.events");
+    // the recomputation it prints is the whole input of the stream: the fold options are in it (GF-3 T2), and the format is not optional
+    expect(hit).toContain("stream.lineups, corpusFormat(corpus), stream.foldOptions)");
     expect(hit).toMatch(/nearest stored full state is step \d+/);
   });
 

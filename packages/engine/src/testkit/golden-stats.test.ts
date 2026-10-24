@@ -286,7 +286,7 @@ describe("player stats over every committed stream (swept, counted)", () => {
         const cfg = module.configSchema.parse(raw);
         const lineups = stream.lineups ?? defaultLineupPair(resolvePositions(module, cfg));
         const label = `${module.key} ${stream.config}#${stream.seed}`;
-        const recorded = recomputeStream(module, raw, stream.events, stream.lineups, 3).playerStats;
+        const recorded = recomputeStream(module, raw, stream.events, stream.lineups, 3, stream.foldOptions).playerStats;
         expect(recorded, label).toBeDefined();
         // the fold, asked independently: the ctx is built here from the raw declaration, and the rows are sorted here
         const kind = module.entrantModel?.defaultKind ?? module.entrantModel?.kinds?.[0] ?? "individual";

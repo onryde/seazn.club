@@ -1899,7 +1899,7 @@ export function formatCorpusStateDiff(diff: CorpusStateDiff): string {
       `  ${diff.digestOnlyStates} of those state(s) are stored as digests only, so no key ` +
         `can be named for them. Recompute the full state from the recorded ledger: ` +
         `recomputeStream(module, corpus.configs[stream.config], stream.events, ` +
-        `stream.lineups).states[N]`,
+        `stream.lineups, corpusFormat(corpus), stream.foldOptions).states[N]`,
     );
   }
   if (diff.eventsMoved) {
@@ -2217,7 +2217,8 @@ export function stateMismatch(
 // liked. It is bounded by one fact: the corpus still stores the `config`, the
 // `lineups` and every `event`, so the full state at ANY step is recomputable
 // locally — `recomputeStream(module, corpus.configs[stream.config],
-// stream.events, stream.lineups).states[N]`. A digest mismatch says so.
+// stream.events, stream.lineups, corpusFormat(corpus), stream.foldOptions).states[N]` (the options are part of the input, GF-3 T2: a
+// stream that offered an award folds to other states without it). A digest mismatch says so.
 //
 // WHAT THIS DOES NOT COST. The digest is taken over `comparableStateText` —
 // the exact text the byte-exact half of `stateMismatch` compares, with the
@@ -2526,7 +2527,7 @@ export function stepMismatch(
     `was kept, so the previous state is a hash in git too. The full state IS recomputable ` +
     `locally, because the ledger it folds from is still recorded: ` +
     `recomputeStream(module, corpus.configs[${JSON.stringify(stream.config)}], stream.events, ` +
-    `stream.lineups).states[${step}]` +
+    `stream.lineups, corpusFormat(corpus), stream.foldOptions).states[${step}]` +
     (nearest === null ? "." : `. The nearest stored full state is step ${nearest}.`)
   );
 }
