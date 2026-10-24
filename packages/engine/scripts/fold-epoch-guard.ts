@@ -185,13 +185,17 @@ const sortKeys = (_key: string, v: unknown): unknown =>
     : v;
 /** JSON with every object's keys in one order, so a payload written with its keys shuffled is the same input. */
 const canonical = (v: unknown): string => JSON.stringify(v ?? null, sortKeys);
-/** Whether two streams ask for the same fold: the same events and the same lineups. The recorder writes keys in one order, so the plain
+/** Whether two streams ask for the same fold: the same config, events, lineups and foldOptions. The recorder writes keys in one order, so the plain
  *  text of the two is equal in practice and settles it; only when the text differs is the order-insensitive form asked. */
 const sameInput = (x: unknown, y: unknown): boolean => JSON.stringify(x) === JSON.stringify(y) || canonical(x) === canonical(y);
 /** What a stream's replay starts from (see THE RULE): its raw config object, its events, its lineups and its `foldOptions` (GF-3 T2: the
  *  server-only fold input the recorder offers the fold, `forfeitAward`; absent means none, so a stream that records none is the input it always was).
  *  An award that changed asks for another fold, so it is another input - never one stream whose output moved. */
-const inputOf = (s: GoldenStream, corpus: GoldenCorpus): unknown => [get(corpus.configs, s.config) ?? null, s.events, s.lineups ?? null, s.foldOptions ?? null];
+const inputOf = (s: GoldenStream, corpus: GoldenCorpus): unknown[] => [get(corpus.configs, s.config) ?? null, s.events, s.lineups ?? null, s.foldOptions ?? null];
+/** The part of the input the PLAYER STATS fold reads: the config, the events and the lineups. The stats fold takes no fold options (the server's
+ *  `aggregatePlayerStatsWithDiagnostics` is given the ledger, the model, the lineups and a ctx), so a stream whose ONLY difference is its
+ *  `foldOptions` is re-recorded for the sport's phone outputs while its stats stay comparable. */
+const statsInputOf = (input: unknown[]): unknown[] => input.slice(0, 3);
 /** Whether a stream records the format-2 fields. `parseCorpus` makes it all or nothing per corpus, so a stream has both or neither. */
 const recordsKernel = (s: GoldenStream): boolean => s.summaries !== undefined && s.overlay !== undefined;
 /** Whether a stream records the format-3 `playerStats`. `parseCorpus` makes it all or nothing per corpus, like the kernel fields. */
@@ -251,7 +255,7 @@ const listPaths = (paths: readonly string[]): string => (paths.length <= 3 ? pat
 
 interface Indexed {
   stream: GoldenStream;
-  input: unknown;
+  input: unknown[];
 }
 
 function indexStreams(corpus: GoldenCorpus | undefined, side: "baseline" | "current", sport: string): Map<string, Indexed> {
@@ -294,8 +298,12 @@ function compareSport(sport: string, before: Side, after: Side, touched: () => r
     const a = aStreams.get(id);
     if (a === undefined) removed++;
     else if (!sameInput(a.input, b.input)) {
-      removed++; // re-recorded (its events, lineups or config differ): the old input is no longer pinned ...
+      removed++; // re-recorded (its config, events, lineups or foldOptions differ): the old input is no longer pinned ...
       added++; //   ... and a new one is
+      // (when ONLY the foldOptions differ the stats are still comparable, because the stats fold takes none: a stats move hidden behind an
+      // award edit still owes STATS_FOLD_VERSION, whatever major the re-record pays. A difference in the config, events or lineups makes the
+      // old and new stats the answer to different questions, and stays uncounted.)
+      if (sameInput(statsInputOf(a.input), statsInputOf(b.input)) && statsDiffer(a.stream, b.stream)) statsMoved++;
     } else {
       matched++;
       // Gaining the fields owes nothing when the source is frozen (the recorder ran the baseline's own code) and, when it is not, the
@@ -697,7 +705,7 @@ const FOLD_OPTION_KEY = "forfeitAward";
 
 /** Why a stream's `foldOptions` is not the shape the recorder writes, or null when it is: an object with exactly one key, `forfeitAward`, a pair of
  *  non-negative finite integers (`Number.isInteger` is false for a fraction, NaN and the Infinity `1e999` parses to). Pure; `parseCorpus` refuses
- *  a stream whose answer is not null, naming the stream. The recorder (`golden.ts`, `checkedFoldOptions`) states the same rule, and a test holds
+ *  a stream whose answer is not null, naming the stream. The recorder (`golden.ts`, `foldOptionsProblem`, used by `strictFold`) states the same rule, and a test holds
  *  the two to one set of inputs. */
 export function foldOptionsProblem(value: unknown): string | null {
   if (!isObject(value)) return "it is not an object";

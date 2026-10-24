@@ -11,6 +11,7 @@ import { builtinModules } from "../src/sports/index.ts";
 import { STATS_FOLD_VERSION } from "../src/stats/stats.ts";
 import { forEachSport } from "../src/testkit/for-each-sport.ts";
 import { readCorpus, type GoldenCorpus, type GoldenStream } from "../src/testkit/golden.ts";
+import { FORFEIT_AWARD_CASES } from "../src/testkit/golden-fold-options.ts";
 import { floorBatches, isFloorStream } from "../src/testkit/golden-floor-streams.ts";
 import { treeBudget } from "./tree-budget.ts";
 
@@ -1318,6 +1319,55 @@ describe("fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded
       expect(reRecordedAsNew.rows[0], "precondition: nothing matched").toMatchObject({ matched: 0, removed: 2, added: 2, statsGainedUnfrozen: 0 });
       expect(reRecordedAsNew.stats).toMatchObject({ gained: 0, moved: 0, reason: null });
     });
+    describe("a stream re-recorded ONLY because its foldOptions differ keeps its stats comparable (GF-3 batch review m1: the stats fold takes no fold options)", () => {
+      const award = (n: number): GoldenStream["foldOptions"] => ({ forfeitAward: [n, 1] });
+      /** The base's first stream carrying `n` as its award (none when undefined), with `over` on top; the second stream untouched. */
+      const awarded = (n: number | undefined, over: Partial<GoldenStream> = {}): GoldenStream[] => [
+        stats3(base()[0]!, n === undefined ? over : { foldOptions: award(n), ...over }),
+        stats3(base()[1]!),
+      ];
+      it("the review's B1: the award edited, the stats moved, the sport's major raised - the major is paid, the STATS_FOLD_VERSION rise is still owed", () => {
+        const { rows, stats, violations } = judge(at(1, 0, 6, awarded(5)), at(2, 0, 6, awarded(6, { playerStats: MOVED })));
+        expect(rows[0]).toMatchObject({ matched: 1, removed: 1, added: 1, statsMoved: 1, owes: "major" });
+        expect(violations, "the sport's major is paid (1 -> 2)").toEqual([]);
+        expect(stats).toMatchObject({ before: 6, after: 6, moved: 1, sports: ["badminton"] });
+        expect(stats.reason).toMatch(/^STATS_FOLD_VERSION must rise: /);
+        expect(stats.reason).toContain("1 stream(s) (badminton)");
+      });
+      it("the review's A2, the control: the award edited, the stats the same, the major raised - nothing is owed", () => {
+        const { rows, stats, violations } = judge(at(1, 0, 6, awarded(5)), at(2, 0, 6, awarded(6)));
+        expect(rows[0]).toMatchObject({ matched: 1, removed: 1, added: 1, statsMoved: 0 });
+        expect(violations).toEqual([]);
+        expect(stats).toMatchObject({ moved: 0, reason: null });
+      });
+      it("the sport still owes its major for the re-record, and a stats bump pays the version alone", () => {
+        const unpaid = judge(at(1, 0, 6, awarded(5)), at(1, 0, 6, awarded(6, { playerStats: MOVED })));
+        expect(unpaid.violations.map((v) => v.owes), "the major").toEqual(["major"]);
+        expect(unpaid.stats.reason, "and the version").toMatch(/^STATS_FOLD_VERSION must rise/);
+        const paid = judge(at(1, 0, 6, awarded(5)), at(1, 0, 7, awarded(6, { playerStats: MOVED })));
+        expect(paid.stats).toMatchObject({ before: 6, after: 7, moved: 1, reason: null });
+        expect(paid.violations.map((v) => v.owes), "the version does not pay the major").toEqual(["major"]);
+        expect(paid.rows[0]).toMatchObject({ statsMoved: 1 });
+      });
+      it("gaining an award and losing one are the same: the stats beside them still count", () => {
+        const gained = judge(at(1, 0, 6, awarded(undefined)), at(2, 0, 6, awarded(5, { playerStats: MOVED })));
+        expect(gained.rows[0], "gained").toMatchObject({ removed: 1, added: 1, statsMoved: 1 });
+        expect(gained.stats.moved).toBe(1);
+        const lost = judge(at(1, 0, 6, awarded(5)), at(2, 0, 6, awarded(undefined, { playerStats: MOVED })));
+        expect(lost.rows[0], "lost").toMatchObject({ removed: 1, added: 1, statsMoved: 1 });
+        expect(lost.stats.moved).toBe(1);
+      });
+      it("a change to the events, the lineups or the config beside the award keeps the stats NOT comparable: the input the stats fold takes did change", () => {
+        const events = judge(at(1, 0, 6, awarded(5)), at(2, 0, 6, awarded(6, { events: [{ seq: 9 }] as never, playerStats: MOVED })));
+        expect(events.rows[0], "events").toMatchObject({ removed: 1, added: 1, statsMoved: 0 });
+        const lineups = judge(at(1, 0, 6, awarded(5)), at(2, 0, 6, awarded(6, { lineups: { home: { entrantId: "H" } } as never, playerStats: MOVED })));
+        expect(lineups.rows[0], "lineups").toMatchObject({ removed: 1, added: 1, statsMoved: 0 });
+        const sideWith = (major: number, n: number, over: Partial<GoldenStream>, knob: number): Side => withVersion(at3(major, 0, { ...fmt3(awarded(n, over)), configs: { std: { knob } } }), 6);
+        const config = judge(sideWith(1, 5, {}, 1), sideWith(2, 6, { playerStats: MOVED }, 2));
+        expect(config.rows[0], "config (it is the corpus's, so it re-records every stream under it)").toMatchObject({ matched: 0, removed: 2, added: 2, statsMoved: 0 });
+        for (const r of [events, lineups, config]) expect(r.stats, "the version is not owed for them").toMatchObject({ moved: 0, reason: null });
+      });
+    });
     it("a stream ADDED already in format 3 owes none (EXTEND_GOLDEN)", () => {
       const { rows, stats } = judge(at(1, 0, 6, rec3()), at(1, 0, 6, [...rec3(), stats3(stream("std", 3))]));
       expect(rows[0]).toMatchObject({ matched: 2, added: 1, statsMoved: 0 });
@@ -1753,7 +1803,7 @@ describe("fold-epoch guard: GF-3 T2 - a stream's foldOptions are part of its inp
         for (const s of found) expect(foldOptionsProblem(s.foldOptions), `${key} ${s.config}#${s.seed}`).toBeNull();
         if (module.awardScoreKeys === undefined) expect(found, `${key} reads no award, so no stream offers it one`).toEqual([]);
         else {
-          expect(found.length, `${key} reads the award, so its corpus offers it`).toBeGreaterThanOrEqual(3);
+          expect(found.length, `${key} reads the award, so its corpus offers one stream per case`).toBe(FORFEIT_AWARD_CASES.length);
           readers++;
         }
         withOptions += found.length;
@@ -1761,7 +1811,7 @@ describe("fold-epoch guard: GF-3 T2 - a stream's foldOptions are part of its inp
       });
       expect(sports).toBe(builtinModules.length);
       expect(readers, "the reading sports exist").toBeGreaterThanOrEqual(4);
-      expect(withOptions, "and between them record award streams").toBeGreaterThanOrEqual(readers * 3);
+      expect(withOptions, "and between them record award streams").toBe(readers * FORFEIT_AWARD_CASES.length);
     }, budget(2));
 
     it("changing, losing or swapping the award of any real award stream names exactly that sport and owes its major; the sport's own bump alone pays it (counted)", () => {

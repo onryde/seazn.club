@@ -2346,4 +2346,40 @@ describe("fold-epoch-guard CLI: GF-3 T2 - foldOptions", () => {
     expect(dropped.status).toBe(1);
     expect(lineOf(dropped.stdout, FIRST)).toMatch(/removed 1 added 1 recorded 0 - VIOLATION: major owed/);
   });
+
+  // The review's B1 / A2 (GF-3 batch review m1): an award edit re-records the stream, but the stats fold takes no fold options, so its
+  // player stats stay comparable. A stats move hidden behind the edit owes STATS_FOLD_VERSION whatever major was raised for the re-record.
+  spawnIt(3 * 10)("an award edited beside a recorded stats move still owes STATS_FOLD_VERSION though the major is raised (B1); a stats bump pays it; the same edit with the stats unchanged is green (A2)", () => {
+    const v = realStatsVersion();
+    const major = realEntry("FOLD_EPOCH", FIRST) + 1;
+    const baseline = (): void => { atF3(fmtMono); editCorpus(fmtMono, FIRST, addAward()); commit(fmtMono, "baseline: an award on stream 0"); };
+    const edit = (): void => { editCorpus(fmtMono, FIRST, addAward({ forfeitAward: [6, 1] })); setEpoch(fmtMono, FIRST, major); };
+
+    baseline();
+    edit();
+    moveStats(fmtMono, FIRST);
+    commit(fmtMono, "B1: the award edited, the stats moved, the major raised, the stats version held");
+    const b1 = guard(fmtMono);
+    expect(b1.status).toBe(1);
+    expect(b1.stderr).toBe("");
+    expect(violated(b1.stdout), "the major is paid, so only the stats version is red").toEqual([STATS_NAME]);
+    expect(lineOf(b1.stdout, FIRST), "the stream is re-recorded (removed and added), not changed").toMatch(/removed 1 added 1 recorded 0$/);
+    expect(statsLine(b1.stdout)).toContain(`${v} -> ${v}, player stats moved in 1 stream(s) (${FIRST}) - VIOLATION: ${STATS_NAME} must rise: `);
+
+    baseline();
+    edit();
+    moveStats(fmtMono, FIRST);
+    bumpStats(fmtMono);
+    commit(fmtMono, "B1 paid: the same, with the stats version raised");
+    const paid = guard(fmtMono);
+    expect({ status: paid.status, stderr: paid.stderr, violated: violated(paid.stdout) }).toEqual({ status: 0, stderr: "", violated: [] });
+    expect(statsLine(paid.stdout)).toBe(`fold-epoch: ${STATS_NAME}: ${v} -> ${v + 1}, player stats moved in 1 stream(s) (${FIRST})`);
+
+    baseline();
+    edit();
+    commit(fmtMono, "A2: the award edited, the stats unchanged, the major raised");
+    const a2 = guard(fmtMono);
+    expect({ status: a2.status, stderr: a2.stderr, violated: violated(a2.stdout) }).toEqual({ status: 0, stderr: "", violated: [] });
+    expect(statsLine(a2.stdout)).toBe(`fold-epoch: ${STATS_NAME}: ${v} -> ${v}, player stats moved in 0 stream(s)`);
+  });
 });
