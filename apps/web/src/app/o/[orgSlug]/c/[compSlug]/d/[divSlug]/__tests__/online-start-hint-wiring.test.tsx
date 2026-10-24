@@ -23,6 +23,8 @@ const division = vi.hoisted(() => ({
 const comp = vi.hoisted(() => ({ frozen: false }));
 const fx = vi.hoisted(() => ({ rows: [] as Record<string, unknown>[] }));
 const flags = vi.hoisted(() => ({ isServerFeatureEnabled: vi.fn() }));
+// The helper itself, counted: its 60s PostHog cache hides a duplicated `await onlineChessOffered(...)` one layer down.
+const asked = vi.hoisted(() => ({ offered: vi.fn() }));
 const queue = vi.hoisted(() => ({
   listNeedsOrganiserExternalPlay: vi.fn(),
   listFlaggedExternalPlay: vi.fn(),
@@ -106,7 +108,15 @@ vi.mock("@/server/external-play/camera-policy", async (importOriginal) => {
 // The queue's and the run sheet's reads are database reads; the flag helper beside them stays REAL.
 vi.mock("@/server/usecases/external-play", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/server/usecases/external-play")>();
-  return { ...actual, ...queue };
+  return {
+    ...actual,
+    ...queue,
+    // The REAL helper, seen through a spy.
+    onlineChessOffered: (asker: Parameters<typeof actual.onlineChessOffered>[0]) => {
+      asked.offered(asker);
+      return actual.onlineChessOffered(asker);
+    },
+  };
 });
 vi.mock("@/lib/posthog-server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/posthog-server")>();
@@ -160,6 +170,7 @@ function flagOff() {
 }
 
 beforeEach(() => {
+  asked.offered.mockReset();
   division.sport_key = "boardgame";
   division.onlinePlay = "lichess";
   division.status = "setup";
@@ -222,10 +233,11 @@ describe("division page: the stage cards are told the online division has not st
     expect((entry[0]!.props as { line: unknown }).line).toEqual({ kind: "ready", roundNo: 1 });
   });
 
-  it("one flag answer feeds both: a not-started division with fixtures asks the flag once, and gets the hint AND the card", async () => {
+  it("one flag answer feeds both: a not-started division with fixtures asks the flag helper once, and gets the hint AND the card", async () => {
     fx.rows = [FIXTURE];
     division.status = "setup";
     const tree = await renderPage();
+    expect(asked.offered, "the helper, once per render (PostHog's own cache would hide a second ask)").toHaveBeenCalledTimes(1);
     expect(flags.isServerFeatureEnabled).toHaveBeenCalledTimes(1);
     expect((findAll(tree, StagesPanel)[0]!.props as { onlineAwaitsStart?: unknown }).onlineAwaitsStart).toBe(true);
     expect(findAll(tree, ArbiterEntryCard)).toHaveLength(1);
@@ -237,6 +249,7 @@ describe("division page: the stage cards are told the online division has not st
     const tree = await renderPage();
     expect((findAll(tree, StagesPanel)[0]!.props as { onlineAwaitsStart?: unknown }).onlineAwaitsStart).toBe(true);
     expect(findAll(tree, ArbiterEntryCard)).toHaveLength(0);
+    expect(asked.offered, "asked for the hint alone, once").toHaveBeenCalledTimes(1);
     expect(flags.isServerFeatureEnabled).toHaveBeenCalledTimes(1);
   });
 

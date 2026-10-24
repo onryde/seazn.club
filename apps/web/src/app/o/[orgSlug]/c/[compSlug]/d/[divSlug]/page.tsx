@@ -70,7 +70,7 @@ import {
   listRunSheetOnlinePlay,
   onlineChessOffered,
 } from "@/server/usecases/external-play";
-import { readOnlinePlay } from "@/server/external-play/online-play";
+import { arbiterPanelOffered } from "@/server/arbiter-panel-offered";
 import { ProgressionPanel } from "@/components/v2/progression-panel";
 import { LaunchActions } from "@/components/v2/launch-actions";
 import { StandingsTable } from "@/components/public-site/standings-table";
@@ -540,10 +540,10 @@ export default async function DivisionPage({
 
   // Phase 2 (spec 2026-10-24-arbiter-round-column-design.md §7, §8): the round is opened and watched in the Arbiter Panel, so this
   // tab hands it over wherever the panel would answer. Two predicates (pre-flight C18), not one:
-  //   - `arbiterOffered` is the panel's own 404 predicate (`canEdit`, a chess division, online play = Lichess, the club offered
-  //     online chess - arbiter/page.tsx, the same parts in the same cheap-first order) plus "has fixtures". It decides the entry
-  //     card and every link into the panel (the run sheet's chips, the Unpair/Rebuild notice). `canEdit`, never `editable`: a
-  //     billing-frozen organiser keeps a working panel and so keeps its way in.
+  //   - `arbiterOffered` is the panel's own 404 predicate - `arbiterPanelOffered`, the ONE function the arbiter page calls too
+  //     (`canEdit`, a chess division that plays online, then the club offered online chess, cheapest first) - plus "has fixtures".
+  //     It decides the entry card and every link into the panel (the run sheet's chips, the Unpair/Rebuild notice). `canEdit`,
+  //     never `editable`: a billing-frozen organiser keeps a working panel and so keeps its way in.
   //   - `editable` (below) decides the controls and the queue, as before.
   // The flag (PostHog `online-chess`) is asked ONCE per render and only on this tab, after the cheap parts. It also feeds the start
   // hint (T20: "start the division" only makes sense where a round could be opened), which is wanted before there are fixtures, so
@@ -551,12 +551,7 @@ export default async function DivisionPage({
   const awaitsStart = editable && divisionScoringClosed(division.status);
   const clubOffered =
     tab === "fixtures" &&
-    canEdit &&
-    division.sport_key === "boardgame" &&
-    readOnlinePlay(division.config) === "lichess" &&
-    (fixtures.length > 0 || awaitsStart)
-      ? await onlineChessOffered(auth)
-      : false;
+    (await arbiterPanelOffered(auth, { canEdit, sport_key: division.sport_key, config: division.config }, () => fixtures.length > 0 || awaitsStart));
   const arbiterOffered = clubOffered && fixtures.length > 0;
   // The division plays online and has not been started, so no round can be opened yet (`listOpenRounds` answers none until it
   // starts): the first stage card says to start it. The Start button is on this tab, so the hint stays here.

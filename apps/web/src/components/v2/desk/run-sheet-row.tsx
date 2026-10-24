@@ -728,9 +728,13 @@ export function RunSheetRow({
               {msg("runsheet.round.notOpenedChip")}
             </span>
           )}
+          {/* Where "Needs a decision" leads depends on where the board's card is. The page offers the Arbiter Panel (`arbiterHref`
+              set): the queue lives in the panel's column and is not on this tab, so the chip opens the panel ON this board
+              (`?fixture=`), where the card and its Settle are. No panel offered: the queue is on this tab, so the chip scrolls to
+              the board's card in it. Never the anchor beside the panel: nothing on the page carries it, so the tap would do nothing. */}
           {onlineHeld && (
             <Link
-              href={`#${queueRowAnchor(fixture.id)}`}
+              href={arbiterHref ?? `#${queueRowAnchor(fixture.id)}`}
               data-testid="run-sheet-online-held-chip"
               data-reason={onlinePlay?.held ?? undefined}
               aria-label={msg("runsheet.online.heldName", { match: `${home} ${msg("schedule.vs")} ${away}` })}

@@ -36,6 +36,7 @@ import {
   resyncExternalPlay,
   type ArbiterVideo,
 } from "../external-play/arbiter";
+import { listNeedsOrganiserExternalPlay } from "../external-play/queue";
 import { putVideoMeeting, putVideoParticipant, seedOnlineChessRound, seedOwner, seedPlayer, type SeedOnlineChessRoundResult } from "./_external-play-seed";
 
 // M4: the loader's per-board reads, observed at the guard's door — the REAL
@@ -568,6 +569,37 @@ describe.runIf(HAS_DB)("arbiterRequestedRound — ?fixture= opens EXACTLY that b
     expect(view.boards.map((b) => b.fixtureId)).toEqual([one.fixtureId]);
     // The positive pair: the latest round's own board is its round.
     expect(await arbiterRequestedRound(r.owner, r.divisionId, two.fixtureId)).toEqual({ kind: "round", stageId: r.stageId, roundNo: 2 });
+  });
+
+  it("a HELD board (needs_organiser) is opened too: `?fixture=` lands on ITS round with that board on hold - what the Fixtures tab's 'Needs a decision' chip leans on", async () => {
+    const { r, one, two } = await twoRounds();
+    // Premise from the product's own reader: nothing is held yet, so every id below is held by the writes that follow.
+    expect(await listNeedsOrganiserExternalPlay(r.owner, r.divisionId), "premise: nothing held yet").toEqual([]);
+    await bridge(one.fixtureId, r.orgId, { status: "needs_organiser", reason: "provider_error", moves: 4 });
+    await bridge(two.fixtureId, r.orgId, { status: "needs_organiser", reason: "fair_play" });
+    const held = (await listNeedsOrganiserExternalPlay(r.owner, r.divisionId)).map((q) => q.fixtureId).sort();
+    expect(held, "premise: the queue lists both boards as held, one per round").toEqual([one.fixtureId, two.fixtureId].sort());
+
+    // Round numbers are the seed's layout (`twoRounds`: board one stays in round 1, board two moved to round 2).
+    const rounds = new Map([[one.fixtureId, 1], [two.fixtureId, 2]]);
+    let checked = 0;
+    for (const fixtureId of held) {
+      const asked = await arbiterRequestedRound(r.owner, r.divisionId, fixtureId);
+      expect(asked, `${fixtureId}: a held board is a round, not 'unavailable'`).toEqual({ kind: "round", stageId: r.stageId, roundNo: rounds.get(fixtureId) });
+      const view = (await loadArbiterRound(r.owner, r.divisionId, { round: asked as { stageId: string; roundNo: number } }))!;
+      const board = view.boards.find((b) => b.fixtureId === fixtureId);
+      expect(board, `${fixtureId}: the held board is in the round the panel opens`).toBeDefined();
+      expect(board!.state, `${fixtureId}: and it reads on hold`).toEqual({ kind: "on_hold" });
+      checked++;
+    }
+    expect(checked, "anti-vacuity: held boards opened").toBe(2);
+    // The differential: a board of the same rounds that is NOT held resolves to a round too but never reads on hold.
+    const clear = await seedOnlineChessRound({ fixtures: 1 });
+    await openRound(clear, 1, OPENED);
+    const free = await arbiterRequestedRound(clear.owner, clear.divisionId, clear.boards[0]!.fixtureId);
+    expect(free).toEqual({ kind: "round", stageId: clear.stageId, roundNo: 1 });
+    const freeView = (await loadArbiterRound(clear.owner, clear.divisionId, { round: free as { stageId: string; roundNo: number } }))!;
+    expect(freeView.boards[0]!.state).not.toEqual({ kind: "on_hold" });
   });
 
   it("unavailable, never another board: an unknown id, a malformed id, another club's board, another division's, a round never opened, a cancelled board", async () => {

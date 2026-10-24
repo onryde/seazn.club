@@ -22,8 +22,8 @@ import {
   listNeedsOrganiserExternalPlay,
   listOpenRounds,
   loadArbiterRound,
-  onlineChessOffered,
 } from "@/server/usecases/external-play";
+import { arbiterPanelOffered } from "@/server/arbiter-panel-offered";
 import { getScheduleSettings } from "@/server/usecases/schedule";
 import { ArbiterPanel } from "@/components/v2/arbiter-panel";
 
@@ -36,13 +36,13 @@ export default async function DivisionArbiterPage({
 }) {
   const [{ orgSlug, compSlug, divSlug }, { fixture }] = await Promise.all([params, searchParams]);
   const page = await requireDivisionPage(orgSlug, compSlug, divSlug, { tail: "/arbiter" });
+  // A viewer does not even load the division: this first `canEdit` only saves the read, the predicate below owns the rule.
   if (!page.canEdit) notFound();
   const division = await getDivision(page.auth, page.division.id);
-  const onlinePlay = (division.config as { onlinePlay?: unknown } | null)?.onlinePlay;
-  if (division.sport_key !== "boardgame" || onlinePlay !== "lichess") notFound();
-  // Spec §7: the PostHog flag `online-chess`, asked only now - after the three cheap checks above, so it is never asked for a
-  // viewer, a non-chess division or one that does not play online - and answered the way every other refusal here is.
-  if (!(await onlineChessOffered(page.auth))) notFound();
+  // Spec §7: the panel's one door, shared with the division page's Fixtures tab (`arbiterPanelOffered`): the viewer can edit, the
+  // division plays online (a chess division set to Lichess), then the PostHog flag `online-chess`, asked last - so it is never
+  // asked for a viewer, a non-chess division or one that does not play online - and answered the way every other refusal is.
+  if (!(await arbiterPanelOffered(page.auth, { canEdit: page.canEdit, sport_key: division.sport_key, config: division.config }))) notFound();
   const divisionId = page.division.id;
   // I3: `?fixture=` opens exactly that board — in its own round, an earlier
   // one included — or the panel says it is not here. No round is loaded for

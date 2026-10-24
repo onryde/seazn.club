@@ -445,7 +445,8 @@ Two predicates (pre-flight C18):
 
 - **`arbiterOffered`** = `canEdit`, a chess division, online play is `lichess`, the club is offered online chess, and the
   division has fixtures. It decides the entry card and the chip links: the panel's own 404 predicate, plus "has
-  fixtures".
+  fixtures". The 404 predicate is ONE function, `arbiterPanelOffered` (`server/arbiter-panel-offered.ts`), called by the
+  arbiter page and by this tab, so the two cannot drift; the tab adds "has fixtures" on top.
 - **`editable`** (`canEdit` and not billing-frozen, `page.tsx:296`) decides the controls and the queue, as today.
 
 **When `arbiterOffered`:**
@@ -453,7 +454,10 @@ Two predicates (pre-flight C18):
 - No Open round control on any stage card. `StagesPanel` loses its `openRounds` prop and the mount
   (`stages-panel.tsx:1351`), and `OpenRoundControl` is deleted (pre-flight C16).
 - No queue on the tab: it now lives in the panel.
-- The "start the division first" hint stays on the stage card, because the Start button is on this tab.
+- The "start the division first" hint stays on the stage card, because the Start button is on this tab. The hint is wanted
+  before any fixture exists (a division that has not started has none yet), so it does not depend on the "has fixtures" term
+  of `arbiterOffered`: the page asks the online-chess flag when the division has fixtures OR is awaiting start, and that ONE
+  answer feeds both the entry card (which still needs fixtures) and the hint.
 - The existing entry card (`arbiter.entry.link` plus body) carries ONE status line instead of its fixed body
   (**controller ruling 1, option C**, §2.1). Attention and phase are separate facts, as the desk rules require
   ("must never be collapsed into one enum"; pre-flight C7). The model is `{ attention: number; phase: "default" |

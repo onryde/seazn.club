@@ -18,6 +18,11 @@ const division = vi.hoisted(() => ({
 const comp = vi.hoisted(() => ({ frozen: false }));
 const fx = vi.hoisted(() => ({ rows: [] as Record<string, unknown>[] }));
 const flags = vi.hoisted(() => ({ isServerFeatureEnabled: vi.fn() }));
+// The helper itself, counted: `onlineChessOffered` keeps its PostHog answer for 60s, so a second `await onlineChessOffered(...)` in the
+// page would still make ONE PostHog call. Only a spy on the helper can see "asked once".
+const asked = vi.hoisted(() => ({ offered: vi.fn() }));
+// The viewer's locale and `ui` dictionary, as the page reads them: a non-default locale and a sentinel object the test owns.
+const viewer = vi.hoisted(() => ({ locale: "en", ui: {} as object }));
 const queue = vi.hoisted(() => ({
   listNeedsOrganiserExternalPlay: vi.fn(),
   listFlaggedExternalPlay: vi.fn(),
@@ -35,9 +40,9 @@ vi.mock("@/server/usecases/stages", () => ({
 vi.mock("@/server/usecases/competitions", () => ({
   getCompetition: vi.fn(async () => ({ id: "comp-1", frozen: comp.frozen, visibility: "public", slug: "comp-one" })),
 }));
-vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: vi.fn(async () => "en") }));
+vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: vi.fn(async () => viewer.locale) }));
 vi.mock("@/lib/i18n", () => ({
-  getDictionary: vi.fn(async () => ({})),
+  getDictionary: vi.fn(async (_locale: string, namespace?: string) => (namespace === "ui" ? viewer.ui : {})),
   t: (_dict: unknown, key: string) => key,
 }));
 vi.mock("@/server/usecases/divisions", () => ({
@@ -101,7 +106,15 @@ vi.mock("@/server/external-play/camera-policy", async (importOriginal) => {
 // The queue's and the run sheet's reads are database reads; the flag helper beside them stays REAL.
 vi.mock("@/server/usecases/external-play", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/server/usecases/external-play")>();
-  return { ...actual, ...queue };
+  return {
+    ...actual,
+    ...queue,
+    // The REAL helper (flag cache, ONLINE_CHESS_ALWAYS, PostHog), seen through a spy.
+    onlineChessOffered: (asker: Parameters<typeof actual.onlineChessOffered>[0]) => {
+      asked.offered(asker);
+      return actual.onlineChessOffered(asker);
+    },
+  };
 });
 vi.mock("@/lib/posthog-server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/posthog-server")>();
@@ -114,6 +127,7 @@ import { ExternalPlayNeedsResultQueue } from "@/components/v2/external-play-need
 import { StagesPanel } from "@/components/v2/stages-panel";
 import type { OpenRoundView } from "@/lib/open-round";
 import { routes } from "@/lib/routes";
+import { getDictionary } from "@/lib/i18n";
 import { forgetOnlineChessFlagCache } from "@/server/usecases/external-play/online-chess-flag";
 
 function findAll(node: ReactNode, type: unknown, out: ReactElement[] = []): ReactElement[] {
@@ -181,6 +195,10 @@ function flagIs(s: FlagState): void {
 }
 
 beforeEach(() => {
+  viewer.locale = "en";
+  viewer.ui = {};
+  asked.offered.mockReset();
+  vi.mocked(getDictionary).mockClear();
   division.sport_key = "boardgame";
   division.status = "active";
   division.config = { variant: "classical", onlinePlay: "lichess" };
@@ -200,13 +218,23 @@ afterEach(() => {
 });
 
 describe("division page: the arbiter panel entry card", () => {
-  it("fixtures tab, organiser, online chess division with fixtures, club offered: ONE card, aimed at the panel, with the viewer's dictionary and locale", async () => {
+  it("fixtures tab, organiser, online chess division with fixtures, club offered: ONE card, aimed at the panel, with the VIEWER's locale and `ui` dictionary (identity, not a lookalike)", async () => {
+    // A non-default locale and a dictionary object the test owns: a card hard-wired to "en" or to `{}` could not pass this.
+    const sentinel = { "arbiter.entry.link": "sentinel link copy" };
+    viewer.locale = "fr";
+    viewer.ui = sentinel;
     const found = await cards();
     expect(found).toHaveLength(1);
     const props = found[0]!.props as { href: string; locale: string; dict: unknown };
     expect(props.href).toBe(ARBITER);
-    expect(props.locale).toBe("en");
-    expect(props.dict, "the page's own `ui` dictionary").toEqual({});
+    expect(props.locale, "the viewer's locale reaches the card").toBe("fr");
+    expect(props.dict, "the very `ui` dictionary the page loaded for that locale").toBe(sentinel);
+    expect(getDictionary, "loaded for the viewer's locale").toHaveBeenCalledWith("fr", "ui");
+    // The positive pair: the default viewer still gets the default locale (so the test above is not just reading a constant).
+    viewer.locale = "en";
+    viewer.ui = {};
+    const plain = await cards();
+    expect((plain[0]!.props as { locale: string }).locale).toBe("en");
   });
 
   it("every other cell renders no card - and the flag is not asked where an earlier, cheaper part already said no", async () => {
@@ -220,26 +248,31 @@ describe("division page: the arbiter panel entry card", () => {
       ["the standings tab", () => undefined, "standings", false],
     ];
     let checked = 0;
-    for (const [label, arm, tab, asked] of cells) {
+    for (const [label, arm, tab, wasAsked] of cells) {
       division.sport_key = "boardgame";
       division.status = "active";
       division.config = { variant: "classical", onlinePlay: "lichess" };
       fx.rows = [FIXTURE];
       pageAuth.requireDivisionPage.mockResolvedValue(PAGE);
       flagIs(FLAG_STATES[0]!);
+      asked.offered.mockClear();
       arm();
       expect(await cards(tab), label).toHaveLength(0);
-      expect(flags.isServerFeatureEnabled.mock.calls.length > 0, `${label}: flag asked?`).toBe(asked);
+      expect(asked.offered.mock.calls.length > 0, `${label}: flag asked?`).toBe(wasAsked);
       checked++;
     }
     expect(checked, "anti-vacuity: every cell ran").toBe(cells.length);
   });
 
-  it("the flag: asked ONCE per fixtures-tab render for this user in this club; a club not offered (or PostHog down) gets no card", async () => {
+  it("the flag: the helper is asked ONCE per fixtures-tab render, for this viewer (so PostHog is asked once too); a club not offered (or PostHog down) gets no card", async () => {
     let checked = 0;
     for (const s of FLAG_STATES) {
       flagIs(s);
+      asked.offered.mockClear();
       expect(await cards(), s.label).toHaveLength(s.offered ? 1 : 0);
+      // The helper, not just PostHog: the 60s answer cache makes a duplicate `await onlineChessOffered(...)` invisible one layer down.
+      expect(asked.offered, `${s.label}: the helper, once per render`).toHaveBeenCalledTimes(1);
+      expect(asked.offered, `${s.label}: for this viewer`).toHaveBeenCalledWith(PAGE.auth);
       expect(flags.isServerFeatureEnabled, s.label).toHaveBeenCalledTimes(1);
       expect(flags.isServerFeatureEnabled, s.label).toHaveBeenCalledWith("online-chess", "user-1", { orgId: "org-1", fallback: false });
       checked++;
