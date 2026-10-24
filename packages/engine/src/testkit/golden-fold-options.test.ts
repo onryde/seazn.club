@@ -589,13 +589,21 @@ describe("the verdict `reached` rejects what is not its own: each guard has a co
       // the same withdrawal with no play ever drawn is not the voided story ...
       expect(refusal(voided, { events: unplayed.stream.events }), `${m.key}: no struck play`).toMatch(/holds no play struck by a void/);
       // ... and the voided ledger is not the unplayed story's, whatever else it shares with it
-      expect(unplayed.story.reached({ ...unplayed.recorded, events: voided.stream.events }), `${m.key}: a struck play where the case has none`).toMatch(/holds a play struck by a void/);
+      expect(refusal(unplayed, { events: voided.stream.events }), `${m.key}: a struck play where the case has none`).toMatch(/holds a play struck by a void/);
       // a void that strikes the Start, names nothing, or names an event the ledger does not have is not a struck PLAY
       const [start, , , forfeit] = voided.stream.events;
       const strikes = (voids: string | undefined) => [start!, { type: "core.void", payload: {}, ...(voids === undefined ? {} : { voids }) }, forfeit!];
       expect(refusal(voided, { events: strikes("e-0") }), `${m.key}: a void of the Start`).toMatch(/holds no play struck by a void/);
       expect(refusal(voided, { events: strikes(undefined) }), `${m.key}: a void that names nothing`).toMatch(/holds no play struck by a void/);
       expect(refusal(voided, { events: strikes("e-9") }), `${m.key}: a void of an event the ledger does not hold`).toMatch(/holds no play struck by a void/);
+      // the target is named exactly `e-<index>`: a name that merely CONTAINS one is no target (the play stays at index 1 in each)
+      const [, play] = voided.stream.events;
+      const named = (voids: string) => [start!, play!, { type: "core.void", payload: {}, voids }, forfeit!];
+      expect(refusal(voided, { events: named("e-1") }), `${m.key}: the control, the exact name`).toBe("accepted");
+      expect(refusal(voided, { events: named("e-1x") }), `${m.key}: a name that only starts like one`).toMatch(/holds no play struck by a void/);
+      expect(refusal(voided, { events: named("xe-1") }), `${m.key}: a name that only ends like one`).toMatch(/holds no play struck by a void/);
+      // only a core.void strikes: a sport event that carries a `voids` field is not a void
+      expect(refusal(voided, { events: [start!, play!, { ...play!, voids: "e-1" }, forfeit!] }), `${m.key}: an event that is not a void but names a target`).toMatch(/holds no play struck by a void/);
       checked++;
     }
     expect(checked).toBe(readers().length);
@@ -629,6 +637,8 @@ describe("the verdict `reached` rejects what is not its own: each guard has a co
     const noPlay = Object.assign(Object.create(football) as object, { arbitraryEvent: () => ({ type: "core.note", payload: {} }) }) as unknown as AnySportModule;
     expect(buildQuietly(storyById("football.retired_after_play"), ctxFor(noPlay)), "no play to retire after").toBeNull();
     expect(buildQuietly(storyById("football.retired_after_play"), ctxFor(football)), "control: the real generator draws one").not.toBeNull();
+    expect(buildQuietly(storyById("football.withdrew_after_voided_play"), ctxFor(noPlay)), "no play to strike with a void").toBeNull();
+    expect(buildQuietly(storyById("football.withdrew_after_voided_play"), ctxFor(football)), "control: the real generator draws one").not.toBeNull();
     expect(buildQuietly(storyById("football.walkover"), ctxFor(noPlay)), "a walkover needs no play").not.toBeNull();
     expect(buildQuietly(storyById("football.withdrew_unplayed"), ctxFor(noPlay)), "nor does a withdrawal before it").not.toBeNull();
   });
