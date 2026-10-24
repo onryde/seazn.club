@@ -11,6 +11,9 @@ import { extendBoardSentence, extendedNoticeTime, extendFailureText } from "./ch
 
 export const MUTED = "text-[#6b5b8a]";
 export const SOFT = "text-[#4a3a6b]";
+/** The panel's clock face: Barlow, tabular numerals. For the check-in countdown, the seat clocks and the tally's numbers only - it
+ *  lives here (not in arbiter-panel.tsx) so the round column can read it without importing the panel that mounts the column. */
+export const CLOCK_FACE = "[font-family:var(--font-barlow,var(--font-geist-sans))] font-semibold tabular-nums";
 // T17B fix 2 (D7): the hand on every button (Tailwind v4 preflight gives <button> the arrow); never on a disabled one.
 export const BUTTON_QUIET =
   "min-h-11 cursor-pointer rounded-[10px] border border-[#c9bdf0] bg-white px-3 text-[15px] font-semibold text-[#2e1065] disabled:cursor-not-allowed disabled:opacity-60";

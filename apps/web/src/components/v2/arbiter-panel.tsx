@@ -60,6 +60,7 @@ import {
   CameraReportCard,
   CARD,
   CHIP_NEUTRAL,
+  CLOCK_FACE,
   FlagCard,
   MUTED,
   noticeLapsed,
@@ -204,7 +205,6 @@ export function nextOffSince(prev: number | null, tile: Pick<ArbiterTileView, "p
 // ── the screen ─────────────────────────────────────────────────────────────
 
 const INK = "text-[#2e1065]";
-const CLOCK_FACE = "[font-family:var(--font-barlow,var(--font-geist-sans))] font-semibold tabular-nums";
 
 function names(b: ArbiterBoard, f: Fmt): string {
   return `${b.white.name} ${f.t("arbiter.vs")} ${b.black.name}`;

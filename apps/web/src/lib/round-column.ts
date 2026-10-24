@@ -9,7 +9,7 @@
 // edge of it itself.
 import type { ArbiterBoard, ArbiterBoardState, ArbiterRound } from "./arbiter-view.ts";
 import { boardIsOver } from "./arbiter-view.ts";
-import type { CheckinExtendState } from "./checkin-extend.ts";
+import type { CheckinExtendState, ExtendRefusal } from "./checkin-extend.ts";
 import { inExtendWindow, liveExtendRefusal } from "./checkin-extend.ts";
 import type { OpenRoundView } from "./open-round.ts";
 import type { FlaggedBoard } from "@/server/usecases/external-play/arbiter";
@@ -37,11 +37,23 @@ export function roundColumnPhase(round: ArbiterRound | null, requested: "unavail
 /** A board known to have a check-in window: what `openWindowBoards` returns, so a caller reads `checkin` without a null branch. */
 export type OpenWindowBoard = ArbiterBoard & { checkin: CheckinExtendState };
 
+/** No clock yet (`nowMs` null - the server render and the first client paint): the SNAPSHOT's word stands, as every other reader of a
+ *  window reads it (`boardExtendOffer`, `liveExtendableBoards`). `refusal` says where the board's window was when the page was read:
+ *  `not_open` (still ahead) and `closed` (past) are the window's own words, `not_playable` is a board that is over; every other
+ *  verdict - none, `cap_reached` (judged only INSIDE the window, window.ts `extendRefusal`), `game_started` (the board's state, not
+ *  the window's) - leaves the window open. */
+const SNAPSHOT_SAYS_NOT_OPEN: readonly (ExtendRefusal | null)[] = ["not_open", "closed", "not_playable"];
+
+/** Is the board's window open at `nowMs`? `inExtendWindow` is the one authority for an instant; null falls back to the snapshot. */
+function windowOpen(c: CheckinExtendState, nowMs: number | null): boolean {
+  return nowMs === null ? !SNAPSHOT_SAYS_NOT_OPEN.includes(c.refusal) : inExtendWindow(c, nowMs);
+}
+
 /** The `checking_in` boards whose window is open now (`inExtendWindow` over `board.checkin`): the tally's set AND the waiting
  *  list's (pre-flight A6), so a later group's board is "Not here yet" in neither before its window opens. Board order is kept.
  *  A board with presses left or not is in its window either way: the cap is the +5's business, not the window's. */
-export function openWindowBoards(boards: readonly ArbiterBoard[], nowMs: number): OpenWindowBoard[] {
-  return boards.filter((b): b is OpenWindowBoard => b.state.kind === "checking_in" && b.checkin !== null && inExtendWindow(b.checkin, nowMs));
+export function openWindowBoards(boards: readonly ArbiterBoard[], nowMs: number | null): OpenWindowBoard[] {
+  return boards.filter((b): b is OpenWindowBoard => b.state.kind === "checking_in" && b.checkin !== null && windowOpen(b.checkin, nowMs));
 }
 
 /** The three states of the one check-in clock:
@@ -55,13 +67,15 @@ function earliest(isos: readonly string[]): string {
   return isos.reduce((best, t) => (Date.parse(t) < Date.parse(best) ? t : best));
 }
 
-export function checkinClock(boards: readonly ArbiterBoard[], nowMs: number): CheckinClock {
+export function checkinClock(boards: readonly ArbiterBoard[], nowMs: number | null): CheckinClock {
   const closing = openWindowBoards(boards, nowMs).map((b) => b.checkin.deadlineAt);
   if (closing.length > 0) return { kind: "closes", at: earliest(closing) };
   // Nothing is open. A group is "still to come" when the window's owner says it is not open YET (`not_open`); a group whose
-  // deadline has passed reads `closed` there, and is not.
+  // deadline has passed reads `closed` there, and is not. With no clock yet the owner's word is the snapshot's.
   const coming = boards.flatMap((b) =>
-    b.state.kind === "checking_in" && b.checkin !== null && liveExtendRefusal(b.checkin, nowMs) === "not_open" ? [b.checkin.opensAt] : [],
+    b.state.kind === "checking_in" && b.checkin !== null && (nowMs === null ? b.checkin.refusal : liveExtendRefusal(b.checkin, nowMs)) === "not_open"
+      ? [b.checkin.opensAt]
+      : [],
   );
   if (coming.length > 0) return { kind: "opens", at: earliest(coming) };
   return { kind: "closed" };
@@ -76,7 +90,7 @@ function isPlaying(state: ArbiterBoardState): boolean {
  *  whose `seats` is null counts as not here); `playing` and `finished` are over EVERY board on screen. */
 export type CheckinTally = { here: number; seats: number; playing: number; finished: number };
 
-export function checkinTally(boards: readonly ArbiterBoard[], nowMs: number): CheckinTally {
+export function checkinTally(boards: readonly ArbiterBoard[], nowMs: number | null): CheckinTally {
   const open = openWindowBoards(boards, nowMs);
   const here = open.reduce((n, b) => n + (b.seats?.white.here ? 1 : 0) + (b.seats?.black.here ? 1 : 0), 0);
   const { playing, finished } = playingTally(boards);

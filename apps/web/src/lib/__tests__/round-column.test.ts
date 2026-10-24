@@ -10,7 +10,8 @@ import { describe, expect, it } from "vitest";
 import type { ArbiterBoard, ArbiterBoardState, ArbiterRound, ArbiterSeatCheckin } from "../arbiter-view";
 import { boardIsOver } from "../arbiter-view";
 import type { CheckinExtendState } from "../checkin-extend";
-import { emptyExtendTally, inExtendWindow, liveExtendRefusal } from "../checkin-extend";
+import { EXTEND_REFUSALS, emptyExtendTally, inExtendWindow, liveExtendRefusal } from "../checkin-extend";
+import type { ExtendRefusal } from "../checkin-extend";
 import type { OpenRoundView } from "../open-round";
 import type { FlaggedBoard } from "@/server/usecases/external-play/arbiter";
 import type { NeedsOrganiserExternalPlayRow } from "@/server/usecases/external-play/queue";
@@ -712,5 +713,76 @@ describe("nextRoundViews", () => {
     const a = pairedView(1);
     const b = pairedView(1, "stage-2");
     expect(nextRoundViews([a, openView(2, 5, "none"), b], null)).toEqual([a, b]);
+  });
+});
+
+// ---- before the viewer's clock is known (nowMs null) ------------------------------------------------------------
+//
+// The arbiter page renders on the server and in the first client paint with no clock (`useExtendClock` answers null until it mounts).
+// The convention of every other reader of a window (`boardExtendOffer`, `liveExtendableBoards`, `OpenRoundControl`) is that the
+// SNAPSHOT's own word stands until the clock is known: `checkin.refusal` says where the board's window was when the page was read.
+// The set, the clock and the tally must give the same answer from it, or the first paint disagrees with itself.
+
+describe("no clock yet (nowMs null): the snapshot's refusal stands as the window's verdict", () => {
+  /** What each declared refusal says about the board's window at the snapshot. `not_open` and `closed` are the window's own words;
+   *  `cap_reached` is only ever judged INSIDE the window (window.ts `extendRefusal` judges closed and not_open before the cap);
+   *  `game_started` and `not_playable` are the board's own state, which says nothing about the window (a board that is over is
+   *  not `checking_in` at all). Typed as a Record over the declared list, so a sixth refusal cannot be added without choosing. */
+  const SNAPSHOT_SAYS_OPEN: Record<ExtendRefusal, boolean> = {
+    not_open: false,
+    closed: false,
+    not_playable: false,
+    game_started: true,
+    cap_reached: true,
+  };
+
+  it("empty: no boards give an empty set, a closed clock and an all-zero tally", () => {
+    expect(openWindowBoards([], null)).toEqual([]);
+    expect(checkinClock([], null)).toEqual({ kind: "closed" });
+    expect(checkinTally([], null)).toEqual({ here: 0, seats: 0, playing: 0, finished: 0 });
+  });
+
+  it("every declared refusal, and no refusal, is read once (the table covers the declared list)", () => {
+    expect(Object.keys(SNAPSHOT_SAYS_OPEN).sort(), "the table is the declared list").toEqual([...EXTEND_REFUSALS].sort());
+    let open = 0;
+    let shut = 0;
+    for (const refusal of [null, ...EXTEND_REFUSALS]) {
+      const b = checkingIn(checkin(-10 * MIN, 8 * MIN, { refusal, canExtend: refusal === null }), { white: seat(true), black: seat(false) });
+      const want = refusal === null ? true : SNAPSHOT_SAYS_OPEN[refusal];
+      expect(openWindowBoards([b], null).length === 1, `refusal ${String(refusal)}`).toBe(want);
+      expect(checkinTally([b], null), `tally, refusal ${String(refusal)}`).toMatchObject(want ? { here: 1, seats: 2 } : { here: 0, seats: 0 });
+      if (want) open += 1;
+      else shut += 1;
+    }
+    expect(open + shut, "anti-vacuity: refusals read (none + the declared five)").toBe(6);
+    expect(open, "both outcomes witnessed").toBeGreaterThan(0);
+    expect(shut, "both outcomes witnessed").toBeGreaterThan(0);
+  });
+
+  it("the clock: the earliest deadline among boards the snapshot says are open; else the earliest opening among those it says are ahead; else closed", () => {
+    const soon = checkin(-10 * MIN, 3 * MIN);
+    const farther = checkin(-10 * MIN, 9 * MIN);
+    // A snapshot-open window outranks a later group, whichever is listed first.
+    const ahead = checkin(5 * MIN, 15 * MIN, { refusal: "not_open", canExtend: false });
+    expect(checkinClock([checkingIn(farther), checkingIn(ahead), checkingIn(soon)], null)).toEqual({ kind: "closes", at: soon.deadlineAt });
+    // Nothing open: the earliest opening.
+    const nearer = checkin(2 * MIN, 12 * MIN, { refusal: "not_open", canExtend: false });
+    expect(checkinClock([checkingIn(ahead), checkingIn(nearer)], null)).toEqual({ kind: "opens", at: nearer.opensAt });
+    // A group the snapshot saw closed is neither.
+    expect(checkinClock([checkingIn(pastDeadline())], null)).toEqual({ kind: "closed" });
+    expect(checkinClock([checkingIn(pastDeadline()), checkingIn(ahead)], null)).toEqual({ kind: "opens", at: ahead.opensAt });
+  });
+
+  it("agrees with the ticking clock whenever the snapshot is current: the same boards, the same clock, the same tally", () => {
+    // The snapshot was read at NOW, so the refusal each fixture carries is the one the server gives at NOW; the null reading must
+    // equal the NOW reading, or the first paint would flip when the clock arrives.
+    const open = checkingIn(openNow(8), { white: seat(true), black: seat(false) });
+    const ahead = checkingIn(checkin(15 * MIN, 25 * MIN, { refusal: "not_open", canExtend: false }), { white: seat(true), black: seat(true) });
+    const closed = checkingIn(pastDeadline(), { white: seat(false), black: seat(false) });
+    const boards = [open, ahead, closed];
+    expect(openWindowBoards(boards, null)).toEqual(openWindowBoards(boards, NOW));
+    expect(checkinClock(boards, null)).toEqual(checkinClock(boards, NOW));
+    expect(checkinTally(boards, null)).toEqual(checkinTally(boards, NOW));
+    expect(openWindowBoards(boards, NOW), "anti-vacuity: the compared set is not empty").toHaveLength(1);
   });
 });
