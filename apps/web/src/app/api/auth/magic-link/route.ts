@@ -22,9 +22,12 @@ import { headers } from "next/headers";
 const GENERIC_SERVER_ERROR = "Server error";
 
 /** The answer to a request the outbox refused. The operator gets the real cause, in the log and in Sentry; the caller, anonymous,
- *  gets the generic answer and never a variable name or a bound. A returned `Response` passes through `handler()` untouched. */
+ *  gets the generic answer and never a variable name or a bound. A returned `Response` passes through `handler()` untouched.
+ *
+ *  What is NOT kept is the token and the email row. A refusal on the catch path comes after the account was resolved and its terms
+ *  acceptance stamped (both idempotent, and both would be written by the next successful request anyway), so those persist. */
 function refused(err: Error) {
-  log.error({ err }, "magic-link: the sign-in email could not be queued; the request was refused, nothing was kept");
+  log.error({ err }, "magic-link: the sign-in email could not be queued; the request was refused and no sign-in token or email row was kept");
   Sentry.captureException(err);
   return NextResponse.json({ ok: false, error: GENERIC_SERVER_ERROR }, { status: 500 });
 }
