@@ -167,6 +167,22 @@ export async function DELETE(req: Request) {
       await tx`
         delete from org_members where user_id = ${user.id}`;
 
+      // The email outbox keeps the sign-in emails it was asked to send to this account for its 90-day retention, with the real
+      // address as the recipient, and it has no foreign key to users: left alone, the address would outlive the account's own
+      // 30-day purge three times over. The rows go with the account, in THIS transaction, so the address is never left behind an
+      // anonymised account: a failure here fails the deletion (which the person can simply retry) rather than complete it quietly.
+      //
+      // `tx` is the pooled PRIVILEGED client (this route has no tenant context; `app_user` holds INSERT only on email_outbox, V470),
+      // so the delete is allowed, and it is the same role the retry worker writes the table as. Matched two ways: by the account's
+      // ref (a magic_link row's ref is `user/<id>`, which also reaches mail sent to an address the account has since changed away
+      // from) and by the address, case folded as the outbox's replace rule folds it (which also reaches a row another ref wrote to
+      // it, and an account whose stored address has capitals). Only `magic_link`: a
+      // `chess_invite` row belongs to an organiser's fixture, which outlives the player's account, and is not erased here.
+      await tx`
+        delete from email_outbox
+         where kind = 'magic_link'
+           and (ref_id = ${user.id} or lower(recipient) = lower(${user.email}))`;
+
       // Soft-delete: anonymize PII, mark deleted, schedule purge
       await tx`
         update users set
