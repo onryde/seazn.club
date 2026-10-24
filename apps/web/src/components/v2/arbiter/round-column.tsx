@@ -67,7 +67,11 @@ export function RoundColumn(p: RoundColumnProps) {
   // Only the before phase is drawn here. "none" is the panel's notice standing alone (spec §5.2 rule 1).
   if (phase !== "before") return null;
 
-  const views = nextRoundViews(p.data.views, p.round);
+  // A named refusal, not an assumption: a view with no pairing has nothing to open or to list. `listOpenRounds` never sends one
+  // (open-round-view.ts skips a group with no playable board: `live.length === 0`, "openRound: no_fixtures"), but its type allows
+  // it, and a block with an Open round press over "0 boards" is worse than none - it falls to the "nothing paired" line below,
+  // which is true. Filtered BEFORE the stage count, so a stage with no block does not make the others name theirs.
+  const views = nextRoundViews(p.data.views, p.round).filter((v) => v.pairings.length > 0);
   // The stage is named only when more than one STAGE has a block (spec §5.4), not when more than one block exists.
   const showStage = new Set(views.map((v) => v.stageId)).size > 1;
   return (
@@ -75,8 +79,9 @@ export function RoundColumn(p: RoundColumnProps) {
       aria-label={msg("arbiter.column.label")}
       data-testid="arbiter-round-column"
       data-phase={phase}
-      // Spec §5.1, the paths with no board grid: first on a phone, the second track from `md`. A landmark is never `contents`.
-      className="flex min-w-0 flex-col gap-3 max-md:order-[-1] md:col-start-2"
+      // Spec §5.1, the paths with no board grid: first on a phone, the second track from `md`, and row 1 by name so the place
+      // does not depend on where the aside sits in the DOM. A landmark is never `contents`.
+      className="flex min-w-0 flex-col gap-3 max-md:order-[-1] md:col-start-2 md:row-start-1"
     >
       {p.data.awaitsStart ? (
         // Before Start `listOpenRounds` answers [], so "nothing paired" would also be true: the start line wins (pre-flight A8),
@@ -128,6 +133,7 @@ export function OpenRoundBlockView({
   // cannot be opened gets no press and no confirmation here.
   const canOpen = view.press === "open";
   const headingId = `arbiter-column-open-${view.stageId}-${view.roundNo}`;
+  const captionId = `${headingId}-pairings`;
   const heading = showStage
     ? msg("arbiter.roundLine", { stage: view.stageName, round: view.roundNo })
     : msg("runsheet.round.heading", { round: view.roundNo });
@@ -174,12 +180,16 @@ export function OpenRoundBlockView({
         </div>
       )}
 
+      <p id={captionId} className={`m-0 text-xs font-semibold ${MUTED}`}>
+        {msg("runsheet.round.pairingsLabel", { round: view.roundNo })}
+      </p>
       {/* A scrolling region a keyboard can reach (AGENTS class 23): focusable, a region, named. A long round scrolls here rather
-          than pushing the rest of the page away. */}
+          than pushing the rest of the page away. Its name is the caption above it, and with more than one stage the block's
+          heading first: two stages can share a round number, and two landmarks must not share a name. */}
       <div
         role="region"
         tabIndex={0}
-        aria-label={msg("runsheet.round.pairingsLabel", { round: view.roundNo })}
+        aria-labelledby={showStage ? `${headingId} ${captionId}` : captionId}
         data-testid="arbiter-column-pairings"
         className="max-h-[40vh] min-w-0 overflow-y-auto rounded-lg border border-[#e7e3f3]"
       >
@@ -187,7 +197,7 @@ export function OpenRoundBlockView({
           {view.pairings.map((p) => (
             <li key={p.fixtureId} data-testid={`arbiter-column-pairing-${p.fixtureId}`} className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5 px-3 py-2">
               <span className={`min-w-16 shrink-0 text-xs font-semibold ${MUTED}`}>{msg("arbiter.boardNo", { n: p.boardNo })}</span>
-              <span className="min-w-0 flex-1 basis-40 text-sm break-words">
+              <span data-field="names" className="min-w-0 flex-1 basis-40 text-sm break-words">
                 <span className={`font-medium ${INK}`}>{p.whiteName}</span>
                 <span className={`mx-1.5 ${MUTED}`}>{msg("schedule.vs")}</span>
                 <span className={`font-medium ${INK}`}>{p.blackName}</span>

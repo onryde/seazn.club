@@ -11,12 +11,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement, ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
+import { DictProvider } from "@/components/i18n/dict-provider";
 import { ConfirmDialog } from "@/components/v2/confirm-dialog";
 import enUi from "@/dictionaries/en/ui.json";
 import esUi from "@/dictionaries/es/ui.json";
 import frUi from "@/dictionaries/fr/ui.json";
 import nlUi from "@/dictionaries/nl/ui.json";
 import { emptyExtendTally } from "@/lib/checkin-extend";
+import type { Dict, Locale } from "@/lib/i18n-constants";
 import { messages } from "@/lib/messages";
 import type { ArbiterRound } from "@/lib/arbiter-view";
 import type { OpenRoundPairing, OpenRoundResult, OpenRoundView } from "@/lib/open-round";
@@ -116,9 +118,9 @@ const ATTR = (testid: string) => `data-testid="${testid}"`;
 const count = (h: string, testid: string) => h.split(ATTR(testid)).length - 1;
 /** The opening tag of the element carrying a test id, or null. */
 const tagOf = (h: string, testid: string): string | null => new RegExp(`<[a-z0-9]+\\b[^>]*${ATTR(testid)}[^>]*>`).exec(h)?.[0] ?? null;
-/** The inner markup of the first element carrying a test id (balanced on its own tag name). */
-function inner(h: string, testid: string): string | null {
-  const open = new RegExp(`<([a-z0-9]+)\\b[^>]*${ATTR(testid)}[^>]*>`).exec(h);
+/** The inner markup of the first element whose opening tag contains `attr` (balanced on its own tag name). */
+function innerAttr(h: string, attr: string): string | null {
+  const open = new RegExp(`<([a-z0-9]+)\\b[^>]*${attr}[^>]*>`).exec(h);
   if (!open) return null;
   const re = new RegExp(`<(/?)${open[1]}\\b[^>]*>`, "g");
   const from = open.index + open[0].length;
@@ -128,7 +130,21 @@ function inner(h: string, testid: string): string | null {
     depth += m[1] ? -1 : 1;
     if (depth === 0) return h.slice(from, m.index);
   }
-  throw new Error(`unbalanced <${open[1]}> for ${testid}`);
+  throw new Error(`unbalanced <${open[1]}> for ${attr}`);
+}
+const inner = (h: string, testid: string): string | null => innerAttr(h, ATTR(testid));
+/** The text of the element with this id (an aria-labelledby target); throws when there is none, so a dangling reference is a failure. */
+function textOfId(h: string, id: string): string {
+  const i = innerAttr(h, ` id="${id}"`);
+  if (i === null) throw new Error(`aria-labelledby points at no element: ${id}`);
+  return i.replace(/<[^>]*>/g, "");
+}
+/** The accessible name of an element from its opening tag: its aria-label, else the text of its aria-labelledby targets, in order. */
+function nameOf(h: string, tag: string): string {
+  const label = /aria-label="([^"]*)"/.exec(tag)?.[1];
+  if (label) return label;
+  const ids = /aria-labelledby="([^"]*)"/.exec(tag)?.[1];
+  return ids ? ids.split(" ").map((id) => textOfId(h, id)).join(" ") : "";
 }
 const textIn = (h: string, testid: string): string | null => {
   const i = inner(h, testid);
@@ -168,6 +184,7 @@ describe("RoundColumn: before the round opens", () => {
     // Spec §5.1, the paths with no board grid: the aside is first below md and sits in the second track from md.
     expect(classOf(root)).toMatch(/(^|\s)max-md:order-\[-1\](\s|$)/);
     expect(classOf(root)).toMatch(/(^|\s)md:col-start-2(\s|$)/);
+    expect(classOf(root), "row 1 by name: independent of the aside's place in the DOM").toMatch(/(^|\s)md:row-start-1(\s|$)/);
     // A landmark is never display: contents; and a truncating name needs min-w-0 on its ancestors.
     expect(classOf(root)).not.toMatch(/(^|\s)(max-md:|md:)?contents(\s|$)/);
     expect(classOf(root)).toMatch(/(^|\s)min-w-0(\s|$)/);
@@ -258,6 +275,48 @@ describe("RoundColumn: before the round opens", () => {
     expect(count(h, "arbiter-column-open")).toBe(1);
     expect(h).toContain(esc(t("runsheet.round.heading", { round: 2 })));
     expect(h).not.toContain(esc(t("runsheet.round.heading", { round: 1 })));
+  });
+});
+
+describe("RoundColumn: landmark names and the empty-view guard", () => {
+  it("two stages that share a round number: each pairings region, and each block, has its own name (landmark-unique)", () => {
+    const a = VIEW({ stageId: "s1", stageName: "Swiss Open", roundNo: 2 });
+    const b = VIEW({ stageId: "s2", stageName: "Rapid Playoff", roundNo: 2 });
+    const h = column({ data: DATA({ views: [a, b] }) });
+    const regions = tagsNamed(h, "div").filter((tag) => tag.includes(ATTR("arbiter-column-pairings")));
+    expect(regions, "anti-vacuity: both regions drawn").toHaveLength(2);
+    const names = regions.map((tag) => nameOf(h, tag));
+    expect(new Set(names).size, `distinct names: ${names.join(" | ")}`).toBe(2);
+    expect(names[0]).toContain("Swiss Open");
+    expect(names[0]).not.toContain("Rapid Playoff");
+    expect(names[1]).toContain("Rapid Playoff");
+    expect(names[1]).not.toContain("Swiss Open");
+    for (const name of names) expect(name).toContain(esc(t("runsheet.round.pairingsLabel", { round: 2 })));
+    const sections = tagsNamed(h, "section").map((tag) => nameOf(h, tag));
+    expect(new Set(sections).size, `the blocks are distinct too: ${sections.join(" | ")}`).toBe(2);
+    // Every id the names point at is unique on the page.
+    const ids = [...h.matchAll(/ id="([^"]+)"/g)].map((m) => m[1]);
+    expect(ids.length, "anti-vacuity: ids checked").toBeGreaterThanOrEqual(4);
+    expect(new Set(ids).size).toBe(ids.length);
+
+    // One stage: no stage in the name, just the existing words.
+    const one = column({ data: DATA({ views: [a] }) });
+    expect(nameOf(one, tagOf(one, "arbiter-column-pairings")!)).toBe(esc(t("runsheet.round.pairingsLabel", { round: 2 })));
+  });
+
+  it("a view with no pairing is refused: no block and no press, the 'nothing paired' line stands, and its stage is not counted", () => {
+    // The reader never sends one (open-round-view.ts skips a group with no playable board), but its type allows it.
+    const empty = VIEW({ stageId: "s1", stageName: "Swiss Open", pairings: [] });
+    const alone = column({ data: DATA({ views: [empty] }) });
+    for (const id of ["arbiter-column-open", "arbiter-column-open-cta"]) expect(alone, id).not.toContain(ATTR(id));
+    expect(textIn(alone, "arbiter-column-nothing")).toBe(esc(`${en["arbiter.column.nothingPaired"]!}${en["arbiter.column.toFixtures"]!}`));
+
+    const real = VIEW({ stageId: "s2", stageName: "Rapid Playoff", roundNo: 3 });
+    const mixed = column({ data: DATA({ views: [empty, real] }) });
+    expect(count(mixed, "arbiter-column-open"), "only the real one draws").toBe(1);
+    expect(mixed).not.toContain(ATTR("arbiter-column-nothing"));
+    expect(mixed, "one stage has a block, so no stage is named").not.toContain("Rapid Playoff");
+    expect(mixed).toContain(esc(t("runsheet.round.heading", { round: 3 })));
   });
 });
 
@@ -396,23 +455,34 @@ describe("OpenRoundBlockView: state in, markup out", () => {
     expect(classOf(list)).toMatch(/(^|\s)overflow-y-auto(\s|$)/);
     expect(list).toContain('tabindex="0"');
     expect(list).toContain('role="region"');
-    expect(list).toContain(`aria-label="${esc(t("runsheet.round.pairingsLabel", { round: 6 }))}"`);
+    expect(nameOf(h, list)).toBe(esc(t("runsheet.round.pairingsLabel", { round: 6 })));
     // AGENTS class 23: every scroller in the markup (this list, and the confirmation's invitee list) is focusable and named.
     const scrollers = h.match(SCROLLERS) ?? [];
     expect(scrollers.length, "anti-vacuity: scrollers checked (pairings + invitees)").toBeGreaterThanOrEqual(2);
     for (const tag of scrollers) {
       expect(tag, tag).toContain('tabindex="0"');
-      expect(tag, tag).toMatch(/aria-label="[^"]+"/);
+      expect(nameOf(h, tag).length, `named: ${tag}`).toBeGreaterThan(0);
     }
   });
 
-  it("a pairing's names wrap rather than push the page wider: min-w-0 down the chain, no fixed-width name", () => {
+  it("a pairing's names wrap (break-words, never truncated) and min-w-0 runs down the whole chain: block, region, list, row, names", () => {
     const long = "A".repeat(43);
     const h = block(VIEW({ pairings: [P(1, { whiteName: long, blackName: long })] }));
-    const row = tagOf(h, "arbiter-column-pairing-f1")!;
-    expect(classOf(row)).toMatch(/(^|\s)min-w-0(\s|$)/);
-    expect(classOf(tagOf(h, "arbiter-column-open")!)).toMatch(/(^|\s)min-w-0(\s|$)/);
-    expect(h).toContain(long);
+    const names = /<span\b[^>]*data-field="names"[^>]*>/.exec(inner(h, "arbiter-column-pairing-f1")!)?.[0];
+    expect(names, "the names span").toBeDefined();
+    const MINW = /(^|\s)min-w-0(\s|$)/;
+    const chain: [string, string | undefined][] = [
+      ["block", tagOf(h, "arbiter-column-open") ?? undefined],
+      ["region", tagOf(h, "arbiter-column-pairings") ?? undefined],
+      ["list", /<ul\b[^>]*>/.exec(inner(h, "arbiter-column-pairings")!)?.[0]],
+      ["row", tagOf(h, "arbiter-column-pairing-f1") ?? undefined],
+      ["names", names],
+    ];
+    for (const [name, tag] of chain) expect(classOf(tag ?? ""), name).toMatch(MINW);
+    expect(chain.length, "anti-vacuity: links checked").toBe(5);
+    expect(classOf(names!)).toMatch(/(^|\s)break-words(\s|$)/);
+    expect(classOf(names!), "wraps, does not truncate").not.toMatch(/(^|\s)truncate(\s|$)/);
+    expect(h.split(long).length - 1, "both 43-character names are in the markup in full").toBe(2);
   });
 });
 
@@ -492,6 +562,41 @@ describe("RoundColumn: each block presses its OWN round (the seam, through the r
     a.read().on.cancel();
     expect(a.read().state.confirming).toBe(false);
     expect(net.calls).toHaveLength(0);
+  });
+});
+
+// ---- another locale ---------------------------------------------------------------------------------------------
+
+describe("the column under another locale: every word comes from that dictionary", () => {
+  const fill = (s: string, vars: Record<string, string | number>) => Object.entries(vars).reduce((acc, [k, v]) => acc.replaceAll(`{${k}}`, String(v)), s);
+  const under = (dict: Dict, locale: Locale, node: ReactNode) => renderToStaticMarkup(<DictProvider dict={dict} locale={locale}>{node}</DictProvider>);
+
+  it.each([["es", esUi], ["fr", frUi], ["nl", nlUi]] as [Locale, Dict][])("%s: block, confirmation, landmark and empty line are that locale's, not English", (locale, dict) => {
+    const d = dict as unknown as Record<string, string>;
+    const view = VIEW({ roundNo: 4 }); // 3 boards, 6 players
+    const state = { ...initialOpenRoundUi(), confirming: true };
+    const h = under(dict, locale, <OpenRoundBlockView view={view} state={state} tz={TZ} showStage={false} on={NO_ON} />);
+    const expected = {
+      lede: fill(d["runsheet.round.pairedLede.other"]!, { count: 3, players: 6 }),
+      cta: d["runsheet.round.openCta"]!,
+      heading: fill(d["runsheet.round.heading"]!, { round: 4 }),
+      caption: fill(d["runsheet.round.pairingsLabel"]!, { round: 4 }),
+      board: fill(d["arbiter.boardNo"]!, { n: 1 }),
+      title: fill(d["runsheet.round.confirmTitle"]!, { round: 4 }),
+      confirm: fill(d["runsheet.round.confirmCta.other"]!, { count: 6 }),
+      cancel: d["confirm.cancel"]!,
+    };
+    for (const [what, text] of Object.entries(expected)) expect(h, `${locale} ${what}`).toContain(esc(text));
+    // Premise: these really differ from the English, so containing them proves the locale was used.
+    expect(expected.lede).not.toBe(pl("runsheet.round.pairedLede", 3, { players: 6 }));
+    expect(expected.cta).not.toBe(en["runsheet.round.openCta"]);
+    expect(h).not.toContain(esc(en["runsheet.round.openCta"]!));
+    expect(h).not.toContain(esc(pl("runsheet.round.pairedLede", 3, { players: 6 })));
+    expect(Object.keys(expected).length, "anti-vacuity: words checked").toBe(8);
+
+    const col = under(dict, locale, <RoundColumn {...COLUMN()} />);
+    expect(tagOf(col, "arbiter-round-column")).toContain(`aria-label="${esc(d["arbiter.column.label"]!)}"`);
+    expect(textIn(col, "arbiter-column-nothing")).toBe(esc(`${d["arbiter.column.nothingPaired"]!}${d["arbiter.column.toFixtures"]!}`));
   });
 });
 
