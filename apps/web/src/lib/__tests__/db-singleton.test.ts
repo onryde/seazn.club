@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FLY_CONFIGS, healthCheckIntervalS } from "./_fly-health-check";
 
 // 2026-07-13 incident: in production builds getClient() constructed a brand
@@ -20,6 +20,11 @@ describe("db client singleton", () => {
     postgresMock.mockClear();
     delete (globalThis as { _sql?: unknown })._sql;
     vi.stubEnv("DATABASE_URL", "postgres://app@db.example.com:5432/app");
+  });
+
+  // A stubbed VITEST (the production-posture case below) must not leak into the next test.
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("constructs the postgres client once in production", async () => {
@@ -71,5 +76,28 @@ describe("db client singleton", () => {
   it("passes fetch_types: true explicitly, so the connection string cannot turn it off", async () => {
     const opts = await clientOptions();
     expect(opts.fetch_types).toBe(true);
+  });
+
+  // SECURITY. A truthy `debug` makes postgres.js put every failed query's bind values on its error as ENUMERABLE fields, which
+  // every logger and Sentry then writes out. The statement counter rides on `debug`, so it is a vitest-only instrument: the
+  // production client is built with `debug: false`. (The behaviour - a real failed query, the real logger and Sentry - is
+  // db-error-redaction.test.ts; this pins what postgres() is handed.)
+  it("production: postgres() is handed `debug: false` EXPLICITLY (an absent key falls back to ?debug= and PGDEBUG)", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("VITEST", "");
+    const opts = await clientOptions();
+    expect(Object.keys(opts), "the key is there").toContain("debug");
+    expect(opts.debug).toBe(false);
+  });
+
+  it("under vitest: postgres() is handed a `debug` hook, and each call it receives is counted", async () => {
+    expect(process.env.VITEST, "premise: the runner sets VITEST").toBeTruthy();
+    const opts = await clientOptions();
+    const { statementCount } = await import("@/lib/db");
+    expect(typeof opts.debug).toBe("function");
+    const before = statementCount();
+    (opts.debug as () => void)();
+    (opts.debug as () => void)();
+    expect(statementCount() - before).toBe(2);
   });
 });
