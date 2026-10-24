@@ -31,6 +31,7 @@ import {
   type OutboxStatus,
 } from "@/server/email-outbox/constants";
 import { KIND_HOOKS, findUnappliedEndings, type EndedRow } from "@/server/email-outbox/hooks";
+import { PROVIDER_EVENT_STATUS } from "@/server/email-outbox/provider-events";
 import { runOutboxTick } from "@/server/email-outbox/worker";
 import type { DeliverMessage } from "@/server/email-outbox/transport";
 import { POST as webhookPost } from "@/app/api/webhooks/resend/route";
@@ -78,36 +79,65 @@ vi.mock("@/server/email-outbox/transport", async () => {
   };
 });
 
+// The logger, replaced by spies so a test can read exactly what a failure path logs (fix round 1, M1 and M3). The fields of every
+// call are checked for the recipient's address, the subject and a pg error's `parameters`/`query`.
+const logSpy = vi.hoisted(() => {
+  const l = { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn(), trace: vi.fn(), fatal: vi.fn(), child: () => l };
+  return l;
+});
+vi.mock("@/server/logger", () => ({ log: logSpy }));
+
 // dispatchNow's pacing clock and sleep, handed through the REAL open and resend (the routes pass neither): a test that sets
 // them runs the whole round on a fake clock, with no waiting.
 const pacing = vi.hoisted(() => ({
   nowMs: null as null | (() => number),
   sleep: null as null | ((ms: number) => Promise<void>),
+  /** When set, the NEXT dispatchNow rejects with this (once): the "dispatch or the status read failed" path of dispatchAndClassify. */
+  rejectNext: null as null | { error: unknown },
 }));
 vi.mock("@/server/email-outbox/attempt", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/server/email-outbox/attempt")>();
   return {
     ...actual,
-    dispatchNow: (ids: readonly string[], opts: Parameters<typeof actual.dispatchNow>[1] = {}) =>
-      actual.dispatchNow(ids, {
+    dispatchNow: (ids: readonly string[], opts: Parameters<typeof actual.dispatchNow>[1] = {}) => {
+      if (pacing.rejectNext) {
+        const { error } = pacing.rejectNext;
+        pacing.rejectNext = null;
+        return Promise.reject(error);
+      }
+      return actual.dispatchNow(ids, {
         ...opts,
         ...(pacing.nowMs ? { nowMs: pacing.nowMs } : {}),
         ...(pacing.sleep ? { sleep: pacing.sleep } : {}),
-      }),
+      });
+    },
   };
 });
 
 // A seat the test makes neither claim nor hold a stamp (the resend's loud guard).
-const race = vi.hoisted(() => ({ claimFalseFor: new Set<string>() }));
+const race = vi.hoisted(() => ({
+  claimFalseFor: new Set<string>(),
+  /** Every `claimSeat` call, as `fixtureId|colour`, in order. */
+  claims: [] as string[],
+  /** When set, every `releaseSeat` rejects with this (a genuine pg error the test minted). */
+  releaseFails: null as null | { error: unknown },
+}));
 vi.mock("../seat-stamp", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../seat-stamp")>();
   return {
     ...actual,
-    claimSeat: async (...args: Parameters<typeof actual.claimSeat>) =>
-      race.claimFalseFor.has(`${args[1]}|${args[2]}`) ? false : actual.claimSeat(...args),
+    claimSeat: async (...args: Parameters<typeof actual.claimSeat>) => {
+      race.claims.push(`${args[1]}|${args[2]}`);
+      return race.claimFalseFor.has(`${args[1]}|${args[2]}`) ? false : actual.claimSeat(...args);
+    },
+    releaseSeat: async (...args: Parameters<typeof actual.releaseSeat>) => {
+      if (race.releaseFails) throw race.releaseFails.error;
+      return actual.releaseSeat(...args);
+    },
   };
 });
 
+import { chessInviteEndedBadly } from "../invite-outbox-hook";
 import { openRound } from "../open-round";
 import { latestStatuses, resendExternalPlayNotice, seatOutcome } from "../invite";
 import { CHESS_SEAT_REF_TYPE, STAMP_COLUMN, chessSeatRef } from "../seat-stamp";
@@ -135,6 +165,10 @@ beforeEach(() => {
   mail.afterDeliver = null;
   pacing.nowMs = null;
   pacing.sleep = null;
+  pacing.rejectNext = null;
+  race.releaseFails = null;
+  race.claims.length = 0;
+  for (const spy of [logSpy.error, logSpy.warn, logSpy.info, logSpy.debug, logSpy.trace, logSpy.fatal]) spy.mockClear();
   stubOutboxEnv();
   vi.stubEnv("RESEND_WEBHOOK_SECRET", WEBHOOK_SECRET);
 });
@@ -266,6 +300,51 @@ const realChessHook = KIND_HOOKS.chess_invite;
 afterEach(() => {
   KIND_HOOKS.chess_invite = realChessHook;
 });
+
+/** Everything the logger was asked to write at error or warn level, as the JSON a log line would carry. */
+const loggedAtErrorOrWarn = (): string => JSON.stringify([...logSpy.error.mock.calls, ...logSpy.warn.mock.calls]);
+
+/** A genuine Postgres error (as the app's client raises it) whose enumerable fields carry `leak`: the app's client attaches the
+ *  statement's `query` and `parameters` to a failed query's error, and a raw log of it would write them out. */
+async function pgErrorCarrying(leak: string): Promise<Error> {
+  const err = await sql`select ${leak}::text as leaked, 1 / 0 as boom`.then(
+    () => null,
+    (e: unknown) => e,
+  );
+  if (!(err instanceof Error)) throw new Error("premise: the staged statement must fail");
+  expect(JSON.stringify(err), "premise: the staged error really carries the address in its fields (what a raw log would write)").toContain(leak);
+  return err;
+}
+
+/** Make an insert into the outbox for exactly this recipient fail with a Postgres error (the trigger's `raise exception`). */
+async function refuseRecipient<T>(recipient: string, during: () => Promise<T>): Promise<T> {
+  const fn = `t7_refuse_${randomUUID().replaceAll("-", "").slice(0, 8)}`;
+  await sql.unsafe(`create function ${fn}() returns trigger language plpgsql as $$ begin raise exception 'staged: refused'; end $$`);
+  await sql.unsafe(
+    `create trigger ${fn} before insert on email_outbox for each row when (new.recipient = '${recipient.replaceAll("'", "''")}') execute function ${fn}()`,
+  );
+  try {
+    return await during();
+  } finally {
+    await sql.unsafe(`drop trigger if exists ${fn} on email_outbox`);
+    await sql.unsafe(`drop function if exists ${fn}()`);
+  }
+}
+
+/** The fields of the first `log.error` whose message matches (the call must exist). */
+function errorCall(message: RegExp): Record<string, unknown> {
+  const call = logSpy.error.mock.calls.find((c) => typeof c[1] === "string" && message.test(c[1]));
+  expect(call, `a log.error whose message matches ${message}`).toBeDefined();
+  return call![0] as Record<string, unknown>;
+}
+
+/** What a log call carries must be a SUMMARY of the error: no address, no subject, no statement, no parameters. */
+function expectNoSecretsLogged(addresses: string[]): void {
+  const text = loggedAtErrorOrWarn();
+  for (const a of addresses) expect(text, `the log must not carry ${a}`).not.toContain(a);
+  expect(text, "no rendered subject").not.toContain("test invite");
+  for (const key of ["parameters", "query", "args", "types"]) expect(text, `no "${key}" field of a raw pg error`).not.toContain(`"${key}"`);
+}
 
 // ===========================================================================
 // seatOutcome: what a seat reports, from the status of the rows that carry it.
@@ -631,6 +710,31 @@ describe.skipIf(!HAS_DB)("the first attempt: accepted, retried later, or refused
     expect(res).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
   });
 
+  it("when the dispatch (or the status read) FAILS after the commit, a seat with rows reads retrying - not failed - and the worker still sends it; a seat with no row reads failed", async () => {
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
+    const b = r.boards[0]!;
+    await sql`update persons set user_id = null where id = ${b.home.personId}`; // the home seat has no row at all
+    pacing.rejectNext = { error: await pgErrorCarrying(b.away.email) };
+    // A real-clock open: the worker judges the row's expiry on the database's clock, so a past open would be expired, not sent.
+    expect(await open(r, new Date())).toEqual({
+      opened: true,
+      invited: 0,
+      retrying: 1,
+      skipped: [{ fixtureId: b.fixtureId, reason: "send_failed" }],
+    });
+    expect(pacing.rejectNext, "premise: the failing dispatch was reached").toBeNull();
+    const awayColour = await colourOf(b.fixtureId, b.away.email);
+    const [row] = await rowsForSeat(b.fixtureId, awayColour);
+    expect(row).toMatchObject({ status: "queued", attempts: 0 });
+    expect(stampOf(await bridgeOf(b.fixtureId), awayColour), "the seat with a queued row stays stamped").not.toBeNull();
+    expect(mail.sent, "nothing was sent in the request").toHaveLength(0);
+    expect(await tick([row!.id])).toMatchObject({ claimed: 1 });
+    expect((await freshRow(row!.id)).status, "the worker finishes the job").toBe("sent");
+    expect(mail.sent.map((m) => m.to)).toEqual([b.away.email]);
+    expect(errorCall(/sending the queued invites failed/)).toMatchObject({ errCode: "22012" });
+    expectNoSecretsLogged([b.away.email]);
+  });
+
   it("a second open after a retrying seat re-mails nobody (its stamp stands); after the hook released a dead seat, the next open invites it afresh", async () => {
     const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
     const b = r.boards[0]!;
@@ -814,12 +918,17 @@ describe.skipIf(!HAS_DB)("the chess hook releases a seat only when every row for
     },
   );
 
-  it("R12: the sweep covered every event the webhook maps to a badly-ended status (anti-vacuity)", () => {
-    const covered = new Set(R12.map((c) => c.becomes));
-    for (const s of ENDED_BADLY_STATUSES.filter((x) => !["dead", "expired"].includes(x))) {
-      expect(covered.has(s), `${s} is driven through the webhook above`).toBe(true);
+  it("R12: the table above drives every event the webhook maps to a badly-ended status, and no event the webhook does not map (anti-vacuity)", () => {
+    // The webhook's own declaration (PROVIDER_EVENT_STATUS), not a list typed here. `dead` and `expired` never come from a webhook.
+    const mapped = Object.entries(PROVIDER_EVENT_STATUS).filter(([, status]) => (ENDED_BADLY_STATUSES as readonly string[]).includes(status));
+    expect(mapped.length, "the webhook maps at least one badly-ended event").toBeGreaterThan(0);
+    for (const [event, status] of mapped) {
+      expect(R12.some((c) => c.event === event && c.becomes === status), `${event} -> ${status} is driven through the webhook above`).toBe(true);
     }
-    expect(R12.length).toBeGreaterThanOrEqual(6);
+    for (const c of R12) {
+      expect(PROVIDER_EVENT_STATUS[c.event as keyof typeof PROVIDER_EVENT_STATUS], `${c.event} is an event the webhook maps`).toBe(c.becomes);
+    }
+    expect(R12.length).toBeGreaterThanOrEqual(mapped.length);
   });
 
   it("a team seat: a bounce on the first row keeps the seat (a sibling is live); a bounce on the last releases it; a complaint on either never does", async () => {
@@ -918,6 +1027,113 @@ describe.skipIf(!HAS_DB)("the chess hook releases a seat only when every row for
   });
 });
 
+describe.skipIf(!HAS_DB)("the hook refuses a row whose ref or meta is not a seat stamp, and releases nothing for it", () => {
+  it("a wrong refType, a refId that names the other colour, and a stamp that is not the ISO instant the invite wrote are each refused and logged; the genuine row still releases", async () => {
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
+    const b = r.boards[0]!;
+    // The home row ends badly while the hook is dead, so the seat is left stamped with a dead row: exactly the state in which a
+    // well-formed row WOULD release it. Each doctored copy below differs from the genuine row in one field only.
+    KIND_HOOKS.chess_invite = { ...realChessHook, onEndedBadly: async () => { throw new Error("staged: dead hook"); } };
+    mail.fail.add(b.home.email);
+    await open(r, OPENED);
+    KIND_HOOKS.chess_invite = realChessHook;
+    const colour = await colourOf(b.fixtureId, b.home.email);
+    const otherColour = colour === "white" ? "black" : "white";
+    const [row] = await rowsForSeat(b.fixtureId, colour);
+    expect(row!.status, "premise: the home row is dead").toBe("dead");
+    expect(stampOf(await bridgeOf(b.fixtureId), colour), "premise: the seat is still stamped").not.toBeNull();
+    const genuine: EndedRow = { id: row!.id, kind: "chess_invite", refType: row!.ref_type, refId: row!.ref_id, status: "dead", meta: row!.meta };
+    const instant = new Date(row!.meta.stampedAt!);
+    const doctored: { name: string; row: EndedRow }[] = [
+      { name: "a refType that is not the seat's", row: { ...genuine, refType: "something_else" } },
+      { name: "a refId that names the other colour", row: { ...genuine, refId: chessSeatRef(b.fixtureId, otherColour) } },
+      // The same instant in a shape the invite never writes (a space, an offset, no millis): it parses, so only the round trip refuses it.
+      { name: "a stamp that is not the ISO instant", row: { ...genuine, meta: { ...genuine.meta, stampedAt: instant.toISOString().replace("T", " ").replace(".000Z", "+00") } } },
+    ];
+    for (const d of doctored) {
+      logSpy.error.mockClear();
+      await chessInviteEndedBadly(d.row);
+      expect(stampOf(await bridgeOf(b.fixtureId), colour), `${d.name}: nothing is released`).not.toBeNull();
+      const call = logSpy.error.mock.calls.find((c) => typeof c[1] === "string" && /not a seat stamp/.test(c[1]));
+      expect(call, `${d.name}: the refusal is logged`).toBeDefined();
+      expect(call![0], `${d.name}: ids only`).toEqual({ outboxId: row!.id, refType: d.row.refType });
+    }
+    expect(doctored.length, "anti-vacuity: three refusals were exercised").toBe(3);
+
+    // Positive pair: the SAME row, undoctored, releases the seat - so the three refusals above were the validation, not a seat that cannot release.
+    logSpy.error.mockClear();
+    await chessInviteEndedBadly(genuine);
+    expect(stampOf(await bridgeOf(b.fixtureId), colour), "the genuine row releases").toBeNull();
+    expect(logSpy.error, "and logs nothing").not.toHaveBeenCalled();
+  });
+});
+
+// ===========================================================================
+// What a failed invite logs: a summary of the error, never the error.
+// ===========================================================================
+
+describe.skipIf(!HAS_DB)("a failure path logs a summary of the error: no address, no subject, no statement, no parameters", () => {
+  it("openRound: queueing a seat's invite fails (a Postgres error on the insert)", async () => {
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
+    const b = r.boards[0]!;
+    const res = await refuseRecipient(b.home.email, () => open(r, OPENED));
+    expect(res).toEqual({ opened: true, invited: 1, retrying: 0, skipped: [{ fixtureId: b.fixtureId, reason: "send_failed" }] });
+    expect(errorCall(/queueing the invite failed; the seat was not stamped/)).toMatchObject({
+      fixtureId: b.fixtureId,
+      errName: expect.any(String),
+      errCode: "P0001",
+      errMessage: expect.stringContaining("staged: refused"),
+    });
+    expectNoSecretsLogged([b.home.email, b.away.email]);
+  });
+
+  it("resend: queueing a seat's invite fails", async () => {
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
+    const b = r.boards[0]!;
+    await open(r, OPENED);
+    logSpy.error.mockClear();
+    expect(await refuseRecipient(b.home.email, () => resend(r, b.fixtureId, new Date(OPENED.getTime() + MIN)))).toEqual({ emailed: 1, retrying: 0 });
+    expect(errorCall(/resend: queueing the invite failed/)).toMatchObject({
+      fixtureId: b.fixtureId,
+      errName: expect.any(String),
+      errCode: "P0001",
+      errMessage: expect.stringContaining("staged: refused"),
+    });
+    expectNoSecretsLogged([b.home.email, b.away.email]);
+  });
+
+  it("the post-commit dispatch or status read fails", async () => {
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
+    const b = r.boards[0]!;
+    pacing.rejectNext = { error: await pgErrorCarrying(b.home.email) };
+    expect(await open(r, OPENED)).toEqual({ opened: true, invited: 0, retrying: SEATS_PER_BOARD, skipped: [] });
+    expect(errorCall(/sending the queued invites failed/)).toMatchObject({ errName: expect.any(String), errCode: "22012" });
+    expectNoSecretsLogged([b.home.email, b.away.email]);
+  });
+
+  it("openRound: the un-stamp of a seat with no address throws", async () => {
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
+    const b = r.boards[0]!;
+    await sql`update persons set user_id = null where id = ${b.home.personId}`;
+    race.releaseFails = { error: await pgErrorCarrying(b.away.email) };
+    await open(r, OPENED);
+    expect(errorCall(/un-stamp of a seat with no address threw/)).toMatchObject({ fixtureId: b.fixtureId, errName: expect.any(String), errCode: "22012" });
+    expectNoSecretsLogged([b.away.email]);
+  });
+
+  it("resend: the un-stamp of a seat with no address throws", async () => {
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
+    const b = r.boards[0]!;
+    await sql`update persons set user_id = null where id = ${b.home.personId}`;
+    await open(r, OPENED);
+    logSpy.error.mockClear();
+    race.releaseFails = { error: await pgErrorCarrying(b.away.email) };
+    await resend(r, b.fixtureId, new Date(OPENED.getTime() + MIN));
+    expect(errorCall(/resend: un-stamp of a seat with no address threw/)).toMatchObject({ fixtureId: b.fixtureId, errName: expect.any(String), errCode: "22012" });
+    expectNoSecretsLogged([b.away.email]);
+  });
+});
+
 // ===========================================================================
 // Resend.
 // ===========================================================================
@@ -1004,6 +1220,25 @@ describe.skipIf(!HAS_DB)("the organiser's Resend writes a fresh row each time", 
     await expect(resend(r, b.fixtureId, new Date(OPENED.getTime() + MIN))).rejects.toThrow(/stamp/);
     expect(await rowsOf(b.fixtureId), "the refused resend queued nothing").toHaveLength(rowsBefore);
     expect(mail.sent.filter((m) => m.to === b.away.email), "and mailed nobody").toHaveLength(1); // only the open's mail
+  });
+
+  it("a seat the resend CLAIMS that has no address at all is released after the commit: no row, nothing counted, never left 'invited' - however often it is resent", async () => {
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
+    const b = r.boards[0]!;
+    await sql`update persons set user_id = null where id = ${b.home.personId}`; // nobody to mail for the home seat
+    await open(r, OPENED); // the away seat is invited and stamped; the home seat is left un-stamped
+    const awayColour = await colourOf(b.fixtureId, b.away.email);
+    const homeColour = awayColour === "white" ? "black" : "white";
+    expect(stampOf(await bridgeOf(b.fixtureId), homeColour), "premise: the home seat is un-stamped after the open").toBeNull();
+    for (const call of [1, 2]) {
+      race.claims.length = 0;
+      expect(await resend(r, b.fixtureId, new Date(OPENED.getTime() + call * MIN)), `resend ${call}`).toEqual({ emailed: 1, retrying: 0 });
+      expect(race.claims, `resend ${call}: the home seat WAS claimed (so the release is what un-stamps it)`).toContain(`${b.fixtureId}|${homeColour}`);
+      const bridge = await bridgeOf(b.fixtureId);
+      expect(stampOf(bridge, homeColour), `resend ${call}: a claimed seat with no address is not left stamped`).toBeNull();
+      expect(stampOf(bridge, awayColour), `resend ${call}: the invited seat keeps its stamp`).not.toBeNull();
+      expect(await rowsForSeat(b.fixtureId, homeColour), `resend ${call}: no row exists for a seat with no address`).toHaveLength(0);
+    }
   });
 
   it("a resend whose queueing THROWS for a seat it claimed un-stamps that seat in the same transaction; a seat invited before keeps its stamp", async () => {

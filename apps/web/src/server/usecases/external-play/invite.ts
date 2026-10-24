@@ -27,6 +27,7 @@ import { toLocale } from "@/lib/i18n-constants";
 import { routes } from "@/lib/routes";
 import { log } from "@/server/logger";
 import { LIVE_STATUSES, RETRYABLE_STATUSES, dispatchNow, enqueueEmail, type OutboxStatus } from "@/server/email-outbox";
+import { errFields } from "@/server/email-outbox/err-fields";
 import { mintMatchRoomToken } from "@/server/usecases/match-room-token";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { boardOpenFor, roundOpenAt } from "@/server/external-play/round-open";
@@ -270,7 +271,7 @@ export async function dispatchAndClassify(seatRowIds: readonly (readonly string[
       seatOutcome(ids.flatMap((id) => { const s = statuses.get(id); return s === undefined ? [] : [s]; })),
     );
   } catch (err) {
-    log.error({ err }, "external-play invite: sending the queued invites failed; the worker will finish them");
+    log.error({ ...errFields(err) }, "external-play invite: sending the queued invites failed; the worker will finish them");
     return seatRowIds.map((ids) => (ids.length === 0 ? "failed" : "retrying"));
   }
 }
@@ -399,7 +400,7 @@ export async function resendExternalPlayNotice(
       } catch (err) {
         // The savepoint took this seat's rows back with it. A seat this call claimed is un-stamped in the same transaction (its
         // next open retries it); one invited before keeps the stamp it had.
-        log.error({ fixtureId, colour: seat.colour, err }, "external-play resend: queueing the invite failed");
+        log.error({ fixtureId, colour: seat.colour, ...errFields(err) }, "external-play resend: queueing the invite failed");
         unqueued.add(seat.colour);
         if (claimed.has(seat.colour)) await releaseSeat(tx, fixtureId, seat.colour, now);
       }
@@ -418,7 +419,7 @@ export async function resendExternalPlayNotice(
         try {
           await releaseSeat(sql, fixtureId, seat.colour, now);
         } catch (err) {
-          log.error({ fixtureId, colour: seat.colour, err }, "external-play resend: un-stamp of a seat with no address threw");
+          log.error({ fixtureId, colour: seat.colour, ...errFields(err) }, "external-play resend: un-stamp of a seat with no address threw");
         }
       }
       continue;

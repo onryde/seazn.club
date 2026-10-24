@@ -63,6 +63,7 @@ import { boardExtraSql, boardRankSql, roundOpenAt, type RoundOpenRow } from "@/s
 import { assertTimeControl } from "@/server/external-play/time-controls";
 import { RETIRED_PAIR, endMeeting, gameEvidenceOn, retireStaleMeeting } from "@/server/external-play/video/realtimekit";
 import { boardAnchor, roomPhase, type BoardAnchor } from "@/server/external-play/window";
+import { errFields } from "@/server/email-outbox/err-fields";
 import { log } from "@/server/logger";
 import { audit } from "../audit";
 import { loadOnlinePlayFixture, resetStaleBridge, type OnlinePlayFixture } from "./guard";
@@ -518,7 +519,7 @@ export async function openRound(
           });
           if (claim) claims.push(claim);
         } catch (err) {
-          log.error({ fixtureId, colour: seat.colour, err }, "openRound: queueing the invite failed; the seat was not stamped");
+          log.error({ fixtureId, colour: seat.colour, ...errFields(err) }, "openRound: queueing the invite failed; the seat was not stamped");
           queueFailed.add(fixtureId);
         }
       }
@@ -572,7 +573,7 @@ export async function openRound(
       } catch (err) {
         // The seat stays stamped with nothing sent. It is reported below as
         // send_failed, so the organiser's Resend is the way back.
-        log.error({ fixtureId, colour: c.seat.colour, err }, "openRound: un-stamp of a seat with no address threw");
+        log.error({ fixtureId, colour: c.seat.colour, ...errFields(err) }, "openRound: un-stamp of a seat with no address threw");
       }
     }
     const outcomes = await dispatchAndClassify(withRows.map((c) => c.rowIds), now);

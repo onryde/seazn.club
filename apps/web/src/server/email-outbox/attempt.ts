@@ -28,10 +28,14 @@ import { checkSendable, type DeliverResult } from "@/lib/email";
 import { log } from "@/server/logger";
 import { INVALID_IDEMPOTENT_REQUEST, classifyResult, nextAttemptAt, type Verdict } from "./classify";
 import { DISPATCH_NOW_BUDGET_MS, LEASE_MS, MIN_SEND_INTERVAL_MS, OUTBOX_TAG_NAME, idempotencyKey, type OutboxKind } from "./constants";
+import { errFields } from "./err-fields";
 import { afterEndedBadly, type EndedRow } from "./hooks";
 import { outboxRoleOk } from "./role-check";
 import { openBody } from "./seal";
 import { deliver } from "./transport";
+
+// The summary a caught error is logged as lives in its own leaf (err-fields.ts); it is re-exported here for the worker.
+export { errFields };
 
 export type AttemptOutcome = "sent" | "retrying" | "dead" | "suppressed" | "expired" | "deferred";
 
@@ -297,12 +301,6 @@ function warnIfStaleClock(injected: Date | undefined): void {
     );
   }
 }
-
-export const errFields = (err: unknown): { errName: string; errCode?: unknown; errMessage: string } => ({
-  errName: err instanceof Error ? err.name : typeof err,
-  errCode: (err as { code?: unknown } | null)?.code,
-  errMessage: (err instanceof Error ? err.message : String(err)).slice(0, 200),
-});
 
 type ExpiredRecord = { id: string; kind: OutboxKind; ref_type: string; ref_id: string; meta: Record<string, string> };
 
