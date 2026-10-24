@@ -97,6 +97,7 @@ function board(over: Partial<ArbiterBoard> & Pick<ArbiterBoard, "fixtureId" | "b
     tiebreakOwed: false,
     noResultOffer: { kind: "void" },
     checkin: null,
+    seats: null,
     flags: [],
     ...over,
   };

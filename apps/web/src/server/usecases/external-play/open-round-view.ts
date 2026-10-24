@@ -42,6 +42,7 @@ import {
 import { loadSideNames, whiteSideOf, type Side } from "./guard";
 import { bridgeTakesInvites } from "./invite";
 import { isPlayableFixtureStatus } from "./preflight";
+import { seatStampBound } from "./seat-stamp";
 import { fixturesSeating } from "./seated";
 
 type Row = {
@@ -91,8 +92,10 @@ type RoundFacts = {
 /** The seats this round's open has stamped on a board. A stamp counts only on
  *  a row bound to THIS open — openRound's own reading (`invitedFor`). */
 function boundStamps(b: Row, open: RoundOpenRow | null): Date[] {
-  if (open === null || b.roundOpenId !== open.id) return [];
-  return [b.whiteEmailedAt, b.blackEmailedAt].filter((d): d is Date => d !== null);
+  const stamps: Date[] = [];
+  if (b.whiteEmailedAt !== null && seatStampBound(b, open?.id ?? null, "white")) stamps.push(b.whiteEmailedAt);
+  if (b.blackEmailedAt !== null && seatStampBound(b, open?.id ?? null, "black")) stamps.push(b.blackEmailedAt);
+  return stamps;
 }
 
 function takesInvites(b: Row): boolean {

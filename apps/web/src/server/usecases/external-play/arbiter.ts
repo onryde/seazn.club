@@ -26,8 +26,10 @@ import {
   type ArbiterBoardState,
   type ArbiterFlag,
   type ArbiterRound,
+  type ArbiterSeatCheckin,
   type ArbiterSideMeeting,
 } from "@/lib/arbiter-view";
+import { seatInviteWords, type SeatInviteWord } from "@/lib/invite-status";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { fixtureCameraPolicy } from "@/server/external-play/camera-policy";
 import type { CameraPolicy } from "@/lib/camera-policy";
@@ -42,17 +44,20 @@ import {
   type ParticipantToken,
 } from "@/server/external-play/video/realtimekit";
 import { anchorOfRow, boardExtraSql, boardRankSql, roundOpenAt } from "@/server/external-play/round-open";
-import { bridgeGameOnFile, extendRefusal, extensionsLeft, windowFor } from "@/server/external-play/window";
+import { type BoardAnchor, bridgeGameOnFile, checkInCounts, extendRefusal, extensionsLeft, windowFor } from "@/server/external-play/window";
+import { latestEmailStatus, type EmailStatusRow } from "@/server/email-outbox/status";
 import type { CheckinExtendState } from "@/lib/checkin-extend";
 import { EDITOR_ROLES } from "@/lib/types";
 import { ARBITER_JOIN_LIMIT, ARBITER_RESYNC_LIMIT, rateLimit } from "@/lib/rate-limit";
 import { log } from "@/server/logger";
 import { decisiveResultFor, gameClocks, turnAfter, type DecisiveEvent } from "@/components/public-site/match-room/room-snapshot";
-import { loadOnlinePlayFixture, loadSides, whiteSideOf, type Side } from "./guard";
+import { checkedInAtOfBoards } from "./check-ins";
+import { loadOnlinePlayFixture, loadSides, whiteSideOf, type Side, type SidePlayer } from "./guard";
 import { noResultOffer } from "./no-result";
 import { readNeedsReason } from "./queue";
 import { isPlayableFixtureStatus, organiserOverrideVideo } from "./preflight";
 import { reconcile, type ReconcileDeps } from "./reconcile";
+import { CHESS_SEAT_REF_TYPE, chessSeatRef, seatStampBound, type Colour } from "./seat-stamp";
 import { fixturesSeating, isSeatedOn } from "./seated";
 
 // ---------------------------------------------------------------------------
@@ -83,6 +88,13 @@ type BoardRow = {
   rank: number;
   extraMs: number;
   extensions: number;
+  /** Phase 2 (spec §6): the seat stamps and the open they are bound to (`seatStampBound`'s inputs). `openId` is the board's own
+   *  round open (`stage_round_opens.id`, null when the round was never opened); `roundOpenId` is the one the bridge row's stamps
+   *  name, which differs after a fixture moved between rounds. */
+  whiteEmailedAt: Date | null;
+  blackEmailedAt: Date | null;
+  roundOpenId: string | null;
+  openId: string | null;
   whiteSide: Side | null;
   moveCount: number | null;
   whiteMs: number | null;
@@ -200,9 +212,12 @@ export async function loadArbiterRound(
   // M4: every board is read at once (its sides, its colours, its result, its
   // flags) — never one board after another. Promise.all keeps board order.
   const listed = [...rows.entries()].filter(([, r]) => !own.has(r.fixtureId));
-  const boards: ArbiterBoard[] = await Promise.all(
-    listed.map(([, r]) => boardOf(auth, r, { limitMs, policy, flagRows, now })),
+  // Pass 1 (C24): the boards, exactly as the Flagged list builds them, each with the two sides it resolved.
+  const built = await Promise.all(
+    listed.map(async ([, r]) => ({ row: r, ...(await boardWithSides(auth, r, { limitMs, policy, flagRows, now })) })),
   );
+  // Pass 2: the seats of the boards in check-in, from ONE read of the round's check-ins and ONE of its invite mail.
+  const boards = await withSeats(auth, built);
   return {
     stageId: round.stageId,
     stageName: round.stageName,
@@ -277,6 +292,8 @@ function boardRows(auth: AuthCtx, where: postgres.Fragment, opts: { cancelled: b
            ep.create_sent_at as "createSentAt", ep.mint_claimed_at as "mintClaimedAt",
            o.opened_at as "openedAt", o.staggered, ${boardRankSql(sql)} as rank, ${boardExtraSql(sql)} as "extraMs",
            coalesce(ep.checkin_extensions, 0)::int as extensions,
+           ep.white_emailed_at as "whiteEmailedAt", ep.black_emailed_at as "blackEmailedAt",
+           ep.round_open_id as "roundOpenId", o.id as "openId",
            ep.move_count as "moveCount", ep.white_ms as "whiteMs", ep.black_ms as "blackMs",
            ep.last_move_at as "lastMoveAt", ep.started_at as "startedAt", ep.finished_at as "finishedAt",
            ep.game_over_at as "gameOverAt", ep.video_override_at as "overrideAt",
@@ -341,12 +358,23 @@ function cameraReportOf(fixtureId: string, sides: { home: ArbiterSideMeeting; aw
 }
 
 /** One board as the panel paints it: its sides, its colours, its state, its
- *  clocks and its open flags. */
+ *  clocks and its open flags. `seats` is null here: the round view fills it in a second pass over the boards in check-in
+ *  (`withSeats`), and the Flagged list never does. */
 async function boardOf(
   auth: AuthCtx,
   r: BoardRow,
   ctx: { limitMs: number; policy: CameraPolicy; flagRows: readonly FlagRow[]; now: Date | null },
 ): Promise<ArbiterBoard> {
+  return (await boardWithSides(auth, r, ctx)).board;
+}
+
+/** `boardOf`, with the two sides it resolved by COLOUR kept: the second pass needs each seat's person (for the check-in) and its
+ *  mailboxes (for the invite words), and re-reading them per board would undo M4's single read. */
+async function boardWithSides(
+  auth: AuthCtx,
+  r: BoardRow,
+  ctx: { limitMs: number; policy: CameraPolicy; flagRows: readonly FlagRow[]; now: Date | null },
+): Promise<{ board: ArbiterBoard; white: SidePlayer; black: SidePlayer }> {
   const { limitMs, policy, flagRows } = ctx;
   const [sides, whiteSide] = await Promise.all([
     loadSides(r),
@@ -409,7 +437,7 @@ async function boardOf(
       }),
   );
 
-  return {
+  const board: ArbiterBoard = {
     fixtureId: r.fixtureId,
     fixtureNo: r.fixtureNo,
     boardNo: r.seq,
@@ -442,16 +470,96 @@ async function boardOf(
       edges: { winner_to_fixture: r.winnerToFixture, loser_to_fixture: r.loserToFixture },
     }),
     checkin: ctx.now === null ? null : checkinOf(r, ctx.now),
+    seats: null,
     flags,
   };
+  return { board, white, black };
+}
+
+/** The board's check-in anchor (window.ts): where its window sits, with its extension. null for a board whose round was never opened. */
+function anchorOf(r: BoardRow): BoardAnchor | null {
+  if (r.openedAt === null) return null;
+  return anchorOfRow({ openedAt: r.openedAt, rank: r.rank, staggered: r.staggered === true, extraMs: r.extraMs });
+}
+
+const COLOURS = ["white", "black"] as const satisfies readonly Colour[];
+
+/**
+ * Pass 2 of the round view (spec §6.2, C24): attach `seats` to the boards in check-in. The round's boards are read in one go and the
+ * outbox is read once for every seat of them; a round with no board in check-in issues no outbox read at all. A board in any other
+ * state keeps `seats: null`.
+ *
+ * Per seat, `here` is `checkInCounts` (window.ts, the rule's one authority) over the person's recorded check-in against the board's
+ * own window, and `invites` is `seatInviteWords` over the seat's mail, its CURRENT mailboxes (`SidePlayer.recipients`, raw: the words
+ * fold both sides) and whether the seat holds a stamp bound to the open on screen (`seatStampBound`, the one rule).
+ */
+async function withSeats(
+  auth: AuthCtx,
+  built: readonly { row: BoardRow; board: ArbiterBoard; white: SidePlayer; black: SidePlayer }[],
+): Promise<ArbiterBoard[]> {
+  // A board whose round was never opened has no window to be here in (and cannot be on screen: the round is read from its open), so
+  // it takes no seats, like the `checkin` it also lacks.
+  const inCheckIn = built.flatMap((b) => {
+    const anchor = anchorOf(b.row);
+    return b.board.state.kind === "checking_in" && anchor !== null ? [{ ...b, anchor }] : [];
+  });
+  if (inCheckIn.length === 0) return built.map((b) => b.board);
+
+  const ids = inCheckIn.map((b) => b.row.fixtureId);
+  const [checkedInAt, mail] = await Promise.all([
+    checkedInAtOfBoards(ids),
+    latestEmailStatus(auth.orgId, CHESS_SEAT_REF_TYPE, ids.flatMap((id) => COLOURS.map((c) => chessSeatRef(id, c)))),
+  ]);
+  // The read orders by ref then lower(recipient), not by time, and keeps two rows that fold to one mailbox only when they differ in
+  // padding. `seatInviteWords` lets the LATER row of a mailbox answer, so each seat's rows go in oldest first (ruling M2).
+  const rowsByRef = new Map<string, EmailStatusRow[]>();
+  for (const row of mail) {
+    const list = rowsByRef.get(row.refId);
+    if (list) list.push(row);
+    else rowsByRef.set(row.refId, [row]);
+  }
+  for (const list of rowsByRef.values()) list.sort((a, b) => a.at.getTime() - b.at.getTime());
+
+  const seatsOf = new Map<string, NonNullable<ArbiterBoard["seats"]>>();
+  for (const { row, anchor, white, black } of inCheckIn) {
+    const seat = (colour: Colour, side: SidePlayer): ArbiterSeatCheckin => {
+      const refId = chessSeatRef(row.fixtureId, colour);
+      const rows = rowsByRef.get(refId) ?? [];
+      const stamped = seatStampBound(row, row.openId, colour);
+      // A held stamp with no mail at all is an anomaly (the stamp is released when every row ends badly, and a stamped seat was
+      // queued with a row): say so, and the seat reads "Not delivered".
+      if (stamped && rows.length === 0) {
+        log.warn({ fixtureId: row.fixtureId, colour, refId }, "arbiter: a seat is stamped for this open but has no invite mail on file; it reads Not delivered");
+      }
+      const at = side.personId === null ? null : (checkedInAt.get(row.fixtureId)?.get(side.personId) ?? null);
+      let invites: SeatInviteWord[];
+      try {
+        invites = seatInviteWords({ rows, mailboxes: side.recipients.map((x) => x.email), stamped });
+      } catch {
+        // One row the panel has no word for (a status outside the outbox's declared set) must not fail the whole panel. The line
+        // names the board, the seat, the ref and the statuses on file: never an address.
+        log.error(
+          { fixtureId: row.fixtureId, colour, refId, statuses: rows.map((x) => x.status) },
+          "arbiter: an invite row has an outbox status with no word; the seat shows no invite words",
+        );
+        invites = [];
+      }
+      return { here: checkInCounts(at, anchor), invites };
+    };
+    seatsOf.set(row.fixtureId, { white: seat("white", white), black: seat("black", black) });
+  }
+  return built.map((b) => {
+    const seats = seatsOf.get(b.row.fixtureId);
+    return seats === undefined ? b.board : { ...b.board, seats };
+  });
 }
 
 /** Spec §3.2.2: one board's check-in as the panel reads it - the deadline it is on (window.ts, with the board's own extension),
  *  how many presses it has left, and whether a press would be accepted NOW: `extendRefusal`, the same rule the door asks, so the
  *  panel never offers a press the server refuses. null for a board whose round was never opened (no window to extend). */
 function checkinOf(r: BoardRow, now: Date): CheckinExtendState | null {
-  if (r.openedAt === null) return null;
-  const anchor = anchorOfRow({ openedAt: r.openedAt, rank: r.rank, staggered: r.staggered === true, extraMs: r.extraMs });
+  const anchor = anchorOf(r);
+  if (anchor === null) return null;
   const refusal = extendRefusal({
     now,
     anchor,

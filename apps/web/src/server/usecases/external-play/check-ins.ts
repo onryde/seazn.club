@@ -32,3 +32,25 @@ export async function countedCheckIns(
     away: checkInCounts(at(away.personId), anchor),
   };
 }
+
+/**
+ * Every recorded check-in of these boards, in ONE read (the arbiter's round view asks for the whole round at once, not board by
+ * board): fixture id -> person id -> `checked_in_at`. This is the raw stamp and nothing else. Whether it COUNTS is `checkInCounts`'
+ * rule (window.ts, its one authority, as `countedCheckIns` above applies it); the caller judges each stamp against its board's own
+ * window. A board nobody checked in on is absent. Empty `fixtureIds` answers an empty map and issues no statement.
+ */
+export async function checkedInAtOfBoards(
+  fixtureIds: readonly string[],
+): Promise<Map<string, Map<string, Date | null>>> {
+  const byBoard = new Map<string, Map<string, Date | null>>();
+  if (fixtureIds.length === 0) return byBoard;
+  const rows = await sql<{ fixture_id: string; person_id: string; checked_in_at: Date | null }[]>`
+    select fixture_id, person_id, checked_in_at from fixture_availability
+     where fixture_id in ${sql([...fixtureIds])}`;
+  for (const row of rows) {
+    const board = byBoard.get(row.fixture_id);
+    if (board) board.set(row.person_id, row.checked_in_at);
+    else byBoard.set(row.fixture_id, new Map([[row.person_id, row.checked_in_at]]));
+  }
+  return byBoard;
+}

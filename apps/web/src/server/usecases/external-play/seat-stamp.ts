@@ -37,6 +37,22 @@ export function bridgeTakesInvites(b: InviteBridgeFacts | null): boolean {
 
 export const STAMP_COLUMN = { white: "white_emailed_at", black: "black_emailed_at" } as const;
 
+/**
+ * THE rule for "this seat holds a stamp bound to this open" (pre-flight C15): the board's row names the open on screen
+ * (`roundOpenId === openId`, an open that exists), and that colour's stamp is set. A stamp under an EARLIER open does not count: a
+ * fixture moved to another round keeps the open id it was stamped under, and the new round's seat has not been invited. Both
+ * readers ask it: `open-round-view.ts`'s `boundStamps` (what the round still owes) and the arbiter loader (whether a seat is "Not
+ * invited" or "Not delivered"), so the two cannot disagree about what a stamp means.
+ */
+export function seatStampBound(
+  row: { roundOpenId: string | null; whiteEmailedAt: Date | null; blackEmailedAt: Date | null },
+  openId: string | null,
+  colour: Colour,
+): boolean {
+  if (openId === null || row.roundOpenId !== openId) return false;
+  return (colour === "white" ? row.whiteEmailedAt : row.blackEmailedAt) !== null;
+}
+
 /** Stamp one seat as invited, only if it is not already, on a row that names
  *  `roundOpenId` and has no game behind it. `true` ⇔ THIS call claimed it. */
 export async function claimSeat(
