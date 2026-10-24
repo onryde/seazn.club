@@ -5625,6 +5625,8 @@
   "runsheet.round.resent.one": "{count} invitation renvoyée.",
   "runsheet.round.resent.other": "{count} invitations renvoyées.",
   "runsheet.round.resentNone": "L'invitation n'a pas pu être envoyée. Réessayez dans un instant.",
+  "runsheet.round.sending.one": "{count} invitation est en cours d'envoi et partira dans un instant.",
+  "runsheet.round.sending.other": "{count} invitations sont en cours d'envoi et partiront dans un instant.",
   "runsheet.round.confirmTitle": "Ouvrir la ronde {round} ?",
   "runsheet.round.confirmTitleReopen": "Rouvrir la ronde {round} ?",
   "runsheet.round.confirmTitleReinvite": "Ouvrir la ronde {round} aux joueurs pas encore invités ?",

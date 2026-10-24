@@ -6007,6 +6007,8 @@ export type DictionaryKey =
   | "runsheet.round.resent.other"
   | "runsheet.round.resentNone"
   | "runsheet.round.scheduled"
+  | "runsheet.round.sending.one"
+  | "runsheet.round.sending.other"
   | "runsheet.round.skipLine"
   | "runsheet.round.stillToInvite.one"
   | "runsheet.round.stillToInvite.other"

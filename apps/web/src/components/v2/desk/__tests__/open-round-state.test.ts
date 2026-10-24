@@ -77,14 +77,15 @@ describe("open-round reducer — the rules, one at a time", () => {
 
   it("R3 + R5: a resend's answer lands on ITS pairing; one for another pairing, or for the open, is dropped", () => {
     const resending = run({ type: "resend", fixtureId: "f1" });
-    expect(openRoundUi(resending, { type: "resendDone", fixtureId: "f2", outcome: { ok: true, emailed: 2 } })).toBe(resending);
+    expect(openRoundUi(resending, { type: "resendDone", fixtureId: "f2", outcome: { ok: true, emailed: 2, retrying: 1 } })).toBe(resending);
     expect(openRoundUi(resending, { type: "openDone", outcome: { ok: true, result: OPENED } })).toBe(resending);
-    const done = openRoundUi(resending, { type: "resendDone", fixtureId: "f1", outcome: { ok: true, emailed: 2 } });
+    // `retrying` differs from `emailed` and from zero, so a reducer that drops it, or swaps the two, shows.
+    const done = openRoundUi(resending, { type: "resendDone", fixtureId: "f1", outcome: { ok: true, emailed: 2, retrying: 1 } });
     expect(done).toEqual({
       confirming: false,
       busy: null,
       notice: null,
-      rowNotice: { fixtureId: "f1", notice: { kind: "resent", emailed: 2 } },
+      rowNotice: { fixtureId: "f1", notice: { kind: "resent", emailed: 2, retrying: 1 } },
       extendNotice: null,
     });
   });
@@ -144,7 +145,7 @@ const openDone = (ok: boolean): OpenRoundUiAction =>
   ok ? { type: "openDone", outcome: { ok: true, result: OPENED } } : { type: "openDone", outcome: { ok: false, code: "E" } };
 const resendDone = (fixtureId: string, ok: boolean): OpenRoundUiAction =>
   ok
-    ? { type: "resendDone", fixtureId, outcome: { ok: true, emailed: 2 } }
+    ? { type: "resendDone", fixtureId, outcome: { ok: true, emailed: 2, retrying: 0 } }
     : { type: "resendDone", fixtureId, outcome: { ok: false, code: "E" } };
 const extendDone = (ok: boolean): OpenRoundUiAction =>
   ok ? { type: "extendDone", outcome: { ok: true, result: EXTENDED } } : { type: "extendDone", outcome: { ok: false, code: "E" } };
@@ -247,7 +248,7 @@ describe("openRoundRunner — at most one request on the network", () => {
 
   it("a refusal's CODE is dispatched (never its English message) and nothing is refreshed; the next tap is sent", async () => {
     const dispatch = vi.fn();
-    const post = vi.fn().mockRejectedValueOnce(new ApiV1Error("Round changed", 409, "ROUND_CHANGED")).mockResolvedValueOnce({ emailed: 2 });
+    const post = vi.fn().mockRejectedValueOnce(new ApiV1Error("Round changed", 409, "ROUND_CHANGED")).mockResolvedValueOnce({ emailed: 2, retrying: 1 });
     const refresh = vi.fn();
     const runner = openRoundRunner({ dispatch, post, refresh });
     await runner.open("s1", 1);
@@ -255,7 +256,7 @@ describe("openRoundRunner — at most one request on the network", () => {
     expect(refresh).not.toHaveBeenCalled();
     expect(await runner.resend("f 1")).toBe(true);
     expect(post).toHaveBeenLastCalledWith("/api/v1/fixtures/f%201/external-play/resend", undefined);
-    expect(dispatch).toHaveBeenLastCalledWith({ type: "resendDone", fixtureId: "f 1", outcome: { ok: true, emailed: 2 } });
+    expect(dispatch).toHaveBeenLastCalledWith({ type: "resendDone", fixtureId: "f 1", outcome: { ok: true, emailed: 2, retrying: 1 } });
     expect(refresh).toHaveBeenCalledTimes(1);
   });
 

@@ -177,13 +177,18 @@ function openNoticeText(n: OpenRoundNotice, round: OpenRoundView, msg: Msg, plur
   }
   const r = n.result;
   if (r.opened === false && r.reason !== "already_open") return [msg(OPEN_ROUND_REFUSAL_KEYS[r.reason] as MessageKey)];
-  const head = r.opened ? plural(OPEN_ROUND_INVITED_KEY, r.invited) : msg(OPEN_ROUND_ALREADY_OPEN_KEY as MessageKey);
+  // An invite still sending is not "0 invited": when the open reached nobody yet but queued some, the count of the invited is left
+  // out (it would read as a failure) and the sending line stands alone. With nothing queued the old count stays, however small.
+  const sending = r.opened ? r.retrying : 0;
+  const head = r.opened
+    ? [...(r.invited > 0 || sending <= 0 ? [plural(OPEN_ROUND_INVITED_KEY, r.invited)] : []), ...(sending > 0 ? [plural("runsheet.round.sending", sending)] : [])]
+    : [msg(OPEN_ROUND_ALREADY_OPEN_KEY as MessageKey)];
   const boardOf = (fixtureId: string) => {
     const p = round.pairings.find((x) => x.fixtureId === fixtureId);
     return p ? boardLabel(p, msg) : fixtureId;
   };
   return [
-    head,
+    ...head,
     ...r.skipped.map((s) =>
       msg("runsheet.round.skipLine", { board: boardOf(s.fixtureId), reason: msg(OPEN_ROUND_SKIP_KEYS[s.reason] as MessageKey) }),
     ),
@@ -191,7 +196,14 @@ function openNoticeText(n: OpenRoundNotice, round: OpenRoundView, msg: Msg, plur
 }
 
 function resendNoticeText(n: ResendNotice, msg: Msg, plural: Plural): string {
-  if (n.kind === "resent") return n.emailed > 0 ? plural("runsheet.round.resent", n.emailed) : msg("runsheet.round.resentNone");
+  if (n.kind === "resent") {
+    // Both facts when both are true; "could not be sent" only when nothing went out AND nothing is waiting to.
+    const lines = [
+      ...(n.emailed > 0 ? [plural("runsheet.round.resent", n.emailed)] : []),
+      ...(n.retrying > 0 ? [plural("runsheet.round.sending", n.retrying)] : []),
+    ];
+    return lines.length > 0 ? lines.join(" ") : msg("runsheet.round.resentNone");
+  }
   if (n.code === "WINDOW_CLOSED" || n.code === "BOARD_HELD") return msg(RESEND_REFUSAL_KEYS[n.code] as MessageKey);
   if (n.code === ONLINE_GAME_EXISTS_CODE) return msg("externalPlay.resend.gameExists");
   if (n.code === "ROUND_CHANGED") return msg("externalPlay.resend.roundChanged");

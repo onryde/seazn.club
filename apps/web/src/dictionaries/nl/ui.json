@@ -5625,6 +5625,8 @@
   "runsheet.round.resent.one": "{count} uitnodiging opnieuw verstuurd.",
   "runsheet.round.resent.other": "{count} uitnodigingen opnieuw verstuurd.",
   "runsheet.round.resentNone": "De uitnodiging kon niet worden verstuurd. Probeer het zo opnieuw.",
+  "runsheet.round.sending.one": "{count} uitnodiging wordt nog verstuurd en komt zo aan.",
+  "runsheet.round.sending.other": "{count} uitnodigingen worden nog verstuurd en komen zo aan.",
   "runsheet.round.confirmTitle": "Ronde {round} openen?",
   "runsheet.round.confirmTitleReopen": "Ronde {round} opnieuw openen?",
   "runsheet.round.confirmTitleReinvite": "Ronde {round} openen voor de spelers die nog niet zijn uitgenodigd?",

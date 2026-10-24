@@ -13,7 +13,9 @@ import type { CheckinExtendRoundResult } from "@/lib/checkin-extend";
 import { codeOf, requestRoundExtend, type RoundExtendNotice } from "../checkin-extend-ui";
 
 export type OpenRoundNotice = { kind: "answered"; result: OpenRoundResult } | { kind: "failed"; code: string };
-export type ResendNotice = { kind: "resent"; emailed: number } | { kind: "failed"; code: string };
+/** `emailed` invites the provider took; `retrying` invites queued and still sending (the mail worker keeps trying). Both zero is the
+ *  one true failure: nothing went out and nothing is waiting to. */
+export type ResendNotice = { kind: "resent"; emailed: number; retrying: number } | { kind: "failed"; code: string };
 
 export type OpenRoundUiState = {
   /** The confirmation is up. */
@@ -38,7 +40,7 @@ export type OpenRoundUiAction =
   | { type: "extend" }
   | { type: "extendDone"; outcome: { ok: true; result: CheckinExtendRoundResult } | Failed }
   | { type: "openDone"; outcome: { ok: true; result: OpenRoundResult } | Failed }
-  | { type: "resendDone"; fixtureId: string; outcome: { ok: true; emailed: number } | Failed };
+  | { type: "resendDone"; fixtureId: string; outcome: { ok: true; emailed: number; retrying: number } | Failed };
 
 export function initialOpenRoundUi(): OpenRoundUiState {
   return { confirming: false, busy: null, notice: null, rowNotice: null, extendNotice: null };
@@ -83,7 +85,9 @@ export function openRoundUi(s: OpenRoundUiState, a: OpenRoundUiAction): OpenRoun
         busy: null,
         rowNotice: {
           fixtureId: a.fixtureId,
-          notice: a.outcome.ok ? { kind: "resent", emailed: a.outcome.emailed } : { kind: "failed", code: a.outcome.code },
+          notice: a.outcome.ok
+            ? { kind: "resent", emailed: a.outcome.emailed, retrying: a.outcome.retrying }
+            : { kind: "failed", code: a.outcome.code },
         },
       };
   }
@@ -137,8 +141,9 @@ export function openRoundRunner(deps: {
       try {
         const r = (await deps.post(`/api/v1/fixtures/${encodeURIComponent(fixtureId)}/external-play/resend`, undefined)) as {
           emailed: number;
+          retrying: number;
         };
-        deps.dispatch({ type: "resendDone", fixtureId, outcome: { ok: true, emailed: r.emailed } });
+        deps.dispatch({ type: "resendDone", fixtureId, outcome: { ok: true, emailed: r.emailed, retrying: r.retrying } });
         deps.refresh();
       } catch (err) {
         deps.dispatch({ type: "resendDone", fixtureId, outcome: { ok: false, code: codeOf(err) } });
