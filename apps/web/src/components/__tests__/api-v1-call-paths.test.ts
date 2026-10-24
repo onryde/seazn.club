@@ -106,8 +106,9 @@ const HAND_CHECKED_DYNAMIC: Record<string, number> = {
   // `openRoundRunner({ post: (path, body) => apiV1(path, …) })` — open-round-state.ts posts only
   // `/api/v1/stages/${stageId}/open-round`, `/api/v1/fixtures/${id}/external-play/resend` and (the check-in extension, 2026-10-19)
   // `extendRoundPath` = `/api/v1/stages/${stageId}/extend-checkin` (all POST routes that exist). Still ONE dynamic call: the
-  // extend press shares this `post`.
-  "src/components/v2/desk/open-round-control.tsx": 1,
+  // extend press shares this `post`. The call moved out of open-round-control.tsx into the `useOpenRound` hook (arbiter round
+  // column, Task 4), which OpenRoundControl and the arbiter column both use; the control no longer calls `apiV1` itself.
+  "src/components/v2/desk/use-open-round.ts": 1,
   // The same `decisionRunner` post as the arbiter panel's (2) above.
   "src/components/v2/external-play-needs-result-queue.tsx": 1,
 };

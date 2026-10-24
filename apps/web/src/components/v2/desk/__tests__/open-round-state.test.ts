@@ -135,6 +135,37 @@ describe("open-round reducer — the rules, one at a time", () => {
   });
 });
 
+describe("open-round reducer — reset (the round on screen changed)", () => {
+  it("goes back to the initial state from ANY state, and an answer still in flight for the old round is then dropped (R3)", () => {
+    const answeredOpen = run({ type: "ask" }, { type: "open" }, { type: "openDone", outcome: { ok: true, result: OPENED } });
+    const answeredResend = run({ type: "resend", fixtureId: "f1" }, { type: "resendDone", fixtureId: "f1", outcome: { ok: true, emailed: 2, retrying: 0 } });
+    const answeredExtend = run({ type: "extend" }, { type: "extendDone", outcome: { ok: true, result: EXTENDED } });
+    const states = [
+      s0,
+      run({ type: "ask" }),
+      run({ type: "ask" }, { type: "open" }),
+      run({ type: "resend", fixtureId: "f1" }),
+      run({ type: "extend" }),
+      answeredOpen,
+      answeredResend,
+      answeredExtend,
+    ];
+    // Anti-vacuity: the seven states past the first are NOT already initial, so the reset has something to wipe.
+    expect(states.slice(1).filter((st) => JSON.stringify(st) !== JSON.stringify(s0))).toHaveLength(7);
+    for (const st of states) expect(openRoundUi(st, { type: "reset" })).toEqual(s0);
+    const late: [OpenRoundUiState, OpenRoundUiAction][] = [
+      [run({ type: "ask" }, { type: "open" }), { type: "openDone", outcome: { ok: true, result: OPENED } }],
+      [run({ type: "resend", fixtureId: "f1" }), { type: "resendDone", fixtureId: "f1", outcome: { ok: true, emailed: 2, retrying: 0 } }],
+      [run({ type: "extend" }), { type: "extendDone", outcome: { ok: true, result: EXTENDED } }],
+    ];
+    for (const [inFlight, answer] of late) {
+      const afterReset = openRoundUi(inFlight, { type: "reset" });
+      expect(openRoundUi(afterReset, answer), `${answer.type} for the old round lands nowhere`).toBe(afterReset);
+    }
+    expect(late).toHaveLength(3);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // The sequence property: random presses and answers, the reducer against a
 // model of R1–R5 (written from the rules above).
@@ -162,6 +193,8 @@ const actionArb: fc.Arbitrary<OpenRoundUiAction> = fc.oneof(
 
 function step(m: Model, a: OpenRoundUiAction): Model {
   switch (a.type) {
+    case "reset":
+      return { confirming: false, busy: null };
     case "ask":
       return m.busy === null ? { ...m, confirming: true } : m;
     case "cancel":

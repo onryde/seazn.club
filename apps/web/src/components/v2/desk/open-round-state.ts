@@ -33,6 +33,7 @@ export type OpenRoundUiState = {
 type Failed = { ok: false; code: string };
 
 export type OpenRoundUiAction =
+  | { type: "reset" }
   | { type: "ask" }
   | { type: "cancel" }
   | { type: "open" }
@@ -48,6 +49,10 @@ export function initialOpenRoundUi(): OpenRoundUiState {
 
 export function openRoundUi(s: OpenRoundUiState, a: OpenRoundUiAction): OpenRoundUiState {
   switch (a.type) {
+    case "reset":
+      // The round on screen changed (use-open-round.ts): nothing asked, held or answered for the old one survives, and an
+      // answer still in flight for it finds no request to answer (R3) and is dropped.
+      return initialOpenRoundUi();
     case "ask":
       if (s.busy !== null) return s; // R4
       return s.confirming ? s : { ...s, confirming: true };

@@ -1,8 +1,9 @@
 // Task 4 (arbiter round column) - the Open / Resend / "+5" press as a hook, driven through the REAL reducer and runner
 // (open-round-state.ts) with the network doubled at `apiV1`. open-round-control-actions.test.tsx already proves each press
 // through the control for one round; this file proves what the hook adds and the control could never show: the EMPTY case
-// (a null view is a handle that does nothing), a redraw of the same round with a new number (the press follows it, the runner
-// does not restart, so a double tap across the redraw still sends one request), and a round that goes away.
+// (a null view is a handle that does nothing), a redraw of the same round (the state stays: a poll must not close the dialog
+// the organiser is reading), a CHANGE of round (the state is reset, the press follows the new round, and the runner does not
+// restart, so a double tap across the change still sends one request), and a round that goes away and comes back.
 // No DOM in this workspace: the hook harness renders a probe that hands the handle out as a prop.
 import { createElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -67,7 +68,7 @@ beforeEach(() => {
 
 describe("useOpenRound - the empty case first", () => {
   it("a null view is the initial state and five presses that do nothing: no state change, no request, no refresh", async () => {
-    const { handle } = mount(null);
+    const { ui, handle } = mount(null);
     expect(handle().state).toEqual(initialOpenRoundUi());
     const presses: [string, (h: OpenRoundHandle) => void][] = [
       ["ask", (h) => h.ask()],
@@ -84,6 +85,10 @@ describe("useOpenRound - the empty case first", () => {
     expect(presses, "five presses were tried").toHaveLength(5);
     expect(net.calls, "nothing reached the network").toHaveLength(0);
     expect(router.refresh).not.toHaveBeenCalled();
+    // Handing a real round in afterwards starts from nothing asked. (The teeth for ask/cancel are the state read AFTER each
+    // press above, while the view is still null: a round change resets the state, so this line alone could not tell.)
+    ui.rerender({ view: VIEW() });
+    expect(handle().state.confirming).toBe(false);
   });
 
   it("its pair: the same ask() on a real round DOES change the state (so the test above is not vacuous)", () => {
@@ -106,6 +111,73 @@ describe("useOpenRound - the empty case first", () => {
     handle().extend();
     await flush();
     expect(net.calls).toHaveLength(0);
+  });
+});
+
+describe("useOpenRound - the state belongs to ONE round (reset when the round on screen changes)", () => {
+  it("the pair first: a redraw of the SAME round with fresh data keeps the state (a poll must not close the organiser's dialog)", () => {
+    const { ui, handle } = mount(VIEW());
+    handle().ask();
+    ui.rerender({ view: VIEW({ state: "open", press: "none", scheduledAt: "2026-10-24T18:00:00.000Z" }) });
+    expect(handle().state.confirming, "same stage, same round number: still asking").toBe(true);
+  });
+
+  it("(a) a change of stage OR of round number resets: what was asked for the old round is not asked for the new one", () => {
+    const next: [string, OpenRoundView][] = [
+      ["round number", VIEW({ roundNo: 8 })],
+      ["stage", VIEW({ stageId: "stage-Y" })],
+    ];
+    for (const [what, view] of next) {
+      const { ui, handle } = mount(VIEW());
+      handle().ask();
+      expect(handle().state.confirming, `${what}: the old round was being confirmed`).toBe(true);
+      ui.rerender({ view });
+      expect(handle().state, `${what}: the new round starts from nothing`).toEqual(initialOpenRoundUi());
+    }
+    expect(next, "both identity fields were tried").toHaveLength(2);
+  });
+
+  it("(b) an open still in flight for the old round: its answer lands nowhere on the new one (no notice, nothing held)", async () => {
+    const { ui, handle } = mount(VIEW({ roundNo: 7 }));
+    handle().ask();
+    handle().open();
+    expect(handle().state.busy, "the old round's open is in flight").toEqual({ kind: "open" });
+    ui.rerender({ view: VIEW({ roundNo: 8 }) });
+    expect(handle().state).toEqual(initialOpenRoundUi());
+    net.calls[0]!.resolve({ opened: true, invited: 4, retrying: 0, skipped: [] });
+    await flush();
+    expect(handle().state, "the answer for round 7 is dropped: round 8 shows no notice").toEqual(initialOpenRoundUi());
+  });
+
+  it("(c) a round that goes away and comes back (even the same one) starts again from nothing", () => {
+    const { ui, handle } = mount(VIEW({ roundNo: 7 }));
+    handle().ask();
+    expect(handle().state.confirming).toBe(true);
+    ui.rerender({ view: null });
+    ui.rerender({ view: VIEW({ roundNo: 7 }) });
+    expect(handle().state, "the confirmation did not wait behind the gap").toEqual(initialOpenRoundUi());
+  });
+
+  it("(d) PINNED: a request in flight for the old round keeps the runner busy - presses on the new round do nothing until it answers (R1), then work", async () => {
+    // Intended, not a gap: the runner's in-flight flag is what keeps a double tap off the network, and it is not reset with the
+    // state, so the new round's button is live (its state is idle) for the moment the old request is still out, and a tap in that
+    // moment is ignored. One request at a time across the page is the rule; the window is the old request's round-trip.
+    const { ui, handle } = mount(VIEW({ roundNo: 7 }));
+    handle().ask();
+    handle().open();
+    ui.rerender({ view: VIEW({ roundNo: 8 }) });
+    handle().ask();
+    expect(handle().state.confirming, "the new round can be asked about").toBe(true);
+    handle().open();
+    expect(net.calls, "...but the old request is still the one in flight").toHaveLength(1);
+    net.calls[0]!.resolve({ opened: true, invited: 0, retrying: 0, skipped: [] });
+    await flush();
+    expect(handle().state.notice, "round 7's answer left nothing on round 8").toBeNull();
+    handle().open();
+    expect(net.calls.map((c) => [c.url, c.json])).toEqual([
+      ["/api/v1/stages/stage-Z/open-round", { roundNo: 7 }],
+      ["/api/v1/stages/stage-Z/open-round", { roundNo: 8 }],
+    ]);
   });
 });
 
