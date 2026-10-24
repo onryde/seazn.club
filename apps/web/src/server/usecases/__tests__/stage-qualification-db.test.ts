@@ -26,6 +26,7 @@
 // exact key set).
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 
 // `unstable_cache` is a Next server-runtime API with no incrementalCache
 // outside a real request — passthrough, never a memoising double.
@@ -159,7 +160,8 @@ describe.skipIf(!HAS_DB)("listStageQualificationMeta (R1a — the console's V414
     expect(compared.some((r) => r.qualify_per_group === true)).toBe(true);
     expect(compared.some((r) => r.next_stage_name === "Finals")).toBe(true);
     expect(compared.some((r) => r.swiss_rounds === 4)).toBe(true);
-    expect(compared.some((r) => JSON.stringify(r.points_rule) === JSON.stringify(POINTS))).toBe(true);
+    // jsonb orders an object's keys its own way (by length, then bytes): compared as values, never as key order.
+    expect(compared.some((r) => isDeepStrictEqual(r.points_rule, POINTS))).toBe(true);
     expect(compared.some((r) => r.has_rank_overrides === true)).toBe(true);
   });
 

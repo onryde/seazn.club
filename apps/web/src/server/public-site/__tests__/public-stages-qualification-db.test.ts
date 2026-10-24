@@ -28,6 +28,7 @@ import { createDivision } from "@/server/usecases/divisions";
 import { createEntrants } from "@/server/usecases/entrants";
 import { createStages, overrideStandings } from "@/server/usecases/stages";
 import { GENERIC_CONFIG, seedOrg } from "@/server/usecases/__tests__/_seed";
+import { parseStoredPointsRule } from "@seazn/engine/competition";
 import { getPublicDivision } from "../data";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -385,6 +386,46 @@ describe.skipIf(!HAS_DB)("public_stages_v — qualification columns (V414)", () 
       select config -> 'points' as points from stages where division_id = ${d.divisionId}`;
     expect(stored!.points, "premise: the raw junk is stored").toEqual(withJunk);
     expect((await view(d.divisionId))[0]!.points_rule).toEqual(clean);
+  });
+
+  // W2d V472: the function rebuilds `points_rule` from BOTH stored shapes. Each rule is written by raw SQL — the stage
+  // door is not under test here (Task 10 owns it), the rebuild is — so every key the outcome-keyed PointsRule reads
+  // is asked at once, with junk beside it at every level.
+  it("W2d V472: every key the outcome-keyed rule reads is published (ot, so, unplayed, soBonus, tie, noResult, a set map), junk is not, and a legacy `base` row still is", async () => {
+    const d = await division();
+    const result = {
+      win: { regulation: 3, ot: 2, so: 1.5 },
+      loss: { regulation: 0, ot: 1, so: 0.5, unplayed: -1 },
+      draw: 1, tie: 1, noResult: 0.5, shootoutAs: "result", unit: "half",
+      bySetScore: { "3-0": [3, 0], "3-2": [2, 1], "*": [3, 0] },
+      bonuses: [{ when: "win_margin_gte", param: 3, points: 1 }],
+      forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [3, 0] },
+    };
+    const dpb = { win: { regulation: 3 }, loss: { regulation: 0 }, draw: 1, soBonus: 2, shootoutAs: "draw_plus_bonus", unit: "whole", bonuses: [] };
+    const legacy = { base: { win: 2, draw: 1, loss: 0 }, bonuses: [] };
+    const junk = (rule: Record<string, unknown>) => ({
+      ...rule,
+      ...(rule.win ? { win: { ...(rule.win as object), note: "win junk" } } : {}),
+      ...(rule.loss ? { loss: { ...(rule.loss as object), note: "loss junk" } } : {}),
+      ...(rule.bySetScore ? { bySetScore: { ...(rule.bySetScore as object), x: [9, 9], "3-1 ": [9, 9], "": [9, 9] } } : {}),
+      ...(rule.base ? { base: { ...(rule.base as object), note: "base junk" } } : {}),
+      internal: { owner: "top-level junk" },
+    });
+    const rules = [result, dpb, legacy];
+    await createStages(d.auth, d.divisionId, rules.map((_, i) => ({ seq: i + 1, kind: "league", name: `L${i + 1}`, config: {} })) as never);
+    const ids = await sql<{ id: string }[]>`select id from stages where division_id = ${d.divisionId} order by seq`;
+    expect(ids.length, "premise: one stage per rule").toBe(rules.length);
+    let checked = 0;
+    for (const [i, rule] of rules.entries()) {
+      await sql`update stages set config = config || ${sql.json({ points: junk(rule) } as never)} where id = ${ids[i]!.id}`;
+      checked++;
+    }
+    expect(checked).toBe(3);
+    const published = (await view(d.divisionId)).map((r) => r.points_rule);
+    expect(published).toEqual(rules);
+    // and each published rule reads back, through the engine's own stored-rule read, as the rule that was saved
+    for (const [i, rule] of rules.entries()) expect(parseStoredPointsRule(published[i]), `L${i + 1}`).toEqual(parseStoredPointsRule(rule));
+    expect(parseStoredPointsRule(published[0])?.bySetScore, "premise: the set map survives the read").toEqual(result.bySetScore);
   });
 
   // Cross-stage feeds (Jul3/08 §9) wire a FIXTURE's winner or loser into a
