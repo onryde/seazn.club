@@ -9,15 +9,25 @@
 //
 // Single-sport by construction: online play exists only for `boardgame` (guard.ts `d.sport_key = 'boardgame'`).
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DeliverMessage } from "@/server/email-outbox/transport";
+import { stubOutboxEnv, type SentInvite } from "@/server/usecases/__tests__/_invite-mail";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { CHECKIN_EXTEND_MAX, CHECKIN_EXTEND_STEP_MS, DEADLINE_AFTER_MS, LINE_DEADLINE_GRACE_MS } from "@/server/external-play/window";
 import { CREATION_429_HOLD_MS, __resetCreationQueue, __setCreationQueueDeps, enqueueCreation } from "@/server/external-play/creation-queue";
 
-vi.mock("@/lib/email", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/email")>()),
-  sendExternalPlayInviteEmail: vi.fn(async () => true),
-}));
+const mail = vi.hoisted(() => ({ sent: [] as SentInvite[], fail: new Set<string>() }));
+vi.mock("@/lib/email", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/email")>();
+  const h = await import("@/server/usecases/__tests__/_invite-mail");
+  return { ...actual, externalPlayInviteEmail: h.renderInviteForTest };
+});
+// The invite is queued on the email outbox and sent after commit through its one network seam; the provider's answer is ours.
+vi.mock("@/server/email-outbox/transport", async () => {
+  const h = await import("@/server/usecases/__tests__/_invite-mail");
+  return { deliver: (msg: DeliverMessage) => h.deliverForTest(mail, msg) };
+});
+beforeEach(() => stubOutboxEnv());
 vi.mock("@/lib/sentry", () => ({ captureError: vi.fn() }));
 
 const board = vi.hoisted(() => ({

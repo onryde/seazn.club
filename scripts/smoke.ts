@@ -208,6 +208,8 @@ async function main() {
   // GDPR (spec 2026-07-14): requesting the magic link under the clickwrap
   // notice stamps terms acceptance on the account.
   await checkTermsStamp(`delivered+admin_${tag}@resend.dev`);
+  // Email outbox, phase 1 (Task 6): the same request queued its sign-in email on the outbox.
+  await checkSignInOutbox(`delivered+admin_${tag}@resend.dev`);
   const org = { id: ver.org_id };
 
   // --- Competition lifecycle guards (v2 service layer) ---
@@ -1256,6 +1258,14 @@ async function main() {
   // Chess Lichess external-play (2026-09-15 Task 9): cron auth + OTB
   // onlinePlay-off regression. Own fresh org; keyless-safe.
   await externalPlayOtBSmoke();
+
+  // Email outbox, phase 1 (Task 4): the retry worker's cron route refuses a wrong secret and, with the right one, answers
+  // a tick report. Keyless-safe (nothing is sent without a RESEND_API_KEY on the server); no org of its own.
+  await emailOutboxCronSmoke();
+
+  // Email outbox, phase 1 (Task 5): the Resend webhook fails closed. The smoke server is a production build, so an event with
+  // no valid signature is refused whether or not RESEND_WEBHOOK_SECRET is set. Keyless; touches no org.
+  await resendWebhookSmoke();
 
   // Chess in-page board T14: the match room's neutral card and its API's
   // refusals. Keyless; one signed-in stranger.
@@ -8955,6 +8965,33 @@ async function checkTermsStamp(email: string): Promise<void> {
     const [row] = await sql<{ terms_accepted_at: Date | null; terms_version: string | null }[]>`
       select terms_accepted_at, terms_version from users where email = ${email}`;
     check("auth terms acceptance stamped", !!row?.terms_accepted_at && !!row?.terms_version);
+  } finally {
+    await sql.end();
+  }
+}
+
+/** Email outbox, phase 1 (Task 6): the magic-link request wrote exactly one `magic_link` row for the address, in the same
+ *  transaction as its token, and the attempt made in the request has left no credential-bearing body behind. The smoke server
+ *  has no Resend key, so the row is `dead` (`no_api_key`); a run against a server that can send would see it `sent`. Either
+ *  way it is neither waiting (`queued`/`sending`) nor holding its sealed body. */
+async function checkSignInOutbox(email: string): Promise<void> {
+  const url = process.env.DATABASE_URL;
+  if (!url) return; // keyless run: nothing to assert against
+  const isLocal = /@(localhost|127\.0\.0\.1)[:/]/.test(url);
+  const sql = postgres(url, {
+    connection: { search_path: process.env.DB_SCHEMA ?? "seazn_club" },
+    ssl: process.env.DATABASE_SSL === "disable" ? false : isLocal ? false : "require",
+    prepare: !url.includes(":6543"),
+    max: 1,
+  });
+  try {
+    const rows = await sql<{ status: string; cleared: boolean }[]>`
+      select status, body_sealed is null as cleared
+        from email_outbox
+       where kind = 'magic_link' and lower(recipient) = lower(${email})`;
+    check("sign-in email: one outbox row for the address", rows.length === 1);
+    check("sign-in email: its attempt was made in the request (not waiting)", !!rows[0] && !["queued", "sending"].includes(rows[0].status));
+    check("sign-in email: no sealed body is left on the row", rows[0]?.cleared === true);
   } finally {
     await sql.end();
   }
@@ -22338,6 +22375,72 @@ async function setPlan(orgId: string, plan: string, owner: Session): Promise<voi
     await sql.end();
   }
   await bustOrgEntitlements(owner, orgId);
+}
+
+/**
+ * Email outbox, phase 1 (Task 4) smoke: POST /api/cron/email-outbox.
+ * - a wrong secret is refused (401, or 503 when the server has no CRON_SECRET);
+ * - with the server's CRON_SECRET in the smoke env, the right secret answers 200 with a tick report: a number for every
+ *   key, and `failed === 0` (a tick that could not run, or a row whose attempt threw, would read 1 or more).
+ * Every key is checked by name, so a renamed or dropped counter is a red here and not an "unreadable" the cron Worker
+ * quietly turns into a Sentry event.
+ */
+async function emailOutboxCronSmoke(): Promise<void> {
+  const wrong = await fetch(`${BASE}/api/cron/email-outbox`, {
+    method: "POST",
+    headers: { "x-cron-secret": "definitely-wrong-email-outbox" },
+  });
+  check("email-outbox: cron wrong secret -> 401 (or 503 if CRON_SECRET unset)", wrong.status === 401 || wrong.status === 503);
+
+  const secret = process.env.CRON_SECRET;
+  if (!secret) {
+    check("email-outbox: cron right-secret shape skipped (no CRON_SECRET in smoke env)", true);
+    return;
+  }
+  const right = await fetch(`${BASE}/api/cron/email-outbox`, { method: "POST", headers: { "x-cron-secret": secret } });
+  if (right.status !== 200) {
+    // The server's CRON_SECRET differs from the smoke env's: still a proven guard, nothing more to read.
+    check("email-outbox: cron right-secret path skipped (server secret differs)", right.status === 401 || right.status === 503);
+    return;
+  }
+  const body = (await right.json().catch(() => ({}))) as { ok?: boolean; data?: Record<string, unknown> };
+  const KEYS = ["claimed", "sent", "retried", "dead", "suppressed", "expired", "failed", "deferred", "purged"] as const;
+  check(
+    "email-outbox: cron runs a tick and answers a number for every report key",
+    body.ok === true && KEYS.every((k) => typeof body.data?.[k] === "number"),
+  );
+  check("email-outbox: the tick reports failed 0 (the role can write the outbox and no attempt threw)", body.data?.failed === 0);
+}
+
+/**
+ * Email outbox, phase 1 (Task 5) smoke: POST /api/webhooks/resend refuses an event it cannot verify.
+ * The smoke server runs in production mode, so both configurations answer 401: no RESEND_WEBHOOK_SECRET (the route fails
+ * closed in production) and a secret with no valid Svix signature (unsigned, or signed with the wrong key). A 200 here would
+ * mean anyone who knows the URL can suppress an address or mark an email delivered.
+ */
+async function resendWebhookSmoke(): Promise<void> {
+  const body = JSON.stringify({
+    type: "email.bounced",
+    data: { email_id: "re_smoke_unsigned", to: ["smoke-webhook@example.invalid"] },
+  });
+  const unsigned = await fetch(`${BASE}/api/webhooks/resend`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body,
+  });
+  check("resend-webhook: an unsigned event is refused (401)", unsigned.status === 401);
+
+  const forged = await fetch(`${BASE}/api/webhooks/resend`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "svix-id": "msg_smoke_forged",
+      "svix-timestamp": String(Math.floor(Date.now() / 1000)),
+      "svix-signature": "v1,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+    },
+    body,
+  });
+  check("resend-webhook: an event with a forged signature is refused (401)", forged.status === 401);
 }
 
 /**

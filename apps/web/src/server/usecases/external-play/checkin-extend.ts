@@ -30,9 +30,16 @@ import "server-only";
 // AUDIT. One `online_chess_audit` row per board extended (kind `checkin_extend`, V465): the actor, the board, and in `note` the
 // scope, the board's press count and its new deadline. No new event type is invented: competition_events is the ledger of
 // SETTINGS and results, not of an arbiter's act on one board.
+//
+// THE INVITES (email outbox, Task 8). A chess invite is queued with `expires_at` = the board's deadline at the time, and the worker
+// ends a still-queued row past it `expired`, unsent. The same transaction therefore moves the expiry of the board's two seats'
+// retryable invites to the new deadline (`extendEmailExpiry`), so a retry between the old deadline and the new one is delivered; a
+// failure of that move rolls the extension back with it, and the extension cannot be left half done. The transaction is the POOLED
+// connection (`sql.begin`, privileged, as the worker's), not `withTenant`: V470 gives `app_user` INSERT only.
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { captureError } from "@/lib/sentry";
+import { extendEmailExpiry } from "@/server/email-outbox";
 import { publishExternalPlayLobby } from "@/lib/realtime";
 import {
   CHECKIN_EXTEND_STEP_MINUTES,
@@ -55,6 +62,7 @@ import { requireWatcher } from "./arbiter";
 import { ensureBridgeRow, loadOnlinePlayFixture, type OnlinePlayFixture } from "./guard";
 import { isPlayableFixtureStatus } from "./preflight";
 import { isSeatedOn } from "./seated";
+import { CHESS_SEAT_REF_TYPE, chessSeatRef } from "./seat-stamp";
 
 export type ExtendDeps = {
   /** The decision clock. Production leaves it out: the database's own clock is read AFTER the board's lock is held (the race rule
@@ -140,6 +148,14 @@ async function extendOneBoard(
       insert into online_chess_audit (org_id, fixture_id, kind, actor_user_id, note)
       values (${orgId}, ${fixtureId}, 'checkin_extend', ${a.actorUserId},
               ${JSON.stringify({ scope: a.scope, extensions: moved.extensions, addedMs: CHECKIN_EXTEND_STEP_MS, deadlineAt: deadline.toISOString() })})`;
+    // The invites still waiting to be sent expire at the NEW deadline, in this same transaction (header: THE INVITES). Both seats:
+    // the ref names the seat, and a seat can have several recipients, all matched by the ref.
+    await extendEmailExpiry(
+      tx,
+      CHESS_SEAT_REF_TYPE,
+      [chessSeatRef(fixtureId, "white"), chessSeatRef(fixtureId, "black")],
+      deadline,
+    );
     return {
       ok: true,
       board: {

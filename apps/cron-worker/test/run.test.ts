@@ -1,13 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
 import { handleManual } from "../src/manual";
 import { RUN_DEADLINE_MS, runDue, type Env, type RunDeps } from "../src/run";
-import { JOBS, TRIGGER_CRON } from "../src/schedule";
+import { FAST_TRIGGER, FIVE_MINUTES, JOBS, TRIGGER_CRON } from "../src/schedule";
 
 const MONDAY_0817 = new Date("2026-09-28T08:17:00Z");
 const TUESDAY_1417 = new Date("2026-09-29T14:17:00Z");
 const MONDAY_0805 = new Date("2026-09-28T08:05:00Z");
-/** Capture QR v2 §6.11 (W22): stream-tick's trigger, typed from the spec. */
-const EVERY_5 = "*/5 * * * *";
+/** The fast trigger of each env (owner ruling 2026-10-20: prod's is the minute trigger that replaced the 5-minute one;
+ *  stg keeps the 5-minute one), read from the schedule's own constants: the literal each env uses is pinned in
+ *  schedule.test.ts. */
+const FAST_PROD = FAST_TRIGGER.prod;
+const FAST_STG = FAST_TRIGGER.stg;
+/** The stg Worker: same table, its own name and origin. */
+const stgEnv = (over: Partial<Env> = {}): Env => env({ ENV_NAME: "stg", BASE_URL: "https://stg.seazn.club", ...over });
+/** The 5-minute rows alone (stream-tick, external-play): the throttle cases below are about THEM, and the outbox row
+ *  shares their trigger. */
+const FIVE_MINUTE_ROWS = JOBS.filter((j) => j.id === "stream-tick" || j.id === "external-play");
 /** A well-formed trigger no row names. */
 const UNKNOWN = "*/7 * * * *";
 // A healthy body for every route: the R3 counters read 0, the others ignore it.
@@ -203,23 +211,162 @@ describe("runDue: the R4 trigger seam", () => {
   });
 
   it("a second trigger runs only its own rows: never news-digest or an hourly row, even at Monday 08:05", async () => {
+    for (const [name, trigger, e, origin] of [
+      ["prod", FAST_PROD, env(), "https://seazn.club"],
+      ["stg", FAST_STG, stgEnv(), "https://stg.seazn.club"],
+    ] as const) {
+      const h = harness();
+      const results = await runDue(MONDAY_0805, trigger, e, h.deps);
+      // The fast rows, in table order: stream-tick (capture QR v2 §6.11), the external-play sweep (chess in-page §4) and
+      // the email outbox's worker (owner ruling 2026-10-20). Minute 05 is a multiple of FIVE_MINUTES on both envs.
+      expect(results.map((r) => r.job), name).toEqual(["stream-tick", "external-play", "email-outbox"]);
+      expect(h.posts(), name).toEqual([`${origin}/api/cron/stream-tick`, `${origin}/api/cron/external-play`, `${origin}/api/cron/email-outbox`]);
+      expect(h.lines.at(-1), name).toMatchObject({ event: "run", cron: trigger, jobs: 3 });
+    }
+  });
+
+  it("an env answers only to its own fast trigger: stg's */5 is unknown to prod, and prod's minute trigger to stg", async () => {
+    for (const [name, trigger, e] of [
+      ["prod", FAST_STG, env()],
+      ["stg", FAST_PROD, stgEnv()],
+    ] as const) {
+      const h = harness();
+      expect(await runDue(MONDAY_0805, trigger, e, h.deps), name).toEqual([]);
+      expect(h.calls, name).toEqual([]);
+      expect(h.lines, name).toEqual([expect.objectContaining({ event: "unknown-trigger", cron: trigger, env: name })]);
+    }
+  });
+
+  it("prod's minute trigger at a minute that is not a multiple of FIVE_MINUTES runs the outbox ALONE", async () => {
     const h = harness();
-    const results = await runDue(MONDAY_0805, EVERY_5, env(), h.deps);
-    // The */5 rows, in table order: stream-tick (capture QR v2 §6.11) and the external-play sweep (chess in-page §4).
-    expect(results.map((r) => r.job)).toEqual(["stream-tick", "external-play"]);
-    expect(h.posts()).toEqual(["https://seazn.club/api/cron/stream-tick", "https://seazn.club/api/cron/external-play"]);
-    expect(h.lines.at(-1)).toMatchObject({ event: "run", cron: EVERY_5, jobs: 2 });
+    const notFive = new Date(Date.parse("2026-09-28T08:00:00Z") + (FIVE_MINUTES + 1) * 60_000);
+    const results = await runDue(notFive, FAST_PROD, env(), h.deps);
+    expect(results.map((r) => r.job)).toEqual(["email-outbox"]);
+    expect(h.posts()).toEqual(["https://seazn.club/api/cron/email-outbox"]);
+  });
+
+  it("one prod hour of minute firings posts the outbox every minute and the 5-minute jobs every FIVE_MINUTES (the Worker's own count, through runDue)", async () => {
+    const h = harness();
+    const HOUR = Date.parse("2026-09-28T08:00:00Z");
+    let firings = 0;
+    for (let m = 0; m < 60; m++, firings++) await runDue(new Date(HOUR + m * 60_000), FAST_PROD, env(), h.deps);
+    expect(firings).toBe(60);
+    const per = (path: string) => h.posts().filter((u) => u.endsWith(path)).length;
+    expect(per("/api/cron/email-outbox")).toBe(60);
+    expect(per("/api/cron/stream-tick")).toBe(60 / FIVE_MINUTES);
+    expect(per("/api/cron/external-play")).toBe(60 / FIVE_MINUTES);
+  });
+
+  it("an env name the table does not know is refused by name, before any call (a misnamed ENV_NAME is a loud failure, not a silent no-op)", async () => {
+    const h = harness();
+    await expect(runDue(MONDAY_0805, FAST_PROD, env({ ENV_NAME: "qa" }), h.deps)).rejects.toThrow(/triggerFor: no trigger for env "qa"/);
+    expect(h.posts()).toEqual([]);
+  });
+
+  describe("M3 (Task 4 review): an unknown ENV_NAME says so before it throws", () => {
+    const SECRET = "cron-secret-Env8-distinctive";
+    const KEY = "dsnkeyEnv8distinctive";
+    const bad = (over: Partial<Env> = {}): Env => env({ ENV_NAME: "qa", CRON_SECRET: SECRET, SENTRY_DSN: `https://${KEY}@o1.ingest.sentry.io/9`, ...over });
+    const refused = (h: ReturnType<typeof harness>, cron: string, e: Env, at = MONDAY_0805) =>
+      runDue(at, cron, e, h.deps).then(
+        () => {
+          throw new Error("runDue resolved for an unknown env");
+        },
+        (err: unknown) => err as Error,
+      );
+
+    it("writes ONE error line naming the env, the trigger and the slot BEFORE the rejection, and calls no job", async () => {
+      const h = harness();
+      const err = await refused(h, FAST_PROD, bad());
+      expect(err.message).toMatch(/triggerFor: no trigger for env "qa"/);
+      expect(h.lines).toEqual([
+        expect.objectContaining({ event: "unknown-env", level: "error", env: "qa", cron: FAST_PROD, scheduledTime: MONDAY_0805.toISOString() }),
+      ]);
+      expect(String(h.lines[0]!.error)).toContain('no trigger for env "qa"');
+      expect(h.posts(), "no job was called").toEqual([]);
+    });
+
+    it("raises one Sentry event on the HOURLY trigger (the cron-worker job, the bad env named) and none on a faster trigger: one an hour, not sixty", async () => {
+      const hourly = harness();
+      await refused(hourly, TRIGGER_CRON, bad(), MONDAY_0817);
+      expect(hourly.events()).toHaveLength(1);
+      expect(hourly.events()[0]).toMatchObject({ level: "error", environment: "qa", tags: { job: "cron-worker", reason: "degraded", run: "scheduled" } });
+      expect(String(hourly.sentry()[0]!.init!.body)).toContain("unknown-env");
+
+      // The same misconfiguration on every minute of an hour: only the hourly trigger's firing pages.
+      const fast = harness();
+      for (let minute = 0; minute < 60; minute++) await refused(fast, FAST_PROD, bad(), new Date(Date.UTC(2026, 8, 28, 8, minute)));
+      expect(fast.lines.filter((l) => l.event === "unknown-env"), "an error line every firing").toHaveLength(60);
+      expect(fast.sentry(), "and no event from a faster trigger").toEqual([]);
+    });
+
+    it("the Sentry event is DELIVERED (its response awaited) before the rejection, not left in flight for the runtime to drop", async () => {
+      const h = harness();
+      let delivered = false;
+      const slow = {
+        ...h.deps,
+        fetch: (async (url: string, init?: RequestInit) => {
+          const res = await h.deps.fetch(url as never, init);
+          if (isSentry(url)) {
+            await new Promise((r) => setTimeout(r, 5)); // the response arrives a moment later
+            delivered = true;
+          }
+          return res;
+        }) as typeof fetch,
+      };
+      await runDue(MONDAY_0817, TRIGGER_CRON, bad(), slow).catch(() => undefined);
+      expect(h.sentry(), "an event was sent").toHaveLength(1);
+      expect(delivered, "and it finished before runDue rejected").toBe(true);
+    });
+
+    it("with no DSN there is a log line and no Sentry call; with a Sentry that answers 500 the ORIGINAL error still surfaces", async () => {
+      const none = harness();
+      const e1 = await refused(none, TRIGGER_CRON, bad({ SENTRY_DSN: undefined }), MONDAY_0817);
+      expect(e1.message).toMatch(/no trigger for env "qa"/);
+      expect(none.sentry()).toEqual([]);
+      expect(none.lines).toHaveLength(1);
+
+      const down = harness(undefined, () => new Response("down", { status: 500 }));
+      const e2 = await refused(down, TRIGGER_CRON, bad(), MONDAY_0817);
+      expect(e2.message, "not a Sentry error").toMatch(/no trigger for env "qa"/);
+      expect(down.sentry(), "it did try").toHaveLength(1);
+    });
+
+    it("neither the log line nor the Sentry envelope carries CRON_SECRET or the DSN key", async () => {
+      const h = harness();
+      await refused(h, TRIGGER_CRON, bad(), MONDAY_0817);
+      expect(h.lines.length, "a line was written").toBe(1);
+      expect(h.sentry().length, "an event was sent").toBe(1);
+      expect(h.sentry()[0]!.url, "the key really is used (positive pair)").toContain(KEY);
+      const envelopes = String(h.sentry()[0]!.init!.body);
+      for (const needle of [SECRET, KEY]) {
+        expect(JSON.stringify(h.lines), needle).not.toContain(needle);
+        expect(envelopes, needle).not.toContain(needle);
+      }
+    });
+
+    it("a KNOWN env is untouched: no unknown-env line, jobs run as before (the pair)", async () => {
+      const h = harness();
+      await runDue(MONDAY_0805, FAST_PROD, env(), h.deps);
+      expect(h.lines.some((l) => l.event === "unknown-env")).toBe(false);
+      expect(h.posts().length).toBeGreaterThan(0);
+    });
   });
 
   it("while inactive, a non-hourly trigger does nothing at all (the probe is hourly only)", async () => {
-    const h = harness();
-    expect(await runDue(MONDAY_0805, EVERY_5, env({ ACTIVE: "false" }), h.deps)).toEqual([]);
-    expect(h.calls).toEqual([]);
-    expect(h.lines).toEqual([]);
+    for (const [name, trigger, e] of [
+      ["prod", FAST_PROD, env({ ACTIVE: "false" })],
+      ["stg", FAST_STG, stgEnv({ ACTIVE: "false" })],
+    ] as const) {
+      const h = harness();
+      expect(await runDue(MONDAY_0805, trigger, e, h.deps), name).toEqual([]);
+      expect(h.calls, name).toEqual([]);
+      expect(h.lines, name).toEqual([]);
+    }
   });
 });
 
-describe("R2 (option S): stream-tick's failures reach Sentry at most once per UTC hour, keyed on the scheduled slot", () => {
+describe("R2 (option S): a fast job's failures reach Sentry at most once per UTC hour, keyed on the scheduled slot", () => {
   const HOUR = Date.parse("2026-09-28T08:00:00Z");
   const slot = (i: number) => new Date(HOUR + i * 5 * 60_000);
   const failing = () => new Response("down", { status: 500 });
@@ -230,7 +377,7 @@ describe("R2 (option S): stream-tick's failures reach Sentry at most once per UT
   it("failing on all 12 firings of one hour: exactly ONE event (the :00 slot), and 11 job lines that say sentryThrottled", async () => {
     const h = harness(failing);
     let firings = 0;
-    for (let i = 0; i < 12; i++, firings++) await runDue(slot(i), EVERY_5, env(), h.deps, TICK_ONLY);
+    for (let i = 0; i < 12; i++, firings++) await runDue(slot(i), FAST_PROD, env(), h.deps, TICK_ONLY);
     expect(firings).toBe(12);
     expect(h.posts(), "every firing still ran the job").toHaveLength(12);
     expect(h.events().map((e) => e.tags.job)).toEqual(["stream-tick"]);
@@ -246,7 +393,7 @@ describe("R2 (option S): stream-tick's failures reach Sentry at most once per UT
   it("288 firings over 24 h, every one failing: 24 events — one per UTC hour", async () => {
     const h = harness(failing);
     let firings = 0;
-    for (let i = 0; i < 288; i++, firings++) await runDue(slot(i), EVERY_5, env(), h.deps, TICK_ONLY);
+    for (let i = 0; i < 288; i++, firings++) await runDue(slot(i), FAST_PROD, env(), h.deps, TICK_ONLY);
     expect(firings, "firings checked").toBe(288);
     expect(h.events()).toHaveLength(24);
     expect(h.lines.filter((l) => l.event === "job" && l.sentryThrottled === true)).toHaveLength(288 - 24);
@@ -254,19 +401,53 @@ describe("R2 (option S): stream-tick's failures reach Sentry at most once per UT
 
   it("the pair: a failure ONLY at :05 sends nothing and logs sentryThrottled; a failure ONLY at :00 sends one event", async () => {
     const at05 = harness(failing);
-    const r05 = await runDue(slot(1), EVERY_5, env(), at05.deps, TICK_ONLY);
+    const r05 = await runDue(slot(1), FAST_PROD, env(), at05.deps, TICK_ONLY);
     expect(r05).toEqual([expect.objectContaining({ job: "stream-tick", status: "error", sentryThrottled: true })]);
     expect(r05[0]!.sentryDelivered, "no event was attempted").toBeUndefined();
     expect(at05.events()).toEqual([]);
     expect(at05.lines.find((l) => l.event === "job")).toMatchObject({ job: "stream-tick", status: "error", sentryThrottled: true });
     const at00 = harness(failing);
-    await runDue(slot(0), EVERY_5, env(), at00.deps, TICK_ONLY);
+    await runDue(slot(0), FAST_PROD, env(), at00.deps, TICK_ONLY);
+    expect(at00.events().map((e) => e.tags.job)).toEqual(["stream-tick"]);
+  });
+
+  it("stg keeps */5 and its throttle: stream-tick failing on all 12 firings of one hour still raises ONE event, from the :00 slot", async () => {
+    const h = harness(failing);
+    let firings = 0;
+    for (let i = 0; i < 12; i++, firings++) await runDue(slot(i), FAST_STG, stgEnv(), h.deps, TICK_ONLY);
+    expect(firings).toBe(12);
+    expect(h.posts(), "every firing still ran the job").toHaveLength(12);
+    expect(h.events().map((e) => [e.tags.job, e.environment])).toEqual([["stream-tick", "stg"]]);
+    expect(h.lines.filter((l) => l.event === "job" && l.sentryThrottled === true)).toHaveLength(11);
+  });
+
+  it("the outbox row on prod's minute trigger: failing on all 60 minutes of one hour raises exactly ONE event (the :00 slot), the other 59 say sentryThrottled", async () => {
+    const OUTBOX_ONLY = JOBS.filter((j) => j.id === "email-outbox");
+    const h = harness(failing);
+    let firings = 0;
+    for (let m = 0; m < 60; m++, firings++) await runDue(new Date(HOUR + m * 60_000), FAST_PROD, env(), h.deps, OUTBOX_ONLY);
+    expect(firings).toBe(60);
+    expect(h.posts(), "every minute still ran the job").toHaveLength(60);
+    expect(h.events().map((e) => e.tags.job)).toEqual(["email-outbox"]);
+    const jobLines = h.lines.filter((l) => l.event === "job");
+    expect(jobLines).toHaveLength(60);
+    expect(jobLines.filter((l) => l.sentryThrottled === true)).toHaveLength(59);
+    expect(jobLines.filter((l) => l.sentryDelivered === true).map((l) => l.scheduledTime)).toEqual([new Date(HOUR).toISOString()]);
+  });
+
+  it("a 5-minute job on prod's minute trigger is throttled by the SAME rule: a failure ONLY at :05 sends nothing, ONLY at :00 sends one", async () => {
+    const at05 = harness(failing);
+    const [r05] = await runDue(slot(1), FAST_PROD, env(), at05.deps, TICK_ONLY);
+    expect(r05).toMatchObject({ job: "stream-tick", status: "error", sentryThrottled: true });
+    expect(at05.events()).toEqual([]);
+    const at00 = harness(failing);
+    await runDue(slot(0), FAST_PROD, env(), at00.deps, TICK_ONLY);
     expect(at00.events().map((e) => e.tags.job)).toEqual(["stream-tick"]);
   });
 
   it("an OK job at a throttled slot is not marked: sentryThrottled only ever names a suppressed failure", async () => {
     const h = harness();
-    const [r] = await runDue(slot(1), EVERY_5, env(), h.deps, TICK_ONLY);
+    const [r] = await runDue(slot(1), FAST_PROD, env(), h.deps, TICK_ONLY);
     expect(r).toMatchObject({ job: "stream-tick", status: "ok" });
     expect(r!.sentryThrottled).toBeUndefined();
   });
@@ -274,7 +455,7 @@ describe("R2 (option S): stream-tick's failures reach Sentry at most once per UT
   it("both */5 rows failing every firing of one hour: ONE event per row, each from the :00 slot (the throttle is per job, so the external-play sweep failing beside stream-tick is still heard)", async () => {
     const h = harness(failing);
     let firings = 0;
-    for (let i = 0; i < 12; i++, firings++) await runDue(slot(i), EVERY_5, env(), h.deps);
+    for (let i = 0; i < 12; i++, firings++) await runDue(slot(i), FAST_PROD, env(), h.deps, FIVE_MINUTE_ROWS);
     expect(firings).toBe(12);
     expect(h.posts(), "both rows ran on every firing").toHaveLength(24);
     expect(h.events().map((e) => e.tags.job)).toEqual(["stream-tick", "external-play"]);

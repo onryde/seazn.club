@@ -136,7 +136,7 @@ describe("Open round — ask, then one request", () => {
     expect(net.calls.map((c) => [c.url, c.json])).toEqual([["/api/v1/stages/s1/open-round", { roundNo: 2 }]]);
     expect(dialog(ui.tree()).busy).toBe(true);
     expect(propsOf(byTestId(ui.tree(), "open-round-cta")[0]!).disabled).toBe(true);
-    net.calls[0]!.resolve({ opened: true, invited: 4, skipped: [] });
+    net.calls[0]!.resolve({ opened: true, invited: 4, retrying: 0, skipped: [] });
     await flush();
     expect(dialog(ui.tree()).open, "answered: the dialog closes").toBe(false);
     expect(noticeText(ui.tree()), "the server's count, as PLAYERS").toBe(pl("externalPlay.openRound.invited", 4));
@@ -147,7 +147,7 @@ describe("Open round — ask, then one request", () => {
     const ui = mount(ROUND());
     click(byTestId(ui.tree(), "open-round-cta")[0]);
     dialog(ui.tree()).onConfirm();
-    net.calls[0]!.resolve({ opened: true, invited: 2, skipped: [{ fixtureId: "f2", reason: "send_failed" }] });
+    net.calls[0]!.resolve({ opened: true, invited: 2, retrying: 0, skipped: [{ fixtureId: "f2", reason: "send_failed" }] });
     await flush();
     const skip = en["runsheet.round.skipLine"]!
       .replace("{board}", en["arbiter.boardNo"]!.replace("{n}", "2"))
@@ -185,7 +185,7 @@ describe("Open round — ask, then one request", () => {
     const ui = mount(ROUND());
     click(byTestId(ui.tree(), "open-round-cta")[0]);
     dialog(ui.tree()).onConfirm();
-    net.calls[0]!.resolve({ opened: true, invited: 4, skipped: [] });
+    net.calls[0]!.resolve({ opened: true, invited: 4, retrying: 0, skipped: [] });
     await flush();
     ui.rerender({ round: INVITED, tz: "Europe/London" });
     expect(noticeText(ui.tree())).toBe(pl("externalPlay.openRound.invited", 4));
@@ -200,7 +200,7 @@ describe("Resend — on its own pairing", () => {
     click(byTestId(ui.tree(), "open-round-resend-f1")[0]);
     expect(net.calls.map((c) => c.url)).toEqual(["/api/v1/fixtures/f2/external-play/resend"]);
     expect(propsOf(byTestId(ui.tree(), "open-round-resend-f1")[0]!).disabled).toBe(true);
-    net.calls[0]!.resolve({ emailed: 2 });
+    net.calls[0]!.resolve({ emailed: 2, retrying: 0 });
     await flush();
     const notices = byTestId(ui.tree(), "open-round-row-notice");
     expect(notices.map((n) => textOf(n))).toEqual([pl("runsheet.round.resent", 2)]);
@@ -211,7 +211,7 @@ describe("Resend — on its own pairing", () => {
 
   it("each refusal reads in words on the row (the window, a hold, a game, a change, the flag), and a send that reached nobody says so", async () => {
     const cases: [unknown, boolean, string][] = [
-      [{ emailed: 0 }, true, en["runsheet.round.resentNone"]!],
+      [{ emailed: 0, retrying: 0 }, true, en["runsheet.round.resentNone"]!],
       [new ApiV1Error("x", 409, "WINDOW_CLOSED"), false, en["externalPlay.resend.windowClosed"]!],
       [new ApiV1Error("x", 409, "BOARD_HELD"), false, en["externalPlay.resend.boardHeld"]!],
       [new ApiV1Error("x", 409, "ONLINE_GAME_EXISTS"), false, en["externalPlay.resend.gameExists"]!],
@@ -231,6 +231,84 @@ describe("Resend — on its own pairing", () => {
       checked += 1;
     }
     expect(checked, "anti-vacuity: answers checked").toBe(7);
+  });
+});
+
+// C1 (task 7 fix round 1): an invite the mail worker is still sending is neither "0 invited" nor "could not be sent". The server now
+// answers { invited, retrying } for an open and { emailed, retrying } for a resend; the arbiter reads them in words, through the real
+// component, reducer and runner. The true failure (nothing sent, nothing queued) keeps its old words.
+describe("a retrying invite is not reported as no invite", () => {
+  const SENDING = (n: number) => pl("runsheet.round.sending", n);
+  const open = async (answer: unknown) => {
+    net.calls.length = 0;
+    const ui = mount(ROUND());
+    click(byTestId(ui.tree(), "open-round-cta")[0]);
+    dialog(ui.tree()).onConfirm();
+    net.calls[0]!.resolve(answer);
+    await flush();
+    return ui;
+  };
+  const resend = async (answer: unknown) => {
+    net.calls.length = 0;
+    const ui = mount(INVITED);
+    click(byTestId(ui.tree(), "open-round-resend-f1")[0]);
+    net.calls[0]!.resolve(answer);
+    await flush();
+    return byTestId(ui.tree(), "open-round-row-notice").map((n) => textOf(n));
+  };
+
+  it("open: only retrying seats says they are sending, and never '0 players invited'", async () => {
+    const ui = await open({ opened: true, invited: 0, retrying: 3, skipped: [] });
+    expect(noticeText(ui.tree())).toBe(SENDING(3));
+    expect(noticeText(ui.tree())).not.toContain(pl("externalPlay.openRound.invited", 0));
+  });
+
+  it("open: invited and retrying together read as two lines, the count of each", async () => {
+    const ui = await open({ opened: true, invited: 2, retrying: 1, skipped: [] });
+    expect(noticeText(ui.tree())).toBe(`${pl("externalPlay.openRound.invited", 2)} ${SENDING(1)}`);
+  });
+
+  it("open: a retrying seat on a board the server also skipped keeps the skip line after the sending line", async () => {
+    const ui = await open({ opened: true, invited: 0, retrying: 2, skipped: [{ fixtureId: "f2", reason: "send_failed" }] });
+    const skip = en["runsheet.round.skipLine"]!
+      .replace("{board}", en["arbiter.boardNo"]!.replace("{n}", "2"))
+      .replace("{reason}", en["externalPlay.openRound.skipped.sendFailed"]!);
+    expect(noticeText(ui.tree())).toBe(`${SENDING(2)} ${skip}`);
+  });
+
+  it("open: nothing sent and nothing queued keeps its old words (0 invited, the skipped board) - the true failure is not softened", async () => {
+    const ui = await open({ opened: true, invited: 0, retrying: 0, skipped: [{ fixtureId: "f1", reason: "send_failed" }] });
+    const skip = en["runsheet.round.skipLine"]!
+      .replace("{board}", en["arbiter.boardNo"]!.replace("{n}", "1"))
+      .replace("{reason}", en["externalPlay.openRound.skipped.sendFailed"]!);
+    expect(noticeText(ui.tree())).toBe(`${pl("externalPlay.openRound.invited", 0)} ${skip}`);
+    expect(noticeText(ui.tree())).not.toContain(SENDING(0));
+  });
+
+  it("resend: nothing emailed yet but invites queued says they are sending, not 'could not be sent'", async () => {
+    const notices = await resend({ emailed: 0, retrying: 2 });
+    expect(notices).toEqual([SENDING(2)]);
+    expect(notices.join(" ")).not.toContain(en["runsheet.round.resentNone"]!);
+  });
+
+  it("resend: emailed and retrying together read as both facts on the row", async () => {
+    expect(await resend({ emailed: 1, retrying: 1 })).toEqual([`${pl("runsheet.round.resent", 1)} ${SENDING(1)}`]);
+    expect(await resend({ emailed: 2, retrying: 0 }), "no retrying: the old line alone").toEqual([pl("runsheet.round.resent", 2)]);
+  });
+
+  it("the sending line is a real sentence in every language: a plural pair, the count in both, no em dash or arrow", () => {
+    let checked = 0;
+    for (const locale of ["en", "nl", "fr", "es"]) {
+      const dict = JSON.parse(readFileSync(join(__dirname, "..", "..", "..", "..", "dictionaries", locale, "ui.json"), "utf8")) as Record<string, string>;
+      for (const form of ["one", "other"]) {
+        const text = dict[`runsheet.round.sending.${form}`];
+        expect(text, `${locale} runsheet.round.sending.${form}`).toBeTruthy();
+        expect(text, `${locale} ${form} carries the count`).toContain("{count}");
+        expect(text, `${locale} ${form}: no em dash or arrow`).not.toMatch(/[\u2014\u2192]/);
+        checked += 1;
+      }
+    }
+    expect(checked, "anti-vacuity: 4 locales x 2 plural forms").toBe(8);
   });
 });
 

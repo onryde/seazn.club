@@ -150,7 +150,12 @@ export default defineConfig({
     // (POSTHOG* is stripped above) — so without this every suite that opens a round, creates a game or turns online
     // play on would read the club as not offered. The override is what local, CI and e2e set; the flag's own suites
     // (online-chess-flag*.test.ts) remove it per case and answer on the flag alone.
-    env: { ONLINE_CHESS_ALWAYS: "1" },
+    //
+    // EMAIL_OUTBOX_DISPATCH_UNPACED: `dispatchNow` waits MIN_SEND_INTERVAL_MS (600 ms) between sends to stay inside Resend's rate
+    // limit. The chess suites open rounds of dozens of seats against a replaced transport, so without this they would sleep for
+    // real (minutes) and a large round would run into the call's own budget. It switches only the WAIT off, never in production
+    // (attempt.ts pacingOn); dispatch-pacing.test.ts is the file that proves the pacing and turns it back on.
+    env: { ONLINE_CHESS_ALWAYS: "1", EMAIL_OUTBOX_DISPATCH_UNPACED: "1" },
     // Warns once when DATABASE_URL is absent: the DB suites then SKIP and the
     // run still exits 0, which has already been misread as a pass. See the file.
     globalSetup: ["./vitest.globalSetup.ts"],

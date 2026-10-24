@@ -32,3 +32,7 @@ export function fakeSql(strings: TemplateStringsArray, ...values: unknown[]): Pr
   if (/select name from organizations/i.test(text)) return Promise.resolve([{ name: "Lagos Chess Club" }]);
   return Promise.resolve([]);
 }
+
+/** `sql.begin(fn)`: the callback runs against the same stand-in (there is no transaction to open or roll back). The sign-in
+ *  route writes its token and its outbox row inside one, so the scrub suites that drive it need this. */
+fakeSql.begin = <T>(fn: (tx: typeof fakeSql) => Promise<T>): Promise<T> => fn(fakeSql);

@@ -358,6 +358,26 @@ test.describe("online chess — the organiser's desk", () => {
           from fixture_external_play where fixture_id in ${sql(r.boards.map((b) => b.fixtureId))}`,
     );
     expect(stamps.length, "a bridge row per board of the opened round").toBe(r.boards.length);
+    // The invite lives in the email outbox now: one row per player's address, queued in the open's own transaction and attempted
+    // right after it. With no provider key the gate ends every attempt `dead` (`no_api_key`) before the body is opened, the
+    // body goes with it, and the hook has released each ended seat - which is why the stamps above read "0 invited".
+    const players = r.boards.flatMap((b) => [b.home, b.away]);
+    const outbox = await withDb(
+      (sql) => sql<{ recipient: string; status: string; last_error: string | null; has_body: boolean }[]>`
+        select recipient, status, last_error, body_sealed is not null as has_body
+          from email_outbox
+         where kind = 'chess_invite' and ref_type = 'fixture_seat'
+           and meta->>'fixtureId' in ${sql(r.boards.map((b) => b.fixtureId))}`,
+    );
+    expect(outbox.length, "anti-vacuity: one outbox row per player's address, none lost").toBe(players.length);
+    expect(outbox.map((x) => x.recipient.toLowerCase()).sort(), "each row is a player's own address").toEqual(
+      players.map((p) => p.email.toLowerCase()).sort(),
+    );
+    for (const row of outbox) {
+      expect(row.status, row.recipient).toBe("dead");
+      expect(row.last_error, row.recipient).toBe("no_api_key");
+      expect(row.has_body, `${row.recipient}: a dead row keeps no body`).toBe(false);
+    }
     const sent = stamps.reduce((n, x) => n + x.sent, 0);
     const lines = notice.locator("p");
     await expect(lines.first()).toHaveText(fill(sent === 1 ? "externalPlay.openRound.invited.one" : "externalPlay.openRound.invited.other", { count: sent }));

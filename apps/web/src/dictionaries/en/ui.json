@@ -5625,6 +5625,8 @@
   "runsheet.round.resent.one": "{count} invite sent again.",
   "runsheet.round.resent.other": "{count} invites sent again.",
   "runsheet.round.resentNone": "The invite could not be sent. Try again in a moment.",
+  "runsheet.round.sending.one": "{count} invite is still sending and will go out shortly.",
+  "runsheet.round.sending.other": "{count} invites are still sending and will go out shortly.",
   "runsheet.round.confirmTitle": "Open Round {round}?",
   "runsheet.round.confirmTitleReopen": "Open Round {round} again?",
   "runsheet.round.confirmTitleReinvite": "Open Round {round} for the players not yet invited?",

@@ -57,6 +57,20 @@ vi.mock("@/lib/auth", async (importOriginal) => ({
   requireOrgRole: vi.fn(async () => ({ user: { id: (await import("./_fake-sql")).USER_ID }, role: "admin" })),
 }));
 const mail = vi.hoisted(() => ({ sent: [] as { to: string; link: string }[] }));
+// The sign-in link is RENDERED by the route (`magicLinkEmail`) and queued; this records the address and link it was asked to
+// render, which is what the old sender recorded. The outbox itself has its own suites; here it is a stand-in (no database).
+// The refusal classes and the readiness rule the route reads are the REAL ones (a stand-in without them would die with "no export
+// defined on the mock" the first time a case made the route reach its catch); only the queue and the send are stand-ins.
+vi.mock("@/server/email-outbox", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/server/email-outbox")>();
+  return {
+    OutboxKeyUnavailableError: real.OutboxKeyUnavailableError,
+    OutboxExpiryTooLongError: real.OutboxExpiryTooLongError,
+    outboxKeyProblem: real.outboxKeyProblem,
+    enqueueEmail: vi.fn(async () => (await import("node:crypto")).randomUUID()),
+    dispatchNow: vi.fn(async () => new Map()),
+  };
+});
 vi.mock("@/lib/email", async (importOriginal) => {
   const record = vi.fn(async (to: string, link: string) => {
     mail.sent.push({ to, link });
@@ -64,7 +78,10 @@ vi.mock("@/lib/email", async (importOriginal) => {
   });
   return {
     ...(await importOriginal<typeof import("@/lib/email")>()),
-    sendMagicLinkEmail: record,
+    magicLinkEmail: vi.fn(async (to: string, link: string) => {
+      mail.sent.push({ to, link });
+      return { subject: "s", html: "", text: "" };
+    }),
     sendVerificationEmail: record,
     sendInviteEmail: vi.fn(async (to: string, _org: string, link: string) => {
       mail.sent.push({ to, link });
@@ -85,6 +102,7 @@ import { mintClaimSecret } from "@/server/usecases/person-claims";
 import { mintCheckinToken } from "@/server/usecases/checkin-token";
 import { posthogBeforeSend, scrubRecordingEvent, scrubScoreUrl, scrubSentryEvent } from "../scrub-score-url";
 import { POST as MAGIC_LINK } from "@/app/api/auth/magic-link/route";
+import { OutboxExpiryTooLongError, OutboxKeyUnavailableError, dispatchNow, enqueueEmail } from "@/server/email-outbox";
 import { POST as RESEND } from "@/app/api/admin/users/[id]/resend-verification/route";
 import { POST as ORG_INVITES } from "@/app/api/orgs/[id]/invites/route";
 
@@ -554,5 +572,36 @@ describe("Sentry's request.query_string (no `?`) is scrubbed when the event is o
     const out = scrubSentryEvent(capture);
     expect(out.request?.query_string, "not a one-time route: kept").toBe(`token=${T()}`);
     expect(Object.hasOwn(out.request ?? {}, "data"), "and still a capture event: its body is dropped").toBe(false);
+  });
+});
+
+// The outbox stand-in above carries the REAL refusal classes (review M6). A stand-in without them dies with "no export defined on
+// the mock" the first time a case makes the sign-in route reach its catch, and nothing in this file did, so nothing would say so.
+describe("the sign-in route, when the (stand-in) outbox refuses the row", () => {
+  it("answers the generic 500 for each refusal class, sends nothing, and the minted token is in no part of the answer", async () => {
+    const refusals: [string, Error][] = [
+      ["a key refusal", new OutboxKeyUnavailableError("unset")],
+      ["an expiry refusal", new OutboxExpiryTooLongError("magic_link", "user")],
+    ];
+    let checked = 0;
+    for (const [label, refusal] of refusals) {
+      mail.sent.length = 0;
+      inserts.length = 0;
+      vi.mocked(dispatchNow).mockClear();
+      vi.mocked(enqueueEmail).mockRejectedValueOnce(refusal);
+      const res = await MAGIC_LINK(
+        new Request(`${ORIGIN}/api/auth/magic-link`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "refused@example.test" }) }),
+      );
+      const raw = await res.text();
+      expect(res.status, label).toBe(500);
+      expect(JSON.parse(raw), label).toEqual({ ok: false, error: "Server error" });
+      const minted = inserts.filter((i) => i.table === "login_links").map((i) => i.values[1] as string);
+      expect(minted, `${label}: the token was minted inside the refused transaction`).toHaveLength(1);
+      expect(raw, label).not.toContain(minted[0]!);
+      // (`mail.sent` records what was RENDERED, which happens before the enqueue; the send is `dispatchNow`.)
+      expect(dispatchNow, `${label}: nothing was sent`).not.toHaveBeenCalled();
+      checked++;
+    }
+    expect(checked).toBe(refusals.length);
   });
 });

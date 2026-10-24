@@ -22879,6 +22879,11 @@
                               "minimum": -9007199254740991,
                               "maximum": 9007199254740991
                             },
+                            "retrying": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
                             "skipped": {
                               "type": "array",
                               "items": {
@@ -22908,6 +22913,7 @@
                           "required": [
                             "opened",
                             "invited",
+                            "retrying",
                             "skipped"
                           ],
                           "additionalProperties": false
@@ -22992,6 +22998,7 @@
                   "data": {
                     "opened": true,
                     "invited": -9007199254740991,
+                    "retrying": -9007199254740991,
                     "skipped": [
                       {
                         "fixtureId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
@@ -54995,10 +55002,16 @@
                           "type": "integer",
                           "minimum": -9007199254740991,
                           "maximum": 9007199254740991
+                        },
+                        "retrying": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
                         }
                       },
                       "required": [
-                        "emailed"
+                        "emailed",
+                        "retrying"
                       ],
                       "additionalProperties": false
                     },
@@ -55011,7 +55024,8 @@
                 "example": {
                   "ok": true,
                   "data": {
-                    "emailed": -9007199254740991
+                    "emailed": -9007199254740991,
+                    "retrying": -9007199254740991
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }

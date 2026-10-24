@@ -11,15 +11,20 @@
  */
 export type Due =
   | { kind: "every" } // every firing of the row's own trigger
+  | { kind: "minuteMod"; every: number } // firings whose SCHEDULED minute is a multiple of `every` (a slower job on a faster trigger)
   | { kind: "daily"; hourUtc: number } // hourly trigger only
   | { kind: "weekly"; weekdayUtc: number; hourUtc: number }; // hourly trigger only
+
+/** The environments the Worker is deployed to: wrangler.json's `env` keys, and the Worker's `ENV_NAME` var. */
+export type EnvName = "stg" | "prod";
 
 export interface Job {
   id: string;
   /** Route on the Next app, POSTed with `x-cron-secret`. */
   path: string;
-  /** The cron expression of the Worker trigger that fires this row (R4). */
-  trigger: string;
+  /** The cron expression of the Worker trigger that fires this row (R4): one string for a row that is the same in every
+   *  env, or one per env for a row that rides an env's fast trigger (`FAST_TRIGGER`). Read it through `triggerFor`. */
+  trigger: string | Readonly<Record<EnvName, string>>;
   due: Due;
   /** Safe to re-send after a 502/503/504 or a network error (the route is idempotent). */
   retry: boolean;
@@ -37,8 +42,20 @@ export interface Job {
 export const TRIGGER_CRON = "17 * * * *";
 
 /** Capture QR v2 §6.11 (W22): stream-tick's own trigger. With the hourly one, 2 per env, 4 of the Free plan's 5.
- *  The external-play sweep (chess in-page design §4) shares it: same cadence, no new trigger. */
+ *  The external-play sweep (chess in-page design §4) shares it: same cadence, no new trigger. Since the email outbox
+ *  (owner ruling 2026-10-20) it is STG's fast trigger; prod's is `MINUTE_CRON`. */
 export const STREAM_TICK_CRON = "*/5 * * * *";
+
+/** Every minute. Prod's one fast trigger: it REPLACES `*\/5` there (still 2 triggers per env, 4 of the Free plan's 5),
+ *  so the email outbox's worker runs every minute on prod, and the 5-minute jobs ride it on their `minuteMod` firings. */
+export const MINUTE_CRON = "* * * * *";
+
+/** The 5-minute jobs' period, in minutes: their `minuteMod` on a faster trigger, and the cadence stg's `*\/5` fires at. */
+export const FIVE_MINUTES = 5;
+
+/** The ONE fast trigger per env. Prod's replaces `*\/5`; stg keeps it (stg is `min_machines_running = 0`, and a minute
+ *  trigger would keep it awake all day), so the outbox runs there on the existing 5-minute tick and adds no wake-up. */
+export const FAST_TRIGGER: Readonly<Record<EnvName, string>> = { prod: MINUTE_CRON, stg: STREAM_TICK_CRON };
 
 export const JOBS: readonly Job[] = [
   { id: "registrations", path: "/api/cron/registrations", trigger: TRIGGER_CRON, due: { kind: "every" }, retry: true, manual: true },
@@ -97,8 +114,8 @@ export const JOBS: readonly Job[] = [
   {
     id: "stream-tick",
     path: "/api/cron/stream-tick",
-    trigger: STREAM_TICK_CRON,
-    due: { kind: "every" },
+    trigger: FAST_TRIGGER,
+    due: { kind: "minuteMod", every: FIVE_MINUTES },
     retry: false,
     manual: true,
     failureCounts: ["data.failed"],
@@ -114,23 +131,52 @@ export const JOBS: readonly Job[] = [
   {
     id: "external-play",
     path: "/api/cron/external-play",
-    trigger: STREAM_TICK_CRON,
-    due: { kind: "every" },
+    trigger: FAST_TRIGGER,
+    due: { kind: "minuteMod", every: FIVE_MINUTES },
     retry: false,
     manual: true,
     failureCounts: ["data.failed", "data.skipped"],
   },
+  // Email outbox, phase 1 (spec 2026-10-19-email-outbox-design.md, "The retry worker"): one tick of the retry worker, on
+  // EVERY firing of the env's fast trigger: every minute on prod, every 5 minutes on stg (owner ruling 2026-10-20). Never
+  // retried: the next firing IS the retry, and skip-locked claims plus the lease make an overlapping re-send safe.
+  // `failed` counts rows whose attempt threw in our own code, and a tick that could not run at all (the database role
+  // cannot write the outbox); `deferred` (rows still due when the batch or the budget ran out) is not a failure, because
+  // the next firing reaches them.
+  {
+    id: "email-outbox",
+    path: "/api/cron/email-outbox",
+    trigger: FAST_TRIGGER,
+    due: { kind: "every" },
+    retry: false,
+    manual: true,
+    failureCounts: ["data.failed"],
+  },
 ];
 
-/** Every distinct trigger the table uses: what wrangler.json must register. */
-export function triggersOf(jobs: readonly Job[] = JOBS): string[] {
-  return [...new Set(jobs.map((j) => j.trigger))];
+/** The cron expression that fires `job` in `env`. A per-env row names every deployed env; an env it does not name is a
+ *  table or config error and is refused BY NAME, never guessed (an `Object.prototype` member is not an env either). */
+export function triggerFor(job: Job, env: string): string {
+  if (typeof job.trigger === "string") return job.trigger;
+  if (!Object.hasOwn(job.trigger, env)) throw new Error(`triggerFor: no trigger for env ${JSON.stringify(env)} on job ${job.id}`);
+  return job.trigger[env as EnvName];
+}
+
+/** Every distinct trigger the table uses in `env`: what that env's wrangler.json entry must register. */
+export function triggersOf(env: string, jobs: readonly Job[] = JOBS): string[] {
+  return [...new Set(jobs.map((j) => triggerFor(j, env)))];
 }
 
 function isDue(due: Due, t: Date): boolean {
   switch (due.kind) {
     case "every":
       return true;
+    case "minuteMod":
+      // A period that is not a whole number of minutes would make the row silently never due (`x % 0` is NaN): refuse it.
+      if (!Number.isInteger(due.every) || due.every < 1 || due.every > 59) {
+        throw new Error(`dueJobs: minuteMod every must be a whole number of minutes from 1 to 59, got ${due.every}`);
+      }
+      return t.getUTCMinutes() % due.every === 0;
     case "daily":
       return t.getUTCHours() === due.hourUtc;
     case "weekly":
@@ -142,21 +188,21 @@ function isDue(due: Due, t: Date): boolean {
  * R2 (option S, controller 2026-10-01): is `t` the FIRST firing of `trigger` in its UTC hour? A job that keeps
  * failing on a fast trigger raises one Sentry event per hour, from this slot only; the others log
  * `sentryThrottled`. Keyed on the SCHEDULED time, like `dueJobs`, so a late invocation is judged by its own slot.
- * Only the two shapes the table uses are understood: the hourly trigger (every firing is its hour's first) and
- * `*\/N * * * *` with N in 1..59. Any other shape is refused by name, never guessed: a wrong answer here is either
- * an alert storm or a silent hour.
+ * Only the shapes the table uses are understood: the hourly trigger (every firing is its hour's first), the minute
+ * trigger (`* * * * *`: only the :00 slot is) and `*\/N * * * *` with N in 1..59. Any other shape is refused by name,
+ * never guessed: a wrong answer here is either an alert storm or a silent hour.
  */
 export function firstSlotOfHour(trigger: string, t: Date): boolean {
   if (trigger === TRIGGER_CRON) return true;
+  if (trigger === MINUTE_CRON) return t.getUTCMinutes() === 0;
   const m = /^\*\/(\d{1,2}) \* \* \* \*$/.exec(trigger);
   const n = m ? Number(m[1]) : NaN;
   if (!(n >= 1 && n <= 59)) throw new Error(`firstSlotOfHour: cannot judge trigger ${JSON.stringify(trigger)}`);
   return t.getUTCMinutes() < n;
 }
 
-/** The rows one firing runs, in table order. The firing TRIGGER picks the
- *  candidate rows (R4); the SCHEDULED time picks the slot, so a late
- *  invocation still runs its own slot's jobs. */
-export function dueJobs(scheduledTime: Date, cron: string, jobs: readonly Job[] = JOBS): Job[] {
-  return jobs.filter((j) => j.trigger === cron && isDue(j.due, scheduledTime));
+/** The rows one firing runs, in table order. The firing TRIGGER, read in the Worker's `env`, picks the candidate rows
+ *  (R4); the SCHEDULED time picks the slot, so a late invocation still runs its own slot's jobs. */
+export function dueJobs(scheduledTime: Date, cron: string, env: string, jobs: readonly Job[] = JOBS): Job[] {
+  return jobs.filter((j) => triggerFor(j, env) === cron && isDue(j.due, scheduledTime));
 }

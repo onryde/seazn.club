@@ -2,6 +2,8 @@
 // deleted usecases/external-play.ts). The per-seat stamp is the invite record;
 // these pin what may write it and what may clear it.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DeliverMessage } from "@/server/email-outbox/transport";
+import { stubOutboxEnv, type SentInvite } from "@/server/usecases/__tests__/_invite-mail";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { backendPid, pollWaitersBehind } from "./_lock-waiters";
@@ -9,7 +11,7 @@ import { HttpError } from "@/lib/errors";
 import { CHECKIN_BATCH_GAP_MS, CHECKIN_BATCH_SIZE, DEADLINE_AFTER_MS, WINDOW_OPEN_LEAD_MS, boardAnchor, windowFor } from "@/server/external-play/window";
 
 const mail = vi.hoisted(() => ({
-  sent: [] as { to: string; fixtureUrl: string; deadlineLabel: string; opensLabel: string | undefined; locale: string }[],
+  sent: [] as SentInvite[],
   fail: new Set<string>(),
   throws: new Set<string>(),
   // The FIRST send to this address waits on `gate` (review M6's staging).
@@ -17,25 +19,15 @@ const mail = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/email", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/email")>();
-  return {
-    ...actual,
-    sendExternalPlayInviteEmail: vi.fn(
-      async (to: string, args: Parameters<typeof actual.sendExternalPlayInviteEmail>[1], locale: string) => {
-        const hold = mail.holdFirst;
-        if (hold && hold.to === to) {
-          mail.holdFirst = null;
-          hold.reached();
-          await hold.gate;
-        }
-        if (mail.throws.has(to)) throw new Error("provider exploded");
-        if (mail.fail.has(to)) return false;
-        mail.sent.push({ to, fixtureUrl: args.fixtureUrl, deadlineLabel: args.deadlineLabel, opensLabel: args.opensLabel, locale });
-        return true;
-      },
-    ),
-  };
+  const h = await import("@/server/usecases/__tests__/_invite-mail");
+  return { ...actual, externalPlayInviteEmail: h.renderInviteForTest };
 });
-
+// The invite is queued on the email outbox and sent after commit through its one network seam; the provider's answer is ours.
+vi.mock("@/server/email-outbox/transport", async () => {
+  const h = await import("@/server/usecases/__tests__/_invite-mail");
+  return { deliver: (msg: DeliverMessage) => h.deliverForTest(mail, msg) };
+});
+beforeEach(() => stubOutboxEnv());
 const board = vi.hoisted(() => ({
   createChallengeToUser: vi.fn(),
   acceptChallenge: vi.fn(),
@@ -169,18 +161,16 @@ describe.skipIf(!HAS_DB)("claimSeat / releaseSeat — the stamp's own guards", (
   });
 });
 
-describe.skipIf(!HAS_DB)("sendFixtureInvite — a throwing provider is a failed send", () => {
-  it("an exception from the sender un-stamps that seat and reports send_failed; the open still completes", async () => {
+describe.skipIf(!HAS_DB)("the outbox — a throwing provider is a retry, not a failed send", () => {
+  it("an exception from the provider keeps that seat stamped and reports it retrying; the open still completes", async () => {
     const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
     const b = r.boards[0]!;
     mail.throws.add(b.away.email);
-    expect(await open(r)).toEqual({
-      opened: true,
-      invited: 1,
-      skipped: [{ fixtureId: b.fixtureId, reason: "send_failed" }],
-    });
+    // Before the outbox this seat read send_failed and was un-stamped. Its row is now queued for the worker's next try, so the
+    // seat is `retrying` and keeps its stamp - the player is not told "failed" for a mail that may still go.
+    expect(await open(r)).toEqual({ opened: true, invited: 1, retrying: 1, skipped: [] });
     const row = (await rowOf(b.fixtureId))!;
-    expect([row.white_emailed_at, row.black_emailed_at].filter((x) => x !== null)).toHaveLength(1);
+    expect([row.white_emailed_at, row.black_emailed_at].filter((x) => x !== null)).toHaveLength(2);
   });
 });
 
@@ -201,7 +191,7 @@ describe.skipIf(!HAS_DB)("resendExternalPlayNotice", () => {
     const b = r.boards[0]!;
     await open(r);
     mail.sent.length = 0;
-    expect(await resendExternalPlayNotice(r.owner, b.fixtureId, ORIGIN)).toEqual({ emailed: 2 });
+    expect(await resendExternalPlayNotice(r.owner, b.fixtureId, ORIGIN)).toEqual({ emailed: 2, retrying: 0 });
     expect(mail.sent.map((m) => m.to).sort()).toEqual([b.home.email, b.away.email].sort());
     expect(mail.sent.every((m) => m.fixtureUrl.startsWith(ORIGIN) && m.fixtureUrl.includes(b.fixtureId))).toBe(true);
   });
@@ -239,7 +229,7 @@ describe.skipIf(!HAS_DB)("resendExternalPlayNotice", () => {
     mail.fail.add(b.home.email);
     await open(r);
     mail.fail.clear();
-    expect(await resendExternalPlayNotice(r.owner, b.fixtureId, ORIGIN)).toEqual({ emailed: 2 });
+    expect(await resendExternalPlayNotice(r.owner, b.fixtureId, ORIGIN)).toEqual({ emailed: 2, retrying: 0 });
     const row = (await rowOf(b.fixtureId))!;
     expect(row.white_emailed_at).not.toBeNull();
     expect(row.black_emailed_at).not.toBeNull();
@@ -255,7 +245,7 @@ describe.skipIf(!HAS_DB)("resendExternalPlayNotice", () => {
     await open(r); // home's send fails ⇒ home un-stamped
     const before = (await rowOf(b.fixtureId))!;
     const homeCol = before.white_emailed_at === null ? "white_emailed_at" : "black_emailed_at";
-    expect(await resendExternalPlayNotice(r.owner, b.fixtureId, ORIGIN)).toEqual({ emailed: 1 });
+    expect(await resendExternalPlayNotice(r.owner, b.fixtureId, ORIGIN)).toEqual({ emailed: 1, retrying: 0 });
     expect((await rowOf(b.fixtureId))![homeCol], "a refused send records no invite").toBeNull();
   });
 
@@ -328,7 +318,7 @@ describe.skipIf(!HAS_DB)("resendExternalPlayNotice", () => {
     const r2 = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
     await open(r2, new Date(Date.now() - DEADLINE_AFTER_MS + MIN));
     mail.sent.length = 0;
-    expect(await resendExternalPlayNotice(r2.owner, r2.boards[0]!.fixtureId, ORIGIN)).toEqual({ emailed: 2 });
+    expect(await resendExternalPlayNotice(r2.owner, r2.boards[0]!.fixtureId, ORIGIN)).toEqual({ emailed: 2, retrying: 0 });
   });
 
   it("the per-seat lock: a resend claims an un-invited seat BEFORE it sends, so an open racing it does not mail that seat again", async () => {
@@ -355,7 +345,7 @@ describe.skipIf(!HAS_DB)("resendExternalPlayNotice", () => {
       skipped: [],
     });
     release();
-    expect(await resend).toEqual({ emailed: 2 });
+    expect(await resend).toEqual({ emailed: 2, retrying: 0 });
     expect(mail.sent.filter((m) => m.to === b.home.email), "home mailed exactly once").toHaveLength(1);
   });
 
@@ -375,7 +365,7 @@ describe.skipIf(!HAS_DB)("resendExternalPlayNotice", () => {
       expect(done, "the resend ran through a held division lock").toBe(false);
       expect(waited).toBe(true);
       await holder`commit`;
-      expect(await p).toEqual({ emailed: 2 });
+      expect(await p).toEqual({ emailed: 2, retrying: 0 });
     } finally {
       await holder`rollback`.catch(() => undefined);
       holder.release();
@@ -563,9 +553,9 @@ describe.skipIf(!HAS_DB)("invites and resend in timed batches", () => {
       code: "WINDOW_CLOSED",
     });
     expect(mail.sent, "batch 0 mailed nobody").toHaveLength(0);
-    expect(await resendExternalPlayNotice(r.owner, r.ranked.fixtureId, ORIGIN, { now: afterBatch0 })).toEqual({ emailed: 2 });
+    expect(await resendExternalPlayNotice(r.owner, r.ranked.fixtureId, ORIGIN, { now: afterBatch0 })).toEqual({ emailed: 2, retrying: 0 });
     const edge = new Date(batchStart(2).getTime() + DEADLINE_AFTER_MS);
-    expect(await resendExternalPlayNotice(r.owner, r.ranked.fixtureId, ORIGIN, { now: new Date(edge.getTime() - 1) })).toEqual({ emailed: 2 });
+    expect(await resendExternalPlayNotice(r.owner, r.ranked.fixtureId, ORIGIN, { now: new Date(edge.getTime() - 1) })).toEqual({ emailed: 2, retrying: 0 });
     mail.sent.length = 0;
     expect(await refusal(resendExternalPlayNotice(r.owner, r.ranked.fixtureId, ORIGIN, { now: edge }))).toEqual({
       status: 409,
@@ -583,7 +573,7 @@ describe.skipIf(!HAS_DB)("invites and resend in timed batches", () => {
     const opensAt = batchStart(2);
     const send = async (now: Date) => {
       mail.sent.length = 0;
-      expect(await resendExternalPlayNotice(r.owner, r.ranked.fixtureId, ORIGIN, { now }), `resend at ${now.toISOString()}`).toEqual({ emailed: 2 });
+      expect(await resendExternalPlayNotice(r.owner, r.ranked.fixtureId, ORIGIN, { now }), `resend at ${now.toISOString()}`).toEqual({ emailed: 2, retrying: 0 });
       const got = mail.sent.filter((m) => [r.ranked.home.email, r.ranked.away.email].includes(m.to));
       expect(got, "both players of the ranked board were mailed").toHaveLength(2);
       return got;
@@ -615,7 +605,7 @@ describe.skipIf(!HAS_DB)("invites and resend in timed batches", () => {
     expect(behind.getTime(), "premise: before batch 0's own opening (the lead ahead of the stamp)").toBeLessThan(windowFor(boardAnchor(OPENED, 0, true)).opensAt.getTime());
     for (const now of [behind, new Date(OPENED.getTime() + 1), new Date(OPENED.getTime() + DEADLINE_AFTER_MS - 1)]) {
       mail.sent.length = 0;
-      expect(await resendExternalPlayNotice(r.owner, r.boards[0]!.fixtureId, ORIGIN, { now })).toEqual({ emailed: 2 });
+      expect(await resendExternalPlayNotice(r.owner, r.boards[0]!.fixtureId, ORIGIN, { now })).toEqual({ emailed: 2, retrying: 0 });
       for (const m of mail.sent) {
         expect(m.opensLabel, `batch 0 at ${now.toISOString()}`).toBeUndefined();
         checked += 1;

@@ -30,6 +30,8 @@
 // Single-sport by construction: online play exists only for `boardgame`
 // (guard.ts `d.sport_key = 'boardgame'`); the sweep adds no sport branch.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DeliverMessage } from "@/server/email-outbox/transport";
+import { stubOutboxEnv, type SentInvite } from "@/server/usecases/__tests__/_invite-mail";
 import { randomUUID } from "node:crypto";
 import fc from "fast-check";
 import { readFileSync, readdirSync, writeSync } from "node:fs";
@@ -139,10 +141,18 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => vi.fn(async () => false) }));
 
 // The invite T19's openRound sends: recorded, never mailed.
+const mail = vi.hoisted(() => ({ sent: [] as SentInvite[], fail: new Set<string>() }));
 vi.mock("@/lib/email", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/email")>();
-  return { ...actual, sendExternalPlayInviteEmail: vi.fn(async () => true) };
+  const h = await import("@/server/usecases/__tests__/_invite-mail");
+  return { ...actual, externalPlayInviteEmail: h.renderInviteForTest };
 });
+// The invite is queued on the email outbox and sent after commit through its one network seam; the provider's answer is ours.
+vi.mock("@/server/email-outbox/transport", async () => {
+  const h = await import("@/server/usecases/__tests__/_invite-mail");
+  return { deliver: (msg: DeliverMessage) => h.deliverForTest(mail, msg) };
+});
+beforeEach(() => stubOutboxEnv());
 
 // The I1 real-route block at the end drives the pad's and the organiser's ROUTES, which read a session. Unset
 // (every other test here), the real auth module answers; set, it is that user. In THIS file because the sweep

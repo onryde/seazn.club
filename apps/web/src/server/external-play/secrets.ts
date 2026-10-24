@@ -2,7 +2,8 @@ import "server-only";
 // The player's Lichess OAuth token at rest (design §3.1). The envelope is
 // server/relay/crypto.ts's — V417 gave the device link exactly this shape —
 // under its OWN key, LICHESS_TOKEN_KEK. This module is the only place that
-// names that key.
+// names that key. (The email outbox seals queued email bodies under a key of
+// its own, EMAIL_OUTBOX_KEK, so rotating this one never strands queued mail.)
 //
 // base64, not Buffer, because the declared interface is Promise<string>; the
 // column is bytea, and external-accounts.ts converts at the SQL boundary. The

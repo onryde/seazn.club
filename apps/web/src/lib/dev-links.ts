@@ -9,13 +9,16 @@
  *
  *     if (!sent || process.env.NODE_ENV !== "production") …
  *
- * `sendMagicLinkEmail` and its siblings pass `transactional: true`, so the
- * suppression branch is bypassed — but `send()` (`lib/email.ts:118-156`) still
- * returns `false` when `RESEND_API_KEY` is unset, when Resend answers non-2xx
- * (429, quota exceeded, unverified domain) or when the fetch throws. The
- * `!sent` half therefore fires IN PRODUCTION on any delivery failure, and the
- * response body carries a live sign-in link for whatever address was posted —
- * which `components/auth-form.tsx:57` then renders as a clickable button. An
+ * The sign-in email is queued by `api/auth/magic-link` (`magicLinkEmail`, then
+ * `dispatchNow` on the email outbox; before 2026-10 a direct sender mailed it)
+ * and, like its siblings, is `transactional: true`, so the suppression branch
+ * is bypassed — but `send()` (`lib/email.ts`) still returns `false` when
+ * `RESEND_API_KEY` is unset, when Resend answers non-2xx (429, quota exceeded,
+ * unverified domain) or when the fetch throws. On the outbox the same failures
+ * leave the row queued for the retry worker and still must not decide
+ * exposure. The `!sent` half therefore fires IN PRODUCTION on any delivery
+ * failure, and the response body carries a live sign-in link for whatever
+ * address was posted — which `components/auth-form.tsx:57` then renders as a clickable button. An
  * email outage became account access, and a provider incident became a window
  * across the whole user base.
  *

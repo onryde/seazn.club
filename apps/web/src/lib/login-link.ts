@@ -1,20 +1,32 @@
 import "server-only";
 import crypto from "node:crypto";
-import { sql } from "@/lib/db";
+import { sql, type Tx } from "@/lib/db";
 
 // Short TTL: a login link is a live credential, so it should not linger.
 const TTL_MINUTES = 15;
+/** The same TTL in ms: the outbox row for the sign-in email expires with the link (never later: a late link is worse than none). */
+export const LOGIN_LINK_TTL_MS = TTL_MINUTES * 60_000;
+
+/**
+ * Issue a single-use passwordless sign-in token for a user, on `db`: the delete of the earlier unused links and the insert
+ * of the new one go through whichever handle the caller holds. The sign-in route passes its transaction, so the token and
+ * the outbox row that carries it are committed together or not at all. Returns the token and the instant it stops working
+ * (the outbox row for the email expires at exactly that instant).
+ */
+export async function issueLoginLink(userId: string, db: Tx | typeof sql): Promise<{ token: string; expiresAt: Date }> {
+  const token = crypto.randomBytes(32).toString("base64url");
+  const expiresAt = new Date(Date.now() + LOGIN_LINK_TTL_MS);
+  // Only one live link per user — invalidate any earlier unused ones.
+  await db`delete from login_links where user_id = ${userId} and used = false`;
+  await db`
+    insert into login_links (user_id, token, expires_at)
+    values (${userId}, ${token}, ${expiresAt.toISOString()})`;
+  return { token, expiresAt };
+}
 
 /** Issue a single-use passwordless sign-in token for a user. */
 export async function createLoginLink(userId: string): Promise<string> {
-  const token = crypto.randomBytes(32).toString("base64url");
-  const expiresAt = new Date(Date.now() + TTL_MINUTES * 60_000).toISOString();
-  // Only one live link per user — invalidate any earlier unused ones.
-  await sql`delete from login_links where user_id = ${userId} and used = false`;
-  await sql`
-    insert into login_links (user_id, token, expires_at)
-    values (${userId}, ${token}, ${expiresAt})`;
-  return token;
+  return (await issueLoginLink(userId, sql)).token;
 }
 
 /**

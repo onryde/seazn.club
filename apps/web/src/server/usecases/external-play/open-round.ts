@@ -38,10 +38,14 @@ import "server-only";
 //     tracks an active room, so a refused end keeps it, and the next claim or
 //     the sweep ends the room. The vendor call cannot sit inside the
 //     transaction, which is why this is two steps and not the claim's one.
-//   - Each seat is stamped BEFORE its mail is sent and un-stamped if the send
-//     fails, so a re-open retries it and nobody is mailed twice. A crash
-//     between the stamp and the send loses that one invite; the organiser's
-//     Resend (invite.ts) is the way back.
+//   - Each seat is stamped and its mail QUEUED in the same transaction (the email
+//     outbox, invite.ts `queueFixtureInvite`), so a stamp never exists without its
+//     rows and a crash cannot lose an invite. The mail is sent after the commit;
+//     a send that is refused for good, or that never succeeds before the check-in
+//     deadline, makes the outbox's chess hook un-stamp the seat, so a re-open
+//     retries it and nobody is mailed twice. A seat whose mail is still being
+//     tried (a provider outage, a rate limit) stays stamped and is reported as
+//     `retrying`, not as failed.
 //
 // `stage_round_opens` is SEALED (FORCE RLS, no app_user grant), so the stamp
 // is written through the privileged `sql` client — which is why the actor is
@@ -59,22 +63,21 @@ import { boardExtraSql, boardRankSql, roundOpenAt, type RoundOpenRow } from "@/s
 import { assertTimeControl } from "@/server/external-play/time-controls";
 import { RETIRED_PAIR, endMeeting, gameEvidenceOn, retireStaleMeeting } from "@/server/external-play/video/realtimekit";
 import { boardAnchor, roomPhase, type BoardAnchor } from "@/server/external-play/window";
+import { errFields } from "@/server/email-outbox/err-fields";
 import { log } from "@/server/logger";
 import { audit } from "../audit";
 import { loadOnlinePlayFixture, resetStaleBridge, type OnlinePlayFixture } from "./guard";
+import { attachToOpen, boardSeats, dispatchAndClassify, queueFixtureInvite, type InviteSeat } from "./invite";
+import { assertOnlineChessOffered } from "./online-chess-flag";
+import { isPlayableFixtureStatus } from "./preflight";
 import {
-  attachToOpen,
-  boardSeats,
   bridgeTakesInvites,
   claimSeat,
   releaseSeat,
-  sendFixtureInvite,
+  unbindIfUnstamped,
   type Colour,
   type InviteBridgeFacts,
-  type InviteSeat,
-} from "./invite";
-import { assertOnlineChessOffered } from "./online-chess-flag";
-import { isPlayableFixtureStatus } from "./preflight";
+} from "./seat-stamp";
 
 export type { OpenRoundRefusal, OpenRoundResult, OpenRoundSkip } from "@/lib/open-round";
 
@@ -148,7 +151,8 @@ type BridgeFactsRow = InviteBridgeFacts & {
   black_emailed_at: Date | null;
 };
 
-type Claim = { board: Board; seat: InviteSeat; anchor: BoardAnchor };
+/** A seat this open stamped, and the outbox rows (one per distinct address) that were queued for it in the same transaction. */
+type Claim = { board: Board; seat: InviteSeat; rowIds: string[] };
 
 type Decision =
   | { kind: "nothing"; skipped: OpenRoundSkip[] }
@@ -156,6 +160,9 @@ type Decision =
       kind: "opened" | "reopened" | "reinvited";
       open: RoundOpenRow;
       claims: Claim[];
+      /** Boards with a seat whose invite could not be queued (its savepoint was rolled back, stamp and rows both): reported
+       *  `send_failed`, and left for the next open. */
+      queueFailed: string[];
       retireBoards: string[];
       /** A re-open's boards whose own batch window had already closed (spec §3.2.1): not invited, reported. */
       closedSkips: OpenRoundSkip[];
@@ -477,21 +484,50 @@ export async function openRound(
     }
 
     const claims: Claim[] = [];
+    const queueFailed = new Set<string>();
     for (const p of pending) {
+      const fixtureId = p.board.f.fixtureId;
       await attachToOpen(tx, p.board.f, open);
-      const kept = keptExtension.get(p.board.f.fixtureId);
+      const kept = keptExtension.get(fixtureId);
       if (kept !== undefined) {
         await tx`
           update fixture_external_play set checkin_extra_ms = ${kept.extraMs}, checkin_extensions = ${kept.extensions}, updated_at = now()
-           where fixture_id = ${p.board.f.fixtureId}`;
+           where fixture_id = ${fixtureId}`;
       }
+      // Outside the seat's try: a board that is not in its own round refuses the whole open (roundChanged), it is not "a seat
+      // that failed to queue".
+      const anchor = anchorOf(fixtureId);
       for (const seat of p.seats) {
-        if (await claimSeat(tx, p.board.f.fixtureId, seat.colour, open.id, now)) {
-          claims.push({ board: p.board, seat, anchor: anchorOf(p.board.f.fixtureId) });
+        // One savepoint per seat: the stamp and the rows are one unit. A seat whose mail cannot be built or queued (a link that
+        // cannot be minted, a body the outbox refuses) takes its stamp back with its rows, and never strands the other seat or
+        // the other boards - or aborts the transaction they share.
+        try {
+          const claim = await tx.savepoint(async (sp): Promise<Claim | null> => {
+            if (!(await claimSeat(sp, fixtureId, seat.colour, open.id, now))) return null;
+            const rowIds = await queueFixtureInvite(sp, {
+              fixture: p.board.f,
+              seat,
+              roundNo: a.roundNo,
+              roundOpenId: open.id,
+              roundOpenedAt: open.roundOpenedAt,
+              anchor,
+              origin: deps.origin,
+              now,
+              stampedAt: now,
+            });
+            return { board: p.board, seat, rowIds };
+          });
+          if (claim) claims.push(claim);
+        } catch (err) {
+          log.error({ fixtureId, colour: seat.colour, ...errFields(err) }, "openRound: queueing the invite failed; the seat was not stamped");
+          queueFailed.add(fixtureId);
         }
       }
+      // The attach bound the row to this open; a board none of whose seats holds a stamp reached nobody, so it is unbound again
+      // (as releaseSeat does for a seat it clears) - or "every send failed" would leave the round reading "someone was invited".
+      if (queueFailed.has(fixtureId)) await unbindIfUnstamped(tx, fixtureId, open.id);
     }
-    return { kind, open, claims, retireBoards: [...new Set(retireBoards)], closedSkips };
+    return { kind, open, claims, queueFailed: [...queueFailed], retireBoards: [...new Set(retireBoards)], closedSkips };
   });
 
   if (decision.kind === "nothing") {
@@ -514,44 +550,39 @@ export async function openRound(
     }
   }
 
-  // Sent AFTER the commit: a mail cannot be rolled back, so the stamp is
-  // committed first and released on a failed send. Each seat is its own
-  // attempt (review M1): a throw — from the sender, or from the un-stamp —
-  // fails THAT seat, which is reported, and never strands the seats after it
-  // as "invited" with no mail. The audit is written whatever happened.
+  // Sent AFTER the commit: a mail cannot be rolled back, so the stamps and their rows were committed first and the rows are
+  // attempted now, once each, in this request (`dispatchNow`); a row that cannot go yet is left to the worker. Each seat is
+  // reported from the STATUS of its rows (`seatOutcome`): `invited` (the provider took it), `retrying` (still being tried; the
+  // stamp stays), or `failed` (nothing can reach the player; the outbox's chess hook has already un-stamped the seat). A throw
+  // from the un-stamp of an addressless seat fails THAT seat only. The audit is written whatever happened.
   let invited = 0;
-  const failed = new Set<string>();
+  let retrying = 0;
+  const failed = new Set<string>(decision.queueFailed);
   try {
+    // A seat with no address at all queued no row: it reached nobody, so its stamp goes (as a failed send's always did).
+    const withRows: Claim[] = [];
     for (const c of decision.claims) {
-      const fixtureId = c.board.f.fixtureId;
-      let ok = false;
-      try {
-        ok = await sendFixtureInvite({
-          fixture: c.board.f,
-          seat: c.seat,
-          roundNo: a.roundNo,
-          roundOpenId: decision.open.id,
-          roundOpenedAt: decision.open.roundOpenedAt,
-          anchor: c.anchor,
-          origin: deps.origin,
-          now,
-        });
-      } catch (err) {
-        log.error({ fixtureId, colour: c.seat.colour, err }, "openRound: invite send threw");
-      }
-      if (ok) {
-        invited += 1;
+      if (c.rowIds.length > 0) {
+        withRows.push(c);
         continue;
       }
+      const fixtureId = c.board.f.fixtureId;
       failed.add(fixtureId);
       try {
         await releaseSeat(sql, fixtureId, c.seat.colour, now);
       } catch (err) {
         // The seat stays stamped with nothing sent. It is reported below as
         // send_failed, so the organiser's Resend is the way back.
-        log.error({ fixtureId, colour: c.seat.colour, err }, "openRound: un-stamp after a failed send threw");
+        log.error({ fixtureId, colour: c.seat.colour, ...errFields(err) }, "openRound: un-stamp of a seat with no address threw");
       }
     }
+    const outcomes = await dispatchAndClassify(withRows.map((c) => c.rowIds), now);
+    withRows.forEach((c, i) => {
+      const outcome = outcomes[i]!;
+      if (outcome === "invited") invited += 1;
+      else if (outcome === "retrying") retrying += 1;
+      else failed.add(c.board.f.fixtureId);
+    });
   } finally {
     const skipped: OpenRoundSkip[] = [
       ...decision.closedSkips,
@@ -567,6 +598,7 @@ export async function openRound(
         roundNo: a.roundNo,
         roundOpenedAt: decision.open.roundOpenedAt.toISOString(),
         invited,
+        retrying,
         skipped,
       },
       a.actorUserId,
@@ -576,5 +608,5 @@ export async function openRound(
     ...decision.closedSkips,
     ...[...failed].map((fixtureId) => ({ fixtureId, reason: "send_failed" as const })),
   ];
-  return { opened: true, invited, skipped };
+  return { opened: true, invited, retrying, skipped };
 }
