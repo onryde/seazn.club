@@ -66,13 +66,13 @@ export function reformatCorpus(module: AnySportModule, existing: GoldenCorpus, t
     // and the outcome, summary and deltas which format 2 records as the EFFECTIVE values (and, from format 2, the summaries and
     // overlay). The view handed to verifyStream is the corpus's OWN format's: a hybrid (a corpus that already holds a later
     // format's field) is a verifyStream finding of its own.
-    const recomputed = recomputeStream(module, raw, stream.events, stream.lineups, target);
+    const recomputed = recomputeStream(module, raw, stream.events, stream.lineups, target, stream.foldOptions);
     const ownView: ReplayedStream =
       format === 1
         ? { states: recomputed.states, outcome: recomputed.outcome, summary: recomputed.summary, deltas: recomputed.deltas }
         : { states: recomputed.states, outcome: recomputed.outcome, summary: recomputed.summary, deltas: recomputed.deltas, summaries: recomputed.summaries, overlay: recomputed.overlay };
     const found = verifyStream(module, existing, stream, ownView);
-    if (format === 1 && found.length > 0 && verifyStream(module, existing, stream, recomputeStream(module, raw, stream.events, stream.lineups, 1)).length === 0) {
+    if (format === 1 && found.length > 0 && verifyStream(module, existing, stream, recomputeStream(module, raw, stream.events, stream.lineups, 1, stream.foldOptions)).length === 0) {
       effectiveOnly.push(...found);
       effectiveOnlyStreams++;
     } else {

@@ -336,6 +336,7 @@ export const CORPUS_MUTATIONS: CorpusMutation[] = [
           events,
           ctx.stream.lineups,
           corpusFormat(ctx.corpus),
+          ctx.stream.foldOptions,
         );
       } catch (error) {
         return [`the mutated ledger no longer folds: ${String(error)}`];
@@ -437,6 +438,7 @@ export function mutationContext(
     stream.events,
     stream.lineups,
     corpusFormat(corpus),
+    stream.foldOptions,
   );
   return {
     module,
