@@ -719,7 +719,7 @@ export function RunSheetRow({
             })
           )}
           {/* D12 (T16): a round nobody has opened — nobody invited, nobody can take a seat. A fact, not a control:
-              the round is opened from its stage card above. */}
+              the round is opened in the Arbiter Panel (the Fixtures tab's entry card leads there). */}
           {onlinePlay?.unopened && (
             <span
               data-testid="run-sheet-round-unopened"

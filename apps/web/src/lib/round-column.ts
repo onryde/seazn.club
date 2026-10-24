@@ -117,8 +117,9 @@ export function countedHeld(held: readonly NeedsOrganiserExternalPlayRow[]): Nee
 }
 
 /** C6: the number of DISTINCT fixture ids over the counted held rows (`countedHeld`) and the flagged boards. A held board with
- *  an open flag is in both lists and counts once; a cancelled flagged board counts. The column's title and the Fixtures-tab
- *  entry line share this one function. */
+ *  an open flag is in both lists and counts once; a cancelled flagged board counts. Two callers, one call shape
+ *  (`attentionCount(held, flagged)`): the column's title (`round-queue-cards.tsx`) and the Fixtures tab's entry card (the division
+ *  page hands `entryStatus` this number), so the tab and the panel cannot count differently. */
 export function attentionCount(held: readonly NeedsOrganiserExternalPlayRow[], flagged: readonly FlaggedBoard[]): number {
   const ids = new Set<string>();
   for (const row of countedHeld(held)) ids.add(row.fixtureId);

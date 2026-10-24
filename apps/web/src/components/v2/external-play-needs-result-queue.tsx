@@ -8,9 +8,13 @@
 //     Lichess when a game is on file, and Settle — four buttons by colour, or
 //     "Pick the winner" for a drawn knockout game, which opens on its own;
 //   - Flagged: boards whose game carried on with OPEN flags. Evidence, never
-//     a verdict: the flag cards are the arbiter panel's own; "Review in
-//     arbiter panel" goes there, and "Let the game go on" (or, once the game
-//     is over, "Mark as reviewed") closes exactly the flags on screen.
+//     a verdict: the flag cards are the arbiter panel's own, and "Let the game
+//     go on" (or, once the game is over, "Mark as reviewed") closes exactly
+//     the flags on screen.
+//
+// Phase 2 (spec 2026-10-24-arbiter-round-column-design.md §8): this queue is on the Fixtures tab only where the Arbiter Panel is NOT
+// offered (online play switched off, or the club not offered online chess), so it links nowhere into it: the panel would 404.
+// Where the panel is offered, the same two lists are the round column's queue, there.
 //
 // Every action here FINISHES play or reviews it, so nothing is gated by the
 // online-chess flag (T20). The invite resend is not here: the server refuses
@@ -22,9 +26,7 @@
 import { useEffect, useMemo, useReducer, useState } from "react";
 import { useRouter } from "next/navigation";
 import { boardIsOver } from "@/lib/arbiter-view";
-import Link from "@/components/ui/console-link";
 import { apiV1 } from "@/lib/client-v1";
-import { routes } from "@/lib/routes";
 import type { FlaggedBoard } from "@/server/usecases/external-play/arbiter";
 import type { NeedsOrganiserExternalPlayRow } from "@/server/usecases/external-play/queue";
 import { arbiterDecision, decisionRunner, initialArbiterDecision, type ArbiterDecisionState, type ArbiterNotice } from "./arbiter-decision";
@@ -41,7 +43,6 @@ export type ExternalPlayQueueProps = {
   flagged: FlaggedBoard[];
   /** Flagged boards the viewer plays on: hidden from them (C1), counted. */
   ownFlagged: number;
-  slugs: { org: string; comp: string; div: string };
 };
 
 const CHIP = "self-start rounded-full px-2.5 py-[3px] text-xs font-semibold";
@@ -77,7 +78,7 @@ function rowNotice(fixtureId: string, decision: ArbiterDecisionState, over: bool
   );
 }
 
-export function ExternalPlayNeedsResultQueue({ held, flagged, ownFlagged, slugs }: ExternalPlayQueueProps) {
+export function ExternalPlayNeedsResultQueue({ held, flagged, ownFlagged }: ExternalPlayQueueProps) {
   const router = useRouter();
   const [decision, dispatch] = useReducer(arbiterDecision, null, initialArbiterDecision);
   // Flag times of day render after mount: the server's timezone is not the
@@ -263,13 +264,6 @@ export function ExternalPlayNeedsResultQueue({ held, flagged, ownFlagged, slugs 
                       <FlagCard key={flag.id} flag={flag} f={f} />
                     ))}
                     <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
-                      <Link
-                        href={routes.divisionArbiter(slugs.org, slugs.comp, slugs.div, b.fixtureId)}
-                        data-testid="external-play-review"
-                        className="min-h-11 content-center text-sm font-semibold text-[#5b21b6]"
-                      >
-                        {f.t("externalPlay.queue.review")}
-                      </Link>
                       <button
                         type="button"
                         data-testid="external-play-go-on"

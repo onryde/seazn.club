@@ -187,6 +187,8 @@ export type DictionaryKey =
   | "arbiter.emptyBoards"
   | "arbiter.entry.body"
   | "arbiter.entry.link"
+  | "arbiter.entry.status.checkin"
+  | "arbiter.entry.status.ready"
   | "arbiter.flag.aPlayer"
   | "arbiter.flag.cameraOff.agree"
   | "arbiter.flag.cameraOff.chip"

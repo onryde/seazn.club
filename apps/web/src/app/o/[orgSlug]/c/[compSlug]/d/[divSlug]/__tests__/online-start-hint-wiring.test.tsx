@@ -3,12 +3,14 @@
 // division starts (a round cannot be opened before it), so the stage cards could not tell "not started" from "nothing
 // left to open".
 //
-// The division page now hands the stage cards `onlineAwaitsStart`: the SAME gates that decide `openRounds` (an organiser
-// who can act on a chess division's fixtures tab, online play = Lichess now, the club offered online chess) plus the
-// shared "not started" predicate (`divisionScoringClosed`, division-phase.ts — what the Start button, the scoring door
-// and the open-round guard ask). This suite drives the REAL page with each gate flipped alone, and the start itself.
-// Same scaffold as online-chess-flag-wiring.test.tsx beside it: no jsdom, the async server component called directly,
-// its returned tree walked, the flag asked through the real helper with PostHog doubled at its boundary.
+// The division page hands the stage cards `onlineAwaitsStart`: an organiser who can act on a chess division's fixtures tab,
+// online play = Lichess now, the club offered online chess, plus the shared "not started" predicate (`divisionScoringClosed`,
+// division-phase.ts - what the Start button, the scoring door and the open-round guard ask). Phase 2 (spec
+// 2026-10-24-arbiter-round-column-design.md §8) moved the Open round control into the Arbiter Panel, so the cards no longer
+// get the rounds map; the hint STAYS, because the Start button is on this tab. This suite drives the REAL page with each gate
+// flipped alone, and the start itself. Same scaffold as online-chess-flag-wiring.test.tsx beside it: no jsdom, the async
+// server component called directly, its returned tree walked, the flag asked through the real helper with PostHog doubled at
+// its boundary.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 
@@ -18,6 +20,8 @@ const division = vi.hoisted(() => ({
   onlinePlay: "off" as "off" | "lichess",
   status: "setup" as "setup" | "scheduled" | "active" | "completed",
 }));
+const comp = vi.hoisted(() => ({ frozen: false }));
+const fx = vi.hoisted(() => ({ rows: [] as Record<string, unknown>[] }));
 const flags = vi.hoisted(() => ({ isServerFeatureEnabled: vi.fn() }));
 const queue = vi.hoisted(() => ({
   listNeedsOrganiserExternalPlay: vi.fn(),
@@ -34,7 +38,7 @@ vi.mock("@/server/usecases/stages", () => ({
   getStageRosterDrift: vi.fn(async () => ({ ghosts: [], unplaced: [] })),
 }));
 vi.mock("@/server/usecases/competitions", () => ({
-  getCompetition: vi.fn(async () => ({ id: "comp-1", frozen: false, visibility: "public", slug: "comp-one" })),
+  getCompetition: vi.fn(async () => ({ id: "comp-1", frozen: comp.frozen, visibility: "public", slug: "comp-one" })),
 }));
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: vi.fn(async () => "en") }));
 vi.mock("@/lib/i18n", () => ({
@@ -61,7 +65,7 @@ vi.mock("@/server/usecases/divisions", () => ({
 }));
 vi.mock("@/server/usecases/division-slots", () => ({ divisionConsumesSlotOnArchive: vi.fn(async () => false) }));
 vi.mock("@/server/usecases/fixtures", () => ({
-  listDivisionFixtures: vi.fn(async () => []),
+  listDivisionFixtures: vi.fn(async () => fx.rows),
   listFixtureHeadlines: vi.fn(async () => ({})),
 }));
 vi.mock("@/server/usecases/entrants", () => ({ listEntrants: vi.fn(async () => []) }));
@@ -111,6 +115,7 @@ vi.mock("@/lib/posthog-server", async (importOriginal) => {
 
 
 import DivisionPage from "../page";
+import { ArbiterEntryCard } from "@/components/v2/arbiter-entry-card";
 import { StagesPanel } from "@/components/v2/stages-panel";
 import { forgetOnlineChessFlagCache } from "@/server/usecases/external-play/online-chess-flag";
 import type { DivisionStatus } from "@/lib/division-phase";
@@ -140,7 +145,7 @@ const renderPage = (tab = "fixtures") =>
 const panelProps = async (tab = "fixtures") => {
   const panels = findAll(await renderPage(tab), StagesPanel);
   expect(panels, `${tab}: the stage panel mounts once`).toHaveLength(1);
-  return panels[0]!.props as { onlineAwaitsStart?: unknown; openRounds?: unknown };
+  return panels[0]!.props as { onlineAwaitsStart?: unknown };
 };
 
 function flagOn() {
@@ -158,6 +163,8 @@ beforeEach(() => {
   division.sport_key = "boardgame";
   division.onlinePlay = "lichess";
   division.status = "setup";
+  comp.frozen = false;
+  fx.rows = [];
   pageAuth.requireDivisionPage.mockReset().mockResolvedValue(PAGE);
   queue.listOpenRounds.mockReset().mockResolvedValue([]);
   queue.listNeedsOrganiserExternalPlay.mockReset().mockResolvedValue([]);
@@ -173,33 +180,67 @@ afterEach(() => {
 // The rulebook, not the predicate under test: a division is started once it is active (and stays so when completed);
 // setup and scheduled have not been started (division-phase.ts: "scoring opens only after the explicit start").
 const AWAITS_START: Record<DivisionStatus, boolean> = { setup: true, scheduled: true, active: false, completed: false };
+const FIXTURE = {
+  id: "f1",
+  stage_id: "st-1",
+  status: "scheduled",
+  scheduled_at: null,
+  home_entrant_id: "e1",
+  away_entrant_id: "e2",
+  home_slot_label: null,
+  away_slot_label: null,
+  outcome: null,
+  round_no: 1,
+  seq_in_round: 1,
+};
 
 describe("division page: the stage cards are told the online division has not started", () => {
-  it("every status: the hint is wanted before the start and gone after it (and the rounds map follows the start)", async () => {
+  it("the start hint stays on the stage card when the division has not started: every status, the hint is wanted before the start and gone after it - and no rounds map is handed down in any of them", async () => {
     let checked = 0;
     for (const status of Object.keys(AWAITS_START) as DivisionStatus[]) {
       division.status = status;
       const props = await panelProps();
       expect(props.onlineAwaitsStart, `${status}: told as a boolean, not left undefined`).toBe(AWAITS_START[status]);
-      // The map is the existing gate's: handed down (empty or not) for every status of an online division.
-      expect(props.openRounds, `${status}: the rounds map is still the existing gates' answer`).toEqual({});
+      // The Open round control moved into the panel: there is no such prop to hand down, even an empty one.
+      expect("openRounds" in props, `${status}: the stage cards take no rounds`).toBe(false);
       checked++;
     }
     expect(checked).toBe(Object.keys(AWAITS_START).length);
     expect(checked, "anti-vacuity: all four statuses swept").toBe(4);
   });
 
-  it("the sequence: not started, then started — the same division, the hint goes and the rounds arrive", async () => {
+  it("the sequence: not started, then started - the same division, the hint goes and the entry card names the round to open", async () => {
+    fx.rows = [FIXTURE];
     division.status = "scheduled";
     expect((await panelProps()).onlineAwaitsStart).toBe(true);
     division.status = "active";
-    queue.listOpenRounds.mockResolvedValue([{ stageId: "s1", roundNo: 1 }]);
-    const started = await panelProps();
-    expect(started.onlineAwaitsStart).toBe(false);
-    expect(started.openRounds).toEqual({ s1: [{ stageId: "s1", roundNo: 1 }] });
+    queue.listOpenRounds.mockResolvedValue([{ stageId: "s1", roundNo: 1, deadlineAt: null, press: "open" }]);
+    const tree = await renderPage();
+    expect((findAll(tree, StagesPanel)[0]!.props as { onlineAwaitsStart?: unknown }).onlineAwaitsStart).toBe(false);
+    const entry = findAll(tree, ArbiterEntryCard);
+    expect(entry).toHaveLength(1);
+    expect((entry[0]!.props as { line: unknown }).line).toEqual({ kind: "ready", roundNo: 1 });
   });
 
-  it("each gate alone: online play off, the club not offered online chess, PostHog down, a viewer, another sport — never told", async () => {
+  it("one flag answer feeds both: a not-started division with fixtures asks the flag once, and gets the hint AND the card", async () => {
+    fx.rows = [FIXTURE];
+    division.status = "setup";
+    const tree = await renderPage();
+    expect(flags.isServerFeatureEnabled).toHaveBeenCalledTimes(1);
+    expect((findAll(tree, StagesPanel)[0]!.props as { onlineAwaitsStart?: unknown }).onlineAwaitsStart).toBe(true);
+    expect(findAll(tree, ArbiterEntryCard)).toHaveLength(1);
+  });
+
+  it("not started and nothing generated yet: the hint (there is a Start to press), but no entry card - there is no board to watch", async () => {
+    fx.rows = [];
+    division.status = "setup";
+    const tree = await renderPage();
+    expect((findAll(tree, StagesPanel)[0]!.props as { onlineAwaitsStart?: unknown }).onlineAwaitsStart).toBe(true);
+    expect(findAll(tree, ArbiterEntryCard)).toHaveLength(0);
+    expect(flags.isServerFeatureEnabled).toHaveBeenCalledTimes(1);
+  });
+
+  it("each gate alone: online play off, the club not offered online chess, PostHog down, a viewer, a billing-frozen organiser, another sport - never told", async () => {
     const cells: [string, () => void][] = [
       ["online play is off", () => (division.onlinePlay = "off")],
       ["the club is not offered online chess", () => flagOff()],
@@ -209,6 +250,7 @@ describe("division page: the stage cards are told the online division has not st
         flags.isServerFeatureEnabled.mockReset().mockRejectedValue(new Error("down"));
       }],
       ["a viewer who cannot edit", () => pageAuth.requireDivisionPage.mockResolvedValue({ ...PAGE, canEdit: false })],
+      ["a billing-frozen organiser (the stage cards' controls are editable's)", () => (comp.frozen = true)],
       ["another sport", () => (division.sport_key = "generic")],
     ];
     let checked = 0;
@@ -216,6 +258,7 @@ describe("division page: the stage cards are told the online division has not st
       division.sport_key = "boardgame";
       division.onlinePlay = "lichess";
       division.status = "setup"; // not started: the hint WOULD show if the gates passed
+      comp.frozen = false;
       pageAuth.requireDivisionPage.mockResolvedValue(PAGE);
       flagOn();
       arm();

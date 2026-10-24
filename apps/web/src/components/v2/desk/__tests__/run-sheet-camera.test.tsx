@@ -325,11 +325,16 @@ describe("StagesPanel threads the map and the arbiter link to the run sheet", ()
     canEdit: true, tz: "UTC", orgTz: "UTC", canExport: false, viewerPlan: "community" as const, phase: "scheduled" as const,
   };
 
-  it("an entry for the row ⇒ its chips, the camera chip leading to the arbiter panel for THAT fixture; no map ⇒ none", () => {
-    const h = renderToStaticMarkup(<StagesPanel {...props} onlinePlay={{ "f-s1": online({ cameraFlagCount: 2, held: "aborted" }) }} />);
+  it("an entry for the row ⇒ its chips, the camera chip leading to the arbiter panel for THAT fixture when the page offers the panel; no map ⇒ none", () => {
+    const entry = { "f-s1": online({ cameraFlagCount: 2, held: "aborted" }) };
+    const h = renderToStaticMarkup(<StagesPanel {...props} onlinePlay={entry} arbiterHref="/o/org/c/comp/d/div/arbiter" />);
     // Typed from the route's contract, not built with the helper.
     expect(h).toContain('href="/o/org/c/comp/d/div/arbiter?fixture=f-s1"');
     expect(h).toContain('href="#external-play-queue-row-f-s1"');
+    // The pair: the page did not offer the panel (`arbiterHref` absent), the camera chip is still there but leads nowhere.
+    const notOffered = renderToStaticMarkup(<StagesPanel {...props} onlinePlay={entry} />);
+    expect(notOffered, "the chip renders without the link").toContain("run-sheet-camera-chip");
+    expect(notOffered, "no link into the panel").not.toContain("/arbiter");
     const bare = renderToStaticMarkup(<StagesPanel {...props} />);
     expect(bare, "the positive pair: the same row renders").toContain('data-fixture-no="1"');
     expect(bare).not.toContain("run-sheet-camera-chip");

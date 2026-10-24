@@ -1,9 +1,11 @@
 // Final review I-1 - the inert seam, proved closed from the PRODUCER's side. `listOpenRounds` has computed
 // `OpenRoundView.batches` since the capacity build and its own test pins the numbers; the control used to read
-// `batches.length` and nothing else, so the organiser never saw a group. A fixture handed to the control proves the
+// `batches.length` and nothing else, so the organiser never saw a group. A fixture handed to the consumer proves the
 // fixture (AGENTS.md class 1), so this drives the REAL chain: a round seeded through the product's producers, opened by
-// `openRound`, read by `listOpenRounds` (the page hands exactly that value to the control), carried across the server ->
-// client boundary as plain JSON, and drawn by `OpenRoundControl`.
+// `openRound`, read by `listOpenRounds` (the Arbiter Panel's page hands exactly that value to the column), carried across
+// the server -> client boundary as plain JSON, and drawn by the round column's `CheckinHero`. Phase 2 (spec
+// 2026-10-24-arbiter-round-column-design.md §8) moved the round control from the Fixtures tab into that column, so the
+// consumer under test is the column's hero; the premise (the groups are drawn, from the view the producer made) is unchanged.
 //
 // Every expected value comes from the rows on file (`fixtures`, `stage_round_opens`) and the window constants - never
 // from the view or the component under test. Single-sport by construction: online play exists only for `boardgame`.
@@ -11,6 +13,10 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeliverMessage } from "@/server/email-outbox/transport";
 import { stubOutboxEnv, type SentInvite } from "@/server/usecases/__tests__/_invite-mail";
 import { renderToStaticMarkup } from "react-dom/server";
+import { DictProvider } from "@/components/i18n/dict-provider";
+import enUi from "@/dictionaries/en/ui.json";
+import type { ArbiterRound } from "@/lib/arbiter-view";
+import type { Dict } from "@/lib/i18n-constants";
 import { sql } from "@/lib/db";
 import { fmtTime } from "@/lib/format";
 import { messages } from "@/lib/messages";
@@ -35,7 +41,9 @@ beforeEach(() => stubOutboxEnv());
 import { openRound } from "@/server/usecases/external-play/open-round";
 import { listOpenRounds } from "@/server/usecases/external-play/open-round-view";
 import { seedOnlineChessRoundWithRankedBoard } from "@/server/usecases/__tests__/_external-play-seed";
-import { OpenRoundControl } from "../open-round-control";
+import { CheckinHero } from "../../arbiter/round-column";
+import { initialOpenRoundUi } from "../open-round-state";
+import type { OpenRoundHandle } from "../use-open-round";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const en = messages as unknown as Record<string, string>;
@@ -52,17 +60,27 @@ afterAll(async () => {
 
 type Seeded = Awaited<ReturnType<typeof seedOnlineChessRoundWithRankedBoard>>;
 
-/** The page's own hand-off: the view for the division, as plain data across the server -> client boundary. */
+/** The handle the panel shares for the round on screen: nothing is pressed in this test, so every press is a no-op. */
+const HANDLE: OpenRoundHandle = { state: initialOpenRoundUi(), ask: () => {}, cancel: () => {}, open: () => {}, resend: () => {} };
+
+/** The page's own hand-off: the view for the division, as plain data across the server -> client boundary, then the column's
+ *  check-in hero drawing it (the hero is what the Arbiter Panel mounts for a round that is open; no boards on screen needed). */
 async function drawn(r: Seeded, now: Date): Promise<{ view: OpenRoundView; html: string }> {
   const views = await listOpenRounds(r.owner, r.divisionId, { now });
   const hit = views.filter((v) => v.roundNo === 1);
   expect(hit, "round 1 is listed once").toHaveLength(1);
   const view = JSON.parse(JSON.stringify(hit[0]!)) as OpenRoundView;
-  return { view, html: renderToStaticMarkup(<OpenRoundControl round={view} tz={TZ} />) };
+  const round: ArbiterRound = { stageId: r.stageId, stageName: view.stageName, roundNo: 1, timeControl: null, boards: [], ownBoards: 0, current: true, extendableBoards: 0 };
+  const html = renderToStaticMarkup(
+    <DictProvider dict={enUi as unknown as Dict} locale="en">
+      <CheckinHero round={round} view={view} tz={TZ} nowMs={now.getTime()} openRound={HANDLE} roundExtend={null} />
+    </DictProvider>,
+  );
+  return { view, html };
 }
 
 const rowsOf = (h: string) =>
-  [...h.matchAll(/<li([^>]*data-testid="open-round-batch-(\d+)"[^>]*)>(.*?)<\/li>/gs)].map((m) => {
+  [...h.matchAll(/<li([^>]*data-testid="arbiter-column-batch-(\d+)"[^>]*)>(.*?)<\/li>/gs)].map((m) => {
     const field = (name: string) => new RegExp(`data-field="${name}"[^>]*>([^<]*)<`).exec(m[3]!)?.[1];
     return { i: Number(m[2]), boards: field("boards"), opens: field("opens"), closes: field("closes") };
   });
@@ -84,14 +102,14 @@ async function groupsOnFile(r: Seeded) {
 }
 
 describe.skipIf(!HAS_DB)("the organiser's check-in groups, through the real producer (final review I-1)", () => {
-  it("a staggered round the server opened: the control draws one row per group on file, each with its own boards, opening and closing", async () => {
+  it("a staggered round the server opened: the column draws one row per group on file, each with its own boards, opening and closing", async () => {
     // Rows 1..2S+1: board 1, 2S-1 withdrawn rows, then one real board - groups of S, S and 1 by rank.
     const r = await seedOnlineChessRoundWithRankedBoard({ roundNo: 1, cameraPolicy: "required" }, 2 * S);
     await openRound({ stageId: r.stageId, roundNo: 1, actorUserId: r.ownerUserId }, { now: T0 });
     const want = await groupsOnFile(r);
     expect(want.length, "premise: three groups on file").toBe(3);
     const { view, html } = await drawn(r, new Date(T0.getTime() + 60_000));
-    expect(view.batches.length, "the view really carries the groups the control must draw").toBe(want.length);
+    expect(view.batches.length, "the view really carries the groups the column must draw").toBe(want.length);
 
     const rows = rowsOf(html);
     expect(rows, "one drawn row per group on file").toHaveLength(want.length);
@@ -99,26 +117,31 @@ describe.skipIf(!HAS_DB)("the organiser's check-in groups, through the real prod
     want.forEach((g, i) => {
       expect(rows[i]!.i).toBe(i);
       expect(rows[i]!.boards, `group ${i} boards`).toBe(
-        esc(g.from === g.to ? t("arbiter.boardNo", { n: g.from }) : t("runsheet.round.batchBoards", { from: g.from, to: g.to })),
+        esc(g.from === g.to ? t("arbiter.boardNo", { n: g.from }) : t("arbiter.column.batchBoards", { from: g.from, to: g.to })),
       );
       expect(rows[i]!.opens, `group ${i} opens`).toBe(esc(t("runsheet.round.batchOpens", { time: fmtTime(TZ, g.opens) })));
       expect(rows[i]!.closes, `group ${i} closes`).toBe(esc(t("runsheet.round.batchCloses", { time: fmtTime(TZ, g.closes) })));
       checked += 1;
     });
     expect(checked, "anti-vacuity: groups checked").toBe(3);
-    // The point of the finding: group 0 closes BEFORE the last group does, and the card says so.
+    // The point of the finding: group 0 closes BEFORE the last group does, and the column says so (two different closing times
+    // are on the page, not the one deadline of the last group).
     expect(want[0]!.closes.getTime(), "premise: group 0's no-shows reach the organiser before the last group closes").toBeLessThan(want[2]!.closes.getTime());
-    expect(html, "the single 'open until' line that named only the last group's close").not.toContain(esc(en["runsheet.round.openUntil"]!.split("{time}")[0]!));
+    expect(new Set(rows.map((x) => x.closes)).size, "the three groups do not all close together").toBe(3);
+    expect(html, "the hero around the groups is mounted").toContain('data-testid="arbiter-checkin-hero"');
   });
 
-  it("the pair: a round that does not stagger (camera off) draws no groups and keeps the one 'open until' line - the same producer, the same control", async () => {
+  it("the pair: a round that does not stagger (camera off) draws no groups - the same producer, the same hero, one window for the whole round", async () => {
     const r = await seedOnlineChessRoundWithRankedBoard({ roundNo: 1, cameraPolicy: "off" }, 2 * S);
     await openRound({ stageId: r.stageId, roundNo: 1, actorUserId: r.ownerUserId }, { now: T0 });
     const { view, html } = await drawn(r, new Date(T0.getTime() + 60_000));
     expect(view.staggered, "premise: the open stored 'one batch'").toBe(false);
     expect(rowsOf(html)).toEqual([]);
-    expect(html).not.toContain('data-testid="open-round-batches"');
-    expect(html).toContain(esc(t("runsheet.round.openUntil", { time: fmtTime(TZ, new Date(T0.getTime() + DEADLINE_AFTER_MS)) })));
+    expect(html).not.toContain('data-testid="arbiter-column-batches"');
+    // Positive pair: the hero IS drawn (so the absence above is the groups', not a render that drew nothing), and the view's one
+    // deadline is the round's open + the window on file.
+    expect(html).toContain('data-testid="arbiter-checkin-hero"');
+    expect(view.deadlineAt, "the one deadline the whole round shares").toBe(new Date(T0.getTime() + DEADLINE_AFTER_MS).toISOString());
   });
 
   it("before the press nothing is scheduled, so a staggered round draws no groups yet (its span is in the confirmation)", async () => {

@@ -6430,6 +6430,8 @@
   "arbiter.emptyBoards": "This round has no boards to watch.",
   "arbiter.entry.link": "Arbiter panel",
   "arbiter.entry.body": "Watch one player's camera at a time and review each board's flags.",
+  "arbiter.entry.status.ready": "Round {round} is ready to open",
+  "arbiter.entry.status.checkin": "Round {round} check-in is open",
   "arbiter.invite.sent": "Sent",
   "arbiter.invite.delivered": "Delivered",
   "arbiter.invite.delayed": "Delayed",

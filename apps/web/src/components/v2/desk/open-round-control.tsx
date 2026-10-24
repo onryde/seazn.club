@@ -1,21 +1,17 @@
 "use client";
 
-// T16 (D12, canvas OpenRoundPhone / OpenRoundConfirmPhone / OpenRoundDesktop)
-// — the organiser opens an online round. A round is PAIRED automatically and
-// OPENED by hand: until then nobody is invited and nobody can take a seat.
-// This control states which (paired, open, still owed), lists every pairing
-// with whether its invite went out and when, and opens the round only after a
-// confirmation that says how many players and which pairings it reaches.
+// T16 (D12, canvas OpenRoundPhone / OpenRoundConfirmPhone / OpenRoundDesktop) - what the organiser reads when a round is opened:
+// the confirmation's body (how many players and which pairings the press reaches), the invite state of each pairing, the
+// check-in groups of a staggered round, and the words of the open's and the resend's answers. The CONTROL that used to mount
+// these on each stage card is gone (phase 2, spec 2026-10-24-arbiter-round-column-design.md §8): the round is opened in the Arbiter
+// Panel's column (arbiter/round-column.tsx), which reads the very same helpers from here, so the two never word a press differently.
 //
-// What a press will do (`round.press`) is the reader's prediction of the
-// server's own decision (open-round-view.ts), so the control never offers a
-// press the server refuses as already open. It counts the UNINVITED — never
-// "is anyone invited?" — so a pairing that arrives after the open is still
-// offered (recurring failure class 13) and nobody is invited twice.
+// What a press will do (`round.press`) is the reader's prediction of the server's own decision (open-round-view.ts), so nothing
+// offers a press the server refuses as already open. The counts here are of the UNINVITED - never "is anyone invited?" - so a
+// pairing that arrives after the open is still offered (recurring failure class 13) and nobody is invited twice.
 //
-// Rendered by the stage card only while the club is offered online chess
-// (T20: an open STARTS play); the page decides that, not this component.
-// One DOM, mobile-first: one column, `min-w-0` down every name, 44px targets.
+// Offered only while the club is offered online chess (T20: an open STARTS play); the page decides that, not these helpers.
+// One DOM, mobile-first: `min-w-0` down every name.
 import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { fmtTime } from "@/lib/format";
 import type { MessageKey } from "@/lib/messages";
@@ -31,12 +27,7 @@ import {
   type OpenRoundPairing,
   type OpenRoundView,
 } from "@/lib/open-round";
-import { ConfirmDialog } from "../confirm-dialog";
-import { extendEdgesOf, liveExtendableCount, liveRoundRefusals, roundWhy } from "@/lib/checkin-extend";
-import { extendFailureText, extendHelperLine, extendRoundLabel, extendRoundLines, roundWhyLine, type ExtendCopy } from "../checkin-extend-ui";
-import { useExtendClock } from "../use-extend-clock";
 import type { OpenRoundNotice, ResendNotice } from "./open-round-state";
-import { useOpenRound } from "./use-open-round";
 
 type Msg = ReturnType<typeof useMsg>;
 type Plural = ReturnType<typeof useMsgPlural>;
@@ -44,10 +35,6 @@ type Plural = ReturnType<typeof useMsgPlural>;
 const INK = "text-[#2e1065]";
 const MUTED = "text-[#6b5b8a]";
 const SOFT = "text-[#4a3a6b]";
-const BUTTON_PRIMARY =
-  "inline-flex min-h-11 items-center justify-center rounded-lg bg-[#7c3aed] px-4 text-sm font-semibold text-white hover:bg-[#5b21b6] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7c3aed] focus-visible:ring-offset-2 disabled:opacity-60";
-const BUTTON_QUIET =
-  "inline-flex min-h-11 items-center justify-center rounded-lg border border-[#e7e3f3] bg-white px-3 text-sm font-medium text-[#5b21b6] hover:bg-[#f5f3ff] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7c3aed] disabled:opacity-60";
 
 export const owedPlayers = (round: OpenRoundView) => round.pairings.reduce((n, p) => n + p.owedSeats, 0);
 
@@ -89,16 +76,12 @@ const boardLabel = (p: OpenRoundPairing, msg: Msg) => msg("arbiter.boardNo", { n
  *  A named refusal, not an assumption: `OpenRoundBatch` types each time `string | null` on its own, and the producer
  *  (open-round-view.ts: one open row feeds every batch) never makes a batch with one time and not the other, or a round with
  *  some batches timed and some not - but the type allows both, and a row with a hole in it is worse than no list, so either
- *  draws nothing and the single "open until" line stays the truth. Both are reached by open-round-control.test.tsx. */
+ *  draws nothing and the hero's one clock (the next board to close) stays the truth. Both are reached by open-round-control.test.tsx. */
 export function timedBatches(round: OpenRoundView): (OpenRoundBatch & { opensAt: string; closesAt: string })[] | null {
   if (round.press === "reopen" || !round.staggered || round.batches.length < 2) return null;
   const timed = round.batches.flatMap((b) => (b.opensAt !== null && b.closesAt !== null ? [{ ...b, opensAt: b.opensAt, closesAt: b.closesAt }] : []));
   return timed.length === round.batches.length ? timed : null;
 }
-
-/** A group's boards: "Boards 11–20", or "Board 21" for a group of one. */
-const batchBoards = (b: OpenRoundBatch, msg: Msg) =>
-  b.fromBoard === b.toBoard ? msg("arbiter.boardNo", { n: b.fromBoard }) : msg("runsheet.round.batchBoards", { from: b.fromBoard, to: b.toBoard });
 
 /** The confirmation's body: who this press reaches and what starts. Exported for its static test. */
 export function OpenRoundConfirmBody({ round, tz }: { round: OpenRoundView; tz: string }) {
@@ -201,220 +184,4 @@ export function resendNoticeText(n: ResendNotice, msg: Msg, plural: Plural): str
   if (n.code === "ROUND_CHANGED") return msg("externalPlay.resend.roundChanged");
   if (n.code === ONLINE_CHESS_DISABLED_CODE) return msg("runsheet.round.err.disabled");
   return msg("runsheet.round.resendFailed");
-}
-
-export function OpenRoundControl({ round, tz }: { round: OpenRoundView; tz: string }) {
-  const msg = useMsg();
-  const plural = useMsgPlural();
-  const handle = useOpenRound(round);
-  const { state } = handle;
-  // The ticking clock for "+5 min" (owner, 2026-10-19: only inside a board's check-in window, to the millisecond, not up to a poll late).
-  // Runs only while there is a window to watch: the round is open and some board's window is still ahead or running.
-  const clockMs = useExtendClock(round.state === "open" && round.extendWindows.length > 0, extendEdgesOf(round.extendWindows));
-
-  // The reader never sends a round with no pairing (openRound: no_fixtures); a guard, not a comment.
-  if (round.pairings.length === 0) {
-    return (
-      <p className={`px-4 py-3 text-sm ${MUTED}`} data-testid="open-round-empty">
-        {msg("externalPlay.openRound.noFixtures")}
-      </p>
-    );
-  }
-
-  // One (stage, round) per control on a page: a stable id, no useId.
-  const headingId = `open-round-${round.stageId}-${round.roundNo}`;
-  const owed = owedPlayers(round);
-  const canPress = round.press !== "none";
-  const stateLine =
-    round.state === "paired"
-      ? msg("runsheet.round.paired")
-      : round.press === "reopen"
-        ? msg("runsheet.round.reopenState")
-        : round.press === "none"
-          ? msg(OPEN_ROUND_ALREADY_OPEN_KEY as MessageKey)
-          : plural("runsheet.round.owed", owed);
-  const title =
-    round.press === "reinvite"
-      ? msg("runsheet.round.confirmTitleReinvite", { round: round.roundNo })
-      : round.press === "reopen"
-        ? msg("runsheet.round.confirmTitleReopen", { round: round.roundNo })
-        : msg("runsheet.round.confirmTitle", { round: round.roundNo });
-  const cta = round.press === "reinvite" ? plural("runsheet.round.inviteCta", owed) : msg("runsheet.round.openCta");
-  const confirmLabel = round.press === "reinvite" ? plural("runsheet.round.inviteCta", owed) : plural("runsheet.round.confirmCta", owed);
-  const notice = state.notice ? openNoticeText(state.notice, round, msg, plural) : null;
-  // Spec §3.2.2: "+5 min to the round" - offered while a board of it would accept it (the server's own count), and its answer
-  // stays on screen after the count drops (every board capped, say).
-  const copy: ExtendCopy = { t: (key, vars) => msg(key as MessageKey, vars), plural, hm: (iso) => fmtTime(tz, iso) };
-  const extendLines =
-    state.extendNotice === null
-      ? null
-      : state.extendNotice.kind === "answered"
-        ? extendRoundLines(state.extendNotice.result, copy)
-        : [extendFailureText(state.extendNotice.code, copy)];
-  // The server's count (`extendableBoards`) stands until the viewer's clock is known; after that the windows it handed over are counted
-  // against the ticking clock, so the button leaves the screen at the deadline and arrives at an opening without a refresh.
-  const reach = clockMs === null ? round.extendableBoards : liveExtendableCount(round.extendWindows, clockMs);
-  const offersExtend = round.state === "open" && reach > 0;
-  // Where the button is not offered, the reason stands in its place (owner, 2026-10-19), from the same two facts the count is made of:
-  // the windows on the ticking clock and the server's tally of every other board. Nothing for a round not opened or one with no boards.
-  const why = round.state === "open" && !offersExtend ? roundWhy(liveRoundRefusals(round.extendRefusals, round.extendWindows, clockMs)) : null;
-  // Each group has its OWN deadline: group 0's no-shows reach the organiser before the last group has even opened, so a
-  // staggered round draws the groups and not the one "open until" line, which could only name the last group's close.
-  const batches = timedBatches(round);
-
-  return (
-    <section
-      aria-labelledby={headingId}
-      data-testid="open-round"
-      data-state={round.state}
-      data-press={round.press}
-      data-uninvited-count={owed}
-      className="min-w-0 border-t border-[#e7e3f3] px-4 py-3"
-    >
-      <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
-        <h4 id={headingId} className={`text-sm font-semibold ${INK}`}>
-          {msg("runsheet.round.heading", { round: round.roundNo })}
-        </h4>
-        {round.scheduledAt !== null && (
-          <time dateTime={round.scheduledAt} className={`text-xs ${MUTED}`}>
-            {msg("runsheet.round.scheduled", { time: fmtTime(tz, round.scheduledAt) })}
-          </time>
-        )}
-      </div>
-      <p className={`mt-1 text-sm font-medium ${SOFT}`} data-testid="open-round-state">
-        {stateLine}
-      </p>
-      {round.state === "paired" && (
-        <p className={`mt-0.5 text-xs ${MUTED}`}>
-          {plural("runsheet.round.pairedLede", round.pairings.length, { players: owed })}
-        </p>
-      )}
-      {round.state === "open" && round.deadlineAt !== null && round.press !== "reopen" && batches === null && (
-        <p className={`mt-0.5 text-xs ${MUTED}`}>{msg("runsheet.round.openUntil", { time: fmtTime(tz, round.deadlineAt) })}</p>
-      )}
-      {canPress && (
-        <button
-          type="button"
-          data-testid="open-round-cta"
-          disabled={state.busy !== null}
-          onClick={handle.ask}
-          className={`${BUTTON_PRIMARY} mt-2 w-full sm:w-auto`}
-        >
-          {cta}
-        </button>
-      )}
-      {(offersExtend || extendLines !== null || why !== null) && (
-        <div data-testid="open-round-extend" className="mt-2 flex min-w-0 flex-col items-start gap-1">
-          {offersExtend && (
-            <>
-              <button
-                type="button"
-                data-testid="open-round-extend-cta"
-                disabled={state.busy !== null}
-                aria-busy={state.busy?.kind === "extend" || undefined}
-                onClick={handle.extend}
-                className={`${BUTTON_QUIET} w-full sm:w-auto`}
-              >
-                {state.busy?.kind === "extend" ? msg("externalPlay.checkinExtend.busy") : extendRoundLabel(copy)}
-              </button>
-              <p data-testid="open-round-extend-helper" className={`text-xs ${MUTED}`}>
-                {extendHelperLine(copy)} {plural("externalPlay.checkinExtend.roundHint", reach)}
-              </p>
-            </>
-          )}
-          {why !== null && (
-            <p data-testid="open-round-extend-why" data-why={why.code} className={`text-sm ${SOFT}`}>
-              {roundWhyLine(why, copy)}
-            </p>
-          )}
-          <div role="status" data-testid="open-round-extend-notice" className={`flex min-w-0 flex-col gap-0.5 text-sm ${SOFT}`}>
-            {(extendLines ?? []).map((line, i) => (
-              <p key={i}>{line}</p>
-            ))}
-          </div>
-        </div>
-      )}
-      {notice !== null && (
-        <div role="status" data-testid="open-round-notice" className={`mt-2 space-y-0.5 text-sm ${SOFT}`}>
-          {notice.map((line, i) => (
-            <p key={i}>{line}</p>
-          ))}
-        </div>
-      )}
-
-      {batches !== null && (
-        <div className="mt-3 min-w-0" data-testid="open-round-batches">
-          <p className={`text-xs ${MUTED}`}>{msg("runsheet.round.batchesLede")}</p>
-          <ul aria-label={msg("runsheet.round.batchesLabel", { round: round.roundNo })} className="mt-1 min-w-0 divide-y divide-[#e7e3f3] rounded-lg border border-[#e7e3f3] bg-[#faf9ff] px-3">
-            {batches.map((b, i) => (
-              <li
-                key={i}
-                data-testid={`open-round-batch-${i}`}
-                data-opens-at={b.opensAt}
-                data-closes-at={b.closesAt}
-                className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5 py-2"
-              >
-                <span data-field="boards" className={`min-w-28 shrink-0 text-sm font-semibold ${INK}`}>
-                  {batchBoards(b, msg)}
-                </span>
-                <span data-field="opens" className={`text-xs ${SOFT}`}>
-                  {msg("runsheet.round.batchOpens", { time: fmtTime(tz, b.opensAt) })}
-                </span>
-                <span data-field="closes" className={`text-xs ${SOFT}`}>
-                  {msg("runsheet.round.batchCloses", { time: fmtTime(tz, b.closesAt) })}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      <ul aria-label={msg("runsheet.round.pairingsLabel", { round: round.roundNo })} className="mt-3 min-w-0 divide-y divide-[#e7e3f3]">
-        {round.pairings.map((p) => {
-          const rowNotice = state.rowNotice?.fixtureId === p.fixtureId ? state.rowNotice.notice : null;
-          return (
-            <li
-              key={p.fixtureId}
-              data-testid={`open-round-${p.owedSeats > 0 ? "pending" : "already"}-${p.fixtureId}`}
-              className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 py-2"
-            >
-              <span className={`w-16 shrink-0 text-xs font-semibold ${MUTED}`}>{boardLabel(p, msg)}</span>
-              <span className="flex min-w-0 flex-1 basis-40 text-sm">{names(p, msg)}</span>
-              <span className={`text-xs ${MUTED}`}>{inviteState(p, tz, msg, plural)}</span>
-              {p.canResend && (
-                <button
-                  type="button"
-                  data-testid={`open-round-resend-${p.fixtureId}`}
-                  disabled={state.busy !== null}
-                  onClick={() => handle.resend(p.fixtureId)}
-                  className={BUTTON_QUIET}
-                >
-                  {msg("runsheet.round.resend")}
-                </button>
-              )}
-              {rowNotice !== null && (
-                <p role="status" data-testid="open-round-row-notice" className={`basis-full text-xs ${SOFT}`}>
-                  {resendNoticeText(rowNotice, msg, plural)}
-                </p>
-              )}
-            </li>
-          );
-        })}
-      </ul>
-
-      <ConfirmDialog
-        open={state.confirming}
-        testId="open-round-confirm"
-        title={title}
-        confirmLabel={confirmLabel}
-        confirmVariant="primary"
-        cancelLabel={msg("confirm.cancel")}
-        busy={state.busy !== null}
-        onConfirm={handle.open}
-        onCancel={handle.cancel}
-      >
-        <OpenRoundConfirmBody round={round} tz={tz} />
-      </ConfirmDialog>
-    </section>
-  );
 }

@@ -1,14 +1,13 @@
-// T16 (D12) — the stage card mounts the organiser's Open round control for
-// ITS rounds (`openRounds`, keyed by stage id; listOpenRounds' answer, which
-// the division page hands down only while the club is offered online chess).
-// Nothing for a viewer, nothing without the map. What the control itself
-// renders is open-round-control.test.tsx's.
+// T16 (D12) put the organiser's Open round control on each stage card, fed by a `openRounds` map the division page built.
+// Phase 2 (spec 2026-10-24-arbiter-round-column-design.md §8, pre-flight C16) moved that control into the Arbiter Panel's round
+// column: the stage cards take no rounds, render no control, and the run sheet's online chips lead to the panel only when the
+// page says the panel would answer (`arbiterHref`; null = it would not, so each chip is plain text, never a link into a 404).
+// The control's own copy and presses are the column's tests (arbiter/__tests__/round-column.test.tsx).
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { StagesPanel } from "@/components/v2/stages-panel";
-import type { OpenRoundView } from "@/lib/open-round";
-import { DEADLINE_AFTER_MS } from "@/server/external-play/window";
-import { emptyExtendTally } from "@/lib/checkin-extend";
+import { routes } from "@/lib/routes";
+import type { RunSheetOnlinePlay } from "@/lib/run-sheet-groups";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => vi.fn(async () => false) }));
@@ -20,56 +19,62 @@ const fixture = (stageId: string, no: number) => ({
   home_entrant_id: "e1", away_entrant_id: "e2", scheduled_at: null, venue: null, court_label: null,
   court_id: null, court_name: null, status: "scheduled", outcome: null,
 });
-const ROUND = (stageId: string, fixtureId: string): OpenRoundView => ({
-  stageId,
-  stageName: "Swiss",
-  roundNo: 1,
-  state: "paired",
-  openedAt: null,
-  deadlineAt: null,
-  windowMinutes: DEADLINE_AFTER_MS / 60_000,
-  staggered: false,
-  batches: [],
-  staggerSpanMinutes: 0,
-  scheduledAt: null,
-  press: "open",
-  earlierInPlay: [],
-  pairings: [{ fixtureId, boardNo: 1, whiteName: "Ada", blackName: "Bo", invitedAt: null, owedSeats: 2, canResend: false }],
-  extendableBoards: 0,
-  extendWindows: [],
-  extendRefusals: emptyExtendTally(),
-});
 const PROPS = {
   divisionId: "d1", competitionId: "c1", orgSlug: "org", compSlug: "comp", divSlug: "div",
   stages: [stage("s1", 1), stage("s2", 2)], fixtures: [fixture("s1", 1), fixture("s2", 2)],
   entrantNames: { e1: "Alpha", e2: "Bravo" }, canEdit: true, tz: "UTC", orgTz: "UTC", canExport: false,
   viewerPlan: "community" as const, sportKey: "boardgame",
 };
-/** The stage card holding this testid'd element, by the card's own stage id attribute. */
-const cardOf = (h: string, stageId: string) => {
-  const start = h.indexOf(`data-stage-id="${stageId}"`);
-  expect(start, `stage card ${stageId}`).toBeGreaterThan(-1);
-  const next = h.indexOf("data-stage-id=", start + 1);
-  return h.slice(start, next === -1 ? undefined : next);
+const ONLINE: RunSheetOnlinePlay = {
+  cameraPolicy: "off", cameraFlagCount: 0, connectionProblemCount: 1, offSeaznFlagCount: 1, held: null, live: false, unopened: false,
 };
+const CHIPS = ["run-sheet-connection-chip", "run-sheet-off-seazn-chip"] as const;
+/** The opening tag of the element carrying this testid. */
+const tagOf = (h: string, testId: string) => h.match(new RegExp(`<[a-z]+[^>]*data-testid="${testId}"[^>]*>`))?.[0] ?? null;
 
-describe("the stage card's Open round control", () => {
-  it("the empty case first: no map ⇒ no control (the cards render)", () => {
+describe("the stage cards after the round moved to the Arbiter Panel", () => {
+  it("the cards render and carry no Open round control", () => {
     const h = renderToStaticMarkup(<StagesPanel {...PROPS} />);
     expect(h).toContain('data-testid="stage-progress"');
     expect(h).not.toContain('data-testid="open-round"');
   });
 
-  it("each stage card mounts ITS OWN rounds' control, and only those", () => {
-    const h = renderToStaticMarkup(<StagesPanel {...PROPS} openRounds={{ s2: [ROUND("s2", "f2")] }} />);
-    expect(h.split('data-testid="open-round"').length - 1).toBe(1);
-    expect(cardOf(h, "s2")).toContain('data-testid="open-round-pending-f2"');
-    expect(cardOf(h, "s1")).not.toContain('data-testid="open-round"');
-  });
-
-  it("a viewer (no edit) gets no control, even with the map", () => {
-    const h = renderToStaticMarkup(<StagesPanel {...PROPS} canEdit={false} openRounds={{ s1: [ROUND("s1", "f1")] }} />);
+  it("a caller still handing the old rounds map gets no control either (nothing reads it)", () => {
+    const legacy = { openRounds: { s1: [{ stageId: "s1", roundNo: 1 }] } };
+    const h = renderToStaticMarkup(<StagesPanel {...PROPS} {...legacy} />);
     expect(h).toContain('data-testid="stage-progress"');
     expect(h).not.toContain('data-testid="open-round"');
+  });
+});
+
+describe("the run sheet's online chips lead to the panel only when the page says it would answer", () => {
+  const onlinePlay = { f1: ONLINE };
+
+  it("offered (`arbiterHref` set): each chip is a link to the panel pinned to ITS board", () => {
+    const h = renderToStaticMarkup(<StagesPanel {...PROPS} onlinePlay={onlinePlay} arbiterHref={routes.divisionArbiter("org", "comp", "div")} />);
+    let checked = 0;
+    for (const id of CHIPS) {
+      const tag = tagOf(h, id);
+      expect(tag, `${id} renders`).not.toBeNull();
+      expect(tag, `${id} is a link`).toMatch(/^<a /);
+      expect(tag, `${id} leads to its own board in the panel`).toContain(`href="${routes.divisionArbiter("org", "comp", "div", "f1")}"`);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: both chips checked").toBe(CHIPS.length);
+  });
+
+  it("not offered (`arbiterHref` null, the default): the same chips are plain text, no href anywhere on them", () => {
+    for (const props of [{ arbiterHref: null }, {}]) {
+      const h = renderToStaticMarkup(<StagesPanel {...PROPS} onlinePlay={onlinePlay} {...props} />);
+      let checked = 0;
+      for (const id of CHIPS) {
+        const tag = tagOf(h, id);
+        expect(tag, `${id} renders`).not.toBeNull();
+        expect(tag, `${id} is a span`).toMatch(/^<span /);
+        expect(tag, `${id} links nowhere`).not.toContain("href");
+        checked++;
+      }
+      expect(checked).toBe(CHIPS.length);
+    }
   });
 });

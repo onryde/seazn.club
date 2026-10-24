@@ -6430,6 +6430,8 @@
   "arbiter.emptyBoards": "Esta ronda no tiene tableros que observar.",
   "arbiter.entry.link": "Panel del árbitro",
   "arbiter.entry.body": "Mira la cámara de un jugador a la vez y revisa las señales de cada tablero.",
+  "arbiter.entry.status.ready": "La ronda {round} está lista para abrirse",
+  "arbiter.entry.status.checkin": "El registro de la ronda {round} está abierto",
   "arbiter.invite.sent": "Enviado",
   "arbiter.invite.delivered": "Entregado",
   "arbiter.invite.delayed": "Retrasado",

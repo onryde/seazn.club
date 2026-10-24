@@ -159,14 +159,13 @@ const COLUMN_DATA = (over: Partial<RoundColumnData> = {}): RoundColumnData => ({
   awaitsStart: false,
   ...over,
 });
-/** The handle ArbiterPanel shares for the round on screen (C9): a state and five presses. */
+/** The handle ArbiterPanel shares for the round on screen (C9): a state and four presses. */
 const HANDLE = (state: Partial<OpenRoundUiState> = {}): OpenRoundHandle => ({
   state: { ...initialOpenRoundUi(), ...state },
   ask: noop,
   cancel: noop,
   open: noop,
   resend: noop,
-  extend: noop,
 });
 function props(over: Partial<ArbiterScreenProps> = {}): ArbiterScreenProps {
   return {

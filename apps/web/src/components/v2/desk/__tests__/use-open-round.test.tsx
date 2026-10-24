@@ -1,6 +1,6 @@
-// Task 4 (arbiter round column) - the Open / Resend / "+5" press as a hook, driven through the REAL reducer and runner
-// (open-round-state.ts) with the network doubled at `apiV1`. open-round-control-actions.test.tsx already proves each press
-// through the control for one round; this file proves what the hook adds and the control could never show: the EMPTY case
+// Task 4 (arbiter round column) - the Open / Resend press as a hook, driven through the REAL reducer and runner
+// (open-round-state.ts) with the network doubled at `apiV1`. open-round-control-actions.test.tsx proves each press and the words of
+// its answer for one round; this file proves what the hook adds: the EMPTY case
 // (a null view is a handle that does nothing), a redraw of the same round (the state stays: a poll must not close the dialog
 // the organiser is reading), a CHANGE of round (the state is reset, the press follows the new round, and the runner does not
 // restart, so a double tap across the change still sends one request), and a round that goes away and comes back.
@@ -67,7 +67,7 @@ beforeEach(() => {
 });
 
 describe("useOpenRound - the empty case first", () => {
-  it("a null view is the initial state and five presses that do nothing: no state change, no request, no refresh", async () => {
+  it("a null view is the initial state and four presses that do nothing: no state change, no request, no refresh", async () => {
     const { ui, handle } = mount(null);
     expect(handle().state).toEqual(initialOpenRoundUi());
     const presses: [string, (h: OpenRoundHandle) => void][] = [
@@ -75,14 +75,13 @@ describe("useOpenRound - the empty case first", () => {
       ["cancel", (h) => h.cancel()],
       ["open", (h) => h.open()],
       ["resend", (h) => h.resend("fx-9")],
-      ["extend", (h) => h.extend()],
     ];
     for (const [name, press] of presses) {
       press(handle());
       await flush();
       expect(handle().state, `${name} on a null view leaves the state alone`).toEqual(initialOpenRoundUi());
     }
-    expect(presses, "five presses were tried").toHaveLength(5);
+    expect(presses, "four presses were tried").toHaveLength(4);
     expect(net.calls, "nothing reached the network").toHaveLength(0);
     expect(router.refresh).not.toHaveBeenCalled();
     // Handing a real round in afterwards starts from nothing asked. (The teeth for ask/cancel are the state read AFTER each
@@ -108,7 +107,7 @@ describe("useOpenRound - the empty case first", () => {
     ui.rerender({ view: null });
     expect(handle().state).toEqual(initialOpenRoundUi());
     handle().open();
-    handle().extend();
+    handle().resend("fx-9");
     await flush();
     expect(net.calls).toHaveLength(0);
   });
@@ -182,7 +181,26 @@ describe("useOpenRound - the state belongs to ONE round (reset when the round on
 });
 
 describe("useOpenRound - the presses follow THIS round", () => {
-  it("open, resend and extend each send for the view's own stage and round number, one request at a time", async () => {
+  it("the press opens THIS round: the confirmation posts ONE request to this stage's open-round route with this round's number - not the next round's - and a double confirm sends nothing more", async () => {
+    // Moved here from the deleted Open round control's suite (Task 4's killer, kept): the number is 7, so a press that read
+    // `roundNo + 1`, another field or a stale render lands on 8 and fails. The column's block makes the same assertion through its
+    // own markup (arbiter/__tests__/round-column.test.tsx).
+    const { handle } = mount(VIEW({ stageId: "stage-Z", roundNo: 7 }));
+    handle().ask();
+    handle().open();
+    handle().open();
+    expect(net.calls.map((c) => [c.url, c.json])).toEqual([["/api/v1/stages/stage-Z/open-round", { roundNo: 7 }]]);
+    expect(handle().state.busy, "held busy until the answer").toEqual({ kind: "open" });
+    const answer = { opened: true, invited: 4, retrying: 0, skipped: [] };
+    net.calls[0]!.resolve(answer);
+    await flush();
+    expect(handle().state.confirming, "answered: the confirmation closes").toBe(false);
+    expect(handle().state.busy).toBeNull();
+    expect(handle().state.notice).toEqual({ kind: "answered", result: answer });
+    expect(router.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("open and resend each send for the view's own stage and round number, one request at a time", async () => {
     const { handle } = mount(VIEW({ stageId: "stage-Z", roundNo: 7 }));
     handle().ask();
     handle().open();
@@ -193,12 +211,13 @@ describe("useOpenRound - the presses follow THIS round", () => {
     expect(net.calls[1]!.url).toBe("/api/v1/fixtures/fx-9/external-play/resend");
     net.calls[1]!.resolve({ emailed: 1, retrying: 0 });
     await flush();
-    handle().extend();
-    expect(net.calls.slice(2).map((c) => [c.url, c.json])).toEqual([["/api/v1/stages/stage-Z/extend-checkin", { roundNo: 7 }]]);
-    net.calls[2]!.resolve({ extended: 1, skipped: [] });
-    await flush();
-    expect(net.calls, "exactly the three presses went out").toHaveLength(3);
-    expect(router.refresh, "each answer refreshed the page once").toHaveBeenCalledTimes(3);
+    expect(net.calls, "exactly the two presses went out").toHaveLength(2);
+    expect(router.refresh, "each answer refreshed the page once").toHaveBeenCalledTimes(2);
+  });
+
+  it("the handle has no round-extend press: the round's +5 is the panel's own control, so nothing here can send one", () => {
+    const { handle } = mount(VIEW());
+    expect(Object.keys(handle()).sort()).toEqual(["ask", "cancel", "open", "resend", "state"]);
   });
 
   it("a redraw with another round number retargets the press, and the runner survives it: a double tap across the redraw sends ONE request", async () => {

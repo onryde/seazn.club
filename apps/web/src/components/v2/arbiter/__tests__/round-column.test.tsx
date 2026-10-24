@@ -98,7 +98,7 @@ const DATA = (o: Partial<RoundColumnData> = {}): RoundColumnData => ({ views: []
 
 /** The handle ArbiterPanel shares for the round ON SCREEN. Every press is a spy: a before-phase block must never use it. */
 const sharedHandle = () => {
-  const spies = { ask: vi.fn(), cancel: vi.fn(), open: vi.fn(), resend: vi.fn(), extend: vi.fn() };
+  const spies = { ask: vi.fn(), cancel: vi.fn(), open: vi.fn(), resend: vi.fn() };
   const handle: OpenRoundHandle = { state: initialOpenRoundUi(), ...spies };
   return { handle, spies };
 };

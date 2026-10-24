@@ -1,9 +1,10 @@
 "use client";
 
-// The Open / Resend / "+5 min" press of ONE round, lifted out of OpenRoundControl so the arbiter column presses the very
-// same thing. It owns what the control used to own: the reducer (open-round-state.ts, rules R1-R5: one request at a time,
-// the open only from its confirmation), the router, and the runner that puts each request on the network with an `apiV1`
-// POST and a `router.refresh()` after the answer. A second caller reads the same state and calls the same five presses.
+// The Open / Resend press of ONE round, lifted out of the Open round control (since deleted: the Arbiter Panel's round column is
+// its only home) so the column and the panel's round bar press the very same thing. It owns the reducer (open-round-state.ts,
+// rules R1-R5: one request at a time, the open only from its confirmation), the router, and the runner that puts each request on
+// the network with an `apiV1` POST and a `router.refresh()` after the answer. The round's "+5 min" is not here: it is the panel's
+// own `RoundExtend` (checkin-extend-ui.ts), one control for the round on screen.
 //
 // The state belongs to ONE round. It is reset when the round on screen changes - a different stage or round number, or none at
 // all (`view` null is its own identity) - and NOT when the same round is redrawn with fresh data, because a poll must not close
@@ -32,14 +33,12 @@ export type OpenRoundHandle = {
   open(): void;
   /** Resend for one pairing's invite. */
   resend(fixtureId: string): void;
-  /** C8: the round "+5" OpenRoundControl still shows until Task 10 deletes the control; Task 10 removes it from the handle too. */
-  extend(): void;
 };
 
 type Presses = Omit<OpenRoundHandle, "state">;
 
 /** The presses of a handle with no round: every call does nothing. */
-const NO_PRESSES: Presses = { ask: () => {}, cancel: () => {}, open: () => {}, resend: () => {}, extend: () => {} };
+const NO_PRESSES: Presses = { ask: () => {}, cancel: () => {}, open: () => {}, resend: () => {} };
 
 /** A null view gives a no-op handle (initial state; every call does nothing). ArbiterPanel calls it for the round on screen (C9). */
 export function useOpenRound(view: OpenRoundView | null): OpenRoundHandle {
@@ -69,7 +68,6 @@ export function useOpenRound(view: OpenRoundView | null): OpenRoundHandle {
             cancel: () => dispatch({ type: "cancel" }),
             open: () => void runner.open(stageId, roundNo),
             resend: (fixtureId) => void runner.resend(fixtureId),
-            extend: () => void runner.extend(stageId, roundNo),
           },
     [runner, stageId, roundNo],
   );
