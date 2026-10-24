@@ -19,8 +19,8 @@ import "server-only";
 //     M2) OR a `sending` row whose lease has lapsed (R9: a 2xx whose recording write failed leaves exactly such a row, and
 //     re-sending it under the SAME idempotency key yields one provider message), sets `sending`, `attempts + 1` and a lease in the claiming
 //     statement (R10: the post-send writes are fenced on that attempt number), and skips rows another tick holds;
-//  4. before each attempt but the first waits out the rest of MIN_SEND_INTERVAL_MS since the previous attempt began
-//     (Resend: 2 requests a second), and stops claiming at the claim cut-off (`claimCutoffMs`: the budget less the
+//  4. before each attempt after a request has left waits out the rest of MIN_SEND_INTERVAL_MS since that request began
+//     (Resend: 2 requests a second; a row refused before any request starts no interval, like `dispatchNow`'s), and stops claiming at the claim cut-off (`claimCutoffMs`: the budget less the
 //     HOOK_RESERVE_FRACTION kept for step 6, one send timeout and one pacing wait, so an attempt in flight at the cut-off
 //     still ends before the reserve and sends can never starve the hooks), when the batch is full, or at the first 429;
 //  5. counts, as `deferred`, the rows that were due right now and were not taken;
@@ -253,26 +253,32 @@ export async function runOutboxTick(opts: RunOutboxTickOptions = {}): Promise<Ou
     }
     report.claimed++;
     // Pace AFTER the claim, so a tick that has nothing left does not sleep to find that out: the waits are exactly the
-    // claims after the first. The interval runs from the START of the previous attempt (Resend limits requests per second,
-    // and a slow request already used its share of it), so an attempt that took the whole interval owes no wait. The row is
-    // leased meanwhile, and `attemptClaimed` judges its expiry on the real clock as it starts, so a row that ran out of time
-    // during the wait is ended unsent.
+    // claims after the first request. The interval runs from the START of the previous REQUEST (Resend limits requests per
+    // second, and a slow request already used its share of it), so an attempt that took the whole interval owes no wait. The
+    // row is leased meanwhile, and `attemptClaimed` judges its expiry on the real clock as it starts, so a row that ran out of
+    // time during the wait is ended unsent.
     if (lastAttemptStartedAt !== null) {
       const wait = MIN_SEND_INTERVAL_MS - (nowMs() - lastAttemptStartedAt);
       if (wait > 0) await sleep(wait);
     }
-    lastAttemptStartedAt = nowMs();
+    const attemptStartedAt = nowMs();
     const claimed = toClaimedRow(rec);
     let rateLimited = false;
     try {
       const result = await attemptClaimed(claimed);
+      // The interval is the provider's: only a request starts one (`AttemptResult.requestMade`, the same rule as `dispatchNow`'s).
+      // A row refused before any request left (no body, no key, suppressed, expired as it began) used none of Resend's rate, so the
+      // next row measures from the last request that did, and a tick of refusals never sleeps.
+      if (result.requestMade) lastAttemptStartedAt = attemptStartedAt;
       tally(report, result.outcome);
       const endedRow = endedRowFor(claimed, result.outcome);
       if (endedRow) ended.push(endedRow);
       rateLimited = result.rateLimited;
     } catch (err) {
-      // The send may have happened (a 2xx whose recording write failed). The row stays `sending` with its lease and the
-      // reclaim re-sends it under the same idempotency key. Ids and the error's name only: no address, no body.
+      // The send may have happened (a 2xx whose recording write failed): the request may have left, so it starts an interval. The
+      // row stays `sending` with its lease and the reclaim re-sends it under the same idempotency key. Ids and the error's name
+      // only: no address, no body.
+      lastAttemptStartedAt = attemptStartedAt;
       report.failed++;
       log.error(
         { outboxId: rec.id, kind: rec.kind, attempt: rec.attempts, ...errFields(err) },

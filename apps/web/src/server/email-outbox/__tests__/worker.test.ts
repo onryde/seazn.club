@@ -592,6 +592,54 @@ describe.skipIf(!HAS_DB)("the email outbox retry worker (DB)", () => {
       expect(sleeps, "no wait owed").toEqual([]);
     });
 
+    // Final review (C2 parity with dispatchNow): the interval is the PROVIDER's, so only a request starts one. A row the attempt refuses
+    // before any request leaves (here: no body, ended `dead` / body_missing; the gate's no-key and suppressed refusals and an expiry as
+    // the attempt begins go the same way) used none of Resend's rate and owes the next row no wait.
+    describe("an interval starts with a real request, not with a refused row", () => {
+      /** A row the attempt refuses without a request: it has no body to send. */
+      async function refusedRow(over: Partial<OutboxMessage>): Promise<string> {
+        const id = await queue(over);
+        await sql`update email_outbox set body_sealed = null where id = ${id}`;
+        return id;
+      }
+      const ORDERS: { order: ("refused" | "sent")[] }[] = [
+        { order: ["refused", "sent", "sent"] },
+        { order: ["sent", "refused", "sent"] },
+        { order: ["refused", "refused", "sent"] },
+      ];
+      it.each(ORDERS)("claimed in the order $order: the waits are one fewer than the requests that left", async ({ order }) => {
+        const sameDeadline = { expiresAt: new Date(Date.now() + 15 * MIN) };
+        const ids: string[] = [];
+        for (const kind of order) ids.push(kind === "refused" ? await refusedRow(sameDeadline) : await queue(sameDeadline));
+        // The claim order is the order given: due longest ago first (the deadline is shared).
+        for (const [i, id] of ids.entries()) await makeDue(id, 100 - i);
+        const requests = order.filter((k) => k === "sent").length;
+        const refused = order.length - requests;
+
+        expect(await tick(ids)).toEqual({ ...ZERO, claimed: order.length, sent: requests, dead: refused });
+        expect(sent().map(idOf), "only the rows with a body made a request").toEqual(ids.filter((_, i) => order[i] === "sent"));
+        expect(sleeps, "one interval between consecutive requests, none for a refused row").toEqual(Array(requests - 1).fill(MIN_SEND_INTERVAL_MS));
+        expect(requests, "anti-vacuity: some request left in every order").toBeGreaterThanOrEqual(1);
+        expect(refused, "and some row was refused").toBeGreaterThan(0);
+      });
+
+      it("a row whose attempt THREW after its request may have left still starts an interval: the next row waits", async () => {
+        const sameDeadline = { expiresAt: new Date(Date.now() + 15 * MIN) };
+        const bad = await queue(sameDeadline);
+        const good = await queue(sameDeadline);
+        await makeDue(bad, 10);
+        await makeDue(good, 5);
+        const P = pid("collide-pace");
+        const holder = await queue();
+        await sql`update email_outbox set provider_id = ${P} where id = ${holder}`; // the post-send write of `bad` collides with it
+        deliverMock.mockImplementation(async (m: Sent) => ({ ok: true, providerId: idOf(m) === bad ? P : pid(idOf(m)) }));
+
+        expect(await tick([bad, good])).toEqual({ ...ZERO, claimed: 2, sent: 1, failed: 1 });
+        expect(sent().map(idOf), "bad's request left, then good's").toEqual([bad, good]);
+        expect(sleeps, "the request of the row that threw counts: the next row waits one interval").toEqual([MIN_SEND_INTERVAL_MS]);
+      });
+    });
+
     it("stops claiming once the budget is spent (exactly AT it) and counts the rows still due as deferred", async () => {
       const deliverMs = 2 * MIN_SEND_INTERVAL_MS; // slower than the interval, so no wait is owed and the arithmetic is bare
       const ids = [await queue(), await queue(), await queue(), await queue(), await queue()];
