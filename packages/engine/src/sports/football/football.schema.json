@@ -715,6 +715,12 @@
       "entrants[]": [
         "string"
       ],
+      "forfeitAward": [
+        "array"
+      ],
+      "forfeitAward[]": [
+        "number"
+      ],
       "goals": [
         "object"
       ],
