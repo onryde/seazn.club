@@ -281,10 +281,13 @@ is independent of the epoch pair: a major or a minor that rose does not settle i
   the old number would go on being served as the old fold computed it. A data-only reformat of an untouched tree
   (the recorder ran the baseline's own code) owes it nothing: nothing stored was computed differently. A stream that
   gains the kernel fields beside its stats counts here too, and a major that rose does not pay it.
-- **It is owed nothing** by a stream that is **removed or re-recorded** (its input changed, so its old and new stats
-  are not comparable; its sport owes the major instead), nor by a baseline with no stats module (below).
+- **It is owed nothing** by a stream that is **removed**, or **re-recorded because its config, events or lineups changed**
+  (the input the stats fold takes changed, so its old and new stats are not comparable; its sport owes the major
+  instead), nor by a baseline with no stats module (below). A stream re-recorded **only because its `foldOptions` differ**
+  (an award edited, gained or dropped) IS compared: the stats fold takes no fold options, so a `playerStats` that differs
+  there is a stats move like any other, counted in `moved`, and the version must rise beside the major the re-record owes.
 - **It is read by its exact declaration**, never imported (`stats.ts` has imports of its own): one line,
-  `export const STATS_FOLD_VERSION = <positive integer>;`, at the start of a line, once. The guard **fails closed**: a
+  `export const STATS_FOLD_VERSION = <positive integer>;`, at the start of a line, once, with at most a trailing `//` comment. The guard **fails closed**: a
   tree whose file is missing, or whose constant cannot be read that way (a type annotation, a second declaration, `0`,
   a number beyond the safe integers), exits 2, and so does a baseline that HAS the file and cannot be read.
 - **A baseline with no `src/stats/stats.ts`** is the bootstrap only when its corpora record no player stats either
@@ -324,7 +327,7 @@ depending on who computes what moved:
 | What moved (the stream's events, lineups, fold options and raw config object are unchanged) | Owes |
 |---|---|
 | a state, the outcome or the summary: a phone computes and renders these | **major** |
-| a stream was removed, or re-recorded (its events, lineups, fold options or raw config object changed) | **major** |
+| a stream was removed, or re-recorded (its events, lineups, fold options or raw config object changed) | **major**; and when only its fold options changed and its recorded `playerStats` differ, `STATS_FOLD_VERSION` must rise too (the stats fold takes no fold options, so those stats stay comparable) |
 | only the standings `deltas` (states, outcome and summary byte for byte the same): the server computes these | **minor** |
 | both kinds in one sport | **major** (the strongest class owed decides) |
 | format 2: a recorded `summaries` digest (or the list's length) or `overlay` differs, on a stream both sides record | **major** |
@@ -510,9 +513,11 @@ hand in the same PR; no tool will tell you):
   fixture's own two team sheets and nothing else). Those owe a **manual minor**, raised by hand in the PR (`FOLD_MINOR`); no tool will tell you.
   `STATS_FOLD_VERSION` is owed by hand for them too: the guard enforces its rise only for
   a move it can SEE in the recorded rows. It does not see a stats-rule change whose every moved
-  stream is ALSO re-recorded in the same PR either: a re-recorded stream is not compared (its
-  input changed, so its old and new stats are not comparable), the sport owes its major for
-  the re-record, and the `STATS_FOLD_VERSION` rise is owed by hand.
+  stream is ALSO re-recorded in the same PR either: a stream re-recorded because its config,
+  events or lineups changed is not compared (its input changed, so its old and new stats are
+  not comparable), the sport owes its major for the re-record, and the `STATS_FOLD_VERSION`
+  rise is owed by hand. (A stream re-recorded only because its `foldOptions` differ IS
+  compared, since the stats fold takes none.)
   The parts of the server's leaderboard the recorder does not run, each read from
   the code and each owing the same manual minor when it changes:
   - `sumPlayerStats` and the division re-derivation of ratio metrics
@@ -548,8 +553,17 @@ which turns a stage's points rule into the award the server offers) or to `forfe
 the guard cannot see it. Only the rebuild test in `golden-fold-options.test.ts` (it rebuilds
 every award stream through the real `PointsRule` and `forfeitAwardOffer` and compares bytes)
 goes red for `forfeitAwardOffer`, and apps/web's own `forfeit-award-callers` test pins who
-calls `stageForfeitAward`; a change to either is judged there, not by `fold-epoch:check`. The
-second is the next such input: **A NEW fold option owes a story.** The corpus field admits `forfeitAward` and
+calls `stageForfeitAward`; a change to either is judged there, not by `fold-epoch:check`.
+**The route when `forfeitAwardOffer` changes.** A rewrite that offers the same value for every rule stays green and
+owes nothing: the rebuild test and the corpora do not move. A rewrite that changes a value turns the rebuild test red
+(it rebuilds every award stream through the real function and compares bytes), while `foldOptionHoles` still counts the
+old stream as reaching its story, so EXTEND appends nothing. The award streams of every sport the change reaches must
+then be re-recorded (drop them and run `EXTEND_GOLDEN=1`, which rebuilds them through the new function), and each
+re-record is an input change, so **each of those sports owes its `FOLD_EPOCH` major**: up to four majors for a change
+that moved no fold. The alternative is to append fresh stories and keep the old pins, which decouples the rebuild test
+from the values the corpora pin; that is a deliberate policy change, made in its own PR and not as a side effect of the
+rewrite.
+The second is the next such input: **A NEW fold option owes a story.** The corpus field admits `forfeitAward` and
 nothing else (an unknown key is a refusal, exit 2), so the day the server starts
 offering the fold another input, adding it to `FoldOptions` does not put it in a corpus.
 Its sports' stories, the field, `strictFold` and `foldOptionsProblem` are owed in the same

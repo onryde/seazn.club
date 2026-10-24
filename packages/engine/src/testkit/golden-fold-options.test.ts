@@ -509,7 +509,7 @@ describe("the committed corpora reach every fold-option story, and the award is 
     expect(checked).toBe(FOLD_OPTION_STORIES.length);
   });
 
-  it("the offer is what forfeitAwardOffer gives a real PointsRule: a sport whose table the award never reaches records none", () => {
+  it("a sport records award streams exactly when forfeitAwardOffer makes an offer to it for a real PointsRule: no offer, no stream (counted)", () => {
     let reached = 0;
     forEachSport(({ module, key }) => {
       const streams = readCorpus(key).streams.filter((s) => s.foldOptions !== undefined);
@@ -1028,6 +1028,15 @@ describe("the recomputation a reviewer is told to run is the whole input of the 
 
 describe("the policy text says what the corpora do (GOLDEN-POLICY.md)", () => {
   const policy = readFileSync(new URL("./GOLDEN-POLICY.md", import.meta.url), "utf8").replace(/\s+/g, " ");
+  it("states the route when forfeitAwardOffer changes, and that an award-only re-record keeps its stats comparable (GF-3 batch review m1, m2, n2, n6)", () => {
+    expect(policy).toContain("**The route when `forfeitAwardOffer` changes.**");
+    expect(policy).toMatch(/A rewrite that offers the same value for every rule stays green and owes nothing/);
+    expect(policy).toMatch(/each of those sports owes its `FOLD_EPOCH` major/);
+    expect(policy).toMatch(/append fresh stories and keep the old pins, which decouples the rebuild test/);
+    expect(policy).toMatch(/re-recorded \*\*only because its `foldOptions` differ\*\* \(an award edited, gained or dropped\) IS compared/);
+    expect(policy, "the table row for a re-record says the stats version can be owed beside the major").toMatch(/only its fold options changed and its recorded `playerStats` differ, `STATS_FOLD_VERSION` must rise too/);
+    expect(policy, "the declaration rule names the comment the guard accepts").toMatch(/at the start of a line, once, with at most a trailing `\/\/` comment/);
+  });
   it("documents the foldOptions field: what it is, that only forfeitAward is allowed, and that it is part of the stream's input identity", () => {
     expect(policy).toContain("`foldOptions`");
     expect(policy).toMatch(/only `forfeitAward` is allowed/);

@@ -183,7 +183,7 @@ rules instead needs an epoch per division or fixture, which does not exist.
   What the recorded rows do not show owes a MANUAL MINOR, raised by hand: a stat no stream earns, an award key no stream credits, the
   division sum and re-derivation, the merged-person relabel, the entrant kind and the lineup pair the server hands the fold (the list is in
   GOLDEN-POLICY.md, "What the guard cannot see"). Raising `STATS_FOLD_VERSION` (an engine constant, `src/stats/stats.ts`) when the fold's
-  output changes is enforced by the guard (GF-3 T1) for a move in the recorded rows, and a manual obligation for the same list above.
+  output changes is enforced by the guard (GF-3 T1) for a move in the recorded rows, and a manual obligation for the same list above. The exception is a stream re-recorded because its config, events or lineups changed: its old and new stats are not compared (its sport owes the major instead). One re-recorded only because its fold options differ is compared, since the stats fold takes none.
 - **A phone must not offer a lineup change in a sport that does not declare lineup support** (owner ruling 2026-10-15). The engine takes
   `core.lineup.*` only from a module that declares a `lineupPolicy` (`admitsLineupEvents(module)`, `@seazn/engine/core`; today football,
   cricket, volleyball, badminton, table tennis, tennis, ice hockey and hockey, and NOT boardgame, carrom or generic). For the others the
