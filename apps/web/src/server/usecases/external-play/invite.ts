@@ -26,11 +26,21 @@ import { appOrigin, externalPlayInviteEmail } from "@/lib/email";
 import { toLocale } from "@/lib/i18n-constants";
 import { routes } from "@/lib/routes";
 import { log } from "@/server/logger";
-import { LIVE_STATUSES, RETRYABLE_STATUSES, dispatchNow, enqueueEmail, latestStatusesOfRows, type OutboxStatus } from "@/server/email-outbox";
+import {
+  LIVE_STATUSES,
+  RETRYABLE_STATUSES,
+  carryRetryBudget,
+  dispatchNow,
+  enqueueEmail,
+  latestStatusesOfRows,
+  lockQueuedEmails,
+  type OutboxStatus,
+  type QueuedEmailRow,
+} from "@/server/email-outbox";
 import { errFields } from "@/server/email-outbox/err-fields";
 import { mintMatchRoomToken } from "@/server/usecases/match-room-token";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { boardOpenFor, roundOpenAt } from "@/server/external-play/round-open";
+import { boardOpenFor, lockCheckinWindow, roundOpenAt } from "@/server/external-play/round-open";
 import { roomPhase, windowFor, type BoardAnchor } from "@/server/external-play/window";
 import {
   loadOnlinePlayFixture,
@@ -98,6 +108,9 @@ export async function attachToOpen(
        and fixture_external_play.create_sent_at is null`;
 }
 
+/** The mailbox an address names, as the invite compares addresses: trimmed and case-folded (the outbox's replace rule folds case). */
+const mailboxOf = (email: string): string => email.trim().toLowerCase();
+
 /** The opening time the mail PROMISES: the instant rounded UP to the next whole minute (one already on a minute is not moved), so the
  *  mail never names a minute before the door opens. The batch-wait card applies the same rule (`formatPromisedTime`). The DEADLINE's
  *  label is not rounded: truncating names a time a few seconds earlier than the real cut-off, which is the safe direction there. */
@@ -158,6 +171,10 @@ export async function queueFixtureInvite(
     /** The stamp these rows are the invite for: this call's own when it claimed the seat, the one already on the seat when a
      *  resend re-mails an invited one. */
     stampedAt: Date;
+    /** Write rows ONLY for these mailboxes (`mailboxOf`), not for every recipient of the seat: the check-in extension re-renders
+     *  the invites still waiting to go out and must not queue (and so must not replace) a recipient whose mail has gone out. Left
+     *  out, the whole seat is queued, as the open and the resend do. */
+    only?: ReadonlySet<string>;
   },
 ): Promise<string[]> {
   const { fixture: f, seat } = a;
@@ -183,7 +200,8 @@ export async function queueFixtureInvite(
   const ids: string[] = [];
   const mailboxes = new Set<string>();
   for (const r of seat.player.recipients) {
-    const mailbox = r.email.trim().toLowerCase();
+    const mailbox = mailboxOf(r.email);
+    if (a.only !== undefined && !a.only.has(mailbox)) continue;
     if (mailboxes.has(mailbox)) continue;
     mailboxes.add(mailbox);
     const locale = toLocale(r.locale);
@@ -215,6 +233,130 @@ export async function queueFixtureInvite(
     );
   }
   return ids;
+}
+
+/** Thrown by `requeueUnsentInvites` when an invite is waiting and the caller passed no seats (see there). */
+export class SeatsNeeded extends Error {
+  constructor() {
+    super("requeueUnsentInvites: invites are waiting to be sent, and the board's seats were not loaded for them");
+    this.name = "SeatsNeeded";
+  }
+}
+
+/**
+ * The check-in extension's half of the invite (follow-up to the email outbox, Task 8): the board's deadline just moved, and an
+ * invite's SEALED body names the deadline the board had when it was written. A row still waiting to go out would be sent later
+ * saying "check in by <a time already passed>". Controller ruling: re-render only what has NOT gone out; NEVER send an extra mail
+ * (this outranks re-rendering every waiting row: see "Which rows" below).
+ *
+ * Which rows (`lockQueuedEmails`, which holds the rows' locks so a send cannot claim one meanwhile): for every recipient of the
+ * board's two seats, the newest non-replaced invite, when it is `queued` AND no request of it can have reached the provider (never
+ * attempted, or its only attempt was answered 429 - the provider refused it before doing anything; a 429 after an earlier attempt
+ * proves nothing about that attempt). A row that ended an attempt in a network error, a 5xx or an in-flight 409, or that was attempted
+ * more than once, may have been accepted with the answer lost; a fresh row has a new idempotency key, so
+ * re-rendering it could mail the recipient twice. Such a row is left alone (same id, same key, same body): its expiry moves with the
+ * extension, and the mail it sends names the deadline it was written with - the match room shows the live one.
+ *
+ * What happens to an eligible row: a FRESH invite is queued through `queueFixtureInvite`, the one place the mail is built, with the
+ * board's NEW anchor and the SAME stamp the retired row carried (`meta.stampedAt`). The V470 replace trigger retires the stale row
+ * on that very insert, so the seat has one live invite per recipient still. The stamp on the bridge row is never written here, and
+ * the chess hook keys a seat's rows by that stamp, so the fresh row holds the seat exactly as the retired one did.
+ *
+ * Untouched, by construction: a row that is `sending` (a send has it), `sent`, `delayed`, `delivered` or ended - the seat's other
+ * recipients too (`only`), since a fresh row for a recipient whose mail has gone out would REPLACE it and mail them again.
+ * `left` are the eligible rows that got no fresh row: a recipient no longer among the seat's addresses, or a row whose
+ * `meta.stampedAt` is not the canonical ISO form of an instant (logged by id - the hook ignores such a row too, and a malformed row
+ * is no reason to refuse the arbiter's extension). Their body still names the old deadline, so the caller does NOT move their
+ * expiry: they end `expired` unsent at the old deadline, as before Task 8.
+ *
+ * RETRY BUDGET. A fresh row inherits the attempts already spent, the retry time and the last error of the row it replaced
+ * (`carryRetryBudget`): a 429'd row waiting for its next try still waits, and each re-render does not restart the schedule.
+ * Feasible without a migration - one UPDATE of the fresh rows in the same transaction. A row never attempted starts as any fresh
+ * row does (due at once; the caller dispatches it). The number of rows carried is checked against the number expected, and a
+ * difference is logged (ids only): a silent zero-match would restart the schedule.
+ *
+ * `seats` are read BEFORE the transaction (`boardSeats`): reading them takes pooled connections, and a pooled query made while `tx`
+ * holds one of the pool's five is the self-deadlock lib/db.ts documents. A caller that has not read them passes null; if an invite is
+ * waiting this throws `SeatsNeeded` (its transaction rolls back, it reads the seats and goes again), and if none is waiting it never
+ * needs them.
+ *
+ * Throws `SeatsNeeded` as above, and anything else if an invite cannot be minted, rendered or queued - the caller decides what that
+ * costs (the check-in extension runs this inside a savepoint and goes on without it). Returns the fresh rows' ids, for the caller's
+ * `dispatchNow` after the commit, and the `left` ids. `tx` must be the PRIVILEGED transaction (V470: `app_user` holds INSERT only,
+ * and the read locks rows).
+ */
+export async function requeueUnsentInvites(
+  tx: Tx,
+  a: {
+    fixture: OnlinePlayFixture;
+    seats: readonly InviteSeat[] | null;
+    roundNo: number;
+    roundOpenId: string;
+    roundOpenedAt: Date;
+    /** The board's anchor WITH the extension just written: the deadline the fresh mail names. */
+    anchor: BoardAnchor;
+    origin?: string;
+    /** The extension's decision clock (whether a later batch is "not open yet" is judged on it, as the open judges it). */
+    now: Date;
+  },
+): Promise<{ fresh: string[]; left: string[] }> {
+  const { fixture: f } = a;
+  const waiting = await lockQueuedEmails(tx, "chess_invite", CHESS_SEAT_REF_TYPE, [
+    chessSeatRef(f.fixtureId, "white"),
+    chessSeatRef(f.fixtureId, "black"),
+  ]);
+  if (waiting.length === 0) return { fresh: [], left: [] }; // nothing to re-render: no seat read, no render
+  if (a.seats === null) throw new SeatsNeeded();
+  const fresh: string[] = [];
+  const retired: string[] = [];
+  for (const seat of a.seats) {
+    const ref = chessSeatRef(f.fixtureId, seat.colour);
+    // A seat's waiting rows grouped by the stamp each carries (they share one; grouping keeps a stray older stamp from borrowing it).
+    const byStamp = new Map<string, QueuedEmailRow[]>();
+    for (const w of waiting) {
+      if (w.refId !== ref) continue;
+      const stamp = w.meta.stampedAt;
+      const at = typeof stamp === "string" ? new Date(stamp) : null;
+      if (at === null || Number.isNaN(at.getTime()) || at.toISOString() !== stamp) {
+        log.error({ outboxId: w.id }, "external-play extension: a waiting invite's stamp is not an instant; it was not re-rendered");
+        continue;
+      }
+      byStamp.set(stamp, [...(byStamp.get(stamp) ?? []), w]);
+    }
+    // Only a recipient the seat STILL carries gets a fresh row (and so replaces the old one); one who has left the seat is `left`.
+    const addressed = new Set(seat.player.recipients.map((r) => mailboxOf(r.email)));
+    for (const [stamp, rows] of byStamp) {
+      const replacing = rows.filter((w) => addressed.has(mailboxOf(w.recipient)));
+      if (replacing.length === 0) continue;
+      fresh.push(
+        ...(await queueFixtureInvite(tx, {
+          fixture: f,
+          seat,
+          roundNo: a.roundNo,
+          roundOpenId: a.roundOpenId,
+          roundOpenedAt: a.roundOpenedAt,
+          anchor: a.anchor,
+          ...(a.origin !== undefined ? { origin: a.origin } : {}),
+          now: a.now,
+          stampedAt: new Date(stamp),
+          only: new Set(replacing.map((w) => mailboxOf(w.recipient))),
+        })),
+      );
+      retired.push(...replacing.map((w) => w.id));
+    }
+  }
+  const retiredSet = new Set(retired);
+  // A retired row that had been attempted passes its budget on; one that was not has nothing to pass. If fewer fresh rows took a
+  // budget than the rows that had one, the schedule of the others silently restarted: say so (ids only).
+  const expected = waiting.filter((w) => retiredSet.has(w.id) && w.attempts > 0);
+  const carried = await carryRetryBudget(tx, retired, fresh);
+  if (carried !== expected.length) {
+    log.warn(
+      { fixtureId: f.fixtureId, expected: expected.length, carried, retiredIds: expected.map((w) => w.id), freshIds: fresh },
+      "external-play extension: a re-rendered invite did not take its retired row's retry budget; its schedule started over",
+    );
+  }
+  return { fresh, left: waiting.filter((w) => !retiredSet.has(w.id)).map((w) => w.id) };
 }
 
 /**
@@ -324,6 +466,11 @@ export async function resendExternalPlayNotice(
 
   const decision = await sql.begin(async (tx) => {
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + pos.divisionId}))`;
+    // The board's check-in window, after the division lock (the order nothing else takes in reverse: the extension and the sweep take
+    // the window lock FIRST but never the division lock): an extension moves the deadline this mail names, and the `boardOpenFor`
+    // read below must not run in front of one that is committing. It waits for it, then reads the extended deadline; a press that
+    // arrives after takes the lock after this transaction, and its own re-render handles the rows written here.
+    await lockCheckinWindow(tx, fixtureId);
     const [fx] = await tx<{ home: string | null; away: string | null; status: string; roundNo: number }[]>`
       select home_entrant_id as home, away_entrant_id as away, status, round_no as "roundNo"
         from fixtures where id = ${fixtureId}`;

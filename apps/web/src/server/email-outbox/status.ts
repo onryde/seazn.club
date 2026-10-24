@@ -1,11 +1,13 @@
 import "server-only";
-// What the outbox knows about the emails of a thing, and the retention of the rows themselves. Both run on the PRIVILEGED pooled
-// connection, as the worker does (V470: `app_user` holds INSERT only, so a tenant connection can neither read a row back nor delete
-// one). Neither sends anything.
+// What the outbox knows about the emails of a thing, and the retention of the rows themselves. They run on the PRIVILEGED connection,
+// as the worker does (V470: `app_user` holds INSERT only, so a tenant connection can neither read a row back nor delete one):
+// `latestEmailStatus`, `latestStatusesOfRows` and `purgeOldEmails` on the pooled client, `lockQueuedEmails` on the PRIVILEGED
+// TRANSACTION its caller passes in (it takes row locks, which only mean something inside that transaction). None of them sends anything.
 //
 //  - `latestEmailStatus` is the read the arbiter's phase-2 column will use ("did this seat's invite arrive?"). Its caller is a tenant
 //    page, so it takes the organisation explicitly and filters on it (T8-R1): the connection bypasses RLS, so the filter in the
 //    statement is the only fence between one club's page and another club's addresses.
+//  - `lockQueuedEmails` is the check-in extension's read of what it may still re-render (see enqueue.ts `carryRetryBudget`).
 //  - `purgeOldEmails` is the worker's last step (RETENTION_DAYS).
 import { sql, type Tx } from "@/lib/db";
 import { PURGE_BATCH, RETENTION_DAYS, type OutboxKind, type OutboxStatus } from "./constants";
@@ -71,6 +73,67 @@ export async function latestStatusesOfRows(ids: readonly string[]): Promise<Map<
       ) l on true
      where o.id = any(${ids as string[]}::uuid[])`;
   return new Map(rows.map((r) => [r.id, r.status]));
+}
+
+/** One email still waiting to be sent, as `lockQueuedEmails` reads it. */
+export type QueuedEmailRow = {
+  id: string;
+  refId: string;
+  recipient: string;
+  attempts: number;
+  nextAttemptAt: Date;
+  lastError: string | null;
+  meta: Record<string, string>;
+};
+
+/**
+ * The emails of these refs that may still be RE-RENDERED: for each recipient (of each ref, case-folded) the newest non-replaced row
+ * (the SAME rule as `latestEmailStatus` and `latestStatusesOfRows`, the fragments above), kept only when
+ *  - its status is `queued` (waiting to go out: a `sending`, `sent`, `delayed`, `delivered` or ended row is out of the caller's hands
+ *    or already gone), AND
+ *  - no request of it can have reached the provider: it was never attempted (`attempts = 0`), or its ONLY attempt was answered 429
+ *    (`attempts = 1` and `http 429 <name>`, the shape `attempt.ts`'s `lastErrorOf` writes: the provider refused the request before it
+ *    did anything). `last_error` is only the LAST answer: with two or more attempts an earlier one may have been a network error or a
+ *    5xx that the provider accepted, so a 429 after them proves nothing and the row is not eligible.
+ * and LOCKED (`for update`) on the caller's transaction.
+ *
+ * The second test is the one that keeps the promise "never an extra mail". A re-rendered email is a NEW row, so a new idempotency
+ * key (`idempotencyKey(row.id)`). A row whose earlier attempt ended in a network error, a 5xx or a 409 in-flight answer may have been
+ * ACCEPTED with the answer lost; the same key would make its retry harmless, but a fresh key would mail the recipient a second time.
+ * Such a row is not returned: it keeps its key and its body (naming the deadline it was written with), and the caller moves only its
+ * expiry. Carrying the old key onto the fresh row is not an option either: the same key with a different payload is a 409
+ * `invalid_idempotent_request`, which ends the row `dead` and lets the chess hook release a seat whose first mail did arrive.
+ *
+ * The lock is what makes the status trustworthy. A send claims a row with an UPDATE on `status = 'queued'`; asking for the row's
+ * lock first means the caller either waits for that claim and then finds the row `sending` (so it is not returned), or holds the
+ * lock before the claim and the claim waits for the caller's commit and then finds the row replaced. Without it the caller could
+ * retire a row a send is delivering at that moment, and mail the recipient twice.
+ *
+ * The caller needs the PRIVILEGED transaction (`sql.begin`): V470 gives `app_user` INSERT only. The newest-row rule is one
+ * subselect and the status and attempt tests are outside it, once: the filter is the guard, and the lock is taken on exactly what
+ * survives it.
+ */
+export async function lockQueuedEmails(
+  db: Tx,
+  kind: OutboxKind,
+  refType: string,
+  refIds: readonly string[],
+): Promise<QueuedEmailRow[]> {
+  if (refIds.length === 0) return [];
+  return db<QueuedEmailRow[]>`
+    select o.id, o.ref_id as "refId", o.recipient, o.attempts, o.next_attempt_at as "nextAttemptAt",
+           o.last_error as "lastError", o.meta
+      from email_outbox o
+     where o.id in (
+             select distinct on (ref_id, lower(recipient)) id
+               from email_outbox
+              where kind = ${kind} and ref_type = ${refType} and ref_id = any(${refIds as string[]}::text[])
+                and ${current()}
+              order by ref_id, lower(recipient), ${newestFirst()})
+       and o.status = 'queued'
+       and (o.attempts = 0 or (o.attempts = 1 and o.last_error like 'http 429 %'))
+     order by o.ref_id, o.id
+       for update of o`;
 }
 
 /** Exactly RETENTION_DAYS of 24 h, in seconds: an `interval '90 days'` would shift by an hour across a DST change in the session's

@@ -80,6 +80,10 @@ export async function enqueueEmail(db: Tx | typeof sql, m: OutboxMessage): Promi
  *  - only `kind = 'chess_invite'` rows of this `refType` and these refs, in a retryable status: a sent, delivered or otherwise
  *    finished row has nothing to retry, and a sign-in link's expiry is its own.
  *
+ * `exceptIds` are rows the caller decided NOT to carry forward: their expiry stays where it was, so they end `expired` unsent at the
+ * old deadline instead of being mailed after it (the check-in extension passes the invites it could not re-render for the new
+ * deadline - their body still names the old one - see `requeueUnsentInvites`).
+ *
  * T8-R1: runs on the caller's PRIVILEGED transaction (checkin-extend's `sql.begin`, the pooled connection the worker uses too).
  * V470 gives `app_user` INSERT only, so a tenant transaction is refused (42501) rather than matching zero rows; there is nothing to
  * fall back to and nothing for a definer function to add. `refIds` carry a board's id, so no other organisation can share one.
@@ -89,6 +93,7 @@ export async function extendEmailExpiry(
   refType: string,
   refIds: readonly string[],
   expiresAt: Date,
+  exceptIds: readonly string[] = [],
 ): Promise<number> {
   if (refIds.length === 0) return 0;
   const rows = await db`
@@ -98,6 +103,41 @@ export async function extendEmailExpiry(
              least(${expiresAt}::timestamptz, created_at + make_interval(secs => ${MAX_EXPIRY_MS / 1000})))
      where kind = 'chess_invite' and ref_type = ${refType} and ref_id = any(${refIds as string[]}::text[])
        and status = any(${RETRYABLE_STATUSES as string[]}::text[])
+       and not (id = any(${exceptIds as string[]}::uuid[]))
     returning id`;
+  return rows.length;
+}
+
+/**
+ * A fresh row that STANDS IN for a retired one (a re-rendered email, in the retired row's place) keeps the retired row's place in the
+ * retry schedule: its `attempts`, its `next_attempt_at` and its `last_error` are copied from the row it replaced, matched by kind,
+ * ref, recipient (case-folded, as the replace trigger matches) and organisation. Returns how many fresh rows it set.
+ *
+ * Why, and not a fresh start: the schedule is a bound (`MAX_ATTEMPTS` sends, `RETRY_DELAYS_MS` apart) that spares the provider and
+ * the player, and a row that was waiting an hour for its next try should wait that hour still. A fresh row would be tried at once
+ * by the request that wrote it and start the whole schedule over, once per re-render. The copy is the only thing the fresh row
+ * inherits: its id (and so its idempotency key), body and expiry are its own.
+ *
+ * Only a retired row that was ATTEMPTED (`attempts > 0`) passes anything on: a never-attempted one leaves the fresh row exactly
+ * as `enqueueEmail` wrote it, due at once and owned by the request's `dispatchNow` (the first-attempt window). Runs on the caller's
+ * transaction, after the fresh rows are written; the retired rows the fresh ones replaced are `replaced` by then and keep these
+ * columns. (A retired row is replaced only if its recipient got a fresh row: the caller counts what it expects to be carried
+ * against what this returns, and says so when they differ.)
+ */
+export async function carryRetryBudget(
+  db: Tx | typeof sql,
+  retiredIds: readonly string[],
+  freshIds: readonly string[],
+): Promise<number> {
+  if (retiredIds.length === 0 || freshIds.length === 0) return 0;
+  const rows = await db`
+    update email_outbox n
+       set attempts = o.attempts, next_attempt_at = o.next_attempt_at, last_error = o.last_error
+      from email_outbox o
+     where n.id = any(${freshIds as string[]}::uuid[]) and o.id = any(${retiredIds as string[]}::uuid[])
+       and n.status = 'queued' and o.attempts > 0
+       and n.kind = o.kind and n.ref_type = o.ref_type and n.ref_id = o.ref_id and lower(n.recipient) = lower(o.recipient)
+       and n.org_id is not distinct from o.org_id
+    returning n.id`;
   return rows.length;
 }

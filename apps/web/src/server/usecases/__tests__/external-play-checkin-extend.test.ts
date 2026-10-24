@@ -21,7 +21,7 @@ import type { DeliverMessage } from "@/server/email-outbox/transport";
 import { stubOutboxEnv, type SentInvite } from "@/server/usecases/__tests__/_invite-mail";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { sql } from "@/lib/db";
+import { connectionOptions, sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { FIXTURE_STATUSES, LOCKED_FIXTURE_STATUSES } from "@/lib/fixture-status";
 import { CHECKIN_EXTEND_STEP_MINUTES, liveExtendRefusal, liveExtendableCount, liveRoundRefusals, roundWhy } from "@/lib/checkin-extend";
@@ -42,25 +42,51 @@ import { loadOnlinePlayFixture } from "../external-play/guard";
 // The email seam (as open-round.test.ts): the invite goes through the email outbox and its replaced transport.
 // `retryAll`: while set, the provider answers every send 503, so the invites stay `queued` for the worker (Task 8: the extension moves
 // the expiry of a row that is still waiting to be retried).
-const mail = vi.hoisted(() => ({ sent: [] as SentInvite[], fail: new Set<string>(), retryAll: false }));
+// `retry`: the addresses the provider answers 503 for (the rest are accepted), so one seat can hold a sent invite beside a queued one.
+// `rateAll`: while set, the provider answers every send 429 (it refused before doing anything: an invite the extension may re-render).
+// `networkAll`: while set, every send fails in the network (the request may have reached the provider: an invite it must not re-render).
+const mail = vi.hoisted(() => ({
+  sent: [] as SentInvite[],
+  fail: new Set<string>(),
+  retry: new Set<string>(),
+  retryAll: false,
+  rateAll: false,
+  networkAll: false,
+}));
+// `renderFault`: while set, rendering an invite throws (the re-render's failure is logged and the extension goes through without it).
+// `pass` is how many renders succeed first, so a fault can strike AFTER some of the board's fresh rows were already written: only a
+// savepoint takes those back (a throw that precedes every write would leave the same rows with or without one).
+const renderFault = vi.hoisted(() => ({ fail: false, pass: 0, seen: 0 }));
 vi.mock("@/lib/email", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/email")>();
   const h = await import("@/server/usecases/__tests__/_invite-mail");
-  return { ...actual, externalPlayInviteEmail: h.renderInviteForTest };
+  return {
+    ...actual,
+    externalPlayInviteEmail: (...args: Parameters<typeof h.renderInviteForTest>) => {
+      if (renderFault.fail && renderFault.seen++ >= renderFault.pass) throw new Error("the invite could not be rendered");
+      return h.renderInviteForTest(...args);
+    },
+  };
 });
 // The invite is queued on the email outbox and sent after commit through its one network seam; the provider's answer is ours.
 vi.mock("@/server/email-outbox/transport", async () => {
   const h = await import("@/server/usecases/__tests__/_invite-mail");
   return {
     deliver: (msg: DeliverMessage) =>
-      mail.retryAll
-        ? Promise.resolve({ ok: false as const, reason: "http" as const, status: 503, errorName: "service_unavailable", detail: "later" })
-        : h.deliverForTest(mail, msg),
+      mail.rateAll
+        ? Promise.resolve({ ok: false as const, reason: "http" as const, status: 429, errorName: "rate_limit_exceeded", detail: "slow down" })
+        : mail.networkAll
+          ? Promise.resolve({ ok: false as const, reason: "network" as const, detail: "timeout" })
+          : mail.retryAll
+            ? Promise.resolve({ ok: false as const, reason: "http" as const, status: 503, errorName: "service_unavailable", detail: "later" })
+            : h.deliverForTest(mail, msg),
   };
 });
 // The outbox's expiry move, wrapped so a test can make it throw INSIDE the extension's transaction (the atomicity test). Every other
 // export, and every other call, is the real module's.
 const expiryFault = vi.hoisted(() => ({ fail: false }));
+// `carryFault.skip`: the retry-budget copy matches nothing (the check on its count is what a test of it needs to reach).
+const carryFault = vi.hoisted(() => ({ skip: false }));
 vi.mock("@/server/email-outbox/enqueue", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/server/email-outbox/enqueue")>();
   return {
@@ -68,6 +94,20 @@ vi.mock("@/server/email-outbox/enqueue", async (importOriginal) => {
     extendEmailExpiry: async (...args: Parameters<typeof actual.extendEmailExpiry>) => {
       if (expiryFault.fail) throw new Error("the expiry move blew up");
       return actual.extendEmailExpiry(...args);
+    },
+    carryRetryBudget: async (...args: Parameters<typeof actual.carryRetryBudget>) => (carryFault.skip ? 0 : actual.carryRetryBudget(...args)),
+  };
+});
+// How many times the extension read the board's seats (the pooled reads it must make OUTSIDE its transaction, and only when an invite is
+// waiting): `boardSeats` as the extension imports it, counted; the real function answers.
+const seatReads = vi.hoisted(() => ({ n: 0 }));
+vi.mock("../external-play/invite", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../external-play/invite")>();
+  return {
+    ...actual,
+    boardSeats: (...args: Parameters<typeof actual.boardSeats>) => {
+      seatReads.n += 1;
+      return actual.boardSeats(...args);
     },
   };
 });
@@ -100,12 +140,17 @@ vi.mock("@/server/external-play/lichess/board-api", () => ({
 import { openRound } from "../external-play/open-round";
 import { resolveExternalPlay } from "../external-play/resolve";
 import { scoreEvent } from "../scoring";
-import { extendCheckin, extendRoundCheckin } from "../external-play/checkin-extend";
+import { extendCheckin, extendRoundCheckin, type ExtendDeps } from "../external-play/checkin-extend";
 import { CHESS_SEAT_REF_TYPE, chessSeatRef } from "../external-play/seat-stamp";
 import { runOutboxTick } from "@/server/email-outbox/worker";
 import { seatPlayer } from "../external-play/preflight";
 import { claimRoomSeat, readRoom, type RoomDeps } from "../external-play/room";
-import { resendExternalPlayNotice } from "../external-play/invite";
+import { resendExternalPlayNotice, seatOutcome } from "../external-play/invite";
+import { chessInviteEndedBadly, findUnappliedChessEndings } from "../external-play/invite-outbox-hook";
+import { dispatchNow, latestEmailStatus, latestStatusesOfRows } from "@/server/email-outbox";
+import { OUTBOX_STATUSES, RETRYABLE_STATUSES } from "@/server/email-outbox/constants";
+import { openBody } from "@/server/email-outbox/seal";
+import { log } from "@/server/logger";
 import { listOpenRounds } from "../external-play/open-round-view";
 import { loadArbiterRound } from "../external-play/arbiter";
 import { playableWindow, sweepExternalPlay, type SweepDeps } from "../external-play/sweep";
@@ -115,6 +160,12 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { putVideoMeeting, seedOnlineChessRound, seedOwner, type SeedOnlineChessRoundResult, type SeedRoundBoard } from "./_external-play-seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
+/** A sweep pass that does not take the sweep's global lock. Test files share one database, and the serialised pass takes ONE advisory lock
+ *  (sweep.ts `SWEEP_LOCK`) and returns an empty, `skipped` report when another pass holds it - so two files sweeping at the same moment
+ *  make each other's passes vanish (reproduced on a clean origin/main with external-play-sweep.test.ts: its own passes and this file's
+ *  came back empty). Every pass here is scoped to the orgs of its own test (`orgIds`), so it needs no lock: it neither waits for it nor
+ *  holds it. */
+const sweepIsolated = (deps: SweepDeps) => sweepExternalPlay({ serialise: false, ...deps });
 const MIN = 60_000;
 const ORIGIN = "https://seazn.test";
 
@@ -123,8 +174,16 @@ afterAll(async () => {
 });
 beforeEach(() => {
   mail.sent.length = 0;
+  mail.retry.clear();
   mail.retryAll = false;
+  mail.rateAll = false;
+  mail.networkAll = false;
   expiryFault.fail = false;
+  carryFault.skip = false;
+  renderFault.fail = false;
+  renderFault.pass = 0;
+  renderFault.seen = 0;
+  seatReads.n = 0;
 });
 
 // ── the instants, from the constants ────────────────────────────────────────────────────────────────────────────────────────
@@ -574,7 +633,7 @@ describe.skipIf(!HAS_DB)("extendRoundCheckin - one action, the same rule on ever
 // 2. THE RACE - the extension against the sweep's no-show, both orders, with the window lock really contended
 // ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 describe.skipIf(!HAS_DB)("the extension races the sweep's no-show", () => {
-  const sweepAt = (r: SeedOnlineChessRoundResult, now: Date, over: SweepDeps = {}) => sweepExternalPlay({ ...over, now, orgIds: [r.orgId] });
+  const sweepAt = (r: SeedOnlineChessRoundResult, now: Date, over: SweepDeps = {}) => sweepIsolated({ ...over, now, orgIds: [r.orgId] });
   const status = async (id: string) => (await sql<{ status: string }[]>`select status from fixtures where id = ${id}`)[0]!.status;
 
   it("order 1 - the extension lands AFTER the sweep read its candidates and BEFORE it acts: the no-show re-reads the deadline under the window lock and does not forfeit", async () => {
@@ -638,7 +697,7 @@ describe.skipIf(!HAS_DB)("the extension races the sweep's no-show", () => {
           await sql`update fixture_external_play set checkin_extra_ms = ${CHECKIN_EXTEND_STEP_MS}, checkin_extensions = 1 where fixture_id = ${idB}`;
         }
       };
-      await sweepExternalPlay({ now: P, orgIds: [a.orgId, b.orgId], endMeeting });
+      await sweepIsolated({ now: P, orgIds: [a.orgId, b.orgId], endMeeting });
       return { ended, meetingA, meetingB };
     };
     const control = await run(false);
@@ -760,10 +819,10 @@ describe.skipIf(!HAS_DB)("every reader of a board's window sees the extension", 
     for (const x of [plain, ext]) await stampFixtureCheckIn(x.b.home.personId, x.id, x.r.orgId, { at: at(O, MIN) });
     await press(ext.r.owner, ext.id);
     const status = async (id: string) => (await sql<{ status: string }[]>`select status from fixtures where id = ${id}`)[0]!.status;
-    expect((await sweepExternalPlay({ now: P, orgIds: [plain.r.orgId, ext.r.orgId] })).noShows, "at P: the unextended board only").toBe(1);
+    expect((await sweepIsolated({ now: P, orgIds: [plain.r.orgId, ext.r.orgId] })).noShows, "at P: the unextended board only").toBe(1);
     expect([await status(plain.id), await status(ext.id)], "walked over / left alone").toEqual(["forfeited", "scheduled"]);
-    expect((await sweepExternalPlay({ now: at(deadlineAfter(1), -1), orgIds: [ext.r.orgId] })).noShows, "1 ms before the extended deadline").toBe(0);
-    expect((await sweepExternalPlay({ now: deadlineAfter(1), orgIds: [ext.r.orgId] })).noShows, "at the extended deadline").toBe(1);
+    expect((await sweepIsolated({ now: at(deadlineAfter(1), -1), orgIds: [ext.r.orgId] })).noShows, "1 ms before the extended deadline").toBe(0);
+    expect((await sweepIsolated({ now: deadlineAfter(1), orgIds: [ext.r.orgId] })).noShows, "at the extended deadline").toBe(1);
     expect(await status(ext.id)).toBe("forfeited");
   });
 
@@ -777,11 +836,11 @@ describe.skipIf(!HAS_DB)("every reader of a board's window sees the extension", 
     const endMeeting: NonNullable<SweepDeps["endMeeting"]> = async (m) => {
       ended.push(m);
     };
-    await sweepExternalPlay({ now: P, orgIds: [plain.r.orgId, ext.r.orgId], endMeeting });
+    await sweepIsolated({ now: P, orgIds: [plain.r.orgId, ext.r.orgId], endMeeting });
     expect(ended, "at P: the unextended board's room is ended, the extended one is not").toEqual([meetings.get(plain.id)]);
-    await sweepExternalPlay({ now: at(deadlineAfter(1), -1), orgIds: [ext.r.orgId], endMeeting });
+    await sweepIsolated({ now: at(deadlineAfter(1), -1), orgIds: [ext.r.orgId], endMeeting });
     expect(ended, "1 ms before the extended deadline").toEqual([meetings.get(plain.id)]);
-    await sweepExternalPlay({ now: deadlineAfter(1), orgIds: [ext.r.orgId], endMeeting });
+    await sweepIsolated({ now: deadlineAfter(1), orgIds: [ext.r.orgId], endMeeting });
     expect(ended, "at the extended deadline").toEqual([meetings.get(plain.id), meetings.get(ext.id)]);
   });
 
@@ -1044,7 +1103,7 @@ describe.skipIf(!HAS_DB)("a re-arm inside a running window keeps the board's ext
     expect(out, "premise: the plain board is the one the open refused").toMatchObject({ opened: true, skipped: [{ fixtureId: plain.fixtureId, reason: "window_closed" }] });
     expect(await rowOf(plain.fixtureId), "the refused board keeps the row it had").toEqual(before);
 
-    const report = await sweepExternalPlay({ now: P, orgIds: [r.orgId] });
+    const report = await sweepIsolated({ now: P, orgIds: [r.orgId] });
     expect(report.noShows, "the sweep forfeits the board nobody refused (the unextended neighbour, closed at P) and no other").toBe(1);
     expect((await noShowKey(neighbour.fixtureId))[0]!.n, "anti-vacuity: the sweep did act on a candidate").toBe(1);
     expect((await noShowKey(plain.fixtureId))[0]!.n, "the refused, closed board is not forfeited").toBe(0);
@@ -1147,23 +1206,23 @@ describe.skipIf(!HAS_DB)("the database's clock decides, not this machine's (revi
 // provider's answer is ours.
 /** The deadline of a board opened at `open` after `k` presses (the constants, not window.ts's function). */
 const deadlineOfPress = (open: Date, k: number): Date => at(open, DEADLINE_AFTER_MS + k * CHECKIN_EXTEND_STEP_MS);
+/** The open's instant for which the REAL clock sits between the board's old deadline and the one after a press: the worker judges expiry
+ *  on the database's clock, which no test can set, so the round is opened a deadline and half a step ago. */
+const openAround = (): Date => new Date(Date.now() - DEADLINE_AFTER_MS - CHECKIN_EXTEND_STEP_MS / 2);
+/** A round opened while the provider answers 503: every invite is left `queued` (attempt 1 spent) for the worker. */
+async function retryingRound(fixtures: number, open: Date): Promise<OpenedRound> {
+  mail.retryAll = true;
+  try {
+    return await openedRound(fixtures, { open });
+  } finally {
+    mail.retryAll = false;
+  }
+}
 
 describe.skipIf(!HAS_DB)("extendCheckin - the queued invites' expiry follows the extension (Task 8)", () => {
   afterEach(() => {
     mail.retryAll = false;
   });
-  /** The open's instant for which the REAL clock sits between the board's old deadline and the one after a press: the worker judges expiry
-   *  on the database's clock, which no test can set, so the round is opened a deadline and half a step ago. */
-  const openAround = (): Date => new Date(Date.now() - DEADLINE_AFTER_MS - CHECKIN_EXTEND_STEP_MS / 2);
-  /** A round opened while the provider answers 503: every invite is left `queued` (attempt 1 spent) for the worker. */
-  async function retryingRound(fixtures: number, open: Date): Promise<OpenedRound> {
-    mail.retryAll = true;
-    try {
-      return await openedRound(fixtures, { open });
-    } finally {
-      mail.retryAll = false;
-    }
-  }
   type InviteRow = { id: string; status: string; expires_at: Date };
   /** Every invite of a board: both seats, every recipient. */
   const invitesOf = (fixtureId: string) =>
@@ -1194,7 +1253,7 @@ describe.skipIf(!HAS_DB)("extendCheckin - the queued invites' expiry follows the
     const out = await press(r.owner, fixtureId, at(open, MIN));
     expect(out.deadlineAt, "the deadline the press reports").toBe(newDeadline.toISOString());
     const after = await invitesOf(fixtureId);
-    expect(ids(after), "the same rows").toEqual(ids(before));
+    expect(ids(after), "the same rows: an invite that has already been attempted is NOT re-rendered (section 5), only its expiry moves").toEqual(ids(before));
     expect(expiries(after), "every invite now expires at the NEW deadline").toEqual(after.map(() => newDeadline.getTime()));
 
     await makeDue(after);
@@ -1325,6 +1384,963 @@ describe.skipIf(!HAS_DB)("extendCheckin - the queued invites' expiry follows the
     expect(src, "the board's step opens its transaction on the pool").toMatch(/return sql\.begin\(async \(tx\)/);
     expect(src, "and never goes through withTenant (app_user)").not.toMatch(/withTenant/);
     expect(src, "and calls the outbox's expiry move on that transaction").toMatch(/extendEmailExpiry\(\s*tx,/);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// 5. THE INVITES, RE-RENDERED - an invite still waiting to go out must not name a deadline that has passed
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// An invite's SEALED BODY names the deadline the board had when it was written. Task 8 moved the expiry of a waiting row, so it is not
+// ended unsent - but it would still go out, later, saying "check in by <the old time>". Controller ruling (not an owner ruling):
+// re-render only what has NOT gone out, and NEVER send an extra mail - the second outranks the first. In the extension's own
+// transaction, every recipient whose newest non-replaced row is `queued` AND that no request can have reached the provider with (never
+// attempted, or its only attempt answered 429) gets a fresh row with the NEW deadline and the SAME stamp (the V470 replace trigger retires the
+// stale one). Any other row is not touched: a `sending`, `sent`, `delayed`, `delivered` or ended one is out of reach, and a queued one
+// whose earlier attempt ended in a network error or a 5xx may have been ACCEPTED with the answer lost - a fresh row has a new
+// idempotency key and would mail the recipient twice - so it keeps its key and body and only its expiry moves. After the commit the
+// fresh rows are dispatched like the open's. Driven through the real producers (`openRound`, `resend`, `extendCheckin` /
+// `extendRoundCheckin`, `runOutboxTick`); only the provider's answer is ours. The expected deadline is written from the constants and
+// read in the mail as its MINUTE (":MM" of the UTC instant), never from the formatter under test.
+type OutboxRow = {
+  id: string;
+  ref_id: string;
+  recipient: string;
+  status: string;
+  attempts: number;
+  next_attempt_at: Date;
+  last_error: string | null;
+  expires_at: Date;
+  provider_id: string | null;
+  body_sealed: Buffer | null;
+  meta: { fixtureId: string; colour: "white" | "black"; stampedAt: string };
+};
+/** Every outbox row of a board's two seats, `replaced` ones too (the first-written first). */
+const outboxOf = (fixtureId: string) =>
+  sql<OutboxRow[]>`
+    select id, ref_id, recipient, status, attempts, next_attempt_at, last_error, expires_at, provider_id, body_sealed, meta
+      from email_outbox
+     where kind = 'chess_invite' and ref_type = ${CHESS_SEAT_REF_TYPE}
+       and ref_id in (${chessSeatRef(fixtureId, "white")}, ${chessSeatRef(fixtureId, "black")})
+     order by created_at, ref_id, recipient, id`;
+/** What the seat is keyed by in the outbox: the ref and the recipient, case-folded as the replace rule folds it. */
+const keyOf = (x: OutboxRow): string => `${x.ref_id}|${x.recipient.toLowerCase()}`;
+const byKey = (rows: OutboxRow[]): Map<string, OutboxRow> => new Map(rows.map((x) => [keyOf(x), x]));
+type RenderedInvite = { to: string; args: { deadlineLabel: string; opensLabel?: string; fixtureUrl: string; roundNo: number }; locale: string };
+/** The email as the sender rendered it (the test seam writes its arguments as JSON in the text), opened from the sealed body. */
+const renderedOf = (x: OutboxRow): RenderedInvite => {
+  if (x.body_sealed === null) throw new Error(`row ${x.id} (${x.status}) holds no body to read`);
+  return JSON.parse(openBody(x.body_sealed).text) as RenderedInvite;
+};
+const minuteOf = (d: Date): string => d.toISOString().slice(14, 16);
+/** Does this label name that instant? By its minute: the deadlines in play are 5 minutes apart, so no two share one. */
+const namesDeadline = (label: string, d: Date): boolean => label.includes(`:${minuteOf(d)}`);
+type Stamps = { white: Date | null; black: Date | null };
+const stampsOf = async (fixtureId: string): Promise<Stamps> =>
+  (await sql<Stamps[]>`select white_emailed_at as white, black_emailed_at as black from fixture_external_play where fixture_id = ${fixtureId}`)[0]!;
+const iso = (d: Date | null): string | null => (d === null ? null : d.toISOString());
+const idsOf = (rows: { id: string }[]): string[] => rows.map((x) => x.id).sort();
+/** Make queued rows read as never attempted (a row the open's dispatch deferred), the state a fresh first send starts from. */
+const neverAttempted = (rows: { id: string }[]) =>
+  sql`update email_outbox set attempts = 0, next_attempt_at = now(), last_error = null where id = any(${idsOf(rows)}::uuid[]) and status = 'queued'`;
+/** A round opened while the provider answers 429 - it refused the request before doing anything, the one ATTEMPTED state an extension may
+ *  re-render: every invite is left `queued`, attempt 1 spent, `last_error` = `http 429 rate_limit_exceeded` (what `attempt.ts` writes).
+ *  The open's dispatch stops at its first 429 and leaves the rest unattempted, so each remaining row gets its own first attempt through
+ *  the same real send. */
+async function rateLimitedRound(fixtures: number, open: Date): Promise<OpenedRound> {
+  mail.rateAll = true;
+  try {
+    const r = await openedRound(fixtures, { open });
+    for (const b of r.boards) {
+      const todo = (await outboxOf(b.fixtureId)).filter((x) => x.status === "queued" && x.attempts === 0);
+      for (const x of todo) await dispatchNow([x.id], { now: at(open, MIN / 2) });
+    }
+    return r;
+  } finally {
+    mail.rateAll = false;
+  }
+}
+/** A round opened while the network fails: the request may have reached the provider, so each invite is `queued`, attempt 1 spent,
+ *  `last_error` = `network timeout` - a row an extension must NOT re-render. */
+async function networkFailedRound(fixtures: number, open: Date): Promise<OpenedRound> {
+  mail.networkAll = true;
+  try {
+    return await openedRound(fixtures, { open });
+  } finally {
+    mail.networkAll = false;
+  }
+}
+const RATE_LIMITED = ["queued", 1, "http 429 rate_limit_exceeded"] as const;
+/** A round whose invites met a 429 TWICE: the worker's retry of the first 429 was refused again, so `last_error` reads as a 429 exactly as
+ *  above but `attempts` is 2. `last_error` keeps only the LAST answer, so an earlier attempt could have been a network error the provider
+ *  accepted - a 429 after it proves nothing, and an extension must NOT re-render such a row. The retry is the real worker's: the rows'
+ *  `expires_at` is held in the future (the database's clock decides it, and the round is opened so the old deadline has passed) for the one
+ *  tick, then put back exactly. */
+async function rateLimitedTwiceRound(fixtures: number, open: Date): Promise<OpenedRound> {
+  const r = await rateLimitedRound(fixtures, open);
+  for (const b of r.boards) {
+    const rows = await outboxOf(b.fixtureId);
+    const expiries = rows.map((x) => x.expires_at.toISOString());
+    const rowIds = idsOf(rows);
+    await sql`update email_outbox set expires_at = now() + interval '1 hour', next_attempt_at = now() - interval '1 second' where id = any(${rowIds}::uuid[])`;
+    mail.rateAll = true;
+    try {
+      // One tick per row: a tick stops claiming after its first 429 (it defers the rest), so a single tick would retry one row only.
+      for (const id of rowIds) await runOutboxTick({ onlyIds: [id], sleep: async () => undefined });
+    } finally {
+      mail.rateAll = false;
+    }
+    for (const [i, x] of rows.entries()) await sql`update email_outbox set expires_at = ${expiries[i]!}::timestamptz where id = ${x.id}`;
+  }
+  return r;
+}
+const pressWith = (auth: AuthCtx, fixtureId: string, now: Date, over: Partial<ExtendDeps>) =>
+  extendCheckin(auth, fixtureId, { now: () => now, publish: async () => {}, ...over });
+/** The dispatch that sends nothing: the rows stay as the transaction left them, for a test to read their sealed bodies. */
+const noDispatch: NonNullable<ExtendDeps["dispatch"]> = async () => new Map();
+/** A dispatch that records what it was asked for and what another connection could see at that moment: a row the extension's
+ *  transaction had not committed is invisible to the pool, so a dispatch made BEFORE the commit would see none of its ids. */
+function spyDispatch() {
+  const calls: { ids: string[]; seen: { id: string; status: string }[] }[] = [];
+  const dispatch: NonNullable<ExtendDeps["dispatch"]> = async (ids) => {
+    const seen = await sql<{ id: string; status: string }[]>`select id, status from email_outbox where id = any(${[...ids]}::uuid[])`;
+    calls.push({ ids: [...ids], seen });
+    return new Map();
+  };
+  return { calls, dispatch };
+}
+/** A second (and third) member of an entrant: their linked addresses become recipients of that seat. */
+async function addMember(r: SeedOnlineChessRoundResult, entrantId: string, email: string): Promise<void> {
+  const [u] = await sql<{ id: string }[]>`
+    insert into users (email, display_name, email_verified, locale) values (${email}, 'Team mate', true, 'en') returning id`;
+  const [p] = await sql<{ id: string }[]>`
+    insert into persons (org_id, full_name, user_id) values (${r.orgId}, 'Team mate', ${u!.id}) returning id`;
+  await sql`insert into entrant_members (entrant_id, person_id, org_id) values (${entrantId}, ${p!.id}, ${r.orgId})`;
+}
+
+describe.skipIf(!HAS_DB)("extendCheckin - an invite still waiting to be sent is re-rendered with the new deadline", () => {
+  afterEach(() => {
+    mail.retryAll = false;
+    mail.retry.clear();
+    renderFault.fail = false;
+  });
+  const makeDue = (rows: { id: string }[]) =>
+    sql`update email_outbox set next_attempt_at = now() - interval '1 second' where id = any(${idsOf(rows)}::uuid[])`;
+
+  it("a queued invite nobody has attempted is retired (`replaced`, body gone) and a fresh one, naming the NEW deadline on the SAME stamp, takes its place", async () => {
+    const open = openAround();
+    const r = await rateLimitedRound(1, open);
+    const fixtureId = r.boards[0]!.fixtureId;
+    const oldDeadline = at(open, DEADLINE_AFTER_MS);
+    const newDeadline = at(oldDeadline, CHECKIN_EXTEND_STEP_MS);
+    await neverAttempted(await outboxOf(fixtureId));
+    const before = await outboxOf(fixtureId);
+    const stamps = await stampsOf(fixtureId);
+    expect(before.length, "premise: both seats were invited").toBeGreaterThanOrEqual(2);
+    expect(before.map((x) => `${x.status}/${x.attempts}`), "premise: every invite is queued and never attempted").toEqual(before.map(() => "queued/0"));
+    let named = 0;
+    for (const x of before) {
+      expect(namesDeadline(renderedOf(x).args.deadlineLabel, oldDeadline), "premise: each body names the OLD deadline").toBe(true);
+      expect(namesDeadline(renderedOf(x).args.deadlineLabel, newDeadline), "... and not the new one").toBe(false);
+      named += 1;
+    }
+    expect(named).toBe(before.length);
+
+    await pressWith(r.owner, fixtureId, at(open, MIN), { dispatch: noDispatch });
+
+    const after = await outboxOf(fixtureId);
+    const beforeIds = new Set(before.map((x) => x.id));
+    const old = after.filter((x) => beforeIds.has(x.id));
+    const fresh = after.filter((x) => !beforeIds.has(x.id));
+    expect(old.map((x) => x.status), "every stale invite is retired").toEqual(old.map(() => "replaced"));
+    expect(old.length, "all of them, none lost").toBe(before.length);
+    expect(old.map((x) => x.body_sealed), "a retired row keeps no body (the credential goes with it)").toEqual(old.map(() => null));
+    expect(fresh.length, "one fresh invite per retired one").toBe(before.length);
+    expect([...byKey(fresh).keys()].sort(), "for the same seat and the same recipient").toEqual([...byKey(before).keys()].sort());
+    for (const f of fresh) {
+      expect(f.status).toBe("queued");
+      expect(f.attempts, "never attempted, so a fresh start").toBe(0);
+      expect(f.expires_at.getTime(), "expiring at the NEW deadline").toBe(newDeadline.getTime());
+      const body = renderedOf(f);
+      expect(namesDeadline(body.args.deadlineLabel, newDeadline), "its body names the NEW deadline").toBe(true);
+      expect(namesDeadline(body.args.deadlineLabel, oldDeadline), "and no longer the old one").toBe(false);
+      const stamp = f.meta.colour === "white" ? stamps.white : stamps.black;
+      expect(f.meta.stampedAt, "the SAME stamp the seat holds, so the chess hook keeps finding the seat's rows").toBe(iso(stamp));
+      expect(f.meta.stampedAt).toBe(byKey(before).get(keyOf(f))!.meta.stampedAt);
+    }
+    expect(iso((await stampsOf(fixtureId)).white), "the seat stamps are exactly as they were").toBe(iso(stamps.white));
+    expect(iso((await stampsOf(fixtureId)).black)).toBe(iso(stamps.black));
+  });
+
+  it("and once sent, the provider got ONE mail per recipient, naming the NEW deadline - nothing was mailed with the old one", async () => {
+    const open = openAround();
+    const r = await rateLimitedRound(1, open);
+    const fixtureId = r.boards[0]!.fixtureId;
+    const oldDeadline = at(open, DEADLINE_AFTER_MS);
+    const newDeadline = at(oldDeadline, CHECKIN_EXTEND_STEP_MS);
+    await neverAttempted(await outboxOf(fixtureId));
+    const before = await outboxOf(fixtureId);
+    mail.sent.length = 0;
+
+    await pressWith(r.owner, fixtureId, at(open, MIN), {}); // the real dispatchNow, on the press's own clock
+
+    expect(mail.sent.map((m) => m.to).sort(), "one mail to each recipient, once").toEqual(before.map((x) => x.recipient).sort());
+    expect(mail.sent.length).toBeGreaterThanOrEqual(2);
+    for (const m of mail.sent) {
+      expect(namesDeadline(m.deadlineLabel, newDeadline), `${m.to}: the NEW deadline`).toBe(true);
+      expect(namesDeadline(m.deadlineLabel, oldDeadline), `${m.to}: not the old one`).toBe(false);
+    }
+    const after = await outboxOf(fixtureId);
+    const live = after.filter((x) => x.status !== "replaced");
+    expect(live.map((x) => x.status), "every fresh row went out").toEqual(live.map(() => "sent"));
+    expect(live.length).toBe(before.length);
+    expect(
+      (await latestStatusesOfRows(before.map((x) => x.id))).size,
+      "each retired id still answers with its recipient's newest row",
+    ).toBe(before.length);
+  });
+
+  it("a row the provider answered 429 (it refused before doing anything) is re-rendered too, and its successor keeps the retry budget: the attempts spent, the retry time, the last error", async () => {
+    const open = openAround();
+    const r = await rateLimitedRound(1, open);
+    const fixtureId = r.boards[0]!.fixtureId;
+    const oldDeadline = at(open, DEADLINE_AFTER_MS);
+    const newDeadline = at(oldDeadline, CHECKIN_EXTEND_STEP_MS);
+    const before = await outboxOf(fixtureId);
+    expect(before.length).toBeGreaterThanOrEqual(2);
+    expect(
+      before.map((x) => [x.status, x.attempts, x.last_error]),
+      "premise: the provider said 429 once; each invite is queued behind a retry (the exact text the eligibility test reads)",
+    ).toEqual(before.map(() => RATE_LIMITED));
+
+    await pressWith(r.owner, fixtureId, at(open, MIN), { dispatch: noDispatch });
+
+    const after = await outboxOf(fixtureId);
+    const beforeIds = new Set(before.map((x) => x.id));
+    const fresh = after.filter((x) => !beforeIds.has(x.id));
+    expect(after.filter((x) => beforeIds.has(x.id)).map((x) => x.status)).toEqual(before.map(() => "replaced"));
+    expect(fresh.length).toBe(before.length);
+    for (const f of fresh) {
+      const was = byKey(before).get(keyOf(f))!;
+      expect(namesDeadline(renderedOf(f).args.deadlineLabel, newDeadline), "re-rendered with the NEW deadline").toBe(true);
+      expect(f.attempts, "the attempt already spent is still spent (the schedule is not restarted)").toBe(was.attempts);
+      expect(f.next_attempt_at.getTime(), "the retry stays due when it was due").toBe(was.next_attempt_at.getTime());
+      expect(f.last_error, "and says why it is waiting").toBe(was.last_error);
+      expect(f.status).toBe("queued");
+    }
+
+    // The worker owns it from there: due, it is attempted ONCE MORE (attempt 2 of the schedule), and delivered with the new deadline.
+    await makeDue(fresh);
+    mail.sent.length = 0;
+    expect(await runOutboxTick({ onlyIds: idsOf(fresh), sleep: async () => undefined })).toMatchObject({
+      claimed: fresh.length,
+      sent: fresh.length,
+      expired: 0,
+    });
+    const sentNow = (await outboxOf(fixtureId)).filter((x) => x.status !== "replaced");
+    expect(sentNow.map((x) => [x.status, x.attempts]), "the budget continued: attempt 2, not a second attempt 1").toEqual(sentNow.map(() => ["sent", 2]));
+    expect(mail.sent.length).toBe(fresh.length);
+    for (const m of mail.sent) expect(namesDeadline(m.deadlineLabel, newDeadline), `${m.to}: the NEW deadline`).toBe(true);
+  });
+
+  // The ruling that outranks re-rendering: NEVER an extra mail. A row whose earlier attempt ended in a network error or a 5xx may have been
+  // ACCEPTED by the provider with the answer lost; a fresh row has a new idempotency key, so re-rendering it could deliver twice. Such a row
+  // keeps its id (its key) and its body; only its expiry moves, and the worker's retry (same key) is harmless whichever way the first ended.
+  for (const [name, round, lastError, attempted] of [
+    ["a 503", retryingRound, "http 503 service_unavailable", 1],
+    ["a network error", networkFailedRound, "network timeout", 1],
+    // controller ruling: a 429 proves the request was refused only when it was the row's ONLY attempt.
+    ["a 429 that followed an earlier attempt (attempts 2)", rateLimitedTwiceRound, "http 429 rate_limit_exceeded", 2],
+  ] as const) {
+    it(`a row whose attempt ended in ${name} is NOT re-rendered (the request may have been accepted): same row, same key, same body - only its expiry moves; no dispatch, one mail in all`, async () => {
+      const open = openAround();
+      const r = await round(1, open);
+      const fixtureId = r.boards[0]!.fixtureId;
+      const oldDeadline = at(open, DEADLINE_AFTER_MS);
+      const newDeadline = at(oldDeadline, CHECKIN_EXTEND_STEP_MS);
+      const before = await outboxOf(fixtureId);
+      expect(before.length, "premise: both seats were invited").toBeGreaterThanOrEqual(2);
+      expect(
+        before.map((x) => [x.status, x.attempts, x.last_error]),
+        `premise: each invite was attempted ${attempted}x and is waiting behind a retry (${lastError})`,
+      ).toEqual(before.map(() => ["queued", attempted, lastError]));
+      const spy = spyDispatch();
+      mail.sent.length = 0;
+
+      await pressWith(r.owner, fixtureId, at(open, MIN), { dispatch: spy.dispatch });
+
+      const after = await outboxOf(fixtureId);
+      expect(idsOf(after), "no new row, and so no new idempotency key").toEqual(idsOf(before));
+      expect(after.map((x) => x.status), "none retired").toEqual(after.map(() => "queued"));
+      expect(after.map((x) => x.body_sealed?.toString("hex")), "the body is the one written at the open").toEqual(
+        before.map((x) => x.body_sealed?.toString("hex")),
+      );
+      for (const x of after) {
+        expect(namesDeadline(renderedOf(x).args.deadlineLabel, oldDeadline), "it still names the deadline it was written with").toBe(true);
+        expect(x.expires_at.getTime(), "but it expires at the NEW deadline, so its retry is delivered and not expired").toBe(newDeadline.getTime());
+        expect([x.attempts, x.last_error], "and its place in the schedule is untouched").toEqual([attempted, lastError]);
+      }
+      expect(spy.calls, "nothing was re-rendered, so nothing is dispatched").toEqual([]);
+      expect(mail.sent, "and nothing was mailed by the press").toEqual([]);
+
+      // The worker's retry under the SAME key: one mail per recipient in all.
+      await makeDue(after);
+      expect(await runOutboxTick({ onlyIds: idsOf(after), sleep: async () => undefined })).toMatchObject({ claimed: after.length, sent: after.length, expired: 0 });
+      expect(mail.sent.map((m) => m.to).sort(), "exactly one mail to each recipient, in total").toEqual(before.map((x) => x.recipient).sort());
+    });
+  }
+
+  // EVERY status but `queued`, taken from the outbox's own list: a status added to the outbox is swept too. The base is a round whose
+  // invites PASS the attempt test (429, attempt 1 spent), so the status test is the only thing keeping these rows out - a sweep over
+  // rows that fail the attempt test as well would stay green with the status test deleted.
+  const NOT_QUEUED = OUTBOX_STATUSES.filter((st) => st !== "queued");
+  let swept = 0;
+  for (const status of NOT_QUEUED) {
+    it(`a ${status} invite is NOT touched: no new row, no retirement, no extra mail`, async () => {
+      const open = openAround();
+      const r = await rateLimitedRound(1, open); // queued rows, with bodies, eligible; put them in the status under test
+      const fixtureId = r.boards[0]!.fixtureId;
+      const newDeadline = at(open, DEADLINE_AFTER_MS + CHECKIN_EXTEND_STEP_MS);
+      const ids = idsOf(await outboxOf(fixtureId));
+      expect(ids.length, "premise: both seats were invited").toBeGreaterThanOrEqual(2);
+      if (status === "sending") {
+        await sql`update email_outbox set status = 'sending', lease_until = now() + interval '2 minutes' where id = any(${ids}::uuid[])`;
+      } else {
+        // The ended and delivered shapes the schema allows: no body, no lease; a provider id and a send time on the ones the provider took.
+        await sql`
+          update email_outbox
+             set status = ${status}, body_sealed = null, lease_until = null, sent_at = now(), provider_id = 're_' || id::text
+           where id = any(${ids}::uuid[])`;
+      }
+      const before = await outboxOf(fixtureId);
+      expect(before.map((x) => x.status), "premise: every invite is in the status under test").toEqual(before.map(() => status));
+      expect(before.map((x) => [x.attempts, x.last_error]), "premise: and would pass the attempt test, so only the status keeps it out").toEqual(
+        before.map(() => [1, "http 429 rate_limit_exceeded"]),
+      );
+      mail.sent.length = 0;
+      const spy = spyDispatch();
+
+      await pressWith(r.owner, fixtureId, at(open, MIN), { dispatch: spy.dispatch });
+
+      const after = await outboxOf(fixtureId);
+      expect(idsOf(after), "no new row").toEqual(ids);
+      expect(after.map((x) => x.status), "and no row retired").toEqual(after.map(() => status));
+      expect(spy.calls, "nothing to send, so no dispatch").toEqual([]);
+      expect(mail.sent, "no extra mail").toEqual([]);
+      // The expiry rule of Task 8 is unchanged beside it: a row that can still be retried moves, a finished one does not.
+      const moved = RETRYABLE_STATUSES.includes(status);
+      expect(after.map((x) => x.expires_at.getTime())).toEqual(
+        after.map((x) => (moved ? newDeadline.getTime() : byKey(before).get(keyOf(x))!.expires_at.getTime())),
+      );
+      swept += 1;
+    });
+  }
+  it("the status sweep above ran for every status of the outbox but `queued` (a sweep that ran for none is a failure, not a pass)", () => {
+    expect(NOT_QUEUED.length, "the list the sweep is drawn from").toBeGreaterThan(0);
+    expect(NOT_QUEUED.length, "and it is the whole list less `queued`").toBe(OUTBOX_STATUSES.length - 1);
+    expect(swept, "every one of them was swept").toBe(NOT_QUEUED.length);
+  });
+
+  it("a board is judged seat by seat: the player whose invite went out keeps it; only the player whose invite is still waiting gets a new one", async () => {
+    const open = openAround();
+    const r = await openedRound(1, { open }); // every invite is sent
+    const b = r.boards[0]!;
+    const [fixtureId, retrying, mailedTo] = [b.fixtureId, b.home.email, b.away.email];
+    // A resend re-mails both seats on their stamps: the away player's goes out again, the home player's is answered 503 and waits.
+    mail.retry.add(retrying);
+    await resendExternalPlayNotice(r.owner, fixtureId, ORIGIN, { now: at(open, 30_000) });
+    mail.retry.clear();
+    const newDeadline = at(open, DEADLINE_AFTER_MS + CHECKIN_EXTEND_STEP_MS);
+    const before = await outboxOf(fixtureId);
+    const sent = before.find((x) => x.recipient === mailedTo && x.status !== "replaced")!;
+    const waiting = before.find((x) => x.recipient === retrying && x.status !== "replaced")!;
+    expect([sent.status, waiting.status], "premise: one invite went out, the other is waiting for a retry").toEqual(["sent", "queued"]);
+    await neverAttempted([waiting]);
+    mail.sent.length = 0;
+
+    await pressWith(r.owner, fixtureId, at(open, MIN), {});
+
+    const after = await outboxOf(fixtureId);
+    expect(after.find((x) => x.id === sent.id), "the sent invite is the very same row, untouched").toMatchObject({ status: "sent", provider_id: sent.provider_id });
+    expect(after.find((x) => x.id === waiting.id)!.status, "the waiting one is retired").toBe("replaced");
+    const beforeIds = new Set(before.map((x) => x.id));
+    const fresh = after.filter((x) => !beforeIds.has(x.id));
+    expect(fresh.map((x) => [x.recipient, x.status]), "and replaced by exactly one fresh invite, to the same person").toEqual([[retrying, "sent"]]);
+    expect(mail.sent.map((m) => m.to), "the only mail after the press went to the player who had not got one").toEqual([retrying]);
+    expect(namesDeadline(mail.sent[0]!.deadlineLabel, newDeadline)).toBe(true);
+  });
+
+  it("a seat with several recipients is judged recipient by recipient: the member whose mail went out is not re-mailed (a team-mate's waiting one is re-rendered)", async () => {
+    const open = openAround();
+    const r = await openedRound(1, { open }); // every invite is sent
+    const b = r.boards[0]!;
+    const mate = `mate-${randomUUID().slice(0, 8)}@seazn.test`;
+    await addMember(r, b.home.entrantId, mate);
+    mail.retry.add(mate);
+    // A resend re-mails the whole seat on its existing stamp: the captain's goes out again, the team-mate's is answered 503 and waits.
+    await resendExternalPlayNotice(r.owner, b.fixtureId, ORIGIN, { now: at(open, 30_000) });
+    mail.retry.clear();
+    const before = await outboxOf(b.fixtureId);
+    const captain = before.find((x) => x.recipient === b.home.email && x.status !== "replaced")!;
+    const mateRow = before.find((x) => x.recipient === mate && x.status !== "replaced")!;
+    expect(captain.ref_id, "premise: one seat, two recipients").toBe(mateRow.ref_id);
+    expect([captain.status, mateRow.status], "premise: the captain's mail went out, the team-mate's is waiting").toEqual(["sent", "queued"]);
+    await neverAttempted([mateRow]);
+    mail.sent.length = 0;
+
+    await pressWith(r.owner, b.fixtureId, at(open, MIN), {});
+
+    const after = await outboxOf(b.fixtureId);
+    expect(after.find((x) => x.id === captain.id), "the captain's mail is untouched: not retired, so no second mail to them").toMatchObject({ status: "sent" });
+    expect(after.find((x) => x.id === mateRow.id)!.status).toBe("replaced");
+    expect(mail.sent.map((m) => m.to), "one mail, to the team-mate whose invite was still waiting").toEqual([mate]);
+    expect(
+      after.filter((x) => x.ref_id === captain.ref_id && x.recipient === mate && x.status !== "replaced").map((x) => x.meta.stampedAt),
+      "on the seat's stamp",
+    ).toEqual([mateRow.meta.stampedAt]);
+  });
+
+  it("the seat stays stamped and the chess hook never releases it because of the retired row (the fresh one holds the stamp); when the fresh one ends badly, the seat IS released", async () => {
+    const open = openAround();
+    const r = await rateLimitedRound(1, open);
+    const fixtureId = r.boards[0]!.fixtureId;
+    const stamps = await stampsOf(fixtureId);
+    expect([stamps.white, stamps.black], "premise: both seats are stamped").not.toContain(null);
+    const before = await outboxOf(fixtureId);
+    await pressWith(r.owner, fixtureId, at(open, MIN), { dispatch: noDispatch });
+    const after = await outboxOf(fixtureId);
+    const retired = after.filter((x) => x.status === "replaced");
+    const fresh = after.filter((x) => x.status === "queued");
+    expect([retired.length, fresh.length]).toEqual([before.length, before.length]);
+    expect([iso((await stampsOf(fixtureId)).white), iso((await stampsOf(fixtureId)).black)], "the stamps did not move").toEqual([iso(stamps.white), iso(stamps.black)]);
+
+    // The hook told about each RETIRED row (as if it had ended) finds the fresh row on the same stamp and leaves the seat alone.
+    for (const x of retired) {
+      await chessInviteEndedBadly({ id: x.id, kind: "chess_invite", refType: CHESS_SEAT_REF_TYPE, refId: x.ref_id, status: "expired", meta: x.meta });
+    }
+    expect([iso((await stampsOf(fixtureId)).white), iso((await stampsOf(fixtureId)).black)], "no seat was released").toEqual([iso(stamps.white), iso(stamps.black)]);
+    const unapplied = (await findUnappliedChessEndings(1000)).filter((e) => e.meta.fixtureId === fixtureId);
+    expect(unapplied, "and the worker's re-drive finds nothing to release on this board").toEqual([]);
+
+    // The positive pair: the fresh rows ending badly IS what releases the seat, on the stamp they carry.
+    await sql`update email_outbox set status = 'dead', body_sealed = null, last_error = 'later' where id = any(${idsOf(fresh)}::uuid[])`;
+    for (const x of fresh) {
+      await chessInviteEndedBadly({ id: x.id, kind: "chess_invite", refType: CHESS_SEAT_REF_TYPE, refId: x.ref_id, status: "dead", meta: x.meta });
+    }
+    expect(await stampsOf(fixtureId), "the seats are released once every email for the stamp has ended badly").toEqual({ white: null, black: null });
+  });
+
+  it("what the arbiter and the response read is unchanged: each retired id still answers with its recipient's newest row, a seat is still `retrying`, and the status read shows one row per recipient", async () => {
+    const open = openAround();
+    const r = await rateLimitedRound(1, open);
+    const fixtureId = r.boards[0]!.fixtureId;
+    const refs = [chessSeatRef(fixtureId, "white"), chessSeatRef(fixtureId, "black")];
+    const before = await outboxOf(fixtureId);
+    const seatsOf = (rows: OutboxRow[], statuses: Map<string, string>) =>
+      (["white", "black"] as const).map((colour) =>
+        seatOutcome(rows.filter((x) => x.ref_id === chessSeatRef(fixtureId, colour)).map((x) => statuses.get(x.id) as never)),
+      );
+    const statusBefore = await latestStatusesOfRows(before.map((x) => x.id));
+    const deskBefore = await latestEmailStatus(r.orgId, CHESS_SEAT_REF_TYPE, refs);
+    expect(seatsOf(before, statusBefore), "premise: both seats read `retrying`").toEqual(["retrying", "retrying"]);
+    expect(deskBefore.length, "premise: the status read has a row per recipient").toBe(before.length);
+
+    await pressWith(r.owner, fixtureId, at(open, MIN), { dispatch: noDispatch });
+
+    const statusAfter = await latestStatusesOfRows(before.map((x) => x.id));
+    expect([...statusAfter.values()], "the response's rule: a retired id answers with the newest non-replaced row").toEqual(before.map(() => "queued"));
+    expect(seatsOf(before, statusAfter), "so both seats still read `retrying`").toEqual(["retrying", "retrying"]);
+    const deskAfter = await latestEmailStatus(r.orgId, CHESS_SEAT_REF_TYPE, refs);
+    const shape = (rows: typeof deskBefore) => rows.map((x) => [x.refId, x.recipient.toLowerCase(), x.kind, x.status]).sort();
+    expect(shape(deskAfter), "the desk's count of invites and their statuses are exactly as before").toEqual(shape(deskBefore));
+  });
+
+  it("two presses leave ONE live invite per recipient, naming the latest deadline, on the original stamp, with the retry budget carried through both generations", async () => {
+    const open = openAround();
+    const r = await rateLimitedRound(1, open);
+    const fixtureId = r.boards[0]!.fixtureId;
+    const before = await outboxOf(fixtureId);
+    expect(before.length, "premise: the seats were invited, so there is something to count").toBeGreaterThanOrEqual(2);
+    expect(before.map((x) => [x.status, x.attempts, x.last_error]), "premise: each invite waits behind a 429").toEqual(before.map(() => RATE_LIMITED));
+    const stamps = await stampsOf(fixtureId);
+    await pressWith(r.owner, fixtureId, at(open, MIN), { dispatch: noDispatch });
+    await pressWith(r.owner, fixtureId, at(open, 2 * MIN), { dispatch: noDispatch });
+
+    const all = await outboxOf(fixtureId);
+    const live = all.filter((x) => x.status !== "replaced");
+    expect(all.length, "three generations of each invite").toBe(3 * before.length);
+    expect(all.filter((x) => x.status === "replaced").length, "the first two retired").toBe(2 * before.length);
+    expect(live.length, "one live invite per recipient").toBe(before.length);
+    expect([...byKey(live).keys()].sort()).toEqual([...byKey(before).keys()].sort());
+    const latest = deadlineOfPress(open, 2);
+    for (const x of live) {
+      expect(x.status).toBe("queued");
+      expect(namesDeadline(renderedOf(x).args.deadlineLabel, latest), "the latest deadline").toBe(true);
+      expect(namesDeadline(renderedOf(x).args.deadlineLabel, deadlineOfPress(open, 1)), "not the middle one").toBe(false);
+      expect(x.expires_at.getTime()).toBe(latest.getTime());
+      expect(x.attempts, "the attempt spent at the open is the only one").toBe(1);
+      expect(x.last_error, "and its reason rode through both generations").toBe(byKey(before).get(keyOf(x))!.last_error);
+      expect(x.next_attempt_at.getTime(), "due when the FIRST row was due").toBe(byKey(before).get(keyOf(x))!.next_attempt_at.getTime());
+      expect(x.meta.stampedAt, "the stamp of the open").toBe(iso(x.meta.colour === "white" ? stamps.white : stamps.black));
+    }
+  });
+
+  it("a LATER batch's waiting invite (written before its window opened: \"opens at ...\") is re-rendered on the batch's own deadline and no longer says it has not opened", async () => {
+    mail.rateAll = true; // the open's dispatch stops at its first 429: some rows are attempted, some not, and both are eligible
+    let r: OpenedRound;
+    try {
+      r = await openedRound(1, { camera: "required", ranked: [2 * CHECKIN_BATCH_SIZE] });
+    } finally {
+      mail.rateAll = false;
+    }
+    const ranked = r.ranked[0]!;
+    const batch2Opens = at(O, 2 * CHECKIN_BATCH_GAP_MS);
+    const oldDeadline = at(batch2Opens, DEADLINE_AFTER_MS);
+    const newDeadline = at(oldDeadline, CHECKIN_EXTEND_STEP_MS);
+    const before = await outboxOf(ranked.fixtureId);
+    expect(before.length, "premise: the later batch's board was invited at the open").toBeGreaterThanOrEqual(2);
+    for (const x of before) {
+      expect(renderedOf(x).args.opensLabel, "premise: the mail said when the window opens").toBeTruthy();
+      expect(namesDeadline(renderedOf(x).args.deadlineLabel, oldDeadline), "premise: on the batch's own deadline").toBe(true);
+    }
+
+    await pressWith(r.owner, ranked.fixtureId, batch2Opens, { dispatch: noDispatch });
+
+    const fresh = (await outboxOf(ranked.fixtureId)).filter((x) => x.status === "queued");
+    expect(fresh.length).toBe(before.length);
+    for (const x of fresh) {
+      expect(namesDeadline(renderedOf(x).args.deadlineLabel, newDeadline), "the batch's start + the window + the step").toBe(true);
+      expect(renderedOf(x).args.opensLabel, "its window is open now: the mail no longer says it opens later").toBeUndefined();
+    }
+  });
+
+  it("a retired row that is NEWER on the clock than the live one is never taken for the recipient's invite: the live, waiting one is still re-rendered", async () => {
+    // The replace trigger retires by KEY, not by time, so a `replaced` row can be the newest by `created_at`. The newest-row rule
+    // (status.ts, shared with the arbiter's read) skips it; a read that did not would find a replaced row, see no queued invite, and leave the
+    // waiting one to go out naming the old deadline.
+    const open = openAround();
+    const r = await rateLimitedRound(1, open);
+    const fixtureId = r.boards[0]!.fixtureId;
+    await pressWith(r.owner, fixtureId, at(open, MIN), { dispatch: noDispatch });
+    const gen1 = (await outboxOf(fixtureId)).filter((x) => x.status === "replaced");
+    expect(gen1.length, "premise: the first press retired the open's invites").toBeGreaterThanOrEqual(2);
+    await sql`update email_outbox set created_at = created_at + interval '1 hour' where id = any(${idsOf(gen1)}::uuid[])`;
+
+    await pressWith(r.owner, fixtureId, at(open, 2 * MIN), { dispatch: noDispatch });
+
+    const live = (await outboxOf(fixtureId)).filter((x) => x.status !== "replaced");
+    expect(live.length, "one live invite per recipient").toBe(gen1.length);
+    for (const x of live) expect(namesDeadline(renderedOf(x).args.deadlineLabel, deadlineOfPress(open, 2)), "naming the second press's deadline").toBe(true);
+  });
+
+  it("the dispatch is made AFTER the commit, once, for exactly the fresh ids (a round-wide press: once for the whole round, and not for the board it skipped)", async () => {
+    const open = openAround();
+    const r = await rateLimitedRound(2, open);
+    const [moved, skipped] = r.boards.map((x) => x.fixtureId) as [string, string];
+    await sql`update fixture_external_play set challenge_id = ${`gm-${randomUUID().slice(0, 8)}`}, status = 'ready', white_side = 'home' where fixture_id = ${skipped}`;
+    const movedBefore = await outboxOf(moved);
+    const skippedBefore = await outboxOf(skipped);
+    const spy = spyDispatch();
+
+    const out = await extendRoundCheckin(r.owner, { stageId: r.stageId, roundNo: r.roundNo }, { now: () => at(open, MIN), publish: async () => {}, dispatch: spy.dispatch });
+    expect(out, "premise: one board extended, one skipped (a game is on it)").toMatchObject({ extended: 1, skipped: { gameStarted: 1 } });
+
+    const movedAfter = await outboxOf(moved);
+    const fresh = movedAfter.filter((x) => !movedBefore.some((o) => o.id === x.id));
+    expect(fresh.length).toBe(movedBefore.length);
+    expect(spy.calls.length, "one dispatch for the whole round").toBe(1);
+    expect(spy.calls[0]!.ids.slice().sort(), "for exactly the fresh ids").toEqual(idsOf(fresh));
+    expect(
+      spy.calls[0]!.seen.map((x) => x.status),
+      "which another connection could already see - so it ran after the commit - and were queued",
+    ).toEqual(spy.calls[0]!.ids.map(() => "queued"));
+    expect(idsOf(await outboxOf(skipped)), "the skipped board's invites are as they were").toEqual(idsOf(skippedBefore));
+  });
+
+  it("a board whose invites were never written (the empty case) is extended and dispatches nothing", async () => {
+    const open = openAround();
+    const r = await retryingRound(1, open);
+    const fixtureId = r.boards[0]!.fixtureId;
+    await sql`delete from email_outbox where ref_id in (${chessSeatRef(fixtureId, "white")}, ${chessSeatRef(fixtureId, "black")})`;
+    expect(await outboxOf(fixtureId), "premise: no outbox row for the board").toEqual([]);
+    const spy = spyDispatch();
+    expect(await pressWith(r.owner, fixtureId, at(open, MIN), { dispatch: spy.dispatch })).toMatchObject({ extensions: 1 });
+    expect(await outboxOf(fixtureId), "nothing invented").toEqual([]);
+    expect(spy.calls, "nothing to dispatch").toEqual([]);
+  });
+
+  it("an extension that rolls back leaves no new rows and retires none: the fresh invites are written in the extension's own transaction", async () => {
+    // A deferred constraint trigger that refuses at COMMIT, after every statement of the transaction (the rows included) has run; keyed
+    // to this board, so it is inert for every other test on the shared database.
+    const open = openAround();
+    const r = await rateLimitedRound(1, open);
+    const fixtureId = r.boards[0]!.fixtureId;
+    const oldDeadline = at(open, DEADLINE_AFTER_MS);
+    const before = await outboxOf(fixtureId);
+    const spy = spyDispatch();
+
+    const fn = `fu_commit_fault_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    await sql.unsafe(`create function ${fn}() returns trigger language plpgsql as $$ begin raise exception 'commit refused (re-render test)'; end $$`);
+    await sql.unsafe(
+      `create constraint trigger ${fn} after insert on online_chess_audit deferrable initially deferred for each row when (new.fixture_id = '${fixtureId}') execute function ${fn}()`,
+    );
+    try {
+      await expect(pressWith(r.owner, fixtureId, at(open, MIN), { dispatch: spy.dispatch })).rejects.toThrow(/commit refused/);
+      const after = await outboxOf(fixtureId);
+      expect(idsOf(after), "no new row").toEqual(idsOf(before));
+      expect(after.map((x) => x.status), "and none retired").toEqual(after.map(() => "queued"));
+      for (const x of after) expect(namesDeadline(renderedOf(x).args.deadlineLabel, oldDeadline), "each body is still the one written at the open").toBe(true);
+      expect(spy.calls, "nothing was dispatched for a press that did not happen").toEqual([]);
+      expect(await rowOf(fixtureId), "the extension rolled back").toMatchObject({ checkin_extra_ms: 0, checkin_extensions: 0 });
+    } finally {
+      await sql.unsafe(`drop trigger if exists ${fn} on online_chess_audit`);
+      await sql.unsafe(`drop function if exists ${fn}()`);
+    }
+    // The positive pair: without the fault the same press re-renders.
+    expect(await pressWith(r.owner, fixtureId, at(open, MIN), { dispatch: spy.dispatch })).toMatchObject({ extensions: 1 });
+    expect((await outboxOf(fixtureId)).filter((x) => x.status === "queued").length).toBe(before.length);
+    expect(spy.calls.length).toBe(1);
+  });
+
+  it("an invite that cannot be rendered does NOT fail the press (controller ruling: the +5 must not fail because of mail): the extension commits, the failure is logged by fixture and error name, and the waiting invites keep their deadline with the expiry moved", async () => {
+    const open = openAround();
+    const r = await rateLimitedRound(1, open);
+    const fixtureId = r.boards[0]!.fixtureId;
+    const oldDeadline = at(open, DEADLINE_AFTER_MS);
+    const newDeadline = at(oldDeadline, CHECKIN_EXTEND_STEP_MS);
+    const before = await outboxOf(fixtureId);
+    expect(before.length).toBeGreaterThanOrEqual(2);
+    const spy = spyDispatch();
+    const logged = vi.spyOn(log, "error").mockImplementation(() => undefined);
+    try {
+      // The first render succeeds and its row is written (retiring the old one); the second throws. Only a savepoint undoes the first.
+      renderFault.pass = 1;
+      renderFault.seen = 0;
+      renderFault.fail = true;
+      expect(await pressWith(r.owner, fixtureId, at(open, MIN), { dispatch: spy.dispatch }), "the press answers").toMatchObject({
+        extensions: 1,
+        deadlineAt: newDeadline.toISOString(),
+      });
+      expect(renderFault.seen, "premise: the fault struck AFTER a render had succeeded").toBeGreaterThanOrEqual(2);
+      renderFault.fail = false;
+      expect(await rowOf(fixtureId), "the deadline moved").toMatchObject({ checkin_extra_ms: CHECKIN_EXTEND_STEP_MS, checkin_extensions: 1 });
+      expect((await auditOf(fixtureId)).length, "and the audit row was kept").toBe(1);
+      const after = await outboxOf(fixtureId);
+      expect(idsOf(after), "no fresh row: the savepoint took the failed re-render back").toEqual(idsOf(before));
+      expect(after.map((x) => x.status), "none retired").toEqual(after.map(() => "queued"));
+      for (const x of after) {
+        expect(namesDeadline(renderedOf(x).args.deadlineLabel, oldDeadline), "each still names the deadline it was written with").toBe(true);
+        expect(x.expires_at.getTime(), "its expiry moved (the pre-Task-8 fall-back), so it is delivered and not expired").toBe(newDeadline.getTime());
+      }
+      expect(spy.calls, "nothing was re-rendered, so nothing is dispatched").toEqual([]);
+      const lines = logged.mock.calls.filter((c) => typeof c[1] === "string" && /re-rendering the waiting invites failed/.test(c[1] as string));
+      expect(lines.length, "the failure is logged once").toBe(1);
+      expect(JSON.stringify(lines[0]), "by fixture").toContain(fixtureId);
+      expect(JSON.stringify(lines[0]), "and error name, never an address").toContain("Error");
+      for (const x of before) expect(JSON.stringify(lines[0])).not.toContain(x.recipient);
+    } finally {
+      renderFault.fail = false;
+      logged.mockRestore();
+    }
+    // The positive pair: without the fault the next press re-renders them.
+    expect(await pressWith(r.owner, fixtureId, at(open, 2 * MIN), { dispatch: noDispatch })).toMatchObject({ extensions: 2 });
+    const live = (await outboxOf(fixtureId)).filter((x) => x.status === "queued");
+    expect(live.length).toBe(before.length);
+    for (const x of live) expect(namesDeadline(renderedOf(x).args.deadlineLabel, deadlineOfPress(open, 2))).toBe(true);
+  });
+
+  it("[pool] the extension's transaction never waits on the pool for a second connection: with every other connection taken, the press still completes and re-renders", async () => {
+    // lib/db.ts: a pooled query made while a transaction holds one of the pool's connections is a self-deadlock under load (postgres.js has
+    // no queue-wait timeout). Reading the board's seats takes pooled connections, so it must happen outside the transaction. Here the
+    // pool is left ONE free connection - the transaction's own - so any pooled query made inside it waits for ever.
+    const open = openAround();
+    const r = await rateLimitedRound(1, open);
+    const fixtureId = r.boards[0]!.fixtureId;
+    const before = await outboxOf(fixtureId);
+    expect(before.length, "premise: invites are waiting, so the press has to read the seats").toBeGreaterThanOrEqual(2);
+    const { max } = connectionOptions(process.env.DATABASE_URL!);
+    expect(max, "premise: a pool of more than one, so there is something to take").toBeGreaterThan(1);
+    const held: Awaited<ReturnType<typeof sql.reserve>>[] = [];
+    let outcome: "done" | "stuck";
+    try {
+      for (let i = 0; i < max - 1; i++) held.push(await sql.reserve());
+      outcome = await Promise.race([
+        pressWith(r.owner, fixtureId, at(open, MIN), { dispatch: noDispatch }).then(() => "done" as const),
+        new Promise<"stuck">((resolve) => setTimeout(() => resolve("stuck"), 10_000)),
+      ]);
+    } finally {
+      for (const h of held) h.release();
+    }
+    expect(outcome, "the press completed with a single free connection").toBe("done");
+    const after = await outboxOf(fixtureId);
+    expect(after.filter((x) => x.status === "queued").length, "and re-rendered every waiting invite").toBe(before.length);
+    expect(after.filter((x) => x.status === "replaced").length).toBe(before.length);
+  });
+
+  it("a row the send claims while the press is deciding is left alone: the press asks for the row's lock and judges its status AFTER it, so a `sending` row is never retired", async () => {
+    const open = openAround();
+    const r = await rateLimitedRound(1, open);
+    const fixtureId = r.boards[0]!.fixtureId;
+    const before = await outboxOf(fixtureId);
+    expect(before.length).toBeGreaterThanOrEqual(2);
+    const target = before[0]!;
+    const holder = await sql.reserve();
+    let done = false;
+    let pending: Promise<unknown> | undefined;
+    try {
+      await holder`begin`;
+      await holder`select id from email_outbox where id = ${target.id} for update`;
+      const holderPid = await backendPid(holder);
+      pending = pressWith(r.owner, fixtureId, at(open, MIN), { dispatch: noDispatch }).finally(() => {
+        done = true;
+      });
+      expect(
+        await pollWaitersBehind(holderPid, { finished: () => done }),
+        "premise: the press is genuinely WAITING on the row's lock",
+      ).toBeGreaterThan(0);
+      expect(done, "and has not decided").toBe(false);
+      // The send claims the row while the press waits.
+      await holder`update email_outbox set status = 'sending', attempts = attempts + 1, lease_until = now() + interval '2 minutes' where id = ${target.id}`;
+      await holder`commit`;
+      await pending;
+    } finally {
+      await holder`rollback`.catch(() => undefined);
+      holder.release();
+      await pending?.catch(() => undefined);
+    }
+    const after = await outboxOf(fixtureId);
+    expect(after.find((x) => x.id === target.id)!.status, "the claimed row is still the send's: not retired mid-flight").toBe("sending");
+    expect(
+      after.filter((x) => x.id !== target.id && keyOf(x) === keyOf(target)),
+      "and no fresh invite was written for its recipient (that would be a second mail)",
+    ).toEqual([]);
+    const others = before.filter((x) => x.id !== target.id);
+    expect(others.length).toBeGreaterThan(0);
+    for (const o of others) expect(after.find((x) => x.id === o.id)!.status, "the other waiting invites were re-rendered").toBe("replaced");
+  });
+
+  it("an invite whose stamp cannot be read is left as it is and logged by id; the press still goes through and the others are re-rendered", async () => {
+    const open = openAround();
+    const r = await rateLimitedRound(1, open);
+    const fixtureId = r.boards[0]!.fixtureId;
+    const before = await outboxOf(fixtureId);
+    const broken = before[0]!;
+    await sql`update email_outbox set meta = meta || '{"stampedAt":"not-an-instant"}'::jsonb where id = ${broken.id}`;
+    const logged = vi.spyOn(log, "error").mockImplementation(() => undefined);
+    try {
+      expect(await pressWith(r.owner, fixtureId, at(open, MIN), { dispatch: noDispatch })).toMatchObject({ extensions: 1 });
+      const after = await outboxOf(fixtureId);
+      expect(after.find((x) => x.id === broken.id)!.status, "the unreadable one is not re-rendered").toBe("queued");
+      expect(
+        after.find((x) => x.id === broken.id)!.expires_at.getTime(),
+        "and its expiry does NOT move: its body names the old deadline, so it ends unsent at it",
+      ).toBe(broken.expires_at.getTime());
+      for (const o of before.filter((x) => x.id !== broken.id)) expect(after.find((x) => x.id === o.id)!.status).toBe("replaced");
+      const lines = logged.mock.calls.filter((c) => typeof c[1] === "string" && /stamp/i.test(c[1] as string));
+      expect(lines.length, "named in the log").toBe(1);
+      expect(JSON.stringify(lines[0]), "by its id, never its address").toContain(broken.id);
+      expect(JSON.stringify(lines[0])).not.toContain(broken.recipient);
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  it("an invite whose stamp IS an instant but not in the canonical form the hook keys by is left as it is and logged: re-rendered, it would be re-stamped under a string the hook never finds", async () => {
+    const open = openAround();
+    const r = await rateLimitedRound(1, open);
+    const fixtureId = r.boards[0]!.fixtureId;
+    const before = await outboxOf(fixtureId);
+    const odd = before[0]!;
+    const offsetForm = odd.meta.stampedAt.replace(/Z$/, "+00:00"); // the same instant, written another way
+    expect(offsetForm, "premise: written another way").not.toBe(odd.meta.stampedAt);
+    expect(new Date(offsetForm).toISOString(), "premise: and it IS the same instant").toBe(odd.meta.stampedAt);
+    await sql`update email_outbox set meta = meta || jsonb_build_object('stampedAt', ${offsetForm}::text) where id = ${odd.id}`;
+    const logged = vi.spyOn(log, "error").mockImplementation(() => undefined);
+    try {
+      expect(await pressWith(r.owner, fixtureId, at(open, MIN), { dispatch: noDispatch })).toMatchObject({ extensions: 1 });
+      const after = await outboxOf(fixtureId);
+      expect(after.find((x) => x.id === odd.id)!.status, "the non-canonical one is not re-rendered").toBe("queued");
+      expect(after.find((x) => x.id === odd.id)!.meta.stampedAt, "and keeps the stamp string it had").toBe(offsetForm);
+      for (const o of before.filter((x) => x.id !== odd.id)) expect(after.find((x) => x.id === o.id)!.status, "the others are").toBe("replaced");
+      const lines = logged.mock.calls.filter((c) => typeof c[1] === "string" && /stamp/i.test(c[1] as string));
+      expect(lines.length, "named in the log").toBe(1);
+      expect(JSON.stringify(lines[0])).toContain(odd.id);
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  it("a waiting invite for someone who has LEFT the seat gets no fresh invite and its expiry is NOT moved: it ends unsent at the old deadline, not mailed after it; the seat's other waiting invite is re-rendered", async () => {
+    const open = openAround();
+    const r = await openedRound(1, { open }); // every invite is sent
+    const b = r.boards[0]!;
+    const oldDeadline = at(open, DEADLINE_AFTER_MS);
+    const newDeadline = at(oldDeadline, CHECKIN_EXTEND_STEP_MS);
+    const mate = `mate-${randomUUID().slice(0, 8)}@seazn.test`;
+    await addMember(r, b.home.entrantId, mate);
+    // A resend re-mails both seats on their stamps; the team-mate's and the away player's are answered 503 and wait.
+    mail.retry.add(mate);
+    mail.retry.add(b.away.email);
+    await resendExternalPlayNotice(r.owner, b.fixtureId, ORIGIN, { now: at(open, 30_000) });
+    mail.retry.clear();
+    const before = await outboxOf(b.fixtureId);
+    const mateRow = before.find((x) => x.recipient === mate && x.status !== "replaced")!;
+    const awayRow = before.find((x) => x.recipient === b.away.email && x.status !== "replaced")!;
+    expect([mateRow.status, awayRow.status], "premise: both are waiting for a retry").toEqual(["queued", "queued"]);
+    await neverAttempted([mateRow, awayRow]);
+    // The team-mate leaves the entrant: the seat no longer carries their address.
+    await sql`
+      delete from entrant_members em using persons p, users u
+       where em.entrant_id = ${b.home.entrantId} and p.id = em.person_id and u.id = p.user_id and u.email = ${mate}`;
+    const spy = spyDispatch();
+    mail.sent.length = 0;
+
+    await pressWith(r.owner, b.fixtureId, at(open, MIN), { dispatch: spy.dispatch });
+
+    const after = await outboxOf(b.fixtureId);
+    const left = after.find((x) => x.id === mateRow.id)!;
+    expect(left.status, "the departed one's row is not retired").toBe("queued");
+    expect(after.filter((x) => x.recipient === mate && x.id !== mateRow.id), "and no fresh invite is written for them").toEqual([]);
+    expect(left.expires_at.getTime(), "its expiry stays at the OLD deadline: its body names it").toBe(oldDeadline.getTime());
+    expect(after.find((x) => x.id === awayRow.id)!.status, "the away player's waiting invite is re-rendered").toBe("replaced");
+    const freshAway = after.filter((x) => x.recipient === b.away.email && x.status === "queued");
+    expect(freshAway.length).toBe(1);
+    expect(freshAway[0]!.expires_at.getTime()).toBe(newDeadline.getTime());
+    expect(spy.calls.map((c) => c.ids), "dispatched: the away player's fresh row only").toEqual([[freshAway[0]!.id]]);
+
+    // The pre-Task-8 end of it: when the worker reaches the departed one's row (past the old deadline) it is expired unsent, never mailed.
+    await makeDue([left]);
+    expect(await runOutboxTick({ onlyIds: [left.id], sleep: async () => undefined })).toMatchObject({ claimed: 0, sent: 0, expired: 1 });
+    expect(mail.sent, "nothing was mailed to the person who left").toEqual([]);
+  });
+
+  it("the retry budget is carried to a fresh row whose address differs from the retired one's only in case (the replace rule and the carry fold it the same way)", async () => {
+    const open = openAround();
+    const r = await rateLimitedRound(1, open);
+    const fixtureId = r.boards[0]!.fixtureId;
+    // An address stored in capitals, as one typed that way would be.
+    await sql`update email_outbox set recipient = upper(recipient) where ref_id in (${chessSeatRef(fixtureId, "white")}, ${chessSeatRef(fixtureId, "black")})`;
+    const before = await outboxOf(fixtureId);
+    expect(before.length).toBeGreaterThanOrEqual(2);
+    for (const x of before) expect(x.recipient, "premise: stored in capitals").not.toBe(x.recipient.toLowerCase());
+    const warned = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    try {
+      await pressWith(r.owner, fixtureId, at(open, MIN), { dispatch: noDispatch });
+      const after = await outboxOf(fixtureId);
+      expect(after.filter((x) => x.status === "replaced").length, "each capitalised row was replaced by the fresh one for the same mailbox").toBe(before.length);
+      const fresh = after.filter((x) => x.status === "queued");
+      expect(fresh.length).toBe(before.length);
+      for (const f of fresh) {
+        expect(f.recipient, "premise: the fresh row's address is not the retired row's spelling").not.toBe(byKey(before).get(keyOf(f))!.recipient);
+        expect([f.attempts, f.last_error], "yet it took the budget").toEqual([1, "http 429 rate_limit_exceeded"]);
+      }
+      expect(warned.mock.calls.filter((c) => /retry budget/.test(String(c[1]))), "so nothing was reported as not carried").toEqual([]);
+    } finally {
+      warned.mockRestore();
+    }
+  });
+
+  it("when a re-rendered invite does not take its retired row's retry budget the press says so (ids only) and still goes through; when every one does, it says nothing", async () => {
+    const open = openAround();
+    const r = await rateLimitedRound(1, open);
+    const fixtureId = r.boards[0]!.fixtureId;
+    const before = await outboxOf(fixtureId);
+    expect(before.length).toBeGreaterThanOrEqual(2);
+    const warned = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    try {
+      carryFault.skip = true; // the copy matches nothing
+      expect(await pressWith(r.owner, fixtureId, at(open, MIN), { dispatch: noDispatch })).toMatchObject({ extensions: 1 });
+      carryFault.skip = false;
+      const lines = warned.mock.calls.filter((c) => /retry budget/.test(String(c[1])));
+      expect(lines.length, "said once").toBe(1);
+      const fields = lines[0]![0] as { expected: number; carried: number; retiredIds: string[]; freshIds: string[] };
+      expect([fields.expected, fields.carried], "how many were owed and how many were carried").toEqual([before.length, 0]);
+      expect([...fields.retiredIds].sort(), "by the ids of the retired rows").toEqual(idsOf(before));
+      expect(fields.freshIds.length).toBe(before.length);
+      for (const x of before) expect(JSON.stringify(lines[0]), "never an address").not.toContain(x.recipient);
+      expect(
+        (await outboxOf(fixtureId)).filter((x) => x.status === "queued").map((x) => x.attempts),
+        "what it warns about: the schedule of each fresh row did start over",
+      ).toEqual(before.map(() => 0));
+
+      // The positive pair: a round whose copy works says nothing.
+      warned.mockClear();
+      const r2 = await rateLimitedRound(1, openAround());
+      await pressWith(r2.owner, r2.boards[0]!.fixtureId, at(openAround(), MIN), { dispatch: noDispatch });
+      expect(warned.mock.calls.filter((c) => /retry budget/.test(String(c[1]))), "nothing to say when every budget was carried").toEqual([]);
+    } finally {
+      carryFault.skip = false;
+      warned.mockRestore();
+    }
+  });
+
+  it("a dispatch that throws after the commit does not fail the press: the extension and the fresh rows stand, the failure is logged by error name, the worker finishes the rows", async () => {
+    const open = openAround();
+    const r = await rateLimitedRound(1, open);
+    const fixtureId = r.boards[0]!.fixtureId;
+    const before = await outboxOf(fixtureId);
+    const logged = vi.spyOn(log, "error").mockImplementation(() => undefined);
+    try {
+      const out = await pressWith(r.owner, fixtureId, at(open, MIN), {
+        dispatch: async () => {
+          throw new Error("the dispatch blew up");
+        },
+      });
+      expect(out, "the press answers as it would have").toMatchObject({ extensions: 1 });
+      expect(await rowOf(fixtureId)).toMatchObject({ checkin_extensions: 1 });
+      const live = (await outboxOf(fixtureId)).filter((x) => x.status === "queued");
+      expect(live.length, "the fresh rows are durable").toBe(before.length);
+      const lines = logged.mock.calls.filter((c) => /sending the re-rendered invites failed/.test(String(c[1])));
+      expect(lines.length, "and the failure is logged once").toBe(1);
+      expect(JSON.stringify(lines[0])).toContain("Error");
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  it("the board's seats are read only when there is an invite to re-render: an extension with nothing waiting reads none, one with a waiting invite reads them once", async () => {
+    const open = openAround();
+    const sent = await openedRound(1, { open }); // the provider answers 200: every invite is `sent`
+    const waiting = await rateLimitedRound(1, open);
+    seatReads.n = 0;
+    await press(sent.owner, sent.boards[0]!.fixtureId, at(open, MIN));
+    expect(seatReads.n, "nothing waiting: the seats were never read").toBe(0);
+    await pressWith(waiting.owner, waiting.boards[0]!.fixtureId, at(open, MIN), { dispatch: noDispatch });
+    expect(seatReads.n, "an invite waiting: the seats were read once, outside the transaction").toBe(1);
+  });
+
+  it("the organiser's Resend takes the board's check-in window lock: it waits behind an extension in flight and names the EXTENDED deadline, never one read in front of it", async () => {
+    const r = await openedRound(1); // opened at O: every invite is sent; the window is open at O + 30 s
+    const fixtureId = r.boards[0]!.fixtureId;
+    const holder = await sql.reserve();
+    let done = false;
+    let pending: Promise<unknown> | undefined;
+    try {
+      await holder`begin`;
+      await lockCheckinWindow(holder, fixtureId); // the extension's first act
+      const holderPid = await backendPid(holder);
+      mail.sent.length = 0;
+      pending = resendExternalPlayNotice(r.owner, fixtureId, ORIGIN, { now: at(O, 30_000) }).finally(() => {
+        done = true;
+      });
+      expect(
+        await pollWaitersBehind(holderPid, { queryLike: "%pg_advisory_xact_lock%", finished: () => done }),
+        "premise: the Resend is genuinely WAITING on the window lock",
+      ).toBeGreaterThan(0);
+      expect(done, "and has not read the deadline").toBe(false);
+      // The extension commits its move while the Resend waits.
+      await holder`update fixture_external_play set checkin_extra_ms = ${CHECKIN_EXTEND_STEP_MS}, checkin_extensions = 1 where fixture_id = ${fixtureId}`;
+      await holder`commit`;
+      await pending;
+    } finally {
+      await holder`rollback`.catch(() => undefined);
+      holder.release();
+      await pending?.catch(() => undefined);
+    }
+    expect(mail.sent.length, "premise: the Resend mailed the seats").toBeGreaterThanOrEqual(2);
+    for (const m of mail.sent) {
+      expect(namesDeadline(m.deadlineLabel, deadlineAfter(1)), `${m.to}: the extended deadline`).toBe(true);
+      expect(namesDeadline(m.deadlineLabel, OLD), `${m.to}: not the old one`).toBe(false);
+    }
   });
 });
 

@@ -31,15 +31,30 @@ import "server-only";
 // scope, the board's press count and its new deadline. No new event type is invented: competition_events is the ledger of
 // SETTINGS and results, not of an arbiter's act on one board.
 //
-// THE INVITES (email outbox, Task 8). A chess invite is queued with `expires_at` = the board's deadline at the time, and the worker
-// ends a still-queued row past it `expired`, unsent. The same transaction therefore moves the expiry of the board's two seats'
-// retryable invites to the new deadline (`extendEmailExpiry`), so a retry between the old deadline and the new one is delivered; a
-// failure of that move rolls the extension back with it, and the extension cannot be left half done. The transaction is the POOLED
+// THE INVITES (email outbox, Task 8 and its follow-up). A chess invite is queued with `expires_at` = the board's deadline at the time,
+// and the worker ends a still-queued row past it `expired`, unsent; and its SEALED BODY names that deadline. The same transaction
+// therefore does two things for the board's two seats:
+//   - RE-RENDERS what can safely be (`requeueUnsentInvites`): a recipient whose newest invite is `queued` AND that no request can have
+//     reached the provider with (never attempted, or its only attempt answered 429) gets a fresh invite naming the NEW deadline, on the SAME
+//     stamp, which retires the stale row (the V470 replace trigger); it keeps the retired row's place in the retry schedule. Any other
+//     invite is not re-rendered, so no extension ever sends an extra email (controller ruling): a `sending`, `sent`, `delayed`,
+//     `delivered` or ended one is out of reach, and a queued one that already had an attempt answered by a network error or a 5xx may
+//     have been accepted with the answer lost, where a fresh row's new idempotency key would mail twice - it keeps its key and its
+//     body, and the match room shows the live deadline. The fresh rows are dispatched after the commit (`deps.dispatch`,
+//     `dispatchNow`: paced and budgeted, as the open's). The seat stamp on the bridge row is not written, so the seat stays invited
+//     and the chess hook still finds its rows. This work runs in a SAVEPOINT: if the mail cannot be built the press still goes
+//     through, the failure is logged, and the invites keep the deadline they were written with;
+//   - moves the expiry of the retryable invites that remain (`extendEmailExpiry`), so a retry between the old deadline and the new
+//     one is delivered, not expired - except a waiting invite that could have been re-rendered but got no fresh row (its recipient
+//     left the seat; its stamp is unreadable): its body names the old deadline, so it ends unsent at it.
+// A failure of the deadline's own writes, or of the expiry move, rolls the extension back with it. The transaction is the POOLED
 // connection (`sql.begin`, privileged, as the worker's), not `withTenant`: V470 gives `app_user` INSERT only.
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { captureError } from "@/lib/sentry";
-import { extendEmailExpiry } from "@/server/email-outbox";
+import { dispatchNow, extendEmailExpiry } from "@/server/email-outbox";
+import { errFields } from "@/server/email-outbox/err-fields";
+import { log } from "@/server/logger";
 import { publishExternalPlayLobby } from "@/lib/realtime";
 import {
   CHECKIN_EXTEND_STEP_MINUTES,
@@ -60,6 +75,7 @@ import {
 } from "@/server/external-play/window";
 import { requireWatcher } from "./arbiter";
 import { ensureBridgeRow, loadOnlinePlayFixture, type OnlinePlayFixture } from "./guard";
+import { SeatsNeeded, boardSeats, requeueUnsentInvites } from "./invite";
 import { isPlayableFixtureStatus } from "./preflight";
 import { isSeatedOn } from "./seated";
 import { CHESS_SEAT_REF_TYPE, chessSeatRef } from "./seat-stamp";
@@ -70,13 +86,16 @@ export type ExtendDeps = {
   now?: () => Date;
   /** The room nudge that makes a player's open room re-read its deadline at once. */
   publish?: (fixtureId: string) => Promise<void>;
+  /** The first send of the invites the extension re-rendered, after the commit (default: the outbox's `dispatchNow`, with `now` as the
+   *  decision clock when one is set). A test replaces it to see what was asked, and when. */
+  dispatch?: (ids: readonly string[], opts: { now?: Date }) => Promise<unknown>;
 };
 
 type Scope = "board" | "round";
 
 /** What one board's locked step decided. `refused` carries whether a game was on file, for the round-wide count of a settled board. */
 type Step =
-  | { ok: true; board: CheckinExtendBoardResult }
+  | { ok: true; board: CheckinExtendBoardResult; /** The fresh invites the step queued (to be dispatched after the commit). */ inviteIds: string[] }
   | { ok: false; refusal: ExtendRefusal; gameOnFile: boolean };
 
 /** One board, one transaction: lock the board's check-in window, re-read everything the rule asks under it, then either refuse or
@@ -88,10 +107,27 @@ async function extendOneBoard(
   a: { f: OnlinePlayFixture; actorUserId: string; scope: Scope },
   deps: ExtendDeps,
 ): Promise<Step> {
+  // The board's seats are needed only to re-render an invite that is still waiting, and reading them takes pooled connections, which
+  // this transaction (one of the pool's five) must not wait for (lib/db.ts: the nesting guard). So the first pass goes without them;
+  // if an invite IS waiting it rolls back (`SeatsNeeded`, nothing written), the seats are read outside any transaction, and the second
+  // pass has them. The common case - every invite already sent - never reads them.
+  try {
+    return await extendInTx(a, deps, null);
+  } catch (err) {
+    if (!(err instanceof SeatsNeeded)) throw err;
+  }
+  return extendInTx(a, deps, await boardSeats(a.f));
+}
+
+async function extendInTx(
+  a: { f: OnlinePlayFixture; actorUserId: string; scope: Scope },
+  deps: ExtendDeps,
+  seats: Awaited<ReturnType<typeof boardSeats>> | null,
+): Promise<Step> {
   const { fixtureId, orgId } = a.f;
   return sql.begin(async (tx): Promise<Step> => {
     await lockCheckinWindow(tx, fixtureId);
-    const [fx] = await tx<{ status: string }[]>`select status from fixtures where id = ${fixtureId} for share`;
+    const [fx] = await tx<{ status: string; roundNo: number }[]>`select status, round_no as "roundNo" from fixtures where id = ${fixtureId} for share`;
     const readRow = async () =>
       (
         await tx<{ status: string; challengeId: string | null; createSentAt: Date | null; mintClaimedAt: Date | null }[]>`
@@ -115,7 +151,7 @@ async function extendOneBoard(
         playable: isPlayableFixtureStatus(fx.status) && r?.status !== "finished",
         gameOnFile,
       });
-      return { refusal, gameOnFile };
+      return { refusal, gameOnFile, at };
     };
     let row = await readRow();
     let decision = await decide(row);
@@ -148,16 +184,46 @@ async function extendOneBoard(
       insert into online_chess_audit (org_id, fixture_id, kind, actor_user_id, note)
       values (${orgId}, ${fixtureId}, 'checkin_extend', ${a.actorUserId},
               ${JSON.stringify({ scope: a.scope, extensions: moved.extensions, addedMs: CHECKIN_EXTEND_STEP_MS, deadlineAt: deadline.toISOString() })})`;
-    // The invites still waiting to be sent expire at the NEW deadline, in this same transaction (header: THE INVITES). Both seats:
-    // the ref names the seat, and a seat can have several recipients, all matched by the ref.
+    // The invites that may still be re-rendered are, in this same transaction (header: THE INVITES) - BEFORE the expiry move, so the read
+    // of their rows (which takes their lock) is the first thing to touch them: a row a send claims while this transaction waits for
+    // its lock is then seen `sending` and left alone, instead of retired mid-flight. A SAVEPOINT holds the work: the arbiter's +5 must
+    // not fail because a mail could not be built (a render fault, a missing key, a token that could not be minted). If it throws, its
+    // rows go back with it, the failure is logged by fixture and error name, and the extension goes on to the expiry move alone - the
+    // pre-Task-8 behaviour: the invites keep the deadline they were written with and the room shows the live one. `SeatsNeeded` is not
+    // a failure but the first pass asking for the seats (nothing written, rolled back as a whole).
+    let requeued: { fresh: string[]; left: string[] } = { fresh: [], left: [] };
+    try {
+      requeued = await tx.savepoint((sp) =>
+        requeueUnsentInvites(sp, {
+          fixture: a.f,
+          seats,
+          roundNo: fx.roundNo,
+          roundOpenId: open.id,
+          roundOpenedAt: open.roundOpenedAt,
+          anchor: boardAnchor(open.roundOpenedAt, open.rank, open.staggered, moved.extraMs),
+          now: decision.at,
+        }),
+      );
+    } catch (err) {
+      if (err instanceof SeatsNeeded) throw err;
+      log.error(
+        { fixtureId, ...errFields(err) },
+        "check-in extension: re-rendering the waiting invites failed; the extension goes through and they keep the deadline they were written with",
+      );
+    }
+    // What is left that can still be retried expires at the NEW deadline too. Both seats: the ref names the seat, and a seat can
+    // have several recipients, all matched by the ref. Not the rows `left` without a fresh one (a recipient who has left the seat, a
+    // stamp that could not be read): their body names the old deadline, so they end unsent at it.
     await extendEmailExpiry(
       tx,
       CHESS_SEAT_REF_TYPE,
       [chessSeatRef(fixtureId, "white"), chessSeatRef(fixtureId, "black")],
       deadline,
+      requeued.left,
     );
     return {
       ok: true,
+      inviteIds: requeued.fresh,
       board: {
         fixtureId,
         extensions: moved.extensions,
@@ -174,6 +240,18 @@ async function extendOneBoard(
 async function nudge(fixtureIds: readonly string[], deps: ExtendDeps): Promise<void> {
   const publish = deps.publish ?? publishExternalPlayLobby;
   await Promise.all(fixtureIds.map((id) => publish(id).catch(() => undefined)));
+}
+
+/** After the commit: the first send of the fresh invites, paced and budgeted as the open's (`dispatchNow`; one call for a whole round, so
+ *  its pacing and its budget cover the round). Never throws: the rows are durable and the worker finishes whatever this does not, so
+ *  a failure here is logged by error name and costs the extension nothing - it has already committed. */
+async function sendFresh(ids: readonly string[], deps: ExtendDeps): Promise<void> {
+  if (ids.length === 0) return;
+  try {
+    await (deps.dispatch ?? dispatchNow)(ids, deps.now ? { now: deps.now() } : {});
+  } catch (err) {
+    log.error({ ...errFields(err) }, "check-in extension: sending the re-rendered invites failed; the worker will finish them");
+  }
 }
 
 function refused(refusal: ExtendRefusal): HttpError {
@@ -202,6 +280,7 @@ export async function extendCheckin(auth: AuthCtx, fixtureId: string, deps: Exte
   const step = await extendOneBoard({ f, actorUserId: userId, scope: "board" }, deps);
   if (!step.ok) throw refused(step.refusal);
   await nudge([fixtureId], deps);
+  await sendFresh(step.inviteIds, deps);
   return step.board;
 }
 
@@ -235,6 +314,7 @@ export async function extendRoundCheckin(
     addedMinutes: CHECKIN_EXTEND_STEP_MINUTES,
   };
   const moved: string[] = [];
+  const fresh: string[] = [];
   for (const { id: fixtureId } of fixtures) {
     try {
       const f = await loadOnlinePlayFixture(fixtureId);
@@ -247,6 +327,7 @@ export async function extendRoundCheckin(
       if (step.ok) {
         result.extended += 1;
         moved.push(fixtureId);
+        fresh.push(...step.inviteIds);
       } else if (step.refusal === "closed") result.skipped.closed += 1;
       else if (step.refusal === "game_started") result.skipped.gameStarted += 1;
       else if (step.refusal === "cap_reached") result.skipped.capReached += 1;
@@ -259,5 +340,6 @@ export async function extendRoundCheckin(
     }
   }
   await nudge(moved, deps);
+  await sendFresh(fresh, deps);
   return result;
 }
