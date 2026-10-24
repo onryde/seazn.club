@@ -6,7 +6,7 @@
 //
 // The advanced gate reads the stage KIND only. Its config terms (custom byes,
 // cross_feeds, placements) were retired by the owner's "all stages are free"
-// ruling (2026-10-20, V469), so a config key never gates a POST.
+// ruling (2026-10-20, V471), so a config key never gates a POST.
 export const DOUBLE_ELIM_KINDS: readonly string[] = Object.freeze(["double_elim", "page_playoff"]);
 export const ADVANCED_KINDS: readonly string[] = Object.freeze(["americano", "ladder"]);
 

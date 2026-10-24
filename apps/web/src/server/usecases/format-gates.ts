@@ -19,7 +19,7 @@ import "server-only";
 export interface StageFormatGateInput {
   kind: string;
   // Real `stages.config` (and TemplateStage.config) is jsonb and carries far
-  // more than the three keys this gate used to read before V469 (it reads
+  // more than the three keys this gate used to read before V471 (it reads
   // the kind alone now) — points, groups,
   // scheduleDefaults, thirdPlace, sport-specific extras, … — so it is typed
   // as the open record it actually is, not narrowed to only the keys this
@@ -45,7 +45,7 @@ export function stageNeedsDoubleElimGate(kind: string): boolean {
  *
  *  Jul3/08 §8 also put a stage's custom `byes`, `cross_feeds` and `placements`
  *  config behind this gate. The owner's "all stages are free" ruling
- *  (2026-10-20, V469) made all three free on every plan, so the gate reads the
+ *  (2026-10-20, V471) made all three free on every plan, so the gate reads the
  *  kind alone. `config` stays on the input on purpose: both call sites pass
  *  the real stage, so a later config-shaped term can be written here without
  *  re-threading a narrower type through createStages and createFromTemplate. */

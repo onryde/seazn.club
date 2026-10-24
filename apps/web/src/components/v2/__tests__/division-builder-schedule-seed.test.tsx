@@ -225,7 +225,7 @@ describe("DivisionBuilder — venue list gate", () => {
   // multi-picker's own checkboxes are how an organiser adds a court now. The
   // gate survives as a SELECTION CAP (maxSelected={1}) plus the same hint +
   // gate copy, no longer paired with a button to hide. `scheduling.constraints`
-  // is granted on every plan, so the gate is the override-only card (V469).
+  // is granted on every plan, so the gate is the override-only card (V471).
   it("shows no switched-off hint when the org has scheduling.constraints", () => {
     const html = render(true);
     expect(html).not.toContain(msg("wizard.venuesProHint", { venue: "pitch" }));

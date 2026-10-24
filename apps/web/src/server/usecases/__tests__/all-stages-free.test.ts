@@ -1,4 +1,4 @@
-// Owner ruling 2026-10-20 — "all stages are free" (option 2), V469.
+// Owner ruling 2026-10-20 — "all stages are free" (option 2), V471.
 //
 // FREE on every plan:
 //   (a) the stage COUNT — `stages.per_division.max` unlimited (NULL) on every plan;
@@ -85,7 +85,7 @@ async function override(orgId: string, featureKey: string, value: { bool?: boole
   await invalidateOrgEntitlements(orgId);
 }
 
-describe.skipIf(!HAS_DB)("all stages are free (owner ruling 2026-10-20, V469)", () => {
+describe.skipIf(!HAS_DB)("all stages are free (owner ruling 2026-10-20, V471)", () => {
   it("the matrix: EVERY plan holds an explicit unlimited stage count and a granted carry-over row; community still lacks formats.advanced", async () => {
     const plans = (await sql<{ key: string }[]>`select key from plans order by key`).map((p) => p.key);
     // Empty case first: no plans would make every check below vacuous.

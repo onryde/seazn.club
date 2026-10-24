@@ -2867,7 +2867,7 @@ test("portfolio panels (P1/P2/P4) hold at this width", async ({ page, request })
 // and generates before a Super 8 fixture exists to assert on at all.
 //
 // t20-super8 is 3 stages. That was over community's stages.per_division.max
-// (2) until V469 ("all stages are free", owner ruling 2026-10-20) made the
+// (2) until V471 ("all stages are free", owner ruling 2026-10-20) made the
 // count unlimited on every plan; this file's shared storageState account is
 // the Pro user (playwright.config.ts's AUTH_STATE) either way.
 // ---------------------------------------------------------------------------

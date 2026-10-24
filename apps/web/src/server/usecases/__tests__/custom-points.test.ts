@@ -315,7 +315,7 @@ describe.skipIf(!HAS_DB)("custom points & rank control (Jul3/05)", () => {
         },
       }),
     ).rejects.toMatchObject({ featureKey: "standings.custom_points" });
-    // Carry-over is free on every plan since V469 ("all stages are free",
+    // Carry-over is free on every plan since V471 ("all stages are free",
     // owner ruling 2026-10-20), so — like custom points above since V393 —
     // only an explicit deny override shuts its gate. The SAME carry pair is
     // refused under the deny and accepted on a plain community org.

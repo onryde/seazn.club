@@ -15,7 +15,7 @@ export const ENTITLEMENT_DOMAINS: { slug: string; features: string[] }[] = [
     "competitions.max_active", "orgs.max_owned", "divisions.per_competition.max",
     "entrants.per_division.max", "members.max",
     "clubs.max", "teams.max", "teams.squad_max",
-    // stages.per_division.max is absent since V469 ("all stages are free",
+    // stages.per_division.max is absent since V471 ("all stages are free",
     // owner ruling 2026-10-20): ∞ on every plan, so a comparison row would
     // read ∞/∞/∞/∞ — the officials.per_fixture.max precedent below. The key
     // itself is live (a staff override can still cap one organisation), so

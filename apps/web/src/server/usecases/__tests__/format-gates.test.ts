@@ -2,7 +2,7 @@
 // finding 5) — the ONE definition createStages (usecases/stages.ts) and
 // createFromTemplate (usecases/templates.ts, D1a) both call. This file pins
 // every branch directly; templates.test.ts additionally exercises the
-// template path end-to-end (config.placements, free since V469, beside a
+// template path end-to-end (config.placements, free since V471, beside a
 // gated americano stage), so a future re-duplication in either call site is
 // caught two ways.
 import { describe, expect, it } from "vitest";
@@ -50,7 +50,7 @@ describe("stageNeedsAdvancedFormatsGate", () => {
     },
   );
 
-  // "All stages are free" (owner ruling 2026-10-20, V469): custom byes,
+  // "All stages are free" (owner ruling 2026-10-20, V471): custom byes,
   // cross-stage feeds and placements LEFT this gate. Each key on a basic kind
   // must now pass — and the same key on a gated kind must still gate, so a
   // mutant that dropped the kind terms too cannot satisfy this.
@@ -58,7 +58,7 @@ describe("stageNeedsAdvancedFormatsGate", () => {
     ["byes", { byes: ["e1"] }],
     ["cross_feeds", { cross_feeds: [{ to_stage_seq: 2 }] }],
     ["placements", { placements: [{ from: 1, to: 2 }] }],
-  ] as const)("does NOT gate a basic kind ('group') when config.%s is set — free since V469", (_key, config) => {
+  ] as const)("does NOT gate a basic kind ('group') when config.%s is set — free since V471", (_key, config) => {
     expect(stageNeedsAdvancedFormatsGate({ kind: "group", config })).toBe(false);
     expect(stageNeedsAdvancedFormatsGate({ kind: "knockout", config })).toBe(false);
     expect(stageNeedsAdvancedFormatsGate({ kind: "ladder", config })).toBe(true);

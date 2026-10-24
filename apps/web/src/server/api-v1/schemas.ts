@@ -505,7 +505,7 @@ export const PatchDivision = z
     /** Hide official names on all public reads (Jul3/02, 25 Jun). */
     officials_hide_names: z.boolean(),
     /** Jul3/08 §5: progression fires without a button (free on every plan
-     *  since V469; was Pro `formats.advanced`). */
+     *  since V471; was Pro `formats.advanced`). */
     auto_progress: z.boolean(),
     /** SPEC-2: draft a news post when results land (Pro `news.auto` on write). */
     auto_posts: z.boolean(),
@@ -1079,7 +1079,7 @@ export const ProgressionSchema = z
     // hand-built stage graph, and it backs a MARKETED entitlement
     // (standings.carry_over — feature-copy.ts's paywall copy,
     // pricing.matrix.standings.carry_over in all 4 marketing dictionaries;
-    // free on every plan since V469). Deleting it would silently break an
+    // free on every plan since V471). Deleting it would silently break an
     // advertised feature.
     // Accepted on BOTH timings as of F6. Applied in seedNextStage for
     // `on_complete` and in confirmSeedProposal for `setup`. computeSeedProposal

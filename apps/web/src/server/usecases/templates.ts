@@ -175,7 +175,7 @@ export async function instantiateTemplate(
   // above spells out: the read stays competition-scoped even though no pass
   // can reference this id yet.
   //
-  // V469 ("all stages are free", owner ruling 2026-10-20) made this cap
+  // V471 ("all stages are free", owner ruling 2026-10-20) made this cap
   // unlimited on every plan, so a plan never refuses here any more. The call
   // is kept because a staff `org_entitlement_overrides` row can still cap one
   // organisation, and this path must honour it exactly as createStages does.

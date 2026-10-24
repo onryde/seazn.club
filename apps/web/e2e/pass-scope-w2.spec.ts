@@ -18,7 +18,7 @@ import { TAG, apiJson, loginUi, grantCompetitionPassSql, invalidateOrgEntitlemen
 // W3-A, 2026-09-06, V399, split off `stats.player`; see the block below),
 // `stages.per_division.max` and `schedule.checkpoints.max` (both CAPS, where the
 // pass moves a number rather than opening a door — a bool-only test would leave
-// the `getLimit` call sites unproven at the HTTP layer). V469 made the stage
+// the `getLimit` call sites unproven at the HTTP layer). V471 made the stage
 // count free on every plan, so its block now proves BOTH divisions take a third
 // stage rather than a pass/sibling split.
 //
@@ -206,9 +206,9 @@ test.describe("Event Pass grants are reachable over HTTP on the passed competiti
       await call(page.request, "GET", `/api/v1/persons/${plainPerson.data!.id}/stats?group=sport`),
     ).toEqual({ status: 402, featureKey: "stats.player.career" });
 
-    // --- stages.per_division.max (free on every plan since V469) -----------
+    // --- stages.per_division.max (free on every plan since V471) -----------
     // Was community 2, event_pass 4: the THIRD stage separated the passed
-    // competition from its sibling. V469 ("all stages are free", owner ruling
+    // competition from its sibling. V471 ("all stages are free", owner ruling
     // 2026-10-20) made the count unlimited on every plan, so BOTH divisions now
     // take a third — the sibling's 201 is the witness, rewritten rather than
     // deleted so a regression that re-caps the count on plan or pass reds here.

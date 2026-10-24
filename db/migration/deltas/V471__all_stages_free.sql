@@ -1,4 +1,4 @@
--- V469 — "All stages are free" (owner ruling 2026-10-20, option 2).
+-- V471 — "All stages are free" (owner ruling 2026-10-20, option 2).
 --
 -- Two plan-matrix keys go free on EVERY plan:
 --

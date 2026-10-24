@@ -1021,7 +1021,7 @@ async function seedArchivedSlotHolder(competitionName: string): Promise<void> {
  * `createFromTemplate`) — never a direct DB insert, so the demo proves the
  * real instantiation path rather than a shape the route could silently
  * drift from. `t20-super8` (4 groups -> Super 8 -> knockout, 3 stages) was
- * PRO-ONLY while Community's `stages.per_division.max` was 2; V469 ("all
+ * PRO-ONLY while Community's `stages.per_division.max` was 2; V471 ("all
  * stages are free", owner ruling 2026-10-20) made the count unlimited on
  * every plan, so any org can instantiate it now.
  *

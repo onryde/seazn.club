@@ -39,7 +39,7 @@ export const FEATURE_REASONS: Record<string, string> = {
   "competitions.max_active": "Your plan's active-competition limit is reached.",
   "divisions.per_competition.max": "Adding another division needs a bigger plan.",
   "entrants.per_division.max": "This division is at your plan's entrant limit.",
-  // "All stages are free" (owner ruling 2026-10-20, V469): the stage count is
+  // "All stages are free" (owner ruling 2026-10-20, V471): the stage count is
   // unlimited on every plan, so "needs a bigger plan" would send a reader to
   // buy an upgrade that changes nothing. The only refusal left is a staff
   // `org_entitlement_overrides` cap on this one organisation.
@@ -58,7 +58,7 @@ export const FEATURE_REASONS: Record<string, string> = {
   // to BOTH pass rungs, live, not just Pro, so a reason naming only Pro sends
   // a pass holder to buy an upgrade they already hold.
   //
-  // "All stages are free" (owner ruling 2026-10-20, V469): custom brackets
+  // "All stages are free" (owner ruling 2026-10-20, V471): custom brackets
   // (byes), cross-stage feeds, placements and auto-advance left this gate —
   // free on every plan — so the sentence names only the two KINDS the gate
   // still refuses (format-gates.ts `stageNeedsAdvancedFormatsGate`).
@@ -103,7 +103,7 @@ export const FEATURE_REASONS: Record<string, string> = {
   // the seven; FALSE for four. Community is `false` on `stats.player`,
   // `discipline.enforced`, `scoring.audit_export` and `standings.carry_over`,
   // so every free org reaches those four strings on the ordinary path.
-  // (Since then `stats.player` (V399) and `standings.carry_over` (V469) went
+  // (Since then `stats.player` (V399) and `standings.carry_over` (V471) went
   // true on community too, and took the override wording.)
   //
   // Which makes the comment's own warning land on itself: "a sentence nobody
@@ -136,7 +136,7 @@ export const FEATURE_REASONS: Record<string, string> = {
   "discipline.enforced": "Automatic suspension tracking is on Pro and the Event Pass.",
   "tiebreakers.custom": "Custom tiebreaker order is switched off for this organisation.",
   "standings.custom_points": "Bonus-point rules and forfeit points are switched off for this organisation — plain win/draw/loss points work on every plan.",
-  // "All stages are free" (owner ruling 2026-10-20, V469): granted on every
+  // "All stages are free" (owner ruling 2026-10-20, V471): granted on every
   // plan, so the only refusal left is an explicit override deny — the same
   // wording as the other override-only reasons above.
   "standings.carry_over": "Carrying Phase-1 standings into Phase 2 is switched off for this organisation.",
@@ -145,7 +145,7 @@ export const FEATURE_REASONS: Record<string, string> = {
   // does not exist. Kept rather than deleted — the key is still passed to
   // `featureReason` — and reworded to the refusal that is actually possible.
   "eligibility.enforced": "Enforced eligibility locks are switched off for this organisation.",
-  // V469 review item 3: four keys granted on EVERY plan had no reason at all, so
+  // V471 review item 3: four keys granted on EVERY plan had no reason at all, so
   // their override-only refusal fell back to "This feature needs a plan
   // upgrade." — an upsell nothing on sale can satisfy. `branding` (V310, the
   // org's own logo), `import.events` (V396, the batch score-event importer) and
@@ -422,7 +422,7 @@ export function featurePlan(featureKey: string): PaidPlan {
  * resolves to, no plan can refuse one of these: the only refusal left is a staff
  * `org_entitlement_overrides` row on one organisation, and nothing on sale lifts
  * that. `<UpgradeGate>` therefore renders them with the override sentence alone
- * — no plan badge, no upgrade link, no pass offer (V469 review item 2).
+ * — no plan badge, no upgrade link, no pass offer (V471 review item 2).
  *
  * A typed list, because `<UpgradeGate>` is a client component and cannot read
  * the matrix: a migration that frees or re-prices a key moves this list by

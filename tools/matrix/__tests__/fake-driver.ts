@@ -1122,7 +1122,7 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
  *  kind to the feature_key its 402 names, and is read in insertion order —
  *  the FIRST entry whose kind any posted stage has answers, as createStages
  *  checks its gates in order over every stage (stages.ts:373-382). Only kinds:
- *  the product's gates read nothing else since V469 retired the advanced
+ *  the product's gates read nothing else since V471 retired the advanced
  *  gate's config keys. Stages are kept per division (ids d1, d2, …).
  *  deleteFirst mirrors today's replaceStages (stages.ts: delete, THEN gate). */
 export class FakeDeniedDriver extends FakeLeagueDriver {

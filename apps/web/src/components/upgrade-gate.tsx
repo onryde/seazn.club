@@ -296,7 +296,7 @@ export function UpgradeGate({
   // Only an org that can still BENEFIT from a pass is offered one.
   const passHref = liftable && gate === "none" ? passHrefFromPath(pathname, feature) : null;
 
-  // V469 review item 2 — a key Community already grants outright
+  // V471 review item 2 — a key Community already grants outright
   // (`stages.per_division.max`, `standings.carry_over`, and every other key in
   // COMMUNITY_GRANTED_FEATURES) is refused only by a staff override on this one
   // organisation. No plan or pass lifts that, so this card sells nothing: no

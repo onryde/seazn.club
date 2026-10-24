@@ -803,7 +803,7 @@ describe.skipIf(!HAS_DB)(
  * every free org auto-drafted news with no witness.
  *
  * The OTHER gate, `formats.advanced` on `auto_progress`, was RETIRED by the
- * owner's "all stages are free" ruling (2026-10-20, V469): auto-advance is free
+ * owner's "all stages are free" ruling (2026-10-20, V471): auto-advance is free
  * on every plan. Its case is inverted rather than deleted, so a regression
  * that re-gates auto-advance reds here.
  *
@@ -813,7 +813,7 @@ describe.skipIf(!HAS_DB)(
  * so a guard that simply refused every write could not satisfy these tests.
  */
 describe.skipIf(!HAS_DB)("paid-layer gates on patchDivision (W8 F21)", () => {
-  it("lets a Community org turn auto_progress ON (and OFF) without formats.advanced — free since V469", async () => {
+  it("lets a Community org turn auto_progress ON (and OFF) without formats.advanced — free since V471", async () => {
     const owner = await seedOwner("community");
     const { division } = await rig(owner);
     // The org really lacks the advanced-formats layer, so the success below is

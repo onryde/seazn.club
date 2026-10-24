@@ -141,7 +141,7 @@ const MATRIX: { feature: string; plan: Plan; allowed: boolean }[] = [
   { feature: "dashboard.public.max",          plan: "pro",       allowed: true },
   { feature: "divisions.per_competition.max", plan: "community", allowed: false },
   { feature: "divisions.per_competition.max", plan: "pro",       allowed: true },
-  // V469 ("all stages are free", owner ruling 2026-10-20): unlimited on every
+  // V471 ("all stages are free", owner ruling 2026-10-20): unlimited on every
   // plan. The rows still EXIST (NULL, not deleted), so — like double_elim
   // below — the community arm is a real assertion that the boundary opened.
   { feature: "stages.per_division.max",       plan: "community", allowed: true },
@@ -234,7 +234,7 @@ async function probe(feature: string, auth: AuthCtx): Promise<() => Promise<unkn
         { seq: 1, kind: "league", name: "S1", config: {} },
         { seq: 2, kind: "knockout", name: "S2", config: {} },
       ] as never);
-      return () => // 3rd stage: one past Community's OLD cap of 2 (V112), free since V469
+      return () => // 3rd stage: one past Community's OLD cap of 2 (V112), free since V471
         createStages(auth, division.id, { seq: 3, kind: "knockout", name: "S3", config: {} } as never);
     }
     case "entrants.per_division.max": {

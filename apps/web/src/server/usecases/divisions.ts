@@ -741,7 +741,7 @@ export async function patchDivision(
   // self-deadlock (lib/db.ts).
   //
   // `auto_progress` used to ask for `formats.advanced` here (Jul3/08 §8). The
-  // owner's "all stages are free" ruling (2026-10-20, V469) made auto-advance
+  // owner's "all stages are free" ruling (2026-10-20, V471) made auto-advance
   // free on every plan, so turning it ON needs no plan at all.
   const competitionId =
     patch.auto_posts === true

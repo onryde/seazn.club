@@ -597,7 +597,7 @@ const CARD_SURFACES: CardSurface[] = [
       // "public dashboard" was covered by dashboard.public.max while "Live
       // standings" beside it was covered by nothing.
       "Live standings":
-        "the standings table is core engine output (packages/engine), produced on every plan and gated by no row. The standings features with their own rows, `standings.carry_over` (free on every plan since V469) and `standings.custom_points` (free since V393), are claimed on no card.",
+        "the standings table is core engine output (packages/engine), produced on every plan and gated by no row. The standings features with their own rows, `standings.carry_over` (free on every plan since V471) and `standings.custom_points` (free since V393), are claimed on no card.",
       "League, groups + knockout & swiss formats":
         "the base formats are the engine's own repertoire (packages/engine), not a plan_entitlements row. `formats.advanced` is the GATED one and is claimed on the Pass card. `formats.double_elim` is TRUE on every plan including community (V393+ growth cell) and is claimed by no card — W3 fix round 1 removed the Pass card's 'double elim' example for exactly that reason, so this bullet's own 'knockout' does the only double-elimination-adjacent naming this card does, unconditionally. Nothing here is plan-conditional.",
     },

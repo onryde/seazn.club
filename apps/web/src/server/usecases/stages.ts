@@ -441,7 +441,7 @@ export async function assertStageBatchGates(
   }
   // The advanced-formats layer (Pro and the Event Pass) is the americano and
   // ladder KINDS. Custom byes, cross-stage feeds and placements were part of it
-  // (Jul3/08 §8) until V469 ("all stages are free", owner ruling 2026-10-20).
+  // (Jul3/08 §8) until V471 ("all stages are free", owner ruling 2026-10-20).
   // Shared with createFromTemplate (usecases/templates.ts, D1a) via
   // usecases/format-gates.ts — see that file's header for why it's a
   // standalone module rather than this usecase calling the other.
@@ -466,7 +466,7 @@ export async function assertStageBatchGates(
   // Jul3/05 §7: base win/draw/loss numbers are free; bonuses + forfeit points
   // + circular-H2H + carry-over were the Pro layer. All four keys are granted
   // on every plan now (custom points / tiebreakers since V393, carry-over since
-  // V469), so each call below refuses only on an explicit staff
+  // V471), so each call below refuses only on an explicit staff
   // `org_entitlement_overrides` deny — kept for exactly that lever.
   for (const s of inputs) {
     const cfg = s.config as { points?: unknown; h2h_scope?: string } | undefined;
@@ -484,7 +484,7 @@ export async function assertStageBatchGates(
   // transaction with the insert (doc 10 §2 rule 1). `getLimit` queries the
   // pooled `sql` proxy, and `withTenant` pins a pooled connection for its whole
   // callback — see `assertWithinLimit` in lib/entitlements.ts.
-  // V469 ("all stages are free", owner ruling 2026-10-20) made this cap
+  // V471 ("all stages are free", owner ruling 2026-10-20) made this cap
   // unlimited on every plan; before it, V393 lifted it on an Event Pass
   // (community 2 -> event_pass 4). The read is kept, competition-scoped with
   // the `divComp` id the format gates already resolved, because a staff
@@ -559,7 +559,7 @@ async function insertStageBatch(
   const configs = stageConfigsAtCreate(division, inputs, carried);
   assertNotFrozen(frozen, division.competition_id);
 
-  // Doc 10 §1: `stages.per_division.max` (∞ on every plan since V469; an
+  // Doc 10 §1: `stages.per_division.max` (∞ on every plan since V471; an
   // override can still set one) — the batch must fit,
   // counted in the same tx as the inserts (doc 10 §2 rule 1).
   const [{ n }] = await tx<{ n: number }[]>`
@@ -5031,7 +5031,7 @@ async function seedNextStage(auth: AuthCtx, completedStageId: string): Promise<S
     // stage graph, and it backs a MARKETED entitlement
     // (standings.carry_over — feature-copy.ts's paywall copy,
     // pricing.matrix.standings.carry_over in all 4 marketing dictionaries;
-    // free on every plan since V469). Deleting it would silently break an
+    // free on every plan since V471). Deleting it would silently break an
     // advertised feature. `carry`
     // is, like `timing`, an apps/web/DB-orchestration concept the engine's
     // pure ProgressionSpec has no notion of — see ProgressionSchema.
@@ -5344,7 +5344,7 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
     // SourcedSlot — progression.ts). Reachable today: createStages/
     // replaceStages persist a multi-source `setup` progression with no
     // progression-aware gate (format-gates.ts checks the stage kind only —
-    // V469 freed byes/cross_feeds/placements); progression-multi-source.test.ts
+    // V471 freed byes/cross_feeds/placements); progression-multi-source.test.ts
     // exercises it end to end.
     //
     // F3 round-3 review, Task 2 — that alone still collides for two bestNth

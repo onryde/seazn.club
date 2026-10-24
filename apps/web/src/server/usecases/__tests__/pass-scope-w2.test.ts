@@ -19,7 +19,7 @@
 // shape on its own new key, `stats.player.career` — the table above is
 // otherwise unchanged, it is `stats.player`'s ROLE in it that moved.
 //
-// V469 ("all stages are free", owner ruling 2026-10-20) did the same to
+// V471 ("all stages are free", owner ruling 2026-10-20) did the same to
 // `stages.per_division.max`: unlimited on every plan, so it left the
 // pass-scoped set too, and its case below was rewritten to prove the sibling
 // competition now takes the extra stages as well.
@@ -378,7 +378,7 @@ describe.skipIf(!HAS_DB)("Event Pass grants resolve against the competition (W2 
     await expectPaywall(personCareerStats(ctx.auth, outsider), "stats.player.career");
   });
 
-  it("stages.per_division.max: free on every plan since V469 — the passed competition AND its sibling take stages past the old caps", async () => {
+  it("stages.per_division.max: free on every plan since V471 — the passed competition AND its sibling take stages past the old caps", async () => {
     const ctx = await seedCommunityOrg();
     const passed = await seedCompetition(ctx, "SC Passed " + uniq());
     await buyPass(ctx.orgId, passed.competitionId);

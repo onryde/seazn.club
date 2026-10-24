@@ -11,7 +11,7 @@ import { ROW_KEYS, stagesForRow } from "../lib/catalogue.ts";
 import { ADVANCED_KINDS, DOUBLE_ELIM_KINDS, expectedGate, expectedGates } from "../lib/format-gates-copy.ts";
 import { batchGatesBody } from "./product-gates-source.ts";
 
-/** The config keys the owner's "all stages are free" ruling (2026-10-20, V469)
+/** The config keys the owner's "all stages are free" ruling (2026-10-20, V471)
  *  took OUT of the advanced gate — custom byes, cross-stage feeds, placements.
  *  Named from the ruling, not read from either copy: they must now gate NOTHING. */
 const FREED_CONFIG_KEYS = ["byes", "cross_feeds", "placements"] as const;
@@ -39,7 +39,7 @@ describe("expectedGate — a text-pinned copy of format-gates.ts (server-only, u
     expect(advKinds.length).toBeGreaterThan(0);
     expect(de).toEqual([...DOUBLE_ELIM_KINDS]);
     expect(advKinds).toEqual([...ADVANCED_KINDS]);
-    // V469: no config term survives in the product's body (its doc comment
+    // V471: no config term survives in the product's body (its doc comment
     // above the signature may still NAME the retired keys — the body may not).
     const code = adv.slice(adv.indexOf("{"));
     expect(code).not.toMatch(/\bconfig\b/);
@@ -82,7 +82,7 @@ describe("expectedGate — a text-pinned copy of format-gates.ts (server-only, u
     let judged = 0;
     for (const k of DOUBLE_ELIM_KINDS) { expect(expectedGate([{ kind: k, config: {} }]), k).toBe("formats.double_elim"); judged++; }
     for (const k of ADVANCED_KINDS) { expect(expectedGate([{ kind: k, config: {} }]), k).toBe("formats.advanced"); judged++; }
-    // The retired config-key branch (V469): no value of a freed key gates a basic
+    // The retired config-key branch (V471): no value of a freed key gates a basic
     // kind — present, empty, or falsy — and none changes what a gated kind fires.
     for (const key of FREED_CONFIG_KEYS) {
       for (const value of [[], [{ from: 1, to: 2 }], null, 0, false, ""]) {
@@ -104,7 +104,7 @@ describe("expectedGate — a text-pinned copy of format-gates.ts (server-only, u
     for (const k of DOUBLE_ELIM_KINDS) { expect(expectedGates([{ kind: k }]), k).toEqual(["formats.double_elim"]); judged++; }
     for (const k of ADVANCED_KINDS) { expect(expectedGates([{ kind: k }]), k).toEqual(["formats.advanced"]); judged++; }
     // A POST that trips both gates needs both — whichever stage comes first
-    // (task 10 review m-6). Since V469 only a gated KIND trips the advanced
+    // (task 10 review m-6). Since V471 only a gated KIND trips the advanced
     // gate; a page_playoff beside a freed config key fires double_elim alone.
     const both: { kind: string; config?: Record<string, unknown> }[][] = [];
     for (const de of DOUBLE_ELIM_KINDS) {

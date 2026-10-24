@@ -4200,9 +4200,9 @@ async function passGrantsSuite(): Promise<void> {
     plainLink.status === 402 && featureKey(plainLink) === "scoring.device_links",
   );
 
-  // === stages.per_division.max — free on every plan (V469) =================
+  // === stages.per_division.max — free on every plan (V471) =================
   // Was community 2, pass 4 (V393): the pass lifted it and the sibling was
-  // refused a 3rd. V469 ("all stages are free", owner ruling 2026-10-20) made
+  // refused a 3rd. V471 ("all stages are free", owner ruling 2026-10-20) made
   // the count unlimited on every plan, so BOTH competitions now take a 3rd —
   // the sibling's 201 is the witness that the old cap is gone, not leaked.
   // Run on the ENTRANT-CAP divisions, which carry NO stages at all — the board
@@ -4231,7 +4231,7 @@ async function passGrantsSuite(): Promise<void> {
     passStages.every((r) => r.status === 201),
   );
   check(
-    "pass grants/stages: the sibling (no pass) takes a 3rd stage too — free on every plan since V469",
+    "pass grants/stages: the sibling (no pass) takes a 3rd stage too — free on every plan since V471",
     plainStages.length === 3 && plainStages.every((r) => r.status === 201),
   );
 
@@ -4323,7 +4323,7 @@ async function passGrantsSuite(): Promise<void> {
       ent.entitlements["registration.fee_percent"]?.limit === communityFee,
   );
   check(
-    "pass grants/scope: the save-point cap stays at the community figure org-wide (2), and the stage count reads unlimited (V469)",
+    "pass grants/scope: the save-point cap stays at the community figure org-wide (2), and the stage count reads unlimited (V471)",
     ent.entitlements["schedule.checkpoints.max"]?.limit === 2 &&
       ent.entitlements["stages.per_division.max"] !== undefined &&
       ent.entitlements["stages.per_division.max"]?.limit === null,
@@ -9819,7 +9819,7 @@ async function templateInstantiationSuite(): Promise<void> {
   // knockout) is the catalog's first template with 3 stages, TWO of which
   // carry progression (timing: "setup") in the SAME division. It used to be
   // gated on STAGE COUNT alone (V112: stages.per_division.max 2 on community)
-  // and ran on a Pro session. V469 ("all stages are free", owner ruling
+  // and ran on a Pro session. V471 ("all stages are free", owner ruling
   // 2026-10-20) made the count unlimited on every plan, so it now runs on a
   // fresh COMMUNITY session — no setPlan — which is the witness that a free
   // org instantiates a 3-stage template through the real route.

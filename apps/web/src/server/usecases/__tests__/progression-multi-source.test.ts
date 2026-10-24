@@ -53,7 +53,7 @@ async function seedOrg(): Promise<{ auth: AuthCtx }> {
     insert into organizations (name, slug) values (${"Ms " + suffix}, ${"ms-" + suffix})
     returning id`;
   // pro: 3 stages (A, B, Final) were past community's stages.per_division.max
-  // until V469 made the count free; kept on pro, which changes nothing here.
+  // until V471 made the count free; kept on pro, which changes nothing here.
   await setOrgPlan(orgId);
   await invalidateOrgEntitlements(orgId);
   await sql`
@@ -388,7 +388,7 @@ describe.skipIf(!HAS_DB)("multi-source progression (F2 Decision 4 / Finding 1)",
   // regression in the union (e.g. carrying only the last-resolved source's
   // rows, or only the just-completed stage's own table) would have shipped
   // silently. `carry` backs the marketed standings.carry_over
-  // entitlement (free since V469); custom-points.test.ts already covers the single-source
+  // entitlement (free since V471); custom-points.test.ts already covers the single-source
   // shape plus the override-deny 402 gate.
   //
   // A and B are given DISJOINT 2-entrant rosters via an explicit
@@ -568,7 +568,7 @@ describe.skipIf(!HAS_DB)("multi-source progression (F2 Decision 4 / Finding 1)",
   // `timing: "setup"` knockout Final via two rankRange{1,1} sources — exactly
   // the "any format with customised stage graphs" reachability path F3
   // exists to cover. `createStages`/`replaceStages` have no progression-aware
-  // gate (format-gates.ts checks the americano/ladder kinds only since V469).
+  // gate (format-gates.ts checks the americano/ladder kinds only since V471).
   it("resolves a tie on ONE of two same-keyed sources into that source's own slot, not the other source's", async () => {
     const { auth } = await seedOrg();
     const comp = await createCompetition(auth, {
