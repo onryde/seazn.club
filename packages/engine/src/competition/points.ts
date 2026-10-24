@@ -338,8 +338,8 @@ export function payout(
   // The rule's forfeit row pays an unplayed forfeit and a bye alike; only the award score tells them apart.
   const forfeitRow = forfeit || bye;
   const award = forfeitShaped(outcome);
-  const shootoutDraw =
-    outcome.kind === "win" && !award && rule.bySetScore === undefined && d === "so" && rule.shootoutAs === "draw_plus_bonus";
+  // `d` is "so" only for a win (the guard above); a forfeit-shaped win is an award whatever a caller passes.
+  const shootoutDraw = !award && rule.bySetScore === undefined && d === "so" && rule.shootoutAs === "draw_plus_bonus";
   const setPair = (): readonly [number, number] => setPairOf(rule.bySetScore!, setScoreOf(pair));
 
   const sidePoints = (delta: StandingsDelta): number => {
@@ -350,9 +350,7 @@ export function payout(
       case "tie":
       case "no_result":
         return levelPayout(rule, levelOutcomeKey(outcome.kind));
-      case "win":
-      case "award":
-        break;
+      // a win or an award: below
     }
     if (forfeitRow && rule.forfeit !== undefined) {
       return delta.won === 1 ? rule.forfeit.winnerPoints : rule.forfeit.loserPoints;

@@ -263,6 +263,8 @@ describe("W2d payout (SPEC §5.3)", () => {
     expect(() => validatePointsRule(rule, hockey.metrics)).not.toThrow();
     // a sport that keeps no score under any alias is still refused (volleyball: sets and rally points only)
     expect(() => validatePointsRule(rule, volleyball.metrics)).toThrowError(CONFIG_INVALID);
+    // ...and the refusal says why (the stage PUT shows it to the organiser)
+    expect(() => validatePointsRule(rule, volleyball.metrics)).toThrow(/emits no score/);
   });
 
   it("unit 'half' changes nothing payout pays (display only)", () => {
@@ -295,6 +297,84 @@ describe("W2d payout (SPEC §5.3)", () => {
     expect(() => payout(award("H", "walkover"), "regulation", pair(0, 0, "H"), false, FB(), undefined)).toThrowError(CONFIG_INVALID);
   });
 
+  it("each refusal says what it refuses: an uncovered outcome, a set score not named, a decidedIn mismatch (message and data)", () => {
+    const refusal = (fn: () => unknown): { message: string; data: unknown } => {
+      try {
+        fn();
+      } catch (e) {
+        expect(e, "an EngineError").toMatchObject({ code: "CONFIG_INVALID" });
+        return { message: (e as Error).message, data: (e as { data?: unknown }).data };
+      }
+      throw new Error("expected a refusal");
+    };
+    const noDraw = refusal(() => payout(LEVEL("draw"), null, pair(1, 1), true, TT(), undefined));
+    expect(noDraw.data).toEqual({ outcome: "draw" });
+    expect(noDraw.message).toMatch(/"draw"/);
+    // a set score the map neither names nor covers with "*"
+    const unnamed = refusal(() => payout(win("H"), "regulation", sets(3, 1), true, VB({ "3-0": [3, 0] }), undefined));
+    expect(unnamed.data).toEqual({ outcome: "set:3-1" });
+    expect(unnamed.message).toMatch(/"set:3-1"/);
+    const needs = refusal(() => payout(win("H"), null, pair(1, 0), true, FB(), undefined));
+    expect([needs.message, needs.data]).toEqual(["a win outcome needs decidedIn", { kind: "win", decidedIn: null }]);
+    const takes = refusal(() => payout(LEVEL("draw"), "regulation", pair(1, 1), true, FB(), undefined));
+    expect([takes.message, takes.data]).toEqual(["a draw outcome takes no decidedIn", { kind: "draw", decidedIn: "regulation" }]);
+    // a set map over a result whose winner's ledger names no set score: refused by name (never "undefined-undefined"
+    // falling to "*"), and a pair whose loser has no winner beside it is the same refusal, never a TypeError
+    const star = VB({ "*": [3, 0] });
+    const noScore = refusal(() => payout(win("H"), "regulation", [side("H", 1, 0, 0, { sets_won: 2 }), side("A", 0, 0, 1, {})], true, star, undefined));
+    expect([noScore.message, noScore.data]).toEqual(["the points rule pays by set score, but the result names no winner's set score", { entrants: ["H", "A"] }]);
+    const noWon = refusal(() => payout(win("H"), "regulation", [side("H", 1, 0, 0, { sets_lost: 0 }), side("A", 0, 0, 1, {})], true, star, undefined));
+    expect(noWon.data, "either half of the set score alone").toEqual({ entrants: ["H", "A"] });
+    const noWinner = refusal(() => payout(win("H"), "regulation", [side("H", 0, 0, 0, {}), side("A", 0, 0, 1, {})], true, star, undefined));
+    expect(noWinner.data).toEqual({ entrants: ["H", "A"] });
+  });
+
+  it("margin and ratio bonuses read the first score alias whose for AND against are both recorded, index for index (F11)", () => {
+    // cricket keeps runs_for/runs_against (the second alias) and here no run_diff, so the ratio reads the pair
+    const ratio = CK({ bonuses: [{ when: "score_ratio_gte", param: 0.9, points: 1 }] });
+    const ck = (hf: number, ha: number, extra: Record<string, number> = {}): FixtureResult => [
+      side("H", 1, 0, 0, { runs_for: hf, runs_against: ha }),
+      side("A", 0, 0, 1, { runs_for: ha, runs_against: hf, ...extra }),
+    ];
+    expect(pts(payout(win("H"), "regulation", ck(150, 140), true, ratio, undefined)), "140/150 >= 0.9: the loser's bonus").toEqual([2, 1]);
+    expect(pts(payout(win("H"), "regulation", ck(150, 120), true, ratio, undefined)), "120/150 < 0.9: none").toEqual([2, 0]);
+    // a half pair of an earlier alias (gf with no ga) is skipped, never read as a score
+    expect(pts(payout(win("H"), "regulation", ck(150, 140, { gf: 0 }), true, ratio, undefined))).toEqual([2, 1]);
+    expect(pts(payout(win("H"), "regulation", ck(150, 140, { ga: 0 }), true, ratio, undefined)), "either half alone").toEqual([2, 1]);
+  });
+
+  it("a win decided in ot pays ot even where so is set; so pays so; regulation pays regulation (the chain, each link)", () => {
+    const rule = PointsRule.parse({ win: { regulation: 3, ot: 2, so: 5 }, loss: { regulation: 0, ot: 1, so: 4 }, shootoutAs: "result", unit: "whole" });
+    expect(pts(payout(win("H", "extra_time"), "ot", pair(2, 1), true, rule, undefined))).toEqual([2, 1]);
+    expect(pts(payout(win("H", "shootout"), "so", pair(1, 1, "H"), true, rule, undefined))).toEqual([5, 4]);
+    expect(pts(payout(win("H"), "regulation", pair(2, 1), true, rule, undefined))).toEqual([3, 0]);
+  });
+
+  it("an award under a set map pays the credited score's pair to both sides, not win.regulation / loss.regulation", () => {
+    const rule = VB({ "2-0": [4, 1] });
+    expect(pts(payout(award("H", "walkover"), null, sets(2, 0), false, rule, undefined))).toEqual([4, 1]);
+  });
+
+  it("a side a result books neither won nor lost is paid 0: an award, a set map, the decided-in chain", () => {
+    const neutral = (h: StandingsDelta): FixtureResult => [h, side("A", 0, 0, 0, {})];
+    const lossPays = PointsRule.parse({ win: { regulation: 3 }, loss: { regulation: 1 }, shootoutAs: "result", unit: "whole" });
+    expect(pts(payout(award("H", "walkover"), null, neutral(side("H", 1, 0, 0, {})), false, lossPays, undefined))).toEqual([3, 0]);
+    expect(pts(payout(win("H"), "regulation", neutral(side("H", 1, 0, 0, { sets_won: 2, sets_lost: 0 })), true, VB({ "2-0": [3, 1] }), undefined))).toEqual([3, 0]);
+    expect(pts(payout(win("H"), "regulation", neutral(side("H", 1, 0, 0, {})), true, lossPays, undefined))).toEqual([3, 0]);
+  });
+
+  it("a set map is the whole table: a result decided in a shoot-out pays its set pair and books won/lost, never a draw", () => {
+    const rule = PointsRule.parse({ win: { regulation: 3 }, loss: { regulation: 0 }, draw: 1, bySetScore: { "*": [3, 0] }, shootoutAs: "draw_plus_bonus", unit: "whole" });
+    const out = payout(win("H", "shootout"), "so", sets(2, 1), true, rule, undefined);
+    expect([wdl(out[0]), wdl(out[1])]).toEqual([[1, 0, 0, 3], [0, 0, 1, 0]]);
+  });
+
+  it("a forfeit-shaped win is an award whatever decidedIn a caller passes: never booked as a shoot-out draw", () => {
+    const out = payout(win("H", "walkover"), "so", pair(0, 0, "H"), false, FB(), undefined);
+    expect([wdl(out[0]), wdl(out[1])]).toEqual([[1, 0, 0, 3], [0, 0, 1, 0]]);
+    expect(out[0].metrics.won_so, "an award writes no display metric").toBeUndefined();
+  });
+
   it("the rule refuses a field its shoot-out booking can never pay: a `so` split under draw_plus_bonus, a soBonus under result", () => {
     const dpbSplit = { win: { regulation: 3, so: 2 }, loss: { regulation: 0 }, draw: 1, shootoutAs: "draw_plus_bonus", unit: "whole" };
     expect(PointsRule.safeParse(dpbSplit).success).toBe(false);
@@ -302,8 +382,45 @@ describe("W2d payout (SPEC §5.3)", () => {
     expect(PointsRule.safeParse({ ...dpbSplit, win: { regulation: 3 } }).success).toBe(true);
     expect(PointsRule.safeParse({ ...dpbSplit, win: { regulation: 3 }, shootoutAs: "result", soBonus: 1 }).success).toBe(false);
     expect(PointsRule.safeParse({ ...dpbSplit, win: { regulation: 3 }, shootoutAs: "result" }).success).toBe(true);
-    // a set-score key is "W-L" or "*"
-    expect(PointsRule.safeParse({ ...dpbSplit, win: { regulation: 3 }, bySetScore: { "3:0": [3, 0] } }).success).toBe(false);
+    // Each refusal names the field it refuses (the API's 400 carries the path and the words), one issue per field.
+    const issues = (raw: unknown) => {
+      const r = PointsRule.safeParse(raw);
+      expect(r.success, JSON.stringify(raw)).toBe(false);
+      return r.error!.issues.map((i) => ({ path: i.path, code: i.code, named: i.message.length > 0 }));
+    };
+    const both = { ...dpbSplit, win: { regulation: 3, so: 2 }, loss: { regulation: 0, so: 1 } };
+    expect(issues(both)).toEqual([
+      { path: ["win", "so"], code: "custom", named: true },
+      { path: ["loss", "so"], code: "custom", named: true },
+    ]);
+    expect(issues({ ...dpbSplit, win: { regulation: 3 }, shootoutAs: "result", soBonus: 1 })).toEqual([{ path: ["soBonus"], code: "custom", named: true }]);
+    expect(PointsRule.safeParse(both).error!.issues.map((i) => i.message).join(" ")).toMatch(/soBonus/);
+    expect(PointsRule.safeParse({ ...dpbSplit, win: { regulation: 3 }, shootoutAs: "result", soBonus: 1 }).error!.issues[0]!.message).toMatch(/win\.so/);
+    // An empty set-score map pays nothing (absent pays every score by the win and the loss): refused by name; one key is a map.
+    expect(issues({ ...dpbSplit, win: { regulation: 3 }, bySetScore: {} })).toEqual([{ path: ["bySetScore"], code: "custom", named: true }]);
+    expect(PointsRule.safeParse({ ...dpbSplit, win: { regulation: 3 }, bySetScore: {} }).error!.issues[0]!.message).toMatch(/at least one score/);
+    expect(PointsRule.safeParse({ ...dpbSplit, win: { regulation: 3 }, bySetScore: { "*": [2, 0] } }).success).toBe(true);
+    // a set-score key is "W-L" (any number of digits a side) or "*", the whole key and nothing else
+    let keys = 0;
+    for (const key of ["3-0", "2-1", "10-12", "*"]) {
+      expect(PointsRule.safeParse({ ...dpbSplit, win: { regulation: 3 }, bySetScore: { [key]: [3, 0] } }).success, key).toBe(true);
+      keys++;
+    }
+    for (const key of ["3:0", "x3-0", "3-0x", "3-", "-0", "a-b", "**", "", "3–0"]) {
+      expect(PointsRule.safeParse({ ...dpbSplit, win: { regulation: 3 }, bySetScore: { [key]: [3, 0] } }).success, key).toBe(false);
+      keys++;
+    }
+    expect(keys).toBe(13);
+  });
+
+  it("the published example (OpenAPI's, from the schema's meta) is a rule the schema takes, and there is one", () => {
+    const examples = (PointsRule.meta()?.examples ?? []) as unknown[];
+    expect(examples.length).toBeGreaterThan(0);
+    for (const ex of examples) {
+      expect(PointsRule.safeParse(ex).error?.issues ?? [], JSON.stringify(ex)).toEqual([]);
+      // the example is the IIHF table it says it is (spec §5.10): ot splits on both sides and a walkover row
+      expect(ex).toMatchObject({ win: { regulation: 3, ot: 2 }, loss: { regulation: 0, ot: 1 }, forfeit: { winnerPoints: 3, loserPoints: 0 } });
+    }
   });
 
   it("Sequence: undecided → decided → second recompute (same points) → void → another sport (cricket tie)", () => {
@@ -428,6 +545,22 @@ describe("reachableOutcomes + coverage (X-PT-3)", () => {
     expect(coverage(PointsRule.parse({ ...noTie, tie: 1 }), reach)).toEqual({ ok: true });
   });
 
+  it("each reachable draw and shoot-out key is asked on its own: {draw}, {win.so}, {loss.so} alone (counted)", () => {
+    const noDraw = PointsRule.parse({ win: { regulation: 3 }, loss: { regulation: 0 }, shootoutAs: "draw_plus_bonus", unit: "whole" });
+    let checked = 0;
+    for (const [keys, uncovered] of [
+      [["draw"], ["draw"]],
+      [["win.so"], ["draw"]],
+      [["loss.so"], ["draw"]],
+      [["win.regulation", "loss.regulation"], null],
+    ] as const) {
+      const got = coverage(noDraw, new Set<OutcomeKey>(keys));
+      expect(got, keys.join(",")).toEqual(uncovered === null ? { ok: true } : { ok: false, uncovered });
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
   it("an override that only removes outcomes (football extra time off) stays covered", () => {
     const stage = reachableOutcomes(football, { extraTime: { enabled: true, halfMinutes: 15 }, shootout: true }, "group");
     const override = reachableOutcomes(football, { extraTime: { enabled: false, halfMinutes: 15 }, shootout: true }, "group");
@@ -538,6 +671,81 @@ describe("pointsRuleBounds, legacyPointsRule, parseStoredPointsRule", () => {
     expect(checked).toBeGreaterThan(SPORTS * 4);
   });
 
+  it("pointsRuleBounds is exact for each outcome class, from the rule's own numbers (empty reachable, ot, so both bookings, set maps, unplayed, level results, draw-class bonuses; counted)", () => {
+    const R = (raw: Raw): PointsRule => PointsRule.parse({ shootoutAs: "result", unit: "whole", ...raw });
+    const reach = (...keys: string[]) => new Set(keys as OutcomeKey[]);
+    type B = { max: number; min: number; winFloor: number; lossCeil: number; winsOnly: boolean };
+    // Each expectation is read off the rule: the award's credited win and loss always, each reachable win.<d>/loss.<d> by
+    // the chain, a booked shoot-out's draw + soBonus / draw, the reachable level results, the double walkover's 0.
+    const cases: [string, PointsRule, ReadonlySet<OutcomeKey>, B][] = [
+      ["empty reachable: the award's 3/1 and the double walkover's 0 only (ot values unreachable)",
+        R({ win: { regulation: 3, ot: 2 }, loss: { regulation: 1, ot: 2 } }), reach(),
+        { max: 3, min: 0, winFloor: 3, lossCeil: 1, winsOnly: false }],
+      ["ot reachable under draw_plus_bonus pays ot (only the so link is booked drawn)",
+        R({ win: { regulation: 3, ot: 2 }, loss: { regulation: 0, ot: 1 }, draw: 1, shootoutAs: "draw_plus_bonus" }),
+        reach("win.regulation", "loss.regulation", "win.ot", "loss.ot", "draw"),
+        { max: 3, min: 0, winFloor: 2, lossCeil: 1, winsOnly: false }],
+      ["a booked shoot-out reached by win.so alone: winner draw 1 + soBonus 2, loser draw 1",
+        R({ win: { regulation: 3 }, loss: { regulation: 0 }, draw: 1, soBonus: 2, shootoutAs: "draw_plus_bonus" }), reach("win.so"),
+        { max: 3, min: 0, winFloor: 3, lossCeil: 1, winsOnly: false }],
+      ["...and by loss.so alone",
+        R({ win: { regulation: 3 }, loss: { regulation: 0 }, draw: 1, soBonus: 2, shootoutAs: "draw_plus_bonus" }), reach("loss.so"),
+        { max: 3, min: 0, winFloor: 3, lossCeil: 1, winsOnly: false }],
+      ["a booked shoot-out with no draw pays nothing here (payout refuses it)",
+        R({ win: { regulation: 3 }, loss: { regulation: 0 }, shootoutAs: "draw_plus_bonus" }), reach("win.so", "loss.so"),
+        { max: 3, min: 0, winFloor: 3, lossCeil: 0, winsOnly: true }],
+      ["a result-booked shoot-out pays its so split 5/4",
+        R({ win: { regulation: 3, so: 5 }, loss: { regulation: 0, so: 4 }, draw: 1 }), reach("win.so", "loss.so"),
+        { max: 5, min: 0, winFloor: 3, lossCeil: 4, winsOnly: false }],
+      ["a set map pays the reachable scores' pairs, never win/loss.regulation 7 nor an unreachable key's 9/9",
+        R({ win: { regulation: 7 }, loss: { regulation: 7 }, bySetScore: { "3-0": [3, 0], "3-1": [3, 0], "3-2": [2, 1], "2-0": [9, 9] } }),
+        reach("set:3-0", "set:3-1", "set:3-2"),
+        { max: 3, min: 0, winFloor: 2, lossCeil: 1, winsOnly: false }],
+      ["a score the map does not name pays '*' (and a level key reads no set pair)",
+        R({ win: { regulation: 7 }, loss: { regulation: 7 }, bySetScore: { "*": [2, 0], "3-2": [1, 1] } }), reach("set:3-0", "draw"),
+        { max: 2, min: 0, winFloor: 2, lossCeil: 0, winsOnly: true }],
+      ["a non-set key never reads '*' as a set pair",
+        R({ win: { regulation: 7 }, loss: { regulation: 7 }, bySetScore: { "3-0": [3, 0], "*": [1, 1] } }), reach("set:3-0", "loss.unplayed"),
+        { max: 3, min: 0, winFloor: 3, lossCeil: 0, winsOnly: true }],
+      ["a score neither named nor starred pays nothing here",
+        R({ win: { regulation: 7 }, loss: { regulation: 7 }, bySetScore: { "3-0": [3, 0] } }), reach("set:3-0", "set:3-1"),
+        { max: 3, min: 0, winFloor: 3, lossCeil: 0, winsOnly: true }],
+      ["a set map with no reachable score bounds every pair it names",
+        R({ win: { regulation: 7 }, loss: { regulation: 7 }, bySetScore: { "2-0": [3, 0], "2-1": [2, 1] } }), reach(),
+        { max: 3, min: 0, winFloor: 2, lossCeil: 1, winsOnly: false }],
+      ["loss.unplayed -1 where reachable",
+        R({ win: { regulation: 2 }, loss: { regulation: 1, unplayed: -1 } }), reach("win.regulation", "loss.regulation", "loss.unplayed"),
+        { max: 2, min: -1, winFloor: 2, lossCeil: 1, winsOnly: false }],
+      ["loss.unplayed set but not reachable pays nothing",
+        R({ win: { regulation: 2 }, loss: { regulation: 1, unplayed: -1 } }), reach("win.regulation", "loss.regulation"),
+        { max: 2, min: 0, winFloor: 2, lossCeil: 1, winsOnly: false }],
+      ["loss.unplayed reachable but unset falls to the credited loss",
+        R({ win: { regulation: 2 }, loss: { regulation: 1 } }), reach("win.regulation", "loss.regulation", "loss.unplayed"),
+        { max: 2, min: 0, winFloor: 2, lossCeil: 1, winsOnly: false }],
+      ["draw 5, tie 6, noResult 7 unreachable pay nothing",
+        R({ win: { regulation: 3 }, loss: { regulation: 0 }, draw: 5, tie: 6, noResult: 7 }), reach("win.regulation", "loss.regulation"),
+        { max: 3, min: 0, winFloor: 3, lossCeil: 0, winsOnly: true }],
+      ["draw 5, tie 6, noResult 7 reachable",
+        R({ win: { regulation: 3 }, loss: { regulation: 0 }, draw: 5, tie: 6, noResult: 7 }), reach("draw", "tie", "noResult"),
+        { max: 7, min: 0, winFloor: 3, lossCeil: 0, winsOnly: false }],
+      ["a reachable draw or tie the rule does not pay adds nothing",
+        R({ win: { regulation: 3 }, loss: { regulation: 0 } }), reach("draw", "tie"),
+        { max: 3, min: 0, winFloor: 3, lossCeil: 0, winsOnly: true }],
+      ["a draw bonus of -1 lowers a booked shoot-out winner's floor (2 - 1)",
+        FB({ bonuses: [{ when: "draw", points: -1 }] }), reach("win.so", "loss.so"),
+        { max: 3, min: 0, winFloor: 1, lossCeil: 1, winsOnly: false }],
+      ["a draw bonus of +2 raises a booked shoot-out loser's ceiling (1 + 2) and the winner's max (2 + 2)",
+        FB({ bonuses: [{ when: "draw", points: 2 }] }), reach("win.so", "loss.so"),
+        { max: 4, min: 0, winFloor: 2, lossCeil: 3, winsOnly: false }],
+    ];
+    let checked = 0;
+    for (const [name, rule, reachable, want] of cases) {
+      expect(pointsRuleBounds(rule, reachable), name).toEqual(want);
+      checked++;
+    }
+    expect(checked).toBe(19);
+  });
+
   it("legacyPointsRule({base:{win:3,draw:1,loss:0}}) pays a shoot-out win as a win (3/0), a tie 0, a no-result 0 (B1)", () => {
     const old = legacyPointsRule({ base: { win: 3, draw: 1, loss: 0 } });
     const [h, a] = payout(win("H", "shootout"), "so", pair(1, 1, "H"), true, old, undefined);
@@ -550,6 +758,9 @@ describe("pointsRuleBounds, legacyPointsRule, parseStoredPointsRule", () => {
     expect(kept.bonuses).toEqual([{ when: "no_result", points: 2 }]);
     expect(kept.forfeit).toEqual({ winnerPoints: 3, loserPoints: -1, awardScore: [3, 0] });
     expect(pts(payout(LEVEL("no_result"), null, level(), false, kept, undefined))).toEqual([2, 2]);
+    // ...and a rule with no forfeit row has none: not even an undefined key (the stored shape is read back key for key)
+    expect(Object.hasOwn(old, "forfeit")).toBe(false);
+    expect(old).toStrictEqual(PointsRule.parse({ win: { regulation: 3 }, loss: { regulation: 0 }, draw: 1, tie: 0, noResult: 0, shootoutAs: "result", unit: "whole" }));
   });
 
   it("parseStoredPointsRule reads the new shape, the old shape through legacyPointsRule, and nothing else (null, never a throw)", () => {
