@@ -91,8 +91,10 @@ export type QueuedEmailRow = {
  * (the SAME rule as `latestEmailStatus` and `latestStatusesOfRows`, the fragments above), kept only when
  *  - its status is `queued` (waiting to go out: a `sending`, `sent`, `delayed`, `delivered` or ended row is out of the caller's hands
  *    or already gone), AND
- *  - no request of it can have reached the provider: it was never attempted (`attempts = 0`), or the last answer was a 429 (the
- *    provider refused the request before it did anything: `http 429 <name>`, the shape `attempt.ts`'s `lastErrorOf` writes).
+ *  - no request of it can have reached the provider: it was never attempted (`attempts = 0`), or its ONLY attempt was answered 429
+ *    (`attempts = 1` and `http 429 <name>`, the shape `attempt.ts`'s `lastErrorOf` writes: the provider refused the request before it
+ *    did anything). `last_error` is only the LAST answer: with two or more attempts an earlier one may have been a network error or a
+ *    5xx that the provider accepted, so a 429 after them proves nothing and the row is not eligible.
  * and LOCKED (`for update`) on the caller's transaction.
  *
  * The second test is the one that keeps the promise "never an extra mail". A re-rendered email is a NEW row, so a new idempotency
@@ -129,7 +131,7 @@ export async function lockQueuedEmails(
                 and ${current()}
               order by ref_id, lower(recipient), ${newestFirst()})
        and o.status = 'queued'
-       and (o.attempts = 0 or o.last_error like 'http 429 %')
+       and (o.attempts = 0 or (o.attempts = 1 and o.last_error like 'http 429 %'))
      order by o.ref_id, o.id
        for update of o`;
 }

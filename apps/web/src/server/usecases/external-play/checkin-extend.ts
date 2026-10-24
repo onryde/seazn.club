@@ -35,7 +35,7 @@ import "server-only";
 // and the worker ends a still-queued row past it `expired`, unsent; and its SEALED BODY names that deadline. The same transaction
 // therefore does two things for the board's two seats:
 //   - RE-RENDERS what can safely be (`requeueUnsentInvites`): a recipient whose newest invite is `queued` AND that no request can have
-//     reached the provider with (never attempted, or the last answer a 429) gets a fresh invite naming the NEW deadline, on the SAME
+//     reached the provider with (never attempted, or its only attempt answered 429) gets a fresh invite naming the NEW deadline, on the SAME
 //     stamp, which retires the stale row (the V470 replace trigger); it keeps the retired row's place in the retry schedule. Any other
 //     invite is not re-rendered, so no extension ever sends an extra email (controller ruling): a `sending`, `sent`, `delayed`,
 //     `delivered` or ended one is out of reach, and a queued one that already had an attempt answered by a network error or a 5xx may

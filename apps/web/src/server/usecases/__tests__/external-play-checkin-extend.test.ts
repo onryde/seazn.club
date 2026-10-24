@@ -1394,7 +1394,7 @@ describe.skipIf(!HAS_DB)("extendCheckin - the queued invites' expiry follows the
 // ended unsent - but it would still go out, later, saying "check in by <the old time>". Controller ruling (not an owner ruling):
 // re-render only what has NOT gone out, and NEVER send an extra mail - the second outranks the first. In the extension's own
 // transaction, every recipient whose newest non-replaced row is `queued` AND that no request can have reached the provider with (never
-// attempted, or the last answer a 429) gets a fresh row with the NEW deadline and the SAME stamp (the V470 replace trigger retires the
+// attempted, or its only attempt answered 429) gets a fresh row with the NEW deadline and the SAME stamp (the V470 replace trigger retires the
 // stale one). Any other row is not touched: a `sending`, `sent`, `delayed`, `delivered` or ended one is out of reach, and a queued one
 // whose earlier attempt ended in a network error or a 5xx may have been ACCEPTED with the answer lost - a fresh row has a new
 // idempotency key and would mail the recipient twice - so it keeps its key and body and only its expiry moves. After the commit the
@@ -1470,6 +1470,29 @@ async function networkFailedRound(fixtures: number, open: Date): Promise<OpenedR
   }
 }
 const RATE_LIMITED = ["queued", 1, "http 429 rate_limit_exceeded"] as const;
+/** A round whose invites met a 429 TWICE: the worker's retry of the first 429 was refused again, so `last_error` reads as a 429 exactly as
+ *  above but `attempts` is 2. `last_error` keeps only the LAST answer, so an earlier attempt could have been a network error the provider
+ *  accepted - a 429 after it proves nothing, and an extension must NOT re-render such a row. The retry is the real worker's: the rows'
+ *  `expires_at` is held in the future (the database's clock decides it, and the round is opened so the old deadline has passed) for the one
+ *  tick, then put back exactly. */
+async function rateLimitedTwiceRound(fixtures: number, open: Date): Promise<OpenedRound> {
+  const r = await rateLimitedRound(fixtures, open);
+  for (const b of r.boards) {
+    const rows = await outboxOf(b.fixtureId);
+    const expiries = rows.map((x) => x.expires_at.toISOString());
+    const rowIds = idsOf(rows);
+    await sql`update email_outbox set expires_at = now() + interval '1 hour', next_attempt_at = now() - interval '1 second' where id = any(${rowIds}::uuid[])`;
+    mail.rateAll = true;
+    try {
+      // One tick per row: a tick stops claiming after its first 429 (it defers the rest), so a single tick would retry one row only.
+      for (const id of rowIds) await runOutboxTick({ onlyIds: [id], sleep: async () => undefined });
+    } finally {
+      mail.rateAll = false;
+    }
+    for (const [i, x] of rows.entries()) await sql`update email_outbox set expires_at = ${expiries[i]!}::timestamptz where id = ${x.id}`;
+  }
+  return r;
+}
 const pressWith = (auth: AuthCtx, fixtureId: string, now: Date, over: Partial<ExtendDeps>) =>
   extendCheckin(auth, fixtureId, { now: () => now, publish: async () => {}, ...over });
 /** The dispatch that sends nothing: the rows stay as the transaction left them, for a test to read their sealed bodies. */
@@ -1622,9 +1645,11 @@ describe.skipIf(!HAS_DB)("extendCheckin - an invite still waiting to be sent is 
   // The ruling that outranks re-rendering: NEVER an extra mail. A row whose earlier attempt ended in a network error or a 5xx may have been
   // ACCEPTED by the provider with the answer lost; a fresh row has a new idempotency key, so re-rendering it could deliver twice. Such a row
   // keeps its id (its key) and its body; only its expiry moves, and the worker's retry (same key) is harmless whichever way the first ended.
-  for (const [name, round, lastError] of [
-    ["a 503", retryingRound, "http 503 service_unavailable"],
-    ["a network error", networkFailedRound, "network timeout"],
+  for (const [name, round, lastError, attempted] of [
+    ["a 503", retryingRound, "http 503 service_unavailable", 1],
+    ["a network error", networkFailedRound, "network timeout", 1],
+    // controller ruling: a 429 proves the request was refused only when it was the row's ONLY attempt.
+    ["a 429 that followed an earlier attempt (attempts 2)", rateLimitedTwiceRound, "http 429 rate_limit_exceeded", 2],
   ] as const) {
     it(`a row whose attempt ended in ${name} is NOT re-rendered (the request may have been accepted): same row, same key, same body - only its expiry moves; no dispatch, one mail in all`, async () => {
       const open = openAround();
@@ -1636,8 +1661,8 @@ describe.skipIf(!HAS_DB)("extendCheckin - an invite still waiting to be sent is 
       expect(before.length, "premise: both seats were invited").toBeGreaterThanOrEqual(2);
       expect(
         before.map((x) => [x.status, x.attempts, x.last_error]),
-        `premise: each invite was attempted once and is waiting behind a retry (${lastError})`,
-      ).toEqual(before.map(() => ["queued", 1, lastError]));
+        `premise: each invite was attempted ${attempted}x and is waiting behind a retry (${lastError})`,
+      ).toEqual(before.map(() => ["queued", attempted, lastError]));
       const spy = spyDispatch();
       mail.sent.length = 0;
 
@@ -1652,7 +1677,7 @@ describe.skipIf(!HAS_DB)("extendCheckin - an invite still waiting to be sent is 
       for (const x of after) {
         expect(namesDeadline(renderedOf(x).args.deadlineLabel, oldDeadline), "it still names the deadline it was written with").toBe(true);
         expect(x.expires_at.getTime(), "but it expires at the NEW deadline, so its retry is delivered and not expired").toBe(newDeadline.getTime());
-        expect([x.attempts, x.last_error], "and its place in the schedule is untouched").toEqual([1, lastError]);
+        expect([x.attempts, x.last_error], "and its place in the schedule is untouched").toEqual([attempted, lastError]);
       }
       expect(spy.calls, "nothing was re-rendered, so nothing is dispatched").toEqual([]);
       expect(mail.sent, "and nothing was mailed by the press").toEqual([]);

@@ -251,8 +251,9 @@ export class SeatsNeeded extends Error {
  *
  * Which rows (`lockQueuedEmails`, which holds the rows' locks so a send cannot claim one meanwhile): for every recipient of the
  * board's two seats, the newest non-replaced invite, when it is `queued` AND no request of it can have reached the provider (never
- * attempted, or the last answer was a 429 - the provider refused it before doing anything). A row that ended an attempt in a network
- * error, a 5xx or an in-flight 409 may have been accepted with the answer lost; a fresh row has a new idempotency key, so
+ * attempted, or its only attempt was answered 429 - the provider refused it before doing anything; a 429 after an earlier attempt
+ * proves nothing about that attempt). A row that ended an attempt in a network error, a 5xx or an in-flight 409, or that was attempted
+ * more than once, may have been accepted with the answer lost; a fresh row has a new idempotency key, so
  * re-rendering it could mail the recipient twice. Such a row is left alone (same id, same key, same body): its expiry moves with the
  * extension, and the mail it sends names the deadline it was written with - the match room shows the live one.
  *
