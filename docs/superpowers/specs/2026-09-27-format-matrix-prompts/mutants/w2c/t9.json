@@ -44,7 +44,7 @@
   {
     "id": "t9-forfeit-row-bye",
     "file": "packages/engine/src/competition/points.ts",
-    "find": "  const forfeitRow = forfeit || isBye(outcome);",
+    "find": "  const forfeitRow = forfeit || bye;",
     "replace": "  const forfeitRow = forfeit;",
     "killers": [
       { "cwd": "packages/engine", "files": ["src/competition/points-w2c.test.ts"] },
@@ -232,8 +232,8 @@
   {
     "id": "t9-gapa-fold-seam",
     "file": "apps/web/src/server/engine-db/competition.ts",
-    "find": "playedFor(f, playedFacts), sportModule.awardScoreKeys)",
-    "replace": "playedFor(f, playedFacts), undefined)",
+    "find": "            pointsRule,\n            sportModule.awardScoreKeys,\n",
+    "replace": "            pointsRule,\n            undefined,\n",
     "killers": [{ "cwd": "apps/web", "files": ["src/server/engine-db/__tests__/w2b-status.test.ts"], "name": "gap \\(a\\): football under a stage rule" }]
   },
   {
@@ -246,8 +246,8 @@
   {
     "id": "t9-fr2-zero-award-scores",
     "file": "apps/web/src/server/public-site/qualification-view.ts",
-    "find": "  return parsed.success && parsed.data.forfeit?.awardScore !== undefined;\n",
-    "replace": "  const score = parsed.success ? parsed.data.forfeit?.awardScore : undefined;\n  return score !== undefined && (score[0] !== 0 || score[1] !== 0);\n",
+    "find": "  return parsed?.forfeit?.awardScore !== undefined;\n",
+    "replace": "  const score = parsed?.forfeit?.awardScore;\n  return score !== undefined && (score[0] !== 0 || score[1] !== 0);\n",
     "killers": [{ "cwd": "apps/web", "files": ["src/server/public-site/__tests__/qualification-points-parity.test.ts"], "name": "a rule awarding 0" }]
   },
   {

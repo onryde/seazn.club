@@ -245,7 +245,7 @@
   {
     "id": "t16b-stage-award-never-offered",
     "file": "apps/web/src/server/engine-db/fixture-cfg.ts",
-    "find": "return rule.success ? forfeitAwardOffer(rule.data, module) : undefined;",
+    "find": "return rule === null ? undefined : forfeitAwardOffer(rule, module);",
     "replace": "return undefined;",
     "killers": [
       {

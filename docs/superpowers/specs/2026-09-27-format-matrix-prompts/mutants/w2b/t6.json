@@ -2,8 +2,8 @@
   {
     "id": "dw-points-one",
     "file": "packages/engine/src/competition/points.ts",
-    "find": "if (outcome.kind === \"no_result\" || outcome.kind === \"double_walkover\") {",
-    "replace": "if (outcome.kind === \"no_result\") {",
+    "find": "      case \"double_walkover\":\n        return 0;\n      case \"draw\":",
+    "replace": "      case \"draw\":",
     "killers": [
       {
         "cwd": "packages/engine",
@@ -32,8 +32,8 @@
   {
     "id": "dw-loss-ceil-unbounded",
     "file": "packages/engine/src/competition/points.ts",
-    "find": "const lossCeil = Math.max(Math.max(...losses) + sum(\"loss\", 1), 0);",
-    "replace": "const lossCeil = Math.max(...losses) + sum(\"loss\", 1);",
+    "find": "const lossCeil = Math.max(...plus(lost, \"loss\", 1), ...plus(soLost, \"draw\", 1), 0);",
+    "replace": "const lossCeil = Math.max(...plus(lost, \"loss\", 1), ...plus(soLost, \"draw\", 1));",
     "killers": [
       {
         "cwd": "packages/engine",
