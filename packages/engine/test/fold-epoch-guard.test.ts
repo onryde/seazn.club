@@ -1158,6 +1158,28 @@ describe("fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded
       expect(stats).toMatchObject({ moved: 2, sports: ["badminton", "tennis"] });
       expect(stats.reason).toContain("2 stream(s) (badminton, tennis)");
     });
+    it("counts the STREAMS, not the sports: two moved streams of one sport are two", () => {
+      const both = base().map((s) => stats3(s, { playerStats: MOVED }));
+      const { rows, stats } = judge(at(1, 0, 6, rec3()), at(1, 0, 6, both));
+      expect(rows[0]).toMatchObject({ matched: 2, statsMoved: 2 });
+      expect(stats).toMatchObject({ moved: 2, sports: ["badminton"] });
+      expect(stats.reason).toContain("2 stream(s) (badminton)");
+    });
+    it("names the sports alphabetically whatever order the rows come in", () => {
+      const sideOf = (over: Partial<GoldenStream>): Side => ({
+        epochs: { badminton: 1, tennis: 1, hockey: 1 },
+        minors: { badminton: 0, tennis: 0, hockey: 0 },
+        statsVersion: 6,
+        corpora: Object.fromEntries(["badminton", "tennis", "hockey"].map((k) => [k, fmt3(base().map((s, i) => stats3(s, i === 0 ? over : {})), k)])),
+      });
+      const before = sideOf({});
+      const after = sideOf({ playerStats: MOVED });
+      const rows = compareSides(before, after, frozen);
+      expect(rows.map((r) => r.sport), "precondition: the sport rows are in a known order").toEqual(["badminton", "hockey", "tennis"]);
+      for (const order of [rows, [...rows].reverse(), [rows[1]!, rows[2]!, rows[0]!]]) {
+        expect(statsVersionRow(before, after, order).sports, order.map((r) => r.sport).join(",")).toEqual(["badminton", "hockey", "tennis"]);
+      }
+    });
     it("the version never falls: 6 -> 5 is a violation with nothing else changed, and no minor or major bump settles it", () => {
       for (const [major, minor] of [[1, 0], [1, 1], [2, 0]] as const) {
         const { stats, violations } = judge(at(1, 0, 6, rec3()), at(major, minor, 5, rec3()));
@@ -1240,6 +1262,23 @@ describe("fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded
       expect(() => statsVersionRow(was, now, compareSides(was, now, frozen))).toThrow(/baseline records player stats .* declares no STATS_FOLD_VERSION/);
       // ... whether or not a stream moved
       expect(() => statsVersionRow(was, at(1, 0, 6, rec3()), compareSides(was, at(1, 0, 6, rec3()), frozen))).toThrow(GuardRefusal);
+    });
+    it("ONE corpus recording stats is enough to refuse (a baseline whose other sports are still format 2), and so is ONE stream within a corpus", () => {
+      const onlyHockey = (hockey: GoldenCorpus): Side => ({
+        epochs: { badminton: 1, hockey: 1 },
+        minors: { badminton: 0, hockey: 0 },
+        corpora: { badminton: fmt2(base().map((x) => recorded(x))), hockey },
+      });
+      const now: Side = { ...onlyHockey(fmt3(rec3(), "hockey")), statsVersion: 6 };
+      const mixed = onlyHockey(fmt3(rec3(), "hockey"));
+      expect(() => statsVersionRow(mixed, now, compareSides(mixed, now, frozen)), "one corpus of two").toThrow(/baseline records player stats/);
+      // a corpus holding one stream that records stats beside one that does not (the CLI refuses such a hybrid; the pure rule must still see it)
+      const [first, second] = rec3();
+      const hybrid = onlyHockey({ ...fmt3([first!, recorded(base()[1]!)], "hockey"), streams: [first!, { ...second!, playerStats: undefined }] });
+      expect(() => statsVersionRow(hybrid, now, compareSides(hybrid, now, frozen)), "one stream of two").toThrow(/baseline records player stats/);
+      // the control: every corpus format 2 is the bootstrap
+      const none = onlyHockey(fmt2(base().map((x) => recorded(x)), "hockey"));
+      expect(statsVersionRow(none, now, compareSides(none, now, frozen)).reason).toBeNull();
     });
     it("a baseline with no stats module and no recorded stats is the bootstrap: nothing was stored under a version, so nothing is owed (the number is reported as none)", () => {
       for (const corpusOf of [(): GoldenCorpus => corpus(base()), (): GoldenCorpus => fmt2(base().map((s) => recorded(s)))]) {
