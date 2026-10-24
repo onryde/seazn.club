@@ -12,7 +12,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
-import { pointsRuleAwardReachesTable, pointsRuleExpressible } from "@seazn/engine/competition";
+import { legacyPointsRule, pointsRuleAwardReachesTable, pointsRuleExpressible } from "@seazn/engine/competition";
 import { BRACKET_KINDS } from "@seazn/engine/core";
 import { builtinModules } from "@seazn/engine/sports";
 import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
@@ -643,6 +643,8 @@ async function holdRefresh(page: Page): Promise<{ seen: () => number; release: (
 }
 
 const DIVISION_BASE = { win: 4, draw: 2, loss: 1 };
+/** W2d: what the editor's three boxes save, as an outcome-keyed rule — the engine's reading of the W2c boxes. */
+const editorRule = (base: { win: number; draw: number; loss: number }) => legacyPointsRule({ base });
 
 /** Only for the owner's per-screen verdict capture: the section cropped at 1280 / 768 / 320 into a SCRATCH dir, no page scroll
  *  at any of them. Unset in CI - never the repo. A tall viewport so the section is not clipped by the fold. */
@@ -676,7 +678,7 @@ test("football league: the section prefills the DIVISION's points, saves a walko
   await expect(section.getByTestId("stage-points-use-division")).toBeChecked();
   await expect(section.getByTestId("stage-points-win")).toHaveCount(0);
   await expect(section.getByTestId("stage-points-save")).toHaveCount(0);
-  const divisionSentence = rulesLineText(PUB, pointsLine({ base: DIVISION_BASE, bonuses: [] }));
+  const divisionSentence = rulesLineText(PUB, pointsLine(editorRule(DIVISION_BASE)));
   await expect(section.getByTestId("stage-points-preview")).toHaveText(divisionSentence);
 
   // Own points: the boxes start at the division's numbers (the prefill is the division, not a default of the editor's).
@@ -694,7 +696,7 @@ test("football league: the section prefills the DIVISION's points, saves a walko
   await section.getByTestId("stage-points-walkover-l").fill("2");
   await section.getByTestId("stage-points-award-w").fill("3");
   await section.getByTestId("stage-points-award-l").fill("0");
-  const want = { base: DIVISION_BASE, bonuses: [], forfeit: { winnerPoints: 7, loserPoints: 2, awardScore: [3, 0] as [number, number] } };
+  const want = { ...editorRule(DIVISION_BASE), forfeit: { winnerPoints: 7, loserPoints: 2, awardScore: [3, 0] as [number, number] } };
   await shootSection(page, section, "editor", () => openMore(section));
   await expect(section.getByTestId("stage-points-preview"), "the live preview is the public line's own words").toHaveText(rulesLineText(PUB, pointsLine(want, { awardReaches: true })));
   const put = nextPointsPut(page, rig.stageId);
@@ -721,7 +723,7 @@ test("football league: the section prefills the DIVISION's points, saves a walko
 
   // Owner: "make sure that works" - a SECOND save of a DIFFERENT value, then a reload: the new rule is what is stored, what
   // the form holds and what the summary says (the first one is not).
-  const want2 = { base: { ...DIVISION_BASE, win: 5 }, bonuses: [], forfeit: { winnerPoints: 6, loserPoints: 1, awardScore: [3, 0] as [number, number] } };
+  const want2 = { ...editorRule({ ...DIVISION_BASE, win: 5 }), forfeit: { winnerPoints: 6, loserPoints: 1, awardScore: [3, 0] as [number, number] } };
   const words2 = rulesLineText(PUB, pointsLine(want2, { awardReaches: true }));
   expect(words2, "premise: the second rule reads differently from the first").not.toBe(rulesLineText(PUB, pointsLine(want, { awardReaches: true })));
   await again.getByTestId("stage-points-win").fill("5");
@@ -801,7 +803,7 @@ test("badminton league: a set sport shows the walkover points and NO score box, 
   const sent = (await put).postDataJSON() as { points: { forfeit?: Record<string, unknown> } };
   expect(Object.keys(sent)).toEqual(["points"]);
   expect(sent.points.forfeit, "no awardScore key on a set sport").toEqual({ winnerPoints: 5, loserPoints: 1 });
-  const want = { base, bonuses: [], forfeit: { winnerPoints: 5, loserPoints: 1 } };
+  const want = { ...editorRule(base), forfeit: { winnerPoints: 5, loserPoints: 1 } };
   await expect.poll(() => storedPoints(request, rig.divisionId, rig.stageId), { timeout: STEP_MS }).toEqual(want);
   await rig.start();
   await walkover(request, rig.fixtureId, rig.away);
@@ -817,7 +819,7 @@ test("badminton league: a set sport shows the walkover points and NO score box, 
 test("use the division's points: unchecking and saving removes the stage's rule, a reload inherits it again, and a stage that never had one cannot be saved as one", async ({ page, request }) => {
   test.setTimeout(180_000);
   const { divisionId, stageId } = await seedStage(request, "generic", { kind: "league", label: "points-inherit", variant: "score" });
-  const first = await apiJson<{ points: unknown }>(request, `/api/v1/stages/${stageId}/rules`, "PUT", { points: { base: { win: 5, draw: 2, loss: 0 }, bonuses: [] } });
+  const first = await apiJson<{ points: unknown }>(request, `/api/v1/stages/${stageId}/rules`, "PUT", { points: { win: { regulation: 5 }, draw: 2, loss: { regulation: 0 }, shootoutAs: "result" as const, unit: "whole" as const, bonuses: [] } });
   expect(first.status, `seed a stage rule: ${JSON.stringify(first.error)}`).toBe(200);
   expect(await storedPoints(request, divisionId, stageId), "premise: the stage holds its own points").not.toBeNull();
   await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"), { waitUntil: "load" });
@@ -892,13 +894,13 @@ test("ice hockey: a division that scores overtime separately says why a stage ca
   await expect(section.locator("input, select, button")).toHaveCount(0);
   await expectNoHorizontalScroll(page);
   await shootSection(page, section, "inexpressible");
-  const refused = await apiJson<unknown>(request, `/api/v1/stages/${a.stageId}/rules`, "PUT", { points: { base: { win: 3, draw: 1, loss: 0 }, bonuses: [] } });
+  const refused = await apiJson<unknown>(request, `/api/v1/stages/${a.stageId}/rules`, "PUT", { points: { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result" as const, unit: "whole" as const, bonuses: [] } });
   expect(refused.status).toBe(422);
   expect((refused.error as { code?: string } | undefined)?.code).toBe("POINTS_RULE_INEXPRESSIBLE");
 
   // Review M1: a stage that STORES its own rule on such a division (a legacy row - every door that writes one now refuses) is
   // not left with only the reason: it reads the rule it plays, and an editable stage can clear it.
-  const own = { base: { win: 4, draw: 1, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 1 } };
+  const own = { win: { regulation: 4 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result" as const, unit: "whole" as const, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 1 } };
   await withDb(async (sql) => {
     await sql`update stages set config = config || ${sql.json({ points: own })} where id = ${a.stageId}`;
   });

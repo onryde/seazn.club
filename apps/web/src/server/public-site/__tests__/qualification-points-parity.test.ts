@@ -1,15 +1,15 @@
-// W2c Task 9 (X-PT-1) — one rule, two readers. The standings fold scores a forfeit through `applyPointsRule`; the public
+// W2c Task 9 (X-PT-1) — one rule, two readers. The standings fold scores a forfeit through `payout`; the public
 // qualification view decides whether the rule's awarded score is in a match's ledger through `ruleScoreReaches`. They
 // must agree on every award shape: a disagreement makes the what-if count a match the table never scored (or skip one it
-// did). The expected side is the ENGINE's answer (`applyPointsRule` changed the score), never a table typed here.
+// did). The expected side is the ENGINE's answer (`payout` changed the score), never a table typed here.
 import { describe, expect, it } from "vitest";
 import { AWARD_REASONS, type MatchOutcome } from "@seazn/engine/core";
-import { applyPointsRule, PointsRule, type FixtureResult } from "@seazn/engine/competition";
+import { payout, PointsRule, type FixtureResult } from "@seazn/engine/competition";
 import { byeAward } from "@/lib/fixture-bye";
 import { builtinModules } from "@seazn/engine/sports";
 import { divisionAwardAddsToLedger, pointsRuleScoresForfeits, ruleScoreReaches, type StageQualMeta } from "../qualification-view";
 
-const rule = PointsRule.parse({ base: { win: 3, draw: 1, loss: 0 }, forfeit: { winnerPoints: 2, loserPoints: 0, awardScore: [3, 0] } });
+const rule = PointsRule.parse({ win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", forfeit: { winnerPoints: 2, loserPoints: 0, awardScore: [3, 0] } });
 const meta = (pointsRule: unknown): StageQualMeta => ({
   qualifyCount: 2,
   qualifyPerGroup: false,
@@ -25,11 +25,11 @@ const pair = (): FixtureResult => [
 ];
 /** The pair is generic-shaped (its own score keys ARE for/against/diff), so no further score keys are named. */
 const scoreChanged = (outcome: MatchOutcome, played: boolean, r = rule): boolean =>
-  applyPointsRule(outcome, pair(), r, played, undefined)[0].metrics.for !== 1;
+  payout(outcome, outcome.kind === "win" ? "regulation" : null, pair(), played, r, undefined)[0].metrics.for !== 1;
 
-describe("X-PT-1 qualification-view agrees with applyPointsRule on where the awarded score lands", () => {
+describe("X-PT-1 qualification-view agrees with payout on where the awarded score lands", () => {
   it("empty case first: no stage rule, or a rule with no awarded score, reaches nothing — every award reason × played (counted)", () => {
-    const noScore = PointsRule.parse({ base: { win: 3, draw: 1, loss: 0 }, forfeit: { winnerPoints: 2, loserPoints: 0 } });
+    const noScore = PointsRule.parse({ win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", forfeit: { winnerPoints: 2, loserPoints: 0 } });
     let checked = 0;
     for (const reason of AWARD_REASONS)
       for (const played of [false, true]) {
@@ -44,7 +44,7 @@ describe("X-PT-1 qualification-view agrees with applyPointsRule on where the awa
     expect([pointsRuleScoresForfeits(null), pointsRuleScoresForfeits(noScore)], "no rule, no awarded score: nothing scores").toEqual([false, false]);
   });
 
-  it("every award reason × played (counted): ruleScoreReaches ⇔ applyPointsRule changed the score", () => {
+  it("every award reason × played (counted): ruleScoreReaches ⇔ payout changed the score", () => {
     let checked = 0;
     let reached = 0;
     for (const reason of AWARD_REASONS)
@@ -98,9 +98,9 @@ describe("X-PT-1 qualification-view agrees with applyPointsRule on where the awa
   });
 
   it("a rule awarding 0–0 is a scoring award: it replaces the sport's credit, so both readers place it where a scored rule's lands (fix round 2)", () => {
-    // A SET awardScore is a score, 0–0 included: `applyPointsRule` writes it whenever it is set, so the view must read it
+    // A SET awardScore is a score, 0–0 included: `payout` writes it whenever it is set, so the view must read it
     // as one. Expected side: the engine's write, and the placement of the scored rule's — never a typed table.
-    const zero = PointsRule.parse({ base: { win: 3, draw: 1, loss: 0 }, forfeit: { winnerPoints: 2, loserPoints: 0, awardScore: [0, 0] } });
+    const zero = PointsRule.parse({ win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", forfeit: { winnerPoints: 2, loserPoints: 0, awardScore: [0, 0] } });
     const walkover = { kind: "award", winner: "H", loser: "A", reason: "walkover" } as MatchOutcome;
     expect(scoreChanged(walkover, false, zero), "premise: the engine writes the awarded 0–0 over the 1–0 credit").toBe(true);
     expect(pointsRuleScoresForfeits(zero), "the gate the played-facts loader and a retired build read").toBe(true);

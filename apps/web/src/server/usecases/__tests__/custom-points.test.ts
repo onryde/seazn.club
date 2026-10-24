@@ -121,7 +121,7 @@ describe.skipIf(!HAS_DB)("custom points & rank control (Jul3/05)", () => {
       name: "L",
       config: {
         points: {
-          base: { win: 5, draw: 3, loss: 0 },
+          win: { regulation: 5 }, draw: 3, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole",
           bonuses: [{ when: "score_ratio_gte", param: 0.5, points: 1 }],
         },
       },
@@ -145,7 +145,7 @@ describe.skipIf(!HAS_DB)("custom points & rank control (Jul3/05)", () => {
       name: "L",
       config: {
         points: {
-          base: { win: 3, draw: 1, loss: 0 },
+          win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole",
           bonuses: [],
           forfeit: { winnerPoints: 3, loserPoints: -1 },
         },
@@ -309,7 +309,7 @@ describe.skipIf(!HAS_DB)("custom points & rank control (Jul3/05)", () => {
         name: "L",
         config: {
           points: {
-            base: { win: 5, draw: 3, loss: 0 },
+            win: { regulation: 5 }, draw: 3, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole",
             bonuses: [{ when: "draw", points: 1 }],
           },
         },

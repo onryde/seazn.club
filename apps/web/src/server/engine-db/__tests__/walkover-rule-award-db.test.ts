@@ -1,6 +1,6 @@
 // W2c Task 16b (X-WO-1 part B; Task 9 P-3 "A") - ONE walkover score everywhere, through the real producers and the real
 // readers. A stage's points rule can carry `forfeit.awardScore`; the table already credits the RULE's number
-// (`applyPointsRule`). Until this task the HEADLINE of the same walkover read the DIVISION cfg's award (football's
+// (`payout`). Until this task the HEADLINE of the same walkover read the DIVISION cfg's award (football's
 // `awardScore.goals`), so a console and a public match page said "3 - 0" beside a table that credited 5-0.
 //
 // Every surface below is read from the DB the way production reads it: the console (`getFixtureState`,
@@ -95,7 +95,7 @@ const divisionLinesFor = (spec: SceneSpec): string[] => divisionReadingFor(spec)
 const awardFor = (spec: SceneSpec): [number, number] => [defaultWinnerFigure(spec) + 4, 1];
 
 const ruleFor = (award: readonly [number, number] | null) => ({
-  base: { win: 3, draw: 1, loss: 0 },
+  win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result" as const, unit: "whole" as const,
   bonuses: [],
   forfeit: { winnerPoints: 3, loserPoints: 0, ...(award === null ? {} : { awardScore: [...award] as [number, number] }) },
 });
@@ -529,7 +529,7 @@ describe.skipIf(!HAS_DB)("a rule change before kickoff moves what an unplayed ma
     await putStageRules(rule.s.auth, rule.s.leagueStageId, { points: ruleFor(award) });
     expect(await versions(), "an identical save").toEqual(before);
     // The base points change but the award does not: what a walkover credits is unchanged, so no pad is stale.
-    await putStageRules(rule.s.auth, rule.s.leagueStageId, { points: { ...ruleFor(award), base: { win: 2, draw: 1, loss: 0 } } });
+    await putStageRules(rule.s.auth, rule.s.leagueStageId, { points: { ...ruleFor(award), win: { regulation: 2 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result" as const, unit: "whole" as const } });
     expect(await versions(), "points moved, award did not").toEqual(before);
     // The award changes: every match with no frozen cfg now resolves to another walkover credit.
     await putStageRules(rule.s.auth, rule.s.leagueStageId, { points: ruleFor([award[0] + 1, award[1]]) });

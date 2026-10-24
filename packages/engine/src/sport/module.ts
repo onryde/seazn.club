@@ -654,7 +654,7 @@ export function stampAttributionRequired(
  *  layer scores a bye through `standingsDelta` as an `award` win
  *  (apps/web engine-db/competition.ts `awardByeDelta`). That layer applies a
  *  stage's PointsRule ON TOP of every pair, byes and played fixtures alike
- *  (`applyPointsRule`), which overrides these sport bounds; the rule's own
+ *  (`payout`), which overrides these sport bounds; the rule's own
  *  bounds are `pointsRuleBounds` (standings plan, Task 2).
  *  `winFloor` is what ANY win (OT, shoot-out, 3-2) is guaranteed to pay;
  *  `lossCeil` is the most ANY loss can still pay. A forecast that promised
@@ -973,7 +973,7 @@ export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> 
    * W2c X-PT-1 (gap a) — the metrics that ARE this sport's match score: its spelling of `for` / `against` / `diff`, one
    * of the tie-break alias triples (tiebreakers.ts FOR_KEYS / AGAINST_KEYS / DIFF_KEYS). A stage PointsRule's
    * `forfeit.awardScore` lands here too, REPLACING the sport's credit, on a forfeit with nothing played
-   * (`applyPointsRule`): the tie-breaks read these before the generic keys, so a rule writing only those never reached
+   * (`payout`): the tie-breaks read these before the generic keys, so a rule writing only those never reached
    * such a table. Absent where the table keeps no score an awarded one can stand in for — the set sports, carrom and the
    * board games (no score triple at all), and cricket (its runs are NRR operands beside the balls; a walkover credits
    * none, CK-WO-2) — which `pointsRuleAwardReachesTable` reports. Held to `metrics` by points-w2c.test.ts.

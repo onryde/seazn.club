@@ -103,7 +103,7 @@ describe("the state the section opens in follows the division (scoring is free o
     const stored = panel({
       sportKey: "icehockey",
       divisionConfig: m.variants[split!],
-      stages: stageOf("league", { points: { base: { win: 4, draw: 1, loss: 0 }, bonuses: [] } }),
+      stages: stageOf("league", { points: { win: { regulation: 4 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [] } }),
       pointsDict: POINTS_DICT,
     });
     expect(stateOf(stored)).toBe("inexpressible");
@@ -112,7 +112,7 @@ describe("the state the section opens in follows the division (scoring is free o
     const locked = panel({
       sportKey: "icehockey",
       divisionConfig: m.variants[split!],
-      stages: stageOf("league", { points: { base: { win: 4, draw: 1, loss: 0 }, bonuses: [] } }),
+      stages: stageOf("league", { points: { win: { regulation: 4 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [] } }),
       pointsDict: POINTS_DICT,
       formatLockedStageIds: [STAGE_ID],
     });
@@ -122,7 +122,7 @@ describe("the state the section opens in follows the division (scoring is free o
 });
 
 describe("what the page hands the panel reaches the section", () => {
-  const STORED = { base: { win: 3, draw: 1, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 4, loserPoints: 1, awardScore: [3, 0] } };
+  const STORED = { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [], forfeit: { winnerPoints: 4, loserPoints: 1, awardScore: [3, 0] } };
 
   it("config.points opens the section on the stage's own rule (the boxes hold its numbers); a stage with none inherits", () => {
     const own = panel({ stages: stageOf("league", { points: STORED }) });

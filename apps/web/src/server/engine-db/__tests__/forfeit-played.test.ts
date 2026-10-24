@@ -74,7 +74,7 @@ describe("forfeitPlayedFacts — one read of the forfeit-shaped fixtures' ledger
   });
 });
 
-describe("playedFor — the fact `applyPointsRule` is handed for one fixture", () => {
+describe("playedFor — the fact `payout` is handed for one fixture", () => {
   it("a forfeit-shaped fixture reads its fact; any other is not asked (false, no lookup)", () => {
     const facts = new Map([["p", true], ["n", false]]);
     expect(playedFor(fx("p", award("retired")), facts)).toBe(true);

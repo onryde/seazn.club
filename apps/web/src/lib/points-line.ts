@@ -42,9 +42,17 @@ export interface PointsLineOptions {
   awardReaches?: boolean;
 }
 
+/** W2d: a regulation win / draw / regulation loss off the outcome-keyed rule (`win.regulation`, `draw`, `loss.regulation`),
+ *  or off a W2c `base` a stored row still carries until it is converted (W2d Task 7). */
+function headOf(r: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  const base = record(r?.base);
+  if (base !== undefined) return base;
+  return { win: record(r?.win)?.regulation, draw: r?.draw, loss: record(r?.loss)?.regulation };
+}
+
 export function pointsLine(rule: PointsRule, opts: PointsLineOptions = {}): PointsClause[] {
   const r = record(rule);
-  const base = record(r?.base);
+  const base = headOf(r);
   // The base is the sentence's head: without all three numbers there is nothing honest to say.
   if (!isNum(base?.win) || !isNum(base?.draw) || !isNum(base?.loss)) return [];
   const out: PointsClause[] = [{ key: "format.points.base", params: { win: base.win, draw: base.draw, loss: base.loss } }];

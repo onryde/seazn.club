@@ -340,7 +340,7 @@ describe.skipIf(!HAS_DB)("public_stages_v — qualification columns (V414)", () 
   it("swiss rounds and the stage points rule are published; rounds only for a swiss stage", async () => {
     const d = await division();
     const points = {
-      base: { win: 3, draw: 1, loss: 0 },
+      win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole",
       bonuses: [
         { when: "win_margin_gte", param: 3, points: 1 },
         { when: "draw", points: 0.5 },
@@ -366,12 +366,14 @@ describe.skipIf(!HAS_DB)("public_stages_v — qualification columns (V414)", () 
   it("points_rule publishes only the keys PointsRule reads, at every level", async () => {
     const d = await division();
     const clean = {
-      base: { win: 3, draw: 1, loss: 0 },
+      win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole",
       bonuses: [{ when: "win_margin_gte", param: 3, points: 1 }],
       forfeit: { winnerPoints: 3, loserPoints: 0 },
     };
     const withJunk = {
-      base: { ...clean.base, note: "base junk" },
+      ...clean,
+      win: { ...clean.win, note: "win junk" },
+      loss: { ...clean.loss, note: "loss junk" },
       bonuses: [{ ...clean.bonuses[0], memo: "bonus junk" }],
       forfeit: { ...clean.forfeit, secret: "forfeit junk" },
       internal: { owner: "top-level junk" },
@@ -687,7 +689,7 @@ describe.skipIf(!HAS_DB)("public_stages_v — qualification columns (V414)", () 
   // them (a reader that forgets one hands the builder `undefined`).
   it("getPublicDivision and embedDivisionData both carry the columns (and the embed the division config)", async () => {
     const d = await division();
-    const points = { base: { win: 2, draw: 1, loss: 0 } };
+    const points = { win: { regulation: 2 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole" };
     await createStages(d.auth, d.divisionId, [
       { seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 4, points } },
       { seq: 2, kind: "knockout", name: "Finals", config: {}, progression: prog([{ kind: "rankRange", from: 1, to: 2 }]) },

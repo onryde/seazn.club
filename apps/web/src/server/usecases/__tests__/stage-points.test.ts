@@ -52,7 +52,7 @@ afterAll(async () => {
   await client?.end();
 });
 
-const base = { base: { win: 3, draw: 1, loss: 0 } };
+const base = { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result" as const, unit: "whole" as const };
 // Not a margin bonus: badminton emits no for/against, so `validatePointsRule` refuses a margin bonus there (its own arm
 // below). `forfeit_loss` pays on any sport.
 const withBonus = { ...base, bonuses: [{ when: "forfeit_loss" as const, points: 1 }] };
@@ -155,12 +155,12 @@ describe.skipIf(!HAS_DB)("ST-G8 stage points (server)", () => {
     const out = await putStageRules(auth, s, { points: base });
     expect(out.points, "the save answers with the stored rule").toMatchObject(base);
     expect((await stageConfig(s)).points).toMatchObject(base);
-    await putStageRules(auth, s, { points: { base: { win: 2, draw: 1, loss: 0 } } });
-    expect((await stageConfig(s)).points).toMatchObject({ base: { win: 2 } });
+    await putStageRules(auth, s, { points: { win: { regulation: 2 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result" as const, unit: "whole" as const } });
+    expect((await stageConfig(s)).points).toMatchObject({ win: { regulation: 2 } });
     // A rules-only save keeps the points; a points-only save keeps the rules.
     const moving = movingFragment(mod("badminton"), "short", "league")!;
     await putStageRules(auth, s, { rules: moving.frag });
-    expect((await stageConfig(s)).points, "a rules save left the points").toMatchObject({ base: { win: 2 } });
+    expect((await stageConfig(s)).points, "a rules save left the points").toMatchObject({ win: { regulation: 2 } });
     await putStageRules(auth, s, { points: base });
     expect((await stageConfig(s)).rules, "a points save left the rules").toEqual(moving.frag);
     // `{rules: null}` clears the rules ONLY.
@@ -394,7 +394,7 @@ describe.skipIf(!HAS_DB)("ST-G8 stage points (server)", () => {
       ((await getStandings(auth, s)).rows as { entrantId: string; points: number }[]).find((r) => r.entrantId === byeWinner)?.points;
     const own = await pointsOf();
     expect(typeof own, "premise: the bye is on the table").toBe("number");
-    const rule = { base: { win: 1, draw: 0, loss: 0 }, forfeit: { winnerPoints: 5, loserPoints: 0 } };
+    const rule = { win: { regulation: 1 }, draw: 0, loss: { regulation: 0 }, shootoutAs: "result" as const, unit: "whole" as const, forfeit: { winnerPoints: 5, loserPoints: 0 } };
     expect(own, "premise: the rule's row differs from the sport's own").not.toBe(rule.forfeit.winnerPoints);
     await putStageRules(auth, s, { points: rule });
     expect(await pointsOf(), "a bye pays the rule's forfeit row").toBe(rule.forfeit.winnerPoints);
@@ -489,7 +489,7 @@ describe.skipIf(!HAS_DB)("R-T13-1 replaceStages carries a matched slot's own poi
     expect(pts.get(1)).toMatchObject(withForfeit);
     expect(pts.get(2) ?? null).toBeNull();
     // A body's own points win over the carry (the rule is one sentence: replaced whole).
-    const other = { base: { win: 2, draw: 1, loss: 0 } };
+    const other = { win: { regulation: 2 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result" as const, unit: "whole" as const };
     await replaceStages(auth, divisionId, [league(1, "Pool", { points: other }), league(2, "New")]);
     const replaced = (await pointsBySeq(divisionId)).get(1) as { base?: unknown; forfeit?: unknown } | null;
     expect(replaced).toMatchObject(other);

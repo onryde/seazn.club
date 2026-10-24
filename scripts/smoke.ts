@@ -7387,7 +7387,7 @@ async function w2cStagePointsWalkoverChecks(owner: Session): Promise<void> {
   const stageId = v1data<{ id: string } | undefined>(
     await v1(owner, `/api/v1/divisions/${divId}/stages`, "POST", { seq: 1, kind: "league", name: "Points Pool" }),
   )?.id;
-  const points = { base: { win: own?.[0] ?? 0, draw: 0, loss: own?.[1] ?? 0 }, forfeit };
+  const points = { win: { regulation: own?.[0] ?? 0 }, draw: 0, loss: { regulation: own?.[1] ?? 0 }, shootoutAs: "result", unit: "whole", forfeit };
   const put = await v1(owner, `/api/v1/stages/${stageId}/rules`, "PUT", { points });
   const stored = (put.json.data as { points?: { forfeit?: unknown } | null } | undefined)?.points?.forfeit;
   check(
@@ -7524,7 +7524,7 @@ async function w2cWalkoverHeadlineChecks(owner: Session, orgId: string): Promise
   );
   const stage = v1data<{ id: string }>(await v1(owner, `/api/v1/divisions/${div.id}/stages`, "POST", { seq: 1, kind: "league", name: "Pool" }));
   const put = await v1(owner, `/api/v1/stages/${stage.id}/rules`, "PUT", {
-    points: { base: { win: 3, draw: 1, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: award } },
+    points: { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: award } },
   });
   // The twin: a second pool over the same entrants with NO points rule - the same ledger read without an award.
   const twinStage = v1data<{ id: string }>(await v1(owner, `/api/v1/divisions/${div.id}/stages`, "POST", { seq: 2, kind: "league", name: "Pool B" }));

@@ -1,11 +1,11 @@
 // W2c Task 18 (review I9) - the decisions the stage points section makes live in a pure helper with unit killers, never in
 // a browser. Expected values come from the SERVER's own door (`refuseStagePoints`) and the engine's declarations
-// (`pointsRuleExpressible`, `pointsRuleAwardReachesTable`, `validatePointsRule`, `applyPointsRule`), never from a table
+// (`pointsRuleExpressible`, `pointsRuleAwardReachesTable`, `validatePointsRule`, `payout`), never from a table
 // typed here; every sweep reports how many items it checked and zero is a failure.
 import { describe, expect, it } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
 import { StageKind } from "@seazn/engine/core";
-import { PointsRule, applyPointsRule, pointsRuleAwardReachesTable, pointsRuleExpressible } from "@seazn/engine/competition";
+import { PointsRule, legacyPointsRule, payout, pointsRuleAwardReachesTable, pointsRuleExpressible } from "@seazn/engine/competition";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { refuseStagePoints } from "@/server/usecases/stage-rules-merge";
 import {
@@ -49,8 +49,12 @@ function serverAnswer(m: AnySportModule, cfg: unknown, rule: PointsRule, kind: S
   }
 }
 
+/** A W2c `base`: what a stored pre-W2d row carries (read through `legacyPointsRule`). */
 const BASE = { win: 3, draw: 1, loss: 0 };
-const plain = (): PointsRule => ({ base: BASE, bonuses: [] });
+/** W2d: the editor's three boxes as the outcome-keyed rule it saves — the engine's own reading of the W2c rule
+ *  (`legacyPointsRule`), never a shape typed here. */
+const editorRule = (win: number, draw: number, loss: number): PointsRule => legacyPointsRule({ base: { win, draw, loss } });
+const plain = (): PointsRule => editorRule(BASE.win, BASE.draw, BASE.loss);
 
 describe("stage points model (I9 killers for t18)", () => {
   it("pointsSectionState: a division a stage rule cannot say is inexpressible, every other the editor - both answers, counted", () => {
@@ -180,7 +184,8 @@ describe("stage points model (I9 killers for t18)", () => {
       else without++;
     }
     expect(withMargins, "generic has for/against").toBeGreaterThan(0);
-    expect(without, "badminton and football emit no for/against metric").toBeGreaterThan(0);
+    // W2d F11: football's gd / ga / gf is a score now (tiebreakers.ts aliases), so only the sports with none are left.
+    expect(without, "badminton emits no score").toBeGreaterThan(0);
   });
 
   it("a draw bonus is offered only where the sport can draw; a no-result bonus only where the sport records one; the rest everywhere", () => {
@@ -193,7 +198,7 @@ describe("stage points model (I9 killers for t18)", () => {
     }
   });
 
-  it("the kinds that read a threshold are the ones the engine's fold reads it for (probe over the engine's own applyPointsRule)", () => {
+  it("the kinds that read a threshold are the ones the engine's fold reads it for (probe over the engine's own payout)", () => {
     const winner = { entrantId: "a", played: 1, won: 1, drawn: 0, lost: 0, points: 0, metrics: { for: 5, against: 3, diff: 2 } };
     const loser = { entrantId: "b", played: 1, won: 0, drawn: 0, lost: 1, points: 0, metrics: { for: 3, against: 5, diff: -2 } };
     const drawn = [{ ...winner, won: 0, drawn: 1, metrics: { for: 2, against: 2, diff: 0 } }, { ...loser, lost: 0, drawn: 1, metrics: { for: 2, against: 2, diff: 0 } }];
@@ -204,7 +209,9 @@ describe("stage points model (I9 killers for t18)", () => {
       { outcome: { kind: "award", winner: "a", loser: "b", reason: "walkover" } as const, pair: [winner, loser], played: false },
     ];
     const pointsFor = (when: PointsRule["bonuses"][number]["when"], param: number): number[] =>
-      probes.flatMap((p) => (applyPointsRule(p.outcome, p.pair as never, { base: BASE, bonuses: [{ when, param, points: 1 }] }, p.played, undefined) as unknown as { points: number }[]).map((d) => d.points));
+      probes.flatMap((p) =>
+        (payout(p.outcome, p.outcome.kind === "win" ? "regulation" : null, p.pair as never, p.played, { ...plain(), bonuses: [{ when, param, points: 1 }] }, undefined) as unknown as { points: number }[]).map((d) => d.points),
+      );
     const reading = BONUS_KINDS.filter((when) => JSON.stringify(pointsFor(when, 0)) !== JSON.stringify(pointsFor(when, 1000)));
     expect(BONUS_KINDS.length, "the engine's enum has its kinds").toBe(7);
     expect([...reading].sort()).toEqual([...PARAM_BONUS_KINDS].sort());
@@ -238,14 +245,14 @@ describe("stage points model (I9 killers for t18)", () => {
     const d = draftFromStored(badminton, badminton.variants.bwf, null);
     expect(d).toMatchObject({ useDivision: true, win: "2", draw: "0", loss: "0" });
     const built = ruleFromDraft(badminton, { ...d, useDivision: false });
-    expect(built).toEqual({ ok: true, rule: { base: { win: 2, draw: 0, loss: 0 }, bonuses: [] } });
+    expect(built).toEqual({ ok: true, rule: editorRule(2, 0, 0) });
   });
 
   it("round trip: a stored rule opens as the draft that rebuilds it (key order is not part of it)", () => {
     const rules: [AnySportModule, PointsRule][] = [
-      [football, { base: BASE, bonuses: [], forfeit: { winnerPoints: 4, loserPoints: 1, awardScore: [3, 0] } }],
-      [generic, { base: { win: 2.5, draw: 1, loss: -1 }, bonuses: [{ points: 1, when: "loss_margin_lte", param: 7 }, { when: "forfeit_loss", points: -1 }], forfeit: { loserPoints: 0, winnerPoints: 3 } }],
-      [badminton, { base: { win: 2, draw: 0, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 1 } }],
+      [football, { ...plain(), forfeit: { winnerPoints: 4, loserPoints: 1, awardScore: [3, 0] } }],
+      [generic, { ...editorRule(2.5, 1, -1), bonuses: [{ points: 1, when: "loss_margin_lte", param: 7 }, { when: "forfeit_loss", points: -1 }], forfeit: { loserPoints: 0, winnerPoints: 3 } }],
+      [badminton, { ...editorRule(2, 0, 0), forfeit: { winnerPoints: 3, loserPoints: 1 } }],
     ];
     for (const [m, rule] of rules) {
       const draft = draftFromStored(m, {}, rule);
@@ -269,7 +276,7 @@ describe("stage points model (I9 killers for t18)", () => {
 
   it("the walkover row is both numbers or neither; a score alone pays the base win and loss; the score never leaves a sport that does not read it", () => {
     const d = { ...draftFromStored(football, football.variants["11-a-side"], null), useDivision: false };
-    expect(ruleFromDraft(football, d)).toMatchObject({ ok: true, rule: { base: BASE } });
+    expect(ruleFromDraft(football, d)).toMatchObject({ ok: true, rule: { win: { regulation: BASE.win }, draw: BASE.draw, loss: { regulation: BASE.loss } } });
     expect((ruleFromDraft(football, d) as { rule: PointsRule }).rule.forfeit, "no walkover row by default").toBeUndefined();
     expect(ruleFromDraft(football, { ...d, walkoverW: "4" })).toEqual({ ok: false, problem: "walkover" });
     expect(ruleFromDraft(football, { ...d, walkoverL: "0" })).toEqual({ ok: false, problem: "walkover" });
@@ -294,7 +301,7 @@ describe("stage points model (I9 killers for t18)", () => {
   });
 
   it("'Use the division's points' is points: null, and it is dirty only against a stored rule", () => {
-    const own: PointsRule = { base: BASE, bonuses: [] };
+    const own: PointsRule = plain();
     const inherit = draftFromStored(football, football.variants["11-a-side"], null);
     expect(ruleFromDraft(football, inherit)).toEqual({ ok: true, rule: null });
     expect(draftIsDirty(football, inherit, null), "nothing stored, nothing changed").toBe(false);
@@ -306,17 +313,20 @@ describe("stage points model (I9 killers for t18)", () => {
     expect(draftIsDirty(football, { ...opened, win: "" }, own), "an invalid draft is never 'unchanged'").toBe(true);
     expect(draftIsDirty(football, { ...inherit, useDivision: false }, null), "unchecking with nothing stored pins the division's numbers: a change").toBe(true);
     // jsonb gives keys back in its own order
-    expect(draftIsDirty(football, opened, { bonuses: [], base: { loss: 0, win: 3, draw: 1 } })).toBe(false);
+    expect(draftIsDirty(football, opened, { bonuses: [], unit: "whole", shootoutAs: "result", noResult: 0, tie: 0, loss: { regulation: 0 }, draw: 1, win: { regulation: 3 } })).toBe(false);
+    // W2d: a stored W2c row (`base`) reads through `legacyPointsRule`, so an untouched one is not dirty either.
+    expect(draftIsDirty(football, draftFromStored(football, football.variants["11-a-side"], { base: BASE, bonuses: [] }), { base: BASE, bonuses: [] })).toBe(false);
   });
 
   it("a stored row the schema refuses reads as NO rule: the stage inherits rather than opening on garbage", () => {
-    const junk: unknown[] = [undefined, null, 5, "rule", [], {}, { bonuses: [] }, { base: { win: "x", draw: 1, loss: 0 }, bonuses: [] }, { base: BASE, bonuses: "none" }];
+    const junk: unknown[] = [undefined, null, 5, "rule", [], {}, { bonuses: [] }, { win: { regulation: "x" }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [] }, { base: BASE, bonuses: "none" }];
     for (const stored of junk) {
       expect(storedPointsRule(stored), JSON.stringify(stored)).toBeNull();
       expect(draftFromStored(football, football.variants["11-a-side"], stored).useDivision, `${JSON.stringify(stored)} opens inheriting`).toBe(true);
     }
     expect(junk.length, "rows tried").toBeGreaterThan(5);
-    expect(storedPointsRule({ base: BASE, bonuses: [] }), "and a real rule is still a rule").not.toBeNull();
+    expect(storedPointsRule(plain()), "and a real rule is still a rule").not.toBeNull();
+    expect(storedPointsRule({ base: BASE, bonuses: [] }), "and so is a stored W2c row (W2d: read through legacyPointsRule)").toEqual(plain());
   });
 
   it("the preview says the walkover score only where the sport's table reads it, and nothing for a draft that is not a rule yet", () => {

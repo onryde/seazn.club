@@ -13,7 +13,7 @@ import { forfeitShaped } from "@seazn/engine/competition";
 type Queryable = postgres.ISql;
 
 /** An outcome a forfeit could have decided (`forfeitShaped`: an award, or a win by walkover or forfeit). Any other is
- *  not asked: `applyPointsRule` reads `played` only for these. */
+ *  not asked: `payout` reads `played` only for these. */
 function asksPlayed(outcome: unknown): boolean {
   return outcome !== null && typeof outcome === "object" && forfeitShaped(outcome as MatchOutcome);
 }
@@ -43,7 +43,7 @@ export async function forfeitPlayedFacts(
 }
 
 /**
- * The `played` argument for `applyPointsRule` on one fixture: its ledger's answer when its outcome is forfeit-shaped.
+ * The `played` argument for `payout` on one fixture: its ledger's answer when its outcome is forfeit-shaped.
  * A forfeit-shaped fixture `facts` does not cover was never read — refused, never guessed: a guess either pays a played
  * match the forfeit row or an unplayed one base points. Any other outcome is not asked by the rule and passes `false`
  * (never read: `isUnplayedForfeit` answers it from the outcome alone).

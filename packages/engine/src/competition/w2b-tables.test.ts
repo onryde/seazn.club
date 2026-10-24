@@ -12,7 +12,8 @@ import { forEachSport } from "../testkit/for-each-sport.ts";
 import { buildStream, lineupFromCatalog, makeEnvelope } from "../testkit/helpers.ts";
 import { builtinModules } from "../sports/index.ts";
 import { derivedMetricText, RATIO_LEDGERS } from "./display.ts";
-import { applyPointsRule, PointsRule } from "./points.ts";
+import { decidedInFor } from "./decided-in.ts";
+import { legacyPointsRule, payout } from "./points.ts";
 import { bracketRanks, type BracketFixture, type BracketStage } from "./stage.ts";
 import { foldResults, resultsAmong, type FixtureResult, type StandingsRow } from "./standings.ts";
 import { ledgerOf, rankStandings } from "./tiebreakers.ts";
@@ -36,7 +37,7 @@ const lineups = (m: AnySportModule, home: EntrantId, away: EntrantId): LineupPai
   away: lineupFromCatalog(m.positions, away),
 });
 
-/** `played`: W2b's `playRecorded` of the ledger the fold read (W2c Task 9: `applyPointsRule` takes it). */
+/** `played`: W2b's `playRecorded` of the ledger the fold read (W2c Task 9: `payout` takes it). */
 interface Folded { outcome: MatchOutcome; pair: FixtureResult; played: boolean }
 
 /** Fold `events` (a list of {type, payload}) for home v away and return the real outcome + the module's delta pair. */
@@ -97,7 +98,7 @@ describe("X-DW-4: a double walkover in a table (spec §5.3; plan D14)", () => {
     let sports = 0;
     let keysCompared = 0;
     // A stage rule where a loss PAYS — the wrong answer (a double walkover scored as a loss) differs from 0.
-    const RULE = PointsRule.parse({ base: { win: 3, draw: 2, loss: 1 }, forfeit: { winnerPoints: 3, loserPoints: 1 } });
+    const RULE = legacyPointsRule({ base: { win: 3, draw: 2, loss: 1 }, forfeit: { winnerPoints: 3, loserPoints: 1 } });
     forEachSport(({ module: m }) => {
       const cfg = firstCfg(m);
       const xz = played(m, cfg, X, Z, 1);
@@ -105,7 +106,7 @@ describe("X-DW-4: a double walkover in a table (spec §5.3; plan D14)", () => {
       const dw = fold(m, cfg, X, Y, DOUBLE_WALKOVER);
       expect(dw.outcome, `${m.key}: the fold of core.forfeit{by:"both"}`).toEqual({ kind: "double_walkover" });
       for (const rule of [undefined, RULE]) {
-        const scored = (f: Folded): FixtureResult => (rule === undefined ? f.pair : applyPointsRule(f.outcome, f.pair, rule, f.played, m.awardScoreKeys));
+        const scored = (f: Folded): FixtureResult => (rule === undefined ? f.pair : payout(f.outcome, decidedInFor(m, f.outcome), f.pair, f.played, rule, m.awardScoreKeys));
         const without = foldResults([X, Y, Z], [scored(xz), scored(yz)]);
         const withDw = foldResults([X, Y, Z], [scored(xz), scored(yz), scored(dw)]);
         const tag = `${m.key} ${rule === undefined ? "sport points" : "stage rule"}`;
@@ -122,7 +123,7 @@ describe("X-DW-4: a double walkover in a table (spec §5.3; plan D14)", () => {
         expect(rowOf(withDw, Z), `${tag} Z`).toEqual(rowOf(without, Z));
       }
       // The rule's own reading of the result itself: 0 each, never `base.loss` / `forfeit.loserPoints` (both 1 here).
-      expect(applyPointsRule(dw.outcome, dw.pair, RULE, dw.played, m.awardScoreKeys).map((d) => d.points), `${m.key}: D14`).toEqual([0, 0]);
+      expect(payout(dw.outcome, decidedInFor(m, dw.outcome), dw.pair, dw.played, RULE, m.awardScoreKeys).map((d) => d.points), `${m.key}: D14`).toEqual([0, 0]);
       sports++;
     });
     expect(sports).toBe(builtinModules.length);
@@ -131,7 +132,7 @@ describe("X-DW-4: a double walkover in a table (spec §5.3; plan D14)", () => {
 
   it("D14: a double walkover earns no bonus, forfeit_loss included, and no configured award score; a bye is still a forfeit win at forfeit.winnerPoints — every sport", () => {
     // Every bonus kind pays, and every one of them is a different amount, so a leak names itself.
-    const RULE = PointsRule.parse({
+    const RULE = legacyPointsRule({
       base: { win: 3, draw: 2, loss: 0 },
       bonuses: [
         { when: "loss_margin_lte", param: 1000, points: 1 },
@@ -149,7 +150,7 @@ describe("X-DW-4: a double walkover in a table (spec §5.3; plan D14)", () => {
     forEachSport(({ module: m }) => {
       for (const { name, cfg } of declaredCfgs(m as never)) {
         const dw = fold(m, cfg, X, Y, DOUBLE_WALKOVER);
-        const scored = applyPointsRule(dw.outcome, dw.pair, RULE, dw.played, m.awardScoreKeys);
+        const scored = payout(dw.outcome, decidedInFor(m, dw.outcome), dw.pair, dw.played, RULE, m.awardScoreKeys);
         expect(scored.map((d) => d.points), `${m.key}/${name}: double walkover`).toEqual([0, 0]);
         expect(scored.map((d) => d.metrics), `${m.key}/${name}: no award score on a double walkover`).toEqual(dw.pair.map((d) => d.metrics));
         dws++;
@@ -158,7 +159,7 @@ describe("X-DW-4: a double walkover in a table (spec §5.3; plan D14)", () => {
         const state = m.init(cfg, { home: { entrantId: X, slots: [] }, away: { entrantId: "__bye__", slots: [] } });
         const pair = m.standingsDelta(bye, cfg, { kind: "swiss" }, state) as FixtureResult;
         // A bye is written with no event (stages.ts), so no ledger: nothing played.
-        const winner = applyPointsRule(bye, pair, RULE, false, m.awardScoreKeys).find((d) => d.entrantId === X);
+        const winner = payout(bye, decidedInFor(m, bye), pair, false, RULE, m.awardScoreKeys).find((d) => d.entrantId === X);
         expect(winner?.points, `${m.key}/${name}: a bye is a forfeit win (winnerPoints 5 + forfeit_win 16)`).toBe(21);
         byes++;
       }

@@ -655,7 +655,7 @@ describe("I3 table-points-equal-declared", () => {
     expect(evaluateInvariant(I3, run([stage({ kind: "swiss", field: ["a", "b", "c"], fixtures: [decided, declaredBye], standings: table(0) })])).evidence.join(" ")).toMatch(/c: table 0, declared Σ 3/);
   });
   it("abstain: a stage with its own points rule", () => {
-    expect(evaluateInvariant(I3, run([stage({ ...withRows(3, 0), config: { points: { base: { win: 2, draw: 1, loss: 0 } } } })])).verdict).toBe("abstain");
+    expect(evaluateInvariant(I3, run([stage({ ...withRows(3, 0), config: { points: { win: { regulation: 2 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole" } } })])).verdict).toBe("abstain");
   });
 });
 

@@ -65,7 +65,7 @@ export interface DivisionQualificationInput {
 
 /**
  * W2c X-PT-1 — the division's fixtures as the qualification view reads them: each with its `played` fact, the one the
- * standings fold hands `applyPointsRule` (`engine-db/forfeit-played.ts`), read exactly where the view reads it
+ * standings fold hands `payout` (`engine-db/forfeit-played.ts`), read exactly where the view reads it
  * (`ruleScoreReaches`): under a stage rule that scores forfeits (`pointsRuleScoresForfeits`), for a two-seated
  * forfeit. One read of those fixtures' ledgers, and none otherwise — a division with no such stage rule (nearly all)
  * costs nothing, and a bye (one seat) has no ledger to read: nothing played. Where it is not read `played` is false:

@@ -1,5 +1,5 @@
 import "server-only";
-import { PointsRule, forfeitAwardOffer } from "@seazn/engine/competition";
+import { forfeitAwardOffer, parseStoredPointsRule } from "@seazn/engine/competition";
 import type { ForfeitAward } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { liveStageCfg, type DeciderOffSource } from "@/lib/stage-decider-off";
@@ -182,7 +182,7 @@ export function hasFrozenCfg(snapshot: unknown): boolean {
  * W2c Task 16b (X-WO-1 part B; Task 9 P-3 "A") - the walkover score the fixture's STAGE offers a fold: its points rule's
  * `forfeit.awardScore` (winner first), and only where that award reaches the sport's table (`forfeitAwardOffer`, the
  * engine's one place). `undefined` for a stage with no points rule, a rule with no award, a sport the award never reaches,
- * and a stored rule `PointsRule` will not read (asked with `safeParse`, never `parse`: this feeds a fold, which must not be
+ * and a stored rule neither shape reads (`parseStoredPointsRule`, never `parse`: this feeds a fold, which must not be
  * made stricter than the table's own read of the same rule).
  *
  * It is NOT part of the cfg (`resolveFixtureCfg`): the cfg is frozen into `config_snapshot` at the first event and the
@@ -200,6 +200,7 @@ export function stageForfeitAward(
 ): ForfeitAward | undefined {
   const raw = stage?.config?.points;
   if (raw === undefined || raw === null) return undefined;
-  const rule = PointsRule.safeParse(raw);
-  return rule.success ? forfeitAwardOffer(rule.data, module) : undefined;
+  // W2d: either stored shape (the legacy one through `legacyPointsRule`); a rule neither takes offers nothing.
+  const rule = parseStoredPointsRule(raw);
+  return rule === null ? undefined : forfeitAwardOffer(rule, module);
 }

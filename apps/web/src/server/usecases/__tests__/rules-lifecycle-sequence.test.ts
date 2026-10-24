@@ -163,8 +163,8 @@ const rulesOf = (c: Record<string, unknown>): Record<string, unknown> | null => 
 const entryFor = (list: readonly RefusedField[], field: string): RefusedField | undefined => list.find((r) => r.field === field);
 
 const START = { type: "core.start", payload: {} } as const;
-const BASE_POINTS = { base: { win: 3, draw: 1, loss: 0 } };
-const SECOND_POINTS = { base: { win: 2, draw: 1, loss: 0 } };
+const BASE_POINTS = { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result" as const, unit: "whole" as const };
+const SECOND_POINTS = { win: { regulation: 2 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result" as const, unit: "whole" as const };
 
 // What the sweep witnessed: zero in any branch is a failure (anti-vacuity), not a pass.
 const seen = {

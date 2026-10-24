@@ -88,7 +88,7 @@ async function division(visibility: "public" | "private") {
   return { auth, divisionId: div.id };
 }
 
-const POINTS = { base: { win: 2, draw: 1, loss: 0 } };
+const POINTS = { win: { regulation: 2 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole" };
 
 /** Swiss (4 rounds, its own points rule) → Finals taking 1..4; the Finals
  *  carries an organiser rank override (`has_rank_overrides` true). */

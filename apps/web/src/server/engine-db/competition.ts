@@ -19,7 +19,9 @@ import { EngineError, StageKind, type MatchOutcome, type StageCtx, type Standing
 import {
   PointsRule,
   SETTLED_FIXTURE_STATUSES,
-  applyPointsRule,
+  decidedInFor,
+  parseStoredPointsRule,
+  payout,
   completeBracketStage,
   completeTableStage,
   isBracketStageComplete,
@@ -109,11 +111,13 @@ function awardByeDelta(
     home: { entrantId: seatedHome ? winnerId : BYE_PHANTOM, slots: [] },
     away: { entrantId: seatedHome ? BYE_PHANTOM : winnerId, slots: [] },
   });
-  // `standingsDelta` returns a mutable pair, `applyPointsRule` a readonly
+  // `standingsDelta` returns a mutable pair, `payout` a readonly
   // `FixtureResult` — so this is a new local, not a reassignment (TS4104).
   const rawPair = sportModule.standingsDelta(bye, cfg, ctx, state);
   // W2c X-PT-1: a bye is told apart by its reason (`isBye`), never by `played` — and it has no ledger: nothing played.
-  const pair: FixtureResult = pointsRule ? applyPointsRule(bye, rawPair, pointsRule, false, sportModule.awardScoreKeys) : rawPair;
+  const pair: FixtureResult = pointsRule
+    ? payout(bye, decidedInFor(sportModule, bye), rawPair, false, pointsRule, sportModule.awardScoreKeys)
+    : rawPair;
   const winner = pair[0].entrantId === winnerId ? pair[0] : pair[1];
   if (winner.entrantId !== winnerId) {
     throw new EngineError("CONFIG_INVALID", "award bye standings delta missing winner", {
@@ -383,7 +387,11 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
   // under its own per-stage lock (D1), so "locked the moment fixtures exist"
   // now describes the format keys rather than the whole column. Let `points`
   // into `rules`, or drop D1's lock, and this line is the same defect again.
-  const pointsRule = stage.config?.points ? PointsRule.parse(stage.config.points) : null;
+  // W2d: a stored rule reads in the outcome-keyed shape, or the legacy win/draw/loss one through `legacyPointsRule`; a
+  // rule neither shape takes still throws, as it always did (`PointsRule.parse`).
+  const pointsRule = stage.config?.points
+    ? (parseStoredPointsRule(stage.config.points) ?? PointsRule.parse(stage.config.points))
+    : null;
   // W2c Task 9 (X-PT-1): under a rule, each forfeit-shaped result's "was anything played" fact, from its own ledger —
   // one read for the stage, and none without a rule (nothing reads it then) or without a forfeit.
   const playedFacts = pointsRule
@@ -429,7 +437,14 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
       // the generic keys and on the sport's own score keys (gap a,
       // `awardScoreKeys`: football's gf/ga/gd); the rest of the ledger stands.
       base.result = pointsRule
-        ? applyPointsRule(f.outcome as MatchOutcome, pair, pointsRule, playedFor(f, playedFacts), sportModule.awardScoreKeys)
+        ? payout(
+            f.outcome as MatchOutcome,
+            decidedInFor(sportModule, f.outcome as MatchOutcome),
+            pair,
+            playedFor(f, playedFacts),
+            pointsRule,
+            sportModule.awardScoreKeys,
+          )
         : pair;
     } else if (isOneSidedAwardBye(f)) {
       // Swiss odd-field sit-out (and KO seeded bye): forfeited award with one

@@ -24,7 +24,7 @@ export const tableRuleKeys = (module: AnySportModule, variant: string | null): R
   new Set([...pointsKeysFor(module, null, variant), "pointsMap"]);
 
 /**
- * The table keys a stage PointsRule REPLACES. `applyPointsRule` (engine competition/points.ts) re-derives `delta.points`
+ * The table keys a stage PointsRule REPLACES. `payout` (engine competition/points.ts) re-derives `delta.points`
  * from the rule, and touches the ledger only on a forfeit with nothing played, where the rule's own award score replaces
  * `for`/`against`/`diff` and the sport's declared score keys (W2c X-PT-1 and its gap a), so a stage with its own
  * `config.points` no longer reads the division's keys whose ONLY reader is `delta.points`: the per-sport win/draw/loss

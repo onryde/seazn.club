@@ -10,12 +10,13 @@ import "server-only";
 // a wrong one (R3). Every `return null` below names the fact it cannot trust;
 // each has its own test in __tests__/qualification-view.test.ts.
 import {
+  DECIDED_IN,
   FOR_KEYS,
-  PointsRule,
   SETTLED_FIXTURE_STATUSES,
   isTableStageComplete,
   isUnplayedForfeit,
   metricKeyOf,
+  parseStoredPointsRule,
   pointsRuleBounds,
   qualificationStatus,
   tieDecidingKey,
@@ -23,6 +24,7 @@ import {
   tieRival,
   tieWhatIf,
   withdrawTableEntrant,
+  type OutcomeKey,
   type QualStatus,
   type QualificationInput,
   type StandingsRow,
@@ -93,7 +95,7 @@ export interface QualFixture {
    *  settle, never held. Absent reads as a plain abandon. */
   no_result?: boolean;
   /** W2c X-PT-1: was anything played before its forfeit — `playRecorded` of its ledger under the division's module, the
-   *  fact the standings fold hands `applyPointsRule` (`engine-db/forfeit-played.ts`, read by `qualificationFixtures`).
+   *  fact the standings fold hands `payout` (`engine-db/forfeit-played.ts`, read by `qualificationFixtures`).
    *  Loaded only under a stage rule that scores forfeits, for a two-seated forfeit; false where it is not loaded (and a
    *  bye's is false: it has no ledger). Read by `ruleScoreReaches` and by `ledgerless` (an award after play is a real
    *  match, fix round 1 M-1). */
@@ -214,7 +216,7 @@ function countedIn(kind: string, f: QualFixture): boolean {
  *  the credit is the walkover's 0–0 and this over-counts it — the view holds no score to tell; and `played` is read only
  *  under a stage rule that scores forfeits (`qualificationFixtures`), so without one an award after play stays out, as
  *  before W2c. And a double walkover, always (X-DW-4, Loop R M-13): it credits nothing in any sport — no forfeit score,
- *  and no stage rule's award score (`applyPointsRule` pays it as no forfeit) — so whatever either flag says, it adds
+ *  and no stage rule's award score (`payout` pays it as no forfeit) — so whatever either flag says, it adds
  *  nothing to the ledger. The what-if's average match leaves these out. */
 function ledgerless(f: QualFixture, awardAddsToLedger: boolean, ruleInAverage: boolean, meta: StageQualMeta): boolean {
   const kind = outcomeKind(f);
@@ -227,18 +229,18 @@ function ledgerless(f: QualFixture, awardAddsToLedger: boolean, ruleInAverage: b
 
 /** A stage PointsRule (V414's `points_rule`, published as `meta.pointsRule`) with a SET `forfeit.awardScore`: the only
  *  rule whose score can reach a fixture (`ruleScoreReaches`), so the only one whose fixtures' played facts are read
- *  (`qualificationFixtures`). An award of 0–0 is a score like any other: `applyPointsRule` writes whatever is set, so a
+ *  (`qualificationFixtures`). An award of 0–0 is a score like any other: `payout` writes whatever is set, so a
  *  0–0 replaces the sport's credit (a football walkover's 3–0 becomes 0–0) and the what-if must read it (fix round 2).
  *  Read off the stage, not by the caller, so a caller cannot forget it. A rule that does not parse scores nothing (and
  *  gives no view: `boundsInForce` refuses it). */
 export function pointsRuleScoresForfeits(pointsRule: unknown): boolean {
   if (pointsRule === null || pointsRule === undefined) return false;
-  const parsed = PointsRule.safeParse(pointsRule);
-  return parsed.success && parsed.data.forfeit?.awardScore !== undefined;
+  const parsed = parseStoredPointsRule(pointsRule);
+  return parsed?.forfeit?.awardScore !== undefined;
 }
 
 /**
- * W2c X-PT-1 — does the stage rule's awarded score land on this fixture? Exactly where `applyPointsRule` writes it (the
+ * W2c X-PT-1 — does the stage rule's awarded score land on this fixture? Exactly where `payout` writes it (the
  * one rule, two readers: `qualification-points-parity.test.ts`): a rule with a set `forfeit.awardScore` (0–0 too), over a
  * forfeit with nothing played — the engine's own `isUnplayedForfeit` on the fixture's `played` fact (a walkover
  * whatever its ledger reads; any other reason only when nothing was played) — and never a bye: a one-sided award is
@@ -331,13 +333,25 @@ function headline(s: QualStatus, i: QualificationViewInput, next: string, n: num
   }
 }
 
+/** W2d: every outcome a stage rule can name — a win or loss however decided, an unplayed loss, a draw, a tie, a no
+ *  result. The view holds no module or cfg to narrow it to the stage's reachable outcomes (`reachableOutcomes`), so the
+ *  bounds range over all of them: wider, never narrower, than the table can pay (R3: cautious, never wrong). A set-score
+ *  map with no `set:` key reachable ranges over every pair it names (`pointsRuleBounds`). */
+export const EVERY_OUTCOME: ReadonlySet<OutcomeKey> = new Set<OutcomeKey>([
+  ...DECIDED_IN.flatMap((d): OutcomeKey[] => [`win.${d}`, `loss.${d}`]),
+  "loss.unplayed",
+  "draw",
+  "tie",
+  "noResult",
+]);
+
 /** The per-match bounds in force: a stage PointsRule replaces the sport's. A
  *  rule that does not parse gives none — never the sport's bounds instead. */
 function boundsInForce(i: QualificationViewInput): MatchPointsBounds | null {
   const rule = i.stage.meta.pointsRule;
   if (rule === null || rule === undefined) return i.bounds;
-  const parsed = PointsRule.safeParse(rule);
-  return parsed.success ? pointsRuleBounds(parsed.data) : null;
+  const parsed = parseStoredPointsRule(rule);
+  return parsed === null ? null : pointsRuleBounds(parsed, EVERY_OUTCOME);
 }
 
 /** F1 — would this departed entrant's table withdrawal VOID results the table

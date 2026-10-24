@@ -124,7 +124,7 @@ describe("the ledger family of a diff/for tie-break", () => {
   });
 
   it("the key the engine COMPARES decides: a cricket row a rule forfeit also gave the generic keys still reads runs", () => {
-    // `applyPointsRule` writes for/against/diff into a forfeit's delta, so a
+    // `payout` writes for/against/diff into a forfeit's delta, so a
     // cricket row can record those beside its own `runs_for`/`run_diff`. The
     // engine reads the sport's own ledger first (DIFF_KEYS gd, run_diff, diff;
     // FOR_KEYS gf, runs_for, for — P1, owner-approved), so that is what it

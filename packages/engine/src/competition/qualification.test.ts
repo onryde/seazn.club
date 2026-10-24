@@ -62,7 +62,7 @@ import { describe, expect, it } from "vitest";
 import { generic } from "../sports/generic/index.ts";
 import { icehockey } from "../sports/icehockey/index.ts";
 import type { MatchPointsBounds } from "../sport/module.ts";
-import { PointsRule, pointsRuleBounds } from "./points.ts";
+import { legacyPointsRule, pointsRuleBounds, type OutcomeKey } from "./points.ts";
 import {
   bestCase,
   qualificationStatus,
@@ -77,6 +77,8 @@ const GENERIC = generic.matchPointsBounds(
   generic.configSchema.parse({ resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false }),
 );
 const W = GENERIC.max; // one win, read from the module
+/** The outcomes a legacy (win/draw/loss) rule pays: a regulation result or a draw — what its bounds range over. */
+const LEGACY_REACHABLE: ReadonlySet<OutcomeKey> = new Set<OutcomeKey>(["win.regulation", "loss.regulation", "draw"]);
 
 function table(
   pts: Record<string, number>,
@@ -232,7 +234,8 @@ describe("a departed row's unplayed fixtures move its points both ways", () => {
   });
   it("a loss that COSTS (forfeit.loserPoints −1): D departed on 10 with two unplayed, B's best 9 → B is not Out", () => {
     const neg = pointsRuleBounds(
-      PointsRule.parse({ base: { win: 3, draw: 1, loss: 0 }, forfeit: { winnerPoints: 3, loserPoints: -1 } }),
+      legacyPointsRule({ base: { win: 3, draw: 1, loss: 0 }, forfeit: { winnerPoints: 3, loserPoints: -1 } }),
+      LEGACY_REACHABLE,
     );
     expect(neg.min).toBe(-1); // precondition, read off the rule
     const scene = (dLeft: number) => table({ D: 10, B: 6, A: 0 }, { cut: 1, inactive: ["D"], r: { D: dLeft, B: 1, A: 1 }, perMatch: neg });
@@ -301,7 +304,8 @@ describe("a points rule where a loss COSTS points (min < 0): every `min` term is
   // `min` term is zero and deleting it changes nothing. ZERO is that wrong
   // reading; each case asserts the right answer AND that ZERO gives another.
   const NEG = pointsRuleBounds(
-    PointsRule.parse({ base: { win: 3, draw: 1, loss: 0 }, forfeit: { winnerPoints: 2, loserPoints: -1 } }),
+    legacyPointsRule({ base: { win: 3, draw: 1, loss: 0 }, forfeit: { winnerPoints: 2, loserPoints: -1 } }),
+    LEGACY_REACHABLE,
   );
   const ZERO: MatchPointsBounds = { ...NEG, min: 0 };
   it("a forfeit loss can drop you level: not Through, and the rival below is not Out", () => {

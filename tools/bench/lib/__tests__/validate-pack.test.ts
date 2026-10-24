@@ -1946,7 +1946,7 @@ describe("validatePack — a pooled group stage is checked one table per pool", 
 
 describe("validatePack — the stage-config mirror is DRIVEN, key by key", () => {
   it("applies the stage's own points rule, which the division cfg cannot express", () => {
-    // The competition layer's `applyPointsRule` path, not the module's
+    // The competition layer's `payout` path, not the module's
     // `standingsDelta` path — a real group stage sets 3/1/0 at the STAGE. The
     // division cfg awards 3/1/0; the stage rule awards 10/4/1, so the table is
     // green ONLY if the rule ran.
@@ -1957,6 +1957,16 @@ describe("validatePack — the stage-config mirror is DRIVEN, key by key", () =>
       rows: [row("e1", 1, 1, 1, 0, 0, 10), row("e2", 2, 1, 0, 0, 1, 1)],
     });
     expectClean(validatePack(pack, UNIT), []);
+
+    // W2d: the outcome-keyed shape pays the same table — a stored rule is read
+    // either way, the legacy one through `legacyPointsRule`.
+    const keyed = leaguePack({
+      entrants: ["e1", "e2"],
+      fixtures: [["f1", "e1", "e2", 3, 1]],
+      stage: { points: { win: { regulation: 10 }, loss: { regulation: 1 }, draw: 4, shootoutAs: "result", unit: "whole" } },
+      rows: [row("e1", 1, 1, 1, 0, 0, 10), row("e2", 2, 1, 0, 0, 1, 1)],
+    });
+    expectClean(validatePack(keyed, UNIT), []);
 
     // The control: the SAME fixtures with no stage rule fall back to the
     // module's own 3/0, so the two paths are visibly different numbers.

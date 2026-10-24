@@ -1,7 +1,7 @@
 // The `for` / `diff` tie-breaks resolve through alias lists (tiebreakers.ts
 // FOR_KEYS / DIFF_KEYS): each row reads the FIRST alias it records. A stage
 // PointsRule that scores forfeits (`forfeit.awardScore`) writes the generic
-// `for` / `against` / `diff` keys (points.ts `applyPointsRule`). In cricket the
+// `for` / `against` / `diff` keys (points.ts `payout`). In cricket the
 // sport's own ledger is `runs_for` / `runs_against`, and it used to be listed
 // AFTER `for` (with no `run_diff` at all) — so a cricket row that took a
 // rule-scored walkover read the rule's award ALONE on `for`/`diff`, while its
@@ -11,7 +11,7 @@
 // this suite was 1/4; on the reorder alone 3/4 (`diff` still had no runs).
 //
 // Driven through the real producer: cricket's own `standingsDelta` for played
-// matches and a real `core.forfeit` award, then the real `applyPointsRule`,
+// matches and a real `core.forfeit` award, then the real `payout`,
 // `foldResults` and `rankStandings` — the same chain as the web's
 // engine-db/competition.ts snapshot fold.
 import { describe, expect, it } from "vitest";
@@ -20,7 +20,8 @@ import type { EntrantId, LineupPair, StageCtx } from "../core/types.ts";
 import type { TiebreakerKey } from "../sport/module.ts";
 import { cricket, type CricketCfg } from "../sports/cricket/cricket.ts";
 import { makeEnvelope } from "../testkit/helpers.ts";
-import { applyPointsRule, PointsRule } from "./points.ts";
+import { decidedInFor } from "./decided-in.ts";
+import { legacyPointsRule, payout } from "./points.ts";
 import { foldResults, type FixtureResult } from "./standings.ts";
 import { rankStandings } from "./tiebreakers.ts";
 
@@ -28,7 +29,7 @@ const t20: CricketCfg = cricket.configSchema.parse(cricket.variants.t20);
 const league: StageCtx = { kind: "league" };
 
 // A forfeit is worth 2 points and an organiser-configured 10–0 award score.
-const RULE = PointsRule.parse({
+const RULE = legacyPointsRule({
   base: { win: 2, draw: 1, loss: 0 },
   forfeit: { winnerPoints: 2, loserPoints: 0, awardScore: [10, 0] },
 });
@@ -53,7 +54,7 @@ function fixture(home: EntrantId, away: EntrantId, specs: Array<[string, unknown
   // W2c Task 9: the played fact is the ledger's own (`playRecorded`): the walkover's is nothing, the matches' something.
   // Gap (a): cricket declares no score keys (its runs stay off the rule's award, P1), so the module's own declaration
   // passes nothing — exactly what this suite pins.
-  return applyPointsRule(state.outcome, pair, RULE, playRecorded(events, cricket), cricket.awardScoreKeys);
+  return payout(state.outcome, decidedInFor(cricket, state.outcome), pair, playRecorded(events, cricket), RULE, cricket.awardScoreKeys);
 }
 
 // Home bats first and wins; the chasing side is bowled out.

@@ -10,6 +10,7 @@
 // engine is offered exactly what the engine says it takes.
 import {
   PointsRule,
+  parseStoredPointsRule,
   pointsRuleAwardReachesTable,
   pointsRuleExpressible,
   validatePointsRule,
@@ -103,7 +104,12 @@ export const BONUS_KINDS: readonly BonusWhen[] = (
 /** The kinds that read a threshold (`param`): the margin and ratio bonuses. Every other kind pays on the result alone. */
 export const PARAM_BONUS_KINDS: ReadonlySet<BonusWhen> = new Set<BonusWhen>(["loss_margin_lte", "win_margin_gte", "score_ratio_gte"]);
 
-const ZERO_BASE = { win: 0, draw: 0, loss: 0 };
+/** W2d: the editor's three boxes as an outcome-keyed rule, read as the W2c rule read them (`legacyPointsRule`): every
+ *  win pays `win`, every loss `loss`, a draw `draw`, a tie and a no result 0, a shoot-out as a result. The per-outcome
+ *  fields (overtime, shoot-out, set score) are not the editor's yet. */
+const legacyEquivalent = (win: number, draw: number, loss: number) =>
+  ({ win: { regulation: win }, loss: { regulation: loss }, draw, tie: 0, noResult: 0, shootoutAs: "result", unit: "whole" }) as const;
+const ZERO_RULE = legacyEquivalent(0, 0, 0);
 
 /**
  * The bonus kinds worth offering for this sport: those the server's `validatePointsRule` accepts for the sport's metrics (a
@@ -119,7 +125,7 @@ export function offeredBonusKinds(module: AnySportModule, divisionConfig: unknow
     if (when === "draw" && !hasDraw) return false;
     if (when === "no_result" && !recordsNoResult) return false;
     try {
-      validatePointsRule(PointsRule.parse({ base: ZERO_BASE, bonuses: [{ when, param: 0, points: 0 }] }), module.metrics);
+      validatePointsRule(PointsRule.parse({ ...ZERO_RULE, bonuses: [{ when, param: 0, points: 0 }] }), module.metrics);
       return true;
     } catch {
       return false;
@@ -161,10 +167,10 @@ export interface PointsDraft {
 
 const text = (n: number | null): string => (n === null ? "" : String(n));
 
-/** The stored rule if it is one the engine's schema takes, else null (absent, `null`, or a hand-edited row). */
+/** The stored rule if it is one the engine's schema takes, else null (absent, `null`, or a hand-edited row). W2d: either
+ *  stored shape — a W2c `{base, …}` row reads through `legacyPointsRule` (`parseStoredPointsRule`). */
 export function storedPointsRule(stored: unknown): PointsRule | null {
-  const parsed = PointsRule.safeParse(stored);
-  return parsed.success ? parsed.data : null;
+  return parseStoredPointsRule(stored);
 }
 
 /** The draft a stage opens with: its own rule when it stores one, else the division's base numbers behind a checked
@@ -187,9 +193,10 @@ export function draftFromStored(module: AnySportModule, divisionConfig: unknown,
   }
   return {
     useDivision: false,
-    win: String(rule.base.win),
-    draw: String(rule.base.draw),
-    loss: String(rule.base.loss),
+    win: String(rule.win.regulation),
+    // A rule with no draw pays none; the box shows the 0 a sport that cannot draw sends (`ruleFromDraft`).
+    draw: String(rule.draw ?? 0),
+    loss: String(rule.loss.regulation),
     walkoverW: rule.forfeit === undefined ? "" : String(rule.forfeit.winnerPoints),
     walkoverL: rule.forfeit === undefined ? "" : String(rule.forfeit.loserPoints),
     awardW: rule.forfeit?.awardScore === undefined ? "" : String(rule.forfeit.awardScore[0]),
@@ -253,7 +260,7 @@ export function ruleFromDraft(module: AnySportModule, draft: PointsDraft): RuleF
     winnerPoints === null || loserPoints === null
       ? undefined
       : { winnerPoints, loserPoints, ...(score === undefined ? {} : { awardScore: score }) };
-  return { ok: true, rule: { base: { win, draw, loss }, bonuses, ...(forfeit === undefined ? {} : { forfeit }) } };
+  return { ok: true, rule: { ...legacyEquivalent(win, draw, loss), bonuses, ...(forfeit === undefined ? {} : { forfeit }) } };
 }
 
 /** A value with its object keys sorted, for comparing a rule to what jsonb gave back (jsonb reorders keys). */

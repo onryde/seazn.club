@@ -261,7 +261,7 @@ export function metricOf(row: StandingsRow, keys: readonly string[]): number | u
 /** The alias `metricOf` reads: the first of `keys` this row records. Callers
  *  that need to know WHICH ledger a row's `for`/`diff` resolve to (a stage
  *  rule's forfeit score reaches `for`/`against`/`diff` only — points.ts
- *  `applyPointsRule`) ask this rather than re-walking the alias order. */
+ *  `payout`) ask this rather than re-walking the alias order. */
 export function metricKeyOf<K extends string>(row: StandingsRow, keys: readonly K[]): K | undefined {
   return keys.find((key) => row.metrics[key] !== undefined);
 }

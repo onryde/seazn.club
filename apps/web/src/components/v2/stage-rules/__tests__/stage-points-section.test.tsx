@@ -24,9 +24,10 @@ const UI = enUi as Record<string, string>;
 const POINTS_DICT = pointsLineDict(enPublic as Dict);
 const ID = "11111111-1111-4111-8111-111111111111";
 
-const BASE = { win: 3, draw: 1, loss: 0 };
-const FORFEIT_RULE: PointsRule = { base: BASE, bonuses: [], forfeit: { winnerPoints: 4, loserPoints: 1 } };
-const SCORED_RULE: PointsRule = { base: BASE, bonuses: [], forfeit: { winnerPoints: 4, loserPoints: 1, awardScore: [3, 0] } };
+/** W2d: the editor's own rule for win 3 / draw 1 / loss 0 (the outcome-keyed reading of the W2c boxes, `legacyPointsRule`). */
+const HEAD = { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, tie: 0, noResult: 0, shootoutAs: "result", unit: "whole" } as const;
+const FORFEIT_RULE: PointsRule = { ...HEAD, bonuses: [], forfeit: { winnerPoints: 4, loserPoints: 1 } };
+const SCORED_RULE: PointsRule = { ...HEAD, bonuses: [], forfeit: { winnerPoints: 4, loserPoints: 1, awardScore: [3, 0] } };
 
 function render(m: AnySportModule, variant: string, stored: unknown, over: { readOnly?: boolean; pointsDict?: Dict } = {}): string {
   return renderToStaticMarkup(
@@ -73,7 +74,7 @@ describe("I3: the walkover SCORE is shown on goal sports and hidden on the sport
   });
 
   it("a set sport (badminton) shows the walkover points and NO score box - the server would refuse it", () => {
-    const html = render(badminton, "bwf", { base: { win: 2, draw: 0, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 1 } });
+    const html = render(badminton, "bwf", { win: { regulation: 2 }, draw: 0, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 1 } });
     expect(has(html, "stage-points-walkover-w") && has(html, "stage-points-walkover-l"), "the walkover points are offered").toBe(true);
     expect(has(html, "stage-points-award-w") || has(html, "stage-points-award-l") || has(html, "stage-points-award"), "no score input").toBe(false);
   });
@@ -84,7 +85,7 @@ describe("I3: the walkover SCORE is shown on goal sports and hidden on the sport
       const variant = Object.keys(m.variants).find((v) => divisionExpressible(m, m.variants[v]).ok)!;
       expect(variant, `${key}: an expressible variant exists`).toBeDefined();
       expect(pointsRuleAwardReachesTable(m), `${key}: premise, the engine's table never reads a walkover score`).toBe(false);
-      const html = render(m, variant, { base: { win: 2, draw: 1, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 2, loserPoints: 0 } });
+      const html = render(m, variant, { win: { regulation: 2 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [], forfeit: { winnerPoints: 2, loserPoints: 0 } });
       expect(has(html, "stage-points-walkover-w"), `${key}: walkover points`).toBe(true);
       expect(has(html, "stage-points-award-w") || has(html, "stage-points-award-l"), `${key}: no score box`).toBe(false);
     }
@@ -97,7 +98,7 @@ describe("I3: the walkover SCORE is shown on goal sports and hidden on the sport
     for (const m of builtinModules)
       for (const variant of Object.keys(m.variants)) {
         if (!divisionExpressible(m, m.variants[variant]).ok) continue;
-        const html = render(m, variant, { base: BASE, bonuses: [], forfeit: { winnerPoints: 2, loserPoints: 0 } });
+        const html = render(m, variant, { ...HEAD, bonuses: [], forfeit: { winnerPoints: 2, loserPoints: 0 } });
         const score = has(html, "stage-points-award-w") && has(html, "stage-points-award-l");
         expect(score, `${m.key}/${variant}`).toBe(pointsRuleAwardReachesTable(m));
         expect(has(html, "stage-points-walkover-w"), `${m.key}/${variant}: the walkover points are on every sport`).toBe(true);
@@ -133,7 +134,7 @@ describe("the section's two states: inexpressible, else the editor (scoring is f
 
   it("editor: the base sentence, the walkover row and the bonus add menu are all there for every stored rule - no plan note, no held boxes", () => {
     let checked = 0;
-    for (const stored of [{ base: BASE, bonuses: [] }, FORFEIT_RULE, { base: BASE, bonuses: [{ when: "draw", points: 1 }] }]) {
+    for (const stored of [{ ...HEAD, bonuses: [] }, FORFEIT_RULE, { ...HEAD, bonuses: [{ when: "draw", points: 1 }] }]) {
       const html = render(football, "11-a-side", stored);
       expect(html).toContain('data-stage-points-state="editor"');
       expect(has(html, "stage-points-walkover-w") && has(html, "stage-points-bonus-add"), JSON.stringify(stored)).toBe(true);
@@ -148,7 +149,7 @@ describe("the section's two states: inexpressible, else the editor (scoring is f
 });
 
 describe("a STORED own rule on a division a stage rule cannot say (review M1): read, and a way out", () => {
-  const OWN: PointsRule = { base: { win: 4, draw: 1, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 1 } };
+  const OWN: PointsRule = { win: { regulation: 4 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 1 } };
   const split = (): { m: AnySportModule; variant: string } => {
     const m = sport("icehockey");
     const variant = Object.keys(m.variants).find((v) => !divisionExpressible(m, m.variants[v]).ok)!;
@@ -183,7 +184,7 @@ describe("a STORED own rule on a division a stage rule cannot say (review M1): r
   it("nothing stored (or a row the schema refuses): the reason alone - no sentence, no preview, no clear", () => {
     const { m, variant } = split();
     let checked = 0;
-    for (const stored of [undefined, null, {}, { base: { win: "x", draw: 1, loss: 0 }, bonuses: [] }, 5]) {
+    for (const stored of [undefined, null, {}, { win: { regulation: "x" }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [] }, 5]) {
       const html = render(m, variant, stored);
       expect(has(html, "stage-points-inexpressible"), JSON.stringify(stored)).toBe(true);
       for (const id of ["stage-points-readonly", "stage-points-preview", "stage-points-clear"]) expect(has(html, id), `${JSON.stringify(stored)}: ${id}`).toBe(false);
@@ -233,7 +234,7 @@ describe("the use-division toggle and the preview", () => {
     expect(tagOf(html, "stage-points-use-division")).toContain('checked=""');
     expect(has(html, "stage-points-win"), "no inputs while inheriting").toBe(false);
     expect(has(html, "stage-points-save"), "nothing to save").toBe(false);
-    expect(text(tagOf(html, "stage-points-preview") + html.slice(html.indexOf('data-testid="stage-points-preview"')))).toContain(rulesLineText(POINTS_DICT, pointsLine({ base: BASE, bonuses: [] })));
+    expect(text(tagOf(html, "stage-points-preview") + html.slice(html.indexOf('data-testid="stage-points-preview"')))).toContain(rulesLineText(POINTS_DICT, pointsLine({ ...HEAD, bonuses: [] })));
   });
 
   it("a stored rule: unchecked, the boxes hold its numbers, the preview is its sentence in the public line's words, Save is offered but not yet enabled", () => {
@@ -249,7 +250,7 @@ describe("the use-division toggle and the preview", () => {
   });
 
   it("the preview says the walkover score on a goal sport and not on a set sport, for the same stored score", () => {
-    const stored = { base: { win: 2, draw: 0, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 1, awardScore: [21, 0] } };
+    const stored = { win: { regulation: 2 }, draw: 0, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 1, awardScore: [21, 0] } };
     expect(text(render(football, "11-a-side", stored))).toContain(rulesLineText(POINTS_DICT, [{ key: "format.points.forfeitScore", params: { winner: 21, loser: 0 } }]).toLowerCase());
     expect(text(render(badminton, "bwf", stored))).not.toContain(rulesLineText(POINTS_DICT, [{ key: "format.points.forfeitScore", params: { winner: 21, loser: 0 } }]).toLowerCase());
   });
@@ -261,15 +262,15 @@ describe("the use-division toggle and the preview", () => {
   });
 
   it("a sport that cannot draw gets the two-part sentence (no draw box)", () => {
-    const html = render(badminton, "bwf", { base: { win: 2, draw: 0, loss: 0 }, bonuses: [] });
+    const html = render(badminton, "bwf", { win: { regulation: 2 }, draw: 0, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [] });
     expect(has(html, "stage-points-draw")).toBe(false);
     expect(has(html, "stage-points-win") && has(html, "stage-points-loss")).toBe(true);
-    expect(has(render(football, "11-a-side", { base: BASE, bonuses: [] }), "stage-points-draw")).toBe(true);
+    expect(has(render(football, "11-a-side", { ...HEAD, bonuses: [] }), "stage-points-draw")).toBe(true);
   });
 });
 
 describe("bonus rows", () => {
-  const STORED: PointsRule = { base: BASE, bonuses: [{ when: "loss_margin_lte", param: 7, points: 1 }, { when: "forfeit_win", points: 2 }] };
+  const STORED: PointsRule = { ...HEAD, bonuses: [{ when: "loss_margin_lte", param: 7, points: 1 }, { when: "forfeit_win", points: 2 }] };
 
   it("a stored bonus is a row with its threshold and points; a kind that reads no threshold has no threshold box", () => {
     const html = render(generic, "score", STORED);
@@ -282,17 +283,17 @@ describe("bonus rows", () => {
 
   it("the add menu offers the kinds the sport's metrics can feed: the margin kinds on generic, none on badminton", () => {
     const options = (html: string): string[] => [...html.slice(html.indexOf('data-testid="stage-points-bonus-add"')).split("</select>")[0]!.matchAll(/<option value="([a-z_]+)"/g)].map((x) => x[1]!);
-    const g = options(render(generic, "score", { base: BASE, bonuses: [] }));
+    const g = options(render(generic, "score", { ...HEAD, bonuses: [] }));
     expect(g).toEqual(offeredBonusKinds(generic, generic.variants.score));
     expect(g).toContain("loss_margin_lte");
-    const b = options(render(badminton, "bwf", { base: { win: 2, draw: 0, loss: 0 }, bonuses: [] }));
+    const b = options(render(badminton, "bwf", { win: { regulation: 2 }, draw: 0, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [] }));
     expect(b).toEqual(offeredBonusKinds(badminton, badminton.variants.bwf));
     expect(b.length, "badminton still has walkover bonuses").toBeGreaterThan(0);
     expect(b).not.toContain("loss_margin_lte");
   });
 
   it("a stored bonus the add menu would not offer is still shown (never silently dropped)", () => {
-    const html = render(badminton, "bwf", { base: { win: 2, draw: 0, loss: 0 }, bonuses: [{ when: "loss_margin_lte", param: 3, points: 1 }] });
+    const html = render(badminton, "bwf", { win: { regulation: 2 }, draw: 0, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [{ when: "loss_margin_lte", param: 3, points: 1 }] });
     expect(has(html, "stage-points-bonus-0")).toBe(true);
     expect(tagOf(html, "stage-points-bonus-param-0")).toContain('value="3"');
   });
@@ -307,7 +308,7 @@ describe("a started stage, or a viewer, reads the section and changes nothing", 
     expect(text(own)).toContain(rulesLineText(POINTS_DICT, pointsLine(SCORED_RULE, { awardReaches: true })));
     const inherited = render(football, "11-a-side", null, { readOnly: true });
     expect(text(inherited)).toContain(UI["stagePoints.divisionPoints"]!);
-    expect(text(inherited)).toContain(rulesLineText(POINTS_DICT, pointsLine({ base: BASE, bonuses: [] })));
+    expect(text(inherited)).toContain(rulesLineText(POINTS_DICT, pointsLine({ ...HEAD, bonuses: [] })));
   });
 
   it("an inexpressible division is explained to a viewer too (the reason is not a control)", () => {
@@ -320,11 +321,11 @@ describe("a started stage, or a viewer, reads the section and changes nothing", 
 describe("pointsLineDict carries every key the preview can emit", () => {
   it("each clause pointsLine produces, for a rule that uses every part, is in the slice and in the real dictionary", () => {
     const everything: PointsRule = {
-      base: BASE,
+      ...HEAD,
       bonuses: [{ when: "loss_margin_lte", param: 7, points: 1 }, { when: "forfeit_win", points: 2 }],
       forfeit: { winnerPoints: 4, loserPoints: 1, awardScore: [3, 0] },
     };
-    const keys = new Set([...pointsLine(everything, { awardReaches: true }), ...pointsLine({ base: BASE, bonuses: [] }), ...pointsLine({ base: BASE, bonuses: [{ when: "draw", points: 1 }] })].map((c) => c.key));
+    const keys = new Set([...pointsLine(everything, { awardReaches: true }), ...pointsLine({ ...HEAD, bonuses: [] }), ...pointsLine({ ...HEAD, bonuses: [{ when: "draw", points: 1 }] })].map((c) => c.key));
     expect(keys.size, "clause keys exercised").toBeGreaterThanOrEqual(4);
     for (const key of keys) {
       expect(Object.hasOwn(POINTS_DICT, key), `${key} is in the slice`).toBe(true);

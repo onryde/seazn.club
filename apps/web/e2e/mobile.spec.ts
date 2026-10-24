@@ -5932,7 +5932,7 @@ test("W2c stage points section at every width: the sentence, More, the walkover 
   // --- review M1: the same division, but a stage that still STORES its own rule (a legacy row): the reason, the rule it plays,
   // and "Use the division's points" to clear it - the one control, on the 44px floor, nothing clipped, the same at 1280 --------
   await withDb(async (sql) => {
-    await sql`update stages set config = config || ${sql.json({ points: { base: { win: 4, draw: 1, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 1 } } })} where id = ${ih.stageId}`;
+    await sql`update stages set config = config || ${sql.json({ points: { win: { regulation: 4 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 1 } } })} where id = ${ih.stageId}`;
   });
   await page.reload({ waitUntil: "load" });
   const legacy = page.getByTestId(`stage-points-${ih.stageId}`);

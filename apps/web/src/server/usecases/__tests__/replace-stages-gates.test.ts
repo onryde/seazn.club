@@ -94,7 +94,7 @@ async function seededGraph(auth: AuthCtx): Promise<{ divisionId: string; competi
   return { ...d, before };
 }
 
-const withForfeit = { base: { win: 3, draw: 1, loss: 0 }, forfeit: { winnerPoints: 3, loserPoints: 0 } };
+const withForfeit = { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", forfeit: { winnerPoints: 3, loserPoints: 0 } };
 
 describe.skipIf(!HAS_DB)("R-T13-2 replaceStages asks every batch gate BEFORE its delete", () => {
   it("the positive pair first: a clean Apply replaces the graph (new rows)", async () => {

@@ -63,7 +63,7 @@ export class AwardFoldMismatch extends Error {
  * written with raw SQL (`__tests__/forfeit-award-callers.test.ts` does exactly that, and nothing else does). It is carried
  * anyway because every server-side read and write fold offers the award (except the append-event `before` folds, the import
  * dry run and the pad's client fold), and a fold that does not is the defect X-WO-1 B closes: this
- * row's stored score would then differ from the number the table's rule credits (`applyPointsRule`) the day a door lets one
+ * row's stored score would then differ from the number the table's rule credits (`payout`) the day a door lets one
  * stage hold both an event-less award and a rule. Delete it only together with a refusal that proves no stage can hold both,
  * and the test that reaches it (`loadAward` reads it, `writeAwardedMatchState` passes it on).
  */

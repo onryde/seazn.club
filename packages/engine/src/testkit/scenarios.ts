@@ -10,7 +10,8 @@ import { EngineError } from "../core/errors.ts";
 import { foldMatch, playRecorded, type EventEnvelope } from "../core/events.ts";
 import { mulberry32 } from "../core/rng.ts";
 import type { EntrantId, LineupPair, MatchOutcome } from "../core/types.ts";
-import { applyPointsRule, carryDeltas, PointsRule } from "../competition/points.ts";
+import { decidedInFor } from "../competition/decided-in.ts";
+import { carryDeltas, legacyPointsRule, payout } from "../competition/points.ts";
 import type { FixtureResult } from "../competition/standings.ts";
 import { assignOfficials } from "../officials/assign.ts";
 import type { AssignPolicy, OfficialFixture, OfficialSpec } from "../officials/types.ts";
@@ -360,7 +361,7 @@ export interface CustomPointsStats {
   fixtures: number;
 }
 
-const CUSTOM_RULE = PointsRule.parse({
+const CUSTOM_RULE = legacyPointsRule({
   base: { win: 5, draw: 2, loss: 1 },
 });
 
@@ -375,7 +376,7 @@ export function runCustomPointsScenario(module: AnySportModule, seed: number): C
     if (outcome.kind === "no_result") continue;
     const pair = module.standingsDelta(outcome, cfg, { kind: "league" }, played.state);
     // W2c Task 9: the played fact from the scenario's own ledger, under its module (ruling 118), as the product reads it.
-    const mapped = applyPointsRule(outcome, pair, CUSTOM_RULE, playRecorded(played.events, module), module.awardScoreKeys);
+    const mapped = payout(outcome, decidedInFor(module, outcome), pair, playRecorded(played.events, module), CUSTOM_RULE, module.awardScoreKeys);
     for (const [i, delta] of mapped.entries()) {
       // W2b D14 (X-DW-4): a double walkover is a 0-point loss under any rule (a boardgame double forfeit decides one).
       const want = outcome.kind === "double_walkover" ? 0 : delta.won === 1 ? 5 : delta.drawn === 1 ? 2 : delta.lost === 1 ? 1 : 0;
@@ -387,7 +388,14 @@ export function runCustomPointsScenario(module: AnySportModule, seed: number): C
         );
       }
       const original = (pair as FixtureResult)[i as 0 | 1];
-      if (JSON.stringify(delta.metrics) !== JSON.stringify(original.metrics)) {
+      // W2d (spec §5.1, §5.7): the rule adds only the display metric of how a win was decided — `won_<d>` on the winner,
+      // `lost_<d>` on the loser, past regulation — read from the module's own vocabulary (`decidedInFor`); the sport's
+      // ledger is otherwise untouched.
+      const d = decidedInFor(module, outcome);
+      const display =
+        outcome.kind === "win" && d !== null && d !== "regulation" ? { [`${delta.entrantId === outcome.winner ? "won" : "lost"}_${d}`]: 1 } : {};
+      const sorted = (m: Record<string, number>) => JSON.stringify(Object.entries(m).sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0)));
+      if (sorted(delta.metrics) !== sorted({ ...original.metrics, ...display })) {
         throw new SimInvariantError(`[points ${module.key}:${seed}] metrics ledger mutated by rule`);
       }
     }

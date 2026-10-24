@@ -69,6 +69,7 @@ import fr from "@/dictionaries/fr/public.json";
 import nl from "@/dictionaries/nl/public.json";
 import { plural, t, type TKey } from "@/lib/i18n-runtime";
 import {
+  EVERY_OUTCOME,
   buildQualificationView,
   divisionAwardAddsToLedger,
   divisionPointsBounds,
@@ -479,7 +480,7 @@ describe("no status — stated first, each with its positive pair", () => {
   });
   it("a malformed stage PointsRule → no status (never the sport's bounds instead); a valid one shows", () => {
     expect(view({ ...swiss4(), meta: { pointsRule: { base: { win: "three" } } } })).toBeNull();
-    expect(view({ ...swiss4(), meta: { pointsRule: { base: { win: 3, draw: 1, loss: 0 } } } })).not.toBeNull();
+    expect(view({ ...swiss4(), meta: { pointsRule: { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole" } } })).not.toBeNull();
   });
   it("a Swiss stage without a declared round count; with one it shows", () => {
     expect(view({ ...swiss4(), meta: { swissRounds: null } })).toBeNull();
@@ -689,12 +690,12 @@ describe("statuses equal the engine's on the derived input", () => {
   });
   it("Review Focus 2: a stage points rule overrides the sport's bounds", () => {
     // A +W win bonus lifts every rival's best case, so A's one win no longer settles it.
-    const rule = { base: { win: W, draw: 1, loss: 0 }, bonuses: [{ when: "win_margin_gte", param: 1, points: W }] };
+    const rule = { win: { regulation: W }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [{ when: "win_margin_gte", param: 1, points: W }] };
     const ruled = must(view({ ...swiss4(), meta: { pointsRule: rule } }));
     const engine = qualificationStatus({
       rows: swiss4().rows.map((r) => ({ entrantId: r.entrantId, points: r.points, active: true })),
       remaining: new Map(["A", "B", "C", "D"].map((id) => [id, 1])),
-      perMatch: pointsRuleBounds(PointsRule.parse(rule)),
+      perMatch: pointsRuleBounds(PointsRule.parse(rule), EVERY_OUTCOME),
       cut: 2,
       anyPlayed: true,
       complete: false,
@@ -775,8 +776,8 @@ describe("a departed row's unplayed fixtures (final review I1)", () => {
     // League of five: r1 D>A, C>B; r2 D>C, B>A; r3 B>E; D–B, D–E, A–C, A–E,
     // C–E to play. D (10, 2 of 4 played: award mode) can still be forfeited
     // twice, to 8 — below B's best (6 + 3 = 9).
-    const rule = { base: { win: 3, draw: 1, loss: 0 }, forfeit: { winnerPoints: 3, loserPoints: -1 } };
-    expect(pointsRuleBounds(PointsRule.parse(rule)).min).toBe(-1); // precondition, off the rule
+    const rule = { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", forfeit: { winnerPoints: 3, loserPoints: -1 } };
+    expect(pointsRuleBounds(PointsRule.parse(rule), EVERY_OUTCOME).min).toBe(-1); // precondition, off the rule
     const scene = (db: QualFixture, de: QualFixture, bPts: number, bPlayed: number): Scene => ({
       kind: "league",
       meta: { qualifyCount: 1, pointsRule: rule },
@@ -1114,7 +1115,7 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     expect(d.whatIf).toBe(`If you finish level on points with Bo, ${RULE} decides: win your next match by 8 or more to finish ahead.`);
   });
   // Loop R M-13 (X-DW-4): a double walkover credits NOTHING — no score to either side, in every sport, whatever the
-  // division's walkover credits (`applyPointsRule` and the folds pay it nothing) — so it is a match the average leaves
+  // division's walkover credits (`payout` and the folds pay it nothing) — so it is a match the average leaves
   // out, as it leaves out a no-result. Swept over every sport whose engine folds a both-sides forfeit to a double
   // walkover, the outcome being the engine's own fold, never typed; `awardAddsToLedger` is each sport's own reading, so
   // a sport whose WALKOVER would count (ice hockey's 5–0) is in the sweep too. D's 14 goals then came from ONE match and
@@ -1235,7 +1236,7 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
   });
 
   // A stage PointsRule's `forfeit.awardScore` (V414 publishes it as
-  // meta.pointsRule): `applyPointsRule` writes it to for/against/diff on a
+  // meta.pointsRule): `payout` writes it to for/against/diff on a
   // forfeit with NOTHING PLAYED — never a bye, never an award after play
   // (W2c X-PT-1; `ruleScoreReaches`, parity with the fold in
   // qualification-points-parity.test.ts). So under such a rule an unplayed
@@ -1244,7 +1245,7 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
   // having to say so (the generic module's awardAddsToLedger stays false).
   // Each pair is the same scene under the same rule minus its awardScore.
   const scoredRule = (awardScore?: [number, number]) => ({
-    base: { win: W, draw: 1, loss: 0 },
+    win: { regulation: W }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole",
     bonuses: [],
     forfeit: { winnerPoints: W, loserPoints: 0, ...(awardScore ? { awardScore } : {}) },
   });
@@ -1257,7 +1258,7 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     expect(scored.whatIfAssumption).toBeNull();
     const unscored = must(view({ ...o, fixtures, meta: { pointsRule: scoredRule() } })).rows.D!;
     expect(unscored.whatIf).toBe(`If you finish level on points with Bo, ${RULE} decides: win your next match by 8 or more to finish ahead.`);
-    // A SET forfeit score of 0–0 is a score like any other (fix round 2): `applyPointsRule` writes it over the sport's
+    // A SET forfeit score of 0–0 is a score like any other (fix round 2): `payout` writes it over the sport's
     // credit, so the walkover is a 0–0 ledger match — the rows (which it adds nothing to) are unchanged, and the match
     // counts in the average exactly as an ordinary result between B and D would.
     const nil = must(view({ ...o, fixtures, meta: { pointsRule: scoredRule([0, 0]) } })).rows.D!;
@@ -1320,7 +1321,7 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
   });
 
   // Fix round 2: the rule's score counts only where the what-if READS it.
-  // `applyPointsRule` writes it to `for`/`against`/`diff` alone; `metricOf`
+  // `payout` writes it to `for`/`against`/`diff` alone; `metricOf`
   // reads a sport's own `gf`/`ga`/`gd` first, and a ratio key reads neither.
   // Counting an award the average cannot see only shrinks the average — so
   // each scene below prints what the same table prints with no rule at all.
@@ -1335,7 +1336,7 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     points,
     metrics,
   });
-  /** What `applyPointsRule` adds for a scored forfeit. */
+  /** What `payout` adds for a scored forfeit. */
   const ruleAward = (mine: number, theirs: number): Metrics => ({ for: mine, against: theirs, diff: mine - theirs });
 
   // W2c X-PT-1: the rule pays a bye no score, so a bye's row never carries the rule's for/against/diff — the scene's
@@ -1432,7 +1433,7 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     expect(cw.sets_won, "premise: the walkover credits sets").toBeGreaterThan(0);
     // Wins only, as badminton's own bounds are — else `wins` decides, not set ratio.
     const winsOnlyRule = {
-      base: { win: bw, draw: 0, loss: 0 },
+      win: { regulation: bw }, draw: 0, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole",
       bonuses: [],
       forfeit: { winnerPoints: bw, loserPoints: 0, awardScore: [3, 0] as [number, number] },
     };
@@ -1482,7 +1483,7 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     const cascade = ["points", "wins", "diff"];
     const plain = must(view(open4(), { cascade })).rows.D!;
     expect(plain.whatIf).toBe("If you finish level on points with Bo, wins decides. Now: you 0, Bo 1.");
-    const winsOnly = { base: { win: W, draw: 0, loss: 0 }, bonuses: [] };
+    const winsOnly = { win: { regulation: W }, draw: 0, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [] };
     const ruled = must(view({ ...open4(), meta: { pointsRule: winsOnly } }, { cascade })).rows.D!;
     expect(ruled.whatIf).toContain(`${RULE} decides`);
   });
@@ -1494,8 +1495,8 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     // unscored rule's "win by 8" (the scene above) for a scored one.
     const o = open4({ D: [6, 8], B: [7, 2] });
     const fixtures = [won(1, "A", "D"), won(1, "C", "B"), won(2, "A", "C"), walkover(2, "B", "D"), open(3, "A", "B"), open(3, "C", "D")];
-    const rule = { ...scoredRule([3, 0]), base: { win: W, draw: 0, loss: 0 } };
-    expect(pointsRuleBounds(PointsRule.parse(rule)).winsOnly).toBe(true); // precondition, off the rule
+    const rule = { ...scoredRule([3, 0]), win: { regulation: W }, draw: 0, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole" };
+    expect(pointsRuleBounds(PointsRule.parse(rule), EVERY_OUTCOME).winsOnly).toBe(true); // precondition, off the rule
     const d = must(view({ ...o, fixtures, meta: { pointsRule: rule } }, { cascade: ["points", "wins", "diff"] })).rows.D!;
     expect(d.whatIf).toBe(`If you finish level on points with Bo, ${RULE} decides. Now: you -2, Bo +5.`);
     expect(d.whatIfAssumption).toBeNull();

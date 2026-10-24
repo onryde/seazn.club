@@ -188,8 +188,10 @@ import {
 import { registry, type AnySportModule } from "@seazn/engine/sport";
 import { registerBuiltins } from "@seazn/engine/sports";
 import {
-  applyPointsRule,
   completeTableStage,
+  decidedInFor,
+  parseStoredPointsRule,
+  payout,
   PointsRule,
   type StandingsRow,
   type TableFixture,
@@ -2172,7 +2174,7 @@ function firstMatchDivergence(
  * Fold a division's streams into the ranked standings rows, through exactly
  * the path `recomputeStandings` uses:
  * `sportModule.standingsDelta(outcome, cfg, ctx, state)` per fixture, an
- * optional `applyPointsRule`, then `completeTableStage`.
+ * optional `payout` (the stage PointsRule), then `completeTableStage`.
  *
  * Mirrors `apps/web/src/server/engine-db/competition.ts` — `ctxBase` at `:236`
  * (`{ kind }`, the stage's OWN kind, not the americano→league display map),
@@ -2208,10 +2210,13 @@ function deriveStandings(
   const pointsRuleRaw = stage.config["points"];
   let pointsRule: PointsRule | null = null;
   if (pointsRuleRaw !== undefined && pointsRuleRaw !== null) {
-    const rule = PointsRule.safeParse(pointsRuleRaw);
-    if (!rule.success)
-      return `stage "${stage.ref}" declares a points rule the engine refuses: ${rule.error.message}`;
-    pointsRule = rule.data;
+    // W2d: a stored rule is read as the product reads it — the outcome-keyed
+    // shape, or the legacy win/draw/loss one through `legacyPointsRule`.
+    pointsRule = parseStoredPointsRule(pointsRuleRaw);
+    if (pointsRule === null) {
+      const refused = PointsRule.safeParse(pointsRuleRaw);
+      return `stage "${stage.ref}" declares a points rule the engine refuses: ${refused.error?.message ?? "unreadable"}`;
+    }
   }
 
   // Which pool each fixture sat in, for a POOLED table. The product reads it
@@ -2258,7 +2263,14 @@ function deriveStandings(
       // events, so it is W2b's `playRecorded` over the same envelopes the fold read, under the fixture's module. Gap (a):
       // the module's own score keys (`awardScoreKeys`) take the awarded score too.
       result: pointsRule
-        ? applyPointsRule(fold.outcome, pair, pointsRule, playRecorded(packEnvelopes(stream), fold.module), fold.module.awardScoreKeys)
+        ? payout(
+            fold.outcome,
+            decidedInFor(fold.module, fold.outcome),
+            pair,
+            playRecorded(packEnvelopes(stream), fold.module),
+            pointsRule,
+            fold.module.awardScoreKeys,
+          )
         : pair,
     });
   }

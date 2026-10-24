@@ -100,8 +100,8 @@ describe.skipIf(!HAS_DB)("a stage's deciders and own points reach the hub and th
     // 4/2 points and a stored 5-0 award: the points are the stage's own, not the division's win of 3; the award score is
     // the stage's too (X-WO-1 B, Task 16b: the headline reads it, so the line says it) - the clauses below are the whole
     // sentence.
-    const points = { base: { win: 4, draw: 2, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 1, loserPoints: 0, awardScore: [5, 0] as [number, number] } };
-    expect(cfg.points.win, "premise: the division's win is not the stage's").not.toBe(points.base.win);
+    const points = { win: { regulation: 4 }, draw: 2, loss: { regulation: 0 }, shootoutAs: "result" as const, unit: "whole" as const, bonuses: [], forfeit: { winnerPoints: 1, loserPoints: 0, awardScore: [5, 0] as [number, number] } };
+    expect(cfg.points.win, "premise: the division's win is not the stage's").not.toBe(points.win.regulation);
     const s = await seedDecidersScene({ sportKey: "football", variantKey: "11-a-side", leaguePoints: points });
     const doc = await loadCompetitionHub(s.orgSlug, s.compSlug);
     expect(doc!.divisions.find((d) => d.slug === s.divSlug)?.stageFormatLines).toEqual([

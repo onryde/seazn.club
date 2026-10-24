@@ -10,7 +10,7 @@ import { RULE_ERROR_STATUS, ruleErrorMessage, type RuleErrorCode } from "@/lib/r
 import { BRACKET_KINDS, DRAW_KINDS, EngineError, StageKind, forbidsLevelResult } from "@seazn/engine/core";
 import { deciderKeysFor, pointsKeysFor, ruleKeyApplies, stageDefaultsFor, stageKeysFor, type AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
-import { PointsRule, applyPointsRule } from "@seazn/engine/competition";
+import { PointsRule, payout } from "@seazn/engine/competition";
 import { defaultLineupPair } from "@seazn/engine/testkit";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { ENGINE_HTTP, v1 } from "@/server/api-v1/http";
@@ -542,7 +542,7 @@ async function startedStageOfKind(sport: string, variant: string, kind: StageKin
 }
 
 describe("X-SR-4 the lock classifies a division key by the ENGINE's declaration (no database)", () => {
-  // Fix round 2, I-2. What a stage PointsRule replaces is a fact about the engine (competition/points.ts: `applyPointsRule`
+  // Fix round 2, I-2. What a stage PointsRule replaces is a fact about the engine (competition/points.ts: `payout`
   // re-derives `points` and leaves the sport's metrics ledger untouched), so it is checked against the engine, not against
   // the lock's own constant.
   it("I-2 STAGE_POINTS_REPLACES names only declared table keys, and the three other points keys a module declares are the ones left locked (counted)", () => {
@@ -565,7 +565,7 @@ describe("X-SR-4 the lock classifies a division key by the ENGINE's declaration 
     // played, so there the division's awardScore stops mattering. It still decides every forfeit AFTER play: X-PT-1 pays
     // that as a result and leaves the sport's credit, and the credit is `goalCredit(awardScore, real)` (FB-RT-1 / HK-RT-1 /
     // IH-RT-1) — so the key stays locked whatever the stage rule carries.
-    const rule = PointsRule.parse({ base: { win: 3, draw: 1, loss: 0 }, forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [1, 0] } });
+    const rule = PointsRule.parse({ win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [1, 0] } });
     let swept = 0;
     for (const m of builtinModules) {
       if (!pointsKeysFor(m, null, null).includes("awardScore")) continue;
@@ -577,7 +577,7 @@ describe("X-SR-4 the lock classifies a division key by the ENGINE's declaration 
       const outcome = (reason: "walkover" | "retired") => ({ kind: "award", winner: "H", loser: "A", reason }) as never;
       const delta = (side: 0 | 1, cfg: unknown, reason: "walkover" | "retired") => ({ entrantId: side === 0 ? "H" : "A", played: 1, won: side === 0 ? 1 : 0, drawn: 0, lost: side === 0 ? 0 : 1, points: 0, metrics: { ...ledger(cfg, reason)[side] } });
       const viaRule = (cfg: unknown, reason: "walkover" | "retired", played: boolean) =>
-        applyPointsRule(outcome(reason), [delta(0, cfg, reason), delta(1, cfg, reason)] as never, rule, played, m.awardScoreKeys)[0].metrics;
+        payout(outcome(reason), null, [delta(0, cfg, reason), delta(1, cfg, reason)] as never, played, rule, m.awardScoreKeys)[0].metrics;
       const own = Object.keys(ledger(base, "retired")[0]);
       expect(own.length, `${m.key}: the forfeit credits the winner something`).toBeGreaterThan(0);
       expect(ledger(raised, "retired")[0], `${m.key}: awardScore changes what a retirement credits`).not.toEqual(ledger(base, "retired")[0]);
@@ -911,7 +911,7 @@ describe.skipIf(!HAS_DB)("X-SR-4 the lock classifies a division key by the ENGIN
   // proving that is in the no-database describe.
   it("I-2 a started football league with its OWN stage points still locks awardScore (the forfeit goal credit); the points key it replaces saves", async () => {
     const r = await rig("football", "11-a-side", "team");
-    await sql`update stages set config = config || ${sql.json({ points: { base: { win: 3, draw: 1, loss: 0 }, bonuses: [] } } as never)} where id = ${r.s1.id}`;
+    await sql`update stages set config = config || ${sql.json({ points: { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [] } } as never)} where id = ${r.s1.id}`;
     await start(r.auth, r.fixtureId);
     const before = (await getDivision(r.auth, r.divisionId)).config as { awardScore: { goals: number }; points: { win: number; draw: number; loss: number } };
     const out = await patchDivision(r.auth, r.divisionId, {
@@ -927,7 +927,7 @@ describe.skipIf(!HAS_DB)("X-SR-4 the lock classifies a division key by the ENGIN
   // the sport's `goalCredit(awardScore, real)` (FB-RT-1), so the division's value still reaches this stage's table.
   it("I-2 a stage rule that carries its own forfeit award score does not take awardScore over either: a forfeit after play still reads the division's", async () => {
     const r = await rig("football", "11-a-side", "team");
-    await sql`update stages set config = config || ${sql.json({ points: { base: { win: 3, draw: 1, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [3, 0] } } } as never)} where id = ${r.s1.id}`;
+    await sql`update stages set config = config || ${sql.json({ points: { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [3, 0] } } } as never)} where id = ${r.s1.id}`;
     await start(r.auth, r.fixtureId);
     const before = (await getDivision(r.auth, r.divisionId)).config as { awardScore: { goals: number } };
     const out = await patchDivision(r.auth, r.divisionId, { name: "Renamed", config: { ...before, awardScore: { goals: before.awardScore.goals + 2 } } as never });
@@ -938,7 +938,7 @@ describe.skipIf(!HAS_DB)("X-SR-4 the lock classifies a division key by the ENGIN
   // `cfg.scoring`), its declared points sets and its per-match bounds read it too, and a stage rule replaces none of them.
   it("I-2 a started chess league with its OWN stage points still locks `scoring` (it also writes the game's headline): a change is refused", async () => {
     const r = await rig("boardgame", "classical");
-    await sql`update stages set config = config || ${sql.json({ points: { base: { win: 2, draw: 1, loss: 0 }, bonuses: [] } } as never)} where id = ${r.s1.id}`;
+    await sql`update stages set config = config || ${sql.json({ points: { win: { regulation: 2 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [] } } as never)} where id = ${r.s1.id}`;
     await start(r.auth, r.fixtureId);
     const before = (await getDivision(r.auth, r.divisionId)).config as { scoring: { win: number; draw: number; loss: number }; byeScore: number };
     const out = await patchDivision(r.auth, r.divisionId, {
@@ -951,7 +951,7 @@ describe.skipIf(!HAS_DB)("X-SR-4 the lock classifies a division key by the ENGIN
 
   it("I-2 …and `byeScore` (the other points key chess declares) beside it: both refused, neither written", async () => {
     const r = await rig("boardgame", "classical");
-    await sql`update stages set config = config || ${sql.json({ points: { base: { win: 2, draw: 1, loss: 0 }, bonuses: [] } } as never)} where id = ${r.s1.id}`;
+    await sql`update stages set config = config || ${sql.json({ points: { win: { regulation: 2 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [] } } as never)} where id = ${r.s1.id}`;
     await start(r.auth, r.fixtureId);
     const before = (await getDivision(r.auth, r.divisionId)).config as { scoring: { win: number; draw: number; loss: number }; byeScore: number };
     const out = await patchDivision(r.auth, r.divisionId, {

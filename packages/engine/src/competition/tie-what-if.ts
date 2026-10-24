@@ -29,7 +29,7 @@ export type TieWhatIf =
 export interface TieWhatIfOpts {
   /** Every point in this table came from wins at one rate, so rows level on
    *  points are level on wins and `wins` cannot split them (OQ1). The caller
-   *  reads it from the bounds in force — `pointsRuleBounds(rule).winsOnly`
+   *  reads it from the bounds in force — `pointsRuleBounds(rule, reachable).winsOnly`
    *  when the stage has a PointsRule, else the module's
    *  `matchPointsBounds(cfg).winsOnly` — and must pass false when the table
    *  carries points that did not come from its matches (carry-over openings).

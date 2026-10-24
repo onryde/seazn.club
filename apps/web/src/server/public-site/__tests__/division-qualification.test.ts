@@ -137,7 +137,7 @@ describe("divisionQualification — no status stated first", () => {
   it("W2c X-PT-1: a retired build gives no view under a stage PointsRule either — its played facts are the module's", () => {
     // The rule has bounds of its own (`pointsRuleBounds`), so only the missing module can refuse here: where the rule's
     // awarded score lands depends on what was played, which only the module reads (ruling 118).
-    const ruled = stage({ kind: "group", qualify_count: 1, qualify_per_group: true, points_rule: { base: { win: 3, draw: 1, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [3, 0] } } });
+    const ruled = stage({ kind: "group", qualify_count: 1, qualify_per_group: true, points_rule: { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [3, 0] } } });
     const live = assemble({ fixtures: POOL_FIXTURES, ids: POOL_IDS });
     expect(live(ruled, SNAP_A), "premise: the rule's own bounds give a view").not.toBeNull();
     const retired = assemble({ module_: null, fixtures: POOL_FIXTURES, ids: POOL_IDS });
@@ -148,7 +148,7 @@ describe("divisionQualification — no status stated first", () => {
     // No awarded score, so no fixture's played fact is read (`pointsRuleScoresForfeits`) and the module is not needed for
     // one; the rule's own bounds stand in for the module's, as they did before W2c. The SAME builder still refuses the
     // scoring stage beside it, so the refusal is per stage, not per division.
-    const RULE = { base: { win: 3, draw: 1, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0 } };
+    const RULE = { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0 } };
     const unscoring = stage({ kind: "group", qualify_count: 1, qualify_per_group: true, points_rule: RULE });
     const scoring = stage({ kind: "group", qualify_count: 1, qualify_per_group: true, points_rule: { ...RULE, forfeit: { ...RULE.forfeit, awardScore: [3, 0] } } });
     const retired = assemble({ module_: null, fixtures: POOL_FIXTURES, ids: POOL_IDS });
@@ -159,7 +159,7 @@ describe("divisionQualification — no status stated first", () => {
 });
 
 describe("qualificationFixtures — the played facts the view reads (W2c X-PT-1)", () => {
-  const SCORING = [{ points_rule: { base: { win: 3, draw: 1, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [3, 0] } } }];
+  const SCORING = [{ points_rule: { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [3, 0] } } }];
   it("a one-seated award under a scoring stage rule is a bye: played false, never refused for a fact nobody read (fix round 1 I-2)", async () => {
     // `playedFor` refuses a forfeit-shaped fixture whose ledger was not read (CONFIG_INVALID), and a one-seated award is
     // forfeit-shaped but has no ledger to read — only the seated gate keeps that refusal off a public page. Typed and

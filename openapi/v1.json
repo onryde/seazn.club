@@ -25387,25 +25387,88 @@
                       {
                         "type": "object",
                         "properties": {
-                          "base": {
+                          "win": {
                             "type": "object",
                             "properties": {
-                              "win": {
+                              "regulation": {
                                 "type": "number"
                               },
-                              "draw": {
+                              "ot": {
                                 "type": "number"
                               },
-                              "loss": {
+                              "so": {
                                 "type": "number"
                               }
                             },
                             "required": [
-                              "win",
-                              "draw",
-                              "loss"
+                              "regulation"
                             ],
                             "additionalProperties": false
+                          },
+                          "loss": {
+                            "type": "object",
+                            "properties": {
+                              "regulation": {
+                                "type": "number"
+                              },
+                              "ot": {
+                                "type": "number"
+                              },
+                              "so": {
+                                "type": "number"
+                              },
+                              "unplayed": {
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "regulation"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "draw": {
+                            "type": "number"
+                          },
+                          "soBonus": {
+                            "type": "number"
+                          },
+                          "shootoutAs": {
+                            "type": "string",
+                            "enum": [
+                              "draw_plus_bonus",
+                              "result"
+                            ]
+                          },
+                          "tie": {
+                            "type": "number"
+                          },
+                          "noResult": {
+                            "type": "number"
+                          },
+                          "bySetScore": {
+                            "type": "object",
+                            "propertyNames": {
+                              "type": "string",
+                              "pattern": "^(\\d+-\\d+|\\*)$"
+                            },
+                            "additionalProperties": {
+                              "type": "array",
+                              "prefixItems": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "number"
+                                }
+                              ]
+                            }
+                          },
+                          "unit": {
+                            "type": "string",
+                            "enum": [
+                              "whole",
+                              "half"
+                            ]
                           },
                           "bonuses": {
                             "default": [],
@@ -25468,10 +25531,32 @@
                           }
                         },
                         "required": [
-                          "base",
+                          "win",
+                          "loss",
+                          "shootoutAs",
+                          "unit",
                           "bonuses"
                         ],
-                        "additionalProperties": false
+                        "additionalProperties": false,
+                        "examples": [
+                          {
+                            "win": {
+                              "regulation": 3,
+                              "ot": 2
+                            },
+                            "loss": {
+                              "regulation": 0,
+                              "ot": 1
+                            },
+                            "shootoutAs": "result",
+                            "unit": "whole",
+                            "bonuses": [],
+                            "forfeit": {
+                              "winnerPoints": 3,
+                              "loserPoints": 0
+                            }
+                          }
+                        ]
                       },
                       {
                         "type": "null"
@@ -25484,25 +25569,20 @@
               "example": {
                 "rules": {},
                 "points": {
-                  "base": {
-                    "win": 1,
-                    "draw": 1,
-                    "loss": 1
+                  "win": {
+                    "regulation": 3,
+                    "ot": 2
                   },
-                  "bonuses": [
-                    {
-                      "when": "loss_margin_lte",
-                      "param": 1,
-                      "points": 1
-                    }
-                  ],
+                  "loss": {
+                    "regulation": 0,
+                    "ot": 1
+                  },
+                  "shootoutAs": "result",
+                  "unit": "whole",
+                  "bonuses": [],
                   "forfeit": {
-                    "winnerPoints": 1,
-                    "loserPoints": 1,
-                    "awardScore": [
-                      1,
-                      1
-                    ]
+                    "winnerPoints": 3,
+                    "loserPoints": 0
                   }
                 }
               }
@@ -25547,25 +25627,88 @@
                             {
                               "type": "object",
                               "properties": {
-                                "base": {
+                                "win": {
                                   "type": "object",
                                   "properties": {
-                                    "win": {
+                                    "regulation": {
                                       "type": "number"
                                     },
-                                    "draw": {
+                                    "ot": {
                                       "type": "number"
                                     },
-                                    "loss": {
+                                    "so": {
                                       "type": "number"
                                     }
                                   },
                                   "required": [
-                                    "win",
-                                    "draw",
-                                    "loss"
+                                    "regulation"
                                   ],
                                   "additionalProperties": false
+                                },
+                                "loss": {
+                                  "type": "object",
+                                  "properties": {
+                                    "regulation": {
+                                      "type": "number"
+                                    },
+                                    "ot": {
+                                      "type": "number"
+                                    },
+                                    "so": {
+                                      "type": "number"
+                                    },
+                                    "unplayed": {
+                                      "type": "number"
+                                    }
+                                  },
+                                  "required": [
+                                    "regulation"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "draw": {
+                                  "type": "number"
+                                },
+                                "soBonus": {
+                                  "type": "number"
+                                },
+                                "shootoutAs": {
+                                  "type": "string",
+                                  "enum": [
+                                    "draw_plus_bonus",
+                                    "result"
+                                  ]
+                                },
+                                "tie": {
+                                  "type": "number"
+                                },
+                                "noResult": {
+                                  "type": "number"
+                                },
+                                "bySetScore": {
+                                  "type": "object",
+                                  "propertyNames": {
+                                    "type": "string",
+                                    "pattern": "^(\\d+-\\d+|\\*)$"
+                                  },
+                                  "additionalProperties": {
+                                    "type": "array",
+                                    "prefixItems": [
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "type": "number"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "unit": {
+                                  "type": "string",
+                                  "enum": [
+                                    "whole",
+                                    "half"
+                                  ]
                                 },
                                 "bonuses": {
                                   "default": [],
@@ -25628,10 +25771,32 @@
                                 }
                               },
                               "required": [
-                                "base",
+                                "win",
+                                "loss",
+                                "shootoutAs",
+                                "unit",
                                 "bonuses"
                               ],
-                              "additionalProperties": false
+                              "additionalProperties": false,
+                              "examples": [
+                                {
+                                  "win": {
+                                    "regulation": 3,
+                                    "ot": 2
+                                  },
+                                  "loss": {
+                                    "regulation": 0,
+                                    "ot": 1
+                                  },
+                                  "shootoutAs": "result",
+                                  "unit": "whole",
+                                  "bonuses": [],
+                                  "forfeit": {
+                                    "winnerPoints": 3,
+                                    "loserPoints": 0
+                                  }
+                                }
+                              ]
                             },
                             {
                               "type": "null"
@@ -25656,25 +25821,20 @@
                   "data": {
                     "rules": {},
                     "points": {
-                      "base": {
-                        "win": 1,
-                        "draw": 1,
-                        "loss": 1
+                      "win": {
+                        "regulation": 3,
+                        "ot": 2
                       },
-                      "bonuses": [
-                        {
-                          "when": "loss_margin_lte",
-                          "param": 1,
-                          "points": 1
-                        }
-                      ],
+                      "loss": {
+                        "regulation": 0,
+                        "ot": 1
+                      },
+                      "shootoutAs": "result",
+                      "unit": "whole",
+                      "bonuses": [],
                       "forfeit": {
-                        "winnerPoints": 1,
-                        "loserPoints": 1,
-                        "awardScore": [
-                          1,
-                          1
-                        ]
+                        "winnerPoints": 3,
+                        "loserPoints": 0
                       }
                     }
                   },
