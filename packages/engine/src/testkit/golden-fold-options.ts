@@ -133,7 +133,11 @@ function ownCredit(
     const folded = foldMatchWithStoppage(module as never, cfg as never, lineups, events.map((e, i) => makeEnvelope(i, e, e.voids)), STRICT_ALL);
     const credit = module.forfeitCredit(cfg, folded.state, reason, offender);
     const winner = credit.perSide[offender === "home" ? 1 : 0];
-    return { for: winner[keys.for] ?? 0, against: winner[keys.against] ?? 0 };
+    const gained = winner[keys.for];
+    const lost = winner[keys.against];
+    // the module declared these keys, so its credit holds them: a module that does not is reported, never read as a zero
+    if (gained === undefined || lost === undefined) return null;
+    return { for: gained, against: lost };
   } catch {
     return null;
   }

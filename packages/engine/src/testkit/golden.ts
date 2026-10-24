@@ -59,8 +59,8 @@ export function foldOptionsProblem(value: unknown): string | null {
   if (!keys.includes("forfeitAward") || record.forfeitAward === undefined) return "it holds no forfeitAward";
   const award = record.forfeitAward;
   if (!Array.isArray(award) || award.length !== 2) return "forfeitAward is not a pair of two numbers";
-  for (const n of award as unknown[]) {
-    if (typeof n !== "number" || !Number.isInteger(n)) return `forfeitAward holds ${String(n)}, which is not an integer`;
+  for (const n of award as number[]) {
+    if (!Number.isInteger(n)) return `forfeitAward holds ${String(n)}, which is not an integer`;
     if (n < 0) return `forfeitAward holds ${n}, and a score is non-negative`;
   }
   return null;

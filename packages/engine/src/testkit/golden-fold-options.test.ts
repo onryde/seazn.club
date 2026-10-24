@@ -18,14 +18,17 @@ import type { AnySportModule } from "../sport/module.ts";
 import { builtinModules } from "../sports/index.ts";
 import { forEachSport } from "./for-each-sport.ts";
 import {
+  corpusFormat,
   corpusStateDiff,
   foldOptionsProblem,
   formatCorpusStateDiff,
   readCorpus,
   recomputeKernel,
   recomputeStats,
+  rebaselineCorpus,
   recomputeStream,
   strictFold,
+  verifyStream,
   type CorpusFormat,
   type GoldenCorpus,
   type GoldenEvent,
@@ -34,6 +37,7 @@ import {
   type StreamStateDiff,
 } from "./golden.ts";
 import { BRANCH_SEED_BASE } from "./golden-branches.ts";
+import { asFormatOne, reformatCorpus } from "./golden-reformat.ts";
 import { sweepBudget } from "./golden-budget.ts";
 import {
   FOLD_OPTION_SEED_BASE,
@@ -465,7 +469,22 @@ describe("the committed corpora reach every fold-option story, and the award is 
 
 describe("the verdict `reached` rejects what is not its own: each guard has a counterfactual that only it rejects, and the reason is asserted", () => {
   const walkover = (sportKey: string) => committedOf(storyById(`${sportKey}.walkover`));
-  const refusal = (c: Committed, over: Partial<AwardRecorded>): string => c.story.reached({ ...c.recorded, ...over }) ?? "accepted";
+  /** The verdict's reason, or "accepted"; a verdict that THROWS reads as "threw ...", so an exception is an assertion failure and not a crash. */
+  const refusal = (c: Committed, over: Partial<AwardRecorded>): string => {
+    try {
+      return c.story.reached({ ...c.recorded, ...over }) ?? "accepted";
+    } catch (error) {
+      return `threw ${String(error)}`;
+    }
+  };
+  const verdictOf = (run: () => string | null): string => {
+    try {
+      return run() ?? "accepted";
+    } catch (error) {
+      return `threw ${String(error)}`;
+    }
+  };
+  const sideTwo = (m: AnySportModule) => defaultLineupPair(resolvePositions(m, m.configSchema.parse(rawOf(m))));
 
   it("a stream with no foldOptions is not a stream that offers the award, however its ledger ends", () => {
     let checked = 0;
@@ -476,13 +495,51 @@ describe("the verdict `reached` rejects what is not its own: each guard has a co
     }
     expect(checked).toBe(readers().length);
   });
-  it("a ledger that does not end in the case's forfeit is rejected (a Start alone, another reason, another side count)", () => {
+  it("a ledger that does not end in the case's forfeit is rejected (a Start alone, another reason, the other side forfeiting)", () => {
+    let checked = 0;
     for (const m of readers()) {
       const c = walkover(m.key);
-      expect(refusal(c, { events: [{ type: "core.start", payload: {} }] }), `${m.key}: no forfeit`).toMatch(/does not end in a walkover forfeit/);
-      const other = { type: "core.forfeit", payload: { ...(c.stream.events.at(-1)!.payload as object), reason: "withdrew" } };
-      expect(refusal(c, { events: [other] }), `${m.key}: another reason`).toMatch(/does not end in a walkover forfeit/);
+      const payload = c.stream.events.at(-1)!.payload as object;
+      expect(refusal(c, { events: [{ type: "core.start", payload: {} }] }), `${m.key}: no forfeit`).toMatch(/does not end in a walkover forfeit by the away side/);
+      const other = { type: "core.forfeit", payload: { ...payload, reason: "withdrew" } };
+      expect(refusal(c, { events: [other] }), `${m.key}: another reason`).toMatch(/does not end in a walkover forfeit by the away side/);
+      const wrongSide = { type: "core.forfeit", payload: { ...payload, by: sideTwo(m).home.entrantId } };
+      expect(refusal(c, { events: [wrongSide] }), `${m.key}: the home side forfeiting a case the away side forfeits`).toMatch(/does not end in a walkover forfeit by the away side/);
+      expect(refusal(c, {}), `${m.key}: the control, the stream as recorded`).toBe("accepted");
+      checked++;
     }
+    expect(checked).toBe(readers().length);
+  });
+  it("a sport that declares no awardScoreKeys never reads an award, whatever the stream offers it", () => {
+    const c = walkover("football");
+    const cricket = sport("cricket");
+    expect(cricket.awardScoreKeys, "premise: cricket reads no award").toBeUndefined();
+    expect(refusal(c, { module: cricket }), "the stream offers an award, the sport cannot read it").toMatch(/cricket declares no awardScoreKeys, so it never reads an award/);
+  });
+  it("a module whose forfeit credit lacks the metric keys it declared is reported, not read as a zero", () => {
+    let checked = 0;
+    for (const m of readers()) {
+      const c = walkover(m.key);
+      const keyless = Object.assign(Object.create(m) as object, {
+        forfeitCredit: (cfg: unknown, state: unknown, reason: unknown, by: unknown) => ({
+          ...m.forfeitCredit(cfg as never, state as never, reason as never, by as never),
+          perSide: [{}, {}] as const,
+        }),
+      }) as unknown as AnySportModule;
+      expect(refusal(c, { module: keyless }), m.key).toMatch(/cannot be read/);
+      checked++;
+    }
+    expect(checked).toBe(readers().length);
+  });
+  it("a build for a sport that never reads the award is null: there is no stream to record", () => {
+    const cricket = sport("cricket");
+    const cfg = cricket.configSchema.parse(rawOf(cricket)) as unknown;
+    const story = storyById("football.walkover");
+    let built: unknown;
+    expect(() => {
+      built = story.build({ module: cricket, raw: rawOf(cricket), cfg, lineups: defaultLineupPair(resolvePositions(cricket, cfg)) });
+    }).not.toThrow();
+    expect(built).toBeNull();
   });
   it("an award equal to the sport's own credit is rejected: it would prove nothing about a dropped award", () => {
     let checked = 0;
@@ -496,9 +553,12 @@ describe("the verdict `reached` rejects what is not its own: each guard has a co
       const credit = m.forfeitCredit(cfg as never, state, "walkover", "away").perSide[0];
       const same: GoldenFoldOptions = { forfeitAward: [credit[keys.for]!, credit[keys.against]!] };
       expect(refusal(c, { foldOptions: same }), m.key).toMatch(/equals the sport's own credit/);
-      // one number the same is rejected too: the other would still show, but the pair must differ in BOTH
-      const half: GoldenFoldOptions = { forfeitAward: [credit[keys.for]!, credit[keys.against]! + 1] };
-      expect(refusal(c, { foldOptions: half }), `${m.key}: one number shared`).toMatch(/equals the sport's own credit/);
+      // one number the same is rejected too: the other would still show, but the pair must differ in BOTH - each number by its own guard
+      const winnerShared: GoldenFoldOptions = { forfeitAward: [credit[keys.for]!, credit[keys.against]! + 1] };
+      expect(refusal(c, { foldOptions: winnerShared }), `${m.key}: the winner's number shared`).toMatch(/winner number \d+ equals the sport's own credit/);
+      const loserShared: GoldenFoldOptions = { forfeitAward: [credit[keys.for]! + 1, credit[keys.against]!] };
+      expect(refusal(c, { foldOptions: loserShared }), `${m.key}: the loser's number shared`).toMatch(/loser number \d+ equals the sport's own credit/);
+      expect(refusal(c, { foldOptions: { forfeitAward: [credit[keys.for]! + 1, credit[keys.against]! + 1] } }), `${m.key}: the control, neither shared`).toBe("accepted");
       checked++;
     }
     expect(checked).toBe(readers().length);
@@ -510,13 +570,13 @@ describe("the verdict `reached` rejects what is not its own: each guard has a co
       const retired = committedOf(storyById(`${m.key}.retired_after_play`));
       // the kernel lands the withdrawal's award, so a case that calls it withheld is wrong, and the recording differs with the offer
       const callsWithheld: ForfeitAwardCase = { ...unplayed.story.case, lands: false };
-      expect(reachesAward(callsWithheld)(unplayed.recorded), `${m.key}: withheld by the case, landed by the kernel`).toMatch(/changed the recording of a forfeit the case says the kernel withholds it from/);
+      expect(verdictOf(() => reachesAward(callsWithheld)(unplayed.recorded)), `${m.key}: withheld by the case, landed by the kernel`).toMatch(/changed the recording of a forfeit the case says the kernel withholds it from/);
       // the kernel withholds the retirement's award, so a case that calls it landing is wrong: the module state holds none
       const callsLanding: ForfeitAwardCase = { ...retired.story.case, lands: true };
-      expect(reachesAward(callsLanding)(retired.recorded), `${m.key}: landing by the case, withheld by the kernel`).toMatch(/holds null, not the offered award, so the award never reached it/);
+      expect(verdictOf(() => reachesAward(callsLanding)(retired.recorded)), `${m.key}: landing by the case, withheld by the kernel`).toMatch(/holds null, not the offered award, so the award never reached it/);
       // and the true cases accept their own streams (the control: the verdicts above are about the case, not the stream)
-      expect(reachesAward(unplayed.story.case)(unplayed.recorded), m.key).toBeNull();
-      expect(reachesAward(retired.story.case)(retired.recorded), m.key).toBeNull();
+      expect(verdictOf(() => reachesAward(unplayed.story.case)(unplayed.recorded)), m.key).toBe("accepted");
+      expect(verdictOf(() => reachesAward(retired.story.case)(retired.recorded)), m.key).toBe("accepted");
       checked++;
     }
     expect(checked).toBe(readers().length);
@@ -535,9 +595,9 @@ describe("the verdict `reached` rejects what is not its own: each guard has a co
     let checked = 0;
     for (const m of readers()) {
       const c = walkover(m.key);
-      expect(c.story.reached({ ...c.recorded, module: blind(m, "summary") }), `${m.key}: headline blind`).toBe("the headline reads the same with and without the award");
-      expect(c.story.reached({ ...c.recorded, module: blind(m, "standingsDelta") }), `${m.key}: credit blind`).toBe("the table's credit is the same with and without the award");
-      expect(c.story.reached(c.recorded), `${m.key}: the control, the module as it is`).toBeNull();
+      expect(refusal(c, { module: blind(m, "summary") }), `${m.key}: headline blind`).toBe("the headline reads the same with and without the award");
+      expect(refusal(c, { module: blind(m, "standingsDelta") }), `${m.key}: credit blind`).toBe("the table's credit is the same with and without the award");
+      expect(refusal(c, {}), `${m.key}: the control, the module as it is`).toBe("accepted");
       checked++;
     }
     expect(checked).toBe(readers().length);
@@ -550,18 +610,18 @@ describe("the verdict `reached` rejects what is not its own: each guard has a co
         apply: (state: unknown, event: unknown, ctx: unknown) =>
           m.apply(state as never, event as never, ctx === undefined ? undefined : ({ ...(ctx as object), forfeitAward: undefined } as never)),
       }) as unknown as AnySportModule;
-      expect(c.story.reached({ ...c.recorded, module: deaf }), m.key).toMatch(/the award never reached it/);
+      expect(refusal(c, { module: deaf }), m.key).toMatch(/the award never reached it/);
       checked++;
     }
     expect(checked).toBe(readers().length);
   });
-  it("an award the config refuses, or a ledger the module cannot fold, is a reason and not a throw", () => {
+  it("an award the recorder refuses, or a ledger the module cannot fold, is a reason and not a throw", () => {
     const c = walkover("football");
     // the forfeit twice: it ends in the right forfeit, but the second is refused by the fold (the match is decided), so the sport's own credit cannot be read
     const forfeit = c.stream.events.at(-1)!;
-    expect(c.story.reached({ ...c.recorded, events: [forfeit, forfeit] })).toMatch(/does not fold without the award/);
+    expect(refusal(c, { events: [forfeit, forfeit] })).toMatch(/does not fold without the award/);
     // a malformed award: the recorder refuses it by name, and the verdict reports that
-    expect(c.story.reached({ ...c.recorded, foldOptions: { forfeitAward: [-1, 2] } as never })).toMatch(/does not record under its options: golden: malformed foldOptions/);
+    expect(refusal(c, { foldOptions: { forfeitAward: [-1, 2] } as never })).toMatch(/does not record under its options: golden: malformed foldOptions/);
   });
 });
 
@@ -618,6 +678,16 @@ describe("extendFoldOptions - the append path", () => {
     expect(() => extendFoldOptions(football, { ...base, streams: [...base.streams, decoy] })).toThrow(new RegExp(`already has a stream ${storyConfig(base)}#${FOLD_OPTION_SEED_BASE + 1}`));
   });
 
+  it("records each stream in its corpus's own format: a format-1 corpus gets the four stored fields and none of the kernel fields", () => {
+    const football = sport("football");
+    const base = asFormatOne(committedBefore("football"));
+    expect(corpusFormat(base), "premise: the corpus is format 1").toBe(1);
+    const result = extendFoldOptions(football, base);
+    const added = result.corpus.streams.filter((s) => s.foldOptions !== undefined);
+    expect(added.length).toBe(FORFEIT_AWARD_CASES.length);
+    for (const s of added) expect(Object.keys(s), identity(s)).toEqual(["config", "seed", "foldOptions", "events", "states", "outcome", "summary", "deltas"]);
+  });
+
   it("reports a hole its builder cannot close instead of inventing a stream, and refuses a built ledger that misses its story", () => {
     const football = sport("football");
     const base = committedBefore("football");
@@ -634,6 +704,69 @@ describe("extendFoldOptions - the append path", () => {
     const base = committedBefore("football");
     expect(() => extendFoldOptions(football, { ...base, configs: {}, streams: [] })).toThrow(/football records no config/);
   });
+});
+
+describe("every replay path of the toolchain offers a committed award stream its own options", () => {
+  const awardStreams = (key: string): GoldenStream[] => readCorpus(key).streams.filter((s) => s.foldOptions !== undefined);
+  const stripped = (corpus: GoldenCorpus): GoldenCorpus => ({ ...corpus, streams: corpus.streams.map(({ foldOptions: _dropped, ...rest }) => rest) });
+
+  it("verifyStream accepts each award stream, and names what moved when the options are gone from a stream the award reaches (and only that kind)", () => {
+    let landed = 0;
+    let withheld = 0;
+    for (const module of readers()) {
+      const corpus = readCorpus(module.key);
+      for (const stream of awardStreams(module.key)) {
+        const label = `${module.key} ${identity(stream)}`;
+        expect(verifyStream(module, corpus, stream), label).toEqual([]);
+        const { foldOptions: _dropped, ...without } = stream;
+        const problems = verifyStream(module, corpus, without);
+        const story = FOLD_OPTION_STORIES.find((st) => st.sport === module.key && st.seed === stream.seed)!;
+        if (story.case.lands) {
+          expect(problems.join("\n"), `${label}: the award is gone, so the recorded summary is not what the fold gives`).toMatch(/summary/);
+          landed++;
+        } else {
+          expect(problems, `${label}: the kernel withholds the award, so dropping it moves nothing`).toEqual([]);
+          withheld++;
+        }
+      }
+    }
+    expect(landed).toBe(readers().length * FORFEIT_AWARD_CASES.filter((c) => c.lands).length);
+    expect(withheld).toBe(readers().length * FORFEIT_AWARD_CASES.filter((c) => !c.lands).length);
+  }, sweepBudget("read"));
+
+  it("rebaselineCorpus re-folds each award stream to the very bytes it holds, and moves the landed ones the day their options are dropped", () => {
+    let same = 0;
+    let moved = 0;
+    for (const module of readers()) {
+      const corpus = readCorpus(module.key);
+      const again = rebaselineCorpus(module, corpus);
+      const dropped = rebaselineCorpus(module, stripped(corpus));
+      corpus.streams.forEach((stream, i) => {
+        if (stream.foldOptions === undefined) return;
+        const label = `${module.key} ${identity(stream)}`;
+        expect(JSON.stringify(again.streams[i]), `${label}: a re-baseline of the committed stream changes nothing`).toBe(JSON.stringify(stream));
+        same++;
+        const story = FOLD_OPTION_STORIES.find((st) => st.sport === module.key && st.seed === stream.seed)!;
+        if (story.case.lands) {
+          expect(dropped.streams[i]!.summary, `${label}: refolded without its options the headline moves`).not.toBe(stream.summary);
+          moved++;
+        } else expect(dropped.streams[i]!.summary, `${label}: a withheld award moves nothing`).toBe(stream.summary);
+      });
+    }
+    expect(same).toBe(FOLD_OPTION_STORIES.length);
+    expect(moved).toBe(readers().length * FORFEIT_AWARD_CASES.filter((c) => c.lands).length);
+  }, sweepBudget("probe"));
+
+  it("reformatCorpus takes the format-1 view of a reading sport's corpus back to the committed bytes, award streams included", () => {
+    let sports = 0;
+    for (const module of readers()) {
+      const committed = readCorpus(module.key);
+      const back = reformatCorpus(module, asFormatOne(committed), 3);
+      expect(JSON.stringify(back), module.key).toBe(JSON.stringify(committed));
+      sports++;
+    }
+    expect(sports).toBe(readers().length);
+  }, sweepBudget("build", readers().length * 2));
 });
 
 describe("the recomputation a reviewer is told to run is the whole input of the stream", () => {

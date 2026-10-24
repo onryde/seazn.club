@@ -707,8 +707,8 @@ export function foldOptionsProblem(value: unknown): string | null {
   if (!keys.includes(FOLD_OPTION_KEY) || value[FOLD_OPTION_KEY] === undefined) return `it holds no ${FOLD_OPTION_KEY}`;
   const award = value[FOLD_OPTION_KEY];
   if (!Array.isArray(award) || award.length !== 2) return `${FOLD_OPTION_KEY} is not a pair of two numbers`;
-  for (const n of award as unknown[]) {
-    if (typeof n !== "number" || !Number.isInteger(n)) return `${FOLD_OPTION_KEY} holds ${String(n)}, which is not an integer`;
+  for (const n of award as number[]) {
+    if (!Number.isInteger(n)) return `${FOLD_OPTION_KEY} holds ${String(n)}, which is not an integer`;
     if (n < 0) return `${FOLD_OPTION_KEY} holds ${n}, and a score is non-negative`;
   }
   return null;
