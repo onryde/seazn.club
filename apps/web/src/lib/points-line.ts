@@ -9,10 +9,13 @@
 //
 // CLIENT-SAFE on purpose: no `server-only`, no value import from the engine (`import type` is erased).
 //
-// WHAT IT SAYS, in order: the base points (win / draw / loss); the walkover row (the points the winner and the loser
-// are paid); the SCORE a walkover is awarded (`forfeit.awardScore`), only where the caller states that the award reaches
-// the sport's table (X-WO-1 part B, Task 16b); and how many bonus rules there are (counted, not listed - the public line
-// is a sentence, not a table).
+// WHAT IT SAYS, in order: the base points (win / draw / loss; win / loss where the rule pays no draw), or - for a rule
+// that pays by set score - the map, which is the whole table (each score's pair, then "any other score"); W2d M5: an
+// overtime split and a shoot-out split (each side falling back so -> ot -> regulation, D9), or a draw-plus-bonus
+// shoot-out's bonus where the rule sets one; the walkover row (the points the winner and the loser are paid); the SCORE
+// a walkover is awarded (`forfeit.awardScore`), only where the caller states that the award reaches the sport's table
+// (X-WO-1 part B, Task 16b); and how many bonus rules there are (counted, not listed - the public line is a sentence,
+// not a table). Not yet said (routed past W2d T2): `loss.unplayed`, cricket's `tie` and `noResult`.
 //
 // THE AWARDED SCORE is said only on `awardReaches`: the engine's `pointsRuleAwardReachesTable(module)`, which this
 // client-safe file cannot import (no value import from the engine). That is the same declaration that lets the sport's
@@ -50,12 +53,77 @@ function headOf(r: Record<string, unknown> | undefined): Record<string, unknown>
   return { win: record(r?.win)?.regulation, draw: r?.draw, loss: record(r?.loss)?.regulation };
 }
 
+/** An absent split falls back to `fallback`; a present one that is no number (null, "2") stays as it is, so it is never
+ *  said - never the fallback's number in its place. */
+const or = (v: unknown, fallback: unknown): unknown => (v === undefined ? fallback : v);
+
+const SET_KEY = /^(\d+)-(\d+)$/;
+/** W2d M5: a `bySetScore` map as clauses, each named score in order, then "any other score". `undefined` for a map with
+ *  a key or a pair it cannot read: a table missing a row is no table. */
+function setScoreClauses(map: Record<string, unknown>): PointsClause[] | undefined {
+  const named: { won: number; lost: number; pair: [number, number] }[] = [];
+  let other: [number, number] | undefined;
+  for (const [key, value] of Object.entries(map)) {
+    if (!Array.isArray(value) || value.length !== 2 || !isNum(value[0]) || !isNum(value[1])) return undefined;
+    const pair: [number, number] = [value[0], value[1]];
+    if (key === "*") {
+      other = pair;
+      continue;
+    }
+    const m = SET_KEY.exec(key);
+    if (m === null) return undefined;
+    named.push({ won: Number(m[1]), lost: Number(m[2]), pair });
+  }
+  named.sort((a, b) => a.won - b.won || a.lost - b.lost);
+  const out: PointsClause[] = named.map(({ won, lost, pair }) => ({
+    key: "format.points.setScore",
+    params: { won, lost, winner: pair[0], loser: pair[1] },
+  }));
+  if (other !== undefined) out.push({ key: "format.points.setScoreOther", params: { winner: other[0], loser: other[1] } });
+  return out;
+}
+
+/** W2d M5: the decided-beyond-regulation splits. An overtime clause where either side splits `ot`; a shoot-out booked as a
+ *  result where either side splits `so` (each side so -> ot -> regulation); a draw-plus-bonus shoot-out's `soBonus` where
+ *  the rule sets it (absent, it pays the default 1, which the line does not claim to know is reachable). */
+function splitClauses(r: Record<string, unknown> | undefined): PointsClause[] {
+  const win = record(r?.win);
+  const loss = record(r?.loss);
+  const out: PointsClause[] = [];
+  if (win?.ot !== undefined || loss?.ot !== undefined) {
+    const w = or(win?.ot, win?.regulation);
+    const l = or(loss?.ot, loss?.regulation);
+    if (isNum(w) && isNum(l)) out.push({ key: "format.points.ot", params: { win: w, loss: l } });
+  }
+  if (r?.shootoutAs === "draw_plus_bonus") {
+    if (isNum(r.soBonus)) out.push({ key: "format.points.soBonus", params: { bonus: r.soBonus } });
+  } else if (win?.so !== undefined || loss?.so !== undefined) {
+    const w = or(win?.so, or(win?.ot, win?.regulation));
+    const l = or(loss?.so, or(loss?.ot, loss?.regulation));
+    if (isNum(w) && isNum(l)) out.push({ key: "format.points.so", params: { win: w, loss: l } });
+  }
+  return out;
+}
+
 export function pointsLine(rule: PointsRule, opts: PointsLineOptions = {}): PointsClause[] {
   const r = record(rule);
-  const base = headOf(r);
-  // The base is the sentence's head: without all three numbers there is nothing honest to say.
-  if (!isNum(base?.win) || !isNum(base?.draw) || !isNum(base?.loss)) return [];
-  const out: PointsClause[] = [{ key: "format.points.base", params: { win: base.win, draw: base.draw, loss: base.loss } }];
+  const out: PointsClause[] = [];
+  const map = record(r?.bySetScore);
+  if (map !== undefined) {
+    // A set map is the whole table (SPEC §5.3 step 6): its pairs are said, never the win / loss it overrides.
+    const sets = setScoreClauses(map);
+    if (sets === undefined || sets.length === 0) return [];
+    out.push(...sets);
+  } else {
+    const base = headOf(r);
+    // The base is the sentence's head: without a win and a loss there is nothing honest to say; a draw that is there
+    // but no number is the same (never "draw" dropped silently).
+    if (!isNum(base?.win) || !isNum(base?.loss)) return [];
+    if (isNum(base.draw)) out.push({ key: "format.points.base", params: { win: base.win, draw: base.draw, loss: base.loss } });
+    else if (base.draw === undefined) out.push({ key: "format.points.winLoss", params: { win: base.win, loss: base.loss } });
+    else return [];
+    out.push(...splitClauses(r));
+  }
 
   const forfeit = record(r?.forfeit);
   if (isNum(forfeit?.winnerPoints) && isNum(forfeit?.loserPoints)) {
