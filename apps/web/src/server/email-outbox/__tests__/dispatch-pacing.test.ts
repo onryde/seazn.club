@@ -199,6 +199,22 @@ describe.skipIf(!HAS_DB)("dispatchNow - pacing and the budget (DB)", () => {
     expect(sleeps.length, "a wait is owed only between two requests").toBeLessThanOrEqual(starts.length - 1);
   });
 
+  it("T7 N1 - a row whose attempt THROWS after its request left still starts an interval: the next send waits one", async () => {
+    // The post-send write of the first row fails (another row already holds the provider id the transport answered with: the column is
+    // unique), so `attemptClaimed` throws AFTER the request left. dispatchNow's catch cannot know the request's fate, so it counts it as made.
+    const [bad, good] = await queueN(2);
+    const [holder] = await queueN(1);
+    await sql`update email_outbox set provider_id = ${`re_${bad!}`} where id = ${holder!}`; // the id deliverMock answers `bad` with
+    const out = await dispatchNow([bad!, good!], { sleep, nowMs });
+    expect(out.get(bad!), "premise: the recording write threw, so the row is left to the worker").toBe("deferred");
+    expect((await rowOf(bad!)).status, "and it is still sending").toBe("sending");
+    expect(out.get(good!)).toBe("sent");
+    expect(starts, "anti-vacuity: both requests left").toHaveLength(2);
+    expect(sleeps, "the request that threw counts: one interval before the next").toEqual([MIN_SEND_INTERVAL_MS]);
+    expect(starts[1]! - starts[0]!).toBeGreaterThanOrEqual(MIN_SEND_INTERVAL_MS);
+    expect(logMock.error, "and the failure was logged").toHaveBeenCalled();
+  });
+
   describe("attemptClaimed says whether a request left (what the pacing counts)", () => {
     /** Claim one queued row the way the worker does (sending, attempts + 1, a lease) and return it as the attempt is handed it. */
     async function claimed(over: Partial<OutboxMessage> = {}): Promise<ClaimedRow> {
