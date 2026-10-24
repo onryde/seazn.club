@@ -110,12 +110,18 @@ export function playingTally(boards: readonly ArbiterBoard[]): PlayingTally {
 
 // ---- the queue (§5.6) -----------------------------------------------------------------------------------------
 
-/** C6: the number of DISTINCT fixture ids over the held rows the organiser does not sit on and the flagged boards. A held
- *  board with an open flag is in both lists and counts once; a seated held card is shown but not counted; a cancelled flagged
- *  board counts. The column's title and the Fixtures-tab entry line share this one function. */
+/** C6: the held rows that COUNT, the ones the organiser does not sit on. A seated held card is shown but never counted, and
+ *  never colours the queue title. The one rule behind `attentionCount` and the title's red. */
+export function countedHeld(held: readonly NeedsOrganiserExternalPlayRow[]): NeedsOrganiserExternalPlayRow[] {
+  return held.filter((row) => !row.seated);
+}
+
+/** C6: the number of DISTINCT fixture ids over the counted held rows (`countedHeld`) and the flagged boards. A held board with
+ *  an open flag is in both lists and counts once; a cancelled flagged board counts. The column's title and the Fixtures-tab
+ *  entry line share this one function. */
 export function attentionCount(held: readonly NeedsOrganiserExternalPlayRow[], flagged: readonly FlaggedBoard[]): number {
   const ids = new Set<string>();
-  for (const row of held) if (!row.seated) ids.add(row.fixtureId);
+  for (const row of countedHeld(held)) ids.add(row.fixtureId);
   for (const b of flagged) ids.add(b.fixtureId);
   return ids.size;
 }

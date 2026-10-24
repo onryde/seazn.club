@@ -111,6 +111,10 @@ const HAND_CHECKED_DYNAMIC: Record<string, number> = {
   "src/components/v2/desk/use-open-round.ts": 1,
   // The same `decisionRunner` post as the arbiter panel's (2) above.
   "src/components/v2/external-play-needs-result-queue.tsx": 1,
+  // The arbiter round column's queue cards (Task 7): the same `decisionRunner({ post: (path, body) => apiV1(path, …) })` shape, and
+  // the cards only ever call `runner.goOn`, which posts `/api/v1/fixtures/${id}/external-play/flags/close` with `{ ids }` (a POST
+  // route that exists, src/app/api/v1/fixtures/[id]/external-play/flags/close) for a cancelled flagged board's "Mark as reviewed".
+  "src/components/v2/arbiter/round-queue-cards.tsx": 1,
 };
 
 describe("apiV1 call paths", () => {

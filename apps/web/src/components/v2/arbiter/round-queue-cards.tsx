@@ -21,12 +21,12 @@ import Link from "@/components/ui/console-link";
 import type { ArbiterRound } from "@/lib/arbiter-view";
 import { apiV1 } from "@/lib/client-v1";
 import { routes } from "@/lib/routes";
-import { attentionCount, reviewTarget, type ReviewTarget } from "@/lib/round-column";
+import { attentionCount, countedHeld, reviewTarget, type ReviewTarget } from "@/lib/round-column";
 import type { FlaggedBoard } from "@/server/usecases/external-play/arbiter";
 import type { NeedsOrganiserExternalPlayRow } from "@/server/usecases/external-play/queue";
 import { arbiterDecision, decisionRunner, initialArbiterDecision } from "../arbiter-decision";
-import { boardStateWord, BUTTON_QUIET, MUTED, noticeSentence, SOFT, useFmt, type Fmt } from "../arbiter-flag-cards";
-import { HELD_TITLE_KEYS, heldBody, namesByColour } from "../external-play-held-copy";
+import { boardStateWord, BUTTON_QUIET, MUTED, noticeSentence, SOFT, useFmt } from "../arbiter-flag-cards";
+import { HELD_TITLE_KEYS, heldBody, namesByColour, where } from "../external-play-held-copy";
 
 export type RoundQueueCardsProps = {
   /** The round on screen, or null: a board in it is selected in place, any other board is linked to. */
@@ -49,11 +49,6 @@ const CHIP = "inline-flex items-center rounded-full border px-2.5 py-[3px] text-
 const CHIP_HELD = `${CHIP} border-[#f1c4c0] bg-[#fef2f2] text-[#b42318]`;
 const CHIP_FLAGGED = `${CHIP} border-[#f5d27a] bg-[#fef3c7] text-[#713f12]`;
 const ACTION = `${BUTTON_QUIET} w-full sm:w-auto`;
-
-/** "Round 2 · Board 4", or the stage name when either number is missing (`boardNo` is nullable on held rows). */
-function where(row: { roundNo: number | null; boardNo: number | null; stageName: string }, f: Fmt): string {
-  return row.roundNo !== null && row.boardNo !== null ? f.t("externalPlay.queue.where", { round: row.roundNo, board: row.boardNo }) : row.stageName;
-}
 
 export function RoundQueueCards({ round, held, flagged, ownFlagged, slugs, onSelect }: RoundQueueCardsProps) {
   const router = useRouter();
@@ -93,7 +88,7 @@ export function RoundQueueCards({ round, held, flagged, ownFlagged, slugs, onSel
 
   // C6: distinct boards, the seated ones left out. Red when a counted card is held; a flagged board alone is amber's, not red's.
   const counted = attentionCount(held, flagged);
-  const anyHeld = held.some((r) => !r.seated);
+  const anyHeld = countedHeld(held).length > 0;
   const busy = decision.busy !== null;
 
   const names = (white: string, black: string) => (

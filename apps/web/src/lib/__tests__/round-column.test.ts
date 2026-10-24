@@ -18,6 +18,7 @@ import type { NeedsOrganiserExternalPlayRow } from "@/server/usecases/external-p
 import type { CheckinClock } from "../round-column";
 import {
   attentionCount,
+  countedHeld,
   checkinClock,
   checkinTally,
   entryLine,
@@ -533,6 +534,37 @@ describe("attentionCount", () => {
 
   it("a cancelled flagged board counts", () => {
     expect(attentionCount([], [flagged({ state: { kind: "cancelled" } })])).toBe(1);
+  });
+});
+
+// ---- countedHeld (C6, Task 7 review M2) -----------------------------------------------------------------------------
+// The ONE rule for "which held rows count": attentionCount's total and the queue title's red both read it.
+
+describe("countedHeld", () => {
+  it("empty: nothing counts", () => {
+    expect(countedHeld([])).toEqual([]);
+  });
+
+  it("every row seated: nothing counts (the empty answer is not 'all of them')", () => {
+    expect(countedHeld([held({ seated: true }), held({ seated: true })])).toEqual([]);
+  });
+
+  it("drops the seated rows, keeps the rest in their order", () => {
+    const a = held();
+    const seated = held({ seated: true });
+    const b = held();
+    const kept = countedHeld([a, seated, b]);
+    expect(kept).toEqual([a, b]);
+    expect(kept.length, "anti-vacuity: one row was dropped, two kept").toBe(2);
+    expect(kept).not.toContain(seated);
+  });
+
+  it("attentionCount is exactly the distinct ids over countedHeld and the flagged boards", () => {
+    const rows = [held(), held({ seated: true }), held()];
+    const boards = [flagged({ fixtureId: rows[0]!.fixtureId }), flagged(), flagged({ fixtureId: rows[1]!.fixtureId })];
+    const ids = new Set([...countedHeld(rows).map((r) => r.fixtureId), ...boards.map((b) => b.fixtureId)]);
+    expect(ids.size, "anti-vacuity: a non-trivial mix, not a trivial 0 or 1").toBeGreaterThan(2);
+    expect(attentionCount(rows, boards)).toBe(ids.size);
   });
 });
 

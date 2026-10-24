@@ -417,6 +417,11 @@ describe("queue: the title and the ownFlagged line", () => {
     expect(count(h, "arbiter-column-card")).toBe(0);
     expect(h).not.toContain(ATTR("arbiter-column-queue-title"));
     expect(h).not.toContain(pl("arbiter.column.queue", 0));
+    // No cards, so no list: an empty <ul> is a list landmark that announces "list, 0 items" (Task 7 review M3).
+    expect(h).not.toContain("<ul");
+    expect(h).not.toContain("<li");
+    // ...and the same markup WITH a card does carry the list, so the absence above is the gate and not a markup change.
+    expect(queue({ round: ROUND("h1"), held: [HELD("h1")], ownFlagged: 2 })).toContain("<ul");
   });
 
   it("the block's accessible name is its title when it has one", () => {

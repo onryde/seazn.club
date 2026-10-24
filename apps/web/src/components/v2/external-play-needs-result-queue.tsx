@@ -29,7 +29,7 @@ import type { FlaggedBoard } from "@/server/usecases/external-play/arbiter";
 import type { NeedsOrganiserExternalPlayRow } from "@/server/usecases/external-play/queue";
 import { arbiterDecision, decisionRunner, initialArbiterDecision, type ArbiterDecisionState, type ArbiterNotice } from "./arbiter-decision";
 import { boardStateWord, BUTTON_QUIET, FlagCard, MUTED, noticeSentence, settleChoices, settleGuidance, SETTLE_GUIDANCE_KEY, SOFT, useFmt, type Fmt } from "./arbiter-flag-cards";
-import { HELD_TITLE_KEYS, heldBody, namesByColour, queueRowAnchor } from "./external-play-held-copy";
+import { HELD_TITLE_KEYS, heldBody, namesByColour, queueRowAnchor, where } from "./external-play-held-copy";
 
 export type HeldRow = Pick<
   NeedsOrganiserExternalPlayRow,
@@ -49,12 +49,6 @@ const CHIP_HELD = `${CHIP} bg-[#fef2f2] text-[#b42318]`;
 const LIST_HEADING = "m-0 text-[13px] font-semibold text-[#4a3a6b]";
 const SETTLE_TOGGLE =
   "flex min-h-11 cursor-pointer list-none items-center justify-center rounded-[10px] bg-[#7c3aed] px-3 text-[15px] font-semibold text-white [&::-webkit-details-marker]:hidden";
-
-function where(row: { roundNo: number | null; boardNo: number | null; stageName: string }, f: Fmt): string {
-  return row.roundNo !== null && row.boardNo !== null
-    ? f.t("externalPlay.queue.where", { round: row.roundNo, board: row.boardNo })
-    : row.stageName;
-}
 
 function Names({ white, black, f }: { white: string; black: string; f: Fmt }) {
   return (

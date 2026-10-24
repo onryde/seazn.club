@@ -1400,7 +1400,6 @@ describe("WaitingList: layout rules", () => {
     const b = checking(OPEN(), seat(false, ["sent", "not_delivered"]), seat(false, ["not_invited"]));
     const h = wl({ boards: [b], view: VIEW({ state: "open", press: "reinvite", pairings: [P(b.boardNo, { fixtureId: b.fixtureId, canResend: true })] }) });
     for (const code of [0x2013, 0x2014, 0x2192, 0x2190, 0x2197]) expect(h, `U+${code.toString(16)}`).not.toContain(String.fromCharCode(code));
-    for (const tag of h.match(SCROLLERS) ?? []) expect(tag, tag).toContain('tabindex="0"');
     expect(h.match(SCROLLERS) ?? [], "the list does not scroll on its own").toHaveLength(0);
   });
 });

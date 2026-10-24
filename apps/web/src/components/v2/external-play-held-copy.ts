@@ -10,6 +10,7 @@
 // ever paint over a drift.
 import type { DictionaryKey } from "@/lib/i18n-keys";
 import type { NeedsReason } from "@/server/external-play/types";
+import type { Fmt } from "./arbiter-flag-cards";
 
 /** The chip on the card ("Lichess link revoked", "Winner to be decided"). */
 export const HELD_TITLE_KEYS: Readonly<Record<NeedsReason, DictionaryKey>> = {
@@ -97,6 +98,14 @@ export function heldBody(row: HeldCopyInput): { key: DictionaryKey; vars?: { nam
       // side and the times are the hold's detail.
       return { key: "externalPlay.reason.clockFlagUnsettled" };
   }
+}
+
+/** The "where" line under a card's chip, for the Fixtures-tab queue and the arbiter round column alike: "Round 2 · Board 4", or
+ *  the stage name when either number is missing (`boardNo` is nullable on held rows). */
+export function where(row: { roundNo: number | null; boardNo: number | null; stageName: string }, f: Pick<Fmt, "t">): string {
+  return row.roundNo !== null && row.boardNo !== null
+    ? f.t("externalPlay.queue.where", { round: row.roundNo, board: row.boardNo })
+    : row.stageName;
 }
 
 /** A held board's card on the division page: the run sheet's held chip
