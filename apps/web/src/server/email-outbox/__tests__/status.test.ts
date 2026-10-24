@@ -28,6 +28,8 @@ const HAS_DB = !!process.env.DATABASE_URL;
 const RUN = `t8s-${randomUUID().slice(0, 8)}`;
 const MIN = 60_000;
 const DAY = 24 * 3_600_000;
+/** RETENTION_DAYS of 24 h in seconds, written from the constant (not read back from the purge's own copy). */
+const RETENTION_SECS = RETENTION_DAYS * 24 * 3600;
 const REF_TYPE = "fixture_seat";
 /** The ids below are chosen for their ORDER, so they share a per-run prefix: the order between two of them is the order of their
  *  tails, and an aborted earlier run cannot collide with this one on the primary key. */
@@ -231,9 +233,13 @@ describe.skipIf(!HAS_DB)("latestEmailStatus and purgeOldEmails (V469 email_outbo
         old.push(...(await history([{ ref: newRef(), org: null, status, createdAt: ageOf(RETENTION_DAYS, 3_600_000) }])));
         young.push(...(await history([{ ref: newRef(), org: null, status, createdAt: ageOf(RETENTION_DAYS - 1) }])));
       }
-      // The boundary: a minute past the retention goes, a minute inside it stays.
-      const justOut = (await history([{ ref: newRef(), org: null, status: "sent", createdAt: ageOf(RETENTION_DAYS, MIN) }]))[0]!;
-      const justIn = (await history([{ ref: newRef(), org: null, status: "sent", createdAt: ageOf(RETENTION_DAYS, -MIN) }]))[0]!;
+      // The boundary: a minute past the retention goes, a minute inside it stays. Anchored to the DATABASE's clock (M2 of the Task 8
+      // review): the rows are written, then moved to `now()` less the retention, so the minute's margin is measured by the one clock
+      // that does the comparing, whatever the test process's clock reads or how long the module has been loaded.
+      const justOut = (await history([{ ref: newRef(), org: null, status: "sent", createdAt: new Date(NOW) }]))[0]!;
+      const justIn = (await history([{ ref: newRef(), org: null, status: "sent", createdAt: new Date(NOW) }]))[0]!;
+      await sql`update email_outbox set created_at = now() - make_interval(secs => ${RETENTION_SECS + 60}) where id = ${justOut}`;
+      await sql`update email_outbox set created_at = now() - make_interval(secs => ${RETENTION_SECS - 60}) where id = ${justIn}`;
       old.push(justOut);
       young.push(justIn);
       const all = [...old, ...young];
@@ -243,6 +249,43 @@ describe.skipIf(!HAS_DB)("latestEmailStatus and purgeOldEmails (V469 email_outbo
       const left = await rowsLeft(all);
       expect(old.filter((id) => left.has(id)), "no old row survived").toEqual([]);
       expect(young.filter((id) => !left.has(id)), "no young row was removed").toEqual([]);
+    });
+
+    it("M1: the cut-off is STRICT - a row exactly RETENTION_DAYS old, to the microsecond, is kept; one microsecond older goes; one microsecond younger stays", async () => {
+      // `now()` is the transaction's start time and does not move inside it, so a row can be written EXACTLY on the cut-off the purge
+      // computes in the same transaction. The purge runs through the `db` seam on that transaction, scoped to these three rows, and
+      // the transaction is rolled back, so nothing is left and no other file's rows are touched. A `<=` in the purge also deletes
+      // the exact row, which reads as 2 removed and `exactly: false` below.
+      class Rollback extends Error {}
+      const seen: { offsets: string[]; removed: number; left: { exactly: boolean; older: boolean; younger: boolean } } = {
+        offsets: [],
+        removed: -1,
+        left: { exactly: false, older: false, younger: false },
+      };
+      await expect(
+        sql.begin(async (tx) => {
+          const t = tx as unknown as typeof sql;
+          const mk = (): Promise<string> => insertRow(t, { ref: newRef(), org: null, status: "dead", createdAt: new Date(NOW) });
+          const exactly = await mk();
+          const older = await mk();
+          const younger = await mk();
+          await tx`update email_outbox set created_at = now() - make_interval(secs => ${RETENTION_SECS}) where id = ${exactly}`;
+          await tx`update email_outbox set created_at = now() - make_interval(secs => ${RETENTION_SECS}) - interval '1 microsecond' where id = ${older}`;
+          await tx`update email_outbox set created_at = now() - make_interval(secs => ${RETENTION_SECS}) + interval '1 microsecond' where id = ${younger}`;
+          // Premise: the boundary rows really sit where they claim (the offsets from the cut-off, in microseconds, read from the database).
+          const offsets = await tx<{ id: string; us: string }[]>`
+            select id, (extract(epoch from (created_at - (now() - make_interval(secs => ${RETENTION_SECS})))) * 1000000)::bigint::text as us
+              from email_outbox where id = any(${[exactly, older, younger]}::uuid[])`;
+          seen.offsets = [older, exactly, younger].map((id) => offsets.find((r) => r.id === id)?.us ?? "missing");
+          seen.removed = await purgeOldEmails({ db: tx, onlyIds: [exactly, older, younger] });
+          const present = new Set((await tx<{ id: string }[]>`select id from email_outbox where id = any(${[exactly, older, younger]}::uuid[])`).map((r) => r.id));
+          seen.left = { exactly: present.has(exactly), older: present.has(older), younger: present.has(younger) };
+          throw new Rollback();
+        }),
+      ).rejects.toBeInstanceOf(Rollback);
+      expect(seen.offsets, "premise: the rows sit at -1, 0 and +1 microsecond from the cut-off").toEqual(["-1", "0", "1"]);
+      expect(seen.removed, "only the row OLDER than the cut-off was removed").toBe(1);
+      expect(seen.left).toEqual({ exactly: true, older: false, younger: true });
     });
 
     it("never removes more than PURGE_BATCH in one call, the OLDEST first, and the rest go on the next calls; a drained purge removes none", async () => {
