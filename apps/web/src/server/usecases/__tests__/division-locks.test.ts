@@ -577,7 +577,7 @@ describe("X-SR-4 the lock classifies a division key by the ENGINE's declaration 
       const outcome = (reason: "walkover" | "retired") => ({ kind: "award", winner: "H", loser: "A", reason }) as never;
       const delta = (side: 0 | 1, cfg: unknown, reason: "walkover" | "retired") => ({ entrantId: side === 0 ? "H" : "A", played: 1, won: side === 0 ? 1 : 0, drawn: 0, lost: side === 0 ? 0 : 1, points: 0, metrics: { ...ledger(cfg, reason)[side] } });
       const viaRule = (cfg: unknown, reason: "walkover" | "retired", played: boolean) =>
-        payout(outcome(reason), null, [delta(0, cfg, reason), delta(1, cfg, reason)] as never, played, rule, m.awardScoreKeys)[0].metrics;
+        payout(outcome(reason), null, [delta(0, cfg, reason), delta(1, cfg, reason)] as never, played, rule, m.awardScoreKeys, undefined)[0].metrics;
       const own = Object.keys(ledger(base, "retired")[0]);
       expect(own.length, `${m.key}: the forfeit credits the winner something`).toBeGreaterThan(0);
       expect(ledger(raised, "retired")[0], `${m.key}: awardScore changes what a retirement credits`).not.toEqual(ledger(base, "retired")[0]);

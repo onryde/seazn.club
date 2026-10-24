@@ -117,7 +117,7 @@ const side = (entrantId: string, won: number, drawn: number, lost: number, metri
 const winPair = (winner: Record<string, number>, loser: Record<string, number>) =>
   [side("W", 1, 0, 0, winner), side("L", 0, 0, 1, loser)] as unknown as FixtureResult;
 const pointsOf = (outcome: MatchOutcome, pair: FixtureResult, rule: PointsRule) =>
-  payout(outcome, outcome.kind === "win" ? "regulation" : null, pair, PLAYED, rule, NO_OWN_KEYS).map((d) => d.points);
+  payout(outcome, outcome.kind === "win" ? "regulation" : null, pair, PLAYED, rule, NO_OWN_KEYS, undefined).map((d) => d.points);
 const bonusRule = (when: string, param: number | undefined, points: number) =>
   legacyPointsRule({ base: { win: 3, draw: 1, loss: 0 }, bonuses: [{ when, ...(param === undefined ? {} : { param }), points }] });
 

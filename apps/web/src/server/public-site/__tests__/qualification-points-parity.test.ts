@@ -25,7 +25,7 @@ const pair = (): FixtureResult => [
 ];
 /** The pair is generic-shaped (its own score keys ARE for/against/diff), so no further score keys are named. */
 const scoreChanged = (outcome: MatchOutcome, played: boolean, r = rule): boolean =>
-  payout(outcome, outcome.kind === "win" ? "regulation" : null, pair(), played, r, undefined)[0].metrics.for !== 1;
+  payout(outcome, outcome.kind === "win" ? "regulation" : null, pair(), played, r, undefined, undefined)[0].metrics.for !== 1;
 
 describe("X-PT-1 qualification-view agrees with payout on where the awarded score lands", () => {
   it("empty case first: no stage rule, or a rule with no awarded score, reaches nothing — every award reason × played (counted)", () => {

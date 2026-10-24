@@ -114,7 +114,7 @@ describe("X-WO-1 B: an unplayed walkover under a stage award reads the RULE's nu
         // The table: standingsDelta over the offered state equals `payout` over the un-offered one (the two authorities).
         const stage = { kind: "league" } as never;
         const viaState = m.standingsDelta(offered.outcome!, cfg, stage, offered.folded.state);
-        const viaRule = payout(base.outcome!, decidedInFor(m, base.outcome), m.standingsDelta(base.outcome!, cfg, stage, base.folded.state), false, ruleOf(award), m.awardScoreKeys);
+        const viaRule = payout(base.outcome!, decidedInFor(m, base.outcome), m.standingsDelta(base.outcome!, cfg, stage, base.folded.state), false, ruleOf(award), m.awardScoreKeys, undefined);
         for (const side of [0, 1] as const) {
           for (const key of [keys.for, keys.against, keys.diff]) {
             expect(viaState[side].metrics[key], `${m.key} side ${side} ${key}: the state's credit and the rule's overlay agree`).toBe(viaRule[side].metrics[key]);
@@ -144,7 +144,7 @@ describe("X-WO-1 B: an unplayed walkover under a stage award reads the RULE's nu
         // The table: the state's credit and the rule's overlay agree on nil-nil (the two authorities).
         const stage = { kind: "league" } as never;
         const viaState = m.standingsDelta(nil.outcome!, cfg, stage, nil.folded.state);
-        const viaRule = payout(base.outcome!, decidedInFor(m, base.outcome), m.standingsDelta(base.outcome!, cfg, stage, base.folded.state), false, ruleOf([0, 0]), m.awardScoreKeys);
+        const viaRule = payout(base.outcome!, decidedInFor(m, base.outcome), m.standingsDelta(base.outcome!, cfg, stage, base.folded.state), false, ruleOf([0, 0]), m.awardScoreKeys, undefined);
         for (const side of [0, 1] as const) {
           for (const key of [keys.for, keys.against, keys.diff]) {
             expect(viaState[side].metrics[key], `${m.key} side ${side} ${key}: the state's credit and the rule's overlay agree on nil-nil`).toBe(viaRule[side].metrics[key]);

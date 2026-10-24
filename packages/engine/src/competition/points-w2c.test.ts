@@ -32,7 +32,7 @@ const pair = (gf: number, ga: number) => [delta("H", 1, 0, gf, ga), delta("A", 0
 const award = (reason: string): MatchOutcome => ({ kind: "award", winner: "H", loser: reason === "bye" ? null : "A", reason }) as never;
 const win = (method: string): MatchOutcome => ({ kind: "win", winner: "H", loser: "A", method });
 /** The generic-shaped pair's own keys ARE for/against/diff, so no further score keys are named (`undefined`). */
-const apply = (o: MatchOutcome, p: FixtureResult, played: boolean, r = rule) => payout(o, o.kind === "win" ? "regulation" : null, p, played, r, undefined) as unknown as [D, D];
+const apply = (o: MatchOutcome, p: FixtureResult, played: boolean, r = rule) => payout(o, o.kind === "win" ? "regulation" : null, p, played, r, undefined, undefined) as unknown as [D, D];
 
 const mod = (key: string): AnySportModule => {
   const m = builtinModules.find((x) => x.key === key);
@@ -123,7 +123,7 @@ describe("X-PT-1 a forfeit is an award with nothing played, whatever its reason"
     const played = playRecorded(events, chess);
     expect(played, "precondition: in chess the Start itself is play").toBe(true);
     expect(isUnplayedForfeit(outcome, played)).toBe(true);
-    const [h, a] = payout(outcome, decidedInFor(chess, outcome), chess.standingsDelta(outcome, cfg, { kind: "swiss" }, folded.state), played, rule, chess.awardScoreKeys);
+    const [h, a] = payout(outcome, decidedInFor(chess, outcome), chess.standingsDelta(outcome, cfg, { kind: "swiss" }, folded.state), played, rule, chess.awardScoreKeys, undefined);
     expect([h.points, a.points]).toEqual([FORFEIT.winnerPoints, FORFEIT.loserPoints]);
     expect([h.metrics.for, a.metrics.against]).toEqual([AWARDED[0], AWARDED[0]]);
   });
@@ -259,7 +259,7 @@ describe("X-PT-1 through every sport's own producer (fold → standingsDelta →
         const played = playRecorded(events, m);
         expect(played, `${m.key}/${name}: nothing played`).toBe(false);
         const credit = m.standingsDelta(outcome, cfg, { kind: "league" }, folded.state) as FixtureResult;
-        const [h, a] = payout(outcome, decidedInFor(m, outcome), credit, played, rule, m.awardScoreKeys);
+        const [h, a] = payout(outcome, decidedInFor(m, outcome), credit, played, rule, m.awardScoreKeys, undefined);
         expect([h.points, a.points], `${m.key}/${name}`).toEqual([FORFEIT.winnerPoints, FORFEIT.loserPoints]);
         // The generic keys ARE the awarded score, and so are the sport's own score keys where it declares them (gap a,
         // held to its metrics by the declaration guard below); every other key stands as the sport credited it.
@@ -289,7 +289,7 @@ describe("X-PT-1 through every sport's own producer (fold → standingsDelta →
           const played = playRecorded(events, m);
           expect(played, `${m.key}/${name}/${reason}: something played`).toBe(true);
           const credit = m.standingsDelta(outcome, cfg, { kind: "league" }, folded.state) as FixtureResult;
-          const [h, a] = payout(outcome, decidedInFor(m, outcome), credit, played, rule, m.awardScoreKeys);
+          const [h, a] = payout(outcome, decidedInFor(m, outcome), credit, played, rule, m.awardScoreKeys, undefined);
           expect([h.points, a.points], `${m.key}/${name}/${reason}`).toEqual([rule.win.regulation, rule.loss.regulation]);
           expect([h.metrics, a.metrics], `${m.key}/${name}/${reason}: the sport's credit, untouched`).toEqual([credit[0].metrics, credit[1].metrics]);
           covered.add(m.key);
@@ -339,7 +339,7 @@ function ruledWalkover(m: AnySportModule, cfg: unknown, r: PointsRule = rule): {
   const folded = foldMatchWithStoppage(m as never, cfg as never, sides(m, "H", "A"), events);
   const outcome = outcomeOf(m as never, folded as never)!;
   const credit = m.standingsDelta(outcome, cfg, { kind: "league" }, folded.state) as FixtureResult;
-  return { credit, ruled: payout(outcome, decidedInFor(m, outcome), credit, playRecorded(events, m), r, m.awardScoreKeys) };
+  return { credit, ruled: payout(outcome, decidedInFor(m, outcome), credit, playRecorded(events, m), r, m.awardScoreKeys, undefined) };
 }
 
 describe("X-PT-1 gap (a) — the awarded score reaches the sport's own score keys", () => {
@@ -433,7 +433,7 @@ describe("X-PT-1 gap (a) — the awarded score reaches the sport's own score key
       const played = playRecorded(events, football);
       expect(played, "precondition: a goal is play").toBe(true);
       const credit = football.standingsDelta(outcome, cfg, { kind: "league" }, folded.state) as FixtureResult;
-      const [h] = payout(outcome, decidedInFor(football, outcome), credit, played, rule, football.awardScoreKeys);
+      const [h] = payout(outcome, decidedInFor(football, outcome), credit, played, rule, football.awardScoreKeys, undefined);
       expect(h.metrics.gd, `division awardScore ${goals}`).toBe(goals);
       seen.add(h.metrics.gd as number);
     }

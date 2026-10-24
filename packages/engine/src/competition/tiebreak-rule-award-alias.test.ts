@@ -54,7 +54,7 @@ function fixture(home: EntrantId, away: EntrantId, specs: Array<[string, unknown
   // W2c Task 9: the played fact is the ledger's own (`playRecorded`): the walkover's is nothing, the matches' something.
   // Gap (a): cricket declares no score keys (its runs stay off the rule's award, P1), so the module's own declaration
   // passes nothing — exactly what this suite pins.
-  return payout(state.outcome, decidedInFor(cricket, state.outcome), pair, playRecorded(events, cricket), RULE, cricket.awardScoreKeys);
+  return payout(state.outcome, decidedInFor(cricket, state.outcome), pair, playRecorded(events, cricket), RULE, cricket.awardScoreKeys, undefined);
 }
 
 // Home bats first and wins; the chasing side is bowled out.

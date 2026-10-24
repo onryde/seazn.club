@@ -22,6 +22,7 @@ import {
   decidedInFor,
   parseStoredPointsRule,
   payout,
+  setsToWinOf,
   completeBracketStage,
   completeTableStage,
   isBracketStageComplete,
@@ -116,7 +117,7 @@ function awardByeDelta(
   const rawPair = sportModule.standingsDelta(bye, cfg, ctx, state);
   // W2c X-PT-1: a bye is told apart by its reason (`isBye`), never by `played` — and it has no ledger: nothing played.
   const pair: FixtureResult = pointsRule
-    ? payout(bye, decidedInFor(sportModule, bye), rawPair, false, pointsRule, sportModule.awardScoreKeys)
+    ? payout(bye, decidedInFor(sportModule, bye), rawPair, false, pointsRule, sportModule.awardScoreKeys, setsToWinOf(sportModule, cfg))
     : rawPair;
   const winner = pair[0].entrantId === winnerId ? pair[0] : pair[1];
   if (winner.entrantId !== winnerId) {
@@ -420,17 +421,13 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
       // resolver as both folds, so a fixture's table contribution and its state
       // can never be computed under two different configs; a fixture with no
       // snapshot (never scored) still reads live cfg, deliberately.
-      const pair = sportModule.standingsDelta(
-        f.outcome as MatchOutcome,
-        resolveFixtureCfg(
-          f,
-          division.config,
-          { kind: stage.kind, config: stage.config as Record<string, unknown> | null },
-          sportModule,
-        ),
-        ctx,
-        f.state,
+      const fixtureCfg = resolveFixtureCfg(
+        f,
+        division.config,
+        { kind: stage.kind, config: stage.config as Record<string, unknown> | null },
+        sportModule,
       );
+      const pair = sportModule.standingsDelta(f.outcome as MatchOutcome, fixtureCfg, ctx, f.state);
       // Custom points rule (Jul3/05 §2): re-derive competition points from
       // stage config. W2c X-PT-1: a forfeit with nothing played pays the
       // rule's forfeit row, and its awarded score replaces the credit — on
@@ -444,6 +441,8 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
             playedFor(f, playedFacts),
             pointsRule,
             sportModule.awardScoreKeys,
+            // I2: a set match settled before its end is scored to the sets this fixture's own format is won on
+            setsToWinOf(sportModule, fixtureCfg),
           )
         : pair;
     } else if (isOneSidedAwardBye(f)) {

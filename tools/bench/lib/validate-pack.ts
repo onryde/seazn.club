@@ -193,6 +193,7 @@ import {
   parseStoredPointsRule,
   payout,
   PointsRule,
+  setsToWinOf,
   type StandingsRow,
   type TableFixture,
   type TableStage,
@@ -2270,6 +2271,7 @@ function deriveStandings(
             playRecorded(packEnvelopes(stream), fold.module),
             pointsRule,
             fold.module.awardScoreKeys,
+            setsToWinOf(fold.module, fold.cfg),
           )
         : pair,
     });

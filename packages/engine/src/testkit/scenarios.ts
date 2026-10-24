@@ -11,7 +11,7 @@ import { foldMatch, playRecorded, type EventEnvelope } from "../core/events.ts";
 import { mulberry32 } from "../core/rng.ts";
 import type { EntrantId, LineupPair, MatchOutcome } from "../core/types.ts";
 import { decidedInFor } from "../competition/decided-in.ts";
-import { carryDeltas, legacyPointsRule, payout } from "../competition/points.ts";
+import { carryDeltas, legacyPointsRule, payout, setsToWinOf } from "../competition/points.ts";
 import type { FixtureResult } from "../competition/standings.ts";
 import { assignOfficials } from "../officials/assign.ts";
 import type { AssignPolicy, OfficialFixture, OfficialSpec } from "../officials/types.ts";
@@ -376,7 +376,7 @@ export function runCustomPointsScenario(module: AnySportModule, seed: number): C
     if (outcome.kind === "no_result") continue;
     const pair = module.standingsDelta(outcome, cfg, { kind: "league" }, played.state);
     // W2c Task 9: the played fact from the scenario's own ledger, under its module (ruling 118), as the product reads it.
-    const mapped = payout(outcome, decidedInFor(module, outcome), pair, playRecorded(played.events, module), CUSTOM_RULE, module.awardScoreKeys);
+    const mapped = payout(outcome, decidedInFor(module, outcome), pair, playRecorded(played.events, module), CUSTOM_RULE, module.awardScoreKeys, setsToWinOf(module, cfg));
     for (const [i, delta] of mapped.entries()) {
       // W2b D14 (X-DW-4): a double walkover is a 0-point loss under any rule (a boardgame double forfeit decides one).
       const want = outcome.kind === "double_walkover" ? 0 : delta.won === 1 ? 5 : delta.drawn === 1 ? 2 : delta.lost === 1 ? 1 : 0;

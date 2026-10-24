@@ -44,7 +44,7 @@ const NO_OWN_KEYS = undefined;
 /** W2d Task 2: these cases are W2c rules (`{base, bonuses, forfeit}`), paid as before W2d through `legacyPointsRule` (B1),
  *  and `payout` replaces `applyPointsRule` — a win here is decided in regulation (a legacy rule pays every win alike). */
 const applyPointsRule = (o: MatchOutcome, p: FixtureResult, r: PointsRule, played: boolean, keys: undefined): FixtureResult =>
-  payout(o, o.kind === "win" ? "regulation" : null, p, played, r, keys);
+  payout(o, o.kind === "win" ? "regulation" : null, p, played, r, keys, undefined);
 /** Every outcome these synthetic corpora hold: the bounds are taken over all of them (W2d: over the reachable outcomes). */
 const ALL_OUTCOMES: ReadonlySet<OutcomeKey> = new Set<OutcomeKey>(["win.regulation", "loss.regulation", "draw", "tie", "noResult"]);
 

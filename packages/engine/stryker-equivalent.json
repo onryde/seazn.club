@@ -764,28 +764,28 @@
       "reason": "`reason === \"\"` is false for every reason that reaches this line, exactly as `reason === \"bye\"` is: a held forfeitAward comes only from a core.forfeit, whose reason is one of the four FORFEIT_REASONS (CoreForfeit refuses `bye`: sports/generic/generic.test.ts, 'a bye is not a forfeit reason'), so neither form ever returns null here."
     },
     {
-      "mutant": "src/competition/points.ts:609:7 ConditionalExpression → false",
+      "mutant": "src/competition/points.ts:656:7 ConditionalExpression → false",
       "original": "locks.length === 0",
       "line": "if (locks.length === 0) return [...ranked];",
       "reason": "With no locks the mutant re-stamps every row `{...row, rank}` from a free list of 1..n in table order, and every ranked row already carries exactly that rank (rankStandings writes `row.rank = index + 1`, tiebreakers.ts), so the rows are equal (competition/points-md1.test.ts, 'the empty case', passes under it); the one production caller, stage.ts:252, calls only with `poolLocks.length > 0`."
     },
     {
-      "mutant": "src/competition/points.ts:618:9 LogicalOperator → rank < 1 && rank > n",
+      "mutant": "src/competition/points.ts:665:9 LogicalOperator → rank < 1 && rank > n",
       "original": "rank < 1 || rank > n",
       "line": "if (rank < 1 || rank > n || out[rank - 1] !== null) {",
       "reason": "The last operand already refuses every rank outside 1..n: `out` holds null at indices 0..n-1 only, so for any other rank (below 1, above n, fractional, NaN) `out[rank - 1]` is undefined and `!== null` throws the same CONFIG_INVALID; the range test is redundant, so weakening it changes nothing."
     },
     {
-      "mutant": "src/competition/points.ts:618:21 ConditionalExpression → false",
+      "mutant": "src/competition/points.ts:665:21 ConditionalExpression → false",
       "original": "rank > n",
       "line": "if (rank < 1 || rank > n || out[rank - 1] !== null) {",
       "reason": "A rank above n reads `out[rank - 1]` past the array's end, which is undefined, so `out[rank - 1] !== null` throws the same CONFIG_INVALID without it (competition/points-md1.test.ts, 'a lock outside 1..n ...', rank n + 1)."
     },
     {
-      "mutant": "src/competition/points.ts:335:37 StringLiteral → \"\"",
+      "mutant": "src/competition/points.ts:371:37 StringLiteral → \"\"",
       "original": "\"regulation\"",
       "line": "const d: DecidedIn = decidedIn ?? \"regulation\";",
-      "reason": "The fallback is read only for an outcome that is not a win (the guard above throws unless decidedIn is present exactly for a win), and every reader of `d` is a win's: the shoot-out booking needs d === \"so\", `byChain` is reached only by a non-award win, and the display metric is written only on a win. A non-win's `d` is never read, so \"\" and \"regulation\" pay and book alike."
+      "reason": "The fallback is taken only for an outcome that is not a win (the guard above throws unless decidedIn is present exactly for a win). For such an outcome `d` is read once, by the shoot-out booking's `d === \"so\"`, which is false for both \"regulation\" and \"\" — neither equals \"so\"; every other reader is a win's: `byChain` is reached only by a non-award win (the switch returns every draw, tie, no result and double walkover, the award branch every award) and the display metric is written only on a win. So \"\" and \"regulation\" pay and book alike."
     },
     {
       "mutant": "src/sports/cricket/scorecard.ts:83:10 OptionalChaining → fine.currentBowler",

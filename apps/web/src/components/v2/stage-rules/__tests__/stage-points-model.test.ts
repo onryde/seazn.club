@@ -210,7 +210,7 @@ describe("stage points model (I9 killers for t18)", () => {
     ];
     const pointsFor = (when: PointsRule["bonuses"][number]["when"], param: number): number[] =>
       probes.flatMap((p) =>
-        (payout(p.outcome, p.outcome.kind === "win" ? "regulation" : null, p.pair as never, p.played, { ...plain(), bonuses: [{ when, param, points: 1 }] }, undefined) as unknown as { points: number }[]).map((d) => d.points),
+        (payout(p.outcome, p.outcome.kind === "win" ? "regulation" : null, p.pair as never, p.played, { ...plain(), bonuses: [{ when, param, points: 1 }] }, undefined, undefined) as unknown as { points: number }[]).map((d) => d.points),
       );
     const reading = BONUS_KINDS.filter((when) => JSON.stringify(pointsFor(when, 0)) !== JSON.stringify(pointsFor(when, 1000)));
     expect(BONUS_KINDS.length, "the engine's enum has its kinds").toBe(7);

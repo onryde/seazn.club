@@ -266,9 +266,33 @@ function levelPayout(rule: PointsRule, key: LevelKey): number {
   return value;
 }
 
-/** The final set score of a decided set match, "W-L", read off the winner's own ledger (`sets_won`/`sets_lost`): the
- *  played score, or the score an award credits (a bye's clean sweep). */
-function setScoreOf(pair: FixtureResult): `${number}-${number}` {
+/**
+ * W2d I2 — the sets a match of `cfg` is won on, for a sport whose table pays by set score: the winner's count every final
+ * score its `reachableSetScores` declares shares (⌈bestOf/2⌉). `undefined` for a sport that keeps no set table. Callers
+ * pass it to `payout` from the fixture's own cfg (the one its fold and `standingsDelta` read).
+ */
+export function setsToWinOf(module: AnySportModule, cfg: unknown): number | undefined {
+  if (module.reachableSetScores === undefined) return undefined;
+  const won = new Set(module.reachableSetScores(module.configSchema.parse(cfg)).map((s) => Number(s.split("-")[0])));
+  if (won.size !== 1) {
+    throw new EngineError("CONFIG_INVALID", `${module.key}'s final set scores name ${won.size} winning counts, not one`, { sport: module.key });
+  }
+  return [...won][0];
+}
+
+/**
+ * The final set score of a decided set match, "W-L", read off the winner's own ledger (`sets_won`/`sets_lost`): the
+ * played score, or the score an award credits. A match that ended before its last set — an abandon the table settles
+ * (by lot, seed or the organiser, W2c X-AB-5), a pre-W2b walkover win, a bye — pays as FIVB 6.4.3 scores a team declared
+ * incomplete (ruling I2): the winner is given the sets it needed (`setsToWin`), the other side keeps its own. So the key
+ * is always `setsToWin-L`, a final score `reachableSetScores` declares.
+ */
+function setScoreOf(pair: FixtureResult, setsToWin: number | undefined): `${number}-${number}` {
+  if (setsToWin === undefined) {
+    throw new EngineError("CONFIG_INVALID", "the points rule pays by set score, but the sport keeps no set score (coverage refuses such a rule at save)", {
+      entrants: pair.map((d) => d.entrantId),
+    });
+  }
   const winner = pair.find((d) => d.won === 1);
   const w = winner?.metrics.sets_won;
   const l = winner?.metrics.sets_lost;
@@ -277,7 +301,15 @@ function setScoreOf(pair: FixtureResult): `${number}-${number}` {
       entrants: pair.map((d) => d.entrantId),
     });
   }
-  return `${w}-${l}`;
+  // Assumptions are guards: a winner holding the majority's worth of losses, or more sets than a match is won on, is no
+  // result this format ends on — never completed into a guess.
+  if (l >= setsToWin || w > setsToWin) {
+    throw new EngineError("CONFIG_INVALID", `the winner's set score ${w}-${l} no match won on ${setsToWin} sets ends on`, {
+      entrants: pair.map((d) => d.entrantId),
+      setsToWin,
+    });
+  }
+  return `${setsToWin}-${l}`;
 }
 
 /** SC-S9 — the pair a `bySetScore` map pays a set score: the exact "W-L" key, else "*". Neither is a rule `coverage`
@@ -302,7 +334,8 @@ function setPairOf(map: Readonly<Record<string, readonly [number, number]>>, sco
  *     - otherwise the winner is paid the win of its credited score (ruling 108: `win.regulation`, or its set score's
  *       pair; a bye's clean sweep) and the loser `loss.unplayed` where the rule declares one (amended 108, D6: table
  *       tennis) — never a bye's, which has no loser — else the loss of the credited score;
- *  6. a win decided in `decidedIn`: a set sport's `bySetScore` pair (exact "W-L", else "*"); a shoot-out under
+ *  6. a win decided in `decidedIn`: a set sport's `bySetScore` pair (exact "W-L", else "*"; a match ended before its
+ *     last set is scored FIVB 6.4.3's way, `setsToWin` to the other side's sets — ruling I2); a shoot-out under
  *     `shootoutAs: "draw_plus_bonus"` (B2) books BOTH sides drawn, pays each `draw` and the shoot-out winner `soBonus`
  *     (absent ⇒ 1) on top — no `wins` for either; otherwise `win`/`loss` by the so → ot → regulation chain;
  *  7. the bonuses, read off the side as the rule booked it (margins through the sport's score aliases, F11).
@@ -316,7 +349,9 @@ function setPairOf(map: Readonly<Record<string, readonly [number, number]>>, sco
  * throws CONFIG_INVALID). `played` (W2c Task 9, owner P-3 "A") is the fixture's "was anything played" fact — W2b's
  * `playRecorded` over its ledger — read only for a forfeit-shaped outcome; REQUIRED, because a stored award carries no
  * played marker (review I7) and only the caller holds the ledger. An organiser's No result abandon (W2c D3,
- * `core.abandon{noResult: true}`) folds to NO outcome and never reaches this function (ruling PF-10).
+ * `core.abandon{noResult: true}`) folds to NO outcome and never reaches this function (ruling PF-10). `setsToWin` is
+ * `setsToWinOf(module, cfg)` over the fixture's own cfg, REQUIRED like `scoreKeys`: read only under a `bySetScore` map,
+ * where `undefined` (a sport with no set table) throws CONFIG_INVALID, as `coverage` refuses it at save (I1).
  */
 export function payout(
   outcome: MatchOutcome,
@@ -325,6 +360,7 @@ export function payout(
   played: boolean,
   rule: PointsRule,
   scoreKeys: AwardScoreKeys | undefined,
+  setsToWin: number | undefined,
 ): FixtureResult {
   if ((outcome.kind === "win") !== (decidedIn !== null)) {
     throw new EngineError("CONFIG_INVALID", `a ${outcome.kind} outcome ${decidedIn === null ? "needs" : "takes no"} decidedIn`, {
@@ -340,7 +376,7 @@ export function payout(
   const award = forfeitShaped(outcome);
   // `d` is "so" only for a win (the guard above); a forfeit-shaped win is an award whatever a caller passes.
   const shootoutDraw = !award && rule.bySetScore === undefined && d === "so" && rule.shootoutAs === "draw_plus_bonus";
-  const setPair = (): readonly [number, number] => setPairOf(rule.bySetScore!, setScoreOf(pair));
+  const setPair = (): readonly [number, number] => setPairOf(rule.bySetScore!, setScoreOf(pair, setsToWin));
 
   const sidePoints = (delta: StandingsDelta): number => {
     switch (outcome.kind) {
@@ -422,7 +458,11 @@ export function reachableOutcomes(module: AnySportModule, cfg: unknown, stageKin
   return out;
 }
 
-export type Coverage = { readonly ok: true } | { readonly ok: false; readonly uncovered: readonly OutcomeKey[] };
+/** A rule field a stage can never pay (I1): a `bySetScore` map where the sport keeps no set table. */
+export type InapplicableField = "bySetScore";
+export type Coverage =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly uncovered: readonly OutcomeKey[]; readonly inapplicable: readonly InapplicableField[] };
 
 /** How many DIFFERENT pairs a `bySetScore` map pays (spec §5.3 "the `*` guard"). */
 const distinctPairs = (map: Readonly<Record<string, readonly [number, number]>>): number =>
@@ -435,7 +475,9 @@ const distinctPairs = (map: Readonly<Record<string, readonly [number, number]>>)
  * `uncovered`. A `bySetScore` map that pays more than one distinct pair must name every reachable "W-L" itself; "*" does
  * not count toward that (D10(a), RBS:566). A map of one distinct pair with "*" is flat and covers every score; a rule
  * with no map pays every score its win/loss. The empty set is covered. `uncovered` lists each key once, in `reachable`'s
- * order. One question for the stage save, the division save and the fixture override (spec §5.4).
+ * order. A map where the stage reaches results but no set score — a sport with no set table (football, tennis: no
+ * `reachableSetScores`) — is `inapplicable: ["bySetScore"]` (I1): `payout` would throw on its first win. One question for
+ * the stage save, the division save and the fixture override (spec §5.4).
  */
 export function coverage(rule: PointsRule, reachable: ReadonlySet<OutcomeKey>): Coverage {
   const uncovered: OutcomeKey[] = [];
@@ -444,16 +486,21 @@ export function coverage(rule: PointsRule, reachable: ReadonlySet<OutcomeKey>): 
   };
   const map = rule.bySetScore;
   const flat = map !== undefined && distinctPairs(map) <= 1 && Object.hasOwn(map, "*");
+  let decided = false;
+  let setScores = false;
   for (const key of reachable) {
     if (key === "draw" || key === "tie") {
       if (rule[key] === undefined) miss(key);
     } else if (key === "win.so" || key === "loss.so") {
       if (rule.shootoutAs === "draw_plus_bonus" && rule.draw === undefined) miss("draw");
     } else if (key.startsWith("set:")) {
+      setScores = true;
       if (map !== undefined && !flat && !Object.hasOwn(map, key.slice("set:".length))) miss(key);
     }
+    if (key.startsWith("win.")) decided = true;
   }
-  return uncovered.length === 0 ? { ok: true } : { ok: false, uncovered };
+  const inapplicable: InapplicableField[] = map !== undefined && decided && !setScores ? ["bySetScore"] : [];
+  return uncovered.length === 0 && inapplicable.length === 0 ? { ok: true } : { ok: false, uncovered, inapplicable };
 }
 
 /**
