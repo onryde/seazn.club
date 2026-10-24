@@ -378,5 +378,110 @@
         "name": "applies the stage's own points rule"
       }
     ]
+  },
+  {
+    "id": "t2-fr1-i1-inapplicable-dropped",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "map !== undefined && decided && !setScores ? [\"bySetScore\"] : []",
+    "replace": "/*MUT*/ []",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/points-w2d.test.ts"
+        ],
+        "name": "I1 a bySetScore map is refused"
+      }
+    ]
+  },
+  {
+    "id": "t2-fr1-i2-key-is-played-score",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "return `${setsToWin}-${l}`;",
+    "replace": "return `${w}-${l}` /*MUT*/;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/points-w2d.test.ts"
+        ],
+        "name": "I2 FIVB 6.4.3 a settled abandon"
+      }
+    ]
+  },
+  {
+    "id": "t2-fr1-i2-malformed-allowed",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "if (l >= setsToWin || w > setsToWin) {",
+    "replace": "if (false /*MUT*/) {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/points-w2d.test.ts"
+        ],
+        "name": "I2 FIVB 6.4.3 a settled abandon"
+      }
+    ]
+  },
+  {
+    "id": "t2-fr1-m4-loss-chain-regulation",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "delta.lost === 1 ? byChain(rule.loss, d) : 0;",
+    "replace": "delta.lost === 1 ? byChain(rule.loss, \"regulation\" /*MUT*/) : 0;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/points-w2d.property.test.ts"
+        ],
+        "name": "per-fixture total"
+      }
+    ]
+  },
+  {
+    "id": "t2-fr1-m5-so-win-skips-ot",
+    "file": "apps/web/src/lib/points-line.ts",
+    "find": "const w = or(win?.so, or(win?.ot, win?.regulation));",
+    "replace": "const w = or(win?.so, win?.regulation) /*MUT*/;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/points-line.test.ts"
+        ],
+        "name": "W2d M5: a shoot-out booked as a result"
+      }
+    ]
+  },
+  {
+    "id": "t2-fr1-m5-ot-gate-win-only",
+    "file": "apps/web/src/lib/points-line.ts",
+    "find": "if (win?.ot !== undefined || loss?.ot !== undefined) {",
+    "replace": "if (win?.ot !== undefined /*MUT*/) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/points-line.test.ts"
+        ],
+        "name": "W2d M5: an overtime split is said"
+      }
+    ]
+  },
+  {
+    "id": "t2-fr1-m5-map-says-splits",
+    "file": "apps/web/src/lib/points-line.ts",
+    "find": "    out.push(...sets);\n  } else {",
+    "replace": "    out.push(...sets);\n    out.push(...splitClauses(r)); /*MUT*/\n  } else {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/points-line.test.ts"
+        ],
+        "name": "W2d M5: a set-score map is the whole table"
+      }
+    ]
   }
 ]

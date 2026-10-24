@@ -2,8 +2,8 @@
   {
     "id": "t16-pl-win-guard",
     "file": "apps/web/src/lib/points-line.ts",
-    "find": "if (!isNum(base?.win) || !isNum(base?.draw) || !isNum(base?.loss)) return [];",
-    "replace": "if (!isNum(base?.draw) || !isNum(base?.loss)) return [];",
+    "find": "if (!isNum(base?.win) || !isNum(base?.loss)) return [];",
+    "replace": "if (!isNum(base?.loss)) return [];",
     "killers": [
       {
         "cwd": "apps/web",
@@ -17,8 +17,8 @@
   {
     "id": "t16-pl-draw-guard",
     "file": "apps/web/src/lib/points-line.ts",
-    "find": "if (!isNum(base?.win) || !isNum(base?.draw) || !isNum(base?.loss)) return [];",
-    "replace": "if (!isNum(base?.win) || !isNum(base?.loss)) return [];",
+    "find": "    else return [];\n",
+    "replace": "    /*MUT*/\n",
     "killers": [
       {
         "cwd": "apps/web",
@@ -32,8 +32,8 @@
   {
     "id": "t16-pl-loss-guard",
     "file": "apps/web/src/lib/points-line.ts",
-    "find": "if (!isNum(base?.win) || !isNum(base?.draw) || !isNum(base?.loss)) return [];",
-    "replace": "if (!isNum(base?.win) || !isNum(base?.draw)) return [];",
+    "find": "if (!isNum(base?.win) || !isNum(base?.loss)) return [];",
+    "replace": "if (!isNum(base?.win)) return [];",
     "killers": [
       {
         "cwd": "apps/web",
