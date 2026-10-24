@@ -1,0 +1,270 @@
+{
+ "batch": "gf3-t2",
+ "note": "Test-id ledger for GF-3 T2 (a golden stream may carry foldOptions { forfeitAward }, the award the server folds a forfeit with; the recorder offers it to every prefix fold, the fold-epoch guard reads it as part of the stream's input, and twelve new streams give football, generic, hockey and icehockey each a landed and a withheld award), built against base bb26d10f03 (GF-3 T1 review ledger). Ids are relative to the engine collection ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --after <after-engine.json>=packages/engine --ledger this-file. Collect each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f>` (--isolate on BOTH sides) from the engine directory, the WHOLE package, DATABASE_URL empty. T2 adds 66 tests (6829 -> 6895 collected: 51 in src/testkit/golden-fold-options.test.ts, 12 in test/fold-epoch-guard.test.ts, 3 in test/fold-epoch-guard-cli.test.ts) and retitles none; it edits the bodies (not the titles) of existing tests that replay committed streams so they offer stream.foldOptions (src/testkit/golden-overlay.test.ts, golden-stats.test.ts, golden-format.test.ts, golden-branches.test.ts, golden-slim.test.ts, golden.test.ts), and the corpora, schema snapshots and GOLDEN-POLICY.md they read.",
+ "entries": [
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › every replay path of the toolchain offers a committed award stream its own options › a format-1 award stream recorded WITHOUT its options is a stale stream (would not survive), not an effective-only one: the second-chance replay offers the options too",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › every replay path of the toolchain offers a committed award stream its own options › rebaselineCorpus re-folds each award stream to the very bytes it holds, and moves the landed ones the day their options are dropped",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › every replay path of the toolchain offers a committed award stream its own options › reformatCorpus takes the format-1 view of a reading sport's corpus back to the committed bytes, award streams included",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › every replay path of the toolchain offers a committed award stream its own options › the mutation list is handed an award stream's options: the context's unmutated replay verifies clean in both storage forms (counted)",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › every replay path of the toolchain offers a committed award stream its own options › verifyStream accepts each award stream, and names what moved when the options are gone from a stream the award reaches (and only that kind)",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › extendFoldOptions - the append path › empty case first: a corpus with no holes gets nothing appended, and a second call is the same",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › extendFoldOptions - the append path › records each stream in its corpus's own format: a format-1 corpus gets the four stored fields and none of the kernel fields",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › extendFoldOptions - the append path › refuses a sport that has no config to record a story under (an empty corpus), by name",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › extendFoldOptions - the append path › refuses by name an identity another stream holds",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › extendFoldOptions - the append path › reports a hole its builder cannot close instead of inventing a stream, and refuses a built ledger that misses its story",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › extendFoldOptions - the append path › reproduces the committed award streams byte for byte from a corpus that lacks them, adds no config, and a second call appends nothing",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › extendFoldOptions - the append path › skips a story some recorded stream already reaches, whatever its config name or seed, and still appends the others",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › extendFoldOptions - the append path › stores an appended stream in the corpus's SLIM form: a ledger long enough to have digestible steps comes back digested (a custom story, since the committed ones are all anchors)",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › foldOptionConfigName - which recorded config the stories use › names `default` for the sports that have one and `score` for generic in the committed corpora (counted)",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › foldOptionConfigName - which recorded config the stories use › prefers `default`, then `score`, then the first config the corpus holds",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › foldOptionConfigName - which recorded config the stories use › refuses a corpus with no config, by sport name (the empty case)",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › foldOptions are checked where the recorder takes them: one rule, two implementations held to one set of inputs › strictFold hands the fold a COPY of the award, so a fold cannot reach back into the corpus object",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › foldOptions are checked where the recorder takes them: one rule, two implementations held to one set of inputs › strictFold refuses a malformed foldOptions by name and otherwise writes the write path's shape: strictFromSeq 0 and the award, no other key",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › foldOptions are checked where the recorder takes them: one rule, two implementations held to one set of inputs › the guard's foldOptionsProblem and the recorder's answer alike for every input (the same message, not only the same verdict)",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › the committed corpora reach every fold-option story, and the award is visible in what they record › a landed award is in the recorded final state, the headline and the table's credit; a withheld one changes none of them (the with/without differential, counted)",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › the committed corpora reach every fold-option story, and the award is visible in what they record › each stream is in the corpus's format (3: summaries, overlay and playerStats beside the options), slim, and appended after everything else",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › the committed corpora reach every fold-option story, and the award is visible in what they record › every story is reached by the stream recorded for it, and ONLY the reading sports record any foldOptions",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › the committed corpora reach every fold-option story, and the award is visible in what they record › leaves no sport with a hole, reporting how many stories, streams and sports it read",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › the committed corpora reach every fold-option story, and the award is visible in what they record › the award differs from the sport's own credit in BOTH numbers (derived from forfeitCredit and awardScoreKeys, not typed), so a dropped, swapped or ignored award shows",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › the committed corpora reach every fold-option story, and the award is visible in what they record › the offer is what forfeitAwardOffer gives a real PointsRule: a sport whose table the award never reaches records none",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › the fold-option stories: one per (reading sport, forfeit case), derived from the engine's declarations › a case's `lands` is the KERNEL's reading of its own ledger (unplayedForfeitEvent over playRecorded), for every committed story - not a value typed in the table",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › the fold-option stories: one per (reading sport, forfeit case), derived from the engine's declarations › the cases cover both arms of the kernel's rule: an award that lands, and one the kernel withholds",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › the fold-option stories: one per (reading sport, forfeit case), derived from the engine's declarations › there is one story per sport that declares awardScoreKeys and per case, in registry order then case order, each with an identity of its own",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › the policy text says what the corpora do (GOLDEN-POLICY.md) › documents the foldOptions field: what it is, that only forfeitAward is allowed, and that it is part of the stream's input identity",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › the policy text says what the corpora do (GOLDEN-POLICY.md) › no longer lists the server-only fold input among what the corpora cannot see, and says what stays unseen",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › the recomputation a reviewer is told to run is the whole input of the stream › a re-baseline report that cannot name a moved key prints the recompute line with the corpus format and the stream's foldOptions",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › the recorder offers a stream's foldOptions to every prefix fold, as the write path does (GF-3 T2) › EVERY prefix is offered it (format 1, 2 and 3 alike): the step before the forfeit holds no award, the forfeit's own step does, and the summary digest of that step moves",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › the recorder offers a stream's foldOptions to every prefix fold, as the write path does (GF-3 T2) › a forfeit AFTER play is not offered the award (the kernel withholds it), so offering one changes nothing in a stream the award never reaches",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › the recorder offers a stream's foldOptions to every prefix fold, as the write path does (GF-3 T2) › no foldOptions is today's recording, byte for byte: omitting the argument and passing undefined are the same (the empty case)",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › the recorder offers a stream's foldOptions to every prefix fold, as the write path does (GF-3 T2) › recomputeKernel and recomputeStats take the options too (the probe calls them directly), and agree with recomputeStream's stored fields",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › the recorder offers a stream's foldOptions to every prefix fold, as the write path does (GF-3 T2) › the ablation probe records BOTH of its ledgers under the stream's own options, so an award stream is probed as the server folds it (counted)",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › the recorder offers a stream's foldOptions to every prefix fold, as the write path does (GF-3 T2) › the floor's three recorders hand the options to the fold they wrap: each answers as the wrapped recompute does WITH them and not as it does without (counted)",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › the recorder offers a stream's foldOptions to every prefix fold, as the write path does (GF-3 T2) › the reading sports are the ones that declare awardScoreKeys, and a rule's award is offered to those and no others",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › the recorder offers a stream's foldOptions to every prefix fold, as the write path does (GF-3 T2) › with the award, every format records a different final state, summary and deltas than without it (counted over the reading sports)",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › the verdict `reached` rejects what is not its own: each guard has a counterfactual that only it rejects, and the reason is asserted › a build for a sport that never reads the award is null: there is no stream to record",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › the verdict `reached` rejects what is not its own: each guard has a counterfactual that only it rejects, and the reason is asserted › a case that says the award lands is rejected for a ledger the kernel withholds it from, and one that says it is withheld for a ledger it lands in",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › the verdict `reached` rejects what is not its own: each guard has a counterfactual that only it rejects, and the reason is asserted › a ledger that does not end in the case's forfeit is rejected (a Start alone, another reason, the other side forfeiting)",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › the verdict `reached` rejects what is not its own: each guard has a counterfactual that only it rejects, and the reason is asserted › a module whose forfeit credit lacks the metric keys it declared is reported, not read as a zero",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › the verdict `reached` rejects what is not its own: each guard has a counterfactual that only it rejects, and the reason is asserted › a module whose headline ignores the offered award, or whose table credit does, is rejected for that and only that (the module is the variable)",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › the verdict `reached` rejects what is not its own: each guard has a counterfactual that only it rejects, and the reason is asserted › a module whose state never holds the offered award is rejected for the state, before the headline or the credit are asked",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › the verdict `reached` rejects what is not its own: each guard has a counterfactual that only it rejects, and the reason is asserted › a retirement after play needs a sport event: a generator that never draws one leaves the story unbuildable (null), the unplayed cases still build",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › the verdict `reached` rejects what is not its own: each guard has a counterfactual that only it rejects, and the reason is asserted › a sport that declares no awardScoreKeys never reads an award, whatever the stream offers it",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › the verdict `reached` rejects what is not its own: each guard has a counterfactual that only it rejects, and the reason is asserted › a stream with no foldOptions is not a stream that offers the award, however its ledger ends",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › the verdict `reached` rejects what is not its own: each guard has a counterfactual that only it rejects, and the reason is asserted › an award equal to the sport's own credit is rejected: it would prove nothing about a dropped award",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › the verdict `reached` rejects what is not its own: each guard has a counterfactual that only it rejects, and the reason is asserted › an award the recorder refuses, or a ledger the module cannot fold, is a reason and not a throw",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › the verdict `reached` rejects what is not its own: each guard has a counterfactual that only it rejects, and the reason is asserted › every story's builder yields a ledger its own verdict accepts, with an award that differs from the sport's own credit in both numbers (counted)",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-3 T2 - foldOptions › a valid foldOptions is read, not refused as a key no format records: the same award on both sides is green, matched, and owes nothing",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-3 T2 - foldOptions › an award that changed owes a MAJOR even though no recorded output moved: removed AND added, never 'changed'; a bump pays it",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-3 T2 - foldOptions › each malformed foldOptions is refused (exit 2, nothing judged), naming the stream, whichever side holds it",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T2 - a stream's foldOptions are part of its input › a different award is a re-recorded stream (removed AND added, not changed), which owes a MAJOR even when every recorded output is byte for byte the same",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T2 - a stream's foldOptions are part of its input › a foldOptions that is only an empty object is not 'no foldOptions' to the input (parseCorpus refuses it; the pure rule does not guess)",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T2 - a stream's foldOptions are part of its input › an award written with its keys in another order is the same input (the order-insensitive form is asked only when the text differs)",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T2 - a stream's foldOptions are part of its input › each number of the pair matters on its own (winner first, so a swapped award is another input)",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T2 - a stream's foldOptions are part of its input › foldOptionsProblem: the shape parseCorpus accepts (two non-negative finite integers, no other key) › accepts the shapes the recorder writes",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T2 - a stream's foldOptions are part of its input › foldOptionsProblem: the shape parseCorpus accepts (two non-negative finite integers, no other key) › refuses everything else, naming what is wrong",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T2 - a stream's foldOptions are part of its input › gaining an award is a re-record, and so is losing one: the stream's fold changed either way",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T2 - a stream's foldOptions are part of its input › over every registered sport's real golden corpus › adding an award stream owes nothing (an appended stream is not a re-record), and the corpus without its award streams is the baseline of that add (counted)",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T2 - a stream's foldOptions are part of its input › over every registered sport's real golden corpus › changing, losing or swapping the award of any real award stream names exactly that sport and owes its major; the sport's own bump alone pays it (counted)",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T2 - a stream's foldOptions are part of its input › over every registered sport's real golden corpus › every recorded foldOptions passes the guard's own shape check, and exactly the sports that declare awardScoreKeys record any (counted)",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T2 - a stream's foldOptions are part of its input › the empty case first: streams that carry no foldOptions on either side are matched, as ever",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T2 - a stream's foldOptions are part of its input › the same award on both sides is the same input: matched, owes nothing",
+   "fate": "added"
+  }
+ ]
+}
