@@ -9,7 +9,13 @@
 //   * `Sentry.pinoIntegration()` forwards, from that same line, to Sentry Logs,
 //   * Node's `util.inspect` prints, i.e. every `console.error(err)` and Next's own uncaught-error log,
 // which no key-by-key redaction list can cover. The fix is at the source: the statement counter (a test instrument) is
-// switched on under vitest only, so a production client's errors carry nothing to leak.
+// switched on under vitest only, and production passes `debug: false` EXPLICITLY (an absent key falls back to a `?debug=` on
+// DATABASE_URL and to PGDEBUG, both probed below), so a production client's errors carry nothing to leak.
+//
+// A SECOND CLASS, beyond postgres.js: Postgres' own error fields (`detail` = the unique key or the whole failing row, `where`,
+// `hint`) are enumerable whatever `debug` says. The logger's `err` serializer and Sentry's `beforeSend` / `beforeSendLog` strip
+// them (lib/strip-db-echo.ts); the last describe below drives real constraint violations through every route. The same strip
+// is also a second guard for the statement fields, which the CONTROL test exercises with the counter on.
 //
 // THIS FILE drives the REAL pieces end to end, with no fixture on either end:
 //   * a real postgres.js client, built by lib/db.ts's own `getClient()` under each posture, failing a real query whose bind
@@ -19,14 +25,16 @@
 //   * the REAL Sentry SDK, initialised by the REAL sentry.server.config.ts (its beforeSend, beforeSendLog and pinoIntegration),
 //     with only the TRANSPORT replaced so the envelopes it would send can be read. Both Sentry paths are exercised: the pino
 //     line that `pinoIntegration` forwards as a Sentry Log, and `Sentry.captureException`.
-// The positive control is the SAME rig with the counting posture on: there the secrets DO come out, so the clean result of the
-// production posture is not a harness that cannot see a leak.
+// The positive control is the SAME rig with the counting posture on: there the secrets DO come out of the error itself and
+// off a line written without the app's serializers, so the clean result of the production posture is not a harness that
+// cannot see a leak. (Sentry's side has no remaining leak to show, by design; its guards are mutation-checked instead.)
 //
 // Needs a database (DATABASE_URL): the statement must really fail in Postgres for the driver to build its own error.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { inspect } from "node:util";
 import { randomBytes } from "node:crypto";
 import pino from "pino";
+import postgres from "postgres";
 import { LOGGER_OPTIONS } from "@/server/logger";
 import { countsStatements, sql, statementCount, withTenant } from "@/lib/db";
 
@@ -177,21 +185,32 @@ describe.skipIf(!HAS_DB)("a failed query's error does not carry its bind values 
     expect(JSON.stringify(events), "the message still reaches the Sentry event").toContain("no_such_table_for_redaction");
   });
 
-  it("POSITIVE CONTROL - the same rig with the statement counter on does carry the secrets, on every path (the rig can see a leak)", async () => {
+  it("CONTROL - with the statement counter on the error itself carries the secrets, and a pino WITHOUT the app's serializers writes them; the app's logger and Sentry hold even then", async () => {
     const { errors, all } = await run(true);
     for (const err of errors) {
       expect(Object.keys(err)).toEqual(expect.arrayContaining(["query", "parameters", "args", "types"]));
       for (const s of all) {
-        expect(JSON.stringify(err)).toContain(s);
-        expect(inspect(err, { depth: 6 })).toContain(s);
+        expect(JSON.stringify(err), "the error carries the secret").toContain(s);
+        expect(inspect(err, { depth: 6 }), "util.inspect of it, i.e. console.error").toContain(s);
       }
     }
-    for (const s of all) {
-      expect(lines.filter((l) => l.includes(s)).length, `${s} in the pino lines`).toBe(errors.length * 2);
+    // The rig can see a leak on a line: the logger's options WITHOUT the app's serializers write the secrets out.
+    const bare: string[] = [];
+    const bareLogger = pino({ ...LOGGER_OPTIONS, serializers: {}, level: "trace" }, { write: (s: string) => { bare.push(s); } });
+    for (const err of errors) bareLogger.error({ err }, "query failed");
+    expect(bare.length).toBe(errors.length);
+    for (const s of all) expect(bare.filter((l) => l.includes(s)).length, `${s} on a line from a logger without the serializers`).toBe(errors.length);
+
+    // Defence in depth: the guard at the source is `debug: false`; if it were ever lost, the app's own logger and the real
+    // Sentry hooks still strip the statement fields (the line and the Sentry payload carry the SQLSTATE and no secret).
+    expect(lines.length, "anti-vacuity: the app logger wrote its lines").toBe(errors.length * 2);
+    for (const line of lines) {
+      for (const s of all) expect(line).not.toContain(s);
+      expect(line).toContain("42P01");
     }
-    const logs = sentItems().items.filter((i) => i.type === "log");
-    expect(logs.length).toBeGreaterThan(0);
-    for (const s of all) expect(JSON.stringify(logs), `${s} in Sentry Logs`).toContain(s);
+    const { text, items } = sentItems();
+    expect(items.filter((i) => i.type === "log").length, "anti-vacuity: Sentry Logs were produced").toBeGreaterThan(0);
+    for (const s of all) expect(text).not.toContain(s);
   });
 });
 
@@ -216,5 +235,143 @@ describe.skipIf(!HAS_DB)("the statement counter stays live under vitest", () => 
     vi.stubEnv("VITEST", "");
     expect(countsStatements()).toBe(false);
     expect(() => statementCount()).toThrow(/only live under vitest/);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// I-1. "No `debug` key" is not "debug off": postgres.js falls back to `?debug=` on the connection string and to PGDEBUG when the
+// option is absent. Both are probed here against the production client; the control builds a bare postgres.js client the
+// same way and finds the leak, so the arming is known to work and the clean result below is the explicit `debug: false`.
+// ---------------------------------------------------------------------------------------------------------------------------
+const withDebugParam = (url: string) => `${url}${url.includes("?") ? "&" : "?"}debug=1`;
+const ARMINGS: [string, () => void][] = [
+  ["a ?debug=1 on DATABASE_URL", () => vi.stubEnv("DATABASE_URL", withDebugParam(process.env.DATABASE_URL!))],
+  ["PGDEBUG=1 in the environment", () => vi.stubEnv("PGDEBUG", "1")],
+];
+
+describe.skipIf(!HAS_DB)("the production client stays clean when something else asks postgres.js for debug", () => {
+  it.each(ARMINGS)("%s: a failed query's error still carries no statement fields and no bind values", async (_name, arm) => {
+    vi.stubEnv("VITEST", "");
+    arm();
+    await dropClient();
+    const secrets = mintSecrets();
+    const err = await failedQuery(secrets, "pool");
+    await dropClient();
+    vi.unstubAllEnvs();
+    const keys = Object.keys(err);
+    for (const leaky of ["query", "parameters", "args", "types"]) expect(keys, `own enumerable keys of the error: ${keys}`).not.toContain(leaky);
+    for (const s of [secrets.token, secrets.email]) {
+      expect(JSON.stringify(err)).not.toContain(s);
+      expect(inspect(err, { depth: 6 })).not.toContain(s);
+    }
+  });
+
+  it.each(ARMINGS)("CONTROL - %s does turn the leak on for a client that leaves `debug` out", async (_name, arm) => {
+    arm();
+    const secrets = mintSecrets();
+    const bare = postgres(process.env.DATABASE_URL!, { max: 1, ssl: false });
+    const err = await bare`insert into no_such_table_for_redaction (token) values (${secrets.token})`.then(
+      () => null,
+      (e: unknown) => e,
+    );
+    await bare.end();
+    vi.unstubAllEnvs();
+    if (!(err instanceof Error)) throw new Error("premise: the staged statement must fail");
+    expect(Object.keys(err)).toContain("parameters");
+    expect(JSON.stringify(err)).toContain(secrets.token);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// I-3. Postgres' OWN fields echo data too, whatever postgres.js does: `detail` carries the unique key or the WHOLE failing row
+// ("Failing row contains (3, <email>, <token>, -1)"), and PostgresError copies every server field onto the error as an
+// enumerable property. The app logs `{ err }` in ~60 places, so the logger's `err` serializer and Sentry's two hooks strip them,
+// leaving name, message, code, constraint_name, table_name, column_name, schema_name and the stack.
+//
+// Each case is a REAL constraint violation raised by Postgres through the production client, carrying unique secrets as bind
+// values. Four routes are driven: the app logger's pino line (on `err`, on `error`, and with the driver error nested inside
+// another error), Sentry Logs from that same line, Sentry.captureException with the console breadcrumb Next's own
+// `console.error(err)` leaves on the event, and a Sentry Log written directly with the error as an attribute.
+// ---------------------------------------------------------------------------------------------------------------------------
+type Kind = "unique" | "not null" | "check";
+const KINDS: { kind: Kind; code: string; keep: "constraint_name" | "column_name" }[] = [
+  { kind: "unique", code: "23505", keep: "constraint_name" },
+  { kind: "not null", code: "23502", keep: "column_name" },
+  { kind: "check", code: "23514", keep: "constraint_name" },
+];
+
+async function constraintFailure(kind: Kind, secrets: { token: string; email: string }): Promise<Error & Record<string, unknown>> {
+  const err = await sql
+    .begin(async (tx) => {
+      await tx`create temp table redact_probe (id int primary key, email text unique not null, token text not null, qty int check (qty >= 0)) on commit drop`;
+      if (kind === "unique") {
+        await tx`insert into redact_probe values (1, ${secrets.email}, ${secrets.token}, 1)`;
+        await tx`insert into redact_probe values (2, ${secrets.email}, 'another', 1)`;
+      } else if (kind === "not null") {
+        await tx`insert into redact_probe values (3, ${secrets.email}, null, 1)`;
+      } else {
+        await tx`insert into redact_probe values (4, ${secrets.email}, ${secrets.token}, -1)`;
+      }
+    })
+    .then(
+      () => null,
+      (e: unknown) => e,
+    );
+  if (!(err instanceof Error)) throw new Error("premise: the staged statement must fail");
+  return err as Error & Record<string, unknown>;
+}
+
+/** Every route an error takes out of the process, in one go. */
+async function emitEverywhere(err: Error): Promise<void> {
+  const outer = Object.assign(new Error("outer"), { inner: err });
+  sink.error({ err }, "constraint failed");
+  sink.error({ error: err }, "constraint failed (error key)");
+  sink.error({ err: outer }, "constraint failed (nested)");
+  console.error("unhandled", err); // what Next's own uncaught-error log does; Sentry's console integration keeps it as a breadcrumb
+  Sentry.captureException(err);
+  Sentry.logger.error("direct", { failure: err });
+  await flush();
+}
+
+describe.skipIf(!HAS_DB)("Postgres' own echo fields (detail, where, hint) do not reach logs or Sentry; the code and the constraint stay", () => {
+  it.each(KINDS)("$kind violation ($code)", async ({ kind, code, keep }) => {
+    vi.stubEnv("VITEST", "");
+    await dropClient();
+    const secrets = mintSecrets();
+    const err = await constraintFailure(kind, secrets);
+    await dropClient();
+    vi.unstubAllEnvs();
+    vi.stubEnv("VITEST", "true");
+
+    const all = [secrets.email, secrets.token];
+    expect(err.code, "premise: Postgres refused it for the staged reason").toBe(code);
+    expect(String(err.detail), "premise: Postgres echoed the bind value in `detail`").toContain(secrets.email);
+    expect(JSON.stringify(err), "premise: a raw log of the error would write it").toContain(secrets.email);
+    const kept = String(err[keep]);
+    expect(kept.length, `premise: the error names its ${keep}`).toBeGreaterThan(0);
+
+    await emitEverywhere(err);
+
+    // pino -> stdout: the app logger's real options.
+    expect(lines.length, "anti-vacuity: the three pino lines were written").toBe(3);
+    for (const line of lines) {
+      for (const s of all) expect(line, "a pino line").not.toContain(s);
+      expect(line, "the SQLSTATE is still logged").toContain(code);
+    }
+    for (const line of lines.filter((l) => !l.includes('"msg":"constraint failed (error key)"'))) {
+      expect(line, `the err serializer keeps ${keep}`).toContain(kept);
+    }
+
+    // Sentry: everything the real SDK would have sent (Logs from the pino lines, the direct Log, the event and its breadcrumbs).
+    const { text, items } = sentItems();
+    const logs = items.filter((i) => i.type === "log");
+    const events = items.filter((i) => i.type === "event");
+    expect(events.length, "anti-vacuity: the event was produced").toBe(1);
+    expect(JSON.stringify(events[0].payload), "anti-vacuity: the console breadcrumb carried the error to the event").toContain("breadcrumbs");
+    expect(JSON.stringify(logs), "anti-vacuity: the direct Sentry Log was produced").toContain('"direct"');
+    for (const s of all) expect(text, `the whole of what Sentry would receive must not contain ${s}`).not.toContain(s);
+    expect(JSON.stringify(events[0].payload), "the event still names the SQLSTATE (breadcrumb)").toContain(code);
+    expect(JSON.stringify(events[0].payload), `the event still names the ${keep}`).toContain(kept);
+    expect(JSON.stringify(logs), "the Logs still name the SQLSTATE").toContain(code);
   });
 });

@@ -27,11 +27,28 @@ const globalForDb = globalThis as unknown as { _sql?: Sql; _queryCount?: number 
  * pino's `err` serializer copies them into the stdout line, `pinoIntegration`
  * forwards that line to Sentry Logs, and `util.inspect` (so every
  * `console.error(err)`, Next's own uncaught-error log included) prints them,
- * all of which a key-by-key redaction list cannot reach. With `debug` unset the
+ * all of which a key-by-key redaction list cannot reach. With `debug` false the
  * same fields still exist but are not enumerable, so nothing that copies an
- * error's own fields can carry them. Production therefore passes no `debug`.
- * (Stack traces lose nothing: postgres.js still joins the call site's stack
- * onto the error.)
+ * error's own fields can carry them. Production therefore passes `debug:
+ * false` - EXPLICITLY, never by leaving the key out: postgres.js then falls
+ * back to a `?debug=` on DATABASE_URL and to the PGDEBUG variable, so a
+ * rotated secret or one env var on a machine would switch the leak back on
+ * (the same class as `fetch_types` below; both are probed in
+ * `__tests__/db-error-redaction.test.ts`).
+ *
+ * WHAT THIS COSTS, AND WAS ACCEPTED. Without `debug`, postgres.js builds a
+ * statement's origin stack once per template literal, 4 frames deep, from the
+ * first call (query.js `cachedError`), instead of a fresh `new Error()` per
+ * call. A failed statement issued from a SHARED helper therefore carries a
+ * stack that ends in the helper, not in the route or usecase that called it,
+ * and Sentry groups on those frames, so existing DB-error issues re-group
+ * (new issues, the old ones quiet) on the first deploy. No bind value in a
+ * log outweighs a caller frame (accepted in the PR 1009 review).
+ *
+ * WHAT THIS DOES NOT COVER. Postgres' own error fields (`detail`, `where`,
+ * `hint`: a unique key, or the whole failing row) are enumerable whatever
+ * `debug` says; the logger and Sentry strip them (lib/strip-db-echo.ts). A cast
+ * error's `message` quotes the value; that is parked.
  *
  * WHY VITEST. The runner sets `VITEST` itself in every worker, so a test can
  * never find the counter off by a missed config line; and the outbox suites
@@ -145,15 +162,15 @@ function getClient(): Sql {
     fetch_types: true,
     connect_timeout: 15,
     connection: { search_path: schema },
-    // Under vitest only - see countsStatements. A production `debug` would put
-    // every failed query's bind values on the error as enumerable fields.
-    ...(countsStatements()
-      ? {
-          debug: () => {
-            globalForDb._queryCount = (globalForDb._queryCount ?? 0) + 1;
-          },
+    // The counter under vitest only, and an explicit `false` otherwise - see
+    // countsStatements. A truthy `debug` (from here, from a `?debug=` on the
+    // URL or from PGDEBUG) puts every failed query's bind values on the error
+    // as enumerable fields; leaving the key out would let the last two do it.
+    debug: countsStatements()
+      ? () => {
+          globalForDb._queryCount = (globalForDb._queryCount ?? 0) + 1;
         }
-      : {}),
+      : false,
     types: {
       // Plain `date` columns (starts_on, ends_on, dob) stay 'YYYY-MM-DD'
       // strings — the API contracts declare them as strings and React can't

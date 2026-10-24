@@ -80,13 +80,14 @@ describe("db client singleton", () => {
 
   // SECURITY. A truthy `debug` makes postgres.js put every failed query's bind values on its error as ENUMERABLE fields, which
   // every logger and Sentry then writes out. The statement counter rides on `debug`, so it is a vitest-only instrument: the
-  // production client is built with none. (The behaviour - a real failed query, the real logger and Sentry - is
+  // production client is built with `debug: false`. (The behaviour - a real failed query, the real logger and Sentry - is
   // db-error-redaction.test.ts; this pins what postgres() is handed.)
-  it("production: postgres() is handed no `debug` hook at all", async () => {
+  it("production: postgres() is handed `debug: false` EXPLICITLY (an absent key falls back to ?debug= and PGDEBUG)", async () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("VITEST", "");
     const opts = await clientOptions();
-    expect(Object.keys(opts), "no `debug` key, not even a falsy one").not.toContain("debug");
+    expect(Object.keys(opts), "the key is there").toContain("debug");
+    expect(opts.debug).toBe(false);
   });
 
   it("under vitest: postgres() is handed a `debug` hook, and each call it receives is counted", async () => {
