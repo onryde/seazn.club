@@ -1726,4 +1726,79 @@ describe("fold-epoch guard: GF-3 T2 - a stream's foldOptions are part of its inp
       expect(BAD.length).toBeGreaterThanOrEqual(15);
     });
   });
+
+  describe("over every registered sport's real golden corpus", () => {
+    const real = new Map<string, GoldenCorpus>();
+    beforeAll(() => { forEachSport(({ key }) => { real.set(key, readCorpus(key)); }); }, treeBudget(builtinModules.length));
+    const only = (key: string, c: GoldenCorpus, epoch = 1): Side => ({ epochs: { [key]: epoch }, corpora: { [key]: c } });
+    const budget = (steps: number) => treeBudget(builtinModules.length, steps);
+    /** The sports whose corpus records an award: the engine's own declaration says which should (they read it), the corpus says which do. */
+    const awardStreams = (c: GoldenCorpus): GoldenStream[] => c.streams.filter((s) => s.foldOptions !== undefined);
+    const swap = (c: GoldenCorpus, i: number, over: Partial<GoldenStream>): GoldenCorpus => ({ ...c, streams: c.streams.map((s, at) => (at === i ? { ...s, ...over } : s)) });
+
+    it("every recorded foldOptions passes the guard's own shape check, and exactly the sports that declare awardScoreKeys record any (counted)", () => {
+      let sports = 0;
+      let withOptions = 0;
+      let readers = 0;
+      forEachSport(({ module, key }) => {
+        const found = awardStreams(real.get(key)!);
+        for (const s of found) expect(foldOptionsProblem(s.foldOptions), `${key} ${s.config}#${s.seed}`).toBeNull();
+        if (module.awardScoreKeys === undefined) expect(found, `${key} reads no award, so no stream offers it one`).toEqual([]);
+        else {
+          expect(found.length, `${key} reads the award, so its corpus offers it`).toBeGreaterThanOrEqual(3);
+          readers++;
+        }
+        withOptions += found.length;
+        sports++;
+      });
+      expect(sports).toBe(builtinModules.length);
+      expect(readers, "the reading sports exist").toBeGreaterThanOrEqual(4);
+      expect(withOptions, "and between them record award streams").toBeGreaterThanOrEqual(readers * 3);
+    }, budget(2));
+
+    it("changing, losing or swapping the award of any real award stream names exactly that sport and owes its major; the sport's own bump alone pays it (counted)", () => {
+      let checked = 0;
+      let variants = 0;
+      forEachSport(({ key }) => {
+        const c = real.get(key)!;
+        const at = c.streams.findIndex((s) => s.foldOptions !== undefined);
+        if (at === -1) return;
+        const [winner, loser] = c.streams[at]!.foldOptions!.forfeitAward;
+        const changes: Array<readonly [string, Partial<GoldenStream>]> = [
+          ["winner's number moved", { foldOptions: { forfeitAward: [winner + 1, loser] } }],
+          ["loser's number moved", { foldOptions: { forfeitAward: [winner, loser + 1] } }],
+          ["the pair swapped", { foldOptions: { forfeitAward: [loser, winner] } }],
+          ["the award dropped", { foldOptions: undefined }],
+        ];
+        for (const [what, over] of changes) {
+          const edited = swap(c, at, over);
+          const v = epochViolations(only(key, c), only(key, edited));
+          expect(v.map((x) => x.sport), `${key}: ${what}`).toEqual([key]);
+          expect(v[0], `${key}: ${what}`).toMatchObject({ matched: c.streams.length - 1, changed: 0, removed: 1, added: 1, owes: "major" });
+          expect(epochViolations(only(key, c), only(key, edited, 2)), `${key}: ${what}, bumped`).toEqual([]);
+          variants++;
+        }
+        // the control: an unchanged award is the same input
+        expect(epochViolations(only(key, c), only(key, swap(c, at, { foldOptions: { forfeitAward: [winner, loser] } }))), `${key}: unchanged`).toEqual([]);
+        checked++;
+      });
+      expect(checked, "every reading sport was edited").toBeGreaterThanOrEqual(4);
+      expect(variants).toBe(checked * 4);
+    }, budget(10));
+
+    it("adding an award stream owes nothing (an appended stream is not a re-record), and the corpus without its award streams is the baseline of that add (counted)", () => {
+      let checked = 0;
+      forEachSport(({ key }) => {
+        const c = real.get(key)!;
+        const found = awardStreams(c);
+        if (found.length === 0) return;
+        const baseline: GoldenCorpus = { ...c, streams: c.streams.filter((s) => s.foldOptions === undefined) };
+        expect(baseline.streams.length, `${key}: the award streams are the appended ones`).toBe(c.streams.length - found.length);
+        expect(epochViolations(only(key, baseline), only(key, c)), `${key}: added streams owe nothing`).toEqual([]);
+        expect(compareSides(only(key, baseline), only(key, c))[0], key).toMatchObject({ added: found.length, removed: 0, changed: 0 });
+        checked++;
+      });
+      expect(checked).toBeGreaterThanOrEqual(4);
+    }, budget(4));
+  });
 });
