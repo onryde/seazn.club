@@ -763,11 +763,14 @@ describe("W2d T4 — the refinement driver's guards", () => {
     for (const id of ["A", "B", "C"]) expect(trace(plain, id), id).toStrictEqual({ key: "lots", with: others(id) });
   });
 
-  it("direct at rank time reads the Swiss card as directEncounter does: a played meeting splits the pair and is explained; a forfeited one is no encounter", () => {
-    // A and B on 4 half-points each, B the higher seed. R1 A–B, C–D drawn; R2 C beat A, B beat D; R3 A–D, B beat C.
-    const seeds = new Map([["B", 1], ["A", 2]]);
-    const cascade: TiebreakerKey[] = ["points", "direct", "seed", "lots"];
-    // (1) A beat B over the board, and beat D by FORFEIT. Direct encounter: A 1-0 → A above B (the seed would say B).
+  // A and B on 4 half-points each, B the higher seed. R1 A–B, C–D drawn; R2 C beat A, B beat D; R3 A–D, B beat C.
+  const swissSeeds = new Map([["B", 1], ["A", 2]]);
+  const swissDirect: TiebreakerKey[] = ["points", "direct", "seed", "lots"];
+
+  it("direct at rank time: a played Swiss meeting splits the tied pair and is explained (FIDE C.07 art. 6)", () => {
+    const [seeds, cascade] = [swissSeeds, swissDirect];
+    // A beat B over the board, and beat D by FORFEIT. Direct encounter among the two: A 1-0 → A above B (the seed
+    // alone would say B).
     const played: SwissTable = [
       card("A", [game("B", "win"), game("C", "loss"), game("D", "win", true)]),
       card("B", [game("A", "loss"), game("D", "win"), game("C", "win")]),
@@ -780,8 +783,15 @@ describe("W2d T4 — the refinement driver's guards", () => {
     expect(ids(met)).toEqual(["A", "B", "C", "D"]);
     expect([trace(met, "A"), trace(met, "B")]).toStrictEqual([{ key: "direct", with: ["B"] }, { key: "direct", with: ["A"] }]);
     expect(ids(rankStandings(swissRows(played), { cascade: ["points", "seed", "lots"], swiss: played, seeds, rngSeed: 1 }))).toEqual(["B", "A", "C", "D"]);
-    // (2) The same scores, but A beat B by FORFEIT and D over the board. directEncounter reads an unplayed game as no
-    // meeting (tiebreakers.ts directEncounter), so the pair is level on direct and the seed decides: B above A.
+  });
+
+  it("direct at rank time on a forfeited Swiss meeting matches the engine's directEncounter (parity pin; no FIDE C.07 digest covers forfeits)", () => {
+    // NOT a rulebook value: the rulebook digests do not say whether a forfeit counts in direct encounter, so this pins
+    // only that the rank-time step and the exported pairwise reader agree (both skip `unplayed`). A FIDE ruling is
+    // owed; if it says a forfeit counts, both readers and this expected order change together.
+    const [seeds, cascade] = [swissSeeds, swissDirect];
+    // The same scores, but A beat B by FORFEIT and D over the board. directEncounter reads the unplayed game as no
+    // meeting, so the pair is level on direct and the seed decides: B above A.
     const forfeited: SwissTable = [
       card("A", [game("B", "win", true), game("C", "loss"), game("D", "win")]),
       card("B", [game("A", "loss", true), game("D", "win"), game("C", "win")]),
@@ -793,6 +803,31 @@ describe("W2d T4 — the refinement driver's guards", () => {
     const unmet = rankStandings(swissRows(forfeited), { cascade, swiss: forfeited, seeds, rngSeed: 1 });
     expect(ids(unmet)).toEqual(["B", "A", "C", "D"]);
     expect([trace(unmet, "B"), trace(unmet, "A")]).toStrictEqual([{ key: "seed", with: ["A"] }, { key: "seed", with: ["B"] }]);
+  });
+
+  it("the empty table: no entrants is no tie and no draw — lotsGroups [] for zero rows, whatever the cascade", () => {
+    // First principles: a drawing of lots separates entrants level on every key, so it needs at least two entrants.
+    // Zero rows have no tie to draw; an empty group in lotsGroups would ask an organiser to lock nobody.
+    let checked = 0;
+    for (const cascade of [["points", "lots"], ["points", "diff", "lots"], ["points", "direct", "lots"], BWF, ITTF, UEFA, ATP, FIDE_RR] as TiebreakerKey[][]) {
+      expect(rankStandings([], { cascade, rngSeed: 1 }), cascade.join(",")).toStrictEqual({ rows: [], lotsGroups: [] });
+      checked++;
+    }
+    expect(checked).toBe(8);
+  });
+
+  it("a stage with an empty pool emits no rank_lock_required for it (stage.ts emits one per lotsGroups entry)", () => {
+    // A group stage: pool A drew its one match (a real tie, so one lock naming both); pool B has only an unplayed
+    // fixture, so no member yet and nobody to draw.
+    const grouped = completeTableStage(
+      { id: "g", kind: "group", entrants: ["A1", "A2", "B1", "B2"], cascade: ["points", "lots"], rngSeed: 1 },
+      [{ id: "a", poolId: "A", status: "decided", result: fb("A1", "A2", 1, 1) }, { id: "b", poolId: "B", status: "scheduled" }],
+    );
+    expect(grouped.events.filter((e) => e.type === "rank_lock_required")).toEqual([{ type: "rank_lock_required", stageId: "g", group: ["A1", "A2"] }]);
+    expect(grouped.tables.pools.map((p) => [p.pool, p.rows.length])).toEqual([["A", 2], ["B", 0]]);
+    // A league stage with no entrants completes with an empty order and nothing to lock.
+    const league = completeTableStage({ id: "s", kind: "league", entrants: [], cascade: ["points", "lots"], rngSeed: 1 }, []);
+    expect(league.events).toEqual([{ type: "stage_completed", stageId: "s", finalRanks: [] }]);
   });
 
   it("the round-robin SB column is written only when the cascade ranks on sberger (B5's ledger is built for it alone)", () => {

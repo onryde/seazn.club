@@ -809,7 +809,7 @@
       "mutant": "src/competition/tiebreakers.ts:632:7 EqualityOperator → cls.length < 1",
       "original": "cls.length <= 1",
       "line": "if (cls.length <= 1) return [cls];",
-      "reason": "A class is never empty (refine only ever holds non-empty classes), so `< 1` is the `→ false` mutant above: a lone row gets a note no reader reaches, since markResidual only marks classes of two or more and a class never grows back."
+      "reason": "`< 1` and `<= 1` agree on every length but 1. On a class of one the mutant falls past the return: the class is not two, so the lone row gets the 'h2h_two_not_applicable' note and comes back unchanged. Only markResidual reads notes, on classes of two or more after the cascade, and classes only split, so a lone row is never in one again: the note is never read."
     },
     {
       "mutant": "src/competition/tiebreakers.ts:661:37 ArrayDeclaration → [\"Stryker was here\"]",
@@ -827,7 +827,7 @@
       "mutant": "src/competition/tiebreakers.ts:706:15 ConditionalExpression → false",
       "original": "cls.length <= 1",
       "line": "if (cls.length <= 1) return [cls];",
-      "reason": "A class of one without the shortcut goes to groupBySort: a one-row sort calls no comparator and returns [[row]], so `groups.length > 1` is false, nothing is marked and the same class comes back."
+      "reason": "Every class reaching the plain step has at least one row: rankStandings starts refine with no class at all when there are no rows (W2d T4 N1, so zero rows now give lotsGroups [], tested), and every step only splits a class into non-empty groups. On a class of one the mutant sends it to groupBySort, whose one-row sort calls no comparator and returns [[row]]; `groups.length > 1` is false, so nothing is marked and the same class comes back."
     },
     {
       "mutant": "src/competition/tiebreakers.ts:720:60 ArrayDeclaration → [\"Stryker was here\"]",
@@ -887,7 +887,7 @@
       "mutant": "src/competition/tiebreakers.ts:706:15 EqualityOperator → cls.length < 1",
       "original": "cls.length <= 1",
       "line": "if (cls.length <= 1) return [cls];",
-      "reason": "A class is never empty, so `< 1` is the `→ false` mutant above: a class of one goes to groupBySort, which returns [[row]] without a comparator call, `groups.length > 1` is false, and the same class comes back unmarked."
+      "reason": "`< 1` and `<= 1` agree on every length but 1. On a class of one the mutant sends it to groupBySort, which returns [[row]] without a comparator call, `groups.length > 1` is false, and the same class comes back unmarked: the `→ false` row's case."
     },
     {
       "mutant": "src/competition/points.ts:656:7 ConditionalExpression → false",

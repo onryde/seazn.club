@@ -422,7 +422,7 @@
     "files": [
      "src/competition/tiebreak-keys-w2d.test.ts"
     ],
-    "name": "direct at rank time"
+    "name": "direct at rank time: a played"
    }
   ]
  },
@@ -452,7 +452,7 @@
     "files": [
      "src/competition/tiebreak-keys-w2d.test.ts"
     ],
-    "name": "direct at rank time"
+    "name": "direct at rank time on a forfeited"
    }
   ]
  },
@@ -467,7 +467,7 @@
     "files": [
      "src/competition/tiebreak-keys-w2d.test.ts"
     ],
-    "name": "direct at rank time"
+    "name": "direct at rank time: a played"
    }
   ]
  },
@@ -482,7 +482,7 @@
     "files": [
      "src/competition/tiebreak-keys-w2d.test.ts"
     ],
-    "name": "direct at rank time"
+    "name": "direct at rank time: a played"
    }
   ]
  },
@@ -558,6 +558,36 @@
      "src/competition/tiebreak-keys-w2d.test.ts"
     ],
     "name": "the round-robin SB column"
+   }
+  ]
+ },
+ {
+  "id": "t4-empty-table-draws-an-empty-group",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "const classes = refine(clones.length === 0 ? [] : [clones], steps, run);",
+  "replace": "const classes = refine([clones], steps, run);",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "the empty table"
+   }
+  ]
+ },
+ {
+  "id": "t4-empty-pool-asks-to-lock-nobody",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "const classes = refine(clones.length === 0 ? [] : [clones], steps, run);",
+  "replace": "const classes = refine([clones], steps, run);",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "a stage with an empty pool"
    }
   ]
  }

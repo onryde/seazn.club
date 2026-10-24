@@ -760,7 +760,8 @@ export function rankStandings(rows: readonly StandingsRow[], ctx: RankContext): 
       ? buildPoolLedger(clones.map((row) => row.entrantId), ctx)
       : undefined;
   const run: RunContext = { ...ctx, poolLedger, notes: new Map() };
-  const classes = refine([clones], steps, run);
+  // No rows, no class: zero entrants are no tie, so there is nothing for lots to draw (W2d T4 N1).
+  const classes = refine(clones.length === 0 ? [] : [clones], steps, run);
   const hasLots = ctx.cascade.includes("lots");
   const rngSeed = ctx.rngSeed ?? 0;
 
