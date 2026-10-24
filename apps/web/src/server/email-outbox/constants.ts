@@ -128,6 +128,26 @@ export const MIN_SEND_INTERVAL_MS = RESEND_MIN_INTERVAL_MS + PACING_HEADROOM_MS;
  */
 export const DISPATCH_NOW_BUDGET_MS = 10_000;
 
+/** A row's `created_at` is the START of the transaction that wrote it (`now()`), and `dispatchNow` begins only after that transaction
+ *  has committed: a big round's write can run this long first. An allowance, not a measurement (final review M2). */
+export const DISPATCH_NOW_TX_ALLOWANCE_MS = 5_000;
+
+/**
+ * How long past `DISPATCH_NOW_BUDGET_MS` a request's `dispatchNow` can still be working on a row it claimed: the last claim is made
+ * just inside the budget and its request runs to `SEND_TIMEOUT_MS`; and the write transaction before it (`DISPATCH_NOW_TX_ALLOWANCE_MS`).
+ */
+export const DISPATCH_NOW_MARGIN_MS = SEND_TIMEOUT_MS + DISPATCH_NOW_TX_ALLOWANCE_MS;
+
+/**
+ * The first-attempt window (final review M2): a `queued` row that has never been attempted (`attempts = 0`) and is younger than this
+ * belongs to the request that wrote it - its `dispatchNow` is still sending the round, paced - so the worker leaves it alone. Without
+ * it a tick that lands mid-round sends the same round at the same time, and the two loops together exceed Resend's 2 requests a
+ * second and each stop at the first 429. Only never-attempted rows wait: a retry (`attempts > 0`) and a `sending` row whose lease
+ * lapsed are the worker's from the moment they are due. A row whose `dispatchNow` died (or deferred it past the budget) is sent by
+ * the first tick after the window.
+ */
+export const FIRST_ATTEMPT_WINDOW_MS = DISPATCH_NOW_BUDGET_MS + DISPATCH_NOW_MARGIN_MS;
+
 /** A tick stops claiming once it has run this long less the hook reserve (`HOOK_RESERVE_MS`); the hooks may run to this
  *  mark. Under prod's 60 s cadence, and (with one more pacing wait and one
  *  more request, `SEND_TIMEOUT_MS`) under the cron Worker's 60 s per-job timeout, which route.test.ts derives. */

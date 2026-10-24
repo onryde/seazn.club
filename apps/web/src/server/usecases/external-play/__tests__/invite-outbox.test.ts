@@ -23,6 +23,7 @@ import {
   ENDED_BADLY_STATUSES,
   LIVE_STATUSES,
   DISPATCH_NOW_BUDGET_MS,
+  FIRST_ATTEMPT_WINDOW_MS,
   MAX_ATTEMPTS,
   MIN_SEND_INTERVAL_MS,
   OUTBOX_STATUSES,
@@ -291,6 +292,10 @@ async function addMember(r: SeedOnlineChessRoundResult, entrantId: string, email
 
 /** Drive the retry worker over exactly these rows (the test seam), with no real waiting. */
 const tick = (ids: string[]) => runOutboxTick({ onlyIds: ids, sleep: async () => undefined });
+/** The request that wrote these rows is done with them (M2): they are older than the first-attempt window, so a tick may attempt
+ *  them. A row the request never attempted is the worker's only from then on. */
+const pastTheWindow = (ids: string[]) =>
+  sql`update email_outbox set created_at = created_at - make_interval(secs => ${FIRST_ATTEMPT_WINDOW_MS / 1000 + 60}) where id = any(${ids}::uuid[])`;
 /** Make a queued row due now with only its LAST attempt left, so the tick's attempt is the one that ends it. */
 const makeLastAttempt = (id: string) =>
   sql`update email_outbox set attempts = ${MAX_ATTEMPTS - 1}, next_attempt_at = now() - interval '1 second' where id = ${id}`;
@@ -671,9 +676,14 @@ describe.skipIf(!HAS_DB)("the first attempt: accepted, retried later, or refused
       const bridge = await bridgeOf(b.fixtureId);
       expect([bridge.white_emailed_at, bridge.black_emailed_at].every((x) => x !== null), "every seat stays stamped").toBe(true);
     }
-    // They are due now (a first attempt is immediate), so the worker sends them; a re-open has nobody left to invite.
+    // They are due now, but the request that wrote them is only just done (M2): a tick inside the first-attempt window leaves them to
+    // it, and the first one after the window sends them; a re-open has nobody left to invite.
     mail.afterDeliver = null;
-    expect(await tick(unreached.map((x) => x.id))).toMatchObject({ sent: unreached.length });
+    const unreachedIds = unreached.map((x) => x.id);
+    expect(await tick(unreachedIds), "inside the window the worker leaves the request's rows alone").toMatchObject({ claimed: 0, sent: 0 });
+    expect(mail.sent, "and nothing more was mailed").toHaveLength(SLOW_SEND);
+    await pastTheWindow(unreachedIds);
+    expect(await tick(unreachedIds)).toMatchObject({ sent: unreached.length });
     expect((await Promise.all(r.boards.map((b) => rowsOf(b.fixtureId)))).flat().every((x) => x.status === "sent")).toBe(true);
     expect(await open(r)).toEqual({ opened: false, reason: "already_open", skipped: [] });
   });
@@ -728,6 +738,7 @@ describe.skipIf(!HAS_DB)("the first attempt: accepted, retried later, or refused
     expect(row).toMatchObject({ status: "queued", attempts: 0 });
     expect(stampOf(await bridgeOf(b.fixtureId), awayColour), "the seat with a queued row stays stamped").not.toBeNull();
     expect(mail.sent, "nothing was sent in the request").toHaveLength(0);
+    await pastTheWindow([row!.id]); // the request is long done with it (M2)
     expect(await tick([row!.id])).toMatchObject({ claimed: 1 });
     expect((await freshRow(row!.id)).status, "the worker finishes the job").toBe("sent");
     expect(mail.sent.map((m) => m.to)).toEqual([b.away.email]);

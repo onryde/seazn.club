@@ -17,6 +17,7 @@ const roleMock = vi.hoisted(() => ({ ok: vi.fn<() => Promise<boolean>>() }));
 vi.mock("@/server/email-outbox/role-check", () => ({ outboxRoleOk: roleMock.ok, resetOutboxRoleCheck: () => {} }));
 
 import { KIND_HOOKS } from "../hooks";
+import { FIRST_ATTEMPT_WINDOW_MS } from "../constants";
 import { enqueueEmail } from "../enqueue";
 import { runOutboxTick, type OutboxTickReport } from "../worker";
 
@@ -72,12 +73,15 @@ describe("a tick when the role cannot write the outbox", () => {
 });
 
 describe.skipIf(!HAS_DB)("a tick that follows a role fix (DB)", () => {
+  /** A row the request is done with: born older than the first-attempt window (M2), so the worker may attempt it. */
   async function queue(over: { expiresAt?: Date } = {}): Promise<string> {
-    return enqueueEmail(sql, {
+    const id = await enqueueEmail(sql, {
       kind: "magic_link", refType: "login", refId: `${RUN}-${randomUUID()}`, orgId: null,
       to: `${randomUUID()}@x.test`, subject: "s", html: "<p>h</p>", text: "t", transactional: true,
       expiresAt: new Date(Date.now() + 15 * 60_000), ...over,
     });
+    await sql`update email_outbox set created_at = now() - make_interval(secs => ${FIRST_ATTEMPT_WINDOW_MS / 1000 + 60}) where id = ${id}`;
+    return id;
   }
   const row = async (id: string) => (await sql<{ status: string; attempts: number; body_sealed: Buffer | null; lease_until: Date | null }[]>`
     select status, attempts, body_sealed, lease_until from email_outbox where id = ${id}`)[0]!;

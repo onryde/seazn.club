@@ -8,7 +8,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { dispatchNow } from "../attempt";
-import { idempotencyKey } from "../constants";
+import { FIRST_ATTEMPT_WINDOW_MS, idempotencyKey } from "../constants";
 import { enqueueEmail, type OutboxMessage } from "../enqueue";
 import { runOutboxTick } from "../worker";
 
@@ -68,8 +68,14 @@ describe.skipIf(!HAS_DB)("the retry worker through the real transport (fetch is 
       select status, provider_id, attempts, last_error from email_outbox where id = ${id}`;
     return r!;
   };
+  /** The worker's turn: its time has come, and (M2) a never-attempted row is also older than the first-attempt window, so the
+   *  request that wrote it is done with it. */
   const makeDue = async (id: string) => {
-    await sql`update email_outbox set next_attempt_at = now() - interval '1 second' where id = ${id}`;
+    await sql`
+      update email_outbox
+         set next_attempt_at = now() - interval '1 second',
+             created_at = now() - make_interval(secs => ${FIRST_ATTEMPT_WINDOW_MS / 1000 + 60})
+       where id = ${id}`;
   };
 
   beforeAll(async () => {

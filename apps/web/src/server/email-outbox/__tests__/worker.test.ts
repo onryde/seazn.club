@@ -44,7 +44,10 @@ import { attemptClaimed, dispatchNow, toClaimedRow, type ClaimedRecord, type Cla
 import {
   ENDED_BADLY_STATUSES,
   CLAIM_CUTOFF_MS,
+  DISPATCH_NOW_BUDGET_MS,
+  DISPATCH_NOW_MARGIN_MS,
   ENDING_BATCH_SIZE,
+  FIRST_ATTEMPT_WINDOW_MS,
   HOOK_RESERVE_FRACTION,
   HOOK_RESERVE_MS,
   LEASE_MS,
@@ -220,9 +223,19 @@ describe.skipIf(!HAS_DB)("the email outbox retry worker (DB)", () => {
   const tick = (ids: readonly string[], extra: Partial<RunOutboxTickOptions> = {}): Promise<OutboxTickReport> =>
     runOutboxTick({ onlyIds: ids, ...fakeClock, ...extra });
 
-  async function queue(over: Partial<OutboxMessage> = {}): Promise<string> {
+  /** Born `secs` ago: the first-attempt window (final review M2) is judged on `created_at`, on the database's clock. */
+  const bornAgo = async (id: string, secs: number): Promise<void> => {
+    await sql`update email_outbox set created_at = now() - make_interval(secs => ${secs}) where id = ${id}`;
+  };
+  /**
+   * Queue a row. By default it is born a while ago - older than the first-attempt window - so a tick may attempt it, which is what
+   * nearly every test here is about (a worker finding work the request is done with). `{ fresh: true }` leaves it as it was
+   * written: a request's own row, whose `dispatchNow` may still be running (M2).
+   */
+  async function queue(over: Partial<OutboxMessage> = {}, opts: { fresh?: boolean } = {}): Promise<string> {
     const id = await enqueueEmail(sql, msg(over));
     created.push(id);
+    if (!opts.fresh) await bornAgo(id, FIRST_ATTEMPT_WINDOW_MS / 1000 + 60);
     return id;
   }
   const get = async (id: string): Promise<Row> => {
@@ -451,12 +464,14 @@ describe.skipIf(!HAS_DB)("the email outbox retry worker (DB)", () => {
     });
 
     it("a row that expires DURING the tick is not claimed: the claim reads expires_at on the clock of the claim", async () => {
-      const first = await queue();
-      const second = await queue({ expiresAt: new Date(Date.now() + 700) });
+      // The claim is deadline-first (M2), so the row that is sent first must be the one that expires first of the two, and the other
+      // must expire while it is being sent: deadlines 1.5 s and 1.8 s out, a first send that takes 2 s.
+      const first = await queue({ expiresAt: new Date(Date.now() + 1_500) });
+      const second = await queue({ expiresAt: new Date(Date.now() + 1_800) });
       await makeDue(first, 10);
       await makeDue(second, 5);
       deliverMock.mockImplementationOnce(async (m: Sent) => {
-        await new Promise((r) => setTimeout(r, 1_000)); // the first send takes longer than the second row has left
+        await new Promise((r) => setTimeout(r, 2_000)); // the first send takes longer than the second row has left
         return { ok: true, providerId: pid(idOf(m)) };
       });
       const report = await tick([first, second]);
@@ -771,11 +786,13 @@ describe.skipIf(!HAS_DB)("the email outbox retry worker (DB)", () => {
   // ---- the claim --------------------------------------------------------------------------------------------------------
 
   describe("the claim", () => {
-    it("takes the oldest due row first, ties broken by id, and never a row whose next_attempt_at is still ahead", async () => {
-      const a = await queue();
-      const b = await queue();
-      const c = await queue();
-      const future = await queue();
+    it("among rows with the same deadline: takes the oldest due row first, ties broken by id, and never a row whose next_attempt_at is still ahead", async () => {
+      // One deadline for all of them, so the deadline (the first key, M2) decides nothing and the next two keys are under test.
+      const sameDeadline = { expiresAt: new Date(Date.now() + 15 * MIN) };
+      const a = await queue(sameDeadline);
+      const b = await queue(sameDeadline);
+      const c = await queue(sameDeadline);
+      const future = await queue(sameDeadline);
       await makeDue(a, 180);
       await makeDue(c, 120);
       await makeDue(b, 60);
@@ -784,7 +801,7 @@ describe.skipIf(!HAS_DB)("the email outbox retry worker (DB)", () => {
       // order with probability 1 - 1/8!, so a claim with no id tiebreak cannot pass this by luck.
       const TIED = 8;
       const tied: string[] = [];
-      for (let i = 0; i < TIED; i++) tied.push(await queue());
+      for (let i = 0; i < TIED; i++) tied.push(await queue(sameDeadline));
       const same = new Date(Date.now() - 30_000);
       await sql`update email_outbox set next_attempt_at = ${same} where id = any(${tied}::uuid[])`;
 
@@ -886,6 +903,123 @@ describe.skipIf(!HAS_DB)("the email outbox retry worker (DB)", () => {
   });
 
   // ---- the report's other outcomes ---------------------------------------------------------------------------------------
+
+  // M2 (final review). Every row an open writes has the same `next_attempt_at` (the transaction's `now()`), so ordering by it alone
+  // claimed a round's leftover rows in uuid order, not by when each seat's check-in closes; and the claim took a never-attempted
+  // row while the request that wrote it was still sending the round, so the two loops sent at once (about 3.3 requests a second
+  // against Resend's 2) and each stopped at the first 429.
+  describe("M2 (final review): earliest deadline first, and a request's own first attempts are left to it", () => {
+    const P = randomUUID().slice(0, 8);
+    /** A row whose id sorts as `idNo` says (the primary key is rewritten; nothing references it). Ids carry a per-run prefix. */
+    async function queueWithId(over: Partial<OutboxMessage>, idNo: number): Promise<string> {
+      const id = await queue(over);
+      const fixed = `${P}-0000-4000-8000-${String(idNo).padStart(12, "0")}`;
+      await sql`update email_outbox set id = ${fixed} where id = ${id}`;
+      created.push(fixed);
+      return fixed;
+    }
+
+    it("the order is the deadline's: the row that expires soonest goes first although it is the LAST due and has the LARGEST id", async () => {
+      const deadlines = { late: 30, mid: 20, soon: 10 }; // minutes ahead
+      const at = (minutes: number) => ({ expiresAt: new Date(Date.now() + minutes * MIN) });
+      const late = await queueWithId(at(deadlines.late), 1); // smallest id, due first, expires last
+      const mid = await queueWithId(at(deadlines.mid), 2);
+      const soon = await queueWithId(at(deadlines.soon), 3); // largest id, due last, expires first
+      await makeDue(late, 180);
+      await makeDue(mid, 120);
+      await makeDue(soon, 60);
+      const rows = [
+        { id: late, deadline: deadlines.late, dueAgo: 180 },
+        { id: mid, deadline: deadlines.mid, dueAgo: 120 },
+        { id: soon, deadline: deadlines.soon, dueAgo: 60 },
+      ];
+      const byDeadline = [...rows].sort((x, y) => x.deadline - y.deadline).map((r) => r.id);
+      // Premises: the three keys disagree, so no other key can produce this order by luck.
+      expect(byDeadline, "premise: not the due order").not.toEqual([...rows].sort((x, y) => y.dueAgo - x.dueAgo).map((r) => r.id));
+      expect(byDeadline, "premise: not the id order").not.toEqual([...rows].map((r) => r.id).sort());
+
+      expect(await tick([late, mid, soon])).toEqual({ ...ZERO, claimed: 3, sent: 3 });
+      expect(sent().map(idOf)).toEqual(byDeadline);
+    });
+
+    it("the same deadline: the row due longest goes first, although its id is the largest", async () => {
+      const sameDeadline = { expiresAt: new Date(Date.now() + 20 * MIN) };
+      const first = await queueWithId(sameDeadline, 4); // smallest id, due LAST
+      const second = await queueWithId(sameDeadline, 5);
+      const third = await queueWithId(sameDeadline, 6); // largest id, due FIRST
+      await makeDue(first, 60);
+      await makeDue(second, 120);
+      await makeDue(third, 180);
+      expect(await tick([first, second, third])).toEqual({ ...ZERO, claimed: 3, sent: 3 });
+      expect(sent().map(idOf), "due order, then not id order").toEqual([third, second, first]);
+    });
+
+    it("the first-attempt window is a whole dispatchNow: its budget plus one request run to the timeout, and the write before it", () => {
+      expect(FIRST_ATTEMPT_WINDOW_MS).toBe(DISPATCH_NOW_BUDGET_MS + DISPATCH_NOW_MARGIN_MS);
+      expect(DISPATCH_NOW_MARGIN_MS, "a claim made just inside the budget runs to the send timeout").toBeGreaterThanOrEqual(SEND_TIMEOUT_MS);
+      expect(FIRST_ATTEMPT_WINDOW_MS).toBeGreaterThan(DISPATCH_NOW_BUDGET_MS + SEND_TIMEOUT_MS);
+      // A row the request never attempted must still reach the worker well before the first retry would: the window is short.
+      expect(FIRST_ATTEMPT_WINDOW_MS).toBeLessThan(RETRY_DELAYS_MS[0]!);
+    });
+
+    it("a never-attempted row inside the window is left alone (no claim, no delivery, not counted as due), and the first tick after it sends it", async () => {
+      const id = await queue({}, { fresh: true });
+      const windowSecs = FIRST_ATTEMPT_WINDOW_MS / 1000;
+      for (const age of [0, windowSecs - 5]) {
+        await bornAgo(id, age);
+        expect(await tick([id]), `born ${age} s ago: not the worker's yet`).toEqual(ZERO);
+        const row = await get(id);
+        expect([row.status, row.attempts, row.body_sealed === null], "untouched").toEqual(["queued", 0, false]);
+      }
+      expect(deliverMock).not.toHaveBeenCalled();
+
+      await bornAgo(id, windowSecs + 5);
+      expect(await tick([id]), "past the window it is an ordinary due row").toEqual({ ...ZERO, claimed: 1, sent: 1 });
+      expect(sent().map(idOf)).toEqual([id]);
+    });
+
+    it("the window is for FIRST attempts only: a retry and a reclaimed lease are the worker's at once, however young the row", async () => {
+      const retry = await queue({}, { fresh: true });
+      deliverMock.mockResolvedValueOnce(http(500, "internal_server_error"));
+      expect((await dispatchNow([retry])).get(retry)).toBe("retrying");
+      await makeDue(retry);
+      const stranded = await queue({}, { fresh: true });
+      await strand(stranded, 1);
+      for (const id of [retry, stranded]) {
+        const r = await get(id);
+        expect(Date.now() - r.status_at.getTime(), `premise: ${id} is young`).toBeLessThan(FIRST_ATTEMPT_WINDOW_MS);
+      }
+      deliverMock.mockClear();
+      expect(await tick([retry, stranded])).toEqual({ ...ZERO, claimed: 2, sent: 2 });
+      expect((await get(retry)).attempts).toBe(2);
+      expect((await get(stranded)).attempts).toBe(2);
+    });
+
+    it("the real producer: a dispatchNow stopped by a 429 leaves its tail queued; a tick inside the window leaves it, the first one after it sends it", async () => {
+      const [a, b, c] = [await queue({}, { fresh: true }), await queue({}, { fresh: true }), await queue({}, { fresh: true })];
+      deliverMock.mockResolvedValueOnce(http(429, "rate_limit_exceeded"));
+      const outcomes = await dispatchNow([a, b, c]);
+      expect([outcomes.get(a), outcomes.get(b), outcomes.get(c)]).toEqual(["retrying", "deferred", "deferred"]);
+      expect((await get(b)).attempts, "premise: the tail was never attempted").toBe(0);
+
+      deliverMock.mockClear();
+      expect(await tick([a, b, c]), "inside the window: a is not due, b and c are the request's").toEqual(ZERO);
+      expect(deliverMock).not.toHaveBeenCalled();
+
+      await bornAgo(b, FIRST_ATTEMPT_WINDOW_MS / 1000 + 5);
+      await bornAgo(c, FIRST_ATTEMPT_WINDOW_MS / 1000 + 5);
+      expect(await tick([a, b, c]), "past it the tail is the worker's; a keeps its retry delay").toEqual({ ...ZERO, claimed: 2, sent: 2 });
+      expect(sent().map(idOf), "b was written before c, so its deadline is earlier: it goes first").toEqual([b, c]);
+      expect((await get(a)).attempts, "a is still waiting out its retry delay").toBe(1);
+    });
+
+    it("expiry is not held back by the window: a young never-attempted row past its deadline is still ended expired", async () => {
+      const id = await queue({}, { fresh: true });
+      await expireNow(id);
+      expect(await tick([id])).toEqual({ ...ZERO, expired: 1 });
+      expect((await get(id)).status).toBe("expired");
+    });
+  });
 
   describe("every outcome lands in its own counter", () => {
     it("one tick with a sent, a retried, a dead, a suppressed, a thrown and a replaced-mid-flight row: each counted once, and claimed is the sum", async () => {

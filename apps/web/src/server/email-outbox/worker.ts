@@ -13,10 +13,11 @@ import "server-only";
 //     goes with them: a late sign-in link is worse than none), the longest-expired first, at most ENDING_BATCH_SIZE;
 //  2. ends `dead` ('attempts_exhausted') the `sending` rows with a lapsed lease that have spent MAX_ATTEMPTS: the last
 //     attempt crashed and there is none left to reclaim it with. Same bound, longest-lapsed first;
-//  3. claims one due row at a time, up to WORKER_BATCH_SIZE, and attempts it (`attemptClaimed`, the same function
-//     `dispatchNow` uses, so the rules live in one place). A claim takes a `queued` row whose time has come OR a `sending`
-//     row whose lease has lapsed (R9: a 2xx whose recording write failed leaves exactly such a row, and re-sending it under
-//     the SAME idempotency key yields one provider message), sets `sending`, `attempts + 1` and a lease in the claiming
+//  3. claims one due row at a time, up to WORKER_BATCH_SIZE, earliest deadline first, and attempts it (`attemptClaimed`, the same
+//     function `dispatchNow` uses, so the rules live in one place). A claim takes a `queued` row whose time has come (a
+//     never-attempted one only once it is older than FIRST_ATTEMPT_WINDOW_MS: before that its request's `dispatchNow` owns it,
+//     M2) OR a `sending` row whose lease has lapsed (R9: a 2xx whose recording write failed leaves exactly such a row, and
+//     re-sending it under the SAME idempotency key yields one provider message), sets `sending`, `attempts + 1` and a lease in the claiming
 //     statement (R10: the post-send writes are fenced on that attempt number), and skips rows another tick holds;
 //  4. before each attempt but the first waits out the rest of MIN_SEND_INTERVAL_MS since the previous attempt began
 //     (Resend: 2 requests a second), and stops claiming at the claim cut-off (`claimCutoffMs`: the budget less the
@@ -41,6 +42,7 @@ import { log } from "@/server/logger";
 import { attemptClaimed, endedRowFor, errFields, toClaimedRow, type AttemptOutcome, type ClaimedRecord } from "./attempt";
 import {
   ENDING_BATCH_SIZE,
+  FIRST_ATTEMPT_WINDOW_MS,
   LEASE_MS,
   MAX_ATTEMPTS,
   MIN_SEND_INTERVAL_MS,
@@ -97,9 +99,16 @@ const scopeOf = (onlyIds: readonly string[] | undefined) =>
   onlyIds === undefined ? sql`` : sql`and id = any(${onlyIds as string[]}::uuid[])`;
 
 /** Rows that are due right now: a `queued` row whose time has come, or a `sending` row whose lease has lapsed, with an
- *  attempt left and time left. One fragment shared by the claim and the deferred count, so they cannot disagree. */
+ *  attempt left and time left. One fragment shared by the claim and the deferred count, so they cannot disagree.
+ *
+ *  M2: a `queued` row that has never been attempted (`attempts = 0`) is the worker's only once it is older than the first-attempt
+ *  window (FIRST_ATTEMPT_WINDOW_MS, judged on the database's clock): until then the request that wrote it is still sending its
+ *  round (`dispatchNow`), and a tick that sent the same rows at the same time would double the rate Resend is asked for. A retry
+ *  (`attempts > 0`) and a `sending` row whose lease lapsed carry no such owner, so the window does not touch them. */
 const dueNow = (onlyIds: readonly string[] | undefined) => sql`
-  ((status = 'queued' and next_attempt_at <= now()) or (status = 'sending' and lease_until < now()))
+  ((status = 'queued' and next_attempt_at <= now()
+      and (attempts > 0 or created_at <= now() - make_interval(secs => ${FIRST_ATTEMPT_WINDOW_MS / 1000})))
+    or (status = 'sending' and lease_until < now()))
   and attempts < ${MAX_ATTEMPTS} and expires_at > now() ${scopeOf(onlyIds)}`;
 
 type EndedRecord = { id: string; kind: OutboxKind; ref_type: string; ref_id: string; meta: Record<string, string> };
@@ -144,8 +153,10 @@ function endExhausted(onlyIds: readonly string[] | undefined): Promise<EndedReco
 }
 
 /**
- * Step 3's claim, one row: the oldest due row (ties by id) that no other transaction holds, set to `sending` with
- * `attempts + 1` and a lease in the same statement. `for update skip locked` is the registrations.ts pattern: a second tick
+ * Step 3's claim, one row: the due row whose deadline is earliest (M2: then the one due longest, then the lower id) that no other
+ * transaction holds, set to `sending` with `attempts + 1` and a lease in the same statement. The deadline leads because the rows
+ * an open writes share one `next_attempt_at` (the transaction's `now()`), so that key alone would take a round's leftovers in uuid
+ * order and let a board whose check-in closes first expire behind boards that close later. `for update skip locked` is the registrations.ts pattern: a second tick
  * passes over a row the first is claiming instead of waiting for it.
  */
 async function claimOne(onlyIds: readonly string[] | undefined): Promise<ClaimedRecord | undefined> {
@@ -153,7 +164,7 @@ async function claimOne(onlyIds: readonly string[] | undefined): Promise<Claimed
     with picked as (
       select id from email_outbox
        where ${dueNow(onlyIds)}
-       order by next_attempt_at, id
+       order by expires_at, next_attempt_at, id
        limit 1
        for update skip locked
     )
