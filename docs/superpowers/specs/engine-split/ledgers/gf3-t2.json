@@ -1,6 +1,6 @@
 {
  "batch": "gf3-t2",
- "note": "Test-id ledger for GF-3 T2 (a golden stream may carry foldOptions { forfeitAward }, the award the server folds a forfeit with; the recorder offers it to every prefix fold, the fold-epoch guard reads it as part of the stream's input, and sixteen new streams give football, generic, hockey and icehockey each a landed, a withheld and a void-struck-play award), built against base bb26d10f03 (GF-3 T1 review ledger). Ids are relative to the engine collection ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --after <after-engine.json>=packages/engine --ledger this-file. Collect each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f>` (--isolate on BOTH sides) from the engine directory, the WHOLE package, DATABASE_URL empty. T2 plus its review round adds 68 tests (6829 -> 6897 collected: 53 in src/testkit/golden-fold-options.test.ts, 12 in test/fold-epoch-guard.test.ts, 3 in test/fold-epoch-guard-cli.test.ts) and retitles none; it edits the bodies (not the titles) of existing tests that replay committed streams so they offer stream.foldOptions (src/testkit/golden-overlay.test.ts, golden-stats.test.ts, golden-format.test.ts, golden-branches.test.ts, golden-slim.test.ts, golden.test.ts), and the corpora, schema snapshots and GOLDEN-POLICY.md they read.",
+ "note": "Test-id ledger for GF-3 T2 (a golden stream may carry foldOptions { forfeitAward }, the award the server folds a forfeit with; the recorder offers it to every prefix fold, the fold-epoch guard reads it as part of the stream's input, and sixteen new streams give football, generic, hockey and icehockey each a landed, a withheld and a void-struck-play award), built against base bb26d10f03 (GF-3 T1 review ledger). Ids are relative to the engine collection ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --after <after-engine.json>=packages/engine --ledger this-file. Collect each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f>` (--isolate on BOTH sides) from the engine directory, the WHOLE package, DATABASE_URL empty. T2 plus its review round and the batch-review round adds 75 tests (6829 -> 6904 collected: 54 in src/testkit/golden-fold-options.test.ts, 17 in test/fold-epoch-guard.test.ts, 4 in test/fold-epoch-guard-cli.test.ts) and retitles none of the tests that exist on the base (one T2 test was retitled inside the branch by the batch review, n4, so its ledger entry carries the new title); it edits the bodies (not the titles) of existing tests that replay committed streams so they offer stream.foldOptions (src/testkit/golden-overlay.test.ts, golden-stats.test.ts, golden-format.test.ts, golden-branches.test.ts, golden-slim.test.ts, golden.test.ts), and the corpora, schema snapshots and GOLDEN-POLICY.md they read.",
  "entries": [
   {
    "id": "src/testkit/golden-fold-options.test.ts › every replay path of the toolchain offers a committed award stream its own options › a format-1 award stream recorded WITHOUT its options is a stale stream (would not survive), not an effective-only one: the second-chance replay offers the options too",
@@ -99,7 +99,7 @@
    "fate": "added"
   },
   {
-   "id": "src/testkit/golden-fold-options.test.ts › the committed corpora reach every fold-option story, and the award is visible in what they record › the offer is what forfeitAwardOffer gives a real PointsRule: a sport whose table the award never reaches records none",
+   "id": "src/testkit/golden-fold-options.test.ts › the committed corpora reach every fold-option story, and the award is visible in what they record › a sport records award streams exactly when forfeitAwardOffer makes an offer to it for a real PointsRule: no offer, no stream (counted)",
    "fate": "added"
   },
   {
@@ -272,6 +272,34 @@
   },
   {
    "id": "src/testkit/golden-fold-options.test.ts › the verdict `reached` rejects what is not its own: each guard has a counterfactual that only it rejects, and the reason is asserted › the void x award corner is told apart from its neighbours: a play struck by a void is what the voided story needs and the unplayed one must not have",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › the policy text says what the corpora do (GOLDEN-POLICY.md) › states the route when forfeitAwardOffer changes, and that an award-only re-record keeps its stats comparable (GF-3 batch review m1, m2, n2, n6)",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-3 T2 - foldOptions › an award edited beside a recorded stats move still owes STATS_FOLD_VERSION though the major is raised (B1); a stats bump pays it; the same edit with the stats unchanged is green (A2)",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › the rule › a stream re-recorded ONLY because its foldOptions differ keeps its stats comparable (GF-3 batch review m1: the stats fold takes no fold options) › a change to the events, the lineups or the config beside the award keeps the stats NOT comparable: the input the stats fold takes did change",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › the rule › a stream re-recorded ONLY because its foldOptions differ keeps its stats comparable (GF-3 batch review m1: the stats fold takes no fold options) › gaining an award and losing one are the same: the stats beside them still count",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › the rule › a stream re-recorded ONLY because its foldOptions differ keeps its stats comparable (GF-3 batch review m1: the stats fold takes no fold options) › the review's A2, the control: the award edited, the stats the same, the major raised - nothing is owed",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › the rule › a stream re-recorded ONLY because its foldOptions differ keeps its stats comparable (GF-3 batch review m1: the stats fold takes no fold options) › the review's B1: the award edited, the stats moved, the sport's major raised - the major is paid, the STATS_FOLD_VERSION rise is still owed",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › the rule › a stream re-recorded ONLY because its foldOptions differ keeps its stats comparable (GF-3 batch review m1: the stats fold takes no fold options) › the sport still owes its major for the re-record, and a stats bump pays the version alone",
    "fate": "added"
   }
  ]
