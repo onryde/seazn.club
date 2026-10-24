@@ -16,10 +16,7 @@
 // Rendered by the stage card only while the club is offered online chess
 // (T20: an open STARTS play); the page decides that, not this component.
 // One DOM, mobile-first: one column, `min-w-0` down every name, 44px targets.
-import { useMemo, useReducer } from "react";
-import { useRouter } from "next/navigation";
 import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
-import { apiV1 } from "@/lib/client-v1";
 import { fmtTime } from "@/lib/format";
 import type { MessageKey } from "@/lib/messages";
 import { ONLINE_CHESS_DISABLED_CODE } from "@/lib/online-chess";
@@ -38,13 +35,8 @@ import { ConfirmDialog } from "../confirm-dialog";
 import { extendEdgesOf, liveExtendableCount, liveRoundRefusals, roundWhy } from "@/lib/checkin-extend";
 import { extendFailureText, extendHelperLine, extendRoundLabel, extendRoundLines, roundWhyLine, type ExtendCopy } from "../checkin-extend-ui";
 import { useExtendClock } from "../use-extend-clock";
-import {
-  initialOpenRoundUi,
-  openRoundRunner,
-  openRoundUi,
-  type OpenRoundNotice,
-  type ResendNotice,
-} from "./open-round-state";
+import type { OpenRoundNotice, ResendNotice } from "./open-round-state";
+import { useOpenRound } from "./use-open-round";
 
 type Msg = ReturnType<typeof useMsg>;
 type Plural = ReturnType<typeof useMsgPlural>;
@@ -57,7 +49,7 @@ const BUTTON_PRIMARY =
 const BUTTON_QUIET =
   "inline-flex min-h-11 items-center justify-center rounded-lg border border-[#e7e3f3] bg-white px-3 text-sm font-medium text-[#5b21b6] hover:bg-[#f5f3ff] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7c3aed] disabled:opacity-60";
 
-const owedPlayers = (round: OpenRoundView) => round.pairings.reduce((n, p) => n + p.owedSeats, 0);
+export const owedPlayers = (round: OpenRoundView) => round.pairings.reduce((n, p) => n + p.owedSeats, 0);
 
 /** Seats this round's open already invited: two per board minus what it still owes, on the boards with a stamp. */
 const alreadyInvitedPlayers = (round: OpenRoundView) =>
@@ -74,7 +66,7 @@ function names(p: OpenRoundPairing, msg: Msg) {
 }
 
 /** One pairing's invite state, in words: "Not invited", "Invited 19:04", partly, or past inviting. */
-function inviteState(p: OpenRoundPairing, tz: string, msg: Msg, plural: Plural) {
+export function inviteState(p: OpenRoundPairing, tz: string, msg: Msg, plural: Plural) {
   if (p.invitedAt === null) {
     return p.owedSeats > 0 ? msg("runsheet.round.notInvited") : msg("runsheet.round.noInviteOwed");
   }
@@ -98,7 +90,7 @@ const boardLabel = (p: OpenRoundPairing, msg: Msg) => msg("arbiter.boardNo", { n
  *  (open-round-view.ts: one open row feeds every batch) never makes a batch with one time and not the other, or a round with
  *  some batches timed and some not - but the type allows both, and a row with a hole in it is worse than no list, so either
  *  draws nothing and the single "open until" line stays the truth. Both are reached by open-round-control.test.tsx. */
-function timedBatches(round: OpenRoundView): (OpenRoundBatch & { opensAt: string; closesAt: string })[] | null {
+export function timedBatches(round: OpenRoundView): (OpenRoundBatch & { opensAt: string; closesAt: string })[] | null {
   if (round.press === "reopen" || !round.staggered || round.batches.length < 2) return null;
   const timed = round.batches.flatMap((b) => (b.opensAt !== null && b.closesAt !== null ? [{ ...b, opensAt: b.opensAt, closesAt: b.closesAt }] : []));
   return timed.length === round.batches.length ? timed : null;
@@ -168,7 +160,7 @@ export function OpenRoundConfirmBody({ round, tz }: { round: OpenRoundView; tz: 
   );
 }
 
-function openNoticeText(n: OpenRoundNotice, round: OpenRoundView, msg: Msg, plural: Plural): string[] {
+export function openNoticeText(n: OpenRoundNotice, round: OpenRoundView, msg: Msg, plural: Plural): string[] {
   if (n.kind === "failed") {
     if (n.code === ONLINE_CHESS_DISABLED_CODE) return [msg("runsheet.round.err.disabled")];
     if (n.code === "ROUND_CHANGED") return [msg("runsheet.round.err.roundChanged")];
@@ -195,7 +187,7 @@ function openNoticeText(n: OpenRoundNotice, round: OpenRoundView, msg: Msg, plur
   ];
 }
 
-function resendNoticeText(n: ResendNotice, msg: Msg, plural: Plural): string {
+export function resendNoticeText(n: ResendNotice, msg: Msg, plural: Plural): string {
   if (n.kind === "resent") {
     // Both facts when both are true; "could not be sent" only when nothing went out AND nothing is waiting to.
     const lines = [
@@ -214,15 +206,11 @@ function resendNoticeText(n: ResendNotice, msg: Msg, plural: Plural): string {
 export function OpenRoundControl({ round, tz }: { round: OpenRoundView; tz: string }) {
   const msg = useMsg();
   const plural = useMsgPlural();
-  const router = useRouter();
-  const [state, dispatch] = useReducer(openRoundUi, undefined, initialOpenRoundUi);
+  const handle = useOpenRound(round);
+  const { state } = handle;
   // The ticking clock for "+5 min" (owner, 2026-10-19: only inside a board's check-in window, to the millisecond, not up to a poll late).
   // Runs only while there is a window to watch: the round is open and some board's window is still ahead or running.
   const clockMs = useExtendClock(round.state === "open" && round.extendWindows.length > 0, extendEdgesOf(round.extendWindows));
-  const runner = useMemo(
-    () => openRoundRunner({ dispatch, post: (path, body) => apiV1(path, { method: "POST", json: body }), refresh: () => router.refresh() }),
-    [router],
-  );
 
   // The reader never sends a round with no pairing (openRound: no_fixtures); a guard, not a comment.
   if (round.pairings.length === 0) {
@@ -309,7 +297,7 @@ export function OpenRoundControl({ round, tz }: { round: OpenRoundView; tz: stri
           type="button"
           data-testid="open-round-cta"
           disabled={state.busy !== null}
-          onClick={() => dispatch({ type: "ask" })}
+          onClick={handle.ask}
           className={`${BUTTON_PRIMARY} mt-2 w-full sm:w-auto`}
         >
           {cta}
@@ -324,7 +312,7 @@ export function OpenRoundControl({ round, tz }: { round: OpenRoundView; tz: stri
                 data-testid="open-round-extend-cta"
                 disabled={state.busy !== null}
                 aria-busy={state.busy?.kind === "extend" || undefined}
-                onClick={() => void runner.extend(round.stageId, round.roundNo)}
+                onClick={handle.extend}
                 className={`${BUTTON_QUIET} w-full sm:w-auto`}
               >
                 {state.busy?.kind === "extend" ? msg("externalPlay.checkinExtend.busy") : extendRoundLabel(copy)}
@@ -398,7 +386,7 @@ export function OpenRoundControl({ round, tz }: { round: OpenRoundView; tz: stri
                   type="button"
                   data-testid={`open-round-resend-${p.fixtureId}`}
                   disabled={state.busy !== null}
-                  onClick={() => void runner.resend(p.fixtureId)}
+                  onClick={() => handle.resend(p.fixtureId)}
                   className={BUTTON_QUIET}
                 >
                   {msg("runsheet.round.resend")}
@@ -422,8 +410,8 @@ export function OpenRoundControl({ round, tz }: { round: OpenRoundView; tz: stri
         confirmVariant="primary"
         cancelLabel={msg("confirm.cancel")}
         busy={state.busy !== null}
-        onConfirm={() => void runner.open(round.stageId, round.roundNo)}
-        onCancel={() => dispatch({ type: "cancel" })}
+        onConfirm={handle.open}
+        onCancel={handle.cancel}
       >
         <OpenRoundConfirmBody round={round} tz={tz} />
       </ConfirmDialog>
