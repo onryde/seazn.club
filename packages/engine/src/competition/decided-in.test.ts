@@ -8,13 +8,21 @@ import { SETTLE_METHODS, settledMethod } from "../core/events.ts";
 import { BRACKET_KINDS, DRAW_KINDS, MatchOutcome, OUTCOME_KINDS, StageKind } from "../core/types.ts";
 import { FOLD_EPOCH } from "../sport/fold-epoch.ts";
 import type { AnySportModule } from "../sport/module.ts";
+// single-sport: chess's result methods and tie-break rungs (X-PT-2) are boardgame's own schema; the sweeps below cover every sport
 import { BoardgameMethod, BoardgameResult, TIEBREAK_RUNGS, boardgame } from "../sports/boardgame/boardgame.ts";
+// single-sport: carrom is the non-set sport pinned to declare no unplayed loss (D6); the sweeps below cover every sport
 import { carrom } from "../sports/carrom/carrom.ts";
+// single-sport: cricket is the one sport with a super over, a boundary count, a tie and a no result (D10(c))
 import { cricket } from "../sports/cricket/cricket.ts";
+// single-sport: SPEC §5.2's extra-time and shoot-out mapping and the named refusal are football's (FIFA) rows
 import { football } from "../sports/football/football.ts";
+// single-sport: FIH hockey is the one sport counting regulation wins only (HK-TB-1) and its fih presets' deciders
 import { hockey } from "../sports/hockey/hockey.ts";
+// single-sport: IIHF's iihf and recreational variants (regulation, OT, GWS) are ice hockey's own declarations
 import { icehockey } from "../sports/icehockey/icehockey.ts";
+// single-sport: table tennis is the one sport declaring an unplayed loss (D6) and its bo7 set scores (ITTF)
 import { tabletennis } from "../sports/setbased/tabletennis.ts";
+// single-sport: VB set scores per bestOf are volleyball's indoor and beach variants (FIVB)
 import { volleyball } from "../sports/setbased/volleyball.ts";
 import { declaredCfgs } from "../testkit/declared-cfgs.ts";
 import { forEachSport } from "../testkit/for-each-sport.ts";
