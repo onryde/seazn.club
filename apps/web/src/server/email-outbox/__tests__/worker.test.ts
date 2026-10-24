@@ -1294,10 +1294,14 @@ describe.skipIf(!HAS_DB)("the email outbox retry worker (DB)", () => {
       const young = [await finishedRow(RETENTION_DAYS - 1), await finishedRow(0)];
       const all = [...old, ...young];
       expect(await tick(all)).toEqual({ ...ZERO, purged: old.length });
+      expect(logMock.info, "a tick that only purged still logs its report").toHaveBeenCalledTimes(1);
+      expect(logMock.info.mock.calls[0]![0]).toMatchObject({ purged: old.length });
       const left = await present(all);
       expect(old.filter((id) => left.has(id)), "every old row went").toEqual([]);
       expect(young.filter((id) => !left.has(id)), "a row a day inside the retention stayed").toEqual([]);
+      logMock.info.mockClear();
       expect(await tick(all), "the empty case").toEqual(ZERO);
+      expect(logMock.info, "and a tick that did nothing logs nothing").not.toHaveBeenCalled();
     });
 
     it("is scoped like the rest of the tick: an old row outside the ids a test scopes the tick to is left alone", async () => {

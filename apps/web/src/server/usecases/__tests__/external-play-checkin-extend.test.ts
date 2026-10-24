@@ -1288,6 +1288,36 @@ describe.skipIf(!HAS_DB)("extendCheckin - the queued invites' expiry follows the
     expect(expiries(await invitesOf(fixtureId))).toEqual(before.map(() => at(oldDeadline, CHECKIN_EXTEND_STEP_MS).getTime()));
   });
 
+  it("and when the COMMIT itself fails, the expiry is rolled back with the extension: the move rides the extension's transaction, not the pool", async () => {
+    // Nothing after the expiry move can fail inside the callback, so a move made on the POOL (a second connection) instead of the
+    // transaction survives every test above. A deferred constraint trigger that refuses at COMMIT is what tells them apart. It is
+    // keyed to this board, so it is inert for every other test running against the shared database.
+    const open = openAround();
+    const r = await retryingRound(1, open);
+    const fixtureId = r.boards[0]!.fixtureId;
+    const oldDeadline = at(open, DEADLINE_AFTER_MS);
+    const before = await invitesOf(fixtureId);
+    expect(before.length).toBeGreaterThanOrEqual(2);
+
+    const fn = `t8_commit_fault_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    await sql.unsafe(`create function ${fn}() returns trigger language plpgsql as $$ begin raise exception 'commit refused (Task 8 test)'; end $$`);
+    await sql.unsafe(
+      `create constraint trigger ${fn} after insert on online_chess_audit deferrable initially deferred for each row when (new.fixture_id = '${fixtureId}') execute function ${fn}()`,
+    );
+    try {
+      await expect(press(r.owner, fixtureId, at(open, MIN))).rejects.toThrow(/commit refused/);
+      expect(await rowOf(fixtureId), "the extension rolled back").toMatchObject({ checkin_extra_ms: 0, checkin_extensions: 0 });
+      expect((await auditOf(fixtureId)).length).toBe(0);
+      expect(expiries(await invitesOf(fixtureId)), "and the expiry with it").toEqual(before.map(() => oldDeadline.getTime()));
+    } finally {
+      await sql.unsafe(`drop trigger if exists ${fn} on online_chess_audit`);
+      await sql.unsafe(`drop function if exists ${fn}()`);
+    }
+    // The positive pair: without the fault the same press goes through and moves the invites.
+    expect(await press(r.owner, fixtureId, at(open, MIN))).toMatchObject({ extensions: 1 });
+    expect(expiries(await invitesOf(fixtureId))).toEqual(before.map(() => at(oldDeadline, CHECKIN_EXTEND_STEP_MS).getTime()));
+  });
+
   it("T8-R1: the extension's transaction is the pooled (privileged) connection, never a tenant one - V469 gives app_user INSERT only, so a tenant transaction could not move the expiry", () => {
     const src = readFileSync(new URL("../external-play/checkin-extend.ts", import.meta.url), "utf8")
       .replace(/\/\*[\s\S]*?\*\//g, "")
