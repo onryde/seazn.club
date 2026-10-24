@@ -143,10 +143,6 @@ function ownCredit(
   }
 }
 
-/** The fields a stream stores, as one comparable string: the recording an award either moves or leaves alone. */
-const stored = (r: ReturnType<typeof recomputeStream>): string =>
-  JSON.stringify([r.states, r.outcome, r.summary, r.deltas, r.summaries ?? null, r.overlay ?? null, r.playerStats ?? null]);
-
 /** The verdict for one case: null when the recorded stream reaches it, else why not. Exported so a test can hand it a doctored case or a
  *  wrapped module. The cheap shape guards come first (most streams in a corpus offer no award and are refused before any fold). */
 export function reachesAward(c: ForfeitAwardCase): (r: AwardRecorded) => string | null {
@@ -178,7 +174,7 @@ export function reachesAward(c: ForfeitAwardCase): (r: AwardRecorded) => string 
     if (!c.lands) {
       // withheld: the kernel does not hand the module the award, so offering one is the same recording, every stored field (`states`
       // holds the whole module state at every step, so a module that kept the award anywhere shows here)
-      if (stored(offered) !== stored(without)) return "offering the award changed the recording of a forfeit the case says the kernel withholds it from";
+      if (JSON.stringify(offered) !== JSON.stringify(without)) return "offering the award changed the recording of a forfeit the case says the kernel withholds it from";
       return null;
     }
     const held = finalState.forfeitAward;

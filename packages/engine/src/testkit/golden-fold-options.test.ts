@@ -531,6 +531,17 @@ describe("the verdict `reached` rejects what is not its own: each guard has a co
     }
     expect(checked).toBe(readers().length);
   });
+  it("a retirement after play needs a sport event: a generator that never draws one leaves the story unbuildable (null), the unplayed cases still build", () => {
+    const football = sport("football");
+    const cfg = football.configSchema.parse(rawOf(football)) as unknown;
+    const ctxFor = (module: AnySportModule) => ({ module, raw: rawOf(football), cfg, lineups: defaultLineupPair(resolvePositions(football, cfg)) });
+    // the same football whose generator only ever draws a note: no walk opens with a Start and then a sport event
+    const noPlay = Object.assign(Object.create(football) as object, { arbitraryEvent: () => ({ type: "core.note", payload: {} }) }) as unknown as AnySportModule;
+    expect(storyById("football.retired_after_play").build(ctxFor(noPlay)), "no play to retire after").toBeNull();
+    expect(storyById("football.retired_after_play").build(ctxFor(football)), "control: the real generator draws one").not.toBeNull();
+    expect(storyById("football.walkover").build(ctxFor(noPlay)), "a walkover needs no play").not.toBeNull();
+    expect(storyById("football.withdrew_unplayed").build(ctxFor(noPlay)), "nor does a withdrawal before it").not.toBeNull();
+  });
   it("a build for a sport that never reads the award is null: there is no stream to record", () => {
     const cricket = sport("cricket");
     const cfg = cricket.configSchema.parse(rawOf(cricket)) as unknown;
@@ -622,6 +633,29 @@ describe("the verdict `reached` rejects what is not its own: each guard has a co
     expect(refusal(c, { events: [forfeit, forfeit] })).toMatch(/does not fold without the award/);
     // a malformed award: the recorder refuses it by name, and the verdict reports that
     expect(refusal(c, { foldOptions: { forfeitAward: [-1, 2] } as never })).toMatch(/does not record under its options: golden: malformed foldOptions/);
+  });
+});
+
+describe("foldOptionConfigName - which recorded config the stories use", () => {
+  const football = sport("football");
+  const named = (...names: string[]): GoldenCorpus => ({ ...readCorpus("football"), configs: Object.fromEntries(names.map((n) => [n, {}])), streams: [] });
+  it("prefers `default`, then `score`, then the first config the corpus holds", () => {
+    expect(foldOptionConfigName(football, named("a", "score", "default"))).toBe("default");
+    expect(foldOptionConfigName(football, named("a", "default", "score"))).toBe("default");
+    expect(foldOptionConfigName(football, named("a", "score"))).toBe("score");
+    expect(foldOptionConfigName(football, named("first", "second"))).toBe("first");
+  });
+  it("refuses a corpus with no config, by sport name (the empty case)", () => {
+    expect(() => foldOptionConfigName(football, named())).toThrow(/football records no config/);
+  });
+  it("names `default` for the sports that have one and `score` for generic in the committed corpora (counted)", () => {
+    let checked = 0;
+    for (const m of readers()) {
+      const names = Object.keys(readCorpus(m.key).configs);
+      expect(foldOptionConfigName(m, readCorpus(m.key)), m.key).toBe(names.includes("default") ? "default" : "score");
+      checked++;
+    }
+    expect(checked).toBe(readers().length);
   });
 });
 
