@@ -37,11 +37,11 @@ Where the spec and the tree disagree, the tree wins and the disagreement is a nu
 
 ## Anchors (to re-pin in Task 0)
 
-`E` = `packages/engine/src`. `W` = `apps/web/src`. `IDX` = `docs/superpowers/specs/2026-09-27-format-matrix-prompts/_INDEX.md`. `MUT` = `docs/superpowers/specs/2026-09-27-format-matrix-prompts/mutants/w2d`. `RULES` = `packages/engine/rules`. `SPEC` = the spec above.
+`E` = `packages/engine/src`. `W` = `apps/web/src`. `IDX` = `docs/superpowers/specs/2026-09-27-format-matrix-prompts/_INDEX.md`. `MUT` = `docs/superpowers/specs/2026-09-27-format-matrix-prompts/mutants/w2d`. `RULES` = `packages/engine/rules`. `SPEC` = the spec above. `§N.M` names item M of spec §N where §N is a numbered list (§11, §12, §13). The engine's pnpm filter is **`@onryde/seazn-engine`** (`@seazn/engine` is only an import alias; a pnpm filter on that name matches no project and exits 0, PF-16).
 
 | Fact | Where |
 |---|---|
-| `PointsRule` zod `{base, bonuses, forfeit}` `:13-40`; `validatePointsRule :46`; `isBye :63`; `forfeitShaped :72`; `isUnplayedForfeit :86`; `applyPointsRule(outcome, pair, rule, played, scoreKeys) :174`; `Expressible`/`BASE_KEYS`/`pointsRuleExpressible :250-283`; `pointsRuleBounds :378` | main@e97823e4d8 `E/competition/points.ts` |
+| `PointsRule` zod `{base, bonuses, forfeit}` `:13-40`; `validatePointsRule :46`; `isBye :63`; `forfeitShaped :72`; `isUnplayedForfeit :86`; `applyPointsRule(outcome, pair, rule, played, scoreKeys) :174`; `Expressible`/`BASE_KEYS`/`pointsRuleExpressible :250-278`; `pointsRuleBounds :378` | main@e97823e4d8 `E/competition/points.ts` |
 | `RankContext :202-223` (`cascade, results, h2hRecursive, swiss, seeds, h2hScope, rngSeed`); `RankingResult :225-231` (`rows, lotsGroups`); `DIFF_KEYS/FOR_KEYS/AGAINST_KEYS :237-241`; `COMPARATORS :332`; `H2H_KEYS :368`; `h2hToPlain :376`; `h2hBlock :414`; `directRefine :468`; `refine :495`; silent skip `:529-537`; `lotSeed :547`; `bySeedThenId :558`; `rankStandings :572`; `validateCascade(cascade, {metrics, swiss}) :638`; `buildSwissTable :705` | main@e97823e4d8 `E/competition/tiebreakers.ts` |
 | `TableStage.h2hRecursive :72`, `rngSeed :75`; `DivisionEvent` `rank_lock_required`/`rank_lock :104-105`; `completeTableStage :215` (passes `h2hRecursive :243`, `rngSeed :245`, events `:255-257`) | main@e97823e4d8 `E/competition/stage.ts` |
 | `crossGroupOrder :573` (hard-coded `points, diff, for, wins`), its caller `resolveProgression :668` | main@e97823e4d8 `E/competition/progression.ts` |
@@ -52,8 +52,9 @@ Where the spec and the tree disagree, the tree wins and the disagreement is a nu
 | period goal: payload `kind?` `:259`; `applyGoal(state, payload, strict) :1094` (strict-only kind check `:1110-1118`); pad enum `goalKindValues :2047`; metrics `goals_<kind>` skip `fg`/`og` `:2478-2481` | main@e97823e4d8 `E/sports/period/kernel.ts` |
 | strict-only refusal precedent (`strict = strictFromSeq …`, lineup refusal) | main@e97823e4d8 `E/core/events.ts:990-1005` |
 | `FOLD_EPOCH` (hockey 2, football 2, …), `FOLD_MINOR` | main@e97823e4d8 `E/sport/fold-epoch.ts` `FOLD_EPOCH :20-32`, `FOLD_MINOR :35-38` (values: PF-14) |
-| football `points {win 3, draw 1, loss 0, shootoutWin?, shootoutLoss?}` | main@e97823e4d8 `E/sports/football/football.ts:124-132`; SO delta `:2779-2789` |
-| period `points {win, draw, loss, otWin?, otLoss?, shootoutWin?, shootoutLoss?}` | main@e97823e4d8 `E/sports/period/kernel.ts:214-222` |
+| football `points {win 3, draw 1, loss 0, shootoutWin?, shootoutLoss?}` | main@e97823e4d8 `E/sports/football/football.ts:124-132`; SO delta `:2779-2789` (split only when BOTH keys are set, `:2781-2784`); `declaredPointsSets :2842`, `matchPointsBounds :2850` read the keys too |
+| period `points {win, draw, loss, otWin?, otLoss?, shootoutWin?, shootoutLoss?}` | main@e97823e4d8 `E/sports/period/kernel.ts:214-222` (type `PeriodCfg.points :98-106`); SO payer `winPoints :1537` (per key: `shootoutWin ?? otWin ?? win`, `:1540-1541`), called by `standingsDelta :2753`; `declaredPointsSets :2833`, `matchPointsBounds :2849` |
+| corpora carrying `shootoutWin` in a recorded config | aff07f7ad8 `E/sports/{football,hockey,icehockey}/*.golden.json` (`git grep -c -a shootoutWin` matches all three); recording configs `E/testkit/golden.ts:82,1073`; the re-baseline splices each RECORDED config back into its states (`keepRecordedConfig`, `golden.ts:1382`; GOLDEN-POLICY.md:331-344) |
 | hockey default `3/1/0 :130`; `fih-shootout` `{3,1,0, shootoutWin 2, shootoutLoss 1} :146`; ice hockey IIHF `{3,1,0, otWin 2, otLoss 1} :179`, recreational `{2,1,0} :208` | main@e97823e4d8 `hockey.ts`, `icehockey.ts` |
 | cricket `points {win 2, tie 1, noResult 1, loss 0, draw?}` | main@e97823e4d8 `E/sports/cricket/cricket.ts:62-68` |
 | set sports `pointsMap` (`setbased/kernel.ts:124`): badminton `{"*":[2,0]} :28`, table tennis `{"*":[2,0]} :30`, volleyball FIVB `{"3-2":[2,1],"*":[3,0]} :11`, beach `{"*":[2,0]} :61` | main@e97823e4d8 `E/sports/setbased/*` |
@@ -70,9 +71,10 @@ Where the spec and the tree disagree, the tree wins and the disagreement is a nu
 | `StagePointsSection` mounted `:2549`; `StageFormatRow :2264` | main@e97823e4d8 `W/components/v2/stages-panel.tsx` |
 | W2c stage-rules UI: `stage-points-section.tsx`, `stage-points-model.ts`, `stage-row-model.ts`, `sequence-field.tsx` | main@e97823e4d8 `W/components/v2/stage-rules/` |
 | hockey pad goal dock: kind chips from `cfg.goalKinds` skip `fg`/`og` (`fg` "is the default and needs no chip") | main@e97823e4d8 `W/components/v2/scorepad/v3/skins/period-shared.ts:1555-1572` |
-| other resolvers (spec §6 W2–W7) | main@e97823e4d8 `W/server/public-site/competition-hub.ts:920`, `W/server/slideshow-data.ts:71`, `W/app/embed/divisions/[id]/[widget]/page.tsx:72`, `W/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx:95`, `W/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx:439,960-978`, `W/server/public-site/standings-view.ts:370,391`, `division-qualification.ts:63`, `qualification-view.ts:169,375` |
-| bench resolvers | main@e97823e4d8 `tools/bench/lib/validate-pack.ts:2303,2337,2367`, `tools/bench/lib/pack-template.ts:107` |
-| smoke `w2cStageRulesSuite :7231`, called `:1294` | main@e97823e4d8 `scripts/smoke.ts` |
+| other resolvers (spec §6 W2–W7) | main@e97823e4d8 `W/server/public-site/competition-hub.ts:920`, `W/server/slideshow-data.ts:71`, `W/app/embed/divisions/[id]/[widget]/page.tsx:72`, `W/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx:95`, `W/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx:439,960-979`, `W/server/public-site/standings-view.ts:370,391`, `division-qualification.ts:63`, `qualification-view.ts:169,375` |
+| other `defaultTiebreakers` readers (Task 8 ports them, PS-3) | aff07f7ad8 `E/testkit/simulation.ts:238`, `E/testkit/conformance.ts:110`, `tools/bench/packs/build-packs/_tiny.ts:784`; engine tests `E/competition/tie-what-if.test.ts`, `E/sports/{boardgame/boardgame,carrom/carrom,football/football,nested/playerstats,period/period,setbased/playerstats}.test.ts`, `E/testkit/{conformance-pad,conformance}.test.ts` (9 files) |
+| bench resolvers | main@e97823e4d8 `tools/bench/lib/validate-pack.ts:2303,2337,2367`, `tools/bench/lib/pack-template.ts:107`; `applyPointsRule` import `:191`, call `:2261` |
+| smoke `w2cStageRulesSuite :7231`, called `:1294`; `SELECTABLE_SUITES :23060` (`w2cStageRules :23071`); `SMOKE_ONLY` takes a comma list (`scripts/smoke-select.ts:12`) | main@e97823e4d8 `scripts/smoke.ts` |
 | W2c e2e `e2e/stage-rules-w2c.spec.ts`; `e2e/standings-popovers.spec.ts`; `e2e/mobile.spec.ts`; walkthroughs `e2e/walkthrough/` | main@e97823e4d8 `apps/web/` |
 | highest delta: main@e97823e4d8 `V471__all_stages_free.sql` (W2c's is `V469__fixture_rules_override.sql`); W2d's is **`V472__w2d_table_rules.sql`** | `db/migration/deltas/` |
 | `stages.status` check `('pending','active','complete')` | `db/migration/v2-engine/tables/V210__stages.sql:10` |
@@ -96,30 +98,30 @@ Before building on any line, the implementer re-opens it (AGENTS class 5). A mov
   - Engine vitest: the same from `packages/engine`, output `$TMPDIR/w2d-t<N>e.json`.
   - **Judge** every run: `jq -c '{total:.numTotalTests,passed:.numPassedTests,failed:.numFailedTests,failedSuites:.numFailedTestSuites,files:[.testResults[].name]|length,names:[.testResults[].name]}' "$TMPDIR/w2d-t<N>.json"`. Green = `failed==0`, `failedSuites==0`, `passed==total>0`, `files` == paths passed, every name starts with `WT`. A TDD red = `failed>0`, `failedSuites==0`, and each failure message is the assertion the step names (a `TypeError` or collect failure is not a red). Never trust an `rtk` summary.
   - DB suites: `.env.local` is the symlink and `jq '[.testResults[].assertionResults[]|select(.status=="pending")]|length'` is 0.
-  - tsc: `cd WT/apps/web && rtk proxy node ../../node_modules/typescript-native/bin/tsc --noEmit -p tsconfig.json; echo EXIT=$?`; engine `cd WT/packages/engine && rtk proxy node ../../node_modules/typescript-native/bin/tsc --noEmit; echo EXIT=$?`.
+  - tsc: `cd WT/apps/web && rtk proxy node ../../node_modules/typescript-native/bin/tsc --noEmit -p tsconfig.json; echo EXIT=$?`; engine `cd WT/packages/engine && rtk proxy node ../../node_modules/typescript-native/bin/tsc --noEmit; echo EXIT=$?`; scripts + tools (bench, matrix, smoke) `cd WT && rtk proxy node node_modules/typescript-native/bin/tsc -p tsconfig.scripts.json; echo EXIT=$?` (every task that edits an engine export a bench file reads, PS-3).
   - eslint: `cd WT && rtk proxy ./node_modules/.bin/eslint <changed files>; echo EXIT=$?` — clean only with `EXIT=0` and no `✖`.
   - **E2E: CI dispatch only, never local** (memory, owner): `cd WT && gh workflow run e2e.yml --ref feat/format-matrix-w2d` (always `--ref`; the workflow's only input is `pr`, so the dispatch runs every job). Judge ONLY the named spec file's results from the run's report artifact (`unexpected == 0`, `expected > 0` for that file) and confirm the run's `headSha` is the branch tip (a push to main cancels a dispatched run; re-dispatch). A Playwright `-g` slice is never a gate (class 21). `mobile.spec.ts` is serial: a red count is a floor.
 - **`grep -a` always**; an empty grep from the wrong cwd is not absence.
 - **Engine/web boundary.** `apps/web` imports only `@seazn/engine/{core,sport,sports,sports/<key>,competition}`; new engine helpers are exported from `E/competition/index.ts` or `E/sport/index.ts`; the engine never imports web; `tools/` is never imported by `apps/` or `packages/`.
-- **Golden corpus** (`E/testkit/GOLDEN-POLICY.md`): never `UPDATE_GOLDEN`/`REBASELINE_GOLDEN`; new cfg fields `.optional()` with no default; `pnpm --filter @seazn/engine fold-epoch:check --against HEAD^1` green on every engine commit. **Module `standingsDelta` does not change in W2d** (the table applies the rule; spec §5.1), so no golden standings delta moves; the only epoch bump is hockey's MAJOR in Task 18 (finding PF-2).
+- **Golden corpus** (`E/testkit/GOLDEN-POLICY.md`): never `UPDATE_GOLDEN`; never `REBASELINE_GOLDEN` **except Task 3's one isolated re-baseline commit (PS-1)**; new cfg fields `.optional()` with no default; `pnpm --filter @onryde/seazn-engine fold-epoch:check --against HEAD^1` green on every engine commit, except Task 3's code → corpus → bump sequence, which is judged once with `--against "$TASK_BASE"` after the bump commit (GOLDEN-POLICY.md:323-329: the corpus lands alone, the bump in the next commit). **Module `standingsDelta` does not change in W2d** (the table applies the rule; spec §5.1), **with one exception (PS-1): Task 3 edits ONLY the shoot-out branch of football's and the period kernel's `standingsDelta` payers and their bounds, so nothing reads the deleted `shootoutWin/shootoutLoss`.** Epoch bumps, all MAJOR: Task 3 football 2 → 3 and hockey 2 → 3 (and ice hockey 1 → 2 if its corpus moves); Task 18 hockey 3 → 4 (finding PF-2). No other sport's corpus may move.
 - **OpenAPI** before every commit that touches `api-v1/`: `cd WT && pnpm openapi:gen && git status --porcelain openapi/` shows only the intended diff, committed with the task. CI's drift check must pass.
 - **Strings.** Every new user-facing string goes to `W/dictionaries/{en,es,fr,nl}/ui.json` (editor, pad) or `public.json` (public table) in the same commit, then `pnpm i18n:gen-keys` and `pnpm i18n:check` at the root. `W/lib/i18n-keys.ts` is generated. Families (SPEC §9): `div.detail.tiebreak.rule.<key>` for every new key and modifier; editor chrome; §10 messages; points outcome rows; lots note; empty-table note.
 - **Greenfield** (RULES.md:30-34, SPEC §7): shapes change without a deprecation window or alias; tests pinning old shapes are updated, each named in the report. The one exception is data: B1 pins started stages.
 - **All scoring is free** (D1). No `requireFeature` on any W2d setting. Owner ruling 2026-10-20: ship BEHAVIOUR tests only (a Community org saves and the table pays); never a test that pins a gate's absence or an entitlement copy string.
 - **UI bar** (D1, owner 2026-10-19): correctness first, existing W2c pattern, house theme, no polish pass. Sign-off screenshots at **1280 only**; the e2e spec runs at all seven width projects in CI with no horizontal scroll. Every UI dispatch invokes `frontend-design:frontend-design` and applies it. Phone composition rules (AGENTS.md) apply to the pad change.
-- **Do not touch:** `.github/workflows/e2e.yml`; `tools/bench/lib/suites/run-suite.ts`/`PackSchema`; committed `truth-runs/**`; the spec (orchestrator owns it); Swiss pairing and Swiss default CONTENT (W3); `colorOfHome`; any module `standingsDelta` body; any engine file split.
+- **Do not touch:** `.github/workflows/e2e.yml`; `tools/bench/lib/suites/run-suite.ts`/`PackSchema` (the other bench files W2d's renames reach ARE in scope and ported in Tasks 2, 8, 9 — PS-3); committed `truth-runs/**`; the spec (orchestrator owns it); Swiss pairing and Swiss default CONTENT (W3); `colorOfHome`; any module `standingsDelta` body, **except Task 3's shoot-out branch (PS-1, above)**; any engine file split.
 - **Test authority** (TEST-STRATEGY 1–10; R9, R13, R15–R19, R25–R29):
-  - **Expected values** come from the rulebook text (RBG/RBS lines cited in the test title or a comment) or the engine's declarations (`module.tablePointsRule`, `module.reachableDecidedIn`, `module.primaryTableKey`, `module.defaultTiebreakers(kind)`, `module.metrics`, `module.configSchema`, `module.variants`). Never from the function under test. Each guard has one case where the right answer differs from the wrong one's constant.
+  - **Expected values** come from the rulebook text (RBG/RBS lines cited in the test title or a comment) or the engine's declarations (`module.tablePointsRule`, `module.reachableDecidedIn`, `module.primaryTableKey`, `module.defaultTiebreakers(kind, cfg)`, `module.metrics`, `module.configSchema`, `module.variants`). Never from the function under test. Each guard has one case where the right answer differs from the wrong one's constant.
   - **Anti-vacuity:** every sweep and property returns its count and asserts `> 0` (and equal to the derived population where known); zero checked fails. Sport sweeps go through `forEachSport`.
   - **Sequence cases**, empty first, in every task: a second call, an empty input, after a void or withdrawal, another sport.
   - **Mutate the guard once** (R17): each task's `MUT/t<N>.json` (`{id, file, find, replace, killers:[{cwd, files, name}]}`), run `cd WT && pnpm mutate --list MUT/t<N>.json --json-out "$TMPDIR/w2d-mut-t<N>.json"; echo EXIT=$?` → every row `KILLED`. Engine tasks also run changed-lines Stryker (`TASK_BASE` recorded by the orchestrator):
     ```bash
     cd WT/packages/engine && rm -f reports/mutation/changed.json && M="$(node scripts/stryker-changed.mjs --base "$TASK_BASE")" && STRYKER_MUTATE="$M" pnpm mutation > "$TMPDIR/w2d-stryker-t<N>.log" 2>&1; echo EXIT=$?; node scripts/stryker-changed.mjs --report reports/mutation/changed.json --expect "$M"
     ```
-    Expected `survived: 0, noCoverage: 0`, or a killing test, or an equivalence row the reviewer agrees with. Never `// Stryker disable`. A guard whose only witness is a browser gets a pure `*-model.ts` helper with a unit killer.
+    Expected `survived: 0, noCoverage: 0`, or a killing test, or an equivalence row the reviewer agrees with. Never `// Stryker disable`. A guard whose only witness is a browser gets a pure `*-model.ts` helper with a unit killer. **Never run `pnpm mutate` or Stryker while any other task's tests, tsc or build run in the same tree** (`pnpm mutate` rewrites source in place; Stryker shares `reports/mutation/changed.json` and diffs `--base "$TASK_BASE"`) — PS-4.
   - **Rule-10 sequences:** fast-check with invariants after every step; a shrunk failure is committed as a named regression with its seed BEFORE the fix (R29).
-  - **Four test types per task** (RULES.md): unit; e2e traced to a NAMED spec file and title (CI dispatch); smoke as a named check in `w2dTablesSuite` (`scripts/smoke.ts`, created in Task 9); regression = the red-first test plus the named existing suite kept green.
-  - **Rule rows:** every proving test title carries its rule id as a whole token (Appendix A, signed in Task 0). No task edits `packages/engine/test/rules-reference.test.ts` `AWAITING_PROOF` or a rules file's `proved-by`; the orchestrator does that in one commit per wave.
+  - **Four test types per task** (RULES.md): unit; e2e traced to a NAMED spec file and title (CI dispatch); smoke as a named check in `w2dTablesSuite` (`scripts/smoke.ts`, created in Task 13 — the first task whose checks the API can see, PS-2), run scoped as `SMOKE_ONLY=w2dTables` (registered in `SELECTABLE_SUITES`; never a full `pnpm smoke`, PS-9a); regression = the red-first test plus the named existing suite kept green. A regression run passes exact FILES, never a directory, and states the file count the judge's `files` must equal (PS-9d). "N/A" is never a test type: a task with no UI or API of its own traces forward to a named spec title or smoke check (RULES.md:104-110).
+  - **Rule rows:** every proving test title carries its rule id as a whole token (Appendix A, signed in Task 0). No task edits `packages/engine/test/rules-reference.ts` `AWAITING_PROOF` (`:47`) or a rules file's `proved-by`; the orchestrator does that in one commit per wave.
 - **Docs as they happen** (R22): each task reports IDX lines (W2 row, false premises); the orchestrator commits IDX.
 
 ---
@@ -132,7 +134,7 @@ Five inputs the spec implies but no requirement names, most likely first. Each l
 2. **An entrant withdraws, or a fixture is expunged (ruling 105), after a drawing of lots.** The tied membership changes, so the old draw is superseded and a new one is stored; reloading twice gives the same order; the old row stays as history and is never applied to a different membership. Test: Task 5 `lots-stored.test.ts` "Review Focus 2: a changed tied set draws again and keeps the old row"; DB half in Task 9 `stage-lots.test.ts`.
 3. **Two recomputes race for the same stage** (two scorers finishing fixtures in one pool at once). Exactly one draw row exists per `(stage, pool, members)` and both readers return the same order. Test: Task 9, `stage-lots.test.ts` "Review Focus 3: concurrent recomputes store one draw".
 4. **An API client sends `tiebreakers: []` versus `tiebreakers: null`.** `null` inherits (badge Inherited); `[]` is refused `TIEBREAK_KEY_INVALID` with reason `empty`, never stored as "no order". Test: Task 10, `stage-tiebreaks-write.test.ts` "Review Focus 4: [] is refused, null inherits".
-5. **A stage with carried-over openings** (`carry_deltas`, carry mode `points`/`full`) under the new always-applied rule. Carried rows keep their carried points; only the stage's own fixtures are paid by `payout`; the carried row is never re-paid. Test: Task 8, `table-rules.test.ts` "Review Focus 5: carried openings are not re-paid by the stage rule".
+5. **A stage with carried-over openings** (`carry_deltas`, carry mode `points`/`full`) under the new always-applied rule. Carried rows keep their carried points; only the stage's own fixtures are paid by `payout`; the carried row is never re-paid. Test: Task 9 (web, DB — carried rows meet `payout` only in web code: `carryDeltas` at `stages.ts:4494`, payout sites `competition.ts:116,432`; PS-5e), `table-rules-pin.test.ts` "Review Focus 5: carried openings are not re-paid by the stage rule".
 
 ---
 
@@ -148,19 +150,20 @@ Five inputs the spec implies but no requirement names, most likely first. Each l
 | Wave | Tasks | Order | Starts when |
 |---|---|---|---|
 | 0 | 0 | orchestrator | W2c merged |
-| 1 — engine foundations | 1, 2, 3, 4, 5, 6 | 1 → {2 ∥ 4} → {3 ∥ 5} → 6 | Task 0 |
-| 2 — storage, pin, resolver | 7, 8, 9, 10 | {7 ∥ 8} → 9 → 10 | wave 1 closed |
-| 3 — defaults and cross-group | 11, 12 | 11 (lane, may start beside 9) → 12 | Task 8 merged |
+| 1 — engine foundations | 1, 2, 3, 4, 5, 6 | 1 → 2 → 4 → 3 → 5 → 6 (sequential, PS-4) | Task 0 |
+| 2 — storage, pin, resolver | 7, 8, 9, 10 | 7 → 8 → 9 → 10 (sequential, PS-4); **T11 merges before T10** starts (PS-2) | wave 1 closed |
+| 3 — defaults and cross-group | 11, 12 | 11 (lane; starts right after Task 8 merges; **merges before Task 10**) → 12 (after 10) | Task 8 merged |
 | 4 — API and the real seam | 13, 14 | 13 → 14 | waves 2 and 3 closed |
 | 5 — UI and pad | 15+16 (one loop), 17, 18 | 15+16 → 17 → 18 | wave 4 closed |
 | 6 — close-out | 19, 20, 21 | 19 → 20 → 21 | wave 5 closed |
 
-**Why these pairs are disjoint** (file sets in each task's **Files**):
-- 2 ∥ 4: `E/competition/points.ts` + its tests vs `E/competition/tiebreakers.ts`, `E/sport/module.ts` (`TiebreakerKey` union only) + tests. Task 2 does not touch `module.ts`.
-- 3 ∥ 5: `E/sports/**` + `E/sport/module.ts` (`tablePointsRule`, `soBonus` cfg) vs `E/competition/{tiebreakers,stage}.ts` + tests. Task 5 does not touch `module.ts`.
-- 7 ∥ 8: `db/migration/deltas/V<n>__…sql`, `scripts/w2d/pin-scenario.ts`, a web DB test vs `E/competition/{table-rules,stage,tie-what-if}.ts`, `E/testkit/simulation.ts`, `E/sport/module.ts` + modules (`defaultTiebreakers(kind)` signature).
-- 11 (lane `format-matrix-w2d-defaults`) beside 9/10: 11 edits only `E/sports/**` values, `RULES/*.md` and engine tests; 9/10 edit only `W/**`, `scripts/smoke.ts`, `tools/bench/**`. 11 merges before 12 starts.
-- Everything from 13 on is sequential: `schemas.ts`/`openapi`, `smoke.ts`, the dictionaries and `mobile.spec.ts` are shared.
+**Why the former pairs run sequentially (PS-4).** The file sets of 2/4, 3/5 and 7/8 are disjoint, but their verify steps are not: `pnpm mutate` rewrites source in place while the other task's tests run; changed-lines Stryker shares `reports/mutation/changed.json` and diffs `--base "$TASK_BASE"`, which would include the other task's edits; engine tsc, vitest and `$S rebuild --label w2d` (Task 7) build the other task's half-done state; `fold-epoch:check --against HEAD^1` can land on the sibling's commit. One build worktree, one implementer at a time (SDD rule: never parallel implementers).
+
+**Why Task 11 merges before Task 10 (PS-2).** Task 10 validates the effective cascade on `createStages`/`replaceStages`. Until Task 11, the sport default is today's list (Task 8), which fails Task 6's rules for badminton, table tennis, volleyball, cricket, hockey, ice hockey and tennis (no `lots`; `points` first where the primary is `wins`) and for chess (`buchholz*` on a non-Swiss stage). With 11 merged first, every inherited default is valid when 10's validation lands, so §5.5 holds exactly as written.
+
+**Task 11's lane** (`format-matrix-w2d-defaults`, its own tree): 11 edits `E/sports/**` values, `E/sport/module.ts` (`tablePresets`), `RULES/*.md` and its own engine tests; 9 edits `W/**`, `E/competition/points.ts` and `tools/bench/**`. The files are disjoint and the lane shares no verify step with the build tree, so whether 11 overlaps 9 is the orchestrator's scheduling call. 11 merges (`--no-ff`, re-gated on the merged tree) before Task 10 starts and before Task 12.
+
+Everything from 13 on is sequential: `schemas.ts`/`openapi`, `smoke.ts`, the dictionaries and `mobile.spec.ts` are shared.
 
 Lanes branch from `feat/format-matrix-w2d`, get their own `pnpm install --frozen-lockfile` and `.env.local` symlinks, and merge back with `git merge --no-ff` (never squash); the lane's scoped gate re-runs on the merged tree. Lanes never write IDX or rules-reference.
 
@@ -171,23 +174,26 @@ Lanes branch from `feat/format-matrix-w2d`, get their own `pnpm install --frozen
 | Path | Responsibility | Task |
 |---|---|---|
 | `E/competition/decided-in.ts` (new) | `DecidedIn`, `decidedInFor`, `DECIDED_IN` | 1 |
-| `E/sport/module.ts` | `decidedInOf`, `reachableDecidedIn`, `shootoutAs`, `winsCount` (1); `TiebreakerKey` additions (4); `tablePointsRule` (3); `primaryTableKey` (6); `defaultTiebreakers(kind)` (8); `partialScheduleOrder?` (12) | 1, 3, 4, 6, 8, 12 |
-| `E/competition/points.ts` | widened `PointsRule`, `payout`, `reachableOutcomes`, `coverage`, `pointsRuleBounds`, `legacyPointsRule`; inexpressible deleted | 2 |
-| `E/sports/**` | per-sport declarations, `tablePointsRule`, `soBonus`, defaults, presets | 1, 3, 6, 8, 11, 12, 18 |
+| `E/sport/module.ts` | `outcomeMethods`, `decidedInOf`, `reachableDecidedIn`, `reachableResultKinds`, `reachableSetScores?`, `shootoutAs`, `winsCount?`, `declaresUnplayedLoss?` (1); `TiebreakerKey` additions (4); `tablePointsRule` (3); `primaryTableKey` (6); `defaultTiebreakers(kind, cfg)` (8; PS-7c); `tablePresets?` (11); `partialScheduleOrder?` (12) | 1, 3, 4, 6, 8, 11, 12 |
+| `E/competition/points.ts` | widened `PointsRule`, `payout`, `reachableOutcomes`, `coverage`, `pointsRuleBounds`, `legacyPointsRule` (2); old-shape tolerance deleted (9); inexpressible deleted (10) | 2, 9, 10 |
+| `E/sports/**` | per-sport declarations, `tablePointsRule`, `soBonus` and the shoot-out branch of the two `standingsDelta` payers (PS-1), defaults, presets | 1, 3, 6, 8, 11, 12, 18 |
+| `E/sports/{football,hockey,icehockey}/*.golden.json`, `E/sport/fold-epoch.ts` | Task 3's isolated re-baseline and MAJOR bumps (PS-1); hockey's second MAJOR | 3, 18 |
+| `W/lib/match-rules/football.ts`, `W/components/v2/{division-settings.tsx,division-format-patch.ts}`, `W/lib/rule-errors.ts` (`POINTS_SPLIT_LABEL_KEYS`), `rules.err.pointsSplit.shootout*` copy | web half of the `shootoutWin/shootoutLoss` removal (PS-1) | 3 |
 | `E/competition/tiebreakers.ts` | new keys, modifiers, throw on no comparator, stored lots, partial-schedule guard | 4, 5, 12 |
 | `E/competition/cascade-rules.ts` (new) | `validateCascade` (moved and rewritten), `CascadeRefusal` | 6 |
 | `E/competition/table-rules.ts` (new) | `TableRules`, `TableRulesPin`, `resolveTableRules` | 8 |
 | `E/competition/{stage,progression,tie-what-if,display}.ts` | consume `TableRules`; cross-group order; primary key; columns | 5, 8, 12, 17 |
 | `db/migration/deltas/V<n>__w2d_table_rules.sql` (new) | pin columns, `stage_lots_draws`, `w2d_pin_started_stages()` | 7 |
-| `scripts/w2d/pin-scenario.ts` (new) + `W/server/engine-db/__tests__/fixtures/w2d-pin-before.json` | B1 seed and the pre-W2d snapshot | 7 |
-| `W/server/engine-db/table-rules.ts` (new) | `loadTableRules`, `pinStageTableRules`, `persistLotsDraws` | 9 |
-| `W/server/engine-db/competition.ts` + the six resolvers (SPEC §6) | one resolver | 9 |
-| `W/server/usecases/{stage-rules,rule-locks,divisions,stages,templates,fixture-rules}.ts`, `W/server/templates/schema.ts` | write paths, lock, coverage, `stagesKeptPinned` | 10 |
-| `W/server/api-v1/{schemas,openapi}.ts`, `openapi/*.json`, `W/lib/rule-errors.ts` | API v1 | 13 |
+| `scripts/w2d/pin-scenario.ts` (new) + `W/server/engine-db/__tests__/fixtures/{w2d-pin-before.json,w2d-pin-seed.ts}` | B1 seed, the pre-W2d snapshot (with every UUID and `rngSeed`) and its seeding twin (PS-8) | 7 |
+| `W/server/engine-db/table-rules.ts` (new) | `loadTableRules`, `pinStageTableRules`, `repinStageOwnRules`, `loadLotsDraws`, `persistLotsDraws` | 9 |
+| `W/server/engine-db/competition.ts` + the six resolvers (SPEC §6) | one resolver; `winsCount`/`gamePoints` at every rank call | 8 (port), 9 |
+| `tools/bench/lib/{validate-pack,pack-template}.ts`, `tools/bench/packs/build-packs/_tiny.ts` | bench ports (in W2d scope, PS-3) | 2, 8, 9 |
+| `W/server/usecases/{stage-rules,rule-locks,divisions,stages,templates,fixture-rules,stage-rules-merge}.ts`, `W/server/templates/schema.ts`, `W/components/v2/stage-rules/stage-points-{model.ts,section.tsx}` (inexpressible state), `W/components/v2/division-settings-locks.ts` | write paths, lock, coverage, `stagesKeptPinned`, inexpressible deleted | 10 |
+| `W/server/api-v1/{schemas,openapi}.ts`, `openapi/*.json`, `W/lib/rule-errors.ts` | API v1 | 2 (`openapi:gen` only), 10 (`TiebreakerKeyS`), 13 |
 | `W/components/v2/stage-rules/{stage-tiebreaks-section.tsx,stage-tiebreaks-model.ts}` (new), `stage-points-{section.tsx,model.ts}`, `stages-panel.tsx` | Option A | 15, 16 |
 | `W/server/public-site/standings-view.ts`, `W/components/public-site/standings-table.tsx`, `W/lib/tiebreak-label.ts` | public table | 17 |
 | `W/components/v2/scorepad/v3/skins/period-shared.ts`, `E/sports/period/kernel.ts`, `E/sport/fold-epoch.ts` | hockey goal type | 18 |
-| `scripts/smoke.ts` (`w2dTablesSuite`) | smoke | 9–18 |
+| `scripts/smoke.ts` (`w2dTablesSuite`, registered as `w2dTables` in `SELECTABLE_SUITES`) | smoke | 13–18 |
 | `apps/web/e2e/stage-tiebreaks-w2d.spec.ts` (new), `e2e/walkthrough/tables-w2d.spec.ts` (new), `e2e/mobile.spec.ts`, `e2e/standings-popovers.spec.ts` | e2e | 15–19 |
 | `RULES/*.md` | Appendix A rows | 0, 11 |
 | `MUT/t<N>.json` | hand mutants | every code task |
@@ -226,7 +232,7 @@ SPEC §5.2, D4, B2 (shoot-out kind), §13.4 (`decidedInOf` total). Rule rows X-P
 
 **Files:**
 - Create: `E/competition/decided-in.ts`; export from `E/competition/index.ts`.
-- Modify: `E/sport/module.ts` (`SportModule` gains the five members below).
+- Modify: `E/sport/module.ts` (`SportModule` gains the eight members below: the seven of the original plan plus `declaresUnplayedLoss`, PS-7a).
 - Modify: `E/sports/football/football.ts`, `E/sports/period/kernel.ts` (+ `hockey.ts`, `icehockey.ts` presets), `E/sports/cricket/cricket.ts`, `E/sports/boardgame/boardgame.ts`, `E/sports/setbased/kernel.ts`, `E/sports/nested/kernel.ts` (tennis), `E/sports/carrom/carrom.ts`, `E/sports/generic/generic.ts`: one declaration block each.
 - Test: `E/competition/decided-in.test.ts` (new); `E/sport/outcome-methods-source.test.ts` (new source scan).
 - Create: `MUT/t1.json`.
@@ -249,7 +255,10 @@ SPEC §5.2, D4, B2 (shoot-out kind), §13.4 (`decidedInOf` total). Rule rows X-P
   reachableSetScores?(cfg: Cfg): readonly `${number}-${number}`[]; // set sports only, from bestOf
   readonly shootoutAs: "draw_plus_bonus" | "result";
   readonly winsCount?: "all" | "regulation";          // absent = "all"
+  readonly declaresUnplayedLoss?: true;               // D6: a "loss, not played" value exists; table tennis only (PS-7a)
   ```
+
+**PF-10 first (read and cite, before Step 1):** read `settleAppliesInTable` (`E/core/events.ts:193`) and `rowAwaitsSettle` (`W/server/engine-db/recorded-abandon.ts:84`), and cite the file:line of each in the task report. An organiser no-result abandon is `core.abandon{noResult:true}` with `outcome` null and the separate `no_result` flag (`W/server/engine-db/competition.ts:346`). Task 9's web payout sites hand `payout` the outcome `{kind:"no_result"}` for it (PS-5c), for which `decidedInFor` is null like every non-win kind (the "decidedInFor is null for … no_result" case below covers it).
 
 **Declarations (SPEC §5.2 table; mapping `extra_time`→`ot`; `shootout`, `super_over`, `boundary_count`, `tiebreak_*`→`so`; `abandoned`→`regulation`; legacy `walkover`/`forfeit` win methods → `regulation`, still treated as awards by `forfeitShaped`):**
 
@@ -262,12 +271,17 @@ SPEC §5.2, D4, B2 (shoot-out kind), §13.4 (`decidedInOf` total). Rule rows X-P
 | boardgame | regulation; `so` iff a table stage carries `tiebreakRungs` | draw | `result` (author's call) | all |
 | set sports, tennis, carrom, generic | regulation | carrom/generic: draw; others none | `result` | all |
 
+`declaresUnplayedLoss: true` is declared by table tennis only (D6, SPEC §5.10 "W 2, played L 1, unplayed L 0"); every other module omits it, so `loss.unplayed` is reachable nowhere else (PS-7a).
+
 - [ ] **Step 1: Write the failing tests.** `E/competition/decided-in.test.ts`:
   ```ts
   // X-PT-2. Expected values from SPEC §5.2's mapping and each module's own cfg declarations, never from decidedInFor.
   it("X-PT-2 decidedInOf is total over every declared outcome method (forEachSport, counted)", () => {
-    const n = forEachSport(({ module }) => { for (const m of module.outcomeMethods) expect(DECIDED_IN).toContain(module.decidedInOf(m)); });
-    expect(n).toBe(builtinModules.length);
+    const visited = new Set<string>();
+    const n = forEachSport(({ module }) => { visited.add(module.key); for (const m of module.outcomeMethods) expect(DECIDED_IN).toContain(module.decidedInOf(m)); });
+    expect(n).toBeGreaterThan(0);
+    // PS-9g: the bound comes from an independent declaration (the epoch table), never from the list being iterated.
+    expect([...visited].sort()).toEqual(Object.keys(FOLD_EPOCH).sort());
   });
   it("X-PT-2 the mapping: extra_time→ot; shootout, super_over, boundary_count, tiebreak_<rung>→so; abandoned→regulation", …);
   //   football.decidedInOf("extra_time")==="ot"; football.decidedInOf("shootout")==="so"; cricket "super_over"/"boundary_count"→"so";
@@ -281,12 +295,13 @@ SPEC §5.2, D4, B2 (shoot-out kind), §13.4 (`decidedInOf` total). Rule rows X-P
   it("HK-TB-1 hockey declares winsCount 'regulation'; no other sport does (counted)", …);
   it("cricket reaches tie and noResult; draw only when inningsPerSide === 2 (D10(c))", …);
   it("volleyball bestOf 5 reaches set scores 3-0, 3-1, 3-2; bestOf 3 reaches 2-0, 2-1 (from cfg.bestOf, not typed lists)", …);
+  it("X-WO-1 (amended, D6) only table tennis declares an unplayed loss; no other module does (counted)", …);
   ```
   `E/sport/outcome-methods-source.test.ts`: for each module source file, every `method: "<literal>"` written on a `win` outcome (`git grep -a`-style regex over the file text) is in `module.outcomeMethods`; reports the count per module and fails on 0 for any module that writes wins.
 - [ ] **Step 2: Run, expect FAIL** (`decided-in.ts` missing → collect fails first; after a stub export, the assertions fail on `outcomeMethods` undefined).
   `cd WT/packages/engine && rm -f "$TMPDIR/w2d-t1e.json" && pnpm exec vitest run src/competition/decided-in.test.ts src/sport/outcome-methods-source.test.ts --reporter=json --outputFile="$TMPDIR/w2d-t1e.json"; echo EXIT=$?`
 - [ ] **Step 3: Implement** `decided-in.ts` and the declarations in the table, one block per module (kernels declare for their presets; hockey/ice hockey differ by preset). `reachableSetScores` enumerates `W-L` for `W = ceil(bestOf/2)`, `L ∈ [0, W-1]`.
-- [ ] **Step 4: Run, expect PASS**; engine tsc; eslint on changed files; `pnpm --filter @seazn/engine fold-epoch:check --against HEAD^1` (no golden moves).
+- [ ] **Step 4: Run, expect PASS**; engine tsc; eslint on changed files; `pnpm --filter @onryde/seazn-engine fold-epoch:check --against HEAD^1` (no golden moves).
 - [ ] **Step 5: Mutate** `MUT/t1.json`: (a) `decidedInOf` default branch returns `"regulation"` instead of throwing → killed by "an unknown method throws"; (b) ice hockey `so` condition `shootout !== null` → `true` → killed by the recreational case. Run the mutate command; every row KILLED.
 - [ ] **Step 6: Commit** `feat(engine): decidedIn and the per-sport outcome vocabulary (W2d T1)`.
 
@@ -294,13 +309,14 @@ Test types: unit (above); e2e → Task 19 `tables-w2d.spec.ts` "goals family: OT
 
 ---
 
-### Task 2: Engine — the widened `PointsRule`, `payout`, reachable outcomes and coverage (wave 1, parallel with Task 4)
+### Task 2: Engine — the widened `PointsRule`, `payout`, reachable outcomes and coverage (wave 1, after Task 1)
 
 SPEC §5.3, D4, D6, D9, D10(a)(c), B2, F11 (§2.1 #15). Rule rows X-PT-2, X-PT-3, X-PT-4, X-WO-1 (amended), X-DW-4, FB-PT-1, VB-PT-2, VB-PT-3, CK-PT-1, CK-PT-2, TT-PT-1, IH-PT-1.
 
 **Files:**
 - Modify: `E/competition/points.ts` — `PointsRule` (replaces `:13-40`), `payout` (replaces `applyPointsRule :174`), `validatePointsRule :46` (margin aliases), `pointsRuleBounds :378` (over reachable outcomes), new `reachableOutcomes`, `coverage`, `legacyPointsRule`. `forfeitShaped`, `isUnplayedForfeit`, `carryDeltas`, `applyRankLocks` unchanged. `pointsRuleExpressible` stays until Task 10 deletes it with its readers.
-- Modify (mechanical port so `tsc` stays green; `tsc` lists them; no behaviour change beyond the shape): `W/server/engine-db/competition.ts:98,116,382,428`; main@e97823e4d8 `W/components/v2/stage-rules/stage-points-model.ts` (`ZERO_BASE`, `storedPointsRule`, the draft builder); `W/lib/points-line.ts`; `E/testkit/scenarios.ts`; the existing tests `E/competition/{points,points-w2c,w2b-tables,tiebreak-rule-award-alias}.test.ts`, `W/server/public-site/__tests__/qualification-view.test.ts`. `tools/bench/lib/validate-pack.ts`: only after the orchestrator clears it with the bench index (`_RULES.md` R3); until then the bench keeps compiling against a local `legacyPointsRule` call.
+- Modify (mechanical port so `tsc` stays green; `tsc` lists them; no behaviour change beyond the shape): `W/server/engine-db/competition.ts:98,116,386,432`; `W/server/engine-db/fixture-cfg.ts:2` (imports `PointsRule`, PF-6); main@e97823e4d8 `W/components/v2/stage-rules/stage-points-model.ts` (`ZERO_BASE`, `storedPointsRule`, the draft builder); `W/lib/points-line.ts`; `E/testkit/scenarios.ts`; the existing tests `E/competition/{points,points-w2c,w2b-tables,tiebreak-rule-award-alias}.test.ts`, `W/server/public-site/__tests__/qualification-view.test.ts`. Bench (in W2d's scope, PS-3: W2d renames the type, so bench tsc must stay green): `tools/bench/lib/validate-pack.ts:191,2261` (`applyPointsRule` → `payout`, same mechanical port).
+- Read, no edit: `W/server/api-v1/schemas.ts:18` re-uses the engine `PointsRule` (`PutStageRules.points :1294`), so the OpenAPI output moves in THIS task: run `cd WT && pnpm openapi:gen` and commit `openapi/*.json` with it (PS-3c; Global "OpenAPI").
 - Test: `E/competition/points-w2d.test.ts` (new); `E/competition/points-w2d.property.test.ts` (new, fast-check).
 - Create: `MUT/t2.json`.
 
@@ -332,6 +348,9 @@ SPEC §5.3, D4, D6, D9, D10(a)(c), B2, F11 (§2.1 #15). Rule rows X-PT-2, X-PT-3
   export function parseStoredPointsRule(raw: unknown): PointsRule | null;
   ```
   `payout` also writes the display metrics `won_ot`, `won_so`, `lost_ot`, `lost_so` (0/1, written only when 1) on a `win`; under `draw_plus_bonus` + `so` the W/D/L becomes drawn/drawn and the winner still gets `won_so: 1` (SPEC §5.1, §5.7).
+  `reachableOutcomes` adds `loss.unplayed` only when `module.declaresUnplayedLoss` (table tennis, PS-7a); elsewhere an unplayed loss falls back to the credited score's loss (SPEC §5.3 coverage defaults).
+
+**PF-10 first:** the same read-and-cite as Task 1 (`settleAppliesInTable` `E/core/events.ts:193`, `rowAwaitsSettle` `W/server/engine-db/recorded-abandon.ts:84`), cited in the report; `payout({kind:"no_result"}, null, …)` pays `rule.noResult ?? 0` (the CK-PT-1 cases below), and the web mapping of the `no_result` flag to that outcome is Task 9's (PS-5c).
 
 - [ ] **Step 1: Write the failing tests.** `E/competition/points-w2d.test.ts`; every rule below is typed from the rulebook values SPEC §5.10 signs, never from a module:
   ```ts
@@ -361,8 +380,9 @@ SPEC §5.3, D4, D6, D9, D10(a)(c), B2, F11 (§2.1 #15). Rule rows X-PT-2, X-PT-3
 
   describe("reachableOutcomes + coverage (X-PT-3)", () => {
     it("an empty reachable set is covered (empty case)", …);
-    it("football group with shootout on: {win.regulation, loss.regulation, draw, win.so, loss.so, loss.unplayed}", …); // from Task 1 declarations
-    it("X-PT-3 a draw_plus_bonus stage with `so` reachable and no draw payout is uncovered: ['draw']", …);
+    it("football group with shootout on: {win.regulation, loss.regulation, draw, win.so, loss.so} — no loss.unplayed (PS-7a)", …); // from Task 1 declarations
+    it("X-WO-1 (amended, D6) table tennis reaches loss.unplayed; football, hockey and badminton do not (declaresUnplayedLoss, counted)", …);
+    it("X-PT-3 a draw_plus_bonus rule with no draw payout is uncovered ['draw'] on a HAND-BUILT reachable set holding win.so but NOT draw — the so→draw rule refuses it, not a reachable draw (PS-9g)", …);
     it("VB-PT-3 {'*':[3,0],'3-2':[2,1]} on bestOf 5 is uncovered ['set:3-0','set:3-1'] — '*' does not count when >1 distinct pair (RBS:566)", …);
     it("VB-PT-3 a flat {'*':[2,0]} always covers; the explicit FIVB map {3-0,3-1,3-2} covers bestOf 5", …);
     it("VB-PT-3 a bestOf 3 override on the FIVB bestOf-5 map is uncovered ['set:2-0','set:2-1'] (SPEC §5.4)", …);
@@ -376,10 +396,10 @@ SPEC §5.3, D4, D6, D9, D10(a)(c), B2, F11 (§2.1 #15). Rule rows X-PT-2, X-PT-3
 - [ ] **Step 2: Run, expect FAIL** on the new assertions (old `PointsRule` rejects the new shape).
   `cd WT/packages/engine && rm -f "$TMPDIR/w2d-t2e.json" && pnpm exec vitest run src/competition/points-w2d.test.ts src/competition/points-w2d.property.test.ts --reporter=json --outputFile="$TMPDIR/w2d-t2e.json"; echo EXIT=$?`
 - [ ] **Step 3: Implement** the signatures in `points.ts` in SPEC §5.3's step order; port the readers listed under **Files** mechanically (old `base.win` → `win.regulation`, `base.draw` → `draw`, `base.loss` → `loss.regulation`; a stored old shape is read through `legacyPointsRule`). `decidedIn` at the two web call sites comes from `decidedInFor(sportModule, outcome)`.
-- [ ] **Step 4: Run, expect PASS**; then the regression set:
+- [ ] **Step 4: Run, expect PASS**; then the regression set (exact files; judge `files` = 4 engine, 5 web):
   `cd WT/packages/engine && pnpm exec vitest run src/competition/points.test.ts src/competition/points-w2c.test.ts src/competition/w2b-tables.test.ts src/competition/tiebreak-rule-award-alias.test.ts --reporter=json --outputFile="$TMPDIR/w2d-t2r.json"; echo EXIT=$?`
-  `cd WT/apps/web && pnpm exec vitest run src/server/public-site/__tests__/qualification-view.test.ts src/components/v2/stage-rules/__tests__ --reporter=json --outputFile="$TMPDIR/w2d-t2w.json"; echo EXIT=$?`
-  Both tsc; eslint on changed files.
+  `cd WT/apps/web && pnpm exec vitest run src/server/public-site/__tests__/qualification-view.test.ts src/components/v2/stage-rules/__tests__/stage-points-model.test.ts src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx src/components/v2/stage-rules/__tests__/stage-row-model.test.ts src/components/v2/stage-rules/__tests__/stage-rule-fields.test.tsx --reporter=json --outputFile="$TMPDIR/w2d-t2w.json"; echo EXIT=$?`
+  All three tscs (web, engine, scripts + tools); eslint on changed files; `cd WT && pnpm openapi:gen && git status --porcelain openapi/` shows only the `PointsRule` diff, committed with the task.
 - [ ] **Step 5: Mutate** `MUT/t2.json`: (a) the `draw_plus_bonus` branch books won/lost instead of drawn → killed by FB-PT-1; (b) `soBonus ?? 1` → `?? 0` → killed by "soBonus absent"; (c) `'*'` counted toward explicit coverage → killed by VB-PT-3; (d) `loss.unplayed` ignored → killed by X-WO-1. Plus changed-lines Stryker on `points.ts`.
 - [ ] **Step 6: Commit** `feat(engine): outcome-keyed PointsRule, payout and coverage (W2d T2)`.
 
@@ -387,16 +407,21 @@ Test types: unit + property; e2e → Task 16 `stage-tiebreaks-w2d.spec.ts` "poin
 
 ---
 
-### Task 3: Engine — each sport's `tablePointsRule`, `soBonus`, and the parity sweep (wave 1, after Task 2; parallel with Task 5)
+### Task 3: Engine — each sport's `tablePointsRule`, `soBonus`, and the parity sweep (wave 1, after Task 4)
 
-SPEC §5.3 "The sport's default, as a rule", §5.10 points column, D6, D10(a)(c), B2. Rule rows FB-PT-1, HK-PT-1, HK-PT-2, IH-PT-1, IH-PT-2, BG-PT-1, CK-PT-1, CK-PT-2, VB-PT-1, VB-PT-2, TT-PT-1.
+SPEC §5.3 "The sport's default, as a rule" (the `shootoutWin/shootoutLoss` removal, greenfield, no alias), §5.10 points column, §11.2, D6, D10(a)(c), B2. Rule rows FB-PT-1, HK-PT-1, HK-PT-2, IH-PT-1, IH-PT-2, BG-PT-1, CK-PT-1, CK-PT-2, VB-PT-1, VB-PT-2, TT-PT-1.
+
+**This task owns W2d's one golden exception (PS-1, Global Constraints).** Removing the zod keys is a tsc error in two `standingsDelta` payers and their bounds, and the football, hockey and ice hockey corpora carry `shootoutWin` in a recorded config, so the fold output moves. The removal stands (SPEC §5.3); the SO rows are already SIGNED in the parity list below, so the parity oracle is unaffected.
 
 **Files:**
 - Modify: `E/sport/module.ts` (`tablePointsRule(cfg: Cfg, stageKind: StageKind): PointsRule` on `SportModule`).
-- Modify: every module/kernel listed in Task 1 (one `tablePointsRule` each). `E/sports/football/football.ts:131-132` and `E/sports/period/kernel.ts:221-222`: `shootoutWin`/`shootoutLoss` → `soBonus: z.number().int().nonnegative().optional()`; `hockey.ts:146` `fih-shootout` preset → `{win 3, draw 1, loss 0, soBonus 1}`. Their `*.schema.json` via `pnpm --filter @seazn/engine schema:snapshot`.
+- Modify: every module/kernel listed in Task 1 (one `tablePointsRule` each). `E/sports/football/football.ts:131-132` and `E/sports/period/kernel.ts:221-222` (+ the `PeriodCfg.points` type `:98-106`): `shootoutWin`/`shootoutLoss` → `soBonus: z.number().int().nonnegative().optional()`; `hockey.ts:146` `fih-shootout` preset → `{win 3, draw 1, loss 0, soBonus 1}`. Their `*.schema.json` via `pnpm --filter @onryde/seazn-engine schema:snapshot`.
+- Modify, **the shoot-out branch ONLY** (the one `standingsDelta` exception, PS-1) — each stops reading the deleted keys and nothing else changes: football `standingsDelta` win case `football.ts:2780-2786` (a shoot-out win pays `points.win`/`points.loss`, as when the split was unset), `declaredPointsSets :2842-2848`, `matchPointsBounds :2850-2857`; period kernel `winPoints :1537-1548` (its `"shootout"` branch reads `otWin ?? win`, `otLoss ?? loss`), `declaredPointsSets :2833-2847`, `matchPointsBounds :2849-2857`.
 - Modify: `E/sports/setbased/volleyball.ts:11,38` — FIVB map explicit `{"3-0":[3,0],"3-1":[3,0],"3-2":[2,1]}`; best-of-3 `{"2-0":[3,0],"2-1":[2,1]}` (D10(a)); beach `{"*":[2,0]}` unchanged. `tabletennis.ts:30` → TT rule 2/1/0 with `loss.unplayed: 0` (D6).
+- Modify (web half of the removal, PS-1c; no task owned it): `W/lib/match-rules/football.ts:32-39,118-144` (the `shootoutWin`/`shootoutLoss` override builder and the two fields; `soBonus` is NOT added here — the stage Points section owns it, Task 15+16); `W/components/v2/division-settings.tsx:361` and `W/components/v2/division-format-patch.ts:39` (comments naming the pair); `W/lib/rule-errors.ts:118-119` (`POINTS_SPLIT_LABEL_KEYS` loses both rows); `rules.err.pointsSplit.shootoutWin`/`shootoutLoss` leave `W/dictionaries/{en,es,fr,nl}/ui.json`, then `pnpm i18n:gen-keys` (`W/lib/i18n-keys.ts`) and `pnpm i18n:check`.
+- Modify (tests pinning the old keys; greenfield — each rewritten or deleted and named in the report): engine `E/competition/points-w2c.test.ts:450`, `E/sport/match-points-bounds.test.ts:92-130`, `E/sport/rule-keys.test.ts:124,139`, `E/sports/football/football.test.ts:138-164,458`, `E/testkit/golden-compare.test.ts:60`; web `W/components/v2/__tests__/{match-rules,division-format-patch}.test.ts`, `W/components/v2/__tests__/division-settings-standings-points.test.tsx`, `W/lib/match-rules/__tests__/{football.contract,joint-builders}.test.ts`, `W/lib/__tests__/{match-rules-best-of-one,rule-scope,rule-errors-copy}.test.ts`, `W/server/usecases/__tests__/{stage-points,stage-rules,stage-rules-every-sport}.test.ts` (the full census is `git grep -n -a -E "shootoutWin|shootoutLoss" -- packages/engine/src apps/web/src`, re-run in Step 4: only `soBonus`-era hits and the corpora's recorded configs may remain). `E/testkit/golden.ts:82,1073` (the recording configs) change only if the re-baseline requires it, and the report says why.
+- Modify: `E/sports/{football,hockey,icehockey}/*.golden.json` — **only** through Step 7's isolated `REBASELINE_GOLDEN=1` commit; `E/sport/fold-epoch.ts` — Step 8's MAJOR bumps football 2 → 3, hockey 2 → 3, and ice hockey 1 → 2 if its corpus moved (from PF-14's values; Task 18 then takes hockey 3 → 4).
 - Test: `E/competition/table-points-parity.test.ts` (new).
-- Modify: `fold-epoch.ts` only if `fold-epoch:check` says a golden moved (it must not: `standingsDelta` is untouched).
 - Create: `MUT/t3.json`.
 
 **Interfaces:**
@@ -407,7 +432,8 @@ SPEC §5.3 "The sport's default, as a rule", §5.10 points column, D6, D10(a)(c)
 
 - [ ] **Step 1: Write the failing test** `table-points-parity.test.ts`:
   ```ts
-  // The parity oracle is the module's OWN standingsDelta (pre-W2d payer), untouched by W2d; the signed deltas are an allowlist.
+  // The parity oracle is the module's OWN standingsDelta (pre-W2d payer), untouched by W2d except its shoot-out branch (PS-1),
+  // whose every row (football/hockey win.so, loss.so) is SIGNED below; the signed deltas are an allowlist.
   const SIGNED: ReadonlyArray<{ sport: string; variant?: string; outcome: OutcomeKey; why: string }> = [
     { sport: "tabletennis", outcome: "loss.regulation", why: "D6 TT 2/1/0" },
     { sport: "volleyball", outcome: "set:2-1", why: "D10(a) best of 3" },
@@ -431,26 +457,33 @@ SPEC §5.3 "The sport's default, as a rule", §5.10 points column, D6, D10(a)(c)
   it("VB-PT-1 VB-PT-2 FIVB best of 5 and the best-of-3 map exactly as SPEC §5.3", …);
   it("BG-PT-1 chess default is 2/1/0 in half-points (unit 'half')", …);
   it("CK-PT-2 the two-innings draw appears only when inningsPerSide === 2", …);
-  it("soBonus is the only shoot-out key: football/hockey configSchema refuses shootoutWin (greenfield, no alias)", …);
+  it("soBonus is the only shoot-out key: football and period configSchema STRIP shootoutWin/shootoutLoss (z.object, `kernel.ts:214`, `football.ts:124-133`) — a cfg parsed with them holds neither key (greenfield, no alias; PS-1b)", …);
+  it("PS-1 a shoot-out win's standingsDelta reads no deleted key: football pays win/loss, the period kernel otWin ?? win (expected from the cfg's own win/otWin, never the split)", …);
   ```
 - [ ] **Step 2: Run, expect FAIL.** `cd WT/packages/engine && rm -f "$TMPDIR/w2d-t3e.json" && pnpm exec vitest run src/competition/table-points-parity.test.ts --reporter=json --outputFile="$TMPDIR/w2d-t3e.json"; echo EXIT=$?`
-- [ ] **Step 3: Implement** `tablePointsRule` per module from its existing cfg keys (SPEC §5.3 examples), the cfg changes and the volleyball/TT maps; run `schema:snapshot`.
-- [ ] **Step 4: Run, expect PASS**; `fold-epoch:check --against HEAD^1` green; regression: `pnpm exec vitest run src/sport/match-points-bounds.test.ts src/sport/supports-draws.test.ts src/sports/hockey src/sports/football/football.test.ts` (judged). tsc, eslint.
+- [ ] **Step 3: Implement** `tablePointsRule` per module from its existing cfg keys (SPEC §5.3 examples), the cfg changes, the shoot-out-branch edits and the volleyball/TT maps; the web half of the removal and the tests that pinned the old keys; run `schema:snapshot`, `pnpm i18n:gen-keys`.
+- [ ] **Step 4: Run, expect PASS** (the golden replay is expected RED here, on the football/hockey/ice hockey corpora only — Steps 7–8 settle it); regression, exact files (judge `files` = 10 engine, 13 web):
+  `cd WT/packages/engine && pnpm exec vitest run src/sport/match-points-bounds.test.ts src/sport/supports-draws.test.ts src/sport/rule-keys.test.ts src/sports/football/football.test.ts src/sports/period/period.test.ts src/sports/period/shootout.test.ts src/competition/points-w2c.test.ts src/testkit/golden-compare.test.ts src/testkit/conformance.test.ts src/testkit/for-each-sport.test.ts --reporter=json --outputFile="$TMPDIR/w2d-t3r.json"; echo EXIT=$?`
+  `cd WT/apps/web && pnpm exec vitest run src/components/v2/__tests__/match-rules.test.ts src/components/v2/__tests__/division-format-patch.test.ts src/components/v2/__tests__/division-settings-standings-points.test.tsx src/lib/match-rules/__tests__/football.contract.test.ts src/lib/match-rules/__tests__/joint-builders.test.ts src/lib/__tests__/match-rules-best-of-one.test.ts src/lib/__tests__/rule-scope.test.ts src/lib/__tests__/rule-errors-copy.test.ts src/server/usecases/__tests__/stage-points.test.ts src/server/usecases/__tests__/stage-rules.test.ts src/server/usecases/__tests__/stage-rules-every-sport.test.ts src/components/v2/stage-rules/__tests__/stage-points-model.test.ts src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx --reporter=json --outputFile="$TMPDIR/w2d-t3w.json"; echo EXIT=$?` (DB suites: pending 0)
+  All three tscs; eslint; `pnpm i18n:check`; the `shootoutWin|shootoutLoss` census above.
 - [ ] **Step 5: Mutate** `MUT/t3.json`: hockey `shootoutAs` → `"result"` (killed by HK-PT-2's D booking); TT `unplayed: 0` → `1` (killed by TT-PT-1); volleyball best-of-3 `2-1` → `[3,0]` (killed by VB-PT-2). Changed-lines Stryker on the module lines W2d added.
-- [ ] **Step 6: Commit** `feat(engine): every sport's table points as a rule; soBonus replaces shootoutWin/Loss (W2d T3)`.
+- [ ] **Step 6: Commit the code** `feat(engine): every sport's table points as a rule; soBonus replaces shootoutWin/Loss (W2d T3)` — everything except the corpora and `fold-epoch.ts`, so the tree is clean for Step 7.
+- [ ] **Step 7: The isolated re-baseline (GOLDEN-POLICY "The write modes", "What the harness enforces" 1–3).** With a clean tree: `cd WT/packages/engine && REBASELINE_GOLDEN=1 pnpm exec vitest run src/testkit/golden.test.ts --reporter=json --outputFile="$TMPDIR/w2d-t3-rebase.json"; echo EXIT=$?`. Review it as a state diff FROM THE BYTES (the `rtk` wrapper swallows the printout): for each written corpus, diff against `git show HEAD:<path>` and confirm, per stream, that `events`, `lineups` and `configs` are byte-identical and which of `states`/`summary`/`outcome`/`deltas` moved; the moved keys must be the shoot-out points' (no `cards`, no clock). Only `E/sports/{football,hockey,icehockey}/*.golden.json` may change. Commit the corpora ALONE: `test(engine): re-baseline football/hockey/icehockey goldens for the soBonus removal (W2d T3, PS-1)`. **Guard:** if the plain golden replay is still red on the recorded `cfg.points.shootoutWin` after the re-baseline (the re-baseline splices each RECORDED config back into its states, `keepRecordedConfig` `golden.ts:1382`; GOLDEN-POLICY.md:331-344), STOP and report to the orchestrator — never hand-edit a corpus, never `UPDATE_GOLDEN`.
+- [ ] **Step 8: The MAJOR bumps, next commit.** `E/sport/fold-epoch.ts`: football 2 → 3, hockey 2 → 3, ice hockey 1 → 2 only if its corpus moved in Step 7; the header comment says why (an older phone keeps paying the deleted split). Then `cd WT/packages/engine && pnpm exec vitest run src/testkit/golden.test.ts src/testkit/golden-policy.test.ts --reporter=json --outputFile="$TMPDIR/w2d-t3g.json"; echo EXIT=$?` green, and `cd WT && pnpm --filter @onryde/seazn-engine fold-epoch:check --against "$TASK_BASE"; echo EXIT=$?` → `EXIT=0`, the raised sports listed, `changed 0` for every other sport. Commit `chore(engine): FOLD_EPOCH majors for the soBonus removal (W2d T3, PS-1)`.
 
-Test types: unit (parity sweep = SPEC §13.4 parity leg); e2e → Task 19 walkthroughs read the points; smoke → Task 14; regression above. Sequence: default variant → each preset → stage-kind change (league vs group) → another sport.
+Test types: unit (parity sweep = SPEC §13.4 parity leg); e2e → Task 19 walkthroughs read the points; smoke → Task 14; regression above (+ the golden replay after Step 8). Sequence: default variant → each preset → stage-kind change (league vs group) → another sport.
 
 ---
 
-### Task 4: Engine — the new tie-break keys, the h2h modifiers, and no silent skip (wave 1, parallel with Task 2)
+### Task 4: Engine — the new tie-break keys, the h2h modifiers, and no silent skip (wave 1, after Task 2)
 
 SPEC §5.6 (table), §2.3 anti-goal 2, P9, P20, B4, B5, OC3. Rule rows BD-TB-1, TT-TB-1, TN-TB-1, IH-TB-1, FB-TB-2, HK-TB-1, HK-TB-2, VB-TB-2, BG-TB-1, BG-TB-3.
 
 **Files:**
-- Modify: `E/sport/module.ts:46` — `TiebreakerKey` gains `set_diff`, `point_diff`, `h2h_two`, `h2h_wins`, `h2h_set_ratio`, `h2h_point_ratio`, `h2h_reapply`, `h2h_exclusion`, `matches_played`, `field_goals`.
+- Modify: `E/sport/module.ts:46` — `TiebreakerKey` gains `set_diff`, `point_diff`, `h2h_two`, `h2h_wins`, `h2h_set_ratio`, `h2h_point_ratio`, `h2h_reapply`, `h2h_exclusion`, `matches_played`, `field_goals`. (The web's hand-typed `TiebreakerKeyS`, `schemas.ts:325`, follows in Task 10, PS-2c.)
 - Modify: `E/competition/tiebreakers.ts` — `COMPARATORS :332` (new comparators), `H2H_KEYS :368` / `h2hToPlain :376` (h2h_wins, h2h_set_ratio, h2h_point_ratio), `h2hBlock :414` (re-application and exclusion as block modifiers; `h2hRecursive` deleted from `RankContext`), `h2h_two` handler, `wins` honours `RankContext.winsCount`, `sberger`/`direct` on a non-Swiss stage from pool results with GAME points (B5), and `:529-537` throws `CONFIG_INVALID` instead of skipping.
 - Modify: `E/competition/stage.ts:72,243` (drop `h2hRecursive`).
+- Modify: `E/competition/cascade.test.ts` — the only test that uses `h2hRecursive` (`git grep -l -a h2hRecursive`: it, `stage.ts`, `tiebreakers.ts`); its cases move to `h2h_reapply` in the cascade, each named (PS-9d).
 - Test: `E/competition/tiebreak-keys-w2d.test.ts`, `E/competition/tiebreak-properties.test.ts` (fast-check).
 - Create: `MUT/t4.json`.
 - Do NOT touch: `buildSwissTable`'s Swiss arithmetic (W3; P12).
@@ -500,7 +533,7 @@ field_goals(row) = gf − goals_pc − goals_stroke (own goals count, B3); missi
   `tiebreak-properties.test.ts` (rule 10; each reports `checked`): **permutation invariance** (shuffling row and fixture order gives the same ranking, given the same lots map — Task 5 adds the map; here residuals compare by id); **appending a key never reorders entrants the prefix already separated**; **re-application terminates** (random classes, bounded steps).
 - [ ] **Step 2: Run, expect FAIL.** `cd WT/packages/engine && rm -f "$TMPDIR/w2d-t4e.json" && pnpm exec vitest run src/competition/tiebreak-keys-w2d.test.ts src/competition/tiebreak-properties.test.ts --reporter=json --outputFile="$TMPDIR/w2d-t4e.json"; echo EXIT=$?`
 - [ ] **Step 3: Implement** the comparators and the block per the algorithm above.
-- [ ] **Step 4: Run, expect PASS**; regression `pnpm exec vitest run src/competition/tiebreakers.test.ts src/competition/stage.test.ts` (judged; update `h2hRecursive` cases to `h2h_reapply` in the cascade, each named). tsc, eslint.
+- [ ] **Step 4: Run, expect PASS**; regression `pnpm exec vitest run src/competition/tiebreakers.test.ts src/competition/stage.test.ts src/competition/cascade.test.ts` (judged, `files` = 3; the `h2hRecursive` cases in `cascade.test.ts` become `h2h_reapply` in the cascade, each named). tsc, eslint.
 - [ ] **Step 5: Mutate** `MUT/t4.json`: exclusion restarts from the current key instead of `blockKeys[0]` (killed by TT-TB-1); `h2h_two` splits a class of 3 (killed by BD-TB-1 OC3 case); the no-comparator `throw` → `continue` (killed by anti-goal 2); `field_goals` subtracts `goals_og` (killed by HK-TB-2). Stryker changed lines.
 - [ ] **Step 6: Commit** `feat(engine): BWF/ITTF/ATP/FIH/IIHF tie-break keys and h2h modifiers (W2d T4)`.
 
@@ -508,13 +541,13 @@ Test types: unit + property (SPEC §13.2, §13.3); e2e → Task 19 per family; s
 
 ---
 
-### Task 5: Engine — the stored lots draw and the empty table (wave 1, after Task 4; parallel with Task 3)
+### Task 5: Engine — the stored lots draw and the empty table (wave 1, after Task 3)
 
 SPEC §5.8, §2.3 anti-goal 3, P21, ruling 70, D5, D7 (ST-G13). Rule rows X-TB-4, X-TB-6.
 
 **Files:**
 - Modify: `E/competition/tiebreakers.ts` — `RankContext` gains `lotsDraws`; `RankingResult` gains `newLotsDraws`, row flag `level`; `lotSeed :547` unchanged; the `lots` step per the algorithm; the no-`lots` seed → id fallback (`:599-607`) stays.
-- Modify: `E/competition/stage.ts` — `DivisionEvent` `rank_lock` gains `order: EntrantId[]` and `drawnAt: string`; `completeTableStage` passes `lotsDraws`, returns `newLotsDraws`.
+- Modify: `E/competition/stage.ts` — `DivisionEvent` `rank_lock` gains `order: EntrantId[]` and `drawnAt: string`, both read from the stored draw in `lotsDraws` (the pure engine has no clock; a new draw's date is the DB's, Task 9 — PS-5b); `completeTableStage` passes `lotsDraws`, returns `newLotsDraws`.
 - Test: `E/competition/lots-stored.test.ts` (new), and properties added to `tiebreak-properties.test.ts`.
 - Create: `MUT/t5.json`.
 
@@ -523,8 +556,9 @@ SPEC §5.8, §2.3 anti-goal 3, P21, ruling 70, D5, D7 (ST-G13). Rule rows X-TB-4
   ```ts
   export type MembersKey = string; // sorted entrant ids joined with ","
   export function membersKeyOf(ids: readonly EntrantId[]): MembersKey;
-  // RankContext
-  lotsDraws?: ReadonlyMap<MembersKey, readonly EntrantId[]>;
+  // RankContext — the value carries the stored draw's date (PS-5b): `drawnAt` is the DB's `stage_lots_draws.drawn_at`
+  export interface StoredLotsDraw { readonly order: readonly EntrantId[]; readonly drawnAt: string }
+  lotsDraws?: ReadonlyMap<MembersKey, StoredLotsDraw>;
   countedFixtures?: number; // 0 ⇒ empty table
   // RankingResult
   newLotsDraws: ReadonlyArray<{ membersKey: MembersKey; members: readonly EntrantId[]; drawnOrder: readonly EntrantId[]; seed: number }>;
@@ -537,7 +571,7 @@ SPEC §5.8, §2.3 anti-goal 3, P21, ruling 70, D5, D7 (ST-G13). Rule rows X-TB-4
 if countedFixtures === 0: order every class by seed then id, mark level=true on every row, store nothing, return.
 for each residual class C at `lots`:
   k = membersKeyOf(C)
-  if lotsDraws.has(k): order C by that stored order.
+  if lotsDraws.has(k): order C by lotsDraws.get(k).order.
   else: seed = lotSeed(rngSeed, sorted ids of C); order = shuffle(C, seed); push {k, members, order, seed} to newLotsDraws.
 ```
 
@@ -547,13 +581,13 @@ for each residual class C at `lots`:
   it("X-TB-4 a residual class with no stored draw is drawn with the seeded shuffle and returned in newLotsDraws", …);
   it("X-TB-4 the same class with its stored draw uses it even when rngSeed changes (stored beats re-hash)", …);
   it("Review Focus 2: a changed tied set (one member withdrew) draws again; the old key is not applied to the new membership", …);
-  it("X-TB-4 completeTableStage's rank_lock carries `order` equal to the drawn order and `drawnAt`", …);
+  it("X-TB-4 completeTableStage's rank_lock carries `order` and `drawnAt` read from the stored draw in lotsDraws — the engine invents no date (PS-5b)", …);
   it("a second recompute with the returned draws stored yields an identical order and no new draws", …);
   ```
   Properties (rule 10): **lots reload stability** — rank, persist `newLotsDraws`, rank again → identical, `newLotsDraws` empty; an unrelated result that leaves the tied set the same keeps the draw; **permutation invariance** now with the lots map.
 - [ ] **Step 2: Run, expect FAIL.** `cd WT/packages/engine && rm -f "$TMPDIR/w2d-t5e.json" && pnpm exec vitest run src/competition/lots-stored.test.ts src/competition/tiebreak-properties.test.ts --reporter=json --outputFile="$TMPDIR/w2d-t5e.json"; echo EXIT=$?`
 - [ ] **Step 3: Implement** per the algorithm.
-- [ ] **Step 4: Run, expect PASS**; regression `src/competition/stage.test.ts`, `src/testkit/simulation*.test.ts` touching lots (judged). tsc, eslint.
+- [ ] **Step 4: Run, expect PASS**; regression `src/competition/stage.test.ts src/testkit/simulation.test.ts` (judged, `files` = 2). tsc, eslint.
 - [ ] **Step 5: Mutate** `MUT/t5.json`: drop the empty-table branch (killed by X-TB-6); look up by unsorted ids (killed by the stability property); ignore a stored draw (killed by "stored beats re-hash"). Stryker changed lines.
 - [ ] **Step 6: Commit** `feat(engine): stored, seeded lots draw and the level empty table (W2d T5)`.
 
@@ -561,7 +595,7 @@ Test types: unit + property; e2e → Task 17 `standings-popovers.spec.ts` "Drawn
 
 ---
 
-### Task 6: Engine — `validateCascade` and `primaryTableKey` (wave 1, after Task 3)
+### Task 6: Engine — `validateCascade` and `primaryTableKey` (wave 1, after Task 5)
 
 SPEC §5.5, D3, D8, D10(d), D11, OC1, OC3. Rule rows X-TB-3, X-TB-5, X-TB-7 (refusal half), FB-TB-4.
 
@@ -603,24 +637,25 @@ SPEC §5.5, D3, D8, D10(d), D11, OC1, OC3. Rule rows X-TB-3, X-TB-5, X-TB-7 (ref
   ```
 - [ ] **Step 2: Run, expect FAIL.** `cd WT/packages/engine && rm -f "$TMPDIR/w2d-t6e.json" && pnpm exec vitest run src/competition/cascade-rules.test.ts --reporter=json --outputFile="$TMPDIR/w2d-t6e.json"; echo EXIT=$?`
 - [ ] **Step 3: Implement** the six rules in SPEC §5.5's order.
-- [ ] **Step 4: Run, expect PASS**; regression: the moved old `validateCascade` cases in `tiebreakers.test.ts` (judged). tsc, eslint.
+- [ ] **Step 4: Run, expect PASS**; regression: the old `validateCascade` callers, moved to the new signature (PS-9d): `pnpm exec vitest run src/competition/cascade.test.ts src/competition/tiebreakers.gaps.test.ts src/sports/period/period.test.ts src/sports/period/period-audit.test.ts` (judged, `files` = 4). tsc, eslint.
 - [ ] **Step 5: Mutate** `MUT/t6.json` (SPEC §13 "mutate the guard once"): delete the first/last check (killed by "must start with"); make the Swiss exemption apply to every kind (killed by the non-Swiss 'first' case); allow every duplicate (killed by OC3's second half); skip the fair-play cfg check (FB-TB-4); skip the cross-group refusal (X-TB-7). Stryker on `cascade-rules.ts`.
 - [ ] **Step 6: Commit** `feat(engine): validateCascade returns every refusal; primaryTableKey (W2d T6)`.
 
-Test types: unit; e2e → Task 15 "an invalid step shows its reason inline"; smoke → Task 14 ("an invalid order is refused by name"); regression above. Sequence: empty → valid → one fault → three faults → another sport.
+Test types: unit; e2e → Task 15 "an invalid step shows its reason inline"; smoke → Task 13 ("an invalid order is refused by name"); regression above. Sequence: empty → valid → one fault → three faults → another sport.
 
-**Wave 1 close:** whole-wave review; orchestrator gate = Steps 4 of Tasks 1–6; proof commit for X-PT-2/3/4, X-WO-1, X-DW-4, X-TB-3/4/5/6, the sport PT/TB rows above; walkthrough: none (engine only) — the orchestrator instead runs `pnpm --filter @seazn/engine fold-epoch:check --against <wave-start>` and records "no golden moved".
+**Wave 1 close:** whole-wave review; orchestrator gate = Steps 4 of Tasks 1–6 (Task 3's golden replay after its Step 8); proof commit for X-PT-2/3/4, X-WO-1, X-DW-4, X-TB-3/4/5/6, the sport PT/TB rows above; walkthrough: none (engine only) — the orchestrator instead runs `pnpm --filter @onryde/seazn-engine fold-epoch:check --against <wave-start>` and records the MAJORs Task 3 raised (football 2 → 3, hockey 2 → 3, ice hockey 1 → 2 if its corpus moved) and that no other sport's corpus moved.
 
 ---
 
-### Task 7: Migration — pin columns, `stage_lots_draws`, the B1 pin function, the view (wave 2, parallel with Task 8)
+### Task 7: Migration — pin columns, `stage_lots_draws`, the B1 pin function, the view (wave 2, first)
 
 SPEC §8, §5.4 "Migration pin (B1)", B1, P18/P18a, plan finding PF-3 (`public_stages_v`). Rule row X-TB-2 (migration half).
 
 **Files:**
 - Create: `db/migration/deltas/V<n>__w2d_table_rules.sql` (`<n>` from Task 0). Load `supabase:supabase-postgres-best-practices` before writing it.
 - Create: `scripts/w2d/pin-scenario.ts` — `seed` and `read` modes over API v1 only (endpoints that exist at `W2D_BASE`: create division/stages, generate, `POST /fixtures/{id}/events`, `GET /stages/{id}/standings`), deterministic names.
-- Create: `apps/web/src/server/engine-db/__tests__/fixtures/w2d-pin-before.json` — the `read` output at `W2D_BASE` (Step 1).
+- Create: `apps/web/src/server/engine-db/__tests__/fixtures/w2d-pin-before.json` — the `read` output at `W2D_BASE` (Step 1), recording every stage, pool, entrant and fixture UUID and each stage's `rngSeed` beside the tables (PS-8b: row order depends on ids through the seed → id fallback and `lotSeed(rngSeed, ids)`).
+- Create: `apps/web/src/server/engine-db/__tests__/fixtures/w2d-pin-seed.ts` — **the seeding twin** (PS-8a): a vitest seeder that inserts the scenario's divisions, stages, pools, entrants, fixtures and events with exactly the UUIDs and `rngSeed` recorded in `w2d-pin-before.json`, so Task 9's §13.8 identity re-seeds the same ids.
 - Test: `apps/web/src/server/engine-db/__tests__/w2d-migration-pin.test.ts` (DB).
 - Create: `MUT/t7.json`.
 
@@ -633,15 +668,15 @@ SPEC §8, §5.4 "Migration pin (B1)", B1, P18/P18a, plan finding PF-3 (`public_s
   - `w2d_pre_points(sport text, cfg jsonb) returns jsonb` — the points each sport paid before W2d, as a new-shape rule (mapping below).
   - `w2d_pre_cascade(sport text) returns jsonb` — each sport's pre-W2d `defaultTiebreakers` as literals (Anchors row; re-read at `W2D_BASE`).
   - `w2d_pin_started_stages() returns integer` — pins every stage with `status in ('active','complete') and table_rules_pinned is null` to `{points, tiebreakers, crossGroup: ["points","diff","for","wins"], sources: {points:"migrated", tiebreakers:"migrated"}}`, returns the count. Idempotent.
-  - The data steps, in order: convert every stage's old-shape `config.points` (`config.points ? 'base'`) through `w2d_legacy_points`; for football and hockey divisions, `soBonus = shootoutWin − draw` and drop `shootoutWin/shootoutLoss`; `select w2d_pin_started_stages()`.
+  - The data steps, in order: convert every stage's old-shape `config.points` (`config.points ? 'base'`) through `w2d_legacy_points`; for football and hockey divisions, `soBonus = shootoutWin − draw` and drop `shootoutWin/shootoutLoss`; for ice hockey divisions, drop `shootoutWin/shootoutLoss` (the period kernel's schema no longer has them, Task 3; GWS falls back to OT, SPEC §5.3 — PS-1d); `select w2d_pin_started_stages()` (which reads the pre-W2d payer from `w2d_pre_points`, so a started stage keeps its split).
   - `public_stages_v.points_rule` redefined to `coalesce(s.table_rules_pinned -> 'points', <the new-shape rebuild of config.points>)` (PF-3: the view rebuilt the OLD keys `base/bonuses/forfeit`, `V414__public_stages_qualification.sql:57-66,154-157`).
 
 **`w2d_pre_points` mapping (pre-W2d payer; every default coalesced from the module schema at `W2D_BASE`, re-read by the builder):**
 
 | sport | rule |
 |---|---|
-| football | `win.regulation = points.win (3)`, `draw = points.draw (1)`, `loss.regulation = points.loss (0)`; `win.so/loss.so = shootoutWin/shootoutLoss` when set; `shootoutAs:"result"` |
-| hockey, icehockey | `points.{win,draw,loss}`; `win.ot/loss.ot = otWin/otLoss`; `win.so/loss.so = shootoutWin/shootoutLoss` when set; `result` |
+| football | `win.regulation = points.win (3)`, `draw = points.draw (1)`, `loss.regulation = points.loss (0)`; `win.so/loss.so = shootoutWin/shootoutLoss` only when BOTH are set, else `win.so/loss.so = win/loss` (pre-W2d football paid the split only with both keys, `football.ts:2781-2784` — PS-8d); `shootoutAs:"result"` |
+| hockey, icehockey | `points.{win,draw,loss}`; `win.ot/loss.ot = otWin/otLoss`; `win.so = shootoutWin ?? otWin ?? win`, `loss.so = shootoutLoss ?? otLoss ?? loss`, per key (`kernel.ts:1540-1541`); `result` |
 | cricket | `win 2, tie 1, noResult 1, loss 0`, `draw` when set |
 | badminton, tabletennis, volleyball | `bySetScore = pointsMap` (TT `{"*":[2,0]}` — 2/0, not D6's 2/1/0) |
 | tennis | `points.{win 2, loss 0}` |
@@ -650,18 +685,21 @@ SPEC §8, §5.4 "Migration pin (B1)", B1, P18/P18a, plan finding PF-3 (`public_s
 | generic | `points.{w, d, l}` |
 | every sport | the stage's own converted `config.points` wins over this when present; `tie`/`noResult` 0 unless the sport paid them; bonuses and forfeit kept |
 
-The cascade is `divisions.tiebreakers` when set, else `w2d_pre_cascade(sport)`. **Plan finding PF-1:** the web resolver today reads `division.tiebreakers ?? module.defaultTiebreakers` for EVERY stage kind including Swiss (W2c `competition.ts:488-490`), so the production Swiss badminton stage ranks by `points, wins, set_ratio, point_ratio, h2h_points` — the SPEC §8 "INFERRED" is confirmed by the code; the builder still reads the live row on staging (Step 6).
+The cascade is `divisions.tiebreakers` when set, else `w2d_pre_cascade(sport)`. **Plan finding PF-1:** the web resolver today reads `division.tiebreakers ?? module.defaultTiebreakers` for EVERY stage kind including Swiss (main@e97823e4d8 `competition.ts:492-494`), so the production Swiss badminton stage ranks by `points, wins, set_ratio, point_ratio, h2h_points` — the SPEC §8 "INFERRED" is confirmed by the code; the builder still reads the live row on staging (Step 6).
 
-- [ ] **Step 1: Capture the pre-W2d snapshot** (expected values come from the pre-W2d CODE, never from W2d's): in a detached worktree at `W2D_BASE` with its own env label `w2d-base`, `pnpm db:apply && pnpm sync:sports`, start its prod server, copy in `scripts/w2d/pin-scenario.ts` (uncommitted there), run `seed` then `read`, and copy the JSON to `fixtures/w2d-pin-before.json`. The scenario seeds one active and one complete stage per family — football (with a played group shoot-out), hockey (Pro League preset with a shoot-out), ice hockey (an OT and a GWS), cricket (a tie and a no-result), volleyball (a 3-2), badminton **Swiss** (mirrors production), table tennis (a walkover), tennis, chess, carrom, generic — plus one stage with an old-shape `config.points`, and one pending stage. Each stage gets enough results to need two keys and one residual tie.
+- [ ] **Step 1: Capture the pre-W2d snapshot** (expected values come from the pre-W2d CODE, never from W2d's): in a detached worktree at `W2D_BASE` with its own env label `w2d-base`, `pnpm db:apply && pnpm sync:sports`, start its prod server, copy in `scripts/w2d/pin-scenario.ts` (uncommitted there), run `seed` then `read`, and copy the JSON (tables, every UUID, each `rngSeed`) to `fixtures/w2d-pin-before.json`. The scenario seeds one active and one complete stage per family — football (with a played group shoot-out), hockey (Pro League preset with a shoot-out), ice hockey (an OT and a GWS), cricket (a tie and a no-result), volleyball (a 3-2), badminton **Swiss** (mirrors production), table tennis (a walkover), tennis, chess, carrom, generic — plus one stage with an old-shape `config.points`, and one pending stage. Each stage gets enough results to need two keys and one residual tie.
 - [ ] **Step 2: Write the failing DB test** `w2d-migration-pin.test.ts`:
   ```ts
   it("B1 w2d_legacy_points equals legacyPointsRule for every old-shape sample (one authority, two languages; counted)", …);
-  it("B1 w2d_pre_points(sport, cfg) equals the pre-W2d payer for every sport × variant preset (counted over forEachSport)", …);
-  //   expected: the points recorded in w2d-pin-before.json for that sport's stages, never W2d's tablePointsRule
+  it("B1 w2d_pre_points(sport, cfg) equals the pre-W2d payer for every SEEDED variant in w2d-pin-before.json (counted; PS-8c)", …);
+  //   expected: the points recorded in w2d-pin-before.json for that sport's stages, never W2d's tablePointsRule.
+  //   The scenario seeds one variant per family; the title says so rather than claiming every preset.
+  it("B1 PS-8d the equality above includes a one-key football sample: w2d_pre_points maps a cfg with only shootoutWin set to a plain win/loss shoot-out (as football.ts:2781-2784 paid), and both keys set to the split", …);
   it("B1 w2d_pin_started_stages pins active and complete stages only, returns the count, sources 'migrated'", …);
   it("B1 a second call pins nothing and changes nothing (idempotent)", …);
   it("B1 a pending stage is NOT pinned, and its old-shape config.points is converted in place", …);
   it("B1 football/hockey division cfg: shootoutWin 2 with draw 1 becomes soBonus 1 and the old keys are gone", …);
+  it("PS-1d an ice hockey division cfg loses shootoutWin/shootoutLoss and keeps otWin/otLoss", …);
   it("PF-3 public_stages_v.points_rule returns the pin's points for a pinned stage and the new shape otherwise", …);
   it("a pin and its timestamp are both null or both set (check constraint)", …);
   ```
@@ -672,20 +710,22 @@ The cascade is `divisions.tiebreakers` when set, else `w2d_pre_cascade(sport)`. 
 - [ ] **Step 6: Staging check (orchestrator).** On staging, before merge: `select count(*) from stages where status in ('active','complete')` before, then after the migration `select count(*) from stages where table_rules_pinned is not null` — equal. Record both numbers in the PR body (owner fact: one Swiss badminton competition).
 - [ ] **Step 7: Commit** `feat(db): W2d pin columns, stored lots table and the B1 pin of started stages (W2d T7)`.
 
-Test types: unit (DB); e2e N/A (no UI; Task 17's public table reads the pin); smoke → Task 14 ("a pinned stage's table reads the pin"); regression `W/server/public-site/__tests__/qualification-view.test.ts` (the view change). Sequence: empty DB (count 0) → seeded → second call → pending stays live → another sport.
+Test types: unit (DB); e2e → Task 19 `tables-w2d.spec.ts` "pin: a started stage's public table does not move after the division default changes" (no UI of its own; the public table reads the same pin, PS-9e); smoke → Task 14 ("a pinned stage's table reads the pin"); regression `W/server/public-site/__tests__/qualification-view.test.ts` (the view change). Sequence: empty DB (count 0) → seeded → second call → pending stays live → another sport.
 
 ---
 
-### Task 8: Engine — `resolveTableRules`, `defaultTiebreakers(kind)`, engine consumers (wave 2, parallel with Task 7)
+### Task 8: Engine — `resolveTableRules`, `defaultTiebreakers(kind, cfg)`, engine consumers (wave 2, after Task 7)
 
-SPEC §5.4 "Resolution", §5.9 default cross-group, §6 E1/E3/E5/E6, P25, Review Focus 5. Rule row X-TB-1.
+SPEC §5.4 "Resolution", §5.9 default cross-group, §6 E1/E3/E5/E6, P25. Rule row X-TB-1. (Review Focus 5 moved to Task 9, PS-5e.)
 
 **Files:**
 - Create: `E/competition/table-rules.ts`; export from `E/competition/index.ts`.
-- Modify: `E/sport/module.ts:944` — `defaultTiebreakers(kind: TableStageKind): TiebreakerKey[]` (`TableStageKind = "league" | "group" | "swiss" | "americano"`); every module returns TODAY's list for every kind (values change in Task 11).
+- Modify: `E/sport/module.ts:944` — `defaultTiebreakers(kind: TableStageKind, cfg: Cfg): TiebreakerKey[]` (`TableStageKind = "league" | "group" | "swiss" | "americano"`); every module returns TODAY's list for every kind and ignores `cfg` (values change in Task 11, where football's default reads `cfg.fairPlay`).
+  **PS-7c, owner 2026-10-24 (Option 1):** the signature is `(kind, cfg)`, and the one caller that matters is `resolveTableRules`, which passes the stage's merged cfg (division cfg ⊕ `stage.rules`). Every other reader below passes the cfg it already holds. No UI file calls it (PS-7b; the editor reads `tableRules.tiebreakers.sportDefault`, Task 13).
 - Modify: `E/competition/stage.ts` — `TableStage.cascade` → `TableStage.rules: TableRules`; `completeTableStage(stage, fixtures)` ranks with `rules.tiebreakers`, `lotsDraws`, `winsCount`, `gamePoints`.
 - Modify: `E/competition/tie-what-if.ts:54` — the "primary" test reads `module.primaryTableKey` (P25).
-- Modify: `E/testkit/simulation.ts:559,653`, `E/testkit/scenarios.ts` — pass `resolveTableRules(...)` and a lots map.
+- Modify: `E/testkit/simulation.ts:238,559,653`, `E/testkit/scenarios.ts`, `E/testkit/conformance.ts:110` — pass `resolveTableRules(...)` and a lots map; read `defaultTiebreakers(kind, cfg)`.
+- Modify (every other `defaultTiebreakers` reader, ported to `defaultTiebreakers(<the stage's kind>, <the cfg it already holds>)` so all three tscs stay green; Task 9 then replaces the web ones with the loader — PS-3a): web `W/server/engine-db/competition.ts:492-494` (`cascadeFor` → `resolveTableRules` with `pinned: null`), `W/server/public-site/competition-hub.ts:920`, `W/server/slideshow-data.ts:71`, `W/app/embed/divisions/[id]/[widget]/page.tsx:72`, `W/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx:95`, `W/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx:439`; bench (in scope, PS-3) `tools/bench/lib/validate-pack.ts:2367`, `tools/bench/packs/build-packs/_tiny.ts:784`; the 9 engine tests in the Anchors row (`git grep -l -a defaultTiebreakers -- 'packages/engine/**/*.test.ts'`).
 - Test: `E/competition/table-rules.test.ts` (new); `E/competition/tie-what-if.test.ts` (one case).
 - Create: `MUT/t8.json`.
 
@@ -705,7 +745,7 @@ SPEC §5.4 "Resolution", §5.9 default cross-group, §6 E1/E3/E5/E6, P25, Review
   /** §5.9: the stage's order with every head-to-head key and modifier removed. */
   export function defaultCrossGroup(tiebreakers: readonly TiebreakerKey[]): readonly TiebreakerKey[];
   ```
-  `resolveTableRules` = `pinned ?? { points: stageOwn.points ?? module.tablePointsRule(mergedCfg, stageKind), tiebreakers: stageOwn.tiebreakers ?? divisionTiebreakers ?? module.defaultTiebreakers(stageKind), crossGroup: stageOwn.crossGroup ?? defaultCrossGroup(<the tiebreakers>) }` with `sources` naming the winning layer.
+  `resolveTableRules` = `pinned ?? { points: stageOwn.points ?? module.tablePointsRule(mergedCfg, stageKind), tiebreakers: stageOwn.tiebreakers ?? divisionTiebreakers ?? module.defaultTiebreakers(stageKind, mergedCfg), crossGroup: stageOwn.crossGroup ?? defaultCrossGroup(<the tiebreakers>) }` with `sources` naming the winning layer.
 
 - [ ] **Step 1: Write the failing tests** `table-rules.test.ts`:
   ```ts
@@ -713,48 +753,59 @@ SPEC §5.4 "Resolution", §5.9 default cross-group, §6 E1/E3/E5/E6, P25, Review
   it("X-TB-1 a pin beats every layer, including a stage own value saved after it (the web re-pins; the engine never merges)", …);
   it("the points layer: own rule → else tablePointsRule(division ⊕ stage.rules, kind) — a stage's best-of-3 rules change the sport rule it inherits (volleyball)", …);
   it("defaultCrossGroup removes h2h_*, h2h_two, direct and the modifiers, keeping order", …);
-  it("Review Focus 5: carried openings (carry mode points/full) are not re-paid by the stage rule; only the stage's own fixtures go through payout", …);
   it("completeTableStage ranks with rules.tiebreakers and returns newLotsDraws; h2hRecursive no longer exists on TableStage", …);
-  it("defaultTiebreakers(kind) is total over TableStageKind for every module (forEachSport, counted)", …);
+  it("defaultTiebreakers(kind, cfg) for every module × TableStageKind × the module's default cfg is non-empty and every key it returns has a comparator (anti-goal 2) — content, not totality, which tsc already enforces (forEachSport, counted; PS-9g)", …);
+  it("PS-7c the sport layer is asked with the input's mergedCfg: a spy module's defaultTiebreakers receives exactly that object and the stage kind; it is not called when an own or division order wins", …);
   ```
   `tie-what-if.test.ts`: `it("P25 a wins-first volleyball order gets a what-if (primaryTableKey, not cascade[0]==='points')", …)`.
 - [ ] **Step 2: Run, expect FAIL.** `cd WT/packages/engine && rm -f "$TMPDIR/w2d-t8e.json" && pnpm exec vitest run src/competition/table-rules.test.ts src/competition/tie-what-if.test.ts --reporter=json --outputFile="$TMPDIR/w2d-t8e.json"; echo EXIT=$?`
-- [ ] **Step 3: Implement**; the web build is kept compiling by a one-line port at `W/server/engine-db/competition.ts:488-505` (`cascadeFor` → `resolveTableRules` with `pinned: null`; Task 9 replaces it with the loader).
-- [ ] **Step 4: Run, expect PASS**; regression `src/competition/stage.test.ts`, `src/testkit/simulation.test.ts` (judged); `fold-epoch:check`; both tscs; eslint.
-- [ ] **Step 5: Mutate** `MUT/t8.json`: swap the stage and division precedence (killed by X-TB-1); `defaultCrossGroup` keeps `h2h_two` (killed); the carried row passed through `payout` (killed by Review Focus 5).
+- [ ] **Step 3: Implement**; port every reader listed under **Files** (the web build and the bench keep compiling; Task 9 replaces the web ports with the loader).
+- [ ] **Step 4: Run, expect PASS**; regression `src/competition/stage.test.ts src/testkit/simulation.test.ts` plus the 9 ported engine tests (judged, `files` = 11); `fold-epoch:check --against HEAD^1`; all three tscs; eslint.
+- [ ] **Step 5: Mutate** `MUT/t8.json`: swap the stage and division precedence (killed by X-TB-1); `defaultCrossGroup` keeps `h2h_two` (killed); `resolveTableRules` calls `defaultTiebreakers(stageKind, {})` instead of `mergedCfg` (killed by the PS-7c case).
 - [ ] **Step 6: Commit** `feat(engine): one resolver for a stage's table rules (W2d T8)`.
 
 Test types: unit; e2e → Task 15 (badges read `sources`); smoke → Task 14; regression above. Sequence: nothing set → division set → own set → pinned → another sport.
 
 ---
 
-### Task 9: Web — one loader, the pin at activation, the six resolvers collapse, lots persisted (wave 2, after Tasks 7 and 8)
+### Task 9: Web — one loader, the pin at activation, the six resolvers collapse, lots persisted (wave 2, after Task 8)
 
-SPEC §5.4 "Pin at start", §5.8 persistence, §6 W1–W11, §2.3 anti-goal 1, OC2, B1 (§13.8), Review Focus 1–3. Rule rows X-TB-1, X-TB-2, X-TB-4.
+SPEC §5.4 "Pin at start", §5.8 persistence, §6 W1–W11, §2.3 anti-goal 1, OC2, B1 (§13.8), Review Focus 1, 2, 3 and 5. Rule rows X-TB-1, X-TB-2, X-TB-4.
 
 **Files:**
 - Create: `W/server/engine-db/table-rules.ts`.
-- Modify: `W/server/usecases/stages.ts` — inside `generateStageFixturesWrite` (`:2889`) and `generateProgressionSetupFixtures` (`:3714`), `pinStageTableRules(tx, stageId)` in the same `if (stage.status === "pending")` block, after the status update.
-- Modify: `W/server/engine-db/competition.ts` — `cascadeFor`/`toTableStage` (`:488-505`) read `loadTableRules`; the two payout sites (`:116`, `:428`) pay `rules.points`; `recomputeStandings`/`rankedStageStandings`/`completeStageIfReady` pass `lotsDraws` and `countedFixtures`, and persist `newLotsDraws` under the advisory lock they already hold; `rank_lock` carries `order`.
-- Modify: the other resolvers (SPEC §6 W2–W7; re-pinned in Task 0): `server/public-site/competition-hub.ts`, `server/slideshow-data.ts`, `app/embed/divisions/[id]/[widget]/page.tsx`, `app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx`, `app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx` (per-stage caption data only; the caption UI is Task 17), `server/public-site/{standings-view,division-qualification,qualification-view}.ts` — each calls `loadTableRules`; bounds from `pointsRuleBounds(rules.points, reachable)`.
-- Modify: `E/competition/points.ts` — delete the old-shape tolerance in `parseStoredPointsRule` (every row is converted by Task 7).
-- Modify: `scripts/smoke.ts` — create `w2dTablesSuite` (called beside `w2cStageRulesSuite`) with its first check.
-- Bench (`tools/bench/lib/validate-pack.ts:2250,2284,2314`, `pack-template.ts:107`): only after the orchestrator clears it with the bench index (R3); otherwise a plan finding and the bench keeps its own resolver until cleared.
+- Modify: `W/server/usecases/stages.ts` — inside `generateStageFixturesWrite` (`:2436`; its status write `:2955`) and `generateProgressionSetupFixtures` (`:3476`; its status write `:3788`), `pinStageTableRules(tx, stageId)` in the same `if (stage.status === "pending")` block, after the status update. These two are the only `update stages set status = 'active'` in non-test `W/server` (`git grep -n -a "set status = 'active'" -- apps/web/src/server`, 2026-10-24).
+- Modify: `W/server/engine-db/competition.ts`:
+  - `cascadeFor`/`toTableStage` (`:492-504`) read `loadTableRules`.
+  - The two payout sites (`:116` bye, `:432` decided fixture) pay `rules.points` through `payout`. When the row's `no_result` flag is set (`:346`) and its outcome is null, they hand `payout` the outcome `{kind:"no_result"}` (PS-5c; PF-10).
+  - Every web rank call passes `winsCount: module.winsCount` and `gamePoints` (PS-5a; the HK-TB-1 and B5 cases are Task 14's).
+  - `recomputeStandings`/`rankedStageStandings`/`completeStageIfReady` pass `lotsDraws` and `countedFixtures`. They persist `newLotsDraws` under the advisory lock they already hold, then RE-READ the stored rows, so `drawnAt` is the DB's `now()`, before ranking and before appending `rank_lock` (PS-5b). `rank_lock` carries the stored `order` and `drawnAt`.
+- Modify: the other resolvers (SPEC §6 W2–W7; ported to `defaultTiebreakers(kind, cfg)` in Task 8, now replaced): `server/public-site/competition-hub.ts`, `server/slideshow-data.ts`, `app/embed/divisions/[id]/[widget]/page.tsx`, `app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx`, `app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx` (per-stage caption data only; the caption UI is Task 17), `server/public-site/{standings-view,division-qualification,qualification-view}.ts`. Each calls `loadTableRules`, with bounds from `pointsRuleBounds(rules.points, reachable)`.
+- Modify: `E/competition/points.ts` — delete the old-shape tolerance in `parseStoredPointsRule` (every row is converted by Task 7); `E/competition/points-w2d.test.ts` gains the case (PS-9f).
+- Modify (bench, in scope, PS-3): `tools/bench/lib/validate-pack.ts` — `:2303` (`cascade: division.tiebreakers ?? tiebreakersOf(…)`), `:2337` (the `completeTableStage` call) and `:2367` (`tiebreakersOf` → `fold.module.defaultTiebreakers`); and `tools/bench/lib/pack-template.ts:107`. All are ported to `resolveTableRules({ …, pinned: null })`: the bench has no DB, so it has no pin and no stored draw.
 - Test: `W/server/engine-db/__tests__/{table-rules-pin,stage-lots,table-rules-single-resolver}.test.ts` (new); `w2d-migration-pin.test.ts` (extended, §13.8).
 - Create: `MUT/t9.json`.
+- No `scripts/smoke.ts` edit: `w2dTablesSuite` is created and registered in Task 13, when the API fields its checks read exist (PS-2, PS-9a).
 
 **Interfaces:**
-- Consumes: `resolveTableRules`, `TableRulesPin`, `membersKeyOf`, `RankingResult.newLotsDraws`, the Task 7 columns.
+- Consumes: `resolveTableRules`, `TableRulesPin`, `membersKeyOf`, `StoredLotsDraw`, `RankingResult.newLotsDraws`, `payout`, the Task 7 columns.
 - Produces:
   ```ts
-  export interface LoadedTableRules extends TableRulesPin { readonly pinnedAt: string | null; readonly reachable: ReadonlySet<OutcomeKey> }
+  export interface LoadedTableRules extends TableRulesPin {
+    readonly pinnedAt: string | null;
+    readonly reachable: ReadonlySet<OutcomeKey>;
+    /** PS-7b: the sport layer for this stage (`module.defaultTiebreakers(stageKind, mergedCfg)`, PS-7c), for the editor's Reset; the UI never calls the module. */
+    readonly sportDefault: readonly TiebreakerKey[];
+  }
   export async function loadTableRules(tx: Tx, stageId: string): Promise<LoadedTableRules>; // throws CONFIG_INVALID: active/complete and unpinned
   export async function pinStageTableRules(tx: Tx, stageId: string): Promise<void>;        // idempotent: … where table_rules_pinned is null
-  export async function repinStageOwnRules(tx: Tx, stageId: string): Promise<void>;        // Task 10: own save between activation and first score
-  export async function loadLotsDraws(tx: Tx, stageId: string): Promise<ReadonlyMap<string /* pool id or "" */, ReadonlyMap<MembersKey, readonly EntrantId[]>>>;
+  /** PS-5d, Task 10's caller: an own save between activation and the first score. Replaces ONLY the saved field(s) of the
+   *  existing pin, with source "stage"; every other field and source of the pin is kept. No pin → no-op (a pending stage reads live). */
+  export async function repinStageOwnRules(tx: Tx, stageId: string, saved: { readonly points?: PointsRule; readonly tiebreakers?: readonly TiebreakerKey[]; readonly crossGroup?: readonly TiebreakerKey[] }): Promise<void>;
+  export async function loadLotsDraws(tx: Tx, stageId: string): Promise<ReadonlyMap<string /* pool id or "" */, ReadonlyMap<MembersKey, StoredLotsDraw>>>;
   export async function persistLotsDraws(tx: Tx, stageId: string, poolId: string | null, draws: RankingResult["newLotsDraws"]): Promise<void>;
   ```
-  `persistLotsDraws` inserts with `on conflict do nothing` on the partial unique index, then re-reads, so a racing writer's draw wins for both (Review Focus 3); a stored draw whose members intersect a newly stored draw in the same pool gets `superseded_at = now()` (history kept).
+  `persistLotsDraws` inserts with `on conflict do nothing` on the partial unique index, then re-reads, so a racing writer's draw wins for both (Review Focus 3). A stored draw whose members intersect a newly stored draw in the same pool gets `superseded_at = now()` (history kept).
 
 - [ ] **Step 1: Write the failing DB tests.** `table-rules-pin.test.ts`:
   ```ts
@@ -764,7 +815,10 @@ SPEC §5.4 "Pin at start", §5.8 persistence, §6 W1–W11, §2.3 anti-goal 1, O
   it("anti-goal 1: after activation, editing the division cfg points, the division default order, or the sport default (simulated by a module stub) changes none of the stage's rows", …);
   it("Review Focus 1: regenerating an active stage keeps its first pin (not re-taken from a changed division default)", …);
   it("an active stage with no pin makes loadTableRules throw CONFIG_INVALID (the guard, reached by nulling the column)", …);
-  it("activation-writer census: every `update stages set status = 'active'` in W/server (git grep -a) is followed by pinStageTableRules in the same function (source scan, counted; 0 fails)", …);
+  it("activation-writer census: every `update stages set status = 'active'` in non-test W/server (git grep -a) is followed by pinStageTableRules in the same function (source scan; counts writers found, expects 2; 0 fails)", …);
+  it("Review Focus 5: carried openings are not re-paid by the stage rule — a points-carry stage's carried row keeps its carried points after the stage's own fixtures are paid by payout (carryDeltas stages.ts:4494; payout sites competition.ts:116,432)", …);
+  it("PF-10 / PS-5c: an organiser no-result abandon (outcome null, no_result flag set) pays rule.noResult to both sides; a rule without noResult pays 0; the same fixture before the abandon pays nothing (cricket, the one sport whose reachableResultKinds holds noResult — Task 1)", …);
+  it("PS-7b loadTableRules returns sportDefault = the module's default for the stage kind and merged cfg, also when an own order wins (football with fairPlay on and off — the two differ from Task 11 on)", …);
   ```
   `stage-lots.test.ts`:
   ```ts
@@ -772,52 +826,92 @@ SPEC §5.4 "Pin at start", §5.8 persistence, §6 W1–W11, §2.3 anti-goal 1, O
   it("X-TB-6 an empty table stores no draw", …);
   it("Review Focus 2: a withdrawal that changes the tied set stores a new draw and marks the old one superseded; an expunged fixture (ruling 105) likewise", …);
   it("Review Focus 3: two concurrent recomputes store one draw per (stage, pool, members) and both return its order", …);
-  it("rank_lock at completion carries the stored order", …);
+  it("X-TB-4 rank_lock at completion carries the stored order and the stored drawn_at (the DB's now(), read back — PS-5b), not a JS clock", …);
   ```
-  `table-rules-single-resolver.test.ts` (source scan, SPEC §1 done-means 4): no file under `W/` except `server/engine-db/table-rules.ts` reads `defaultTiebreakers` or `.tiebreakers ??`; reports files scanned (> 0).
+  `table-rules-single-resolver.test.ts` (source scan, SPEC §1 done-means 4): no file under `W/` except `server/engine-db/table-rules.ts` reads `defaultTiebreakers` or `.tiebreakers ??`; reports files scanned (> 0) and the one allowed hit (= 1).
   `w2d-migration-pin.test.ts` gains **§13.8**:
   ```ts
   it("B1 a started stage's table is IDENTICAL before and after the migration, row by row (order, points, W/D/L), for every stage in w2d-pin-before.json (counted)", …);
-  //   seed via the scenario's SQL twin, call w2d_pin_started_stages(), rankedStageStandings per stage, compare to the fixture.
-  it("B1 positive pair: the pending stage in the same scenario DOES take W2d's new default (its order differs from the fixture's)", …);
+  //   seed with Task 7's `fixtures/w2d-pin-seed.ts` (the recorded UUIDs and rngSeed, PS-8a), call w2d_pin_started_stages(), rankedStageStandings per stage, compare to the fixture.
+  it("B1 positive pair: the scenario's pending football stage DOES take W2d's new rule — its shoot-out-decided fixture is booked as a draw plus the SO bonus (Task 3), so its rows differ from the fixture's (PS-2b)", …);
   ```
 - [ ] **Step 2: Run, expect FAIL.** `cd WT/apps/web && rm -f "$TMPDIR/w2d-t9.json" && pnpm exec vitest run src/server/engine-db/__tests__/table-rules-pin.test.ts src/server/engine-db/__tests__/stage-lots.test.ts src/server/engine-db/__tests__/table-rules-single-resolver.test.ts src/server/engine-db/__tests__/w2d-migration-pin.test.ts --reporter=json --outputFile="$TMPDIR/w2d-t9.json"; echo EXIT=$?`
-- [ ] **Step 3: Implement** the loader, the pin calls, the resolver collapse and lots persistence.
-- [ ] **Step 4: Run, expect PASS**; regression: `pnpm exec vitest run src/server/engine-db/__tests__/standings.test.ts src/server/public-site/__tests__/qualification-view.test.ts src/server/public-site/__tests__/standings-view.test.ts` (re-pin names on the tree; judged); tsc; eslint. Smoke: `w2dTablesSuite` check "a stage is pinned when its fixtures are generated" against the label server (`SMOKE_BASE=http://localhost:<port> pnpm smoke` per RULES.md).
-- [ ] **Step 5: Mutate** `MUT/t9.json`: delete the `pinStageTableRules` call in one writer (killed by the census AND by the writer's own case — mutate the two guards one at a time); drop `where table_rules_pinned is null` (killed by Review Focus 1); `on conflict do nothing` → plain insert (killed by Review Focus 3).
+- [ ] **Step 3: Implement** the loader, the pin calls, the resolver collapse, the no-result mapping, lots persistence and the bench port.
+- [ ] **Step 4: Run, expect PASS.**
+  - Regression (PS-9e; judged, `files` = 5): `cd WT/apps/web && pnpm exec vitest run src/server/engine-db/__tests__/integration.test.ts src/server/engine-db/__tests__/config-snapshot.test.ts src/server/engine-db/__tests__/pooled-standings-null-snapshot.test.ts src/server/public-site/__tests__/qualification-view.test.ts src/server/public-site/__tests__/standings-view.test.ts --reporter=json --outputFile="$TMPDIR/w2d-t9r.json"; echo EXIT=$?`.
+  - Engine (PS-9f; `files` = 2): `cd WT/packages/engine && pnpm exec vitest run src/competition/points-w2d.test.ts src/competition/points.test.ts --reporter=json --outputFile="$TMPDIR/w2d-t9e.json"; echo EXIT=$?`, then the Global changed-lines Stryker recipe on `points.ts` (the deleted old-shape branch).
+  - All three tscs; eslint.
+  - Smoke: none in this task. The "pinned at generate" check is Task 13's `w2dTables` (PS-9a).
+- [ ] **Step 5: Mutate** `MUT/t9.json`:
+  - Delete the `pinStageTableRules` call in one writer. It is killed by the census AND by the writer's own case; mutate the two guards one at a time.
+  - Skip the pin step entirely. It is killed by the §13.8 B1 case, on the scenario's football shoot-out stage.
+  - Drop `where table_rules_pinned is null` (killed by Review Focus 1).
+  - Delete the active⇒pinned throw in `loadTableRules` (killed by the CONFIG_INVALID case).
+  - `on conflict do nothing` → plain insert (killed by Review Focus 3).
+  - Pay the carried row through `payout` too (killed by Review Focus 5).
+  - Drop the `no_result` → `{kind:"no_result"}` mapping (killed by the PF-10 case).
 - [ ] **Step 6: Commit** `feat(web): one table-rules loader, the pin at activation, stored lots (W2d T9)`.
 
-Test types: unit (DB) + source scans; e2e → Task 15 "pinned at start" and Task 19 walkthroughs; smoke `w2dTablesSuite`; regression above. Sequence: pending → active (pinned) → regenerate → first score → void that score → another sport.
+Test types: unit (DB) + source scans; e2e → Task 15 "pinned at start" and Task 19 walkthroughs; smoke → Task 13 `w2dTables` ("a stage is pinned when its fixtures are generated"); regression above. Sequence: pending → active (pinned) → regenerate → first score → void that score → another sport.
 
 ---
 
-### Task 10: Web — the write paths: validation, coverage, the lock, `stagesKeptPinned` (wave 2, after Task 9)
+### Task 10: Web — the write paths: validation, coverage, the lock, `stagesKeptPinned` (wave 2, after Task 9 AND after Task 11 has merged — PS-2)
 
-SPEC §5.4 "What changes after the pin", "Fixture override coverage", §5.5 "Write paths", §10, §11.4, D3, D8, D9, D10(a), Review Focus 4. Rule rows X-TB-2 (lock half), X-TB-3, X-TB-5, X-PT-3, FB-TB-4.
+SPEC §5.4 "What changes after the pin", "Fixture override coverage", §5.5 "Write paths", §5.8 (the seed → id fallback), §10, §11 item 4, D3, D8, D9, D10(a), Review Focus 4. Rule rows X-TB-2 (lock half), X-TB-3, X-TB-5, X-PT-3, FB-TB-4.
+
+**Why Task 11 first (PS-2):** this task validates the effective cascade on `createStages`/`replaceStages`. Before Task 11, the sport default is TODAY's list, which fails `validateCascade` for most sports (no `lots` last; `points` first where the primary key is `wins`; chess `buchholz*` on a non-Swiss stage). With Task 11 merged, every inherited default passes, and §5.5 stays exactly as written.
 
 **Files:**
-- Modify: main@e97823e4d8 `W/server/usecases/stage-rules.ts` `putStageRules :73` — accepts `tiebreakers: TiebreakerKey[] | null` and `crossGroupTiebreakers`; validates with `validateCascade`; points through `coverage(rule, reachableOutcomes(...))`; before the first score a valid save calls `repinStageOwnRules`; after it, `STAGE_FORMAT_LOCKED`. The volleyball `"*"` early return (main `:113`) is deleted (coverage owns it).
-- Modify: main@e97823e4d8 `W/server/usecases/rule-locks.ts` — `divisionRefusals` loses its tiebreakers branch (`:125-129`); `STAGE_POINTS_REPLACES` = `{points, pointsMap, otWin, otLoss, soBonus, tie, noResult, draw}`; boardgame `scoring` and `awardScore` keep W2c's lock.
-- Modify: `W/server/usecases/divisions.ts` create (main `:352`) and patch (main `:1091`) — validate against the sport and every UNPINNED table stage that inherits; patch response gains `stagesKeptPinned: {stageId, name}[]`; a cfg save that flips football `fairPlay` re-validates every unpinned inheriting cascade.
-- Modify: `W/server/usecases/stages.ts` `createStages`/`replaceStages` — validate the effective cascade; assign `config.rngSeed` (random 31-bit) when absent.
-- Modify: `W/server/usecases/templates.ts`, `W/server/templates/schema.ts:135` (`z.array(TiebreakerKeyS)` + validation on apply).
-- Modify: main@e97823e4d8 `W/server/usecases/fixture-rules.ts` `writeFixtureRulesOverride :251` — coverage of the fixture's merged format against the stage's effective (pinned) rule.
-- Delete: `pointsRuleExpressible`, `Expressible`, `BASE_KEYS` (W2c `points.ts:250-283`) and every reader (`stage-rules.ts`, `stage-rules-merge.ts:233,262,287`, `stage-defaults.ts`, `W/lib/rule-errors.ts:20,89-104`); `POINTS_RULE_INEXPRESSIBLE` leaves `RULE_ERROR_STATUS`.
-- Modify: `W/lib/rule-errors.ts` — `TIEBREAK_KEY_INVALID` (422, `extra.refusals`), `POINTS_OUTCOME_UNCOVERED` (422, `extra.uncovered`) with SPEC §10's English and their keys; the four dictionaries (`ui.json`) for the §10 messages and the nine reasons, then `pnpm i18n:gen-keys`.
-- Modify: `scripts/smoke.ts` (`w2dTablesSuite` checks).
-- Test: `W/server/usecases/__tests__/{stage-tiebreaks-write,division-tiebreaks-write,table-rules-sequence,table-writers-source}.test.ts` (new); rewrite W2c's `rules-lifecycle-sequence.test.ts` and `division-locks.test.ts` cases the lock change turns red (each named with why, SPEC §11.4).
+- Modify: `W/server/usecases/stage-rules.ts` `putStageRules :73`:
+  - It accepts `tiebreakers: TiebreakerKey[] | null` and `crossGroupTiebreakers`, and validates them with `validateCascade`.
+  - Points go through `coverage(rule, reachableOutcomes(...))`.
+  - Before the first score, a valid save calls `repinStageOwnRules(tx, stageId, <the saved fields>)`. That call replaces only those fields of the existing pin (PS-5d, Task 9).
+  - After the first score the save is `STAGE_FORMAT_LOCKED`. "Started" is W2c's predicate `lockedStageIdsAmong` (`rule-locks.ts:74`), which also counts an online stage whose round is opened and has no score (PF-9, PS-6).
+  - The volleyball `"*"` early return in `unansweredSetScores` (`W/server/usecases/stage-rules-merge.ts:113`, the return at `:125`) is deleted, because coverage owns it.
+- Modify: `W/server/usecases/rule-locks.ts`:
+  - `divisionRefusals` loses its tiebreakers branch (`:125-129`).
+  - `STAGE_POINTS_REPLACES` becomes `{points, pointsMap, otWin, otLoss, soBonus, tie, noResult, draw}`.
+  - Boardgame `scoring` and `awardScore` keep W2c's lock.
+- Modify: `W/components/v2/division-settings-locks.ts` (`RULE_LOCK_KEYS :16-19`; SPEC §11 item 4, PS-9e): the form's tiebreakers field carries no lock line once a stage starts, because the server stops refusing it. `DIVISION_TABLE_RULES_LOCKED` stays for boardgame `scoring`/`awardScore`. Its tests `W/components/v2/__tests__/division-settings-locks.test.ts` and `division-settings-lock-lines.test.tsx` gain that case.
+- Modify: `W/server/usecases/divisions.ts` `createDivision :239` and `patchDivision :732`:
+  - Validate against the sport and against every UNPINNED table stage that inherits.
+  - The patch response gains `stagesKeptPinned: {stageId, name}[]`.
+  - A cfg save that flips football `fairPlay` re-validates every unpinned inheriting cascade.
+  - `refuseInexpressibleStagePoints`'s call (`:1245`) is deleted.
+- Modify: `W/server/usecases/stages.ts` `createStages :507` / `replaceStages :621` — validate the effective cascade, and assign `config.rngSeed` (random 31-bit) when it is absent.
+- Modify: `W/server/usecases/templates.ts` and `W/server/templates/schema.ts:135` (`z.array(z.string())` → `z.array(TiebreakerKeyS)`, plus validation on apply).
+- Modify: `W/server/api-v1/schemas.ts` — `TiebreakerKeyS :325` gains Task 4's ten keys (moved here from Task 13, PS-2c, because the template schema and the division write types above need them). Then `cd WT && pnpm openapi:gen` and commit `openapi/*.json` (Global "OpenAPI").
+- Modify: `W/server/usecases/fixture-rules.ts` `writeFixtureRulesOverride :251` — check coverage of the fixture's merged format against the stage's effective (pinned) rule.
+- Delete: `pointsRuleExpressible`, `Expressible` and `BASE_KEYS` (W2c `E/competition/points.ts:250-278`) with every reader (SPEC §5.3 "with every reader"; PS-3b). The census is `git grep -l -a -E "pointsRuleExpressible|POINTS_RULE_INEXPRESSIBLE|divisionExpressible|POINTS_SPLIT_LABEL_KEYS|refuseInexpressibleStagePoints" -- apps packages`, which must read 0 after this task. At 2026-10-24 it lists:
+  - **Engine:** `E/competition/points.ts`; `points-w2c.test.ts` (the Q1 `describe`, `:460-496`).
+  - **Web server:** `W/server/usecases/stage-rules-merge.ts`:
+    - the import `:15`;
+    - `inexpressibleRefusal :256-263`;
+    - Q1 step 2 of `refuseStagePoints :287-289`, whose steps 1 and 3 stay (its callers are `stage-rules.ts:170` and `stage-defaults.ts:110`);
+    - `refuseInexpressibleStagePoints :312-321`.
+  - **Web server, continued:** `divisions.ts:29,1245`; `stage-defaults.ts:81` (comment); `openapi.ts:102,147,148,160,766` (the route summaries and the `keys` description; Task 13 then names the new codes there).
+  - **Rule errors:** `W/lib/rule-errors.ts` — `POINTS_RULE_INEXPRESSIBLE` (`:20`, `:53`, `:178`, `:202`, `:272`), `pointsSplit :79` and `POINTS_SPLIT_LABEL_KEYS :115-123`. Task 3 has already removed the shoot-out rows from it.
+  - **UI (PS-3b):** `W/components/v2/stage-rules/stage-points-model.ts` (`divisionExpressible :52-54`, imports `:14,16`) and `stage-points-section.tsx` (the inexpressible state, `:8,29,128,173`).
+  - **Tests:** `stage-points-model.test.ts`, `stage-points-section.test.tsx`, `W/components/v2/__tests__/stages-panel-stage-points.test.tsx`, `W/lib/__tests__/rule-errors-copy.test.ts`, `W/server/api-v1/__tests__/openapi-400-label.test.ts`, `division-locks.test.ts`, `rules-lifecycle-sequence.test.ts`, `stage-points.test.ts` — each case is deleted or rewritten, with why.
+  - **E2e:** `apps/web/e2e/stage-rules-w2c.spec.ts:15,558,882-897` and `apps/web/e2e/mobile.spec.ts:33,5919`. They are rewritten here and proven by the CI e2e dispatch at the wave-2 close; e2e never runs locally.
+- Modify: `W/lib/rule-errors.ts` — `TIEBREAK_KEY_INVALID` (422, `extra.refusals`) and `POINTS_OUTCOME_UNCOVERED` (422, `extra.uncovered`), with SPEC §10's English and their keys. The four dictionaries (`ui.json`) get the §10 messages and the nine reasons, then run `pnpm i18n:gen-keys`.
+- No `scripts/smoke.ts` edit: its checks read `PutStageRules.tiebreakers` and `stagesKeptPinned` over the API, so they are Task 13's (PS-2, PS-9a).
+- Test: `W/server/usecases/__tests__/{stage-tiebreaks-write,division-tiebreaks-write,table-rules-sequence,table-writers-source}.test.ts` (new). Rewrite the cases in W2c's `rules-lifecycle-sequence.test.ts` and `division-locks.test.ts` that the lock change turns red, each named with why (SPEC §11 item 4).
 - Create: `MUT/t10.json`.
 
 **Interfaces:**
-- Consumes: `validateCascade`, `coverage`, `reachableOutcomes`, `loadTableRules`, `repinStageOwnRules`, `lockedStageIdsAmong` (W2c).
-- Produces: `putStageRules(auth, stageId, body: { rules?; points?: PointsRule | null; tiebreakers?: TiebreakerKey[] | null; crossGroupTiebreakers?: TiebreakerKey[] | null })`; `DivisionPatchResult.stagesKeptPinned`; error codes above.
+- Consumes: `validateCascade`, `coverage`, `reachableOutcomes`, `loadTableRules`, `repinStageOwnRules` (Task 9's signature), `lockedStageIdsAmong` (W2c).
+- Produces: `putStageRules(auth, stageId, body: { rules?; points?: PointsRule | null; tiebreakers?: TiebreakerKey[] | null; crossGroupTiebreakers?: TiebreakerKey[] | null })`; `DivisionPatchResult.stagesKeptPinned`; the error codes above; `TiebreakerKeyS` with the ten keys.
 
 - [ ] **Step 1: Write the failing tests.** `stage-tiebreaks-write.test.ts`:
   ```ts
   it("X-TB-5 an own order with nrr on a football stage is refused 422 TIEBREAK_KEY_INVALID with refusals [{index, key:'nrr', reason:'sport'}]", …);
   it("Review Focus 4: tiebreakers [] is refused (reason 'empty'); null inherits (sources.tiebreakers 'division' or 'sport')", …);
   it("X-TB-2 between activation and the first score an own save is accepted and re-pins (sources 'stage')", …);
+  it("PS-5d an own points save after activation re-pins ONLY points: a division default order edited after activation does not ride in — the pinned tiebreakers and their source are unchanged", …);
   it("X-TB-2 after the first score an own tiebreakers or points save is 409 STAGE_FORMAT_LOCKED; a void of that score does not unlock (monotonic)", …);
+  it("PF-9 / PS-6 an online (Lichess) division stage with an opened round and NO score refuses own tiebreakers and points 409 STAGE_FORMAT_LOCKED (W2c's lockedStageIdsAmong); the same stage before the round opens accepts them", …);
   it("X-PT-3 a football group stage with shootout on and an own rule with no draw is refused POINTS_OUTCOME_UNCOVERED ['draw']", …);
   it("X-PT-3 VB-PT-3 a best-of-3 fixture override on a FIVB best-of-5 stage is refused naming set:2-0 and set:2-1", …);
   it("an override that only removes outcomes (football extra time off) is accepted", …);
@@ -828,30 +922,64 @@ SPEC §5.4 "What changes after the pin", "Fixture override coverage", §5.5 "Wri
   it("X-TB-2 a division tiebreakers save is no longer refused for a started stage; the response lists it in stagesKeptPinned", …);
   it("STAGE_POINTS_REPLACES: a division otWin / soBonus / tie / draw save is accepted once stages are pinned; boardgame `scoring` still DIVISION_TABLE_RULES_LOCKED", …);
   it("X-TB-5 a division default invalid for one unpinned inheriting stage is refused naming that stage and its kind; a pinned stage is not consulted", …);
-  it("FB-TB-4 flipping football fairPlay off while an unpinned stage inherits fair_play is refused naming it", …);
+  it("FB-TB-4 flipping football fairPlay off while an unpinned stage has an OWN or division order holding fair_play is refused naming it; a stage inheriting the sport default is not refused (the default drops fair_play with it — PS-7c, Task 11)", …);
   it("createStages: an inherited key invalid for the new stage's kind is refused with the 'set this stage's own order' reason; rngSeed is assigned when absent", …);
   it("a template whose tiebreakers hold an unknown key is refused at apply (schema.ts no longer z.string())", …);
+  it("§5.8 no non-Swiss product path reaches the seed → id fallback: every sport default (forEachSport × non-Swiss TableStageKind × the module's default cfg) and every order a write path accepts ends in lots (counted, > 0); a migrated pin is the one exception (B1), counted separately", …);
   ```
-  `table-rules-sequence.test.ts` (rule 10, fast-check over {stage own edit, division edit, sport-default stub change, activate, first score, void, regenerate}): **pin monotonicity** — after activation no sequence changes the stage's ranked rows except its own valid saves before the first score; reports `checked`.
+  `table-rules-sequence.test.ts` (rule 10, fast-check over {stage own edit, division edit, sport-default stub change, activate, first score, void, regenerate}): **pin monotonicity**. After activation, no sequence changes the stage's ranked rows except its own valid saves before the first score, and such a save changes only the field it saved (PS-5d). Reports `checked`.
   `table-writers-source.test.ts`: every SQL write to `divisions.tiebreakers` and `stages.config` under `W/server` (`git grep -a`) is in a function that calls `validateCascade` (counted; 0 fails).
-- [ ] **Step 2: Run, expect FAIL.** `cd WT/apps/web && rm -f "$TMPDIR/w2d-t10.json" && pnpm exec vitest run src/server/usecases/__tests__/stage-tiebreaks-write.test.ts src/server/usecases/__tests__/division-tiebreaks-write.test.ts src/server/usecases/__tests__/table-rules-sequence.test.ts src/server/usecases/__tests__/table-writers-source.test.ts --reporter=json --outputFile="$TMPDIR/w2d-t10.json"; echo EXIT=$?`
-- [ ] **Step 3: Implement** the write paths; rewrite the W2c lock tests that assert the removed refusals.
-- [ ] **Step 4: Run, expect PASS**; regression: W2c `src/server/usecases/__tests__/{stage-rules,stage-rules-every-sport,rules-lifecycle-sequence,division-locks,fixture-rules,stage-defaults}.test.ts` (re-pin names; judged); tsc; eslint; `pnpm i18n:check`. **Live catalog (SPEC §11.5):** read `standings.custom_points` and `tiebreakers.custom` for every plan from the live entitlements catalog (memory: it has differed from `V393__entitlements_v18.sql:63-69`); if any plan reads false, delete the `requireFeature` calls for these settings (`stages.ts:418-427`, re-pinned) in this task — the Community behaviour test above is the proof; no gate-absence pin. Smoke checks: "an invalid order is refused by name", "a division edit after activation lists the stage as kept".
-- [ ] **Step 5: Mutate** `MUT/t10.json`: remove `validateCascade` from `putStageRules` (killed by X-TB-5 case AND the writers source scan — one at a time); the lock predicate reads `fixtures.status` instead of W2c's monotonic pair (killed by the void case); `STAGE_POINTS_REPLACES` loses `soBonus` (killed); coverage skipped on the override path (killed by VB-PT-3).
+  Division settings locks (`W/components/v2/__tests__/division-settings-locks.test.ts`): `it("§11 item 4 a started stage leaves the tiebreakers field open (no lock line); boardgame scoring still carries DIVISION_TABLE_RULES_LOCKED", …)`.
+- [ ] **Step 2: Run, expect FAIL.** `cd WT/apps/web && rm -f "$TMPDIR/w2d-t10.json" && pnpm exec vitest run src/server/usecases/__tests__/stage-tiebreaks-write.test.ts src/server/usecases/__tests__/division-tiebreaks-write.test.ts src/server/usecases/__tests__/table-rules-sequence.test.ts src/server/usecases/__tests__/table-writers-source.test.ts src/components/v2/__tests__/division-settings-locks.test.ts --reporter=json --outputFile="$TMPDIR/w2d-t10.json"; echo EXIT=$?`
+- [ ] **Step 3: Implement** the write paths and the deletions. Rewrite the W2c lock tests that assert the removed refusals.
+- [ ] **Step 4: Run, expect PASS.**
+  - Regression (PS-9e; judged, `files` = 13):
+    ```
+    cd WT/apps/web && pnpm exec vitest run \
+      src/server/usecases/__tests__/{stage-rules,stage-rules-every-sport,rules-lifecycle-sequence,division-locks,fixture-rules,stage-defaults,stage-points}.test.ts \
+      src/components/v2/__tests__/division-settings-lock-lines.test.tsx \
+      src/components/v2/stage-rules/__tests__/{stage-points-model.test.ts,stage-points-section.test.tsx} \
+      src/components/v2/__tests__/stages-panel-stage-points.test.tsx \
+      src/lib/__tests__/rule-errors-copy.test.ts \
+      src/server/api-v1/__tests__/openapi-400-label.test.ts \
+      --reporter=json --outputFile="$TMPDIR/w2d-t10r.json"; echo EXIT=$?
+    ```
+    zsh expands the braces. Confirm 13 paths in `.testResults[].name`.
+  - Engine (`files` = 1): `cd WT/packages/engine && pnpm exec vitest run src/competition/points-w2c.test.ts --reporter=json --outputFile="$TMPDIR/w2d-t10e.json"; echo EXIT=$?`.
+  - Run the census grep above, which must read 0. Run all three tscs (the e2e specs compile under apps/web's tsc), eslint, `pnpm i18n:check` and `cd WT && pnpm openapi:gen && git status --porcelain openapi/` (only the `TiebreakerKeyS` and removed-code diff).
+  - **Live catalog (SPEC §11 item 5):** read `standings.custom_points` and `tiebreakers.custom` for every plan from the live entitlements catalog (memory: it has differed from `V393__entitlements_v18.sql:63-69`). If any plan reads false, delete the `requireFeature` calls for these settings (`stages.ts:419` `standings.custom_points`, `:477` `tiebreakers.custom`) in this task; the Community behaviour test above is the proof, and there is no gate-absence pin. The `tiebreakers.custom` call at `:5143` (`overrideStandings`) is not a scoring setting and stays.
+  - Smoke: none in this task. "An invalid order is refused by name" and "a division edit after activation lists the stage as kept" are Task 13's `w2dTables` checks.
+- [ ] **Step 5: Mutate** `MUT/t10.json`:
+  - Remove `validateCascade` from `putStageRules` (killed by the X-TB-5 case AND the writers source scan; mutate the two one at a time).
+  - The lock predicate reads `fixtures.status` instead of W2c's monotonic pair (killed by the void case).
+  - The lock predicate drops the opened-round arm (killed by the PF-9 case, PS-6).
+  - `repinStageOwnRules` re-resolves the whole pin with `pinned: null` (killed by the PS-5d case).
+  - `STAGE_POINTS_REPLACES` loses `soBonus` (killed).
+  - Coverage is skipped on the override path (killed by VB-PT-3).
 - [ ] **Step 6: Commit** `feat(web): validated tie-break and points writes; the pin replaces the division lock (W2d T10)`.
 
-Test types: unit (DB) + sequence + source scan; e2e → Task 15/16; smoke above; regression above. Sequence: empty body → valid → invalid → after activation → after first score → after a void → another sport.
+Test types: unit (DB) + sequence + source scan; e2e → Task 15/16, plus the rewritten `stage-rules-w2c.spec.ts`/`mobile.spec.ts` cases in the wave-2 close CI dispatch; smoke → Task 13 `w2dTables`; regression above. Sequence: empty body → valid → invalid → after activation → after first score → after a void → another sport.
 
-**Wave 2 close:** whole-wave review; gate = Steps 4 of Tasks 7–10; proof commit (X-TB-1/2/3/4/5/6, X-PT-3, FB-TB-4); **walkthrough** on the `w2d` env at 1280: create a football and a volleyball division, generate (badge data says pinned via API), edit the division default, confirm the started table did not move and the API lists it in `stagesKeptPinned`; verdicts written to IDX.
+**Wave 2 close:**
+- Whole-wave review.
+- Gate = the Step 4s of Tasks 7–10, and of Task 11, which merged before Task 10.
+- Proof commit (X-TB-1/2/3/4/5/6, X-PT-3, FB-TB-4).
+- CI e2e dispatch (`--ref` the build branch) for `stage-rules-w2c.spec.ts` and `mobile.spec.ts`.
+- **Walkthrough** on the `w2d` env at 1280:
+  1. Create a football and a volleyball division.
+  2. Generate. The badge data says pinned, via the API.
+  3. Edit the division default.
+  4. Confirm the started table did not move and the API lists it in `stagesKeptPinned`.
+  5. Write the verdicts to IDX.
 
 ---
 
-### Task 11: Engine — per-sport defaults, presets, rule rows, rulebook scenarios (wave 3, lane `format-matrix-w2d-defaults`; may start once Task 8 is merged)
+### Task 11: Engine — per-sport defaults, presets, rule rows, rulebook scenarios (lane `format-matrix-w2d-defaults`; starts right after Task 8 merges and merges BEFORE Task 10 starts — PS-2)
 
 SPEC §5.10, D5, D10, B4, B5, OC1, §13.1, §13.4 ("the default order passes"). Rule rows FB-TB-1/2/3, HK-TB-1, IH-TB-1, BG-TB-1/2, CK-TB-1, VB-TB-1, BD-TB-1, TT-TB-1, TN-TB-1/2, CA-TB-1, GN-TB-1, HK-PT-2, BG-PT-1 (preset half).
 
 **Files:**
-- Modify: every module's `defaultTiebreakers(kind)` round-robin value (Swiss value unchanged, OC1), exactly SPEC §5.10:
+- Modify: every module's `defaultTiebreakers(kind, cfg)` round-robin value (Swiss value unchanged, OC1), exactly SPEC §5.10:
 
   | sport | default order (league/group/americano) |
   |---|---|
@@ -867,7 +995,7 @@ SPEC §5.10, D5, D10, B4, B5, OC1, §13.1, §13.4 ("the default order passes"). 
   | carrom | points, wins, set_ratio, board_ratio, point_ratio, h2h_points, lots |
   | generic | points, diff, for, h2h_points, lots |
 
-  Football's `fair_play` step is in the default only while `fairPlay` is on; with it off, `defaultTiebreakers` omits it (planner's call: the default must pass `validateCascade`, D8).
+  **PS-7c, owner 2026-10-24 (Option 1):** football's `fair_play` step is in the default only while the division's cfg tracks it (`cfg.fairPlay` on). With it off, `defaultTiebreakers(kind, cfg)` omits the step, so the default always passes `validateCascade` (D8, §13.4). `resolveTableRules` hands it the merged cfg (Task 8). Every other module ignores `cfg`.
 - Modify: `E/sport/module.ts` — `tablePresets?(stageKind: TableStageKind): { points: readonly { id: string; rule: PointsRule }[]; tiebreakers: readonly { id: string; keys: readonly TiebreakerKey[] }[] }`. Football tiebreakers `fifa2026`, `uefa` (fifa2026 with `h2h_reapply` after the block), `classic` (points, diff, for, h2h_points, h2h_diff, h2h_for, fair_play, lots); hockey points `pro_league`; chess points `fide_1_half_0` and `three_one_zero` (`{win 3, draw 1, loss 0, unit "whole"}`) — `three_one_zero` absent on `swiss`.
 - Modify: `RULES/*.md` — the deviation rows' text (football lots instead of FIFA ranking RB2B-4, UEFA 20.02 not offered RB2B-5, `uefa` tail INFERRED; FIH ranking shoot-out RB2B-11; IIHF steps 4–5 RB2B-12; cricket lots after seed; tennis lots after seed; volleyball best of 3 VB-12 and double-RR aggregate RBS:295; carrom/generic product rule RB2B-27).
 - Test: `E/competition/tables-rulebook.test.ts` (new, §13.1), `E/competition/defaults-sweep.test.ts` (new, §13.4).
@@ -890,10 +1018,13 @@ SPEC §5.10, D5, D10, B4, B5, OC1, §13.1, §13.4 ("the default order passes"). 
   it("HK-PT-2 SC-P4 oracle: FIH default 3/1/0 with a draw; the Pro League preset's shoot-out pays D + 1 (2/1) (D10(f), B2)", …);
   ```
   `defaults-sweep.test.ts` (forEachSport × variant × table stage kind, counted, 0 fails): the default order passes `validateCascade` (Swiss skips the shape rule only, OC1 — and the count of Swiss cells is reported separately); every `tablePresets` order passes; every `tablePresets` points rule covers `reachableOutcomes`; the non-Swiss default starts with `primaryTableKey` and ends with `lots`.
+  ```ts
+  it("PS-7c football default omits fair_play when fairPlay is off, includes it when on; both pass validateCascade", …); // the two orders typed from SPEC §5.10's fifa2026 row, with and without fair_play
+  ```
 - [ ] **Step 2: Run, expect FAIL.** `cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2d-defaults/packages/engine && rm -f "$TMPDIR/w2d-t11e.json" && pnpm exec vitest run src/competition/tables-rulebook.test.ts src/competition/defaults-sweep.test.ts --reporter=json --outputFile="$TMPDIR/w2d-t11e.json"; echo EXIT=$?`
 - [ ] **Step 3: Implement** the values, presets and rule-row text.
-- [ ] **Step 4: Run, expect PASS**; regression: every module test touching `defaultTiebreakers` (`git grep -l -a defaultTiebreakers -- packages/engine/src`), `fold-epoch:check`; tsc; eslint. Merge the lane (`--no-ff`) and re-run on the merged tree.
-- [ ] **Step 5: Mutate** `MUT/t11.json`: badminton default swaps `set_diff` and `point_diff` (killed by BD-TB-1); volleyball `points` first (killed by VB-TB-1); chess 3/1/0 preset offered on swiss (killed by the sweep).
+- [ ] **Step 4: Run, expect PASS**; regression: every engine test touching `defaultTiebreakers` — list them with `git grep -l -a defaultTiebreakers -- 'packages/engine/**/*.test.ts'`, pass them as exact paths, and judge `files` = that count (written down before the run; PS-9d); `pnpm --filter @onryde/seazn-engine fold-epoch:check --against HEAD^1`; all three tscs; eslint. Merge the lane (`--no-ff`) BEFORE Task 10 starts, and re-run the same files on the merged tree.
+- [ ] **Step 5: Mutate** `MUT/t11.json`: badminton default swaps `set_diff` and `point_diff` (killed by BD-TB-1); volleyball `points` first (killed by VB-TB-1); chess 3/1/0 preset offered on swiss (killed by the sweep); football keeps `fair_play` when `fairPlay` is off (killed by the PS-7c case AND by the sweep — mutate them one at a time).
 - [ ] **Step 6: Commit** `feat(engine): the signed per-sport table defaults and presets (W2d T11)`.
 
 Test types: unit (§13.1, §13.4); e2e → Task 19; smoke → Task 14 (one sport's default order through the API); regression above. Sequence: default → preset → variant → Swiss (exempt) → another sport.
@@ -905,7 +1036,7 @@ Test types: unit (§13.1, §13.4); e2e → Task 19; smoke → Task 14 (one sport
 SPEC §5.9, §5.6 "ST-G12", D3, D7, author's call (generic skip). Rule rows X-TB-7, X-TB-8, IH-TB-2.
 
 **Files:**
-- Modify: `E/competition/progression.ts:573` — `crossGroupOrder(rows, crossGroup: readonly TiebreakerKey[], lotsDraws, ctx)` replaces the hard-coded list; its callers `resolveProgression :668`, `E/competition/qualification.ts` `orderCandidates`, stage seeding.
+- Modify: `E/competition/progression.ts:573` — `crossGroupOrder(rows, crossGroup: readonly TiebreakerKey[], lotsDraws, ctx)` replaces the hard-coded list (`:574`). Its ONLY caller is `resolveProgression`'s best-Nth branch (`:668`). The comment at `:570-572` records that the former `orderCandidates` (qualification.ts) and `crossGroupOrder` (stage-seeding.ts) copies were already unified into this one; neither exists today (`git grep -n -a crossGroupOrder`, 2026-10-24).
 - Modify: `E/competition/tiebreakers.ts` — `RankContext.scheduledPairs?: ReadonlySet<string>` (sorted `a|b`); the h2h block's completeness guard; `partialScheduleOrder` substitution.
 - Modify: `E/sport/module.ts` — `partialScheduleOrder?: readonly (TiebreakerKey | "fewest_played")[]`; ice hockey declares `["fewest_played","diff","for","seed","lots"]` (RBG:349-350). `fewest_played` is internal, never in `TiebreakerKey` or `offerableKeys`.
 - Modify: `W/server/engine-db/competition.ts` — pass `scheduledPairs` (from the stage's fixtures, decided or not) and the SOURCE stage's `crossGroup` + lots to progression.
@@ -924,26 +1055,27 @@ SPEC §5.9, §5.6 "ST-G12", D3, D7, author's call (generic skip). Rule rows X-TB
   it("X-TB-8 another sport (football) with an incomplete mini-schedule skips the block for that class and notes 'h2h_incomplete' (author's call, AUD-ST:71)", …);
   it("empty: a class of one, and a stage whose scheduledPairs is empty, behave as before", …);
   ```
-- [ ] **Step 2: Run, expect FAIL.** `cd WT/packages/engine && rm -f "$TMPDIR/w2d-t12e.json" && pnpm exec vitest run src/competition/cross-group-w2d.test.ts src/competition/partial-schedule.test.ts --reporter=json --outputFile="$TMPDIR/w2d-t12e.json"; echo EXIT=$?` and the web DB file.
+- [ ] **Step 2: Run, expect FAIL.** `cd WT/packages/engine && rm -f "$TMPDIR/w2d-t12e.json" && pnpm exec vitest run src/competition/cross-group-w2d.test.ts src/competition/partial-schedule.test.ts --reporter=json --outputFile="$TMPDIR/w2d-t12e.json"; echo EXIT=$?`, then the web DB case: `cd WT/apps/web && rm -f "$TMPDIR/w2d-t12w.json" && pnpm exec vitest run src/server/engine-db/__tests__/table-rules-pin.test.ts -t "crossGroup" --reporter=json --outputFile="$TMPDIR/w2d-t12w.json"; echo EXIT=$?` (judge the case's title in `.testResults[].assertionResults`, not just the count).
 - [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run, expect PASS**; regression `src/competition/progression.test.ts`, `src/competition/qualification.test.ts`; tsc both; eslint.
+- [ ] **Step 4: Run, expect PASS**; regression (judged): engine `src/competition/progression.test.ts src/competition/qualification.test.ts` (`files` = 2); web `src/server/usecases/__tests__/stage-progression.test.ts` and `src/server/engine-db/__tests__/table-rules-pin.test.ts` (`files` = 2; `stage-progression.test.ts:272,371` pins the best-Nth tie order that runs through `crossGroupOrder`); all three tscs; eslint.
 - [ ] **Step 5: Mutate** `MUT/t12.json`: restore the hard-coded list (killed by X-TB-7); treat an undecided scheduled pair as complete (killed by X-TB-8). Stryker changed lines.
 - [ ] **Step 6: Commit** `feat(engine): cross-group order from the source stage; IIHF partial-schedule order (W2d T12)`.
 
 Test types: unit; e2e → Task 19 "goals family: best third"; smoke → Task 14; regression above. Sequence: no candidates → one per group → tie → after a withdrawal → another sport.
 
-**Wave 3 close:** whole-wave review; gate = Steps 4 of Tasks 11–12; proof commit; **walkthrough**: a hockey group stage and an ice-hockey group stage played to a tie on the `w2d` env, public tables read through the API; verdicts to IDX.
+**Wave 3 close:** whole-wave review; gate = Task 12's Step 4, plus Task 11's Step 4 re-run on the current tree (it merged before Task 10 and was gated at the wave-2 close, PS-2); proof commit; **walkthrough**: a hockey group stage and an ice-hockey group stage played to a tie on the `w2d` env, public tables read through the API; verdicts to IDX.
 
 ---
 
 ### Task 13: API v1 and OpenAPI (wave 4)
 
-SPEC §7, §10, §6 W9. Rule rows proved through the API: X-TB-1, X-TB-5, X-PT-3.
+SPEC §7, §10, §6 W9. Rule rows proved through the API: X-TB-1, X-TB-5, X-PT-3. This is the first task whose fields the smoke suite can read, so it creates `w2dTablesSuite` and takes the checks Tasks 9 and 10 traced forward (PS-2, PS-9a).
 
 **Files:**
-- Modify: `W/server/api-v1/schemas.ts` — `TiebreakerKeyS :318` gains the ten keys (Task 4); `PutStageRules` gains `tiebreakers: z.array(TiebreakerKeyS).nullable().optional()` and `crossGroupTiebreakers` (same); `points` is the widened `PointsRule` (re-exported, unchanged import at `:18`); `StageRules` response adds both; `Stage` GET gains `tableRules` (shape below); standings row gains `won_ot, won_so, lost_ot, lost_so`, `tieBreak.drawnAt`, `level`; division patch response gains `stagesKeptPinned`; `rngSeed` stays optional on input (server assigns it).
-- Modify: `W/server/api-v1/openapi.ts` — the `/divisions/{id}/stages` POST/PUT and `/stages/{id}/rules` PUT summaries (W2c `:147,148,159`) drop `POINTS_RULE_INEXPRESSIBLE` and name `TIEBREAK_KEY_INVALID`, `POINTS_OUTCOME_UNCOVERED`, the pin and the lock; the standings and division routes describe the new fields.
-- Modify: `W/server/api-v1/http.ts` (error→status rows for the two new codes, if W2c's map lives there; re-pin in Task 0).
+- Modify: `W/server/api-v1/schemas.ts` — `TiebreakerKeyS :325` (already widened with Task 4's ten keys in Task 10, PS-2c); `PutStageRules` (`points :1294`) gains `tiebreakers: z.array(TiebreakerKeyS).nullable().optional()` and `crossGroupTiebreakers` (same); `points` is the widened `PointsRule` (re-exported, unchanged import at `:18`); `StageRules` response adds both; `Stage` GET gains `tableRules` (shape below, exported as `StageTableRules` for Task 15+16); standings row gains `won_ot, won_so, lost_ot, lost_so`, `tieBreak.drawnAt`, `level`; division patch response gains `stagesKeptPinned`; `rngSeed` stays optional on input (server assigns it).
+- Modify: `W/server/api-v1/openapi.ts` — the `/divisions/{id}/stages` POST/PUT and `/stages/{id}/rules` PUT summaries (`:147,148,160`; Task 10 already removed `POINTS_RULE_INEXPRESSIBLE` from them) name `TIEBREAK_KEY_INVALID`, `POINTS_OUTCOME_UNCOVERED`, the pin and the lock; the standings and division routes describe the new fields.
+- No `W/server/api-v1/http.ts` edit: its `ENGINE_HTTP` (`:28`) maps ENGINE error codes only. The two rule codes take their status from `RULE_ERROR_STATUS` (`W/lib/rule-errors.ts:13`), where Task 10 adds them (PS-10).
+- Modify: `scripts/smoke.ts` — create `w2dTablesSuite`, call it beside `w2cStageRulesSuite` (`:1294`), and register it as `w2dTables` in `SELECTABLE_SUITES` (`:23060`, beside `w2cStageRules :23071`). Its checks: "a stage is pinned when its fixtures are generated" (Task 9), "an invalid order is refused by name" and "a division edit after activation lists the stage as kept" (Task 10), "GET tableRules says where the order came from" (this task).
 - Modify: `openapi/*.json` (regenerated).
 - Modify: the route handlers only if a schema change needs it: `W/app/api/v1/stages/[id]/{rules,standings}/route.ts`, the public standings route, the division PATCH route.
 - Test: `W/server/api-v1/__tests__/w2d-api.test.ts` (new; route handlers over the label DB).
@@ -954,7 +1086,7 @@ SPEC §7, §10, §6 W9. Rule rows proved through the API: X-TB-1, X-TB-5, X-PT-3
   ```ts
   // GET /stages/{id} and the stages list
   tableRules: {
-    tiebreakers: { keys: TiebreakerKey[]; source: TableRulesSource; pinnedAt: string | null };
+    tiebreakers: { keys: TiebreakerKey[]; source: TableRulesSource; pinnedAt: string | null; sportDefault: TiebreakerKey[] }; // sportDefault: LoadedTableRules.sportDefault (PS-7b), the editor's Reset
     crossGroup: { keys: TiebreakerKey[] };
     points: { rule: PointsRule; source: TableRulesSource; pinnedAt: string | null };
     reachableOutcomes: OutcomeKey[];
@@ -964,6 +1096,7 @@ SPEC §7, §10, §6 W9. Rule rows proved through the API: X-TB-1, X-TB-5, X-PT-3
 - [ ] **Step 1: Write the failing tests** `w2d-api.test.ts`:
   ```ts
   it("X-TB-1 GET /stages/{id} returns tableRules with source 'sport' before any edit, 'division' after a division default, 'stage' after PUT rules", …);
+  it("PS-7b tableRules.tiebreakers.sportDefault is the sport's default for the stage kind and the division cfg even when an own order wins (football with fairPlay off: no fair_play; on: fair_play before lots)", …);
   it("X-TB-5 PUT /stages/{id}/rules {tiebreakers:['points','nrr','lots']} on football → 422 TIEBREAK_KEY_INVALID, extra.refusals[0] = {index:1,key:'nrr',reason:'sport'}", …);
   it("X-PT-3 PUT /fixtures/{id}/rules best of 3 on a FIVB best-of-5 stage → 422 POINTS_OUTCOME_UNCOVERED, extra.uncovered ['set:2-0','set:2-1']", …);
   it("an old-shape points body {base:{…}} is 400 (greenfield, no alias)", …);
@@ -973,8 +1106,8 @@ SPEC §7, §10, §6 W9. Rule rows proved through the API: X-TB-1, X-TB-5, X-PT-3
   ```
 - [ ] **Step 2: Run, expect FAIL.** `cd WT/apps/web && rm -f "$TMPDIR/w2d-t13.json" && pnpm exec vitest run src/server/api-v1/__tests__/w2d-api.test.ts --reporter=json --outputFile="$TMPDIR/w2d-t13.json"; echo EXIT=$?`
 - [ ] **Step 3: Implement**; `cd WT && pnpm openapi:gen && git status --porcelain openapi/` shows only the intended diff.
-- [ ] **Step 4: Run, expect PASS**; regression: the W2c API tests (`git grep -l -a "stages/{id}/rules\|PutStageRules" -- apps/web/src/server/api-v1/__tests__`), tsc, eslint. Smoke: `w2dTablesSuite` "GET tableRules says where the order came from".
-- [ ] **Step 5: Mutate** `MUT/t13.json`: `tableRules.tiebreakers.source` hard-coded `"sport"` (killed); `TiebreakerKeyS` loses `h2h_two` (killed by a BWF PUT case added to the first test).
+- [ ] **Step 4: Run, expect PASS**; regression: the W2c API tests — list them with `git grep -l -a "stages/{id}/rules\|PutStageRules" -- apps/web/src/server/api-v1/__tests__`, pass exact paths, and judge `files` = that count (PS-9d); all three tscs; eslint. Smoke (scoped, PS-9a): `$S rebuild --label w2d`, then `cd WT && SMOKE_ONLY=w2dTables SMOKE_BASE=http://localhost:<port> pnpm smoke; echo EXIT=$?`, judged on its own exit and the printed check count (= 4).
+- [ ] **Step 5: Mutate** `MUT/t13.json`: `tableRules.tiebreakers.source` hard-coded `"sport"` (killed); `TiebreakerKeyS` loses `h2h_two` (killed by a BWF PUT case added to the first test); `sportDefault` serialised from the winning order instead of the loader's field (killed by the PS-7b case).
 - [ ] **Step 6: Commit** (with `openapi/*.json`) `feat(api): stage tableRules, tie-break orders and outcome-keyed points over API v1 (W2d T13)`.
 
 Test types: unit (route); e2e → Task 15; smoke above; regression above. Sequence: GET before edit → PUT → GET → PUT invalid → after activation → another sport.
@@ -983,7 +1116,7 @@ Test types: unit (route); e2e → Task 15; smoke above; regression above. Sequen
 
 ### Task 14: The real producer → consumer seam, and smoke (wave 4, after Task 13)
 
-SPEC §13.5 (class 1: drive the seam through its real producer and consumer), §13 Smoke, §5.2 pad finding (API half). Rule rows FB-PT-1, IH-PT-1, CK-PT-1, TT-PT-1, HK-TB-2, X-TB-2.
+SPEC §13.5 (class 1: drive the seam through its real producer and consumer), §13 Smoke, §5.2 pad finding (API half), B5. Rule rows FB-PT-1, IH-PT-1, CK-PT-1, TT-PT-1, HK-TB-1, HK-TB-2, X-TB-2.
 
 **Files:**
 - Test: `W/server/engine-db/__tests__/tables-producer-consumer.test.ts` (new, DB): events go through the real `POST /api/v1/fixtures/{id}/events` route handler, the real recompute, then the real public standings `GET`.
@@ -997,14 +1130,19 @@ SPEC §13.5 (class 1: drive the seam through its real producer and consumer), §
   it("IH-PT-1 icehockey.shootout.attempt → a GWS pays 2/1", …);
   it("CK-PT-1 a cricket tie → 1 point each on the public table", …);
   it("TT-PT-1 a table-tennis walkover → the loser's row gets 0, a played loser 1", …);
-  it("HK-TB-2 hockey goals typed fg / pc / stroke / og through the API → the public field-goals column = gf − pc − stroke", …);
+  it("HK-TB-2 hockey goals typed fg / pc / stroke / og through the API: two teams level on points, wins, diff and for are ranked by field goals (gf − goals_pc − goals_stroke; the own goal counts as a field goal), and the public row's metrics carry goals_pc and goals_stroke (the column itself is Task 17's — PS-2)", …);
+  it("HK-TB-1 FIH: a team with more REGULATION wins ranks above one level on points whose wins include a shoot-out win — winsCount 'regulation' reaches the web rank call (PS-5a; RBG:236)", …);
+  it("B5 chess round robin under the 3/1/0 preset: Sonneborn-Berger and direct read the game points 1/½/0, not the 3/1/0 table points — two players level on table points split as RBG's SB arithmetic says (gamePoints reaches the web rank call, PS-5a)", …);
   it("X-TB-2 the pin comes from the real POST /stages/{id}/generate; the lock from the real first event append; the override refusal from the real PUT /fixtures/{id}/rules", …);
   ```
 - [ ] **Step 2: Run, expect FAIL** on any unwired step; a red here is a defect in the owning task, fixed there (class 1), never by editing this test's expected values.
   `cd WT/apps/web && rm -f "$TMPDIR/w2d-t14.json" && pnpm exec vitest run src/server/engine-db/__tests__/tables-producer-consumer.test.ts --reporter=json --outputFile="$TMPDIR/w2d-t14.json"; echo EXIT=$?`
 - [ ] **Step 3: Fix the seams the test finds** (each fix in its owning file, named in the report).
-- [ ] **Step 4: Run, expect PASS**; smoke: `$S rebuild --label w2d` then `SMOKE_BASE=http://localhost:<port> pnpm smoke` restricted per RULES.md to the suite (`w2dTablesSuite` + `w2cStageRulesSuite` regression), judged on its own exit and printed check count.
-- [ ] **Step 5: Mutate** `MUT/t14.json`: the web payout site passes `decidedIn: null` (killed by FB-PT-1 and IH-PT-1); the recompute skips `persistLotsDraws` (killed by the smoke's reload-twice check — a smoke killer cannot run under `scripts/mutate.ts`, so this one is run by hand and recorded).
+- [ ] **Step 4: Run, expect PASS**; smoke (scoped, PS-9a): `$S rebuild --label w2d` then `cd WT && SMOKE_ONLY=w2dTables,w2cStageRules SMOKE_BASE=http://localhost:<port> pnpm smoke; echo EXIT=$?` (`w2cStageRules` is the regression), judged on its own exit and the printed check count of each suite.
+- [ ] **Step 5: Mutate** `MUT/t14.json`:
+  - The web payout site passes `decidedIn: null` (killed by FB-PT-1 and IH-PT-1).
+  - The web rank call drops `winsCount` (killed by HK-TB-1) or `gamePoints` (killed by B5); mutate them one at a time.
+  - The recompute skips `persistLotsDraws`. It is killed by Task 9's `stage-lots.test.ts` "X-TB-4 a residual tie is drawn once, stored, and the same order comes back on two reloads", which reads the stored row; that is a vitest killer `scripts/mutate.ts` can run (PS-9b).
 - [ ] **Step 6: Commit** `test(web): W2d producer → consumer through the real API; w2dTablesSuite (W2d T14)`.
 
 **Wave 4 close:** whole-wave review; gate; proof commit; **walkthrough** through the API on the `w2d` env (football group shoot-out, ice-hockey OT) with verdicts in IDX.
@@ -1017,25 +1155,29 @@ SPEC §9, D11, D3, OC1, OC2, B2 (SO row), D10(b), §10 copy. **Invoke `frontend-
 
 **Files:**
 - Create: `W/components/v2/stage-rules/stage-tiebreaks-model.ts` (pure; every guard lives here so it has a unit killer), `W/components/v2/stage-rules/stage-tiebreaks-section.tsx`.
-- Modify: `W/components/v2/stages-panel.tsx` — mount `StageTiebreaksSection` after `StagePointsSection` (W2c `:2504`) for table stages (league, group, swiss, americano).
-- Modify: main@e97823e4d8 `W/components/v2/stage-rules/stage-points-model.ts` + `stage-points-section.tsx` — rows = `reachableOutcomes`; SO row by `shootoutAs`; volleyball row per reachable set score; preset chips from `tablePresets`; `POINTS_OUTCOME_UNCOVERED` inline; W2c's inexpressible card deleted.
+- Modify: `W/components/v2/stages-panel.tsx` — mount `StageTiebreaksSection` after `StagePointsSection` (W2c `:2549`) for table stages; it receives the panel's `formatLockedStageIds` prop (`:331`, the server's `formatLockedStageIds`, `W/server/usecases/stage-rules.ts:45`) (league, group, swiss, americano).
+- Modify: main@e97823e4d8 `W/components/v2/stage-rules/stage-points-model.ts` + `stage-points-section.tsx` — rows = `reachableOutcomes`; SO row by `shootoutAs`; volleyball row per reachable set score; preset chips from `tablePresets`; `POINTS_OUTCOME_UNCOVERED` inline. (W2c's inexpressible card and `divisionExpressible` were already deleted in Task 10, PS-3b.)
 - Modify: `W/dictionaries/{en,es,fr,nl}/ui.json` (+ `pnpm i18n:gen-keys`): `div.detail.tiebreak.rule.<key>` for every new key and modifier; badges; "+ Add step"; reset and preset names (FIFA 2026 / UEFA / Classic, Pro League, 1/½/0, 3/1/0); "always first" / "always last"; the lock line "{stage} has started — its tie-breaks are pinned."; the cross-group line "Between groups: …"; the points rows including "after a shoot-out: counts as a draw; the winner gets +[1]".
 - Create: `apps/web/e2e/stage-tiebreaks-w2d.spec.ts`; Modify: `apps/web/e2e/mobile.spec.ts` (the section at all seven widths; open the phone fold first, `toBeAttached` before visibility; every instance).
 - Test: `W/components/v2/stage-rules/__tests__/{stage-tiebreaks-model,stage-points-w2d-model}.test.ts`.
 - Create: `MUT/t15.json`, `MUT/t16.json`.
 
 **Interfaces:**
-- Consumes: `offerableKeys`, `validateCascade`, `tablePresets`, `reachableOutcomes`, `coverage`, `GET tableRules` (Task 13), `PUT /stages/{id}/rules`.
+- Consumes: `offerableKeys`, `validateCascade`, `tablePresets`, `reachableOutcomes`, `coverage`, `GET tableRules` typed `StageTableRules` (Task 13's export; its `tiebreakers.sportDefault` is the Reset target, PS-7b — the UI never calls `defaultTiebreakers`), `PUT /stages/{id}/rules`, the server's `formatLockedStageIds`.
 - Produces:
   ```ts
+  // PS-9h: the types this file reads. StageTableRules is Task 13's API type; the other two are defined here.
+  export interface StageLike { readonly id: string; readonly kind: TableStageKind; readonly pooled: boolean; readonly bestNth: boolean; readonly tableRules: StageTableRules } // the panel's stage row, reduced to what the models read
+  export interface PointsRow { readonly key: OutcomeKey; readonly value: number | null /* null = uncovered */; readonly fallback: boolean /* paid by coverage's fallback, e.g. loss.unplayed → loss */; readonly drawPlusBonus: number | null /* the SO row under shootoutAs 'draw_plus_bonus': the winner's +soBonus */ }
   export type TiebreakBadge = { kind: "inherited"; from: "division" | "sport" } | { kind: "overridden" } | { kind: "pinned"; from: TableRulesSource };
   export interface TiebreakRow { key: TiebreakerKey; pinned: "first" | "last" | null; canUp: boolean; canDown: boolean; canRemove: boolean; refusal?: CascadeRefusal }
   export function tiebreakRows(keys: readonly TiebreakerKey[], ctx: CascadeContext, locked: boolean): TiebreakRow[];
   export function addableAt(keys: readonly TiebreakerKey[], position: number, ctx: CascadeContext): readonly TiebreakerKey[]; // === offerableKeys
   export function tiebreakBadge(tableRules: StageTableRules): TiebreakBadge;
-  export function sectionLocked(stage: { hasScore: boolean }): boolean; // first score, not activation (OC2)
+  export function sectionLocked(stageId: string, formatLockedStageIds: readonly string[]): boolean; // the SERVER's lock answer (W2c's predicate: first score, or an opened online round — PF-9, PS-6), never activation (OC2) and never a client-side hasScore
+  export function resetOrder(tableRules: StageTableRules): readonly TiebreakerKey[]; // = tableRules.tiebreakers.sportDefault (PS-7b)
   export function crossGroupLine(stage: StageLike): readonly TiebreakerKey[] | null; // pooled + best-Nth only
-  export function pointsRows(reachable: readonly OutcomeKey[], rule: PointsRule, shootoutAs: PointsRule["shootoutAs"]): PointsRow[];
+  export function pointsRows(reachable: readonly OutcomeKey[], rule: PointsRule): PointsRow[]; // the SO row reads rule.shootoutAs (PS-9h: no duplicate argument)
   ```
 
 - [ ] **Step 1: Write the failing unit tests.** `stage-tiebreaks-model.test.ts`:
@@ -1044,9 +1186,10 @@ SPEC §9, D11, D3, OC1, OC2, B2 (SO row), D10(b), §10 copy. **Invoke `frontend-
   it("X-TB-3 OC1 a Swiss stage shows no pinned rows (its shape is W3's)", …);
   it("+ Add step offers exactly offerableKeys at that position; h2h modifiers only directly after an h2h step (forEachSport × kind, counted)", …);
   it("X-TB-1 badge: Inherited from division / sport default; Overridden when own; Pinned at start from activation with its source", …);
-  it("X-TB-2 OC2 editable between activation and the first score; locked (no arrows/remove/add/reset) after it", …);
+  it("X-TB-2 OC2 editable between activation and the first score; locked (no arrows/remove/add/reset) once the server lists the stage in formatLockedStageIds", …);
+  it("PF-9 / PS-6 an online stage with an opened round and no score is locked because the server says so (formatLockedStageIds holds it), not because of a score; the empty list locks nothing", …);
   it("an inherited division default invalid for this stage marks the inherited step and returns the 'set this stage's own order' hint", …);
-  it("football reset offers FIFA 2026 / UEFA / Classic from tablePresets; other sports one 'sport default'", …);
+  it("football reset offers FIFA 2026 / UEFA / Classic from tablePresets; other sports one 'sport default' = tableRules.tiebreakers.sportDefault (PS-7b; a fixture whose sportDefault differs from the stage's current order)", …);
   it("the cross-group line shows only for a pooled stage with best-Nth progression, and holds no h2h key", …);
   ```
   `stage-points-w2d-model.test.ts`:
@@ -1056,31 +1199,32 @@ SPEC §9, D11, D3, OC1, OC2, B2 (SO row), D10(b), §10 copy. **Invoke `frontend-
   it("VB-PT-3 volleyball best of 5 shows one row per reachable set score; a two-pair map missing 3-1 marks it uncovered", …);
   it("cricket shows tie and no result; TT shows 'a loss not played'", …);
   it("chess presets 1/½/0 and 3/1/0 on a round robin; 3/1/0 absent on Swiss", …);
-  it("W2c's inexpressible notice is gone: no key POINTS_RULE_INEXPRESSIBLE is referenced (source scan of stage-rules/)", …);
+  it("W2c's inexpressible notice stays gone: no key POINTS_RULE_INEXPRESSIBLE is referenced (source scan of stage-rules/, files scanned > 0) — green from Step 2 on, because Task 10 deleted it; kept as the guard", …);
   ```
 - [ ] **Step 2: Run, expect FAIL.** `cd WT/apps/web && rm -f "$TMPDIR/w2d-t15.json" && pnpm exec vitest run src/components/v2/stage-rules/__tests__/stage-tiebreaks-model.test.ts src/components/v2/stage-rules/__tests__/stage-points-w2d-model.test.ts --reporter=json --outputFile="$TMPDIR/w2d-t15.json"; echo EXIT=$?`
 - [ ] **Step 3: Implement** the models, then the sections rendering the models' answers (the components decide nothing a model does not).
-- [ ] **Step 4: Run, expect PASS**; regression W2c `src/components/v2/stage-rules/__tests__` (all files in the dir, judged by count); tsc; eslint; `pnpm i18n:check`.
+- [ ] **Step 4: Run, expect PASS**; regression (PS-9d; judged, `files` = 4): `cd WT/apps/web && pnpm exec vitest run src/components/v2/stage-rules/__tests__/stage-points-model.test.ts src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx src/components/v2/stage-rules/__tests__/stage-row-model.test.ts src/components/v2/stage-rules/__tests__/stage-rule-fields.test.tsx --reporter=json --outputFile="$TMPDIR/w2d-t15r.json"; echo EXIT=$?`; all three tscs; eslint; `pnpm i18n:check`.
 - [ ] **Step 5: Write the e2e** `stage-tiebreaks-w2d.spec.ts` (run whole, no `-g`): inherit → override (move a step, add `set_diff`) → an invalid step shows its reason inline → reset to sport default → generate fixtures (badge "Pinned at start", still editable) → first score → pinned and locked (arrows hidden, lock line) → the points rows are exactly the reachable outcomes for a football group stage with shootout on; axe on both sections; no horizontal scroll. Add the section to `mobile.spec.ts`. **CI dispatch** (Global Constraints) and judge this file and `mobile.spec.ts` at all seven projects; re-run `mobile.spec.ts` until a full pass (serial floor).
-- [ ] **Step 6: Mutate** `MUT/t15.json` / `t16.json` (unit killers only): `sectionLocked` reads activation (killed by OC2 case); Swiss rows pinned (killed by OC1 case); `pointsRows` shows unreachable rows (killed by X-PT-3).
+- [ ] **Step 6: Mutate** `MUT/t15.json` / `t16.json` (unit killers only): `sectionLocked` returns true for every activated stage (killed by the OC2 case); `sectionLocked` ignores `formatLockedStageIds` and reads a score flag (killed by the PF-9 case); `resetOrder` returns the current order (killed by the reset case); Swiss rows pinned (killed by OC1 case); `pointsRows` shows unreachable rows (killed by X-PT-3).
 - [ ] **Step 7: Sign-off.** Screenshots at **1280 only** (Swiss, football group pre-start, pinned, locked; points for football and ice hockey), with per-screen verdicts in the report.
 - [ ] **Step 8: Commit** `feat(ui): stage Tie-breaks section and reachable-outcome points (W2d T15+T16)`.
 
-Test types: unit (models); e2e `stage-tiebreaks-w2d.spec.ts` + `mobile.spec.ts`; smoke N/A for the UI (API checks cover the writes, Tasks 10/13); regression above. Sequence: inherited → own → invalid → reset → activated → scored → after a void of that score (still locked) → another sport.
+Test types: unit (models); e2e `stage-tiebreaks-w2d.spec.ts` + `mobile.spec.ts`; smoke → Task 13 `w2dTables` "an invalid order is refused by name" and "GET tableRules says where the order came from" (the write and the read this UI makes; RULES.md:104-110, PS-9e); regression above. Sequence: inherited → own → invalid → reset → activated → scored → after a void of that score (still locked) → another sport.
 
 ---
 
 ### Task 17: The public table — columns, half-points, OTW/OTL, lots note, empty table (wave 5, after 15+16)
 
-SPEC §5.7, §6 W6/W8/B2, §9 public table, D10(b), anti-goal 3. Rule rows X-TB-4 (display), X-TB-6, BG-PT-1, IH-PT-1 (columns).
+SPEC §5.7, §6 W6/W8/B2, §9 public table, D10(b), anti-goals 2 (the popover half) and 3. Rule rows X-TB-4 (display), X-TB-6, BG-PT-1, IH-PT-1 (columns), HK-TB-2 (the field-goals column; the ranking half is Task 14's).
 
 **Files:**
 - Modify: `E/competition/display.ts` — a column per new key (set difference, point difference, field goals, SB in round robin, tennis game ratio ST-G29); IIHF `OTW`/`OTL` (= `won_ot + won_so`, `lost_ot + lost_so`, RBG:343-344); recreational GP W D L; chess `unit:"half"` renders `pointsToText` ("1½").
-- Modify: `W/server/public-site/standings-view.ts` (`standingsColumns`), `W/components/public-site/standings-table.tsx` (popover), `W/lib/tiebreak-label.ts:21` — new key labels, "Drawn by lots on {date}", "head-to-head not complete", "level"; the empty table renders every rank "–" and no leader styling or qualification chips.
-- Modify: the division page (`W/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx:955-969`) — the read-only caption becomes per stage, with source and pinned.
+- Modify: `W/server/public-site/standings-view.ts` (`standingsColumns`), `W/components/public-site/standings-table.tsx` (popover), `W/lib/tiebreak-label.ts:21` — new key labels, "Drawn by lots on {date}", "head-to-head not complete" (`h2h_incomplete`, Task 12), "head-to-head applies to two teams only" (`h2h_two_not_applicable`, Task 4), "level"; the empty table renders every rank "–" and no leader styling or qualification chips.
+- Modify: the division page (`W/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx:960-979`) — the read-only caption becomes per stage, with source and pinned.
 - Modify: `tools/matrix/lib/browser/pages/standings.ts` — re-checked against the new columns (SPEC §6 B2).
 - Modify: `W/dictionaries/{en,es,fr,nl}/public.json` (+ `ui.json` for the caption), `pnpm i18n:gen-keys`.
-- Modify: `apps/web/e2e/standings-popovers.spec.ts` (lots note, level, head-to-head not complete), `e2e/mobile.spec.ts` (new columns at seven widths, no horizontal scroll).
+- Modify: `apps/web/e2e/standings-popovers.spec.ts` (lots note, level, head-to-head not complete, head-to-head for two only), `apps/web/e2e/mobile.spec.ts` (new columns at seven widths, no horizontal scroll).
+- Modify: `scripts/smoke.ts` — `w2dTablesSuite` gains the check "public standings carry drawnAt and level" (PS-9e).
 - Test: `E/competition/display-w2d.test.ts`, `W/server/public-site/__tests__/standings-view-w2d.test.ts` (new).
 - Create: `MUT/t17.json`.
 
@@ -1091,14 +1235,17 @@ SPEC §5.7, §6 W6/W8/B2, §9 public table, D10(b), anti-goal 3. Rule rows X-TB-
   it("a column per new key in the order: set_diff, point_diff, field_goals, SB (round robin), game ratio — only when the key is in the effective order (ST-G29)", …);
   it("X-TB-6 an empty table renders every rank '–', no leader row, no qualification chip", …);
   it("X-TB-4 a lots-decided row's popover says 'Drawn by lots on {date}' from tieBreak.drawnAt", …);
+  it("anti-goal 2 a class of three on a badminton h2h_two step: the popover says head-to-head applies to two teams only (note h2h_two_not_applicable), and a class of two shows no such note (the positive pair)", …);
   it("the division caption is per stage and says where its order came from and that it is pinned", …);
   ```
-- [ ] **Step 2: Run, expect FAIL** (engine and web paths, two JSON files).
+- [ ] **Step 2: Run, expect FAIL.** `cd WT/packages/engine && rm -f "$TMPDIR/w2d-t17e.json" && pnpm exec vitest run src/competition/display-w2d.test.ts --reporter=json --outputFile="$TMPDIR/w2d-t17e.json"; echo EXIT=$?` and `cd WT/apps/web && rm -f "$TMPDIR/w2d-t17w.json" && pnpm exec vitest run src/server/public-site/__tests__/standings-view-w2d.test.ts --reporter=json --outputFile="$TMPDIR/w2d-t17w.json"; echo EXIT=$?`.
 - [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run, expect PASS**; regression `src/competition/display.test.ts`, `src/server/public-site/__tests__/standings-view.test.ts`; tsc; eslint; `pnpm i18n:check`. E2E by CI dispatch: `standings-popovers.spec.ts` and `mobile.spec.ts`, judged per file. Assertions on HTML bodies anchor on `="` (`$undefined` trap).
-- [ ] **Step 5: Mutate** `MUT/t17.json`: `pointsToText` bypassed (killed by BG-PT-1); empty-table branch removed (killed by X-TB-6).
+- [ ] **Step 4: Run, expect PASS** (the Step 2 commands); regression (judged, `files` = 1 each): `cd WT/packages/engine && pnpm exec vitest run src/competition/display.test.ts --reporter=json --outputFile="$TMPDIR/w2d-t17er.json"; echo EXIT=$?` and `cd WT/apps/web && pnpm exec vitest run src/server/public-site/__tests__/standings-view.test.ts --reporter=json --outputFile="$TMPDIR/w2d-t17wr.json"; echo EXIT=$?`; all three tscs; eslint; `pnpm i18n:check`. Smoke: `$S rebuild --label w2d`, then `cd WT && SMOKE_ONLY=w2dTables SMOKE_BASE=http://localhost:<port> pnpm smoke; echo EXIT=$?`. E2E by CI dispatch: `standings-popovers.spec.ts` and `mobile.spec.ts`, judged per file. Assertions on HTML bodies anchor on `="` (`$undefined` trap).
+- [ ] **Step 5: Mutate** `MUT/t17.json`: `pointsToText` bypassed (killed by BG-PT-1); empty-table branch removed (killed by X-TB-6); the `h2h_two_not_applicable` label dropped (killed by the anti-goal 2 case).
 - [ ] **Step 6: Sign-off** at 1280 (chess RR, IIHF, an empty table, a lots tie popover) with per-screen verdicts.
 - [ ] **Step 7: Commit** `feat(public): standings columns, half-points, OTW/OTL, lots note and the level empty table (W2d T17)`.
+
+Test types: unit (engine display + web view); e2e `standings-popovers.spec.ts` + `mobile.spec.ts` (CI dispatch); smoke `w2dTables` "public standings carry drawnAt and level" (PS-9e); regression above. Sequence: empty table → one fixture → a lots tie → a void that re-levels it → another sport.
 
 ---
 
@@ -1106,28 +1253,37 @@ SPEC §5.7, §6 W6/W8/B2, §9 public table, D10(b), anti-goal 3. Rule rows X-TB-
 
 SPEC §5.6 `field_goals` row, B3; plan finding PF-2. **Invoke `frontend-design:frontend-design`**; phone composition rules apply (one DOM, `max-md:` branches; control-set diff at 320 vs 1280). **Owner chose option A (2026-10-20, after a clickable mockup):** the goal tap opens the kind chips (Field goal / Penalty corner / Penalty stroke), and the soft-commit timer waits until one is chosen; Cancel drops the goal. Option B (three goal tiles per side) was rejected. Rule row HK-TB-2.
 
+**PS-7d, owner 2026-10-24:**
+- A strict untyped hockey goal is refused with the named engine code `GOAL_KIND_REQUIRED`. The refusal is pad-visible, so this amends SPEC §10, which called it `CONFIG_INVALID` "never shown to an organiser" (recorded in PF-15; the spec text itself is not edited by this plan).
+- The dock offers exactly three kind chips (owner option A): Field goal (`fg`), Penalty corner (`pc`) and Penalty stroke (`stroke`), from hockey's `goalKinds` (`E/sports/hockey/hockey.ts:133`).
+- An own goal stays on its existing control, the dock's `ownGoal` flag (`period-shared.ts:1567-1572`, sending `kind: "og"`). It counts as a field goal for the side it is credited to (HK-TB-2, B3). The chips gain no own-goal chip; SPEC §9's four-type list is superseded by option A.
+
 **Files:**
 - Modify: `E/sports/period/kernel.ts` — preset flag `goalKindRequired: boolean` (hockey true; ice hockey false); in `applyGoal :1094`, `if (strict && state.cfg.goalKindRequired && payload.kind === undefined) throw GOAL_KIND_REQUIRED`. **Strict only** (PF-2): replay stays lenient, so the frozen golden hockey streams with `{"by":"H"}` still fold (an untyped legacy goal counts as a field goal, B3's definition).
 - Modify: `E/core/errors.ts` (+ `errors.test.ts`) — `GOAL_KIND_REQUIRED`.
-- Modify: `E/sport/fold-epoch.ts` — hockey MAJOR 2 → 3 (the write path now refuses what an older phone sends; the lineup precedent in the file's header); `FOLD_MINOR` unchanged.
+- Modify: `W/server/api-v1/http.ts` — `ENGINE_HTTP` (`:28`, typed `Record<EngineErrorCode, number>`, so tsc demands the row) gains `GOAL_KIND_REQUIRED: 422`, beside `INVALID_EVENT`.
+- Modify: `E/sport/fold-epoch.ts` — hockey MAJOR 3 → 4 (Task 3 took it 2 → 3, PS-1; the write path now refuses what an older phone sends; the lineup precedent in the file's header); `FOLD_MINOR` unchanged.
 - Modify: `E/testkit/conformance-pad.ts` — the hockey goal generator always sends a kind (else conformance turns red under strict).
-- Modify: `W/components/v2/scorepad/v3/skins/period-shared.ts:1555-1572` (+ `types.ts` `DockSpec` if option A needs `requires`), the pad error copy for `GOAL_KIND_REQUIRED`, `W/dictionaries/{en,es,fr,nl}/ui.json` (`pad.hockey.kind.fg` "Field goal", the refusal copy).
-- Create: `apps/web/e2e/scorepad-v3-hockey-goal-type.spec.ts`; Modify: `e2e/mobile.spec.ts` (the hockey pad at seven widths).
+- Modify: `W/components/v2/scorepad/v3/skins/period-shared.ts:1555-1572` — the loop stops skipping `fg` (it becomes the first chip, "Field goal"), keeps skipping `og` (the `ownGoal` flag stays as it is); `types.ts` `DockSpec` gains `requires` if option A needs it. Also the pad error copy for `GOAL_KIND_REQUIRED` and `W/dictionaries/{en,es,fr,nl}/ui.json` (`pad.hockey.kind.fg` "Field goal", the refusal copy).
+- Create: `apps/web/e2e/scorepad-v3-hockey-goal-type.spec.ts`; Modify: `apps/web/e2e/mobile.spec.ts` (the hockey pad at seven widths).
 - Test: `E/sports/period/goal-kind-required.test.ts`, `W/components/v2/scorepad/v3/__tests__/hockey-goal-type.test.ts` (new; the pure dock/commit helper).
 - Create: `MUT/t18.json`.
 
 - [ ] **Step 1: Write the failing tests.**
   ```ts
-  it("HK-TB-2 B3 a strict hockey.goal with no kind is refused GOAL_KIND_REQUIRED", …);
+  it("HK-TB-2 B3 a strict hockey.goal with no kind is refused GOAL_KIND_REQUIRED (PS-7d: the named code, not CONFIG_INVALID)", …);
+  it("PS-7d an own goal (kind 'og', the existing ownGoal control) is accepted under strict and counts as a field goal for the credited side", …);
   it("HK-TB-2 replay of a ledger holding an untyped goal still folds and counts it as a field goal (golden stays byte-identical)", …);
   it("ice hockey goals without a kind are still accepted (another sport)", …);
-  it("fold-epoch: hockey MAJOR is 3; fold-epoch:check --against HEAD^1 passes with the bump and fails without it", …);
+  it("fold-epoch: FOLD_EPOCH.hockey is 4 (Task 3's 3, plus this task's major; PS-9c — no git in vitest)", () => { expect(FOLD_EPOCH.hockey).toBe(4); });
   it("the pad cannot commit a hockey goal until a kind is chosen; Field goal is an explicit choice (pure helper)", …);
+  it("PS-7d the hockey dock's kind chips are exactly Field goal, Penalty corner, Penalty stroke (from hockey's goalKinds minus og), and ownGoal stays a flag, not a kind chip", …);
+  it("an own goal commits through the ownGoal flag without a kind chip (its kind is og)", …);
   ```
-- [ ] **Step 2: Run, expect FAIL** (engine + web JSON).
+- [ ] **Step 2: Run, expect FAIL.** `cd WT/packages/engine && rm -f "$TMPDIR/w2d-t18e.json" && pnpm exec vitest run src/sports/period/goal-kind-required.test.ts --reporter=json --outputFile="$TMPDIR/w2d-t18e.json"; echo EXIT=$?` and `cd WT/apps/web && rm -f "$TMPDIR/w2d-t18w.json" && pnpm exec vitest run src/components/v2/scorepad/v3/__tests__/hockey-goal-type.test.ts --reporter=json --outputFile="$TMPDIR/w2d-t18w.json"; echo EXIT=$?`.
 - [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run, expect PASS**; regression `src/sports/hockey`, `src/testkit/conformance-pad.test.ts`, `src/testkit/golden.test.ts` (hockey), `W/components/v2/scorepad/v3/__tests__/period-pair.test.ts`; `fold-epoch:check`; tsc; eslint; `pnpm i18n:check`. E2E by CI dispatch: the new spec and `mobile.spec.ts`. Smoke: `w2dTablesSuite` "an untyped hockey goal is refused by name".
-- [ ] **Step 5: Mutate** `MUT/t18.json`: drop `strict &&` (killed by the replay case); drop the `goalKindRequired` test (killed by the ice-hockey case).
+- [ ] **Step 4: Run, expect PASS**; regression (judged; `src/sports/hockey` holds no test file, so it is not a target — PS-9d): engine `src/sports/period/period.test.ts src/sports/period/period-audit.test.ts src/sports/period/padspec.test.ts src/testkit/conformance-pad.test.ts src/testkit/golden.test.ts src/testkit/golden-policy.test.ts` (`files` = 6), web `src/components/v2/scorepad/v3/__tests__/period-pair.test.ts` (`files` = 1); `cd WT && pnpm --filter @onryde/seazn-engine fold-epoch:check --against HEAD^1; echo EXIT=$?` (PS-9c); all three tscs; eslint; `pnpm i18n:check`. E2E by CI dispatch: the new spec and `mobile.spec.ts`. Smoke: `w2dTablesSuite` "an untyped hockey goal is refused by name".
+- [ ] **Step 5: Mutate** `MUT/t18.json`: drop `strict &&` (killed by the replay case); drop the `goalKindRequired` test (killed by the ice-hockey case); refuse `og` too (killed by the own-goal case); the dock keeps skipping `fg` (killed by the three-chips case).
 - [ ] **Step 6: Sign-off** at 1280 plus the 320 vs 1280 control-set diff (phone composition rule) with verdicts.
 - [ ] **Step 7: Commit** `feat(hockey): the pad records every goal's type; strict refusal of an untyped goal (W2d T18)`.
 
@@ -1147,6 +1303,7 @@ SPEC §13.7, §5.2 pad finding (football kicks in a GROUP stage), "Regression". 
   - cricket: a tie (1 each) and a no-result.
   - boards: chess round robin "1½" and SB; carrom.
   - generic.
+  - the pin (SPEC §13.8, traced from Task 7): `test("pin: a started stage's public table does not move after the division default changes", …)` — generate and score a stage, edit the division default order in Settings, and the public table's order and points are unchanged, while a new pending stage takes the edit.
 - Create: the regression map in the PR-body draft (`$TMPDIR/w2d-pr-body.md`): each closed gap (ST-G2, G4, G9, G10, G12, G13, G16, G29, SC-P10, SC-S9, F11, P20–P25) → the test title that was red first in its task (taken from the task reports), and the commit that turned it green.
 
 - [ ] **Step 1: Write the spec**; CI dispatch; judge this file (`unexpected == 0`, `expected > 0`). A red is fixed in the owning task's files, never by loosening the walkthrough.
@@ -1178,9 +1335,9 @@ SPEC §14. Before/after in the PR body.
 SPEC §15.4–5, §12.3, §16.
 
 - [ ] **Step 1: Fold.** D1–D11, B1–B5 and OC1–OC3 get ruling numbers after W2c's; the ruling 108 amendment text (SPEC §3); §4's false premises and this plan's findings; the MD-1 table row for `points.ts` (P13) → IDX. Rule rows → `signed <ruling> <date>` or `deviation <ruling> <date>`; `AWAITING_PROOF` is empty for W2d ids.
-- [ ] **Step 2: W5 amendments** (D7, SPEC §12.3), same PR: `W5-round-robin.md:79-80` trap → "fixed in W2d (stored lots)"; `2026-09-27-format-matrix-design.md:455` W5 row drops ST-G4 and ST-G13; `_INDEX.md:3869-3872` ST-G4, ST-G12, ST-G13 → W2d, ST-G3 stays W5.
+- [ ] **Step 2: W5 amendments** (D7, SPEC §12.3), same PR: `W5-round-robin.md:79-80` trap → "fixed in W2d (stored lots)"; `2026-09-27-format-matrix-design.md:455` W5 row drops ST-G4 and ST-G13; `IDX:4406,4408,4409` (the ST-G4, ST-G12 and ST-G13 rows; ST-G6 sits between them at `:4407` and is not W2d's) → W2d. ST-G3 has no IDX row; it stays W5 in `W5-round-robin.md:36`.
 - [ ] **Step 3: Ruling-70 regression (SPEC §16).** Dispatch one judge regression over the `swiss_knockout` L3 cells; record any new P6 cell against ruling 70 rather than parking it.
-- [ ] **Step 4: Gates.** The union of every task's scoped Step 4 on the final tree (never the full suite); `fold-epoch:check --against <merge-base>`; OpenAPI drift; `pnpm i18n:check`; a whole-branch `reviewer` pass (the three standing lenses).
+- [ ] **Step 4: Gates.** The union of every task's scoped Step 4 on the final tree (never the full suite); `pnpm --filter @onryde/seazn-engine fold-epoch:check --against <merge-base>`; OpenAPI drift; `pnpm i18n:check`; a whole-branch `reviewer` pass (the three standing lenses).
 - [ ] **Step 5: PR** (one PR, merge commit; body: per-wave verdicts, the regression map, MD-1 before/after, the staging pin counts from Task 7 Step 6, the planner's calls). Smoke runs on the PR. E2E by `gh workflow run e2e.yml --ref feat/format-matrix-w2d`, judged per spec file. Merge only on the owner's explicit go after any owner-run staging steps. Delete the lane worktrees.
 
 ---
@@ -1193,12 +1350,12 @@ The rows, their ids and their wording are SPEC Appendix A, signed in Task 0. Eac
 
 | # | Spec said / assumed | Tree says | Effect on the plan |
 |---|---|---|---|
-| PF-1 | §8: INFERRED that the production Swiss stage resolves to badminton's `defaultTiebreakers` | Confirmed by code: W2c `competition.ts:488-490` `cascadeFor` reads `division.tiebreakers ?? module.defaultTiebreakers` for every stage kind | Task 7 pins Swiss stages with the same literal; Task 7 Step 6 still reads the live row |
-| PF-2 | §5.6: "the engine refuses an untyped `hockey.goal`" | The frozen golden hockey streams hold untyped goals (`hockey.golden.json`, `{"by":"H"}`) and GOLDEN-POLICY forbids re-baselining; the pad treats `fg` as "the default and needs no chip" (`period-shared.ts:1555-1572`); the kernel already has a strict-only seam for declaration refusals (`kernel.ts:1110-1118`, `core/events.ts:990-1005`) | Task 18 refuses on the WRITE path only (`strict`), replay lenient, hockey `FOLD_EPOCH` MAJOR bump, `conformance-pad` sends a kind. The decision (refuse) stands; only where it is enforced is the planner's call |
+| PF-1 | §8: INFERRED that the production Swiss stage resolves to badminton's `defaultTiebreakers` | Confirmed by code: main@e97823e4d8 `competition.ts:492-494` `cascadeFor` reads `division.tiebreakers ?? module.defaultTiebreakers` for every stage kind | Task 7 pins Swiss stages with the same literal; Task 7 Step 6 still reads the live row |
+| PF-2 | §5.6: "the engine refuses an untyped `hockey.goal`" | The frozen golden hockey streams hold untyped goals (`hockey.golden.json`, `{"by":"H"}`) and GOLDEN-POLICY forbids re-baselining; the pad treats `fg` as "the default and needs no chip" (`period-shared.ts:1555-1572`); the kernel already has a strict-only seam for declaration refusals (`kernel.ts:1110-1118`, `core/events.ts:990-1005`) | Task 18 refuses on the WRITE path only (`strict`), replay lenient, hockey `FOLD_EPOCH` MAJOR bump (3 → 4, after Task 3's PS-1 bump), `conformance-pad` sends a kind. The decision (refuse) stands; only where it is enforced is the planner's call. Task 3's PS-1 rebaseline re-records corpus STATES, not the event streams, so the untyped goals stay. The refusal code is `GOAL_KIND_REQUIRED`, owner 2026-10-24 (PS-7d, PF-15) |
 | PF-3 | §8 lists the columns and table only | `public_stages_v.points_rule` rebuilds the OLD keys `base/bonuses/forfeit` (`V414__public_stages_qualification.sql:57-66,154-157`) and qualification reads it | Task 7 redefines the view to the pin's points or the new shape |
 | PF-4 | §5.3: `payout(outcome, decidedIn, pair, played, rule)` | W2c `applyPointsRule` has a fifth parameter `scoreKeys: AwardScoreKeys` (`points.ts:174`) | `payout` keeps it as its sixth |
-| PF-5 | §5.4: "including any insert that creates a stage already active" | Both stage inserts write `pending` (W2c `stages.ts:563`, `templates.ts:351`); activation is only at fixture generation (`:2889`, `:3714`) | Task 9's census scan still enforces it for any future writer |
-| PF-6 | §11 lists W2c readers of the points rule | More readers of the old shape exist: `stage-points-model.ts`, `points-line.ts`, `schemas.ts:18`, `fixture-cfg.ts`, `competition.ts:98,382` | Task 2 ports them mechanically so `tsc` stays green |
+| PF-5 | §5.4: "including any insert that creates a stage already active" | Both stage inserts write `pending` (main@e97823e4d8 `stages.ts:575`, `templates.ts:356`); activation is only at fixture generation (status writes `stages.ts:2955`, `:3788`) | Task 9's census scan still enforces it for any future writer |
+| PF-6 | §11 lists W2c readers of the points rule | More readers of the old shape exist: `stage-points-model.ts`, `points-line.ts`, `schemas.ts:18`, `fixture-cfg.ts`, `competition.ts:98,386` | Task 2 ports them mechanically so `tsc` stays green, and regenerates `openapi/*.json` (PS-3c) |
 | PF-7 | §15.5 "e2e by workflow_dispatch" | `e2e.yml`'s only dispatch input is `pr`; a dispatch runs every job | Each UI task judges its named spec file from the run |
 | PF-8 | §8 pins points and order | The pre-W2d cross-group order is hard-coded `points, diff, for, wins` (`progression.ts:573`); not pinning it would move best-third rankings of started stages, which B1 forbids | Task 7 pins `crossGroup` to that literal for migrated stages |
 | PF-9 | W2c's Q3 lock (plan read at `2bcc66313b`): `lockedStageIdsAmong` counts PLAYED stages | `lockedStageIdsAmong` (`rule-locks.ts:74`) also counts a stage whose online round is opened (`stage_ids_with_opened_round`, an SQL function in V469; W2c rebase ruling D2), not only played stages | The W2d pin and the first-score lock (Tasks 9, 10) keep D2: a stage with an opened round counts as started for the lock. Tests reuse W2c's predicate rather than re-deriving "played" |
@@ -1207,16 +1364,18 @@ The rows, their ids and their wording are SPEC Appendix A, signed in Task 0. Eac
 | PF-12 | W2d's locks reuse W2c's lock codes (`STAGE_FORMAT_LOCKED`, `DIVISION_TABLE_RULES_LOCKED`) | Plain `FORMAT_LOCKED` (`replaceStages`) is not in `RULE_ERROR_STATUS` (`W/lib/rule-errors.ts:13`), while `DIVISION_FORMAT_LOCKED`, `DIVISION_TABLE_RULES_LOCKED` and `STAGE_FORMAT_LOCKED` are | Task 10's new lock refusals use `STAGE_FORMAT_LOCKED` / `DIVISION_TABLE_RULES_LOCKED` as planned, and add no new code to the unlisted family |
 | PF-13 | Task 0 Step 5 (SPEC §11.2): a handover note to f-w2c, so W2c ships `soBonus`, a wider `STAGE_POINTS_REPLACES` and no tiebreakers branch in `divisionRefusals` | W2c merged (#1007) without those changes, and f-w2c is closed. `STAGE_POINTS_REPLACES` is still `{points, pointsMap}` (`rule-locks.ts:43`); the tiebreakers branch of `divisionRefusals` is at `:125-129` | Task 0 Step 5 is void. W2d makes those edits itself in Tasks 3 and 10 |
 | PF-14 | Anchors at plan time: `FOLD_EPOCH` "hockey 2, football 2, …" | `FOLD_EPOCH` (`E/sport/fold-epoch.ts:20-32`) is hockey 2, football 2, boardgame/carrom/generic 3, and every other sport 1 | Every task that changes a sport's fold bumps from these values, not from the old ones |
+| PF-15 | The plan as approved 2026-10-20 | Pre-flight scan 2026-10-24 (`.superpowers/sdd/2026-10-20-format-matrix-w2d/preflight-scan.md`, PS-1..PS-10) found false premises, stale pins, an unrunnable B1 seed and wave-order hazards | PS-1..PS-10 applied per the ledger's rulings (`progress.md` "Pre-flight scan rulings"). The main moves: T3 golden exception with an isolated REBASELINE commit and epoch majors; T9/T10/T13 smoke moves to T13; pairs sequential; T11 merges before T10; bench in scope; T7 seeding twin. **Owner 2026-10-24:** PS-7c = Option 1 (`defaultTiebreakers(kind, cfg)` through `resolveTableRules`; the football default omits `fair_play` when `fairPlay` is off, so it always passes `validateCascade`; T8, T11). PS-7d = the untyped hockey goal is refused with the named code `GOAL_KIND_REQUIRED`, which is pad-visible and **amends SPEC §10's `CONFIG_INVALID`**; three chips (Field goal, Penalty corner, Penalty stroke); own goal stays on its existing control and counts as a field goal; no own-goal chip (T18) |
+| PF-16 | Verify commands written `pnpm --filter @seazn/engine …` | The engine package is `@onryde/seazn-engine` (`packages/engine/package.json`). A filter on `@seazn/engine` matches no project, and pnpm exits 0 having run nothing (seen 2026-10-24): a vacuous green | Every engine filter in this plan names `@onryde/seazn-engine`; a step that prints no script output is not a pass |
 
 ## Self-review
 
-1. **Spec coverage.** §2.1 #1 → T8, T10, T15; #2 → T6, T10; #3 → T1; #4 → T2, T3, T10; #5 → T9, T10; #5a → T7, T9; #5b → T2, T3, T4; #6 → T4; #7 → T5, T9; #8, #9 → T12; #10 → T3, T11; #11 → T2, T3; #12 → T6, T10, T11; #13 → T17; #14 → T2, T3, T10; #15 → T2; #16 → T17. §2.3 anti-goals → T9 (1), T4/T6 (2), T5/T17 (3). §5.1–5.10 → T1–T12 as headed. §6: E1–E6 → T5, T8, T12; W1–W7 → T9; W8, W6 caption, B2 → T17; W9 → T13; W10 unchanged; W11 → T3's parity + T4 (B5); W12 → T10; bench B1 → T9 (gated). §7 → T13. §8 → T7. §9 → T15+16, T17, T18. §10 → T10, T13. §11.1–4 → T0, T10; §11.5 → T10 (behaviour test; the live catalog is re-checked in T10 Step 4 — if any plan reads `standings.custom_points` or `tiebreakers.custom` false, the `requireFeature` calls at `stages.ts:418-427` go, and only behaviour is tested). §12.3 → T21. §13 parts 1 → T11 (+T4, T12 differentials); 2 → T4, T5; 3 → T2, T4, T5, T10; 4 → T1, T3, T6, T11; 5 → T14; 6 → T20; 7 → T15+16, T17, T18, T19; 8 → T7, T9; smoke → T9–T18 (`w2dTablesSuite`), T14; regression → each task + T19's map. §14 → T20. §15 → T0, T21. §16 judge regression → T21. **Gaps found and fixed while writing:** the `tools/matrix` standings page (§6 B2) had no task → added to T17; §11.5's live-catalog check had no step → T10; the ruling-70 judge dispatch (§16) → T21; the view `public_stages_v` (PF-3) → T7; the pinned cross-group (PF-8) → T7.
+1. **Spec coverage.** §2.1 #1 → T8, T10, T15; #2 → T6, T10; #3 → T1; #4 → T2, T3, T10; #5 → T9, T10; #5a → T7, T9; #5b → T2, T3, T4; #6 → T4; #7 → T5, T9; #8, #9 → T12; #10 → T3, T11; #11 → T2, T3; #12 → T6, T10, T11; #13 → T17; #14 → T2, T3, T10; #15 → T2; #16 → T17. §2.3 anti-goals → T9 (1), T4/T6 (2), T5/T17 (3). §5.1–5.10 → T1–T12 as headed. §6: E1–E6 → T5, T8, T12; W1–W7 → T9; W8, W6 caption, B2 → T17; W9 → T13; W10 unchanged; W11 → T3's parity + T4 (B5); W12 → T10; bench B1 → T9 (in scope, PS-3). §7 → T13. §8 → T7. §9 → T15+16, T17, T18. §10 → T10, T13. §11 items 1–4 → T0, T10; §11 item 5 → T10 (behaviour test; the live catalog is re-checked in T10 Step 4 — if any plan reads `standings.custom_points` or `tiebreakers.custom` false, the `requireFeature` calls at `stages.ts:419,477` go, and only behaviour is tested). §12.3 → T21. §13 parts 1 → T11 (+T4, T12 differentials); 2 → T4, T5; 3 → T2, T4, T5, T10; 4 → T1, T3, T6, T11; 5 → T14; 6 → T20; 7 → T15+16, T17, T18, T19; 8 → T7, T9; smoke → T9–T18 (`w2dTablesSuite`), T14; regression → each task + T19's map. §14 → T20. §15 → T0, T21. §16 judge regression → T21. **Gaps found and fixed while writing:** the `tools/matrix` standings page (§6 B2) had no task → added to T17; §11 item 5's live-catalog check had no step → T10; the ruling-70 judge dispatch (§16) → T21; the view `public_stages_v` (PF-3) → T7; the pinned cross-group (PF-8) → T7.
 2. **Step scan.** Function bodies appear only for the h2h block modifiers, `h2h_two`, the `lots` step and the B1 mapping table (undetermined by their signatures). Removed a parity allowlist row that did not differ (TT unplayed loss) and required every allowlisted row to actually differ.
-3. **Type consistency.** `payout`/`reachableOutcomes`/`coverage`/`OutcomeKey`/`legacyPointsRule`/`parseStoredPointsRule` (T2) used by T3, T7, T9, T10, T15+16; `TableRules`/`TableRulesPin`/`TableRulesSource`/`resolveTableRules`/`defaultCrossGroup` (T8) by T9, T12, T13, T15; `membersKeyOf`/`newLotsDraws`/`countedFixtures` (T5) by T9; `offerableKeys`/`CascadeRefusal`/`CascadeContext` (T6) by T10, T15; `winsCount`/`gamePoints` (T1/T4) by T8; `tablePresets` (T11) by T15+16; `loadTableRules`/`repinStageOwnRules` (T9) by T10, T12, T13. `defaultTiebreakers(kind: TableStageKind)` (T8) by T11.
-4. **Review Focus.** Five lines, each with its test in the owning task (T9, T5+T9, T9, T10, T8).
+3. **Type consistency.** `payout`/`reachableOutcomes`/`coverage`/`OutcomeKey`/`legacyPointsRule`/`parseStoredPointsRule` (T2) used by T3, T7, T9, T10, T15+16; `TableRules`/`TableRulesPin`/`TableRulesSource`/`resolveTableRules`/`defaultCrossGroup` (T8) by T9, T12, T13, T15; `membersKeyOf`/`newLotsDraws`/`countedFixtures` (T5) by T9; `offerableKeys`/`CascadeRefusal`/`CascadeContext` (T6) by T10, T15; `winsCount`/`gamePoints` (T1/T4) by T8; `tablePresets` (T11) by T15+16; `loadTableRules`/`repinStageOwnRules` (T9) by T10, T12, T13. `defaultTiebreakers(kind: TableStageKind, cfg: Cfg)` (T8, PS-7c) by T11 and through `resolveTableRules` only; `LoadedTableRules.sportDefault` (T9) by T13 (`StageTableRules`) and T15+16 (`resetOrder`).
+4. **Review Focus.** Five lines, each with its test in the owning task (T9, T5+T9, T9, T10, T9 — Review Focus 5 moved from T8, PS-5e).
 5. **Proportion.** The spec is 998 lines; this plan is well under 3× it, and its code blocks are signatures, test titles and assertions.
 
-**Planner's calls** (none re-opens a decision): `validateCascade` moves to a new `cascade-rules.ts`; the Swiss editor shows no pinned rows (consequence of OC1); `pointsRuleExpressible` is deleted in T10 with its readers, not T2; `payout` runs at the existing web fold sites rather than inside `completeTableStage`; the B1 "before" comes from the pre-W2d code through an API scenario, and the pin is a SQL function the test can call again; the migrated `crossGroup` literal (PF-8); the hockey refusal is strict-only with a fold-epoch MAJOR and a `GOAL_KIND_REQUIRED` code (PF-2); football's default omits `fair_play` when `fairPlay` is off; a stored draw is superseded when a newer draw in the same pool shares a member; the `tablePresets` declaration; `outcomeMethods`/`reachableResultKinds`/`reachableSetScores` declarations (so totality and coverage are computable); `rngSeed` is a random 31-bit value at creation; Opus for every task; two UI options shown before T15+16 and T18 are built.
+**Planner's calls** (none re-opens a decision): `validateCascade` moves to a new `cascade-rules.ts`; the Swiss editor shows no pinned rows (consequence of OC1); `pointsRuleExpressible` is deleted in T10 with its readers, not T2; `payout` runs at the existing web fold sites rather than inside `completeTableStage`; the B1 "before" comes from the pre-W2d code through an API scenario, and the pin is a SQL function the test can call again; the migrated `crossGroup` literal (PF-8); the hockey refusal is strict-only with a fold-epoch MAJOR and a `GOAL_KIND_REQUIRED` code (PF-2); football's default omits `fair_play` when `fairPlay` is off; a stored draw is superseded when a newer draw in the same pool shares a member; the `tablePresets` declaration; `outcomeMethods`/`reachableResultKinds`/`reachableSetScores` declarations (so totality and coverage are computable); `rngSeed` is a random 31-bit value at creation; Opus for every task.
 
 ## Execution handoff
 
