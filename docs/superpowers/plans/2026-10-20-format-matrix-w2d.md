@@ -2,10 +2,10 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Sequencing.** W2d builds ON W2c (`feat/format-matrix-w2c`, not merged at plan time; `2bcc66313b`).
-> - **Every task waits for Task 0**, which runs only after W2c merges: the rebase, the re-pin of every line in **Anchors**, the migration number and the pre-W2d snapshot B1 needs.
-> - Line numbers below marked **W2c** were read in the W2c worktree at `2bcc66313b` (read-only). Lines marked **main** were read at `dec7b95d90`. Both are pins for Task 0 to re-take, not promises.
-> - Migration numbers are provisional: main's max + 1 **at rebase**, after r2's V468, free-stages' V469 and email-outbox (D1). W2c's own V463 renumbers first (spec P6).
+> **Sequencing.** W2d builds ON W2c, which merged as #1007 (`5e8cef4347`) on 2026-10-24.
+> - **Every task waits for Task 0**: the rebase, the re-pin of every line in **Anchors**, the migration number and the pre-W2d snapshot B1 needs.
+> - Task 0 re-took every **Anchors** pin at `e97823e4d8` (= origin/main `2e0deaa6c1` plus the W2d docs merge); they are marked **main@e97823e4d8**. They are still pins, not promises.
+> - The migration is **V472** (`V472__w2d_table_rules.sql`). Main's max is V471: V469 W2c (`fixture_rules_override`), V470 email-outbox, V471 all-stages-free.
 
 **Goal:** Every table stage ranks by its sport's real rules — outcome-keyed points (regulation, overtime, shoot-out, tie, no result), a per-stage tie-break order validated when it is saved, a stored drawing of lots, the sport's cross-group order — and once a stage is active its table can no longer move under anyone, including under this release.
 
@@ -41,42 +41,42 @@ Where the spec and the tree disagree, the tree wins and the disagreement is a nu
 
 | Fact | Where |
 |---|---|
-| `PointsRule` zod `{base, bonuses, forfeit}` `:13-40`; `validatePointsRule :46`; `isBye :63`; `forfeitShaped :72`; `isUnplayedForfeit :86`; `applyPointsRule(outcome, pair, rule, played, scoreKeys) :174`; `Expressible`/`BASE_KEYS`/`pointsRuleExpressible :250-283`; `pointsRuleBounds :378` | W2c `E/competition/points.ts` |
-| `RankContext :202-223` (`cascade, results, h2hRecursive, swiss, seeds, h2hScope, rngSeed`); `RankingResult :225-231` (`rows, lotsGroups`); `DIFF_KEYS/FOR_KEYS/AGAINST_KEYS :237-241`; `COMPARATORS :332`; `H2H_KEYS :368`; `h2hToPlain :376`; `h2hBlock :414`; `directRefine :468`; `refine :495`; silent skip `:529-537`; `lotSeed :547`; `bySeedThenId :558`; `rankStandings :572`; `validateCascade(cascade, {metrics, swiss}) :638`; `buildSwissTable :705` | W2c `E/competition/tiebreakers.ts` |
-| `TableStage.h2hRecursive :72`, `rngSeed :75`; `DivisionEvent` `rank_lock_required`/`rank_lock :104-105`; `completeTableStage :215` (passes `h2hRecursive :243`, `rngSeed :245`, events `:255-257`) | W2c `E/competition/stage.ts` |
-| `crossGroupOrder :573` (hard-coded `points, diff, for, wins`), its caller `resolveProgression :668` | W2c `E/competition/progression.ts` |
-| `tieDecidingKey :54` (null unless `cascade[0]==="points"`) | W2c `E/competition/tie-what-if.ts` |
-| `TiebreakerKey` union `:46`; `defaultTiebreakers: TiebreakerKey[] :944`; `matchPointsBounds :979` | W2c `E/sport/module.ts` |
-| `forEachSport(fn, modules?) : number :18`; `sportCases :33` | W2c `E/testkit/for-each-sport.ts` |
-| `deriveSeed(…,"lots",stageId)` | main `E/testkit/simulation.ts:559,653` |
-| period goal: payload `kind?` `:259`; `applyGoal(state, payload, strict) :1094` (strict-only kind check `:1110-1118`); pad enum `goalKindValues :2047`; metrics `goals_<kind>` skip `fg`/`og` | W2c `E/sports/period/kernel.ts` (main `:240,1098-1101,1986,2413-2416`) |
-| strict-only refusal precedent (`strict = strictFromSeq …`, lineup refusal) | W2c `E/core/events.ts:990-1005` |
-| `FOLD_EPOCH` (hockey 2, football 2, …), `FOLD_MINOR` | W2c `E/sport/fold-epoch.ts:19-37` |
-| football `points {win 3, draw 1, loss 0, shootoutWin?, shootoutLoss?}` | W2c `E/sports/football/football.ts:124-132`; SO delta `:2721-2730` (main) |
-| period `points {win, draw, loss, otWin?, otLoss?, shootoutWin?, shootoutLoss?}` | W2c `E/sports/period/kernel.ts:214-222` |
-| hockey default `3/1/0 :130`; `fih-shootout` `{3,1,0, shootoutWin 2, shootoutLoss 1} :146`; ice hockey IIHF `{3,1,0, otWin 2, otLoss 1} :179`, recreational `{2,1,0} :208` | W2c `hockey.ts`, `icehockey.ts` |
-| cricket `points {win 2, tie 1, noResult 1, loss 0, draw?}` | W2c `E/sports/cricket/cricket.ts:62-68` |
-| set sports `pointsMap` (`setbased/kernel.ts:124`): badminton `{"*":[2,0]} :28`, table tennis `{"*":[2,0]} :30`, volleyball FIVB `{"3-2":[2,1],"*":[3,0]} :11`, beach `{"*":[2,0]} :61` | W2c `E/sports/setbased/*` |
-| tennis `points {win 2, loss 0}` `:25`; boardgame `scoring {2,1,0}` half-points `:61-67`; carrom `{2,0,1} :55-57`; generic `{w,d,l} :44-48` | W2c per module |
-| default cascades: badminton/TT/volleyball `points, wins, set_ratio, point_ratio, h2h_points`; ice hockey `points, h2h_points, h2h_diff, h2h_for, diff, for, seed`; cricket `points, wins, nrr, h2h_points, seed`; hockey `points, diff, for, h2h_points, seed`; tennis `points, set_ratio, game_ratio, h2h_points, seed`; generic `points, diff, for, h2h_points, lots`; football `FOOTBALL_TIEBREAKERS.fifa2026`; carrom `CARROM_TIEBREAKERS`; boardgame `BOARDGAME_TIEBREAKERS` | main `E/sports/**` `defaultTiebreakers` |
-| web cascade resolver `cascadeFor :488-490`; `toTableStage :492` (passes `rngSeed :500`); `applyPointsRule` call sites `:116` (bye) and `:428`; `recomputeStandings :579`; `rankedStageStandings :614`; `completeStageIfReady :664`; `status = 'complete' :845` | W2c `W/server/engine-db/competition.ts` |
-| stage activation: `generateStageFixturesWrite :2370` → `update stages set status = 'active' :2889`; `generateProgressionSetupFixtures :3402` → `:3714`; stage inserts `:563` and `templates.ts:351` (both `pending`) | W2c `W/server/usecases/stages.ts` |
-| `tableRuleKeys :23`; `STAGE_POINTS_REPLACES = {points, pointsMap} :43`; `lockedStageIdsAmong :66`; `divisionRefusals :91` (tiebreakers branch `:114-117`); `divisionLockedFields :149` | W2c `W/server/usecases/rule-locks.ts` |
-| `formatLockedStageIds :45`; `putStageRules :73` | W2c `W/server/usecases/stage-rules.ts` |
-| `writeFixtureRulesOverride :251` | W2c `W/server/usecases/fixture-rules.ts` |
-| `RULE_ERROR_STATUS :13`; `POINTS_SPLIT_LABEL_KEYS :96`; `ruleRefusalText :211` | W2c `W/lib/rule-errors.ts` |
-| `TiebreakerKeyS :318`; division `tiebreakers :438,462`; stage `:536`; `rngSeed` optional (main `:1144`) | W2c `W/server/api-v1/schemas.ts` |
-| template `tiebreakers: z.array(z.string()).optional() :135` | W2c `W/server/templates/schema.ts` |
-| `StagePointsSection` mounted `:2504`; `StageFormatRow :2219` | W2c `W/components/v2/stages-panel.tsx` |
-| W2c stage-rules UI: `stage-points-section.tsx`, `stage-points-model.ts`, `stage-row-model.ts`, `sequence-field.tsx` | W2c `W/components/v2/stage-rules/` |
-| hockey pad goal dock: kind chips from `cfg.goalKinds` skip `fg`/`og` (`fg` "is the default and needs no chip") | W2c `W/components/v2/scorepad/v3/skins/period-shared.ts:1555-1572` |
-| other resolvers (spec §6 W2–W7) | main `W/server/public-site/competition-hub.ts:920`, `W/server/slideshow-data.ts:71`, `W/app/embed/divisions/[id]/[widget]/page.tsx:72`, `W/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx:95`, `W/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx:440,955-969`, `W/server/public-site/standings-view.ts:370,391`, `division-qualification.ts:53`, `qualification-view.ts:152,317` |
-| bench resolvers | main `tools/bench/lib/validate-pack.ts:2250,2284,2314`, `tools/bench/lib/pack-template.ts:107` |
-| smoke `w2cStageRulesSuite :7204`, called `:1268` | W2c `scripts/smoke.ts` |
-| W2c e2e `e2e/stage-rules-w2c.spec.ts`; `e2e/standings-popovers.spec.ts`; `e2e/mobile.spec.ts`; walkthroughs `e2e/walkthrough/` | W2c `apps/web/` |
-| highest delta: main `V467__stream_runner_restart_seen.sql`; W2c `V463__fixture_rules_override.sql` | `db/migration/deltas/` |
+| `PointsRule` zod `{base, bonuses, forfeit}` `:13-40`; `validatePointsRule :46`; `isBye :63`; `forfeitShaped :72`; `isUnplayedForfeit :86`; `applyPointsRule(outcome, pair, rule, played, scoreKeys) :174`; `Expressible`/`BASE_KEYS`/`pointsRuleExpressible :250-283`; `pointsRuleBounds :378` | main@e97823e4d8 `E/competition/points.ts` |
+| `RankContext :202-223` (`cascade, results, h2hRecursive, swiss, seeds, h2hScope, rngSeed`); `RankingResult :225-231` (`rows, lotsGroups`); `DIFF_KEYS/FOR_KEYS/AGAINST_KEYS :237-241`; `COMPARATORS :332`; `H2H_KEYS :368`; `h2hToPlain :376`; `h2hBlock :414`; `directRefine :468`; `refine :495`; silent skip `:529-537`; `lotSeed :547`; `bySeedThenId :558`; `rankStandings :572`; `validateCascade(cascade, {metrics, swiss}) :638`; `buildSwissTable :705` | main@e97823e4d8 `E/competition/tiebreakers.ts` |
+| `TableStage.h2hRecursive :72`, `rngSeed :75`; `DivisionEvent` `rank_lock_required`/`rank_lock :104-105`; `completeTableStage :215` (passes `h2hRecursive :243`, `rngSeed :245`, events `:255-257`) | main@e97823e4d8 `E/competition/stage.ts` |
+| `crossGroupOrder :573` (hard-coded `points, diff, for, wins`), its caller `resolveProgression :668` | main@e97823e4d8 `E/competition/progression.ts` |
+| `tieDecidingKey :54` (null unless `cascade[0]==="points"`) | main@e97823e4d8 `E/competition/tie-what-if.ts` |
+| `TiebreakerKey` union `:46`; `defaultTiebreakers: TiebreakerKey[] :944`; `matchPointsBounds :979` | main@e97823e4d8 `E/sport/module.ts` |
+| `forEachSport(fn, modules?) : number :57`; `sportCases :33` | main@e97823e4d8 `E/testkit/for-each-sport.ts` |
+| `deriveSeed(…,"lots",stageId)` | main@e97823e4d8 `E/testkit/simulation.ts:559,653` |
+| period goal: payload `kind?` `:259`; `applyGoal(state, payload, strict) :1094` (strict-only kind check `:1110-1118`); pad enum `goalKindValues :2047`; metrics `goals_<kind>` skip `fg`/`og` `:2478-2481` | main@e97823e4d8 `E/sports/period/kernel.ts` |
+| strict-only refusal precedent (`strict = strictFromSeq …`, lineup refusal) | main@e97823e4d8 `E/core/events.ts:990-1005` |
+| `FOLD_EPOCH` (hockey 2, football 2, …), `FOLD_MINOR` | main@e97823e4d8 `E/sport/fold-epoch.ts` `FOLD_EPOCH :20-32`, `FOLD_MINOR :35-38` (values: PF-14) |
+| football `points {win 3, draw 1, loss 0, shootoutWin?, shootoutLoss?}` | main@e97823e4d8 `E/sports/football/football.ts:124-132`; SO delta `:2779-2789` |
+| period `points {win, draw, loss, otWin?, otLoss?, shootoutWin?, shootoutLoss?}` | main@e97823e4d8 `E/sports/period/kernel.ts:214-222` |
+| hockey default `3/1/0 :130`; `fih-shootout` `{3,1,0, shootoutWin 2, shootoutLoss 1} :146`; ice hockey IIHF `{3,1,0, otWin 2, otLoss 1} :179`, recreational `{2,1,0} :208` | main@e97823e4d8 `hockey.ts`, `icehockey.ts` |
+| cricket `points {win 2, tie 1, noResult 1, loss 0, draw?}` | main@e97823e4d8 `E/sports/cricket/cricket.ts:62-68` |
+| set sports `pointsMap` (`setbased/kernel.ts:124`): badminton `{"*":[2,0]} :28`, table tennis `{"*":[2,0]} :30`, volleyball FIVB `{"3-2":[2,1],"*":[3,0]} :11`, beach `{"*":[2,0]} :61` | main@e97823e4d8 `E/sports/setbased/*` |
+| tennis `points {win 2, loss 0}` `:25`; boardgame `scoring {2,1,0}` half-points `:61-67`; carrom `{2,0,1} :55-57`; generic `{w,d,l} :44-48` | main@e97823e4d8 per module |
+| default cascades: badminton/TT/volleyball `points, wins, set_ratio, point_ratio, h2h_points`; ice hockey `points, h2h_points, h2h_diff, h2h_for, diff, for, seed`; cricket `points, wins, nrr, h2h_points, seed`; hockey `points, diff, for, h2h_points, seed`; tennis `points, set_ratio, game_ratio, h2h_points, seed`; generic `points, diff, for, h2h_points, lots`; football `FOOTBALL_TIEBREAKERS.fifa2026`; carrom `CARROM_TIEBREAKERS`; boardgame `BOARDGAME_TIEBREAKERS` | main@e97823e4d8 `E/sports/**` `defaultTiebreakers` |
+| web cascade resolver `cascadeFor :492-494`; `toTableStage :496` (passes `rngSeed :504`); `applyPointsRule` call sites `:116` (bye) and `:432`; `recomputeStandings :583`; `rankedStageStandings :618`; `completeStageIfReady :668`; `status = 'complete' :849` | main@e97823e4d8 `W/server/engine-db/competition.ts` |
+| stage activation: `generateStageFixturesWrite :2436` → `update stages set status = 'active' :2955`; `generateProgressionSetupFixtures :3476` → `:3788`; stage inserts `:575` and `templates.ts:356` (both `pending`) | main@e97823e4d8 `W/server/usecases/stages.ts` |
+| `tableRuleKeys :23`; `STAGE_POINTS_REPLACES = {points, pointsMap} :43`; `lockedStageIdsAmong :74` (played OR an opened online round: PF-9); `divisionRefusals :102` (tiebreakers branch `:125-129`); `divisionLockedFields :160` | main@e97823e4d8 `W/server/usecases/rule-locks.ts` |
+| `formatLockedStageIds :45`; `putStageRules :73` | main@e97823e4d8 `W/server/usecases/stage-rules.ts` |
+| `writeFixtureRulesOverride :251` | main@e97823e4d8 `W/server/usecases/fixture-rules.ts` |
+| `RULE_ERROR_STATUS :13`; `POINTS_SPLIT_LABEL_KEYS :115`; `ruleRefusalText :240` | main@e97823e4d8 `W/lib/rule-errors.ts` |
+| `TiebreakerKeyS :325`; division `tiebreakers :450` (`CreateDivision`), `:479` (`PatchDivision`); `Division` response schema `tiebreakers :561` (the plan's "stage `:536`" was this line; no Stage schema carries `tiebreakers`); `rngSeed` optional `:1184` (`StageConfig :1152`) | main@e97823e4d8 `W/server/api-v1/schemas.ts` |
+| template `tiebreakers: z.array(z.string()).optional() :135` | main@e97823e4d8 `W/server/templates/schema.ts` |
+| `StagePointsSection` mounted `:2549`; `StageFormatRow :2264` | main@e97823e4d8 `W/components/v2/stages-panel.tsx` |
+| W2c stage-rules UI: `stage-points-section.tsx`, `stage-points-model.ts`, `stage-row-model.ts`, `sequence-field.tsx` | main@e97823e4d8 `W/components/v2/stage-rules/` |
+| hockey pad goal dock: kind chips from `cfg.goalKinds` skip `fg`/`og` (`fg` "is the default and needs no chip") | main@e97823e4d8 `W/components/v2/scorepad/v3/skins/period-shared.ts:1555-1572` |
+| other resolvers (spec §6 W2–W7) | main@e97823e4d8 `W/server/public-site/competition-hub.ts:920`, `W/server/slideshow-data.ts:71`, `W/app/embed/divisions/[id]/[widget]/page.tsx:72`, `W/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx:95`, `W/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx:439,960-978`, `W/server/public-site/standings-view.ts:370,391`, `division-qualification.ts:63`, `qualification-view.ts:169,375` |
+| bench resolvers | main@e97823e4d8 `tools/bench/lib/validate-pack.ts:2303,2337,2367`, `tools/bench/lib/pack-template.ts:107` |
+| smoke `w2cStageRulesSuite :7231`, called `:1294` | main@e97823e4d8 `scripts/smoke.ts` |
+| W2c e2e `e2e/stage-rules-w2c.spec.ts`; `e2e/standings-popovers.spec.ts`; `e2e/mobile.spec.ts`; walkthroughs `e2e/walkthrough/` | main@e97823e4d8 `apps/web/` |
+| highest delta: main@e97823e4d8 `V471__all_stages_free.sql` (W2c's is `V469__fixture_rules_override.sql`); W2d's is **`V472__w2d_table_rules.sql`** | `db/migration/deltas/` |
 | `stages.status` check `('pending','active','complete')` | `db/migration/v2-engine/tables/V210__stages.sql:10` |
-| golden hockey streams record untyped goals (`{"by":"H"}`) | W2c `E/sports/hockey/hockey.golden.json` (finding PF-2) |
+| golden hockey streams record untyped goals (`{"by":"H"}`) | main@e97823e4d8 `E/sports/hockey/hockey.golden.json` (finding PF-2) |
 
 Before building on any line, the implementer re-opens it (AGENTS class 5). A moved line is a note in the task report; a changed MEANING is a new plan finding.
 
@@ -84,7 +84,7 @@ Before building on any line, the implementer re-opens it (AGENTS class 5). A mov
 
 ## Global Constraints
 
-- **Worktree.** `WT` = `/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2d-build`, branch `feat/format-matrix-w2d` (created in Task 0, off main after W2c merges, with the spec and plan commits merged in).
+- **Worktree.** `WT` = the build worktree `/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2d-build`, branch `feat/format-matrix-w2d` (created in Task 0 off origin/main `2e0deaa6c1`, after W2c merged as #1007, with the spec and plan merged in at `e97823e4d8`).
   - Every shell command starts `cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2d-build && …` (cwd resets between calls).
   - Never edit the main checkout, the W2c worktree or the docs worktree. **Never `git stash`.** No heredocs: commit messages go through the Write tool to `$TMPDIR/w2d-msg.txt`, then `git commit -F "$TMPDIR/w2d-msg.txt" -- <paths>`, ending with the committing agent's own `Co-Authored-By:` line.
 - **Local env.** `S=~/.claude/skills/seazn-local-env/scripts/seazn-env.sh`, label `w2d`: `$S up --label w2d --all` (fresh pg + `db:apply` + `sync:sports` + prod server); `eval "$($S env --label w2d)"`; `psql "$DATABASE_URL" -Atc "show data_directory"` equals the label's datadir; after a code change `$S rebuild --label w2d`. `BASE`/`SMOKE_BASE` use `localhost`, never 127.0.0.1.
@@ -198,7 +198,7 @@ Lanes branch from `feat/format-matrix-w2d`, get their own `pnpm install --frozen
 
 Every task lists its files, interfaces, its four test types, its sequence cases (empty first), its mutation step and its verify command. The orchestrator records `TASK_BASE=$(git rev-parse HEAD)` before each dispatch.
 
-### Task 0: Orchestrator — rebase, re-pin, migration number, rule rows, the pre-W2d base (**BLOCKED until W2c merges**)
+### Task 0: Orchestrator — rebase, re-pin, migration number, rule rows, the pre-W2d base (W2c merged #1007, 2026-10-24)
 
 SPEC §15.1–2, §11.1, D1, Appendix A.
 
@@ -206,16 +206,16 @@ SPEC §15.1–2, §11.1, D1, Appendix A.
 - Create: `WT` (worktree), `MUT/.gitkeep`.
 - Modify: this plan's **Anchors** table (re-pinned values), `RULES/{cross-sport,football,hockey,icehockey,boardgame,cricket,volleyball,badminton,tabletennis,tennis,carrom,generic}.md` (Appendix A rows, status `awaiting proof`), `packages/engine/test/rules-reference.test.ts` (`AWAITING_PROOF` gains every Appendix A id), `IDX` (W2d row: started, `W2D_BASE`).
 
-- [ ] **Step 1: Create the build worktree after W2c merges**
+- [x] **Step 1: Create the build worktree after W2c merges**
   ```bash
   cd /Users/ashokhein/github/seazn.club && git fetch origin && git worktree add ../seazn.club-worktrees/format-matrix-w2d-build -b feat/format-matrix-w2d origin/main; echo EXIT=$?
   cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2d-build && git merge --no-ff docs/format-matrix-w2d -m "Merge W2d spec and plan"; echo EXIT=$?
   ```
   Expected: `EXIT=0` twice; `git log --oneline -3` shows the merge, and `git merge-base --is-ancestor <W2c merge sha> HEAD` exits 0. Then `pnpm install --frozen-lockfile`; symlink `.env.local` and `apps/web/.env.local` from the main checkout; `readlink -f node_modules/@seazn/engine` resolves inside `WT`. Record `W2D_BASE=$(git rev-parse HEAD)` in IDX: it is the pre-W2d code the B1 snapshot runs (Task 7).
-- [ ] **Step 2: Re-pin every Anchors row on the rebased tree** with `git grep -n -a`. A moved line is updated in place; a changed meaning becomes a Plan finding. Confirm in particular: W2c's `STAGE_POINTS_REPLACES`, `divisionRefusals`' tiebreakers branch, `writeFixtureRulesOverride`, `applyPointsRule`'s five parameters, the two `status = 'active'` writers, and that no third activation writer exists (`git grep -n -a -E "stages set status|insert into stages" -- apps/web/src scripts tools`).
-- [ ] **Step 3: Fix the migration number.** `ls db/migration/deltas | sort -V | tail -3` → `V<max>`; W2d's delta is `V<max+1>__w2d_table_rules.sql`. Record the number in IDX and tell f-r2 / free-stages / email-outbox (whoever lands second renumbers, D1).
+- [x] **Step 2: Re-pin every Anchors row on the rebased tree** with `git grep -n -a`. A moved line is updated in place; a changed meaning becomes a Plan finding. Confirm in particular: W2c's `STAGE_POINTS_REPLACES`, `divisionRefusals`' tiebreakers branch, `writeFixtureRulesOverride`, `applyPointsRule`'s five parameters, the two `status = 'active'` writers, and that no third activation writer exists (`git grep -n -a -E "stages set status|insert into stages" -- apps/web/src scripts tools`).
+- [x] **Step 3: Fix the migration number.** `ls db/migration/deltas | sort -V | tail -3` → `V<max>`; W2d's delta is `V<max+1>__w2d_table_rules.sql`. Record the number in IDX and tell f-r2 / free-stages / email-outbox (whoever lands second renumbers, D1).
 - [ ] **Step 4: Sign the rule rows.** Put Appendix A's rows to the owner in chat, word for word, at plan start (ruling 75). Write the signed text into each `RULES/*.md` with status `awaiting proof`, add each id to `AWAITING_PROOF`, and run `rules-reference.test.ts` (judged by JSON; green means the map lists every new id).
-- [ ] **Step 5: Send f-w2c the handover note** (SPEC §11.2) as a RECOMMENDATION from f-w2d, never as an owner ruling (class 17): `shootoutWin/shootoutLoss` are replaced by `soBonus`; `STAGE_POINTS_REPLACES` widens; the tiebreakers branch of `divisionRefusals` goes.
+- [x] **Step 5: Send f-w2c the handover note** (SPEC §11.2) as a RECOMMENDATION from f-w2d, never as an owner ruling (class 17): `shootoutWin/shootoutLoss` are replaced by `soBonus`; `STAGE_POINTS_REPLACES` widens; the tiebreakers branch of `divisionRefusals` goes. — void, see PF-13
 - [ ] **Step 6: Commit** `git commit -F "$TMPDIR/w2d-msg.txt" -- RULES packages/engine/test/rules-reference.test.ts docs/superpowers/plans/2026-10-20-format-matrix-w2d.md MUT/.gitkeep` (IDX by the orchestrator in the same commit).
 
 ---
@@ -296,11 +296,11 @@ Test types: unit (above); e2e → Task 19 `tables-w2d.spec.ts` "goals family: OT
 
 ### Task 2: Engine — the widened `PointsRule`, `payout`, reachable outcomes and coverage (wave 1, parallel with Task 4)
 
-SPEC §5.3, D4, D6, D9, D10(a)(c), B2, F11 (§2.1 #15). Rule rows X-PT-2, X-PT-3, X-PT-4, X-WO-1 (amended), X-DW-4, FB-PT-1, VB-PT-2, VB-PT-3, CR-PT-1, CR-PT-2, TT-PT-1, IH-PT-1.
+SPEC §5.3, D4, D6, D9, D10(a)(c), B2, F11 (§2.1 #15). Rule rows X-PT-2, X-PT-3, X-PT-4, X-WO-1 (amended), X-DW-4, FB-PT-1, VB-PT-2, VB-PT-3, CK-PT-1, CK-PT-2, TT-PT-1, IH-PT-1.
 
 **Files:**
 - Modify: `E/competition/points.ts` — `PointsRule` (replaces `:13-40`), `payout` (replaces `applyPointsRule :174`), `validatePointsRule :46` (margin aliases), `pointsRuleBounds :378` (over reachable outcomes), new `reachableOutcomes`, `coverage`, `legacyPointsRule`. `forfeitShaped`, `isUnplayedForfeit`, `carryDeltas`, `applyRankLocks` unchanged. `pointsRuleExpressible` stays until Task 10 deletes it with its readers.
-- Modify (mechanical port so `tsc` stays green; `tsc` lists them; no behaviour change beyond the shape): `W/server/engine-db/competition.ts:98,116,382,428`; W2c `W/components/v2/stage-rules/stage-points-model.ts` (`ZERO_BASE`, `storedPointsRule`, the draft builder); `W/lib/points-line.ts`; `E/testkit/scenarios.ts`; the existing tests `E/competition/{points,points-w2c,w2b-tables,tiebreak-rule-award-alias}.test.ts`, `W/server/public-site/__tests__/qualification-view.test.ts`. `tools/bench/lib/validate-pack.ts`: only after the orchestrator clears it with the bench index (`_RULES.md` R3); until then the bench keeps compiling against a local `legacyPointsRule` call.
+- Modify (mechanical port so `tsc` stays green; `tsc` lists them; no behaviour change beyond the shape): `W/server/engine-db/competition.ts:98,116,382,428`; main@e97823e4d8 `W/components/v2/stage-rules/stage-points-model.ts` (`ZERO_BASE`, `storedPointsRule`, the draft builder); `W/lib/points-line.ts`; `E/testkit/scenarios.ts`; the existing tests `E/competition/{points,points-w2c,w2b-tables,tiebreak-rule-award-alias}.test.ts`, `W/server/public-site/__tests__/qualification-view.test.ts`. `tools/bench/lib/validate-pack.ts`: only after the orchestrator clears it with the bench index (`_RULES.md` R3); until then the bench keeps compiling against a local `legacyPointsRule` call.
 - Test: `E/competition/points-w2d.test.ts` (new); `E/competition/points-w2d.property.test.ts` (new, fast-check).
 - Create: `MUT/t2.json`.
 
@@ -352,8 +352,8 @@ SPEC §5.3, D4, D6, D9, D10(a)(c), B2, F11 (§2.1 #15). Rule rows X-PT-2, X-PT-3
   it("X-WO-1 (amended, D6) TT: an unplayed walkover loser gets loss.unplayed 0; a played loser gets 1; the winner gets 2 either way", …);
   it("X-PT-1 an unplayed forfeit with a forfeit row pays the forfeit row, not loss.unplayed (precedence, SPEC §5.3 step 5)", …);
   it("a bye pays the forfeit row if set, else the clean-sweep win; never awardScore", …);
-  it("CR-PT-1 cricket: tie 1 each; noResult 1 each; a rule with no noResult pays 0 (D14)", …);
-  it("CR-PT-2 a two-innings draw pays `draw` 1 (D10(c))", …);
+  it("CK-PT-1 cricket: tie 1 each; noResult 1 each; a rule with no noResult pays 0 (D14)", …);
+  it("CK-PT-2 a two-innings draw pays `draw` 1 (D10(c))", …);
   it("VB-PT-2 bySetScore {2-0:[3,0], 2-1:[2,1]}: 2-1 pays 2:1, not 3:0 (SC-S9); an exact key beats '*'", …);
   it("F11 a win_margin_gte bonus reads football's gd and cricket's run_diff, not literal diff (validatePointsRule accepts it)", …);
   it("unit 'half' changes nothing payout pays (display only)", …);
@@ -389,7 +389,7 @@ Test types: unit + property; e2e → Task 16 `stage-tiebreaks-w2d.spec.ts` "poin
 
 ### Task 3: Engine — each sport's `tablePointsRule`, `soBonus`, and the parity sweep (wave 1, after Task 2; parallel with Task 5)
 
-SPEC §5.3 "The sport's default, as a rule", §5.10 points column, D6, D10(a)(c), B2. Rule rows FB-PT-1, HK-PT-1, HK-PT-2, IH-PT-1, IH-PT-2, BG-PT-1, CR-PT-1, CR-PT-2, VB-PT-1, VB-PT-2, TT-PT-1.
+SPEC §5.3 "The sport's default, as a rule", §5.10 points column, D6, D10(a)(c), B2. Rule rows FB-PT-1, HK-PT-1, HK-PT-2, IH-PT-1, IH-PT-2, BG-PT-1, CK-PT-1, CK-PT-2, VB-PT-1, VB-PT-2, TT-PT-1.
 
 **Files:**
 - Modify: `E/sport/module.ts` (`tablePointsRule(cfg: Cfg, stageKind: StageKind): PointsRule` on `SportModule`).
@@ -430,7 +430,7 @@ SPEC §5.3 "The sport's default, as a rule", §5.10 points column, D6, D10(a)(c)
   it("TT-PT-1 2/1/0 with an unplayed loss paying 0", …);
   it("VB-PT-1 VB-PT-2 FIVB best of 5 and the best-of-3 map exactly as SPEC §5.3", …);
   it("BG-PT-1 chess default is 2/1/0 in half-points (unit 'half')", …);
-  it("CR-PT-2 the two-innings draw appears only when inningsPerSide === 2", …);
+  it("CK-PT-2 the two-innings draw appears only when inningsPerSide === 2", …);
   it("soBonus is the only shoot-out key: football/hockey configSchema refuses shootoutWin (greenfield, no alias)", …);
   ```
 - [ ] **Step 2: Run, expect FAIL.** `cd WT/packages/engine && rm -f "$TMPDIR/w2d-t3e.json" && pnpm exec vitest run src/competition/table-points-parity.test.ts --reporter=json --outputFile="$TMPDIR/w2d-t3e.json"; echo EXIT=$?`
@@ -796,12 +796,12 @@ Test types: unit (DB) + source scans; e2e → Task 15 "pinned at start" and Task
 SPEC §5.4 "What changes after the pin", "Fixture override coverage", §5.5 "Write paths", §10, §11.4, D3, D8, D9, D10(a), Review Focus 4. Rule rows X-TB-2 (lock half), X-TB-3, X-TB-5, X-PT-3, FB-TB-4.
 
 **Files:**
-- Modify: W2c `W/server/usecases/stage-rules.ts` `putStageRules :73` — accepts `tiebreakers: TiebreakerKey[] | null` and `crossGroupTiebreakers`; validates with `validateCascade`; points through `coverage(rule, reachableOutcomes(...))`; before the first score a valid save calls `repinStageOwnRules`; after it, `STAGE_FORMAT_LOCKED`. The volleyball `"*"` early return (main `:113`) is deleted (coverage owns it).
-- Modify: W2c `W/server/usecases/rule-locks.ts` — `divisionRefusals` loses its tiebreakers branch (`:114-117`); `STAGE_POINTS_REPLACES` = `{points, pointsMap, otWin, otLoss, soBonus, tie, noResult, draw}`; boardgame `scoring` and `awardScore` keep W2c's lock.
+- Modify: main@e97823e4d8 `W/server/usecases/stage-rules.ts` `putStageRules :73` — accepts `tiebreakers: TiebreakerKey[] | null` and `crossGroupTiebreakers`; validates with `validateCascade`; points through `coverage(rule, reachableOutcomes(...))`; before the first score a valid save calls `repinStageOwnRules`; after it, `STAGE_FORMAT_LOCKED`. The volleyball `"*"` early return (main `:113`) is deleted (coverage owns it).
+- Modify: main@e97823e4d8 `W/server/usecases/rule-locks.ts` — `divisionRefusals` loses its tiebreakers branch (`:125-129`); `STAGE_POINTS_REPLACES` = `{points, pointsMap, otWin, otLoss, soBonus, tie, noResult, draw}`; boardgame `scoring` and `awardScore` keep W2c's lock.
 - Modify: `W/server/usecases/divisions.ts` create (main `:352`) and patch (main `:1091`) — validate against the sport and every UNPINNED table stage that inherits; patch response gains `stagesKeptPinned: {stageId, name}[]`; a cfg save that flips football `fairPlay` re-validates every unpinned inheriting cascade.
 - Modify: `W/server/usecases/stages.ts` `createStages`/`replaceStages` — validate the effective cascade; assign `config.rngSeed` (random 31-bit) when absent.
 - Modify: `W/server/usecases/templates.ts`, `W/server/templates/schema.ts:135` (`z.array(TiebreakerKeyS)` + validation on apply).
-- Modify: W2c `W/server/usecases/fixture-rules.ts` `writeFixtureRulesOverride :251` — coverage of the fixture's merged format against the stage's effective (pinned) rule.
+- Modify: main@e97823e4d8 `W/server/usecases/fixture-rules.ts` `writeFixtureRulesOverride :251` — coverage of the fixture's merged format against the stage's effective (pinned) rule.
 - Delete: `pointsRuleExpressible`, `Expressible`, `BASE_KEYS` (W2c `points.ts:250-283`) and every reader (`stage-rules.ts`, `stage-rules-merge.ts:233,262,287`, `stage-defaults.ts`, `W/lib/rule-errors.ts:20,89-104`); `POINTS_RULE_INEXPRESSIBLE` leaves `RULE_ERROR_STATUS`.
 - Modify: `W/lib/rule-errors.ts` — `TIEBREAK_KEY_INVALID` (422, `extra.refusals`), `POINTS_OUTCOME_UNCOVERED` (422, `extra.uncovered`) with SPEC §10's English and their keys; the four dictionaries (`ui.json`) for the §10 messages and the nine reasons, then `pnpm i18n:gen-keys`.
 - Modify: `scripts/smoke.ts` (`w2dTablesSuite` checks).
@@ -848,7 +848,7 @@ Test types: unit (DB) + sequence + source scan; e2e → Task 15/16; smoke above;
 
 ### Task 11: Engine — per-sport defaults, presets, rule rows, rulebook scenarios (wave 3, lane `format-matrix-w2d-defaults`; may start once Task 8 is merged)
 
-SPEC §5.10, D5, D10, B4, B5, OC1, §13.1, §13.4 ("the default order passes"). Rule rows FB-TB-1/2/3, HK-TB-1, IH-TB-1, BG-TB-1/2, CR-TB-1, VB-TB-1, BD-TB-1, TT-TB-1, TN-TB-1/2, CM-TB-1, GN-TB-1, HK-PT-2, BG-PT-1 (preset half).
+SPEC §5.10, D5, D10, B4, B5, OC1, §13.1, §13.4 ("the default order passes"). Rule rows FB-TB-1/2/3, HK-TB-1, IH-TB-1, BG-TB-1/2, CK-TB-1, VB-TB-1, BD-TB-1, TT-TB-1, TN-TB-1/2, CA-TB-1, GN-TB-1, HK-PT-2, BG-PT-1 (preset half).
 
 **Files:**
 - Modify: every module's `defaultTiebreakers(kind)` round-robin value (Swiss value unchanged, OC1), exactly SPEC §5.10:
@@ -885,7 +885,7 @@ SPEC §5.10, D5, D10, B4, B5, OC1, §13.1, §13.4 ("the default order passes"). 
   it("IH-TB-1 a 4-way tie re-applied down to 2 (RBG:345-346)", …);
   it("FB-TB-1 FB-TB-2 uefa vs fifa2026 on a 3-way tie that re-application splits differently (RBG:108-112)", …);
   it("BG-TB-1 chess RR: SB decides where Buchholz would have; BG-TB-2 buchholz is not in the RR default", …);
-  it("CR-PT-1 under a stage rule a cricket tie pays 1, not 0 (ST-G9)", …);
+  it("CK-PT-1 under a stage rule a cricket tie pays 1, not 0 (ST-G9)", …);
   it("VB-PT-2 best of 3: 2-1 pays 2:1, not 3:0 (SC-S9)", …);
   it("HK-PT-2 SC-P4 oracle: FIH default 3/1/0 with a draw; the Pro League preset's shoot-out pays D + 1 (2/1) (D10(f), B2)", …);
   ```
@@ -983,7 +983,7 @@ Test types: unit (route); e2e → Task 15; smoke above; regression above. Sequen
 
 ### Task 14: The real producer → consumer seam, and smoke (wave 4, after Task 13)
 
-SPEC §13.5 (class 1: drive the seam through its real producer and consumer), §13 Smoke, §5.2 pad finding (API half). Rule rows FB-PT-1, IH-PT-1, CR-PT-1, TT-PT-1, HK-TB-2, X-TB-2.
+SPEC §13.5 (class 1: drive the seam through its real producer and consumer), §13 Smoke, §5.2 pad finding (API half). Rule rows FB-PT-1, IH-PT-1, CK-PT-1, TT-PT-1, HK-TB-2, X-TB-2.
 
 **Files:**
 - Test: `W/server/engine-db/__tests__/tables-producer-consumer.test.ts` (new, DB): events go through the real `POST /api/v1/fixtures/{id}/events` route handler, the real recompute, then the real public standings `GET`.
@@ -995,7 +995,7 @@ SPEC §13.5 (class 1: drive the seam through its real producer and consumer), §
   it("FB-PT-1 football group, shootout on: football.penalty kicks in the SHOOTOUT phase → public row D for both, winner 2 points, loser 1, wins 0 (RB2B-7)", …);
   it("IH-PT-1 icehockey.period.advance into OT + icehockey.goal → OTW/OTL and 3-2-1-0 points 2/1 (RBG:343-344)", …);
   it("IH-PT-1 icehockey.shootout.attempt → a GWS pays 2/1", …);
-  it("CR-PT-1 a cricket tie → 1 point each on the public table", …);
+  it("CK-PT-1 a cricket tie → 1 point each on the public table", …);
   it("TT-PT-1 a table-tennis walkover → the loser's row gets 0, a played loser 1", …);
   it("HK-TB-2 hockey goals typed fg / pc / stroke / og through the API → the public field-goals column = gf − pc − stroke", …);
   it("X-TB-2 the pin comes from the real POST /stages/{id}/generate; the lock from the real first event append; the override refusal from the real PUT /fixtures/{id}/rules", …);
@@ -1018,7 +1018,7 @@ SPEC §9, D11, D3, OC1, OC2, B2 (SO row), D10(b), §10 copy. **Invoke `frontend-
 **Files:**
 - Create: `W/components/v2/stage-rules/stage-tiebreaks-model.ts` (pure; every guard lives here so it has a unit killer), `W/components/v2/stage-rules/stage-tiebreaks-section.tsx`.
 - Modify: `W/components/v2/stages-panel.tsx` — mount `StageTiebreaksSection` after `StagePointsSection` (W2c `:2504`) for table stages (league, group, swiss, americano).
-- Modify: W2c `W/components/v2/stage-rules/stage-points-model.ts` + `stage-points-section.tsx` — rows = `reachableOutcomes`; SO row by `shootoutAs`; volleyball row per reachable set score; preset chips from `tablePresets`; `POINTS_OUTCOME_UNCOVERED` inline; W2c's inexpressible card deleted.
+- Modify: main@e97823e4d8 `W/components/v2/stage-rules/stage-points-model.ts` + `stage-points-section.tsx` — rows = `reachableOutcomes`; SO row by `shootoutAs`; volleyball row per reachable set score; preset chips from `tablePresets`; `POINTS_OUTCOME_UNCOVERED` inline; W2c's inexpressible card deleted.
 - Modify: `W/dictionaries/{en,es,fr,nl}/ui.json` (+ `pnpm i18n:gen-keys`): `div.detail.tiebreak.rule.<key>` for every new key and modifier; badges; "+ Add step"; reset and preset names (FIFA 2026 / UEFA / Classic, Pro League, 1/½/0, 3/1/0); "always first" / "always last"; the lock line "{stage} has started — its tie-breaks are pinned."; the cross-group line "Between groups: …"; the points rows including "after a shoot-out: counts as a draw; the winner gets +[1]".
 - Create: `apps/web/e2e/stage-tiebreaks-w2d.spec.ts`; Modify: `apps/web/e2e/mobile.spec.ts` (the section at all seven widths; open the phone fold first, `toBeAttached` before visibility; every instance).
 - Test: `W/components/v2/stage-rules/__tests__/{stage-tiebreaks-model,stage-points-w2d-model}.test.ts`.
@@ -1201,6 +1201,12 @@ The rows, their ids and their wording are SPEC Appendix A, signed in Task 0. Eac
 | PF-6 | §11 lists W2c readers of the points rule | More readers of the old shape exist: `stage-points-model.ts`, `points-line.ts`, `schemas.ts:18`, `fixture-cfg.ts`, `competition.ts:98,382` | Task 2 ports them mechanically so `tsc` stays green |
 | PF-7 | §15.5 "e2e by workflow_dispatch" | `e2e.yml`'s only dispatch input is `pr`; a dispatch runs every job | Each UI task judges its named spec file from the run |
 | PF-8 | §8 pins points and order | The pre-W2d cross-group order is hard-coded `points, diff, for, wins` (`progression.ts:573`); not pinning it would move best-third rankings of started stages, which B1 forbids | Task 7 pins `crossGroup` to that literal for migrated stages |
+| PF-9 | W2c's Q3 lock (plan read at `2bcc66313b`): `lockedStageIdsAmong` counts PLAYED stages | `lockedStageIdsAmong` (`rule-locks.ts:74`) also counts a stage whose online round is opened (`stage_ids_with_opened_round`, an SQL function in V469; W2c rebase ruling D2), not only played stages | The W2d pin and the first-score lock (Tasks 9, 10) keep D2: a stage with an opened round counts as started for the lock. Tests reuse W2c's predicate rather than re-deriving "played" |
+| PF-10 | `core.abandon` carries no no-result marker (plan read at `2bcc66313b`) | W2c rebase ruling D3: `core.abandon` takes an optional `noResult: true` (`E/core/events.ts:74`). Only `organiser_no_result` writes it; W2c's `settleAppliesInTable`/`rowAwaitsSettle` read it | Task 1's `decidedInFor` and Task 2's `reachableOutcomes`/`payout` map an abandoned fixture with `noResult: true` to the `noResult` outcome and keep W2c's table treatment unchanged. Tasks 1 and 2 first read `settleAppliesInTable` and `rowAwaitsSettle`, and cite the file:line of each |
+| PF-11 | Stage-level rules are settable on every division (plan read at `2bcc66313b`) | W2c rebase ruling D1: a Lichess (online) division refuses stage-level clock and variant (reason `online_division`, `W/lib/rule-errors.ts:99`) | None on tie-breaks or points: stage-level order and points stay editable on online divisions. Task 10 must not route its new refusals through `online_division` |
+| PF-12 | W2d's locks reuse W2c's lock codes (`STAGE_FORMAT_LOCKED`, `DIVISION_TABLE_RULES_LOCKED`) | Plain `FORMAT_LOCKED` (`replaceStages`) is not in `RULE_ERROR_STATUS` (`W/lib/rule-errors.ts:13`), while `DIVISION_FORMAT_LOCKED`, `DIVISION_TABLE_RULES_LOCKED` and `STAGE_FORMAT_LOCKED` are | Task 10's new lock refusals use `STAGE_FORMAT_LOCKED` / `DIVISION_TABLE_RULES_LOCKED` as planned, and add no new code to the unlisted family |
+| PF-13 | Task 0 Step 5 (SPEC §11.2): a handover note to f-w2c, so W2c ships `soBonus`, a wider `STAGE_POINTS_REPLACES` and no tiebreakers branch in `divisionRefusals` | W2c merged (#1007) without those changes, and f-w2c is closed. `STAGE_POINTS_REPLACES` is still `{points, pointsMap}` (`rule-locks.ts:43`); the tiebreakers branch of `divisionRefusals` is at `:125-129` | Task 0 Step 5 is void. W2d makes those edits itself in Tasks 3 and 10 |
+| PF-14 | Anchors at plan time: `FOLD_EPOCH` "hockey 2, football 2, …" | `FOLD_EPOCH` (`E/sport/fold-epoch.ts:20-32`) is hockey 2, football 2, boardgame/carrom/generic 3, and every other sport 1 | Every task that changes a sport's fold bumps from these values, not from the old ones |
 
 ## Self-review
 

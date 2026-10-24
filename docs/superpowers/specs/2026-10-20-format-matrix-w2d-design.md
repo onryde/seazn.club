@@ -927,6 +927,8 @@ field goals, B4 volleyball double round robin, B5 chess SB), and B1 replaced the
 
 ## Appendix A — Rule rows to sign at plan start (ruling 75)
 
+Ids as written: cricket CK-, carrom CA- (file prefixes); signed 2026-10-24.
+
 These ids are proposed and checked free in both trees (no existing `*-TB-*`; `X-PT-1` and `X-SR-1..7` are W2c's). The
 wording is finalised with the owner at plan start. Statuses become `signed <ruling> <date>` or `deviation <ruling>
 <date>` at the fold.
