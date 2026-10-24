@@ -13,6 +13,7 @@ import { EngineError } from "../../core/errors.ts";
 import { CoreForfeit, forfeitOf, isStrictFold, type CoreEv, type EventEnvelope } from "../../core/events.ts";
 import type { Rng } from "../../core/rng.ts";
 import {
+  BRACKET_KINDS,
   DRAW_KINDS,
   EntrantId,
   type LineupPair,
@@ -43,6 +44,17 @@ import { forfeitStatsRole, personsForEntrant, statsUnplayed, type PlayerStatRow,
 // ---------------------------------------------------------------------------
 // Cfg — spec 04 §6.1
 // ---------------------------------------------------------------------------
+
+// W2a BG-KO-1/BG-KO-2 (ruling 73). Lots is NOT a rung: drawing lots is the
+// organiser's core.settle {method: "lot"}. Declared before the cfg, which
+// validates a stage's rung list against it.
+export const TIEBREAK_RUNGS = ["rapid", "blitz", "armageddon"] as const;
+export type TiebreakRung = (typeof TIEBREAK_RUNGS)[number];
+/** W2c D8: the rungs a stage plays, IN THE STAGE'S ORDER. Absent = every rung, in `TIEBREAK_RUNGS` order (today's
+ *  behaviour); an empty list sends no drawn game to a tie-break. Never re-sorted: the order is the order played. */
+export function effectiveRungs(cfg: Pick<BoardgameCfg, "tiebreakRungs">): readonly TiebreakRung[] {
+  return cfg.tiebreakRungs ?? TIEBREAK_RUNGS;
+}
 
 // Points are HALF-POINTS (×2): a win is 2 (= 1.0), a draw 1 (= 0.5), a loss 0.
 export const BoardgameScoring = z.object({
@@ -88,6 +100,15 @@ export const BoardgameCfg = z.object({
   // default (finding 12): cfg is serialised into every frozen golden state.
   // Absent reads as false (spec §5.2 "default false").
   tiebreak: z.boolean().optional(),
+  // W2c BG-KO-3 (D8) — the stage's tie-break rungs, in the order they are played. OPTIONAL with NO default (the same
+  // golden rule as `tiebreak`): absent means every rung. An EMPTY list is the organiser's "no tie-break games": a
+  // drawn bracket game folds level and the server holds it for a decision (ruling 79), so the list is authoritative
+  // and `bracketDeciders` never writes it. No rung twice, none the engine does not declare.
+  tiebreakRungs: z
+    .array(z.enum(TIEBREAK_RUNGS))
+    .max(TIEBREAK_RUNGS.length)
+    .refine((rungs) => new Set(rungs).size === rungs.length, { message: "a tie-break rung is listed once" })
+    .optional(),
   clock: z
     .object({
       base: z.number().int().nonnegative(),
@@ -202,20 +223,29 @@ export const BoardgamePairing = z
   });
 export type BoardgamePairing = z.infer<typeof BoardgamePairing>;
 
-// W2a BG-KO-1/BG-KO-2 (ruling 73). Lots is NOT a rung: drawing lots is the
-// organiser's core.settle {method: "lot"}.
-export const TIEBREAK_RUNGS = ["rapid", "blitz", "armageddon"] as const;
-export type TiebreakRung = (typeof TIEBREAK_RUNGS)[number];
 // A chess match score: whole points with an optional half either side of an en dash ("1½–½", "2–0").
 export const CHESS_SCORE = /^(\d+½?|½)–(\d+½?|½)$/;
 export const BOARDGAME_TIEBREAK_TYPE = "boardgame.tiebreak";
-export const BoardgameTiebreak = z.strictObject({
-  rung: z.enum(TIEBREAK_RUNGS),
+/** Rapid and blitz: the scorer records who won (ruling 82). */
+export const BoardgameRungTiebreak = z.strictObject({
+  rung: z.enum(["rapid", "blitz"]),
   // The entrant who advances — the same schema core.settle names its winner with
   // (review Minor 4); it was typed PersonId, a different brand of the same string.
   winner: EntrantId,
   score: z.string().regex(CHESS_SCORE).optional(),
 });
+/** W2c BG-KO-2 (D7): how a single Armageddon game ended, from White's side. */
+export const ARMAGEDDON_RESULTS = ["white", "black", "draw"] as const;
+/** Armageddon (W2c D7, greenfield — no live ledger carries the old `{rung, winner}` shape): the scorer records who
+ *  had Black and the result, and the ENGINE decides who advances (BG-KO-2: a drawn Armageddon is Black's). The
+ *  entrant is never named as a winner, so there is no way to record a draw that advances White. `black` is required;
+ *  an event without it is refused by name (TIEBREAK_COLOUR_REQUIRED, see `requireArmageddonColour`). */
+export const BoardgameArmageddon = z.strictObject({
+  rung: z.literal("armageddon"),
+  black: EntrantId,
+  result: z.enum(ARMAGEDDON_RESULTS),
+});
+export const BoardgameTiebreak = z.discriminatedUnion("rung", [BoardgameRungTiebreak, BoardgameArmageddon]);
 export type BoardgameTiebreak = z.infer<typeof BoardgameTiebreak>;
 
 // Branches are told apart structurally (spec 03 §2): a result always carries
@@ -253,6 +283,10 @@ export interface BoardgameState {
   // `rung`/`score` land when the tie-break is recorded.
   // Absent on every stream that never reached a tie-break (golden-safe).
   tiebreak?: { rung?: TiebreakRung; score?: string };
+  // W2c BG-KO-2 — the entrant who had Black in the Armageddon, once one is recorded. ABSENT until then (never null in
+  // `init`), so every stream that never played an Armageddon folds to exactly the state it always did (review I11).
+  // Its own field: `colorOfHome` is the classical game's colour and stays untouched.
+  armageddonBlack?: string;
 }
 
 function opponent(side: Side): Side {
@@ -313,7 +347,11 @@ function decideResult(
     // settle had to close; a settle recorded over one before W2b still replays
     // (the kernel's legacy settle, D6).
     if (method === "double_forfeit") return { ...base, outcome: { kind: "double_walkover" } };
-    if (state.cfg.tiebreak === true) return { ...base, phase: "tiebreak", outcome: null, tiebreak: {} };
+    // W2c BG-KO-3: the stage's rung list is authoritative. An empty list is "no tie-break games", so the drawn game
+    // stays a draw (the server holds a bracket's level result for the organiser, ruling 79) instead of waiting for a
+    // decider nobody may record.
+    const rungs = effectiveRungs(state.cfg);
+    if (state.cfg.tiebreak === true && rungs.length > 0) return { ...base, phase: "tiebreak", outcome: null, tiebreak: {} };
     return { ...base, outcome: { kind: "draw" } };
   }
   const winnerSide = sideOf(state, winner);
@@ -399,11 +437,53 @@ function tiebreakRefused(message: string, data?: unknown): never {
   throw new EngineError("TIEBREAK_NOT_APPLICABLE", message, data);
 }
 
-// W2a BG-KO-1. Only in phase "tiebreak". The scorer records the winner on every
-// rung; BG-KO-2 (a drawn armageddon goes to Black) is the pad's hint in W2a, and
-// armageddon colours are W2c's (ruling 82).
+/** BG-KO-2: White won, the other entrant advances; Black won or the Armageddon was drawn, Black advances. */
+function armageddonAdvancer(black: Side, result: (typeof ARMAGEDDON_RESULTS)[number]): Side {
+  return result === "white" ? opponent(black) : black;
+}
+
+/** BG-KO-3: a rung the stage does not list is not played, whatever else the event says. Which of the LISTED rungs may be
+ *  recorded first is not decided here: the engine is only ever given the rung that decided the game (it has no "this rung
+ *  ended level" fact), so "the next rung after the last drawn one" has nothing to read. See the order test in
+ *  tiebreak.test.ts (open ruling). */
+function refuseUnlistedRung(state: BoardgameState, rung: TiebreakRung): void {
+  const listed = effectiveRungs(state.cfg);
+  if (!listed.includes(rung)) {
+    tiebreakRefused(`tie-break rung "${rung}" is not one this stage plays`, { rung, allowed: [...listed] });
+  }
+}
+
+/** W2c D7: an Armageddon names who had Black, or it is refused by name. Read from the raw payload, ahead of the
+ *  schema, so a scorer who left the colour out is told what to record rather than that the payload is invalid. A
+ *  stage that does not play an Armageddon is told that first: the rung list outranks the colour. */
+function requireArmageddonColour(state: BoardgameState, payload: unknown): void {
+  if (typeof payload !== "object" || payload === null) return;
+  const { rung, black } = payload as { rung?: unknown; black?: unknown };
+  // Missing is anything that names no entrant: absent, null, "" or a non-string (an API client that clears the field sends
+  // null or ""). A non-empty string no one owns is not missing; the schema and the lineup lookup refuse that one.
+  if (rung === "armageddon" && (typeof black !== "string" || black === "")) {
+    refuseUnlistedRung(state, rung);
+    throw new EngineError("TIEBREAK_COLOUR_REQUIRED", "an Armageddon must record who had Black", { rung });
+  }
+}
+
+// W2a BG-KO-1. Only in phase "tiebreak", and only on a rung the stage lists (W2c BG-KO-3). Rapid and blitz: the
+// scorer records the winner. Armageddon (W2c BG-KO-2): the scorer records Black and the result and the winner is
+// DERIVED here, never typed — the colour is kept in its own field and never written to `colorOfHome`.
 function applyTiebreak(state: BoardgameState, p: BoardgameTiebreak): BoardgameState {
   if (state.phase !== "tiebreak") tiebreakRefused(`tie-break not allowed in phase "${state.phase}"`);
+  refuseUnlistedRung(state, p.rung);
+  if (p.rung === "armageddon") {
+    const blackSide = sideOf(state, p.black);
+    const winnerSide = armageddonAdvancer(blackSide, p.result);
+    return {
+      ...state,
+      phase: "done",
+      armageddonBlack: state.entrants[blackSide],
+      tiebreak: { rung: p.rung },
+      outcome: { kind: "win", winner: state.entrants[winnerSide], loser: state.entrants[opponent(winnerSide)], method: `tiebreak_${p.rung}` },
+    };
+  }
   const winnerSide = sideOf(state, p.winner);
   return {
     ...state,
@@ -585,14 +665,32 @@ export function padSpec(cfg: BoardgameCfg): PadSpec {
   // phase "tiebreak"; the result panels are then gated to phase "live", so a
   // drawn bracket game swaps them for the tie-break. Without `tiebreak` in cfg
   // no panel carries a gate (the spec is unchanged).
-  const tiebreakAction: PadAction = {
+  // W2c: the tie-break has two payload shapes (rapid/blitz name the winner; an Armageddon names Black and the result),
+  // so it is two actions of one event type, each offering only the rungs the stage lists, in the stage's order. An
+  // empty list offers none, and a stage with no rung to play has no tie-break panel at all.
+  const rungsListed = effectiveRungs(cfg);
+  const timedRungs = rungsListed.filter((r) => r !== "armageddon");
+  const timedAction: PadAction = {
     type: BOARDGAME_TIEBREAK_TYPE,
     labelKey: { key: "pad.boardgame.action.tiebreak", label: "Tie-break" },
-    fields: [{ kind: "enum", path: "rung", values: TIEBREAK_RUNGS }],
+    fields: [{ kind: "enum", path: "rung", values: timedRungs }],
     attribution: [{ kind: "side", path: "winner" }],
   };
+  const armageddonAction: PadAction = {
+    type: BOARDGAME_TIEBREAK_TYPE,
+    labelKey: { key: "pad.boardgame.action.armageddon", label: "Armageddon game" },
+    fields: [
+      { kind: "enum", path: "rung", values: ["armageddon"] },
+      { kind: "enum", path: "result", values: ARMAGEDDON_RESULTS },
+    ],
+    attribution: [{ kind: "side", path: "black" }],
+  };
+  const tiebreakActions: PadAction[] = [
+    ...(timedRungs.length > 0 ? [timedAction] : []),
+    ...(rungsListed.includes("armageddon") ? [armageddonAction] : []),
+  ];
   const inPhase = (value: string): PadGate => ({ op: "path-equals", path: "state.phase", value });
-  const tb = cfg.tiebreak === true;
+  const tb = cfg.tiebreak === true && tiebreakActions.length > 0;
 
   const panels: PadPanel[] = [
     {
@@ -620,14 +718,15 @@ export function padSpec(cfg: BoardgameCfg): PadSpec {
           labelKey: { key: "pad.boardgame.panel.tiebreak", label: "Tie-break" },
           phase: "live" as const,
           layout: "primary" as const,
-          actions: [tiebreakAction],
+          actions: tiebreakActions,
           gate: inPhase("tiebreak"),
         }]
       : []),
   ];
 
   // R8/WS-B — `required` stamped ONCE, here, from BOARDGAME_EVENT_SCHEMAS
-  // itself (never hand-typed per action; see module.ts's own doc comment).
+  // itself (never hand-typed per action; see module.ts's own doc comment). `boardgame.tiebreak` is a union of the
+  // rapid/blitz and Armageddon payloads, and `isPathRequired` resolves a path through its branches.
   return stampAttributionRequired(
     {
       panels,
@@ -771,6 +870,18 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
     rapid: { variant: "rapid" },
     blitz: { variant: "blitz" },
   },
+  // W2c (spec §4.1 Q5) — a chess match has no per-match format: the time control is set per stage (item 14), and the
+  // tie-break games exist only where someone must advance (`bracketDeciders`). Scoring and the bye are table points.
+  ruleKeys: {
+    variant: { scope: "stage" },
+    clock: { scope: "stage" },
+    // W2c BG-KO-1, BG-KO-3 (item 13): the stage's tie-break rungs, in order, ARE the chess decider; their off state is the
+    // EMPTY list, which holds a drawn game for the organiser (ruling 79). Stage-only (Q5). The bare `tiebreak` switch is no
+    // organiser key: `bracketDeciders` forces it on, and the rung list now decides whether anything is played.
+    tiebreakRungs: { scope: "stage", decider: true, appliesTo: { stageKinds: [...BRACKET_KINDS] } },
+    scoring: { scope: "points" },
+    byeScore: { scope: "points" },
+  },
 
   init(cfg, lineups: LineupPair): BoardgameState {
     return {
@@ -803,6 +914,7 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
       case "boardgame.pairing":
         return applyPairing(state, parsePayload(BoardgamePairing, ev.payload, ev.type), isStrictFold(ctx));
       case BOARDGAME_TIEBREAK_TYPE:
+        requireArmageddonColour(state, ev.payload);
         return applyTiebreak(state, parsePayload(BoardgameTiebreak, ev.payload, ev.type));
       case "core.forfeit": {
         const { by, reason } = forfeitOf(ev.payload);
@@ -974,11 +1086,26 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
 
   // BG-KO-1
   bracketDeciders: () => ({ tiebreak: true }),
+  // M-3 (BG-KO-1, BG-KO-3): a drawn game goes to its tie-break when the stage plays one and lists at least one rung
+  // (`decideResult`), and every tie-break event names a winner. Anything else - no tie-break, or an empty rung list -
+  // leaves the draw standing, held for the organiser (ruling 79).
+  canEndLevel: (cfg) => !(cfg.tiebreak === true && effectiveRungs(cfg).length > 0),
   // C12: lots is the organiser's settle (ruling 73) — settleApplies is true while
   // the tie-break is pending. A held double forfeit is phase "done": false (T15-R1).
   awaitingDecider: (s: BoardgameState) => s.phase === "tiebreak",
   // D-C7: the kernel refuses a tie-break TIEBREAK_NOT_APPLICABLE unless one is pending.
   deciderTypes: [BOARDGAME_TIEBREAK_TYPE],
+  // D-R7 / W2c D7: who a tie-break event would advance. Rapid and blitz name the winner; an Armageddon names Black and
+  // the result, so the advancer is derived (BG-KO-2). The server's withdrawn-entrant guard asks this, because the
+  // payload no longer carries a `winner` for an Armageddon. Undefined = the payload names nobody (the fold refuses it).
+  deciderWinner(payload, entrants) {
+    const parsed = BoardgameTiebreak.safeParse(payload);
+    if (!parsed.success) return undefined;
+    const t = parsed.data;
+    if (t.rung !== "armageddon") return t.winner;
+    const black: Side | null = t.black === entrants.home ? "home" : t.black === entrants.away ? "away" : null;
+    return black === null ? undefined : entrants[armageddonAdvancer(black, t.result)];
+  },
 
   // §9.3 — {win+loss, 2·draw, 0 (double forfeit)}.
   declaredPointsSets(cfg) {
@@ -1065,12 +1192,18 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
     if (state.phase === "tiebreak") {
       // W2a BG-KO-1 — a drawn bracket game: one tie-break on any rung, the
       // winner either side, and the tie-break's match score present or absent.
-      const rung = pickFrom(rng, TIEBREAK_RUNGS);
-      const winner = state.entrants[pickFrom(rng, SIDES)];
+      // W2c: only a rung the stage lists (a drawn game reaches this phase only when the list is not empty), and an
+      // Armageddon records Black and the result instead of a winner. For the absent list the draws are the ones the
+      // generator always made, rung then side, so a rapid or blitz stream is the one it always was.
+      const rung = pickFrom(rng, effectiveRungs(state.cfg));
+      const side = state.entrants[pickFrom(rng, SIDES)];
+      if (rung === "armageddon") {
+        return { type: BOARDGAME_TIEBREAK_TYPE, payload: { rung, black: side, result: pickFrom(rng, ARMAGEDDON_RESULTS) } };
+      }
       const score = pickFrom(rng, TIEBREAK_SCORES);
       return {
         type: BOARDGAME_TIEBREAK_TYPE,
-        payload: { rung, winner, ...(score === null ? {} : { score }) },
+        payload: { rung, winner: side, ...(score === null ? {} : { score }) },
       };
     }
     if (state.phase !== "live") return null;

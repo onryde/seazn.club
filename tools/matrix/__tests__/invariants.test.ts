@@ -748,9 +748,9 @@ describe("I4 nothing-ends-stuck", () => {
 describe("I5 config-edit-never-rescores", () => {
   const I5 = spec("I5-config-edit-never-rescores");
   const before = [{ id: "f1", status: "decided", outcome: win("a") }];
-  const edit = (after: typeof before) => ({ attempts: [{ kind: "format" as const, status: 409, code: "FORMAT_LOCKED" }], before, after });
+  const edit = (after: typeof before) => ({ attempts: [{ kind: "format" as const, status: 409, code: "DIVISION_FORMAT_LOCKED" }], before, after });
   it("zero-count: an edit attempted with no finished fixture before it fails (R25)", () => {
-    expect(evaluateInvariant(I5, run([stage({})], { configEdit: { attempts: [{ kind: "format", status: 409, code: "FORMAT_LOCKED" }], before: [], after: [] } }))).toMatchObject({ verdict: "fail", checked: 0 });
+    expect(evaluateInvariant(I5, run([stage({})], { configEdit: { attempts: [{ kind: "format", status: 409, code: "DIVISION_FORMAT_LOCKED" }], before: [], after: [] } }))).toMatchObject({ verdict: "fail", checked: 0 });
   });
   it("positive: the finished fixture is unchanged after the edit", () => {
     expect(evaluateInvariant(I5, run([stage({})], { configEdit: edit(before) }))).toMatchObject({ verdict: "pass", checked: 1 });

@@ -315,6 +315,26 @@ describe("Start tournament confirms first", () => {
     }
   });
 
+  it("says what fixtures lock - the stage STRUCTURE - and leaves the match rules to the line beside it (W2c T20: rules lock per stage once it starts)", () => {
+    // Since W2c only the stage structure locks with fixtures (`replaceStages`); the match rules lock per stage, once its first
+    // match is scored, and `launch.confirm.rules` already says so. Both lines must name the structure in each locale, and
+    // neither may say "the format" locks (the claim that is false of the rules). The noun is each locale's own word for the
+    // structure, the one the settings tab's structure note uses (`divset.lockedNotePre`).
+    const structure: Record<string, string> = { en: "stage structure", es: "estructura de fases", fr: "structure des phases", nl: "fasestructuur" };
+    const formatWord: Record<string, RegExp> = { en: /\bformat\b/i, es: /\bformato\b/i, fr: /\bformat\b/i, nl: /\bformat\b/i };
+    let judged = 0;
+    for (const locale of ["en", "es", "fr", "nl"]) {
+      expect((DICTS[locale]!["divset.lockedNotePre"] as string).toLowerCase(), `${locale}: the structure note uses this noun`).toContain(structure[locale]!);
+      for (const key of ["launch.confirm.format", "launch.confirm.formatLocksNow"]) {
+        const line = DICTS[locale]![key] as string;
+        expect(line.toLowerCase(), `${locale} ${key}`).toContain(structure[locale]!);
+        expect(line, `${locale} ${key} must not say the format locks`).not.toMatch(formatWord[locale]!);
+        judged++;
+      }
+    }
+    expect(judged, "every locale, both lines").toBe(8);
+  });
+
   it("ships the not-yet-locked line in all four locales", async () => {
     // Same bar the other conditional lines are held to: a key present only in
     // English renders English to a Spanish organiser, and no unit test that

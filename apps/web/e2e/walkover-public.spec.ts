@@ -1316,3 +1316,106 @@ test.describe("design audit 3.8 — a long result wraps inside the hub card", ()
     expect(wrapped, "the long result wrapped at the narrow width at least").toBeGreaterThanOrEqual(1);
   });
 });
+
+// W2c Task 16b (X-WO-1 B, Task 9 P-3 "A") — a pool whose points rule awards a walkover score shows ONE number: the
+// match centre, the results list and the stage's own format line all say the RULE's award, where the same walkover read
+// the division's `awardScore.goals` on the first two until this task. The rule's winner figure is the division's plus 4
+// and the side that did not turn up is 1, so a surface still reading the division's number fails on BOTH figures. Whole
+// file, never a -g slice; the crops land in `T16B_SHOTS` when it is set (never committed).
+const AWARD: [number, number] = [CREDIT + 4, 1];
+async function cropB(target: Locator, name: string) {
+  const dir = process.env.T16B_SHOTS;
+  if (dir) await target.screenshot({ path: `${dir}/${name}.png` });
+}
+
+/** A public, started four-team football pool whose stage points rule awards a walkover `AWARD`. */
+async function publicPoolWithAward(r: APIRequestContext) {
+  const comp = await apiJson<{ id: string; slug: string }>(r, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `W2c walkover award ${TAG}-${Math.random().toString(36).slice(2, 6)}`,
+    visibility: "public",
+  });
+  expect(comp.status, JSON.stringify(comp.error)).toBe(201);
+  const div = await apiJson<{ id: string; slug: string }>(r, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "Pool", sport_key: SPORT, variant_key: VARIANT,
+  });
+  expect(div.status, JSON.stringify(div.error)).toBe(201);
+  const names = ["Riverside Athletic FC", "Harbour United Reserves", "Bears of Brockley", "Catford Wanderers"];
+  const added = await addEntrantsViaApi(r, div.data!.id, names, "team");
+  expect(added.ids).toHaveLength(names.length);
+  const stage = await apiJson<{ id: string }>(r, `/api/v1/divisions/${div.data!.id}/stages`, "POST", { seq: 1, kind: "league", name: "Pool" });
+  expect(stage.status, JSON.stringify(stage.error)).toBe(201);
+  const put = await apiJson(r, `/api/v1/stages/${stage.data!.id}/rules`, "PUT", {
+    points: { base: { win: 3, draw: 1, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: AWARD } },
+  });
+  expect(put.status, JSON.stringify(put.error)).toBe(200);
+  const gen = await apiJson<{ fixtures: { id: string }[] }>(r, `/api/v1/stages/${stage.data!.id}/generate`, "POST");
+  const started = await apiJson(r, `/api/v1/divisions/${div.data!.id}/start`, "POST");
+  expect(started.status, JSON.stringify(started.error)).toBeLessThan(300);
+  const fixtures = await Promise.all((gen.data?.fixtures ?? []).map((f) => read(r, f.id)));
+  expect(fixtures.length, "a four-team pool has six fixtures").toBe(6);
+  const nameOf = new Map(added.ids.map((id, i) => [id, names[i]!]));
+  return { divId: div.data!.id, stageId: stage.data!.id, compSlug: comp.data!.slug, divSlug: div.data!.slug, fixtures, nameOf };
+}
+
+test.describe("W2c Task 16b — a walkover under a stage points rule reads the rule's number everywhere", () => {
+  test("X-WO-1 B: the match centre, the results card and the stage's format line say the award, at 1280/768/320", async ({ page, request }) => {
+    test.setTimeout(4 * 60_000);
+    expect(AWARD[0], "the premise: the rule's winner figure is not the division's").not.toBe(CREDIT);
+    const org = await activeOrg(page);
+    const pool = await publicPoolWithAward(request);
+    const fx = pool.fixtures[0]!;
+    const loser = fx.away_entrant_id!;
+    await post(request, fx.id, "core.forfeit", { by: loser, reason: "walkover" });
+    expect((await read(request, fx.id)).outcome).toEqual({ kind: "award", winner: fx.home_entrant_id, loser, reason: "walkover" });
+    const base = `/shared/${org.slug}/${pool.compSlug}`;
+    const clause = say("format.points.forfeitScore", { winner: String(AWARD[0]), loser: String(AWARD[1]) });
+    expect(clause, "the clause carries the rule's two figures in the en copy").toContain(`${AWARD[0]}‑${AWARD[1]}`);
+
+    let screens = 0;
+    for (const w of WIDTHS) {
+      await page.setViewportSize({ width: w, height: 900 });
+
+      // The match centre: the credited score is the rule's, the home side (who turned up) first.
+      await page.goto(`${base}/${pool.divSlug}/fixtures/${fx.id}`);
+      await dismissCookieBanner(page);
+      await expect(page.getByTestId("mc-score-0"), `${w}: the winner's figure`).toHaveText(String(AWARD[0]), { timeout: STEP_MS });
+      await expect(page.getByTestId("mc-score-1"), `${w}: the side that did not turn up`).toHaveText(String(AWARD[1]));
+      await expectNoHorizontalScroll(page);
+      await cropB(page.locator("main"), `match-centre-rule-award-${w}`);
+      screens++;
+
+      // The results list: the card's two score figures are the rule's.
+      await hubResults(page, `${base}?tab=matches`);
+      const card = page.getByTestId(`mh-match-${fx.id}`);
+      await expect(card).toBeVisible({ timeout: STEP_MS });
+      const figures = card.locator("span.tabular-nums");
+      await expect(figures, `${w}: two score figures on the card`).toHaveCount(2);
+      await expect(figures.nth(0), `${w}: the card's winner figure`).toHaveText(String(AWARD[0]));
+      await expect(figures.nth(1), `${w}: the card's other figure`).toHaveText(String(AWARD[1]));
+      await expectNoHorizontalScroll(page);
+      await cropB(card, `results-list-rule-award-${w}`);
+      screens++;
+
+      // The division page: the stage's own format line says the clause, in the stage chip.
+      await page.goto(`${base}/${pool.divSlug}`);
+      await dismissCookieBanner(page);
+      const chip = page.getByTestId("division-stage-format");
+      await expect(chip, `${w}: the stage's format line says the walkover score`).toContainText(clause, { timeout: STEP_MS });
+      await expect(chip).toBeVisible();
+      await expectNoHorizontalScroll(page);
+      await cropB(chip.locator("xpath=ancestor::*[self::li or self::section or self::div][1]"), `stage-format-line-rule-award-${w}`);
+      screens++;
+    }
+    expect(screens).toBe(WIDTHS.length * 3);
+
+    // The table credits what the headline says: the winner's goals for are the rule's winner figure, once.
+    await expect
+      .poll(async () => {
+        const st = await apiJson<{ rows: { entrantId: string; metrics: Record<string, number> }[] }>(request, `/api/v1/stages/${pool.stageId}/standings`);
+        const row = (st.data?.rows ?? []).find((x) => x.entrantId === fx.home_entrant_id);
+        return row ? [row.metrics.gf, row.metrics.ga] : null;
+      }, { timeout: 30_000 })
+      .toEqual(AWARD);
+  });
+});

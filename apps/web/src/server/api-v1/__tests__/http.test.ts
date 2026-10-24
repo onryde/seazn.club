@@ -8,6 +8,11 @@ import { interpolate } from "@/lib/i18n-runtime";
 import { scoringErrorText } from "@/lib/scoring-vocab";
 import { LEVEL_RESULT_REASON } from "@/lib/level-result-reason";
 import { AuthError, HttpError, PaymentRequiredError } from "@/lib/errors";
+import { featureReason } from "@/lib/feature-copy";
+import { ApiV1Error } from "@/lib/client-v1";
+import { LOCALIZED_CONFIG_ISSUES, settingsSaveErrorText } from "@/lib/config-issue-copy";
+import { SHARE_NEEDS_DRAWN_GAME, SHARE_NEEDS_DRAWS } from "@seazn/engine/sport";
+import { builtinModules } from "@seazn/engine/sports";
 import { getRequestContext } from "@/server/request-context";
 import { setRateLimitInfo } from "../context";
 import { log } from "@/server/logger";
@@ -27,6 +32,8 @@ import {
 // does not page anyone.
 const sentry = vi.hoisted(() => ({ captureException: vi.fn() }));
 vi.mock("@sentry/nextjs", () => sentry);
+
+const enMsg = (k: string, v?: Record<string, string | number>) => interpolate((uiEn as Record<string, string>)[k] ?? k, v);
 
 async function body(res: Response): Promise<Record<string, unknown>> {
   return (await res.json()) as Record<string, unknown>;
@@ -92,6 +99,7 @@ describe("v1 envelope", () => {
     ["TIEBREAK_NOT_APPLICABLE", 409],
     ["LEVEL_RESULT_IN_BRACKET", 409],
     ["LEVEL_RESULT_SEATED", 500], // an assertion: only reachable through a bug
+    ["TIEBREAK_COLOUR_REQUIRED", 422], // W2c D7: an Armageddon that names no Black
   ] as const)("maps EngineError %s → %d", async (code, status) => {
     const res = await v1(async () => {
       throw new EngineError(code, "boom");
@@ -224,6 +232,201 @@ describe("v1 envelope", () => {
     });
   });
 
+  // W2c P-7 / X-AB-5 (fix round 1, I2): the next Swiss round is refused while an abandoned board has no result, and the
+  // refusal NAMES the boards. They lived on the thrown error's `.data` and never left the server - the desk showed the
+  // generic sentence. Read at the wire: the body an API client (and the desk) actually receives.
+  it("I2: STAGE_NOT_READY reason=swiss_abandoned_boards forwards the named boards in order (and nothing else from .data)", async () => {
+    const abandoned = [
+      { fixtureId: "f-3", round: 1, board: 3 },
+      { fixtureId: "f-7", round: 2, board: 1 },
+    ];
+    const res = await v1(async () => {
+      throw new EngineError("STAGE_NOT_READY", "current swiss round has undecided fixtures - settle the abandoned boards first", {
+        stageId: "s1",
+        reason: "swiss_abandoned_boards",
+        abandoned,
+      });
+    });
+    expect(res.status).toBe(422);
+    expect((await body(res)).error).toEqual({
+      code: "STAGE_NOT_READY",
+      message: "current swiss round has undecided fixtures - settle the abandoned boards first",
+      reason: "swiss_abandoned_boards",
+      abandoned,
+    });
+  });
+
+  it("I2 empty/negative cases: no reason, no boards, or a malformed board forwards code + message only", async () => {
+    const good = { fixtureId: "f-3", round: 1, board: 3 };
+    const cases: [string, unknown][] = [
+      ["boards but no reason (the bare refusal)", { stageId: "s1", abandoned: [good] }],
+      ["the reason with no boards", { stageId: "s1", reason: "swiss_abandoned_boards" }],
+      ["the reason with an empty list", { stageId: "s1", reason: "swiss_abandoned_boards", abandoned: [] }],
+      ["a board without a fixture id", { reason: "swiss_abandoned_boards", abandoned: [{ round: 1, board: 3 }] }],
+      ["a fractional round", { reason: "swiss_abandoned_boards", abandoned: [{ ...good, round: 1.5 }] }],
+      ["a zero board", { reason: "swiss_abandoned_boards", abandoned: [{ ...good, board: 0 }] }],
+      ["one good board and one malformed", { reason: "swiss_abandoned_boards", abandoned: [good, { fixtureId: "x", round: "1", board: 2 }] }],
+      ["boards under a reason nobody names", { reason: "made_up", abandoned: [good] }],
+    ];
+    let checked = 0;
+    for (const [why, data] of cases) {
+      const res = await v1(async () => {
+        throw new EngineError("STAGE_NOT_READY", "m", data);
+      });
+      expect((await body(res)).error, why).toEqual({ code: "STAGE_NOT_READY", message: "m" });
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+  });
+
+  // W2c X-AB-5 (fix round 2, N2): the explicit Complete of a table stage is refused by NAME while a match is held for the
+  // settle. Same envelope as the Swiss boards, another reason: read at the wire.
+  it("N2: STAGE_NOT_READY reason=abandoned_matches forwards the held matches in order (the stage's own data stays out)", async () => {
+    const abandoned = [
+      { fixtureId: "f-2", round: 1, board: 2 },
+      { fixtureId: "f-9", round: 3, board: 1 },
+    ];
+    const res = await v1(async () => {
+      throw new EngineError("STAGE_NOT_READY", "stage has matches abandoned without a result - settle them first", {
+        stageId: "s1",
+        reason: "abandoned_matches",
+        abandoned,
+      });
+    });
+    expect(res.status).toBe(422);
+    expect((await body(res)).error).toEqual({
+      code: "STAGE_NOT_READY",
+      message: "stage has matches abandoned without a result - settle them first",
+      reason: "abandoned_matches",
+      abandoned,
+    });
+  });
+
+  it("N2 empty/negative cases: no list, an empty list, a malformed entry, or the Swiss reason's shape under the wrong reason forwards code + message only", async () => {
+    const good = { fixtureId: "f-2", round: 1, board: 2 };
+    const cases: [string, unknown][] = [
+      ["the reason with no matches", { stageId: "s1", reason: "abandoned_matches" }],
+      ["the reason with an empty list", { stageId: "s1", reason: "abandoned_matches", abandoned: [] }],
+      ["an entry without a fixture id", { reason: "abandoned_matches", abandoned: [{ round: 1, board: 2 }] }],
+      ["a fractional round", { reason: "abandoned_matches", abandoned: [{ ...good, round: 1.5 }] }],
+      ["one good entry and one malformed", { reason: "abandoned_matches", abandoned: [good, { fixtureId: "x", round: 1, board: 0 }] }],
+      ["matches under a reason nobody names", { reason: "made_up", abandoned: [good] }],
+    ];
+    let checked = 0;
+    for (const [why, data] of cases) {
+      const res = await v1(async () => {
+        throw new EngineError("STAGE_NOT_READY", "m", data);
+      });
+      expect((await body(res)).error, why).toEqual({ code: "STAGE_NOT_READY", message: "m" });
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+  });
+
+  // W2c P-5 (fix round 1): CONFIG_INVALID carries the PROBLEM in `data.issues` (zod's issue list - the rule's own
+  // sentence, e.g. the carrom share refinement), not in the generic message. http.ts did not forward it, so a refused
+  // setting told the organiser nothing about what to change.
+  it("P-5: CONFIG_INVALID forwards the issue messages (path and message), and only those", async () => {
+    const issues = [
+      { code: "custom", path: ["abandonPolicy"], message: "Sharing the points needs a drawn game to be possible", input: "secret", extra: 1 },
+      { code: "custom", path: [], message: "second problem" },
+    ];
+    const res = await v1(async () => {
+      throw new EngineError("CONFIG_INVALID", "invalid carrom config", { issues });
+    });
+    expect(res.status).toBe(422);
+    expect((await body(res)).error).toEqual({
+      code: "CONFIG_INVALID",
+      message: "invalid carrom config",
+      issues: [
+        { path: ["abandonPolicy"], message: "Sharing the points needs a drawn game to be possible" },
+        { path: [], message: "second problem" },
+      ],
+    });
+  });
+
+  it("P-5 end to end: the REAL refusal of generic and carrom (their own schemas) reaches the organiser's screen as the localized sentence", async () => {
+    // The producer is the sport's configSchema (zod's own issue objects, `input` and all), the consumer is the settings
+    // form's reader - the wire between them is the thing under test, not a fixture on either end.
+    const sports: [string, Record<string, unknown>, string][] = [
+      ["generic", { allowDraws: false, abandonPolicy: "share" }, SHARE_NEEDS_DRAWS],
+      ["carrom", { tieBoard: "extra", abandonPolicy: "share" }, SHARE_NEEDS_DRAWN_GAME],
+    ];
+    let checked = 0;
+    for (const [key, cfg, sentence] of sports) {
+      const mod = builtinModules.find((m) => m.key === key)!;
+      const parsed = mod.configSchema.safeParse({ ...mod.variants[Object.keys(mod.variants)[0]!], ...cfg });
+      expect(parsed.success, `${key}: the rig must be refused by the schema`).toBe(false);
+      if (parsed.success) continue;
+      const res = await v1(async () => {
+        throw new EngineError("CONFIG_INVALID", `invalid ${key} config`, { issues: parsed.error.issues });
+      });
+      expect(res.status).toBe(422);
+      const { code, message, ...extra } = (await body(res)).error as { code: string; message: string } & Record<string, unknown>;
+      expect(extra, `${key}: only path and message go out`).toEqual({ issues: [{ path: ["abandonPolicy"], message: sentence }] });
+      const shown = settingsSaveErrorText(new ApiV1Error(message, 422, code, extra), enMsg as never, "fallback");
+      expect(shown, key).not.toBe(message); // not the generic "invalid <sport> config"
+      expect(shown, key).toBe(uiEn[LOCALIZED_CONFIG_ISSUES.get(sentence)!]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  // W2c Task 12 (Task 2 review): the division save's CONFIG_INVALID after a per-field refusal names the fields it kept as
+  // stored (`data.refused`, divisions.ts) — forwarded beside `issues`, well-formed entries only, their four keys only.
+  it("CONFIG_INVALID forwards `refused` beside `issues`: well-formed entries, four keys each; a malformed one is dropped", async () => {
+    const kept = { field: "setTo", code: "DIVISION_FORMAT_LOCKED", stageId: "6f1c5c9e-1111-4c1d-9b0e-000000000001", stageName: "Pool A" };
+    const table = { field: "tiebreakers", code: "DIVISION_TABLE_RULES_LOCKED", stageId: "6f1c5c9e-1111-4c1d-9b0e-000000000002", stageName: "Pool B" };
+    const refused = [
+      { ...kept, secret: 1 },
+      table,
+      { ...kept, code: "STAGE_FORMAT_LOCKED" }, // not a division refusal
+      { field: "cap", code: "DIVISION_FORMAT_LOCKED", stageId: 3, stageName: "x" },
+      "setTo",
+    ];
+    const res = await v1(async () => {
+      throw new EngineError("CONFIG_INVALID", "invalid badminton config once setTo stay as stored", {
+        issues: [{ code: "custom", path: ["cap"], message: "cap must be ≥ the set target" }],
+        refused,
+      });
+    });
+    expect(res.status).toBe(422);
+    expect((await body(res)).error).toEqual({
+      code: "CONFIG_INVALID",
+      message: "invalid badminton config once setTo stay as stored",
+      issues: [{ path: ["cap"], message: "cap must be ≥ the set target" }],
+      refused: [kept, table],
+    });
+    // Each half alone: `refused` without issues still goes out; neither leaves code + message.
+    const alone = await v1(async () => {
+      throw new EngineError("CONFIG_INVALID", "m", { refused: [kept] } as never);
+    });
+    expect((await body(alone)).error).toEqual({ code: "CONFIG_INVALID", message: "m", refused: [kept] });
+    const neither = await v1(async () => {
+      throw new EngineError("CONFIG_INVALID", "m", { refused: [{ field: 1 }] } as never);
+    });
+    expect((await body(neither)).error).toEqual({ code: "CONFIG_INVALID", message: "m" });
+  });
+
+  it("P-5 empty cases: no issues, an empty list, or entries without a message forward code + message only", async () => {
+    const cases: [string, unknown][] = [
+      ["no data", undefined],
+      ["no issues", { fixtureId: "f1" }],
+      ["an empty list", { issues: [] }],
+      ["entries with no message", { issues: [{ path: ["a"] }, { message: 3 }] }],
+      ["a non-list", { issues: "oops" }],
+    ];
+    let checked = 0;
+    for (const [why, data] of cases) {
+      const res = await v1(async () => {
+        throw new EngineError("CONFIG_INVALID", "m", data as never);
+      });
+      expect((await body(res)).error, why).toEqual({ code: "CONFIG_INVALID", message: "m" });
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+  });
+
   // W2a fix round 1 (review M-1): LEVEL_RESULT_IN_BRACKET has two emitters asking for different things, so its
   // reason reaches the wire — and only a reason this codebase names (lib/level-result-reason.ts).
   it("M-1: LEVEL_RESULT_IN_BRACKET forwards each named reason, and nothing else from .data", async () => {
@@ -299,10 +502,15 @@ describe("v1 envelope", () => {
     });
     expect(res.status).toBe(402);
     const json = await body(res);
-    const error = json.error as { code: string; feature: string; feature_key: string };
+    const error = json.error as { code: string; feature: string; feature_key: string; reason: unknown };
     expect(error.code).toBe("PAYMENT_REQUIRED");
     expect(error.feature).toBe("api.access");
     expect(error.feature_key).toBe("api.access");
+    // Batch-6 T18-1: the upgrade-moment contract's human sentence (`<UpgradeGate>` shows it) is on the envelope, a string,
+    // and the one `featureReason` says for that feature.
+    expect(typeof error.reason, "the envelope carries a reason").toBe("string");
+    expect((error.reason as string).length, "and it is not empty").toBeGreaterThan(0);
+    expect(error.reason).toBe(featureReason("api.access"));
   });
 
   it("maps AuthError → 401 and HttpError → its status", async () => {

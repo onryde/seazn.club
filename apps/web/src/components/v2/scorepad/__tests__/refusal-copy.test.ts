@@ -19,7 +19,7 @@ import nl from "@/dictionaries/nl/ui.json";
 import { interpolate } from "@/lib/i18n-runtime";
 import { matchRef } from "@/lib/slot-label";
 import { REFUSAL_FALLBACK, REFUSAL_KEY, refusalText } from "../refusal-copy";
-import { CHROME_TERMINAL_CODES, isPermanentRefusal } from "../transport";
+import { CHROME_TERMINAL_CODES, TERMINAL_CONFLICT_CODES, isPermanentRefusal } from "../transport";
 
 const identityMsg = ((key: string) => key) as MsgFn;
 const dict = en as Record<string, string>;
@@ -72,6 +72,40 @@ describe("refusalText", () => {
     expect(refusalText({ code: "RESULT_CARRIED_FORWARD", message: "server prose" }, identityMsg)).toBe(
       "scorepad.refusal.carriedForward",
     );
+  });
+
+  // W2c Task 15: a terminal 409 is DROPPED from the queue (`TERMINAL_CONFLICT_CODES`), so its line is the only thing
+  // that tells the scorer the tap did not land — each one reads its own words (the engine's or the pad's), never the
+  // generic fallback. FIXTURE_RULES_CHANGED is the one the rules check added.
+  it("gives every terminal conflict refusal (dropped, never resent) its own words, not the fallback (counted)", () => {
+    let checked = 0;
+    for (const code of TERMINAL_CONFLICT_CODES) {
+      expect(refusalText({ code, message: "server prose" }, identityMsg), `${code} reads the fallback`).not.toBe(REFUSAL_FALLBACK);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: the terminal set was read").toBe(TERMINAL_CONFLICT_CODES.size);
+    expect(checked).toBeGreaterThan(0);
+    expect(refusalText({ code: "FIXTURE_RULES_CHANGED", message: "server prose" }, identityMsg)).toBe("scorepad.refusal.rulesChanged");
+  });
+
+  it("W2c Task 15 fix round 1 (M-3): the rules-changed refusal promises no follow, in every locale (counted)", () => {
+    // The refusal shows on the 409 itself — before, or without, the reload (`use-pad-pipeline.ts` `reloadRules` keeps the
+    // old rules when its read fails). Only the banner (`pad.rulesChanged`), rendered once the reload LANDED, may say the
+    // pad follows the new format. Each locale's verb the first build used for that claim:
+    const follows: readonly [string, Record<string, string>, RegExp][] = [
+      ["en", en as Record<string, string>, /\bfollows?\b/i],
+      ["es", es as Record<string, string>, /\bsigue\b/i],
+      ["fr", fr as Record<string, string>, /\bsuit\b/i],
+      ["nl", nl as Record<string, string>, /\bvolgt\b/i],
+    ];
+    let checked = 0;
+    for (const [locale, d, claim] of follows) {
+      const copy = d["scorepad.refusal.rulesChanged"];
+      expect(copy, `${locale}: the refusal has copy`).toBeTruthy();
+      expect(copy, `${locale}: the refusal claims the pad follows the new format`).not.toMatch(claim);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: the four shipped locales").toBe(4);
   });
 
   it("gives an unknown code the generic fallback rather than the server's string", () => {
@@ -201,10 +235,15 @@ describe("the wire-code list tracks the server's own statusCode() map", () => {
     // `lib/next-match-started.ts`, so the literal lives there.
     const nextMatch = read("src/lib/next-match-started.ts");
     const fedSeats = read("src/server/engine-db/fed-seats.ts");
+    // W2c Task 15: the append path throws FIXTURE_RULES_CHANGED itself, under its rule-errors status (the code is also
+    // NAMED in scoring.ts's replay lookup, which is not a throw: this branch is asked first so it is credited right).
+    const appendEvent = read("src/server/engine-db/append-event.ts");
 
     for (const code of Object.keys(REFUSAL_KEY)) {
       const producer = http.includes(`return "${code}"`)
         ? "http.ts statusCode()"
+        : new RegExp(`RULE_ERROR_STATUS\\.${code},`).test(appendEvent) && appendEvent.includes(`"${code}",`)
+          ? "append-event.ts rules-version refusal"
         : scoring.includes(`"${code}"`)
           ? "scoring.ts explicit refusal"
           : carried.includes(`export const ${code} = "${code}"`) && new RegExp(`HttpError\\([^)]*, ${code}\\)`).test(scoring)

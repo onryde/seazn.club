@@ -8,7 +8,9 @@
 // (restating them here would be a second copy of a fact that already has an
 // owner).
 import { describe, expect, it } from "vitest";
-import { CreateStage, StageConfig } from "@/server/api-v1/schemas";
+import { deciderKeysFor, type AnySportModule } from "@seazn/engine/sport";
+import { builtinModules } from "@seazn/engine/sports";
+import { CreateStage, PutStageRules, STAGE_DECIDER_MOVED, StageConfig } from "@/server/api-v1/schemas";
 
 /** Every key with a real reader. Derived from the reader/writer sweep, not
  *  typed from memory — if one is dropped from the schema it becomes
@@ -35,8 +37,8 @@ const KNOWN: Record<string, unknown> = {
   rank_overrides: [{ entrant_id: "e1", rank: 1 }],
   cross_feeds: [{ from_ext_key: "sf1", side: "loser", to_stage_seq: 2, to_ext_key: "f", slot: 1 }],
   placements: { f: [1, 2] },
-  shootout: { bestOf: 5 },
-  extraTime: { halves: 2, minutes: 15 },
+  // W2c Task 12: a stage's deciders are its match rules (D3) — `shootout` / `extraTime` moved under `rules`.
+  rules: { shootout: false, extraTime: { enabled: true, halfMinutes: 10 } },
 };
 
 const stage = (config: unknown) => ({ seq: 1, kind: "knockout", name: "Cup", config });
@@ -112,12 +114,54 @@ describe("StageConfig closes the key set", () => {
   });
 
   it("leaves the shapes another authority owns unvalidated, deliberately", () => {
-    // `points` is the engine's PointsRule; shootout/extraTime belong to each
-    // sport module's configSchema. The KEY is real, the SHAPE is not this
-    // file's to enforce — a second copy here is how two shapes of one fact
-    // drift apart. If these ever start failing, the shape moved home.
+    // `points` is the engine's PointsRule; `rules` belongs to each sport
+    // module's configSchema and declarations (validated by the usecase,
+    // `stage-defaults.ts`). The KEY is real, the SHAPE is not this file's to
+    // enforce — a second copy here is how two shapes of one fact drift apart.
     expect(StageConfig.safeParse({ points: { anything: true } }).success).toBe(true);
-    expect(StageConfig.safeParse({ shootout: "whatever" }).success).toBe(true);
+    expect(StageConfig.safeParse({ rules: { anything: "whatever" } }).success).toBe(true);
+  });
+
+  it("refuses a top-level stage decider LOUDLY, naming where it moved (W2c Task 12, greenfield: no shim)", () => {
+    let checked = 0;
+    for (const key of ["shootout", "extraTime"]) {
+      for (const value of [true, false, { enabled: true, halfMinutes: 15 }, null]) {
+        const r = StageConfig.safeParse({ [key]: value });
+        expect(r.success, `${key}: ${JSON.stringify(value)}`).toBe(false);
+        expect(r.error?.issues.map((i) => i.message), key).toEqual([STAGE_DECIDER_MOVED]);
+        expect(r.error?.issues[0]?.path, key).toEqual([key]);
+        checked++;
+      }
+    }
+    expect(checked).toBe(8);
+    expect(STAGE_DECIDER_MOVED, "the message says where it went").toContain("config.rules");
+  });
+
+  // W2c Task 13b finish-up (R-13b-1): the refused set is every whole decider any sport DECLARES (the engine's
+  // `deciderKeysFor`, the create door's own set), not the two keys the retired overlay read. Expected values come from
+  // the engine's declarations; both schemas a client sends a stage's config through are swept.
+  it("R-13b-1 refuses EVERY decider the engine declares at the top level, by name, on StageConfig and PutStageRules (counted)", () => {
+    const deciders = [...new Set((builtinModules as readonly AnySportModule[]).flatMap((m) => deciderKeysFor(m, null, null)))];
+    expect(deciders, "the premise: deciders beyond the two named before").toEqual(expect.arrayContaining(["superOver", "tiebreakRungs", "tieBoard", "overtime"]));
+    let checked = 0;
+    for (const key of deciders) {
+      for (const value of [true, false, [], null]) {
+        const stage = StageConfig.safeParse({ [key]: value });
+        expect(stage.success, `StageConfig ${key}: ${JSON.stringify(value)}`).toBe(false);
+        expect(stage.error?.issues.map((i) => i.message), `StageConfig ${key}`).toEqual([STAGE_DECIDER_MOVED]);
+        expect(stage.error?.issues[0]?.path, `StageConfig ${key}`).toEqual([key]);
+        const put = PutStageRules.safeParse({ rules: {}, [key]: value });
+        expect(put.success, `PutStageRules ${key}`).toBe(false);
+        expect(put.error?.issues.map((i) => i.message), `PutStageRules ${key}`).toEqual([STAGE_DECIDER_MOVED]);
+        expect(put.error?.issues[0]?.path, `PutStageRules ${key}`).toEqual([key]);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: every decider x four values").toBe(deciders.length * 4);
+    // The positive pair: under `rules` the same keys parse (their values are the sport's to judge, downstream).
+    const underRules = { rules: Object.fromEntries(deciders.map((k) => [k, false])) };
+    expect(StageConfig.safeParse(underRules).success).toBe(true);
+    expect(PutStageRules.safeParse(underRules).success).toBe(true);
   });
 
   it("defaults to {} so an omitted config is still a valid stage", () => {

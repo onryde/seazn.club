@@ -27,6 +27,9 @@ import { PublicPlayerMatches } from "../public-site/player-matches-schema.ts";
 import {
   DESTINATION_LABEL_EMPTY, DESTINATION_NOT_ALLOWED, DESTINATION_REFUSALS, STREAM_KEY_EMPTY, TARGET_UNREADABLE,
 } from "../../lib/stream-destinations.ts";
+// The stream-link validator's own host list (zod only, client-safe, already reached through schemas.ts): a published example
+// link is built from it, so it is a link `isStreamUrl` accepts by construction.
+import { STREAM_HOSTS } from "../../lib/stream-url.ts";
 
 // ---------------------------------------------------------------------------
 // Route registry — one row per (path, method). The coverage test asserts this
@@ -96,7 +99,7 @@ export const ROUTES: RouteSpec[] = [
   { path: "/competitions/{id}/divisions", method: "get", summary: "List divisions", tag: "divisions", response: z.array(S.Division) },
   { path: "/competitions/{id}/divisions", method: "post", summary: "Create a division (pins sport module version). With onlinePlay 'lichess', 403 ONLINE_CHESS_DISABLED unless the club is offered online chess (the PostHog flag `online-chess`), and 400 INVALID_TIME_CONTROL unless config.clock is one of the curated Board API controls (error.controls lists them); camera_policy null or absent inherits the competition's, and a non-off value on a sport that cannot play online is 422 CAMERA_POLICY_SPORT", tag: "divisions", request: S.CreateDivision, response: S.Division, status: 201, errors: [403, 409, 422] },
   { path: "/divisions/{id}", method: "get", summary: "Get a division", tag: "divisions", response: S.Division },
-  { path: "/divisions/{id}", method: "patch", summary: "Update a division (format edits 409 FORMAT_LOCKED once fixtures exist). Turning onlinePlay on (a stored value other than 'lichess' patched to 'lichess') is 403 ONLINE_CHESS_DISABLED unless the club is offered online chess (the PostHog flag `online-chess`); re-sending a stored 'lichess', or turning it off, is never refused for that. With onlinePlay 'lichess' in the final config, 400 INVALID_TIME_CONTROL unless config.clock is one of the curated Board API controls (error.controls lists them). camera_policy is editable at any time, but once a round of the division has been opened it can only be relaxed: a tightening of the effective policy is 409 POLICY_LOCKED. Every change of the stored camera_policy is audited", tag: "divisions", request: S.PatchDivision, response: S.Division, errors: [402, 403, 409, 422] },
+  { path: "/divisions/{id}", method: "patch", summary: "Update a division. A format edit (`variant_key`, `config`, `tiebreakers`) is applied PER FIELD (W2c, owner P-2 \"A\"): a change a STARTED stage depends on is not applied and is listed in the 200's `refused` (`field`, `code`, `stageId`, `stageName`) while every other field lands; when nothing in the save can land, 409 DIVISION_FORMAT_LOCKED (the stage plays that format) or 409 DIVISION_TABLE_RULES_LOCKED (the stage's table ranks by it), the message naming the first stage and `refused` listing every field. 422 CONFIG_INVALID when the sport's schema refuses the config (`issues`, plus `refused` when the refusal follows from fields kept as stored), or when a stage's OWN rules would no longer parse under it (`stage_id`, `stage_name`, `issues`); 422 POINTS_MAP_INCOMPLETE when the points table would stop answering a stage's own `bestOf` (`stage_id`, `stage_name`); 422 POINTS_RULE_INEXPRESSIBLE when the save would split the division's points (an overtime or shoot-out split, a tie or no-result, a set-score table paying more than one pair) in a way an unstarted stage's own `points` rule cannot say (`keys` names the split keys, with `stage_id`, `stage_name`) — clear that stage's points first. A variant change re-seeds the preset match rules its unstarted stages still store (a key equal to the old variant's preset becomes the new variant's, or goes when it declares none; a key the new preset adds is written; each stage re-seeded is audited `stage.rules_reseeded`); a key the organiser changed is kept. 400 RULE_NOT_SETTABLE when a new variant cannot carry such a key (`field`, `stage_id`, `stage_name`) — clear it on that stage first. 409 FIXTURE_OWN_FORMAT_NO_LONGER_FITS when an unstarted match's own format (`PUT /fixtures/{id}/rules`) would stop fitting (`fixture_id`, `fixture_no`, `field`). 422 ENTRANT_KIND_IN_USE when entrants of a kind the new format refuses still exist. Turning onlinePlay on (a stored value other than 'lichess' patched to 'lichess') is 403 ONLINE_CHESS_DISABLED unless the club is offered online chess (the PostHog flag `online-chess`); re-sending a stored 'lichess', or turning it off, is never refused for that. With onlinePlay 'lichess' in the final config, 400 INVALID_TIME_CONTROL unless config.clock is one of the curated Board API controls (error.controls lists them). camera_policy is editable at any time, but once a round of the division has been opened it can only be relaxed: a tightening of the effective policy is 409 POLICY_LOCKED. Every change of the stored camera_policy is audited", tag: "divisions", request: S.PatchDivision, response: S.PatchedDivision, errors: [400, 402, 403, 409, 422] },
   { path: "/divisions/{id}/logo-upload-url", method: "post", summary: "Signed upload URL for the division card logo (session-only; not key-accessible)", tag: "divisions" },
   { path: "/divisions/{id}", method: "delete", summary: "Delete a setup division (204) or purge a 30-day archive; started/resulted → 409 DIVISION_HAS_RESULTS {archive: true}", tag: "divisions", status: 204, errors: [409] },
   { path: "/divisions/{id}/archive", method: "post", summary: "Archive: hidden from console/public/quota, restorable", tag: "divisions", response: S.Division, errors: [409] },
@@ -141,8 +144,8 @@ export const ROUTES: RouteSpec[] = [
   { path: "/fixtures/{id}/checkin-link", method: "post", summary: "Mint the fixture's self-check-in QR link (session editors only; signed token, dies at local midnight)", tag: "player-accounts", response: S.CheckinLink, status: 201, errors: [422] },
   // Stages
   { path: "/divisions/{id}/stages", method: "get", summary: "List stages", tag: "stages", response: z.array(S.Stage) },
-  { path: "/divisions/{id}/stages", method: "post", summary: "Define the stage graph. 422 STAGE_SWISS_ROUNDS_REQUIRED when a `swiss` stage's `config.rounds` is absent or is not a whole number >= 1 — a Swiss round budget is declared up front, never derived from field size", tag: "stages", request: S.CreateStages, response: z.union([S.Stage, z.array(S.Stage)]), status: 201, errors: [409, 422] },
-  { path: "/divisions/{id}/stages", method: "put", summary: "Replace the stage graph (v8 Settings format; 409 FORMAT_LOCKED once fixtures exist). 422 STAGE_SWISS_ROUNDS_REQUIRED as for POST, and raised BEFORE the existing graph is deleted", tag: "stages", request: S.CreateStages, response: z.array(S.Stage), errors: [409, 422] },
+  { path: "/divisions/{id}/stages", method: "post", summary: "Define the stage graph. Each stage is created with its kind's PRESET match rules in `config.rules` (W2c X-SR-6: a bracket stage starts with the deciders its sport presets for its kind and the division's variant — extra time and a shoot-out, overtime, a super over; the engine's `stageDefaults` decides which and their values; a table stage with none), every one the organiser's to switch off. `config.rules` sent with a create is laid over that preset key by key (a null removes the preset key: the stage inherits the division's value; `false` switches OFF a decider the sport turns off with no value at all, ice-hockey `overtime` and `shootout` and the hockey `shootout`). Unlike the stage PUT, `config.rules` that is absent, null or `{}` at create KEEPS the whole preset (a create has nothing stored to clear; to start from the division's own rules, send each preset key as null, or PUT `{}` afterwards). The rules are validated as `PUT /stages/{id}/rules` validates a save: 400 UNKNOWN_RULE_KEY / RULE_NOT_SETTABLE (`field`), 422 CONFIG_INVALID (`issues`), 422 POINTS_MAP_INCOMPLETE; nothing in the batch is written. A stage's own `config.points` (the engine's PointsRule) is asked what the stage PUT asks of it, and `config.points: null` means no points for this slot (as `points: null` does on the stage PUT): nothing is asked and nothing is stored. A non-null value: a bracket stage (no table) 400 RULE_NOT_SETTABLE (`field` `points`); a walkover `awardScore` on a sport whose table never reads it 400 RULE_NOT_SETTABLE (`field` `points.forfeit.awardScore`); a division whose own points a stage rule cannot express 422 POINTS_RULE_INEXPRESSIBLE (`keys` names the split keys); a bonus reading a score the sport does not emit 422 CONFIG_INVALID; bonuses or a forfeit row without `standings.custom_points`, any other plan feature the body needs, or the stage cap, 402 PAYMENT_REQUIRED (the base sentence is free). A decider at the config's TOP level (any whole decider a sport declares, e.g. `config.shootout`, `config.overtime`, `config.superOver`) is refused 400 VALIDATION naming the key (`field`) and where it goes (`config.rules.<key>`). 422 STAGE_SWISS_ROUNDS_REQUIRED when a `swiss` stage's `config.rounds` is absent or is not a whole number >= 1 — a Swiss round budget is declared up front, never derived from field size", tag: "stages", request: S.CreateStages, response: z.union([S.Stage, z.array(S.Stage)]), status: 201, errors: [400, 402, 409, 422] },
+  { path: "/divisions/{id}/stages", method: "put", summary: "Replace the stage graph (v8 Settings format; 409 FORMAT_LOCKED once fixtures exist). Each stage is written as for POST, then the body's `config.rules` over it — except that a slot whose `seq` keeps the same `kind` keeps the rules it already stored IN PLACE OF its preset (a preset key the organiser removed stays removed, and a stage set to the division's rules stays so); a new slot, or one whose kind changed, starts from its own kind's preset. A matched slot also keeps its own `points` (the stage's PointsRule) unless the body sends its own, which replaces it whole, or sends `points: null`, which drops it and stores none; a new slot, or one whose kind changed, has none. Every refusal POST can raise from the body or the carry (400 UNKNOWN_RULE_KEY / RULE_NOT_SETTABLE, 402 PAYMENT_REQUIRED for a plan feature or the stage cap, 409 for a `seq` the body names twice, 422 CONFIG_INVALID / POINTS_MAP_INCOMPLETE / POINTS_RULE_INEXPRESSIBLE / STAGE_SWISS_ROUNDS_REQUIRED) refuses the whole save: a refused save leaves the existing stages untouched", tag: "stages", request: S.CreateStages, response: z.array(S.Stage), errors: [400, 402, 409, 422] },
   { path: "/stages/{id}/generate", method: "post", summary: "Generate fixtures (idempotent, returns diff). Optional body `{pairing}` — Swiss only, ROUND 1 only (422 SWISS_PAIRING_ROUND_ONE_ONLY / SWISS_PAIRING_NOT_SWISS otherwise); never stored.", tag: "stages", request: S.GenerateStageInput, requestOptional: true, response: S.GenerateResult, errors: [422] },
   { path: "/stages/{id}/unpair", method: "post", summary: "Unpair latest Swiss round (shells kept) — clears sides on the highest fully seated round when it has no played results; Pair-minted bye awards do not block. 422 when the stage is not `swiss`; 409 ONLINE_GAME_EXISTS when an online (Lichess) game exists, or may exist, on a board it would clear — nothing changes, void the game first", tag: "stages", response: S.UnpairResult, errors: [409, 422] },
   { path: "/stages/{id}/open-round", method: "post", summary: "D12 — the organiser opens one round of an online-play (Lichess) stage: stamps it (the 10-minute check-in window hangs off this) and emails each player not yet invited for the current pairing. Idempotent per seat: a re-open invites only boards added or re-paired since, and answers `already_open` when nobody is left. A refusal (`no_fixtures`, `not_paired`, `division_not_started`, `clock_not_playable`) writes nothing; a board with no start time is served, its window hanging off the open. 403 OPEN_ROUND_FORBIDDEN for a non-organiser; 422 ROUND_NOT_ONLINE when the division is not played online; 403 ONLINE_CHESS_DISABLED unless the club is offered online chess (the PostHog flag `online-chess`) (asked after those two, so a re-open is refused alike and nothing is written); 409 ROUND_CHANGED when a board was re-paired mid-call. Session only — never an API-key route", tag: "stages", request: S.OpenRoundInput, response: S.OpenRoundResult, errors: [403, 404, 409, 422] },
@@ -154,7 +157,7 @@ export const ROUTES: RouteSpec[] = [
   // rather than `scheduling` because it edits the stage's own configuration;
   // the SCHEDULER is the consumer, not the owner.
   { path: "/stages/{id}/court-tags", method: "get", summary: "#622 — a stage's required court tags: the stage-wide list (V367) plus per-round-role overrides, and the round roles this stage's fixtures currently occupy (a picker source, in bracket order). A round is addressed by ROLE (`final`, `semi_final`, `round_of_16`, `losers_round_2`, `plain_round_3`, …), never by `round_no`: a bracket numbers sparsely and a draw resize renumbers every round, so a round_no key silently addresses the wrong fixtures", tag: "stages", response: S.StageCourtTags },
-  { path: "/stages/{id}/rules", method: "put", summary: "Per-stage match-format override (design 2026-09-17) — Best-of-1 in the league/Swiss stage and Best-of-3 in the playoff of the same division. SETS-BASED SPORTS ONLY (tennis, badminton, tabletennis, volleyball); any other sport 400s SPORT_NOT_SUPPORTED. A WHOLE-FRAGMENT replace: what you send is what the stage carries, and `rules: null` clears it back to the division format. \"Inherit\" is key ABSENCE — a null VALUE inside `rules` is stripped, never stored, because the resolver's overlay would copy it over the division's value. Keys are the CONFIG keys the sport's rule fields write, not the form keys that write them: tennis takes `set`, `game` and `tiebreak`, NOT `setType`, `noAd` or `tiebreakWinBy` (400 UNKNOWN_RULE_KEY), and `points` is refused for every sport. The merged `{division config + rules}` is validated through the sport module's own configSchema (422 CONFIG_INVALID) while only the fragment is stored. A `bestOf` override is additionally refused 422 POINTS_MAP_INCOMPLETE when the division's `pointsMap` cannot answer every final set score that `bestOf` can reach — `pointsMap` is looked up by the exact `\"W-L\"` score (else `\"*\"`, else it throws) and is NOT itself overridable per stage, so a division enumerating only its own format's scores would otherwise crash this stage's standings; the refusal names the missing scores. Tennis is unaffected: it pays flat `points {win, loss}` with no score lookup. Editable until the first fixture in THAT stage has a frozen config snapshot or a score event, then 409 STAGE_FORMAT_LOCKED — a monotonic pair, deliberately not `fixtures.status`, which moves backwards when a start is voided", tag: "stages", request: S.PutStageRules, response: S.StageRules, errors: [400, 402, 409, 422] },
+  { path: "/stages/{id}/rules", method: "put", summary: "Per-stage match-format override (design 2026-09-17; every sport since W2c) — Best-of-1 in the league/Swiss stage and Best-of-3 in the playoff of the same division, an extra-time length on a knockout. What a stage can set is the SPORT'S declaration for the stage's kind and variant, not a list kept here: a key the sport never declares is 400 UNKNOWN_RULE_KEY, a declared key this stage cannot set (a league-only key on a knockout, a knockout-only decider on a table stage) or any points key is 400 RULE_NOT_SETTABLE (`field` names it). On an online (Lichess) division the clock and its clock family (`clock`, `variant`) are the division's own, never a stage's: either key is 400 RULE_NOT_SETTABLE (`field`, `reason: online_division`), and the Lichess challenge plays the division's clock in every stage. Keys are the CONFIG keys, not the editor's form keys: tennis takes `set`, `game` and `tiebreak`, NOT `setType`, `noAd` or `tiebreakWinBy`. The body is a FRAGMENT that MERGES into the stage's stored rules: a key it omits is kept, a key it names is replaced, a null VALUE removes that key (\"inherit\" is key ABSENCE — a stored null would be copied over the division's value by the overlay), `false` switches OFF a decider the sport turns off with no value at all (ice-hockey `overtime` and `shootout`, the hockey `shootout`; football's `shootout` and cricket's `superOver` take `false` as themselves; anywhere else it is 422 CONFIG_INVALID), an empty list is a value (chess `tiebreakRungs: []`, held for the organiser), and `rules: null` or `{}` clears every key back to the division format. The merged `{division config + rules}` is validated through the sport module's own configSchema (422 CONFIG_INVALID) while only the merged rules are stored. A `bestOf` in the body is additionally refused 422 POINTS_MAP_INCOMPLETE when the division's `pointsMap` cannot answer every final set score that `bestOf` can reach — `pointsMap` is looked up by the exact \"W-L\" score (else \"*\", else it throws) and is NOT itself overridable per stage; the refusal names the missing scores. A save that would leave an unstarted match's OWN format (`PUT /fixtures/{id}/rules`) unable to fit the stage is 409 FIXTURE_OWN_FORMAT_NO_LONGER_FITS, naming the match (`fixture_id`, `fixture_no`, `field`) — never a silent drop; the same refusal comes from a division config save. Walkovers no event records are re-scored under the new format in the same transaction (409 FORMAT_DOES_NOT_FIT_PLAY if one cannot hold). The stage's own POINTS ride the same PUT (W2c ST-G8): the body is `{rules?, points?}`, at least one sent, each arm left as stored when omitted, any other key 400. `points` is the engine's PointsRule (`base` win/draw/loss, `bonuses`, a `forfeit` row with an optional walkover `awardScore`) written WHOLE to the stage's `config.points` — a second save replaces it — and `points: null` removes it, back to the division's points. Refused by name: a bracket stage (no table) 400 RULE_NOT_SETTABLE (`field` `points`); a division whose own points a stage rule cannot express (an overtime or shoot-out split, a tie or no-result, a set-score table paying more than one pair) 422 POINTS_RULE_INEXPRESSIBLE (`keys` names the split keys); a walkover `awardScore` on a sport whose table never reads it (the set sports, carrom, the board games) 400 RULE_NOT_SETTABLE (`field` `points.forfeit.awardScore`); a bonus reading a score the sport does not emit 422 CONFIG_INVALID; bonuses or a forfeit row without `standings.custom_points` 402 PAYMENT_REQUIRED (the base sentence is free). A decider at the body's TOP level (any whole decider a sport declares, e.g. `shootout`, `superOver`, `tiebreakRungs`) is 400 VALIDATION, naming the key (`field`) and where it goes (`rules.<key>`). Editable until the first fixture in THAT stage has a frozen config snapshot or a score event, then 409 STAGE_FORMAT_LOCKED — a monotonic pair, deliberately not `fixtures.status`, which moves backwards when a start is voided. The answer is the stage's `rules` and `points` as stored", tag: "stages", request: S.PutStageRules, response: S.StageRules, errors: [400, 402, 409, 422] },
   { path: "/stages/{id}/court-tags", method: "put", summary: "#622 — replace a stage's required court tags. `rounds` is a WHOLE-LIST replace: an omitted round role is deleted, an empty `required_court_tags` on a listed role is a real \"no requirement\" row. Omitting the `rounds` key entirely leaves the round rules untouched. 422 UNKNOWN_ROUND_ROLE for a role key no stage format produces, 422 DUPLICATE_ROUND_ROLE for the same role listed twice. Effective requirement per fixture is division ∪ stage ∪ round, resolved identically by the deterministic placer, the AI pack and the verifier", tag: "stages", request: S.PutStageCourtTags, response: S.StageCourtTags, errors: [422] },
   // Seed proposals (D4a design doc, P5) — propose + confirm cross-stage fill.
   { path: "/stages/{id}/seed-proposal", method: "post", summary: "Compute (or recompute) a draft seed proposal for a stage whose `progression.timing` is `setup`. 409 SEEDING_SOURCE_INCOMPLETE, 409 SEEDING_ALREADY_CONFIRMED, 422 SEEDING_RULES_MISSING, 422 SEEDING_CARRY_SOURCE_INVALID (`progression.carry` set against a source that offers a downstream stage a finishing order rather than a points table — every kind except `league`/`group`/`swiss`, i.e. the four bracket kinds plus `ladder` and `americano`)", tag: "stages", response: S.SeedProposal, status: 201, errors: [409, 422] },
@@ -175,6 +178,8 @@ export const ROUTES: RouteSpec[] = [
   { path: "/fixtures/{id}", method: "get", summary: "Get a fixture", tag: "fixtures", response: S.Fixture },
   { path: "/fixtures/{id}", method: "patch", summary: "Schedule move, venue, officials, pin/lock — blocking conflicts → 409, warn-level ones come back in `conflicts`", tag: "fixtures", request: S.PatchFixture, response: S.PatchedFixture, errors: [402, 409, 422] },
   { path: "/fixtures/{id}/stream", method: "put", summary: "Set or clear the fixture's public broadcast link (https, exact-host allowlist: YouTube, Facebook, Twitch, Kick) — surfaces as \"Watch live\" on the public match page", tag: "fixtures", request: S.PutFixtureStream, response: S.FixtureStream, errors: [403, 404, 422] },
+  { path: "/fixtures/{id}/rules", method: "put", summary: "One match's own format over its stage's (W2c X-SR-2), and the live correction of a STARTED match's format (X-SR-5, owner Q11). A WHOLE-FRAGMENT replace: `rules` is the match's format over its stage's, and `rules: null` (or `{}`, or only null values) sets it back to the stage's — a null VALUE means inherit and is never stored. Only the leaves that differ from the stage's format are stored, so a later stage edit still reaches every leaf the match did not change. Keys are the sport's declared rule keys (400 UNKNOWN_RULE_KEY otherwise); a key the sport scopes per stage, or a decider switched on or lengthened, is 400 RULE_NOT_SETTABLE; the merged `{division + stage rules + bracket deciders + rules}` is parsed by the sport's configSchema (422 CONFIG_INVALID, the engine's message on `field`). A finished match (finalized or cancelled) is 409 FIXTURE_FORMAT_LOCKED. A started match is corrected only if the recorded play fits the new format: its ledger refolded under it must fold, keep its outcome and keep its score as shown, else 409 FORMAT_DOES_NOT_FIT_PLAY (\"This format would end the match as it stands\" when it would decide an open match). A correction re-freezes the match's config and bumps `rules_version` (an open pad compares it); re-sending the format it already plays bumps nothing. A match decided WITHOUT play (a walkover no event records) is started too: the correction must keep the award and its credited score (else 409 FORMAT_DOES_NOT_FIT_PLAY), and a bye, which credits no score, is 409 FIXTURE_FORMAT_LOCKED. Errors carry `fixture_id` and, where one applies, `field`. Organiser auth (no device link): a caller without write access to the fixture (a read-only role, an API key without the scope) is 403.", tag: "fixtures", request: S.PutFixtureRules, response: S.FixtureRulesResult, errors: [400, 402, 403, 404, 409, 422] },
+  { path: "/fixtures/{id}/rules", method: "get", summary: "The rules a match plays by now (W2c X-SR-7, owner P-1): `cfg` (the format its ledger folds under), `rules_version` (bumped by each live correction of a started match) and `format_line` (the rules line the public pages print, in the reader's language: the format, how a tied match ends, an abandon policy the stage changed; null when there is none to say). An open scoring pad reloads them after 409 FIXTURE_RULES_CHANGED, or when an append's answer carries a newer `rules_version`. Organiser or device link, as GET /fixtures/{id}/state", tag: "scoring", response: S.FixtureCurrentRules, errors: [404] },
   // Streaming R1 — phone relay sessions (design §6.3). Never key-reachable (key-scopes.ts).
   { path: "/fixtures/{id}/stream-sessions", method: "post", summary: "Start a phone-relay session for the fixture (one match credit is consumed when it goes live). 409 active_session when one is already running (its id is returned as `sessionId`), 409 overlay_required, 409 phone_not_paired (no phone is paired on the fixture's stream code — scan it first; asked after active_session and before credits, so no row is written and no credit spent), 409 phone_not_responding (a phone IS paired but has sent no beat within its liveness window — wake it, no rescan needed; asked at the same point, same guarantees), 409 target_in_use (the destination is live or waiting on another match, named in `holder`), 402 no_credits, 422 DESTINATION_NOT_ALLOWED (the saved destination is no longer on the allowlist), 422 TARGET_UNREADABLE (the saved stream key can no longer be read: replace the key, or for a legacy destination remove it, since only YouTube and Twitch can be added; refused before any provider call, no row is written, no credit spent), 503 composed_unavailable (mode composed where the compositor cannot run: the relay is unavailable, no compositor image is configured, or, on a live deployment, FLY_API_TOKEN or ENV_NAME is unset or FLY_RELAY_APP is unset or still the retired shared default; asked before every admission refusal, after the deployment's ingest_unavailable, so no session row, input, credit or runner is created — start passthrough instead), 503 storage_exhausted (no row is written)", tag: "fixtures", request: S.CreateStreamSession, response: S.StreamSessionCreated, status: 201, errors: [402, 403, 404, 409, 422, 503] },
   { path: "/fixtures/{id}/stream-sessions/current", method: "get", summary: "The fixture's latest relay session as the organiser sees it (state, health, the phone-lost countdown, the restart allowance) — null when none exists. Carries no credential. A `reveal` query parameter (the removed v1 QR's) is 400", tag: "fixtures", response: S.StreamSessionCurrent.nullable(), errors: [403, 404] },
@@ -193,7 +198,7 @@ export const ROUTES: RouteSpec[] = [
   { path: "/fixtures/{id}/stream-settings", method: "put", summary: "The fixture's stream settings: the destination pre-pick the phone's start uses (`targetId`, null clears it), the automatic-streaming switch (`autoStream`), and the stream's score preferences — `streamMode` (`passthrough` streams the camera only; null or `composed` streams the score whenever the deployment can run it, and every start reads it), `overlayTemplate` (null is the sport's default; an id the fixture's sport is not offered is a 400 and writes nothing) and `overlayDelayMs` (0–30000 whole ms; null is the server's default, 0 a real override). Send any of them; a field left out is left as it is. The answer's `targetId` is the saved choice, and its `revision` orders it against any other answer or read of these settings (higher is newer). 404 when the target is not this org's, is archived, or does not exist", tag: "fixtures", request: S.PutStreamSettings, response: S.StreamSettings, errors: [403, 404] },
   { path: "/fixtures/{id}/lineups/{entrantId}", method: "get", summary: "Get a side's lineup", tag: "fixtures" },
   { path: "/fixtures/{id}/lineups/{entrantId}", method: "put", summary: "Replace a side's lineup", tag: "fixtures", request: S.PutLineup, errors: [422] },
-  { path: "/fixtures/{id}/events", method: "post", summary: "Append a score event (THE scoring endpoint). 403 RESULT_CARRIED_FORWARD: a device link writing to a fixture whose settled result has already moved the competition on (its winner or loser feed seated, the next Swiss round paired, or its stage complete) — corrections are then the organiser's. A keyed retry of a write the ledger already holds still gets its original answer. 426 ENGINE_OUTDATED: the request carries an engine_epoch lower than the server's fold epoch for the fixture's sport — update the client; nothing was written and the idempotency key is not consumed (an absent or higher engine_epoch is accepted; a retry of an already-accepted key answers its original event even after the epoch has moved). This 426 carries no Upgrade header (it is not a protocol upgrade): key on error.code ENGINE_OUTDATED, never on the status alone", tag: "scoring", request: S.AppendEventRequest, response: S.AppendEventResponse, status: 201, errors: [403, 409, 422, 426, 429] },
+  { path: "/fixtures/{id}/events", method: "post", summary: "Append a score event (THE scoring endpoint). 403 RESULT_CARRIED_FORWARD: a device link writing to a fixture whose settled result has already moved the competition on (its winner or loser feed seated, the next Swiss round paired, or its stage complete) — corrections are then the organiser's. A keyed retry of a write the ledger already holds still gets its original answer. 409 FIXTURE_RULES_CHANGED (W2c X-SR-7): the request sent a `rules_version` that is not the match's — its format was corrected since; nothing was written, and the error carries the match's `rules_version` and `format` (its rules line, en: the format, how a tied match ends, an abandon policy the stage changed; null when none). Checked only when sent, and before `expected_seq`. Every 201 carries the match's `rules_version`. 426 ENGINE_OUTDATED: the request carries an engine_epoch lower than the server's fold epoch for the fixture's sport — update the client; nothing was written and the idempotency key is not consumed (an absent or higher engine_epoch is accepted; a retry of an already-accepted key answers its original event even after the epoch has moved). This 426 carries no Upgrade header (it is not a protocol upgrade): key on error.code ENGINE_OUTDATED, never on the status alone", tag: "scoring", request: S.AppendEventRequest, response: S.AppendEventResponse, status: 201, errors: [403, 409, 422, 426, 429] },
   { path: "/fixtures/{id}/events", method: "get", summary: "Read the ledger after ?since_seq=", tag: "scoring", response: z.array(S.ScoreEvent), query: { since_seq: { schema: { type: "integer", minimum: 0, default: 0 } } } },
   { path: "/fixtures/{id}/audit", method: "get", summary: "Signed per-match audit trail: the full hash-chained event stream, chain-verification verdict and an Ed25519 signature over the head hash (Pro `scoring.audit_export`; verify keys at /.well-known/seazn-audit-keys)", tag: "scoring", errors: [402, 404], query: { format: { schema: { type: "string", enum: ["json", "pdf"], default: "json" } } } },
   { path: "/fixtures/{id}/state", method: "get", summary: "Live state (ETag = digest of the body)", tag: "scoring", response: S.FixtureState },
@@ -725,7 +730,48 @@ const STREAM_SESSION_CREATE_ERRORS = {
 // status -> the envelope THAT route x status uses instead of the plain
 // ERROR_ENVELOPE. Consulted once, inside `operation()`'s `route.errors`
 // loop, so a route not listed here is completely unaffected.
+// W2c — the division PATCH's refusals, each with the facts a client says it with (`lib/rule-errors.ts`
+// `ruleRefusalText`). `refused` is the same list the 200 carries.
+const DIVISION_REFUSED = {
+  type: "array",
+  description: "The format fields this save did not apply, each with the first started stage that depends on it",
+  items: toSchema(S.RefusedFieldS),
+} as const;
+const STAGE_NAMED = {
+  stage_id: { type: "string", format: "uuid", description: "The stage whose own rules refuse the save" },
+  stage_name: { type: "string", description: "Its name, for the sentence" },
+} as const;
+const DIVISION_PATCH_ERRORS = {
+  400: scopedErrorEnvelope({
+    field: { type: "string", description: "On RULE_NOT_SETTABLE (400): the stage's own rules key the new variant (or online play) cannot carry" },
+    reason: { type: "string", enum: ["online_division"], description: "On RULE_NOT_SETTABLE (400): why, as a code - `online_division` when the key (clock, clock family) is the division's own once it plays online (Lichess)" },
+    ...STAGE_NAMED,
+  }),
+  409: scopedErrorEnvelope({
+    refused: { ...DIVISION_REFUSED, description: "On DIVISION_FORMAT_LOCKED / DIVISION_TABLE_RULES_LOCKED (409): every field refused; the message names the first" },
+    match_edits: { type: "boolean", description: "On DIVISION_FORMAT_LOCKED (409): whether the first refused stage's matches can take a format of their own (the sport declares a match-scope key for it); false = the message does not suggest changing individual matches" },
+    fixture_id: { type: "string", format: "uuid", description: "On FIXTURE_OWN_FORMAT_NO_LONGER_FITS (409): the unstarted match whose own format would stop fitting" },
+    fixture_no: { type: ["integer", "null"], description: "On FIXTURE_OWN_FORMAT_NO_LONGER_FITS (409): that match's number on the board" },
+    field: { type: "string", description: "On FIXTURE_OWN_FORMAT_NO_LONGER_FITS (409): the rule that would stop fitting" },
+  }),
+  422: scopedErrorEnvelope({
+    issues: {
+      type: "array",
+      description: "On CONFIG_INVALID (422): the sport schema's reasons, path and message only",
+      items: { type: "object", required: ["path", "message"], properties: { path: { type: "array", items: { type: ["string", "integer"] } }, message: { type: "string" } } },
+    },
+    refused: { ...DIVISION_REFUSED, description: "On CONFIG_INVALID (422) after a per-field refusal: the fields kept as stored, whose stored values the config no longer parses with" },
+    keys: {
+      type: "array",
+      description: "On POINTS_RULE_INEXPRESSIBLE (422): the division's config keys that split its points (the engine's key names, not labels), which an unstarted stage's own points rule cannot say",
+      items: { type: "string" },
+    },
+    ...STAGE_NAMED,
+  }),
+};
+
 const ERROR_SCHEMA_OVERRIDES: Record<string, Partial<Record<number, unknown>>> = {
+  "PATCH /divisions/{id}": DIVISION_PATCH_ERRORS,
   "POST /stages/{id}/schedule/auto": { 422: CAPACITY_ERROR_ENVELOPE },
   "POST /fixtures/{id}/events": { 426: ENGINE_OUTDATED_ENVELOPE },
   "POST /competitions/from-template": {
@@ -758,7 +804,39 @@ function pathParams(path: string): object[] {
 // hand-maintaining ~100 of them.
 // ---------------------------------------------------------------------------
 
-function exampleOf(schema: unknown, depth = 0): unknown {
+/** `{not: {}}`: the JSON Schema `z.never()` emits, which no value satisfies. */
+function refusesEverything(schema: unknown): boolean {
+  if (typeof schema !== "object" || schema === null) return false;
+  const s = schema as Record<string, unknown>;
+  const not = s.not;
+  return Object.keys(s).length === 1 && typeof not === "object" && not !== null && Object.keys(not).length === 0;
+}
+
+/** A string example that satisfies what the JSON Schema says of it (batch 4: a request example is a body a client copies, so
+ *  it must parse). In order: a declared DEFAULT where the stock word cannot be made to fit (a pattern, or an exact length:
+ *  valid by construction, e.g. `return_path`, `currency`), then its format, then the stock word padded to `minLength` and cut to
+ *  `maxLength`. `ordinal` is the element's place in an array whose `minItems` asks for several, so uuid items stay distinct. */
+function stringExample(s: Record<string, unknown>, ordinal: number): string {
+  const exactLength = typeof s.minLength === "number" && s.minLength === s.maxLength;
+  if ((typeof s.pattern === "string" || exactLength) && typeof s.default === "string") return s.default;
+  if (s.format === "uuid") return ordinal === 0 ? "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b" : `3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2${(ordinal % 16).toString(16)}`;
+  if (s.format === "date") return "2026-08-01";
+  if (s.format === "date-time") return "2026-08-01T09:00:00Z";
+  if (s.format === "email") return "user@example.com";
+  if (s.format === "uri" || s.format === "url") return "https://example.com/example";
+  const min = typeof s.minLength === "number" ? s.minLength : 0;
+  const max = typeof s.maxLength === "number" ? s.maxLength : Number.POSITIVE_INFINITY;
+  const word = "example";
+  const padded = word.length >= min ? word : word.repeat(Math.ceil(min / word.length)).slice(0, min);
+  return padded.length > max ? padded.slice(0, max) : padded;
+}
+
+const isScalarSchema = (schema: unknown): boolean => {
+  const type = typeof schema === "object" && schema !== null ? (schema as { type?: unknown }).type : undefined;
+  return type === "string" || type === "integer" || type === "number";
+};
+
+export function exampleOf(schema: unknown, depth = 0, ordinal = 0): unknown {
   if (depth > 6 || typeof schema !== "object" || schema === null) return null;
   const s = schema as Record<string, unknown>;
   if ("const" in s) return s.const;
@@ -767,7 +845,7 @@ function exampleOf(schema: unknown, depth = 0): unknown {
   const first = (k: "anyOf" | "oneOf" | "allOf") =>
     Array.isArray(s[k]) && (s[k] as unknown[]).length > 0 ? (s[k] as unknown[])[0] : null;
   const union = first("anyOf") ?? first("oneOf") ?? first("allOf");
-  if (union) return exampleOf(union, depth + 1);
+  if (union) return exampleOf(union, depth + 1, ordinal);
   const type = Array.isArray(s.type) ? s.type[0] : s.type;
   switch (type) {
     case "object": {
@@ -775,6 +853,10 @@ function exampleOf(schema: unknown, depth = 0): unknown {
       const props = (s.properties ?? {}) as Record<string, unknown>;
       const required = new Set((s.required as string[]) ?? []);
       for (const [name, prop] of Object.entries(props)) {
+        // A property that accepts nothing (`z.never()`, emitted `{not: {}}`: the top-level stage deciders a stage's
+        // config refuses by name, W2c Task 13b) is documented only so a client learns where the key went. Any value in
+        // an example would make the example a body its own route refuses.
+        if (refusesEverything(prop)) continue;
         // Keep examples focused: required fields plus the first few optionals.
         if (required.has(name) || Object.keys(out).length < 4) {
           out[name] = exampleOf(prop, depth + 1);
@@ -783,12 +865,14 @@ function exampleOf(schema: unknown, depth = 0): unknown {
       return out;
     }
     case "array":
-      return [exampleOf(s.items, depth + 1)];
+      // A tuple (`z.tuple`, emitted `prefixItems` with no `items`: a stage forfeit's `awardScore` pair) is one example
+      // per position; `[exampleOf(undefined)]` would publish `[null]`, which the tuple refuses.
+      if (Array.isArray(s.prefixItems)) return (s.prefixItems as unknown[]).map((item) => exampleOf(item, depth + 1));
+      // `minItems` is a count the schema demands (a tie-break order needs two entrants): one example per place, for a list of
+      // scalars. A list of objects keeps its single sample (the same object repeated is noise in a document, and no request needs more).
+      return Array.from({ length: isScalarSchema(s.items) && typeof s.minItems === "number" && s.minItems > 1 ? s.minItems : 1 }, (_, i) => exampleOf(s.items, depth + 1, i));
     case "string":
-      if (s.format === "uuid") return "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b";
-      if (s.format === "date") return "2026-08-01";
-      if (s.format === "date-time") return "2026-08-01T09:00:00Z";
-      return "example";
+      return stringExample(s, ordinal);
     case "integer":
     case "number":
       return typeof s.minimum === "number" ? s.minimum : 1;
@@ -799,6 +883,49 @@ function exampleOf(schema: unknown, depth = 0): unknown {
     default:
       return null;
   }
+}
+
+/** One published stream link: the validator's first allowed host, so `isStreamUrl` accepts it by construction. */
+const STREAM_EXAMPLE_URL = `https://${STREAM_HOSTS[0]}/watch?v=example`;
+
+/**
+ * Batch 4 — the request examples JSON Schema cannot get right on its own. A zod `.refine` is not exported to JSON Schema, so a
+ * timezone is "a string" to the generator, a stream link is "a string", and two fields that exclude each other are both
+ * "optional strings". Each entry names the route (`METHOD /path`, as `RouteSpec`) and the TOP-LEVEL body properties to set;
+ * `undefined` removes the property. The ratchet (`openapi-request-examples.test.ts`) parses every example against its own
+ * schema, so a patch that is wrong is red, and a patch the generated example did not need is red too (a stale entry).
+ */
+export const REQUEST_EXAMPLE_PATCHES: Readonly<Record<string, Readonly<Record<string, unknown>>>> = {
+  "PUT /divisions/{id}/schedule-settings": { tz: "Europe/London" },
+  "PUT /fixtures/{id}/stream": { streamUrl: STREAM_EXAMPLE_URL },
+  "POST /orgs/{id}/stream-targets": { watchUrl: STREAM_EXAMPLE_URL },
+  // Exactly one of label or streamKey (the route's refine).
+  "PATCH /orgs/{id}/stream-targets/{targetId}": { streamKey: undefined },
+  // The code's own pattern; and `stopped` rides only while no broadcast is held (`sid` null), which the example's sid breaks.
+  "POST /capture/codes/{code}/beats": { code: "3f1a2b04m8cd", stopped: null },
+  // `date` and `dateFrom`/`dateTo` are exclusive.
+  "POST /competitions/{id}/exports/scorer-sheets": { dateFrom: undefined, dateTo: undefined },
+};
+
+/** The request body example the spec publishes for a route: the schema-driven `exampleOf`, then the route's patch.
+ *  `patched: false` is the generator alone (the ratchet uses it to prove every patch is load-bearing). */
+export function requestExampleOf(
+  route: { method: string; path: string; request?: ZodType },
+  opts: { patched?: boolean } = {},
+): unknown {
+  if (route.request === undefined) throw new Error(`${route.method} ${route.path} takes no request body`);
+  const generated = exampleOf(toSchema(route.request));
+  const patch = opts.patched === false ? undefined : REQUEST_EXAMPLE_PATCHES[`${route.method.toUpperCase()} ${route.path}`];
+  if (patch === undefined) return generated;
+  if (typeof generated !== "object" || generated === null || Array.isArray(generated)) {
+    throw new Error(`${route.method} ${route.path}: an example patch needs an object body`);
+  }
+  const out = { ...(generated as Record<string, unknown>) };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined) delete out[key];
+    else out[key] = value;
+  }
+  return out;
 }
 
 /** The key scope this operation needs, from the SAME allowlist the auth
@@ -827,7 +954,7 @@ function operation(route: RouteSpec): Record<string, unknown> {
   const overrides = ERROR_SCHEMA_OVERRIDES[`${route.method.toUpperCase()} ${route.path}`];
   for (const status of route.errors ?? []) {
     responses[String(status)] = {
-      description: { 402: "Plan upgrade required", 409: "Conflict", 422: "Rejected by the engine", 426: "Client engine out of date", 429: "Rate limited" }[status] ?? "Error",
+      description: { 400: "Validation error", 402: "Plan upgrade required", 409: "Conflict", 422: "Rejected by the engine", 426: "Client engine out of date", 429: "Rate limited" }[status] ?? "Error",
       content: { "application/json": { schema: overrides?.[status] ?? errorBody } },
     };
   }
@@ -864,7 +991,7 @@ function operation(route: RouteSpec): Record<string, unknown> {
             content: {
               [route.requestContentType ?? "application/json"]: {
                 schema: toSchema(route.request),
-                example: exampleOf(toSchema(route.request)),
+                example: requestExampleOf(route),
               },
             },
           },

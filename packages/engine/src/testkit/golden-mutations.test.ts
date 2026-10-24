@@ -23,6 +23,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { AnySportModule } from "../sport/module.ts";
+import { cricket } from "../sports/cricket/index.ts";
 import { football } from "../sports/football/index.ts";
 import { builtinModules } from "../sports/index.ts";
 import {
@@ -286,31 +287,50 @@ describe("the list itself", () => {
 
 // ------------------------------------------- the two gates' division of labour
 //
-// `football-abandonPolicy-enum-narrowed` is recorded as killed by the SCHEMA
+// `cricket-superOverStillTied-enum-narrowed` is recorded as killed by the SCHEMA
 // SNAPSHOT and not by the corpus. That is a claim about the corpus's blindness,
 // so it is asserted rather than asserted-in-prose: the corpus records exactly
 // one value of the knob, while the declaration carries more than one member.
 // Drop any of the others and no recorded state moves.
+//
+// The exemplar used to be football's `abandonPolicy`. W2c 16c recorded its second
+// member (`award`), so that narrowing IS a corpus kill now - asserted below as the
+// other half, so the move is a fact and not a memory.
+
+/** The members a committed schema snapshot declares for a config knob. */
+function declaredMembers(key: string, knob: string): string[] {
+  const snapshot = readFileSync(goldenPath(key).replace(/\.golden\.json$/, ".schema.json"), "utf8");
+  const declared = new RegExp(`"${knob}":\\s*\\{[^}]*"enum":\\s*\\[([^\\]]*)\\]`).exec(snapshot);
+  expect(declared, `${knob} enum in the committed ${key} schema snapshot`).not.toBeNull();
+  return (declared?.[1] as string).split(",").map((part) => part.trim().replace(/^"|"$/g, "")).filter((part) => part !== "");
+}
+
+/** The distinct values a corpus's recorded states carry for a config knob (the config is embedded in every state). */
+function recordedValues(module: AnySportModule, knob: string): Set<string> {
+  const full = unslimCorpus(module, readCorpus(module.key));
+  const recorded = new Set<string>();
+  for (const stream of full.streams) {
+    for (const state of stream.states) {
+      const match = new RegExp(`"${knob}":"([^"]+)"`).exec(state);
+      if (match !== null) recorded.add(match[1] as string);
+    }
+  }
+  return recorded;
+}
 
 describe("why the corpus cannot kill an enum narrowing", () => {
-  it("records ONE abandonPolicy value while the schema declares several", () => {
-    const full = unslimCorpus(football, readCorpus("football"));
-    const recorded = new Set<string>();
-    for (const stream of full.streams) {
-      for (const state of stream.states) {
-        const match = /"abandonPolicy":"([^"]+)"/.exec(state);
-        if (match !== null) recorded.add(match[1] as string);
-      }
-    }
-    expect(recorded.size, "distinct abandonPolicy values in the football corpus").toBe(1);
+  it("records ONE superOverStillTied value while the schema declares several", () => {
+    const recorded = recordedValues(cricket, "superOverStillTied");
+    expect(recorded.size, "distinct superOverStillTied values in the cricket corpus").toBe(1);
+    const members = declaredMembers("cricket", "superOverStillTied");
+    expect(members.length, "declared superOverStillTied members").toBeGreaterThan(recorded.size);
+    expect([...recorded].every((value) => members.includes(value)), "the recorded value is one of the declared members").toBe(true);
+  });
 
-    const snapshot = readFileSync(
-      goldenPath("football").replace(/\.golden\.json$/, ".schema.json"),
-      "utf8",
-    );
-    const declared = /"abandonPolicy":\s*\{[^}]*"enum":\s*\[([^\]]*)\]/.exec(snapshot);
-    expect(declared, "abandonPolicy enum in the committed schema snapshot").not.toBeNull();
-    const members = (declared?.[1] as string).split(",").filter((part) => part.trim() !== "");
-    expect(members.length, "declared abandonPolicy members").toBeGreaterThan(recorded.size);
+  it("football's abandonPolicy is no longer blind: its corpus records every declared member, so a narrowing is a corpus kill", () => {
+    const recorded = recordedValues(football, "abandonPolicy");
+    const members = declaredMembers("football", "abandonPolicy");
+    expect(members.length, "football declares more than one abandonPolicy member").toBeGreaterThan(1);
+    expect([...recorded].sort(), "the corpus records exactly the declared members").toEqual([...members].sort());
   });
 });

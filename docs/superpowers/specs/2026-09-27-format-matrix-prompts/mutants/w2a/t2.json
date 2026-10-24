@@ -17,8 +17,8 @@
   {
     "id": "status-date-format",
     "file": "packages/engine/rules/boardgame.md",
-    "find": "ruling 82 | signed 73 2026-10-08",
-    "replace": "ruling 82 | signed 73 08-10-2026",
+    "find": "FIDE C.07 (read, summary) | signed 86 2026-10-08",
+    "replace": "FIDE C.07 (read, summary) | signed 86 08-10-2026",
     "killers": [
       {
         "cwd": "packages/engine",
@@ -32,8 +32,8 @@
   {
     "id": "awaiting-entry-deleted",
     "file": "packages/engine/rules/boardgame.md",
-    "find": "| `apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx` | `apps/web/src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts` |",
-    "replace": "| `apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx` | — |",
+    "find": "| `packages/engine/src/sports/boardgame/tiebreak.test.ts`<br>`apps/web/src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts` |",
+    "replace": "| — |",
     "killers": [
       {
         "cwd": "packages/engine",
@@ -47,8 +47,8 @@
   {
     "id": "awaiting-entry-stale",
     "file": "packages/engine/test/rules-reference.test.ts",
-    "find": "const AWAITING_PROOF: ReadonlyMap<string, string> = new Map([]);",
-    "replace": "const AWAITING_PROOF: ReadonlyMap<string, string> = new Map([[\"X-ZZ-9\", \"Task 99\"]]);",
+    "find": "const AWAITING_PROOF: ReadonlyMap<string, string> = new Map<string, string>([",
+    "replace": "const AWAITING_PROOF: ReadonlyMap<string, string> = new Map<string, string>([[\"X-ZZ-9\", \"Task 99\"]",
     "killers": [
       {
         "cwd": "packages/engine",
@@ -182,8 +182,8 @@
   {
     "id": "awaiting-row-claims-proof",
     "file": "packages/engine/test/rules-reference.test.ts",
-    "find": "const AWAITING_PROOF: ReadonlyMap<string, string> = new Map([]);",
-    "replace": "const AWAITING_PROOF: ReadonlyMap<string, string> = new Map([[\"BG-KO-2\", \"Task 12\"]]);",
+    "find": "const AWAITING_PROOF: ReadonlyMap<string, string> = new Map<string, string>([",
+    "replace": "const AWAITING_PROOF: ReadonlyMap<string, string> = new Map<string, string>([[\"BG-KO-2\", \"Task 12\"]",
     "killers": [
       {
         "cwd": "packages/engine",
@@ -962,8 +962,8 @@
   {
     "id": "seed-id-absent",
     "file": "packages/engine/rules/boardgame.md",
-    "find": "| BG-KO-2 | A drawn",
-    "replace": "| BG-KO-3 | A drawn",
+    "find": "| BG-KO-2 | Armageddon records who had Black",
+    "replace": "| BG-KO-9 | Armageddon records who had Black",
     "killers": [
       {
         "cwd": "packages/engine",

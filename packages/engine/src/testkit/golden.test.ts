@@ -49,6 +49,7 @@ import {
   writeCorpus,
   type GoldenCorpus,
 } from "./golden.ts";
+import { extendBranches } from "./golden-branches.ts";
 import { extendFloor } from "./golden-floor-streams.ts";
 import { reformatAll } from "./golden-reformat.ts";
 
@@ -91,7 +92,9 @@ if (corpusWriteRefusalReason !== null) {
         const { corpus: covered, gained, stillMissing, appended } = extendCorpus(module, before);
         // The golden floor (GF-1) is the second append pass: the core events and outcome kinds no generator walk reaches.
         const floor = extendFloor(module, covered);
-        const corpus = floor.corpus;
+        // W2c 16c is the third: the opt-in config branches no generator walk and no floor scenario takes (golden-branches.ts).
+        const branches = extendBranches(module, floor.corpus);
+        const corpus = branches.corpus;
         expect(corpus.streams.slice(0, before.streams.length)).toEqual(before.streams);
         // eslint-disable-next-line no-console
         console.log(
@@ -103,7 +106,12 @@ if (corpusWriteRefusalReason !== null) {
           `[extend] ${module.key} floor: +${floor.appended.length} streams ${JSON.stringify(floor.appended)} ` +
             `stillMissing ${JSON.stringify(floor.stillMissing)}`,
         );
-        if (appended.length > 0 || floor.appended.length > 0) writeCorpus(corpus);
+        // eslint-disable-next-line no-console
+        console.log(
+          `[extend] ${module.key} branches: +${branches.appended.length} streams ${JSON.stringify(branches.appended)} ` +
+            `stillMissing ${JSON.stringify(branches.stillMissing)}`,
+        );
+        if (appended.length > 0 || floor.appended.length > 0 || branches.appended.length > 0) writeCorpus(corpus);
         // Generous: a maintenance tool, not a gate. The floor's search for cricket's tie walks thousands of seeds.
       }, 300_000);
     }

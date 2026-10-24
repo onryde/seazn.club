@@ -18,6 +18,9 @@ export interface ReplayedOutcome {
   /** The row the original append wrote — the same `event_id` its own answer
    *  carried (`ScoreOutcome`), so a retrying pad learns it too. */
   event_id: string;
+  /** W2c Task 15 (X-SR-7) — the match's rules version NOW, not when the original write answered: a retry that lands
+   *  after a correction is told the rules moved, so the pad reloads them (the fold above is still the original's). */
+  rules_version: number;
 }
 
 /**
@@ -39,9 +42,10 @@ export async function replayOutcomeFor(
   idempotencyKey: string,
 ): Promise<ReplayedOutcome | null> {
   return withTenant(orgId, async (tx) => {
-    const [row] = await tx<{ id: string; seq: number; type: string }[]>`
-      select id, seq, type from score_events
-      where fixture_id = ${fixtureId} and idempotency_key = ${idempotencyKey}`;
+    const [row] = await tx<{ id: string; seq: number; type: string; rules_version: number }[]>`
+      select e.id, e.seq, e.type, f.rules_version from score_events e
+      join fixtures f on f.id = e.fixture_id
+      where e.fixture_id = ${fixtureId} and e.idempotency_key = ${idempotencyKey}`;
     if (!row) return null;
 
     const inputs = await loadFoldInputs(tx, fixtureId);
@@ -64,6 +68,19 @@ export async function replayOutcomeFor(
       // can never answer "finalized", and only `nextStatus` knows that rule.
       status: nextStatus(row.type, folded.outcome, folded.active, inputs.stageKind),
       event_id: row.id,
+      rules_version: row.rules_version,
     };
+  });
+}
+
+/**
+ * W2c batch-5 m-2 - the match's rules version NOW, for a replayed answer that did not come from the ledger: the Redis fast
+ * path caches the `ScoreOutcome` of the original write, whose `rules_version` is the version THEN. One primary-key read;
+ * null when the fixture is not visible to the tenant (deleted), and the caller keeps the cached answer.
+ */
+export async function rulesVersionNow(orgId: string, fixtureId: string): Promise<number | null> {
+  return withTenant(orgId, async (tx) => {
+    const [row] = await tx<{ rules_version: number }[]>`select rules_version from fixtures where id = ${fixtureId}`;
+    return row?.rules_version ?? null;
   });
 }

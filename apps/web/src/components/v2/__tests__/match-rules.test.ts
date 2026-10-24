@@ -9,7 +9,7 @@
 // build()'s key name reds here rather than silently producing a config the
 // server-side configSchema rejects.
 import { describe, expect, it } from "vitest";
-import { buildRuleOverride } from "../match-rules";
+import { buildRuleOverride, hydrateRuleValues } from "../match-rules";
 
 describe("buildRuleOverride — icehockey overtime, the values-param collapse", () => {
   it("assembles the nested override from the primary field plus its siblings", () => {
@@ -66,6 +66,26 @@ describe("buildRuleOverride — boardgame clock, a three-way merge", () => {
         clockDelaySeconds: "2",
       }),
     ).toEqual({ clock: { base: 300, increment: 3, delay: 2 } });
+  });
+});
+
+// W2c Task 8 (BG-KO-3) — the chess tie-break rungs, the first ORDERED-LIST ("sequence") field: the value is the chosen
+// rungs, comma-joined, in the order they are played.
+describe("buildRuleOverride — boardgame tie-break rungs (BG-KO-3), an ordered list", () => {
+  it("builds the rungs in the order chosen, never re-sorted, and a blank value writes nothing (the engine's own order)", () => {
+    expect(buildRuleOverride("boardgame", { tiebreakRungs: "blitz,armageddon" })).toEqual({ tiebreakRungs: ["blitz", "armageddon"] });
+    expect(buildRuleOverride("boardgame", { tiebreakRungs: "armageddon,rapid,blitz" })).toEqual({ tiebreakRungs: ["armageddon", "rapid", "blitz"] });
+    expect(buildRuleOverride("boardgame", { tiebreakRungs: "" })).toEqual({});
+  });
+
+  it("a saved list reopens as the value that rebuilds it — a blank would silently drop it on the next save (a stage's PUT is a fragment)", () => {
+    const saved = { tiebreakRungs: ["blitz", "rapid"] };
+    const values = hydrateRuleValues("boardgame", saved);
+    expect(values).toEqual({ tiebreakRungs: "blitz,rapid" });
+    expect(buildRuleOverride("boardgame", values)).toEqual(saved);
+    // The positive pair: a config that carries no list shows nothing, and does not invent one.
+    expect(hydrateRuleValues("boardgame", {})).toEqual({});
+    expect(hydrateRuleValues("boardgame", { tiebreak: true })).toEqual({});
   });
 });
 

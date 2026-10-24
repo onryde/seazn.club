@@ -18,12 +18,14 @@
 // one entry that cannot work this way is a source-level schema narrowing, and
 // it is recorded as a manual procedure with the failure line it produces.
 //
-// WHAT IS DELIBERATELY NOT HERE. The football `abandonPolicy` enum narrowing is
-// in the list but marked `killedBy: "schema-snapshot"`, because the corpus does
-// not kill it and never did — the frozen states pin the one value the corpus
+// WHAT IS DELIBERATELY NOT HERE. The cricket `superOverStillTied` enum narrowing
+// is in the list but marked `killedBy: "schema-snapshot"`, because the corpus does
+// not kill it and never did - the frozen states pin the one value the corpus
 // recorded, so dropping a DIFFERENT member of the enum moves no state at all.
 // That is the two gates' division of labour, and writing it down as a corpus
-// mutation that "passes" would be a lie in the other direction.
+// mutation that "passes" would be a lie in the other direction. (The exemplar was
+// football's `abandonPolicy` until W2c 16c recorded its second member, `award`:
+// that narrowing is a corpus kill now, which is the corpus doing its job.)
 import type { AnySportModule } from "../sport/module.ts";
 import {
   anchorSteps,
@@ -342,24 +344,24 @@ export const CORPUS_MUTATIONS: CorpusMutation[] = [
     },
   },
   {
-    id: "football-abandonPolicy-enum-narrowed",
+    id: "cricket-superOverStillTied-enum-narrowed",
     klass: "schema-narrowing",
-    origin: "#429 scope item 2 — the case that motivated the schema snapshots",
+    origin: "#429 scope item 2 - the case that motivated the schema snapshots (football's abandonPolicy until W2c 16c recorded its second member)",
     why:
-      "THE CORPUS DOES NOT KILL THIS, and that is the entry. Every football stream records " +
-      "abandonPolicy: \"replay\", so the frozen states pin that ONE member; dropping any " +
-      "other member of the enum moves no recorded state and all eleven corpora stay green. " +
-      "`<key>.schema.json` records the DECLARATION instead of a replay, so the narrowing is " +
-      "a removed line there. The two gates are not redundant and this is where that shows.",
+      "THE CORPUS DOES NOT KILL THIS, and that is the entry. Every cricket stream records " +
+      "superOverStillTied: \"repeat\" (the default), so the frozen states pin that ONE member; " +
+      "dropping any other member of the enum moves no recorded state and all eleven corpora stay " +
+      "green. `<key>.schema.json` records the DECLARATION instead of a replay, so the narrowing " +
+      "is a removed line there. The two gates are not redundant and this is where that shows.",
     killedBy: "schema-snapshot",
     manual: {
       procedure:
-        "In src/sports/football/config.ts narrow the abandonPolicy enum to exclude a member " +
-        "the corpus does NOT record (e.g. drop \"abandoned\"), then run: " +
+        "In src/sports/cricket/cricket.ts narrow the superOverStillTied enum to exclude a member " +
+        "the corpus does NOT record (e.g. drop \"shared\"), then run: " +
         "npx vitest run src/testkit/golden.test.ts src/testkit/schema-snapshot.test.ts",
       expected:
         "golden.test.ts stays GREEN for all eleven modules. schema-snapshot.test.ts reds on " +
-        "football with a removed line under configSchema — the staleness failure counts " +
+        "cricket with a removed line under configSchema - the staleness failure counts " +
         "removals separately because a removed line is a narrowing.",
     },
   },

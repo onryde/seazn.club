@@ -11,6 +11,7 @@ import {
   getFixtureState,
   getLineup,
   listEvents,
+  loadFixtureMatchRules,
   loadFixturePadCfg,
 } from "@/server/usecases/fixtures";
 import { getDivision } from "@/server/usecases/divisions";
@@ -27,6 +28,8 @@ import {
   type LineupSlotIn,
 } from "@/components/v2/fixture-console";
 import { resolveLocale } from "@/lib/resolve-locale";
+import { getDictionary } from "@/lib/i18n";
+import { matchRulesBlockProps, offersMatchRules } from "@/components/v2/match-rules-block-model";
 import { loadStreamPanelContext } from "@/server/stream-panel-context";
 import { fixtureStreamMode } from "@/lib/fixture-stream-mount";
 import { openStreamStates } from "@/server/usecases/stream-sessions";
@@ -84,7 +87,8 @@ export default async function FixturePage({
       // Loop-F tidy 2: the held block's no-choice sentence on a line that feeds no next match (a final, third place).
       fixtureFeedsNextMatch(auth, id),
     ]);
-  const { cfg: padCfg, stageKind } = padLoad;
+  // W2c Task 15 (X-SR-7): the rules version rides the bootstrap to the console's pad, read with the cfg.
+  const { cfg: padCfg, stageKind, rulesVersion, forfeitAward } = padLoad;
   const [competition, planKey] = await Promise.all([
     getCompetition(auth, division.competition_id),
     orgPlanKey(auth.orgId),
@@ -159,17 +163,21 @@ export default async function FixturePage({
   // `canScore && !frozen`. The context loader reads nothing unless the full panel is offered (an organiser on a page that
   // is not billing-frozen), and the session read runs only for an organiser: a scorer's or viewer's refresh pays nothing.
   const frozen = competition.frozen ?? false;
-  const [streamContext, openStreams] = await Promise.all([
+  const locale = await resolveLocale();
+  const [streamContext, openStreams, matchRules] = await Promise.all([
     loadStreamPanelContext({
       auth,
       competitionId: competition.id,
       sportKey: division.sport_key,
       fixtureIds: [id],
-      locale: await resolveLocale(),
+      locale,
       offered: canEdit && !frozen,
       checkout: { status: first(sp.checkout), sessionId: first(sp.session_id) },
     }),
     canEdit ? openStreamStates(auth, [id]) : Promise.resolve({} as Awaited<ReturnType<typeof openStreamStates>>),
+    // W2c Task 19 (S2): the match rules block's facts - organisers only, like the other organiser controls (settle, forfeit):
+    // the writer is organiser auth, so a block shown to a scorer would only earn a 403. A billing-frozen competition shows none.
+    offersMatchRules({ canEdit, frozen }) ? loadFixtureMatchRules(auth, id, await getDictionary(locale, "public")) : Promise.resolve(null),
   ]);
   const streamMode = fixtureStreamMode({
     canEdit,
@@ -209,6 +217,7 @@ export default async function FixturePage({
     initialEvents: events.map((e) => eventOutToEnvelope(fixture.id, e)),
     identity: { recordedBy: auth.userId, deviceLinkId: null },
     stageKind,
+    rulesVersion,
   });
 
   return (
@@ -260,6 +269,9 @@ export default async function FixturePage({
             // W2b Task 11 (D19, X-DW-3): the server's own reading of "a double walkover is refused here" — the forfeit
             // dialog shows the guidance instead of "Neither" (a reset grand final and a 2-entrant DE winners' match included).
             no_next_match: doubleWalkoverRefused(stageKind, feedsNext),
+            // W2c Task 16b (X-WO-1 B): the stage points rule's walkover award, when it reaches this sport's table - the
+            // forfeit dialog's preview then says the number the table will carry (absent: the sport's own credit).
+            ...(forfeitAward === undefined ? {} : { forfeit_award: forfeitAward }),
           }}
           sport={{
             key: division.sport_key,
@@ -320,6 +332,7 @@ export default async function FixturePage({
           }
           stream={streamMount}
           streamReturn={first(sp.stream) === "open"}
+          matchRules={matchRules === null ? undefined : matchRulesBlockProps(id, matchRules)}
           viewerPlan={viewerPlan}
         />
       </main>

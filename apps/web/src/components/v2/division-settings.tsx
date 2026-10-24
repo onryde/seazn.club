@@ -1,24 +1,40 @@
 "use client";
 
 // Division Settings tab (v8 spec §2): General → Format → Sharing & embed →
-// Danger zone, tap-per-section. The format section renders read-only once
-// fixtures exist; patchDivision enforces the same rule (409 FORMAT_LOCKED),
-// so hiding and enforcement can't drift.
+// Danger zone, tap-per-section. Two locks, two doors (W2c Task 20, S4), and the form names each BEFORE anyone types:
+//  - the stage STRUCTURE (template, knobs) hides behind a note once fixtures exist - `replaceStages` refuses on any
+//    fixture row, so `structureLocked` is "fixtures exist" (formatAlreadyLocked);
+//  - the match RULES (variant, points, every rule field) lock per field and per STARTED stage that inherits them -
+//    `patchDivision` refuses a locked key and saves the rest. `lockedFields` is that same read (`divisionLockedFields`),
+//    handed down by the page; a save's own `refused` (a 200 that kept part of it, or a 409) covers a stage that started after
+//    the page loaded, and names every kept field instead of reading "saved" over a value that snapped back.
 import { useEffect, useState, type ReactNode } from "react";
 import Link from "@/components/ui/console-link";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
+import { settingsSaveErrorText } from "@/lib/config-issue-copy";
 import { divisionAccent, monogram } from "@/lib/division-hue";
 import { SWISS_ROUNDS_REQUIRED_CODE } from "@/lib/swiss-shell";
 import { ONLINE_CHESS_DISABLED_CODE } from "@/lib/online-chess";
 import { CAMERA_POLICIES, type CameraPolicy } from "@/lib/camera-policy";
-import { MatchRuleFields, buildRuleOverride, hydrateRuleValues, SPORT_RULES } from "./match-rules";
+import { MatchRuleFields, hydrateRuleValues, rulesFor } from "./match-rules";
+import { visibleRuleFields } from "@/lib/match-rules";
+import { divisionFormatPatch } from "./division-format-patch";
 import {
   LICHESS_CLOCK_FIELD_KEYS,
   selectedTimeControlKey,
   timeControlOptions,
   timeControlRuleValues,
 } from "@/lib/online-time-control";
+import {
+  RULE_LOCK_PARTIAL_KEY,
+  lockLineFor,
+  lockSentence,
+  mergeLocks,
+  refusedLines,
+  type RefusedLine,
+} from "./division-settings-locks";
+import { refusedFieldsOf, type RefusedField } from "@/lib/rule-errors";
 import {
   STAGE_TEMPLATES,
   applyStandingsCarry,
@@ -356,7 +372,7 @@ const POINTS_KEY_CONCEPT: Record<string, { order: number; labelKey: MessageKey }
 
 function editablePointsKeys(sportKey: string, points: Record<string, unknown> | undefined): string[] {
   if (!points) return [];
-  const dedicated = new Set((SPORT_RULES[sportKey] ?? []).map((f) => f.key));
+  const dedicated = new Set(rulesFor(sportKey).map((f) => f.key));
   return Object.keys(points)
     .filter((k) => !dedicated.has(k) && POINTS_KEY_CONCEPT[k])
     .sort((a, b) => POINTS_KEY_CONCEPT[a]!.order - POINTS_KEY_CONCEPT[b]!.order);
@@ -378,7 +394,8 @@ export function DivisionSettings({
   division,
   orgId,
   variants,
-  locked,
+  structureLocked,
+  lockedFields,
   stages,
   canEdit,
   divisionPathPrefix,
@@ -398,8 +415,12 @@ export function DivisionSettings({
    *  is not org-scoped in its URL) — see saveRequiredCourtTags below. */
   orgId: string;
   variants: { key: string; name: string }[];
-  /** formatLocked() from the page — fixtures exist. */
-  locked: boolean;
+  /** Fixtures exist - the stage structure cannot be replaced (`formatAlreadyLocked`, the page). NOT the rules: those lock
+   *  per started stage (`lockedFields`), so a division with fixtures and no started stage keeps its rules editable. */
+  structureLocked: boolean;
+  /** Every field a started stage locks, read by the page from the same `divisionRefusals` the save asks
+   *  (`divisionLockedFields`): each is read-only here with its line before the organiser types. */
+  lockedFields: RefusedField[];
   /** Stage structure (kind + name) — shown so group/top sections are visible
    *  here; structure itself is edited on the Fixtures tab. */
   stages: {
@@ -479,6 +500,9 @@ export function DivisionSettings({
   // the saved config's OWN points shape, not the sport key (see
   // editablePointsKeys above).
   const pointsFieldKeys = editablePointsKeys(division.sport_key, cfg.points);
+  // The saved config the rule fields fall back to. ONE value read by the grid (`MatchRuleFields`) and by the "kept" lines
+  // (`refusedLines`), so both see the same visible controls (batch-6 T20-1: best of 1 hides one of the points pair).
+  const inheritedCfg = (division.config as Record<string, unknown>) ?? {};
   const [pointsValues, setPointsValues] = useState<Record<string, string>>(() =>
     hydratePointsValues(division.sport_key, cfg.points),
   );
@@ -567,6 +591,28 @@ export function DivisionSettings({
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // What the last save kept, and whether the rest landed: a 200 with `refused[]` is a PARTIAL save (the line says what
+  // landed and the list what did not); a 409 is a save where nothing landed (the red error, plus the list).
+  const [refusedList, setRefusedList] = useState<RefusedField[]>([]);
+  const [partialSave, setPartialSave] = useState(false);
+  // Which save the notices belong to: the rules save (inside the Format group, directly under its Save) or any other (the foot
+  // of the page, where they always were). One home per save, so each notice - and its testid - renders once.
+  const [rulesSave, setRulesSave] = useState(false);
+  // Fields a save refused that the page did not know were locked (a stage started after it loaded). Dropped when the page's
+  // own list changes - the refresh after that save carries them - so a stage deleted since does not leave a stale lock.
+  const [learnedLocks, setLearnedLocks] = useState<RefusedField[]>([]);
+  const lockedSignature = JSON.stringify(lockedFields);
+  const [syncedLockedSignature, setSyncedLockedSignature] = useState(lockedSignature);
+  if (lockedSignature !== syncedLockedSignature) {
+    setSyncedLockedSignature(lockedSignature);
+    setLearnedLocks([]);
+  }
+  const locks = mergeLocks(lockedFields, learnedLocks);
+  const variantLock = lockLineFor("variant_key", locks);
+  const pointsLock = lockLineFor("points", locks);
+  // The Lichess time-control picker stands in for the clock fields it omits (`variant` and the clock), so it is locked
+  // when either is: a started stage that plays this clock refuses a change to it.
+  const clockLock = lockLineFor("clock", locks, ["variant"]);
   const [paywallFeature, setPaywallFeature] = useState<string | null>(null);
   const fileInputId = `division-logo-${division.id}`;
   const hue = divisionAccent(division.id);
@@ -599,14 +645,42 @@ export function DivisionSettings({
     };
   }, [orgId]);
 
-  async function run(fn: () => Promise<void>, done: string) {
+  // A refusal keeps what is STORED, so the control it locks must show that again, not what was typed (a locked box reading
+  // 13 over a stored 11 says the save worked). Only the refused controls are reset: whatever else was typed stands.
+  const restoreRefused = (refused: readonly RefusedField[]) => {
+    if (lockLineFor("variant_key", refused) !== undefined) setVariantKey(division.variant_key);
+    if (lockLineFor("points", refused) !== undefined) setPointsValues(hydratePointsValues(division.sport_key, cfg.points));
+    const stored = hydrateRuleValues(division.sport_key, division.config);
+    const covered = rulesFor(division.sport_key).filter((f) => lockLineFor(f.key, refused, f.edits) !== undefined);
+    setRuleValues((prev) => {
+      const next = { ...prev };
+      for (const f of covered) {
+        if (Object.hasOwn(stored, f.key)) next[f.key] = stored[f.key]!;
+        else delete next[f.key];
+      }
+      return next;
+    });
+  };
+
+  async function run(fn: () => Promise<void | RefusedField[]>, done: string, rules = false) {
     setBusy(true);
     setError(null);
     setPaywallFeature(null);
     setNotice(null);
+    setRefusedList([]);
+    setPartialSave(false);
+    setRulesSave(rules);
     try {
-      await fn();
-      setNotice(done);
+      const refused = await fn();
+      if (refused !== undefined && refused.length > 0) {
+        // A mixed save: the rest landed, these were kept. "Rules saved" over a value that snapped back is the defect.
+        setPartialSave(true);
+        setRefusedList(refused);
+        setLearnedLocks((prev) => mergeLocks(prev, refused));
+        restoreRefused(refused);
+      } else {
+        setNotice(done);
+      }
       router.refresh();
     } catch (err) {
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
@@ -631,12 +705,73 @@ export function DivisionSettings({
         // flag change, a kept answer gone stale, PostHog down. Server English otherwise: localise the code.
         setError(msg("divset.err.onlineChessDisabled"));
       } else {
-        setError(err instanceof Error ? err.message : msg("divset.failed"));
+        // W2c P-5: a refused match-rules save names its problem (CONFIG_INVALID `issues`) - the rule's own sentence,
+        // localized where this app owns it - instead of the generic "invalid <sport> config".
+        setError(settingsSaveErrorText(err, msg, msg("divset.failed")));
+        // A refusal names EVERY field it kept (409 `extra.refused`): list them, and lock them from now on.
+        const refused = err instanceof ApiV1Error ? refusedFieldsOf(err.extra) : null;
+        if (refused !== null) {
+          setRefusedList(refused);
+          setLearnedLocks((prev) => mergeLocks(prev, refused));
+          restoreRefused(refused);
+        }
       }
     } finally {
       setBusy(false);
     }
   }
+
+  // A lock line (W2c Task 20): the sentence for the stage that has started, under the control it locks. A plain function,
+  // not a component, so a test of this island's own markup reads it without rendering a child.
+  const lockLine = (lock: RefusedField, testId: string) => (
+    <p className="mt-1 text-[11px] leading-snug text-slate-700" data-testid={testId}>
+      <span aria-hidden="true">🔒 </span>
+      {lockSentence(lock, msg)}
+    </p>
+  );
+
+  // What a save kept, one line per CONTROL the organiser can see (never a raw config key): the control's own label and the
+  // stage that holds it. Used by the partial-save notice (a 200) and under the refusal (a 409), so the two say it the same way.
+  const keptLines = refusedLines(visibleRuleFields(division.sport_key, ruleValues, inheritedCfg), refusedList, msg, pointsFieldKeys.length > 0);
+  const refusedItems = (lines: readonly RefusedLine[]) => (
+    <ul className="mt-1 space-y-0.5">
+      {lines.map((l) => (
+        <li key={l.id} data-testid={`division-refused-${l.id}`}>
+          <span className="font-medium">{l.label}</span>
+          {": "}
+          {lockSentence(l.lock, msg)}
+        </li>
+      ))}
+    </ul>
+  );
+
+  // What the last save says. It renders in ONE place: inside the Format group directly under "Save match rules" when the rules
+  // save made it (the organiser's eyes are on that button), at the foot of the page for every other save.
+  const saveFeedback = (
+    <>
+      {notice && (
+        <p role="status" className="rounded-md bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
+          {notice}
+        </p>
+      )}
+      {partialSave && refusedList.length > 0 && (
+        <div role="status" className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800" data-testid="division-partial-save">
+          <p className="font-medium">{msg(RULE_LOCK_PARTIAL_KEY, { n: keptLines.length })}</p>
+          {refusedItems(keptLines)}
+        </div>
+      )}
+      {error && (
+        <p role="alert" className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-600">
+          {error}
+        </p>
+      )}
+      {error && refusedList.length > 0 && (
+        <div role="status" className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-600" data-testid="division-refused-list">
+          {refusedItems(keptLines)}
+        </div>
+      )}
+    </>
+  );
 
   const saveName = () =>
     run(async () => {
@@ -695,81 +830,35 @@ export function DivisionSettings({
 
   const applyFormat = () =>
     run(async () => {
-      // The server merges preset + override, but presets only carry the
-      // variant-identity keys (resultMode/allowDraws) — schema-required keys
-      // like progressScore live in the division's current config. Base the
-      // override on that valid snapshot; on a variant change, drop the
-      // identity keys so the new preset wins them.
-      const override: Record<string, unknown> = {
-        ...((division.config as Record<string, unknown>) ?? {}),
-      };
-      if (variantKey !== division.variant_key) {
-        delete override.resultMode;
-        delete override.allowDraws;
-      }
-      // R3.5/Task Q — buildRuleOverride can return a nested `{ points: {...} }`
-      // (football's shootoutWin/shootoutLoss). A bare Object.assign of the
-      // whole rule override would REPLACE override.points wholesale, dropping
-      // whatever of the existing config's points (win/draw/loss, or a
-      // shootout half the organiser isn't touching right now) the rule
-      // fields didn't themselves resend. Merge points separately; everything
-      // else a rule field returns is a fine top-level Object.assign, exactly
-      // as before.
-      // `division.config` as the inherited config: a blank best-of here keeps
-      // the saved one (the `{...config}` base above), so it is also what
-      // decides whether the single best-of-1 points field applies.
-      const { points: rulePoints, ...ruleOverrideRest } = buildRuleOverride(
-        division.sport_key,
-        ruleValues,
-        (division.config as Record<string, unknown>) ?? {},
-      );
-      Object.assign(override, ruleOverrideRest);
-      if (rulePoints && typeof rulePoints === "object") {
-        const mergedPoints: Record<string, unknown> = {
-          ...((override.points as Record<string, unknown>) ?? {}),
-          ...(rulePoints as Record<string, unknown>),
-        };
-        // R3.5 review F5 — a rule field's build()/buildOnBlank() (currently
-        // only match-rules.tsx's shootoutPointsPatch) can ask to DELETE a key
-        // from the nested object by setting it to `undefined` rather than
-        // omitting it — omitting it would leave whatever `override.points`
-        // already carried forward from the `{...division.config}` base at
-        // the top of this function untouched. Resolve those markers into a
-        // real deletion here, so the PATCH body (and any `toEqual`/
-        // `toHaveProperty` assertion on it) is a clean object rather than
-        // one holding `undefined`-valued keys.
-        for (const key of Object.keys(mergedPoints)) {
-          if (mergedPoints[key] === undefined) delete mergedPoints[key];
-        }
-        override.points = mergedPoints;
-      }
-      if (pointsFieldKeys.some((k) => pointsValues[k] !== undefined && pointsValues[k] !== "")) {
-        // Spread whatever survived above (shootout points included) rather
-        // than replacing override.points outright, and write only the keys
-        // THIS sport's schema actually declares — see editablePointsKeys.
-        const pointsPatch: Record<string, unknown> = { ...((override.points as Record<string, unknown>) ?? {}) };
-        for (const key of pointsFieldKeys) {
-          const raw = pointsValues[key];
-          pointsPatch[key] = raw === undefined || raw === "" ? (cfg.points?.[key] ?? 0) : Number(raw);
-        }
-        override.points = pointsPatch;
-      }
+      let advanced: Record<string, unknown> | null = null;
       if (advancedText.trim() !== "") {
         try {
-          Object.assign(override, JSON.parse(advancedText));
+          advanced = JSON.parse(advancedText) as Record<string, unknown>;
         } catch {
           throw new Error(msg("divset.invalidJson"));
         }
       }
+      const override = divisionFormatPatch({
+        sportKey: division.sport_key,
+        divisionConfig: (division.config as Record<string, unknown>) ?? {},
+        savedVariantKey: division.variant_key,
+        variantKey,
+        ruleValues,
+        pointsFieldKeys,
+        pointsValues,
+        savedPoints: cfg.points,
+        advanced,
+      });
       if (division.sport_key === "boardgame") {
         if (onlinePlay === "lichess") override.onlinePlay = "lichess";
         else delete override.onlinePlay;
       }
-      await apiV1(`/api/v1/divisions/${division.id}`, {
+      const saved = await apiV1<unknown>(`/api/v1/divisions/${division.id}`, {
         method: "PATCH",
         json: { variant_key: variantKey, config: override },
       });
-    }, msg("divset.notice.rulesSaved"));
+      return refusedFieldsOf(saved) ?? [];
+    }, msg("divset.notice.rulesSaved"), true);
 
   // Sends ONLY camera_policy, so it works on a format-locked division (any
   // variant_key in the patch is 409 FORMAT_LOCKED once fixtures exist). On a
@@ -950,11 +1039,11 @@ export function DivisionSettings({
         title={msg("divset.format")}
         // T16 (canvas SettingsPhone): the summary states that the division plays online — a fact, shown whatever the
         // flag and even when the format is locked (the select itself is hidden then).
-        summary={`${sportName} · ${locked ? msg("divset.variantLocked", { variant: variantName }) : variantName}${
+        summary={`${sportName} · ${variantLock ? msg("divset.variantLocked", { variant: variantName }) : variantName}${
           division.sport_key === "boardgame" && onlinePlaySaved ? ` · ${msg("divset.onlinePlay.summaryOn")}` : ""
         }`}
       >
-        {locked ? (
+        {structureLocked ? (
           <div data-testid="format-locked" className="rounded-md bg-slate-50 p-3 text-xs text-slate-600">
             <p className="font-medium text-slate-700">
               {sportName} · {variantName}
@@ -966,7 +1055,6 @@ export function DivisionSettings({
             </p>
           </div>
         ) : (
-          <>
             <div className="space-y-3">
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 {msg("divset.competitionFormat")}
@@ -1071,144 +1159,148 @@ export function DivisionSettings({
                 <p className="text-[11px] text-amber-600">{msg("divset.customStructure")}</p>
               )}
             </div>
+        )}
 
-            <p className="border-t border-slate-100 pt-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-              {msg("divset.matchRules")}
-            </p>
+        <p className="border-t border-slate-100 pt-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+          {msg("divset.matchRules")}
+        </p>
+        <label className="block text-xs text-slate-500">
+          {msg("divset.variant")}
+          <select
+            disabled={!canEdit || variantLock !== undefined}
+            value={variantKey}
+            onChange={(e) => setVariantKey(e.target.value)}
+            className="input mt-1 w-full"
+          >
+            {variants.map((v) => (
+              <option key={v.key} value={v.key}>
+                {v.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        {variantLock !== undefined && lockLine(variantLock, "division-locked-variant_key")}
+
+        {division.sport_key === "boardgame" && onlineChessOffered && (
+          <div>
             <label className="block text-xs text-slate-500">
-              {msg("divset.variant")}
+              {msg("divset.onlinePlay.label")}
               <select
                 disabled={!canEdit}
-                value={variantKey}
-                onChange={(e) => setVariantKey(e.target.value)}
+                value={onlinePlay}
+                onChange={(e) => setOnlinePlay(e.target.value as "off" | "lichess")}
                 className="input mt-1 w-full"
+                data-testid="division-online-play"
               >
-                {variants.map((v) => (
-                  <option key={v.key} value={v.key}>
-                    {v.name}
+                <option value="off">{msg("divset.onlinePlay.off")}</option>
+                <option value="lichess">{msg("divset.onlinePlay.lichess")}</option>
+              </select>
+            </label>
+            <p className="mt-1 text-[11px] text-slate-500">{msg("divset.onlinePlay.help")}</p>
+          </div>
+        )}
+
+        {lichessClock && (
+          <div>
+            <label className="block text-xs text-slate-500">
+              {msg("divset.timeControl.label")}
+              <select
+                disabled={!canEdit || clockLock !== undefined}
+                value={timeControl}
+                onChange={(e) => {
+                  const picked = timeControlRuleValues(e.target.value);
+                  if (picked) setRuleValues({ ...ruleValues, ...picked });
+                }}
+                className="input mt-1 w-full"
+                data-testid="division-time-control"
+              >
+                {timeControl === "" && <option value="">{msg("divset.timeControl.choose")}</option>}
+                {timeControlOptions(msg).map((o) => (
+                  <option key={o.key} value={o.key}>
+                    {o.label}
                   </option>
                 ))}
               </select>
             </label>
-
-            {division.sport_key === "boardgame" && onlineChessOffered && (
-              <div>
-                <label className="block text-xs text-slate-500">
-                  {msg("divset.onlinePlay.label")}
-                  <select
-                    disabled={!canEdit}
-                    value={onlinePlay}
-                    onChange={(e) => setOnlinePlay(e.target.value as "off" | "lichess")}
-                    className="input mt-1 w-full"
-                    data-testid="division-online-play"
-                  >
-                    <option value="off">{msg("divset.onlinePlay.off")}</option>
-                    <option value="lichess">{msg("divset.onlinePlay.lichess")}</option>
-                  </select>
-                </label>
-                <p className="mt-1 text-[11px] text-slate-500">{msg("divset.onlinePlay.help")}</p>
-              </div>
+            <p className="mt-1 text-[11px] text-slate-500">{msg("divset.timeControl.help")}</p>
+            {timeControl === "" && (
+              <p className="mt-1 text-[11px] text-amber-700">{msg("divset.timeControl.unsupported")}</p>
             )}
-
-            {lichessClock && (
-              <div>
-                <label className="block text-xs text-slate-500">
-                  {msg("divset.timeControl.label")}
-                  <select
-                    disabled={!canEdit}
-                    value={timeControl}
-                    onChange={(e) => {
-                      const picked = timeControlRuleValues(e.target.value);
-                      if (picked) setRuleValues({ ...ruleValues, ...picked });
-                    }}
-                    className="input mt-1 w-full"
-                    data-testid="division-time-control"
-                  >
-                    {timeControl === "" && <option value="">{msg("divset.timeControl.choose")}</option>}
-                    {timeControlOptions(msg).map((o) => (
-                      <option key={o.key} value={o.key}>
-                        {o.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <p className="mt-1 text-[11px] text-slate-500">{msg("divset.timeControl.help")}</p>
-                {timeControl === "" && (
-                  <p className="mt-1 text-[11px] text-amber-700">{msg("divset.timeControl.unsupported")}</p>
-                )}
-              </div>
-            )}
-
-            {pointsFieldKeys.length > 0 && (
-              <div>
-                <p className="text-xs text-slate-500">{msg("divset.standingsPoints")}</p>
-                <div className="mt-1 grid grid-cols-3 gap-2">
-                  {pointsFieldKeys.map((key) => (
-                    <label key={key} className="block text-xs text-slate-500">
-                      {msg(POINTS_KEY_CONCEPT[key]!.labelKey)}
-                      <input
-                        type="number"
-                        min={0}
-                        max={99}
-                        disabled={!canEdit}
-                        value={pointsValues[key] ?? ""}
-                        onChange={(e) => setPointsValues({ ...pointsValues, [key]: e.target.value })}
-                        className="input mt-1 w-full"
-                      />
-                    </label>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <MatchRuleFields
-              sportKey={division.sport_key}
-              values={ruleValues}
-              onChange={setRuleValues}
-              disabled={!canEdit}
-              inherited={(division.config as Record<string, unknown>) ?? {}}
-              omit={lichessClock ? LICHESS_CLOCK_FIELD_KEYS : undefined}
-            />
-
-            {stages.length > 0 && (
-              <p className="rounded-md bg-slate-50 p-3 text-xs text-slate-500" data-testid="stage-structure">
-                {msg("divset.structureLabel")}{" "}
-                {stages.map((st, i) => (
-                  <span key={i}>
-                    {i > 0 && " → "}
-                    <span className="font-medium text-slate-700">{st.name}</span> ({st.kind})
-                  </span>
-                ))}
-                {" · "}
-                <Link href={fixturesHref} className="text-purple-700 underline">
-                  {msg("divset.editStages")}
-                </Link>
-              </p>
-            )}
-
-            <details>
-              <summary className="cursor-pointer text-[11px] text-slate-500">
-                {msg("divset.advanced")}
-              </summary>
-              <textarea
-                disabled={!canEdit}
-                value={advancedText}
-                onChange={(e) => setAdvancedText(e.target.value)}
-                rows={4}
-                spellCheck={false}
-                placeholder='e.g. { "progressScore": true }'
-                className="input mt-1 w-full font-mono text-xs"
-              />
-            </details>
-
-            {canEdit && (
-              <button type="button" disabled={busy} onClick={applyFormat} className="btn btn-primary text-xs">
-                {msg("divset.saveRules")}
-              </button>
-            )}
-            <p className="text-[11px] text-slate-500">{msg("divset.rulesNote")}</p>
-          </>
+            {clockLock !== undefined && lockLine(clockLock, "division-locked-clock")}
+          </div>
         )}
+
+        {pointsFieldKeys.length > 0 && (
+          <div>
+            <p className="text-xs text-slate-500">{msg("divset.standingsPoints")}</p>
+            <div className="mt-1 grid grid-cols-3 gap-2">
+              {pointsFieldKeys.map((key) => (
+                <label key={key} className="block text-xs text-slate-500">
+                  {msg(POINTS_KEY_CONCEPT[key]!.labelKey)}
+                  <input
+                    type="number"
+                    min={0}
+                    max={99}
+                    disabled={!canEdit || pointsLock !== undefined}
+                    value={pointsValues[key] ?? ""}
+                    onChange={(e) => setPointsValues({ ...pointsValues, [key]: e.target.value })}
+                    className="input mt-1 w-full"
+                  />
+                </label>
+              ))}
+            </div>
+            {pointsLock !== undefined && lockLine(pointsLock, "division-locked-points")}
+          </div>
+        )}
+
+        <MatchRuleFields
+          sportKey={division.sport_key}
+          values={ruleValues}
+          onChange={setRuleValues}
+          disabled={!canEdit}
+          inherited={inheritedCfg}
+          lockedFields={locks}
+          omit={lichessClock ? LICHESS_CLOCK_FIELD_KEYS : undefined}
+        />
+
+        {stages.length > 0 && (
+          <p className="rounded-md bg-slate-50 p-3 text-xs text-slate-500" data-testid="stage-structure">
+            {msg("divset.structureLabel")}{" "}
+            {stages.map((st, i) => (
+              <span key={i}>
+                {i > 0 && " → "}
+                <span className="font-medium text-slate-700">{st.name}</span> ({st.kind})
+              </span>
+            ))}
+            {" · "}
+            <Link href={fixturesHref} className="text-purple-700 underline">
+              {msg("divset.editStages")}
+            </Link>
+          </p>
+        )}
+
+        <details>
+          <summary className="cursor-pointer text-[11px] text-slate-500">
+            {msg("divset.advanced")}
+          </summary>
+          <textarea
+            disabled={!canEdit}
+            value={advancedText}
+            onChange={(e) => setAdvancedText(e.target.value)}
+            rows={4}
+            spellCheck={false}
+            placeholder='e.g. { "progressScore": true }'
+            className="input mt-1 w-full font-mono text-xs"
+          />
+        </details>
+
+        {canEdit && (
+          <button type="button" disabled={busy} onClick={applyFormat} className="btn btn-primary text-xs">
+            {msg("divset.saveRules")}
+          </button>
+        )}
+        {rulesSave && saveFeedback}
+        <p className="text-[11px] text-slate-500">{msg("divset.rulesNote")}</p>
       </Group>
 
       {/* T6 — its own group, OUTSIDE the format lock: the camera requirement
@@ -1471,8 +1563,7 @@ export function DivisionSettings({
       </Group>
 
       {paywallFeature && <UpgradeGate feature={paywallFeature} viewerPlan={viewerPlan} />}
-      {notice && <p className="rounded-md bg-emerald-50 px-3 py-2 text-xs text-emerald-700">{notice}</p>}
-      {error && <p className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-600">{error}</p>}
+      {!rulesSave && saveFeedback}
     </div>
   );
 }

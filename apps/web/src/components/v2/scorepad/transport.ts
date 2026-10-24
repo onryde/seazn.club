@@ -91,8 +91,23 @@ const ledgerSlotEventsSchema = z.array(ledgerSlotEventSchema);
  * missing id falls back to that key honestly (`AppendSuccess.event_id`).
  */
 function appendSuccessOf(data: AppendSuccess): AppendSuccess {
-  const { event_id: eventId, ...rest } = data as Omit<AppendSuccess, "event_id"> & { event_id?: unknown };
-  return typeof eventId === "string" && eventId.length > 0 ? { ...rest, event_id: eventId } : rest;
+  const { event_id: eventId, rules_version: rulesVersion, ...rest } = data as Omit<AppendSuccess, "event_id" | "rules_version"> & {
+    event_id?: unknown;
+    rules_version?: unknown;
+  };
+  // W2c Task 15: the rules version likewise — a version the pad would reload on must be one (`rulesVersionOf`).
+  const version = rulesVersionOf(rulesVersion);
+  return {
+    ...rest,
+    ...(typeof eventId === "string" && eventId.length > 0 ? { event_id: eventId } : {}),
+    ...(version !== undefined ? { rules_version: version } : {}),
+  };
+}
+
+/** A rules version as the wire may say it (W2c Task 15, X-SR-7): a non-negative integer, else nothing — never a hole
+ *  the pad would compare against. */
+export function rulesVersionOf(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : undefined;
 }
 
 /** Session vs device-link — the one fact that changes the outgoing request. */
@@ -120,11 +135,24 @@ export interface FixtureStateResult {
   outcome: unknown;
 }
 
+/** W2c Task 15 (X-SR-7, owner P-1) — `GET /api/v1/fixtures/{id}/rules`: the rules a match plays by now. Mirrors
+ *  `FixtureCurrentRules` (api-v1/schemas.ts) without importing it, for the same reason as `FixtureStateResult`. */
+export interface FixtureRulesResult {
+  cfg: unknown;
+  rules_version: number;
+  /** The format in the reader's language, or null when there is none to say. */
+  format_line: string | null;
+}
+
 /** `ScoringTransport` plus the one read pipeline.ts's own append/replay
  *  protocol never needed. See the file header for why this extends rather
  *  than edits that interface. */
 export interface PadTransport extends ScoringTransport {
   fetchState(fixtureId: string): Promise<FixtureStateResult>;
+  /** W2c Task 15 — what the pad reloads after a correction (409 FIXTURE_RULES_CHANGED, or an ack naming a newer
+   *  version). Optional so a hand-rolled test transport need not grow one; both real transports have it, and a pad
+   *  whose transport lacks it keeps its rules (its taps are still refused, never applied under the new ones). */
+  getRules?(fixtureId: string): Promise<FixtureRulesResult>;
 }
 
 interface V1Envelope<T> {
@@ -268,6 +296,10 @@ export const TERMINAL_CONFLICT_CODES: ReadonlySet<string> = new Set([
   "ABANDONED_SETTLE_OR_VOID",
   "DOUBLE_WALKOVER_NO_NEXT_MATCH",
   "STAGE_SEAT_DEPARTED",
+  // W2c Task 15 (X-SR-7, owner P-1 "A"): a tap made under rules the organiser has since corrected. Never renegotiable —
+  // a resend under a new seq would apply an old-rules tap under the new rules, the one thing the check exists to stop.
+  // The pad drops it, says so, and reloads the rules (use-pad-pipeline.ts).
+  "FIXTURE_RULES_CHANGED",
 ]);
 
 /**
@@ -384,12 +416,15 @@ function makeTransport(auth: PadAuthMode, init: TransportInit = {}): PadTranspor
           // M-1 / D-R8: the reason a LEVEL_RESULT_IN_BRACKET or a SETTLE_NOT_APPLICABLE names picks its copy;
           // carried only when it is one we name.
           const reason = envelope.error?.reason;
+          // W2c Task 15: FIXTURE_RULES_CHANGED names the match's version — carried only when well-formed.
+          const version = rulesVersionOf(envelope.error?.rules_version);
           return {
             kind: "rejected",
             code,
             message,
             ...(nextMatch ? { nextMatch } : {}),
             ...(isLevelResultReason(reason) || isSettleRefusalReason(reason) ? { reason } : {}),
+            ...(version !== undefined ? { rulesVersion: version } : {}),
           };
         }
         const currentSeq = typeof envelope.error?.current_seq === "number" ? envelope.error.current_seq : null;
@@ -446,6 +481,11 @@ function makeTransport(auth: PadAuthMode, init: TransportInit = {}): PadTranspor
     async fetchState(fixtureId: string): Promise<FixtureStateResult> {
       const res = await doFetch(`/api/v1/fixtures/${fixtureId}/state`, { headers });
       return readV1Envelope<FixtureStateResult>(res);
+    },
+
+    async getRules(fixtureId: string): Promise<FixtureRulesResult> {
+      const res = await doFetch(`/api/v1/fixtures/${fixtureId}/rules`, { headers });
+      return readV1Envelope<FixtureRulesResult>(res);
     },
   };
 }

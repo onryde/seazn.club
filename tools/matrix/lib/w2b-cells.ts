@@ -52,7 +52,7 @@ export const AWARD_POLICY = Object.freeze({ abandonPolicy: "award" });
 
 /** The cfg a fixture of `sport` folds under on `row`'s root stage, on the planner's variant, with `overrides`. */
 export function rootCfgOf(row: RowKey, sport: string, overrides: Record<string, unknown> = {}): unknown {
-  return stageCfg(sport, resolveSportCfg(sport, offlineBuilderDefault(sport), overrides), rootKind(row));
+  return stageCfg(sport, resolveSportCfg(sport, offlineBuilderDefault(sport), overrides), rootKind(row), offlineBuilderDefault(sport));
 }
 
 function streamBuilds(sport: string, cfg: unknown, stageKind: StageKind, outcome: RequestedOutcome): boolean {

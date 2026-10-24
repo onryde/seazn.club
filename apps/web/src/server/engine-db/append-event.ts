@@ -10,6 +10,7 @@ import {
   outcomeOf,
   resolveVoids,
   settleApplies,
+  settleOffered,
   summaryOf,
   type EventEnvelope,
   type MatchOutcome,
@@ -21,13 +22,17 @@ import { LEVEL_RESULT_REASON } from "@/lib/level-result-reason";
 import { SETTLE_REFUSAL_REASON } from "@/lib/settle-refusal-reason";
 import { resolveModule } from "./registry";
 import { loadLineupPair } from "./lineups";
-import { hasFrozenCfg, resolveFixtureCfg } from "./fixture-cfg";
+import { hasFrozenCfg, resolveFixtureCfg, stageForfeitAward } from "./fixture-cfg";
 import { lockStageSeatsForVoid, releaseFedSeats } from "./fed-seats";
 import { feedsNextMatch } from "@/lib/bracket-next-match";
 import { doubleWalkoverRefused } from "@/lib/double-walkover-next-match";
 import { isCascadeOnlyForfeitReason } from "@/lib/forfeit-phase-refusal";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
+import { HttpError } from "@/lib/errors";
+import { getDictionary } from "@/lib/i18n";
+import { RULE_ERROR_STATUS, ruleErrorMessage } from "@/lib/rule-errors";
+import { formatLineOf } from "./rules-version";
 import { log } from "@/server/logger";
 
 // What a caller supplies; persistence stamps id/seq/recordedAt (spec 03 §2 —
@@ -48,14 +53,21 @@ export interface AppendInput {
   voids?: string;
   id?: string;
   recordedAt?: string;
-  /** W2b PF-2 — which server writer is appending. Set ONLY by the withdrawal cascade (`withdrawal.ts`, through
-   *  `scoreEvent`'s internal options, never a request field): `reason: "withdrew"` and `core.abandon{expunge:true}`
-   *  are cascade-only events, refused from every other writer — the console, a device link, the API, the importer. */
+  /** W2c Task 15 (X-SR-7, D14, P-1) — the rules version the SENDER folds under: the two scoring pads send it with
+   *  every append (`scorepad/pipeline.ts`'s body builder, the device chrome). A sent value that is not the fixture's
+   *  `rules_version` is refused FIXTURE_RULES_CHANGED before anything is written. Absent is never checked: the console
+   *  chrome, the americano panel, the withdrawal cascade, finalize, the settle and the importer never send it. */
+  rulesVersion?: number;
+  /** W2b PF-2 — which server writer is appending. Set ONLY by the withdrawal cascade (`withdrawal.ts`) and the organiser's
+   *  online No result (`external-play/resolve.ts`), through `scoreEvent`'s internal options, never a request field:
+   *  `reason: "withdrew"` and `core.abandon{expunge:true}` are the cascade's alone, `core.abandon{noResult:true}` the No
+   *  result's alone (rebase ruling D3) - each refused from every other writer: the console, a device link, the API, the importer. */
   writer?: CascadeWriter;
 }
 
-/** The one writer that may record the cascade-only events (PF-2). */
-export type CascadeWriter = "withdrawal_cascade";
+/** The server writers that may record a writer-only event: the withdrawal cascade (PF-2) and the organiser's online No
+ *  result (rebase ruling D3). */
+export type CascadeWriter = "withdrawal_cascade" | "organiser_no_result";
 
 export interface AppendResult {
   seq: number;
@@ -71,6 +83,9 @@ export interface AppendResult {
    *  public documents changed (a name became a "Winner of …" seat), so
    *  `scoreEvent` publishes them with the fixtures a decision advanced into. */
   released: string[];
+  /** W2c Task 15 (X-SR-7) — the fixture's `rules_version` this write was checked against and folded under: every
+   *  accepted answer carries it, so an open pad learns of a correction from its next ack. */
+  rulesVersion: number;
   /** F9 (R3.5 review) — carried through so `appendEvent` can log an accepted
    *  event AFTER `withTenant` has committed, instead of `appendEventInTx`
    *  logging it itself before the fixtures update, the pg_notify, and the
@@ -94,6 +109,10 @@ interface FixtureRow {
   /** V347 — the resolved cfg this fixture was SCORED under; null until its
    *  first event. See `fixture-cfg.ts` for why it exists. */
   config_snapshot: unknown;
+  /** W2c (V469) — this match's own format override; resolved last, frozen with the rest at the first event. */
+  rules_override: unknown;
+  /** W2c (V469) — how many times a correction re-froze this match's format (Task 15: a pad sends the one it loaded). */
+  rules_version: number;
   /** W2b D19 — the feed graph: a double walkover needs a next match to send nobody to. */
   winner_to_fixture: string | null;
   loser_to_fixture: string | null;
@@ -203,6 +222,8 @@ export const RETIRED_ON_WRITE_SPORT_EVENTS: Readonly<Record<string, { field: str
  * - D15: a retired sport-event value (`RETIRED_ON_WRITE_SPORT_EVENTS`) — INVALID_EVENT, `chess_forfeit_method_retired`.
  * - PF-2: `core.forfeit{reason:"withdrew"}` and `core.abandon{expunge:true}` from any writer but the withdrawal
  *   cascade — INVALID_EVENT, `cascade_only`.
+ * - Rebase ruling D3: `core.abandon{noResult:true}` (the organiser's No result, which a table stage reads as already
+ *   settled) from any writer but the online No result — INVALID_EVENT, `no_result_only`.
  * - PF-1 (server half): the cascade's `withdrew` over a stored result is admitted only on a HELD row
  *   (`needs_decision`); the engine's admission is stage-blind, and a league draw is a result standings credit —
  *   ALREADY_DECIDED, `withdrew_over_result`.
@@ -237,6 +258,12 @@ function assertW2bWriteGuards(
     throw new EngineError("INVALID_EVENT", "only a withdrawal records this — withdraw the entrant instead", {
       fixtureId: fixture.id,
       reason: "cascade_only",
+    });
+  }
+  if (candidate.type === "core.abandon" && payload.noResult === true && writer !== "organiser_no_result") {
+    throw new EngineError("INVALID_EVENT", "only the organiser's No result on an online board records this", {
+      fixtureId: fixture.id,
+      reason: "no_result_only",
     });
   }
   if (withdrew && fixture.outcome !== null && fixture.status !== "needs_decision") {
@@ -282,7 +309,7 @@ export async function appendEventInTx(
 
   const [fixture] = await tx<FixtureRow[]>`
     select id, division_id, stage_id, home_entrant_id, away_entrant_id, status, outcome,
-           config_snapshot, winner_to_fixture, loser_to_fixture
+           config_snapshot, rules_override, rules_version, winner_to_fixture, loser_to_fixture
     from fixtures where id = ${fixtureId}
   `;
   if (!fixture) {
@@ -300,6 +327,24 @@ export async function appendEventInTx(
     });
   }
 
+  // W2c Task 15 (Task 2 I-1, orchestrator ruling): the FIRST event of a match freezes the division's LIVE config (the
+  // snapshot below). A division or stage format save holds `division-config:<division>` EXCLUSIVE from before its
+  // refusal read to its commit (`divisions.ts` patchDivision, `stage-rules.ts` putStageRules); the first freeze takes it
+  // SHARED here — after this fixture's lock, before the division read — so the two serialise: the event waits for the
+  // save and freezes what it committed, or the save waits for the event and its refusal read sees the stage started.
+  // Without it one stage could play two formats. Only a match with nothing frozen asks: a started one reads its own
+  // snapshot and never waits on a save. Lock order: division: → stage-seats → fixture: → division-config: (an exclusive
+  // holder takes no stage-seats or fixture lock after it; a shared holder takes no division lock after it).
+  if (!hasFrozenCfg(fixture.config_snapshot)) {
+    await tx`select pg_advisory_xact_lock_shared(hashtext(${"division-config:" + fixture.division_id}))`;
+    // Fix round 2 (re-review N-1): the row above was read BEFORE this wait, and a save that held the lock bumped the
+    // version of every match whose format it moved (`rules-version.ts` bumpMovedRules) — so the version is re-read
+    // now, as the division below is, and the check and the answer use the one that stands. Only the version: the
+    // match's own override cannot move meanwhile (its writer needs the `fixture:` lock this append holds).
+    const [now] = await tx<{ rules_version: number }[]>`select rules_version from fixtures where id = ${fixtureId}`;
+    fixture.rules_version = now!.rules_version;
+  }
+
   const [division] = await tx<DivisionRow[]>`
     select config, sport_key, module_version from divisions where id = ${fixture.division_id}
   `;
@@ -312,6 +357,29 @@ export async function appendEventInTx(
   const [stage] = await tx<StageRow[]>`
     select kind, config from stages where id = ${fixture.stage_id}
   `;
+
+  // W2c Task 15 (X-SR-7, D14, P-1): a tap sent under rules this match no longer plays is never applied under the new
+  // ones. Asked only when the sender sent a version (the scoring pads; every server writer sends none), and `!==`, not
+  // `<`: a version from anywhere else is as wrong as an old one. BEFORE the seq check on purpose — a stale queued tap
+  // behind a stale seq would otherwise be a SEQ_CONFLICT, which the pad renegotiates and RESENDS under the new rules.
+  // The answer names the rules that stand (the version, and the format line in the server's English: the pad says it
+  // in the reader's language off GET /rules).
+  if (input.rulesVersion !== undefined && input.rulesVersion !== fixture.rules_version) {
+    const format = formatLineOf(
+      division.sport_key,
+      sportModule,
+      resolveFixtureCfg(fixture, division.config, stage, sportModule),
+      stage?.kind,
+      division.config,
+      await getDictionary("en", "public"),
+    );
+    throw new HttpError(
+      RULE_ERROR_STATUS.FIXTURE_RULES_CHANGED,
+      ruleErrorMessage("FIXTURE_RULES_CHANGED", { format: format ?? undefined }),
+      "FIXTURE_RULES_CHANGED",
+      { rules_version: fixture.rules_version, format },
+    );
+  }
 
   // Optimistic concurrency: the client's expectedSeq must equal the current
   // ledger tip. Gapless seq is assigned here, under the lock (doc 07 note 3).
@@ -376,7 +444,7 @@ export async function appendEventInTx(
   // the division up must have the format they choose apply. See
   // `fixture-cfg.ts` for the full rationale; it is the single reader of the
   // column, shared with `fold.ts` so the two folds cannot drift apart.
-  const cfg = resolveFixtureCfg(fixture.config_snapshot, division.config, stage, sportModule);
+  const cfg = resolveFixtureCfg(fixture, division.config, stage, sportModule);
   // Take it on the FIRST event only. The advisory lock above is held to
   // commit, so no concurrent appender can interleave between this decision
   // and the write below — the snapshot is taken exactly once.
@@ -410,12 +478,31 @@ export async function appendEventInTx(
   if (candidate.type === "core.settle") {
     // Loop-F addendum 3: the engine's settle precondition is not stage-aware (spec §5.1), and a league, group,
     // swiss or americano draw is a RESULT that standings credit — a settle there would turn it into a win.
+    //
+    // W2c P-7 / X-AB-5 is the one exception: an ABANDONED match that decided nobody has no result to turn into a win -
+    // it stays out of the table and, in a Swiss stage, holds the next round - so the organiser's settle is how it is
+    // decided. The offer is `settleOffered` (@seazn/engine/core), the SAME predicate the console's needs-decision block
+    // reads, fed from the ledger and the fold (an active core.abandon, no effective outcome, not a withdrawal's expunge),
+    // never from the status column or a source: an abandon written by any path qualifies, one that recorded a result
+    // (shared points, a leader's win) does not.
     if (!forbidsLevelResult(stageKind)) {
-      throw new EngineError("SETTLE_NOT_APPLICABLE", "only a knockout match is settled — a draw here is a result", {
-        fixtureId,
-        reason: "not_bracket",
-        stage: stageKind,
+      const before = foldMatchWithStoppage(sportModule, cfg, lineups, prior, { strictFromSeq: candidate.seq });
+      const activeAbandons = resolveVoids(prior).filter((e) => e.type === "core.abandon");
+      const offered = settleOffered(sportModule, stageKind, {
+        outcome: outcomeOf(sportModule, before),
+        abandoned: activeAbandons.length > 0,
+        expunged: before.expunged === true,
+        // Rebase ruling D3: the organiser's No result is already the settle (`noResult`, read off the payload).
+        noResult: activeAbandons.some((e) => (e.payload as { noResult?: unknown } | null)?.noResult === true),
+        state: before.state,
       });
+      if (!offered) {
+        throw new EngineError("SETTLE_NOT_APPLICABLE", "only a knockout match is settled — a draw here is a result", {
+          fixtureId,
+          reason: "not_bracket",
+          stage: stageKind,
+        });
+      }
     }
   }
   // Controller ruling C17, widened by D-R7: no event that names a DECIDER WINNER may advance an entrant who has
@@ -423,7 +510,14 @@ export async function appendEventInTx(
   // boardgame.tiebreak), which a scorer may record on a held tie-break. The settle or the decider goes to the remaining
   // entrant; the auto-walkover of a held fixture is W2b's (spec §2.3).
   if (candidate.type === "core.settle" || (sportModule.deciderTypes ?? []).includes(candidate.type)) {
-    const winner = (candidate.payload as { winner?: unknown } | null)?.winner;
+    // W2c D7: who a decider event ADVANCES is the sport's to say — chess's Armageddon records Black and the result, so
+    // its payload names no winner and the engine derives one (BG-KO-2). Read the payload's `winner` only for a settle,
+    // or for a sport that declares no `deciderWinner`; otherwise this guard would see nobody and wave the withdrawn
+    // entrant through.
+    const winner =
+      candidate.type !== "core.settle" && sportModule.deciderWinner !== undefined
+        ? sportModule.deciderWinner(candidate.payload, { home: fixture.home_entrant_id, away: fixture.away_entrant_id })
+        : (candidate.payload as { winner?: unknown } | null)?.winner;
     // Review N2: `entrants.id` is a uuid, so a malformed winner never reaches the lookup (Postgres 22P02 → a 500). It
     // names no entrant either way; the fold refuses it below with its own 4xx, as before D-R7.
     if (typeof winner === "string" && ENTRANT_ID_SHAPE.test(winner)) {
@@ -464,8 +558,13 @@ export async function appendEventInTx(
 
   const folded = (() => {
     try {
+      // W2c Task 16b: the stage rule's walkover award is offered to the write fold too, so the summary stored below is the
+      // one every read of this ledger folds (`fold.ts` offers the same value): a forfeit with nothing played reads the
+      // rule's number, one after play the sport's own credit.
+      const forfeitAward = stageForfeitAward(stage, sportModule);
       return foldMatchWithStoppage(sportModule, cfg, lineups, stream, {
         strictFromSeq: candidate.seq,
+        ...(forfeitAward === undefined ? {} : { forfeitAward }),
       });
     } catch (error) {
       // IDs, types and codes only. The payload carries striker/nonStriker/
@@ -616,6 +715,7 @@ export async function appendEventInTx(
       outcome,
       status,
       released,
+      rulesVersion: fixture.rules_version,
       sportKey: division.sport_key,
     },
     firstResult,

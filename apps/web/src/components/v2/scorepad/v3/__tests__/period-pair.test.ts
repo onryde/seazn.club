@@ -23,7 +23,7 @@ import { CLOCK_NUDGE_SECONDS, adjustClock, initClock, startClock, reseatClock, e
 import { stampFor } from "../pad-host";
 import { answerStep, backStep, currentStep, initialSheetState, resolveInitial } from "../guided-sheet";
 import type { GuidedSheetState } from "../guided-sheet";
-import type { GuidedSheetSpec, SheetNumberStep, PadHostView, SwapSlot, TileSpec } from "../types";
+import type { GuidedSheetSpec, GuidedSheetStep, SheetNumberStep, PadHostView, SwapSlot, TileSpec } from "../types";
 import { SPORT_PALETTES, SPORT_TONES } from "../sport-theme";
 import { hockeySkinV3, hockeySpec, HOCKEY_REASONS } from "../skins/hockey";
 import { icehockeySkinV3, icehockeySpec, ICEHOCKEY_REASONS } from "../skins/icehockey";
@@ -678,6 +678,54 @@ function reachShootout(sport: Sport): { cfg: unknown; state: PeriodStateLike } {
   return { cfg, state };
 }
 
+// W2c Task 21 — the sheet chassis grew a `confirm` step kind (the chess Armageddon's read-back). The answer walkers in
+// this file fill choice, person and number steps and nothing else. They used to default any other kind to "ok" under
+// a comment saying no period sheet has one; that comment is a guard now, in two halves: the walkers REFUSE a confirm
+// step (below), and the sweep right after proves no sheet either hockey skin builds contains one.
+const noConfirmStep = (step: GuidedSheetStep): never => {
+  throw new Error(`step "${step.id}" is a ${step.kind} step: the period answer walkers fill choice, person and number steps only`);
+};
+
+describe("no period sheet has a confirm step — the walkers below answer choice, person and number steps only", () => {
+  for (const sport of SPORTS) {
+    it(`${sport.key}: every step of every sheet it builds is a choice, person or number step`, () => {
+      const cfg = periodCfg(sport.module);
+      const e = eventTypesOf(sport.spec);
+      const classKey = Object.keys((cfg as { suspensions: { classes: Record<string, unknown> } }).suspensions.classes)[0]!;
+      const carded = foldPeriod(sport.module, cfg, [
+        ["core.start"],
+        [e.suspStart, { by: "H", person: "H-p2", class: classKey, at: { period: firstPlayPhase(sport, cfg), elapsed: 30 } }],
+      ]);
+      const shootout = reachShootout(sport);
+      // Three views, so every sheet the skin can build exists in at least one of them: an ordinary play phase, a phase
+      // with a suspension to release, and the shoot-out.
+      const views = [viewFor(sport, cfg, livePhaseState(sport, cfg)), viewFor(sport, cfg, carded), viewFor(sport, shootout.cfg, shootout.state)];
+      const sheetKeys = new Set<string>();
+      const kinds = new Set<string>();
+      let sheetsChecked = 0;
+      let stepsChecked = 0;
+      for (const view of views) {
+        for (const [key, sheet] of Object.entries(sport.factory(T).sheets!(view) as Record<string, GuidedSheetSpec>)) {
+          sheetKeys.add(key);
+          sheetsChecked++;
+          for (const step of sheet.steps) {
+            expect(step.kind, `${sport.key} sheet "${key}" step "${step.id}"`).not.toBe("confirm");
+            kinds.add(step.kind);
+            stepsChecked++;
+          }
+        }
+      }
+      // Anti-vacuity: the sweep saw the sheets the claims below drive, and a real number of steps of the kinds the walkers handle.
+      expect([...sheetKeys].sort(), `${sport.key}: sheets seen`).toEqual(expect.arrayContaining(["attempt-home", SHEET_RELEASE, SHEET_SET_PIECE, "suspension-home"]));
+      expect(sheetsChecked, `${sport.key}: sheets checked`).toBeGreaterThanOrEqual(4);
+      expect(stepsChecked, `${sport.key}: steps checked`).toBeGreaterThan(sheetsChecked);
+      expect([...kinds].sort(), `${sport.key}: step kinds seen`).toContain("choice");
+      // The walkers' half: handed a confirm step they refuse it rather than answering "ok".
+      expect(() => noConfirmStep({ id: "read-back", kind: "confirm", title: "k" as never, summary: () => "" } as never)).toThrow(/confirm step/);
+    });
+  }
+});
+
 describe("a claimed action's sheet + dock reach every padSpec-declared field", () => {
   for (const sport of SPORTS) {
     const e = eventTypesOf(sport.spec);
@@ -712,7 +760,8 @@ describe("a claimed action's sheet + dock reach every padSpec-declared field", (
           // `String(step.initial)` stringified the FUNCTION SOURCE into the
           // payload, and the fold rightly refused it — which is how this
           // sweep caught the widening.
-          else answers[step.id] = String(resolveInitial(step, answers));
+          else if (step.kind === "number") answers[step.id] = String(resolveInitial(step, answers));
+          else noConfirmStep(step); // W2c Task 21: refused, not defaulted — the sweep above proves no period sheet has one
         }
         const payload = sheet.buildPayload(answers);
         const dock = sport.factory(T).dock(type, view, payload);
@@ -876,7 +925,9 @@ describe("changing the class after going Back re-seeds the minutes step", () => 
               ? cur.options[0]!.id
               : cur.kind === "person"
                 ? ((cur.candidates ?? [])[0] ?? "")
-                : String(resolveInitial(cur, st.answers));
+                : cur.kind === "number"
+                  ? String(resolveInitial(cur, st.answers))
+                  : noConfirmStep(cur); // W2c Task 21: refused, not defaulted — the sweep above proves no period sheet has one
           const out = answerStep(sheet, st, answer);
           if (out.done) return st;
           st = out.state;
@@ -948,7 +999,9 @@ describe("Back-and-forward without changing the class keeps what the scorer type
               ? cur.options[0]!.id
               : cur.kind === "person"
                 ? ((cur.candidates ?? [])[0] ?? "")
-                : String(resolveInitial(cur, st.answers));
+                : cur.kind === "number"
+                  ? String(resolveInitial(cur, st.answers))
+                  : noConfirmStep(cur); // W2c Task 21: refused, not defaulted — the sweep above proves no period sheet has one
           const out = answerStep(sheet, st, answer);
           if (out.done) return st;
           st = out.state;

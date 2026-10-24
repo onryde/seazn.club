@@ -12,6 +12,17 @@ const cacheGet = vi.hoisted(() => vi.fn());
 const cacheEnabled = vi.hoisted(() => vi.fn(() => true));
 vi.mock("@/lib/cache", async (orig) => ({ ...(await orig<object>()), cacheGet, cacheEnabled }));
 
+// Batch-5 m-2 put a rules-version read on the cached-replay path. It is wrapped, not replaced: every case below that does
+// not queue a rejection still runs the REAL read (which, with no DATABASE_URL, rejects by itself - CI's unit job - and
+// with one, answers null for a fixture that does not exist), and the case at the bottom queues a rejection of its own so
+// the policy is proven in an environment with a database too.
+const rulesVersionNow = vi.hoisted(() => vi.fn());
+vi.mock("@/server/engine-db", async (orig) => {
+  const actual = await orig<typeof import("@/server/engine-db")>();
+  rulesVersionNow.mockImplementation(actual.rulesVersionNow);
+  return { ...actual, rulesVersionNow };
+});
+
 afterEach(() => {
   __setRateLimitCounterForTests(null);
   cacheGet.mockReset();
@@ -102,6 +113,37 @@ async function allowedBeforeRefusal(fire: () => Promise<unknown>): Promise<numbe
   }
   throw new Error("no 429 within 500 attempts — the ceiling is missing entirely");
 }
+
+// m-2's overlay is an enrichment of an answer the pad already has. A Postgres that cannot answer a one-row read must not
+// cost a lost-ack retry its cached answer (the cache itself fails open for the same reason), so the read is best-effort.
+describe("the rules-version overlay on a cached replay", () => {
+  it("a rejected version read returns the cached answer unchanged, and still spends one replay slot", async () => {
+    const seen: string[] = [];
+    __setRateLimitCounterForTests(recordingCounter(seen));
+    const cached = { ...REPLAYED, rules_version: 4 };
+    cacheGet.mockResolvedValue(cached);
+    rulesVersionNow.mockClear();
+    rulesVersionNow.mockRejectedValueOnce(new Error("connection terminated"));
+
+    const out = await send("00000000-0000-4000-8000-0000000000b1", "k-ov");
+
+    expect(rulesVersionNow, "premise: the read was attempted, and rejected").toHaveBeenCalledTimes(1);
+    expect(out).toEqual(cached);
+    expect(seen).toEqual([`${REPLAY_BUCKET}00000000-0000-4000-8000-0000000000b1`]);
+  });
+
+  // The pair: the same call with a read that ANSWERS a different version is the overlay (so the case above is not a
+  // test of a path that never overlays at all).
+  it("a read that answers a newer version overlays it on the cached answer", async () => {
+    __setRateLimitCounterForTests(recordingCounter([]));
+    cacheGet.mockResolvedValue({ ...REPLAYED, rules_version: 4 });
+    rulesVersionNow.mockClear();
+    rulesVersionNow.mockResolvedValueOnce(5);
+
+    await expect(send("00000000-0000-4000-8000-0000000000b2", "k-ov2")).resolves.toMatchObject({ rules_version: 5 });
+    expect(rulesVersionNow).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("the replay ceiling", () => {
   it("is strictly more generous than the write cadence", async () => {

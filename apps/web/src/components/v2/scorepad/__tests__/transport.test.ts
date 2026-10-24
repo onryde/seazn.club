@@ -590,6 +590,18 @@ describe("409 classification", () => {
     const engine409 = [...table!.matchAll(/^\s*([A-Z_]+):\s*409,/gm)].map((m) => m[1]!);
     expect(engine409).toEqual(expect.arrayContaining(["SEQ_CONFLICT", "SCHEDULE_CONFLICT"]));
     for (const c of engine409) if (c !== "SEQ_CONFLICT" && c !== "SCHEDULE_CONFLICT") thrown.add(c);
+    // W2c Task 15 (X-SR-7): the append path's own rule refusals — a code `append-event.ts` throws under its
+    // `RULE_ERROR_STATUS` (lib/rule-errors.ts) where that status is 409. Never renegotiable: the rules, not the seq.
+    const ruleStatus = /export const RULE_ERROR_STATUS = \{([\s\S]*?)\n\} as const;/.exec(read("src/lib/rule-errors.ts"))?.[1];
+    expect(ruleStatus, "RULE_ERROR_STATUS found in rule-errors.ts").toBeDefined();
+    const appendEvent = read("src/server/engine-db/append-event.ts");
+    let appendThrows = 0;
+    for (const [, c] of ruleStatus!.matchAll(/^\s*([A-Z_]+):\s*409,/gm)) {
+      if (!new RegExp(`throw new HttpError\\(\\s*RULE_ERROR_STATUS\\.${c},`).test(appendEvent)) continue;
+      thrown.add(c!);
+      appendThrows++;
+    }
+    expect(appendThrows, "anti-vacuity: the append path throws at least one rule refusal (FIXTURE_RULES_CHANGED)").toBe(1);
     expect([...TERMINAL_CONFLICT_CODES].sort()).toEqual([...thrown].sort());
   });
 });

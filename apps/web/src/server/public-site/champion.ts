@@ -70,9 +70,12 @@ export interface ChampionFixture {
  * repo's own settled set (`usecases/stages.ts`'s `DECIDED`), and the DB side of
  * the engine's `SETTLED` (`packages/engine/src/competition/stage.ts`) —
  * `decided`/`finalized` read as the engine's `decided`, `forfeited` as its
- * `walkover` (`engine-db/competition.ts` `toEngineStatus`). The engine's third
+ * `walkover` (`lib/fixture-engine-status.ts` `engineFixtureStatus`; stage completion reads it through
+ * `completionEngineStatus`, `engine-db/recorded-abandon.ts`). The engine's third
  * member, `void` (a `cancelled`/`abandoned` row), is left out: a void game
- * carries no winner, so it could never pass the winner test anyway. The suite
+ * carries no winner, so it could never pass the winner test anyway - and a
+ * recorded abandon still held for the organiser's settle reads `in_play` to
+ * completion, so it is not settled either. The suite
  * reads `stages.ts` to keep the two sets equal.
  */
 export const BRACKET_SETTLED: ReadonlySet<string> = new Set(["decided", "finalized", "forfeited"]);

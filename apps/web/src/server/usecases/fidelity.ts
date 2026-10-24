@@ -50,6 +50,8 @@ export async function resolveScorePadBootstrap(params: {
   identity: OwnIdentity;
   /** W2a Task 12 — `loadFixturePadCfg`'s stage kind, carried to the pad unchanged. */
   stageKind: string | null;
+  /** W2c Task 15 (X-SR-7) — `loadFixturePadCfg`'s rules version, read with the cfg: the version the pad's taps send. */
+  rulesVersion: number;
 }): Promise<ScorePadBootstrap | null> {
   try {
     const resolvedConfig: unknown = params.sportModule.configSchema.parse(params.rawConfig);
@@ -63,6 +65,7 @@ export async function resolveScorePadBootstrap(params: {
       entitlements: { [SWAP_OFF_STEP_ENFORCEMENT_KEY]: swapOffStepEnforcement },
       identity: params.identity,
       stageKind: params.stageKind,
+      rulesVersion: params.rulesVersion,
     };
   } catch {
     return null;

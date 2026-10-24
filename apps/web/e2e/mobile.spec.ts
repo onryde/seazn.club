@@ -29,6 +29,9 @@ import {
   matchRoomPathBySql,
 } from "./helpers";
 import { roundGameSql, seedOnlineRound } from "./match-room-kit";
+import { ARMAGEDDON_RESULTS } from "@seazn/engine/sports/boardgame";
+import { pointsRuleExpressible } from "@seazn/engine/competition";
+import { builtinModules } from "@seazn/engine/sports";
 import {
   HIT_TARGET_FLOOR_PX,
   consentedAnonymousState,
@@ -39,7 +42,9 @@ import {
 } from "./scorepad-a11y-kit";
 import { V3_SKIN_CASES, type V3SkinRosterSlot } from "./v3-skin-catalog";
 import { WIDTH_MATRIX_CLOCK_SPORTS } from "./v3-width-matrix-coverage";
+import { SPORT_RULES } from "../src/lib/match-rules";
 import { FLOOR_MS, ROUTE_CHECK_MS } from "./spectator-w2-kit";
+import { withDb } from "./rs007-money-kit";
 import { STORAGE_KEY as GAME_2048_STORAGE_KEY, type GameState as Game2048State } from "../src/games/2048/state";
 
 // v3/02 §4 viewport gate — runs ONLY in the mobile-se / mobile-14 projects
@@ -4863,10 +4868,15 @@ test("boardgame v3 pad: the pairing card (pre) and the halves + Draw tile (live)
 
 // W2a Task 12 (spec §5.5, UI-2 option B; BG-KO-1, BG-KO-2 per ruling 82). A drawn chess KNOCKOUT game goes to its
 // tie-break, which is the only thing the pad offers: a three-step sheet (rung → winner → optional score). Each step
-// must be reachable and hold at this width, and the Armageddon winner step must offer the SAME options here as at
-// 1280 — membership and order, never a groomed shrink (AGENTS.md, the phone composition). Options are read by their
-// chassis data hook (`data-choice-option-id`, preflight C24), never by a testid or a translated label.
-test("chess tie-break (W2a): every step of the knockout tie-break sheet is reachable and holds at this width; the Armageddon options match 1280", async ({
+// must be reachable and hold at this width.
+//
+// W2c Task 21 (S5, BG-KO-2): the Armageddon is no longer a winner tap. It is three screens — Who had Black?, Result?, then
+// a read-back with one Confirm — and EACH must offer the SAME controls here as at 1280, membership and order, never a
+// groomed shrink (AGENTS.md, the phone composition). The entrants carry 43-character names: a short name hides the
+// wrap, and the read-back sentence is where a long one lands. Options are read by their chassis data hook
+// (`data-choice-option-id`, preflight C24), never by a testid or a translated label; the sentence and the labels are
+// read from the dictionary, never typed.
+test("chess tie-break (W2a): every step of the knockout tie-break sheet is reachable and holds at this width; the Armageddon's three screens match 1280", async ({
   page,
   request,
 }, testInfo) => {
@@ -4883,17 +4893,28 @@ test("chess tie-break (W2a): every step of the knockout tie-break sheet is reach
     variant_key: "classical",
   });
   expect(div.status, `division: ${JSON.stringify(div.error)}`).toBeLessThan(300);
-  const added = await addEntrantsViaApi(request, div.data!.id, ["W2a Ana", "W2a Ben", "W2a Cy", "W2a Di"], "individual");
+  const longNames = [
+    "Alexandria Montgomery-Featherstonehaugh III",
+    "Bartholomew Wolfeschlegelstein-Hausenberger",
+    "Christopherson Van der Berg-Oosterhuizen Jr",
+    "Dominique Castellanos-Villaverde de la Cruz",
+  ];
+  const added = await addEntrantsViaApi(request, div.data!.id, longNames, "individual");
   expect(added.ids).toHaveLength(4);
+  const nameOf = new Map(added.ids.map((id, i) => [id, longNames[i]!]));
   const { fixtureIds } = await createStageAndGenerate(request, div.data!.id, { kind: "knockout", name: "Cup" });
   const started = await apiJson(request, `/api/v1/divisions/${div.data!.id}/start`, "POST");
   expect(started.status, `start: ${JSON.stringify(started.error)}`).toBeLessThan(300);
   let fixtureId: string | null = null;
+  let homeEntrantId = "";
+  let awayEntrantId = "";
   for (const id of fixtureIds) {
     const f = await apiJson<{ home_entrant_id: string | null; away_entrant_id: string | null }>(request, `/api/v1/fixtures/${id}`);
-    if (f.data?.home_entrant_id && f.data.away_entrant_id) { fixtureId = id; break; }
+    if (f.data?.home_entrant_id && f.data.away_entrant_id) { fixtureId = id; homeEntrantId = f.data.home_entrant_id; awayEntrantId = f.data.away_entrant_id; break; }
   }
   expect(fixtureId, "a first-round game with both players").not.toBeNull();
+  expect(nameOf.get(awayEntrantId), "the away entrant is one of the four named players").toBeTruthy();
+  expect(nameOf.get(homeEntrantId), "the home entrant is one of the four named players").toBeTruthy();
   for (const [type, payload] of [["core.start", {}], ["boardgame.result", { winner: null, method: "agreement" }]] as const) {
     const st = await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${fixtureId}/state`);
     const res = await apiJson(request, `/api/v1/fixtures/${fixtureId}/events`, "POST", { expected_seq: st.data!.last_seq, type, payload });
@@ -4904,6 +4925,31 @@ test("chess tie-break (W2a): every step of the knockout tie-break sheet is reach
   const optionIds = () => v3Sheet(page).locator("[data-choice-option-id]").evaluateAll((els) => els.map((e) => e.getAttribute("data-choice-option-id")));
   const backButton = () => v3Sheet(page).getByRole("button", { name: "Back", exact: true });
   const projectWidth = page.viewportSize()!.width;
+  /** Only for a per-screen visual verdict: an element crop of the open sheet into W2A_SHOTS_DIR (the switch bracket-finish.spec.ts
+   *  uses). Unset in CI, where it does nothing. */
+  const shotSheet = async (name: string) => {
+    const dir = process.env.W2A_SHOTS_DIR;
+    if (dir) await v3Sheet(page).screenshot({ path: `${dir}/${name}-${projectWidth}.png` });
+  };
+  /** Nothing in the open sheet is wider than the box that clips it (a scrollable region would be reachable; clipped content is not),
+   *  and the page does not scroll sideways. The names are 43 characters: this is the check a short name cannot fail. */
+  const expectSheetNotClipped = async (screen: string) => {
+    const o = await overflowingIn(page, '[data-role="v3-sheet"]', "*", "the tie-break sheet is missing");
+    expect(o.clipped, `${screen}: nothing in the sheet is clipped at ${projectWidth}`).toEqual([]);
+    await expectNoHorizontalScroll(page);
+  };
+  /** W2c Task 21 design pass: the deciding steps are ROWS — each option spans the card (less its 16px gutters), a long name wraps
+   *  inside it — never a pill hugging its label. */
+  const expectRows = async (ids: readonly string[], screen: string) => {
+    const sheet = (await v3Sheet(page).boundingBox())!;
+    for (const id of ids) {
+      const box = (await option(id).boundingBox())!;
+      expect(box.width, `${screen} ${id}: a full-width row at ${projectWidth} (${box.width}px in a ${sheet.width}px sheet)`).toBeGreaterThanOrEqual(sheet.width - 40);
+    }
+  };
+  /** The sheet's context lines as the scorer reads them (whitespace collapsed). */
+  const contextLines = () =>
+    v3Sheet(page).getByTestId("pad-sheet-context-line").evaluateAll((els) => els.map((e) => (e.textContent ?? "").replace(/\s+/g, " ").trim()));
 
   await page.goto(await fixturePath(page.request, fixtureId!), { waitUntil: "load" });
   await dismissCookieBanner(page);
@@ -4915,28 +4961,87 @@ test("chess tie-break (W2a): every step of the knockout tie-break sheet is reach
   // Step 1 — the rung. Exactly the engine's three, no lots.
   expect(await optionIds()).toEqual(["rapid", "blitz", "armageddon"]);
   for (const id of ["rapid", "blitz", "armageddon"]) await assertTapFloor(option(id), `rung ${id}`);
-  await expectNoHorizontalScroll(page);
+  await expectRows(["rapid", "blitz", "armageddon"], "Rung step");
+  expect(await contextLines(), "the rung pick names no round").toEqual([]);
+  await expectSheetNotClipped("Rung step");
   // Step 2 — the winner (rapid), then step 3 — the optional score.
   await option("rapid").click();
   expect(await optionIds()).toEqual(["home", "away"]);
   await assertTapFloor(option("away"), "rapid winner");
-  await expectNoHorizontalScroll(page);
+  await expect(option("away")).toHaveText(nameOf.get(awayEntrantId)!);
+  await expectRows(["home", "away"], "Rapid winner step");
+  expect(await contextLines(), "the rapid winner step names its round").toEqual([dlDict("en")["pad.boardgame.tiebreak.rung.rapid"]!]);
+  await expectSheetNotClipped("Rapid winner step");
+  await shotSheet("s5-20-long-name-rapid-winner");
   await option("away").click();
   expect(await optionIds()).toEqual(["none", "2–0", "1½–½"]);
   await assertTapFloor(option("none"), "score none");
-  await expectNoHorizontalScroll(page);
-  // Back twice to the rung, then Armageddon: its winner step, here and at 1280.
+  await expectSheetNotClipped("Score step");
+  // Back twice to the rung, then the Armageddon: three screens, each here and at 1280.
   await backButton().click();
   await backButton().click();
   await option("armageddon").click();
-  await expect(v3Sheet(page).getByText("In Armageddon a draw means Black advances.")).toBeVisible();
-  const here = await optionIds();
-  expect(here).toEqual(["home", "away"]);
-  await expectNoHorizontalScroll(page);
-  await page.setViewportSize({ width: 1280, height: 900 });
-  await expect(option("home")).toBeVisible();
-  const desktop = await optionIds();
-  expect(here, `the Armageddon options at ${projectWidth} vs 1280: membership and order`).toEqual(desktop);
+  const dict = dlDict("en");
+  const hint = v3Sheet(page).getByText(dict["pad.boardgame.tiebreak.armageddonHint"]!);
+  const phoneViewport = page.viewportSize()!;
+  /** Every control the sheet shows, in DOM order: the choice options by their option id, the rest by testid or label. */
+  const controls = () =>
+    v3Sheet(page)
+      .locator("button, [data-choice-option-id]")
+      .evaluateAll((els) => els.map((e) => e.getAttribute("data-choice-option-id") ?? e.getAttribute("data-testid") ?? (e.textContent ?? "").trim()));
+  /** The control set at this width, then at 1280 — the same screen, the same state — then back to the project's width. */
+  const sameControlsAt1280 = async (screen: string): Promise<string[]> => {
+    const here = await controls();
+    expect(here.length, `${screen}: the sheet shows controls`).toBeGreaterThan(0);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await expect(v3Sheet(page)).toBeVisible();
+    const desktop = await controls();
+    await page.setViewportSize(phoneViewport);
+    await expect(v3Sheet(page)).toBeVisible();
+    expect(here, `${screen} at ${projectWidth} vs 1280: membership and order`).toEqual(desktop);
+    return here;
+  };
+
+  // Screen 1 — Who had Black? Exactly the two entrants, named in full; no hint (it is the result step's).
+  const blackIds = await sameControlsAt1280("Black step");
+  expect(blackIds.filter((id) => id.startsWith("black-")), "Black step: the two entrants").toEqual(["black-home", "black-away"]);
+  await expect(v3Sheet(page).getByText(dict["pad.boardgame.tiebreak.black.title"]!)).toBeVisible();
+  await expect(hint, "the Black step carries no hint").toHaveCount(0);
+  await expect(option("black-away")).toHaveText(nameOf.get(awayEntrantId)!);
+  for (const id of ["black-home", "black-away"]) await assertTapFloor(option(id), `Black ${id}`);
+  await expectRows(["black-home", "black-away"], "Black step");
+  expect(await contextLines(), "the Black step names the round and nothing else").toEqual([dict["pad.boardgame.tiebreak.rung.armageddon"]!]);
+  await expectSheetNotClipped("Black step");
+  await shotSheet("s5-21-long-name-black");
+  await option("black-away").click();
+
+  // Screen 2 — Result? The engine's three, each labelled by the dictionary, the hint showing.
+  await expect(hint).toBeVisible();
+  const resultIds = await sameControlsAt1280("Result step");
+  expect(resultIds.filter((id) => id.startsWith("result-")), "Result step: the engine's results, in its order").toEqual(ARMAGEDDON_RESULTS.map((r) => `result-${r}`));
+  for (const r of ARMAGEDDON_RESULTS) {
+    await expect(option(`result-${r}`)).toHaveText(dict[`pad.boardgame.armageddon.result.${r}`]!);
+    await assertTapFloor(option(`result-${r}`), `result ${r}`);
+  }
+  await expectRows(ARMAGEDDON_RESULTS.map((r) => `result-${r}`), "Result step");
+  // Black is the away entrant, so the home entrant is White. Both names are 43 characters: the legend wraps them, it never clips.
+  const legend = [dict["pad.boardgame.tiebreak.rung.armageddon"]!, `${dict["pad.boardgame.tiebreak.who.white"]!} ${nameOf.get(homeEntrantId)!}`, `${dict["pad.boardgame.tiebreak.who.black"]!} ${nameOf.get(awayEntrantId)!}`];
+  expect(await contextLines(), "the result step says who is White and who is Black").toEqual(legend);
+  await expectSheetNotClipped("Result step");
+  await shotSheet("s5-22-long-name-result");
+  await option("result-draw").click();
+
+  // Screen 3 — the read-back: the sentence in full, then one Confirm that is a real tap target.
+  const sentence = dict["pad.boardgame.tiebreak.confirm.drawn"]!.replace("{name}", nameOf.get(awayEntrantId)!);
+  await expect(v3Sheet(page).getByTestId("pad-sheet-summary")).toHaveText(sentence);
+  const readBackIds = await sameControlsAt1280("Read-back step");
+  expect(readBackIds.filter((id) => id === "pad-sheet-confirm"), "the read-back offers exactly one Confirm").toHaveLength(1);
+  expect(readBackIds.some((id) => id.startsWith("black-") || id.startsWith("result-")), "the read-back offers no choice to re-tap").toBe(false);
+  await assertTapFloor(v3Sheet(page).getByTestId("pad-sheet-confirm"), "Confirm");
+  await assertTapFloor(backButton(), "Back on the read-back");
+  expect(await contextLines(), "the read-back keeps the same legend above it").toEqual(legend);
+  await expectSheetNotClipped("Read-back step");
+  await shotSheet("s5-23-long-name-confirm");
   // Nothing was written by walking the sheet.
   const events = await apiJson<{ type: string }[]>(request, `/api/v1/fixtures/${fixtureId}/events`);
   expect(events.data!.map((e) => e.type)).toEqual(["core.start", "boardgame.result"]);
@@ -5512,4 +5617,539 @@ test("R2008 free-gaps: the never-live FAILED card fits and Try again stays reach
   }
   expect(checked, "anti-vacuity: both locales x both tellings").toBe(NL_LOCALES.length * NL_VARIANTS.length);
   expect(sentences.size, "four different sentences were shown").toBe(4);
+});
+
+test("rules-changed banner (W2c T15, X-SR-7): an open remote pad after a correction says the new format above the board, no horizontal scroll", async ({
+  browser,
+  request,
+}) => {
+  test.setTimeout(120_000);
+  // Badminton `short`: the P5 rig (best of 3 → 5). Person names carry `projectTag()` (the badminton test's reason above).
+  const fx = await seedRosteredFixture(request, {
+    label: `Mobile Rules Banner ${TAG}-${projectTag()}`,
+    sportKey: "badminton",
+    variantKey: "short",
+    entrantKind: "individual",
+    home: [{ fullName: `Mobile RB Home ${TAG}-${projectTag()}` }],
+    away: [{ fullName: `Mobile RB Away ${TAG}-${projectTag()}` }],
+    emitCoreStart: true,
+  });
+  const link = await apiJson<{ secret: string }>(request, `/api/v1/fixtures/${fx.fixtureId}/device-links`, "POST", {
+    label: `mobile rules banner ${projectTag()}`,
+  });
+  expect(link.status, JSON.stringify(link.error)).toBe(201);
+  const ctx = await browser.newContext({ viewport: projectViewport() ?? undefined, storageState: await consentedAnonymousState() });
+  try {
+    const page = await ctx.newPage();
+    await page.goto(`/score/${link.data!.secret}`, { waitUntil: "load" });
+    const scorebug = page.locator('[data-role="v3-scorebug"]');
+    await expect(scorebug).toBeVisible({ timeout: 20_000 });
+
+    const fix = await apiJson(request, `/api/v1/fixtures/${fx.fixtureId}/rules`, "PUT", { rules: { bestOf: 5 } });
+    expect(fix.status, JSON.stringify(fix.error)).toBe(200);
+    const rules = await apiJson<{ format_line: string | null }>(request, `/api/v1/fixtures/${fx.fixtureId}/rules`);
+    const line = rules.data?.format_line;
+    expect(line, "premise: badminton's format line exists").toBeTruthy();
+
+    // The stale tap: refused, and the pad raises the banner (the hold, then the wire: `HOLD_MS` is CI-pinned short).
+    await scorebug.locator(".grid > button").first().click();
+    const banner = page.getByTestId("pad-rules-changed");
+    await expect(banner).toBeVisible({ timeout: 45_000 });
+    await expect(banner).toContainText(line!);
+    // Above the board at every width: the banner sits in the host's unordered band, before the tiles.
+    const [b, tiles] = await Promise.all([banner.boundingBox(), page.locator('[data-role="v3-tiles"]').boundingBox()]);
+    expect(b, "the banner has a box").not.toBeNull();
+    expect(tiles, "the board has a box").not.toBeNull();
+    expect(b!.y + b!.height, "the banner ends above the board").toBeLessThanOrEqual(tiles!.y);
+    // The format line wraps inside the banner rather than clipping it, and the dismiss keeps its own column.
+    const o = await overflowingIn(page, '[data-testid="pad-rules-changed"]', "*", "the rules-changed banner is missing");
+    expect(o.clipped, "nothing clipped inside the banner").toEqual([]);
+    await expectNoHorizontalScroll(page);
+    // Only for a per-screen visual verdict: a crop from the scorebug to the top of the board into W2A_SHOTS_DIR (the switch
+    // bracket-finish.spec.ts uses). Unset in CI, where it does nothing.
+    const dir = process.env.W2A_SHOTS_DIR;
+    if (dir) {
+      const width = page.viewportSize()!.width;
+      const sy = await page.evaluate(() => window.scrollY);
+      const sb = (await scorebug.boundingBox())!;
+      const top = Math.max(0, sb.y + sy - 8);
+      await page.screenshot({
+        path: `${dir}/t15-rules-banner-${width}.png`,
+        fullPage: true,
+        clip: { x: 0, y: top, width, height: tiles!.y + sy + 120 - top },
+      });
+    }
+  } finally {
+    await ctx.close();
+  }
+});
+
+// W2c Task 17 (S1): the stage rules row at every width. One DOM, branched with `max-md:*` - never a second phone tree - so
+// the evidence is: the row and its editor fit (no page scroll, nothing clipped), every control holds the 44px floor and is
+// hit-testable (`elementFromPoint`, not paint), the deciders notice shows at this width, and the control SET (membership,
+// order, repeats) is the one 1280 shows. Football carries the sections, the notice and the selects; chess carries the
+// ordered-list control, which has the most buttons per row of anything in the product's rules editors.
+test("W2c stage format row at every width: sections, the deciders notice and the tie-break list hold the 44px floor, no scroll, the control set matches 1280", async ({
+  page,
+  request,
+}, testInfo) => {
+  test.setTimeout(180_000);
+  const seed = async (sport: string, variant: string, label: string): Promise<{ divisionId: string; stageId: string }> => {
+    const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+      ends_on: "2030-12-31",
+      name: `W2c T17 ${label} ${TAG}-${testInfo.project.name}`,
+      visibility: "private",
+    });
+    expect(comp.status, `competition: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
+    const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+      name: `${label} division`,
+      sport_key: sport,
+      variant_key: variant,
+    });
+    expect(div.status, `division ${sport}: ${JSON.stringify(div.error)}`).toBeLessThan(300);
+    const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${div.data!.id}/stages`, "POST", {
+      seq: 1,
+      kind: "knockout",
+      name: "Knockout",
+    });
+    expect(stage.status, `stage ${sport}: ${JSON.stringify(stage.error)}`).toBeLessThan(300);
+    return { divisionId: div.data!.id, stageId: stage.data!.id };
+  };
+  const projectWidth = page.viewportSize()!.width;
+  const shots = process.env.T17_SHOTS_DIR;
+  const editorControls = (row: Locator) =>
+    row
+      .getByTestId("stage-format-editor")
+      .locator('[data-testid^="stage-rule-field-"], [data-testid^="stage-rule-sequence-"], [data-testid="stage-format-save"], [data-testid="stage-format-cancel"], [data-testid="stage-deciders-off"], [data-testid="stage-deciders-level"]')
+      .evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")));
+
+  // --- football: the sections, the selects, the notice -------------------------------------------------------------
+  const fb = await seed("football", "11-a-side", "football");
+  await page.goto(await divisionPath(page.request, fb.divisionId, "?tab=fixtures"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const row = page.getByTestId(`stage-format-row-${fb.stageId}`);
+  await expect(row).toBeVisible({ timeout: 20_000 });
+  await assertTapFloor(row.getByTestId("stage-format-edit"), "Edit rules");
+  await expectNoHorizontalScroll(page);
+  // Fix round 1 (I-1): the collapsed row says the stage's format as chips, they wrap inside the row, and none is clipped.
+  const chips = row.getByTestId("stage-format-chips");
+  await expect(chips, `the chips are on the collapsed row at ${projectWidth}`).toBeVisible();
+  expect(await chips.locator("li").count(), "the chips are a list of clauses").toBeGreaterThan(1);
+  const collapsedClip = await overflowingIn(page, `[data-testid="stage-format-row-${fb.stageId}"]`, "*", "the stage rules row is missing");
+  expect(collapsedClip.clipped, `nothing in the collapsed row is clipped at ${projectWidth}`).toEqual([]);
+  if (shots) await row.screenshot({ path: `${shots}/collapsed-${projectWidth}.png` });
+  await row.getByTestId("stage-format-edit").click();
+  const editor = row.getByTestId("stage-format-editor");
+  await expect(editor).toBeVisible();
+  // M-3: while editing, Cancel is the one way out and Edit is gone.
+  await expect(row.getByTestId("stage-format-edit")).toHaveCount(0);
+  await assertTapFloor(row.getByTestId("stage-format-cancel"), "football Cancel");
+  const interactive = editor.locator("select, input, button");
+  const n = await interactive.count();
+  expect(n, "the editor has controls to measure").toBeGreaterThan(4);
+  for (let i = 0; i < n; i++) await assertTapFloor(interactive.nth(i), `football editor control ${i}`);
+  // Both deciders off: the notice shows, inside the row, at this width.
+  await row.getByTestId("stage-rule-field-extraTime").locator("select").selectOption("off");
+  await row.getByTestId("stage-rule-field-shootout").locator("select").selectOption("off");
+  const notice = row.getByTestId("stage-deciders-off");
+  await expect(notice).toBeVisible();
+  // M-4: the kicks are held with the reason beside them, and the caption fits at this width.
+  await expect(row.getByTestId("stage-rule-field-shootoutAttempts").locator("input")).toBeDisabled();
+  await expect(row.getByTestId("stage-rule-detail-off-shootoutAttempts")).toBeVisible();
+  const clip = await overflowingIn(page, `[data-testid="stage-format-row-${fb.stageId}"]`, "*", "the stage rules row is missing");
+  expect(clip.clipped, `nothing in the row is clipped at ${projectWidth}`).toEqual([]);
+  await expectNoHorizontalScroll(page);
+  const dims = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
+  expect(dims.scroll, `${projectWidth}: scrollWidth ${dims.scroll} within clientWidth ${dims.client}`).toBeLessThanOrEqual(dims.client);
+  if (shots) {
+    await editor.scrollIntoViewIfNeeded();
+    await row.screenshot({ path: `${shots}/expanded-${projectWidth}.png` });
+    await notice.screenshot({ path: `${shots}/deciders-off-${projectWidth}.png` });
+  }
+  const here = await editorControls(row);
+  expect(here.length, "the editor's controls were read").toBeGreaterThan(4);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  expect(here, `the football editor's control set at ${projectWidth} vs 1280: membership, order, repeats`).toEqual(await editorControls(row));
+  await page.setViewportSize({ width: projectWidth, height: page.viewportSize()!.height });
+
+  // --- chess: the ordered list -------------------------------------------------------------------------------------
+  const chess = await seed("boardgame", "blitz", "chess");
+  await page.goto(await divisionPath(page.request, chess.divisionId, "?tab=fixtures"), { waitUntil: "load" });
+  const crow = page.getByTestId(`stage-format-row-${chess.stageId}`);
+  await expect(crow).toBeVisible({ timeout: 20_000 });
+  await crow.getByTestId("stage-format-edit").click();
+  const list = crow.getByTestId("stage-rule-sequence-tiebreakRungs");
+  await expect(list).toBeVisible();
+  const items = list.locator("li");
+  const rungs = await items.count();
+  expect(rungs, "the default list has every rung").toBe(3);
+  for (let i = 0; i < rungs; i++) {
+    const buttons = items.nth(i).locator("button");
+    const b = await buttons.count();
+    expect(b, "up, down and remove").toBe(3);
+    for (let j = 0; j < b; j++) if (!(await buttons.nth(j).isDisabled())) await assertTapFloor(buttons.nth(j), `chess rung ${i} button ${j}`);
+  }
+  // Empty it: the add menu and the reset hold the floor too, and the empty line fits.
+  for (let i = 0; i < rungs; i++) await items.first().locator("button").last().click();
+  await expect(crow.getByTestId("stage-rule-sequence-tiebreakRungs-empty")).toBeVisible();
+  await assertTapFloor(crow.getByTestId("stage-rule-sequence-tiebreakRungs-add"), "chess add rung");
+  await assertTapFloor(crow.getByTestId("stage-rule-sequence-tiebreakRungs-reset"), "chess use default order");
+  await assertTapFloor(crow.getByTestId("stage-format-save"), "chess Save rules");
+  const cclip = await overflowingIn(page, `[data-testid="stage-format-row-${chess.stageId}"]`, "*", "the chess rules row is missing");
+  expect(cclip.clipped, `nothing in the chess row is clipped at ${projectWidth}`).toEqual([]);
+  await expectNoHorizontalScroll(page);
+  if (shots) await crow.screenshot({ path: `${shots}/chess-sequence-${projectWidth}.png` });
+  const chessHere = await editorControls(crow);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  expect(chessHere, `the chess editor's control set at ${projectWidth} vs 1280`).toEqual(await editorControls(crow));
+  await page.setViewportSize({ width: projectWidth, height: page.viewportSize()!.height });
+
+  // --- the DIVISION door: the same ordered list in the division's Settings (review I-2), phone-first too ---------------------
+  const dcomp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `W2c T17 division-seq ${TAG}-${testInfo.project.name}`,
+    visibility: "private",
+  });
+  expect(dcomp.status, `competition: ${JSON.stringify(dcomp.error)}`).toBeLessThan(300);
+  const ddiv = await apiJson<{ id: string }>(request, `/api/v1/competitions/${dcomp.data!.id}/divisions`, "POST", {
+    name: "division sequence",
+    sport_key: "boardgame",
+    variant_key: "blitz",
+    config: { tiebreakRungs: ["rapid", "blitz"] },
+  });
+  expect(ddiv.status, `division: ${JSON.stringify(ddiv.error)}`).toBeLessThan(300);
+  await page.goto(await divisionPath(page.request, ddiv.data!.id, "?tab=settings"), { waitUntil: "load" });
+  await page.getByRole("button", { name: /Format/ }).click();
+  const dlist = page.getByTestId("stage-rule-sequence-tiebreakRungs");
+  await expect(dlist).toBeVisible({ timeout: 20_000 });
+  const ditems = dlist.locator("li");
+  expect(await ditems.count(), "the division's stored list, two rungs").toBe(2);
+  for (let i = 0; i < 2; i++) {
+    const buttons = ditems.nth(i).locator("button");
+    for (let j = 0; j < (await buttons.count()); j++) if (!(await buttons.nth(j).isDisabled())) await assertTapFloor(buttons.nth(j), `division rung ${i} button ${j}`);
+  }
+  await assertTapFloor(page.getByTestId("stage-rule-sequence-tiebreakRungs-reset"), "division use default order");
+  await expectNoHorizontalScroll(page);
+  if (shots) await dlist.screenshot({ path: `${shots}/division-sequence-${projectWidth}.png` });
+});
+
+test("W2c stage points section at every width: the sentence, More, the walkover row, the bonus menu and Save hold the 44px floor, nothing clips or scrolls, the visible control set matches 1280, and the refusal card fits", async ({
+  page,
+  request,
+}, testInfo) => {
+  test.setTimeout(180_000);
+  const seed = async (sport: string, variant: string | undefined, label: string, config?: Record<string, unknown>): Promise<{ divisionId: string; stageId: string }> => {
+    const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+      ends_on: "2030-12-31",
+      name: `W2c T18 ${label} ${TAG}-${testInfo.project.name}`,
+      visibility: "private",
+    });
+    expect(comp.status, `competition: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
+    const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+      name: `${label} division`,
+      sport_key: sport,
+      ...(variant === undefined ? {} : { variant_key: variant }),
+      ...(config === undefined ? {} : { config }),
+    });
+    expect(div.status, `division ${sport}: ${JSON.stringify(div.error)}`).toBeLessThan(300);
+    const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${div.data!.id}/stages`, "POST", { seq: 1, kind: "league", name: "League" });
+    expect(stage.status, `stage ${sport}: ${JSON.stringify(stage.error)}`).toBeLessThan(300);
+    return { divisionId: div.data!.id, stageId: stage.data!.id };
+  };
+  const projectWidth = page.viewportSize()!.width;
+  /** The section's visible controls in DOM order (the phone toggle left out: it is the one phone-only control), by testid. */
+  const visibleControls = (section: Locator) =>
+    section.evaluate((root) =>
+      Array.from(root.querySelectorAll<HTMLElement>("input, select, button"))
+        .filter((el) => el.getAttribute("data-role") !== "phone-disclosure-toggle")
+        .filter((el) => {
+          const r = el.getBoundingClientRect();
+          return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== "hidden";
+        })
+        .map((el) => el.getAttribute("data-testid") ?? el.tagName),
+    );
+  const openMoreHere = async (section: Locator): Promise<void> => {
+    const toggle = section.locator('[data-role="phone-disclosure-toggle"]');
+    if ((await toggle.isVisible()) && (await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+  };
+
+  // --- football: the editor ---------------------------------------------------------------------------------------------
+  const footballVariant = Object.keys(builtinModules.find((m) => m.key === "football")!.variants)[0]!;
+  const fb = await seed("football", footballVariant, "football", { points: { win: 4, draw: 2, loss: 1 } });
+  await page.goto(await divisionPath(page.request, fb.divisionId, "?tab=fixtures"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const section = page.getByTestId(`stage-points-${fb.stageId}`);
+  await expect(section).toBeVisible({ timeout: 20_000 });
+  await expectNoHorizontalScroll(page);
+  await assertTapFloor(section.locator("label").first(), "Use the division's points");
+  await section.getByTestId("stage-points-use-division").uncheck();
+  for (const id of ["stage-points-win", "stage-points-draw", "stage-points-loss"]) await assertTapFloor(section.getByTestId(id), id);
+  const toggle = section.locator('[data-role="phone-disclosure-toggle"]');
+  const phone = projectWidth < 768;
+  expect(await toggle.isVisible(), `More is a phone control (${projectWidth})`).toBe(phone);
+  if (phone) {
+    await assertTapFloor(toggle, "More");
+    await expect(section.getByTestId("stage-points-walkover-w"), "the walkover row is folded on a phone").toBeHidden();
+  }
+  await openMoreHere(section);
+  for (const id of ["stage-points-walkover-w", "stage-points-walkover-l", "stage-points-award-w", "stage-points-award-l", "stage-points-bonus-add"]) await assertTapFloor(section.getByTestId(id), id);
+  await section.getByTestId("stage-points-bonus-add").selectOption({ index: 1 });
+  await expect(section.getByTestId("stage-points-bonus-0")).toBeVisible();
+  await assertTapFloor(section.getByTestId("stage-points-bonus-points-0"), "bonus points");
+  await assertTapFloor(section.getByTestId("stage-points-bonus-remove-0"), "remove bonus");
+  await section.getByTestId("stage-points-win").fill("5");
+  await assertTapFloor(section.getByTestId("stage-points-save"), "Save points");
+  const clip = await overflowingIn(page, `[data-testid="stage-points-${fb.stageId}"]`, "*", "the stage points section is missing");
+  expect(clip.clipped, `nothing in the points section is clipped at ${projectWidth}`).toEqual([]);
+  await expectNoHorizontalScroll(page);
+  const dims = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
+  expect(dims.scroll, `${projectWidth}: scrollWidth ${dims.scroll} within clientWidth ${dims.client}`).toBeLessThanOrEqual(dims.client);
+  const here = await visibleControls(section);
+  expect(here.length, "the section's controls were read").toBeGreaterThan(8);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await openMoreHere(section);
+  expect(here, `the points section's visible control set at ${projectWidth} vs 1280: membership, order, repeats`).toEqual(await visibleControls(section));
+  await page.setViewportSize({ width: projectWidth, height: page.viewportSize()!.height });
+
+  // --- ice hockey (a division that scores overtime separately): the refusal card ----------------------------------------
+  const hockey = builtinModules.find((m) => m.key === "icehockey")!;
+  const splitVariant = Object.keys(hockey.variants).find((v) => {
+    const r = hockey.configSchema.safeParse(hockey.variants[v]);
+    return !pointsRuleExpressible((r.success ? r.data : hockey.variants[v]) as Record<string, unknown>).ok;
+  });
+  expect(splitVariant, "premise: the engine has a splitting ice-hockey variant").toBeDefined();
+  const ih = await seed("icehockey", splitVariant, "icehockey");
+  await page.goto(await divisionPath(page.request, ih.divisionId, "?tab=fixtures"), { waitUntil: "load" });
+  const card = page.getByTestId(`stage-points-${ih.stageId}`);
+  await expect(card).toHaveAttribute("data-stage-points-state", "inexpressible", { timeout: 20_000 });
+  await expect(card.getByTestId("stage-points-inexpressible")).toBeVisible();
+  await expect(card.locator("input, select, button")).toHaveCount(0);
+  const cclip = await overflowingIn(page, `[data-testid="stage-points-${ih.stageId}"]`, "*", "the refusal card is missing");
+  expect(cclip.clipped, `nothing in the refusal card is clipped at ${projectWidth}`).toEqual([]);
+  await expectNoHorizontalScroll(page);
+
+  // --- review M1: the same division, but a stage that still STORES its own rule (a legacy row): the reason, the rule it plays,
+  // and "Use the division's points" to clear it - the one control, on the 44px floor, nothing clipped, the same at 1280 --------
+  await withDb(async (sql) => {
+    await sql`update stages set config = config || ${sql.json({ points: { base: { win: 4, draw: 1, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 1 } } })} where id = ${ih.stageId}`;
+  });
+  await page.reload({ waitUntil: "load" });
+  const legacy = page.getByTestId(`stage-points-${ih.stageId}`);
+  await expect(legacy).toHaveAttribute("data-stage-points-state", "inexpressible", { timeout: 20_000 });
+  await expect(legacy.getByTestId("stage-points-inexpressible")).toBeVisible();
+  await expect(legacy.getByTestId("stage-points-readonly")).toBeVisible();
+  await expect(legacy.getByTestId("stage-points-preview")).toBeVisible();
+  await assertTapFloor(legacy.getByTestId("stage-points-clear"), "Use the division's points (a stored rule on a splitting division)");
+  const lclip = await overflowingIn(page, `[data-testid="stage-points-${ih.stageId}"]`, "*", "the stored-rule card is missing");
+  expect(lclip.clipped, `nothing in the stored-rule card is clipped at ${projectWidth}`).toEqual([]);
+  await expectNoHorizontalScroll(page);
+  const legacyHere = await visibleControls(legacy);
+  expect(legacyHere, "premise: the clear is the card's one control").toEqual(["stage-points-clear"]);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  expect(legacyHere, `the stored-rule card's visible control set at ${projectWidth} vs 1280`).toEqual(await visibleControls(legacy));
+  await page.setViewportSize({ width: projectWidth, height: page.viewportSize()!.height });
+});
+
+// W2c Task 19 (S2, S4): the match rules block on the fixture console, and the run sheet's "Format changed" chip, at every
+// width. One DOM, branched with `max-md:*` (AGENTS.md "The phone composition") - the block lives inside ONE phone
+// disclosure: folded below md until its toggle is tapped, a plain card from md up. So the evidence is: the block is ATTACHED
+// at every width (class 22: wait on `toBeAttached`, and open the fold only when its toggle is the visible kind - at 768/834
+// the toggle is `md:hidden`), its controls hold the 44px floor and are hit-testable (`elementFromPoint`, not paint), nothing
+// clips or scrolls, and the visible control SET (membership, order, repeats) is the one 1280 shows. The states are the
+// product's: unstarted, changed, a live match behind "Correct format", and a finished one with its lock.
+test("W2c match rules block at every width: the fold opens, the controls hold the 44px floor, nothing clips or scrolls, the control set matches 1280, and the live, locked and run-sheet states fit", async ({
+  page,
+  request,
+}, testInfo) => {
+  test.setTimeout(240_000);
+  const projectWidth = page.viewportSize()!.width;
+  const m = builtinModules.find((x) => x.key === "badminton")!;
+  const variant = Object.keys(m.variants)[0]!;
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `W2c T19 ${TAG}-${testInfo.project.name}`,
+    visibility: "private",
+  });
+  expect(comp.status, `competition: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "Match rules widths",
+    sport_key: "badminton",
+    variant_key: variant,
+  });
+  expect(div.status, `division: ${JSON.stringify(div.error)}`).toBeLessThan(300);
+  const added = await addEntrantsViaApi(request, div.data!.id, ["Mr Alpha", "Mr Bravo", "Mr Charlie"].map((n) => `${n} ${TAG}-${testInfo.project.name}`));
+  expect(added.ids).toHaveLength(3);
+  const { fixtureIds } = await createStageAndGenerate(request, div.data!.id, { kind: "league", name: "League" });
+  expect(fixtureIds.length, "a league of three plays three matches").toBe(3);
+  const started = await apiJson(request, `/api/v1/divisions/${div.data!.id}/start`, "POST");
+  expect(started.status, JSON.stringify(started.error)).toBeLessThan(300);
+  const [unstarted, live, finished] = fixtureIds as [string, string, string];
+
+  const block = page.getByTestId("match-rules-block");
+  /** The block's visible controls in DOM order, by the field block they sit in (the phone toggle is not the block's). */
+  const visibleControls = () =>
+    block.evaluate((root) =>
+      Array.from(root.querySelectorAll<HTMLElement>("input, select, button"))
+        .filter((el) => {
+          const r = el.getBoundingClientRect();
+          return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== "hidden";
+        })
+        .map((el) => `${el.closest("[data-testid]")?.getAttribute("data-testid") ?? "-"}:${el.tagName}`),
+    );
+  /** Class 22: attached first, then open the fold only when its toggle is the visible kind. */
+  const openFold = async (): Promise<void> => {
+    await expect(block, "the block is attached at every width").toBeAttached({ timeout: 20_000 });
+    const toggle = page.locator('[data-role="phone-disclosure"]:has([data-testid="match-rules-block"]) > [data-role="phone-disclosure-toggle"]');
+    expect(await toggle.isVisible(), `the fold is a phone control (${projectWidth})`).toBe(projectWidth < 768);
+    if (await toggle.isVisible()) {
+      await assertTapFloor(toggle, "Match rules toggle");
+      await expect(block, "folded on a phone until the toggle is tapped").toBeHidden();
+      if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+    }
+    await expect(block).toBeVisible({ timeout: 20_000 });
+  };
+  const fits = async (label: string): Promise<void> => {
+    const clip = await overflowingIn(page, '[data-testid="match-rules-block"]', "*", "the match rules block is missing");
+    expect(clip.clipped, `${label}: nothing in the block is clipped at ${projectWidth}`).toEqual([]);
+    await expectNoHorizontalScroll(page);
+    const dims = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
+    expect(dims.scroll, `${label} ${projectWidth}: scrollWidth ${dims.scroll} within clientWidth ${dims.client}`).toBeLessThanOrEqual(dims.client);
+  };
+  const go = async (id: string): Promise<void> => {
+    await page.goto(await fixturePath(request, id), { waitUntil: "load" });
+    await dismissCookieBanner(page);
+  };
+
+  // --- unstarted: the form -----------------------------------------------------------------------------------------------
+  await go(unstarted);
+  await openFold();
+  const bestOf = block.getByTestId("stage-rule-field-bestOf").getByRole("combobox");
+  await assertTapFloor(bestOf, "best of");
+  for (const f of await block.locator("select, input").all()) await assertTapFloor(f, "a match field");
+  await bestOf.selectOption("1");
+  await assertTapFloor(block.getByTestId("match-rules-save"), "Save");
+  await fits("unstarted");
+  const unstartedHere = await visibleControls();
+  expect(unstartedHere.length, "the block's controls were read").toBeGreaterThan(4);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  expect(unstartedHere, `unstarted: the block's visible control set at ${projectWidth} vs 1280: membership, order, repeats`).toEqual(await visibleControls());
+  await page.setViewportSize({ width: projectWidth, height: page.viewportSize()!.height });
+
+  // --- changed: the chip, the reset, and the chip on the phone's closed row ---------------------------------------------
+  const put = await apiJson(request, `/api/v1/fixtures/${unstarted}/rules`, "PUT", { rules: { bestOf: 1 } });
+  expect(put.status, JSON.stringify(put.error)).toBe(200);
+  await go(unstarted);
+  await openFold();
+  await expect(block.getByTestId("match-rules-overridden")).toBeVisible();
+  await assertTapFloor(block.getByTestId("match-rules-reset"), "Use stage rules");
+  await fits("changed");
+  const changedHere = await visibleControls();
+  expect(changedHere, "premise: the reset joined the form's controls").toContain("match-rules-reset:BUTTON");
+  await page.setViewportSize({ width: 1280, height: 900 });
+  expect(changedHere, `changed: the block's visible control set at ${projectWidth} vs 1280`).toEqual(await visibleControls());
+  await page.setViewportSize({ width: projectWidth, height: page.viewportSize()!.height });
+
+  // --- the run sheet (before any play: once a stage has started its Fixtures tab folds the list behind "View fixtures"): the chip
+  // is on the changed row only, inside the viewport ----------------------------------------------------------------------
+  await page.goto(await divisionPath(request, div.data!.id, "?tab=fixtures"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const chip = page.getByTestId("run-sheet-format-changed");
+  await expect(chip, "exactly the changed match is tagged").toHaveCount(1, { timeout: 20_000 });
+  await expect(chip).toBeVisible();
+  const box = await chip.boundingBox();
+  expect(box, "the chip has a box").not.toBeNull();
+  expect(box!.x, "the chip starts inside the viewport").toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width, "the chip ends inside the viewport").toBeLessThanOrEqual(page.viewportSize()!.width);
+  await expectNoHorizontalScroll(page);
+
+  // --- live: the form stays behind "Correct format", then opens with its warning ---------------------------------------
+  const start = await apiJson(request, `/api/v1/fixtures/${live}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
+  expect(start.status, JSON.stringify(start.error)).toBe(201);
+  await go(live);
+  await openFold();
+  await assertTapFloor(block.getByTestId("match-rules-correct"), "Correct format");
+  await expect(block.getByTestId("stage-rule-field-bestOf")).toHaveCount(0);
+  await fits("live (closed)");
+  await block.getByTestId("match-rules-correct").click();
+  await expect(block.getByTestId("match-rules-warning")).toBeVisible();
+  await assertTapFloor(block.getByTestId("stage-rule-field-bestOf").getByRole("combobox"), "best of (live)");
+  await fits("live (open)");
+
+  // --- finished: the lock sentence, no controls -----------------------------------------------------------------------
+  const fixtureRead = await apiJson<{ home_entrant_id: string }>(request, `/api/v1/fixtures/${finished}`);
+  let seq = 0;
+  for (const [type, payload] of [["core.forfeit", { by: fixtureRead.data!.home_entrant_id, reason: "walkover" }], ["core.finalize", {}]] as const) {
+    const r = await apiJson(request, `/api/v1/fixtures/${finished}/events`, "POST", { expected_seq: seq++, type, payload });
+    expect(r.status, `${type}: ${JSON.stringify(r.error)}`).toBe(201);
+  }
+  await go(finished);
+  await openFold();
+  await expect(block.getByTestId("match-rules-locked")).toBeVisible();
+  await expect(block.locator("select, input, button")).toHaveCount(0);
+  await fits("locked");
+});
+
+// W2c Task 20 (S4): the division settings' lock lines at every width. A started stage makes the match-rule fields read-only and
+// puts one line under each ("Locked: Pool A has started and plays this format"). The lines are plain text in the existing
+// field grid - no second phone tree - so the evidence is that every line is on screen, readable (its text is not clipped by its
+// own box), inside the viewport, that nothing scrolls the page sideways, and that the SET of lines (membership, order, repeats)
+// is the one 1280 shows. Owner 2026-10-20: the settings tab is being redesigned, so no design bar here beyond "readable, no
+// scroll, same set".
+test("W2c division lock lines at every width: each line is on screen and readable, nothing scrolls, and the line set matches 1280", async ({
+  page,
+  request,
+}, testInfo) => {
+  test.setTimeout(240_000);
+  const projectWidth = page.viewportSize()!.width;
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `W2c T20 ${TAG}-${testInfo.project.name}`,
+    visibility: "private",
+  });
+  expect(comp.status, `competition: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "Lock lines widths",
+    sport_key: "badminton",
+    variant_key: "short",
+  });
+  expect(div.status, `division: ${JSON.stringify(div.error)}`).toBeLessThan(300);
+  const added = await addEntrantsViaApi(request, div.data!.id, ["Ms Alpha", "Ms Bravo", "Ms Charlie"].map((n) => `${n} ${TAG}-${testInfo.project.name}`));
+  expect(added.ids).toHaveLength(3);
+  const { fixtureIds } = await createStageAndGenerate(request, div.data!.id, { kind: "league", name: "Pool A" });
+  expect(fixtureIds.length, "a league of three plays three matches").toBe(3);
+  const divStarted = await apiJson(request, `/api/v1/divisions/${div.data!.id}/start`, "POST");
+  expect(divStarted.status, JSON.stringify(divStarted.error)).toBeLessThan(300);
+  const started = await apiJson(request, `/api/v1/fixtures/${fixtureIds[0]!}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
+  expect(started.status, JSON.stringify(started.error)).toBe(201);
+
+  await page.goto(await divisionPath(request, div.data!.id, "?tab=settings"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  await expect(page.getByTestId("division-settings")).toBeVisible({ timeout: 20_000 });
+  await page.getByRole("button", { name: /^Format/ }).click();
+
+  const lines = page.locator('[data-testid^="division-locked-"]');
+  // One per badminton field plus the variant (the fields are the form's own table, not a number typed here).
+  const expectedLines = SPORT_RULES.badminton!.length + 1;
+  await expect(lines, "every locked field says so").toHaveCount(expectedLines, { timeout: 20_000 });
+  const ids = (): Promise<string[]> => lines.evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")!));
+  const here = await ids();
+
+  for (let i = 0; i < expectedLines; i++) {
+    const line = lines.nth(i);
+    await line.scrollIntoViewIfNeeded();
+    await expect(line, `line ${here[i]} is visible at ${projectWidth}`).toBeVisible();
+    expect((await line.innerText()).trim().length, `line ${here[i]} has words`).toBeGreaterThan(10);
+    const box = (await line.boundingBox())!;
+    expect(box.x, `${here[i]} starts inside the viewport`).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width, `${here[i]} ends inside the viewport`).toBeLessThanOrEqual(page.viewportSize()!.width);
+    const clip = await line.evaluate((el) => el.scrollWidth - el.clientWidth);
+    expect(clip, `${here[i]}'s words are not clipped by their own box`).toBeLessThanOrEqual(1);
+  }
+  await expectNoHorizontalScroll(page);
+  const dims = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
+  expect(dims.scroll, `scrollWidth ${dims.scroll} within clientWidth ${dims.client} at ${projectWidth}`).toBeLessThanOrEqual(dims.client);
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  expect(here, `the lock line set at ${projectWidth} vs 1280: membership, order, repeats`).toEqual(await ids());
+  await page.setViewportSize({ width: projectWidth, height: page.viewportSize()!.height });
 });

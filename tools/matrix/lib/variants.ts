@@ -6,7 +6,7 @@
 // by the engine's configSchema. Deterministic greedy cover: no clock, no
 // randomness (R11) — a regeneration is a reviewed diff of variants.json.
 import { EngineError, type StageKind } from "@seazn/engine/core";
-import { SPORT_RULES, buildRuleOverride, visibleRuleFields, type RuleField } from "../../../apps/web/src/lib/match-rules.ts";
+import { SPORT_RULES, buildRuleOverride, visibleRuleFields, type RuleField } from "../../../apps/web/src/lib/match-rules/index.ts";
 import { ROW_KEYS, builderDefaultVariant, stagesForRow, type RowKey } from "./catalogue.ts";
 import { foldStream } from "./fold.ts";
 import { CfgInvalid, resolveSportCfg, sportModule, stageCfg, variantKeys } from "./sport-cfg.ts";
@@ -61,6 +61,9 @@ export function levelsOf(field: RuleField): Level[] {
       out.push({ cls: "blank", raw: "" });
       return out;
     }
+    case "sequence":
+      // An ordered list (chess's tie-break rungs) is neither a bound nor an option set: it has no boundary classes.
+      throw new FieldUnbounded(field.key);
     case "bool":
       return [{ cls: "on", raw: "on" }, { cls: "off", raw: "off" }, { cls: "blank", raw: "" }];
     case "select": {
@@ -77,7 +80,10 @@ export function factorsFor(sport: string): Factor[] {
   return [
     { name: "row", levels: ROW_KEYS.map((r) => ({ cls: r, raw: r })) },
     { name: "preset", levels: offlineVariantOrder(sport).map((v) => ({ cls: v, raw: v })) },
-    ...(SPORT_RULES[sport] ?? []).map((f) => ({ name: f.key, levels: levelsOf(f) })),
+    // The fields with boundary classes. A sequence field (an ordered list: chess's tie-break rungs) IS shown by the editor
+    // since W2c Task 17 built its control, but it is neither a bound nor an option set, so it has no boundary classes and
+    // is no variant factor; its states (default order, empty, reordered) are covered by the sequence field's own tests.
+    ...(SPORT_RULES[sport] ?? []).filter((f) => f.kind !== "sequence").map((f) => ({ name: f.key, levels: levelsOf(f) })),
   ];
 }
 
@@ -282,7 +288,7 @@ export function scorable(vc: VariantCase, deps: { generate?: typeof generateStre
   // W2a: a bracket fixture is generated and folded under the cfg the product folds it under - the stage's own overlay
   // (boardgame's tie-break, carrom's extra board) on top of the resolved cfg. A bare cfg here asks a carrom knockout
   // for a plain win, which the overlay makes a different game.
-  const foldCfg = stageCfg(vc.sport, cfg, stageKind);
+  const foldCfg = stageCfg(vc.sport, cfg, stageKind, vc.preset);
   for (const winner of ["home", "away"] as const) {
     const req = { sportKey: vc.sport, cfg: foldCfg, stageKind, home: "matrix-home", away: "matrix-away", outcome: { kind: "win", winner } as const };
     try {

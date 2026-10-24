@@ -9,10 +9,10 @@
 import { SETTLE_METHODS, forbidsLevelResult, type StageKind } from "@seazn/engine/core";
 import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import { ROW_KEYS, SPORT_KEYS, stagesForRow, type RowKey } from "./catalogue.ts";
-import { drawsAllowed, resolveSportCfg, stageCfg } from "./sport-cfg.ts";
+import { decidersOffRulesFor, drawsAllowed, resolveSportCfg, stageCfg } from "./sport-cfg.ts";
 import { generateStream } from "./streams/index.ts";
 import { GeneratorUnsupported, OutcomeUnreachable, type RequestedOutcome } from "./streams/types.ts";
-import type { W2aScenarioKey } from "./scenarios/types.ts";
+import { HOLD_PATH_SCENARIOS, type W2aScenarioKey } from "./scenarios/types.ts";
 import { offlineBuilderDefault } from "./variants.ts";
 
 /** The rows whose first (root) stage is a bracket kind: the scenarios' probe runs through the round hooks playDivision
@@ -22,14 +22,20 @@ export function bracketRootRows(): RowKey[] {
   return ROW_KEYS.filter((row) => forbidsLevelResult(stagesForRow(row)[0].kind as StageKind));
 }
 
-/** The cfg a bracket fixture of `sport` folds under, on the variant the planner uses (the offline builder default). */
-export const bracketCfgOf = (sport: string): unknown => stageCfg(sport, resolveSportCfg(sport, offlineBuilderDefault(sport)), "knockout");
+/** The cfg a bracket fixture of `sport` folds under in `key`'s cases, on the variant the planner uses (the offline
+ *  builder default): the stage's presets, and on a hold-path scenario (HOLD_PATH_SCENARIOS, R-T12-3) the every-decider-off
+ *  rules its cases post — the same rules `setUpDivision` posts, so the plan asks the cfg the case plays. */
+export function bracketCfgOf(sport: string, key: W2aScenarioKey): unknown {
+  const variant = offlineBuilderDefault(sport);
+  const rules = HOLD_PATH_SCENARIOS.has(key) ? decidersOffRulesFor(sport, variant, "knockout") : undefined;
+  return stageCfg(sport, resolveSportCfg(sport, variant), "knockout", variant, rules);
+}
 
-/** Whether the sport's generator builds `outcome` in a bracket under its overlaid cfg. A declaration of unreachable is
- *  an answer; any other error is a bug and propagates. */
-function generatorBuilds(sport: string, outcome: RequestedOutcome): boolean {
+/** Whether the sport's generator builds `outcome` in a bracket under `key`'s overlaid cfg. A declaration of unreachable
+ *  is an answer; any other error is a bug and propagates. */
+function generatorBuilds(sport: string, key: W2aScenarioKey, outcome: RequestedOutcome): boolean {
   try {
-    generateStream({ sportKey: sport, cfg: bracketCfgOf(sport), stageKind: "knockout", home: "h", away: "a", outcome });
+    generateStream({ sportKey: sport, cfg: bracketCfgOf(sport, key), stageKind: "knockout", home: "h", away: "a", outcome });
     return true;
   } catch (e) {
     if (e instanceof OutcomeUnreachable || e instanceof GeneratorUnsupported) return false;
@@ -40,9 +46,9 @@ function generatorBuilds(sport: string, outcome: RequestedOutcome): boolean {
 /** The scenario's applicability on a sport, with the one-line reason of each rule that is one sport's. */
 export function w2aApplies(key: W2aScenarioKey, sport: string): boolean {
   switch (key) {
-    case "BRACKET_SETTLE_LEVEL": return generatorBuilds(sport, { kind: "settle", then: "home", method: SETTLE_METHODS[0], after: "level" });
-    case "BRACKET_SETTLE_ABANDON": return generatorBuilds(sport, { kind: "settle", then: "home", method: SETTLE_METHODS[0], after: "abandon" });
-    case "BRACKET_TIEBREAK": return generatorBuilds(sport, { kind: "tiebreak", rung: TIEBREAK_RUNGS[0], winner: "home" });
+    case "BRACKET_SETTLE_LEVEL": return generatorBuilds(sport, key, { kind: "settle", then: "home", method: SETTLE_METHODS[0], after: "level" });
+    case "BRACKET_SETTLE_ABANDON": return generatorBuilds(sport, key, { kind: "settle", then: "home", method: SETTLE_METHODS[0], after: "abandon" });
+    case "BRACKET_TIEBREAK": return generatorBuilds(sport, key, { kind: "tiebreak", rung: TIEBREAK_RUNGS[0], winner: "home" });
     // single-sport: CA-KO-1 is carrom's rule (the ICF extra board); no other sport plays one.
     case "BRACKET_EXTRA_BOARD": return sport === "carrom";
     // single-sport: GN-KO-1 is generic's rule; and the refusal needs a draw that exists in a league to be posted at the bracket.

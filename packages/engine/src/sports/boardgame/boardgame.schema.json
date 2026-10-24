@@ -66,6 +66,18 @@
       "tiebreak": {
         "type": "boolean"
       },
+      "tiebreakRungs": {
+        "items": {
+          "enum": [
+            "armageddon",
+            "blitz",
+            "rapid"
+          ],
+          "type": "string"
+        },
+        "maxItems": 3,
+        "type": "array"
+      },
       "variant": {
         "default": "classical",
         "enum": [
@@ -149,30 +161,60 @@
         "type": "object"
       },
       {
-        "additionalProperties": false,
-        "properties": {
-          "rung": {
-            "enum": [
-              "armageddon",
-              "blitz",
-              "rapid"
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "rung": {
+                "enum": [
+                  "blitz",
+                  "rapid"
+                ],
+                "type": "string"
+              },
+              "score": {
+                "pattern": "^(\\d+½?|½)–(\\d+½?|½)$",
+                "type": "string"
+              },
+              "winner": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "rung",
+              "winner"
             ],
-            "type": "string"
+            "type": "object"
           },
-          "score": {
-            "pattern": "^(\\d+½?|½)–(\\d+½?|½)$",
-            "type": "string"
-          },
-          "winner": {
-            "minLength": 1,
-            "type": "string"
+          {
+            "additionalProperties": false,
+            "properties": {
+              "black": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "result": {
+                "enum": [
+                  "black",
+                  "draw",
+                  "white"
+                ],
+                "type": "string"
+              },
+              "rung": {
+                "const": "armageddon",
+                "type": "string"
+              }
+            },
+            "required": [
+              "black",
+              "result",
+              "rung"
+            ],
+            "type": "object"
           }
-        },
-        "required": [
-          "rung",
-          "winner"
-        ],
-        "type": "object"
+        ]
       }
     ]
   },
@@ -181,6 +223,9 @@
   "snapshotVersion": 1,
   "state": {
     "paths": {
+      "armageddonBlack": [
+        "string"
+      ],
       "board": [
         "number"
       ],

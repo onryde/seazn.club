@@ -6,7 +6,7 @@ import { isDeepStrictEqual } from "node:util";
 import { generatePagePlayoff } from "@seazn/engine/scheduling";
 import { resolvePositions, validateLineup } from "@seazn/engine/sport";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildRuleOverride } from "../../../apps/web/src/lib/match-rules.ts";
+import { buildRuleOverride } from "../../../apps/web/src/lib/match-rules/index.ts";
 import { RULES, decide } from "../lib/applicability.ts";
 import { ROW_KEYS, SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
 import { NoFieldSize, fieldSizeFor } from "../lib/field-size.ts";
@@ -282,11 +282,11 @@ describe("shared assertions — empty case first, then each way to go red", () =
   });
 
   it("entrantsEditAccepted (I-2): the entrants-only save must be a 2xx; none attempted is vacuous", () => {
-    const edit = (status: number, code: string | null) => ({ attempts: [{ kind: "format" as const, status: 409, code: "FORMAT_LOCKED" }, { kind: "entrants_only" as const, status, code }], before: [], after: [] });
-    expect(entrantsEditAccepted({ attempts: [{ kind: "format", status: 409, code: "FORMAT_LOCKED" }], before: [], after: [] })).toMatchObject({ id: "life-entrants-edit-accepted", verdict: "fail", checked: 0 });
+    const edit = (status: number, code: string | null) => ({ attempts: [{ kind: "format" as const, status: 409, code: "DIVISION_FORMAT_LOCKED" }, { kind: "entrants_only" as const, status, code }], before: [], after: [] });
+    expect(entrantsEditAccepted({ attempts: [{ kind: "format", status: 409, code: "DIVISION_FORMAT_LOCKED" }], before: [], after: [] })).toMatchObject({ id: "life-entrants-edit-accepted", verdict: "fail", checked: 0 });
     expect(entrantsEditAccepted(edit(200, null))).toMatchObject({ verdict: "pass", checked: 1 });
     expect(entrantsEditAccepted(edit(204, null))).toMatchObject({ verdict: "pass", checked: 1 });
-    expect(entrantsEditAccepted(edit(409, "FORMAT_LOCKED"))).toMatchObject({ verdict: "fail", checked: 1, evidence: ["entrants-only save → 409 FORMAT_LOCKED"] });
+    expect(entrantsEditAccepted(edit(409, "DIVISION_FORMAT_LOCKED"))).toMatchObject({ verdict: "fail", checked: 1, evidence: ["entrants-only save → 409 DIVISION_FORMAT_LOCKED"] });
     expect(entrantsEditAccepted(edit(300, null))).toMatchObject({ verdict: "fail" });
     expect(entrantsEditAccepted(edit(199, null))).toMatchObject({ verdict: "fail" });
   });
@@ -300,25 +300,45 @@ describe("shared assertions — empty case first, then each way to go red", () =
     expect(drawPathExercised(rec, run([], [fx({ outcome: { kind: "draw" } }), fx({ id: "f2", outcome: { kind: "draw" } })]), true)).toMatchObject({ verdict: "pass", checked: 1 });
   });
 
-  it("formatEditRefusedNamed: no format field abstains; only the lock's own 409 FORMAT_LOCKED passes (not 200, not generic CONFLICT, not 500, not another named 4xx)", () => {
+  it("formatEditRefusedNamed: no format field abstains; only the lock's own 409 DIVISION_FORMAT_LOCKED passes (not 200, not generic CONFLICT, not 500, not another named 4xx)", () => {
     const edit = (status: number, code: string | null) => ({ attempts: [{ kind: "format" as const, status, code }], before: [], after: [] });
     expect(formatEditRefusedNamed({ attempts: [{ kind: "entrants_only", status: 200, code: null }], before: [], after: [] })).toMatchObject({ verdict: "abstain", checked: 0 });
-    expect(formatEditRefusedNamed(edit(409, "FORMAT_LOCKED"))).toMatchObject({ verdict: "pass", checked: 1 });
+    expect(formatEditRefusedNamed(edit(409, "DIVISION_FORMAT_LOCKED"))).toMatchObject({ verdict: "pass", checked: 1 });
+    // W2c: the old division-wide code is the replaceStages door's now, not this PATCH's: it no longer passes here.
+    expect(formatEditRefusedNamed(edit(409, "FORMAT_LOCKED")))
+      .toMatchObject({ verdict: "fail", evidence: ["format edit → 409 FORMAT_LOCKED, expected 409 DIVISION_FORMAT_LOCKED"] });
+    // The table-rules code is the lock's too, but for a TABLE key; a format key must not be answered with it.
+    expect(formatEditRefusedNamed(edit(409, "DIVISION_TABLE_RULES_LOCKED"))).toMatchObject({ verdict: "fail" });
     expect(formatEditRefusedNamed(edit(200, null))).toMatchObject({ verdict: "fail" });
     expect(formatEditRefusedNamed(edit(409, "CONFLICT"))).toMatchObject({ verdict: "fail" });
     expect(formatEditRefusedNamed(edit(500, "MODULE_DUPLICATE"))).toMatchObject({ verdict: "fail" });
     // m-3: a named 4xx that is not the lock's (the lock gone, another domain guard answering) fails too.
     expect(formatEditRefusedNamed(edit(409, "ENTRANT_KIND_IN_USE")))
-      .toMatchObject({ verdict: "fail", evidence: ["format edit → 409 ENTRANT_KIND_IN_USE, expected 409 FORMAT_LOCKED"] });
-    expect(formatEditRefusedNamed(edit(422, "FORMAT_LOCKED"))).toMatchObject({ verdict: "fail" });
+      .toMatchObject({ verdict: "fail", evidence: ["format edit → 409 ENTRANT_KIND_IN_USE, expected 409 DIVISION_FORMAT_LOCKED"] });
+    expect(formatEditRefusedNamed(edit(422, "DIVISION_FORMAT_LOCKED"))).toMatchObject({ verdict: "fail" });
   });
-  it("m-3: FORMAT_LOCK is the product's own lock answer, read from usecases/divisions.ts (derived, not typed)", () => {
-    const src = readFileSync(resolve(REPO, "apps/web/src/server/usecases/divisions.ts"), "utf8");
-    const all = [...src.matchAll(/"FORMAT_LOCKED"/g)];
-    const thrown = [...src.matchAll(/new HttpError\((\d{3}),[^()]*?,\s*"FORMAT_LOCKED"\)/g)];
-    expect(all.length).toBeGreaterThan(0);
-    expect(thrown).toHaveLength(all.length); // every mention is a throw we read
-    for (const m of thrown) expect({ status: Number(m[1]), code: "FORMAT_LOCKED" }).toEqual({ ...FORMAT_LOCK });
+  it("m-3 (W2c, P-2 A): FORMAT_LOCK is the product's own PATCH lock answer — the code the per-started-stage lock emits for a match-format key, with the status the rule-error table gives it (derived, not typed)", () => {
+    const read = (rel: string) => readFileSync(resolve(REPO, rel), "utf8");
+    const divisions = read("apps/web/src/server/usecases/divisions.ts");
+    const locks = read("apps/web/src/server/usecases/rule-locks.ts");
+    const table = read("apps/web/src/lib/rule-errors.ts");
+    // 1. The PATCH door throws the FIRST refusal's own code, with that code's table status (so the answer is whatever
+    //    rule-locks.ts emitted, not a literal in divisions.ts).
+    //    Final review M2: the details may add `match_edits` beside `refused` (`cond ? { refused } : { refused, ... }`).
+    const door = /throw new HttpError\(\s*RULE_ERROR_STATUS\[(\w+)\.code\],[^;]*?\b\1\.code,[^;]*?\{\s*refused\s*[,}]/.exec(divisions);
+    expect(door, "divisions.ts no longer throws the first refusal's own code with its RULE_ERROR_STATUS").not.toBeNull();
+    // 2. The code rule-locks.ts emits for a key that is NOT a table rule: the false arm of `table ? TABLE : FORMAT`.
+    const picks = [...locks.matchAll(/code:\s*table\s*\?\s*"(\w+)"\s*:\s*"(\w+)"/g)];
+    expect(picks, "rule-locks.ts no longer picks a code by table-vs-format").toHaveLength(1);
+    const [, tableCode, formatCode] = picks[0]!;
+    expect(tableCode, "a table key and a format key must be answered differently").not.toBe(formatCode);
+    // 3. That code's status, from the product's own RULE_ERROR_STATUS (same read as STAGE_NOT_READY_STATUS above).
+    const status = new RegExp(`^\\s*${formatCode}: (\\d{3}),$`, "m").exec(table)?.[1];
+    expect(status, `${formatCode} is not in RULE_ERROR_STATUS`).toBeDefined();
+    expect({ status: Number(status), code: formatCode }).toEqual({ ...FORMAT_LOCK });
+    // 4. The paired negative: the old division-wide literal is gone from this door. If it returns, FORMAT_LOCK has to
+    //    be re-read against it, not silently stay on the new code.
+    expect([...divisions.matchAll(/"FORMAT_LOCKED"/g)], "divisions.ts mentions the old FORMAT_LOCKED again").toHaveLength(0);
   });
 
   it("loopBounded (I-1): only a loop that ran dry AND left every fixture finished passes", () => {
@@ -410,13 +430,13 @@ describe("LIFECYCLE on the fake league (wiring, not product truth)", () => {
   it("I-2: a product that 409s the entrants-only save reds life-entrants-edit-accepted, and only that", async () => {
     class LocksEntrantsToo extends FakeLeagueDriver {
       override async patchDivisionConfig(d: string, c: Record<string, unknown>) {
-        return this.fixtures.length > 0 ? { status: 409, code: "FORMAT_LOCKED" } : super.patchDivisionConfig(d, c);
+        return this.fixtures.length > 0 ? { status: 409, code: "DIVISION_FORMAT_LOCKED" } : super.patchDivisionConfig(d, c);
       }
     }
     const r = await runOn(new LocksEntrantsToo(), "LIFECYCLE");
     expect(r.state.state).toBe("red");
     expect(failed(r.checks)).toEqual(["life-entrants-edit-accepted"]);
-    expect(r.checks.find((c) => c.id === "life-entrants-edit-accepted")!.evidence).toEqual(["entrants-only save → 409 FORMAT_LOCKED"]);
+    expect(r.checks.find((c) => c.id === "life-entrants-edit-accepted")!.evidence).toEqual(["entrants-only save → 409 DIVISION_FORMAT_LOCKED"]);
     // The format refusal beside it is still the expected one.
     expect(r.checks.find((c) => c.id === "life-format-edit-refused-named")).toMatchObject({ verdict: "pass" });
   });
@@ -451,14 +471,48 @@ describe("LIFECYCLE on the fake league (wiring, not product truth)", () => {
     expect(driver.fixtures.filter((f) => f !== tbd).every((f) => isTerminal(f.status))).toBe(true);
   });
 
-  it("the config probe: format edit refused FORMAT_LOCKED, entrants-only save accepted (Task 6 ruling)", async () => {
+  it("the config probe: format edit refused DIVISION_FORMAT_LOCKED, entrants-only save accepted (Task 6 ruling)", async () => {
     const { out, checks } = await runFake("LIFECYCLE");
     expect(out.observed.configEdit!.attempts).toEqual([
-      { kind: "format", status: 409, code: "FORMAT_LOCKED" },
+      { kind: "format", status: 409, code: "DIVISION_FORMAT_LOCKED" },
       { kind: "entrants_only", status: 200, code: null },
     ]);
     expect(checks.find((c) => c.id === "life-format-edit-refused-named")).toMatchObject({ verdict: "pass", checked: 1 });
     expect(checks.find((c) => c.id === "I5-config-edit-never-rescores")).toMatchObject({ verdict: "pass", checked: 28 });
+  });
+
+  it("W2c: the fake's PATCH lock is the product's per-started-stage rule — generated-but-unplayed saves, the first event locks a format edit by DIVISION_FORMAT_LOCKED, unparseable is 422 either way, entrants-only always saves", async () => {
+    const driver = new FakeLeagueDriver();
+    const setup = await setUpDivision(ctxFor(driver, "LIFECYCLE"), new Recorder(), 4);
+    expect(driver.fixtures.length, "fixtures are generated").toBeGreaterThan(0);
+    expect(driver.fixtures.every((f) => f.events.length === 0 && f.status === "scheduled"), "and none has been played").toBe(true);
+    expect(driver.stageStarted()).toBe(false);
+    const id = setup.division.id;
+    const flipped = async () => {
+      const cur = (await driver.getDivision()).config as Record<string, unknown> & { allowDraws: boolean };
+      return { cur, flip: { ...cur, allowDraws: !cur.allowDraws } };
+    };
+    // Generated, not started: the old division-wide rule refused this, the new one saves it.
+    const before = await flipped();
+    expect(await driver.patchDivisionConfig(id, before.flip)).toEqual({ status: 200, code: null });
+    expect(((await driver.getDivision()).config as { allowDraws: boolean }).allowDraws).toBe(before.flip.allowDraws);
+    // An unparseable config is a 422 whether or not anything started (the old order, 409 beating 422, belonged to the division-wide lock).
+    expect(await driver.patchDivisionConfig(id, { ...before.flip, allowDraws: "yes" })).toEqual({ status: 422, code: "CONFIG_INVALID" });
+    // The first event on one fixture starts the stage.
+    await driver.postStream(driver.fixtures[0]!.id, [START]);
+    expect(driver.stageStarted()).toBe(true);
+    const after = await flipped();
+    expect(await driver.patchDivisionConfig(id, after.flip)).toEqual({ status: 409, code: "DIVISION_FORMAT_LOCKED" });
+    expect(((await driver.getDivision()).config as { allowDraws: boolean }).allowDraws, "the refused edit wrote nothing").toBe(after.cur.allowDraws);
+    expect(await driver.patchDivisionConfig(id, { ...after.flip, allowDraws: "yes" })).toEqual({ status: 422, code: "CONFIG_INVALID" });
+    // The edit the lock lets through: entrants only, every other key as stored.
+    expect(await driver.patchDivisionConfig(id, { ...after.cur, entrants: { kinds: driver.kindsInUse() } })).toEqual({ status: 200, code: null });
+    // The table fake's expunge writes `abandoned` with no event where the product writes one: that starts the stage too.
+    const other = new FakeLeagueDriver();
+    await setUpDivision(ctxFor(other, "LIFECYCLE"), new Recorder(), 4);
+    expect(other.stageStarted()).toBe(false);
+    await other.abandonFixture(other.fixtures[0]!);
+    expect(other.stageStarted()).toBe(true);
   });
 
   it("the entrants-only probe spreads the division's CURRENT config (a stored override would otherwise read as a format change)", async () => {
@@ -485,7 +539,7 @@ describe("LIFECYCLE on the fake league (wiring, not product truth)", () => {
     const { state, checks, out } = await runFake("LIFECYCLE", { sport, variant });
     expect(state, JSON.stringify(checks.filter((c) => c.verdict === "fail"))).toMatchObject({ state: "works" });
     expect(checks.find((c) => c.id === "life-draw-path-exercised")).toMatchObject({ verdict: "abstain" });
-    expect(out.observed.configEdit!.attempts[0]).toEqual({ kind: "format", status: 409, code: "FORMAT_LOCKED" });
+    expect(out.observed.configEdit!.attempts[0]).toEqual({ kind: "format", status: 409, code: "DIVISION_FORMAT_LOCKED" });
   });
 });
 
@@ -1128,6 +1182,35 @@ class WarnsToo extends FakeLeagueDriver {
 }
 const read = (rel: string) => readFileSync(resolve(REPO, rel), "utf8");
 
+/** http.ts's `if (err instanceof ZodError) { ... }` branch of v1Inner's catch, header to its closer at the same indent.
+ *  THROWS on a missing header or closer, so a pin cannot pass on text it never found. */
+function zodErrorBranch(src: string): string {
+  const header = "\n    if (err instanceof ZodError) {\n";
+  const at = src.indexOf(header);
+  if (at < 0) throw new Error("http.ts: no `if (err instanceof ZodError) {` branch");
+  const end = src.indexOf("\n    }\n", at + header.length);
+  if (end < 0) throw new Error("http.ts: the ZodError branch has no closer");
+  return src.slice(at, end);
+}
+
+/** What is wrong with a ZodError branch's answers; empty when it is sound. The pin (W2c Task 13 put a comment, a
+ *  `const moved` and a nested named-refusal return ahead of the generic one, so "the branch OPENS with the return" is
+ *  no longer the question): EVERY path of the branch answers 400 VALIDATION, and the branch ends in an UNCONDITIONAL
+ *  answer — which is where a malformed id (it names no moved decider) lands. Full-line comments are dropped first:
+ *  they may sit anywhere in the branch and say anything. */
+function zodBranchFlaws(branch: string): string[] {
+  const code = branch.replace(/^\s*\/\/.*$/gm, "");
+  const returns = [...code.matchAll(/^( *)return\b[^;]*;/gm)];
+  const flaws: string[] = [];
+  if (returns.length === 0) flaws.push("the branch answers nothing");
+  for (const r of returns) if (!/^ *return errorResponse\(requestId, 400, "VALIDATION", /.test(r[0])) flaws.push(`not a 400 VALIDATION: ${r[0].trim().slice(0, 70)}`);
+  if ((code.match(/\breturn\b/g) ?? []).length !== returns.length) flaws.push("a return that does not start its own line");
+  if (/\bthrow\b/.test(code)) flaws.push("the branch throws");
+  const last = returns.at(-1);
+  if (last !== undefined && last[1]!.length !== 6) flaws.push("no unconditional answer: the last return is nested in a condition");
+  return flaws;
+}
+
 describe("team rosters and per-fixture lineups (W1-driving Task 4, fold-in beneath ruling 49)", () => {
   // State transitions, the empty case first: an individual sport (no members,
   // no lineups, nothing thrown); the first team fixture; a second fixture with
@@ -1409,7 +1492,7 @@ describe("team rosters and per-fixture lineups (W1-driving Task 4, fold-in benea
     expect(/\nexport async function gateLineupSuspensions\([\s\S]*?\n\}\n/.exec(read("apps/web/src/server/usecases/discipline.ts"))?.[0]).toMatch(/throw new HttpError\(\s*422,[^;]*"SUSPENDED_PLAYER"/);
     // A malformed person id never reaches the usecase: a Uuid in the schema, a ZodError answered 400 VALIDATION.
     expect(read("apps/web/src/server/api-v1/schemas.ts")).toMatch(/export const LineupSlotInput = z\.object\(\{\s*person_id: Uuid,/);
-    expect(read("apps/web/src/server/api-v1/http.ts")).toMatch(/if \(err instanceof ZodError\) \{\s*return errorResponse\(requestId, 400, "VALIDATION"/);
+    expect(zodBranchFlaws(zodErrorBranch(read("apps/web/src/server/api-v1/http.ts")))).toEqual([]);
     // A second PUT replaces the first: delete, then insert.
     const del = put.indexOf("delete from lineups where fixture_id = ${fixtureId} and entrant_id = ${entrantId}");
     expect(del).toBeGreaterThan(-1);
@@ -1428,6 +1511,27 @@ describe("team rosters and per-fixture lineups (W1-driving Task 4, fold-in benea
     const callers = sources.filter((p) => /\bassertLineup\(/.test(read(p)));
     expect(callers).toEqual(["packages/engine/src/sport/catalog.ts"]);
     expect(read("packages/engine/src/sport/catalog.ts").match(/\bassertLineup\(/g)).toHaveLength(1);
+  });
+
+  it("the ZodError-branch pin tolerates comments and the named refusal, and rejects every way the 400 VALIDATION answer can break", () => {
+    const named = '      if (moved !== null) {\n        return errorResponse(requestId, 400, "VALIDATION", moved.message, { field: moved.field });\n      }\n';
+    const generic = '      return errorResponse(requestId, 400, "VALIDATION", "Invalid input", {\n        issues: err.issues,\n      });';
+    const branch = (...body: string[]) => `\n    if (err instanceof ZodError) {\n${body.join("")}\n    }\n`;
+    // The sound shapes: the bare return the pin was first written against, and the shape http.ts has now (comment, const, nested return).
+    expect(zodBranchFlaws(zodErrorBranch(branch(generic)))).toEqual([]);
+    expect(zodBranchFlaws(zodErrorBranch(branch("      // a comment that says return errorResponse(requestId, 500, \"X\");\n      const moved = f(err.issues);\n", named, generic)))).toEqual([]);
+    // Each way it breaks.
+    expect(zodBranchFlaws(zodErrorBranch(branch(generic.replace("400", "500"))))).toEqual([expect.stringMatching(/^not a 400 VALIDATION/)]);
+    expect(zodBranchFlaws(zodErrorBranch(branch(generic.replace('"VALIDATION"', '"ERROR"'))))).toEqual([expect.stringMatching(/^not a 400 VALIDATION/)]);
+    expect(zodBranchFlaws(zodErrorBranch(branch(named, generic.replace("400", "422"))))).toEqual([expect.stringMatching(/^not a 400 VALIDATION/)]);
+    expect(zodBranchFlaws(zodErrorBranch(branch(named.replace("400", "200"), generic)))).toEqual([expect.stringMatching(/^not a 400 VALIDATION/)]);
+    expect(zodBranchFlaws(zodErrorBranch(branch(named)))).toEqual(["no unconditional answer: the last return is nested in a condition"]);
+    expect(zodBranchFlaws(zodErrorBranch(branch("      if (x) return errorResponse(requestId, 500, \"X\");\n", generic)))).toEqual(["a return that does not start its own line"]);
+    expect(zodBranchFlaws(zodErrorBranch(branch("      throw err;\n")))).toEqual(["the branch answers nothing", "the branch throws"]);
+    expect(zodBranchFlaws(zodErrorBranch(branch("      log(err);\n")))).toEqual(["the branch answers nothing"]);
+    // A branch the pin cannot bound is a named failure, never a pass.
+    expect(() => zodErrorBranch("\n    if (err instanceof Error) {\n")).toThrow(/no `if \(err instanceof ZodError\) \{` branch/);
+    expect(() => zodErrorBranch("\n    if (err instanceof ZodError) {\n      return 1;\n")).toThrow(/no closer/);
   });
 });
 

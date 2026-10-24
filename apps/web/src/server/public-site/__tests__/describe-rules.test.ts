@@ -15,14 +15,15 @@
 import { describe, expect, it } from "vitest";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { resolveLatestModule } from "@/server/engine-db";
-import { configKeysFor, STAGE_RULES_SPORTS } from "@/lib/match-rules";
+import { builtinModules } from "@seazn/engine/sports";
+import { configKeysFor } from "@/lib/match-rules";
 import { GAME_UNIT_SPORTS } from "@/lib/public-site";
 import enPublic from "@/dictionaries/en/public.json";
 import esPublic from "@/dictionaries/es/public.json";
 import frPublic from "@/dictionaries/fr/public.json";
 import nlPublic from "@/dictionaries/nl/public.json";
 import { rulesLineText } from "@/lib/rules-line";
-import { describeMatchRules, effectiveRulesLine, rulesDifferFromDivision, type RulesLineT } from "../describe-rules";
+import { describeMatchRules, effectiveRulesLine, rulesDifferFromDivision, ruleFamilyOf, type RulesLineT } from "../describe-rules";
 
 const mod = (sportKey: string) => resolveLatestModule(sportKey);
 
@@ -52,10 +53,9 @@ function one(sportKey: string, m: AnySportModule | null, cfg: unknown) {
   return line[0];
 }
 
-/** The four set-kernel-or-tennis sports split by config SHAPE (tennis nests `set`). */
-const SET_KERNEL_SPORTS = [...STAGE_RULES_SPORTS].filter(
-  (k) => typeof (mod(k).configSchema.parse({}) as Record<string, unknown>).set !== "object",
-);
+/** The set-kernel sports, read from the engine's own declarations (W2c Task 16: the web's four-sport gate is gone). The
+ *  set kernel declares its target as `setTo`; tennis nests it as `set`. */
+const SET_KERNEL_SPORTS = builtinModules.filter((m) => Object.hasOwn(m.ruleKeys ?? {}, "setTo")).map((m) => m.key);
 
 describe("describeMatchRules — option A wording, from the parsed config", () => {
   it("badminton Best-of-1 to 15 capped at 21 reads as ONE game with its points and cap", () => {
@@ -188,15 +188,19 @@ describe("describeMatchRules — option A wording, from the parsed config", () =
     expect(one("badminton", permissive({ bestOf: "3" }), {})).toBeNull();
   });
 
-  it("a refused config, a missing module, or a sport with no per-stage rules → null", () => {
+  it("a refused config, a missing module, or a shape no family claims → null", () => {
     const badminton = mod("badminton");
     expect(one("badminton", badminton, { bestOf: 2 }), "bestOf must be odd").toBeNull();
     expect(one("badminton", null, SWISS_RULES)).toBeNull();
-    // Carrom declares `bestOf` but is not a stage-rules sport, and its unit is
-    // neither a game of points nor a set — the line stays with the preset.
-    expect(STAGE_RULES_SPORTS.has("carrom")).toBe(false);
-    expect(one("carrom", mod("carrom"), mod("carrom").configSchema.parse({}))).toBeNull();
-    expect(one("football", mod("football"), mod("football").configSchema.parse({}))).toBeNull();
+    // W2c Task 16: the four-sport gate is gone - carrom and football are described (the sweep below) - but a module
+    // whose declarations match no family still answers nothing rather than a guess. A module that declares rule keys
+    // and none a family reads has no honest line; it keeps its preset name.
+    const unknownShape = {
+      ...permissive({ bestOf: 3, setTo: 11 }),
+      ruleKeys: { sparkle: { scope: "match" } },
+    } as unknown as AnySportModule;
+    expect(describeMatchRules("badminton", unknownShape, {})).toBeNull();
+    expect(ruleFamilyOf(unknownShape)).toBeNull();
   });
 });
 
@@ -583,10 +587,47 @@ describe("effectiveRulesLine — the preset name ONLY when the rule keys are equ
     ]);
   });
 
-  it("no module, a refused config, or a sport with no per-stage rules → null (the preset stays; nothing invented)", () => {
+  it("no module, a refused config, or a shape no family claims → null (the preset stays; nothing invented)", () => {
     expect(effectiveRulesLine("badminton", null, { ...division, ...SWISS_RULES }, division)).toBeNull();
     expect(line("badminton", { ...division, bestOf: 2 }, division), "bestOf must be odd").toBeNull();
-    expect(line("carrom", { bestOf: 1 }, { bestOf: 3 })).toBeNull();
+    // A module whose rule keys no family reads: the preset stays however the configs differ.
+    const unknownShape = { ...permissive({ bestOf: 1 }), ruleKeys: { sparkle: { scope: "match" } } } as unknown as AnySportModule;
+    expect(effectiveRulesLine("badminton", unknownShape, { bestOf: 1 }, { bestOf: 3 })).toBeNull();
+  });
+});
+
+describe("X-SR-1 every sport's format line (public)", () => {
+  const DICTS = { en: enPublic, es: esPublic, fr: frPublic, nl: nlPublic } as const;
+
+  it("every builtin sport x every declared variant answers a non-empty line in all 4 locales (counted)", () => {
+    let checked = 0;
+    for (const m of builtinModules)
+      for (const v of Object.keys(m.variants)) {
+        const line = describeMatchRules(m.key, m, variantCfg(m.key, v));
+        expect(line, `${m.key}/${v}`).not.toBeNull();
+        expect(line!.length, `${m.key}/${v}`).toBeGreaterThan(0);
+        for (const [locale, dict] of Object.entries(DICTS)) {
+          const text = rulesLineText(dict as never, line!);
+          expect(text, `${m.key}/${v} ${locale}`).not.toMatch(/format\.rules\./); // an unresolved key prints its own name
+          expect(text, `${m.key}/${v} ${locale}`).not.toMatch(/\{[a-zA-Z]+\}/); // an unfilled param
+          expect(text.trim().length, `${m.key}/${v} ${locale}`).toBeGreaterThan(0);
+        }
+        checked++;
+      }
+    expect(checked).toBe(builtinModules.reduce((n, m) => n + Object.keys(m.variants).length, 0));
+    expect(checked).toBeGreaterThan(builtinModules.length);
+  });
+
+  it("a period sport's line carries its own numbers: two football variants whose halves differ print different lines", () => {
+    const m = mod("football");
+    const variants = Object.keys(m.variants);
+    const cfgOf = (v: string) => variantCfg("football", v) as { halfMinutes: number };
+    const lines = variants.map((v) => rulesLineText(enPublic as never, describeMatchRules("football", m, variantCfg("football", v))!));
+    const i = variants.findIndex((v) => cfgOf(v).halfMinutes !== cfgOf(variants[0]!).halfMinutes);
+    expect(i, "football declares two variants whose halves differ").toBeGreaterThan(0);
+    expect(lines[i]).not.toBe(lines[0]);
+    expect(lines[0]).toMatch(new RegExp(`\\b${cfgOf(variants[0]!).halfMinutes}\\b`));
+    expect(lines[i]).toMatch(new RegExp(`\\b${cfgOf(variants[i]!).halfMinutes}\\b`));
   });
 });
 
@@ -672,4 +713,59 @@ describe("every line the describer can PRODUCE is in all four public dictionarie
       }
     });
   }
+});
+
+// Batch-5 late note (pad banner at 320): the rules line wraps like prose, and "(cap 15)" broke INSIDE its parentheses -
+// "(cap" at the end of one line, "15)" opening the next. The label and its number are joined with a no-break space in
+// every locale; the break may still fall before the "(".
+describe("the points-cap parenthetical never breaks across a line (every locale)", () => {
+  const NBSP = "\u00a0";
+  const LOCALES = { en: enPublic, es: esPublic, fr: frPublic, nl: nlPublic } as const;
+  /** The cap clauses, read off the English dictionary: every format-rules key that takes a `{cap}`. */
+  const capKeys = Object.entries(enPublic as Record<string, string>)
+    .filter(([key, text]) => key.startsWith("format.rules.") && text.includes("{cap}"))
+    .map(([key]) => key);
+
+  it("anti-vacuity: the dictionary has the cap clauses the describer emits, in every locale", () => {
+    const emitted = new Set<string>();
+    const badminton = mod("badminton");
+    const d = variantCfg("badminton", "short") as { bestOf: number; setTo: number; finalSetTo: number; cap: number };
+    for (const cfg of [d, { ...d, bestOf: 1 }, { ...d, bestOf: 5 }, { ...d, finalSetTo: d.cap }]) {
+      for (const clause of describeMatchRules("badminton", badminton, cfg) ?? []) if (clause.params && "cap" in clause.params) emitted.add(clause.key);
+    }
+    expect(emitted.size, "the describer emits at least the one-game, best-of and decider cap clauses").toBeGreaterThanOrEqual(3);
+    for (const key of emitted) expect(capKeys, `${key} is a cap key in the dictionary`).toContain(key);
+    for (const [locale, dict] of Object.entries(LOCALES)) {
+      for (const key of capKeys) expect(Object.hasOwn(dict, key), `${locale}: ${key}`).toBe(true);
+    }
+  });
+
+  it("every cap key in every locale joins its label to {cap} with a no-break space, never an ordinary one", () => {
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(LOCALES)) {
+      for (const key of capKeys) {
+        const text = (dict as Record<string, string>)[key]!;
+        expect(text, `${locale} ${key}: the label and {cap} are joined by U+00A0`).toMatch(new RegExp(`\\S${NBSP}\\{cap\\}`));
+        expect(text, `${locale} ${key}: no ordinary space before {cap}`).not.toMatch(/ \{cap\}/);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: keys x locales checked").toBe(capKeys.length * Object.keys(LOCALES).length);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("rendered, the parenthetical holds no ordinary space (so no line can break inside it), for each locale and clause", () => {
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(LOCALES)) {
+      for (const key of capKeys) {
+        const rendered = rulesLineText(dict, [{ key, params: { n: 3, points: 21, cap: 30, decider: 25 } }]);
+        const paren = rendered.match(/\(([^)]*\b30)\)/);
+        expect(paren, `${locale} ${key}: the parenthetical is in the line: ${rendered}`).not.toBeNull();
+        expect(paren![1], `${locale} ${key}`).not.toContain(" ");
+        expect(paren![1]!.includes(NBSP), `${locale} ${key}: it is joined by the no-break space`).toBe(true);
+        checked++;
+      }
+    }
+    expect(checked).toBe(capKeys.length * Object.keys(LOCALES).length);
+  });
 });

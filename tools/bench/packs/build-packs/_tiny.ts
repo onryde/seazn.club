@@ -686,6 +686,8 @@ const TINY_ADAPTATIONS: PackInput["meta"]["adaptations"] = [
 // ---------------------------------------------------------------------------
 
 const BADMINTON_DIVISION_REF = "d-badminton";
+/** The badminton division's variant, ONE value for the division, its resolved cfg and its stream's preset. */
+const BADMINTON_VARIANT = "bwf";
 const BADMINTON_STAGE_REF = "s-badminton-league";
 const BADMINTON_HOME = "e-cho";
 const BADMINTON_AWAY = "e-dahl";
@@ -711,9 +713,9 @@ const BADMINTON_SETS: readonly ReconstructedSet[] = [
   { home: 21, away: 18 },
 ];
 
-const badmintonCfg = resolveDivisionCfg(badminton, { variantKey: "bwf", cfgOverrides: {} });
+const badmintonCfg = resolveDivisionCfg(badminton, { variantKey: BADMINTON_VARIANT, cfgOverrides: {} });
 if (!badmintonCfg.ok) {
-  throw new Error(`badminton "bwf" cfg failed to resolve: ${JSON.stringify(badmintonCfg)}`);
+  throw new Error(`badminton "${BADMINTON_VARIANT}" cfg failed to resolve: ${JSON.stringify(badmintonCfg)}`);
 }
 
 /** The STAGE OBJECT, not its ref — see `ReconstructSetBasedStreamInput.stage`'s
@@ -735,6 +737,7 @@ const BADMINTON_STREAM = reconstructSetBasedStream({
   cfg: badmintonCfg.cfg,
   divisionRef: BADMINTON_DIVISION_REF,
   stage: BADMINTON_STAGE,
+  variantKey: BADMINTON_VARIANT,
   fixtureExtKey: BADMINTON_FIXTURE,
   home: BADMINTON_HOME,
   away: BADMINTON_AWAY,
@@ -771,7 +774,7 @@ const BADMINTON_DIVISION: PackInput["divisions"][number] = {
   ref: BADMINTON_DIVISION_REF,
   name: "Badminton",
   sportKey: badminton.key,
-  variantKey: "bwf",
+  variantKey: BADMINTON_VARIANT,
   moduleVersion: badminton.version,
   cfgOverrides: {},
   // The module's own official cascade (doc 05 §4), read off the module
@@ -795,7 +798,7 @@ const BADMINTON_DIVISION: PackInput["divisions"][number] = {
 const badmintonResolvedCfg = badmintonCfg.cfg as SetBasedCfg;
 const BADMINTON_WIN_POINTS = badmintonResolvedCfg.pointsMap["*"];
 if (BADMINTON_WIN_POINTS === undefined) {
-  throw new Error('badminton "bwf" cfg declares no pointsMap["*"] entry');
+  throw new Error(`badminton "${BADMINTON_VARIANT}" cfg declares no pointsMap["*"] entry`);
 }
 const [BADMINTON_WINNER_POINTS, BADMINTON_LOSER_POINTS] = BADMINTON_WIN_POINTS;
 

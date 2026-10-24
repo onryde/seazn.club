@@ -923,7 +923,14 @@ const COVERAGE_CONFIGS: Record<string, Record<string, unknown>> = {
   // W2a BG-KO-1 — `tiebreak` is set only by bracketDeciders (a bracket stage),
   // never by a variant, so `boardgame.tiebreak` and its optional `score` were
   // reachable from no recorded config. The bracket overlay itself, by name.
-  boardgame: { knockoutTiebreak: { tiebreak: true } },
+  boardgame: {
+    knockoutTiebreak: { tiebreak: true },
+    // W2c BG-KO-3/BG-KO-2 — the stage's rung list is written by a stage, never a variant, so `tiebreakRungs` and the
+    // Armageddon's recorded colour (`armageddonBlack`) were reachable from no recorded config. An Armageddon-only list
+    // makes every tie-break stream play one. (The empty list adds no field and no state path, so the corpus has no
+    // reason to record it: tiebreak.test.ts BG-KO-3 owns "a drawn game stays a draw".)
+    knockoutArmageddon: { tiebreak: true, tiebreakRungs: ["armageddon"] },
+  },
   // W1 (scoring free) golden-gap fix — golden coverage now measures against
   // `padSpec.fidelity`, and the set-based kernel it is shared by declares
   // `expedite.start`/`sub`/`timeout` fidelity bands unconditionally for every
@@ -1014,6 +1021,10 @@ const COVERAGE_CONFIG_KNOBS: Record<string, Record<string, unknown>> = {
       periodSeconds: { H1: 2700, H2: 2820 },
     },
     concussed: { teamSize: 11, maxSubs: 1, concussionSubs: 2 },
+    // W2c FB-SO-1 — a youth knockout as a stage preset stores it: extra time, penalties and three kicks each.
+    // `shootoutAttempts` is optional with no default, so no shipped variant sets it and the corpus pinned it nowhere. This
+    // entry pins the KEY (the raw config); the shortened shoot-out's behaviour is pinned by src/sport/stage-defaults.test.ts.
+    youthKnockout: { extraTime: { enabled: true, halfMinutes: 15 }, shootout: true, shootoutAttempts: 3 },
   },
   // ICC playing conditions declare a per-innings DRS allowance; no shipped
   // variant does, so `reviews` was pinned by nothing. The generator already
@@ -1029,6 +1040,12 @@ const COVERAGE_CONFIG_KNOBS: Record<string, Record<string, unknown>> = {
     reviewed: { reviews: { perInnings: 2 } },
     mutable: { lineupChanges: { maxSubs: 1, concussionReplacements: 2, reentry: "once" } },
   },
+  // W2c CA-AB-2 / GN-AB-2 - a stage that shares the points on an abandon. `abandonPolicy` is optional with no default, so
+  // no shipped variant sets it and the corpus pinned it nowhere. Each pins the KEY (the raw config); the abandon's
+  // behaviour is pinned by src/sport/abandon-options.test.ts. Both need draws (owner P-5): carrom's house rule tieBoard
+  // "draw", generic's allowDraws.
+  carrom: { sharedAbandon: { tieBoard: "draw", abandonPolicy: "share" } },
+  generic: { sharedAbandon: { resultMode: "score", allowDraws: true, abandonPolicy: "share" } },
   // A Fischer-with-delay time control ("G/5 +3 d2"). `increment` and `delay`
   // are independent knobs and a control may declare both.
   boardgame: { timed: { clock: { base: 300, increment: 3, delay: 2 } } },

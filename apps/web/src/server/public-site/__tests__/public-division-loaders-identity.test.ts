@@ -149,11 +149,26 @@ async function readPublicDivisionDetailBefore(division: PublicDivision) {
                 and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id))) as expunged,
            -- W2b Task 13, carried the same way: the active abandon's reason, for a row an abandon could have left a
            -- result on (the reader's ABANDON_RESULT_KINDS, written out), latest first. Independent of the loaders'.
-           (case when public_fixtures_v.outcome ->> 'kind' in ('win', 'draw', 'tie', 'no_result') then (
-             select a.payload ->> 'reason' from score_events a
+           -- T16 review m3 (X-AB-1), extended by hand in batch-5 Q3: a row at status 'abandoned' with NO outcome is
+           -- probed too (the replay policy, a level abandon the cfg refuses), and a withdrawal's expunge reads null.
+           (case when public_fixtures_v.outcome ->> 'kind' in ('win', 'draw', 'tie', 'no_result')
+                      or (public_fixtures_v.outcome is null and public_fixtures_v.status = 'abandoned') then (
+             select case when a.payload ->> 'expunge' = 'true' then null else a.payload ->> 'reason' end from score_events a
               where a.fixture_id = public_fixtures_v.id and a.type = 'core.abandon'
                 and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id)
-              order by a.seq desc limit 1) end) as abandon_reason
+              order by a.seq desc limit 1) end) as abandon_reason,
+           -- X-AB-5 (61d735712), carried the same way: an active (non-voided) core.abandon on an 'abandoned' row, the
+           -- table's "held for settle" probe (hasActiveAbandonSql without the expunge gate), written out by hand.
+           (public_fixtures_v.status = 'abandoned' and exists (
+             select 1 from score_events a
+              where a.fixture_id = public_fixtures_v.id and a.type = 'core.abandon'
+                and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id))) as has_active_abandon,
+           -- Rebase ruling D3, carried the same way: the organiser's online "No result" (the marker on an active
+           -- core.abandon), written out by hand.
+           (public_fixtures_v.status = 'abandoned' and exists (
+             select 1 from score_events a
+              where a.fixture_id = public_fixtures_v.id and a.type = 'core.abandon' and a.payload ->> 'noResult' = 'true'
+                and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id))) as no_result
     from public_fixtures_v where division_id = ${division.id}
     order by round_no, seq_in_round`.then((rows) => rows.map(normalizeFixtureBefore));
   const fixtures = await withCourtVenueNames(rawFixtures);
@@ -231,7 +246,17 @@ async function embedDivisionDataBefore(divisionId: string) {
              (public_fixtures_v.status = 'abandoned' and exists (
              select 1 from score_events a
               where a.fixture_id = public_fixtures_v.id and a.type = 'core.abandon' and a.payload ->> 'expunge' = 'true'
-                and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id))) as expunged
+                and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id))) as expunged,
+             -- X-AB-5 (61d735712): the same carry as readPublicDivisionDetailBefore.
+             (public_fixtures_v.status = 'abandoned' and exists (
+               select 1 from score_events a
+                where a.fixture_id = public_fixtures_v.id and a.type = 'core.abandon'
+                  and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id))) as has_active_abandon,
+             -- Rebase ruling D3: the same carry as readPublicDivisionDetailBefore.
+             (public_fixtures_v.status = 'abandoned' and exists (
+               select 1 from score_events a
+                where a.fixture_id = public_fixtures_v.id and a.type = 'core.abandon' and a.payload ->> 'noResult' = 'true'
+                  and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id))) as no_result
       from public_fixtures_v where division_id = ${divisionId}
       order by round_no, seq_in_round`
       .then((rows) => rows.map(isoBefore))
@@ -349,6 +374,33 @@ describe.skipIf(!HAS_DB)("readPublicDivisionDetail — identical to the pre-T4 r
     expect(cup.standings.length).toBeGreaterThan(0);
     // The empty division is empty everywhere.
     expect([empty.stages, empty.pools, empty.fixtures, empty.standings, empty.entrants].map((a) => a.length)).toEqual([0, 0, 0, 0, 0]);
+    // Batch-5 Q3: the three abandon carries (`expunged`, `abandon_reason`, `has_active_abandon`) each have a TRUE witness
+    // and a false one. The scene used to hold no abandoned match at all, so a loader hard-wiring any of them to false
+    // read identical to the frozen select (14/14 green with `false as has_active_abandon`).
+    const row = (id: string) => cup.fixtures.find((f) => f.id === id);
+    const active = row(scene.abandoned.active);
+    const voided = row(scene.abandoned.voided);
+    const expunged = row(scene.abandoned.expunged);
+    expect([active, voided, expunged].every((f) => f !== undefined), "the cup holds the three abandoned matches").toBe(true);
+    expect(active!.status).toBe("abandoned");
+    expect({ x: active!.expunged, h: active!.has_active_abandon }, "an active abandon: held, not expunged").toEqual({ x: false, h: true });
+    expect(active!.abandon_reason, "the active abandon's reason is carried").toBe("floodlights failed");
+    expect(expunged!.status).toBe("abandoned");
+    expect({ x: expunged!.expunged, h: expunged!.has_active_abandon }, "a withdrawal's expunge").toEqual({ x: true, h: true });
+    expect(expunged!.abandon_reason ?? null, "an expunge took the match off the table: no reason to state").toBeNull();
+    expect(voided!.status, "a voided abandon leaves the match playable again").not.toBe("abandoned");
+    expect({ x: voided!.expunged, h: voided!.has_active_abandon, r: voided!.abandon_reason ?? null }, "a voided abandon carries nothing").toEqual({ x: false, h: false, r: null });
+    // Rebase ruling D3: the fourth carry, `no_result`, true on the organiser's online "No result" only — a plain
+    // abandon, an expunge and a voided abandon all read false (a loader hard-wiring it either way reds here).
+    const noResult = row(scene.abandoned.noResult);
+    expect(noResult, "the cup holds the No result match").toBeDefined();
+    expect(noResult!.status).toBe("abandoned");
+    expect({ n: noResult!.no_result, x: noResult!.expunged, h: noResult!.has_active_abandon }, "the organiser's No result").toEqual({ n: true, x: false, h: true });
+    expect([active, expunged, voided].map((f) => f!.no_result), "a plain abandon, an expunge, a voided abandon: no No result").toEqual([false, false, false]);
+    // …and every other match carries false/null on all four (the negative pair: the carries are not stuck true).
+    const others = cup.fixtures.filter((f) => ![scene.abandoned.active, scene.abandoned.expunged, scene.abandoned.noResult].includes(f.id));
+    expect(others.length).toBeGreaterThan(0);
+    expect(others.every((f) => f.expunged !== true && f.has_active_abandon !== true && f.no_result !== true), "only the three abandoned matches carry").toBe(true);
   });
 
   it("the pre-T4 fixtures statement leaves tied rows in PHYSICAL order when it walks the index (why the order now ends on stage seq and id)", async () => {

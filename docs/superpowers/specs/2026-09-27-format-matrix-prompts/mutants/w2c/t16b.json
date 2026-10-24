@@ -1,0 +1,612 @@
+[
+  {
+    "id": "t16b-kernel-played-forfeit-takes-award",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "return by !== \"both\" && (reason === \"walkover\" || !playedBefore);",
+    "replace": "return by !== \"both\";",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/forfeit-award.test.ts"
+        ]
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/walkover-rule-award-db.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16b-kernel-walkover-after-play-loses-award",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "return by !== \"both\" && (reason === \"walkover\" || !playedBefore);",
+    "replace": "return by !== \"both\" && !playedBefore;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/forfeit-award.test.ts"
+        ]
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/walkover-rule-award-db.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16b-kernel-double-walkover-takes-award",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "return by !== \"both\" && (reason === \"walkover\" || !playedBefore);",
+    "replace": "return reason === \"walkover\" || !playedBefore;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/forfeit-award.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16b-football-credit-ignores-state-award",
+    "file": "packages/engine/src/sports/football/football.ts",
+    "find": "  const award = state.forfeitAward;\n  const credited =\n    award === undefined\n      ? goalCredit(cfg.awardScore.goals",
+    "replace": "  const award: ForfeitAward | undefined = undefined;\n  const credited =\n    award === undefined\n      ? goalCredit(cfg.awardScore.goals",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/forfeit-award.test.ts"
+        ]
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/walkover-rule-award-db.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16b-football-never-stores-award",
+    "file": "packages/engine/src/sports/football/football.ts",
+    "find": "    ...(forfeitAward === undefined ? {} : { forfeitAward: [...forfeitAward] as ForfeitAward }),",
+    "replace": "    ...({} as { forfeitAward?: ForfeitAward }),",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/forfeit-award.test.ts"
+        ]
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/walkover-rule-award-db.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16b-kernel-credit-ignores-state-award",
+    "file": "packages/engine/src/sports/period/kernel.ts",
+    "find": "    const award = state.forfeitAward;\n    const credited =",
+    "replace": "    const award: ForfeitAward | undefined = undefined;\n    const credited =",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/forfeit-award.test.ts"
+        ]
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/walkover-rule-award-db.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16b-kernel-never-stores-award",
+    "file": "packages/engine/src/sports/period/kernel.ts",
+    "find": "    ...(forfeitAward === undefined ? {} : { forfeitAward: [...forfeitAward] as ForfeitAward }),",
+    "replace": "    ...({} as { forfeitAward?: ForfeitAward }),",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/forfeit-award.test.ts"
+        ]
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/walkover-rule-award-db.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16b-generic-credit-ignores-state-award",
+    "file": "packages/engine/src/sports/generic/generic.ts",
+    "find": "  const award = state.forfeitAward;\n  const credited =",
+    "replace": "  const award: ForfeitAward | undefined = undefined;\n  const credited =",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/forfeit-award.test.ts"
+        ]
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/walkover-rule-award-db.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16b-generic-never-stores-award",
+    "file": "packages/engine/src/sports/generic/generic.ts",
+    "find": "          ...(ctx?.forfeitAward === undefined ? {} : { forfeitAward: [...ctx.forfeitAward] as ForfeitAward }),",
+    "replace": "          ...({} as { forfeitAward?: ForfeitAward }),",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/forfeit-award.test.ts"
+        ]
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/walkover-rule-award-db.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16b-generic-line-ignores-award",
+    "file": "packages/engine/src/sports/generic/generic.ts",
+    "find": "  if (state.forfeitAward === undefined || outcome?.kind !== \"award\") return null;",
+    "replace": "  if (outcome?.kind !== \"award\") return null;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/forfeit-award.test.ts",
+          "src/sport/forfeit-credit.test.ts"
+        ]
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/walkover-rule-award-db.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16b-offer-reach-gate",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "return award !== undefined && pointsRuleAwardReachesTable(module_) ? [award[0], award[1]] : undefined;",
+    "replace": "return award !== undefined ? [award[0], award[1]] : undefined;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/forfeit-award.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16b-offer-orientation",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "return award !== undefined && pointsRuleAwardReachesTable(module_) ? [award[0], award[1]] : undefined;",
+    "replace": "return award !== undefined && pointsRuleAwardReachesTable(module_) ? [award[1], award[0]] : undefined;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/forfeit-award.test.ts"
+        ]
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/walkover-rule-award-db.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16b-offer-aliases-rule",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "return award !== undefined && pointsRuleAwardReachesTable(module_) ? [award[0], award[1]] : undefined;",
+    "replace": "return award !== undefined && pointsRuleAwardReachesTable(module_) ? (award as unknown as ForfeitAward) : undefined;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/forfeit-award.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16b-stage-award-never-offered",
+    "file": "apps/web/src/server/engine-db/fixture-cfg.ts",
+    "find": "return rule.success ? forfeitAwardOffer(rule.data, module) : undefined;",
+    "replace": "return undefined;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/walkover-rule-award-db.test.ts"
+        ]
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/forfeit-award-callers.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16b-fold-inputs-drop-award",
+    "file": "apps/web/src/server/engine-db/fold.ts",
+    "find": "    ...(forfeitAward === undefined ? {} : { forfeitAward }),\n  };\n}\n\n/** The pure half",
+    "replace": "    ...{},\n  };\n}\n\n/** The pure half",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/walkover-rule-award-db.test.ts"
+        ]
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/forfeit-award-callers.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16b-fold-from-drops-award",
+    "file": "apps/web/src/server/engine-db/fold.ts",
+    "find": "inputs.forfeitAward === undefined ? undefined : { forfeitAward: inputs.forfeitAward }",
+    "replace": "undefined",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/forfeit-award-callers.test.ts"
+        ]
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/walkover-rule-award-db.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16b-write-fold-drops-award",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "        ...(forfeitAward === undefined ? {} : { forfeitAward }),\n      });",
+    "replace": "        ...{},\n      });",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/walkover-rule-award-db.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16b-awarded-state-drops-award",
+    "file": "apps/web/src/server/engine-db/awarded-state.ts",
+    "find": "forfeitAward === undefined ? undefined : { forfeitAward });\n  const decided",
+    "replace": "undefined);\n  const decided",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/forfeit-award-callers.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16b-load-award-drops-award",
+    "file": "apps/web/src/server/engine-db/awarded-state.ts",
+    "find": "ledger, ...(forfeitAward === undefined ? {} : { forfeitAward }) };",
+    "replace": "ledger };",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/forfeit-award-callers.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16b-resolved-now-ignores-award",
+    "file": "apps/web/src/server/engine-db/rules-version.ts",
+    "find": "forfeitAward: stageForfeitAward(stage, m) ?? null }",
+    "replace": "forfeitAward: null }",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/walkover-rule-award-db.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16b-points-arm-no-rules-bump",
+    "file": "apps/web/src/server/usecases/stage-rules.ts",
+    "find": "const rulesBefore = input.rules !== undefined || points !== undefined ?",
+    "replace": "const rulesBefore = input.rules !== undefined ?",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/walkover-rule-award-db.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16b-pad-cfg-drops-award",
+    "file": "apps/web/src/server/usecases/fixtures.ts",
+    "find": "      forfeitAward: stageForfeitAward(stage, sportModule),",
+    "replace": "      forfeitAward: undefined,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/walkover-rule-award-db.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16b-line-says-score-unreached",
+    "file": "apps/web/src/lib/points-line.ts",
+    "find": "if (opts.awardReaches === true && Array.isArray(score)",
+    "replace": "if (Array.isArray(score)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/points-line.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16b-line-reach-always",
+    "file": "apps/web/src/server/public-site/stage-format-lines.ts",
+    "find": "{ awardReaches: module_ ? pointsRuleAwardReachesTable(module_) : false }",
+    "replace": "{ awardReaches: true }",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/points-line.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16b-line-reach-never",
+    "file": "apps/web/src/server/public-site/stage-format-lines.ts",
+    "find": "{ awardReaches: module_ ? pointsRuleAwardReachesTable(module_) : false }",
+    "replace": "{ awardReaches: false }",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/points-line.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16b-dialog-previews-award-after-play",
+    "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+    "find": "typeof state === \"object\" && state !== null && unplayedForfeitEvent({ by: w, reason }, f.playRecorded);",
+    "replace": "typeof state === \"object\" && state !== null;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16b-dialog-never-previews-award",
+    "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+    "find": "const awarded = f.forfeitAward !== undefined && typeof state",
+    "replace": "const awarded = false && typeof state",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16b-dict-en-score-nb-dash",
+    "file": "apps/web/src/dictionaries/en/public.json",
+    "find": "walkover scored {winner}‑{loser}",
+    "replace": "walkover scored {winner}–{loser}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/points-line.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16b-dict-es-score-nb-dash",
+    "file": "apps/web/src/dictionaries/es/public.json",
+    "find": "walkover con el marcador {winner}‑{loser}",
+    "replace": "walkover con el marcador {winner}–{loser}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/points-line.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16b-dict-fr-score-nb-dash",
+    "file": "apps/web/src/dictionaries/fr/public.json",
+    "find": "walk-over avec le score {winner}‑{loser}",
+    "replace": "walk-over avec le score {winner}–{loser}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/points-line.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16b-dict-nl-score-nb-dash",
+    "file": "apps/web/src/dictionaries/nl/public.json",
+    "find": "walkover met uitslag {winner}‑{loser}",
+    "replace": "walkover met uitslag {winner}–{loser}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/points-line.test.ts",
+          "src/server/public-site/__tests__/stage-format-lines.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t16b-dialog-nil-award-suppressed",
+    "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+    "find": "if (h === 0 && a === 0 && !awarded) return null;",
+    "replace": "if (h === 0 && a === 0) return null;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+        ],
+        "name": "nil-nil award"
+      }
+    ]
+  },
+  {
+    "id": "t16b-dialog-nil-suppression-dropped",
+    "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+    "find": "if (h === 0 && a === 0 && !awarded) return null;",
+    "replace": "if (h === 0 && a === 0 && false) return null;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+        ],
+        "name": "nil-nil award"
+      }
+    ]
+  },
+  {
+    "id": "t16b-football-nil-award-dropped",
+    "file": "packages/engine/src/sports/football/football.ts",
+    "find": "...(forfeitAward === undefined ? {} : { forfeitAward: [...forfeitAward] as ForfeitAward }),",
+    "replace": "...(forfeitAward === undefined || (forfeitAward[0] === 0 && forfeitAward[1] === 0) ? {} : { forfeitAward: [...forfeitAward] as ForfeitAward }),",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/forfeit-award.test.ts"
+        ],
+        "name": "nil-nil award"
+      }
+    ]
+  },
+  {
+    "id": "t16b-cascade-writer-skips-award",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "const forfeitAward = stageForfeitAward(stage, sportModule);\n      return foldMatchWithStoppage(sportModule, cfg, lineups, stream, {",
+    "replace": "const forfeitAward = input.writer === \"withdrawal_cascade\" ? undefined : stageForfeitAward(stage, sportModule);\n      return foldMatchWithStoppage(sportModule, cfg, lineups, stream, {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/walkover-rule-award-db.test.ts"
+        ],
+        "name": "TABLE stage"
+      }
+    ]
+  },
+  {
+    "id": "t16b-write-fold-defaults-an-award",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "const forfeitAward = stageForfeitAward(stage, sportModule);\n      return foldMatchWithStoppage(sportModule, cfg, lineups, stream, {",
+    "replace": "const forfeitAward = stageForfeitAward(stage, sportModule) ?? ([1, 0] as [number, number]);\n      return foldMatchWithStoppage(sportModule, cfg, lineups, stream, {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/walkover-rule-award-db.test.ts"
+        ],
+        "name": "every reaching sport, both orientations"
+      }
+    ]
+  },
+  {
+    "id": "t16b-profile-away-line-not-exchanged",
+    "file": "apps/web/src/server/public-site/public-player-matches.ts",
+    "find": "const exchanged = sidesExchanged(stored.state);",
+    "replace": "const exchanged = stored.state;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/walkover-rule-award-db.test.ts"
+        ],
+        "name": "player profile"
+      }
+    ]
+  }
+]

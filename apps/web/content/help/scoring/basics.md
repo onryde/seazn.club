@@ -26,6 +26,21 @@ Scoring opens when you **start** the division ([why starting locks setup](/help/
 
 Results are an append-only ledger: fixing a mistake undoes the entry rather than erasing history, so a disputed scoreline can always be reconstructed. See [fixing a mistake](/help/scoring/corrections) for how undo works and its one ordering caveat.
 
+## If a match is abandoned
+
+**Abandon** ends a match that can't be finished (rain, floodlights, an incident). What it counts as depends on the stage and on the sport's **If a match is abandoned** setting in Match rules:
+
+- **Replay the match** — nobody is decided. The match stays out of the table (nothing is credited) and is marked **Needs a decision** until you act.
+- **Share the points** (generic and carrom) — the abandoned match counts as a draw, so both sides take the draw points. It needs draws to be possible: switch on **Allow draws** (generic), or set **Game tied at max boards** to **Drawn game** (carrom), or the setting won't save.
+- **Result stands** (football and others) — the score at the moment of the abandon is the result, where the sport allows it.
+
+Two things follow from the stage the match is in:
+
+- **Knockout, double elimination, page playoff, stepladder, ladder:** a bracket can't end level, so the sharing setting is ignored there and an abandoned match is always held. Open it and press **Settle the match** to pick who advances (by lot, higher seed, or your own decision), or use **Void last entry** on the abandon to play the match on.
+- **League, group, Swiss, americano:** a shared or standing result is simply a result. A match that decided nobody is held too, and **Settle the match** records who won. In a **Swiss** stage that matters: the next round isn't drawn while an abandoned board is unsettled, and the message names the round and board to settle.
+
+If a player withdraws while one of their boards is waiting, the withdrawal report lists that board as left to you — settle it for the opponent (the withdrawn player can't be chosen as the winner), or void the abandon.
+
 ## Common questions
 
 **Two people scored the same match at once?** The second entry is rejected and refreshed rather than silently overwriting — see [score conflicts](/help/scoring/conflicts).

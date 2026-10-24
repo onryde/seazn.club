@@ -53,7 +53,7 @@ import { fireDivisionCreated } from "./divisions";
 import { countsTowardPublicQuota } from "./entitlement-freeze";
 import { expireCompetitionShell } from "@/server/public-site/revalidate";
 import { stageNeedsAdvancedFormatsGate, stageNeedsDoubleElimGate } from "./format-gates";
-import { assertConfigCarriesNoRules } from "./stages";
+import { validatedStageConfig } from "./stage-defaults";
 import { validateStageProgression } from "./stage-seeding";
 import { getTemplate } from "@/server/templates/catalog";
 import type { CompetitionTemplate, TemplateStage } from "@/server/templates/schema";
@@ -73,15 +73,6 @@ export function effectiveStageConfig(stage: TemplateStage): Record<string, unkno
   }
   if (stage.points !== undefined) cfg.points = stage.points;
   Object.assign(cfg, stage.config ?? {});
-  // The THIRD door onto `stages.config` (D2a, review 2026-09-18). `TemplateStage.config`
-  // is `z.record(z.string(), z.unknown())`, so any `rules` key a template declared would
-  // be inserted verbatim below: no sport gate, no allowlist, no merged parse, for any
-  // sport — the exact bypass D2a closed on `createStages`. Not reachable today, because
-  // templates resolve against an in-code catalog and `catalog.test.ts` now asserts no
-  // stage in it carries `rules`. That test is the fast feedback; this is the guard, and
-  // D2a's whole argument is that a door is shut by a guard rather than by an assumption
-  // about who walks through it.
-  assertConfigCarriesNoRules(cfg);
   return cfg;
 }
 
@@ -343,10 +334,23 @@ export async function instantiateTemplate(
             );
           }
           const stageName = t(dict, templateStage.i18nNameKey);
+          // The THIRD door onto `stages.config` (D2a, review 2026-09-18), on `createStages`' terms since W2c Task 12:
+          // the stage starts with its kind's preset match rules (X-SR-6), and any `rules` a template stage declares
+          // (`TemplateStage.config` is an open record) is validated exactly as the stage PUT validates a save, against
+          // this division's sport, variant and parsed config. `catalog.test.ts` still asserts the shipped catalog
+          // declares none; a refusal here is a catalog bug, located below like every other.
+          const stageConfig = validatedStageConfig(
+            sportModule,
+            templateDivision.sportKey,
+            templateStage.kind,
+            templateDivision.variantKey,
+            parsedConfig.data,
+            effectiveStageConfig(templateStage),
+          );
           const [stage] = await tx<{ id: string }[]>`
             insert into stages (division_id, seq, kind, name, config, progression)
             values (${divisionId}, ${si + 1}, ${templateStage.kind}, ${stageName},
-                    ${tx.json(effectiveStageConfig(templateStage) as never)},
+                    ${tx.json(stageConfig as never)},
                     ${templateStage.progression ? tx.json(templateStage.progression as never) : null})
             returning id`;
           // Progression rules ARE persisted here (T3, D4a/P5's
@@ -361,10 +365,12 @@ export async function instantiateTemplate(
           // the existing Generate action (stages.ts's
           // generateProgressionSetupFixtures, which already handles them).
           // This split matters, not just defers work: a fixture row
-          // anywhere in the division trips replaceStages'/patchDivision's
-          // FORMAT_LOCKED guard (stages.ts :276-281, divisions.ts :563) —
-          // generating eagerly here would freeze the division's
-          // format/variant before a single entrant exists.
+          // anywhere in the division trips replaceStages' structure lock
+          // (`formatAlreadyLocked`, stages.ts) - generating eagerly here
+          // would freeze the division's stage structure before a single
+          // entrant exists. (patchDivision no longer locks on a fixture row:
+          // the rules lock per field and per STARTED stage that inherits them,
+          // `divisionRefusals`, rule-locks.ts - W2c.)
           stageResults.push({ id: stage!.id, fixtureCount: 0 });
         }
         divisionResults.push({ id: divisionId, stages: stageResults });

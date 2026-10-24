@@ -18,22 +18,22 @@
   "l2": {
     "formula": "runs in l2-pairs.json; pairTargets = owed (row, scenario) + (sport, scenario) pairs (the scenario applies there, or its only drop is the L3 harness gap — that run is marked l3Gap), each covered by one run, so runs ≥ owed (row, scenario) pairs",
     "value": 1729,
-    "pairTargets": 2592,
+    "pairTargets": 2595,
     "l3GapRuns": 0
   },
   "l3": {
     "formula": "Σ cells (1 LIFECYCLE + applicable L3 atomic, variant-bound included) + scorable variant cases (Q-B: LIFECYCLE each; unscorable ones are listed under variants, not run) + denied cases (one per gated row, generic) + regression cases",
     "lifecycle": 231,
-    "atomicApplicable": 15255,
-    "bound": 115,
-    "variantCasesScorable": 1025,
+    "atomicApplicable": 15318,
+    "bound": 178,
+    "variantCasesScorable": 1033,
     "variantCasesUnscorable": 40,
     "denied": 7,
     "regressions": 9,
-    "value": 16527
+    "value": 16598
   },
   "drops": {
-    "total": 4842,
+    "total": 4779,
     "harnessGap": 0,
     "unscorableOnly": 0,
     "byScenario": {
@@ -63,7 +63,7 @@
       "M2": 0,
       "M3": 0,
       "M4a": 0,
-      "M4b": 210,
+      "M4b": 147,
       "M5": 126,
       "M6": 126,
       "M7a": 0,
@@ -129,11 +129,11 @@
   },
   "variants": {
     "perSport": {
-      "football": 92,
+      "football": 96,
       "cricket": 107,
       "boardgame": 90,
-      "carrom": 95,
-      "generic": 64,
+      "carrom": 97,
+      "generic": 66,
       "volleyball": 127,
       "badminton": 97,
       "tabletennis": 109,
@@ -141,8 +141,8 @@
       "icehockey": 90,
       "hockey": 86
     },
-    "cases": 1065,
-    "scorable": 1025,
+    "cases": 1073,
+    "scorable": 1033,
     "unscorable": 40,
     "engineUnscorable": {
       "count": 40,
@@ -198,7 +198,7 @@
       "ids": []
     },
     "noOp": {
-      "count": 35,
+      "count": 18,
       "why": "no overrides at the sport's builder-default preset: the case runs the builder-default cfg again (listed, not removed from the variant set)",
       "ids": [
         "cricket#031",
@@ -218,26 +218,9 @@
         "boardgame#081",
         "boardgame#082",
         "boardgame#083",
-        "boardgame#084",
-        "generic#043",
-        "generic#048",
-        "generic#049",
-        "generic#050",
-        "generic#051",
-        "generic#052",
-        "generic#053",
-        "generic#054",
-        "generic#055",
-        "generic#056",
-        "generic#057",
-        "generic#058",
-        "generic#059",
-        "generic#060",
-        "generic#061",
-        "generic#062",
-        "generic#063"
+        "boardgame#084"
       ]
     },
-    "uncoverablePairs": 38
+    "uncoverablePairs": 41
   }
 }

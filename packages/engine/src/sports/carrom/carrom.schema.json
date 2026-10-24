@@ -2,6 +2,13 @@
   "configSchema": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "properties": {
+      "abandonPolicy": {
+        "enum": [
+          "replay",
+          "share"
+        ],
+        "type": "string"
+      },
       "bestOf": {
         "default": 3,
         "exclusiveMinimum": 0,

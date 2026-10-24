@@ -1,19 +1,12 @@
-// D2a's THIRD door (review 2026-09-18). `createFromTemplate` inserts
-// `effectiveStageConfig(templateStage)` straight into `stages.config`, and
-// `TemplateStage.config` is `z.record(z.string(), z.unknown())` — so a `rules`
-// key declared on a template stage would reach the column verbatim: no sport
-// gate, no per-sport allowlist, no merged-config parse, for any sport at all.
-// That is exactly the bypass D2a closed on `createStages`, in a third file.
+// D2a's THIRD door (review 2026-09-18). `createFromTemplate` inserts a template stage's config into `stages.config`, and
+// `TemplateStage.config` is `z.record(z.string(), z.unknown())` — so a `rules` key declared on a template stage reaches
+// the insert. Until W2c Task 12 `effectiveStageConfig` refused it outright (the door was shut); since Task 12 a stage is
+// created WITH rules (its kind's preset, X-SR-6) and the insert validates any declared ones exactly as the stage PUT
+// validates a save (`stage-defaults.ts` `validatedStageConfig`, against the division's sport, variant and config — which
+// this pure builder does not have). So the builder passes `rules` through untouched, and the guard lives at the insert
+// (templates.test.ts, "template stage rules").
 //
-// Two halves, deliberately, because they answer different questions and
-// neither covers the other:
-//   - `catalog.test.ts` asserts the SHIPPED catalog declares no `rules`, so a
-//     catalog author finds out in CI rather than shipping a template that 400s
-//     on every instantiation;
-//   - this asserts the GUARD refuses one anyway, because D2a's whole argument
-//     is that a door is shut by a guard and not by an assumption about who
-//     walks through it. The catalog is the only source today; it need not be
-//     the only source tomorrow.
+// `catalog.test.ts` still asserts the SHIPPED catalog declares no `rules`, so a catalog author finds out in CI.
 //
 // Pure — no database.
 import { describe, expect, it } from "vitest";
@@ -22,14 +15,14 @@ import type { TemplateStage } from "@/server/templates/schema";
 
 const base = { i18nNameKey: "x", kind: "league" as const, size: 4 };
 
-describe("effectiveStageConfig refuses per-stage match rules", () => {
-  it("throws 400 RULES_NOT_ACCEPTED_HERE for a template stage declaring rules", () => {
-    expect(() =>
+describe("effectiveStageConfig builds the config; rules are the insert's to validate", () => {
+  it("passes a template stage's rules through untouched (the insert validates them against the division)", () => {
+    expect(
       effectiveStageConfig({
         ...base,
         config: { rules: { bestOf: 5 } },
       } as unknown as TemplateStage),
-    ).toThrow(expect.objectContaining({ status: 400, code: "RULES_NOT_ACCEPTED_HERE" }));
+    ).toEqual({ rules: { bestOf: 5 } });
   });
 
   it("still builds the ordinary config it is there to build", () => {

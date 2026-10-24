@@ -133,7 +133,7 @@ async function readyGame(over: { kind?: string; whiteAway?: boolean; legacyCfg?:
         from fixtures f join divisions d on d.id = f.division_id join stages st on st.id = f.stage_id
        where f.id = ${s.fixtureId}`;
     // The cfg a NON-bracket kind resolves to = the same cfg without the overlay.
-    const cfg = resolveFixtureCfg(null, row!.dcfg, { kind: "league", config: row!.scfg }, boardgame);
+    const cfg = resolveFixtureCfg({ config_snapshot: null, rules_override: null }, row!.dcfg, { kind: "league", config: row!.scfg }, boardgame);
     await sql`update fixtures set config_snapshot = ${sql.json(cfg as never)}, config_snapshot_at = now() where id = ${s.fixtureId}`;
   }
   return over.whiteAway
@@ -896,9 +896,11 @@ describe.runIf(HAS_DB)("writeResultFrom — a draw: decided where the stage allo
     await scoreEvent(auth, g.fixtureId, {
       expected_seq: tip,
       type: "boardgame.tiebreak",
-      payload: { rung: "armageddon", winner: g.away.entrantId },
+      // W2c BG-KO-2 (D7): an Armageddon records who had Black and the result; the engine derives who advances (away).
+      payload: { rung: "armageddon", black: g.away.entrantId, result: "black" },
     });
     expect((await fixtureOf(g.fixtureId)).status, "premise: the tie-break decided it").toBe("decided");
+    expect((await fixtureOf(g.fixtureId)).outcome?.winner, "premise: Black (away) won the Armageddon").toBe(g.away.entrantId);
     const before = [await typesOf(g.fixtureId), await bridgeOf(g.fixtureId)];
     expect(await writeResultFrom(s, g.fixtureId)).toEqual({ wrote: "draw" });
     expect([await typesOf(g.fixtureId), await bridgeOf(g.fixtureId)]).toEqual(before);

@@ -1,0 +1,68 @@
+[
+ {
+  "id": "b5r3-n5-no-bump",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "version = snapshotted ? (await freezeCfg(tx, id, cfg)).rules_version : await bumpRulesVersion(tx, id);",
+  "replace": "if (snapshotted) version = (await freezeCfg(tx, id, cfg)).rules_version;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-version-prekickoff.test.ts"
+    ],
+    "name": "a ruling-116 walkover"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "an award that already carries its own format"
+   }
+  ]
+ },
+ {
+  "id": "b5r3-n5-guard-always",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "if (canonicalJson(cfg) !== canonicalJson(current)) {\n          await assertAwardFits(tx, row, cfg);",
+  "replace": "if (true) {\n          await assertAwardFits(tx, row, cfg);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-version-prekickoff.test.ts"
+    ],
+    "name": "a ruling-116 walkover"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "an award that already carries its own format"
+   }
+  ]
+ },
+ {
+  "id": "b5r3-n5-bump-only-when-snapshotted",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "version = snapshotted ? (await freezeCfg(tx, id, cfg)).rules_version : await bumpRulesVersion(tx, id);",
+  "replace": "version = snapshotted ? await bumpRulesVersion(tx, id) : (await freezeCfg(tx, id, cfg)).rules_version;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-version-prekickoff.test.ts"
+    ],
+    "name": "a ruling-116 walkover"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "an award that already carries its own format"
+   }
+  ]
+ }
+]

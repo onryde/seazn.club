@@ -272,6 +272,19 @@ describe("a held fixture (needs_decision) reads Needs a decision and offers Sett
     expect(rowAction(voided)).not.toBe("decide");
   });
 
+  it("X-AB-5: a Swiss board abandoned with no result (a TABLE stage's row) is held the same way: chip, Settle, no strike", () => {
+    const abandoned = fx({ status: "abandoned", outcome: null });
+    const held = rowHtml(abandoned, true, "Swiss", true);
+    expectRowRendered(held);
+    expect(held).toContain('data-testid="run-sheet-held-chip"');
+    expect(rowAction(held)).toBe("decide");
+    expect(held).not.toContain("line-through");
+    // The positive pair: the same row with nothing owed (a generator void, or a withdrawal's expunge) is struck, no chip.
+    const voided = rowHtml(abandoned, true, "Swiss", false);
+    expect(voided).toContain("line-through");
+    expect(voided).not.toContain('data-testid="run-sheet-held-chip"');
+  });
+
   it("M10 (fix round 1): a held abandon's names are NOT struck through — the row is owed work, not a void; the void keeps its strike", () => {
     // Seen on the 320/1280 crops: a struck-through pair beside "Needs a decision" and Settle read as two contradicting
     // facts in one row (the void says "does not count"; the settle seats a winner). The reason line still says abandoned.

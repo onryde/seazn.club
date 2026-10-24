@@ -204,6 +204,11 @@ export interface ScorePadBootstrap {
   /** W2a Task 12 (addendum 4) — the fixture's stage kind from `loadFixturePadCfg`, never discarded: the pad reads it
    *  as `PadHostView.stageKind` (a bracket hides a level result). Null for a fixture with no stage. */
   stageKind: string | null;
+  /** W2c Task 15 (X-SR-7, owner P-1) — the match's rules version, read with `resolvedConfig` (`loadFixturePadCfg`): the
+   *  version every tap of this pad sends, so a tap made under a format the organiser has since corrected is refused,
+   *  never applied under the new one. Optional on the TYPE only so a hand-built test bootstrap need not carry one:
+   *  `resolveScorePadBootstrap` — the one producer both pages call — requires it and always sets it. */
+  rulesVersion?: number;
 }
 
 export interface ScorePadProps {
@@ -222,6 +227,8 @@ export interface ScorePadProps {
    *  a refusal that ends this surface's rights on the fixture, so the chrome
    *  can leave the pad. Only the device pad passes it. */
   onTerminalRefusal?: (rejection: RejectionInfo) => void;
+  /** W2c Task 15 — forwarded straight to `PadHostV3.onRulesChanged`. Only the device pad passes it. */
+  onRulesChanged?: (rulesVersion: number) => void;
   auth: PadAuthMode;
   /**
    * R7/C1 (D-4) — the chrome around this pad already mounts the one activity
@@ -240,6 +247,9 @@ export interface ScorePadProps {
   entitlements: Readonly<Record<string, boolean>>;
   /** W2a Task 12 — forwarded to `PadHostV3.stageKind`. */
   stageKind: string | null;
+  /** W2c Task 15 — forwarded to `PadHostV3.rulesVersion`. A required KEY (undefined allowed), so a mount cannot drop
+   *  it silently: a pad mounted without it sends no version and is never refused for the rules. */
+  rulesVersion: number | undefined;
   /** W2a D-O1 — forwarded to `PadHostV3.canOrganise`: the console passes its organiser flag, the device pad `false`. */
   canOrganise: boolean;
 }
@@ -315,6 +325,7 @@ export function ScorePad(props: ScorePadProps) {
       module={resolution.module}
       cfg={props.resolvedConfig}
       stageKind={props.stageKind}
+      rulesVersion={props.rulesVersion}
       canOrganise={props.canOrganise}
       entrantNames={entrantNames}
       fixtureId={props.fixtureId}
@@ -326,6 +337,7 @@ export function ScorePad(props: ScorePadProps) {
       initialEvents={props.initialEvents}
       onEvents={props.onEvents}
       onTerminalRefusal={props.onTerminalRefusal}
+      onRulesChanged={props.onRulesChanged}
       queueDbName={`scorepad-${props.fixtureId}`}
       personNames={personNames}
       showActivity={!props.hideActivity}

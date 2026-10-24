@@ -30,7 +30,6 @@
 import { describe, expect, it } from "vitest";
 import {
   SPORT_RULES,
-  STAGE_RULES_SPORTS,
   buildRuleOverride,
   configKeysFor,
   hydrateRuleValues,
@@ -49,7 +48,9 @@ function probesFor(field: RuleField): string[] {
   return lo === hi ? [String(lo)] : [String(lo), String(hi)];
 }
 
-const IN_SCOPE = [...STAGE_RULES_SPORTS].sort();
+// The four sets-based sports, whose nine field keys this file pins exactly. (They were `STAGE_RULES_SPORTS` until W2c
+// Task 17 opened the stage row to every sport; the other sports' stage fields round-trip in match-rules-stage-read.test.ts.)
+const IN_SCOPE = ["badminton", "tabletennis", "tennis", "volleyball"];
 
 describe("hydrateRuleValues round-trips every in-scope rule field", () => {
   it("covers all four sets-based sports and nine distinct field keys", () => {

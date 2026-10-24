@@ -68,6 +68,7 @@ import { ContextStrip, type PoolView, type TFn } from "./context-strip";
 import { SwapSheet, refusalMessage, type PolicyVerdict, type SwapSheetSpec } from "./swap-sheet";
 import { GuidedSheet } from "./guided-sheet";
 import { BANDS, RecordingChip } from "./recording-chip";
+import { RulesChangedBanner } from "./rules-changed-banner";
 import { buildRibbon, type Ribbon } from "./ribbon";
 import {
   CLOCK_NUDGE_SECONDS,
@@ -1537,6 +1538,10 @@ export interface PadHostV3Props {
   cfg: unknown;
   /** W2a Task 12 — copied into `PadHostView.stageKind`; see its doc (types.ts). */
   stageKind: string | null;
+  /** W2c Task 15 (X-SR-7, owner P-1 "A") — the rules version `cfg` was loaded with; forwarded to `usePadPipeline`,
+   *  whose `cfg` (the loaded one, or the rules it reloaded after a correction) is the one this host reads everywhere.
+   *  Absent: the pad sends no version and never reloads. */
+  rulesVersion?: number;
   /** W2a D-O1 — copied into `PadHostView.canOrganise`; see its doc (types.ts). False for every device link. */
   canOrganise: boolean;
   /** W2a fix round 1 (I2) — copied into `PadHostView.entrantNames`; see its doc (types.ts). */
@@ -1605,6 +1610,10 @@ export interface PadHostV3Props {
    *  ends this surface's rights on the fixture (`CHROME_TERMINAL_CODES`), so the
    *  chrome can leave the pad. The pad still shows its own refusal banner. */
   onTerminalRefusal?: (rejection: RejectionInfo) => void;
+  /** W2c Task 15 (X-SR-7) — fired once per correction this pad reloaded (`usePadPipeline`'s `rulesChanged`), with the
+   *  version it now scores to. The device chrome keeps its own writes ("Void my last entry") on the same version, or
+   *  its next write would be refused for a correction the pad already follows. */
+  onRulesChanged?: (rulesVersion: number) => void;
   /** Load-bearing for REALTIME specifically, and for nothing else on this
    *  host. `transport` above is ALREADY built with the right credential by
    *  registry.tsx (`deviceLinkTransport` vs `sessionTransport`), so reads and
@@ -1702,7 +1711,11 @@ export function PadHostV3(props: PadHostV3Props) {
     auth: props.auth,
     initialEvents: props.initialEvents,
     queueDbName: props.queueDbName,
+    rulesVersion: props.rulesVersion,
   });
+  // W2c Task 15 (X-SR-7): the format this pad scores under NOW — the loaded one, or the rules the pipeline reloaded
+  // after a correction. Read below in place of `props.cfg`, so the board, the actions and the fold never disagree.
+  const cfg = pipeline.cfg;
 
   useEffect(() => {
     props.onStateChange?.(pipeline.state, pipeline.summary);
@@ -1714,10 +1727,16 @@ export function PadHostV3(props: PadHostV3Props) {
     if (terminal) props.onTerminalRefusal?.(terminal);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pipeline.lastRejection]);
+  // W2c Task 15: keyed on the VERSION (not the object, which a dismiss nulls): each correction is reported once.
+  const reloadedRulesVersion = pipeline.rulesChanged?.rulesVersion;
+  useEffect(() => {
+    if (reloadedRulesVersion !== undefined) props.onRulesChanged?.(reloadedRulesVersion);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reloadedRulesVersion]);
 
   const personNames = props.personNames ?? NO_NAMES;
   const entitlements = props.entitlements ?? NO_ENTITLEMENTS;
-  const spec = useMemo(() => props.module.padSpec?.(props.cfg) ?? EMPTY_SPEC, [props.module, props.cfg]);
+  const spec = useMemo(() => props.module.padSpec?.(cfg) ?? EMPTY_SPEC, [props.module, cfg]);
   const squads = useMemo(() => squadStateOf(pipeline.state, props.lineups), [pipeline.state, props.lineups]);
 
   // THE RECORDING BAND (W1 / Task 4). Held here rather than passed in: it is
@@ -1807,7 +1826,7 @@ export function PadHostV3(props: PadHostV3Props) {
 
   const view: PadHostView = useMemo(
     () => ({
-      cfg: props.cfg,
+      cfg,
       state: pipeline.state,
       summary: pipeline.summary,
       phase,
@@ -1831,7 +1850,7 @@ export function PadHostV3(props: PadHostV3Props) {
       canOrganise: props.canOrganise,
       entrantNames: props.entrantNames,
     }),
-    [props.cfg, props.stageKind, props.canOrganise, props.entrantNames, pipeline.state, pipeline.summary, phase, band, entitlements, personNames, squads, pipeline.events, contextOverrides, clockAt],
+    [cfg, props.stageKind, props.canOrganise, props.entrantNames, pipeline.state, pipeline.summary, phase, band, entitlements, personNames, squads, pipeline.events, contextOverrides, clockAt],
   );
 
   // `sheets` is resolved BEFORE the tiles so the band filter below can read a
@@ -2502,6 +2521,13 @@ export function PadHostV3(props: PadHostV3Props) {
           onOpenSheet={handleOpenSheet}
         />
       </div>
+
+      {/* W2c Task 15 (X-SR-7, owner P-1 "A"): the organiser corrected the format and this pad now scores to it. In the
+       *  host's unordered band — after the scorebug, before the board on a phone (whose ordered rows are
+       *  `max-md:order-1..4`) — so the scorer reads it before the next tap. */}
+      {pipeline.rulesChanged !== null && (
+        <RulesChangedBanner formatLine={pipeline.rulesChanged.formatLine} onDismiss={pipeline.dismissRulesChanged} />
+      )}
 
       {/* The server's own 422-class refusal (`pipeline.lastRejection`) and a
        *  CLIENT-side dispatch fault (`dispatchRefusal`, see `send` above) share

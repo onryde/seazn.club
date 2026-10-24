@@ -15,6 +15,7 @@ import {
   type MatchPosition,
 } from "../../core/position.ts";
 import {
+  BRACKET_KINDS,
   DRAW_KINDS,
   EntrantId,
   type LineupPair,
@@ -39,8 +40,10 @@ import type {
   PadGate,
   PadPanel,
   PadSpec,
+  RuleKeyFact,
   SportModule,
 } from "../../sport/module.ts";
+import { ruleKeyApplies } from "../../sport/rule-keys.ts";
 import { resolvePayloadPath, type PlayerStatMetric, type PlayerStatsModel } from "../../stats/stats.ts";
 import { makeSquadAdopter } from "../squad-state.ts";
 import { dlsPar, dlsTarget, resourcesFromBalls } from "./dls.ts";
@@ -3560,6 +3563,11 @@ function cricketForfeitCredit(cfg: CricketCfg, _state: CricketState, reason: Awa
   return { perSide: creditFor(by, zeroCricketLedger(), { ...zeroCricketLedger(), balls_faced_eff: quota }), excluded: [] };
 }
 
+/** CK-SO-1 — the super over is a stage key of the variants whose schema takes one; `CricketCfg` refuses it unless one
+ *  innings a side, so a two-innings test match is not among them. The one declaration both `ruleKeys` and
+ *  `stageDefaults` read, so a variant added to the list gets the knockout preset with it. */
+const SUPER_OVER_KEY: RuleKeyFact = { scope: "stage", decider: true, appliesTo: { variants: ["t20", "odi", "hundred"] } };
+
 export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
   key: "cricket",
   version: "1.0.0",
@@ -3604,6 +3612,19 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
       minOversForResult: 0,
       lineupChanges: { concussionReplacements: 1 },
     },
+  },
+  // W2c (spec §4.1 Q5) — the overs and the bowler limit may differ per match; the super over (any stage kind,
+  // CK-SO-1), DLS and the result floor per stage. The innings shape is the variant's, and `CricketCfg` refuses a super
+  // over unless one innings a side and DLS unless the innings is limited: `test` (2 innings, unlimited) offers neither.
+  ruleKeys: {
+    ballsPerInnings: { scope: "match" },
+    maxOversPerBowler: { scope: "match" },
+    superOver: SUPER_OVER_KEY,
+    superOverStillTied: { scope: "stage" },
+    dls: { scope: "stage", appliesTo: { variants: ["t20", "odi", "hundred"] } },
+    minOversForResult: { scope: "stage" },
+    playersPerSide: { scope: "stage" },
+    points: { scope: "points" },
   },
 
   // spec 03 §2 guarantee 4 — post-match scorecards append after the decision.
@@ -4026,6 +4047,17 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
 
   // W2a: none (cricket's deciders stay organiser-configured until W2c, spec §5.2)
   bracketDeciders: () => ({}),
+  // M-3: without a super over a tied innings pair is a tie. With one, a tied super over is played again only under the
+  // `repeat` policy; `boundary_count` still ties on equal boundaries and `shared` stands as a tie (`decideTie`).
+  canEndLevel: (cfg) => !cfg.superOver || cfg.superOverStillTied !== "repeat",
+
+  // W2c X-SR-6, CK-SO-1 (spec §4.2) — the preset a NEW bracket stage should start with: the super over ON, wherever the
+  // schema takes one (`ruleKeys.superOver.appliesTo` is the one declaration of which variants: a two-innings test match
+  // has none). It is the organiser's to switch off, and a league stage starts without it; switched on there it is played
+  // on every tie (`decideTie` reads the cfg, never the stage kind). Stage creation writes it into `stages.config.rules`
+  // (apps/web usecases/stage-defaults.ts `withStageDefaults`, W2c Task 12).
+  stageDefaults: (kind, variant) =>
+    BRACKET_KINDS.has(kind) && ruleKeyApplies(SUPER_OVER_KEY, kind, variant) ? { superOver: true } : {},
 
   // §9.3 — {win+loss, 2·tie, 2·noResult, 2·draw}.
   declaredPointsSets(cfg) {

@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   configKeysFor,
   keysEmittedBy,
-  STAGE_RULES_SPORTS,
   type RuleField,
 } from "@/lib/match-rules";
+
+// The four sets-based sports: the per-stage rules the first wave offered, and the sports whose fields share these keys.
+// (`STAGE_RULES_SPORTS` named them until W2c Task 17 opened the stage row to every sport.)
+const SETS_SPORTS = ["tennis", "badminton", "tabletennis", "volleyball"];
 
 describe("configKeysFor", () => {
   // Tennis is the case that matters: three of its five FIELD keys differ from
@@ -24,8 +27,8 @@ describe("configKeysFor", () => {
       expect(configKeysFor(sport).has("winBy")).toBe(true);
   });
 
-  it("never admits points or the decider keys for an in-scope sport", () => {
-    for (const sport of STAGE_RULES_SPORTS) {
+  it("never admits points or the decider keys for a sets-based sport", () => {
+    for (const sport of SETS_SPORTS) {
       const keys = configKeysFor(sport);
       expect(keys.has("points")).toBe(false);
       expect(keys.has("pointsMap")).toBe(false);
@@ -46,6 +49,7 @@ describe("configKeysFor", () => {
   it("probes every option, so a value-branching build cannot hide a key", () => {
     const branching: RuleField = {
       key: "probe",
+      edits: ["probe"],
       label: "Probe",
       kind: "select",
       options: [

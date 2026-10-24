@@ -297,7 +297,7 @@ async function readyGame(over: { kind?: string; legacyCfg?: boolean } = {}): Pro
       select d.config as dcfg, st.config as scfg
         from fixtures f join divisions d on d.id = f.division_id join stages st on st.id = f.stage_id
        where f.id = ${s.fixtureId}`;
-    const cfg = resolveFixtureCfg(null, row!.dcfg, { kind: "league", config: row!.scfg }, boardgame);
+    const cfg = resolveFixtureCfg({ config_snapshot: null, rules_override: null }, row!.dcfg, { kind: "league", config: row!.scfg }, boardgame);
     await sql`update fixtures set config_snapshot = ${sql.json(cfg as never)}, config_snapshot_at = now() where id = ${s.fixtureId}`;
   }
   return { ...s, gameId, white: s.home, black: s.away };

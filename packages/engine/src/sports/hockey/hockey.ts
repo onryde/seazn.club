@@ -5,9 +5,10 @@
 // green 2' / yellow 5' / red permanent — the team plays short on ALL of them
 // — and the App 12 shoot-out (5 one-on-ones, 8 s, sudden death) where a
 // competition demands a winner.
+import { BRACKET_KINDS } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import type { PlayerStatsModel } from "../../stats/stats.ts";
-import { makePeriodModule, periodKeeperStatsFold, type PeriodSuspensionReason } from "../period/kernel.ts";
+import { makePeriodModule, PERIOD_RULE_KEYS, periodKeeperStatsFold, type PeriodSuspensionReason } from "../period/kernel.ts";
 import { HOCKEY_SUSPENSIONS, HOCKEY_YOUTH_SUSPENSIONS } from "../period/suspensions.ts";
 
 // S4 (#428) — FIH's own subset of the shared `PeriodSuspensionReason` union:
@@ -143,6 +144,9 @@ export const hockey = makePeriodModule({
     "fih-shootout": {
       shootout: { attempts: 5, suddenDeath: true, clockSeconds: 8 },
       points: { win: 3, draw: 1, loss: 0, shootoutWin: 2, shootoutLoss: 1 },
+      // HK-AB-2 (W2c, H-15): the FIH tournament rule - an abandon replays until the 4th quarter has started, then the
+      // result stands (ruling 117 where the cfg refuses a draw).
+      abandonPolicy: "q4_stands",
     },
     // W5 (#416) — regression fix, hockey/DOMAIN.md's "Other youth
     // divergences" row: `periods` was already correctly shortened, but
@@ -166,6 +170,17 @@ export const hockey = makePeriodModule({
       suspensions: { classes: HOCKEY_YOUTH_SUSPENSIONS },
     },
   },
+  // W2c Q10 (D9) - "If a match is abandoned": replay, the result as it stood, or the FIH 4th-quarter rule (HK-AB-2).
+  abandonOptions: ["replay", "award", "q4_stands"],
+  // W2c (spec §4.1 Q5) — the period kernel's keys, narrowed: FIH hockey has no overtime, so neither the stage key nor
+  // its match-length leaf is offered (the X-SR-1 sweep holds `overtime` UNSETTABLE for hockey).
+  ruleKeys: (({ overtime: _noOvertime, "overtime.minutes": _noOvertimeMinutes, ...keys }) => keys)(PERIOD_RULE_KEYS),
+  // W2c X-SR-6 (spec §4.2) — the preset a NEW bracket stage should start with: the FIH shoot-out (5 one-on-ones, 8 s,
+  // then sudden death), read from the module's own `fih-shootout` preset through its own schema (a fresh object on every
+  // call, so a caller that edits its copy never reaches the preset); a table stage starts with none. Hockey has no
+  // overtime. Stage creation writes it into `stages.config.rules` (apps/web stage-defaults.ts, W2c Task 12).
+  stageDefaults: (kind) =>
+    BRACKET_KINDS.has(kind) ? { shootout: hockey.configSchema.parse(hockey.variants["fih-shootout"]).shootout } : {},
   positions,
   keeperGroup: "GK",
   // S3/W4b (#426) ruling 2 — FIH Rule 5.2: substitution is UNLIMITED and

@@ -18,6 +18,7 @@ vi.mock("next/cache", () => ({
 }));
 
 import { qualificationStatus, type QualStatus } from "@seazn/engine/competition";
+import { SETTLE_METHODS } from "@seazn/engine/core";
 import { builtinModules } from "@seazn/engine/sports";
 import en from "@/dictionaries/en/public.json";
 import { sql } from "@/lib/db";
@@ -32,6 +33,7 @@ import { createStages, generateStageFixtures } from "@/server/usecases/stages";
 import { withdrawEntrantCascade } from "@/server/usecases/withdrawal";
 import { GENERIC_CONFIG, seedOrg } from "@/server/usecases/__tests__/_seed";
 import { getPublicDivision } from "../data";
+import { qualificationFixtures } from "../division-qualification";
 import { embedDivisionData } from "@/server/embed-data";
 import { listDivisionFixtures } from "@/server/usecases/fixtures";
 import {
@@ -152,6 +154,25 @@ async function forfeitRound(r: Rig, round: number, loser: string): Promise<void>
   await scoreEvent(r.auth, f.id, { expected_seq: 0, type: "core.forfeit", payload: { by: id, reason: "walkover" } });
 }
 
+/** Decide every seated, unplayed board of `round` (only `poolId`'s) for the entrant `winnerOf` names. */
+async function playRoundBy(r: Rig, round: number, winnerOf: (f: Row) => string, poolId: string | null): Promise<number> {
+  let played = 0;
+  for (const f of await fixturesOf(r)) {
+    if (f.round_no !== round || f.status !== "scheduled" || !f.home_entrant_id || !f.away_entrant_id) continue;
+    if (poolId !== null && f.pool_id !== poolId) continue;
+    const homeWins = winnerOf(f) === f.home_entrant_id;
+    await scoreEvent(r.auth, f.id, { expected_seq: 0, type: "core.start", payload: {} });
+    await scoreEvent(r.auth, f.id, {
+      expected_seq: 1,
+      type: "generic.result",
+      payload: homeWins ? { p1Score: 3, p2Score: 1 } : { p1Score: 1, p2Score: 3 },
+    });
+    played++;
+  }
+  expect(played, `round ${round} had boards to play`).toBeGreaterThan(0);
+  return played;
+}
+
 async function load(
   r: Rig,
   poolId: string | null = null,
@@ -170,7 +191,8 @@ async function load(
     stage: { id: stage.id, kind: stage.kind, meta: stageQualMeta(stage) },
     poolId,
     rows: snap?.rows ?? [],
-    fixtures: data.fixtures,
+    // W2c X-PT-1: the played facts as the public surfaces read them (one read of the forfeit-shaped ledgers).
+    fixtures: await qualificationFixtures(data.fixtures, module_, data.stages),
     entrantStatuses: statuses,
     bounds: divisionPointsBounds(module_, data.division.config),
     awardAddsToLedger: divisionAwardAddsToLedger(module_, data.division.config),
@@ -408,6 +430,102 @@ describe.skipIf(!HAS_DB)("buildQualificationView on real reads (getPublicDivisio
     expect(view!.rows[r.id.Ann!]).toBeUndefined();
     expectSameStatuses(view!, await engineStatuses(r, rows, statuses, leagueLeft));
   });
+
+  // W2c X-AB-5 / N2 (post-merge item), through the REAL producers: a scorer's plain abandon (core.start, core.abandon) is
+  // stored `abandoned` with no outcome - the same row a generator's void is - and only its ledger says the desk holds it.
+  // The public table reads the completion predicate over the fixture rows `getPublicDivision`/the embed/the console hand
+  // it, so the flag must travel on all three. Expected statuses are the ENGINE's, with the remaining count read from the
+  // `fixtures` table and the ledger by raw SQL here - not through the builder's derivation.
+  const heldIds = async (r: Rig): Promise<Set<string>> =>
+    new Set(
+      (
+        await sql<{ id: string }[]>`
+        select f.id from fixtures f where f.stage_id = ${r.stageId} and f.status = 'abandoned'
+          and exists (select 1 from score_events a where a.fixture_id = f.id and a.type = 'core.abandon'
+            and coalesce(a.payload ->> 'expunge', 'false') <> 'true'
+            and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id))`
+      ).map((x) => x.id),
+    );
+  const SETTLE_BY_ORGANISER = SETTLE_METHODS.find((m) => m === "organiser")!;
+  const evAt = async (id: string) => (await sql<{ s: number }[]>`select coalesce(max(seq), 0)::int as s from score_events where fixture_id = ${id}`)[0]!.s;
+  const post = async (r: Rig, id: string, type: string, payload: unknown = {}) =>
+    scoreEvent(r.auth, id, { expected_seq: await evAt(id), type, payload } as never);
+
+  const DECIDED = ["through", "out"];
+  for (const kind of ["league", "group"] as const) {
+    it(`${kind}: a plain abandon is HELD - the table decides nobody by it; the settle decides them (real rows, real ledger)`, async () => {
+      const NAMES = kind === "league" ? FOUR : [...FOUR, "Eve", "Fay", "Gus", "Hal"];
+      const r = await rig(kind, NAMES);
+      const pool = kind === "group" ? [...new Set((await fixturesOf(r)).map((f) => f.pool_id))].filter((p): p is string => p !== null).sort()[0]! : null;
+      const cut = kind === "group" ? 1 : 2;
+      // A scene where the last round's top board is what the table hangs on: the table's four are P, Q (round 3's board
+      // that will be abandoned) and R, S (the other). P wins both its earlier matches; Q beats S and loses to R - so
+      // before round 3 P has 6, Q and R 3, S 0, and P-Q decides the top places (the shape of `open4` in the builder's tests).
+      const r3 = (await fixturesOf(r)).filter((f) => f.round_no === 3 && (pool === null || f.pool_id === pool));
+      expect(r3.length, "round 3 has two boards in the table").toBe(2);
+      const board = r3[0]!;
+      const [P, Q, R] = [board.home_entrant_id!, board.away_entrant_id!, r3[1]!.home_entrant_id!];
+      const winnerOf = (f: Row): string => {
+        const seated = [f.home_entrant_id, f.away_entrant_id];
+        if (seated.includes(P)) return P;
+        return seated.includes(Q) && seated.includes(R) ? R : Q;
+      };
+      await playRoundBy(r, 1, winnerOf, pool);
+      await playRoundBy(r, 2, winnerOf, pool);
+
+      const open = (f: Row) => f.status === "scheduled" || f.status === "in_play";
+      const left = (counts: (f: Row) => boolean) => (id: string, fx: Row[]) =>
+        fx.filter((f) => counts(f) && (pool === null || f.pool_id === pool) && (f.home_entrant_id === id || f.away_entrant_id === id)).length;
+      const kindOf = (m: Map<string, QualStatus | null>, id: string) => m.get(id)?.kind;
+      // The entrants the engine decides when the board is gone (the void reading the old code gave) and does not decide
+      // while it is still to come. Before the abandon the board is scheduled, which IS the held reading.
+      const pre = await load(r, pool);
+      const heldPre = await engineStatuses(r, pre.rows, pre.statuses, left(open), cut);
+      const gonePre = await engineStatuses(r, pre.rows, pre.statuses, left((f) => open(f) && f.id !== board.id), cut);
+      const affected = [...heldPre.keys()].filter((id) => DECIDED.includes(kindOf(gonePre, id)!) && !DECIDED.includes(kindOf(heldPre, id)!));
+      expect(affected.length, `${kind}: somebody's fate hangs on the board (read as void it would decide them)`).toBeGreaterThan(0);
+
+      await post(r, board.id, "core.start");
+      await post(r, board.id, "core.abandon", { reason: "rain" });
+      expect((await fixturesOf(r)).find((f) => f.id === board.id)!.status, "the rig recorded the abandon").toBe("abandoned");
+      const held = await heldIds(r);
+      expect([...held], "the ledger says it is held").toEqual([board.id]);
+
+      // The flag travels on every public read - page, embed, console - true on exactly the held board, a boolean on every row.
+      const page = (await getPublicDivision(...r.slugs))!;
+      const embed = await embedDivisionData(r.divisionId);
+      if (!embed.ok) throw new Error(`rig: the embed is not served (${embed.reason})`);
+      for (const [where, fixtures] of [
+        ["page", page.fixtures],
+        ["embed", embed.data.fixtures],
+        ["console", await listDivisionFixtures(r.auth, r.divisionId)],
+      ] as const) {
+        expect(fixtures.length, `${where}: the division's fixtures`).toBeGreaterThan(2);
+        expect(fixtures.every((f) => typeof f.has_active_abandon === "boolean"), `${where}: every row says`).toBe(true);
+        expect(fixtures.filter((f) => f.has_active_abandon === true).map((f) => f.id), `${where}: held`).toEqual([board.id]);
+      }
+
+      const { view, rows, statuses } = await load(r, pool);
+      expect(view, "a view exists: the table is still open").not.toBeNull();
+      const heldReading = await engineStatuses(r, rows, statuses, left((f) => open(f) || held.has(f.id)), cut);
+      const voidReading = await engineStatuses(r, rows, statuses, left(open), cut);
+      expectSameStatuses(view!, heldReading);
+      expect(affected.length).toBeGreaterThan(0);
+      for (const id of affected) {
+        expect(DECIDED, `${id}: the void reading would decide them`).toContain(kindOf(voidReading, id));
+        expect(DECIDED, `${id}: the held match leaves them undecided`).not.toContain(view!.rows[id]!.status);
+      }
+
+      // The settle turns it into a result (P wins): the match is decided and the table decides again.
+      await post(r, board.id, "core.settle", { winner: P, method: SETTLE_BY_ORGANISER });
+      expect((await fixturesOf(r)).find((f) => f.id === board.id)!.status, "the settle decided it").toBe("decided");
+      expect([...(await heldIds(r))], "nothing is held any more").toEqual([]);
+      const after = await load(r, pool);
+      expect(after.view).not.toBeNull();
+      expectSameStatuses(after.view!, await engineStatuses(r, after.rows, after.statuses, left(open), cut));
+      expect(Object.values(after.view!.rows).filter((x) => DECIDED.includes(x.status)).length, "the settled table decides somebody").toBeGreaterThan(0);
+    });
+  }
 
   it("F1 expunge: a status flip under 50% played hides the table; the real expunge cascade (nothing left to void) does not", async () => {
     const flip = await rig("league", FOUR);

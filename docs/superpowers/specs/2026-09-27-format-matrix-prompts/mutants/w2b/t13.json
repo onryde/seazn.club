@@ -252,7 +252,7 @@
     "files": [
      "src/components/public-site/__tests__/knockout-tab.test.tsx"
     ],
-    "name": "a final PLAYED before its forfeit (a retirement, a disqualification or a withdrawal after play)"
+    "name": "a final PLAYED before its forfeit \\(a retirement, a disqualification or a withdrawal after play\\)"
    }
   ]
  },
@@ -861,8 +861,8 @@
  {
   "id": "m5-whatif-ignores-credit",
   "file": "apps/web/src/server/public-site/qualification-view.ts",
-  "find": "  return isOneSidedAwardBye(f) || !awardAddsToLedger;",
-  "replace": "  return isOneSidedAwardBye(f) || awardAddsToLedger;",
+  "find": "  return !awardAddsToLedger && !f.played;",
+  "replace": "  return awardAddsToLedger && !f.played;",
   "killers": [
    {
     "cwd": "apps/web",

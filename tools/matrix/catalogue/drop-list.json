@@ -7,8 +7,8 @@
     "harness-gap": "the scenario APPLIES in the cell, but the L3 generator cannot drive it yet (the rule's harness gap); L2 still owes the pair and marks its run l3Gap",
     "unscorable-only": "only committed variants the harness cannot score (variants.json scorable ≠ null) would enable the scenario in the cell — it may apply once they can be scored; the reason names them"
   },
-  "total": 4842,
-  "inapplicable": 4842,
+  "total": 4779,
+  "inapplicable": 4779,
   "harnessGap": 0,
   "unscorableOnly": 0,
   "groups": [
@@ -1478,260 +1478,197 @@
     {
       "scenario": "M4b",
       "kind": "inapplicable",
-      "reason": "no organiser-reachable config lets an abandon yield a result here: football/hockey/icehockey need abandonPolicy \"award\", which no editor field sets (configKeysFor; false premise 10); cricket needs DLS on or two innings a side; every other sport's abandon replays or records no result (ABANDON_RESULTS) — no committed variant enables it",
-      "count": 210,
+      "reason": "this config gives no abandon a result: football/hockey/icehockey need abandonPolicy \"award\" (hockey also \"q4_stands\"), which the editor's \"If a match is abandoned\" field sets; cricket needs DLS on or two innings a side; every other sport's abandon replays or records no result (ABANDON_RESULTS) — no committed variant enables it",
+      "count": 147,
       "cells": {
         "league": [
-          "football",
           "boardgame",
           "carrom",
           "generic",
           "volleyball",
           "badminton",
           "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
+          "tennis"
         ],
         "triple_rr": [
-          "football",
           "boardgame",
           "carrom",
           "generic",
           "volleyball",
           "badminton",
           "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
+          "tennis"
         ],
         "league_ko": [
-          "football",
           "boardgame",
           "carrom",
           "generic",
           "volleyball",
           "badminton",
           "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
+          "tennis"
         ],
         "groups_ko": [
-          "football",
           "boardgame",
           "carrom",
           "generic",
           "volleyball",
           "badminton",
           "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
+          "tennis"
         ],
         "group_stepladder": [
-          "football",
           "boardgame",
           "carrom",
           "generic",
           "volleyball",
           "badminton",
           "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
+          "tennis"
         ],
         "group_playoffs": [
-          "football",
           "boardgame",
           "carrom",
           "generic",
           "volleyball",
           "badminton",
           "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
+          "tennis"
         ],
         "swiss": [
-          "football",
           "boardgame",
           "carrom",
           "generic",
           "volleyball",
           "badminton",
           "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
+          "tennis"
         ],
         "swiss_playoff": [
-          "football",
           "boardgame",
           "carrom",
           "generic",
           "volleyball",
           "badminton",
           "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
+          "tennis"
         ],
         "swiss_knockout": [
-          "football",
           "boardgame",
           "carrom",
           "generic",
           "volleyball",
           "badminton",
           "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
+          "tennis"
         ],
         "knockout": [
-          "football",
           "boardgame",
           "carrom",
           "generic",
           "volleyball",
           "badminton",
           "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
+          "tennis"
         ],
         "ko_plate": [
-          "football",
           "boardgame",
           "carrom",
           "generic",
           "volleyball",
           "badminton",
           "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
+          "tennis"
         ],
         "qualifying_main": [
-          "football",
           "boardgame",
           "carrom",
           "generic",
           "volleyball",
           "badminton",
           "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
+          "tennis"
         ],
         "double_elim": [
-          "football",
           "boardgame",
           "carrom",
           "generic",
           "volleyball",
           "badminton",
           "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
+          "tennis"
         ],
         "americano": [
-          "football",
           "boardgame",
           "carrom",
           "generic",
           "volleyball",
           "badminton",
           "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
+          "tennis"
         ],
         "mexicano": [
-          "football",
           "boardgame",
           "carrom",
           "generic",
           "volleyball",
           "badminton",
           "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
+          "tennis"
         ],
         "ladder": [
-          "football",
           "boardgame",
           "carrom",
           "generic",
           "volleyball",
           "badminton",
           "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
+          "tennis"
         ],
         "group_only": [
-          "football",
           "boardgame",
           "carrom",
           "generic",
           "volleyball",
           "badminton",
           "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
+          "tennis"
         ],
         "group_group_ko": [
-          "football",
           "boardgame",
           "carrom",
           "generic",
           "volleyball",
           "badminton",
           "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
+          "tennis"
         ],
         "knockout_third_place": [
-          "football",
           "boardgame",
           "carrom",
           "generic",
           "volleyball",
           "badminton",
           "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
+          "tennis"
         ],
         "page_playoff_only": [
-          "football",
           "boardgame",
           "carrom",
           "generic",
           "volleyball",
           "badminton",
           "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
+          "tennis"
         ],
         "stepladder_only": [
-          "football",
           "boardgame",
           "carrom",
           "generic",
           "volleyball",
           "badminton",
           "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
+          "tennis"
         ]
       }
     },
@@ -4040,7 +3977,7 @@
     {
       "scenario": "P6",
       "kind": "inapplicable",
-      "reason": "the sport has no per-stage rules (STAGE_RULES_SPORTS)",
+      "reason": "the sport has no best-of for a stage to override (the per-stage best-of final is for the four sets-based sports)",
       "count": 147,
       "cells": {
         "league": [

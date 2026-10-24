@@ -26,6 +26,7 @@ import { sql, withTenant } from "@/lib/db";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
 import { fixtureHasResultSql, playedFixtureIds } from "./fixture-results-sql";
+import { refuseOwnFormatLoss } from "./fixture-override-guards";
 import { getLimit, requireFeature } from "@/lib/entitlements";
 import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -567,6 +568,9 @@ async function execute(
         // with it. Every part of a data-modifying WITH reads the same snapshot,
         // so the outer select still sees the rows its delete removes. The
         // caller refreshes the division's player stats when one did.
+        // W2c Task 14: the snapshot does not carry a match's own format, so the delete is refused by name instead —
+        // over exactly the rows it removes.
+        await refuseOwnFormatLoss(tx, tx`id in ${tx(ids)} and ${unplayed(tx)}`);
         const removed = await tx<{ id: string; scored: boolean }[]>`
           with gone as (
             delete from fixtures where id in ${tx(ids)} and ${unplayed(tx)} returning id

@@ -25,6 +25,7 @@ broke it by construction.
 | `REBASELINE_GOLDEN=1` | the same recorded **events**, with states / outcome / summary / deltas recomputed | an **intended** fold change. The commit diff is then the behaviour change itself. |
 | `EXTEND_GOLDEN=1` | **appends** streams covering uncovered fidelity-tier types and optional fields, then the streams the **golden floor** owes (next section but one), each written in the canonical **slim** form (see "Per-step digests") | a coverage gap. Never touches an existing stream. |
 | `REFORMAT_GOLDEN=1` | takes a corpus to the current format, one step at a time: adds the **format-2** fields (`summaries`, `overlay`) and `format: 2`, then the **format-3** field (`playerStats`) and `format: 3` (see "Corpus format 2" and "Corpus format 3"); every field, event and config the corpus already holds stays byte for byte | a corpus that does not yet record the kernel overlay (GF-2). **Never a re-baseline:** it replays every stream against the bytes it already holds and refuses to run if one field would change. |
+| *(no env: a one-off script)* | one **floor-batch stream**, re-derived from its batch under today's engine and put back at the **same index**; every other stream byte for byte | an intended rule change that refuses or rewrites an **event** a floor stream records, which `REBASELINE_GOLDEN` cannot do (see "Re-recording a floor-batch stream in place"). Owes a **major**. |
 
 Only the appended stream is slimmed, never the corpus as a whole: the existing
 streams have to survive byte for byte, and re-slimming an already-slim stream is
@@ -427,14 +428,21 @@ hand in the same PR; no tool will tell you):
   requires each fact to move. What it cannot require is a path no stream reaches: a
   config knob no recorded config sets. Football, hockey and icehockey (the last two
   through the shared period kernel's `applyAbandon`) carry `abandonPolicy: "replay" |
-  "award"`, and every recorded config says `replay`; under `award` the module itself
-  answers an outcome after an abandon (the leader wins, a level score is a draw where a
-  draw stands), so `outcomeOf`'s expunge guard (an expunged match has no outcome) would
-  be visible there, and no stream shows it. The expunge of an `award`-policy match is
-  owed a recorded config in each of the three. (Under the recorded configs only
-  cricket's module answers an outcome after an abandon, so a mutant that makes
-  `outcomeOf` ignore the expunge reaches cricket alone; the `expunged` column is what
-  pins it in all eleven.)
+  "award"`, `replay` by default; under `award` the module itself answers an outcome
+  after an abandon (the leader wins, a level score is a draw where a draw stands), so
+  `outcomeOf`'s expunge guard (an expunged match has no outcome) is visible only in a
+  stream that sets it. **Closed for those three by W2c Task 16c:** each records an
+  `abandonAward` config and a branch stream whose withdrawal expunge stands over the
+  award (`golden-branches.ts`: football `abandonAward#90005`, hockey
+  `abandonAward#90006`, icehockey `abandonAward#90007`), recorded with no outcome. A
+  mutant that makes `outcomeOf` ignore the expunge now reds the replay of those three
+  as well as cricket's (measured 2026-10-16: four of the eleven replays; before these
+  streams it reached cricket alone). Under the recorded configs a module answers an
+  outcome after an abandon in cricket (its own rule) and wherever a recorded config sets
+  a policy other than `replay`: `award` in football, hockey and icehockey, `share` in
+  carrom and generic (and hockey's `q4_stands`). The `expunged` column pins the expunge
+  itself in all eleven. A NEW knob is still owed a recorded config: the floor will not
+  ask for one.
 - **Kernel refusals, and widening what the kernel accepts.** A rule that only REFUSES an
   event moves no recorded byte when it is widened: a ledger it refused was never
   recorded, and every ledger it accepted folds as before. There are two, both fed by the
@@ -447,7 +455,16 @@ hand in the same PR; no tool will tell you):
   any other path the corpora do not show.
 - **Unexercised branches** of a module: a field no stream writes is invisible to
   a byte-exact comparison (see below), so a rule that fires only there moves
-  nothing.
+  nothing. An opt-in cfg key is the standing case: an older phone strips or
+  refuses it, so a match that sets it folds differently there, while every
+  recorded stream (none sets it) folds the same. W2c's were raised by hand
+  (owner 2026-10-15, manual MAJOR for opt-in cfg keys the guard cannot see):
+  football `shootoutAttempts`, hockey fih-shootout `abandonPolicy:"q4_stands"`,
+  carrom and generic `abandonPolicy:"share"`. Task 16c then recorded a stream
+  for each branch (`golden-branches.ts`, next section), so a later change to
+  how those keys fold is seen by the guard. The bump already raised stays: it
+  covers the keys' arrival, which no stream can show a baseline without them.
+  A NEW opt-in key owes a story in that table, not just a name in a config.
 - **Player-statistics folds outside the recorded final rows** (`src/stats/stats.ts`).
   Format 3 records the FINAL rows of each stream, so a change to how a recorded stat
   folds is a **minor** the guard asks for (the server computes it; a phone must not).
@@ -473,6 +490,18 @@ hand in the same PR; no tool will tell you):
     team official is not excluded (the ctx is passed either way).
   - Football `motm` is pinned by ONE stream (`stats:award:motm`), so the award's
     credit path has a single witness; the floor asks for one, not for more.
+- **A server-only fold input** (`FoldOptions`, e.g. `forfeitAward`, W2c Task 16b).
+  The server offers it to the fold and stores the result in module state
+  (`state.forfeitAward`); no corpus carries one, and `recomputeStream`
+  (`golden.ts`) takes no fold options, so a change to how an offered input folds
+  moves no golden (the P-3 mutant left the corpus green). A change to how an
+  offered input folds owes a manual **MAJOR**, because the summary code that
+  reads `state.forfeitAward` ships to phones. Task 16b's own award owes none
+  yet: W2c's manual bump ("raise FOLD_EPOCH one MAJOR") raised football, hockey, carrom and generic for W2c's
+  opt-in cfg keys only, and ice hockey, which carries none, stayed at epoch 1. A
+  per-stream `foldOptions` corpus field is the real fix: the engine owner ruled
+  it a follow-up, GF-3 ("per-stream foldOptions"), after W2c merges. It is not
+  built here.
 
 Which `core.*` events and outcome kinds each corpus holds is no longer a gap to
 read off a table: it is a floor a test enforces (next section). Holding an event
@@ -573,7 +602,11 @@ gets: at the GF-2 batch review (2026-10-16) the overlay columns `settlement`, `e
 stream per sport (one setting it, one clearing it; stoppage by one or two), so a rule with
 branches is pinned only for the inputs that one stream happens to use. That is not a gap
 against the floor and not a defect; when a column's rule grows a branch, adding a witness for
-the new input is that change's job, because the floor will not ask for it.
+the new input is that change's job, because the floor will not ask for it. W2c's streams
+add witnesses on top of the floor's: the award+expunge branch streams set `expunged` and
+leave it standing in football, hockey and icehockey, and carrom's second floor batch
+(`sharedAbandon#900125`, the level-route settle story its draw-house config opened)
+carries a second `settlement` and carrom's only `levelWithdrawal` set and clear.
 
 **Anti-vacuity.** Every sweep reports how many sports, tokens and holes it
 checked; zero is a failure; the empty-corpus case is tested first (an emptied
@@ -617,6 +650,99 @@ streams have `seed >= FLOOR_SEED_STRIDE` (100000); the epoch guard keys a stream
 by `config#seed`, so a floor stream is a plain **added** stream, never a changed
 one, and a floor append owes no version bump (neither `FOLD_EPOCH` nor `FOLD_MINOR`). The existing streams are not
 touched; `golden.test.ts` asserts the prefix.
+
+## Re-recording a floor-batch stream in place
+
+A floor stream (seed `>= FLOOR_SEED_STRIDE`) is DERIVED, not hand-written ("a floor is reproduced one batch at a time"
+above), so when an intended rule change makes one of its **recorded events** wrong, the repair is the floor's own derivation
+run again under the new engine, written back where the stream already sits. Two have been needed:
+
+- **Main's #977** (`6586a6243`, merged as `cf3e64977`): the kernel now refuses `core.lineup.*` for a sport that declares no
+  `lineupPolicy`, so the withdrawal stream of boardgame, carrom and generic (`default#800008`; generic's is `win_loss#800008`) lost its four lineup events.
+- **W2c BG-KO-2**: an Armageddon tie-break must name who had Black, so boardgame's `knockoutTiebreak#100008` lost its
+  `{rung, winner, score}` event for `{rung, black, result}` (the old shape is refused with `TIEBREAK_COLOUR_REQUIRED`).
+
+**When it applies:** only to a floor stream, and only when an event it records (not just a state, outcome or summary the
+fold recomputes) must change. Not `REBASELINE_GOLDEN=1`: that keeps every recorded event byte for byte, so it cannot change
+one, and a ledger the engine now refuses does not fold to be recomputed. Not `EXTEND_GOLDEN=1`: it never touches an existing
+stream, and a stream with the same `config#seed` is already there. Not `UPDATE_GOLDEN=1`: it rewrites everything. A stream below
+the stride (a generator walk) is never re-derived this way.
+
+**What it owes: a MAJOR for that sport**, in the same PR. The epoch guard keys a stream by `config#seed`, and a stream whose
+events, lineups or raw config differ is counted **removed and added** (`scripts/fold-epoch-guard.ts`), so an in-place
+re-record owes what a deletion owes ("A re-baseline that changes a fold must raise that sport's version": a stream removed,
+or re-recorded). The bump may follow in the next commit; the guard compares the PR as a whole. #977 raised boardgame, carrom and
+generic to 2; W2c raised boardgame to 3.
+
+**How it is done.** There is no env mode; it is a scratch script, which is why every rule of the policy lands on you rather
+than on `corpusWriteVerdict` (that dirty-tree refusal guards the env modes only):
+
+1. Start from a tree whose only change is the engine change, and put the corpus write in a commit of its own, so the diff is
+   reviewed as a state diff.
+2. `floorBatches(corpus)` gives the batch that holds the stream; `reproduceFloorBatch(module, corpus, batch)` is what
+   `extendFloor` appends to `corpusBefore(corpus, batch.start)` today.
+3. Compare the batch with its reproduction index by index. The identity (`config#seed`) of every stream must match, and
+   **the script refuses to write unless exactly the stream you meant to re-record differs**. A second stream that differs is a
+   finding (the engine change moved more than intended, or the floor itself grew), not something to write over.
+4. Print what moved: the event indices that differ, and whether `outcome`, `deltas`, `summary`, `playerStats` and `overlay`
+   differ. Read it as a state diff; for #100008 only event 9 and the summary moved.
+5. Put the reproduced stream back at the same index (`corpus.streams[index] = reproduced`) and `writeCorpus(corpus)`. Nothing
+   else in the corpus shifts: identity and position are unchanged, the stream stays in its slim form.
+6. Check: the plain golden replay and the floor suites green (`golden.test.ts`, `golden-floor-streams.test.ts`, which
+   reproduces every batch), a second run of the script reporting nothing to change, and `fold-epoch:check --against origin/main`
+   naming the major owed (then raise `FOLD_EPOCH`).
+
+```ts
+const id = (s: GoldenStream) => `${s.config}#${s.seed}`;
+const batch = floorBatches(corpus).find((b) => b.streams.some((s) => id(s) === target))!;
+const reproduced = reproduceFloorBatch(module, corpus, batch);
+const moved = batch.streams.flatMap((s, i) => {
+  if (id(reproduced[i]!) !== id(s)) throw new Error(`identity drift at ${id(s)}`);
+  return JSON.stringify(reproduced[i]) === JSON.stringify(s) ? [] : [i];
+});
+if (moved.length !== 1 || id(batch.streams[moved[0]!]!) !== target) throw new Error(`refusing: expected exactly ${target} to change`);
+corpus.streams[batch.start + moved[0]!] = reproduced[moved[0]!]!;
+writeCorpus(corpus);
+```
+
+## Branch streams (W2c Task 16c)
+
+`src/testkit/golden-branches.ts` is the fourth append path, for the branches a
+config key switches on that none of the others can reach: the generator never
+sets an opt-in key, `extendCorpus` stops once the key is pinned, and the floor
+derives its tokens from kernel events. It is a table of **stories**; each builds
+its ledger from the module's own generator plus the kernel event the branch is
+about, and carries a verdict (`reached`) over the engine's own folds. Where a
+ledger can name the key and still miss the branch the verdict is a
+**differential**: the same ledger refolded without the key must decide
+differently (the default five kicks leave the shoot-out running; the replay
+default leaves a shared abandon "abandoned", where carrom's drawn walk stays
+"final"), so a stream that only names the key proves nothing. Every guard in a
+verdict is owed a counterfactual that only it rejects, and the test asserts the
+REASON each one gives. `branchHoles` is the skip rule (any recorded stream that reaches a
+branch makes it a skip, whatever its config name or seed) and `extendBranches`
+appends one slim stream per hole; `EXTEND_GOLDEN=1` runs it after the floor.
+A branch stream is recorded in its corpus's format (`recomputeStream(…,
+corpusFormat(corpus))`, as the other append paths do): on a format-3 corpus it
+carries `summaries`, `overlay` and `playerStats` like every other stream, and
+the award+expunge streams record the overlay `{"expunged":[[<last step>,true]]}`
+and no outcome.
+
+Branch streams carry `seed` in `[BRANCH_SEED_BASE, FLOOR_SEED_STRIDE)` (90001
+and up): above every generator seed, below the floor's stride, so the floor's
+reproduction and keep-rule never count them. They are appended streams, so they
+owe no version bump. They add configs, appended at the end of `configs`; no
+existing stream or config changes. The ten stories today: football
+`shootoutAttempts` (and its sudden-death arm), hockey `q4_stands`, carrom and
+generic `share`, the `award` abandon with a withdrawal's expunge for football,
+hockey and ice hockey, football's level (draw) arm, and ice hockey's level
+abandon under the IIHF default, which is flagged for a replay because no draw
+can stand there (R16-3). Five verdicts (the two award expunge arms, the
+4th quarter, the flagged level award `reachesLevelAwardFlagged` and the football
+level draw `reachesAwardLevelDraw`) carry no replay differential: an abandon is
+applied only to a match still in play, so a ledger that ends on one and holds a
+result has its effect; the premise test pins that refusal per story (six
+stories) against the engine's own error.
 
 ## How the comparison actually works
 
@@ -779,13 +905,15 @@ knob must stay green in both forms. Without it a gate that reds on everything
 would kill every entry in the list and guard nothing.
 
 One entry is recorded as **`killedBy: "schema-snapshot"`** rather than by the
-corpus: narrowing football's `abandonPolicy` enum. Every football stream records
-`"replay"`, so the frozen states pin that one member and dropping any other moves
-no recorded state — all eleven corpora stay green. The schema snapshot records
-the declaration instead of a replay, so the narrowing is a removed line there.
-The test asserts that blindness (one recorded value against several declared
-members) instead of describing it, because "this gate cannot see X" is exactly
-the kind of claim that rots into folklore.
+corpus: narrowing cricket's `superOverStillTied` enum. Every cricket stream
+records `"repeat"`, so the frozen states pin that one member and dropping any
+other moves no recorded state — all eleven corpora stay green. The schema
+snapshot records the declaration instead of a replay, so the narrowing is a
+removed line there. The test asserts that blindness (one recorded value against
+several declared members) instead of describing it, because "this gate cannot
+see X" is exactly the kind of claim that rots into folklore. (The exemplar was
+football's `abandonPolicy` until W2c Task 16c recorded its second member,
+`award`: that narrowing is now a corpus kill, and the test asserts that too.)
 
 # Schema snapshots (#429 scope item 2)
 

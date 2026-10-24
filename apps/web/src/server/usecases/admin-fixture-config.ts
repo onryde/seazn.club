@@ -1,18 +1,17 @@
 import "server-only";
 import type postgres from "postgres";
 import { sql } from "@/lib/db";
+import { canonicalJson } from "@/lib/canonical-json";
 import { HttpError } from "@/lib/http";
 import { EngineError } from "@seazn/engine/core";
 import {
   LOCKED_FIXTURE_STATUSES,
-  fixtureStatusFromFold,
   hasFrozenCfg,
   recomputeStandings,
   resolveFixtureCfg,
   resolveModule,
 } from "@/server/engine-db";
-import { foldFixture } from "@/server/engine-db/fold";
-import { releaseFedSeats } from "@/server/engine-db/fed-seats";
+import { RefreezeFoldError, refreezeFixture } from "@/server/engine-db/refreeze";
 import { log } from "@/server/logger";
 import { schedulePlayerStatsRefresh } from "./player-stats-refresh";
 import { invalidatePublicCache } from "./scoring";
@@ -83,6 +82,9 @@ interface Row {
   outcome: unknown;
   config_snapshot: unknown;
   config_snapshot_at: Date | null;
+  /** W2c (V469) — the match's own format override. Live config INCLUDES it: it is frozen with everything else at the
+   *  first event, so a re-freeze that dropped it would silently put the match back on its stage's format. */
+  rules_override: unknown;
   division_config: unknown;
   stage_config: Record<string, unknown> | null;
   /** W2a — the stage's kind: a bracket kind adds the sport's deciders to the live cfg (fixture-cfg.ts) and holds a
@@ -103,7 +105,7 @@ type Queryable = postgres.ISql;
 async function loadRow(db: Queryable, fixtureId: string): Promise<Row | null> {
   const [row] = await db<Row[]>`
     select f.id, f.org_id, f.stage_id, f.pool_id, f.fixture_no, f.status, f.outcome,
-           f.config_snapshot, f.config_snapshot_at,
+           f.config_snapshot, f.config_snapshot_at, f.rules_override,
            d.config as division_config, s.config as stage_config, s.kind as stage_kind,
            d.sport_key, d.module_version,
            d.name as division_name, c.name as competition_name, o.name as org_name,
@@ -122,13 +124,15 @@ async function loadRow(db: Queryable, fixtureId: string): Promise<Row | null> {
 export async function fixtureConfigPanel(fixtureId: string): Promise<FixtureConfigPanel | null> {
   const row = await loadRow(sql, fixtureId);
   if (!row) return null;
-  // `resolveFixtureCfg(null, …)` rather than a second call to stageScopedCfg:
+  // `resolveFixtureCfg({ config_snapshot: null, … }, …)` rather than a second call to stageScopedCfg:
   // "what live config resolves to" must have ONE definition, or the divergence
   // shown here could differ from the one the fold would actually see.
   // W2a: with the stage's kind, so a bracket fixture's live cfg carries the sport's deciders exactly as its first
   // append would freeze them (fixture-cfg.ts).
+  // W2c: and with the fixture's REAL override (the snapshot alone is nulled): the first append froze it too, so a
+  // live cfg without it would read "diverged" for every match with an override the moment it started.
   const live = resolveFixtureCfg(
-    null,
+    { config_snapshot: null, rules_override: row.rules_override },
     row.division_config,
     { kind: row.stage_kind, config: row.stage_config },
     resolveModule(row.sport_key, row.module_version),
@@ -146,12 +150,16 @@ export async function fixtureConfigPanel(fixtureId: string): Promise<FixtureConf
     snapshot,
     snapshotAt: row.config_snapshot_at?.toISOString() ?? null,
     live,
-    diverged: hasFrozenCfg(snapshot) && JSON.stringify(snapshot) !== JSON.stringify(live),
+    // Key-sorted, not `JSON.stringify`: the snapshot comes back from jsonb, which stores keys in its own order, while
+    // `live` keeps build order — a key the stage, a decider or the match override (W2c) ADDS lands last in `live` and
+    // wherever jsonb sorts it in the snapshot, and an order-sensitive compare called that same cfg "diverged".
+    diverged: hasFrozenCfg(snapshot) && canonicalJson(snapshot) !== canonicalJson(live),
     canResnapshot: hasFrozenCfg(snapshot) && !LOCKED_FIXTURE_STATUSES.has(row.status),
   };
 }
 
-/** Re-freeze a REOPENED fixture's cfg from live division + stage config. */
+/** Re-freeze a REOPENED fixture's cfg from live division + stage config, and the fixture's own match override (W2c):
+ *  the override is the match's format, not drift, so a re-freeze keeps it. */
 export async function resnapshotFixtureConfig(
   actorId: string,
   fixtureId: string,
@@ -204,15 +212,13 @@ export async function resnapshotFixtureConfig(
     }
 
     const live = resolveFixtureCfg(
-      null,
+      { config_snapshot: null, rules_override: row.rules_override },
       row.division_config,
       { kind: row.stage_kind, config: row.stage_config },
       resolveModule(row.sport_key, row.module_version),
     );
-    await tx`
-      update fixtures
-      set config_snapshot = ${tx.json(live as never)}, config_snapshot_at = now()
-      where id = ${fixtureId}`;
+    // W2c (Task 14, owner P-1): the write, the refold and every cache below are ONE function shared with the organiser's
+    // live correction (`refreezeFixture`) — which also bumps `rules_version`, so an open pad learns its cfg moved.
     // PREFLIGHT, inside the transaction and AFTER the write so it reads the new
     // snapshot through the ordinary read path. Live config is not guaranteed to
     // be compatible with history that was recorded under something else — the
@@ -275,10 +281,14 @@ export async function resnapshotFixtureConfig(
     // by `admin-fixture-config.test.ts` ("does not leave the fixture in a state
     // where every future write is refused"); the third is not, and is the one to
     // re-derive if a module's draw policy changes.
-    let folded;
+    let released: string[];
     try {
-      folded = await foldFixture(tx, fixtureId);
-    } catch (err) {
+      ({ released } = await refreezeFixture(tx, fixtureId, live));
+    } catch (thrown) {
+      // `refreezeFixture` wraps a fold throw (and only that) in `RefreezeFoldError`; a seat release refusal
+      // (NEXT_MATCH_STARTED) and a database failure propagate as themselves, as they always did here.
+      if (!(thrown instanceof RefreezeFoldError)) throw thrown;
+      const err = thrown.foldError;
       // Only a refusal FROM THE FOLD is evidence about the config. A dropped
       // connection, a data defect (a fixture whose entrant went missing) or a
       // module version the registry does not have are all failures the
@@ -329,26 +339,12 @@ export async function resnapshotFixtureConfig(
     // and writes no audit row. This hatch runs no fill afterwards (it never
     // has: a re-snapshot that DECIDES a line seats nobody either), so a flip
     // here leaves the seat empty and labelled rather than holding a name the
-    // result no longer gives it.
-    const released = folded ? await releaseFedSeats(tx, fixtureId, row.outcome, folded.outcome) : [];
-    if (folded) {
-      await tx`
-        insert into match_states (fixture_id, last_seq, state, summary)
-        values (${fixtureId}, ${folded.lastSeq}, ${tx.json(folded.state as never)},
-                ${tx.json(folded.summary as never)})
-        on conflict (fixture_id) do update set
-          last_seq = excluded.last_seq, state = excluded.state,
-          summary = excluded.summary, updated_at = now()`;
-      // Unconditionally, in BOTH directions: a corrected config can just as
-      // easily un-decide a fixture (tennis at bestOf 5 is not over after two
-      // sets) as decide one, and a stale non-null outcome beside a null fold is
-      // what feeds the standings table.
-      await tx`
-        update fixtures set
-          outcome = ${folded.outcome === null ? null : tx.json(folded.outcome as never)},
-          status = ${fixtureStatusFromFold(folded.outcome, folded.active, row.stage_kind)}
-        where id = ${fixtureId}`;
-    }
+    // result no longer gives it. `match_states`, `fixtures.outcome` and
+    // `fixtures.status` are rewritten unconditionally, in BOTH directions: a
+    // corrected config can just as easily un-decide a fixture (tennis at bestOf 5
+    // is not over after two sets) as decide one, and a stale non-null outcome
+    // beside a null fold is what feeds the standings table. All of it is
+    // `refreezeFixture` (engine-db/refreeze.ts), above.
     // Mirror logStaffAction's columns (lib/admin.ts) on THIS tx — never call
     // logStaffAction itself inside the tx, it opens its own connection.
     await tx`

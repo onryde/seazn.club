@@ -67,6 +67,8 @@ export type RunSheetFixture = Pick<
   | "ext_key"
   // W2b Task 13: the active abandon's reason, the run sheet's abandon tag read (`outcomeText`'s ledger).
   | "abandon_reason"
+  // W2c Task 19 (S4): the match plays a format of its own - the "Format changed" chip (`desk/run-sheet-tags.ts`).
+  | "format_changed"
 >;
 
 export type RunSheetStage = { id: string; seq: number; kind: string };

@@ -3,6 +3,7 @@
 // from W1b Task 5, the match-rules table the variant set is built from), and
 // the invariant layer is type-only so W1b's fast-check model and W10's shadow
 // checks can reuse it.
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
@@ -34,7 +35,20 @@ const BRACKET_NEXT_MATCH = "apps/web/src/lib/bracket-next-match.ts";
 // than retype what the dialog authors. Its one import is @seazn/engine/core, a bare package @seazn/matrix depends on
 // (pinned below), so plain node loads it with no alias — the bench's scorer.ts already loads it in this process.
 const FORFEIT_PHASE_REFUSAL = "apps/web/src/lib/forfeit-phase-refusal.ts";
-const ALLOWED_WEB = new Set(["apps/web/src/lib/format-templates.ts", "apps/web/src/lib/match-rules.ts", ORGANISER_ONLY_EVENTS, BRACKET_NEXT_MATCH, FORFEIT_PHASE_REFUSAL]);
+// W2c Task 1: the match-rules table is a DIRECTORY (one file per sport); its registry is the only entry the matrix names.
+const MATCH_RULES_DIR = "apps/web/src/lib/match-rules";
+// W2c Task 12 fix rounds 1 and 2 (R-T12-3, review M-3): stage-decider-off.ts holds the PRODUCT's stage-cfg composition
+// (the one mapping `stageRulesOverlay`, the create's `storedStageRules`, the resolver's `liveStageCfg`, and
+// `postedStageCfg` over them) and its every-decider-off builder; sport-cfg.ts's stageCfg calls it rather than keep a
+// copy. Its value imports are the engine's core and sport barrels, bare packages @seazn/matrix depends on (pinned below),
+// so plain node loads it with no alias.
+const STAGE_DECIDER_OFF = "apps/web/src/lib/stage-decider-off.ts";
+// W2c Task 13b finish-up (R-13b-1), pinned in batch 4: top-level-stage-deciders.ts is the engine-derived set of whole
+// deciders a stage's config refuses at its top level. The bench's validate-pack.ts reads it (the bench's second apps/web
+// import, with stage-decider-off.ts), and apps/web's schema and create door read it too, so it must stay loadable by plain
+// node: bare engine barrels only. The matrix itself does not load it.
+const TOP_LEVEL_STAGE_DECIDERS = "apps/web/src/lib/top-level-stage-deciders.ts";
+const ALLOWED_WEB = new Set(["apps/web/src/lib/format-templates.ts", `${MATCH_RULES_DIR}/index.ts`, ORGANISER_ONLY_EVENTS, BRACKET_NEXT_MATCH, FORFEIT_PHASE_REFUSAL, STAGE_DECIDER_OFF]);
 const FORBIDDEN = ["run-suite", "pack-schema", "seed.ts", "seed-plan", "validate-pack", "scripts/smoke"];
 const TYPE_ONLY = new Set(["lib/invariants.ts", "lib/observed.ts"]);
 // The bench is also the @seazn/bench workspace (2026-10-04). A bare
@@ -148,6 +162,71 @@ describe("tools/matrix import boundary", () => {
     expect(Object.keys(deps), "@seazn/matrix depends on the engine the file imports").toContain("@seazn/engine");
     const naming = MODULES.filter((m) => importsOf(m).some((i) => i.spec.startsWith(".") && relative(REPO, resolve(dirname(m), i.spec)) === FORFEIT_PHASE_REFUSAL)).map((m) => relative(MATRIX, m));
     expect(naming).toEqual(["lib/driver/browser-driver.ts"]);
+  });
+
+  it("the product's stage-cfg composition is a file plain node can load: it exists, loads only the engine's core and sport barrels (a package the matrix depends on), only sport-cfg.ts names it, and stageCfg delegates whole to it", () => {
+    const file = join(REPO, STAGE_DECIDER_OFF);
+    expect(existsSync(file), STAGE_DECIDER_OFF).toBe(true);
+    const imports = importsOf(file);
+    expect(imports.filter((i) => !i.typeOnly).map((i) => i.spec).sort(), `${STAGE_DECIDER_OFF} must load nothing but the engine's core and sport barrels`).toEqual(["@seazn/engine/core", "@seazn/engine/sport"]);
+    expect(imports.filter((i) => !i.spec.startsWith("@seazn/engine/")).map((i) => i.spec), `${STAGE_DECIDER_OFF} names nothing outside the engine, not even as a type`).toEqual([]);
+    const deps = (JSON.parse(readFileSync(join(MATRIX, "package.json"), "utf8")) as { dependencies?: Record<string, string> }).dependencies ?? {};
+    expect(Object.keys(deps), "@seazn/matrix depends on the engine the file imports").toContain("@seazn/engine");
+    const naming = MODULES.filter((m) => importsOf(m).some((i) => i.spec.startsWith(".") && relative(REPO, resolve(dirname(m), i.spec)) === STAGE_DECIDER_OFF)).map((m) => relative(MATRIX, m));
+    expect(naming).toEqual(["lib/sport-cfg.ts"]);
+    // Review M-3: the harness folds under the PRODUCT's composition, never its own. `stageCfg` is one call to
+    // `postedStageCfg`, the function apps/web's stage-cfg-composition.test.ts diffs against the create door and resolver.
+    const sportCfg = readFileSync(join(MATRIX, "lib/sport-cfg.ts"), "utf8");
+    const body = /export function stageCfg\([^)]*\)[^{]*\{([\s\S]*?)\n\}/.exec(sportCfg)?.[1] ?? "";
+    expect(body.trim(), "stageCfg delegates whole to the product").toBe("return postedStageCfg(sportModule(sportKey), cfg, stageKind, variantKey, rules);");
+  });
+
+  it("the product's top-level decider set is a file plain node can load: it exists, loads only the engine's sport barrels (a package the bench depends on), and only the bench's validate-pack names it", () => {
+    const file = join(REPO, TOP_LEVEL_STAGE_DECIDERS);
+    expect(existsSync(file), TOP_LEVEL_STAGE_DECIDERS).toBe(true);
+    const imports = importsOf(file);
+    expect(imports.map((i) => i.spec).sort(), `${TOP_LEVEL_STAGE_DECIDERS} must import nothing but the engine's sport barrels, not even as a type`).toEqual(["@seazn/engine/sport", "@seazn/engine/sports"]);
+    const deps = (JSON.parse(readFileSync(join(REPO, "tools/bench/package.json"), "utf8")) as { dependencies?: Record<string, string> }).dependencies ?? {};
+    expect(Object.keys(deps), "@seazn/bench depends on the engine the file imports").toContain("@seazn/engine");
+    const namedBy = (modules: readonly string[]) =>
+      modules.filter((m) => importsOf(m).some((i) => i.spec.startsWith(".") && relative(REPO, resolve(dirname(m), i.spec)) === TOP_LEVEL_STAGE_DECIDERS)).map((m) => relative(REPO, m));
+    const benchModules = shipped(join(REPO, "tools/bench/lib")).sort();
+    expect(benchModules.length, "anti-vacuity: the bench's shipped modules were scanned").toBeGreaterThan(0);
+    expect(namedBy(benchModules)).toEqual(["tools/bench/lib/validate-pack.ts"]);
+    expect(namedBy(MODULES), "the matrix does not load it").toEqual([]);
+  });
+
+  // W2c Task 1: lib/match-rules/ became a directory, and the matrix CLIs (`matrix:*`) load it under plain
+  // `node --experimental-strip-types`, which resolves no extensionless specifier. vitest, tsc and eslint all accept
+  // `./shared`, so nothing else in the repo goes red when a sibling import loses its `.ts`.
+  // The expected API is the public surface the single-file module exported (the Task 1 brief's interface list), not
+  // anything read back from the code under test.
+  const MATCH_RULES_API = [
+    "SINGLE_SET_POINTS_LABEL", "SPORT_RULES", "alignBestOfOnePoints", "borrowOptionLabel",
+    "buildRuleOverride", "clearedSequenceKeys", "configKeysFor", "hydrateRuleValues", "keysEmittedBy", "ruleOptionLabel", "rulesFor", "setRuleValue",
+    "showsOnePointsField", "visibleRuleFields",
+  ];
+  // `rulesFor` joined the public surface in the W2c batch-6 fix round (T20-2): the settings form reads a sport's fields
+  // through it instead of `SPORT_RULES[key] ?? []`, whose prototype-key answer is a function that cannot be iterated.
+  it("the match-rules directory is a tree plain node can load: every relative import names its .ts, and node loads the whole public API", () => {
+    const dir = join(REPO, MATCH_RULES_DIR);
+    const files = readdirSync(dir).filter((f) => f.endsWith(".ts")).sort();
+    expect(files, "the directory holds the registry and its sibling files (an empty scan would pass vacuously)").toContain("index.ts");
+    let relativeImports = 0;
+    const bare: string[] = [];
+    for (const f of files) {
+      for (const { spec } of importsOf(join(dir, f))) {
+        if (!spec.startsWith(".")) continue;
+        relativeImports++;
+        if (!spec.endsWith(".ts")) bare.push(`${f}: ${spec}`);
+      }
+    }
+    console.info(`boundary: ${files.length} match-rules files, ${relativeImports} relative imports, all with .ts`);
+    expect(relativeImports).toBeGreaterThan(files.length);
+    expect(bare, "plain node cannot resolve an extensionless relative import").toEqual([]);
+    const r = spawnSync(process.execPath, ["--experimental-strip-types", "-e", `import(${JSON.stringify(join(dir, "index.ts"))}).then((m) => console.log(JSON.stringify(Object.keys(m).sort())))`], { cwd: REPO, encoding: "utf8", timeout: 30_000, env: { PATH: process.env.PATH ?? "" } });
+    expect(r.status, r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout) as string[]).toEqual(MATCH_RULES_API);
   });
 
   it("the test-module check sees every import shape it is held to, and no shipped module reaches __tests__ (anti-vacuity: the scan reads every module)", () => {

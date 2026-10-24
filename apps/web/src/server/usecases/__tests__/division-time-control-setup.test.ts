@@ -43,11 +43,17 @@ async function createBoardgame(onlinePlay: "off" | "lichess", clock?: Clock) {
   }).then((division) => ({ owner, division }));
 }
 
-async function refusal(p: Promise<unknown>): Promise<{ status: number; code: string | undefined }> {
+async function refusal(p: Promise<unknown>): Promise<{ status: number; code: string | undefined; field?: unknown }> {
   try {
     await p;
   } catch (err) {
-    if (err instanceof HttpError) return { status: err.status, code: err.code };
+    if (err instanceof HttpError) {
+      // A rule lock names the field it refused first (W2c X-SR-4, `extra.refused`); any other refusal carries none.
+      const refused: unknown = err.extra?.refused;
+      const first: unknown = Array.isArray(refused) ? refused[0] : undefined;
+      const field = typeof first === "object" && first !== null ? (first as { field?: unknown }).field : undefined;
+      return { status: err.status, code: err.code, ...(field === undefined ? {} : { field }) };
+    }
     throw err;
   }
   throw new Error("expected a refusal, the call succeeded");
@@ -189,11 +195,15 @@ describe.skipIf(!HAS_DB)("patchDivision refuses an unplayable online clock", () 
   });
 
   it("a format-locked division keeps the lock's precedence: a clock change is 409, never 400", async () => {
+    // W2c X-SR-4 locks a division field per STARTED stage, and rebase ruling D2 (2026-10-23) makes an OPENED round a
+    // start: the running Lichess round below is what locks the clock (a fixture alone no longer does). The code is
+    // W2c's per-field name for the same 409, with the refused field beside it.
     const s = await seedOnlineChessFixture({
       onlinePlay: "lichess",
       divisionStarted: true,
       scheduledAt: new Date("2026-10-01T12:10:00.000Z"),
       linked: true,
+      roundOpenedAt: new Date("2026-10-01T12:00:00.000Z"),
     });
     const auth = { orgId: s.orgId, via: "session", userId: s.ownerUserId, role: "owner", keyId: null } as AuthCtx;
     const before = await getDivision(auth, s.divisionId);
@@ -203,7 +213,7 @@ describe.skipIf(!HAS_DB)("patchDivision refuses an unplayable online clock", () 
           config: { ...(before.config as Record<string, unknown>), clock: ONE_PLUS_ZERO },
         }),
       ),
-    ).toEqual({ status: 409, code: "FORMAT_LOCKED" });
+    ).toEqual({ status: 409, code: "DIVISION_FORMAT_LOCKED", field: "clock" });
   });
 });
 
@@ -250,11 +260,13 @@ describe.skipIf(!HAS_DB)("the clock gate judges a change, not a re-send", () => 
 
   async function lockedPreGateDivision(clock: Clock | null) {
     expectRefusedByTheGate(clock ? JSON.stringify(clock) : "no clock", clock);
+    // Locked by its running round (W2c X-SR-4 + rebase ruling D2): the open, not the fixture, is what locks the clock.
     const s = await seedOnlineChessFixture({
       onlinePlay: "lichess",
       divisionStarted: true,
       scheduledAt: new Date("2026-10-01T12:10:00.000Z"),
       linked: true,
+      roundOpenedAt: new Date("2026-10-01T12:00:00.000Z"),
     });
     if (clock) {
       await sql`
@@ -265,9 +277,9 @@ describe.skipIf(!HAS_DB)("the clock gate judges a change, not a re-send", () => 
     }
     const auth = { orgId: s.orgId, via: "session", userId: s.ownerUserId, role: "owner", keyId: null } as AuthCtx;
     const [{ locked }] = await sql<{ locked: boolean }[]>`
-      select exists(select 1 from fixtures f join stages st on st.id = f.stage_id
+      select exists(select 1 from stage_round_opens o join stages st on st.id = o.stage_id
                      where st.division_id = ${s.divisionId}) as locked`;
-    expect(locked, "premise: the division is format-locked (it has a fixture)").toBe(true);
+    expect(locked, "premise: the division is format-locked (its round is open)").toBe(true);
     const before = await getDivision(auth, s.divisionId);
     expect((before.config as { clock?: unknown }).clock ?? null, "premise: the legacy clock is stored").toEqual(clock);
     expect((before.config as { onlinePlay?: string }).onlinePlay, "premise: online play is on").toBe("lichess");
@@ -292,7 +304,7 @@ describe.skipIf(!HAS_DB)("the clock gate judges a change, not a re-send", () => 
     const { auth, divisionId, before } = await lockedPreGateDivision(TWENTY_PLUS_ZERO);
     expect(
       await refusal(patchDivision(auth, divisionId, { config: { ...before, clock: ONE_PLUS_ZERO } })),
-    ).toEqual({ status: 409, code: "FORMAT_LOCKED" });
+    ).toEqual({ status: 409, code: "DIVISION_FORMAT_LOCKED", field: "clock" });
   });
 
   it("a LOCKED division turning online play ON over a pre-gate clock is refused, and nothing is written", async () => {

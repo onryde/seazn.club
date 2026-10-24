@@ -31,6 +31,7 @@ describe("resolveScorePadBootstrap", () => {
       initialEvents: [],
       identity: IDENTITY,
       stageKind: null,
+      rulesVersion: 0,
     });
     expect(result).not.toBeNull();
     expect(result!.moduleVersion).toBe(generic.version);
@@ -48,6 +49,7 @@ describe("resolveScorePadBootstrap", () => {
         initialEvents: [],
         identity: IDENTITY,
         stageKind,
+        rulesVersion: 0,
       });
       expect(result?.stageKind, String(stageKind)).toBe(stageKind);
       checked++;
@@ -64,6 +66,7 @@ describe("resolveScorePadBootstrap", () => {
       initialEvents: [],
       identity: IDENTITY,
       stageKind: null,
+      rulesVersion: 0,
     });
     expect(result).toBeNull();
   });
@@ -87,6 +90,7 @@ describe("resolveScorePadBootstrap", () => {
       initialEvents: events,
       identity: IDENTITY,
       stageKind: null,
+      rulesVersion: 0,
     });
     expect(result!.initialEvents).toBe(events);
   });
@@ -105,6 +109,7 @@ describe("resolveScorePadBootstrap", () => {
       initialEvents: [],
       identity: IDENTITY,
       stageKind: null,
+      rulesVersion: 0,
     });
     expect(result).not.toBeNull();
     expect(result!.entitlements["scoring.swap_off_step_enforcement"]).toBe(false);
@@ -128,6 +133,7 @@ describe("resolveScorePadBootstrap", () => {
       initialEvents: [],
       identity: IDENTITY,
       stageKind: null,
+      rulesVersion: 0,
     });
     expect(result).not.toBeNull();
     expect(hasFeatureFn).toHaveBeenCalledTimes(1);

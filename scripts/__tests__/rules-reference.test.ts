@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { allRows, type RuleRow } from "@seazn/engine/testkit";
 import { describe, expect, it } from "vitest";
-import { AWAITING_PROOF, REPO, fileExists, inEngine, isMatrixCase, proofProblems, readRepoFile, type ReadRepoFile } from "../../packages/engine/test/rules-reference.ts";
+import { AWAITING_PROOF, REPO, fileExists, inEngine, isMatrixCase, proofBudget, proofProblems, readRepoFile, type ReadRepoFile } from "../../packages/engine/test/rules-reference.ts";
 import { SPAWN_MS, spawnBudget } from "../../packages/engine/test/stryker-spawn.ts";
 import { readAppendixA, w2bIds, w2bProblems, type AppendixA } from "../../packages/engine/test/w2b-rows.ts";
 
@@ -104,6 +104,12 @@ function w2bTextProblems(rows: readonly RuleRow[], appendix: AppendixA): TextChe
   return check;
 }
 
+/** The (row, proving test path) pairs the proof check below reads: every signed or deviation row not awaiting proof, each of its
+ *  non-matrix paths OUTSIDE packages/engine/ (the engine's half reads the rest). Counted from the table, not from the check's own reads. */
+const PROOF_PAIRS = allRows()
+  .filter((r) => !r.status.startsWith("⬜") && !AWAITING_PROOF.has(r.id))
+  .reduce((n, r) => n + r.provedBy.filter((p) => !isMatrixCase(p) && !inEngine(p)).length, 0);
+
 /** A synthetic signed row: the fixtures of the real-repo reader test below. */
 const row = (provedBy: string[]): RuleRow => ({ id: "X-ZZ-1", rule: "r", citation: "c", status: "signed 1 2026-10-08", enforcedAt: [], provedBy, file: "synthetic.md" });
 const noTitle = (p: string) => `X-ZZ-1: ${p} has no it/test/describe title naming "X-ZZ-1"`;
@@ -121,7 +127,7 @@ describe("rules reference (ruling 75, spec §6)", () => {
 
   // The monorepo's half of the proof check that used to be one test in the engine: every proof path that is NOT under
   // packages/engine/ (the engine checks those, " (engine paths)"). Each half reports what it checked, and zero is a failure.
-  it("every signed or deviation row names a proving test that exists and contains the id (or awaits proof by name) (app, tools and reference paths)", () => {
+  it("every signed or deviation row names a proving test that exists and contains the id (or awaits proof by name) (app, tools and reference paths)", (ctx) => {
     const outsideEngine = (p: string): boolean => !inEngine(p);
     const reads: string[] = [];
     const read: ReadRepoFile = (p) => { reads.push(p); return readRepoFile(p); };
@@ -141,7 +147,11 @@ describe("rules reference (ruling 75, spec §6)", () => {
     // and it read exactly the paths it counted
     expect(reads.filter((p) => p.startsWith("packages/engine/")), "engine paths this half read").toEqual([]);
     expect(reads.length, "paths this half read").toBe(paths);
-  });
+    // Batch 4 review M7 (AGENTS.md class 20), as the engine half has it: one read and, per distinct file, one TypeScript parse for
+    // every pair, so the cost grows with the table. The budget is stated from the pairs the table has, and the run made exactly those.
+    expect(reads.length, "the reads the budget was derived from are the reads made").toBe(PROOF_PAIRS);
+    expect(ctx.task.timeout, "the timeout vitest applied is the one stated from those pairs, not a default").toBe(proofBudget(reads.length));
+  }, proofBudget(PROOF_PAIRS));
 
   it("every enforced-at path exists (app, tools and reference paths)", () => {
     const checked: string[] = [];

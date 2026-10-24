@@ -26,15 +26,18 @@ vi.mock("next/cache", () => ({
   revalidateTag: vi.fn(),
 }));
 
+import { stageDefaultsFor, type AnySportModule } from "@seazn/engine/sport";
+import { decidersOffRules } from "@/lib/stage-decider-off";
 import { sql } from "@/lib/db";
 import { t } from "@/lib/i18n-runtime";
 import { msgFor } from "@/lib/messages-i18n";
 import enPublic from "@/dictionaries/en/public.json";
 import esPublic from "@/dictionaries/es/public.json";
+import { resolveLatestModule } from "@/server/engine-db";
 import { publicFixture } from "@/server/usecases/public";
 import type { MatchCentreDocT } from "../match-centre-schema";
 import { getPublicFixture } from "../data";
-import { SWISS_RULES, seedStageRulesScene, type StageRulesScene } from "./_stage-rules-scene";
+import { SWISS_RULES, seedDecidersScene, seedStageRulesScene, type StageRulesScene } from "./_stage-rules-scene";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -52,7 +55,7 @@ function infoFormat(doc: MatchCentreDocT): unknown {
   return row?.value.params?.format;
 }
 
-async function pageDoc(s: StageRulesScene, fixtureId: string): Promise<MatchCentreDocT> {
+async function pageDoc(s: Pick<StageRulesScene, "orgSlug" | "compSlug" | "divSlug">, fixtureId: string): Promise<MatchCentreDocT> {
   const data = await getPublicFixture(s.orgSlug, s.compSlug, s.divSlug, fixtureId);
   expect(data, "the seeded fixture must be publicly visible").not.toBeNull();
   return data!.matchCentre;
@@ -128,4 +131,85 @@ describe.skipIf(!HAS_DB)("a fixture's public format label follows its STAGE's ru
     expect(infoFormat(await pageDoc(s, s.leagueFixtureId))).toBe(expected);
     expect(infoFormat(await pollDoc(s.leagueFixtureId))).toBe(expected);
   }, 60_000);
+});
+
+// W2c Task 16 (spec items 12-13, carried M4): a bracket fixture's public label says how a tied match ENDS, and a sport
+// the old four-sport gate never described is described. Through BOTH loaders, because `match-centre-load.ts` is the
+// seam that hands the fixture's stage KIND to the describer - a builder test cannot see that it does.
+//
+// Every number is the engine's own declaration (the variant's parsed config, the knockout preset a created stage
+// stores); the words are the product's dictionary. The right answers differ from the wrong ones' constants: hockey's
+// 15-minute quarters beside a 5-attempt shoot-out; football's 45-minute halves beside 15-minute extra time.
+describe.skipIf(!HAS_DB)("a bracket fixture's public label names the deciders of its stage", () => {
+  const cases = [
+    {
+      sportKey: "hockey",
+      variantKey: "fih-outdoor",
+      label: (m: AnySportModule, cfg: Record<string, unknown>, preset: Record<string, unknown>) =>
+        [
+          t(enPublic, "format.rules.period.quarters", { minutes: (cfg.periods as { minutes: number }).minutes }),
+          t(enPublic, "format.rules.decider.shootout", { n: (preset.shootout as { attempts: number }).attempts }),
+        ].join(", "),
+    },
+    {
+      sportKey: "football",
+      variantKey: "11-a-side",
+      label: (m: AnySportModule, cfg: Record<string, unknown>, preset: Record<string, unknown>) =>
+        [
+          t(enPublic, "format.rules.period.halves", { minutes: cfg.halfMinutes as number }),
+          t(enPublic, "format.rules.decider.extraTime", { n: (preset.extraTime as { halfMinutes: number }).halfMinutes }),
+          t(enPublic, "format.rules.decider.penalties", { n: preset.shootoutAttempts as number }),
+        ].join(", "),
+    },
+  ];
+
+  it.each(cases)("$sportKey: the Cup's fixture reads its period line and deciders on BOTH loaders; the Pool's keeps the preset name", async (c) => {
+    const m = resolveLatestModule(c.sportKey);
+    const cfg = m.configSchema.parse(m.variants[c.variantKey]) as Record<string, unknown>;
+    const preset = stageDefaultsFor(m, "knockout", c.variantKey);
+    expect(Object.keys(preset).length, "premise: the sport's knockout preset carries deciders").toBeGreaterThan(0);
+    const expected = c.label(m, cfg, preset);
+    const s = await seedDecidersScene({ sportKey: c.sportKey, variantKey: c.variantKey });
+    for (const [loader, doc] of [
+      ["getPublicFixture", await pageDoc(s, s.cupFixtureId)],
+      ["publicFixture", await pollDoc(s.cupFixtureId)],
+    ] as const) {
+      expect(infoFormat(doc), `${loader}: Info tab format row`).toBe(expected);
+      expect(doc.header.metaLine, `${loader}: header meta line`).toContain(expected);
+    }
+    // The empty case: a table stage that plays the division's format keeps the preset name.
+    const presetName = infoFormat(await pollDoc(s.leagueFixtureId));
+    expect(presetName, "the Pool names no deciders").not.toBe(expected);
+    expect(String(presetName)).not.toMatch(/shoot-out|penalties|extra time|level matches/);
+    expect(infoFormat(await pageDoc(s, s.leagueFixtureId))).toBe(presetName);
+  }, 90_000);
+});
+
+// The stage KIND is what lets the label say "level matches wait for the organiser": without it the describer cannot
+// tell a knockout from a table, and an all-off Cup would read as the bare period line - the spectator told nothing about
+// a match that cannot end level. (Both numbers and words come from the engine's declarations and the dictionary.)
+describe.skipIf(!HAS_DB)("a bracket fixture whose stage switched every decider off says what happens to a level match", () => {
+  it("football: a Cup with shorter halves and no decider reads its period line and 'level matches wait for the organiser' on BOTH loaders; the Pool does not", async () => {
+    const m = resolveLatestModule("football");
+    const cfg = m.configSchema.parse(m.variants["11-a-side"]) as Record<string, unknown>;
+    const off = decidersOffRules(m, "11-a-side", "knockout");
+    expect(Object.keys(off).length, "premise: football has deciders to switch off").toBeGreaterThan(0);
+    // The Cup also plays shorter halves than the division, so it DIFFERS (a stage that changed nothing keeps the preset
+    // name, which is the division-level rule - "none" is only said once there is a line to put it on).
+    const halfMinutes = (cfg.halfMinutes as number) - 5;
+    const expected = [
+      t(enPublic, "format.rules.period.halves", { minutes: halfMinutes }),
+      t(enPublic, "format.rules.decider.none"),
+    ].join(", ");
+    const s = await seedDecidersScene({ sportKey: "football", variantKey: "11-a-side", cupRules: { ...off, halfMinutes } });
+    for (const [loader, doc] of [
+      ["getPublicFixture", await pageDoc(s, s.cupFixtureId)],
+      ["publicFixture", await pollDoc(s.cupFixtureId)],
+    ] as const) {
+      expect(infoFormat(doc), `${loader}: Info tab format row`).toBe(expected);
+      expect(doc.header.metaLine, `${loader}: header meta line`).toContain(expected);
+    }
+    // The empty case: the table stage is a league, where a drawn match is a result - it never says "level matches".
+    expect(String(infoFormat(await pollDoc(s.leagueFixtureId)))).not.toMatch(/level matches/);
+  }, 90_000);
 });

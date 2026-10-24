@@ -14,15 +14,22 @@ import { describe, expect, it, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { getLimit, invalidateOrgEntitlements } from "@/lib/entitlements";
-import { buildRuleOverride, configKeysFor, setRuleValue, STAGE_RULES_SPORTS } from "@/lib/match-rules";
+import { buildRuleOverride, setRuleValue } from "@/lib/match-rules";
+import { divisionOnlyStageKeys } from "@/lib/online-time-control";
+import { msg as msgEn } from "@/lib/messages";
+import { RULE_NOT_SETTABLE_REASON_KEYS, ruleRefusalText } from "@/lib/rule-errors";
+import esUi from "@/dictionaries/es/ui.json";
+import { divisionPlaysOnline } from "@/server/external-play/online-play";
+import { stageTopKeysFor } from "@seazn/engine/sport";
+import { builtinModules } from "@seazn/engine/sports";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { appendEvent } from "@/server/engine-db";
 import { resolveModule } from "@/server/engine-db";
 import { recomputeStandings } from "@/server/engine-db/competition";
 import { createCompetition } from "../competitions";
-import { createDivision } from "../divisions";
+import { createDivision, patchDivision } from "../divisions";
 import { createEntrants } from "../entrants";
-import { createStages, generateStageFixtures } from "../stages";
+import { createStages, generateStageFixtures, replaceStages } from "../stages";
 import { formatLockedStageIds, putStageRules } from "../stage-rules";
 import { frozenCompetitionIds } from "../entitlement-freeze";
 
@@ -75,10 +82,10 @@ async function seedDivision(
   return { divisionId: division.id, entrants: entrants.map((e) => e.id) };
 }
 
-async function seedStage(auth: AuthCtx, divisionId: string, seq: number): Promise<string> {
+async function seedStage(auth: AuthCtx, divisionId: string, seq: number, kind: "league" | "knockout" = "league"): Promise<string> {
   const [stage] = await createStages(auth, divisionId, {
     seq,
-    kind: "league",
+    kind,
     name: "S" + seq,
     config: {},
     progression: null,
@@ -138,9 +145,11 @@ describe.skipIf(!HAS_DB)("putStageRules (design §T3)", () => {
     const { divisionId } = await seedDivision(auth, "tennis", "tour");
     const stageId = await seedStage(auth, divisionId, 1);
 
+    // W2c Task 11: the engine DECLARES tennis's `points` (a points-scope key), so the answer is now the sharper
+    // RULE_NOT_SETTABLE (declared, but never a stage rule) rather than UNKNOWN_RULE_KEY. Still a 400 from the allowlist.
     await expect(
       putStageRules(auth, stageId, { rules: { points: { win: 5, loss: 0 } } }),
-    ).rejects.toMatchObject({ status: 400, code: "UNKNOWN_RULE_KEY" });
+    ).rejects.toMatchObject({ status: 400, code: "RULE_NOT_SETTABLE", extra: { field: "points" } });
 
     // The positive half, and the reason the status code matters: tennis's own
     // configSchema ACCEPTS a top-level `points`, so the merged-config parse
@@ -158,54 +167,168 @@ describe.skipIf(!HAS_DB)("putStageRules (design §T3)", () => {
     expect(merged.success).toBe(true);
   }, 30_000);
 
-  it("refuses a sport outside the sets-based four", async () => {
-    const auth = await seedOrg();
-    const { divisionId } = await seedDivision(auth, "football", "11-a-side", 0);
-    const stageId = await seedStage(auth, divisionId, 1);
-    await expect(putStageRules(auth, stageId, { rules: { bestOf: 3 } })).rejects.toMatchObject({
-      status: 400,
-      code: "SPORT_NOT_SUPPORTED",
-    });
-  }, 30_000);
-
-  // Review of PR #986: the Match rules clock is the division's alone on an online (Lichess) division. A stage cannot carry
-  // one: the per-stage format is only for the four sets-based sports, whose rule fields emit no `clock`, and a chess stage is
-  // refused at the sport gate before any key is looked at - so the Lichess challenge (guard.ts onlinePlayClock, which reads
-  // divisions.config.clock only) can never be built on a stage-level clock. The consumer's half is
+  // Rebase ruling D1 (2026-10-23) - rewrites PR #986's two chess tests, which pinned the pre-W2c sport gate
+  // (SPORT_NOT_SUPPORTED, STAGE_RULES_SPORTS) that W2c X-SR-1 / Task 17 removed. Their intent stands: on an online
+  // (Lichess) division the Match rules clock is the DIVISION's alone. The challenge is built from divisions.config.clock
+  // only (guard.ts onlinePlayClock), so a stage-level clock there would be an inert seam - saved, shown, never played.
+  // The stage save refuses it with the allowlist's own refusal (RULE_NOT_SETTABLE, naming the key), the stage editor does
+  // not draw it (stages-panel-stage-format.test.tsx), and the tie-break rungs stay the stage's. The consumer's half is
   // external-play-guard.test.ts ("a stage's rules never reach the Lichess clock").
-  it("chess: a Lichess division's stage refuses a clock (and any rules) at the sport gate - nothing written to the stage or the division", async () => {
+  const LICHESS_CLOCK = { base: 600, increment: 5 }; // 10+5, a control on the Lichess list
+  const lichessConfig = { variant: "classical", clock: LICHESS_CLOCK, onlinePlay: "lichess" };
+  async function divisionRow(divisionId: string) {
+    const [div] = await sql<{ config: { clock?: unknown; onlinePlay?: string } }[]>`select config from divisions where id = ${divisionId}`;
+    return div!.config;
+  }
+  /** A reader in Spanish (final review M1): the refusal said off its code and extra, never the server's English. */
+  const ES = esUi as unknown as Record<string, string>;
+  const msgEs = (key: string, vars: Record<string, string | number> = {}) =>
+    ES[key]!.replace(/\{(\w+)\}/g, (h, name: string) => (name in vars ? String(vars[name]) : h));
+  const refusalOf = (p: Promise<unknown>) =>
+    p.then(
+      () => {
+        throw new Error("expected a refusal");
+      },
+      (e: unknown) => e as { status: number; code: string; message: string; extra: Record<string, unknown> },
+    );
+
+  it("chess (D1): a Lichess division's stage refuses a clock or its clock family by name - nothing written to the stage or the division", async () => {
     const auth = await seedOrg();
-    const { divisionId } = await seedDivision(auth, "boardgame", "classical", 0, {
-      variant: "classical",
-      clock: { base: 600, increment: 5 },
-      onlinePlay: "lichess",
-    });
-    const stageId = await seedStage(auth, divisionId, 1);
+    const { divisionId } = await seedDivision(auth, "boardgame", "classical", 2, lichessConfig);
+    const stageId = await seedStage(auth, divisionId, 1, "knockout");
+    const FRAGMENTS: { rules: Record<string, unknown>; field: string }[] = [
+      { rules: { clock: { base: 60, increment: 0 } }, field: "clock" },
+      // The division's own value too: the KEY is the division's, whatever it holds.
+      { rules: { clock: LICHESS_CLOCK }, field: "clock" },
+      { rules: { variant: "blitz" }, field: "variant" },
+      // A rung the stage may keep does not carry a clock through: one refused key refuses the whole save.
+      { rules: { tiebreakRungs: ["blitz"], clock: { base: 300, increment: 3 } }, field: "clock" },
+    ];
     let refused = 0;
-    for (const rules of [{ clock: { base: 60, increment: 0 } }, { clock: { base: 600, increment: 5 } }, { variant: "blitz" }, {}]) {
-      await expect(putStageRules(auth, stageId, { rules }), JSON.stringify(rules)).rejects.toMatchObject({
+    for (const f of FRAGMENTS) {
+      const err = await refusalOf(putStageRules(auth, stageId, { rules: f.rules }));
+      expect(err, JSON.stringify(f.rules)).toMatchObject({
         status: 400,
-        code: "SPORT_NOT_SUPPORTED",
+        code: "RULE_NOT_SETTABLE",
+        // Final review M1: the reason travels as a CODE a client says in the reader's language.
+        extra: { field: f.field, reason: "online_division" },
       });
+      // The client's English is the server's sentence, and it names the online division's reason (from the dictionary).
+      expect(ruleRefusalText(err.code, err.extra, msgEn), JSON.stringify(f.rules)).toBe(err.message);
+      expect(err.message).toContain(msgEn(RULE_NOT_SETTABLE_REASON_KEYS.online_division));
+      // A Spanish reader gets the Spanish reason, not the English one.
+      const es = ruleRefusalText(err.code, err.extra, msgEs as never);
+      expect(es).toContain(ES[RULE_NOT_SETTABLE_REASON_KEYS.online_division]!);
+      expect(es).not.toBe(err.message);
       refused += 1;
     }
-    expect(refused, "anti-vacuity: every fragment was refused").toBe(4);
+    expect(refused, "anti-vacuity: every fragment was refused").toBe(FRAGMENTS.length);
     expect(await stageConfig(stageId), "the stage holds no rules").not.toHaveProperty("rules");
-    const [div] = await sql<{ config: { clock?: unknown; onlinePlay?: string } }[]>`select config from divisions where id = ${divisionId}`;
-    expect(div!.config.clock, "and the division's clock is as it was").toEqual({ base: 600, increment: 5 });
+    expect((await divisionRow(divisionId)).clock, "and the division's clock is as it was").toEqual(LICHESS_CLOCK);
   }, 30_000);
 
-  it("the four sports that DO take stage rules emit no `clock` key - so no stage fragment of any of them can set one", () => {
-    let checked = 0;
-    for (const sport of STAGE_RULES_SPORTS) {
-      expect(configKeysFor(sport).has("clock"), `${sport} must not emit a clock`).toBe(false);
-      checked += 1;
-    }
-    expect(checked, "anti-vacuity: the registry's four").toBe(4);
-    expect(STAGE_RULES_SPORTS.has("boardgame"), "chess is not among them").toBe(false);
-    expect(configKeysFor("boardgame").has("clock"), "the premise: chess's own rule fields DO emit one (the division's)").toBe(true);
-  });
+  it("chess (D1): the rungs still save on a Lichess knockout - a second save replaces them, the clock is still refused after, and {} clears", async () => {
+    const auth = await seedOrg();
+    const { divisionId } = await seedDivision(auth, "boardgame", "classical", 2, lichessConfig);
+    const stageId = await seedStage(auth, divisionId, 1, "knockout");
+    await putStageRules(auth, stageId, { rules: { tiebreakRungs: ["blitz", "armageddon"] } });
+    expect((await stageConfig(stageId)).rules).toEqual({ tiebreakRungs: ["blitz", "armageddon"] });
+    // The second call: the fragment merges, so the list is replaced whole.
+    await putStageRules(auth, stageId, { rules: { tiebreakRungs: ["rapid"] } });
+    expect((await stageConfig(stageId)).rules).toEqual({ tiebreakRungs: ["rapid"] });
+    await expect(putStageRules(auth, stageId, { rules: { clock: { base: 300, increment: 3 } } })).rejects.toMatchObject({
+      status: 400,
+      code: "RULE_NOT_SETTABLE",
+      extra: { field: "clock" },
+    });
+    expect((await stageConfig(stageId)).rules, "the refused save left the rungs as they were").toEqual({ tiebreakRungs: ["rapid"] });
+    // The empty case: a fragment naming no key the division keeps is never refused for it.
+    await putStageRules(auth, stageId, { rules: {} });
+    expect(await stageConfig(stageId), "{} cleared the rules").not.toHaveProperty("rules");
+    expect((await divisionRow(divisionId)).clock, "the division's clock never moved").toEqual(LICHESS_CLOCK);
+  }, 30_000);
 
+  it("chess (D1), the positive pair: over the board (online play off) the stage's clock and clock family are the stage's own", async () => {
+    const auth = await seedOrg();
+    const { divisionId } = await seedDivision(auth, "boardgame", "classical", 2, { variant: "classical", clock: LICHESS_CLOCK });
+    const stageId = await seedStage(auth, divisionId, 1);
+    await putStageRules(auth, stageId, { rules: { variant: "blitz", clock: { base: 300, increment: 3 } } });
+    expect((await stageConfig(stageId)).rules).toEqual({ variant: "blitz", clock: { base: 300, increment: 3 } });
+  }, 30_000);
+
+  it("chess (D1), the sequence: online play turned ON over a stage that keeps its own clock is refused naming the stage; cleared, it goes through, twice", async () => {
+    const auth = await seedOrg();
+    const { divisionId } = await seedDivision(auth, "boardgame", "classical", 2, { variant: "classical", clock: LICHESS_CLOCK });
+    const stageId = await seedStage(auth, divisionId, 1, "knockout");
+    await putStageRules(auth, stageId, { rules: { clock: { base: 300, increment: 3 }, tiebreakRungs: ["blitz"] } });
+    const err = await refusalOf(patchDivision(auth, divisionId, { config: lichessConfig }));
+    expect(err).toMatchObject({
+      status: 400,
+      code: "RULE_NOT_SETTABLE",
+      extra: { field: "clock", stage_id: stageId, stage_name: "S1", reason: "online_division" },
+    });
+    // Final review M1: the client names the STAGE and the reason, as the server's English does - and in Spanish, in Spanish.
+    expect(ruleRefusalText(err.code, err.extra, msgEn), "the client's English is the server's").toBe(err.message);
+    expect(err.message.startsWith("S1"), "the stage is named").toBe(true);
+    const es = ruleRefusalText(err.code, err.extra, msgEs as never)!;
+    expect(es.startsWith("S1"), "the stage is named in Spanish too").toBe(true);
+    expect(es).toContain(ES[RULE_NOT_SETTABLE_REASON_KEYS.online_division]!);
+    expect((await divisionRow(divisionId)).onlinePlay, "nothing was written: still over the board").toBeUndefined();
+    await putStageRules(auth, stageId, { rules: { clock: null } });
+    expect((await stageConfig(stageId)).rules, "the stage keeps its rungs, not its clock").toEqual({ tiebreakRungs: ["blitz"] });
+    await patchDivision(auth, divisionId, { config: lichessConfig });
+    expect((await divisionRow(divisionId)).onlinePlay).toBe("lichess");
+    // A second save re-sends the same config: still accepted, and the rungs are still the stage's.
+    await patchDivision(auth, divisionId, { config: lichessConfig });
+    expect((await divisionRow(divisionId)).onlinePlay).toBe("lichess");
+    expect((await stageConfig(stageId)).rules).toEqual({ tiebreakRungs: ["blitz"] });
+  }, 30_000);
+
+  // Final review I1: the CREATE doors (POST /divisions/{id}/stages = createStages, the Format tab's Apply =
+  // replaceStages) reach the same allowlist through `validatedStageConfig`, which must be handed the DIVISION's config -
+  // an empty one reads "over the board" and lets the clock through (the mutant that survived 85/85).
+  it("chess (D1), the create doors: createStages and replaceStages refuse a stage clock on a Lichess division by name, writing no stage; over the board both take it", async () => {
+    const auth = await seedOrg();
+    const STAGE_CLOCK = { base: 300, increment: 3 };
+    const batch = (rules: Record<string, unknown>) => ({ seq: 1, kind: "league" as const, name: "S1", config: { rules }, progression: null });
+    const stagesOf = async (divisionId: string) =>
+      sql<{ id: string; config: { rules?: Record<string, unknown> } }[]>`select id, config from stages where division_id = ${divisionId} order by seq`;
+    const DOORS = [
+      ["createStages", createStages],
+      ["replaceStages", replaceStages],
+    ] as const;
+
+    const lichess = (await seedDivision(auth, "boardgame", "classical", 2, lichessConfig)).divisionId;
+    let refused = 0;
+    for (const [name, door] of DOORS) {
+      await expect(door(auth, lichess, batch({ clock: STAGE_CLOCK })), name).rejects.toMatchObject({
+        status: 400,
+        code: "RULE_NOT_SETTABLE",
+        extra: { field: "clock" },
+      });
+      refused += 1;
+      expect(await stagesOf(lichess), `${name}: no stage written`).toEqual([]);
+    }
+    expect(refused, "anti-vacuity: both doors asked").toBe(DOORS.length);
+    // The refusal is the clock's, not the division's: the same batch without it goes through either door.
+    for (const [name, door] of DOORS) {
+      await door(auth, lichess, batch({}));
+      expect((await stagesOf(lichess)).length, `${name}: a stage with no clock is written`).toBeGreaterThan(0);
+    }
+    expect((await divisionRow(lichess)).clock, "the division's clock never moved").toEqual(LICHESS_CLOCK);
+
+    // The positive pair: over the board (online play off) both doors keep the stage's own clock - replaceStages twice.
+    const otb = (await seedDivision(auth, "boardgame", "classical", 2, { variant: "classical", clock: LICHESS_CLOCK })).divisionId;
+    let kept = 0;
+    for (const [name, door] of [...DOORS, ["replaceStages (second call)", replaceStages] as const]) {
+      await door(auth, otb, batch({ clock: STAGE_CLOCK }));
+      const rows = await stagesOf(otb);
+      expect(rows.length, name).toBeGreaterThan(0);
+      expect(rows.at(-1)!.config.rules?.clock, `${name}: the stage's own clock`).toEqual(STAGE_CLOCK);
+      kept += 1;
+    }
+    expect(kept).toBe(3);
+  }, 60_000);
   it("422s when the MERGED config fails the module schema", async () => {
     const auth = await seedOrg();
     const { divisionId } = await seedDivision(auth, "tennis", "tour");
@@ -244,9 +367,13 @@ describe.skipIf(!HAS_DB)("putStageRules (design §T3)", () => {
 
     await appendEvent(auth.orgId, fixture!.id, 0, { type: "core.start", payload: {} });
 
+    // Batch-3 M1: the spec's sentence names the stage, and the refusal carries the name for a client to say it with.
+    const [{ name }] = await sql<{ name: string }[]>`select name from stages where id = ${stageId}`;
     await expect(putStageRules(auth, stageId, { rules: { bestOf: 5 } })).rejects.toMatchObject({
       status: 409,
       code: "STAGE_FORMAT_LOCKED",
+      message: `${name} has started — its rules are locked.`,
+      extra: { stage_name: name },
     });
     // Per STAGE, not per division — the sibling has not started.
     await expect(putStageRules(auth, siblingId, { rules: { bestOf: 5 } })).resolves.toBeTruthy();
@@ -425,15 +552,13 @@ describe.skipIf(!HAS_DB)("putStageRules (design §T3)", () => {
     ).rejects.toMatchObject({ status: 404 });
   }, 30_000);
 
-  it("refuses a rules key through createStages", async () => {
+  it("createStages takes config.rules on the stage PUT's terms: a points key is RULE_NOT_SETTABLE, nothing created (custom points never ride a create)", async () => {
     const auth = await seedOrg();
     const { divisionId } = await seedDivision(auth, "football", "11-a-side", 0);
 
-    // The shape SPORT_RULES.football genuinely emits — derived from the table,
-    // not invented. createStages parses stage config through no configSchema
-    // at all, and its paywall gate reads `s.config.points`, never
-    // `s.config.rules.points`, so without this refusal a football division
-    // could set custom shoot-out points straight past the entitlement.
+    // The shape SPORT_RULES.football genuinely emits — derived from the table, not invented. The custom-points paywall
+    // reads `s.config.points`, never `s.config.rules.points`: before W2c Task 12 this door refused `rules` outright; it
+    // now takes them through the engine's allowlist, which refuses every points key (they belong to the Points section).
     const smuggled = buildRuleOverride("football", { shootoutWin: "3", shootoutLoss: "1" });
     expect(smuggled).toEqual({ points: { shootoutWin: 3, shootoutLoss: 1 } });
 
@@ -445,7 +570,12 @@ describe.skipIf(!HAS_DB)("putStageRules (design §T3)", () => {
         config: { rules: smuggled },
         progression: null,
       }),
-    ).rejects.toMatchObject({ status: 400, code: "RULES_NOT_ACCEPTED_HERE" });
+    ).rejects.toMatchObject({ status: 400, code: "RULE_NOT_SETTABLE", extra: { field: "points" } });
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from stages where division_id = ${divisionId}`;
+    expect(n, "nothing created").toBe(0);
+    // The positive pair: a stage key the engine declares for a league rides the create and is stored.
+    const [st] = await createStages(auth, divisionId, { seq: 1, kind: "league", name: "L", config: { rules: { halfMinutes: 40 } }, progression: null });
+    expect((await stageConfig(st!.id)).rules).toEqual({ halfMinutes: 40 });
   }, 30_000);
 });
 
@@ -826,4 +956,41 @@ describe.skipIf(!HAS_DB)("best of 1 — the single points field through the endp
     ).resolves.toBeTruthy();
     expect((await stageConfig(stageId)).rules).toEqual({ setTo: 15, finalSetTo: 15 });
   }, 30_000);
+});
+
+// Rebase ruling D1 (2026-10-23) - which keys an online division keeps for itself. Expected values come from the consumer
+// and the engine, never from the helper: the challenge reads `clock` (guard.ts onlinePlayClock), the Lichess picker writes
+// the clock family beside it (online-time-control.ts: "the clock family (which follows from the choice)"), and both are
+// stage keys the engine declares for chess - which is exactly why the stage could otherwise hold them.
+describe("D1: the keys a Lichess division keeps from its stages", () => {
+  it("are the picker's clock and clock family, each a stage key the engine declares for chess; the rungs are not among them", () => {
+    const kept = divisionOnlyStageKeys("boardgame", { onlinePlay: "lichess" });
+    expect([...kept].sort()).toEqual(["clock", "variant"]);
+    const chess = builtinModules.find((m) => m.key === "boardgame")!;
+    let checked = 0;
+    for (const kind of ["league", "knockout"] as const) {
+      const settable = stageTopKeysFor(chess, kind, "classical");
+      for (const key of kept) {
+        expect(settable.has(key), `premise: ${kind} declares ${key} at stage scope`).toBe(true);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity").toBe(4);
+    expect(kept.has("tiebreakRungs"), "the rungs stay the stage's").toBe(false);
+  });
+
+  it("only a division that plays online keeps any - the same answer as divisionPlaysOnline, swept over every sport (counted)", () => {
+    let checked = 0;
+    let online = 0;
+    for (const m of builtinModules) {
+      for (const config of [{}, { onlinePlay: "off" }, { onlinePlay: "lichess" }, null]) {
+        const plays = divisionPlaysOnline({ sport_key: m.key, config });
+        expect(divisionOnlyStageKeys(m.key, config).size > 0, `${m.key} ${JSON.stringify(config)}`).toBe(plays);
+        if (plays) online++;
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: every sport, four configs").toBe(builtinModules.length * 4);
+    expect(online, "exactly one cell plays online: chess on Lichess").toBe(1);
+  });
 });

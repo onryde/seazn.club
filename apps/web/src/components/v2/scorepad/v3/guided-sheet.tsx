@@ -67,9 +67,12 @@
 // (lime-400), matching every sibling primitive's "one hue per signal" rule
 // (tile-grid.tsx's own header) — nothing on this surface is `primary` or
 // `destructive` in the TileGrid sense, so violet/red have no place here.
+// ONE amendment (W2c Task 21): a `SheetConfirmStep` is a sheet's single commit
+// after a read-back sentence, so its Confirm — and only it — takes the
+// `primary` violet fill; every choice, Back and Cancel stay as described above.
 import { useState, type ReactNode } from "react";
 import { renderCandidateRow, resolvePool, type PoolView, type TFn } from "./context-strip";
-import type { Blocked, GuidedSheetSpec, GuidedSheetStep, SheetChoiceOption, SheetNumberStep, SheetPersonStep, TapEvent } from "./types";
+import type { Blocked, GuidedSheetSpec, GuidedSheetStep, SheetChoiceOption, SheetConfirmStep, SheetContextLine, SheetDisc, SheetNumberStep, SheetPersonStep, TapEvent } from "./types";
 import { SPORT_TONE_CLASSES } from "./tokens";
 import type { SportTone } from "./sport-theme";
 
@@ -363,8 +366,64 @@ const backButtonClass =
 const cancelButtonClass =
   "min-w-0 shrink-0 break-words rounded-full border border-dashed border-slate-300 bg-transparent px-4 text-sm font-medium text-slate-500 transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400";
 
+// `max-w-full` is what lets a long label WRAP instead of overflowing: a `shrink-0` flex item in a `flex-wrap` row is as wide as
+// its text, and a 43-character entrant name (the W2c Task 21 Black step; the rapid winner step had it too) was 353px of
+// content in a 260px card, clipped by the card's `overflow-hidden` — visible only with a realistic name, only in a browser.
+// `py-1.5` is the room a WRAPPED (2-line) label needs inside the rounded-full pill; the inline 44px `minHeight` still floors a
+// one-line label at the same height as before (20px line + 12px padding < 44).
 const choiceButtonClass =
-  "min-w-0 shrink-0 break-words rounded-full border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400";
+  "min-w-0 max-w-full shrink-0 break-words rounded-full border border-slate-200 bg-white px-4 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400";
+
+// W2c Task 21 design pass (S5): `layout: "rows"` — one option per line, the full width of the card, label LEFT-aligned (a name or a
+// sentence reads as text, not as a pill's centred caption). `rounded-xl` is the mockup's 12px; `py-3` is the room a wrapped
+// (2-3 line) 43-character name needs, and the inline 48px `minHeight` floors a one-line label. `min-w-0` + `break-words` let the
+// name wrap instead of overflowing the card's `overflow-hidden` (the same defect `choiceButtonClass` documents).
+const rowButtonClass =
+  "flex w-full min-w-0 items-center gap-3 break-words rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400";
+
+/** The chess piece colour a disc stands for (`SheetDisc`). The white one carries a slate rim so it reads on the white card; the
+ *  split one is the draw, half of each. The hexes are the two ends of the palette (white, slate-900), spelled in the gradient
+ *  because a Tailwind colour utility cannot express a hard-stop split. */
+const DISC_CLASSES: Record<SheetDisc, string> = {
+  white: "border-slate-400 bg-white",
+  black: "border-slate-900 bg-slate-900",
+  split: "border-slate-400 bg-[linear-gradient(90deg,#ffffff_50%,#0f172a_50%)]",
+};
+
+/** A colour disc. `aria-hidden`, always: the text beside it names the colour (`SheetDisc`'s own doc). `data-disc` is the stable
+ *  hook a spec targets without matching a translated label. A PLAIN FUNCTION for the node harness's `.props.children` walk. */
+function renderDisc(disc: SheetDisc) {
+  return <span aria-hidden="true" data-disc={disc} className={`inline-block h-3.5 w-3.5 shrink-0 rounded-full border ${DISC_CLASSES[disc]}`} />;
+}
+
+/**
+ * The context block under a step's title (`SheetChoiceStep.context`): the lines the skin derives from the answers so far. A plain
+ * line is a fact in its own right (the round: semibold, so it reads as the heading of the block); a labelled line is a legend
+ * entry — disc, then the colour word in a fixed-width column so two names start at the same x, then the name, which wraps on
+ * its own (`min-w-0 break-words`: a 43-character name at 320 takes three lines, it never pushes the card wider). The label and
+ * the name are separated by a real space so the block READS "White Asha Rao" to a screen reader and in `textContent`.
+ * Renders NOTHING for an empty list — an empty box would still cost its margin. A PLAIN FUNCTION, like the other renderers.
+ */
+function renderContext(lines: readonly SheetContextLine[]) {
+  if (lines.length === 0) return null;
+  return (
+    <div data-testid="pad-sheet-context" className="flex flex-col gap-1.5 px-4 pt-1">
+      {lines.map((line, i) => (
+        <p key={i} data-testid="pad-sheet-context-line" className="flex min-w-0 items-start gap-2 text-sm text-slate-700">
+          {line.disc !== undefined && <span className="mt-[3px] flex">{renderDisc(line.disc)}</span>}
+          {line.label !== undefined ? (
+            <>
+              <span className="w-16 shrink-0 font-medium text-slate-500">{line.label}</span>{" "}
+              <span className="min-w-0 break-words">{line.text}</span>
+            </>
+          ) : (
+            <span className="min-w-0 break-words font-semibold text-slate-800">{line.text}</span>
+          )}
+        </p>
+      ))}
+    </div>
+  );
+}
 
 /** A row of real 44px choice buttons for a `SheetChoiceStep` — the
  *  `renderCandidateRow` (context-strip.tsx) equivalent for options that
@@ -408,11 +467,13 @@ function renderChoiceRow(
   t: TFn,
   onPick: (id: string) => void,
   blocked?: Blocked,
+  layout?: "rows",
 ) {
+  const rows = layout === "rows";
   return (
     <div className="flex flex-col gap-2">
       {hintKey && <p className="text-sm text-slate-600">{t(hintKey)}</p>}
-      <div className="flex flex-wrap gap-2">
+      <div className={rows ? "flex flex-col gap-2" : "flex flex-wrap gap-2"}>
         {options.map((opt) => {
           // R2c: same treatment renderCandidateRow gives a blocked person —
           // visible, natively disabled, reason as real text, stable data-*.
@@ -436,13 +497,14 @@ function renderChoiceRow(
               {...(reason ? { "data-blocked": "true" } : {})}
               disabled={reason !== undefined}
               onClick={reason !== undefined ? undefined : () => onPick(opt.id)}
-              style={{ minHeight: 44 }}
+              style={{ minHeight: rows ? 48 : 44 }}
               className={
                 reason !== undefined
-                  ? `${choiceButtonClass}${toneClass} cursor-not-allowed opacity-60`
-                  : `${choiceButtonClass}${toneClass}`
+                  ? `${rows ? rowButtonClass : choiceButtonClass}${toneClass} cursor-not-allowed opacity-60`
+                  : `${rows ? rowButtonClass : choiceButtonClass}${toneClass}`
               }
             >
+              {opt.disc !== undefined && renderDisc(opt.disc)}
               {renderToneSwatches(tones)}
               <span className="break-words">{opt.labelText ?? t(opt.label)}</span>
               {reason !== undefined && (
@@ -569,6 +631,41 @@ function renderNumberStep(
   );
 }
 
+/** W2c Task 21 — the confirm control of a `SheetConfirmStep`: the sheet's ONE commit, so it takes the chassis' `primary`
+ *  fill (tile-grid.tsx `KIND_CLASS.primary`: violet-600 + white, 5.02:1) rather than the neutral pill every choice wears.
+ *  A confirm step carries exactly one decision, so there is nothing for the accent to compete with. */
+const confirmButtonClass =
+  "min-w-0 break-words rounded-full border-2 border-transparent bg-violet-600 px-6 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-violet-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-lime-400";
+
+/**
+ * The read-back and its Confirm (`SheetConfirmStep`, types.ts). A PLAIN FUNCTION for the same reason the other row
+ * renderers are (the node-only `_hook-harness` walks `.props.children`, never a nested component). The sentence is the
+ * skin's own, derived from the answers so far; it is printed verbatim and sits in a quiet slate box so the names in it
+ * are the loudest thing on the sheet. Confirm shares the number step's `pad-sheet-confirm` testid and its
+ * `scorepad.action.confirm` label, which is what the bench driver's `confirm` TapStep targets.
+ */
+function renderConfirmStep(step: SheetConfirmStep, answers: Readonly<Record<string, string>>, t: TFn, onConfirm: () => void) {
+  return (
+    <div className="flex flex-col gap-3">
+      <p
+        data-testid="pad-sheet-summary"
+        className="break-words rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-base font-semibold leading-snug text-slate-900"
+      >
+        {step.summary(answers)}
+      </p>
+      <button
+        type="button"
+        data-testid="pad-sheet-confirm"
+        onClick={onConfirm}
+        style={{ minHeight: 44 }}
+        className={confirmButtonClass}
+      >
+        {t("scorepad.action.confirm")}
+      </button>
+    </div>
+  );
+}
+
 export interface GuidedSheetProps {
   spec: GuidedSheetSpec;
   /** Both squads a `kind:"person"` step might resolve against — see the
@@ -672,12 +769,15 @@ export function GuidedSheet({ spec, views, personNames, t, onComplete, onCancel 
           </button>
         )}
       </div>
+      {(step.kind === "choice" || step.kind === "confirm") && step.context !== undefined && renderContext(step.context(state.answers))}
       <div className="px-4 py-3">
         {step.kind === "choice"
-          ? renderChoiceRow(step.options, step.hintKey, t, handleAnswer, step.blocked?.(state.answers))
+          ? renderChoiceRow(step.options, step.hintKey, t, handleAnswer, step.blocked?.(state.answers), step.layout)
           : step.kind === "number"
             ? renderNumberStep(step, numberEditValue, t, setNumberEditValue, () => handleAnswer(String(numberEditValue)))
-            : renderPersonStep(step, views[step.side], personNames, t, handleAnswer, emptyText)}
+            : step.kind === "confirm"
+              ? renderConfirmStep(step, state.answers, t, () => handleAnswer("confirmed"))
+              : renderPersonStep(step, views[step.side], personNames, t, handleAnswer, emptyText)}
       </div>
       <div className="flex justify-end px-4 pb-3">
         <button type="button" onClick={handleCancel} style={{ minHeight: 44 }} className={cancelButtonClass}>

@@ -507,6 +507,9 @@ const MAX_WRAPPER_HOPS = 8;
  */
 type ObjectShapeLookup =
   | { readonly kind: "shape"; readonly shape: Record<string, z.ZodTypeAny> }
+  // W2c: a (discriminated) union of payloads — chess's `boardgame.tiebreak` is rapid/blitz OR Armageddon. Each branch is
+  // looked up in turn; see `fieldsNamed`.
+  | { readonly kind: "union"; readonly branches: readonly z.ZodTypeAny[] }
   | { readonly kind: "not-object" }
   | { readonly kind: "too-deep" };
 
@@ -521,6 +524,11 @@ function objectShapeOf(t: z.ZodTypeAny): ObjectShapeLookup {
     const shaped = cursor as { shape?: unknown };
     if (shaped !== null && typeof shaped === "object" && shaped.shape !== undefined && typeof shaped.shape === "object") {
       return { kind: "shape", shape: shaped.shape as Record<string, z.ZodTypeAny> };
+    }
+    // A union's `.options` are schemas; an enum's are strings, and an enum is a leaf, so test the elements.
+    const unioned = cursor as { options?: unknown };
+    if (Array.isArray(unioned.options) && unioned.options.length > 0 && unioned.options.every((o) => typeof o === "object" && o !== null)) {
+      return { kind: "union", branches: unioned.options as z.ZodTypeAny[] };
     }
     const wrapped = cursor as { unwrap?: () => z.ZodTypeAny };
     if (typeof wrapped.unwrap === "function") {
@@ -562,34 +570,45 @@ function objectShapeOf(t: z.ZodTypeAny): ObjectShapeLookup {
  */
 export function isPathRequired(schema: z.ZodTypeAny, path: string): boolean {
   const segments = path.split(".");
-  let cursor: z.ZodTypeAny = schema;
+  // One cursor per union branch that declares the path so far; a plain object schema keeps exactly one.
+  let cursors: z.ZodTypeAny[] = [schema];
   for (const [index, segment] of segments.entries()) {
     const prefix = `isPathRequired: cannot resolve payload path "${path}" against its schema — `;
     const at = index === 0 ? "the payload schema" : `"${segments.slice(0, index).join(".")}"`;
-    const lookup = objectShapeOf(cursor);
-    if (lookup.kind === "too-deep") {
-      throw new Error(
-        `${prefix}${at} still wraps something after ${MAX_WRAPPER_HOPS} modifier hops, so the walk gave up ` +
-          `before it could look for "${segment}" (this is a WRAPPER-DEPTH bound, not a missing field — "${segment}" ` +
-          `may well exist; unwrap the schema or raise MAX_WRAPPER_HOPS in sport/module.ts)`,
-      );
-    }
-    if (lookup.kind === "not-object") {
-      throw new Error(
-        `${prefix}${at} is not an object schema and does not wrap one, so nothing can be resolved beneath it ` +
-          `(a PadAttributionItem/PadField path must not walk past a leaf value)`,
-      );
-    }
-    const field = lookup.shape[segment];
-    if (field === undefined) {
+    const found = cursors.flatMap((cursor) => fieldsNamed(cursor, segment, prefix, at));
+    if (found.length === 0) {
       throw new Error(
         `${prefix}no field "${segment}" found while walking it ` +
           `(a PadAttributionItem/PadField path must name a real payload key)`,
       );
     }
-    cursor = field;
+    cursors = found;
   }
-  return !cursor.isOptional();
+  // W2c: through a union, required means every branch that declares the key requires it — an optional branch keeps the
+  // item skippable (the (g) conformance property is the behavioural half that would catch the over-claim).
+  return cursors.every((cursor) => !cursor.isOptional());
+}
+
+/** Every field named `segment` directly under `t`, descending through union branches. Empty = nothing declares it
+ *  (the caller reports that); a leaf or an over-wrapped schema throws its own, different, message. */
+function fieldsNamed(t: z.ZodTypeAny, segment: string, prefix: string, at: string): z.ZodTypeAny[] {
+  const lookup = objectShapeOf(t);
+  if (lookup.kind === "too-deep") {
+    throw new Error(
+      `${prefix}${at} still wraps something after ${MAX_WRAPPER_HOPS} modifier hops, so the walk gave up ` +
+        `before it could look for "${segment}" (this is a WRAPPER-DEPTH bound, not a missing field — "${segment}" ` +
+        `may well exist; unwrap the schema or raise MAX_WRAPPER_HOPS in sport/module.ts)`,
+    );
+  }
+  if (lookup.kind === "not-object") {
+    throw new Error(
+      `${prefix}${at} is not an object schema and does not wrap one, so nothing can be resolved beneath it ` +
+        `(a PadAttributionItem/PadField path must not walk past a leaf value)`,
+    );
+  }
+  if (lookup.kind === "union") return lookup.branches.flatMap((branch) => fieldsNamed(branch, segment, prefix, at));
+  const field = lookup.shape[segment];
+  return field === undefined ? [] : [field];
 }
 
 /**
@@ -640,6 +659,13 @@ export function stampAttributionRequired(
  *  `winFloor` is what ANY win (OT, shoot-out, 3-2) is guaranteed to pay;
  *  `lossCeil` is the most ANY loss can still pay. A forecast that promised
  *  "win and you're through" with `max` would be wrong for an OT win. */
+/** W2c X-PT-1 (gap a) — the metric keys a sport keeps its match score under (`SportModule.awardScoreKeys`). */
+export interface AwardScoreKeys {
+  readonly for: string;
+  readonly against: string;
+  readonly diff: string;
+}
+
 export interface MatchPointsBounds {
   max: number;
   min: number;
@@ -688,6 +714,43 @@ export function boundsFrom(
     winsOnly: wins.every((v) => v === wins[0]) && wins[0] !== 0 && losses.every(zero) && others.every(zero),
   };
 }
+
+/**
+ * W2c (spec §4.1 as amended; plan D1) — who may set a cfg key. Q5's three groups: `match` keys may be set per stage
+ * AND per match, `stage` keys per stage only, `points` keys are the stage's table points (D11), never a match rule.
+ */
+export type RuleScope = "match" | "stage" | "points";
+export interface RuleKeyFact {
+  readonly scope: RuleScope;
+  /** Which stage kinds ("format") and which engine variants the key applies to. Absent = every one. A null kind or
+   *  variant at the call site (the division level, or no variant) is never narrowed. */
+  readonly appliesTo?: { readonly stageKinds?: readonly StageKind[]; readonly variants?: readonly string[] };
+  /** X-SR-2 (signed): "a decider may only be switched off or shortened for one match". Carried by every match-scoped
+   *  bounded key (spec §4.1 Q5): `shorter` a length or count a match may only lower (overtime minutes, shoot-out
+   *  attempts); `off_or_shorter` an `{enabled, halfMinutes}` decider, off or a shorter half (RB2B-3, football ET). */
+  readonly matchBound?: "shorter" | "off_or_shorter";
+  /** What the engine plays when a stage carries NO value at this key (a stage created before the key existed), for a
+   *  `shorter` bound: the bound compares a match's value against it instead of reading the missing key as "off" (fix
+   *  round 1, ruling). Pinned to the engine's own constant by the module's test. Absent = a missing key is off. */
+  readonly whenAbsent?: number;
+  /** A bounded DETAIL of a decider, not a decider itself: the key of the decider it only means something under (the kicks
+   *  of a shoot-out under `shootout`, the minutes of an overtime under `overtime`). Declared, not inferred from the key's
+   *  spelling: football's `shootoutAttempts` is a flat key beside its decider, the period kernel's are dotted paths
+   *  beneath theirs. The stage editor reads it to hold such a field while its decider is off, and to place it with the
+   *  deciders; the sweep in `rule-keys.test.ts` fails a bounded key that is neither a decider nor a detail of one, and a
+   *  `detailOf` that names a key which is not a declared decider. */
+  readonly detailOf?: string;
+  /** A WHOLE decider: the key that, on, settles a level match (extra time, penalties, overtime, the shoot-out, the
+   *  super over, chess tie-break games, carrom's tie board). The knockout preselection reads it through
+   *  `deciderKeysFor` (spec §4.2, X-SR-6); the "no decider" notice reads it the same way
+   *  (`components/v2/stage-rules/deciders-off-notice.tsx`, Task 17). Stage keys, except football ET, a bounded match key.
+   *  A decider need not be a boolean or an `{enabled}` object: chess's is the ordered rung LIST `tiebreakRungs`
+   *  (BG-KO-1, BG-KO-3), whose off state is the EMPTY list (a drawn game is held for the organiser), and a list that
+   *  is merely absent is "every rung", not off. */
+  readonly decider?: true;
+}
+/** Key = a cfg path: top-level ("bestOf") or dotted to a leaf ("overtime.minutes"). Most specific wins. */
+export type RuleKeys = Readonly<Record<string, RuleKeyFact>>;
 
 // spec 03 §3. Extends the kernel's FoldableModule (spec 03 §2) so every
 // SportModule folds through foldMatch unchanged.
@@ -759,6 +822,19 @@ export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> 
   lineupPolicy?(cfg: Cfg): LineupPolicy;
   onLineup?(state: State, squads: SquadState): State;
   variants: Record<string, Partial<Cfg>>; // named presets: t20, odi, beach, blitz…
+  /**
+   * W2c (spec §4.1 as amended) — the game rule of who may set which cfg key, at which scope, for which stage kinds and
+   * variants. Every settable key of `configSchema` is declared here; every server allowlist, form and label reads it
+   * through the helpers in `sport/rule-keys.ts`, never a hand-kept list. Shared kernels declare their keys once and
+   * the sport re-exports or narrows them. Optional only so hand-built fakes compile; every builtin declares it (the
+   * X-SR-1 sweep in `rule-keys.test.ts`).
+   */
+  ruleKeys?: RuleKeys;
+  /**
+   * W2c (plan D9) — the abandon policies THIS sport offers an organiser, in `abandonPolicy`'s own vocabulary. The
+   * TYPE only here; W2c Task 7 fills it per sport.
+   */
+  abandonOptions?: readonly string[];
 
   // Jul3/06 §3 — optional print-template fragments. Sport-neutral kinds
   // (timetable, standings, roster, participants) live in engine/exports; a
@@ -855,12 +931,44 @@ export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> 
     state: State,
   ): [StandingsDelta, StandingsDelta];
   metrics: MetricSpec[]; // ledger fields this sport maintains (gd, nrr, set_ratio…)
+  /**
+   * W2c X-PT-1 (gap a) — the metrics that ARE this sport's match score: its spelling of `for` / `against` / `diff`, one
+   * of the tie-break alias triples (tiebreakers.ts FOR_KEYS / AGAINST_KEYS / DIFF_KEYS). A stage PointsRule's
+   * `forfeit.awardScore` lands here too, REPLACING the sport's credit, on a forfeit with nothing played
+   * (`applyPointsRule`): the tie-breaks read these before the generic keys, so a rule writing only those never reached
+   * such a table. Absent where the table keeps no score an awarded one can stand in for — the set sports, carrom and the
+   * board games (no score triple at all), and cricket (its runs are NRR operands beside the balls; a walkover credits
+   * none, CK-WO-2) — which `pointsRuleAwardReachesTable` reports. Held to `metrics` by points-w2c.test.ts.
+   */
+  awardScoreKeys?: AwardScoreKeys;
   defaultTiebreakers: TiebreakerKey[]; // sport's official cascade (doc 05 §4)
   supportsDraws(cfg: Cfg, stage: StageKind): boolean; // knockout football: no
   // W2a (spec §5.2, ruling 76) — the cfg changes a BRACKET stage applies on top
   // of the resolved cfg (resolveFixtureCfg merges it by stage kind; the V347
   // freeze then carries it). `{}` is a legal declaration.
   bracketDeciders(cfg: Cfg): Partial<Cfg>;
+  /**
+   * W2c Task 17 (review M-3) — can a match played under `cfg` still finish LEVEL (a `draw` or a `tie`) once every decider
+   * the cfg switches on has run? `cfg` is the cfg a BRACKET stage plays: the stage's rules over its division, then
+   * `bracketDeciders`. When it can, the server holds the level result for the organiser to settle (ruling 79); when it
+   * cannot, the deciders always produce a winner. The stage editor's "a level match waits for you" notice and the public
+   * format line both read this one answer (`bracketMayEndLevel`), so neither keeps a table of which deciders settle:
+   * football's penalties do and its extra time does not; an ice hockey overtime does not (a scoreless one ends level),
+   * its shoot-out does; a chess rung list does unless it is empty; cricket's super over does only while a tied one is
+   * played again; carrom's extra board does.
+   *
+   * Declared by exactly the sports that declare a `decider: true` key (a sport with none has nothing to say, and
+   * absent means "no claim"). The fold, not this function, is the authority: `can-end-level.test.ts` plays seeded
+   * streams under each setup and fails the day the two disagree.
+   */
+  canEndLevel?(cfg: Cfg): boolean;
+  /**
+   * W2c (spec §4.2) — the rules a NEW stage of this kind should start with, layered after the variant preset and before
+   * the stage's stored rules (the knockout preselection: football ET 2×15 + penalties, …). Stage creation (W2c Task 12)
+   * writes it into the stage's `config.rules`, and it is never inferred at resolve time. Every key is a
+   * stage key of its kind (X-SR-1 sweep). Absent = `{}`; Task 6 fills it.
+   */
+  stageDefaults?(kind: StageKind, variant: string | null): Partial<Cfg>;
 
   // §9.3 — allowed per-fixture point totals under cfg (football {3, 2}, …);
   // the conformance kit checks Σ points of both deltas is in this set.

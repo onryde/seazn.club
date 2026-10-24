@@ -368,6 +368,16 @@ export interface PublicFixture {
    *  read on the same fenced LATERAL as the feed edges). The qualification view reads it (F2). Optional and absent
    *  from older cached documents, where it reads as "not expunged" — the fail-closed answer. */
   expunged?: boolean;
+  /** W2c X-AB-5 / N2: the row has an ACTIVE `core.abandon` (`hasActiveAbandonSql`, no expunge clause) - what tells a
+   *  scorer's abandon (held for the organiser's settle) from the generator's void, both stored `abandoned`. The
+   *  qualification view reads it through completion's own predicate (`rowAwaitsSettle`) so a held match stays open.
+   *  Read on the same fenced LATERAL as `expunged`. Optional and absent from older cached documents; there the view
+   *  cannot tell the two apart and shows no status for an abandoned, result-less row rather than guess. */
+  has_active_abandon?: boolean;
+  /** Rebase ruling D3: that active abandon is the organiser's online No result (`hasActiveAbandonSql`'s noResult probe)
+   *  - already the settle, so the qualification view reads the row as decided-void, not held. Read on the same fenced
+   *  LATERAL as `expunged`. Optional: absent from older cached documents, where it reads as a plain (held) abandon. */
+  no_result?: boolean;
   /** W2b Task 13 (X-AB-2): the reason of the row's ACTIVE `core.abandon`, or null — what the public abandon tag reads
    *  (`forfeitLedgerOfReason`; the ledger, never the status). Read on the same fenced LATERAL as `expunged`
    *  (`activeAbandonReasonSql`). Optional: absent from older cached documents and from the reads that do not list it,
@@ -1019,12 +1029,14 @@ export async function readPublicDivisionDetail(
                  v.status, v.outcome, v.summary, v.last_seq,
                  v.lane, v.is_final, v.third_place, v.conditional,
                  e.ext_key, e.winner_to_fixture, e.winner_to_slot, e.loser_to_fixture, e.loser_to_slot, e.expunged,
-                 e.abandon_reason
+                 e.abandon_reason, e.has_active_abandon, e.no_result
           from public_fixtures_v v
           left join lateral (
             select x.ext_key, x.winner_to_fixture, x.winner_to_slot, x.loser_to_fixture, x.loser_to_slot,
                    ${hasActiveAbandonSql(sql, "x", { expunge: true })} as expunged,
-                   ${activeAbandonReasonSql(sql, "x")} as abandon_reason
+                   ${activeAbandonReasonSql(sql, "x")} as abandon_reason,
+                   ${hasActiveAbandonSql(sql, "x")} as has_active_abandon,
+                   ${hasActiveAbandonSql(sql, "x", { noResult: true })} as no_result
             from fixtures x where x.id = v.id
             offset 0
           ) e on true

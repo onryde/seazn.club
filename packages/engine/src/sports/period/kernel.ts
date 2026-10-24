@@ -28,6 +28,7 @@ import {
   type DisciplineCard,
   type DisciplineModel,
   type AwardReason,
+  type ForfeitAward,
   type ForfeitBy,
   type ForfeitCredit,
   type ForfeitPhase,
@@ -50,6 +51,7 @@ import type {
   PadGate,
   PadPanel,
   PadSpec,
+  RuleKeys,
   SportModule,
   TiebreakerKey,
 } from "../../sport/module.ts";
@@ -107,7 +109,9 @@ export interface PeriodParams {
   goalKinds: string[]; // allowed goal kinds beyond plain fg ('og' credits opponent)
   assists: boolean; // ice: up to 2 assists per goal feed player stats
   awardScore: { goals: number };
-  abandonPolicy: "replay" | "award";
+  /** W2c Q10 — `q4_stands` is the FIH rule (HK-AB-2): replay until the 4th quarter has started, then the result stands.
+   *  Which of the three a SPORT offers is its preset's `abandonOptions`; the schema refuses the rest. */
+  abandonPolicy: "replay" | "award" | "q4_stands";
 }
 
 // W4 (#407) — resolved-config knobs that are deliberately NOT PeriodParams
@@ -144,9 +148,13 @@ const SuspensionClassSchema: z.ZodType<SuspensionClass> = z.object({
   releaseOnGoal: z.boolean().optional(),
 });
 
+/** The policies a period sport offers when its preset declares no list: today's two (W2c Task 7). */
+const DEFAULT_ABANDON_OPTIONS: readonly string[] = ["replay", "award"];
+
 export function makePeriodConfigSchema(
   defaults: PeriodParams,
   setPieceKinds: readonly string[] = [],
+  abandonOptions: readonly string[] = DEFAULT_ABANDON_OPTIONS,
 ) {
   return z.object({
     // W4 review item 4 — which restarts this competition records as AWARDED
@@ -223,7 +231,18 @@ export function makePeriodConfigSchema(
     goalKinds: z.array(z.string().min(1)).default(defaults.goalKinds),
     assists: z.boolean().default(defaults.assists),
     awardScore: z.object({ goals: z.number().int().positive() }).default(defaults.awardScore),
-    abandonPolicy: z.enum(["replay", "award"]).default(defaults.abandonPolicy),
+    abandonPolicy: z.enum(["replay", "award", "q4_stands"]).default(defaults.abandonPolicy),
+  }).superRefine((cfg, ctx) => {
+    // W2c Task 7 (review I5): a policy outside the SPORT'S OWN list is refused, so ice hockey never takes `q4_stands`
+    // (a hockey rule) whatever its period count. `code: "custom"` like every cross-field refusal of this schema.
+    if (!abandonOptions.includes(cfg.abandonPolicy)) {
+      ctx.addIssue({ code: "custom", path: ["abandonPolicy"], message: `This sport does not offer "${cfg.abandonPolicy}" for an abandoned match.` });
+      return;
+    }
+    // HK-AB-2: the 4th-quarter rule exists only for four-quarter formats.
+    if (cfg.abandonPolicy === "q4_stands" && cfg.periods.count !== 4) {
+      ctx.addIssue({ code: "custom", path: ["abandonPolicy"], message: "The 4th-quarter rule needs four periods." });
+    }
   });
 }
 
@@ -610,6 +629,13 @@ export interface PeriodState {
    * forbidden, exactly as for `goalLog` and `setPieces` above.
    */
   squads?: SquadState;
+  /**
+   * W2c Task 16b (X-WO-1 part B; Task 9 P-3 "A") - the stage PointsRule's award for the forfeit that decided this match,
+   * winner first. Present ONLY when the fold was offered one and the forfeit had nothing played
+   * (`FoldContext.forfeitAward`), so `init` and every other state serialise exactly as before. `creditedGoals` reads
+   * it - the table's credit and the headline (`officialScore`) share that one reading.
+   */
+  forfeitAward?: ForfeitAward;
 }
 
 function opponent(side: Side): Side {
@@ -1445,7 +1471,7 @@ function periodForfeitPhase(state: PeriodState): ForfeitPhase {
 // W2b (spec §5.2) — a forfeit decides `award{winner, loser, reason}`, or `double_walkover` when both sides are
 // absent. The PLAYED goals stay in state; the table's credit is `forfeitCredit`'s (W2b Task 4), read by
 // `standingsDelta` — overwriting `goals` here made a retirement's real margin unreadable (F-16).
-function applyForfeit(state: PeriodState, by: string, reason: ForfeitReason): PeriodState {
+function applyForfeit(state: PeriodState, by: string, reason: ForfeitReason, forfeitAward?: ForfeitAward): PeriodState {
   if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
     wrongPhase("match already over");
   }
@@ -1456,6 +1482,7 @@ function applyForfeit(state: PeriodState, by: string, reason: ForfeitReason): Pe
     ...sweepEndOfMatch(state),
     phase: "done",
     outcome: { kind: "award", winner: state.entrants[winnerSide], loser: state.entrants[loserSide], reason },
+    ...(forfeitAward === undefined ? {} : { forfeitAward: [...forfeitAward] as ForfeitAward }),
   };
 }
 
@@ -1466,11 +1493,18 @@ function drawStands(cfg: PeriodCfg): boolean {
   return cfg.overtime === null && cfg.shootout === null;
 }
 
+/** HK-AB-2 (review I4) — true until the LAST regulation period has started: before the start, or in a regulation period
+ *  before the last. From the 4th quarter on - overtime and the shoot-out included - it is false and the result stands. */
+function lastRegulationPeriodNotStarted(state: PeriodState): boolean {
+  return state.phase === "pre" || periodLabels(state.cfg).slice(0, -1).includes(state.phase);
+}
+
 function applyAbandon(state: PeriodState): PeriodState {
   if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
     wrongPhase("match already over");
   }
-  if (state.cfg.abandonPolicy === "replay") {
+  const { abandonPolicy } = state.cfg;
+  if (abandonPolicy === "replay" || (abandonPolicy === "q4_stands" && lastRegulationPeriodNotStarted(state))) {
     return { ...state, phase: "abandoned", replayFlagged: true };
   }
   // W2b D8 (ruling 102 Q3): an award-policy abandon is the leader's WIN on the real score (`method: "abandoned"`),
@@ -1787,10 +1821,37 @@ export function periodKeeperStatsFold(
 // Preset wiring
 // ---------------------------------------------------------------------------
 
+/**
+ * W2c (spec §4.1 Q5; plan finding 3) — the period kernel's rule keys, declared once. The deciders are stage objects
+ * (`overtime`, `shootout`) whose LENGTH leaves a match may only lower (X-SR-2, signed); the most specific declaration
+ * wins, so `overtime.minutes` is a match key inside the stage-only `overtime`. A sport whose rules lack a decider
+ * narrows it out (hockey has no overtime). Table points and the walkover score are the stage's points (D11).
+ */
+export const PERIOD_RULE_KEYS: RuleKeys = {
+  "periods.minutes": { scope: "match" },
+  "overtime.minutes": { scope: "match", matchBound: "shorter", detailOf: "overtime" },
+  "shootout.attempts": { scope: "match", matchBound: "shorter", detailOf: "shootout" },
+  overtime: { scope: "stage", decider: true },
+  shootout: { scope: "stage", decider: true },
+  points: { scope: "points" },
+  awardScore: { scope: "points" },
+  // W2c Q10 — what an abandoned match counts as is the stage's: replay, the result as it stood, or (hockey) the FIH 4th-quarter rule.
+  abandonPolicy: { scope: "stage" },
+};
+
 export interface PeriodPreset {
   key: string; // 'icehockey' | 'hockey' (football migrates later)
   version: string;
   defaults: PeriodParams;
+  /** W2c (spec §4.1 as amended) — who may set which cfg key, from `PERIOD_RULE_KEYS` spread or narrowed. Optional only
+   *  so hand-built test presets compile: the X-SR-1 sweep (`sport/rule-keys.test.ts`) fails a builtin without it. */
+  ruleKeys?: RuleKeys;
+  /** W2c (plan D9, Q10) - the abandon policies this sport offers an organiser, in `abandonPolicy`'s vocabulary. The schema
+   *  refuses any other; omitted ⇒ `replay` and `award`, and the module offers none. */
+  abandonOptions?: readonly ("replay" | "award" | "q4_stands")[];
+  /** W2c X-SR-6 (spec §4.2) — what a NEW stage of this kind and variant starts with, passed through to the module's own
+   *  `stageDefaults`. Omitted ⇒ the module declares none. */
+  stageDefaults?: (kind: StageKind, variant: string | null) => Partial<PeriodCfg>;
   variants: Record<string, Partial<PeriodParams>>;
   positions: PositionCatalog;
   // W4 (#407) — which `positions.groups` key is the goalkeeper, so the kernel
@@ -1900,7 +1961,7 @@ export interface PeriodPreset {
 export function makePeriodModule(
   preset: PeriodPreset,
 ): SportModule<PeriodCfg, PeriodEv, PeriodState> {
-  const configSchema = makePeriodConfigSchema(preset.defaults, preset.setPieceKinds ?? []);
+  const configSchema = makePeriodConfigSchema(preset.defaults, preset.setPieceKinds ?? [], preset.abandonOptions ?? DEFAULT_ABANDON_OPTIONS);
   const goalType = `${preset.key}.goal`;
   const advanceType = `${preset.key}.period.advance`;
   const clockType = `${preset.key}.clock`;
@@ -2382,7 +2443,12 @@ export function makePeriodModule(
    */
   const creditedGoals = (cfg: PeriodCfg, state: PeriodState, by: Side): { home: number; away: number } => {
     const winner = opponent(by);
-    const credited = goalCredit(cfg.awardScore.goals, { winner: state.goals[winner], offender: state.goals[by] });
+    // W2c Task 16b: a stage rule's award, held in state for a forfeit with nothing played (P-3 "A"), is the credit.
+    const award = state.forfeitAward;
+    const credited =
+      award === undefined
+        ? goalCredit(cfg.awardScore.goals, { winner: state.goals[winner], offender: state.goals[by] })
+        : { winner: award[0], offender: award[1] };
     return winner === "home"
       ? { home: credited.winner, away: credited.offender }
       : { home: credited.offender, away: credited.winner };
@@ -2456,6 +2522,7 @@ export function makePeriodModule(
     state: PeriodState,
     ev: EventEnvelope<PeriodEv | CoreEv>,
     strict: boolean,
+    forfeitAward?: ForfeitAward,
   ): PeriodState => {
     switch (ev.type) {
       case "core.start":
@@ -2483,7 +2550,7 @@ export function makePeriodModule(
         return applyShot(state, parsePayload(PeriodShot, ev.payload, ev.type), shotTracking);
       case "core.forfeit": {
         const { by, reason } = forfeitOf(ev.payload);
-        return applyForfeit(state, by, reason);
+        return applyForfeit(state, by, reason, forfeitAward);
       }
       case "core.abandon":
         return applyAbandon(state);
@@ -2541,6 +2608,9 @@ export function makePeriodModule(
       };
     },
     variants: preset.variants,
+    ruleKeys: preset.ruleKeys,
+    ...(preset.abandonOptions === undefined ? {} : { abandonOptions: preset.abandonOptions }),
+    ...(preset.stageDefaults === undefined ? {} : { stageDefaults: preset.stageDefaults }),
 
     // S3/W4b (#426) — the two halves of adopting `core/lineup.ts`. `lineupPolicy` is
     // declared only when the preset states one, and since the 2026-10-15 ruling a
@@ -2601,7 +2671,7 @@ export function makePeriodModule(
       // the release, so that one applies first and sweeps after.
       const sweepsFirst = at !== null && ev.type !== suspEndType;
       const base = sweepsFirst ? sweepExpired(state, at) : state;
-      const applied = applyEvent(base, ev, isStrictFold(ctx));
+      const applied = applyEvent(base, ev, isStrictFold(ctx), ctx?.forfeitAward);
       if (at === null) return applied;
       const swept = ev.type === suspEndType ? sweepExpired(applied, at) : applied;
       // §6 obligation 3 — as of when everything above is true.
@@ -2742,6 +2812,8 @@ export function makePeriodModule(
     },
 
     metrics: preset.metrics,
+    // W2c X-PT-1 (gap a): the kernel's own goal ledger (`sideMetrics`, `periodForfeitCredit`) is gf / ga / gd.
+    awardScoreKeys: { for: "gf", against: "ga", diff: "gd" },
     defaultTiebreakers: preset.defaultTiebreakers,
 
     // v6/00 §3 — draws are a table result only where no decider is
@@ -2754,6 +2826,9 @@ export function makePeriodModule(
 
     // W2a: none (hockey/ice hockey deciders stay organiser-configured until W2c, spec §5.2)
     bracketDeciders: () => ({}),
+    // M-3: the shoot-out is sudden death (`shootoutDecision`), so it always produces a winner. An overtime does not,
+    // sudden-death or not: a scoreless one runs out and `resolveEnd` finishes level when no shoot-out follows.
+    canEndLevel: (cfg) => cfg.shootout === null,
 
     declaredPointsSets(cfg) {
       const totals = [cfg.points.win + cfg.points.loss, cfg.points.draw * 2];

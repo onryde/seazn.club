@@ -153,6 +153,8 @@ export interface AppendEventBody {
   type: string;
   payload: unknown;
   idempotency_key: string;
+  /** W2c Task 15 (X-SR-7) — the version the tap was made under (`PendingEvent.rulesVersion`); absent when none. */
+  rules_version?: number;
 }
 
 export type AppendCallResult =
@@ -164,7 +166,7 @@ export type AppendCallResult =
   /** Any other rejection (422-class: INVALID_EVENT, WRONG_PHASE, …) — the
    *  module deterministically refused this payload. Retrying it verbatim
    *  gets the same refusal, so this is permanent, not transient. */
-  | { kind: "rejected"; code: string; message: string; nextMatch?: NextMatchRef; reason?: string }
+  | { kind: "rejected"; code: string; message: string; nextMatch?: NextMatchRef; reason?: string; rulesVersion?: number }
   /** 429. Transient by the server's own definition, so the tap is KEPT — but
    *  it is not a connectivity failure, and telling the scorer they are offline
    *  when the venue wifi is fine sends them to fix the wrong thing. The bucket
@@ -197,13 +199,16 @@ export interface ScoringTransport {
 }
 
 function toRequestBody(
-  event: Pick<PendingEvent, "type" | "payload" | "expectedSeq" | "idempotencyKey">,
+  event: Pick<PendingEvent, "type" | "payload" | "expectedSeq" | "idempotencyKey" | "rulesVersion">,
 ): AppendEventBody {
   return {
     expected_seq: event.expectedSeq,
     type: event.type,
     payload: event.payload,
     idempotency_key: event.idempotencyKey,
+    // W2c Task 15 (X-SR-7): the version the tap was CAPTURED under, verbatim — never the pad's current one, or a tap
+    // queued before a correction would be applied under rules the scorer never saw. Absent stays absent (no key).
+    ...(event.rulesVersion !== undefined ? { rules_version: event.rulesVersion } : {}),
   };
 }
 
@@ -342,8 +347,17 @@ export function throttleBackoffMs(sendsAlreadyMade: number, retryAfterMs: number
 
 /** A rejection's `nextMatch` and `reason` (W2a M-1), each spread in only when present — so every other refusal
  *  keeps exactly its old shape (no `nextMatch: undefined` key). */
-function refOf(r: { nextMatch?: NextMatchRef; reason?: string }): { nextMatch?: NextMatchRef; reason?: string } {
-  return { ...(r.nextMatch ? { nextMatch: r.nextMatch } : {}), ...(r.reason ? { reason: r.reason } : {}) };
+function refOf(r: { nextMatch?: NextMatchRef; reason?: string; rulesVersion?: number }): {
+  nextMatch?: NextMatchRef;
+  reason?: string;
+  rulesVersion?: number;
+} {
+  return {
+    ...(r.nextMatch ? { nextMatch: r.nextMatch } : {}),
+    ...(r.reason ? { reason: r.reason } : {}),
+    // W2c Task 15: FIXTURE_RULES_CHANGED's version, so the pad knows which rules to wait for.
+    ...(r.rulesVersion !== undefined ? { rulesVersion: r.rulesVersion } : {}),
+  };
 }
 /**
  * Drive ONE pending event through the transport, applying the full

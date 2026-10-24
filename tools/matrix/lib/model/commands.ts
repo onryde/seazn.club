@@ -257,7 +257,7 @@ async function post(m: ModelState, d: OrganiserDriver, f: FixtureModel, events: 
 function winStream(m: ModelState, f: FixtureModel, winner: "home" | "away"): StreamEvent[] {
   const [home, away] = seatsOf(f);
   // W2a: the cfg the product folds this stage's fixtures under (a bracket's decider overlay on the division's).
-  return generateStream({ sportKey: m.sport, cfg: stageCfg(m.sport, m.cfg, m.stageKind as StageKind), stageKind: m.stageKind as never, home, away, outcome: { kind: "win", winner } });
+  return generateStream({ sportKey: m.sport, cfg: stageCfg(m.sport, m.cfg, m.stageKind as StageKind, m.variant, m.stageRules), stageKind: m.stageKind as never, home, away, outcome: { kind: "win", winner } });
 }
 
 class Start extends Cmd {
@@ -453,7 +453,7 @@ class Settle extends Cmd {
     const phase = this.phase(m, f);
     const [home, away] = seatsOf(f);
     if (phase === "open") {
-      const cfg = stageCfg(m.sport, m.cfg, m.stageKind as StageKind);
+      const cfg = stageCfg(m.sport, m.cfg, m.stageKind as StageKind, m.variant, m.stageRules);
       const level = levelReachable(m.sport, cfg, m.stageKind as StageKind) && !abandonsToHold(this.w);
       await post(m, d, f, generateStream({ sportKey: m.sport, cfg, stageKind: m.stageKind as never, home, away, outcome: level ? { kind: "level" } : { kind: "abandon", atScore: true } }));
       // The held state is judged on its own, before the settle moves it: a held match seats nobody.
@@ -499,7 +499,7 @@ function forfeitPhaseOf(m: ModelState, f: FixtureModel, ledger: readonly LedgerE
     if (ledger.length === 0) return "pre";
     const [home, away] = seatsOf(f);
     try {
-      const folded = foldMatchWithStoppage(sportModule(m.sport), stageCfg(m.sport, m.cfg, m.stageKind as StageKind) as never, lineupsFor(home, away), ledgerEnvelopes(f.id, ledger), FOLD_OPTIONS);
+      const folded = foldMatchWithStoppage(sportModule(m.sport), stageCfg(m.sport, m.cfg, m.stageKind as StageKind, m.variant, m.stageRules) as never, lineupsFor(home, away), ledgerEnvelopes(f.id, ledger), FOLD_OPTIONS);
       return mod.forfeitPhase(folded.state);
     } catch {
       return null;

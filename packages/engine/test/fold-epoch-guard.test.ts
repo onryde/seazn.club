@@ -9,6 +9,7 @@ import { epochViolations, compareSides, foldSourceTouched, GuardRefusal, type Si
 import { builtinModules } from "../src/sports/index.ts";
 import { forEachSport } from "../src/testkit/for-each-sport.ts";
 import { readCorpus, type GoldenCorpus, type GoldenStream } from "../src/testkit/golden.ts";
+import { floorBatches, isFloorStream } from "../src/testkit/golden-floor-streams.ts";
 import { treeBudget } from "./tree-budget.ts";
 
 const stream = (config: string, seed: number, over: Partial<GoldenStream> = {}): GoldenStream =>
@@ -438,6 +439,30 @@ describe("fold-epoch guard: over every registered sport's real golden corpus", (
     });
     expect(checked).toBe(builtinModules.length * FIELDS.length);
   }, budget(FIELDS.length * 2));
+
+  // GOLDEN-POLICY.md, "Re-recording a floor-batch stream in place": a floor stream whose recorded EVENT is rewritten, same
+  // `config#seed`, same index, is counted removed AND added, so it owes the major whatever else is true. The doc says so; this is the guard saying it.
+  it("a floor stream re-recorded in place (the GOLDEN-POLICY.md mode) is removed AND added, owes the major, and is settled by that sport's bump alone, for every sport", () => {
+    let checked = 0;
+    forEachSport(({ key }) => {
+      const c = real.get(key)!;
+      const batches = floorBatches(c);
+      expect(batches.length, `${key}: a floor batch to re-record in`).toBeGreaterThan(0);
+      const index = batches[0]!.start;
+      const target = c.streams[index]!;
+      expect(isFloorStream(target), `${key}: stream ${index} is a floor stream`).toBe(true);
+      const recorded: GoldenStream = { ...target, events: target.events.map((e, i) => (i === 0 ? { ...e, payload: { rewritten: true, was: e.payload } } : e)) };
+      const moved: GoldenCorpus = { ...c, streams: c.streams.map((s, i) => (i === index ? recorded : s)) };
+      const identity = (s: GoldenStream) => `${s.config}#${s.seed}`;
+      expect(moved.streams.map(identity), `${key}: in place, nothing renamed or shifted`).toEqual(c.streams.map(identity));
+      const v = epochViolations(only(key, c), only(key, moved));
+      expect(v, key).toHaveLength(1);
+      expect(v[0], `${key}: ${identity(target)} re-recorded`).toMatchObject({ sport: key, matched: c.streams.length - 1, changed: 0, removed: 1, added: 1, owes: "major" });
+      expect(epochViolations(only(key, c), only(key, moved, 2)), `${key}: re-recorded and bumped`).toEqual([]);
+      checked++;
+    });
+    expect(checked).toBe(builtinModules.length);
+  }, budget(2));
 
   // A side holding only `key`, with a FOLD_MINOR of its own: the pair (major, minor) is what the real-corpus sweeps below move.
   const pair = (key: string, c: GoldenCorpus, major: number, minor: number): Side => ({ epochs: { [key]: major }, minors: { [key]: minor }, corpora: { [key]: c } });

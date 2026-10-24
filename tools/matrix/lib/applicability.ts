@@ -6,7 +6,7 @@
 // guards live in applicability.test.ts. Pure and deterministic (R11).
 import { BRACKET_STAGE_KINDS } from "@seazn/engine/competition";
 import { StageKind } from "@seazn/engine/core";
-import { STAGE_RULES_SPORTS, showsOnePointsField } from "../../../apps/web/src/lib/match-rules.ts";
+import { showsOnePointsField } from "../../../apps/web/src/lib/match-rules/index.ts";
 import { ROW_KEYS, SPORT_KEYS, cellId, stagesForRow, type RowKey } from "./catalogue.ts";
 import { isLonePagePlayoff } from "./field-size.ts";
 import { expectedGate, type FormatGate } from "./format-gates-copy.ts";
@@ -209,7 +209,9 @@ const decider: Predicate = (f) => DECIDERS[f.sport]?.(f.cfg) ?? false;
 
 /** Ruling 30, M4b: the cfg lets an abandon YIELD A RESULT (engine applyAbandon).
  *  football/hockey/icehockey only under abandonPolicy "award" (football.ts:1657,
- *  period/kernel.ts:1450; every schema defaults to "replay"). Cricket when DLS
+ *  period/kernel.ts:1450; every schema defaults to "replay"), and hockey also
+ *  under "q4_stands" once the last regulation period has started (kernel.ts
+ *  applyAbandon; W2c Task 7). Cricket when DLS
  *  is on (a chase past minOversForResult, cricket.ts:1152-1161) or at two
  *  innings a side (a draw, cricket.ts:1143). Every other sport's abandon
  *  replays (null) or records no_result. Keys recorded and pinned against each
@@ -217,7 +219,9 @@ const decider: Predicate = (f) => DECIDERS[f.sport]?.(f.cfg) ?? false;
  *  real fold (applicability.test.ts). */
 export const ABANDON_RESULTS: Readonly<Record<string, (cfg: Readonly<Record<string, unknown>>) => boolean>> = Object.freeze({
   football: (c) => c.abandonPolicy === "award",
-  hockey: (c) => c.abandonPolicy === "award",
+  // W2c Task 7 (HK-AB-2): hockey's q4_stands lets the abandon stand once the last regulation period has started - a
+  // result - so it is a second switch; ice hockey does not offer it.
+  hockey: (c) => c.abandonPolicy === "award" || c.abandonPolicy === "q4_stands",
   icehockey: (c) => c.abandonPolicy === "award",
   cricket: (c) => (c.dls as { enabled?: unknown } | undefined)?.enabled === true || c.inningsPerSide === 2,
 });
@@ -264,6 +268,12 @@ const rule = (when: Predicate, reason: string, keep: W | readonly [W, ...W[]], d
   return Object.freeze({ when, reason, variantDependent, witness: Object.freeze({ keep: cellOf(first), alsoKeep: Object.freeze(rest.map(cellOf)), drop: cellOf(drop) }) });
 };
 
+/** P6 is the per-stage BEST-OF override ("a best-of-3 final"): it runs for the four sets-based sports, whose match
+ *  format is a best-of the stage can set. It used to read `STAGE_RULES_SPORTS`, the list of sports the stage rules API
+ *  took; W2c Task 17 opened the stage rules to every sport and deleted the list, but this scenario is about the best-of
+ *  override, so its population stays these four (a test pins each to a sport whose stage rule fields carry `bestOf`). */
+export const P6_SPORTS: ReadonlySet<string> = new Set(["badminton", "tabletennis", "tennis", "volleyball"]);
+const P6_REASON = "the sport has no best-of for a stage to override (the per-stage best-of final is for the four sets-based sports)";
 const T = "league|generic";
 const KO = "knockout|generic";
 const LADDER = "ladder|generic";
@@ -301,7 +311,7 @@ export const RULES: Readonly<Record<string, Rule>> = Object.freeze({
   // default (replay → null, or no_result below cricket's minimum overs) —
   // a guard in applicability.test.ts folds it for every sport.
   M4a: ALWAYS,
-  M4b: rule(abandonWithResult, "no organiser-reachable config lets an abandon yield a result here: football/hockey/icehockey need abandonPolicy \"award\", which no editor field sets (configKeysFor; false premise 10); cricket needs DLS on or two innings a side; every other sport's abandon replays or records no result (ABANDON_RESULTS)", { cell: "league|cricket", values: { dls: "on" } }, "league|badminton", true),
+  M4b: rule(abandonWithResult, "this config gives no abandon a result: football/hockey/icehockey need abandonPolicy \"award\" (hockey also \"q4_stands\"), which the editor's \"If a match is abandoned\" field sets; cricket needs DLS on or two innings a side; every other sport's abandon replays or records no result (ABANDON_RESULTS)", { cell: "league|cricket", values: { dls: "on" } }, "league|badminton", true),
   M5: rule(
     or(drawRefusedHere, tieInBracket),
     "no level result the sport can reach under this config lands in a stage that cannot take it: draws (supportsDraws) are allowed in every stage of the row or in none, and a tie (a real fold of level scores) cannot happen here or meets no bracket stage (outside a bracket a tie has a place: a points table pays a tie, and a ladder's order moves only on a winner, so a tie leaves it standing)",
@@ -329,7 +339,7 @@ export const RULES: Readonly<Record<string, Rule>> = Object.freeze({
   P2: rule(tableFed, "no later stage fed by a points table: nothing qualifies from a table", "groups_ko|generic", "qualifying_main|generic"),
   P3: ALWAYS, P4: ALWAYS, P5a: ALWAYS,
   P5b: rule(hasKind("swiss"), "Pair next round (and its undo, /unpair) exists only for swiss stages", "swiss|generic", T),
-  P6: rule((f) => STAGE_RULES_SPORTS.has(f.sport), "the sport has no per-stage rules (STAGE_RULES_SPORTS)", "knockout|badminton", "knockout|football"),
+  P6: rule((f) => P6_SPORTS.has(f.sport), P6_REASON, "knockout|badminton", "knockout|football"),
   P7: rule(ranked, "bracket-only row: there is no rank table to override", T, KO),
   Q1a: rule(tableFed, "no later stage fed by a points table: no qualifier is decided by lots", "groups_ko|generic", "ko_plate|generic"),
   Q1b: rule(tableFed, "no later stage fed by a points table: no qualifier is decided by the organiser", "groups_ko|generic", KO),

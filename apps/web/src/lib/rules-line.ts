@@ -22,6 +22,49 @@ export interface RulesClause {
 
 export const RULES_LINE_JOINER = ", ";
 
+/**
+ * The line as one sentence. Clauses are written to sit ANYWHERE in a line ("walkover 2–0", "penalties (5 each)",
+ * "level matches wait for the organiser"), so they begin lowercase; the joiner capitalises the sentence's first
+ * letter, once. A clause that leads with a digit or a capital ("2 halves of 45 min", "Best of 3") is left as it is, and
+ * nothing past the first letter is touched.
+ */
 export function rulesLineText(dict: Dict, line: readonly RulesClause[]): string {
-  return line.map((clause) => t(dict, clause.key, clause.params)).join(RULES_LINE_JOINER);
+  const text = line.map((clause) => t(dict, clause.key, clause.params)).join(RULES_LINE_JOINER);
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** The keys a rules line reads from the PUBLIC dictionary: every clause is a `format.rules.*` key. */
+export const RULES_LINE_DICT_PREFIX = "format.rules.";
+
+/** The one clause key outside that prefix: the set kernel's head when a best-of config names no points target
+ *  (`describeSetKernel`). The describers share it with the hub's division line, hence its `format.sets.*` home. */
+export const RULES_LINE_DICT_EXTRA_KEYS: ReadonlySet<string> = new Set(["format.sets.bestOf"]);
+
+/** The slice of the public dictionary a rules line needs (`format.rules.*` and `RULES_LINE_DICT_EXTRA_KEYS`), for a client
+ *  island that is not the public site - the stage format row's chips (W2c Task 17) - so the whole 85 KB dictionary does not
+ *  cross the RSC boundary. Pinned: every key the describers can emit is inside it (`stage-row-model.test.ts`). */
+export function rulesLineDict(dict: Dict): Dict {
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(dict)) if (key.startsWith(RULES_LINE_DICT_PREFIX) || RULES_LINE_DICT_EXTRA_KEYS.has(key)) out[key] = dict[key];
+  return out;
+}
+
+/** The keys a stage's POINTS sentence reads from the PUBLIC dictionary (`pointsLine`, Task 16): every clause is a
+ *  `format.points.*` key. */
+export const POINTS_LINE_DICT_PREFIX = "format.points.";
+
+/** The slice of the public dictionary the stage points section's preview needs (W2c Task 18): the `format.points.*`
+ *  clauses, so the editor says the rule in the words the public stage line will. Its own slice, not part of
+ *  `rulesLineDict`: the chips read the rules clauses and never the points ones. */
+export function pointsLineDict(dict: Dict): Dict {
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(dict)) if (key.startsWith(POINTS_LINE_DICT_PREFIX)) out[key] = dict[key];
+  return out;
+}
+
+/** One clause as a chip's text: the same words the public line says, its first letter capitalised (a chip stands alone;
+ *  a clause is written to sit mid-sentence, so it begins lowercase). */
+export function rulesChipText(dict: Dict, clause: RulesClause): string {
+  const text = t(dict, clause.key, clause.params);
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }

@@ -142,6 +142,8 @@ function fx(
     home_entrant_id: home,
     away_entrant_id: away,
     outcome,
+    // W2c X-PT-1: these fixtures hold no ledger — nothing was played before a forfeit unless a case says so.
+    played: false,
     ...over,
   };
 }
@@ -151,9 +153,12 @@ const open = (round: number, home: string | null, away: string | null, over: Par
   fx(round, home, away, "scheduled", null, over);
 /** A Swiss sit-out as `seatSwissRound` writes it: settled at creation. */
 const bye = (round: number, id: string) => fx(round, id, null, "forfeited", { kind: "award", winner: id });
-/** A real two-sided walkover (core.forfeit): an award with both seats. */
+/** A real two-sided walkover (core.forfeit): an award with both seats, as W2b stores it (`reason`, `loser`). */
 const walkover = (round: number, winner: string, loser: string) =>
-  fx(round, winner, loser, "forfeited", { kind: "award", winner });
+  fx(round, winner, loser, "forfeited", { kind: "award", winner, loser, reason: "walkover" });
+/** W2c X-PT-1: a withdrawal (core.forfeit `withdrew`) with its ledger's played fact. */
+const withdrew = (round: number, winner: string, loser: string, played: boolean) =>
+  fx(round, winner, loser, "forfeited", { kind: "award", winner, loser, reason: "withdrew" }, { played });
 const voided = (f: QualFixture): QualFixture => ({ ...f, status: "cancelled", outcome: null });
 
 interface Scene {
@@ -584,7 +589,8 @@ describe("no status — stated first, each with its positive pair", () => {
     expect(view({ ...s, fixtures: [...s.fixtures, ...expunged] }, { entrantStatuses: rest })).toBeNull();
     expect(view({ ...s, fixtures: [...s.fixtures, ...expunged], statuses: { E: "confirmed" } })).toBeNull();
     // One line NOT expunged (a plain recorded abandon, or still scheduled): her points can still move — hidden.
-    const plain = [expunged[0]!, { ...expunged[1]!, expunged: false }];
+    // (A recorded abandon says so - `has_active_abandon` - or the fixture itself would be unreadable, X-AB-5.)
+    const plain = [expunged[0]!, { ...expunged[1]!, expunged: false, has_active_abandon: true }];
     expect(view({ ...s, fixtures: [...s.fixtures, ...plain], statuses: { E: "withdrawn" } })).toBeNull();
     expect(view({ ...s, fixtures: [...s.fixtures, expunged[0]!, eOpen[1]!], statuses: { E: "withdrawn" } })).toBeNull();
   });
@@ -1229,10 +1235,11 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
   });
 
   // A stage PointsRule's `forfeit.awardScore` (V414 publishes it as
-  // meta.pointsRule): `applyPointsRule` adds it to for/against/diff on EVERY
-  // forfeit, and the adapter applies the rule to a one-sided bye's delta too
-  // (engine-db/competition.ts `awardByeDelta`). So under such a rule a walkover
-  // AND a bye are ledger matches wherever the deciding key reads those three
+  // meta.pointsRule): `applyPointsRule` writes it to for/against/diff on a
+  // forfeit with NOTHING PLAYED — never a bye, never an award after play
+  // (W2c X-PT-1; `ruleScoreReaches`, parity with the fold in
+  // qualification-points-parity.test.ts). So under such a rule an unplayed
+  // forfeit is a ledger match wherever the deciding key reads those three
   // keys — the generic module's `diff` and `for` here — without the caller
   // having to say so (the generic module's awardAddsToLedger stays false).
   // Each pair is the same scene under the same rule minus its awardScore.
@@ -1250,15 +1257,40 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     expect(scored.whatIfAssumption).toBeNull();
     const unscored = must(view({ ...o, fixtures, meta: { pointsRule: scoredRule() } })).rows.D!;
     expect(unscored.whatIf).toBe(`If you finish level on points with Bo, ${RULE} decides: win your next match by 8 or more to finish ahead.`);
-    // A 0–0 forfeit score adds nothing, so it is no ledger match either.
+    // A SET forfeit score of 0–0 is a score like any other (fix round 2): `applyPointsRule` writes it over the sport's
+    // credit, so the walkover is a 0–0 ledger match — the rows (which it adds nothing to) are unchanged, and the match
+    // counts in the average exactly as an ordinary result between B and D would.
     const nil = must(view({ ...o, fixtures, meta: { pointsRule: scoredRule([0, 0]) } })).rows.D!;
-    expect(nil.whatIf).toBe(`If you finish level on points with Bo, ${RULE} decides: win your next match by 8 or more to finish ahead.`);
+    const asPlayed = fixtures.map((f) => (f === fixtures[3] ? won(2, "B", "D") : f));
+    const ordinary = must(view({ ...o, fixtures: asPlayed, meta: { pointsRule: scoredRule([0, 0]) } })).rows.D!;
+    expect(ordinary.whatIf, "premise: the ordinary match counts").toBe(`If you finish level on points with Bo, ${RULE} decides. Now: you -2, Bo +5.`);
+    expect(nil.whatIf).toBe(ordinary.whatIf);
+    expect(nil.whatIf, "its negative pair: the same rule without an awarded score").not.toBe(unscored.whatIf);
   });
-  it("…and a one-sided bye too (the adapter applies the rule to the bye's delta)", () => {
-    // swiss5's fixtures, goals as a 3–0 bye rule folds them: r1 A 3–0 B, E 3–0
-    // D, C bye; r2 A 2–0 C, E 1–0 B, D bye. D is 3–3 (level) over one real
-    // match and one bye; its rival E is +4, so a win by 5 draws them level:
-    // it fits one 6-goal match, not an average of 3 over two.
+  it("X-PT-1: a withdrawal with nothing played is rule-scored like the walkover; after play it is the real match it was (ruling 124)", () => {
+    // The walkover scene with B–D a withdrawal instead. Nothing played: the rule's 3–0 replaces the credit, so it is a
+    // ledger match, as the walkover is. Something played: the rule pays base points and leaves the sport's credit — and
+    // the generic credit of a withdrawal after play is the RECORDED score wherever it is worse for the offender (ruling
+    // 124, GN-RT-1: football's `goalCredit` at generic's 0–0), here B's lead when D withdrew. That is a real match in the
+    // ledger like any other, not the walkover's nothing, so the scene reads exactly as it does with B–D an ordinary result.
+    const o = open4({ D: [6, 8], B: [7, 2] });
+    const scene = (bd: QualFixture) => [won(1, "A", "D"), won(1, "C", "B"), won(2, "A", "C"), bd, open(3, "A", "B"), open(3, "C", "D")];
+    const scored = { pointsRule: scoredRule([3, 0]) };
+    const asResult = must(view({ ...o, fixtures: scene(won(2, "B", "D")), meta: scored })).rows.D!;
+    const leftOut = must(view({ ...o, fixtures: scene(walkover(2, "B", "D")), meta: { pointsRule: scoredRule() } })).rows.D!;
+    expect(asResult.whatIf, "premise: counting B–D or leaving it out prints different sentences").not.toBe(leftOut.whatIf);
+    const walkoverScored = must(view({ ...o, fixtures: scene(walkover(2, "B", "D")), meta: scored })).rows.D!;
+    const nothingPlayed = must(view({ ...o, fixtures: scene(withdrew(2, "B", "D", false)), meta: scored })).rows.D!;
+    expect(nothingPlayed.whatIf).toBe(walkoverScored.whatIf);
+    const afterPlay = must(view({ ...o, fixtures: scene(withdrew(2, "B", "D", true)), meta: scored })).rows.D!;
+    expect(afterPlay.whatIf).toBe(asResult.whatIf);
+    expect(afterPlay.whatIf).toBe(`If you finish level on points with Bo, ${RULE} decides. Now: you -2, Bo +5.`);
+  });
+  it("…but never a one-sided bye: the rule pays a bye no score (X-PT-1), so it stays out of the average", () => {
+    // swiss5's fixtures: r1 A–B, E–D, C bye; r2 A–C, E–B, D bye. The snapshot rows are the scene's as given (the
+    // builder reads them, it does not fold them): D is 3–3 (level) over one real match and one bye; its rival E is
+    // +4, so a win by 5 draws them level: it fits one 6-goal match, not an average of 3 over two. Before W2c the
+    // rule's score was taken to reach the bye, which made it a second match ("Now: you 0, Ed +4.").
     const s = swiss5();
     const rows = [
       row("A", 1, 2, 2, [5, 0]),
@@ -1267,11 +1299,11 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
       row("D", 4, 1, 2, [3, 3]),
       row("B", 5, 0, 2, [0, 4]),
     ];
-    const scored = must(view({ ...s, rows, meta: { swissRounds: 3, pointsRule: scoredRule([3, 0]) } })).rows.D!;
-    expect(scored.whatIf).toBe(`If you finish level on points with Ed, ${RULE} decides. Now: you 0, Ed +4.`);
-    expect(scored.whatIfAssumption).toBeNull();
+    const target = `If you finish level on points with Ed, ${RULE} decides: win your next match by 5 or more to finish ahead.`;
     const unscored = must(view({ ...s, rows, meta: { swissRounds: 3, pointsRule: scoredRule() } })).rows.D!;
-    expect(unscored.whatIf).toBe(`If you finish level on points with Ed, ${RULE} decides: win your next match by 5 or more to finish ahead.`);
+    expect(unscored.whatIf).toBe(target);
+    const scored = must(view({ ...s, rows, meta: { swissRounds: 3, pointsRule: scoredRule([3, 0]) } })).rows.D!;
+    expect(scored.whatIf).toBe(target);
   });
   it("…and on `for` as on `diff`: the rule's score is in the goals the average reads", () => {
     // The walkover scene, D's real match a 1–2 loss plus the walkover's 0–3:
@@ -1306,7 +1338,9 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
   /** What `applyPointsRule` adds for a scored forfeit. */
   const ruleAward = (mine: number, theirs: number): Metrics => ({ for: mine, against: theirs, diff: mine - theirs });
 
-  it("a football bye under the rule: `gf`/`gd` hide the rule's score, so the bye stays out of the average", () => {
+  // W2c X-PT-1: the rule pays a bye no score, so a bye's row never carries the rule's for/against/diff — the scene's
+  // rows are the same with the rule or without it. (Before W2c the bye was taken to carry it and `gf` hid it.)
+  it("a football bye under the rule stays out of the average (no rule pays a bye a score)", () => {
     // Swiss of five on points → diff → for: r1 A 3–0 B, C 2–0 E, D bye; r2
     // A 2–0 C, D 4–0 E, B bye. Di (6, +4 from ONE real match of 4 goals) wins
     // and is in; a loss leaves it level on points with Cy (0). m = 0 − 4 + 1 =
@@ -1326,18 +1360,18 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
       open(3, null, null),
     ];
     const goals = (gf: number, ga: number): Metrics => ({ gf, ga, gd: gf - ga });
-    const rows = (scored: boolean) => [
+    const rows = [
       ledgerRow("A", 1, 2, 2, 2 * W, goals(5, 0)),
-      ledgerRow("D", 2, 2, 2, 2 * W, { ...goals(4, 0), ...(scored ? ruleAward(3, 0) : {}) }),
+      ledgerRow("D", 2, 2, 2, 2 * W, goals(4, 0)),
       ledgerRow("C", 3, 1, 2, W, goals(2, 2)),
-      ledgerRow("B", 4, 1, 2, W, { ...goals(0, 3), ...(scored ? ruleAward(3, 0) : {}) }),
+      ledgerRow("B", 4, 1, 2, W, goals(0, 3)),
       ledgerRow("E", 5, 0, 2, 0, goals(0, 6)),
     ];
     const over = { cascade: ["points", "diff", "for"], bounds: FB, awardAddsToLedger: divisionAwardAddsToLedger(FOOTBALL, {}) };
     const target = `If you finish level on points with Cy, goal difference decides: lose your next match by no more than 3 to finish ahead.`;
-    const plain = must(view({ kind: "swiss", rows: rows(false), fixtures }, over)).rows.D!;
+    const plain = must(view({ kind: "swiss", rows, fixtures }, over)).rows.D!;
     expect(plain.whatIf).toBe(target);
-    const scored = must(view({ kind: "swiss", rows: rows(true), fixtures, meta: { pointsRule: scoredRule([3, 0]) } }, over)).rows.D!;
+    const scored = must(view({ kind: "swiss", rows, fixtures, meta: { pointsRule: scoredRule([3, 0]) } }, over)).rows.D!;
     expect(scored.whatIf).toBe(target);
   });
   it("a cricket ledger names runs: `for` reads `runs_for`, and the what-if says \"runs scored\"", () => {
@@ -1550,6 +1584,160 @@ describe("wording", () => {
     expect(v.rows.A!.ariaLabel).toBe("Posición 1, Gana y pasa, ver detalles");
     expect(v.table.label).toBe("Los 2 primeros pasan a Finals · queda 1 ronda");
     expect(v.rows.D!.ifYouLose).toBe("Si pierdes tu próximo partido, quedas eliminado.");
+  });
+});
+
+// W2c X-AB-5 / N2 (post-merge item): a recorded abandon that decided nobody is HELD for the organiser's settle - the desk
+// shows it, `POST /stages/{id}/complete` refuses around it (`completionEngineStatus`) - so the PUBLIC table must not call
+// anybody's fate while it stands. The builder reads the SAME predicate (`rowAwaitsSettle`): the stored row is `abandoned`
+// either way, and only the ledger (`has_active_abandon`, `expunged`) tells a plain abandon (held) from a withdrawal's
+// expunge or a generator's void (closed). Expected statuses come from the ENGINE on the snapshot, run with the held match
+// counted as one still to come (held) and as gone (closed) - never from the builder - and every scene proves the two
+// readings DIFFER for the entrant it is about, or the test could not tell the predicate from its absence.
+describe("a match held for settle is still open (X-AB-5; the public table reads completion's predicate)", () => {
+  const kindsFor = (rows: readonly StandingsRow[], remaining: Record<string, number>, cut: number) => {
+    const out = qualificationStatus({
+      rows: rows.map((r) => ({ entrantId: r.entrantId, points: r.points, active: true })),
+      remaining: new Map(Object.entries(remaining)),
+      perMatch: BOUNDS,
+      cut,
+      anyPlayed: true,
+      complete: false,
+    })!;
+    return Object.fromEntries(rows.map((r) => [r.entrantId, out.get(r.entrantId)!.status.kind]));
+  };
+  const kindsOf = (v: QualificationView) => Object.fromEntries(Object.entries(v.rows).map(([id, r]) => [id, r.status]));
+  const DECIDED = ["through", "out"];
+  /** A recorded abandon as the public read carries it: stored `abandoned`, no outcome, an active ledger entry. */
+  const plain = (home: string, away: string, over: Partial<QualFixture> = {}) =>
+    fx(3, home, away, "abandoned", null, { has_active_abandon: true, expunged: false, ...over });
+
+  // League of four, cut 2: r1 A>D, C>B; r2 A>C, B>D; r3 C-D still to play and A-B `ab`. Before r3: A 6, B 3, C 3, D 0.
+  const BEFORE = open4().rows;
+  const AFTER = [row("A", 1, 3, 3, [3, 0]), row("B", 2, 1, 3, [1, 2]), row("C", 3, 1, 2, [1, 1]), row("D", 4, 0, 2, [0, 2])];
+  const league = (ab: QualFixture, rows: StandingsRow[] = BEFORE): Scene => ({
+    ...open4({}, [["C", "D"]]),
+    rows,
+    fixtures: [...open4({}, [["C", "D"]]).fixtures, ab],
+  });
+  const group = (ab: QualFixture, rows: StandingsRow[] = BEFORE): Scene => {
+    const s = league(ab, rows);
+    return { ...s, kind: "group", poolId: "P1", meta: { qualifyCount: 2, qualifyPerGroup: true }, fixtures: s.fixtures.map((f) => ({ ...f, pool_id: "P1" })) };
+  };
+  // The engine's two readings of the same table: the A-B match still to come (held), and gone (closed).
+  const HELD = kindsFor(BEFORE, { A: 1, B: 1, C: 1, D: 1 }, 2);
+  const CLOSED = kindsFor(BEFORE, { A: 0, B: 0, C: 1, D: 1 }, 2);
+  const SETTLED = kindsFor(AFTER, { A: 0, B: 0, C: 1, D: 1 }, 2);
+
+  it("premise (the differential): the engine decides A when the match is gone, and does not while it is to come", () => {
+    expect(DECIDED).toContain(CLOSED.A);
+    expect(DECIDED).not.toContain(HELD.A);
+    expect(HELD).not.toEqual(CLOSED);
+    expect(DECIDED).toContain(SETTLED.A);
+  });
+
+  for (const [name, build] of [["league", league], ["group", group]] as const) {
+    it(`${name}: a PLAIN abandon keeps both seats open - nobody whose fate hangs on it is decided`, () => {
+      const v = must(view(build(plain("A", "B"))));
+      expect(kindsOf(v)).toEqual(HELD);
+      const decided = Object.entries(v.rows).filter(([, r]) => DECIDED.includes(r.status));
+      expect(Object.keys(v.rows).length, "every entrant of the table is checked").toBe(4);
+      expect(decided.map(([id]) => id)).not.toContain("A");
+      expect(v.rows.A!.status).not.toBe(CLOSED.A);
+    });
+
+    it(`${name}: after the settle the match is a result and A is decided`, () => {
+      const v = must(view(build(won(3, "A", "B"), AFTER)));
+      expect(kindsOf(v)).toEqual(SETTLED);
+      expect(DECIDED).toContain(v.rows.A!.status);
+    });
+
+    it(`${name}: a withdrawal's EXPUNGE stays closed (the match left the table), as the void it always read as`, () => {
+      expect(kindsOf(must(view(build(plain("A", "B", { expunged: true })))))).toEqual(CLOSED);
+    });
+
+    it(`${name}: rebase ruling D3 - the organiser's online No result IS the settle: closed, while the same abandon unmarked is held`, () => {
+      expect(kindsOf(must(view(build(plain("A", "B", { no_result: true })))))).toEqual(CLOSED);
+      expect(kindsOf(must(view(build(plain("A", "B", { no_result: false })))))).toEqual(HELD);
+      // The table's last match: No result finishes the stage (no view), where a plain abandon still shows one.
+      const LAST = [row("A", 1, 2, 2, [2, 0]), row("C", 2, 2, 3, [2, 1]), row("B", 3, 1, 2, [1, 1]), row("D", 4, 0, 3, [0, 3])];
+      const lastOne = (ab: QualFixture): Scene => {
+        const sc = build(ab, LAST);
+        return { ...sc, fixtures: sc.fixtures.map((f) => (f.status === "scheduled" ? { ...won(3, "C", "D"), pool_id: f.pool_id } : f)) };
+      };
+      expect(view(lastOne(plain("A", "B", { no_result: true }))), "No result: the stage is complete").toBeNull();
+      expect(view(lastOne(plain("A", "B"))), "plain: still open").not.toBeNull();
+    });
+
+    it(`${name}: a generator's void (no ledger entry) and an abandon that RECORDED a result stay closed`, () => {
+      let checked = 0;
+      for (const closed of [
+        plain("A", "B", { has_active_abandon: false }),
+        fx(3, "A", "B", "abandoned", { kind: "no_result" }, { has_active_abandon: true, expunged: false }),
+        fx(3, "A", "B", "cancelled", null, { has_active_abandon: false, expunged: false }),
+      ]) {
+        expect(kindsOf(must(view(build(closed)))), `${closed.status} ${JSON.stringify(closed.outcome)}`).toEqual(CLOSED);
+        checked++;
+      }
+      expect(checked).toBe(3);
+    });
+
+    it(`${name}: the held match is the table's LAST - the table is not complete and still shows; settled, expunged or void it is finished and shows none`, () => {
+      // C-D is played, so A-B is the only match left: the completion check (isTableStageComplete) is what reads the status.
+      const LAST = [row("A", 1, 2, 2, [2, 0]), row("C", 2, 2, 3, [2, 1]), row("B", 3, 1, 2, [1, 1]), row("D", 4, 0, 3, [0, 3])];
+      const SETTLED_LAST = [row("A", 1, 3, 3, [3, 0]), row("C", 2, 2, 3, [2, 1]), row("B", 3, 1, 3, [1, 2]), row("D", 4, 0, 3, [0, 3])];
+      const lastOne = (ab: QualFixture, rows: StandingsRow[]): Scene => {
+        const s = build(ab, rows);
+        return { ...s, fixtures: s.fixtures.map((f) => (f.status === "scheduled" ? { ...won(3, "C", "D"), pool_id: f.pool_id } : f)) };
+      };
+      const shown = must(view(lastOne(plain("A", "B"), LAST)));
+      expect(kindsOf(shown)).toEqual(kindsFor(LAST, { A: 1, B: 1, C: 0, D: 0 }, 2));
+      expect(Object.keys(shown.rows).length, "every entrant of the table is checked").toBe(4);
+      let finished = 0;
+      for (const done of [plain("A", "B", { expunged: true }), plain("A", "B", { has_active_abandon: false })]) {
+        expect(view(lastOne(done, LAST)), `${done.expunged ? "expunged" : "void"}: the stage is complete`).toBeNull();
+        finished++;
+      }
+      expect(view(lastOne(won(3, "A", "B"), SETTLED_LAST)), "settled: the stage is complete").toBeNull();
+      expect(finished).toBe(2);
+    });
+
+    it(`${name}: the sequence - held, then voided back to scheduled, reads as the match to come it is`, () => {
+      const back = fx(3, "A", "B", "scheduled", null, { has_active_abandon: false, expunged: false });
+      expect(kindsOf(must(view(build(back))))).toEqual(HELD);
+    });
+
+    it(`${name}: a fixture that does not say whether its abandon is active (an older cached read) gives no status, not a guess`, () => {
+      const unsure = fx(3, "A", "B", "abandoned", null);
+      expect(unsure.has_active_abandon).toBeUndefined();
+      expect(view(build(unsure))).toBeNull();
+      // …whereas a fixture that DOES say gives a view either way, so the null is the missing fact and nothing else.
+      expect(view(build({ ...unsure, has_active_abandon: false }))).not.toBeNull();
+      expect(view(build({ ...unsure, has_active_abandon: true }))).not.toBeNull();
+      // Unsure but already answered by what it does carry (a result, or the expunge flag) stays a view.
+      expect(view(build({ ...unsure, expunged: true }))).not.toBeNull();
+      expect(view(build({ ...unsure, outcome: { kind: "no_result" } }))).not.toBeNull();
+    });
+  }
+
+  it("swiss: a held board is an unplayed round for both seats, not a settled one", () => {
+    // swiss4's round 2 C-D board is the abandon: C and D have ONE settled round (round 1) where the closed reading gives two.
+    const swiss = (over: Partial<QualFixture>): Scene => ({
+      kind: "swiss",
+      rows: [row("A", 1, 2, 2, [4, 0]), row("B", 2, 1, 2, [2, 2]), row("C", 3, 0, 1, [0, 1]), row("D", 4, 0, 1, [0, 3])],
+      fixtures: [
+        won(1, "A", "D"), won(1, "B", "C"), won(2, "A", "B"),
+        fx(2, "C", "D", "abandoned", null, { has_active_abandon: true, expunged: false, ...over }),
+        open(3, null, null), open(3, null, null),
+      ],
+    });
+    const rows = swiss({}).rows;
+    // 3 rounds declared: rounds with a SETTLED fixture seating the entrant are what is spent.
+    const held = kindsFor(rows, { A: 1, B: 1, C: 2, D: 2 }, 2);
+    const closed = kindsFor(rows, { A: 1, B: 1, C: 1, D: 1 }, 2);
+    expect(held, "premise: the two readings differ").not.toEqual(closed);
+    expect(kindsOf(must(view(swiss({}))))).toEqual(held);
+    expect(kindsOf(must(view(swiss({ expunged: true }))))).toEqual(closed);
   });
 });
 

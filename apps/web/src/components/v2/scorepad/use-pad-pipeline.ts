@@ -338,7 +338,7 @@ import {
 import type { QueueStore } from "./queue-store";
 import { deepEqual, reconcile, sendOne } from "./pipeline";
 import type { LedgerSlotEvent, OwnIdentity, PendingEvent } from "./types";
-import type { PadAuthMode, PadTransport } from "./transport";
+import { rulesVersionOf, type PadAuthMode, type PadTransport } from "./transport";
 import type { NextMatchRef } from "@/lib/next-match-started";
 import { useFixtureStream, type RealtimeConnector } from "./use-fixture-stream";
 
@@ -433,6 +433,22 @@ export interface UsePadPipelineParams {
   streamFetchFn?: typeof fetch;
   streamConnector?: RealtimeConnector;
   streamPollMs?: number;
+  /**
+   * W2c Task 15 (X-SR-7, owner P-1 "A") — the match's rules version `cfg` was loaded with (`loadFixturePadCfg`, the
+   * same select). Every tap captures the version the pad folds under and sends it; a tap made under rules the
+   * organiser has since corrected is refused (FIXTURE_RULES_CHANGED) and never applied under the new ones. On that
+   * refusal, or an ack naming a newer version, the pad reloads the rules (`transport.getRules`) and folds under them
+   * (`cfg` in the result). Absent: the pad sends no version (never checked) and never reloads.
+   */
+  rulesVersion?: number;
+}
+
+/** W2c Task 15 — the rules a pad reloaded after a correction, until its own page hands down newer ones. */
+export interface RulesChangedInfo {
+  /** The corrected format in the reader's language, or null when there is none to say (the banner then says the
+   *  format changed without naming it). */
+  formatLine: string | null;
+  rulesVersion: number;
 }
 
 export interface RejectionInfo {
@@ -469,6 +485,15 @@ export interface UsePadPipelineResult {
   /** The most recent permanent (422-class) refusal, if any. Cleared at the
    *  start of the next submit. */
   lastRejection: RejectionInfo | null;
+  /** W2c Task 15 (X-SR-7) — the cfg this pad folds under NOW: the loaded one, or the rules it reloaded after a
+   *  correction while those are newer than the loaded ones. Every reader of the format (the skin, the view) reads
+   *  THIS, never the prop, or the board would show one format while the fold scores another. */
+  cfg: unknown;
+  /** W2c Task 15 — non-null while the pad folds under rules it reloaded after a correction, and the scorer has not
+   *  acknowledged them (`dismissRulesChanged`): what the pad's banner says. */
+  rulesChanged: RulesChangedInfo | null;
+  /** W2c Task 15 — the scorer has read the banner: hide it until the NEXT correction. */
+  dismissRulesChanged: () => void;
   /** True while a post-ack `fetchState` reconciliation read is in flight. */
   resyncing: boolean;
   /** Submit one action: folds it in immediately, then durably enqueues and
@@ -1102,10 +1127,34 @@ function pendingWithLocalVoidTarget(
 }
 
 export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResult {
-  const { fixtureId, module: sportModule, cfg, lineups, identity, transport } = params;
+  const { fixtureId, module: sportModule, cfg: loadedCfg, lineups, identity, transport } = params;
+  const loadedRulesVersion = params.rulesVersion;
   const dbName = params.queueDbName ?? `scorepad-queue-${fixtureId}`;
 
   const store = useMemo(() => indexedDbQueueStore(dbName), [dbName]);
+
+  // W2c Task 15 (X-SR-7, owner P-1 "A") — the rules this pad folds under. The page loads them once; a correction
+  // after that reaches the pad as a refused tap (FIXTURE_RULES_CHANGED) or an ack naming a newer version, and the pad
+  // reloads them (`reloadRules` below). The reloaded rules win only while they are NEWER than the loaded ones: once
+  // the page itself hands down a version at least as new (its own refresh), the props are the truth again. The cfg the
+  // fold uses and the version a tap captures come from the SAME pick, so no tap can carry one correction's version
+  // while the board shows another's format.
+  const [reloadedRules, setReloadedRules] = useState<{ cfg: unknown; rulesVersion: number; formatLine: string | null } | null>(
+    null,
+  );
+  const [dismissedRulesVersion, setDismissedRulesVersion] = useState<number | null>(null);
+  const reloadedWins =
+    reloadedRules !== null && loadedRulesVersion !== undefined && reloadedRules.rulesVersion > loadedRulesVersion;
+  const cfg = reloadedWins ? reloadedRules.cfg : loadedCfg;
+  const rulesVersion = reloadedWins ? reloadedRules.rulesVersion : loadedRulesVersion;
+  const rulesChangedVersion = reloadedWins && dismissedRulesVersion !== reloadedRules.rulesVersion ? reloadedRules.rulesVersion : null;
+  const rulesChangedLine = reloadedWins ? reloadedRules.formatLine : null;
+  const rulesChanged = useMemo(
+    (): RulesChangedInfo | null =>
+      rulesChangedVersion === null ? null : { formatLine: rulesChangedLine, rulesVersion: rulesChangedVersion },
+    [rulesChangedVersion, rulesChangedLine],
+  );
+  const dismissRulesChanged = useCallback(() => setDismissedRulesVersion(rulesChangedVersion), [rulesChangedVersion]);
 
   // W3 task 1 fix round 1 — seeded THROUGH `mergeEnvelopesIntoLedger`, not by
   // a raw spread. This was the one writer into `ledgerEvents` that bypassed
@@ -1187,6 +1236,61 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
   // divergence; cleared as soon as the next ack's reconciliation matches
   // again (a fresh optimistic fold from `ledgerEvents` is then correct).
   const [serverOverride, setServerOverride] = useState<unknown>(undefined);
+
+  // W2c Task 15 — the newest rules version this pad KNOWS of (loaded or reloaded), for `runDrain`, a stable callback
+  // that must judge an ack against the latest one. Raised synchronously by a reload (so a second refusal arriving
+  // before the re-render does not reload twice) and by the props in an effect (a ref is not written during render).
+  const knownRulesVersionRef = useRef<number | undefined>(loadedRulesVersion);
+  useEffect(() => {
+    if (loadedRulesVersion !== undefined && (knownRulesVersionRef.current ?? -1) < loadedRulesVersion) {
+      knownRulesVersionRef.current = loadedRulesVersion;
+    }
+  }, [loadedRulesVersion]);
+  const rulesReloadRef = useRef<Promise<void> | null>(null);
+  // One reload at a time: refusals that arrive while it is in flight wait on it. `atLeast` is the version the refusal
+  // or ack named — already known, there is nothing to reload. A pad loaded with no version never reloads (it sends
+  // none, so nothing it sends is ever refused for the rules). A failed read keeps the rules the pad has: its taps are
+  // still refused, never applied under rules it did not fold, and the next refusal asks again.
+  //
+  // Batch-5 m-3: waiting on the in-flight read answers a refusal naming the SAME version, not a newer one - that read was
+  // issued before the second correction and may carry the first. So a caller that named a version waits for it and then
+  // asks again: the check above ends it at once when the read already got there, and reads once more when it did not.
+  // Once only (`waited`): a server that keeps failing the read costs each caller one wait and one more read at most,
+  // never a chain of them.
+  const reloadRules = useCallback(
+    (atLeast: number | undefined): Promise<void> => {
+      const getRules = transport.getRules;
+      const attempt = (waited: boolean): Promise<void> => {
+        if (getRules === undefined || knownRulesVersionRef.current === undefined) return Promise.resolve();
+        if (atLeast !== undefined && knownRulesVersionRef.current >= atLeast) return Promise.resolve();
+        const inFlight = rulesReloadRef.current;
+        if (inFlight !== null) return atLeast === undefined || waited ? inFlight : inFlight.then(() => attempt(true));
+        const run = (async () => {
+          try {
+            const read = await getRules.call(transport, fixtureId);
+            const version = rulesVersionOf(read.rules_version);
+            if (version === undefined || version <= (knownRulesVersionRef.current ?? -1)) return;
+            knownRulesVersionRef.current = version;
+            setReloadedRules({
+              cfg: read.cfg,
+              rulesVersion: version,
+              formatLine: typeof read.format_line === "string" && read.format_line.length > 0 ? read.format_line : null,
+            });
+            // A server-wins override was a fold under the OLD rules: the next reconciliation decides afresh.
+            setServerOverride(undefined);
+          } catch {
+            // Best-effort, like `reconcileAfterAck`'s read: never crashes the pad over one flaky read.
+          }
+        })().finally(() => {
+          rulesReloadRef.current = null;
+        });
+        rulesReloadRef.current = run;
+        return run;
+      };
+      return attempt(false);
+    },
+    [transport, fixtureId],
+  );
 
   // The in-flight drain, shared by every caller. NOT a boolean guard that
   // makes a concurrent caller no-op: `submit()` always awaits the actual
@@ -1717,6 +1821,11 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
           }
           commitPendingEnvelopes(remaining);
           void reconcileAfterAck(withAck);
+          // W2c Task 15: an answer naming a newer rules version (a replayed answer to a tap recorded before a
+          // correction, or a write that raced one): the format moved under this pad — reload it before the next tap.
+          const ackVersion = outcome.kind === "acked" ? outcome.result.rules_version : undefined;
+          const known = knownRulesVersionRef.current;
+          if (ackVersion !== undefined && known !== undefined && ackVersion > known) void reloadRules(ackVersion);
         } else if (outcome.kind === "rejected") {
           setOffline(false);
           // Cleared on every resolved outcome, exactly like `offline` — a
@@ -1731,6 +1840,10 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
           const remaining = new Map(pendingEnvelopesRef.current);
           remaining.delete(next.idempotencyKey);
           commitPendingEnvelopes(remaining);
+          // W2c Task 15 (X-SR-7): the tap was made under rules the organiser has since corrected. Dropped above, never
+          // resent; said out loud (`lastRejection`); and the pad moves to the corrected rules so the scorer retakes it
+          // under them.
+          if (outcome.code === "FIXTURE_RULES_CHANGED") void reloadRules(outcome.rulesVersion);
         } else {
           // stayed-queued: network failure, throttling, or an indeterminate
           // 409 — stop here, in order, exactly like pipeline.ts's drainQueue.
@@ -1744,7 +1857,7 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
     });
     drainInFlight.current = run;
     await run;
-  }, [store, transport, fixtureId, identity, refreshDepth, commitLedgerEvents, commitPendingEnvelopes, reconcileAfterAck, markOwn]);
+  }, [store, transport, fixtureId, identity, refreshDepth, commitLedgerEvents, commitPendingEnvelopes, reconcileAfterAck, markOwn, reloadRules]);
 
   // Resume a leftover queue from a previous session (tab death/reload) —
   // seeding `pendingEnvelopes` from whatever the durable store already held
@@ -1889,6 +2002,8 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
           attempts: 0,
           ...(voidTargetSeq === undefined ? {} : { voidTargetSeq }),
           ...(opts?.dropWith === undefined ? {} : { dropWith: opts.dropWith }),
+          // W2c Task 15 (X-SR-7): the version this tap is made under, captured NOW and never re-stamped.
+          ...(rulesVersion === undefined ? {} : { rulesVersion }),
         };
         // Review Q8 (S12/#421 pass J): deliberately NOT wrapped in
         // `pendingWithLocalVoidTarget`, unlike every OTHER place a
@@ -1927,7 +2042,7 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
         submitInFlight.current = null;
       }
     },
-    [store, fixtureId, identity, commitPendingEnvelopes, markOwn, refreshDepth, runDrain],
+    [store, fixtureId, identity, commitPendingEnvelopes, markOwn, refreshDepth, runDrain, rulesVersion],
   );
 
   // R2 (spec §2.3) — see UsePadPipelineResult.submitHeld's own doc. Mirrors
@@ -1993,6 +2108,8 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
           createdAt: new Date().toISOString(),
           attempts: 0,
           ...(voidTargetSeq === undefined ? {} : { voidTargetSeq }),
+          // W2c Task 15 (X-SR-7): as `submit` — the version this tap is made under, captured NOW.
+          ...(rulesVersion === undefined ? {} : { rulesVersion }),
         };
         const withPending = new Map(pendingEnvelopesRef.current);
         withPending.set(pending.idempotencyKey, pendingToEnvelope(fixtureId, identity, pending));
@@ -2010,7 +2127,7 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
         submitInFlight.current = null;
       }
     },
-    [store, fixtureId, identity, commitPendingEnvelopes, markOwn, refreshDepth],
+    [store, fixtureId, identity, commitPendingEnvelopes, markOwn, refreshDepth, rulesVersion],
   );
 
   // R2 (spec §2.3) — see UsePadPipelineResult.dropHeldSubmission's own doc.
@@ -2050,6 +2167,9 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
     offline,
     throttled,
     lastRejection,
+    cfg,
+    rulesChanged,
+    dismissRulesChanged,
     resyncing,
     submit,
     events,

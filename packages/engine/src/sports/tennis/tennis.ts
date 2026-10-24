@@ -12,7 +12,7 @@ const positions: PositionCatalog = {
   lineup: { size: 1, benchMax: 1 },
 };
 
-export const tennis = makeNestedModule({
+const nestedTennis = makeNestedModule({
   key: "tennis",
   version: "1.0.0",
   // Default = tour play (ITF Rules 5–7): best of 3 tie-break sets, TB7 at 6–6.
@@ -109,3 +109,19 @@ export const tennis = makeNestedModule({
     ],
   },
 }, () => tennis);
+
+// W2c (spec §4.1 Q5; plan finding 3) — the whole match format may differ per match: best-of, the set shape (games,
+// tie-break point and target), the final set, no-ad games and the tie-break margin. Table points are the stage's (D11).
+// Declared here, over the module the nested kernel returns, because the kernel's preset has no rule-key field and
+// tennis is still its only sport; the self thunk above hands the kernel THIS binding.
+export const tennis: typeof nestedTennis = {
+  ...nestedTennis,
+  ruleKeys: {
+    bestOf: { scope: "match" },
+    set: { scope: "match" },
+    finalSet: { scope: "match" },
+    "game.noAd": { scope: "match" },
+    "tiebreak.winBy": { scope: "match" },
+    points: { scope: "points" },
+  },
+};

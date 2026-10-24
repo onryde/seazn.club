@@ -11,8 +11,13 @@ import { EngineError, type EngineErrorCode } from "@seazn/engine/core";
 import { isLevelResultReason } from "@/lib/level-result-reason";
 import { isSettleRefusalReason } from "@/lib/settle-refusal-reason";
 import { forfeitPhaseRefusalOf } from "@/lib/forfeit-phase-refusal";
+import { SWISS_ABANDONED_BOARDS_REASON, abandonedBoardsOf } from "@/lib/swiss-abandoned-refusal";
+import { ABANDONED_MATCHES_REASON, heldMatchesOf } from "@/lib/abandoned-matches-refusal";
+import { configIssuesOf } from "@/lib/config-issue-copy";
+import { refusedFieldsOf } from "@/lib/rule-errors";
 import { AuthError, HttpError, PaymentRequiredError } from "@/lib/errors";
 import { featureReason } from "@/lib/feature-copy";
+import { STAGE_DECIDER_MOVED } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
 import { runRequestContext } from "@/server/request-context";
 import { rateLimitHeaders, runV1Context } from "./context";
@@ -86,6 +91,8 @@ export const ENGINE_HTTP: Record<EngineErrorCode, number> = {
   ABANDONED_SETTLE_OR_VOID: 409,
   DOUBLE_WALKOVER_NO_NEXT_MATCH: 409,
   STAGE_SEAT_DEPARTED: 409,
+  // W2c (D7) — a malformed Armageddon (it names no Black), like INVALID_EVENT: the scorer re-sends it complete.
+  TIEBREAK_COLOUR_REQUIRED: 422,
 };
 
 // HTTP status → stable machine code for non-engine errors.
@@ -170,6 +177,12 @@ async function v1Inner<T>(
     return NextResponse.json({ ok: true, data: result, requestId }, { headers: rate });
   } catch (err: unknown) {
     if (err instanceof ZodError) {
+      // W2c Task 13 (Task 12 re-review M-6): a top-level stage decider is refused by name, saying where it goes — zod's
+      // own "Invalid input" left the useful sentence in `issues[].message` (behind a union, for POST /stages).
+      const moved = stageDeciderMovedOf(err.issues);
+      if (moved !== null) {
+        return errorResponse(requestId, 400, "VALIDATION", moved.message, { field: moved.field, issues: err.issues });
+      }
       return errorResponse(requestId, 400, "VALIDATION", "Invalid input", {
         issues: err.issues,
       });
@@ -240,6 +253,29 @@ async function v1Inner<T>(
         const d = err.data as { stageId: string; previousStageId: string };
         extra = { reason: "previous_stage_incomplete", stageId: d.stageId, previousStageId: d.previousStageId };
       }
+      // W2c P-7 / X-AB-5 (fix round 1, I2): the next Swiss round is refused while an abandoned board has no result; the
+      // refusal names the boards (round and board number) so the desk can say which to settle. Forwarded only when the
+      // shape parses (lib/swiss-abandoned-refusal.ts); otherwise the code's own copy stands.
+      if (err.code === "STAGE_NOT_READY" && (err.data as { reason?: unknown } | undefined)?.reason === SWISS_ABANDONED_BOARDS_REASON) {
+        const abandoned = abandonedBoardsOf(err.data);
+        if (abandoned) extra = { reason: SWISS_ABANDONED_BOARDS_REASON, abandoned };
+      }
+      // W2c X-AB-5 (fix round 2, N2): Complete stage is refused while a TABLE stage holds a match for the organiser's
+      // settle; the refusal names the matches the same way (lib/abandoned-matches-refusal.ts), under its own reason.
+      if (err.code === "STAGE_NOT_READY" && (err.data as { reason?: unknown } | undefined)?.reason === ABANDONED_MATCHES_REASON) {
+        const abandoned = heldMatchesOf(err.data);
+        if (abandoned) extra = { reason: ABANDONED_MATCHES_REASON, abandoned };
+      }
+      // W2c owner P-5 (fix round 1): a refused match-rules save names its PROBLEM in `data.issues` (the rule's own
+      // sentence on the field's path - the share-on-abandon refusals); the generic message alone told the organiser
+      // nothing to change. Only `path` and `message` go out - the issue's `input` and `code` are not wire contract.
+      // W2c Task 12: a division save refused AFTER its per-field lock also names the fields it kept as stored
+      // (`refused`, the 409's own list) — without them the organiser reads a config error about a value they never sent.
+      if (err.code === "CONFIG_INVALID") {
+        const issues = configIssuesOf(err.data);
+        const refused = refusedFieldsOf(err.data);
+        if (issues || refused) extra = { ...(issues ? { issues } : {}), ...(refused ? { refused } : {}) };
+      }
       // W2a fix round 1 (review M-1): LEVEL_RESULT_IN_BRACKET has two emitters asking for different things (enter
       // the winner; settle before finalizing), so the copy branches on the reason — forwarded only when named.
       if (err.code === "LEVEL_RESULT_IN_BRACKET") {
@@ -304,6 +340,35 @@ async function v1Inner<T>(
     log.error({ err }, "v1: unhandled error");
     return errorResponse(requestId, 500, "INTERNAL", message);
   }
+}
+
+type IssueLike = { readonly path: readonly PropertyKey[]; readonly message: string; readonly errors?: readonly (readonly IssueLike[])[] };
+
+/** A body path as a reader writes it: `config.shootout`, `[0].config.shootout`, `shootout`. */
+const pathText = (path: readonly PropertyKey[]): string =>
+  path.map((p, i) => (typeof p === "number" ? `[${p}]` : i === 0 ? String(p) : `.${String(p)}`)).join("");
+
+/**
+ * The first top-level stage decider (any whole decider a sport declares, `TOP_LEVEL_STAGE_DECIDERS`, refused
+ * `STAGE_DECIDER_MOVED` by schemas.ts) in a refusal,
+ * walked through union arms (POST /stages takes one stage or a list): the field as sent and a sentence naming it and the
+ * place it goes — `config.rules.<key>` on a stage, `rules.<key>` in the stage PUT's body. Null for any other refusal.
+ */
+export function stageDeciderMovedOf(issues: readonly IssueLike[], prefix: readonly PropertyKey[] = []): { field: string; message: string } | null {
+  for (const issue of issues) {
+    const path = [...prefix, ...issue.path];
+    if (issue.message === STAGE_DECIDER_MOVED && path.length > 0) {
+      const key = String(path[path.length - 1]);
+      const field = pathText(path);
+      const target = pathText([...path.slice(0, -1), "rules", key]);
+      return { field, message: `${field}: a stage's deciders are its match rules — set it under the stage's rules, as ${target}` };
+    }
+    for (const arm of issue.errors ?? []) {
+      const found = stageDeciderMovedOf(arm, path);
+      if (found !== null) return found;
+    }
+  }
+  return null;
 }
 
 /** Parse + Zod-validate a JSON request body (malformed JSON → 400). */

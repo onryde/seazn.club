@@ -26,9 +26,8 @@
 // WHY NOT journey-pro. `journey-pro.spec.ts` already drives the Start dialog
 // and the promotion, and stays as it is. It reaches that screen through a
 // generic 6-entrant league with every fixture timed, so it can say nothing
-// about per-stage rules: `generic` is not in `STAGE_RULES_SPORTS`, and it has
-// exactly one stage, so neither direction of a PER-STAGE lock is expressible
-// in it. This file is badminton, two stages, and reads the format row.
+// about a per-stage BEST-OF (generic has none), and it has exactly one stage,
+// so neither direction of a PER-STAGE lock is expressible in it. This file is badminton, two stages, and reads the format row.
 //
 // BOTH DIRECTIONS, always. A stage whose first match has been scored must
 // REFUSE, and the stage beside it that has not begun must still SAVE — in the
@@ -172,6 +171,10 @@ function stageSheet(page: Page, heading: string) {
  *  clause — assembled the way `StageFormatRow` assembles it
  *  (`${stageFormatHeadline(...)} · ${clause}`), from the SAME option-label
  *  lookup, so neither half is a string typed into this file. */
+/** A locked stage's header carries the format alone: the lock is stated once, in the lock line below it (T17 review M-2). */
+function lockedSummary(bestOf: number): string {
+  return ruleOptionLabel(SPORT, "bestOf", String(bestOf)) ?? String(bestOf);
+}
 function summaryLine(bestOf: number, clauseKey: string): string {
   const headline = ruleOptionLabel(SPORT, "bestOf", String(bestOf)) ?? String(bestOf);
   return `${headline} · ${L[clauseKey]}`;
@@ -503,7 +506,7 @@ test("the format lock is per stage: the played stage refuses, the stage that has
     { timeout: STEP_MS },
   );
   await expect(league.getByTestId("stage-format-summary")).toHaveText(
-    summaryLine(LEAGUE_BEST_OF, "schedule.stageFormat.locked"),
+    lockedSummary(LEAGUE_BEST_OF),
   );
   await expect(league.getByTestId("stage-format-edit")).toHaveCount(0);
   await expect(league.getByTestId("stage-format-clear")).toHaveCount(0);
@@ -524,7 +527,7 @@ test("the format lock is per stage: the played stage refuses, the stage that has
   );
   // The locked card did not move while its neighbour was being edited.
   await expect(league.getByTestId("stage-format-summary")).toHaveText(
-    summaryLine(LEAGUE_BEST_OF, "schedule.stageFormat.locked"),
+    lockedSummary(LEAGUE_BEST_OF),
   );
 
   // The same two directions on the endpoint itself, one call apart, so the
@@ -688,6 +691,24 @@ test("best of 1: ONE 'Points to win' field — on a stage that overrides to it, 
   await picker.selectOption("1");
   await expect(single).toHaveValue(String(BO1_POINTS));
 
+  // The save's `router.refresh()` is not awaited (stages-panel), so the props can still be the pre-save ones when the
+  // organiser taps Edit again. That window is a race on a fast machine, so HOLD the refresh's own request (the RSC GET)
+  // open across the reopen: the reopen below then happens, deterministically, while the page still holds the props it had
+  // before the save (batch-5 review Q2). Released after the assertions; the count proves the hold caught the refresh.
+  const heldRefreshes: string[] = [];
+  let releaseRefresh: () => void = () => undefined;
+  const refreshGate = new Promise<void>((resolve) => {
+    releaseRefresh = resolve;
+  });
+  await page.route("**/*", async (route) => {
+    const req = route.request();
+    if (req.method() === "GET" && req.headers()["rsc"] === "1") {
+      heldRefreshes.push(req.url());
+      await refreshGate;
+    }
+    // A held refresh the page itself gave up on (Next aborts a superseded one) is already handled: nothing to continue.
+    await route.continue().catch(() => undefined);
+  });
   await finals.getByTestId("stage-format-save").click();
   await expect(finals.getByTestId("stage-format-save")).toHaveCount(0, { timeout: STEP_MS });
   await expect(finals.getByTestId("stage-format-summary")).toHaveText(
@@ -700,10 +721,15 @@ test("best of 1: ONE 'Points to win' field — on a stage that overrides to it, 
       timeout: POLL_MS,
     })
     .toEqual({ bestOf: 1, setTo: BO1_POINTS, finalSetTo: BO1_POINTS });
-  // Reopen shows the number played.
+  // Reopen shows the number played - IN PAGE, with no reload between the save and the reopen, and while the refresh is
+  // still in flight: the editor hydrates from the PUT's own answer until the props catch up. (A reload here, or waiting
+  // for the refresh, would read what the server stored and hide exactly that.)
+  expect(heldRefreshes.length, "the hold caught the save's refresh: the reopen below is mid-refresh").toBeGreaterThan(0);
   await finals.getByTestId("stage-format-edit").click();
   await expect(single).toHaveValue(String(BO1_POINTS));
-  await finals.getByTestId("stage-format-edit").click(); // the toggle now reads Cancel
+  await finals.getByTestId("stage-format-cancel").click(); // while the editor is open, its Cancel is the only way out
+  releaseRefresh();
+  await page.unroute("**/*");
 
   // --- 2. A stage that INHERITS best of 1 ------------------------------------
   // A division that is best of 1 itself, and a stage naming no best-of of its

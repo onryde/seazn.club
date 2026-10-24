@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { foldMatch, type EventEnvelope } from "@seazn/engine/core";
 import { builtinModules } from "@seazn/engine/sports";
 // single-sport: the chess tie-break's own rungs and module — no other sport declares a decider
-import { TIEBREAK_RUNGS, boardgame } from "@seazn/engine/sports/boardgame";
+import { ARMAGEDDON_RESULTS, TIEBREAK_RUNGS, boardgame, type TiebreakRung } from "@seazn/engine/sports/boardgame";
 import { declaredCfgs, defaultLineupPair, makeEnvelope } from "@seazn/engine/testkit";
 import { ORGANISER_ONLY_SPORT_EVENTS, isOrganiserOnlyEvent } from "@/lib/organiser-only-events";
 import { entrantDisplayName } from "@/lib/entrant-name";
@@ -25,7 +25,9 @@ import {
   TIEBREAK_TILE_ID,
   TIEBREAK_TYPE,
 } from "../skins/boardgame";
-import type { GuidedSheetStep, PadHostView } from "../types";
+import { GuidedSheet, answerStep, backStep, currentStep, initialSheetState, type GuidedSheetState } from "../guided-sheet";
+import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
+import type { GuidedSheetSpec, GuidedSheetStep, PadHostView } from "../types";
 import { liveView } from "./_views";
 
 // W2a Task 12 — the chess three-step tie-break on the pad (spec §5.5; BG-KO-1; BG-KO-2 per ruling 82; UI-2 option B;
@@ -41,8 +43,41 @@ const SETTLE = { type: "core.settle", payload: { winner: "H", method: "lot" } };
 // single-sport: a chess knockout game drawn into its tie-break — the only sport with one
 const tiebreakView = (o: { canOrganise?: boolean } = {}) =>
   liveView("boardgame", { stageKind: "knockout", cfg: TB_CFG, events: [START, DRAWN], ...o });
-const winnerKey = (rung: string) => (rung === "armageddon" ? "winner-armageddon" : "winner");
 const shownFor = (step: GuidedSheetStep, answers: Record<string, string>) => step.when?.(answers) ?? true;
+/** The ids of the steps a scorer who has answered `answers` sees, in declaration order (the chassis' own `when` rule). */
+const visibleIds = (sheet: GuidedSheetSpec, answers: Record<string, string>) => sheet.steps.filter((s) => shownFor(s, answers)).map((s) => s.id);
+/** A chess knockout drawn into its tie-break under a stage that plays exactly `rungs` (absent = every rung). */
+// single-sport: the tie-break rungs and the Armageddon are chess's alone — boardgame is the only module declaring a decider (pinned by the registry sweep above)
+const stageView = (rungs?: readonly TiebreakRung[], names?: PadHostView["entrantNames"]) =>
+  liveView("boardgame", {
+    stageKind: "knockout",
+    cfg: { tiebreak: true, ...(rungs === undefined ? {} : { tiebreakRungs: rungs }) },
+    events: [START, DRAWN],
+    ...(names === undefined ? {} : { entrantNames: names }),
+  });
+const sheetOf = (view: PadHostView) => buildSheets(view, echo)[TIEBREAK_TILE_ID]!;
+/** The two steps that name the entrants, with the option ids each one answers (the Black step prefixes its own). */
+const NAMED_STEPS = [["winner", ["home", "away"]], ["black", ["black-home", "black-away"]]] as const;
+/** `defaultLineupPair` seats entrants "H" (home) and "A" (away). */
+const ENTRANT = { home: "H", away: "A" } as const;
+const otherSide = (side: "home" | "away") => (side === "home" ? "away" : "home");
+/** BG-KO-2, from the rulebook (packages/engine/rules/boardgame.md): White won → the OTHER entrant advances; Black won or
+ *  the Armageddon was drawn → Black advances. Written out here, never read from the engine's helper. */
+const advancerOf = (black: "home" | "away", result: (typeof ARMAGEDDON_RESULTS)[number]) => (result === "white" ? otherSide(black) : black);
+/** A drawn game followed by `payload`, folded through the REAL engine: the outcome the fixture would carry. */
+const foldTiebreak = (payload: Record<string, unknown>, rungs?: readonly TiebreakRung[]) => {
+  const env = (seq: number, type: string, body: unknown): EventEnvelope =>
+    ({ id: `e${seq}`, fixtureId: "fx", seq, type, payload: body, recordedAt: "2026-10-08T00:00:00Z", recordedBy: null }) as EventEnvelope;
+  return boardgame.outcome(
+    foldMatch(boardgame, boardgame.configSchema.parse(rungs === undefined ? TB_CFG : { ...TB_CFG, tiebreakRungs: rungs }), defaultLineupPair(boardgame.positions), [env(1, "core.start", {}), env(2, RESULT_TYPE, DRAWN.payload), env(3, TIEBREAK_TYPE, payload)]),
+  );
+};
+/** The English dictionary with `{var}` interpolation — the sentence a scorer would read. */
+const tEn = (key: string, vars?: Record<string, string | number>): string => {
+  const raw = (uiEn as Record<string, string>)[key];
+  if (raw === undefined) throw new Error(`no English entry for ${key}`);
+  return raw.replace(/\{(\w+)\}/g, (_, name: string) => String(vars?.[name]));
+};
 
 describe("the chess three-step tie-break on the pad (spec §5.5, BG-KO-1, BG-KO-2 per ruling 82, D6)", () => {
   it("the single-sport reasons in this file hold: of every registry sport, only boardgame declares a decider (awaitingDecider, deciderTypes), and since W2b (D15) none declares an organiser-only result method", () => {
@@ -106,6 +141,51 @@ describe("the chess three-step tie-break on the pad (spec §5.5, BG-KO-1, BG-KO-
     expect(resolvePhase(voided)).toBe("live");
   });
 
+  it("a voided Armageddon is re-recorded from scratch: each re-record advances the entrant ITS Black × result gives, twice over, never the voided one's (the sequence, class 1)", () => {
+    // single-sport: the void-then-re-record of a tie-break is chess's alone — boardgame is the only module declaring deciderTypes
+    // Three Armageddons whose rulebook advancers (BG-KO-2: White won -> the other entrant; Black won or drawn -> Black) each differ from the
+    // one before it, so a re-record that kept the voided event's winner (or its Black) could not pass.
+    const attempts = [
+      { black: "home", result: "white" },
+      { black: "home", result: "black" },
+      { black: "away", result: "draw" },
+    ] as const;
+    const advancers = attempts.map((a) => ENTRANT[advancerOf(a.black, a.result)]);
+    expect(advancers, "each attempt's advancer differs from the previous one's").toEqual(["A", "H", "A"]);
+    // The ledger grows one attempt at a time: [start, drawn, TB1, void(TB1), TB2, void(TB2), TB3]. Event ids are `e-<seq>`.
+    const ledger: { type: string; payload: Record<string, unknown>; voids?: string }[] = [START, DRAWN];
+    let checked = 0;
+    attempts.forEach((a, i) => {
+      // The pad offers the sheet from the CURRENT ledger (the previous attempt voided): build the payload through it, not by hand.
+      const offered = liveView("boardgame", { stageKind: "knockout", cfg: TB_CFG, events: ledger });
+      expect(buildTiles(offered, echo).map((t) => t.id), `attempt ${i + 1}: the tie-break is owed again`).toEqual([TIEBREAK_TILE_ID]);
+      expect(resolvePhase(offered)).toBe("live");
+      const payload = buildSheets(offered, echo)[TIEBREAK_TILE_ID]!.buildPayload({ rung: "armageddon", black: `black-${a.black}`, result: `result-${a.result}` });
+      ledger.push({ type: TIEBREAK_TYPE, payload });
+      const recorded = liveView("boardgame", { stageKind: "knockout", cfg: TB_CFG, events: ledger });
+      expect(boardgame.outcome(recorded.state as never), `attempt ${i + 1} (${a.black} Black, ${a.result}): the engine's win`).toMatchObject({
+        kind: "win",
+        winner: advancers[i],
+        loser: advancers[i] === "H" ? "A" : "H",
+        method: "tiebreak_armageddon",
+      });
+      expect(buildTiles(recorded, echo), `attempt ${i + 1}: decided, nothing offered`).toEqual([]);
+      expect(resolvePhase(recorded)).toBe("post");
+      checked++;
+      if (i < attempts.length - 1) {
+        // Void it: the match is undecided again (no carry-over of the voided win) and the decider is owed.
+        ledger.push({ type: "core.void", payload: {}, voids: `e-${ledger.length}` });
+        const voided = liveView("boardgame", { stageKind: "knockout", cfg: TB_CFG, events: ledger });
+        expect(boardgame.outcome(voided.state as never), `after voiding attempt ${i + 1}`).toBeNull();
+        expect((voided.state as { phase?: string }).phase).toBe("tiebreak");
+        checked++;
+      }
+    });
+    // three records + two voids
+    expect(checked).toBe(5);
+    expect(ledger.filter((e) => e.voids !== undefined).map((e) => e.voids)).toEqual(["e-3", "e-5"]);
+  });
+
   it("a ledger whose settle names neither side is refused loudly — the pad never guesses who advanced", () => {
     const v = tiebreakView();
     const bogus = { ...v, events: [...v.events, makeEnvelope(3, { type: "core.settle", payload: { winner: "X", method: "lot" } } as never)] };
@@ -153,23 +233,154 @@ describe("the chess three-step tie-break on the pad (spec §5.5, BG-KO-1, BG-KO-
     expect(ids.filter((id) => /settle|\blots?\b/i.test(id))).toEqual([]);
   });
 
-  it("BG-KO-2 (ruling 82): every rung shows ONE winner step with exactly the two entrants; the 'draw means Black advances' hint is on armageddon only", () => {
-    const sheet = buildSheets(tiebreakView(), echo)[TIEBREAK_TILE_ID]!;
+  it("BG-KO-3 the rung step offers exactly the rungs the STAGE plays, in the STAGE's order, never the engine's canonical list", () => {
+    // ["armageddon", "rapid"] is NOT TIEBREAK_RUNGS order, so a sheet that re-sorts to the canonical list fails here.
+    expect(TIEBREAK_RUNGS.indexOf("rapid")).toBeLessThan(TIEBREAK_RUNGS.indexOf("armageddon"));
+    // A one-rung list is absent here ON PURPOSE: a stage that plays one rung never asks which (the design-pass describe at the end of this file).
+    const lists: (readonly TiebreakRung[])[] = [["armageddon", "rapid"], ["rapid", "blitz"], ["blitz", "armageddon", "rapid"], [...TIEBREAK_RUNGS]];
     let checked = 0;
-    for (const rung of TIEBREAK_RUNGS) {
-      const shown = sheet.steps.filter((s) => s.id.startsWith("winner") && shownFor(s, { rung }));
-      expect(shown, rung).toHaveLength(1);
-      const step = shown[0]!;
-      expect(step.kind === "choice" && step.options.map((o) => o.id), rung).toEqual(["home", "away"]); // no third "drawn" choice
-      expect(step.kind === "choice" && step.hintKey === "pad.boardgame.tiebreak.armageddonHint", rung).toBe(rung === "armageddon");
+    for (const list of lists) {
+      const rung = sheetOf(stageView(list)).steps.find((s) => s.id === "rung")!;
+      expect(rung.kind === "choice" && rung.options.map((o) => o.id), JSON.stringify(list)).toEqual([...list]);
       checked++;
     }
-    expect(checked).toBe(TIEBREAK_RUNGS.length);
-    expect(sheet.buildPayload({ rung: "armageddon", "winner-armageddon": "away" })).toEqual({ rung: "armageddon", winner: "A" });
-    expect(sheet.buildPayload({ rung: "armageddon", "winner-armageddon": "home" })).toEqual({ rung: "armageddon", winner: "H" });
+    expect(checked).toBe(lists.length);
+    // The engine's own padSpec is the second witness of WHICH rungs are playable: the pad offers the same set (the order
+    // is the stage's; padSpec splits the timed rungs from the Armageddon, so only the set is comparable).
+    const offeredBy = (rungs: readonly TiebreakRung[]) => {
+      const spec = boardgame.padSpec!(boardgame.configSchema.parse({ tiebreak: true, tiebreakRungs: rungs }));
+      const panel = spec.panels.find((p) => p.labelKey.key === "pad.boardgame.panel.tiebreak");
+      return (panel?.actions ?? []).flatMap((a) => a.fields ?? []).flatMap((f) => (f.kind === "enum" && f.path === "rung" ? [...f.values] : [])).sort();
+    };
+    let compared = 0;
+    for (const list of lists) {
+      const rung = sheetOf(stageView(list)).steps.find((s) => s.id === "rung")!;
+      expect(rung.kind === "choice" && rung.options.map((o) => o.id).sort(), JSON.stringify(list)).toEqual(offeredBy(list));
+      compared++;
+    }
+    expect(compared).toBe(lists.length);
+    // The positive pair: a stage that lists nothing plays every rung, in the engine's order (today's behaviour).
+    const all = sheetOf(stageView()).steps.find((s) => s.id === "rung")!;
+    expect(all.kind === "choice" && all.options.map((o) => o.id)).toEqual([...TIEBREAK_RUNGS]);
   });
 
-  it("I2 (spec §5.5 'two entrants, always'): with NO pairing card the winner and armageddon options read the ENTRANTS' names, ids stay home/away", () => {
+  it("BG-KO-3 an empty rung list offers no tie-break tile (the drawn game is the organiser's to settle); a one-rung list offers it", () => {
+    // Empty case first: with no rung to play the engine never leaves phase done, so there is nothing to record.
+    const none = stageView([]);
+    expect((none.state as { phase?: string }).phase, "a drawn game with no rung to play stays a draw").toBe("done");
+    expect(buildTiles(none, echo).map((t) => t.id)).not.toContain(TIEBREAK_TILE_ID);
+    expect(resolvePhase(none)).toBe("post");
+    // …and the pair: one listed rung is enough for the tile.
+    expect(buildTiles(stageView(["blitz"]), echo).map((t) => t.id)).toEqual([TIEBREAK_TILE_ID]);
+  });
+
+  it("BG-KO-2 the Armageddon branch asks Black then the result, then reads the outcome back; rapid and blitz keep winner then score", () => {
+    const sheet = sheetOf(stageView(["armageddon", "rapid"]));
+    expect(visibleIds(sheet, { rung: "armageddon" })).toEqual(["rung", "black", "result", "confirm"]);
+    // Rapid and blitz are unchanged by this task (the positive pair of the Armageddon branch).
+    for (const rung of ["rapid", "blitz"]) expect(visibleIds(sheet, { rung }), rung).toEqual(["rung", "winner", "score"]);
+    const black = sheet.steps.find((s) => s.id === "black")!;
+    expect(black.kind === "choice" && black.options.map((o) => o.id)).toEqual(["black-home", "black-away"]);
+    expect(black.kind === "choice" && black.options.map((o) => o.label)).toEqual(["scorepad.attribution.home", "scorepad.attribution.away"]);
+    expect(black.title).toBe("pad.boardgame.tiebreak.black.title");
+    // The result step offers exactly the engine's three results, in its order; the draw's label carries its consequence.
+    const result = sheet.steps.find((s) => s.id === "result")!;
+    expect(result.title).toBe("pad.boardgame.tiebreak.result.title");
+    expect(result.kind === "choice" && result.options.map((o) => o.id)).toEqual(ARMAGEDDON_RESULTS.map((r) => `result-${r}`));
+    expect(result.kind === "choice" && result.options.map((o) => o.label)).toEqual(ARMAGEDDON_RESULTS.map((r) => `pad.boardgame.armageddon.result.${r}`));
+    expect(tEn("pad.boardgame.armageddon.result.draw")).toBe("Drawn — Black advances");
+    // The payload is Task 8's, with Black as an ENTRANT id and the result as the engine's token.
+    expect(sheet.buildPayload({ rung: "armageddon", black: "black-away", result: "result-draw" })).toEqual({ rung: "armageddon", black: "A", result: "draw" });
+    expect(sheet.buildPayload({ rung: "armageddon", black: "black-home", result: "result-white" })).toEqual({ rung: "armageddon", black: "H", result: "white" });
+  });
+
+  it("BG-KO-2 the 'draw means Black advances' hint stays, on the Armageddon result step only", () => {
+    const sheet = sheetOf(stageView());
+    let checked = 0;
+    for (const step of sheet.steps) {
+      if (step.kind !== "choice") continue;
+      expect(step.hintKey === "pad.boardgame.tiebreak.armageddonHint", step.id).toBe(step.id === "result");
+      checked++;
+    }
+    expect(checked, "every choice step was inspected").toBe(sheet.steps.filter((s) => s.kind === "choice").length);
+    expect(checked).toBeGreaterThanOrEqual(5);
+    // What a scorer SEES, per rung: the hint is on a shown step for the Armageddon and on none for rapid or blitz. (The check
+    // above says which step carries it; this one says the step is not shown on a rung that never plays it.)
+    let rungs = 0;
+    for (const rung of TIEBREAK_RUNGS) {
+      const hinted = sheet.steps.filter((s) => shownFor(s, { rung }) && s.kind === "choice" && s.hintKey === "pad.boardgame.tiebreak.armageddonHint");
+      expect(hinted.map((s) => s.id), `rung ${rung}`).toEqual(rung === "armageddon" ? ["result"] : []);
+      rungs++;
+    }
+    expect(rungs, "every rung the engine declares was inspected").toBe(TIEBREAK_RUNGS.length);
+  });
+
+  it("BG-KO-2 the confirm line names who advances and why, for every Black × result — the scorer never applies the rule", () => {
+    const names = { home: "Asha Rao", away: "Priya Menon" };
+    const confirm = buildSheets(stageView(undefined, names), tEn)[TIEBREAK_TILE_ID]!.steps.find((s) => s.id === "confirm")!;
+    if (confirm.kind !== "confirm") throw new Error(`the Armageddon sheet ends on a confirm step, not ${confirm.kind}`);
+    let checked = 0;
+    const advancers = new Set<string>();
+    for (const black of ["home", "away"] as const)
+      for (const result of ARMAGEDDON_RESULTS) {
+        // The sentence is the dictionary's own, in the scorer's language; WHO advances comes from the rule (BG-KO-2).
+        const name = names[advancerOf(black, result)];
+        const want = result === "draw" ? `Advances: ${name} — Black, Armageddon drawn` : `Advances: ${name} — ${result === "white" ? "White" : "Black"} won`;
+        expect(confirm.summary({ rung: "armageddon", black: `black-${black}`, result: `result-${result}` }), `${black}/${result}`).toBe(want);
+        advancers.add(`${black}/${name}`);
+        checked++;
+      }
+    expect(checked).toBe(2 * ARMAGEDDON_RESULTS.length);
+    // Teeth: White winning and Black winning name DIFFERENT entrants for the same Black, so a sentence that always
+    // named Black (or always the other player) fails somewhere in the loop above.
+    expect(advancers.size, "both entrants are named as the advancer somewhere").toBe(4);
+  });
+
+  it("BG-KO-2 with no name known the confirm line falls back to Home/Away, and a seated player's name wins over the entrant's", () => {
+    const view = (personNames: Record<string, string>, entrantNames: PadHostView["entrantNames"]) =>
+      liveView("boardgame", { stageKind: "knockout", cfg: TB_CFG, events: [START, DRAWN], personNames, entrantNames }); // single-sport: the Armageddon read-back is chess's alone (see the registry sweep above)
+    const line = (v: PadHostView) => {
+      const c = buildSheets(v, tEn)[TIEBREAK_TILE_ID]!.steps.find((s) => s.id === "confirm")!;
+      if (c.kind !== "confirm") throw new Error("unreachable");
+      return c.summary({ rung: "armageddon", black: "black-away", result: "result-draw" });
+    };
+    expect(line(view({}, {}))).toBe(`Advances: ${tEn("scorepad.attribution.away")} — Black, Armageddon drawn`);
+    expect(line(view({}, { home: "Riverside", away: "Summit Knights" }))).toBe("Advances: Summit Knights — Black, Armageddon drawn");
+    expect(line(view({ "A-p1": "Hou Yifan" }, { home: "Riverside", away: "Summit Knights" }))).toBe("Advances: Hou Yifan — Black, Armageddon drawn");
+  });
+
+  it("BG-KO-2 walking the real sheet: Back from the result step keeps Black, a different result rewrites the line, and only Confirm writes", () => {
+    const sheet = buildSheets(stageView(["armageddon", "rapid"], { home: "Asha Rao", away: "Priya Menon" }), tEn)[TIEBREAK_TILE_ID]!;
+    const idAt = (st: GuidedSheetState) => currentStep(sheet, st)?.id;
+    const advance = (st: GuidedSheetState, value: string): GuidedSheetState => {
+      const out = answerStep(sheet, st, value);
+      if (out.done) throw new Error(`the sheet completed early on "${value}"`);
+      return out.state;
+    };
+    const lineAt = (st: GuidedSheetState) => {
+      const c = currentStep(sheet, st);
+      if (c === null || c.kind !== "confirm") throw new Error("not on the confirm step");
+      return c.summary(st.answers);
+    };
+    let s = advance(initialSheetState(), "armageddon");
+    expect(idAt(s)).toBe("black");
+    s = advance(s, "black-away");
+    expect(idAt(s)).toBe("result");
+    s = advance(s, "result-draw");
+    expect(idAt(s), "the result opens the read-back, it does not write").toBe("confirm");
+    expect(lineAt(s)).toBe("Advances: Priya Menon — Black, Armageddon drawn");
+    s = backStep(sheet, s);
+    expect(idAt(s), "Back from the confirm step lands on the result").toBe("result");
+    s = backStep(sheet, s);
+    expect(idAt(s), "…and Back again lands on Black").toBe("black");
+    expect(s.answers.black, "Back keeps what was answered").toBe("black-away");
+    s = advance(s, "black-home"); // changed Black to Asha
+    s = advance(s, "result-white"); // …and White won
+    expect(lineAt(s), "Asha had Black and White won: the other entrant advances").toBe("Advances: Priya Menon — White won");
+    expect(answerStep(sheet, s, "ok")).toEqual({ done: true, event: { type: TIEBREAK_TYPE, payload: { rung: "armageddon", black: "H", result: "white" } } });
+  });
+
+  it("I2 (spec §5.5 'two entrants, always'): with NO pairing card the winner and Black options read the ENTRANTS' names, ids stay home/away", () => {
     // single-sport: the tie-break is chess's alone — boardgame is the only module declaring awaitingDecider/deciderTypes (pinned by the registry sweep in this describe)
     // The production shape the review caught: a chess knockout with no pairing card, so no person is named on the board,
     // and every option read "Home"/"Away". The entrant display names arrive in the view (registry.tsx `entrantNamesFrom`).
@@ -181,16 +392,16 @@ describe("the chess three-step tie-break on the pad (spec §5.5, BG-KO-1, BG-KO-
     });
     const sheet = buildSheets(view, echo)[TIEBREAK_TILE_ID]!;
     let checked = 0;
-    for (const id of ["winner", "winner-armageddon"]) {
+    for (const [id, ids] of NAMED_STEPS) {
       const step = sheet.steps.find((s) => s.id === id)!;
-      expect(step.kind === "choice" && step.options.map((o) => o.id), id).toEqual(["home", "away"]);
+      expect(step.kind === "choice" && step.options.map((o) => o.id), id).toEqual(ids);
       expect(step.kind === "choice" && step.options.map((o) => o.labelText), id).toEqual(["Riverside Chess Club", "Summit Knights"]);
       checked++;
     }
     expect(checked).toBe(2);
   });
 
-  it("N1 (fix round 2): a pairing card's seated person still wins over the entrant label — on both winner steps; ids stay home/away", () => {
+  it("N1 (fix round 2): a pairing card's seated person still wins over the entrant label — on the winner step AND the Black step; ids stay home/away (black-home/black-away on Black)", () => {
     // single-sport: the tie-break is chess's alone — boardgame is the only module declaring awaitingDecider/deciderTypes (pinned by the registry sweep in this describe)
     // Round 1 let the entrant label beat the person the card seats; the person at the board is who the scorer saw play.
     const seated = liveView("boardgame", {
@@ -202,16 +413,16 @@ describe("the chess three-step tie-break on the pad (spec §5.5, BG-KO-1, BG-KO-
     });
     const sheet = buildSheets(seated, echo)[TIEBREAK_TILE_ID]!;
     let checked = 0;
-    for (const id of ["winner", "winner-armageddon"]) {
+    for (const [id, ids] of NAMED_STEPS) {
       const step = sheet.steps.find((s) => s.id === id)!;
-      expect(step.kind === "choice" && step.options.map((o) => o.id), id).toEqual(["home", "away"]);
+      expect(step.kind === "choice" && step.options.map((o) => o.id), id).toEqual(ids);
       expect(step.kind === "choice" && step.options.map((o) => o.labelText), id).toEqual(["Magnus Carlsen", "Hou Yifan"]);
       checked++;
     }
     expect(checked).toBe(2);
   });
 
-  it("N1 (fix round 2, D-6): a SINGLES entrant whose snapshot reads 'Entry 3' is named by its member — the same name the heading shows — on both winner steps", () => {
+  it("N1 (fix round 2, D-6): a SINGLES entrant whose snapshot reads 'Entry 3' is named by its member — the same name the heading shows — on the winner step and the Black step", () => {
     // single-sport: the tie-break is chess's alone — boardgame is the only module declaring awaitingDecider/deciderTypes (pinned by the registry sweep in this describe)
     // The production shape: an individual entrant's `display_name` is whatever the entry flow wrote ("Entry 3"); the
     // console heading and the device header resolve the roster (`entrantDisplayName`) and read "Ada Okonkwo". The pad's
@@ -234,28 +445,33 @@ describe("the chess three-step tie-break on the pad (spec §5.5, BG-KO-1, BG-KO-
       TIEBREAK_TILE_ID
     ]!;
     let checked = 0;
-    for (const id of ["winner", "winner-armageddon"]) {
+    for (const [id, ids] of NAMED_STEPS) {
       const step = sheet.steps.find((s) => s.id === id)!;
-      expect(step.kind === "choice" && step.options.map((o) => o.id), id).toEqual(["home", "away"]);
+      expect(step.kind === "choice" && step.options.map((o) => o.id), id).toEqual(ids);
       expect(step.kind === "choice" && step.options.map((o) => o.labelText), id).toEqual(["Ada Okonkwo", "Bea Lindqvist"]);
       checked++;
     }
     expect(checked).toBe(2);
   });
 
-  it("with no entrant name the winner options fall back to the players the lineup puts on the board, then to Home/Away", () => {
+  it("with no entrant name the winner and Black options fall back to the players the lineup puts on the board, then to Home/Away", () => {
     // single-sport: the tie-break is chess's alone — boardgame is the only module declaring awaitingDecider/deciderTypes (pinned by the registry sweep in this describe)
     const names = { "H-p1": "Magnus Carlsen", "A-p1": "Hou Yifan" }; // defaultLineupPair seats `<entrant>-p1`
-    const winnerStep = (personNames: Record<string, string>) =>
+    const stepOf = (id: string, personNames: Record<string, string>) =>
       buildSheets(liveView("boardgame", { stageKind: "knockout", cfg: TB_CFG, events: [START, DRAWN], personNames }), echo)[TIEBREAK_TILE_ID]!.steps.find(
-        (s) => s.id === "winner",
+        (s) => s.id === id,
       )!;
-    const named = winnerStep(names);
-    const unnamed = winnerStep({});
-    // The key stays the canonical fallback on every option; the name, when the lineup has one, wins (labelText).
-    expect(named.kind === "choice" && named.options.map((o) => o.label)).toEqual(["scorepad.attribution.home", "scorepad.attribution.away"]);
-    expect(named.kind === "choice" && named.options.map((o) => o.labelText)).toEqual(["Magnus Carlsen", "Hou Yifan"]);
-    expect(unnamed.kind === "choice" && unnamed.options.map((o) => o.labelText)).toEqual([undefined, undefined]);
+    let checked = 0;
+    for (const [id] of NAMED_STEPS) {
+      const named = stepOf(id, names);
+      const unnamed = stepOf(id, {});
+      // The key stays the canonical fallback on every option; the name, when the lineup has one, wins (labelText).
+      expect(named.kind === "choice" && named.options.map((o) => o.label), id).toEqual(["scorepad.attribution.home", "scorepad.attribution.away"]);
+      expect(named.kind === "choice" && named.options.map((o) => o.labelText), id).toEqual(["Magnus Carlsen", "Hou Yifan"]);
+      expect(unnamed.kind === "choice" && unnamed.options.map((o) => o.labelText), id).toEqual([undefined, undefined]);
+      checked++;
+    }
+    expect(checked).toBe(NAMED_STEPS.length);
   });
 
   it("the score step shows for rapid and blitz only, and 'none' sends no score", () => {
@@ -273,42 +489,77 @@ describe("the chess three-step tie-break on the pad (spec §5.5, BG-KO-1, BG-KO-
 
   it("answers left by a rung the scorer backed out of are never sent: the rung decides which winner and whether a score", () => {
     const sheet = buildSheets(tiebreakView(), echo)[TIEBREAK_TILE_ID]!;
-    // Rapid answered (home, 2–0), then Back to step 1 and Armageddon (away): only armageddon's own answer counts.
-    expect(sheet.buildPayload({ rung: "armageddon", winner: "home", score: "2–0", "winner-armageddon": "away" })).toEqual({ rung: "armageddon", winner: "A" });
-    // …and the other way: an armageddon answer left behind does not decide a blitz.
-    expect(sheet.buildPayload({ rung: "blitz", "winner-armageddon": "home", winner: "away", score: "2–0" })).toEqual({ rung: "blitz", winner: "A", score: "2–0" });
+    // Rapid answered (home, 2–0), then Back to step 1 and Armageddon (Black away, drawn): only the Armageddon branch counts,
+    // and neither the rapid winner nor its score rides along.
+    expect(sheet.buildPayload({ rung: "armageddon", winner: "home", score: "2–0", black: "black-away", result: "result-draw" })).toEqual({ rung: "armageddon", black: "A", result: "draw" });
+    // …and the other way: an Armageddon answer left behind does not decide a blitz.
+    expect(sheet.buildPayload({ rung: "blitz", black: "black-home", result: "result-white", winner: "away", score: "2–0" })).toEqual({ rung: "blitz", winner: "A", score: "2–0" });
   });
 
-  it("with no winner answered for the chosen rung the sheet refuses to build a payload — it never defaults a winner", () => {
+  it("with no winner, Black or result answered for the chosen rung the sheet refuses to build a payload — it never defaults one", () => {
     const sheet = buildSheets(tiebreakView(), echo)[TIEBREAK_TILE_ID]!;
     let checked = 0;
     for (const rung of TIEBREAK_RUNGS) {
-      expect(() => sheet.buildPayload({ rung }), rung).toThrow(/no winner answered/);
+      expect(() => sheet.buildPayload({ rung }), rung).toThrow(rung === "armageddon" ? /no Black answered/ : /no winner answered/);
       checked++;
     }
     expect(checked).toBe(TIEBREAK_RUNGS.length);
     expect(() => sheet.buildPayload({ rung: "rapid", winner: "draw" })).toThrow(/no winner answered/);
+    // An Armageddon with Black but no result, or a result but no Black, or an answer that is not one of the options.
+    expect(() => sheet.buildPayload({ rung: "armageddon", black: "black-home" })).toThrow(/no result answered/);
+    expect(() => sheet.buildPayload({ rung: "armageddon", result: "result-draw" })).toThrow(/no Black answered/);
+    expect(() => sheet.buildPayload({ rung: "armageddon", black: "home", result: "result-draw" })).toThrow(/no Black answered/);
+    expect(() => sheet.buildPayload({ rung: "armageddon", black: "black-home", result: "draw" })).toThrow(/no result answered/);
+    // The pair: the same answers, complete, build.
+    expect(sheet.buildPayload({ rung: "armageddon", black: "black-home", result: "result-draw" })).toEqual({ rung: "armageddon", black: "H", result: "draw" });
   });
 
-  it("the seam: every payload the sheet can build folds through the REAL engine to a win for the tapped side (class 1)", () => {
+  it("the seam: every payload the sheet can build folds through the REAL engine to the win the rulebook gives — the tapped winner, or the entrant BG-KO-2 advances (class 1)", () => {
     let checked = 0;
     const sheet = buildSheets(tiebreakView(), echo)[TIEBREAK_TILE_ID]!;
     const scoreStep = sheet.steps.find((s) => s.id === "score")!;
     const scores = scoreStep.kind === "choice" ? scoreStep.options.map((o) => o.id) : [];
     expect(scores).toContain("none");
-    const cfg = boardgame.configSchema.parse(TB_CFG);
-    const lineups = defaultLineupPair(boardgame.positions);
-    const env = (seq: number, type: string, payload: unknown): EventEnvelope =>
-      ({ id: `e${seq}`, fixtureId: "fx", seq, type, payload, recordedAt: "2026-10-08T00:00:00Z", recordedBy: null }) as EventEnvelope;
-    for (const rung of TIEBREAK_RUNGS)
-      for (const winner of ["home", "away"])
-        for (const score of rung === "armageddon" ? [undefined] : scores) {
-          const payload = sheet.buildPayload({ rung, [winnerKey(rung)]: winner, ...(score ? { score } : {}) });
-          const s = foldMatch(boardgame, cfg, lineups, [env(1, "core.start", {}), env(2, RESULT_TYPE, DRAWN.payload), env(3, TIEBREAK_TYPE, payload)]);
-          expect(boardgame.outcome(s), JSON.stringify(payload)).toMatchObject({ kind: "win", winner: winner === "home" ? "H" : "A", method: `tiebreak_${rung}` });
+    const fold = foldTiebreak;
+    for (const rung of TIEBREAK_RUNGS) {
+      if (rung === "armageddon") continue; // the Armageddon is driven below: it has no winner and no score
+      for (const winner of ["home", "away"] as const)
+        for (const score of scores) {
+          const payload = sheet.buildPayload({ rung, winner, ...(score !== "none" ? { score } : {}) });
+          expect(fold(payload), JSON.stringify(payload)).toMatchObject({ kind: "win", winner: ENTRANT[winner], method: `tiebreak_${rung}` });
           checked++;
         }
-    expect(checked).toBe(2 * scores.length * 2 + 2); // rapid and blitz × each score × both sides, armageddon × both sides
+    }
+    // BG-KO-2: Black × result. Who advances is the RULEBOOK's (White won → the other entrant; Black won or drawn → Black),
+    // never read off the payload the sheet built: the engine derives it, and this is the only place both halves meet.
+    for (const black of ["home", "away"] as const)
+      for (const result of ARMAGEDDON_RESULTS) {
+        const payload = sheet.buildPayload({ rung: "armageddon", black: `black-${black}`, result: `result-${result}` });
+        expect(payload, "no winner key: the entrant is never named as the winner").not.toHaveProperty("winner");
+        expect(fold(payload), JSON.stringify(payload)).toMatchObject({ kind: "win", winner: ENTRANT[advancerOf(black, result)], method: "tiebreak_armageddon" });
+        checked++;
+      }
+    // rapid and blitz × each score × both sides, plus Armageddon × both Black × each result
+    expect(checked).toBe((TIEBREAK_RUNGS.length - 1) * scores.length * 2 + 2 * ARMAGEDDON_RESULTS.length);
+  });
+
+  it("BG-KO-2 the read-back names the entrant the REAL engine advances, for every Black × result — the sentence cannot drift from the fold", () => {
+    const names = { home: "Asha Rao", away: "Priya Menon" };
+    const sheet = buildSheets(stageView(undefined, names), tEn)[TIEBREAK_TILE_ID]!;
+    const confirm = sheet.steps.find((s) => s.id === "confirm");
+    if (confirm === undefined || confirm.kind !== "confirm") throw new Error("the Armageddon sheet has no confirm step");
+    const nameOfEntrant = { H: names.home, A: names.away } as const;
+    let checked = 0;
+    for (const black of ["home", "away"] as const)
+      for (const result of ARMAGEDDON_RESULTS) {
+        const answers = { rung: "armageddon", black: `black-${black}`, result: `result-${result}` };
+        const outcome = foldTiebreak(sheet.buildPayload(answers)) as { kind: string; winner: "H" | "A"; loser: "H" | "A" };
+        const line = confirm.summary(answers);
+        expect(line, `${black}/${result}: names the engine's winner`).toContain(`Advances: ${nameOfEntrant[outcome.winner]} —`);
+        expect(line, `${black}/${result}: never names the loser as the advancer`).not.toContain(`Advances: ${nameOfEntrant[outcome.loser]}`);
+        checked++;
+      }
+    expect(checked).toBe(2 * ARMAGEDDON_RESULTS.length);
   });
 
   it("every key the tie-break can render exists in the English dictionary", () => {
@@ -316,14 +567,27 @@ describe("the chess three-step tie-break on the pad (spec §5.5, BG-KO-1, BG-KO-
     const recording = (k: string) => (seen.add(k), k);
     const v = tiebreakView();
     for (const tile of buildTiles(v, recording)) seen.add(tile.label);
+    let confirms = 0;
     for (const step of buildSheets(v, recording)[TIEBREAK_TILE_ID]!.steps) {
       seen.add(step.title);
       if (step.kind === "choice") {
         if (step.hintKey) seen.add(step.hintKey);
         for (const o of step.options) seen.add(o.label);
       }
+      if (step.kind === "confirm") {
+        // The read-back sentence resolves its own keys through the `t` the sheet was built with: drive every answer.
+        for (const black of ["home", "away"]) for (const result of ARMAGEDDON_RESULTS) step.summary({ rung: "armageddon", black: `black-${black}`, result: `result-${result}` });
+        confirms++;
+      }
+      // The context block resolves its own keys too (the round, the colour words): drive it for every rung and both Blacks.
+      if (step.kind === "choice" || step.kind === "confirm") {
+        for (const rung of TIEBREAK_RUNGS) for (const black of ["home", "away"]) step.context?.({ rung, black: `black-${black}` });
+      }
     }
-    expect(seen.size).toBeGreaterThan(8);
+    expect(confirms, "the Armageddon branch ends on exactly one confirm step").toBe(1);
+    expect(seen.size).toBeGreaterThan(14);
+    // The design pass's two colour words reach the screen through the context block, so the walk above must have seen them.
+    expect([...seen]).toEqual(expect.arrayContaining(["pad.boardgame.tiebreak.who.white", "pad.boardgame.tiebreak.who.black"]));
     expect([...seen].filter((k) => !(k in (uiEn as Record<string, string>)))).toEqual([]);
   });
 });
@@ -369,7 +633,10 @@ describe("the dock never offers an organiser-only write to anyone else (D-O1; lo
     // for clockAt. The behavioural witness is bracket-finish.spec.ts (a generic bracket shows no Draw on the pad).
     const src = readFileSync(fileURLToPath(new URL("../pad-host.tsx", import.meta.url)), "utf8");
     expect(src).toContain("      stageKind: props.stageKind,\n      canOrganise: props.canOrganise,\n      entrantNames: props.entrantNames,\n");
-    expect(src).toContain("[props.cfg, props.stageKind, props.canOrganise, props.entrantNames, pipeline.state,");
+    // W2c Task 15 (X-SR-7): the view's cfg is the pipeline's — the loaded one, or the rules it reloaded after a
+    // correction — so the board and the fold read one format (rules-version-transport.test.ts drives the reload).
+    expect(src).toContain("const cfg = pipeline.cfg;");
+    expect(src).toContain("[cfg, props.stageKind, props.canOrganise, props.entrantNames, pipeline.state,");
   });
 
   it("D-P1: the organiser keeps Draw in every stage kind while live; its dock holds no double forfeit (W2b D15)", () => {
@@ -426,5 +693,179 @@ describe("the dock never offers an organiser-only write to anyone else (D-O1; lo
     // W2b D15: chess's forfeit / double forfeit left the dock for everyone, so the filter removes nothing from any
     // shipped skin — a chip it removes again is a new organiser-only dock write, and owes its own ruling.
     expect(removed, "no shipped dock carries an organiser-only chip").toBe(0);
+  });
+});
+
+// --- W2c Task 21 design pass (S5, owner sign-off) ----------------------------------------------------------------------
+// The owner's questions, answered as the designer: a stage that plays ONE tie-break game does not ask which (the round is
+// named in the sheet instead); the Armageddon's screens keep the mockup's colour cue where colour is a FACT (who is White,
+// who is Black, what a result is about), not before a tap that has not yet said it; the deciding steps are rows.
+
+describe("the tie-break sheet's design pass (W2c Task 21, S5)", () => {
+  /** The first step a scorer sees on a stage that plays only that rung — from the two branches (D6 / BG-KO-2), not read back from the sheet. */
+  const FIRST_STEP: Record<TiebreakRung, string> = { rapid: "winner", blitz: "winner", armageddon: "black" };
+  const NAMES = { home: "Asha Rao", away: "Priya Menon" } as const;
+  const rungWord = (rung: string) => tEn(`pad.boardgame.tiebreak.rung.${rung}`);
+  const emptyViews = { home: { squad: { entrantId: "H", members: [], subsUsed: 0, exemptUsed: {} } }, away: { squad: { entrantId: "A", members: [], subsUsed: 0, exemptUsed: {} } } };
+  const named = (rungs?: readonly TiebreakRung[]) => buildSheets(stageView(rungs, NAMES), tEn)[TIEBREAK_TILE_ID]!;
+  /** Every step the scorer would see, in order, as the chassis walks it: each answered with the next tap. */
+  const walkTaps = (sheet: GuidedSheetSpec, taps: readonly string[]) => {
+    let st = initialSheetState();
+    const seen: string[] = [];
+    for (const [i, tap] of taps.entries()) {
+      seen.push(currentStep(sheet, st)!.id);
+      const out = answerStep(sheet, st, tap);
+      if (out.done) {
+        expect(i, "the sheet completes on its LAST tap, never earlier").toBe(taps.length - 1);
+        return { seen, event: out.event };
+      }
+      st = out.state;
+    }
+    throw new Error("the sheet did not complete");
+  };
+
+  it("a stage that plays ONE rung never asks which: the sheet opens on that rung's first step and the REAL engine, told the same one-rung list, takes what it builds — every rung the engine declares", () => {
+    let checked = 0;
+    for (const rung of TIEBREAK_RUNGS) {
+      const sheet = named([rung]);
+      expect(sheet.steps.map((s) => s.id), `${rung}: no rung step`).not.toContain("rung");
+      expect(currentStep(sheet, initialSheetState())?.id, `${rung}: opens on its first step`).toBe(FIRST_STEP[rung]);
+      // Only this rung's steps are in the sheet at all: the other branch's are not merely hidden.
+      expect(sheet.steps.map((s) => s.id), rung).toEqual(rung === "armageddon" ? ["black", "result", "confirm"] : ["winner", "score"]);
+      const taps = rung === "armageddon" ? ["black-away", "result-draw", "ok"] : ["away", "none"];
+      const { seen, event } = walkTaps(sheet, taps);
+      expect(seen, `${rung}: the screens the scorer sees`).toEqual(sheet.steps.map((s) => s.id));
+      expect(event.type).toBe(TIEBREAK_TYPE);
+      expect(event.payload, `${rung}: the payload still names its rung`).toMatchObject({ rung });
+      // away entrant: the tapped winner (rapid, blitz) or Black on a drawn Armageddon (BG-KO-2): "A" either way.
+      expect(foldTiebreak(event.payload, [rung]), rung).toMatchObject({ kind: "win", winner: "A", method: `tiebreak_${rung}` });
+      checked++;
+    }
+    expect(checked, "every rung the engine declares").toBe(TIEBREAK_RUNGS.length);
+  });
+
+  it("a stage that plays two or more rungs still asks first (the positive pair), and an empty list opens no sheet at all", () => {
+    let checked = 0;
+    for (const list of [["armageddon", "rapid"], ["rapid", "blitz"], [...TIEBREAK_RUNGS]] as const) {
+      const sheet = named(list);
+      expect(currentStep(sheet, initialSheetState())?.id, JSON.stringify(list)).toBe("rung");
+      checked++;
+    }
+    expect(checked).toBe(3);
+    expect(buildTiles(stageView([]), echo).map((t) => t.id), "no rung to play: no tile, so no sheet to skip").not.toContain(TIEBREAK_TILE_ID);
+  });
+
+  it("Back: from Black it lands on the rung pick (the pick kept, a different pick prunes Black); a one-rung sheet's first screen has NO Back, later screens do — Cancel is the way out", () => {
+    // Multi-rung: rung -> Black -> Back is the rung pick, still answered.
+    const multi = named(["armageddon", "rapid"]);
+    const at = (sheet: GuidedSheetSpec, st: GuidedSheetState) => currentStep(sheet, st)?.id;
+    const adv = (sheet: GuidedSheetSpec, st: GuidedSheetState, tap: string): GuidedSheetState => {
+      const out = answerStep(sheet, st, tap);
+      if (out.done) throw new Error(`completed early on ${tap}`);
+      return out.state;
+    };
+    let m = adv(multi, initialSheetState(), "armageddon");
+    expect(at(multi, m)).toBe("black");
+    m = adv(multi, m, "black-home");
+    m = backStep(multi, m);
+    expect(at(multi, m), "Back from the result is Black").toBe("black");
+    m = backStep(multi, m);
+    expect(at(multi, m), "Back from Black is the rung pick").toBe("rung");
+    expect(m.answers.rung, "the pick is kept").toBe("armageddon");
+    m = adv(multi, m, "rapid");
+    expect(at(multi, m), "a different rung opens ITS first step").toBe("winner");
+    expect(m.answers, "Black belonged to the rung the scorer left: pruned").toEqual({ rung: "rapid" });
+    // One rung: Black IS the first step, so there is nothing before it.
+    const single = named(["armageddon"]);
+    const first = initialSheetState();
+    expect(backStep(single, first), "Back on the first screen is inert").toBe(first);
+    let s = adv(single, first, "black-away");
+    expect(at(single, s)).toBe("result");
+    s = backStep(single, s);
+    expect(at(single, s), "Back from the result is Black").toBe("black");
+    expect(s.answers.black, "…with the answer kept").toBe("black-away");
+    expect(backStep(single, s), "…and Back from Black has nowhere to go").toBe(s);
+    // What the scorer SEES: Back is drawn from the second screen on only.
+    const backShown = (spec: GuidedSheetSpec, tapsBefore: readonly string[]) => {
+      const island = renderIsland(GuidedSheet, { spec, views: emptyViews as never, personNames: {}, t: echo, onComplete: () => {} });
+      for (const id of tapsBefore) {
+        const btn = walk(island.tree()).find((el) => propsOf(el)["data-choice-option-id"] === id)!;
+        (propsOf(btn).onClick as () => void)();
+      }
+      return walk(island.tree()).some((el) => el.type === "button" && textOf(el) === "pad.sheet.back");
+    };
+    expect(backShown(single, []), "one rung: no Back on the first screen").toBe(false);
+    expect(backShown(single, ["black-home"]), "one rung: Back on the second").toBe(true);
+    expect(backShown(multi, []), "several rungs: no Back on the rung pick").toBe(false);
+    expect(backShown(multi, ["armageddon"]), "several rungs: Back on Black").toBe(true);
+  });
+
+  it("the sheet NAMES its round: absent on the rung pick (nothing chosen yet), on every later step — and from the very first screen of a one-rung stage", () => {
+    const multi = named();
+    const rung = multi.steps.find((s) => s.id === "rung")!;
+    expect(rung.kind === "choice" && rung.context, "the rung pick carries no context").toBeUndefined();
+    let checked = 0;
+    for (const r of TIEBREAK_RUNGS) {
+      const shown = multi.steps.filter((s) => s.id !== "rung" && shownFor(s, { rung: r }));
+      expect(shown.length, r).toBeGreaterThan(0);
+      for (const step of shown) {
+        if (step.kind === "person" || step.kind === "number") throw new Error(`${step.id}: unexpected kind`);
+        // The Armageddon's result and read-back sit after Black, so a scorer on them HAS answered it (the guard that refuses to default it is pinned in the test below).
+        const lines = step.context?.({ rung: r, black: "black-home" }) ?? [];
+        expect(lines[0], `${r} ${step.id}: the first line is the round`).toEqual({ text: rungWord(r) });
+        checked++;
+      }
+      // The one-rung stage names it on the first screen.
+      const only = named([r]);
+      const firstStep = currentStep(only, initialSheetState())!;
+      if (firstStep.kind !== "choice") throw new Error("the first step is a choice");
+      expect(firstStep.context?.({}), `${r}: a one-rung sheet names its round from the start`).toEqual([{ text: rungWord(r) }]);
+    }
+    expect(checked, "every shown step of every rung").toBeGreaterThanOrEqual(TIEBREAK_RUNGS.length * 2);
+  });
+
+  it("the Armageddon result and read-back say who is White and who is Black — the OTHER entrant is White — for both Blacks; the Black step and the timed rungs never do", () => {
+    const sheet = named();
+    const ctx = (id: string, answers: Record<string, string>) => {
+      const step = sheet.steps.find((s) => s.id === id)!;
+      if (step.kind !== "choice" && step.kind !== "confirm") throw new Error(`${id}: no context on a ${step.kind} step`);
+      return step.context?.(answers) ?? [];
+    };
+    const who = { white: tEn("pad.boardgame.tiebreak.who.white"), black: tEn("pad.boardgame.tiebreak.who.black") };
+    expect([who.white, who.black], "the colour words are the dictionary's own").toEqual(["White", "Black"]);
+    let checked = 0;
+    for (const black of ["home", "away"] as const) {
+      const white = otherSide(black);
+      const answers = { rung: "armageddon", black: `black-${black}` };
+      for (const id of ["result", "confirm"]) {
+        expect(ctx(id, answers), `${id}, Black = ${black}`).toEqual([
+          { text: "Armageddon" },
+          { label: who.white, text: NAMES[white], disc: "white" },
+          { label: who.black, text: NAMES[black], disc: "black" },
+        ]);
+        checked++;
+      }
+    }
+    expect(checked, "two Blacks × two steps").toBe(4);
+    // The colours are never guessed: a result or read-back whose Black was not answered refuses to name who is White.
+    for (const id of ["result", "confirm"]) expect(() => ctx(id, { rung: "armageddon" }), id).toThrow(/no Black answered/);
+    // Nothing is known on the Black step itself, so it names the round and nothing else; rapid and blitz have no colours.
+    expect(ctx("black", { rung: "armageddon" })).toEqual([{ text: "Armageddon" }]);
+    for (const rung of ["rapid", "blitz"]) for (const id of ["winner", "score"]) expect(ctx(id, { rung, winner: "home" }), `${rung} ${id}`).toEqual([{ text: rungWord(rung) }]);
+  });
+
+  it("the deciding steps are rows and the optional score keeps its pills; a result wears the colour it is about (white, black, a split disc for the draw) and no name option wears one", () => {
+    const sheet = named();
+    const choice = (id: string) => {
+      const step = sheet.steps.find((s) => s.id === id)!;
+      if (step.kind !== "choice") throw new Error(`${id} is not a choice step`);
+      return step;
+    };
+    expect(["rung", "winner", "black", "result"].map((id) => choice(id).layout)).toEqual(["rows", "rows", "rows", "rows"]);
+    expect(choice("score").layout, "short tokens stay pills").toBeUndefined();
+    const discs = choice("result").options.map((o) => o.disc);
+    expect(discs).toEqual(ARMAGEDDON_RESULTS.map((r) => (r === "draw" ? "split" : r)));
+    expect(new Set(discs).size, "three results, three different discs").toBe(ARMAGEDDON_RESULTS.length);
+    for (const id of ["rung", "winner", "black", "score"]) expect(choice(id).options.map((o) => o.disc), `${id}: no disc before a tap has said anything`).toEqual(choice(id).options.map(() => undefined));
   });
 });

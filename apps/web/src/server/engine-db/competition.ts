@@ -9,11 +9,11 @@ import { byeAward, isOneSidedAwardBye } from "@/lib/fixture-bye";
 // DB fixtures.status → engine FixtureStatus (spec 05 §1 vocabulary). ONE
 // mapping, shared with the qualification builder and the bracket rebuild in
 // usecases/stages.ts; the local name is kept so the call sites read as before.
-import { engineFixtureStatus as toEngineStatus } from "@/lib/fixture-engine-status";
 import { log } from "@/server/logger";
 import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "./level-seat";
 import { fixtureBoardRef, isLegacyForfeitWin } from "./fed-seats";
-import { bracketEngineStatus, hasActiveAbandonSql } from "./recorded-abandon";
+import { completionEngineStatus, hasActiveAbandonSql, rowAwaitsSettle } from "./recorded-abandon";
+import { ABANDONED_MATCHES_REASON } from "@/lib/abandoned-matches-refusal";
 import { inTheField } from "@/lib/entrant-field";
 import { EngineError, StageKind, type MatchOutcome, type StageCtx, type StandingsDelta } from "@seazn/engine/core";
 import {
@@ -36,6 +36,7 @@ import {
 import type { AnySportModule } from "@seazn/engine/sport";
 import { resolveModule } from "./registry";
 import { resolveFixtureCfg } from "./fixture-cfg";
+import { forfeitPlayedFacts, playedFor } from "./forfeit-played";
 
 type Tx = postgres.TransactionSql;
 
@@ -111,7 +112,8 @@ function awardByeDelta(
   // `standingsDelta` returns a mutable pair, `applyPointsRule` a readonly
   // `FixtureResult` — so this is a new local, not a reassignment (TS4104).
   const rawPair = sportModule.standingsDelta(bye, cfg, ctx, state);
-  const pair: FixtureResult = pointsRule ? applyPointsRule(bye, rawPair, pointsRule) : rawPair;
+  // W2c X-PT-1: a bye is told apart by its reason (`isBye`), never by `played` — and it has no ledger: nothing played.
+  const pair: FixtureResult = pointsRule ? applyPointsRule(bye, rawPair, pointsRule, false, sportModule.awardScoreKeys) : rawPair;
   const winner = pair[0].entrantId === winnerId ? pair[0] : pair[1];
   if (winner.entrantId !== winnerId) {
     throw new EngineError("CONFIG_INVALID", "award bye standings delta missing winner", {
@@ -226,7 +228,7 @@ function toBracketFixture(
     round: f.round_no,
     isFinal: !thirdPlace,
     // D-G1: a recorded abandon that decided nobody is in play, never the generator's void (recorded-abandon.ts).
-    status: bracketEngineStatus(f),
+    status: completionEngineStatus(stageKind, f),
     ...(bracket !== undefined ? { bracket } : {}),
     ...(thirdPlace ? { thirdPlace: true } : {}),
     ...(f.home_entrant_id !== null ? { home: f.home_entrant_id } : {}),
@@ -276,12 +278,22 @@ interface FixtureRow {
   /** V347 — the resolved cfg this fixture was SCORED under; null before its
    *  first event. See `fixture-cfg.ts`. */
   config_snapshot: unknown;
+  /** W2c (V469) — the match's own format override, resolved last (`fixture-cfg.ts`). */
+  rules_override: unknown;
   /** L3/#414 pass 2 — see parseExtKey: the only surviving record of a bracket
    *  fixture's lane and thirdPlace status. */
   ext_key: string | null;
-  /** W2a D-G1: abandoned with an ACTIVE `core.abandon` (recorded-abandon.ts) — read by the bracket and ladder
-   *  completion branches through `bracketEngineStatus`. */
+  /** W2a D-G1: abandoned with an ACTIVE `core.abandon` (recorded-abandon.ts) — read by every completion branch
+   *  through `completionEngineStatus`. */
   has_active_abandon: boolean;
+  /** X-AB-5: that active abandon is a withdrawal's EXPUNGE (owner ruling 105) — the match left the table, nothing is
+   *  owed on it, so it never holds a completion. */
+  expunged: boolean;
+  /** Rebase ruling D3: that active abandon is the organiser's online No result - already the settle, so it never
+   *  holds a table stage's completion either. */
+  no_result: boolean;
+  /** The match's number within its round - names a held match in the refusal (`completeStageIfReady`). */
+  seq_in_round: number;
   /** W2b D20 — the feed edges, so the bracket read can assert a double walkover seated nobody. */
   winner_to_fixture: string | null;
   winner_to_slot: number | null;
@@ -327,21 +339,36 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
 
   const fixtures = await tx<FixtureRow[]>`
     select f.id, f.status, f.round_no, f.pool_id, f.home_entrant_id, f.away_entrant_id,
-           f.outcome, f.config_snapshot, f.ext_key, m.state,
-           f.winner_to_fixture, f.winner_to_slot, f.loser_to_fixture, f.loser_to_slot,
-           ${hasActiveAbandonSql(tx)} as has_active_abandon
+           f.outcome, f.config_snapshot, f.rules_override, f.ext_key, m.state,
+           f.winner_to_fixture, f.winner_to_slot, f.loser_to_fixture, f.loser_to_slot, f.seq_in_round,
+           ${hasActiveAbandonSql(tx)} as has_active_abandon,
+           ${hasActiveAbandonSql(tx, "f", { expunge: true })} as expunged,
+           ${hasActiveAbandonSql(tx, "f", { noResult: true })} as no_result
     from fixtures f left join match_states m on m.fixture_id = f.id
     where f.stage_id = ${stageId}
     order by f.round_no, f.seq_in_round
   `;
   // NOT snapshotted, and that is not an oversight. `stage.config.points`
   // (Jul3/05 §2) is a competition-level re-derivation applied on top of the
-  // sport ledger, not an input to any fold, so it is not part of the resolved
-  // cfg `stageScopedCfg` produces and no fixture froze it. It is safe today
-  // because a stage's config is locked the moment fixtures exist
-  // (`usecases/stages.ts` FORMAT_LOCKED) except for `qualified`,
-  // `carry_deltas`, `rank_overrides` and `ladder_order` — `points` is not on
-  // that list. Relax that lock and this line becomes the same defect again.
+  // sport ledger, so it is not part of the resolved cfg `stageScopedCfg`
+  // produces and no fixture froze it. Its walkover award IS a fold input since
+  // W2c Task 16b: `stageForfeitAward` reads `forfeit.awardScore` off the stage
+  // and every server-side read and write fold offers it
+  // (`FoldOptions.forfeitAward`), except the append-event `before` folds, the
+  // event-import dry run and the pad's client fold, for the sports whose table
+  // it reaches. That is safe for the reason below, not because the rule stays
+  // out of the fold: the stage lock means no fixture of the stage holds a
+  // ledger when the award can still change, so no two folds that offer it ever
+  // read two different awards of one ledger. Since W2c Task 13 the rule
+  // IS editable after fixtures exist — `PUT /stages/{id}/rules`' points arm
+  // — but only until the stage STARTS: the first frozen config snapshot or
+  // score event in that stage locks it (STAGE_FORMAT_LOCKED, the monotonic
+  // `lockedStageIdsAmong` pair, never `fixtures.status`). Until then no result
+  // in the stage exists to have been ranked under the old rule, and a save that
+  // moves the rule re-folds a table already cached for the stage (a Swiss bye,
+  // an event-less walkover — `putStageRules` calls `recomputeStandings`). Let a
+  // points save through after the stage starts, or drop that re-fold, and
+  // this line becomes the same defect again: a table ranked under two rules.
   //
   // Per-stage match rules (design 2026-09-17 §T1) widened what the resolved
   // cfg can contain: `stageScopedCfg` now also overlays `stage.config.rules`
@@ -349,18 +376,26 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
   // Two things keep the paragraph above true. This line reads the TOP-LEVEL
   // `stage.config.points`, which the overlay still never touches; and a
   // `rules.points` — which the overlay WOULD copy through — is barred at the
-  // only write path by the per-sport allowlist and the sets-sports-only gate
-  // (design D2/D2a), with `createStages`/`replaceStages` refusing a `rules`
-  // key outright. `rules` is also a fifth key editable after fixtures exist,
+  // write paths by the per-sport allowlist and the sets-sports-only gate
+  // (design D2/D2a): the stage PUT and, since W2c Task 12, `createStages` /
+  // `replaceStages` / template instantiation, which take `config.rules` on the
+  // PUT's own terms (`validatedStageConfig`). `rules` is also a fifth key editable after fixtures exist,
   // under its own per-stage lock (D1), so "locked the moment fixtures exist"
   // now describes the format keys rather than the whole column. Let `points`
   // into `rules`, or drop D1's lock, and this line is the same defect again.
   const pointsRule = stage.config?.points ? PointsRule.parse(stage.config.points) : null;
+  // W2c Task 9 (X-PT-1): under a rule, each forfeit-shaped result's "was anything played" fact, from its own ledger —
+  // one read for the stage, and none without a rule (nothing reads it then) or without a forfeit.
+  const playedFacts = pointsRule
+    ? await forfeitPlayedFacts(tx, fixtures.filter((f) => f.outcome && f.state && f.home_entrant_id && f.away_entrant_id), sportModule)
+    : new Map<string, boolean>();
 
   const tableFixtures: TableFixture[] = fixtures.map((f) => {
     const base: TableFixture = {
       id: f.id,
-      status: toEngineStatus(f.status),
+      // X-AB-5: a TABLE stage's recorded abandon that decided nobody is held for the settle, not the generator's void
+      // (a withdrawal's expunge stays void: it left the table). The same predicate as a bracket's (D-G1).
+      status: completionEngineStatus(kind, f),
       ...(f.pool_id ? { poolId: f.pool_id } : {}),
       roundNo: f.round_no,
     };
@@ -380,7 +415,7 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
       const pair = sportModule.standingsDelta(
         f.outcome as MatchOutcome,
         resolveFixtureCfg(
-          f.config_snapshot,
+          f,
           division.config,
           { kind: stage.kind, config: stage.config as Record<string, unknown> | null },
           sportModule,
@@ -389,9 +424,12 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
         f.state,
       );
       // Custom points rule (Jul3/05 §2): re-derive competition points from
-      // stage config; the sport ledger is untouched.
+      // stage config. W2c X-PT-1: a forfeit with nothing played pays the
+      // rule's forfeit row, and its awarded score replaces the credit — on
+      // the generic keys and on the sport's own score keys (gap a,
+      // `awardScoreKeys`: football's gf/ga/gd); the rest of the ledger stands.
       base.result = pointsRule
-        ? applyPointsRule(f.outcome as MatchOutcome, pair, pointsRule)
+        ? applyPointsRule(f.outcome as MatchOutcome, pair, pointsRule, playedFor(f, playedFacts), sportModule.awardScoreKeys)
         : pair;
     } else if (isOneSidedAwardBye(f)) {
       // Swiss odd-field sit-out (and KO seeded bye): forfeited award with one
@@ -403,7 +441,7 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
         sportModule,
         f.outcome as MatchOutcome,
         resolveFixtureCfg(
-          f.config_snapshot,
+          f,
           division.config,
           { kind: stage.kind, config: stage.config as Record<string, unknown> | null },
           sportModule,
@@ -643,6 +681,26 @@ export async function completeStageIfReady(
     if (isTable) {
       const tableStage = toTableStage(inputs);
       if (!isTableStageComplete(tableStage, inputs.tableFixtures)) {
+        // X-AB-5 (N2): a held match reads in play above, so it is what keeps the stage open. When it is the ONLY thing
+        // left - every other match is settled - say so BY NAME, instead of the soft "not ready" an organiser reads as
+        // "play something". Counterfactual: the same stage with the held matches counted settled would complete.
+        const held = inputs.fixtures.filter((f) => rowAwaitsSettle(inputs.kind, f));
+        if (held.length > 0) {
+          const heldIds = new Set(held.map((f) => f.id));
+          const onlyHeld = isTableStageComplete(
+            tableStage,
+            inputs.tableFixtures.map((f) => (heldIds.has(f.id) ? { ...f, status: "void" as const } : f)),
+          );
+          if (onlyHeld) {
+            const abandoned = held.map((f) => ({ fixtureId: f.id, round: f.round_no, board: f.seq_in_round }));
+            const named = abandoned.map((m) => `round ${m.round} match ${m.board}`).join(", ");
+            throw new EngineError(
+              "STAGE_NOT_READY",
+              `stage has ${abandoned.length === 1 ? "a match" : "matches"} abandoned without a result - settle ${abandoned.length === 1 ? "it" : "them"} first: ${named}`,
+              { stageId, reason: ABANDONED_MATCHES_REASON, abandoned },
+            );
+          }
+        }
         return { completed: false, events: [] };
       }
       const completed = completeTableStage(tableStage, inputs.tableFixtures);
@@ -652,7 +710,7 @@ export async function completeStageIfReady(
       }
     } else if (inputs.kind === "ladder") {
       // Jul3/08 §6 — no table/bracket shape of its own: complete once every
-      // challenge fixture is settled (SETTLED per toEngineStatus — decided,
+      // challenge fixture is settled (SETTLED per the engine status — decided,
       // walkover or void), ranked by the ladder position players fought their
       // way into (usecases/scoring.ts swaps winner/loser on each decided
       // challenge). Zero fixtures ever issued is NOT complete — same as an
@@ -661,7 +719,7 @@ export async function completeStageIfReady(
       // issueChallenge.
       const open = inputs.fixtures.some((f) => {
         // D-G1: an abandoned challenge nobody settled is still open (recorded-abandon.ts), not the void it used to read as.
-        const status = bracketEngineStatus(f);
+        const status = completionEngineStatus(inputs.kind, f);
         return status === "scheduled" || status === "in_play";
       });
       if (inputs.fixtures.length === 0 || open) {
@@ -710,7 +768,7 @@ export async function completeStageIfReady(
       // Right for a departed entrant whose line the generator voided (F14, walkoverDepartedQualifiers); wrong for
       // anyone still in the field — an unbeaten field entrant who won no final means the deciding game decided
       // nobody, and the loop G review measured exactly that: an abandoned final ranked its two finalists 3rd and
-      // 4th behind the semi-final losers. A recorded abandon now holds the stage open (bracketEngineStatus), so
+      // 4th behind the semi-final losers. A recorded abandon now holds the stage open (completionEngineStatus), so
       // that path no longer reaches here. The one PRODUCT path W2a left (loop G re-review, probe P2; ruling D-G3) —
       // a stepladder qualifier departed before the draw, her final voided with her seated in it and the climber
       // seated into the void row — is gone too: W2b's generator stamps her seat dead instead (spec §5.4 corner 3,

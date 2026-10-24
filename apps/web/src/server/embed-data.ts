@@ -126,11 +126,16 @@ export async function embedDivisionData(divisionId: string): Promise<EmbedResolu
              -- (No backticks in here: this is inside a tagged template.)
              -- W2b loop-F I-2: whether a withdrawal EXPUNGED the match (D5), on the same fenced probe — the
              -- standings widget's qualification line reads it, as getPublicDivision's does.
-             e.ext_key, e.winner_to_fixture, e.winner_to_slot, e.loser_to_fixture, e.loser_to_slot, e.expunged
+             e.ext_key, e.winner_to_fixture, e.winner_to_slot, e.loser_to_fixture, e.loser_to_slot, e.expunged,
+             -- W2c X-AB-5: whether the match has an ACTIVE abandon (a held match is still open to the qualification line).
+             -- Rebase ruling D3: and whether that abandon is the organiser's online No result (settled, not held).
+             e.has_active_abandon, e.no_result
       from public_fixtures_v v
       left join lateral (
         select x.ext_key, x.winner_to_fixture, x.winner_to_slot, x.loser_to_fixture, x.loser_to_slot,
-               ${hasActiveAbandonSql(sql, "x", { expunge: true })} as expunged
+               ${hasActiveAbandonSql(sql, "x", { expunge: true })} as expunged,
+               ${hasActiveAbandonSql(sql, "x")} as has_active_abandon,
+               ${hasActiveAbandonSql(sql, "x", { noResult: true })} as no_result
         from fixtures x where x.id = v.id
         offset 0
       ) e on true

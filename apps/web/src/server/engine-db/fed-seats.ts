@@ -345,6 +345,23 @@ export async function lockStageSeats(tx: Tx, stageId: string): Promise<void> {
   await tx`select pg_advisory_xact_lock(hashtext('stage-seats'), hashtext(${stageId}))`;
 }
 
+/**
+ * W2c Task 15 fix round 1 (review M-1) — the format freeze's lock, SHARED (`append-event.ts` takes it so for a first
+ * event, `onDecided` for a decision that feeds a seat): taken by a bracket writer that rewrites seats a format save can
+ * reshape — a withdrawal's no-event seat write (`writeDepartedSeat`, whose cascade may award a walkover scored under the
+ * division's live config) and a take-back that releases or revives what it fed (below; a reset walkover's take-back
+ * ledger is refolded, `clearAwardedMatchState`). A format save holding it EXCLUSIVE (`patchDivision`, `putStageRules`)
+ * then commits first and these read what it committed, or waits for them and its refusal and award reads see them.
+ *
+ * LOCK ORDER: after every `fixture:` lock the writer takes (global order `division:` → stage seats → `fixture:` →
+ * `division-config:` → rows). An exclusive holder takes no stage-seat or fixture lock after its own, and a shared holder
+ * takes no division lock after this one, so no cycle runs through it; two shared holders never wait on each other.
+ */
+export async function lockDivisionConfigShared(tx: Tx, stageId: string): Promise<void> {
+  const [s] = await tx<{ division_id: string }[]>`select division_id from stages where id = ${stageId}`;
+  if (s) await tx`select pg_advisory_xact_lock_shared(hashtext(${"division-config:" + s.division_id}))`;
+}
+
 /** Loop R2 N-1 — the void's half of the one lock order: a `core.void` of a line whose STORED outcome is a double
  *  walkover feeding a next match may revive what it killed (`reviveDeadSeats`), so it takes the stage lock before the
  *  append's own fixture lock. Read without a lock: a fixture never changes stage, and an outcome that turns into a
@@ -508,6 +525,12 @@ async function planRevive(tx: Tx, src: Node, revives: Revive[], plan: Step[], lo
   }
 }
 
+/** THE one fixture-lock order across a bracket (review M1, below): ascending (round_no, id). Every writer that locks
+ *  more than one fixture of a stage takes them in this order — the fed-seat release and revive here, and the batch
+ *  override writer (`fixture-rules.ts`, W2c Task 14) — so no two of them can each hold a lock the other asks for. */
+export const bracketOrder = (a: { round_no: number; id: string }, b: { round_no: number; id: string }): number =>
+  a.round_no - b.round_no || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+
 /**
  * Give back the seats `fixtureId`'s stored decision (`before`) had filled and
  * its new fold (`after`) no longer fills, or refuse.
@@ -557,8 +580,10 @@ export async function releaseFedSeats(
   // started with. That is what rules the cycle out.
   const reach = new Map<string, Node>();
   await reachable(tx, src, moved, reach);
-  const order = [...reach.values()].sort((a, b) => a.round_no - b.round_no || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const order = [...reach.values()].sort(bracketOrder);
   for (const t of order) await lockFixture(tx, t.id);
+  // Fix round 1 (M-1): a take-back that reaches a seat it fed waits for a format save in flight, after every fixture lock.
+  if (order.length > 0) await lockDivisionConfigShared(tx, src.stage_id);
 
   const plan: Step[] = [];
   const revives: Revive[] = [];
@@ -622,8 +647,10 @@ async function reviveDeadSeats(tx: Tx, fixtureId: string): Promise<string[]> {
   }
   const reach = new Map<string, Node>();
   await reachableRevive(tx, src, reach);
-  const order = [...reach.values()].sort((a, b) => a.round_no - b.round_no || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const order = [...reach.values()].sort(bracketOrder);
   for (const t of order) await lockFixture(tx, t.id);
+  // Fix round 1 (M-1): as the release above — a revive waits for a format save in flight, after every fixture lock.
+  if (order.length > 0) await lockDivisionConfigShared(tx, src.stage_id);
   const revives: Revive[] = [];
   const plan: Step[] = [];
   await planRevive(tx, src, revives, plan, new Set(reach.keys()));

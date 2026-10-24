@@ -46,7 +46,8 @@ function renderSettings(
       }}
       orgId="org1"
       variants={[{ key: "standard", name: "Standard" }]}
-      locked={false}
+      structureLocked={false}
+      lockedFields={[]}
       stages={[]}
       canEdit={overrides.canEdit ?? true}
       divisionPathPrefix="/o/org/c/comp/d/"

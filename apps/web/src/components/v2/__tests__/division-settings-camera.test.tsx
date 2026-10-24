@@ -80,7 +80,8 @@ function renderChess(own: CameraPolicy | null, inherited: CameraPolicy, dict = E
       }}
       orgId="org1"
       variants={[{ key: "classical", name: "Classical" }]}
-      locked={false}
+      structureLocked={false}
+      lockedFields={[]}
       stages={[]}
       canEdit
       divisionPathPrefix="/o/org/c/comp/d/"

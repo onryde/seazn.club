@@ -440,11 +440,12 @@ async function foldDivision(
       id: string;
       stage_id: string;
       config_snapshot: unknown;
+      rules_override: unknown;
       home_entrant_id: string | null;
       away_entrant_id: string | null;
     }[]
   >`
-    select id, stage_id, config_snapshot, home_entrant_id, away_entrant_id
+    select id, stage_id, config_snapshot, rules_override, home_entrant_id, away_entrant_id
     from fixtures where division_id = ${divisionId}`;
   const stageIds = [...new Set(fixtureInfoRows.map((r) => r.stage_id))];
   // W2a: the kind beside the config — a bracket stage adds the sport's deciders (fixture-cfg.ts).
@@ -462,7 +463,7 @@ async function foldDivision(
   const perFixtureResults = [...byFixture.entries()].map(([fixtureId, ledger]) => {
     const info = fixtureInfoById.get(fixtureId);
     const cfg = resolveFixtureCfg(
-      info?.config_snapshot,
+      info ?? { config_snapshot: undefined, rules_override: undefined },
       division.config,
       info ? stageById.get(info.stage_id) : undefined,
       sportModule,

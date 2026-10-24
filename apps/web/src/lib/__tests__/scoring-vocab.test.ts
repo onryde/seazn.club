@@ -430,7 +430,7 @@ describe("scoring-vocab covers every PadSpec label key the engine declares (#427
     const division = bg.configSchema.parse({});
     const divisionKeys = new Set(labelsOf(division).map((l) => l.key));
     const bracketOnly = labelsOf({ ...(division as object), ...bg.bracketDeciders(division as never) }).filter((l) => !divisionKeys.has(l.key));
-    expect(bracketOnly.map((l) => l.key).sort()).toEqual(["pad.boardgame.action.tiebreak", "pad.boardgame.panel.tiebreak"]);
+    expect(bracketOnly.map((l) => l.key).sort()).toEqual(["pad.boardgame.action.armageddon", "pad.boardgame.action.tiebreak", "pad.boardgame.panel.tiebreak"]);
     let checked = 0;
     for (const { key, label } of bracketOnly) {
       for (const [locale, dict] of Object.entries(LOCALES)) {
@@ -832,7 +832,8 @@ describe("scoring-vocab covers what the engine declares", () => {
       // S4 (#428) — `offence` joined this list: FootballPenalty.offence, the
       // Law 12 offence that conceded the kick.
       // W2a — `rung` joined it: BoardgameTiebreak.rung (BG-KO-1).
-      ["color", "elected", "kind", "level", "method", "offence", "outcome", "phase", "reason", "receiverSide", "rung"],
+      // W2c — `result` joined it: BoardgameArmageddon.result (BG-KO-2).
+      ["color", "elected", "kind", "level", "method", "offence", "outcome", "phase", "reason", "receiverSide", "result", "rung"],
     );
     // W4a's own additions, one per sport that grew an enum.
     expect([...(enums.get("method") ?? [])]).toEqual(

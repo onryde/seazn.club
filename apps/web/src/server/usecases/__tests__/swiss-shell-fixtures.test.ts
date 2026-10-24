@@ -609,10 +609,9 @@ describe.runIf(HAS_DB)("swiss rounds are declared at create time", () => {
   });
 
   // `replaceStages` is what the Format tab's Apply calls (division-settings.tsx
-  // PUTs /stages). It deletes the whole graph and then delegates to
-  // `createStages`, so a refusal raised only inside that delegate would land
-  // AFTER the delete and leave the division stage-less — the same reason
-  // `assertNoRulesKey` is called twice. Pin that the stages survive.
+  // PUTs /stages). The round-count guard is pure, so it answers before any read
+  // or write; a refusal raised later, inside the one transaction that deletes and
+  // recreates (R-T13-3), rolls the delete back. Pin that the stages survive.
   it("replaceStages refuses BEFORE deleting the existing graph", async () => {
     const { auth } = await seedOrg();
     const { divisionId, stageId } = await seedSwissStage(auth, { rounds: 3 });

@@ -90,10 +90,11 @@ export interface PhaseFixture {
    *  rounds are null on both sides by CONSTRUCTION and are filled by the
    *  round before them, never by a draw. */
   awaitsSeedDraw: boolean;
-  /** W2a (addendum 9) — a recorded abandon in a BRACKET stage that decided nobody, so it is owed the organiser's
-   *  settle. Stored `abandoned`, exactly like the generator's void; only the ledger tells them apart, so the caller
-   *  computes this server-side from engine-db/recorded-abandon.ts (`abandonAwaitsSettle`, the one source) and this
-   *  pure module never re-derives it. A table stage's abandoned match is a void and never sets it. */
+  /** W2a (addendum 9), widened by W2c X-AB-5 — a recorded abandon that decided nobody, so it is owed the organiser's
+   *  settle: a bracket's, or a TABLE stage's (a Swiss board holds the next round). Stored `abandoned`, exactly like
+   *  the generator's void; only the ledger tells them apart, so the caller computes this server-side from
+   *  engine-db/recorded-abandon.ts (`rowAwaitsSettle`, the engine's stage-aware `settleOffered`: the one source) and
+   *  this pure module never re-derives it. The generator's void and a withdrawal's expunge never set it. */
   awaitsSettle: boolean;
   /** T16 fix round 1, R4 (D12) — an ONLINE board whose (stage, round) nobody has opened: nobody is invited and nobody
    *  can take a seat, so its slot passing owes no result. The caller reads it (`roundOpensOfDivisions`, the one

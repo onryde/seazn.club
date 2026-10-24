@@ -4,13 +4,14 @@
 // real module on the contract — proves PROMPT-03.
 import { z } from "zod";
 import { EngineError } from "../../core/errors.ts";
-import { foldMatchWithStoppage, forfeitOf, outcomeOf, type CoreEv, type EventEnvelope } from "../../core/events.ts";
+import { foldMatchWithStoppage, forfeitOf, outcomeOf, type CoreEv, type EventEnvelope, type FoldContext } from "../../core/events.ts";
 import type { Rng } from "../../core/rng.ts";
 import {
   DRAW_KINDS,
   EntrantId,
   type LineupPair,
   type AwardReason,
+  type ForfeitAward,
   type ForfeitBy,
   type ForfeitCredit,
   type ForfeitPhase,
@@ -30,6 +31,7 @@ import type {
   PadSpec,
   SportModule,
 } from "../../sport/module.ts";
+import { SHARE_NEEDS_DRAWS } from "../../sport/abandon-share.ts";
 import { personsForEntrant, resultInStats, type PlayerStatRow, type PlayerStatsFoldCtx } from "../../stats/stats.ts";
 
 // spec 04 §8 Cfg
@@ -49,6 +51,14 @@ export const GenericCfg = z.object({
   // v1 stepladder progress-score carry; stored for the PROMPT-15 cutover,
   // no scoring effect inside the module.
   progressScore: z.boolean().default(false),
+  // W2c Q10 (GN-AB-2): what an abandoned match counts as, per stage. Absent = a replay (GN-AB-1) - optional with NO
+  // default, so no recorded config or frozen state gains a key.
+  abandonPolicy: z.enum(["replay", "share"]).optional(),
+}).superRefine((cfg, ctx) => {
+  // Owner P-5: sharing the points is a drawn result, so it needs draws to be allowed.
+  if (cfg.abandonPolicy === "share" && !cfg.allowDraws) {
+    ctx.addIssue({ code: "custom", path: ["abandonPolicy"], message: SHARE_NEEDS_DRAWS });
+  }
 });
 export type GenericCfg = z.infer<typeof GenericCfg>;
 
@@ -94,6 +104,13 @@ export interface GenericState {
   // W4 — the live tally. Absent until a generic.score event lands, so a
   // result-only stream folds to exactly the state it always did.
   running?: { home: number; away: number };
+  /**
+   * W2c Task 16b (X-WO-1 part B; Task 9 P-3 "A") - the stage PointsRule's award for the forfeit that decided this match,
+   * winner first. Present ONLY when the fold was offered one and the forfeit had nothing played
+   * (`FoldContext.forfeitAward`), so every other state serialises exactly as before. `genericForfeitCredit` reads it,
+   * and a decided walkover then shows the rule's score instead of the "W/O" marker - the table credits that score.
+   */
+  forfeitAward?: ForfeitAward;
 }
 
 type Side = "home" | "away";
@@ -218,7 +235,20 @@ function applyScore(state: GenericState, payload: GenericScore): GenericState {
  *  with the result's own chip ("ret." / "DQ") naming how — the "W/O" every award used to read misnamed both. */
 const AWARD_WINNER_MARK: Record<AwardReason, "W/O" | "W"> = { walkover: "W/O", withdrew: "W/O", bye: "W/O", retired: "W", disqualified: "W" };
 
+/** W2c Task 16b - a decided forfeit that holds a stage rule's award reads the credited figure (the table's), the one
+ *  case where a generic walkover has a score of its own to show. Null where there is none. */
+function awardedLine(state: GenericState, side: Side): string | null {
+  const outcome = state.outcome;
+  if (state.forfeitAward === undefined || outcome?.kind !== "award") return null;
+  const reason = awardReasonOf(outcome);
+  if (reason === "bye") return null;
+  const credit = genericForfeitCredit(state.cfg, state, reason, awardOffenderSide(outcome, sideOf(state, outcome.winner), (id) => sideOf(state, id)));
+  return String(credit.perSide[side === "home" ? 0 : 1].for);
+}
+
 function sideLine(state: GenericState, side: Side): string {
+  const awarded = awardedLine(state, side);
+  if (awarded !== null) return awarded;
   if (state.score && !creditReplacesCard(state)) return String(state.score[side]);
   const outcome = state.outcome;
   // A live tally renders while the fixture is undecided; a decided fixture
@@ -268,7 +298,12 @@ function genericForfeitCredit(_cfg: GenericCfg, state: GenericState, reason: Awa
   if (reason === "bye") return { perSide: played, excluded: [] };
   const recorded = reason === "walkover" ? null : (state.score ?? state.running ?? null);
   const winner = opponent(by);
-  const credited = goalCredit(GENERIC_WALKOVER_SCORE, { winner: recorded?.[winner] ?? 0, offender: recorded?.[by] ?? 0 });
+  // W2c Task 16b: a stage rule's award, held in state for a forfeit with nothing played (P-3 "A"), is the credit.
+  const award = state.forfeitAward;
+  const credited =
+    award === undefined
+      ? goalCredit(GENERIC_WALKOVER_SCORE, { winner: recorded?.[winner] ?? 0, offender: recorded?.[by] ?? 0 })
+      : { winner: award[0], offender: award[1] };
   const record = (forScore: number, against: number) => ({ for: forScore, against, diff: forScore - against });
   return { perSide: creditFor(by, record(credited.winner, credited.offender), record(credited.offender, credited.winner)), excluded: [] };
 }
@@ -582,6 +617,15 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
       progressScore: false,
     },
   },
+  // W2c (spec §4.1 Q5) — no per-match format: how a result is recorded and whether a draw stands are set per stage.
+  ruleKeys: {
+    resultMode: { scope: "stage" },
+    allowDraws: { scope: "stage" },
+    points: { scope: "points" },
+    // W2c Q10 - sharing the points on an abandon is a table stage's choice: a bracket match must have a winner.
+    abandonPolicy: { scope: "stage", appliesTo: { stageKinds: [...DRAW_KINDS] } },
+  },
+  abandonOptions: ["replay", "share"],
 
   init(cfg, lineups: LineupPair): GenericState {
     return {
@@ -593,7 +637,7 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
     };
   },
 
-  apply(state, ev: EventEnvelope<GenericEv | CoreEv>): GenericState {
+  apply(state, ev: EventEnvelope<GenericEv | CoreEv>, ctx?: FoldContext): GenericState {
     switch (ev.type) {
       case "core.start": {
         if (state.phase !== "pre") throw new EngineError("WRONG_PHASE", "already started");
@@ -626,15 +670,23 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
         if (by === "both") return { ...state, phase: "done", outcome: { kind: "double_walkover" } };
         const loserSide = sideOf(state, by);
         const winner = state.entrants[opponent(loserSide)];
-        return { ...state, phase: "done", outcome: { kind: "award", winner, loser: state.entrants[loserSide], reason } };
+        return {
+          ...state,
+          phase: "done",
+          outcome: { kind: "award", winner, loser: state.entrants[loserSide], reason },
+          ...(ctx?.forfeitAward === undefined ? {} : { forfeitAward: [...ctx.forfeitAward] as ForfeitAward }),
+        };
       }
       case "core.abandon": {
         if (state.phase !== "pre" && state.phase !== "live") {
           throw new EngineError("WRONG_PHASE", "match already over");
         }
-        // W2b GN-AB-1 (plan D16): a replay — no outcome, so nobody is credited shared points (opt-in sharing is W2c).
-        // Before W2b this was a `no_result` with draw points each.
-        return { ...state, phase: "abandoned" };
+        // W2b GN-AB-1 (plan D16): a replay - no outcome, so nobody is credited shared points. Before W2b this was a
+        // `no_result` with draw points each.
+        if (state.cfg.abandonPolicy !== "share") return { ...state, phase: "abandoned" };
+        // W2c GN-AB-2: the stage opted in to sharing - a draw (P-5 made `allowDraws` a precondition of the cfg), and the
+        // running tally as it stood is the match's score, not rewritten to level.
+        return { ...state, phase: "done", score: state.running ?? state.score, outcome: { kind: "draw" } };
       }
       case "core.finalize": {
         if (state.phase !== "done") throw new EngineError("WRONG_PHASE", "not decided");
@@ -731,6 +783,8 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
     { key: "against", label: "Against", direction: "asc" },
     { key: "diff", label: "Difference", direction: "desc" },
   ],
+  // W2c X-PT-1 (gap a): generic's own ledger IS the generic for / against / diff.
+  awardScoreKeys: { for: "for", against: "against", diff: "diff" },
   defaultTiebreakers: ["points", "diff", "for", "h2h_points", "lots"],
 
   // X-DR-1 (ruling 78): an allow-list — draws only where nobody must advance,
@@ -739,8 +793,11 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
     return cfg.allowDraws && DRAW_KINDS.has(stage);
   },
 
-  // W2a: none (spec §5.2)
-  bracketDeciders: () => ({}),
+  // W2a: none (spec §5.2). W2c I3 (ruling): sharing the points is a table-stage policy (its rule key applies in
+  // DRAW_KINDS only) - a bracket cannot end level, so an abandon there follows W2a (held, then settled) whatever the
+  // division's policy says: the overlay replays instead of sharing. Only where a share is set, so every other bracket
+  // fixture's cfg - and the snapshot frozen from it - stays exactly what it was.
+  bracketDeciders: (cfg) => (cfg.abandonPolicy === "share" ? { abandonPolicy: "replay" as const } : {}),
 
   // §9.3 — decisive total w+l; shared total 2d (draw/tie/no_result — abandon
   // can produce no_result even when allowDraws is false).

@@ -32,6 +32,7 @@ import { StreamSessionProvider, useSharedPhoneSession } from "@/components/v2/st
 import { nextOpenPanel, streamButtonState, type OpenPanel } from "@/lib/fixture-stream-mount";
 import { officialLabelKey } from "@/lib/official-label";
 import { PhoneDisclosure } from "@/components/v2/phone-disclosure";
+import { MatchRulesBlock, type MatchRulesBlockProps } from "@/components/v2/match-rules-block";
 import { PadSuspensionBanner } from "@/components/discipline/pad-suspension-banner";
 import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { scoringErrorText, decidedOutcomeText, shootoutScoreFromDetail, tiebreakScoreFromDetail } from "@/lib/scoring-vocab";
@@ -72,7 +73,7 @@ import { ActivityPanel, type ActivityDetailResolver, type ActivityEvent } from "
 import { resolvePad } from "@/components/v2/scorepad/v3/registry";
 import { cricketHasNoInnings } from "@/components/v2/scorepad/v3/skins/cricket";
 import { genericHasNoResult } from "@/components/v2/scorepad/v3/skins/generic";
-import { HeldNote, NeedsDecisionBlock, finalizeVisible, heldCause, needsDecision, type SettleResult } from "@/components/v2/needs-decision";
+import { HeldNote, NeedsDecisionBlock, finalizeVisible, heldCause, inTableStage, needsDecision, type SettleResult } from "@/components/v2/needs-decision";
 import { ForfeitDialog, forfeitBaseState, forfeitDialogModel, forfeitPlayRecorded, type ForfeitDialogModel, type ForfeitResult } from "@/components/v2/forfeit-dialog";
 import { lineupPairFrom } from "@/components/v2/scorepad/registry";
 import type { AnySportModule } from "@seazn/engine/sport";
@@ -335,6 +336,10 @@ interface Props {
      *  The forfeit dialog then shows the guidance instead of "Neither". Absent reads false: "Neither" is offered and
      *  the server's own refusal still stands. */
     no_next_match?: boolean;
+    /** W2c Task 16b (X-WO-1 B): the walkover score the fixture's stage points rule awards (winner first), read by the page
+     *  server-side (`stageForfeitAward`) - present only where the award reaches this sport's table. The forfeit dialog's
+     *  preview says it for a forfeit with nothing played. Absent: the sport's own credit. */
+    forfeit_award?: readonly [number, number];
   };
   sport: SportInfo;
   home: SideInfo | null;
@@ -396,6 +401,9 @@ interface Props {
   stream?: FixtureStreamMount;
   /** `?stream=open` on the URL: open the stream panel on first render (checkout return, run-sheet chip). */
   streamReturn?: boolean;
+  /** W2c Task 19 (S2) - the match rules block's facts (`loadFixtureMatchRules`, minus its function-valued `fields`), decided
+   *  by the page: organisers only. Absent => no block. */
+  matchRules?: MatchRulesBlockProps;
   viewerPlan: ViewerPlan;
 }
 
@@ -540,6 +548,7 @@ export function FixtureConsole({
   deviceHandover = false,
   stream,
   streamReturn = false,
+  matchRules,
   viewerPlan,
 }: Props) {
   const msg = useMsg();
@@ -883,9 +892,10 @@ export function FixtureConsole({
   // row may still be voided, and undoing a mistaken abandon must stay possible.
   // Over, but reversible.
   const decided = live.outcome !== null || live.status === "abandoned";
-  // W2a Task 11 (spec §5.5, ruling C12) — HELD: a bracket fixture the kernel's own settle precondition says is owed
-  // the organiser's settle (a level result, an active abandon that decided nobody, a chess game whose tie-break is
-  // pending). The module is resolved defensively, the way `resolvePadSpecForMount` does: an unresolvable pin falls
+  // W2a Task 11 (spec §5.5, ruling C12) — HELD: a fixture the engine's `settleOffered` says is owed the organiser's
+  // settle: in a bracket stage the kernel's own precondition (a level result, an active abandon that decided nobody, a
+  // chess game whose tie-break is pending); in a TABLE stage (W2c X-AB-5) an active abandon that decided nobody - the
+  // server's settle guard reads the same function, so this never offers a settle it would refuse. The module is resolved defensively, the way `resolvePadSpecForMount` does: an unresolvable pin falls
   // back to "no pending-decider hook", which can only HIDE the block in phase tiebreak, never show it wrongly.
   // W2b Task 11: the same resolution feeds the forfeit dialog (its phase guard, credit and metric order); null there
   // offers no Forfeit at all rather than a dialog with nothing to choose.
@@ -901,6 +911,7 @@ export function FixtureConsole({
   // scheduled fixture's null read as the module's init), the cfg the pad folds against, and the page's D19 reading.
   const forfeitCfg = scorePadV2?.resolvedConfig ?? sport.config;
   const noNextMatch = fixture.no_next_match === true;
+  const forfeitAward = fixture.forfeit_award;
   // Ruling 112: a walkover stays on offer after the Start until something is played — the engine's own reading of the
   // full ledger this console holds (`listEvents` since 0, re-read on every resync beside the state), for this
   // fixture's module (ruling 118: chess's Start is play). No module, no dialog (below), so nothing to read.
@@ -909,12 +920,12 @@ export function FixtureConsole({
     if (sportModule === null || home === null || away === null) return null;
     try {
       const state = forfeitBaseState(sportModule, forfeitCfg, live.state, lineupPairFrom(home, away));
-      return forfeitDialogModel(sportModule, forfeitCfg, state, { noNextMatch, playRecorded });
+      return forfeitDialogModel(sportModule, forfeitCfg, state, { noNextMatch, playRecorded, ...(forfeitAward === undefined ? {} : { forfeitAward }) });
     } catch {
       // A state the module cannot read here is not a dialog to guess at; the console stays up without the Forfeit.
       return null;
     }
-  }, [sportModule, forfeitCfg, live.state, home, away, noNextMatch, playRecorded]);
+  }, [sportModule, forfeitCfg, live.state, home, away, noNextMatch, playRecorded, forfeitAward]);
   // The match-actions band's two halves, each decided ONCE and read both by the band's own gate and by the control it
   // renders (two gates for one fact would each cover for the other, and neither would be tested).
   //  - Finding 27: a held fixture's Finalize is refused (LEVEL_RESULT_IN_BRACKET), so it is not offered.
@@ -1386,6 +1397,8 @@ export function FixtureConsole({
                   // the pad and the block can never disagree about whether this is a bracket or who is asking.
                   stageKind={stageKind}
                   canOrganise={canOrganise}
+                  // W2c Task 15 (X-SR-7): the version the page loaded the cfg with — this pad's taps send it.
+                  rulesVersion={scorePadV2.rulesVersion}
                   onEvents={handlePadEvents}
                   // R7/C1 — this console mounts the one ledger itself, below.
                   hideActivity
@@ -1404,7 +1417,7 @@ export function FixtureConsole({
           (N2 — a chess tie-break is the scorer's to record, so it never says "wait for the organiser"), and it sits
           straight under the Scoring card, above the ledger and lineups, so it is in view at 768 and 1280 (m5). */}
       {scoring && home && away && !canOrganise && held && (
-        <HeldNote msg={msg} cause={heldCause({ outcome: live.outcome, events })} />
+        <HeldNote msg={msg} cause={heldCause({ outcome: live.outcome, events })} table={inTableStage(stageKind)} />
       )}
 
       {/* Spec 2026-09-30 §2 + Review Focus 4: the Scoring section renders only while this fixture can be scored with both
@@ -1586,6 +1599,20 @@ export function FixtureConsole({
         </div>
       )}
 
+      {/* W2c Task 19 (S2): the format THIS match plays, over its stage's - change it before the start, correct it live,
+          read it locked. Organisers only (the page decides; absent => nothing here). One DOM: below `md` the disclosure
+          folds it, from `md` up it is a plain card. */}
+      {matchRules && (
+        <PhoneDisclosure
+          summary={msg("matchRules.title")}
+          aside={matchRules.override !== null ? msg("matchRules.overridden") : undefined}
+          showLabel={msg("matchRules.show")}
+          hideLabel={msg("matchRules.hide")}
+        >
+          <MatchRulesBlock {...matchRules} />
+        </PhoneDisclosure>
+      )}
+
       {/* THE AUTHORITY BAND (R7/C2, D-12; Finalize in it per R7-3a).
           These three used to be a bare row of buttons ABOVE the scoring
           card — no container, no heading, nothing saying they end the match,
@@ -1600,6 +1627,7 @@ export function FixtureConsole({
         <NeedsDecisionBlock
           msg={msg}
           cause={heldCause({ outcome: live.outcome, events })}
+          table={inTableStage(stageKind)}
           home={{ id: home.id, name: homeName!, withdrawn: home.withdrawn === true }}
           away={{ id: away.id, name: awayName!, withdrawn: away.withdrawn === true }}
           feedsNextMatch={fixture.feeds_next_match}

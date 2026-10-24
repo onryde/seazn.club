@@ -163,10 +163,16 @@
 // Runtime constraints (B02 GLOBAL.md): no TS `enum`, no `namespace`, no
 // emit-dependent syntax — `tools/bench` runs under
 // `node --experimental-strip-types`. Every relative import carries `.ts`;
-// engine imports use SUBPATHS only; nothing from `apps/web` is imported.
+// engine imports use SUBPATHS only. Two modules are imported from `apps/web`:
+// `lib/stage-decider-off.ts` (the product's stage-cfg composition, W2c Task
+// 13b) and `lib/top-level-stage-deciders.ts` (the engine-derived set of deciders
+// a stage's config refuses at its top level, R-13b-1). Each imports nothing but
+// the engine's barrels, so plain node loads it; tools/matrix/__tests__/boundary.test.ts
+// pins both files' imports.
 import {
   EngineError,
   foldMatchWithStoppage,
+  playRecorded,
   summaryOf,
   type EventEnvelope,
   type FoldedOutcomeFacts,
@@ -209,6 +215,10 @@ import {
   type PackStage,
   type PackStream,
 } from "./pack-schema.ts";
+import { postedStageCfg } from "../../../apps/web/src/lib/stage-decider-off.ts";
+// The deciders the product's create door refuses at a stage config's top level (R-13b-1). Its only imports are the
+// engine's bare `sport` / `sports` barrels, which this file already loads.
+import { TOP_LEVEL_STAGE_DECIDERS } from "../../../apps/web/src/lib/top-level-stage-deciders.ts";
 
 // ---------------------------------------------------------------------------
 // Findings
@@ -379,42 +389,34 @@ export function sigil(ref: string): string {
 }
 
 /**
- * The two stage-config DECIDER keys that overlay a division's resolved cfg for
- * fixtures in that stage — `STAGE_DECIDER_KEYS` in
- * `apps/web/src/server/engine-db/stage-cfg.ts`, whose comment is the
- * authority. They are no longer the only source: a stage may ALSO carry
- * `config.rules`, a partial per-stage format override (design 2026-09-17 §T1),
- * which `stageScopedFoldCfg` applies FIRST so these two keys keep a single
- * winner. Null inside `rules` means "inherit", never "blank the division
- * value", so nulls are skipped rather than copied.
+ * THE CFG A STREAM BOUND TO `stage` FOLDS UNDER: the product's own
+ * composition (`postedStageCfg`, apps/web/src/lib/stage-decider-off.ts),
+ * called rather than mirrored (W2c Task 13b, R-T12-3).
  *
- * A HAND MIRROR of a product constant, which is a drift risk this file cannot
- * remove — `apps/web` may not be imported from `tools/bench` (GLOBAL.md:
- * `@/` aliases do not resolve here and most of that tree is `server-only`).
- * It is mirrored rather than skipped because skipping it makes stage 0 fold a
- * knockout stage that declares `shootout` (or now a `rules` override) under
- * the WRONG cfg, which is exactly the class of divergence the bench exists to
- * find. Recorded in the task report; the live cross-check is B05's.
+ * A pack stage's `config` is posted verbatim to the product's create door
+ * (`PackStage.config`), so its `rules` are the rules SENT with the create. The
+ * stage therefore folds under what that door STORES (the kind's preset, from
+ * the engine's `stageDefaults` for the division's variant, merged with the
+ * rules sent: a key sent wins, a null removes it) read through the product's
+ * resolver (`liveStageCfg`: the rules laid over the division, then a bracket
+ * kind's `bracketDeciders`). Since D3 nothing at the stage config's TOP level
+ * is read, by the product or here.
+ *
+ * This was a hand mirror of two top-level decider keys plus `rules`, pinned
+ * by reading the product file as text. It folded a new knockout WITHOUT the
+ * preset the product writes into it, so a pack whose knockout ended level at
+ * full time folded to a draw here and went to extra time in the product.
+ *
+ * The identity when the stream binds no stage.
  */
-const STAGE_DECIDER_KEYS = ["shootout", "extraTime"] as const;
-
-/** `stageScopedCfg` (stage-cfg.ts), for a pack's own stage config. */
 export function stageScopedFoldCfg(
+  sportModule: AnySportModule,
   divisionCfg: unknown,
-  stageCfg: Record<string, unknown> | undefined,
+  stage: Pick<PackStage, "kind" | "config"> | undefined,
+  variantKey: string,
 ): unknown {
-  if (stageCfg === undefined) return divisionCfg;
-  const overlay: Record<string, unknown> = {};
-  // Rules first, decider keys second — mirrors stage-cfg.ts field for field.
-  const rules = stageCfg.rules;
-  if (rules != null && typeof rules === "object" && !Array.isArray(rules))
-    for (const [k, v] of Object.entries(rules as Record<string, unknown>))
-      if (v !== null && v !== undefined) overlay[k] = v;
-  for (const key of STAGE_DECIDER_KEYS) {
-    if (stageCfg[key] !== undefined) overlay[key] = stageCfg[key];
-  }
-  if (Object.keys(overlay).length === 0) return divisionCfg;
-  return { ...(divisionCfg as Record<string, unknown>), ...overlay };
+  if (stage === undefined) return divisionCfg;
+  return postedStageCfg(sportModule, divisionCfg, stage.kind, variantKey, stage.config["rules"]);
 }
 
 /**
@@ -674,9 +676,9 @@ export function resolveStatePath(
 // Two of the five (rule 1's per-person checks) are hand mirrors of
 // `apps/web/src/lib/registration-rules.ts`'s pure predicates
 // (`categoryEligibilityIssues`/`ageBandEligibilityIssues`/
-// `rosterCompositionIssues`) — the SAME "cannot import apps/web" constraint
-// `STAGE_DECIDER_KEYS` above lives under (GLOBAL.md: `@/` aliases do not
-// resolve here and most of that tree is `server-only`). Mirrored rather than
+// `rosterCompositionIssues`) — under the "cannot import apps/web" constraint
+// (GLOBAL.md: `@/` aliases do not resolve here and most of that tree is
+// `server-only`). Mirrored rather than
 // skipped: a `rejected_eligibility` entry never checked against the real
 // rule is exactly the "pack lies" failure design §4 exists to catch.
 //
@@ -1287,31 +1289,42 @@ function resolveStage(
 }
 
 /**
- * The stage-scoped decider keys a division declares but cannot bind, because
- * at least one of its streams resolves to no stage.
+ * The cfg keys in which some stage of a division plays a different format
+ * from the division itself (`stageScopedFoldCfg`: its rules, or a bracket
+ * kind's preset and deciders), when the division cannot bind them because at
+ * least one of its streams resolves to no stage. Sorted.
  *
  * Such a stream folds on the DIVISION cfg with no overlay. That is the honest
  * default — but it is not free: a groups+knockout division whose knockout
- * stage declares `shootout` or `extraTime` folds its knockout fixtures under
- * the wrong cfg and reports a divergence the pack did not commit.
+ * stage plays extra time and penalties (its preset, since W2c Task 12) folds
+ * its knockout fixtures under the wrong cfg and reports a divergence the pack
+ * did not commit.
  *
  * So the risk is NAMED rather than left to look like a data defect. A false
  * red a reader can explain is recoverable; one they cannot is where a correct
  * pack gets edited to match a broken gate. Declaring `stageRef` on every
  * stream silences it, because then nothing is unbound.
+ *
+ * Asked of the same composition the fold uses (W2c Task 13b), so the warning
+ * names exactly the keys a bound stream would fold differently under, rather
+ * than the keys a stage happens to spell out.
  */
 function unbindableOverlayKeys(
   division: PackDivision,
   unboundStreams: readonly PackStream[],
+  sportModule: AnySportModule,
+  divisionCfg: unknown,
 ): readonly string[] {
   if (unboundStreams.length === 0) return [];
+  const base = divisionCfg as Record<string, unknown>;
   const keys = new Set<string>();
   for (const stage of division.stages) {
-    for (const key of STAGE_DECIDER_KEYS) {
-      if (stage.config[key] !== undefined) keys.add(key);
+    const scoped = stageScopedFoldCfg(sportModule, divisionCfg, stage, division.variantKey) as Record<string, unknown>;
+    for (const key of new Set([...Object.keys(base), ...Object.keys(scoped)])) {
+      if (!deepEqual(scoped[key], base[key])) keys.add(key);
     }
   }
-  return [...keys];
+  return [...keys].sort();
 }
 
 // ---------------------------------------------------------------------------
@@ -1496,6 +1509,30 @@ export function validatePack(
     }
   }
 
+  // -- Stage 1.7: a decider at a stage config's TOP level -------------------
+  //
+  // D3 (W2c Task 13b): a stage's deciders are its match rules, read from
+  // `config.rules` only, so the fold below ignores one at the top level — and
+  // the product's create door refuses that stage 400 (R-13b-1), naming the key.
+  // Folding it as harmless would green a pack the product refuses at seed. The
+  // set is the product's own (`lib/top-level-stage-deciders.ts`, the engine's
+  // declared deciders), never a list kept here.
+  for (const division of pack.divisions) {
+    for (const stage of division.stages) {
+      for (const key of Object.keys(stage.config)) {
+        if (!TOP_LEVEL_STAGE_DECIDERS.includes(key)) continue;
+        add(
+          "error",
+          "pack.stage_top_level_decider",
+          `divisions[ref=${division.ref}].stages[ref=${stage.ref}].config.${key}`,
+          `stage "${stage.ref}" of division "${division.ref}" carries the decider "${key}" at its config's ` +
+            `TOP level, which nothing reads, and the product refuses the stage 400: a stage's deciders ` +
+            `are its match rules. Set it as config.rules.${key}`,
+        );
+      }
+    }
+  }
+
   // WHICH STAGE each stream folds under — resolved ONCE, so the fold, the
   // overlay warning and the standings derivation cannot answer it three ways.
   const stageOfStream = new Map<string, PackStage | undefined>();
@@ -1518,13 +1555,26 @@ export function validatePack(
 
   for (const division of pack.divisions) {
     const unbound = unboundOf(division.ref);
-    const keys = unbindableOverlayKeys(division, unbound);
+    if (unbound.length === 0) continue;
+    // The module and cfg exactly as the per-stream fold below resolves them. A
+    // division that resolves neither is the fold's to report, by name, on
+    // every one of its streams; there is no stage format to compare here.
+    let sportModule: AnySportModule;
+    try {
+      sportModule = registryHandle.get(division.sportKey, division.moduleVersion);
+    } catch {
+      continue;
+    }
+    const resolved = resolveDivisionCfg(sportModule, division);
+    if (!resolved.ok) continue;
+    const keys = unbindableOverlayKeys(division, unbound, sportModule, resolved.cfg);
     if (keys.length === 0) continue;
     add(
       "warning",
       "fold.stage_overlay_unbindable",
       `divisions[ref=${division.ref}]`,
-      `division "${division.ref}" declares [${keys.join(", ")}] — a stage-scoped decider key — and ` +
+      `division "${division.ref}" has a stage whose format differs from the division's in ` +
+        `[${keys.join(", ")}] (its rules, or a bracket kind's preset and deciders) — and ` +
         `${unbound.length} of its stream(s) name no stage, so stage 0 folds those fixtures under the ` +
         `DIVISION cfg with no overlay. Any divergence reported for them may be this gap rather than ` +
         `the pack. Declaring streams[].stageRef on every stream closes it`,
@@ -1587,7 +1637,7 @@ export function validatePack(
     const stage = stageOfStream.get(
       fixtureKey(stream.divisionRef, stream.fixtureExtKey),
     );
-    const cfg = stageScopedFoldCfg(resolved.cfg, stage?.config);
+    const cfg = stageScopedFoldCfg(sportModule, resolved.cfg, stage, division.variantKey);
 
     let state: unknown;
     let squads: SquadState;
@@ -2204,8 +2254,11 @@ function deriveStandings(
       // 20) and the fold treats them identically, so the distinction — which
       // is a fixture-row fact a pack does not declare — cannot change a row.
       status: "decided",
+      // W2c Task 9 (X-PT-1): the rule reads a forfeit's "was anything played" fact. A pack carries every fixture's
+      // events, so it is W2b's `playRecorded` over the same envelopes the fold read, under the fixture's module. Gap (a):
+      // the module's own score keys (`awardScoreKeys`) take the awarded score too.
       result: pointsRule
-        ? applyPointsRule(fold.outcome, pair, pointsRule)
+        ? applyPointsRule(fold.outcome, pair, pointsRule, playRecorded(packEnvelopes(stream), fold.module), fold.module.awardScoreKeys)
         : pair,
     });
   }

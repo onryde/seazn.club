@@ -1,0 +1,1243 @@
+[
+  {
+    "id": "t17-notice",
+    "file": "apps/web/src/components/v2/stage-rules/stage-row-model.ts",
+    "find": "return isBracket && deciders.length > 0 && deciders.every(",
+    "replace": "return false && deciders.every(",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-row-model.test.ts"
+        ],
+        "name": "football KO with both deciders off holds"
+      }
+    ]
+  },
+  {
+    "id": "t17-notice-vacuous",
+    "file": "apps/web/src/components/v2/stage-rules/stage-row-model.ts",
+    "find": "return isBracket && deciders.length > 0 && deciders.every(",
+    "replace": "return isBracket && deciders.every(",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-row-model.test.ts"
+        ],
+        "name": "a table stage and a sport with no decider say nothing"
+      }
+    ]
+  },
+  {
+    "id": "t17-notice-league",
+    "file": "apps/web/src/components/v2/stage-rules/stage-row-model.ts",
+    "find": "const isBracket = forbidsLevelResult(kind);",
+    "replace": "const isBracket = true;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-row-model.test.ts"
+        ],
+        "name": "a league never shows the notice"
+      }
+    ]
+  },
+  {
+    "id": "t17-fields",
+    "file": "apps/web/src/components/v2/stage-rules/stage-row-model.ts",
+    "find": "return stageFieldsFor({ module, stageKind: kind, variant });",
+    "replace": "return stageFieldsFor({ module, stageKind: kind, variant }).slice(0, 1);",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-row-model.test.ts"
+        ],
+        "name": "every sport shows its stage fields"
+      }
+    ]
+  },
+  {
+    "id": "t17-resolved-raw",
+    "file": "apps/web/src/components/v2/stage-rules/stage-row-model.ts",
+    "find": "const parsed = module.configSchema.safeParse(liveStageCfg(divisionConfig, { kind, config }, module));",
+    "replace": "const parsed = module.configSchema.safeParse({ ...divisionConfig, ...(rules ?? {}) });",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-row-model.test.ts"
+        ],
+        "name": "the resolved cfg IS the cfg the bracket plays"
+      }
+    ]
+  },
+  {
+    "id": "t17-forced-keys",
+    "file": "apps/web/src/components/v2/stage-rules/stage-row-model.ts",
+    "find": "filter((k) => applicable.has(k) || Object.hasOwn(forced, k));",
+    "replace": "filter((k) => applicable.has(k));",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-row-model.test.ts"
+        ],
+        "name": "a decider the overlay forces ON counts"
+      }
+    ]
+  },
+  {
+    "id": "t17-forced-cfg",
+    "file": "apps/web/src/components/v2/stage-rules/stage-row-model.ts",
+    "find": "return { keys, cfg: { ...c, ...forced } };",
+    "replace": "return { keys, cfg: c };",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-row-model.test.ts"
+        ],
+        "name": "the notice's own read lays the overlay too"
+      }
+    ]
+  },
+  {
+    "id": "t17-may-end-level",
+    "file": "apps/web/src/components/v2/stage-rules/stage-row-model.ts",
+    "find": "return !decidersAllOff(module, kind, values) && bracketMayEndLevel(module, kind, values);",
+    "replace": "return bracketMayEndLevel(module, kind, values);",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-row-model.test.ts"
+        ],
+        "name": "over every declared cfg"
+      }
+    ]
+  },
+  {
+    "id": "t17-may-end-level-engine",
+    "file": "apps/web/src/components/v2/stage-rules/stage-row-model.ts",
+    "find": "return !decidersAllOff(module, kind, values) && bracketMayEndLevel(module, kind, values);",
+    "replace": "return !decidersAllOff(module, kind, values);",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-row-model.test.ts"
+        ],
+        "name": "football: extra time alone can still end level"
+      }
+    ]
+  },
+  {
+    "id": "t17-notice-order",
+    "file": "apps/web/src/components/v2/stage-rules/stage-row-model.ts",
+    "find": "  if (decidersAllOff(module, kind, values)) return \"off\";\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-row-model.test.ts"
+        ],
+        "name": "every decider off -> 'off'; extra time alone -> 'level'"
+      }
+    ]
+  },
+  {
+    "id": "t17-abandon-disabled",
+    "file": "apps/web/src/components/v2/stage-rules/stage-row-model.ts",
+    "find": "return { value, disabled: reasonKey !== null, reasonKey };",
+    "replace": "return { value, disabled: false, reasonKey };",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-row-model.test.ts"
+        ],
+        "name": "P-5: generic share is unavailable"
+      }
+    ]
+  },
+  {
+    "id": "t17-abandon-values",
+    "file": "apps/web/src/components/v2/stage-rules/stage-row-model.ts",
+    "find": "safeParse({ ...base, ...values, abandonPolicy: value });",
+    "replace": "safeParse({ ...base, abandonPolicy: value });",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-row-model.test.ts"
+        ],
+        "name": "P-5: generic share is unavailable"
+      }
+    ]
+  },
+  {
+    "id": "t17-abandon-reason-map",
+    "file": "apps/web/src/components/v2/stage-rules/stage-row-model.ts",
+    "find": "[SHARE_NEEDS_DRAWN_GAME, \"rules.err.shareNeedsDrawnGame\"],",
+    "replace": "[SHARE_NEEDS_DRAWN_GAME, \"stageRules.abandon.shareNeedsDraws\"],",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-row-model.test.ts"
+        ],
+        "name": "P-5: generic share is unavailable"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-rule-fields.test.tsx"
+        ],
+        "name": "carrom: 'share' is unavailable while the tie board is the extra board"
+      }
+    ]
+  },
+  {
+    "id": "t17-section-abandon",
+    "file": "apps/web/src/components/v2/stage-rules/stage-row-model.ts",
+    "find": "if (tops.every((t) => t === \"abandonPolicy\")) return \"abandon\";",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-row-model.test.ts"
+        ],
+        "name": "format, deciders and abandon partition the shown fields"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-row-model.test.ts"
+        ],
+        "name": "football knockout: the kicks of a shoot-out sit WITH the deciders"
+      }
+    ]
+  },
+  {
+    "id": "t17-section-bounded",
+    "file": "apps/web/src/components/v2/stage-rules/stage-row-model.ts",
+    "find": "tops.every((t) => deciders.has(t) || bounded.has(t))",
+    "replace": "tops.every((t) => deciders.has(t))",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-row-model.test.ts"
+        ],
+        "name": "football knockout: the kicks of a shoot-out sit WITH the deciders"
+      }
+    ]
+  },
+  {
+    "id": "t17-save-null",
+    "file": "apps/web/src/components/v2/stage-rules/stage-row-model.ts",
+    "find": "for (const key of Object.keys(before)) if (!Object.hasOwn(now, key)) out[key] = null;",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/stages-panel-stage-format.test.tsx"
+        ],
+        "name": "notices a field being CLEARED"
+      }
+    ]
+  },
+  {
+    "id": "t17-save-false",
+    "file": "apps/web/src/components/v2/stage-rules/stage-row-model.ts",
+    "find": "if (v === null) return sportModule !== null && offByFalse(sportModule, inherited, key) ? false : null;",
+    "replace": "if (v === null) return null;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/stages-panel-stage-format.test.tsx"
+        ],
+        "name": "a period sport's decider switched OFF is sent as false"
+      }
+    ]
+  },
+  {
+    "id": "t17-save-undefined",
+    "file": "apps/web/src/components/v2/stage-rules/stage-row-model.ts",
+    "find": "if (v === undefined) return null;",
+    "replace": "if (v === undefined) return undefined;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/stages-panel-stage-format.test.tsx"
+        ],
+        "name": "a field whose blank build is a delete marker"
+      }
+    ]
+  },
+  {
+    "id": "t17-save-empty",
+    "file": "apps/web/src/components/v2/stage-rules/stage-row-model.ts",
+    "find": "return Object.keys(out).length === 0 ? alignBestOfOnePoints(sportKey, stored, inherited) : out;",
+    "replace": "return out;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/stages-panel-stage-format.test.tsx"
+        ],
+        "name": "an edit with no net effect re-sends the stored fragment"
+      }
+    ]
+  },
+  {
+    "id": "t17-seq-empty-token",
+    "file": "apps/web/src/components/v2/stage-rules/sequence-field.tsx",
+    "find": "return items.length === 0 ? (field.emptyValue ?? \"\") : items.join(\",\");",
+    "replace": "return items.length === 0 ? \"\" : items.join(\",\");",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-sequence-field.test.tsx"
+        ],
+        "name": "the pure list helpers"
+      }
+    ]
+  },
+  {
+    "id": "t17-seq-default",
+    "file": "apps/web/src/components/v2/stage-rules/sequence-field.tsx",
+    "find": "if (value === \"\") return (field.options ?? []).map((o) => o.value);",
+    "replace": "if (value === \"\") return [];",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-sequence-field.test.tsx"
+        ],
+        "name": "the pure list helpers"
+      }
+    ]
+  },
+  {
+    "id": "t17-seq-token-read",
+    "file": "apps/web/src/components/v2/stage-rules/sequence-field.tsx",
+    "find": "if (field.emptyValue !== undefined && value === field.emptyValue) return [];",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-sequence-field.test.tsx"
+        ],
+        "name": "the EMPTY list is shown as 'no tie-breaks'"
+      }
+    ]
+  },
+  {
+    "id": "t17-seq-move",
+    "file": "apps/web/src/components/v2/stage-rules/sequence-field.tsx",
+    "find": "next.splice(to, 0, item!);",
+    "replace": "next.splice(index, 0, item!);",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-sequence-field.test.tsx"
+        ],
+        "name": "the pure list helpers"
+      }
+    ]
+  },
+  {
+    "id": "t17-chess-truthy",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "return rungs.length === 0 ? null : rungs.map((rung) => ({ key: `format.rules.decider.${rung}` }));",
+    "replace": "return rungs.map((rung) => ({ key: `format.rules.decider.${rung}` }));",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-row-model.test.ts"
+        ],
+        "name": "a chess knockout stage with its list empty is held"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/stages-panel-stage-format.test.tsx"
+        ],
+        "name": "chess: an EMPTY rung list holds the match"
+      }
+    ]
+  },
+  {
+    "id": "t17-chess-absent",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "Array.isArray(c.tiebreakRungs) ? (c.tiebreakRungs as TiebreakRung[]) : undefined",
+    "replace": "Array.isArray(c.tiebreakRungs) ? (c.tiebreakRungs as TiebreakRung[]) : []",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-row-model.test.ts"
+        ],
+        "name": "a chess knockout stage with its list empty is held"
+      }
+    ]
+  },
+  {
+    "id": "t17-decider-unknown",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "return !Object.hasOwn(DECIDERS, key) || DECIDERS[key]!(c, module_) !== null;",
+    "replace": "return Object.hasOwn(DECIDERS, key) && DECIDERS[key]!(c, module_) !== null;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-row-model.test.ts"
+        ],
+        "name": "an undeclared decider is never read as off, and a known one follows its own cfg"
+      }
+    ]
+  },
+  {
+    "id": "t17-then-clause",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "out.push({ key: \"format.rules.decider.thenOrganiser\" });",
+    "replace": "void 0;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts"
+        ],
+        "name": "M-3: 'then the organiser decides' is said exactly where the engine says"
+      }
+    ]
+  },
+  {
+    "id": "t17-then-undescribed",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "if (on && !undescribed && bracket && bracketMayEndLevel(",
+    "replace": "if (on && bracket && bracketMayEndLevel(",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/describe-rules-families.test.ts"
+        ],
+        "name": "a decider no describer knows is never read as OFF"
+      }
+    ]
+  },
+  {
+    "id": "t17-eng-bracket-only",
+    "file": "packages/engine/src/sport/rule-keys.ts",
+    "find": "if (!forbidsLevelResult(kind) || m.canEndLevel === undefined) return false;",
+    "replace": "if (m.canEndLevel === undefined) return false;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/can-end-level.test.ts"
+        ],
+        "name": "answers the module for a bracket kind, and false for a table kind"
+      }
+    ]
+  },
+  {
+    "id": "t17-eng-undeclared",
+    "file": "packages/engine/src/sport/rule-keys.ts",
+    "find": "if (!forbidsLevelResult(kind) || m.canEndLevel === undefined) return false;",
+    "replace": "if (!forbidsLevelResult(kind)) return false;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/can-end-level.test.ts"
+        ],
+        "name": "a module that declares no decider makes no claim"
+      }
+    ]
+  },
+  {
+    "id": "t17-eng-refused",
+    "file": "packages/engine/src/sport/rule-keys.ts",
+    "find": "if (!parsed.success) return false;\n  // A hand-built",
+    "replace": "// A hand-built",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/can-end-level.test.ts"
+        ],
+        "name": "a cfg the schema refuses makes no claim"
+      }
+    ]
+  },
+  {
+    "id": "t17-eng-guard",
+    "file": "packages/engine/src/sport/rule-keys.ts",
+    "find": "const forced = typeof m.bracketDeciders === \"function\" ? m.bracketDeciders(parsed.data) : {};",
+    "replace": "const forced = m.bracketDeciders(parsed.data);",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/can-end-level.test.ts"
+        ],
+        "name": "a hand-built module with no bracketDeciders"
+      }
+    ]
+  },
+  {
+    "id": "t17-eng-overlay",
+    "file": "packages/engine/src/sport/rule-keys.ts",
+    "find": "return m.canEndLevel({ ...parsed.data, ...forced });",
+    "replace": "return m.canEndLevel({ ...parsed.data });",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/can-end-level.test.ts"
+        ],
+        "name": "lays the sport's bracketDeciders over the cfg"
+      }
+    ]
+  },
+  {
+    "id": "t17-eng-football",
+    "file": "packages/engine/src/sports/football/football.ts",
+    "find": "canEndLevel: (cfg) => cfg.shootout !== true,",
+    "replace": "canEndLevel: (cfg) => cfg.shootout === true,",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/can-end-level.test.ts"
+        ],
+        "name": "football: both deciders off"
+      }
+    ]
+  },
+  {
+    "id": "t17-eng-period",
+    "file": "packages/engine/src/sports/period/kernel.ts",
+    "find": "canEndLevel: (cfg) => cfg.shootout === null,",
+    "replace": "canEndLevel: (cfg) => true,",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/can-end-level.test.ts"
+        ],
+        "name": "icehockey: shootout only"
+      }
+    ]
+  },
+  {
+    "id": "t17-eng-cricket",
+    "file": "packages/engine/src/sports/cricket/cricket.ts",
+    "find": "canEndLevel: (cfg) => !cfg.superOver || cfg.superOverStillTied !== \"repeat\",",
+    "replace": "canEndLevel: (cfg) => !cfg.superOver,",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/can-end-level.test.ts"
+        ],
+        "name": "shared: a tied super over stands as a tie"
+      }
+    ]
+  },
+  {
+    "id": "t17-eng-carrom",
+    "file": "packages/engine/src/sports/carrom/carrom.ts",
+    "find": "canEndLevel: (cfg) => cfg.tieBoard === \"draw\",",
+    "replace": "canEndLevel: (cfg) => false,",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/can-end-level.test.ts"
+        ],
+        "name": "carrom: drawn game as configured"
+      }
+    ]
+  },
+  {
+    "id": "t17-eng-chess-empty",
+    "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+    "find": "canEndLevel: (cfg) => !(cfg.tiebreak === true && effectiveRungs(cfg).length > 0),",
+    "replace": "canEndLevel: (cfg) => !(cfg.tiebreak === true),",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/can-end-level.test.ts"
+        ],
+        "name": "boardgame: no rungs"
+      }
+    ]
+  },
+  {
+    "id": "t17-eng-chess-off",
+    "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+    "find": "canEndLevel: (cfg) => !(cfg.tiebreak === true && effectiveRungs(cfg).length > 0),",
+    "replace": "canEndLevel: (cfg) => !(effectiveRungs(cfg).length > 0),",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/can-end-level.test.ts"
+        ],
+        "name": "boardgame: no tie-break played at all"
+      }
+    ]
+  },
+  {
+    "id": "t17-read-bool",
+    "file": "apps/web/src/lib/match-rules/shared.ts",
+    "find": "config[key] === true ? \"on\" : config[key] === false ? \"off\" : undefined;",
+    "replace": "config[key] ? \"on\" : \"off\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/match-rules-stage-read.test.ts"
+        ],
+        "name": "an empty fragment hydrates to nothing for every sport"
+      }
+    ]
+  },
+  {
+    "id": "t17-read-nested",
+    "file": "apps/web/src/lib/match-rules/shared.ts",
+    "find": "return typeof n === \"number\" ? String(n) : undefined;",
+    "replace": "return String(n);",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/match-rules-stage-read.test.ts"
+        ],
+        "name": "an empty fragment hydrates to nothing for every sport"
+      }
+    ]
+  },
+  {
+    "id": "t17-read-shape",
+    "file": "apps/web/src/lib/match-rules/football.ts",
+    "find": "read: (config) => readShape(EXTRA_TIME, config.extraTime),",
+    "replace": "read: (config) => (config.extraTime ? \"on\" : undefined),",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/match-rules-stage-read.test.ts"
+        ],
+        "name": "round-trips every value of every stage field"
+      }
+    ]
+  },
+  {
+    "id": "t17-p6-rule",
+    "file": "tools/matrix/lib/applicability.ts",
+    "find": "P6: rule((f) => P6_SPORTS.has(f.sport), P6_REASON,",
+    "replace": "P6: rule((f) => true, P6_REASON,",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "tools/matrix/__tests__/applicability.test.ts"
+        ],
+        "name": "the rule applies exactly to P6_SPORTS"
+      }
+    ]
+  },
+  {
+    "id": "t17-p6-sports",
+    "file": "tools/matrix/lib/applicability.ts",
+    "find": "new Set([\"badminton\", \"tabletennis\", \"tennis\", \"volleyball\"])",
+    "replace": "new Set([\"badminton\", \"tabletennis\", \"tennis\"])",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "tools/matrix/__tests__/applicability.test.ts"
+        ],
+        "name": "P6_SPORTS plus the named gaps are exactly the sports"
+      }
+    ]
+  },
+  {
+    "id": "t17-lock-line",
+    "file": "apps/web/src/components/v2/stages-panel.tsx",
+    "find": "        {locked && (\n          // S4",
+    "replace": "        {false && (\n          // S4",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/stages-panel-stage-format.test.tsx"
+        ],
+        "name": "a locked stage says so BEFORE anyone tries"
+      }
+    ]
+  },
+  {
+    "id": "t17-div-clear",
+    "file": "apps/web/src/components/v2/division-format-patch.ts",
+    "find": "  for (const key of clearedSequenceKeys(input.sportKey, input.ruleValues)) delete override[key];\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/division-format-patch.test.ts"
+        ],
+        "name": "the PATCH no longer carries the list"
+      }
+    ]
+  },
+  {
+    "id": "t17-cleared-kind",
+    "file": "apps/web/src/lib/match-rules/index.ts",
+    "find": "    if (field.kind !== \"sequence\") continue;\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/division-format-patch.test.ts"
+        ],
+        "name": "only an ordered list is cleared by a blank"
+      }
+    ]
+  },
+  {
+    "id": "t17-cleared-blank",
+    "file": "apps/web/src/lib/match-rules/index.ts",
+    "find": "if ((values[field.key] ?? \"\") === \"\") keys.push(...field.edits);",
+    "replace": "if ((values[field.key] ?? \"\") !== \"\") keys.push(...field.edits);",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/division-format-patch.test.ts"
+        ],
+        "name": "the PATCH no longer carries the list"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-sequence-field.test.tsx"
+        ],
+        "name": "clearedSequenceKeys: a blank ordered list is a reset, nothing else is"
+      }
+    ]
+  },
+  {
+    "id": "t17-cleared-absent",
+    "file": "apps/web/src/lib/match-rules/index.ts",
+    "find": "if ((values[field.key] ?? \"\") === \"\") keys.push(...field.edits);",
+    "replace": "if (values[field.key] === \"\") keys.push(...field.edits);",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/match-rules-sequence-field.test.tsx"
+        ],
+        "name": "clearedSequenceKeys: a blank ordered list is a reset, nothing else is"
+      }
+    ]
+  },
+  {
+    "id": "t17-detail-football",
+    "file": "packages/engine/src/sports/football/football.ts",
+    "find": ", whenAbsent: SHOOTOUT_ATTEMPTS_DEFAULT, detailOf: \"shootout\" },",
+    "replace": ", whenAbsent: SHOOTOUT_ATTEMPTS_DEFAULT },",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "every bounded key is a whole decider or the detail of one"
+      }
+    ]
+  },
+  {
+    "id": "t17-detail-overtime",
+    "file": "packages/engine/src/sports/period/kernel.ts",
+    "find": "\"overtime.minutes\": { scope: \"match\", matchBound: \"shorter\", detailOf: \"overtime\" },",
+    "replace": "\"overtime.minutes\": { scope: \"match\", matchBound: \"shorter\" },",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "every bounded key is a whole decider or the detail of one"
+      }
+    ]
+  },
+  {
+    "id": "t17-detail-shootout",
+    "file": "packages/engine/src/sports/period/kernel.ts",
+    "find": "\"shootout.attempts\": { scope: \"match\", matchBound: \"shorter\", detailOf: \"shootout\" },",
+    "replace": "\"shootout.attempts\": { scope: \"match\", matchBound: \"shorter\" },",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "every bounded key is a whole decider or the detail of one"
+      }
+    ]
+  },
+  {
+    "id": "t17-detail-undeclared",
+    "file": "apps/web/src/components/v2/stage-rules/stage-row-model.ts",
+    "find": "const of = Object.hasOwn(facts, key) ? facts[key]!.detailOf : undefined;",
+    "replace": "const of = facts[key]!.detailOf;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-row-model.test.ts"
+        ],
+        "name": "a field editing several keys is a detail only when EVERY key names the same decider"
+      }
+    ]
+  },
+  {
+    "id": "t17-detail-mixed",
+    "file": "apps/web/src/components/v2/stage-rules/stage-row-model.ts",
+    "find": "if (of === undefined || (owner !== null && owner !== of)) return null;",
+    "replace": "if (of === undefined) return null;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-row-model.test.ts"
+        ],
+        "name": "a field editing several keys is a detail only when EVERY key names the same decider"
+      }
+    ]
+  },
+  {
+    "id": "t17-detail-unpaired",
+    "file": "apps/web/src/components/v2/stage-rules/stage-row-model.ts",
+    "find": "if (of === undefined || (owner !== null && owner !== of)) return null;",
+    "replace": "if (owner !== null && owner !== of) return null;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-row-model.test.ts"
+        ],
+        "name": "a field editing several keys is a detail only when EVERY key names the same decider"
+      }
+    ]
+  },
+  {
+    "id": "t17-inert-negate",
+    "file": "apps/web/src/components/v2/stage-rules/stage-row-model.ts",
+    "find": "return decider !== null && resolved !== null && !deciderIsOn(module, decider, resolved);",
+    "replace": "return decider !== null && resolved !== null && deciderIsOn(module, decider, resolved);",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-row-model.test.ts"
+        ],
+        "name": "football: the kicks are held while the shoot-out is off"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-rule-fields.test.tsx"
+        ],
+        "name": "football knockout: kicks held"
+      }
+    ]
+  },
+  {
+    "id": "t17-inert-null",
+    "file": "apps/web/src/components/v2/stage-rules/stage-row-model.ts",
+    "find": "return decider !== null && resolved !== null && !deciderIsOn(module, decider, resolved);",
+    "replace": "return decider !== null && !deciderIsOn(module, decider, resolved ?? {});",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-row-model.test.ts"
+        ],
+        "name": "a cfg the schema refuses holds nothing"
+      }
+    ]
+  },
+  {
+    "id": "t17-detail-disabled",
+    "file": "apps/web/src/components/v2/stage-rules/stage-rule-fields.tsx",
+    "find": "disabled={disabled || inert}",
+    "replace": "disabled={disabled}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-rule-fields.test.tsx"
+        ],
+        "name": "football knockout: kicks held"
+      }
+    ]
+  },
+  {
+    "id": "t17-detail-caption",
+    "file": "apps/web/src/components/v2/stage-rules/stage-rule-fields.tsx",
+    "find": "{inert && switchLabel !== undefined && (",
+    "replace": "{false && (",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-rule-fields.test.tsx"
+        ],
+        "name": "football knockout: kicks held"
+      }
+    ]
+  },
+  {
+    "id": "t17-detail-label",
+    "file": "apps/web/src/components/v2/stage-rules/stage-rule-fields.tsx",
+    "find": "?.label;\n",
+    "replace": "?.key;\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-rule-fields.test.tsx"
+        ],
+        "name": "football knockout: kicks held"
+      }
+    ]
+  },
+  {
+    "id": "t17-chips-format",
+    "file": "apps/web/src/components/v2/stage-rules/stage-row-model.ts",
+    "find": "    ...(describeMatchRules(sportKey, module, resolved) ?? []),\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-row-model.test.ts"
+        ],
+        "name": "it is the public line plus the abandon clause"
+      }
+    ]
+  },
+  {
+    "id": "t17-chips-deciders",
+    "file": "apps/web/src/components/v2/stage-rules/stage-row-model.ts",
+    "find": "    ...describeDeciders(module, kind, resolved),\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-row-model.test.ts"
+        ],
+        "name": "it is the public line plus the abandon clause"
+      }
+    ]
+  },
+  {
+    "id": "t17-chips-abandon",
+    "file": "apps/web/src/components/v2/stage-rules/stage-row-model.ts",
+    "find": "    ...describeAbandon(module, resolved),\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-row-model.test.ts"
+        ],
+        "name": "the abandon policy is always said, in the stage's own value"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/stages-panel-stage-format.test.tsx"
+        ],
+        "name": "a stage override that differs from the division shows the OVERRIDE"
+      }
+    ]
+  },
+  {
+    "id": "t17-chips-override",
+    "file": "apps/web/src/components/v2/stages-panel.tsx",
+    "find": "stageSummaryClauses(sportKey, sportModule, kind, resolved)",
+    "replace": "stageSummaryClauses(sportKey, sportModule, kind, resolvedStageCfg(sportModule, divisionConfig, kind, {}))",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/stages-panel-stage-format.test.tsx"
+        ],
+        "name": "a stage override that differs from the division shows the OVERRIDE"
+      }
+    ]
+  },
+  {
+    "id": "t17-chips-gate",
+    "file": "apps/web/src/components/v2/stages-panel.tsx",
+    "find": "{chips.length > 0 && ruleDict !== undefined && (",
+    "replace": "{ruleDict !== undefined && (",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/stages-panel-stage-format.test.tsx"
+        ],
+        "name": "a stage whose stored rules the schema refuses says nothing"
+      }
+    ]
+  },
+  {
+    "id": "t17-chips-dict",
+    "file": "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx",
+    "find": "              ruleDict={ruleDict}\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/__tests__/held-final-phase.test.tsx"
+        ],
+        "name": "StagesPanel gets the format.rules.* slice"
+      }
+    ]
+  },
+  {
+    "id": "t17-chips-slice",
+    "file": "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx",
+    "find": "rulesLineDict(await getDictionary(locale, \"public\"))",
+    "replace": "await getDictionary(locale, \"public\")",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/__tests__/held-final-phase.test.tsx"
+        ],
+        "name": "StagesPanel gets the format.rules.* slice"
+      }
+    ]
+  },
+  {
+    "id": "t17-chips-prefix",
+    "file": "apps/web/src/lib/rules-line.ts",
+    "find": "if (key.startsWith(RULES_LINE_DICT_PREFIX) || RULES_LINE_DICT_EXTRA_KEYS.has(key)) out[key] = dict[key];",
+    "replace": "out[key] = dict[key];",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/stages-panel-stage-format.test.tsx"
+        ],
+        "name": "rulesLineDict keeps exactly the rules-line keys"
+      }
+    ]
+  },
+  {
+    "id": "t17-chips-extra-key",
+    "file": "apps/web/src/lib/rules-line.ts",
+    "find": "if (key.startsWith(RULES_LINE_DICT_PREFIX) || RULES_LINE_DICT_EXTRA_KEYS.has(key)) out[key] = dict[key];",
+    "replace": "if (key.startsWith(RULES_LINE_DICT_PREFIX)) out[key] = dict[key];",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-row-model.test.ts"
+        ],
+        "name": "every key the describers can emit reaches"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/stages-panel-stage-format.test.tsx"
+        ],
+        "name": "rulesLineDict keeps exactly the rules-line keys"
+      }
+    ]
+  },
+  {
+    "id": "t17-rawkey-nl",
+    "file": "apps/web/src/dictionaries/nl/public.json",
+    "find": "\"format.rules.decider.superOver\"",
+    "replace": "\"format.rules.decider.superOverX\"",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-row-model.test.ts"
+        ],
+        "name": "every key the describers can emit reaches"
+      }
+    ]
+  },
+  {
+    "id": "t17-rawkey-family",
+    "file": "apps/web/src/server/public-site/describe-rules.ts",
+    "find": "`format.rules.abandon.${policy}`",
+    "replace": "`format.rules.abandon2.${policy}`",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-row-model.test.ts"
+        ],
+        "name": "over every sport, declared cfg and stage kind"
+      }
+    ]
+  },
+  {
+    "id": "t17-seq-inherit",
+    "file": "apps/web/src/components/v2/stage-rules/sequence-field.tsx",
+    "find": "sequenceItems(field, value === \"\" ? (inheritedValue ?? \"\") : value)",
+    "replace": "sequenceItems(field, value)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-rule-fields.test.tsx"
+        ],
+        "name": "a blank stage lists Rapid only"
+      }
+    ]
+  },
+  {
+    "id": "t17-seq-from-division",
+    "file": "apps/web/src/components/v2/stage-rules/sequence-field.tsx",
+    "find": "const fromDivision = inheritedValue !== undefined;",
+    "replace": "const fromDivision = false;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-rule-fields.test.tsx"
+        ],
+        "name": "a blank stage lists Rapid only"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-rule-fields.test.tsx"
+        ],
+        "name": "the stage's OWN list wins over the division's"
+      }
+    ]
+  },
+  {
+    "id": "t17-seq-plumb",
+    "file": "apps/web/src/components/v2/stage-rules/rule-field-control.tsx",
+    "find": "inheritedValue={sequenceInherits === undefined ? undefined : field.read?.(sequenceInherits)}",
+    "replace": "inheritedValue={undefined}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-rule-fields.test.tsx"
+        ],
+        "name": "a blank stage lists Rapid only"
+      }
+    ]
+  },
+  {
+    "id": "t17-seq-stage-pass",
+    "file": "apps/web/src/components/v2/stage-rules/stage-rule-fields.tsx",
+    "find": "                      sequenceInherits={divisionConfig}\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-rule-fields.test.tsx"
+        ],
+        "name": "a blank stage lists Rapid only"
+      }
+    ]
+  },
+  {
+    "id": "t17-seq-division-leak",
+    "file": "apps/web/src/components/v2/match-rules.tsx",
+    "find": "            disabled={disabled}\n            inherited={inherited}\n",
+    "replace": "            disabled={disabled}\n            inherited={inherited}\n            sequenceInherits={inherited}\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-rule-fields.test.tsx"
+        ],
+        "name": "the DIVISION editor does not inherit"
+      }
+    ]
+  },
+  {
+    "id": "t17-chips-cap",
+    "file": "apps/web/src/lib/rules-line.ts",
+    "find": "const text = t(dict, clause.key, clause.params);\n  return text.charAt(0).toUpperCase() + text.slice(1);",
+    "replace": "const text = t(dict, clause.key, clause.params);\n  return text;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-row-model.test.ts"
+        ],
+        "name": "every clause has words"
+      }
+    ]
+  },
+  {
+    "id": "t17-lock-once",
+    "file": "apps/web/src/components/v2/stages-panel.tsx",
+    "find": "const clause = locked ? null : msg(",
+    "replace": "const clause = false ? null : msg(",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/stages-panel-stage-format.test.tsx"
+        ],
+        "name": "locked"
+      }
+    ]
+  },
+  {
+    "id": "t17-notice-role",
+    "file": "apps/web/src/components/v2/stage-rules/deciders-off-notice.tsx",
+    "find": "role=\"status\"",
+    "replace": "role=\"note\"",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/stages-panel-stage-format.test.tsx"
+        ],
+        "name": "football: every decider off holds the match"
+      }
+    ]
+  }
+]

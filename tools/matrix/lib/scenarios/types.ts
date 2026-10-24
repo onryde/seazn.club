@@ -20,6 +20,13 @@ export type W2bScenarioKey = (typeof W2B_SCENARIO_KEYS)[number];
 
 export type ScenarioKey = "LIFECYCLE" | "M1" | "R4" | "F1" | "DENIED" | "PADPROOF" | "VOIDPROOF" | W2aScenarioKey | W2bScenarioKey;
 
+/** W2c Task 12 fix round 1 (R-T12-3): the scenarios whose premise is "a level knockout is HELD for the organiser"
+ *  (BRACKET_SETTLE_LEVEL's level settle, WD-CASC's held line). Since Task 12 a new bracket stage plays its sport's
+ *  deciders (extra time and penalties, overtime and the shoot-out, the super over), so a level result there is not
+ *  held: these cases post their bracket stages with EVERY decider off (X-SR-6's held arm, an organiser's own choice;
+ *  sport-cfg.ts `decidersOffRulesFor`). Every other scenario posts none and plays the presets, so both arms are driven. */
+export const HOLD_PATH_SCENARIOS: ReadonlySet<ScenarioKey> = new Set<ScenarioKey>(["BRACKET_SETTLE_LEVEL", "WD-CASC"]);
+
 /** `row` is any catalogue row, API-only ones included (W1b Task 3 carry):
  *  stagesForRow builds every one. `deny` (ruling 24) lists the feature keys
  *  the case org is denied through `org_entitlement_overrides`. `overrides`

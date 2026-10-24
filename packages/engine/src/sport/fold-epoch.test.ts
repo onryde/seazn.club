@@ -34,6 +34,27 @@ describe("FOLD_EPOCH", () => {
     expect(swept).toBe(Object.keys(FOLD_EPOCH).length);
   });
 
+  // A MANUAL major no corpus can ask for (W2c, owner 2026-10-15, commit 3abddb9c4): the opt-in cfg keys W2c added (football `shootoutAttempts`; hockey
+  // `abandonPolicy: "q4_stands"`; carrom and generic `abandonPolicy: "share"`) are ones an older phone strips or refuses, and no pre-existing golden
+  // stream sets them - W2c's own streams that do are APPENDED, which owes no bump - so `fold-epoch:check` cannot ask for the raise and reverting it
+  // leaves every other test green. So this is a floor, stated as a literal and not derived: a git lookup of origin/main at test time would turn red the
+  // day W2c merges (main's value is then this one) and cannot run in a shallow clone. MAIN holds each sport's value at origin/main cf3e64977
+  // (`git show cf3e64977:packages/engine/src/sport/fold-epoch.ts`); the floor is that + 1. A ratchet: it stays true after the merge, and lowering
+  // an entry here is a decision, not a cleanup.
+  const W2C_MANUAL_MAJOR = { football: 1, hockey: 1, carrom: 2, generic: 2 } as const;
+  it("W2c's four-sport manual MAJOR stays raised: football, hockey, carrom and generic are each at least their origin/main value + 1 (opt-in cfg keys no corpus can ask for)", () => {
+    const registered = builtinModules.map((m) => m.key);
+    let checked = 0;
+    for (const [sport, main] of Object.entries(W2C_MANUAL_MAJOR)) {
+      expect(registered, `${sport} is a registered sport`).toContain(sport);
+      expect(table[sport], `${sport}: origin/main is at ${main}; W2c's opt-in cfg keys owe ${main + 1} (3abddb9c4)`).toBeGreaterThanOrEqual(main + 1);
+      expect(foldEpochOf(sport), `${sport} through the accessor the server's gate reads`).toBeGreaterThanOrEqual(main + 1);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: all four sports were checked").toBe(4);
+    expect(checked).toBe(Object.keys(W2C_MANUAL_MAJOR).length);
+  });
+
   it("answers each registered sport's own entry: a copy of the file with a different number per sport answers each its own", async () => {
     const keys = builtinModules.map((m) => m.key);
     expect(keys.length).toBeGreaterThan(1);

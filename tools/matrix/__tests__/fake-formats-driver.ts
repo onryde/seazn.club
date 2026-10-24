@@ -47,7 +47,7 @@ import {
   type StageRef, type StandingsOut, type StartOut, type WithdrawOut,
 } from "../lib/driver/types.ts";
 import { X_WD_2_KINDS, isTerminal } from "../lib/observed.ts";
-import { FakeLeagueDriver, bracketWithdrawalActs, bracketWithdrawalPolicy, type FakeFixture } from "./fake-driver.ts";
+import { FakeLeagueDriver, bracketWithdrawalActs, bracketWithdrawalPolicy, rulesOfConfig, type FakeFixture } from "./fake-driver.ts";
 import { departedStatusesText, entrantMembersPkeyText, ladderText, wireCodeFor } from "./product-text.ts";
 
 /** The self-pair's 500 message, read once from V213 (product-text). */
@@ -309,7 +309,7 @@ export class FakeMultiStageDriver extends FakeLeagueDriver {
     const pts = new Map(this.#members(stage, poolId).map((e) => [e, 0]));
     const m = sportModule(this.sport);
     const kind = stage.kind as StageKind;
-    const cfg = stageCfg(this.sport, this.cfg, kind); // W2a: the cfg the stage's fixtures were folded under
+    const cfg = stageCfg(this.sport, this.cfg, kind, this.variant, rulesOfConfig(stage.config)); // W2a: the cfg the stage's fixtures were folded under
     for (const f of this.fixtures.filter((x) => x.stage_id === stage.id && x.pool_id === poolId)) {
       if (f.outcome === null) continue;
       const ctx = { kind, ...(f.pool_id ? { poolId: f.pool_id } : {}), ...(f.round_no ? { roundNo: f.round_no } : {}) };
@@ -354,6 +354,7 @@ export class FakeMultiStageDriver extends FakeLeagueDriver {
   }
   /** Each stage has its own kind: the status rule and the stage cfg overlay follow the fixture's stage (W2a). */
   protected override stageKindOf(f: FakeFixture): string | null { return this.stages.find((s) => s.id === f.stage_id)?.kind ?? null; }
+  protected override stageRulesOf(f: FakeFixture): Readonly<Record<string, unknown>> | undefined { return rulesOfConfig(this.stages.find((s) => s.id === f.stage_id)?.config); }
   /** scoring.ts → fillSlot: a decided line's winner (and a page playoff's
    *  pp-q1 loser) fills the line it feeds. */
   #feed(f: FakeFixture): void {

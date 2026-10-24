@@ -2490,8 +2490,10 @@ describe("the add-ons article's behaviour claims are pinned to the code", () => 
      * keep. It is a device-link surface: the token is a device-link token, and
      * `requireOrgAuth` calls `rejectDeviceLink(req)` FIRST, which throws 403 for
      * exactly those tokens. So it can never reach the freeze branch, and the
-     * routes it uses (`/api/v1/fixtures/[id]/state`, `/events`) authenticate
-     * through `requireFixtureActor`, not `requireOrgAuth` at all. It matches the
+     * routes it uses (`/api/v1/fixtures/[id]/state`, `/events`, and since W2c
+     * Task 15 the GET of `/rules` its pad reloads after a correction)
+     * authenticate through `requireFixtureActor`, not `requireOrgAuth` at all
+     * (`/rules`' PUT is organiser-only, and the pad never sends it). It matches the
      * caller walk only because OTHER `/api/v1/fixtures/` routes are
      * freeze-checked, so the prefix is a false positive for this file.
      *

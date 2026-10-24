@@ -17,7 +17,7 @@ import {
   type CaseFact, type CompleteObs, type ConfigEditObs, type GenerateObs, type LoopExit, type ObservedDeclared, type ObservedFixture,
   type ObservedOutcome, type ObservedRun, type ObservedStage, type PairRoundObs, type WithdrawalObs,
 } from "../observed.ts";
-import { drawsAllowed, entrantKindFor, sportModule, stageCfg } from "../sport-cfg.ts";
+import { decidersOffRulesFor, drawsAllowed, entrantKindFor, sportModule, stageCfg } from "../sport-cfg.ts";
 import { forfeitPosting, generateStream, levelReachable, matchesRequest, type RequestMatch } from "../streams/index.ts";
 import { outcomeLabel, type RequestedOutcome, type Side, type StreamEvent } from "../streams/types.ts";
 import { forfeitPlayOf, levelKindOf, loserSeatOf, nextLineOf, type BracketDrive } from "../reference-bracket.ts";
@@ -27,7 +27,7 @@ import { playLadder } from "./ladder-loop.ts";
 import { lineupWarningLine, postedTeamSides, putOwedLineups, type LineupSink } from "./lineup-plan.ts";
 import { entrantName, rosterMembers, rosterSize } from "./rosters.ts";
 import { STRUCTURAL_FINAL_KINDS, terminalFinalKeys } from "./terminal-finals.ts";
-import type { ScenarioContext } from "./types.ts";
+import { HOLD_PATH_SCENARIOS, type CaseSpec, type ScenarioContext } from "./types.ts";
 
 /** Final review I-2: what the harness POSTED beside what the product says it
  *  built, read back after start rather than taken from the create/add
@@ -277,6 +277,26 @@ export async function inSetup<T>(f: () => Promise<T>): Promise<T> {
  *  rosters and PUTs lineups (W1-driving Task 4). */
 export interface SetUpOptions { readonly rosterlessTeams?: boolean }
 
+/** W2c Task 12 fix round 1 (R-T12-3): the `config.rules` this case posts on a stage of `kind` — every decider off on a
+ *  hold-path scenario's bracket stages (`HOLD_PATH_SCENARIOS`), none anywhere else. */
+export function postedStageRules(spec: CaseSpec, kind: StageKind): Record<string, unknown> | undefined {
+  return HOLD_PATH_SCENARIOS.has(spec.scenario) ? decidersOffRulesFor(spec.sport, spec.variant, kind) : undefined;
+}
+
+/** The cfg a fixture of a stage of `kind` folds under in this case: `stageCfg` over the case's division cfg, its variant's
+ *  presets and the rules the case posted on that stage (`postedStageRules`) — what the product folds it under. */
+export function caseStageCfg(ctx: ScenarioContext, kind: StageKind): unknown {
+  return stageCfg(ctx.spec.sport, ctx.cfg, kind, ctx.spec.variant, postedStageRules(ctx.spec, kind));
+}
+
+/** The stage bodies with this case's rules on them (`postedStageRules`); a body that gets none is returned as it came. */
+export function withPostedRules(spec: CaseSpec, bodies: readonly StagePostBody[]): StagePostBody[] {
+  return bodies.map((b) => {
+    const rules = postedStageRules(spec, b.kind as StageKind);
+    return rules === undefined ? b : { ...b, config: { ...b.config, rules } };
+  });
+}
+
 /** W1-driving Task 5: the product plays the PERSONS behind an americano
  *  stage's entrants (stages.ts americanoGen: one linked person per entrant, at
  *  least 4, else STAGE_NOT_READY). Americano and mexicano are one stage kind;
@@ -296,7 +316,10 @@ export async function setUpDivision(ctx: ScenarioContext, rec: Recorder, entrant
   // catalog's, built by the product in the same act as its competition and
   // division; the case "posts" exactly that shape, so life-built-as-posted
   // judges the build against the catalog JSON.
-  const bodies = template === undefined ? stagesForRow(ctx.spec.row) : templateCase(ctx, kind, template, entrantCount);
+  // A template case's stages are the card's, built in one act, so they cannot be posted with rules: a hold-path case on
+  // one would play the presets its premise switches off (R-T12-3). Refused by name, before any driver call.
+  if (template !== undefined && HOLD_PATH_SCENARIOS.has(ctx.spec.scenario)) throw new Error(`scenario: ${ctx.spec.scenario} on template ${template} — a hold-path case posts its bracket stages with every decider off, and a template's stages are never posted`);
+  const bodies = template === undefined ? withPostedRules(ctx.spec, stagesForRow(ctx.spec.row)) : templateCase(ctx, kind, template, entrantCount);
   const rosterless = o.rosterlessTeams === true;
   const persons = personsNeeded(bodies);
   // No case drives a pair kind (no sport defaults to one; only a cfg entrants
@@ -501,13 +524,22 @@ export function bracketPolicy(setup: DivisionSetup, f: FixtureRow, sport: string
   return hardPath(sport, cfg, Math.floor(ordinal / 3), higher);
 }
 
+/** The `n`th tie-break request: the rung rotates through the engine's own list, and successive Armageddons alternate how
+ *  they ended - Black won, then drawn (a drawn Armageddon advances Black all the same, BG-KO-2) - so a matrix run records
+ *  both results rather than only the plain one. `winner` advances either way. */
+export function tiebreakAt(n: number, winner: Side): RequestedOutcome {
+  const rung = TIEBREAK_RUNGS[n % TIEBREAK_RUNGS.length];
+  if (rung !== "armageddon") return { kind: "tiebreak", rung, winner };
+  return { kind: "tiebreak", rung, winner, result: Math.floor(n / TIEBREAK_RUNGS.length) % 2 === 0 ? "black" : "draw" };
+}
+
 /** The `n`th (0-based) HARD-path request a bracket stage makes, ending in a win by `winner`: chess takes its tie-break
  *  (BG-KO-1), and everything else a settle — after a level result where the sport's generator can build one under this
  *  (stage-overlaid) cfg, alternating with an abandon at score, and after an abandon alone where it cannot (generic,
  *  GN-KO-1). The method and rung rotate through the engine's own lists. Shared by the fixture policy and the ladder loop,
  *  so a ladder (a bracket kind played through challenges) owes its deciders by the same rule. */
 export function hardPath(sport: string, cfg: unknown, n: number, winner: Side): RequestedOutcome {
-  if (sport === "boardgame") return { kind: "tiebreak", rung: TIEBREAK_RUNGS[n % TIEBREAK_RUNGS.length], winner };
+  if (sport === "boardgame") return tiebreakAt(n, winner);
   const level = levelReachable(sport, cfg, "knockout") && n % 2 === 0;
   return { kind: "settle", then: winner, method: SETTLE_METHODS[n % SETTLE_METHODS.length], after: level ? "level" : "abandon" };
 }
@@ -540,7 +572,7 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
   // W2a (finding 16): the cfg the PRODUCT folds this fixture under — a bracket stage's overlay (bracketDeciders:
   // a chess tie-break, carrom's extra board) on top of the division's. Generation, the local fold, the request match
   // and the declared points all read it, so parity holds on every boardgame and carrom bracket.
-  const cfg = stageCfg(ctx.spec.sport, ctx.cfg, stage.kind as StageKind);
+  const cfg = caseStageCfg(ctx, stage.kind as StageKind);
   const generated = generateStream({ sportKey: ctx.spec.sport, cfg, stageKind: stage.kind as StageKind, home, away, outcome: asked });
   const prior = rec.streams.get(f.id) ?? [];
   if (resumed !== undefined) {
@@ -674,7 +706,7 @@ export async function decideRound(ctx: ScenarioContext, rec: Recorder, setup: Di
   // W2a: a bracket stage is asked for the hard path every third fixture (bracketPolicy); every other stage keeps the
   // table policy, byte for byte.
   const bracket = forbidsLevelResult(stage.kind);
-  const bracketCfgOf = bracket ? stageCfg(ctx.spec.sport, ctx.cfg, stage.kind as StageKind) : null;
+  const bracketCfgOf = bracket ? caseStageCfg(ctx, stage.kind as StageKind) : null;
   await hooks.beforeRound?.(round, batch);
   for (const f of [...batch].sort((a, b) => (a.fixture_no ?? 0) - (b.fixture_no ?? 0))) {
     const n = rec.bracketOrdinal;
@@ -847,7 +879,8 @@ export async function configProbe(ctx: ScenarioContext, rec: Recorder, setup: Di
   const division = await ctx.driver.getDivision(setup.division.id);
   const attempts: ConfigEditObs["attempts"] = [];
   const cfg = ctx.cfg as Record<string, unknown>;
-  // A format field this sport declares; divisions.ts:814-857 locks it once fixtures exist.
+  // A format field this sport declares. The probe runs after stage 1 was played (`beforeComplete`), and the harness posts
+  // no per-stage match rules, so the started stage inherits it: the PATCH refuses it by name (W2c, X-SR-4 — FORMAT_LOCK).
   const formatDelta = typeof cfg.allowDraws === "boolean" ? { allowDraws: !cfg.allowDraws }
     : typeof cfg.setTo === "number" ? { setTo: cfg.setTo === 15 ? 11 : 15, finalSetTo: cfg.setTo === 15 ? 11 : 15 }
     : null;

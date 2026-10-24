@@ -17,10 +17,12 @@ vi.mock("next/cache", () => ({
   revalidateTag: vi.fn(),
 }));
 
+import { stageDefaultsFor } from "@seazn/engine/sport";
+import { resolveLatestModule } from "@/server/engine-db";
 import { CompetitionHubDoc } from "../competition-hub-schema";
 import { loadCompetitionHub } from "../competition-hub";
 import { getPublicDivision } from "../data";
-import { SWISS_RULES, seedStageRulesScene } from "./_stage-rules-scene";
+import { SWISS_RULES, seedDecidersScene, seedStageRulesScene } from "./_stage-rules-scene";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -61,4 +63,64 @@ describe.skipIf(!HAS_DB)("stage rules reach the hub and the division page throug
       },
     ]);
   }, 60_000);
+});
+
+// W2c Task 16 - the same DB half for the two things the line gained: how a tied match ENDS (needs each stage's KIND
+// from the division read) and a stage's OWN points (needs `points_rule` from the view). A double of `getPublicDivision`
+// cannot say the real SELECT carries either.
+describe.skipIf(!HAS_DB)("a stage's deciders and own points reach the hub and the division page (W2c Task 16)", () => {
+  it("hockey: the division read carries each stage's KIND, and the hub's line for the Cup is its period line and shoot-out (the Pool, playing the division's format, has none)", async () => {
+    const m = resolveLatestModule("hockey");
+    const cfg = m.configSchema.parse(m.variants["fih-outdoor"]) as { periods: { minutes: number } };
+    const preset = stageDefaultsFor(m, "knockout", "fih-outdoor") as { shootout: { attempts: number } };
+    const s = await seedDecidersScene({ sportKey: "hockey", variantKey: "fih-outdoor" });
+    const data = await getPublicDivision(s.orgSlug, s.compSlug, s.divSlug);
+    expect(data, "the seeded division must be public").not.toBeNull();
+    const kinds = new Map(data!.stages.map((st) => [st.id, st.kind]));
+    expect(kinds.get(s.leagueStageId)).toBe("league");
+    expect(kinds.get(s.cupStageId)).toBe("knockout");
+
+    const doc = await loadCompetitionHub(s.orgSlug, s.compSlug);
+    expect(CompetitionHubDoc.safeParse(doc).success).toBe(true);
+    expect(doc!.divisions.find((d) => d.slug === s.divSlug)?.stageFormatLines).toEqual([
+      {
+        stageName: "Cup",
+        line: [
+          { key: "format.rules.period.quarters", params: { minutes: cfg.periods.minutes } },
+          { key: "format.rules.decider.shootout", params: { n: preset.shootout.attempts } },
+        ],
+      },
+    ]);
+  }, 90_000);
+
+  it("football: a stage with its own points says them (view's points_rule), ahead of the Cup in stage order, and the Cup says its extra time and penalties", async () => {
+    const m = resolveLatestModule("football");
+    const cfg = m.configSchema.parse(m.variants["11-a-side"]) as { halfMinutes: number; points: { win: number } };
+    const preset = stageDefaultsFor(m, "knockout", "11-a-side") as { extraTime: { halfMinutes: number }; shootoutAttempts: number };
+    // 4/2 points and a stored 5-0 award: the points are the stage's own, not the division's win of 3; the award score is
+    // the stage's too (X-WO-1 B, Task 16b: the headline reads it, so the line says it) - the clauses below are the whole
+    // sentence.
+    const points = { base: { win: 4, draw: 2, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 1, loserPoints: 0, awardScore: [5, 0] as [number, number] } };
+    expect(cfg.points.win, "premise: the division's win is not the stage's").not.toBe(points.base.win);
+    const s = await seedDecidersScene({ sportKey: "football", variantKey: "11-a-side", leaguePoints: points });
+    const doc = await loadCompetitionHub(s.orgSlug, s.compSlug);
+    expect(doc!.divisions.find((d) => d.slug === s.divSlug)?.stageFormatLines).toEqual([
+      {
+        stageName: "Pool",
+        line: [
+          { key: "format.points.base", params: { win: 4, draw: 2, loss: 0 } },
+          { key: "format.points.forfeit", params: { winner: 1, loser: 0 } },
+          { key: "format.points.forfeitScore", params: { winner: 5, loser: 0 } },
+        ],
+      },
+      {
+        stageName: "Cup",
+        line: [
+          { key: "format.rules.period.halves", params: { minutes: cfg.halfMinutes } },
+          { key: "format.rules.decider.extraTime", params: { n: preset.extraTime.halfMinutes } },
+          { key: "format.rules.decider.penalties", params: { n: preset.shootoutAttempts } },
+        ],
+      },
+    ]);
+  }, 90_000);
 });

@@ -676,3 +676,10 @@ only what a future session cannot re-derive from the code.
      kinds from the engine's own `ImportOp` union
      (`import-wizard-op-badges.test.ts`), so the next op added moves the test
      with it.
+
+## Owed from W2c (2026-10-14, owner "4 Ok") — held rows hidden by run-sheet filters
+
+Pre-existing, found in the W2c X-AB-5 review: the run sheet's "Today" and "Needs result" filters never show an
+UNTIMED held row (a bracket match awaiting settle, and now a table/Swiss abandon awaiting settle under X-AB-5), so it
+is visible only under "All". Owner routed it to this programme. A held row needs the organiser, so it belongs in
+"Needs result" regardless of time. Not yet scheduled.

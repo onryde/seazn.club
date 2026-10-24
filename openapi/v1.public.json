@@ -4525,7 +4525,7 @@
         ]
       },
       "patch": {
-        "summary": "Update a division (format edits 409 FORMAT_LOCKED once fixtures exist). Turning onlinePlay on (a stored value other than 'lichess' patched to 'lichess') is 403 ONLINE_CHESS_DISABLED unless the club is offered online chess (the PostHog flag `online-chess`); re-sending a stored 'lichess', or turning it off, is never refused for that. With onlinePlay 'lichess' in the final config, 400 INVALID_TIME_CONTROL unless config.clock is one of the curated Board API controls (error.controls lists them). camera_policy is editable at any time, but once a round of the division has been opened it can only be relaxed: a tightening of the effective policy is 409 POLICY_LOCKED. Every change of the stored camera_policy is audited",
+        "summary": "Update a division. A format edit (`variant_key`, `config`, `tiebreakers`) is applied PER FIELD (W2c, owner P-2 \"A\"): a change a STARTED stage depends on is not applied and is listed in the 200's `refused` (`field`, `code`, `stageId`, `stageName`) while every other field lands; when nothing in the save can land, 409 DIVISION_FORMAT_LOCKED (the stage plays that format) or 409 DIVISION_TABLE_RULES_LOCKED (the stage's table ranks by it), the message naming the first stage and `refused` listing every field. 422 CONFIG_INVALID when the sport's schema refuses the config (`issues`, plus `refused` when the refusal follows from fields kept as stored), or when a stage's OWN rules would no longer parse under it (`stage_id`, `stage_name`, `issues`); 422 POINTS_MAP_INCOMPLETE when the points table would stop answering a stage's own `bestOf` (`stage_id`, `stage_name`); 422 POINTS_RULE_INEXPRESSIBLE when the save would split the division's points (an overtime or shoot-out split, a tie or no-result, a set-score table paying more than one pair) in a way an unstarted stage's own `points` rule cannot say (`keys` names the split keys, with `stage_id`, `stage_name`) — clear that stage's points first. A variant change re-seeds the preset match rules its unstarted stages still store (a key equal to the old variant's preset becomes the new variant's, or goes when it declares none; a key the new preset adds is written; each stage re-seeded is audited `stage.rules_reseeded`); a key the organiser changed is kept. 400 RULE_NOT_SETTABLE when a new variant cannot carry such a key (`field`, `stage_id`, `stage_name`) — clear it on that stage first. 409 FIXTURE_OWN_FORMAT_NO_LONGER_FITS when an unstarted match's own format (`PUT /fixtures/{id}/rules`) would stop fitting (`fixture_id`, `fixture_no`, `field`). 422 ENTRANT_KIND_IN_USE when entrants of a kind the new format refuses still exist. Turning onlinePlay on (a stored value other than 'lichess' patched to 'lichess') is 403 ONLINE_CHESS_DISABLED unless the club is offered online chess (the PostHog flag `online-chess`); re-sending a stored 'lichess', or turning it off, is never refused for that. With onlinePlay 'lichess' in the final config, 400 INVALID_TIME_CONTROL unless config.clock is one of the curated Board API controls (error.controls lists them). camera_policy is editable at any time, but once a round of the division has been opened it can only be relaxed: a tightening of the effective policy is 409 POLICY_LOCKED. Every change of the stored camera_policy is audited",
         "tags": [
           "divisions"
         ],
@@ -4997,6 +4997,39 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "refused": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "field": {
+                                "type": "string"
+                              },
+                              "code": {
+                                "type": "string",
+                                "enum": [
+                                  "DIVISION_FORMAT_LOCKED",
+                                  "DIVISION_TABLE_RULES_LOCKED"
+                                ]
+                              },
+                              "stageId": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "stageName": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "field",
+                              "code",
+                              "stageId",
+                              "stageName"
+                            ],
+                            "additionalProperties": false
+                          }
                         }
                       },
                       "required": [
@@ -5025,7 +5058,8 @@
                         "archived_at",
                         "created_at",
                         "required_court_tags",
-                        "camera_policy"
+                        "camera_policy",
+                        "refused"
                       ],
                       "additionalProperties": false
                     },
@@ -5067,7 +5101,15 @@
                     "required_court_tags": [
                       "example"
                     ],
-                    "camera_policy": "off"
+                    "camera_policy": "off",
+                    "refused": [
+                      {
+                        "field": "example",
+                        "code": "DIVISION_FORMAT_LOCKED",
+                        "stageId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                        "stageName": "example"
+                      }
+                    ]
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -5105,6 +5147,26 @@
                         "current_seq": {
                           "type": "integer",
                           "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        },
+                        "field": {
+                          "type": "string",
+                          "description": "On RULE_NOT_SETTABLE (400): the stage's own rules key the new variant (or online play) cannot carry"
+                        },
+                        "reason": {
+                          "type": "string",
+                          "enum": [
+                            "online_division"
+                          ],
+                          "description": "On RULE_NOT_SETTABLE (400): why, as a code - `online_division` when the key (clock, clock family) is the division's own once it plays online (Lichess)"
+                        },
+                        "stage_id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "description": "The stage whose own rules refuse the save"
+                        },
+                        "stage_name": {
+                          "type": "string",
+                          "description": "Its name, for the sentence"
                         }
                       },
                       "additionalProperties": true
@@ -5325,6 +5387,60 @@
                         "current_seq": {
                           "type": "integer",
                           "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        },
+                        "refused": {
+                          "type": "array",
+                          "description": "On DIVISION_FORMAT_LOCKED / DIVISION_TABLE_RULES_LOCKED (409): every field refused; the message names the first",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "field": {
+                                "type": "string"
+                              },
+                              "code": {
+                                "type": "string",
+                                "enum": [
+                                  "DIVISION_FORMAT_LOCKED",
+                                  "DIVISION_TABLE_RULES_LOCKED"
+                                ]
+                              },
+                              "stageId": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "stageName": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "field",
+                              "code",
+                              "stageId",
+                              "stageName"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "match_edits": {
+                          "type": "boolean",
+                          "description": "On DIVISION_FORMAT_LOCKED (409): whether the first refused stage's matches can take a format of their own (the sport declares a match-scope key for it); false = the message does not suggest changing individual matches"
+                        },
+                        "fixture_id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "description": "On FIXTURE_OWN_FORMAT_NO_LONGER_FITS (409): the unstarted match whose own format would stop fitting"
+                        },
+                        "fixture_no": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ],
+                          "description": "On FIXTURE_OWN_FORMAT_NO_LONGER_FITS (409): that match's number on the board"
+                        },
+                        "field": {
+                          "type": "string",
+                          "description": "On FIXTURE_OWN_FORMAT_NO_LONGER_FITS (409): the rule that would stop fitting"
                         }
                       },
                       "additionalProperties": true
@@ -5369,6 +5485,81 @@
                         "current_seq": {
                           "type": "integer",
                           "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        },
+                        "issues": {
+                          "type": "array",
+                          "description": "On CONFIG_INVALID (422): the sport schema's reasons, path and message only",
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "path",
+                              "message"
+                            ],
+                            "properties": {
+                              "path": {
+                                "type": "array",
+                                "items": {
+                                  "type": [
+                                    "string",
+                                    "integer"
+                                  ]
+                                }
+                              },
+                              "message": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        },
+                        "refused": {
+                          "type": "array",
+                          "description": "On CONFIG_INVALID (422) after a per-field refusal: the fields kept as stored, whose stored values the config no longer parses with",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "field": {
+                                "type": "string"
+                              },
+                              "code": {
+                                "type": "string",
+                                "enum": [
+                                  "DIVISION_FORMAT_LOCKED",
+                                  "DIVISION_TABLE_RULES_LOCKED"
+                                ]
+                              },
+                              "stageId": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "stageName": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "field",
+                              "code",
+                              "stageId",
+                              "stageName"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "keys": {
+                          "type": "array",
+                          "description": "On POINTS_RULE_INEXPRESSIBLE (422): the division's config keys that split its points (the engine's key names, not labels), which an unstarted stage's own points rule cannot say",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "stage_id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "description": "The stage whose own rules refuse the save"
+                        },
+                        "stage_name": {
+                          "type": "string",
+                          "description": "Its name, for the sentence"
                         }
                       },
                       "additionalProperties": true
@@ -11623,7 +11814,7 @@
             }
           },
           "400": {
-            "description": "Error",
+            "description": "Validation error",
             "content": {
               "application/json": {
                 "schema": {
@@ -11984,7 +12175,7 @@
             }
           },
           "400": {
-            "description": "Error",
+            "description": "Validation error",
             "content": {
               "application/json": {
                 "schema": {
@@ -13235,7 +13426,7 @@
         ]
       },
       "post": {
-        "summary": "Define the stage graph. 422 STAGE_SWISS_ROUNDS_REQUIRED when a `swiss` stage's `config.rounds` is absent or is not a whole number >= 1 — a Swiss round budget is declared up front, never derived from field size",
+        "summary": "Define the stage graph. Each stage is created with its kind's PRESET match rules in `config.rules` (W2c X-SR-6: a bracket stage starts with the deciders its sport presets for its kind and the division's variant — extra time and a shoot-out, overtime, a super over; the engine's `stageDefaults` decides which and their values; a table stage with none), every one the organiser's to switch off. `config.rules` sent with a create is laid over that preset key by key (a null removes the preset key: the stage inherits the division's value; `false` switches OFF a decider the sport turns off with no value at all, ice-hockey `overtime` and `shootout` and the hockey `shootout`). Unlike the stage PUT, `config.rules` that is absent, null or `{}` at create KEEPS the whole preset (a create has nothing stored to clear; to start from the division's own rules, send each preset key as null, or PUT `{}` afterwards). The rules are validated as `PUT /stages/{id}/rules` validates a save: 400 UNKNOWN_RULE_KEY / RULE_NOT_SETTABLE (`field`), 422 CONFIG_INVALID (`issues`), 422 POINTS_MAP_INCOMPLETE; nothing in the batch is written. A stage's own `config.points` (the engine's PointsRule) is asked what the stage PUT asks of it, and `config.points: null` means no points for this slot (as `points: null` does on the stage PUT): nothing is asked and nothing is stored. A non-null value: a bracket stage (no table) 400 RULE_NOT_SETTABLE (`field` `points`); a walkover `awardScore` on a sport whose table never reads it 400 RULE_NOT_SETTABLE (`field` `points.forfeit.awardScore`); a division whose own points a stage rule cannot express 422 POINTS_RULE_INEXPRESSIBLE (`keys` names the split keys); a bonus reading a score the sport does not emit 422 CONFIG_INVALID; bonuses or a forfeit row without `standings.custom_points`, any other plan feature the body needs, or the stage cap, 402 PAYMENT_REQUIRED (the base sentence is free). A decider at the config's TOP level (any whole decider a sport declares, e.g. `config.shootout`, `config.overtime`, `config.superOver`) is refused 400 VALIDATION naming the key (`field`) and where it goes (`config.rules.<key>`). 422 STAGE_SWISS_ROUNDS_REQUIRED when a `swiss` stage's `config.rounds` is absent or is not a whole number >= 1 — a Swiss round budget is declared up front, never derived from field size",
         "tags": [
           "stages"
         ],
@@ -13288,6 +13479,24 @@
                         "default": {},
                         "type": "object",
                         "properties": {
+                          "extraTime": {
+                            "not": {}
+                          },
+                          "overtime": {
+                            "not": {}
+                          },
+                          "shootout": {
+                            "not": {}
+                          },
+                          "superOver": {
+                            "not": {}
+                          },
+                          "tieBoard": {
+                            "not": {}
+                          },
+                          "tiebreakRungs": {
+                            "not": {}
+                          },
                           "legs": {
                             "type": "integer",
                             "minimum": 1,
@@ -13390,8 +13599,6 @@
                           "rank_overrides": {},
                           "cross_feeds": {},
                           "placements": {},
-                          "shootout": {},
-                          "extraTime": {},
                           "rules": {
                             "anyOf": [
                               {
@@ -13698,6 +13905,24 @@
                           "default": {},
                           "type": "object",
                           "properties": {
+                            "extraTime": {
+                              "not": {}
+                            },
+                            "overtime": {
+                              "not": {}
+                            },
+                            "shootout": {
+                              "not": {}
+                            },
+                            "superOver": {
+                              "not": {}
+                            },
+                            "tieBoard": {
+                              "not": {}
+                            },
+                            "tiebreakRungs": {
+                              "not": {}
+                            },
                             "legs": {
                               "type": "integer",
                               "minimum": 1,
@@ -13800,8 +14025,6 @@
                             "rank_overrides": {},
                             "cross_feeds": {},
                             "placements": {},
-                            "shootout": {},
-                            "extraTime": {},
                             "rules": {
                               "anyOf": [
                                 {
@@ -14382,6 +14605,50 @@
               }
             }
           },
+          "402": {
+            "description": "Plan upgrade required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found",
             "content": {
@@ -14525,7 +14792,7 @@
         ]
       },
       "put": {
-        "summary": "Replace the stage graph (v8 Settings format; 409 FORMAT_LOCKED once fixtures exist). 422 STAGE_SWISS_ROUNDS_REQUIRED as for POST, and raised BEFORE the existing graph is deleted",
+        "summary": "Replace the stage graph (v8 Settings format; 409 FORMAT_LOCKED once fixtures exist). Each stage is written as for POST, then the body's `config.rules` over it — except that a slot whose `seq` keeps the same `kind` keeps the rules it already stored IN PLACE OF its preset (a preset key the organiser removed stays removed, and a stage set to the division's rules stays so); a new slot, or one whose kind changed, starts from its own kind's preset. A matched slot also keeps its own `points` (the stage's PointsRule) unless the body sends its own, which replaces it whole, or sends `points: null`, which drops it and stores none; a new slot, or one whose kind changed, has none. Every refusal POST can raise from the body or the carry (400 UNKNOWN_RULE_KEY / RULE_NOT_SETTABLE, 402 PAYMENT_REQUIRED for a plan feature or the stage cap, 409 for a `seq` the body names twice, 422 CONFIG_INVALID / POINTS_MAP_INCOMPLETE / POINTS_RULE_INEXPRESSIBLE / STAGE_SWISS_ROUNDS_REQUIRED) refuses the whole save: a refused save leaves the existing stages untouched",
         "tags": [
           "stages"
         ],
@@ -14578,6 +14845,24 @@
                         "default": {},
                         "type": "object",
                         "properties": {
+                          "extraTime": {
+                            "not": {}
+                          },
+                          "overtime": {
+                            "not": {}
+                          },
+                          "shootout": {
+                            "not": {}
+                          },
+                          "superOver": {
+                            "not": {}
+                          },
+                          "tieBoard": {
+                            "not": {}
+                          },
+                          "tiebreakRungs": {
+                            "not": {}
+                          },
                           "legs": {
                             "type": "integer",
                             "minimum": 1,
@@ -14680,8 +14965,6 @@
                           "rank_overrides": {},
                           "cross_feeds": {},
                           "placements": {},
-                          "shootout": {},
-                          "extraTime": {},
                           "rules": {
                             "anyOf": [
                               {
@@ -14988,6 +15271,24 @@
                           "default": {},
                           "type": "object",
                           "properties": {
+                            "extraTime": {
+                              "not": {}
+                            },
+                            "overtime": {
+                              "not": {}
+                            },
+                            "shootout": {
+                              "not": {}
+                            },
+                            "superOver": {
+                              "not": {}
+                            },
+                            "tieBoard": {
+                              "not": {}
+                            },
+                            "tiebreakRungs": {
+                              "not": {}
+                            },
                             "legs": {
                               "type": "integer",
                               "minimum": 1,
@@ -15090,8 +15391,6 @@
                             "rank_overrides": {},
                             "cross_feeds": {},
                             "placements": {},
-                            "shootout": {},
-                            "extraTime": {},
                             "rules": {
                               "anyOf": [
                                 {
@@ -15551,6 +15850,50 @@
           },
           "401": {
             "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Plan upgrade required",
             "content": {
               "application/json": {
                 "schema": {
@@ -18714,7 +19057,7 @@
     },
     "/api/v1/stages/{id}/rules": {
       "put": {
-        "summary": "Per-stage match-format override (design 2026-09-17) — Best-of-1 in the league/Swiss stage and Best-of-3 in the playoff of the same division. SETS-BASED SPORTS ONLY (tennis, badminton, tabletennis, volleyball); any other sport 400s SPORT_NOT_SUPPORTED. A WHOLE-FRAGMENT replace: what you send is what the stage carries, and `rules: null` clears it back to the division format. \"Inherit\" is key ABSENCE — a null VALUE inside `rules` is stripped, never stored, because the resolver's overlay would copy it over the division's value. Keys are the CONFIG keys the sport's rule fields write, not the form keys that write them: tennis takes `set`, `game` and `tiebreak`, NOT `setType`, `noAd` or `tiebreakWinBy` (400 UNKNOWN_RULE_KEY), and `points` is refused for every sport. The merged `{division config + rules}` is validated through the sport module's own configSchema (422 CONFIG_INVALID) while only the fragment is stored. A `bestOf` override is additionally refused 422 POINTS_MAP_INCOMPLETE when the division's `pointsMap` cannot answer every final set score that `bestOf` can reach — `pointsMap` is looked up by the exact `\"W-L\"` score (else `\"*\"`, else it throws) and is NOT itself overridable per stage, so a division enumerating only its own format's scores would otherwise crash this stage's standings; the refusal names the missing scores. Tennis is unaffected: it pays flat `points {win, loss}` with no score lookup. Editable until the first fixture in THAT stage has a frozen config snapshot or a score event, then 409 STAGE_FORMAT_LOCKED — a monotonic pair, deliberately not `fixtures.status`, which moves backwards when a start is voided",
+        "summary": "Per-stage match-format override (design 2026-09-17; every sport since W2c) — Best-of-1 in the league/Swiss stage and Best-of-3 in the playoff of the same division, an extra-time length on a knockout. What a stage can set is the SPORT'S declaration for the stage's kind and variant, not a list kept here: a key the sport never declares is 400 UNKNOWN_RULE_KEY, a declared key this stage cannot set (a league-only key on a knockout, a knockout-only decider on a table stage) or any points key is 400 RULE_NOT_SETTABLE (`field` names it). On an online (Lichess) division the clock and its clock family (`clock`, `variant`) are the division's own, never a stage's: either key is 400 RULE_NOT_SETTABLE (`field`, `reason: online_division`), and the Lichess challenge plays the division's clock in every stage. Keys are the CONFIG keys, not the editor's form keys: tennis takes `set`, `game` and `tiebreak`, NOT `setType`, `noAd` or `tiebreakWinBy`. The body is a FRAGMENT that MERGES into the stage's stored rules: a key it omits is kept, a key it names is replaced, a null VALUE removes that key (\"inherit\" is key ABSENCE — a stored null would be copied over the division's value by the overlay), `false` switches OFF a decider the sport turns off with no value at all (ice-hockey `overtime` and `shootout`, the hockey `shootout`; football's `shootout` and cricket's `superOver` take `false` as themselves; anywhere else it is 422 CONFIG_INVALID), an empty list is a value (chess `tiebreakRungs: []`, held for the organiser), and `rules: null` or `{}` clears every key back to the division format. The merged `{division config + rules}` is validated through the sport module's own configSchema (422 CONFIG_INVALID) while only the merged rules are stored. A `bestOf` in the body is additionally refused 422 POINTS_MAP_INCOMPLETE when the division's `pointsMap` cannot answer every final set score that `bestOf` can reach — `pointsMap` is looked up by the exact \"W-L\" score (else \"*\", else it throws) and is NOT itself overridable per stage; the refusal names the missing scores. A save that would leave an unstarted match's OWN format (`PUT /fixtures/{id}/rules`) unable to fit the stage is 409 FIXTURE_OWN_FORMAT_NO_LONGER_FITS, naming the match (`fixture_id`, `fixture_no`, `field`) — never a silent drop; the same refusal comes from a division config save. Walkovers no event records are re-scored under the new format in the same transaction (409 FORMAT_DOES_NOT_FIT_PLAY if one cannot hold). The stage's own POINTS ride the same PUT (W2c ST-G8): the body is `{rules?, points?}`, at least one sent, each arm left as stored when omitted, any other key 400. `points` is the engine's PointsRule (`base` win/draw/loss, `bonuses`, a `forfeit` row with an optional walkover `awardScore`) written WHOLE to the stage's `config.points` — a second save replaces it — and `points: null` removes it, back to the division's points. Refused by name: a bracket stage (no table) 400 RULE_NOT_SETTABLE (`field` `points`); a division whose own points a stage rule cannot express (an overtime or shoot-out split, a tie or no-result, a set-score table paying more than one pair) 422 POINTS_RULE_INEXPRESSIBLE (`keys` names the split keys); a walkover `awardScore` on a sport whose table never reads it (the set sports, carrom, the board games) 400 RULE_NOT_SETTABLE (`field` `points.forfeit.awardScore`); a bonus reading a score the sport does not emit 422 CONFIG_INVALID; bonuses or a forfeit row without `standings.custom_points` 402 PAYMENT_REQUIRED (the base sentence is free). A decider at the body's TOP level (any whole decider a sport declares, e.g. `shootout`, `superOver`, `tiebreakRungs`) is 400 VALIDATION, naming the key (`field`) and where it goes (`rules.<key>`). Editable until the first fixture in THAT stage has a frozen config snapshot or a score event, then 409 STAGE_FORMAT_LOCKED — a monotonic pair, deliberately not `fixtures.status`, which moves backwards when a start is voided. The answer is the stage's `rules` and `points` as stored",
         "tags": [
           "stages"
         ],
@@ -18737,6 +19080,24 @@
               "schema": {
                 "type": "object",
                 "properties": {
+                  "extraTime": {
+                    "not": {}
+                  },
+                  "overtime": {
+                    "not": {}
+                  },
+                  "shootout": {
+                    "not": {}
+                  },
+                  "superOver": {
+                    "not": {}
+                  },
+                  "tieBoard": {
+                    "not": {}
+                  },
+                  "tiebreakRungs": {
+                    "not": {}
+                  },
                   "rules": {
                     "anyOf": [
                       {
@@ -18750,15 +19111,130 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "points": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "base": {
+                            "type": "object",
+                            "properties": {
+                              "win": {
+                                "type": "number"
+                              },
+                              "draw": {
+                                "type": "number"
+                              },
+                              "loss": {
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "win",
+                              "draw",
+                              "loss"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "bonuses": {
+                            "default": [],
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "when": {
+                                  "type": "string",
+                                  "enum": [
+                                    "loss_margin_lte",
+                                    "win_margin_gte",
+                                    "score_ratio_gte",
+                                    "draw",
+                                    "forfeit_win",
+                                    "forfeit_loss",
+                                    "no_result"
+                                  ]
+                                },
+                                "param": {
+                                  "type": "number"
+                                },
+                                "points": {
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "when",
+                                "points"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "forfeit": {
+                            "type": "object",
+                            "properties": {
+                              "winnerPoints": {
+                                "type": "number"
+                              },
+                              "loserPoints": {
+                                "type": "number"
+                              },
+                              "awardScore": {
+                                "type": "array",
+                                "prefixItems": [
+                                  {
+                                    "type": "number"
+                                  },
+                                  {
+                                    "type": "number"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "winnerPoints",
+                              "loserPoints"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "base",
+                          "bonuses"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 },
-                "required": [
-                  "rules"
-                ],
                 "additionalProperties": false
               },
               "example": {
-                "rules": {}
+                "rules": {},
+                "points": {
+                  "base": {
+                    "win": 1,
+                    "draw": 1,
+                    "loss": 1
+                  },
+                  "bonuses": [
+                    {
+                      "when": "loss_margin_lte",
+                      "param": 1,
+                      "points": 1
+                    }
+                  ],
+                  "forfeit": {
+                    "winnerPoints": 1,
+                    "loserPoints": 1,
+                    "awardScore": [
+                      1,
+                      1
+                    ]
+                  }
+                }
               }
             }
           }
@@ -18795,10 +19271,107 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "points": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "base": {
+                                  "type": "object",
+                                  "properties": {
+                                    "win": {
+                                      "type": "number"
+                                    },
+                                    "draw": {
+                                      "type": "number"
+                                    },
+                                    "loss": {
+                                      "type": "number"
+                                    }
+                                  },
+                                  "required": [
+                                    "win",
+                                    "draw",
+                                    "loss"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "bonuses": {
+                                  "default": [],
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "when": {
+                                        "type": "string",
+                                        "enum": [
+                                          "loss_margin_lte",
+                                          "win_margin_gte",
+                                          "score_ratio_gte",
+                                          "draw",
+                                          "forfeit_win",
+                                          "forfeit_loss",
+                                          "no_result"
+                                        ]
+                                      },
+                                      "param": {
+                                        "type": "number"
+                                      },
+                                      "points": {
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "when",
+                                      "points"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
+                                "forfeit": {
+                                  "type": "object",
+                                  "properties": {
+                                    "winnerPoints": {
+                                      "type": "number"
+                                    },
+                                    "loserPoints": {
+                                      "type": "number"
+                                    },
+                                    "awardScore": {
+                                      "type": "array",
+                                      "prefixItems": [
+                                        {
+                                          "type": "number"
+                                        },
+                                        {
+                                          "type": "number"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "winnerPoints",
+                                    "loserPoints"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "base",
+                                "bonuses"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
-                        "rules"
+                        "rules",
+                        "points"
                       ],
                       "additionalProperties": false
                     },
@@ -18811,7 +19384,29 @@
                 "example": {
                   "ok": true,
                   "data": {
-                    "rules": {}
+                    "rules": {},
+                    "points": {
+                      "base": {
+                        "win": 1,
+                        "draw": 1,
+                        "loss": 1
+                      },
+                      "bonuses": [
+                        {
+                          "when": "loss_margin_lte",
+                          "param": 1,
+                          "points": 1
+                        }
+                      ],
+                      "forfeit": {
+                        "winnerPoints": 1,
+                        "loserPoints": 1,
+                        "awardScore": [
+                          1,
+                          1
+                        ]
+                      }
+                    }
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -18819,7 +19414,7 @@
             }
           },
           "400": {
-            "description": "Error",
+            "description": "Validation error",
             "content": {
               "application/json": {
                 "schema": {
@@ -19630,7 +20225,8 @@
                       "example"
                     ],
                     "order": [
-                      "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                      "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                      "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a21"
                     ]
                   }
                 ]
@@ -23302,7 +23898,7 @@
                     }
                   ]
                 },
-                "tz": "example"
+                "tz": "Europe/London"
               }
             }
           }
@@ -32124,7 +32720,7 @@
                 "additionalProperties": false
               },
               "example": {
-                "streamUrl": "example"
+                "streamUrl": "https://www.youtube.com/watch?v=example"
               }
             }
           }
@@ -32363,6 +32959,670 @@
           },
           "422": {
             "description": "Rejected by the engine",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ]
+      }
+    },
+    "/api/v1/fixtures/{id}/rules": {
+      "put": {
+        "summary": "One match's own format over its stage's (W2c X-SR-2), and the live correction of a STARTED match's format (X-SR-5, owner Q11). A WHOLE-FRAGMENT replace: `rules` is the match's format over its stage's, and `rules: null` (or `{}`, or only null values) sets it back to the stage's — a null VALUE means inherit and is never stored. Only the leaves that differ from the stage's format are stored, so a later stage edit still reaches every leaf the match did not change. Keys are the sport's declared rule keys (400 UNKNOWN_RULE_KEY otherwise); a key the sport scopes per stage, or a decider switched on or lengthened, is 400 RULE_NOT_SETTABLE; the merged `{division + stage rules + bracket deciders + rules}` is parsed by the sport's configSchema (422 CONFIG_INVALID, the engine's message on `field`). A finished match (finalized or cancelled) is 409 FIXTURE_FORMAT_LOCKED. A started match is corrected only if the recorded play fits the new format: its ledger refolded under it must fold, keep its outcome and keep its score as shown, else 409 FORMAT_DOES_NOT_FIT_PLAY (\"This format would end the match as it stands\" when it would decide an open match). A correction re-freezes the match's config and bumps `rules_version` (an open pad compares it); re-sending the format it already plays bumps nothing. A match decided WITHOUT play (a walkover no event records) is started too: the correction must keep the award and its credited score (else 409 FORMAT_DOES_NOT_FIT_PLAY), and a bye, which credits no score, is 409 FIXTURE_FORMAT_LOCKED. Errors carry `fixture_id` and, where one applies, `field`. Organiser auth (no device link): a caller without write access to the fixture (a read-only role, an API key without the scope) is 403.",
+        "tags": [
+          "fixtures"
+        ],
+        "x-required-scope": "manage",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "rules": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "additionalProperties": {}
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "rules"
+                ],
+                "additionalProperties": false
+              },
+              "example": {
+                "rules": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "fixtures": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "started": {
+                                "type": "boolean"
+                              },
+                              "rules_version": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "started",
+                              "rules_version"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "fixtures"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "fixtures": [
+                      {
+                        "id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                        "started": true,
+                        "rules_version": 0
+                      }
+                    ]
+                  },
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Plan upgrade required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Rejected by the engine",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ]
+      },
+      "get": {
+        "summary": "The rules a match plays by now (W2c X-SR-7, owner P-1): `cfg` (the format its ledger folds under), `rules_version` (bumped by each live correction of a started match) and `format_line` (the rules line the public pages print, in the reader's language: the format, how a tied match ends, an abandon policy the stage changed; null when there is none to say). An open scoring pad reloads them after 409 FIXTURE_RULES_CHANGED, or when an append's answer carries a newer `rules_version`. Organiser or device link, as GET /fixtures/{id}/state",
+        "tags": [
+          "scoring"
+        ],
+        "x-required-scope": "read",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "cfg": {},
+                        "rules_version": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "format_line": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "cfg",
+                        "rules_version",
+                        "format_line"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "cfg": null,
+                    "rules_version": 0,
+                    "format_line": "example"
+                  },
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
             "content": {
               "application/json": {
                 "schema": {
@@ -32985,7 +34245,7 @@
     },
     "/api/v1/fixtures/{id}/events": {
       "post": {
-        "summary": "Append a score event (THE scoring endpoint). 403 RESULT_CARRIED_FORWARD: a device link writing to a fixture whose settled result has already moved the competition on (its winner or loser feed seated, the next Swiss round paired, or its stage complete) — corrections are then the organiser's. A keyed retry of a write the ledger already holds still gets its original answer. 426 ENGINE_OUTDATED: the request carries an engine_epoch lower than the server's fold epoch for the fixture's sport — update the client; nothing was written and the idempotency key is not consumed (an absent or higher engine_epoch is accepted; a retry of an already-accepted key answers its original event even after the epoch has moved). This 426 carries no Upgrade header (it is not a protocol upgrade): key on error.code ENGINE_OUTDATED, never on the status alone",
+        "summary": "Append a score event (THE scoring endpoint). 403 RESULT_CARRIED_FORWARD: a device link writing to a fixture whose settled result has already moved the competition on (its winner or loser feed seated, the next Swiss round paired, or its stage complete) — corrections are then the organiser's. A keyed retry of a write the ledger already holds still gets its original answer. 409 FIXTURE_RULES_CHANGED (W2c X-SR-7): the request sent a `rules_version` that is not the match's — its format was corrected since; nothing was written, and the error carries the match's `rules_version` and `format` (its rules line, en: the format, how a tied match ends, an abandon policy the stage changed; null when none). Checked only when sent, and before `expected_seq`. Every 201 carries the match's `rules_version`. 426 ENGINE_OUTDATED: the request carries an engine_epoch lower than the server's fold epoch for the fixture's sport — update the client; nothing was written and the idempotency key is not consumed (an absent or higher engine_epoch is accepted; a retry of an already-accepted key answers its original event even after the epoch has moved). This 426 carries no Upgrade header (it is not a protocol upgrade): key on error.code ENGINE_OUTDATED, never on the status alone",
         "tags": [
           "scoring"
         ],
@@ -33028,6 +34288,11 @@
                     "description": "Fold epoch of the client's engine for this fixture's sport (engine-split D26/D31). Native clients send it; the web pad does not.",
                     "type": "integer",
                     "minimum": 1,
+                    "maximum": 9007199254740991
+                  },
+                  "rules_version": {
+                    "type": "integer",
+                    "minimum": 0,
                     "maximum": 9007199254740991
                   }
                 },
@@ -33087,6 +34352,11 @@
                           "type": "string",
                           "format": "uuid",
                           "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "rules_version": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
                         }
                       },
                       "required": [
@@ -33094,7 +34364,8 @@
                         "state_summary",
                         "outcome",
                         "status",
-                        "event_id"
+                        "event_id",
+                        "rules_version"
                       ],
                       "additionalProperties": false
                     },
@@ -33111,7 +34382,8 @@
                     "state_summary": null,
                     "outcome": null,
                     "status": "example",
-                    "event_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                    "event_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                    "rules_version": 0
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -34341,6 +35613,11 @@
                           "type": "string",
                           "format": "uuid",
                           "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "rules_version": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
                         }
                       },
                       "required": [
@@ -34348,7 +35625,8 @@
                         "state_summary",
                         "outcome",
                         "status",
-                        "event_id"
+                        "event_id",
+                        "rules_version"
                       ],
                       "additionalProperties": false
                     },
@@ -34365,7 +35643,8 @@
                     "state_summary": null,
                     "outcome": null,
                     "status": "example",
-                    "event_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                    "event_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                    "rules_version": 0
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -40238,13 +41517,28 @@
                           "live": true,
                           "status": "scheduled",
                           "sides": [
-                            null
+                            {
+                              "entrantId": "example",
+                              "name": "example",
+                              "short": "example",
+                              "colour": null,
+                              "badgeUrl": null
+                            },
+                            {
+                              "entrantId": "example",
+                              "name": "example",
+                              "short": "example",
+                              "colour": null,
+                              "badgeUrl": null
+                            }
                           ],
                           "scoreLines": [
-                            null
+                            "example",
+                            "example"
                           ],
                           "subLines": [
-                            null
+                            "example",
+                            "example"
                           ],
                           "battingIndex": 0,
                           "statusLine": {
@@ -43323,13 +44617,28 @@
                         "live": true,
                         "status": "scheduled",
                         "sides": [
-                          null
+                          {
+                            "entrantId": "example",
+                            "name": "example",
+                            "short": "example",
+                            "colour": "example",
+                            "badgeUrl": "example"
+                          },
+                          {
+                            "entrantId": "example",
+                            "name": "example",
+                            "short": "example",
+                            "colour": "example",
+                            "badgeUrl": "example"
+                          }
                         ],
                         "scoreLines": [
-                          null
+                          "example",
+                          "example"
                         ],
                         "subLines": [
-                          null
+                          "example",
+                          "example"
                         ],
                         "battingIndex": 0,
                         "statusLine": {
@@ -43454,7 +44763,12 @@
                           "example"
                         ],
                         "rows": [
-                          null
+                          [
+                            null
+                          ],
+                          [
+                            null
+                          ]
                         ],
                         "closedMask": [
                           true
@@ -53091,7 +54405,7 @@
               "example": {
                 "contact": {
                   "name": "example",
-                  "email": "example",
+                  "email": "user@example.com",
                   "dob": "2026-08-01",
                   "gender": "m"
                 },
@@ -53266,7 +54580,7 @@
             }
           },
           "400": {
-            "description": "Error",
+            "description": "Validation error",
             "content": {
               "application/json": {
                 "schema": {
@@ -53944,7 +55258,7 @@
                   "full_name": "example",
                   "dob": "2026-08-01",
                   "gender": "m",
-                  "email": "example"
+                  "email": "user@example.com"
                 },
                 "player_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                 "guardian_name": "example",
@@ -54597,7 +55911,7 @@
                 "additionalProperties": false
               },
               "example": {
-                "token": "example"
+                "token": "exampleexa"
               }
             }
           }
@@ -54899,7 +56213,7 @@
                 "additionalProperties": false
               },
               "example": {
-                "token": "example"
+                "token": "exampleexa"
               }
             }
           }
@@ -55335,7 +56649,7 @@
                 "additionalProperties": false
               },
               "example": {
-                "token": "example"
+                "token": "exampleexa"
               }
             }
           }
@@ -55499,7 +56813,7 @@
                 "additionalProperties": false
               },
               "example": {
-                "token": "example"
+                "token": "exampleexa"
               }
             }
           }
@@ -61812,7 +63126,7 @@
                 "display_name": "example",
                 "person_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                 "entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
-                "email": "example",
+                "email": "user@example.com",
                 "role_keys": [
                   "example"
                 ]
@@ -62513,7 +63827,7 @@
                 "display_name": "example",
                 "person_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                 "entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
-                "email": "example"
+                "email": "user@example.com"
               }
             }
           }
@@ -70609,7 +71923,7 @@
             }
           },
           "400": {
-            "description": "Error",
+            "description": "Validation error",
             "content": {
               "application/json": {
                 "schema": {
@@ -73775,7 +75089,7 @@
             }
           },
           "400": {
-            "description": "Error",
+            "description": "Validation error",
             "content": {
               "application/json": {
                 "schema": {
@@ -75410,7 +76724,7 @@
             }
           },
           "400": {
-            "description": "Error",
+            "description": "Validation error",
             "content": {
               "application/json": {
                 "schema": {
@@ -76503,7 +77817,7 @@
             }
           },
           "400": {
-            "description": "Error",
+            "description": "Validation error",
             "content": {
               "application/json": {
                 "schema": {
@@ -79212,7 +80526,7 @@
             }
           },
           "400": {
-            "description": "Error",
+            "description": "Validation error",
             "content": {
               "application/json": {
                 "schema": {

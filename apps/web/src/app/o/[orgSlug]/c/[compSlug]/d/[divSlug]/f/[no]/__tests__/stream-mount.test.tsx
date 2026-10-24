@@ -24,6 +24,8 @@ const scene = vi.hoisted(() => ({
 const spies = vi.hoisted(() => ({
   loader: vi.fn(),
   openStreams: vi.fn(),
+  // W2c Task 19: the match rules block's facts. A spy, so what pins the page is WHO it reads them for, not the loader.
+  matchRules: vi.fn(),
 }));
 
 vi.mock("@/server/page-auth", () => ({
@@ -56,6 +58,7 @@ vi.mock("@/server/usecases/fixtures", () => ({
   getLineup: vi.fn(async () => ({ slots: [] })),
   loadFixturePadCfg: vi.fn(async () => ({ cfg: {}, stageKind: scene.stageKind })),
   fixtureFeedsNextMatch: vi.fn(async (_auth: unknown, id: string) => (id === "fx-7" ? scene.feedsNext : !scene.feedsNext)),
+  loadFixtureMatchRules: spies.matchRules,
 }));
 vi.mock("@/server/usecases/divisions", () => ({
   getDivision: vi.fn(async () => ({
@@ -109,6 +112,21 @@ vi.mock("@/server/usecases/stream-sessions", () => ({ openStreamStates: spies.op
 import FixturePage from "../page";
 import { FixtureConsole } from "@/components/v2/fixture-console";
 
+/** What `loadFixtureMatchRules` answers: the serialisable facts, plus a function-valued `fields` an RSC payload cannot carry. */
+const MATCH_RULES = {
+  sportKey: "football",
+  stageKind: "knockout",
+  variant: "11-a-side",
+  stageLine: "2 halves of 45 min",
+  override: null,
+  stageResolved: { halfMinutes: 45 },
+  effective: { halfMinutes: 45 },
+  effectiveLine: "2 halves of 45 min",
+  fields: [{ key: "halfMinutes", build: () => ({}) }],
+  state: "unstarted",
+  cancelled: false,
+};
+
 const CONTEXT = { entitled: true, relayEntitled: true, relayDisabled: false, orgId: "org-1", streamBalance: 2 };
 
 function find(node: ReactNode, type: unknown): ReactElement | null {
@@ -143,6 +161,8 @@ beforeEach(() => {
   spies.loader.mockImplementation(async () => CONTEXT);
   spies.openStreams.mockReset();
   spies.openStreams.mockImplementation(async () => Object.fromEntries(scene.open.map((id) => [id, "live"])));
+  spies.matchRules.mockReset();
+  spies.matchRules.mockImplementation(async () => MATCH_RULES);
 });
 
 describe("the organiser fixture page mounts Stream (spec 2026-09-30 §2)", () => {
@@ -277,5 +297,38 @@ describe("the organiser fixture page names ruling 116's withdrawn winner for the
       checked++;
     }
     expect(checked).toBe(ROWS.length);
+  });
+});
+
+describe("the organiser fixture page mounts the match rules block (W2c Task 19, S2)", () => {
+  it("an organiser on an unfrozen page: the loader is read for THIS fixture and the console gets its facts - JSON only, the function-valued fields dropped", async () => {
+    const props = await consoleProps();
+    expect(spies.matchRules).toHaveBeenCalledTimes(1);
+    expect(spies.matchRules.mock.calls[0][1], "read for this fixture").toBe("fx-7");
+    // Every fact the loader answers but the function-valued `fields`.
+    const facts = Object.fromEntries(Object.entries(MATCH_RULES).filter(([k]) => k !== "fields"));
+    expect(props.matchRules).toEqual({ fixtureId: "fx-7", ...facts });
+    expect(JSON.parse(JSON.stringify(props.matchRules)), "what crosses the RSC boundary survives JSON").toEqual(props.matchRules);
+  });
+
+  it("organisers only: a scorer without canEdit is not offered the block, and its facts are not read", async () => {
+    Object.assign(scene, { canEdit: false, canScore: true });
+    const props = await consoleProps();
+    expect(props.matchRules, "the writer is organiser auth: a block shown to a scorer would only earn a 403").toBeUndefined();
+    expect(spies.matchRules, "nothing is read for a scorer").not.toHaveBeenCalled();
+  });
+
+  it("a billing-frozen competition is offered no block, and nothing is read", async () => {
+    Object.assign(scene, { frozen: true });
+    const props = await consoleProps();
+    expect(props.matchRules).toBeUndefined();
+    expect(spies.matchRules).not.toHaveBeenCalled();
+  });
+
+  it("a sport with nothing to change for one match (the loader answers no fields) gets no block", async () => {
+    spies.matchRules.mockImplementation(async () => ({ ...MATCH_RULES, sportKey: "generic", fields: [] }));
+    const props = await consoleProps();
+    expect(spies.matchRules).toHaveBeenCalledTimes(1);
+    expect(props.matchRules).toBeUndefined();
   });
 });

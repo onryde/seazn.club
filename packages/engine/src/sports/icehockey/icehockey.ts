@@ -3,9 +3,10 @@
 // sudden-death OT (5', 3 skaters + goalkeeper) then GWS (5 shooters + sudden-
 // death pairs); the full penalty ladder with power-play strength and PIM;
 // Event Code §219 points (3 · 2 · 1 · 0) and the §220 H2H-first tie-break.
+import { BRACKET_KINDS } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import type { PlayerStatsModel } from "../../stats/stats.ts";
-import { makePeriodModule, periodKeeperStatsFold, type PeriodSuspensionReason } from "../period/kernel.ts";
+import { makePeriodModule, PERIOD_RULE_KEYS, periodKeeperStatsFold, type PeriodSuspensionReason } from "../period/kernel.ts";
 import { ICEHOCKEY_RECREATIONAL_SUSPENSIONS, ICEHOCKEY_SUSPENSIONS } from "../period/suspensions.ts";
 
 // S4 (#428) — IIHF's own subset of the shared `PeriodSuspensionReason` union:
@@ -158,14 +159,22 @@ const playerStats: PlayerStatsModel = {
   folded: periodKeeperStatsFold(() => icehockey, "icehockey.goal", "G", "icehockey.shot"),
 };
 
+// The IIHF preliminary-round deciders: sudden-death overtime, 3 skaters and a goalkeeper a side, then the GWS. One
+// constant for the module's default cfg and for the knockout preset below, so the preset's skaters and shoot-out are
+// the engine's own, never a second copy.
+const IIHF_OVERTIME = { kind: "sudden_death", minutes: 5, skaters: 3 } as const;
+const IIHF_SHOOTOUT = { attempts: 5, suddenDeath: true } as const;
+// IH-KO-1 (RB2B-9, owner Q7) — a knockout game's overtime is 10 minutes, not the preliminary round's 5.
+const KNOCKOUT_OVERTIME_MINUTES = 10;
+
 export const icehockey = makePeriodModule({
   key: "icehockey",
   version: "1.0.0",
   // Default = IIHF preliminary-round rules.
   defaults: {
     periods: { count: 3, minutes: 20 },
-    overtime: { kind: "sudden_death", minutes: 5, skaters: 3 },
-    shootout: { attempts: 5, suddenDeath: true },
+    overtime: { ...IIHF_OVERTIME },
+    shootout: { ...IIHF_SHOOTOUT },
     // Event Code §219: regulation win 3, OT/GWS win 2, OT/GWS loss 1, loss 0.
     points: { win: 3, draw: 1, loss: 0, otWin: 2, otLoss: 1 },
     suspensions: { classes: ICEHOCKEY_SUSPENSIONS },
@@ -200,6 +209,19 @@ export const icehockey = makePeriodModule({
       suspensions: { classes: ICEHOCKEY_RECREATIONAL_SUSPENSIONS },
     },
   },
+  // W2c (spec §4.1 Q5) — the period kernel's keys as they are: overtime and the shoot-out per stage, their lengths
+  // per match.
+  ruleKeys: { ...PERIOD_RULE_KEYS },
+  // W2c Q10 (D9; review I5) - replay or the result as it stood (IH-AB-1). The 4th-quarter rule is a field-hockey rule
+  // (HK-AB-2): ice hockey is never offered `q4_stands`, and its schema refuses it.
+  abandonOptions: ["replay", "award"],
+  // W2c X-SR-6, IH-KO-1 (spec §4.2) — the preset a NEW bracket stage should start with: a 10-minute sudden-death overtime
+  // and the GWS, each the organiser's to switch off; a table stage starts with none. A fresh object on every call. Stage
+  // creation writes it into `stages.config.rules` (apps/web usecases/stage-defaults.ts, W2c Task 12).
+  stageDefaults: (kind) =>
+    BRACKET_KINDS.has(kind)
+      ? { overtime: { ...IIHF_OVERTIME, minutes: KNOCKOUT_OVERTIME_MINUTES }, shootout: { ...IIHF_SHOOTOUT } }
+      : {},
   positions,
   keeperGroup: "G",
   // S3/W4b (#426) ruling 2 — IIHF Rule 68: substitution is unlimited and "on

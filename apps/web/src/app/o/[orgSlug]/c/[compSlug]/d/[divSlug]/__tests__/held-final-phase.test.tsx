@@ -20,8 +20,16 @@ vi.mock("@/server/page-auth", () => pageAuth);
 vi.mock("@/server/usecases/stages", () => stagesSpies);
 
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: vi.fn(async () => "en") }));
+// W2c Task 17: the PUBLIC dictionary carries the rules-line clauses the stage format row's chips are worded from; the double
+// holds one of them and one key that is not a clause, so the slice the page hands the panel can be told from the whole.
+// W2c Task 18: and one `format.points.*` clause, which the stage points section's preview is worded from.
+const PUBLIC_DICT = {
+  "format.rules.decider.extraTime": "extra time (2 × {n} min)",
+  "format.points.base": "{win} for a win",
+  "landing.title": "not a rules-line key",
+};
 vi.mock("@/lib/i18n", () => ({
-  getDictionary: vi.fn(async () => ({})),
+  getDictionary: vi.fn(async (_locale: unknown, ns: string) => (ns === "public" ? PUBLIC_DICT : {})),
   t: (_dict: unknown, key: string) => key,
 }));
 vi.mock("@/server/usecases/divisions", () => ({
@@ -149,7 +157,12 @@ const renderTab = () =>
     searchParams: Promise.resolve({ tab: "fixtures" }),
   });
 
-type PanelProps = { phase?: string; awaitingSettle?: readonly string[] };
+type PanelProps = {
+  phase?: string;
+  awaitingSettle?: readonly string[];
+  ruleDict?: Record<string, string>;
+  pointsDict?: Record<string, string>;
+};
 
 describe("the division page reads an abandoned final awaiting its settle as owed work (fix round 1, M3/M10)", () => {
   beforeEach(() => {
@@ -180,5 +193,42 @@ describe("the division page reads an abandoned final awaiting its settle as owed
     expect(props.awaitingSettle).toEqual([FINAL.id]);
     expect(deskSpies.listFixturesAwaitingSettle).toHaveBeenCalledTimes(1);
     expect(deskSpies.listFixturesAwaitingSettle.mock.calls[0]![1], "asked about THIS division").toBe("div-1");
+  });
+});
+
+describe("the fixtures tab hands the stage format row the rules-line words (W2c Task 17, review I-1)", () => {
+  beforeEach(() => {
+    pageAuth.requireDivisionPage.mockReset().mockResolvedValue(PAGE);
+    stagesSpies.listStages.mockReset().mockResolvedValue([KO_STAGE]);
+    stagesSpies.getSeedProposal.mockReset();
+    stagesSpies.getStageRosterDrift.mockReset().mockResolvedValue({ ghosts: [], unplaced: [] });
+    fixtureSpies.listDivisionFixtures.mockReset().mockResolvedValue([FINAL]);
+    deskSpies.listFixturesAwaitingSettle.mockReset().mockResolvedValue(new Set());
+  });
+
+  it("StagesPanel gets the format.rules.* slice of the PUBLIC dictionary and nothing else of it", async () => {
+    const panel = find(await renderTab(), StagesPanel);
+    expect(panel, "the fixtures tab mounts StagesPanel").not.toBeNull();
+    const props = panel!.props as PanelProps;
+    expect(props.ruleDict, "the seam is wired: the chips have words to resolve against").toBeDefined();
+    expect(props.ruleDict).toEqual({ "format.rules.decider.extraTime": PUBLIC_DICT["format.rules.decider.extraTime"] });
+    expect(Object.hasOwn(props.ruleDict!, "landing.title"), "a key that is not a clause is not sent").toBe(false);
+  });
+});
+
+describe("the fixtures tab hands the stage points section its words (W2c Task 18)", () => {
+  beforeEach(() => {
+    pageAuth.requireDivisionPage.mockReset().mockResolvedValue(PAGE);
+    stagesSpies.listStages.mockReset().mockResolvedValue([KO_STAGE]);
+    stagesSpies.getSeedProposal.mockReset();
+    stagesSpies.getStageRosterDrift.mockReset().mockResolvedValue({ ghosts: [], unplaced: [] });
+    fixtureSpies.listDivisionFixtures.mockReset().mockResolvedValue([FINAL]);
+    deskSpies.listFixturesAwaitingSettle.mockReset().mockResolvedValue(new Set());
+  });
+
+  it("StagesPanel gets the format.points.* slice of the PUBLIC dictionary - the points words, not the rules words, not the rest", async () => {
+    const props = find(await renderTab(), StagesPanel)!.props as PanelProps;
+    expect(props.pointsDict, "the seam is wired: the preview has words to resolve against").toEqual({ "format.points.base": PUBLIC_DICT["format.points.base"] });
+    expect(Object.hasOwn(props.ruleDict!, "format.points.base"), "the chips do not carry the points clauses").toBe(false);
   });
 });

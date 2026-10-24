@@ -7,6 +7,7 @@
 // per-sport walkover rows (FB-WO-1, HK-WO-1, BD-WO-1, BG-WO-1, CK-WO-1, GN-WO-1) for the preview.
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
+import { pointsRuleAwardReachesTable } from "@seazn/engine/competition";
 import { foldMatch, FORFEIT_REASONS, type EventEnvelope, type ForfeitReason } from "@seazn/engine/core";
 import { builtinModules } from "@seazn/engine/sports";
 import { defaultLineupPair, makeEnvelope, onePlayEvent } from "@seazn/engine/testkit";
@@ -237,6 +238,93 @@ describe("UI-1 forfeit dialog model (spec §5.5)", () => {
     const fx = fixtureOf("football", (l) => [ev(1, "core.start"), ev(2, "football.goal", { by: l.home.entrantId })]);
     expect(fx.m.summary(fx.state as never).headline, "the rig scored the goal: the played score is 1-0").toBe("1 — 0");
     expect(model(fx).preview("away", "retired")).toEqual({ home: "3", away: "0" });
+  });
+
+  // X-WO-1 part B (Task 16b): the console previews "the credit the table will carry". Under a stage points rule that awards
+  // a walkover score, the table carries the RULE's number for a forfeit with nothing played, so the preview says that one.
+  describe("X-WO-1 B: the preview reads the stage rule's award where the forfeit would be unplayed", () => {
+    const reaching = () => builtinModules.filter((m) => pointsRuleAwardReachesTable(m));
+    /** The rule's award for a sport: its own default walkover figure + 4, the offender a nonzero 1 (never the default). */
+    const awardOf = (key: string): [number, number] => {
+      const fx = fixtureOf(key, PRE);
+      const keys = fx.m.awardScoreKeys!;
+      return [fx.m.forfeitCredit(fx.cfg, fx.state, "walkover", "away").perSide[0][keys.for]! + 4, 1];
+    };
+    const offered = (fx: ReturnType<typeof fixtureOf>, forfeitAward?: [number, number]) =>
+      forfeitDialogModel(fx.m, fx.cfg, fx.state, { noNextMatch: false, playRecorded: forfeitPlayRecorded(rowsOf(fx.events), fx.m), ...(forfeitAward === undefined ? {} : { forfeitAward }) });
+
+    it("every sport the award reaches, before play and after a bare Start, both sides: the rule's number, the side that turned up first", () => {
+      let checked = 0;
+      for (const m of reaching()) {
+        const [w, l] = awardOf(m.key);
+        for (const [shape, ledger] of [["pre", PRE], ["started", STARTED]] as const) {
+          const fx = fixtureOf(m.key, ledger);
+          const d = offered(fx, [w, l]);
+          const plain = offered(fx);
+          expect(plain.preview("away", "walkover"), `${m.key}/${shape}: premise - without the rule the preview is not the rule's`).not.toEqual({ home: String(w), away: String(l) });
+          expect(d.preview("away", "walkover"), `${m.key}/${shape}: home turned up`).toEqual({ home: String(w), away: String(l) });
+          expect(d.preview("home", "walkover"), `${m.key}/${shape}: away turned up`).toEqual({ home: String(l), away: String(w) });
+          expect(d.preview("both", "walkover"), `${m.key}/${shape}: a double walkover credits nothing`).toBeNull();
+          checked++;
+        }
+      }
+      expect(checked, "sport x shape cases").toBe(reaching().length * 2);
+      expect(reaching().length).toBeGreaterThan(0);
+    });
+
+    it("P-3: a forfeit AFTER play keeps the sport's own credit - the preview is the same with or without the rule's award (disqualified from a bare start is unplayed and takes it)", () => {
+      let checked = 0;
+      for (const m of reaching()) {
+        const [w, l] = awardOf(m.key);
+        const fx = playedOf(m.key);
+        const d = offered(fx, [w, l]);
+        const plain = offered(fx);
+        for (const who of ["home", "away"] as const) {
+          expect(d.preview(who, "retired"), `${m.key}/${who}: retired after play`).toEqual(plain.preview(who, "retired"));
+          expect(d.preview(who, "disqualified"), `${m.key}/${who}: disqualified after play`).toEqual(plain.preview(who, "disqualified"));
+        }
+        const started = offered(fixtureOf(m.key, STARTED), [w, l]);
+        expect(started.preview("away", "disqualified"), `${m.key}: disqualified from a bare Start is unplayed`).toEqual({ home: String(w), away: String(l) });
+        checked++;
+      }
+      expect(checked).toBe(reaching().length);
+    });
+
+    it("a nil-nil award is an award: the preview says 0 - 0 where the headline does, and only an applied award lifts the 'no score' suppression", () => {
+      // The headline reads the rule's "0 - 0" (engine forfeit-award.test.ts), so the dialog must not preview nothing.
+      let checked = 0;
+      let suppressedWithout = 0;
+      for (const m of reaching()) {
+        for (const [shape, ledger] of [["pre", PRE], ["started", STARTED]] as const) {
+          const fx = fixtureOf(m.key, ledger);
+          const plain = offered(fx);
+          const nil = offered(fx, [0, 0]);
+          for (const who of ["home", "away"] as const) {
+            expect(nil.preview(who, "walkover"), `${m.key}/${shape}/${who}: a 0-0 rule award previews 0 - 0`).toEqual({ home: "0", away: "0" });
+            // The no-award twin keeps the sport's own reading (a credit of nothing reads as none: generic's 0-0).
+            if (plain.preview(who, "walkover") === null) suppressedWithout++;
+            checked++;
+          }
+        }
+        // After play, a retirement is not unplayed: the 0-0 award never applies, so the sport's own credit stands.
+        const played = playedOf(m.key);
+        for (const who of ["home", "away"] as const) {
+          expect(offered(played, [0, 0]).preview(who, "retired"), `${m.key}/${who}: retired after play ignores the award`).toEqual(offered(played).preview(who, "retired"));
+        }
+      }
+      expect(checked, "sport x shape x side cases").toBe(reaching().length * 2 * 2);
+      expect(reaching().length).toBeGreaterThan(0);
+      // The suppression the bypass must not remove: generic credits 0-0 without an award and previews nothing.
+      expect(suppressedWithout, "sports whose own walkover credit is 0-0 still preview nothing without an award").toBeGreaterThan(0);
+      expect(offered(fixtureOf("generic", PRE)).preview("away", "walkover")).toBeNull();
+    });
+
+    it("no award offered: nothing changes (the empty case) - and a sport the award never reaches is never offered one", () => {
+      const fx = fixtureOf("football", PRE);
+      expect(offered(fx).preview("away", "walkover")).toEqual({ home: "3", away: "0" });
+      expect(pointsRuleAwardReachesTable(mod("badminton")), "premise").toBe(false);
+      expect(offered(fixtureOf("badminton", PRE)).preview("away", "walkover")).toEqual({ home: "2", away: "0" });
+    });
   });
 
   it("BG-WO-3: a chess fixture whose tie-break is pending offers one side's walkover, retirement or disqualification, never Neither", () => {

@@ -2,6 +2,7 @@
 // declarations (SETTLE_METHODS, TIEBREAK_RUNGS, StageKind.options, supportsDraws) and the rule rows (BG-KO-1, GN-KO-1,
 // X-ST-1), never from the policy's own text. Needs loop D's exports (merged into this lane).
 import { SETTLE_METHODS, StageKind, forbidsLevelResult } from "@seazn/engine/core";
+import { bracketRanks, type BracketFixture } from "@seazn/engine/competition";
 import { generatePagePlayoff } from "@seazn/engine/scheduling";
 import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import { describe, expect, it } from "vitest";
@@ -14,7 +15,7 @@ import { Recorder, bracketPolicy, hardPath, type DivisionSetup } from "../lib/sc
 import { bracketDeciderExercised } from "../lib/scenarios/assertions.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import type { CaseSpec } from "../lib/scenarios/types.ts";
-import { resolveSportCfg, stageCfg } from "../lib/sport-cfg.ts";
+import { decidersOffRulesFor, resolveSportCfg, stageCfg } from "../lib/sport-cfg.ts";
 import { levelReachable } from "../lib/streams/index.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 import { FakeKnockoutDriver } from "./fake-driver.ts";
@@ -22,7 +23,10 @@ import { FakeKnockoutDriver } from "./fake-driver.ts";
 /** A setup that seeds by id order: "a" is seed 1, "b" seed 2. Only seedOf is read by the policy. */
 const setup = { seedOf: (id: string) => (id === "a" ? 1 : 2) } as unknown as DivisionSetup;
 const fixture = (home: string, away: string): FixtureRow => ({ home_entrant_id: home, away_entrant_id: away } as FixtureRow);
-const cfgOf = (sport: string) => stageCfg(sport, resolveSportCfg(sport, offlineBuilderDefault(sport)), "knockout");
+const cfgOf = (sport: string) => stageCfg(sport, resolveSportCfg(sport, offlineBuilderDefault(sport)), "knockout", offlineBuilderDefault(sport));
+/** A HOLD-PATH knockout's cfg (R-T12-3): every decider off, as BRACKET_SETTLE_LEVEL's cases post it. */
+const heldCfgOf = (sport: string) =>
+  stageCfg(sport, resolveSportCfg(sport, offlineBuilderDefault(sport)), "knockout", offlineBuilderDefault(sport), decidersOffRulesFor(sport, offlineBuilderDefault(sport), "knockout"));
 
 describe("bracketPolicy — the first of every three bracket fixtures asks for the hard path, the rest play out", () => {
   it("ordinal 0, 1, 2, 3 …: hard, win, win, hard; the win is the better seed's side, whichever side that is", () => {
@@ -43,12 +47,34 @@ describe("bracketPolicy — the first of every three bracket fixtures asks for t
     expect(new Set(rungs).size, "every tie-break rung is reached").toBe(TIEBREAK_RUNGS.length);
   });
 
+  it("W2c BG-KO-2 (M4): chess's Armageddons alternate Black won / drawn, in both pickers; rapid and blitz carry no result, and the winner advances either way", () => {
+    // 4 laps of the engine's rung list: every rung four times, so the Armageddon comes up four times - two of each result.
+    const laps = 4;
+    let armageddons = 0;
+    const results: unknown[] = [];
+    for (let n = 0; n < TIEBREAK_RUNGS.length * laps; n++) {
+      for (const winner of ["home", "away"] as const) {
+        const asked = hardPath("boardgame", cfgOf("boardgame"), n, winner) as { kind: string; rung: string; winner: string; result?: string };
+        expect(asked, `n ${n}`).toMatchObject({ kind: "tiebreak", rung: TIEBREAK_RUNGS[n % TIEBREAK_RUNGS.length], winner });
+        if (asked.rung !== "armageddon") { expect(Object.hasOwn(asked, "result"), `n ${n}: ${asked.rung} has no result`).toBe(false); continue; }
+        if (winner === "home") { armageddons++; results.push(asked.result); }
+      }
+    }
+    expect(armageddons).toBe(laps);
+    expect(results).toEqual(["black", "draw", "black", "draw"]);
+    // The fixture policy reaches the same picker (every third fixture is a hard path), so the drawn Armageddon is requested for real.
+    const viaPolicy = [2, 5, 8, 11].map((n) => bracketPolicy(setup, fixture("a", "b"), "boardgame", n * 3, cfgOf("boardgame")) as { rung: string; result?: string });
+    expect(viaPolicy.map((r) => r.rung)).toEqual(Array(4).fill("armageddon"));
+    expect(viaPolicy.map((r) => r.result)).toEqual(["black", "draw", "black", "draw"]);
+  });
+
   it("swept over the registry: chess takes its tie-break (BG-KO-1), generic can only abandon then settle (GN-KO-1), every other sport settles after a level result or an abandon — whichever its generator can build", () => {
     let judged = 0;
     let level = 0;
     let abandon = 0;
     for (const sport of SPORT_KEYS) {
-      const cfg = cfgOf(sport);
+      // The hold-path arm: with the presets on no knockout ends level (sport-cfg-stage-presets.test.ts's positive pairs).
+      const cfg = heldCfgOf(sport);
       const reach = levelReachable(sport, cfg, "knockout");
       for (const n of [0, 1, 2, 3]) {
         const asked = hardPath(sport, cfg, n, "home");
@@ -355,6 +381,56 @@ describe("F1, M1 and R4 on a bracket row play THROUGH a decider too (M-6)", () =
       const check = checks.find((c) => c.id === "life-bracket-decider-exercised")!;
       expect(check, sport).toMatchObject({ verdict: "abstain", checked: 0 });
       expect(check.reason, sport).toMatch(/not owed/);
+      judged++;
+    }
+    expect(judged).toBe(SPORT_KEYS.length);
+    expect(judged).toBeGreaterThan(0);
+  });
+
+  // The fake's completeStage mints the finalRanks a page playoff's /complete would. Its clause "a loser that plays on is not out
+  // yet - unless its next seat is dead (a walkover's loser)" is what puts pp-q1's walkover loser OUT at q1's own round; without it
+  // the loser is ranked only by the leftover pass, last, whatever its seed. The expected list is the ENGINE's bracketRanks over the
+  // rows the run left, never a list typed here.
+  it("M1 on a page playoff: the finalRanks the fake mints are the engine's bracketRanks over the rows the run left - the walkover's loser is out at q1's own round, ahead of a worse-seeded loser of that round, not last", async () => {
+    let judged = 0;
+    for (const sport of SPORT_KEYS) {
+      const variant = offlineBuilderDefault(sport);
+      const spec: CaseSpec = { caseId: `page_playoff_only|${sport}|${variant}|M1`, row: "page_playoff_only", sport, variant, scenario: "M1", canary: false };
+      const driver = new FakeKnockoutDriver({ pagePlayoff: true });
+      const out = await SCENARIOS.M1.run({ driver, spec, orgSlug: "o", cfg: resolveSportCfg(sport, variant), tag: "t", denied: [] });
+      const ranks = out.observed.stages[0]!.complete?.finalRanks ?? null;
+      expect(ranks, `${sport}: the stage completed and read its finalRanks`).not.toBeNull();
+      const seeds = new Map(driver.entrants.map((e) => [e.id, e.seed ?? Number.MAX_SAFE_INTEGER]));
+      // The rows as the engine reads them (the web's bracketWinnerLoser): an award whose loser held a seat is a forfeit the loser
+      // is OUT at; an award nobody lost (the waiting side, awarded through) has no loser.
+      const rows = driver.fixtures.map((f): BracketFixture => {
+        if (f.status !== "decided" && f.status !== "forfeited") throw new Error(`${sport}: ${f.id} is ${f.status}: not a finished page-playoff row`);
+        const w = (f.outcome as { winner?: unknown } | null)?.winner;
+        const winner = typeof w === "string" ? w : undefined;
+        const loser = winner === undefined ? undefined : [f.home_entrant_id, f.away_entrant_id].find((e): e is string => e !== null && e !== winner);
+        return {
+          id: f.id,
+          round: f.round_no ?? 0,
+          status: f.status === "decided" ? "decided" : "walkover",
+          ...(f.is_final === true ? { isFinal: true } : {}),
+          ...(f.home_entrant_id === null ? {} : { home: f.home_entrant_id }),
+          ...(f.away_entrant_id === null ? {} : { away: f.away_entrant_id }),
+          ...(winner === undefined ? {} : { winner }),
+          ...(loser === undefined ? {} : { loser }),
+          ...(f.status === "forfeited" && loser !== undefined ? { walkedOver: "loser" as const } : {}),
+        };
+      });
+      expect(rows.length, `${sport}: the whole page playoff is on the books`).toBe(generatePagePlayoff({ entrants: ["e1", "e2", "e3", "e4"] }).fixtures.length);
+      const expected = bracketRanks({ id: "s1", kind: "page_playoff", seeds }, rows);
+      expect(ranks, `${sport}: finalRanks`).toEqual(expected);
+      // The case must discriminate: the walkover's loser is out at round 1 with elim's loser, and has the BETTER seed, so only a
+      // rank that honours "out at q1" - not the leftover pass - puts it ahead.
+      const walkedOver = rows.find((r) => r.walkedOver === "loser");
+      expect(walkedOver, `${sport}: one walkover`).toBeDefined();
+      const elimLoser = rows.find((r) => r.status === "decided" && r.round === walkedOver!.round && r.id !== walkedOver!.id)?.loser;
+      expect(elimLoser, `${sport}: pp-elim's loser is out at the same round`).toBeDefined();
+      expect(seeds.get(walkedOver!.loser!)!, `${sport}: the walkover's loser out-seeds pp-elim's`).toBeLessThan(seeds.get(elimLoser!)!);
+      expect(ranks!.indexOf(walkedOver!.loser!), `${sport}: ahead of pp-elim's loser`).toBeLessThan(ranks!.indexOf(elimLoser!));
       judged++;
     }
     expect(judged).toBe(SPORT_KEYS.length);

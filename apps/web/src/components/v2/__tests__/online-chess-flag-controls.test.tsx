@@ -81,7 +81,8 @@ function settingsProps(sportKey: string, config: Record<string, unknown>, online
     },
     orgId: "org1",
     variants: [{ key: sportKey === "boardgame" ? "classical" : "standard", name: "Standard" }],
-    locked: false,
+    structureLocked: false,
+    lockedFields: [],
     stages: [],
     canEdit: true,
     divisionPathPrefix: "/o/org/c/comp/d/",
@@ -151,14 +152,16 @@ describe("division Settings: the Format summary states that the division plays o
     expect(groups, "the Format group").toHaveLength(1);
     return String(propsOf(groups[0]!).summary);
   };
+  // W2c: fixtures lock the structure; the variant locks once a stage that plays it has started. "Locked" is both.
+  const lockedProps = (locked: boolean) => ({ structureLocked: locked, lockedFields: locked ? [{ field: "variant_key", code: "DIVISION_FORMAT_LOCKED" as const, stageId: "s1", stageName: "Round 1" }] : [] });
   it("online ⇒ '· online on Lichess', locked or not and whatever the flag (a fact, not a control); off ⇒ absent", () => {
     const ON = EN_UI["divset.onlinePlay.summaryOn"]!;
     let checked = 0;
     for (const offered of [true, false]) {
       for (const locked of [false, true]) {
-        const on = renderIsland(DivisionSettings, { ...settingsProps("boardgame", { variant: "classical", onlinePlay: "lichess" }, offered), locked }).tree();
+        const on = renderIsland(DivisionSettings, { ...settingsProps("boardgame", { variant: "classical", onlinePlay: "lichess" }, offered), ...lockedProps(locked) }).tree();
         expect(formatSummary(on), `offered ${offered}, locked ${locked}`).toContain(` · ${ON}`);
-        const off = renderIsland(DivisionSettings, { ...settingsProps("boardgame", { variant: "classical", onlinePlay: "off" }, offered), locked }).tree();
+        const off = renderIsland(DivisionSettings, { ...settingsProps("boardgame", { variant: "classical", onlinePlay: "off" }, offered), ...lockedProps(locked) }).tree();
         expect(formatSummary(off), `off: offered ${offered}, locked ${locked}`).not.toContain(ON);
         checked++;
       }

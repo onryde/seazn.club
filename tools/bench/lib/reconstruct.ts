@@ -122,34 +122,44 @@ const CORE_START: PackEvent = { type: "core.start", payload: {} };
  * one question two ways.
  *
  * This was the ONE seam that did not get carried across, and it was not
- * theoretical. Stage 0 folds every stream with
- * `stageScopedFoldCfg(divisionCfg, stage?.config)` — the two stage-scoped
- * decider keys, `shootout` and `extraTime` — while the generators folded under
- * the division cfg alone. A division enabling extra time whose knockout stage
- * turns it OFF therefore generated `ET_HT`/`ET_FT` markers that the validator
- * then refused as `ALREADY_DECIDED`, because under the overlay the match was
- * already a draw at full time. The `stageRef` doc below actively told authors
- * to set the field that arms it.
+ * theoretical. Stage 0 folded every stream under the stage-scoped cfg (at the
+ * time, the two top-level decider keys `shootout` and `extraTime`; since D3 a
+ * stage's rules and its kind's preset, nothing at the config's top level)
+ * while the generators folded under the division cfg alone. A division enabling extra
+ * time whose knockout stage turns it OFF therefore generated `ET_HT`/`ET_FT`
+ * markers that the validator then refused as `ALREADY_DECIDED`, because under
+ * the overlay the match was already a draw at full time. The `stageRef` doc
+ * below actively told authors to set the field that arms it.
  *
  * So `cfg` on every input in this file is the DIVISION cfg — exactly what
- * `resolveDivisionCfg` returns — and the stage is passed separately. One
- * function applies the overlay, and it is the validator's own.
+ * `resolveDivisionCfg` returns — and the stage and the division's variant are
+ * passed separately. One function applies the overlay, and it is the
+ * validator's own, which since W2c Task 13b is the PRODUCT's composition
+ * (`postedStageCfg`): the stage's `rules` over its kind's preset (which the
+ * VARIANT selects: a youth knockout's shoot-out is three kicks), then a
+ * bracket kind's deciders. Nothing at the stage config's top level is read.
  */
-function foldCfgFor(divisionCfg: unknown, stage: PackStage | undefined): unknown {
-  return stageScopedFoldCfg(divisionCfg, stage?.config);
+function foldCfgFor(
+  sportModule: AnySportModule,
+  divisionCfg: unknown,
+  stage: PackStage | undefined,
+  variantKey: string,
+): unknown {
+  return stageScopedFoldCfg(sportModule, divisionCfg, stage, variantKey);
 }
 
-// Compile-time: `stage` is a REQUIRED property on all three generator inputs,
-// not an optional one. An optional property does not satisfy a required one, so
-// relaxing any of them back to `stage?:` reds `tsc` HERE — in a non-test file,
-// because `tsconfig.scripts.json:35` excludes `scripts/**/*.test.ts` and a
-// type-level guard written in a test is checked by nothing. Same technique as
-// `EXPECTED_SUITE_IS_REQUIRED` (validate-pack.ts), and for the same reason: the
-// obligation is on callers that do not exist yet, so no runtime test in this
-// suite can witness it.
-type _StageIsRequired = ReconstructSetRalliesInput extends { stage: PackStage | undefined }
-  ? FillPeriodMarkersInput extends { stage: PackStage | undefined }
-    ? ReconstructSetBasedStreamInput extends { stage: PackStage | undefined }
+// Compile-time: `stage` and `variantKey` are REQUIRED properties on all three
+// generator inputs, not optional ones. An optional property does not satisfy a
+// required one, so relaxing any of them back to `stage?:` / `variantKey?:` reds
+// `tsc` HERE — in a non-test file, because `tsconfig.scripts.json:35` excludes
+// `scripts/**/*.test.ts` and a type-level guard written in a test is checked by
+// nothing. Same technique as `EXPECTED_SUITE_IS_REQUIRED` (validate-pack.ts),
+// and for the same reason: the obligation is on callers that do not exist yet,
+// so no runtime test in this suite can witness it. A generator left without the
+// variant would fold a stage under a preset the validator never applies.
+type _StageIsRequired = ReconstructSetRalliesInput extends { stage: PackStage | undefined; variantKey: string }
+  ? FillPeriodMarkersInput extends { stage: PackStage | undefined; variantKey: string }
+    ? ReconstructSetBasedStreamInput extends { stage: PackStage | undefined; variantKey: string }
       ? true
       : never
     : never
@@ -302,8 +312,9 @@ export interface ReconstructSetRalliesInput {
    *  will later fold it under. */
   readonly cfg: unknown;
   /**
-   * The stage this stream belongs to. Its `shootout` / `extraTime` keys OVERLAY
-   * the division cfg on the fold path — see `foldCfgFor`.
+   * The stage this stream belongs to. Its format (its `rules`, and a bracket
+   * kind's preset and deciders) OVERLAYS the division cfg on the fold path —
+   * see `foldCfgFor`.
    *
    * REQUIRED, and `undefined` must be written out. It was optional, and the
    * fork survived on OMISSION: `resolveStage` (validate-pack.ts) binds a
@@ -322,6 +333,10 @@ export interface ReconstructSetRalliesInput {
    * decision rather than an oversight.
    */
   readonly stage: PackStage | undefined;
+  /** The division's `variantKey`, off the same `PackDivision` as `cfg`: it
+   *  selects the stage kind's preset (`foldCfgFor`), as the validator's own
+   *  fold does. REQUIRED for the reason `stage` is (W2c Task 13b). */
+  readonly variantKey: string;
   /** Who played, on which side. Build it with `packLineupPair` from the same
    *  stream the events are going into — the entrant ids the fold sees are the
    *  SIGILLED pack refs, and a generator that used bare refs would emit
@@ -351,7 +366,7 @@ export interface ReconstructSetRalliesInput {
  */
 export function reconstructSetRallies(input: ReconstructSetRalliesInput): PackEvent[] {
   const { module: sportModule, lineups, rallyType, sets, seed } = input;
-  const cfg = foldCfgFor(input.cfg, input.stage);
+  const cfg = foldCfgFor(sportModule, input.cfg, input.stage, input.variantKey);
   const fixtureId = input.fixtureId ?? UNNAMED_FIXTURE;
   assertDeclaresEventType(sportModule, rallyType);
   if (sets.length === 0) throw new Error("a reconstruction needs at least one set score");
@@ -615,8 +630,8 @@ export interface ReconstructSetBasedStreamInput {
    * WHICH STAGE of that division — the STAGE ITSELF, not merely its ref.
    *
    * It supplies two facts that must never disagree: the `stageRef` written
-   * onto the returned stream, and the `shootout` / `extraTime` overlay the
-   * fold applies (`foldCfgFor`). Taking the ref alone is how they came to
+   * onto the returned stream, and the stage-format overlay the fold applies
+   * (`foldCfgFor`). Taking the ref alone is how they came to
    * disagree: the doc here used to say "SET IT whenever the stage carries a
    * cfg overlay", and setting it made the VALIDATOR apply an overlay the
    * generator never had — so the field that was supposed to close the gap was
@@ -625,9 +640,11 @@ export interface ReconstructSetBasedStreamInput {
    * REQUIRED, `undefined` written out — see
    * `ReconstructSetRalliesInput.stage` for why optional was not safe. Passing
    * `undefined` yields a stream with no `stageRef` and no overlay, which is
-   * correct only for a division whose stages carry neither decider key.
+   * correct only for a division whose stages play the division's own format.
    */
   readonly stage: PackStage | undefined;
+  /** The division's `variantKey` — see `ReconstructSetRalliesInput.variantKey`. */
+  readonly variantKey: string;
   readonly fixtureExtKey: string;
   /** Entrant REFS, bare — the sigil is applied where the fold needs it. */
   readonly home: string;
@@ -685,6 +702,7 @@ export function reconstructSetBasedStream(input: ReconstructSetBasedStreamInput)
       module: input.module,
       cfg: input.cfg,
       stage: input.stage,
+      variantKey: input.variantKey,
       lineups,
       rallyType: input.rallyType,
       sets,
@@ -714,6 +732,8 @@ export interface FillPeriodMarkersInput {
    *  `ReconstructSetRalliesInput.stage`. This is the entry point the omission
    *  path was proven on. */
   readonly stage: PackStage | undefined;
+  /** The division's `variantKey` — see `ReconstructSetRalliesInput.variantKey`. */
+  readonly variantKey: string;
   readonly lineups: LineupPair;
   /**
    * The sheet's own events, GROUPED BY PERIOD: one array per period, in the
@@ -824,7 +844,7 @@ function markerCandidates(
  */
 export function fillPeriodMarkers(input: FillPeriodMarkersInput): PackEvent[] {
   const { module: sportModule, lineups, segments, markerType } = input;
-  const cfg = foldCfgFor(input.cfg, input.stage);
+  const cfg = foldCfgFor(sportModule, input.cfg, input.stage, input.variantKey);
   const fixtureId = input.fixtureId ?? UNNAMED_FIXTURE;
   const maxTrailing = input.maxTrailingMarkers ?? DEFAULT_MAX_TRAILING_MARKERS;
   // NO `assertDeclaresEventType` here, deliberately. `markerCandidates` already

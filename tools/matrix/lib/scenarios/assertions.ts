@@ -82,6 +82,17 @@ export function builtAsPosted(built: BuiltReadback, observed: ObservedRun): Chec
     items.push({ ok: s?.kind === body.kind, note: `stage ${body.seq}: built ${s?.kind ?? "nothing"}, posted ${body.kind}` });
     for (const [k, v] of Object.entries(body.config)) {
       const got = s === undefined ? undefined : s.config[k];
+      // W2c Task 12 fix round 1 (R-T12-3): a stage's `rules` are stored OVER its sport's preset (the create merges the
+      // two, a sent key winning), so the stored object may hold preset keys nobody posted. Judged per POSTED key
+      // instead: a value is stored as sent, and a null (remove the key, inherit) is stored as no value.
+      if (k === "rules" && v !== null && typeof v === "object" && !Array.isArray(v)) {
+        const stored = got !== null && typeof got === "object" && !Array.isArray(got) ? (got as Record<string, unknown>) : {};
+        for (const [rk, rv] of Object.entries(v as Record<string, unknown>)) {
+          const ok = s !== undefined && (rv === null ? stored[rk] === undefined || stored[rk] === null : canonical(stored[rk]) === canonical(rv));
+          items.push({ ok, note: `stage ${body.seq} config.rules.${rk}: built ${canonical(stored[rk])}, posted ${canonical(rv)}` });
+        }
+        continue;
+      }
       items.push({ ok: s !== undefined && canonical(got) === canonical(v), note: `stage ${body.seq} config.${k}: built ${canonical(got)}, posted ${canonical(v)}` });
     }
     // T3 review G1: the stored config.thirdPlace (judged just above) says
@@ -293,10 +304,15 @@ export function referenceBracketFinish(rec: Recorder, observed: ObservedRun, opt
   return parts.length === 0 ? verdict : { ...verdict, reason: `${verdict.reason}; ${parts.join("; ")}` };
 }
 
-/** The format lock's answer: usecases/divisions.ts `formatLocked()` throws
- *  `new HttpError(409, …, "FORMAT_LOCKED")` (pinned against that text by
- *  scenarios.test.ts). */
-export const FORMAT_LOCK = Object.freeze({ status: 409, code: "FORMAT_LOCKED" });
+/** The format lock's answer on the division PATCH. Since W2c (X-SR-4, owner P-2
+ *  "A") the lock is PER STARTED STAGE THAT INHERITS the key, not "once any
+ *  fixture exists": usecases/divisions.ts throws the first refusal's own code
+ *  with its `RULE_ERROR_STATUS`, and rule-locks.ts emits `DIVISION_FORMAT_LOCKED`
+ *  for a match-format key (a table key gets `DIVISION_TABLE_RULES_LOCKED`).
+ *  `FORMAT_LOCKED` is no longer this door's answer: it is the replaceStages PUT's
+ *  (spec §4.3), which the `denied` scenario still expects. Pinned against the
+ *  product's own text by scenarios.test.ts. */
+export const FORMAT_LOCK = Object.freeze({ status: 409, code: "DIVISION_FORMAT_LOCKED" });
 
 /** R28: a locked format is refused BY THE LOCK, never a silent accept or a
  *  500. Final review m-3: any named 4xx is not enough — a new domain refusal
@@ -312,8 +328,8 @@ export function formatEditRefusedNamed(edit: ConfigEditObs): CheckResult {
 }
 
 /** Controller ruling (fix round 1, I-2): the entrants-only save is the one
- *  edit the format lock lets through (divisions.ts:795-870), so it must be
- *  ACCEPTED — a 2xx. A 409 here is a red finding, never an expected refusal.
+ *  edit the format lock lets through (usecases/divisions.ts patchDivision,
+ *  `entrants` is never a refused key), so it must be ACCEPTED — a 2xx. A 409 here is a red finding, never an expected refusal.
  *  configProbe always makes one, so none attempted is the vacuous fail. */
 export function entrantsEditAccepted(edit: ConfigEditObs): CheckResult {
   return assertion("life-entrants-edit-accepted", edit.attempts.filter((a) => a.kind === "entrants_only")

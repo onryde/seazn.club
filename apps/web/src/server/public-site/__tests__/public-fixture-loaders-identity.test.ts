@@ -233,8 +233,8 @@ async function loadMatchCentreBefore(q: Sql, fixture: PublicFixture, ctx: MatchC
     ...(r.voids_event_id ? { voids: r.voids_event_id } : {}),
   }));
   const events = resolveVoids(envelopes);
-  const [fixtureRow] = await q<{ config_snapshot: unknown }[]>`
-    select config_snapshot from fixtures where id = ${fixture.id}`;
+  const [fixtureRow] = await q<{ config_snapshot: unknown; rules_override: unknown }[]>`
+    select config_snapshot, rules_override from fixtures where id = ${fixture.id}`;
   const [divisionRow] = await q<{ config: unknown }[]>`
     select config from divisions where id = ${fixture.division_id}`;
   const [stageRow] = await q<{ config: Record<string, unknown> | null; kind: string }[]>`
@@ -244,7 +244,13 @@ async function loadMatchCentreBefore(q: Sql, fixture: PublicFixture, ctx: MatchC
       ? resolveModule(ctx.division.sportKey, ctx.division.moduleVersion)
       : resolveLatestModule(ctx.division.sportKey);
   // W2a: resolveFixtureCfg takes the stage row (kind + config) and the module (the bracket overlay).
-  const rawCfg = resolveFixtureCfg(fixtureRow?.config_snapshot, divisionRow?.config, stageRow, sportModule);
+  // W2c (V469): and the fixture ROW (snapshot + rules_override), with the same absent-row fallback the loader uses.
+  const rawCfg = resolveFixtureCfg(
+    fixtureRow ?? { config_snapshot: undefined, rules_override: undefined },
+    divisionRow?.config,
+    stageRow,
+    sportModule,
+  );
   const parsedCfg = sportModule.configSchema.safeParse(rawCfg);
   const cfg = parsedCfg.success ? parsedCfg.data : rawCfg;
   // main's per-stage format label (c86254b6a), which landed after the freeze.
@@ -644,7 +650,9 @@ describe.skipIf(!HAS_DB)("match-centre loaders — identical to the pre-T4 loade
       expect(before, f.id).toHaveLength(1);
       expect(await argsOf(() => getPublicFixture(scene.orgSlug, scene.compSlug, f.slug, f.id)), f.id).toStrictEqual(before);
       expect(await argsOf(() => publicFixture(f.id)), f.id).toStrictEqual(await argsOf(() => publicFixtureBefore(f.id)));
-      const [snapshot, , stageConfig] = before[0]!;
+      // W2c: the first argument is the fixture ROW; the premise counts its frozen snapshot, not the (always present) row.
+      const [fixtureArg, , stageConfig] = before[0]!;
+      const snapshot = (fixtureArg as { config_snapshot: unknown }).config_snapshot;
       if (snapshot != null) snapshots += 1;
       if (stageConfig != null && Object.keys(stageConfig as object).length > 0) stageConfigs += 1;
     }

@@ -2,7 +2,7 @@
   {
     "id": "tiebreak-flag-ignored",
     "file": "packages/engine/src/sports/boardgame/boardgame.ts",
-    "find": "if (state.cfg.tiebreak === true) return { ...base, phase: \"tiebreak\"",
+    "find": "if (state.cfg.tiebreak === true && rungs.length > 0) return { ...base, phase: \"tiebreak\"",
     "replace": "if (false) return { ...base, phase: \"tiebreak\"",
     "killers": [
       {
@@ -47,8 +47,8 @@
   {
     "id": "method-always-rapid",
     "file": "packages/engine/src/sports/boardgame/boardgame.ts",
-    "find": "method: `tiebreak_${p.rung}` },",
-    "replace": "method: \"tiebreak_rapid\" },",
+    "find": "method: `tiebreak_${p.rung}` },\n  };\n}",
+    "replace": "method: \"tiebreak_rapid\" },\n  };\n}",
     "killers": [
       {
         "cwd": "packages/engine",
@@ -62,15 +62,30 @@
   {
     "id": "outcome-winner-swapped",
     "file": "packages/engine/src/sports/boardgame/boardgame.ts",
-    "find": "outcome: { kind: \"win\", winner: state.entrants[winnerSide], loser: state.entrants[opponent(winnerSide)], method: `tiebreak_${p.rung}` },",
-    "replace": "outcome: { kind: \"win\", winner: state.entrants[opponent(winnerSide)], loser: state.entrants[winnerSide], method: `tiebreak_${p.rung}` },",
+    "find": "\n    outcome: { kind: \"win\", winner: state.entrants[winnerSide], loser: state.entrants[opponent(winnerSide)], method: `tiebreak_${p.rung}` },\n  };",
+    "replace": "\n    outcome: { kind: \"win\", winner: state.entrants[opponent(winnerSide)], loser: state.entrants[winnerSide], method: `tiebreak_${p.rung}` },\n  };",
     "killers": [
       {
         "cwd": "packages/engine",
         "files": [
           "src/sports/boardgame/tiebreak.test.ts"
         ],
-        "name": "BG-KO-2 \\(ruling 82\\): the engine records the armageddon winner the scorer taps — either side, with or without colours|BG-KO-1: each rung decides a win with method tiebreak_<rung>, and the summary still shows the level game"
+        "name": "BG-KO-1: each rung decides a win with method tiebreak_<rung>, and the summary still shows the level game"
+      }
+    ]
+  },
+  {
+    "id": "outcome-winner-swapped-armageddon",
+    "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+    "find": "\n      outcome: { kind: \"win\", winner: state.entrants[winnerSide], loser: state.entrants[opponent(winnerSide)], method: `tiebreak_${p.rung}` },\n    };",
+    "replace": "\n      outcome: { kind: \"win\", winner: state.entrants[opponent(winnerSide)], loser: state.entrants[winnerSide], method: `tiebreak_${p.rung}` },\n    };",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/boardgame/tiebreak.test.ts"
+        ],
+        "name": "BG-KO-2 \\(ruling 82, D7\\): an Armageddon records Black and the result"
       }
     ]
   },
@@ -107,7 +122,7 @@
   {
     "id": "carrom-bracket-deciders-empty",
     "file": "packages/engine/src/sports/carrom/carrom.ts",
-    "find": "bracketDeciders: () => ({ tieBoard: \"extra\" as const }),",
+    "find": "bracketDeciders: (cfg) =>\n    cfg.abandonPolicy === \"share\"\n      ? { tieBoard: \"extra\" as const, abandonPolicy: \"replay\" as const }\n      : { tieBoard: \"extra\" as const },",
     "replace": "bracketDeciders: () => ({}),",
     "killers": [
       {
@@ -144,8 +159,8 @@
   {
     "id": "t15-r1-double-forfeit-enters-tiebreak",
     "file": "packages/engine/src/sports/boardgame/boardgame.ts",
-    "find": "    if (method === \"double_forfeit\") return { ...base, outcome: { kind: \"double_walkover\" } };\n    if (state.cfg.tiebreak === true) return { ...base, phase: \"tiebreak\", outcome: null, tiebreak: {} };",
-    "replace": "    if (state.cfg.tiebreak === true) return { ...base, phase: \"tiebreak\", outcome: null, tiebreak: {} };\n    if (method === \"double_forfeit\") return { ...base, outcome: { kind: \"double_walkover\" } };",
+    "find": "    if (method === \"double_forfeit\") return { ...base, outcome: { kind: \"double_walkover\" } };\n    // W2c BG-KO-3: the stage's rung list is authoritative. An empty list is \"no tie-break games\", so the drawn game\n    // stays a draw (the server holds a bracket's level result for the organiser, ruling 79) instead of waiting for a\n    // decider nobody may record.\n    const rungs = effectiveRungs(state.cfg);\n    if (state.cfg.tiebreak === true && rungs.length > 0) return { ...base, phase: \"tiebreak\", outcome: null, tiebreak: {} };\n",
+    "replace": "    // W2c BG-KO-3: the stage's rung list is authoritative. An empty list is \"no tie-break games\", so the drawn game\n    // stays a draw (the server holds a bracket's level result for the organiser, ruling 79) instead of waiting for a\n    // decider nobody may record.\n    const rungs = effectiveRungs(state.cfg);\n    if (state.cfg.tiebreak === true && rungs.length > 0) return { ...base, phase: \"tiebreak\", outcome: null, tiebreak: {} };\n    if (method === \"double_forfeit\") return { ...base, outcome: { kind: \"double_walkover\" } };\n",
     "killers": [
       {
         "cwd": "packages/engine",

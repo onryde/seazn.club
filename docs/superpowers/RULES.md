@@ -73,6 +73,15 @@ backwards-compatible one; don't contort a design to dodge a migration.
   `*-sonnet` agent definitions are not tracked in git (`git ls-files` lists only
   `implementer`, `reviewer` and `scout`), so their description lines — which
   still say "W2c-ONLY" — are a local edit for whoever holds them.
+- **2026-10-13: W2c-ONLY exception (owner, "A Sonnet with those 4 tasks on Opus").**
+  For format-matrix W2c only, tasks run in batches. Each ordinary task is
+  implemented by `implementer-sonnet` and reviewed by `reviewer-sonnet`
+  (`.claude/agents/*-sonnet.md`, `model: sonnet`). Four tasks stay on the Opus
+  `implementer`/`reviewer`: engine `ruleKeys` + the resolver change across every
+  caller; the Q11 refold/correction; the `rules_version` check; the points
+  forfeit rule. Every batch ends with an Opus `reviewer` pass over the whole
+  batch diff. The standing Opus-minimum rule above is unchanged for every
+  other wave; delete the `*-sonnet` agents when W2c closes.
 
 **Loop**: Implementer → Reviewer → gap list → Implementer → Reviewer → …
 repeat until the review is clean AND all tests are green.

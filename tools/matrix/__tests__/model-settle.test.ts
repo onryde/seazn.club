@@ -7,7 +7,7 @@ import { SETTLE_METHODS } from "@seazn/engine/core";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { COMMAND_KINDS, ModelViolation, OPT_IN_KINDS, checkStep, commandOf, modelCommands, newModelState, type ModelState } from "../lib/model/commands.ts";
-import { resolveSportCfg, stageCfg } from "../lib/sport-cfg.ts";
+import { decidersOffRulesFor, resolveSportCfg, stageCfg } from "../lib/sport-cfg.ts";
 import { generateStream } from "../lib/streams/index.ts";
 import { BRACKET_LEVEL_CHECK, HELD_SEATS_CHECK, SETTLE_REFUSAL_CHECK, SETTLE_SEATS_CHECK, UNEXPECTED_REFUSAL } from "../lib/model/state.ts";
 import { RefusedCall } from "../lib/driver/types.ts";
@@ -16,13 +16,18 @@ import type { StreamEvent } from "../lib/streams/types.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 import { ModelFakeDriver } from "./model-fake-driver.ts";
 
-/** Two semis feeding a final, the stage reading as a knockout, started — the RR-1 tests' bracket on the model fake. */
+/** Two semis feeding a final, the stage reading as a knockout, started — the RR-1 tests' bracket on the model fake. The
+ *  knockout is a HOLD-PATH stage (R-T12-3): every decider off, as newModelState posts a bracket row's, so a level result
+ *  is held; the fake folds under the rules the stage carries, the model under the ones it posted. */
 async function bracket(sport: string, make: () => ModelFakeDriver = () => new ModelFakeDriver({})): Promise<{ m: ModelState; d: ModelFakeDriver; sf1: string; sf2: string; fin: string }> {
   const d = make();
-  const base = await newModelState({ driver: d, row: "league", sport, variant: offlineBuilderDefault(sport), entrants: 4, tag: "t" });
+  const variant = offlineBuilderDefault(sport);
+  const base = await newModelState({ driver: d, row: "league", sport, variant, entrants: 4, tag: "t" });
   if (d.stage === null) throw new Error("test: no stage");
+  const stageRules = decidersOffRulesFor(sport, variant, "knockout");
   d.stage.kind = "knockout";
-  const m: ModelState = { ...base, stageKind: "knockout" };
+  if (stageRules !== undefined) d.stage.config = { ...d.stage.config, rules: stageRules };
+  const m: ModelState = { ...base, stageKind: "knockout", stageRules };
   const [e1, e2, e3, e4] = m.entrants as [string, string, string, string];
   const sf1 = d.seat(1, e1, e4);
   const sf2 = d.seat(1, e2, e3);
@@ -71,7 +76,7 @@ describe("Settle in the model (spec §5.6.2; finding 24)", () => {
     const m = await newModelState({ driver: d, row: "league", sport: "generic", variant: "score", entrants: 4, tag: "t" });
     await commandOf("Start", 0, 0, false).run(m, d);
     const f = [...m.fixtures.values()][0]!;
-    const events = generateStream({ sportKey: "generic", cfg: stageCfg("generic", resolveSportCfg("generic", "score"), "league"), stageKind: "league", home: f.home!, away: f.away!, outcome: { kind: "draw" } });
+    const events = generateStream({ sportKey: "generic", cfg: stageCfg("generic", resolveSportCfg("generic", "score"), "league", "score"), stageKind: "league", home: f.home!, away: f.away!, outcome: { kind: "draw" } });
     await d.postStream(f.id, events);
     expect(d.fixtures.find((x) => x.id === f.id)).toMatchObject({ status: "decided", outcome: { kind: "draw" } });
     await checkStep(m, d); // would throw if the bracket rules reached a table stage

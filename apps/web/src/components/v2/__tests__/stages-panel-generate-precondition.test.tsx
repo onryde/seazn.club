@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { generatePreconditionMessage } from "@/components/v2/stages-panel";
+import { classifyActError, generatePreconditionMessage, matchNamerFor } from "@/components/v2/stages-panel";
 import { ApiV1Error } from "@/lib/client-v1";
 import { msg } from "@/lib/messages";
 
@@ -83,6 +83,107 @@ describe("generatePreconditionMessage — StagesPanel generate-click classifier"
     // The stranded count is the datum this copy adds — confirm it renders.
     expect(text).toContain("1");
     expect(text).toContain("3");
+  });
+
+  // W2c P-7 / X-AB-5 (fix round 1, I2): the next Swiss round is refused while an abandoned board has no result. The
+  // organiser must read WHICH board(s) to settle, in their own language - not the generic failure banner.
+  describe("swiss_abandoned_boards (X-AB-5)", () => {
+    const refusal = (abandoned: unknown) => new ApiV1Error("current swiss round has undecided fixtures", 422, "STAGE_NOT_READY", { reason: "swiss_abandoned_boards", abandoned });
+    const b = (round: number, board: number) => ({ fixtureId: `f-${round}-${board}`, round, board });
+
+    it("one board: the singular sentence naming round and board", () => {
+      const text = generatePreconditionMessage(refusal([b(1, 3)]), msg);
+      expect(text).toBe(msg("schedule.error.swissAbandonedOne", { boards: msg("schedule.error.swissAbandonedRef", { round: 1, board: 3 }) }));
+      expect(text).toContain("round 1 board 3");
+    });
+
+    it("several boards: the plural sentence naming each, in the order given", () => {
+      const text = generatePreconditionMessage(refusal([b(1, 2), b(1, 5), b(2, 1)]), msg)!;
+      expect(text).toBe(
+        msg("schedule.error.swissAbandonedMany", {
+          boards: ["round 1 board 2", "round 1 board 5", "round 2 board 1"].join(", "),
+        }),
+      );
+      expect(text.indexOf("round 1 board 2")).toBeLessThan(text.indexOf("round 1 board 5"));
+      expect(text).not.toBe(msg("schedule.error.swissAbandonedOne", { boards: "round 1 board 2" }));
+    });
+
+    it("an unreadable list keeps the code's own copy (null), never a guess", () => {
+      for (const abandoned of [undefined, [], [{ fixtureId: "f", round: 0, board: 1 }], "x"]) expect(generatePreconditionMessage(refusal(abandoned), msg), JSON.stringify(abandoned)).toBeNull();
+    });
+
+    it("the same STAGE_NOT_READY without the reason is not mistaken for it", () => {
+      const err = new ApiV1Error("x", 422, "STAGE_NOT_READY", { abandoned: [b(1, 1)] });
+      expect(generatePreconditionMessage(err, msg)).toBeNull();
+    });
+  });
+
+  // W2c X-AB-5 (fix round 2, N2): "Complete stage" is refused while a TABLE stage holds a match for the organiser's settle.
+  // The organiser must read WHICH match(es), in their own language - by the players' names where the board knows them.
+  describe("abandoned_matches (X-AB-5, Complete stage)", () => {
+    const refusal = (abandoned: unknown) =>
+      new ApiV1Error("stage has a match abandoned without a result", 422, "STAGE_NOT_READY", { reason: "abandoned_matches", abandoned });
+    const m = (round: number, board: number) => ({ fixtureId: `f-${round}-${board}`, round, board });
+    const pairs: Record<string, string> = { "f-1-2": "Ana – Ben", "f-2-1": "Cy – Di" };
+    const lookup = (id: string) => pairs[id];
+
+    it("one match: the singular sentence, naming the players", () => {
+      const text = generatePreconditionMessage(refusal([m(1, 2)]), msg, undefined, lookup);
+      expect(text).toBe(msg("schedule.error.completeHeldOne", { matches: "Ana – Ben" }));
+    });
+
+    it("several matches: the plural sentence naming each, in the order given", () => {
+      const text = generatePreconditionMessage(refusal([m(1, 2), m(2, 1)]), msg, undefined, lookup)!;
+      expect(text).toBe(msg("schedule.error.completeHeldMany", { matches: "Ana – Ben, Cy – Di" }));
+      expect(text.indexOf("Ana")).toBeLessThan(text.indexOf("Cy"));
+      expect(text).not.toBe(msg("schedule.error.completeHeldOne", { matches: "Ana – Ben, Cy – Di" }));
+    });
+
+    it("a board that cannot name a match (stale, or no lookup) says round and match number instead - never the wire text", () => {
+      const one = generatePreconditionMessage(refusal([m(3, 4)]), msg)!;
+      expect(one).toBe(msg("schedule.error.completeHeldOne", { matches: msg("schedule.error.heldMatchRef", { round: 3, board: 4 }) }));
+      expect(one).toContain("3");
+      expect(one).toContain("4");
+      // One resolved, one not: each is named as well as it can be.
+      const mixed = generatePreconditionMessage(refusal([m(1, 2), m(9, 9)]), msg, undefined, lookup)!;
+      expect(mixed).toContain("Ana – Ben");
+      expect(mixed).toContain(msg("schedule.error.heldMatchRef", { round: 9, board: 9 }));
+    });
+
+    it("an unreadable list keeps the code's own copy (null), never a guess; the Swiss reason is not mistaken for it", () => {
+      for (const abandoned of [undefined, [], [{ fixtureId: "f", round: 0, board: 1 }], "x"])
+        expect(generatePreconditionMessage(refusal(abandoned), msg, undefined, lookup), JSON.stringify(abandoned)).toBeNull();
+      // A readable list under ANOTHER reason is not this refusal (the branch keys on the reason, not on the list's shape).
+      for (const reason of ["swiss_abandoned_boards", "group_too_few_entrants", "something_else"]) {
+        const other = new ApiV1Error("x", 422, "STAGE_NOT_READY", { reason, abandoned: [m(1, 2)] });
+        expect(generatePreconditionMessage(other, msg, undefined, lookup), reason).not.toBe(msg("schedule.error.completeHeldOne", { matches: "Ana – Ben" }));
+      }
+      expect(generatePreconditionMessage(new ApiV1Error("x", 422, "STAGE_NOT_READY", { reason: "something_else", abandoned: [m(1, 2)] }), msg, undefined, lookup), "an unknown reason keeps the code's own copy").toBeNull();
+      const swiss = new ApiV1Error("x", 422, "STAGE_NOT_READY", { reason: "swiss_abandoned_boards", abandoned: [m(1, 2)] });
+      expect(generatePreconditionMessage(swiss, msg, undefined, lookup)).not.toBe(msg("schedule.error.completeHeldOne", { matches: "Ana – Ben" }));
+    });
+
+    it("matchNamerFor: the players from the board's own fixtures; undefined for a match it does not hold or a seat not yet filled", () => {
+      const fx = [
+        { id: "a", home_entrant_id: "e1", away_entrant_id: "e2" },
+        { id: "b", home_entrant_id: "e1", away_entrant_id: null },
+        { id: "c", home_entrant_id: null, away_entrant_id: "e2" },
+        { id: "d", home_entrant_id: "e1", away_entrant_id: "ghost" },
+      ];
+      const names = { e1: "Ana", e2: "Ben" };
+      const of = matchNamerFor(fx, names);
+      expect(of("a")).toBe("Ana – Ben");
+      expect(of("b"), "an empty seat").toBeUndefined();
+      expect(of("c"), "an empty seat").toBeUndefined();
+      expect(of("d"), "an entrant the board cannot name").toBe("Ana – ?");
+      expect(of("nope"), "a match the board does not hold").toBeUndefined();
+      expect(matchNamerFor([], names)("a"), "empty board").toBeUndefined();
+    });
+
+    it("the Complete click's catch (classifyActError) shows it amber, in the reader's language, with no refresh", () => {
+      const out = classifyActError(refusal([m(1, 2)]), msg, "en", undefined, lookup);
+      expect(out).toEqual({ tone: "warning", text: msg("schedule.error.completeHeldOne", { matches: "Ana – Ben" }), refresh: false });
+    });
   });
 
   it("returns null for an unrelated ApiV1Error (falls through to the generic error banner)", () => {

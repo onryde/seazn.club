@@ -22,6 +22,12 @@ import { engineHttpStatus } from "../lib/driver/engine-http.ts";
 import { declaredPoints, foldStream, lineupsFor } from "../lib/fold.ts";
 import { liveEvents } from "../lib/scenarios/common.ts";
 import { entrantKindsFor, resolveSportCfg, sportModule, stageCfg } from "../lib/sport-cfg.ts";
+
+/** A stage config's posted `rules` object, or undefined (R-T12-3: what `stageCfg` layers over the preset). */
+export const rulesOfConfig = (config: Readonly<Record<string, unknown>> | undefined): Readonly<Record<string, unknown>> | undefined => {
+  const r = config?.rules;
+  return r !== null && typeof r === "object" && !Array.isArray(r) ? (r as Record<string, unknown>) : undefined;
+};
 import { DEPARTED_STATUSES } from "../lib/observed.ts";
 import { forfeitPosting } from "../lib/streams/index.ts";
 import type { ForfeitReason, StreamEvent } from "../lib/streams/types.ts";
@@ -372,7 +378,7 @@ export class FakeLeagueDriver implements OrganiserDriver {
     const kind = this.stageKindOf(f);
     try {
       // W2a: the product folds a bracket fixture under the stage's overlay (resolveFixtureCfg), and the status follows D3.
-      folded = foldStream(sportModule(this.sport), kind === null ? this.cfg : stageCfg(this.sport, this.cfg, kind as StageKind), f.home_entrant_id!, f.away_entrant_id!, next);
+      folded = foldStream(sportModule(this.sport), this.foldCfgOf(f), f.home_entrant_id!, f.away_entrant_id!, next);
     } catch (e) {
       // The product turns ONLY an EngineError into a status (http.ts:157-158);
       // anything else is a 500 INTERNAL there (http.ts:244-247). Here that is a
@@ -391,6 +397,14 @@ export class FakeLeagueDriver implements OrganiserDriver {
   }
   /** The kind of the stage a fixture belongs to: this fake plays one stage (a subclass with several overrides it). */
   protected stageKindOf(_f: FakeFixture): string | null { return this.stage?.kind ?? null; }
+  /** The `config.rules` the fixture's stage was POSTED with (R-T12-3): the product stores them over the preset and folds
+   *  under both, which `stageCfg` layers. */
+  protected stageRulesOf(_f: FakeFixture): Readonly<Record<string, unknown>> | undefined { return rulesOfConfig(this.stage?.config); }
+  /** The cfg a fixture folds under: the division's, or its stage's (presets, posted rules, a bracket's deciders). */
+  protected foldCfgOf(f: FakeFixture): unknown {
+    const kind = this.stageKindOf(f);
+    return kind === null ? this.cfg : stageCfg(this.sport, this.cfg, kind as StageKind, this.variant, this.stageRulesOf(f));
+  }
   /** W1d Task 14: the fixture's ledger as the product serves it — a row per event, seq from 1, the id the seq as a
    *  string (the id space the harness's own void names, fold.ts envelopes), exclusive of `sinceSeq`. */
   ledger(id: string, sinceSeq = 0): Promise<readonly LedgerRow[]> {
@@ -476,9 +490,8 @@ export class FakeLeagueDriver implements OrganiserDriver {
   heldForWithdrawal(f: FakeFixture): boolean {
     if (f.status === "needs_decision" || this.abandonActive(f)) return true;
     if (f.status !== "in_play" || f.home_entrant_id === null || f.away_entrant_id === null) return false;
-    const kind = this.stageKindOf(f);
     const m = sportModule(this.sport);
-    const folded = foldStream(m, kind === null ? this.cfg : stageCfg(this.sport, this.cfg, kind as StageKind), f.home_entrant_id, f.away_entrant_id, this.tableEvents(f));
+    const folded = foldStream(m, this.foldCfgOf(f), f.home_entrant_id, f.away_entrant_id, this.tableEvents(f));
     return deciderPending(m as never, { state: folded.state as never, settlement: null });
   }
   /** The fixture's ledger holds an abandon nothing voided (withdrawal.ts activeAbandons). */
@@ -583,7 +596,7 @@ export class FakeLeagueDriver implements OrganiserDriver {
       };
       const m = sportModule(this.sport);
       const kind = this.stage!.kind as StageKind;
-      const cfg = stageCfg(this.sport, this.cfg, kind); // W2a: the cfg the stage's fixtures were folded under
+      const cfg = stageCfg(this.sport, this.cfg, kind, this.variant, rulesOfConfig(this.stage!.config)); // W2a: the cfg the stage's fixtures were folded under
       for (const f of this.fixtures) {
         if (f.outcome === null) continue;
         const ctx = { kind, ...(f.round_no ? { roundNo: f.round_no } : {}) };
@@ -623,21 +636,31 @@ export class FakeLeagueDriver implements OrganiserDriver {
   kindsInUse(): string[] {
     return [...new Set(this.entrants.filter((e) => !DEPARTED_STATUSES.includes(e.status)).flatMap((e) => (e.kind === undefined ? [] : [e.kind])))];
   }
-  /** divisions.ts:795-870: once fixtures exist, a config that does not parse or
-   *  changes anything but `entrants` is 409 FORMAT_LOCKED; a model that no
-   *  longer accepts an active entrant's kind is 422 ENTRANT_KIND_IN_USE
-   *  (T12-R1, :857-871); otherwise it saves. */
+  /** Has any fixture of the stage started? The product's predicate (rule-locks.ts `lockedStageIdsAmong`): a fixture that
+   *  holds an event (its config freezes at the first one). The table fake's expunge writes `abandoned` with no event,
+   *  where the product writes a score event, so that status counts too. Generated-but-unplayed fixtures start nothing,
+   *  and neither does a bye's award (decided at generation, with no event). */
+  stageStarted(): boolean {
+    return this.fixtures.some((f) => f.events.length > 0 || f.status === "abandoned");
+  }
+  /** usecases/divisions.ts patchDivision (W2c, X-SR-4, owner P-2 "A"): the lock is per STARTED stage that INHERITS a
+   *  key. A config that does not parse is 422 CONFIG_INVALID whether or not anything started; once a stage started, a
+   *  change to anything but `entrants` is 409 DIVISION_FORMAT_LOCKED (a match-format key — the keys this fake's probes
+   *  edit; a table key would be DIVISION_TABLE_RULES_LOCKED, which no probe sends); a model that no longer accepts an
+   *  active entrant's kind is 422 ENTRANT_KIND_IN_USE; otherwise it saves. The fake plays stages that post no
+   *  per-stage `rules`, so a started stage inherits every key — and it refuses to run if one ever does. */
   patchDivisionConfig(_d: string, config: Record<string, unknown>): Promise<ProbeOutcome> {
     return settle(() => {
       this.log("patchDivisionConfig");
-      const locked = this.fixtures.length > 0;
+      if (this.stage !== null && this.stage.config.rules !== undefined) throw new Error("fake: a stage with its own match rules — per-stage inheritance is not modelled here");
+      const locked = this.stageStarted();
       let parsed: Record<string, unknown>;
       try {
         parsed = resolveSportCfg(this.sport, this.variant, config) as Record<string, unknown>;
       } catch {
-        return locked ? { status: 409, code: "FORMAT_LOCKED" } : { status: 422, code: "CONFIG_INVALID" };
+        return { status: 422, code: "CONFIG_INVALID" };
       }
-      if (locked && canonical(withoutEntrants(parsed)) !== canonical(withoutEntrants(this.divisionConfig))) return { status: 409, code: "FORMAT_LOCKED" };
+      if (locked && canonical(withoutEntrants(parsed)) !== canonical(withoutEntrants(this.divisionConfig))) return { status: 409, code: "DIVISION_FORMAT_LOCKED" };
       const entrants = config.entrants;
       const next = entrantKindsFor(this.sport, entrants != null && typeof entrants === "object" ? { ...parsed, entrants } : parsed);
       if (this.kindsInUse().some((k) => !next.includes(k))) return { status: 422, code: "ENTRANT_KIND_IN_USE" };

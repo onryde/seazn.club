@@ -83,11 +83,13 @@ export const NO_RESULT_REFUSAL = {
 
 export type NoResultEvent =
   | { type: "core.forfeit"; payload: { by: "both"; reason: "walkover" } }
-  | { type: "core.abandon"; payload: { reason: string } };
+  | { type: "core.abandon"; payload: { reason: string; noResult: true } };
 
 /** The ledger event the organiser's No result writes for a board held for `reason` (null: not held), its abandon
- *  reason worded in `locale`. */
+ *  reason worded in `locale`. The abandon carries `noResult: true` (rebase ruling D3): it IS the organiser's settle of
+ *  the board, so W2c's table hold (`settleAppliesInTable`, X-AB-5) owes it nothing more - the league completes over it,
+ *  the desk does not show it held, the console offers no settle. Only this writer may record it (append-event.ts). */
 export function noResultEvent(reason: NeedsReason | null, locale: Locale): NoResultEvent {
   if (reason !== null && isBothAbsent(reason)) return { type: "core.forfeit", payload: { by: "both", reason: "walkover" } };
-  return { type: "core.abandon", payload: { reason: msgFor(locale, ABANDON_REASON_KEY[reason ?? "none"]) } };
+  return { type: "core.abandon", payload: { reason: msgFor(locale, ABANDON_REASON_KEY[reason ?? "none"]), noResult: true } };
 }

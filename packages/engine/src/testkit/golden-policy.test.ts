@@ -25,6 +25,8 @@ import type { AnySportModule } from "../sport/module.ts";
 import { builtinModules } from "../sports/index.ts";
 import { football } from "../sports/football/index.ts";
 import { sweepBudget } from "./golden-budget.ts";
+import * as floorStreams from "./golden-floor-streams.ts";
+import * as golden from "./golden.ts";
 import { buildWalk, defaultLineupPair, makeEnvelope } from "./helpers.ts";
 import {
   MAX_EVENTS,
@@ -416,16 +418,17 @@ describe("GOLDEN-POLICY.md — what the guard cannot see names what the engine s
     return { attempted, answered };
   };
 
-  it("the sports with an abandonPolicy knob are the ones the policy names, every recorded config says 'replay', and 'award' makes the module answer an outcome after an abandon", () => {
+  it("the sports whose abandonPolicy defaults to 'replay' are the ones the policy names, 'award' makes the module answer an outcome after an abandon, and each records an award stream whose standing expunge the recorded outcome shows (W2c Task 16c closed it)", () => {
     const text = bullet("A kernel overlay a corpus never exercises.");
     const withKnob: string[] = [];
+    let witnesses = 0;
     for (const module of builtinModules) {
       const corpus = readCorpus(module.key);
       const raws = Object.values(corpus.configs);
       const knob = (raw: unknown): unknown => (module.configSchema.parse(raw) as { abandonPolicy?: unknown }).abandonPolicy;
       if (knob(raws[0]) === undefined) continue;
       withKnob.push(module.key);
-      expect(raws.map(knob), `${module.key}: every recorded config says replay`).toEqual(raws.map(() => "replay"));
+      expect(knob(raws[0]), `${module.key}: the default config says replay`).toBe("replay");
       const replay = afterAbandon(module, raws[0]);
       const award = afterAbandon(module, { ...(raws[0] as object), abandonPolicy: "award" });
       expect(replay.attempted, `${module.key}: abandons were accepted under replay`).toBeGreaterThan(0);
@@ -433,24 +436,43 @@ describe("GOLDEN-POLICY.md — what the guard cannot see names what the engine s
       expect(award.attempted, `${module.key}: abandons were accepted under award`).toBeGreaterThan(0);
       expect(award.answered, `${module.key}: under award the module answers an outcome`).toBeGreaterThan(0);
       expect(text, `the policy names ${module.key}`).toMatch(new RegExp(`\\b${module.key}\\b`, "i"));
+      // The gap this bullet named, closed: a recorded `award` config with a stream whose withdrawal expunge STANDS over the award the
+      // module answered, recorded with no outcome. Dropping `outcomeOf`'s expunge guard moves that stream's recorded outcome.
+      const closing = corpus.streams.filter((stream) => {
+        const raw = corpus.configs[stream.config];
+        if (knob(raw) !== "award") return false;
+        const cfg = module.configSchema.parse(raw) as unknown;
+        const lineups = stream.lineups ?? defaultLineupPair(resolvePositions(module, cfg));
+        const folded = foldMatchWithStoppage(module as never, cfg as never, lineups, stream.events.map((e, i) => makeEnvelope(i, e, e.voids)), { strictFromSeq: 0 });
+        return folded.expunged && module.outcome(folded.state) !== null && stream.outcome === "null";
+      });
+      expect(closing.length, `${module.key}: an award stream whose standing expunge the recorded outcome shows`).toBeGreaterThan(0);
+      for (const stream of closing) expect(text, `the policy names ${module.key}'s ${stream.config}#${stream.seed}`).toContain(`#${stream.seed}`);
+      witnesses += closing.length;
     }
     expect(withKnob.sort(), "football, and hockey and icehockey through the period kernel").toEqual(["football", "hockey", "icehockey"]);
+    expect(witnesses, "one per sport at least").toBeGreaterThanOrEqual(withKnob.length);
     expect(text).toContain("abandonPolicy");
   });
 
-  it("under the recorded configs only cricket's module answers an outcome after an abandon (the sentence the policy rests on), swept over every sport", () => {
+  it("under the recorded configs a module answers an outcome after an abandon in cricket (its own rule) and exactly where a recorded config sets a policy other than 'replay' (the sentence the policy rests on), swept over every sport", () => {
     const answering: string[] = [];
+    const nonReplay: string[] = [];
     let attempted = 0;
     for (const module of builtinModules) {
       for (const raw of Object.values(readCorpus(module.key).configs)) {
         const r = afterAbandon(module, raw);
         attempted += r.attempted;
         if (r.answered > 0 && !answering.includes(module.key)) answering.push(module.key);
+        const policy = (module.configSchema.parse(raw) as { abandonPolicy?: unknown }).abandonPolicy;
+        if (policy !== undefined && policy !== "replay" && !nonReplay.includes(module.key)) nonReplay.push(module.key);
       }
     }
     expect(attempted, "abandons were attempted across the registry").toBeGreaterThan(builtinModules.length);
-    expect(answering).toEqual(["cricket"]);
-    expect(bullet("A kernel overlay a corpus never exercises.")).toMatch(/only\s+cricket/);
+    expect(nonReplay.length, "W2c records award, share and q4_stands configs").toBeGreaterThan(0);
+    expect(answering.sort()).toEqual(["cricket", ...nonReplay].sort());
+    const text = bullet("A kernel overlay a corpus never exercises.");
+    for (const key of answering) expect(text, `the policy names ${key}`).toMatch(new RegExp(`\\b${key}\\b`, "i"));
   }, sweepBudget("probe"));
 
   it("the widening-a-refusal bullet names both refusals by the code the kernel throws, and the kernel still throws them", () => {
@@ -463,5 +485,57 @@ describe("GOLDEN-POLICY.md — what the guard cannot see names what the engine s
     expect(text).toContain("manual MAJOR bump");
     expect(text).toContain("abandonActive");
     expect(events, "the flag the policy names exists").toContain("let abandonActive");
+  });
+});
+
+// ------------------------------------------------- the in-place re-record of a floor stream is documented against real machinery
+
+describe("GOLDEN-POLICY.md — \"Re-recording a floor-batch stream in place\" names real machinery and real examples", () => {
+  const policy = readFileSync(join(import.meta.dirname, "GOLDEN-POLICY.md"), "utf8");
+  const HEADING = "## Re-recording a floor-batch stream in place";
+  const at = policy.indexOf(HEADING);
+  const section = at < 0 ? "" : policy.slice(at, policy.indexOf("\n## ", at + 1));
+
+  it("the section exists, and the write-modes table points at it by its title", () => {
+    expect(at, "the heading exists").toBeGreaterThan(-1);
+    expect(section.length, "the section has a body").toBeGreaterThan(500);
+    expect(policy.slice(0, at), "the table row cites the section").toContain('see "Re-recording a floor-batch stream in place"');
+  });
+
+  it("every helper it tells you to call is a real export, and it names the obligations: the major, the guard, the refusal to write more than the one stream", () => {
+    const exported: Record<string, unknown> = { ...floorStreams, ...golden };
+    const named = ["floorBatches", "reproduceFloorBatch", "corpusBefore", "extendFloor", "FLOOR_SEED_STRIDE", "writeCorpus", "corpusWriteVerdict"];
+    let found = 0;
+    for (const name of named) {
+      expect(section, `the section names ${name}`).toContain(name);
+      expect(exported[name], `${name} is exported`).toBeDefined();
+      found++;
+    }
+    expect(found).toBe(named.length);
+    for (const phrase of ["MAJOR", "FOLD_EPOCH", "fold-epoch:check", "removed and added", "refuses to write unless exactly", "config#seed"]) expect(section, phrase).toContain(phrase);
+    const scripts = (JSON.parse(readFileSync(join(import.meta.dirname, "../../package.json"), "utf8")) as { scripts: Record<string, string> }).scripts;
+    expect(scripts["fold-epoch:check"], "the script the section runs exists").toBeDefined();
+    for (const file of ["golden.test.ts", "golden-floor-streams.test.ts"]) expect(existsSync(join(import.meta.dirname, file)), `${file} exists`).toBe(true);
+  });
+
+  it("its two worked examples are what the corpora hold: #100008 records the colour-naming Armageddon in a floor batch; the 800008 withdrawal streams carry no lineup event", () => {
+    const boardgame = readCorpus("boardgame");
+    const index = boardgame.streams.findIndex((s) => s.config === "knockoutTiebreak" && s.seed === 100008);
+    expect(index, "boardgame knockoutTiebreak#100008 exists").toBeGreaterThan(-1);
+    const stream = boardgame.streams[index]!;
+    expect(floorStreams.isFloorStream(stream), "it is a floor stream").toBe(true);
+    expect(floorStreams.floorBatches(boardgame).some((b) => b.start <= index && index < b.start + b.streams.length), "it sits in a floor batch").toBe(true);
+    const armageddon = stream.events.filter((e) => e.type === "boardgame.tiebreak").map((e) => e.payload as Record<string, unknown>);
+    expect(armageddon.some((p) => p.rung === "armageddon" && p.black !== undefined && p.winner === undefined), "its Armageddon names who had Black and derives the winner").toBe(true);
+    let checked = 0;
+    for (const key of ["boardgame", "carrom", "generic"]) {
+      const withdrawal = readCorpus(key).streams.filter((s) => s.seed === 800008);
+      expect(withdrawal.length, `${key} records an 800008 withdrawal stream`).toBeGreaterThan(0);
+      for (const s of withdrawal) {
+        expect(s.events.filter((e) => e.type.startsWith("core.lineup.")), `${key} ${s.config}#${s.seed}: no lineup event`).toEqual([]);
+        checked++;
+      }
+    }
+    expect(checked, "one 800008 stream per sport the section names").toBe(3);
   });
 });

@@ -4,7 +4,7 @@
 // Disciplines (MS/WS/MD/WD/XD) are entrant-kind + eligibility combinations, NOT
 // module variants — one module serves all five, so there are no positions.
 import type { PositionCatalog } from "../../sport/catalog.ts";
-import { makeSetBasedModule } from "./kernel.ts";
+import { makeSetBasedModule, SET_RULE_KEYS } from "./kernel.ts";
 
 // badminton.md §7 — no positions; singles vs doubles is the entrant kind
 // (doc 02 §2), which the module never inspects (scoring reads only wonBy). One
@@ -41,6 +41,7 @@ export const badminton = makeSetBasedModule({
     // Junior/social short format: to 11, cap 15 (badminton.md §2).
     short: { setTo: 11, finalSetTo: 11, cap: 15 },
   },
+  ruleKeys: { ...SET_RULE_KEYS }, // W2c (spec §4.1 Q5) — the set kernel's keys as they are
   positions,
   // S3/W4b (#426) ruling 2 — BWF Law 16 has no substitution: a player who
   // cannot continue retires and the match is over. Stated for the same reason

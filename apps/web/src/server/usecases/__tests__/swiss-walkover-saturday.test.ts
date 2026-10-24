@@ -10,7 +10,8 @@
 //   badminton / bwf, 6 individual entrants seeded 1–6 (S1…S6 here);
 //   stage 1 swiss   config {"rounds":2,"pairing":"rank_adjacent"}
 //   stage 2 knockout config {"rules":{"bestOf":3}}  (written through the real
-//     PUT /stages/{id}/rules path — `createStages` refuses a `rules` key);
+//     PUT /stages/{id}/rules path, as production's was — a create now takes
+//     `config.rules` too, since W2c Task 12, but this division predates it);
 //   the knockout's progression is the swiss_knockout TEMPLATE's (Top 4,
 //     rankRange 1–4, rank_order, timing "setup") — production's own
 //     progression row was not available to this probe.

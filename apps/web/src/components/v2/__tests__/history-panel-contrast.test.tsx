@@ -243,7 +243,9 @@ describe("FixtureConsole & MatchRuleFields — contrast sweep completion (R3.5/T
     join(process.cwd(), "src/components/v2/scorepad/v3/activity.tsx"),
     "utf8",
   );
-  const matchRulesCode = readFileSync(join(process.cwd(), "src/components/v2/match-rules.tsx"), "utf8")
+  // The shared field help span lives in the rule-field control since W2c (T17 moved it out of match-rules.tsx, which now
+  // only lays the controls out); it is the one render of `field.help` in all three editors (division, stage row, match).
+  const matchRulesCode = readFileSync(join(process.cwd(), "src/components/v2/stage-rules/rule-field-control.tsx"), "utf8")
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/\/\/.*$/gm, "");
 
@@ -296,7 +298,7 @@ describe("FixtureConsole & MatchRuleFields — contrast sweep completion (R3.5/T
       regex: /className="mt-px shrink-0 font-mono text-xs tabular-nums text-slate-(\d+)"/,
     },
     {
-      label: "match-rules.tsx — shared field help span",
+      label: "rule-field-control.tsx — shared field help span",
       src: matchRulesCode,
       regex: /<span className="mt-0\.5 block text-\[11px\] text-slate-(\d+)">\{field\.help\}<\/span>/,
     },

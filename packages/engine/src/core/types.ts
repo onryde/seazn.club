@@ -209,6 +209,15 @@ export function advancesNobody(o: MatchOutcome | null | undefined): boolean {
 export type ForfeitPhase = "pre" | "play" | "tiebreak" | "over";
 /** W2b (plan D9) — the OFFENDING side of a forfeit; `both` is the double walkover. */
 export type ForfeitBy = "home" | "away" | "both";
+/**
+ * W2c Task 16b (X-WO-1 part B; Task 9 P-3 "A") — a stage PointsRule's `forfeit.awardScore`, WINNER first: the score the
+ * rule awards the side that turned up and the one it awards the side that did not. Offered to the fold
+ * (`FoldOptions.forfeitAward`); the kernel hands it to the sport module (`FoldContext.forfeitAward`) for a forfeit with
+ * NOTHING PLAYED only, and the module keeps it in its own state, where its forfeit credit and its summary read it - so
+ * the headline, the table's credit and the rule's award are one number.
+ */
+export type ForfeitAward = readonly [number, number];
+
 /** W2b (plan D9) — what a forfeit credits, per sport, from cfg and state alone. */
 export interface ForfeitCredit {
   /** home, away: the metrics this match credits each side, in the module's own metric keys. */

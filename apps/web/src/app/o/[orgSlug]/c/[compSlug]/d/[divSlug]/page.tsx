@@ -9,15 +9,16 @@ import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
 import { sportLabel } from "@/lib/scoring-vocab";
 import { variantWord } from "@/lib/variant-label-keys";
+import { pointsLineDict, rulesLineDict } from "@/lib/rules-line";
 import { requireDivisionPage } from "@/server/page-auth";
 import { getDivision, listVariantOptions } from "@/server/usecases/divisions";
 import { divisionConsumesSlotOnArchive } from "@/server/usecases/division-slots";
 import { getCompetition } from "@/server/usecases/competitions";
 import { listStages, getStandings, getSeedProposal, getStageRosterDrift } from "@/server/usecases/stages";
 import { listStageQualificationMeta, type StageQualMetaRow } from "@/server/usecases/stage-qualification";
-import { divisionQualification } from "@/server/public-site/division-qualification";
+import { divisionQualification, qualificationFixtures } from "@/server/public-site/division-qualification";
 import { formatLockedStageIds } from "@/server/usecases/stage-rules";
-import { STAGE_RULES_SPORTS } from "@/lib/match-rules";
+import { divisionLockedFields } from "@/server/usecases/rule-locks";
 // From the DB-free module, not through the server-only usecase above: this
 // page's tests mock `@/server/usecases/stages` wholesale, and a mocked
 // predicate is a second copy of the rule (F3 ultrareview finding 9 was a
@@ -54,7 +55,7 @@ import { EmbedSnippet } from "@/components/v2/embed-snippet";
 import { DivisionSettings } from "@/components/v2/division-settings";
 import { competitionCameraPolicy } from "@/server/external-play/camera-policy";
 import type { StageDraft } from "@/lib/format-templates";
-import { formatLocked } from "@/lib/format-lock";
+import { formatAlreadyLocked } from "@/lib/format-already-locked";
 import { resolveLogoUrl } from "@/server/public-site/data";
 import { EntrantsPanel } from "@/components/v2/entrants-panel";
 import { entrantListLocked } from "@/lib/open-entry-stages";
@@ -418,13 +419,11 @@ export default async function DivisionPage({
   // panel cannot derive this: `FIXTURE_COLS` does not carry `config_snapshot`
   // (a payload-budget ruling, stages.ts:147-162) and `score_events` reaches no
   // prop, leaving only the non-monotonic `fixtures.status`. Same per-stage
-  // shape as `rosterDrift` above, and skipped entirely for a sport with no
-  // per-stage rules — the row never renders there, so the page should not pay
-  // for the query.
+  // shape as `rosterDrift` above. W2c Task 11: every sport has a stage rules row
+  // now, so the lock is read for every sport (the page skips it only where the
+  // row is not shown at all: another tab, or a viewer who cannot edit).
   const formatLockedStages =
-    tab === "fixtures" && editable && STAGE_RULES_SPORTS.has(division.sport_key)
-      ? await formatLockedStageIds(auth, id)
-      : [];
+    tab === "fixtures" && editable ? await formatLockedStageIds(auth, id) : [];
   const stageNames = Object.fromEntries(stages.map((s) => [s.id, s.name]));
   // Badge chips on standings rows (v3/03 §5) — resolved once per render.
   // PROMPT-62: the bracket panel on the fixtures tab shows them too.
@@ -467,6 +466,13 @@ export default async function DivisionPage({
   // locale — and so do the pool labels below. Loaded only on the tab that
   // draws them, like `standings`.
   const publicDict = tab === "standings" ? await getDictionary(locale, "public") : {};
+  // The fixtures tab's stage format rows say each stage's effective rules as chips, in the PUBLIC line's own clauses
+  // (`format.rules.*`, W2c Task 17): only that slice crosses into the client panel.
+  const fixturesPublicDict = tab === "fixtures" ? await getDictionary(locale, "public") : undefined;
+  const ruleDict = fixturesPublicDict === undefined ? undefined : rulesLineDict(fixturesPublicDict);
+  // W2c Task 18 (S3): the stage points section previews its rule in the public stage line's own `format.points.*` words.
+  // It asks no plan question: scoring is free on every plan (owner, 2026-10-19), and the server's own gate stays.
+  const pointsDict = fixturesPublicDict === undefined ? undefined : pointsLineDict(fixturesPublicDict);
 
   // Standings per table stage (+ per pool), with pool labels.
   const tableStages = stages.filter((s) => TABLE_KINDS.has(s.kind));
@@ -517,7 +523,7 @@ export default async function DivisionPage({
           division,
           dict: publicDict,
           locale,
-          fixtures,
+          fixtures: await qualificationFixtures(fixtures, sportModule, [...qualMeta.values()]),
           entrantStatuses,
           entrantNames,
           cascade,
@@ -851,7 +857,10 @@ export default async function DivisionPage({
               rosterDrift={rosterDrift}
               canEdit={editable}
               sportKey={division.sport_key}
+              variantKey={division.variant_key}
               divisionConfig={(division.config ?? {}) as Record<string, unknown>}
+              ruleDict={ruleDict}
+              pointsDict={pointsDict}
               formatLockedStageIds={formatLockedStages}
               tz={scheduleSettings.tz}
               // The GOVERNING clock, resolved here exactly as the schedule page
@@ -1039,7 +1048,10 @@ export default async function DivisionPage({
             orgId={auth.orgId}
             onlineChessOffered={onlineChessOn}
             variants={await listVariantOptions(auth, division.sport_key)}
-            locked={formatLocked([{ fixture_count: fixtures.length }])}
+            // W2c Task 20 (S4): two locks, two sources. The stage STRUCTURE locks on any fixture row (replaceStages); the
+            // RULES lock per field and per STARTED stage that inherits them - the same read the save asks (patchDivision).
+            structureLocked={formatAlreadyLocked(fixtures.length)}
+            lockedFields={await divisionLockedFields(auth, id)}
             stages={stages.map((st) => ({
               name: st.name,
               kind: st.kind,

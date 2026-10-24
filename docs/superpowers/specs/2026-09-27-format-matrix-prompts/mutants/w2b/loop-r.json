@@ -640,7 +640,7 @@
  {
   "id": "lr-i2-revive-takes-no-stage-lock",
   "file": "apps/web/src/server/engine-db/fed-seats.ts",
-  "find": "  await lockStageSeats(tx, src.stage_id);\n",
+  "find": "  await lockStageSeats(tx, f.stage_id);\n",
   "replace": "",
   "killers": [
    {
@@ -662,8 +662,8 @@
  {
   "id": "lr-i2-decision-takes-no-stage-lock",
   "file": "apps/web/src/server/usecases/scoring.ts",
-  "find": "if (fixture.winner_to_fixture !== null || fixture.loser_to_fixture !== null) await lockStageSeats(tx, fixture.stage_id);",
-  "replace": "if (fixture.winner_to_fixture !== null || fixture.loser_to_fixture !== null) void 0;",
+  "find": "    if (pre?.feeds) await lockStageSeats(tx, pre.stage_id);\n",
+  "replace": "",
   "killers": [
    {
     "cwd": "apps/web",
@@ -1248,8 +1248,8 @@
  {
   "id": "lr-m17-fold-not-the-award",
   "file": "apps/web/src/server/engine-db/awarded-state.ts",
-  "find": "  if (!isDeepStrictEqual(decided, outcome)) {",
-  "replace": "  if (!isDeepStrictEqual(decided, outcome) && false) {",
+  "find": "  if (!isDeepStrictEqual(decided, outcome)) throw new AwardFoldMismatch(decided, outcome);",
+  "replace": "  if (!isDeepStrictEqual(decided, outcome) && false) throw new AwardFoldMismatch(decided, outcome);",
   "killers": [
    {
     "cwd": "apps/web",
@@ -1293,8 +1293,8 @@
  {
   "id": "lr-m17-standing-play-refused",
   "file": "apps/web/src/server/engine-db/awarded-state.ts",
-  "find": "  if (ledger.standing > 0) {",
-  "replace": "  if (ledger.standing > 0 && false) {",
+  "find": "  if (award.ledger.standing > 0) {",
+  "replace": "  if (award.ledger.standing > 0 && false) {",
   "killers": [
    {
     "cwd": "apps/web",
@@ -1308,7 +1308,7 @@
  {
   "id": "lr-m17-tip-not-zero",
   "file": "apps/web/src/server/engine-db/awarded-state.ts",
-  "find": "values (${fixtureId}, ${ledger.tip},",
+  "find": "values (${fixtureId}, ${award.ledger.tip},",
   "replace": "values (${fixtureId}, 0,",
   "killers": [
    {
@@ -1330,8 +1330,8 @@
  {
   "id": "lr-m17-overwrite-empty-ledger",
   "file": "apps/web/src/server/engine-db/awarded-state.ts",
-  "find": "      where ${ledger.tip > 0}",
-  "replace": "      where ${ledger.tip > 0 || true}",
+  "find": "      where ${award.ledger.tip > 0 || opts.rewrite === true}",
+  "replace": "      where ${award.ledger.tip > 0 || true}",
   "killers": [
    {
     "cwd": "apps/web",
@@ -1345,8 +1345,8 @@
  {
   "id": "lr-m17-overwrite-voided-ledger",
   "file": "apps/web/src/server/engine-db/awarded-state.ts",
-  "find": "      where ${ledger.tip > 0}",
-  "replace": "      where ${ledger.tip > 0 && false}",
+  "find": "      where ${award.ledger.tip > 0 || opts.rewrite === true}",
+  "replace": "      where ${false}",
   "killers": [
    {
     "cwd": "apps/web",

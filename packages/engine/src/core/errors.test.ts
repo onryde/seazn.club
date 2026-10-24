@@ -80,6 +80,8 @@ describe("EngineError", () => {
       "STAGE_SEAT_DEPARTED",
       // Owner ruling 2026-10-15 — a lineup event for a sport that declares no lineupPolicy. Appended last, existing order frozen.
       "LINEUP_NOT_SUPPORTED",
+      // W2c (D7) — appended last, existing order frozen. An Armageddon tie-break recorded without who had Black.
+      "TIEBREAK_COLOUR_REQUIRED",
     ]);
   });
 });

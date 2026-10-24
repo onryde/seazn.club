@@ -58,6 +58,7 @@ import { consentedAnonymousState } from "../scorepad-a11y-kit";
 import { padPollMs } from "../realtime-propagation-kit";
 import { signInAs } from "../overlay-kit";
 import { withDb } from "../rs007-money-kit";
+import { decidersOffRules } from "../stage-deciders";
 import { composeMatchRef } from "../../src/lib/match-ref";
 import { boardRoundCodes } from "../../src/components/v2/board/round-codes";
 
@@ -889,7 +890,9 @@ test("the scorebug's LONGEST round label — a double-elimination reset — is w
       name: "Double",
       // The reset is generated only on request (`generateDoubleElim`'s
       // `bracketReset`, read from the stage config in usecases/stages.ts).
-      config: { bracketReset: true },
+      // Every decider off (W2c X-SR-6: a new bracket stage starts with extra
+      // time and penalties), so a 0–0 full time is held, as REACH_STATUS needs.
+      config: { bracketReset: true, rules: decidersOffRules("football", "11-a-side", "double_elim") },
     });
     expect(stage.status, `stage POST → ${JSON.stringify(stage.error)}`).toBe(201);
     const generated = await apiJson(api, `/api/v1/stages/${stage.data!.id}/generate`, "POST");
@@ -1001,8 +1004,8 @@ test("the scorebug's LONGEST round label — a double-elimination reset — is w
       forfeited: {
         reach: (f, homeWins) => post(f.id, "core.forfeit", { by: homeWins ? f.away_entrant_id : f.home_entrant_id, reason: "walkover" }),
       },
-      // 0–0 at full time: 11-a-side configures no extra time or shootout, so a
-      // knockout HOLDS it (X-BR-2); the organiser's settle then seats the winner
+      // 0–0 at full time: the stage's deciders are switched off (config.rules
+      // above), so a bracket HOLDS it (X-BR-2); the organiser's settle seats the winner
       needs_decision: {
         reach: (f) => play(f.id, null),
         release: (f, homeWins) => post(f.id, "core.settle", { winner: homeWins ? f.home_entrant_id : f.away_entrant_id, method: "lot" }),

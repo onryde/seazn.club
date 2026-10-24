@@ -18,6 +18,8 @@ import { badminton, tabletennis, volleyball } from "@seazn/engine/sports/setbase
 import { football } from "@seazn/engine/sports/football";
 import { generic } from "@seazn/engine/sports/generic";
 import { hockey } from "@seazn/engine/sports/hockey";
+// The product's own held-knockout rules (W2c Task 13b): an apps/web module that imports only the engine's barrels.
+import { decidersOffRules } from "../../../../apps/web/src/lib/stage-decider-off.ts";
 import type { PackEvent, PackStage, PackStream } from "../pack-schema.ts";
 import {
   PACK_FOLD_OPTIONS,
@@ -284,6 +286,7 @@ describe("reconstructSetRallies — exactness, enumerated", () => {
       for (const seed of SEEDS) {
         const events = reconstructSetRallies({
         stage: undefined,
+          variantKey: scenario.variantKey,
           module: scenario.module,
           cfg,
           lineups: lineups(),
@@ -302,6 +305,7 @@ describe("reconstructSetRallies — exactness, enumerated", () => {
     const scenario = SCENARIOS[1] as Scenario;
     const events = reconstructSetRallies({
         stage: undefined,
+      variantKey: scenario.variantKey,
       module: scenario.module,
       cfg: cfgFor(scenario.module, scenario.variantKey),
       lineups: lineups(),
@@ -319,6 +323,7 @@ describe("reconstructSetRallies — exactness, enumerated", () => {
     const scenario = SCENARIOS[4] as Scenario;
     const events = reconstructSetRallies({
         stage: undefined,
+      variantKey: scenario.variantKey,
       module: scenario.module,
       cfg: cfgFor(scenario.module, scenario.variantKey),
       lineups: lineups(),
@@ -344,6 +349,7 @@ describe("reconstructSetRallies — determinism", () => {
         JSON.stringify(
           reconstructSetRallies({
         stage: undefined,
+            variantKey: scenario.variantKey,
             module: scenario.module,
             cfg,
             lineups: lineups(),
@@ -372,6 +378,7 @@ describe("reconstructSetRallies — determinism", () => {
     for (let seed = 0; seed < 12; seed++) {
       const events = reconstructSetRallies({
         stage: undefined,
+        variantKey: "indoor",
         module: volleyball,
         cfg,
         lineups: lineups(),
@@ -449,6 +456,7 @@ describe("foldMatchLedgerIssue — the guard's whole behaviour, fold included", 
       module: badminton,
       cfg: cfg(),
       stage: undefined,
+      variantKey: "bwf",
       lineups: lineups(),
       rallyType: "badminton.rally",
       sets: SETS,
@@ -490,6 +498,7 @@ describe("reconstructSetRallies — refusals", () => {
   const call = (sets: readonly ReconstructedSet[]): PackEvent[] =>
     reconstructSetRallies({
         stage: undefined,
+      variantKey: "bwf",
       module: badminton,
       cfg: cfgFor(badminton, "bwf"),
       lineups: lineups(),
@@ -554,6 +563,7 @@ describe("reconstructSetRallies — refusals", () => {
     expect(() =>
       reconstructSetRallies({
         stage: undefined,
+        variantKey: "bwf",
         module: badminton,
         cfg: cfgFor(badminton, "bwf"),
         lineups: lineups(),
@@ -573,6 +583,7 @@ describe("reconstructSetRallies — refusals", () => {
     expect(() =>
       reconstructSetRallies({
         stage: undefined,
+        variantKey: "score",
         module: generic,
         cfg: cfgFor(generic, "score"),
         lineups: lineups(),
@@ -595,6 +606,7 @@ describe("reconstructSetBasedStream — the stream a pack carries", () => {
   const build = (seed: number, stageRef?: string): PackStream =>
     reconstructSetBasedStream({
         stage: undefined,
+      variantKey: "bwf",
       module: badminton,
       cfg: cfgFor(badminton, "bwf"),
       divisionRef: "d",
@@ -649,6 +661,7 @@ describe("reconstructSetBasedStream — the stream a pack carries", () => {
     expect(stream.reconstruction?.seed).toBe(99);
     const replayed = reconstructSetRallies({
         stage: undefined,
+      variantKey: "bwf",
       module: badminton,
       cfg: cfgFor(badminton, "bwf"),
       lineups: lineups(),
@@ -684,6 +697,7 @@ describe("reconstructSetBasedStream — the stream a pack carries", () => {
     };
     const stream = reconstructSetBasedStream({
         stage: undefined,
+      variantKey: "bwf",
       module: badminton,
       cfg: cfgFor(badminton, "bwf"),
       divisionRef: "d",
@@ -742,6 +756,7 @@ describe("fillPeriodMarkers — the whistles a match sheet does not record", () 
   it("supplies HT and FT for a two-half football sheet, and nothing else", () => {
     const events = fillPeriodMarkers({
         stage: undefined,
+      variantKey: "11-a-side",
       module: football,
       cfg: cfgFor(football, "11-a-side"),
       lineups: lineups(),
@@ -768,6 +783,7 @@ describe("fillPeriodMarkers — the whistles a match sheet does not record", () 
     // match undecided.
     const events = fillPeriodMarkers({
         stage: undefined,
+      variantKey: "mini-soccer",
       module: football,
       cfg: cfgFor(football, "mini-soccer"),
       lineups: lineups(),
@@ -783,6 +799,7 @@ describe("fillPeriodMarkers — the whistles a match sheet does not record", () 
     const cfg = cfgFor(hockey, "fih-outdoor");
     const events = fillPeriodMarkers({
         stage: undefined,
+      variantKey: "fih-outdoor",
       module: hockey,
       cfg,
       lineups: lineups(),
@@ -816,21 +833,25 @@ describe("fillPeriodMarkers — the whistles a match sheet does not record", () 
 
   // -------------------------------------------------------------------------
   // THE STAGE OVERLAY, which the whole-branch review found the generators not
-  // applying. `stageScopedFoldCfg` overlays a stage's `shootout`/`extraTime`
-  // onto the division cfg on the fold path, so a division that ENABLES extra
-  // time and a knockout stage that turns it OFF fold differently — and the
-  // generator used to fold under the division cfg alone.
+  // applying. `stageScopedFoldCfg` lays a stage's format (its `rules`, and a
+  // bracket kind's preset and deciders: the product's own composition, W2c
+  // Task 13b) over the division cfg on the fold path, so a division that
+  // ENABLES extra time and a stage whose rules turn it OFF fold differently —
+  // and the generator used to fold under the division cfg alone.
   //
   // Both directions are driven, because the positive test alone cannot tell a
   // working overlay from a cfg where the overlay makes no difference.
   // -------------------------------------------------------------------------
   const ET_DIVISION = { extraTime: { enabled: true, halfMinutes: 15 }, shootout: false };
+  /** Extra time off, in the stage's `rules`: the one place a stage's decider
+   *  is read since D3 (a key at the config's top level is read by nothing). */
+  const NO_ET_CONFIG = { rules: { extraTime: { enabled: false } } };
   const noExtraTime: PackStage = {
     ref: "s",
     seq: 1,
     kind: "league",
     name: "Knockout",
-    config: { extraTime: { enabled: false } },
+    config: NO_ET_CONFIG,
   } as PackStage;
 
   const levelSheet = (): PackEvent[][] => [
@@ -844,7 +865,7 @@ describe("fillPeriodMarkers — the whistles a match sheet does not record", () 
       variantKey: "11-a-side",
       moduleVersion: football.version,
       cfgOverrides: ET_DIVISION,
-      stages: [{ ref: "s", seq: 1, kind: "league", name: "Knockout", config: { extraTime: { enabled: false } } }],
+      stages: [{ ref: "s", seq: 1, kind: "league", name: "Knockout", config: NO_ET_CONFIG }],
       streams: [{ ...streamOf(events, "real"), stageRef: "s" } as unknown as PackStream],
       expected: {
         matches: [{ divisionRef: "d", fixtureExtKey: "fx", outcome: { kind: "draw" } }],
@@ -856,6 +877,7 @@ describe("fillPeriodMarkers — the whistles a match sheet does not record", () 
       module: football,
       cfg: cfgFor(football, "11-a-side", ET_DIVISION),
       stage: noExtraTime,
+      variantKey: "11-a-side",
       lineups: lineups(),
       markerType: "football.period",
       segments: levelSheet(),
@@ -882,6 +904,7 @@ describe("fillPeriodMarkers — the whistles a match sheet does not record", () 
     // cannot tell "the overlay is applied" from "the overlay changes nothing".
     const events = fillPeriodMarkers({
         stage: undefined,
+      variantKey: "11-a-side",
       module: football,
       cfg: cfgFor(football, "11-a-side", ET_DIVISION),
       lineups: lineups(),
@@ -906,6 +929,7 @@ describe("fillPeriodMarkers — the whistles a match sheet does not record", () 
       module: football,
       cfg: cfgFor(football, "11-a-side", ET_DIVISION),
       stage: undefined,
+      variantKey: "11-a-side",
       lineups: lineups(),
       markerType: "football.period",
       segments: levelSheet(),
@@ -917,7 +941,7 @@ describe("fillPeriodMarkers — the whistles a match sheet does not record", () 
       variantKey: "11-a-side",
       moduleVersion: football.version,
       cfgOverrides: ET_DIVISION,
-      stages: [{ ref: "s", seq: 1, kind: "league", name: "Knockout", config: { extraTime: { enabled: false } } }],
+      stages: [{ ref: "s", seq: 1, kind: "league", name: "Knockout", config: NO_ET_CONFIG }],
       streams: [streamOf(events, "real")],
       expected: {
         matches: [{ divisionRef: "d", fixtureExtKey: "fx", outcome: { kind: "draw" } }],
@@ -937,6 +961,7 @@ describe("fillPeriodMarkers — the whistles a match sheet does not record", () 
       module: football,
       cfg: cfgFor(football, "11-a-side", ET_DIVISION),
       stage: noExtraTime,
+      variantKey: "11-a-side",
       lineups: lineups(),
       markerType: "football.period",
       segments: levelSheet(),
@@ -946,8 +971,81 @@ describe("fillPeriodMarkers — the whistles a match sheet does not record", () 
       variantKey: "11-a-side",
       moduleVersion: football.version,
       cfgOverrides: ET_DIVISION,
-      stages: [{ ref: "s", seq: 1, kind: "league", name: "Knockout", config: { extraTime: { enabled: false } } }],
+      stages: [{ ref: "s", seq: 1, kind: "league", name: "Knockout", config: NO_ET_CONFIG }],
       streams: [streamOf(events, "real")],
+      expected: {
+        matches: [{ divisionRef: "d", fixtureExtKey: "fx", outcome: { kind: "draw" } }],
+      },
+    });
+    expect(errorsOf(validatePack(pack, { expectedSuite: "_unit" }).findings)).toEqual([]);
+  });
+
+  it("D3: the same decider at the stage config's TOP level is read by neither side — both play the extra time", () => {
+    // W2c Task 13b. The generator and stage 0 share one composition, so a key
+    // the product no longer reads is ignored by BOTH: the filler carries on
+    // into extra time and the validator folds the same stream to the same
+    // draw. Before D3 both read it and stopped at FT; a generator that kept
+    // reading it alone would emit FT-only markers stage 0 then refuses.
+    const topLevel: PackStage = { ...noExtraTime, config: { extraTime: { enabled: false } } } as PackStage;
+    const events = fillPeriodMarkers({
+      module: football,
+      cfg: cfgFor(football, "11-a-side", ET_DIVISION),
+      stage: topLevel,
+      variantKey: "11-a-side",
+      lineups: lineups(),
+      markerType: "football.period",
+      segments: levelSheet(),
+    });
+    expect(events.map((e) => e.payload["phase"])).toContain("ET_HT");
+    const pack = unitPack({
+      sportKey: "football",
+      variantKey: "11-a-side",
+      moduleVersion: football.version,
+      cfgOverrides: ET_DIVISION,
+      stages: [{ ref: "s", seq: 1, kind: "league", name: "Knockout", config: topLevel.config }],
+      streams: [{ ...streamOf(events, "real"), stageRef: "s" } as unknown as PackStream],
+      expected: {
+        matches: [{ divisionRef: "d", fixtureExtKey: "fx", outcome: { kind: "draw" } }],
+      },
+    });
+    // The fold agrees with the generator (no fold finding); the one error is the
+    // refusal the product's create door would answer this stage with (R-13b-1).
+    expect(errorsOf(validatePack(pack, { expectedSuite: "_unit" }).findings).map((f) => `${f.code} @ ${f.where}`)).toEqual([
+      "pack.stage_top_level_decider @ divisions[ref=d].stages[ref=s].config.extraTime",
+    ]);
+  });
+
+  it("a knockout folds under its PRESET in the generator too; its held rules stop at FT (R-T12-3)", () => {
+    // The division plays no decider (11-a-side: extra time off, no shoot-out).
+    // A knockout created with nothing sent carries the engine's preset (extra
+    // time and penalties on), so a level sheet runs on past FT into extra time
+    // and then a shoot-out, whose kicks are attributed facts the filler will
+    // not invent. The same knockout with every decider off (the product's own
+    // `decidersOffRules`) is a draw at FT, and stage 0 agrees.
+    const division = cfgFor(football, "11-a-side");
+    const knockout = (config: Record<string, unknown>): PackStage =>
+      ({ ref: "s", seq: 1, kind: "knockout", name: "Knockout", config }) as PackStage;
+    const fill = (stage: PackStage): PackEvent[] =>
+      fillPeriodMarkers({
+        module: football,
+        cfg: division,
+        stage,
+        variantKey: "11-a-side",
+        lineups: lineups(),
+        markerType: "football.period",
+        segments: levelSheet(),
+      });
+    expect(() => fill(knockout({})), "the preset reaches the generator").toThrow(/accepted none of/);
+
+    const held = knockout({ rules: decidersOffRules(football, "11-a-side") });
+    const events = fill(held);
+    expect(events.map((e) => e.payload["phase"]).filter((p) => p !== undefined)).toEqual(["HT", "FT"]);
+    const pack = unitPack({
+      sportKey: "football",
+      variantKey: "11-a-side",
+      moduleVersion: football.version,
+      stages: [{ ...held }],
+      streams: [{ ...streamOf(events, "real"), stageRef: "s" } as unknown as PackStream],
       expected: {
         matches: [{ divisionRef: "d", fixtureExtKey: "fx", outcome: { kind: "draw" } }],
       },
@@ -959,6 +1057,7 @@ describe("fillPeriodMarkers — the whistles a match sheet does not record", () 
     expect(() =>
       fillPeriodMarkers({
         stage: undefined,
+        variantKey: "11-a-side",
         module: football,
         cfg: cfgFor(football, "11-a-side"),
         lineups: lineups(),
@@ -972,6 +1071,7 @@ describe("fillPeriodMarkers — the whistles a match sheet does not record", () 
     expect(() =>
       fillPeriodMarkers({
         stage: undefined,
+        variantKey: "11-a-side",
         module: football,
         cfg: cfgFor(football, "11-a-side"),
         lineups: lineups(),
@@ -987,6 +1087,7 @@ describe("fillPeriodMarkers — the whistles a match sheet does not record", () 
     expect(() =>
       fillPeriodMarkers({
         stage: undefined,
+        variantKey: "11-a-side",
         module: football,
         cfg: cfgFor(football, "11-a-side", { shootout: true }),
         lineups: lineups(),
@@ -1053,6 +1154,7 @@ describe("fillPeriodMarkers — the whistles a match sheet does not record", () 
     expect(() =>
       fillPeriodMarkers({
         stage: undefined,
+        variantKey: "fake",
         module: fakeModule({ values: ["a", "b"] }),
         cfg: {},
         lineups: lineups(),
@@ -1095,6 +1197,7 @@ describe("fillPeriodMarkers — the whistles a match sheet does not record", () 
     expect(() =>
       fillPeriodMarkers({
         stage: undefined,
+        variantKey: "fake",
         module: twoEnums,
         cfg: {},
         lineups: lineups(),
@@ -1108,6 +1211,7 @@ describe("fillPeriodMarkers — the whistles a match sheet does not record", () 
     expect(() =>
       fillPeriodMarkers({
         stage: undefined,
+        variantKey: "fake",
         module: fakeModule({ padSpec: false }),
         cfg: {},
         lineups: lineups(),
@@ -1121,6 +1225,7 @@ describe("fillPeriodMarkers — the whistles a match sheet does not record", () 
     expect(() =>
       fillPeriodMarkers({
         stage: undefined,
+        variantKey: "fake",
         module: fakeModule(),
         cfg: {},
         lineups: lineups(),
@@ -1134,6 +1239,7 @@ describe("fillPeriodMarkers — the whistles a match sheet does not record", () 
   it("stops as soon as the module says the match is decided", () => {
     const events = fillPeriodMarkers({
         stage: undefined,
+      variantKey: "fake",
       module: fakeModule({ decides: true }),
       cfg: {},
       lineups: lineups(),
@@ -1149,6 +1255,7 @@ describe("fillPeriodMarkers — the whistles a match sheet does not record", () 
   it("folds green through the real validator as a REAL-provenance football stream", () => {
     const events = fillPeriodMarkers({
         stage: undefined,
+      variantKey: "11-a-side",
       module: football,
       cfg: cfgFor(football, "11-a-side"),
       lineups: lineups(),

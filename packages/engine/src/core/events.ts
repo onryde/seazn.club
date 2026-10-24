@@ -20,7 +20,9 @@ import { GameTime, compareGameTime, gameTimeOf } from "./time.ts";
 import {
   EntrantId,
   FORFEIT_REASONS,
+  forbidsLevelResult,
   isLevelOutcome,
+  type ForfeitAward,
   type ForfeitPhase,
   type ForfeitReason,
   type LineupPair,
@@ -69,7 +71,7 @@ export const CoreForfeit = z
   });
 // W2b (plan D5): `expunge: true` marks an abandon written by the withdrawal cascade — the match leaves the table
 // entirely (`outcomeOf` reads null while it is active). `true` or absent; never `false`.
-export const CoreAbandon = z.strictObject({ reason: z.string().min(1), expunge: z.literal(true).optional() });
+export const CoreAbandon = z.strictObject({ reason: z.string().min(1), expunge: z.literal(true).optional(), noResult: z.literal(true).optional() });
 
 /** The one reader for a `core.forfeit` payload. Every sport module used to cast
  *  it inline as `{ by: string }`, which is why the REQUIRED `reason` was
@@ -179,6 +181,29 @@ export function settleApplies(module: { awaitingDecider?(state: never): boolean 
   // P1 follow-up: a fixture nobody started has no fold — the console is fed `match_states.state ?? null` — and a
   // module's hook reads its own state shape (boardgame: `s.phase`). No state, no decider owed; never ask the hook.
   return f.abandoned || (f.state != null && module.awaitingDecider?.(f.state as never) === true);
+}
+
+/** W2c P-7 / X-AB-5 - the TABLE half of the settle offer. A league, group, swiss or americano draw is a RESULT the
+ *  standings credit, so none of `settleApplies`' arms (a level outcome, a pending decider) applies there; the one
+ *  exception is an ABANDONED match that decided nobody (no effective outcome), which has no result to turn into a win,
+ *  stays out of the table and, in a Swiss stage, holds the next round - the organiser's settle is how it is decided.
+ *  An EXPUNGE abandon (W2b D5, a withdrawal's) also folds to no outcome but took the match out of the table altogether:
+ *  nothing is owed on it, so it is never offered. `abandoned` is the ACTIVE `core.abandon` of the ledger. `noResult` (rebase ruling D3): that abandon IS the organiser's No result (`core.abandon{noResult: true}`, online chess I-3), already the settle - owed nothing more. */
+export interface TableSettleFacts { readonly outcome: MatchOutcome | null; readonly abandoned: boolean; readonly expunged?: boolean; readonly noResult?: boolean }
+export function settleAppliesInTable(f: TableSettleFacts): boolean {
+  return f.abandoned && f.expunged !== true && f.noResult !== true && f.outcome === null;
+}
+
+/** THE stage-aware settle offer: ONE entry for the server's append guard (a table stage's settle) and the console's
+ *  block, the pad's held line, and any other reader that asks "is this match owed the organiser's settle?". A bracket
+ *  kind (controller ruling C12) is `settleApplies`; every other kind - and a fixture outside any stage - is the table
+ *  arm above. `state` is read only by a bracket's pending-decider hook. */
+export function settleOffered(
+  module: { awaitingDecider?(state: never): boolean },
+  stageKind: string | null | undefined,
+  f: SettleFacts & { readonly expunged?: boolean; readonly noResult?: boolean },
+): boolean {
+  return forbidsLevelResult(stageKind) ? settleApplies(module, f) : settleAppliesInTable(f);
 }
 
 /** THE outcome of a fold. An expunge abandon (W2b D5) outranks everything — the match left the table, so there is
@@ -545,6 +570,26 @@ export interface FoldContext {
    * must therefore handle its absence — the fold always supplies it.
    */
   readonly squads?: SquadState;
+  /**
+   * W2c Task 16b (X-WO-1 part B) - the stage PointsRule's award for THIS forfeit, present ONLY when the kernel has
+   * decided it is a forfeit with nothing played (`unplayedForfeitEvent`) and the caller offered one
+   * (`FoldOptions.forfeitAward`). A module that reads it keeps it in its own state, where its forfeit credit and its
+   * summary read it. Absent for every other event, so no state it does not apply to moves.
+   */
+  readonly forfeitAward?: ForfeitAward;
+}
+
+/**
+ * W2c Task 16b (P-3 "A") - does a stage rule's award land on THIS forfeit event? Exactly when nothing was played before
+ * it (`playRecorded` of the active ledger, ruling 112) or when it is a walkover (a side that never arrived played
+ * nothing, whatever the ledger holds - chess's Start is play and a no-show after it is still a walkover), and never for
+ * a double walkover (nobody forfeited TO anyone). This is `isUnplayedForfeit`'s rule (competition/points.ts, the table's
+ * reading of the decided outcome) stated for the EVENT, because the kernel decides before the module has an outcome;
+ * sport/forfeit-award.test.ts holds the two together across every sport, reason and ledger shape.
+ */
+export function unplayedForfeitEvent(payload: unknown, playedBefore: boolean): boolean {
+  const { by, reason } = forfeitOf(payload);
+  return by !== "both" && (reason === "walkover" || !playedBefore);
 }
 
 /**
@@ -565,6 +610,15 @@ export interface FoldContext {
  */
 export interface FoldOptions<State = unknown> {
   readonly strictFromSeq?: number;
+  /**
+   * W2c Task 16b (X-WO-1 part B; Task 9 P-3 "A") - the stage PointsRule's `forfeit.awardScore`, winner first, offered to
+   * a fold of that stage's matches. The kernel withholds it from every forfeit that is not one with nothing played
+   * (`unplayedForfeitEvent`) and hands it to the module through `FoldContext.forfeitAward` for the rest, so a forfeit
+   * after play keeps the module's own credit. Absent means no rule awards a score: every state is exactly what it was
+   * before this option existed. Only a module that declares `awardScoreKeys` reads it; offering it to another sport
+   * is harmless (it is ignored), so a caller need not branch on the sport.
+   */
+  readonly forfeitAward?: ForfeitAward;
   /**
    * Called once for every ACTIVE event — after `resolveVoids`, so never for a
    * voided event or the void itself — AFTER the kernel has folded it, with the
@@ -645,6 +699,12 @@ export interface FoldableModule<Cfg = unknown, State = unknown> {
   // 4, so a decided fixture answers with the decider's own refusal, never
   // ALREADY_DECIDED. Optional; absent reads as "no decider types".
   deciderTypes?: readonly string[];
+  // W2c D7 (D-R7): the entrant a decider event (one of `deciderTypes`) would advance, read from its payload and the
+  // fixture's two entrants. The server's withdrawn-entrant guard asks it instead of reading `payload.winner`, because
+  // a decider need not carry a winner: chess's Armageddon records Black and the result, and the engine derives who
+  // advances. Undefined = the payload names nobody (the fold refuses it with its own code). Optional; absent reads as
+  // "the payload's `winner`".
+  deciderWinner?(payload: unknown, entrants: { readonly home: string; readonly away: string }): string | undefined;
   // W2b (plan D3) — where in the match a forfeit is being recorded, read from the module's own phase union: "pre"
   // before play, "play" while it runs (a shoot-out and a super over included, ruling 102 Q5), "tiebreak" for a
   // pending decider (chess), "over" once done/final/abandoned. The kernel's phase guard judges every
@@ -860,6 +920,7 @@ export function foldMatchWithStoppage<Cfg, State>(
 } {
   const active = resolveVoids(events);
   const strictFromSeq = opts?.strictFromSeq;
+  const forfeitAward = opts?.forfeitAward;
   const onFolded = opts?.onFolded;
   const postDecision = new Set([...POST_DECISION_CORE, ...(module.postDecisionTypes ?? [])]);
   const deciderTypes = new Set(module.deciderTypes); // absent ⇒ empty
@@ -1118,7 +1179,13 @@ export function foldMatchWithStoppage<Cfg, State>(
       // apply() directly — and nested/kernel refuses an interruption against a
       // cfg allowance. Each is the same fixture-bricking shape as the guard
       // above and needs the same signal; the other eight ignore the argument.
-      state = module.apply(state, event, { strict, squads });
+      // W2c Task 16b: the stage rule's award reaches the module only for a forfeit with nothing played - decided HERE,
+      // from the active ledger before this event (the one `playRecorded` reading), never by the module.
+      const award =
+        forfeitAward !== undefined && event.type === "core.forfeit" && unplayedForfeitEvent(event.payload, playRecorded(active.slice(0, index), module))
+          ? forfeitAward
+          : undefined;
+      state = module.apply(state, event, award === undefined ? { strict, squads } : { strict, squads, forfeitAward: award });
       if (event.type === "core.start") started = true;
       if (event.type === "core.abandon") {
         abandonActive = true;

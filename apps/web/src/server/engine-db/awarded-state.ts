@@ -2,32 +2,48 @@ import "server-only";
 import type postgres from "postgres";
 import { isDeepStrictEqual } from "node:util";
 import {
+  EngineError,
   foldMatchWithStoppage,
   outcomeOf,
   summaryOf,
   type EventEnvelope,
+  type ForfeitAward,
   type LineupPair,
   type MatchOutcome,
   type ScoreSummary,
 } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { unseatedForfeitLoser } from "@/lib/forfeit-tag";
+import { FORMAT_FIT_REASONS } from "@/lib/rule-errors";
 import { resolveModule } from "./registry";
 import { loadLineupPair } from "./lineups";
-import { resolveFixtureCfg } from "./fixture-cfg";
+import { resolveFixtureCfg, stageForfeitAward } from "./fixture-cfg";
 import { foldFrom, loadFoldInputs } from "./fold";
 
 type Tx = postgres.TransactionSql;
 
 /** A fixture's ledger as the award reads it: its tip, and how many recorded events still stand (no void took them
  *  back; voids are not voidable, events.test.ts PROMPT-02) — `fed-seats.ts` `readNode`'s `live_events`. */
-async function ledgerOf(tx: Tx, fixtureId: string): Promise<{ tip: number; standing: number }> {
+export async function ledgerOf(tx: Tx, fixtureId: string): Promise<{ tip: number; standing: number }> {
   const [ledger] = await tx<{ tip: number; standing: number }[]>`
     select coalesce(max(e.seq), 0)::int as tip,
            (count(*) filter (where e.type <> 'core.void' and not exists (
               select 1 from score_events v where v.fixture_id = e.fixture_id and v.voids_event_id = e.id)))::int as standing
     from score_events e where e.fixture_id = ${fixtureId}`;
   return ledger!;
+}
+
+/** `awardedMatchState`'s refusal when the walkover, folded under a cfg, decides something other than the stored award
+ *  — named, so a caller asking "does this cfg still score the award?" (the format correction, `fixture-rules.ts`) can
+ *  tell "it would change the result" from a broken assumption. */
+export class AwardFoldMismatch extends Error {
+  constructor(
+    readonly decided: MatchOutcome | null,
+    readonly stored: MatchOutcome,
+  ) {
+    super(`awardedMatchState: the walkover folds to ${JSON.stringify(decided)}, not the stored ${JSON.stringify(stored)}`);
+    this.name = "AwardFoldMismatch";
+  }
 }
 
 /**
@@ -40,6 +56,16 @@ async function ledgerOf(tx: Tx, fixtureId: string): Promise<{ tip: number; stand
  * summary reads the credit from its own `forfeitCredit` (football's `displayedGoals`, the set kernel's
  * `displayedSets`, …), and the state is the walkover's in every detail (its phase, its method). The fold's decision
  * must BE the stored award, or the score would describe a different result: that is refused, not written.
+ *
+ * `forfeitAward` (W2c Task 16b) - a DOCUMENTED GUARD, not a live path. It is the award the fixture's stage points rule offers
+ * (`stageForfeitAward`). An award no event records sits in a bracket stage, which holds no points rule (RULE_NOT_SETTABLE
+ * `points`, `refuseStagePoints`), so no door writes one with an award today: the only way to reach this argument is a rule
+ * written with raw SQL (`__tests__/forfeit-award-callers.test.ts` does exactly that, and nothing else does). It is carried
+ * anyway because every server-side read and write fold offers the award (except the append-event `before` folds, the import
+ * dry run and the pad's client fold), and a fold that does not is the defect X-WO-1 B closes: this
+ * row's stored score would then differ from the number the table's rule credits (`applyPointsRule`) the day a door lets one
+ * stage hold both an event-less award and a rule. Delete it only together with a refusal that proves no stage can hold both,
+ * and the test that reaches it (`loadAward` reads it, `writeAwardedMatchState` passes it on).
  */
 export function awardedMatchState(
   module: AnySportModule,
@@ -47,6 +73,7 @@ export function awardedMatchState(
   lineups: LineupPair,
   outcome: MatchOutcome,
   at: { fixtureId: string; recordedAt: string },
+  forfeitAward?: ForfeitAward,
 ): { state: unknown; summary: ScoreSummary } {
   if (outcome.kind !== "award") {
     throw new Error(`awardedMatchState: a "${outcome.kind}" is no award, and only an award is decided without play`);
@@ -63,14 +90,84 @@ export function awardedMatchState(
     recordedAt: at.recordedAt,
     recordedBy: null,
   };
-  const folded = foldMatchWithStoppage(module, cfg as never, lineups, [forfeit]);
+  // W2c Task 16b: the stage rule's walkover award (a walkover nobody played is the case it exists for), when the stage has one.
+  const folded = foldMatchWithStoppage(module, cfg as never, lineups, [forfeit], forfeitAward === undefined ? undefined : { forfeitAward });
   const decided = outcomeOf(module, folded);
-  if (!isDeepStrictEqual(decided, outcome)) {
-    throw new Error(
-      `awardedMatchState: the walkover folds to ${JSON.stringify(decided)}, not the stored ${JSON.stringify(outcome)}`,
-    );
-  }
+  if (!isDeepStrictEqual(decided, outcome)) throw new AwardFoldMismatch(decided, outcome);
   return { state: folded.state, summary: summaryOf(module, folded) };
+}
+
+/** An award with a loser: the only decision without play that credits a score (a bye names no loser). */
+export const isScoredAward = (o: MatchOutcome | null): o is Extract<MatchOutcome, { kind: "award" }> & { loser: string } =>
+  o !== null && o.kind === "award" && o.loser !== null;
+
+/** `awardFit`'s verdict. `FIXTURE_FORMAT_LOCKED`: no fit applies to the stored award. `FORMAT_DOES_NOT_FIT_PLAY`: the
+ *  corrected format would not keep it, for `reason`. */
+export type AwardFitVerdict =
+  | { ok: true }
+  | { ok: false; code: "FIXTURE_FORMAT_LOCKED" }
+  | { ok: false; code: "FORMAT_DOES_NOT_FIT_PLAY"; reason: string };
+
+/**
+ * W2c Task 14 (fix rounds 1–2, X-SR-5 for a match decided WITHOUT play) — does a format correction keep an award no
+ * event records? Pure: the award's own walkover fold (`awardedMatchState`) under the format it plays now and under the
+ * corrected one, and nothing else (`fixture-rules.ts` (7a) is the one caller).
+ *
+ *  - A bye (no loser) or no award at all credits no score: no fit applies (`FIXTURE_FORMAT_LOCKED`).
+ *  - The CURRENT fold must reproduce the stored award, or there is nothing to fit against: the engine refusing the
+ *    forfeit, or the fold deciding another award, is `FIXTURE_FORMAT_LOCKED` too — a named refusal, never a 500.
+ *  - Under the corrected format: the engine refusing the forfeit is `FORMAT_DOES_NOT_FIT_PLAY` with its own message;
+ *    the fold deciding another award is the "result" reason; a different credited score is the "score" reason.
+ *  - Anything else thrown is a module bug, not a verdict, and propagates.
+ *
+ * The stage rule's walkover award (X-WO-1 B) is deliberately NOT offered to either fold here, nor in `awardFoldsUnder`:
+ * both answer only "does the award hold under this format" (`ok`, and for the fit the headline), and a rule's award is
+ * the same number under every format, never the reason one holds or fails (the only keys a per-fixture correction may
+ * set are rule-scope - a score key such as `awardScore` is table-scope and refused by name, `overrideFor`). The write
+ * that stores the folded state (`writeAwardedMatchState`) is the one that offers it.
+ */
+/** Does the stored award hold under `cfg`? Its walkover folded there (`awardedMatchState`), or the reason it will not
+ *  hold: the engine refusing the forfeit (its own message) or the fold deciding another award (the "result" reason). A
+ *  module bug (a plain Error) is no verdict and propagates. The format correction asks it of the corrected cfg
+ *  (`awardFit`); a FORMAT SAVE asks only this (batch-3 I1, `award-rewrite.ts`): the save moves the credited score with
+ *  it, so the old fold is no question there. */
+export function awardFoldsUnder(
+  module: AnySportModule,
+  cfg: unknown,
+  lineups: LineupPair,
+  outcome: MatchOutcome,
+  at: { fixtureId: string; recordedAt: string },
+): { ok: true; state: ReturnType<typeof awardedMatchState> } | { ok: false; reason: string } {
+  try {
+    return { ok: true, state: awardedMatchState(module, cfg, lineups, outcome, at) };
+  } catch (err) {
+    if (EngineError.is(err)) return { ok: false, reason: err.message };
+    if (err instanceof AwardFoldMismatch) return { ok: false, reason: FORMAT_FIT_REASONS.result };
+    throw err;
+  }
+}
+
+export function awardFit(
+  module: AnySportModule,
+  currentCfg: unknown,
+  correctedCfg: unknown,
+  lineups: LineupPair,
+  outcome: MatchOutcome,
+  at: { fixtureId: string; recordedAt: string },
+): AwardFitVerdict {
+  if (!isScoredAward(outcome)) return { ok: false, code: "FIXTURE_FORMAT_LOCKED" };
+  let was;
+  try {
+    was = awardedMatchState(module, currentCfg, lineups, outcome, at);
+  } catch (err) {
+    if (EngineError.is(err) || err instanceof AwardFoldMismatch) return { ok: false, code: "FIXTURE_FORMAT_LOCKED" };
+    throw err;
+  }
+  const now = awardFoldsUnder(module, correctedCfg, lineups, outcome, at);
+  if (!now.ok) return { ok: false, code: "FORMAT_DOES_NOT_FIT_PLAY", reason: now.reason };
+  if (now.state.summary.headline !== was.summary.headline)
+    return { ok: false, code: "FORMAT_DOES_NOT_FIT_PLAY", reason: FORMAT_FIT_REASONS.score };
+  return { ok: true };
 }
 
 /**
@@ -93,7 +190,55 @@ export function awardedMatchState(
  * double walkover's dead seat — never needs the clear: its dead seat's feeder has no winner, so its award is a bye and
  * wrote no row.)
  */
-export async function writeAwardedMatchState(tx: Tx, fixtureId: string): Promise<void> {
+export async function writeAwardedMatchState(
+  tx: Tx,
+  fixtureId: string,
+  opts: {
+    /** W2c Task 14 (fix round 1, I1): the award's OWN row, re-written under the fixture's cfg as it now resolves — a
+     *  format correction (`fixture-rules.ts`) changed it and proved the award still scores the same way. Only an award
+     *  with no standing play reaches here (refused below like any other), so the row replaced is the award's. */
+    rewrite?: boolean;
+  } = {},
+): Promise<void> {
+  const award = await loadAward(tx, fixtureId);
+  if (award.ledger.standing > 0) {
+    throw new Error(`writeAwardedMatchState: ${fixtureId} holds ${award.ledger.standing} recorded event(s) no void took back, and an award recorded without an event never overwrites play`);
+  }
+  const { state, summary } = awardedMatchState(
+    award.module,
+    award.cfg,
+    award.lineups,
+    award.outcome,
+    { fixtureId, recordedAt: new Date().toISOString() },
+    award.forfeitAward,
+  );
+  const written = await tx`
+    insert into match_states (fixture_id, last_seq, state, summary)
+    values (${fixtureId}, ${award.ledger.tip}, ${tx.json(state as never)}, ${tx.json(summary as never)})
+    on conflict (fixture_id) do update set
+      last_seq = excluded.last_seq, state = excluded.state, summary = excluded.summary, updated_at = now()
+      where ${award.ledger.tip > 0 || opts.rewrite === true}
+    returning fixture_id`;
+  if (written.length === 0) {
+    throw new Error(`writeAwardedMatchState: ${fixtureId} already holds a match state, and an award recorded without an event never overwrites one`);
+  }
+}
+
+/** What an award with no play is folded from (`writeAwardedMatchState`'s inputs, one reader): its module, the
+ *  fixture's own resolved cfg (`resolveFixtureCfg`, the fold's), its sides — her dead seat included
+ *  (`unseatedForfeitLoser`) — and its ledger. Throws on a fixture that is no award over two sides. */
+export async function loadAward(
+  tx: Tx,
+  fixtureId: string,
+): Promise<{
+  module: AnySportModule;
+  cfg: unknown;
+  lineups: LineupPair;
+  outcome: MatchOutcome;
+  ledger: { tip: number; standing: number };
+  /** W2c Task 16b - the walkover award the fixture's stage rule offers (`stageForfeitAward`); absent for none. */
+  forfeitAward?: ForfeitAward;
+}> {
   const [fixture] = await tx<
     {
       division_id: string;
@@ -101,10 +246,11 @@ export async function writeAwardedMatchState(tx: Tx, fixtureId: string): Promise
       home_entrant_id: string | null;
       away_entrant_id: string | null;
       config_snapshot: unknown;
+      rules_override: unknown;
       outcome: MatchOutcome | null;
     }[]
   >`
-    select division_id, stage_id, home_entrant_id, away_entrant_id, config_snapshot, outcome
+    select division_id, stage_id, home_entrant_id, away_entrant_id, config_snapshot, rules_override, outcome
     from fixtures where id = ${fixtureId}`;
   if (!fixture) throw new Error(`writeAwardedMatchState: no fixture ${fixtureId}`);
   const home = fixture.home_entrant_id ?? unseatedForfeitLoser(fixture, "home");
@@ -118,26 +264,11 @@ export async function writeAwardedMatchState(tx: Tx, fixtureId: string): Promise
     select kind, config from stages where id = ${fixture.stage_id}`;
   if (!division) throw new Error(`writeAwardedMatchState: no division for ${fixtureId}`);
   const sportModule = resolveModule(division.sport_key, division.module_version);
-  const cfg = resolveFixtureCfg(fixture.config_snapshot, division.config, stage, sportModule);
+  const cfg = resolveFixtureCfg(fixture, division.config, stage, sportModule);
   const ledger = await ledgerOf(tx, fixtureId);
-  if (ledger.standing > 0) {
-    throw new Error(`writeAwardedMatchState: ${fixtureId} holds ${ledger.standing} recorded event(s) no void took back, and an award recorded without an event never overwrites play`);
-  }
   const lineups = await loadLineupPair(tx, fixtureId, home, away);
-  const { state, summary } = awardedMatchState(sportModule, cfg, lineups, fixture.outcome, {
-    fixtureId,
-    recordedAt: new Date().toISOString(),
-  });
-  const written = await tx`
-    insert into match_states (fixture_id, last_seq, state, summary)
-    values (${fixtureId}, ${ledger.tip}, ${tx.json(state as never)}, ${tx.json(summary as never)})
-    on conflict (fixture_id) do update set
-      last_seq = excluded.last_seq, state = excluded.state, summary = excluded.summary, updated_at = now()
-      where ${ledger.tip > 0}
-    returning fixture_id`;
-  if (written.length === 0) {
-    throw new Error(`writeAwardedMatchState: ${fixtureId} already holds a match state, and an award recorded without an event never overwrites one`);
-  }
+  const forfeitAward = stageForfeitAward(stage, sportModule);
+  return { module: sportModule, cfg, lineups, outcome: fixture.outcome, ledger, ...(forfeitAward === undefined ? {} : { forfeitAward }) };
 }
 
 /**

@@ -13,18 +13,16 @@
 // the reference oracle among them), plus its own, which say what makes it THAT scenario. Expected values are the
 // rulebook's and the engine's declared lists (SETTLE_METHODS, TIEBREAK_RUNGS), never read back from the generator.
 import { SETTLE_METHODS, type StageKind } from "@seazn/engine/core";
-import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import { RefusedCall } from "../driver/types.ts";
 import { fieldSizeFor } from "../field-size.ts";
 import { bracketRootRows, w2aApplies } from "../w2a-cells.ts";
 import type { ObservedRun } from "../observed.ts";
-import { stageCfg } from "../sport-cfg.ts";
 import { generateStream } from "../streams/index.ts";
 import type { RequestedOutcome } from "../streams/types.ts";
 import type { CheckResult } from "../results.ts";
 import { advanceSeededAsDeclared } from "./advance.ts";
 import { assertion, bracketDeciderExercised, builtAsPosted, foldParity, lineupsPut, loopBounded, publicStandingsMatch, referenceBracketFinish, resultsAsPosted, stageCompleted, type Item } from "./assertions.ts";
-import { Recorder, bracketPolicy, playDivision, recordPosted, setUpDivision, snapshot, type BracketPick, type DivisionSetup, type RoundHooks } from "./common.ts";
+import { Recorder, bracketPolicy, caseStageCfg, playDivision, recordPosted, setUpDivision, snapshot, tiebreakAt, type BracketPick, type DivisionSetup, type RoundHooks } from "./common.ts";
 import type { FixtureRow } from "../driver/types.ts";
 import { W2A_SCENARIO_KEYS, type Scenario, type ScenarioContext, type W2aScenarioKey } from "./types.ts";
 
@@ -56,10 +54,9 @@ export interface RefusalProbe {
 /** The settle method / tie-break rung the `n`th match rotates to — the engine's own lists, so a method added there is
  *  exercised without an edit here. */
 const methodAt = (n: number) => SETTLE_METHODS[n % SETTLE_METHODS.length];
-const rungAt = (n: number) => TIEBREAK_RUNGS[n % TIEBREAK_RUNGS.length];
 
 const settleEvery = (after: "level" | "abandon"): BracketPick => (_f, n, higher) => ({ kind: "settle", then: higher, method: methodAt(n), after });
-const tiebreakEvery: BracketPick = (_f, n, higher) => ({ kind: "tiebreak", rung: rungAt(n), winner: higher });
+const tiebreakEvery: BracketPick = (_f, n, higher) => tiebreakAt(n, higher);
 const winEvery: BracketPick = (_f, _n, higher) => ({ kind: "win", winner: higher });
 
 /** The first match of the round, in the order decideRound decides them. */
@@ -86,7 +83,7 @@ export async function refuseGenericDraw(ctx: ScenarioContext, rec: Recorder, set
   }
   const after = await ctx.driver.fixtureState(f.id);
   // Finished as the policy would have asked of it: the root bracket's pick for this ordinal (nothing decided yet).
-  const outcome = bracketPolicy(setup, f, ctx.spec.sport, rec.bracketOrdinal, stageCfg(ctx.spec.sport, ctx.cfg, setup.stage.kind as StageKind));
+  const outcome = bracketPolicy(setup, f, ctx.spec.sport, rec.bracketOrdinal, caseStageCfg(ctx, setup.stage.kind as StageKind));
   rec.resumed.set(f.id, { outcome, live: 1, voidedType: null });
   return { fixtureId: f.id, refusal, before: { status: before.status, seq: before.last_seq }, after: { status: after.status, seq: after.last_seq } };
 }
@@ -197,7 +194,7 @@ export const w2aScenarios: Readonly<Record<W2aScenarioKey, Scenario>> = Object.f
   BRACKET_SETTLE_LEVEL: scenario("BRACKET_SETTLE_LEVEL", { pick: settleEvery("level"), checks: (rec) => [everyMatchTookThePath(rec, "BRACKET_SETTLE_LEVEL")] }),
   BRACKET_SETTLE_ABANDON: scenario("BRACKET_SETTLE_ABANDON", { pick: settleEvery("abandon"), checks: (rec) => [everyMatchTookThePath(rec, "BRACKET_SETTLE_ABANDON")] }),
   BRACKET_TIEBREAK: scenario("BRACKET_TIEBREAK", { pick: tiebreakEvery, checks: (rec) => [everyMatchTookThePath(rec, "BRACKET_TIEBREAK")] }),
-  BRACKET_EXTRA_BOARD: scenario("BRACKET_EXTRA_BOARD", { pick: winEvery, organiserDecides: false, checks: (rec, ctx) => [everyGamePlayedTheExtraBoard(rec, stageCfg(ctx.spec.sport, ctx.cfg, "knockout"))] }),
+  BRACKET_EXTRA_BOARD: scenario("BRACKET_EXTRA_BOARD", { pick: winEvery, organiserDecides: false, checks: (rec, ctx) => [everyGamePlayedTheExtraBoard(rec, caseStageCfg(ctx, "knockout"))] }),
   // The default policy still asks the hard path every third match (generic: an abandon at a score, then a settle),
   // so the run owes its deciders; the probe is the scenario's own.
   BRACKET_NO_DRAW_GENERIC: scenario("BRACKET_NO_DRAW_GENERIC", { probe: true, checks: (_rec, _ctx, probe) => [genericDrawRefused(probe)] }),

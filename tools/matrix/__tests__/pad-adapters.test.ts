@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SETTLE_METHODS } from "@seazn/engine/core";
-import { BoardgameMethod, TIEBREAK_RUNGS, boardgame } from "@seazn/engine/sports/boardgame";
+import { ARMAGEDDON_RESULTS, BoardgameMethod, TIEBREAK_RUNGS, boardgame, effectiveRungs, type TiebreakRung } from "@seazn/engine/sports/boardgame";
 import { carrom } from "@seazn/engine/sports/carrom";
 import { cricket } from "@seazn/engine/sports/cricket";
 import { football } from "@seazn/engine/sports/football";
@@ -18,13 +18,13 @@ import { badminton, tabletennis, volleyball } from "@seazn/engine/sports/setbase
 import { tennis } from "@seazn/engine/sports/tennis";
 import { beforeAll, describe, expect, it } from "vitest";
 import { GENERIC_TOLERATED_EXTRA_KEYS, genericAdapter } from "../../bench/lib/drivers/adapters/generic.ts";
-import { START_MATCH_TESTID, selectorForTapStep, type TapAdapterContext } from "../../bench/lib/drivers/scorer.ts";
+import { START_MATCH_TESTID, selectorForTapStep, type TapAdapterContext, type TapStep } from "../../bench/lib/drivers/scorer.ts";
 import { ORGANISER_ONLY_SPORT_EVENTS, isOrganiserOnlyEvent } from "../../../apps/web/src/lib/organiser-only-events.ts";
 import type { LedgerRow } from "../../bench/lib/ledger.ts";
 import { SPORT_KEYS } from "../lib/catalogue.ts";
 import { PAD_OWNER, PAD_SPORTS, PAD_UNOWNED, noPadReason } from "../lib/pad-sports.ts";
 import { foldStream } from "../lib/fold.ts";
-import { ARMAGEDDON, BOARDGAME_DRAW_TILE, BOARDGAME_RESULT, BOARDGAME_TIEBREAK, BOARDGAME_TIEBREAK_TILE, TIEBREAK_SCORE_NONE, boardgamePad, methodChipId } from "../lib/pads/boardgame.ts";
+import { ARMAGEDDON, BOARDGAME_DRAW_TILE, BOARDGAME_RESULT, BOARDGAME_TIEBREAK, BOARDGAME_TIEBREAK_TILE, BLACK_OPTION_PREFIX, RESULT_OPTION_PREFIX, TIEBREAK_SCORE_NONE, boardgamePad, methodChipId } from "../lib/pads/boardgame.ts";
 import { CARROM_BOARD, CARROM_BOARD_TILE, CARROM_COIN_MAX, carromPad } from "../lib/pads/carrom.ts";
 import { CRICKET_OVER_TILE, CRICKET_SUMMARY, cricketPad, makeCricketPad, overSplit } from "../lib/pads/cricket.ts";
 import { BADMINTON_SET_SCORE_TILE, BADMINTON_SUMMARY, badmintonPad } from "../lib/pads/badminton.ts";
@@ -79,6 +79,8 @@ function bracketOutcomesFor(): RequestedOutcome[] {
     { kind: "win", winner: "home" }, { kind: "level" }, { kind: "abandon" }, { kind: "abandon", atScore: true },
     ...SETTLE_METHODS.flatMap((method) => (["level", "abandon"] as const).map((after) => ({ kind: "settle", then: "home", method, after }) as const)),
     ...TIEBREAK_RUNGS.map((rung) => ({ kind: "tiebreak", rung, winner: "away" }) as const),
+    // W2c BG-KO-2: a DRAWN Armageddon advances Black — the pad records Black and "Drawn", never a winner.
+    { kind: "tiebreak", rung: "armageddon", winner: "away", result: "draw" },
   ];
 }
 
@@ -93,7 +95,7 @@ function requestsFor(sport: string): StreamRequest[] {
     const cfg = resolveSportCfg(sport, v);
     return outcomesFor(sport, cfg).map((o) => req(sport, cfg, o));
   });
-  const cfg = stageCfg(sport, resolveSportCfg(sport, def), "knockout");
+  const cfg = stageCfg(sport, resolveSportCfg(sport, def), "knockout", def);
   return [...league, ...bracketOutcomesFor().map((o) => bracketReq(sport, cfg, o))];
 }
 /** The events a request generates, or [] where the generator declares the case unsupported. */
@@ -1153,8 +1155,27 @@ function boardgameModel(ctx: TapAdapterContext) {
     // W2a (loop H's plan, NOT yet seen in a browser — Step 8 proves it against the real pad): the tie-break tile opens
     // a sheet of choices, rung then winner (then the score, which "none" skips), and its last choice writes the row.
     if (taps[0] === TILE(BOARDGAME_TIEBREAK_TILE)) {
-      const [rung, side, score] = taps.slice(1).map((t) => CHOICE_ID.exec(t)?.[1]);
-      const complete = rung !== undefined && (side === "home" || side === "away") && (rung === ARMAGEDDON ? score === undefined : score === TIEBREAK_SCORE_NONE);
+      const rest = taps.slice(1);
+      // W2c design pass: the pad shows the rung pick only when the stage plays more than one rung; a one-rung stage opens
+      // on that rung's first step, so there is no pick tap to read and the rung is the stage's own.
+      const played = effectiveRungs({ tiebreakRungs: (ctx.cfg as { tiebreakRungs?: TiebreakRung[] }).tiebreakRungs });
+      const asked = played.length !== 1;
+      const rung: string | undefined = asked ? CHOICE_ID.exec(rest[0] ?? "")?.[1] : played[0];
+      // A rung the pad does not offer is a tap on nothing: no row.
+      if (rung === undefined || !(played as readonly string[]).includes(rung)) return [];
+      const after = asked ? rest.slice(1) : rest;
+      if (rung === ARMAGEDDON) {
+        // W2c BG-KO-2 (S5): Black, then the result, then the read-back's Confirm — the Confirm is what writes the row,
+        // so a sheet abandoned on the result step records nothing.
+        const black = CHOICE_ID.exec(after[0] ?? "")?.[1];
+        const result = CHOICE_ID.exec(after[1] ?? "")?.[1];
+        const side = black?.startsWith(BLACK_OPTION_PREFIX) ? black.slice(BLACK_OPTION_PREFIX.length) : undefined;
+        const outcome = result?.startsWith(RESULT_OPTION_PREFIX) ? result.slice(RESULT_OPTION_PREFIX.length) : undefined;
+        const complete = after.length === 3 && after[2] === CONFIRM_SEL && (side === "home" || side === "away") && (ARMAGEDDON_RESULTS as readonly (string | undefined)[]).includes(outcome);
+        return complete ? [{ type: BOARDGAME_TIEBREAK, payload: { rung, black: ctx.entrants[side as "home" | "away"], result: outcome } }] : [];
+      }
+      const [side, score] = after.map((t) => CHOICE_ID.exec(t)?.[1]);
+      const complete = after.length === 2 && (side === "home" || side === "away") && score === TIEBREAK_SCORE_NONE;
       return complete ? [{ type: BOARDGAME_TIEBREAK, payload: { rung, winner: ctx.entrants[side] } }] : [];
     }
     let held: Record<string, unknown> | null = null;
@@ -1262,55 +1283,153 @@ describe("boardgame", () => {
     expect(checked).toBeGreaterThan(0);
   });
 
-  it("W2a tie-break (BG-KO-1, ruling 82): the tile, the rung, the winner, and for rapid and blitz the score skipped — armageddon has no score step; every rung the engine declares, both winners", () => {
-    const cfg = stageCfg("boardgame", resolveSportCfg("boardgame", offlineBuilderDefault("boardgame")), "knockout");
+  /** The tie-break requests the matrix can make of a bracket: rapid and blitz name the winner; the Armageddon names who
+   *  had Black (the generator's `winner` IS Black) and the result — Black won, or drawn (BG-KO-2: Black advances). */
+  const tiebreakRequests = (): { label: string; outcome: RequestedOutcome }[] =>
+    TIEBREAK_RUNGS.flatMap((rung) =>
+      (["home", "away"] as const).flatMap((winner) =>
+        (rung === ARMAGEDDON ? (["black", "draw"] as const) : ([undefined] as const)).map((result) => ({
+          label: `${rung}/${winner}${result === undefined ? "" : `/${result}`}`,
+          outcome: { kind: "tiebreak", rung, winner, ...(result === undefined ? {} : { result }) } as RequestedOutcome,
+        })),
+      ),
+    );
+
+  it("W2a tie-break (BG-KO-1, ruling 82; W2c BG-KO-2): the tile and the rung; then the winner and the score skipped for rapid and blitz, or Black, the result and the read-back's Confirm for the Armageddon — every rung the engine declares, both sides, a drawn Armageddon too", () => {
+    const cfg = stageCfg("boardgame", resolveSportCfg("boardgame", offlineBuilderDefault("boardgame")), "knockout", offlineBuilderDefault("boardgame"));
     let driven = 0;
-    for (const rung of TIEBREAK_RUNGS) {
-      for (const winner of ["home", "away"] as const) {
-        const r = bracketReq("boardgame", cfg, { kind: "tiebreak", rung, winner });
-        const tb = generateStream(r).filter((e) => e.type === BOARDGAME_TIEBREAK);
-        expect(tb, `${rung}/${winner}`).toHaveLength(1);
-        expect(boardgamePad.stepsFor(tb[0]!, ctxOf(r)), `${rung}/${winner}`).toEqual([
-          { kind: "tile", tileId: BOARDGAME_TIEBREAK_TILE }, { kind: "choice", optionId: rung }, { kind: "choice", optionId: winner },
-          ...(rung === ARMAGEDDON ? [] : [{ kind: "choice", optionId: TIEBREAK_SCORE_NONE }]),
-        ]);
-        driven++;
-      }
+    let drawn = 0;
+    for (const { label, outcome } of tiebreakRequests()) {
+      const o = outcome as Extract<RequestedOutcome, { kind: "tiebreak" }>;
+      const r = bracketReq("boardgame", cfg, outcome);
+      const tb = generateStream(r).filter((e) => e.type === BOARDGAME_TIEBREAK);
+      expect(tb, label).toHaveLength(1);
+      const tail: TapStep[] =
+        o.rung === ARMAGEDDON
+          ? [{ kind: "choice", optionId: `black-${o.winner}` }, { kind: "choice", optionId: `result-${o.result}` }, { kind: "confirm" }]
+          : [{ kind: "choice", optionId: o.winner }, { kind: "choice", optionId: TIEBREAK_SCORE_NONE }];
+      expect(boardgamePad.stepsFor(tb[0]!, ctxOf(r)), label).toEqual([{ kind: "tile", tileId: BOARDGAME_TIEBREAK_TILE }, { kind: "choice", optionId: o.rung }, ...tail]);
+      if (o.result === "draw") drawn++;
+      driven++;
     }
-    expect(driven).toBe(TIEBREAK_RUNGS.length * 2);
+    expect(driven).toBe((TIEBREAK_RUNGS.length - 1) * 2 + 2 * 2); // rapid, blitz × both sides; Armageddon × both Black × {Black won, drawn}
+    expect(drawn, "a DRAWN Armageddon is in the sweep, for both Blacks").toBe(2);
     expect(TIEBREAK_RUNGS).toContain(ARMAGEDDON); // the one rung with no score step is one the engine declares
     expect(boardgamePad.emits).toContain(BOARDGAME_TIEBREAK);
   });
 
-  it("W2a tie-break: a payload that is not {rung of the engine's, winner an entrant of the fixture} is refused by name — a score key, lots, a stranger, no winner", () => {
-    const r = bracketReq("boardgame", stageCfg("boardgame", resolveSportCfg("boardgame", offlineBuilderDefault("boardgame")), "knockout"), { kind: "tiebreak", rung: "rapid", winner: "home" });
+  it("W2c design pass: a stage that plays ONE rung shows no rung step, so the adapter taps none — every rung the engine declares, both sides, replayed on the fake ledger — and a rung the stage does not play is refused by name", async () => {
+    const base = stageCfg("boardgame", resolveSportCfg("boardgame", offlineBuilderDefault("boardgame")), "knockout", offlineBuilderDefault("boardgame"));
+    /** The bracket's cfg with the stage's rung list set (BG-KO-3). */
+    const playing = (rungs: readonly string[]) => ({ ...(base as Record<string, unknown>), tiebreakRungs: rungs });
+    let driven = 0;
+    for (const rung of TIEBREAK_RUNGS) {
+      const cfg = playing([rung]);
+      for (const winner of ["home", "away"] as const) {
+        const outcome = { kind: "tiebreak", rung, winner, ...(rung === ARMAGEDDON ? { result: "black" } : {}) } as RequestedOutcome;
+        const label = `${rung}/${winner}`;
+        const r = bracketReq("boardgame", cfg, outcome);
+        const tb = generateStream(r).filter((e) => e.type === BOARDGAME_TIEBREAK);
+        expect(tb, label).toHaveLength(1);
+        const tail: TapStep[] =
+          rung === ARMAGEDDON
+            ? [{ kind: "choice", optionId: `black-${winner}` }, { kind: "choice", optionId: "result-black" }, { kind: "confirm" }]
+            : [{ kind: "choice", optionId: winner }, { kind: "choice", optionId: TIEBREAK_SCORE_NONE }];
+        // The pad never shows the pick for a one-rung stage, so a tap on `rapid` / `armageddon` would find no such option.
+        expect(boardgamePad.stepsFor(tb[0]!, ctxOf(r)), label).toEqual([{ kind: "tile", tileId: BOARDGAME_TIEBREAK_TILE }, ...tail]);
+        const { res, ledger } = await replayOnModel(boardgamePad, generateStream(r), ctxOf(r), boardgameModel(ctxOf(r)));
+        expect(res.findings, label).toEqual([]);
+        expect(res.rows.map((x) => x.verdict), label).toEqual(["equal", "equal", "equal"]);
+        expect(matchesRequest(r, foldStream(boardgame, cfg, HOME, AWAY, asEvents(ledger)).outcome), label).toBe("match");
+        driven++;
+      }
+    }
+    expect(driven, "every rung the engine declares, both sides").toBe(TIEBREAK_RUNGS.length * 2);
+    // A rung the stage does not play is not on the pad: the adapter refuses rather than tap an option that is not there.
+    const only = bracketReq("boardgame", playing(["rapid"]), { kind: "tiebreak", rung: "rapid", winner: "home" });
+    expect(() => boardgamePad.stepsFor({ type: BOARDGAME_TIEBREAK, payload: { rung: "blitz", winner: HOME } }, ctxOf(only))).toThrow(/stage does not play the blitz rung/);
+    expect(() => boardgamePad.stepsFor({ type: BOARDGAME_TIEBREAK, payload: { rung: ARMAGEDDON, black: HOME, result: "draw" } }, ctxOf(only))).toThrow(/stage does not play the armageddon rung/);
+    // …and the several-rung stage still taps the pick (the positive pair of everything above).
+    const several = bracketReq("boardgame", playing(["rapid", "armageddon"]), { kind: "tiebreak", rung: "rapid", winner: "home" });
+    expect(boardgamePad.stepsFor({ type: BOARDGAME_TIEBREAK, payload: { rung: "rapid", winner: HOME } }, ctxOf(several))[1]).toEqual({ kind: "choice", optionId: "rapid" });
+  });
+
+  it("route case (a value outside the generator's): the Armageddon White wins — Black, then `result-white`, then Confirm — is equal on the ledger and folds to the OTHER entrant (BG-KO-2)", async () => {
+    const cfg = stageCfg("boardgame", resolveSportCfg("boardgame", offlineBuilderDefault("boardgame")), "knockout", offlineBuilderDefault("boardgame"));
+    const r = bracketReq("boardgame", cfg, { kind: "tiebreak", rung: ARMAGEDDON, winner: "home" });
+    // The generator cannot ask for "White won": its `winner` is Black. Rewrite the row it emits, as the resignation case does.
+    const evs = generateStream(r).map((e) => (e.type === BOARDGAME_TIEBREAK ? { ...e, payload: { rung: ARMAGEDDON, black: AWAY, result: "white" } } : e));
+    const tb = evs.find((e) => e.type === BOARDGAME_TIEBREAK)!;
+    expect(boardgamePad.stepsFor(tb, ctxOf(r))).toEqual([
+      { kind: "tile", tileId: BOARDGAME_TIEBREAK_TILE }, { kind: "choice", optionId: ARMAGEDDON }, { kind: "choice", optionId: "black-away" }, { kind: "choice", optionId: "result-white" }, { kind: "confirm" },
+    ]);
+    const { res, ledger } = await replayOnModel(boardgamePad, evs, ctxOf(r), boardgameModel(ctxOf(r)));
+    expect(res.findings).toEqual([]);
+    expect(res.rows.map((x) => x.verdict)).toEqual(["equal", "equal", "equal"]);
+    // Black is AWAY and White won, so HOME advances — never the tapped colour's own entrant.
+    expect(foldStream(boardgame, cfg, HOME, AWAY, asEvents(ledger)).outcome).toMatchObject({ kind: "win", winner: HOME, method: "tiebreak_armageddon" });
+  });
+
+  it("W2a tie-break: a payload that is not the engine's rung with an entrant winner — or, for the Armageddon, an entrant as Black and one of the engine's results — is refused by name", () => {
+    const r = bracketReq("boardgame", stageCfg("boardgame", resolveSportCfg("boardgame", offlineBuilderDefault("boardgame")), "knockout", offlineBuilderDefault("boardgame")), { kind: "tiebreak", rung: "rapid", winner: "home" });
     const bad: unknown[] = [null, { rung: "rapid" }, { winner: HOME }, { rung: "lots", winner: HOME }, { rung: "rapid", winner: "stranger" }, { rung: "rapid", winner: HOME, score: "2–0" }, { rung: 1, winner: HOME },
       // an extra key that sorts AFTER "winner" leaves the first two sorted keys right, so only the key count refuses it
-      { rung: "rapid", winner: HOME, zz: 1 }];
+      { rung: "rapid", winner: HOME, zz: 1 },
+      // rapid and blitz never take a Black or a result: those are the Armageddon's facts
+      { rung: "rapid", black: HOME, result: "draw" }, { rung: "blitz", black: AWAY }];
     for (const payload of bad) {
       expect(() => boardgamePad.stepsFor({ type: BOARDGAME_TIEBREAK, payload }, ctxOf(r)), JSON.stringify(payload)).toThrow(`is not {rung: one of ${TIEBREAK_RUNGS.join(", ")}, winner: an entrant of the fixture}`);
     }
-    expect(bad).toHaveLength(8);
-    // the positive pair: each rung of the engine's, either winner, is accepted
-    for (const rung of TIEBREAK_RUNGS) expect(boardgamePad.stepsFor({ type: BOARDGAME_TIEBREAK, payload: { rung, winner: AWAY } }, ctxOf(r)).length, rung).toBeGreaterThan(0);
+    expect(bad).toHaveLength(10);
+    // The Armageddon's own refusals: no Black, a stranger as Black, a result the engine does not declare, a missing result,
+    // an extra key — and (W2c) the Armageddon's old `{rung, winner}` shape, which the engine refuses: a winner is never named.
+    const badArmageddon: unknown[] = [{ rung: ARMAGEDDON, result: "draw" }, { rung: ARMAGEDDON, black: "stranger", result: "draw" }, { rung: ARMAGEDDON, black: HOME, result: "won" },
+      { rung: ARMAGEDDON, black: HOME }, { rung: ARMAGEDDON, black: null, result: "draw" }, { rung: ARMAGEDDON, black: HOME, result: "draw", zz: 1 },
+      { rung: ARMAGEDDON, winner: HOME }, { rung: ARMAGEDDON, winner: HOME, result: "draw" }];
+    for (const payload of badArmageddon) {
+      expect(() => boardgamePad.stepsFor({ type: BOARDGAME_TIEBREAK, payload }, ctxOf(r)), JSON.stringify(payload)).toThrow(
+        `is not {rung: ${ARMAGEDDON}, black: an entrant of the fixture, result: one of ${ARMAGEDDON_RESULTS.join(", ")}}`,
+      );
+    }
+    expect(badArmageddon).toHaveLength(8);
+    // the positive pair: each rung of the engine's, either winner (or Black × each result), is accepted
+    let accepted = 0;
+    for (const rung of TIEBREAK_RUNGS) {
+      if (rung === ARMAGEDDON) continue;
+      expect(boardgamePad.stepsFor({ type: BOARDGAME_TIEBREAK, payload: { rung, winner: AWAY } }, ctxOf(r)).length, rung).toBeGreaterThan(0);
+      accepted++;
+    }
+    for (const black of [HOME, AWAY])
+      for (const result of ARMAGEDDON_RESULTS) {
+        expect(boardgamePad.stepsFor({ type: BOARDGAME_TIEBREAK, payload: { rung: ARMAGEDDON, black, result } }, ctxOf(r)).length, `${black}/${result}`).toBeGreaterThan(0);
+        accepted++;
+      }
+    expect(accepted).toBe((TIEBREAK_RUNGS.length - 1) + 2 * ARMAGEDDON_RESULTS.length);
   });
 
-  it("W2a tie-break, replayed on the fake ledger: the drawn game and the tie-break row are equal to the generated ones for every rung and winner, and the stored rows fold (under the bracket's cfg) to the requested win by that rung", async () => {
-    const cfg = stageCfg("boardgame", resolveSportCfg("boardgame", offlineBuilderDefault("boardgame")), "knockout");
+  it("W2a tie-break, replayed on the fake ledger: the drawn game and the tie-break row are equal to the generated ones for every rung, side and Armageddon result (drawn included), and the stored rows fold (under the bracket's cfg) to the requested win by that rung", async () => {
+    const cfg = stageCfg("boardgame", resolveSportCfg("boardgame", offlineBuilderDefault("boardgame")), "knockout", offlineBuilderDefault("boardgame"));
     let cases = 0;
-    for (const rung of TIEBREAK_RUNGS) {
-      for (const winner of ["home", "away"] as const) {
-        const r = bracketReq("boardgame", cfg, { kind: "tiebreak", rung, winner });
-        const { res, ledger } = await replayOnModel(boardgamePad, generateStream(r), ctxOf(r), boardgameModel(ctxOf(r)));
-        expect(res.findings, `${rung}/${winner}`).toEqual([]);
-        expect(res.rows.map((x) => x.verdict), `${rung}/${winner}`).toEqual(["equal", "equal", "equal"]); // start, the drawn game, the tie-break
-        const folded = foldStream(boardgame, cfg, HOME, AWAY, asEvents(ledger)).outcome;
-        expect(matchesRequest(r, folded), `${rung}/${winner}`).toBe("match");
-        expect(folded, `${rung}/${winner}`).toMatchObject({ kind: "win", winner: winner === "home" ? HOME : AWAY, method: `tiebreak_${rung}` });
-        cases++;
-      }
+    for (const { label, outcome } of tiebreakRequests()) {
+      const o = outcome as Extract<RequestedOutcome, { kind: "tiebreak" }>;
+      const r = bracketReq("boardgame", cfg, outcome);
+      const { res, ledger } = await replayOnModel(boardgamePad, generateStream(r), ctxOf(r), boardgameModel(ctxOf(r)));
+      expect(res.findings, label).toEqual([]);
+      expect(res.rows.map((x) => x.verdict), label).toEqual(["equal", "equal", "equal"]); // start, the drawn game, the tie-break
+      const folded = foldStream(boardgame, cfg, HOME, AWAY, asEvents(ledger)).outcome;
+      expect(matchesRequest(r, folded), label).toBe("match");
+      // BG-KO-2: a drawn Armageddon advances Black, who is the requested winner; so does a Black win.
+      expect(folded, label).toMatchObject({ kind: "win", winner: o.winner === "home" ? HOME : AWAY, method: `tiebreak_${o.rung}` });
+      cases++;
     }
-    expect(cases).toBe(TIEBREAK_RUNGS.length * 2);
+    expect(cases).toBe((TIEBREAK_RUNGS.length - 1) * 2 + 2 * 2);
+  });
+
+  it("pins: the Armageddon sheet's option-id prefixes and its read-back are the skin's own (black-<side>, result-<result>, a confirm step)", () => {
+    expect(skin).toContain(`export const BLACK_OPTION_PREFIX = "${BLACK_OPTION_PREFIX}";`);
+    expect(skin).toContain(`export const RESULT_OPTION_PREFIX = "${RESULT_OPTION_PREFIX}";`);
+    expect(skin).toMatch(/id: "confirm",\s*kind: "confirm"/);
+    expect(selectorForTapStep({ kind: "confirm" })).toBe('[data-testid="pad-sheet-confirm"]');
   });
 
   it("route case (a value outside the generator's): a resignation — the winner's half, then the `method:resign` chip — is equal on the ledger and folds to that win; the skin offers `resign`", async () => {
@@ -1478,7 +1597,7 @@ describe("carrom", () => {
   });
 
   it("route case (a value outside the generator's old one): a BRACKET game's boards carry 7 coins, not 9 — the number step takes the generated value, the rows are equal, and the stored rows fold under the overlay (tieBoard 'extra') to the requested win", async () => {
-    const cfg = stageCfg("carrom", resolveSportCfg("carrom", offlineBuilderDefault("carrom")), "knockout");
+    const cfg = stageCfg("carrom", resolveSportCfg("carrom", offlineBuilderDefault("carrom")), "knockout", offlineBuilderDefault("carrom"));
     const c = cfg as { gameTo: number; maxBoards: number; pointsPerCoin: number; tieBoard: string };
     expect(c.tieBoard).toBe("extra"); // the overlay is on
     // The rulebook arithmetic, not the generator's: a level game plays maxBoards boards, a side wins ceil(maxBoards/2) of

@@ -1145,6 +1145,14 @@ describe("cricket golden (d): tied T20 super over policies", () => {
     expect(state.margin).toBeNull();
   });
 
+  it("CK-SO-1 a league stage with the super over ON plays it on every tie (ICC), never a plain tie", () => {
+    const { cfg, events } = tiedMain("repeat");       // superOver: true — what a league stage stores when the organiser turns it on
+    const state = fold(cfg, events);
+    expect(state.outcome).toBeNull();                  // not { kind: "tie" }: the super over is owed
+    expect(state.superOver).not.toBeNull();
+    expect(fold(t20, events).outcome).toEqual({ kind: "tie" }); // positive pair: off → the tie stands
+  });
+
   it("X-ST-1 (C11): a league tie folds to {kind:'tie'} and an organiser settle turns it into a settled win", () => {
     const { events } = tiedMain("repeat");
     const settleEv = makeEnvelope(events.length + 1, { type: "core.settle", payload: { winner: lineups.away.entrantId, method: "lot" } });

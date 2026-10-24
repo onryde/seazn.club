@@ -133,9 +133,12 @@ describe("templateBodies — the stages the product inserts for a template (temp
     expect(body).toContain('if (stage.kind === "group" && stage.groups !== undefined) {\n    cfg.pools = { count: stage.groups };');
     expect(body).toContain("if (stage.points !== undefined) cfg.points = stage.points;");
     expect(body).toContain("Object.assign(cfg, stage.config ?? {});");
-    // And the insert writes seq si + 1, that config, and the progression verbatim (or null).
+    // And the insert writes seq si + 1, that config, and the progression verbatim (or null). Since W2c Task 12 the config
+    // goes through `validatedStageConfig` first, which lays the stage kind's preset match rules over it (X-SR-6): the
+    // catalog's half is what templateBodies posts, and life-built-as-posted judges only the keys posted.
     expect(text).toContain("values (${divisionId}, ${si + 1}, ${templateStage.kind}, ${stageName},");
-    expect(text).toContain("${tx.json(effectiveStageConfig(templateStage) as never)},");
+    expect(text).toMatch(/const stageConfig = validatedStageConfig\([^;]*\beffectiveStageConfig\(templateStage\),\s*\);/);
+    expect(text).toContain("${tx.json(stageConfig as never)},");
     expect(text).toContain("${templateStage.progression ? tx.json(templateStage.progression as never) : null})");
   });
 

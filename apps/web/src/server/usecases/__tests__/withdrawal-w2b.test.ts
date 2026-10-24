@@ -109,7 +109,9 @@ function siblingsInto(rows: readonly FixtureRow[]): { a: FixtureRow; b: FixtureR
   throw new Error("rig: no two seated first-round lines feed one fixture");
 }
 
-const football = { sport: "football", variant: declaredVariant("football", "11-a-side") };
+// Every football seed here is a HELD rig (0-0 at full time, `heldFootball`): `stageRules: {}` switches off the extra time
+// and penalties a new knockout starts with (W2c X-SR-6), so the level full time is held for the organiser.
+const football = { sport: "football", variant: declaredVariant("football", "11-a-side"), stageRules: {} };
 const badminton = { sport: "badminton", variant: declaredVariant("badminton", "bwf") };
 const chess = { sport: "boardgame", variant: declaredVariant("boardgame", "classical") };
 
@@ -1740,8 +1742,9 @@ describe.skipIf(!HAS_DB)("rule 10: withdrawals in any order", () => {
               // score: the home side wins.
               await startIfNeeded(f);
               if (isChess) {
+                // A drawn Armageddon is Black's (BG-KO-2): naming the home side as Black advances it.
                 await ((await tiebreakPending(f.id))
-                  ? post(s.auth, f.id, "boardgame.tiebreak", { rung: "armageddon", winner: f.home_entrant_id })
+                  ? post(s.auth, f.id, "boardgame.tiebreak", { rung: "armageddon", black: f.home_entrant_id, result: "draw" })
                   : post(s.auth, f.id, "boardgame.result", { winner: f.home_entrant_id, method: "resign" }));
               } else {
                 for (let g = 0; g < 3 && (await fixtureRow(f.id)).status === "in_play"; g++) {

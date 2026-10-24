@@ -1,0 +1,88 @@
+<h2>Screen 2 of 4 — Changing ONE match's format before it starts</h2>
+<p class="subtitle">Example: badminton group stage plays best of 3 to 21. The organiser is running late and makes QF3 "best of 1 to 21". Only match-format fields (your Q5 group 1) can be changed per match. Once the match starts it's locked, named. Both options also mark the changed match in the fixtures list with a small "Format changed" tag.</p>
+
+<style>
+  .card { border:1px solid #cbd5e1; border-radius:10px; background:#fff; color:#0f172a; font-size:13px; overflow:hidden }
+  .h { padding:10px 14px; background:#f8fafc; border-bottom:1px solid #e2e8f0; font-weight:600; display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap }
+  .row { padding:10px 14px; border-bottom:1px solid #f1f5f9; display:flex; flex-wrap:wrap; gap:6px 10px; align-items:center }
+  .muted { color:#64748b; font-size:12px }
+  .tag { border:1px solid #f59e0b; color:#92400e; background:#fffbeb; border-radius:999px; padding:1px 8px; font-size:11px }
+  .btn { border:1px solid #cbd5e1; border-radius:8px; padding:6px 10px; font-size:12px; background:#fff }
+  .btn.p { background:#0f172a; color:#fff; border-color:#0f172a }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:8px; padding:10px 14px }
+  .f { border:1px solid #e2e8f0; border-radius:8px; padding:6px 8px }
+  .f .l { font-size:11px; color:#475569 } .f .v { font-weight:600 } .f .src { font-size:10.5px; color:#b45309 } .f .src.d { color:#94a3b8 }
+  .phone { width:320px; max-width:100%; margin:0 auto; border:8px solid #1e293b; border-radius:22px; overflow:hidden; background:#f1f5f9 }
+  .lbl { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:#475569; margin:14px 0 6px }
+  .menu { position:relative; margin-left:auto } .pop { position:absolute; right:0; top:28px; width:200px; border:1px solid #cbd5e1; border-radius:8px; background:#fff; box-shadow:0 6px 20px rgba(0,0,0,.12); z-index:2 }
+  .pop div { padding:8px 10px; font-size:12px; border-bottom:1px solid #f1f5f9 }
+  .modal { border:1px solid #94a3b8; border-radius:12px; background:#fff; box-shadow:0 12px 40px rgba(0,0,0,.2); max-width:420px; margin:10px auto }
+</style>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>On the match's own console page — a "Match rules" block</h3>
+      <p>The fixture console (where the organiser already starts, assigns and settles a match) gets a block: "Best of 3 to 21 · uses stage rules · Change for this match". Expands to group-1 fields only, each labelled Stage vs This match. "Use stage rules" resets. After start: "Started — format locked".</p>
+    </div>
+  </div>
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>From the fixtures list row — "⋯ → Change format" dialog</h3>
+      <p>Each unstarted row in the division's fixtures tab gets a menu item opening a small dialog with the group-1 fields. Fast when running late; it's the same list the future bulk "apply to all unstarted" action (competition desk) will live next to.</p>
+    </div>
+  </div>
+</div>
+
+<div class="lbl">A — desktop 1280: fixture console</div>
+<div class="card">
+  <div class="h"><span>QF3 · Asha Rao v Priya Menon · Court 2 · 14:30</span><span class="muted">Not started</span></div>
+  <div class="row"><b style="font-size:12px">Match rules</b><span class="muted">Best of 1 to 21</span><span class="tag">Changed for this match</span><button class="btn">Cancel</button></div>
+  <div class="grid">
+    <div class="f"><div class="l">Best of</div><div class="v">1</div><div class="src">This match (stage: 3)</div></div>
+    <div class="f"><div class="l">Points to win</div><div class="v">21</div><div class="src d">Stage</div></div>
+    <div class="f"><div class="l">Cap</div><div class="v">30</div><div class="src d">Stage</div></div>
+    <div class="f"><div class="l">Win by</div><div class="v">2</div><div class="src d">Stage</div></div>
+  </div>
+  <div class="row"><button class="btn p">Save</button><button class="btn">Use stage rules</button><span class="muted">Only match format can change per match.</span></div>
+  <div class="row muted">Officials · Stream · Remote scoring …</div>
+</div>
+
+<div class="lbl">A — phone 320: same block, stacked</div>
+<div class="phone"><div class="card" style="border:0;border-radius:0">
+  <div class="h"><span>QF3 · Rao v Menon</span><span class="muted">14:30</span></div>
+  <div class="row"><b style="font-size:12px">Match rules</b><span class="muted">Bo1 to 21</span><span class="tag">Changed</span></div>
+  <div class="grid" style="grid-template-columns:1fr 1fr">
+    <div class="f"><div class="l">Best of</div><div class="v">1</div><div class="src">This match</div></div>
+    <div class="f"><div class="l">Points</div><div class="v">21</div><div class="src d">Stage</div></div></div>
+  <div class="row"><button class="btn p" style="flex:1">Save</button><button class="btn" style="flex:1">Use stage</button></div>
+</div></div>
+
+<div class="lbl">B — desktop 1280: fixtures list + dialog</div>
+<div class="card">
+  <div class="h"><span>Group stage · Fixtures</span></div>
+  <div class="row"><span>QF2 · Lee v Tan · 14:00</span><span class="muted">Live 1–0</span></div>
+  <div class="row"><span>QF3 · Rao v Menon · 14:30</span><span class="tag">Format changed</span>
+    <span class="menu"><button class="btn">⋯</button><div class="pop"><div>Edit time / court</div><div><b>Change format…</b></div><div>Assign officials</div></div></span></div>
+  <div class="row" style="height:70px"></div>
+</div>
+<div class="modal">
+  <div class="h"><span>Change format — QF3</span><span>✕</span></div>
+  <div class="grid">
+    <div class="f"><div class="l">Best of</div><div class="v">1</div><div class="src">This match</div></div>
+    <div class="f"><div class="l">Points to win</div><div class="v">21</div><div class="src d">Stage</div></div></div>
+  <div class="row"><button class="btn p">Save</button><button class="btn">Use stage rules</button></div>
+</div>
+
+<div class="pros-cons" style="margin-top:18px">
+  <div class="pros"><h4>My recommendation: A</h4><ul>
+    <li>The console is already "everything about this one match"; the lock message sits where Start is</li>
+    <li>No new dialog pattern; same Division/Stage/This-match labelling as screen 1</li>
+    <li>The list still shows the "Format changed" tag, so nothing is hidden</li>
+    <li>The future bulk action (competition desk) covers the running-late list case properly</li></ul></div>
+  <div class="cons"><h4>Against A</h4><ul>
+    <li>One more click to reach a match than B's row menu</li>
+    <li>B is quicker for changing 2–3 matches in a row today, before bulk exists</li></ul></div>
+</div>

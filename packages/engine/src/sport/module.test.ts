@@ -241,6 +241,11 @@ describe("isPathRequired", () => {
     const message = messageFrom(() => isPathRequired(outer, "inner.a"));
     expect(message).toMatch(/wrapper/i);
     expect(message).not.toMatch(/no field "a" found/);
+    // Each part of the diagnosis is read by whoever hits it: where the walk stopped, that it is a depth bound and not a
+    // missing key, and what to do about it.
+    expect(message).toMatch(/"inner" still wraps something after \d+ modifier hops, so the walk gave up before it could look for "a"/);
+    expect(message).toMatch(/\(this is a WRAPPER-DEPTH bound, not a missing field — "a" may well exist; /);
+    expect(message).toMatch(/unwrap the schema or raise MAX_WRAPPER_HOPS in sport\/module\.ts\)$/);
   });
 
   it("a segment that is not an object at all says so, rather than blaming the next segment", () => {
@@ -249,6 +254,8 @@ describe("isPathRequired", () => {
     const message = messageFrom(() => isPathRequired(Ball, "striker.foo"));
     expect(message).toMatch(/striker/);
     expect(message).not.toMatch(/no field "foo" found/);
+    expect(message).toMatch(/"striker" is not an object schema and does not wrap one, so nothing can be resolved beneath it/);
+    expect(message).toMatch(/\(a PadAttributionItem\/PadField path must not walk past a leaf value\)$/);
   });
 
   it("a nullable-but-not-optional field is still required (nullable != optional)", () => {
@@ -260,6 +267,76 @@ describe("isPathRequired", () => {
     const refined = z.strictObject({ a: z.string() }).refine(() => true);
     const outer = z.strictObject({ inner: refined });
     expect(isPathRequired(outer, "inner.a")).toBe(true);
+  });
+});
+
+// W2c BG-KO-2 — `boardgame.tiebreak` is one event type with two payload shapes (rapid/blitz name the winner, an
+// Armageddon names Black and the result), registered as a discriminated union. `isPathRequired` therefore has to
+// resolve a path THROUGH the union's branches or the pad's Confirm gate (`required`) cannot be derived for it.
+describe("isPathRequired through a union", () => {
+  const Timed = z.strictObject({ rung: z.enum(["rapid", "blitz"]), winner: z.string().min(1), note: z.string().optional() });
+  const Armageddon = z.strictObject({ rung: z.literal("armageddon"), black: z.string().min(1), note: z.string() });
+  const Tiebreak = z.discriminatedUnion("rung", [Timed, Armageddon]);
+
+  it("a key only one branch declares takes that branch's requiredness — each branch's own key, both ways", () => {
+    expect(isPathRequired(Tiebreak, "winner")).toBe(true);
+    expect(isPathRequired(Tiebreak, "black")).toBe(true);
+    const lenient = z.discriminatedUnion("rung", [
+      z.strictObject({ rung: z.literal("a"), x: z.string().optional() }),
+      z.strictObject({ rung: z.literal("b"), y: z.string() }),
+    ]);
+    expect(isPathRequired(lenient, "x")).toBe(false); // the positive pair: an optional key stays optional through the union
+    expect(isPathRequired(lenient, "y")).toBe(true);
+  });
+
+  it("a key several branches declare is required only when EVERY declaring branch requires it", () => {
+    expect(isPathRequired(Tiebreak, "rung")).toBe(true);
+    expect(isPathRequired(Tiebreak, "note")).toBe(false); // optional in one branch, required in the other
+    const both = z.discriminatedUnion("k", [
+      z.strictObject({ k: z.literal("a"), v: z.string() }),
+      z.strictObject({ k: z.literal("b"), v: z.string() }),
+    ]);
+    expect(isPathRequired(both, "v")).toBe(true);
+  });
+
+  it("resolves through a union nested under an object field, and through a plain z.union", () => {
+    expect(isPathRequired(z.strictObject({ t: Tiebreak }), "t.black")).toBe(true);
+    expect(isPathRequired(z.union([z.strictObject({ a: z.string() }), z.strictObject({ b: z.string().optional() })]), "b")).toBe(false);
+    expect(isPathRequired(z.union([z.strictObject({ a: z.string() }), z.strictObject({ b: z.string().optional() })]), "a")).toBe(true);
+  });
+
+  it("a key no branch declares still throws, naming the missing field (a typo never reads as optional)", () => {
+    expect(() => isPathRequired(Tiebreak, "doesNotExist")).toThrow(/no field "doesNotExist" found/);
+    expect(() => isPathRequired(z.strictObject({ t: Tiebreak }), "t.doesNotExist")).toThrow(/no field "doesNotExist" found/);
+  });
+
+  it("an enum is still a leaf — its `.options` are strings, not branches, and nothing resolves beneath it", () => {
+    const withEnum = z.strictObject({ kind: z.enum(["a", "b"]) });
+    expect(() => isPathRequired(withEnum, "kind.a")).toThrow(/not an object schema/);
+    expect(() => isPathRequired(withEnum, "kind.a")).toThrow(/must not walk past a leaf value\)$/);
+  });
+
+  it("the empty case: a union or an enum with NO options is a leaf, not a union of nothing - it names the leaf, never a missing field", () => {
+    // `[]` is an array whose every element is an object (vacuously), so a reader that skipped the length check would read
+    // it as a union with no branches and report `no field ... found` for a key that nothing could ever declare. The key is
+    // not missing from this schema; there is no object here to look in - the leaf diagnosis, like the enum's above.
+    let checked = 0;
+    for (const empty of [z.union([]), z.enum([] as never)]) {
+      expect(empty.options, "premise: the schema reads as an empty options array").toEqual([]);
+      for (const schema of [empty, z.strictObject({ k: empty })]) {
+        const path = schema === empty ? "a" : "k.a";
+        let message = "";
+        try {
+          isPathRequired(schema, path);
+        } catch (err) {
+          message = (err as Error).message;
+        }
+        expect(message, `${path}`).toMatch(/is not an object schema and does not wrap one, so nothing can be resolved beneath it/);
+        expect(message, `${path}`).not.toMatch(/no field "a" found/);
+        checked++;
+      }
+    }
+    expect(checked, "schemas walked").toBe(4);
   });
 });
 

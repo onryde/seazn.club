@@ -14,7 +14,7 @@
 // The visual pattern is the settle dialog's (needs-decision.tsx `SettleDialog`): a bottom sheet on phones, buttons for
 // the side, radios for the reason, Cancel + Confirm, focus trapped, Escape closes unless sending.
 import { useEffect, useRef, useState } from "react";
-import { forfeitAdmission, playRecorded, type ForfeitReason, type LineupPair } from "@seazn/engine/core";
+import { forfeitAdmission, playRecorded, unplayedForfeitEvent, type ForfeitAward, type ForfeitReason, type LineupPair } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { isCascadeOnlyForfeitReason, type WriterForfeitReason } from "@/lib/forfeit-phase-refusal";
 import type { MessageKey } from "@/lib/messages";
@@ -97,7 +97,15 @@ export function forfeitDialogModel(
   module: ForfeitModule,
   cfg: unknown,
   state: unknown,
-  f: { noNextMatch: boolean; playRecorded: boolean },
+  f: {
+    noNextMatch: boolean;
+    playRecorded: boolean;
+    /** W2c Task 16b (X-WO-1 B): the stage points rule's walkover award (winner first) the page read server-side
+     *  (`stageForfeitAward`), when the fixture's stage has one that reaches this sport's table. The preview then says the
+     *  number the table will carry for a forfeit with nothing played - the same reading the server's fold makes
+     *  (`unplayedForfeitEvent`) - and the sport's own credit for one after play (P-3 "A"). */
+    forfeitAward?: ForfeitAward;
+  },
 ): ForfeitDialogModel {
   const admission = forfeitAdmission(module, state, { playRecorded: f.playRecorded });
   // PF-2: the engine admits withdrew in every phase; the server refuses it from every writer but the cascade.
@@ -114,8 +122,11 @@ export function forfeitDialogModel(
     // X-DW-4: a double walkover credits nothing; a choice the dialog does not offer previews nothing.
     if (w === "both" || headline === undefined || !why(w).includes(reason as WriterForfeitReason)) return null;
     let credit: ReturnType<ForfeitModule["forfeitCredit"]>;
+    // The rule's award applies to this forfeit exactly when the server's fold applies it (`unplayedForfeitEvent`).
+    const awarded = f.forfeitAward !== undefined && typeof state === "object" && state !== null && unplayedForfeitEvent({ by: w, reason }, f.playRecorded);
     try {
-      credit = module.forfeitCredit(cfg, state, reason, w);
+      // The module reads the award from its own state (`state.forfeitAward`), as the server's fold leaves it.
+      credit = module.forfeitCredit(cfg, awarded ? { ...state, forfeitAward: f.forfeitAward } : state, reason, w);
     } catch {
       // A credit the module cannot compute here (an unpriceable cfg) is the server's refusal to explain, not a guess.
       return null;
@@ -123,7 +134,9 @@ export function forfeitDialogModel(
     const [h, a] = [credit.perSide[0][headline], credit.perSide[1][headline]];
     if (typeof h !== "number" || typeof a !== "number") return null;
     // GN-WO-1 / CK-WO-1: a walkover that credits no score on the headline (generic 0-0, cricket's runs) reads as none.
-    if (h === 0 && a === 0) return null;
+    // An APPLIED rule award is a score the organiser typed, not "no score": a 0-0 award reads "0 - 0" on the headline
+    // (`awardedLine`), so the preview says the same.
+    if (h === 0 && a === 0 && !awarded) return null;
     return { home: String(h), away: String(a) };
   };
   return {

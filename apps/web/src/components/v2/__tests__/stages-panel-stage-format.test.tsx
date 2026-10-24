@@ -2,8 +2,9 @@
 // ruling D7 "Option A", 2026-09-18).
 //
 // Node env, no DOM — so these tests cover what a static render CAN settle: the
-// three states and their controls, the sport gate, the viewer case, and the
-// two derivations behind the row. What they deliberately do NOT claim to cover
+// three states and their controls, the row for every sport (W2c Task 17 removed
+// the sport gate), the deciders notice, the viewer case, and the two derivations
+// behind the row. What they deliberately do NOT claim to cover
 // is the editor opening, saving, or clearing: those need a click, and a green
 // suite here says nothing about them (AGENTS.md failure class 2). That half is
 // proven in the browser.
@@ -14,8 +15,12 @@ import {
   stageFormatEditorValues,
   stageFormatHeadline,
   stageFormatSaveFragment,
+  stageRulesInForce,
 } from "@/components/v2/stages-panel";
 import { MatchRuleFields } from "@/components/v2/match-rules";
+import { StageRuleFields } from "@/components/v2/stage-rules/stage-rule-fields";
+import { DictProvider } from "@/components/i18n/dict-provider";
+import enUi from "@/dictionaries/en/ui.json";
 import {
   SPORT_RULES,
   buildRuleOverride,
@@ -25,6 +30,14 @@ import {
 } from "@/lib/match-rules";
 import { pointsTheOnlyGameIsPlayedTo } from "@/lib/__tests__/_single-game-target";
 import { badminton } from "@seazn/engine/sports/setbased";
+import { BRACKET_KINDS, StageKind } from "@seazn/engine/core";
+import { stageDefaultsFor } from "@seazn/engine/sport";
+import { builtinModules } from "@seazn/engine/sports";
+import { decidersOffRules, mergedStageRules, stageRulesOverlay } from "@/lib/stage-decider-off";
+import { declaredCfgs } from "@seazn/engine/testkit";
+import enPublic from "@/dictionaries/en/public.json";
+import type { Dict } from "@/lib/i18n-constants";
+import { rulesChipText, rulesLineDict } from "@/lib/rules-line";
 
 // Same two mocks every `stages-panel-*.test.tsx` uses — this panel is rendered
 // bare, with no provider tree.
@@ -124,8 +137,12 @@ describe("the three states of the Match format row", () => {
     });
     expect(html).toContain('data-stage-format-state="locked"');
     const row = formatRow(html);
-    expect(row).toContain("Locked");
     expect(row).toContain("Best of 1");
+    // M-2: the lock is stated ONCE, in the lock line; the header carries the format alone, no state clause.
+    expect(row).not.toContain("Stage override");
+    expect(row).not.toContain("Same as division");
+    expect(row).not.toContain("Locked");
+    expect(html.match(/has started/g)?.length, "one statement of the lock").toBe(1);
     expect(row).not.toContain('data-testid="stage-format-edit"');
     expect(row).not.toContain('data-testid="stage-format-clear"');
   });
@@ -162,27 +179,229 @@ describe("the three states of the Match format row", () => {
   });
 });
 
-describe("the sport gate", () => {
-  it("renders nothing at all for a sport with no per-stage rules", () => {
-    // The server 400s SPORT_NOT_SUPPORTED for these, so offering the row would
-    // be offering a control that cannot work.
-    const html = panel({ sportKey: "football", divisionConfig: {} });
-    expect(html).not.toContain('data-testid="stage-format"');
+describe("the row is offered for EVERY sport (W2c Task 17: the STAGE_RULES_SPORTS gate is gone)", () => {
+  it("renders the rules row for every shipped sport, on a league and on every bracket kind (counted)", () => {
+    // The server used to 400 SPORT_NOT_SUPPORTED for all but four sports, and the row hid itself to match; now every
+    // sport takes stage rules. The population is the engine's registry and kind list, never a list typed here.
+    let rendered = 0;
+    const missing: string[] = [];
+    const kinds = ["league", ...BRACKET_KINDS] as const;
+    for (const m of builtinModules)
+      for (const kind of kinds) {
+        const html = panel({
+          sportKey: m.key,
+          divisionConfig: {},
+          stages: [{ id: STAGE_ID, seq: 1, kind, name: "Stage", config: {}, progression: null, status: "active" }],
+        });
+        rendered++;
+        if (!html.includes(`data-testid="stage-format-row-${STAGE_ID}"`) || !html.includes('data-testid="stage-format-edit"'))
+          missing.push(`${m.key}/${kind}`);
+      }
+    expect(missing).toEqual([]);
+    expect(rendered).toBe(builtinModules.length * kinds.length);
+    expect(rendered).toBeGreaterThan(builtinModules.length * 2);
   });
 
-  it("review of PR #986: chess - a Lichess division included - has no per-stage match format row, so no free stage clock or delay is ever offered there", () => {
-    // The Match rules grid of a chess division carries the clock fields (time, increment, delay). The stage's own editor
-    // mounts the same MatchRuleFields, so it must never mount for chess: the Lichess clock is the division's alone
-    // (server: stage-rules.test.ts, external-play-guard.test.ts).
+  // Rebase ruling D1 (2026-10-23) - rewrites PR #986's chess test, which pinned the pre-W2c gate (no stage row for chess;
+  // W2c Task 17 offers the row for every sport). Its intent stands: no free stage clock is ever offered on a Lichess division.
+  it("review of PR #986, ruling D1: a Lichess chess division has the stage row, and its editor draws no clock or clock family - the rungs stay; over the board every field is there (counted)", () => {
+    // The Match rules grid of a chess division carries the clock fields (time, increment, delay) and the clock family. The
+    // row's editor is StageRuleFields: on a Lichess division it must never offer them, because the Lichess clock is the
+    // division's alone (server: stage-rules.test.ts D1, external-play-guard.test.ts). The tie-break rungs are the stage's.
     const lichess = { variant: "classical", clock: { base: 600, increment: 5 }, onlinePlay: "lichess" };
-    const html = panel({ sportKey: "boardgame", divisionConfig: lichess });
-    expect(html).not.toContain('data-testid="stage-format"');
-    expect(panel({ sportKey: "badminton" }), "the positive: the same panel for a sets-based sport DOES render the row").toContain('data-testid="stage-format"');
+    const overTheBoard = { variant: "classical", clock: { base: 600, increment: 5 } };
+    expect(panel({ sportKey: "boardgame", divisionConfig: lichess }), "the row renders for chess (W2c Task 17)").toContain('data-testid="stage-format"');
+    const chess = builtinModules.find((m) => m.key === "boardgame")!;
+    const blocks = (kind: StageKind, variant: string | null, divisionConfig: Record<string, unknown>) =>
+      [
+        ...renderToStaticMarkup(
+          <DictProvider dict={enUi as Dict} locale="en">
+            <StageRuleFields sportKey="boardgame" module={chess} kind={kind} variant={variant} values={{}} onChange={() => undefined} disabled={false} divisionConfig={divisionConfig} resolved={null} />
+          </DictProvider>,
+        ).matchAll(/data-testid="stage-rule-field-([A-Za-z]+)"/g),
+      ].map((m) => m[1]!).sort();
+    // The keys the picker stands in for, typed from the ruling (the challenge reads `clock`; the picker writes the family).
+    const DIVISION_ONLY = new Set(["clock", "variant"]);
+    let cells = 0;
+    let clockBlocks = 0;
+    // Final review M4: EVERY stage kind the engine declares (group, swiss and americano too), never a list typed here.
+    const KINDS = StageKind.options;
+    expect(KINDS, "premise: the table kinds beyond league are in the sweep").toEqual(expect.arrayContaining(["group", "swiss", "americano"]));
+    const kindsSeen = new Set<StageKind>();
+    for (const kind of KINDS) {
+      kindsSeen.add(kind);
+      for (const variant of [null, ...Object.keys(chess.variants)]) {
+        const all = blocks(kind, variant, overTheBoard);
+        const online = blocks(kind, variant, lichess);
+        expect(online, `${kind}/${variant}: Lichess draws every field but the division's`).toEqual(all.filter((k) => !DIVISION_ONLY.has(k)));
+        clockBlocks += all.filter((k) => DIVISION_ONLY.has(k)).length;
+        cells++;
+      }
+    }
+    expect(kindsSeen.size, "anti-vacuity: every stage kind").toBe(KINDS.length);
+    expect(cells, "anti-vacuity: every kind and variant").toBe(KINDS.length * (1 + Object.keys(chess.variants).length));
+    expect(clockBlocks, "the positive pair: over the board the clock fields ARE drawn").toBeGreaterThan(0);
+    expect(blocks("knockout", "classical", lichess), "a knockout keeps its rungs on Lichess").toEqual(["tiebreakRungs"]);
   });
 
-  it("renders nothing when the page passes no sport at all", () => {
-    const html = panel({ sportKey: undefined });
-    expect(html).not.toContain('data-testid="stage-format"');
+  it("renders nothing when the page passes no sport at all, or a sport the registry does not ship", () => {
+    expect(panel({ sportKey: undefined })).not.toContain('data-testid="stage-format"');
+    expect(panel({ sportKey: "kabaddi-not-shipped" })).not.toContain('data-testid="stage-format"');
+    // The positive pair: a shipped sport, same props, does render it.
+    expect(panel({ sportKey: "football", divisionConfig: {} })).toContain('data-testid="stage-format"');
+  });
+});
+
+describe("the lock line (S4) and the read-only view", () => {
+  it("a locked stage says so BEFORE anyone tries: one line, a link to the fixtures, no edit control", () => {
+    const html = panel({ stages: stageWith({ bestOf: 1 }), formatLockedStageIds: [STAGE_ID] });
+    expect(html).toContain('data-testid="stage-format-locked"');
+    expect(html).toContain("This stage has started");
+    expect(html.match(/has started/g)?.length, "one statement of the lock (M-2)").toBe(1);
+    expect(html).toContain("See the fixtures");
+    expect(html).toContain('data-testid="stage-format-view"'); // read the rules without being able to change them
+    expect(html).not.toContain('data-testid="stage-format-edit"');
+  });
+
+  it("an unlocked stage shows no lock line, and a viewer gets the read-only view but not the lock line", () => {
+    expect(panel({ stages: stageWith({ bestOf: 1 }) })).not.toContain('data-testid="stage-format-locked"');
+    const viewer = panel({ canEdit: false, stages: stageWith({ bestOf: 1 }) });
+    expect(viewer).not.toContain('data-testid="stage-format-locked"');
+    expect(viewer).toContain('data-testid="stage-format-view"');
+    expect(viewer).not.toContain('data-testid="stage-format-edit"');
+  });
+});
+
+describe("the deciders notice on the row reads the RESOLVED cfg (carry G1) and the engine's declarations (M-3)", () => {
+  const mod = (key: string) => builtinModules.find((m) => m.key === key)!;
+  const koStage = (rules: Record<string, unknown> | null, kind = "knockout"): Record<string, unknown>[] => [
+    { id: STAGE_ID, seq: 1, kind, name: "KO", config: rules === null ? {} : { rules }, progression: null, status: "active" },
+  ];
+  const footballDivision = { ...mod("football").configSchema.parse({}) } as Record<string, unknown>;
+  const chessVariant = Object.keys(mod("boardgame").variants)[0]!;
+  const chessDivision = { ...mod("boardgame").configSchema.parse(mod("boardgame").variants[chessVariant]) } as Record<string, unknown>;
+
+  it("football: every decider off holds the match (notice); the knockout preset does not; a league never says it", () => {
+    const off = decidersOffRules(mod("football"), Object.keys(mod("football").variants)[0]!);
+    expect(Object.keys(off).length, "premise: football has deciders to switch off").toBeGreaterThan(0);
+    const offHtml = panel({ sportKey: "football", divisionConfig: footballDivision, stages: koStage(off) });
+    expect(offHtml).toContain('data-testid="stage-deciders-off"');
+    expect(offHtml).not.toContain('data-testid="stage-deciders-level"');
+    // M-5: the notice appears while the organiser edits, so it is a status (announced), not a note.
+    expect(offHtml).toMatch(/role="status"[^>]*data-testid="stage-deciders-off"/);
+    expect(offHtml).not.toContain('role="note"');
+    const preset = stageDefaultsFor(mod("football"), "knockout", null);
+    expect(Object.keys(preset).length, "premise: football declares a knockout preset").toBeGreaterThan(0);
+    const presetHtml = panel({ sportKey: "football", divisionConfig: footballDivision, stages: koStage(preset) });
+    expect(presetHtml).not.toContain('data-testid="stage-deciders-off"');
+    expect(presetHtml).not.toContain('data-testid="stage-deciders-level"');
+    // a league has no knockout to hold
+    expect(panel({ sportKey: "football", divisionConfig: footballDivision, stages: koStage(off, "league") })).not.toContain(
+      'data-testid="stage-deciders-off"',
+    );
+  });
+
+  it("football: extra time on with the shoot-out off can still end level, and the row says so (M-3, from canEndLevel)", () => {
+    const rules = { ...decidersOffRules(mod("football"), Object.keys(mod("football").variants)[0]!), ...stageDefaultsFor(mod("football"), "knockout", null), shootout: false };
+    const html = panel({ sportKey: "football", divisionConfig: footballDivision, stages: koStage(rules) });
+    expect(html).toContain('data-testid="stage-deciders-level"');
+    expect(html).not.toContain('data-testid="stage-deciders-off"');
+  });
+
+  it("chess: an EMPTY rung list holds the match; no list, or a list of one, does not (carry 3, and G1's resolved cfg)", () => {
+    const empty = panel({ sportKey: "boardgame", divisionConfig: chessDivision, stages: koStage({ tiebreakRungs: [] }) });
+    expect(empty).toContain('data-testid="stage-deciders-off"');
+    // No stored list: the bracket overlay forces the tie-break on, so the RAW rules (which carry nothing) must not be
+    // read as "off" - the stage plays the default list.
+    expect(panel({ sportKey: "boardgame", divisionConfig: { ...chessDivision, tiebreak: false }, stages: koStage(null) })).not.toContain(
+      'data-testid="stage-deciders-off"',
+    );
+    const rung = (mod("boardgame").configSchema.parse({}) as Record<string, unknown>).tiebreakRungs;
+    const one = Array.isArray(rung) && rung.length > 0 ? [rung[0]] : ["armageddon"];
+    expect(panel({ sportKey: "boardgame", divisionConfig: chessDivision, stages: koStage({ tiebreakRungs: one }) })).not.toContain(
+      'data-testid="stage-deciders-off"',
+    );
+  });
+});
+
+describe("the collapsed row's chips say the stage's EFFECTIVE format in the public line's words (I-1)", () => {
+  const ruleDict = rulesLineDict(enPublic as Dict);
+  const football = builtinModules.find((m) => m.key === "football")!;
+  // A division that plays extra time (15-minute halves), so a stage that inherits it has a chip to show and a stage that
+  // sets its own number has a different one.
+  const divisionMinutes = 15;
+  const division = {
+    ...(football.configSchema.parse(football.variants["11-a-side"]) as Record<string, unknown>),
+    extraTime: { enabled: true, halfMinutes: divisionMinutes },
+  };
+  const stage = (rules: Record<string, unknown> | null, kind = "knockout"): Record<string, unknown>[] => [
+    { id: STAGE_ID, seq: 1, kind, name: "KO", config: rules === null ? {} : { rules }, progression: null, status: "active" },
+  ];
+  const chip = (key: string, params?: Record<string, string | number>): string => rulesChipText(ruleDict, { key, params });
+  const chipsOf = (html: string): string[] => {
+    const start = html.indexOf('data-testid="stage-format-chips"');
+    if (start === -1) return [];
+    const list = html.slice(start, html.indexOf("</ul>", start));
+    return [...list.matchAll(/<li[^>]*>([^<]*)<\/li>/g)].map((m) => m[1]!.replace(/&#x27;/g, "'"));
+  };
+  const withChips = (over: Record<string, unknown>): string =>
+    panel({ sportKey: "football", divisionConfig: division, ruleDict, ...over });
+
+  it("rulesLineDict keeps exactly the rules-line keys, so the whole public dictionary does not cross into the client", () => {
+    const keys = Object.keys(ruleDict);
+    expect(keys.length).toBeGreaterThan(0);
+    expect(keys.every((k) => k.startsWith("format.rules.") || k === "format.sets.bestOf")).toBe(true);
+    expect(keys.length).toBe(Object.keys(enPublic).filter((k) => k.startsWith("format.rules.") || k === "format.sets.bestOf").length);
+    expect(keys, "the one clause key that sits outside format.rules.* is kept, not dropped").toContain("format.sets.bestOf");
+    expect(keys.length, "and it is a slice, not the whole dictionary").toBeLessThan(Object.keys(enPublic).length);
+  });
+
+  it("a stage override that differs from the division shows the OVERRIDE; the inherited stage shows the division's", () => {
+    const stageMinutes = divisionMinutes + 5;
+    const overridden = chipsOf(withChips({ stages: stage({ extraTime: { enabled: true, halfMinutes: stageMinutes } }) }));
+    expect(overridden).toContain(chip("format.rules.decider.extraTime", { n: stageMinutes }));
+    expect(overridden).not.toContain(chip("format.rules.decider.extraTime", { n: divisionMinutes }));
+    const inherited = chipsOf(withChips({ stages: stage(null) }));
+    expect(inherited, "a football knockout with no rules plays the division's extra time").toContain(chip("format.rules.decider.extraTime", { n: divisionMinutes }));
+    // the abandon policy is always said, in the stage's value
+    expect(overridden).toContain(chip("format.rules.abandon.replay"));
+    expect(chipsOf(withChips({ stages: stage({ abandonPolicy: "award" }) }))).toContain(chip("format.rules.abandon.award"));
+  });
+
+  it("a locked stage still shows its chips, and a viewer reads them too", () => {
+    expect(chipsOf(withChips({ stages: stage({ halfMinutes: 30 }), formatLockedStageIds: [STAGE_ID] }))).toContain(chip("format.rules.period.halves", { minutes: 30 }));
+    expect(chipsOf(withChips({ stages: stage({ halfMinutes: 30 }), canEdit: false }))).toContain(chip("format.rules.period.halves", { minutes: 30 }));
+  });
+
+  it("a stage whose stored rules the schema refuses says nothing: no empty chip list", () => {
+    // `bestOf: "x"` is no cfg the engine takes, so there is no effective format to state.
+    const html = withChips({ sportKey: "badminton", divisionConfig: {}, stages: stage({ bestOf: "x" }, "league") });
+    expect(html).toContain('data-testid="stage-format-row-');
+    expect(html).not.toContain('data-testid="stage-format-chips"');
+    // positive pair: the same sport and stage with valid rules does say its format
+    const ok = withChips({ sportKey: "badminton", divisionConfig: {}, stages: stage({ bestOf: 3 }, "league") });
+    expect(ok).toContain('data-testid="stage-format-chips"');
+  });
+
+  it("no dictionary slice, no chips - and the row still renders (the page owns passing it)", () => {
+    const html = withChips({ ruleDict: undefined, stages: stage({ halfMinutes: 30 }) });
+    expect(html).not.toContain('data-testid="stage-format-chips"');
+    expect(html).toContain('data-testid="stage-format-edit"');
+  });
+
+  it("every sport says something for its stage, in the real dictionary's words, never a raw key (counted)", () => {
+    let rendered = 0;
+    const withAny = new Set<string>();
+    for (const m of builtinModules)
+      for (const kind of ["league", "knockout"]) {
+        const cfg = declaredCfgs(m)[0]!.cfg as Record<string, unknown>;
+        const chips = chipsOf(panel({ sportKey: m.key, divisionConfig: cfg, ruleDict, stages: stage(null, kind) }));
+        rendered++;
+        for (const c of chips) expect(c.startsWith("format.rules."), `${m.key}/${kind}: a raw key ${c}`).toBe(false);
+        if (chips.length > 0) withAny.add(m.key);
+      }
+    expect(rendered).toBe(builtinModules.length * 2);
+    expect([...withAny].sort(), "every sport has chips on at least one stage kind").toEqual(builtinModules.map((m) => m.key).sort());
   });
 });
 
@@ -303,11 +522,154 @@ describe("what a Save actually PUTs", () => {
     expect(stageFormatSaveFragment("badminton", stored, opened, edited)).toEqual({ bestOf: 3 });
   });
 
-  it("notices a field being CLEARED, which is an edit and not an untouched save", () => {
-    const stored = { bestOf: 1, setTo: 21 };
+  it("notices a field being CLEARED: it is sent as null, and the merged stored rules lose the key (the cleared field is NOT silently kept)", () => {
+    const stored = { bestOf: 3, setTo: 21 };
     const opened = stageFormatEditorValues("badminton", { rules: stored });
+    expect(opened.setTo, "premise: the field opens filled").toBe("21");
     const cleared = { ...opened, setTo: "" };
-    expect(stageFormatSaveFragment("badminton", stored, opened, cleared)).toEqual({ bestOf: 1 });
+    const fragment = stageFormatSaveFragment("badminton", stored, opened, cleared);
+    expect(fragment).toEqual({ setTo: null });
+    // Read the stored rules back through the endpoint's own merge: the key is gone, the sibling stays.
+    expect(mergedStageRules(stored, fragment)).toEqual({ bestOf: 3 });
+    // And a fragment of ONLY what changed: an unrelated edit leaves the cleared-before keys alone.
+    expect(stageFormatSaveFragment("badminton", stored, opened, { ...opened, bestOf: "5" })).toEqual({ bestOf: 5 });
+  });
+
+  it("clearing the LAST field of a stage is a null for that key, not an empty fragment (which would clear the whole stage)", () => {
+    const stored = { cap: 30 };
+    const opened = stageFormatEditorValues("badminton", { rules: stored });
+    const fragment = stageFormatSaveFragment("badminton", stored, opened, { ...opened, cap: "" });
+    expect(fragment).toEqual({ cap: null });
+    expect(Object.keys(fragment).length).toBeGreaterThan(0);
+    expect(mergedStageRules(stored, fragment)).toBeNull(); // the endpoint stores null (no rules) - the organiser's own clear
+  });
+
+  it("a field whose blank build is a delete marker (a top-level undefined) is sent as null - JSON drops an undefined, and the key would silently survive", () => {
+    // No stage-visible field of a shipped sport builds a top-level undefined today (football's shoot-out points do, but
+    // nested under `points`, which is the stage points screen's), so the guard is reached through a registered stand-in.
+    const GONE = "__t17_delete_marker";
+    SPORT_RULES[GONE] = [
+      {
+        key: "gone",
+        edits: ["gone"],
+        label: "Gone",
+        kind: "number",
+        build: (v) => ({ gone: Number(v) }),
+        buildOnBlank: () => ({ gone: undefined }),
+        read: (config) => (typeof config.gone === "number" ? String(config.gone) : undefined),
+      },
+    ];
+    try {
+      const stored = { gone: 5, keep: 1 };
+      const opened = stageFormatEditorValues(GONE, { rules: stored });
+      expect(opened, "premise: the stand-in hydrates what it built").toEqual({ gone: "5" });
+      const fragment = stageFormatSaveFragment(GONE, stored, opened, { gone: "" });
+      expect(Object.hasOwn(fragment, "gone"), "the key is named").toBe(true);
+      expect(fragment.gone).toBeNull();
+      expect(JSON.parse(JSON.stringify(fragment))).toEqual({ gone: null });
+    } finally {
+      delete SPORT_RULES[GONE];
+    }
+  });
+
+  it("an edit with no net effect re-sends the stored fragment, never an empty one", () => {
+    const stored = { bestOf: 3 };
+    const opened = stageFormatEditorValues("badminton", { rules: stored });
+    const fragment = stageFormatSaveFragment("badminton", stored, opened, { ...opened, bestOf: "3", cap: "" });
+    expect(fragment).toEqual(stored);
+    expect(Object.keys(fragment).length).toBeGreaterThan(0);
+  });
+
+  it("a period sport's decider switched OFF is sent as false (null would mean inherit), and reads back as off", () => {
+    const icehockey = builtinModules.find((m) => m.key === "icehockey")!;
+    const division = icehockey.configSchema.parse({}) as Record<string, unknown>;
+    expect(division.shootout, "premise: the division's shoot-out is on, so off is a real change").not.toBeNull();
+    const stored = {};
+    const opened = stageFormatEditorValues("icehockey", { rules: stored });
+    const fragment = stageFormatSaveFragment("icehockey", stored, opened, { ...opened, shootout: "off" }, division);
+    expect(fragment).toEqual({ shootout: false });
+    // The overlay (the resolver's read of the stored rules) maps that false to the engine's null.
+    expect(stageRulesOverlay(icehockey, division, mergedStageRules(stored, fragment))).toEqual({ shootout: null });
+    // Reopening shows it as Off, and clearing the field removes the key (inherit again).
+    const reopened = stageFormatEditorValues("icehockey", { rules: { shootout: false } });
+    expect(reopened.shootout).toBe("off");
+    expect(stageFormatSaveFragment("icehockey", { shootout: false }, reopened, { ...reopened, shootout: "" }, division)).toEqual({ shootout: null });
+  });
+
+  it("chess: saving the EMPTY rung list persists [], a reload shows it, and the next save does not bring a rung back", () => {
+    const stored0 = {};
+    const opened0 = stageFormatEditorValues("boardgame", { rules: stored0 });
+    const token = SPORT_RULES.boardgame!.find((f) => f.kind === "sequence")!.emptyValue!;
+    const fragment1 = stageFormatSaveFragment("boardgame", stored0, opened0, { ...opened0, tiebreakRungs: token });
+    expect(fragment1).toEqual({ tiebreakRungs: [] });
+    const stored1 = mergedStageRules(stored0, fragment1)!;
+    expect(stored1).toEqual({ tiebreakRungs: [] }); // an empty list is a VALUE, not an absent key
+    // reload: the editor opens on the empty token, and an untouched save re-sends the empty list
+    const opened1 = stageFormatEditorValues("boardgame", { rules: stored1 });
+    expect(opened1.tiebreakRungs).toBe(token);
+    expect(stageFormatSaveFragment("boardgame", stored1, opened1, opened1)).toEqual({ tiebreakRungs: [] });
+    // an edit to ANOTHER field omits the list entirely (the merge keeps it), so no rung comes back
+    const other = SPORT_RULES.boardgame!.find((f) => f.kind === "select" && (f.options ?? []).length > 1)!;
+    const edited = { ...opened1, [other.key]: other.options![0]!.value };
+    const fragment2 = stageFormatSaveFragment("boardgame", stored1, opened1, edited);
+    expect(Object.keys(fragment2).length, "premise: the edit really changed something").toBeGreaterThan(0);
+    expect(Object.hasOwn(fragment2, "tiebreakRungs")).toBe(false);
+    expect(mergedStageRules(stored1, fragment2) ?? {}).toMatchObject({ tiebreakRungs: [] });
+    // and putting a rung back is a deliberate edit to the list
+    const fragment3 = stageFormatSaveFragment("boardgame", stored1, opened1, { ...opened1, tiebreakRungs: "armageddon" });
+    expect(fragment3).toEqual({ tiebreakRungs: ["armageddon"] });
+  });
+});
+
+// W2c batch-5 review Q2 - the editor reopens over what the organiser JUST SAVED, not over the props from before the save.
+// `router.refresh()` after the PUT is not awaited, so for a moment the row's props are still the pre-save ones; a reopen
+// in that window used to hydrate the editor from them (an empty "Points to win" over a stored best of 1 to 15), and the
+// next Save would have diffed against that blank. The row now keeps the PUT's own answer until the props move on. The
+// pure half of that lives here (`stageRulesInForce`); the in-page reopen with the refresh held open is the walkthrough
+// (`stage-rules-start-promotion.spec.ts`, "best of 1"), the half a node-env render cannot click.
+describe("a stage's rules after a save, before the page's props catch up (batch-5 Q2)", () => {
+  // Pre-save props: best of 1 with no points key (the organiser had just picked 1); the PUT's answer adds the points.
+  const BEFORE = { bestOf: 1 };
+  const SAVED = { bestOf: 1, setTo: 15, finalSetTo: 15 };
+
+  it("the empty case: nothing saved reads the props, whatever they are", () => {
+    expect(stageRulesInForce(null, BEFORE)).toBe(BEFORE);
+    expect(stageRulesInForce(null, undefined)).toEqual({});
+    expect(stageRulesInForce(null, null)).toEqual({});
+    expect(stageRulesInForce(null, "nope")).toEqual({});
+    expect(stageRulesInForce(null, [1])).toEqual({});
+  });
+
+  it("while the props are still the ones the save started from, the PUT's answer stands - and the editor opens over it", () => {
+    const inForce = stageRulesInForce({ against: BEFORE, rules: SAVED }, BEFORE);
+    expect(inForce).toBe(SAVED);
+    // The reopen in that window: the number played, not the blank the stale props would hydrate.
+    expect(stageFormatEditorValues("badminton", { rules: inForce })).toEqual(stageFormatEditorValues("badminton", { rules: SAVED }));
+    expect(stageFormatEditorValues("badminton", { rules: inForce }).finalSetTo).toBe("15");
+    expect(stageFormatEditorValues("badminton", { rules: BEFORE }).finalSetTo, "premise: the stale props really hydrate blank").toBeUndefined();
+  });
+
+  it("once the props are a different object (the refresh landed), they stand again - even when they differ from the save", () => {
+    const refreshed = { bestOf: 3 }; // another editor's save arrived with the refresh
+    expect(stageRulesInForce({ against: BEFORE, rules: SAVED }, refreshed)).toBe(refreshed);
+    // …and the same value in a new object (the usual refresh) is the props too, not the saved object.
+    const same = { ...SAVED };
+    expect(stageRulesInForce({ against: BEFORE, rules: SAVED }, same)).toBe(same);
+  });
+
+  it("a stage that had no rules: a save into the empty props stands until they move on", () => {
+    expect(stageRulesInForce({ against: undefined, rules: SAVED }, undefined)).toBe(SAVED);
+    expect(stageRulesInForce({ against: undefined, rules: SAVED }, SAVED)).toBe(SAVED); // the props now ARE a (new) object
+  });
+
+  it("a clear: the saved empty fragment reads as inherited at once, over props that still hold the override", () => {
+    expect(stageRulesInForce({ against: SAVED, rules: {} }, SAVED)).toEqual({});
+    expect(Object.keys(stageRulesInForce({ against: SAVED, rules: {} }, SAVED))).toHaveLength(0);
+  });
+
+  it("a second save replaces the first: the latest answer is the one in force", () => {
+    const second = { bestOf: 3 };
+    expect(stageRulesInForce({ against: BEFORE, rules: second }, BEFORE)).toBe(second);
   });
 });
 
@@ -351,8 +713,9 @@ describe("REGRESSION (2026-09-25) — best of 1: the points field an organiser e
     const visible = visibleRuleFields("badminton", opened, division).find((f) => f.label === labels[0])!;
     const edited = setRuleValue("badminton", opened, visible.key, "21", division);
     const fragment = stageFormatSaveFragment("badminton", stored, opened, edited, division);
-    expect(fragment).toEqual({ bestOf: 1, setTo: 21, finalSetTo: 21 });
-    expect(pointsTheOnlyGameIsPlayedTo("badminton", { ...division, ...fragment })).toBe(21);
+    // Only what changed (the endpoint merges it over the stored `bestOf: 1`).
+    expect(fragment).toEqual({ setTo: 21, finalSetTo: 21 });
+    expect(pointsTheOnlyGameIsPlayedTo("badminton", { ...division, ...stored, ...fragment })).toBe(21);
   });
 
   it("a stage INHERITING best of 1 gets the single field too, and pins nothing it did not edit", () => {
@@ -392,10 +755,7 @@ describe("REGRESSION (2026-09-25) — best of 1: the points field an organiser e
       ["setTo", "finalSetTo"].map((k) => SPORT_RULES.badminton!.find((f) => f.key === k)!.label),
     );
     const edited = setRuleValue("badminton", opened, "setTo", "21", division);
-    expect(stageFormatSaveFragment("badminton", stored, opened, edited, division)).toEqual({
-      bestOf: 3,
-      setTo: 21,
-    });
+    expect(stageFormatSaveFragment("badminton", stored, opened, edited, division)).toEqual({ setTo: 21 });
   });
 });
 

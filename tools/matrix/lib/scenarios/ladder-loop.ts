@@ -8,8 +8,7 @@
 // the same order — so the expected order needs no ladder rulebook (W7's).
 import { RefusedCall, type ChallengeOut, type StageRef } from "../driver/types.ts";
 import type { RequestedOutcome, Side } from "../streams/types.ts";
-import { decideFixture, hardPath, type DivisionSetup, type Recorder, type RoundHooks } from "./common.ts";
-import { stageCfg } from "../sport-cfg.ts";
+import { caseStageCfg, decideFixture, hardPath, type DivisionSetup, type Recorder, type RoundHooks } from "./common.ts";
 import type { StageKind } from "@seazn/engine/core";
 import type { ScenarioContext } from "./types.ts";
 
@@ -55,7 +54,7 @@ export async function playLadder(ctx: ScenarioContext, rec: Recorder, setup: Div
     rec.notes.push("ladder: a field of < 2 has no challenge");
     return;
   }
-  const cfg = stageCfg(ctx.spec.sport, ctx.cfg, stage.kind as StageKind); // the cfg the product folds a ladder fixture under
+  const cfg = caseStageCfg(ctx, stage.kind as StageKind); // the cfg the product folds a ladder fixture under
   let hard = 0; // hard-path requests this stage has made (rotates the settle method / tie-break rung)
   let lossAsked = false; // the first non-climbing step asks for the hard path once
   // Until the first challenge writes ladder_order: the entrants addEntrants

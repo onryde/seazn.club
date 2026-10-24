@@ -5,6 +5,7 @@ import { builtinModules } from "@seazn/engine/sports";
 import { TAG, activeOrg, addEntrantsViaApi, apiJson, createStageAndGenerate, divisionPath, expectNoHorizontalScroll } from "./helpers";
 import { withDb } from "./rs007-money-kit";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
+import { decidersOffRules } from "./stage-deciders";
 
 // W2b Task 8 (spec §5.4, X-WD-1 / C17): an organiser withdraws an entrant whose knockout semi is HELD (a level
 // football result, needs_decision). Before W2b the cascade skipped the held line and the bracket waited on a settle
@@ -66,7 +67,10 @@ async function heldSemi(r: APIRequestContext) {
   const names = ["W2b Ashford", "W2b Brockley", "W2b Catford", "W2b Deptford"];
   const added = await addEntrantsViaApi(r, div.data!.id, names, "team");
   expect(added.ids).toHaveLength(names.length);
-  const { fixtureIds } = await createStageAndGenerate(r, div.data!.id, { kind: "knockout", name: "Cup" });
+  // Every decider off (W2c X-SR-6: a new knockout starts with extra time and penalties), so 0-0 at full time is held.
+  const { fixtureIds } = await createStageAndGenerate(r, div.data!.id, {
+    kind: "knockout", name: "Cup", config: { rules: decidersOffRules(sport, variant) },
+  });
   const started = await apiJson(r, `/api/v1/divisions/${div.data!.id}/start`, "POST");
   expect(started.status, JSON.stringify(started.error)).toBeLessThan(300);
   const all = await Promise.all(fixtureIds.map((id) => read(r, id)));

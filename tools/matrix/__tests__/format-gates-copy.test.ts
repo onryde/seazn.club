@@ -1,13 +1,15 @@
 // expectedGate is a text-pinned COPY of apps/web/src/server/usecases/format-gates.ts:
 // that file imports "server-only", so the harness cannot load it. Expected
 // values come from the product's own source text (the two gate bodies and
-// createStages' call order), never from the copy under test.
+// the stage batch's call order: `assertStageBatchGates`, which createStages and
+// replaceStages both call), never from the copy under test.
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { ROW_KEYS, stagesForRow } from "../lib/catalogue.ts";
 import { ADVANCED_CONFIG_KEYS, ADVANCED_KINDS, DOUBLE_ELIM_KINDS, expectedGate, expectedGates } from "../lib/format-gates-copy.ts";
+import { batchGatesBody } from "./product-gates-source.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const gates = readFileSync(resolve(REPO, "apps/web/src/server/usecases/format-gates.ts"), "utf8");
@@ -49,10 +51,15 @@ describe("expectedGate — a text-pinned copy of format-gates.ts (server-only, u
     }
   });
 
-  it("createStages checks the double-elim gate before the advanced gate (so a row hitting both reports double_elim)", () => {
-    const body = bodyOf(stages, "export async function createStages(");
-    expect(body.indexOf("stageNeedsDoubleElimGate(")).toBeGreaterThan(0);
-    expect(body.indexOf("stageNeedsDoubleElimGate(")).toBeLessThan(body.indexOf("stageNeedsAdvancedFormatsGate("));
+  it("the stage batch checks the double-elim gate before the advanced gate (so a row hitting both reports double_elim)", () => {
+    // The gates live in `assertStageBatchGates` (W2c T13 fix round 1); `batchGatesBody` follows the call from createStages
+    // and replaceStages (and throws if either stopped calling it), so the order is judged on the function the POST runs.
+    const body = batchGatesBody(stages);
+    const de = body.indexOf("stageNeedsDoubleElimGate(");
+    const adv = body.indexOf("stageNeedsAdvancedFormatsGate(");
+    expect(de, "the double-elim gate is asked").toBeGreaterThan(0);
+    expect(adv, "the advanced gate is asked").toBeGreaterThan(0);
+    expect(de).toBeLessThan(adv);
     // Both gates read EVERY stage of the POST (some), which is what expectedGate models.
     expect(body).toContain("inputs.some((s) => stageNeedsDoubleElimGate(s.kind))");
     expect(body).toContain("inputs.some((s) => stageNeedsAdvancedFormatsGate({ kind: s.kind, config: s.config }))");

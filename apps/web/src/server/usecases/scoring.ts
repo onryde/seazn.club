@@ -13,7 +13,7 @@ import { deferred } from "@/lib/deferred";
 import { divisionScoringClosed } from "@/lib/division-phase";
 import { EngineError } from "@seazn/engine/core";
 import { foldEpochOf } from "@seazn/engine/sport";
-import { appendEvent, replayOutcomeFor, resolveModule } from "@/server/engine-db";
+import { appendEvent, replayOutcomeFor, resolveModule, rulesVersionNow } from "@/server/engine-db";
 import type { CascadeWriter } from "@/server/engine-db/append-event";
 import { recomputeStandings } from "@/server/engine-db";
 import { advancingSides, lockStageSeats } from "@/server/engine-db/fed-seats";
@@ -62,6 +62,10 @@ export interface ScoreOutcome {
    *  undo, a second official's). Every answer this function returns carries
    *  it, cached ones included: the Redis fast path stores this same object. */
   event_id: string;
+  /** W2c Task 15 (X-SR-7, owner P-1) — the match's rules version (`fixtures.rules_version`, the corrections of its
+   *  format) as this answer saw it. A pad that loaded an older one reloads the rules before its next tap; a tap it sends
+   *  under the old version is refused (FIXTURE_RULES_CHANGED). A replayed answer carries the version NOW. */
+  rules_version: number;
 }
 
 const IDEM_TTL_SECONDS = 24 * 60 * 60; // doc 08 §4
@@ -70,8 +74,9 @@ const IDEM_TTL_SECONDS = 24 * 60 * 60; // doc 08 §4
  *  to `IDEM_TTL_SECONDS`, so serving it would ack a pad with no row id — the
  *  shape device-void-mine's Fix A exists to end. A v2 miss falls through to
  *  the durable replay, which carries the id. Bump it again whenever
- *  `ScoreOutcome` gains a field a reader relies on. */
-const idemKey = (fixtureId: string, key: string) => `idemv2:${fixtureId}:${key}`;
+ *  `ScoreOutcome` gains a field a reader relies on. v3 (W2c Task 15) =
+ *  `rules_version`: the API declares it on every accepted answer. */
+const idemKey = (fixtureId: string, key: string) => `idemv3:${fixtureId}:${key}`;
 
 // One scorer's cadence (doc 08 §6).
 const SCORING_LIMIT = { max: 10, windowSeconds: 1 };
@@ -175,7 +180,13 @@ export async function scoreEvent(
     const replay = await cacheGet<ScoreOutcome>(cacheKey);
     if (replay) {
       await rateLimit(`scorereplayv1:${fixtureId}`, REPLAY_LIMIT);
-      return replay; // retried request: same answer, no double write
+      // Batch-5 m-2: a replayed answer carries the rules version NOW (`ScoreOutcome.rules_version`), whichever tier serves
+      // it - the durable replay reads it off the row, and the cached answer holds the version of the original write. A
+      // lost-ack retry after a correction is what tells the pad to reload; an overlay per answer, never written back.
+      // Best-effort: the overlay only ENRICHES an answer the pad already has, and the cache fails open for the same reason
+      // (a retry must not be refused because a backing store is down). A read that rejects keeps the cached answer.
+      const now = await rulesVersionNow(auth.orgId, fixtureId).catch(() => null);
+      return now === null || now === replay.rules_version ? replay : { ...replay, rules_version: now }; // same answer, no double write
     }
   }
 
@@ -236,6 +247,9 @@ export async function scoreEvent(
       // or past its 24h TTL. The column is nullable and NULLs are distinct in
       // a unique index, so un-keyed callers are entirely unaffected.
       idempotencyKey: input.idempotency_key ?? null,
+      // W2c Task 15 (X-SR-7, owner P-1): only a scoring pad sends it, and only a sent version is checked; the console
+      // and the server's own writers (cascade, finalize, settle) never do.
+      ...(input.rules_version !== undefined ? { rulesVersion: input.rules_version } : {}),
       ...(opts.writer !== undefined ? { writer: opts.writer } : {}),
       ...(input.type === "core.void" &&
       typeof (input.payload as { event_id?: unknown })?.event_id === "string"
@@ -272,7 +286,11 @@ export async function scoreEvent(
     // rather than the error code alone.
     if (
       input.idempotency_key &&
-      ((err instanceof EngineError && (err.code === "SEQ_CONFLICT" || err.code === "ALREADY_DECIDED")) || isIdemKeyViolation(err))
+      ((err instanceof EngineError && (err.code === "SEQ_CONFLICT" || err.code === "ALREADY_DECIDED")) ||
+        // W2c Task 15: the rules check runs BEFORE the seq check, so a keyed retry of a tap the ledger recorded
+        // before a correction meets FIXTURE_RULES_CHANGED, not SEQ_CONFLICT. It already landed: the original answer.
+        (err instanceof HttpError && err.code === "FIXTURE_RULES_CHANGED") ||
+        isIdemKeyViolation(err))
     ) {
       const replayed = await replayOutcomeFor(auth.orgId, fixtureId, input.idempotency_key);
       if (replayed) {
@@ -297,6 +315,7 @@ export async function scoreEvent(
     outcome: result.outcome,
     status: result.status,
     event_id: result.event.id,
+    rules_version: result.rulesVersion,
   };
 
   // R10 M3: everything from here on runs AFTER the event committed, so the
@@ -859,6 +878,16 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
     // stage lock late, behind this fixture's — the one window the old order survives in, and still better than a
     // cascade that reads its feeders unserialised.
     if (!pre?.feeds && (fixture.winner_to_fixture !== null || fixture.loser_to_fixture !== null)) await lockStageSeats(tx, fixture.stage_id);
+    // W2c Task 15 (Task 2 I-1, batch-3 carry): a decision that feeds a seat may AWARD the line it feeds (the cascade
+    // below walks an opponent over a dead feeder, `resolveBracketSeats`), and that line, unstarted, has no snapshot: its
+    // award is scored under the division's LIVE config. So the format freeze's lock, SHARED, as a first append takes it
+    // (`append-event.ts`): a division or stage format save in flight (holding it EXCLUSIVE) commits first and the award
+    // is scored under what it committed; a save that arrives after waits for this award to commit and then sees it.
+    // After the stage seats and this fixture's lock (the one order: `division:` → stage seats → `fixture:` →
+    // `division-config:`). A decision that feeds nothing awards nothing and never waits.
+    if (fixture.winner_to_fixture !== null || fixture.loser_to_fixture !== null) {
+      await tx`select pg_advisory_xact_lock_shared(hashtext(${"division-config:" + fixture.division_id}))`;
+    }
     // X-BR-1: a level outcome under a seating status in a bracket is the bug shape (level-seat.ts).
     assertNoLevelSeat({ fixtureId, stageKind: fixture.kind, status: fixture.status, outcome: fixture.outcome });
     // W2b D20: a double walkover advances nobody, so a seat it feeds holding one of its entrants is the bug shape.

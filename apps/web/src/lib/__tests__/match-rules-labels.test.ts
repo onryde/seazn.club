@@ -23,13 +23,18 @@
 import { describe, expect, it } from "vitest";
 import {
   SPORT_RULES,
-  STAGE_RULES_SPORTS,
   borrowOptionLabel,
   ruleOptionLabel,
   type RuleField,
 } from "@/lib/match-rules";
 
-const IN_SCOPE = [...STAGE_RULES_SPORTS].sort();
+// The four sets-based sports: every sport that labels `bestOf` the way badminton does. (`STAGE_RULES_SPORTS` named them
+// until W2c Task 17 opened the stage row to every sport; the borrow now looks at every sport and the identical-label
+// rule picks the lenders, so this list is DERIVED from the labels and pinned below.)
+const BADMINTON_BEST_OF_LABEL = (SPORT_RULES.badminton ?? []).find((f) => f.key === "bestOf")?.label;
+const IN_SCOPE = Object.keys(SPORT_RULES)
+  .filter((k) => SPORT_RULES[k]!.some((f) => f.key === "bestOf" && f.label === BADMINTON_BEST_OF_LABEL))
+  .sort();
 
 function bestOfField(sport: string): RuleField {
   const field = (SPORT_RULES[sport] ?? []).find((f) => f.key === "bestOf");
@@ -100,9 +105,10 @@ describe("ruleOptionLabel", () => {
     expect(ruleOptionLabel("badminton", "no-such-field", "1")).toBeUndefined();
   });
 
-  it("never borrows across the scope boundary", () => {
+  it("never borrows across the label boundary", () => {
     // Carrom's `bestOf` is "Best of (games)" — a different field label for a
-    // different concept, and carrom is not a stage-rules sport. Borrowing
+    // different concept. Every sport is a peer now (W2c Task 17 deleted the
+    // four-sport set), and the identical-label rule alone keeps it out. Borrowing
     // tennis's "Best of 5" onto it, or carrom's label onto tennis, would be
     // the exact cross-sport lie this file guards against.
     expect((SPORT_RULES.carrom ?? []).some((f) => f.key === "bestOf")).toBe(true);
@@ -122,6 +128,7 @@ describe("borrowOptionLabel refuses a peer that labels the FIELD differently", (
   // could kill. Peers are passed in here so the disagreement is constructible.
   const field: RuleField = {
     key: "bestOf",
+    edits: ["bestOf"],
     label: "Best of (sets)",
     kind: "select",
     options: [{ value: "3", label: "Best of 3" }],

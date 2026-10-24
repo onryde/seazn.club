@@ -65,7 +65,9 @@ function settings(locked: boolean) {
     },
     orgId: "org1",
     variants: [{ key: "classical", name: "Classical" }],
-    locked,
+    structureLocked: locked,
+    // W2c: fixtures lock the structure; the variant locks once a stage that plays it has started. "Locked" is both.
+    lockedFields: locked ? [{ field: "variant_key", code: "DIVISION_FORMAT_LOCKED" as const, stageId: "s1", stageName: "Round 1" }] : [],
     stages: [],
     canEdit: true,
     divisionPathPrefix: "/o/org/c/comp/d/",
@@ -104,7 +106,7 @@ describe("Settings → Format names the sport and variant as words", () => {
     expect(checked).toBe(LOCALES.length);
   });
 
-  it("once fixtures exist the locked note says the same words, and the summary marks the variant locked", () => {
+  it("once fixtures exist and a stage has started, the locked note says the same words and the summary marks the variant locked", () => {
     let checked = 0;
     for (const locale of LOCALES) {
       activeDict.current = DICT[locale];

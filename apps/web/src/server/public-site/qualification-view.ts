@@ -14,6 +14,7 @@ import {
   PointsRule,
   SETTLED_FIXTURE_STATUSES,
   isTableStageComplete,
+  isUnplayedForfeit,
   metricKeyOf,
   pointsRuleBounds,
   qualificationStatus,
@@ -28,13 +29,13 @@ import {
   type TableFixture,
   type TieWhatIf,
 } from "@seazn/engine/competition";
-import type { ForfeitCredit, LineupPair } from "@seazn/engine/core";
+import type { ForfeitCredit, LineupPair, MatchOutcome } from "@seazn/engine/core";
 import type { AnySportModule, MatchPointsBounds, TiebreakerKey } from "@seazn/engine/sport";
 import { inTheField } from "@/lib/entrant-field";
 import { isOneSidedAwardBye } from "@/lib/fixture-bye";
-import { engineFixtureStatus } from "@/lib/fixture-engine-status";
 import type { TKey } from "@/lib/i18n-runtime";
 import { tableWithdrawalInputs } from "@/lib/table-withdrawal";
+import { completionEngineStatus, rowAwaitsSettle } from "@/server/engine-db/recorded-abandon";
 import type { QualRowT, QualTableT } from "./competition-hub-schema";
 import { tieBreakRule } from "./standings-view";
 
@@ -83,6 +84,20 @@ export interface QualFixture {
   outcome: unknown;
   /** W2b D5: a withdrawal expunged this match (`PublicFixture.expunged`). Absent reads as not expunged. */
   expunged?: boolean;
+  /** W2c X-AB-5 / N2: the row has an ACTIVE `core.abandon` (`PublicFixture.has_active_abandon`) - the ledger fact that
+   *  tells a scorer's abandon (HELD for the organiser's settle) from the generator's void, both stored `abandoned`.
+   *  Absent (an older cached document) is UNKNOWN, not false: `buildQualificationView` shows no status while an
+   *  abandoned, result-less row could be either (`abandonUnknown`). */
+  has_active_abandon?: boolean;
+  /** Rebase ruling D3: that abandon is the organiser's online No result (`PublicFixture.no_result`) - already the
+   *  settle, never held. Absent reads as a plain abandon. */
+  no_result?: boolean;
+  /** W2c X-PT-1: was anything played before its forfeit — `playRecorded` of its ledger under the division's module, the
+   *  fact the standings fold hands `applyPointsRule` (`engine-db/forfeit-played.ts`, read by `qualificationFixtures`).
+   *  Loaded only under a stage rule that scores forfeits, for a two-seated forfeit; false where it is not loaded (and a
+   *  bye's is false: it has no ledger). Read by `ruleScoreReaches` and by `ledgerless` (an award after play is a real
+   *  match, fix round 1 M-1). */
+  played: boolean;
 }
 
 /** The division's per-match bounds from its PINNED module and live cfg. Future
@@ -143,9 +158,11 @@ export interface QualificationViewInput {
   /** The division's walkover credits the ledger (`divisionAwardAddsToLedger`,
    *  the engine's `forfeitCredit`) — then a two-sided award counts toward the
    *  what-if's average match. The SPORT's forfeit score never reaches a
-   *  one-sided bye. A stage PointsRule's `forfeit.awardScore` scores every
-   *  walkover and bye, but only into `for`/`against`/`diff`: where the what-if
-   *  reads those, the builder counts the award whatever this flag says
+   *  one-sided bye. A stage PointsRule's `forfeit.awardScore` (0–0 too) scores
+   *  a forfeit with nothing played — never a bye, never an award after play
+   *  (W2c X-PT-1, `ruleScoreReaches`) — into `for`/`against`/`diff` and the
+   *  sport's declared score keys (gap a): where the what-if reads `for`, the
+   *  builder counts such an award whatever this flag says
    *  (`ruleScoreInAverage`, read off `stage.meta.pointsRule`); elsewhere this
    *  flag decides. */
   awardAddsToLedger: boolean;
@@ -156,59 +173,100 @@ export interface QualificationViewInput {
 }
 
 const seats = (f: QualFixture, id: string) => f.home_entrant_id === id || f.away_entrant_id === id;
-const settled = (f: QualFixture) => SETTLED_FIXTURE_STATUSES.has(engineFixtureStatus(f.status));
-const outcomeKind = (f: QualFixture): string | undefined =>
+/** The engine status the table reads a fixture at: COMPLETION's own reading (`completionEngineStatus`, X-AB-5). A
+ *  recorded abandon that decided nobody is HELD for the organiser's settle - the desk shows it and the stage will not
+ *  complete around it - so it is still open here (`in_play`): nobody's fate is decided by a match nobody has settled. A
+ *  withdrawal's expunge and the generator's void stay `void`, as does any abandon that recorded a result. */
+function statusIn(kind: string, f: QualFixture) {
+  return completionEngineStatus(kind, {
+    status: f.status,
+    outcome: f.outcome,
+    has_active_abandon: f.has_active_abandon === true,
+    expunged: f.expunged,
+    no_result: f.no_result === true,
+  });
+}
+const settledIn = (kind: string, f: QualFixture) => SETTLED_FIXTURE_STATUSES.has(statusIn(kind, f));
+/** An abandoned, result-less row whose ledger fact is missing: held if it has an active abandon, void if it is the
+ *  generator's - and the row cannot say. Only a row the held predicate WOULD take (were the fact true) is ambiguous. */
+const abandonUnknown = (kind: string, f: QualFixture) =>
+  f.has_active_abandon === undefined &&
+  rowAwaitsSettle(kind, { status: f.status, outcome: f.outcome, has_active_abandon: true, expunged: f.expunged, no_result: f.no_result === true });
+const outcomeKind = (f: Pick<QualFixture, "outcome">): string | undefined =>
   f.outcome && typeof f.outcome === "object" ? (f.outcome as { kind?: string }).kind : undefined;
 
 /** A fixture the standings fold counts as a match played by its entrants: a
  *  settled, non-void result between two seats, or a one-sided bye (the fold's
  *  `awardDelta` path). */
-function counted(f: QualFixture): boolean {
-  if (!settled(f) || engineFixtureStatus(f.status) === "void") return false;
+function countedIn(kind: string, f: QualFixture): boolean {
+  if (!settledIn(kind, f) || statusIn(kind, f) === "void") return false;
   if (isOneSidedAwardBye(f)) return true;
   return f.outcome !== null && f.outcome !== undefined && f.home_entrant_id !== null && f.away_entrant_id !== null;
 }
 
 /** A counted match that adds nothing to the ledger the what-if reads
- *  (T3-⚠3): a no-result; and, unless a stage rule's forfeit score is in what
- *  the average reads (`ruleInAverage`, from `ruleScoreInAverage`), a one-sided
- *  bye (the adapter folds it from a fresh 0–0 state) or a two-sided award — a
- *  walkover — in a sport whose walkover credits nothing (`awardAddsToLedger`
- *  false: generic's; every other sport's credits its ledger, so its walkover
- *  is an ordinary match here — W2b X-WO-1). And a double walkover, always (X-DW-4, Loop R M-13): it credits nothing in
- *  any sport — no forfeit score, and no stage rule's award score (`applyPointsRule` pays it as no forfeit) — so
- *  whatever either flag says, it adds nothing to the ledger. The what-if's average match leaves these out. */
-function ledgerless(f: QualFixture, awardAddsToLedger: boolean, ruleInAverage: boolean): boolean {
+ *  (T3-⚠3): a no-result; and, unless a stage rule's awarded score reached it and is in what the average reads
+ *  (`ruleInAverage` from `ruleScoreInAverage`, and `ruleScoreReaches`), a one-sided bye (the adapter folds it from a
+ *  fresh 0–0 state) or a two-sided award with NOTHING PLAYED in a sport whose walkover credits nothing
+ *  (`awardAddsToLedger` false: generic's; every other sport's credits its ledger, so its walkover is an ordinary match
+ *  here — W2b X-WO-1). A two-sided award AFTER play (`played`, W2c fix round 1 M-1) is the real match it was: generic's
+ *  credit keeps the recorded score wherever it is worse for the offender (ruling 124, GN-RT-1). Where the offender led,
+ *  the credit is the walkover's 0–0 and this over-counts it — the view holds no score to tell; and `played` is read only
+ *  under a stage rule that scores forfeits (`qualificationFixtures`), so without one an award after play stays out, as
+ *  before W2c. And a double walkover, always (X-DW-4, Loop R M-13): it credits nothing in any sport — no forfeit score,
+ *  and no stage rule's award score (`applyPointsRule` pays it as no forfeit) — so whatever either flag says, it adds
+ *  nothing to the ledger. The what-if's average match leaves these out. */
+function ledgerless(f: QualFixture, awardAddsToLedger: boolean, ruleInAverage: boolean, meta: StageQualMeta): boolean {
   const kind = outcomeKind(f);
   if (kind === "no_result" || kind === "double_walkover") return true;
   if (kind !== "award") return false;
-  if (ruleInAverage) return false;
-  return isOneSidedAwardBye(f) || !awardAddsToLedger;
+  if (ruleInAverage && ruleScoreReaches(f, meta)) return false;
+  if (isOneSidedAwardBye(f)) return true;
+  return !awardAddsToLedger && !f.played;
 }
 
-/** A stage PointsRule with a non-zero `forfeit.awardScore`: `applyPointsRule`
- *  adds it to for/against/diff on every forfeit, and the adapter applies the
- *  rule to a one-sided bye's delta as well (engine-db/competition.ts
- *  `awardByeDelta`) — so every award carries it, though only where the what-if
- *  reads those three keys does it count (`ruleScoreInAverage`). Read here, not
- *  by the caller: V414 publishes the rule as `meta.pointsRule`, and a caller
- *  cannot forget it. (A rule that does not parse never gets this far —
- *  `boundsInForce` refuses it.) */
-function ruleScoresForfeits(meta: StageQualMeta): boolean {
-  if (meta.pointsRule === null || meta.pointsRule === undefined) return false;
-  const parsed = PointsRule.safeParse(meta.pointsRule);
-  const score = parsed.success ? parsed.data.forfeit?.awardScore : undefined;
-  return score !== undefined && (score[0] !== 0 || score[1] !== 0);
+/** A stage PointsRule (V414's `points_rule`, published as `meta.pointsRule`) with a SET `forfeit.awardScore`: the only
+ *  rule whose score can reach a fixture (`ruleScoreReaches`), so the only one whose fixtures' played facts are read
+ *  (`qualificationFixtures`). An award of 0–0 is a score like any other: `applyPointsRule` writes whatever is set, so a
+ *  0–0 replaces the sport's credit (a football walkover's 3–0 becomes 0–0) and the what-if must read it (fix round 2).
+ *  Read off the stage, not by the caller, so a caller cannot forget it. A rule that does not parse scores nothing (and
+ *  gives no view: `boundsInForce` refuses it). */
+export function pointsRuleScoresForfeits(pointsRule: unknown): boolean {
+  if (pointsRule === null || pointsRule === undefined) return false;
+  const parsed = PointsRule.safeParse(pointsRule);
+  return parsed.success && parsed.data.forfeit?.awardScore !== undefined;
+}
+
+/**
+ * W2c X-PT-1 — does the stage rule's awarded score land on this fixture? Exactly where `applyPointsRule` writes it (the
+ * one rule, two readers: `qualification-points-parity.test.ts`): a rule with a set `forfeit.awardScore` (0–0 too), over a
+ * forfeit with nothing played — the engine's own `isUnplayedForfeit` on the fixture's `played` fact (a walkover
+ * whatever its ledger reads; any other reason only when nothing was played) — and never a bye: a one-sided award is
+ * the fold's bye path (`awardByeDelta`), which the rule pays no score. Only where the what-if reads `for`/`against`/
+ * `diff` does it count (`ruleScoreInAverage`). Before W2c every award was taken to carry it, added.
+ */
+export function ruleScoreReaches(
+  f: Pick<QualFixture, "outcome" | "played" | "home_entrant_id" | "away_entrant_id">,
+  meta: StageQualMeta,
+): boolean {
+  if (!pointsRuleScoresForfeits(meta.pointsRule) || isOneSidedAwardBye(f)) return false;
+  return outcomeKind(f) !== undefined && isUnplayedForfeit(f.outcome as MatchOutcome, f.played);
 }
 
 /** Whether a rule-scored award is in the what-if's average match for `row`
  *  (fix round 2): an award counts only if it changed the ledger the deciding
- *  key reads. The rule writes `for`/`against`/`diff` alone, so (1) the key
- *  must be `diff` or `for` — a ratio key reads its own won/lost counters —
- *  and (2) the row's goals must resolve to the rule's `for`, not a sport's
- *  own `gf` that `metricOf` reads first. For both keys the average match is
- *  for + against (tie-what-if.ts `marginFor`); `diff` only sets the margin,
- *  which `played` never touches — so (2) asks where FOR_KEYS lands. */
+ *  key reads. (1) The key must be `diff` or `for` — a ratio key reads its own
+ *  won/lost counters. For both keys the average match is for + against
+ *  (tie-what-if.ts `marginFor`); `diff` only sets the margin, which `played`
+ *  never touches — so (2) asks where FOR_KEYS lands: on the rule's own `for`.
+ *  Since W2c Task 9 gap (a) the rule ALSO writes the score keys a sport
+ *  declares (`awardScoreKeys`: football's and the period sports' `gf`), so
+ *  for those rows (2) answers no although the award did reach `gf`. That
+ *  costs nothing: every sport declaring keys other than `for` credits its
+ *  ledger on a walkover (its schema refuses a 0-goal award), so `ledgerless`
+ *  falls through to `awardAddsToLedger` and counts the award all the same —
+ *  a guard in qualification-points-parity.test.ts holds every module to it.
+ *  Only `for` is told here, because only generic's walkover credits nothing. */
 function ruleScoreInAverage(row: StandingsRow, key: TiebreakerKey | null): boolean {
   if (key !== "diff" && key !== "for") return false;
   return metricKeyOf(row, FOR_KEYS) === "for";
@@ -317,12 +375,15 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
   if (i.cascade[0] !== "points") return null; // Review Focus 4: points do not decide places
   const perMatch = boundsInForce(i);
   if (perMatch === null) return null;
-  const ruleScored = ruleScoresForfeits(meta);
 
   const isSwiss = i.stage.kind === "swiss";
+  const settled = (f: QualFixture) => settledIn(i.stage.kind, f);
+  const counted = (f: QualFixture) => countedIn(i.stage.kind, f);
   if (isSwiss && (meta.swissRounds === null || meta.swissRounds < 1)) return null;
   const tableFx = i.fixtures.filter((f) => f.stage_id === i.stage.id && (f.pool_id ?? null) === i.poolId);
   if (tableFx.length === 0) return null;
+  // X-AB-5 / N2: a match that may be held for settle or may be the generator's void cannot be counted either way.
+  if (tableFx.some((f) => abandonUnknown(i.stage.kind, f))) return null;
   // Review Focus 3: a league seat still TBD cannot be counted per entrant.
   // (A Swiss round's unseated boards are shells; its remaining is round-based.)
   if (!isSwiss && tableFx.some((f) => !settled(f) && (f.home_entrant_id === null || f.away_entrant_id === null))) {
@@ -398,7 +459,7 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
   );
   const engineFx: TableFixture[] = tableFx.map((f) => ({
     id: f.id,
-    status: engineFixtureStatus(f.status),
+    status: statusIn(i.stage.kind, f),
     roundNo: f.round_no,
     ...(f.pool_id ? { poolId: f.pool_id } : {}),
   }));
@@ -418,7 +479,7 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
     perMatch,
     cut,
     anyPlayed: tableFx.some(
-      (f) => engineFixtureStatus(f.status) === "decided" && f.home_entrant_id !== null && f.away_entrant_id !== null,
+      (f) => statusIn(i.stage.kind, f) === "decided" && f.home_entrant_id !== null && f.away_entrant_id !== null,
     ),
     complete: isTableStageComplete(
       {
@@ -458,8 +519,8 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
     const rival = rivalId === null ? undefined : byId.get(rivalId);
     if (!rival) return null;
     // The average match counts only matches with a ledger (T3-⚠3).
-    const ruleInAverage = ruleScored && ruleScoreInAverage(r, decidingKey);
-    const noLedger = tableFx.filter((f) => seats(f, r.entrantId) && counted(f) && ledgerless(f, i.awardAddsToLedger, ruleInAverage)).length;
+    const ruleInAverage = ruleScoreInAverage(r, decidingKey);
+    const noLedger = tableFx.filter((f) => seats(f, r.entrantId) && counted(f) && ledgerless(f, i.awardAddsToLedger, ruleInAverage, meta)).length;
     const w: TieWhatIf | null = tieWhatIf({ ...r, played: r.played - noLedger }, rival, cascade, { winsOnly });
     if (w === null) return null;
     const name = i.entrantNames[rival.entrantId] ?? rival.entrantId;

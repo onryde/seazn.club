@@ -618,7 +618,7 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — the game as the room 
     expect(await resolveExternalPlay(await mintOrgOwnerAuth(s.orgId), s.fixtureId, "no_result")).toEqual({ status: "finished" });
     const ledger = await sql<{ type: string; payload: unknown }[]>`select type, payload from score_events where fixture_id = ${s.fixtureId} order by seq`;
     expect(ledger, "premise: the abandon is the ledger's one event").toEqual([
-      { type: "core.abandon", payload: { reason: (EN as Record<string, string>)["externalPlay.resolve.abandonReason.none"] } },
+      { type: "core.abandon", payload: { reason: (EN as Record<string, string>)["externalPlay.resolve.abandonReason.none"], noResult: true } },
     ]);
     const [fx] = await sql<{ status: string; outcome: unknown }[]>`select status, outcome from fixtures where id = ${s.fixtureId}`;
     expect(fx, "premise: the engine decided nobody").toEqual({ status: "abandoned", outcome: null });

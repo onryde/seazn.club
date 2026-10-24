@@ -21,13 +21,22 @@ import { subjectToScorerCapabilityGates } from "./scorers";
 import { gateRosterEligibility } from "./registration-eligibility";
 import { disciplineEnforcedForFixture, gateLineupSuspensions } from "./discipline";
 import { resolveFixtureCfg, resolveModule } from "@/server/engine-db";
+import { liveCfg, stageForfeitAward } from "@/server/engine-db/fixture-cfg";
+import { formatStanding } from "@/server/engine-db/format-standing";
+import { LOCKED_FIXTURE_STATUSES, type MatchRulesState } from "@/lib/fixture-status";
+import { awardFit, isScoredAward, loadAward, type AwardFitVerdict } from "@/server/engine-db/awarded-state";
+import { matchFieldsFor } from "@/lib/rule-scope";
+import type { RuleField } from "@/lib/match-rules";
 import { benchRefusal, lineupCatalogFor } from "./lineup-catalog";
-import { validateLineup, type LineupIssue, type PositionCatalog } from "@seazn/engine/sport";
-import type { Lineup } from "@seazn/engine/core";
+import { validateLineup, type AnySportModule, type LineupIssue, type PositionCatalog } from "@seazn/engine/sport";
+import type { ForfeitAward, Lineup, MatchOutcome, StageKind } from "@seazn/engine/core";
 import { log } from "@/server/logger";
+import type { Dict } from "@/lib/i18n-constants";
+import { formatLineOf } from "@/server/engine-db/rules-version";
 
-/** Doc 13 §7: a device link reads fixture state/events ONLY — every other
- *  fixture surface (detail, lineups, schedule) is 403 for dl_ tokens. */
+/** Doc 13 §7: a device link reads its fixture's scoring surface ONLY — state, events and, since W2c Task 15, the
+ *  rules its pad reloads after a correction (`GET /fixtures/{id}/rules`, `getFixtureRules`) — every other fixture
+ *  surface (detail, lineups, schedule) is 403 for dl_ tokens. */
 function rejectDeviceLink(auth: AuthCtx): void {
   if (auth.via === "device_link") {
     throw new HttpError(403, "Device links can only access their fixture's scoring surface");
@@ -104,7 +113,9 @@ export async function fixtureFeedsNextMatch(auth: AuthCtx, fixtureId: string): P
  * is the column the whole thing turns on: `hasFrozenCfg` reads `undefined` as
  * absence exactly like `null` (fixture-cfg.ts:53-64), so a caller that joined
  * the stage but dropped the snapshot would serve live config for every scored
- * fixture and raise nothing. One select, one place to get it wrong.
+ * fixture and raise nothing. One select, one place to get it wrong. The same
+ * holds for `f.rules_override` beside it (W2c, V469): dropped, the pad would
+ * show the stage's format for a match the organiser changed.
  *
  * No `rejectDeviceLink` guard: this has no route of its own, and the
  * device-link pad is one of the two surfaces that legitimately needs it.
@@ -112,11 +123,36 @@ export async function fixtureFeedsNextMatch(auth: AuthCtx, fixtureId: string): P
 export async function loadFixturePadCfg(
   auth: AuthCtx,
   fixtureId: string,
-): Promise<{ cfg: unknown; stageKind: string | null }> {
+): Promise<{ cfg: unknown; stageKind: string | null; rulesVersion: number; forfeitAward?: ForfeitAward }> {
+  const { cfg, stageKind, rulesVersion, forfeitAward } = await readPadRules(auth, fixtureId);
+  // W2c Task 16b (X-WO-1 B): the stage points rule's walkover award rides beside the cfg (it is not part of it), so the
+  // console's forfeit dialog previews the number the table will carry. Absent: the stage has none that reaches this sport.
+  return { cfg, stageKind, rulesVersion, ...(forfeitAward === undefined ? {} : { forfeitAward }) };
+}
+
+/**
+ * W2c Task 15 (X-SR-7, owner P-1 "A") — `GET /api/v1/fixtures/{id}/rules`: the rules a match plays by NOW, as an open
+ * scoring pad reloads them after a correction (409 FIXTURE_RULES_CHANGED, or an answer carrying a newer
+ * `rules_version`). The same read as `loadFixturePadCfg` — the cfg the fold uses and the version an append is checked
+ * against come from ONE select, so a pad can never hold a cfg from one correction and a version from the next — plus
+ * the format line in the reader's language (`dict`, the public namespace), null when the describer has none to say.
+ */
+export async function getFixtureRules(
+  auth: AuthCtx,
+  fixtureId: string,
+  dict: Dict,
+): Promise<{ cfg: unknown; rules_version: number; format_line: string | null }> {
+  const { cfg, rulesVersion, sportKey, sportModule, stageKind, divisionConfig } = await readPadRules(auth, fixtureId);
+  return { cfg, rules_version: rulesVersion, format_line: formatLineOf(sportKey, sportModule, cfg, stageKind, divisionConfig, dict) };
+}
+
+async function readPadRules(auth: AuthCtx, fixtureId: string) {
   return withTenant(auth.orgId, async (tx) => {
     const [row] = await tx<
       {
         config_snapshot: unknown;
+        rules_override: unknown;
+        rules_version: number;
         division_config: unknown;
         sport_key: string;
         module_version: string;
@@ -124,8 +160,8 @@ export async function loadFixturePadCfg(
         stage_kind: string | null;
       }[]
     >`
-      select f.config_snapshot, d.config as division_config, d.sport_key, d.module_version,
-             s.config as stage_config, s.kind as stage_kind
+      select f.config_snapshot, f.rules_override, f.rules_version, d.config as division_config, d.sport_key,
+             d.module_version, s.config as stage_config, s.kind as stage_kind
         from fixtures f
         join divisions d on d.id = f.division_id
         left join stages s on s.id = f.stage_id
@@ -135,13 +171,145 @@ export async function loadFixturePadCfg(
     if (!row) throw new HttpError(404, "fixture not found");
     // W2a: the stage KIND too — a bracket fixture's pad must see the sport's deciders (chess's tie-break) the
     // fold will apply, and the pad itself needs the kind (Task 12 threads `stageKind` on to it).
-    const cfg = resolveFixtureCfg(
-      row.config_snapshot,
-      row.division_config,
-      { kind: row.stage_kind, config: row.stage_config },
-      resolveModule(row.sport_key, row.module_version),
-    );
-    return { cfg, stageKind: row.stage_kind };
+    const sportModule = resolveModule(row.sport_key, row.module_version);
+    const stage = { kind: row.stage_kind, config: row.stage_config };
+    const cfg = resolveFixtureCfg(row, row.division_config, stage, sportModule);
+    return {
+      cfg,
+      forfeitAward: stageForfeitAward(stage, sportModule),
+      stageKind: row.stage_kind,
+      rulesVersion: row.rules_version,
+      sportKey: row.sport_key,
+      sportModule,
+      divisionConfig: row.division_config,
+    };
+  });
+}
+
+/**
+ * Where a match stands for the block, by the writer's own predicates (`fixture-rules.ts`). `standing` is null for a match the
+ * writer refuses first (`LOCKED_FIXTURE_STATUSES`): `locked`. A match decided without play is `decided` when the writer
+ * refuses every change to it (FIXTURE_FORMAT_LOCKED, reason decided): a bye (no score to refit), or - batch-6 M-2 - a scored
+ * award `awardFit` says is locked (its own fold cannot reproduce it, so there is nothing to fit a correction against).
+ * Otherwise `live` once played or decided without play with a scored award a correction refits, else `unstarted`.
+ *
+ * `award` is `awardFit`'s verdict (`awardRefitVerdict`) and is asked for exactly the scored award decided without play: null
+ * for every other match. Any refusal it gives is a lock here - the question is asked of the format the award plays now, for
+ * which the corrected-format reasons cannot arise.
+ */
+export function matchRulesState(
+  outcome: MatchOutcome | null,
+  standing: { played: boolean; decidedWithoutPlay: boolean } | null,
+  award: AwardFitVerdict | null,
+): MatchRulesState {
+  if (standing === null) return "locked";
+  if (standing.decidedWithoutPlay) {
+    if (!isScoredAward(outcome)) return "decided";
+    if (award === null) throw new Error("matchRulesState: a scored award decided without play needs awardFit's verdict (awardRefitVerdict)");
+    if (!award.ok) return "decided";
+  }
+  return standing.played || standing.decidedWithoutPlay ? "live" : "unstarted";
+}
+
+/** Batch-6 M-2: the writer's own question of an award (`fixture-rules.ts` `assertAwardFits`: `loadAward`, then `awardFit`),
+ *  asked of the format the award plays NOW (a no-op correction), so only the lock is left to answer: does the award's fold
+ *  reproduce it? One reader, so the block never offers a correction the writer will always refuse. */
+export async function awardRefitVerdict(tx: postgres.TransactionSql, fixtureId: string): Promise<AwardFitVerdict> {
+  const award = await loadAward(tx, fixtureId);
+  return awardFit(award.module, award.cfg, award.cfg, award.lineups, award.outcome, { fixtureId, recordedAt: new Date().toISOString() });
+}
+
+/**
+ * W2c Task 19 (S2, X-SR-2, X-SR-3, X-SR-5) - what the fixture console's "Match rules" block reads: the format the match's
+ * STAGE resolves to, the match's own override over it, the format it plays by now, the fields one match may change, and
+ * where the match stands.
+ *
+ * The console reads the RESOLVED cfg, never a raw stored one: `effective` is `resolveFixtureCfg`'s answer (the frozen
+ * snapshot of a started match, else division + stage rules + the match's override), `stageResolved` is the stage's own
+ * (`liveCfg`, what the writer bounds an override against). Both run through the sport's schema so a default the stage
+ * never wrote (football's extra time, off) is a value the form can open at; a cfg the schema refuses is passed as is.
+ *
+ * `state` is the WRITER's own reading (`fixture-rules.ts`): `locked` is exactly the statuses it refuses on
+ * (`LOCKED_FIXTURE_STATUSES`, step 1); otherwise a match is `live` when it counts as started there (`formatStanding`: played
+ * or decided without play, step 7) and `unstarted` when neither. A match decided without play is `decided`, not `live`, when
+ * the writer's `awardFit` refuses every change to it (a bye, or a scored award its own fold cannot reproduce: batch-6 M-2).
+ *
+ * `fields` holds functions (`build`/`read`) and so never crosses to a client component: the page hands the client the
+ * serialisable rest, and the block rebuilds the same list from `sportKey`/`stageKind`/`variant` (`matchFieldsFor`).
+ * `dict` is the PUBLIC dictionary in the reader's language, for the stage's line in words.
+ */
+export interface FixtureMatchRules {
+  readonly sportKey: string;
+  readonly stageKind: StageKind | null;
+  readonly variant: string | null;
+  readonly stageLine: string;
+  readonly override: Record<string, unknown> | null;
+  readonly stageResolved: Record<string, unknown>;
+  readonly effective: Record<string, unknown>;
+  /** The format the match plays (or played) in words: the describer over `effective`, so the frozen snapshot once it has
+   *  started. The block states it whenever the match carries its own override (review I2: a finished match with an override
+   *  used to show a chip and the STAGE's format, never the one it was played under). */
+  readonly effectiveLine: string;
+  readonly fields: readonly RuleField[];
+  readonly state: MatchRulesState;
+  /** Status `cancelled` (the lock sentence says so; `state` is `locked` for it and for `finalized` alike). */
+  readonly cancelled: boolean;
+}
+
+const isCfgObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+
+/** A cfg through the sport's schema (defaults in), else as it stands; never a non-object. */
+function parsedCfg(m: AnySportModule, cfg: unknown): Record<string, unknown> {
+  const parsed = m.configSchema.safeParse(cfg);
+  const out = parsed.success ? parsed.data : cfg;
+  return isCfgObject(out) ? out : {};
+}
+
+export async function loadFixtureMatchRules(auth: AuthCtx, fixtureId: string, dict: Dict): Promise<FixtureMatchRules> {
+  return withTenant(auth.orgId, async (tx) => {
+    const [row] = await tx<
+      {
+        status: string;
+        outcome: MatchOutcome | null;
+        config_snapshot: unknown;
+        rules_override: unknown;
+        division_config: unknown;
+        sport_key: string;
+        module_version: string;
+        variant_key: string | null;
+        stage_config: Record<string, unknown> | null;
+        stage_kind: string | null;
+      }[]
+    >`
+      select f.status, f.outcome, f.config_snapshot, f.rules_override, d.config as division_config, d.sport_key, d.module_version,
+             d.variant_key, s.config as stage_config, s.kind as stage_kind
+        from fixtures f
+        join divisions d on d.id = f.division_id
+        left join stages s on s.id = f.stage_id
+       where f.id = ${fixtureId}`;
+    // `withTenant` scopes the read to this org: another tenant's fixture is indistinguishable from a missing one.
+    if (!row) throw new HttpError(404, "fixture not found");
+    const sportModule = resolveModule(row.sport_key, row.module_version);
+    const stage = { kind: row.stage_kind, config: row.stage_config };
+    const stageKind = row.stage_kind as StageKind | null;
+    const stageRaw = liveCfg(row.division_config, stage, sportModule);
+    const stageResolved = parsedCfg(sportModule, stageRaw);
+    const effective = parsedCfg(sportModule, resolveFixtureCfg(row, row.division_config, stage, sportModule));
+    const standing = LOCKED_FIXTURE_STATUSES.has(row.status) ? null : await formatStanding(tx, fixtureId);
+    const award = standing?.decidedWithoutPlay && isScoredAward(row.outcome) ? await awardRefitVerdict(tx, fixtureId) : null;
+    return {
+      sportKey: row.sport_key,
+      stageKind,
+      variant: row.variant_key,
+      stageLine: formatLineOf(row.sport_key, sportModule, stageRaw, row.stage_kind, row.division_config, dict) ?? "",
+      override: isCfgObject(row.rules_override) ? row.rules_override : null,
+      stageResolved,
+      effective,
+      effectiveLine: formatLineOf(row.sport_key, sportModule, effective, row.stage_kind, row.division_config, dict) ?? "",
+      fields: matchFieldsFor({ module: sportModule, stageKind, variant: row.variant_key }),
+      state: matchRulesState(row.outcome, standing, award),
+      cancelled: row.status === "cancelled",
+    };
   });
 }
 
@@ -174,7 +342,12 @@ export async function listDivisionFixtures(auth: AuthCtx, divisionId: string): P
              f.ext_key, f.lane, f.is_final, f.third_place, f.conditional,
              f.winner_to_fixture, f.winner_to_slot, f.loser_to_fixture, f.loser_to_slot,
              ${hasActiveAbandonSql(tx, "f", { expunge: true })} as expunged,
-             ${activeAbandonReasonSql(tx, "f")} as abandon_reason
+             ${activeAbandonReasonSql(tx, "f")} as abandon_reason,
+             ${hasActiveAbandonSql(tx, "f")} as has_active_abandon,
+             -- Rebase ruling D3: that abandon is the organiser's online No result (the settle; the line is not held).
+             ${hasActiveAbandonSql(tx, "f", { noResult: true })} as no_result,
+             -- W2c Task 19 (S4): the match plays a format of its own (the run sheet's "Format changed" chip).
+             f.rules_override is not null as format_changed
       from fixtures f
       left join venues ven on ven.id = f.venue_id
       where f.division_id = ${divisionId}

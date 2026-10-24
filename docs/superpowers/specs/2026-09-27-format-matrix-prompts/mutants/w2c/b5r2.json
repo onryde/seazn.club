@@ -1,0 +1,143 @@
+[
+ {
+  "id": "b5r2-q5-filter-old",
+  "file": "apps/web/src/server/engine-db/rules-version.ts",
+  "find": "       and not (coalesce(f.outcome->>'reason', '') = 'bye'\n                and not exists (select 1 from fixtures g where g.winner_to_fixture = f.id or g.loser_to_fixture = f.id))`;",
+  "replace": "       and (f.outcome is null or exists (select 1 from score_events e where e.fixture_id = f.id))`;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-version-prekickoff.test.ts"
+    ],
+    "name": "the re-review's probe"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-version-prekickoff.test.ts"
+    ],
+    "name": "a points-map save while the match is decided without play"
+   }
+  ]
+ },
+ {
+  "id": "b5r2-q5-filter-reason-only",
+  "file": "apps/web/src/server/engine-db/rules-version.ts",
+  "find": "       and not (coalesce(f.outcome->>'reason', '') = 'bye'\n                and not exists (select 1 from fixtures g where g.winner_to_fixture = f.id or g.loser_to_fixture = f.id))`;",
+  "replace": "       and coalesce(f.outcome->>'reason', '') <> 'bye'`;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-version-prekickoff.test.ts"
+    ],
+    "name": "the re-review's probe"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-version-prekickoff.test.ts"
+    ],
+    "name": "a points-map save while the match is decided without play"
+   }
+  ]
+ },
+ {
+  "id": "b5r2-q5-filter-none",
+  "file": "apps/web/src/server/engine-db/rules-version.ts",
+  "find": "       and not (coalesce(f.outcome->>'reason', '') = 'bye'\n                and not exists (select 1 from fixtures g where g.winner_to_fixture = f.id or g.loser_to_fixture = f.id))`;",
+  "replace": "       and true`;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-version-prekickoff.test.ts"
+    ],
+    "name": "after a bye"
+   }
+  ]
+ },
+ {
+  "id": "b5r2-q5-winner-edge-dropped",
+  "file": "apps/web/src/server/engine-db/rules-version.ts",
+  "find": "g.winner_to_fixture = f.id or g.loser_to_fixture = f.id",
+  "replace": "g.loser_to_fixture = f.id",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-version-prekickoff.test.ts"
+    ],
+    "name": "the re-review's probe"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-version-prekickoff.test.ts"
+    ],
+    "name": "a points-map save while the match is decided without play"
+   }
+  ]
+ },
+ {
+  "id": "b5r2-q5-loser-edge-dropped",
+  "file": "apps/web/src/server/engine-db/rules-version.ts",
+  "find": "g.winner_to_fixture = f.id or g.loser_to_fixture = f.id",
+  "replace": "g.winner_to_fixture = f.id",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-version-prekickoff.test.ts"
+    ],
+    "name": "badminton third place, a bye fed by LOSER edges only"
+   }
+  ]
+ },
+ {
+  "id": "b5r2-n1-no-catch",
+  "file": "apps/web/src/server/usecases/scoring.ts",
+  "find": "await rulesVersionNow(auth.orgId, fixtureId).catch(() => null);",
+  "replace": "await rulesVersionNow(auth.orgId, fixtureId);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/scoring-replay-is-free.test.ts"
+    ],
+    "name": "a rejected version read returns the cached answer unchanged"
+   }
+  ]
+ },
+ {
+  "id": "b5r2-n2-409-baseline-match-cfg",
+  "file": "apps/web/src/server/engine-db/append-event.ts",
+  "find": "      stage?.kind,\n      division.config,\n      await getDictionary(\"en\", \"public\"),",
+  "replace": "      stage?.kind,\n      resolveFixtureCfg(fixture, division.config, stage, sportModule),\n      await getDictionary(\"en\", \"public\"),",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-line-parity.test.ts"
+    ],
+    "name": "the abandon policy rides the line when the stage CHANGED it from the division's"
+   }
+  ]
+ },
+ {
+  "id": "b5r2-n4-409-format-null",
+  "file": "apps/web/src/server/engine-db/append-event.ts",
+  "find": "{ rules_version: fixture.rules_version, format },",
+  "replace": "{ rules_version: fixture.rules_version, format: null },",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-version-prekickoff.test.ts"
+    ],
+    "name": "the pad's first tap under the version it loaded is refused"
+   }
+  ]
+ }
+]

@@ -6,6 +6,7 @@
         "default": "replay",
         "enum": [
           "award",
+          "q4_stands",
           "replay"
         ],
         "type": "string"

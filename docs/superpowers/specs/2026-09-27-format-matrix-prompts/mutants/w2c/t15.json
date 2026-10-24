@@ -1,0 +1,711 @@
+[
+ {
+  "id": "t15-stale-never-refused",
+  "file": "apps/web/src/server/engine-db/append-event.ts",
+  "find": "if (input.rulesVersion !== undefined && input.rulesVersion !== fixture.rules_version) {",
+  "replace": "if (false) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/rules-version.test.ts"
+    ],
+    "name": "after a correction: a stale version is refused FIXTURE_RULES_CHANGED"
+   }
+  ]
+ },
+ {
+  "id": "t15-only-when-sent",
+  "file": "apps/web/src/server/engine-db/append-event.ts",
+  "find": "input.rulesVersion !== undefined && input.rulesVersion !== fixture.rules_version",
+  "replace": "input.rulesVersion !== fixture.rules_version",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/rules-version.test.ts"
+    ],
+    "name": "an append WITHOUT the field is never checked"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-version-writers.test.ts"
+    ],
+    "name": "X-SR-7 C2"
+   }
+  ]
+ },
+ {
+  "id": "t15-older-only",
+  "file": "apps/web/src/server/engine-db/append-event.ts",
+  "find": "input.rulesVersion !== fixture.rules_version) {",
+  "replace": "input.rulesVersion < fixture.rules_version) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/rules-version.test.ts"
+    ],
+    "name": "a version from the future is refused too"
+   }
+  ]
+ },
+ {
+  "id": "t15-refusal-format-dropped",
+  "file": "apps/web/src/server/engine-db/append-event.ts",
+  "find": "{ rules_version: fixture.rules_version, format },",
+  "replace": "{ rules_version: fixture.rules_version },",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/rules-version.test.ts"
+    ],
+    "name": "after a correction: a stale version is refused FIXTURE_RULES_CHANGED"
+   }
+  ]
+ },
+ {
+  "id": "t15-refusal-kind-dropped",
+  "file": "apps/web/src/server/engine-db/append-event.ts",
+  "find": "      resolveFixtureCfg(fixture, division.config, stage, sportModule),\n      stage?.kind,",
+  "replace": "      resolveFixtureCfg(fixture, division.config, stage && { kind: null, config: stage.config }, sportModule),\n      stage?.kind,",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/bracket-overlay-callers.test.ts"
+    ],
+    "name": "append-event\\.ts appendEvent: the X-SR-7 refusal names the format the match plays now"
+   }
+  ]
+ },
+ {
+  "id": "t15-append-version-zero",
+  "file": "apps/web/src/server/engine-db/append-event.ts",
+  "find": "      rulesVersion: fixture.rules_version,",
+  "replace": "      rulesVersion: 0,",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/rules-version.test.ts"
+    ],
+    "name": "an append WITHOUT the field is never checked"
+   }
+  ]
+ },
+ {
+  "id": "t15-append-s-lock-dropped",
+  "file": "apps/web/src/server/engine-db/append-event.ts",
+  "find": "    await tx`select pg_advisory_xact_lock_shared(hashtext(${\"division-config:\" + fixture.division_id}))`;\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-config-lock.test.ts"
+    ],
+    "name": "I-1, the append side \\(SHARED\\)"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-config-lock.test.ts"
+    ],
+    "name": "I-1, the save side \\(EXCLUSIVE\\)"
+   }
+  ]
+ },
+ {
+  "id": "t15-append-lock-every-append",
+  "file": "apps/web/src/server/engine-db/append-event.ts",
+  "find": "  if (!hasFrozenCfg(fixture.config_snapshot)) {\n    await tx`select pg_advisory_xact_lock_shared",
+  "replace": "  if (true) {\n    await tx`select pg_advisory_xact_lock_shared",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-config-lock.test.ts"
+    ],
+    "name": "the other direction: a STARTED match's append never waits"
+   }
+  ]
+ },
+ {
+  "id": "t15-append-lock-exclusive",
+  "file": "apps/web/src/server/engine-db/append-event.ts",
+  "find": "pg_advisory_xact_lock_shared(hashtext(${\"division-config:\" + fixture.division_id}))",
+  "replace": "pg_advisory_xact_lock(hashtext(${\"division-config:\" + fixture.division_id}))",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-config-lock.test.ts"
+    ],
+    "name": "two first events never wait on each other"
+   }
+  ]
+ },
+ {
+  "id": "t15-replay-version-then",
+  "file": "apps/web/src/server/engine-db/replay.ts",
+  "find": "select e.id, e.seq, e.type, f.rules_version from score_events e",
+  "replace": "select e.id, e.seq, e.type, 0 as rules_version from score_events e",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/rules-version.test.ts"
+    ],
+    "name": "an idempotent retry of a tap the ledger recorded BEFORE the correction"
+   }
+  ]
+ },
+ {
+  "id": "t15-refusal-not-a-replay",
+  "file": "apps/web/src/server/usecases/scoring.ts",
+  "find": "        (err instanceof HttpError && err.code === \"FIXTURE_RULES_CHANGED\") ||\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/rules-version.test.ts"
+    ],
+    "name": "an idempotent retry of a tap the ledger recorded BEFORE the correction"
+   }
+  ]
+ },
+ {
+  "id": "t15-version-not-passed",
+  "file": "apps/web/src/server/usecases/scoring.ts",
+  "find": "      ...(input.rules_version !== undefined ? { rulesVersion: input.rules_version } : {}),\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/rules-version.test.ts"
+    ],
+    "name": "after a correction: a stale version is refused FIXTURE_RULES_CHANGED"
+   }
+  ]
+ },
+ {
+  "id": "t15-outcome-version-zero",
+  "file": "apps/web/src/server/usecases/scoring.ts",
+  "find": "    rules_version: result.rulesVersion,",
+  "replace": "    rules_version: 0,",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/rules-version.test.ts"
+    ],
+    "name": "an append WITHOUT the field is never checked"
+   }
+  ]
+ },
+ {
+  "id": "t15-idem-prefix-v2",
+  "file": "apps/web/src/server/usecases/scoring.ts",
+  "find": "`idemv3:${fixtureId}:${key}`",
+  "replace": "`idemv2:${fixtureId}:${key}`",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/scoring-idem-cache-version.test.ts"
+    ],
+    "name": "a retry past a deploy misses the old-prefix entry"
+   }
+  ]
+ },
+ {
+  "id": "t15-award-s-lock-dropped",
+  "file": "apps/web/src/server/usecases/scoring.ts",
+  "find": "      await tx`select pg_advisory_xact_lock_shared(hashtext(${\"division-config:\" + fixture.division_id}))`;\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-config-lock.test.ts"
+    ],
+    "name": "the deciding append parks its award behind a save holding the lock"
+   }
+  ]
+ },
+ {
+  "id": "t15-patch-x-lock-dropped",
+  "file": "apps/web/src/server/usecases/divisions.ts",
+  "find": "    if (formatEdit) {\n      await tx`select pg_advisory_xact_lock(hashtext(${\"division-config:\" + id}))`;\n    }\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-config-lock.test.ts"
+    ],
+    "name": "I-1, the save side \\(EXCLUSIVE\\)"
+   }
+  ]
+ },
+ {
+  "id": "t15-patch-x-lock-shared",
+  "file": "apps/web/src/server/usecases/divisions.ts",
+  "find": "pg_advisory_xact_lock(hashtext(${\"division-config:\" + id}))",
+  "replace": "pg_advisory_xact_lock_shared(hashtext(${\"division-config:\" + id}))",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-config-lock.test.ts"
+    ],
+    "name": "I-1, the save side \\(EXCLUSIVE\\)"
+   }
+  ]
+ },
+ {
+  "id": "t15-stage-x-lock-dropped",
+  "file": "apps/web/src/server/usecases/stage-rules.ts",
+  "find": "    await tx`select pg_advisory_xact_lock(hashtext(${\"division-config:\" + first.division_id}))`;\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-config-lock.test.ts"
+    ],
+    "name": "batch-1, the stage save \\(EXCLUSIVE\\)"
+   }
+  ]
+ },
+ {
+  "id": "t15-pad-cfg-version-zero",
+  "file": "apps/web/src/server/usecases/fixtures.ts",
+  "find": "rulesVersion: row.rules_version,",
+  "replace": "rulesVersion: 0,",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/rules-version.test.ts"
+    ],
+    "name": "after a correction: a stale version is refused FIXTURE_RULES_CHANGED"
+   }
+  ]
+ },
+ {
+  "id": "t15-get-rules-version-zero",
+  "file": "apps/web/src/server/usecases/fixtures.ts",
+  "find": "return { cfg, rules_version: rulesVersion, format_line:",
+  "replace": "return { cfg, rules_version: 0, format_line:",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/rules-version.test.ts"
+    ],
+    "name": "before and after a correction: the cfg the fold uses, the version, and the format line"
+   }
+  ]
+ },
+ {
+  "id": "t15-status-not-409",
+  "file": "apps/web/src/lib/rule-errors.ts",
+  "find": "  FIXTURE_RULES_CHANGED: 409,",
+  "replace": "  FIXTURE_RULES_CHANGED: 400,",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-locks.test.ts"
+    ],
+    "name": "declares exactly the ten codes"
+   }
+  ]
+ },
+ {
+  "id": "t15-no-line-sentence-lost",
+  "file": "apps/web/src/lib/rule-errors.ts",
+  "find": "      return p.format !== undefined\n",
+  "replace": "      return true\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/rule-errors-copy.test.ts"
+    ],
+    "name": "each code, with the extra its emitter sends"
+   }
+  ]
+ },
+ {
+  "id": "t15-pad-copy-dropped",
+  "file": "apps/web/src/components/v2/scorepad/refusal-copy.ts",
+  "find": "  FIXTURE_RULES_CHANGED: \"scorepad.refusal.rulesChanged\",\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/__tests__/refusal-copy.test.ts"
+    ],
+    "name": "gives every terminal conflict refusal"
+   }
+  ]
+ },
+ {
+  "id": "t15-transport-sender",
+  "file": "apps/web/src/components/v2/scorepad/pipeline.ts",
+  "find": "    ...(event.rulesVersion !== undefined ? { rules_version: event.rulesVersion } : {}),\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/__tests__/rules-version-transport.test.ts"
+    ],
+    "name": "carries the rules_version: a remote pad loaded at version 3 sends 3"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/events-post-sites.test.ts"
+    ],
+    "name": "the built body carries the version"
+   }
+  ]
+ },
+ {
+  "id": "t15-scan-pad",
+  "file": "apps/web/src/components/v2/device-score-pad.tsx",
+  "find": "                rules_version: rulesVersion,\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/events-post-sites.test.ts"
+    ],
+    "name": "a pad site sends rules_version within its request body"
+   }
+  ]
+ },
+ {
+  "id": "t15-terminal-code",
+  "file": "apps/web/src/components/v2/scorepad/transport.ts",
+  "find": "  \"FIXTURE_RULES_CHANGED\",\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/__tests__/rules-version-transport.test.ts"
+    ],
+    "name": "FIXTURE_RULES_CHANGED is a refusal \\(never a renegotiable conflict\\)"
+   }
+  ]
+ },
+ {
+  "id": "t15-refusal-version-dropped",
+  "file": "apps/web/src/components/v2/scorepad/transport.ts",
+  "find": "            ...(version !== undefined ? { rulesVersion: version } : {}),\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/__tests__/rules-version-transport.test.ts"
+    ],
+    "name": "FIXTURE_RULES_CHANGED is a refusal \\(never a renegotiable conflict\\), carrying the server's version"
+   }
+  ]
+ },
+ {
+  "id": "t15-submit-not-captured",
+  "file": "apps/web/src/components/v2/scorepad/use-pad-pipeline.ts",
+  "find": "captured NOW and never re-stamped.\n          ...(rulesVersion === undefined ? {} : { rulesVersion }),\n",
+  "replace": "captured NOW and never re-stamped.\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/__tests__/rules-version-transport.test.ts"
+    ],
+    "name": "X-SR-7 the remote pad's tap carries the rules version"
+   }
+  ]
+ },
+ {
+  "id": "t15-held-not-captured",
+  "file": "apps/web/src/components/v2/scorepad/use-pad-pipeline.ts",
+  "find": "captured NOW.\n          ...(rulesVersion === undefined ? {} : { rulesVersion }),\n",
+  "replace": "captured NOW.\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/__tests__/rules-version-transport.test.ts"
+    ],
+    "name": "a HELD tap"
+   }
+  ]
+ },
+ {
+  "id": "t15-no-reload-on-refusal",
+  "file": "apps/web/src/components/v2/scorepad/use-pad-pipeline.ts",
+  "find": "if (outcome.code === \"FIXTURE_RULES_CHANGED\") void reloadRules(outcome.rulesVersion);",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/__tests__/rules-version-transport.test.ts"
+    ],
+    "name": "on the refusal: the tap is dropped, the rules reloaded"
+   }
+  ]
+ },
+ {
+  "id": "t15-no-reload-on-ack",
+  "file": "apps/web/src/components/v2/scorepad/use-pad-pipeline.ts",
+  "find": "if (ackVersion !== undefined && known !== undefined && ackVersion > known) void reloadRules(ackVersion);",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/__tests__/rules-version-transport.test.ts"
+    ],
+    "name": "an ack naming a newer version"
+   }
+  ]
+ },
+ {
+  "id": "t15-reload-not-deduped",
+  "file": "apps/web/src/components/v2/scorepad/use-pad-pipeline.ts",
+  "find": "        if (inFlight !== null) return atLeast === undefined || waited ? inFlight : inFlight.then(() => attempt(true));\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/__tests__/rules-version-transport.test.ts"
+    ],
+    "name": "two stale taps refused while the reload is in flight cost ONE reload"
+   }
+  ]
+ },
+ {
+  "id": "t15-reload-always-wins",
+  "file": "apps/web/src/components/v2/scorepad/use-pad-pipeline.ts",
+  "find": "reloadedRules !== null && loadedRulesVersion !== undefined && reloadedRules.rulesVersion > loadedRulesVersion;",
+  "replace": "reloadedRules !== null;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/__tests__/rules-version-transport.test.ts"
+    ],
+    "name": "the page's own reload wins"
+   }
+  ]
+ },
+ {
+  "id": "t15fr1-division-save-no-bump",
+  "file": "apps/web/src/server/usecases/divisions.ts",
+  "find": "    if (rulesBefore !== undefined) await bumpMovedRules(tx, rulesBefore);\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-version-prekickoff.test.ts"
+    ],
+    "name": "patchDivision"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-version-prekickoff.test.ts"
+    ],
+    "name": "another sport"
+   }
+  ]
+ },
+ {
+  "id": "t15fr1-stage-save-no-bump",
+  "file": "apps/web/src/server/usecases/stage-rules.ts",
+  "find": "    if (rulesBefore !== null) await bumpMovedRules(tx, rulesBefore);\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-version-prekickoff.test.ts"
+    ],
+    "name": "putStageRules"
+   }
+  ]
+ },
+ {
+  "id": "t15fr1-override-unstarted-no-bump",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "if (canonicalJson(cfg) !== canonicalJson(liveNow)) version = await bumpRulesVersion(tx, id);",
+  "replace": "if (false) version = await bumpRulesVersion(tx, id);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-version-prekickoff.test.ts"
+    ],
+    "name": "writeFixture"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-version-prekickoff.test.ts"
+    ],
+    "name": "legacy"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "an UNSTARTED write bumps the version once"
+   }
+  ]
+ },
+ {
+  "id": "t15fr1-override-bumps-unmoved",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "if (canonicalJson(cfg) !== canonicalJson(liveNow)) version = await bumpRulesVersion(tx, id);",
+  "replace": "version = await bumpRulesVersion(tx, id);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "an UNSTARTED write bumps the version once"
+   }
+  ]
+ },
+ {
+  "id": "t15fr1-bump-every-unfrozen",
+  "file": "apps/web/src/server/engine-db/rules-version.ts",
+  "find": "  const moved = [...before].filter(([id, cfg]) => now.get(id) !== cfg).map(([id]) => id);",
+  "replace": "  const moved = [...before.keys()];",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-version-prekickoff.test.ts"
+    ],
+    "name": "a rename, tiebreakers"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-version-prekickoff.test.ts"
+    ],
+    "name": "per match: a save leaves alone"
+   }
+  ]
+ },
+ {
+  "id": "t15fr1-departed-seat-no-s-lock",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "  if (at) await lockDivisionConfigShared(tx, at.stage_id);\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-config-lock.test.ts"
+    ],
+    "name": "a withdrawal's no-event seat write"
+   }
+  ]
+ },
+ {
+  "id": "t15fr1-release-no-s-lock",
+  "file": "apps/web/src/server/engine-db/fed-seats.ts",
+  "find": "fed waits for a format save in flight, after every fixture lock.\n  if (order.length > 0) await lockDivisionConfigShared(tx, src.stage_id);\n",
+  "replace": "fed waits for a format save in flight, after every fixture lock.\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-config-lock.test.ts"
+    ],
+    "name": "a take-back that RELEASES a seat"
+   }
+  ]
+ },
+ {
+  "id": "t15fr1-revive-no-s-lock",
+  "file": "apps/web/src/server/engine-db/fed-seats.ts",
+  "find": "a revive waits for a format save in flight, after every fixture lock.\n  if (order.length > 0) await lockDivisionConfigShared(tx, src.stage_id);\n",
+  "replace": "a revive waits for a format save in flight, after every fixture lock.\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-config-lock.test.ts"
+    ],
+    "name": "a take-back that REVIVES"
+   }
+  ]
+ },
+ {
+  "id": "t15fr1-unfrozen-takes-awards",
+  "file": "apps/web/src/server/engine-db/rules-version.ts",
+  "find": "\n       and not (coalesce(f.outcome->>'reason', '') = 'bye'\n                and not exists (select 1 from fixtures g where g.winner_to_fixture = f.id or g.loser_to_fixture = f.id))`;",
+  "replace": "`;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/rules-version-prekickoff.test.ts"
+    ],
+    "name": "after a bye"
+   }
+  ]
+ },
+ {
+  "id": "t15fr2-version-reread-dropped",
+  "file": "apps/web/src/server/engine-db/append-event.ts",
+  "find": "    const [now] = await tx<{ rules_version: number }[]>`select rules_version from fixtures where id = ${fixtureId}`;\n    fixture.rules_version = now!.rules_version;\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-config-lock.test.ts"
+    ],
+    "name": "moves its version is refused"
+   }
+  ]
+ },
+ {
+  "id": "t15fr2-version-reread-unused",
+  "file": "apps/web/src/server/engine-db/append-event.ts",
+  "find": "    fixture.rules_version = now!.rules_version;\n",
+  "replace": "    void now;\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-config-lock.test.ts"
+    ],
+    "name": "moves its version is refused"
+   }
+  ]
+ }
+]

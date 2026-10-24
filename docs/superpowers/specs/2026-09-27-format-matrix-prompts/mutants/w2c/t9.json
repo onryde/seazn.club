@@ -1,0 +1,260 @@
+[
+  {
+    "id": "t9-replace",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "      metrics.for = mine;",
+    "replace": "      metrics.for = (metrics.for ?? 0) + mine;",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/competition/points-w2c.test.ts"] }]
+  },
+  {
+    "id": "t9-played",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "  if (played) return false;\n",
+    "replace": "",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/competition/points-w2c.test.ts"] }]
+  },
+  {
+    "id": "t9-walkover",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "  if (isWalkover(outcome)) return true;\n",
+    "replace": "",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/competition/points-w2c.test.ts"] }]
+  },
+  {
+    "id": "t9-bye-no-score",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "  return outcome.kind === \"award\" && !isBye(outcome);",
+    "replace": "  return outcome.kind === \"award\";",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/competition/points-w2c.test.ts"] }]
+  },
+  {
+    "id": "t9-win-forfeit",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "  if (outcome.kind === \"win\") return outcome.method === \"forfeit\";",
+    "replace": "  if (outcome.kind === \"win\") return false;",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/competition/points-w2c.test.ts"] }]
+  },
+  {
+    "id": "t9-forfeit-shaped",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "  return outcome.kind === \"award\" || (outcome.kind === \"win\" && (outcome.method === \"walkover\" || outcome.method === \"forfeit\"));",
+    "replace": "  return outcome.kind === \"award\";",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/competition/points-w2c.test.ts"] }]
+  },
+  {
+    "id": "t9-forfeit-row-bye",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "  const forfeitRow = forfeit || isBye(outcome);",
+    "replace": "  const forfeitRow = forfeit;",
+    "killers": [
+      { "cwd": "packages/engine", "files": ["src/competition/points-w2c.test.ts"] },
+      { "cwd": "packages/engine", "files": ["src/competition/w2b-tables.test.ts"] }
+    ]
+  },
+  {
+    "id": "t9-bonus-margin-after-play",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "        if (delta.won === 1 && !forfeitRow && margin >= (b.param ?? 0)) extra += b.points;",
+    "replace": "        if (delta.won === 1 && margin >= (b.param ?? 0)) extra += b.points;",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/competition/points-w2c.test.ts"] }]
+  },
+  {
+    "id": "t9-bonus-forfeit-win-only-unplayed",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "        if (forfeitRow && delta.won === 1) extra += b.points;",
+    "replace": "        if ((forfeitRow || forfeitShaped(outcome)) && delta.won === 1) extra += b.points;",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/competition/points-w2c.test.ts"] }]
+  },
+  {
+    "id": "t9-expressible-pointsmap",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "  if (pairs.size > 1) keys.push(\"pointsMap\");",
+    "replace": "",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/competition/points-w2c.test.ts"] }]
+  },
+  {
+    "id": "t9-expressible-null-key",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "!BASE_KEYS.has(k) && pts[k] != null",
+    "replace": "!BASE_KEYS.has(k)",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/competition/points-w2c.test.ts"] }]
+  },
+  {
+    "id": "t9-qual-parity",
+    "file": "apps/web/src/server/public-site/qualification-view.ts",
+    "find": "isUnplayedForfeit(f.outcome as MatchOutcome, f.played)",
+    "replace": "true",
+    "killers": [{ "cwd": "apps/web", "files": ["src/server/public-site/__tests__/qualification-points-parity.test.ts"] }]
+  },
+  {
+    "id": "t9-qual-parity-played-flag",
+    "file": "apps/web/src/server/public-site/qualification-view.ts",
+    "find": "isUnplayedForfeit(f.outcome as MatchOutcome, f.played)",
+    "replace": "isUnplayedForfeit(f.outcome as MatchOutcome, false)",
+    "killers": [{ "cwd": "apps/web", "files": ["src/server/public-site/__tests__/qualification-points-parity.test.ts"] }]
+  },
+  {
+    "id": "t9-qual-bye-path",
+    "file": "apps/web/src/server/public-site/qualification-view.ts",
+    "find": "  if (!pointsRuleScoresForfeits(meta.pointsRule) || isOneSidedAwardBye(f)) return false;",
+    "replace": "  if (!pointsRuleScoresForfeits(meta.pointsRule)) return false;",
+    "killers": [{ "cwd": "apps/web", "files": ["src/server/public-site/__tests__/qualification-points-parity.test.ts"] }]
+  },
+  {
+    "id": "t9-qual-no-outcome",
+    "file": "apps/web/src/server/public-site/qualification-view.ts",
+    "find": "  return outcomeKind(f) !== undefined && isUnplayedForfeit(",
+    "replace": "  return isUnplayedForfeit(",
+    "killers": [{ "cwd": "apps/web", "files": ["src/server/public-site/__tests__/qualification-points-parity.test.ts"] }]
+  },
+  {
+    "id": "t9-qual-ledgerless",
+    "file": "apps/web/src/server/public-site/qualification-view.ts",
+    "find": "  if (ruleInAverage && ruleScoreReaches(f, meta)) return false;",
+    "replace": "  if (ruleInAverage) return false;",
+    "killers": [{ "cwd": "apps/web", "files": ["src/server/public-site/__tests__/qualification-view.test.ts"] }]
+  },
+  {
+    "id": "t9-qual-retired-module",
+    "file": "apps/web/src/server/public-site/division-qualification.ts",
+    "find": "    if (!i.module_ && pointsRuleScoresForfeits(stage.points_rule)) return null;\n",
+    "replace": "",
+    "killers": [{ "cwd": "apps/web", "files": ["src/server/public-site/__tests__/division-qualification.test.ts"] }]
+  },
+  {
+    "id": "t9-fr1-m2-retired-narrow",
+    "file": "apps/web/src/server/public-site/division-qualification.ts",
+    "find": "if (!i.module_ && pointsRuleScoresForfeits(stage.points_rule)) return null;",
+    "replace": "if (!i.module_) return null;",
+    "killers": [{ "cwd": "apps/web", "files": ["src/server/public-site/__tests__/division-qualification.test.ts"], "name": "only where the rule scores forfeits" }]
+  },
+  {
+    "id": "t9-fr1-i2-bye-seated",
+    "file": "apps/web/src/server/public-site/division-qualification.ts",
+    "find": "played: seated(f) ? playedFor(f, facts) : false",
+    "replace": "played: playedFor(f, facts)",
+    "killers": [{ "cwd": "apps/web", "files": ["src/server/public-site/__tests__/division-qualification.test.ts"], "name": "a one-seated award under a scoring stage rule" }]
+  },
+  {
+    "id": "t9-fr1-m1-played-real-match",
+    "file": "apps/web/src/server/public-site/qualification-view.ts",
+    "find": "  return !awardAddsToLedger && !f.played;",
+    "replace": "  return !awardAddsToLedger;",
+    "killers": [{ "cwd": "apps/web", "files": ["src/server/public-site/__tests__/qualification-view.test.ts"], "name": "after play it is the real match it was" }]
+  },
+  {
+    "id": "t9-lock-scoring",
+    "file": "apps/web/src/server/usecases/rule-locks.ts",
+    "find": "new Set([\"points\", \"pointsMap\"])",
+    "replace": "new Set([\"points\", \"pointsMap\", \"scoring\"])",
+    "killers": [{ "cwd": "apps/web", "files": ["src/server/usecases/__tests__/division-locks.test.ts"], "name": "I-2" }]
+  },
+  {
+    "id": "t9-fold-played-seam",
+    "file": "apps/web/src/server/engine-db/competition.ts",
+    "find": "playedFor(f, playedFacts)",
+    "replace": "false",
+    "killers": [{ "cwd": "apps/web", "files": ["src/server/engine-db/__tests__/w2b-status.test.ts"], "name": "X-PT-1 stage points read" }]
+  },
+  {
+    "id": "t9-facts-voids",
+    "file": "apps/web/src/server/engine-db/forfeit-played.ts",
+    "find": "voids_event_id as voids",
+    "replace": "null as voids",
+    "killers": [
+      { "cwd": "apps/web", "files": ["src/server/engine-db/__tests__/forfeit-played.test.ts"] },
+      { "cwd": "apps/web", "files": ["src/server/engine-db/__tests__/w2b-status.test.ts"], "name": "X-PT-1 stage points read" }
+    ]
+  },
+  {
+    "id": "t9-facts-empty-no-query",
+    "file": "apps/web/src/server/engine-db/forfeit-played.ts",
+    "find": "  if (ids.length === 0) return out;\n",
+    "replace": "",
+    "killers": [{ "cwd": "apps/web", "files": ["src/server/engine-db/__tests__/forfeit-played.test.ts"] }]
+  },
+  {
+    "id": "t9-played-for-unread-refused",
+    "file": "apps/web/src/server/engine-db/forfeit-played.ts",
+    "find": "  if (played === undefined) {",
+    "replace": "  if (played === undefined) return false;\n  if (played === null) {",
+    "killers": [{ "cwd": "apps/web", "files": ["src/server/engine-db/__tests__/forfeit-played.test.ts"] }]
+  },
+  {
+    "id": "t9-played-for-not-asked",
+    "file": "apps/web/src/server/engine-db/forfeit-played.ts",
+    "find": "  if (!asksPlayed(f.outcome)) return false;\n",
+    "replace": "",
+    "killers": [{ "cwd": "apps/web", "files": ["src/server/engine-db/__tests__/forfeit-played.test.ts"] }]
+  },
+  {
+    "id": "t9-gapa-assign-own-keys",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "      if (scoreKeys !== undefined) {\n        metrics[scoreKeys.for] = mine;\n        metrics[scoreKeys.against] = theirs;\n        metrics[scoreKeys.diff] = mine - theirs;\n      }\n",
+    "replace": "",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/competition/points-w2c.test.ts"], "name": "gd \\+5 on the table" }]
+  },
+  {
+    "id": "t9-gapa-assign-diff-key",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "        metrics[scoreKeys.diff] = mine - theirs;\n",
+    "replace": "",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/competition/points-w2c.test.ts"], "name": "pointsRuleAwardReachesTable" }]
+  },
+  {
+    "id": "t9-gapa-football-decl",
+    "file": "packages/engine/src/sports/football/football.ts",
+    "find": "  awardScoreKeys: { for: \"gf\", against: \"ga\", diff: \"gd\" },\n",
+    "replace": "",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/competition/points-w2c.test.ts"], "name": "declares exactly the score triple" }]
+  },
+  {
+    "id": "t9-gapa-period-decl",
+    "file": "packages/engine/src/sports/period/kernel.ts",
+    "find": "    awardScoreKeys: { for: \"gf\", against: \"ga\", diff: \"gd\" },\n",
+    "replace": "",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/competition/points-w2c.test.ts"], "name": "declares exactly the score triple" }]
+  },
+  {
+    "id": "t9-gapa-generic-decl",
+    "file": "packages/engine/src/sports/generic/generic.ts",
+    "find": "  awardScoreKeys: { for: \"for\", against: \"against\", diff: \"diff\" },\n",
+    "replace": "",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/competition/points-w2c.test.ts"], "name": "declares exactly the score triple" }]
+  },
+  {
+    "id": "t9-gapa-reaches-always",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "  return module_.awardScoreKeys !== undefined;",
+    "replace": "  return true;",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/competition/points-w2c.test.ts"], "name": "pointsRuleAwardReachesTable" }]
+  },
+  {
+    "id": "t9-gapa-fold-seam",
+    "file": "apps/web/src/server/engine-db/competition.ts",
+    "find": "playedFor(f, playedFacts), sportModule.awardScoreKeys)",
+    "replace": "playedFor(f, playedFacts), undefined)",
+    "killers": [{ "cwd": "apps/web", "files": ["src/server/engine-db/__tests__/w2b-status.test.ts"], "name": "gap \\(a\\): football under a stage rule" }]
+  },
+  {
+    "id": "t9-fr1-lock-awardscore-after-play",
+    "file": "apps/web/src/server/usecases/rule-locks.ts",
+    "find": "new Set([\"points\", \"pointsMap\"])",
+    "replace": "new Set([\"points\", \"pointsMap\", \"awardScore\"])",
+    "killers": [{ "cwd": "apps/web", "files": ["src/server/usecases/__tests__/division-locks.test.ts"], "name": "carries its own forfeit award score" }]
+  },
+  {
+    "id": "t9-fr2-zero-award-scores",
+    "file": "apps/web/src/server/public-site/qualification-view.ts",
+    "find": "  return parsed.success && parsed.data.forfeit?.awardScore !== undefined;\n",
+    "replace": "  const score = parsed.success ? parsed.data.forfeit?.awardScore : undefined;\n  return score !== undefined && (score[0] !== 0 || score[1] !== 0);\n",
+    "killers": [{ "cwd": "apps/web", "files": ["src/server/public-site/__tests__/qualification-points-parity.test.ts"], "name": "a rule awarding 0" }]
+  },
+  {
+    "id": "t9-fr2-guard-goal-floor",
+    "file": "packages/engine/src/sports/football/football.ts",
+    "find": "  awardScore: z.object({ goals: z.number().int().positive() }).default({ goals: 3 }),\n",
+    "replace": "  awardScore: z.object({ goals: z.number().int().nonnegative() }).default({ goals: 3 }),\n",
+    "killers": [{ "cwd": "apps/web", "files": ["src/server/public-site/__tests__/qualification-points-parity.test.ts"], "name": "guard for" }]
+  }
+]

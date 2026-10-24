@@ -87,6 +87,9 @@ const VALIDATES_BEFORE_AUTH = [
   "PATCH /entrants/:id",
   "PATCH /fixtures/:id",
   "PUT /fixtures/:id/stream",
+  // W2c Task 14: the route parses `PutFixtureRules` (a required `rules`) before `requireResourceAuth`, so an empty body
+  // answers 400 first (confirmed by this sweep at the 2026-10-23 rebase onto #1006's fail-closed list).
+  "PUT /fixtures/:id/rules",
   "POST /fixtures/:id/events",
   "POST /fixtures/:id/finalize",
   "PUT /fixtures/:id/lineups/:entrantId",

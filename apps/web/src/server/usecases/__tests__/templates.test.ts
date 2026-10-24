@@ -4,6 +4,8 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { builtinModules } from "@seazn/engine/sports";
+import { stageDefaultsFor } from "@seazn/engine/sport";
+import { pointsRuleAwardReachesTable } from "@seazn/engine/competition";
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { captureServer } from "@/lib/posthog-server";
@@ -196,7 +198,9 @@ describe.skipIf(!HAS_DB)("createFromTemplate (D1a, P4)", () => {
   it("a stage's PointsRule is written into stages.config.points verbatim", async () => {
     await seedTemplateSportCatalog();
     const { auth } = await seedOrg("pro");
+    // A TABLE stage: since W2c Task 13 a bracket stage's points are refused at every door (it ranks no table).
     const template = SLAM_STAGE_TEMPLATE({
+      kind: "league",
       points: { base: { win: 3, draw: 1, loss: 0 }, bonuses: [] },
     });
     const result = await instantiateTemplate(auth, template, {
@@ -206,6 +210,41 @@ describe.skipIf(!HAS_DB)("createFromTemplate (D1a, P4)", () => {
     const [stage] = await sql<{ config: { points?: { base?: { win?: number } } } }[]>`
       select config from stages where id = ${result.divisions[0]!.stages[0]!.id}`;
     expect(stage!.config.points?.base?.win).toBe(3);
+  });
+
+  it("the template door asks a stage's points the stage PUT's questions (W2c Task 13): a bracket stage's points and an unreached walkover score are refused, writing nothing", async () => {
+    await seedTemplateSportCatalog();
+    const { auth } = await seedOrg("pro");
+    const before = await competitionCount(auth.orgId);
+    // SLAM_STAGE_TEMPLATE's own stage is a KNOCKOUT: it ranks no table, so it takes no points.
+    await expect(
+      instantiateTemplate(auth, SLAM_STAGE_TEMPLATE({ points: { base: { win: 3, draw: 1, loss: 0 }, bonuses: [] } }), {
+        name: `KO points ${randomUUID().slice(0, 6)}`,
+        ends_on: "2030-12-31",
+      }),
+    ).rejects.toMatchObject({
+      status: 422,
+      code: TEMPLATE_INSTANTIATION_FAILED_CODE,
+      extra: { divisionIndex: 0, stageIndex: 0, cause: expect.stringContaining("points") },
+    });
+    // Tennis is a set sport: a walkover's score never reaches its table (pointsRuleAwardReachesTable is false).
+    const tennis = builtinModules.find((m) => m.key === "tennis")!;
+    expect(pointsRuleAwardReachesTable(tennis), "premise: tennis's table never reads a walkover score").toBe(false);
+    await expect(
+      instantiateTemplate(
+        auth,
+        SLAM_STAGE_TEMPLATE({
+          kind: "league",
+          points: { base: { win: 3, draw: 1, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [3, 0] } },
+        }),
+        { name: `Award ${randomUUID().slice(0, 6)}`, ends_on: "2030-12-31" },
+      ),
+    ).rejects.toMatchObject({
+      status: 422,
+      code: TEMPLATE_INSTANTIATION_FAILED_CODE,
+      extra: { stageIndex: 0, cause: expect.stringContaining("points.forfeit.awardScore") },
+    });
+    expect(await competitionCount(auth.orgId), "both refusals rolled the competition back").toBe(before);
   });
 
   it("unknown template key is refused 404 TEMPLATE_UNKNOWN_KEY", async () => {
@@ -758,5 +797,63 @@ describe.skipIf(!HAS_DB)("createFromTemplate — seeding persistence (P7/D1b T3)
     const [{ n: orphanCompetitions }] = await sql<{ n: number }[]>`
       select count(*)::int as n from competitions where org_id = ${auth.orgId} and name = ${name}`;
     expect(orphanCompetitions).toBe(0);
+  });
+});
+
+// W2c Task 12 (X-SR-6; D2a's third door on `createStages`' terms) — a template stage is created with its kind's preset
+// match rules, and a `rules` key a template stage declares is validated against the division exactly as the stage PUT
+// validates a save. Expected presets from the engine (`stageDefaultsFor`), never from the code under test.
+describe.skipIf(!HAS_DB)("createFromTemplate — template stage rules (W2c Task 12)", () => {
+  const football = builtinModules.find((m) => m.key === "football")!;
+
+  it("X-SR-6 wc32's stages are created with football's presets: the group stage none, every bracket stage its own (counted)", async () => {
+    await seedTemplateSportCatalog();
+    const { auth } = await seedOrg("pro");
+    const template = getTemplate("wc32")!;
+    const division = template.divisions[0]!;
+    expect(division.sportKey, "the premise: wc32 is football").toBe("football");
+    const wc32 = await createFromTemplate(auth, { template_key: "wc32", name: `wc32 ${randomUUID().slice(0, 6)}`, ends_on: "2030-12-31", visibility: "private" });
+    let bracket = 0;
+    for (const [i, st] of wc32.divisions[0]!.stages.entries()) {
+      const kind = division.stages[i]!.kind;
+      const expected = stageDefaultsFor(football, kind, division.variantKey);
+      const [row] = await sql<{ config: Record<string, unknown> }[]>`select config from stages where id = ${st.id}`;
+      if (Object.keys(expected).length === 0) expect(Object.hasOwn(row!.config, "rules"), `${kind}: no preset`).toBe(false);
+      else {
+        expect(row!.config.rules, kind).toEqual(expected);
+        bracket++;
+      }
+    }
+    expect(bracket, "anti-vacuity: wc32 has a bracket stage").toBeGreaterThan(0);
+  });
+
+  const footballKnockout = (rules: Record<string, unknown>): CompetitionTemplate => ({
+    key: "test-synthetic",
+    version: 1,
+    i18n: { nameKey: "templates.slam128.name", descriptionKey: "templates.slam128.desc" },
+    divisions: [
+      {
+        i18nNameKey: "templates.slam128.div.main",
+        sportKey: "football",
+        variantKey: "11-a-side",
+        entrantKind: "team",
+        entrantCount: 8,
+        stages: [{ i18nNameKey: "templates.stage.mainDraw", kind: "knockout", config: { rules } }],
+      },
+    ],
+  });
+
+  it("a declared rules key the sport never declares fails the instantiation (422, located), nothing created; a declared one lands over the preset", async () => {
+    await seedTemplateSportCatalog();
+    const { auth } = await seedOrg("pro");
+    const before = await competitionCount(auth.orgId);
+    await expect(
+      instantiateTemplate(auth, footballKnockout({ bogus: 1 }), { name: `Bogus ${randomUUID().slice(0, 6)}`, ends_on: "2030-12-31" }),
+    ).rejects.toMatchObject({ status: 422, code: TEMPLATE_INSTANTIATION_FAILED_CODE, extra: { divisionIndex: 0, stageIndex: 0 } });
+    expect(await competitionCount(auth.orgId), "rolled back whole").toBe(before);
+
+    const ok = await instantiateTemplate(auth, footballKnockout({ shootout: false }), { name: `Off ${randomUUID().slice(0, 6)}`, ends_on: "2030-12-31" });
+    const [row] = await sql<{ config: Record<string, unknown> }[]>`select config from stages where id = ${ok.divisions[0]!.stages[0]!.id}`;
+    expect(row!.config.rules).toEqual({ ...stageDefaultsFor(football, "knockout", "11-a-side"), shootout: false });
   });
 });
