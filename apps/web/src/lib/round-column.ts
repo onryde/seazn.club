@@ -4,11 +4,13 @@
 // types below are type-only and erased) - so the column, the waiting list and the entry card all read ONE answer, and a
 // client component can import it.
 //
-// The check-in window is `inExtendWindow`'s (lib/checkin-extend.ts), the one authority: opening included, deadline excluded.
-// Nothing here restates it.
+// The check-in window is the one authority of lib/checkin-extend.ts: `inExtendWindow` says whether an instant is inside it (opening
+// included, deadline excluded) and `liveExtendRefusal` says "not_open" for one still ahead of its opening. Nothing here parses an
+// edge of it itself.
 import type { ArbiterBoard, ArbiterBoardState, ArbiterRound } from "./arbiter-view.ts";
 import { boardIsOver } from "./arbiter-view.ts";
-import { inExtendWindow } from "./checkin-extend.ts";
+import type { CheckinExtendState } from "./checkin-extend.ts";
+import { inExtendWindow, liveExtendRefusal } from "./checkin-extend.ts";
 import type { OpenRoundView } from "./open-round.ts";
 import type { FlaggedBoard } from "@/server/usecases/external-play/arbiter";
 import type { NeedsOrganiserExternalPlayRow } from "@/server/usecases/external-play/queue";
@@ -32,11 +34,14 @@ export function roundColumnPhase(round: ArbiterRound | null, requested: "unavail
 
 // ---- check-in: the open-window set, the clock and the tally (§5.3) ---------------------------------------------
 
+/** A board known to have a check-in window: what `openWindowBoards` returns, so a caller reads `checkin` without a null branch. */
+export type OpenWindowBoard = ArbiterBoard & { checkin: CheckinExtendState };
+
 /** The `checking_in` boards whose window is open now (`inExtendWindow` over `board.checkin`): the tally's set AND the waiting
  *  list's (pre-flight A6), so a later group's board is "Not here yet" in neither before its window opens. Board order is kept.
  *  A board with presses left or not is in its window either way: the cap is the +5's business, not the window's. */
-export function openWindowBoards(boards: readonly ArbiterBoard[], nowMs: number): ArbiterBoard[] {
-  return boards.filter((b) => b.state.kind === "checking_in" && b.checkin !== null && inExtendWindow(b.checkin, nowMs));
+export function openWindowBoards(boards: readonly ArbiterBoard[], nowMs: number): OpenWindowBoard[] {
+  return boards.filter((b): b is OpenWindowBoard => b.state.kind === "checking_in" && b.checkin !== null && inExtendWindow(b.checkin, nowMs));
 }
 
 /** The three states of the one check-in clock:
@@ -51,11 +56,12 @@ function earliest(isos: readonly string[]): string {
 }
 
 export function checkinClock(boards: readonly ArbiterBoard[], nowMs: number): CheckinClock {
-  const closing = openWindowBoards(boards, nowMs).flatMap((b) => (b.checkin === null ? [] : [b.checkin.deadlineAt]));
+  const closing = openWindowBoards(boards, nowMs).map((b) => b.checkin.deadlineAt);
   if (closing.length > 0) return { kind: "closes", at: earliest(closing) };
-  // Nothing is open. A group is "still to come" when its opening is ahead; a group whose deadline has passed is not.
+  // Nothing is open. A group is "still to come" when the window's owner says it is not open YET (`not_open`); a group whose
+  // deadline has passed reads `closed` there, and is not.
   const coming = boards.flatMap((b) =>
-    b.state.kind === "checking_in" && b.checkin !== null && Date.parse(b.checkin.opensAt) > nowMs ? [b.checkin.opensAt] : [],
+    b.state.kind === "checking_in" && b.checkin !== null && liveExtendRefusal(b.checkin, nowMs) === "not_open" ? [b.checkin.opensAt] : [],
   );
   if (coming.length > 0) return { kind: "opens", at: earliest(coming) };
   return { kind: "closed" };
@@ -73,12 +79,8 @@ export type CheckinTally = { here: number; seats: number; playing: number; finis
 export function checkinTally(boards: readonly ArbiterBoard[], nowMs: number): CheckinTally {
   const open = openWindowBoards(boards, nowMs);
   const here = open.reduce((n, b) => n + (b.seats?.white.here ? 1 : 0) + (b.seats?.black.here ? 1 : 0), 0);
-  return {
-    here,
-    seats: open.length * 2,
-    playing: boards.filter((b) => isPlaying(b.state)).length,
-    finished: boards.filter((b) => boardIsOver(b.state)).length,
-  };
+  const { playing, finished } = playingTally(boards);
+  return { here, seats: open.length * 2, playing, finished };
 }
 
 // ---- playing (§5.5) -------------------------------------------------------------------------------------------
@@ -120,14 +122,17 @@ export function reviewTarget(fixtureId: string, round: ArbiterRound | null, card
 // ---- the Fixtures-tab entry card (§8, C7) ---------------------------------------------------------------------
 
 /** Attention and phase are separate facts (desk _RULES: "must never be collapsed into one enum"). `phase` is "checkin" when
- *  some round is open with its deadline ahead, otherwise "ready" when some view's press is "open", otherwise "default";
+ *  some round's check-in deadline is ahead, otherwise "ready" when some view's press is "open", otherwise "default";
  *  `roundNo` is the round that set the phase (null for "default"). */
 export type EntryStatus = { attention: number; phase: "default" | "checkin" | "ready"; roundNo: number | null };
 
 /** Check-in outranks ready: a league pairs every round at Generate, so a ready round exists beside a round in check-in.
- *  When several views qualify, the first in the reader's order (`listOpenRounds`: stage, then round) names the round. */
+ *  When several views qualify, the first in the reader's order (`listOpenRounds`: stage, then round) names the round.
+ *  `deadlineAt` is THE check-in rule here: the producer leaves it null until the round is opened (`open-round-view.ts:279`,
+ *  `openedAt === null` gives null; `OpenRoundView.deadlineAt` "Null before the open"), so a non-null deadline already means
+ *  "opened" and `state` is not asked a second time. */
 export function entryStatus(views: readonly OpenRoundView[], attention: number, nowMs: number): EntryStatus {
-  const checkin = views.find((v) => v.state === "open" && v.deadlineAt !== null && Date.parse(v.deadlineAt) > nowMs);
+  const checkin = views.find((v) => v.deadlineAt !== null && Date.parse(v.deadlineAt) > nowMs);
   if (checkin) return { attention, phase: "checkin", roundNo: checkin.roundNo };
   const ready = views.find((v) => v.press === "open");
   if (ready) return { attention, phase: "ready", roundNo: ready.roundNo };

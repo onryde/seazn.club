@@ -10,10 +10,11 @@ import { describe, expect, it } from "vitest";
 import type { ArbiterBoard, ArbiterBoardState, ArbiterRound, ArbiterSeatCheckin } from "../arbiter-view";
 import { boardIsOver } from "../arbiter-view";
 import type { CheckinExtendState } from "../checkin-extend";
-import { emptyExtendTally, inExtendWindow } from "../checkin-extend";
+import { emptyExtendTally, inExtendWindow, liveExtendRefusal } from "../checkin-extend";
 import type { OpenRoundView } from "../open-round";
 import type { FlaggedBoard } from "@/server/usecases/external-play/arbiter";
 import type { NeedsOrganiserExternalPlayRow } from "@/server/usecases/external-play/queue";
+import type { CheckinClock } from "../round-column";
 import {
   attentionCount,
   checkinClock,
@@ -161,16 +162,25 @@ function flagged(over: Partial<ArbiterBoard> = {}, roundNo: number | null = 2): 
 }
 
 /** Every state kind the board can be in, with the answer each tally owes it (spec §5.3 / §5.5: "playing" is `starting` +
- *  `live`; a held board is the queue's, not "playing"; "finished" is a board that is over, `boardIsOver`). */
-const STATE_TABLE: { state: ArbiterBoardState; playing: boolean; finished: boolean }[] = [
-  { state: { kind: "checking_in" }, playing: false, finished: false },
-  { state: { kind: "starting" }, playing: true, finished: false },
-  { state: { kind: "live", moveNo: 12 }, playing: true, finished: false },
-  { state: { kind: "on_hold" }, playing: false, finished: false },
-  { state: { kind: "result", score: "1-0", noResult: false }, playing: false, finished: true },
-  { state: { kind: "result", score: null, noResult: true }, playing: false, finished: true },
-  { state: { kind: "cancelled" }, playing: false, finished: true },
-];
+ *  `live`; a held board is the queue's, not "playing"; "finished" is a board that is over, `boardIsOver`). Keyed by kind
+ *  through `Record`, so a new kind in `ArbiterBoardState` is a type error here until it gets a row (and a verdict). */
+const STATE_TABLE: Record<ArbiterBoardState["kind"], { states: ArbiterBoardState[]; playing: boolean; finished: boolean }> = {
+  checking_in: { states: [{ kind: "checking_in" }], playing: false, finished: false },
+  starting: { states: [{ kind: "starting" }], playing: true, finished: false },
+  live: { states: [{ kind: "live", moveNo: 12 }], playing: true, finished: false },
+  on_hold: { states: [{ kind: "on_hold" }], playing: false, finished: false },
+  result: {
+    states: [
+      { kind: "result", score: "1-0", noResult: false },
+      { kind: "result", score: null, noResult: true },
+    ],
+    playing: false,
+    finished: true,
+  },
+  cancelled: { states: [{ kind: "cancelled" }], playing: false, finished: true },
+};
+/** One entry per state shape in the table (a kind with two shapes, like a played result and a void, appears twice). */
+const EVERY_STATE = Object.values(STATE_TABLE).flatMap((row) => row.states.map((state) => ({ state, playing: row.playing, finished: row.finished })));
 
 // ---- roundColumnPhase -----------------------------------------------------------------------------------------
 
@@ -356,6 +366,29 @@ describe("checkinClock", () => {
     expect(checkinClock([checkingIn(w)], NOW - 1)).toEqual({ kind: "opens", at: w.opensAt });
   });
 
+  it("agrees with the window's owner at every probe around both edges (inExtendWindow and liveExtendRefusal are the oracle)", () => {
+    const opensAt = NOW + 5 * MIN;
+    const deadlineAt = NOW + 15 * MIN;
+    const probes = [opensAt - MIN, opensAt - 1, opensAt, opensAt + 1, deadlineAt - 1, deadlineAt, deadlineAt + 1];
+    const w = checkin(5 * MIN, 15 * MIN);
+    const seen = new Set<string>();
+    for (const t of probes) {
+      // closes iff inside the declared half-open window; opens iff outside it and the window's owner says "not_open"; else closed.
+      const want: CheckinClock = inExtendWindow(w, t)
+        ? { kind: "closes", at: w.deadlineAt }
+        : liveExtendRefusal(w, t) === "not_open"
+          ? { kind: "opens", at: w.opensAt }
+          : { kind: "closed" };
+      expect(checkinClock([checkingIn(w)], t), `at ${iso(t)}`).toEqual(want);
+      seen.add(want.kind);
+    }
+    expect(probes.length, "anti-vacuity: probes checked").toBe(7);
+    // All three outcomes were witnessed: the sweep cannot pass on a clock that only ever says one thing.
+    expect([...seen].sort()).toEqual(["closed", "closes", "opens"]);
+    // ...and the oracle itself agrees with the declaration it leans on (the window is [opensAt, deadlineAt)), probe by probe.
+    expect(probes.map((t) => checkinClock([checkingIn(w)], t).kind)).toEqual(["opens", "opens", "closes", "closes", "closes", "closed", "closed"]);
+  });
+
   it("a checking_in board with checkin null is ignored (the guard, reached)", () => {
     expect(checkinClock([checkingIn(null)], NOW)).toEqual({ kind: "closed" });
     const w = openNow(6);
@@ -438,21 +471,25 @@ describe("playingTally", () => {
   });
 
   it("total is the boards on screen, whatever state each is in", () => {
-    const boards = STATE_TABLE.map((row) => withState(row.state));
-    expect(playingTally(boards).total).toBe(STATE_TABLE.length);
+    const boards = EVERY_STATE.map((row) => withState(row.state));
+    expect(boards.length, "anti-vacuity").toBeGreaterThan(0);
+    expect(playingTally(boards).total).toBe(EVERY_STATE.length);
   });
 
   it("every state kind lands where the spec puts it (playing is starting + live; held is neither; over is finished)", () => {
     let checked = 0;
-    for (const row of STATE_TABLE) {
+    for (const row of EVERY_STATE) {
       const t = playingTally([withState(row.state)]);
       expect(t, JSON.stringify(row.state)).toEqual({ playing: row.playing ? 1 : 0, total: 1, finished: row.finished ? 1 : 0 });
       // The table's "finished" is the declared `boardIsOver`, not a second opinion.
       expect(row.finished, `${row.state.kind} vs boardIsOver`).toBe(boardIsOver(row.state));
       checked += 1;
     }
-    expect(checked, "anti-vacuity").toBe(STATE_TABLE.length);
-    expect(new Set(STATE_TABLE.map((r) => r.state.kind)).size, "every state kind is in the table").toBe(6);
+    expect(checked, "anti-vacuity").toBe(EVERY_STATE.length);
+    // Completeness is the type's job (`Record` over every kind); at runtime the table must still reach at least one of each outcome.
+    expect(EVERY_STATE.some((r) => r.playing)).toBe(true);
+    expect(EVERY_STATE.some((r) => r.finished)).toBe(true);
+    expect(EVERY_STATE.some((r) => !r.playing && !r.finished)).toBe(true);
   });
 
   it("a held board beside a live one is playing 1 of 2, never 2", () => {
@@ -599,6 +636,8 @@ describe("entryStatus and entryLine", () => {
     // Round 1's check-in is over, round 2's and 3's are on: round 2 (the first that qualifies) is named.
     const checkins = [openView(1, -5, "none"), openView(2, 8), openView(3, 12)];
     expect(entryStatus(checkins, 0, NOW)).toEqual({ attention: 0, phase: "checkin", roundNo: 2 });
+    // Listed [3, 2], the FIRST LISTED names the round: 3, not the lowest number.
+    expect(entryStatus([openView(3, 12), openView(2, 8)], 0, NOW)).toEqual({ attention: 0, phase: "checkin", roundNo: 3 });
     const readies = [openView(1, -5, "none"), pairedView(3), pairedView(2)];
     expect(entryStatus(readies, 0, NOW)).toEqual({ attention: 0, phase: "ready", roundNo: 3 });
   });
