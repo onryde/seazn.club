@@ -15,11 +15,47 @@ export type Tx = postgres.TransactionSql;
 const globalForDb = globalThis as unknown as { _sql?: Sql; _queryCount?: number };
 
 /**
+ * Statement counting is a TEST INSTRUMENT, and it is on under vitest only.
+ *
+ * WHY NOT EVERYWHERE. postgres.js has no counting hook of its own; the counter
+ * rides on the `debug` option, and a truthy `debug` has two other effects. It
+ * defines `query`, `parameters`, `args` and `types` on every failed query's
+ * error as ENUMERABLE properties (connection.js `queryError`, `enumerable:
+ * options.debug`), and it captures a stack for every statement. The first is a
+ * leak: the bind values of a failed statement - a token, an address, sealed
+ * body bytes - then travel with the error into every place it is printed.
+ * pino's `err` serializer copies them into the stdout line, `pinoIntegration`
+ * forwards that line to Sentry Logs, and `util.inspect` (so every
+ * `console.error(err)`, Next's own uncaught-error log included) prints them,
+ * all of which a key-by-key redaction list cannot reach. With `debug` unset the
+ * same fields still exist but are not enumerable, so nothing that copies an
+ * error's own fields can carry them. Production therefore passes no `debug`.
+ * (Stack traces lose nothing: postgres.js still joins the call site's stack
+ * onto the error.)
+ *
+ * WHY VITEST. The runner sets `VITEST` itself in every worker, so a test can
+ * never find the counter off by a missed config line; and the outbox suites
+ * rely on the driver's enumerable error fields as their premise.
+ * `statementCount()` refuses outside it rather than reading 0, because a
+ * "no statements were issued" assertion passes on a dead counter.
+ * See `__tests__/db-error-redaction.test.ts`.
+ */
+export function countsStatements(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(env.VITEST);
+}
+
+/**
  * Number of statements sent to Postgres since process start. Regression tests
  * use this to pin the round-trip budget of hot paths (fixture generation);
  * the counter is a monotonic total, so tests diff before/after.
  */
 export function statementCount(): number {
+  if (!countsStatements()) {
+    throw new Error(
+      "statementCount() is only live under vitest: the production client passes no `debug` hook, " +
+        "so a failed query's error carries no bind values (see countsStatements in lib/db.ts).",
+    );
+  }
   return globalForDb._queryCount ?? 0;
 }
 
@@ -109,9 +145,15 @@ function getClient(): Sql {
     fetch_types: true,
     connect_timeout: 15,
     connection: { search_path: schema },
-    debug: () => {
-      globalForDb._queryCount = (globalForDb._queryCount ?? 0) + 1;
-    },
+    // Under vitest only - see countsStatements. A production `debug` would put
+    // every failed query's bind values on the error as enumerable fields.
+    ...(countsStatements()
+      ? {
+          debug: () => {
+            globalForDb._queryCount = (globalForDb._queryCount ?? 0) + 1;
+          },
+        }
+      : {}),
     types: {
       // Plain `date` columns (starts_on, ends_on, dob) stay 'YYYY-MM-DD'
       // strings — the API contracts declare them as strings and React can't
