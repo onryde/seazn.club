@@ -1948,8 +1948,8 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   // the sibling case — a division carrying TWO round-robin-kind stages
   // (two `league` stages, or a `league` beside an unpooled `group`), NEITHER
   // of which has a pool. Both then read `poolId: undefined`, one bucket, no
-  // trip — the exact shape `stages.ts`'s `stages.per_division.max` (capped
-  // 2/4/∞, no kind-uniqueness check) permits today. `stageId` joins the key
+  // trip — the exact shape `stages.ts`'s `stages.per_division.max` (unlimited
+  // on every plan since V471; no kind-uniqueness check) permits. `stageId` joins the key
   // for the same reason it joined `calendar.ts`'s: it is the one dimension
   // that still separated two stages sharing no pool.
   const roundBearingPoolsByDivision = new Map<string, Set<string>>();

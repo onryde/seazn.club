@@ -41,7 +41,7 @@ export const CRICKET_RULES: RuleField[] = [
     key: "dls",
     edits: ["dls"],
     label: "DLS revised targets",
-    help: "Pro feature — a manual umpire target works on every plan.",
+    help: "A manual umpire target always works too.",
     kind: "bool",
     build: (v) => ({ dls: { enabled: v === "on", edition: "standard" } }),
     // The standard edition only: another edition is not this field's shape.

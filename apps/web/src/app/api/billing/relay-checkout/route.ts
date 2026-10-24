@@ -120,10 +120,10 @@ export async function POST(req: Request) {
       hasFeature(orgId, "streaming.relay", competitionId),
     ]);
     if (!overlay) {
-      throw new HttpError(402, "This plan does not include the stream overlay", "plan_lacks_overlay");
+      throw new HttpError(402, "The stream overlay is switched off for this organisation", "plan_lacks_overlay");
     }
     if (!relay) {
-      throw new HttpError(402, "This plan does not include phone streaming", "plan_lacks_relay");
+      throw new HttpError(402, "Phone streaming is switched off for this organisation", "plan_lacks_relay");
     }
 
     const [sub] = await sql<{ stripe_customer_id: string | null }[]>`

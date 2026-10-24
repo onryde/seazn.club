@@ -272,10 +272,11 @@ describe("aiErrorKey (status → localized copy key)", () => {
   it("splits 402 on the feature key: an empty AI wallet tops up, a plan gate upgrades", () => {
     // AI is credit-metered on every tier now, so an out-of-credits 402 (feature_key
     // ai.credits) must offer a top-up, not "upgrade to Pro". A plain (non-credit)
-    // paywall 402 still routes to the upgrade line.
+    // paywall 402 still routes to the upgrade line — except on a key every plan
+    // grants (scheduling.ai), whose only refusal is a staff override.
     expect(aiErrorKey(402, "ai.credits")).toBe("board.ai.error.outOfCredits");
     expect(aiErrorKey(402)).toBe("board.ai.error.upgrade");
-    expect(aiErrorKey(402, "scheduling.ai")).toBe("board.ai.error.upgrade");
+    expect(aiErrorKey(402, "scheduling.ai")).toBe("board.ai.error.switchedOff");
   });
 
   it("splits 422 on the server code: TOO_LARGE vs everything else", () => {

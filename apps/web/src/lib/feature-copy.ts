@@ -39,7 +39,11 @@ export const FEATURE_REASONS: Record<string, string> = {
   "competitions.max_active": "Your plan's active-competition limit is reached.",
   "divisions.per_competition.max": "Adding another division needs a bigger plan.",
   "entrants.per_division.max": "This division is at your plan's entrant limit.",
-  "stages.per_division.max": "Adding another stage needs a bigger plan.",
+  // "All stages are free" (owner ruling 2026-10-20, V471): the stage count is
+  // unlimited on every plan, so "needs a bigger plan" would send a reader to
+  // buy an upgrade that changes nothing. The only refusal left is a staff
+  // `org_entitlement_overrides` cap on this one organisation.
+  "stages.per_division.max": "This division has reached the stage limit set for your organisation.",
   // W3 fix round 2 (item 4): was "Double-elimination brackets are a Pro
   // format." — false since V393's growth cell made `formats.double_elim`
   // true on COMMUNITY (and every plan). The only refusal this gate can still
@@ -53,8 +57,12 @@ export const FEATURE_REASONS: Record<string, string> = {
   // "is a Pro feature" reasons were fixed for: `formats.advanced` is granted
   // to BOTH pass rungs, live, not just Pro, so a reason naming only Pro sends
   // a pass holder to buy an upgrade they already hold.
-  "formats.advanced":
-    "Americano, ladders, custom brackets, cross-stage feeds and auto-advance are on Pro and the Event Pass.",
+  //
+  // "All stages are free" (owner ruling 2026-10-20, V471): custom brackets
+  // (byes), cross-stage feeds, placements and auto-advance left this gate —
+  // free on every plan — so the sentence names only the two KINDS the gate
+  // still refuses (format-gates.ts `stageNeedsAdvancedFormatsGate`).
+  "formats.advanced": "Americano and ladders are on Pro and the Event Pass.",
   // Sport depth.
   //
   // W1 (entitlements v18, owner ruling 2026-08-30): the three fidelity keys —
@@ -95,6 +103,8 @@ export const FEATURE_REASONS: Record<string, string> = {
   // the seven; FALSE for four. Community is `false` on `stats.player`,
   // `discipline.enforced`, `scoring.audit_export` and `standings.carry_over`,
   // so every free org reaches those four strings on the ordinary path.
+  // (Since then `stats.player` (V399) and `standings.carry_over` (V471) went
+  // true on community too, and took the override wording.)
   //
   // Which makes the comment's own warning land on itself: "a sentence nobody
   // can reach is exactly where a falsehood survives — no customer complains, no
@@ -126,12 +136,25 @@ export const FEATURE_REASONS: Record<string, string> = {
   "discipline.enforced": "Automatic suspension tracking is on Pro and the Event Pass.",
   "tiebreakers.custom": "Custom tiebreaker order is switched off for this organisation.",
   "standings.custom_points": "Bonus-point rules and forfeit points are switched off for this organisation — plain win/draw/loss points work on every plan.",
-  "standings.carry_over": "Carrying Phase-1 standings into Phase 2 is a Pro feature.",
+  // "All stages are free" (owner ruling 2026-10-20, V471): granted on every
+  // plan, so the only refusal left is an explicit override deny — the same
+  // wording as the other override-only reasons above.
+  "standings.carry_over": "Carrying Phase-1 standings into Phase 2 is switched off for this organisation.",
   // `eligibility.enforced` has NO rows in plan_entitlements at all, so no
   // plan grants or denies it and "a Pro feature" described a paywall that
   // does not exist. Kept rather than deleted — the key is still passed to
   // `featureReason` — and reworded to the refusal that is actually possible.
   "eligibility.enforced": "Enforced eligibility locks are switched off for this organisation.",
+  // V471 review item 3: four keys granted on EVERY plan had no reason at all, so
+  // their override-only refusal fell back to "This feature needs a plan
+  // upgrade." — an upsell nothing on sale can satisfy. `branding` (V310, the
+  // org's own logo), `import.events` (V396, the batch score-event importer) and
+  // both streaming keys (V426) are refused only by a staff override now, and
+  // say so, like the other override-only reasons above.
+  branding: "Your own logo is switched off for this organisation.",
+  "import.events": "Importing score events from a file is switched off for this organisation.",
+  "streaming.overlay": "Live-stream score overlays are switched off for this organisation.",
+  "streaming.relay": "Streaming to your own channels is switched off for this organisation.",
   // Public & realtime
   // The number is NOT written here, for the same reason `import.bulk` stopped
   // writing its own: this sentence said "one public dashboard at a time"
@@ -183,7 +206,7 @@ export const FEATURE_REASONS: Record<string, string> = {
   // to hand: the /admin reason column, and `<UpgradeGate>`'s key-only lookup.
   "import.bulk": "This file has more rows than your plan allows — split it into smaller files, or upgrade for a higher limit.",
   "logos.bulk": "Multi-file logo upload is a Pro feature — you can still set logos one at a time.",
-  "clubs.hierarchy": "Club hierarchies (parent clubs, group-by-club) — your plan's limits apply.",
+  "clubs.hierarchy": "Club hierarchies (parent clubs, group-by-club) are switched off for this organisation.",
   "clubs.max": "You've reached your plan's club limit.",
   "teams.max": "You've reached your plan's team limit.",
   "teams.squad_max": "This squad has reached your plan's size limit.",
@@ -193,8 +216,8 @@ export const FEATURE_REASONS: Record<string, string> = {
   // off for one org, and a paywall with no reason falls back to the flat "This
   // feature needs a plan upgrade.", which reads as a bug next to a priced
   // button. The wording no longer claims a plan.
-  "scheduling.constraints": "The scheduling constraints solver is not available on this plan.",
-  "scheduling.board": "Editing the schedule board is not available on this plan.",
+  "scheduling.constraints": "The scheduling constraints solver is switched off for this organisation.",
+  "scheduling.board": "Editing the schedule board is switched off for this organisation.",
   // Still a real paywall — and since V353 an Event Pass lifts it for one
   // competition, which is why the key is in `PASS_FEATURES`.
   // V393 granted this to community: joint planning is free on every plan and
@@ -205,7 +228,7 @@ export const FEATURE_REASONS: Record<string, string> = {
   "officials.auto": "Auto-assigning officials (solver, phased sourcing) is on Pro and the Event Pass — manual assignment still works.",
   "officials.roles_multi": "Multiple official roles per fixture (judge + referee) are switched off for this organisation.",
   "officials.marks": "Rating your match officials is switched off for this organisation.",
-  "scheduling.ai": "AI Schedule (plan, refine and repair your schedule from plain-language instructions) is not available on this plan.",
+  "scheduling.ai": "AI Schedule (plan, refine and repair your schedule from plain-language instructions) is switched off for this organisation.",
   // scheduling.ai.runs_per_division.max retired (v17 Phase 2 Task 5, V322):
   // the graded per-division run cap below it is gone, replaced by the
   // AI credit wallet's "ai.credits" reason (right below).
@@ -221,7 +244,7 @@ export const FEATURE_REASONS: Record<string, string> = {
   "scoring.device_links":
     "Hand-this-device-over scoring links are on Pro and the Event Pass — your scorer seat still works.",
   // Registration & entry fees (doc 16 §1.1)
-  "registration.enabled": "Online registration is not available on this plan.",
+  "registration.enabled": "Online registration is switched off for this organisation.",
   // V309 seeds registration.paid TRUE on every plan, so no PLAN can deny this
   // any more — the only surviving 402 path is an org_entitlement_overrides deny
   // (staff switching entry fees off for one org). The copy has to make sense in
@@ -236,7 +259,7 @@ export const FEATURE_REASONS: Record<string, string> = {
   "sponsors.monetize":
     "Selling priced sponsorship packages is on Pro and the Event Pass — showing sponsor logos is free on every plan.",
   // Discovery showcase (doc 15 §5)
-  "discovery.listed": "Showcasing on seazn.club is not available on this plan.",
+  "discovery.listed": "Showcasing on seazn.club is switched off for this organisation.",
   "discovery.featured": "The featured showcase row is a Pro perk.",
   "discovery.branding": "Card tagline and hero image on seazn.club are a Pro feature.",
   "news.auto": "Auto-drafted result posts are on Pro and the Event Pass.",
@@ -392,3 +415,41 @@ export type PaidPlan = "pro" | "enterprise";
 export function featurePlan(featureKey: string): PaidPlan {
   return ENTERPRISE_FEATURES.has(featureKey) ? "enterprise" : "pro";
 }
+
+/**
+ * Keys COMMUNITY already grants outright — a `true` boolean with no cap, or a
+ * cap with `int_value NULL` (unlimited). Since community is the floor every org
+ * resolves to, no plan can refuse one of these: the only refusal left is a staff
+ * `org_entitlement_overrides` row on one organisation, and nothing on sale lifts
+ * that. `<UpgradeGate>` therefore renders them with the override sentence alone
+ * — no plan badge, no upgrade link, no pass offer (V471 review item 2).
+ *
+ * A typed list, because `<UpgradeGate>` is a client component and cannot read
+ * the matrix: a migration that frees or re-prices a key moves this list by
+ * hand in the same change. A dual-valued row (`teams.squad_max`: bool true,
+ * int 23) is a cap of 23 and is deliberately NOT here.
+ */
+export const COMMUNITY_GRANTED_FEATURES: ReadonlySet<string> = new Set([
+  "branding",
+  "clubs.hierarchy",
+  "cricket.dls",
+  "discovery.listed",
+  "exports",
+  "formats.double_elim",
+  "import.events",
+  "officials.marks",
+  "officials.roles_multi",
+  "registration.enabled",
+  "registration.paid",
+  "scheduling.ai",
+  "scheduling.board",
+  "scheduling.constraints",
+  "scheduling.multi_division",
+  "stages.per_division.max",
+  "standings.carry_over",
+  "standings.custom_points",
+  "stats.player",
+  "streaming.overlay",
+  "streaming.relay",
+  "tiebreakers.custom",
+]);

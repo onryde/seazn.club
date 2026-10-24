@@ -148,7 +148,11 @@ const INT_FEATURES = new Set([
   "clubs.max",
   "teams.max",
   "teams.squad_max",
-  "stages.per_division.max",
+  // stages.per_division.max dropped at V471 ("all stages are free", owner
+  // ruling 2026-10-20): ∞ on every plan, the same all-∞ row that retired
+  // officials.per_fixture.max above. Its key stays in plan_entitlements (an
+  // override can still cap one organisation), so /admin lists it under
+  // "other".
   "dashboard.public.max",
   "import.bulk",
   "schedule.checkpoints.max",

@@ -246,7 +246,7 @@ describe("Stripe onboarding failure copy", () => {
     expect(text).not.toContain(OWNER_ONLY);
   });
 
-  it("still shows the upgrade prompt on a 402, which has its own key", async () => {
+  it("still shows its own line on a 402 (registration.paid switched off by an override), which has its own key", async () => {
     const island = mountWithFailure(
       new ApiV1Error("Plan upgrade required: registration.paid", 402, "PAYMENT_REQUIRED"),
     );

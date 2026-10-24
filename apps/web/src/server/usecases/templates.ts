@@ -172,8 +172,13 @@ export async function instantiateTemplate(
   const divisionCap = await getLimit(auth.orgId, "divisions.per_competition.max", competitionId);
   assertWithinLimit(divisionCap, "divisions.per_competition.max", template.divisions.length);
   // Same competition id, and for the same reason the `requireFeature` block
-  // above spells out: V393 lifts this cap on an Event Pass, so the read must be
-  // competition-scoped even though no pass can reference this id yet.
+  // above spells out: the read stays competition-scoped even though no pass
+  // can reference this id yet.
+  //
+  // V471 ("all stages are free", owner ruling 2026-10-20) made this cap
+  // unlimited on every plan, so a plan never refuses here any more. The call
+  // is kept because a staff `org_entitlement_overrides` row can still cap one
+  // organisation, and this path must honour it exactly as createStages does.
   const stageCap = await getLimit(auth.orgId, "stages.per_division.max", competitionId);
   for (const division of template.divisions) {
     assertWithinLimit(stageCap, "stages.per_division.max", division.stages.length);

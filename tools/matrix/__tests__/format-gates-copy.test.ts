@@ -8,8 +8,13 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { ROW_KEYS, stagesForRow } from "../lib/catalogue.ts";
-import { ADVANCED_CONFIG_KEYS, ADVANCED_KINDS, DOUBLE_ELIM_KINDS, expectedGate, expectedGates } from "../lib/format-gates-copy.ts";
+import { ADVANCED_KINDS, DOUBLE_ELIM_KINDS, expectedGate, expectedGates } from "../lib/format-gates-copy.ts";
 import { batchGatesBody } from "./product-gates-source.ts";
+
+/** The config keys the owner's "all stages are free" ruling (2026-10-20, V471)
+ *  took OUT of the advanced gate — custom byes, cross-stage feeds, placements.
+ *  Named from the ruling, not read from either copy: they must now gate NOTHING. */
+const FREED_CONFIG_KEYS = ["byes", "cross_feeds", "placements"] as const;
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const gates = readFileSync(resolve(REPO, "apps/web/src/server/usecases/format-gates.ts"), "utf8");
@@ -25,18 +30,20 @@ const fnBody = (name: string): string => bodyOf(gates, `export function ${name}(
 const count = (s: string, needle: string): number => s.split(needle).length - 1;
 
 describe("expectedGate — a text-pinned copy of format-gates.ts (server-only, unimportable)", () => {
-  it("the double-elim gate's kinds, the advanced gate's kinds and config keys match the product's text", () => {
+  it("the double-elim gate's kinds and the advanced gate's kinds match the product's text; the advanced gate reads no config key", () => {
     const deBody = fnBody("stageNeedsDoubleElimGate");
     const adv = fnBody("stageNeedsAdvancedFormatsGate");
     const de = [...deBody.matchAll(/kind === "([a-z_]+)"/g)].map((m) => m[1]);
     const advKinds = [...adv.matchAll(/stage\.kind === "([a-z_]+)"/g)].map((m) => m[1]);
-    const advKeys = [...adv.matchAll(/stage\.config\?\.([a-z_]+) !== undefined/g)].map((m) => m[1]);
     expect(de.length).toBeGreaterThan(0);
     expect(advKinds.length).toBeGreaterThan(0);
-    expect(advKeys.length).toBeGreaterThan(0);
     expect(de).toEqual([...DOUBLE_ELIM_KINDS]);
     expect(advKinds).toEqual([...ADVANCED_KINDS]);
-    expect(advKeys).toEqual([...ADVANCED_CONFIG_KEYS]);
+    // V471: no config term survives in the product's body (its doc comment
+    // above the signature may still NAME the retired keys — the body may not).
+    const code = adv.slice(adv.indexOf("{"));
+    expect(code).not.toMatch(/\bconfig\b/);
+    for (const key of FREED_CONFIG_KEYS) expect(code, key).not.toContain(key);
   });
 
   it("the copy is COMPLETE: each gate body is one flat disjunction of exactly the pinned terms (a new term of another shape reds)", () => {
@@ -44,7 +51,7 @@ describe("expectedGate — a text-pinned copy of format-gates.ts (server-only, u
     const adv = fnBody("stageNeedsAdvancedFormatsGate");
     // n terms joined by n-1 `||`, and no `&&` or `!` that would change a term's meaning.
     expect(count(deBody, "||")).toBe(DOUBLE_ELIM_KINDS.length - 1);
-    expect(count(adv, "||")).toBe(ADVANCED_KINDS.length + ADVANCED_CONFIG_KEYS.length - 1);
+    expect(count(adv, "||")).toBe(ADVANCED_KINDS.length - 1);
     for (const b of [deBody, adv]) {
       expect(b.includes("&&")).toBe(false);
       expect(/[^=!]![^=]/.test(b.slice(b.indexOf("{")))).toBe(false);
@@ -75,16 +82,17 @@ describe("expectedGate — a text-pinned copy of format-gates.ts (server-only, u
     let judged = 0;
     for (const k of DOUBLE_ELIM_KINDS) { expect(expectedGate([{ kind: k, config: {} }]), k).toBe("formats.double_elim"); judged++; }
     for (const k of ADVANCED_KINDS) { expect(expectedGate([{ kind: k, config: {} }]), k).toBe("formats.advanced"); judged++; }
-    // The config-key branch: no row carries these keys, so only this test reaches it.
-    for (const key of ADVANCED_CONFIG_KEYS) {
-      expect(expectedGate([{ kind: "league", config: { [key]: [] } }]), key).toBe("formats.advanced");
-      expect(expectedGate([{ kind: "league", config: { [key]: undefined } }]), `${key}: undefined is absent`).toBeNull();
-      // The product tests `!== undefined`, so a present-but-falsy value still gates.
-      for (const falsy of [null, 0, false, ""]) expect(expectedGate([{ kind: "league", config: { [key]: falsy } }]), `${key}: ${String(falsy)}`).toBe("formats.advanced");
+    // The retired config-key branch (V471): no value of a freed key gates a basic
+    // kind — present, empty, or falsy — and none changes what a gated kind fires.
+    for (const key of FREED_CONFIG_KEYS) {
+      for (const value of [[], [{ from: 1, to: 2 }], null, 0, false, ""]) {
+        expect(expectedGate([{ kind: "league", config: { [key]: value } }]), `${key}: ${JSON.stringify(value)}`).toBeNull();
+      }
+      expect(expectedGate([{ kind: ADVANCED_KINDS[0]!, config: { [key]: [] } }]), `${key} on a gated kind`).toBe("formats.advanced");
       judged++;
     }
-    expect(judged).toBe(DOUBLE_ELIM_KINDS.length + ADVANCED_KINDS.length + ADVANCED_CONFIG_KEYS.length);
-    expect(expectedGate([{ kind: "league", config: { byes: [] } }, { kind: "double_elim" }])).toBe("formats.double_elim");
+    expect(judged).toBe(DOUBLE_ELIM_KINDS.length + ADVANCED_KINDS.length + FREED_CONFIG_KEYS.length);
+    expect(expectedGate([{ kind: "ladder" }, { kind: "double_elim" }])).toBe("formats.double_elim");
   });
 
   it("final batch FB-7: expectedGates is EVERY gate a POST fires, in createStages' order (double-elim, then advanced); expectedGate is its first", () => {
@@ -96,18 +104,24 @@ describe("expectedGate — a text-pinned copy of format-gates.ts (server-only, u
     for (const k of DOUBLE_ELIM_KINDS) { expect(expectedGates([{ kind: k }]), k).toEqual(["formats.double_elim"]); judged++; }
     for (const k of ADVANCED_KINDS) { expect(expectedGates([{ kind: k }]), k).toEqual(["formats.advanced"]); judged++; }
     // A POST that trips both gates needs both — whichever stage comes first
-    // (task 10 review m-6: a page_playoff stage beside a placements key).
+    // (task 10 review m-6). Since V471 only a gated KIND trips the advanced
+    // gate; a page_playoff beside a freed config key fires double_elim alone.
     const both: { kind: string; config?: Record<string, unknown> }[][] = [];
     for (const de of DOUBLE_ELIM_KINDS) {
       for (const adv of ADVANCED_KINDS) both.push([{ kind: de }, { kind: adv }], [{ kind: adv }, { kind: de }]);
-      for (const key of ADVANCED_CONFIG_KEYS) both.push([{ kind: de }, { kind: "league", config: { [key]: [] } }], [{ kind: "league", config: { [key]: [] } }, { kind: de }]);
     }
     for (const st of both) {
       expect(expectedGates(st), JSON.stringify(st)).toEqual(["formats.double_elim", "formats.advanced"]);
       expect(expectedGate(st), JSON.stringify(st)).toBe("formats.double_elim");
       judged++;
     }
-    expect(judged).toBe(DOUBLE_ELIM_KINDS.length + ADVANCED_KINDS.length + 2 * DOUBLE_ELIM_KINDS.length * (ADVANCED_KINDS.length + ADVANCED_CONFIG_KEYS.length));
+    for (const de of DOUBLE_ELIM_KINDS) {
+      for (const key of FREED_CONFIG_KEYS) {
+        expect(expectedGates([{ kind: de }, { kind: "league", config: { [key]: [] } }]), `${de} + ${key}`).toEqual(["formats.double_elim"]);
+        judged++;
+      }
+    }
+    expect(judged).toBe(DOUBLE_ELIM_KINDS.length + ADVANCED_KINDS.length + 2 * DOUBLE_ELIM_KINDS.length * ADVANCED_KINDS.length + DOUBLE_ELIM_KINDS.length * FREED_CONFIG_KEYS.length);
     // Over the rows, expectedGate is expectedGates' first (and no row needs both today).
     let rows = 0;
     for (const r of ROW_KEYS) {

@@ -52,7 +52,8 @@ async function seedOrg(): Promise<{ auth: AuthCtx }> {
   const [{ id: orgId }] = await sql<{ id: string }[]>`
     insert into organizations (name, slug) values (${"Ms " + suffix}, ${"ms-" + suffix})
     returning id`;
-  // pro: 3 stages (A, B, Final) > community's stages.per_division.max.
+  // pro: 3 stages (A, B, Final) were past community's stages.per_division.max
+  // until V471 made the count free; kept on pro, which changes nothing here.
   await setOrgPlan(orgId);
   await invalidateOrgEntitlements(orgId);
   await sql`
@@ -386,9 +387,9 @@ describe.skipIf(!HAS_DB)("multi-source progression (F2 Decision 4 / Finding 1)",
   // nothing exercised `carry` together with 2+ sources before this test — a
   // regression in the union (e.g. carrying only the last-resolved source's
   // rows, or only the just-completed stage's own table) would have shipped
-  // silently. `carry` backs the marketed standings.carry_over Pro
-  // entitlement; custom-points.test.ts already covers the single-source
-  // shape plus the Community 402 gate.
+  // silently. `carry` backs the marketed standings.carry_over
+  // entitlement (free since V471); custom-points.test.ts already covers the single-source
+  // shape plus the override-deny 402 gate.
   //
   // A and B are given DISJOINT 2-entrant rosters via an explicit
   // config.qualified on each (the same "a seeded stage draws from
@@ -567,7 +568,7 @@ describe.skipIf(!HAS_DB)("multi-source progression (F2 Decision 4 / Finding 1)",
   // `timing: "setup"` knockout Final via two rankRange{1,1} sources — exactly
   // the "any format with customised stage graphs" reachability path F3
   // exists to cover. `createStages`/`replaceStages` have no progression-aware
-  // gate (format-gates.ts checks kind/byes/cross_feeds/placements only).
+  // gate (format-gates.ts checks the americano/ladder kinds only since V471).
   it("resolves a tie on ONE of two same-keyed sources into that source's own slot, not the other source's", async () => {
     const { auth } = await seedOrg();
     const comp = await createCompetition(auth, {

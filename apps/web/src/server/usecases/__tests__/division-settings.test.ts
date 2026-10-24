@@ -18,7 +18,7 @@ import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures, replaceStages } from "../stages";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
-import { invalidateOrgEntitlements } from "@/lib/entitlements";
+import { hasFeature, invalidateOrgEntitlements } from "@/lib/entitlements";
 const HAS_DB = !!process.env.DATABASE_URL;
 
 /** `plan` defaults to the Pro this file has always seeded; pass "community" for
@@ -794,14 +794,18 @@ describe.skipIf(!HAS_DB)(
  * (`divisions.ts`, inside `patchDivision`) had NO test anywhere in the repo
  * that reddened when they stopped throwing: the sweep mutated each to
  * `.catch(() => undefined)` and 117 and 141 tests respectively stayed green
- * across every suite that calls `patchDivision`. The single test that reaches
- * the `formats.advanced` line (`format-ext.test.ts`'s auto_progress case) runs
- * on a **pro** org, where the gate passes; `auto_posts` reaches `patchDivision`
- * only from `e2e/news.spec.ts`, which expects 200 on the shared Pro org.
+ * across every suite that calls `patchDivision`. `auto_posts` reaches
+ * `patchDivision` only from `e2e/news.spec.ts`, which expects 200 on the shared
+ * Pro org.
  *
- * Both keys are FALSE on `community` in the live matrix, so this is the state
+ * `news.auto` is FALSE on `community` in the live matrix, so this is the state
  * a real free org is in — no staff deny needed, and a regression would hand
- * every free org auto-progression and auto-drafted news with no witness.
+ * every free org auto-drafted news with no witness.
+ *
+ * The OTHER gate, `formats.advanced` on `auto_progress`, was RETIRED by the
+ * owner's "all stages are free" ruling (2026-10-20, V471): auto-advance is free
+ * on every plan. Its case is inverted rather than deleted, so a regression
+ * that re-gates auto-advance reds here.
  *
  * Each case carries its POSITIVE pair in the same block: turning the toggle
  * OFF must stay allowed on the very same org (`divisions.ts`' own comment:
@@ -809,19 +813,17 @@ describe.skipIf(!HAS_DB)(
  * so a guard that simply refused every write could not satisfy these tests.
  */
 describe.skipIf(!HAS_DB)("paid-layer gates on patchDivision (W8 F21)", () => {
-  it("refuses auto_progress on a Community org with 402 formats.advanced, while still allowing it OFF", async () => {
+  it("lets a Community org turn auto_progress ON (and OFF) without formats.advanced — free since V471", async () => {
     const owner = await seedOwner("community");
     const { division } = await rig(owner);
+    // The org really lacks the advanced-formats layer, so the success below is
+    // the ruling and not an org that happens to hold the old gate's key.
+    expect(await hasFeature(owner.orgId, "formats.advanced")).toBe(false);
 
-    await expect(patchDivision(owner, division.id, { auto_progress: true })).rejects.toMatchObject({
-      status: 402,
-      featureKey: "formats.advanced",
-    });
-    // A refusal, not a silent no-op: nothing was written on the way past.
-    expect((await getDivision(owner, division.id)).auto_progress).toBe(false);
+    const on = await patchDivision(owner, division.id, { auto_progress: true });
+    expect(on.auto_progress).toBe(true);
+    expect((await getDivision(owner, division.id)).auto_progress).toBe(true);
 
-    // The positive pair. Without it a guard that refused EVERY auto_progress
-    // patch — the over-refusing mutant — would satisfy the assertion above.
     const off = await patchDivision(owner, division.id, { auto_progress: false });
     expect(off.auto_progress).toBe(false);
   });

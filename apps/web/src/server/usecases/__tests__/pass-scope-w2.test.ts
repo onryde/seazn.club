@@ -19,6 +19,11 @@
 // shape on its own new key, `stats.player.career` — the table above is
 // otherwise unchanged, it is `stats.player`'s ROLE in it that moved.
 //
+// V471 ("all stages are free", owner ruling 2026-10-20) did the same to
+// `stages.per_division.max`: unlimited on every plan, so it left the
+// pass-scoped set too, and its case below was rewritten to prove the sibling
+// competition now takes the extra stages as well.
+//
 // lib/entitlements.ts only consults `competition_passes` when a competition is
 // in scope (`resolveFromDb`'s `if (competitionId)` branch), so every gate that
 // omitted the third argument made the pass INVISIBLE: a Community org bought a
@@ -373,26 +378,25 @@ describe.skipIf(!HAS_DB)("Event Pass grants resolve against the competition (W2 
     await expectPaywall(personCareerStats(ctx.auth, outsider), "stats.player.career");
   });
 
-  it("stages.per_division.max: four stages on the passed competition, two on the sibling", async () => {
+  it("stages.per_division.max: free on every plan since V471 — the passed competition AND its sibling take stages past the old caps", async () => {
     const ctx = await seedCommunityOrg();
     const passed = await seedCompetition(ctx, "SC Passed " + uniq());
     await buyPass(ctx.orgId, passed.competitionId);
     const plain = await seedCompetition(ctx, "SC Plain " + uniq());
 
-    // Each division already holds stage seq 1. community = 2, event_pass = 4.
-    await createStages(ctx.auth, passed.divisionId, [
-      { seq: 2, kind: "league", name: "Two", config: {} },
-      { seq: 3, kind: "league", name: "Three", config: {} },
-    ]);
-    const [{ n: passedStages }] = await sql<{ n: number }[]>`
-      select count(*)::int as n from stages where division_id = ${passed.divisionId}`;
-    expect(passedStages).toBe(3);
-
-    await createStages(ctx.auth, plain.divisionId, { seq: 2, kind: "league", name: "Two", config: {} });
-    await expectPaywall(
-      createStages(ctx.auth, plain.divisionId, { seq: 3, kind: "league", name: "Three", config: {} }),
-      "stages.per_division.max",
-    );
+    // Each division already holds stage seq 1. The old caps were community 2
+    // and event_pass 4, so five stages is past both; the sibling (no pass)
+    // used to be refused its third.
+    const more = [2, 3, 4, 5].map((seq) => ({ seq, kind: "league" as const, name: `S${seq}`, config: {} }));
+    let checked = 0;
+    for (const divisionId of [passed.divisionId, plain.divisionId]) {
+      await createStages(ctx.auth, divisionId, more);
+      const [{ n }] = await sql<{ n: number }[]>`
+        select count(*)::int as n from stages where division_id = ${divisionId}`;
+      expect(n, divisionId === plain.divisionId ? "sibling (no pass)" : "passed").toBe(5);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
   // -------------------------------------------------------------------------
   // discipline.enforced, the OTHER six gates. The report bridge above is the

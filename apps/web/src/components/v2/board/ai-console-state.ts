@@ -11,6 +11,7 @@ import type {
   AiOfficialsPlanResponse,
   AiParsePreviewResponse,
 } from "@/server/api-v1/schemas";
+import { COMMUNITY_GRANTED_FEATURES } from "@/lib/feature-copy";
 import type { ApplyOutcome } from "./ai-apply";
 
 export type AiStep = "brief" | "schedule" | "officials" | "apply";
@@ -430,6 +431,7 @@ export function canRun(state: AiConsoleState, opts?: { scheduleFrozen?: boolean 
 /** ui-catalog copy keys for a failed run. */
 export type AiErrorKey =
   | "board.ai.error.upgrade"
+  | "board.ai.error.switchedOff"
   | "board.ai.error.outOfCredits"
   | "board.ai.error.unavailable"
   | "board.ai.error.rateLimited"
@@ -447,12 +449,17 @@ export type AiErrorKey =
  * to narrow the scope; anything else is a plain "couldn't use that instruction".
  * 402 splits on the feature key: an empty AI credit wallet (feature_key
  * "ai.credits") asks the organiser to top up — AI is metered on every tier now,
- * so "upgrade to Pro" is only right for the plain (non-credit) paywall.
+ * so "upgrade to Pro" is only right for the plain (non-credit) paywall. A key
+ * Community grants (`scheduling.ai`, `scheduling.multi_division`) is refused
+ * only by a staff override on this one organisation, which no plan lifts — so
+ * it reads "switched off for this organisation", never an upgrade.
  */
 export function aiErrorKey(status: number, code?: string): AiErrorKey {
   switch (status) {
     case 402:
-      return code === "ai.credits" ? "board.ai.error.outOfCredits" : "board.ai.error.upgrade";
+      if (code === "ai.credits") return "board.ai.error.outOfCredits";
+      if (code !== undefined && COMMUNITY_GRANTED_FEATURES.has(code)) return "board.ai.error.switchedOff";
+      return "board.ai.error.upgrade";
     case 503:
       // AI isn't configured on this server (no key / disabled) — a distinct line
       // from the run failures so the organiser isn't told to just try again.

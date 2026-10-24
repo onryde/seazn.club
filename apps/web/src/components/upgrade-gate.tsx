@@ -2,7 +2,7 @@
 
 import Link from "@/components/ui/console-link";
 import { usePathname } from "next/navigation";
-import { featurePlan, featureReason } from "@/lib/feature-copy";
+import { COMMUNITY_GRANTED_FEATURES, featurePlan, featureReason } from "@/lib/feature-copy";
 import { PlanBadge } from "@/components/plan-badge";
 import {
   usePassCurrency,
@@ -295,6 +295,42 @@ export function UpgradeGate({
   const liftable = PASS_FEATURES.has(feature);
   // Only an org that can still BENEFIT from a pass is offered one.
   const passHref = liftable && gate === "none" ? passHrefFromPath(pathname, feature) : null;
+
+  // V471 review item 2 — a key Community already grants outright
+  // (`stages.per_division.max`, `standings.carry_over`, and every other key in
+  // COMMUNITY_GRANTED_FEATURES) is refused only by a staff override on this one
+  // organisation. No plan or pass lifts that, so this card sells nothing: no
+  // <PlanBadge> (it would name Pro for a feature the reader's free plan
+  // already has), no "See plans & upgrade →", no pass offer. Ahead of every
+  // other arm, the pill included, because every one of them sells something.
+  // Slate, like the other nothing-for-sale cards below. After every hook call,
+  // so the hook order never depends on the key.
+  if (COMMUNITY_GRANTED_FEATURES.has(feature)) {
+    if (compact) {
+      return (
+        <span
+          data-feature={feature}
+          data-override-only
+          className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700"
+        >
+          <LockIcon />
+          {reason}
+        </span>
+      );
+    }
+    return (
+      <div
+        data-feature={feature}
+        data-override-only
+        className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700"
+      >
+        <p className="flex items-center gap-2 font-medium">
+          <LockIcon />
+          {reason}
+        </p>
+      </div>
+    );
+  }
 
   if (compact) {
     const compactCta = planCovers ? paidPlan(feature, currency, href, reason, true) : null;

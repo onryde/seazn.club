@@ -4200,13 +4200,16 @@ async function passGrantsSuite(): Promise<void> {
     plainLink.status === 402 && featureKey(plainLink) === "scoring.device_links",
   );
 
-  // === stages.per_division.max — community 2, pass 4 (V393) ================
+  // === stages.per_division.max — free on every plan (V471) =================
+  // Was community 2, pass 4 (V393): the pass lifted it and the sibling was
+  // refused a 3rd. V471 ("all stages are free", owner ruling 2026-10-20) made
+  // the count unlimited on every plan, so BOTH competitions now take a 3rd —
+  // the sibling's 201 is the witness that the old cap is gone, not leaked.
   // Run on the ENTRANT-CAP divisions, which carry NO stages at all — the board
   // divisions already hold one and both competitions are at their division
   // ceiling, so there is no fresh division to take instead. Counting from ZERO
   // is load-bearing: an earlier draft started at seq 2 and the sibling's third
-  // create was only its SECOND stage, so it landed 201 and the check passed
-  // while proving nothing.
+  // create was only its SECOND stage, so it proved nothing about the cap.
   const addStage = (divisionId: string, seq: number) =>
     v1(s, `/api/v1/divisions/${divisionId}/stages`, "POST", {
       seq,
@@ -4224,15 +4227,12 @@ async function passGrantsSuite(): Promise<void> {
     await addStage(plainCap.id, 3),
   ];
   check(
-    "pass grants/stages: the passed competition takes a 3rd stage — past community's 2",
+    "pass grants/stages: the passed competition takes a 3rd stage — past community's old 2",
     passStages.every((r) => r.status === 201),
   );
   check(
-    "pass grants/stages: the sibling takes 2 and is refused a 3rd (402 stages.per_division.max)",
-    plainStages[0].status === 201 &&
-      plainStages[1].status === 201 &&
-      plainStages[2].status === 402 &&
-      featureKey(plainStages[2]) === "stages.per_division.max",
+    "pass grants/stages: the sibling (no pass) takes a 3rd stage too — free on every plan since V471",
+    plainStages.length === 3 && plainStages.every((r) => r.status === 201),
   );
 
   // === registration.fee_percent — the pass cuts the org's rate ============
@@ -4323,9 +4323,10 @@ async function passGrantsSuite(): Promise<void> {
       ent.entitlements["registration.fee_percent"]?.limit === communityFee,
   );
   check(
-    "pass grants/scope: the two V393 caps stay at the community figure org-wide (2 stages, 2 save points)",
-    ent.entitlements["stages.per_division.max"]?.limit === 2 &&
-      ent.entitlements["schedule.checkpoints.max"]?.limit === 2,
+    "pass grants/scope: the save-point cap stays at the community figure org-wide (2), and the stage count reads unlimited (V471)",
+    ent.entitlements["schedule.checkpoints.max"]?.limit === 2 &&
+      ent.entitlements["stages.per_division.max"] !== undefined &&
+      ent.entitlements["stages.per_division.max"]?.limit === null,
   );
 
   // === lock (archived) — a pass stops lifting once its competition is
@@ -9816,14 +9817,14 @@ async function templateInstantiationSuite(): Promise<void> {
 
   // P7/D1b (T5) — multi-stage instantiation: t20-super8 (group -> Super 8 ->
   // knockout) is the catalog's first template with 3 stages, TWO of which
-  // carry progression (timing: "setup") in the SAME division. It is gated
-  // on STAGE COUNT alone
-  // (V112: stages.per_division.max is 2 on community, 4 on pro) — a fresh
-  // Pro session, via the same setPlan + bustOrgEntitlements flip every other
-  // Pro-gated suite in this file already uses, not a template-specific block.
-  const proTemplateUser = newSession();
-  const proVer = await signIn(proTemplateUser, `delivered+dtx_template_pro_${tag}@resend.dev`);
-  await setPlan(proVer.org_id, "pro", proTemplateUser);
+  // carry progression (timing: "setup") in the SAME division. It used to be
+  // gated on STAGE COUNT alone (V112: stages.per_division.max 2 on community)
+  // and ran on a Pro session. V471 ("all stages are free", owner ruling
+  // 2026-10-20) made the count unlimited on every plan, so it now runs on a
+  // fresh COMMUNITY session — no setPlan — which is the witness that a free
+  // org instantiates a 3-stage template through the real route.
+  const t20User = newSession();
+  await signIn(t20User, `delivered+dtx_template_t20_${tag}@resend.dev`);
 
   const t20Created = v1data<{
     competitionId: string;
@@ -9832,7 +9833,7 @@ async function templateInstantiationSuite(): Promise<void> {
     templateKey: string;
     templateVersion: number;
   }>(
-    await v1(proTemplateUser, "/api/v1/competitions/from-template", "POST", {
+    await v1(t20User, "/api/v1/competitions/from-template", "POST", {
       template_key: "t20-super8",
       name: `DTX T20 ${tag}`,
       ends_on: "2030-12-31",
@@ -9849,7 +9850,7 @@ async function templateInstantiationSuite(): Promise<void> {
 
   type SlotLabelWire = { key: string; params: Record<string, unknown> } | null;
   const t20Stages = v1data<{ id: string; kind: string; name: string; seq: number }[]>(
-    await v1(proTemplateUser, `/api/v1/divisions/${t20DivisionId}/stages`, "GET"),
+    await v1(t20User, `/api/v1/divisions/${t20DivisionId}/stages`, "GET"),
   );
   check(
     "template instantiation: t20-super8's 3 stages are Group Stage -> Super 8 (a group-kind mid-stage) -> Knockout, in seq order",
@@ -9864,13 +9865,13 @@ async function templateInstantiationSuite(): Promise<void> {
 
   const t20TeamNames = Array.from({ length: 16 }, (_, i) => `T20 Squad ${i + 1}`);
   await v1(
-    proTemplateUser,
+    t20User,
     `/api/v1/divisions/${t20DivisionId}/entrants`,
     "POST",
     t20TeamNames.map((n, i) => ({ kind: "team", display_name: n, seed: i + 1 })),
   );
 
-  const t20GroupGen = await v1(proTemplateUser, `/api/v1/stages/${t20GroupStageId}/generate`, "POST");
+  const t20GroupGen = await v1(t20User, `/api/v1/stages/${t20GroupStageId}/generate`, "POST");
   check("template instantiation: t20-super8 group stage generates from real entrants", t20GroupGen.status < 300);
 
   // The group stage was only just generated, never played — Super 8 (fed by
@@ -9887,7 +9888,7 @@ async function templateInstantiationSuite(): Promise<void> {
       home_slot_label: SlotLabelWire;
       away_slot_label: SlotLabelWire;
     }[];
-  }>(await v1(proTemplateUser, `/api/v1/stages/${t20SuperStageId}/generate`, "POST"));
+  }>(await v1(t20User, `/api/v1/stages/${t20SuperStageId}/generate`, "POST"));
   const seedFamily = new Set(["slot.winner_group", "slot.runner_up_group"]);
   check(
     "template instantiation: Super 8 generates real fixture rows, every slot TBD with a resolved seed-descriptor label (not a real entrant, not a raw string)",
@@ -9900,17 +9901,6 @@ async function templateInstantiationSuite(): Promise<void> {
           seedFamily.has(f.home_slot_label?.key ?? "") &&
           seedFamily.has(f.away_slot_label?.key ?? ""),
       ),
-  );
-
-  const t20Gated = await v1(free, "/api/v1/competitions/from-template", "POST", {
-    template_key: "t20-super8",
-    name: `DTX T20 Gated ${tag}`,
-    ends_on: "2030-12-31",
-  });
-  check(
-    "template instantiation: t20-super8 (3 stages) is refused 402 on a community session — stage count alone trips it, same free session already used for the americano-night check above",
-    t20Gated.status === 402 &&
-      (t20Gated.json.error)?.code === "PAYMENT_REQUIRED",
   );
 }
 

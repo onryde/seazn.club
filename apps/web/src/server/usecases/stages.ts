@@ -439,8 +439,9 @@ export async function assertStageBatchGates(
   if (inputs.some((s) => stageNeedsDoubleElimGate(s.kind))) {
     await requireFeature(auth.orgId, "formats.double_elim", divComp?.competition_id);
   }
-  // Jul3/08 §8: new kinds + custom byes + cross-stage feeds + placements are
-  // the advanced-formats Pro layer; basic RR/KO/group+KO stays Community.
+  // The advanced-formats layer (Pro and the Event Pass) is the americano and
+  // ladder KINDS. Custom byes, cross-stage feeds and placements were part of it
+  // (Jul3/08 §8) until V471 ("all stages are free", owner ruling 2026-10-20).
   // Shared with createFromTemplate (usecases/templates.ts, D1a) via
   // usecases/format-gates.ts — see that file's header for why it's a
   // standalone module rather than this usecase calling the other.
@@ -463,7 +464,10 @@ export async function assertStageBatchGates(
     validateFeedGraph(edges);
   }
   // Jul3/05 §7: base win/draw/loss numbers are free; bonuses + forfeit points
-  // + circular-H2H + carry-over are the Pro layer.
+  // + circular-H2H + carry-over were the Pro layer. All four keys are granted
+  // on every plan now (custom points / tiebreakers since V393, carry-over since
+  // V471), so each call below refuses only on an explicit staff
+  // `org_entitlement_overrides` deny — kept for exactly that lever.
   for (const s of inputs) {
     const cfg = s.config as { points?: unknown; h2h_scope?: string } | undefined;
     // M6: a null `points` is "no points for this slot" (`sentPoints`): nothing to gate.
@@ -480,9 +484,11 @@ export async function assertStageBatchGates(
   // transaction with the insert (doc 10 §2 rule 1). `getLimit` queries the
   // pooled `sql` proxy, and `withTenant` pins a pooled connection for its whole
   // callback — see `assertWithinLimit` in lib/entitlements.ts.
-  // V393 lifts this cap on an Event Pass (community 2 -> event_pass 4), and the
-  // pass overlay only applies when a competition is in scope — `divComp` is
-  // already resolved above for the format gates, so the same id gates the cap.
+  // V471 ("all stages are free", owner ruling 2026-10-20) made this cap
+  // unlimited on every plan; before it, V393 lifted it on an Event Pass
+  // (community 2 -> event_pass 4). The read is kept, competition-scoped with
+  // the `divComp` id the format gates already resolved, because a staff
+  // `org_entitlement_overrides` row can still cap one organisation.
   const stageCap = await getLimit(auth.orgId, "stages.per_division.max", divComp?.competition_id);
   // The batch alone must fit (a lower bound of the in-transaction count: the stages that already stand add to it).
   assertWithinLimit(stageCap, "stages.per_division.max", inputs.length);
@@ -553,7 +559,8 @@ async function insertStageBatch(
   const configs = stageConfigsAtCreate(division, inputs, carried);
   assertNotFrozen(frozen, division.competition_id);
 
-  // Doc 10 §1: `stages.per_division.max` (2/4/∞) — the batch must fit,
+  // Doc 10 §1: `stages.per_division.max` (∞ on every plan since V471; an
+  // override can still set one) — the batch must fit,
   // counted in the same tx as the inserts (doc 10 §2 rule 1).
   const [{ n }] = await tx<{ n: number }[]>`
     select count(*)::int as n from stages where division_id = ${divisionId}`;
@@ -5021,10 +5028,11 @@ async function seedNextStage(auth: AuthCtx, completedStageId: string): Promise<S
     // 6): grounding said "no shipped writer sets `.carry`", true for
     // format-templates.ts/the catalogue but not for the whole codebase —
     // custom-points.test.ts exercises it end to end against a hand-built
-    // stage graph, and it backs a MARKETED Pro entitlement
+    // stage graph, and it backs a MARKETED entitlement
     // (standings.carry_over — feature-copy.ts's paywall copy,
-    // pricing.matrix.standings.carry_over in all 4 marketing dictionaries).
-    // Deleting it would silently break a paid, advertised feature. `carry`
+    // pricing.matrix.standings.carry_over in all 4 marketing dictionaries;
+    // free on every plan since V471). Deleting it would silently break an
+    // advertised feature. `carry`
     // is, like `timing`, an apps/web/DB-orchestration concept the engine's
     // pure ProgressionSpec has no notion of — see ProgressionSchema.
     //
@@ -5335,9 +5343,9 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
     // `ProgressionTieFlag.descriptors` carries sourceIndex (widened to
     // SourcedSlot — progression.ts). Reachable today: createStages/
     // replaceStages persist a multi-source `setup` progression with no
-    // progression-aware gate (format-gates.ts checks kind/byes/cross_feeds/
-    // placements only); progression-multi-source.test.ts exercises it end to
-    // end.
+    // progression-aware gate (format-gates.ts checks the stage kind only —
+    // V471 freed byes/cross_feeds/placements); progression-multi-source.test.ts
+    // exercises it end to end.
     //
     // F3 round-3 review, Task 2 — that alone still collides for two bestNth
     // rules on the SAME source at the same position but a different nth

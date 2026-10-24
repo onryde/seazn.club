@@ -2866,9 +2866,10 @@ test("portfolio panels (P1/P2/P4) hold at this width", async ({ page, request })
 // so this proves the stages exist and are visible FIRST, then adds entrants
 // and generates before a Super 8 fixture exists to assert on at all.
 //
-// Pro-only: t20-super8 is 3 stages, over community's stages.per_division.max
-// (2) on stage count alone — this file's shared storageState account is the
-// Pro user (playwright.config.ts's AUTH_STATE), so no plan flip is needed.
+// t20-super8 is 3 stages. That was over community's stages.per_division.max
+// (2) until V471 ("all stages are free", owner ruling 2026-10-20) made the
+// count unlimited on every plan; this file's shared storageState account is
+// the Pro user (playwright.config.ts's AUTH_STATE) either way.
 // ---------------------------------------------------------------------------
 
 test("P7/D1b: the t20-super8 template creates 3 stages, and Super 8 fixtures resolve seeded slot labels before the group stage is even played", async ({

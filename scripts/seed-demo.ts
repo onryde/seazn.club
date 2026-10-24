@@ -1020,9 +1020,10 @@ async function seedArchivedSlotHolder(competitionName: string): Promise<void> {
  * wizard's "start from a famous format" step calls (templates.ts's
  * `createFromTemplate`) — never a direct DB insert, so the demo proves the
  * real instantiation path rather than a shape the route could silently
- * drift from. `t20-super8` (4 groups -> Super 8 -> knockout, 3 stages) is
- * PRO-ONLY: 3 stages exceeds Community's `stages.per_division.max` of 2
- * (catalog.test.ts pins this).
+ * drift from. `t20-super8` (4 groups -> Super 8 -> knockout, 3 stages) was
+ * PRO-ONLY while Community's `stages.per_division.max` was 2; V471 ("all
+ * stages are free", owner ruling 2026-10-20) made the count unlimited on
+ * every plan, so any org can instantiate it now.
  *
  * Generates fixtures for STAGE 1 ONLY and decides none of them — the whole
  * point of seeding this is the CONTRAST between real group fixtures and the

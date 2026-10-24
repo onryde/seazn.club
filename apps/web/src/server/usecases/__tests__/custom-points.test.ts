@@ -315,22 +315,31 @@ describe.skipIf(!HAS_DB)("custom points & rank control (Jul3/05)", () => {
         },
       }),
     ).rejects.toMatchObject({ featureKey: "standings.custom_points" });
-    await expect(
-      createStages(freeAuth, freeDiv.id, [
-        { seq: 1, kind: "league", name: "L", config: {} },
-        {
-          seq: 2,
-          kind: "league",
-          name: "S",
-          config: {},
-          progression: {
-            sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 1 }] }],
-            placement: "rank_order",
-            timing: "on_complete",
-            carry: "points",
-          },
+    // Carry-over is free on every plan since V471 ("all stages are free",
+    // owner ruling 2026-10-20), so — like custom points above since V393 —
+    // only an explicit deny override shuts its gate. The SAME carry pair is
+    // refused under the deny and accepted on a plain community org.
+    const carryPair = () => [
+      { seq: 1, kind: "league" as const, name: "L", config: {} },
+      {
+        seq: 2,
+        kind: "league" as const,
+        name: "S",
+        config: {},
+        progression: {
+          sources: [{ stage: "previous" as const, take: [{ kind: "rankRange" as const, from: 1, to: 2 }] }],
+          placement: "rank_order" as const,
+          timing: "on_complete" as const,
+          carry: "points" as const,
         },
-      ]),
-    ).rejects.toMatchObject({ featureKey: "standings.carry_over" });
+      },
+    ];
+    await denyFeature(freeAuth.orgId, "standings.carry_over");
+    await expect(createStages(freeAuth, freeDiv.id, carryPair())).rejects.toMatchObject({
+      featureKey: "standings.carry_over",
+    });
+    const { auth: plainFree } = await seedOrg("community");
+    const { division: plainDiv } = await seedDivision(plainFree, ["A", "B"]);
+    expect(await createStages(plainFree, plainDiv.id, carryPair())).toHaveLength(2);
   });
 });

@@ -13,7 +13,8 @@ export async function POST(
     await requireOrgRole(id, ["owner", "admin"]);
 
     const ok = await hasFeature(id, "branding");
-    if (!ok) throw new HttpError(402, "Org logo requires Pro plan");
+    // `branding` is granted on every plan (V310): only a staff override refuses it.
+    if (!ok) throw new HttpError(402, "Your own logo is switched off for this organisation");
 
     const path = orgLogoPath(id);
     const { url, token } = await getSignedUploadUrl(path);

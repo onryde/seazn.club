@@ -2,9 +2,9 @@
 // finding 5) — the ONE definition createStages (usecases/stages.ts) and
 // createFromTemplate (usecases/templates.ts, D1a) both call. This file pins
 // every branch directly; templates.test.ts additionally exercises the
-// template path end-to-end with an edge case (config.placements) the
-// pre-existing americano-night regression test doesn't cover, so a future
-// re-duplication in either call site is caught two ways.
+// template path end-to-end (config.placements, free since V471, beside a
+// gated americano stage), so a future re-duplication in either call site is
+// caught two ways.
 import { describe, expect, it } from "vitest";
 import { stageNeedsAdvancedFormatsGate, stageNeedsDoubleElimGate } from "../format-gates";
 import { buildTemplateStages } from "@/lib/format-templates";
@@ -50,12 +50,18 @@ describe("stageNeedsAdvancedFormatsGate", () => {
     },
   );
 
+  // "All stages are free" (owner ruling 2026-10-20, V471): custom byes,
+  // cross-stage feeds and placements LEFT this gate. Each key on a basic kind
+  // must now pass — and the same key on a gated kind must still gate, so a
+  // mutant that dropped the kind terms too cannot satisfy this.
   it.each([
     ["byes", { byes: ["e1"] }],
     ["cross_feeds", { cross_feeds: [{ to_stage_seq: 2 }] }],
     ["placements", { placements: [{ from: 1, to: 2 }] }],
-  ] as const)("gates on a basic kind ('group') when config.%s is set", (_key, config) => {
-    expect(stageNeedsAdvancedFormatsGate({ kind: "group", config })).toBe(true);
+  ] as const)("does NOT gate a basic kind ('group') when config.%s is set — free since V471", (_key, config) => {
+    expect(stageNeedsAdvancedFormatsGate({ kind: "group", config })).toBe(false);
+    expect(stageNeedsAdvancedFormatsGate({ kind: "knockout", config })).toBe(false);
+    expect(stageNeedsAdvancedFormatsGate({ kind: "ladder", config })).toBe(true);
   });
 
   it("does not gate a basic kind with an empty/unrelated config", () => {
@@ -71,9 +77,9 @@ describe("stageNeedsAdvancedFormatsGate", () => {
 // are free kinds, same as league_ko). A badge and a gate that disagree is a
 // defect either way round, so this asserts the gates against the template's
 // REAL stage drafts rather than against a kind list typed in by hand — if a
-// later edit gives the swiss stage a `byes`/`cross_feeds`/`placements` key,
-// or swaps the plain knockout for a page_playoff, this reds instead of
-// silently paywalling a format the catalogue advertises as free.
+// later edit swaps either half for a gated kind (a page_playoff, a ladder),
+// this reds instead of silently paywalling a format the catalogue advertises
+// as free.
 describe("swiss_knockout is free at the server gate, and swiss_playoff is not", () => {
   const KNOBS = { qualified: 4, swissRounds: 5, poolCount: 2, legs: 1 };
 

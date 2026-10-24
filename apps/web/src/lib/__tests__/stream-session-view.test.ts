@@ -1116,7 +1116,7 @@ describe("PR-2 §7.4 — the automatic start's refusal (served only while it cou
     const SPEC: Record<string, [string, "buy" | "manage" | undefined]> = {
       no_credit: ["You need a match credit to go live.", "buy"],
       no_destination: ["This match has no destination to stream to.", "manage"],
-      not_entitled: ["Phone streaming isn't on your plan.", undefined],
+      not_entitled: ["Phone streaming is switched off for this organisation.", undefined],
       destination_in_use: ["That destination is already live on another match.", undefined],
       unavailable: ["The streaming service is unavailable. Try again in a minute.", undefined],
     };

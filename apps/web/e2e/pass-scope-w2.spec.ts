@@ -18,7 +18,9 @@ import { TAG, apiJson, loginUi, grantCompetitionPassSql, invalidateOrgEntitlemen
 // W3-A, 2026-09-06, V399, split off `stats.player`; see the block below),
 // `stages.per_division.max` and `schedule.checkpoints.max` (both CAPS, where the
 // pass moves a number rather than opening a door — a bool-only test would leave
-// the `getLimit` call sites unproven at the HTTP layer).
+// the `getLimit` call sites unproven at the HTTP layer). V471 made the stage
+// count free on every plan, so its block now proves BOTH divisions take a third
+// stage rather than a pass/sibling split.
 //
 // Both directions on the SAME org throughout: a one-sided test stays green if
 // the gate leaks org-wide, which is the same paid-for hole in the other
@@ -141,7 +143,7 @@ async function call(
 const stage = (seq: number) => ({ seq, kind: "league", name: `S${seq}`, config: {} });
 
 test.describe("Event Pass grants are reachable over HTTP on the passed competition only", () => {
-  test("player stats, the stage cap and the save-point cap all follow the pass", async ({
+  test("player stats and the save-point cap follow the pass; the stage count is free on both sides", async ({
     page,
   }: {
     page: Page;
@@ -204,22 +206,20 @@ test.describe("Event Pass grants are reachable over HTTP on the passed competiti
       await call(page.request, "GET", `/api/v1/persons/${plainPerson.data!.id}/stats?group=sport`),
     ).toEqual({ status: 402, featureKey: "stats.player.career" });
 
-    // --- stages.per_division.max (community 2, event_pass 4) ---------------
-    // Each division already holds stage seq 1, so the SECOND stage is inside
-    // both caps and the THIRD separates them.
-    expect(
-      await call(page.request, "POST", `/api/v1/divisions/${passed.divisionId}/stages`, stage(2)),
-    ).toEqual({ status: 201, featureKey: undefined });
-    expect(
-      await call(page.request, "POST", `/api/v1/divisions/${passed.divisionId}/stages`, stage(3)),
-    ).toEqual({ status: 201, featureKey: undefined });
-
-    expect(
-      await call(page.request, "POST", `/api/v1/divisions/${plain.divisionId}/stages`, stage(2)),
-    ).toEqual({ status: 201, featureKey: undefined });
-    expect(
-      await call(page.request, "POST", `/api/v1/divisions/${plain.divisionId}/stages`, stage(3)),
-    ).toEqual({ status: 402, featureKey: "stages.per_division.max" });
+    // --- stages.per_division.max (free on every plan since V471) -----------
+    // Was community 2, event_pass 4: the THIRD stage separated the passed
+    // competition from its sibling. V471 ("all stages are free", owner ruling
+    // 2026-10-20) made the count unlimited on every plan, so BOTH divisions now
+    // take a third — the sibling's 201 is the witness, rewritten rather than
+    // deleted so a regression that re-caps the count on plan or pass reds here.
+    for (const divisionId of [passed.divisionId, plain.divisionId]) {
+      for (const seq of [2, 3]) {
+        expect(
+          await call(page.request, "POST", `/api/v1/divisions/${divisionId}/stages`, stage(seq)),
+          `${divisionId === plain.divisionId ? "sibling (no pass)" : "passed"} stage ${seq}`,
+        ).toEqual({ status: 201, featureKey: undefined });
+      }
+    }
 
     // --- schedule.checkpoints.max (community 2, event_pass 5) --------------
     // This cap does not refuse: since #382 a save AT the cap ROLLS the window
