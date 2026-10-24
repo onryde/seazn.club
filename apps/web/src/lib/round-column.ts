@@ -1,0 +1,166 @@
+// The Arbiter Panel round column's model (spec 2026-10-24-arbiter-round-column-design.md §5.2, §5.3, §5.5, §5.6, §8): which
+// phase the column is in, the check-in clock, the tallies, the queue's attention count, where a "Review board" goes, the
+// Fixtures-tab entry line and the next-round views. Pure on purpose - no DB, no React, nothing server-only (the two server
+// types below are type-only and erased) - so the column, the waiting list and the entry card all read ONE answer, and a
+// client component can import it.
+//
+// The check-in window is `inExtendWindow`'s (lib/checkin-extend.ts), the one authority: opening included, deadline excluded.
+// Nothing here restates it.
+import type { ArbiterBoard, ArbiterBoardState, ArbiterRound } from "./arbiter-view.ts";
+import { boardIsOver } from "./arbiter-view.ts";
+import { inExtendWindow } from "./checkin-extend.ts";
+import type { OpenRoundView } from "./open-round.ts";
+import type { FlaggedBoard } from "@/server/usecases/external-play/arbiter";
+import type { NeedsOrganiserExternalPlayRow } from "@/server/usecases/external-play/queue";
+
+// ---- phase (§5.2) ---------------------------------------------------------------------------------------------
+
+export type RoundColumnPhase = "none" | "before" | "checkin" | "playing";
+
+/** A ladder whose order is part of its meaning, empty case stated by the first rungs:
+ *   1. the page said "not here" or "you play on it" (`requested`): no column, the panel's notice stands alone;
+ *   2. no round of the division has been opened: before;
+ *   3. some board on screen is `checking_in`: check-in;
+ *   4. otherwise playing - every board over, and a round whose every board is your own (`boards` empty), included.
+ *  A pinned older round (`current` false) takes its phase from the round on screen, like any other. */
+export function roundColumnPhase(round: ArbiterRound | null, requested: "unavailable" | "own" | null): RoundColumnPhase {
+  if (requested !== null) return "none";
+  if (round === null) return "before";
+  if (round.boards.some((b) => b.state.kind === "checking_in")) return "checkin";
+  return "playing";
+}
+
+// ---- check-in: the open-window set, the clock and the tally (§5.3) ---------------------------------------------
+
+/** The `checking_in` boards whose window is open now (`inExtendWindow` over `board.checkin`): the tally's set AND the waiting
+ *  list's (pre-flight A6), so a later group's board is "Not here yet" in neither before its window opens. Board order is kept.
+ *  A board with presses left or not is in its window either way: the cap is the +5's business, not the window's. */
+export function openWindowBoards(boards: readonly ArbiterBoard[], nowMs: number): ArbiterBoard[] {
+  return boards.filter((b) => b.state.kind === "checking_in" && b.checkin !== null && inExtendWindow(b.checkin, nowMs));
+}
+
+/** The three states of the one check-in clock:
+ *   - `closes`: some window is open - the NEXT board to close, the earliest deadline among the open windows;
+ *   - `opens`: no window is open but a later group is still to open - the earliest opening ahead;
+ *   - `closed`: neither (no `checking_in` board, or every window has run out). */
+export type CheckinClock = { kind: "closes"; at: string } | { kind: "opens"; at: string } | { kind: "closed" };
+
+/** The earliest of some ISO instants. Callers pass a non-empty list of parseable ones. */
+function earliest(isos: readonly string[]): string {
+  return isos.reduce((best, t) => (Date.parse(t) < Date.parse(best) ? t : best));
+}
+
+export function checkinClock(boards: readonly ArbiterBoard[], nowMs: number): CheckinClock {
+  const closing = openWindowBoards(boards, nowMs).flatMap((b) => (b.checkin === null ? [] : [b.checkin.deadlineAt]));
+  if (closing.length > 0) return { kind: "closes", at: earliest(closing) };
+  // Nothing is open. A group is "still to come" when its opening is ahead; a group whose deadline has passed is not.
+  const coming = boards.flatMap((b) =>
+    b.state.kind === "checking_in" && b.checkin !== null && Date.parse(b.checkin.opensAt) > nowMs ? [b.checkin.opensAt] : [],
+  );
+  if (coming.length > 0) return { kind: "opens", at: earliest(coming) };
+  return { kind: "closed" };
+}
+
+/** A board with a game under way: `starting` or `live`. A held board is the queue's, not "playing" (§5.3, §5.5). */
+function isPlaying(state: ArbiterBoardState): boolean {
+  return state.kind === "starting" || state.kind === "live";
+}
+
+/** The hero's tally. `seats` is two for each open-window board; `here` the seats among them that have checked in (a board
+ *  whose `seats` is null counts as not here); `playing` and `finished` are over EVERY board on screen. */
+export type CheckinTally = { here: number; seats: number; playing: number; finished: number };
+
+export function checkinTally(boards: readonly ArbiterBoard[], nowMs: number): CheckinTally {
+  const open = openWindowBoards(boards, nowMs);
+  const here = open.reduce((n, b) => n + (b.seats?.white.here ? 1 : 0) + (b.seats?.black.here ? 1 : 0), 0);
+  return {
+    here,
+    seats: open.length * 2,
+    playing: boards.filter((b) => isPlaying(b.state)).length,
+    finished: boards.filter((b) => boardIsOver(b.state)).length,
+  };
+}
+
+// ---- playing (§5.5) -------------------------------------------------------------------------------------------
+
+/** "{playing} of {total} boards playing" and the finished clause, over the boards on screen. */
+export type PlayingTally = { playing: number; total: number; finished: number };
+
+export function playingTally(boards: readonly ArbiterBoard[]): PlayingTally {
+  return {
+    playing: boards.filter((b) => isPlaying(b.state)).length,
+    total: boards.length,
+    finished: boards.filter((b) => boardIsOver(b.state)).length,
+  };
+}
+
+// ---- the queue (§5.6) -----------------------------------------------------------------------------------------
+
+/** C6: the number of DISTINCT fixture ids over the held rows the organiser does not sit on and the flagged boards. A held
+ *  board with an open flag is in both lists and counts once; a seated held card is shown but not counted; a cancelled flagged
+ *  board counts. The column's title and the Fixtures-tab entry line share this one function. */
+export function attentionCount(held: readonly NeedsOrganiserExternalPlayRow[], flagged: readonly FlaggedBoard[]): number {
+  const ids = new Set<string>();
+  for (const row of held) if (!row.seated) ids.add(row.fixtureId);
+  for (const b of flagged) ids.add(b.fixtureId);
+  return ids.size;
+}
+
+/** Where a card's "Review board" goes: `select` the board in place (it is in the round on screen), `link` to the arbiter page
+ *  pinned to its round (any other board), or `none` (a board the organiser sits on, or a cancelled one, which can never be
+ *  selected). `none` outranks the other two. */
+export type ReviewTarget = { kind: "select" } | { kind: "link" } | { kind: "none" };
+
+export function reviewTarget(fixtureId: string, round: ArbiterRound | null, card: { seated: boolean; cancelled: boolean }): ReviewTarget {
+  if (card.seated || card.cancelled) return { kind: "none" };
+  if (round !== null && round.boards.some((b) => b.fixtureId === fixtureId)) return { kind: "select" };
+  return { kind: "link" };
+}
+
+// ---- the Fixtures-tab entry card (§8, C7) ---------------------------------------------------------------------
+
+/** Attention and phase are separate facts (desk _RULES: "must never be collapsed into one enum"). `phase` is "checkin" when
+ *  some round is open with its deadline ahead, otherwise "ready" when some view's press is "open", otherwise "default";
+ *  `roundNo` is the round that set the phase (null for "default"). */
+export type EntryStatus = { attention: number; phase: "default" | "checkin" | "ready"; roundNo: number | null };
+
+/** Check-in outranks ready: a league pairs every round at Generate, so a ready round exists beside a round in check-in.
+ *  When several views qualify, the first in the reader's order (`listOpenRounds`: stage, then round) names the round. */
+export function entryStatus(views: readonly OpenRoundView[], attention: number, nowMs: number): EntryStatus {
+  const checkin = views.find((v) => v.state === "open" && v.deadlineAt !== null && Date.parse(v.deadlineAt) > nowMs);
+  if (checkin) return { attention, phase: "checkin", roundNo: checkin.roundNo };
+  const ready = views.find((v) => v.press === "open");
+  if (ready) return { attention, phase: "ready", roundNo: ready.roundNo };
+  return { attention, phase: "default", roundNo: null };
+}
+
+export type EntryLine =
+  | { kind: "default" }
+  | { kind: "attention"; count: number }
+  | { kind: "checkin"; roundNo: number }
+  | { kind: "ready"; roundNo: number };
+
+/** The one line the entry card says, empty case first: nothing to say reads the card's existing body; a board that needs a
+ *  decision outranks the phase (a red attention outranks the phase, as on the desk); then check-in; then ready. A phase with
+ *  no round number to name cannot be said ("Round null"), so it falls to the default body. */
+export function entryLine(s: EntryStatus): EntryLine {
+  if (s.attention > 0) return { kind: "attention", count: s.attention };
+  if (s.phase === "checkin" && s.roundNo !== null) return { kind: "checkin", roundNo: s.roundNo };
+  if (s.phase === "ready" && s.roundNo !== null) return { kind: "ready", roundNo: s.roundNo };
+  return { kind: "default" };
+}
+
+// ---- the round's views (§5.4, §5.5) ---------------------------------------------------------------------------
+
+/** The open-round view of the round on screen, or null when `listOpenRounds` has none for it (no row then offers Resend). */
+export function viewOfRound(views: readonly OpenRoundView[], round: Pick<ArbiterRound, "stageId" | "roundNo">): OpenRoundView | null {
+  return views.find((v) => v.stageId === round.stageId && v.roundNo === round.roundNo) ?? null;
+}
+
+/** The views waiting for their Open (`press === "open"`), the round on screen excluded, in the reader's order. A pinned older
+ *  round (`current` false) never offers the next round's press - the panel's N1 line offers the newer round - so it gets none.
+ *  With no round on screen there is nothing to exclude and nothing pinned: every view waiting to open. */
+export function nextRoundViews(views: readonly OpenRoundView[], round: ArbiterRound | null): OpenRoundView[] {
+  if (round !== null && !round.current) return [];
+  return views.filter((v) => v.press === "open" && !(round !== null && v.stageId === round.stageId && v.roundNo === round.roundNo));
+}
