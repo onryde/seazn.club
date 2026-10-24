@@ -338,6 +338,8 @@ type SideRow = {
   userId: string | null;
   email: string | null;
   locale: string | null;
+  /** `users.deleted_at` of the linked user (null while the account is live, and when there is no user). Read for `recipients` ONLY. */
+  deletedAt: Date | null;
   externalUserId: string | null;
   username: string | null;
 };
@@ -377,7 +379,7 @@ async function loadSide(side: Side, entrantId: string): Promise<SidePlayer> {
   const rows = await sql<SideRow[]>`
     select e.display_name as "displayName", e.kind as "kind",
            p.id as "personId", p.full_name as "fullName", p.user_id as "userId",
-           u.email, u.locale,
+           u.email, u.locale, u.deleted_at as "deletedAt",
            uea.external_user_id as "externalUserId", uea.username
       from entrants e
       left join entrant_members em on em.entrant_id = e.id
@@ -409,8 +411,11 @@ async function loadSide(side: Side, entrantId: string): Promise<SidePlayer> {
       solo?.externalUserId !== undefined && solo?.externalUserId !== null
         ? { id: solo.externalUserId, username: solo.username ?? solo.externalUserId }
         : null,
+    // A deleted account is not mailed. Its `users.email` is the unreachable placeholder the deletion left (`deleted-<id>@deleted.invalid`),
+    // so a Resend or the next Open would queue, stamp and send an invite to nobody; with the filter the seat takes the existing "no
+    // address" path (its stamp is released). Filtered HERE and nowhere else: `personId`, `userId` and `lichess` still resolve for the seat.
     recipients: rows
-      .filter((r): r is SideRow & { email: string } => r.email !== null)
+      .filter((r): r is SideRow & { email: string } => r.email !== null && r.deletedAt === null)
       .map((r) => ({ email: r.email, locale: r.locale })),
   };
 }
