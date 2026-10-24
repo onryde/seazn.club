@@ -53,6 +53,15 @@ async function denyFeature(orgId: string, featureKey: string): Promise<void> {
   await invalidateOrgEntitlements(orgId);
 }
 
+/** A CAP override on an int key: since V471 the only thing that can cap one organisation's stages per division. */
+async function capFeature(orgId: string, featureKey: string, limit: number): Promise<void> {
+  await sql`
+    insert into org_entitlement_overrides (org_id, feature_key, int_value, reason)
+    values (${orgId}, ${featureKey}, ${limit}, 'test')
+    on conflict (org_id, feature_key) do update set int_value = excluded.int_value, bool_value = null`;
+  await invalidateOrgEntitlements(orgId);
+}
+
 async function seedDivision(auth: AuthCtx): Promise<{ divisionId: string; competitionId: string }> {
   const comp = await createCompetition(auth, {
     ends_on: "2030-12-31",
@@ -120,9 +129,21 @@ describe.skipIf(!HAS_DB)("R-T13-2 replaceStages asks every batch gate BEFORE its
 
   it("the stage cap's 402, counted against the batch, leaves the original stages untouched", async () => {
     const auth = await seedOrg("community");
+    // V471 ("all stages are free", owner ruling 2026-10-20): no plan caps the stages per division, so the free
+    // behaviour comes first — community replaces its graph with 7 stages, past every old cap (community 2, pass 4,
+    // pro 6) …
+    const free = await seededGraph(auth);
+    expect(
+      await getLimit(auth.orgId, "stages.per_division.max", free.competitionId),
+      "premise: community is uncapped since V471",
+    ).toBeNull();
+    await replaceStages(auth, free.divisionId, Array.from({ length: 7 }, (_, i) => league(i + 1)));
+    expect((await stageIds(free.divisionId)).length).toBe(7);
+    // … and the cap this gate still reads is a staff override's, the per-organisation lever the code is kept for.
+    await capFeature(auth.orgId, "stages.per_division.max", 2);
     const { divisionId, competitionId, before } = await seededGraph(auth);
     const cap = await getLimit(auth.orgId, "stages.per_division.max", competitionId);
-    expect(cap, "premise: Community caps the stages per division").not.toBeNull();
+    expect(cap, "premise: the staff override caps the stages per division").toBe(2);
     const body = Array.from({ length: cap! + 1 }, (_, i) => league(i + 1));
     await expect(replaceStages(auth, divisionId, body)).rejects.toMatchObject({
       status: 402,
