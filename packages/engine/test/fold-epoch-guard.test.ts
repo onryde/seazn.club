@@ -6,7 +6,7 @@
 // reports how many it visited (TEST-STRATEGY rule 2): zero visited is a failure, never a pass.
 import { readFileSync } from "node:fs";
 import { beforeAll, describe, expect, it } from "vitest";
-import { epochViolations, compareSides, foldSourceTouched, GuardRefusal, guardVerdicts, parseStatsFoldVersion, sideStatsVersion, STATS_REQUIRED, statsVersionRow, type Side } from "../scripts/fold-epoch-guard.ts";
+import { epochViolations, compareSides, foldOptionsProblem, foldSourceTouched, GuardRefusal, guardVerdicts, parseStatsFoldVersion, sideStatsVersion, STATS_REQUIRED, statsVersionRow, type Side } from "../scripts/fold-epoch-guard.ts";
 import { builtinModules } from "../src/sports/index.ts";
 import { STATS_FOLD_VERSION } from "../src/stats/stats.ts";
 import { forEachSport } from "../src/testkit/for-each-sport.ts";
@@ -1646,5 +1646,84 @@ describe("fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded
       });
       expect(checked).toBe(builtinModules.length);
     }, budget(6));
+  });
+});
+
+// ------------------------------------------------------------------------------------------------------------------------------------
+// GF-3 T2: a stream's `foldOptions` (the server-only fold input `forfeitAward`) is part of its INPUT, beside its raw config, events and
+// lineups. A stream whose award changed asks for another fold, so it is a different input - removed and added, a major owed - and never
+// one stream whose output moved (which would read as an ordinary state change, or, with the output equal, as nothing at all).
+describe("fold-epoch guard: GF-3 T2 - a stream's foldOptions are part of its input", () => {
+  const AWARD = { forfeitAward: [5, 1] } as never;
+  const base = (): GoldenStream[] => [stream("std", 1), stream("std", 2, { foldOptions: AWARD })];
+  const withAward = (award: unknown): GoldenStream[] => [stream("std", 1), stream("std", 2, { foldOptions: award as never })];
+  const row = (v: ReturnType<typeof compareSides>) => v.map((r) => ({ matched: r.matched, changed: r.changed, removed: r.removed, added: r.added, owes: r.owes }));
+
+  it("the empty case first: streams that carry no foldOptions on either side are matched, as ever", () => {
+    expect(row(compareSides(side(1, [stream("std", 1), stream("std", 2)]), side(1, [stream("std", 1), stream("std", 2)])))).toEqual([{ matched: 2, changed: 0, removed: 0, added: 0, owes: null }]);
+  });
+  it("the same award on both sides is the same input: matched, owes nothing", () => {
+    expect(row(compareSides(side(1, base()), side(1, base())))).toEqual([{ matched: 2, changed: 0, removed: 0, added: 0, owes: null }]);
+    expect(epochViolations(side(1, base()), side(1, base()))).toEqual([]);
+  });
+  it("a different award is a re-recorded stream (removed AND added, not changed), which owes a MAJOR even when every recorded output is byte for byte the same", () => {
+    const v = epochViolations(side(1, base()), side(1, withAward([4, 1])));
+    expect(v).toHaveLength(1);
+    expect(v[0]).toMatchObject({ sport: "badminton", matched: 1, changed: 0, removed: 1, added: 1, owes: "major" });
+    expect(v[0]!.reason).toMatch(/1 stream\(s\) removed or re-recorded/);
+    expect(epochViolations(side(1, base()), side(2, withAward([4, 1])))).toEqual([]);
+  });
+  it("each number of the pair matters on its own (winner first, so a swapped award is another input)", () => {
+    for (const award of [[6, 1], [5, 2], [1, 5]]) {
+      expect(row(compareSides(side(1, base()), side(1, withAward({ forfeitAward: award })))), JSON.stringify(award)).toEqual([{ matched: 1, changed: 0, removed: 1, added: 1, owes: "major" }]);
+    }
+  });
+  it("gaining an award is a re-record, and so is losing one: the stream's fold changed either way", () => {
+    expect(row(compareSides(side(1, [stream("std", 1), stream("std", 2)]), side(1, base())))).toEqual([{ matched: 1, changed: 0, removed: 1, added: 1, owes: "major" }]);
+    expect(row(compareSides(side(1, base()), side(1, [stream("std", 1), stream("std", 2)])))).toEqual([{ matched: 1, changed: 0, removed: 1, added: 1, owes: "major" }]);
+  });
+  it("an award written with its keys in another order is the same input (the order-insensitive form is asked only when the text differs)", () => {
+    const wide = { forfeitAward: [5, 1], note: "x" } as never;
+    const shuffled = { note: "x", forfeitAward: [5, 1] } as never;
+    expect(row(compareSides(side(1, [stream("std", 2, { foldOptions: wide })]), side(1, [stream("std", 2, { foldOptions: shuffled })])))).toEqual([{ matched: 1, changed: 0, removed: 0, added: 0, owes: null }]);
+  });
+  it("a foldOptions that is only an empty object is not 'no foldOptions' to the input (parseCorpus refuses it; the pure rule does not guess)", () => {
+    expect(row(compareSides(side(1, [stream("std", 2)]), side(1, [stream("std", 2, { foldOptions: {} as never })])))).toEqual([{ matched: 0, changed: 0, removed: 1, added: 1, owes: "major" }]);
+  });
+
+  describe("foldOptionsProblem: the shape parseCorpus accepts (two non-negative finite integers, no other key)", () => {
+    const GOOD: ReadonlyArray<readonly [string, unknown]> = [
+      ["an award", { forfeitAward: [5, 1] }],
+      ["a 0-0 award (a score like any other)", { forfeitAward: [0, 0] }],
+      ["a lopsided award", { forfeitAward: [20, 0] }],
+    ];
+    const BAD: ReadonlyArray<readonly [string, unknown, RegExp]> = [
+      ["null", null, /not an object/],
+      ["an array", [], /not an object/],
+      ["a string", "forfeitAward", /not an object/],
+      ["a number", 3, /not an object/],
+      ["an empty object", {}, /forfeitAward/],
+      ["another key beside the award", { forfeitAward: [5, 1], other: 1 }, /only forfeitAward is allowed.*"other"/],
+      ["another key INSTEAD of the award", { strictFromSeq: 0 }, /only forfeitAward is allowed.*"strictFromSeq"/],
+      ["an undefined award", { forfeitAward: undefined }, /forfeitAward/],
+      ["an award that is not an array", { forfeitAward: "5-1" }, /pair/],
+      ["an award that is an object with index keys", { forfeitAward: { 0: 5, 1: 1, length: 2 } }, /pair/],
+      ["a one-number award", { forfeitAward: [5] }, /pair/],
+      ["a three-number award", { forfeitAward: [5, 1, 0] }, /pair/],
+      ["a negative number", { forfeitAward: [-1, 2] }, /non-negative/],
+      ["a fraction", { forfeitAward: [1.5, 2] }, /integer/],
+      ["a number that parses to Infinity", JSON.parse('{"forfeitAward":[1e999,0]}') as unknown, /integer/],
+      ["a numeric string", { forfeitAward: ["5", 1] }, /integer/],
+      ["a null", { forfeitAward: [null, 1] }, /integer/],
+      ["NaN", { forfeitAward: [Number.NaN, 1] }, /integer/],
+    ];
+    it("accepts the shapes the recorder writes", () => {
+      for (const [label, value] of GOOD) expect(foldOptionsProblem(value), label).toBeNull();
+      expect(GOOD.length).toBeGreaterThan(0);
+    });
+    it("refuses everything else, naming what is wrong", () => {
+      for (const [label, value, why] of BAD) expect(foldOptionsProblem(value) ?? "accepted", label).toMatch(why);
+      expect(BAD.length).toBeGreaterThanOrEqual(15);
+    });
   });
 });

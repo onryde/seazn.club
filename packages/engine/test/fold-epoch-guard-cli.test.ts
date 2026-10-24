@@ -2262,3 +2262,88 @@ describe("fold-epoch-guard CLI: GF-3 T1 - STATS_FOLD_VERSION must rise when reco
     });
   });
 });
+
+// ------------------------------------------------------------------------------------------------------------------------------------
+// GF-3 T2: a stream's `foldOptions` ({ "forfeitAward": [winner, loser] }, the server-only fold input), in a real git history. It is part of the
+// stream's INPUT, in every format: a shape the recorder never writes is a refusal (exit 2, naming the stream), a valid one is read (it is not "a key
+// no format records"), and an award that changed is a re-recorded stream - a major owed, not a moved output. The pure rule is in
+// fold-epoch-guard.test.ts; what only a real repository shows is that the SCRIPT reads and refuses the field.
+describe("fold-epoch-guard CLI: GF-3 T2 - foldOptions", () => {
+  const AWARD = { forfeitAward: [5, 1] };
+  const addAward = (award: unknown = AWARD) => (c: Corpus): void => { c.streams[0]!.foldOptions = award; };
+  const BAD: ReadonlyArray<readonly [string, unknown]> = [
+    ["null", null],
+    ["an array", [5, 1]],
+    ["an empty object", {}],
+    ["another key beside the award", { forfeitAward: [5, 1], strictFromSeq: 0 }],
+    ["another key instead of the award", { strictFromSeq: 0 }],
+    ["an award that is not a pair", { forfeitAward: [5] }],
+    ["an award of three numbers", { forfeitAward: [5, 1, 0] }],
+    ["a negative score", { forfeitAward: [-1, 0] }],
+    ["a fractional score", { forfeitAward: [2.5, 0] }],
+    ["a score that is not a number", { forfeitAward: ["5", 1] }],
+  ];
+  spawnIt(BAD.length + 3)("each malformed foldOptions is refused (exit 2, nothing judged), naming the stream, whichever side holds it", () => {
+    let refused = 0;
+    for (const [label, value] of BAD) {
+      atF3(fmtMono);
+      editCorpus(fmtMono, FIRST, addAward(value));
+      commit(fmtMono, `current side: ${label}`);
+      const r = guard(fmtMono, "f3");
+      expect({ label, status: r.status, stdout: r.stdout }, label).toEqual({ label, status: 2, stdout: "" });
+      expect(r.stderr, label).toMatch(/stream #0 \(\S+#\d+\) has malformed foldOptions \(.+\): the only fold option a corpus records is \{ "forfeitAward": \[winner, loser\] \}/);
+      refused++;
+    }
+    expect(refused, "every malformed shape was tried").toBe(BAD.length);
+    // the same corpus as the BASELINE is refused too, with the baseline named
+    atF3(fmtMono);
+    editCorpus(fmtMono, FIRST, addAward({ forfeitAward: [-1, 0] }));
+    const bad = commit(fmtMono, "a baseline with a malformed foldOptions");
+    atF3(fmtMono);
+    const r = guard(fmtMono, bad);
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(new RegExp(`at ${bad}: stream #0 \\(\\S+#\\d+\\) has malformed foldOptions`));
+  });
+
+  spawnIt(4)("a valid foldOptions is read, not refused as a key no format records: the same award on both sides is green, matched, and owes nothing", () => {
+    atF3(fmtMono);
+    editCorpus(fmtMono, FIRST, addAward());
+    commit(fmtMono, "an award on stream 0");
+    editCorpus(fmtMono, FIRST, (c) => { c.streams[1]!.outcome = String(c.streams[1]!.outcome); }); // a commit that changes nothing in the corpus's meaning
+    commit(fmtMono, "nothing moved");
+    const r = guard(fmtMono);
+    expect({ status: r.status, stderr: r.stderr, violated: violated(r.stdout) }).toEqual({ status: 0, stderr: "", violated: [] });
+    expect(lineOf(r.stdout, FIRST)).toMatch(new RegExp(`matched ${STREAMS.get(FIRST)} changed 0 deltas-only 0 removed 0 added 0 recorded 0$`));
+  });
+
+  spawnIt(8)("an award that changed owes a MAJOR even though no recorded output moved: removed AND added, never 'changed'; a bump pays it", () => {
+    atF3(fmtMono);
+    editCorpus(fmtMono, FIRST, addAward());
+    commit(fmtMono, "baseline: an award on stream 0");
+    editCorpus(fmtMono, FIRST, addAward({ forfeitAward: [6, 1] }));
+    commit(fmtMono, "the award changed, every recorded output the same");
+    const red = guard(fmtMono);
+    expect(red.status).toBe(1);
+    expect(violated(red.stdout)).toEqual([FIRST]);
+    const n = STREAMS.get(FIRST)!;
+    expect(lineOf(red.stdout, FIRST)).toMatch(new RegExp(`matched ${n - 1} changed 0 deltas-only 0 removed 1 added 1 recorded 0 - VIOLATION: major owed`));
+    setEpoch(fmtMono, FIRST, realEntry("FOLD_EPOCH", FIRST) + 1);
+    commit(fmtMono, "the major, raised");
+    const green = guard(fmtMono);
+    expect({ status: green.status, violated: violated(green.stdout) }).toEqual({ status: 0, violated: [] });
+    // gaining an award is a re-record too (the stream's fold changed), and so is losing one
+    atF3(fmtMono);
+    editCorpus(fmtMono, FIRST, addAward());
+    commit(fmtMono, "an award appears on stream 0");
+    const gained = guard(fmtMono, "f3");
+    expect(gained.status).toBe(1);
+    expect(lineOf(gained.stdout, FIRST)).toMatch(new RegExp(`removed 1 added 1 recorded 0 - VIOLATION: major owed`));
+    const lost = guard(fmtMono, "HEAD");
+    expect({ status: lost.status, violated: violated(lost.stdout) }, "nothing changed against itself").toEqual({ status: 0, violated: [] });
+    editCorpus(fmtMono, FIRST, (c) => { delete c.streams[0]!.foldOptions; });
+    commit(fmtMono, "the award is dropped again");
+    const dropped = guard(fmtMono);
+    expect(dropped.status).toBe(1);
+    expect(lineOf(dropped.stdout, FIRST)).toMatch(/removed 1 added 1 recorded 0 - VIOLATION: major owed/);
+  });
+});

@@ -122,6 +122,11 @@ export interface GoldenEvent {
   voids?: string;
 }
 
+/** The fold options a corpus stream records (`GoldenStream.foldOptions`): `forfeitAward` only, winner first (`ForfeitAward`, core/types.ts). */
+export interface GoldenFoldOptions {
+  readonly forfeitAward: readonly [number, number];
+}
+
 export interface GoldenStream {
   /** Key into GoldenCorpus.configs. */
   config: string;
@@ -132,6 +137,11 @@ export interface GoldenStream {
    *  would change `init` for all eleven corpora, so a coverage stream that
    *  needs a bench (football cannot substitute without one) carries its own. */
   lineups?: LineupPair;
+  /** GF-3 T2 - the server-only fold input this stream's fold was offered beside its ledger (`FoldOptions`): ONLY `forfeitAward`, the stage
+   *  points rule's award for a forfeit with nothing played, winner first. Part of the stream's INPUT like `lineups`: the guard compares it
+   *  with the config and the events, so a stream whose award changed is re-recorded, not a moved output. Absent on every stream recorded
+   *  before it existed, which then fold as they always did. Optional in every format; the format stays 3. */
+  foldOptions?: GoldenFoldOptions;
   events: GoldenEvent[];
   /** JSON of the folded state after each event — states[i] is the fold of
    *  events[0..i]. Length always equals events.length. */

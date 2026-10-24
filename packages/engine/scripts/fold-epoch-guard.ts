@@ -11,8 +11,11 @@
 // THE RULE, per sport (epochViolations is pure and carries it):
 //   - A stream's identity is `config#seed` (unique in every corpus: a duplicate is a refusal).
 //   - A stream's INPUT is everything its replay starts from: the RAW config object it names in the corpus's `configs`, its events, and the
-//     lineups it was recorded against. The replay re-parses that config, so a module's default can change and the old value be written
-//     into the recorded configs, leaving every event and result byte for byte the same: that is a rule change, and it owes the bump.
+//     lineups it was recorded against, and (GF-3 T2) the `foldOptions` its fold was offered: the server-only fold input `forfeitAward`
+//     (`{ "forfeitAward": [winner, loser] }`, absent = none). The replay re-parses that config, so a module's default can change and the
+//     old value be written into the recorded configs, leaving every event and result byte for byte the same: that is a rule change, and it
+//     owes the bump. An award that changed is the same: another fold, so another input (a stream is never "the same stream whose output
+//     moved"). `foldOptions` is optional in every format, and a shape other than the one the recorder writes is a refusal (exit 2).
 //   - MATCHED: the identity is on both sides and the stream's INPUT is equal.
 //   - CHANGED: a matched stream whose states, outcome or summary differ. A phone computes (and renders) all three, mid-match states
 //     included. DELTAS-ONLY: a matched stream whose states, outcome and summary are the same and whose standings deltas differ: only the
@@ -83,7 +86,8 @@
 //   2  refused, nothing judged: usage, a ref that is not a commit (shallow clone, root commit), no git to ask, a table or corpus that is
 //      missing, does not load or is malformed (the tree's must declare FOLD_MINOR for exactly the sports of FOLD_EPOCH), a table that declares
 //      no sport, a duplicate stream identity, a stream that names no config of
-//      its corpus, a corpus format that is none of 1, 2 and 3, a format-2 or -3 stream without `summaries` (one per event) and `overlay` (a JSON
+//      its corpus, a stream whose foldOptions is not `{ forfeitAward: [two non-negative integers] }` and nothing else,
+//      a corpus format that is none of 1, 2 and 3, a format-2 or -3 stream without `summaries` (one per event) and `overlay` (a JSON
 //      object), a format-1 stream that has either, a format-3 stream without `playerStats` (the text of a JSON array of rows), a format-1 or -2 stream that has it, git could not list the change (the paths a newly recorded stream is judged by), a baseline git cannot read, a baseline that lacks the table but already has this guard or holds no corpus (a moved table, a
 //      renamed engine directory), a tree whose src/stats/stats.ts is missing or does not declare STATS_FOLD_VERSION exactly once as a positive
 //      integer, the same of a baseline that has the file, a baseline that records player stats and has no src/stats/stats.ts (a moved module),
@@ -184,8 +188,10 @@ const canonical = (v: unknown): string => JSON.stringify(v ?? null, sortKeys);
 /** Whether two streams ask for the same fold: the same events and the same lineups. The recorder writes keys in one order, so the plain
  *  text of the two is equal in practice and settles it; only when the text differs is the order-insensitive form asked. */
 const sameInput = (x: unknown, y: unknown): boolean => JSON.stringify(x) === JSON.stringify(y) || canonical(x) === canonical(y);
-/** What a stream's replay starts from (see THE RULE): its raw config object, its events and its lineups. */
-const inputOf = (s: GoldenStream, corpus: GoldenCorpus): unknown => [get(corpus.configs, s.config) ?? null, s.events, s.lineups ?? null];
+/** What a stream's replay starts from (see THE RULE): its raw config object, its events, its lineups and its `foldOptions` (GF-3 T2: the
+ *  server-only fold input the recorder offers the fold, `forfeitAward`; absent means none, so a stream that records none is the input it always was).
+ *  An award that changed asks for another fold, so it is another input - never one stream whose output moved. */
+const inputOf = (s: GoldenStream, corpus: GoldenCorpus): unknown => [get(corpus.configs, s.config) ?? null, s.events, s.lineups ?? null, s.foldOptions ?? null];
 /** Whether a stream records the format-2 fields. `parseCorpus` makes it all or nothing per corpus, so a stream has both or neither. */
 const recordsKernel = (s: GoldenStream): boolean => s.summaries !== undefined && s.overlay !== undefined;
 /** Whether a stream records the format-3 `playerStats`. `parseCorpus` makes it all or nothing per corpus, like the kernel fields. */
@@ -678,13 +684,35 @@ function playerStatsOk(text: unknown): boolean {
   );
 }
 
-/** Every key a stored stream may hold, in any format: the input (`config`, `seed`, `lineups`, `events`), the four fields of format 1, the two
+/** Every key a stored stream may hold, in any format: the input (`config`, `seed`, `lineups`, `foldOptions`, `events`), the four fields of format 1, the two
  *  of format 2 and the one of format 3. A key outside it is a probe-only field that reached a corpus (the recorder's `dense` overlay is the
  *  one that can: a spread of a recomputation writes it), and the guard would compare nothing of it. The per-format all-or-nothing rules below
  *  say which of these a given format may hold. */
 const STREAM_KEYS: ReadonlySet<string> = new Set([
-  "config", "seed", "lineups", "events", "states", "outcome", "summary", "deltas", "summaries", "overlay", "playerStats",
+  "config", "seed", "lineups", "foldOptions", "events", "states", "outcome", "summary", "deltas", "summaries", "overlay", "playerStats",
 ]);
+
+/** The one key a stream's `foldOptions` may hold: the server's `FoldOptions.forfeitAward` (the stage points rule's award, winner first). */
+const FOLD_OPTION_KEY = "forfeitAward";
+
+/** Why a stream's `foldOptions` is not the shape the recorder writes, or null when it is: an object with exactly one key, `forfeitAward`, a pair of
+ *  non-negative finite integers (`Number.isInteger` is false for a fraction, NaN and the Infinity `1e999` parses to). Pure; `parseCorpus` refuses
+ *  a stream whose answer is not null, naming the stream. The recorder (`golden.ts`, `checkedFoldOptions`) states the same rule, and a test holds
+ *  the two to one set of inputs. */
+export function foldOptionsProblem(value: unknown): string | null {
+  if (!isObject(value)) return "it is not an object";
+  const keys = Object.keys(value);
+  const other = keys.find((k) => k !== FOLD_OPTION_KEY);
+  if (other !== undefined) return `only ${FOLD_OPTION_KEY} is allowed, and it holds ${JSON.stringify(other)}`;
+  if (!keys.includes(FOLD_OPTION_KEY) || value[FOLD_OPTION_KEY] === undefined) return `it holds no ${FOLD_OPTION_KEY}`;
+  const award = value[FOLD_OPTION_KEY];
+  if (!Array.isArray(award) || award.length !== 2) return `${FOLD_OPTION_KEY} is not a pair of two numbers`;
+  for (const n of award as unknown[]) {
+    if (typeof n !== "number" || !Number.isInteger(n)) return `${FOLD_OPTION_KEY} holds ${String(n)}, which is not an integer`;
+    if (n < 0) return `${FOLD_OPTION_KEY} holds ${n}, and a score is non-negative`;
+  }
+  return null;
+}
 
 function parseCorpus(text: string, label: string, sport: string): GoldenCorpus {
   let v: unknown;
@@ -712,6 +740,13 @@ function parseCorpus(text: string, label: string, sport: string): GoldenCorpus {
     const unknownKey = Object.keys(s as object).find((key) => !STREAM_KEYS.has(key));
     if (unknownKey !== undefined) {
       throw new GuardRefusal(`${label}: stream #${i} carries a key no format records (${JSON.stringify(unknownKey)}): a probe-only field is never stored in a corpus`);
+    }
+    // GF-3 T2: `foldOptions` is part of the stream's INPUT, in every format. A shape the recorder never writes is refused, not compared as text.
+    if (Object.hasOwn(s, "foldOptions")) {
+      const problem = foldOptionsProblem((s as { foldOptions?: unknown }).foldOptions);
+      if (problem !== null) {
+        throw new GuardRefusal(`${label}: stream #${i} (${(s as { config: string }).config}#${(s as { seed: number }).seed}) has malformed foldOptions (${problem}): the only fold option a corpus records is { "${FOLD_OPTION_KEY}": [winner, loser] }`);
+      }
     }
     const kernel = s as { events: unknown[]; summaries?: unknown; overlay?: unknown; playerStats?: unknown };
     if (format === 1 && (kernel.summaries !== undefined || kernel.overlay !== undefined)) {
