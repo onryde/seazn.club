@@ -1,0 +1,198 @@
+{
+ "batch": "gf3-t1",
+ "note": "Test-id ledger for GF-3 T1 (the fold-epoch guard requires STATS_FOLD_VERSION to rise whenever the player stats a corpus records change, reads the constant by its exact declaration, and prints it in the summary line), built against base 2e0deaa6c1 (main after #1010). Ids are relative to the engine collection ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --after <after-engine.json>=packages/engine --ledger this-file. Collect each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f>` (--isolate on BOTH sides) from the engine directory, the WHOLE package, DATABASE_URL empty. T1 adds 48 tests (6758 -> 6806 collected: 29 in test/fold-epoch-guard.test.ts, 19 in test/fold-epoch-guard-cli.test.ts), retitles and retires none; it edits the bodies (not the titles) of the existing GF-2 T4 CLI tests that move recorded stats so they also pay the new version, and the summary-line regex of tools/matrix/__tests__/ci-wiring.test.ts (outside the engine collection root; its test id is unchanged, re-run green).",
+ "entries": [
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › (a) the rule, in a real git history › a MAJOR bump does not settle it, with the stats beside a phone output that moved or not: the stats version is red whatever the epoch did",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › (a) the rule, in a real git history › a bump with no stats change is green, and so is a change to the stats module's code that moved no recorded stat",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › (a) the rule, in a real git history › a sport-only violation leaves the stats line clean and the hint without a stats step (the control)",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › (a) the rule, in a real git history › a stats move with the sport's own minor paid and no STATS_FOLD_VERSION bump is red on the stats version ALONE: it names the constant, the file and both values",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › (a) the rule, in a real git history › an unbumped stats move owes BOTH: the sport's minor and the stats version, each named on its own line",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › (a) the rule, in a real git history › each bump pays only its own debt: the minor alone leaves the stats version red, the stats bump alone leaves the sport red, both together are green",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › (a) the rule, in a real git history › the version never falls: a fall is red with nothing else changed, and no sport bump settles it",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › (b) what owes nothing › a 2 -> 3 reformat owes no stats bump: green when it touches no fold source, and green with the sport's MINOR when it does (the stats module touched, its constant alone)",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › (b) what owes nothing › a stream APPENDED already in format 3 (EXTEND_GOLDEN) owes no stats bump",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › (b) what owes nothing › a stream removed or re-recorded owes no stats bump (its input changed, so its stats are not comparable): it owes its sport's MAJOR",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › (c) with the engine at a repository root › the same verdicts hold, and the hint names the file without a prefix",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › (d) the second call, and the next change › the same run twice prints the same report, and a later change is judged against the bump already spent",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › (e) fail closed: a number the guard cannot read is a refusal (exit 2, nothing judged), never a pass › a BASELINE that has the file must parse too: refused, and the message says it is the baseline's",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › (e) fail closed: a number the guard cannot read is a refusal (exit 2, nothing judged), never a pass › the introducing-PR pass (no table, no guard at the baseline) still reads the tree's number: unreadable or missing is refused there too",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › (e) fail closed: a number the guard cannot read is a refusal (exit 2, nothing judged), never a pass › the tree's stats module deleted is refused, naming the file",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › (e) fail closed: a number the guard cannot read is a refusal (exit 2, nothing judged), never a pass › the tree's stats module: each unreadable declaration is refused even though nothing else changed (counted)",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › (f) a baseline with no stats module › a stats module MOVED to another path, with the guard taught the new path and a stats move without any bump in the same PR, is refused",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › (f) a baseline with no stats module › that records NO player stats is the bootstrap: nothing was stored under a number, so nothing is owed, and the report says the baseline had none",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard-cli.test.ts › fold-epoch-guard CLI: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › (f) a baseline with no stats module › that records player stats is refused: the module moved, and nothing can be judged against a baseline that has no number",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › fail closed: a side whose version was not given, or a baseline that cannot be compared › ONE corpus recording stats is enough to refuse (a baseline whose other sports are still format 2), and so is ONE stream within a corpus",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › fail closed: a side whose version was not given, or a baseline that cannot be compared › a baseline WITH a module and no recorded stats is compared as usual (a format-2 base cannot owe a stats move)",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › fail closed: a side whose version was not given, or a baseline that cannot be compared › a baseline with no stats module and no recorded stats is the bootstrap: nothing was stored under a version, so nothing is owed (the number is reported as none)",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › fail closed: a side whose version was not given, or a baseline that cannot be compared › a baseline with no stats module that already RECORDS player stats is refused: the module moved, and a change cannot be judged against nothing",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › fail closed: a side whose version was not given, or a baseline that cannot be compared › a current side with no STATS_FOLD_VERSION is refused, even when no stream moved (a pass over a missing number proves nothing)",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › over every registered sport's real golden corpus › a stats move in one stream of any sport names exactly that sport and needs the stats bump; the sport's own bumps do not pay it (counted)",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › parseStatsFoldVersion reads the constant by its exact declaration and refuses everything else › a declaration quoted inside a doc comment is not the declaration",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › parseStatsFoldVersion reads the constant by its exact declaration and refuses everything else › reads any positive integer, with the line ending or trailing blanks the file happens to have",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › parseStatsFoldVersion reads the constant by its exact declaration and refuses everything else › reads the live constant out of the real file's text (derived from the engine's own declaration)",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › parseStatsFoldVersion reads the constant by its exact declaration and refuses everything else › refuses a text that does not declare it exactly once as a positive safe integer, naming the file and the shape it wants",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › the policy text says what the guard does (GOLDEN-POLICY.md) › names the three edges the code has: the bootstrap, the moved module and the fail-closed read",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › the policy text says what the guard does (GOLDEN-POLICY.md) › states the rule in the words the guard prints, and no longer calls the version a manual obligation the guard does not enforce",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › the rule › a bump with no stats change is not a violation either (a version may rise on its own, as an epoch may)",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › the rule › a fall beside a stats change names both: it went down AND it must rise",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › the rule › a held version with no stats change is not a violation (the control: the cases above are not red for another reason)",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › the rule › a stats bump does not settle the sport's own minor: both are owed, each is paid on its own",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › the rule › a stats change that a phone output moved beside (a MAJOR change) still counts: every matched stream, not only the stats-only ones",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › the rule › a stats change with a MAJOR bump but no stats bump is still a violation (snapshot invalidation is independent of the epoch)",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › the rule › a stats-only change with no stats bump is a violation: the reason names the constant, the file, both values and the number to set",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › the rule › a stream ADDED already in format 3 owes none (EXTEND_GOLDEN)",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › the rule › a stream that GAINS its stats (a 2 -> 3 reformat) owes no stats bump, with or without fold source touched; the sport's own minor is judged as before",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › the rule › counts every moved stream of every sport once, and names the sports in alphabetical order",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › the rule › counts the STREAMS, not the sports: two moved streams of one sport are two",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › the rule › is settled by a RISE: 6 -> 7 is green, and so is any larger step",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › the rule › names the sports alphabetically whatever order the rows come in",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › the rule › stats are compared only when BOTH sides record them: a stream that lost its stats is the format falling, not a stats move",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › the rule › streams that are REMOVED or re-recorded owe no stats bump: their input changed, so their stats are not comparable (the sport owes its major instead)",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › the rule › the call is pure and the answer is the same the second time; a later change needs its OWN bump on top of the last",
+   "fate": "added"
+  },
+  {
+   "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T1 - STATS_FOLD_VERSION must rise when recorded player stats change › the rule › the version never falls: 6 -> 5 is a violation with nothing else changed, and no minor or major bump settles it",
+   "fate": "added"
+  }
+ ]
+}
