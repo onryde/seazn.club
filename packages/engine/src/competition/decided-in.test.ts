@@ -156,7 +156,10 @@ describe("W2d Task 1: decidedInOf — the per-sport win-method vocabulary", () =
   });
 
   it("an unknown method throws CONFIG_INVALID, never maps to regulation", () => {
-    expect(() => football.decidedInOf("bogus")).toThrowError(expect.objectContaining({ code: "CONFIG_INVALID" }));
+    // The refusal names the sport and the method, in its data and its message, so a caller can say which.
+    expect(() => football.decidedInOf("bogus")).toThrowError(
+      expect.objectContaining({ code: "CONFIG_INVALID", data: { sport: "football", method: "bogus" }, message: expect.stringContaining('"bogus"') }),
+    );
     // Swept: an undeclared string, a prototype key (a plain-object lookup would answer `constructor` with a function)
     // and the empty string are refused by every sport.
     const probes = ["bogus", "constructor", "toString", "__proto__", "hasOwnProperty", ""];
@@ -164,7 +167,9 @@ describe("W2d Task 1: decidedInOf — the per-sport win-method vocabulary", () =
     const n = forEachSport(({ module }) => {
       for (const p of probes) {
         expect(module.outcomeMethods).not.toContain(p);
-        expect(() => module.decidedInOf(p), `${module.key} "${p}"`).toThrowError(expect.objectContaining({ code: "CONFIG_INVALID" }));
+        expect(() => module.decidedInOf(p), `${module.key} "${p}"`).toThrowError(
+          expect.objectContaining({ code: "CONFIG_INVALID", data: { sport: module.key, method: p } }),
+        );
         checked++;
       }
     });

@@ -225,6 +225,36 @@
     ]
   },
   {
+    "id": "t1-refusal-message-empty",
+    "file": "packages/engine/src/sport/module.ts",
+    "find": "`${sport} writes no win method \"${method}\"`",
+    "replace": "\"\" /*MUT*/",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/decided-in.test.ts"
+        ],
+        "name": "an unknown method throws CONFIG_INVALID"
+      }
+    ]
+  },
+  {
+    "id": "t1-refusal-data-empty",
+    "file": "packages/engine/src/sport/module.ts",
+    "find": "{ sport, method });",
+    "replace": "{} /*MUT*/);",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/decided-in.test.ts"
+        ],
+        "name": "an unknown method throws CONFIG_INVALID"
+      }
+    ]
+  },
+  {
     "id": "t1-hockey-winscount-dropped",
     "file": "packages/engine/src/sports/hockey/hockey.ts",
     "find": "winsCount: \"regulation\",",

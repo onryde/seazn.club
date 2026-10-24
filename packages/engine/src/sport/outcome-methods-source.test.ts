@@ -42,13 +42,35 @@ interface Scan {
 
 const isWinLiteral = (o: ts.ObjectLiteralExpression): boolean =>
   o.properties.some(
-    (p) => ts.isPropertyAssignment(p) && p.name.getText() === "kind" && ts.isStringLiteralLike(p.initializer) && p.initializer.text === "win",
+    (p) =>
+      ts.isPropertyAssignment(p) &&
+      (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)) &&
+      p.name.text === "kind" &&
+      ts.isStringLiteralLike(p.initializer) &&
+      p.initializer.text === "win",
   );
 
-const scanFile = (path: string, out: Scan): void => scanSource(path, readFileSync(path, "utf8"), out);
+/** Each file is parsed once per run: kernels are shared by several modules (the period kernel by both hockeys, the set-based
+ *  kernel by three sports), and a parse of a 4,000-line module is the cost of this test. */
+const fileScans = new Map<string, Scan>();
+const scanFile = (path: string, out: Scan): void => {
+  let own = fileScans.get(path);
+  if (own === undefined) {
+    own = { literals: new Set(), templateHeads: new Set(), unresolved: 0 };
+    scanSource(path, readFileSync(path, "utf8"), own);
+    fileScans.set(path, own);
+  }
+  for (const l of own.literals) out.literals.add(l);
+  for (const h of own.templateHeads) out.templateHeads.add(h);
+  out.unresolved += own.unresolved;
+};
+
+/** The TypeScript compiler parses every module source of every sport: a stated budget, not vitest's 5 s (a loaded runner is
+ *  several times slower than the ~1 s it takes locally). */
+const SCAN_BUDGET_MS = 30_000;
 
 function scanSource(name: string, text: string, out: Scan): void {
-  const sf = ts.createSourceFile(name, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const sf = ts.createSourceFile(name, text, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
   const consts = new Map<string, ts.Expression>();
   const methodParam = new Map<string, number>(); // function name → index of its parameter named `method`
   const index = (n: ts.Node): void => {
@@ -135,7 +157,7 @@ describe("X-PT-2: the win methods a module's source writes are its declared outc
     expect(probe(SOURCE_DIRS.cricket!).literals).toContain("dls"); // through the local `methodSuffix` const
     expect(probe(SOURCE_DIRS.boardgame!).templateHeads).toContain("tiebreak_");
     expect(perModule.football!.literals).toBeGreaterThanOrEqual(4); // regulation, extra_time, shootout, abandoned
-  });
+  }, SCAN_BUDGET_MS);
 
   it("the scanner sees each road a method takes into a win (a synthetic source; an undeclared method is found, not skipped)", () => {
     // A witness for the scanner, not the modules: without it a scanner that found nothing in a file would read as clean.
