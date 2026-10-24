@@ -30,7 +30,8 @@ import "server-only";
 //     was skipped is exactly what the finder reports next tick (a hook is idempotent and recomputes from state);
 //  7. purges the rows older than RETENTION_DAYS (`purgeOldEmails`, at most PURGE_BATCH, whatever their status), LAST and inside the
 //     SAME budget: housekeeping never takes time from a send or a hook, so once TICK_BUDGET_MS is spent it is skipped and the next
-//     tick purges (the rows are as old tomorrow as today).
+//     tick purges (the rows are as old tomorrow as today). A purge that throws is logged (`errFields`) and reported as 0: it never
+//     turns a tick whose sends and hooks are done into a failure.
 //
 // Overlap is safe: skip locked keeps two ticks off the same row, and the lease keeps the second off a row the first is
 // still sending. A row that is claimed but whose attempt throws in OUR code (the post-send write failed) is left `sending`
@@ -298,8 +299,18 @@ export async function runOutboxTick(opts: RunOutboxTickOptions = {}): Promise<Ou
     );
   }
 
-  // Step 7. Last, and only with budget left: retention is housekeeping, and the next tick does it just as well.
-  if (!overBudget()) report.purged = await purgeOldEmails(opts.onlyIds === undefined ? {} : { onlyIds: opts.onlyIds });
+  // Step 7. Last, and only with budget left: retention is housekeeping, and the next tick does it just as well. It is also the one
+  // step whose failure costs nothing that was already done: the sends and the hooks above are committed, so a purge that throws
+  // (a statement timeout on a big backlog, a dropped connection) must not turn the tick into a 500 that loses their report. It is
+  // logged by name, code and message only (`errFields`: the driver's error carries the failed statement), counted as 0, and the
+  // next tick purges. It is NOT a `failed` row: nothing was attempted for a row.
+  if (!overBudget()) {
+    try {
+      report.purged = await purgeOldEmails({ onlyIds: opts.onlyIds });
+    } catch (err) {
+      log.error({ ...errFields(err) }, "email outbox: the retention purge failed; the tick's other work is done and the next tick purges");
+    }
+  }
 
   if (report.claimed + report.expired + report.dead + report.deferred + report.purged > 0) log.info({ ...report }, "email outbox: tick");
   return report;

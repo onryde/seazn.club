@@ -28,6 +28,18 @@ vi.mock("@/server/logger", () => ({ log: logMock }));
 const deliverMock = vi.hoisted(() => vi.fn());
 vi.mock("@/server/email-outbox/transport", () => ({ deliver: deliverMock }));
 
+// The one seam the C3 test needs: the retention purge, made to throw on demand. Everything else about it is the real function (a test
+// that does not set `error` runs the real statement), so this mock cannot hide the purge from the tests above it.
+const purgeFault = vi.hoisted(() => ({ error: null as unknown }));
+vi.mock("../status", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../status")>();
+  return {
+    ...actual,
+    purgeOldEmails: (...args: Parameters<typeof actual.purgeOldEmails>) =>
+      purgeFault.error === null ? actual.purgeOldEmails(...args) : Promise.reject(purgeFault.error),
+  };
+});
+
 import { attemptClaimed, dispatchNow, toClaimedRow, type ClaimedRecord, type ClaimedRow } from "../attempt";
 import {
   ENDED_BADLY_STATUSES,
@@ -270,6 +282,7 @@ describe.skipIf(!HAS_DB)("the email outbox retry worker (DB)", () => {
     logMock.error.mockClear();
     logMock.warn.mockClear();
     logMock.info.mockClear();
+    purgeFault.error = null;
     deliverMock.mockReset();
     deliverMock.mockImplementation(async (m: Sent) => ({ ok: true, providerId: pid(idOf(m)) }));
     hookSpy.mockClear();
@@ -1351,6 +1364,46 @@ describe.skipIf(!HAS_DB)("the email outbox retry worker (DB)", () => {
       expect(await tick([id], { budgetMs: HOOK_MS }), "the row is expired, its hook ran, the purge was skipped").toEqual({ ...ZERO, expired: 1 });
       expect((await present([id])).size, "the old row is still there").toBe(1);
       expect(await tick([id])).toEqual({ ...ZERO, purged: 1 });
+    });
+
+    it("C3: a purge that THROWS does not fail the tick - the sends and the hook it already did are reported, purged is 0, the error is logged without its statement, and the next tick purges", async () => {
+      const SECRET = `secret-recipient-${randomUUID()}@x.test`;
+      // A real driver error carries the failed statement: the parameters (here a recipient), the query text, the SQLSTATE.
+      const dbError = Object.assign(new Error("canceling statement due to statement timeout"), {
+        name: "PostgresError",
+        code: "57014",
+        query: `delete from email_outbox where recipient = '${SECRET}'`,
+        parameters: [SECRET],
+        args: [SECRET],
+      });
+      const toSend = await queue();
+      const toExpire = await queue();
+      await expireNow(toExpire);
+      const old = await finishedRow(RETENTION_DAYS + 1);
+      const ids = [toSend, toExpire, old];
+
+      purgeFault.error = dbError;
+      const report = await tick(ids); // must RESOLVE: a rejection here is the cron route's 500 and the tick's report lost
+      expect(report, "the work done before the purge is reported, the purge as 0").toEqual({ ...ZERO, claimed: 1, sent: 1, expired: 1, purged: 0 });
+      expect(deliverMock, "the send went out").toHaveBeenCalledTimes(1);
+      expect(hookSpy, "and the expired row's hook ran").toHaveBeenCalledTimes(1);
+      expect((await get(toSend)).status).toBe("sent");
+      expect((await present(ids)).has(old), "the old row is still there: nothing was purged").toBe(true);
+
+      expect(logMock.error, "the failure is logged once").toHaveBeenCalledTimes(1);
+      const [fields] = logMock.error.mock.calls[0]!;
+      expect(Object.keys(fields as object).sort(), "by errFields: name, code, message - never the error object").toEqual(["errCode", "errMessage", "errName"]);
+      expect(fields).toMatchObject({ errName: "PostgresError", errCode: "57014", errMessage: "canceling statement due to statement timeout" });
+      expect(JSON.stringify(logMock.error.mock.calls), "no parameter, query or args reached the log").not.toContain(SECRET);
+      expect(logMock.info, "the tick still logs its report").toHaveBeenCalledTimes(1);
+      expect(logMock.info.mock.calls[0]![0]).toMatchObject({ claimed: 1, sent: 1, expired: 1, purged: 0 });
+      expect(report.failed, "a purge failure is not a failed send").toBe(0);
+
+      purgeFault.error = null;
+      logMock.error.mockClear();
+      expect(await tick(ids), "the fault cleared: the next tick purges the row the failed one could not").toEqual({ ...ZERO, purged: 1 });
+      expect((await present(ids)).has(old)).toBe(false);
+      expect(logMock.error).not.toHaveBeenCalled();
     });
   });
 });

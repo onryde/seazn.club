@@ -108,7 +108,9 @@ describe("POST /api/cron/email-outbox: the seam with the cron Worker (R3)", () =
     expect(checked).toBe(cases.length);
     // The pair: a body that lost its `failed` counter reads unreadable (degraded), never clean.
     const noFailed = Object.fromEntries(Object.entries(ZERO).filter(([k]) => k !== "failed"));
-    expect(Object.keys(noFailed).length, "the other seven counters").toBe(Object.keys(ZERO).length - 1);
+    // No count in the label: it went stale once (seven, then eight with `purged`); the number is whatever ZERO has less `failed`.
+    expect(Object.keys(noFailed).length, "every counter but `failed` is still in the body").toBe(Object.keys(ZERO).length - 1);
+    expect(Object.keys(noFailed).length, "anti-vacuity: there are counters left to be unreadable alongside").toBeGreaterThan(0);
     tickMock.mockResolvedValueOnce(noFailed);
     expect(failureCountsOver0(ROW!, await (await POST()).text())).toEqual({ "data.failed": "unreadable" });
   });

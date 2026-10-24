@@ -8,7 +8,9 @@ import { runOutboxTick, type OutboxTickReport } from "@/server/email-outbox/work
 /** POST /api/cron/email-outbox - ONE TICK of the email outbox's retry worker (spec 2026-10-19-email-outbox-design.md,
  *  "The retry worker"): expires the rows past `expires_at`, ends the ones that spent every attempt, then claims due rows
  *  (`for update skip locked`, so an overlapping tick takes different rows) and attempts each one, paced for Resend's
- *  2 requests a second, a bounded batch, and a time budget under the Worker's per-job timeout. Answers the tick's report
+ *  2 requests a second, a bounded batch, and a time budget under the Worker's per-job timeout; runs the kind hooks for the
+ *  rows that ended badly; and LAST, with budget left, purges the rows older than RETENTION_DAYS (`purged` in the report; a
+ *  purge that throws is logged and counted 0, never a failed tick). Answers the tick's report
  *  (counts only: never an address, a body or a provider message). The cron Worker counts `failed` as a failure (rows whose
  *  attempt threw in our own code, or a tick that could not run because the database role cannot write the outbox);
  *  `deferred` (rows still due when the batch or the budget ran out) is not one: the next firing reaches them.
