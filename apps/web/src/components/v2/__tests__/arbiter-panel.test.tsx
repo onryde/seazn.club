@@ -25,6 +25,7 @@ import {
   CHECKIN_EXTEND_STEP_MINUTES,
   EXTEND_REFUSALS,
   EXTEND_REFUSAL_CODES,
+  emptyExtendTally,
   type CheckinExtendRoundResult,
   type CheckinExtendState,
 } from "@/lib/checkin-extend";
@@ -45,6 +46,13 @@ import {
 } from "../arbiter-panel";
 import { ApiV1Error } from "@/lib/client-v1";
 import { noticeLapsed } from "../arbiter-flag-cards";
+import type { OpenRoundView } from "@/lib/open-round";
+import { DEADLINE_AFTER_MS } from "@/server/external-play/window";
+import type { FlaggedBoard } from "@/server/usecases/external-play/arbiter";
+import type { NeedsOrganiserExternalPlayRow } from "@/server/usecases/external-play/queue";
+import type { RoundColumnData } from "../arbiter/round-column";
+import { initialOpenRoundUi, type OpenRoundUiState } from "../desk/open-round-state";
+import type { OpenRoundHandle } from "../desk/use-open-round";
 // The container's first render (effects never run here): only the router's
 // existence is needed.
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => undefined }) }));
@@ -141,6 +149,25 @@ const WATCHING_BLACK_OFF: ArbiterVideoView = {
 };
 
 const noop = () => undefined;
+/** The column's data when the page has read nothing for it (Task 9 wires the real reads): no views, no queue, venue zone London. */
+const COLUMN_DATA = (over: Partial<RoundColumnData> = {}): RoundColumnData => ({
+  views: [],
+  held: [],
+  flagged: [],
+  ownFlagged: 0,
+  tz: "Europe/London",
+  awaitsStart: false,
+  ...over,
+});
+/** The handle ArbiterPanel shares for the round on screen (C9): a state and five presses. */
+const HANDLE = (state: Partial<OpenRoundUiState> = {}): OpenRoundHandle => ({
+  state: { ...initialOpenRoundUi(), ...state },
+  ask: noop,
+  cancel: noop,
+  open: noop,
+  resend: noop,
+  extend: noop,
+});
 function props(over: Partial<ArbiterScreenProps> = {}): ArbiterScreenProps {
   return {
     round: ROUND,
@@ -151,7 +178,9 @@ function props(over: Partial<ArbiterScreenProps> = {}): ArbiterScreenProps {
     shown: "white",
     nowMs: NOW,
     slugs: { org: "club", comp: "autumn", div: "open" },
-    on: { select: noop, resync: noop, goOn: noop, toggleSettle: noop, settle: noop, extend: noop, extendRound: noop, override: noop, retryVideo: noop, switchTo: noop },
+    column: COLUMN_DATA(),
+    openRound: HANDLE(),
+    on: { select: noop, extendBoard: noop, resync: noop, goOn: noop, toggleSettle: noop, settle: noop, extend: noop, extendRound: noop, override: noop, retryVideo: noop, switchTo: noop },
     ...over,
   };
 }
@@ -1888,6 +1917,486 @@ describe("every locale", () => {
     expect(scanned).toBe(3);
   });
 });
+
+// ══ Task 8: the round column in the panel (spec 2026-10-24-arbiter-round-column-design.md §5.1, §5.2, §9) ═══════════════════════════
+//
+// What this file can see is MARKUP: `renderToStaticMarkup` has no DOM and no clicks. What a press does through the panel (select a
+// board, extendBoard, the one handle, a phase flip) is arbiter-panel-mount.test.tsx's, through the hook harness.
+
+const IDLE: ArbiterVideoView = { kind: "idle" };
+/** The whole class tokens of an opening tag, so `hidden` is never found inside `max-md:hidden` (AGENTS: `\bmd:hidden\b` matches it). */
+const tokensOf = (tag: string | null | undefined): Set<string> => new Set((/\sclass="([^"]*)"/.exec(tag ?? "")?.[1] ?? "").split(/\s+/).filter(Boolean));
+/** The tokens `want` that `tag` lacks: an empty list is a pass, and the list names what is missing. */
+const missing = (tag: string | null | undefined, want: readonly string[]) => want.filter((w) => !tokensOf(tag).has(w));
+const VOID_TAGS = new Set(["input", "img", "br", "hr", "source", "wbr", "meta", "link"]);
+type Node = { name: string; open: string; inner: string };
+/** The elements directly inside `inner` (an element's inner markup), in order, each with its opening tag and inner markup. */
+function childrenOf(inner: string): Node[] {
+  const out: Node[] = [];
+  const re = /<(\/?)([a-z0-9]+)\b[^>]*?(\/?)>/g;
+  let depth = 0;
+  let start: { name: string; open: string; from: number } | null = null;
+  for (let m = re.exec(inner); m; m = re.exec(inner)) {
+    const [whole, closing, name, selfClose] = m as unknown as [string, string, string, string];
+    if (closing) {
+      depth -= 1;
+      if (depth === 0 && start) {
+        out.push({ name: start.name, open: start.open, inner: inner.slice(start.from, m.index) });
+        start = null;
+      }
+    } else if (selfClose || VOID_TAGS.has(name)) {
+      if (depth === 0) out.push({ name, open: whole, inner: "" });
+    } else {
+      if (depth === 0) start = { name, open: whole, from: m.index + whole.length };
+      depth += 1;
+    }
+  }
+  return out;
+}
+/** The first element whose opening tag matches `open`, with its balanced inner markup; null when there is none. */
+const elementMatching = (h: string, open: RegExp): Node | null => {
+  const m = open.exec(h);
+  return m ? (childrenOf(h.slice(m.index))[0] ?? null) : null;
+};
+const COLUMN_ATTR = 'data-testid="arbiter-round-column"';
+const BAR = 'data-testid="arbiter-extend-round"';
+const phaseOf = (h: string) => /data-testid="arbiter-round-column" data-phase="(\w+)"/.exec(h)?.[1] ?? null;
+const mainOf = (h: string) => elementMatching(h, /<main\b[^>]*>/);
+const asideOf = (h: string) => elementMatching(h, /<aside\b[^>]*>/);
+const testidOf = (n: Node) => /data-testid="([^"]*)"/.exec(n.open)?.[1] ?? null;
+
+/** A check-in window the screen's clock (NOW, 19:44) is inside. */
+const WINDOW_OPEN: CheckinExtendState = { canExtend: true, refusal: null, extensionsLeft: CHECKIN_EXTEND_MAX, opensAt: at(19, 30), deadlineAt: at(19, 50) };
+/** Board f4 (ROUND's checking-in one) in that window, white not here (one invite sent), black here. */
+const CHECKING_IN_F4: ArbiterBoard = {
+  ...ROUND.boards[3]!,
+  checkin: WINDOW_OPEN,
+  seats: { white: { here: false, invites: ["sent"] }, black: { here: true, invites: [] } },
+};
+/** Round 3 in check-in: f1 live, f2 finished (with the report that makes "other reports" render), f4 checking in. */
+const CK_ROUND: ArbiterRound = { ...ROUND, extendableBoards: 1, boards: [ROUND.boards[0]!, ROUND.boards[1]!, CHECKING_IN_F4] };
+/** The same round with nothing checking in: f1 live, f2 finished, f3 live. */
+const PLAYING_ROUND: ArbiterRound = { ...ROUND, extendableBoards: 0, boards: ROUND.boards.slice(0, 3) };
+const screenOf = (round: ArbiterRound, over: Partial<ArbiterScreenProps> = {}) => props({ round, decision: initialArbiterDecision(round.boards[0]!.fixtureId), ...over });
+
+/** An open-able view of ROUND's own stage and round, with its pairings; override to taste. */
+const VIEW = (over: Partial<OpenRoundView> = {}): OpenRoundView => ({
+  stageId: "st1",
+  stageName: "Open Swiss",
+  roundNo: 3,
+  state: "open",
+  openedAt: at(19, 30),
+  deadlineAt: at(19, 50),
+  windowMinutes: DEADLINE_AFTER_MS / 60_000,
+  staggered: false,
+  batches: [],
+  staggerSpanMinutes: 0,
+  scheduledAt: null,
+  press: "reinvite",
+  earlierInPlay: [],
+  pairings: [{ fixtureId: "f4", boardNo: 4, whiteName: "Sven Halvorsen", blackName: "Grace Achterberg", invitedAt: at(19, 30), owedSeats: 1, canResend: true }],
+  extendableBoards: 0,
+  extendWindows: [],
+  extendRefusals: emptyExtendTally(),
+  ...over,
+});
+
+describe("the round column in the panel: where it mounts (spec §5.2 table)", () => {
+  it("the five paths: requested, round null, no boards, the asked-for board missing, and the grid - each its phase or no column", () => {
+    const none = { round: null, decision: initialArbiterDecision(null), video: IDLE } as const;
+    const ownOnly = { round: { ...ROUND, boards: [] as ArbiterBoard[], ownBoards: 2 }, decision: initialArbiterDecision(null), video: IDLE } as const;
+    const noBoards = { round: { ...ROUND, boards: [] as ArbiterBoard[] }, decision: initialArbiterDecision(null), video: IDLE } as const;
+    const rows: { path: string; name: string; p: ArbiterScreenProps; phase: string | null }[] = [
+      { path: "requested", name: "requested unavailable", p: props({ ...none, requested: "unavailable" }), phase: null },
+      { path: "requested", name: "requested own", p: props({ ...none, requested: "own" }), phase: null },
+      { path: "round null", name: "round null", p: props(none), phase: "before" },
+      { path: "no boards", name: "boards [] with ownBoards", p: props(ownOnly), phase: "playing" },
+      { path: "no boards", name: "boards [] and none of the viewer's", p: props(noBoards), phase: "playing" },
+      { path: "I3", name: "the board on screen is not in the round", p: props({ decision: initialArbiterDecision("not-in-this-round") }), phase: null },
+      { path: "grid", name: "the grid, a board checking in", p: props(), phase: "checkin" },
+      { path: "grid", name: "the grid, nothing checking in", p: props({ round: PLAYING_ROUND, decision: initialArbiterDecision("f1") }), phase: "playing" },
+    ];
+    let checked = 0;
+    for (const { name, p, phase } of rows) {
+      const h = html(p);
+      expect(phaseOf(h), name).toBe(phase);
+      expect(count(h, COLUMN_ATTR), name).toBe(phase === null ? 0 : 1);
+      // No column means no aside at all (nothing else on this screen is a landmark of that kind), and a column is ONE aside.
+      expect(count(h, "<aside"), name).toBe(phase === null ? 0 : 1);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: rows checked").toBe(8);
+    expect(new Set(rows.map((r) => r.path)).size, "the table's five paths").toBe(5);
+  });
+
+  it("round null: the column (before) stands beside the empty notice, in the SAME main, notice first in the document", () => {
+    const h = html(props({ round: null, decision: initialArbiterDecision(null), video: IDLE }));
+    const main = mainOf(h)!;
+    expect(main.inner).toContain(EN["arbiter.empty.title"]);
+    expect(main.inner).toContain(COLUMN_ATTR);
+    expect(main.inner.indexOf(EN["arbiter.empty.title"]!), "the notice precedes the aside in the DOM").toBeLessThan(main.inner.indexOf(COLUMN_ATTR));
+  });
+
+  it("the requested notice and the I3 notice stand alone: no grid on their main, no aside", () => {
+    let checked = 0;
+    for (const p of [props({ round: null, requested: "own", decision: initialArbiterDecision(null), video: IDLE }), props({ decision: initialArbiterDecision("not-in-this-round") })]) {
+      const h = html(p);
+      expect(missing(mainOf(h)!.open, ["md:grid"]), "a notice's main is not a grid").toEqual(["md:grid"]);
+      expect(h).not.toContain("<aside");
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+});
+
+describe("one round bar per page, placed by path (C13)", () => {
+  const barIn = (h: string, testid: string) => count(elementMatching(h, new RegExp(`<[a-z0-9]+\\b[^>]*data-testid="${testid}"[^>]*>`))!.inner, BAR);
+
+  it("check-in: the bar is the hero's, and the only one", () => {
+    const h = html(screenOf(CK_ROUND));
+    expect(count(h, BAR)).toBe(1);
+    expect(barIn(h, "arbiter-checkin-hero")).toBe(1);
+    expect(h, "the button rides with the bar").toContain('data-testid="arbiter-extend-round-cta"');
+  });
+
+  it("playing (f1 live / f2 result / f3 live): the bar is the status block's, with its why line still rendered", () => {
+    const gameStarted: CheckinExtendState = { ...WINDOW_OPEN, canExtend: false, refusal: "game_started" };
+    const round: ArbiterRound = { ...PLAYING_ROUND, boards: PLAYING_ROUND.boards.map((b) => (b.fixtureId === "f1" ? { ...b, checkin: gameStarted } : b)) };
+    const h = html(screenOf(round));
+    expect(phaseOf(h)).toBe("playing");
+    expect(count(h, BAR)).toBe(1);
+    expect(barIn(h, "arbiter-column-status")).toBe(1);
+    expect(elementMatching(h, /<[a-z0-9]+\b[^>]*data-testid="arbiter-column-status"[^>]*>/)!.inner).toContain('data-testid="arbiter-extend-round-why" data-why="game_started"');
+    expect(text(h)).toContain(EN["externalPlay.checkinExtend.why.gameStarted"]);
+  });
+
+  it("the no-boards path (playing, no counts): the bar rides the status block too, when it has an answer to show", () => {
+    const result: CheckinExtendRoundResult = { extended: 2, skipped: { closed: 0, gameStarted: 0, capReached: 0 }, notOpenYet: 0, ownBoards: 0, failed: 0, addedMinutes: CHECKIN_EXTEND_STEP_MINUTES };
+    const h = html(props({ round: { ...ROUND, boards: [], ownBoards: 1 }, decision: initialArbiterDecision(null), video: IDLE, roundExtend: { busy: false, notice: { kind: "answered", result } } }));
+    expect(phaseOf(h)).toBe("playing");
+    expect(count(h, BAR)).toBe(1);
+    expect(barIn(h, "arbiter-column-status")).toBe(1);
+    expect(text(h)).toContain("Added 5 minutes to 2 boards.");
+  });
+
+  it("I3 (no column): the bar stays in the top bar, above the notice and outside any aside", () => {
+    const h = html(screenOf(CK_ROUND, { decision: initialArbiterDecision("not-in-this-round") }));
+    expect(h).not.toContain(COLUMN_ATTR);
+    expect(h).not.toContain("<aside");
+    expect(count(h, BAR)).toBe(1);
+    expect(h.indexOf(BAR), "above the notice's main").toBeLessThan(h.indexOf("<main"));
+  });
+
+  it("the bar's box follows its place: a page-wide bar at the top (I3), a plain block inside the column (check-in)", () => {
+    const rootOf = (h: string) => elementMatching(h, /<div\b[^>]*data-testid="arbiter-extend-round"[^>]*>/)!;
+    const ctaOf = (h: string) => elementMatching(h, /<button\b[^>]*data-testid="arbiter-extend-round-cta"[^>]*>/)!;
+    const top = html(screenOf(CK_ROUND, { decision: initialArbiterDecision("not-in-this-round") }));
+    const inline = html(screenOf(CK_ROUND));
+    let checked = 0;
+    // The top bar is the page's own row: centred to the page width, padded to its gutter, its button full width until lg.
+    expect(missing(rootOf(top).open, ["mx-auto", "max-w-[1232px]", "px-4", "lg:px-6", "w-full", "min-w-0"]), "top bar box").toEqual([]);
+    expect(missing(ctaOf(top).open, ["w-full", "lg:w-auto"]), "top bar button").toEqual([]);
+    expect(tokensOf(ctaOf(top).open).has("sm:w-auto"), "top bar button is not the inline one").toBe(false);
+    checked += 3;
+    // Inside the column the card around it already pads and bounds it: a second gutter would double the padding.
+    expect(missing(rootOf(inline).open, ["w-full", "min-w-0"]), "inline bar box").toEqual([]);
+    for (const token of ["mx-auto", "max-w-[1232px]", "px-4", "lg:px-6"]) expect(tokensOf(rootOf(inline).open).has(token), `inline bar has no ${token}`).toBe(false);
+    expect(missing(ctaOf(inline).open, ["w-full", "sm:w-auto"]), "inline bar button").toEqual([]);
+    expect(tokensOf(ctaOf(inline).open).has("lg:w-auto"), "inline button is not the top bar's").toBe(false);
+    checked += 4;
+    expect(checked, "every box assertion ran").toBe(7);
+  });
+
+  it("no round (and a request that says 'not here'): no bar at all", () => {
+    let checked = 0;
+    for (const p of [
+      props({ round: null, decision: initialArbiterDecision(null), video: IDLE }),
+      props({ round: null, requested: "unavailable", decision: initialArbiterDecision(null), video: IDLE }),
+      props({ round: CK_ROUND, requested: "own", decision: initialArbiterDecision("f1") }),
+    ]) {
+      expect(count(html(p), BAR)).toBe(0);
+      checked += 1;
+    }
+    expect(checked).toBe(3);
+  });
+});
+
+describe("placement classes (C10): the groups, in the DOM order and with the classes the grid needs", () => {
+  const MAIN = ["flex", "flex-col", "gap-3", "md:grid", "md:grid-cols-[minmax(0,1fr)_320px]", "md:grid-rows-[auto_1fr]", "md:items-start", "lg:grid-cols-[248px_minmax(0,1fr)_320px]", "lg:grid-rows-[auto_1fr]"];
+  const NAV = ["hidden", "lg:flex", "lg:col-start-1", "lg:row-start-1", "lg:row-span-2"];
+  const BOARD_GROUP = ["max-md:contents", "md:flex", "md:flex-col", "md:gap-3", "md:col-start-1", "md:row-start-1", "lg:col-start-2", "lg:row-span-2"];
+  const DECISION_GROUP = ["max-md:contents", "md:flex", "md:flex-col", "md:gap-3", "md:col-start-1", "md:row-start-2", "lg:col-start-3", "lg:row-start-2"];
+  const ASIDE = ["max-md:order-[-2]", "md:col-start-2", "md:row-start-1", "md:row-span-2", "lg:col-start-3", "lg:row-start-1", "lg:row-span-1"];
+  /** f4 on screen: it has a check-in window, so the decision group carries the board's "+5 min" and the groups are all populated. */
+  const grid = () => html(screenOf(CK_ROUND, { decision: initialArbiterDecision("f4") }));
+
+  it("main, nav, the two groups and the aside carry the spec's classes, in the spec's DOM order, and nothing else is a child of main", () => {
+    const h = grid();
+    const main = mainOf(h)!;
+    expect(missing(main.open, MAIN)).toEqual([]);
+    const kids = childrenOf(main.inner);
+    expect(kids.map((k) => k.name), "main's children: nav, board group, decision group, aside").toEqual(["nav", "div", "div", "aside"]);
+    const [nav, board, decision, aside] = kids as [Node, Node, Node, Node];
+    expect(missing(nav.open, NAV), "nav").toEqual([]);
+    expect(testidOf(board)).toBe("arbiter-board-group");
+    expect(testidOf(decision)).toBe("arbiter-decision-group");
+    expect(missing(board.open, BOARD_GROUP), "board group").toEqual([]);
+    expect(missing(decision.open, DECISION_GROUP), "decision group").toEqual([]);
+    expect(missing(aside.open, ASIDE), "aside").toEqual([]);
+    // A landmark is never display: contents, and every new wrapper can shrink (min-w-0 down the chain).
+    expect([...tokensOf(aside.open)].filter((x) => /(^|:)contents$/.test(x))).toEqual([]);
+    for (const [name, n] of [["board group", board], ["decision group", decision], ["aside", aside]] as const) expect(missing(n.open, ["min-w-0"]), name).toEqual([]);
+  });
+
+  it("the board group holds the picker, the watch-only line, the heading, the camera, other reports and the waiting list; the decision group holds flags, the decision and the outage card", () => {
+    const [, board, decision, aside] = childrenOf(mainOf(grid())!.inner) as [Node, Node, Node, Node];
+    const inBoard = childrenOf(board.inner);
+    expect(inBoard.map((c) => c.name)).toContain("label");
+    expect(board.inner).toContain("<select");
+    expect(board.inner).toContain("<figure");
+    expect(board.inner).toContain(EN["arbiter.otherReport.heading"]!.replace("{n}", "2"));
+    const waiting = inBoard.find((c) => testidOf(c) === "arbiter-waiting");
+    expect(waiting, "the waiting list is a direct child of the board group").toBeDefined();
+    expect(board.inner, "the column is not in the board group").not.toContain(COLUMN_ATTR);
+    expect(decision.inner).toContain("arbiter-extend-board");
+    expect(childrenOf(decision.inner).filter((c) => c.name === "section").length, "flags and the decision (no outage card with the video up)").toBe(2);
+    for (const stray of ["<select", "<figure", "arbiter-waiting"]) expect(decision.inner, stray).not.toContain(stray);
+    expect(aside.inner).toContain("arbiter-checkin-hero");
+    for (const stray of ["<select", "<figure", "arbiter-extend-board"]) expect(aside.inner, stray).not.toContain(stray);
+  });
+
+  it("the waiting list leads the phone and sits under the camera from md: max-md:order-[-1], and a md order after the camera's and before other reports'", () => {
+    const [, board] = childrenOf(mainOf(grid())!.inner) as [Node, Node, Node, Node];
+    const kids = childrenOf(board.inner);
+    const waiting = kids.find((c) => testidOf(c) === "arbiter-waiting")!;
+    expect(missing(waiting.open, ["max-md:order-[-1]"])).toEqual([]);
+    // From md the group is a flex column, so `order` is a sort key: 0 would put the list ABOVE the picker. The camera group is order-2 and
+    // the other reports order-4; the list sits between, so it is "under the camera" and the rest keep their places.
+    const mdOrder = (n: Node) => {
+      const t = [...tokensOf(n.open)];
+      const hit = t.find((x) => /^md:order-\d+$/.test(x)) ?? t.find((x) => /^order-\d+$/.test(x));
+      return hit === undefined ? 0 : Number(/(\d+)$/.exec(hit)![1]);
+    };
+    const tile = kids.find((c) => c.inner.includes("<figure"))!;
+    const reports = kids.find((c) => c.inner.includes(EN["arbiter.otherReport.heading"]!.replace("{n}", "2")))!;
+    expect(mdOrder(tile)).toBe(2);
+    expect(mdOrder(reports)).toBe(4);
+    expect(mdOrder(waiting), "after the camera").toBeGreaterThan(mdOrder(tile));
+    expect(mdOrder(waiting), "before other reports").toBeLessThan(mdOrder(reports));
+  });
+
+  it("the phone reads: the column, the waiting list, the picker, the board, the flags, the decision (spec §5.1)", () => {
+    const main = mainOf(grid())!;
+    // Below md the groups are display: contents, so their children are main's flex items; nav is hidden. Sort by `order` (ties keep DOM order).
+    const items: { label: string; order: number }[] = [];
+    const phoneOrder = (n: Node) => {
+      const t = [...tokensOf(n.open)];
+      const max = t.find((x) => /^max-md:order-\[-?\d+\]$/.test(x));
+      if (max !== undefined) return Number(/\[(-?\d+)\]/.exec(max)![1]);
+      const bare = t.find((x) => /^order-\d+$/.test(x));
+      return bare === undefined ? 0 : Number(/(\d+)$/.exec(bare)![1]);
+    };
+    const label = (n: Node) => testidOf(n) ?? `${n.name}:${phoneOrder(n)}`;
+    for (const k of childrenOf(main.inner)) {
+      if (tokensOf(k.open).has("hidden")) continue;
+      if (tokensOf(k.open).has("max-md:contents")) for (const c of childrenOf(k.inner)) items.push({ label: label(c), order: phoneOrder(c) });
+      else items.push({ label: label(k), order: phoneOrder(k) });
+    }
+    const sorted = items.map((x, i) => ({ ...x, i })).sort((a, b) => a.order - b.order || a.i - b.i).map((x) => x.label);
+    // The spec's phone order, item by item: column, waiting list, picker, its line, the board's heading, the camera, the flags, other
+    // reports, the decision. (`div:1` is the heading row, `div:2` the pane and switch, `div:4` the other reports.)
+    expect(sorted).toEqual(["arbiter-round-column", "arbiter-waiting", "label:0", "p:0", "div:1", "div:2", "section:3", "div:4", "section:5"]);
+  });
+
+  it("the paths with no grid: main is a two-track grid from md, the notice leads the DOM, the aside is first on a phone and in track 2", () => {
+    let checked = 0;
+    for (const [name, p] of [
+      ["round null", props({ round: null, decision: initialArbiterDecision(null), video: IDLE })],
+      ["own boards only", props({ round: { ...ROUND, boards: [], ownBoards: 1 }, decision: initialArbiterDecision(null), video: IDLE })],
+      // The third notice path (arbiter.emptyBoards): no boards and none of the viewer's. A placement given to only the other two
+      // would leave this one's aside on the grid's tracks, with no grid around it.
+      ["no boards at all", props({ round: { ...ROUND, boards: [], ownBoards: 0 }, decision: initialArbiterDecision(null), video: IDLE })],
+    ] as const) {
+      const h = html(p);
+      const main = mainOf(h)!;
+      expect(missing(main.open, ["md:grid", "md:grid-cols-[minmax(0,1fr)_320px]"]), name).toEqual([]);
+      const kids = childrenOf(main.inner);
+      expect(kids.map((k) => k.name), name).toEqual(["div", "aside"]);
+      expect(missing(kids[1]!.open, ["max-md:order-[-1]", "md:col-start-2", "md:row-start-1"]), `${name}: aside`).toEqual([]);
+      expect(tokensOf(kids[1]!.open).has("max-md:order-[-2]"), `${name}: the solo placement, not the grid's`).toBe(false);
+      expect(missing(kids[0]!.open, ["min-w-0"]), `${name}: the notice can shrink`).toEqual([]);
+      checked += 1;
+    }
+    expect(checked).toBe(3);
+  });
+});
+
+describe("the empty copy no longer sends the organiser to the run sheet (spec §9)", () => {
+  // The words the OLD copy used for the run sheet, per locale: they are the regression witnesses.
+  const OLD_RUN_SHEET = { en: "run sheet", es: "hoja de ronda", fr: "feuille de ronde", nl: "rondeschema" } as const;
+  const COLUMN_WORD = { en: "column", es: "columna", fr: "colonne", nl: "kolom" } as const;
+
+  it("the rendered body is the dictionary's new body, and points at the round column, in every locale", () => {
+    let checked = 0;
+    for (const locale of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
+      const d = LOCALES[locale] as Record<string, string>;
+      const h = html(props({ round: null, decision: initialArbiterDecision(null), video: IDLE }), locale);
+      const body = /<p class="m-0 max-w-prose[^"]*">([^<]*)<\/p>/.exec(h)?.[1];
+      expect(decode(body ?? ""), `${locale}: the empty notice's body`).toBe(d["arbiter.empty.body"]);
+      expect(d["arbiter.empty.body"]!.toLowerCase(), `${locale}: no run sheet`).not.toContain(OLD_RUN_SHEET[locale]);
+      expect(d["arbiter.empty.body"]!.toLowerCase(), `${locale}: names the column`).toContain(COLUMN_WORD[locale]);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: four locales").toBe(4);
+    expect(EN["arbiter.empty.body"], "the D8 sentence stays").toMatch(/whether or not anyone is watching/);
+  });
+});
+
+describe("extendBoard selects the board, then extends it (the reducer, with the actions the shell dispatches)", () => {
+  it("select f4 then extend f4: the board on screen is f4 and the one request in flight is its extend", () => {
+    const start = initialArbiterDecision("f1");
+    const afterSelect = arbiterDecision(start, { type: "select", boardId: "f4" });
+    expect(afterSelect.boardId).toBe("f4");
+    expect(afterSelect.busy, "nothing sent by selecting").toBeNull();
+    const afterExtend = arbiterDecision(afterSelect, { type: "extend", boardId: "f4" });
+    expect(afterExtend.boardId).toBe("f4");
+    expect(afterExtend.busy).toEqual({ kind: "extend", boardId: "f4" });
+    // The answer lands in the decision area of the board that is now on screen.
+    const answered = arbiterDecision(afterExtend, {
+      type: "extendDone",
+      boardId: "f4",
+      boardNo: 4,
+      outcome: { ok: true, result: { fixtureId: "f4", extensions: 1, extensionsLeft: 2, addedMinutes: 5, deadlineAt: WINDOW_OPEN.deadlineAt } },
+    });
+    expect(answered.busy).toBeNull();
+    expect(answered.notice).toMatchObject({ boardId: "f4", kind: "extended", boardNo: 4 });
+    const screen = html(screenOf(CK_ROUND, { decision: { ...answered, boardId: "f4" } }));
+    const decisionArea = childrenOf(mainOf(screen)!.inner)[2]!;
+    expect(text(decisionArea.inner), "the answer is in the decision area").toContain(
+      EN["externalPlay.checkinExtend.notice.board"]!.replace("{minutes}", "5").replace("{n}", "4").replace("{time}", hhmm(WINDOW_OPEN.deadlineAt)),
+    );
+  });
+});
+
+// ── the panel hands the column every prop it consumes (page → panel → column), proven in the markup (AGENTS class 1: the inert seam) ──
+//
+// Each prop below is sent a value whose effect is visible, and each is also withheld to show the effect goes with it: a prop typed
+// and never sent would pass tsc and a pure-column suite, and fail here.
+describe("the panel hands the column everything it consumes", () => {
+  const SLUGS = { org: "club", comp: "autumn", div: "open" };
+  const panel = (round: ArbiterRound | null, column: RoundColumnData, initialFixtureId: string | null = round?.boards[0]?.fixtureId ?? null) =>
+    renderToStaticMarkup(
+      <DictProvider dict={en as unknown as Dict} locale="en">
+        <ArbiterPanel round={round} requested={null} slugs={SLUGS} initialFixtureId={initialFixtureId} column={column} />
+      </DictProvider>,
+    );
+  const HELD = (fixtureId: string, over: Partial<NeedsOrganiserExternalPlayRow> = {}): NeedsOrganiserExternalPlayRow => ({
+    fixtureId,
+    fixtureNo: 9,
+    homeName: "Held White",
+    awayName: "Held Black",
+    scheduledAt: null,
+    reason: "no_show_white",
+    lastError: null,
+    whiteSide: "home",
+    revokedSeat: null,
+    roundNo: 3,
+    boardNo: 9,
+    stageName: "Open Swiss",
+    canResync: false,
+    seated: false,
+    noResultOffer: { kind: "void" },
+    ...over,
+  });
+  const FLAGGED_F2: FlaggedBoard = { ...ROUND.boards[1]!, roundNo: 3, stageName: "Open Swiss" };
+  let checked = 0;
+  const seen = (what: string) => {
+    checked += 1;
+    return what;
+  };
+
+  it("views: the round on screen's view gives the hero its press and the waiting list its Resend; another view is the next round's press", () => {
+    const withView = panel(CK_ROUND, COLUMN_DATA({ views: [VIEW()] }));
+    expect(count(withView, 'data-testid="arbiter-column-reinvite"'), seen("hero press")).toBe(1);
+    expect(withView, seen("row Resend")).toMatch(/data-testid="arbiter-waiting-resend" data-fixture-id="f4"/);
+    const without = panel(CK_ROUND, COLUMN_DATA());
+    expect(without).not.toContain('data-testid="arbiter-column-reinvite"');
+    expect(without).not.toContain("arbiter-waiting-resend");
+    // The waiting list still lists the seat (the round's boards reach it); only the view's word is missing.
+    expect(without).toContain('data-testid="arbiter-waiting-row"');
+    const next = panel(PLAYING_ROUND, COLUMN_DATA({ views: [VIEW({ roundNo: 4, state: "paired", press: "open", openedAt: null, deadlineAt: null })] }));
+    expect(count(next, 'data-testid="arbiter-column-next"'), seen("next-round press")).toBe(1);
+    expect(panel(PLAYING_ROUND, COLUMN_DATA())).not.toContain("arbiter-column-next");
+  });
+
+  it("held, flagged and slugs: a held card and a flagged card arrive, 'Review board' selects a board of the round and links to the panel for another", () => {
+    const h = panel(PLAYING_ROUND, COLUMN_DATA({ held: [HELD("elsewhere")], flagged: [FLAGGED_F2] }));
+    const cards = [...h.matchAll(/data-testid="arbiter-column-card" data-kind="(\w+)" data-fixture-id="([^"]*)"/g)].map((m) => [m[1], m[2]]);
+    expect(cards, seen("held and flagged cards")).toEqual([["held", "elsewhere"], ["flagged", "f2"]]);
+    // f2 is in the round on screen: a button that selects it. `elsewhere` is not: a link to the arbiter page pinned to it, on THIS division.
+    expect(h).toMatch(/data-testid="arbiter-column-review" data-target="select"/);
+    const link = /<a\b[^>]*data-testid="arbiter-column-review"[^>]*>/.exec(h)?.[0] ?? "";
+    expect(/href="([^"]*)"/.exec(link)?.[1], seen("slugs")).toBe("/o/club/c/autumn/d/open/arbiter?fixture=elsewhere");
+    expect(text(h)).toContain(EN["arbiter.column.queue.other"]!.replace("{count}", "2"));
+    const none = panel(PLAYING_ROUND, COLUMN_DATA());
+    expect(none).not.toContain("arbiter-column-card");
+    expect(none).not.toContain("arbiter-column-queue");
+  });
+
+  it("ownFlagged: the line says how many flagged boards the organiser plays on", () => {
+    const h = panel(PLAYING_ROUND, COLUMN_DATA({ ownFlagged: 3 }));
+    expect(text(elementMatching(h, /<p\b[^>]*data-testid="arbiter-column-own-flagged"[^>]*>/)!.inner), seen("ownFlagged")).toBe(
+      EN["externalPlay.queue.ownFlagged.other"]!.replace("{count}", "3"),
+    );
+    expect(panel(PLAYING_ROUND, COLUMN_DATA({ ownFlagged: 0 }))).not.toContain("arbiter-column-own-flagged");
+  });
+
+  it("tz: the hero's group times are the venue zone's, not the viewer's and not UTC's", () => {
+    const batches = [
+      { fromBoard: 1, toBoard: 2, offsetMs: 0, opensAt: "2026-10-24T12:00:00.000Z", closesAt: "2026-10-24T12:10:00.000Z" },
+      { fromBoard: 3, toBoard: 4, offsetMs: 600_000, opensAt: "2026-10-24T12:10:00.000Z", closesAt: "2026-10-24T12:20:00.000Z" },
+    ];
+    const view = VIEW({ staggered: true, press: "reinvite", batches });
+    const opens = (tz: string) => text(elementMatching(panel(CK_ROUND, COLUMN_DATA({ views: [view], tz })), /<span\b[^>]*data-field="opens"[^>]*>/)!.inner);
+    // 12:00 UTC on 2026-10-24: Tokyo is UTC+9 all year, New York is on daylight time (UTC-4) until 1 November.
+    expect(opens("Asia/Tokyo"), seen("tz")).toBe("Opens 21:00");
+    expect(opens("America/New_York")).toBe("Opens 08:00");
+    expect(opens("UTC")).toBe("Opens 12:00");
+  });
+
+  it("awaitsStart: before the division starts the column says so and offers no press, whatever views arrived", () => {
+    const view = VIEW({ roundNo: 1, state: "paired", press: "open", openedAt: null, deadlineAt: null });
+    const waiting = panel(null, COLUMN_DATA({ awaitsStart: true, views: [view] }));
+    expect(text(elementMatching(waiting, /<p\b[^>]*data-testid="arbiter-column-start-first"[^>]*>/)!.inner), seen("awaitsStart")).toBe(EN["externalPlay.openRound.startFirst"]);
+    expect(waiting).not.toContain("arbiter-column-open-cta");
+    const started = panel(null, COLUMN_DATA({ awaitsStart: false, views: [view] }));
+    expect(started).not.toContain("arbiter-column-start-first");
+    expect(started, "started: the press is there").toContain('data-testid="arbiter-column-open-cta"');
+  });
+
+  it("placement: the grid path's aside is the grid's, the paths with no grid are solo", () => {
+    const gridAside = asideOf(panel(CK_ROUND, COLUMN_DATA()))!;
+    expect(missing(gridAside.open, ["max-md:order-[-2]", "md:row-span-2", "lg:col-start-3"]), seen("placement (grid)")).toEqual([]);
+    const solo = asideOf(panel(null, COLUMN_DATA()))!;
+    expect(missing(solo.open, ["max-md:order-[-1]", "md:col-start-2", "md:row-start-1"]), seen("placement (solo)")).toEqual([]);
+    expect(tokensOf(solo.open).has("md:row-span-2")).toBe(false);
+  });
+
+  it("roundExtend: the panel's bar is placed in the hero (check-in) and in the status block (playing)", () => {
+    const ck = panel(CK_ROUND, COLUMN_DATA());
+    expect(count(elementMatching(ck, /<section\b[^>]*data-testid="arbiter-checkin-hero"[^>]*>/)!.inner, BAR), seen("roundExtend (hero)")).toBe(1);
+    const gameStarted: CheckinExtendState = { ...WINDOW_OPEN, canExtend: false, refusal: "game_started" };
+    const playing = panel({ ...PLAYING_ROUND, boards: PLAYING_ROUND.boards.map((b) => (b.fixtureId === "f1" ? { ...b, checkin: gameStarted } : b)) }, COLUMN_DATA());
+    expect(count(elementMatching(playing, /<section\b[^>]*data-testid="arbiter-column-status"[^>]*>/)!.inner, BAR), seen("roundExtend (status)")).toBe(1);
+  });
+
+  it("anti-vacuity: every static-markup wiring check above ran", () => {
+    // views (hero press, row Resend, next press), held+flagged, slugs, ownFlagged, tz, awaitsStart, placement x2, roundExtend x2 = 12 sightings.
+    // (on.select, on.extendBoard, openRound and nowMs are callbacks and identities: arbiter-panel-mount.test.tsx.)
+    expect(checked).toBe(12);
+  });
+});
+
 
 function hhmm(iso: string): string {
   return new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(iso));

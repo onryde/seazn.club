@@ -58,6 +58,11 @@ export type RoundColumnData = {
   awaitsStart: boolean;
 };
 
+/** Where the aside sits (spec §5.1). The panel knows its own path, so it says: `grid` on the board grid (the aside spans the two
+ *  rows of the middle track from md, and is the first thing on a phone), `solo` on the paths with no grid (before the round opens, and
+ *  a round with no board on screen: the notice in track 1, the aside in track 2). */
+export type ColumnPlacement = "solo" | "grid";
+
 export type RoundColumnProps = {
   round: ArbiterRound | null;
   requested: "unavailable" | "own" | null;
@@ -69,6 +74,8 @@ export type RoundColumnProps = {
   on: { select(fixtureId: string): void; extendBoard(fixtureId: string): void };
   /** C13: the panel's one RoundExtend, placed by phase. null when the panel mounts it elsewhere. */
   roundExtend: ReactNode;
+  /** Required: a column that does not say where it sits is placed by accident (spec §5.1, C10). */
+  placement: ColumnPlacement;
 };
 
 const INK = "text-[#2e1065]";
@@ -76,15 +83,23 @@ const CARD_BOX = "min-w-0 rounded-xl border border-[#e7e3f3] bg-white p-3";
 const BUTTON_PRIMARY =
   "min-h-11 w-full cursor-pointer rounded-[10px] bg-[#7c3aed] px-4 text-[15px] font-semibold text-white hover:bg-[#5b21b6] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7c3aed] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto";
 
-/** Spec §5.1, the paths with no board grid: first on a phone, the second track from `md`, and row 1 by name so the place does not
- *  depend on where the aside sits in the DOM. A landmark is never `contents`. Task 8 owns the grid path's placement. */
-const ASIDE_CLASS = "flex min-w-0 flex-col gap-3 max-md:order-[-1] md:col-start-2 md:row-start-1";
+/** Spec §5.1: the aside is one real box (a landmark is never `contents`) placed by NAME, so its place does not depend on where it sits
+ *  in the DOM. Below md it is first on the page (`order -2` on the grid path, one ahead of the waiting list's -1; `-1` where there is no
+ *  waiting list to lead). From md it is the second track: on the grid path it spans both rows, and from lg it moves to the third track
+ *  beside the board, over the decision group. A two-entry lookup rather than a conditional string, so the two places are read side by
+ *  side and a third cannot be added without choosing its classes. */
+const ASIDE_BASE = "flex min-w-0 flex-col gap-3";
+const ASIDE_PLACEMENT: Record<ColumnPlacement, string> = {
+  grid: "max-md:order-[-2] md:col-start-2 md:row-start-1 md:row-span-2 lg:col-start-3 lg:row-start-1 lg:row-span-1",
+  solo: "max-md:order-[-1] md:col-start-2 md:row-start-1",
+};
 
 export function RoundColumn(p: RoundColumnProps) {
   const msg = useMsg();
   const phase = roundColumnPhase(p.round, p.requested);
   // "none" is the panel's notice standing alone (spec §5.2 rule 1): no column, and no queue with it.
   if (phase === "none") return null;
+  const asideClass = `${ASIDE_BASE} ${ASIDE_PLACEMENT[p.placement]}`;
 
   // First in the aside in every phase, ahead of the phase block: source order is visual order (C10). It renders nothing at all
   // when there is nothing to decide.
@@ -103,7 +118,7 @@ export function RoundColumn(p: RoundColumnProps) {
     // `checking_in` boards on screen mean a round on screen; a named refusal rather than an assumption.
     if (p.round === null) return null;
     return (
-      <aside aria-label={msg("arbiter.column.label")} data-testid="arbiter-round-column" data-phase={phase} className={ASIDE_CLASS}>
+      <aside aria-label={msg("arbiter.column.label")} data-testid="arbiter-round-column" data-phase={phase} className={asideClass}>
         {queue}
         <CheckinHero
           round={p.round}
@@ -132,7 +147,7 @@ export function RoundColumn(p: RoundColumnProps) {
     const { total, finished } = playingTally(p.round.boards);
     const primary = total > 0 && finished === total;
     return (
-      <aside aria-label={msg("arbiter.column.label")} data-testid="arbiter-round-column" data-phase={phase} className={ASIDE_CLASS}>
+      <aside aria-label={msg("arbiter.column.label")} data-testid="arbiter-round-column" data-phase={phase} className={asideClass}>
         {queue}
         <PlayingStatus round={p.round} roundExtend={p.roundExtend} />
         {views.map((view) => (
@@ -143,7 +158,7 @@ export function RoundColumn(p: RoundColumnProps) {
   }
 
   return (
-    <aside aria-label={msg("arbiter.column.label")} data-testid="arbiter-round-column" data-phase={phase} className={ASIDE_CLASS}>
+    <aside aria-label={msg("arbiter.column.label")} data-testid="arbiter-round-column" data-phase={phase} className={asideClass}>
       {queue}
       {p.data.awaitsStart ? (
         // Before Start `listOpenRounds` answers [], so "nothing paired" would also be true: the start line wins (pre-flight A8),
@@ -528,7 +543,7 @@ export function CheckinHero({ round, view, tz, nowMs, openRound, roundExtend }: 
 
 // ---- check-in: the waiting list -------------------------------------------------------------------------------------------------
 
-/** C9: placed by Task 8 in the board group (under the camera from md). Shares the column's handle. */
+/** C9: the panel puts it in the board group, under the camera from md. Shares the column's handle. */
 export type WaitingListProps = {
   /** `round.boards`; the list filters with `openWindowBoards`, the SAME set the hero's tally counts. */
   boards: readonly ArbiterBoard[];
@@ -568,7 +583,10 @@ export function WaitingList({ boards, view, openRound, nowMs, on }: WaitingListP
   const copy = { t: (key: string, vars?: Record<string, string | number>) => msg(key as MessageKey, vars) };
 
   return (
-    <section aria-labelledby="arbiter-waiting-heading" data-testid="arbiter-waiting" className={`flex flex-col gap-2 ${CARD_BOX}`}>
+    // The panel's board group is `contents` below md, so on a phone this is a flex item of the page: -1 puts it straight after the column
+    // (the aside is -2). From md the group is a flex column whose children carry order-1..4 (heading, camera, other reports): `order-3`
+    // is "under the camera" and above the other reports. 0 would sort it above the picker, which is why it is not left unsaid.
+    <section aria-labelledby="arbiter-waiting-heading" data-testid="arbiter-waiting" className={`flex flex-col gap-2 max-md:order-[-1] md:order-3 ${CARD_BOX}`}>
       <h2 id="arbiter-waiting-heading" data-testid="arbiter-waiting-heading" className={`m-0 min-w-0 text-base font-semibold break-words ${INK}`}>
         {plural("arbiter.column.waiting", rows.length)}
       </h2>

@@ -111,6 +111,8 @@ const COLUMN = (o: Partial<RoundColumnProps> = {}): RoundColumnProps => ({
   openRound: sharedHandle().handle,
   on: { select: () => {}, extendBoard: () => {} },
   roundExtend: null,
+  // The paths with no board grid (before, no boards on screen); the panel passes "grid" on the board grid.
+  placement: "solo",
   ...o,
 });
 // The column mounts the queue, which formats through `useFmt` and so needs a DictProvider (the panel is always inside one).
@@ -1023,6 +1025,42 @@ describe("CheckinHero: the reinvite press is the SHARED handle's, with its confi
   });
 });
 
+describe("RoundColumn: placement is the panel's to give (Task 8, C10)", () => {
+  const SOLO = ["max-md:order-[-1]", "md:col-start-2", "md:row-start-1"];
+  const GRID = ["max-md:order-[-2]", "md:col-start-2", "md:row-start-1", "md:row-span-2", "lg:col-start-3", "lg:row-start-1", "lg:row-span-1"];
+  const tokens = (tag: string) => new Set(classOf(tag).split(/\s+/).filter(Boolean));
+  const phases = (): [string, Partial<RoundColumnProps>][] => [
+    ["before", { round: null }],
+    ["checkin", { round: ROUND([checking(OPEN(), seat(true), seat(false))]), nowMs: NOW }],
+    ["playing", { round: ON_SCREEN, nowMs: NOW }],
+  ];
+
+  it("each placement is its class set in every phase, and the other placement's distinguishing classes are absent", () => {
+    let checked = 0;
+    for (const [phase, over] of phases()) {
+      for (const placement of ["solo", "grid"] as const) {
+        const root = tagOf(column({ ...over, placement }), "arbiter-round-column")!;
+        const want = placement === "solo" ? SOLO : GRID;
+        const other = placement === "solo" ? GRID : SOLO;
+        expect(want.filter((w) => !tokens(root).has(w)), `${phase} ${placement}: missing`).toEqual([]);
+        expect(other.filter((w) => !want.includes(w) && tokens(root).has(w)), `${phase} ${placement}: the other placement's`).toEqual([]);
+        expect(root, `${phase} ${placement}`).toContain(`data-phase="${phase}"`);
+        // A landmark is never display: contents, and it can shrink.
+        expect([...tokens(root)].filter((x) => /(^|:)contents$/.test(x))).toEqual([]);
+        expect(tokens(root).has("min-w-0")).toBe(true);
+        checked += 1;
+      }
+    }
+    expect(checked, "anti-vacuity: 3 phases x 2 placements").toBe(6);
+  });
+
+  it("the two placements really differ (the lookup has two entries, not one string twice)", () => {
+    const a = classOf(tagOf(column({ round: null, placement: "solo" }), "arbiter-round-column")!);
+    const b = classOf(tagOf(column({ round: null, placement: "grid" }), "arbiter-round-column")!);
+    expect(a).not.toBe(b);
+  });
+});
+
 // ---- the waiting list ------------------------------------------------------------------------------------------------
 
 const WL = (o: Partial<WaitingListProps> = {}): WaitingListProps => ({
@@ -1364,6 +1402,19 @@ describe("WaitingList: with several rows, each control acts on ITS row", () => {
     expect(spies.resend.mock.calls.map((c) => c[0])).toEqual(want);
     expect(on.extendBoard.mock.calls.map((c) => c[0])).toEqual(want);
     expect(want[0], "premise: two different boards").not.toBe(want[1]);
+  });
+});
+
+describe("WaitingList: its place in the panel's flex order (Task 8, spec §5.1)", () => {
+  it("the root leads the phone (max-md:order-[-1], one below the column's -2) and carries no other order", () => {
+    const b = checking(OPEN(), seat(false, ["sent"]), seat(true));
+    const root = tagOf(wl({ boards: [b] }), "arbiter-waiting")!;
+    const orders = classOf(root).split(/\s+/).filter((x) => /(^|:)-?order-/.test(x));
+    // From md the panel's board group is a flex column whose children carry order-1..4, so the list must sort between the camera
+    // (order-2) and the other reports (order-4): the panel's own test pins that; here, that the root is the one that says so.
+    expect(orders.filter((x) => x.startsWith("max-md:"))).toEqual(["max-md:order-[-1]"]);
+    expect(orders.filter((x) => x.startsWith("md:"))).toEqual(["md:order-3"]);
+    expect(classOf(root)).toMatch(/(^|\s)min-w-0(\s|$)/);
   });
 });
 
