@@ -132,6 +132,8 @@ import {
 } from "../../stages";
 import { deleteEntrant } from "../../entrants";
 import { patchDivision } from "../../divisions";
+import { divisionLockedFields } from "../../rule-locks";
+import { formatLockedStageIds, putStageRules } from "../../stage-rules";
 import { moveFixture } from "../../schedule";
 import { ensureBridgeRow, loadOnlinePlayFixture } from "../guard";
 import { readRoom } from "../room";
@@ -274,6 +276,34 @@ describe.skipIf(!HAS_DB)("openRound — the stamp", () => {
     expect(await open(r, 2)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
     expect((await stampRows(r.stageId, 2))).toHaveLength(1);
     expect((await stampRows(r.stageId, 1))[0]!.opened_at.getTime()).toBe(r1.opened_at.getTime());
+  });
+
+  // Rebase ruling D2 (W2c): an OPENED round locks its stage. rule-locks-opened-round.test.ts proves the predicate against a
+  // `stage_round_opens` row the SEED writes; this is the other end of the same seam, the row the REAL open writes (its stamp is
+  // now written beside the outbox rows), read by the real lock.
+  it("D2: the row this open writes is what locks the stage - open before, locked after, and only that stage", async () => {
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
+    const other = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
+
+    // The empty case first: nothing opened, nothing locked, the save goes through (an unlocked save is not itself a refusal).
+    expect(await stampRows(r.stageId), "premise: the round is not opened").toHaveLength(0);
+    expect(await formatLockedStageIds(r.owner, r.divisionId)).toEqual([]);
+    expect(await divisionLockedFields(r.owner, r.divisionId)).toEqual([]);
+    await putStageRules(r.owner, r.stageId, { rules: {} });
+
+    expect(await open(r)).toMatchObject({ opened: true });
+    expect(await stampRows(r.stageId), "the real open wrote the stamp").toHaveLength(1);
+    expect(await formatLockedStageIds(r.owner, r.divisionId)).toEqual([r.stageId]);
+    for (const call of ["first", "second"]) {
+      await expect(putStageRules(r.owner, r.stageId, { rules: {} }), call).rejects.toMatchObject({
+        status: 409,
+        code: "STAGE_FORMAT_LOCKED",
+      });
+    }
+
+    // Another division's unopened stage is untouched by this open.
+    expect(await formatLockedStageIds(other.owner, other.divisionId)).toEqual([]);
+    await putStageRules(other.owner, other.stageId, { rules: {} });
   });
 });
 
