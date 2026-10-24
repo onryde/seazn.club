@@ -1,6 +1,6 @@
 // stripDbEcho: the fields of a database error that echo the failed statement's data (lib/strip-db-echo.ts).
 //
-// The two lists below are the RULING (owner-approved, PR 1009 fix round), typed here on purpose: the expected values are not
+// The two lists below are the RULING (a controller ruling in PR 1009's review fix round), typed here on purpose: the expected values are not
 // read from the module under test. A field moved between them is a decision, and this is where it is reviewed.
 import { describe, expect, it } from "vitest";
 import pino from "pino";
