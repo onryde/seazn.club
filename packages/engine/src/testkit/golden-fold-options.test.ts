@@ -7,7 +7,7 @@
 // EVERY prefix fold exactly as the write path does, and `golden-fold-options.ts` appends the streams that reach the award.
 //
 // This file: the recorder (below), the stories and the append path, the committed corpora, and the policy text.
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { foldOptionsProblem as guardProblem } from "../../scripts/fold-epoch-guard.ts";
 import { PointsRule, forfeitAwardOffer } from "../competition/points.ts";
@@ -639,7 +639,10 @@ describe("the policy text says what the corpora do (GOLDEN-POLICY.md)", () => {
     expect(policy).toContain("`foldOptions`");
     expect(policy).toMatch(/only `forfeitAward` is allowed/);
     expect(policy).toMatch(/part of the stream's input/);
-    expect(policy).toContain("`golden-fold-options.ts`");
+    // the file it names is the one that exists, and the seeds it quotes are the table's
+    expect(policy).toContain("`src/testkit/golden-fold-options.ts`");
+    expect(existsSync(new URL("./golden-fold-options.ts", import.meta.url))).toBe(true);
+    expect(policy).toContain(`${FOLD_OPTION_SEED_BASE + 1}-${FOLD_OPTION_SEED_BASE + FORFEIT_AWARD_CASES.length}`);
   });
   it("no longer lists the server-only fold input among what the corpora cannot see, and says what stays unseen", () => {
     expect(policy).not.toContain("**A server-only fold input**");

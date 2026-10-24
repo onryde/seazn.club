@@ -800,7 +800,7 @@ hockey in `state.forfeitAward`. Absent means no award is offered, which is every
 recorded before GF-3 T2 and every stream of a sport that ignores the award: today's
 behaviour, byte for byte. The corpus format stays **3**; the field is not a format change.
 
-- **Only `forfeitAward` is allowed**, and it must be two non-negative finite integers (the
+- **One key**: only `forfeitAward` is allowed, and it must be two non-negative finite integers (the
   winner's score first, as `ForfeitAward` is). Any other key, a missing pair, a negative or fractional
   number is a refusal that names the stream: `scripts/fold-epoch-guard.ts` exits 2 (`foldOptionsProblem`),
   and the recorder throws the same message (`golden.ts`, `strictFold`), held to the same inputs by a
