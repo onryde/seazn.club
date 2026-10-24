@@ -206,17 +206,18 @@ export async function DELETE(req: Request) {
       return endedByDeletion;
     });
 
-    // The invites the deletion just ended are badly-ended rows like any other: the chess hook releases a seat whose every email has now
-    // ended, so the board reads "still to invite" for the organiser. After the commit, as everywhere else the hooks run; it never throws
-    // (a hook that fails is logged, and the worker's re-drive finishes the release), so it cannot fail a deletion that already committed.
-    await afterEndedBadly(endedInvites);
-
     await invalidateUser(user.id);
     await invalidateUserOrgs(user.id);
 
     // Best-effort notification before destroying session
     await sendAccountDeletionEmail(user.email, toLocale(user.locale));
     await destroySession();
+
+    // The invites the deletion ended are badly-ended rows like any other: the chess hook releases a seat whose every email has now ended,
+    // so the board reads "still to invite" for the organiser. After the commit, as everywhere else the hooks run, and AFTER the sign-out:
+    // the hook locks the board's bridge row, and a lock wait must not delay clearing the session cookie. It never throws (a hook that
+    // fails is logged, and the worker's re-drive finishes the release), so it cannot fail a deletion that already committed.
+    await afterEndedBadly(endedInvites);
 
     return { ok: true };
   });

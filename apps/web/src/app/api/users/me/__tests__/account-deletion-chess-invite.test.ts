@@ -51,6 +51,7 @@ vi.mock("@/server/email-outbox/transport", async () => {
 });
 
 import { sql } from "@/lib/db";
+import { destroySession, invalidateUser, invalidateUserOrgs } from "@/lib/auth";
 import { DELETE } from "@/app/api/users/me/route";
 import {
   OUTBOX_STATUSES,
@@ -64,6 +65,7 @@ import { anonymiseChessInvites } from "@/server/email-outbox/account-deletion";
 import { KIND_HOOKS } from "@/server/email-outbox/hooks";
 import { runOutboxTick } from "@/server/email-outbox/worker";
 import { openRound } from "@/server/usecases/external-play/open-round";
+import { resendExternalPlayNotice } from "@/server/usecases/external-play/invite";
 import { CHESS_SEAT_REF_TYPE, chessSeatRef, type Colour } from "@/server/usecases/external-play/seat-stamp";
 import { renderInviteForTest, stubOutboxEnv } from "@/server/usecases/__tests__/_invite-mail";
 import { seedOnlineChessRound } from "@/server/usecases/__tests__/_external-play-seed";
@@ -75,6 +77,16 @@ const RUN = `adci-${randomUUID().slice(0, 8)}`;
 const del = () =>
   DELETE(new Request("http://test.local/api/users/me", { method: "DELETE", body: JSON.stringify({ confirm: "DELETE" }) }));
 const address = (tag: string): string => `${RUN}-${tag}-${randomUUID().slice(0, 6)}@del.test`;
+const ORIGIN = "https://seazn.test";
+
+/** The address a deleted account is left with, written out from the rule and NOT read back from the code under test: the `.invalid` TLD is
+ *  reserved (RFC 6761) and can never resolve, so a row addressed to it can never reach anybody, and the account's id keeps two deleted
+ *  accounts apart. Every assertion about "the placeholder" compares to THIS. */
+const placeholderOf = (userId: string): string => `deleted-${userId}@deleted.invalid`;
+
+/** What this file wrote, so afterAll removes it by id and ref and not only by the RUN prefix in an address (an anonymised row carries no
+ *  prefix any more). */
+const made = { rows: [] as string[], users: [] as string[], fixtures: [] as string[] };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -99,7 +111,12 @@ afterEach(() => {
 });
 afterAll(async () => {
   if (HAS_DB) {
-    await sql`delete from email_outbox where recipient like ${`${RUN}-%`} or recipient like ${`${RUN.toUpperCase()}-%`}`;
+    await sql`
+      delete from email_outbox
+       where recipient like ${`${RUN}-%`} or recipient like ${`${RUN.toUpperCase()}-%`}
+          or id = any(${made.rows}::uuid[])
+          or recipient = any(${made.users.map(placeholderOf)}::text[])
+          or ref_id like any(${made.fixtures.map((f) => `${f}:%`)}::text[])`;
     await sql.end({ timeout: 2 }).catch(() => undefined);
   }
 });
@@ -134,6 +151,7 @@ const accountOf = async (id: string) =>
 
 async function seedUser(email: string, name: string): Promise<string> {
   const [{ id }] = await sql<{ id: string }[]>`insert into users (email, display_name, email_verified) values (${email}, ${name}, true) returning id`;
+  made.users.push(id);
   return id;
 }
 async function seedOrg(tag: string): Promise<string> {
@@ -145,7 +163,7 @@ async function seedOrg(tag: string): Promise<string> {
 /** One chess invite for `to`, through the real writer, on a fresh seat ref (so the replace rule supersedes nothing). */
 async function invite(to: string, orgId: string | null): Promise<string> {
   const fixtureId = randomUUID();
-  return enqueueEmail(sql, {
+  const id = await enqueueEmail(sql, {
     kind: "chess_invite",
     refType: CHESS_SEAT_REF_TYPE,
     refId: chessSeatRef(fixtureId, "white"),
@@ -156,6 +174,8 @@ async function invite(to: string, orgId: string | null): Promise<string> {
     expiresAt: new Date(Date.now() + 60 * MIN),
     meta: { fixtureId, colour: "white", stampedAt: new Date().toISOString() },
   });
+  made.rows.push(id);
+  return id;
 }
 
 /** Move a freshly written (queued) row to `status`, keeping every V470 CHECK true: a body only while retryable, a lease exactly while sending. */
@@ -230,12 +250,13 @@ describe.skipIf(!HAS_DB)("deleting an account anonymises its chess invites in th
     expect(res.status).toBe(200);
     const gone = await accountOf(leaverId);
     expect(gone.deleted_at, "premise: the account really was deleted").not.toBeNull();
+    expect(gone.email, "premise: the account itself is left with the same reserved-TLD placeholder").toBe(placeholderOf(leaverId));
 
     let checked = 0;
     for (const r of await rowsByIds(mine.map((m) => m.id))) {
       const was = beforeMine.get(r.id)!;
       const label = `${was.status} row in org ${r.org_id === orgA ? "A" : "B"}`;
-      expect(r.recipient, `${label}: the address is gone and the placeholder is the account's own anonymised one`).toBe(gone.email);
+      expect(r.recipient, `${label}: the address is gone and the placeholder is the reserved-TLD one built from the account's id`).toBe(placeholderOf(leaverId));
       expect(r.recipient, `${label}: nothing of the address survives in it`).not.toContain("Leaver");
       expect(r.status, `${label}: its status after deletion`).toBe(STATUS_AFTER_DELETION[was.status]);
       expect(r.org_id, `${label}: still in its org`).toBe(was.org_id);
@@ -243,6 +264,7 @@ describe.skipIf(!HAS_DB)("deleting an account anonymises its chess invites in th
         expect(r.has_body, `${label}: the unsent credential is gone with the send`).toBe(false);
         expect(r.last_error, `${label}: why it ended`).toBe("account_deleted");
         expect(r.has_lease).toBe(false);
+        expect(r.status_at.getTime(), `${label}: the ending is stamped (the arbiter's status column and the hook order by it)`).toBeGreaterThan(was.status_at.getTime());
       } else {
         expect(r.has_body, `${label}: body untouched`).toBe(was.has_body);
         expect(r.has_lease, `${label}: lease untouched`).toBe(was.has_lease);
@@ -281,6 +303,30 @@ describe.skipIf(!HAS_DB)("deleting an account anonymises its chess invites in th
     expect((await accountOf(bareId)).deleted_at).not.toBeNull();
   });
 
+  it("two deleted accounts are left with different placeholders, each the reserved `.invalid` address built from its own id", async () => {
+    const people = [] as { id: string; email: string; row: string }[];
+    for (const tag of ["first", "second"]) {
+      const email = address(tag);
+      const id = await seedUser(email, tag);
+      people.push({ id, email, row: await invite(email, null) });
+    }
+    for (const p of people) {
+      authState.user = { id: p.id, email: p.email, locale: null };
+      expect((await del()).status).toBe(200);
+    }
+    const recipients = [] as string[];
+    for (const p of people) {
+      const r = await rowOf(p.row);
+      expect(r.recipient).toBe(placeholderOf(p.id));
+      expect(r.recipient, "an address that can never resolve (RFC 6761)").toMatch(/@deleted\.invalid$/);
+      expect(r.recipient, "and nothing of the real one survives in it").not.toContain(p.email.split("@")[0]!);
+      expect((await accountOf(p.id)).email, "the account holds the same one").toBe(r.recipient);
+      recipients.push(r.recipient);
+    }
+    expect(recipients.length, "anti-vacuity: both accounts were read back").toBe(2);
+    expect(new Set(recipients).size, "two people are never left with one shared placeholder").toBe(2);
+  });
+
   it("the helper touches chess invites and nothing else: a sign-in row for the same address, in any status, is not its business", async () => {
     // The route deletes the account's sign-in rows first, so through the route the kind filter is unobservable: drive the helper itself.
     const email = address("kinds");
@@ -292,6 +338,7 @@ describe.skipIf(!HAS_DB)("deleting an account anonymises its chess invites in th
         kind: "magic_link", refType: "user", refId: randomUUID(), orgId: null, to: email,
         subject: "Your sign-in link", html: "<p>link</p>", text: "link", transactional: true, expiresAt: new Date(Date.now() + 15 * MIN),
       });
+      made.rows.push(signIn);
       await put(signIn, status);
       rows.push({ id: chess, kind: "chess_invite" }, { id: signIn, kind: "magic_link" });
     }
@@ -355,7 +402,7 @@ describe.skipIf(!HAS_DB)("deleting an account anonymises its chess invites in th
     }
     expect((await del()).status, "the retry completes the deletion").toBe(200);
     expect((await rowOf(queued)).status).toBe("expired");
-    expect((await rowOf(sent)).recipient).toBe((await accountOf(id)).email);
+    expect((await rowOf(sent)).recipient).toBe(placeholderOf(id));
   });
 
   it("a send in flight when the account is deleted is left to finish: it lands `sent`, with the address already gone from its row", async () => {
@@ -377,7 +424,7 @@ describe.skipIf(!HAS_DB)("deleting an account anonymises its chess invites in th
     const mid = await rowOf(row);
     expect(mid.status, "deletion does not fight the attempt that owns the row").toBe("sending");
     expect(mid.has_lease, "its lease is intact").toBe(true);
-    expect(mid.recipient, "but the address is already gone from it").toBe((await accountOf(id)).email);
+    expect(mid.recipient, "but the address is already gone from it").toBe(placeholderOf(id));
 
     release();
     expect((await dispatch).get(row), "the attempt still owns the row, so its result is recorded").toBe("sent");
@@ -385,7 +432,7 @@ describe.skipIf(!HAS_DB)("deleting an account anonymises its chess invites in th
     expect(done.status).toBe("sent");
     expect(done.provider_id, "and the provider's id is recorded for its later events").not.toBeNull();
     expect(done.has_body).toBe(false);
-    expect(done.recipient, "and the address did not come back").toBe((await accountOf(id)).email);
+    expect(done.recipient, "and the address did not come back").toBe(placeholderOf(id));
     expect(mail.sent.map((m) => m.to), "the mail was already on its way; the placeholder was never mailed").toEqual([email]);
   });
 
@@ -399,7 +446,7 @@ describe.skipIf(!HAS_DB)("deleting an account anonymises its chess invites in th
     expect(sent.status, "premise: the provider took it").toBe("sent");
 
     expect((await del()).status).toBe(200);
-    const anon = (await accountOf(id)).email;
+    const anon = placeholderOf(id);
     expect((await rowOf(row)).recipient).toBe(anon);
 
     // The payload carries no address at all: the match is the provider id.
@@ -438,7 +485,10 @@ const other = (c: Colour): Colour => (c === "white" ? "black" : "white");
 
 async function openedBoard(): Promise<{ r: Awaited<ReturnType<typeof seedOnlineChessRound>>; b: Board }> {
   const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
-  return { r, b: r.boards[0]! };
+  const b = r.boards[0]!;
+  made.fixtures.push(b.fixtureId);
+  made.users.push(b.home.userId, b.away.userId);
+  return { r, b };
 }
 const open = (r: Awaited<ReturnType<typeof seedOnlineChessRound>>) =>
   openRound({ stageId: r.stageId, roundNo: 1, actorUserId: r.ownerUserId });
@@ -459,7 +509,7 @@ describe.skipIf(!HAS_DB)("the seat of a deleted account's invite (the chess hook
 
     asLeaver(b);
     expect((await del()).status).toBe(200);
-    const anon = (await accountOf(b.home.userId)).email;
+    const anon = placeholderOf(b.home.userId);
 
     const [ended] = await seatRows(b.fixtureId, mine);
     expect([ended!.status, ended!.last_error, ended!.has_body, ended!.recipient]).toEqual(["expired", "account_deleted", false, anon]);
@@ -503,7 +553,7 @@ describe.skipIf(!HAS_DB)("the seat of a deleted account's invite (the chess hook
 
     asLeaver(b);
     expect((await del()).status).toBe(200);
-    const anon = (await accountOf(b.home.userId)).email;
+    const anon = placeholderOf(b.home.userId);
     const [after] = await seatRows(b.fixtureId, mine);
     expect([after!.status, after!.recipient, after!.provider_id], "status and provider id untouched, address replaced").toEqual(["sent", anon, sent!.provider_id]);
     expect(await stampOf(b.fixtureId, mine), "the provider took the mail: the seat stays invited").not.toBeNull();
@@ -532,5 +582,83 @@ describe.skipIf(!HAS_DB)("the seat of a deleted account's invite (the chess hook
 
     await runOutboxTick({ onlyIds: [], sleep: async () => undefined }); // claims nothing; its last step re-drives unapplied endings
     expect(await stampOf(b.fixtureId, mine), "the re-drive applied the release").toBeNull();
+  });
+
+  it("the sign-out comes first: the session and the caches are cleared BEFORE the seat hook runs, so a hook waiting on a bridge lock cannot delay it", async () => {
+    const { r, b } = await openedBoard();
+    mail.retry.add(b.home.email);
+    await open(r);
+    const mine = await colourOf(b.fixtureId, b.home.email);
+    const realHook = KIND_HOOKS.chess_invite;
+    const atHook: { destroyed: number; invalidated: number; invalidatedOrgs: number }[] = [];
+    KIND_HOOKS.chess_invite = {
+      ...realHook,
+      onEndedBadly: async (row) => {
+        atHook.push({
+          destroyed: vi.mocked(destroySession).mock.calls.length,
+          invalidated: vi.mocked(invalidateUser).mock.calls.length,
+          invalidatedOrgs: vi.mocked(invalidateUserOrgs).mock.calls.length,
+        });
+        await realHook.onEndedBadly!(row);
+      },
+    };
+    try {
+      asLeaver(b);
+      expect((await del()).status).toBe(200);
+    } finally {
+      KIND_HOOKS.chess_invite = realHook;
+    }
+    expect(atHook, "anti-vacuity: the hook ran once, and each call had already happened when it did").toEqual([
+      { destroyed: 1, invalidated: 1, invalidatedOrgs: 1 },
+    ]);
+    expect(await stampOf(b.fixtureId, mine), "and it still did its job").toBeNull();
+  });
+});
+
+// A deleted player's seat is not mailable (guard.ts loadSide drops a deleted account from the recipients): after the deletion the
+// account's address is the unreachable placeholder, and a Resend or the next Open must not queue, stamp or send anything to it.
+describe.skipIf(!HAS_DB)("a Resend after a player deleted their account", () => {
+  it("the seat whose invite was ended and released is handled as a seat with no address: nothing queued, nothing mailed to the placeholder, the stamp released again", async () => {
+    const { r, b } = await openedBoard();
+    mail.retry.add(b.home.email);
+    await open(r);
+    const mine = await colourOf(b.fixtureId, b.home.email);
+    asLeaver(b);
+    expect((await del()).status).toBe(200);
+    expect(await stampOf(b.fixtureId, mine), "premise: the deletion released the leaver's seat").toBeNull();
+    mail.sent.length = 0;
+    mail.retry.clear();
+
+    const out = await resendExternalPlayNotice(r.owner, b.fixtureId, ORIGIN);
+
+    expect(out, "only the opponent's seat has an address to invite").toEqual({ emailed: 1, retrying: 0 });
+    expect(mail.sent.map((m) => m.to), "the one email of the Resend went to the opponent").toEqual([b.away.email]);
+    const leaverSeat = await seatRows(b.fixtureId, mine);
+    expect(leaverSeat.map((x) => [x.status, x.recipient]), "no row was written for the leaver's seat: the ended one is all there is").toEqual([
+      ["expired", placeholderOf(b.home.userId)],
+    ]);
+    expect(await stampOf(b.fixtureId, mine), "the seat the Resend claimed has no address, so its stamp went again (the no-address path)").toBeNull();
+    const toPlaceholder = await sql<{ id: string }[]>`select id from email_outbox where recipient = ${placeholderOf(b.home.userId)}`;
+    expect(toPlaceholder.length, "and nothing anywhere is addressed to the placeholder but that ended row").toBe(1);
+  });
+
+  it("the seat whose invite had already been sent keeps its stamp and gets no second email", async () => {
+    const { r, b } = await openedBoard();
+    expect(await open(r)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+    const mine = await colourOf(b.fixtureId, b.home.email);
+    asLeaver(b);
+    expect((await del()).status).toBe(200);
+    const stampBefore = await stampOf(b.fixtureId, mine);
+    expect(stampBefore, "premise: the sent mail still holds the stamp").not.toBeNull();
+    mail.sent.length = 0;
+
+    const out = await resendExternalPlayNotice(r.owner, b.fixtureId, ORIGIN);
+
+    expect(out).toEqual({ emailed: 1, retrying: 0 });
+    expect(mail.sent.map((m) => m.to)).toEqual([b.away.email]);
+    expect((await seatRows(b.fixtureId, mine)).map((x) => [x.status, x.recipient]), "still the one sent row, with no address").toEqual([
+      ["sent", placeholderOf(b.home.userId)],
+    ]);
+    expect((await stampOf(b.fixtureId, mine))?.getTime(), "and the stamp is exactly the one it was").toBe(stampBefore!.getTime());
   });
 });
