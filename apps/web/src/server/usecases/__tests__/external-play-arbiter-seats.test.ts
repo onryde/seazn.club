@@ -17,7 +17,15 @@ import { randomUUID } from "node:crypto";
 import { sql, statementCount } from "@/lib/db";
 import type { ArbiterBoard } from "@/lib/arbiter-view";
 import { OUTBOX_STATUSES, type OutboxStatus } from "@/server/email-outbox/constants";
-import { boardAnchor, checkInCounts, windowFor } from "@/server/external-play/window";
+import {
+  CHECKIN_BATCH_GAP_MS,
+  CHECKIN_BATCH_SIZE,
+  DEADLINE_AFTER_MS,
+  WINDOW_OPEN_LEAD_MS,
+  boardAnchor,
+  checkInCounts,
+  windowFor,
+} from "@/server/external-play/window";
 import { log } from "@/server/logger";
 import { stampFixtureCheckIn } from "../me";
 import { scoreEvent } from "../scoring";
@@ -57,9 +65,11 @@ import { CHESS_SEAT_REF_TYPE, STAMP_COLUMN, chessSeatRef, seatStampBound, type C
 import { generateStageFixtures, unpairSwissRound } from "../stages";
 import {
   seedOnlineChessRound,
+  seedOnlineChessRoundWithRankedBoard,
   seedOnlineSwiss,
   seedOwner,
   type SeedOnlineChessRoundResult,
+  type SeedRoundBoard,
   type SeedSide,
 } from "./_external-play-seed";
 
@@ -293,6 +303,67 @@ describe.runIf(HAS_DB)("loadArbiterRound seats: who is here", () => {
     // Pinned by hand as well, so a window rule that moved would still be caught here: before the window is not here, inside is, the
     // opening edge is, the deadline is not.
     expect(expected).toEqual([false, true, true, false]);
+  });
+
+  // [reader:arbiter-here] is what batch-anchor-source-guard.test.ts pins: the loader's `seats` pass asks window.ts's `checkInCounts`
+  // with THIS board's anchor (rank, stagger, extension), not the round's. The round below is staggered (a camera policy that is not
+  // `off`, as the real open stores it), so a rank-0 board and a rank-20 board have different windows, and a pass that judged every
+  // board by the round's own opening would get one of them wrong at every edge. Every instant is written from window.ts's constants
+  // (OPENED + batch x GAP, less the lead for batch 0, plus the deadline), never read back from windowFor.
+  const OPENED = new Date("2026-10-01T12:00:00.000Z");
+  const startOf = (batch: number) => new Date(OPENED.getTime() + batch * CHECKIN_BATCH_GAP_MS);
+  const opensOf = (batch: number) => (batch === 0 ? new Date(OPENED.getTime() - WINDOW_OPEN_LEAD_MS) : startOf(batch));
+  const closesOf = (batch: number) => new Date(startOf(batch).getTime() + DEADLINE_AFTER_MS);
+
+  /** Stamp the board's home player at `at`, then read the white seat the way the arbiter's page does. */
+  async function hereAt(r: SeedOnlineChessRoundResult, board: SeedRoundBoard, at: Date): Promise<boolean> {
+    await stampFixtureCheckIn(board.home.personId, board.fixtureId, r.orgId, { at });
+    return (await seatsOf(r, board.fixtureId)).white.here;
+  }
+
+  it("[reader:arbiter-here] a stamp counts only inside ITS board's window (staggered round): each board's own edges, and one instant that is here for one board and not the other", async () => {
+    // A staggered round opened by the real usecase at OPENED: board 1 sits in batch 0, `ranked` in batch 2 (rank 2 x the batch size).
+    const r = await seedOnlineChessRoundWithRankedBoard({ cameraPolicy: "required" }, 2 * CHECKIN_BATCH_SIZE);
+    const out = await openRound({ stageId: r.stageId, roundNo: r.roundNo, actorUserId: r.ownerUserId }, { now: OPENED });
+    expect(out, "premise: the real open stamped the round").toMatchObject({ opened: true });
+    const [open] = await sql<{ openedAt: Date; staggered: boolean }[]>`
+      select opened_at as "openedAt", staggered from stage_round_opens where stage_id = ${r.stageId} and round_no = ${r.roundNo}`;
+    expect(open!.staggered, "premise: the open stored a staggered round").toBe(true);
+    expect(open!.openedAt.getTime(), "premise: the open is dated at the injected clock").toBe(OPENED.getTime());
+    const boards = [
+      { batch: 0, board: r.boards[0]! },
+      { batch: 2, board: r.ranked },
+    ];
+
+    // Each board's own edges: 1 ms before it opens is not here, its opening is, 1 ms before its deadline is, its deadline is not.
+    let checked = 0;
+    for (const { batch, board } of boards) {
+      const o = opensOf(batch).getTime();
+      const c = closesOf(batch).getTime();
+      expect(await hereAt(r, board, new Date(o - 1)), `batch ${batch}: a stamp 1 ms before the window`).toBe(false);
+      expect(await hereAt(r, board, new Date(o)), `batch ${batch}: a stamp at its opening`).toBe(true);
+      expect(await hereAt(r, board, new Date(c - 1)), `batch ${batch}: a stamp 1 ms before the deadline`).toBe(true);
+      expect(await hereAt(r, board, new Date(c)), `batch ${batch}: a stamp at the deadline`).toBe(false);
+      checked += 4;
+    }
+    expect(checked, "anti-vacuity: edges read (four per batch, two batches)").toBe(8);
+
+    // The differential, both ways round. Batch 0 holds [OPENED - lead, OPENED + deadline); batch 2 holds [OPENED + 2 gaps, + deadline).
+    // Five minutes before the opening is inside batch 0 only; twelve minutes after it is past batch 0's deadline and inside batch 2.
+    const early = new Date(OPENED.getTime() - 5 * MIN);
+    const late = new Date(OPENED.getTime() + 12 * MIN);
+    expect(early >= opensOf(0) && early < closesOf(0) && early < opensOf(2), "premise: the early instant is in batch 0 only").toBe(true);
+    expect(late >= closesOf(0) && late >= opensOf(2) && late < closesOf(2), "premise: the late instant is in batch 2 only").toBe(true);
+    const got: boolean[][] = [];
+    for (const at of [early, late]) {
+      const row: boolean[] = [];
+      for (const { board } of boards) row.push(await hereAt(r, board, at));
+      got.push(row);
+    }
+    expect(got, "[batch 0, batch 2] at the early instant, then at the late one").toEqual([
+      [true, false],
+      [false, true],
+    ]);
   });
 
   it("a seat with no linked person is not here and has no mailbox to read: Not invited", async () => {
