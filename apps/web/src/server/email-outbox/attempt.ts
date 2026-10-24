@@ -143,7 +143,7 @@ async function markRetry(row: ClaimedRow, next: Date, lastError: string | null):
   return done.length > 0;
 }
 
-/** `dead` and `suppressed`: terminal, so the body and the lease go with the status (the V469 CHECKs insist). */
+/** `dead` and `suppressed`: terminal, so the body and the lease go with the status (the V470 CHECKs insist). */
 async function markEnded(row: ClaimedRow, status: "dead" | "suppressed", lastError: string | null): Promise<boolean> {
   const done = await sql`
     update email_outbox
@@ -153,7 +153,7 @@ async function markEnded(row: ClaimedRow, status: "dead" | "suppressed", lastErr
   return done.length > 0;
 }
 
-/** The email is worthless now: end it unsent, body and lease gone (the V469 CHECKs insist on both). */
+/** The email is worthless now: end it unsent, body and lease gone (the V470 CHECKs insist on both). */
 async function markExpired(row: ClaimedRow): Promise<boolean> {
   const done = await sql`
     update email_outbox

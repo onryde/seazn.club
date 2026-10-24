@@ -1,6 +1,6 @@
 import "server-only";
 // What the outbox knows about the emails of a thing, and the retention of the rows themselves. Both run on the PRIVILEGED pooled
-// connection, as the worker does (V469: `app_user` holds INSERT only, so a tenant connection can neither read a row back nor delete
+// connection, as the worker does (V470: `app_user` holds INSERT only, so a tenant connection can neither read a row back nor delete
 // one). Neither sends anything.
 //
 //  - `latestEmailStatus` is the read the arbiter's phase-2 column will use ("did this seat's invite arrive?"). Its caller is a tenant
@@ -14,7 +14,7 @@ import { PURGE_BATCH, RETENTION_DAYS, type OutboxKind, type OutboxStatus } from 
 // differ - `latestEmailStatus` asks by (organisation, ref type, refs) and answers per recipient; `latestStatusesOfRows` asks by row
 // id (the rows a request has just written, whose org it owns) and answers per row - so they cannot be one statement, but they
 // share these two fragments and so cannot disagree about what "latest" means:
-//  - `current`: a `replaced` row is never the answer, even when it is the newest on the clock (the V469 replace trigger supersedes
+//  - `current`: a `replaced` row is never the answer, even when it is the newest on the clock (the V470 replace trigger supersedes
 //    by KEY, not by time, so the row that carries the outcome is the newest one that is not replaced);
 //  - `newestFirst`: "newest" is `created_at`, ties by `id` - never `status_at`, which moves with every status change and says
 //    nothing about which email is the latest.
@@ -28,7 +28,7 @@ export type EmailStatusRow = { refId: string; recipient: string; kind: OutboxKin
 
 /**
  * The status of the newest email to each recipient of each of these refs, for one organisation and one ref type: one row per
- * (ref, recipient case-folded, as the V469 replace rule folds it), never a `replaced` row. A `replaced` row is skipped even when
+ * (ref, recipient case-folded, as the V470 replace rule folds it), never a `replaced` row. A `replaced` row is skipped even when
  * it is the newest on the clock: the replace trigger supersedes by KEY, not by time, so the row that carries the outcome is the
  * newest one that is not. "Newest" is `created_at`, ties by `id` (`status_at` moves with every status change and says nothing about
  * which email is the latest). A resend after a dead row reads as the new row. Empty `refIds` answers `[]` and issues no statement.

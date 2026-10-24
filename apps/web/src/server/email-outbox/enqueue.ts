@@ -3,7 +3,7 @@ import "server-only";
 // inside `withTenant` / `sql.begin` queues the email in the SAME transaction as the thing that caused it (committed <=>
 // queued; a rollback queues nothing). It never calls Resend; `dispatchNow` does, after the caller commits.
 //
-// Two constraints from the schema (V469):
+// Two constraints from the schema (V470):
 //  - `app_user` holds INSERT only, so the id is made here and the insert has no RETURNING (RETURNING needs SELECT);
 //  - the replace trigger supersedes older non-terminal rows for the same kind + ref + recipient on this very insert.
 import { randomUUID } from "node:crypto";
@@ -81,7 +81,7 @@ export async function enqueueEmail(db: Tx | typeof sql, m: OutboxMessage): Promi
  *    finished row has nothing to retry, and a sign-in link's expiry is its own.
  *
  * T8-R1: runs on the caller's PRIVILEGED transaction (checkin-extend's `sql.begin`, the pooled connection the worker uses too).
- * V469 gives `app_user` INSERT only, so a tenant transaction is refused (42501) rather than matching zero rows; there is nothing to
+ * V470 gives `app_user` INSERT only, so a tenant transaction is refused (42501) rather than matching zero rows; there is nothing to
  * fall back to and nothing for a definer function to add. `refIds` carry a board's id, so no other organisation can share one.
  */
 export async function extendEmailExpiry(

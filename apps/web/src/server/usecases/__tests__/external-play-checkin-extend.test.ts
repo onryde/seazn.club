@@ -1318,7 +1318,7 @@ describe.skipIf(!HAS_DB)("extendCheckin - the queued invites' expiry follows the
     expect(expiries(await invitesOf(fixtureId))).toEqual(before.map(() => at(oldDeadline, CHECKIN_EXTEND_STEP_MS).getTime()));
   });
 
-  it("T8-R1: the extension's transaction is the pooled (privileged) connection, never a tenant one - V469 gives app_user INSERT only, so a tenant transaction could not move the expiry", () => {
+  it("T8-R1: the extension's transaction is the pooled (privileged) connection, never a tenant one - V470 gives app_user INSERT only, so a tenant transaction could not move the expiry", () => {
     const src = readFileSync(new URL("../external-play/checkin-extend.ts", import.meta.url), "utf8")
       .replace(/\/\*[\s\S]*?\*\//g, "")
       .replace(/(^|[^:])\/\/.*$/gm, "$1");

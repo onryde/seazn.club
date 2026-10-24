@@ -1,4 +1,4 @@
-// V469 email_outbox: the table, its two body/lease CHECKs, the replace trigger and the INSERT-only grant.
+// V470 email_outbox: the table, its two body/lease CHECKs, the replace trigger and the INSERT-only grant.
 // Spec: docs/superpowers/specs/2026-10-19-email-outbox-design.md ("The row", "Statuses", "Credentials at rest").
 //
 // Claims that are not derivable from the DDL, and where each is pinned:
@@ -91,7 +91,7 @@ const attempt = (p: Promise<unknown>): Promise<Outcome> =>
     }),
   );
 
-describe.skipIf(!HAS_DB)("email_outbox (V469)", () => {
+describe.skipIf(!HAS_DB)("email_outbox (V470)", () => {
   /** Every ref this run writes starts with this, so teardown can find the org-less rows too. */
   const RUN = randomUUID().slice(0, 8);
   const BODY = Buffer.from("sealed-envelope-bytes");

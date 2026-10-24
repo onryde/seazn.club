@@ -1,6 +1,6 @@
 import "server-only";
 // May the pooled role write the outbox? `email_outbox` is FORCE RLS with an INSERT policy for `app_user` and nothing else
-// (V469), so the dispatcher, the worker, the webhook and the status read all depend on the pooled role being a superuser
+// (V470), so the dispatcher, the worker, the webhook and the status read all depend on the pooled role being a superuser
 // or BYPASSRLS (local and CI `postgres` is a superuser; V451 relies on the same on stg/prod). A role that is neither does
 // NOT get an error: its UPDATEs match zero rows, so every send is quietly `deferred` and nothing ever leaves. This turns
 // that silence into a loud answer, exported for the Task 4 worker as well as `dispatchNow`. Only a TRUE answer is

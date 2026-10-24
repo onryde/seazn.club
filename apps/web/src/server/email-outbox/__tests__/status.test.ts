@@ -4,7 +4,7 @@
 // whatever its status).
 //
 // What is pinned, and by which test:
-//  - the answer is ONE row per (ref, recipient case-folded): the newest by `created_at`, never a `replaced` row (the V469 trigger
+//  - the answer is ONE row per (ref, recipient case-folded): the newest by `created_at`, never a `replaced` row (the V470 trigger
 //    supersedes by KEY, not by clock, so a replaced row can be the newest on the clock);
 //  - the ordering is the real sort key: the newer row holds the SMALLER id and the OLDER `status_at`, so neither `id` nor
 //    `status_at` can stand in for `created_at`, and a tie on `created_at` falls to `id`;
@@ -50,7 +50,7 @@ describe("latestEmailStatus with nothing to ask about (no statement)", () => {
   });
 });
 
-describe.skipIf(!HAS_DB)("latestEmailStatus and purgeOldEmails (V469 email_outbox)", () => {
+describe.skipIf(!HAS_DB)("latestEmailStatus and purgeOldEmails (V470 email_outbox)", () => {
   let orgA = "";
   let orgB = "";
   let orgC = "";

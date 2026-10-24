@@ -1,8 +1,8 @@
 // Task 8: `extendEmailExpiry`, the half of "expiry follows a check-in extension" that lives in the outbox. The caller (checkin-extend.ts,
 // proved end to end in usecases/__tests__/external-play-checkin-extend.test.ts) hands it the seats' refs and the board's new deadline;
 // it moves the `expires_at` of the invites that can still be sent, so a retry between the old and the new deadline is delivered
-// instead of expired. Controller rulings: T8-R1 (it runs on the caller's PRIVILEGED transaction: V469 gives `app_user` INSERT only, so
-// a tenant caller is refused, loudly, and V469 needs no amendment) and T8-R2 (an extension never pushes a row past what Resend's 24 h
+// instead of expired. Controller rulings: T8-R1 (it runs on the caller's PRIVILEGED transaction: V470 gives `app_user` INSERT only, so
+// a tenant caller is refused, loudly, and V470 needs no amendment) and T8-R2 (an extension never pushes a row past what Resend's 24 h
 // idempotency key covers: `created_at + MAX_EXPIRY_MS`).
 //
 // Pinned here:
@@ -36,7 +36,7 @@ describe("extendEmailExpiry with nothing to extend", () => {
   });
 });
 
-describe.skipIf(!HAS_DB)("extendEmailExpiry (V469 email_outbox)", () => {
+describe.skipIf(!HAS_DB)("extendEmailExpiry (V470 email_outbox)", () => {
   let orgId = "";
 
   interface Seed {

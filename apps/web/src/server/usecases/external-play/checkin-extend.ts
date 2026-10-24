@@ -35,7 +35,7 @@ import "server-only";
 // ends a still-queued row past it `expired`, unsent. The same transaction therefore moves the expiry of the board's two seats'
 // retryable invites to the new deadline (`extendEmailExpiry`), so a retry between the old deadline and the new one is delivered; a
 // failure of that move rolls the extension back with it, and the extension cannot be left half done. The transaction is the POOLED
-// connection (`sql.begin`, privileged, as the worker's), not `withTenant`: V469 gives `app_user` INSERT only.
+// connection (`sql.begin`, privileged, as the worker's), not `withTenant`: V470 gives `app_user` INSERT only.
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { captureError } from "@/lib/sentry";
