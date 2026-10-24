@@ -13,6 +13,8 @@ import { cancelBillingGroup } from "@/lib/billing";
 import { groupIdsOwnedBy } from "@/lib/billing-group";
 import { toLocale } from "@/lib/i18n";
 import { unlinkLichess } from "@/server/usecases/external-accounts";
+import { afterEndedBadly } from "@/server/email-outbox";
+import { anonymiseChessInvites } from "@/server/email-outbox/account-deletion";
 
 /**
  * Whoami (task-8): resolves the same identity AnalyticsBootstrap used to read
@@ -162,7 +164,7 @@ export async function DELETE(req: Request) {
     const purgeAfter = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
     const anonEmail = `deleted-${user.id}@deleted.invalid`;
 
-    await sql.begin(async (tx) => {
+    const endedInvites = await sql.begin(async (tx) => {
       // Remove from all orgs they were sole owner of (no other members — safe to dissolve)
       await tx`
         delete from org_members where user_id = ${user.id}`;
@@ -175,13 +177,19 @@ export async function DELETE(req: Request) {
       // `tx` is the pooled PRIVILEGED client (this route has no tenant context; `app_user` holds INSERT only on email_outbox, V470),
       // so the delete is allowed, and it is the same role the retry worker writes the table as. Matched two ways: by the account's
       // ref (a magic_link row's ref is `user/<id>`, which also reaches mail sent to an address the account has since changed away
-      // from) and by the address, case folded as the outbox's replace rule folds it (which also reaches a row another ref wrote to
-      // it, and an account whose stored address has capitals). Only `magic_link`: a
-      // `chess_invite` row belongs to an organiser's fixture, which outlives the player's account, and is not erased here.
+      // from) and by the address EXACTLY as the account stores it (which also reaches a row another ref wrote to it). Not case
+      // folded: `users.email` is unique but case-sensitive, so `Ann@x.io` and `ann@x.io` are two live accounts, and a folded
+      // match erased the other one's queued sign-in email (N-B). Only `magic_link`: a `chess_invite` row belongs to an
+      // organiser's fixture, which outlives the player's account, so it is not deleted but anonymised, just below.
       await tx`
         delete from email_outbox
          where kind = 'magic_link'
-           and (ref_id = ${user.id} or lower(recipient) = lower(${user.email}))`;
+           and (ref_id = ${user.id} or recipient = ${user.email})`;
+
+      // The chess invites addressed to this account keep the address for the same 90 days, so it is taken out of them: replaced with the
+      // placeholder the account itself is about to be given, and the ones still waiting to be sent are ended (nothing is mailed to a
+      // deleted person). Same transaction, same connection. The rows it ended are returned for the seat hook, which runs after commit.
+      const endedByDeletion = await anonymiseChessInvites(tx, { email: user.email, placeholder: anonEmail });
 
       // Soft-delete: anonymize PII, mark deleted, schedule purge
       await tx`
@@ -194,7 +202,14 @@ export async function DELETE(req: Request) {
           deleted_at    = now(),
           purge_after   = ${purgeAfter.toISOString()}
         where id = ${user.id}`;
+
+      return endedByDeletion;
     });
+
+    // The invites the deletion just ended are badly-ended rows like any other: the chess hook releases a seat whose every email has now
+    // ended, so the board reads "still to invite" for the organiser. After the commit, as everywhere else the hooks run; it never throws
+    // (a hook that fails is logged, and the worker's re-drive finishes the release), so it cannot fail a deletion that already committed.
+    await afterEndedBadly(endedInvites);
 
     await invalidateUser(user.id);
     await invalidateUserOrgs(user.id);

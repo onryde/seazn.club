@@ -10,8 +10,13 @@
 // INSERT only on `email_outbox` (V470), so a tenant transaction could not delete, and this one can. The "rows are gone" tests below are
 // the proof: a deletion that ran as `app_user` would be refused (42501) and the account would not be deleted.
 //
-// What stays (owner-relevant, flagged in the fix report): `chess_invite` rows addressed to the same account belong to an organiser's
-// fixture and are left alone.
+// Which rows are the account's (N-B): `users.email` is unique but CASE-SENSITIVE (`Ann@x.io` and `ann@x.io` are two live accounts), and
+// the outbox stores a recipient exactly as the producer was given it (the sign-in route resolves the account by `email = $1`, so the
+// address it queues IS the account's address, byte for byte). So the match is by the account's ref and by the address EXACTLY: a
+// case-folded match deleted the queued sign-in email of a separate live account whose address differs only in case.
+//
+// The `chess_invite` rows addressed to the account are not deleted here: they are anonymised, and that has its own file
+// (account-deletion-chess-invite.test.ts).
 //
 // Sport: not applicable. Account deletion is sport-agnostic.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -122,28 +127,33 @@ async function scene(): Promise<Scene> {
   const otherId = await userIdOf(other);
   const [otherProduced] = await sql<{ id: string }[]>`select id from email_outbox where kind = 'magic_link' and ref_id = ${otherId}`;
 
+  // A SEPARATE live account whose address differs from the leaver's only in case, signed in through the real route (N-B).
+  const shouted = email.toUpperCase();
+  expect(shouted, "premise: a different string for the same mailbox").not.toBe(email);
+  expect((await signIn(shouted)).status).toBe(200);
+  const shoutedId = await userIdOf(shouted);
+  expect(shoutedId, "premise: it is a different account, not the leaver's").not.toBe(userId);
+  const [shoutedProduced] = await sql<{ id: string }[]>`select id from email_outbox where kind = 'magic_link' and ref_id = ${shoutedId}`;
+
   return {
     userId,
     email,
     mustGo: [
       { why: "the row the real sign-in route wrote (ref user/<id>, the account's address)", id: produced!.id },
       { why: "the address under another ref, exactly as stored (a previous owner of the address)", id: await seedRow({ refId: randomUUID(), to: email }) },
-      { why: "the address in another case, under another ref (matched case-insensitively)", id: await seedRow({ refId: randomUUID(), to: email.toUpperCase() }) },
       { why: "the account's ref with an OLD address (the account changed its email since)", id: await seedRow({ refId: userId, to: address("old") }) },
     ],
     mustStay: [
       { why: "another account's sign-in row, written by the real route", id: otherProduced!.id },
       { why: "another account's row under a different ref and address", id: await seedRow({ refId: randomUUID(), to: address("else") }) },
-      {
-        why: "a chess invite to the same address (it belongs to the organiser's fixture, not to the account)",
-        id: await seedRow({ kind: "chess_invite", refType: "fixture_seat", refId: `${RUN}-${randomUUID()}:white`, to: email, meta: { fixtureId: randomUUID(), colour: "white", stampedAt: new Date().toISOString() } }),
-      },
+      { why: "the sign-in row of a separate live account whose address differs only in case, written by the real route (N-B)", id: shoutedProduced!.id },
+      { why: "the address in another case, under another ref (a mailbox the leaver's account does not own)", id: await seedRow({ refId: randomUUID(), to: shouted }) },
     ],
   };
 }
 
 describe.skipIf(!HAS_DB)("deleting an account removes its sign-in emails from the outbox (final review M3)", () => {
-  it("every sign-in row that holds the leaver's address is gone; another account's rows and the chess invite stay", async () => {
+  it("every sign-in row that holds the leaver's address is gone; another account's rows and a case-variant account's rows stay", async () => {
     const s = await scene();
     const before = await outboxIds([...s.mustGo, ...s.mustStay].map((r) => r.id));
     expect(before.size, "premise: every seeded row exists").toBe(s.mustGo.length + s.mustStay.length);
@@ -155,27 +165,28 @@ describe.skipIf(!HAS_DB)("deleting an account removes its sign-in emails from th
     const after = await outboxIds([...s.mustGo, ...s.mustStay].map((r) => r.id));
     for (const r of s.mustGo) expect(after.has(r.id), `gone: ${r.why}`).toBe(false);
     for (const r of s.mustStay) expect(after.has(r.id), `stays: ${r.why}`).toBe(true);
-    expect(s.mustGo.length, "anti-vacuity: four ways of matching were exercised").toBe(4);
-    expect(s.mustStay.length, "anti-vacuity: three kinds of bystander were exercised").toBe(3);
+    expect(s.mustGo.length, "anti-vacuity: three ways of matching were exercised").toBe(3);
+    expect(s.mustStay.length, "anti-vacuity: four kinds of bystander were exercised").toBe(4);
   });
 
-  it("an account whose stored address has capitals: rows addressed to it in ANY case go (the match folds both sides)", async () => {
+  it("an account whose stored address has capitals: only rows addressed to it EXACTLY go; the same letters in another case are another account's (N-B)", async () => {
     const mixed = `${RUN}-Mixed.Case-${randomUUID().slice(0, 6)}@Del.test`;
     expect(mixed, "premise: the address has capitals to fold").not.toBe(mixed.toLowerCase());
     const [{ id }] = await sql<{ id: string }[]>`insert into users (email, display_name, email_verified) values (${mixed}, 'Mixed', true) returning id`;
     authState.user = { id, email: mixed, locale: null };
-    // Under other refs, so only the address can reach them: the row as the account spells it, in lower case, and in upper case.
-    const rows = [
-      await seedRow({ refId: randomUUID(), to: mixed }),
+    // Under other refs, so only the address can reach them.
+    const exact = await seedRow({ refId: randomUUID(), to: mixed });
+    const others = [
       await seedRow({ refId: randomUUID(), to: mixed.toLowerCase() }),
       await seedRow({ refId: randomUUID(), to: mixed.toUpperCase() }),
+      await seedRow({ refId: randomUUID(), to: address("bystander") }),
     ];
-    const bystander = await seedRow({ refId: randomUUID(), to: address("bystander") });
-    expect((await outboxIds([...rows, bystander])).size, "premise: all seeded").toBe(rows.length + 1);
+    expect((await outboxIds([exact, ...others])).size, "premise: all seeded").toBe(1 + others.length);
 
     expect((await del()).status).toBe(200);
-    const left = await outboxIds([...rows, bystander]);
-    expect([...left], "only the bystander is left").toEqual([bystander]);
+    const left = await outboxIds([exact, ...others]);
+    expect(left.has(exact), "the row addressed to the account exactly as it is stored is gone").toBe(false);
+    expect([...left].sort(), "and the rest are all still there").toEqual([...others].sort());
   });
 
   it("the sequence: a second deletion changes nothing and does not fail; an account with no sign-in rows deletes as before", async () => {
