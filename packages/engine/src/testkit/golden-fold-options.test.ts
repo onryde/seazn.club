@@ -20,6 +20,7 @@ import { forEachSport } from "./for-each-sport.ts";
 import {
   corpusFormat,
   corpusStateDiff,
+  isSlimStream,
   foldOptionsProblem,
   formatCorpusStateDiff,
   readCorpus,
@@ -27,6 +28,8 @@ import {
   recomputeStats,
   rebaselineCorpus,
   recomputeStream,
+  slimCorpus,
+  slimStream,
   strictFold,
   verifyStream,
   type CorpusFormat,
@@ -47,11 +50,15 @@ import {
   foldOptionConfigName,
   foldOptionHoles,
   reachesAward,
+  type AwardBuilt,
   type AwardRecorded,
+  type FoldOptionExtension,
   type ForfeitAwardCase,
   type FoldOptionStory,
 } from "./golden-fold-options.ts";
 import { FLOOR_SEED_STRIDE } from "./golden-floor-streams.ts";
+import { kernelRecorder, moduleRecorder, overlayVerdicts, statsRecorder, type Recorder } from "./golden-floor.ts";
+import { mutationContext } from "./golden-mutations.ts";
 import { buildStream, defaultLineupPair, makeEnvelope } from "./helpers.ts";
 
 const sport = (key: string): AnySportModule => {
@@ -164,6 +171,51 @@ describe("the recorder offers a stream's foldOptions to every prefix fold, as th
       checked++;
     }
     expect(checked).toBe(readers().length);
+  });
+
+  it("the floor's three recorders hand the options to the fold they wrap: each answers as the wrapped recompute does WITH them and not as it does without (counted)", () => {
+    let checked = 0;
+    for (const story of FOLD_OPTION_STORIES.filter((s) => s.case.lands)) {
+      const { module, corpus, stream } = committedOf(story);
+      const raw = corpus.configs[stream.config];
+      const options = stream.foldOptions!;
+      const wrapped: ReadonlyArray<readonly [string, Recorder, unknown, unknown]> = [
+        ["kernelRecorder", kernelRecorder, recomputeKernel(module, raw, stream.events, stream.lineups, options), recomputeKernel(module, raw, stream.events, stream.lineups)],
+        ["statsRecorder", statsRecorder, recomputeStats(module, raw, stream.events, stream.lineups, options), recomputeStats(module, raw, stream.events, stream.lineups)],
+        ["moduleRecorder", moduleRecorder, recomputeStream(module, raw, stream.events, stream.lineups, 1, options), recomputeStream(module, raw, stream.events, stream.lineups, 1)],
+      ];
+      for (const [name, record, offered, plain] of wrapped) {
+        expect(JSON.stringify(record(module, raw, stream.events, stream.lineups, options)), `${story.id} ${name} with the options`).toBe(JSON.stringify(offered));
+        expect(JSON.stringify(record(module, raw, stream.events, stream.lineups)), `${story.id} ${name} without them`).toBe(JSON.stringify(plain));
+        expect(JSON.stringify(offered), `${story.id} ${name}: the award moves the recording (the premise this test rests on)`).not.toBe(JSON.stringify(plain));
+        checked++;
+      }
+    }
+    expect(checked).toBe(3 * readers().length * FORFEIT_AWARD_CASES.filter((c) => c.lands).length);
+  });
+
+  it("the ablation probe records BOTH of its ledgers under the stream's own options, so an award stream is probed as the server folds it (counted)", () => {
+    let calls = 0;
+    let streams = 0;
+    for (const module of readers()) {
+      const corpus = readCorpus(module.key);
+      const mine = corpus.streams.filter((s) => s.foldOptions !== undefined);
+      expect(mine.length, `${module.key}: premise, the sport records award streams`).toBe(FORFEIT_AWARD_CASES.length);
+      const offers = new Set(mine.map((s) => JSON.stringify(s.foldOptions)));
+      const seen: Array<string | undefined> = [];
+      const spy: Recorder = (m, raw, events, lineups, foldOptions) => {
+        seen.push(JSON.stringify(foldOptions));
+        return statsRecorder(m, raw, events, lineups, foldOptions);
+      };
+      overlayVerdicts(module, { ...corpus, streams: mine }, spy, [], "all");
+      // every award stream holds a Start or a Forfeit, so each is ablated at least once and recorded twice (near, far)
+      expect(seen.length, `${module.key}: the probe recorded each award stream's two ledgers`).toBeGreaterThanOrEqual(mine.length * 2);
+      for (const offered of seen) expect(offers.has(offered as string), `${module.key}: a probe recording was folded under ${String(offered)}, not under a stream's options`).toBe(true);
+      calls += seen.length;
+      streams += mine.length;
+    }
+    expect(streams).toBe(FOLD_OPTION_STORIES.length);
+    expect(calls).toBeGreaterThanOrEqual(streams * 2);
   });
 
   it("no foldOptions is today's recording, byte for byte: omitting the argument and passing undefined are the same (the empty case)", () => {
@@ -485,6 +537,14 @@ describe("the verdict `reached` rejects what is not its own: each guard has a co
     }
   };
   const sideTwo = (m: AnySportModule) => defaultLineupPair(resolvePositions(m, m.configSchema.parse(rawOf(m))));
+  /** A builder's answer; a builder that THROWS is an assertion failure here, not a crash (null means "cannot build", which is a verdict). */
+  const buildQuietly = (story: FoldOptionStory, ctx: Parameters<FoldOptionStory["build"]>[0]): AwardBuilt | null => {
+    const held: { value: AwardBuilt | null } = { value: null };
+    expect(() => {
+      held.value = story.build(ctx);
+    }, `${story.id} builds without throwing`).not.toThrow();
+    return held.value;
+  };
 
   it("a stream with no foldOptions is not a stream that offers the award, however its ledger ends", () => {
     let checked = 0;
@@ -505,6 +565,9 @@ describe("the verdict `reached` rejects what is not its own: each guard has a co
       expect(refusal(c, { events: [other] }), `${m.key}: another reason`).toMatch(/does not end in a walkover forfeit by the away side/);
       const wrongSide = { type: "core.forfeit", payload: { ...payload, by: sideTwo(m).home.entrantId } };
       expect(refusal(c, { events: [wrongSide] }), `${m.key}: the home side forfeiting a case the away side forfeits`).toMatch(/does not end in a walkover forfeit by the away side/);
+      // the payload of the right forfeit under another event type is not a forfeit: only the type rejects it
+      const wrongType = { type: "core.note", payload };
+      expect(refusal(c, { events: [wrongType] }), `${m.key}: the forfeit's payload on an event that is not a forfeit`).toMatch(/does not end in a walkover forfeit by the away side/);
       expect(refusal(c, {}), `${m.key}: the control, the stream as recorded`).toBe("accepted");
       checked++;
     }
@@ -537,10 +600,34 @@ describe("the verdict `reached` rejects what is not its own: each guard has a co
     const ctxFor = (module: AnySportModule) => ({ module, raw: rawOf(football), cfg, lineups: defaultLineupPair(resolvePositions(football, cfg)) });
     // the same football whose generator only ever draws a note: no walk opens with a Start and then a sport event
     const noPlay = Object.assign(Object.create(football) as object, { arbitraryEvent: () => ({ type: "core.note", payload: {} }) }) as unknown as AnySportModule;
-    expect(storyById("football.retired_after_play").build(ctxFor(noPlay)), "no play to retire after").toBeNull();
-    expect(storyById("football.retired_after_play").build(ctxFor(football)), "control: the real generator draws one").not.toBeNull();
-    expect(storyById("football.walkover").build(ctxFor(noPlay)), "a walkover needs no play").not.toBeNull();
-    expect(storyById("football.withdrew_unplayed").build(ctxFor(noPlay)), "nor does a withdrawal before it").not.toBeNull();
+    expect(buildQuietly(storyById("football.retired_after_play"), ctxFor(noPlay)), "no play to retire after").toBeNull();
+    expect(buildQuietly(storyById("football.retired_after_play"), ctxFor(football)), "control: the real generator draws one").not.toBeNull();
+    expect(buildQuietly(storyById("football.walkover"), ctxFor(noPlay)), "a walkover needs no play").not.toBeNull();
+    expect(buildQuietly(storyById("football.withdrew_unplayed"), ctxFor(noPlay)), "nor does a withdrawal before it").not.toBeNull();
+  });
+  it("every story's builder yields a ledger its own verdict accepts, with an award that differs from the sport's own credit in both numbers (counted)", () => {
+    let built = 0;
+    for (const story of FOLD_OPTION_STORIES) {
+      const module = sport(story.sport);
+      const raw = readCorpus(story.sport).configs[foldOptionConfigName(module, readCorpus(story.sport))];
+      const cfg = module.configSchema.parse(raw) as unknown;
+      const lineups = defaultLineupPair(resolvePositions(module, cfg));
+      const result = buildQuietly(story, { module, raw, cfg, lineups });
+      expect(result, `${story.id}: the builder closes its own story`).not.toBeNull();
+      const recorded: AwardRecorded = { module, raw, lineups: undefined, events: result!.events, foldOptions: result!.foldOptions };
+      expect(story.reached(recorded), `${story.id}: the verdict accepts what the builder built`).toBeNull();
+      // the sport's own credit for that ledger, folded here without the award (independent of the builder's own derivation)
+      const keys = module.awardScoreKeys!;
+      const folded = foldMatchWithStoppage(module as never, cfg as never, lineups, result!.events.map((e, i) => makeEnvelope(i, e, e.voids)), { strictFromSeq: 0 });
+      const last = result!.events.at(-1)!.payload as { by: string; reason: AwardReason };
+      const offender = last.by === lineups.home.entrantId ? "home" : "away";
+      const own = module.forfeitCredit(cfg, folded.state, last.reason, offender).perSide[offender === "home" ? 1 : 0];
+      const [winner, loser] = result!.foldOptions.forfeitAward;
+      expect(winner, `${story.id}: the winner's number is not the sport's own credit`).not.toBe(own[keys.for]);
+      expect(loser, `${story.id}: the loser's number is not the sport's own credit`).not.toBe(own[keys.against]);
+      built++;
+    }
+    expect(built).toBe(FOLD_OPTION_STORIES.length);
   });
   it("a build for a sport that never reads the award is null: there is no stream to record", () => {
     const cricket = sport("cricket");
@@ -664,12 +751,21 @@ describe("extendFoldOptions - the append path", () => {
     const mine = new Set(readCorpus(key).streams.filter((s) => s.foldOptions !== undefined).map(identity));
     return without(readCorpus(key), mine);
   };
+  /** `extendFoldOptions` where it is expected to succeed: a refusal by name (a ledger that misses its story, an identity taken) is a failed
+   *  ASSERTION here, so a defect in a builder cannot pass for "it threw, so the test errored". */
+  const extendOk = (module: AnySportModule, corpus: GoldenCorpus, stories?: readonly FoldOptionStory[]): FoldOptionExtension => {
+    const held: { value: FoldOptionExtension | null } = { value: null };
+    expect(() => {
+      held.value = extendFoldOptions(module, corpus, stories);
+    }, `${module.key}: extendFoldOptions does not refuse`).not.toThrow();
+    return held.value ?? { corpus, appended: [], stillMissing: [] };
+  };
 
   it("empty case first: a corpus with no holes gets nothing appended, and a second call is the same", () => {
     let sports = 0;
     forEachSport(({ module, key }) => {
       const corpus = readCorpus(key);
-      const first = extendFoldOptions(module, corpus);
+      const first = extendOk(module, corpus);
       expect(first.appended, key).toEqual([]);
       expect(first.stillMissing, key).toEqual([]);
       expect(JSON.stringify(first.corpus), key).toBe(JSON.stringify(corpus));
@@ -685,12 +781,12 @@ describe("extendFoldOptions - the append path", () => {
       const base = committedBefore(key);
       const expected = FOLD_OPTION_STORIES.filter((s) => s.sport === key).map((s) => s.id);
       expect(foldOptionHoles(module, base), `${key}: without its award streams the sport has holes`).toEqual(expected);
-      const result = extendFoldOptions(module, base);
+      const result = extendOk(module, base);
       expect(result.stillMissing, key).toEqual([]);
       expect(result.appended.length, key).toBe(expected.length);
       expect(JSON.stringify(result.corpus), key).toBe(JSON.stringify(committed));
       expect(Object.keys(result.corpus.configs), `${key}: the stories use a config already there`).toEqual(Object.keys(base.configs));
-      expect(extendFoldOptions(module, result.corpus).appended, `${key}: a second call`).toEqual([]);
+      expect(extendOk(module, result.corpus).appended, `${key}: a second call`).toEqual([]);
       appended += result.appended.length;
     });
     expect(appended).toBe(FOLD_OPTION_STORIES.length);
@@ -701,7 +797,7 @@ describe("extendFoldOptions - the append path", () => {
     const base = committedBefore("football");
     const donorOf = committedOf(storyById("football.walkover")).stream;
     const donor: GoldenStream = { ...donorOf, seed: 4242 };
-    const result = extendFoldOptions(football, { ...base, streams: [...base.streams, donor] });
+    const result = extendOk(football, { ...base, streams: [...base.streams, donor] });
     expect(result.appended.map((a) => a.split(" ")[0])).toEqual(FORFEIT_AWARD_CASES.filter((c) => c.id !== "walkover").map((c) => `football.${c.id}`));
   });
 
@@ -716,17 +812,42 @@ describe("extendFoldOptions - the append path", () => {
     const football = sport("football");
     const base = asFormatOne(committedBefore("football"));
     expect(corpusFormat(base), "premise: the corpus is format 1").toBe(1);
-    const result = extendFoldOptions(football, base);
+    const result = extendOk(football, base);
     const added = result.corpus.streams.filter((s) => s.foldOptions !== undefined);
     expect(added.length).toBe(FORFEIT_AWARD_CASES.length);
     for (const s of added) expect(Object.keys(s), identity(s)).toEqual(["config", "seed", "foldOptions", "events", "states", "outcome", "summary", "deltas"]);
+  });
+
+  it("stores an appended stream in the corpus's SLIM form: a ledger long enough to have digestible steps comes back digested (a custom story, since the committed ones are all anchors)", () => {
+    const football = sport("football");
+    const base = committedBefore("football");
+    const retired = storyById("football.retired_after_play");
+    // the retirement story with more play behind it: the generator's own walk (seed 5: nine sport events, all valid after a Start) between the Start and the retirement
+    const long: FoldOptionStory = {
+      ...retired,
+      build: (ctx) => {
+        const short = retired.build(ctx)!;
+        const play = buildStream(ctx.module, ctx.cfg as never, ctx.lineups, 5, 40)
+          .filter((e) => !e.type.startsWith("core."))
+          .slice(0, 8)
+          .map((e) => ({ type: e.type, payload: e.payload }));
+        return { ...short, events: [ev("core.start"), ...play, short.events.at(-1)!] };
+      },
+    };
+    const result = extendOk(football, base, [long]);
+    expect(result.appended, "premise: the custom story was appended").toHaveLength(1);
+    const added = result.corpus.streams.at(-1)!;
+    expect(added.events.length, "premise: more steps than the anchors alone").toBeGreaterThan(5);
+    expect(isSlimStream(added), "the appended stream holds digests, as every stream of a slim corpus does").toBe(true);
+    const whole: GoldenStream = { ...added, states: recomputeStream(football, result.corpus.configs[added.config], added.events, added.lineups, 3, added.foldOptions).states };
+    expect(JSON.stringify(added), "and is exactly the slim form of what was recorded").toBe(JSON.stringify(slimStream(football, result.corpus, whole)));
   });
 
   it("reports a hole its builder cannot close instead of inventing a stream, and refuses a built ledger that misses its story", () => {
     const football = sport("football");
     const base = committedBefore("football");
     const story = storyById("football.walkover");
-    const dry = extendFoldOptions(football, base, [{ ...story, build: () => null }]);
+    const dry = extendOk(football, base, [{ ...story, build: () => null }]);
     expect(dry.appended).toEqual([]);
     expect(dry.stillMissing).toEqual(["football.walkover"]);
     expect(dry.corpus.streams.length).toBe(base.streams.length);
@@ -790,6 +911,40 @@ describe("every replay path of the toolchain offers a committed award stream its
     expect(same).toBe(FOLD_OPTION_STORIES.length);
     expect(moved).toBe(readers().length * FORFEIT_AWARD_CASES.filter((c) => c.lands).length);
   }, sweepBudget("probe"));
+
+  it("a format-1 award stream recorded WITHOUT its options is a stale stream (would not survive), not an effective-only one: the second-chance replay offers the options too", () => {
+    const football = sport("football");
+    const view = asFormatOne(readCorpus("football"));
+    const at = view.streams.findIndex((s) => s.seed === storyById("football.walkover").seed && s.foldOptions !== undefined);
+    expect(at, "premise: the format-1 view holds the walkover award stream").toBeGreaterThan(-1);
+    const stream = view.streams[at]!;
+    // the four fields format 1 stores, folded WITHOUT the award: the stream as if its options had never been offered
+    const stale = recomputeStream(football, view.configs[stream.config], stream.events, stream.lineups, 1);
+    const tampered: GoldenCorpus = { ...view, streams: view.streams.map((s, i) => (i === at ? { ...s, states: stale.states, outcome: stale.outcome, summary: stale.summary, deltas: stale.deltas } : s)) };
+    let message = "accepted";
+    try {
+      reformatCorpus(football, tampered, 3);
+    } catch (error) {
+      message = String(error);
+    }
+    expect(message).toMatch(/would not survive/);
+    expect(message, "a stream whose own replay (options and all) disagrees is stale, whatever format 2 would add").not.toMatch(/EFFECTIVE ones/);
+  });
+
+  it("the mutation list is handed an award stream's options: the context's unmutated replay verifies clean in both storage forms (counted)", () => {
+    let checked = 0;
+    for (const story of FOLD_OPTION_STORIES.filter((s) => s.case.lands)) {
+      const { module, corpus, stream } = committedOf(story);
+      const index = corpus.streams.indexOf(stream);
+      for (const form of ["full", "slim"] as const) {
+        const ctx = mutationContext(module, corpus, slimCorpus(module, corpus), form, index, 0, 0, null);
+        expect(ctx.verify(ctx.replayed), `${story.id} ${form}: the replay the mutations start from is the stream as recorded`).toEqual([]);
+        expect(ctx.replayed.summary, `${story.id} ${form}: and it holds the award's headline`).toBe(stream.summary);
+        checked++;
+      }
+    }
+    expect(checked).toBe(2 * readers().length * FORFEIT_AWARD_CASES.filter((c) => c.lands).length);
+  });
 
   it("reformatCorpus takes the format-1 view of a reading sport's corpus back to the committed bytes, award streams included", () => {
     let sports = 0;

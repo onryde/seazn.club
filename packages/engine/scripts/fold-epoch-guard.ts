@@ -704,7 +704,7 @@ export function foldOptionsProblem(value: unknown): string | null {
   const keys = Object.keys(value);
   const other = keys.find((k) => k !== FOLD_OPTION_KEY);
   if (other !== undefined) return `only ${FOLD_OPTION_KEY} is allowed, and it holds ${JSON.stringify(other)}`;
-  if (!keys.includes(FOLD_OPTION_KEY) || value[FOLD_OPTION_KEY] === undefined) return `it holds no ${FOLD_OPTION_KEY}`;
+  if (value[FOLD_OPTION_KEY] === undefined) return `it holds no ${FOLD_OPTION_KEY}`;
   const award = value[FOLD_OPTION_KEY];
   if (!Array.isArray(award) || award.length !== 2) return `${FOLD_OPTION_KEY} is not a pair of two numbers`;
   for (const n of award as number[]) {

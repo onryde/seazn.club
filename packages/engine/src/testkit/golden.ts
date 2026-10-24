@@ -56,7 +56,7 @@ export function foldOptionsProblem(value: unknown): string | null {
   const keys = Object.keys(record);
   const other = keys.find((k) => k !== "forfeitAward");
   if (other !== undefined) return `only forfeitAward is allowed, and it holds ${JSON.stringify(other)}`;
-  if (!keys.includes("forfeitAward") || record.forfeitAward === undefined) return "it holds no forfeitAward";
+  if (record.forfeitAward === undefined) return "it holds no forfeitAward";
   const award = record.forfeitAward;
   if (!Array.isArray(award) || award.length !== 2) return "forfeitAward is not a pair of two numbers";
   for (const n of award as number[]) {

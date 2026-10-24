@@ -32,6 +32,7 @@
 // branch pass. Streams carry `seed` in (3000, BRANCH_SEED_BASE): clear of the generator's walks, of the branches' and of the floor's, so none of
 // their keep-rules or reproductions count them. The epoch guard keys a stream `config#seed`.
 import { PointsRule, forfeitAwardOffer } from "../competition/points.ts";
+import { EngineError } from "../core/errors.ts";
 import { foldMatchWithStoppage } from "../core/events.ts";
 import type { AwardReason, LineupPair } from "../core/types.ts";
 import { resolvePositions } from "../sport/catalog.ts";
@@ -54,7 +55,7 @@ const STRICT_ALL = { strictFromSeq: 0 } as const;
  *  3000, so a later `extendCorpus` can never collide with it) and below the branch streams' base (90000) and the floor's stride (100000), so
  *  neither the floor's reproduction nor the branch keep-rule counts it. The epoch guard keys a stream `config#seed`. */
 export const FOLD_OPTION_SEED_BASE = 80_000;
-/** How many generator seeds `drawPlay` tries for a walk that opens with a Start and then a sport event. */
+/** How many generator seeds `drawPlay` tries for a walk that draws a sport event. */
 const PLAY_SEED_BUDGET = 60;
 /** How long a walk `drawPlay` asks the generator for. */
 const PLAY_WALK_MAX = 40;
@@ -138,8 +139,10 @@ function ownCredit(
     // the module declared these keys, so its credit holds them: a module that does not is reported, never read as a zero
     if (gained === undefined || lost === undefined) return null;
     return { for: gained, against: lost };
-  } catch {
-    return null;
+  } catch (error) {
+    // a ledger the fold refuses (a second forfeit, an event the match cannot take) is a reason; any other throw is a defect of the caller
+    if (error instanceof EngineError) return null;
+    throw error;
   }
 }
 
@@ -201,14 +204,14 @@ export interface FoldOptionStory {
   build(c: AwardBuildCtx): AwardBuilt | null;
 }
 
-/** A Start and the first sport event the module's own generator draws after it: play has been recorded and the match is undecided. Null
- *  where no walk in the budget opens that way. The lowest seed wins, so the ledger is a pure function of the module. */
+/** The first sport event the module's own generator draws (the ledger puts it after a Start): play has been recorded and the match is undecided. Null
+ *  where no walk in the budget draws one. The lowest seed wins, so the ledger is a pure function of the module. */
 function drawPlay(c: AwardBuildCtx): GoldenEvent | null {
   for (let seed = 1; seed <= PLAY_SEED_BUDGET; seed++) {
     const walk = buildStream(c.module, c.cfg as never, c.lineups, seed, PLAY_WALK_MAX);
     const at = walk.findIndex((e) => !e.type.startsWith("core."));
     const first = walk[at];
-    if (first !== undefined && walk.slice(0, at).every((e) => e.type === "core.start")) return { type: first.type, payload: first.payload };
+    if (first !== undefined) return { type: first.type, payload: first.payload };
   }
   return null;
 }

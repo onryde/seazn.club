@@ -1717,12 +1717,20 @@ describe("fold-epoch guard: GF-3 T2 - a stream's foldOptions are part of its inp
       ["a null", { forfeitAward: [null, 1] }, /integer/],
       ["NaN", { forfeitAward: [Number.NaN, 1] }, /integer/],
     ];
+    /** The rule's answer, or "accepted"; a rule that THROWS on a shape reads as "threw ...", so a crash is a wrong answer and an assertion failure. */
+    const verdict = (value: unknown): string => {
+      try {
+        return foldOptionsProblem(value) ?? "accepted";
+      } catch (error) {
+        return `threw ${String(error)}`;
+      }
+    };
     it("accepts the shapes the recorder writes", () => {
-      for (const [label, value] of GOOD) expect(foldOptionsProblem(value), label).toBeNull();
+      for (const [label, value] of GOOD) expect(verdict(value), label).toBe("accepted");
       expect(GOOD.length).toBeGreaterThan(0);
     });
     it("refuses everything else, naming what is wrong", () => {
-      for (const [label, value, why] of BAD) expect(foldOptionsProblem(value) ?? "accepted", label).toMatch(why);
+      for (const [label, value, why] of BAD) expect(verdict(value), label).toMatch(why);
       expect(BAD.length).toBeGreaterThanOrEqual(15);
     });
   });
