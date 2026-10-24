@@ -486,17 +486,6 @@ describe("the screen's wiring of the column and the waiting list (every prop, by
     expect(screenIsland(own).tree().filter((e) => e.type === WaitingList)).toHaveLength(0);
   });
 
-  it("a panel handed no column (the page, until it reads one) gives the screen the EMPTY column, never undefined", () => {
-    // The page does not pass `column` yet (Task 9). What the screen then reads is spelt out here, from the contract (no open
-    // rounds, nobody held, no flags, and NOT "waiting for the start" - a start line over a press that is not there would be a lie).
-    const full = PANEL({ round: ROUND([]) });
-    const ui = mountPanel({ round: full.round, requested: full.requested, slugs: full.slugs, initialFixtureId: full.initialFixtureId });
-    expect(screenProps(ui).column).toEqual({ views: [], held: [], flagged: [], ownFlagged: 0, tz: "UTC", awaitsStart: false });
-    expect(propsOf(columnEl(ui)).data, "and the column was given exactly that").toBe(screenProps(ui).column);
-    // the hook ran on the empty views: no view for the round, so null.
-    expect(vi.mocked(useOpenRound).mock.calls.at(-1)![0]).toBeNull();
-  });
-
   it("no column on the notices: requested, and the I3 path (the board asked for is not in the round)", () => {
     const requested = mountPanel(PANEL({ round: null, requested: "unavailable", initialFixtureId: "nope" }));
     expect(screenIsland(requested).tree().filter((e) => e.type === RoundColumn)).toHaveLength(0);

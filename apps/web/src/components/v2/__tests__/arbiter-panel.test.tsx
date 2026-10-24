@@ -149,7 +149,7 @@ const WATCHING_BLACK_OFF: ArbiterVideoView = {
 };
 
 const noop = () => undefined;
-/** The column's data when the page has read nothing for it (Task 9 wires the real reads): no views, no queue, venue zone London. */
+/** The column's data when nothing is paired, nobody is held and nothing is flagged: no views, no queue, venue zone London. */
 const COLUMN_DATA = (over: Partial<RoundColumnData> = {}): RoundColumnData => ({
   views: [],
   held: [],
@@ -337,7 +337,7 @@ describe("the panel's first board (the container, first render)", () => {
   const panel = (initialFixtureId: string | null) =>
     renderToStaticMarkup(
       <DictProvider dict={en as unknown as Dict} locale="en">
-        <ArbiterPanel round={ROUND} requested={null} slugs={{ org: "club", comp: "autumn", div: "open" }} initialFixtureId={initialFixtureId} />
+        <ArbiterPanel round={ROUND} requested={null} slugs={{ org: "club", comp: "autumn", div: "open" }} initialFixtureId={initialFixtureId} column={COLUMN_DATA()} />
       </DictProvider>,
     );
   /** The board list's pressed button(s) - inside the <nav>, never the White/Black switch's. */
@@ -636,7 +636,7 @@ describe("the White/Black switch (D16 §5.6.4, the re-review's M9)", () => {
       const b: ArbiterBoard = { ...ROUND.boards[2]!, sides: { home: meeting(home), away: meeting(away) } };
       return renderToStaticMarkup(
         <DictProvider dict={en as unknown as Dict} locale="en">
-          <ArbiterPanel round={{ ...ROUND, boards: [b] }} requested={null} slugs={{ org: "club", comp: "autumn", div: "open" }} initialFixtureId="f3" />
+          <ArbiterPanel round={{ ...ROUND, boards: [b] }} requested={null} slugs={{ org: "club", comp: "autumn", div: "open" }} initialFixtureId="f3" column={COLUMN_DATA()} />
         </DictProvider>,
       );
     };

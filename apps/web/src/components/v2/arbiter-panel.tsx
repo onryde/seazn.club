@@ -1018,22 +1018,20 @@ export function switchingFrom(lastKey: string | null, fixtureId: string, side: A
   return m !== null && m[1] === fixtureId && m[2] !== side;
 }
 
-/** What the round column reads when the page has handed it nothing: no open rounds, nobody held, no flags. */
-const EMPTY_COLUMN: RoundColumnData = { views: [], held: [], flagged: [], ownFlagged: 0, tz: "UTC", awaitsStart: false };
-
 export function ArbiterPanel({
   round,
   requested,
   slugs,
   initialFixtureId,
-  column = EMPTY_COLUMN,
+  column,
 }: {
   round: ArbiterRound | null;
   requested: ArbiterScreenProps["requested"];
   slugs: ArbiterScreenProps["slugs"];
   initialFixtureId: string | null;
-  /** The round column's data (the page reads it server-side). Optional until the page passes it (Task 9). */
-  column?: RoundColumnData;
+  /** The round column's data, read server-side by the page. Required: a panel handed nothing would paint an empty column that
+   *  looks like "no round is paired" when the page simply forgot to read one. */
+  column: RoundColumnData;
 }) {
   const router = useRouter();
   // I3: the board asked for, EXACTLY — absent from the round, the screen
