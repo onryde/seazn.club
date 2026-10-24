@@ -34,15 +34,20 @@ import "server-only";
 // THE INVITES (email outbox, Task 8 and its follow-up). A chess invite is queued with `expires_at` = the board's deadline at the time,
 // and the worker ends a still-queued row past it `expired`, unsent; and its SEALED BODY names that deadline. The same transaction
 // therefore does two things for the board's two seats:
-//   - RE-RENDERS what has not gone out (`requeueUnsentInvites`): a recipient whose newest invite is `queued` (never attempted, or
-//     waiting for a retry) gets a fresh invite naming the NEW deadline, on the SAME stamp, which retires the stale row (the V470
-//     replace trigger); it keeps the retired row's place in the retry schedule. A `sending`, `sent`, `delayed`, `delivered` or ended
-//     invite is not touched, so no extension ever sends an extra email - the match room already shows the live deadline. The fresh
-//     rows are dispatched after the commit (`deps.dispatch`, `dispatchNow`: paced and budgeted, as the open's). The seat stamp on the
-//     bridge row is not written, so the seat stays invited and the chess hook still finds its rows;
+//   - RE-RENDERS what can safely be (`requeueUnsentInvites`): a recipient whose newest invite is `queued` AND that no request can have
+//     reached the provider with (never attempted, or the last answer a 429) gets a fresh invite naming the NEW deadline, on the SAME
+//     stamp, which retires the stale row (the V470 replace trigger); it keeps the retired row's place in the retry schedule. Any other
+//     invite is not re-rendered, so no extension ever sends an extra email (controller ruling): a `sending`, `sent`, `delayed`,
+//     `delivered` or ended one is out of reach, and a queued one that already had an attempt answered by a network error or a 5xx may
+//     have been accepted with the answer lost, where a fresh row's new idempotency key would mail twice - it keeps its key and its
+//     body, and the match room shows the live deadline. The fresh rows are dispatched after the commit (`deps.dispatch`,
+//     `dispatchNow`: paced and budgeted, as the open's). The seat stamp on the bridge row is not written, so the seat stays invited
+//     and the chess hook still finds its rows. This work runs in a SAVEPOINT: if the mail cannot be built the press still goes
+//     through, the failure is logged, and the invites keep the deadline they were written with;
 //   - moves the expiry of the retryable invites that remain (`extendEmailExpiry`), so a retry between the old deadline and the new
-//     one is delivered, not expired.
-// A failure of either rolls the extension back with it, and the extension cannot be left half done. The transaction is the POOLED
+//     one is delivered, not expired - except a waiting invite that could have been re-rendered but got no fresh row (its recipient
+//     left the seat; its stamp is unreadable): its body names the old deadline, so it ends unsent at it.
+// A failure of the deadline's own writes, or of the expiry move, rolls the extension back with it. The transaction is the POOLED
 // connection (`sql.begin`, privileged, as the worker's), not `withTenant`: V470 gives `app_user` INSERT only.
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
@@ -179,29 +184,46 @@ async function extendInTx(
       insert into online_chess_audit (org_id, fixture_id, kind, actor_user_id, note)
       values (${orgId}, ${fixtureId}, 'checkin_extend', ${a.actorUserId},
               ${JSON.stringify({ scope: a.scope, extensions: moved.extensions, addedMs: CHECKIN_EXTEND_STEP_MS, deadlineAt: deadline.toISOString() })})`;
-    // The invites still waiting to be sent are RE-RENDERED with the new deadline, in this same transaction (header: THE INVITES) -
-    // BEFORE the expiry move, so the read of the waiting rows (which takes their lock) is the first thing to touch them. A row a send
-    // claims while this transaction waits for its lock is then seen `sending` and left alone, instead of retired mid-flight.
-    const inviteIds = await requeueUnsentInvites(tx, {
-      fixture: a.f,
-      seats,
-      roundNo: fx.roundNo,
-      roundOpenId: open.id,
-      roundOpenedAt: open.roundOpenedAt,
-      anchor: boardAnchor(open.roundOpenedAt, open.rank, open.staggered, moved.extraMs),
-      now: decision.at,
-    });
+    // The invites that may still be re-rendered are, in this same transaction (header: THE INVITES) - BEFORE the expiry move, so the read
+    // of their rows (which takes their lock) is the first thing to touch them: a row a send claims while this transaction waits for
+    // its lock is then seen `sending` and left alone, instead of retired mid-flight. A SAVEPOINT holds the work: the arbiter's +5 must
+    // not fail because a mail could not be built (a render fault, a missing key, a token that could not be minted). If it throws, its
+    // rows go back with it, the failure is logged by fixture and error name, and the extension goes on to the expiry move alone - the
+    // pre-Task-8 behaviour: the invites keep the deadline they were written with and the room shows the live one. `SeatsNeeded` is not
+    // a failure but the first pass asking for the seats (nothing written, rolled back as a whole).
+    let requeued: { fresh: string[]; left: string[] } = { fresh: [], left: [] };
+    try {
+      requeued = await tx.savepoint((sp) =>
+        requeueUnsentInvites(sp, {
+          fixture: a.f,
+          seats,
+          roundNo: fx.roundNo,
+          roundOpenId: open.id,
+          roundOpenedAt: open.roundOpenedAt,
+          anchor: boardAnchor(open.roundOpenedAt, open.rank, open.staggered, moved.extraMs),
+          now: decision.at,
+        }),
+      );
+    } catch (err) {
+      if (err instanceof SeatsNeeded) throw err;
+      log.error(
+        { fixtureId, ...errFields(err) },
+        "check-in extension: re-rendering the waiting invites failed; the extension goes through and they keep the deadline they were written with",
+      );
+    }
     // What is left that can still be retried expires at the NEW deadline too. Both seats: the ref names the seat, and a seat can
-    // have several recipients, all matched by the ref.
+    // have several recipients, all matched by the ref. Not the rows `left` without a fresh one (a recipient who has left the seat, a
+    // stamp that could not be read): their body names the old deadline, so they end unsent at it.
     await extendEmailExpiry(
       tx,
       CHESS_SEAT_REF_TYPE,
       [chessSeatRef(fixtureId, "white"), chessSeatRef(fixtureId, "black")],
       deadline,
+      requeued.left,
     );
     return {
       ok: true,
-      inviteIds,
+      inviteIds: requeued.fresh,
       board: {
         fixtureId,
         extensions: moved.extensions,

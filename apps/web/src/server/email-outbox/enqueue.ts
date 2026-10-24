@@ -80,6 +80,10 @@ export async function enqueueEmail(db: Tx | typeof sql, m: OutboxMessage): Promi
  *  - only `kind = 'chess_invite'` rows of this `refType` and these refs, in a retryable status: a sent, delivered or otherwise
  *    finished row has nothing to retry, and a sign-in link's expiry is its own.
  *
+ * `exceptIds` are rows the caller decided NOT to carry forward: their expiry stays where it was, so they end `expired` unsent at the
+ * old deadline instead of being mailed after it (the check-in extension passes the invites it could not re-render for the new
+ * deadline - their body still names the old one - see `requeueUnsentInvites`).
+ *
  * T8-R1: runs on the caller's PRIVILEGED transaction (checkin-extend's `sql.begin`, the pooled connection the worker uses too).
  * V470 gives `app_user` INSERT only, so a tenant transaction is refused (42501) rather than matching zero rows; there is nothing to
  * fall back to and nothing for a definer function to add. `refIds` carry a board's id, so no other organisation can share one.
@@ -89,6 +93,7 @@ export async function extendEmailExpiry(
   refType: string,
   refIds: readonly string[],
   expiresAt: Date,
+  exceptIds: readonly string[] = [],
 ): Promise<number> {
   if (refIds.length === 0) return 0;
   const rows = await db`
@@ -98,6 +103,7 @@ export async function extendEmailExpiry(
              least(${expiresAt}::timestamptz, created_at + make_interval(secs => ${MAX_EXPIRY_MS / 1000})))
      where kind = 'chess_invite' and ref_type = ${refType} and ref_id = any(${refIds as string[]}::text[])
        and status = any(${RETRYABLE_STATUSES as string[]}::text[])
+       and not (id = any(${exceptIds as string[]}::uuid[]))
     returning id`;
   return rows.length;
 }
@@ -114,7 +120,9 @@ export async function extendEmailExpiry(
  *
  * Only a retired row that was ATTEMPTED (`attempts > 0`) passes anything on: a never-attempted one leaves the fresh row exactly
  * as `enqueueEmail` wrote it, due at once and owned by the request's `dispatchNow` (the first-attempt window). Runs on the caller's
- * transaction, after the fresh rows are written; the retired rows are `replaced` by then and keep these columns.
+ * transaction, after the fresh rows are written; the retired rows the fresh ones replaced are `replaced` by then and keep these
+ * columns. (A retired row is replaced only if its recipient got a fresh row: the caller counts what it expects to be carried
+ * against what this returns, and says so when they differ.)
  */
 export async function carryRetryBudget(
   db: Tx | typeof sql,
