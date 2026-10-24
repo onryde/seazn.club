@@ -539,9 +539,17 @@ their headline. No corpus stream offered one, `recomputeStream` took no fold opt
 the P-3 mutant left the corpus green, so a change to how an offered award folds owed a
 manual major that no tool checked. A stream now records the award it was folded with
 (`foldOptions`), the recorder offers it to every prefix fold, and each of the four sports
-holds three award streams: a change to how an award folds moves a golden and the guard
-names the sport (see "Fold-option streams (GF-3 T2)"). What stays unseen is the next such
-input: **A NEW fold option owes a story.** The corpus field admits `forfeitAward` and
+holds four award streams: a change to how an award folds moves a golden and the guard
+names the sport (see "Fold-option streams (GF-3 T2)"). Two things stay unseen. The first is
+the producer half: **the corpus stores the award VALUE a stream was folded with, not its
+derivation.** A change to `stageForfeitAward` (`apps/web/src/server/engine-db/fixture-cfg.ts`,
+which turns a stage's points rule into the award the server offers) or to `forfeitAwardOffer`
+(`competition/points.ts`) that offers a different award for the same rule moves no golden, so
+the guard cannot see it. Only the rebuild test in `golden-fold-options.test.ts` (it rebuilds
+every award stream through the real `PointsRule` and `forfeitAwardOffer` and compares bytes)
+goes red for `forfeitAwardOffer`, and apps/web's own `forfeit-award-callers` test pins who
+calls `stageForfeitAward`; a change to either is judged there, not by `fold-epoch:check`. The
+second is the next such input: **A NEW fold option owes a story.** The corpus field admits `forfeitAward` and
 nothing else (an unknown key is a refusal, exit 2), so the day the server starts
 offering the fold another input, adding it to `FoldOptions` does not put it in a corpus.
 Its sports' stories, the field, `strictFold` and `foldOptionsProblem` are owed in the same
@@ -820,10 +828,11 @@ behaviour, byte for byte. The corpus format stays **3**; the field is not a form
 
 `src/testkit/golden-fold-options.ts` is the fifth append path: a table of **stories**, one per sport that
 declares `awardScoreKeys` (football, generic, hockey, ice hockey) and per forfeit case.
-The cases are the three shapes of the kernel's rule (`unplayedForfeitEvent`): a **walkover** with nothing
+The cases are the shapes of the kernel's rule (`unplayedForfeitEvent`): a **walkover** with nothing
 recorded (the award lands), a **withdrawal after the Start and before any play** (lands: a reason other than
-a walkover reaches it too), and a **retirement once play is recorded** (the kernel WITHHOLDS the award, so
-the stream records the same match as one that offers none). The sides differ (the away side walks over, the
+a walkover reaches it too), a **retirement once play is recorded** (the kernel WITHHOLDS the award, so
+the stream records the same match as one that offers none), and a **withdrawal after a play that a `core.void`
+struck** (lands: `playRecorded` ignores a voided event, so the match is unplayed again). The sides differ (the away side walks over, the
 home side withdraws and retires), so a winner-first pair read against the wrong side is a different recording.
 The award is derived, never typed: `build` folds the ledger without it, reads what the module credits that forfeit on its
 own (`forfeitCredit`, under the module's `awardScoreKeys`), and offers a pair that differs from it in
@@ -834,9 +843,9 @@ credit move; or nothing moves at all). Every guard in it is owed a counterfactua
 asserted. `foldOptionHoles` is the skip rule and `extendFoldOptions` appends one slim stream per hole after everything
 already there, under the config the sport's coverage streams already use (`default`, else `score`: no new
 config); `EXTEND_GOLDEN=1` runs it after the branch streams. A sport that starts declaring `awardScoreKeys` owes the
-three stories at once: `foldOptionHoles` names them and a test fails.
+four stories at once: `foldOptionHoles` names them and a test fails.
 
-The streams carry `seed` in `(3000, BRANCH_SEED_BASE)` (`FOLD_OPTION_SEED_BASE + 1` and up, 80001-80003):
+The streams carry `seed` in `(3000, BRANCH_SEED_BASE)` (`FOLD_OPTION_SEED_BASE + 1` and up, 80001-80004):
 above every generator seed, below the branch streams and the floor's stride, so neither keep-rule counts
 them. They are appended streams, so they owe no bump.
 

@@ -9,11 +9,13 @@
 //
 // WHAT. A table of named stories: (a sport that reads the award) x (a forfeit case). The reading sports are the engine's own declaration
 // (`awardScoreKeys`), so a sport that starts reading the award owes the stories at once (`foldOptionHoles` names them; a test fails). The
-// cases are the three shapes of the kernel's rule (`unplayedForfeitEvent`: `by !== "both" && (reason === "walkover" || !playedBefore)`):
+// cases are the shapes of the kernel's rule (`unplayedForfeitEvent`: `by !== "both" && (reason === "walkover" || !playedBefore)`):
 //   - walkover: a side that never arrived, nothing recorded. The award lands.
 //   - withdrew_unplayed: a withdrawal after the Start, before any play. The award lands (the walkover reason is not the only way in).
 //   - retired_after_play: a retirement once play is recorded. The kernel WITHHOLDS the award, so a stream that offers one records the
 //     same match as one that does not: the other direction of the rule, pinned so a reader that stopped checking the kernel's word shows.
+//   - withdrew_after_voided_play: a withdrawal after a play that a void then struck. The kernel's `playRecorded` ignores a voided event, so
+//     the match is unplayed again and the award LANDS: the void x award witness (a reader that counted the struck play as play would withhold it).
 // The sides differ on purpose (the away side walks over; the home side withdraws and retires), so a winner-first pair read against the wrong
 // side is a different recording.
 //
@@ -72,8 +74,10 @@ export interface ForfeitAwardCase {
   readonly reason: AwardReason;
   /** Which side forfeits. */
   readonly offender: "home" | "away";
-  /** Whether play is recorded before the forfeit (the kernel's `playRecorded`). */
+  /** Whether play is recorded before the forfeit (the kernel's `playRecorded`, which ignores a voided event). */
   readonly played: boolean;
+  /** Whether the ledger holds a play that a later `core.void` struck, so play was drawn and is no longer recorded (`played` is then false). */
+  readonly voidedPlay: boolean;
   /** Whether the kernel hands the module the offered award for this forfeit (`unplayedForfeitEvent`). A test holds this to the kernel's
    *  own predicate over every committed story, so it is a statement of the rule, not a value the verdict trusts. */
   readonly lands: boolean;
@@ -82,10 +86,20 @@ export interface ForfeitAwardCase {
 }
 
 export const FORFEIT_AWARD_CASES: readonly ForfeitAwardCase[] = [
-  { id: "walkover", reason: "walkover", offender: "away", played: false, lands: true, what: "a side that never arrived: a walkover with nothing recorded" },
-  { id: "withdrew_unplayed", reason: "withdrew", offender: "home", played: false, lands: true, what: "a withdrawal after the Start and before any play" },
-  { id: "retired_after_play", reason: "retired", offender: "home", played: true, lands: false, what: "a retirement once play is recorded: the kernel withholds the award" },
+  { id: "walkover", reason: "walkover", offender: "away", played: false, voidedPlay: false, lands: true, what: "a side that never arrived: a walkover with nothing recorded" },
+  { id: "withdrew_unplayed", reason: "withdrew", offender: "home", played: false, voidedPlay: false, lands: true, what: "a withdrawal after the Start and before any play" },
+  { id: "retired_after_play", reason: "retired", offender: "home", played: true, voidedPlay: false, lands: false, what: "a retirement once play is recorded: the kernel withholds the award" },
+  { id: "withdrew_after_voided_play", reason: "withdrew", offender: "home", played: false, voidedPlay: true, lands: true, what: "a withdrawal after a play that a void struck: nothing is played any more, so the award lands" },
 ];
+
+/** Whether a `core.void` of the ledger strikes a SPORT event (a play, not a core event). A void names its target `e-<index in this ledger>`. */
+function holdsStruckPlay(events: readonly GoldenEvent[]): boolean {
+  return events.some((e) => {
+    const target = e.type === "core.void" ? /^e-(\d+)$/.exec(e.voids ?? "") : null;
+    const struck = target === null ? undefined : events[Number(target[1])];
+    return struck !== undefined && !struck.type.startsWith("core.");
+  });
+}
 
 // ---------------------------------------------------------------------------------------------------------- verdicts
 
@@ -159,6 +173,9 @@ export function reachesAward(c: ForfeitAwardCase): (r: AwardRecorded) => string 
     if (last?.type !== "core.forfeit" || payload.reason !== c.reason || payload.by !== lineups[c.offender].entrantId) {
       return `the ledger does not end in a ${c.reason} forfeit by the ${c.offender} side`;
     }
+    if (holdsStruckPlay(r.events) !== c.voidedPlay) {
+      return c.voidedPlay ? "the ledger holds no play struck by a void, which this case needs" : "the ledger holds a play struck by a void, which this case does not have";
+    }
     const own = ownCredit(r.module, cfg, lineups, r.events, c.reason, c.offender);
     if (own === null) return "the ledger does not fold without the award, so the sport's own credit cannot be read";
     const [winner, loser] = r.foldOptions.forfeitAward;
@@ -219,6 +236,10 @@ function drawPlay(c: AwardBuildCtx): GoldenEvent | null {
 /** The ledger of a case: the forfeit, preceded by what the case says came before it. */
 function ledgerOf(c: ForfeitAwardCase, ctx: AwardBuildCtx): GoldenEvent[] | null {
   const forfeit = ev("core.forfeit", { by: ctx.lineups[c.offender].entrantId, reason: c.reason });
+  if (c.voidedPlay) {
+    const play = drawPlay(ctx);
+    return play === null ? null : [ev("core.start"), play, { type: "core.void", payload: {}, voids: "e-1" }, forfeit];
+  }
   if (!c.played) return c.reason === "walkover" ? [forfeit] : [ev("core.start"), forfeit];
   const play = drawPlay(ctx);
   return play === null ? null : [ev("core.start"), play, forfeit];

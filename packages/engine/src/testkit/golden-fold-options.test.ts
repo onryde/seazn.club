@@ -381,6 +381,9 @@ describe("the fold-option stories: one per (reading sport, forfeit case), derive
     expect(FORFEIT_AWARD_CASES.some((c) => c.reason === "walkover" && c.lands)).toBe(true);
     expect(FORFEIT_AWARD_CASES.some((c) => c.reason !== "walkover" && c.lands)).toBe(true);
     expect(FORFEIT_AWARD_CASES.some((c) => c.played && !c.lands)).toBe(true);
+    // and the void x award corner: play was drawn and then struck, so it is not play any more and the award lands
+    expect(FORFEIT_AWARD_CASES.some((c) => c.voidedPlay && c.lands && !c.played)).toBe(true);
+    expect(FORFEIT_AWARD_CASES.filter((c) => c.voidedPlay && c.played), "a struck play is not recorded play: the two cannot both hold").toEqual([]);
   });
 
   it("a case's `lands` is the KERNEL's reading of its own ledger (unplayedForfeitEvent over playRecorded), for every committed story - not a value typed in the table", () => {
@@ -394,6 +397,9 @@ describe("the fold-option stories: one per (reading sport, forfeit case), derive
       const kernel = unplayedForfeitEvent(forfeit.payload, playRecorded(prefix, c.module));
       expect(kernel, `${c.story.id}: the kernel and the table agree on whether the award lands`).toBe(c.story.case.lands);
       expect(playRecorded(prefix, c.module), `${c.story.id}: and on whether play was recorded`).toBe(c.story.case.played);
+      // a case that says a void struck its play: the ledger holds a void, and WITHOUT that void the same ledger has play recorded
+      expect(events.some((e) => e.type === "core.void"), `${c.story.id}: a void in the ledger exactly when the case strikes its play`).toBe(c.story.case.voidedPlay);
+      expect(playRecorded(prefix.filter((e) => e.type !== "core.void"), c.module), `${c.story.id}: the struck play WAS play before its void`).toBe(c.story.case.played || c.story.case.voidedPlay);
       if (kernel) landed++;
       checked++;
     }
@@ -460,7 +466,7 @@ describe("the committed corpora reach every fold-option story, and the award is 
       const base = recomputeStream(c.module, c.recorded.raw, c.stream.events, c.stream.lineups, 3);
       const offered = recomputeStream(c.module, c.recorded.raw, c.stream.events, c.stream.lineups, 3, c.stream.foldOptions);
       // what is COMMITTED is what the recorder gives with the options, and differs from the recording without them exactly when the award lands
-      expect(c.stream.states.at(-1) === offered.states.at(-1) || c.stream.states.at(-1)!.startsWith("#"), `${c.story.id}: committed final state is the offered fold`).toBe(true);
+      expect(c.stream.states.at(-1), `${c.story.id}: committed final state is the offered fold (the last step is always stored whole)`).toBe(offered.states.at(-1));
       expect(c.stream.summary, `${c.story.id}: committed summary`).toBe(offered.summary);
       expect(c.stream.deltas, `${c.story.id}: committed deltas`).toBe(offered.deltas);
       expect(c.stream.summaries, `${c.story.id}: committed digests`).toEqual(offered.summaries);
@@ -569,6 +575,27 @@ describe("the verdict `reached` rejects what is not its own: each guard has a co
       const wrongType = { type: "core.note", payload };
       expect(refusal(c, { events: [wrongType] }), `${m.key}: the forfeit's payload on an event that is not a forfeit`).toMatch(/does not end in a walkover forfeit by the away side/);
       expect(refusal(c, {}), `${m.key}: the control, the stream as recorded`).toBe("accepted");
+      checked++;
+    }
+    expect(checked).toBe(readers().length);
+  });
+  it("the void x award corner is told apart from its neighbours: a play struck by a void is what the voided story needs and the unplayed one must not have", () => {
+    let checked = 0;
+    for (const m of readers()) {
+      const voided = committedOf(storyById(`${m.key}.withdrew_after_voided_play`));
+      const unplayed = committedOf(storyById(`${m.key}.withdrew_unplayed`));
+      expect(refusal(voided, {}), `${m.key}: the control, the voided story's own stream`).toBe("accepted");
+      expect(refusal(unplayed, {}), `${m.key}: the control, the unplayed story's own stream`).toBe("accepted");
+      // the same withdrawal with no play ever drawn is not the voided story ...
+      expect(refusal(voided, { events: unplayed.stream.events }), `${m.key}: no struck play`).toMatch(/holds no play struck by a void/);
+      // ... and the voided ledger is not the unplayed story's, whatever else it shares with it
+      expect(unplayed.story.reached({ ...unplayed.recorded, events: voided.stream.events }), `${m.key}: a struck play where the case has none`).toMatch(/holds a play struck by a void/);
+      // a void that strikes the Start, names nothing, or names an event the ledger does not have is not a struck PLAY
+      const [start, , , forfeit] = voided.stream.events;
+      const strikes = (voids: string | undefined) => [start!, { type: "core.void", payload: {}, ...(voids === undefined ? {} : { voids }) }, forfeit!];
+      expect(refusal(voided, { events: strikes("e-0") }), `${m.key}: a void of the Start`).toMatch(/holds no play struck by a void/);
+      expect(refusal(voided, { events: strikes(undefined) }), `${m.key}: a void that names nothing`).toMatch(/holds no play struck by a void/);
+      expect(refusal(voided, { events: strikes("e-9") }), `${m.key}: a void of an event the ledger does not hold`).toMatch(/holds no play struck by a void/);
       checked++;
     }
     expect(checked).toBe(readers().length);
@@ -718,6 +745,10 @@ describe("the verdict `reached` rejects what is not its own: each guard has a co
     // the forfeit twice: it ends in the right forfeit, but the second is refused by the fold (the match is decided), so the sport's own credit cannot be read
     const forfeit = c.stream.events.at(-1)!;
     expect(refusal(c, { events: [forfeit, forfeit] })).toMatch(/does not fold without the award/);
+    // only the fold's own refusal (an EngineError) is a reason; any other throw in the module's credit is a defect the verdict must not turn into one
+    const football = sport("football");
+    const broken = Object.assign(Object.create(football) as object, { forfeitCredit: () => { throw new TypeError("credit exploded"); } }) as unknown as AnySportModule;
+    expect(refusal(c, { module: broken }), "a TypeError from the module's own credit is not read as 'does not fold'").toMatch(/^threw TypeError: credit exploded/);
     // a malformed award: the recorder refuses it by name, and the verdict reports that
     expect(refusal(c, { foldOptions: { forfeitAward: [-1, 2] } as never })).toMatch(/does not record under its options: golden: malformed foldOptions/);
   });
@@ -806,6 +837,18 @@ describe("extendFoldOptions - the append path", () => {
     const base = committedBefore("football");
     const decoy: GoldenStream = { ...base.streams[0]!, config: storyConfig(base), seed: FOLD_OPTION_SEED_BASE + 1 };
     expect(() => extendFoldOptions(football, { ...base, streams: [...base.streams, decoy] })).toThrow(new RegExp(`already has a stream ${storyConfig(base)}#${FOLD_OPTION_SEED_BASE + 1}`));
+  });
+
+  it("the identity another stream holds is config AND seed: the same seed under ANOTHER config is no clash", () => {
+    const football = sport("football");
+    const base = committedBefore("football");
+    const decoy = base.streams.find((s) => s.config !== storyConfig(base));
+    expect(decoy, "premise: the corpus records streams under a config other than the stories'").toBeDefined();
+    const same: GoldenStream = { ...decoy!, seed: FOLD_OPTION_SEED_BASE + 1 };
+    expect(same.config, "premise: that config is not the one the story records under").not.toBe(storyConfig(base));
+    const result = extendOk(football, { ...base, streams: [...base.streams, same] });
+    expect(result.appended.length, "every story is still appended").toBe(FORFEIT_AWARD_CASES.length);
+    expect(result.corpus.streams.filter((s) => s.seed === FOLD_OPTION_SEED_BASE + 1).map((s) => s.config).sort()).toEqual([same.config, storyConfig(base)].sort());
   });
 
   it("records each stream in its corpus's own format: a format-1 corpus gets the four stored fields and none of the kernel fields", () => {

@@ -2688,7 +2688,9 @@ export interface PayloadParseFailure {
 /** Recorded payloads that no longer parse against the branch `apply` selects
  *  for their event type. Stops at the first event the fold cannot get past:
  *  after that the states diverge and every later verdict is about a different
- *  match, not about a schema. */
+ *  match, not about a schema. It takes no `foldOptions` on purpose: a payload
+ *  parses or not whatever the fold is offered, and the award lives in the
+ *  options, never in a payload. */
 export function payloadParseFailures(
   module: AnySportModule,
   rawConfig: unknown,
