@@ -88,6 +88,8 @@ export const tabletennis = makeSetBasedModule({
     serverFromPairOrder: true,
   },
   entrantModel: { kinds: ["individual", "pair"], defaultKind: "individual" },
+  // W2d (D6, PS-7a; ruling 108 amended) — a match the loser did not play pays it 0, not the played loss 1.
+  declaresUnplayedLoss: true,
   // `tabletennis.expedite.start` records that the umpire introduced the
   // expedite system, and every later rally carrying `returns` + `serving` is
   // judged against the receiver's thirteenth good return (see `records`

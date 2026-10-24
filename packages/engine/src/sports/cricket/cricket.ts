@@ -30,7 +30,7 @@ import {
   type StandingsDelta,
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
-import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
+import { boundsFrom, stampAttributionRequired, winMethodTable, type DecidedIn } from "../../sport/module.ts";
 import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
 import type {
   ModuleEvent,
@@ -4050,6 +4050,15 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
   // M-3: without a super over a tied innings pair is a tie. With one, a tied super over is played again only under the
   // `repeat` policy; `boundary_count` still ties on equal boundaries and `shared` stands as a tie (`decideTie`).
   canEndLevel: (cfg) => !cfg.superOver || cfg.superOverStillTied !== "repeat",
+  // W2d (spec §5.2, D4; X-PT-2) — the win methods this fold writes (`decideAfterClose`, the DLS par, the super over and
+  // its boundary count) and how each was decided: the super over is cricket's shoot-out (author's call, D4).
+  ...winMethodTable("cricket", { regulation: "regulation", dls: "regulation", innings: "regulation", super_over: "so", boundary_count: "so" }),
+  reachableDecidedIn: (cfg) => new Set<DecidedIn>(cfg.superOver ? ["regulation", "so"] : ["regulation"]),
+  // In a table: a tie (it stands without a super over and survives an abandoned one), a no result (an abandon short of a
+  // result), and a draw only where one stands, two innings a side (D10(c)). A bracket holds every level result (ruling 79).
+  reachableResultKinds: (cfg, stage) =>
+    new Set<"draw" | "tie" | "noResult">(DRAW_KINDS.has(stage) ? ["tie", "noResult", ...(cricket.supportsDraws(cfg, stage) ? (["draw"] as const) : [])] : []),
+  shootoutAs: "result",
 
   // W2c X-SR-6, CK-SO-1 (spec §4.2) — the preset a NEW bracket stage should start with: the super over ON, wherever the
   // schema takes one (`ruleKeys.superOver.appliesTo` is the one declaration of which variants: a two-innings test match

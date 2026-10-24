@@ -260,6 +260,8 @@ export const icehockey = makePeriodModule({
   officialLabel: { scorer: "Scorekeeper" },
   suspensionReasons: ICEHOCKEY_SUSPENSION_REASONS,
   shootoutLabel: "GWS",
+  // W2d (X-PT-4) — the GWS decides the game: the table books it as a result (an OT/SO win), never a draw.
+  shootoutAs: "result",
   // IIHF Rule 87 / NHL Rule 84.4 — the game-winning shot is credited as a goal
   // in the official score (2-2 on the GWS is recorded 3-2). Derived at the
   // score layer; the shoot-out itself scores no player goals. FIH does not do

@@ -3,7 +3,7 @@
 // declaredPointsSets; arbitraryEvent/coarsen hooks from spec 03 §6 + §9.6).
 import { z } from "zod";
 import { EngineError } from "../core/errors.ts";
-import type { CoreEv, EventEnvelope, FoldableModule, FoldContext } from "../core/events.ts";
+import { SETTLE_METHODS, settledMethod, type CoreEv, type EventEnvelope, type FoldableModule, type FoldContext } from "../core/events.ts";
 import type { LineupPolicy, SquadState } from "../core/lineup.ts";
 import type { MatchPosition } from "../core/position.ts";
 import type { Rng } from "../core/rng.ts";
@@ -752,6 +752,44 @@ export interface RuleKeyFact {
 /** Key = a cfg path: top-level ("bestOf") or dotted to a leaf ("overtime.minutes"). Most specific wins. */
 export type RuleKeys = Readonly<Record<string, RuleKeyFact>>;
 
+/**
+ * W2d (spec §5.2, D4) — how a WON match was decided: in regulation, in overtime (football's extra time, an overtime
+ * period), or by a shoot-out (penalties, the GWS, a cricket super over or boundary count, a chess tie-break rung). Only a
+ * `win` carries one; `decidedInFor` (competition/decided-in.ts) reads it off a stored outcome.
+ */
+export type DecidedIn = "regulation" | "ot" | "so";
+
+/**
+ * W2d (X-PT-2) — the win methods a ledger can hold for EVERY sport besides the sport's own: the kernel's settle, which
+ * `outcomeOf` writes as `settled_<method>` whatever the sport (core/events.ts `settledMethod`), and the two methods a win
+ * stored before W2b can carry (`walkover`, `forfeit`), which `forfeitShaped` still reads as awards. None of them is an
+ * overtime or a shoot-out, so each is decided in regulation.
+ */
+export const SHARED_WIN_METHODS: readonly string[] = Object.freeze([...SETTLE_METHODS.map(settledMethod), "walkover", "forfeit"]);
+
+/**
+ * W2d (X-PT-2) — a sport's `outcomeMethods` and `decidedInOf` from ONE table, so the list and the lookup cannot drift: the
+ * sport's own methods, then `SHARED_WIN_METHODS`, each of those in regulation. `decidedInOf` answers a declared method only;
+ * any other string, a prototype key included, is refused CONFIG_INVALID and never read as regulation.
+ */
+export function winMethodTable(
+  sport: string,
+  own: Readonly<Record<string, DecidedIn>>,
+): Pick<AnySportModule, "outcomeMethods" | "decidedInOf"> {
+  const table = new Map<string, DecidedIn>(Object.entries(own));
+  for (const method of SHARED_WIN_METHODS) table.set(method, "regulation");
+  return {
+    outcomeMethods: Object.freeze([...table.keys()]),
+    decidedInOf(method) {
+      const decided = table.get(method);
+      if (decided === undefined) {
+        throw new EngineError("CONFIG_INVALID", `${sport} writes no win method "${method}"`, { sport, method });
+      }
+      return decided;
+    },
+  };
+}
+
 // spec 03 §3. Extends the kernel's FoldableModule (spec 03 §2) so every
 // SportModule folds through foldMatch unchanged.
 export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> {
@@ -943,6 +981,34 @@ export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> 
   awardScoreKeys?: AwardScoreKeys;
   defaultTiebreakers: TiebreakerKey[]; // sport's official cascade (doc 05 §4)
   supportsDraws(cfg: Cfg, stage: StageKind): boolean; // knockout football: no
+
+  // W2d (spec §5.2, D4, B2, D6; X-PT-2) — the outcome vocabulary the table reads. `outcomeMethods` and `decidedInOf` come
+  // from ONE table (`winMethodTable`); the §13.4 sweep holds `decidedInOf` total over the list and a source scan holds the
+  // list to every method the fold writes (sport/outcome-methods-source.test.ts).
+  /** Every `win.method` this sport's ledger can hold: what its fold writes, plus `SHARED_WIN_METHODS`. */
+  readonly outcomeMethods: readonly string[];
+  /** How a win by `method` was decided. A method the sport does not declare throws CONFIG_INVALID (a guard: never read as
+   *  regulation). */
+  decidedInOf(method: string): DecidedIn;
+  /** The decidedIn values a stage of this format can produce under `cfg` (its overtime, shoot-out, super over, rungs);
+   *  always holds `regulation`. */
+  reachableDecidedIn(cfg: Cfg, stageKind: StageKind): ReadonlySet<DecidedIn>;
+  /** The level results a TABLE can pay under `cfg`: a draw the sport stands (`supportsDraws`), or a shoot-out booked as one
+   *  (`shootoutAs: "draw_plus_bonus"`); cricket's tie and no result. Empty in a bracket kind, which holds every level
+   *  result for the organiser's settle (ruling 79). */
+  reachableResultKinds(cfg: Cfg, stageKind: StageKind): ReadonlySet<"draw" | "tie" | "noResult">;
+  /** Set sports only (their table pays by set score): every `W-L` a match of `cfg.bestOf` can end, the winner's majority
+   *  against each losing count below it. */
+  reachableSetScores?(cfg: Cfg): readonly `${number}-${number}`[];
+  /** B2 — how a shoot-out-decided TABLE match is booked: a draw for both sides plus the winner's bonus (FIFA, FIH), or a
+   *  win and a loss (IIHF's GWS, cricket's super over, chess's rungs). In a knockout the shoot-out only decides who
+   *  advances. */
+  readonly shootoutAs: "draw_plus_bonus" | "result";
+  /** HK-TB-1 (B2) — which wins the `wins` tie-break counts. Absent = every win; FIH counts regulation wins only. */
+  readonly winsCount?: "all" | "regulation";
+  /** D6 (X-WO-1 amended) — the sport pays a separate "loss, not played" (table tennis: played L 1, unplayed L 0). Absent
+   *  everywhere else, so `loss.unplayed` is reachable nowhere else (PS-7a). */
+  readonly declaresUnplayedLoss?: true;
   // W2a (spec §5.2, ruling 76) — the cfg changes a BRACKET stage applies on top
   // of the resolved cfg (resolveFixtureCfg merges it by stage kind; the V347
   // freeze then carries it). `{}` is a legal declaration.

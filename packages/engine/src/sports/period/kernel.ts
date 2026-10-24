@@ -42,7 +42,7 @@ import {
   type StandingsDelta,
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
-import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
+import { boundsFrom, stampAttributionRequired, winMethodTable, type DecidedIn } from "../../sport/module.ts";
 import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit, goalCredit } from "../../sport/forfeit-credit.ts";
 import type {
   ModuleEvent,
@@ -1882,6 +1882,10 @@ export interface PeriodPreset {
   defaultTiebreakers: TiebreakerKey[];
   officialLabel: { scorer: string };
   shootoutLabel: string; // 'GWS' (ice) | 'SO' (FIH)
+  // W2d (X-PT-4, B2) — how a table books a shoot-out: FIH as a draw plus a bonus point, ice hockey as a result.
+  shootoutAs: "draw_plus_bonus" | "result";
+  // W2d (HK-TB-1) — "regulation" when the tie-break's "wins" counts regulation wins only (FIH); omitted = every win.
+  winsCount?: "regulation";
   // IIHF Rule 87 / NHL Rule 84.4 — the shoot-out winner is credited ONE extra
   // goal in the OFFICIAL SCORE: 2-2 won on the shoot-out is recorded 3-2, so
   // the winner's GF and the loser's GA carry it and it reaches goal difference.
@@ -2829,6 +2833,23 @@ export function makePeriodModule(
     // M-3: the shoot-out is sudden death (`shootoutDecision`), so it always produces a winner. An overtime does not,
     // sudden-death or not: a scoreless one runs out and `resolveEnd` finishes level when no shoot-out follows.
     canEndLevel: (cfg) => cfg.shootout === null,
+    // W2d (spec §5.2, D4, B2; X-PT-2) — the win methods this kernel writes (`resolveEnd`'s whistles, the sudden-death
+    // overtime goal, the shoot-out, an award-policy abandon) and how each was decided; both codes share them.
+    ...winMethodTable(preset.key, { regulation: "regulation", extra_time: "ot", shootout: "so", abandoned: "regulation" }),
+    reachableDecidedIn: (cfg) =>
+      new Set<DecidedIn>([
+        "regulation",
+        ...(cfg.overtime !== null ? (["ot"] as const) : []),
+        ...(cfg.shootout !== null ? (["so"] as const) : []),
+      ]),
+    // A table pays a draw that stands (`drawStands`, the cfg half of `supportsDraws`) and, where the sport books a
+    // shoot-out as a draw plus a bonus (B2: FIH), a shoot-out the cfg plays. A bracket holds every level result (ruling 79).
+    reachableResultKinds: (cfg, stage) =>
+      new Set<"draw" | "tie" | "noResult">(
+        DRAW_KINDS.has(stage) && (drawStands(cfg) || (preset.shootoutAs === "draw_plus_bonus" && cfg.shootout !== null)) ? ["draw"] : [],
+      ),
+    shootoutAs: preset.shootoutAs,
+    ...(preset.winsCount === undefined ? {} : { winsCount: preset.winsCount }),
 
     declaredPointsSets(cfg) {
       const totals = [cfg.points.win + cfg.points.loss, cfg.points.draw * 2];

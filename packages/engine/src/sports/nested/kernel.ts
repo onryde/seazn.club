@@ -45,7 +45,7 @@ import {
   type StandingsDelta,
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
-import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
+import { boundsFrom, stampAttributionRequired, winMethodTable, type DecidedIn } from "../../sport/module.ts";
 import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
 import type {
   FidelityBand,
@@ -2306,6 +2306,11 @@ export function makeNestedModule(
     supportsDraws(_cfg, _stage: StageKind) {
       return false; // v6/00 §4 — tennis never draws
     },
+    // W2d (spec §5.2; X-PT-2) — a match is won in regulation and never ends level (`supportsDraws` above).
+    ...winMethodTable(preset.key, { regulation: "regulation" }),
+    reachableDecidedIn: () => new Set<DecidedIn>(["regulation"]),
+    reachableResultKinds: () => new Set<"draw" | "tie" | "noResult">(),
+    shootoutAs: "result",
 
     // W2a: none — a tennis match always produces a winner (spec §5.2)
     bracketDeciders: () => ({}),

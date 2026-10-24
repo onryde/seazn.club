@@ -28,7 +28,7 @@ import {
   type StandingsDelta,
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
-import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
+import { boundsFrom, stampAttributionRequired, winMethodTable, type DecidedIn } from "../../sport/module.ts";
 import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
 import type {
   ModuleEvent,
@@ -1090,6 +1090,18 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
   // (`decideResult`), and every tie-break event names a winner. Anything else - no tie-break, or an empty rung list -
   // leaves the draw standing, held for the organiser (ruling 79).
   canEndLevel: (cfg) => !(cfg.tiebreak === true && effectiveRungs(cfg).length > 0),
+  // W2d (spec §5.2, D4; X-PT-2) — a result names any method a winner may carry (the result schema refuses a winner only
+  // on a double forfeit), `regulation` when it names none (`decideResult`), and a tie-break game names its rung: chess's
+  // shoot-out (author's call, D4).
+  ...winMethodTable("boardgame", {
+    regulation: "regulation",
+    ...Object.fromEntries(BoardgameMethod.options.filter((m) => m !== "double_forfeit").map((m): [string, DecidedIn] => [m, "regulation"])),
+    ...Object.fromEntries(TIEBREAK_RUNGS.map((r): [string, DecidedIn] => [`tiebreak_${r}`, "so"])),
+  }),
+  // A drawn game goes to tie-break games only where the stage plays them and lists a rung (`decideResult`, `canEndLevel`).
+  reachableDecidedIn: (cfg) => new Set<DecidedIn>(cfg.tiebreak === true && effectiveRungs(cfg).length > 0 ? ["regulation", "so"] : ["regulation"]),
+  reachableResultKinds: (cfg, stage) => new Set<"draw" | "tie" | "noResult">(boardgame.supportsDraws(cfg, stage) ? ["draw"] : []),
+  shootoutAs: "result",
   // C12: lots is the organiser's settle (ruling 73) — settleApplies is true while
   // the tie-break is pending. A held double forfeit is phase "done": false (T15-R1).
   awaitingDecider: (s: BoardgameState) => s.phase === "tiebreak",

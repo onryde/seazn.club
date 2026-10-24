@@ -9,3 +9,5 @@ export * from "./points.ts";
 export * from "./round-role.ts";
 export * from "./qualification.ts";
 export * from "./tie-what-if.ts";
+// W2d (spec §5.2) — how a decided match was decided (`decidedInFor`).
+export * from "./decided-in.ts";

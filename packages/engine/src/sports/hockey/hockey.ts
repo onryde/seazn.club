@@ -230,6 +230,10 @@ export const hockey = makePeriodModule({
   officialLabel: { scorer: "Umpire" },
   suspensionReasons: HOCKEY_SUSPENSION_REASONS,
   shootoutLabel: "SO",
+  // W2d (B2, X-PT-4) — an FIH table books a shoot-out as a draw plus a bonus point; HK-TB-1 — FIH "matches won"
+  // counts regulation wins only.
+  shootoutAs: "draw_plus_bonus",
+  winsCount: "regulation",
   playerStats,
   // SPEC-1 — FIH card grades the discipline rules editor may accumulate/ban on.
   disciplineColors: [

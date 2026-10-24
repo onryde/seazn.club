@@ -39,7 +39,7 @@ import {
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import type { EntrantModel } from "../../sport/entrant-model.ts";
-import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
+import { boundsFrom, stampAttributionRequired, winMethodTable, type DecidedIn } from "../../sport/module.ts";
 import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
 import {
   personsForEntrant,
@@ -1557,6 +1557,8 @@ export interface SetBasedPreset {
    */
   serve: SetBasedServeRotation;
   entrantModel?: EntrantModel;
+  // W2d (D6, X-WO-1 amended) — the sport's laws book an unplayed match as a loss (table tennis, PS-7a); omitted = no.
+  declaresUnplayedLoss?: true;
   // W4 (#407) — which interruptions THIS sport's scoresheet carries. A sport
   // that does not declare one refuses the event outright rather than silently
   // recording a fact its laws have no concept of (badminton has no timeouts
@@ -2606,6 +2608,17 @@ export function makeSetBasedModule(
     supportsDraws(_cfg, _stage: StageKind) {
       return false;
     },
+    // W2d (spec §5.2; X-PT-2) — a match is won on sets, in regulation, and never ends level (`supportsDraws` above).
+    ...winMethodTable(preset.key, { regulation: "regulation" }),
+    reachableDecidedIn: () => new Set<DecidedIn>(["regulation"]),
+    reachableResultKinds: () => new Set<"draw" | "tie" | "noResult">(),
+    // The table pays by set score (`pointsMap`): the winner's majority of `bestOf` against each losing count below it.
+    reachableSetScores: (cfg) => {
+      const won = majority(cfg.bestOf);
+      return Array.from({ length: won }, (_, lost) => `${won}-${lost}` as const);
+    },
+    shootoutAs: "result",
+    ...(preset.declaresUnplayedLoss === true ? { declaresUnplayedLoss: true as const } : {}),
 
     // W2a: none — a set-based match always produces a winner (spec §5.2)
     bracketDeciders: () => ({}),

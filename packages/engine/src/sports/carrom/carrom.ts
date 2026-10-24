@@ -35,7 +35,7 @@ import {
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import { SHARE_NEEDS_DRAWN_GAME } from "../../sport/abandon-share.ts";
-import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
+import { boundsFrom, stampAttributionRequired, winMethodTable, type DecidedIn } from "../../sport/module.ts";
 import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
 import type {
   ModuleEvent,
@@ -1131,6 +1131,12 @@ export const carrom: SportModule<CarromCfg, CarromEv, CarromState> = {
       : { tieBoard: "extra" as const },
   // M-3: the sudden-death extra board always produces a winner; only the 'draw' house rule closes a tied game level.
   canEndLevel: (cfg) => cfg.tieBoard === "draw",
+  // W2d (spec §5.2; X-PT-2) — one win method: the extra board is a regulation result. A draw only under the 'draw' tie
+  // board, in a table (`supportsDraws`).
+  ...winMethodTable("carrom", { regulation: "regulation" }),
+  reachableDecidedIn: () => new Set<DecidedIn>(["regulation"]),
+  reachableResultKinds: (cfg, stage) => new Set<"draw" | "tie" | "noResult">(carrom.supportsDraws(cfg, stage) ? ["draw"] : []),
+  shootoutAs: "result",
 
   // §9.3 — {win+loss (win & walkover), 2·draw (drawn match & no_result)}.
   declaredPointsSets(cfg) {
