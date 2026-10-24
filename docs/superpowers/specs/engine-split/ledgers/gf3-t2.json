@@ -1,6 +1,6 @@
 {
  "batch": "gf3-t2",
- "note": "Test-id ledger for GF-3 T2 (a golden stream may carry foldOptions { forfeitAward }, the award the server folds a forfeit with; the recorder offers it to every prefix fold, the fold-epoch guard reads it as part of the stream's input, and twelve new streams give football, generic, hockey and icehockey each a landed and a withheld award), built against base bb26d10f03 (GF-3 T1 review ledger). Ids are relative to the engine collection ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --after <after-engine.json>=packages/engine --ledger this-file. Collect each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f>` (--isolate on BOTH sides) from the engine directory, the WHOLE package, DATABASE_URL empty. T2 adds 66 tests (6829 -> 6895 collected: 51 in src/testkit/golden-fold-options.test.ts, 12 in test/fold-epoch-guard.test.ts, 3 in test/fold-epoch-guard-cli.test.ts) and retitles none; it edits the bodies (not the titles) of existing tests that replay committed streams so they offer stream.foldOptions (src/testkit/golden-overlay.test.ts, golden-stats.test.ts, golden-format.test.ts, golden-branches.test.ts, golden-slim.test.ts, golden.test.ts), and the corpora, schema snapshots and GOLDEN-POLICY.md they read.",
+ "note": "Test-id ledger for GF-3 T2 (a golden stream may carry foldOptions { forfeitAward }, the award the server folds a forfeit with; the recorder offers it to every prefix fold, the fold-epoch guard reads it as part of the stream's input, and sixteen new streams give football, generic, hockey and icehockey each a landed, a withheld and a void-struck-play award), built against base bb26d10f03 (GF-3 T1 review ledger). Ids are relative to the engine collection ROOT. Run: node scripts/lib/test-parity.mjs --before <before-engine.json>=<base>/packages/engine --after <after-engine.json>=packages/engine --ledger this-file. Collect each side with `vitest run --isolate -t __parity_collect_only__ --reporter=json --outputFile <f>` (--isolate on BOTH sides) from the engine directory, the WHOLE package, DATABASE_URL empty. T2 plus its review round adds 68 tests (6829 -> 6897 collected: 53 in src/testkit/golden-fold-options.test.ts, 12 in test/fold-epoch-guard.test.ts, 3 in test/fold-epoch-guard-cli.test.ts) and retitles none; it edits the bodies (not the titles) of existing tests that replay committed streams so they offer stream.foldOptions (src/testkit/golden-overlay.test.ts, golden-stats.test.ts, golden-format.test.ts, golden-branches.test.ts, golden-slim.test.ts, golden.test.ts), and the corpora, schema snapshots and GOLDEN-POLICY.md they read.",
  "entries": [
   {
    "id": "src/testkit/golden-fold-options.test.ts › every replay path of the toolchain offers a committed award stream its own options › a format-1 award stream recorded WITHOUT its options is a stale stream (would not survive), not an effective-only one: the second-chance replay offers the options too",
@@ -264,6 +264,14 @@
   },
   {
    "id": "test/fold-epoch-guard.test.ts › fold-epoch guard: GF-3 T2 - a stream's foldOptions are part of its input › the same award on both sides is the same input: matched, owes nothing",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › extendFoldOptions - the append path › the identity another stream holds is config AND seed: the same seed under ANOTHER config is no clash",
+   "fate": "added"
+  },
+  {
+   "id": "src/testkit/golden-fold-options.test.ts › the verdict `reached` rejects what is not its own: each guard has a counterfactual that only it rejects, and the reason is asserted › the void x award corner is told apart from its neighbours: a play struck by a void is what the voided story needs and the unplayed one must not have",
    "fate": "added"
   }
  ]
