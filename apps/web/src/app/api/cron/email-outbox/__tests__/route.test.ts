@@ -28,7 +28,7 @@ vi.mock("@/server/email-outbox/worker", () => ({ runOutboxTick: tickMock }));
 
 import { POST } from "../route";
 
-const ZERO = { claimed: 0, sent: 0, retried: 0, dead: 0, suppressed: 0, expired: 0, failed: 0, deferred: 0 };
+const ZERO = { claimed: 0, sent: 0, retried: 0, dead: 0, suppressed: 0, expired: 0, failed: 0, deferred: 0, purged: 0 };
 
 afterEach(() => {
   vi.unstubAllEnvs();

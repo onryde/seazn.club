@@ -161,3 +161,16 @@ export const ENDING_BATCH_SIZE = 100;
 
 /** Badly-ended rows a tick re-drives at most (a kind's `findUnapplied`): a backlog drains over several ticks. */
 export const REDRIVE_LIMIT = 50;
+
+// ---------------------------------------------------------------------------
+// Retention (spec "Credentials at rest" / the 90-day purge, Task 8).
+// ---------------------------------------------------------------------------
+
+/** A row older than this (by `created_at`) is deleted by the worker's last step, whatever its status. By then the body is long
+ *  gone (a CHECK nulls it when a row stops being retryable) and the row is only history: the arbiter's status column reads the
+ *  newest rows of a live round, which are days old, not months. */
+export const RETENTION_DAYS = 90;
+
+/** Rows one purge call deletes at most (one bounded statement per tick: a backlog, after a long outage of the worker, drains over
+ *  the next ticks instead of making one tick a long delete). */
+export const PURGE_BATCH = 500;

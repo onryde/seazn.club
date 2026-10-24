@@ -22,7 +22,7 @@ import { runOutboxTick, type OutboxTickReport } from "../worker";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const RUN = `t4role-${randomUUID().slice(0, 8)}`;
-const ZERO: OutboxTickReport = { claimed: 0, sent: 0, retried: 0, dead: 0, suppressed: 0, expired: 0, failed: 0, deferred: 0 };
+const ZERO: OutboxTickReport = { claimed: 0, sent: 0, retried: 0, dead: 0, suppressed: 0, expired: 0, failed: 0, deferred: 0, purged: 0 };
 const sleep = vi.fn(async () => {});
 
 describe("a tick when the role cannot write the outbox", () => {

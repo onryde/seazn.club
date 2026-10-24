@@ -41,6 +41,7 @@ import {
   OUTBOX_KINDS,
   PACING_HEADROOM_MS,
   REDRIVE_LIMIT,
+  RETENTION_DAYS,
   RESEND_IDEMPOTENCY_TTL_MS,
   RESEND_MIN_INTERVAL_MS,
   RESEND_REQUESTS_PER_SECOND,
@@ -69,7 +70,7 @@ const pid = (s: string): string => `re_${s}_${RUN}`;
  *  `cutoffMs`: claims start while the tick's elapsed time is under it. */
 const budgetFor = (cutoffMs: number): number => (cutoffMs + SEND_TIMEOUT_MS + MIN_SEND_INTERVAL_MS) / (1 - HOOK_RESERVE_FRACTION);
 
-const ZERO: OutboxTickReport = { claimed: 0, sent: 0, retried: 0, dead: 0, suppressed: 0, expired: 0, failed: 0, deferred: 0 };
+const ZERO: OutboxTickReport = { claimed: 0, sent: 0, retried: 0, dead: 0, suppressed: 0, expired: 0, failed: 0, deferred: 0, purged: 0 };
 const REPORT_KEYS = Object.keys(ZERO).sort();
 
 type Row = {
@@ -733,10 +734,10 @@ describe.skipIf(!HAS_DB)("the email outbox retry worker (DB)", () => {
       expect(logMock.error).not.toHaveBeenCalled();
     });
 
-    it("the report always carries exactly the eight counters, all whole numbers", async () => {
+    it("the report always carries exactly the nine counters, all whole numbers", async () => {
       const report = await tick([randomUUID()]);
       expect(Object.keys(report).sort()).toEqual(REPORT_KEYS);
-      expect(REPORT_KEYS.length).toBe(8);
+      expect(REPORT_KEYS.length).toBe(9);
       for (const [k, v] of Object.entries(report)) expect(Number.isInteger(v), k).toBe(true);
     });
 
@@ -1268,6 +1269,84 @@ describe.skipIf(!HAS_DB)("the email outbox retry worker (DB)", () => {
         expect((await get(id)).status).toBe("sent");
         expect(hookSpy).not.toHaveBeenCalled();
       });
+    });
+  });
+
+  // ---- the purge (Task 8) -----------------------------------------------------------------------------------------------
+
+  describe("the 90-day purge (Task 8): the tick's last step, inside its budget", () => {
+    const DAY = 24 * 3_600_000;
+    /** A finished row (`expired`, no body) whose `created_at` is `days` days ago, `extraMs` further back. */
+    async function finishedRow(days: number, extraMs = 0): Promise<string> {
+      const id = await queue();
+      await sql`
+        update email_outbox
+           set status = 'expired', body_sealed = null, lease_until = null, status_at = now(),
+               created_at = ${new Date(Date.now() - days * DAY - extraMs)}
+         where id = ${id}`;
+      return id;
+    }
+    const present = async (ids: string[]): Promise<Set<string>> =>
+      new Set((await sql<{ id: string }[]>`select id from email_outbox where id = any(${ids}::uuid[])`).map((r) => r.id));
+
+    it("a tick reports purged: it removes the rows older than RETENTION_DAYS (and only those), and the next tick has none left to remove", async () => {
+      const old = [await finishedRow(RETENTION_DAYS, 3_600_000), await finishedRow(RETENTION_DAYS + 30), await finishedRow(RETENTION_DAYS, 60_000)];
+      const young = [await finishedRow(RETENTION_DAYS - 1), await finishedRow(0)];
+      const all = [...old, ...young];
+      expect(await tick(all)).toEqual({ ...ZERO, purged: old.length });
+      const left = await present(all);
+      expect(old.filter((id) => left.has(id)), "every old row went").toEqual([]);
+      expect(young.filter((id) => !left.has(id)), "a row a day inside the retention stayed").toEqual([]);
+      expect(await tick(all), "the empty case").toEqual(ZERO);
+    });
+
+    it("is scoped like the rest of the tick: an old row outside the ids a test scopes the tick to is left alone", async () => {
+      const mine = await finishedRow(RETENTION_DAYS + 1);
+      const foreign = await finishedRow(RETENTION_DAYS + 1);
+      expect(await tick([mine])).toEqual({ ...ZERO, purged: 1 });
+      expect([...(await present([mine, foreign]))]).toEqual([foreign]);
+    });
+
+    it("runs LAST: a row this tick expired is still in the table when its hook runs, and is gone when the tick returns", async () => {
+      const id = await queue();
+      await sql`update email_outbox set created_at = ${new Date(Date.now() - (RETENTION_DAYS + 1) * DAY)} where id = ${id}`;
+      await expireNow(id);
+      const seen: Array<{ status: string }[]> = [];
+      for (const k of OUTBOX_KINDS) {
+        KIND_HOOKS[k] = {
+          onEndedBadly: async (row) => {
+            seen.push(await sql<{ status: string }[]>`select status from email_outbox where id = ${row.id}`);
+          },
+        };
+      }
+      expect(await tick([id])).toEqual({ ...ZERO, expired: 1, purged: 1 });
+      expect(seen, "the hook ran once, before the purge").toEqual([[{ status: "expired" }]]);
+      expect((await present([id])).size).toBe(0);
+    });
+
+    it("is inside the tick's budget: a budget already spent skips the purge and reports 0, and the next tick purges", async () => {
+      const ids = [await finishedRow(RETENTION_DAYS + 1), await finishedRow(RETENTION_DAYS + 2)];
+      expect(await tick(ids, { budgetMs: 0 })).toEqual(ZERO);
+      expect((await present(ids)).size, "nothing was purged").toBe(ids.length);
+      expect(await tick(ids), "the same rows, a tick with budget").toEqual({ ...ZERO, purged: ids.length });
+      expect((await present(ids)).size).toBe(0);
+    });
+
+    it("is inside the tick's budget: a budget the hooks spend skips the purge too", async () => {
+      const HOOK_MS = 1_000;
+      const id = await queue();
+      await sql`update email_outbox set created_at = ${new Date(Date.now() - (RETENTION_DAYS + 1) * DAY)} where id = ${id}`;
+      await expireNow(id);
+      for (const k of OUTBOX_KINDS) {
+        KIND_HOOKS[k] = {
+          onEndedBadly: async () => {
+            clock += HOOK_MS; // the hook uses up the whole budget
+          },
+        };
+      }
+      expect(await tick([id], { budgetMs: HOOK_MS }), "the row is expired, its hook ran, the purge was skipped").toEqual({ ...ZERO, expired: 1 });
+      expect((await present([id])).size, "the old row is still there").toBe(1);
+      expect(await tick([id])).toEqual({ ...ZERO, purged: 1 });
     });
   });
 });
