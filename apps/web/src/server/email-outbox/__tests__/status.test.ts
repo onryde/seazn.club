@@ -282,6 +282,34 @@ describe.skipIf(!HAS_DB)("latestEmailStatus and purgeOldEmails (V469 email_outbo
       expect(await purgeOldEmails({ onlyIds: [b] })).toBe(1);
     });
 
+    it("skips a row another transaction holds instead of waiting for it, and takes it on the next call once it is released", async () => {
+      // A purge that waited on a held row would stall the whole tick (it is the tick's last statement, after its sends). The holder
+      // is a transaction that has `select ... for update` the row, as a worker mid-claim or a hook mid-write would.
+      const held = (await history([{ ref: newRef(), org: null, status: "expired", createdAt: ageOf(RETENTION_DAYS, DAY) }]))[0]!;
+      const free = (await history([{ ref: newRef(), org: null, status: "expired", createdAt: ageOf(RETENTION_DAYS, DAY) }]))[0]!;
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      let locked!: () => void;
+      const lockedP = new Promise<void>((resolve) => (locked = resolve));
+      const holder = sql.begin(async (tx) => {
+        await tx`select id from email_outbox where id = ${held} for update`;
+        locked();
+        await gate;
+      });
+      try {
+        await lockedP;
+        const WAITED = "waited";
+        const first = await Promise.race([purgeOldEmails({ onlyIds: [held, free] }), new Promise<string>((r) => setTimeout(() => r(WAITED), 4_000))]);
+        expect(first, "the purge did not wait for the held row").not.toBe(WAITED);
+        expect(first, "and deleted the free one").toBe(1);
+        expect([...(await rowsLeft([held, free]))], "the held row is still there").toEqual([held]);
+      } finally {
+        release();
+        await holder;
+      }
+      expect(await purgeOldEmails({ onlyIds: [held] }), "released: the next call takes it").toBe(1);
+    });
+
     it("the production call (no scope) removes old rows and leaves young ones; run in a transaction that is rolled back, so no other file's rows are touched", async () => {
       class Rollback extends Error {}
       let removed = -1;
