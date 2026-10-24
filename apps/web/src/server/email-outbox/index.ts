@@ -1,7 +1,7 @@
 // The email outbox's public surface. No logic here: callers import from "@/server/email-outbox".
 export * from "./constants";
-export { OutboxExpiryTooLongError, enqueueEmail, extendEmailExpiry, type OutboxMessage } from "./enqueue";
-export { latestEmailStatus, latestStatusesOfRows, purgeOldEmails, type EmailStatusRow } from "./status";
+export { OutboxExpiryTooLongError, carryRetryBudget, enqueueEmail, extendEmailExpiry, type OutboxMessage } from "./enqueue";
+export { latestEmailStatus, latestStatusesOfRows, lockQueuedEmails, purgeOldEmails, type EmailStatusRow, type QueuedEmailRow } from "./status";
 export {
   attemptClaimed,
   dispatchNow,

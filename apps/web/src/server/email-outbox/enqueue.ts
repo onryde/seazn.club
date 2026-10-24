@@ -101,3 +101,35 @@ export async function extendEmailExpiry(
     returning id`;
   return rows.length;
 }
+
+/**
+ * A fresh row that STANDS IN for a retired one (a re-rendered email, in the retired row's place) keeps the retired row's place in the
+ * retry schedule: its `attempts`, its `next_attempt_at` and its `last_error` are copied from the row it replaced, matched by kind,
+ * ref, recipient (case-folded, as the replace trigger matches) and organisation. Returns how many fresh rows it set.
+ *
+ * Why, and not a fresh start: the schedule is a bound (`MAX_ATTEMPTS` sends, `RETRY_DELAYS_MS` apart) that spares the provider and
+ * the player, and a row that was waiting an hour for its next try should wait that hour still. A fresh row would be tried at once
+ * by the request that wrote it and start the whole schedule over, once per re-render. The copy is the only thing the fresh row
+ * inherits: its id (and so its idempotency key), body and expiry are its own.
+ *
+ * Only a retired row that was ATTEMPTED (`attempts > 0`) passes anything on: a never-attempted one leaves the fresh row exactly
+ * as `enqueueEmail` wrote it, due at once and owned by the request's `dispatchNow` (the first-attempt window). Runs on the caller's
+ * transaction, after the fresh rows are written; the retired rows are `replaced` by then and keep these columns.
+ */
+export async function carryRetryBudget(
+  db: Tx | typeof sql,
+  retiredIds: readonly string[],
+  freshIds: readonly string[],
+): Promise<number> {
+  if (retiredIds.length === 0 || freshIds.length === 0) return 0;
+  const rows = await db`
+    update email_outbox n
+       set attempts = o.attempts, next_attempt_at = o.next_attempt_at, last_error = o.last_error
+      from email_outbox o
+     where n.id = any(${freshIds as string[]}::uuid[]) and o.id = any(${retiredIds as string[]}::uuid[])
+       and n.status = 'queued' and o.attempts > 0
+       and n.kind = o.kind and n.ref_type = o.ref_type and n.ref_id = o.ref_id and lower(n.recipient) = lower(o.recipient)
+       and n.org_id is not distinct from o.org_id
+    returning n.id`;
+  return rows.length;
+}
