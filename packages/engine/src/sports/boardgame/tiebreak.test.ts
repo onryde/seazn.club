@@ -346,9 +346,9 @@ describe("BG-KO-1 / BG-KO-2: the chess knockout tie-break (ruling 73)", () => {
     ];
     for (const [rungs, offeredTimed, offersArmageddon] of cases) {
       const t = timed(rungs);
-      expect(t.length, `${rungs}: the rapid/blitz action is present iff a timed rung is listed`).toBe(offeredTimed.length > 0 ? 1 : 0);
+      expect(t.length, `${rungs.join(",")}: the rapid/blitz action is present iff a timed rung is listed`).toBe(offeredTimed.length > 0 ? 1 : 0);
       if (offeredTimed.length > 0) expect(t[0]!.fields[0], rungs.join(",")).toEqual({ kind: "enum", path: "rung", values: offeredTimed });
-      expect(armageddonOf(rungs).length, `${rungs}: the Armageddon action is present iff it is listed`).toBe(offersArmageddon ? 1 : 0);
+      expect(armageddonOf(rungs).length, `${rungs.join(",")}: the Armageddon action is present iff it is listed`).toBe(offersArmageddon ? 1 : 0);
       checked++;
     }
     expect(checked).toBe(cases.length);
@@ -803,7 +803,7 @@ describe("rule 10 — rungs × draw × tiebreak events × void (BG-KO-3, BG-KO-2
             decided = true;
             const s = fold(cfg, events);
             expect(boardgame.awaitingDecider!(s as never)).toBe(s.phase === "tiebreak");
-            const advances = advancerOf(payload as never);
+            const advances = advancerOf(payload);
             expect(s.outcome).toEqual({ kind: "win", winner: advances, loser: advances === H ? A : H, method: `tiebreak_${a.rung}` });
             expect([H, A]).toContain((s.outcome as { winner: string }).winner);
             expect(Object.hasOwn(s, "armageddonBlack")).toBe(a.rung === "armageddon");

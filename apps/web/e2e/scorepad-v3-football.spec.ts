@@ -179,7 +179,11 @@ test("football v3: the lineup disclosure closes itself the moment Start match is
   });
   await page.goto(await fixturePath(page.request, fx.fixtureId), { waitUntil: "load" });
 
-  const toggles = page.locator('[data-role="phone-disclosure-toggle"]');
+  // The lineup disclosures only: W2c's match rules box is a phone disclosure too, and it neither opens
+  // pre-match nor folds on Start match.
+  const toggles = page.locator(
+    '[data-role="phone-disclosure"]:not(:has([data-testid="match-rules-block"])) > [data-role="phone-disclosure-toggle"]',
+  );
   await expect(toggles.first(), "no lineup disclosure rendered").toBeAttached({ timeout: 20_000 });
   const count = await toggles.count();
   expect(count, "expected one lineup disclosure per side").toBeGreaterThanOrEqual(2);

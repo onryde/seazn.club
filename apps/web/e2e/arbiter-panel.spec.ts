@@ -537,8 +537,9 @@ test.describe("arbiter panel", () => {
       return { fixture: f!, ledger };
     });
     expect(voided.fixture, "VOID: abandoned, nobody's result").toEqual({ status: "abandoned", outcome: null });
-    expect(voided.ledger, "the abandon, its reason the organiser's own decision").toEqual([
-      { type: "core.abandon", payload: { reason: uiEn["externalPlay.resolve.abandonReason.none"] } },
+    // Rebase ruling D3 (W2c): the organiser's No result IS the settle, so the abandon carries `noResult: true`.
+    expect(voided.ledger, "the abandon, its reason the organiser's own decision, marked as their No result").toEqual([
+      { type: "core.abandon", payload: { reason: uiEn["externalPlay.resolve.abandonReason.none"], noResult: true } },
     ]);
     // The panel reads it back as No result.
     await page.goto(`${r.arbiterPath}?fixture=${b1.fixtureId}`);
