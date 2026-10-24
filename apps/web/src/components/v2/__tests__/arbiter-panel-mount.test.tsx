@@ -310,6 +310,59 @@ describe("on.extendBoard selects the board, then extends it (through a waiting r
     ui.batch(() => screenProps(ui).on.extendBoard("f4"));
     expect(net.calls, "still one request").toHaveLength(1);
     expect(screenProps(ui).decision.busy).toEqual({ kind: "extend", boardId: "f6" });
+    expect(screenProps(ui).decision.boardId, "and the pane did not move to the board that was refused").toBe("f6");
+  });
+
+  // Review I1: the reducer's `select` ignores `busy`, so a second row's +5 used to MOVE the pane to its board while the runner refused
+  // the extend; the first request's answer then found a deselected board and cleared the busy flag in silence - the answer was lost.
+  it("a second row's +5 while the first is out changes nothing: the pane stays, nothing is sent, and the first answer still lands", async () => {
+    const ui = mountPanel();
+    ui.batch(() => rowExtend(ui, "f6")());
+    expect(screenProps(ui).decision, "premise: f6 selected and extending").toMatchObject({ boardId: "f6", busy: { kind: "extend", boardId: "f6" } });
+    const before = screenProps(ui).decision;
+
+    ui.batch(() => rowExtend(ui, "f4")()); // the SECOND row's press, through its own bound handler
+    expect(screenProps(ui).decision, "the whole decision state is untouched").toBe(before);
+    expect(screenProps(ui).decision.boardId, "the selected board is unchanged").toBe("f6");
+    expect(net.calls.map((c) => c.url), "no second request").toEqual([extendBoardPath("f6")]);
+
+    net.calls[0]!.resolve({ fixtureId: "f6", extensions: 1, extensionsLeft: 2, addedMinutes: 5, deadlineAt: WINDOW.deadlineAt });
+    await flush();
+    const after = screenProps(ui).decision;
+    expect(after.busy, "the request is answered").toBeNull();
+    expect(after.boardId, "still on f6").toBe("f6");
+    expect(after.notice, "its answer is shown, not dropped").toMatchObject({ boardId: "f6", kind: "extended", boardNo: 6 });
+    const page = markup(ui);
+    const from = page.indexOf('data-testid="arbiter-decision-group"');
+    expect(text(page.slice(from, page.indexOf("<aside", from))), "in the decision area").toContain(
+      EN["externalPlay.checkinExtend.notice.board"]!.replace("{minutes}", "5").replace("{n}", "6").replace("{time}", new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(WINDOW.deadlineAt))),
+    );
+  });
+
+  it("every row's +5 is disabled while a request is in flight, and enabled when none is (the panel's own +5 rule)", () => {
+    const ui = mountPanel();
+    const rows = (u: Ui) => buttonTags(markup(u), "arbiter-waiting-extend");
+    const idle = rows(ui);
+    expect(idle.length, "anti-vacuity: at least two rows offer +5").toBeGreaterThanOrEqual(2);
+    expect(idle.filter(disabled), "idle: none disabled").toEqual([]);
+    ui.batch(() => rowExtend(ui, "f6")());
+    const busy = rows(ui);
+    expect(busy.length, "the same rows are still offered").toBe(idle.length);
+    expect(busy.filter(disabled).length, "busy: every one disabled").toBe(busy.length);
+  });
+
+  it("a round-wide +5 in flight blocks a row's +5 as well: disabled, and a press does not move the pane or send", () => {
+    const ui = mountPanel();
+    ui.batch(() => screenProps(ui).on.extendRound());
+    expect(screenProps(ui).roundExtend.busy, "premise: the round's +5 is out").toBe(true);
+    expect(net.calls, "premise: one request").toHaveLength(1);
+    const tags = buttonTags(markup(ui), "arbiter-waiting-extend");
+    expect(tags.length, "anti-vacuity: rows offer +5").toBeGreaterThanOrEqual(2);
+    expect(tags.filter(disabled).length, "all disabled").toBe(tags.length);
+    ui.batch(() => rowExtend(ui, "f6")());
+    expect(screenProps(ui).decision.boardId, "the pane did not move").toBe("f1");
+    expect(screenProps(ui).decision.busy).toBeNull();
+    expect(net.calls, "still only the round's request").toHaveLength(1);
   });
 });
 

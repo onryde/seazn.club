@@ -132,7 +132,8 @@ export type ArbiterScreenProps = {
   on: {
     /** Any board of the round: a live one, a finished one, one on hold (the queue's "Review board N" offers all three). */
     select(fixtureId: string): void;
-    /** A waiting row's "+5 min": select the board (so its answer lands in the decision area), then extend it. */
+    /** A waiting row's "+5 min": select the board (so its answer lands in the decision area), then extend it. Does nothing at all while a
+     *  request is in flight (the row's button is disabled then, too). */
     extendBoard(fixtureId: string): void;
     resync(): void;
     /** "Let the game go on" for the flags on screen, by id (ruling A). */
@@ -235,8 +236,6 @@ export function ArbiterScreen(p: ArbiterScreenProps) {
   const ids = { flags: useId(), decide: useId(), outage: useId(), board: useId(), boards: useId(), switch: useId() };
   const roundLine = p.round ? f.t("arbiter.roundLine", { stage: p.round.stageName, round: p.round.roundNo }) : null;
   const board = p.round?.boards.find((b) => b.fixtureId === p.decision.boardId) ?? null;
-  // I3: the board on screen is not in a round that has boards. The one path with a round and no column.
-  const i3 = p.requested === null && p.round !== null && p.round.boards.length > 0 && board === null;
   // C13: the round's "+5 min" bar. Built once per path, never twice: with no round there is none.
   const roundBar = (variant: RoundBarVariant) =>
     p.round === null ? null : (
@@ -283,9 +282,8 @@ export function ArbiterScreen(p: ArbiterScreenProps) {
 
       {p.requested === null && p.round !== null && <RoundNotes round={p.round} slugs={p.slugs} f={f} />}
       {/* C13: exactly ONE round bar per page, placed by path. Check-in: the hero's. Playing, and the no-boards path: the status block's.
-          Both are handed to the column below. Only the I3 path has no column, so only there does the bar keep the top of the page. */}
-      {i3 && roundBar("bar")}
-
+          Both are handed to the column below. Only the I3 branch of the chain below has no column, so only there does the bar keep the
+          top of the page. */}
       {p.requested !== null ? (
         <RequestedNotice body={f.t(p.requested === "own" ? "arbiter.requested.own" : "arbiter.requested.unavailable")} slugs={p.slugs} f={f} />
       ) : p.round === null ? (
@@ -303,8 +301,11 @@ export function ArbiterScreen(p: ArbiterScreenProps) {
         </EmptyNotice>
       ) : board === null ? (
         // I3: the board asked for (or on screen) is not in this round — said
-        // so, never another board opened in its place.
-        <RequestedNotice body={f.t("arbiter.requested.unavailable")} slugs={p.slugs} f={f} />
+        // so, never another board opened in its place. The one path with a round and no column, so the round's bar stays on top.
+        <>
+          {roundBar("bar")}
+          <RequestedNotice body={f.t("arbiter.requested.unavailable")} slugs={p.slugs} f={f} />
+        </>
       ) : (
         <main className="mx-auto flex w-full min-w-0 max-w-[1232px] flex-col gap-3 px-4 pt-3 pb-6 md:grid md:grid-cols-[minmax(0,1fr)_320px] md:grid-rows-[auto_1fr] md:items-start md:gap-4 lg:grid-cols-[248px_minmax(0,1fr)_320px] lg:grid-rows-[auto_1fr] lg:gap-6 lg:p-6">
           <nav aria-labelledby={ids.boards} className="hidden min-w-0 flex-col gap-1.5 lg:col-start-1 lg:row-start-1 lg:row-span-2 lg:flex">
@@ -384,6 +385,7 @@ export function ArbiterScreen(p: ArbiterScreenProps) {
               view={viewOfRound(p.column.views, p.round)}
               openRound={p.openRound}
               nowMs={p.nowMs}
+              requestBusy={p.decision.busy !== null || p.roundExtend.busy}
               on={{ select: p.on.select, extendBoard: p.on.extendBoard }}
             />
           </div>
@@ -486,10 +488,6 @@ function RoundNotes({ round, slugs, f }: { round: ArbiterRound; slugs: ArbiterSc
   );
 }
 
-/** Spec §3.2.2: "+5 min to the round" at the top of the panel - one press gives every board of the round whose check-in is open
- *  five more minutes, and the answer says how many and why the rest were left alone. Offered while at least one board would
- *  accept it - the server's own reading of each board (`checkin.refusal`), re-asked of the TICKING clock (owner, 2026-10-19: +5 only
- *  inside the check-in window, to the millisecond) - and, once pressed, for as long as its answer is on screen. */
 /** Where the bar is drawn. `bar` is the top of the page (the I3 path, the one with no column to hold it); `inline` is a block inside the
  *  column (the check-in hero, the playing status), whose own card already pads and bounds it. */
 type RoundBarVariant = "bar" | "inline";
@@ -499,6 +497,10 @@ const ROUND_BAR_BOX: Record<RoundBarVariant, string> = {
 };
 const ROUND_BAR_BUTTON: Record<RoundBarVariant, string> = { bar: "w-full lg:w-auto", inline: "w-full sm:w-auto" };
 
+/** Spec §3.2.2: "+5 min to the round" at the top of the panel - one press gives every board of the round whose check-in is open
+ *  five more minutes, and the answer says how many and why the rest were left alone. Offered while at least one board would
+ *  accept it - the server's own reading of each board (`checkin.refusal`), re-asked of the TICKING clock (owner, 2026-10-19: +5 only
+ *  inside the check-in window, to the millisecond) - and, once pressed, for as long as its answer is on screen. */
 function RoundExtend({
   variant,
   round,
@@ -1194,10 +1196,15 @@ export function ArbiterPanel({
       on={{
         select,
         // A waiting row's "+5 min": the board becomes the one on screen (its answer lands in the decision area, which is about the
-        // board on screen), then the extend goes. An id not in this round does nothing at all.
+        // board on screen), then the extend goes. An id not in this round, or any request in flight, does nothing at all.
         extendBoard: (fixtureId) => {
           const target = round?.boards.find((b) => b.fixtureId === fixtureId);
           if (!target) return;
+          // One request at a time, and the pane stays put: `select` ignores `busy`, so moving to this board while another request is out
+          // would leave that request's answer on a deselected board, where the reducer clears the busy flag and shows nothing. The same
+          // rule as the panel's own +5 (disabled while a decision or the round's +5 is in flight), and the row's button says so too.
+          if (decision.busy !== null) return;
+          if (roundExtend.busy) return;
           select(fixtureId);
           void runner.extend(target.fixtureId, target.boardNo);
         },

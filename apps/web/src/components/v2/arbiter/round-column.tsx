@@ -551,6 +551,10 @@ export type WaitingListProps = {
   view: OpenRoundView | null;
   openRound: OpenRoundHandle;
   nowMs: number | null;
+  /** A decision or round-wide "+5 min" request is in flight on the panel: every row's +5 waits, as the panel's own +5 does. A row's
+   *  press moves the pane to its board, and the panel's reducer refuses a second request - a press that moved the pane and then was
+   *  refused would strand the first request's answer on a deselected board. (Resend has its own gate: the handle's.) */
+  requestBusy: boolean;
   on: { select(fixtureId: string): void; extendBoard(fixtureId: string): void };
 };
 
@@ -573,7 +577,7 @@ const CHIP = "inline-flex items-center rounded-full border px-2.5 py-[3px] text-
  *  in board order - the same boards the tally counts, so its denominator and this list never disagree. A board whose `seats` is null
  *  is listed with both seats "Not here yet" and no chip (the tally counts it as two seats, none here). Empty: no list at all, and
  *  no help line (with no row there is nothing to explain). */
-export function WaitingList({ boards, view, openRound, nowMs, on }: WaitingListProps) {
+export function WaitingList({ boards, view, openRound, nowMs, requestBusy, on }: WaitingListProps) {
   const msg = useMsg();
   const plural = useMsgPlural();
   const { state } = openRound;
@@ -585,7 +589,8 @@ export function WaitingList({ boards, view, openRound, nowMs, on }: WaitingListP
   return (
     // The panel's board group is `contents` below md, so on a phone this is a flex item of the page: -1 puts it straight after the column
     // (the aside is -2). From md the group is a flex column whose children carry order-1..4 (heading, camera, other reports): `order-3`
-    // is "under the camera" and above the other reports. 0 would sort it above the picker, which is why it is not left unsaid.
+    // is "under the camera" and above the other reports. `md:order-none` (0) would tie with the picker and the watch-only line and sort by
+    // DOM order, landing above the heading (order-1) and the camera (order-2) - not under the camera.
     <section aria-labelledby="arbiter-waiting-heading" data-testid="arbiter-waiting" className={`flex flex-col gap-2 max-md:order-[-1] md:order-3 ${CARD_BOX}`}>
       <h2 id="arbiter-waiting-heading" data-testid="arbiter-waiting-heading" className={`m-0 min-w-0 text-base font-semibold break-words ${INK}`}>
         {plural("arbiter.column.waiting", rows.length)}
@@ -660,6 +665,7 @@ export function WaitingList({ boards, view, openRound, nowMs, on }: WaitingListP
                       type="button"
                       data-testid="arbiter-waiting-extend"
                       data-fixture-id={b.fixtureId}
+                      disabled={requestBusy}
                       onClick={() => on.extendBoard(b.fixtureId)}
                       className={`${BUTTON_QUIET} w-full sm:w-auto`}
                     >

@@ -2170,8 +2170,9 @@ describe("placement classes (C10): the groups, in the DOM order and with the cla
     const kids = childrenOf(board.inner);
     const waiting = kids.find((c) => testidOf(c) === "arbiter-waiting")!;
     expect(missing(waiting.open, ["max-md:order-[-1]"])).toEqual([]);
-    // From md the group is a flex column, so `order` is a sort key: 0 would put the list ABOVE the picker. The camera group is order-2 and
-    // the other reports order-4; the list sits between, so it is "under the camera" and the rest keep their places.
+    // From md the group is a flex column, so `order` is a sort key: `md:order-none` (0) would tie with the picker and the watch-only line
+    // and sort by DOM order, landing above the heading (order-1) and the camera (order-2). The camera group is order-2 and the other
+    // reports order-4; the list sits between, so it is "under the camera" and the rest keep their places.
     const mdOrder = (n: Node) => {
       const t = [...tokensOf(n.open)];
       const hit = t.find((x) => /^md:order-\d+$/.test(x)) ?? t.find((x) => /^order-\d+$/.test(x));
@@ -2234,9 +2235,11 @@ describe("placement classes (C10): the groups, in the DOM order and with the cla
 describe("the empty copy no longer sends the organiser to the run sheet (spec §9)", () => {
   // The words the OLD copy used for the run sheet, per locale: they are the regression witnesses.
   const OLD_RUN_SHEET = { en: "run sheet", es: "hoja de ronda", fr: "feuille de ronde", nl: "rondeschema" } as const;
+  // The round column has no visible label (its accessible name is "This round"), so the copy must not send the organiser to "the round
+  // column": it says what to do ("once you open a round") and the press is right there beside it.
   const COLUMN_WORD = { en: "column", es: "columna", fr: "colonne", nl: "kolom" } as const;
 
-  it("the rendered body is the dictionary's new body, and points at the round column, in every locale", () => {
+  it("the rendered body is the dictionary's new body, and names neither the run sheet nor a column, in every locale", () => {
     let checked = 0;
     for (const locale of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
       const d = LOCALES[locale] as Record<string, string>;
@@ -2244,7 +2247,7 @@ describe("the empty copy no longer sends the organiser to the run sheet (spec §
       const body = /<p class="m-0 max-w-prose[^"]*">([^<]*)<\/p>/.exec(h)?.[1];
       expect(decode(body ?? ""), `${locale}: the empty notice's body`).toBe(d["arbiter.empty.body"]);
       expect(d["arbiter.empty.body"]!.toLowerCase(), `${locale}: no run sheet`).not.toContain(OLD_RUN_SHEET[locale]);
-      expect(d["arbiter.empty.body"]!.toLowerCase(), `${locale}: names the column`).toContain(COLUMN_WORD[locale]);
+      expect(d["arbiter.empty.body"]!.toLowerCase(), `${locale}: no column to look for`).not.toContain(COLUMN_WORD[locale]);
       checked += 1;
     }
     expect(checked, "anti-vacuity: four locales").toBe(4);

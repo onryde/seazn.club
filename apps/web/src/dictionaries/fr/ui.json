@@ -6426,7 +6426,7 @@
   "arbiter.outage.body": "Les joueurs ne peuvent pas prendre place tant qu'une caméra est exigée. Vous pouvez laisser cet échiquier démarrer sans vidéo. C'est inscrit au journal d'audit.",
   "arbiter.outage.cta": "Laisser cet échiquier se jouer sans vidéo",
   "arbiter.empty.title": "Aucune ronde n'est encore ouverte",
-  "arbiter.empty.body": "Les échiquiers apparaissent ici dès que vous ouvrez une ronde depuis la colonne de la ronde. Les signalements sont enregistrés, que quelqu'un observe ou non.",
+  "arbiter.empty.body": "Les échiquiers apparaissent ici dès que vous ouvrez une ronde. Les signalements sont enregistrés, que quelqu'un observe ou non.",
   "arbiter.emptyBoards": "Cette ronde n'a aucun échiquier à observer.",
   "arbiter.entry.link": "Panneau d'arbitre",
   "arbiter.entry.body": "Regardez la caméra d'un joueur à la fois et examinez les signalements de chaque échiquier.",

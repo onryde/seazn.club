@@ -1068,6 +1068,7 @@ const WL = (o: Partial<WaitingListProps> = {}): WaitingListProps => ({
   view: null,
   openRound: sharedHandle().handle,
   nowMs: NOW,
+  requestBusy: false,
   on: { select: () => {}, extendBoard: () => {} },
   ...o,
 });
@@ -1333,6 +1334,29 @@ describe("WaitingList: the row's +5 follows the live clock (C14)", () => {
     const capped = checking(win(-10 * MIN, 8 * MIN, { canExtend: false, refusal: "cap_reached", extensionsLeft: 0 }), seat(true), seat(false));
     expect(extendTags(wl({ boards: [offered], nowMs: null }))).toHaveLength(1);
     expect(extendTags(wl({ boards: [capped], nowMs: null }))).toHaveLength(0);
+  });
+});
+
+describe("WaitingList: the row's +5 waits for the request in flight (Task 8 review, I1)", () => {
+  const rowTags = (h: string, id: string) => [...h.matchAll(new RegExp(`<button\\b[^>]*data-testid="${id}"[^>]*>`, "g"))].map((m) => m[0]);
+  const two = () => [checking(OPEN(), seat(false, ["sent"]), seat(true)), checking(OPEN(), seat(false, ["delivered"]), seat(true))];
+
+  it("requestBusy disables EVERY row's +5 (anchored on the attribute), and idle leaves them all enabled", () => {
+    const boards = two();
+    const busy = rowTags(wl({ boards, requestBusy: true }), "arbiter-waiting-extend");
+    const idle = rowTags(wl({ boards, requestBusy: false }), "arbiter-waiting-extend");
+    expect(busy, "anti-vacuity: a +5 on both rows").toHaveLength(2);
+    expect(idle, "anti-vacuity: a +5 on both rows").toHaveLength(2);
+    for (const tag of busy) expect(tag, "busy: disabled").toContain('disabled=""');
+    for (const tag of idle) expect(tag, "idle: not disabled").not.toContain('disabled=""');
+  });
+
+  it("it gates the +5 only: a Resend is the open-round handle's to disable, not the request flag's", () => {
+    const boards = two();
+    const view = VIEW({ state: "open", press: "reinvite", pairings: boards.map((b) => P(b.boardNo, { fixtureId: b.fixtureId, canResend: true })) });
+    const resends = rowTags(wl({ boards, view, requestBusy: true }), "arbiter-waiting-resend");
+    expect(resends, "anti-vacuity: a Resend on both rows").toHaveLength(2);
+    for (const tag of resends) expect(tag, "an idle handle keeps Resend enabled").not.toContain('disabled=""');
   });
 });
 
