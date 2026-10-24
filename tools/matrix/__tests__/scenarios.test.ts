@@ -324,7 +324,8 @@ describe("shared assertions — empty case first, then each way to go red", () =
     const table = read("apps/web/src/lib/rule-errors.ts");
     // 1. The PATCH door throws the FIRST refusal's own code, with that code's table status (so the answer is whatever
     //    rule-locks.ts emitted, not a literal in divisions.ts).
-    const door = /throw new HttpError\(\s*RULE_ERROR_STATUS\[(\w+)\.code\],[^;]*?\b\1\.code,\s*\{\s*refused\s*\}/.exec(divisions);
+    //    Final review M2: the details may add `match_edits` beside `refused` (`cond ? { refused } : { refused, ... }`).
+    const door = /throw new HttpError\(\s*RULE_ERROR_STATUS\[(\w+)\.code\],[^;]*?\b\1\.code,[^;]*?\{\s*refused\s*[,}]/.exec(divisions);
     expect(door, "divisions.ts no longer throws the first refusal's own code with its RULE_ERROR_STATUS").not.toBeNull();
     // 2. The code rule-locks.ts emits for a key that is NOT a table rule: the false arm of `table ? TABLE : FORMAT`.
     const picks = [...locks.matchAll(/code:\s*table\s*\?\s*"(\w+)"\s*:\s*"(\w+)"/g)];
