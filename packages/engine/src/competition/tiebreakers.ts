@@ -25,6 +25,7 @@ import {
   resultsAmong,
   type FixtureResult,
   type StandingsRow,
+  type TieBreakNote,
 } from "./standings.ts";
 
 export type Color = "W" | "B";
@@ -204,9 +205,18 @@ export interface RankContext {
   // Decided fixtures of the pool being ranked — the source for head-to-head
   // and direct-encounter mini-tables (spec 05 §4.2). Empty ⇒ no h2h data.
   results?: readonly FixtureResult[];
-  // UEFA recursive h2h re-application (true) vs FIFA fall-through (false),
-  // spec 05 §4.2 step 3.
-  h2hRecursive?: boolean;
+  // W2d (spec §5.6, B2): which wins the `wins` key (and `h2h_wins`) counts.
+  // "regulation" — FIH "matches won" — leaves out a win in overtime (the
+  // `won_ot` display metric). A shoot-out after a draw is already a draw in the
+  // W column, so it is never subtracted. Absent ⇒ "all".
+  winsCount?: "all" | "regulation";
+  // W2d (spec §5.6, B5, FIDE C.07): the GAME points of a result, [home, away],
+  // in half-points (1/½/0 → 2/1/0). `sberger` and `direct` on a non-Swiss
+  // stage read these instead of the table points, so a 3/1/0 round robin still
+  // scores SB and direct encounter on game points. Absent ⇒ the table points.
+  // (UEFA re-application, formerly `h2hRecursive`, is now the cascade's own
+  // `h2h_reapply` modifier.)
+  gamePoints?: (result: FixtureResult) => readonly [number, number];
   // Assembled Swiss ledger for buchholz/sberger/direct (spec 05 §4.1); the
   // boardgame cascade needs it, most sports do not.
   swiss?: SwissTable;
@@ -282,8 +292,11 @@ export function ledgerOf(row: StandingsRow, keys: readonly string[]): number {
 // simply does not apply to this pair" is not an available answer. Two rows that
 // BOTH record the metric compare exactly as they did before.
 function compareMetric(a: StandingsRow, b: StandingsRow, keys: readonly string[]): number {
-  const va = metricOf(a, keys);
-  const vb = metricOf(b, keys);
+  return compareRecorded(metricOf(a, keys), metricOf(b, keys));
+}
+
+// The same "absent sorts last" order on two already-read values.
+function compareRecorded(va: number | undefined, vb: number | undefined): number {
   if (va === undefined || vb === undefined) {
     return va === vb ? 0 : va === undefined ? -1 : 1;
   }
@@ -321,17 +334,64 @@ function nrrFraction(row: StandingsRow): { n: number; d: number } {
 // ratio column, the breakdown popover and the qualification what-if also read,
 // so the cascade cannot rank on a pair the table does not print (final review
 // M2: these four were literal copies before).
-function ratioComparator(key: RatioKey): Comparator {
+function ratioComparator(key: RatioKey): RunComparator {
   const [won, lost] = RATIO_LEDGERS[key];
   return (a, b) => compareRatio(ledgerOf(a, [won]), ledgerOf(a, [lost]), ledgerOf(b, [won]), ledgerOf(b, [lost]));
 }
 
-// spec 05 §4.1 — one comparator per non-structural TiebreakerKey. h2h_* /
-// direct / lots are handled by the refinement driver (they need the tie-group
-// context, not a pairwise value).
-const COMPARATORS: Partial<Record<TiebreakerKey, Comparator>> = {
+// W2d (spec §5.6) — `set_diff` / `point_diff`: won − lost over the SAME
+// RATIO_LEDGERS pair the ratio of that ledger reads (BWF 16.2.3 "games
+// difference", 16.2.4 "points difference"), greater first. A row recording
+// neither half has no difference at all and sorts last, as `diff` does (#429);
+// one recorded half reads the other as 0, as the ratio does.
+function differenceComparator(key: "set_ratio" | "point_ratio"): RunComparator {
+  const [won, lost] = RATIO_LEDGERS[key];
+  const difference = (row: StandingsRow): number | undefined => {
+    const w = metricOf(row, [won]);
+    const l = metricOf(row, [lost]);
+    return w === undefined && l === undefined ? undefined : (w ?? 0) - (l ?? 0);
+  };
+  return (a, b) => compareRecorded(difference(a), difference(b));
+}
+
+// `wins` (W2d B2): the W column, less the overtime wins under winsCount
+// "regulation" (FIH). A draw-plus-bonus shoot-out is a draw in the W column
+// already, so `won_so` is never subtracted.
+function winsOf(row: StandingsRow, ctx: RankContext): number {
+  return ctx.winsCount === "regulation" ? row.won - ledgerOf(row, ["won_ot"]) : row.won;
+}
+
+// `field_goals` (W2d B3, FIH GTR App. 3): every goal not scored from a penalty
+// corner or a penalty stroke. An own goal is in `gf` (credited to the side it
+// benefits) and in no `goals_<kind>` ledger, so it counts. Missing reads 0.
+function fieldGoals(row: StandingsRow): number {
+  return ledgerOf(row, ["gf"]) - ledgerOf(row, ["goals_pc"]) - ledgerOf(row, ["goals_stroke"]);
+}
+
+// The keys the refinement driver handles itself, because they need the tied
+// class (a mini-table, the class size, the stored draw) rather than a pairwise
+// value. Every OTHER key has a comparator: COMPARATORS is a full Record over
+// PlainKey, so a new TiebreakerKey cannot compile without one (anti-goal 2).
+type BlockKey = "h2h_points" | "h2h_diff" | "h2h_for" | "h2h_wins" | "h2h_set_ratio" | "h2h_point_ratio";
+type Modifier = "h2h_reapply" | "h2h_exclusion";
+type StructuralKey = BlockKey | Modifier | "h2h_two" | "direct" | "lots";
+type PlainKey = Exclude<TiebreakerKey, StructuralKey>;
+
+// What the driver threads through every step of one rank call.
+interface RunContext extends RankContext {
+  // `sberger` outside Swiss (B5): the pool's results as a Swiss ledger scored
+  // in game points. Built once per call, and only when the cascade has sberger.
+  readonly poolLedger: SwissTable | undefined;
+  // Why a conditional step left a class unsplit (anti-goal 2), by entrant.
+  // A later split clears it (markTieBreak); a residual tie keeps it.
+  readonly notes: Map<EntrantId, TieBreakNote>;
+}
+type RunComparator = (a: StandingsRow, b: StandingsRow, run: RunContext) => number;
+
+// spec 05 §4.1 — one comparator per non-structural TiebreakerKey.
+const COMPARATORS: Readonly<Record<PlainKey, RunComparator>> = {
   points: (a, b) => sgn(a.points - b.points),
-  wins: (a, b) => sgn(a.won - b.won),
+  wins: (a, b, run) => sgn(winsOf(a, run) - winsOf(b, run)),
   diff: (a, b) => compareMetric(a, b, DIFF_KEYS),
   for: (a, b) => compareMetric(a, b, FOR_KEYS),
   fair_play: (a, b) => compareMetric(a, b, FAIR_PLAY_KEYS),
@@ -354,38 +414,59 @@ const COMPARATORS: Partial<Record<TiebreakerKey, Comparator>> = {
     ctx.swiss
       ? sgn(buchholzCut1(ctx.swiss, a.entrantId) - buchholzCut1(ctx.swiss, b.entrantId))
       : 0,
-  sberger: (a, b, ctx) =>
-    ctx.swiss
-      ? sgn(sonnebornBerger(ctx.swiss, a.entrantId) - sonnebornBerger(ctx.swiss, b.entrantId))
-      : 0,
+  // The Swiss ledger, else (W2d §5.6, B5) the pool ledger in game points.
+  sberger: (a, b, run) => {
+    const table = run.swiss ?? run.poolLedger;
+    return table ? sgn(sonnebornBerger(table, a.entrantId) - sonnebornBerger(table, b.entrantId)) : 0;
+  },
   seed: (a, b, ctx) => {
     const sa = ctx.seeds?.get(a.entrantId) ?? Number.MAX_SAFE_INTEGER;
     const sb = ctx.seeds?.get(b.entrantId) ?? Number.MAX_SAFE_INTEGER;
     return sgn(sb - sa); // lower seed number ranks above
   },
+  // W2d (spec §5.6).
+  set_diff: differenceComparator("set_ratio"),
+  point_diff: differenceComparator("point_ratio"),
+  // ATP 4.01 C.3-2: more matches played ranks higher ("a 2-1 record beats 2-0").
+  matches_played: (a, b) => sgn(a.played - b.played),
+  field_goals: (a, b) => sgn(fieldGoals(a) - fieldGoals(b)),
 };
 
-const H2H_KEYS = new Set<TiebreakerKey>(["h2h_points", "h2h_diff", "h2h_for"]);
+// Inside an h2h block each key is its plain twin applied to the mini-table:
+// "h2h GD" is simply GD computed among the tied set (W2d adds wins, set ratio
+// and point ratio — FIH's mini-league, ITTF 3.7.5.2).
+const H2H_PLAIN: Readonly<Record<BlockKey, PlainKey>> = {
+  h2h_points: "points",
+  h2h_diff: "diff",
+  h2h_for: "for",
+  h2h_wins: "wins",
+  h2h_set_ratio: "set_ratio",
+  h2h_point_ratio: "point_ratio",
+};
+const H2H_KEYS: ReadonlySet<string> = new Set(Object.keys(H2H_PLAIN));
+const MODIFIERS: ReadonlySet<string> = new Set<Modifier>(["h2h_reapply", "h2h_exclusion"]);
 
-function isH2HKey(key: TiebreakerKey): boolean {
-  return H2H_KEYS.has(key);
+function isH2HKey(key: string | undefined): key is BlockKey {
+  return key !== undefined && H2H_KEYS.has(key);
 }
 
-// Inside an h2h mini-table, "h2h GD" simply means "GD computed among the tied
-// set" — so the block keys map to their plain equivalents applied to mini rows.
-function h2hToPlain(key: TiebreakerKey): TiebreakerKey {
-  return key === "h2h_points" ? "points" : key === "h2h_diff" ? "diff" : "for";
+function isModifier(key: string | undefined): key is Modifier {
+  return key !== undefined && MODIFIERS.has(key);
+}
+
+function h2hToPlain(key: BlockKey): PlainKey {
+  return H2H_PLAIN[key];
 }
 
 // Sort a tied class by a comparator (best first) and split into equal-neighbour
 // sub-classes. Sound because every comparator here is a total preorder.
-function groupBySort(cls: StandingsRow[], cmp: Comparator, ctx: RankContext): StandingsRow[][] {
-  const sorted = [...cls].sort((a, b) => -sgn(cmp(a, b, ctx)));
+function groupBySort(cls: StandingsRow[], cmp: RunComparator, run: RunContext): StandingsRow[][] {
+  const sorted = [...cls].sort((a, b) => -sgn(cmp(a, b, run)));
   const groups: StandingsRow[][] = [];
   let current: StandingsRow[] = [];
   for (const row of sorted) {
     const prev = current[current.length - 1];
-    if (prev !== undefined && sgn(cmp(prev, row, ctx)) !== 0) {
+    if (prev !== undefined && sgn(cmp(prev, row, run)) !== 0) {
       groups.push(current);
       current = [];
     }
@@ -397,149 +478,250 @@ function groupBySort(cls: StandingsRow[], cmp: Comparator, ctx: RankContext): St
 
 // Record on every row of a just-split tie group which cascade rule separated
 // it (doc 09 §2 tie-explanation popover). Later, finer splits overwrite — the
-// snapshot keeps the finest rule that applied to each row.
-function markTieBreak(cls: readonly StandingsRow[], key: string): void {
+// snapshot keeps the finest rule that applied to each row. A split answers any
+// earlier "could not split" note, so the note goes.
+function markTieBreak(cls: readonly StandingsRow[], key: string, run: RunContext): void {
   const ids = cls.map((row) => row.entrantId);
   for (const row of cls) {
     row.tieBreak = { key, with: ids.filter((id) => id !== row.entrantId) };
+    run.notes.delete(row.entrantId);
   }
 }
 
-// spec 05 §4.2 — head-to-head partition refinement over a maximal run of h2h_*
-// keys. (1) build a mini-table from fixtures among the tied set; (2) refine it
-// by the block's plain equivalents; (3) UEFA only: re-run the block on any
-// partially-split sub-tie (rebuilding the mini-table among just those
-// entrants). FIFA 2026 (h2hRecursive=false) applies the block once, then the
-// outer cascade falls through to overall criteria.
+// A residual tie (lots / seed): the same trace, plus the note of a conditional
+// step that could not split it (anti-goal 2: the popover says why).
+function markResidual(cls: readonly StandingsRow[], key: "lots" | "seed", run: RunContext): void {
+  const ids = cls.map((row) => row.entrantId);
+  for (const row of cls) {
+    const note = run.notes.get(row.entrantId);
+    row.tieBreak = { key, with: ids.filter((id) => id !== row.entrantId), ...(note === undefined ? {} : { note }) };
+  }
+}
+
+// The cascade, parsed once per rank call. `index` is the key's position: the
+// first key is the primary order, so a split there is not a tie to explain.
+type Step =
+  | { kind: "plain"; index: number; key: PlainKey; cmp: RunComparator }
+  | { kind: "block"; index: number; keys: readonly BlockKey[]; modifier: Modifier | null }
+  | { kind: "h2h_two" | "direct" | "lots"; index: number };
+
+// Anti-goal 2 (W2d spec §2.3, §5.5 read side): a key nothing handles THROWS.
+// Before W2d it was silently skipped (a preset name stored where a key belongs
+// ranked as if the step were absent). Parsed up front, so the refusal does not
+// depend on whether this table happens to reach the key. A modifier must
+// directly follow an h2h block, at most one per block (§5.5 rule 5).
+function parseCascade(cascade: readonly TiebreakerKey[]): Step[] {
+  const steps: Step[] = [];
+  for (let i = 0; i < cascade.length; i++) {
+    const key = cascade[i] as TiebreakerKey;
+    if (isH2HKey(key)) {
+      const index = i;
+      const keys: BlockKey[] = [key];
+      while (isH2HKey(cascade[i + 1])) {
+        i++;
+        keys.push(cascade[i] as BlockKey);
+      }
+      const next = cascade[i + 1];
+      const modifier = isModifier(next) ? next : null;
+      if (modifier !== null) i++;
+      steps.push({ kind: "block", index, keys, modifier });
+      continue;
+    }
+    if (isModifier(key)) throw refusal(key, i, "must directly follow a head-to-head block, at most one per block");
+    if (key === "h2h_two" || key === "direct" || key === "lots") {
+      steps.push({ kind: key, index: i });
+      continue;
+    }
+    // `key` is typed PlainKey by now, but a stored cascade is data: own-property
+    // lookup, so neither an unknown key nor "toString" finds a comparator.
+    const cmp = Object.hasOwn(COMPARATORS, key) ? COMPARATORS[key] : undefined;
+    if (cmp === undefined) throw refusal(key, i, "has no comparator");
+    steps.push({ kind: "plain", index: i, key, cmp });
+  }
+  return steps;
+}
+
+function refusal(key: string, index: number, why: string): EngineError {
+  return new EngineError("CONFIG_INVALID", `tie-break key "${key}" at position ${index + 1} ${why}`, { key, index });
+}
+
+// spec 05 §4.2, W2d §5.6 — head-to-head partition refinement over a maximal
+// run of h2h_* keys (the block), with its optional modifier:
+//   none (FIFA)             one pass; residual groups fall through.
+//   h2h_reapply             after the WHOLE block, re-run it on each sub-group
+//     (UEFA 20.01(d), IIHF) it left smaller than the group it started with, on
+//                           matches among that sub-group only, until no group
+//                           shrinks.
+//   h2h_exclusion           as soon as ANY key splits the group, each resulting
+//     (ITTF 3.7.5.3)        sub-group restarts the block from its FIRST key, on
+//                           matches among its own members only.
+// Every restart is on a strictly smaller set and siblings are disjoint, so the
+// sets visited form a laminar family: at most n − 1 mini-tables per class.
 function h2hBlock(
   cls: StandingsRow[],
-  block: readonly TiebreakerKey[],
-  ctx: RankContext,
+  keys: readonly BlockKey[],
+  modifier: Modifier | null,
+  run: RunContext,
 ): StandingsRow[][] {
   // Jul3/05 §5 circular-H2H mode: an organiser may prefer overall metrics in
   // a ≥3-way tie — skip the mini-table and let later cascade keys decide.
-  if (ctx.h2hScope === "overall" && cls.length >= 3) return [cls];
-  const ids = new Set(cls.map((row) => row.entrantId));
-  const among = resultsAmong(ids, ctx.results ?? []);
-  const miniRows = foldResults(
-    cls.map((row) => row.entrantId),
-    among,
-  );
-  const byId = new Map(cls.map((row) => [row.entrantId, row]));
-
-  // Refine the mini-table one block key at a time so each split can be
-  // attributed to the h2h key that caused it (tie-explanation trace).
-  let miniClasses: StandingsRow[][] = [miniRows];
-  for (const key of block) {
-    const cmp = COMPARATORS[h2hToPlain(key)];
-    // h2hToPlain maps onto points/diff/for, all registered — defensive only.
-    /* v8 ignore next */
-    if (cmp === undefined) continue;
-    miniClasses = miniClasses.flatMap((mini) => {
-      if (mini.length <= 1) return [mini];
-      const groups = groupBySort(mini, cmp, ctx);
-      if (groups.length > 1) {
-        markTieBreak(
-          mini.map((row) => byId.get(row.entrantId) as StandingsRow),
-          key,
-        );
-      }
-      return groups;
-    });
-    if (miniClasses.every((mini) => mini.length === 1)) break;
-  }
-
-  const ordered = miniClasses.map((mini) =>
-    mini.map((row) => byId.get(row.entrantId) as StandingsRow),
-  );
-
-  if (ctx.h2hRecursive !== true) return ordered;
+  if (run.h2hScope === "overall" && cls.length >= 3) return [cls];
+  if (modifier === "h2h_exclusion") return h2hExclusion(cls, keys, run);
+  const ordered = h2hPass(cls, keys, run);
+  if (modifier !== "h2h_reapply") return ordered;
   return ordered.flatMap((sub) =>
     // Recurse only when the block *partially* split the group; a sub-tie the
     // same size as the input made no progress (guards against non-termination).
-    sub.length > 1 && sub.length < cls.length ? h2hBlock(sub, block, ctx) : [sub],
+    sub.length > 1 && sub.length < cls.length ? h2hBlock(sub, keys, modifier, run) : [sub],
   );
 }
 
-// Direct-encounter refinement among the tied set: half-points each entrant
-// scored against the others (spec 05 §4.1). Uses the Swiss ledger when present
-// (boardgame), else the pool results. Building a mini-league (not pairwise)
-// keeps it transitive for 3+ tied entrants.
-function directRefine(cls: StandingsRow[], ctx: RankContext): StandingsRow[][] {
-  const ids = new Set(cls.map((row) => row.entrantId));
-  const score = (id: EntrantId): number => {
-    if (ctx.swiss) {
-      const row = ctx.swiss.find((entry) => entry.entrant === id);
-      if (row === undefined) return 0;
-      return row.games.reduce(
-        (sum, game) =>
-          game.opponent !== null && !game.unplayed && ids.has(game.opponent)
-            ? sum + game.scored
-            : sum,
-        0,
-      );
-    }
-    const among = resultsAmong(ids, ctx.results ?? []);
-    return among.reduce((sum, [home, away]) => {
-      if (home.entrantId === id) return sum + home.points;
-      if (away.entrantId === id) return sum + away.points;
-      return sum;
-    }, 0);
-  };
-  const cmp: Comparator = (a, b) => sgn(score(a.entrantId) - score(b.entrantId));
-  return groupBySort(cls, cmp, ctx);
+// The mini-table among a tied class: rows folded from the fixtures among its
+// members only (every meeting — both legs of a double round robin aggregate,
+// B4), and the way back from a mini row to the class's own row.
+function miniTable(
+  cls: readonly StandingsRow[],
+  run: RunContext,
+): { rows: StandingsRow[]; back: (mini: readonly StandingsRow[]) => StandingsRow[] } {
+  const ids = cls.map((row) => row.entrantId);
+  const rows = foldResults(ids, resultsAmong(new Set(ids), run.results ?? []));
+  const byId = new Map(cls.map((row) => [row.entrantId, row]));
+  return { rows, back: (mini) => mini.map((row) => byId.get(row.entrantId) as StandingsRow) };
 }
 
-// The full cascade driver: refine one equivalence class through the cascade,
-// consuming a maximal run of h2h keys as a single block.
-function refine(
-  classes: StandingsRow[][],
-  cascade: readonly TiebreakerKey[],
-  ctx: RankContext,
-): StandingsRow[][] {
-  let current = classes;
-  let i = 0;
-  while (i < cascade.length) {
-    const key = cascade[i] as TiebreakerKey;
-    // The cascade's first key is the primary ordering — a split there is not a
-    // "tie" worth explaining. Every later key that splits a class is.
-    const explain = i > 0;
-    if (key === "lots") {
-      i++;
-      continue; // resolved after the cascade (rankStandings)
+// One pass of the block: refine the mini-table one key at a time so each split
+// is attributed to the h2h key that caused it (tie-explanation trace).
+function h2hPass(cls: StandingsRow[], keys: readonly BlockKey[], run: RunContext): StandingsRow[][] {
+  const mini = miniTable(cls, run);
+  let miniClasses: StandingsRow[][] = [mini.rows];
+  for (const key of keys) {
+    const cmp = COMPARATORS[h2hToPlain(key)];
+    miniClasses = miniClasses.flatMap((group) => {
+      if (group.length <= 1) return [group];
+      const groups = groupBySort(group, cmp, run);
+      if (groups.length > 1) markTieBreak(mini.back(group), key, run);
+      return groups;
+    });
+    if (miniClasses.every((group) => group.length === 1)) break;
+  }
+  return miniClasses.map(mini.back);
+}
+
+// ITTF 3.7.5.3 exclusion: the first key that splits the class stops the walk;
+// each sub-group of two or more restarts the block from blockKeys[0], among its
+// own members only.
+function h2hExclusion(cls: StandingsRow[], keys: readonly BlockKey[], run: RunContext): StandingsRow[][] {
+  const mini = miniTable(cls, run);
+  for (let k = 0; k < keys.length; k++) {
+    const groups = groupBySort(mini.rows, COMPARATORS[h2hToPlain(keys[k] as BlockKey)], run);
+    if (groups.length === 1) continue;
+    markTieBreak(cls, keys[k] as BlockKey, run);
+    return groups
+      .map(mini.back)
+      .flatMap((sub) => (sub.length > 1 ? h2hBlock(sub, keys, "h2h_exclusion", run) : [sub]));
+  }
+  return [cls];
+}
+
+// W2d (spec §5.6, OC3) — `h2h_two`: a tied class of exactly two, ordered by the
+// table points of the matches between them (every meeting, B4). Any other size,
+// two who never met, or two level between them: no split, and the class carries
+// the note that says why (anti-goal 2). Two who never met have an empty
+// mini-table, so they are level on its points — one test covers both.
+function h2hTwo(cls: StandingsRow[], explain: boolean, run: RunContext): StandingsRow[][] {
+  if (cls.length <= 1) return [cls];
+  if (cls.length === 2) {
+    const mini = miniTable(cls, run);
+    const groups = groupBySort(mini.rows, COMPARATORS.points, run);
+    if (groups.length > 1) {
+      if (explain) markTieBreak(cls, "h2h_two", run);
+      return groups.map(mini.back);
     }
-    if (isH2HKey(key)) {
-      const block: TiebreakerKey[] = [];
-      while (i < cascade.length && isH2HKey(cascade[i] as TiebreakerKey)) {
-        block.push(cascade[i] as TiebreakerKey);
-        i++;
-      }
-      // h2hBlock writes its own per-key trace; suppress none — an h2h block at
-      // cascade head still explains genuine ties within the mini-table.
-      current = current.flatMap((cls) => (cls.length > 1 ? h2hBlock(cls, block, ctx) : [cls]));
-    } else if (key === "direct") {
-      current = current.flatMap((cls) => {
-        if (cls.length <= 1) return [cls];
-        const groups = directRefine(cls, ctx);
-        if (explain && groups.length > 1) markTieBreak(cls, key);
-        return groups;
-      });
-      i++;
-    } else {
-      const cmp = COMPARATORS[key];
-      if (cmp !== undefined) {
+  }
+  for (const row of cls) run.notes.set(row.entrantId, "h2h_two_not_applicable");
+  return [cls];
+}
+
+// The game points of a result (B5): the context's reader, else the table points.
+function gamePointsOf(result: FixtureResult, ctx: RankContext): readonly [number, number] {
+  return ctx.gamePoints === undefined ? [result[0].points, result[1].points] : ctx.gamePoints(result);
+}
+
+// Direct-encounter refinement among the tied set (spec 05 §4.1): the points
+// each entrant scored against the others — from the Swiss ledger when present
+// (boardgame), else the pool results in GAME points (B5). A mini-league, not
+// pairwise, keeps it transitive for 3+ tied entrants.
+function directRefine(cls: StandingsRow[], run: RunContext): StandingsRow[][] {
+  const ids = new Set(cls.map((row) => row.entrantId));
+  const scores = new Map<EntrantId, number>();
+  const swiss = run.swiss;
+  if (swiss) {
+    for (const id of ids) {
+      const row = swiss.find((entry) => entry.entrant === id);
+      const scored = (row?.games ?? []).reduce(
+        (sum, game) =>
+          game.opponent !== null && !game.unplayed && ids.has(game.opponent) ? sum + game.scored : sum,
+        0,
+      );
+      scores.set(id, scored);
+    }
+  } else {
+    for (const result of resultsAmong(ids, run.results ?? [])) {
+      const [home, away] = gamePointsOf(result, run);
+      scores.set(result[0].entrantId, (scores.get(result[0].entrantId) ?? 0) + home);
+      scores.set(result[1].entrantId, (scores.get(result[1].entrantId) ?? 0) + away);
+    }
+  }
+  const score = (row: StandingsRow): number => scores.get(row.entrantId) ?? 0;
+  return groupBySort(cls, (a, b) => sgn(score(a) - score(b)), run);
+}
+
+// The full cascade driver: refine the classes one parsed step at a time.
+function refine(classes: StandingsRow[][], steps: readonly Step[], run: RunContext): StandingsRow[][] {
+  let current = classes;
+  for (const step of steps) {
+    if (current.every((cls) => cls.length === 1)) break;
+    const explain = step.index > 0;
+    switch (step.kind) {
+      case "lots":
+        break; // resolved after the cascade (rankStandings)
+      case "block":
+        // h2hBlock writes its own per-key trace; an h2h block at cascade head
+        // still explains genuine ties within the mini-table.
+        current = current.flatMap((cls) => (cls.length > 1 ? h2hBlock(cls, step.keys, step.modifier, run) : [cls]));
+        break;
+      case "h2h_two":
+        current = current.flatMap((cls) => h2hTwo(cls, explain, run));
+        break;
+      case "direct":
         current = current.flatMap((cls) => {
           if (cls.length <= 1) return [cls];
-          const groups = groupBySort(cls, cmp, ctx);
-          if (explain && groups.length > 1) markTieBreak(cls, key);
+          const groups = directRefine(cls, run);
+          if (explain && groups.length > 1) markTieBreak(cls, "direct", run);
           return groups;
         });
-      }
-      i++;
+        break;
+      case "plain":
+        current = current.flatMap((cls) => {
+          if (cls.length <= 1) return [cls];
+          const groups = groupBySort(cls, step.cmp, run);
+          if (explain && groups.length > 1) markTieBreak(cls, step.key, run);
+          return groups;
+        });
+        break;
     }
-    if (current.every((cls) => cls.length === 1)) break;
   }
   return current;
+}
+
+// B5: the pool's counted results as a Swiss ledger, every result re-scored in
+// game points, so SB reads opponents' GAME scores whatever the table paid.
+function buildPoolLedger(ids: readonly EntrantId[], ctx: RankContext): SwissTable {
+  const scored = resultsAmong(new Set(ids), ctx.results ?? []).map((result): FixtureResult => {
+    const [home, away] = gamePointsOf(result, ctx);
+    return [{ ...result[0], points: home }, { ...result[1], points: away }];
+  });
+  return buildSwissTable(ids, scored);
 }
 
 // FNV-1a fold of the division rngSeed and sorted tie-group ids → a stable
@@ -568,10 +750,17 @@ function bySeedThenId(ctx: RankContext): (a: StandingsRow, b: StandingsRow) => n
 // rows in a total order with distinct 1..n ranks. A class the cascade cannot
 // separate is broken by `lots` if the cascade lists it (marking the group for a
 // rank_lock_required event), otherwise by seed→id — a deterministic fallback
-// that never silently randomises (spec 05 §3).
+// that never silently randomises (spec 05 §3). Throws CONFIG_INVALID for a
+// cascade it cannot run (anti-goal 2, `parseCascade`).
 export function rankStandings(rows: readonly StandingsRow[], ctx: RankContext): RankingResult {
+  const steps = parseCascade(ctx.cascade);
   const clones = rows.map((row) => ({ ...row, metrics: { ...row.metrics } }));
-  const classes = refine([clones], ctx.cascade, ctx);
+  const poolLedger =
+    ctx.swiss === undefined && ctx.cascade.includes("sberger")
+      ? buildPoolLedger(clones.map((row) => row.entrantId), ctx)
+      : undefined;
+  const run: RunContext = { ...ctx, poolLedger, notes: new Map() };
+  const classes = refine([clones], steps, run);
   const hasLots = ctx.cascade.includes("lots");
   const rngSeed = ctx.rngSeed ?? 0;
 
@@ -586,7 +775,7 @@ export function rankStandings(rows: readonly StandingsRow[], ctx: RankContext): 
       const ids = cls.map((row) => row.entrantId).sort();
       const drawn = shuffle(lotSeed(rngSeed, ids), ids);
       const byId = new Map(cls.map((row) => [row.entrantId, row]));
-      markTieBreak(cls, "lots");
+      markResidual(cls, "lots", run);
       for (const id of drawn) {
         const row = byId.get(id) as StandingsRow;
         row.rankLocked = true;
@@ -599,7 +788,7 @@ export function rankStandings(rows: readonly StandingsRow[], ctx: RankContext): 
     } else {
       // Jul3/05 §5 tie-exhaustion (10 Jun): the cascade could not separate
       // these rows — flag them so the console alerts before KO seeding.
-      markTieBreak(cls, "seed");
+      markResidual(cls, "seed", run);
       for (const row of [...cls].sort(bySeedThenId(ctx))) {
         row.tieUnbroken = true;
         order.push(row);
@@ -627,6 +816,11 @@ export function rankStandings(rows: readonly StandingsRow[], ctx: RankContext): 
       if (ctx.cascade.includes("sberger")) {
         row.metrics["sberger"] = sonnebornBerger(ctx.swiss, row.entrantId) / 4;
       }
+    }
+  } else if (poolLedger !== undefined) {
+    // W2d (spec §5.7): SB in a round robin gets the same display column.
+    for (const row of order) {
+      row.metrics["sberger"] = sonnebornBerger(poolLedger, row.entrantId) / 4;
     }
   }
   return { rows: order, lotsGroups };

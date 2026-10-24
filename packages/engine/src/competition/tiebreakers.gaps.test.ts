@@ -257,15 +257,14 @@ describe("federation cascades on complete data are unaffected", () => {
 // guarantee display-only metrics rest on — the set-piece conversion counters
 // are emitted for every gated fixture and must never move a table.
 //
-// It is enforced at runtime, not merely by the type: `validateCascade`'s switch
-// has NO `default` branch, so an unregistered key passes validation untouched;
-// and `rankStandings` looks the key up in `COMPARATORS` behind
-// `if (cmp !== undefined)` with no `else` (tiebreakers.ts:534-535), so it is
-// SILENTLY SKIPPED at rank time. Both halves are asserted below, because either
-// one changing is a behaviour change worth noticing: an `else` that threw, or a
-// validation that started rejecting, would break every caller passing a cascade
-// this engine does not know — and would do it at rank time, in production.
-describe("an unregistered cascade key is silently skipped, never an ordering input", () => {
+// Until W2d it was enforced by a SILENT SKIP at rank time. W2d anti-goal 2
+// (spec §2.3, "a tie-break step that silently does nothing") reversed that on
+// purpose: `rankStandings` now THROWS CONFIG_INVALID for a key with no
+// comparator, so the display-only guarantee still holds (the key never orders
+// anything) and a broken order can no longer pass for a working one. The write
+// side refuses such keys before they are stored (W2d §5.5); `validateCascade`
+// itself is unchanged here — its switch still has no `default`.
+describe("an unregistered cascade key is never an ordering input — it is refused (W2d anti-goal 2)", () => {
   // Cast: the point of the test is the RUNTIME behaviour on a key the type
   // system is supposed to exclude, so the cast is the fixture, not a shortcut.
   const unknown = "sp_pc_scored" as Parameters<typeof rankStandings>[1]["cascade"][number];
@@ -274,31 +273,34 @@ describe("an unregistered cascade key is silently skipped, never an ordering inp
     expect(() => validateCascade([unknown], { metrics: [] })).not.toThrow();
   });
 
-  it("rankStandings ignores it rather than throwing, and the order is unmoved", () => {
-    // B leads on the unknown key, A leads on GD. If the unknown key were an
-    // ordering input at all, B would come first.
+  it("rankStandings refuses it with CONFIG_INVALID instead of skipping it, before any ordering", () => {
+    // B leads on the unknown key, A leads on GD. Before W2d the key was skipped
+    // and `diff` ordered A, B; now the order is refused outright.
     const rows = [
       row("A", 4, { gd: 5, sp_pc_scored: 0 }),
       row("B", 4, { gd: 1, sp_pc_scored: 99 }),
     ];
-    const ranked = rankStandings(rows, { cascade: [unknown, "diff"], results: [] });
+    expect(() => rankStandings(rows, { cascade: [unknown, "diff"], results: [] })).toThrow(EngineError);
+    // The positive pair: the same rows with the registered key alone rank by GD.
+    const ranked = rankStandings(rows, { cascade: ["points", "diff"], results: [] });
     expect(ranked.rows.map((entry) => entry.entrantId)).toEqual(["A", "B"]);
-    // And the split is attributed to `diff`, not to the key that was skipped.
     expect(ranked.rows[0]?.tieBreak?.key).toBe("diff");
   });
 
-  it("a cascade of NOTHING BUT unregistered keys falls through to the seed", () => {
-    // The strongest form: the cascade contributes NOTHING, so the residual-tie
-    // seed fallback decides. If the skip ever became a throw this reds; if it
-    // ever became a real comparison, B would lead on `sp_pc_scored: 99` and the
-    // split would be attributed to that key instead of to `seed`.
+  it("a cascade of NOTHING BUT unregistered keys is refused too (no silent seed fall-through)", () => {
     const rows = [
       row("A", 4, { sp_pc_scored: 0 }),
       row("B", 4, { sp_pc_scored: 99 }),
     ];
-    const ranked = rankStandings(rows, { cascade: [unknown], results: [] });
-    expect(ranked.rows.map((entry) => entry.entrantId)).toEqual(["A", "B"]);
-    expect(ranked.rows[0]?.tieBreak?.key).toBe("seed");
+    let refused: unknown;
+    try {
+      rankStandings(rows, { cascade: [unknown], results: [] });
+    } catch (e) {
+      refused = e;
+    }
+    expect(refused).toBeInstanceOf(EngineError);
+    expect((refused as EngineError).code).toBe("CONFIG_INVALID");
+    expect((refused as EngineError).data).toEqual({ key: "sp_pc_scored", index: 0 });
   });
 });
 

@@ -9,6 +9,8 @@ import { buildSwissTable, rankStandings, validateCascade } from "./tiebreakers.t
 // The two football presets under test (spec 04 §1.6): H2H-first vs GD-first.
 const FIFA2026: TiebreakerKey[] = ["points", "h2h_points", "h2h_diff", "h2h_for", "diff", "for", "fair_play", "lots"];
 const CLASSIC: TiebreakerKey[] = ["points", "diff", "for", "h2h_points", "h2h_diff", "h2h_for", "fair_play", "lots"];
+// UEFA 20.01(d): the FIFA block closed by the re-application modifier (W2d PS-9d — the `h2hRecursive` flag's cases).
+const UEFA: TiebreakerKey[] = ["points", "h2h_points", "h2h_diff", "h2h_for", "h2h_reapply", "diff", "for", "fair_play", "lots"];
 
 // Football-shaped decided fixture (gf/ga/gd ledger, 3/1/0 points).
 function fb(home: string, away: string, hg: number, ag: number): FixtureResult {
@@ -29,9 +31,9 @@ function fb(home: string, away: string, hg: number, ag: number): FixtureResult {
   ];
 }
 
-function rankOrder(entrants: string[], results: FixtureResult[], cascade: TiebreakerKey[], opts: { h2hRecursive?: boolean } = {}): string[] {
+function rankOrder(entrants: string[], results: FixtureResult[], cascade: TiebreakerKey[]): string[] {
   const rows = foldResults(entrants, results);
-  return rankStandings(rows, { cascade, results, h2hRecursive: opts.h2hRecursive === true, rngSeed: 1 }).rows.map((r) => r.entrantId);
+  return rankStandings(rows, { cascade, results, rngSeed: 1 }).rows.map((r) => r.entrantId);
 }
 
 // ---------------------------------------------------------------------------
@@ -70,7 +72,7 @@ describe("FIFA 2026 H2H-first vs classic GD-first (golden — spec 05 §4, PROMP
 // UEFA recursive vs FIFA fall-through (spec 05 §4.2, PROMPT-08 §3).
 // ---------------------------------------------------------------------------
 
-describe("h2hRecursive — UEFA re-application vs FIFA fall-through (spec 05 §4.2)", () => {
+describe("h2h_reapply — UEFA re-application vs FIFA fall-through (spec 05 §4.2; W2d PS-9d, was h2hRecursive)", () => {
   // A,B,C,D level on 6 pts (jobber games equalise). The 4-way h2h splits into
   // {A,B} over {C,D} and leaves each pair level on h2h pts/GD/GF. UEFA re-runs
   // the head-to-head among just the pair (A beat B, C beat D). FIFA falls
@@ -92,17 +94,17 @@ describe("h2hRecursive — UEFA re-application vs FIFA fall-through (spec 05 §4
     fb("D", "Jd", 1, 0), // D wins 1-0 → overall GD 0
   ];
 
-  it("UEFA (recursive) ranks the pair by their direct game", () => {
-    expect(rankOrder(entrants, results, FIFA2026, { h2hRecursive: true }).slice(0, 4)).toEqual(["A", "B", "C", "D"]);
+  it("UEFA (h2h_reapply after the block) ranks the pair by their direct game", () => {
+    expect(rankOrder(entrants, results, UEFA).slice(0, 4)).toEqual(["A", "B", "C", "D"]);
   });
 
-  it("FIFA (fall-through) ranks the still-level pair by overall criteria", () => {
-    expect(rankOrder(entrants, results, FIFA2026, { h2hRecursive: false }).slice(0, 4)).toEqual(["B", "A", "C", "D"]);
+  it("FIFA (no modifier, fall-through) ranks the still-level pair by overall criteria", () => {
+    expect(rankOrder(entrants, results, FIFA2026).slice(0, 4)).toEqual(["B", "A", "C", "D"]);
   });
 
-  it("the flag changes the result on the same fixtures", () => {
-    const uefa = rankOrder(entrants, results, FIFA2026, { h2hRecursive: true });
-    const fifa = rankOrder(entrants, results, FIFA2026, { h2hRecursive: false });
+  it("the h2h_reapply modifier changes the result on the same fixtures", () => {
+    const uefa = rankOrder(entrants, results, UEFA);
+    const fifa = rankOrder(entrants, results, FIFA2026);
     expect(uefa).not.toEqual(fifa);
   });
 });

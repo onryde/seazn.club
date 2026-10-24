@@ -69,7 +69,6 @@ export interface TableStage {
   kind: Extract<StageKind, "league" | "group" | "swiss">;
   entrants: readonly EntrantId[];
   cascade: readonly TiebreakerKey[];
-  h2hRecursive?: boolean;
   swiss?: boolean; // assemble the Swiss ledger for buchholz/sberger/direct
   seeds?: ReadonlyMap<EntrantId, number>;
   rngSeed?: number;
@@ -240,7 +239,6 @@ export function completeTableStage(
     const ranked = rankStandings(rows, {
       cascade: stage.cascade,
       results,
-      h2hRecursive: stage.h2hRecursive === true,
       ...(stage.seeds === undefined ? {} : { seeds: stage.seeds }),
       ...(stage.rngSeed === undefined ? {} : { rngSeed: stage.rngSeed }),
       ...(stage.h2hScope === undefined ? {} : { h2hScope: stage.h2hScope }),

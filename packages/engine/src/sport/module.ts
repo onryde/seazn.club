@@ -62,7 +62,18 @@ export type TiebreakerKey =
   | "direct"
   | "fair_play"
   | "seed"
-  | "lots";
+  | "lots"
+  // W2d (spec §5.6) — BWF/ITTF/ATP/FIH/IIHF keys and the h2h block modifiers.
+  | "set_diff"
+  | "point_diff"
+  | "h2h_two"
+  | "h2h_wins"
+  | "h2h_set_ratio"
+  | "h2h_point_ratio"
+  | "h2h_reapply"
+  | "h2h_exclusion"
+  | "matches_played"
+  | "field_goals";
 
 // A type + payload pair before persistence stamps the envelope fields
 // (id/seq/recordedAt) — what generators and coarsen produce.

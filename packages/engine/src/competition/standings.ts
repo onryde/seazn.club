@@ -30,8 +30,14 @@ export interface StandingsRow {
   // (spec 05 §4, doc 09 §2 tie-explanation popover). Written by the ranking
   // pass for every row that needed a tiebreaker beyond the cascade's primary
   // key; the finest rule that applied wins. Rides into standings_snapshots.
-  tieBreak?: { key: string; with: EntrantId[] };
+  // `note` (W2d): on a residual tie, why a conditional step did not split it.
+  tieBreak?: { key: string; with: EntrantId[]; note?: TieBreakNote };
 }
+
+/** W2d (spec §2.3 anti-goal 2): why a conditional cascade step left a tie
+ *  unsplit — the tie popover says it instead of the step silently doing nothing.
+ *  Kept only on a residual tie (lots / seed); any later split clears it. */
+export type TieBreakNote = "h2h_two_not_applicable";
 
 // The two deltas a decided fixture contributes, in [home, away] order (the pair
 // a SportModule.standingsDelta returns). The pair also names both entrants of

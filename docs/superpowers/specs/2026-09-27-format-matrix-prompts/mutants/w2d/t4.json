@@ -1,0 +1,234 @@
+[
+ {
+  "id": "t4-exclusion-restarts-at-current-key",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": ".flatMap((sub) => (sub.length > 1 ? h2hBlock(sub, keys, \"h2h_exclusion\", run) : [sub]));",
+  "replace": ".flatMap((sub) => (sub.length > 1 ? h2hBlock(sub, keys.slice(k), \"h2h_exclusion\", run) : [sub]));",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "TT-TB-1 ITTF 3.7.5.3 exclusion"
+   }
+  ]
+ },
+ {
+  "id": "t4-h2h-two-splits-a-class-of-three",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "  if (cls.length === 2) {",
+  "replace": "  if (cls.length >= 2) {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "BD-TB-1 OC3 h2h_two after set_diff"
+   }
+  ]
+ },
+ {
+  "id": "t4-no-comparator-throw-becomes-continue",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "if (cmp === undefined) throw refusal(key, i, \"has no comparator\");",
+  "replace": "if (cmp === undefined) continue;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "anti-goal 2: a cascade key with no comparator"
+   }
+  ]
+ },
+ {
+  "id": "t4-field-goals-subtracts-own-goals",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "return ledgerOf(row, [\"gf\"]) - ledgerOf(row, [\"goals_pc\"]) - ledgerOf(row, [\"goals_stroke\"]);",
+  "replace": "return ledgerOf(row, [\"gf\"]) - ledgerOf(row, [\"goals_pc\"]) - ledgerOf(row, [\"goals_stroke\"]) - ledgerOf(row, [\"goals_og\"]);",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "HK-TB-2 field_goals = gf"
+   }
+  ]
+ },
+ {
+  "id": "t4-reapply-modifier-ignored",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "  if (modifier !== \"h2h_reapply\") return ordered;",
+  "replace": "  return ordered;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "FB-TB-2 UEFA re-application"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "IH-TB-1 IIHF re-application"
+   }
+  ]
+ },
+ {
+  "id": "t4-regulation-wins-also-drop-shootout-wins",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "return ctx.winsCount === \"regulation\" ? row.won - ledgerOf(row, [\"won_ot\"]) : row.won;",
+  "replace": "return ctx.winsCount === \"regulation\" ? row.won - ledgerOf(row, [\"won_ot\"]) - ledgerOf(row, [\"won_so\"]) : row.won;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "HK-TB-1 FIH: more wins above better GD"
+   }
+  ]
+ },
+ {
+  "id": "t4-direct-reads-table-points",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "      const [home, away] = gamePointsOf(result, run);",
+  "replace": "      const [home, away] = [result[0].points, result[1].points];",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "BG-TB-1 BG-TB-3 round robin"
+   }
+  ]
+ },
+ {
+  "id": "t4-pool-sb-reads-table-points",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "    const [home, away] = gamePointsOf(result, ctx);",
+  "replace": "    const [home, away] = [result[0].points, result[1].points];",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "BG-TB-1 BG-TB-3 round robin"
+   }
+  ]
+ },
+ {
+  "id": "t4-stray-modifier-skipped",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "if (isModifier(key)) throw refusal(",
+  "replace": "if (isModifier(key)) continue; if (false) throw refusal(",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "anti-goal 2: a cascade key with no comparator"
+   }
+  ]
+ },
+ {
+  "id": "t4-prototype-key-finds-a-comparator",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "const cmp = Object.hasOwn(COMPARATORS, key) ? COMPARATORS[key] : undefined;",
+  "replace": "const cmp = (COMPARATORS as Record<string, RunComparator | undefined>)[key];",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "anti-goal 2: a cascade key with no comparator"
+   }
+  ]
+ },
+ {
+  "id": "t4-split-keeps-stale-note",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "    run.notes.delete(row.entrantId);",
+  "replace": "    void run.notes;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "edge: one entrant"
+   }
+  ]
+ },
+ {
+  "id": "t4-h2h-two-explains-as-first-key",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "      if (explain) markTieBreak(cls, \"h2h_two\", run);",
+  "replace": "      markTieBreak(cls, \"h2h_two\", run);",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "edge: one entrant"
+   }
+  ]
+ },
+ {
+  "id": "t4-property-direct-credits-home-only",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "      scores.set(result[1].entrantId, (scores.get(result[1].entrantId) ?? 0) + away);",
+  "replace": "      scores.set(result[1].entrantId, (scores.get(result[1].entrantId) ?? 0) + 0 * away);",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-properties.test.ts"
+    ],
+    "name": "permutation invariance"
+   }
+  ]
+ },
+ {
+  "id": "t4-property-block-key-regroups-whole-mini",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "    miniClasses = miniClasses.flatMap((group) => {",
+  "replace": "    miniClasses = [mini.rows].flatMap((group) => {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-properties.test.ts"
+    ],
+    "name": "appending a key never reorders"
+   }
+  ]
+ },
+ {
+  "id": "t4-property-reapply-without-progress-recurses",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "sub.length > 1 && sub.length < cls.length ? h2hBlock(sub, keys, modifier, run) : [sub],",
+  "replace": "sub.length > 1 && sub.length <= cls.length ? h2hBlock(sub, keys, modifier, run) : [sub],",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-properties.test.ts"
+    ],
+    "name": "re-application and exclusion terminate"
+   }
+  ]
+ }
+]
