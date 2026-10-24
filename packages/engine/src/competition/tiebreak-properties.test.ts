@@ -118,8 +118,11 @@ describe("W2d T4 — tie-break cascade properties (rule 10)", () => {
   });
 
   it("appending a key never reorders entrants the prefix already separated", () => {
-    // Every key is appended to every prefix. Half the prefixes end in a modifier-free h2h block, so an appended h2h key
-    // EXTENDS that block (one pass over a longer block) — the case a single random draw would rarely reach.
+    // Every key except the two modifiers is appended to every prefix. Half the prefixes end in a modifier-free h2h
+    // block, so an appended h2h key EXTENDS that block (one pass over a longer block) — the case a single random draw
+    // would rarely reach. The modifiers are left out on purpose: a modifier is not a new step but rewrites the block
+    // in front of it, and `h2h_exclusion` legitimately REVERSES an order that block's single pass made — TT-TB-1 is
+    // exactly that (the 3-way set ratio orders Z above Y; the exclusion restart on Y–Z alone orders Y above Z).
     const EXTRAS: readonly TiebreakerKey[] = [...PLAIN, ...BLOCK, "lots"];
     const openBlock = fc.array(fc.constantFrom(...BLOCK), { minLength: 1, maxLength: 2 });
     const prefixArb = fc.oneof(cascadeArb, fc.tuple(fc.array(fc.constantFrom(...PLAIN), { maxLength: 2 }), openBlock).map(([head, block]) => [...head, ...block]));

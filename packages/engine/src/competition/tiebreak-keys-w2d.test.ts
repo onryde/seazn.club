@@ -21,7 +21,7 @@ import { forEachSport } from "../testkit/for-each-sport.ts";
 import { lineupFromCatalog, makeEnvelope } from "../testkit/helpers.ts";
 import { completeTableStage, type TableFixture } from "./stage.ts";
 import { foldResults, type FixtureResult, type StandingsRow } from "./standings.ts";
-import { rankStandings, type RankContext, type RankingResult } from "./tiebreakers.ts";
+import { buildSwissTable, directEncounter, rankStandings, type RankContext, type RankingResult, type SwissGame, type SwissTable } from "./tiebreakers.ts";
 
 // ---------------------------------------------------------------------------
 // Builders
@@ -143,6 +143,34 @@ describe("W2d T4 — the new tie-break keys (spec §5.6)", () => {
     for (const id of ["X", "Y", "Z"]) expect(rowOf(ranked, id).tieBreak?.key, id).toBe("set_diff");
     // The disagreement is real: the ratio reading of the same rows puts Y first.
     expect(ids(rankStandings(rows, { cascade: ["wins", "set_ratio", "lots"], rngSeed: 1 }))).toEqual(["W", "Y", "X", "Z", "V"]);
+  });
+
+  it("BD-TB-1 BWF 16.2.4: points DIFFERENCE where points RATIO would disagree; a row with no points ledger sorts last", () => {
+    // Six players level on matches won (2) and games difference (5-3, +2), so BWF 16.2.4 "points difference" decides:
+    //   H 40 won, no lost recorded → +40 (one recorded half reads the other as 0, as the ratio does)
+    //   X 210-200 → +10 (ratio 1.050) · Y 100-92 → +8 (ratio 1.087) · Z 150-150 → 0
+    //   L 5 lost, no won recorded → −5 (the other half again) · V 90-100 → −10
+    //   U records no rally points at all → no difference, below every recorded one (#429), even V's −10.
+    // Difference: H, X, Y, Z, L, V, U. A points RATIO would put Y (1.087) above X (1.050).
+    const level = { played: 3, won: 2, lost: 1, points: 4 };
+    const rows = [
+      row("U", { ...level, metrics: { sets_won: 5, sets_lost: 3 } }),
+      row("V", { ...level, metrics: { sets_won: 5, sets_lost: 3, points_won: 90, points_lost: 100 } }),
+      row("X", { ...level, metrics: { sets_won: 5, sets_lost: 3, points_won: 210, points_lost: 200 } }),
+      row("Y", { ...level, metrics: { sets_won: 5, sets_lost: 3, points_won: 100, points_lost: 92 } }),
+      row("Z", { ...level, metrics: { sets_won: 5, sets_lost: 3, points_won: 150, points_lost: 150 } }),
+      row("H", { ...level, metrics: { sets_won: 5, sets_lost: 3, points_won: 40 } }),
+      row("L", { ...level, metrics: { sets_won: 5, sets_lost: 3, points_lost: 5 } }),
+    ];
+    const ranked = rankStandings(rows, { cascade: BWF, results: [], rngSeed: 1 });
+    expect(ids(ranked)).toEqual(["H", "X", "Y", "Z", "L", "V", "U"]);
+    for (const r of ranked.rows) expect(r.tieBreak?.key, r.entrantId).toBe("point_diff");
+    expect(ranked.lotsGroups).toEqual([]);
+    // (L 0/5 and U 0/0 both read ratio 0, so the ratio reading leaves those two to the draw.)
+    expect(ids(rankStandings(rows, { cascade: ["wins", "point_ratio", "lots"], rngSeed: 1 })).slice(0, 5)).toEqual(["H", "Y", "X", "Z", "V"]);
+    // The same "absent sorts last" on games: a row with no sets ledger sits below a −3 games difference.
+    const games = [row("A", { ...level, metrics: { sets_won: 1, sets_lost: 4 } }), row("B", level)];
+    expect(ids(rankStandings(games, { cascade: ["wins", "set_diff", "lots"], rngSeed: 1 }))).toEqual(["A", "B"]);
   });
 
   it("BD-TB-1 OC3 h2h_two after set_diff splits the remaining two by their meeting; on a class of 3 it does not split", () => {
@@ -312,17 +340,19 @@ describe("W2d T4 — the new tie-break keys (spec §5.6)", () => {
     expect(ids(ranked)).toEqual(["A", "B"]);
     expect(rowOf(ranked, "A").tieBreak?.key).toBe("field_goals");
     // A ledger that ALSO counts own goals by kind still counts them as field goals: E 3 goals, 2 of them own goals
-    // credited to it → 3; F 3 goals, 1 from a corner → 2. Missing keys read 0: G (2 goals, no kinds) → 2; H none → 0.
+    // credited to it → 3; F 3 goals, 1 from a corner → 2; S 4 goals, 3 of them strokes → 1 (the most goals, the fewest
+    // field goals). Missing keys read 0: G (2 goals, no kinds) → 2; H none → 0.
     const rows = [
       row("F", { played: 1, won: 0, drawn: 1, lost: 0, points: 1, metrics: { gf: 3, goals_pc: 1 } }),
+      row("S", { played: 1, won: 0, drawn: 1, lost: 0, points: 1, metrics: { gf: 4, goals_stroke: 3 } }),
       row("E", { played: 1, won: 0, drawn: 1, lost: 0, points: 1, metrics: { gf: 3, goals_og: 2 } }),
       row("H", { played: 1, won: 0, drawn: 1, lost: 0, points: 1 }),
     ];
-    expect(ids(rankStandings(rows, { cascade: ["points", "field_goals", "lots"], rngSeed: 1 }))).toEqual(["E", "F", "H"]);
+    expect(ids(rankStandings(rows, { cascade: ["points", "field_goals", "lots"], rngSeed: 1 }))).toEqual(["E", "F", "S", "H"]);
     const g = row("G", { played: 1, won: 0, drawn: 1, lost: 0, points: 1, metrics: { gf: 2 } });
     const withG = rankStandings([...rows, g], { cascade: ["points", "field_goals", "seed"], seeds: new Map([["G", 1], ["F", 2]]), rngSeed: 1 });
     // G (2) ties F (2): the seed, not field goals, separates them.
-    expect(ids(withG)).toEqual(["E", "G", "F", "H"]);
+    expect(ids(withG)).toEqual(["E", "G", "F", "S", "H"]);
     expect(rowOf(withG, "G").tieBreak?.key).toBe("seed");
   });
 
@@ -420,13 +450,17 @@ describe("W2d T4 — the new tie-break keys (spec §5.6)", () => {
     // A preset NAME stored where a key belongs — refused, and the error names the key and its position.
     const unknown = refused(["points", "fifa2026", "lots"]);
     expect([unknown.code, unknown.data]).toEqual(["CONFIG_INVALID", { key: "fifa2026", index: 1 }]);
+    // The message a person reads counts positions from 1: the second key is "position 2".
+    expect(unknown.message).toBe('tie-break key "fifa2026" at position 2 has no comparator');
     // Refused whatever the data: a table the first key already orders (A 6, B 3, C 0) still refuses a broken order, so
     // the refusal cannot hide behind a season with no ties.
     const ordered = [fb("A", "B", 1, 0), fb("A", "C", 1, 0), fb("B", "C", 1, 0)];
     expect(() => rankAll(ordered, ["points", "fifa2026"] as unknown as TiebreakerKey[])).toThrow(EngineError);
     expect(ids(rankAll(ordered, ["points", "lots"]))).toEqual(["A", "B", "C"]);
     // A modifier with no head-to-head block directly before it, and a second modifier on one block.
-    expect(refused(["points", "h2h_reapply", "lots"]).data).toEqual({ key: "h2h_reapply", index: 1 });
+    const stray = refused(["points", "h2h_reapply", "lots"]);
+    expect(stray.data).toEqual({ key: "h2h_reapply", index: 1 });
+    expect(stray.message).toBe('tie-break key "h2h_reapply" at position 2 must directly follow a head-to-head block, at most one per block');
     expect(refused(["points", "h2h_points", "h2h_reapply", "h2h_exclusion"]).data).toEqual({ key: "h2h_exclusion", index: 3 });
     // A stored order is data: a key that names an Object.prototype member is no comparator either.
     expect(refused(["points", "constructor"]).data).toEqual({ key: "constructor", index: 1 });
@@ -592,5 +626,202 @@ describe("W2d T4 — the new tie-break keys (spec §5.6)", () => {
     const second = rankStandings(frozen, ctx);
     expect(second).toStrictEqual(first);
     expect(ids(first)).toEqual(["A", "B", "C", "D"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The refinement driver's own guards (W2d T4 fix round 1: the changed-lines Stryker leg found each one unwitnessed)
+// ---------------------------------------------------------------------------
+
+/** Rank with the fixtures COUNTED: every mini-table, direct encounter and SB ledger reads them through
+ *  `resultsAmong`, one `filter` call per read (the termination property's counter). The rows are folded first, from
+ *  the plain array, so only the rank call's own reads are counted. */
+function rankCounted(results: readonly FixtureResult[], cascade: readonly TiebreakerKey[]): { ranked: RankingResult; reads: number } {
+  const entrants = [...new Set(results.flatMap(([h, a]) => [h.entrantId, a.entrantId]))].sort();
+  const rows = foldResults(entrants, results);
+  let reads = 0;
+  const counted = new Proxy(results, {
+    get(target, prop, receiver) {
+      if (prop === "filter") reads++;
+      return Reflect.get(target, prop, receiver) as unknown;
+    },
+  });
+  const ranked = rankStandings(rows, { cascade, results: counted, rngSeed: 1 });
+  return { ranked, reads };
+}
+
+/** ITTF, five players, where 3.7.5.3 has to exclude at every depth. E beat everyone. A gave E a walkover and C gave
+ *  B one (credited 3-0, 11-0 each game, ITTF 2.3.7; the unplayed loss pays 0, D6). Match points: E 8; A, B, C, D 5.
+ *  Among A, B, C, D (3.7.5.2): A 2+2+1 = 5, B 1+2+1 = 4, C 2+0+2 = 4, D 1+1+2 = 4 → A first.
+ *  Exclude A's matches; restart on B, C, D: B 2+1 = 3, C 0+2 = 2, D 1+2 = 3 → C last.
+ *  Exclude C's matches; restart on B–D: D beat B → D above B. ITTF: E, A, D, B, C. */
+const DEEP_EXCLUSION: readonly FixtureResult[] = [
+  ittf("E", "A", [3, 0], [33, 0], true),
+  ittf("E", "B", [3, 1], [44, 30]),
+  ittf("E", "C", [3, 1], [44, 30]),
+  ittf("E", "D", [3, 1], [44, 30]),
+  ittf("A", "B", [3, 0], [33, 20]),
+  ittf("A", "D", [3, 0], [33, 20]),
+  ittf("C", "A", [3, 0], [33, 20]),
+  ittf("B", "C", [3, 0], [33, 0], true),
+  ittf("C", "D", [3, 1], [44, 30]),
+  ittf("D", "B", [3, 2], [52, 50]),
+];
+
+/** A tie-break trace with its `with` list sorted, every other field as written (a key holding undefined stays). */
+function trace(r: RankingResult, id: EntrantId): unknown {
+  const t = rowOf(r, id).tieBreak;
+  return t === undefined ? undefined : { ...t, with: [...t.with].sort() };
+}
+
+/** A Swiss card in half-points (win 2, draw 1, loss 0), the score summed from it. */
+const game = (opponent: EntrantId, result: "win" | "draw" | "loss", unplayed = false): SwissGame => ({
+  opponent, result, scored: result === "win" ? 2 : result === "draw" ? 1 : 0, ...(unplayed ? { unplayed: true } : {}),
+});
+const card = (entrant: EntrantId, games: SwissGame[]) => ({ entrant, score: games.reduce((sum, g) => sum + g.scored, 0), games });
+const swissRows = (table: SwissTable): StandingsRow[] =>
+  table.map((c) =>
+    row(c.entrant, {
+      played: c.games.length,
+      won: c.games.filter((g) => g.result === "win").length,
+      drawn: c.games.filter((g) => g.result === "draw").length,
+      lost: c.games.filter((g) => g.result === "loss").length,
+      points: c.score,
+    }),
+  );
+
+describe("W2d T4 — the refinement driver's guards", () => {
+  it("TT-TB-1 ITTF 3.7.5.3 excludes at every depth: four level, then three, then the last two's own match", () => {
+    const deep = rankAll(DEEP_EXCLUSION, ITTF);
+    expect(ids(deep)).toEqual(["E", "A", "D", "B", "C"]);
+    expect(deep.lotsGroups).toEqual([]);
+    // Each placement is traced to the match points of the group it was placed in, among that group's members only.
+    expect(trace(deep, "A")).toStrictEqual({ key: "h2h_points", with: ["B", "C", "D"] });
+    expect(trace(deep, "C")).toStrictEqual({ key: "h2h_points", with: ["B", "D"] });
+    expect(trace(deep, "D")).toStrictEqual({ key: "h2h_points", with: ["B"] });
+    expect(trace(deep, "B")).toStrictEqual({ key: "h2h_points", with: ["D"] });
+    // Differentials. Restarting only once (B, C, D read on in one pass) puts B above D on games among the three:
+    // B 5-3 (1.67), D 4-5 (0.80). No exclusion at all orders B, C, D on games among the four: C 6-4, B 5-6, D 4-8.
+    expect(ids(rankAll(DEEP_EXCLUSION, ITTF_WITHOUT_EXCLUSION))).toEqual(["E", "A", "C", "B", "D"]);
+  });
+
+  it("a head-to-head step builds one mini-table per tied class of two or more, never for an entrant already alone", () => {
+    // The termination bound's unit (tiebreakers.ts h2hBlock): the classes a block visits form a laminar family of sets
+    // of size ≥ 2, so a class of n is read at most n − 1 times. The bound is TIGHT on the 3.7.5.3 table: {A, B, C, D},
+    // then {B, C, D}, then {B, D} — three reads; E (placed by points) and every placed singleton are read never.
+    const deep = rankCounted(DEEP_EXCLUSION, ITTF);
+    expect(ids(deep.ranked)).toEqual(["E", "A", "D", "B", "C"]);
+    expect(deep.reads).toBe(3);
+    // Re-application: IH-TB-1's table. {A, B, C} (D placed by points), then the pair {A, B} it reduced to — two reads.
+    const reduced = [ih("A", "B", 3, 1), ih("B", "C", 3, 0), ih("C", "A", 2, 1), ih("A", "D", 1, 0), ih("B", "D", 5, 0), ih("C", "D", 1, 0)];
+    const reapplied = rankCounted(reduced, IIHF);
+    expect(ids(reapplied.ranked)).toEqual(["A", "B", "C", "D"]);
+    expect(reapplied.reads).toBe(2);
+    // The empty case: a table the first key already orders reads the fixtures not at all.
+    const ordered = rankCounted([ih("A", "B", 1, 0), ih("A", "C", 1, 0), ih("B", "C", 1, 0)], IIHF);
+    expect(ids(ordered.ranked)).toEqual(["A", "B", "C"]);
+    expect(ordered.reads).toBe(0);
+  });
+
+  it("h2hScope 'overall' (Jul3/05 §5): a tie of three or more skips the mini-table for the overall keys; a tie of two still meets head-to-head", () => {
+    // A, B, C on 6 points, a cycle among them: A beat B 3-0, B beat C 1-0, C beat A 1-0; each beat D.
+    // Mini-table GD: A +2, C 0, B −2 → A, C, B. Overall GD (D: A 1-0, B 6-0, C 2-0): B +4, A +3, C +2 → B, A, C.
+    const three = [fb("A", "B", 3, 0), fb("B", "C", 1, 0), fb("C", "A", 1, 0), fb("A", "D", 1, 0), fb("B", "D", 6, 0), fb("C", "D", 2, 0)];
+    expect(ids(rankAll(three, FIFA2026))).toEqual(["A", "C", "B", "D"]);
+    expect(ids(rankAll(three, FIFA2026, { h2hScope: "mini_table" }))).toEqual(["A", "C", "B", "D"]);
+    const overall = rankAll(three, FIFA2026, { h2hScope: "overall" });
+    expect(ids(overall)).toEqual(["B", "A", "C", "D"]);
+    for (const id of ["A", "B", "C"]) expect(rowOf(overall, id).tieBreak?.key, id).toBe("diff");
+    // Two level, twice: P and Q on 6, R and S on 3. P beat Q, but Q has the better GD (+9 v +1); S beat R, but R has
+    // the better GD (−1 v −9). Under "overall" each pair still meets head-to-head: P, Q, S, R.
+    const two = [fb("P", "Q", 1, 0), fb("R", "P", 1, 0), fb("P", "S", 1, 0), fb("Q", "R", 1, 0), fb("Q", "S", 9, 0), fb("S", "R", 1, 0)];
+    const pairs = rankAll(two, FIFA2026, { h2hScope: "overall" });
+    expect(ids(pairs)).toEqual(["P", "Q", "S", "R"]);
+    expect([rowOf(pairs, "P").tieBreak?.key, rowOf(pairs, "S").tieBreak?.key]).toEqual(["h2h_points", "h2h_points"]);
+    // The differential: the overall keys alone order both pairs the other way.
+    expect(ids(rankAll(two, ["points", "diff", "lots"]))).toEqual(["Q", "P", "R", "S"]);
+  });
+
+  it("a step that splits nothing keeps the earlier step's 'could not split' note for the draw; a draw with no note carries no note key", () => {
+    // A, B, C drew every match 1-1: level on points, on every head-to-head key, on GD and goals, and on direct
+    // encounter (2 each). h2h_two cannot split three (OC3) and says so; each later step splits nothing, so nothing
+    // answered the note and it reaches the draw.
+    const level = [fb("A", "B", 1, 1), fb("B", "C", 1, 1), fb("A", "C", 1, 1)];
+    const others = (id: EntrantId): EntrantId[] => ["A", "B", "C"].filter((x) => x !== id);
+    let checked = 0;
+    for (const after of ["h2h_points", "diff", "direct"] as const) {
+      const ranked = rankAll(level, ["points", "h2h_two", after, "lots"]);
+      expect(ranked.lotsGroups, after).toEqual([["A", "B", "C"]]);
+      for (const id of ["A", "B", "C"]) {
+        expect(trace(ranked, id), `${after} ${id}`).toStrictEqual({ key: "lots", with: others(id), note: "h2h_two_not_applicable" });
+        checked++;
+      }
+    }
+    expect(checked).toBe(9);
+    // With no conditional step before the draw, the trace has no note at all — not a `note` key holding undefined.
+    const plain = rankAll(level, ["points", "diff", "lots"]);
+    for (const id of ["A", "B", "C"]) expect(trace(plain, id), id).toStrictEqual({ key: "lots", with: others(id) });
+  });
+
+  it("direct at rank time reads the Swiss card as directEncounter does: a played meeting splits the pair and is explained; a forfeited one is no encounter", () => {
+    // A and B on 4 half-points each, B the higher seed. R1 A–B, C–D drawn; R2 C beat A, B beat D; R3 A–D, B beat C.
+    const seeds = new Map([["B", 1], ["A", 2]]);
+    const cascade: TiebreakerKey[] = ["points", "direct", "seed", "lots"];
+    // (1) A beat B over the board, and beat D by FORFEIT. Direct encounter: A 1-0 → A above B (the seed would say B).
+    const played: SwissTable = [
+      card("A", [game("B", "win"), game("C", "loss"), game("D", "win", true)]),
+      card("B", [game("A", "loss"), game("D", "win"), game("C", "win")]),
+      card("C", [game("D", "draw"), game("A", "win"), game("B", "loss")]),
+      card("D", [game("C", "draw"), game("B", "loss"), game("A", "loss", true)]),
+    ];
+    expect(played.map((c) => c.score)).toEqual([4, 4, 3, 1]);
+    expect(directEncounter(played, "A", "B")).toBe(1);
+    const met = rankStandings(swissRows(played), { cascade, swiss: played, seeds, rngSeed: 1 });
+    expect(ids(met)).toEqual(["A", "B", "C", "D"]);
+    expect([trace(met, "A"), trace(met, "B")]).toStrictEqual([{ key: "direct", with: ["B"] }, { key: "direct", with: ["A"] }]);
+    expect(ids(rankStandings(swissRows(played), { cascade: ["points", "seed", "lots"], swiss: played, seeds, rngSeed: 1 }))).toEqual(["B", "A", "C", "D"]);
+    // (2) The same scores, but A beat B by FORFEIT and D over the board. directEncounter reads an unplayed game as no
+    // meeting (tiebreakers.ts directEncounter), so the pair is level on direct and the seed decides: B above A.
+    const forfeited: SwissTable = [
+      card("A", [game("B", "win", true), game("C", "loss"), game("D", "win")]),
+      card("B", [game("A", "loss", true), game("D", "win"), game("C", "win")]),
+      card("C", [game("D", "draw"), game("A", "win"), game("B", "loss")]),
+      card("D", [game("C", "draw"), game("B", "loss"), game("A", "loss")]),
+    ];
+    expect(forfeited.map((c) => c.score)).toEqual([4, 4, 3, 1]);
+    expect(directEncounter(forfeited, "A", "B")).toBe(0);
+    const unmet = rankStandings(swissRows(forfeited), { cascade, swiss: forfeited, seeds, rngSeed: 1 });
+    expect(ids(unmet)).toEqual(["B", "A", "C", "D"]);
+    expect([trace(unmet, "B"), trace(unmet, "A")]).toStrictEqual([{ key: "seed", with: ["A"] }, { key: "seed", with: ["B"] }]);
+  });
+
+  it("the round-robin SB column is written only when the cascade ranks on sberger (B5's ledger is built for it alone)", () => {
+    // A beat B, B beat C, A–C drawn, on the 3/1/0 table. FIDE game points: A 1½, B 1, C ½. SB (C.07 9.1): A = B's 1 +
+    // ½ × C's ½ = 1¼; B = C's ½; C = ½ × A's 1½ = ¾.
+    const games = [chess("A", "B", "1-0"), chess("B", "C", "1-0"), chess("C", "A", "½-½")];
+    const withSb = rankAll(games, ["points", "sberger", "lots"], { gamePoints: GAME_POINTS });
+    expect(withSb.rows.map((r) => [r.entrantId, r.metrics["sberger"]])).toEqual([["A", 1.25], ["B", 0.5], ["C", 0.75]]);
+    let checked = 0;
+    for (const cascade of [["points", "wins", "lots"], ["points", "direct", "lots"]] as TiebreakerKey[][]) {
+      const without = rankAll(games, cascade, { gamePoints: GAME_POINTS });
+      for (const r of without.rows) {
+        expect(Object.hasOwn(r.metrics, "sberger"), `${cascade.join(",")} ${r.entrantId}`).toBe(false);
+        checked++;
+      }
+    }
+    expect(checked).toBe(6);
+    // On a Swiss stage the assembled ledger is SB's source (and its column's), so no pool ledger is built from the
+    // results: ranking on sberger with a Swiss ledger reads the results not at all.
+    let reads = 0;
+    const counted = new Proxy(games, {
+      get(target, prop, receiver) {
+        if (prop === "filter") reads++;
+        return Reflect.get(target, prop, receiver) as unknown;
+      },
+    });
+    const swiss = buildSwissTable(["A", "B", "C"], games);
+    const onSwiss = rankStandings(foldResults(["A", "B", "C"], games), { cascade: ["points", "sberger", "lots"], swiss, results: counted, rngSeed: 1 });
+    expect(ids(onSwiss)).toEqual(["A", "B", "C"]);
+    expect(reads).toBe(0);
   });
 });

@@ -230,5 +230,335 @@
     "name": "re-application and exclusion terminate"
    }
   ]
+ },
+ {
+  "id": "t4-point-diff-reads-ratio",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "  point_diff: differenceComparator(\"point_ratio\"),",
+  "replace": "  point_diff: ratioComparator(\"point_ratio\"),",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "BD-TB-1 BWF 16.2.4"
+   }
+  ]
+ },
+ {
+  "id": "t4-difference-absent-reads-zero",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "return w === undefined && l === undefined ? undefined : (w ?? 0) - (l ?? 0);",
+  "replace": "return (w ?? 0) - (l ?? 0);",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "BD-TB-1 BWF 16.2.4"
+   }
+  ]
+ },
+ {
+  "id": "t4-difference-one-half-is-absent",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "return w === undefined && l === undefined ? undefined : (w ?? 0) - (l ?? 0);",
+  "replace": "return w === undefined || l === undefined ? undefined : (w ?? 0) - (l ?? 0);",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "BD-TB-1 BWF 16.2.4"
+   }
+  ]
+ },
+ {
+  "id": "t4-exclusion-restart-reads-one-pass",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": ".flatMap((sub) => (sub.length > 1 ? h2hBlock(sub, keys, \"h2h_exclusion\", run) : [sub]));",
+  "replace": ".flatMap((sub) => (sub.length > 1 ? h2hBlock(sub, keys, null, run) : [sub]));",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "TT-TB-1 ITTF 3.7.5.3 excludes at every depth"
+   }
+  ]
+ },
+ {
+  "id": "t4-exclusion-reads-placed-singletons",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": ".flatMap((sub) => (sub.length > 1 ? h2hBlock(sub, keys, \"h2h_exclusion\", run) : [sub]));",
+  "replace": ".flatMap((sub) => (sub.length >= 1 ? h2hBlock(sub, keys, \"h2h_exclusion\", run) : [sub]));",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "a head-to-head step builds one mini-table"
+   }
+  ]
+ },
+ {
+  "id": "t4-reapply-reads-placed-singletons",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "sub.length > 1 && sub.length < cls.length ? h2hBlock(sub, keys, modifier, run) : [sub],",
+  "replace": "sub.length >= 1 && sub.length < cls.length ? h2hBlock(sub, keys, modifier, run) : [sub],",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "a head-to-head step builds one mini-table"
+   }
+  ]
+ },
+ {
+  "id": "t4-block-reads-a-placed-entrant",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "current = current.flatMap((cls) => (cls.length > 1 ? h2hBlock(cls, step.keys, step.modifier, run) : [cls]));",
+  "replace": "current = current.flatMap((cls) => (cls.length >= 1 ? h2hBlock(cls, step.keys, step.modifier, run) : [cls]));",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "a head-to-head step builds one mini-table"
+   }
+  ]
+ },
+ {
+  "id": "t4-overall-scope-from-four",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "if (run.h2hScope === \"overall\" && cls.length >= 3) return [cls];",
+  "replace": "if (run.h2hScope === \"overall\" && cls.length > 3) return [cls];",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "h2hScope"
+   }
+  ]
+ },
+ {
+  "id": "t4-overall-scope-skips-a-pair",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "if (run.h2hScope === \"overall\" && cls.length >= 3) return [cls];",
+  "replace": "if (run.h2hScope === \"overall\") return [cls];",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "h2hScope"
+   }
+  ]
+ },
+ {
+  "id": "t4-unsplit-mini-group-is-marked",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "if (groups.length > 1) markTieBreak(mini.back(group), key, run);",
+  "replace": "markTieBreak(mini.back(group), key, run);",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "a step that splits nothing"
+   }
+  ]
+ },
+ {
+  "id": "t4-unsplit-plain-class-is-marked",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "if (explain && groups.length > 1) markTieBreak(cls, step.key, run);",
+  "replace": "if (explain) markTieBreak(cls, step.key, run);",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "a step that splits nothing"
+   }
+  ]
+ },
+ {
+  "id": "t4-unsplit-direct-is-marked",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "if (explain && groups.length > 1) markTieBreak(cls, \"direct\", run);",
+  "replace": "if (explain) markTieBreak(cls, \"direct\", run);",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "a step that splits nothing"
+   }
+  ]
+ },
+ {
+  "id": "t4-direct-split-unexplained",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "if (explain && groups.length > 1) markTieBreak(cls, \"direct\", run);",
+  "replace": "if (false) markTieBreak(cls, \"direct\", run);",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "direct at rank time"
+   }
+  ]
+ },
+ {
+  "id": "t4-residual-note-key-undefined",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "...(note === undefined ? {} : { note }) };",
+  "replace": "note };",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "a step that splits nothing"
+   }
+  ]
+ },
+ {
+  "id": "t4-direct-counts-a-forfeit",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "!game.unplayed && game.opponent !== null && ids.has(game.opponent) ? sum + game.scored : sum,",
+  "replace": "game.opponent !== null && ids.has(game.opponent) ? sum + game.scored : sum,",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "direct at rank time"
+   }
+  ]
+ },
+ {
+  "id": "t4-direct-counts-every-played-game",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "!game.unplayed && game.opponent !== null && ids.has(game.opponent) ? sum + game.scored : sum,",
+  "replace": "!game.unplayed && game.opponent !== null || ids.has(game.opponent) ? sum + game.scored : sum,",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "direct at rank time"
+   }
+  ]
+ },
+ {
+  "id": "t4-swiss-direct-reads-results",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "  if (swiss) {",
+  "replace": "  if (false) {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "direct at rank time"
+   }
+  ]
+ },
+ {
+  "id": "t4-pool-ledger-without-sberger",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "ctx.swiss === undefined && ctx.cascade.includes(\"sberger\")",
+  "replace": "ctx.swiss === undefined || ctx.cascade.includes(\"sberger\")",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "the round-robin SB column"
+   }
+  ]
+ },
+ {
+  "id": "t4-field-goals-keep-strokes",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "return ledgerOf(row, [\"gf\"]) - ledgerOf(row, [\"goals_pc\"]) - ledgerOf(row, [\"goals_stroke\"]);",
+  "replace": "return ledgerOf(row, [\"gf\"]) - ledgerOf(row, [\"goals_pc\"]);",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "HK-TB-2 field_goals"
+   }
+  ]
+ },
+ {
+  "id": "t4-refusal-position-zero-based",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "at position ${index + 1} ${why}",
+  "replace": "at position ${index} ${why}",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "anti-goal 2"
+   }
+  ]
+ },
+ {
+  "id": "t4-difference-lost-half-alone",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "return w === undefined && l === undefined ? undefined : (w ?? 0) - (l ?? 0);",
+  "replace": "return w === undefined ? undefined : (w ?? 0) - (l ?? 0);",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "BD-TB-1 BWF 16.2.4"
+   }
+  ]
+ },
+ {
+  "id": "t4-pool-ledger-on-a-swiss-stage",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "ctx.swiss === undefined && ctx.cascade.includes(\"sberger\")",
+  "replace": "true && ctx.cascade.includes(\"sberger\")",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-keys-w2d.test.ts"
+    ],
+    "name": "the round-robin SB column"
+   }
+  ]
  }
 ]

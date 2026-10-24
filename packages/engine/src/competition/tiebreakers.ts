@@ -660,7 +660,7 @@ function directRefine(cls: StandingsRow[], run: RunContext): StandingsRow[][] {
       const row = swiss.find((entry) => entry.entrant === id);
       const scored = (row?.games ?? []).reduce(
         (sum, game) =>
-          game.opponent !== null && !game.unplayed && ids.has(game.opponent) ? sum + game.scored : sum,
+          !game.unplayed && game.opponent !== null && ids.has(game.opponent) ? sum + game.scored : sum,
         0,
       );
       scores.set(id, scored);

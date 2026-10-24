@@ -194,7 +194,7 @@
       "reason": "Line 83 returns whenever taken.home === taken.away, so line 84 only compares two different counts, where `<` and `<=` agree."
     },
     {
-      "mutant": "src/competition/stage.ts:367:33 EqualityOperator → fixture.round <= prev",
+      "mutant": "src/competition/stage.ts:365:33 EqualityOperator → fixture.round <= prev",
       "original": "fixture.round < prev",
       "line": "if (prev === undefined || fixture.round < prev) outAt.set(id, fixture.round);",
       "reason": "At fixture.round === prev the mutant sets outAt[id] to the value it already holds (prev), so the elimination round each entrant is pinned at is the same map either way; only the strict `>=` mutant changes it (killed)."
@@ -680,6 +680,30 @@
       "reason": "A walkover is admitted only while nothing is played (rulings 112, 114: any sport event after Start is play) and carrom's board summary and adjustment refuse outside phase \"live\", so an admitted walkover's state has no games and gamesWon 0-0: reading them adds nothing."
     },
     {
+      "mutant": "src/sport/module.ts:541:73 MethodExpression → unioned.options.some(o => typeof o === \"object\" && o !== null)",
+      "original": "unioned.options.every((o) => typeof o === \"object\" && o !== null)",
+      "line": "if (Array.isArray(unioned.options) && unioned.options.length > 0 && unioned.options.every((o) => typeof o === \"object\" && o !== null)) {",
+      "reason": "`some` differs from `every` only on a MIXED options array; a zod `.options` is all schemas (union, discriminatedUnion) or all enum values (strings, or numbers for a numeric enum), never schemas and values together, and the empty array never reaches it (`length > 0` first, killed by module.test.ts 'the empty case'), so the two agree on every schema the walk can meet."
+    },
+    {
+      "mutant": "src/sport/module.ts:541:102 LogicalOperator → typeof o === \"object\" || o !== null",
+      "original": "typeof o === \"object\" && o !== null",
+      "line": "if (Array.isArray(unioned.options) && unioned.options.length > 0 && unioned.options.every((o) => typeof o === \"object\" && o !== null)) {",
+      "reason": "`||` differs from `&&` only for a non-null non-object option, i.e. an enum's strings: the mutant then reads the enum as a union of string branches, each a leaf, so fieldsNamed throws the same `is not an object schema` message (same prefix, same path) the enum itself would (module.test.ts 'an enum is still a leaf' passes under it)."
+    },
+    {
+      "mutant": "src/sport/module.ts:541:102 ConditionalExpression → true",
+      "original": "typeof o === \"object\" && o !== null",
+      "line": "if (Array.isArray(unioned.options) && unioned.options.length > 0 && unioned.options.every((o) => typeof o === \"object\" && o !== null)) {",
+      "reason": "Names two mutants, the whole test and its `typeof o === \"object\"` operand, each made `true`; with options never null (union options are schemas, enum values strings or numbers) both are true for every element exactly as the LogicalOperator `||` mutant beside this entry is, so they read an enum as a union of leaf branches and fieldsNamed throws the same `is not an object schema` message at the same path (module.test.ts 'an enum is still a leaf' passes under both: the 4,478-test related run, W2c Task 22)."
+    },
+    {
+      "mutant": "src/sport/module.ts:541:127 ConditionalExpression → true",
+      "original": "o !== null",
+      "line": "if (Array.isArray(unioned.options) && unioned.options.length > 0 && unioned.options.every((o) => typeof o === \"object\" && o !== null)) {",
+      "reason": "Differs from `o !== null` only for a null option, and zod `.options` never holds null: a union's are schemas, an enum's are its string or number values (`typeof null === \"object\"` is the only case the operand exists for)."
+    },
+    {
       "mutant": "src/sports/period/kernel.ts:2387:38 ConditionalExpression → true",
       "original": "awardReasonOf(outcome) !== \"bye\"",
       "line": "if (outcome?.kind === \"award\" && awardReasonOf(outcome) !== \"bye\") {",
@@ -716,30 +740,6 @@
       "reason": "The guard exists for TypeScript narrowing only: past the award arm the remaining MatchOutcome kinds (draw, tie, no_result, double_walkover; core/types.ts:169-197) declare no `method`, so the method test is already false for every one of them and the mutant answers the same (W2c Task 9)."
     },
     {
-      "mutant": "src/sport/module.ts:530:73 MethodExpression → unioned.options.some(o => typeof o === \"object\" && o !== null)",
-      "original": "unioned.options.every((o) => typeof o === \"object\" && o !== null)",
-      "line": "if (Array.isArray(unioned.options) && unioned.options.length > 0 && unioned.options.every((o) => typeof o === \"object\" && o !== null)) {",
-      "reason": "`some` differs from `every` only on a MIXED options array; a zod `.options` is all schemas (union, discriminatedUnion) or all enum values (strings, or numbers for a numeric enum), never schemas and values together, and the empty array never reaches it (`length > 0` first, killed by module.test.ts 'the empty case'), so the two agree on every schema the walk can meet."
-    },
-    {
-      "mutant": "src/sport/module.ts:530:102 LogicalOperator → typeof o === \"object\" || o !== null",
-      "original": "typeof o === \"object\" && o !== null",
-      "line": "if (Array.isArray(unioned.options) && unioned.options.length > 0 && unioned.options.every((o) => typeof o === \"object\" && o !== null)) {",
-      "reason": "`||` differs from `&&` only for a non-null non-object option, i.e. an enum's strings: the mutant then reads the enum as a union of string branches, each a leaf, so fieldsNamed throws the same `is not an object schema` message (same prefix, same path) the enum itself would (module.test.ts 'an enum is still a leaf' passes under it)."
-    },
-    {
-      "mutant": "src/sport/module.ts:530:102 ConditionalExpression → true",
-      "original": "typeof o === \"object\" && o !== null",
-      "line": "if (Array.isArray(unioned.options) && unioned.options.length > 0 && unioned.options.every((o) => typeof o === \"object\" && o !== null)) {",
-      "reason": "Names two mutants, the whole test and its `typeof o === \"object\"` operand, each made `true`; with options never null (union options are schemas, enum values strings or numbers) both are true for every element exactly as the LogicalOperator `||` mutant beside this entry is, so they read an enum as a union of leaf branches and fieldsNamed throws the same `is not an object schema` message at the same path (module.test.ts 'an enum is still a leaf' passes under both: the 4,478-test related run, W2c Task 22)."
-    },
-    {
-      "mutant": "src/sport/module.ts:530:127 ConditionalExpression → true",
-      "original": "o !== null",
-      "line": "if (Array.isArray(unioned.options) && unioned.options.length > 0 && unioned.options.every((o) => typeof o === \"object\" && o !== null)) {",
-      "reason": "Differs from `o !== null` only for a null option, and zod `.options` never holds null: a union's are schemas, an enum's are its string or number values (`typeof null === \"object\"` is the only case the operand exists for)."
-    },
-    {
       "mutant": "src/sports/generic/generic.ts:242:43 ConditionalExpression → false",
       "original": "outcome?.kind !== \"award\"",
       "line": "if (state.forfeitAward === undefined || outcome?.kind !== \"award\") return null;",
@@ -762,6 +762,132 @@
       "original": "\"bye\"",
       "line": "if (reason === \"bye\") return null;",
       "reason": "`reason === \"\"` is false for every reason that reaches this line, exactly as `reason === \"bye\"` is: a held forfeitAward comes only from a core.forfeit, whose reason is one of the four FORFEIT_REASONS (CoreForfeit refuses `bye`: sports/generic/generic.test.ts, 'a bye is not a forfeit reason'), so neither form ever returns null here."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:587:75 ArrayDeclaration → [\"Stryker was here\"]",
+      "original": "[]",
+      "line": "const rows = foldResults(ids, resultsAmong(new Set(ids), run.results ?? []));",
+      "reason": "Only with no `results` in the rank context (the h2h mini-table). resultsAmong then filters [\"Stryker was here\"]: its callback destructures the string, so `home` is \"S\", whose `.entrantId` is undefined, and the group (a Set of entrant-id strings) never holds undefined, so the filter returns [] exactly as it did from [] and the mini-table folds no result either way."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:600:11 ConditionalExpression → false",
+      "original": "group.length <= 1",
+      "line": "if (group.length <= 1) return [group];",
+      "reason": "A mini-table group of one without the shortcut goes to groupBySort, which sorts a one-row array (no comparator call) and returns [[row]]; `groups.length > 1` is then false, so nothing is marked and the same single group comes back. Only the shortcut is lost."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:600:11 EqualityOperator → group.length < 1",
+      "original": "group.length <= 1",
+      "line": "if (group.length <= 1) return [group];",
+      "reason": "A group is never empty (groupBySort and mini.rows never yield []), so `< 1` is the `→ false` mutant above: a group of one goes to groupBySort, comes back as [[row]] unmarked, the same result."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:605:9 ConditionalExpression → false",
+      "original": "miniClasses.every((group) => group.length === 1)",
+      "line": "if (miniClasses.every((group) => group.length === 1)) break;",
+      "reason": "The early exit from h2hPass's key loop once every mini group is a single row. Without it the remaining keys still run, but every group of one returns itself at `group.length <= 1` (no comparator call, no mark), so miniClasses and the result are unchanged; only iterations are spent."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:605:27 ArrowFunction → () => undefined",
+      "original": "(group) => group.length === 1",
+      "line": "if (miniClasses.every((group) => group.length === 1)) break;",
+      "reason": "`every` with a predicate returning undefined is false for any non-empty miniClasses (it never is empty), so this is the `→ false` mutant of the same line: the loop runs the remaining keys over groups of one, each returned unchanged and unmarked."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:605:38 ConditionalExpression → false",
+      "original": "group.length === 1",
+      "line": "if (miniClasses.every((group) => group.length === 1)) break;",
+      "reason": "The predicate always false makes `every` false (miniClasses is never empty), so the early exit never fires: the remaining keys run over groups of one, each returned unchanged and unmarked at `group.length <= 1`; same result."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:632:7 ConditionalExpression → false",
+      "original": "cls.length <= 1",
+      "line": "if (cls.length <= 1) return [cls];",
+      "reason": "h2hTwo on a class of one: without the early return the class is not two, so the row gets the 'h2h_two_not_applicable' note and comes back unchanged. That note is read only by markResidual, which runs on classes of two or more after the cascade; classes only shrink, so a row once alone is never in one again (markTieBreak only deletes notes). The note is never read."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:632:7 EqualityOperator → cls.length < 1",
+      "original": "cls.length <= 1",
+      "line": "if (cls.length <= 1) return [cls];",
+      "reason": "A class is never empty (refine only ever holds non-empty classes), so `< 1` is the `→ false` mutant above: a lone row gets a note no reader reaches, since markResidual only marks classes of two or more and a class never grows back."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:661:37 ArrayDeclaration → [\"Stryker was here\"]",
+      "original": "[]",
+      "line": "const scored = (row?.games ?? []).reduce(",
+      "reason": "Only for a tied entrant missing from the Swiss ledger. The reduce then visits one string instead of no game: `!game.unplayed` holds (undefined), `game.opponent !== null` holds (undefined), and `ids.has(undefined)` is false (ids holds entrant-id strings), so the sum stays 0, as the empty card gave."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:669:59 ArrayDeclaration → [\"Stryker was here\"]",
+      "original": "[]",
+      "line": "for (const result of resultsAmong(ids, run.results ?? [])) {",
+      "reason": "NoCoverage: the literal is evaluated only when `direct` runs off-Swiss with no `results`, which no test does. resultsAmong then filters [\"Stryker was here\"]: its callback destructures the string, so `home` is \"S\", whose `.entrantId` is undefined, and the group (a Set of entrant-id strings) never holds undefined, so the filter returns [] exactly as it did from [], so the loop body never runs and every direct score stays 0 either way."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:706:15 ConditionalExpression → false",
+      "original": "cls.length <= 1",
+      "line": "if (cls.length <= 1) return [cls];",
+      "reason": "A class of one without the shortcut goes to groupBySort: a one-row sort calls no comparator and returns [[row]], so `groups.length > 1` is false, nothing is marked and the same class comes back."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:720:60 ArrayDeclaration → [\"Stryker was here\"]",
+      "original": "[]",
+      "line": "const scored = resultsAmong(new Set(ids), ctx.results ?? []).map((result): FixtureResult => {",
+      "reason": "NoCoverage: the literal is evaluated only when sberger ranks a round robin with no `results`, which no test does. resultsAmong then filters [\"Stryker was here\"]: its callback destructures the string, so `home` is \"S\", whose `.entrantId` is undefined, and the group (a Set of entrant-id strings) never holds undefined, so the filter returns [] exactly as it did from [], so the pool ledger is buildSwissTable(ids, []) either way."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:450:10 ConditionalExpression → true",
+      "original": "key !== undefined",
+      "line": "return key !== undefined && H2H_KEYS.has(key);",
+      "reason": "TypeScript narrowing for `H2H_KEYS.has(key)`: with it true, an absent key (parseCascade looks one past the end with `cascade[i + 1]`) reaches `H2H_KEYS.has(undefined)`, which is false (the set holds key strings), so the answer is the same false."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:454:10 ConditionalExpression → true",
+      "original": "key !== undefined",
+      "line": "return key !== undefined && MODIFIERS.has(key);",
+      "reason": "TypeScript narrowing for `MODIFIERS.has(key)`: with it true, the absent key one past the cascade's end reaches `MODIFIERS.has(undefined)`, which is false (the set holds the two modifier strings), so the answer is the same false."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:514:25 ArrayDeclaration → [\"Stryker was here\"]",
+      "original": "[]",
+      "line": "const steps: Step[] = [];",
+      "reason": "parseCascade's step list then starts with a string, which refine alone reads: `\"Stryker was here\".index > 0` is false and its `.kind` (undefined) matches no case of the switch, so that step does nothing and the real steps follow it unchanged."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:663:29 ConditionalExpression → true",
+      "original": "game.opponent !== null",
+      "line": "!game.unplayed && game.opponent !== null && ids.has(game.opponent) ? sum + game.scored : sum,",
+      "reason": "TypeScript narrowing for `ids.has(game.opponent)`: with it true, a null opponent (a bye) reaches `ids.has(null)`, which is false (ids holds entrant-id strings), so the game is skipped exactly as the guard skipped it. (The conjuncts were ordered `!game.unplayed` first so this key names only this mutant.)"
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:683:9 ConditionalExpression → false",
+      "original": "current.every((cls) => cls.length === 1)",
+      "line": "if (current.every((cls) => cls.length === 1)) break;",
+      "reason": "Without the early exit, refine runs the remaining steps over classes that are all single rows, and every step returns a class of one unchanged and unmarked: `lots` does nothing here, a block step skips it (`cls.length > 1`), h2hTwo, `direct` and a plain key return it at `cls.length <= 1`. The classes, the traces and the notes are the same; only the loop is spent."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:683:23 ArrowFunction → () => undefined",
+      "original": "(cls) => cls.length === 1",
+      "line": "if (current.every((cls) => cls.length === 1)) break;",
+      "reason": "`every` with a predicate returning undefined is false for the never-empty class list, so this is the `→ false` mutant of the same line. Without the early exit, refine runs the remaining steps over classes that are all single rows, and every step returns a class of one unchanged and unmarked: `lots` does nothing here, a block step skips it (`cls.length > 1`), h2hTwo, `direct` and a plain key return it at `cls.length <= 1`. The classes, the traces and the notes are the same; only the loop is spent."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:683:32 ConditionalExpression → false",
+      "original": "cls.length === 1",
+      "line": "if (current.every((cls) => cls.length === 1)) break;",
+      "reason": "The predicate always false makes `every` false (the class list is never empty), so the early exit never fires. Without the early exit, refine runs the remaining steps over classes that are all single rows, and every step returns a class of one unchanged and unmarked: `lots` does nothing here, a block step skips it (`cls.length > 1`), h2hTwo, `direct` and a plain key return it at `cls.length <= 1`. The classes, the traces and the notes are the same; only the loop is spent."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:686:12 StringLiteral → \"\"",
+      "original": "\"lots\"",
+      "line": "case \"lots\":",
+      "reason": "The `lots` case of refine's switch only breaks (lots is drawn after the cascade, in rankStandings). With its label changed no case matches a lots step, and a switch with no matching case also does nothing, so the step is the same no-op."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:706:15 EqualityOperator → cls.length < 1",
+      "original": "cls.length <= 1",
+      "line": "if (cls.length <= 1) return [cls];",
+      "reason": "A class is never empty, so `< 1` is the `→ false` mutant above: a class of one goes to groupBySort, which returns [[row]] without a comparator call, `groups.length > 1` is false, and the same class comes back unmarked."
     },
     {
       "mutant": "src/competition/points.ts:656:7 ConditionalExpression → false",
