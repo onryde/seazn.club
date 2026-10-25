@@ -26,11 +26,15 @@ export async function expectSeatWord(page: Page, board: RoundBoard, colour: "whi
 }
 
 /** One seat of a board in a confirmation dialog's row (`OpenRoundConfirmBody`): the same word the waiting list shows for that seat
- *  (Task 16 D2 - the dialog used to say "Not invited" for a seat the list called Not delivered), in the dictionary's own text. */
+ *  (Task 16 D2 - the dialog used to say "Not invited" for a seat the list called Not delivered), in the dictionary's own text. The
+ *  seat's WHOLE text is matched, anchored at both ends: "White: Not delivered, Bounced" (a seat that read two words) is not
+ *  "White: Not delivered", so a mixed string fails where a substring check would pass. */
 export async function expectConfirmSeatWord(dialog: Locator, board: RoundBoard, colour: "white" | "black", word: SeatInviteWord): Promise<void> {
   const seat = dialog.getByTestId(`open-round-invitee-${board.fixtureId}`).locator(`[data-seat="${colour}"]`);
   await expect(seat, `${colour} of ${board.fixtureId} is named in the confirmation`).toHaveCount(1);
-  await expect(seat, `${colour} of ${board.fixtureId} in the confirmation`).toContainText(uiEn[INVITE_WORD_KEYS[word]]!);
+  const wanted = fill("arbiter.column.confirmSeat", { colour: uiEn[colour === "white" ? "arbiter.colour.white" : "arbiter.colour.black"]!, words: uiEn[INVITE_WORD_KEYS[word]]! });
+  const escaped = wanted.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  await expect(seat, `${colour} of ${board.fixtureId} in the confirmation reads exactly ${JSON.stringify(wanted)}`).toHaveText(new RegExp(`^${escaped}$`));
 }
 
 /** The open-round route's answer (`OpenRoundResult`, lib/open-round.ts), as it crosses the wire. */

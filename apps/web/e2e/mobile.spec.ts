@@ -6196,6 +6196,11 @@ test("arbiter round column: below md the column leads the page; from md it is th
   await expect(col.getByTestId("arbiter-waiting"), "the waiting list is not inside the column").toHaveCount(0);
   await expect(waiting.getByTestId("arbiter-waiting-row"), "one row for each board still checking in").toHaveCount(waitingRows);
   await expect(col.getByTestId("arbiter-column-review"), "premise: the held board has a card to review").toBeVisible();
+  // The decision area is measured below (tablet: above the waiting list). It renders for the board on screen only when that board has
+  // something to offer; the panel opens on the FIRST board, which the seed leaves checking in with its round open, so "+5 min" (or the
+  // reason it is not offered) and "Settle the result now" are there. Said as a premise, so a seed that stops offering either fails here by
+  // name instead of as "the decision area is not on screen" at the measurement.
+  await expect(page.getByTestId("arbiter-decision"), "premise: the board on screen (board 1, checking in) has a decision area").toBeVisible();
   // The panel's own `main`: the one that holds the column (the page has no other, but the scope is stated, not assumed).
   const panelMain = page.locator('main:has([data-testid="arbiter-round-column"])');
   await expect(panelMain.locator("figure"), "premise: the camera tile is on screen").toHaveCount(1);
@@ -6245,8 +6250,11 @@ test("arbiter round column: below md the column leads the page; from md it is th
     holds(decision.top >= camera.bottom - 1, "the decision area is below the camera");
     holds(decision.bottom <= wait.top + 1, "the decision area is above the waiting list");
     holds(wait.top >= camera.bottom - 1, "the waiting list is under the camera");
+    // The waiting list is in the board track, not the column's: its right edge stops short of the column's left (the relation the
+    // box-measuring version of this branch checked as "the column is right of the board group", which the list was part of).
+    holds(aside.left >= wait.right - 1, "the column is right of the waiting list");
   }
-  const expectedRelations = phone ? 3 : 5;
+  const expectedRelations = phone ? 3 : 6;
   expect(relations.length, "anti-vacuity: every relation of this branch was checked").toBe(expectedRelations);
 
   // ── the sideways scroll, and what overflows inside the column ─────────────────────────────────────────────────────────────────────

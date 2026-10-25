@@ -948,73 +948,96 @@ test.describe("arbiter panel", () => {
     await expect(page.getByRole("heading", { level: 1, name: uiEn["arbiter.title"] })).toHaveCount(0);
   });
 
-  // T17B fix 2, D9 (measured live, JTcfKXow): a player connected from more than one place at the same time in the
-  // match. The flag is the sweep's job-5 note, seeded in the producer's format (see the header: producing it for real
-  // needs a RealtimeKit meeting; the producer → loader read is external-play-sweep.test.ts's D9 describe). Here: the
-  // card the organiser reads after the game, at every width, and "Mark as reviewed" closing it on the record.
-  test("T17B fix 2 (D9): a finished board's 'more than one device at once' card — the count, when, and why; no sideways scroll at 320, 768 or 1280; Mark as reviewed closes it under the organiser's name", async ({
-    page,
-    request,
-  }) => {
-    test.setTimeout(120_000);
-    const r = await seedRound(request, [longName(), "Ana Petrova", "Bo Lindqvist", "Chen Wei"]);
-    const board = r.boards[0]!;
-    await gameOn(board, { moves: LINE });
-    // The game is over: its result through the organiser's own scoring API (what reconcile writes).
-    const homeEntrant = await withDb(async (sql) => {
-      const [row] = await sql<{ id: string }[]>`select home_entrant_id as id from fixtures where id = ${board.fixtureId}`;
-      return row!.id;
+  // Task 16 D1: the zone pair this test needs. The venue (Tokyo) and the browser (New York) are never at one UTC offset, whatever zone the
+  // runner is in, so the panel's "(Tokyo time)" label is always owed and a face in the wrong zone is always a different string.
+  const VENUE_ZONE = "Asia/Tokyo";
+  const VENUE_CITY = "Tokyo"; // IANA's own name for the zone, typed from the zone id, not derived by the panel
+  const BROWSER_ZONE = "America/New_York";
+  test.describe("a flag card reads its times in the venue's zone", () => {
+    test.use({ timezoneId: BROWSER_ZONE });
+    // T17B fix 2, D9 (measured live, JTcfKXow): a player connected from more than one place at the same time in the
+    // match. The flag is the sweep's job-5 note, seeded in the producer's format (see the header: producing it for real
+    // needs a RealtimeKit meeting; the producer → loader read is external-play-sweep.test.ts's D9 describe). Here: the
+    // card the organiser reads after the game, at every width, and "Mark as reviewed" closing it on the record.
+    test("T17B fix 2 (D9): a finished board's 'more than one device at once' card — the count, when, and why; no sideways scroll at 320, 768 or 1280; Mark as reviewed closes it under the organiser's name", async ({
+      page,
+      request,
+    }) => {
+      test.setTimeout(120_000);
+      const r = await seedRound(request, [longName(), "Ana Petrova", "Bo Lindqvist", "Chen Wei"]);
+      const board = r.boards[0]!;
+      await gameOn(board, { moves: LINE });
+      // The game is over: its result through the organiser's own scoring API (what reconcile writes).
+      const homeEntrant = await withDb(async (sql) => {
+        const [row] = await sql<{ id: string }[]>`select home_entrant_id as id from fixtures where id = ${board.fixtureId}`;
+        return row!.id;
+      });
+      for (const [seq, event] of [
+        [0, { type: "core.start", payload: {} }],
+        [1, { type: "boardgame.result", payload: { winner: homeEntrant, method: "resign" } }],
+      ] as const) {
+        const res = await apiJson(request, `/api/v1/fixtures/${board.fixtureId}/events`, "POST", { expected_seq: seq, ...event });
+        expect(res.status, JSON.stringify(res.error)).toBeLessThan(300);
+      }
+      const from = new Date(Date.now() - 20 * 60_000);
+      from.setUTCMilliseconds(0);
+      const to = new Date(from.getTime() + 340_000);
+      await withDb(
+        (sql) => sql`
+          insert into fixture_play_flags (fixture_id, org_id, kind, person_id, note) values
+            (${board.fixtureId}, ${r.orgId}, 'multiple_devices', ${board.home.personId},
+             ${`2 camera connections at once for 340 s in the match: ${from.toISOString()} to ${to.toISOString()}; camera required`})`,
+      );
+
+      // The venue's zone, on THIS division only (a division zone beats the org's, and the org is shared with other specs).
+      await withDb(
+        (sql) => sql`
+          insert into schedule_settings (division_id, tz, config) values (${r.divisionId}, ${VENUE_ZONE}, '{}'::jsonb)
+          on conflict (division_id) do update set tz = excluded.tz`,
+      );
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await page.goto(`${r.arbiterPath}?fixture=${board.fixtureId}`);
+      const flags = page.getByRole("region", { name: fill("arbiter.flags.headingBoard", { n: 1 }) });
+      await expect(flags.getByText(fill("arbiter.flag.devices.chip", { count: 2 }), { exact: true })).toBeVisible();
+      // Task 16 D1: the panel prints a time of day in the VENUE's zone, and names the venue after each one when the viewer's own UTC offset
+      // differs ("15:56:10 (Tokyo time)"). The venue here is Tokyo and the browser is pinned to New York (describe above), so the two
+      // faces differ and the test can tell them apart: the face worked out here, by Intl in the runner, in the VENUE's zone, with the
+      // dictionary's own label; and a face read in the browser's zone must NOT be on the page.
+      const browserZone = await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
+      expect(browserZone, "the browser is pinned to a zone other than the venue's").toBe(BROWSER_ZONE);
+      const faceIn = (at: Date, timeZone: string) =>
+        new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23", timeZone }).format(at);
+      const [vFrom, vTo] = [faceIn(from, VENUE_ZONE), faceIn(to, VENUE_ZONE)];
+      const [bFrom, bTo] = [faceIn(from, BROWSER_ZONE), faceIn(to, BROWSER_ZONE)];
+      expect([vFrom, vTo], "anti-vacuity: the venue's faces differ from the browser's, so a browser-zone face cannot pass").not.toEqual([bFrom, bTo]);
+      expect(vFrom, "a face is HH:MM:SS").toMatch(/^\d{2}:\d{2}:\d{2}$/);
+      const named = (face: string) => fill("arbiter.venueTime", { time: face, city: VENUE_CITY });
+      const spansIn = (a: string, b: string) => fill("arbiter.flag.cameraOff.span", { from: named(a), to: named(b) });
+      await expect(flags.getByText(fill("arbiter.flag.devices.spans", { name: board.home.name, count: 2, spans: spansIn(vFrom, vTo) }))).toBeVisible();
+      await expect(
+        flags.getByText(fill("arbiter.flag.devices.spans", { name: board.home.name, count: 2, spans: spansIn(bFrom, bTo) })),
+        "the browser's own face is not what the panel prints",
+      ).toHaveCount(0);
+      await expect(flags.getByText(uiEn["arbiter.flag.devices.why"]!)).toBeVisible();
+      expect(await noSidewaysScroll(page, [320, 768, 1280])).toBe(3);
+      await shoot(page, "arbiter-d9-devices");
+
+      await page.setViewportSize({ width: 1280, height: 900 });
+      const review = decision(page).getByRole("button", { name: uiEn["externalPlay.queue.markReviewed"] });
+      await expect(review).toBeVisible();
+      await review.click();
+      await expect(status(page)).toHaveText(uiEn["externalPlay.queue.reviewed"]!);
+      const kept = await withDb(
+        (sql) => sql<{ kind: string; closed: boolean; role: string | null }[]>`
+          select f.kind, f.closed_at is not null as closed, m.role from fixture_play_flags f
+            left join org_members m on m.user_id = f.resolved_by and m.org_id = f.org_id
+           where f.fixture_id = ${board.fixtureId}`,
+      );
+      expect(kept, "closed and kept on record, resolved by an organiser").toEqual([
+        { kind: "multiple_devices", closed: true, role: expect.stringMatching(/^(owner|admin)$/) },
+      ]);
+      await expect(flags.getByText(fill("arbiter.flag.devices.chip", { count: 2 }), { exact: true })).toHaveCount(0);
     });
-    for (const [seq, event] of [
-      [0, { type: "core.start", payload: {} }],
-      [1, { type: "boardgame.result", payload: { winner: homeEntrant, method: "resign" } }],
-    ] as const) {
-      const res = await apiJson(request, `/api/v1/fixtures/${board.fixtureId}/events`, "POST", { expected_seq: seq, ...event });
-      expect(res.status, JSON.stringify(res.error)).toBeLessThan(300);
-    }
-    const from = new Date(Date.now() - 20 * 60_000);
-    from.setUTCMilliseconds(0);
-    const to = new Date(from.getTime() + 340_000);
-    await withDb(
-      (sql) => sql`
-        insert into fixture_play_flags (fixture_id, org_id, kind, person_id, note) values
-          (${board.fixtureId}, ${r.orgId}, 'multiple_devices', ${board.home.personId},
-           ${`2 camera connections at once for 340 s in the match: ${from.toISOString()} to ${to.toISOString()}; camera required`})`,
-    );
-
-    await page.setViewportSize({ width: 1280, height: 900 });
-    await page.goto(`${r.arbiterPath}?fixture=${board.fixtureId}`);
-    const flags = page.getByRole("region", { name: fill("arbiter.flags.headingBoard", { n: 1 }) });
-    await expect(flags.getByText(fill("arbiter.flag.devices.chip", { count: 2 }), { exact: true })).toBeVisible();
-    // The times as the viewer's own clock says them (h23, like every flag card) — formatted by the browser, not the panel.
-    const [hFrom, hTo] = await page.evaluate(
-      ([a, b]) => {
-        const f = new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" });
-        return [f.format(new Date(a!)), f.format(new Date(b!))];
-      },
-      [from.toISOString(), to.toISOString()],
-    );
-    const spans = fill("arbiter.flag.cameraOff.span", { from: hFrom!, to: hTo! });
-    await expect(flags.getByText(fill("arbiter.flag.devices.spans", { name: board.home.name, count: 2, spans }))).toBeVisible();
-    await expect(flags.getByText(uiEn["arbiter.flag.devices.why"]!)).toBeVisible();
-    expect(await noSidewaysScroll(page, [320, 768, 1280])).toBe(3);
-    await shoot(page, "arbiter-d9-devices");
-
-    await page.setViewportSize({ width: 1280, height: 900 });
-    const review = decision(page).getByRole("button", { name: uiEn["externalPlay.queue.markReviewed"] });
-    await expect(review).toBeVisible();
-    await review.click();
-    await expect(status(page)).toHaveText(uiEn["externalPlay.queue.reviewed"]!);
-    const kept = await withDb(
-      (sql) => sql<{ kind: string; closed: boolean; role: string | null }[]>`
-        select f.kind, f.closed_at is not null as closed, m.role from fixture_play_flags f
-          left join org_members m on m.user_id = f.resolved_by and m.org_id = f.org_id
-         where f.fixture_id = ${board.fixtureId}`,
-    );
-    expect(kept, "closed and kept on record, resolved by an organiser").toEqual([
-      { kind: "multiple_devices", closed: true, role: expect.stringMatching(/^(owner|admin)$/) },
-    ]);
-    await expect(flags.getByText(fill("arbiter.flag.devices.chip", { count: 2 }), { exact: true })).toHaveCount(0);
   });
   // ── D16 (§5.6.4, shape (b)): one player's camera at a time, and the switch between them ───────────────────────────
   //

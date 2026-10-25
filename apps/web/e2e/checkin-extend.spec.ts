@@ -71,7 +71,7 @@ const hm = (text: string): string => {
   if (!m) throw new Error(`no HH:MM in ${JSON.stringify(text)}`);
   return m[1]!;
 };
-/** "HH:MM" plus n minutes (mod a day), for comparing a time the page printed with the one it should print - in the page's own zone. */
+/** "HH:MM" plus n minutes (mod a day), for comparing a time the page printed with the one it should print - in whichever zone the panel prints (both times are read off the page, so the zone does not matter). */
 const plusMinutes = (t: string, n: number): string => {
   const [h, m] = t.split(":").map(Number) as [number, number];
   const total = (h * 60 + m + n) % (24 * 60);
