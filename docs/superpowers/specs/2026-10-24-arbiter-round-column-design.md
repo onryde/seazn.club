@@ -229,8 +229,8 @@ No state loses a line it shows today.
 - **"+5 min to the round"**: the panel's one `RoundExtend` (`arbiter-extend-round*` testids, `roundExtendRunner`,
   `liveExtendableBoards`, `roundExtendWhy`), placed here in this phase (§5.2).
 - **The round's own press** when `press` is `reinvite` or `reopen` (the spike dropped it, §2): a quiet secondary button
-  that opens a confirmation. A `reinvite` press keeps the run sheet's copy ("Invite {count} players", "Open Round {round}
-  for the players not yet invited?"). A `reopen` press has its own words, below. This is how a Not delivered seat is
+  that opens a confirmation. A `reinvite` press keeps the run sheet's copy ("Invite {count} players", "Invite the players not yet
+  invited to Round {round}?": the title names the action its button names). A `reopen` press has its own words, below. This is how a Not delivered seat is
   invited again (pre-flight C4). Its stamp is released, so its
   row offers no Resend, and the round's press becomes `reopen` or `reinvite`. A `reopen` press is on a round that is
   ALREADY open, and what it does is invite everyone again and start the check-in window again now (`openRound`'s
@@ -238,7 +238,10 @@ No state loses a line it shows today.
   `arbiter.column.reopenCta` ("Invite again and restart check-in"), never "Open round" (Task 11). An action keeps one name
   through the flow, so its confirmation says the same: the title is `arbiter.column.reopenConfirmTitle` ("Restart
   check-in for Round {round}?") and the button `arbiter.column.reopenConfirmCta` ("Invite {count} players and restart
-  check-in"), over the run sheet's body ("This invites {count} players and starts their clock now."). The first-time Open
+  check-in"), over the run sheet's body ("This invites {count} players and starts their clock now."). That body is shared by all three
+  presses and only the first-time open has an Open button, so its window sentence counts from now and names no button
+  ("... {minutes} minutes from now, that board comes to you to decide"; staggered: "the last group opens {span} minutes
+  from now"). The first-time Open
   press and its confirmation ("Open Round {round}?", "Open round and invite {count} players") are unchanged. The reader
   names `reopen` when the window will start again: nobody it reached is still bound, or (D17) a board the arbiter closed
   with No result and the organiser voided is re-armed and every other bound board is decided.

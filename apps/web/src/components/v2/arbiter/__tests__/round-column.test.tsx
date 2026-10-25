@@ -24,7 +24,7 @@ import type { ArbiterBoard, ArbiterRound } from "@/lib/arbiter-view";
 import { INVITE_WORD_KEYS, type SeatInviteWord } from "@/lib/invite-status";
 import type { OpenRoundPairing, OpenRoundResult, OpenRoundView } from "@/lib/open-round";
 import { routes } from "@/lib/routes";
-import { DEADLINE_AFTER_MS } from "@/server/external-play/window";
+import { CHECKIN_BATCH_GAP_MS, DEADLINE_AFTER_MS } from "@/server/external-play/window";
 import { owedPlayers } from "../../desk/open-round-control";
 import { initialOpenRoundUi, type OpenRoundUiState } from "../../desk/open-round-state";
 import type { OpenRoundHandle } from "../../desk/use-open-round";
@@ -1606,6 +1606,113 @@ describe("the confirmation of each press, under every locale: the press and its 
     expect(inner(h, "arbiter-column-reinvite-dialog")!, `${locale}: title`).toContain(esc(fillIn(d["runsheet.round.confirmTitleReinvite"]!, { round: ON_SCREEN.roundNo })));
     expect(textIn(h, "arbiter-column-reinvite-dialog-confirm"), `${locale}: button`).toBe(esc(fillIn(d["runsheet.round.inviteCta.other"]!, { count: 2 })));
     expect(inner(h, "arbiter-column-reinvite-dialog")!, `${locale}: not the restart title`).not.toContain(esc(fillIn(d["arbiter.column.reopenConfirmTitle"]!, { round: ON_SCREEN.roundNo })));
+  });
+});
+
+// The body under a confirmation is the run sheet's, shared by the first open, the reopen and the reinvite; only the first open has an
+// Open button. A sentence that says "after you press Open" under "Invite 2 players and restart check-in" names a button that is not
+// there (Task 11 re-review). The probe is the Open round label's own verb, read from each locale's dictionary.
+describe("the open-round confirmation names the press it sits under, under every locale", () => {
+  const dicts = [["en", enUi], ["es", esUi], ["fr", frUi], ["nl", nlUi]] as [Locale, Dict][];
+  const fillIn = (s: string, vars: Record<string, string | number>) => Object.entries(vars).reduce((acc, [k, v]) => acc.replaceAll(`{${k}}`, String(v)), s);
+  /** Where the Open round label keeps its verb: the one word of it that starts like this. Guarded below, so a relabel cannot blind the probe. */
+  const VERB_STEM: Record<Locale, string> = { en: "open", es: "abr", fr: "ouv", nl: "open" };
+  const verbOf = (d: Record<string, string>, locale: Locale) => {
+    const words = d["runsheet.round.openCta"]!.split(/\s+/).filter((w) => w.toLowerCase().startsWith(VERB_STEM[locale]));
+    expect(words, `${locale}: the Open round label has exactly one verb`).toHaveLength(1);
+    return words[0]!;
+  };
+  const textOf = (markup: string) => markup.replace(/<[^>]*>/g, "");
+  /** What tells the arbiter to press an Open button: the label itself, or its verb written as a button's name is (capitalised). */
+  const namesOpenPress = (markup: string, d: Record<string, string>, locale: Locale) => {
+    const text = textOf(markup);
+    const verb = verbOf(d, locale);
+    const capital = verb[0]!.toUpperCase() + verb.slice(1);
+    const found: string[] = [];
+    if (text.toLowerCase().includes(esc(d["runsheet.round.openCta"]!).toLowerCase())) found.push("the label");
+    if (new RegExp(`(?<![\\p{L}])${esc(capital)}(?![\\p{L}])`, "u").test(text)) found.push("the verb as a button's name");
+    return found;
+  };
+  /** A dialog with no Open sentence of its own has no word from the Open verb at all (the staggered body's own "a group opens" is the exception). */
+  const hasVerbStem = (markup: string, locale: Locale) => new RegExp(VERB_STEM[locale], "i").test(textOf(markup));
+
+  const BATCHES = [0, 1, 2].map((i) => ({ fromBoard: 10 * i + 1, toBoard: 10 * i + 10, offsetMs: i * CHECKIN_BATCH_GAP_MS, opensAt: null, closesAt: null }));
+  const SPAN = (2 * CHECKIN_BATCH_GAP_MS) / 60_000;
+  const OPENED_AT = "2026-10-24T11:50:00.000Z";
+  const DEADLINE_AT = new Date(Date.parse(OPENED_AT) + DEADLINE_AFTER_MS).toISOString();
+  const boards = [checking(OPEN(), seat(false), seat(false))];
+  const STAGGER = { staggered: true, batches: BATCHES, staggerSpanMinutes: SPAN };
+  const PAIRINGS = [P(1, { owedSeats: 2 })];
+  /** The three presses that are NOT the first open, each with and without a stagger. */
+  const OTHERS: { name: string; view: OpenRoundView; title: string }[] = [
+    { name: "reopen", view: VIEW({ state: "open", press: "reopen", openedAt: OPENED_AT, deadlineAt: DEADLINE_AT, pairings: PAIRINGS }), title: "arbiter.column.reopenConfirmTitle" },
+    { name: "reopen, staggered", view: VIEW({ state: "open", press: "reopen", openedAt: OPENED_AT, deadlineAt: DEADLINE_AT, pairings: PAIRINGS, ...STAGGER }), title: "arbiter.column.reopenConfirmTitle" },
+    { name: "reinvite", view: VIEW({ state: "open", press: "reinvite", openedAt: OPENED_AT, deadlineAt: DEADLINE_AT, pairings: PAIRINGS }), title: "runsheet.round.confirmTitleReinvite" },
+    { name: "reinvite, staggered", view: VIEW({ state: "open", press: "reinvite", openedAt: OPENED_AT, deadlineAt: DEADLINE_AT, pairings: PAIRINGS, ...STAGGER }), title: "runsheet.round.confirmTitleReinvite" },
+  ];
+  const dialogOf = (dict: Dict, locale: Locale, view: OpenRoundView) =>
+    inner(
+      renderToStaticMarkup(
+        <DictProvider dict={dict} locale={locale}>
+          <RoundColumn
+            {...COLUMN({
+              round: ROUND(boards),
+              nowMs: NOW,
+              data: DATA({ views: [view] }),
+              openRound: { ...sharedHandle().handle, state: { ...initialOpenRoundUi(), confirming: true } },
+            })}
+          />
+        </DictProvider>,
+      ),
+      "arbiter-column-reinvite-dialog",
+    );
+
+  it.each(dicts)("%s: the reopen and the reinvite dialogs never name an Open button, whole or by its verb, and their titles carry no Open verb", (locale, dict) => {
+    const d = dict as unknown as Record<string, string>;
+    let checked = 0;
+    for (const { name, view, title } of OTHERS) {
+      const dialog = dialogOf(dict, locale, view);
+      expect(dialog, `${locale} ${name}: the dialog is open`).not.toBeNull();
+      const heading = fillIn(d[title]!, { round: ON_SCREEN.roundNo });
+      expect(dialog!, `${locale} ${name}: its title`).toContain(esc(heading));
+      expect(heading, `${locale} ${name}: the title names no Open verb`).not.toMatch(new RegExp(VERB_STEM[locale], "i"));
+      expect(namesOpenPress(dialog!, d, locale), `${locale} ${name}: the dialog names the Open press`).toEqual([]);
+      // The reopen shows the run sheet's window sentence for its round (the staggered one is the sentence that said "press Open"); the reinvite its own.
+      const staggeredSentence = fillIn(d["runsheet.round.confirmWindowStaggered"]!, { span: SPAN, minutes: DEADLINE_AFTER_MS / 60_000 });
+      const plainSentence = fillIn(d["runsheet.round.confirmWindow"]!, { minutes: DEADLINE_AFTER_MS / 60_000 });
+      const staggeredBody = view.press === "reopen" && view.staggered;
+      if (view.press === "reopen") {
+        expect(dialog!, `${locale} ${name}: the window sentence for this round`).toContain(esc(staggeredBody ? staggeredSentence : plainSentence));
+      }
+      if (!staggeredBody) expect(hasVerbStem(dialog!, locale), `${locale} ${name}: no word from the Open verb at all`).toBe(false);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: 4 dialogs").toBe(4);
+  });
+
+  it.each(dicts)("%s: its positive pair: the first open still says Open round on its button, and the probe sees it", (locale, dict) => {
+    const d = dict as unknown as Record<string, string>;
+    const h = renderToStaticMarkup(
+      <DictProvider dict={dict} locale={locale}>
+        <OpenRoundBlockView view={VIEW({ roundNo: 4 })} state={{ ...initialOpenRoundUi(), confirming: true }} tz={TZ} showStage={false} on={NO_ON} />
+      </DictProvider>,
+    );
+    const dialog = inner(h, "arbiter-column-confirm")!;
+    expect(dialog, `${locale}: the first open's dialog is open`).not.toBeNull();
+    expect(textIn(h, "arbiter-column-confirm-confirm"), `${locale}: the button`).toBe(esc(fillIn(d["runsheet.round.confirmCta.other"]!, { count: 6 })));
+    expect(textIn(h, "arbiter-column-confirm-confirm")!, `${locale}: the button carries the Open round label`).toContain(esc(d["runsheet.round.openCta"]!));
+    expect(dialog, `${locale}: the title`).toContain(esc(fillIn(d["runsheet.round.confirmTitle"]!, { round: 4 })));
+    // The probe is not blind: on a dialog that really has an Open button it finds one.
+    expect(namesOpenPress(dialog, d, locale), `${locale}: the probe sees the real Open press`).toContain("the label");
+  });
+
+  // The reinvite press is labelled "Invite N players"; its title asks about that action, with that verb (case-sensitive, so "invited" in
+  // "not yet invited" does not stand in for it). One typed verb per locale: the infinitive the label uses.
+  const INVITE_VERB: Record<Locale, string> = { en: "Invite", es: "Invitar", fr: "Inviter", nl: "uitnodigen" };
+  it.each(dicts)("%s: the reinvite title names the invite its press is labelled with", (locale, dict) => {
+    const d = dict as unknown as Record<string, string>;
+    expect(d["runsheet.round.inviteCta.other"]!, `${locale}: premise: the press names the invite`).toContain(INVITE_VERB[locale]);
+    expect(d["runsheet.round.confirmTitleReinvite"]!, `${locale}: the title names the same action`).toContain(INVITE_VERB[locale]);
   });
 });
 
