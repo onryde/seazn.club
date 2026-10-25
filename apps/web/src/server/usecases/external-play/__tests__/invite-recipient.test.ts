@@ -15,6 +15,7 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
+import { CHECKIN_EXTEND_STEP_MS } from "@/lib/checkin-extend";
 import { FIRST_ATTEMPT_WINDOW_MS } from "@/server/email-outbox/constants";
 import { runOutboxTick } from "@/server/email-outbox/worker";
 import type { DeliverMessage } from "@/server/email-outbox/transport";
@@ -37,6 +38,7 @@ vi.mock("@/server/email-outbox/transport", async () => {
   return { deliver: (msg: DeliverMessage) => h.deliverForTest(mail as InviteMail, msg) };
 });
 
+import { extendCheckin } from "../checkin-extend";
 import { openRound } from "../open-round";
 import { resendExternalPlayNotice } from "../invite";
 import { STAMP_COLUMN, type Colour } from "../seat-stamp";
@@ -61,11 +63,12 @@ type Row = {
   status: string;
   attempts: number;
   last_error: string | null;
+  expires_at: Date;
 };
 /** Every chess-invite row of these boards, oldest first. */
 const rowsOf = (fixtureIds: readonly string[]) =>
   sql<Row[]>`
-    select id, ref_id, recipient, recipient_user_id, status, attempts, last_error
+    select id, ref_id, recipient, recipient_user_id, status, attempts, last_error, expires_at
       from email_outbox
      where kind = 'chess_invite' and split_part(ref_id, ':', 1) = any(${fixtureIds as string[]}::text[])
      order by created_at, ref_id, id`;
@@ -228,5 +231,54 @@ describe.skipIf(!HAS_DB)("a round open's invites are an account's mail (T4)", ()
     mail.sent.length = 0;
     await tick(rows.map((x) => x.id));
     expect(mail.sent).toHaveLength(0);
+  });
+
+  it("PINS THE ACCEPTED C5 RESIDUAL: an email change before a +5 extension leaves the old invite un-re-rendered (not replaced, expiry unmoved); it is still mailed to the new address, naming the OLD deadline", async () => {
+    // Controller ruling C5 (plan P10 dropped): `requeueUnsentInvites` re-renders only rows whose address is still one of the seat's
+    // CURRENT addresses, so an account that moved before the extension has its row `left`: no fresh row, no retry budget carried, and
+    // the caller does not move its expiry (its body names the old deadline). It is resolved at send, so the mail still reaches the
+    // new address, with the old deadline in it. If a later change makes the extension follow the account (matching by
+    // recipient_user_id), this test should be rewritten, not deleted.
+    const r = await openedRound(1, (seeded) => {
+      for (const s of sidesOf(seeded)) mail.rateLimit.add(s.email);
+    });
+    const fixtureId = r.boards[0]!.fixtureId;
+    const home = r.boards[0]!.home;
+    const away = r.boards[0]!.away;
+    const before = await rowsOf([fixtureId]);
+    expect(
+      before.every((x) => x.status === "queued" && (x.attempts === 0 || (x.attempts === 1 && x.last_error === "http 429 rate_limit_exceeded"))),
+      "premise: both invites are waiting and re-render-eligible (never attempted, or only a 429)",
+    ).toBe(true);
+    const homeRow = before.find((x) => x.recipient.toLowerCase() === home.email.toLowerCase())!;
+    const awayRow = before.find((x) => x.recipient.toLowerCase() === away.email.toLowerCase())!;
+    expect(homeRow.expires_at.getTime(), "premise: one deadline for the board").toBe(awayRow.expires_at.getTime());
+
+    mail.rateLimit.clear();
+    const next = await moveAccount(home);
+    await extendCheckin(r.owner, fixtureId, { publish: async () => {} });
+
+    const after = await rowsOf([fixtureId]);
+    const byId = new Map(after.map((x) => [x.id, x]));
+    // The positive pair: the extension DID re-render the player whose address had not changed (retired row, fresh row, new deadline).
+    expect(byId.get(awayRow.id)!.status, "the unchanged player's invite was re-rendered").toBe("replaced");
+    const freshAway = after.find((x) => x.recipient_user_id === away.userId && x.status !== "replaced")!;
+    expect(freshAway.id).not.toBe(awayRow.id);
+    expect(freshAway.expires_at.getTime() - awayRow.expires_at.getTime(), "its deadline moved by the extension's step").toBe(CHECKIN_EXTEND_STEP_MS);
+
+    // The residual: the moved player's row is exactly as it was.
+    const homeAfter = byId.get(homeRow.id)!;
+    expect([homeAfter.status, homeAfter.recipient], "not re-rendered: still the same row at the old address").toEqual(["queued", homeRow.recipient]);
+    expect(homeAfter.expires_at.getTime(), "its expiry was not moved with the extension").toBe(homeRow.expires_at.getTime());
+    expect(after.filter((x) => x.recipient_user_id === home.userId), "and no fresh row was written for the new address").toHaveLength(1);
+
+    // Resolved at send, with the old deadline in the body.
+    await dueForTheWorker([homeRow.id]);
+    await tick([homeRow.id]);
+    const sentHome = mail.sent.find((m) => m.to === next);
+    const sentAway = mail.sent.find((m) => m.to.toLowerCase() === away.email.toLowerCase());
+    expect(sentHome, "the old row was mailed to the account's NEW address").toBeDefined();
+    expect(sentAway, "premise: the re-rendered invite went out").toBeDefined();
+    expect(sentHome!.deadlineLabel, "... naming the deadline it was written with, not the extended one").not.toBe(sentAway!.deadlineLabel);
   });
 });

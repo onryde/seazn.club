@@ -519,8 +519,11 @@ async function withSeats(
     // become the seat's "latest" and paint its word (final review m4). The hook that holds and releases the stamp reads the same kind.
     latestEmailStatus(auth.orgId, CHESS_SEAT_REF_TYPE, ids.flatMap((id) => COLOURS.map((c) => chessSeatRef(id, c))), "chess_invite"),
   ]);
-  // The read orders by ref then lower(recipient), not by time, and keeps two rows that fold to one mailbox only when they differ in
-  // padding. `seatInviteWords` lets the LATER row of a mailbox answer, so each seat's rows go in oldest first (ruling M2).
+  // The read orders by ref then lower(recipient), not by time, and returns one row per (ref, lower(recipient)). So it can hand back two
+  // rows that match ONE mailbox: two that fold to it and differ only in padding, or - an invite being an account's mail - two rows of
+  // one ACCOUNT at different addresses (the row at the address it left, and one at the address it moved to; the replace rule retires
+  // the first on the second's insert, but a privileged write can leave both live). `seatInviteWords` lets the LATER matching row
+  // answer, so each seat's rows go in oldest first, by `status_at` (`at`): the row whose status changed last is the news (ruling M2).
   const rowsByRef = new Map<string, EmailStatusRow[]>();
   for (const row of mail) {
     const list = rowsByRef.get(row.refId);

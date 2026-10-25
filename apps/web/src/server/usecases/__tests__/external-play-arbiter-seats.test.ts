@@ -699,6 +699,40 @@ describe.runIf(HAS_DB)("loadArbiterRound seats: an account's mail follows the ac
     await setStatus(row.id, "delivered");
     expect((await seatsOf(r, board.fixtureId))[colour].invites, "the row names a different account, so it is not this seat's").toEqual(["not_delivered"]);
   });
+
+  it("two live rows of ONE account at different addresses: the row whose status changed last answers, in either order (the loader sorts oldest first)", async () => {
+    const r = await openedRound(1);
+    const board = r.boards[0]!;
+    const { colour, row } = await seatOfPlayer(r, board, board.home);
+    await stampSeat(board.fixtureId, colour);
+    const next = await moveAccount(board.home);
+    // The replace rule retires the first row on the second's insert, so only a privileged write (the trigger off) leaves two live rows
+    // for one account: the one at the address it left (the open's), and one at the address it moved to.
+    const second = randomUUID();
+    await sql.begin(async (tx) => {
+      await tx`set local session_replication_role = replica`;
+      await tx`
+        insert into email_outbox (id, kind, ref_type, ref_id, org_id, recipient, recipient_user_id, subject, transactional, status, expires_at)
+        values (${second}, 'chess_invite', ${CHESS_SEAT_REF_TYPE}, ${chessSeatRef(board.fixtureId, colour)}, ${r.orgId}, ${next},
+                ${board.home.userId}, 'subject', true, 'bounced', now() + interval '1 hour')`;
+    });
+    await setStatus(row.id, "delivered");
+    const changedAt = (id: string, minutesAgo: number) =>
+      sql`update email_outbox set status_at = now() - make_interval(mins => ${minutesAgo}) where id = ${id}`;
+
+    // The word of each row, from the status map; they differ, so the test can tell which row answered.
+    const openWord = inviteWordOf("delivered");
+    const secondWord = inviteWordOf("bounced");
+    expect(openWord).not.toBe(secondWord);
+    expect(await rowsOf(r.orgId, board.fixtureId, colour), "premise: two live rows for the seat").toHaveLength(2);
+
+    await changedAt(row.id, 10);
+    await changedAt(second, 1);
+    expect((await seatsOf(r, board.fixtureId))[colour].invites, "the second row changed last").toEqual([secondWord]);
+    await changedAt(row.id, 1);
+    await changedAt(second, 10);
+    expect((await seatsOf(r, board.fixtureId))[colour].invites, "the open's row changed last").toEqual([openWord]);
+  });
 });
 
 // ---------------------------------------------------------------------------------------------------------------------------
