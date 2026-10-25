@@ -13,8 +13,10 @@
 #
 # Deliberate deviations from CI, all of them printed at runtime:
 #   * Postgres and the placement service are native (seazn-env), not the
-#     `postgres:16` / `placement-service:ci` containers. The Dockerfile itself
-#     therefore stays gated only by CI. --placement-image opts into the image.
+#     `postgres:16` container / the pinned placement image CI pulls. The image
+#     therefore stays gated only by CI. --placement-image pulls and runs the
+#     pinned GHCR image (`packages/scheduler/VENDORED.json`); the default runs a
+#     native placement checkout (seazn-env).
 #   * GHA `background:`/`wait:` parallelism collapses to sequential.
 #   * Playwright runs UNSHARDED (a superset of CI's 5 `parallel` legs — heavy
 #     plus rest 1..4/4 — and its 3 mobile legs).
@@ -58,7 +60,7 @@ options:
   --dry-run            print every resolved command, run nothing
   --keep               leave the environment up after the job (debugging)
   --bail               stop at the first red job (default: run all, report at end)
-  --placement-image    build+run the CI placement container instead of the venv
+  --placement-image    pull+run the pinned GHCR placement image (VENDORED.json); the default is a native checkout
   --no-stripe-live     skip the live-Stripe step in smoke-db
   -h, --help           this
 EOF

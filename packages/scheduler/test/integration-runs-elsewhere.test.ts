@@ -4,12 +4,14 @@
 // `PLACEMENT_SERVICE_HOST`): placement-integration.test.ts and repair-decompose-cpsat-integration.test.ts. The two jobs that
 // could run them pull in opposite directions, and the join between them is workflow TEXT:
 //
-//   * ci.yml's scheduler step is the strict DB-free judge. It counts a skip as a failure, so it must EXCLUDE both files, or
-//     it goes red for a reason that has nothing to do with the code.
-//   * placement-ci.yml's `integration` job stands up the real container and is the only place those files can run. It must
-//     run BOTH, with a judge that fails on zero tests, on any skip, and on any live file that did not report.
+//   * ci.yml's scheduler step (in `gates`) is the strict DB-free judge. It counts a skip as a failure, so it must EXCLUDE both
+//     files, or it goes red for a reason that has nothing to do with the code.
+//   * ci.yml's `scheduler-live` job stands up the real placement container (the PINNED image, as a service: engine-split phase
+//     2a, Task W2) and is the only place those files can run. It must run BOTH, with a judge that fails on zero tests, on any
+//     skip, and on any live file that did not report. They ran in placement-ci.yml's `integration` job until the placement
+//     service moved to its own repo.
 //
-// Before this test, placement-ci.yml ran one of the two (the other was run by no workflow at all) and pointed at a path that
+// Before this test, the live job ran one of the two (the other was run by no workflow at all) and pointed at a path that
 // had stopped existing when the file moved, so the job would have "ran 0 files" and still read as an intentional skip. Both
 // directions are asserted from the workflow text, over a live-file list DERIVED from the tree, never typed here.
 import { execFileSync, spawnSync } from "node:child_process";
@@ -40,14 +42,16 @@ const live = [...testFiles(join(PACKAGE, "src")), ...testFiles(join(PACKAGE, "te
   .filter((file) => /^const\s+RUN_INTEGRATION\s*=\s*process\.env\.PLACEMENT_SERVICE_HOST\b/m.test(readFileSync(file, "utf8")))
   .map((file) => relative(PACKAGE, file).split("\\").join("/"));
 
-/** The text of one workflow step: from its `- name:` line to the next step or the comment block that heads it. */
+/** The text of one workflow step: from its `- name:` line to the next step, the comment block that heads it, or the first line
+ *  indented less than a step (the end of the job: the last step of a job is followed by the next job's comment at 2 spaces, which
+ *  the first two alternatives never see, so the slice would otherwise run on to the end of the file and into a `run:` body). */
 function step(yml: string, name: string): string {
   const lines = yml.split("\n");
   const at = lines.findIndex((l) => l.trim() === `- name: ${name}`);
   expect(at, `no step named "${name}"`).toBeGreaterThan(-1);
   let end = lines.length;
   for (let i = at + 1; i < lines.length; i++) {
-    if (/^ {6}(- |#)/.test(lines[i]!)) {
+    if (/^ {6}(- |#)|^ {0,5}\S/.test(lines[i]!)) {
       end = i;
       break;
     }
@@ -139,9 +143,12 @@ function gateProblems(yml: string, jobId: string, stepNames: string[]): string[]
 
 // ---- The judge, EXECUTED. A text match proves a clause is written down, not that it judges: this runs the workflow's own
 // "Assert the suite RAN, and passed" script against synthetic vitest reports and reads its exit code. The script's report path
-// is swapped for a temp file and `docker` is a no-op shim on PATH (the script only calls it to print logs on the way out).
+// is swapped for a temp file and `docker` is a shim on PATH that records its argv (the script only calls it to print logs on
+// the way out). `PLACEMENT_CONTAINER` is what the workflow's step-level `env:` supplies from `job.services.placement.id`.
 const SHIM_DIR = mkdtempSync(join(tmpdir(), "placement-judge-"));
-writeFileSync(join(SHIM_DIR, "docker"), "#!/bin/sh\nexit 0\n");
+const DOCKER_LOG = join(SHIM_DIR, "docker.log");
+const CONTAINER = "0123456789abcdef-service-container-id";
+writeFileSync(join(SHIM_DIR, "docker"), '#!/bin/sh\necho "$*" >> "$DOCKER_LOG"\nexit 0\n');
 chmodSync(join(SHIM_DIR, "docker"), 0o755);
 afterAll(() => rmSync(SHIM_DIR, { recursive: true, force: true }));
 
@@ -189,29 +196,43 @@ function report(files: FileReport[], over: Overrides = {}): string {
 }
 const BOTH = (): FileReport[] => live.map((file) => ({ file }));
 
-/** Run the workflow's judge over a synthetic report: its exit code, and the error annotations it printed. */
-function judge(json: string): { code: number | null; errors: string } {
-  const body = runBody(step(workflow("placement-ci.yml"), "Assert the suite RAN, and passed"));
+/** Run the workflow's judge over a synthetic report: its exit code, the error annotations it printed, and the docker calls it made. */
+function judge(json: string): { code: number | null; errors: string; docker: string[] } {
+  const body = runBody(step(workflow("ci.yml"), "Assert the suite RAN, and passed"));
   expect(body, "the script reads the report from the path this test swaps").toContain(REPORT_PATH);
   const reportFile = join(SHIM_DIR, "report.json");
   writeFileSync(reportFile, json);
+  writeFileSync(DOCKER_LOG, "");
   const r = spawnSync("bash", ["-c", body.split(REPORT_PATH).join(reportFile)], {
     encoding: "utf8",
-    env: { ...process.env, PATH: `${SHIM_DIR}:${process.env.PATH ?? ""}` },
+    env: { ...process.env, PATH: `${SHIM_DIR}:${process.env.PATH ?? ""}`, PLACEMENT_CONTAINER: CONTAINER, DOCKER_LOG },
   });
   expect(r.error, "bash/jq must be runnable: a judge that cannot run proves nothing").toBeUndefined();
-  return { code: r.status, errors: (r.stdout + r.stderr).split("\n").filter((l) => l.startsWith("::error::")).join("\n") };
+  return {
+    code: r.status,
+    errors: (r.stdout + r.stderr).split("\n").filter((l) => l.startsWith("::error::")).join("\n"),
+    docker: readFileSync(DOCKER_LOG, "utf8").split("\n").filter(Boolean),
+  };
 }
 
-describe("the scheduler's live tests run in placement-ci.yml, and are excluded from ci.yml's strict step", () => {
+describe("the scheduler's live tests run in ci.yml's scheduler-live job, against the pinned image, and are excluded from ci.yml's strict step", () => {
   it("finds the two live files (anti-vacuity: a scan that finds nothing proves nothing)", () => {
     expect(live.length, "live files found").toBeGreaterThanOrEqual(2);
     expect(live).toContain("src/__tests__/placement-integration.test.ts");
     expect(live).toContain("src/__tests__/repair-decompose-cpsat-integration.test.ts");
   });
 
-  it("placement-ci.yml runs every live file with the scheduler's own vitest", () => {
-    const yml = workflow("placement-ci.yml");
+  it("each live-job step name occurs once in ci.yml, inside the scheduler-live job (the slicer finds the FIRST one)", () => {
+    const yml = workflow("ci.yml");
+    for (const name of ["Run the integration suite against the live service", "Assert the suite RAN, and passed"]) {
+      const occurrences = yml.split("\n").filter((l) => l.trim() === `- name: ${name}`).length;
+      expect(occurrences, `"${name}" occurrences in ci.yml`).toBe(1);
+      expect(jobOf(yml, name), `"${name}" must live in the scheduler-live job`).toBe("scheduler-live");
+    }
+  });
+
+  it("ci.yml's scheduler-live job runs every live file with the scheduler's own vitest", () => {
+    const yml = workflow("ci.yml");
     const run = step(yml, "Run the integration suite against the live service");
     expect(run, "the suite runs from the scheduler package").toMatch(/working-directory:\s*packages\/scheduler\b/);
     expect(run, "and not from the engine").not.toContain("packages/engine");
@@ -219,8 +240,8 @@ describe("the scheduler's live tests run in placement-ci.yml, and are excluded f
     for (const file of live) expect(run, `${file} is not run by the integration step`).toContain(file);
   });
 
-  it("placement-ci.yml's judge fails on zero tests, on any skip, and on any live file that did not report", () => {
-    const judge = step(workflow("placement-ci.yml"), "Assert the suite RAN, and passed");
+  it("ci.yml's judge fails on zero tests, on any skip, and on any live file that did not report", () => {
+    const judge = step(workflow("ci.yml"), "Assert the suite RAN, and passed");
     expect(judge, "a zero-total refusal").toMatch(/"\$total" -eq 0/);
     expect(judge, "a skipped test is a failure").toMatch(/"\$skipped" -ne 0/);
     for (const file of live) {
@@ -233,8 +254,26 @@ describe("the scheduler's live tests run in placement-ci.yml, and are excluded f
     expect(jq.status, "jq must be installed: every judge case below would otherwise fail for the wrong reason").toBe(0);
     expect(live.length, "live files the good report covers").toBeGreaterThanOrEqual(2);
     const good = judge(report(BOTH()));
-    expect(good, good.errors).toEqual({ code: 0, errors: "" });
+    expect(good, good.errors).toEqual({ code: 0, errors: "", docker: [] });
   });
+
+  it("the executed judge reads the SERVICE container's logs on every refusal path (the container is a service, not one `docker run` named here)", () => {
+    const refusals: [string, string][] = [
+      ["a skip", report(BOTH(), { numPendingTests: 1 })],
+      ["a failed test", report(BOTH(), { numFailedTests: 1, numPassedTests: 3 })],
+      ["a failed suite", report(BOTH(), { numFailedTestSuites: 1 })],
+      ["a live file that did not report", report([{ file: live[0]! }])],
+      ["a live file that passed with no assertions", report([{ file: live[0]! }, { file: live[1]!, assertions: 0 }])],
+    ];
+    expect(refusals.length, "paths exercised").toBe(5);
+    for (const [label, json] of refusals) {
+      const out = judge(json);
+      expect(out.code, `${label}: ${out.errors}`).toBe(1);
+      expect(out.docker, `${label}: the judge must print the service's logs by the id the workflow supplies`).toEqual([`logs ${CONTAINER}`]);
+    }
+    expect(judge(report(BOTH())).docker, "a passing run reads no logs").toEqual([]);
+    // Six bash+jq spawns in one case: the 5s default is not enough on a loaded runner.
+  }, 30_000);
 
   // Each case below is red through exactly ONE clause of the judge, so deleting any one clause turns exactly its case
   // green-when-it-should-be-red. Two clauses covering for each other would each be untested.
