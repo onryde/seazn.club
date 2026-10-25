@@ -345,7 +345,7 @@ cd ~/github/seazn.club.placement && PATH="$BUF_DIR:$PATH" venv/bin/python -m pyt
 
 Run these in order. O3 MUST precede O5, because O5's push deploys `placement-stg`.
 
-> **Amended 2026-10-25 after the P3 review:** P3 deploys the tested GHCR image with `flyctl deploy --image … --no-public-ips` (stg on `workflow_run` after `ci` succeeds on main; prod on a `v*.*.*` tag that already has an image). So the first stg run is expected RED until O6 makes the package public. Also owed at O2 (owner, recommended): a `production` GitHub environment holding `FLY_TOKEN`, plus a tag ruleset on `v*.*.*`, so a tag push alone cannot reach the prod token (P3 review M-7); branch protection blocks force-pushes on `main` (P2 review M-5); required checks are listed by job `name:` (P2 review M-11).
+> **Amended 2026-10-25 after the P3 review:** P3 deploys the tested GHCR image with `flyctl deploy --image … --no-public-ips` (stg on `workflow_run` after `ci` succeeds on main; prod on a `v*.*.*` tag that already has an image). So the first stg run is expected RED until O6 makes the package public. Owner ruling 2026-10-25: ONE repo-level `FLY_TOKEN`, no GitHub environment (the repo has a single write-access maintainer; fork PRs never receive secrets; environments are not offered on the private repo). Revisit only if write collaborators are added (P3 review M-7, Batch P review I-1). Also owed at O2: branch protection blocks force-pushes on `main` (P2 review M-5); required checks are listed by job `name:` (P2 review M-11).
 
 - [ ] **O2 — OWNER (GitHub UI / `gh secret set`):**
   - Set `FLY_TOKEN` in `onryde/seazn.club.placement`. It must be able to deploy both `placement` and `placement-stg`.
