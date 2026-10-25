@@ -69,19 +69,28 @@ function jobOf(yml: string, stepName: string): string {
 /** The 0-based line a step starts on. */
 const lineOf = (yml: string, stepName: string): number => yml.split("\n").findIndex((l) => l.trim() === `- name: ${stepName}`);
 
-/** A step that carries its own `if:` or `continue-on-error:` (at the step's key column, or on the `- ` header line) can be skipped
- *  or can fail without failing the job. Same pattern as apps/web's ci-server-instrumentation-wiring.test.ts (STEP_SILENCE).
- *  Anchored to the key column, so a `# if: false` comment line never matches (the self-test below pins that). */
-const STEP_SILENCE = /^ {6}- (?:if|continue-on-error):|^ {8}(?:if|continue-on-error):/;
+/** A step that carries its own `if:` or `continue-on-error:` at the step's key column can be skipped or can fail without failing
+ *  the job. Same idea as apps/web's ci-server-instrumentation-wiring.test.ts (STEP_SILENCE). The `- if:` HEADER form (a step that
+ *  starts with the key before its `name:`) is deliberately not matched here: such a step has no `- name:` line, so gateProblems()
+ *  reports it as "not in job" before this pattern could see it (pinned by the header-line case in the self-test below).
+ *  Anchored to the key column, so a `# if: false` comment line never matches either. */
+const STEP_SILENCE = /^ {8}(?:if|continue-on-error):/;
+/** A step key at the step's key column (the `- name:` header line carries `name`). */
+const STEP_KEY = /^ {8}([A-Za-z][A-Za-z0-9_-]*):/;
 /** The same two keys at a JOB's key column: `if:` skips the whole job, `continue-on-error:` makes its red non-blocking. */
 const JOB_SILENCE = /^ {4}(?:if|continue-on-error):/;
 
 /**
- * Why a PR could go green with these steps skipped or ignored: every way `job` (or any of the named steps in it) can be
- * silenced. Empty means none. A step that cannot be found in the job is a problem too (moved to another job, renamed, or
- * given an `if:` header line before its `name:`), and so is a missing job: a scan of nothing proves nothing.
+ * Ways a PR could go green with these gate steps skipped, ignored or aimed at the wrong place, for the classes this check
+ * knows (it is a list of known holes, not a proof that none is left):
+ *   * the job or a named step carries an `if:` or `continue-on-error:` (skipped, or a red that blocks nothing);
+ *   * a named step has any key besides `name` and `run`: a `working-directory:` there doubles the pathspec the drift gate
+ *     reads (git exits 0 on a path that does not exist, so the gate passes), and `env:`/`shell:` change what the script does;
+ *   * the job, or the whole workflow, sets `defaults:` (the same `working-directory`, one level up).
+ * A step that cannot be found in the job is a problem too (moved to another job, renamed, or given an `if:` header line before
+ * its `name:`), and so is a missing job: a scan of nothing proves nothing. Empty means none of the above.
  */
-function silencing(yml: string, jobId: string, stepNames: string[]): string[] {
+function gateProblems(yml: string, jobId: string, stepNames: string[]): string[] {
   const lines = yml.split("\n");
   const at = lines.findIndex((l) => new RegExp(`^ {2}${jobId}:\\s*$`).test(l));
   if (at < 0) return [`there is no job "${jobId}"`];
@@ -94,6 +103,12 @@ function silencing(yml: string, jobId: string, stepNames: string[]): string[] {
   }
   const job = lines.slice(at + 1, end);
   const problems: string[] = [];
+  if (lines.some((l) => /^defaults:/.test(l))) {
+    problems.push("the workflow sets top-level `defaults:`: a working-directory or shell there moves every gate step");
+  }
+  if (job.some((l) => /^ {4}defaults:/.test(l))) {
+    problems.push(`job "${jobId}" sets \`defaults:\`: a working-directory or shell there moves the gate steps`);
+  }
   if (job.some((l) => JOB_SILENCE.test(l))) {
     problems.push(`job "${jobId}" carries an \`if:\` or \`continue-on-error:\`: it can be skipped, or its red blocks nothing`);
   }
@@ -110,8 +125,13 @@ function silencing(yml: string, jobId: string, stepNames: string[]): string[] {
         break;
       }
     }
-    if (job.slice(from, to).some((l) => STEP_SILENCE.test(l))) {
+    const block = job.slice(from, to);
+    if (block.some((l) => STEP_SILENCE.test(l))) {
       problems.push(`step "${name}" carries an \`if:\` or \`continue-on-error:\`: it can be skipped or ignored`);
+    }
+    const keys = ["name", ...block.map((l) => STEP_KEY.exec(l)?.[1]).filter((k): k is string => k !== undefined)];
+    if (keys.join(",") !== "name,run") {
+      problems.push(`step "${name}" has keys [${keys.join(", ")}], not exactly [name, run]: any other key can move or change what the gate checks`);
     }
   }
   return problems;
@@ -328,12 +348,12 @@ describe("ci.yml regenerates the TypeScript stubs from the vendored proto and di
     expect(onBlock).not.toMatch(/\bbranches(-ignore)?:/);
   });
 
-  it("neither new step, nor the gates job, can be skipped or made non-blocking (`if:` / `continue-on-error:`)", () => {
+  it("the two new steps are exactly `name` + `run`, and neither they nor the gates job can be skipped, made non-blocking or moved (`if:`, `continue-on-error:`, `working-directory:`, `defaults:`)", () => {
     // `if: false` on the regenerate step is the fail-open one: with nothing regenerated the tree is always clean.
-    expect(silencing(workflow("ci.yml"), "gates", [REGENERATE, DRIFT])).toEqual([]);
+    expect(gateProblems(workflow("ci.yml"), "gates", [REGENERATE, DRIFT])).toEqual([]);
   });
 
-  describe("silencing(): the check itself refuses each way to mute the gate (negative self-test)", () => {
+  describe("gateProblems(): the check itself refuses each known way to mute or move the gate (negative self-test)", () => {
     const REAL = workflow("ci.yml");
     const after = (anchor: string, insert: string): string => {
       expect(REAL.split(anchor).length - 1, `anchor occurs once: ${anchor.trim()}`).toBe(1);
@@ -348,6 +368,42 @@ describe("ci.yml regenerates the TypeScript stubs from the vendored proto and di
       ["if: false on the regenerate step (fail-open)", () => after(REGEN_HEAD, "        if: false\n"), /step "Regenerate TypeScript proto stubs" carries/],
       ["continue-on-error on the regenerate step", () => after(REGEN_HEAD, "        continue-on-error: true\n"), /step "Regenerate TypeScript proto stubs" carries/],
       ["an `if:` on the step's header line, before its name", () => REAL.replace(REGEN_HEAD, `      - if: false\n        name: ${REGENERATE}\n`), /step "Regenerate TypeScript proto stubs" is not in job/],
+      [
+        "working-directory on the drift step (the pathspec doubles, git exits 0 on nothing)",
+        () => after(DRIFT_HEAD, "        working-directory: packages/scheduler\n"),
+        /step "TypeScript stub drift gate" has keys \[name, working-directory, run\]/,
+      ],
+      [
+        "working-directory on the regenerate step",
+        () => after(REGEN_HEAD, "        working-directory: apps/web\n"),
+        /step "Regenerate TypeScript proto stubs" has keys \[name, working-directory, run\]/,
+      ],
+      [
+        "working-directory written AFTER the drift step's run (key order must not hide it)",
+        () => {
+          const end = "      # The engine rules reference (W2a ruling 75";
+          expect(REAL.split(end).length - 1, "anchor occurs once").toBe(1);
+          return REAL.replace(end, `        working-directory: packages/scheduler\n\n${end}`);
+        },
+        /step "TypeScript stub drift gate" has keys \[name, run, working-directory\]/,
+      ],
+      [
+        "working-directory written AFTER the regenerate step's run",
+        () => REAL.replace("        run: pnpm --filter @seazn/scheduler gen:proto\n", "        run: pnpm --filter @seazn/scheduler gen:proto\n        working-directory: apps/web\n"),
+        /step "Regenerate TypeScript proto stubs" has keys \[name, run, working-directory\]/,
+      ],
+      ["env on the drift step", () => after(DRIFT_HEAD, "        env:\n          GIT_DIR: /nowhere\n"), /step "TypeScript stub drift gate" has keys \[name, env, run\]/],
+      ["shell on the drift step", () => after(DRIFT_HEAD, "        shell: bash {0} || true\n"), /step "TypeScript stub drift gate" has keys \[name, shell, run\]/],
+      ["defaults.run.working-directory on the gates job", () => after(GATES_HEAD, "    defaults:\n      run:\n        working-directory: packages/scheduler\n"), /job "gates" sets `defaults:`/],
+      [
+        "defaults.run.working-directory on the whole workflow",
+        () => {
+          const moved = REAL.replace(/\njobs:\n/, "\ndefaults:\n  run:\n    working-directory: packages/scheduler\n\njobs:\n");
+          expect(moved, "the fixture really added the key").not.toBe(REAL);
+          return moved;
+        },
+        /top-level `defaults:`/,
+      ],
       ["continue-on-error on the gates job", () => after(GATES_HEAD, "    continue-on-error: true\n"), /job "gates" carries/],
       ["if: on the gates job", () => after(GATES_HEAD, "    if: github.event_name == 'push'\n"), /job "gates" carries/],
       [
@@ -370,30 +426,30 @@ describe("ci.yml regenerates the TypeScript stubs from the vendored proto and di
       ],
     ];
     it.each(MUTED)("refuses %s", (_label, yml, why) => {
-      const problems = silencing(yml(), "gates", [REGENERATE, DRIFT]);
+      const problems = gateProblems(yml(), "gates", [REGENERATE, DRIFT]);
       expect(problems.join("\n")).toMatch(why);
     });
 
     it("anti-vacuity: it checked both steps and the job, and the unmutated file is clean", () => {
-      expect(MUTED.length, "mutations exercised").toBeGreaterThanOrEqual(8);
-      expect(silencing(REAL, "gates", [REGENERATE, DRIFT])).toEqual([]);
-      expect(silencing(REAL, "no-such-job", [REGENERATE]).join(), "a missing job is a problem, not a pass").toMatch(/no job/);
-      expect(silencing(REAL, "gates", ["No Such Step"]).join(), "a missing step is a problem, not a pass").toMatch(/not in job/);
+      expect(MUTED.length, "mutations exercised").toBeGreaterThanOrEqual(16);
+      expect(gateProblems(REAL, "gates", [REGENERATE, DRIFT])).toEqual([]);
+      expect(gateProblems(REAL, "no-such-job", [REGENERATE]).join(), "a missing job is a problem, not a pass").toMatch(/no job/);
+      expect(gateProblems(REAL, "gates", ["No Such Step"]).join(), "a missing step is a problem, not a pass").toMatch(/not in job/);
     });
 
     it("does not flag what silences nothing: a comment, another job's key, a run-body line", () => {
-      expect(silencing(after(DRIFT_HEAD, "        # if: false\n        # continue-on-error: true\n"), "gates", [REGENERATE, DRIFT])).toEqual([]);
-      expect(silencing(after(GATES_HEAD, "    # continue-on-error: true\n"), "gates", [REGENERATE, DRIFT])).toEqual([]);
+      expect(gateProblems(after(DRIFT_HEAD, "        # if: false\n        # continue-on-error: true\n"), "gates", [REGENERATE, DRIFT])).toEqual([]);
+      expect(gateProblems(after(GATES_HEAD, "    # continue-on-error: true\n"), "gates", [REGENERATE, DRIFT])).toEqual([]);
       const other = REAL.replace(/(\n {2}test:\n {4}name: [^\n]*\n)/, "$1    continue-on-error: true\n");
       expect(other, "the fixture really muted the test job").not.toBe(REAL);
-      expect(silencing(other, "gates", [REGENERATE, DRIFT]), "a different job's continue-on-error is not the gates job's").toEqual([]);
-      expect(silencing(other, "test", []).join(), "and it IS flagged on its own job").toMatch(/job "test" carries/);
+      expect(gateProblems(other, "gates", [REGENERATE, DRIFT]), "a different job's continue-on-error is not the gates job's").toEqual([]);
+      expect(gateProblems(other, "test", []).join(), "and it IS flagged on its own job").toMatch(/job "test" carries/);
       // A NEIGHBOURING step in the same job is not one of ours: its own `if:` stays its own.
       for (const neighbour of ["Scheduler package tests (DB-free)", "Engine rules reference checker (DB-free)"]) {
         const head = `      - name: ${neighbour}\n`;
-        const sibling = after(head, "        if: false\n        continue-on-error: true\n");
+        const sibling = after(head, "        if: false\n        continue-on-error: true\n        working-directory: elsewhere\n");
         expect(sibling, "the fixture really muted the neighbour").not.toBe(REAL);
-        expect(silencing(sibling, "gates", [REGENERATE, DRIFT]), `${neighbour} is not one of the gate's steps`).toEqual([]);
+        expect(gateProblems(sibling, "gates", [REGENERATE, DRIFT]), `${neighbour} is not one of the gate's steps`).toEqual([]);
       }
     });
   });

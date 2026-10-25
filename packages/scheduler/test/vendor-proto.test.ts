@@ -351,6 +351,17 @@ describe("vendorProto", () => {
     expect(readdirSync(pkg), "nothing was written").toEqual([]);
   });
 
+  it("names an unreadable proto size instead of calling it empty (the blob id resolves from the tree, the blob is gone)", () => {
+    const repo = placementRepo();
+    const blob = git(repo, "rev-parse", "HEAD:proto/scheduler.proto");
+    rmSync(join(repo, ".git/objects", blob.slice(0, 2), blob.slice(2)));
+    expect(() => git(repo, "cat-file", "-s", blob), "the fixture really breaks cat-file").toThrow();
+    expect(git(repo, "status", "--porcelain"), "and status still reads clean").toBe("");
+    const pkg = pkgRootDir();
+    expect(() => vendorProto({ checkout: repo, pkgRoot: pkg })).toThrow(/^could not read the size of proto\/scheduler\.proto at HEAD in .+: .*fatal:/);
+    expect(readdirSync(pkg), "nothing was written").toEqual([]);
+  });
+
   describe("ignores the caller's git config and environment", () => {
     /** Run `fn` with `env` overlaid on process.env (vendorProto reads the ambient environment), then put it back. */
     function withEnv<T>(env: Record<string, string>, fn: () => T): T {

@@ -119,7 +119,8 @@ export function vendorProto(opts: { checkout: string; pkgRoot?: string }): Vendo
   const committed = git(checkout, ["rev-parse", "--verify", `HEAD:${PROTO_IN_CHECKOUT}`]);
   if (!committed.ok || !existsSync(source)) throw new Error(`no ${PROTO_IN_CHECKOUT} in ${checkout}`);
   const size = git(checkout, ["cat-file", "-s", committed.out]);
-  if (!size.ok || size.out === "0") throw new Error(`${PROTO_IN_CHECKOUT} is empty at HEAD in ${checkout}`);
+  if (!size.ok) throw new Error(`could not read the size of ${PROTO_IN_CHECKOUT} at HEAD in ${checkout}: ${size.err}`);
+  if (size.out === "0") throw new Error(`${PROTO_IN_CHECKOUT} is empty at HEAD in ${checkout}`);
   const onDisk = git(checkout, ["hash-object", "--no-filters", "--", source]);
   if (onDisk.out !== committed.out) {
     throw new Error(`${PROTO_IN_CHECKOUT} is not HEAD's committed bytes in ${checkout} (working copy ${onDisk.out || onDisk.err}, HEAD ${committed.out})`);
