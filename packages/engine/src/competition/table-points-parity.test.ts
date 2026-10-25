@@ -87,6 +87,8 @@ interface Probe {
   outcome: MatchOutcome;
   state: unknown;
   played: boolean;
+  /** A settled abandon after sets were played: the winner's sets, then the loser's, when the match stopped. */
+  settledAt?: string;
 }
 const winOf = (winner: "H" | "A", method?: string): MatchOutcome =>
   MatchOutcome.parse({ kind: "win", winner, loser: winner === "H" ? "A" : "H", ...(method === undefined ? {} : { method }) });
@@ -122,6 +124,28 @@ function probes(m: AnySportModule, cfg: unknown, kind: StageKind): Probe[] {
   // A settled abandon (W2a X-ST-1) before any set or goal: regulation, the scoreless ledger.
   const started = m.reachableSetScores === undefined ? fresh : fold(m, parsed, [ev("core.start", {})]).state;
   for (const s of SETTLE_METHODS) for (const winner of ["H", "A"] as const) out.push({ outcome: winOf(winner, settledMethod(s)), state: started, played: true });
+  // A settled abandon AFTER sets were played (T2 ruling I2, FIVB 6.4.3): every partial score short of the match, each
+  // settle method, both settle winners, the real ledger (core.abandon, core.settle) folded so the sport's own payer reads
+  // the sets it holds.
+  const toWin = setsToWinOf(m, parsed);
+  if (m.reachableSetScores !== undefined && toWin !== undefined) {
+    const sc = parsed as SetCfg;
+    for (let h = 0; h < toWin; h++) {
+      for (let a = 0; a < toWin; a++) {
+        if (h + a === 0) continue; // the scoreless ledger, above
+        const sets = [...Array.from({ length: h }, () => true), ...Array.from({ length: a }, () => false)];
+        for (const s of SETTLE_METHODS) {
+          for (const winner of ["H", "A"] as const) {
+            const tail = [ev("core.abandon", { reason: "the hall lost power" }), ev("core.settle", { winner, method: s })];
+            const folded = fold(m, parsed, setStream(m, sc, sets, tail));
+            const outcome = outcomeOf(m as never, folded as never);
+            expect(outcome, `${m.key} settled at ${h}-${a} (${s}) for ${winner}`).toMatchObject({ kind: "win", winner, method: settledMethod(s) });
+            out.push({ outcome: outcome!, state: folded.state, played: true, settledAt: winner === "H" ? `${h}-${a}` : `${a}-${h}` });
+          }
+        }
+      }
+    }
+  }
   for (const winner of ["H", "A"] as const) {
     out.push({ outcome: MatchOutcome.parse({ kind: "award", winner, loser: winner === "H" ? "A" : "H", reason: "walkover" }), state: fresh, played: false });
   }
@@ -132,16 +156,50 @@ function probes(m: AnySportModule, cfg: unknown, kind: StageKind): Probe[] {
   return out;
 }
 
-/** The cfgs a sport's table can be played under: every declared variant (and the schema default), each again with the
- *  sport's knockout deciders switched on (an organiser may keep a shoot-out in a group, FB-PT-1), and for a set sport
- *  each `bestOf` and two organiser maps (one flat, one paying two pairs). */
+/** The field a sport keeps its own points in (`points`, chess's `scoring`), with every key its schema declares
+ *  (optional ones included), or null for a sport that pays by a set-score map. Read off the cfg schema itself. */
+function pointsFieldOf(m: AnySportModule): { field: string; keys: string[] } | null {
+  const shape = (m.configSchema as unknown as { shape?: Record<string, unknown> }).shape;
+  const field = shape === undefined ? undefined : ["points", "scoring"].find((k) => Object.hasOwn(shape, k));
+  if (shape === undefined || field === undefined) return null;
+  // Unwrap `.default()` / `.optional()` down to the object.
+  let inner = shape[field] as { shape?: Record<string, unknown>; unwrap?: () => unknown } | undefined;
+  for (let i = 0; inner !== undefined && inner.shape === undefined && i < 4; i++) inner = inner.unwrap?.() as typeof inner;
+  return inner?.shape === undefined ? null : { field, keys: Object.keys(inner.shape) };
+}
+
+/** I-1 (AGENTS.md class 19): an organiser's points for `cfg`, every key the schema declares paying a value no default
+ *  pays and no other key pays — one past the cfg's largest, counting up — so a rule that reads a default constant, or
+ *  one key for another, pays differently from the sport's own payer. The values are the cfg's, never the rule's. */
+function organiserPoints(m: AnySportModule, name: string, cfg: unknown): { variant: string; cfg: unknown } | null {
+  const pf = pointsFieldOf(m);
+  if (pf === null) return null;
+  const own = (m.configSchema.parse(cfg) as Raw)[pf.field] as Record<string, unknown>;
+  const floor = Math.max(0, ...Object.values(own).filter((v): v is number => typeof v === "number")) + 1;
+  const pts = Object.fromEntries(pf.keys.map((k, i) => [k, floor + i]));
+  return { variant: `${name}+organiser points ${JSON.stringify(pts)}`, cfg: m.configSchema.parse({ ...(cfg as Raw), [pf.field]: pts }) };
+}
+
+/** The two-pair organiser map a set sport is swept with: "*" 3:0, and its default best-of's closest score 2:1. */
+function organiserTwoPairs(m: AnySportModule): Record<string, [number, number]> {
+  const won = Math.ceil((m.configSchema.parse({}) as SetCfg).bestOf / 2);
+  return { "*": [3, 0], [`${won}-${won - 1}`]: [2, 1] };
+}
+
+/** The cfgs a sport's table can be played under: every declared variant (and the schema default), each again with
+ *  organiser points (I-1), each of those again with the sport's knockout deciders switched on (an organiser may keep a
+ *  shoot-out in a group, FB-PT-1), and for a set sport each `bestOf` and two organiser maps (one flat, one paying two
+ *  pairs). */
 function cfgSpace(m: AnySportModule): { variant: string; cfg: unknown }[] {
   const out: { variant: string; cfg: unknown }[] = [];
   for (const { name, cfg } of declaredCfgs(m)) {
-    out.push({ variant: name, cfg });
-    const preset = Object.hasOwn(m.variants, name) ? name : null;
-    const deciders = { ...(m.stageDefaults?.("knockout", preset) ?? {}), ...m.bracketDeciders(cfg) };
-    if (Object.keys(deciders).length > 0) out.push({ variant: `${name}+deciders`, cfg: m.configSchema.parse({ ...(cfg as Raw), ...deciders }) });
+    const organiser = organiserPoints(m, name, cfg);
+    for (const base of [{ variant: name, cfg }, ...(organiser === null ? [] : [organiser])]) {
+      out.push(base);
+      const preset = Object.hasOwn(m.variants, name) ? name : null;
+      const deciders = { ...(m.stageDefaults?.("knockout", preset) ?? {}), ...m.bracketDeciders(base.cfg) };
+      if (Object.keys(deciders).length > 0) out.push({ variant: `${base.variant}+deciders`, cfg: m.configSchema.parse({ ...(base.cfg as Raw), ...deciders }) });
+    }
   }
   if (m.reachableSetScores !== undefined) {
     for (const base of [...out]) {
@@ -149,10 +207,8 @@ function cfgSpace(m: AnySportModule): { variant: string; cfg: unknown }[] {
         if ((base.cfg as SetCfg).bestOf !== bestOf) out.push({ variant: `${base.variant}+bo${bestOf}`, cfg: m.configSchema.parse({ ...(base.cfg as Raw), bestOf }) });
       }
     }
-    const d = m.configSchema.parse({}) as SetCfg;
-    const won = Math.ceil(d.bestOf / 2);
     out.push({ variant: "organiser flat", cfg: m.configSchema.parse({ pointsMap: { "*": [3, 1] } }) });
-    out.push({ variant: "organiser two pairs", cfg: m.configSchema.parse({ pointsMap: { "*": [3, 0], [`${won}-${won - 1}`]: [2, 1] } }) });
+    out.push({ variant: "organiser two pairs", cfg: m.configSchema.parse({ pointsMap: organiserTwoPairs(m) }) });
   }
   // D10(c): a two-innings organiser cfg whose tie pays more than the draw default, so the draw's change is witnessed.
   // single-sport: cricket is the one sport with a two-innings draw; every sport gets the cfgs above
@@ -172,72 +228,146 @@ function labelOf(rule: PointsRule, outcome: MatchOutcome, pair: FixtureResult, s
 
 // ---------------------------------------------------------------------------------------------------------------------
 
-// The signed deltas (SPEC §5.3, §11.2): an allowlist, each row MET and each row a REAL change (below). Volleyball's
-// `set:2-0` is not signed: best of 3 pays a 2-0 3:0 before and after (the old "*"), so a signed row could never differ.
+// The signed deltas (SPEC §5.3, §11.2): an allowlist. Each row is keyed by sport, by the label the NEW rule pays (a
+// set score, a decidedIn, a level result) AND by its scope (the map, the best-of, the settled score), so a side outside
+// the scope is parity-checked like any other (review M-1). Inside it, EVERY side must change (∀, a stale signature
+// fails), and every row must be met. Volleyball's `set:2-0` is not signed: best of 3 pays a 2-0 3:0 before and after.
+interface SignCtx {
+  m: AnySportModule;
+  cfg: Raw;
+  label: string;
+  settledAt: string | undefined;
+}
+interface Signed {
+  sport: string;
+  label: string;
+  scope: string;
+  why: string;
+  when: (c: SignCtx) => boolean;
+}
+const entriesOf = (map: unknown): string => JSON.stringify(Object.entries((map ?? {}) as Raw).sort(([a], [b]) => (a < b ? -1 : 1)));
+/** The cfg's map is the sport's shipped one (the schema default), whatever order its keys were written in. */
+const shippedMap = (c: SignCtx): boolean => entriesOf(c.cfg.pointsMap) === entriesOf((c.m.configSchema.parse({}) as Raw).pointsMap);
+const settledFrom = (c: SignCtx, from: readonly string[]): boolean => c.settledAt !== undefined && from.includes(c.settledAt);
+const I2 = "T2 ruling I2 (FIVB 6.4.3; owner may overturn at pre-release): a settled abandon is scored as the winner taking the sets it needed";
+/** I-2: under an organiser's two-pair map, a match settled with the loser one set short of the match is scored to the
+ *  priced closest score (2:1); the old payer priced the partial score by "*" (3:0). Volleyball has no such row: its
+ *  two-pair map IS the shipped FIVB map, signed above. */
+const organiserI2 = (sport: string, label: string): Signed => ({
+  sport,
+  label,
+  scope: "the organiser two-pair map, settled with the loser one set short",
+  why: `${I2}; the old payer priced the partial score by "*"`,
+  when: (c) => {
+    const won = Math.ceil((c.m.configSchema.parse({}) as SetCfg).bestOf / 2);
+    const from = Array.from({ length: won }, (_, k) => `${k}-${won - 1}`);
+    return entriesOf(c.cfg.pointsMap) === entriesOf(organiserTwoPairs(c.m)) && c.label === `set:${won}-${won - 1}` && settledFrom(c, from);
+  },
+});
 // single-sport: the signed rows are SPEC §5.10's per-sport changes; the sweep that reads them runs every sport
-const SIGNED: ReadonlyArray<{ sport: string; outcome: OutcomeKey; why: string }> = [
-  { sport: "tabletennis", outcome: "loss.regulation", why: "D6: TT 2/1/0, a played loss pays 1" },
-  { sport: "volleyball", outcome: "set:2-1", why: "D10(a): best of 3, a 2-1 pays 2:1" },
-  { sport: "cricket", outcome: "draw", why: "D10(c): a two-innings draw pays 1 by default, no longer the tie's points" },
-  { sport: "football", outcome: "win.so", why: "B2: a table shoot-out is a draw plus a bonus" },
-  { sport: "football", outcome: "loss.so", why: "B2" },
-  { sport: "hockey", outcome: "win.so", why: "B2 (FIH Pro League)" },
-  { sport: "hockey", outcome: "loss.so", why: "B2" },
+const SIGNED: readonly Signed[] = [
+  { sport: "tabletennis", label: "loss.regulation", scope: "the shipped map", why: "D6: TT 2/1/0, a played loss pays 1", when: (c) => c.label === "loss.regulation" && shippedMap(c) },
+  { sport: "volleyball", label: "set:2-1", scope: "the shipped map, best of 3", why: "D10(a): best of 3, a 2-1 pays 2:1 — played, or settled at 0-1 / 1-1 and scored 2-1 (T2 ruling I2)", when: (c) => c.label === "set:2-1" && shippedMap(c) && c.cfg.bestOf === 3 },
+  {
+    sport: "cricket",
+    label: "draw",
+    scope: "two innings, no `draw` of the organiser's, a tie not worth 1",
+    why: "D10(c): a two-innings draw pays `draw`, else 1 — the old payer's fallback was the tie's points (`draw ?? tie`)",
+    when: (c) => c.label === "draw" && c.cfg.inningsPerSide === 2 && (c.cfg.points as Raw).draw === undefined && (c.cfg.points as Raw).tie !== 1,
+  },
+  { sport: "football", label: "win.so", scope: "every cfg", why: "B2: a table shoot-out is a draw plus a bonus", when: (c) => c.label === "win.so" },
+  { sport: "football", label: "loss.so", scope: "every cfg", why: "B2", when: (c) => c.label === "loss.so" },
+  { sport: "hockey", label: "win.so", scope: "every cfg", why: "B2 (FIH Pro League)", when: (c) => c.label === "win.so" },
+  { sport: "hockey", label: "loss.so", scope: "every cfg", why: "B2", when: (c) => c.label === "loss.so" },
+  {
+    sport: "volleyball",
+    label: "set:3-2",
+    scope: "the shipped map, best of 5, settled at 0-2, 1-2 or 2-2",
+    why: `${I2}; the old payer priced the partial score by "*" (3:0), the table pays 3-2's 2:1`,
+    when: (c) => c.label === "set:3-2" && shippedMap(c) && c.cfg.bestOf === 5 && settledFrom(c, ["0-2", "1-2", "2-2"]),
+  },
+  {
+    sport: "volleyball",
+    label: "set:4-2",
+    scope: "the shipped map, best of 7, settled at 3-2",
+    why: `${I2}; the old payer priced the partial 3-2 by its own key (2:1), the table pays 4-2's "*" (3:0)`,
+    when: (c) => c.label === "set:4-2" && shippedMap(c) && c.cfg.bestOf === 7 && settledFrom(c, ["3-2"]),
+  },
+  organiserI2("badminton", "set:2-1"),
+  organiserI2("tabletennis", "set:3-2"),
 ];
-const signedKey = (sport: string, outcome: string): string => `${sport}|${outcome}`;
+const signedName = (s: Signed): string => `${s.sport} ${s.label} [${s.scope}]`;
 
 describe("W2d tablePointsRule (SPEC §5.3, §13.4)", () => {
   it("X-PT-2 tablePointsRule pays exactly what standingsDelta paid, every sport × cfg × table stage kind × result, except SIGNED (counted)", () => {
-    const signed = new Map(SIGNED.map((s) => [signedKey(s.sport, s.outcome), { met: 0, differed: 0 }]));
+    const signed = new Map(SIGNED.map((s) => [s, { met: 0, differed: 0 }]));
     const perSport = new Map<string, number>();
+    const organiserCfgs = new Map<string, number>();
     const mismatches: string[] = [];
+    const stale: string[] = [];
     let checked = 0;
     let skippedAsSigned = 0;
+    let settledProbes = 0;
     const swept = forEachSport(({ key, module: m }) => {
       for (const { variant, cfg } of cfgSpace(m)) {
+        // the organiser cfg itself, not its +deciders / +bo copies
+        if (/\+organiser points \{[^}]*\}$/.test(variant)) organiserCfgs.set(key, (organiserCfgs.get(key) ?? 0) + 1);
         const setsToWin = setsToWinOf(m, cfg);
         for (const kind of TABLE_KINDS) {
           const rule = ruleOf(m, cfg, kind);
           const reach = reachableOutcomes(m, cfg, kind);
           for (const p of probes(m, cfg, kind)) {
+            if (p.settledAt !== undefined) settledProbes++;
             const old = m.standingsDelta(p.outcome, cfg, { kind }, p.state) as FixtureResult;
             const d = decidedInFor(m, p.outcome);
             const paid = payout(p.outcome, d, old, p.played, rule, m.awardScoreKeys, setsToWin);
             for (const i of [0, 1] as const) {
               const label = labelOf(rule, p.outcome, old, old[i], reach, setsToWin, d ?? "regulation");
               const same = JSON.stringify(row(paid[i])) === JSON.stringify(row(old[i]));
-              const s = signed.get(signedKey(key, label));
+              const where = `${key} ${variant} ${kind} ${JSON.stringify(p.outcome)}${p.settledAt === undefined ? "" : ` settled at ${p.settledAt}`} side ${i} (${label}): ${JSON.stringify(row(old[i]))} → ${JSON.stringify(row(paid[i]))}`;
+              const ctx: SignCtx = { m, cfg: cfg as Raw, label, settledAt: p.settledAt };
+              const s = SIGNED.find((x) => x.sport === key && x.when(ctx));
               checked++;
               perSport.set(key, (perSport.get(key) ?? 0) + 1);
               if (s !== undefined) {
-                s.met++;
-                if (!same) s.differed++;
+                const got = signed.get(s)!;
+                got.met++;
                 skippedAsSigned++;
+                if (same) stale.push(`${signedName(s)}: ${where}`);
+                else got.differed++;
                 continue;
               }
-              if (!same) {
-                mismatches.push(`${key} ${variant} ${kind} ${JSON.stringify(p.outcome)} side ${i} (${label}): ${JSON.stringify(row(old[i]))} → ${JSON.stringify(row(paid[i]))}`);
-              }
+              if (!same) mismatches.push(where);
             }
           }
         }
       }
     });
-    const signedReport = SIGNED.map((s) => `${s.sport} ${s.outcome} met ${signed.get(signedKey(s.sport, s.outcome))!.met} differed ${signed.get(signedKey(s.sport, s.outcome))!.differed}`);
+    const signedReport = SIGNED.map((s) => `${signedName(s)} met ${signed.get(s)!.met} differed ${signed.get(s)!.differed}`);
     // eslint-disable-next-line no-console -- TEST-STRATEGY anti-vacuity: the sweep reports what it checked
-    console.info(`X-PT-2: ${checked} sides checked over ${perSport.size} sports (${[...perSport].map(([k, n]) => `${k} ${n}`).join(", ")}); ${skippedAsSigned} signed — ${signedReport.join("; ")}`);
+    console.info(
+      `X-PT-2: ${checked} sides checked over ${perSport.size} sports (${[...perSport].map(([k, n]) => `${k} ${n}`).join(", ")}); ` +
+        `${settledProbes} settled-after-sets probes; organiser-points cfgs ${[...organiserCfgs].map(([k, n]) => `${k} ${n}`).join(", ")}; ` +
+        `${mismatches.length} unsigned differences; ${skippedAsSigned} signed — ${signedReport.join("; ")}`,
+    );
     expect(swept, "every registered sport swept").toBe(SPORTS);
     expect(checked, `anti-vacuity: ${checked} sides checked, ${skippedAsSigned} signed`).toBeGreaterThan(0);
     for (const [key, n] of perSport) expect(n, `${key}: sides checked`).toBeGreaterThan(0);
     expect(perSport.size, "a side checked for every sport").toBe(SPORTS);
+    expect(settledProbes, "anti-vacuity: settled abandons after sets were probed").toBeGreaterThan(0);
+    // I-1: every sport that keeps its own points was swept with an organiser's, and only those sports lack one.
+    forEachSport(({ key, module: m }) => {
+      expect(organiserCfgs.get(key) ?? 0, `${key}: organiser-points cfgs swept`).toBe(pointsFieldOf(m) === null ? 0 : declaredCfgs(m).length);
+    });
+    expect(organiserCfgs.size, "anti-vacuity: sports swept with organiser points").toBeGreaterThan(0);
     expect(mismatches, "unsigned parity breaks").toEqual([]);
+    expect(stale, "a side inside a signed row's scope that pays as it did (a stale signature)").toEqual([]);
     for (const s of SIGNED) {
-      const got = signed.get(signedKey(s.sport, s.outcome))!;
-      expect(got.met, `SIGNED ${s.sport} ${s.outcome} (${s.why}) is reached`).toBeGreaterThan(0);
-      // The allowlist cannot hide a non-change: a signed row that pays as it did is a stale signature.
-      expect(got.differed, `SIGNED ${s.sport} ${s.outcome} (${s.why}) actually changes`).toBeGreaterThan(0);
+      const got = signed.get(s)!;
+      expect(got.met, `SIGNED ${signedName(s)} (${s.why}) is reached`).toBeGreaterThan(0);
+      expect(got.differed, `SIGNED ${signedName(s)}: every side in scope changes`).toBe(got.met);
     }
-    // 14,120 sides over 11 sports: measured 4.7-5.8 s on a loaded machine, past vitest's 5 s default.
+    // 37,216 sides over 11 sports (organiser points and settled-after-sets probes included): measured 14 s at load 116.
   }, 60_000);
 
   it("X-PT-3 every module's tablePointsRule is a valid PointsRule and covers its own reachableOutcomes, every cfg × stage kind (counted)", () => {
@@ -395,12 +525,7 @@ describe("W2d the sports' table points, row by row (SPEC §5.10)", () => {
       { why: "same keys, one pair's first number moved", pointsMap: { "3-2": [2, 1], "*": [2, 0] }, table: { "2-0": [2, 0], "2-1": [2, 0] } },
       { why: "same keys, one pair's second number moved", pointsMap: { "3-2": [2, 1], "*": [3, 1] }, table: { "2-0": [3, 1], "2-1": [3, 1] } },
     ];
-    let checked = 0;
-    for (const { why, pointsMap, table } of cases) {
-      expect(ruleOf(volleyball, { bestOf: 3, pointsMap }, "league").bySetScore, why).toEqual(table);
-      checked += 1;
-    }
-    expect(checked).toBe(cases.length);
+    for (const { why, pointsMap, table } of cases) expect(ruleOf(volleyball, { bestOf: 3, pointsMap }, "league").bySetScore, why).toEqual(table);
   });
 
   it("VB settled abandons pay FIVB 6.4.3's score under the default maps: 1-1 ⇒ 3-1 (3:0), 2-2 ⇒ 3-2 (2:1), bo3 1-1 ⇒ 2-1 (2:1)", () => {
@@ -467,4 +592,51 @@ describe("W2d PS-1 soBonus replaces shootoutWin/shootoutLoss (greenfield, no ali
     expect(delta(hockey, { ...hockey.variants["fih-shootout"] }, winOf("H", "shootout"))).toEqual([[1, 0, 0, 3], [0, 0, 1, 0]]);
     expect(delta(icehockey, { points: { win: 3, draw: 1, loss: 0, otWin: 2, otLoss: 1, shootoutWin: 3, shootoutLoss: 0 } }, winOf("A", "shootout"))).toEqual([[0, 0, 1, 1], [1, 0, 0, 2]]);
   });
+
+  it("PS-1 an UNPARSED frozen cfg still carrying shootoutWin/shootoutLoss pays exactly the plain shoot-out win, every sport (review M-2, counted)", () => {
+    // A recorded cfg read back without the schema keeps the deleted keys: the payer must not read them. The split is
+    // 100 and 101 past the cfg's largest own value, a pair none of its keys pays, so a reader that came back would pay it.
+    const freeze = (m: AnySportModule, parsed: unknown): { frozen: unknown; split: number[] } => {
+      const field = pointsFieldOf(m)?.field;
+      if (field === undefined) return { frozen: parsed, split: [] };
+      const own = (parsed as Raw)[field] as Raw;
+      const top = Math.max(0, ...Object.values(own).filter((v): v is number => typeof v === "number"));
+      return { frozen: { ...(parsed as Raw), [field]: { ...own, shootoutWin: top + 100, shootoutLoss: top + 101 } }, split: [top + 100, top + 101] };
+    };
+    const perSport = new Map<string, number>();
+    const swept = forEachSport(({ key, module: m }) => {
+      for (const { variant, cfg } of cfgSpace(m)) {
+        const parsed: unknown = m.configSchema.parse(cfg);
+        const { frozen, split } = freeze(m, parsed);
+        for (const kind of TABLE_KINDS) {
+          for (const p of probes(m, parsed, kind)) {
+            if (p.outcome.kind !== "win" || p.outcome.method !== "shootout") continue;
+            const plain = (m.standingsDelta(p.outcome, parsed, { kind }, p.state) as FixtureResult).map(row);
+            const read = (m.standingsDelta(p.outcome, frozen as never, { kind }, p.state) as FixtureResult).map(row);
+            expect(read, `${key} ${variant} ${kind} ${JSON.stringify(p.outcome)}`).toEqual(plain);
+            for (const n of split) expect(read.map((r) => r[3]), `${key} ${variant}: no deleted key paid`).not.toContain(n);
+            perSport.set(key, (perSport.get(key) ?? 0) + 1);
+          }
+        }
+      }
+    });
+    // eslint-disable-next-line no-console -- TEST-STRATEGY anti-vacuity: the sweep reports what it checked
+    console.info(`PS-1 frozen: ${[...perSport].map(([k, n]) => `${k} ${n}`).join(", ")} shoot-out wins checked`);
+    expect(swept, "every registered sport swept").toBe(SPORTS);
+    // The sports whose own methods hold a shoot-out are the ones checked, each at least once (zero is a failure).
+    forEachSport(({ key, module: m }) => {
+      if (m.outcomeMethods.includes("shootout")) expect(perSport.get(key) ?? 0, `${key}: shoot-out wins checked`).toBeGreaterThan(0);
+      else expect(perSport.has(key), `${key} has no shoot-out`).toBe(false);
+    });
+    expect(perSport.size, "anti-vacuity: sports with a shoot-out checked").toBeGreaterThan(0);
+    // The anchors, from each cfg's own numbers (PS-1: the chain with no split): football win/loss, the period kernel
+    // otWin ?? win (IIHF's GWS 2/1, FIH's plain 3/0).
+    const unparsed = (m: AnySportModule, cfg: Raw, outcome: MatchOutcome): Row[] => {
+      const parsed: unknown = m.configSchema.parse(cfg);
+      return (m.standingsDelta(outcome, freeze(m, parsed).frozen as never, { kind: "league" }, m.init(parsed, defaultLineupPair(m.positions))) as FixtureResult).map(row);
+    };
+    expect(unparsed(football, { shootout: true }, winOf("H", "shootout"))).toEqual([[1, 0, 0, 3], [0, 0, 1, 0]]);
+    expect(unparsed(hockey, { ...hockey.variants["fih-shootout"] }, winOf("A", "shootout"))).toEqual([[0, 0, 1, 0], [1, 0, 0, 3]]);
+    expect(unparsed(icehockey, {}, winOf("H", "shootout"))).toEqual([[1, 0, 0, 2], [0, 0, 1, 1]]);
+  }, 60_000);
 });

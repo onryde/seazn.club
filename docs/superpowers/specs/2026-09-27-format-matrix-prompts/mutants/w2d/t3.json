@@ -253,5 +253,95 @@
         "name": "pays a shoot-out win as a plain win"
       }
     ]
+  },
+  {
+    "id": "t3-fr1-fb-split-reader-readded",
+    "file": "packages/engine/src/sports/football/football.ts",
+    "find": "const winner = build(winnerSide, 1, 0, 0, cfg.points.win);",
+    "replace": "const winner = build(winnerSide, 1, 0, 0, outcome.method === \"shootout\" && (cfg.points as unknown as Record<string, number | undefined>).shootoutWin !== undefined ? (cfg.points as unknown as Record<string, number>).shootoutWin! /*MUT*/ : cfg.points.win);",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-points-parity.test.ts"
+        ],
+        "name": "PS-1 an UNPARSED frozen cfg still carrying shootoutWin"
+      }
+    ]
+  },
+  {
+    "id": "t3-fr1-period-split-reader-readded",
+    "file": "packages/engine/src/sports/period/kernel.ts",
+    "find": "  if (method === \"shootout\" || method === \"extra_time\") {\n",
+    "replace": "  if (method === \"shootout\" && (cfg.points as unknown as Record<string, number | undefined>).shootoutWin !== undefined) return [(cfg.points as unknown as Record<string, number>).shootoutWin!, cfg.points.loss] /*MUT*/;\n  if (method === \"shootout\" || method === \"extra_time\") {\n",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-points-parity.test.ts"
+        ],
+        "name": "PS-1 an UNPARSED frozen cfg still carrying shootoutWin"
+      }
+    ]
+  },
+  {
+    "id": "t3-fr1-fb-rule-const-points",
+    "file": "packages/engine/src/sports/football/football.ts",
+    "find": "    win: { regulation: cfg.points.win },\n    loss: { regulation: cfg.points.loss },\n    draw: cfg.points.draw,",
+    "replace": "    win: { regulation: 3 },\n    loss: { regulation: 0 },\n    draw: 1 /*MUT*/,",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-points-parity.test.ts"
+        ],
+        "name": "X-PT-2 tablePointsRule pays exactly"
+      }
+    ]
+  },
+  {
+    "id": "t3-fr1-period-rule-const-loss-draw",
+    "file": "packages/engine/src/sports/period/kernel.ts",
+    "find": "      loss: { regulation: cfg.points.loss, ...(cfg.points.otLoss === undefined ? {} : { ot: cfg.points.otLoss }) },\n      draw: cfg.points.draw,",
+    "replace": "      loss: { regulation: 0, ...(cfg.points.otLoss === undefined ? {} : { ot: cfg.points.otLoss }) },\n      draw: 1 /*MUT*/,",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-points-parity.test.ts"
+        ],
+        "name": "X-PT-2 tablePointsRule pays exactly"
+      }
+    ]
+  },
+  {
+    "id": "t3-fr1-generic-rule-const-win",
+    "file": "packages/engine/src/sports/generic/generic.ts",
+    "find": "    win: { regulation: cfg.points.w },",
+    "replace": "    win: { regulation: 3 /*MUT*/ },",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-points-parity.test.ts"
+        ],
+        "name": "X-PT-2 tablePointsRule pays exactly"
+      }
+    ]
+  },
+  {
+    "id": "t3-fr1-boardgame-rule-const-loss-draw",
+    "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+    "find": "    loss: { regulation: cfg.scoring.loss },\n    draw: cfg.scoring.draw,",
+    "replace": "    loss: { regulation: 0 },\n    draw: 1 /*MUT*/,",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-points-parity.test.ts"
+        ],
+        "name": "X-PT-2 tablePointsRule pays exactly"
+      }
+    ]
   }
 ]
