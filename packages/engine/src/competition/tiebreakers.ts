@@ -230,6 +230,33 @@ export interface RankContext {
   // Division rngSeed for `lots` (spec 05 §4.4); combined with sorted tie-group
   // ids so the draw is reproducible and audited.
   rngSeed?: number;
+  // W2d (spec §5.8, ruling 70): the draws already stored for this table, by the
+  // tied set's members key. A class whose exact set is here takes the stored
+  // order, whatever rngSeed says now. The value carries the stored draw's date
+  // (PS-5b): `drawnAt` is the DB's `stage_lots_draws.drawn_at` — the engine has
+  // no clock and never makes one up.
+  lotsDraws?: ReadonlyMap<MembersKey, StoredLotsDraw>;
+  // W2d (spec §5.8 step 1, anti-goal 3): how many fixtures this table counts.
+  // 0 ⇒ an empty table: every row is `level`, ordered by seed then id, and no
+  // lots are drawn. Absent ⇒ the caller does not say, and nothing is level.
+  countedFixtures?: number;
+}
+
+/** W2d (spec §5.8): a tied set's identity — its entrant ids, sorted, joined with ",". */
+export type MembersKey = string;
+
+/** A drawing of lots as stored (`stage_lots_draws`): the drawn order and the date the DB stamped on it. */
+export interface StoredLotsDraw {
+  readonly order: readonly EntrantId[];
+  readonly drawnAt: string;
+}
+
+/** A drawing of lots this rank call made, for the caller to store: `members` sorted, `seed` = lotSeed(rngSeed, members). */
+export interface NewLotsDraw {
+  readonly membersKey: MembersKey;
+  readonly members: readonly EntrantId[];
+  readonly drawnOrder: readonly EntrantId[];
+  readonly seed: number;
 }
 
 export interface RankingResult {
@@ -238,6 +265,20 @@ export interface RankingResult {
   // Tie-groups a drawing of lots decided (sorted ids) — each needs a
   // `rank_lock_required` division event before progression (spec 05 §3).
   lotsGroups: EntrantId[][];
+  // W2d (spec §5.8): the lots drawn in this call because no stored draw held the
+  // tied set. Empty on an empty table and when every draw was stored.
+  newLotsDraws: readonly NewLotsDraw[];
+}
+
+/** The members key of a tied set (spec §5.8). An id holding the separator is refused: {"a,b"} and {"a","b"} would
+ *  share a key, so one set's stored draw would order the other. */
+export function membersKeyOf(ids: readonly EntrantId[]): MembersKey {
+  for (const id of ids) {
+    if (id.includes(",")) {
+      throw new EngineError("CONFIG_INVALID", `entrant id "${id}" holds ",", the lots members-key separator`, { entrantId: id });
+    }
+  }
+  return [...ids].sort().join(",");
 }
 
 const sgn = (n: number): number => (n > 0 ? 1 : n < 0 ? -1 : 0);
@@ -489,12 +530,18 @@ function markTieBreak(cls: readonly StandingsRow[], key: string, run: RunContext
 }
 
 // A residual tie (lots / seed): the same trace, plus the note of a conditional
-// step that could not split it (anti-goal 2: the popover says why).
-function markResidual(cls: readonly StandingsRow[], key: "lots" | "seed", run: RunContext): void {
+// step that could not split it (anti-goal 2: the popover says why), and for a
+// stored draw the date it was drawn ("Drawn by lots on {date}", spec §5.8).
+function markResidual(cls: readonly StandingsRow[], key: "lots" | "seed", run: RunContext, drawnAt?: string): void {
   const ids = cls.map((row) => row.entrantId);
   for (const row of cls) {
     const note = run.notes.get(row.entrantId);
-    row.tieBreak = { key, with: ids.filter((id) => id !== row.entrantId), ...(note === undefined ? {} : { note }) };
+    row.tieBreak = {
+      key,
+      with: ids.filter((id) => id !== row.entrantId),
+      ...(note === undefined ? {} : { note }),
+      ...(drawnAt === undefined ? {} : { drawnAt }),
+    };
   }
 }
 
@@ -725,8 +772,9 @@ function buildPoolLedger(ids: readonly EntrantId[], ctx: RankContext): SwissTabl
 }
 
 // FNV-1a fold of the division rngSeed and sorted tie-group ids → a stable
-// 32-bit lot seed (spec 05 §4.4). Same seed + same ids ⇒ same draw.
-function lotSeed(rngSeed: number, sortedIds: readonly EntrantId[]): number {
+// 32-bit lot seed (spec 05 §4.4). Same seed + same ids ⇒ same draw. Exported
+// (W2d T5) as the declared draw a test computes independently of rankStandings.
+export function lotSeed(rngSeed: number, sortedIds: readonly EntrantId[]): number {
   let hash = rngSeed >>> 0;
   for (const id of sortedIds) {
     for (let k = 0; k < id.length; k++) {
@@ -746,12 +794,30 @@ function bySeedThenId(ctx: RankContext): (a: StandingsRow, b: StandingsRow) => n
   };
 }
 
+// A stored draw orders exactly the tied set it is keyed by. Anything else is a
+// broken row (or two sets sharing a key) and is refused by name: applying it
+// would drop or repeat entrants in the table.
+function storedOrder(stored: StoredLotsDraw, membersKey: MembersKey): readonly EntrantId[] {
+  if (membersKeyOf(stored.order) !== membersKey) {
+    throw new EngineError(
+      "CONFIG_INVALID",
+      `stored lots draw "${membersKey}" orders [${stored.order.join(",")}], not exactly those entrants`,
+      { membersKey, order: [...stored.order] },
+    );
+  }
+  return stored.order;
+}
+
 // Rank a folded standings table by the cascade (spec 05 §4). Returns cloned
 // rows in a total order with distinct 1..n ranks. A class the cascade cannot
 // separate is broken by `lots` if the cascade lists it (marking the group for a
-// rank_lock_required event), otherwise by seed→id — a deterministic fallback
-// that never silently randomises (spec 05 §3). Throws CONFIG_INVALID for a
-// cascade it cannot run (anti-goal 2, `parseCascade`).
+// rank_lock_required event): by the stored draw of its exact set when
+// `lotsDraws` holds one, else by a seeded draw returned in `newLotsDraws` for
+// the caller to store (W2d §5.8, ruling 70). Otherwise — and on an empty table
+// (countedFixtures 0: every row `level`, nothing drawn, anti-goal 3) — by
+// seed→id, a deterministic fallback that never silently randomises (spec 05
+// §3). Throws CONFIG_INVALID for a cascade it cannot run (anti-goal 2,
+// `parseCascade`) and for a stored draw that does not fit its set.
 export function rankStandings(rows: readonly StandingsRow[], ctx: RankContext): RankingResult {
   const steps = parseCascade(ctx.cascade);
   const clones = rows.map((row) => ({ ...row, metrics: { ...row.metrics } }));
@@ -762,11 +828,15 @@ export function rankStandings(rows: readonly StandingsRow[], ctx: RankContext): 
   const run: RunContext = { ...ctx, poolLedger, notes: new Map() };
   // No rows, no class: zero entrants are no tie, so there is nothing for lots to draw (W2d T4 N1).
   const classes = refine(clones.length === 0 ? [] : [clones], steps, run);
-  const hasLots = ctx.cascade.includes("lots");
+  // W2d §5.8 step 1 (anti-goal 3): a table with no counted fixture has no
+  // leader and draws no lots — its residual classes take seed then id.
+  const empty = ctx.countedFixtures === 0;
+  const hasLots = !empty && ctx.cascade.includes("lots");
   const rngSeed = ctx.rngSeed ?? 0;
 
   const order: StandingsRow[] = [];
   const lotsGroups: EntrantId[][] = [];
+  const newLotsDraws: NewLotsDraw[] = [];
   for (const cls of classes) {
     if (cls.length === 1) {
       order.push(cls[0] as StandingsRow);
@@ -774,9 +844,18 @@ export function rankStandings(rows: readonly StandingsRow[], ctx: RankContext): 
     }
     if (hasLots) {
       const ids = cls.map((row) => row.entrantId).sort();
-      const drawn = shuffle(lotSeed(rngSeed, ids), ids);
+      const membersKey = membersKeyOf(ids);
+      const stored = ctx.lotsDraws?.get(membersKey);
+      let drawn: readonly EntrantId[];
+      if (stored === undefined) {
+        const seed = lotSeed(rngSeed, ids);
+        drawn = shuffle(seed, ids);
+        newLotsDraws.push({ membersKey, members: [...ids], drawnOrder: drawn, seed });
+      } else {
+        drawn = storedOrder(stored, membersKey);
+      }
       const byId = new Map(cls.map((row) => [row.entrantId, row]));
-      markResidual(cls, "lots", run);
+      markResidual(cls, "lots", run, stored?.drawnAt);
       for (const id of drawn) {
         const row = byId.get(id) as StandingsRow;
         row.rankLocked = true;
@@ -799,6 +878,10 @@ export function rankStandings(rows: readonly StandingsRow[], ctx: RankContext): 
 
   order.forEach((row, index) => {
     row.rank = index + 1;
+    // Every row of an empty table is level; no row of any other table is, even
+    // one a previous rank call flagged (the clone carries its input's fields).
+    if (empty) row.level = true;
+    else delete row.level;
   });
 
   // Swiss cascade metrics exist only at rank time (they need the assembled
@@ -824,7 +907,7 @@ export function rankStandings(rows: readonly StandingsRow[], ctx: RankContext): 
       row.metrics["sberger"] = sonnebornBerger(poolLedger, row.entrantId) / 4;
     }
   }
-  return { rows: order, lotsGroups };
+  return { rows: order, lotsGroups, newLotsDraws };
 }
 
 // spec 05 §4.1 — reject cascade keys whose metrics the sport doesn't maintain

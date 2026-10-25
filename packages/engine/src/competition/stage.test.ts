@@ -142,9 +142,15 @@ describe("completeTableStage — division events (spec 05 §3/§5)", () => {
   it("emits rank_lock_required + rank_lock when the cascade exhausts to lots", () => {
     const fixtures: TableFixture[] = [{ id: "f", status: "decided", result: fb("X", "Y", 1, 1) }];
     const stage: TableStage = { id: "s", kind: "league", entrants: ["X", "Y"], cascade: ["points", "lots"], rngSeed: 2 };
+    // W2d T5 (spec §5.8, PS-5b): rank_lock carries the STORED draw's order and date, so it needs a stored draw; an
+    // unstored one emits rank_lock_required alone and is returned for storing (lots-stored.test.ts owns the rest).
     const { events } = completeTableStage(stage, fixtures);
     expect(events).toContainEqual({ type: "rank_lock_required", stageId: "s", group: ["X", "Y"] });
-    expect(events).toContainEqual({ type: "rank_lock", stageId: "s", method: "lots", group: ["X", "Y"] });
+    expect(events.some((e) => e.type === "rank_lock")).toBe(false);
+    const lotsDraws = new Map([["", new Map([["X,Y", { order: ["Y", "X"], drawnAt: "2026-10-24 09:00:00+00" }]])]]);
+    const stored = completeTableStage({ ...stage, lotsDraws }, fixtures);
+    expect(stored.events).toContainEqual({ type: "rank_lock_required", stageId: "s", group: ["X", "Y"] });
+    expect(stored.events).toContainEqual({ type: "rank_lock", stageId: "s", method: "lots", group: ["X", "Y"], order: ["Y", "X"], drawnAt: "2026-10-24 09:00:00+00" });
   });
 
   it("marks lot-decided rows as rankLocked", () => {

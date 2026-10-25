@@ -31,7 +31,12 @@ export interface StandingsRow {
   // pass for every row that needed a tiebreaker beyond the cascade's primary
   // key; the finest rule that applied wins. Rides into standings_snapshots.
   // `note` (W2d): on a residual tie, why a conditional step did not split it.
-  tieBreak?: { key: string; with: EntrantId[]; note?: TieBreakNote };
+  // `drawnAt` (W2d §5.8): on a lots row ordered by a STORED draw, the date the
+  // DB stamped on it ("Drawn by lots on {date}"); absent for a draw not yet stored.
+  tieBreak?: { key: string; with: EntrantId[]; note?: TieBreakNote; drawnAt?: string };
+  /** W2d (spec §5.8 step 1, anti-goal 3): true on every row of a table with no
+   *  counted fixture — no leader, no row marked first. Absent otherwise. */
+  level?: boolean;
 }
 
 /** W2d (spec §2.3 anti-goal 2): why a conditional cascade step left a tie

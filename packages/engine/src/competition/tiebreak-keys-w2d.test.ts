@@ -810,7 +810,7 @@ describe("W2d T4 — the refinement driver's guards", () => {
     // Zero rows have no tie to draw; an empty group in lotsGroups would ask an organiser to lock nobody.
     let checked = 0;
     for (const cascade of [["points", "lots"], ["points", "diff", "lots"], ["points", "direct", "lots"], BWF, ITTF, UEFA, ATP, FIDE_RR] as TiebreakerKey[][]) {
-      expect(rankStandings([], { cascade, rngSeed: 1 }), cascade.join(",")).toStrictEqual({ rows: [], lotsGroups: [] });
+      expect(rankStandings([], { cascade, rngSeed: 1 }), cascade.join(",")).toStrictEqual({ rows: [], lotsGroups: [], newLotsDraws: [] });
       checked++;
     }
     expect(checked).toBe(8);

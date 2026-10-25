@@ -10,7 +10,8 @@ import { describe, expect, it } from "vitest";
 import type { EntrantId, StandingsDelta } from "../core/types.ts";
 import type { TiebreakerKey } from "../sport/module.ts";
 import { foldResults, type FixtureResult, type StandingsRow } from "./standings.ts";
-import { rankStandings, type RankContext, type RankingResult } from "./tiebreakers.ts";
+import { shuffle } from "../core/rng.ts";
+import { lotSeed, rankStandings, type MembersKey, type RankContext, type RankingResult, type StoredLotsDraw } from "./tiebreakers.ts";
 
 const PLAIN: readonly TiebreakerKey[] = [
   "points", "wins", "diff", "for", "nrr", "set_ratio", "game_ratio", "board_ratio", "point_ratio", "buchholz",
@@ -67,7 +68,7 @@ const cascadeArb: fc.Arbitrary<TiebreakerKey[]> = fc
 
 const gamePointOf = (d: StandingsDelta): number => (d.won === 1 ? 2 : d.drawn === 1 ? 1 : 0);
 
-function rank(s: Scenario, cascade: readonly TiebreakerKey[], results: readonly FixtureResult[], rowOrder?: readonly number[]): RankingResult {
+function rank(s: Scenario, cascade: readonly TiebreakerKey[], results: readonly FixtureResult[], rowOrder?: readonly number[], extra: Partial<RankContext> = {}): RankingResult {
   const ids = IDS.slice(0, s.n);
   const rows = foldResults(ids, results);
   const ordered = rowOrder === undefined ? rows : rowOrder.map((i) => rows[i] as StandingsRow);
@@ -76,6 +77,7 @@ function rank(s: Scenario, cascade: readonly TiebreakerKey[], results: readonly 
     seeds: new Map(ids.flatMap((id, i) => (s.seeded[i] === true ? [[id, i + 1] as const] : []))),
     ...(s.gamePoints ? { gamePoints: (r: FixtureResult) => [gamePointOf(r[0]), gamePointOf(r[1])] as const } : {}),
     ...(s.regulation ? { winsCount: "regulation" as const } : {}),
+    ...extra,
   };
   return rankStandings(ordered, ctx);
 }
@@ -185,5 +187,146 @@ describe("W2d T4 — tie-break cascade properties (rule 10)", () => {
     expect(checked).toBe(400);
     // Some runs restarted on a sub-class (more than one read), so the bound was exercised, not only the root pass.
     expect(deep).toBeGreaterThan(20);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W2d Task 5 (spec §5.8, ruling 70): the stored drawing of lots. The cascades are the T4 generator's with `lots`
+// appended, so every residual class reaches the draw.
+// ---------------------------------------------------------------------------
+
+const DRAWN_AT = "2026-10-24 09:15:02+00";
+// Anti-vacuity floors (rule 2), each well under what its fixed seed measured on 2026-10-25: reload 116 of 300 runs drew;
+// the later-result property kept 107 stored sets and redrew 135 changed ones over 600 runs; the lots-map property read
+// a stored draw in 112 runs, drew a new one in 112, and did both in one table in 20.
+const DRAWN_FLOOR_RELOAD = 70;
+const KEPT_FLOOR = 60;
+const REDRAWN_FLOOR = 80;
+const READ_FLOOR = 60;
+const FRESH_FLOOR = 60;
+const MIXED_FLOOR = 8;
+/** What the caller does with `newLotsDraws`: store each under its key, the DB stamping the date (Task 9). */
+const storeOf = (draws: RankingResult["newLotsDraws"]): Map<MembersKey, StoredLotsDraw> =>
+  new Map(draws.map((d) => [d.membersKey, { order: [...d.drawnOrder], drawnAt: DRAWN_AT }]));
+/** The key of a tied set, from its declaration (spec §5.8: the sorted ids, joined), not from `membersKeyOf`. */
+const keyOf = (members: readonly EntrantId[]): string => [...members].sort().join(",");
+/** Everything a reader sees, with the lots fields: the stored date on each row, and the new draws. */
+const viewLots = (r: RankingResult): unknown => ({ base: view(r), drawnAt: r.rows.map((x) => x.tieBreak?.drawnAt ?? null), newLots: r.newLotsDraws });
+
+describe("W2d T5 — the stored drawing of lots, properties (rule 10)", () => {
+  it("lots reload stability: rank, persist newLotsDraws, rank again on permuted rows and fixtures with another rngSeed → identical, no new draws", () => {
+    let checked = 0;
+    let drawn = 0;
+    fc.assert(
+      fc.property(scenario, cascadeArb, fc.array(fc.nat(), { minLength: 64, maxLength: 64 }), fc.array(fc.boolean(), { minLength: 64, maxLength: 64 }), (s, prefix, keys, flips) => {
+        const cascade: TiebreakerKey[] = [...prefix, "lots"];
+        const results = s.meetings.map(resultOf);
+        const first = rank(s, cascade, results, undefined, { countedFixtures: results.length });
+        // Every new draw is the declared one: lotSeed over the sorted members, shuffled (spec 05 §4.4).
+        for (const d of first.newLotsDraws) {
+          const sorted = [...d.members].sort();
+          expect(d.members).toEqual(sorted);
+          expect(d.membersKey).toBe(keyOf(sorted));
+          expect(d.seed).toBe(lotSeed(7, sorted));
+          expect(d.drawnOrder).toEqual(shuffle(lotSeed(7, sorted), sorted));
+        }
+        const store = storeOf(first.newLotsDraws);
+        const order = permutation(keys.slice(7), results.length).map((i, k) => {
+          const r = results[i] as FixtureResult;
+          return flips[k] === true ? ([r[1], r[0]] as FixtureResult) : r;
+        });
+        const again = rank(s, cascade, order, permutation(keys.slice(0, 7), s.n), { countedFixtures: results.length, lotsDraws: store, rngSeed: 8 });
+        expect(view(again)).toEqual(view(first));
+        expect(again.newLotsDraws).toEqual([]);
+        // Every row a stored draw placed says when it was drawn; every other row says nothing.
+        const lotsRows = new Set(first.lotsGroups.flat());
+        expect(again.rows.map((x) => x.tieBreak?.drawnAt ?? null)).toEqual(again.rows.map((x) => (lotsRows.has(x.entrantId) ? DRAWN_AT : null)));
+        checked++;
+        if (first.newLotsDraws.length > 0) drawn++;
+      }),
+      { numRuns: 300, seed: 20261027 },
+    );
+    expect(checked).toBe(300);
+    // Runs that drew at least once: the reload read a real store, not an empty map.
+    expect(drawn).toBeGreaterThan(DRAWN_FLOOR_RELOAD);
+  });
+
+  it("a stored draw is reused exactly when its tied set recurs: an unrelated later result keeps it, a changed set draws again", () => {
+    let checked = 0;
+    let kept = 0;
+    let redrawn = 0;
+    const meeting = (n: number) =>
+      fc.record({
+        a: fc.nat(n - 1), b: fc.nat(n - 1), hs: fc.integer({ min: 0, max: 3 }), as: fc.integer({ min: 0, max: 3 }),
+        hp: fc.integer({ min: 0, max: 40 }), ap: fc.integer({ min: 0, max: 40 }), hpc: fc.nat(2), apc: fc.nat(2), ot: fc.boolean(),
+      }).filter((m) => m.a !== m.b);
+    const withLater = scenario.chain((s) => fc.tuple(fc.constant(s), meeting(s.n)));
+    fc.assert(
+      fc.property(withLater, cascadeArb, ([s, extra], prefix) => {
+        const cascade: TiebreakerKey[] = [...prefix, "lots"];
+        const results = s.meetings.map(resultOf);
+        const store = storeOf(rank(s, cascade, results, undefined, { countedFixtures: results.length }).newLotsDraws);
+        const later = [...results, resultOf(extra)];
+        const next = rank(s, cascade, later, undefined, { countedFixtures: later.length, lotsDraws: store, rngSeed: 8 });
+        let fresh = 0;
+        for (const group of next.lotsGroups) {
+          const key = keyOf(group);
+          const placed = next.rows.filter((x) => group.includes(x.entrantId)).map((x) => x.entrantId);
+          const kept_ = store.get(key);
+          if (kept_ !== undefined) {
+            expect(placed, key).toEqual(kept_.order);
+            kept++;
+          } else {
+            const sorted = [...group].sort();
+            expect(placed, key).toEqual(shuffle(lotSeed(8, sorted), sorted));
+            expect(next.newLotsDraws.some((d) => d.membersKey === key), key).toBe(true);
+            fresh++;
+            redrawn++;
+          }
+        }
+        // Nothing is drawn but the sets that had no stored draw.
+        expect(next.newLotsDraws).toHaveLength(fresh);
+        checked++;
+      }),
+      { numRuns: 600, seed: 20261028 },
+    );
+    expect(checked).toBe(600);
+    expect(kept).toBeGreaterThan(KEPT_FLOOR);
+    expect(redrawn).toBeGreaterThan(REDRAWN_FLOOR);
+  });
+
+  it("permutation invariance with the lots map: some draws stored, shuffled rows and fixtures give the same ranking and the same new draws", () => {
+    let checked = 0;
+    let read = 0;
+    let fresh = 0;
+    let mixed = 0;
+    fc.assert(
+      fc.property(scenario, cascadeArb, fc.array(fc.nat(), { minLength: 64, maxLength: 64 }), fc.array(fc.boolean(), { minLength: 64, maxLength: 64 }), fc.array(fc.boolean(), { minLength: 8, maxLength: 8 }), (s, prefix, keys, flips, picks) => {
+        const cascade: TiebreakerKey[] = [...prefix, "lots"];
+        const results = s.meetings.map(resultOf);
+        // A store drawn under another seed, keeping the draws `picks` chooses: those classes read a stored order that
+        // differs from today's re-hash, the rest are drawn now.
+        const store = storeOf(rank(s, cascade, results, undefined, { rngSeed: 99 }).newLotsDraws.filter((_, i) => picks[i] === true));
+        const ctx = { countedFixtures: results.length, lotsDraws: store };
+        const base = rank(s, cascade, results, undefined, ctx);
+        const order = permutation(keys.slice(7), results.length).map((i, k) => {
+          const r = results[i] as FixtureResult;
+          return flips[k] === true ? ([r[1], r[0]] as FixtureResult) : r;
+        });
+        const again = rank(s, cascade, order, permutation(keys.slice(0, 7), s.n), ctx);
+        expect(viewLots(again)).toEqual(viewLots(base));
+        checked++;
+        const usedStore = base.rows.some((x) => x.tieBreak?.drawnAt !== undefined);
+        if (usedStore) read++;
+        if (base.newLotsDraws.length > 0) fresh++;
+        if (usedStore && base.newLotsDraws.length > 0) mixed++;
+      }),
+      { numRuns: 600, seed: 20261029 },
+    );
+    expect(checked).toBe(600);
+    // Runs that read a stored draw, runs that drew one now, and runs that did both in one table.
+    expect(read).toBeGreaterThan(READ_FLOOR);
+    expect(fresh).toBeGreaterThan(FRESH_FLOOR);
+    expect(mixed).toBeGreaterThan(MIXED_FLOOR);
   });
 });

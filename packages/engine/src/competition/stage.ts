@@ -10,7 +10,7 @@ import { applyRankLocks, type RankLock } from "./points.ts";
 import type { StandingsDelta } from "../core/types.ts";
 import type { PoolTable, SourceTables as StageTables } from "./progression.ts";
 import type { TiebreakerKey } from "../sport/module.ts";
-import { buildSwissTable, rankStandings } from "./tiebreakers.ts";
+import { buildSwissTable, membersKeyOf, rankStandings, type MembersKey, type NewLotsDraw, type StoredLotsDraw } from "./tiebreakers.ts";
 
 // spec 02 §6 fixture statuses that matter to a stage's completion/ranking.
 export type FixtureStatus = "scheduled" | "in_play" | "decided" | "void" | "walkover";
@@ -81,6 +81,10 @@ export interface TableStage {
   rankLocks?: readonly RankLock[];
   /** Circular-H2H mode for ≥3-way ties (Jul3/05 §5). */
   h2hScope?: "mini_table" | "overall";
+  /** W2d (spec §5.8): the stage's stored lots draws, by pool (a fixture's
+   *  `poolId`, "" for none — the key completeTableStage names its pools by),
+   *  then by the tied set's members key. A draw belongs to its pool. */
+  lotsDraws?: ReadonlyMap<string, ReadonlyMap<MembersKey, StoredLotsDraw>>;
 }
 
 export interface BracketStage {
@@ -101,7 +105,10 @@ export type DivisionEvent =
   | { type: "stage_opened"; stageId: string }
   | { type: "stage_completed"; stageId: string; finalRanks: EntrantId[] }
   | { type: "rank_lock_required"; stageId: string; group: EntrantId[] }
-  | { type: "rank_lock"; stageId: string; method: "lots"; group: EntrantId[] }
+  // W2d (spec §5.8, PS-5b): `order` and `drawnAt` are the STORED draw's. A draw
+  // made in this call has no date yet, so it emits rank_lock_required alone and
+  // goes back in `newLotsDraws`; the lock follows once the draw is stored.
+  | { type: "rank_lock"; stageId: string; method: "lots"; group: EntrantId[]; order: EntrantId[]; drawnAt: string }
   | {
       type: "entrant_withdrawn";
       stageId: string;
@@ -204,13 +211,16 @@ function entrantsOfPool(
 export interface CompletedTableStage {
   events: DivisionEvent[];
   tables: StageTables;
+  /** W2d (spec §5.8): the lots drawn now, each tagged with its pool, for the caller to store. */
+  newLotsDraws: ReadonlyArray<NewLotsDraw & { readonly pool: string }>;
 }
 
 // Fold + rank each pool of a completed table stage. Emits stage_completed
-// {finalRanks}, plus rank_lock_required + rank_lock for any tie the cascade
-// left to a drawing of lots (spec 05 §3/§4.4). finalRanks interleaves pools by
-// rank (all pool winners, then all runners-up, …) — the cross-pool seeding
-// order (spec 05 §2.3).
+// {finalRanks}, plus rank_lock_required for any tie the cascade left to a
+// drawing of lots (spec 05 §3/§4.4), and rank_lock for one whose draw is stored
+// (W2d §5.8). A pool with no counted fixture is an empty table: no lots, every
+// row level. finalRanks interleaves pools by rank (all pool winners, then all
+// runners-up, …) — the cross-pool seeding order (spec 05 §2.3).
 export function completeTableStage(
   stage: TableStage,
   fixtures: readonly TableFixture[],
@@ -219,6 +229,7 @@ export function completeTableStage(
   const single = pools.length === 1;
   const events: DivisionEvent[] = [];
   const poolTables: PoolTable[] = [];
+  const newLotsDraws: (NewLotsDraw & { readonly pool: string })[] = [];
 
   for (const pool of pools) {
     const poolFixtures = single ? fixtures : fixtures.filter((fixture) => poolOf(fixture) === pool);
@@ -236,9 +247,16 @@ export function completeTableStage(
       openings.length > 0 || awardDeltas.length > 0
         ? foldStandings(entrants, [...openings, ...results.flat(), ...awardDeltas])
         : foldResults(entrants, results);
+    // W2d §5.8 step 1: the pool's table is empty when nothing in it counts — no
+    // counted result, no sit-out award, and no carried opening (an opening is
+    // the fold of counted fixtures in its source stage, so it carries a table).
+    const countedFixtures = results.length + awardDeltas.length + openings.length;
+    const poolDraws = stage.lotsDraws?.get(pool);
     const ranked = rankStandings(rows, {
       cascade: stage.cascade,
       results,
+      countedFixtures,
+      ...(poolDraws === undefined ? {} : { lotsDraws: poolDraws }),
       ...(stage.seeds === undefined ? {} : { seeds: stage.seeds }),
       ...(stage.rngSeed === undefined ? {} : { rngSeed: stage.rngSeed }),
       ...(stage.h2hScope === undefined ? {} : { h2hScope: stage.h2hScope }),
@@ -252,8 +270,14 @@ export function completeTableStage(
 
     for (const group of ranked.lotsGroups) {
       events.push({ type: "rank_lock_required", stageId: stage.id, group });
-      events.push({ type: "rank_lock", stageId: stage.id, method: "lots", group });
+      // The lock carries the stored draw's order and date (PS-5b): the engine
+      // has no clock, so a draw made just now waits for its stored row.
+      const drawn = poolDraws?.get(membersKeyOf(group));
+      if (drawn !== undefined) {
+        events.push({ type: "rank_lock", stageId: stage.id, method: "lots", group, order: [...drawn.order], drawnAt: drawn.drawnAt });
+      }
     }
+    for (const draw of ranked.newLotsDraws) newLotsDraws.push({ pool, ...draw });
     poolTables.push({ pool, rows: ranked.rows, results });
   }
 
@@ -264,6 +288,7 @@ export function completeTableStage(
   return {
     events,
     tables: { pools: poolTables, ...(overall === undefined ? {} : { overall }) },
+    newLotsDraws,
   };
 }
 
