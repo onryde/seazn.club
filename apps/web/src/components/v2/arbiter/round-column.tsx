@@ -27,7 +27,6 @@ import type { ReactNode } from "react";
 import Link from "@/components/ui/console-link";
 import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import type { ArbiterBoard, ArbiterRound } from "@/lib/arbiter-view";
-import { fmtTime } from "@/lib/format";
 import { INVITE_WORD_KEYS, seatWords, type SeatInviteWord } from "@/lib/invite-status";
 import type { MessageKey } from "@/lib/messages";
 import type { OpenRoundView } from "@/lib/open-round";
@@ -39,6 +38,7 @@ import { BUTTON_QUIET, CLOCK_FACE, MUTED, SOFT } from "../arbiter-flag-cards";
 import { boardExtendOffer, extendBoardLabel } from "../checkin-extend-ui";
 import { ConfirmDialog } from "../confirm-dialog";
 import { OpenRoundConfirmBody, openNoticeText, owedPlayers, resendNoticeText, timedBatches, type BoardSeats } from "../desk/open-round-control";
+import { useVenueClock } from "../venue-clock";
 import type { OpenRoundUiState } from "../desk/open-round-state";
 import { useOpenRound, type OpenRoundHandle } from "../desk/use-open-round";
 import { RoundQueueCards } from "./round-queue-cards";
@@ -401,6 +401,7 @@ export function CheckinHero({ round, view, tz, nowMs, openRound, roundExtend }: 
   const msg = useMsg();
   const plural = useMsgPlural();
   const { state } = openRound;
+  const venueAt = useVenueClock(tz);
   const clock = checkinClock(round.boards, nowMs);
   const tally = checkinTally(round.boards, nowMs);
   const batches = view === null ? null : timedBatches(view);
@@ -489,7 +490,7 @@ export function CheckinHero({ round, view, tz, nowMs, openRound, roundExtend }: 
           onClick={openRound.ask}
           // BUTTON_QUIET has min-h-11 and no vertical padding. This label is long ("Inviter de nouveau et relancer l'enregistrement" wraps to two
           // lines from 320 to 375), and two lines of text would touch the border: py-2 keeps them clear of it, on this press only.
-          className={`${BUTTON_QUIET} w-full py-2 sm:w-auto`}
+          className={`${BUTTON_QUIET} w-full py-2 max-md:max-w-sm`}
         >
           {reinvite ? plural("runsheet.round.inviteCta", owed) : msg("arbiter.column.reopenCta")}
         </button>
@@ -524,10 +525,10 @@ export function CheckinHero({ round, view, tz, nowMs, openRound, roundExtend }: 
                   {b.fromBoard === b.toBoard ? msg("arbiter.boardNo", { n: b.fromBoard }) : msg("arbiter.column.batchBoards", { from: b.fromBoard, to: b.toBoard })}
                 </span>
                 <span data-field="opens" className={`text-xs ${MUTED}`}>
-                  {msg("runsheet.round.batchOpens", { time: fmtTime(tz, b.opensAt) })}
+                  {msg("runsheet.round.batchOpens", { time: venueAt(b.opensAt) })}
                 </span>
                 <span data-field="closes" className={`text-xs ${MUTED}`}>
-                  {msg("runsheet.round.batchCloses", { time: fmtTime(tz, b.closesAt) })}
+                  {msg("runsheet.round.batchCloses", { time: venueAt(b.closesAt) })}
                 </span>
               </li>
             ))}

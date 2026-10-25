@@ -231,7 +231,7 @@ function flagCount(b: ArbiterBoard, f: Fmt): string | null {
 }
 
 export function ArbiterScreen(p: ArbiterScreenProps) {
-  const f = useFmt(p.nowMs);
+  const f = useFmt(p.nowMs, p.column.tz);
   const back = routes.division(p.slugs.org, p.slugs.comp, p.slugs.div, "fixtures");
   const ids = { flags: useId(), decide: useId(), outage: useId(), board: useId(), boards: useId(), switch: useId() };
   const roundLine = p.round ? f.t("arbiter.roundLine", { stage: p.round.stageName, round: p.round.roundNo }) : null;
@@ -495,7 +495,9 @@ const ROUND_BAR_BOX: Record<RoundBarVariant, string> = {
   bar: "mx-auto flex w-full max-w-[1232px] min-w-0 flex-col items-start gap-1.5 px-4 pt-3 lg:px-6 lg:pt-5",
   inline: "flex w-full min-w-0 flex-col items-start gap-1.5",
 };
-const ROUND_BAR_BUTTON: Record<RoundBarVariant, string> = { bar: "w-full lg:w-auto", inline: "w-full sm:w-auto" };
+// `inline` is the round card's button, side by side with the round's press (round-column.tsx): both fill the card and are capped at the
+// same width below md, so the two read as one pair of buttons rather than one stretched and one label-wide (Task 16 D5).
+const ROUND_BAR_BUTTON: Record<RoundBarVariant, string> = { bar: "w-full lg:w-auto", inline: "w-full max-md:max-w-sm" };
 
 /** Spec §3.2.2: "+5 min to the round" at the top of the panel - one press gives every board of the round whose check-in is open
  *  five more minutes, and the answer says how many and why the rest were left alone. Offered while at least one board would

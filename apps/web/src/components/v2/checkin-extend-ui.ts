@@ -24,8 +24,9 @@ import {
 
 type Vars = Record<string, string | number>;
 
-/** What the copy needs from either screen's translator: the plain lookup, the plural lookup and the time of day in the viewer's
- *  own zone (`null` before mount). The arbiter panel hands its `Fmt`; the Open round control hands `useMsg` and `fmtTime`. */
+/** What the copy needs from either screen's translator: the plain lookup, the plural lookup and the time of day (`null` before mount).
+ *  The arbiter panel hands its `Fmt`, whose times are the VENUE's zone, named when the viewer's own offset differs (Task 16 D1); the
+ *  Open round control hands `useMsg` and the venue clock. */
 export type ExtendCopy = {
   t: (key: string, vars?: Vars) => string;
   plural: (key: string, count: number, vars?: Vars) => string;

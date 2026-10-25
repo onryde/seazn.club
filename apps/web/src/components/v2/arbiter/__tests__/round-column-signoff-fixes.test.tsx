@@ -15,11 +15,18 @@ import type { ArbiterBoard, ArbiterRound } from "@/lib/arbiter-view";
 import type { SeatInviteWord } from "@/lib/invite-status";
 import type { OpenRoundPairing, OpenRoundView } from "@/lib/open-round";
 import { DEADLINE_AFTER_MS } from "@/server/external-play/window";
+import { ArbiterScreen, type ArbiterScreenProps } from "../../arbiter-panel";
+import { initialArbiterDecision } from "../../arbiter-decision";
+import { initialRoundExtend } from "../../checkin-extend-ui";
 import { initialOpenRoundUi, type OpenRoundUiState } from "../../desk/open-round-state";
 import type { OpenRoundHandle } from "../../desk/use-open-round";
 import { CheckinHero, OpenRoundBlockView, RoundColumn, WaitingList, type CheckinHeroProps, type RoundColumnData, type RoundColumnProps } from "../round-column";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
+
+/** The viewer's browser zone, which the real hook reads from `Intl` after mount and answers `null` for on a server render. */
+const viewer = vi.hoisted(() => ({ zone: null as string | null }));
+vi.mock("../../use-viewer-zone", () => ({ useViewerZone: () => viewer.zone }));
 
 const en = messages as unknown as Record<string, string>;
 const TZ = "Europe/London";
@@ -431,5 +438,226 @@ describe("D3: a seat's words are on their own row under the name", () => {
     const h = rowsOf(boards);
     expect(h.split(ATTR("arbiter-seat-words")).length - 1).toBe(8);
     expect(h.split(ATTR("arbiter-seat")+" ").length - 1, "premise: eight seats").toBe(8);
+  });
+});
+
+// ======================================================================================================================
+// The panel itself (D1, D5). ArbiterScreen is pure: props in, markup out. Venue Asia/Tokyo; the viewer's browser zone is a variable
+// (the hook is replaced; the real one answers null on a server render and the browser's zone after mount).
+// ======================================================================================================================
+
+const VENUE = "Asia/Tokyo";
+const OPENS = "2026-10-24T06:40:00.000Z";
+const DEADLINE = "2026-10-24T07:00:00.000Z";
+const PANEL_NOW = Date.parse("2026-10-24T06:50:00.000Z");
+
+/** A clock face read from Intl at test time (never typed): "15:56" or, with seconds, "15:31:05". */
+const face = (iso: string, tz: string, seconds = false) =>
+  new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", ...(seconds ? { second: "2-digit" } : {}), hourCycle: "h23", timeZone: tz }).format(new Date(iso));
+/** The same face with the venue's name, as the dictionary words it. */
+const labelled = (time: string, city: string) => en["arbiter.venueTime"]!.replace("{time}", time).replace("{city}", city);
+
+const WINDOW: CheckinExtendState = { canExtend: true, refusal: null, extensionsLeft: 3, opensAt: OPENS, deadlineAt: DEADLINE };
+const CAMERA_FLAG = {
+  id: "fl-cam",
+  kind: "camera_lost" as const,
+  at: "2026-10-24T06:36:00.000Z",
+  personName: "Priya Raghunathan",
+  windowFrom: "2026-10-24T06:18:00.000Z",
+  report: {
+    offSeconds: 189,
+    windowSeconds: 21 * 60,
+    intervals: [{ from: "2026-10-24T06:31:05.000Z", to: "2026-10-24T06:34:14.000Z", confirmedByEvents: true }],
+    connections: 2,
+    sessions: 1,
+  },
+};
+const NOOP = () => undefined;
+const screen = (boards: ArbiterBoard[], selected: string, o: Partial<ArbiterScreenProps> = {}) =>
+  underEnglish(
+    <ArbiterScreen
+      round={ROUND(boards)}
+      requested={null}
+      decision={initialArbiterDecision(selected)}
+      roundExtend={initialRoundExtend()}
+      video={{ kind: "idle" }}
+      shown="white"
+      nowMs={PANEL_NOW}
+      slugs={SLUGS}
+      column={DATA({ tz: VENUE })}
+      openRound={handle()}
+      on={{ select: NOOP, extendBoard: NOOP, resync: NOOP, goOn: NOOP, toggleSettle: NOOP, settle: NOOP, extend: NOOP, extendRound: NOOP, override: NOOP, retryVideo: NOOP, switchTo: NOOP }}
+      {...o}
+    />,
+  );
+const inWindow = (o: Partial<ArbiterBoard> = {}) => board({ state: { kind: "checking_in" }, checkin: WINDOW, seats: { white: seat(false, ["sent"]), black: seat(true) }, ...o });
+const reported = () => over({ canResync: false, playable: false, canSettle: false, cameraReport: "settled", flags: [CAMERA_FLAG] });
+const labelsIn = (h: string, city = "Tokyo") => h.split(en["arbiter.venueTime"]!.replace("{time}", "").replace("{city}", city).trim()).length - 1;
+const NY = "America/New_York";
+
+describe("D1: one deadline, one clock - every time on the panel is the venue's", () => {
+  const noViewer = () => {
+    viewer.zone = null;
+  };
+
+  it("the decision area and the column agree on a deadline, and both name the venue when the viewer is elsewhere", () => {
+    viewer.zone = NY;
+    const f4 = inWindow();
+    // The round's groups: group 0's close is this same instant, so the column draws it.
+    const view = VIEW({
+      state: "open",
+      press: "none",
+      staggered: true,
+      batches: [
+        { fromBoard: 1, toBoard: 1, offsetMs: 0, opensAt: OPENS, closesAt: DEADLINE },
+        { fromBoard: 2, toBoard: 2, offsetMs: 5 * MIN, opensAt: "2026-10-24T06:45:00.000Z", closesAt: "2026-10-24T07:05:00.000Z" },
+      ],
+    });
+    const h = screen([live(), f4], f4.fixtureId, { column: DATA({ tz: VENUE, views: [view] }) });
+    const venue = face(DEADLINE, VENUE);
+    const viewerFace = face(DEADLINE, NY);
+    expect(venue, "premise: the two zones read this instant differently").not.toBe(viewerFace);
+
+    const decision = textIn(h, "arbiter-extend-closes");
+    expect(decision, "the decision area reads the deadline in the venue's zone, with its name").toBe(
+      esc(en["externalPlay.checkinExtend.closesAt"]!.replace("{time}", labelled(venue, "Tokyo"))),
+    );
+    expect(decision, "and not in the viewer's").not.toContain(viewerFace);
+
+    const closes = textIn(h, "arbiter-column-batch-0")!;
+    expect(closes, "the column's group reads the same instant the same way").toContain(esc(labelled(venue, "Tokyo")));
+    expect(closes).not.toContain(viewerFace);
+  });
+
+  it("the label is added once per time, never twice (checked: every time in the camera report)", () => {
+    viewer.zone = NY;
+    const f2 = reported();
+    const h = screen([live(), f2], f2.fixtureId);
+    const from = face(CAMERA_FLAG.report.intervals[0]!.from, VENUE, true);
+    const to = face(CAMERA_FLAG.report.intervals[0]!.to, VENUE, true);
+    const start = face(CAMERA_FLAG.windowFrom, VENUE);
+    const end = face(new Date(Date.parse(CAMERA_FLAG.windowFrom) + CAMERA_FLAG.report.windowSeconds * 1000).toISOString(), VENUE);
+    const text = textOf(h);
+    let checked = 0;
+    for (const t of [from, to, start, end]) {
+      const want = esc(labelled(t, "Tokyo"));
+      expect(text.split(want).length - 1, `${t} appears once, labelled`).toBeGreaterThanOrEqual(1);
+      expect(text, `${t} is never labelled twice`).not.toContain(`${want} (`);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: four times").toBe(4);
+    // None of the viewer's own clock faces for the same instants.
+    for (const iso of [CAMERA_FLAG.report.intervals[0]!.from, CAMERA_FLAG.report.intervals[0]!.to]) {
+      expect(face(iso, NY, true), "premise: the zones differ").not.toBe(face(iso, VENUE, true));
+      expect(text).not.toContain(face(iso, NY, true));
+    }
+  });
+
+  it("the confirmation's times are the venue's too, labelled (the reinvite deadline, and the scheduled time)", () => {
+    viewer.zone = NY;
+    const f4 = inWindow();
+    const view = VIEW({ state: "open", press: "reinvite", deadlineAt: DEADLINE, scheduledAt: "2026-10-24T09:00:00.000Z", pairings: [P(1, { fixtureId: f4.fixtureId, owedSeats: 1, invitedAt: OPENS })] });
+    const h = screen([live(), f4], f4.fixtureId, { column: DATA({ tz: VENUE, views: [view] }), openRound: { ...handle(), state: { ...initialOpenRoundUi(), confirming: true } } });
+    const dialog = textOf(innerAttr(h, ATTR("arbiter-column-reinvite-dialog"))!);
+    expect(dialog).toContain(esc(en["runsheet.round.confirmWindowReinvite"]!.replace("{time}", labelled(face(DEADLINE, VENUE), "Tokyo"))));
+    expect(dialog, "the viewer's clock does not appear").not.toContain(face(DEADLINE, NY));
+  });
+
+  it("the first Open's confirmation names the scheduled time and each pairing's invited time in the venue's zone, labelled", () => {
+    viewer.zone = NY;
+    const view = VIEW({ scheduledAt: "2026-10-24T09:00:00.000Z" });
+    const html = underEnglish(
+      <OpenRoundBlockView view={view} state={{ ...initialOpenRoundUi(), confirming: true }} tz={VENUE} showStage={false} on={{ ask: NOOP, cancel: NOOP, open: NOOP }} />,
+    );
+    const dialog = textOf(innerAttr(html, ATTR("arbiter-column-confirm"))!);
+    expect(dialog).toContain(esc(en["runsheet.round.confirmScheduled"]!.replace("{time}", labelled(face("2026-10-24T09:00:00.000Z", VENUE), "Tokyo"))));
+  });
+
+  it("when the viewer is in the venue's zone, or at its offset, no time carries a label (and the times are unchanged)", () => {
+    const f4 = inWindow();
+    const f2 = reported();
+    let checked = 0;
+    for (const zone of [VENUE, "Asia/Seoul"]) {
+      viewer.zone = zone;
+      const a = screen([live(), f4], f4.fixtureId);
+      const b = screen([live(), f2], f2.fixtureId);
+      expect(textIn(a, "arbiter-extend-closes"), zone).toBe(esc(en["externalPlay.checkinExtend.closesAt"]!.replace("{time}", face(DEADLINE, VENUE))));
+      expect(a, zone).not.toContain("Tokyo");
+      expect(b, zone).not.toContain("Tokyo");
+      expect(textOf(b), `${zone}: the report's times are still the venue's`).toContain(face(CAMERA_FLAG.report.intervals[0]!.from, VENUE, true));
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: two viewer zones").toBe(2);
+  });
+
+  it("a server render (no viewer zone yet) carries no label, and the column's own times are already the venue's", () => {
+    noViewer();
+    const f4 = inWindow();
+    const view = VIEW({ state: "open", press: "none", staggered: true, batches: [
+      { fromBoard: 1, toBoard: 1, offsetMs: 0, opensAt: OPENS, closesAt: DEADLINE },
+      { fromBoard: 2, toBoard: 2, offsetMs: 5 * MIN, opensAt: "2026-10-24T06:45:00.000Z", closesAt: "2026-10-24T07:05:00.000Z" },
+    ] });
+    // nowMs null is the server's: the panel paints no time of day until it has mounted.
+    const h = screen([live(), f4], f4.fixtureId, { nowMs: null, column: DATA({ tz: VENUE, views: [view] }) });
+    expect(h).not.toContain("Tokyo");
+    expect(textIn(h, "arbiter-column-batch-0")).toContain(face(DEADLINE, VENUE));
+    // The decision area paints no time until the panel has mounted (the server's zone is not the viewer's), so nothing to label.
+    expect(textIn(h, "arbiter-extend-closes"), "no decision-area time before mount").toBe("");
+  });
+
+  it("every time is read in the venue's zone, not the runtime's: a different venue gives a different face for the same instant", () => {
+    viewer.zone = VENUE;
+    const f4 = inWindow();
+    const faces = new Set<string>();
+    for (const tz of ["Asia/Tokyo", "America/New_York", "Pacific/Auckland"]) {
+      const h = screen([live(), f4], f4.fixtureId, { column: DATA({ tz }) });
+      const got = textIn(h, "arbiter-extend-closes")!;
+      expect(got, tz).toContain(face(DEADLINE, tz));
+      faces.add(got);
+    }
+    expect(faces.size, "three venues, three different lines").toBe(3);
+  });
+});
+
+describe("D5: in the round card both buttons take the same width", () => {
+  const tokens = (tag: string) => new Set((/class="([^"]*)"/.exec(tag)?.[1] ?? "").split(/\s+/).filter(Boolean));
+  const widthTokens = (tag: string) => [...tokens(tag)].filter((x) => /(^|:)(min-w|max-w|w)-/.test(x)).sort();
+  const tagOfId = (h: string, id: string) => new RegExp(`<[a-z0-9]+\\b[^>]*${ATTR(id)}[^>]*>`).exec(h)![0];
+  const withPress = (): string => {
+    const f4 = inWindow({ extendable: undefined } as Partial<ArbiterBoard>);
+    const view = VIEW({ state: "open", press: "reinvite", pairings: [P(1, { fixtureId: f4.fixtureId, owedSeats: 1, invitedAt: OPENS })] });
+    return screen([live(), f4], f4.fixtureId, { round: ROUND([live(), f4], { extendableBoards: 1 }), column: DATA({ tz: VENUE, views: [view] }) });
+  };
+
+  it("'+5 min to the round' and the round's press share every width class, and are capped below md", () => {
+    const h = withPress();
+    const hero = innerAttr(h, ATTR("arbiter-checkin-hero"))!;
+    expect(hero, "premise: both buttons are in the hero").toContain(ATTR("arbiter-extend-round-cta"));
+    expect(hero).toContain(ATTR("arbiter-column-reinvite"));
+    const a = tagOfId(hero, "arbiter-extend-round-cta");
+    const b = tagOfId(hero, "arbiter-column-reinvite");
+    expect(widthTokens(a).length, "premise: the buttons carry width classes").toBeGreaterThan(0);
+    expect(widthTokens(a), "the same width classes on both").toEqual(widthTokens(b));
+    for (const [name, tag] of [["round +5", a], ["round press", b]] as const) {
+      expect(tokens(tag).has("w-full"), `${name}: fills the card`).toBe(true);
+      expect(tokens(tag).has("max-md:max-w-sm"), `${name}: capped below md`).toBe(true);
+      expect(tokens(tag).has("sm:w-auto"), `${name}: not label-width from sm`).toBe(false);
+    }
+  });
+
+  it("the card and the column stay full width: the cap is on the buttons, not on the box", () => {
+    const h = withPress();
+    const hero = /<section\b[^>]*data-testid="arbiter-checkin-hero"[^>]*>/.exec(h)![0];
+    const aside = /<aside\b[^>]*>/.exec(h)![0];
+    for (const [name, tag] of [["hero", hero], ["column", aside]] as const) {
+      expect([...tokens(tag)].filter((x) => /(^|:)max-w-/.test(x)), `${name}: no max width`).toEqual([]);
+    }
+  });
+
+  it("the page-wide bar (the board is not in this round) keeps its own widths: full width until lg, not the card's cap", () => {
+    const i3 = screen([live(), inWindow()], "not-in-this-round", { round: ROUND([live(), inWindow()], { extendableBoards: 1 }) });
+    const cta = tagOfId(i3, "arbiter-extend-round-cta");
+    expect([...tokens(cta)]).toEqual(expect.arrayContaining(["w-full", "lg:w-auto"]));
+    expect(tokens(cta).has("max-md:max-w-sm"), "the page-wide bar is not the card's button").toBe(false);
   });
 });

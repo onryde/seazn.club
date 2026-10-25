@@ -67,7 +67,7 @@ const ROUND = (o: Partial<OpenRoundView> = {}): OpenRoundView => ({
 const msg = (key: string, vars: Record<string, string | number> = {}) => t(key, vars);
 const plural = (key: string, n: number, vars: Record<string, string | number> = {}) => pl(key, n, vars);
 /** A pairing's invite state as the column prints it (a fragment: text and, once invited, a <time>). */
-const stateOf = (p: OpenRoundPairing) => renderToStaticMarkup(<>{inviteState(p, TZ, msg, plural)}</>);
+const stateOf = (p: OpenRoundPairing) => renderToStaticMarkup(<>{inviteState(p, (iso) => fmtTime(TZ, iso), msg, plural)}</>);
 
 describe("the pairing's invite state and the players a press reaches", () => {
   const DEADLINE = new Date(Date.parse(OPENED) + DEADLINE_AFTER_MS).toISOString();

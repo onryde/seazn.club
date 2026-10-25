@@ -149,13 +149,15 @@ const WATCHING_BLACK_OFF: ArbiterVideoView = {
 };
 
 const noop = () => undefined;
-/** The column's data when nothing is paired, nobody is held and nothing is flagged: no views, no queue, venue zone London. */
+/** The column's data when nothing is paired, nobody is held and nothing is flagged: no views, no queue. The venue zone is the runtime's
+ *  own: every time on the panel is read in the venue's zone (Task 16 D1), and these tests build their instants from LOCAL clock fields
+ *  (`at(19, 42)`), so they read back as written on any machine. Tests about a different venue pass `tz`. */
 const COLUMN_DATA = (over: Partial<RoundColumnData> = {}): RoundColumnData => ({
   views: [],
   held: [],
   flagged: [],
   ownFlagged: 0,
-  tz: "Europe/London",
+  tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
   awaitsStart: false,
   ...over,
 });
@@ -2102,10 +2104,11 @@ describe("one round bar per page, placed by path (C13)", () => {
     // Inside the column the card around it already pads and bounds it: a second gutter would double the padding.
     expect(missing(rootOf(inline).open, ["w-full", "min-w-0"]), "inline bar box").toEqual([]);
     for (const token of ["mx-auto", "max-w-[1232px]", "px-4", "lg:px-6"]) expect(tokensOf(rootOf(inline).open).has(token), `inline bar has no ${token}`).toBe(false);
-    expect(missing(ctaOf(inline).open, ["w-full", "sm:w-auto"]), "inline bar button").toEqual([]);
+    expect(missing(ctaOf(inline).open, ["w-full", "max-md:max-w-sm"]), "inline bar button").toEqual([]);
     expect(tokensOf(ctaOf(inline).open).has("lg:w-auto"), "inline button is not the top bar's").toBe(false);
-    checked += 4;
-    expect(checked, "every box assertion ran").toBe(7);
+    expect(tokensOf(ctaOf(inline).open).has("sm:w-auto"), "inline button is not label-width from sm (D5: it is the round press's pair)").toBe(false);
+    checked += 5;
+    expect(checked, "every box assertion ran").toBe(8);
   });
 
   it("no round (and a request that says 'not here'): no bar at all", () => {

@@ -14,7 +14,6 @@
 // One DOM, mobile-first: `min-w-0` down every name.
 import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import type { ArbiterBoard } from "@/lib/arbiter-view";
-import { fmtTime } from "@/lib/format";
 import { SEAT_WORD_KEYS, seatWords } from "@/lib/invite-status";
 import type { MessageKey } from "@/lib/messages";
 import { ONLINE_CHESS_DISABLED_CODE } from "@/lib/online-chess";
@@ -29,6 +28,7 @@ import {
   type OpenRoundPairing,
   type OpenRoundView,
 } from "@/lib/open-round";
+import { useVenueClock } from "../venue-clock";
 import type { OpenRoundNotice, ResendNotice } from "./open-round-state";
 
 type Msg = ReturnType<typeof useMsg>;
@@ -54,15 +54,16 @@ function names(p: OpenRoundPairing, msg: Msg) {
   );
 }
 
-/** One pairing's invite state, in words: "Not invited", "Invited 19:04", partly, or past inviting. */
-export function inviteState(p: OpenRoundPairing, tz: string, msg: Msg, plural: Plural) {
+/** One pairing's invite state, in words: "Not invited", "Invited 19:04", partly, or past inviting. `clock` reads an instant in the
+ *  venue's zone (`useVenueClock`), naming it when the viewer is elsewhere. */
+export function inviteState(p: OpenRoundPairing, clock: (iso: string) => string, msg: Msg, plural: Plural) {
   if (p.invitedAt === null) {
     return p.owedSeats > 0 ? msg("runsheet.round.notInvited") : msg("runsheet.round.noInviteOwed");
   }
   return (
     <>
       {msg("runsheet.round.invited")}{" "}
-      <time dateTime={p.invitedAt}>{fmtTime(tz, p.invitedAt)}</time>
+      <time dateTime={p.invitedAt}>{clock(p.invitedAt)}</time>
       {p.owedSeats > 0 && <> · {plural("runsheet.round.stillToInvite", p.owedSeats)}</>}
     </>
   );
@@ -117,6 +118,7 @@ function seatsLine(p: OpenRoundPairing, seats: BoardSeats | undefined, msg: Msg)
 export function OpenRoundConfirmBody({ round, tz, seats }: { round: OpenRoundView; tz: string; seats?: BoardSeats }) {
   const msg = useMsg();
   const plural = useMsgPlural();
+  const clock = useVenueClock(tz);
   const owed = owedPlayers(round);
   const already = alreadyInvitedPlayers(round);
   const invitees = round.pairings.filter((p) => p.owedSeats > 0);
@@ -149,7 +151,7 @@ export function OpenRoundConfirmBody({ round, tz, seats }: { round: OpenRoundVie
           <li key={p.fixtureId} data-testid={`open-round-invitee-${p.fixtureId}`} className="flex min-w-0 flex-col gap-0.5 px-3 py-2">
             {names(p, msg)}
             <span className={`text-xs ${MUTED}`}>
-              {boardLabel(p, msg)} · {seatsLine(p, seats, msg) ?? inviteState(p, tz, msg, plural)}
+              {boardLabel(p, msg)} · {seatsLine(p, seats, msg) ?? inviteState(p, clock, msg, plural)}
             </span>
           </li>
         ))}
@@ -161,13 +163,13 @@ export function OpenRoundConfirmBody({ round, tz, seats }: { round: OpenRoundVie
       )}
       <p>
         {round.press === "reinvite" && round.deadlineAt !== null
-          ? msg("runsheet.round.confirmWindowReinvite", { time: fmtTime(tz, round.deadlineAt) })
+          ? msg("runsheet.round.confirmWindowReinvite", { time: clock(round.deadlineAt) })
           : round.staggered && round.batches.length > 1
             ? msg("runsheet.round.confirmWindowStaggered", { minutes: round.windowMinutes, span: round.staggerSpanMinutes })
             : msg("runsheet.round.confirmWindow", { minutes: round.windowMinutes })}
       </p>
       {round.press !== "reinvite" && round.scheduledAt !== null && (
-        <p>{msg("runsheet.round.confirmScheduled", { time: fmtTime(tz, round.scheduledAt) })}</p>
+        <p>{msg("runsheet.round.confirmScheduled", { time: clock(round.scheduledAt) })}</p>
       )}
     </>
   );

@@ -6,8 +6,11 @@ import { useMemo } from "react";
 import { useLocale, usePlural, useT } from "@/components/i18n/dict-provider";
 import { fullMoveOf, timelineSegments, type ArbiterBoard, type ArbiterFlag, type CameraOffReport, type NoResultOffer } from "@/lib/arbiter-view";
 import { formatTimeOfDay } from "@/components/public-site/match-room/room-time";
+import { DEFAULT_TZ, isValidIana } from "@/lib/tz";
 import type { ArbiterNotice, SettleChoice } from "./arbiter-decision";
 import { extendBoardSentence, extendedNoticeTime, extendFailureText } from "./checkin-extend-ui";
+import { useViewerZone } from "./use-viewer-zone";
+import { withVenueName } from "./venue-clock";
 
 export const MUTED = "text-[#6b5b8a]";
 export const SOFT = "text-[#4a3a6b]";
@@ -27,28 +30,36 @@ export type Fmt = {
   plural: ReturnType<typeof usePlural>;
   locale: string;
   mounted: boolean;
-  /** "19:42", or null before mount. */
+  /** "19:42", or null before mount. Read in the venue's zone when `useFmt` was given one, with "(Tokyo time)" added when the viewer's own
+   *  offset differs at that instant; the viewer's own zone, unlabelled, when it was not. */
   hm(iso: string): string | null;
-  /** "19:31:05", or null before mount. */
+  /** "19:31:05", or null before mount. Zoned and labelled as `hm`. */
   hms(iso: string): string | null;
   duration(seconds: number): string;
   list(items: string[]): string;
 };
 
-export function useFmt(nowMs: number | null): Fmt {
+/** `venueTz`: the zone every time of day is read in (the arbiter panel passes the venue's, Task 16 D1). Left out, times are the viewer's
+ *  own and carry no label (the organiser queue, which has no venue to name). */
+export function useFmt(nowMs: number | null, venueTz?: string): Fmt {
   const t = useT();
   const plural = usePlural();
   const locale = useLocale();
+  const viewerTz = useViewerZone();
   const mounted = nowMs !== null;
+  const zone = venueTz === undefined ? undefined : isValidIana(venueTz) ? venueTz : DEFAULT_TZ;
   return useMemo<Fmt>(() => {
-    const hmsFmt = new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" });
+    const hmsFmt = new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23", ...(zone ? { timeZone: zone } : {}) });
+    // The label is added only for a venue zone, and only once the browser's own zone is known (never on a server render).
+    const named = (time: string, iso: string) =>
+      zone === undefined ? time : withVenueName(time, iso, zone, viewerTz, (v) => t("arbiter.venueTime", v));
     return {
       t,
       plural,
       locale,
       mounted,
-      hm: (iso) => (mounted ? formatTimeOfDay(iso, locale) : null),
-      hms: (iso) => (mounted ? hmsFmt.format(new Date(iso)) : null),
+      hm: (iso) => (mounted ? named(formatTimeOfDay(iso, locale, zone), iso) : null),
+      hms: (iso) => (mounted ? named(hmsFmt.format(new Date(iso)), iso) : null),
       duration: (raw) => {
         const s = Math.max(0, Math.round(raw));
         if (s < 60) return t("arbiter.duration.sec", { sec: s });
@@ -58,7 +69,7 @@ export function useFmt(nowMs: number | null): Fmt {
       },
       list: (items) => new Intl.ListFormat(locale, { type: "conjunction" }).format(items),
     };
-  }, [t, plural, locale, mounted]);
+  }, [t, plural, locale, mounted, zone, viewerTz]);
 }
 
 export function FlagCard({ flag, f }: { flag: ArbiterFlag; f: Fmt }) {
