@@ -1849,6 +1849,74 @@ jobs:
           grep -F "PASS  capture-v2 smoke: R2004: the composed session's Stop → 200, and it completes" composed-smoke.log
           grep -F "PASS  capture-v2 smoke: all 28 steps ran (ran 28)" composed-smoke.log
 
+      # Engine-split spec 5.6 (override review I2): the per-sport engine-epoch FLOOR OVERRIDE through a REAL server. The usecase tests
+      # prove the gate in-process; nothing else boots a standalone build with the variable set, so a lever instrumentation.ts never
+      # wired would pass them all. A THIRD server from the SAME build lowers generic by one, DERIVED from the engine's own table (never
+      # typed), at LOG_LEVEL=warn (the job's error would hide the boot's warning). The value is also exported to later steps, because
+      # the smoke process asserts it is the one the server booted with. The greps are the gate: the server's log must carry the
+      # boot's ACTIVE line, and the next step's must carry the gate's OVERRIDDEN line. This is also the only server in the job that runs
+      # instrumentation.ts's register(): the others serve the standalone tree as traced, which has no compiled instrumentation.js.
+      - name: Start a third server with the generic epoch floor lowered by one (ENGINE_EPOCH_FLOOR_OVERRIDE)
+        env:
+          PORT: "3002"
+          PLACEMENT_SERVICE_HOST: localhost:50051
+          PLACEMENT_SERVICE_SECRET: ci-smoke-secret
+          LOG_LEVEL: warn
+          AUTH_DEV_LINKS: "1"
+          RELAY_DRIVERS: fake
+          ENV_NAME: ci
+          CAPTURE_QR_V2_ALWAYS: "1"
+          ONLINE_CHESS_ALWAYS: "1"
+        run: |
+          set -eo pipefail
+          floor=$(node --input-type=module -e "import { foldEpochOf } from '@seazn/engine/sport'; console.log(foldEpochOf('generic') - 1)")
+          echo "generic floor lowered to ${floor}"
+          export ENGINE_EPOCH_FLOOR_OVERRIDE="generic=${floor}"
+          echo "ENGINE_EPOCH_FLOOR_OVERRIDE=${ENGINE_EPOCH_FLOOR_OVERRIDE}" >> "$GITHUB_ENV"
+          # The Dockerfile's own overlay (see its comment there): Turbopack's standalone tracing drops the COMPILED instrumentation.js,
+          # and Next silently skips register() when it is missing - so on the tree the other servers in this job run from, the boot
+          # report never executes. Production overlays the compiled server/ dir; so does this server, or the ACTIVE grep below
+          # waits out its bound and reds for a reason that reads as "the lever is broken".
+          cp -R apps/web/.next/server/. apps/web/.next/standalone/apps/web/.next/server/
+          node apps/web/.next/standalone/apps/web/server.js > epoch-override-server.log 2>&1 &
+          up=""
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:3002/api/health >/dev/null; then
+              echo "third server up after ${i} tries"; up=1; break
+            fi
+            sleep 2
+          done
+          if [ -z "$up" ]; then
+            echo "third server did not become healthy"; cat epoch-override-server.log; exit 1
+          fi
+          active=""
+          for i in $(seq 1 15); do
+            if grep -F '"code":"ENGINE_EPOCH_FLOOR_OVERRIDE_ACTIVE"' epoch-override-server.log | grep -qF '"sport":"generic"'; then
+              active=1; break
+            fi
+            sleep 1
+          done
+          if [ -z "$active" ]; then
+            echo "the boot did not log ENGINE_EPOCH_FLOOR_OVERRIDE_ACTIVE for generic"; cat epoch-override-server.log; exit 1
+          fi
+
+      - name: Run floor-override smoke (the generic floor lowered, against the third server)
+        env:
+          SMOKE_BASE: http://localhost:3002
+          SMOKE_ONLY: epochFloorOverride
+        run: |
+          set -o pipefail
+          npm run test:smoke 2>&1 | tee epoch-override-smoke.log
+          grep -F "PASS  epoch floor override: a client at epoch" epoch-override-smoke.log | grep -F "is ADMITTED: 201, seq 1"
+          grep -F "PASS  epoch floor override: all 10 steps ran (ran 10)" epoch-override-smoke.log
+          for i in $(seq 1 15); do
+            if grep -F '"code":"ENGINE_EPOCH_FLOOR_OVERRIDDEN"' epoch-override-server.log | grep -qF '"sport":"generic"'; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "the gate did not log ENGINE_EPOCH_FLOOR_OVERRIDDEN for generic"; cat epoch-override-server.log; exit 1
+
       # The Playwright UI e2e suite moved to its own workflow (e2e.yml): it
       # runs on pushes to main, or on demand against a PR by number.
 
@@ -1914,6 +1982,8 @@ jobs:
           cat dev-server.log || true
           echo "--- the compositor-image server (R2004) ---"
           cat composed-server.log || true
+          echo "--- the floor-override server (engine-split 5.6) ---"
+          cat epoch-override-server.log || true
 
       - name: Placement service logs and teardown
         if: always()
