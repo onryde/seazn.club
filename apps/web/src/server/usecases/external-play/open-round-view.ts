@@ -8,8 +8,11 @@ import "server-only";
 // and clock, from the same predicates (`isPlayableFixtureStatus`,
 // `bridgeTakesInvites`, `roomPhase`, "is any bridge row bound to the open"),
 // so the control never offers a press the server refuses as already open, and
-// never hides a round the server would open. open-round-view.test.ts presses
-// the real usecase on every state it reads.
+// never hides a round the server would open. It also names the BRANCH: "reopen"
+// when the press starts the window again (nobody bound, or D17's re-arm with every
+// other bound board decided), "reinvite" when it invites inside the window that
+// runs. open-round-view.test.ts presses the real usecase on every state it reads
+// and reads the branch back from the rows.
 //
 // Read for the organiser on the fixtures tab. Not gated here by the online-
 // chess flag: the PAGE renders the control only while the club is offered it
@@ -25,6 +28,7 @@ import type { OpenRoundBatch, OpenRoundPairing, OpenRoundPress, OpenRoundView } 
 import { emptyExtendTally, type ExtendTally, type ExtendWindow } from "@/lib/checkin-extend";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { stageCameraPolicy } from "@/server/external-play/camera-policy";
+import { gameEvidenceOn } from "@/server/external-play/video/realtimekit";
 import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
 import { boardExtraSql, boardRankSql, roundKey, roundOpensOfDivisions, type RoundOpenRow } from "@/server/external-play/round-open";
 import {
@@ -71,6 +75,10 @@ type Row = {
   whiteEmailedAt: Date | null;
   blackEmailedAt: Date | null;
   whiteSide: Side | null;
+  /** D17: the bridge row our side CLOSED with no game (`finished`, no move, no recorded challenge or create marker) - the one row an
+   *  open RE-ARMS: resets and invites afresh, as if the board had never had one. openRound reads exactly this (`rearmed`), with the same
+   *  `gameEvidenceOn`. It only matters on a board that is playable again (the organiser voided the No result). */
+  rearmable: boolean;
 };
 
 type Paired = Row & { homeEntrantId: string; awayEntrantId: string };
@@ -92,6 +100,8 @@ type RoundFacts = {
 /** The seats this round's open has stamped on a board. A stamp counts only on
  *  a row bound to THIS open — openRound's own reading (`invitedFor`). */
 function boundStamps(b: Row, open: RoundOpenRow | null): Date[] {
+  // A re-armed row is reset before any invite, so its old stamps are not this round's invites (openRound's `factsOf` reads it as no row).
+  if (b.rearmable) return [];
   const stamps: Date[] = [];
   if (b.whiteEmailedAt !== null && seatStampBound(b, open?.id ?? null, "white")) stamps.push(b.whiteEmailedAt);
   if (b.blackEmailedAt !== null && seatStampBound(b, open?.id ?? null, "black")) stamps.push(b.blackEmailedAt);
@@ -99,6 +109,8 @@ function boundStamps(b: Row, open: RoundOpenRow | null): Date[] {
 }
 
 function takesInvites(b: Row): boolean {
+  // The same: a re-armed board takes an invite as a board with no bridge row does.
+  if (b.rearmable) return true;
   return bridgeTakesInvites(
     b.bridgeStatus === null ? null : { status: b.bridgeStatus, challenge_id: b.challengeId, create_sent_at: b.createSentAt },
   );
@@ -132,7 +144,8 @@ export async function listOpenRounds(
            ep.mint_claimed_at as "mintClaimedAt", ${boardExtraSql(sql)} as "extraMs",
            coalesce(ep.checkin_extensions, 0)::int as extensions,
            ep.round_open_id as "roundOpenId", ep.white_emailed_at as "whiteEmailedAt",
-           ep.black_emailed_at as "blackEmailedAt", ep.white_side as "whiteSide"
+           ep.black_emailed_at as "blackEmailedAt", ep.white_side as "whiteSide",
+           coalesce(ep.status = 'finished' and ep.move_count = 0 and not ${gameEvidenceOn(now)}, false) as "rearmable"
       from fixtures f
       join stages s on s.id = f.stage_id
       left join fixture_external_play ep on ep.fixture_id = f.id
@@ -193,10 +206,19 @@ export async function listOpenRounds(
     const latestDeadline = open === null ? null : Math.max(...group.map((r) => windowFor(anchorOf(r)).deadline.getTime()));
     const closed = open !== null && now.getTime() >= latestDeadline!;
     const owedOpen = open === null ? owed : boards.reduce((n, b) => n + (roomPhase(now, anchorOf(b)) === "closed" ? 0 : owedSeats(b, open)), 0);
+    // openRound starts the window again ("reopened") in two cases: nobody this round reached is still bound to the open, or - D17 - a
+    // board is re-armed and every OTHER row bound to the open is decided (nobody still playing was invited into the window that moves).
+    // The second reads every row bound to the open, the re-armed ones aside, for a fixture still playable.
+    const rearmed = new Set(boards.filter((b) => b.rearmable).map((b) => b.fixtureId));
+    const otherBoundStillPlayable =
+      open !== null && rearmed.size > 0
+        ? group.some((r) => r.roundOpenId === open.id && !rearmed.has(r.fixtureId) && isPlayableFixtureStatus(r.status))
+        : true;
+    const restarts = open !== null && (!boundOpenIds.has(open.id) || !otherBoundStillPlayable);
     let press: OpenRoundPress;
     if (open === null) press = "open";
     else if (owed === 0) press = "none";
-    else press = !boundOpenIds.has(open.id) ? "reopen" : owedOpen === 0 ? "none" : "reinvite";
+    else press = restarts ? "reopen" : owedOpen === 0 ? "none" : "reinvite";
     facts.push({ stageId: first.stageId, stageName: first.stageName, roundNo: first.roundNo, boards, group, open, press, closed });
   }
 

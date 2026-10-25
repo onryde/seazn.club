@@ -37,6 +37,7 @@ beforeEach(() => stubOutboxEnv());
 
 import { openRound } from "../open-round";
 import { listOpenRounds } from "../open-round-view";
+import { resolveExternalPlay } from "../resolve";
 import { addFixture } from "../../stages";
 import { getFixtureState } from "../../fixtures";
 import { scoreEvent } from "../../scoring";
@@ -483,5 +484,203 @@ describe.skipIf(!HAS_DB)("listOpenRounds — timed batches", () => {
     // round is not listed at all (the control offers no re-invite that openRound would answer already_open).
     expect((await view(r, closesOf(2))).filter((x) => x.roundNo === 1), "every owed board's window has closed").toEqual([]);
     expect((await view(r, new Date(closesOf(2).getTime() - 1))).filter((x) => x.roundNo === 1).map((x) => x.press), "one ms earlier").toEqual(["reinvite"]);
+  });
+});
+
+// ─── D17: a re-armed board - the press the reader names is the BRANCH the server takes (Task 11 fix round 1, item 9) ───────────────
+// A playable board whose bridge row our side CLOSED with no game (the arbiter's No result, then the organiser's void) is re-armed by the
+// organiser's re-open: openRound resets the row and invites the board afresh, and when every OTHER bound board is decided it also starts
+// the window again ("reopened": a fresh opened_at, the meetings retired, the extensions zeroed). The reader used to count that row as
+// owing nothing (a finished row takes no invite), so it named "reinvite" ("Invite N players", "into the round already under way") for a
+// round whose press restarts check-in, and named nothing at all when no other board was owed. Every state below is pressed through the
+// REAL usecase and the branch it took is READ BACK from the rows (opened_at moved or not, the audit event written), never from the reader.
+describe.skipIf(!HAS_DB)("listOpenRounds - a re-armed board (D17): the press named is the branch the server takes", () => {
+  const lastEvent = async (fixtureId: string) =>
+    (await sql<{ id: string; seq: number }[]>`select id, seq from score_events where fixture_id = ${fixtureId} order by seq desc limit 1`)[0]!;
+  /** The arbiter's No result (the real resolve), then the organiser's undo on the match page (the real void): the board is playable again. */
+  async function noResultThenVoid(r: SeedOnlineChessRoundResult, fixtureId: string) {
+    expect(await resolveExternalPlay(r.owner, fixtureId, "no_result")).toEqual({ status: "finished" });
+    const last = await lastEvent(fixtureId);
+    await scoreEvent(r.owner, fixtureId, { expected_seq: last.seq, type: "core.void", payload: { event_id: last.id } });
+    const [fx] = await sql<{ status: string }[]>`select status from fixtures where id = ${fixtureId}`;
+    expect(["scheduled", "in_play"], "premise: the void made the board playable again").toContain(fx!.status);
+    const [b] = await sql<{ status: string; challenge_id: string | null; create_sent_at: Date | null }[]>`
+      select status, challenge_id, create_sent_at from fixture_external_play where fixture_id = ${fixtureId}`;
+    expect([b?.status, b?.challenge_id, b?.create_sent_at], "premise: closed, no game").toEqual(["finished", null, null]);
+  }
+  /** A neighbour DECIDED on the pad (the real scoring usecase): a Start, then a result. */
+  async function decide(r: SeedOnlineChessRoundResult, b: SeedOnlineChessRoundResult["boards"][number]) {
+    await scoreEvent(r.owner, b.fixtureId, { expected_seq: 0, type: "core.start", payload: {} });
+    await scoreEvent(r.owner, b.fixtureId, { expected_seq: 1, type: "boardgame.result", payload: { winner: b.home.entrantId, method: "resign" } });
+    const [fx] = await sql<{ status: string }[]>`select status from fixtures where id = ${b.fixtureId}`;
+    expect(["scheduled", "in_play"], "premise: the neighbour is decided").not.toContain(fx!.status);
+  }
+  const openedAt = async (stageId: string) =>
+    (await sql<{ openedAt: Date }[]>`select opened_at as "openedAt" from stage_round_opens where stage_id = ${stageId} and round_no = 1`)[0]!.openedAt.getTime();
+  const auditTypes = async (competitionId: string) =>
+    (
+      await sql<{ type: string }[]>`
+        select type from competition_events where competition_id = ${competitionId} and type like 'external_play.round_%' order by created_at, id`
+    ).map((x) => x.type);
+  type Branch = "reopened" | "reinvited" | "nothing";
+  /** Press the real usecase and read the branch it took back from the rows. */
+  async function pressAndRead(r: SeedOnlineChessRoundResult, now: Date): Promise<Branch> {
+    const [stampBefore, auditBefore] = [await openedAt(r.stageId), await auditTypes(r.competitionId)];
+    const res = await press(r, 1, now);
+    if (!res.opened) {
+      expect(await auditTypes(r.competitionId), "nothing opened, nothing written").toEqual(auditBefore);
+      return "nothing";
+    }
+    const written = (await auditTypes(r.competitionId)).slice(auditBefore.length);
+    const moved = (await openedAt(r.stageId)) !== stampBefore;
+    expect(written, "one audit event for the press").toHaveLength(1);
+    expect(moved, "the audit event and the window agree").toBe(written[0] === "external_play.round_reopened");
+    return moved ? "reopened" : "reinvited";
+  }
+  /** The branch the reader's press names: a hidden round (nothing owed, window closed) and "none" both name no press. */
+  const named = (rounds: OpenRoundView[]): "reopen" | "reinvite" | "none" => {
+    const hit = rounds.filter((x) => x.roundNo === 1);
+    expect(hit.length, "the round is listed once, or not at all").toBeLessThanOrEqual(1);
+    return hit[0]?.press === "reopen" || hit[0]?.press === "reinvite" ? hit[0].press : "none";
+  };
+  const BRANCH_OF = { reopen: "reopened", reinvite: "reinvited", none: "nothing" } as const;
+  const CLOSED = at(DEADLINE_AFTER_MS + 10 * MIN);
+  const INSIDE = at(5 * MIN);
+
+  type Scenario = {
+    name: string;
+    /** Build the round (already opened at T0) and return the clock to read and press at. */
+    build: (r: SeedOnlineChessRoundResult) => Promise<Date>;
+    seed: Parameters<typeof seedOnlineChessRound>[0];
+    want: "reopen" | "reinvite" | "none";
+  };
+  const addLate = async (r: SeedOnlineChessRoundResult) => {
+    const late = r.spares[0]!;
+    await addFixture(r.owner, r.stageId, {
+      home_entrant_id: late.home.entrantId,
+      away_entrant_id: late.away.entrantId,
+      round_no: 1,
+      scheduled_at: "2026-10-01T12:10:00.000Z",
+    });
+  };
+  const SCENARIOS: Scenario[] = [
+    {
+      name: "a board added after the open, a re-armed board and a decided neighbour: the review's reinvite that is really a restart",
+      seed: { roundNo: 1, fixtures: 2, spares: 1 },
+      want: "reopen",
+      build: async (r) => {
+        await decide(r, r.boards[1]!);
+        await noResultThenVoid(r, r.boards[0]!.fixtureId);
+        await addLate(r);
+        return INSIDE;
+      },
+    },
+    {
+      name: "a re-armed board and a decided neighbour, nothing else owed, the window closed: the restart the reader used to hide",
+      seed: { roundNo: 1, fixtures: 2 },
+      want: "reopen",
+      build: async (r) => {
+        await decide(r, r.boards[1]!);
+        await noResultThenVoid(r, r.boards[0]!.fixtureId);
+        return CLOSED;
+      },
+    },
+    {
+      name: "the same, inside the window",
+      seed: { roundNo: 1, fixtures: 2 },
+      want: "reopen",
+      build: async (r) => {
+        await decide(r, r.boards[1]!);
+        await noResultThenVoid(r, r.boards[0]!.fixtureId);
+        return INSIDE;
+      },
+    },
+    {
+      name: "a one-board round, re-armed: every other bound board (none) is decided",
+      seed: { roundNo: 1, fixtures: 1 },
+      want: "reopen",
+      build: async (r) => {
+        await noResultThenVoid(r, r.boards[0]!.fixtureId);
+        return CLOSED;
+      },
+    },
+    {
+      name: "a neighbour still PLAYABLE, inside the window: the board is re-invited and the window does not move",
+      seed: { roundNo: 1, fixtures: 2 },
+      want: "reinvite",
+      build: async (r) => {
+        await noResultThenVoid(r, r.boards[0]!.fixtureId);
+        return INSIDE;
+      },
+    },
+    {
+      name: "a neighbour still PLAYABLE, the window closed: the board is skipped as window_closed, nothing opens",
+      seed: { roundNo: 1, fixtures: 2 },
+      want: "none",
+      build: async (r) => {
+        await noResultThenVoid(r, r.boards[0]!.fixtureId);
+        return CLOSED;
+      },
+    },
+    {
+      name: "a game MAY be on file (a create marker): the row is never reset, so there is nothing to press",
+      seed: { roundNo: 1, fixtures: 2 },
+      want: "none",
+      build: async (r) => {
+        await decide(r, r.boards[1]!);
+        await noResultThenVoid(r, r.boards[0]!.fixtureId);
+        await sql`update fixture_external_play set create_sent_at = now() - interval '30 minutes' where fixture_id = ${r.boards[0]!.fixtureId}`;
+        return CLOSED;
+      },
+    },
+    {
+      name: "a move is on file: the row is never reset, so there is nothing to press",
+      seed: { roundNo: 1, fixtures: 2 },
+      want: "none",
+      build: async (r) => {
+        await decide(r, r.boards[1]!);
+        await noResultThenVoid(r, r.boards[0]!.fixtureId);
+        await sql`update fixture_external_play set moves_uci = '["e2e4"]'::jsonb, move_count = 1 where fixture_id = ${r.boards[0]!.fixtureId}`;
+        return CLOSED;
+      },
+    },
+    {
+      name: "no board re-armed, a board added after the open (the positive pair): a plain re-invite, the window does not move",
+      seed: { roundNo: 1, fixtures: 2, spares: 1 },
+      want: "reinvite",
+      build: async (r) => {
+        await decide(r, r.boards[1]!);
+        await addLate(r);
+        return INSIDE;
+      },
+    },
+  ];
+
+  it.each(SCENARIOS.map((sc) => [sc.name, sc] as const))("%s", async (_name, sc) => {
+    const r = await seedOnlineChessRound(sc.seed);
+    expect(await press(r, 1, T0), "premise: the round opened").toMatchObject({ opened: true });
+    const now = await sc.build(r);
+    const reader = named(await view(r, now));
+    const server = await pressAndRead(r, now);
+    // Both at once: the press the reader names, and the branch the real usecase took when pressed on the same rows and clock. A failure
+    // prints the pair, so a reader that names 'reinvite' for a press that restarts the window shows as ["reinvite", "reopened"].
+    expect([reader, server], "[the press the reader names, the branch the server took]").toEqual([sc.want, BRANCH_OF[sc.want]]);
+  });
+
+  it("anti-vacuity: the scenarios reach all three branches, and each press the reader can name", () => {
+    expect(new Set(SCENARIOS.map((s) => s.want))).toEqual(new Set(["reopen", "reinvite", "none"]));
+    expect(SCENARIOS.length).toBe(9);
+  });
+
+  it("a re-armed board is listed as owed in full, and a pairing the reset cleared has no Resend (its invite was the old game's)", async () => {
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 2 });
+    await press(r, 1, T0);
+    await decide(r, r.boards[1]!);
+    await noResultThenVoid(r, r.boards[0]!.fixtureId);
+    const v = roundOf(await view(r, INSIDE), 1);
+    const rearmed = v.pairings.find((p) => p.fixtureId === r.boards[0]!.fixtureId)!;
+    expect(rearmed, "owed both seats, no stamp, no resend").toMatchObject({ owedSeats: 2, invitedAt: null, canResend: false });
+    expect(v.pairings.filter((p) => p.owedSeats > 0).map((p) => p.fixtureId), "only the re-armed board is invited").toEqual([r.boards[0]!.fixtureId]);
+    expect(await pressAndRead(r, INSIDE)).toBe("reopened");
   });
 });

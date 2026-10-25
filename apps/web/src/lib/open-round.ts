@@ -38,7 +38,9 @@ export type OpenRoundResult =
  *  (`listOpenRounds`) from the same facts `openRound` decides on:
  *  - `open`: never opened — stamp it, invite everyone, start the window now;
  *  - `reopen`: opened, but nobody it reached is still bound (every send
- *    failed, or a re-pair cleared the rows) — the window starts again now;
+ *    failed, or a re-pair cleared the rows), or a board the arbiter closed
+ *    with No result and the organiser voided is re-armed while every other
+ *    board bound to the open is decided (D17) — the window starts again now;
  *  - `reinvite`: opened and under way — invite only who is still owed, inside
  *    the round's own window (its deadline does not move);
  *  - `none`: nobody left to invite, or the window has closed on them. */
