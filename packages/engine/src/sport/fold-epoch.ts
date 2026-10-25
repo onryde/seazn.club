@@ -27,8 +27,11 @@ export const FOLD_EPOCH = Object.freeze({
   // stream was re-recorded in place.
   // W2c raised football, hockey, carrom and generic one MAJOR for opt-in cfg keys an older phone strips or refuses
   // (football shootoutAttempts; hockey abandonPolicy "q4_stands"; carrom and generic abandonPolicy "share"), so carrom and generic are at their third.
-  football: 2, cricket: 1, boardgame: 3, carrom: 3, generic: 3, volleyball: 1,
-  badminton: 1, tabletennis: 1, tennis: 1, icehockey: 1, hockey: 2,
+  // W2d (T3, PS-1) raised football, hockey and icehockey one MAJOR: `points.shootoutWin/shootoutLoss` are gone (a phone that still sends them has
+  // them stripped), football and hockey take `soBonus` instead, and a shoot-out win's standingsDelta pays the plain win (the 2/1 booking is the
+  // table rule's). Their recorded configs were converted (soBonus = shootoutWin - draw), so the guard reads the streams as re-recorded.
+  football: 3, cricket: 1, boardgame: 3, carrom: 3, generic: 3, volleyball: 1,
+  badminton: 1, tabletennis: 1, tennis: 1, icehockey: 2, hockey: 3,
 } as const satisfies Readonly<Record<string, number>>);
 export type FoldEpochSport = keyof typeof FOLD_EPOCH;
 // The same sports as FOLD_EPOCH: `satisfies` over its keys makes a sport missing here, or one only here, a type error.
