@@ -369,12 +369,13 @@ describe.skipIf(!HAS_DB)("email_outbox (V472: once-key, user-id replace, cancel)
     expect(checked).toBe(3);
   });
 
+  const def = async (name: string): Promise<string> => {
+    const [r] = await sql<{ d: string }[]>`select indexdef as d from pg_indexes where tablename = 'email_outbox' and indexname = ${name}`;
+    expect(r, `index ${name} exists`).toBeDefined();
+    return r!.d;
+  };
+
   it("the once-key index and the user index are partial, on the columns the writer and the reader use", async () => {
-    const def = async (name: string): Promise<string> => {
-      const [r] = await sql<{ d: string }[]>`select indexdef as d from pg_indexes where tablename = 'email_outbox' and indexname = ${name}`;
-      expect(r, `index ${name} exists`).toBeDefined();
-      return r!.d;
-    };
     const once = await def("email_outbox_once_idx");
     expect(once).toMatch(/UNIQUE INDEX/);
     expect(once).toMatch(/\(kind, dedupe_key\)/);
@@ -383,6 +384,18 @@ describe.skipIf(!HAS_DB)("email_outbox (V472: once-key, user-id replace, cancel)
     expect(byUser).not.toMatch(/UNIQUE/);
     expect(byUser).toMatch(/\(recipient_user_id\)/);
     expect(byUser).toMatch(/WHERE \(recipient_user_id IS NOT NULL\)/);
+  });
+
+  it("the legacy-invite index is partial on chess invites with no account, on the address EXACTLY (account-deletion.ts's address arm)", async () => {
+    // Plan T5: the account-deletion sweep finds a pre-V472 chess invite by `kind = 'chess_invite' and recipient_user_id is null and
+    // recipient = <the address exactly>`. No other index leads on `recipient`, so without this one the scrub reads the whole table.
+    // The expression is `recipient`, NOT `lower(recipient)`: the statement does not fold case (FU2), so a folded index could not serve it.
+    const legacy = await def("email_outbox_legacy_invite_idx");
+    expect(legacy).not.toMatch(/UNIQUE/);
+    expect(legacy).toMatch(/USING btree \(recipient\) WHERE/);
+    expect(legacy).not.toMatch(/lower\(/);
+    expect(legacy).toMatch(/kind = 'chess_invite'/);
+    expect(legacy).toMatch(/recipient_user_id IS NULL/);
   });
 
   // ---- email_outbox_cancel -------------------------------------------------------------------------------------------

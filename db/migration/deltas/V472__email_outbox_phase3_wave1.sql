@@ -11,6 +11,7 @@
 --      that is redelivered or a double press enqueues the email once.
 --   4. The replace trigger moves from BEFORE to AFTER INSERT and learns the user rule.
 --   5. `email_outbox_cancel`: the void's way to end a tenant's own queued rows, which `app_user` cannot UPDATE.
+--   6. `email_outbox_legacy_invite_idx`: the account-deletion sweep's address arm for chess invites that name no account.
 --
 -- WHY THE ONCE-KEY IS A PLAIN UNIQUE INDEX AND THE WRITER'S ON CONFLICT HAS NO TARGET (plan P1). The spec wrote
 -- `on conflict (kind, dedupe_key) where dedupe_key is not null do nothing`. As `app_user` that fails 42501: inferring a
@@ -41,6 +42,14 @@ alter table email_outbox
 -- NOT serve the replace trigger's `case`: that arm is not indexable, and the trigger is served by email_outbox_replace_idx on
 -- (kind, ref_type, ref_id).
 create index email_outbox_recipient_user_idx on email_outbox (recipient_user_id) where recipient_user_id is not null;
+-- "Every pre-V472 chess invite at this address". The account-deletion sweep (plan T5) finds an invite queued before this migration, which
+-- names no account, by `kind = 'chess_invite' and recipient_user_id is null and recipient = <the address exactly>`. No other index leads
+-- on `recipient`, so without this one that scrub reads the whole table (EXPLAIN on 105k rows: Seq Scan, cost ~4300; with it, an Index Scan,
+-- cost ~18). The expression is plain `recipient`, NOT `lower(recipient)`, because the statement matches the address exactly (FU2:
+-- `users.email` is case-sensitive); the predicate is the statement's own, so the index holds only the rows that arm can ever reach, a
+-- set that only drains (nothing writes a chess invite without a user id any more, and retention removes the old ones). outbox-once-key.test.ts
+-- pins this definition; account-deletion-sweep.test.ts pins that the sweep's real predicate uses it.
+create index email_outbox_legacy_invite_idx on email_outbox (recipient) where kind = 'chess_invite' and recipient_user_id is null;
 -- The once-key. Partial: a row with no key is free to repeat.
 create unique index email_outbox_once_idx on email_outbox (kind, dedupe_key) where dedupe_key is not null;
 

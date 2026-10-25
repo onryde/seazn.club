@@ -58,7 +58,7 @@ vi.mock("@/server/email-outbox", async (importOriginal) => {
 import { sql } from "@/lib/db";
 import { DELETE } from "@/app/api/users/me/route";
 import { OUTBOX_STATUSES, RETRYABLE_STATUSES, enqueueEmail, type OutboxKind, type OutboxStatus } from "@/server/email-outbox";
-import { anonymiseAccountEmails } from "@/server/email-outbox/account-deletion";
+import { anonymiseAccountEmails, legacyInviteAt, namesAccount } from "@/server/email-outbox/account-deletion";
 import { CHESS_SEAT_REF_TYPE, chessSeatRef } from "@/server/usecases/external-play/seat-stamp";
 import { stubOutboxEnv } from "@/server/usecases/__tests__/_invite-mail";
 
@@ -397,5 +397,28 @@ describe.skipIf(!HAS_DB)("deleting an account ends and scrubs the account's own 
 
     const again = await sql.begin((tx) => anonymiseAccountEmails(tx, { userId, email, placeholder }));
     expect(again, "a second run ends nothing").toEqual([]);
+  });
+
+  it("each arm's predicate can use an index: with sequential scans off, the planner picks its index and not the table", async () => {
+    // The two arms are separate statements so each can ride an index (account-deletion.ts header). This pins that the predicates the
+    // sweep REALLY uses (the exported fragments, so the test cannot drift from them) are ones an index serves. Sequential scans are
+    // turned off so the answer does not depend on how many rows the table holds; without a usable index the plan is a Seq Scan anyway.
+    const plans = await sql.begin(async (tx) => {
+      await tx`set local enable_seqscan = off`;
+      const explain = async (where: ReturnType<typeof namesAccount>): Promise<string> =>
+        (await tx<{ "QUERY PLAN": string }[]>`explain update email_outbox set recipient = ${"x"} where ${where}`).map((r) => r["QUERY PLAN"]).join("\n");
+      return {
+        account: await explain(namesAccount(tx, randomUUID())),
+        legacy: await explain(legacyInviteAt(tx, address("plan"))),
+      };
+    });
+    // The index is named AND the column is an `Index Cond`: a partial index whose predicate the statement implies can be read end to end
+    // with the column as a mere `Filter` (a case-folded statement does exactly that), which names the index and is no lookup at all.
+    expect(plans.account, "the account arm").toMatch(/Index Scan using email_outbox_recipient_user_idx|Bitmap Index Scan on email_outbox_recipient_user_idx/);
+    expect(plans.account, "looked up by the account id").toMatch(/Index Cond: \(recipient_user_id = /);
+    expect(plans.account).not.toMatch(/Seq Scan/);
+    expect(plans.legacy, "the legacy arm").toMatch(/Index Scan using email_outbox_legacy_invite_idx|Bitmap Index Scan on email_outbox_legacy_invite_idx/);
+    expect(plans.legacy, "looked up by the address exactly").toMatch(/Index Cond: \(recipient = /);
+    expect(plans.legacy).not.toMatch(/Seq Scan/);
   });
 });

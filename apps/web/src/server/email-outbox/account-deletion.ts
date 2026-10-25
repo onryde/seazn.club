@@ -30,17 +30,15 @@ import "server-only";
 //     the seat through the usual hook. Nothing reaches the deleted person either way.
 //   - terminal rows: the address is simply replaced.
 //
-// EACH OF STEPS 2 AND 3 IS TWO STATEMENTS, NOT ONE `or`. The two arms of "the account's rows" have different access paths, and one
-// statement with `a or b` takes the worse of them for both (EXPLAIN on 105k rows: a Seq Scan on the whole table). Split:
-//   - the account arm (every row since V472, the arm that grows) is a Bitmap Index Scan on `email_outbox_recipient_user_idx`, in the end
-//     and in the scrub alike;
-//   - the legacy arm's END is an Index Scan on `email_outbox_due_idx` (it also carries `status = 'queued'`, which that partial index serves);
-//   - the legacy arm's SCRUB (all statuses) is still a Seq Scan: no index leads on `recipient`, and there is none for it to fall back to
-//     even with sequential scans disabled. It is the arm that only drains (V472 stopped writing such rows, retention removes them within
-//     90 days), runs once per deleted account, and is no worse than the `chess_invite` scrub it replaces (also a Seq Scan, twice). A
-//     partial index on `(recipient) where kind = 'chess_invite' and recipient_user_id is null` would take it from ~4300 to ~18 cost units;
-//     that is a schema change and so the migration's owner's call, not this file's. The `magic_link` delete in step 1 is a Seq Scan too, as
-//     it has always been.
+// EACH OF STEPS 2 AND 3 IS TWO STATEMENTS, ONE PER ARM, and each arm has its own index (EXPLAIN on 100k rows):
+//   - the account arm (every row since V472, the arm that grows): a Bitmap Index Scan on `email_outbox_recipient_user_idx`;
+//   - the legacy arm's END (it also carries `status = 'queued'`): an Index Scan on `email_outbox_due_idx`;
+//   - the legacy arm's SCRUB (all statuses): an Index Scan on `email_outbox_legacy_invite_idx`, V472's partial index on `(recipient) where
+//     kind = 'chess_invite' and recipient_user_id is null`. It is plain `recipient`, not `lower(recipient)`, because this arm does not fold
+//     case; before the index this one statement read the whole table (cost ~4300 against ~23).
+// With that index even a single `a or b` statement would be a BitmapOr of the two, so the split is for clarity (each arm's access path is
+// stated and pinned alone, account-deletion-sweep.test.ts) and no longer for the planner. The `magic_link` delete in step 1 is a Seq Scan,
+// as it has always been (it matches `ref_id` or `recipient` on a kind, and no index leads on either).
 //
 // Runs on the caller's PRIVILEGED transaction (the route's `sql.begin`): `app_user` holds INSERT only on `email_outbox` (V470), so a tenant
 // transaction would be refused. It must run in the SAME transaction as the account's anonymisation, so the address is never left behind an
@@ -62,9 +60,9 @@ export const deletedAccountPlaceholder = (userId: string): string => `deleted-${
 type EndedRecord = { id: string; kind: OutboxKind; ref_type: string; ref_id: string; meta: Record<string, string> };
 
 /** The account arm: every row that names the account, at whatever address. Served by `email_outbox_recipient_user_idx`. */
-const namesAccount = (tx: Tx, userId: string) => tx`recipient_user_id = ${userId}`;
+export const namesAccount = (tx: Tx, userId: string) => tx`recipient_user_id = ${userId}`;
 /** The legacy arm: a chess invite from before V472, no user id, at the address EXACTLY (no case folding). */
-const legacyInviteAt = (tx: Tx, email: string) => tx`kind = 'chess_invite' and recipient_user_id is null and recipient = ${email}`;
+export const legacyInviteAt = (tx: Tx, email: string) => tx`kind = 'chess_invite' and recipient_user_id is null and recipient = ${email}`;
 
 type Predicate = ReturnType<typeof namesAccount>;
 
