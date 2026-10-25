@@ -2308,9 +2308,10 @@ export function makeSetBasedModule(
         }
       : undefined;
 
-  // A bye's points = a clean-sweep win pair: "*" (or the first entry). A forfeit pays its credited score (X-WO-1).
+  // A bye's points = a clean-sweep win pair: "*" (or the first set-score entry: a key that is no set score is never
+  // read, review N-1). A forfeit pays its credited score (X-WO-1).
   const cleanSweepPair = (cfg: SetBasedCfg): PointsPair =>
-    cfg.pointsMap["*"] ?? Object.values(cfg.pointsMap)[0] ?? [1, 0];
+    cfg.pointsMap["*"] ?? Object.entries(cfg.pointsMap).find(([key]) => SET_SCORE_KEY.test(key))?.[1] ?? [1, 0];
 
   // pointsMap lookup for a decided match: exact "W-L", else "*".
   const matchPoints = (cfg: SetBasedCfg, winnerSets: number, loserSets: number): PointsPair => {
@@ -2333,8 +2334,8 @@ export function makeSetBasedModule(
    * end (its exact pair, else "*"), because `coverage` counts "*" toward no score of a map that pays two pairs. A score
    * the map prices neither way stays out, so `coverage` names it (`standingsDelta` throws on it). The win and the loss
    * pay the clean-sweep pair, a bye's. A key that is no set score ("W-L" or "*", `SET_SCORE_KEY`) is one the payer never
-   * reads (`matchPoints`) and PointsRule refuses: skipped. A map left pricing no score at all is refused, as the payer
-   * refuses its every match (review M-4).
+   * reads (`matchPoints` for a match, `cleanSweepPair` for a bye) and PointsRule refuses: skipped. A map left pricing no
+   * score at all is refused, as the payer refuses its every match (review M-4, N-1).
    */
   const setBasedPointsMapRule = (cfg: SetBasedCfg): PointsRule => {
     const map = cfg.pointsMap;

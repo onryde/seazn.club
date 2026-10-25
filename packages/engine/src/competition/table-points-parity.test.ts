@@ -210,9 +210,13 @@ function cfgSpace(m: AnySportModule): { variant: string; cfg: unknown }[] {
     out.push({ variant: "organiser flat", cfg: m.configSchema.parse({ pointsMap: { "*": [3, 1] } }) });
     out.push({ variant: "organiser two pairs", cfg: m.configSchema.parse({ pointsMap: organiserTwoPairs(m) }) });
   }
-  // D10(c): a two-innings organiser cfg whose tie pays more than the draw default, so the draw's change is witnessed.
+  // D10(c): two-innings organiser cfgs with no `draw` of their own — a tie paying more than the draw default, so the
+  // draw's change is witnessed, and a tie paying exactly it, so the signed row's `tie !== 1` scope is (the old fallback
+  // `draw ?? tie` and the new `draw ?? 1` pay the same 1 there).
   // single-sport: cricket is the one sport with a two-innings draw; every sport gets the cfgs above
-  if (m.key === "cricket") out.push({ variant: "test, organiser tie 2", cfg: m.configSchema.parse({ ...m.variants.test, points: { win: 2, tie: 2, noResult: 1, loss: 0 } }) });
+  if (m.key === "cricket") {
+    for (const tie of [2, 1]) out.push({ variant: `test, organiser tie ${tie}`, cfg: m.configSchema.parse({ ...m.variants.test, points: { win: 2, tie, noResult: 1, loss: 0 } }) });
+  }
   return out;
 }
 
@@ -528,9 +532,10 @@ describe("W2d the sports' table points, row by row (SPEC §5.10)", () => {
     for (const { why, pointsMap, table } of cases) expect(ruleOf(volleyball, { bestOf: 3, pointsMap }, "league").bySetScore, why).toEqual(table);
   });
 
-  it("a pointsMap key that is no set score is skipped by the rule as the payer skips it; a map pricing no set score is refused, as the payer refuses its every match — every set sport (review M-4, counted)", () => {
+  it("a pointsMap key that is no set score is skipped by the rule and by the payer, a bye's pair included; a map pricing no set score is refused, as the payer refuses its every match — every set sport (review M-4, N-1, counted)", () => {
     // The cfg schema takes any non-empty key; PointsRule takes only a set score or "*" (SET_SCORE_KEY). The payer reads a
-    // match's exact "W-L", else "*" (`matchPoints`), so a key that is neither is never read.
+    // match's exact "W-L", else "*" (`matchPoints`), and a bye's clean-sweep pair: "*", else the first SET-SCORE entry
+    // (`cleanSweepPair`), so a key that is neither is never read by either.
     const code = (f: () => unknown): unknown => {
       try {
         f();
@@ -562,6 +567,34 @@ describe("W2d the sports' table points, row by row (SPEC §5.10)", () => {
           }
         }
       }
+      // N-1: a map with no "*" pays a bye its first set-score entry. A stray key written FIRST (or last) is still skipped:
+      // a bye and a walkover pay the same from the payer, from the rule, and from the map without the key. Expected: the
+      // organiser's own clean-sweep pair, `${won}-0`'s.
+      const exact: Record<string, [number, number]> = Object.fromEntries(
+        Array.from({ length: won }, (_, l) => [`${won}-${l}`, l === won - 1 ? [2, 1] : [3, 0]] as const),
+      );
+      const clean = m.configSchema.parse({ pointsMap: exact });
+      for (const pointsMap of [{ x: [9, 9], ...exact }, { ...exact, x: [9, 9] }]) {
+        const cfg = m.configSchema.parse({ pointsMap });
+        const rule = ruleOf(m, cfg, "league");
+        const state = m.init(cfg, defaultLineupPair(m.positions));
+        for (const winner of ["H", "A"] as const) {
+          const bye = MatchOutcome.parse({ kind: "award", winner, loser: null, reason: "bye" });
+          for (const outcome of [bye, walkover(winner)]) {
+            const where = `${key} ${JSON.stringify(pointsMap)} ${outcome.kind === "award" ? outcome.reason : ""} for ${winner}`;
+            const old = m.standingsDelta(outcome, cfg, { kind: "league" }, state) as FixtureResult;
+            const paid = payout(outcome, decidedInFor(m, outcome), old, false, rule, m.awardScoreKeys, setsToWinOf(m, cfg));
+            const without = (m.standingsDelta(outcome, clean, { kind: "league" }, m.init(clean, defaultLineupPair(m.positions))) as FixtureResult).map(row);
+            expect(old.map(row), `${where}: the payer skips the key`).toEqual(without);
+            expect(paid.map(row), `${where}: the rule pays as the payer`).toEqual(old.map(row));
+            if (outcome === bye) {
+              const [w, l] = exact[`${won}-0`]!;
+              expect(old.map((d) => d.points), `${where}: the clean-sweep pair`).toEqual(winner === "H" ? [w, l] : [l, w]);
+            }
+            perSport.set(key, (perSport.get(key) ?? 0) + 1);
+          }
+        }
+      }
       // No set score priced at all: the payer refuses every played match, and the rule refuses the map. An empty map is
       // the cfg schema's own refusal.
       expect(m.configSchema.safeParse({ pointsMap: {} }).success, `${key}: the cfg schema refuses an empty map`).toBe(false);
@@ -575,7 +608,7 @@ describe("W2d the sports' table points, row by row (SPEC §5.10)", () => {
       }
     });
     expect([...perSport.keys()].sort(), "the set sports, each checked").toEqual(["badminton", "tabletennis", "volleyball"]);
-    for (const [key, n] of perSport) expect(n, `${key}: cases checked`).toBe(2 * 3 * 2 * TABLE_KINDS.length + 3);
+    for (const [key, n] of perSport) expect(n, `${key}: cases checked`).toBe(2 * 3 * 2 * TABLE_KINDS.length + 2 * 2 * 2 + 3);
   });
 
   it("VB settled abandons pay FIVB 6.4.3's score under the default maps: 1-1 ⇒ 3-1 (3:0), 2-2 ⇒ 3-2 (2:1), bo3 1-1 ⇒ 2-1 (2:1)", () => {

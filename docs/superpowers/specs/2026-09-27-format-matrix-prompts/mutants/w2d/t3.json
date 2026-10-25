@@ -388,5 +388,20 @@
         "name": "X-PT-2 tablePointsRule pays exactly"
       }
     ]
+  },
+  {
+    "id": "t3-fr2-setbased-bye-reads-junk",
+    "file": "packages/engine/src/sports/setbased/kernel.ts",
+    "find": "Object.entries(cfg.pointsMap).find(([key]) => SET_SCORE_KEY.test(key))?.[1]",
+    "replace": "Object.entries(cfg.pointsMap).find(() => true /*MUT*/)?.[1]",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-points-parity.test.ts"
+        ],
+        "name": "a pointsMap key that is no set score is skipped"
+      }
+    ]
   }
 ]
