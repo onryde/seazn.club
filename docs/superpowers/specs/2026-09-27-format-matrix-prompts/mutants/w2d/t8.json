@@ -137,7 +137,7 @@
  {
   "id": "t8-schema-refusal-refuses-a-cfg-that-scores",
   "file": "packages/engine/src/competition/table-rules.ts",
-  "find": "    return ask(input.mergedCfg);",
+  "find": "    answer = ask(input.mergedCfg);",
   "replace": "    throw new TypeError(\"not read as given\");",
   "killers": [
    {
@@ -154,6 +154,36 @@
   "file": "packages/engine/src/competition/table-rules.ts",
   "find": "    if (cause instanceof EngineError) throw cause;",
   "replace": "    throw cause;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/table-rules.test.ts"
+    ],
+    "name": "a merged cfg the sport layer cannot read is a typed CONFIG_INVALID refusal"
+   }
+  ]
+ },
+ {
+  "id": "t8-as-given-rule-unchecked",
+  "file": "packages/engine/src/competition/table-rules.ts",
+  "find": "  if (answerSchema === undefined) return answer;",
+  "replace": "  return answer;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/table-rules.test.ts"
+    ],
+    "name": "a merged cfg the sport layer cannot read is a typed CONFIG_INVALID refusal"
+   }
+  ]
+ },
+ {
+  "id": "t8-points-answer-not-checked",
+  "file": "packages/engine/src/competition/table-rules.ts",
+  "find": "askSport(input, (cfg) => input.module.tablePointsRule(cfg, input.stageKind), PointsRule)",
+  "replace": "askSport(input, (cfg) => input.module.tablePointsRule(cfg, input.stageKind))",
   "killers": [
    {
     "cwd": "packages/engine",
@@ -191,6 +221,13 @@
      "src/competition/tie-what-if.test.ts"
     ],
     "name": "P25 a wins-first volleyball order gets a what-if"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tie-what-if.test.ts"
+    ],
+    "name": "P25 every wins-primary sport"
    }
   ]
  },
@@ -206,6 +243,13 @@
      "src/competition/tie-what-if.test.ts"
     ],
     "name": "P25 a wins-first volleyball order gets a what-if"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tie-what-if.test.ts"
+    ],
+    "name": "P25 every wins-primary sport"
    }
   ]
  },
@@ -221,6 +265,13 @@
      "src/competition/tie-what-if.test.ts"
     ],
     "name": "P25 a wins-first volleyball order gets a what-if"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tie-what-if.test.ts"
+    ],
+    "name": "P25 every wins-primary sport"
    }
   ]
  },

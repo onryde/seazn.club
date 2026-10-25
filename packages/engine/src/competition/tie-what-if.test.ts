@@ -21,6 +21,8 @@ import type { TiebreakerKey } from "../sport/module.ts";
 import { badminton } from "../sports/setbased/badminton.ts";
 import { volleyball } from "../sports/setbased/volleyball.ts";
 import { carrom } from "../sports/carrom/index.ts";
+import { builtinModules } from "../sports/index.ts";
+import { declaredCfgs } from "../testkit/declared-cfgs.ts";
 import type { StandingsRow } from "./standings.ts";
 import { rankStandings } from "./tiebreakers.ts";
 import { tieDecidingKey, tieKeyValue, tieWhatIf } from "./tie-what-if.ts";
@@ -200,6 +202,39 @@ describe("tieWhatIf — the cascade and the skip read off real modules", () => {
     expect(tieDecidingKey(["points", "wins", "set_ratio", "point_ratio", "h2h_points"], { winsOnly: false, primary })).toBe("wins");
     // A wins-first order where the sport's primary is points is still no what-if: football ranks on points (D11).
     expect(tieDecidingKey(["wins", "points", "diff"], { winsOnly: false, primary: "points" })).toBeNull();
+  });
+  // The same claim for every sport that declares `wins` its primary measure, under every cfg it declares: its own default
+  // order with `wins` moved first gets a deciding key — the step after `wins`, passing over `points` only when every
+  // point came from wins (OQ1) — and, where points can split rows level on wins, a points rule naming both totals.
+  it("P25 every wins-primary sport (volleyball, badminton, tennis — D11) gets a what-if on a wins-first order, under every declared cfg (counted)", () => {
+    const winsPrimary = builtinModules.filter((m) => m.primaryTableKey === "wins");
+    // D11: matches won rank first in volleyball (FIVB), badminton (BWF) and tennis — the registry sweep's set, pinned.
+    // single-sport: the literal is the sweep's expected membership (D11), not a one-sport test; the sweep walks the registry
+    expect(winsPrimary.map((m) => m.key).sort()).toEqual(["badminton", "tennis", "volleyball"]);
+    let cfgs = 0;
+    let pointsRules = 0;
+    for (const module of winsPrimary) {
+      const primary = module.primaryTableKey;
+      for (const { name, cfg } of declaredCfgs(module)) {
+        const label = `${module.key} ${name}`;
+        const winsFirst: TiebreakerKey[] = ["wins", ...module.defaultTiebreakers("league", cfg).filter((k) => k !== "wins")];
+        const { winsOnly } = module.matchPointsBounds(cfg);
+        const after = winsFirst.slice(1).find((k) => !(winsOnly && k === "points"));
+        expect(after, `${label}: the order has a step after wins`).toBeDefined();
+        expect(tieDecidingKey(winsFirst, { winsOnly, primary }), label).toBe(after);
+        // The same order under a points primary is no what-if: the primary is the sport's, not the order's first step.
+        expect(tieDecidingKey(winsFirst, { winsOnly, primary: "points" }), label).toBeNull();
+        if (!winsOnly) {
+          const me = { ...row("me", 3, { sets_won: 8, sets_lost: 7 }, 2), points: 4 };
+          const rv = { ...row("rv", 3, { sets_won: 6, sets_lost: 4 }, 2), points: 6 };
+          expect(tieWhatIf(me, rv, winsFirst, { winsOnly, primary }), label).toEqual({ kind: "rule", key: "points", mine: "4", theirs: "6" });
+          pointsRules++;
+        }
+        cfgs++;
+      }
+    }
+    expect(cfgs, "every wins-primary sport declares at least one cfg").toBeGreaterThanOrEqual(winsPrimary.length);
+    expect(pointsRules, "a cfg where points split rows level on wins").toBeGreaterThan(0);
   });
   it("carrom default cascade: no draws, but a no-result pays — `wins` still decides", () => {
     const cfg = carrom.configSchema.parse({});

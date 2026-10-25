@@ -11,12 +11,14 @@
 // cfg reads the defaults the schema declares. A cfg the schema refuses is read AS GIVEN, as the fold reads it
 // (`fixture-cfg.ts`: every module tolerates a cfg its schema rejects) and as `validateCascade` does (D8), so this is never
 // stricter than the fold: a stored cfg that scores is never refused here. A cfg the sport cannot read even so (generic's
-// `{}`), or one it refuses itself (a set map that prices no set score, `tablePointsRule`), is a CONFIG_INVALID refusal —
-// typed, never a crash; a stage whose own values (or pin) answer every layer never asks, so it is never refused for it.
+// `{}`), or one it refuses itself (a set map that prices no set score, `tablePointsRule`), or a rule read from it as given
+// that PointsRule refuses (generic's points with no loss), is a CONFIG_INVALID refusal — typed, never a crash; a stage
+// whose own values (or pin) answer every layer never asks, so it is never refused for it.
+import type { z } from "zod";
 import { EngineError } from "../core/errors.ts";
 import type { AnySportModule, TableStageKind, TiebreakerKey } from "../sport/module.ts";
 import { isHeadToHeadKey } from "./cascade-rules.ts";
-import type { PointsRule } from "./points.ts";
+import { PointsRule } from "./points.ts";
 
 /** The layer a rule came from: this stage's own value, its division's, its sport's default, or — in a pin only — the
  *  rules the W2d migration found the stage ranking by (B1). */
@@ -60,28 +62,35 @@ export function defaultCrossGroup(tiebreakers: readonly TiebreakerKey[]): readon
 
 // The sport's answer under the merged cfg as the sport reads it. Called only by a sport layer that answers. On a parsed
 // cfg every throw is the sport's own (its typed refusals stand; anything else is a defect and is not dressed up). On a cfg
-// the schema refuses, the sport is asked with it as given; one it cannot read at all is the typed refusal.
-function askSport<T>(input: TableRulesInput, ask: (cfg: unknown) => T): T {
+// the schema refuses, the sport is asked with it as given; one it cannot read at all is the typed refusal. A reader that
+// meets a missing field there may return `undefined` where a number belongs rather than throw (generic's points with no
+// loss), so an answer with a schema of its own is checked against it too: a pin (T9) would keep the hole for good.
+function askSport<T>(input: TableRulesInput, ask: (cfg: unknown) => T, answerSchema?: z.ZodType<T>): T {
   const parsed = input.module.configSchema.safeParse(input.mergedCfg);
   if (parsed.success) return ask(parsed.data);
+  // The issues are the schema's; what the reading made of the cfg rides along beside them.
+  const refused = (why: string, detail: Record<string, unknown>) =>
+    new EngineError("CONFIG_INVALID", `the stage's ${input.module.key} settings do not parse, so ${why}`, {
+      sport: input.module.key, stageKind: input.stageKind, issues: parsed.error.issues, ...detail,
+    });
+  let answer: T;
   try {
-    return ask(input.mergedCfg);
+    answer = ask(input.mergedCfg);
   } catch (cause) {
     if (cause instanceof EngineError) throw cause;
-    throw new EngineError(
-      "CONFIG_INVALID",
-      `the stage's ${input.module.key} settings do not parse, so its sport's table rules cannot be read`,
-      // The reading's own failure rides along for the log; the issues are the schema's.
-      { sport: input.module.key, stageKind: input.stageKind, issues: parsed.error.issues, reading: String(cause) },
-    );
+    throw refused("its sport's table rules cannot be read", { reading: String(cause) });
   }
+  if (answerSchema === undefined) return answer;
+  const checked = answerSchema.safeParse(answer);
+  if (checked.success) return checked.data;
+  throw refused("the table rule its sport reads from them as given is no points rule", { ruleIssues: checked.error.issues });
 }
 
 // null or absent = inherit: a stored config that never had the key reads as unset, never as an order or rule of its own.
 function pointsOf(input: TableRulesInput): { readonly points: PointsRule; readonly source: TableRulesSource } {
   const own = input.stageOwn.points;
   if (own != null) return { points: own, source: "stage" };
-  return { points: askSport(input, (cfg) => input.module.tablePointsRule(cfg, input.stageKind)), source: "sport" };
+  return { points: askSport(input, (cfg) => input.module.tablePointsRule(cfg, input.stageKind), PointsRule), source: "sport" };
 }
 
 function orderOf(input: TableRulesInput): { readonly tiebreakers: readonly TiebreakerKey[]; readonly source: TableRulesSource } {

@@ -276,7 +276,10 @@ describe("defaultTiebreakers(kind, cfg) and the sport layer (PS-7c)", () => {
     resolveTableRules(input(spy, "group", merged));
     expect(calls).toHaveLength(1);
     expect(calls[0]!.kind).toBe("group");
+    // "Exactly that object" is the merged cfg as the sport's schema parses it — the same values, not the same reference
+    // (a stored partial cfg reads the schema's defaults, below).
     expect(calls[0]!.cfg).toEqual(football.configSchema.parse(merged));
+    expect(calls[0]!.cfg).not.toBe(merged);
     expect((calls[0]!.cfg as { fairPlay: boolean }).fairPlay).toBe(false);
     // A stored partial cfg reads the schema's declared defaults (D8: football tracks fair play unless told not to) — the
     // reading `validateCascade` gives the same cfg, so a default and its validator cannot disagree.
@@ -304,7 +307,28 @@ describe("defaultTiebreakers(kind, cfg) and the sport layer (PS-7c)", () => {
     const chess = resolveTableRules(input(boardgame, "swiss", halfPoints));
     expect(chess.points.draw).toBe(halfPoints.scoring.draw);
     expect(chess.points.win.regulation).toBe(halfPoints.scoring.win);
+    expect(chess.points.unit).toBe("half");
+    expect(PointsRule.safeParse(chess.points).success, "the half-point rule is a points rule").toBe(true);
     expect(chess.sources).toEqual({ points: "sport", tiebreakers: "sport" });
+    // The other direction: a reader that meets a missing field returns `undefined` where a number belongs instead of
+    // throwing. Generic's settings with a win and a draw but no loss read a rule PointsRule refuses (no loss.regulation);
+    // a pin (T9) would keep it for good, so it is the typed refusal, naming the rule's own issues.
+    const genericModule = builtinModules.find((m) => m.key === "generic")!;
+    const noLoss = { points: { w: 3, d: 1 } };
+    expect(genericModule.configSchema.safeParse(noLoss).success, "premise: the schema refuses a cfg with no loss").toBe(false);
+    expect(PointsRule.safeParse(genericModule.tablePointsRule(noLoss as never, "league")).success, "premise: read as given it is no points rule").toBe(false);
+    let lossless: unknown;
+    try {
+      resolveTableRules(input(genericModule, "league", noLoss));
+    } catch (e) {
+      lossless = e;
+    }
+    expect(lossless).toBeInstanceOf(EngineError);
+    expect((lossless as EngineError).code).toBe("CONFIG_INVALID");
+    expect((lossless as EngineError).message).toMatch(/generic settings do not parse, so the table rule .* is no points rule/);
+    const ruleIssues = ((lossless as EngineError).data as { ruleIssues?: { path: unknown[] }[] }).ruleIssues;
+    expect(ruleIssues?.map((i) => i.path.join("."))).toContain("loss.regulation");
+    expect(((lossless as EngineError).data as { issues?: unknown[] }).issues?.length, "the schema's issues ride along").toBeGreaterThan(0);
     // A cfg the sport cannot read even as given — generic's settings with no result mode and no points — is the typed
     // refusal, naming the schema's issues, never the TypeError reading it would be.
     let generic: unknown;
@@ -315,34 +339,53 @@ describe("defaultTiebreakers(kind, cfg) and the sport layer (PS-7c)", () => {
     }
     expect(generic).toBeInstanceOf(EngineError);
     expect((generic as EngineError).code).toBe("CONFIG_INVALID");
-    expect((generic as EngineError).message).toMatch(/generic settings do not parse/);
+    expect((generic as EngineError).message).toMatch(/generic settings do not parse, so its sport's table rules cannot be read/);
+    // What the reading made of it rides along for the log: the TypeError it would have been.
+    expect(((generic as EngineError).data as { reading?: unknown }).reading).toMatch(/^TypeError/);
     expect(((generic as EngineError).data as { issues?: { path: unknown[] }[] }).issues?.map((i) => i.path[0])).toContain("resultMode");
     // A sport's OWN typed refusal of a cfg read as given stands as the sport worded it, never re-worded as "do not parse":
     // a set map left pricing no set score (M-4) beside a best-of the schema refuses.
     const evenBestOf = { ...volleyball.configSchema.parse({}), bestOf: 4, pointsMap: {} };
     expect(volleyball.configSchema.safeParse(evenBestOf).success, "premise: the schema refuses an even best-of").toBe(false);
     expect(() => resolveTableRules(input(volleyball, "league", evenBestOf))).toThrow(/prices no set score/);
-    // In every sport, a cfg no schema takes: the sport answers if it reads nothing it lacks, else refuses typed — never
-    // another error (counted; both halves reached).
+    // In every sport, the cfgs above that its schema refuses (a cfg a sport's schema takes is the parsed path, skipped):
+    // the sport answers with a rule PointsRule takes, or refuses typed — never another error, never a rule with a hole
+    // (counted; both halves reached: chess answers its half-point cfg, every sport refuses 42).
+    const refusedCfgs: readonly { name: string; cfg: unknown }[] = [
+      { name: "42", cfg: 42 },
+      { name: "half-point chess", cfg: halfPoints },
+      { name: "a win and a draw, no loss", cfg: noLoss },
+    ];
+    let asGiven = 0;
     let answered = 0;
     let refused = 0;
     const swept = forEachSport(({ module }) => {
-      let caught: unknown;
-      try {
-        resolveTableRules(input(module, "league", 42));
-        answered++;
-      } catch (e) {
-        caught = e;
-        refused++;
-      }
-      if (caught !== undefined) {
-        expect(caught, module.key).toBeInstanceOf(EngineError);
-        expect((caught as EngineError).code, module.key).toBe("CONFIG_INVALID");
-        expect(((caught as EngineError).data as { issues?: unknown[] }).issues?.length, module.key).toBeGreaterThan(0);
+      for (const { name, cfg } of refusedCfgs) {
+        if (module.configSchema.safeParse(cfg).success) continue;
+        asGiven++;
+        const label = `${module.key} ${name}`;
+        let caught: unknown;
+        let got: TableRulesPin | undefined;
+        try {
+          got = resolveTableRules(input(module, "league", cfg));
+        } catch (e) {
+          caught = e;
+        }
+        if (got !== undefined) {
+          answered++;
+          expect(PointsRule.safeParse(got.points).success, label).toBe(true);
+        } else {
+          refused++;
+          expect(caught, label).toBeInstanceOf(EngineError);
+          expect((caught as EngineError).code, label).toBe("CONFIG_INVALID");
+          expect(((caught as EngineError).data as { issues?: unknown[] }).issues?.length, label).toBeGreaterThan(0);
+        }
       }
     });
     expect(swept).toBe(builtinModules.length);
-    expect(answered + refused).toBe(builtinModules.length);
+    expect(answered + refused).toBe(asGiven);
+    expect(asGiven, "every sport's schema refuses 42").toBeGreaterThanOrEqual(builtinModules.length);
+    expect(answered, "a sport reads a cfg its schema refuses and scores it (chess half points)").toBeGreaterThan(0);
     expect(refused, "a sport that reads its cfg refuses 42").toBeGreaterThan(0);
     // The same unreadable cfgs on a stage whose own layers (or pin) answer everything: nothing asks the sport, nothing throws.
     const ownAll = { stageOwn: { points: OWN_POINTS, tiebreakers: OWN_ORDER, crossGroup: null } };
