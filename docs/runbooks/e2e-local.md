@@ -67,6 +67,12 @@ Note the path: `outputFileTracingRoot` points at the monorepo root, so the
 server lands at `.next/standalone/**apps/web/**/server.js`, not the
 `.next/standalone/server.js` that Next's own warning text names.
 
+Unlike CI (and the production image), a local server does **not** overlay the
+compiled `.next/server` over this tree, so `instrumentation.ts`'s `register()` does
+not run on it: no Sentry init, no relay boot check, no public-error `no-store`
+guard. That is deliberate: a local build inlines your dev `NEXT_PUBLIC_SENTRY_DSN`,
+and an overlaid server would start reporting to that project.
+
 ## 4. Start the server
 
 **`npm run start` (`next start`) is wrong here.** It does not serve a standalone

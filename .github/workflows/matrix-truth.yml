@@ -230,6 +230,9 @@ jobs:
           # relayDriverMode() boot check, the outbox readiness report or the public error no-store guard. The merge form
           # (`/.`): the destination exists, and `cp -R dir dest` would nest under it.
           cp -R apps/web/.next/server/. apps/web/.next/standalone/apps/web/.next/server/
+          # Source maps are ~220 MB of the overlaid tree (about 2700 files) and nothing in a matrix shard reads them; they
+          # would only bloat the artifact every shard downloads.
+          find apps/web/.next/standalone -name '*.map' -delete
           tar -czf web.tgz -C apps/web/.next standalone
       - name: Upload the build
         uses: actions/upload-artifact@v4
@@ -364,7 +367,8 @@ jobs:
         env:
           # register() runs on this server, and sentry.server.config.ts enables Sentry the moment a DSN exists. Held
           # blank-but-defined (the empty string wins `SENTRY_DSN ?? NEXT_PUBLIC_SENTRY_DSN`), so a DSN baked into the
-          # build or present on the runner never sends a CI event to the real project.
+          # build or present on the runner never sends a CI event to the real project. Only the SENTRY_DSN blank is
+          # load-bearing: a NEXT_PUBLIC_ value is inlined into the server chunks at build, so blanking it here is inert.
           SENTRY_DSN: ""
           NEXT_PUBLIC_SENTRY_DSN: ""
           # 3200, NOT 3000: env.ts refuses 3000 and 3100 (the owner's dev server and

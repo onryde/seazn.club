@@ -30,6 +30,9 @@ import type { FullConfig } from "@playwright/test";
 
 const PROBE_TIMEOUT_MS = 10_000;
 
+// A server started by this recipe does NOT overlay the compiled `.next/server` (CI's server steps and the Dockerfile do), so
+// instrumentation.ts's register() does not run on it: no Sentry init, relay boot check or public-error no-store guard. On
+// purpose: a local build inlines a dev NEXT_PUBLIC_SENTRY_DSN, which an overlaid server would start reporting to.
 const RECIPE = [
   "  npm run build --workspace apps/web",
   "  rm -rf apps/web/.next/standalone/apps/web/.next/static",

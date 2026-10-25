@@ -253,7 +253,9 @@ start_server() {
   # does NOT overlay the compiled `.next/server` over the standalone tree (CI's server steps and the Dockerfile do), so
   # instrumentation.ts's register() does not run here: no Sentry init, no relayDriverMode() boot refusal, no outbox
   # readiness report, no public-error no-store guard. A bad RELAY_DRIVERS/ENV_NAME pair therefore does not fail the boot
-  # here; it fails only the first request that touches the relay.
+  # here; it fails only the first request that touches the relay. It does not overlay on purpose: a LOCAL build inlines a
+  # developer's NEXT_PUBLIC_SENTRY_DSN into the server chunks (CI's builds carry none), so overlaying would start Sentry
+  # init against that dev project on every smoke/e2e run.
   # Like CI, it seals stream targets under a per-run random RELAY_KEK (a caller's own wins), and the walkthrough's
   # fake phone connects after FAKE_INGEST_CONNECT_AFTER_MS, the value e2e.yml pins for the walkthrough leg.
   # Capture QR v2: CAPTURE_QR_V2_ALWAYS=1 shows the panel's phone-camera option, which is otherwise behind the PostHog

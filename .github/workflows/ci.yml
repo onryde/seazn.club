@@ -1708,7 +1708,8 @@ jobs:
         env:
           # register() runs on this server, and sentry.server.config.ts enables Sentry the moment a DSN exists. Held
           # blank-but-defined (the empty string wins `SENTRY_DSN ?? NEXT_PUBLIC_SENTRY_DSN`), so a DSN baked into the
-          # build or present on the runner never sends a CI event to the real project.
+          # build or present on the runner never sends a CI event to the real project. Only the SENTRY_DSN blank is
+          # load-bearing: a NEXT_PUBLIC_ value is inlined into the server chunks at build, so blanking it here is inert.
           SENTRY_DSN: ""
           NEXT_PUBLIC_SENTRY_DSN: ""
           PLACEMENT_SERVICE_HOST: localhost:50051
@@ -1808,9 +1809,13 @@ jobs:
       # `s-maxage=30, stale-while-revalidate=270`, and only the guard turns a /shared 404 into `private, no-cache,
       # no-store, max-age=0, must-revalidate`. The same build without the overlay answers this URL with the s-maxage
       # header (measured), so no-store here means the boot hook ran. A fresh slug per try, so no answer is a cached
-      # one; the bound only absorbs a slow first render, a guard that never installs fails it. The step is only as
-      # good as the premise that /shared is ISR (a dynamic render sends no-store by itself, whether or not register()
-      # ran): e2e/public-cache-headers.spec.ts is its paired tripwire, and fails the day /shared stops emitting s-maxage.
+      # one; the bound only absorbs a slow first render, a guard that never installs fails it.
+      # The step is only as good as the premise that /shared renders through Next's ISR cache: a forced-dynamic page's
+      # notFound() (/r/<ref> is one) sends no-store by itself, whether or not register() ran. So the step also requires
+      # `x-nextjs-cache` on the 404, a header Next sends only on a response that went through its incremental cache
+      # (measured: present on a /shared 404, absent on /r/<ref>'s). If /shared ever stops being ISR this step reds loudly
+      # rather than passing for the wrong reason. (e2e/public-cache-headers.spec.ts is NOT a tripwire for that: it skips
+      # when s-maxage is missing, probes another route, and e2e does not run on pull requests.)
       - name: Prove the server ran register() (a public 404 goes out no-store)
         run: |
           set -o pipefail
@@ -1819,13 +1824,14 @@ jobs:
           for i in $(seq 1 15); do
             code=$(curl -s -o /dev/null -D "$hdrs" -w '%{http_code}' --max-time 10 "http://localhost:3000/shared/register-proof-${GITHUB_RUN_ID:-0}-${i}" || true)
             cc=$(tr -d '\r' < "$hdrs" | grep -i '^cache-control:' || true)
-            if [ "$code" = "404" ] && grep -qi 'no-store' <<< "$cc"; then
-              ok=1; echo "register() ran: HTTP ${code}, ${cc}"; break
+            isr=$(tr -d '\r' < "$hdrs" | grep -i '^x-nextjs-cache:' || true)
+            if [ "$code" = "404" ] && grep -qi 'no-store' <<< "$cc" && [ -n "$isr" ]; then
+              ok=1; echo "register() ran: HTTP ${code}, ${cc}, ${isr}"; break
             fi
             sleep 1
           done
           if [ -z "$ok" ]; then
-            echo "a public 404 did not go out no-store (last: HTTP ${code}, ${cc:-no Cache-Control header}) - instrumentation.ts register() did not run on this server"
+            echo "a public /shared 404 did not go out no-store from an ISR render (last: HTTP ${code}, ${cc:-no Cache-Control header}, ${isr:-no x-nextjs-cache header}) - instrumentation.ts register() did not run on this server, or /shared stopped rendering through Next's ISR cache and no-store alone proves nothing"
             cat dev-server.log; exit 1
           fi
 
@@ -1853,7 +1859,8 @@ jobs:
         env:
           # register() runs on this server, and sentry.server.config.ts enables Sentry the moment a DSN exists. Held
           # blank-but-defined (the empty string wins `SENTRY_DSN ?? NEXT_PUBLIC_SENTRY_DSN`), so a DSN baked into the
-          # build or present on the runner never sends a CI event to the real project.
+          # build or present on the runner never sends a CI event to the real project. Only the SENTRY_DSN blank is
+          # load-bearing: a NEXT_PUBLIC_ value is inlined into the server chunks at build, so blanking it here is inert.
           SENTRY_DSN: ""
           NEXT_PUBLIC_SENTRY_DSN: ""
           PORT: "3001"
@@ -1904,7 +1911,8 @@ jobs:
         id: epoch-floor-server
         env:
           # Blank-but-defined, as on the other servers (see "Start server"): register() runs here too, and the empty string
-          # wins `SENTRY_DSN ?? NEXT_PUBLIC_SENTRY_DSN`, so no CI event reaches the real project.
+          # wins `SENTRY_DSN ?? NEXT_PUBLIC_SENTRY_DSN`, so no CI event reaches the real project. Only the SENTRY_DSN blank
+          # is load-bearing: a NEXT_PUBLIC_ value is inlined into the server chunks at build, so blanking it is inert.
           SENTRY_DSN: ""
           NEXT_PUBLIC_SENTRY_DSN: ""
           PORT: "3002"
