@@ -8,13 +8,15 @@
 //   * a path that is not the root of a git checkout (a plain folder, a folder inside a checkout, a repo with no commit);
 //   * a checkout with ANY uncommitted change, staged, unstaged or untracked: the pin names a commit, so the copy must be
 //     exactly that commit's bytes;
-//   * a checkout whose proto is not committed, or whose working copy is not HEAD's committed bytes even though `status` is
-//     clean (assume-unchanged / skip-worktree, or a smudge filter);
+//   * a checkout whose proto is not committed, is empty, or whose working copy is not HEAD's committed bytes even though
+//     `status` is clean (assume-unchanged / skip-worktree, or a smudge filter);
+//   * THIS repository (the one `pkgRoot` lives in): it also has a committed proto/scheduler.proto, so the pin would name a
+//     monorepo commit and the image tag would not exist;
 //   * a relative path resolved against the wrong directory (`resolveCheckout`).
 // Every refusal happens BEFORE the first write, so a refused run leaves the previous copy and pin exactly as they were.
 //
 // Runs under `node --experimental-strip-types`: type annotations only, no enums or parameter properties, `.ts` import suffixes.
-import { execFileSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -41,18 +43,43 @@ export function resolveCheckout(arg: string, initCwd: string | undefined, cwd: s
   return path.resolve(initCwd ? initCwd : cwd, arg);
 }
 
-/** stdout of `git -C <checkout> <args>`, trimmed; null if git exits non-zero (not a repo, bad ref, missing path). */
-function git(checkout: string, args: string[]): string | null {
-  try {
-    return execFileSync("git", ["-C", checkout, ...args], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      // `status` would otherwise refresh (write) the checkout's index: this tool must not touch the clone it reads.
-      env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
-    }).trim();
-  } catch {
-    return null;
+interface GitResult {
+  ok: boolean;
+  /** Trimmed stdout (empty when git failed). */
+  out: string;
+  /** Git's own words on one line, for an error message: stderr, or why git could not be run at all. */
+  err: string;
+}
+
+/** The environment every git call runs in: the caller's, minus the variables that would aim git at some OTHER repository
+ *  than the one named by `-C` (an inherited GIT_DIR from a hook or a wrapper), and with optional locks off. `status` would
+ *  otherwise refresh (write) the checkout's index: this tool must not touch the clone it reads. */
+function gitEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, GIT_OPTIONAL_LOCKS: "0" };
+  for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"]) delete env[key];
+  return env;
+}
+
+/** `git -C <dir> <args>`. `status.showUntrackedFiles=all` is pinned on the command line: a user's `status.showUntrackedFiles=no`
+ *  would otherwise make an untracked file read as "clean". */
+function git(dir: string, args: string[]): GitResult {
+  const r = spawnSync("git", ["-c", "status.showUntrackedFiles=all", "-C", dir, ...args], { encoding: "utf8", env: gitEnv() });
+  if (r.error || r.status !== 0) {
+    const why = r.error ? r.error.message : r.stderr;
+    return { ok: false, out: "", err: why.replace(/\s+/g, " ").trim() };
   }
+  return { ok: true, out: r.stdout.trim(), err: "" };
+}
+
+/** Two paths name the same place. `.native` asks the OS for the real spelling, so a case variant on a case-insensitive
+ *  filesystem (APFS) still compares equal to the path git reports. */
+const samePlace = (a: string, b: string): boolean => realpathSync.native(a) === realpathSync.native(b);
+
+/** The repository's common git dir (shared by all its worktrees), absolute; null when `dir` is not inside a repository (or
+ *  does not exist yet, as a first import's package directory may not). git prints it relative to `dir` unless it is absolute. */
+function commonDirOf(dir: string): string | null {
+  const r = git(dir, ["rev-parse", "--git-common-dir"]);
+  return r.ok ? path.resolve(dir, r.out) : null;
 }
 
 const PROTO_IN_CHECKOUT = "proto/scheduler.proto";
@@ -63,27 +90,39 @@ export function vendorProto(opts: { checkout: string; pkgRoot?: string }): Vendo
 
   // 1. The path is the ROOT of a work tree (git also answers inside a subfolder, whose HEAD says nothing about that folder).
   const top = git(checkout, ["rev-parse", "--show-toplevel"]);
-  if (top === null || realpathSync(top) !== realpathSync(checkout)) {
-    throw new Error(`not a git checkout: ${checkout} (expected the root of a git work tree)`);
+  if (!top.ok) throw new Error(`not a git checkout: ${checkout} (${top.err})`);
+  if (!samePlace(top.out, checkout)) {
+    throw new Error(`not a git checkout: ${checkout} (expected the root of a git work tree; git says the root is ${top.out})`);
   }
+
+  // 1b. Not THIS repository. The monorepo also commits a proto/scheduler.proto, so without this a mistaken argument vendors our
+  //     own copy and pins a monorepo commit. Worktrees of one repository share a common dir, so compare that, not the toplevel.
+  const common = commonDirOf(checkout);
+  const own = commonDirOf(pkgRoot);
+  if (common !== null && own !== null && samePlace(common, own)) {
+    throw new Error(`is this repository, not the placement checkout: ${checkout} (it holds ${pkgRoot}; pass a checkout of the placement repo)`);
+  }
+
   const head = git(checkout, ["rev-parse", "--verify", "HEAD"]);
-  if (head === null) throw new Error(`not a git checkout: ${checkout} (the repository has no commit)`);
-  if (!/^[0-9a-f]{40}$/.test(head)) {
-    throw new Error(`not a git checkout: ${checkout} (HEAD is "${head}", not a 40-hex sha1 commit id; the image tag needs one)`);
+  if (!head.ok) throw new Error(`not a git checkout: ${checkout} (the repository has no commit: ${head.err})`);
+  if (!/^[0-9a-f]{40}$/.test(head.out)) {
+    throw new Error(`not a git checkout: ${checkout} (HEAD is "${head.out}", not a 40-hex sha1 commit id; the image tag needs one)`);
   }
 
   // 2. Nothing uncommitted, staged or untracked. Gitignored files (the placement venv) are not listed and do not matter.
   const dirty = git(checkout, ["status", "--porcelain"]);
-  if (dirty === null) throw new Error(`not a git checkout: ${checkout} (git status failed)`);
-  if (dirty !== "") throw new Error(`has uncommitted changes: ${checkout}\n${dirty}`);
+  if (!dirty.ok) throw new Error(`not a git checkout: ${checkout} (git status failed: ${dirty.err})`);
+  if (dirty.out !== "") throw new Error(`has uncommitted changes: ${checkout}\n${dirty.out}`);
 
-  // 3. The proto is committed at HEAD and the working copy is exactly those bytes.
+  // 3. The proto is committed at HEAD, is not empty, and the working copy is exactly those bytes.
   const source = path.join(checkout, PROTO_IN_CHECKOUT);
   const committed = git(checkout, ["rev-parse", "--verify", `HEAD:${PROTO_IN_CHECKOUT}`]);
-  if (committed === null || !existsSync(source)) throw new Error(`no ${PROTO_IN_CHECKOUT} in ${checkout}`);
+  if (!committed.ok || !existsSync(source)) throw new Error(`no ${PROTO_IN_CHECKOUT} in ${checkout}`);
+  const size = git(checkout, ["cat-file", "-s", committed.out]);
+  if (!size.ok || size.out === "0") throw new Error(`${PROTO_IN_CHECKOUT} is empty at HEAD in ${checkout}`);
   const onDisk = git(checkout, ["hash-object", "--no-filters", "--", source]);
-  if (onDisk !== committed) {
-    throw new Error(`${PROTO_IN_CHECKOUT} is not HEAD's committed bytes in ${checkout} (working copy ${String(onDisk)}, HEAD ${committed})`);
+  if (onDisk.out !== committed.out) {
+    throw new Error(`${PROTO_IN_CHECKOUT} is not HEAD's committed bytes in ${checkout} (working copy ${onDisk.out || onDisk.err}, HEAD ${committed.out})`);
   }
 
   // 4. Only now write, copy first, so a failed run above never leaves half a vendoring behind.
@@ -91,7 +130,7 @@ export function vendorProto(opts: { checkout: string; pkgRoot?: string }): Vendo
   const dest = path.join(destDir, "scheduler.proto");
   mkdirSync(destDir, { recursive: true });
   writeFileSync(dest, readFileSync(source));
-  const pin: VendoredPin = { placementCommit: head, sha256: sha256Of(dest), imageTag: head };
+  const pin: VendoredPin = { placementCommit: head.out, sha256: sha256Of(dest), imageTag: head.out };
   writeFileSync(path.join(pkgRoot, "VENDORED.json"), `${JSON.stringify(pin, null, 2)}\n`);
   return pin;
 }

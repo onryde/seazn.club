@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
-import { resolveCheckout, sha256Of, vendorProto } from "../scripts/vendor-proto-lib.ts";
+import { resolveCheckout, sha256Of, vendorProto, type VendoredPin } from "../scripts/vendor-proto-lib.ts";
 
 const PACKAGE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -182,17 +182,17 @@ describe("vendorProto", () => {
   });
 
   describe("refuses a path that is not a git checkout", () => {
-    it("a plain directory", () => {
+    it("a plain directory (and the message carries git's own words, not a guess)", () => {
       const dir = fresh("plain");
       mkdirSync(join(dir, "proto"));
       writeFileSync(join(dir, "proto/scheduler.proto"), PROTO_V1);
       const pkg = pkgRootDir();
-      expect(() => vendorProto({ checkout: dir, pkgRoot: pkg })).toThrow(/^not a git checkout: /);
+      expect(() => vendorProto({ checkout: dir, pkgRoot: pkg })).toThrow(/^not a git checkout: .*\(fatal: /);
       expect(readdirSync(pkg), "nothing was written").toEqual([]);
     });
 
-    it("a path that does not exist", () => {
-      expect(() => vendorProto({ checkout: join(SCRATCH, "nope"), pkgRoot: pkgRootDir() })).toThrow(/^not a git checkout: /);
+    it("a path that does not exist (git says so, in the message)", () => {
+      expect(() => vendorProto({ checkout: join(SCRATCH, "nope"), pkgRoot: pkgRootDir() })).toThrow(/^not a git checkout: .*\(fatal: .*nope/);
     });
 
     it("a folder INSIDE a checkout (git is happy there, but its HEAD is not the folder's)", () => {
@@ -303,6 +303,132 @@ describe("vendorProto", () => {
     const pkg = pkgRootDir();
     expect(() => vendorProto({ checkout: repo, pkgRoot: pkg })).toThrow(/^not a git checkout: .*git status failed/);
     expect(readdirSync(pkg)).toEqual([]);
+  });
+
+  describe("refuses THIS repository (the one that holds the package): its own proto/scheduler.proto is not the placement's", () => {
+    /** A package directory inside `repo`, like packages/scheduler inside the monorepo. */
+    const pkgInside = (repo: string): string => {
+      const pkg = join(repo, "packages/scheduler");
+      mkdirSync(pkg, { recursive: true });
+      return pkg;
+    };
+
+    it("the checkout IS the repository holding pkgRoot", () => {
+      const repo = placementRepo();
+      const pkg = pkgInside(repo);
+      expect(() => vendorProto({ checkout: repo, pkgRoot: pkg })).toThrow(/^is this repository, not the placement checkout: /);
+      expect(readdirSync(pkg), "nothing was written").toEqual([]);
+    });
+
+    it("the checkout is another WORKTREE of the repository holding pkgRoot (same common dir, different toplevel)", () => {
+      const repo = placementRepo();
+      const worktree = join(fresh("worktree"), "wt");
+      git(repo, "worktree", "add", "-q", "--detach", worktree);
+      expect(git(worktree, "rev-parse", "--show-toplevel"), "the fixture really is a second work tree").not.toBe(git(repo, "rev-parse", "--show-toplevel"));
+      const pkg = pkgInside(worktree);
+      expect(() => vendorProto({ checkout: repo, pkgRoot: pkg })).toThrow(/^is this repository, not the placement checkout: /);
+      expect(() => vendorProto({ checkout: worktree, pkgRoot: pkgInside(repo) })).toThrow(/^is this repository, not the placement checkout: /);
+    });
+
+    it("control: a package inside a DIFFERENT repository is fine (the guard compares repositories, it does not ban packages in repos)", () => {
+      const placement = placementRepo();
+      const web = placementRepo(PROTO_V2);
+      const pkg = pkgInside(web);
+      let pin: VendoredPin | undefined;
+      expect(() => {
+        pin = vendorProto({ checkout: placement, pkgRoot: pkg });
+      }, "a package inside another repository is not this repository").not.toThrow();
+      expect(pin?.placementCommit).toBe(head(placement));
+      expect(copyOf(pkg).equals(PROTO_V1)).toBe(true);
+    });
+  });
+
+  it("refuses a zero-length committed proto (it would be vendored, hashed and reported OK)", () => {
+    const repo = placementRepo(Buffer.alloc(0));
+    expect(git(repo, "cat-file", "-s", "HEAD:proto/scheduler.proto"), "the fixture really committed an empty file").toBe("0");
+    const pkg = pkgRootDir();
+    expect(() => vendorProto({ checkout: repo, pkgRoot: pkg })).toThrow(/^proto\/scheduler\.proto is empty at HEAD in /);
+    expect(readdirSync(pkg), "nothing was written").toEqual([]);
+  });
+
+  describe("ignores the caller's git config and environment", () => {
+    /** Run `fn` with `env` overlaid on process.env (vendorProto reads the ambient environment), then put it back. */
+    function withEnv<T>(env: Record<string, string>, fn: () => T): T {
+      const saved = Object.fromEntries(Object.keys(env).map((k) => [k, process.env[k]]));
+      Object.assign(process.env, env);
+      try {
+        return fn();
+      } finally {
+        for (const [k, v] of Object.entries(saved)) {
+          if (v === undefined) delete process.env[k];
+          else process.env[k] = v;
+        }
+      }
+    }
+    /** A plain git with `env` overlaid; a git that cannot work under it reports "ERR" (itself a way of being misdirected). */
+    const rawGit = (repo: string, env: Record<string, string>, ...args: string[]): string => {
+      try {
+        return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], env: { ...process.env, ...env } }).trim();
+      } catch {
+        return "ERR";
+      }
+    };
+
+    it("a global status.showUntrackedFiles=no does not hide an untracked file", () => {
+      const cfg = join(fresh("gitcfg"), "gitconfig");
+      writeFileSync(cfg, "[status]\n\tshowUntrackedFiles = no\n");
+      const repo = placementRepo();
+      writeFileSync(join(repo, "scratch.txt"), "x\n");
+      expect(rawGit(repo, { GIT_CONFIG_GLOBAL: cfg }, "status", "--porcelain"), "control: the config really hides it from a plain git status").toBe("");
+      const pkg = pkgRootDir();
+      withEnv({ GIT_CONFIG_GLOBAL: cfg }, () => {
+        expect(() => vendorProto({ checkout: repo, pkgRoot: pkg })).toThrow(/^has uncommitted changes: .*scratch\.txt/s);
+      });
+      expect(readdirSync(pkg), "nothing was written").toEqual([]);
+    });
+
+    // Each variable aims git at a DIFFERENT repository (a decoy with other proto bytes and another commit). Set on its own, each
+    // must change what a plain git sees (the control) and must not change what vendorProto vendors.
+    const REDIRECTS: [name: string, value: (decoy: string) => string][] = [
+      ["GIT_DIR", (decoy) => join(decoy, ".git")],
+      ["GIT_WORK_TREE", (decoy) => decoy],
+      ["GIT_INDEX_FILE", (decoy) => join(decoy, ".git/index")],
+      ["GIT_COMMON_DIR", (decoy) => join(decoy, ".git")],
+    ];
+    it.each(REDIRECTS)("an inherited %s does not redirect it to another repository", (name, value) => {
+      const repo = placementRepo();
+      const decoy = placementRepo(PROTO_V2);
+      const wantHead = head(repo);
+      const env = { [name]: value(decoy) };
+      const seen = `${rawGit(repo, env, "rev-parse", "HEAD")}|${rawGit(repo, env, "status", "--porcelain")}`;
+      expect(seen, `control: a plain git in the checkout IS redirected by ${name}`).not.toBe(`${wantHead}|`);
+
+      const pkg = pkgRootDir();
+      let pin: VendoredPin | undefined;
+      expect(() => {
+        pin = withEnv(env, () => vendorProto({ checkout: repo, pkgRoot: pkg }));
+      }, `vendoring must not be disturbed by an inherited ${name}`).not.toThrow();
+      expect(pin?.placementCommit).toBe(wantHead);
+      expect(copyOf(pkg).equals(PROTO_V1), "the copy is the checkout's bytes, not the decoy's").toBe(true);
+    });
+  });
+
+  it("accepts a case variant of the checkout path where the filesystem is case-insensitive (APFS), and says why otherwise", () => {
+    const repo = placementRepo();
+    const variant = join(dirname(repo), basename(repo).toUpperCase());
+    expect(variant, "the fixture really differs in case").not.toBe(repo);
+    const pkg = pkgRootDir();
+    if (existsSync(variant)) {
+      // Case-insensitive volume: the same directory under another spelling. git reports the real spelling as its toplevel.
+      let pin: VendoredPin | undefined;
+      expect(() => {
+        pin = vendorProto({ checkout: variant, pkgRoot: pkg });
+      }, "the same directory under another spelling is the same checkout").not.toThrow();
+      expect(pin?.placementCommit).toBe(head(repo));
+    } else {
+      // Case-sensitive volume (Linux CI): there is no such directory, and the refusal carries git's own words.
+      expect(() => vendorProto({ checkout: variant, pkgRoot: pkg })).toThrow(/^not a git checkout: .*\(fatal: /);
+    }
   });
 
   it("refuses a repository whose commit ids are not 40-hex (the image tag could not be one)", () => {
