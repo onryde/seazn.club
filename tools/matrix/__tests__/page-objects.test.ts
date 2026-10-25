@@ -59,6 +59,24 @@ function productRoute(name: string, vars: Record<string, string>, nth = 0): stri
     return vars[v]!;
   });
 }
+/** Every JSX `href={...}` expression in `body`, read to its MATCHING close brace. A `[^}]+` capture stops at the first
+ *  `}` it meets, so a template literal's own `${...}` truncates it (`arbiterHref ?? \`#${queueRowAnchor(fixture.id)`);
+ *  counting braces reads the whole expression. An expression that never closes is refused, not guessed. */
+function jsxHrefExpressions(body: string): string[] {
+  const out: string[] = [];
+  for (const m of body.matchAll(/href=\{/g)) {
+    const start = m.index + m[0].length;
+    let depth = 1;
+    let i = start;
+    for (; i < body.length && depth > 0; i++) {
+      if (body[i] === "{") depth++;
+      else if (body[i] === "}") depth--;
+    }
+    expect(depth, `an href={ at offset ${m.index} never closes`).toBe(0);
+    out.push(body.slice(start, i - 1));
+  }
+  return out;
+}
 /** A `const NAME = ["a", "b"] as const;` literal's members, read from the product. */
 function literalList(file: string, decl: RegExp): string[] {
   const m = decl.exec(src(file));
@@ -1020,24 +1038,38 @@ describe("the console, the run sheet and the public page", () => {
     const row = src(`${V2}/desk/run-sheet-row.tsx`);
     // Online chess (Lichess external play) adds links that leave the console ON PURPOSE, and only on an online-play
     // row: the camera / connection / off-Seazn chips open the arbiter panel through `chipLink` (whose own `href`
-    // param is the arbiter's), and the held chip jumps to the organiser queue on the same page. Split them off by
-    // their own shapes first — `chipLink`'s body is not the row's, and its calls must all pass `arbiterHref` under
-    // `onlinePlay` — then hold every remaining link to the console rule.
+    // param is the arbiter's), and the held chip leads to the same panel when the page offers one (`arbiterHref`) and
+    // to the organiser queue on this page when it does not. Split them off by their own shapes first — `chipLink`'s
+    // body is not the row's, and its calls must all pass `arbiterHref` under `onlinePlay` — then hold every remaining
+    // link to the console rule.
     const body = row.slice(row.indexOf("export function RunSheetRow("));
     expect(row.slice(row.indexOf("function chipLink("), row.indexOf("export function RunSheetRow(")), "chipLink renders its own href").toContain("<Link href={href}");
     const chips = [...body.matchAll(/\{onlinePlay[^\n]*&&\s*\(\s*chipLink\(\{\s*href: (\w+)/g)].map((m) => m[1]);
     expect(chips, "every arbiter chip, gated on onlinePlay").toEqual(["arbiterHref", "arbiterHref", "arbiterHref"]);
     expect(body.match(/chipLink\(/g)?.length, "no chipLink call outside an onlinePlay gate").toBe(chips.length);
     expect(row, "the queue chip needs an online-play hold").toContain("const onlineHeld = !held && (onlinePlay?.held ?? null) !== null;");
-    const ONLINE_QUEUE = "`#${queueRowAnchor(fixture.id)}`";
-    const hrefs = [...body.matchAll(/href=\{(`[^`]*`|[^}]+)\}/g)].map((m) => m[1]);
+    expect(row, "arbiterHref is the arbiter panel's address, optional: a page that does not offer the panel hands none").toContain("arbiterHref?: string;");
+    // The held chip's target: the arbiter panel on this board when the page offers it, else the board's card in the queue.
+    const ONLINE_HELD = "arbiterHref ?? `#${queueRowAnchor(fixture.id)}`";
+    const hrefs = jsxHrefExpressions(body);
     // The identity link, the run-sheet action link, the stream chip, which
     // opens the same console with its Stream panel up (`?stream=open`), and the online held chip.
-    expect(hrefs).toEqual(["href", "`${href}?stream=open`", ONLINE_QUEUE, "href"]);
-    for (const h of hrefs.filter((x) => x !== ONLINE_QUEUE)) expect(h === "href" || h.startsWith("`${href}?"), `${h} leaves the fixture console`).toBe(true);
+    expect(hrefs).toEqual(["href", "`${href}?stream=open`", ONLINE_HELD, "href"]);
+    for (const h of hrefs.filter((x) => x !== ONLINE_HELD)) expect(h === "href" || h.startsWith("`${href}?"), `${h} leaves the fixture console`).toBe(true);
     expect(src(`${V2}/stages-panel.tsx`)).toContain("hrefFor={(f) => routes.fixture(orgSlug, compSlug, divSlug, f.fixture_no)}");
     // set_time is the one row action that is a <button>, not a link.
     expect(row).toMatch(/<button\s+type="button"\s+data-row-action="set_time"/);
+  });
+
+  it("the href reader takes an expression to its matching brace: a template literal's own ${...} does not cut it short, and an unclosed one is refused", () => {
+    // Empty case first: no href at all reads as none, not as one empty string.
+    expect(jsxHrefExpressions("<p>no links</p>")).toEqual([]);
+    // The shape the run-sheet's held chip has: a `??` over a template whose ${...} holds a call and a member.
+    expect(jsxHrefExpressions("<Link href={arbiterHref ?? `#${queueRowAnchor(fixture.id)}`} a={1}><Link href={href}>")).toEqual([
+      "arbiterHref ?? `#${queueRowAnchor(fixture.id)}`",
+      "href",
+    ]);
+    expect(() => jsxHrefExpressions("<Link href={`#${a(b)`")).toThrow(/never closes/);
   });
 
   it("the public standings tab and panel are the ids tabs.tsx composes, selected by aria-selected", () => {
