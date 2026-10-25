@@ -170,15 +170,17 @@ describe("findUnappliedEndings", () => {
     expect(asked, "a limit of nothing asks for nothing").not.toHaveBeenCalled();
   });
 
-  // Both orders: a throw must not stop the kinds AFTER it, and must not discard the rows of the kinds BEFORE it. With two
-  // kinds each order exercises one of those (the loop runs the vocabulary's order, so the first kind has a successor and the
-  // last has a predecessor).
+  // Both orders: a throw must not stop the kinds AFTER it, and must not discard the rows of the kinds BEFORE it. With the
+  // first and last kinds each order exercises one of those (the loop runs the vocabulary's order, so the first kind has a
+  // successor and the last has a predecessor). The kinds in between are blanked below: the chess invite sits among them with
+  // a REAL finder that reads the database, and a test that needs no database must not meet another suite's rows.
   const [FIRST_KIND, LAST_KIND] = [OUTBOX_KINDS[0], OUTBOX_KINDS[OUTBOX_KINDS.length - 1]!] as [OutboxKind, OutboxKind];
   it.each([
     { throwing: FIRST_KIND, healthy: LAST_KIND },
     { throwing: LAST_KIND, healthy: FIRST_KIND },
   ])("a finder that throws ($throwing) is logged by name and does not stop or lose the other kind's rows ($healthy)", async ({ throwing, healthy }) => {
     expect(FIRST_KIND, "two distinct kinds, or the order cases below are one case").not.toBe(LAST_KIND);
+    for (const k of OUTBOX_KINDS) KIND_HOOKS[k] = {};
     KIND_HOOKS[throwing] = {
       findUnapplied: async () => {
         throw new Error("SECRET-LEAK finder blew up");

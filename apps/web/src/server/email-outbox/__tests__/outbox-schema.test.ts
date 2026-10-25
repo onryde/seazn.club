@@ -46,8 +46,14 @@ describe("email outbox vocabularies (constants.ts)", () => {
     expect([...OUTBOX_STATUSES]).toEqual(SPEC_STATUSES);
   });
 
-  it("the kinds are the two phase-1 kinds", () => {
-    expect([...OUTBOX_KINDS]).toEqual(["magic_link", "chess_invite"]);
+  it("the kinds are the spec's seven, in the spec's wave order", () => {
+    // Typed from the phase-3 spec's kind table (wave order), never read from constants.ts.
+    const SPEC_KINDS = [
+      "magic_link", "chess_invite", "registration_confirmation", "payment_reminder", "registration_promoted",
+      "refund_issued", "solo_signup_assigned",
+    ];
+    expect(SPEC_KINDS.length).toBe(7);
+    expect([...OUTBOX_KINDS]).toEqual(SPEC_KINDS);
   });
 
   it("every status lands in exactly one of: replaceable, delivered, ended badly, replaced (checked: all twelve)", () => {
@@ -480,9 +486,10 @@ describe.skipIf(!HAS_DB)("email_outbox (V470)", () => {
 
   it("app_user cannot SELECT, UPDATE or DELETE email_outbox (42501 each), nor read an insert back, nor insert for another org or for none", async () => {
     const victim = await row();
-    // Org B's pending row. The "another org, same key" insert below names exactly this key, so the replace trigger (a
-    // BEFORE ROW trigger, which runs before the policy's WITH CHECK) matches it and supersedes it - and the refusal
-    // that follows must roll that back. Asserting the row afterwards is the witness that the statement was atomic.
+    // Org B's pending row. The "another org, same key" insert below names exactly this key. The replace trigger is an
+    // AFTER ROW trigger (V472), so a refused insert never reaches it; were it BEFORE ROW it would match this row and
+    // supersede it before the policy's WITH CHECK refused, and the refusal would have to roll that back. Either way the
+    // row asserted afterwards is the witness that the refused statement touched nothing.
     const SAME_KEY = { ref: newRef(), to: "Pat@x.test" };
     const [theirs] = await seedHistory([{ ...SAME_KEY, status: "queued", body: BODY, org: otherOrgId }]);
     expect(await statusOf(theirs!)).toBe("queued");

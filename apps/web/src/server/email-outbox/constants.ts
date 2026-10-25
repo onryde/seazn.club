@@ -6,8 +6,35 @@
 // are two copies of one fact, so outbox-schema.test.ts reads the constraint definitions back from the catalogue
 // and requires them to name exactly these members.
 
-export const OUTBOX_KINDS = ["magic_link", "chess_invite"] as const;
+export const OUTBOX_KINDS = [
+  "magic_link",
+  "chess_invite",
+  "registration_confirmation",
+  "payment_reminder",
+  "registration_promoted",
+  "refund_issued",
+  "solo_signup_assigned",
+] as const;
 export type OutboxKind = (typeof OUTBOX_KINDS)[number];
+
+/**
+ * What each kind IS, as the phase-3 spec's kind table declares it (docs/superpowers/specs/2026-10-25-email-outbox-phase3-design.md):
+ *  - `to` (the spec's legend A, L, S): `account` is an account, resolved at send so a changed or deleted account is followed
+ *    (spec §6); `literal` is a literal address, sent as it stands; `staff` is `STAFF_ALERT_EMAIL`.
+ *  - `transactional`: whether the mail ignores the marketing suppression list. Each kind keeps its sender's flag from before it
+ *    joined the outbox: the sign-in link and the chess invite are transactional, the five registration and refund mails are not.
+ *
+ * A declaration, like the lists above: pure data for the core, the writers and the tests to read.
+ */
+export const OUTBOX_KIND_FACTS: Readonly<Record<OutboxKind, { to: "account" | "literal" | "staff"; transactional: boolean }>> = {
+  magic_link: { to: "literal", transactional: true },
+  chess_invite: { to: "account", transactional: true },
+  registration_confirmation: { to: "literal", transactional: false },
+  payment_reminder: { to: "literal", transactional: false },
+  registration_promoted: { to: "literal", transactional: false },
+  refund_issued: { to: "literal", transactional: false },
+  solo_signup_assigned: { to: "literal", transactional: false },
+};
 
 /** Spec order: the happy path first (`queued` -> `sending` -> `sent` -> `delivered`, `delayed` between `sent` and
  *  `delivered`), then the other terminal states. Twelve members; the spec's "Statuses" paragraph is the authority. */
