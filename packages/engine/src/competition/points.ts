@@ -30,7 +30,7 @@ const ForfeitRow = z.object({
   awardScore: z.tuple([z.number(), z.number()]).optional(), // 20 Jan
 });
 /** A `bySetScore` key: a set score "W-L", or "*" for every score the map does not name (SC-S9). */
-const SET_SCORE_KEY = /^(\d+-\d+|\*)$/;
+export const SET_SCORE_KEY = /^(\d+-\d+|\*)$/;
 
 /**
  * W2d (spec §5.3, D4, B2, D6, D10) — a stage's points rule, keyed by outcome: a win and a loss by how the match was

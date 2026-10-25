@@ -37,7 +37,7 @@ import {
   type StageKind,
   type StandingsDelta,
 } from "../../core/types.ts";
-import type { PointsRule } from "../../competition/points.ts";
+import { SET_SCORE_KEY, type PointsRule } from "../../competition/points.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import type { EntrantModel } from "../../sport/entrant-model.ts";
 import { boundsFrom, stampAttributionRequired, winMethodTable, type DecidedIn } from "../../sport/module.ts";
@@ -2332,14 +2332,19 @@ export function makeSetBasedModule(
    * flat map (one distinct pair, under "*") as it stands; any other map spelled out for every final score `bestOf` can
    * end (its exact pair, else "*"), because `coverage` counts "*" toward no score of a map that pays two pairs. A score
    * the map prices neither way stays out, so `coverage` names it (`standingsDelta` throws on it). The win and the loss
-   * pay the clean-sweep pair, a bye's.
+   * pay the clean-sweep pair, a bye's. A key that is no set score ("W-L" or "*", `SET_SCORE_KEY`) is one the payer never
+   * reads (`matchPoints`) and PointsRule refuses: skipped. A map left pricing no score at all is refused, as the payer
+   * refuses its every match (review M-4).
    */
   const setBasedPointsMapRule = (cfg: SetBasedCfg): PointsRule => {
     const map = cfg.pointsMap;
+    if (Object.keys(map).length === 0) {
+      throw new EngineError("CONFIG_INVALID", "pointsMap prices no set score: name a \"W-L\" score or \"*\"", { keys: Object.keys(cfg.pointsMap) });
+    }
     const flat = new Set(Object.values(map).map(([w, l]) => `${w}:${l}`)).size <= 1 && Object.hasOwn(map, "*");
     const bySetScore: Record<string, PointsPair> = {};
-    if (flat) Object.assign(bySetScore, map);
-    else {
+    // A flat map stays as it stands: `bySetScore` left empty takes the map itself below.
+    if (!flat) {
       for (const score of finalSetScores(cfg)) {
         const pair = map[score] ?? map["*"];
         if (pair !== undefined) bySetScore[score] = pair;
@@ -2669,8 +2674,11 @@ export function makeSetBasedModule(
     // W2d (spec §5.3) — the `pointsMap` as a rule, paying what `standingsDelta` pays (X-PT-2), unless the sport declares
     // its own (`preset.tablePointsRule`).
     tablePointsRule: (cfg) => {
-      const fromMap = setBasedPointsMapRule(cfg);
-      return preset.tablePointsRule === undefined ? fromMap : preset.tablePointsRule(cfg, fromMap);
+      // A key that is no set score is skipped before anything reads the map (review M-4): the sport's own table reads
+      // the map the payer prices, so the shipped map with a stray key is still the shipped map.
+      const priced = { ...cfg, pointsMap: Object.fromEntries(Object.entries(cfg.pointsMap).filter(([key]) => SET_SCORE_KEY.test(key))) };
+      const fromMap = setBasedPointsMapRule(priced);
+      return preset.tablePointsRule === undefined ? fromMap : preset.tablePointsRule(priced, fromMap);
     },
 
     // W2a: none — a set-based match always produces a winner (spec §5.2)

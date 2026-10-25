@@ -2862,7 +2862,7 @@ export function makePeriodModule(
       win: { regulation: cfg.points.win, ...(cfg.points.otWin === undefined ? {} : { ot: cfg.points.otWin }) },
       loss: { regulation: cfg.points.loss, ...(cfg.points.otLoss === undefined ? {} : { ot: cfg.points.otLoss }) },
       draw: cfg.points.draw,
-      ...(cfg.points.soBonus === undefined ? {} : { soBonus: cfg.points.soBonus }),
+      ...(preset.shootoutAs !== "draw_plus_bonus" || cfg.points.soBonus === undefined ? {} : { soBonus: cfg.points.soBonus }),
       shootoutAs: preset.shootoutAs,
       unit: "whole",
       bonuses: [],

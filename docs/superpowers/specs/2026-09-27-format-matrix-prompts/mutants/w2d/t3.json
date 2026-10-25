@@ -92,7 +92,7 @@
   {
     "id": "t3-setbased-preset-hook-ignored",
     "file": "packages/engine/src/sports/setbased/kernel.ts",
-    "find": "return preset.tablePointsRule === undefined ? fromMap : preset.tablePointsRule(cfg, fromMap);",
+    "find": "return preset.tablePointsRule === undefined ? fromMap : preset.tablePointsRule(priced, fromMap);",
     "replace": "return /*MUT*/ fromMap;",
     "killers": [
       {
@@ -197,7 +197,7 @@
   {
     "id": "t3-period-rule-sobonus-dropped",
     "file": "packages/engine/src/sports/period/kernel.ts",
-    "find": "      ...(cfg.points.soBonus === undefined ? {} : { soBonus: cfg.points.soBonus }),\n      shootoutAs: preset.shootoutAs,",
+    "find": "      ...(preset.shootoutAs !== \"draw_plus_bonus\" || cfg.points.soBonus === undefined ? {} : { soBonus: cfg.points.soBonus }),\n      shootoutAs: preset.shootoutAs,",
     "replace": "      /*MUT*/\n      shootoutAs: preset.shootoutAs,",
     "killers": [
       {
@@ -251,6 +251,51 @@
           "src/sports/football/football.test.ts"
         ],
         "name": "pays a shoot-out win as a plain win"
+      }
+    ]
+  },
+  {
+    "id": "t3-fr1-period-rule-sobonus-on-result",
+    "file": "packages/engine/src/sports/period/kernel.ts",
+    "find": "...(preset.shootoutAs !== \"draw_plus_bonus\" || cfg.points.soBonus === undefined ? {} :",
+    "replace": "...(/*MUT*/ cfg.points.soBonus === undefined ? {} :",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-points-parity.test.ts"
+        ],
+        "name": "PS-1 a shoot-out booked as a result takes no soBonus"
+      }
+    ]
+  },
+  {
+    "id": "t3-fr1-setbased-junk-key-kept",
+    "file": "packages/engine/src/sports/setbased/kernel.ts",
+    "find": "Object.entries(cfg.pointsMap).filter(([key]) => SET_SCORE_KEY.test(key))",
+    "replace": "Object.entries(cfg.pointsMap).filter(() => true /*MUT*/)",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-points-parity.test.ts"
+        ],
+        "name": "a pointsMap key that is no set score is skipped"
+      }
+    ]
+  },
+  {
+    "id": "t3-fr1-setbased-unpriced-map-not-refused",
+    "file": "packages/engine/src/sports/setbased/kernel.ts",
+    "find": "    if (Object.keys(map).length === 0) {\n      throw new EngineError(\"CONFIG_INVALID\", \"pointsMap prices no set score",
+    "replace": "    if (false /*MUT*/) {\n      throw new EngineError(\"CONFIG_INVALID\", \"pointsMap prices no set score",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-points-parity.test.ts"
+        ],
+        "name": "a pointsMap key that is no set score is skipped"
       }
     ]
   },

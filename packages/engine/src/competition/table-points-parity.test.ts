@@ -528,6 +528,56 @@ describe("W2d the sports' table points, row by row (SPEC §5.10)", () => {
     for (const { why, pointsMap, table } of cases) expect(ruleOf(volleyball, { bestOf: 3, pointsMap }, "league").bySetScore, why).toEqual(table);
   });
 
+  it("a pointsMap key that is no set score is skipped by the rule as the payer skips it; a map pricing no set score is refused, as the payer refuses its every match — every set sport (review M-4, counted)", () => {
+    // The cfg schema takes any non-empty key; PointsRule takes only a set score or "*" (SET_SCORE_KEY). The payer reads a
+    // match's exact "W-L", else "*" (`matchPoints`), so a key that is neither is never read.
+    const code = (f: () => unknown): unknown => {
+      try {
+        f();
+      } catch (e) {
+        return (e as { code?: unknown }).code;
+      }
+      return "no throw";
+    };
+    const perSport = new Map<string, number>();
+    forEachSport(({ key, module: m }) => {
+      if (m.reachableSetScores === undefined) return; // a sport with no set table keeps no pointsMap
+      // Two organiser maps: one paying two pairs (spelled out per score) and a flat one (kept as it stands, where a
+      // copied key would land); the stray key paying a pair of its own, and the flat map's own pair (keeping it flat).
+      const won = Math.ceil((m.configSchema.parse({}) as SetCfg).bestOf / 2);
+      const maps: Record<string, [number, number]>[] = [{ "*": [3, 0], [`${won}-0`]: [3, 1] }, { "*": [2, 0] }];
+      for (const organiser of maps) {
+        for (const junk of ["x", "3:0", "best of five"]) {
+          for (const pair of [[9, 9], organiser["*"]!]) {
+            const cfg = m.configSchema.parse({ pointsMap: { ...organiser, [junk]: pair } });
+            expect((cfg as Raw).pointsMap, `${key}: the cfg schema keeps "${junk}"`).toHaveProperty([junk]);
+            for (const kind of TABLE_KINDS) {
+              const rule = ruleOf(m, cfg, kind);
+              const where = `${key} ${JSON.stringify((cfg as Raw).pointsMap)} ${kind}`;
+              expect(PointsRule.safeParse(rule).success, `${where}: a rule the schema takes`).toBe(true);
+              // Expected: the organiser's map without the key, as that map's own rule spells it.
+              expect(rule, `${where}: the key is skipped`).toEqual(ruleOf(m, { pointsMap: organiser }, kind));
+              perSport.set(key, (perSport.get(key) ?? 0) + 1);
+            }
+          }
+        }
+      }
+      // No set score priced at all: the payer refuses every played match, and the rule refuses the map. An empty map is
+      // the cfg schema's own refusal.
+      expect(m.configSchema.safeParse({ pointsMap: {} }).success, `${key}: the cfg schema refuses an empty map`).toBe(false);
+      perSport.set(key, (perSport.get(key) ?? 0) + 1);
+      for (const pointsMap of [{ x: [3, 0] }, { "3:0": [3, 0], "best of five": [2, 1] }]) {
+        const cfg = m.configSchema.parse({ pointsMap });
+        const won = setsPlayed(m, cfg, "H", Math.ceil((cfg as SetCfg).bestOf / 2), 0);
+        expect(code(() => m.standingsDelta(won.outcome, cfg, { kind: "league" }, won.state)), `${key} ${JSON.stringify(pointsMap)}: the payer refuses`).toBe("INVALID_EVENT");
+        expect(code(() => m.tablePointsRule(cfg as never, "league")), `${key} ${JSON.stringify(pointsMap)}: the rule refuses`).toBe("CONFIG_INVALID");
+        perSport.set(key, (perSport.get(key) ?? 0) + 1);
+      }
+    });
+    expect([...perSport.keys()].sort(), "the set sports, each checked").toEqual(["badminton", "tabletennis", "volleyball"]);
+    for (const [key, n] of perSport) expect(n, `${key}: cases checked`).toBe(2 * 3 * 2 * TABLE_KINDS.length + 3);
+  });
+
   it("VB settled abandons pay FIVB 6.4.3's score under the default maps: 1-1 ⇒ 3-1 (3:0), 2-2 ⇒ 3-2 (2:1), bo3 1-1 ⇒ 2-1 (2:1)", () => {
     const settled = (cfg: unknown, sets: boolean[]): Probe => {
       const parsed = volleyball.configSchema.parse(cfg) as SetCfg;
@@ -639,4 +689,22 @@ describe("W2d PS-1 soBonus replaces shootoutWin/shootoutLoss (greenfield, no ali
     expect(unparsed(hockey, { ...hockey.variants["fih-shootout"] }, winOf("A", "shootout"))).toEqual([[0, 0, 1, 0], [1, 0, 0, 3]]);
     expect(unparsed(icehockey, {}, winOf("H", "shootout"))).toEqual([[1, 0, 0, 2], [0, 0, 1, 1]]);
   }, 60_000);
+
+  it("PS-1 a shoot-out booked as a result takes no soBonus into its rule, even from an unparsed cfg that carries one; a bonus sport still does (review M-3)", () => {
+    // Ice hockey books the GWS as a result (IIHF); its schema strips `soBonus`, a frozen cfg read back without it does not.
+    // PointsRule refuses a bonus on a result booking, so a rule that copied it would be no rule at all.
+    const ih = icehockey.configSchema.parse({}) as unknown as Raw;
+    const ihFrozen = { ...ih, points: { ...(ih.points as Raw), soBonus: 2 } };
+    for (const kind of TABLE_KINDS) {
+      const rule = icehockey.tablePointsRule(ihFrozen as never, kind);
+      expect(rule.shootoutAs, `ice hockey ${kind}`).toBe("result");
+      expect(rule.soBonus, `ice hockey ${kind}: no bonus on a result booking`).toBeUndefined();
+      expect(PointsRule.safeParse(rule).success, `ice hockey ${kind}: a rule the schema takes`).toBe(true);
+    }
+    // The other direction: hockey's draw-plus-bonus booking keeps the organiser's bonus, parsed or not.
+    const hk = hockey.configSchema.parse(hockey.variants["fih-shootout"]) as unknown as Raw;
+    const hkBonus = { ...hk, points: { ...(hk.points as Raw), soBonus: 2 } };
+    expect(hockey.tablePointsRule(hkBonus as never, "league")).toMatchObject({ shootoutAs: "draw_plus_bonus", soBonus: 2 });
+    expect(TABLE_KINDS.length, "anti-vacuity: table stage kinds checked").toBeGreaterThan(0);
+  });
 });
