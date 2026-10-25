@@ -85,27 +85,35 @@ function isPlaying(state: ArbiterBoardState): boolean {
   return state.kind === "starting" || state.kind === "live";
 }
 
+/** A board held for the organiser (`fixture_external_play.status = needs_organiser`): the board the queue draws a held card for. The
+ *  tally says so in a line of its own (Task 16 D7), so the boards it counts add up: playing, finished, held. */
+function isHeld(state: ArbiterBoardState): boolean {
+  return state.kind === "on_hold";
+}
+
 /** The hero's tally. `seats` is two for each open-window board; `here` the seats among them that have checked in (a board
- *  whose `seats` is null counts as not here); `playing` and `finished` are over EVERY board on screen. */
-export type CheckinTally = { here: number; seats: number; playing: number; finished: number };
+ *  whose `seats` is null counts as not here); `playing`, `finished` and `held` are over EVERY board on screen. */
+export type CheckinTally = { here: number; seats: number; playing: number; finished: number; held: number };
 
 export function checkinTally(boards: readonly ArbiterBoard[], nowMs: number | null): CheckinTally {
   const open = openWindowBoards(boards, nowMs);
   const here = open.reduce((n, b) => n + (b.seats?.white.here ? 1 : 0) + (b.seats?.black.here ? 1 : 0), 0);
-  const { playing, finished } = playingTally(boards);
-  return { here, seats: open.length * 2, playing, finished };
+  const { playing, finished, held } = playingTally(boards);
+  return { here, seats: open.length * 2, playing, finished, held };
 }
 
 // ---- playing (§5.5) -------------------------------------------------------------------------------------------
 
-/** "{playing} of {total} boards playing" and the finished clause, over the boards on screen. */
-export type PlayingTally = { playing: number; total: number; finished: number };
+/** "{playing} of {total} boards playing", the finished clause and the held clause, over the boards on screen. A board is in at most one
+ *  of the three, and a board still checking in is in none (`playing + finished + held + checking in = total`). */
+export type PlayingTally = { playing: number; total: number; finished: number; held: number };
 
 export function playingTally(boards: readonly ArbiterBoard[]): PlayingTally {
   return {
     playing: boards.filter((b) => isPlaying(b.state)).length,
     total: boards.length,
     finished: boards.filter((b) => boardIsOver(b.state)).length,
+    held: boards.filter((b) => isHeld(b.state)).length,
   };
 }
 
@@ -219,6 +227,7 @@ export const ROUND_COLUMN_KEYS: readonly ColumnKey[] = [
   "arbiter.column.label",
   "arbiter.column.notHereYet",
   "arbiter.column.nothingPaired",
+  "arbiter.column.onHold",
   "arbiter.column.playing",
   "arbiter.column.queue",
   "arbiter.column.reopenConfirmCta",

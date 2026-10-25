@@ -193,7 +193,7 @@ export function RoundColumn(p: RoundColumnProps) {
 function PlayingStatus({ round, roundExtend }: { round: ArbiterRound; roundExtend: ReactNode }) {
   const msg = useMsg();
   const plural = useMsgPlural();
-  const { playing, total, finished } = playingTally(round.boards);
+  const { playing, total, finished, held } = playingTally(round.boards);
   return (
     <section aria-labelledby="arbiter-column-status-heading" data-testid="arbiter-column-status" className={`flex min-w-0 flex-col gap-3 ${CARD_BOX}`}>
       <h2 id="arbiter-column-status-heading" className={`m-0 min-w-0 text-base font-semibold break-words ${INK}`}>
@@ -207,6 +207,12 @@ function PlayingStatus({ round, roundExtend }: { round: ArbiterRound; roundExten
           {finished > 0 && (
             <p data-testid="arbiter-column-finished" className={`m-0 text-sm ${MUTED}`}>
               {plural("arbiter.column.finished", finished)}
+            </p>
+          )}
+          {/* A held board is the queue's and is neither playing nor finished: without this line the counts above do not add up (D7). */}
+          {held > 0 && (
+            <p data-testid="arbiter-column-onhold" className={`m-0 text-sm ${MUTED}`}>
+              {plural("arbiter.column.onHold", held)}
             </p>
           )}
         </div>
@@ -447,8 +453,9 @@ export function CheckinHero({ round, view, tz, nowMs, openRound, roundExtend }: 
         </div>
       )}
 
-      {/* A zero clause is never printed (desk _RULES: an empty cell is not information). A held board is the queue's, not playing. */}
-      {(tally.playing > 0 || tally.finished > 0) && (
+      {/* A zero clause is never printed (desk _RULES: an empty cell is not information). A held board is the queue's, not playing, and has
+          its own line so the counts add up (D7). */}
+      {(tally.playing > 0 || tally.finished > 0 || tally.held > 0) && (
         <div className="flex min-w-0 flex-col gap-0.5">
           {tally.playing > 0 && (
             <p data-testid="arbiter-checkin-playing" className={`m-0 text-sm ${SOFT}`}>
@@ -458,6 +465,11 @@ export function CheckinHero({ round, view, tz, nowMs, openRound, roundExtend }: 
           {tally.finished > 0 && (
             <p data-testid="arbiter-checkin-finished" className={`m-0 text-sm ${MUTED}`}>
               {plural("arbiter.column.finished", tally.finished)}
+            </p>
+          )}
+          {tally.held > 0 && (
+            <p data-testid="arbiter-checkin-onhold" className={`m-0 text-sm ${MUTED}`}>
+              {plural("arbiter.column.onHold", tally.held)}
             </p>
           )}
         </div>

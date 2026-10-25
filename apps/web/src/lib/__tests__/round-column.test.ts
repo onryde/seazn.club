@@ -166,11 +166,11 @@ function flagged(over: Partial<ArbiterBoard> = {}, roundNo: number | null = 2): 
 /** Every state kind the board can be in, with the answer each tally owes it (spec §5.3 / §5.5: "playing" is `starting` +
  *  `live`; a held board is the queue's, not "playing"; "finished" is a board that is over, `boardIsOver`). Keyed by kind
  *  through `Record`, so a new kind in `ArbiterBoardState` is a type error here until it gets a row (and a verdict). */
-const STATE_TABLE: Record<ArbiterBoardState["kind"], { states: ArbiterBoardState[]; playing: boolean; finished: boolean }> = {
-  checking_in: { states: [{ kind: "checking_in" }], playing: false, finished: false },
-  starting: { states: [{ kind: "starting" }], playing: true, finished: false },
-  live: { states: [{ kind: "live", moveNo: 12 }], playing: true, finished: false },
-  on_hold: { states: [{ kind: "on_hold" }], playing: false, finished: false },
+const STATE_TABLE: Record<ArbiterBoardState["kind"], { states: ArbiterBoardState[]; playing: boolean; finished: boolean; held: boolean }> = {
+  checking_in: { states: [{ kind: "checking_in" }], playing: false, finished: false, held: false },
+  starting: { states: [{ kind: "starting" }], playing: true, finished: false, held: false },
+  live: { states: [{ kind: "live", moveNo: 12 }], playing: true, finished: false, held: false },
+  on_hold: { states: [{ kind: "on_hold" }], playing: false, finished: false, held: true },
   result: {
     states: [
       { kind: "result", score: "1-0", noResult: false },
@@ -178,11 +178,12 @@ const STATE_TABLE: Record<ArbiterBoardState["kind"], { states: ArbiterBoardState
     ],
     playing: false,
     finished: true,
+    held: false,
   },
-  cancelled: { states: [{ kind: "cancelled" }], playing: false, finished: true },
+  cancelled: { states: [{ kind: "cancelled" }], playing: false, finished: true, held: false },
 };
 /** One entry per state shape in the table (a kind with two shapes, like a played result and a void, appears twice). */
-const EVERY_STATE = Object.values(STATE_TABLE).flatMap((row) => row.states.map((state) => ({ state, playing: row.playing, finished: row.finished })));
+const EVERY_STATE = Object.values(STATE_TABLE).flatMap((row) => row.states.map((state) => ({ state, playing: row.playing, finished: row.finished, held: row.held })));
 
 // ---- roundColumnPhase -----------------------------------------------------------------------------------------
 
@@ -409,7 +410,7 @@ describe("checkinClock", () => {
 
 describe("checkinTally", () => {
   it("empty: all zero", () => {
-    expect(checkinTally([], NOW)).toEqual({ here: 0, seats: 0, playing: 0, finished: 0 });
+    expect(checkinTally([], NOW)).toEqual({ here: 0, seats: 0, playing: 0, finished: 0, held: 0 });
   });
 
   it("seats are two per open-window board", () => {
@@ -461,7 +462,7 @@ describe("checkinTally", () => {
       withState({ kind: "result", score: "0-1", noResult: false }),
       checkingIn(later()),
     ];
-    expect(checkinTally(boards, NOW)).toEqual({ here: 2, seats: 2, playing: 1, finished: 1 });
+    expect(checkinTally(boards, NOW)).toEqual({ here: 2, seats: 2, playing: 1, finished: 1, held: 0 });
   });
 });
 
@@ -469,7 +470,7 @@ describe("checkinTally", () => {
 
 describe("playingTally", () => {
   it("empty boards: { playing: 0, total: 0, finished: 0 }", () => {
-    expect(playingTally([])).toEqual({ playing: 0, total: 0, finished: 0 });
+    expect(playingTally([])).toEqual({ playing: 0, total: 0, finished: 0, held: 0 });
   });
 
   it("total is the boards on screen, whatever state each is in", () => {
@@ -482,7 +483,7 @@ describe("playingTally", () => {
     let checked = 0;
     for (const row of EVERY_STATE) {
       const t = playingTally([withState(row.state)]);
-      expect(t, JSON.stringify(row.state)).toEqual({ playing: row.playing ? 1 : 0, total: 1, finished: row.finished ? 1 : 0 });
+      expect(t, JSON.stringify(row.state)).toEqual({ playing: row.playing ? 1 : 0, total: 1, finished: row.finished ? 1 : 0, held: row.held ? 1 : 0 });
       // The table's "finished" is the declared `boardIsOver`, not a second opinion.
       expect(row.finished, `${row.state.kind} vs boardIsOver`).toBe(boardIsOver(row.state));
       checked += 1;
@@ -492,10 +493,63 @@ describe("playingTally", () => {
     expect(EVERY_STATE.some((r) => r.playing)).toBe(true);
     expect(EVERY_STATE.some((r) => r.finished)).toBe(true);
     expect(EVERY_STATE.some((r) => !r.playing && !r.finished)).toBe(true);
+    expect(EVERY_STATE.some((r) => r.held), "the table reaches a held state").toBe(true);
   });
 
   it("a held board beside a live one is playing 1 of 2, never 2", () => {
-    expect(playingTally([withState({ kind: "on_hold" }), withState({ kind: "live", moveNo: 3 })])).toEqual({ playing: 1, total: 2, finished: 0 });
+    expect(playingTally([withState({ kind: "on_hold" }), withState({ kind: "live", moveNo: 3 })])).toEqual({ playing: 1, total: 2, finished: 0, held: 1 });
+  });
+});
+
+// ---- the held count (Task 16 D7) ------------------------------------------------------------------------------
+
+describe("the held count: a round's tally says where EVERY board is (Task 16 D7)", () => {
+  it("empty: no boards, nothing held, in both tallies", () => {
+    expect(playingTally([]).held).toBe(0);
+    expect(checkinTally([], NOW).held).toBe(0);
+  });
+
+  it("0, 1 and 2 held boards: the count follows them exactly, whatever else is on screen", () => {
+    const live = () => withState({ kind: "live", moveNo: 4 });
+    const over = () => withState({ kind: "result", score: "1-0", noResult: false });
+    const onHold = () => withState({ kind: "on_hold" });
+    const cases: [string, ArbiterBoard[], number][] = [
+      ["none held", [live(), over()], 0],
+      ["one held", [live(), over(), onHold()], 1],
+      ["two held", [onHold(), live(), onHold(), over()], 2],
+    ];
+    let checked = 0;
+    for (const [name, boards, want] of cases) {
+      expect(playingTally(boards).held, `${name}: playingTally`).toBe(want);
+      expect(checkinTally(boards, NOW).held, `${name}: checkinTally reads the same answer`).toBe(want);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity").toBe(3);
+  });
+
+  it("the tally accounts for every board on screen: playing + finished + held + checking in = total", () => {
+    const boards = [
+      withState({ kind: "live", moveNo: 2 }),
+      withState({ kind: "starting" }),
+      withState({ kind: "result", score: "1-0", noResult: false }),
+      withState({ kind: "on_hold" }),
+      checkingIn(openNow()),
+    ];
+    const t = playingTally(boards);
+    const checking = boards.filter((b) => b.state.kind === "checking_in").length;
+    expect(t.playing + t.finished + t.held + checking, "no board is missing from the sums").toBe(t.total);
+    expect(t.held, "premise: a held board is on screen").toBe(1);
+  });
+
+  it("agrees with the QUEUE: the held cards the queue counts for these boards are the boards this tally calls held", () => {
+    // The queue's held cards are rows (`countedHeld`: not seated), one per held board; a seated row is a board the organiser plays on,
+    // which the round on screen never lists. So for the boards on screen the two readers must give one answer.
+    const boards = [withState({ kind: "on_hold" }), withState({ kind: "live", moveNo: 1 }), withState({ kind: "on_hold" })];
+    const heldRows = boards.filter((b) => b.state.kind === "on_hold").map((b) => held({ fixtureId: b.fixtureId }));
+    const seated = held({ fixtureId: "fx-someone-elses-board", seated: true });
+    const rows = [...heldRows, seated];
+    expect(countedHeld(rows).length, "premise: the seated row is not counted by the queue").toBe(2);
+    expect(playingTally(boards).held).toBe(countedHeld(rows).filter((r) => boards.some((b) => b.fixtureId === r.fixtureId)).length);
   });
 });
 
@@ -776,7 +830,7 @@ describe("no clock yet (nowMs null): the snapshot's refusal stands as the window
   it("empty: no boards give an empty set, a closed clock and an all-zero tally", () => {
     expect(openWindowBoards([], null)).toEqual([]);
     expect(checkinClock([], null)).toEqual({ kind: "closed" });
-    expect(checkinTally([], null)).toEqual({ here: 0, seats: 0, playing: 0, finished: 0 });
+    expect(checkinTally([], null)).toEqual({ here: 0, seats: 0, playing: 0, finished: 0, held: 0 });
   });
 
   it("every declared refusal, and no refusal, is read once (the table covers the declared list)", () => {
