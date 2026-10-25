@@ -652,4 +652,87 @@ test.describe("online chess: the division's camera group (Task 6's owed browser 
     expect(widthsChecked, "anti-vacuity: three widths in es and fr").toBe(6);
     expect(errors).toEqual([]);
   });
+
+  // Owner ruling 2026-10-25 ("apply rec"): switching a chess division to online play while players have no Lichess link WARNS,
+  // naming them, and never blocks - clubs switch first and collect links later. Driven end to end: real entrants with persons
+  // (an entrant typed in the UI always has one; no Lichess account behind either), the real Settings tab, the real save. The
+  // drop-off when a player links is a database fact (unlinked-lichess-players.test.ts): there is no Lichess to link to here.
+  test("online play with unlinked players: nobody unlinked is silent; choosing Lichess warns and names them; the save still lands; the warning stays after it and after a reload, in all four languages, at 320/768/1280", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(240_000);
+    const errors = pageErrors(page);
+    const rig = await seedChessDivision(request, page, { online: false });
+    const warning = page.getByTestId("division-online-unlinked");
+    const openFormat = async (locale: W2Locale = "en") => {
+      const group = page.getByRole("button", { name: new RegExp(escapeRe(uiString(locale, "divset.format"))) }).first();
+      if ((await group.getAttribute("aria-expanded")) !== "true") await group.click();
+    };
+
+    // Empty case first: a roster of nobody has nobody to warn about.
+    await gotoSettings(page, rig.settings);
+    await openFormat();
+    await page.getByTestId("division-online-play").selectOption("lichess");
+    await expect(warning, "no entrants: nothing to warn about").toHaveCount(0);
+
+    // Two players with a person each and no Lichess account (the division is still Off, so no link is demanded of the roster).
+    const added = await apiJson(
+      request,
+      `/api/v1/divisions/${rig.divisionId}/entrants`,
+      "POST",
+      ["Ann Unlinked", "Ben Unlinked"].map((n) => ({
+        kind: "individual",
+        display_name: n,
+        members: [{ new_person: { full_name: n }, is_captain: false, roles: [] }],
+      })),
+    );
+    expect(added.status, JSON.stringify(added.error)).toBeLessThan(300);
+
+    const sentence = (locale: W2Locale) =>
+      uiString(locale, "divset.onlinePlay.unlinked.other", {
+        count: 2,
+        names: new Intl.ListFormat(locale, { style: "long", type: "conjunction" }).format(["Ann Unlinked", "Ben Unlinked"]),
+      });
+
+    // The switch moment: Off is silent, Lichess warns - before anything is saved - and nothing is disabled.
+    await gotoSettings(page, rig.settings);
+    await openFormat();
+    await page.getByTestId("division-online-play").selectOption("off");
+    await expect(warning).toHaveCount(0);
+    await page.getByTestId("division-online-play").selectOption("lichess");
+    await expect(warning).toBeVisible();
+    await expect(warning).toHaveText(sentence("en"));
+    const stillOff = await apiJson<{ config: { onlinePlay?: string } }>(request, `/api/v1/divisions/${rig.divisionId}`);
+    expect(stillOff.data?.config.onlinePlay, "choosing it saved nothing").toBeUndefined();
+    await expect(page.getByTestId("division-online-play")).toBeEnabled();
+    const save = page.getByRole("button", { name: uiString("en", "divset.saveRules") });
+    await expect(save, "the warning does not block the save").toBeEnabled();
+
+    // The save lands - 200, stored - and the warning is still there on the refreshed page.
+    await save.click();
+    await expect(page.getByText("Match rules saved.")).toBeVisible({ timeout: 15_000 });
+    const stored = await apiJson<{ config: { onlinePlay?: string } }>(request, `/api/v1/divisions/${rig.divisionId}`);
+    expect(stored.data?.config.onlinePlay, "the switch was saved with two players unlinked").toBe("lichess");
+    await expect(warning, "still warned after the save").toHaveText(sentence("en"));
+
+    // After a reload, in every language, at every width: the saved division keeps the warning, and the page never scrolls sideways.
+    let checked = 0;
+    for (const locale of LOCALES) {
+      await setLocaleCookie(page, locale);
+      for (const width of [1280, 768, 320]) {
+        await page.setViewportSize({ width, height: 900 });
+        await gotoSettings(page, rig.settings);
+        await openFormat(locale);
+        await expect(warning, `${locale} ${width}`).toBeVisible();
+        await expect(warning, `${locale} ${width}`).toHaveText(sentence(locale));
+        await expectNoHorizontalScroll(page);
+        const box = (await warning.boundingBox())!;
+        expect(box.x + box.width, `${locale}: the warning fits a ${width}px viewport`).toBeLessThanOrEqual(width);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: four languages at three widths").toBe(12);
+    expect(errors).toEqual([]);
+  });
 });

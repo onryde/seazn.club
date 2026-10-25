@@ -22,6 +22,8 @@ const fx = vi.hoisted(() => ({ rows: [] as Record<string, unknown>[] }));
 const flags = vi.hoisted(() => ({ isServerFeatureEnabled: vi.fn() }));
 // The division's resolved venue zone, as `getScheduleSettings` serves it (the division's own override, else the club's).
 const schedule = vi.hoisted(() => ({ tz: "UTC" }));
+// Who holds no Lichess link (the online-switch warning): the real page hands DivisionSettings a summary of this list.
+const unlinked = vi.hoisted(() => ({ read: vi.fn() }));
 const queue = vi.hoisted(() => ({
   listNeedsOrganiserExternalPlay: vi.fn(),
   listFlaggedExternalPlay: vi.fn(),
@@ -67,7 +69,10 @@ vi.mock("@/server/usecases/fixtures", () => ({
   listDivisionFixtures: vi.fn(async () => fx.rows),
   listFixtureHeadlines: vi.fn(async () => ({})),
 }));
-vi.mock("@/server/usecases/entrants", () => ({ listEntrants: vi.fn(async () => []) }));
+vi.mock("@/server/usecases/entrants", () => ({
+  listEntrants: vi.fn(async () => []),
+  listUnlinkedLichessPlayers: unlinked.read,
+}));
 vi.mock("@/server/usecases/schedule", () => ({
   getScheduleSettings: vi.fn(async () => ({ config: {}, tz: schedule.tz })),
 }));
@@ -186,6 +191,7 @@ beforeEach(() => {
   queue.listNeedsOrganiserExternalPlay.mockReset().mockResolvedValue([]);
   queue.listFlaggedExternalPlay.mockReset().mockResolvedValue({ boards: [], ownBoards: 0 });
   queue.listRunSheetOnlinePlay.mockReset().mockResolvedValue({});
+  unlinked.read.mockReset().mockResolvedValue([]);
   forgetOnlineChessFlagCache();
   flags.isServerFeatureEnabled.mockReset().mockRejectedValue(new Error("flag asked while the override was on"));
 });
@@ -358,4 +364,81 @@ describe("division page: the online-chess flag's answer reaches the islands", ()
     expect(flags.isServerFeatureEnabled).not.toHaveBeenCalled();
   });
 
+});
+
+// The online-switch warning (owner ruling 2026-10-25: switching to online with unlinked players WARNS, never blocks). The
+// island's own suite (division-settings-online-unlinked.test.tsx) proves what it prints from a summary; the use-case's
+// (unlinked-lichess-players.test.ts) proves the list against a real database. This one proves the JOIN between them - the
+// page reads the list for THIS division as THIS organiser, summarises it, and hands it to DivisionSettings, and only where the
+// Online play select renders - which neither end can see on its own (a fixture on both ends proves the fixture).
+describe("division page: the unlinked-players summary reaches DivisionSettings", () => {
+  const settingsProps = async () => {
+    const found = findAll(await renderPage("settings"), DivisionSettings);
+    expect(found, "DivisionSettings mounted once").toHaveLength(1);
+    return found[0]!.props as { unlinkedLichess?: { count: number; names: string[] } };
+  };
+  const person = (n: number) => ({ person_id: `p${n}`, full_name: `Player ${n}` });
+
+  it("empty case first: offered, nobody unlinked -> a zero summary (so the island prints nothing), read for this division", async () => {
+    flagIs(FLAG_STATES[0]!);
+    unlinked.read.mockResolvedValue([]);
+
+    expect((await settingsProps()).unlinkedLichess).toEqual({ count: 0, names: [] });
+    expect(unlinked.read).toHaveBeenCalledTimes(1);
+    expect(unlinked.read).toHaveBeenLastCalledWith(PAGE.auth, "div-1");
+  });
+
+  it("offered, 7 unlinked: the true count and the first five names, in the reader's order", async () => {
+    flagIs(FLAG_STATES[0]!);
+    unlinked.read.mockResolvedValue([1, 2, 3, 4, 5, 6, 7].map(person));
+
+    expect((await settingsProps()).unlinkedLichess).toEqual({
+      count: 7,
+      names: ["Player 1", "Player 2", "Player 3", "Player 4", "Player 5"],
+    });
+  });
+
+  it("read whether or not the division is online yet - the switch moment is exactly when it is not", async () => {
+    let checked = 0;
+    for (const online of ["off", "lichess"] as const) {
+      division.onlinePlay = online;
+      unlinked.read.mockReset().mockResolvedValue([person(1)]);
+      flagIs(FLAG_STATES[0]!);
+      expect((await settingsProps()).unlinkedLichess, `online play ${online}`).toEqual({ count: 1, names: ["Player 1"] });
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("not offered (flag off, PostHog down), not chess, or not the Settings tab: no summary, and the list is never read", async () => {
+    let checked = 0;
+    for (const s of [FLAG_STATES[1]!, FLAG_STATES[2]!]) {
+      flagIs(s);
+      unlinked.read.mockClear();
+      expect((await settingsProps()).unlinkedLichess, s.label).toBeUndefined();
+      expect(unlinked.read, s.label).not.toHaveBeenCalled();
+      checked++;
+    }
+    division.sport_key = "generic";
+    flagIs(FLAG_STATES[0]!);
+    unlinked.read.mockClear();
+    expect((await settingsProps()).unlinkedLichess, "another sport").toBeUndefined();
+    expect(unlinked.read, "another sport").not.toHaveBeenCalled();
+    checked++;
+    division.sport_key = "boardgame";
+    flagIs(FLAG_STATES[0]!);
+    unlinked.read.mockClear();
+    await renderPage("entrants");
+    expect(unlinked.read, "a tab that mounts no Settings").not.toHaveBeenCalled();
+    checked++;
+    expect(checked).toBe(4);
+  });
+
+  it("a viewer (not an editor) reads nothing: the Settings island is not mounted for them", async () => {
+    pageAuth.requireDivisionPage.mockResolvedValue({ ...PAGE, canEdit: false });
+    flagIs(FLAG_STATES[0]!);
+
+    expect(findAll(await renderPage("settings"), DivisionSettings)).toHaveLength(0);
+    expect(unlinked.read).not.toHaveBeenCalled();
+  });
 });
