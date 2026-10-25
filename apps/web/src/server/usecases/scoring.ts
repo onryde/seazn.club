@@ -13,6 +13,7 @@ import { deferred } from "@/lib/deferred";
 import { divisionScoringClosed } from "@/lib/division-phase";
 import { EngineError } from "@seazn/engine/core";
 import { foldEpochOf } from "@seazn/engine/sport";
+import { epochFloorOverride, judgeEngineEpoch } from "./engine-epoch-override";
 import { appendEvent, replayOutcomeFor, resolveModule, rulesVersionNow } from "@/server/engine-db";
 import type { CascadeWriter } from "@/server/engine-db/append-event";
 import { recomputeStandings } from "@/server/engine-db";
@@ -677,6 +678,12 @@ interface FixtureSport {
  * THE SPORT IS RESOLVED FIRST. `foldEpochOf` throws a plain Error for a sport it has no epoch for (engine `fold-epoch.ts`), which
  * the v1 kernel would answer as a 500; the registry throws EngineError("MODULE_NOT_FOUND") — a 422 — for the same unknown
  * sport or a pinned version this build no longer ships, so an unknown sport can never reach `foldEpochOf`.
+ *
+ * THE FLOOR OVERRIDE (`ENGINE_EPOCH_FLOOR_OVERRIDE`, engine-split spec §5.6, `engine-epoch-override.ts`): a default-off emergency lever that
+ * LOWERS the floor for the sports it names, `min(foldEpochOf(sport), override)`, never raises it. A write admitted ONLY because of it
+ * (below the sport's own epoch, at or above the lowered floor) logs `ENGINE_EPOCH_FLOOR_OVERRIDDEN`, one line per admitted write. A
+ * refusal under an override reports the EFFECTIVE floor as `required` (what the client must reach to be admitted), and the lockout
+ * line adds `declared`, the sport's own epoch. The replay lookup below is untouched: it still runs before any refusal.
  */
 async function assertEngineEpoch(
   auth: AuthCtx,
@@ -686,8 +693,19 @@ async function assertEngineEpoch(
   idempotencyKey: string | undefined,
 ): Promise<ScoreOutcome | null> {
   const sportKey = resolveModule(sport.key, sport.moduleVersion).key;
-  const required = foldEpochOf(sportKey);
-  if (got >= required) return null;
+  const declared = foldEpochOf(sportKey);
+  const verdict = judgeEngineEpoch(got, declared, epochFloorOverride().get(sportKey));
+  if (verdict.admitted) {
+    if (verdict.viaOverride) {
+      // Ops visibility for the lever: this write is in the ledger only because the floor was lowered by hand. One line per write.
+      log.warn(
+        { code: "ENGINE_EPOCH_FLOOR_OVERRIDDEN", sport: sportKey, floor: verdict.floor, required: declared, got, via: auth.via, deviceLinkId: auth.deviceLinkId ?? null, fixtureId },
+        "scoring: ENGINE_EPOCH_FLOOR_OVERRIDDEN — a write was admitted below the server's fold epoch by ENGINE_EPOCH_FLOOR_OVERRIDE",
+      );
+    }
+    return null;
+  }
+  const required = verdict.floor;
   if (idempotencyKey) {
     const replayed = await replayOutcomeFor(auth.orgId, fixtureId, idempotencyKey);
     if (replayed) return replayed;
@@ -695,7 +713,17 @@ async function assertEngineEpoch(
   // Ops visibility (review 1f F5): a refusal is a scorer locked out of a match, and the v1 kernel logs only 5xx. One structured
   // line per 426 — ids and numbers only, no names or tokens; requestId / orgId / userId arrive through the logger's mixin.
   log.warn(
-    { code: "ENGINE_OUTDATED", sport: sportKey, required, got, via: auth.via, deviceLinkId: auth.deviceLinkId ?? null, fixtureId },
+    {
+      code: "ENGINE_OUTDATED",
+      sport: sportKey,
+      required,
+      // Only under an override: the sport's own epoch, so a lockout line shows both numbers. Absent otherwise (the line is unchanged).
+      ...(required === declared ? {} : { declared }),
+      got,
+      via: auth.via,
+      deviceLinkId: auth.deviceLinkId ?? null,
+      fixtureId,
+    },
     "scoring: ENGINE_OUTDATED — a client's fold epoch is behind the server's",
   );
   throw new HttpError(
