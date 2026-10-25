@@ -33,6 +33,10 @@ until the first bump. Test the 426 path with a faked epoch, as the server's own 
 | **higher** | | **accepted** — a phone ahead of the server is a supported state ("we maintain 2-3 backward version support with release discipline") |
 | **lower** | | **refused 426, no grace window** |
 
+The server may TEMPORARILY lower one sport's floor by hand (`ENGINE_EPOCH_FLOOR_OVERRIDE`, an emergency lever the operators hold, default
+off): then a "lower" phone at or above that lowered floor is accepted, a phone below it still gets the 426, and its `required` is the
+lowered floor. The rule above otherwise stands: do not build on the lever, and expect it to be withdrawn once phones have updated.
+
 **The refusal.** HTTP `426`, body
 
 ```json

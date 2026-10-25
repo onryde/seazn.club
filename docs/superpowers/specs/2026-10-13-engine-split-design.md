@@ -11,8 +11,9 @@ FOLD_EPOCH/FOLD_MINOR split (#963, D34) and the release-time epoch report
 (#964, warn-only). GF-2 (corpus format 3: kernel overlay, effective results and
 player stats recorded and guarded) is this spec's last Phase 1 follow-up
 (`engine-split/gf2-kernel-overlay-design.md`). Phase 2a and 2b wait on the
-owner's go-ahead. Owed before the first capture app release to real scorers:
-a default-off per-sport epoch floor override, logged at boot.
+owner's go-ahead. The per-sport epoch floor override owed before the first
+capture app release to real scorers is delivered (`ENGINE_EPOCH_FLOOR_OVERRIDE`,
+default off, logged at boot; §5.6).
 
 **Inputs.** Brief: `.superpowers/handoff/2026-10-08-w1d-close/engine-split-prompt.md`.
 Fact check: `engine-split-facts.md` beside it (36 claims against `origin/main`
@@ -300,6 +301,23 @@ at 2b.
   in progress** does when the epoch moves (finish under the old rules, or stop
   and ask for an update).
 - This PR does not block 2a or 2b; it must land before capture S2 ships.
+
+**Delivered after 1f: the per-sport floor override (the emergency lever; owner ruling 2026-10-15, review 1f lens 3).** After a bump
+reaches prod, every capture app on the old epoch is locked out of that sport until it updates, and the only way back used to be a
+Fly rollback. `ENGINE_EPOCH_FLOOR_OVERRIDE=football=2,hockey=1` (a Fly secret; a restart applies it) LOWERS the floor for the
+sports it names: the gate compares against `min(foldEpochOf(sport), override)`, so it can never raise one.
+`apps/web/src/server/usecases/engine-epoch-override.ts` owns it.
+- **Default off.** Unset or blank changes nothing. Production use is the point (it is not a local/ci-only `tunable()`).
+- **Fails closed.** An unknown sport (checked against the `FOLD_EPOCH` keys), an epoch that is not an integer >= 1, a duplicate sport,
+  an empty pair or a pair with no `=` THROWS at boot (`instrumentation.ts`, beside `relayDriverMode()`: the process stays up and
+  answers 500 until it is fixed) and at the gate. A typo never becomes "no override", nor a wrong floor.
+- **Loud.** Boot logs `ENGINE_EPOCH_FLOOR_OVERRIDE_ACTIVE { sport, floor, required }` once per sport. An entry at or above the sport's
+  own epoch is inert: boot logs `ENGINE_EPOCH_FLOOR_OVERRIDE_INERT` and does NOT throw, so a stale entry left behind by a later bump
+  cannot take prod down. Every write admitted ONLY because of the lever logs `ENGINE_EPOCH_FLOOR_OVERRIDDEN
+  { sport, floor, required, got, via, deviceLinkId, fixtureId }`.
+- **Unchanged.** Absent `engine_epoch` is accepted (D31), ahead is accepted, a keyed retry replays before any refusal, and
+  authorisation / entitlement / phase refusals still outrank the gate. The 426 code and shape are the same; under an override
+  `required` reports the EFFECTIVE (lowered) floor, the number the client must reach, and the lockout log adds `declared`.
 
 ## 6. Phase 2a — placement repo (rehearsal; D13, D22, D27)
 
