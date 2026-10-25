@@ -998,7 +998,7 @@ export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> 
   /** W2d (spec §5.4, §5.10; PS-7c) — the sport's official tie-break order (doc 05 §4) for a TABLE stage of `kind`, under
    *  `cfg`: the stage's merged cfg (division ⊕ stage.rules) as the sport's schema parses it. Asked by the one resolver,
    *  `resolveTableRules` (competition/table-rules.ts), and only when neither the stage nor its division sets an order.
-   *  A fresh list the caller owns. Until Task 11 every sport answers its pre-W2d list for every kind and reads no cfg. */
+   *  A fresh list the caller owns. From Task 11 a Swiss stage keeps its pre-W2d order (OC1); football reads `cfg` (PS-7c). */
   defaultTiebreakers(kind: TableStageKind, cfg: Cfg): TiebreakerKey[];
   /** W2d (spec §5.10; FB-TB-2, HK-PT-2, BG-PT-1) — the named points rules and tie-break orders a TABLE stage of
    *  `stageKind` may pick instead of the sport's default (the stage editor's preset menu). Fresh arrays the caller owns.

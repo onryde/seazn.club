@@ -244,4 +244,39 @@ describe("W2d T11 — the table-measure check reads each sport's primary (every 
       expect(() => assertDivisionInvariants(sim, module, league.cfg), real.key).toThrow(/winsCount "regulation"/);
     }
   }, 120_000);
+
+  // review m7: the sim used to STRIP a Swiss-ledger key from a non-Swiss default, a branch no signed default reaches. It
+  // now refuses by name (validateCascade rule 3: the Buchholz pair needs the assembled Swiss ledger), reached here by
+  // planting `buchholz` in every sport's round-robin default; the same plant in a Swiss-only position is not refused.
+  it("refuses a round-robin default that ranks on the Swiss ledger (every sport), and leaves a Swiss stage's Buchholz alone", () => {
+    const plant = (real: AnySportModule): AnySportModule => ({
+      ...real,
+      defaultTiebreakers: (kind, cfg) => {
+        const order = real.defaultTiebreakers(kind, cfg);
+        return kind === "swiss" ? order : [...order.slice(0, -1), "buchholz", ...order.slice(-1)];
+      },
+    });
+    let refused = 0;
+    for (const real of builtinModules) {
+      const league = simOptionsFor(real, "league", 3);
+      expect(() => simulateDivision({ ...league, module: plant(real), entrantCount: 6 }), real.key).toThrow(
+        new RegExp(`${real.key}'s league default ranks on the Swiss ledger \\(buchholz\\)`),
+      );
+      refused++;
+    }
+    expect(refused, "every registered sport").toBe(builtinModules.length);
+    // The positive pair: a sport whose own Swiss default ranks on Buchholz still simulates its Swiss stage (the plant
+    // leaves the Swiss order alone), so the refusal reads the stage kind and not the key alone.
+    let swissRuns = 0;
+    for (const real of builtinModules) {
+      const swissOrder = real.defaultTiebreakers("swiss", real.configSchema.parse(SIM_CONFIGS[real.key] ?? {}));
+      if (!swissOrder.some((key) => key === "buchholz" || key === "buchholz_cut1")) continue;
+      const swiss = simOptionsFor(real, "swiss_knockout", 3);
+      const sim = simulateDivision({ ...swiss, module: plant(real), entrantCount: 8 });
+      expect(sim.stages[0]?.kind, `${real.key}: premise — a swiss stage`).toBe("swiss");
+      expect(sim.stages[0]?.cascade, `${real.key}: the Swiss default, unstripped`).toEqual(swissOrder);
+      swissRuns++;
+    }
+    expect(swissRuns, "sports whose Swiss default ranks on Buchholz").toBeGreaterThan(0);
+  }, 120_000);
 });

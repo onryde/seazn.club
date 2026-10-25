@@ -58,7 +58,7 @@ const SWISS: Readonly<Record<string, Order>> = {
 };
 
 // SPEC §5.10's stage presets, by sport: football's named orders (`uefa` = fifa2026 with `h2h_reapply` after the block;
-// `classic` = `football.ts:1769-1775`'s pre-2026 World Cup order), hockey's FIH Pro League points (HK-PT-2: a drawn
+// `classic` = `FOOTBALL_TIEBREAKERS.classic`, the pre-2026 World Cup order), hockey's FIH Pro League points (HK-PT-2: a drawn
 // match goes to a shoot-out booked D 1 each, its winner +1, so 2/1; regulation W 3, L 0 — B2), chess's FIDE 1/½/0 in
 // half-points and the 3/1/0 "football scoring" some opens use (BG-PT-1, RB2B-18), never on a Swiss stage. No other
 // sport declares a preset.
@@ -270,16 +270,25 @@ describe("W2d T11 — the stage presets (spec §5.10; tablePresets)", () => {
     expect(declaring, "sport × kind cells that declare a preset").toBe(3 * TABLE_KINDS.length);
   });
 
-  it("BG-PT-1 chess's 3/1/0 preset is a round-robin preset only: absent on swiss, present on every other table kind", () => {
-    let checked = 0;
+  it("BG-PT-1 chess's 3/1/0 preset is a round-robin preset only: absent on swiss, present on every other table kind, and no other sport offers it", () => {
+    // SPEC §5.10 chess / boardgame: "Preset 3/1/0 on non-Swiss stages".
+    let present = 0;
+    let absent = 0;
     forEachSport(({ module }) => {
       for (const kind of TABLE_KINDS) {
         const ids = (module.tablePresets?.(kind)?.points ?? []).map((p) => p.id);
-        if (kind === "swiss") expect(ids, `${module.key} swiss`).not.toContain("three_one_zero");
-        checked++;
+        if (module.key === "boardgame" && kind !== "swiss") {
+          expect(ids, `${module.key} ${kind}`).toContain("three_one_zero");
+          present++;
+        } else {
+          expect(ids, `${module.key} ${kind}`).not.toContain("three_one_zero");
+          absent++;
+        }
       }
     });
-    expect(checked).toBe(Object.keys(SIGNED).length * TABLE_KINDS.length);
+    expect(present, "boardgame's non-swiss table kinds").toBe(TABLE_KINDS.filter((k) => k !== "swiss").length);
+    expect(present).toBeGreaterThan(0);
+    expect(present + absent).toBe(Object.keys(SIGNED).length * TABLE_KINDS.length);
   });
 
   it("FB-TB-4 a football preset under a division that does not track fair play is refused at its fair_play step only — the editor must drop that step (the preset list takes no cfg)", () => {

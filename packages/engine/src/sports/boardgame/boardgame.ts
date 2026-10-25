@@ -1074,9 +1074,9 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
   },
 
   metrics: [
-    // doc 09 §2: chess shows Score, Buchholz Cut-1, SB (cascade-derived
-    // columns, engine competition/display.ts) — colour tallies are pairing
-    // metadata, not table columns.
+    // The table's columns derive from the stage's cascade (competition/display.ts): a Swiss shows Score, Buchholz Cut-1,
+    // SB; a round robin shows no Buchholz (C.07 Art. 8 note, BG-TB-2) — colour tallies
+    // are pairing metadata, not table columns.
     { key: "wins", label: "Wins", direction: "desc" },
     { key: "white", label: "Games as White", direction: "desc", display: false },
     { key: "black", label: "Games as Black", direction: "desc", display: false },

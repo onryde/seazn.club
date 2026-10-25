@@ -17,6 +17,7 @@ import {
   type TableFixture,
   type TableStage,
 } from "../competition/stage.ts";
+import { validateCascade } from "../competition/cascade-rules.ts";
 import { resolveTableRules, type TableRules } from "../competition/table-rules.ts";
 import type { MembersKey, StoredLotsDraw } from "../competition/tiebreakers.ts";
 import {
@@ -228,27 +229,28 @@ export function drawEntrantCount(seed: number): number {
   return Math.min(64, 2 + Math.floor(rng() * rng() * 63));
 }
 
-// W2d T11: only the Buchholz pair is Swiss-only (validateCascade rule 3). Sonneborn-Berger and the direct encounter
-// rank a round robin from its own pool ledger (W2d §5.6, B5) — chess's signed round-robin order (BG-TB-1) holds both, so
-// stripping them would simulate an order the product never ranks by.
-const SWISS_ONLY_KEYS: ReadonlySet<TiebreakerKey> = new Set([
-  "buchholz",
-  "buchholz_cut1",
-]);
-
 // The stage's table rules through the product's one resolver (W2d spec §5.4, §6 E6): the sport's points under the run's
-// cfg, and the sport's default order for the stage kind — minus the Swiss-ledger keys outside a swiss stage (they need
-// the assembled Swiss ledger, spec 05 §4.1). Where that strip removes a step, the stage sets the rest as its own order; where it
-// removes none, the stage inherits the sport's. No division order, no pin: a simulated stage is never pinned.
+// cfg, and the sport's default order for the stage kind, inherited as it ships. No division order, no pin: a simulated
+// stage is never pinned. W2d T11 (review m7): a default that ranks on the Swiss ledger outside a Swiss stage (validateCascade
+// rule 3: the Buchholz pair; Sonneborn-Berger and the direct encounter read the pool's own ledger, §5.6, B5) is an order
+// the product refuses, so the sim refuses it by name rather than stripping it into one it would rank by. No signed default
+// holds one (defaults-sweep.test.ts); simulation.test.ts reaches the refusal with a planted key in every sport.
 function stageRules(ctx: SimContext, kind: TableStageKind): TableRules {
   const order = ctx.module.defaultTiebreakers(kind, ctx.cfg);
-  const swiss = kind === "swiss";
-  const kept = order.filter((key) => swiss || !SWISS_ONLY_KEYS.has(key));
+  const swissLedger = validateCascade(order, { module: ctx.module, cfg: ctx.cfg, stageKind: kind, crossGroup: false }).filter(
+    (refusal) => refusal.reason === "stage_format",
+  );
+  if (swissLedger.length > 0) {
+    throw new SimInvariantError(
+      `${ctx.module.key}'s ${kind} default ranks on the Swiss ledger (${swissLedger.map((r) => r.key).join(", ")}), which only a swiss stage assembles (validateCascade rule 3)`,
+      { order },
+    );
+  }
   return resolveTableRules({
     module: ctx.module,
     stageKind: kind,
     mergedCfg: ctx.cfg,
-    stageOwn: { points: null, tiebreakers: kept.length === order.length ? null : kept, crossGroup: null },
+    stageOwn: { points: null, tiebreakers: null, crossGroup: null },
     divisionTiebreakers: null,
     pinned: null,
   });

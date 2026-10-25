@@ -317,8 +317,8 @@
  {
   "id": "t11-sim-strips-direct",
   "file": "packages/engine/src/testkit/simulation.ts",
-  "find": "const SWISS_ONLY_KEYS: ReadonlySet<TiebreakerKey> = new Set([",
-  "replace": "const SWISS_ONLY_KEYS: ReadonlySet<TiebreakerKey> = new Set([\"direct\", ",
+  "find": "stageOwn: { points: null, tiebreakers: null, crossGroup: null },",
+  "replace": "stageOwn: { points: null, tiebreakers: order.filter((key) => key !== \"direct\"), crossGroup: null },",
   "killers": [
    {
     "cwd": "packages/engine",
@@ -356,6 +356,51 @@
      "src/competition/tables-rulebook.test.ts"
     ],
     "name": "TN-TB-2 a won match tie-break counts"
+   }
+  ]
+ },
+ {
+  "id": "t11-mtb-home-biased",
+  "file": "packages/engine/src/sports/nested/kernel.ts",
+  "find": "(set.mtb === true ? (set[s] > set[opponent(s)] ? 1 : 0) : set[s])",
+  "replace": "(set.mtb === true ? (s === \"home\" ? 1 : 0) : set[s])",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tables-rulebook.test.ts"
+    ],
+    "name": "TN-TB-2 an away pair"
+   }
+  ]
+ },
+ {
+  "id": "t11-sim-swiss-ledger-guard-off",
+  "file": "packages/engine/src/testkit/simulation.ts",
+  "find": "  if (swissLedger.length > 0) {",
+  "replace": "  if (false) {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/testkit/simulation.test.ts"
+    ],
+    "name": "refuses a round-robin default that ranks on the Swiss ledger"
+   }
+  ]
+ },
+ {
+  "id": "t11-sim-swiss-ledger-kind-blind",
+  "file": "packages/engine/src/testkit/simulation.ts",
+  "find": "stageKind: kind, crossGroup: false })",
+  "replace": "stageKind: \"league\", crossGroup: false })",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/testkit/simulation.test.ts"
+    ],
+    "name": "refuses a round-robin default that ranks on the Swiss ledger"
    }
   ]
  }

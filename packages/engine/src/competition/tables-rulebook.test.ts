@@ -915,6 +915,27 @@ const BOOK: Readonly<Record<string, Book>> = {
           expect([home.entrantId, away.entrantId]).toEqual([H, A]);
         },
       },
+      {
+        // The mirror: a side-blind credit (the game always to home, or to whichever side is asked first) passes the case above.
+        title: "TN-TB-2 an away pair's won match tie-break is its one game, never the home pair's (ATP 4.02, RB2A-11)",
+        run: (module) => {
+          const cfg = cfgOf(module, "doubles-noad-mtb10");
+          const lineups = defaultLineupPair(module.positions);
+          const [H, A] = [lineups.home.entrantId, lineups.away.entrantId];
+          const summary = (home: number, away: number) => ({ type: "tennis.set_summary", payload: { home, away } });
+          // 3-6, 6-4, then the match tie-break 6-10 to the away pair.
+          const events = [{ type: "core.start", payload: {} }, summary(3, 6), summary(6, 4), summary(6, 10)].map((e, i) => makeEnvelope(i, e));
+          const state = foldMatch(module, cfg, lineups, events, { strictFromSeq: 0 });
+          const outcome = module.outcome(state);
+          expect(outcome).toMatchObject({ kind: "win", winner: A });
+          if (outcome === null) throw new Error("the match decided nothing");
+          const [home, away] = module.standingsDelta(outcome, cfg, { kind: "league" }, state);
+          // Sets 1-2; games 3 + 6 = 9 against 6 + 4 + 1 = 11 (the tie-break's points are no games).
+          expect([home.metrics["sets_won"], home.metrics["sets_lost"], home.metrics["games_won"], home.metrics["games_lost"]]).toEqual([1, 2, 9, 11]);
+          expect([away.metrics["sets_won"], away.metrics["sets_lost"], away.metrics["games_won"], away.metrics["games_lost"]]).toEqual([2, 1, 11, 9]);
+          expect([home.entrantId, away.entrantId]).toEqual([H, A]);
+        },
+      },
     ],
   },
 
@@ -969,7 +990,7 @@ const BOOK: Readonly<Record<string, Book>> = {
     old: ["points", "diff", "for", "h2h_points", "lots"],
     cases: [
       {
-        title: "GN-TB-1 level on points: score difference (RB2B-27, the product order)",
+        title: "GN-TB-1 level on points: score difference (RBG:650, the product order)",
         cfg: "score",
         // A 3-0 C, B 2-1 D: A +3, B +1; D −1, C −3.
         matches: [match("A", "C", "h", genericScore(3, 0), w3("h")), match("B", "D", "h", genericScore(2, 1), w3("h"))],
@@ -977,7 +998,7 @@ const BOOK: Readonly<Record<string, Book>> = {
         splits: { A: "diff", B: "diff", D: "diff", C: "diff" },
       },
       {
-        title: "GN-TB-1 level on points and difference: score for (RB2B-27)",
+        title: "GN-TB-1 level on points and difference: score for (RBG:650)",
         cfg: "score",
         // B 3-1 C, A 2-0 D: +2 each; for B 3, A 2. C, D −2; for C 1, D 0.
         matches: [match("B", "C", "h", genericScore(3, 1), w3("h")), match("A", "D", "h", genericScore(2, 0), w3("h"))],
@@ -985,7 +1006,7 @@ const BOOK: Readonly<Record<string, Book>> = {
         splits: { B: "for", A: "for", C: "for", D: "for" },
       },
       {
-        title: "GN-TB-1 level on points, difference and for: head-to-head; level throughout: lots (RB2B-27)",
+        title: "GN-TB-1 level on points, difference and for: head-to-head; level throughout: lots (RBG:650)",
         cfg: "score",
         // A 1-0 B, B 1-0 C, D 1-0 A, E 1-1 F. D 3 (+1); A, B 3 (0, for 1) → A beat B. E, F → the stored draw F, E.
         matches: [

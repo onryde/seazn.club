@@ -217,7 +217,7 @@ export const hockey = makePeriodModule({
     { key: "cards_red", label: "Red cards", direction: "asc", display: false },
     // Set-piece conversion, DISPLAY ONLY. Declared so `validateCascade` can see
     // the ledgers a future ratio comparator would need; no federation ranks on
-    // conversion (FIH is points → GD → GF → H2H), so nothing consults them for
+    // conversion (FIH App. 3 is points, wins, GD, GF, H2H, field goals), so nothing consults them for
     // ORDER today, and `display: false` keeps them out of the standings table.
     { key: "sp_pc_awarded", label: "PC awarded", direction: "desc", display: false },
     { key: "sp_pc_scored", label: "PC scored", direction: "desc", display: false },
