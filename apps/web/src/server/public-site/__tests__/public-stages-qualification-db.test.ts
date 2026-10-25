@@ -394,7 +394,7 @@ describe.skipIf(!HAS_DB)("public_stages_v — qualification columns (V414)", () 
   // W2d V472: the function rebuilds `points_rule` from BOTH stored shapes. Each rule is written by raw SQL — the stage
   // door is not under test here (Task 10 owns it), the rebuild is — so every key the outcome-keyed PointsRule reads
   // is asked at once, with junk beside it at every level.
-  it("W2d V472: every key the outcome-keyed rule reads is published (ot, so, unplayed, soBonus, tie, noResult, a set map), junk is not, and a legacy `base` row still is", async () => {
+  it("W2d V472: every key the outcome-keyed rule reads is published (ot, so, unplayed, soBonus, tie, noResult, a set map), junk is not, and a legacy `base` is not any more (W2d Task 9 retired it with the engine's read)", async () => {
     const d = await division();
     const result = {
       win: { regulation: 3, ot: 2, so: 1.5 },
@@ -425,9 +425,12 @@ describe.skipIf(!HAS_DB)("public_stages_v — qualification columns (V414)", () 
     }
     expect(checked).toBe(3);
     const published = (await view(d.divisionId)).map((r) => r.points_rule);
-    expect(published).toEqual(rules);
-    // and each published rule reads back, through the engine's own stored-rule read, as the rule that was saved
+    // The legacy row keeps only the keys the outcome-keyed rule reads: its bonuses, never its `base`.
+    expect(published).toEqual([result, dpb, { bonuses: [] }]);
+    // and each published rule reads back, through the engine's own stored-rule read, as the rule that was saved — the
+    // legacy one as no rule on both sides (no stored row holds the shape after the migration, Task 7)
     for (const [i, rule] of rules.entries()) expect(parseStoredPointsRule(published[i]), `L${i + 1}`).toEqual(parseStoredPointsRule(rule));
+    expect(parseStoredPointsRule(legacy), "premise: the engine reads the legacy shape as no rule").toBeNull();
     expect(parseStoredPointsRule(published[0])?.bySetScore, "premise: the set map survives the read").toEqual(result.bySetScore);
   });
 

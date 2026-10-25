@@ -526,20 +526,28 @@ export function legacyPointsRule(old: {
   });
 }
 
-/** The W2c shape, as W2c's `PointsRule` read it (non-strict, bonuses default []): read only by `parseStoredPointsRule`. */
+/** The W2c shape, as W2c's `PointsRule` read it (non-strict, bonuses default []): read only by `parseLegacyPointsRule`. */
 const LegacyPointsRule = z.object({
   base: z.object({ win: z.number(), draw: z.number(), loss: z.number() }),
   bonuses: z.array(Bonus).default([]),
   forfeit: ForfeitRow.optional(),
 });
 
-/** Reads a stored `config.points`: the new shape, or (until Task 9 deletes this branch) the old shape via
- *  `legacyPointsRule`; else null. Never throws: a fold and a table read it. */
-export function parseStoredPointsRule(raw: unknown): PointsRule | null {
-  const now = PointsRule.safeParse(raw);
-  if (now.success) return now.data;
+/** B1's authority, and nothing else's: a stored W2c `{base, bonuses, forfeit}` rule exactly as W2c's reader took it,
+ *  converted through `legacyPointsRule`; else null. The W2d migration's SQL twin (`w2d_legacy_points`) is held to it.
+ *  NO read path calls it: the migration converts every stored row (W2d Task 7), and `parseStoredPointsRule` reads the
+ *  outcome-keyed shape alone (Task 9, PS-9f). */
+export function parseLegacyPointsRule(raw: unknown): PointsRule | null {
   const old = LegacyPointsRule.safeParse(raw);
   return old.success ? legacyPointsRule(old.data) : null;
+}
+
+/** Reads a stored `config.points` in the outcome-keyed shape; else null. Never throws: a fold and a table read it. The
+ *  W2c shape is not read here any more (W2d Task 9): every stored row was converted by the W2d migration (Task 7), so an
+ *  old-shape value is a rule nobody wrote since, read as none — as any value neither shape takes always was. */
+export function parseStoredPointsRule(raw: unknown): PointsRule | null {
+  const now = PointsRule.safeParse(raw);
+  return now.success ? now.data : null;
 }
 
 

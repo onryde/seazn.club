@@ -38,6 +38,7 @@ import {
   forfeitAwardOffer,
   legacyPointsRule,
   levelOutcomeKey,
+  parseLegacyPointsRule,
   parseStoredPointsRule,
   payout,
   pointsRuleBounds,
@@ -869,19 +870,24 @@ describe("pointsRuleBounds, legacyPointsRule, parseStoredPointsRule", () => {
     expect(old).toStrictEqual(PointsRule.parse({ win: { regulation: 3 }, loss: { regulation: 0 }, draw: 1, tie: 0, noResult: 0, shootoutAs: "result", unit: "whole" }));
   });
 
-  it("parseStoredPointsRule reads the new shape, the old shape through legacyPointsRule, and nothing else (null, never a throw)", () => {
+  it("PS-9f parseStoredPointsRule reads the outcome-keyed shape and nothing else — the W2c `base` shape is null now (the W2d migration converted every row), never a throw", () => {
     const now = { win: { regulation: 3 }, loss: { regulation: 0 }, draw: 1, shootoutAs: "draw_plus_bonus", unit: "whole", bonuses: [] };
     expect(parseStoredPointsRule(now)).toEqual(PointsRule.parse(now));
-    expect(parseStoredPointsRule({ base: { win: 2, draw: 1, loss: 0 } })).toEqual(legacyPointsRule({ base: { win: 2, draw: 1, loss: 0 } }));
+    // The old shape: the W2c reader (B1's authority) still converts it — and the stored-rule reader no longer does.
+    const old = { base: { win: 2, draw: 1, loss: 0 } };
+    expect(parseLegacyPointsRule(old), "premise: a rule W2c read").toEqual(legacyPointsRule(old));
+    expect(parseStoredPointsRule(old)).toBeNull();
+    expect(parseStoredPointsRule({ ...old, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0 } })).toBeNull();
     let checked = 0;
     for (const junk of [null, undefined, 3, "x", [], {}, { base: { win: "3" } }, { win: 3 }, { base: { win: 2, draw: 1, loss: 0 }, bonuses: [{ when: "nope", points: 1 }] }]) {
       expect(parseStoredPointsRule(junk), JSON.stringify(junk)).toBeNull();
+      expect(parseLegacyPointsRule(junk), JSON.stringify(junk)).toBeNull();
       checked++;
     }
     expect(checked).toBe(9);
   });
 
-  it("forfeitAwardOffer gives the identical ForfeitAward for every rule expressible before W2d (the W2c reading as the oracle, every sport, counted)", () => {
+  it("forfeitAwardOffer gives the identical ForfeitAward for every rule expressible before W2d, read as the W2d migration converts it (parseLegacyPointsRule; the W2c reading as the oracle, every sport, counted)", () => {
     // The W2c pipeline, frozen as the oracle: fixture-cfg.ts read the stored rule with W2c's own schema (`safeParse`)
     // and offered `forfeit.awardScore` (winner first) only where the module declares `awardScoreKeys`.
     const W2C = z.object({
@@ -909,7 +915,7 @@ describe("pointsRuleBounds, legacyPointsRule, parseStoredPointsRule", () => {
     expect(
       forEachSport(({ module }) => {
         for (const raw of stored) {
-          const now = forfeitAwardOffer(parseStoredPointsRule(raw), module);
+          const now = forfeitAwardOffer(parseLegacyPointsRule(raw), module);
           expect(now, `${module.key} ${JSON.stringify(raw)}`).toEqual(w2cOffer(raw, module));
           if (now !== undefined) offered++;
           checked++;

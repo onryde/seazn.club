@@ -18,7 +18,8 @@
 -- 5. `stage_qualification_meta` (W2d Task 2; PF-3) and `public_stages_v`: `points_rule` stays the stage's OWN rule (the
 --    format line prints it as the stage's own points), and a new trailing `table_points_rule` is the rule the TABLE is
 --    paid by — the pin's points where the stage is pinned, else its own rule — which qualification reads for its bounds.
--- 6. The data steps, in ONE block: pin first, then convert the old-shape stage rules, then the division configs.
+-- 6. The data steps, in ONE block: pin first, then convert the old-shape stage rules, then the division configs and the
+--    organisations' own sport variants (W2d Task 9, T7 review m10: a variant's cfg seeds a new division's).
 -- 7. The `w2d_*` helpers are DROPPED: after this release the start path is the only pin writer, and a manual call of the
 --    pin would pin a stage with PRE-W2d payers.
 --
@@ -504,8 +505,8 @@ end $$;
 -- A new OUT column changes the function's row type, which `create or replace` cannot do, and the view depends on the
 -- function: both are dropped and re-created here, the view with V414's columns in V414's order and the new one LAST.
 --
--- The published shape, for both: the legacy `base` (step 6 converts every stored one; the engine still reads the shape
--- until W2d Task 9 drops it, and the two retire together) and every key the outcome-keyed PointsRule reads. The same
+-- The published shape, for both: every key the outcome-keyed PointsRule reads. The W2c `base` is not published: step 6
+-- converts every stored one, and the engine no longer reads the shape (W2d Task 9 retired the two together). The same
 -- rule as V414 holds at every level: only the keys PointsRule reads, never an organiser's stray keys (PointsRule is a
 -- non-strict z.object, and createStages stores the raw config); a key that is absent stays absent (jsonb_strip_nulls); a
 -- `bySetScore` key is kept only when it is a set score ("W-L") or "*", the grammar PointsRule accepts. The values
@@ -516,11 +517,6 @@ returns jsonb
   set search_path = ${flyway:defaultSchema}, pg_temp as $$
   select
     case when jsonb_typeof(p) = 'object' then jsonb_strip_nulls(jsonb_build_object(
-      -- the W2c shape (no stored row after step 6; retired with the engine's legacy read, W2d Task 9)
-      'base', case when jsonb_typeof(p -> 'base') = 'object' then jsonb_build_object(
-                'win',  p #> '{base,win}',
-                'draw', p #> '{base,draw}',
-                'loss', p #> '{base,loss}') end,
       -- the W2d outcome-keyed shape (engine competition/points.ts PointsRule, spec §5.3)
       'win', case when jsonb_typeof(p -> 'win') = 'object' then jsonb_build_object(
                 'regulation', p #> '{win,regulation}',
@@ -670,13 +666,17 @@ grant select on public_stages_v to app_user;
 -- 1. Pin every started stage (before step 3 removes the shoot-out split the pin reads), then hold the invariant the W2d
 --    resolver throws on: no stage is active or complete without a pin. 2. Convert every old-shape stage rule, whatever
 --    the stage's status (a pending stage keeps it as its own rule; new defaults still reach it). 3. Move the football,
---    hockey and ice hockey division configs off the shoot-out split.
+--    hockey and ice hockey division configs off the shoot-out split. 4. The same for an organisation's own sport variant
+--    (W2d Task 9, T7 review m10): its cfg is copied into every division created from it, so a split left there would
+--    seed a division config the W2d schema no longer reads. The system presets (org_id null) are written by
+--    `sync:sports` from the code, which carries no split.
 do $$
 declare
   pinned integer;
   unpinned integer;
   stage_rules integer;
   division_cfgs integer;
+  variant_cfgs integer;
 begin
   pinned := w2d_pin_started_stages();
   select count(*) into unpinned from stages where status in ('active', 'complete') and table_rules_pinned is null;
@@ -696,8 +696,16 @@ begin
      and config -> 'points' ?| array['shootoutWin', 'shootoutLoss'];
   get diagnostics division_cfgs = row_count;
 
-  raise notice 'W2d B1: pinned % started stage(s); converted % old-shape stage rule(s) and % division config(s) off the shoot-out split',
-    pinned, stage_rules, division_cfgs;
+  update sport_variants
+     set config = w2d_drop_shootout_split(sport_key, config)
+   where org_id is not null
+     and sport_key in ('football', 'hockey', 'icehockey')
+     and jsonb_typeof(config -> 'points') = 'object'
+     and config -> 'points' ?| array['shootoutWin', 'shootoutLoss'];
+  get diagnostics variant_cfgs = row_count;
+
+  raise notice 'W2d B1: pinned % started stage(s); converted % old-shape stage rule(s), % division config(s) and % organisation sport variant(s) off the shoot-out split',
+    pinned, stage_rules, division_cfgs, variant_cfgs;
 end $$;
 
 -- ═══ 7. The B1 helpers go (they exist for the data steps above alone) ═══

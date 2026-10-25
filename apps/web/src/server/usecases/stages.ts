@@ -59,6 +59,7 @@ import { resolveModule } from "@/server/engine-db";
 // rather than re-deriving lane/thirdPlace from round/position (never
 // arithmetic — see parseExtKey's own comment).
 import { parseExtKey, bracketWinnerLoser, rankedStageStandings } from "@/server/engine-db/competition";
+import { pinStageTableRules } from "@/server/engine-db/table-rules";
 import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "@/server/engine-db/level-seat";
 import { killsLoserEdge, lockDivisionConfigShared, lockStageSeats } from "@/server/engine-db/fed-seats";
 import { hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
@@ -2984,6 +2985,8 @@ async function generateStageFixturesWrite(
 
     if (stage.status === "pending") {
       await tx`update stages set status = 'active' where id = ${stageId}`;
+      // W2d X-TB-2 (OC2): the table rules are fixed in the transaction that starts the stage.
+      await pinStageTableRules(tx, stageId);
     }
 
     const fixtureRows = await tx<Omit<FixtureRow, "court_name">[]>`
@@ -3820,6 +3823,8 @@ async function generateProgressionSetupFixtures(auth: AuthCtx, stageId: string):
 
     if (stage.status === "pending") {
       await tx`update stages set status = 'active' where id = ${stageId}`;
+      // W2d X-TB-2 (OC2): the table rules are fixed in the transaction that starts the stage.
+      await pinStageTableRules(tx, stageId);
     }
 
     const fixtureRows = await tx<Omit<FixtureRow, "court_name">[]>`

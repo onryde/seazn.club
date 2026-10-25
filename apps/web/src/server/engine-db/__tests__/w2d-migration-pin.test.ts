@@ -15,7 +15,7 @@ import { resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import postgres from "postgres";
 import { afterAll, describe, expect, it } from "vitest";
-import { PointsRule, parseStoredPointsRule } from "@seazn/engine/competition";
+import { PointsRule, parseLegacyPointsRule, parseStoredPointsRule } from "@seazn/engine/competition";
 import { builtinModules } from "@seazn/engine/sports";
 import { connectionOptions, type Tx } from "@/lib/db";
 import { rankedStageStandings } from "@/server/engine-db/competition";
@@ -132,12 +132,22 @@ const head = (sport: string) => {
   return m;
 };
 
-/** `stage`'s table under `rule`, ranked by TODAY's fold (`rankedStageStandings`) with the rule as the stage's own. */
+/** `stage`'s table under `rule`, ranked by TODAY's fold (`rankedStageStandings`) with the rule as the stage's own — and,
+ *  for a started stage, as its pin: since W2d Task 9 a started stage is paid by its pin alone (and one with none is
+ *  refused, CONFIG_INVALID), so the rule is written where today's read takes it. Only the points are compared. */
 async function pointsUnder(tx: Tx, stageId: string, rule: unknown): Promise<Record<string, number>> {
-  await tx`update stages set config = jsonb_set(coalesce(config, '{}'::jsonb), '{points}', ${tx.json(rule as never)}) where id = ${stageId}`;
+  const pin = { points: rule, tiebreakers: ["points"], crossGroup: ["points"], sources: { points: "stage", tiebreakers: "stage" } };
+  await tx`
+    update stages set config = jsonb_set(coalesce(config, '{}'::jsonb), '{points}', ${tx.json(rule as never)}),
+           table_rules_pinned = case when status in ('active', 'complete') then ${tx.json(pin as never)} else table_rules_pinned end,
+           table_rules_pinned_at = case when status in ('active', 'complete') then now() else table_rules_pinned_at end
+    where id = ${stageId}`;
   const rows = await rankedStageStandings(tx, stageId);
   return Object.fromEntries(rows.map((r) => [r.entrantId, r.points]));
 }
+/** The rule a stored `config.points` is after the migration: the outcome-keyed shape as it stands, the W2c shape as B1
+ *  converts it (`parseLegacyPointsRule`, the W2c reader — today's stored-rule read no longer takes that shape). */
+const afterMigration = (raw: unknown) => parseStoredPointsRule(raw) ?? parseLegacyPointsRule(raw);
 
 interface StageRow {
   id: string;
@@ -225,7 +235,7 @@ describe.skipIf(!HAS_DB)("W2d migration — B1 pin, stored lots table (V472)", (
       },
       { base: { win: 3, draw: 1, loss: 0 }, forfeit: { winnerPoints: 2, loserPoints: 0, awardScore: [3, 0] } },
     ];
-    // Shapes the W2c reader refused (parseStoredPointsRule: neither shape ⇒ null), so the SQL twin refuses them too.
+    // Shapes the W2c reader refused (parseLegacyPointsRule ⇒ null), so the SQL twin refuses them too.
     const refused: unknown[] = [
       { base: { win: "3", draw: 1, loss: 0 } },
       { base: { win: 3, draw: 1 } },
@@ -256,13 +266,13 @@ describe.skipIf(!HAS_DB)("W2d migration — B1 pin, stored lots table (V472)", (
     });
     let checked = 0;
     for (const [i, s] of samples.entries()) {
-      const authority = parseStoredPointsRule(s);
-      expect(authority, `premise: sample ${i} is a shape the engine reads`).not.toBeNull();
+      const authority = parseLegacyPointsRule(s);
+      expect(authority, `premise: sample ${i} is a shape the W2c reader reads`).not.toBeNull();
       expect(value.converted[i], `sample ${i}`).toEqual(authority);
       checked++;
     }
     for (const [i, s] of refused.entries()) {
-      expect(parseStoredPointsRule(s), `premise: refused sample ${i} is one the engine refuses`).toBeNull();
+      expect(parseLegacyPointsRule(s), `premise: refused sample ${i} is one the W2c reader refused`).toBeNull();
       expect(value.messages[i]).toMatch(/W2d/);
       checked++;
     }
@@ -399,7 +409,7 @@ describe.skipIf(!HAS_DB)("W2d migration — B1 pin, stored lots table (V472)", (
       }
       const own = ownPoints(s);
       expect(row.pin, `${s.family} (${s.status})`).toEqual({
-        points: own ? parseStoredPointsRule(own) : value.pre.get(s.stageId),
+        points: own ? afterMigration(own) : value.pre.get(s.stageId),
         tiebreakers: s.divisionTiebreakers ?? W2D_PIN_BEFORE.declarations[s.sport]!.defaultTiebreakers,
         crossGroup: PRE_W2D_CROSS_GROUP,
         sources: { points: "migrated", tiebreakers: "migrated" },
@@ -448,7 +458,7 @@ describe.skipIf(!HAS_DB)("W2d migration — B1 pin, stored lots table (V472)", (
     let checked = 0;
     // the pending legacy stage: converted, its own rule still, and not pinned
     expect(row(pendingLegacy).pin).toBeNull();
-    expect(row(pendingLegacy).config.points).toEqual(parseStoredPointsRule(ownPoints(pendingLegacy)));
+    expect(row(pendingLegacy).config.points).toEqual(parseLegacyPointsRule(ownPoints(pendingLegacy)));
     expect(withoutKeys(row(pendingLegacy).config, ["points"])).toEqual(withoutKeys(pendingLegacy.stageConfig as Record<string, unknown>, ["points"]));
     checked++;
     // a pending stage without a rule: untouched
@@ -456,7 +466,7 @@ describe.skipIf(!HAS_DB)("W2d migration — B1 pin, stored lots table (V472)", (
     expect(row(pendingPlain).config).toEqual(pendingPlain.stageConfig);
     checked++;
     // an active legacy stage: converted in place too, and pinned to the same converted rule
-    expect(row(activeLegacy).config.points).toEqual(parseStoredPointsRule(ownPoints(activeLegacy)));
+    expect(row(activeLegacy).config.points).toEqual(parseLegacyPointsRule(ownPoints(activeLegacy)));
     expect(row(activeLegacy).pin?.points).toEqual(row(activeLegacy).config.points);
     checked++;
     // no stage anywhere is left in the old shape
@@ -523,7 +533,46 @@ describe.skipIf(!HAS_DB)("W2d migration — B1 pin, stored lots table (V472)", (
     // a shoot-out win below the draw clamps to a 0 bonus, also said out loud
     expect(value.clamp).toEqual({ points: { win: 3, draw: 2, loss: 0, soBonus: 0 } });
     expect(value.notices.some((n) => n.includes("W2d shoot-out split (football)") && n.includes("below the draw"))).toBe(true);
-    expect(value.notices.some((n) => /converted 2 old-shape stage rule\(s\) and 6 division config\(s\)/.test(n))).toBe(true);
+    expect(value.notices.some((n) => /converted 2 old-shape stage rule\(s\), 6 division config\(s\) and 0 organisation sport variant\(s\)/.test(n))).toBe(true);
+  });
+
+  it("T7 m10: an organisation's own football/hockey sport variant loses the shoot-out split as its divisions do (soBonus = shootoutWin − draw); ice hockey drops the keys; a system preset and another sport are untouched (counted)", async () => {
+    // Expected from the B1 conversion's own rule (spec §5.3, PS-1): a draw-plus-bonus shoot-out pays its winner the draw
+    // plus `soBonus`, so the bonus is the split's win minus the draw; ice hockey books a shoot-out as a result (PS-1d).
+    const OLD = ["shootoutWin", "shootoutLoss"];
+    const football = { points: { win: 3, draw: 1, loss: 0, shootoutWin: 2, shootoutLoss: 1 }, shootout: true };
+    const hockey = { points: { win: 3, draw: 1, loss: 0, shootoutWin: 3, shootoutLoss: 1 } };
+    const icehockey = { points: { win: 3, otWin: 2, otLoss: 1, loss: 0, shootoutWin: 2, shootoutLoss: 1 } };
+    const cricket = { points: { win: 2, tie: 1, noResult: 1, loss: 0, shootoutWin: 9 } };
+    const variants = [
+      { sport: "football", key: "w2d-t9-fb", org: true, config: football, want: { ...football, points: { ...withoutKeys(football.points, OLD), soBonus: 1 } } },
+      { sport: "hockey", key: "w2d-t9-hk", org: true, config: hockey, want: { ...hockey, points: { ...withoutKeys(hockey.points, OLD), soBonus: 2 } } },
+      { sport: "icehockey", key: "w2d-t9-ih", org: true, config: icehockey, want: { points: withoutKeys(icehockey.points, OLD) } },
+      // another sport keeps whatever it holds; a system preset is the code's (`sync:sports`), never this step's
+      { sport: "cricket", key: "w2d-t9-ck", org: true, config: cricket, want: cricket },
+      { sport: "football", key: "w2d-t9-sys", org: false, config: football, want: football },
+    ];
+    const { value } = await rolledBack(async (tx, notices) => {
+      await install(tx);
+      await seedW2dPinScenario(tx);
+      for (const v of variants) {
+        await tx`insert into sport_variants (sport_key, key, name, config, is_system, org_id)
+                 values (${v.sport}, ${v.key}, ${v.key}, ${tx.json(v.config as never)}, ${!v.org}, ${v.org ? W2D_PIN_ORG_ID : null})`;
+      }
+      await asW2dPinTenant(tx);
+      await runSteps(tx);
+      await tx`reset role`;
+      const rows = await tx<{ key: string; config: Record<string, unknown> }[]>`
+        select key, config from sport_variants where key like 'w2d-t9-%'`;
+      return { rows: new Map(rows.map((r) => [r.key, r.config])), notices: [...notices] };
+    });
+    let checked = 0;
+    for (const v of variants) {
+      expect(value.rows.get(v.key), `${v.sport} ${v.org ? "org" : "system"} variant`).toEqual(v.want);
+      checked++;
+    }
+    expect(checked).toBe(variants.length);
+    expect(value.notices.some((n) => /and 3 organisation sport variant\(s\) off the shoot-out split/.test(n))).toBe(true);
   });
 
   it("PS-1d an ice hockey division cfg loses shootoutWin/shootoutLoss and keeps otWin/otLoss", async () => {
@@ -608,7 +657,7 @@ describe.skipIf(!HAS_DB)("W2d migration — B1 pin, stored lots table (V472)", (
     for (const [s, own, table] of [
       [pinnedSport, null, pinOf(pinnedSport)],
       [pinnedOwn, later, pinOf(pinnedOwn)],
-      [pendingOwn, parseStoredPointsRule(ownPoints(pendingOwn)), parseStoredPointsRule(ownPoints(pendingOwn))],
+      [pendingOwn, afterMigration(ownPoints(pendingOwn)), afterMigration(ownPoints(pendingOwn))],
       [pendingNone, null, null],
     ] as const) {
       const want = { points_rule: own, table_points_rule: table };
@@ -1003,5 +1052,69 @@ describe.skipIf(!HAS_DB)("W2d migration — B1 pin, stored lots table (V472)", (
     expect(value.theirs).toBe(0);
     expect(value.foreign).toMatch(/row-level security/);
     expect(value.left).toBe(0);
+  });
+
+  // ═══ §13.8 (W2d Task 9): the B1 pin is what today's table reads ═══
+  // Expected values are the recording's (`w2d-pin-before.json`: the tables a server built at W2D_BASE printed), never
+  // today's code: every started stage, pinned by the delta's own steps, ranks under TODAY's fold (`rankedStageStandings`,
+  // which reads the pin through `loadTableRules` and pays every fixture by it) into the very rows it held before W2d.
+  const tableOf = (rows: readonly { entrantId: string; points: number; played: number; won: number; drawn: number; lost: number }[]) =>
+    rows.map((r) => ({ entrantId: r.entrantId, points: r.points, played: r.played, won: r.won, drawn: r.drawn, lost: r.lost }));
+
+  it("B1 a started stage's table is IDENTICAL before and after the migration, row by row (order, points, W/D/L), for every stage in w2d-pin-before.json (counted)", async () => {
+    const { value } = await rolledBack(async (tx) => {
+      await seeded(tx);
+      await runSteps(tx);
+      const out: { s: W2dPinStage; rows: Awaited<ReturnType<typeof rankedStageStandings>> }[] = [];
+      for (const s of STARTED) out.push({ s, rows: await rankedStageStandings(tx, s.stageId) });
+      return out;
+    });
+    let checked = 0;
+    let rowsChecked = 0;
+    for (const { s, rows } of value) {
+      expect(s.table.length, `premise: ${s.family} (${s.status}) recorded a table`).toBeGreaterThan(0);
+      // the recorded rows in the recorded order (rank 1 first)
+      const recorded = [...s.table].sort((a, b) => a.rank - b.rank);
+      expect(tableOf(rows), `${s.family} (${s.status}, ${s.sport} ${s.kind})`).toEqual(tableOf(recorded));
+      checked++;
+      rowsChecked += rows.length;
+    }
+    expect(checked).toBe(STARTED.length);
+    expect(checked, "every started stage of the recording").toBeGreaterThan(20);
+    expect(rowsChecked).toBeGreaterThan(100);
+  });
+
+  it("B1 positive pair: the scenario's football shoot-out stage, were it NOT pinned, DOES take W2d's new rule — each shoot-out-decided fixture is booked as a draw for both plus the SO bonus to its winner (Task 3, B2), so its rows differ from the recording's (PS-2b)", async () => {
+    // The brief names the scenario's PENDING football stage; it holds no fixture (`football-pending`, 0 recorded), so the
+    // pair is drawn on the started shoot-out stage itself: pinned it reads the recording (above); un-pinned and pending it
+    // reads the live layers, which are W2d's. Expected from the recording plus B2's booking (spec §5.3: a draw-plus-bonus
+    // shoot-out books a draw for both and pays the winner `draw + soBonus`; the converted division pays `soBonus =
+    // shootoutWin − draw`), never from today's payout.
+    const so = stageOf("football-so");
+    const p = (so.divisionConfig as { points: Record<string, number> }).points;
+    const soBonus = p.shootoutWin! - p.draw!;
+    const shootouts = (so.fixtures as { status: string; outcome: { kind: string; method?: string; winner: string; loser: string } }[]).filter(
+      (f) => f.status === "decided" && f.outcome?.kind === "win" && f.outcome.method === "shootout",
+    );
+    expect(shootouts.length, "premise: the stage holds shoot-out-decided fixtures").toBeGreaterThan(1);
+    const { value } = await rolledBack(async (tx) => {
+      await seeded(tx);
+      await runSteps(tx);
+      const pinned = await rankedStageStandings(tx, so.stageId);
+      await tx`update stages set status = 'pending', table_rules_pinned = null, table_rules_pinned_at = null where id = ${so.stageId}`;
+      const live = await rankedStageStandings(tx, so.stageId);
+      return { pinned, live };
+    });
+    const want = new Map(so.table.map((r) => [r.entrantId, { ...r }]));
+    for (const f of shootouts) {
+      const w = want.get(f.outcome.winner)!;
+      const l = want.get(f.outcome.loser)!;
+      want.set(w.entrantId, { ...w, won: w.won - 1, drawn: w.drawn + 1, points: w.points - p.shootoutWin! + p.draw! + soBonus });
+      want.set(l.entrantId, { ...l, lost: l.lost - 1, drawn: l.drawn + 1, points: l.points - p.shootoutLoss! + p.draw! });
+    }
+    const byId = <R extends { entrantId: string }>(rows: readonly R[]): R[] => [...rows].sort((a, b) => a.entrantId.localeCompare(b.entrantId));
+    expect(tableOf(byId(value.pinned)), "pinned: the recording").toEqual(tableOf(byId(so.table)));
+    expect(tableOf(byId(value.live)), "un-pinned: W2d's booking").toEqual(tableOf(byId([...want.values()])));
+    expect(tableOf(byId(value.live)), "the pair differs").not.toEqual(tableOf(byId(so.table)));
   });
 });

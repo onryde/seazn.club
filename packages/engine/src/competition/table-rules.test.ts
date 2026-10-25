@@ -293,6 +293,31 @@ describe("defaultTiebreakers(kind, cfg) and the sport layer (PS-7c)", () => {
     expect(calls).toHaveLength(2);
   });
 
+  it("T8 m-R1-1 the sport's points rule comes back in the schema's form on both branches — a cfg the schema takes and one it refuses read as given: defaults applied (bonuses []), stray keys dropped", () => {
+    // A sport whose rule leaves out `bonuses` (PointsRule defaults it to []) and carries a key PointsRule does not read.
+    const bare = { win: { regulation: 4 }, loss: { regulation: 1 }, shootoutAs: "result", unit: "whole", stray: true };
+    const spy = { ...football, tablePointsRule: () => bare } as unknown as AnySportModule;
+    const taken = football.configSchema.parse({});
+    const refusedCfg = { ...taken, extraTime: "not a boolean" };
+    expect(football.configSchema.safeParse(refusedCfg).success, "premise: the schema refuses the second cfg").toBe(false);
+    const viaParsed = resolveTableRules(input(spy, "league", taken)).points;
+    const viaGiven = resolveTableRules(input(spy, "league", refusedCfg)).points;
+    const schemaForm = PointsRule.parse(bare);
+    expect(schemaForm.bonuses, "premise: the schema's form has the default").toEqual([]);
+    expect(viaParsed).toStrictEqual(schemaForm);
+    expect(viaGiven).toStrictEqual(schemaForm);
+    // On a cfg the schema takes, a sport answering no rule is its own defect: thrown as the schema refuses it, not dressed.
+    const broken = { ...football, tablePointsRule: () => ({ win: { regulation: "x" } }) } as unknown as AnySportModule;
+    let thrown: unknown;
+    try {
+      resolveTableRules(input(broken, "league", taken));
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeDefined();
+    expect(thrown).not.toBeInstanceOf(EngineError);
+  });
+
   it("a merged cfg the sport layer cannot read is a typed CONFIG_INVALID refusal, never a crash — and a stage that never asks the sport is not refused", () => {
     // T3 M-4: a set sport's pointsMap that prices no set score. The schema takes it; the sport's rule refuses it.
     const junk = { ...volleyball.configSchema.parse({}), pointsMap: { junk: [9, 9] } };

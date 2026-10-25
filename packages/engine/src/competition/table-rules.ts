@@ -65,9 +65,15 @@ export function defaultCrossGroup(tiebreakers: readonly TiebreakerKey[]): readon
 // the schema refuses, the sport is asked with it as given; one it cannot read at all is the typed refusal. A reader that
 // meets a missing field there may return `undefined` where a number belongs rather than throw (generic's points with no
 // loss), so an answer with a schema of its own is checked against it too: a pin (T9) would keep the hole for good.
+// W2d T9 (T8 review m-R1-1): an answer with a schema is returned in the schema's form on BOTH branches — its defaults
+// applied (a rule's `bonuses: []`), its stray keys dropped — so the rule a stage is pinned with never depends on which
+// branch read the cfg. On a parsed cfg a sport answering no rule is the sport's defect, thrown as the schema says.
 function askSport<T>(input: TableRulesInput, ask: (cfg: unknown) => T, answerSchema?: z.ZodType<T>): T {
   const parsed = input.module.configSchema.safeParse(input.mergedCfg);
-  if (parsed.success) return ask(parsed.data);
+  if (parsed.success) {
+    const answer = ask(parsed.data);
+    return answerSchema === undefined ? answer : answerSchema.parse(answer);
+  }
   // The issues are the schema's; what the reading made of the cfg rides along beside them.
   const refused = (why: string, detail: Record<string, unknown>) =>
     new EngineError("CONFIG_INVALID", `the stage's ${input.module.key} settings do not parse, so ${why}`, {
