@@ -31,7 +31,7 @@ import type { ArbiterBoard, ArbiterRound } from "@/lib/arbiter-view";
 import { INVITE_WORD_KEYS, seatWords, type SeatInviteWord } from "@/lib/invite-status";
 import type { MessageKey } from "@/lib/messages";
 import type { OpenRoundView } from "@/lib/open-round";
-import { checkinClock, checkinTally, nextRoundViews, openWindowBoards, playingTally, roundColumnPhase, viewOfRound } from "@/lib/round-column";
+import { boardsOwedAnInvite, checkinClock, checkinTally, nextRoundViews, openWindowBoards, playingTally, roundColumnPhase, viewOfRound } from "@/lib/round-column";
 import { routes } from "@/lib/routes";
 import type { FlaggedBoard } from "@/server/usecases/external-play/arbiter";
 import type { NeedsOrganiserExternalPlayRow } from "@/server/usecases/external-play/queue";
@@ -144,9 +144,6 @@ export function RoundColumn(p: RoundColumnProps) {
 
   if (phase === "playing") {
     if (p.round === null) return null;
-    // Primary needs every board on screen over. With no board on screen at all (a round whose every board is the organiser's own)
-    // the empty set would satisfy "every board is over" vacuously, and nobody can say it is: `total > 0` keeps the press quiet.
-    const { total, finished } = playingTally(p.round.boards);
     // Final review I2: the round on screen's OWN press, when the reader names one. After D17 (the arbiter's No result, then the organiser's
     // void) the re-armed board keeps its bridge row `finished`, so it paints as a result and no board is `checking_in`: this is the one
     // place the organiser's re-open can be pressed. The handle is the panel's (the same one the check-in hero and the waiting list read).
@@ -159,12 +156,18 @@ export function RoundColumn(p: RoundColumnProps) {
       plural,
       buttonClass: `${BUTTON_PRIMARY} py-2 text-balance`,
     });
-    // The next round waits for it: a board owed its re-open is not "over", whatever its bridge row says.
+    // The boards the press would invite are, on screen, over without a result: the card counts them as WAITING TO REOPEN, not finished.
+    const owed = boardsOwedAnInvite(own.owedView);
+    // Primary needs every board on screen over. With no board on screen at all (a round whose every board is the organiser's own)
+    // the empty set would satisfy "every board is over" vacuously, and nobody can say it is: `total > 0` keeps the press quiet.
+    // The next round waits for the owed press too: a board owed its re-open is not "over", whatever its bridge row says (`finished`
+    // already leaves the waiting boards out; the press check covers an owed press whose boards are not on screen).
+    const { total, finished } = playingTally(p.round.boards, owed);
     const primary = total > 0 && finished === total && own.owedView === null;
     return (
       <aside aria-label={msg("arbiter.column.label")} data-testid="arbiter-round-column" data-phase={phase} className={asideClass}>
         {queue}
-        <PlayingStatus round={p.round} roundExtend={p.roundExtend}>
+        <PlayingStatus round={p.round} roundExtend={p.roundExtend} owed={owed}>
           {own.button}
           {own.notice}
           {own.dialog}
@@ -208,11 +211,13 @@ export function RoundColumn(p: RoundColumnProps) {
 /** The playing phase's status (spec §5.5): "14 of 20 boards playing" and the finished clause over the boards on screen, then the
  *  round bar the panel hands over (its why line and last answer: C13). A round with no board on screen (every board is the
  *  organiser's own) prints no count at all - never "0 of 0" - and keeps the heading and the bar. A zero finished clause is not
- *  printed (desk _RULES: an empty cell is not information). The count agrees with the TOTAL ("1 of 1 board"). */
-function PlayingStatus({ round, roundExtend, children }: { round: ArbiterRound; roundExtend: ReactNode; children?: ReactNode }) {
+ *  printed (desk _RULES: an empty cell is not information). The count agrees with the TOTAL ("1 of 1 board"). `owed` is the boards the
+ *  round's own press would still invite: the ones of them that are over on screen are "waiting to reopen", not finished (D17), so playing,
+ *  finished, on hold and waiting add up to the total. */
+function PlayingStatus({ round, roundExtend, owed, children }: { round: ArbiterRound; roundExtend: ReactNode; owed: ReadonlySet<string>; children?: ReactNode }) {
   const msg = useMsg();
   const plural = useMsgPlural();
-  const { playing, total, finished, held } = playingTally(round.boards);
+  const { playing, total, finished, held, waiting } = playingTally(round.boards, owed);
   return (
     <section aria-labelledby="arbiter-column-status-heading" data-testid="arbiter-column-status" className={`flex min-w-0 flex-col gap-3 ${CARD_BOX}`}>
       <h2 id="arbiter-column-status-heading" className={`m-0 min-w-0 text-base font-semibold break-words ${INK}`}>
@@ -232,6 +237,13 @@ function PlayingStatus({ round, roundExtend, children }: { round: ArbiterRound; 
           {held > 0 && (
             <p data-testid="arbiter-column-onhold" className={`m-0 text-sm ${MUTED}`}>
               {plural("arbiter.column.onHold", held)}
+            </p>
+          )}
+          {/* A re-armed board (D17) has no result: the restart below is what it waits for. Without this line it would be counted as finished,
+              and the next round's warning ("Round 1 still has a game in play") would contradict the card. */}
+          {waiting > 0 && (
+            <p data-testid="arbiter-column-reopen-waiting" className={`m-0 text-sm ${MUTED}`}>
+              {plural("arbiter.column.waitingToReopen", waiting)}
             </p>
           )}
         </div>

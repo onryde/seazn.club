@@ -12,12 +12,13 @@ import { boardIsOver } from "../arbiter-view";
 import type { CheckinExtendState } from "../checkin-extend";
 import { EXTEND_REFUSALS, emptyExtendTally, inExtendWindow, liveExtendRefusal } from "../checkin-extend";
 import type { ExtendRefusal } from "../checkin-extend";
-import type { OpenRoundView } from "../open-round";
+import type { OpenRoundPairing, OpenRoundView } from "../open-round";
 import type { FlaggedBoard } from "@/server/usecases/external-play/arbiter";
 import type { NeedsOrganiserExternalPlayRow } from "@/server/usecases/external-play/queue";
 import type { CheckinClock } from "../round-column";
 import {
   attentionCount,
+  boardsOwedAnInvite,
   countedHeld,
   checkinClock,
   checkinTally,
@@ -470,7 +471,7 @@ describe("checkinTally", () => {
 
 describe("playingTally", () => {
   it("empty boards: { playing: 0, total: 0, finished: 0 }", () => {
-    expect(playingTally([])).toEqual({ playing: 0, total: 0, finished: 0, held: 0 });
+    expect(playingTally([])).toEqual({ playing: 0, total: 0, finished: 0, held: 0, waiting: 0 });
   });
 
   it("total is the boards on screen, whatever state each is in", () => {
@@ -483,7 +484,7 @@ describe("playingTally", () => {
     let checked = 0;
     for (const row of EVERY_STATE) {
       const t = playingTally([withState(row.state)]);
-      expect(t, JSON.stringify(row.state)).toEqual({ playing: row.playing ? 1 : 0, total: 1, finished: row.finished ? 1 : 0, held: row.held ? 1 : 0 });
+      expect(t, JSON.stringify(row.state)).toEqual({ playing: row.playing ? 1 : 0, total: 1, finished: row.finished ? 1 : 0, held: row.held ? 1 : 0, waiting: 0 });
       // The table's "finished" is the declared `boardIsOver`, not a second opinion.
       expect(row.finished, `${row.state.kind} vs boardIsOver`).toBe(boardIsOver(row.state));
       checked += 1;
@@ -497,7 +498,7 @@ describe("playingTally", () => {
   });
 
   it("a held board beside a live one is playing 1 of 2, never 2", () => {
-    expect(playingTally([withState({ kind: "on_hold" }), withState({ kind: "live", moveNo: 3 })])).toEqual({ playing: 1, total: 2, finished: 0, held: 1 });
+    expect(playingTally([withState({ kind: "on_hold" }), withState({ kind: "live", moveNo: 3 })])).toEqual({ playing: 1, total: 2, finished: 0, held: 1, waiting: 0 });
   });
 });
 
@@ -537,8 +538,26 @@ describe("the held count: a round's tally says where EVERY board is (Task 16 D7)
     ];
     const t = playingTally(boards);
     const checking = boards.filter((b) => b.state.kind === "checking_in").length;
-    expect(t.playing + t.finished + t.held + checking, "no board is missing from the sums").toBe(t.total);
+    expect(t.playing + t.finished + t.held + t.waiting + checking, "no board is missing from the sums").toBe(t.total);
     expect(t.held, "premise: a held board is on screen").toBe(1);
+  });
+
+  it("the same identity with a board WAITING TO REOPEN (D17: no result, owed its invite): playing + finished + held + waiting + checking in = total", () => {
+    const rearmed = withState({ kind: "result", score: null, noResult: true });
+    const boards = [
+      withState({ kind: "live", moveNo: 2 }),
+      withState({ kind: "result", score: "1-0", noResult: false }),
+      withState({ kind: "result", score: "0-1", noResult: false }),
+      rearmed,
+      withState({ kind: "on_hold" }),
+      checkingIn(openNow()),
+    ];
+    const t = playingTally(boards, new Set([rearmed.fixtureId]));
+    const checking = boards.filter((b) => b.state.kind === "checking_in").length;
+    // Expected numbers are the boards BUILT above: 1 live, 2 decided, 1 re-armed, 1 held, 1 checking in.
+    expect(t).toEqual({ playing: 1, total: 6, finished: 2, held: 1, waiting: 1 });
+    expect(t.playing + t.finished + t.held + t.waiting + checking, "no board is missing from the sums").toBe(t.total);
+    expect(t.finished, "the re-armed board has no result, so it is not among the finished").toBe(2);
   });
 
   it("agrees with the QUEUE: the held cards the queue counts for these boards are the boards this tally calls held", () => {
@@ -550,6 +569,86 @@ describe("the held count: a round's tally says where EVERY board is (Task 16 D7)
     const rows = [...heldRows, seated];
     expect(countedHeld(rows).length, "premise: the seated row is not counted by the queue").toBe(2);
     expect(playingTally(boards).held).toBe(countedHeld(rows).filter((r) => boards.some((b) => b.fixtureId === r.fixtureId)).length);
+  });
+});
+
+// ---- boards waiting to reopen (final review, residual round: the D17 tally) --------------------------------------
+
+const pairingOf = (fixtureId: string, owedSeats: 0 | 1 | 2): OpenRoundPairing => ({
+  fixtureId,
+  boardNo: 1,
+  whiteName: "White Player",
+  blackName: "Black Player",
+  invitedAt: null,
+  owedSeats,
+  canResend: false,
+});
+
+describe("boardsOwedAnInvite: the boards a round's press would still invite (pairings that owe a seat)", () => {
+  it("the empty case first: no view, and a view with no pairings, answer the empty set", () => {
+    expect(boardsOwedAnInvite(null).size).toBe(0);
+    expect(boardsOwedAnInvite(view({ pairings: [] })).size).toBe(0);
+  });
+
+  it("a pairing is in the set when it owes one seat or two, and out when it owes none (counted over 0, 1 and 2)", () => {
+    const v = view({ pairings: [pairingOf("a", 0), pairingOf("b", 1), pairingOf("c", 2)] });
+    const owed = boardsOwedAnInvite(v);
+    expect([...owed].sort()).toEqual(["b", "c"]);
+    expect(owed.has("a"), "a settled pairing is not owed").toBe(false);
+  });
+});
+
+describe("playingTally: a board waiting to reopen has no result, so it is not finished (D17)", () => {
+  const overBoard = () => withState({ kind: "result", score: null, noResult: true });
+
+  it("empty owed set (the default): waiting is 0 and every over board is finished, as before", () => {
+    const boards = [overBoard(), overBoard()];
+    expect(playingTally(boards)).toMatchObject({ finished: 2, waiting: 0 });
+    expect(playingTally(boards, new Set())).toMatchObject({ finished: 2, waiting: 0 });
+  });
+
+  it("0, 1 and 2 waiting boards move exactly that many from finished to waiting, never more", () => {
+    const a = overBoard();
+    const b = overBoard();
+    const c = overBoard();
+    const cases: [string, ReadonlySet<string>, number, number][] = [
+      ["none", new Set(), 3, 0],
+      ["one", new Set([a.fixtureId]), 2, 1],
+      ["two", new Set([a.fixtureId, c.fixtureId]), 1, 2],
+    ];
+    let checked = 0;
+    for (const [name, owed, finished, waiting] of cases) {
+      const t = playingTally([a, b, c], owed);
+      expect([t.finished, t.waiting], name).toEqual([finished, waiting]);
+      expect(t.finished + t.waiting, `${name}: the over boards are still all counted`).toBe(3);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: cases checked").toBe(3);
+  });
+
+  it("only an OVER board on screen waits: an owed id for a live board, a held board, or a board that is not on screen changes nothing", () => {
+    const live = withState({ kind: "live", moveNo: 3 });
+    const onHold = withState({ kind: "on_hold" });
+    const done = withState({ kind: "result", score: "1-0", noResult: false });
+    const t = playingTally([live, onHold, done], new Set([live.fixtureId, onHold.fixtureId, "fx-not-on-screen"]));
+    expect(t).toEqual({ playing: 1, total: 3, finished: 1, held: 1, waiting: 0 });
+  });
+
+  it("every state kind, owed or not: the five counts and the boards still checking in add up to the total (counted)", () => {
+    let checked = 0;
+    for (const row of EVERY_STATE) {
+      for (const owed of [false, true]) {
+        const b = withState(row.state);
+        const t = playingTally([b], owed ? new Set([b.fixtureId]) : new Set());
+        const checking = row.state.kind === "checking_in" ? 1 : 0;
+        expect(t.playing + t.finished + t.held + t.waiting + checking, `${JSON.stringify(row.state)} owed=${owed}`).toBe(t.total);
+        // The expected answer comes from the declared predicate (boardIsOver, through the table's own `finished`), not from the tally.
+        expect(t.waiting, `${JSON.stringify(row.state)} owed=${owed}`).toBe(owed && row.finished ? 1 : 0);
+        checked += 1;
+      }
+    }
+    expect(checked, "anti-vacuity: every state x {owed, not owed}").toBe(EVERY_STATE.length * 2);
+    expect(EVERY_STATE.some((r) => r.finished), "the table reaches a state that can wait").toBe(true);
   });
 });
 

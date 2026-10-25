@@ -2424,4 +2424,107 @@ describe("RoundColumn: the playing status offers the round on screen's own press
     expect(inner(h, "arbiter-column-reinvite-dialog"), locale).toContain(esc(d["arbiter.column.reopenConfirmTitle"]!.replaceAll("{round}", "2")));
     if (locale !== "en") expect(d["arbiter.column.reopenCta"], `${locale}: premise, translated`).not.toBe(en["arbiter.column.reopenCta"]);
   });
+
+  // ---- the status card's tally in a D17 round (residual round): a re-armed board has NO result, so it is not "finished" ----------------
+
+  /** The boards of a D17 round, by id: f1 is the re-armed board (painted a result by the loader), f2 and f3 are decided. */
+  const REARMED = () => [over({ fixtureId: "f1" }), over({ fixtureId: "f2" }), over({ fixtureId: "f3" })];
+  const WAITING = "arbiter-column-reopen-waiting";
+  /** The numbers the card PRINTS (an absent clause is 0), read back from the markup: the identity is checked on what a person reads. */
+  const printed = (h: string) => {
+    const num = (id: string) => (h.includes(ATTR(id)) ? Number(/^\d+/.exec(textIn(h, id)!)![0]) : 0);
+    return {
+      playing: num("arbiter-column-playing"),
+      finished: num("arbiter-column-finished"),
+      held: num("arbiter-column-onhold"),
+      waiting: num(WAITING),
+      total: Number(/of (\d+)/.exec(textIn(h, "arbiter-column-playing")!)![1]),
+    };
+  };
+
+  it("the card says where EVERY board is: 0 playing, 2 finished, 1 waiting to reopen, and the counts add up to the 3 boards built", () => {
+    const h = playingColumn(REARMED(), { data: DATA({ views: [OWN("reopen")] }) });
+    expect(textIn(h, "arbiter-column-playing")).toBe(esc(pl("arbiter.column.playing", 3, { count: 0, total: 3 })));
+    expect(textIn(h, "arbiter-column-finished"), "the re-armed board is not among the finished").toBe(esc(pl("arbiter.column.finished", 2)));
+    expect(textIn(h, WAITING)).toBe(esc(pl("arbiter.column.waitingToReopen", 1)));
+    // The numbers are the boards BUILT (3: none playing, 2 decided, 1 owed its invite), and the printed counts add up to them.
+    const t = printed(h);
+    expect(t).toEqual({ playing: 0, finished: 2, held: 0, waiting: 1, total: REARMED().length });
+    expect(t.playing + t.finished + t.held + t.waiting, "the clauses account for every board built").toBe(t.total);
+  });
+
+  it("the clause sits with the other counts, after the on-hold line, and above the press it explains", () => {
+    const h = playingColumn([...REARMED(), held()], { data: DATA({ views: [OWN("reopen")] }) });
+    const card = status(h);
+    const order = ["arbiter-column-playing", "arbiter-column-finished", "arbiter-column-onhold", WAITING, "arbiter-column-reinvite"].map((id) => card.indexOf(ATTR(id)));
+    expect(order.every((i) => i >= 0), "every line and the press are present").toBe(true);
+    expect(order, "playing, finished, on hold, waiting to reopen, then the press").toEqual([...order].sort((a, b) => a - b));
+    expect(card).not.toMatch(/<div class="[^"]*"><\/div>/);
+    // And with a held board on screen the printed counts still account for all four boards built.
+    const t = printed(h);
+    expect(t, "premise: one of each clause is printed").toEqual({ playing: 0, finished: 2, held: 1, waiting: 1, total: 4 });
+    expect(t.playing + t.finished + t.held + t.waiting).toBe(t.total);
+  });
+
+  it("zero waiting: no clause, and not its words either (the press named, but nothing it would invite is a board on screen; the press named none; nothing owed)", () => {
+    const cases: [string, RoundColumnData][] = [
+      ["press none, though a pairing owes a seat", DATA({ views: [OWN("none")] })],
+      ["press open (the next round's)", DATA({ views: [OWN("open")] })],
+      ["a reopen whose pairings owe nothing", DATA({ views: [OWN("reopen", { pairings: [P(1, { owedSeats: 0 })] })] })],
+      ["an owed pairing that is not on screen", DATA({ views: [OWN("reopen", { pairings: [P(9, { owedSeats: 2 })] })] })],
+      ["no view", DATA({ views: [] })],
+    ];
+    let checked = 0;
+    for (const [what, data] of cases) {
+      const h = playingColumn(REARMED(), { data });
+      expect(h, what).not.toContain(ATTR(WAITING));
+      expect(textIn(h, "arbiter-column-finished"), `${what}: all three boards are finished`).toBe(esc(pl("arbiter.column.finished", 3)));
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: cases checked").toBe(5);
+    // The positive pair: the same boards with the press named and f1 owed do draw it.
+    expect(playingColumn(REARMED(), { data: DATA({ views: [OWN("reopen")] }) })).toContain(ATTR(WAITING));
+  });
+
+  it("only a board that is OVER can wait: an owed pairing on a live board leaves it playing and prints no clause", () => {
+    const h = playingColumn([playing({ fixtureId: "f1" }), over({ fixtureId: "f2" })], { data: DATA({ views: [OWN("reopen")] }) });
+    expect(h).not.toContain(ATTR(WAITING));
+    expect(textIn(h, "arbiter-column-playing")).toBe(esc(pl("arbiter.column.playing", 2, { count: 1, total: 2 })));
+    expect(textIn(h, "arbiter-column-finished")).toBe(esc(pl("arbiter.column.finished", 1)));
+  });
+
+  it("one and two waiting: the singular and the plural of the clause, counted from the boards built", () => {
+    const one = playingColumn([over({ fixtureId: "f1" }), over({ fixtureId: "f2" })], { data: DATA({ views: [OWN("reopen", { pairings: [P(1, { owedSeats: 2 })] })] }) });
+    const two = playingColumn([over({ fixtureId: "f1" }), over({ fixtureId: "f2" }), over({ fixtureId: "f3" })], {
+      data: DATA({ views: [OWN("reopen", { pairings: [P(1, { owedSeats: 2 }), P(2, { owedSeats: 1 })] })] }),
+    });
+    expect(textIn(one, WAITING)).toBe(esc(pl("arbiter.column.waitingToReopen", 1)));
+    expect(textIn(two, WAITING)).toBe(esc(pl("arbiter.column.waitingToReopen", 2)));
+    expect(pl("arbiter.column.waitingToReopen", 1), "anti-vacuity: the two forms differ").not.toBe(pl("arbiter.column.waitingToReopen", 2));
+    // One board decided is the only finished one beside one waiting; two waiting leave one finished.
+    expect(textIn(one, "arbiter-column-finished")).toBe(esc(pl("arbiter.column.finished", 1)));
+    expect(textIn(two, "arbiter-column-finished")).toBe(esc(pl("arbiter.column.finished", 1)));
+  });
+
+  it("a round whose every board is waiting prints no finished clause (an empty cell is not information) but the waiting one", () => {
+    const h = playingColumn([over({ fixtureId: "f1" })], { data: DATA({ views: [OWN("reopen", { pairings: [P(1, { owedSeats: 2 })] })] }) });
+    expect(h).not.toContain(ATTR("arbiter-column-finished"));
+    expect(textIn(h, WAITING)).toBe(esc(pl("arbiter.column.waitingToReopen", 1)));
+    expect(textIn(h, "arbiter-column-playing")).toBe(esc(pl("arbiter.column.playing", 1, { count: 0, total: 1 })));
+  });
+
+  it.each([["en", enUi], ["es", esUi], ["fr", frUi], ["nl", nlUi]] as [Locale, Dict][])("%s: the waiting clause reads that locale's words, both forms", (locale, dict) => {
+    const d = dict as unknown as Record<string, string>;
+    const render = (pairings: OpenRoundPairing[]) =>
+      renderToStaticMarkup(
+        <DictProvider dict={dict} locale={locale}>
+          <RoundColumn {...COLUMN({ round: R2(REARMED()), nowMs: NOW, data: DATA({ views: [OWN("reopen", { pairings })] }) })} />
+        </DictProvider>,
+      );
+    const one = render([P(1, { owedSeats: 2 })]);
+    const two = render([P(1, { owedSeats: 2 }), P(2, { owedSeats: 2 })]);
+    expect(textIn(one, WAITING), locale).toBe(esc(d["arbiter.column.waitingToReopen.one"]!.replaceAll("{count}", "1")));
+    expect(textIn(two, WAITING), locale).toBe(esc(d["arbiter.column.waitingToReopen.other"]!.replaceAll("{count}", "2")));
+    if (locale !== "en") expect(d["arbiter.column.waitingToReopen.other"], `${locale}: premise, translated`).not.toBe(en["arbiter.column.waitingToReopen.other"]);
+  });
 });

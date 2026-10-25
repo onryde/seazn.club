@@ -104,16 +104,31 @@ export function checkinTally(boards: readonly ArbiterBoard[], nowMs: number | nu
 
 // ---- playing (§5.5) -------------------------------------------------------------------------------------------
 
-/** "{playing} of {total} boards playing", the finished clause and the held clause, over the boards on screen. A board is in at most one
- *  of the three, and a board still checking in is in none (`playing + finished + held + checking in = total`). */
-export type PlayingTally = { playing: number; total: number; finished: number; held: number };
+/** "{playing} of {total} boards playing", the finished clause, the held clause and the waiting clause, over the boards on screen. A board
+ *  is in at most one of the four, and a board still checking in is in none (`playing + finished + held + waiting + checking in = total`).
+ *  `waiting` is a board that paints as over but has no result: D17's re-armed board (the arbiter's No result, then the organiser's void),
+ *  owed its invite by the round's restart. It is taken OUT of `finished`, so a board is never counted as both. */
+export type PlayingTally = { playing: number; total: number; finished: number; held: number; waiting: number };
 
-export function playingTally(boards: readonly ArbiterBoard[]): PlayingTally {
+const NO_BOARDS: ReadonlySet<string> = new Set();
+
+/** The boards a round's press would still invite: the pairings of `view` that owe a seat. Empty when there is no view. The reader lists
+ *  only playable boards, so a decided board is never in it; `playingTally` still takes only the over boards on screen from it. */
+export function boardsOwedAnInvite(view: OpenRoundView | null): ReadonlySet<string> {
+  return view === null ? NO_BOARDS : new Set(view.pairings.filter((p) => p.owedSeats > 0).map((p) => p.fixtureId));
+}
+
+/** `owed` (default none) names boards that still owe an invite. One that is OVER on screen and owed is `waiting`, not `finished`; an owed
+ *  id for a board that is playing, held, checking in or not on screen changes nothing (a board counts once, where its state says). */
+export function playingTally(boards: readonly ArbiterBoard[], owed: ReadonlySet<string> = NO_BOARDS): PlayingTally {
+  const over = boards.filter((b) => boardIsOver(b.state));
+  const waiting = over.filter((b) => owed.has(b.fixtureId)).length;
   return {
     playing: boards.filter((b) => isPlaying(b.state)).length,
     total: boards.length,
-    finished: boards.filter((b) => boardIsOver(b.state)).length,
+    finished: over.length - waiting,
     held: boards.filter((b) => isHeld(b.state)).length,
+    waiting,
   };
 }
 
@@ -237,6 +252,7 @@ export const ROUND_COLUMN_KEYS: readonly ColumnKey[] = [
   "arbiter.column.reviewThis",
   "arbiter.column.toFixtures",
   "arbiter.column.waiting",
+  "arbiter.column.waitingToReopen",
   "arbiter.flagCount",
   "arbiter.invite.help",
   "arbiter.notice.settleOwnBoard",

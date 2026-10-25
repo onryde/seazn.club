@@ -530,6 +530,26 @@ describe("the reopen press says what it does", () => {
     expect(checked, "anti-vacuity: locales checked").toBe(LOCALES.length);
   });
 
+  it("the status card's waiting clause says the board is to be REOPENED, in both forms, and is not the on-hold line (4 locales x 2 forms, counted)", () => {
+    // The clause is the one place the card says the word: a board with no result that the restart will invite (D17). A translation that
+    // lost the idea (or that borrowed the on-hold words, which mean something else) fails here.
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const d = DICTS[locale];
+      for (const form of ["one", "other"] as const) {
+        const text = d[`arbiter.column.waitingToReopen.${form}`];
+        expect(text, `${locale}: ${form} exists`).toBeTruthy();
+        expect(text, `${locale}: ${form} carries the count`).toContain("{count}");
+        expect(text, `${locale}: ${form} says reopen`).toMatch(OPEN_WORD[locale]);
+        expect(text, `${locale}: ${form} is not the on-hold line`).not.toBe(d[`arbiter.column.onHold.${form}`]);
+        checked += 1;
+      }
+      expect(d["arbiter.column.waitingToReopen.one"], `${locale}: the two forms differ`).not.toBe(d["arbiter.column.waitingToReopen.other"]);
+    }
+    expect(checked, "anti-vacuity: locales x forms").toBe(LOCALES.length * 2);
+    expect((ROUND_COLUMN_KEYS as readonly string[]).includes("arbiter.column.waitingToReopen"), "the sweep lists the stem").toBe(true);
+  });
+
   it("it has a label of its own, which is not the real Open round press and does not say open (4 locales)", () => {
     let checked = 0;
     for (const locale of LOCALES) {
