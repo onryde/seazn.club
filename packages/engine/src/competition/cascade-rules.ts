@@ -160,8 +160,10 @@ export function validateCascade(cascade: readonly TiebreakerKey[], ctx: CascadeC
   return out;
 }
 
-const refusalId = (refusal: CascadeRefusal, index: number): string =>
-  JSON.stringify([index, refusal.key, refusal.reason, refusal.need ?? null]);
+// A refusal's identity within one ctx: its step, key and reason. `need` is left out: in one ctx it is fixed by the key and
+// the reason (the primary, "lots", the key's missing ledger, "swiss", "fairPlay"), so it never tells two refusals apart —
+// cascade-rules.test.ts's complement sweep holds that premise over every refusal it sees.
+const refusalId = (refusal: CascadeRefusal, index: number): string => JSON.stringify([index, refusal.key, refusal.reason]);
 
 /** "+ Add step" (§9): exactly the keys `k` for which `validateCascade(insert(cascade, position, k), ctx)` adds no refusal —
  *  every refusal of the new order is one the old order already had, moved past the inserted step. A refusal the insertion

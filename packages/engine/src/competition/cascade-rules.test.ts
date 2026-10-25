@@ -302,6 +302,17 @@ describe("validateCascade — X-TB-5 what the sport records and what the stage f
     expect((football.configSchema.parse({}) as { fairPlay: unknown }).fairPlay, "premise: the schema defaults fairPlay on").toBe(true);
     expect(validateCascade(fifa, { ...ctxOf(football), cfg: {} })).toEqual([]);
     expect(reasons(validateCascade(fifa, { ...ctxOf(football), cfg: { fairPlay: false } }), "fair_play_off")).toHaveLength(1);
+    // A cfg the schema refuses is read as given — D8's literal `cfg.fairPlay === true`: a cfg that is no object tracks no
+    // fair play, and reading it never throws; one that carries `fairPlay: true` beside a bad field still tracks it.
+    for (const raw of [undefined, null, 42, "x"]) {
+      expect(football.configSchema.safeParse(raw).success, `premise: the schema refuses ${String(raw)}`).toBe(false);
+      expect(validateCascade(fifa, { ...ctxOf(football), cfg: raw }), String(raw)).toEqual([
+        { index: at, key: "fair_play", reason: "fair_play_off", need: "fairPlay" },
+      ]);
+    }
+    const unparsed = { fairPlay: true, points: 7 };
+    expect(football.configSchema.safeParse(unparsed).success, "premise: the schema refuses a non-object points").toBe(false);
+    expect(validateCascade(fifa, { ...ctxOf(football), cfg: unparsed })).toEqual([]);
     expect(validateCascade(["points", "fair_play", "lots"], ctxOf(hockey))).toEqual([
       { index: 1, key: "fair_play", reason: "sport", need: "fair_play" },
     ]);
@@ -424,8 +435,13 @@ describe("validateCascade — every refusal, primaryTableKey, and the guards", (
 
   it("rule 6: an unknown key is refused by name (CONFIG_INVALID) — the zod enum is the gate, so one reaching here is a caller's breach", () => {
     const unknown = "sp_pc_scored" as TiebreakerKey;
-    const cascades: TiebreakerKey[][] = [[unknown], ["points", unknown, "lots"], ["points", "toString" as TiebreakerKey]];
-    for (const cascade of cascades) {
+    // [order, the offending key, its index, the step number a person reads (1-based)]
+    const cases: [TiebreakerKey[], string, number, number][] = [
+      [[unknown], "sp_pc_scored", 0, 1],
+      [["points", unknown, "lots"], "sp_pc_scored", 1, 2],
+      [["points", "lots", "toString" as TiebreakerKey], "toString", 2, 3],
+    ];
+    for (const [cascade, key, index, step] of cases) {
       let threw: unknown = null;
       try {
         validateCascade(cascade, ctxOf(hockey));
@@ -433,19 +449,40 @@ describe("validateCascade — every refusal, primaryTableKey, and the guards", (
         threw = e;
       }
       expect(EngineError.is(threw, "CONFIG_INVALID"), cascade.join(",")).toBe(true);
-      expect((threw as EngineError).message).toMatch(/is not a tie-break key/);
-      expect((threw as EngineError).data).toEqual({ key: cascade[cascade.length > 1 ? 1 : 0], index: cascade.length > 1 ? 1 : 0 });
+      expect((threw as EngineError).message).toContain(`"${key}" at position ${step} is not a tie-break key`);
+      expect((threw as EngineError).data).toEqual({ key, index });
     }
   });
 });
 
 /** The refusals inserting a key at `position` ADDS: those of the new order that the old order's refusals, moved past the
  *  inserted step, do not already account for. The spec's identity, computed here from `validateCascade` alone. */
-function addedBy(cascade: readonly TiebreakerKey[], position: number, ctx: CascadeContext): (key: TiebreakerKey) => CascadeRefusal[] {
+// The oracle compares whole refusals, `need` included. offerableKeys leaves `need` out of a refusal's identity on the
+// premise that, in one ctx, it is fixed by the key and the reason; `needs` (one per ctx) holds that premise over every
+// refusal the sweep sees.
+interface NeedLedger { readonly byKeyReason: Map<string, string | null>; readonly conflicts: string[]; checked: number }
+function addedBy(
+  cascade: readonly TiebreakerKey[],
+  position: number,
+  ctx: CascadeContext,
+  needs: NeedLedger,
+): (key: TiebreakerKey) => CascadeRefusal[] {
   const id = (r: CascadeRefusal, index: number): string => JSON.stringify([index, r.key, r.reason, r.need ?? null]);
-  const before = new Set(validateCascade(cascade, ctx).map((r) => id(r, r.index >= position ? r.index + 1 : r.index)));
-  return (key) =>
-    validateCascade([...cascade.slice(0, position), key, ...cascade.slice(position)], ctx).filter((r) => !before.has(id(r, r.index)));
+  const hold = (r: CascadeRefusal): void => {
+    const at = JSON.stringify([r.key, r.reason]);
+    const need = r.need ?? null;
+    if (!needs.byKeyReason.has(at)) needs.byKeyReason.set(at, need);
+    else if (needs.byKeyReason.get(at) !== need) needs.conflicts.push(`${at}: ${String(needs.byKeyReason.get(at))} vs ${String(need)}`);
+    needs.checked++;
+  };
+  const old = validateCascade(cascade, ctx);
+  old.forEach(hold);
+  const before = new Set(old.map((r) => id(r, r.index >= position ? r.index + 1 : r.index)));
+  return (key) => {
+    const now = validateCascade([...cascade.slice(0, position), key, ...cascade.slice(position)], ctx);
+    now.forEach(hold);
+    return now.filter((r) => !before.has(id(r, r.index)));
+  };
 }
 
 describe("offerableKeys — '+ Add step' (spec §9)", () => {
@@ -453,6 +490,8 @@ describe("offerableKeys — '+ Add step' (spec §9)", () => {
     let cells = 0;
     let offered = 0;
     let hidden = 0;
+    const conflicts: string[] = [];
+    let needsChecked = 0;
     forEachSport(({ module }) => {
       const cfgs: unknown[] = [firstCfg(module)];
       if (module.key === "football") cfgs.push(football.configSchema.parse({ fairPlay: false }));
@@ -468,11 +507,12 @@ describe("offerableKeys — '+ Add step' (spec §9)", () => {
         for (const crossGroup of [false, true]) {
           for (const cfg of cfgs) {
             const ctx: CascadeContext = { module, cfg, stageKind, crossGroup };
+            const needs: NeedLedger = { byKeyReason: new Map(), conflicts, checked: 0 };
             for (const order of orders) {
               for (let position = 0; position <= order.length; position++) {
                 const offers = offerableKeys(order, position, ctx);
                 expect(new Set(offers).size, "no key offered twice").toBe(offers.length);
-                const added = addedBy(order, position, ctx);
+                const added = addedBy(order, position, ctx, needs);
                 for (const key of KEYS) {
                   const adds = added(key);
                   expect(offers.includes(key), `${module.key} ${stageKind} x${String(crossGroup)} [${order.join(",")}] @${position} ${key}`).toBe(adds.length === 0);
@@ -482,6 +522,7 @@ describe("offerableKeys — '+ Add step' (spec §9)", () => {
                 cells++;
               }
             }
+            needsChecked += needs.checked;
           }
         }
       }
@@ -489,6 +530,9 @@ describe("offerableKeys — '+ Add step' (spec §9)", () => {
     expect(cells).toBeGreaterThan(SPORTS * KINDS.length * 2 * 4);
     expect(offered).toBeGreaterThan(0);
     expect(hidden).toBeGreaterThan(0);
+    // The premise offerableKeys's refusal identity rests on (cascade-rules.ts `refusalId`), over every refusal seen.
+    expect(conflicts).toEqual([]);
+    expect(needsChecked).toBeGreaterThan(cells);
     // ~3,800 cells × 29 keys, each a validateCascade call; a loaded runner is several times slower than an idle one.
   }, 60_000);
 
@@ -536,7 +580,8 @@ describe("offerableKeys — '+ Add step' (spec §9)", () => {
         threw = e;
       }
       expect(EngineError.is(threw, "CONFIG_INVALID"), String(position)).toBe(true);
-      expect((threw as EngineError).message).toMatch(/outside the order/);
+      expect((threw as EngineError).message).toMatch(/outside the order \(0\.\.2\)/);
+      expect((threw as EngineError).data, String(position)).toEqual({ position });
     }
     expect(offerableKeys(["points", "lots"], 2, ctxOf(football))).toEqual([]);
   });
