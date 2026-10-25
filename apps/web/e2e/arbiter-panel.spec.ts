@@ -1329,6 +1329,10 @@ test.describe("arbiter round column", () => {
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto(r.arbiterPath);
     const col = column(page);
+    // The waiting list is NOT inside the column's `aside`: the panel mounts it in its board group (arbiter-panel.tsx, spec §5.1), so
+    // its rows, words, row Resend and help line are read from the PAGE. A locator scoped to `col` finds none of them, and a count of 0
+    // on it passes for any state (the defect fix round 2 removed). `list` is the one scope for all of them.
+    const list = page.getByTestId("arbiter-waiting");
     await expect(col, "the round is paired and not opened").toHaveAttribute("data-phase", "before", { timeout: 30_000 });
 
     // C20a: a double click on the confirmation is ONE request, and one outbox row per player's address.
@@ -1355,7 +1359,11 @@ test.describe("arbiter round column", () => {
       }
     }
     expect(words, "anti-vacuity: every seat of every board read").toBe(seatCount);
-    await expect(col.getByTestId("arbiter-waiting-resend"), "nobody holds a mail, so no row offers Resend").toHaveCount(0);
+    // The positive pair of the absence below, on the SAME scope: the list is on the page with a row per board and a seat per player.
+    await expect(list, "positive pair: the waiting list is on the page").toBeVisible();
+    await expect(list.getByTestId("arbiter-waiting-row"), "positive pair: one row per board asked for").toHaveCount(BOARDS_ASKED);
+    await expect(list.getByTestId("arbiter-seat"), "positive pair: one seat per player asked for").toHaveCount(seatCount);
+    await expect(list.getByTestId("arbiter-waiting-resend"), "nobody holds a mail, so no row offers Resend").toHaveCount(0);
     const press = col.getByTestId("arbiter-column-reinvite");
     await expect(press).toHaveText(uiEn["arbiter.column.reopenCta"]!);
     await press.click();
@@ -1387,13 +1395,13 @@ test.describe("arbiter round column", () => {
     expect(new Set(seeded.map(([, w]) => w)).size, "four different words on four boards").toBe(4);
 
     // Resend: on the boards whose seat holds a mail (sent, delivered, delayed), not on the board whose only mail bounced.
-    const resend = (b: RoundBoard) => col.locator(`[data-testid="arbiter-waiting-resend"][data-fixture-id="${b.fixtureId}"]`);
+    const resend = (b: RoundBoard) => list.locator(`[data-testid="arbiter-waiting-resend"][data-fixture-id="${b.fixtureId}"]`);
     for (const [b, word] of seeded) {
       await expect(resend(b), `${word}: Resend is offered exactly when a seat on the board holds the mail`).toHaveCount(HOLDING_WORDS.includes(word as InviteWord) ? 1 : 0);
     }
     const holding = seeded.filter(([, w]) => HOLDING_WORDS.includes(w as InviteWord)).length;
     expect(holding, "premise: three of the four words hold a seat").toBe(3);
-    await expect(col.getByTestId("arbiter-waiting-resend")).toHaveCount(holding);
+    await expect(list.getByTestId("arbiter-waiting-resend")).toHaveCount(holding);
     // The press follows what is owed: a seat is owed unless its mail holds it, so it is now a reinvite of the seats not holding.
     await expect(press).toHaveText(fill("runsheet.round.inviteCta.other", { count: seatCount - holding }));
     // The rule is the BOARD's: the bounced board's other seat takes a mail, the bounced seat still reads Bounced, and the board offers
@@ -1410,9 +1418,9 @@ test.describe("arbiter round column", () => {
     await expect(press).toHaveText(fill(pluralKey("runsheet.round.inviteCta", seatCount - holding - 1), { count: seatCount - holding - 1 }));
 
     // C27b: the mail server's word is Delivered, never "opened". Every invite chip and the help line, counted.
-    const chipTexts = await col.getByTestId("arbiter-invite-word").allTextContents();
+    const chipTexts = await list.getByTestId("arbiter-invite-word").allTextContents();
     expect(chipTexts.length, "anti-vacuity: every seat shows a chip").toBe(seatCount);
-    const helpText = await col.getByTestId("arbiter-invite-help").textContent();
+    const helpText = await list.getByTestId("arbiter-invite-help").textContent();
     expect(helpText, "the help line is on screen").toBe(uiEn["arbiter.invite.help"]);
     for (const text of [...chipTexts, helpText!]) expect(text, `"${text}" must not claim the mail was opened`).not.toMatch(/open/i);
     expect(posts.roundNos(), "nothing but the one open was sent").toEqual([1]);

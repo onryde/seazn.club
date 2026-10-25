@@ -6179,13 +6179,22 @@ test("arbiter round column: below md the column leads the page; from md it is th
   // on screen with no camera duty.
   const r = await seedOnlineRound(request, [longName(), longName(), `Mo Phone ${TAG}`, `Ny Width ${TAG}`], { camera: "optional" });
   expect(r.boards.length, "premise: two boards").toBe(2);
-  await roundGameSql(r.boards[1]!, { moves: ["e2e4", "e7e5"], hold: "mismatch" });
+  const heldBoards = [r.boards[1]!];
+  for (const b of heldBoards) await roundGameSql(b, { moves: ["e2e4", "e7e5"], hold: "mismatch" });
+  // The waiting list lists the boards still checking in: the ones not held. Derived from the seed, not read back from the page.
+  const waitingRows = r.boards.length - heldBoards.length;
+  expect(waitingRows, "premise: the seed leaves one board checking in").toBe(1);
 
   await page.goto(r.arbiterPath, { waitUntil: "load" });
   const col = page.getByTestId("arbiter-round-column");
   const waiting = page.getByTestId("arbiter-waiting");
   await expect(col).toHaveAttribute("data-phase", "checkin", { timeout: 30_000 });
   await expect(waiting, "premise: board 1 is waiting for its seats").toBeVisible({ timeout: 30_000 });
+  // Two scopes, not one: the panel mounts the waiting list in its board group, OUTSIDE the column's `aside` (spec §5.1). Every scan
+  // below names which of the two it reads, and each is proved non-empty for its own scope. The negative (nothing of the list inside the
+  // aside) is paired with the positive just above and the row count that follows.
+  await expect(col.getByTestId("arbiter-waiting"), "the waiting list is not inside the column").toHaveCount(0);
+  await expect(waiting.getByTestId("arbiter-waiting-row"), "one row for each board still checking in").toHaveCount(waitingRows);
   await expect(col.getByTestId("arbiter-column-review"), "premise: the held board has a card to review").toBeVisible();
   // The panel's own `main`: the one that holds the column (the page has no other, but the scope is stated, not assumed).
   const panelMain = page.locator('main:has([data-testid="arbiter-round-column"])');
@@ -6278,16 +6287,18 @@ test("arbiter round column: below md the column leads the page; from md it is th
       });
     }, scope);
   const counts: string[] = [];
-  const scopes: [string, string, string][] = [
-    ["the column", '[data-testid="arbiter-round-column"]', "arbiter-column-reinvite"],
-    ["the waiting list", '[data-testid="arbiter-waiting"]', "arbiter-waiting-board"],
+  // [label, scope, the control that scope must offer, how many of it]: the hero's one press in the column, one board link per row in the list.
+  const scopes: [string, string, string, number][] = [
+    ["the column", '[data-testid="arbiter-round-column"]', "arbiter-column-reinvite", 1],
+    ["the waiting list", '[data-testid="arbiter-waiting"]', "arbiter-waiting-board", waitingRows],
   ];
-  for (const [label, scope, mustHave] of scopes) {
+  for (const [label, scope, mustHave, mustHaveCount] of scopes) {
     const all = await tapTargets(scope);
     expect(all, `${label} is in the DOM`).not.toBeNull();
     const shown = all!.filter((t) => t.shown);
     expect(shown.length, `anti-vacuity: ${label} has controls on screen at ${width}px`).toBeGreaterThan(0);
     expect(shown.map((t) => t.testid), `${label} offers ${mustHave}`).toContain(mustHave);
+    expect(shown.filter((t) => t.testid === mustHave).length, `${label} offers ${mustHave} ${mustHaveCount} time(s) at ${width}px`).toBe(mustHaveCount);
     const report = hitTargetFloorReport(shown.map((t) => ({ name: t.name, role: t.role, disabled: t.disabled, width: t.width, height: t.height })));
     expect(report.operable.length, `anti-vacuity: ${label} has operable controls`).toBeGreaterThan(0);
     expect(floorViolationLines(report), `${label}: every control is at least ${HIT_TARGET_FLOOR_PX}px at ${width}px`).toEqual([]);
@@ -6305,6 +6316,7 @@ test("arbiter round column: below md the column leads the page; from md it is th
   const controlSet = () =>
     page.evaluate(() => {
       const column = document.querySelector('[data-testid="arbiter-round-column"]');
+      const waiting = document.querySelector('[data-testid="arbiter-waiting"]');
       const main = column?.closest("main") ?? null;
       const nav = main?.querySelector("nav") ?? null;
       if (!main) return null;
@@ -6317,7 +6329,7 @@ test("arbiter round column: below md the column leads the page; from md it is th
           const b = el.getBoundingClientRect();
           return b.width > 0 && b.height > 0 && getComputedStyle(el).visibility !== "hidden";
         })
-        .map((el) => ({ key: keyOf(el), picker: el.tagName === "SELECT", inNav: nav !== null && nav.contains(el), inColumn: column !== null && column.contains(el) }));
+        .map((el) => ({ key: keyOf(el), picker: el.tagName === "SELECT", inNav: nav !== null && nav.contains(el), inColumn: column !== null && column.contains(el), inWaiting: waiting !== null && waiting.contains(el) }));
     });
   const here = await controlSet();
   expect(here, "main is on screen").not.toBeNull();
@@ -6344,9 +6356,14 @@ test("arbiter round column: below md the column leads the page; from md it is th
   const inColumn = (list: NonNullable<typeof here>) => multiset(list.filter((c) => c.inColumn).map((c) => c.key));
   expect(inColumn(here!), "membership and repeats: the column's controls are the same at both widths").toEqual(inColumn(desk!));
   expect(inColumn(here!).length, "anti-vacuity: the column has controls at both widths").toBeGreaterThan(0);
+  // The waiting list is its own scope (outside the aside), so the column's comparison above says nothing about it: it gets its own.
+  const inWaiting = (list: NonNullable<typeof here>) => multiset(list.filter((c) => c.inWaiting).map((c) => c.key));
+  expect(inWaiting(here!), "membership and repeats: the waiting list's controls are the same at both widths").toEqual(inWaiting(desk!));
+  expect(inWaiting(here!).length, "anti-vacuity: the waiting list has controls at both widths").toBeGreaterThan(0);
+  expect(here!.filter((c) => c.inColumn && c.inWaiting).length, "the two scopes share no control").toBe(0);
 
   console.log(
     `[arbiter-column ${width}px] data-phase=${phase}; ${relations.length}/${expectedRelations} layout relations held (${relations.join("; ")}); ${counts.join("; ")}; ` +
-      `control set ${here!.length} at ${width}px vs ${desk!.length} at 1280 (column ${inColumn(here!).length} vs ${inColumn(desk!).length})`,
+      `control set ${here!.length} at ${width}px vs ${desk!.length} at 1280 (column ${inColumn(here!).length} vs ${inColumn(desk!).length}, waiting list ${inWaiting(here!).length} vs ${inWaiting(desk!).length})`,
   );
 });
