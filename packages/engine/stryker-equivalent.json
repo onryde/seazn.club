@@ -296,6 +296,18 @@
       "reason": "carromForfeitCredit returns doubleWalkoverCredit for by \"both\" before it reads `reason`, so the reason passed for a double walkover is never read."
     },
     {
+      "mutant": "src/sports/carrom/carrom.ts:249:16 ConditionalExpression → false",
+      "original": "state.outcome === null",
+      "line": "const live = state.outcome === null;",
+      "reason": "With live false, unitNumber gives max(started, max(1, completed)) against the original max(started, completed + 1) while outcome is null; there an open game exists (phase live) or nothing has started (pre), and an abandoned match has completed = started - 1 too, so completed + 1 = started (or 1 = 1) and both sides agree. Ran 372 prefixes (4 configs, with abandon and forfeits at 4 depths) with the mutant applied: position and breaker identical to the original; the same probe did detect the mutant live = true."
+    },
+    {
+      "mutant": "src/sports/carrom/carrom.ts:1012:33 ConditionalExpression → true",
+      "original": "current !== undefined",
+      "line": "state.phase === \"live\" && current !== undefined",
+      "reason": "Phase live always has an open game (core.start seeds one, bankGame opens the next in the same step), so current is defined whenever the first operand holds and the mutant never changes the result. Ran the same 372-prefix probe with the mutant applied: summaries identical to the original."
+    },
+    {
       "mutant": "src/sports/carrom/carrom.ts:254:35 ArrowFunction → () => undefined",
       "original": "(game) => game.winner !== null",
       "line": "completed: state.games.filter((game) => game.winner !== null).length,",
