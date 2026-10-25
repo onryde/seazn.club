@@ -334,106 +334,112 @@ export function ArbiterScreen(p: ArbiterScreenProps) {
             })}
           </nav>
 
-          {/* The board group: the picker (below lg), the watch-only line, the heading, the camera, other reports and the waiting list. Below
-              md it is `contents` (its children are the page's flex items, in the phone's order); from md it is the first track's first row,
-              and at lg the middle track over both rows. */}
-          <div
-            data-testid="arbiter-board-group"
-            className="min-w-0 max-md:contents md:col-start-1 md:row-start-1 md:flex md:flex-col md:gap-3 lg:col-start-2 lg:row-span-2 lg:gap-3.5"
-          >
-            <label className={`flex min-w-0 flex-col gap-1.5 text-[13px] font-semibold lg:hidden ${SOFT}`}>
-              {f.t("arbiter.boardPicker")}
-              <select
-                value={board.fixtureId}
-                onChange={(e) => p.on.select(e.target.value)}
-                className={`min-h-11 w-full min-w-0 rounded-[10px] border border-[#c9bdf0] bg-white px-3 text-[15px] font-normal ${INK}`}
-              >
-                {p.round.boards.map((b) => (
-                  <option key={b.fixtureId} value={b.fixtureId}>
-                    {[f.t("arbiter.boardNo", { n: b.boardNo }), names(b, f), flagCount(b, f)].filter(Boolean).join(" · ")}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <p className={`m-0 text-xs leading-[1.45] lg:hidden ${MUTED}`}>{f.t("arbiter.watchOnly")}</p>
-            <div className="order-1 flex min-w-0 items-center justify-between gap-2 lg:items-baseline lg:gap-3">
-              <h2 id={ids.board} className="m-0 min-w-0 text-xl font-semibold max-lg:sr-only">
-                {f.t("arbiter.boardNo", { n: board.boardNo })} · {board.white.name} <span className={`font-medium ${MUTED}`}>{f.t("arbiter.vs")}</span>{" "}
-                {board.black.name}
-              </h2>
-              <BoardStatus board={board} f={f} />
-              {p.round.timeControl && <span className={`text-[13px] lg:hidden ${SOFT}`}>{p.round.timeControl}</span>}
-            </div>
-            <div className="order-2 flex min-w-0 flex-col gap-3 lg:gap-3.5">
-              <Tile seat={p.shown} board={board} video={p.video} f={f} />
-              <PlayerSwitch board={board} shown={p.shown} video={p.video} nowMs={p.nowMs} baseId={ids.switch} onSwitch={p.on.switchTo} f={f} />
-              {/* The completed switch, and each refusal, said to assistive technology (§5.6.4). */}
-              <p role="status" className="sr-only">
-                {statusSentence(p.video, board, p.shown, f)}
-              </p>
-            </div>
-            {(p.video.kind === "fault" || p.video.kind === "error") && (
-              <button type="button" onClick={p.on.retryVideo} className={`order-2 self-start ${BUTTON_QUIET}`}>
-                {f.t("arbiter.tile.retry")}
-              </button>
-            )}
-            <OtherReports round={p.round} board={board} f={f} />
-            {/* The seats that are not here: sorted by its own `order` classes (round-column.tsx), first of the page on a phone and under
-                the camera from md. Renders nothing at all outside a check-in with someone to wait for. */}
-            <WaitingList
-              boards={p.round.boards}
-              view={viewOfRound(p.column.views, p.round)}
-              openRound={p.openRound}
-              nowMs={p.nowMs}
-              requestBusy={p.decision.busy !== null || p.roundExtend.busy}
-              on={{ select: p.on.select, extendBoard: p.on.extendBoard }}
-            />
-          </div>
-
-          {/* The decision group: the flags, the decision and the outage card. Below md it is `contents`; from md it sits under the board
-              group in the first track, and at lg it is the right track's second row, under the column. */}
-          <div
-            data-testid="arbiter-decision-group"
-            className="min-w-0 max-md:contents md:col-start-1 md:row-start-2 md:flex md:flex-col md:gap-3 lg:col-start-3 lg:row-start-2 lg:gap-3.5"
-          >
-            <section aria-labelledby={ids.flags} className="order-3 flex min-w-0 flex-col gap-2.5 border-t border-[#e7e3f3] pt-3 lg:border-t-0 lg:pt-0">
-              <h2 id={ids.flags} className="m-0 text-[17px] font-semibold">
-                <span className="lg:hidden">{f.t("arbiter.flags.headingThis")}</span>
-                <span className="max-lg:hidden">{f.t("arbiter.flags.headingBoard", { n: board.boardNo })}</span>
-              </h2>
-              <p className={`m-0 text-xs leading-[1.45] lg:text-[13px] ${MUTED}`}>{f.t("arbiter.flags.lede")}</p>
-              {board.flags.map((flag) => (
-                <FlagCard key={flag.id} flag={flag} f={f} />
-              ))}
-              {board.cameraReport === "pending" && (
-                <article className={`${CARD} border-[#e7e3f3]`}>
-                  <span className={CHIP_NEUTRAL}>{f.t("arbiter.flag.pending.chip")}</span>
-                  <p className="m-0 text-[13px] leading-[1.45] lg:text-sm">{f.t("arbiter.flag.pending.body")}</p>
-                </article>
-              )}
-              {board.flags.length === 0 && board.cameraReport !== "pending" && (
-                <p className={`m-0 text-[13px] ${SOFT}`}>{f.t("arbiter.flags.none")}</p>
-              )}
-            </section>
-            <Decision board={board} decision={p.decision} roundBusy={p.roundExtend.busy} nowMs={p.nowMs} slugs={p.slugs} on={p.on} f={f} headingId={ids.decide} />
-            {showsOutageCard(board, p.video) && (
-              <section aria-labelledby={ids.outage} className="order-6 flex min-w-0 flex-col gap-2 rounded-xl border border-[#f5d27a] bg-[#fef3c7] p-3 text-[#713f12]">
-                <span className="text-[11px] font-semibold tracking-[0.06em] uppercase">{f.t("arbiter.outage.eyebrow")}</span>
-                <h2 id={ids.outage} className="m-0 text-[15px] font-semibold">
-                  {f.t("arbiter.outage.title")}
-                </h2>
-                <p className="m-0 text-[13px] leading-[1.45]">{f.t("arbiter.outage.body")}</p>
-                <button
-                  type="button"
-                  onClick={p.on.override}
-                  disabled={p.decision.busy !== null}
-                  aria-busy={p.decision.busy?.kind === "override" || undefined}
-                  className="min-h-11 cursor-pointer rounded-[10px] bg-[#713f12] px-3 text-[15px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+          {/* The track (Task 16 D4): ONE box from md to lg, the first grid track's flex column, holding the board group and the decision
+              group so their children sort against each other - the decision above the waiting list. Below md and from lg it is `contents`
+              and owns nothing. */}
+          <div className="min-w-0 contents md:max-lg:col-start-1 md:max-lg:row-start-1 md:max-lg:flex md:max-lg:flex-col md:max-lg:gap-3">
+            {/* The board group: the picker (below lg), the watch-only line, the heading, the camera, other reports and the waiting list. It is
+                `contents` until lg (its children are the page's flex items below md, the track's from md), and at lg the middle track over
+                both rows. */}
+            <div
+              data-testid="arbiter-board-group"
+              className="min-w-0 contents lg:col-start-2 lg:row-start-1 lg:row-span-2 lg:flex lg:flex-col lg:gap-3.5"
+            >
+              <label className={`flex min-w-0 flex-col gap-1.5 text-[13px] font-semibold lg:hidden ${SOFT}`}>
+                {f.t("arbiter.boardPicker")}
+                <select
+                  value={board.fixtureId}
+                  onChange={(e) => p.on.select(e.target.value)}
+                  className={`min-h-11 w-full min-w-0 rounded-[10px] border border-[#c9bdf0] bg-white px-3 text-[15px] font-normal ${INK}`}
                 >
-                  {f.t("arbiter.outage.cta")}
+                  {p.round.boards.map((b) => (
+                    <option key={b.fixtureId} value={b.fixtureId}>
+                      {[f.t("arbiter.boardNo", { n: b.boardNo }), names(b, f), flagCount(b, f)].filter(Boolean).join(" · ")}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <p className={`m-0 text-xs leading-[1.45] lg:hidden ${MUTED}`}>{f.t("arbiter.watchOnly")}</p>
+              <div className="order-1 flex min-w-0 items-center justify-between gap-2 lg:items-baseline lg:gap-3">
+                <h2 id={ids.board} className="m-0 min-w-0 text-xl font-semibold max-lg:sr-only">
+                  {f.t("arbiter.boardNo", { n: board.boardNo })} · {board.white.name} <span className={`font-medium ${MUTED}`}>{f.t("arbiter.vs")}</span>{" "}
+                  {board.black.name}
+                </h2>
+                <BoardStatus board={board} f={f} />
+                {p.round.timeControl && <span className={`text-[13px] lg:hidden ${SOFT}`}>{p.round.timeControl}</span>}
+              </div>
+              <div className="order-2 flex min-w-0 flex-col gap-3 lg:gap-3.5">
+                <Tile seat={p.shown} board={board} video={p.video} f={f} />
+                <PlayerSwitch board={board} shown={p.shown} video={p.video} nowMs={p.nowMs} baseId={ids.switch} onSwitch={p.on.switchTo} f={f} />
+                {/* The completed switch, and each refusal, said to assistive technology (§5.6.4). */}
+                <p role="status" className="sr-only">
+                  {statusSentence(p.video, board, p.shown, f)}
+                </p>
+              </div>
+              {(p.video.kind === "fault" || p.video.kind === "error") && (
+                <button type="button" onClick={p.on.retryVideo} className={`order-2 self-start ${BUTTON_QUIET}`}>
+                  {f.t("arbiter.tile.retry")}
                 </button>
+              )}
+              <OtherReports round={p.round} board={board} f={f} />
+              {/* The seats that are not here: sorted by its own `order` classes (round-column.tsx), first of the page on a phone and under
+                  the camera from md. Renders nothing at all outside a check-in with someone to wait for. */}
+              <WaitingList
+                boards={p.round.boards}
+                view={viewOfRound(p.column.views, p.round)}
+                openRound={p.openRound}
+                nowMs={p.nowMs}
+                requestBusy={p.decision.busy !== null || p.roundExtend.busy}
+                on={{ select: p.on.select, extendBoard: p.on.extendBoard }}
+              />
+            </div>
+
+            {/* The decision group: the flags, the decision and the outage card. `contents` until lg (the phone's flex column, then the track's:
+                from md to lg their orders 5 to 7 put them after the camera and other reports and before the waiting list's 8), and at lg the
+                right track's second row, under the column. */}
+            <div
+              data-testid="arbiter-decision-group"
+              className="min-w-0 contents lg:col-start-3 lg:row-start-2 lg:flex lg:flex-col lg:gap-3.5"
+            >
+              <section aria-labelledby={ids.flags} className="order-3 flex min-w-0 flex-col gap-2.5 border-t border-[#e7e3f3] pt-3 md:max-lg:order-5 lg:border-t-0 lg:pt-0">
+                <h2 id={ids.flags} className="m-0 text-[17px] font-semibold">
+                  <span className="lg:hidden">{f.t("arbiter.flags.headingThis")}</span>
+                  <span className="max-lg:hidden">{f.t("arbiter.flags.headingBoard", { n: board.boardNo })}</span>
+                </h2>
+                <p className={`m-0 text-xs leading-[1.45] lg:text-[13px] ${MUTED}`}>{f.t("arbiter.flags.lede")}</p>
+                {board.flags.map((flag) => (
+                  <FlagCard key={flag.id} flag={flag} f={f} />
+                ))}
+                {board.cameraReport === "pending" && (
+                  <article className={`${CARD} border-[#e7e3f3]`}>
+                    <span className={CHIP_NEUTRAL}>{f.t("arbiter.flag.pending.chip")}</span>
+                    <p className="m-0 text-[13px] leading-[1.45] lg:text-sm">{f.t("arbiter.flag.pending.body")}</p>
+                  </article>
+                )}
+                {board.flags.length === 0 && board.cameraReport !== "pending" && (
+                  <p className={`m-0 text-[13px] ${SOFT}`}>{f.t("arbiter.flags.none")}</p>
+                )}
               </section>
-            )}
+              <Decision board={board} decision={p.decision} roundBusy={p.roundExtend.busy} nowMs={p.nowMs} slugs={p.slugs} on={p.on} f={f} headingId={ids.decide} />
+              {showsOutageCard(board, p.video) && (
+                <section aria-labelledby={ids.outage} className="order-6 flex min-w-0 flex-col gap-2 rounded-xl border border-[#f5d27a] bg-[#fef3c7] p-3 text-[#713f12] md:max-lg:order-7">
+                  <span className="text-[11px] font-semibold tracking-[0.06em] uppercase">{f.t("arbiter.outage.eyebrow")}</span>
+                  <h2 id={ids.outage} className="m-0 text-[15px] font-semibold">
+                    {f.t("arbiter.outage.title")}
+                  </h2>
+                  <p className="m-0 text-[13px] leading-[1.45]">{f.t("arbiter.outage.body")}</p>
+                  <button
+                    type="button"
+                    onClick={p.on.override}
+                    disabled={p.decision.busy !== null}
+                    aria-busy={p.decision.busy?.kind === "override" || undefined}
+                    className="min-h-11 cursor-pointer rounded-[10px] bg-[#713f12] px-3 text-[15px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {f.t("arbiter.outage.cta")}
+                  </button>
+                </section>
+              )}
+            </div>
           </div>
 
           {/* The round column: last in the DOM, placed by name (round-column.tsx), the first thing on a phone and the second track from
@@ -880,7 +886,7 @@ function Decision({
   const busy = decision.busy !== null || roundBusy;
   const guidance = settleGuidance(board);
   return (
-    <section aria-labelledby={headingId} className="order-5 flex min-w-0 flex-col gap-2 border-t border-[#e7e3f3] pt-3 lg:pt-3.5">
+    <section aria-labelledby={headingId} data-testid="arbiter-decision" className="order-5 flex min-w-0 flex-col gap-2 border-t border-[#e7e3f3] pt-3 md:max-lg:order-6 lg:pt-3.5">
       <h2 id={headingId} className="m-0 text-[17px] font-semibold">
         <span className="lg:hidden">{f.t("arbiter.decide.headingBoard", { n: board.boardNo })}</span>
         <span className="max-lg:hidden">{f.t("arbiter.decide.heading")}</span>

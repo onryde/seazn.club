@@ -1967,6 +1967,13 @@ const phaseOf = (h: string) => /data-testid="arbiter-round-column" data-phase="(
 const mainOf = (h: string) => elementMatching(h, /<main\b[^>]*>/);
 const asideOf = (h: string) => elementMatching(h, /<aside\b[^>]*>/);
 const testidOf = (n: Node) => /data-testid="([^"]*)"/.exec(n.open)?.[1] ?? null;
+/** main's parts: the nav, the track (one box from md to lg that holds both groups), the two groups inside it, and the aside. */
+const partsOf = (h: string) => {
+  const kids = childrenOf(mainOf(h)!.inner);
+  const [nav, track, aside] = kids as [Node, Node, Node];
+  const [board, decision] = childrenOf(track.inner) as [Node, Node];
+  return { kids, nav, track, board, decision, aside };
+};
 
 /** A check-in window the screen's clock (NOW, 19:44) is inside. */
 const WINDOW_OPEN: CheckinExtendState = { canExtend: true, refusal: null, extensionsLeft: CHECKIN_EXTEND_MAX, opensAt: at(19, 30), deadlineAt: at(19, 50) };
@@ -2128,19 +2135,23 @@ describe("one round bar per page, placed by path (C13)", () => {
 describe("placement classes (C10): the groups, in the DOM order and with the classes the grid needs", () => {
   const MAIN = ["flex", "flex-col", "gap-3", "md:grid", "md:grid-cols-[minmax(0,1fr)_320px]", "md:grid-rows-[auto_1fr]", "md:items-start", "lg:grid-cols-[248px_minmax(0,1fr)_320px]", "lg:grid-rows-[auto_1fr]"];
   const NAV = ["hidden", "lg:flex", "lg:col-start-1", "lg:row-start-1", "lg:row-span-2"];
-  const BOARD_GROUP = ["max-md:contents", "md:flex", "md:flex-col", "md:gap-3", "md:col-start-1", "md:row-start-1", "lg:col-start-2", "lg:row-span-2"];
-  const DECISION_GROUP = ["max-md:contents", "md:flex", "md:flex-col", "md:gap-3", "md:col-start-1", "md:row-start-2", "lg:col-start-3", "lg:row-start-2"];
+  // Task 16 D4: from md to lg the two groups are ONE flex column (the track), so the decision can sort above the waiting list; the
+  // groups themselves are `display: contents` until lg, where each is its own flex column in its own grid track.
+  const TRACK = ["min-w-0", "contents", "md:max-lg:col-start-1", "md:max-lg:row-start-1", "md:max-lg:flex", "md:max-lg:flex-col", "md:max-lg:gap-3"];
+  const BOARD_GROUP = ["min-w-0", "contents", "lg:flex", "lg:flex-col", "lg:gap-3.5", "lg:col-start-2", "lg:row-start-1", "lg:row-span-2"];
+  const DECISION_GROUP = ["min-w-0", "contents", "lg:flex", "lg:flex-col", "lg:gap-3.5", "lg:col-start-3", "lg:row-start-2"];
   const ASIDE = ["max-md:order-[-2]", "md:col-start-2", "md:row-start-1", "md:row-span-2", "lg:col-start-3", "lg:row-start-1", "lg:row-span-1"];
   /** f4 on screen: it has a check-in window, so the decision group carries the board's "+5 min" and the groups are all populated. */
   const grid = () => html(screenOf(CK_ROUND, { decision: initialArbiterDecision("f4") }));
 
-  it("main, nav, the two groups and the aside carry the spec's classes, in the spec's DOM order, and nothing else is a child of main", () => {
+  it("main, nav, the track, the two groups and the aside carry the spec's classes, in the spec's DOM order, and nothing else is a child of main", () => {
     const h = grid();
     const main = mainOf(h)!;
     expect(missing(main.open, MAIN)).toEqual([]);
-    const kids = childrenOf(main.inner);
-    expect(kids.map((k) => k.name), "main's children: nav, board group, decision group, aside").toEqual(["nav", "div", "div", "aside"]);
-    const [nav, board, decision, aside] = kids as [Node, Node, Node, Node];
+    const { kids, nav, track, board, decision, aside } = partsOf(h);
+    expect(kids.map((k) => k.name), "main's children: nav, the track, aside").toEqual(["nav", "div", "aside"]);
+    expect(childrenOf(track.inner).map((k) => k.name), "the track's children: the board group, the decision group").toEqual(["div", "div"]);
+    expect(missing(track.open, TRACK), "track").toEqual([]);
     expect(missing(nav.open, NAV), "nav").toEqual([]);
     expect(testidOf(board)).toBe("arbiter-board-group");
     expect(testidOf(decision)).toBe("arbiter-decision-group");
@@ -2149,11 +2160,15 @@ describe("placement classes (C10): the groups, in the DOM order and with the cla
     expect(missing(aside.open, ASIDE), "aside").toEqual([]);
     // A landmark is never display: contents, and every new wrapper can shrink (min-w-0 down the chain).
     expect([...tokensOf(aside.open)].filter((x) => /(^|:)contents$/.test(x))).toEqual([]);
-    for (const [name, n] of [["board group", board], ["decision group", decision], ["aside", aside]] as const) expect(missing(n.open, ["min-w-0"]), name).toEqual([]);
+    for (const [name, n] of [["track", track], ["board group", board], ["decision group", decision], ["aside", aside]] as const) expect(missing(n.open, ["min-w-0"]), name).toEqual([]);
+    // The groups are boxless until lg: a stale `md:flex` on either would make it a flex column of its own again, with the waiting list
+    // sorting inside the board group only, and the decision group below it (the D4 defect).
+    for (const [name, n] of [["board group", board], ["decision group", decision]] as const)
+      expect([...tokensOf(n.open)].filter((x) => /^(md|max-md):/.test(x)), `${name}: no md or max-md class of its own`).toEqual([]);
   });
 
   it("the board group holds the picker, the watch-only line, the heading, the camera, other reports and the waiting list; the decision group holds flags, the decision and the outage card", () => {
-    const [, board, decision, aside] = childrenOf(mainOf(grid())!.inner) as [Node, Node, Node, Node];
+    const { board, decision, aside } = partsOf(grid());
     const inBoard = childrenOf(board.inner);
     expect(inBoard.map((c) => c.name)).toContain("label");
     expect(board.inner).toContain("<select");
@@ -2169,25 +2184,18 @@ describe("placement classes (C10): the groups, in the DOM order and with the cla
     for (const stray of ["<select", "<figure", "arbiter-extend-board"]) expect(aside.inner, stray).not.toContain(stray);
   });
 
-  it("the waiting list leads the phone and sits under the camera from md: max-md:order-[-1], and a md order after the camera's and before other reports'", () => {
-    const [, board] = childrenOf(mainOf(grid())!.inner) as [Node, Node, Node, Node];
-    const kids = childrenOf(board.inner);
-    const waiting = kids.find((c) => testidOf(c) === "arbiter-waiting")!;
-    expect(missing(waiting.open, ["max-md:order-[-1]"])).toEqual([]);
-    // From md the group is a flex column, so `order` is a sort key: `md:order-none` (0) would tie with the picker and the watch-only line
-    // and sort by DOM order, landing above the heading (order-1) and the camera (order-2). The camera group is order-2 and the other
-    // reports order-4; the list sits between, so it is "under the camera" and the rest keep their places.
-    const mdOrder = (n: Node) => {
-      const t = [...tokensOf(n.open)];
-      const hit = t.find((x) => /^md:order-\d+$/.test(x)) ?? t.find((x) => /^order-\d+$/.test(x));
-      return hit === undefined ? 0 : Number(/(\d+)$/.exec(hit)![1]);
-    };
-    const tile = kids.find((c) => c.inner.includes("<figure"))!;
-    const reports = kids.find((c) => c.inner.includes(EN["arbiter.otherReport.heading"]!.replace("{n}", "2")))!;
-    expect(mdOrder(tile)).toBe(2);
-    expect(mdOrder(reports)).toBe(4);
-    expect(mdOrder(waiting), "after the camera").toBeGreaterThan(mdOrder(tile));
-    expect(mdOrder(waiting), "before other reports").toBeLessThan(mdOrder(reports));
+  it("the waiting list leads the phone, is last of the track from md to lg, and sits under the camera at lg", () => {
+    const { board, decision } = partsOf(grid());
+    const waiting = childrenOf(board.inner).find((c) => testidOf(c) === "arbiter-waiting")!;
+    const t = tokensOf(waiting.open);
+    expect(t.has("max-md:order-[-1]"), "leads the phone").toBe(true);
+    // md to lg: the track is one flex column, so the list's order is a sort key against the decision group's children too.
+    const tracked = (n: Node) => Number(/^md:max-lg:order-(\d+)$/.exec([...tokensOf(n.open)].find((x) => /^md:max-lg:order-\d+$/.test(x)) ?? "")?.[1] ?? NaN);
+    const decisionKids = childrenOf(decision.inner);
+    expect(decisionKids.length, "premise: the decision group has children").toBeGreaterThan(1);
+    for (const k of decisionKids) expect(tracked(waiting), `after ${k.name}`).toBeGreaterThan(tracked(k));
+    // lg: the board group is its own flex column and the list stays under the camera (order 3), before other reports (4).
+    expect(t.has("lg:order-3"), "lg: under the camera").toBe(true);
   });
 
   it("the phone reads: the column, the waiting list, the picker, the board, the flags, the decision (spec §5.1)", () => {
@@ -2202,15 +2210,17 @@ describe("placement classes (C10): the groups, in the DOM order and with the cla
       return bare === undefined ? 0 : Number(/(\d+)$/.exec(bare)![1]);
     };
     const label = (n: Node) => testidOf(n) ?? `${n.name}:${phoneOrder(n)}`;
-    for (const k of childrenOf(main.inner)) {
-      if (tokensOf(k.open).has("hidden")) continue;
-      if (tokensOf(k.open).has("max-md:contents")) for (const c of childrenOf(k.inner)) items.push({ label: label(c), order: phoneOrder(c) });
+    // A boxless node (`contents`, the track and both groups) hands its children to the page's flex column; descend until a box.
+    const take = (k: Node) => {
+      if (tokensOf(k.open).has("hidden")) return;
+      if (tokensOf(k.open).has("contents")) for (const c of childrenOf(k.inner)) take(c);
       else items.push({ label: label(k), order: phoneOrder(k) });
-    }
+    };
+    for (const k of childrenOf(main.inner)) take(k);
     const sorted = items.map((x, i) => ({ ...x, i })).sort((a, b) => a.order - b.order || a.i - b.i).map((x) => x.label);
     // The spec's phone order, item by item: column, waiting list, picker, its line, the board's heading, the camera, the flags, other
-    // reports, the decision. (`div:1` is the heading row, `div:2` the pane and switch, `div:4` the other reports.)
-    expect(sorted).toEqual(["arbiter-round-column", "arbiter-waiting", "label:0", "p:0", "div:1", "div:2", "section:3", "div:4", "section:5"]);
+    // reports, the decision. (`div:1` is the heading row, `div:2` the pane and switch, `div:4` the other reports; the decision is named by its testid.)
+    expect(sorted).toEqual(["arbiter-round-column", "arbiter-waiting", "label:0", "p:0", "div:1", "div:2", "section:3", "div:4", "arbiter-decision"]);
   });
 
   it("the paths with no grid: main is a two-track grid from md, the notice leads the DOM, the aside is first on a phone and in track 2", () => {
@@ -2259,6 +2269,85 @@ describe("the empty copy no longer sends the organiser to the run sheet (spec §
   });
 });
 
+// ── Task 16 D4: from md to lg the decision area sits above the waiting list ───────────────────────────────────────────────────────
+//
+// `renderToStaticMarkup` has no layout, so the order a person sees is derived here the way the browser derives it: which boxes are
+// flex items of which container at each width (a `display: contents` node hands its children up), and each item's `order` at that
+// width. Three widths: a phone (below md), md to lg (two tracks), lg (three). Only the md-to-lg order is new; the other two are pinned
+// so a change to the new classes cannot move them.
+describe("D4: the decision area is above the waiting list from md to lg, and the phone and desktop orders are unchanged", () => {
+  const board = (): ArbiterBoard => ({ ...CHECKING_IN_F4, cameraPolicy: "required", playable: true, videoOverridden: false });
+  /** f4 on screen with every item of the board's side present: picker, watch-only line, heading, camera, other reports (f2's camera
+   *  report), flags, the decision with its +5, the outage card (required camera, video unavailable) and the waiting list (a seat not here). */
+  const full = () =>
+    html(screenOf({ ...CK_ROUND, boards: [CK_ROUND.boards[0]!, CK_ROUND.boards[1]!, board()] }, { decision: initialArbiterDecision("f4"), video: { kind: "unavailable" } }));
+
+  const labelOf = (n: Node): string => {
+    const id = testidOf(n);
+    if (id === "arbiter-waiting") return "waiting";
+    if (n.name === "label") return "picker";
+    if (n.name === "p") return "watch-only";
+    if (n.inner.includes("<figure")) return "camera";
+    if (n.inner.includes(EN["arbiter.otherReport.heading"]!.replace("{n}", "2"))) return "other-reports";
+    if (n.inner.includes(EN["arbiter.outage.title"]!)) return "outage";
+    if (id === "arbiter-decision") return "decision";
+    if (n.inner.includes(EN["arbiter.flags.lede"]!)) return "flags";
+    if (n.name === "div" && n.inner.includes("<h2")) return "heading";
+    return `unknown:${n.name}`;
+  };
+  type Range = "phone" | "md" | "lg";
+  /** An item's `order` at a width: the most specific class that applies there, else the bare `order-N`, else 0. */
+  const orderAt = (n: Node, range: Range): number => {
+    const t = [...tokensOf(n.open)];
+    const num = (re: RegExp) => {
+      const hit = t.find((x) => re.test(x));
+      return hit === undefined ? null : Number(/order-\[?(-?\d+)\]?$/.exec(hit)![1]);
+    };
+    const specific = range === "phone" ? num(/^max-md:order-\[-?\d+\]$/) : range === "md" ? num(/^md:max-lg:order-\d+$/) : num(/^lg:order-\d+$/);
+    return specific ?? num(/^order-\d+$/) ?? 0;
+  };
+  /** Whether the node is boxless at that width (its children are its parent's flex items). */
+  const boxless = (n: Node, range: Range): boolean => {
+    const t = tokensOf(n.open);
+    if (range === "lg") return t.has("lg:contents") || (t.has("contents") && !t.has("lg:flex"));
+    if (range === "md") return t.has("contents") && !t.has("md:max-lg:flex");
+    return t.has("contents");
+  };
+  const flexItems = (nodes: Node[], range: Range): Node[] =>
+    nodes.flatMap((k) => (tokensOf(k.open).has("hidden") && range !== "lg" ? [] : boxless(k, range) ? flexItems(childrenOf(k.inner), range) : [k]));
+  /** The labels of one flex container's items, in the order the browser lays them out (ties keep DOM order). */
+  const laidOut = (items: Node[], range: Range): string[] =>
+    items.map((n, i) => ({ l: labelOf(n), o: orderAt(n, range), i })).sort((a, b) => a.o - b.o || a.i - b.i).map((x) => x.l);
+
+  it("md to lg: heading, camera, other reports, flags, the decision, the outage card, THEN the waiting list (one column, the waiting list last)", () => {
+    const { track } = partsOf(full());
+    expect(boxless(track, "md"), "the track is the flex column at md").toBe(false);
+    const order = laidOut(flexItems(childrenOf(track.inner), "md"), "md");
+    expect(order).toEqual(["picker", "watch-only", "heading", "camera", "other-reports", "flags", "decision", "outage", "waiting"]);
+    expect(order.indexOf("decision"), "the defect: the decision below the waiting list").toBeLessThan(order.indexOf("waiting"));
+  });
+
+  it("the phone is unchanged: the waiting list leads, then the picker, the board, the flags, other reports, the decision, the outage card", () => {
+    const { kids } = partsOf(full());
+    const order = laidOut(flexItems(kids.filter((k) => k.name !== "aside"), "phone"), "phone");
+    expect(order).toEqual(["waiting", "picker", "watch-only", "heading", "camera", "flags", "other-reports", "decision", "outage"]);
+  });
+
+  it("lg is unchanged: the board group (middle track) holds the waiting list under the camera, the decision group is the right track's own column", () => {
+    const { board: b, decision: d } = partsOf(full());
+    expect(boxless(b, "lg") || boxless(d, "lg"), "both groups are boxes at lg").toBe(false);
+    expect(laidOut(childrenOf(b.inner), "lg")).toEqual(["picker", "watch-only", "heading", "camera", "waiting", "other-reports"]);
+    expect(laidOut(childrenOf(d.inner), "lg")).toEqual(["flags", "decision", "outage"]);
+  });
+
+  it("anti-vacuity: the simulation sees nine items at md and at the phone, and finds the decision at all", () => {
+    const { track, kids } = partsOf(full());
+    expect(flexItems(childrenOf(track.inner), "md")).toHaveLength(9);
+    expect(flexItems(kids.filter((k) => k.name !== "aside"), "phone")).toHaveLength(9);
+    for (const n of flexItems(childrenOf(track.inner), "md")) expect(labelOf(n), "every item was recognised").not.toMatch(/^unknown/);
+  });
+});
+
 describe("extendBoard selects the board, then extends it (the reducer, with the actions the shell dispatches)", () => {
   it("select f4 then extend f4: the board on screen is f4 and the one request in flight is its extend", () => {
     const start = initialArbiterDecision("f1");
@@ -2278,7 +2367,7 @@ describe("extendBoard selects the board, then extends it (the reducer, with the 
     expect(answered.busy).toBeNull();
     expect(answered.notice).toMatchObject({ boardId: "f4", kind: "extended", boardNo: 4 });
     const screen = html(screenOf(CK_ROUND, { decision: { ...answered, boardId: "f4" } }));
-    const decisionArea = childrenOf(mainOf(screen)!.inner)[2]!;
+    const decisionArea = partsOf(screen).decision;
     expect(text(decisionArea.inner), "the answer is in the decision area").toContain(
       EN["externalPlay.checkinExtend.notice.board"]!.replace("{minutes}", "5").replace("{n}", "4").replace("{time}", hhmm(WINDOW_OPEN.deadlineAt)),
     );

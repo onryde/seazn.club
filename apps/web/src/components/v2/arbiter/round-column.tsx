@@ -607,10 +607,12 @@ export function WaitingList({ boards, view, openRound, nowMs, requestBusy, on }:
 
   return (
     // The panel's board group is `contents` below md, so on a phone this is a flex item of the page: -1 puts it straight after the column
-    // (the aside is -2). From md the group is a flex column whose children carry order-1..4 (heading, camera, other reports): `order-3`
-    // is "under the camera" and above the other reports. `md:order-none` (0) would tie with the picker and the watch-only line and sort by
-    // DOM order, landing above the heading (order-1) and the camera (order-2) - not under the camera.
-    <section aria-labelledby="arbiter-waiting-heading" data-testid="arbiter-waiting" className={`flex flex-col gap-2 max-md:order-[-1] md:order-3 ${CARD_BOX}`}>
+    // (the aside is -2). From md to lg the panel's two groups are ONE flex column (the track) whose children carry order-1..7 (heading,
+    // camera, other reports 4, then the flags, the decision and the outage card at 5..7): `md:max-lg:order-8` is last, so the decision is
+    // above the list (Task 16 D4). From lg the board group is its own flex column again, children order-1..4 (heading, camera, other
+    // reports): `lg:order-3` is "under the camera" and above the other reports. A bare order of 0 would tie with the picker and the
+    // watch-only line and sort by DOM order, landing above the heading (order-1) and the camera (order-2) - not under the camera.
+    <section aria-labelledby="arbiter-waiting-heading" data-testid="arbiter-waiting" className={`flex flex-col gap-2 max-md:order-[-1] md:max-lg:order-8 lg:order-3 ${CARD_BOX}`}>
       <h2 id="arbiter-waiting-heading" data-testid="arbiter-waiting-heading" className={`m-0 min-w-0 text-base font-semibold break-words ${INK}`}>
         {plural("arbiter.column.waiting", rows.length)}
       </h2>

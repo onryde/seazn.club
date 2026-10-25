@@ -1454,7 +1454,8 @@ describe("WaitingList: its place in the panel's flex order (Task 8, spec §5.1)"
     // From md the panel's board group is a flex column whose children carry order-1..4, so the list must sort between the camera
     // (order-2) and the other reports (order-4): the panel's own test pins that; here, that the root is the one that says so.
     expect(orders.filter((x) => x.startsWith("max-md:"))).toEqual(["max-md:order-[-1]"]);
-    expect(orders.filter((x) => x.startsWith("md:"))).toEqual(["md:order-3"]);
+    // Task 16 D4: from md to lg the panel's two groups are one flex column and the list is its last item; at lg it is back under the camera.
+    expect(orders.filter((x) => x.startsWith("md:") || x.startsWith("lg:")).sort()).toEqual(["lg:order-3", "md:max-lg:order-8"]);
     expect(classOf(root)).toMatch(/(^|\s)min-w-0(\s|$)/);
   });
 });

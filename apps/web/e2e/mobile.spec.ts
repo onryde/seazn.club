@@ -6157,7 +6157,7 @@ test("W2c division lock lines at every width: each line is on screen and readabl
 
 // The Arbiter Panel's round column (phase 2, spec 2026-10-24-arbiter-round-column-design.md §5.1, §7; C27): at this project's REAL
 // width. Below md the column is the first thing on the page, then the waiting seats, then the board picker; from md `main` is two
-// tracks and the column is the right-hand one, the decision group under the camera. Asserted as the order and the edges of what is
+// tracks and the column is the right-hand one, with the decision area under the camera and above the waiting list (Task 16 D4). Asserted as the order and the edges of what is
 // on screen, not as box sizes, so a groomed shrink of the desktop layout cannot pass for the phone composition. Every control in the
 // column and in the waiting list is at least 44px and HIT-TESTED (the paint box is not the tap area), nothing scrolls the page
 // sideways, and the visible control set of `main` is the one 1280 shows from the same seed, apart from the two controls that exist
@@ -6213,8 +6213,7 @@ test("arbiter round column: below md the column leads the page; from md it is th
       aside: at(document.querySelector('[data-testid="arbiter-round-column"]')),
       waiting: at(document.querySelector('[data-testid="arbiter-waiting"]')),
       picker: at(document.querySelector('[data-testid="arbiter-round-column"]')?.closest("main")?.querySelector("select")?.closest("label")),
-      boardGroup: at(document.querySelector('[data-testid="arbiter-board-group"]')),
-      decisionGroup: at(document.querySelector('[data-testid="arbiter-decision-group"]')),
+      decision: at(document.querySelector('[data-testid="arbiter-decision"]')),
       camera: at(document.querySelector('[data-testid="arbiter-round-column"]')?.closest("main")?.querySelector("figure")),
     };
   });
@@ -6236,14 +6235,15 @@ test("arbiter round column: below md the column leads the page; from md it is th
     holds(wait.top >= aside.bottom - 1, "the waiting list starts below the column");
     holds(wait.bottom <= picker.top + 1, "the waiting list ends above the picker");
   } else {
-    // 768 and 834 are md and not lg (lg is 1024): two tracks, the board group over the decision group in the first, the column in the second.
+    // 768 and 834 are md and not lg (lg is 1024): two tracks, the board then the decision then the waiting list in the first, the column in
+    // the second. (The panel's two groups are `display: contents` here and have no box to measure, so the boxes that are drawn are read:
+    // the camera, the decision area and the list. Task 16 D4: the decision area sits ABOVE the list, not below the whole of it.)
     expect(width, "premise: the tablet widths are md, not lg").toBeLessThan(1024);
-    const boardGroup = need(rects.boardGroup, "the board group");
-    const decisionGroup = need(rects.decisionGroup, "the decision group");
-    holds(aside.left >= boardGroup.right - 1, "the column is right of the board group");
-    holds(aside.left >= decisionGroup.right - 1, "the column is right of the decision group");
-    holds(decisionGroup.top >= camera.bottom - 1, "the decision group is below the camera");
-    holds(decisionGroup.top >= boardGroup.bottom - 1, "the decision group is below the board group");
+    const decision = need(rects.decision, "the decision area");
+    holds(aside.left >= camera.right - 1, "the column is right of the camera");
+    holds(aside.left >= decision.right - 1, "the column is right of the decision area");
+    holds(decision.top >= camera.bottom - 1, "the decision area is below the camera");
+    holds(decision.bottom <= wait.top + 1, "the decision area is above the waiting list");
     holds(wait.top >= camera.bottom - 1, "the waiting list is under the camera");
   }
   const expectedRelations = phone ? 3 : 5;
