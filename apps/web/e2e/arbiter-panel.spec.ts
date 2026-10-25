@@ -40,8 +40,25 @@ import { Chess } from "chess.js";
 import { randomBytes, randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { HOLDING_WORDS, type InviteWord } from "../src/lib/invite-status";
+import { DEADLINE_AFTER_MS } from "../src/server/external-play/window";
+import {
+  backdateOpenSql,
+  budgetFor,
+  cancelFlaggedSql,
+  column,
+  expectSeatWord,
+  holdNoShowSql,
+  inviteRowCount,
+  openRoundSent,
+  POLL_BUDGET_MS,
+  recordedOpenNotices,
+  recordOpenNotices,
+  refreshNow,
+  watchOpenRoundPosts,
+} from "./arbiter-column-kit";
 import { apiJson, createStageAndGenerate, linkPersonToUserBySql, loginUi, TAG, withDb } from "./helpers";
-import { CLOCK, fill, longName, seedLichessLink, seedUser, uiEn } from "./match-room-kit";
+import { CLOCK, fill, longName, roundGameSql, seedLichessLink, seedOnlineRound, seedSeatInvite, seedUser, uiEn, type RoundBoard } from "./match-room-kit";
 
 test.describe.configure({ mode: "parallel" });
 
@@ -1278,4 +1295,445 @@ test.describe("arbiter panel", () => {
     await shoot(page, "arbiter-switch-after-colour-swap");
   });
 
+});
+
+// ─── the Arbiter Panel's round column at 1280 (phase 2, Task 13) ────────────────────────────────────────────────────────────────
+// Spec 2026-10-24-arbiter-round-column-design.md. online-chess-desk.spec.ts drives the same column through the full Open round, the
+// six invite words and the queue; these are the sequences it does not: a double-clicked confirmation, the invite words beside
+// Resend and the hero's press, an Open from a page made stale, a Review that selects in place, Open round 2 while round 1 plays,
+// the Fixtures tab's absences, and the two pieces of client state the column owns (the queue's reducer, the open-round hook).
+// The e2e servers have no mail provider, so every invite row ends `dead` inside the open and every seat reads "Not delivered";
+// `seedSeatInvite` writes the rows the worker and the provider's webhook would. The sweep that holds a no-show is a cron job that
+// does not run here, so `holdNoShowSql` writes the row it leaves.
+test.describe("arbiter round column", () => {
+  /** The dictionary's one/other pair for a count, picked the way `plural()` picks it. */
+  const pluralKey = (stem: string, count: number) => `${stem}.${count === 1 ? "one" : "other"}`;
+
+  test("round column: before, open from the column, then check-in with each invite's word", async ({ page, request }) => {
+    test.setTimeout(budgetFor(0, 360_000));
+    // Eight players, four boards: each of the words below gets a board of its own, because Resend is a BOARD's (a board offers it
+    // when either of its seats holds a mail: open-round-view.ts `canResend`, spec §5.3).
+    const names = [longName(), "Ana Petrova", "Bo Lindqvist", "Chen Wei", "Dara Okafor", "Eli Brandt", "Fay Moreno", "Gus Hallberg"];
+    const r = await seedOnlineRound(request, names, { open: false });
+    const ids = r.boards.map((b) => b.fixtureId);
+    const seatCount = r.boards.flatMap((b) => [b.home, b.away]).length;
+    expect(r.boards.length, "premise: eight players pair into four boards").toBe(4);
+    expect(seatCount, "premise: a board seats two").toBe(2 * r.boards.length);
+    expect(await inviteRowCount(ids), "the empty case first: nothing is mailed before the open").toBe(0);
+
+    const posts = watchOpenRoundPosts(page, r.stageId);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(r.arbiterPath);
+    const col = column(page);
+    await expect(col, "the round is paired and not opened").toHaveAttribute("data-phase", "before", { timeout: 30_000 });
+
+    // C20a: a double click on the confirmation is ONE request, and one outbox row per player's address.
+    const block = col.locator('[data-testid="arbiter-column-open"][data-round-no="1"]');
+    await block.getByTestId("arbiter-column-open-cta").click();
+    const confirm = page.getByTestId("arbiter-column-confirm-confirm");
+    await expect(confirm).toHaveText(fill("runsheet.round.confirmCta.other", { count: seatCount }));
+    await confirm.dblclick();
+    await expect(col).toHaveAttribute("data-phase", "checkin", { timeout: 30_000 });
+    expect(posts.roundNos(), "two clicks, one request").toEqual([1]);
+    const opens = await withDb(
+      async (sql) => (await sql`select 1 from stage_round_opens where stage_id = ${r.stageId} and round_no = 1`).length,
+    );
+    expect(opens, "one open, stamped once").toBe(1);
+    expect(await inviteRowCount(ids), "one invite row per player's address: 2 x the seeded boards, none doubled").toBe(seatCount);
+
+    // C4, the CI default: no mail provider, so every row ended dead and the hook released every seat. Every seat reads Not delivered,
+    // no row offers Resend (no seat holds a mail), and the hero offers the round's reopen press, not a reinvite.
+    let words = 0;
+    for (const b of r.boards) {
+      for (const colour of ["white", "black"] as const) {
+        await expectSeatWord(page, b, colour, "not_delivered");
+        words += 1;
+      }
+    }
+    expect(words, "anti-vacuity: every seat of every board read").toBe(seatCount);
+    await expect(col.getByTestId("arbiter-waiting-resend"), "nobody holds a mail, so no row offers Resend").toHaveCount(0);
+    const press = col.getByTestId("arbiter-column-reinvite");
+    await expect(press).toHaveText(uiEn["arbiter.column.reopenCta"]!);
+    await press.click();
+    const dialog = page.getByTestId("arbiter-column-reinvite-dialog");
+    await expect(dialog).toContainText(fill("arbiter.column.reopenConfirmTitle", { round: 1 }));
+    await expect(page.getByTestId("arbiter-column-reinvite-dialog-confirm")).toHaveText(fill("arbiter.column.reopenConfirmCta.other", { count: seatCount }));
+    await page.getByTestId("arbiter-column-reinvite-dialog-cancel").click();
+    await expect(dialog).toHaveCount(0);
+    expect(posts.roundNos(), "Cancel sent nothing").toEqual([1]);
+
+    // The words the mail leaves. One seat per board, a different word on each: delivered, sent, delayed, and a bounce.
+    const [b1, b2, b3, b4] = r.boards as [RoundBoard, RoundBoard, RoundBoard, RoundBoard];
+    const seeded = [
+      [b1, "delivered"],
+      [b2, "sent"],
+      [b3, "delayed"],
+      [b4, "bounced"],
+    ] as const;
+    for (const [b, word] of seeded) await seedSeatInvite(b.fixtureId, "white", word);
+    await page.reload();
+    await expect(col).toHaveAttribute("data-phase", "checkin", { timeout: 30_000 });
+    let read = 0;
+    for (const [b, word] of seeded) {
+      await expectSeatWord(page, b, "white", word);
+      await expectSeatWord(page, b, "black", "not_delivered");
+      read += 2;
+    }
+    expect(read, "anti-vacuity: every seat of the four boards read after the reload").toBe(seatCount);
+    expect(new Set(seeded.map(([, w]) => w)).size, "four different words on four boards").toBe(4);
+
+    // Resend: on the boards whose seat holds a mail (sent, delivered, delayed), not on the board whose only mail bounced.
+    const resend = (b: RoundBoard) => col.locator(`[data-testid="arbiter-waiting-resend"][data-fixture-id="${b.fixtureId}"]`);
+    for (const [b, word] of seeded) {
+      await expect(resend(b), `${word}: Resend is offered exactly when a seat on the board holds the mail`).toHaveCount(HOLDING_WORDS.includes(word as InviteWord) ? 1 : 0);
+    }
+    const holding = seeded.filter(([, w]) => HOLDING_WORDS.includes(w as InviteWord)).length;
+    expect(holding, "premise: three of the four words hold a seat").toBe(3);
+    await expect(col.getByTestId("arbiter-waiting-resend")).toHaveCount(holding);
+    // The press follows what is owed: a seat is owed unless its mail holds it, so it is now a reinvite of the seats not holding.
+    await expect(press).toHaveText(fill("runsheet.round.inviteCta.other", { count: seatCount - holding }));
+    // The rule is the BOARD's: the bounced board's other seat takes a mail, the bounced seat still reads Bounced, and the board offers Resend.
+    await seedSeatInvite(b4.fixtureId, "black", "delivered");
+    await page.reload();
+    await expectSeatWord(page, b4, "white", "bounced");
+    await expectSeatWord(page, b4, "black", "delivered");
+    await expect(resend(b4), "one seat of the board holds a mail, so the board offers Resend while its other seat still reads Bounced").toHaveCount(1);
+    await expect(press).toHaveText(fill(pluralKey("runsheet.round.inviteCta", seatCount - holding - 1), { count: seatCount - holding - 1 }));
+
+    // C27b: the mail server's word is Delivered, never "opened". Every invite chip and the help line, counted.
+    const chipTexts = await col.getByTestId("arbiter-invite-word").allTextContents();
+    expect(chipTexts.length, "anti-vacuity: every seat shows a chip").toBe(seatCount);
+    const helpText = await col.getByTestId("arbiter-invite-help").textContent();
+    expect(helpText, "the help line is on screen").toBe(uiEn["arbiter.invite.help"]);
+    for (const text of [...chipTexts, helpText!]) expect(text, `"${text}" must not claim the mail was opened`).not.toMatch(/open/i);
+    expect(posts.roundNos(), "nothing but the one open was sent").toEqual([1]);
+  });
+
+  test('round column: "already open" from a stale page', async ({ page, request }) => {
+    test.setTimeout(budgetFor(0, 240_000));
+    const r = await seedOnlineRound(request, [longName(), "Ana Petrova", "Bo Lindqvist", "Chen Wei"], { open: false });
+    const ids = r.boards.map((b) => b.fixtureId);
+    const seatCount = r.boards.flatMap((b) => [b.home, b.away]).length;
+    const posts = watchOpenRoundPosts(page, r.stageId);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(r.arbiterPath);
+    const col = column(page);
+    await expect(col).toHaveAttribute("data-phase", "before", { timeout: 30_000 });
+    const cta = col.locator('[data-testid="arbiter-column-open"][data-round-no="1"]').getByTestId("arbiter-column-open-cta");
+    await expect(cta).toBeVisible();
+
+    // Elsewhere (another tab, a second organiser) the round is opened, and every seat's mail is on its way: nobody is left to invite.
+    // The page in front of the organiser has not heard (the Before phase polls at the quiet period, which is longer than this test).
+    const opened = await apiJson(request, `/api/v1/stages/${r.stageId}/open-round`, "POST", { roundNo: 1 });
+    expect(opened.status, `open-round: ${JSON.stringify(opened.error)}`).toBeLessThan(300);
+    for (const b of r.boards) for (const colour of ["white", "black"] as const) await seedSeatInvite(b.fixtureId, colour, "sent");
+    const rowsBefore = await inviteRowCount(ids);
+    expect(rowsBefore, "the other open queued one row per player's address").toBe(seatCount);
+    await expect(col, "premise: the page is stale, it still says the round is not opened").toHaveAttribute("data-phase", "before");
+
+    await recordOpenNotices(page);
+    await cta.click();
+    const sent = openRoundSent(page, r.stageId);
+    await page.getByTestId("arbiter-column-confirm-confirm").click();
+    const res = await sent;
+    expect(res.status()).toBeLessThan(300);
+    const body = ((await res.json()) as { data: { opened: boolean; reason?: string; skipped: unknown[] } }).data;
+    expect(body, "the route answered that the round is already open, with nobody to invite").toEqual({ opened: false, reason: "already_open", skipped: [] });
+    // The refresh that follows flips the column to check-in and takes the block, and its notice, away: the notice is read as it was drawn.
+    await expect(col).toHaveAttribute("data-phase", "checkin", { timeout: 30_000 });
+    const drawn = await recordedOpenNotices(page);
+    expect(drawn, "the observer survived the flip (the page did not navigate)").not.toBeNull();
+    expect(drawn!.at(-1), "the notice read: already open").toEqual([uiEn["externalPlay.openRound.alreadyOpen"]]);
+    expect(posts.roundNos(), "one press, one request").toEqual([1]);
+    expect(await inviteRowCount(ids), "the stale press queued nothing").toBe(rowsBefore);
+    // And the page now shows the truth the press answered: every seat holds a mail, so nobody is owed and the hero has no press.
+    await expectSeatWord(page, r.boards[0]!, "white", "sent");
+    await expect(col.getByTestId("arbiter-column-reinvite"), "nobody is owed").toHaveCount(0);
+  });
+
+  test('round column: a held board is "Review board N" and selects in place', async ({ page, request }) => {
+    test.setTimeout(budgetFor(0, 240_000));
+    const r = await seedOnlineRound(request, [longName(), "Ana Petrova", "Bo Lindqvist", "Chen Wei"]);
+    const [b1, b2] = [r.boards[0]!, r.boards[1]!];
+    // Board 2 is held (the sweep's and a mismatch's way to the organiser's desk); board 1 is the panel's default and stays checking in.
+    await roundGameSql(b2, { moves: LINE.slice(0, 6), hold: "mismatch" });
+
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(r.arbiterPath);
+    const col = column(page);
+    await expect(col).toHaveAttribute("data-phase", "checkin", { timeout: 30_000 });
+    const nav = boardsNav(page).getByRole("button");
+    await expect(nav).toHaveCount(2);
+    await expect(nav.nth(0), "board 1 is on screen").toHaveAttribute("aria-pressed", "true");
+    await expect(nav.nth(1)).toHaveAttribute("aria-pressed", "false");
+    const pathBefore = new URL(page.url()).pathname;
+    expect(pathBefore, "premise: the panel's own page").toBe(r.arbiterPath);
+
+    const queue = col.getByTestId("arbiter-column-queue");
+    await expect(queue.getByTestId("arbiter-column-queue-title")).toHaveText(fill("arbiter.column.queue.one", { count: 1 }));
+    const card = queue.locator(`[data-testid="arbiter-column-card"][data-kind="held"][data-fixture-id="${b2.fixtureId}"]`);
+    await expect(card).toHaveCount(1);
+    await expect(card.getByTestId("arbiter-column-card-chip")).toHaveText(uiEn["externalPlay.held.mismatch"]!);
+    const review = card.getByTestId("arbiter-column-review");
+    await expect(review).toHaveText(fill("arbiter.column.review", { board: 2 }));
+    await expect(review, "a board of the round on screen is selected in place, not linked to").toHaveAttribute("data-target", "select");
+
+    // A mark on the live document: a navigation (the self-link defect this card replaced) would load a new one and lose it.
+    await page.evaluate(() => {
+      (window as unknown as { __stay?: string }).__stay = "same document";
+    });
+    await review.click();
+    await expect(nav.nth(1), "the pressed state moves to board 2").toHaveAttribute("aria-pressed", "true");
+    await expect(nav.nth(0)).toHaveAttribute("aria-pressed", "false");
+    const after = new URL(page.url());
+    expect(after.pathname, "the path is unchanged").toBe(pathBefore);
+    expect(after.searchParams.get("fixture"), "the board on screen is recorded on the URL").toBe(b2.fixtureId);
+    expect(await page.evaluate(() => (window as unknown as { __stay?: string }).__stay), "no navigation: the document is the same one").toBe("same document");
+
+    // The decision area is board 2's: its Settle fieldset offers board 2's players (White is the home side, recorded on the row), and none of board 1's.
+    await decision(page).getByRole("button", { name: uiEn["arbiter.decide.settle"]!, exact: true }).click();
+    const settle = page.getByTestId("arbiter-settle");
+    await expect(settle).toBeVisible();
+    await expect(settle.getByRole("button", { name: fill("externalPlay.settle.wins", { name: b2.home.name }), exact: true })).toBeVisible();
+    await expect(settle.getByRole("button", { name: fill("externalPlay.settle.wins", { name: b2.away.name }), exact: true })).toBeVisible();
+    for (const stranger of [b1.home.name, b1.away.name]) {
+      await expect(settle.getByText(stranger), `board 1's ${stranger} is not offered on board 2's settle`).toHaveCount(0);
+    }
+    await expect(page.getByRole("heading", { level: 2, name: new RegExp(`^${fill("arbiter.boardNo", { n: 2 })} · `) }), "the board heading is board 2's").toBeVisible();
+  });
+
+  test("round column: Open round 2 stays offered while round 1 plays, with the warning", async ({ page, request }) => {
+    test.setTimeout(budgetFor(0, 240_000));
+    // A league pairs every round at Generate, so round 2's pairings exist while round 1 plays.
+    const r = await seedOnlineRound(request, [longName(), "Ana Petrova", "Bo Lindqvist", "Chen Wei"]);
+    const ids = r.boards.map((b) => b.fixtureId);
+    for (const b of r.boards) await roundGameSql(b, { moves: LINE.slice(0, 4) });
+    const round2 = await withDb((sql) => sql<{ id: string }[]>`select id from fixtures where stage_id = ${r.stageId} and round_no = 2 order by seq_in_round`);
+    expect(round2.length, "premise: round 2 is paired, with as many boards as round 1").toBe(r.boards.length);
+    expect(await inviteRowCount(round2.map((x) => x.id)), "the empty case first: round 2 has mailed nobody").toBe(0);
+
+    const posts = watchOpenRoundPosts(page, r.stageId);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(r.arbiterPath);
+    const col = column(page);
+    await expect(col, "every board of round 1 has a game, so none is checking in").toHaveAttribute("data-phase", "playing", { timeout: 30_000 });
+    const next = col.locator('[data-testid="arbiter-column-open"][data-round-no="2"]');
+    await expect(next, "round 2 is offered").toHaveCount(1);
+    await expect(next.getByRole("heading", { name: fill("runsheet.round.heading", { round: 2 }) })).toBeVisible();
+    const press = next.getByTestId("arbiter-column-next");
+    await expect(press, "quiet while a board plays: opening stays the organiser's call").toHaveAttribute("data-primary", "false");
+    const earlierText = fill(pluralKey("runsheet.round.confirmEarlierInPlay", ids.length), { round: 1, count: ids.length });
+    const inline = next.getByTestId("arbiter-column-earlier");
+    await expect(inline, "the warning is on the page before the press").toHaveAttribute("role", "note");
+    await expect(inline.locator("[data-earlier-round]")).toHaveCount(1);
+    await expect(inline.locator('[data-earlier-round="1"]')).toHaveText(earlierText);
+
+    await press.click();
+    const dialog = page.getByTestId("arbiter-column-confirm");
+    await expect(dialog).toContainText(fill("runsheet.round.confirmTitle", { round: 2 }));
+    const note = dialog.getByTestId("open-round-earlier");
+    await expect(note, "and again in the confirmation, naming the games").toHaveAttribute("role", "note");
+    await expect(note.locator('[data-earlier-round="1"]')).toHaveText(earlierText);
+    expect(posts.roundNos(), "asking sends nothing").toEqual([]);
+    const seatCount = r.boards.flatMap((b) => [b.home, b.away]).length;
+    const confirm = page.getByTestId("arbiter-column-confirm-confirm");
+    await expect(confirm).toHaveText(fill("runsheet.round.confirmCta.other", { count: seatCount }));
+    await confirm.click();
+    await expect(col, "round 2 opens beside the games still playing in round 1").toHaveAttribute("data-phase", "checkin", { timeout: 30_000 });
+    await expect(col.getByTestId("arbiter-checkin-hero").getByRole("heading", { name: fill("runsheet.round.heading", { round: 2 }) })).toBeVisible();
+    expect(posts.roundNos(), "the press asked for round 2").toEqual([2]);
+    expect(await inviteRowCount(round2.map((x) => x.id)), "round 2's players were mailed").toBe(seatCount);
+    expect(await inviteRowCount(ids), "round 1's games were not touched").toBe(seatCount);
+  });
+
+  test("Fixtures tab: no Open round, no queue, one entry line", async ({ page, request }) => {
+    test.setTimeout(budgetFor(0, 300_000));
+    const r = await seedOnlineRound(request, [longName(), "Ana Petrova", "Bo Lindqvist", "Chen Wei"], { open: false });
+    const b2 = r.boards[1]!;
+    const total = await withDb(async (sql) => {
+      const [row] = await sql<{ n: number }[]>`select count(*)::int as n from fixtures where stage_id = ${r.stageId}`;
+      return row!.n;
+    });
+    expect(total, "premise: a league of four is six games").toBeGreaterThan(r.boards.length);
+    await page.setViewportSize({ width: 1280, height: 900 });
+
+    // One state after another. Each is the entry card's line, from the ladder (lib/round-column.ts `entryStatus` / `entryLine`:
+    // attention outranks check-in, check-in outranks ready). A control that is gone is looked for by its WORDS, beside a positive on
+    // the same page - the entry card, its link and every run-sheet row - so an absence cannot pass on a page that rendered nothing.
+    let states = 0;
+    const read = async (kind: string, line: string, label: string) => {
+      await page.goto(r.fixturesTab);
+      const entry = page.getByTestId("arbiter-entry");
+      await expect(entry, `${label}: the entry card is there`).toBeVisible({ timeout: 30_000 });
+      await expect(entry.getByTestId("arbiter-entry-status"), `${label}: one entry line`).toHaveCount(1);
+      await expect(entry.getByTestId("arbiter-entry-status")).toHaveAttribute("data-kind", kind);
+      await expect(entry.getByTestId("arbiter-entry-status")).toHaveText(line);
+      await expect(entry.getByRole("link", { name: uiEn["arbiter.entry.link"]!, exact: true }), `${label}: the way into the panel`).toBeVisible();
+      await expect(page.locator("li[data-fixture-no]"), `${label}: the run sheet is on the page`).toHaveCount(total);
+      for (const gone of ["runsheet.round.openCta", "runsheet.round.resend", "arbiter.column.reopenCta", "externalPlay.queue.markReviewed"]) {
+        await expect(page.getByRole("button", { name: uiEn[gone]!, exact: true }), `${label}: no "${uiEn[gone]}" on the tab`).toHaveCount(0);
+      }
+      for (const n of [1, 2]) {
+        await expect(page.getByRole("button", { name: fill("arbiter.column.review", { board: n }), exact: true })).toHaveCount(0);
+        await expect(page.getByRole("link", { name: fill("arbiter.column.review", { board: n }), exact: true })).toHaveCount(0);
+      }
+      for (const gone of ["open-round", "arbiter-round-column", "arbiter-column-queue", "arbiter-column-card", "arbiter-waiting"]) {
+        await expect(page.getByTestId(gone), `${label}: ${gone} is the panel's`).toHaveCount(0);
+      }
+      states += 1;
+    };
+
+    await read("ready", fill("arbiter.entry.status.ready", { round: 1 }), "paired, not opened");
+    const opened = await apiJson(request, `/api/v1/stages/${r.stageId}/open-round`, "POST", { roundNo: 1 });
+    expect(opened.status, `open-round: ${JSON.stringify(opened.error)}`).toBeLessThan(300);
+    await read("checkin", fill("arbiter.entry.status.checkin", { round: 1 }), "round 1 opened, window running");
+    await roundGameSql(b2, { moves: LINE.slice(0, 6), hold: "mismatch" });
+    await read("attention", fill("arbiter.column.queue.one", { count: 1 }), "a board needs a decision");
+    await expect(page.getByTestId("run-sheet-online-held-chip"), "the run sheet's own chip still points at the held board").toHaveCount(1);
+    await roundGameSql(b2, { moves: LINE.slice(0, 6) });
+    await read("checkin", fill("arbiter.entry.status.checkin", { round: 1 }), "the board is let go, the window still running");
+    // The window ends (round 1 opened long enough ago): no check-in is under way, and round 2 is the one waiting for its Open.
+    await backdateOpenSql(r.stageId, 1, DEADLINE_AFTER_MS + 120_000);
+    await read("ready", fill("arbiter.entry.status.ready", { round: 2 }), "round 1's window ended, round 2 is next");
+    expect(states, "anti-vacuity: five states read").toBe(5);
+  });
+
+  test("round column: the queue keeps its own state across the check-in to playing flip", async ({ page, request }) => {
+    // One poll is waited out for the flip; the rest is seeding (four players) and the page loads.
+    test.setTimeout(budgetFor(1, 240_000));
+    const r = await seedOnlineRound(request, [longName(), "Ana Petrova", "Bo Lindqvist", "Chen Wei"]);
+    const [b1, b2] = [r.boards[0]!, r.boards[1]!];
+    // The queue's one piece of state of its own is a cancelled flagged board's "Mark as reviewed" (its card cannot be selected, so it
+    // closes its review itself, with the queue's own reducer). A league pairs every round: a game of round 2 is cancelled and flagged.
+    const [later] = await withDb((sql) => sql<{ id: string }[]>`select id from fixtures where stage_id = ${r.stageId} and round_no = 2 order by seq_in_round limit 1`);
+    expect(later, "premise: round 2 is paired").toBeDefined();
+    await cancelFlaggedSql(r.orgId, later!.id);
+    await roundGameSql(b1, { moves: LINE.slice(0, 6), hold: "mismatch" });
+    // Board 2 is the one still checking in. Its window has ENDED (the round was opened long enough ago), which is how a board comes to be
+    // held: the sweep follows the deadline. The deadline passing alone changes nothing on screen.
+    await backdateOpenSql(r.stageId, 1, DEADLINE_AFTER_MS + 120_000);
+
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(r.arbiterPath);
+    const col = column(page);
+    await expect(col).toHaveAttribute("data-phase", "checkin", { timeout: 30_000 });
+    await expect(col.getByTestId("arbiter-checkin-clock"), "premise: board 2's window has ended").toHaveAttribute("data-kind", "closed");
+    const queue = col.getByTestId("arbiter-column-queue");
+    await expect(queue.getByTestId("arbiter-column-queue-title")).toHaveText(fill("arbiter.column.queue.other", { count: 2 }));
+    const heldCard = (b: RoundBoard) => queue.locator(`[data-testid="arbiter-column-card"][data-kind="held"][data-fixture-id="${b.fixtureId}"]`);
+    const flaggedCard = queue.locator(`[data-testid="arbiter-column-card"][data-kind="flagged"][data-fixture-id="${later!.id}"]`);
+    await expect(heldCard(b1)).toHaveCount(1);
+    await expect(flaggedCard).toHaveCount(1);
+    await expect(flaggedCard.getByTestId("arbiter-column-review"), "a cancelled board cannot be selected: no Review").toHaveCount(0);
+
+    // A mark on the queue's node and on the column's, so a remount (a new node) is told from a re-render.
+    await queue.evaluate((el) => {
+      (el as HTMLElement & { __probe?: string }).__probe = "queue";
+    });
+    await col.evaluate((el) => {
+      (el as HTMLElement & { __probe?: string }).__probe = "column";
+    });
+    await flaggedCard.getByTestId("arbiter-column-mark-reviewed").click();
+    // Its card goes with the refresh, so the answer stands where the card was: the queue's own status line, now visible.
+    const answer = queue.getByTestId("arbiter-column-queue-status");
+    await expect(answer).toHaveText(uiEn["externalPlay.queue.reviewed"]!, { timeout: 30_000 });
+    await expect(flaggedCard).toHaveCount(0);
+    // Playwright counts a 1px `sr-only` box as visible, so "now on screen" is the class that hides it from the eye, not toBeVisible.
+    await expect(answer, "the answer stands where the card was, no longer screen-reader only").not.toHaveClass(/sr-only/);
+    await expect(queue.getByTestId("arbiter-column-queue-title")).toHaveText(fill("arbiter.column.queue.one", { count: 1 }));
+    const closed = await withDb(
+      async (sql) => (await sql`select 1 from fixture_play_flags where fixture_id = ${later!.id} and closed_at is not null`).length,
+    );
+    expect(closed, "the flag was closed on the server").toBe(1);
+    // The window is over and the phase has not moved: a deadline passing flips nothing; a board leaving check-in does.
+    await expect(col).toHaveAttribute("data-phase", "checkin");
+
+    // The sweep holds board 2 (no_show_both); the panel's own poll brings it in. The wait is the poll's period, from the constant.
+    await holdNoShowSql(b2.fixtureId);
+    await expect(col, "no board is checking in: the column flips to its playing phase").toHaveAttribute("data-phase", "playing", { timeout: POLL_BUDGET_MS });
+    // The same queue, not a new one: the probe survived, so did the answer, and the new held board is in it.
+    expect(await queue.evaluate((el) => (el as HTMLElement & { __probe?: string }).__probe), "the queue's node survived the flip").toBe("queue");
+    expect(await col.evaluate((el) => (el as HTMLElement & { __probe?: string }).__probe), "the column's node survived the flip").toBe("column");
+    await expect(answer, "the queue's own answer survived the flip").toHaveText(uiEn["externalPlay.queue.reviewed"]!);
+    await expect(heldCard(b2)).toHaveCount(1);
+    await expect(heldCard(b2).getByTestId("arbiter-column-card-chip")).toHaveText(uiEn["externalPlay.held.noShowBoth"]!);
+    await expect(heldCard(b1)).toHaveCount(1);
+    await expect(queue.getByTestId("arbiter-column-queue-title")).toHaveText(fill("arbiter.column.queue.other", { count: 2 }));
+    await expect(queue.getByTestId("arbiter-column-queue-title")).toHaveAttribute("data-tone", "held");
+  });
+
+  test("round column: the open-round hook resets on a round change, and a press targets the round on screen", async ({ page, request }) => {
+    // Two panel refreshes are waited for (each is the tab coming back, which refreshes at once), plus the seeding of a league of four.
+    test.setTimeout(budgetFor(2, 240_000));
+    const r = await seedOnlineRound(request, [longName(), "Ana Petrova", "Bo Lindqvist", "Chen Wei"]);
+    const posts = watchOpenRoundPosts(page, r.stageId);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(r.arbiterPath);
+    const col = column(page);
+    await expect(col).toHaveAttribute("data-phase", "checkin", { timeout: 30_000 });
+    const hero = col.getByTestId("arbiter-checkin-hero");
+    const heading = (round: number) => hero.getByRole("heading", { name: fill("runsheet.round.heading", { round }) });
+    const press = col.getByTestId("arbiter-column-reinvite");
+    const dialog = page.getByTestId("arbiter-column-reinvite-dialog");
+    const confirm = page.getByTestId("arbiter-column-reinvite-dialog-confirm");
+    const openByApi = async (roundNo: number) => {
+      const res = await apiJson(request, `/api/v1/stages/${r.stageId}/open-round`, "POST", { roundNo });
+      expect(res.status, `open round ${roundNo}: ${JSON.stringify(res.error)}`).toBeLessThan(300);
+    };
+
+    // A: a confirmation is open for round 1; round 2 is opened elsewhere and the panel brings it in.
+    await expect(heading(1)).toBeVisible();
+    await press.click();
+    await expect(dialog).toContainText(fill("arbiter.column.reopenConfirmTitle", { round: 1 }));
+    await openByApi(2);
+    await refreshNow(page);
+    await expect(heading(2), "round 2 is the round on screen").toBeVisible({ timeout: POLL_BUDGET_MS });
+    await expect(dialog, "the confirmation for round 1 did not survive the round changing").toHaveCount(0);
+    expect(posts.roundNos(), "the abandoned confirmation sent nothing").toEqual([]);
+    await press.click();
+    await expect(dialog).toContainText(fill("arbiter.column.reopenConfirmTitle", { round: 2 }));
+    await confirm.click();
+    await expect(page.getByTestId("arbiter-column-reinvite-notice"), "the press answered").toBeVisible({ timeout: 30_000 });
+    expect(posts.roundNos(), "the press asked for round 2, not the round that was confirmed before").toEqual([2]);
+
+    // B: the runner's in-flight flag outlives the reset (by design, rule R1: one request at a time). A press for round 2 is held in
+    // flight; round 3 opens and comes in; the confirmation for round 3 is then tapped once while the old request is out (a dead tap:
+    // nothing is sent), and tapped again after its answer (one request, for round 3).
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let seen = 0;
+    await page.route(new RegExp(`/stages/${r.stageId}/open-round$`), async (route) => {
+      seen += 1;
+      if (seen === 1) await gate;
+      await route.continue();
+    });
+    const heldAnswer = page.waitForResponse((res) => res.request().method() === "POST" && res.url().includes(`/stages/${r.stageId}/open-round`));
+    await press.click();
+    await expect(dialog).toContainText(fill("arbiter.column.reopenConfirmTitle", { round: 2 }));
+    await confirm.click();
+    await expect.poll(() => posts.roundNos(), { message: "the second press for round 2 is out, held at the network" }).toEqual([2, 2]);
+    await openByApi(3);
+    await refreshNow(page);
+    await expect(heading(3), "round 3 is the round on screen, with the old request still out").toBeVisible({ timeout: POLL_BUDGET_MS });
+    await expect(dialog, "round 2's confirmation (busy) is gone with the reset").toHaveCount(0);
+    await press.click();
+    await expect(dialog).toContainText(fill("arbiter.column.reopenConfirmTitle", { round: 3 }));
+    await confirm.click();
+    // The dead tap: a request is sending nothing for 800 ms is not proof by itself, so the other half is the dialog still waiting.
+    await page.waitForTimeout(800);
+    expect(posts.roundNos(), "the tap landed while the old request was out: nothing was sent for round 3").toEqual([2, 2]);
+    await expect(dialog, "and the confirmation waits for another tap").toBeVisible();
+    release();
+    await heldAnswer;
+    await expect(page.getByTestId("arbiter-column-reinvite-notice"), "round 2's answer shows nothing under round 3").toHaveCount(0);
+    // After the answer the next tap goes. A tap that lands before the runner has cleared its flag is dead again, so it is retried.
+    await expect(async () => {
+      await confirm.click({ timeout: 2_000 });
+      await expect.poll(() => posts.roundNos().filter((n) => n === 3).length, { timeout: 2_000 }).toBe(1);
+    }).toPass({ timeout: 20_000 });
+    expect(posts.roundNos(), "round 2's two presses, then exactly one for round 3").toEqual([2, 2, 3]);
+    await expect(page.getByTestId("arbiter-column-reinvite-notice"), "round 3's own answer").toBeVisible({ timeout: 30_000 });
+  });
 });

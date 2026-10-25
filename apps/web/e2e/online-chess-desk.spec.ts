@@ -35,7 +35,7 @@
  * Expected copy comes from the dictionary, expected positions from the rules
  * (chess.js) — never from the code under test.
  */
-import { test, expect, type Browser, type BrowserContext, type Locator, type Page, type Response } from "@playwright/test";
+import { test, expect, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import { Chess } from "chess.js";
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -45,6 +45,16 @@ import { INVITE_WORD_KEYS, type SeatInviteWord } from "../src/lib/invite-status"
 import { routes } from "../src/lib/routes";
 import { CHECKIN_BATCH_GAP_MS, CHECKIN_BATCH_SIZE, DEADLINE_AFTER_MS } from "../src/server/external-play/window";
 import { apiJson, loginUi, withDb } from "./helpers";
+import {
+  column,
+  expectSeatWord,
+  openAnswerOf,
+  openNoticeLines,
+  openRoundSent,
+  recordedOpenNotices,
+  recordOpenNotices,
+  waitingSeat,
+} from "./arbiter-column-kit";
 import {
   CLOCK,
   fill,
@@ -287,83 +297,14 @@ async function flagBoard(r: SeededRound, board: RoundBoard): Promise<void> {
 
 // ─── the Arbiter Panel's round column (phase 2) ─────────────────────────────
 // Open round, the invites, the round's +5 and the queue of boards that need a decision moved off the Fixtures tab into the panel's
-// round column (spec 2026-10-24-arbiter-round-column-design.md). These are the column's locators and the open-round route's
-// answer, which a press from the BEFORE block cannot show on screen: the open flips the column to its check-in phase and the block
-// (with its answer) unmounts: the answer is read from the wire AND recorded as it is drawn (`recordOpenNotices`, a MutationObserver),
-// and the same press's reopen from the check-in hero keeps its notice on screen.
-
-/** The column: one `aside`, its phase on `data-phase` (before | checkin | playing). */
-const column = (page: Page) => page.getByTestId("arbiter-round-column");
+// round column (spec 2026-10-24-arbiter-round-column-design.md). The column's locators and the open-round route's answer live in
+// arbiter-column-kit.ts (arbiter-panel.spec.ts and mobile.spec.ts drive the same column, and a spec cannot import a spec). A press
+// from the BEFORE block cannot be read off the screen: the open flips the column to its check-in phase and the block (with its
+// answer) unmounts, so the answer is read from the wire AND recorded as it is drawn (`recordOpenNotices`, a MutationObserver), and
+// the same press's reopen from the check-in hero keeps its notice on screen.
 
 /** The panel's decision area for the board on screen (at lg and up its name is the plain heading). */
 const decision = (page: Page) => page.getByRole("region", { name: uiEn["arbiter.decide.heading"]! });
-
-/** One seat of a board on the column's waiting list, found by the board's fixture and the seat's colour. */
-const waitingSeat = (page: Page, board: RoundBoard, colour: "white" | "black") =>
-  page.locator(`[data-testid="arbiter-waiting-row"][data-fixture-id="${board.fixtureId}"] [data-testid="arbiter-seat"][data-colour="${colour}"]`);
-
-/** The word a seat shows for its invite: exactly one chip, the right `data-word`, and the dictionary's own text for it. */
-async function expectSeatWord(page: Page, board: RoundBoard, colour: "white" | "black", word: SeatInviteWord): Promise<void> {
-  const chip = waitingSeat(page, board, colour).getByTestId("arbiter-invite-word");
-  await expect(chip, `${colour} of ${board.fixtureId}: one word`).toHaveCount(1);
-  await expect(chip, `${colour} of ${board.fixtureId}`).toHaveAttribute("data-word", word);
-  await expect(chip, `${colour} of ${board.fixtureId}`).toHaveText(uiEn[INVITE_WORD_KEYS[word]]!);
-}
-
-/** The open-round route's answer (`OpenRoundResult`, lib/open-round.ts), as it crosses the wire. */
-type OpenAnswer = { opened: boolean; invited: number; retrying: number; skipped: { fixtureId: string; reason: string }[] };
-
-/** Started BEFORE the click that sends the request (a response that has already gone by is never seen). */
-const openRoundSent = (page: Page, stageId: string) =>
-  page.waitForResponse((res) => res.request().method() === "POST" && res.url().includes(`/stages/${stageId}/open-round`));
-
-async function openAnswerOf(res: Response): Promise<OpenAnswer> {
-  expect(res.status(), "the open-round route answered").toBeLessThan(300);
-  const body = (await res.json()) as { data?: OpenAnswer };
-  expect(body.data, "the route's answer carries its data").toBeDefined();
-  return body.data!;
-}
-
-/** "{count} player(s) invited." - the dictionary's one/other pair, picked by the count the way `plural()` picks it. */
-const invitedLine = (count: number) => fill(count === 1 ? "externalPlay.openRound.invited.one" : "externalPlay.openRound.invited.other", { count });
-
-/** The lines an open's notice draws for the answer the route gave: the count, then one line per board nobody was reached on (the
- *  keys `openNoticeText` reads, filled from the answer and the round's boards, not from the notice). The first line assumes nothing
- *  is left sending - the notice words a send still in flight as its own line, and drops the count when it is 0 - so that is a PREMISE
- *  and fails by name: the e2e servers have no mail provider, every attempt ends dead inside the open, and `retrying` is 0. */
-function openNoticeLines(answer: OpenAnswer, boards: readonly RoundBoard[]): string[] {
-  expect(answer.retrying, "premise: no mail provider, so no invite is left sending when the open answers").toBe(0);
-  return [
-    invitedLine(answer.invited),
-    ...answer.skipped.map((skipped) => {
-      const n = boards.findIndex((b) => b.fixtureId === skipped.fixtureId) + 1;
-      expect(n, `the skipped board ${skipped.fixtureId} is one of the round's`).toBeGreaterThan(0);
-      expect(skipped.reason, "a send that failed is skipped as send_failed").toBe("send_failed");
-      return fill("runsheet.round.skipLine", { board: fill("arbiter.boardNo", { n }), reason: uiEn["externalPlay.openRound.skipped.sendFailed"]! });
-    }),
-  ];
-}
-
-/** Records every distinct set of lines the open's notice shows, from now on, into `window.__openNotices`. The first open's notice
- *  lives only until the refresh that follows it flips the column's phase and takes its block away, which is shorter than any poll,
- *  so a MutationObserver (not an assertion in flight) is what can read it. */
-async function recordOpenNotices(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    const w = window as unknown as { __openNotices?: string[][] };
-    const seen: string[][] = (w.__openNotices = []);
-    const read = () => {
-      for (const el of document.querySelectorAll('[data-testid="arbiter-column-open-notice"]')) {
-        const lines = [...el.querySelectorAll("p")].map((p) => p.textContent ?? "");
-        const last = seen[seen.length - 1];
-        if (lines.length > 0 && JSON.stringify(last) !== JSON.stringify(lines)) seen.push(lines);
-      }
-    };
-    new MutationObserver(read).observe(document.body, { childList: true, subtree: true, characterData: true });
-    read();
-  });
-}
-const recordedOpenNotices = (page: Page) =>
-  page.evaluate(() => (window as unknown as { __openNotices?: string[][] }).__openNotices ?? null);
 
 test.describe("online chess — the organiser's desk", () => {
   test("Open round (D12): paired, not opened — the column's confirmation names who it invites; opened, the column reads what was sent", async ({

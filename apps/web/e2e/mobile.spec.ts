@@ -28,7 +28,7 @@ import {
   overflowingIn,
   matchRoomPathBySql,
 } from "./helpers";
-import { roundGameSql, seedOnlineRound } from "./match-room-kit";
+import { longName, roundGameSql, seedOnlineRound, uiEn } from "./match-room-kit";
 import { ARMAGEDDON_RESULTS } from "@seazn/engine/sports/boardgame";
 import { pointsRuleExpressible } from "@seazn/engine/competition";
 import { builtinModules } from "@seazn/engine/sports";
@@ -6153,4 +6153,196 @@ test("W2c division lock lines at every width: each line is on screen and readabl
   await page.setViewportSize({ width: 1280, height: 900 });
   expect(here, `the lock line set at ${projectWidth} vs 1280: membership, order, repeats`).toEqual(await ids());
   await page.setViewportSize({ width: projectWidth, height: page.viewportSize()!.height });
+});
+
+// The Arbiter Panel's round column (phase 2, spec 2026-10-24-arbiter-round-column-design.md §5.1, §7; C27): at this project's REAL
+// width. Below md the column is the first thing on the page, then the waiting seats, then the board picker; from md `main` is two
+// tracks and the column is the right-hand one, the decision group under the camera. Asserted as the order and the edges of what is
+// on screen, not as box sizes, so a groomed shrink of the desktop layout cannot pass for the phone composition. Every control in the
+// column and in the waiting list is at least 44px and HIT-TESTED (the paint box is not the tap area), nothing scrolls the page
+// sideways, and the visible control set of `main` is the one 1280 shows from the same seed, apart from the two controls that exist
+// at one width only: the picker (below lg) and the board list (lg and up). Nothing in the column is folded behind a disclosure.
+//
+// mobile.spec.ts is a SERIAL file (`describe.configure({ mode: "serial" })`): a red test aborts the rest of its project, so a CI
+// count for this file is a floor, not a total (AGENTS class 21). This test seeds its own round and reads nothing an earlier test left.
+test("arbiter round column: below md the column leads the page; from md it is the right-hand column; no horizontal scroll; 44px targets", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(240_000);
+  const vp = projectViewport();
+  expect(vp, "a width project declares its viewport").not.toBeNull();
+  const width = vp!.width;
+  const phone = width < 768;
+  // Two boards, the first with two realistic 43-character names (a long name is what breaks a column), the second held by a mismatch so
+  // the queue has a card to review: the column has its queue, its hero and its waiting list at once. `camera: optional` puts the tile
+  // on screen with no camera duty.
+  const r = await seedOnlineRound(request, [longName(), longName(), `Mo Phone ${TAG}`, `Ny Width ${TAG}`], { camera: "optional" });
+  expect(r.boards.length, "premise: two boards").toBe(2);
+  await roundGameSql(r.boards[1]!, { moves: ["e2e4", "e7e5"], hold: "mismatch" });
+
+  await page.goto(r.arbiterPath, { waitUntil: "load" });
+  const col = page.getByTestId("arbiter-round-column");
+  const waiting = page.getByTestId("arbiter-waiting");
+  await expect(col).toHaveAttribute("data-phase", "checkin", { timeout: 30_000 });
+  await expect(waiting, "premise: board 1 is waiting for its seats").toBeVisible({ timeout: 30_000 });
+  await expect(col.getByTestId("arbiter-column-review"), "premise: the held board has a card to review").toBeVisible();
+  // The panel's own `main`: the one that holds the column (the page has no other, but the scope is stated, not assumed).
+  const panelMain = page.locator('main:has([data-testid="arbiter-round-column"])');
+  await expect(panelMain.locator("figure"), "premise: the camera tile is on screen").toHaveCount(1);
+  const phase = await col.getAttribute("data-phase");
+
+  // ── where things are ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+  await page.evaluate(() => window.scrollTo(0, 0));
+  const rects = await page.evaluate(() => {
+    const at = (el: Element | null | undefined) => {
+      if (!el) return null;
+      const b = el.getBoundingClientRect();
+      return { top: b.top + window.scrollY, bottom: b.bottom + window.scrollY, left: b.left, right: b.right };
+    };
+    return {
+      aside: at(document.querySelector('[data-testid="arbiter-round-column"]')),
+      waiting: at(document.querySelector('[data-testid="arbiter-waiting"]')),
+      picker: at(document.querySelector('[data-testid="arbiter-round-column"]')?.closest("main")?.querySelector("select")?.closest("label")),
+      boardGroup: at(document.querySelector('[data-testid="arbiter-board-group"]')),
+      decisionGroup: at(document.querySelector('[data-testid="arbiter-decision-group"]')),
+      camera: at(document.querySelector('[data-testid="arbiter-round-column"]')?.closest("main")?.querySelector("figure")),
+    };
+  });
+  function need<T>(v: T | null, what: string): T {
+    expect(v, `${what} is on screen at ${width}px`).not.toBeNull();
+    return v!;
+  }
+  const aside = need(rects.aside, "the column");
+  const wait = need(rects.waiting, "the waiting list");
+  const camera = need(rects.camera, "the camera tile");
+  const relations: string[] = [];
+  const holds = (ok: boolean, what: string) => {
+    expect(ok, `${what} at ${width}px`).toBe(true);
+    relations.push(what);
+  };
+  if (phone) {
+    const picker = need(rects.picker, "the board picker");
+    holds(aside.top < picker.top, "the column's top is above the picker's top");
+    holds(wait.top >= aside.bottom - 1, "the waiting list starts below the column");
+    holds(wait.bottom <= picker.top + 1, "the waiting list ends above the picker");
+  } else {
+    // 768 and 834 are md and not lg (lg is 1024): two tracks, the board group over the decision group in the first, the column in the second.
+    expect(width, "premise: the tablet widths are md, not lg").toBeLessThan(1024);
+    const boardGroup = need(rects.boardGroup, "the board group");
+    const decisionGroup = need(rects.decisionGroup, "the decision group");
+    holds(aside.left >= boardGroup.right - 1, "the column is right of the board group");
+    holds(aside.left >= decisionGroup.right - 1, "the column is right of the decision group");
+    holds(decisionGroup.top >= camera.bottom - 1, "the decision group is below the camera");
+    holds(decisionGroup.top >= boardGroup.bottom - 1, "the decision group is below the board group");
+    holds(wait.top >= camera.bottom - 1, "the waiting list is under the camera");
+  }
+  const expectedRelations = phone ? 3 : 5;
+  expect(relations.length, "anti-vacuity: every relation of this branch was checked").toBe(expectedRelations);
+
+  // ── the sideways scroll, and what overflows inside the column ─────────────────────────────────────────────────────────────────────
+  await expectNoHorizontalScroll(page);
+  const dims = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
+  expect(dims.scroll, `scrollWidth ${dims.scroll} within clientWidth ${dims.client} at ${width}`).toBeLessThanOrEqual(dims.client);
+  // A box whose extra content cannot be reached is a defect; one that scrolls is a feature that must be a tab stop (AGENTS class 23).
+  let scanned = 0;
+  for (const root of ['[data-testid="arbiter-round-column"]', '[data-testid="arbiter-waiting"]']) {
+    const { clipped, scrollable } = await overflowingIn(page, root, "button,a,p,span,li,h2,div", `${root} was not in the DOM`);
+    expect(clipped, `${root} clips content at ${width}px`).toEqual([]);
+    for (const box of scrollable) expect(box, `${root}: a scrolling box that is not keyboard-reachable`).toMatch(/tabindex=0$/);
+    scanned += 1;
+  }
+  expect(scanned, "anti-vacuity: the column and the waiting list were both scanned").toBe(2);
+
+  // ── 44px, measured and hit-tested ──────────────────────────────────────────────────────────────────────────────────────────────────
+  const tapTargets = (scope: string) =>
+    page.evaluate((sel) => {
+      const root = document.querySelector(sel);
+      if (!root) return null;
+      return Array.from(root.querySelectorAll<HTMLElement>("button, a[href]")).map((el) => {
+        el.scrollIntoView({ block: "center", inline: "nearest" });
+        const b = el.getBoundingClientRect();
+        const shown = b.width > 0 && b.height > 0 && getComputedStyle(el).visibility !== "hidden";
+        const hit = shown ? document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2) : null;
+        return {
+          testid: el.getAttribute("data-testid"),
+          name: (el.getAttribute("aria-label") ?? el.innerText ?? "").trim().replace(/\s+/g, " ").slice(0, 60),
+          role: el.tagName.toLowerCase(),
+          disabled: (el as HTMLButtonElement).disabled === true,
+          width: Math.round(b.width * 100) / 100,
+          height: Math.round(b.height * 100) / 100,
+          shown,
+          reachable: hit !== null && (hit === el || el.contains(hit)),
+        };
+      });
+    }, scope);
+  const counts: string[] = [];
+  const scopes: [string, string, string][] = [
+    ["the column", '[data-testid="arbiter-round-column"]', "arbiter-column-reinvite"],
+    ["the waiting list", '[data-testid="arbiter-waiting"]', "arbiter-waiting-board"],
+  ];
+  for (const [label, scope, mustHave] of scopes) {
+    const all = await tapTargets(scope);
+    expect(all, `${label} is in the DOM`).not.toBeNull();
+    const shown = all!.filter((t) => t.shown);
+    expect(shown.length, `anti-vacuity: ${label} has controls on screen at ${width}px`).toBeGreaterThan(0);
+    expect(shown.map((t) => t.testid), `${label} offers ${mustHave}`).toContain(mustHave);
+    const report = hitTargetFloorReport(shown.map((t) => ({ name: t.name, role: t.role, disabled: t.disabled, width: t.width, height: t.height })));
+    expect(report.operable.length, `anti-vacuity: ${label} has operable controls`).toBeGreaterThan(0);
+    expect(floorViolationLines(report), `${label}: every control is at least ${HIT_TARGET_FLOOR_PX}px at ${width}px`).toEqual([]);
+    const operable = shown.filter((t) => !t.disabled);
+    expect(
+      operable.filter((t) => !t.reachable).map((t) => t.name),
+      `${label}: every control's centre hits the control itself at ${width}px (nothing covers it)`,
+    ).toEqual([]);
+    counts.push(`${label} ${report.operable.length} controls, ${operable.filter((t) => t.reachable).length} hit-tested`);
+  }
+  // The column's own controls, by what they are: the queue's Review and the hero's press (both in the column), the row's board link.
+  await expect(col.getByTestId("arbiter-column-review")).toBeVisible();
+
+  // ── the control set of `main`, against the same page at 1280 ─────────────────────────────────────────────────────────────────────
+  const controlSet = () =>
+    page.evaluate(() => {
+      const column = document.querySelector('[data-testid="arbiter-round-column"]');
+      const main = column?.closest("main") ?? null;
+      const nav = main?.querySelector("nav") ?? null;
+      if (!main) return null;
+      const keyOf = (el: HTMLElement) =>
+        el.getAttribute("data-testid") ??
+        el.getAttribute("aria-label") ??
+        `${el.tagName.toLowerCase()}:${(el.innerText ?? "").trim().replace(/\s+/g, " ").slice(0, 60)}`;
+      return Array.from(main.querySelectorAll<HTMLElement>('button, a[href], select, [role="button"], input, textarea'))
+        .filter((el) => {
+          const b = el.getBoundingClientRect();
+          return b.width > 0 && b.height > 0 && getComputedStyle(el).visibility !== "hidden";
+        })
+        .map((el) => ({ key: keyOf(el), picker: el.tagName === "SELECT", inNav: nav !== null && nav.contains(el), inColumn: column !== null && column.contains(el) }));
+    });
+  const here = await controlSet();
+  expect(here, "main is on screen").not.toBeNull();
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await expect(page.getByRole("navigation", { name: uiEn["arbiter.boardsHeading"] }), "at 1280 the board list is on screen").toBeVisible();
+  const desk = await controlSet();
+  expect(desk, "main is on screen at 1280").not.toBeNull();
+  await page.setViewportSize(vp!);
+  await expect(panelMain.locator("select"), "back at the project's width the picker is on screen").toBeVisible();
+  await expectNoHorizontalScroll(page);
+
+  const boardCount = r.boards.length;
+  expect(here!.filter((c) => c.picker).length, `the picker is in the set below lg (${width}px)`).toBe(1);
+  expect(here!.filter((c) => c.inNav).length, `the board list is not in the set below lg (${width}px)`).toBe(0);
+  expect(desk!.filter((c) => c.picker).length, "the picker is not in the set at 1280").toBe(0);
+  expect(desk!.filter((c) => c.inNav).length, "the board list has a button per board at 1280").toBe(boardCount);
+  // Everything else is the same controls, in the same order, with the same repeats.
+  const same = (list: NonNullable<typeof here>) => list.filter((c) => !c.picker && !c.inNav).map((c) => c.key);
+  expect(same(here!), `the control set at ${width}px, less the picker, is the one 1280 shows, less its board list`).toEqual(same(desk!));
+  expect(same(here!).length, "anti-vacuity: the set has controls in it").toBeGreaterThan(0);
+  const inColumn = (list: NonNullable<typeof here>) => list.filter((c) => c.inColumn).map((c) => c.key);
+  expect(inColumn(here!), "the column's controls are the same at both widths").toEqual(inColumn(desk!));
+  expect(inColumn(here!).length, "anti-vacuity: the column has controls at both widths").toBeGreaterThan(0);
+
+  console.log(
+    `[arbiter-column ${width}px] data-phase=${phase}; ${relations.length}/${expectedRelations} layout relations held (${relations.join("; ")}); ${counts.join("; ")}; ` +
+      `control set ${here!.length} at ${width}px vs ${desk!.length} at 1280 (column ${inColumn(here!).length} vs ${inColumn(desk!).length})`,
+  );
 });
