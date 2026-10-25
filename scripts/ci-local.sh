@@ -249,8 +249,11 @@ start_server() {
   # and the server keeps listening — a stale bundle answering the next run.
   # R5 (Task 14b): server.js is NODE_ENV=production, where an unset RELAY_DRIVERS disables streaming; the smoke and
   # e2e suites stream on the fake drivers, as CI's server steps now say explicitly. Under production an explicit fake
-  # also needs ENV_NAME "local" or "ci" (m2) — unset, or a caller's stg/prod, and every relay-touching request
-  # (every request, where the compiled boot hook runs) answers 500 — so this mirror names itself ci, as those steps do.
+  # also needs ENV_NAME "local" or "ci" (m2) — so this mirror names itself ci, as those steps do. Unlike CI, this mirror
+  # does NOT overlay the compiled `.next/server` over the standalone tree (CI's server steps and the Dockerfile do), so
+  # instrumentation.ts's register() does not run here: no Sentry init, no relayDriverMode() boot refusal, no outbox
+  # readiness report, no public-error no-store guard. A bad RELAY_DRIVERS/ENV_NAME pair therefore does not fail the boot
+  # here; it fails only the first request that touches the relay.
   # Like CI, it seals stream targets under a per-run random RELAY_KEK (a caller's own wins), and the walkthrough's
   # fake phone connects after FAKE_INGEST_CONNECT_AFTER_MS, the value e2e.yml pins for the walkthrough leg.
   # Capture QR v2: CAPTURE_QR_V2_ALWAYS=1 shows the panel's phone-camera option, which is otherwise behind the PostHog

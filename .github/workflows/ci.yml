@@ -1706,6 +1706,11 @@ jobs:
         # unreachable from a runner, and every board would quietly come back
         # greedy while smoke reported on it.
         env:
+          # register() runs on this server, and sentry.server.config.ts enables Sentry the moment a DSN exists. Held
+          # blank-but-defined (the empty string wins `SENTRY_DSN ?? NEXT_PUBLIC_SENTRY_DSN`), so a DSN baked into the
+          # build or present on the runner never sends a CI event to the real project.
+          SENTRY_DSN: ""
+          NEXT_PUBLIC_SENTRY_DSN: ""
           PLACEMENT_SERVICE_HOST: localhost:50051
           PLACEMENT_SERVICE_SECRET: ci-smoke-secret
           # Default pino level is info — every accepted score event + route
@@ -1803,14 +1808,16 @@ jobs:
       # `s-maxage=30, stale-while-revalidate=270`, and only the guard turns a /shared 404 into `private, no-cache,
       # no-store, max-age=0, must-revalidate`. The same build without the overlay answers this URL with the s-maxage
       # header (measured), so no-store here means the boot hook ran. A fresh slug per try, so no answer is a cached
-      # one; the bound only absorbs a slow first render, a guard that never installs fails it.
+      # one; the bound only absorbs a slow first render, a guard that never installs fails it. The step is only as
+      # good as the premise that /shared is ISR (a dynamic render sends no-store by itself, whether or not register()
+      # ran): e2e/public-cache-headers.spec.ts is its paired tripwire, and fails the day /shared stops emitting s-maxage.
       - name: Prove the server ran register() (a public 404 goes out no-store)
         run: |
           set -o pipefail
           hdrs="$RUNNER_TEMP/register-proof-headers.txt"
           ok=""
           for i in $(seq 1 15); do
-            code=$(curl -s -o /dev/null -D "$hdrs" -w '%{http_code}' --max-time 30 "http://localhost:3000/shared/register-proof-${GITHUB_RUN_ID:-0}-${i}" || true)
+            code=$(curl -s -o /dev/null -D "$hdrs" -w '%{http_code}' --max-time 10 "http://localhost:3000/shared/register-proof-${GITHUB_RUN_ID:-0}-${i}" || true)
             cc=$(tr -d '\r' < "$hdrs" | grep -i '^cache-control:' || true)
             if [ "$code" = "404" ] && grep -qi 'no-store' <<< "$cc"; then
               ok=1; echo "register() ran: HTTP ${code}, ${cc}"; break
@@ -1844,6 +1851,11 @@ jobs:
       # image in the smoke process's env, exits 0 having run the 503 branch instead.
       - name: Start a second server with a compositor image (R2004)
         env:
+          # register() runs on this server, and sentry.server.config.ts enables Sentry the moment a DSN exists. Held
+          # blank-but-defined (the empty string wins `SENTRY_DSN ?? NEXT_PUBLIC_SENTRY_DSN`), so a DSN baked into the
+          # build or present on the runner never sends a CI event to the real project.
+          SENTRY_DSN: ""
+          NEXT_PUBLIC_SENTRY_DSN: ""
           PORT: "3001"
           RELAY_IMAGE: registry.fly.io/ci-smoke-compositor:dummy
           PLACEMENT_SERVICE_HOST: localhost:50051

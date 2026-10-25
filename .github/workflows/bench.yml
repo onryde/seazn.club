@@ -178,6 +178,11 @@ jobs:
 
       - name: Start server
         env:
+          # register() runs on this server, and sentry.server.config.ts enables Sentry the moment a DSN exists. Held
+          # blank-but-defined (the empty string wins `SENTRY_DSN ?? NEXT_PUBLIC_SENTRY_DSN`), so a DSN baked into the
+          # build or present on the runner never sends a CI event to the real project.
+          SENTRY_DSN: ""
+          NEXT_PUBLIC_SENTRY_DSN: ""
           # 3200, NOT 3000. `env.ts`'s FORBIDDEN_BASE_PORTS refuses 3000 and
           # 3100 outright (the owner's dev server and the e2e target); the
           # bench always owns its own server. The standalone entrypoint reads

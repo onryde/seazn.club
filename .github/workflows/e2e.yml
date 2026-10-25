@@ -992,6 +992,11 @@ jobs:
         # (`placement.flycast:50051`) — unreachable from a runner — and every
         # board would come back greedy while the suite reported on it.
         env:
+          # register() runs on this server, and sentry.server.config.ts enables Sentry the moment a DSN exists. Held
+          # blank-but-defined (the empty string wins `SENTRY_DSN ?? NEXT_PUBLIC_SENTRY_DSN`), so a DSN baked into the
+          # build or present on the runner never sends a CI event to the real project.
+          SENTRY_DSN: ""
+          NEXT_PUBLIC_SENTRY_DSN: ""
           PLACEMENT_SERVICE_HOST: localhost:50051
           PLACEMENT_SERVICE_SECRET: ci-e2e-secret
           SUPABASE_JWT_SIGNING_KEY_B64: ${{ env.SUPABASE_JWT_SIGNING_KEY_B64 }}
@@ -1495,6 +1500,11 @@ jobs:
 
       - name: Start server
         env:
+          # register() runs on this server, and sentry.server.config.ts enables Sentry the moment a DSN exists. Held
+          # blank-but-defined (the empty string wins `SENTRY_DSN ?? NEXT_PUBLIC_SENTRY_DSN`), so a DSN baked into the
+          # build or present on the runner never sends a CI event to the real project.
+          SENTRY_DSN: ""
+          NEXT_PUBLIC_SENTRY_DSN: ""
           PLACEMENT_SERVICE_HOST: localhost:50051
           PLACEMENT_SERVICE_SECRET: ci-e2e-secret
           SUPABASE_JWT_SIGNING_KEY_B64: ${{ env.SUPABASE_JWT_SIGNING_KEY_B64 }}
@@ -1864,6 +1874,11 @@ jobs:
 
       - name: Start server
         env:
+          # register() runs on this server, and sentry.server.config.ts enables Sentry the moment a DSN exists. Held
+          # blank-but-defined (the empty string wins `SENTRY_DSN ?? NEXT_PUBLIC_SENTRY_DSN`), so a DSN baked into the
+          # build or present on the runner never sends a CI event to the real project.
+          SENTRY_DSN: ""
+          NEXT_PUBLIC_SENTRY_DSN: ""
           PLACEMENT_SERVICE_HOST: localhost:50051
           PLACEMENT_SERVICE_SECRET: ci-e2e-secret
           SUPABASE_JWT_SIGNING_KEY_B64: ${{ env.SUPABASE_JWT_SIGNING_KEY_B64 }}
