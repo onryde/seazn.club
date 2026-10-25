@@ -38,7 +38,9 @@ const SESSION_ALGORITHM = "HS256";
 // Auth data is read on nearly every request but changes rarely, so it caches
 // well (cache-aside, fail-open via lib/cache). Explicit busts run on the few
 // writes that touch these rows; short TTLs bound staleness if a bust is missed.
-const USER_TTL_SECONDS = 300;
+/** How long a cached `users` row may answer. This is also the longest a MISSED bust (a Redis blip on the DEL after an account
+ *  deletion, or a read racing it) can keep a deleted account signed in, so it is exported for the test that pins the bound. */
+export const USER_TTL_SECONDS = 300;
 const ORGS_TTL_SECONDS = 120;
 const userKey = (uid: string) => `user:${uid}`;
 const orgsKey = (uid: string) => `orgs:${uid}`;
@@ -112,9 +114,15 @@ export async function getCurrentUser(): Promise<User | null> {
   const cached = await cacheGet<User>(userKey(uid));
   if (cached) return cached;
 
+  // `deleted_at is null` is what ends a deleted account's sessions on every OTHER device. The session is a stateless JWT, so
+  // nothing records that a token was revoked: the cookie of the device that deleted the account is cleared by the route, but
+  // the tokens on its other devices are still validly signed and unexpired, and DELETE /api/users/me is a SOFT delete (the row
+  // is anonymised and kept for 30 days). Without this filter those tokens resolved to a signed-in "Deleted User". The cached
+  // copy cannot outlive the deletion either: the route busts `user:<id>` (invalidateUser) after the commit, and this branch
+  // never caches a deleted row because it never selects one.
   const rows = await sql<User[]>`
     select id, display_name, email, avatar_url, timezone, locale
-    from users where id = ${uid} limit 1
+    from users where id = ${uid} and deleted_at is null limit 1
   `;
   const user = rows[0] ?? null;
   if (user) await cacheSet(userKey(uid), user, USER_TTL_SECONDS);

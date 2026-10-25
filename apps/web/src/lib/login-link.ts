@@ -33,6 +33,18 @@ export async function createLoginLink(userId: string): Promise<string> {
  * Consume a login token: mark it used and return the user id if it was valid
  * and unexpired, otherwise null. Clicking the link proves email ownership, so
  * the account is marked verified in the same transaction.
+ *
+ * A link whose account has been deleted is an invalid link. A link lives 15
+ * minutes and DELETE /api/users/me does not touch `login_links`, so one issued
+ * just before the deletion is still unspent and unexpired just after it. The
+ * guard is the `deleted_at is null` on the write that verifies the address,
+ * and the row it must hit: that statement is the check AND the effect, so a
+ * deletion committing between this transaction's first read and its update
+ * (the update waits on the deleting transaction's row lock, then re-reads the
+ * row) is refused as well, which a separate read-then-write would not be.
+ * Nothing is verified, no id is returned, so the route mints no cookie and
+ * provisions no organisation for a deleted user. The link is spent: a refused
+ * credential does not stay redeemable.
  */
 export async function consumeLoginLink(token: string): Promise<string | null> {
   return sql.begin(async (tx) => {
@@ -45,7 +57,11 @@ export async function consumeLoginLink(token: string): Promise<string | null> {
       return null;
     }
     await tx`update login_links set used = true where id = ${row.id}`;
-    await tx`update users set email_verified = true where id = ${row.user_id}`;
+    const verified = await tx<{ id: string }[]>`
+      update users set email_verified = true
+      where id = ${row.user_id} and deleted_at is null
+      returning id`;
+    if (verified.length === 0) return null;
     return row.user_id;
   });
 }
