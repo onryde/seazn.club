@@ -12,8 +12,8 @@
 // Before this test, placement-ci.yml ran one of the two (the other was run by no workflow at all) and pointed at a path that
 // had stopped existing when the file moved, so the job would have "ran 0 files" and still read as an intentional skip. Both
 // directions are asserted from the workflow text, over a live-file list DERIVED from the tree, never typed here.
-import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -54,6 +54,20 @@ function step(yml: string, name: string): string {
   }
   return lines.slice(at, end).join("\n");
 }
+
+/** The job a step lives in: the nearest job key (a 2-space-indented `name:` line) above its `- name:` line. */
+function jobOf(yml: string, stepName: string): string {
+  const lines = yml.split("\n");
+  const at = lines.findIndex((l) => l.trim() === `- name: ${stepName}`);
+  expect(at, `no step named "${stepName}"`).toBeGreaterThan(-1);
+  for (let i = at; i >= 0; i--) {
+    const m = /^ {2}([A-Za-z0-9_-]+):\s*$/.exec(lines[i]!);
+    if (m) return m[1]!;
+  }
+  throw new Error(`no job above step "${stepName}"`);
+}
+/** The 0-based line a step starts on. */
+const lineOf = (yml: string, stepName: string): number => yml.split("\n").findIndex((l) => l.trim() === `- name: ${stepName}`);
 
 // ---- The judge, EXECUTED. A text match proves a clause is written down, not that it judges: this runs the workflow's own
 // "Assert the suite RAN, and passed" script against synthetic vitest reports and reads its exit code. The script's report path
@@ -214,5 +228,115 @@ describe("the scheduler's live tests run in placement-ci.yml, and are excluded f
     expect(run).toContain("numTotalTests > 0");
     expect(run).toContain("numFailedTestSuites");
     expect(run).toContain("numPassedTests !== r.numTotalTests");
+  });
+});
+
+// ---- The proto's home moved (engine-split phase 2a, Task W1): `packages/scheduler/proto/scheduler.proto` is a vendored copy of
+// the placement repo's file, and ci.yml's `gates` job is the PR-time proof that the committed TypeScript stubs still come from
+// it. Both steps are pinned from the workflow text; the drift step's own script is also EXECUTED, because a text match proves a
+// clause is written down, not that it fails a PR.
+describe("ci.yml regenerates the TypeScript stubs from the vendored proto and diffs them", () => {
+  const REGENERATE = "Regenerate TypeScript proto stubs";
+  const DRIFT = "TypeScript stub drift gate";
+  const SCHEDULER_STEP = "Scheduler package tests (DB-free)";
+
+  it("each step exists exactly once, in the gates job, after the scheduler package tests and in that order", () => {
+    const yml = workflow("ci.yml");
+    for (const name of [REGENERATE, DRIFT]) {
+      const occurrences = yml.split("\n").filter((l) => l.trim() === `- name: ${name}`).length;
+      expect(occurrences, `"${name}" occurrences in ci.yml`).toBe(1);
+      expect(jobOf(yml, name), `"${name}" must live in the gates job`).toBe("gates");
+    }
+    expect(jobOf(yml, SCHEDULER_STEP)).toBe("gates");
+    expect(lineOf(yml, REGENERATE), "regenerate follows the scheduler step").toBeGreaterThan(lineOf(yml, SCHEDULER_STEP));
+    expect(lineOf(yml, DRIFT), "the drift gate follows the regeneration it judges").toBeGreaterThan(lineOf(yml, REGENERATE));
+  });
+
+  it("regenerates from the scheduler workspace, and the drift step diffs the scheduler's generated tree", () => {
+    const yml = workflow("ci.yml");
+    // Each step on its own: the drift gate's error message also names the command, so a joined text would let a stale
+    // regenerate step ride on the message of the next one.
+    const regenerate = step(yml, REGENERATE);
+    expect(regenerate).toMatch(/run:\s*pnpm --filter @seazn\/scheduler gen:proto\s*$/);
+    const drift = step(yml, DRIFT);
+    expect(drift).toContain("git status --porcelain -- packages/scheduler/src/generated/");
+    expect(drift, "the message sends a developer to the vendored file and the vendoring command").toContain("packages/scheduler/proto/scheduler.proto");
+    expect(drift).toContain("vendor:proto");
+    expect(drift).toContain("pnpm --filter @seazn/scheduler gen:proto");
+    expect(regenerate + drift, "no stale pointer to the retired monorepo proto or engine codegen").not.toMatch(
+      /(?<![\w/.-])proto\/scheduler\.proto|packages\/engine\/(src\/scheduling\/generated|scripts)/,
+    );
+  });
+
+  it("the gate cannot be filtered away: ci.yml's `on:` has no path filter, and the gates job has no `if:`", () => {
+    const yml = workflow("ci.yml");
+    const lines = yml.split("\n");
+    const onAt = lines.findIndex((l) => /^on:\s*$/.test(l));
+    expect(onAt, "ci.yml has a top-level `on:`").toBeGreaterThan(-1);
+    const rest = lines.slice(onAt + 1);
+    const nextTop = rest.findIndex((l) => /^[A-Za-z]/.test(l));
+    const onBlock = rest.slice(0, nextTop).join("\n");
+    expect(onBlock, "the trigger is non-empty (a scan of nothing proves nothing)").toContain("pull_request:");
+    expect(onBlock).not.toMatch(/\bpaths(-ignore)?:/);
+    expect(onBlock).not.toMatch(/\bbranches(-ignore)?:/);
+
+    const jobAt = lines.findIndex((l) => /^ {2}gates:\s*$/.test(l));
+    expect(jobAt, "ci.yml has a gates job").toBeGreaterThan(-1);
+    const stepsAt = lines.findIndex((l, i) => i > jobAt && /^ {4}steps:\s*$/.test(l));
+    const header = lines.slice(jobAt, stepsAt).join("\n");
+    expect(header, "the job header was read (name + runs-on)").toContain("runs-on:");
+    expect(header, "a job-level `if:` could skip the gate").not.toMatch(/^ {4}if:/m);
+  });
+
+  // ---- The drift step's script, EXECUTED in a temp repo that has the generated tree committed. `bash -e`, as GitHub runs it.
+  const DRIFT_DIR = mkdtempSync(join(tmpdir(), "stub-drift-"));
+  afterAll(() => rmSync(DRIFT_DIR, { recursive: true, force: true }));
+  const GENERATED = "packages/scheduler/src/generated";
+  let n = 0;
+  const gitIn = (cwd: string, ...args: string[]) =>
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], {
+      cwd,
+      encoding: "utf8",
+      env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" },
+    });
+  /** A committed tree with the generated stub and an unrelated file, then `mutate` applied to the working tree. */
+  function runDrift(mutate: (repo: string) => void): { code: number | null; errors: string; out: string } {
+    const repo = join(DRIFT_DIR, `repo-${String(++n)}`);
+    mkdirSync(join(repo, GENERATED), { recursive: true });
+    gitIn(repo, "init", "-q");
+    writeFileSync(join(repo, GENERATED, "scheduler.ts"), "export const generated = 1;\n");
+    writeFileSync(join(repo, "other.txt"), "x\n");
+    gitIn(repo, "add", "-A");
+    gitIn(repo, "commit", "-q", "-m", "init");
+    mutate(repo);
+    const body = runBody(step(workflow("ci.yml"), DRIFT));
+    const r = spawnSync("bash", ["-e", "-c", body], { cwd: repo, encoding: "utf8" });
+    expect(r.error, "bash must be runnable: a gate that cannot run proves nothing").toBeUndefined();
+    const out = r.stdout + r.stderr;
+    return { code: r.status, out, errors: out.split("\n").filter((l) => l.startsWith("::error::")).join("\n") };
+  }
+
+  it("the executed drift gate: a regenerated tree identical to the committed one passes", () => {
+    const ok = runDrift(() => undefined);
+    expect(ok, ok.out).toEqual(expect.objectContaining({ code: 0, errors: "" }));
+  });
+
+  it("the executed drift gate: an edited stub is red, with an ::error:: naming the proto and the vendoring command", () => {
+    const red = runDrift((repo) => writeFileSync(join(repo, GENERATED, "scheduler.ts"), "export const generated = 2;\n"));
+    expect(red.code, red.out).toBe(1);
+    expect(red.errors).toContain("packages/scheduler/proto/scheduler.proto");
+    expect(red.errors).toContain("vendor:proto");
+    expect(red.out, "the diff is printed so the PR log shows what drifted").toContain("-export const generated = 1;");
+  });
+
+  it("the executed drift gate: a stub that was never committed (untracked) is red too", () => {
+    const red = runDrift((repo) => writeFileSync(join(repo, GENERATED, "extra.ts"), "export {};\n"));
+    expect(red.code, red.out).toBe(1);
+    expect(red.errors).not.toBe("");
+  });
+
+  it("the executed drift gate: a change OUTSIDE the generated tree is not its business", () => {
+    const ok = runDrift((repo) => writeFileSync(join(repo, "other.txt"), "changed\n"));
+    expect(ok, ok.out).toEqual(expect.objectContaining({ code: 0, errors: "" }));
   });
 });

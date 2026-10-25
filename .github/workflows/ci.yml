@@ -336,6 +336,24 @@ jobs:
             if (stray.length > 0) fail(`the packages/scheduler filter also ran files outside packages/scheduler/: ${stray.join(", ")}`);
           '
 
+      # The placement service's proto lives in its own repo; packages/scheduler/proto/scheduler.proto is a vendored copy, pinned
+      # by packages/scheduler/VENDORED.json (`pnpm --filter @seazn/scheduler vendor:proto <placement checkout>` writes both).
+      # The TypeScript stubs are COMMITTED, so this pair proves they still come from that copy: regenerate, then fail the PR if
+      # the working tree moved. The Python half of the same gate runs in the placement repo's own CI. Both steps are pinned by
+      # packages/scheduler/test/integration-runs-elsewhere.test.ts, and the second is executed there against a temp repo.
+      - name: Regenerate TypeScript proto stubs
+        run: pnpm --filter @seazn/scheduler gen:proto
+
+      - name: TypeScript stub drift gate
+        run: |
+          drift="$(git status --porcelain -- packages/scheduler/src/generated/)"
+          if [ -n "$drift" ]; then
+            echo "$drift"
+            echo "::error::TypeScript proto stubs are stale — packages/scheduler/proto/scheduler.proto (or the generator) changed but packages/scheduler/src/generated/ was not regenerated and committed. Re-vendor with 'pnpm --filter @seazn/scheduler vendor:proto <placement checkout>' if the proto moved, then run 'pnpm --filter @seazn/scheduler gen:proto' and commit the result."
+            git diff -- packages/scheduler/src/generated/
+            exit 1
+          fi
+
       # The engine rules reference (W2a ruling 75, packages/engine/rules/). Its rows are proved by tests in apps/web,
       # e2e and tools, so this checker must run on a PR that touches none of packages/engine/**: the engine job
       # further down is path-filtered, and this job is not. Same node judge discipline as the two steps above: red on
