@@ -504,40 +504,55 @@ export function RegisterStepper({
       {currentStep === "review" && (
         <>
           <StepReview summary={reviewSummary} locale={locale} />
-          {submitError && (
-            <div role="alert" className="space-y-1">
-              {/* Primary — localized, actionable, never the raw server
-                  string (FIX 3: server errors are English-only by design,
-                  see handleSubmit's own doc comment above). */}
-              <p className="text-sm text-red-600">
-                {t(submitError.kind === "retry" ? "register.submit.error" : "register.submit.errorRejected")}
-              </p>
-              {/* Secondary — the raw detail, de-emphasized: useful context
-                  (e.g. "another checkout was just started"), never the
-                  primary thing read. */}
-              {submitError.code === "LICHESS_LINK_REQUIRED" ? (
-                <p className="text-sm text-ink">
-                  {t("register.lichessLinkRequired")}{" "}
-                  {/* `ph-no-capture`: the return path carries the team's join code (`?join=`), url-encoded into this href. */}
-                  <a href={lichessLinkStartHref(orgSlug, lichessReturn)} className="ph-no-capture font-medium underline" data-testid="register-lichess-link">
-                    {t("register.lichessLinkCta")}
-                  </a>
+          {submitError &&
+            (submitError.code === "LICHESS_LINK_REQUIRED" || submitError.code === "LICHESS_RECONSENT_REQUIRED" ? (
+              // A Lichess reason says WHAT is wrong and WHAT to do, so it stands alone: the generic "check your details"
+              // line would send a player with correct details hunting for a mistake they have not made. The amber is the
+              // Lichess card's own "needs reconnecting" colour (register-lichess-card.tsx), the one place this is said
+              // before the submit; the sentence is the localized copy, never the server's English.
+              <div
+                role="alert"
+                data-testid="reg-lichess-refusal"
+                className="flex min-w-0 items-start gap-2.5 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2.5 text-sm text-amber-900"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#b45309" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="mt-0.5 shrink-0">
+                  <path d="M12 8v5" />
+                  <path d="M12 17h.01" />
+                  <path d="M10.3 3.9L2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />
+                </svg>
+                {submitError.code === "LICHESS_LINK_REQUIRED" ? (
+                  <p className="m-0 min-w-0">
+                    {t("register.lichessLinkRequired")}{" "}
+                    {/* `ph-no-capture`: the return path carries the team's join code (`?join=`), url-encoded into this href. */}
+                    <a href={lichessLinkStartHref(orgSlug, lichessReturn)} className="ph-no-capture font-medium underline" data-testid="register-lichess-link">
+                      {t("register.lichessLinkCta")}
+                    </a>
+                  </p>
+                ) : (
+                  // The link is there but cannot play (the registration gate refuses what the seat gate refuses): the same
+                  // start, back to this registration, under the reconnect words.
+                  <p className="m-0 min-w-0">
+                    {t("register.lichessReconnectRequired")}{" "}
+                    <a href={lichessLinkStartHref(orgSlug, lichessReturn)} className="ph-no-capture font-medium underline" data-testid="register-lichess-reconnect-link">
+                      {t("register.lichess.reconnect.cta")}
+                    </a>
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div role="alert" className="space-y-1">
+                {/* Primary — localized, actionable, never the raw server
+                    string (FIX 3: server errors are English-only by design,
+                    see handleSubmit's own doc comment above). */}
+                <p className="text-sm text-red-600">
+                  {t(submitError.kind === "retry" ? "register.submit.error" : "register.submit.errorRejected")}
                 </p>
-              ) : submitError.code === "LICHESS_RECONSENT_REQUIRED" ? (
-                // The link is there but cannot play (the registration gate refuses what the seat gate refuses): the same
-                // start, back to this registration, under the reconnect words.
-                <p className="text-sm text-ink">
-                  {t("register.lichessReconnectRequired")}{" "}
-                  {/* `ph-no-capture`: the return path carries the team's join code (`?join=`), url-encoded into this href. */}
-                  <a href={lichessLinkStartHref(orgSlug, lichessReturn)} className="ph-no-capture font-medium underline" data-testid="register-lichess-reconnect-link">
-                    {t("register.lichess.reconnect.cta")}
-                  </a>
-                </p>
-              ) : (
+                {/* Secondary — the raw detail, de-emphasized: useful context
+                    (e.g. "another checkout was just started"), never the
+                    primary thing read. */}
                 <p className="text-xs text-ink-muted">{submitError.detail}</p>
-              )}
-            </div>
-          )}
+              </div>
+            ))}
         </>
       )}
 

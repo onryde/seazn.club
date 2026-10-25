@@ -2046,41 +2046,81 @@ describe("step 5 — submit", () => {
     );
   });
 
-  // Owner ruling 2026-10-25: a link the seat gate refuses is refused at registration too, as LICHESS_RECONSENT_REQUIRED.
-  // The review step's backstop must say RECONNECT (its own localized sentence, from the dictionary) and offer the same
-  // start - back to this registration - under the reconnect label; and it must not say "link".
-  it("LICHESS_RECONSENT_REQUIRED: says to RECONNECT, in the dictionary's words, and offers the start back to this registration", async () => {
-    apiV1Mock.impl.mockRejectedValueOnce(
-      new ApiV1Error("Reconnect your Lichess account so Seazn can submit your moves before registering for online play", 422, "LICHESS_RECONSENT_REQUIRED"),
-    );
+  // A Lichess reason stands ALONE (fix round 1 addendum): the generic "check your details and try again" line, shown
+  // above it, sent a player with correct details hunting for a mistake they had not made. So the refusal block holds the
+  // reason's own sentence and its action, and neither generic line appears anywhere on the page.
+  const GENERIC_LINES = () => [String(EN_UI["register.submit.errorRejected"]), String(EN_UI["register.submit.error"])];
+  async function submitRefused(error: ApiV1Error) {
+    apiV1Mock.impl.mockRejectedValueOnce(error);
     const { island } = await reachReview();
     const btn = island.tree().find((e) => e.type === "button" && textOf(e) === "Enter the competition");
     await (propsOf(btn!).onClick as () => Promise<void>)();
+    return island;
+  }
+  const refusalBlock = (island: Awaited<ReturnType<typeof submitRefused>>) => {
+    const blocks = island.tree().filter((e) => propsOf(e)["data-testid"] === "reg-lichess-refusal");
+    expect(blocks, "exactly one Lichess refusal block").toHaveLength(1);
+    expect(propsOf(blocks[0]!).role, "announced as an alert").toBe("alert");
+    return blocks[0]!;
+  };
+  const alerts = (island: Awaited<ReturnType<typeof submitRefused>>) => island.tree().filter((e) => propsOf(e).role === "alert");
 
-    const { secondary } = alertBlock(island);
-    expect(textOf(secondary)).toContain(String(EN_UI["register.lichessReconnectRequired"]));
-    expect(textOf(secondary)).not.toContain(String(EN_UI["register.lichessLinkRequired"]));
+  // Owner ruling 2026-10-25: a link the seat gate refuses is refused at registration too, as LICHESS_RECONSENT_REQUIRED.
+  // The review step must say RECONNECT (its own localized sentence, from the dictionary) and offer the same start - back
+  // to this registration - under the reconnect label; and it must not say "link".
+  it("LICHESS_RECONSENT_REQUIRED: says to RECONNECT, alone, in the dictionary's words, and offers the start back to this registration", async () => {
+    const island = await submitRefused(
+      new ApiV1Error("Reconnect your Lichess account so Seazn can submit your moves before registering for online play", 422, "LICHESS_RECONSENT_REQUIRED"),
+    );
+
+    const block = refusalBlock(island);
+    expect(textOf(block)).toContain(String(EN_UI["register.lichessReconnectRequired"]));
+    expect(textOf(block)).not.toContain(String(EN_UI["register.lichessLinkRequired"]));
     const links = island.tree().filter((e) => propsOf(e)["data-testid"] === "register-lichess-reconnect-link");
     expect(links, "exactly one reconnect link").toHaveLength(1);
     expect(propsOf(links[0]!).href).toBe(
       `/api/auth/lichess?org=${ORG_SLUG}&next=${encodeURIComponent(`/shared/${ORG_SLUG}/${COMPETITION_SLUG}/register`)}`,
     );
     expect(textOf(links[0]!)).toBe(String(EN_UI["register.lichess.reconnect.cta"]));
-    // The pair: the "link" affordance is not offered for this reason, and a "link" refusal offers no reconnect.
+    // The pair: the "link" affordance is not offered for this reason.
     expect(island.tree().filter((e) => propsOf(e)["data-testid"] === "register-lichess-link")).toHaveLength(0);
+    // Alone: no generic line anywhere, and the refusal is the page's only alert.
+    let checked = 0;
+    for (const line of GENERIC_LINES()) {
+      expect(island.tree().filter((e) => textOf(e).includes(line)), `the generic line "${line}" is not on the page`).toHaveLength(0);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: both generic lines were looked for").toBe(2);
+    expect(alerts(island), "the refusal is the only alert").toHaveLength(1);
   });
 
-  it("LICHESS_LINK_REQUIRED keeps its own copy and offers no reconnect (negative pair of the above)", async () => {
-    apiV1Mock.impl.mockRejectedValueOnce(
+  it("LICHESS_LINK_REQUIRED keeps its own copy, alone, and offers no reconnect (negative pair of the above)", async () => {
+    const island = await submitRefused(
       new ApiV1Error("Link your Lichess account in Settings before registering for online play", 422, "LICHESS_LINK_REQUIRED"),
     );
-    const { island } = await reachReview();
-    const btn = island.tree().find((e) => e.type === "button" && textOf(e) === "Enter the competition");
-    await (propsOf(btn!).onClick as () => Promise<void>)();
 
-    expect(textOf(alertBlock(island).secondary)).toContain(String(EN_UI["register.lichessLinkRequired"]));
+    expect(textOf(refusalBlock(island))).toContain(String(EN_UI["register.lichessLinkRequired"]));
+    expect(textOf(refusalBlock(island))).not.toContain(String(EN_UI["register.lichessReconnectRequired"]));
     expect(island.tree().filter((e) => propsOf(e)["data-testid"] === "register-lichess-reconnect-link")).toHaveLength(0);
     expect(island.tree().filter((e) => propsOf(e)["data-testid"] === "register-lichess-link")).toHaveLength(1);
+    let checked = 0;
+    for (const line of GENERIC_LINES()) {
+      expect(island.tree().filter((e) => textOf(e).includes(line)), `the generic line "${line}" is not on the page`).toHaveLength(0);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    expect(alerts(island)).toHaveLength(1);
+  });
+
+  // The other direction: any OTHER refusal keeps the generic line (and no Lichess block). A 422 with a different code is
+  // the near miss - same status as the Lichess reasons.
+  it("a 422 that is NOT a Lichess reason keeps the generic line and its detail, and shows no Lichess block", async () => {
+    const island = await submitRefused(new ApiV1Error("This division is full", 422, "DIVISION_FULL"));
+
+    const { primary, secondary } = alertBlock(island);
+    expect(textOf(primary)).toBe(String(EN_UI["register.submit.errorRejected"]));
+    expect(textOf(secondary)).toBe("This division is full");
+    expect(island.tree().filter((e) => propsOf(e)["data-testid"] === "reg-lichess-refusal")).toHaveLength(0);
   });
 
   it("a CONFLICT failure (409 — a concurrent checkout-mint race) shows the retry-bucket message, not the rejected one", async () => {

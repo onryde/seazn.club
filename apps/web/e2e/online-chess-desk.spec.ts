@@ -1686,6 +1686,9 @@ test.describe("online chess — registration (I5)", () => {
     await expect(refused.getByTestId("register-lichess-reconnect-link")).toHaveText(uiEn["register.lichess.reconnect.cta"]!);
     await expect(p.getByTestId("register-lichess-link"), "the link prompt is not this refusal's").toHaveCount(0);
     await expect(p.getByText(uiEn["register.lichessLinkRequired"]!)).toHaveCount(0);
+    // Alone: the generic "check your details" line would send a player with correct details hunting for a mistake.
+    await expect(p.getByText(uiEn["register.submit.errorRejected"]!)).toHaveCount(0);
+    await expect(p.getByText(uiEn["register.submit.error"]!)).toHaveCount(0);
     const again = new URL((await refused.getByTestId("register-lichess-reconnect-link").getAttribute("href"))!, "https://seazn.test");
     expect(again.searchParams.get("org")).toBe(reg.orgSlug);
     expect(again.searchParams.get("next")).toBe(reg.registerPath);

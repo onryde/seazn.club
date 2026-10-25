@@ -184,6 +184,25 @@ describe("classifyJoinFailure — 409 here means a real conflict, unlike submit.
     expect(classifyJoinFailure(429)).toBe("rateLimited");
     expect(classifyJoinFailure(429)).not.toBe("rejected");
   });
+  // Fix round 1 (owner 2026-10-25): two 422 codes are told apart, because the joiner's next step differs.
+  it("422 LICHESS_LINK_REQUIRED -> lichessLink; 422 LICHESS_RECONSENT_REQUIRED -> lichessReconnect (never the generic 'rejected')", () => {
+    expect(classifyJoinFailure(422, "LICHESS_LINK_REQUIRED")).toBe("lichessLink");
+    expect(classifyJoinFailure(422, "LICHESS_RECONSENT_REQUIRED")).toBe("lichessReconnect");
+    // The near misses: another 422 code, and no code at all, stay 'rejected'.
+    expect(classifyJoinFailure(422, "ROSTER_FULL")).toBe("rejected");
+    expect(classifyJoinFailure(422)).toBe("rejected");
+    expect(classifyJoinFailure(422, "lichess_link_required"), "codes are exact").toBe("rejected");
+  });
+  it("the status still comes first: a Lichess code on a 404 / 409 / 429 / 5xx / no-response is those, not a Lichess state", () => {
+    let checked = 0;
+    for (const [status, kind] of [[404, "notFound"], [409, "conflict"], [429, "rateLimited"], [500, "retry"], [503, "retry"], [undefined, "retry"], [400, "rejected"]] as const) {
+      for (const code of ["LICHESS_LINK_REQUIRED", "LICHESS_RECONSENT_REQUIRED"]) {
+        expect(classifyJoinFailure(status, code), `${status} ${code}`).toBe(kind);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: every pair was asked").toBe(14);
+  });
   it("5xx and no-response -> retry", () => {
     expect(classifyJoinFailure(500)).toBe("retry");
     expect(classifyJoinFailure(503)).toBe("retry");
