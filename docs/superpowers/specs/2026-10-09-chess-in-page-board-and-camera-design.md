@@ -2937,7 +2937,8 @@ Every minute count is derived from `DEADLINE_AFTER_MS`, `LINE_DEADLINE_GRACE_MS`
    batch: every board opens at `T`. (b) A `required` round opened, then DOWNGRADED to `off` (D9):
    batch index 2's open time and deadline are exactly what they were before the downgrade, and
    differ from `T`'s (the case where the wrong answer is not the right one's constant). (c) A re-open
-   decides afresh and a policy change before it counts. (d) A row that existed before the delta
+   keeps the stored flag, so a policy change after the first open does not move the groups the screen promised (final review I1,
+   owner-approved 2026-10-25). (d) A row that existed before the delta
    (`staggered` defaulted `false`) behaves as it did. Mutant: `boardAnchor` reads the live policy:
    (b) red.
 6. **The deadline shift reaches every reader.** One table lists the readers (§3.2.1): seat, check-in

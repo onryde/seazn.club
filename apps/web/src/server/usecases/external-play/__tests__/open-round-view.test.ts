@@ -738,9 +738,5 @@ describe.skipIf(!HAS_DB)("listOpenRounds - a re-armed board (D17): the press nam
       expect(after.batches[2]!.opensAt, "batch 2 opens when the server said").toBe(last.anchor.at.toISOString());
       expect(after.batches[0]!.opensAt).toBe(first.anchor.at.toISOString());
     });
-
-    it("anti-vacuity: both paths of the reopen are driven", () => {
-      expect(PATHS.length).toBe(2);
-    });
   });
 });
