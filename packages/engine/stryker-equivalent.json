@@ -290,6 +290,18 @@
       "reason": "The flag only moves the played ledger's `wins` value; creditedMetrics lays the double-walkover credit over it, and that credit carries every key the ledger has (wins, white, black) at 0, so the played value is never observable."
     },
     {
+      "mutant": "src/sports/boardgame/boardgame.ts:910:15 ConditionalExpression → false",
+      "original": "payload.moves === undefined",
+      "line": "...(payload.moves === undefined ? {} : { moves: payload.moves }),",
+      "reason": "With no moves the mutant hands decideResult `extra.moves: undefined` instead of omitting the key; decideResult is the only reader and re-tests `extra.moves === undefined` before writing state, so the same state is built either way."
+    },
+    {
+      "mutant": "src/sports/boardgame/boardgame.ts:911:15 ConditionalExpression → false",
+      "original": "payload.winnerPerson === undefined",
+      "line": "...(payload.winnerPerson === undefined ? {} : { winnerPerson: payload.winnerPerson }),",
+      "reason": "With no winnerPerson the mutant hands decideResult `extra.winnerPerson: undefined` instead of omitting the key; decideResult is the only reader, tests `extra.winnerPerson !== undefined` for its draw guard and `=== undefined` before writing state, so it refuses and writes exactly as before."
+    },
+    {
       "mutant": "src/sports/carrom/carrom.ts:1092:56 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "const credit = carromForfeitCredit(cfg, state, \"walkover\", \"both\");",
