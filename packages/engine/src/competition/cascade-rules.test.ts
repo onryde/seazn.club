@@ -518,11 +518,17 @@ function addedBy(
 
 describe("offerableKeys — '+ Add step' (spec §9)", () => {
   it("premise: this file's vocabulary is in TiebreakerKey's own order, read from the union's declaration in module.ts", () => {
+    // Layout-free: a Stryker sandbox reprints module.ts with the union on one line (a comment splitting it), so the
+    // declaration is isolated (`export type TiebreakerKey =` to its `;`), its comments dropped, and every quoted member
+    // read wherever it sits.
     const source = readFileSync(new URL("../sport/module.ts", import.meta.url), "utf8");
-    const start = source.indexOf("export type TiebreakerKey =");
-    expect(start, "module.ts declares TiebreakerKey").toBeGreaterThan(-1);
-    const declaration = source.slice(start, source.indexOf(";", start));
-    const declared = [...declaration.matchAll(/^\s*\|\s*"([a-z0-9_]+)"/gm)].map((m) => m[1]);
+    const head = /export\s+type\s+TiebreakerKey\s*=/.exec(source);
+    expect(head, "module.ts declares TiebreakerKey").not.toBeNull();
+    const start = head?.index ?? 0;
+    const end = source.indexOf(";", start);
+    expect(end, "the declaration ends").toBeGreaterThan(start);
+    const declaration = source.slice(start, end).replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+    const declared = [...declaration.matchAll(/"([a-z0-9_]+)"/g)].map((m) => m[1]);
     expect(declared.length, "anti-vacuity: the union's members were read").toBe(KEYS.length);
     expect(KEYS).toEqual(declared);
   });
