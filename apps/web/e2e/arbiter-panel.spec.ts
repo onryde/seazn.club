@@ -1779,10 +1779,23 @@ test.describe("arbiter round column", () => {
       release = resolve;
     });
     let seen = 0;
+    let round2Done = false;
+    // The held request is held on its way BACK, not on its way out: the server does round 2's work at once (`route.fetch`) and only the
+    // ANSWER waits at the gate. That is load-bearing, not a convenience. This server has no mail provider, so every press is a REOPEN,
+    // and a reopen moves the round's `opened_at`; the panel shows the most recently OPENED round (loadArbiterRound, D12). A request
+    // released AFTER round 3 opens would make round 2 the latest again, and the refresh behind its answer would take the screen back to
+    // round 2 and close round 3's confirmation - the red CI saw on both attempts (arbiter-panel-stale-open.test.tsx drives both orders
+    // from the real readers and the real usecase). Done first, round 3 stays the latest and nothing the old answer does can move it.
     await page.route(new RegExp(`/stages/${r.stageId}/open-round$`), async (route) => {
       seen += 1;
-      if (seen === 1) await gate;
-      await route.continue();
+      if (seen !== 1) {
+        await route.continue();
+        return;
+      }
+      const answer = await route.fetch();
+      round2Done = true;
+      await gate;
+      await route.fulfill({ response: answer });
     });
     // The held answer's own wait must outlast the hold (the default 30 s would expire while the gate is shut), and "held" is proved,
     // not assumed: the route saw the request, and the answer has not arrived by the time of the dead tap below.
@@ -1799,8 +1812,13 @@ test.describe("arbiter round column", () => {
     await confirm.click();
     await expect.poll(() => posts.roundNos(), { message: "the second press for round 2 is out, held at the network" }).toEqual([2, 2]);
     expect(seen, "the route held exactly one request: the second press for round 2").toBe(1);
+    await expect.poll(() => round2Done, { message: "the server has done round 2's press; only its answer is held" }).toBe(true);
     expect(answered, "the held request has not been answered").toBe(false);
     await openByApi(3);
+    const latest = await withDb(
+      (sql) => sql<{ roundNo: number }[]>`select round_no as "roundNo" from stage_round_opens where stage_id = ${r.stageId} order by opened_at desc, round_no desc limit 1`,
+    );
+    expect(latest.map((x) => x.roundNo), "round 3 is the most recently opened, so no answer for round 2 can take the screen back").toEqual([3]);
     await refreshNow(page);
     await expect(heading(3), "round 3 is the round on screen, with the old request still out").toBeVisible({ timeout: POLL_BUDGET_MS });
     await expect(dialog, "round 2's confirmation (busy) is gone with the reset").toHaveCount(0);
