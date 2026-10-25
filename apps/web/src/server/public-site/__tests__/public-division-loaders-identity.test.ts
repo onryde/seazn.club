@@ -117,12 +117,12 @@ const normalizeStandingsBefore = (s: PublicStandings): PublicStandings => ({
 });
 
 async function readPublicDivisionDetailBefore(division: PublicDivision) {
-  // `rules`: main's per-stage match rules (bb6523248), which landed on this
-  // read after the freeze; carried here so the diff is still T4's alone.
+  // `rules`: main's per-stage match rules (bb6523248), and `table_points_rule`: W2d's PF-3 (V472), both of which landed
+  // on this read after the freeze; carried here so the diff is still T4's alone.
   const stages = await sql<PublicStage[]>`
     select id, division_id, seq, kind, name, status,
            qualify_count, qualify_per_group, next_stage_name, swiss_rounds, points_rule,
-           has_rank_overrides,
+           has_rank_overrides, table_points_rule,
            (select x.config->'rules' from stages x where x.id = public_stages_v.id) as rules
     from public_stages_v where division_id = ${division.id} order by seq`;
   const pools = await sql<{ id: string; stage_id: string; key: string; name: string }[]>`
@@ -221,10 +221,11 @@ async function embedDivisionDataBefore(divisionId: string) {
     select id, slug, name, default_locale from organizations where id = ${competition.org_id}`;
   if (!org) return { ok: false, reason: "not_found" } as const;
   const [stages, pools, fixtures, standings, entrants, ssRows] = await Promise.all([
+    // `table_points_rule`: W2d's PF-3 (V472), which landed on this read after the freeze; carried so the diff is T4's alone.
     sql<PublicStage[]>`
       select id, division_id, seq, kind, name, status,
              qualify_count, qualify_per_group, next_stage_name, swiss_rounds, points_rule,
-             has_rank_overrides
+             has_rank_overrides, table_points_rule
       from public_stages_v where division_id = ${divisionId} order by seq`,
     sql<{ id: string; stage_id: string; key: string; name: string }[]>`
       select p.id, p.stage_id, p.key, p.name

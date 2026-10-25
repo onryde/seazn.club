@@ -170,7 +170,7 @@ const row = (entrantId: string, rank: number, won: number, played: number, goals
   metrics: { for: goals[0], against: goals[1], diff: goals[0] - goals[1] },
 });
 
-/** V414's six columns, as the usecase returns them. */
+/** V414's six columns and V472's `table_points_rule`, as the usecase returns them. */
 const meta = (m: Partial<StageQualMetaRow>): StageQualMetaRow => ({
   qualify_count: null,
   qualify_per_group: false,
@@ -178,6 +178,8 @@ const meta = (m: Partial<StageQualMetaRow>): StageQualMetaRow => ({
   swiss_rounds: null,
   points_rule: null,
   has_rank_overrides: false,
+  // an unpinned stage (V472): the table is paid by its own rule
+  table_points_rule: m.points_rule ?? null,
   ...m,
 });
 

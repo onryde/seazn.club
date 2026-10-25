@@ -350,6 +350,7 @@ const stage = (id: string, divisionId: string, seq: number, kind: PublicStage["k
   swiss_rounds: null,
   points_rule: null,
   has_rank_overrides: false,
+  table_points_rule: null,
 });
 
 const entrants = (divisionId: string, prefix: string, n: number): PublicEntrant[] =>

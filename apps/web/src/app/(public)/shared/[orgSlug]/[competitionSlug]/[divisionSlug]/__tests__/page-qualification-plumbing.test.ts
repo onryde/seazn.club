@@ -119,6 +119,7 @@ function divisionData(qualifyCount: number | null) {
     swiss_rounds: 3,
     points_rule: null,
     has_rank_overrides: false,
+    table_points_rule: null,
   };
   return {
     org: { id: "o1", slug: "test-org", name: "Test Org", default_locale: "en" },

@@ -70,6 +70,7 @@ import nl from "@/dictionaries/nl/public.json";
 import { plural, t, type TKey } from "@/lib/i18n-runtime";
 import {
   EVERY_OUTCOME,
+  boundsInForce,
   buildQualificationView,
   divisionAwardAddsToLedger,
   divisionPointsBounds,
@@ -178,6 +179,7 @@ const META: StageQualMeta = {
   swissRounds: null,
   pointsRule: null,
   hasRankOverrides: false,
+  tablePointsRule: null,
 };
 
 const LOCALES = new Map<Dict, "en" | "es" | "fr" | "nl">([
@@ -202,7 +204,14 @@ function input(scene: Scene, over: Partial<QualificationViewInput> = {}, dict: D
     stage: {
       id: "S",
       kind: scene.kind,
-      meta: { ...META, ...(scene.kind === "swiss" ? { swissRounds: 3 } : {}), ...scene.meta },
+      // An unpinned stage unless the scene says otherwise: its table is paid by its own rule (V472 `table_points_rule`
+      // = the pin, else the own rule), so a scene that sets only `pointsRule` gets it for both.
+      meta: {
+        ...META,
+        ...(scene.kind === "swiss" ? { swissRounds: 3 } : {}),
+        ...scene.meta,
+        tablePointsRule: scene.meta && "tablePointsRule" in scene.meta ? scene.meta.tablePointsRule : (scene.meta?.pointsRule ?? null),
+      },
     },
     poolId: scene.poolId ?? null,
     rows: scene.rows,
@@ -341,7 +350,7 @@ function after3(left: 1 | 2, m: Partial<Record<"A" | "B" | "C" | "D", [number, n
 
 // ---------------------------------------------------------------------------
 describe("stageQualMeta / divisionPointsBounds", () => {
-  it("maps the V414 columns, defaulting a null per-group flag to false", () => {
+  it("maps the V414 columns and V472's table_points_rule, defaulting a null per-group flag to false; the two rules never cross", () => {
     expect(
       stageQualMeta({
         qualify_count: 4,
@@ -350,8 +359,9 @@ describe("stageQualMeta / divisionPointsBounds", () => {
         swiss_rounds: 5,
         points_rule: undefined,
         has_rank_overrides: true,
+        table_points_rule: undefined,
       }),
-    ).toEqual({ qualifyCount: 4, qualifyPerGroup: false, nextStageName: "Cup", swissRounds: 5, pointsRule: null, hasRankOverrides: true });
+    ).toEqual({ qualifyCount: 4, qualifyPerGroup: false, nextStageName: "Cup", swissRounds: 5, pointsRule: null, hasRankOverrides: true, tablePointsRule: null });
     expect(
       stageQualMeta({
         qualify_count: null,
@@ -360,8 +370,20 @@ describe("stageQualMeta / divisionPointsBounds", () => {
         swiss_rounds: null,
         points_rule: { base: {} },
         has_rank_overrides: false,
+        table_points_rule: { win: { regulation: 2 } },
       }),
-    ).toEqual({ qualifyCount: null, qualifyPerGroup: true, nextStageName: null, swissRounds: null, pointsRule: { base: {} }, hasRankOverrides: false });
+    ).toEqual({ qualifyCount: null, qualifyPerGroup: true, nextStageName: null, swissRounds: null, pointsRule: { base: {} }, hasRankOverrides: false, tablePointsRule: { win: { regulation: 2 } } });
+  });
+  it("W2d PF-3: the per-match bounds read the rule the TABLE is paid by (a started stage's pin), never the stage's own rule", () => {
+    // A pinned stage with no rule of its own: the pin's bounds, not the sport's.
+    const pin = { win: { regulation: 4 }, draw: 2, loss: { regulation: 1 }, shootoutAs: "result", unit: "whole" };
+    const pinBounds = pointsRuleBounds(PointsRule.parse(pin), EVERY_OUTCOME);
+    expect(pinBounds, "premise: the pin's bounds are not the sport's").not.toEqual(BOUNDS);
+    expect(boundsInForce({ ...META, pointsRule: null, tablePointsRule: pin }, BOUNDS)).toEqual(pinBounds);
+    // An own rule the table is NOT paid by (no table rule): the sport's bounds, whatever the own rule says.
+    expect(boundsInForce({ ...META, pointsRule: pin, tablePointsRule: null }, BOUNDS)).toEqual(BOUNDS);
+    // An unparsable table rule gives none, never the sport's instead.
+    expect(boundsInForce({ ...META, pointsRule: null, tablePointsRule: { win: "three" } }, BOUNDS)).toBeNull();
   });
   it("bounds come from the module's own declaration; no module or an unparsable cfg gives none", () => {
     expect(BOUNDS).toEqual(GENERIC.matchPointsBounds(GENERIC.configSchema.parse(CFG)));

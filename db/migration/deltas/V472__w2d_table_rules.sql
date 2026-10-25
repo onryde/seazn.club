@@ -15,9 +15,12 @@
 --    The pre-W2d values are written in as LITERALS, re-read at W2D_BASE (e97823e4d8, main before W2d): the code defaults
 --    change in this same release, and the migration must not read them.
 -- 4. `w2d_pin_started_stages()` — the B1 pin (spec §5.4, §8).
--- 5. `stage_qualification_meta` (W2d Task 2; PF-3): `points_rule` is the pin's points where the stage is pinned, else
---    the stage's own rule; the view (`public_stages_v`) takes it by a lateral join, so it follows without a change.
+-- 5. `stage_qualification_meta` (W2d Task 2; PF-3) and `public_stages_v`: `points_rule` stays the stage's OWN rule (the
+--    format line prints it as the stage's own points), and a new trailing `table_points_rule` is the rule the TABLE is
+--    paid by — the pin's points where the stage is pinned, else its own rule — which qualification reads for its bounds.
 -- 6. The data steps, in ONE block: pin first, then convert the old-shape stage rules, then the division configs.
+-- 7. The `w2d_*` helpers are DROPPED: after this release the start path is the only pin writer, and a manual call of the
+--    pin would pin a stage with PRE-W2d payers.
 --
 -- ── B1 decisions (W2d Task 7) ──
 -- * ORDER. The pin runs BEFORE the division configs lose `shootoutWin/shootoutLoss`: it reads the pre-W2d payer from the
@@ -35,11 +38,11 @@
 --   is already pinned with its exact old payout, and spec §5.4 lets new defaults reach only stages that have not started
 --   (greenfield, no alias — no key holds the old split any more). A negative bonus is clamped to 0 (the schema's floor).
 -- * A value the pre-W2d code could not have paid (a non-number, a missing required key, an unknown sport, a set map that
---   pays no set score, a stage rule in neither shape) is REFUSED (22023), naming the row: the migration fails closed
---   rather than pin a guess.
+--   pays no set score, a stage rule in neither shape — no `base`, and no object `win` and `loss` each with a numeric
+--   `regulation`) is REFUSED (22023), naming the row: the migration fails closed rather than pin a guess.
 -- * V347 froze each scored fixture's resolved config; the pin reads the LIVE division config. W2c locks a started
---   stage's points fields, so the two agree; a stage whose snapshots pay otherwise is pinned to the live one and named
---   in a NOTICE.
+--   stage's points fields, so the two agree; a stage whose snapshots pay otherwise — or hold one the pre-W2d payer
+--   cannot read — is pinned to the live one and named in a NOTICE. That check is a diagnostic: it never aborts.
 
 -- ═══ 1. The pin columns ═══
 alter table stages
@@ -436,17 +439,27 @@ begin
     -- the stage's own rule, as the loader tests it (competition.ts `stage.config?.points ?`): a falsy value is none
     if r.own is null or r.own in ('null'::jsonb, 'false'::jsonb, '0'::jsonb, '""'::jsonb) then
       pts := w2d_pre_points(r.sport_key, r.cfg);
-      if exists (select 1 from fixtures f
-                 where f.stage_id = r.id and jsonb_typeof(f.config_snapshot) = 'object'
-                   and w2d_pre_points(r.sport_key, f.config_snapshot) is distinct from pts) then
+      -- a diagnostic, never a refusal: a historical snapshot the pre-W2d payer cannot read is named, not fatal
+      begin
+        if exists (select 1 from fixtures f
+                   where f.stage_id = r.id and jsonb_typeof(f.config_snapshot) = 'object'
+                     and w2d_pre_points(r.sport_key, f.config_snapshot) is distinct from pts) then
+          drift := drift || r.id::text;
+        end if;
+      exception when sqlstate '22023' then
         drift := drift || r.id::text;
-      end if;
+      end;
     elsif jsonb_typeof(r.own) <> 'object' then
       raise exception 'W2d pin: stage % has a points rule that is no object: %', r.id, r.own::text using errcode = '22023';
     elsif r.own ? 'base' then
       pts := w2d_legacy_points(r.own);
-    else
+    elsif jsonb_typeof(r.own -> 'win') = 'object' and jsonb_typeof(r.own #> '{win,regulation}') = 'number'
+          and jsonb_typeof(r.own -> 'loss') = 'object' and jsonb_typeof(r.own #> '{loss,regulation}') = 'number' then
+      -- the outcome-keyed shape (W2d PointsRule): its two required payouts are there
       pts := r.own;
+    else
+      raise exception 'W2d pin: stage % has a points rule in neither shape (no base, no win/loss regulation): %',
+        r.id, r.own::text using errcode = '22023';
     end if;
     if r.tiebreakers is null or jsonb_typeof(r.tiebreakers) = 'null' then
       tbs := w2d_pre_cascade(r.sport_key);
@@ -468,34 +481,85 @@ begin
     n := n + 1;
   end loop;
   if cardinality(drift) > 0 then
-    raise notice 'W2d pin: % started stage(s) scored fixtures under a points config the live division does not pay; each is pinned to the live one: %',
+    raise notice 'W2d pin: % started stage(s) scored fixtures under a points config the live division does not pay (or one the pre-W2d payer cannot read); each is pinned to the live one: %',
       cardinality(drift), array_to_string(drift, ', ');
   end if;
   return n;
 end $$;
 
-revoke all on function w2d_points_num(jsonb, jsonb, text, boolean) from public;
-revoke all on function w2d_legacy_points(jsonb) from public;
-revoke all on function w2d_pre_points(text, jsonb) from public;
-revoke all on function w2d_pre_cascade(text) from public;
-revoke all on function w2d_drop_shootout_split(text, jsonb) from public;
-revoke all on function w2d_pin_started_stages() from public;
 
--- ═══ 5. The stage points rule on the public and console reads (W2d Task 2; Task 7 PF-3) ═══
+-- ═══ 5. The stage points rules on the public and console reads (W2d Task 2; Task 7 PF-3) ═══
 -- `stage_qualification_meta` (V414) rebuilt `points_rule` from the OLD keys only, so a rule saved in the new shape
 -- reached both of its readers — `public_stages_v` (division page, hub, embed) and the organiser console
 -- (usecases/stage-qualification.ts, which calls the function directly) — as `{bonuses, forfeit}`: no qualification
 -- status, no "Points:" clause, no walkover-score clause. The fold was unaffected (it reads `config.points` itself).
 --
--- This rebuilds the FUNCTION (the view takes `points_rule` from it by a lateral join, so it follows without a change).
--- The rule it reads is the stage's PIN where it has one (PF-3: a started stage is paid by its pin, not by a later edit of
--- its own rule), else its own `config.points`; built from BOTH shapes: the legacy `base` (step 6 converts every stored
--- one; the engine still reads the shape until W2d Task 9 drops it, and the two retire together) and every key the
--- outcome-keyed PointsRule reads. The rest of the function is V414's, verbatim. The same rule as V414 holds at every
--- level: only the keys PointsRule reads, never an organiser's stray keys (PointsRule is a non-strict z.object, and
--- createStages stores the raw config); a key that is absent stays absent (jsonb_strip_nulls); a `bySetScore` key is kept
--- only when it is a set score ("W-L") or "*", the grammar PointsRule accepts. The values themselves are not sensitive:
--- the table already prints the points they produce.
+-- Two rules now leave the function, each built from BOTH stored shapes by `stage_points_rule_published` (below):
+-- * `points_rule` — the stage's OWN `config.points`, as V414 published it. The format line prints it as the stage's own
+--   points ("a stage that plays the division's format gets nothing"), so a pin must never reach it: a started stage
+--   with no rule of its own still prints no points line.
+-- * `table_points_rule` (new, last) — the rule the TABLE is paid by: the stage's PIN where it has one (PF-3: a started
+--   stage is paid by its pin, not by a later edit of its own rule), else its own rule. Qualification reads it for its
+--   per-match bounds.
+-- A new OUT column changes the function's row type, which `create or replace` cannot do, and the view depends on the
+-- function: both are dropped and re-created here, the view with V414's columns in V414's order and the new one LAST.
+--
+-- The published shape, for both: the legacy `base` (step 6 converts every stored one; the engine still reads the shape
+-- until W2d Task 9 drops it, and the two retire together) and every key the outcome-keyed PointsRule reads. The same
+-- rule as V414 holds at every level: only the keys PointsRule reads, never an organiser's stray keys (PointsRule is a
+-- non-strict z.object, and createStages stores the raw config); a key that is absent stays absent (jsonb_strip_nulls); a
+-- `bySetScore` key is kept only when it is a set score ("W-L") or "*", the grammar PointsRule accepts. The values
+-- themselves are not sensitive: the table already prints the points they produce.
+create or replace function stage_points_rule_published(p jsonb)
+returns jsonb
+  language sql immutable
+  set search_path = ${flyway:defaultSchema}, pg_temp as $$
+  select
+    case when jsonb_typeof(p) = 'object' then jsonb_strip_nulls(jsonb_build_object(
+      -- the W2c shape (no stored row after step 6; retired with the engine's legacy read, W2d Task 9)
+      'base', case when jsonb_typeof(p -> 'base') = 'object' then jsonb_build_object(
+                'win',  p #> '{base,win}',
+                'draw', p #> '{base,draw}',
+                'loss', p #> '{base,loss}') end,
+      -- the W2d outcome-keyed shape (engine competition/points.ts PointsRule, spec §5.3)
+      'win', case when jsonb_typeof(p -> 'win') = 'object' then jsonb_build_object(
+                'regulation', p #> '{win,regulation}',
+                'ot',         p #> '{win,ot}',
+                'so',         p #> '{win,so}') end,
+      'loss', case when jsonb_typeof(p -> 'loss') = 'object' then jsonb_build_object(
+                'regulation', p #> '{loss,regulation}',
+                'ot',         p #> '{loss,ot}',
+                'so',         p #> '{loss,so}',
+                'unplayed',   p #> '{loss,unplayed}') end,
+      'draw',       p -> 'draw',
+      'soBonus',    p -> 'soBonus',
+      'shootoutAs', p -> 'shootoutAs',
+      'tie',        p -> 'tie',
+      'noResult',   p -> 'noResult',
+      'bySetScore', case when jsonb_typeof(p -> 'bySetScore') = 'object' then (
+                select jsonb_object_agg(k.key, k.value)
+                from jsonb_each(p -> 'bySetScore') as k(key, value)
+                where k.key ~ '^([0-9]+-[0-9]+|[*])$') end,
+      'unit',       p -> 'unit',
+      'bonuses', case when jsonb_typeof(p -> 'bonuses') = 'array' then (
+                select coalesce(jsonb_agg(jsonb_build_object(
+                         'when',   b.value -> 'when',
+                         'param',  b.value -> 'param',
+                         'points', b.value -> 'points') order by b.ord), '[]'::jsonb)
+                from jsonb_array_elements(p -> 'bonuses') with ordinality as b(value, ord)) end,
+      'forfeit', case when jsonb_typeof(p -> 'forfeit') = 'object' then jsonb_build_object(
+                'winnerPoints', p #> '{forfeit,winnerPoints}',
+                'loserPoints',  p #> '{forfeit,loserPoints}',
+                'awardScore',   p #> '{forfeit,awardScore}') end)) end
+$$;
+
+revoke all on function stage_points_rule_published(jsonb) from public;
+grant execute on function stage_points_rule_published(jsonb) to app_user;
+
+drop view public_stages_v;
+drop function stage_qualification_meta(uuid);
+
+-- V414's function verbatim, but for the two rules it reads (`points`, `table_points`) and its new last column.
 create or replace function stage_qualification_meta(p_stage_id uuid)
 returns table (
   qualify_count int,
@@ -503,13 +567,15 @@ returns table (
   next_stage_name text,
   swiss_rounds int,
   points_rule jsonb,
-  has_rank_overrides boolean
+  has_rank_overrides boolean,
+  table_points_rule jsonb
 )
   language sql stable security definer
   set search_path = ${flyway:defaultSchema}, pg_temp as $$
   with src as (
     select s.id, s.division_id, s.seq, s.kind, s.config,
-           coalesce(s.table_rules_pinned -> 'points', s.config -> 'points') as points,
+           s.config -> 'points' as points,
+           coalesce(s.table_rules_pinned -> 'points', s.config -> 'points') as table_points,
            coalesce(jsonb_typeof(s.config -> 'cross_feeds') = 'array'
                     and s.config -> 'cross_feeds' <> '[]'::jsonb, false) as feeds_by_result
     from stages s where s.id = p_stage_id
@@ -575,50 +641,30 @@ returns table (
                    and jsonb_typeof(src.config -> 'rounds') = 'number'
                    and (src.config ->> 'rounds') ~ '^[0-9]{1,6}$'
               then (src.config ->> 'rounds')::int end,
-         case when jsonb_typeof(src.points) = 'object' then jsonb_strip_nulls(jsonb_build_object(
-           -- the W2c shape (no stored row after step 6; retired with the engine's legacy read, W2d Task 9)
-           'base', case when jsonb_typeof(src.points -> 'base') = 'object' then jsonb_build_object(
-                     'win',  src.points #> '{base,win}',
-                     'draw', src.points #> '{base,draw}',
-                     'loss', src.points #> '{base,loss}') end,
-           -- the W2d outcome-keyed shape (engine competition/points.ts PointsRule, spec §5.3)
-           'win', case when jsonb_typeof(src.points -> 'win') = 'object' then jsonb_build_object(
-                     'regulation', src.points #> '{win,regulation}',
-                     'ot',         src.points #> '{win,ot}',
-                     'so',         src.points #> '{win,so}') end,
-           'loss', case when jsonb_typeof(src.points -> 'loss') = 'object' then jsonb_build_object(
-                     'regulation', src.points #> '{loss,regulation}',
-                     'ot',         src.points #> '{loss,ot}',
-                     'so',         src.points #> '{loss,so}',
-                     'unplayed',   src.points #> '{loss,unplayed}') end,
-           'draw',       src.points -> 'draw',
-           'soBonus',    src.points -> 'soBonus',
-           'shootoutAs', src.points -> 'shootoutAs',
-           'tie',        src.points -> 'tie',
-           'noResult',   src.points -> 'noResult',
-           'bySetScore', case when jsonb_typeof(src.points -> 'bySetScore') = 'object' then (
-                     select jsonb_object_agg(k.key, k.value)
-                     from jsonb_each(src.points -> 'bySetScore') as k(key, value)
-                     where k.key ~ '^([0-9]+-[0-9]+|[*])$') end,
-           'unit',       src.points -> 'unit',
-           'bonuses', case when jsonb_typeof(src.points -> 'bonuses') = 'array' then (
-                     select coalesce(jsonb_agg(jsonb_build_object(
-                              'when',   b.value -> 'when',
-                              'param',  b.value -> 'param',
-                              'points', b.value -> 'points') order by b.ord), '[]'::jsonb)
-                     from jsonb_array_elements(src.points -> 'bonuses') with ordinality as b(value, ord)) end,
-           'forfeit', case when jsonb_typeof(src.points -> 'forfeit') = 'object' then jsonb_build_object(
-                     'winnerPoints', src.points #> '{forfeit,winnerPoints}',
-                     'loserPoints',  src.points #> '{forfeit,loserPoints}',
-                     'awardScore',   src.points #> '{forfeit,awardScore}') end)) end,
+         stage_points_rule_published(src.points),
          coalesce(jsonb_typeof(src.config -> 'rank_overrides') = 'array'
-                  and src.config -> 'rank_overrides' <> '[]'::jsonb, false)
+                  and src.config -> 'rank_overrides' <> '[]'::jsonb, false),
+         stage_points_rule_published(src.table_points)
   from src
   left join forecast f on not src.feeds_by_result
 $$;
 
 revoke all on function stage_qualification_meta(uuid) from public;
 grant execute on function stage_qualification_meta(uuid) to app_user;
+
+-- V414's columns in V414's order (V233's six, then V414's appended six), then `table_points_rule`. The visibility gate is
+-- copied verbatim from V233; the grant is V239's.
+create view public_stages_v as
+  select st.id, st.division_id, st.seq, st.kind, st.name, st.status,
+         q.qualify_count, q.qualify_per_group, q.next_stage_name, q.swiss_rounds, q.points_rule,
+         q.has_rank_overrides, q.table_points_rule
+  from stages st
+  join divisions d    on d.id = st.division_id
+  join competitions c on c.id = d.competition_id
+  cross join lateral stage_qualification_meta(st.id) q
+  where c.visibility in ('public','unlisted');
+
+grant select on public_stages_v to app_user;
 
 -- ═══ 6. The data steps (B1), in one block ═══
 -- 1. Pin every started stage (before step 3 removes the shoot-out split the pin reads), then hold the invariant the W2d
@@ -653,3 +699,13 @@ begin
   raise notice 'W2d B1: pinned % started stage(s); converted % old-shape stage rule(s) and % division config(s) off the shoot-out split',
     pinned, stage_rules, division_cfgs;
 end $$;
+
+-- ═══ 7. The B1 helpers go (they exist for the data steps above alone) ═══
+-- After this release the start path is the only pin writer; a manual `select w2d_pin_started_stages()` would pin any
+-- unpinned started stage with PRE-W2d payers. `stage_points_rule_published` stays: the read functions call it.
+drop function w2d_pin_started_stages();
+drop function w2d_drop_shootout_split(text, jsonb);
+drop function w2d_pre_cascade(text);
+drop function w2d_pre_points(text, jsonb);
+drop function w2d_legacy_points(jsonb);
+drop function w2d_points_num(jsonb, jsonb, text, boolean);

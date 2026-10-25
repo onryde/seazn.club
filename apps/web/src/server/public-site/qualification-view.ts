@@ -48,10 +48,15 @@ export interface StageQualMeta {
   qualifyPerGroup: boolean;
   nextStageName: string | null;
   swissRounds: number | null;
+  /** The stage's OWN PointsRule (`points_rule`, V414), or null. What the format line prints and what a rule-scored
+   *  forfeit reads; never the pin. */
   pointsRule: unknown;
   /** V414 (ruling M1): the organiser pinned ranks on this stage. NOT a row's
    *  `rankLocked`, which the engine also sets on every tie settled by lots. */
   hasRankOverrides: boolean;
+  /** W2d (V472, PF-3): the rule the TABLE is paid by (`table_points_rule`) — a started stage's pinned points, else its
+   *  own rule, else null (the sport's points apply). The per-match bounds read this one (`boundsInForce`). */
+  tablePointsRule: unknown;
 }
 
 /** snake→camel for `stage_qualification_meta`'s columns — the public view row
@@ -63,6 +68,7 @@ export function stageQualMeta(row: {
   swiss_rounds: number | null;
   points_rule: unknown;
   has_rank_overrides: boolean | null;
+  table_points_rule: unknown;
 }): StageQualMeta {
   return {
     qualifyCount: row.qualify_count,
@@ -71,6 +77,7 @@ export function stageQualMeta(row: {
     swissRounds: row.swiss_rounds,
     pointsRule: row.points_rule ?? null,
     hasRankOverrides: row.has_rank_overrides === true,
+    tablePointsRule: row.table_points_rule ?? null,
   };
 }
 
@@ -345,11 +352,11 @@ export const EVERY_OUTCOME: ReadonlySet<OutcomeKey> = new Set<OutcomeKey>([
   "noResult",
 ]);
 
-/** The per-match bounds in force: a stage PointsRule replaces the sport's. A
- *  rule that does not parse gives none — never the sport's bounds instead. */
-function boundsInForce(i: QualificationViewInput): MatchPointsBounds | null {
-  const rule = i.stage.meta.pointsRule;
-  if (rule === null || rule === undefined) return i.bounds;
+/** The per-match bounds in force: the rule the table is paid by (`tablePointsRule`: a started stage's pin, else its own
+ *  rule) replaces the sport's. A rule that does not parse gives none — never the sport's bounds instead. */
+export function boundsInForce(meta: StageQualMeta, sportBounds: MatchPointsBounds | null): MatchPointsBounds | null {
+  const rule = meta.tablePointsRule;
+  if (rule === null || rule === undefined) return sportBounds;
   const parsed = parseStoredPointsRule(rule);
   return parsed === null ? null : pointsRuleBounds(parsed, EVERY_OUTCOME);
 }
@@ -388,7 +395,7 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
   if (!meta.qualifyPerGroup && i.poolId !== null) return null; // Review Focus 5: an overall cut
   if (i.rows.length === 0) return null;
   if (i.cascade[0] !== "points") return null; // Review Focus 4: points do not decide places
-  const perMatch = boundsInForce(i);
+  const perMatch = boundsInForce(meta, i.bounds);
   if (perMatch === null) return null;
 
   const isSwiss = i.stage.kind === "swiss";

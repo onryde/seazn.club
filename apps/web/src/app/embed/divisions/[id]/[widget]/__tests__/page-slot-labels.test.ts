@@ -97,7 +97,7 @@ const payload = (locale: string, fixtures: PublicFixture[]): EmbedPayload => ({
       name: "Knockout",
       status: "active",
       // V414 — no qualification cut on this hand-built stage.
-      qualify_count: null, qualify_per_group: false, next_stage_name: null, swiss_rounds: null, points_rule: null, has_rank_overrides: false,
+      qualify_count: null, qualify_per_group: false, next_stage_name: null, swiss_rounds: null, points_rule: null, has_rank_overrides: false, table_points_rule: null,
     },
   ],
   pools: [],

@@ -18,6 +18,7 @@ vi.mock("next/cache", () => ({
 }));
 
 import { stageDefaultsFor } from "@seazn/engine/sport";
+import { sql } from "@/lib/db";
 import { resolveLatestModule } from "@/server/engine-db";
 import { CompetitionHubDoc } from "../competition-hub-schema";
 import { loadCompetitionHub } from "../competition-hub";
@@ -79,6 +80,51 @@ describe.skipIf(!HAS_DB)("a stage's deciders and own points reach the hub and th
     const kinds = new Map(data!.stages.map((st) => [st.id, st.kind]));
     expect(kinds.get(s.leagueStageId)).toBe("league");
     expect(kinds.get(s.cupStageId)).toBe("knockout");
+
+    const doc = await loadCompetitionHub(s.orgSlug, s.compSlug);
+    expect(CompetitionHubDoc.safeParse(doc).success).toBe(true);
+    expect(doc!.divisions.find((d) => d.slug === s.divSlug)?.stageFormatLines).toEqual([
+      {
+        stageName: "Cup",
+        line: [
+          { key: "format.rules.period.quarters", params: { minutes: cfg.periods.minutes } },
+          { key: "format.rules.decider.shootout", params: { n: preset.shootout.attempts } },
+        ],
+      },
+    ]);
+  }, 90_000);
+
+  it("W2d PF-3: a started stage PINNED to its table rules, with no points of its own, still prints no points line — the pin reaches the table's rule (table_points_rule), never the stage's own (points_rule)", async () => {
+    // The migration pins every started stage (V472 B1); a stage that plays the division's format must still read exactly
+    // as before (division page, hub, embed: "a stage that plays the division's format gets nothing"). The pin is written
+    // as the migration writes one; its points are a rule today's reader takes.
+    const m = resolveLatestModule("hockey");
+    const cfg = m.configSchema.parse(m.variants["fih-outdoor"]) as { periods: { minutes: number } };
+    const preset = stageDefaultsFor(m, "knockout", "fih-outdoor") as { shootout: { attempts: number } };
+    const s = await seedDecidersScene({ sportKey: "hockey", variantKey: "fih-outdoor" });
+    const pinPoints = {
+      win: { regulation: 3, so: 2 }, loss: { regulation: 0, so: 1 }, draw: 1, tie: 1, noResult: 1,
+      shootoutAs: "result", unit: "whole", bonuses: [],
+    };
+    const pin = {
+      points: pinPoints,
+      tiebreakers: ["points", "wins", "diff", "for", "h2h_points"],
+      crossGroup: ["points", "diff", "for", "wins"],
+      sources: { points: "migrated", tiebreakers: "migrated" },
+    };
+    await sql`update stages set status = 'active', table_rules_pinned = ${sql.json(pin)}, table_rules_pinned_at = now()
+              where id = ${s.leagueStageId}`;
+
+    const [row] = await sql<{ points_rule: unknown; table_points_rule: unknown }[]>`
+      select points_rule, table_points_rule from public_stages_v where id = ${s.leagueStageId}`;
+    expect(row, "the Pool is on the public view").toBeDefined();
+    expect(row!.points_rule, "the stage's own rule: none").toBeNull();
+    expect(row!.table_points_rule, "the rule its table is paid by: the pin's").toEqual(pinPoints);
+
+    const data = await getPublicDivision(s.orgSlug, s.compSlug, s.divSlug);
+    const pool = data!.stages.find((st) => st.id === s.leagueStageId);
+    expect(pool?.points_rule ?? null).toBeNull();
+    expect(pool?.table_points_rule).toEqual(pinPoints);
 
     const doc = await loadCompetitionHub(s.orgSlug, s.compSlug);
     expect(CompetitionHubDoc.safeParse(doc).success).toBe(true);

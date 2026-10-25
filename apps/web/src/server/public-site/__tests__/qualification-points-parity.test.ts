@@ -17,6 +17,7 @@ const meta = (pointsRule: unknown): StageQualMeta => ({
   swissRounds: null,
   pointsRule,
   hasRankOverrides: false,
+  tablePointsRule: pointsRule,
 });
 /** The sport's credit before the rule: a 1–0 the awarded 3–0 is told apart from. */
 const pair = (): FixtureResult => [
