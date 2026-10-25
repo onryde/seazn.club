@@ -11,7 +11,7 @@
 // line it always was, with its `PostgresError: message` head, its stack and its code, minus the dropped fields; an error with
 // nothing to drop reaches `console.error` as the same object. Log levels and messages are untouched.
 //
-// Installed LAST in `register()`'s Sentry step, so it is the outer wrapper: Sentry's console breadcrumb sees the scrubbed arguments.
+// Installed in `register()` right after Sentry's init, so it is the outer wrapper: Sentry's console breadcrumb sees the scrubbed arguments.
 // Only the Node runtime has a database driver, so only it installs this. Server-only: nothing on the client imports it.
 import { stripDbEchoFromErrors } from "@/lib/strip-db-echo";
 
