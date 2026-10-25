@@ -49,6 +49,10 @@ import { asFormatOne } from "./golden-reformat.ts";
 import { defaultLineupPair, makeEnvelope } from "./helpers.ts";
 
 const STRICT_ALL = { strictFromSeq: 0 } as const;
+/** The options an INDEPENDENT fold of a committed stream is offered: the write path's `strictFromSeq` and the award the stream records
+ *  (GF-3 T2), written out here rather than taken from the recorder's `strictFold`, so the two are held to each other. */
+const optionsOf = (stream: GoldenStream) =>
+  stream.foldOptions === undefined ? STRICT_ALL : { ...STRICT_ALL, forfeitAward: [stream.foldOptions.forfeitAward[0], stream.foldOptions.forfeitAward[1]] as [number, number] };
 const ev = (type: string, payload: unknown = {}, voids?: string): GoldenEvent => ({ type, payload, ...(voids === undefined ? {} : { voids }) });
 const envelopesOf = (events: readonly GoldenEvent[]): EventEnvelope[] => events.map((e, i) => makeEnvelope(i, e, e.voids));
 const rawOf = (m: AnySportModule): unknown => Object.values(m.variants as Record<string, unknown>)[0] ?? {};
@@ -577,7 +581,7 @@ function independent(module: AnySportModule, raw: unknown, stream: GoldenStream)
   const dense = Object.fromEntries(OVERLAY_COLUMNS.map((c) => [c, [] as string[]])) as Record<OverlayColumn, string[]>;
   const summaries: string[] = [];
   for (let i = 0; i < envelopes.length; i++) {
-    const f = foldMatchWithStoppage(module, cfg, lineups, envelopes.slice(0, i + 1), STRICT_ALL);
+    const f = foldMatchWithStoppage(module, cfg, lineups, envelopes.slice(0, i + 1), optionsOf(stream));
     dense.outcome.push(text(outcomeOf(module, f)));
     dense.stoppage.push(text(f.stoppage));
     dense.settlement.push(text(f.settlement));
@@ -609,7 +613,7 @@ describe("recomputeStream format 2 over every committed stream (swept, counted)"
       let recorded = 0;
       corpus.streams.forEach((stream, index) => {
         const raw = corpus.configs[stream.config];
-        const rec = recomputeKernel(module, raw, stream.events, stream.lineups);
+        const rec = recomputeKernel(module, raw, stream.events, stream.lineups, stream.foldOptions);
         // (1) Q3: the effective values are byte-identical to what the corpus holds today, on every existing stream
         expect(
           verifyStream(module, corpus, stream, { states: rec.states, outcome: rec.outcome, summary: rec.summary, deltas: rec.deltas }),

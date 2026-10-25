@@ -142,8 +142,9 @@ describe("the committed corpora reach every branch", () => {
         expect(first, key).toBe(-1);
         return;
       }
-      // append only: every stream after the first branch stream is a branch stream
-      expect(streams.slice(first).map(identity), key).toEqual(streams.filter((s) => mine.has(identity(s))).map(identity));
+      // append only: every stream after the first branch stream is a branch stream - or a fold-option stream, the fifth append path (GF-3 T2),
+      // which runs after this one and is pinned in golden-fold-options.test.ts
+      expect(streams.slice(first).filter((s) => s.foldOptions === undefined).map(identity), key).toEqual(streams.filter((s) => mine.has(identity(s))).map(identity));
     });
   });
 
@@ -563,11 +564,12 @@ describe("each verdict has teeth: the stream passes, its counterfactuals do not"
 });
 
 describe("extendBranches - the append path", () => {
-  /** The corpus as it stood before the branch streams: no branch stream, and only the configs the rest still reference. */
+  /** The corpus as it stood before the branch streams: no branch stream, none of the fold-option streams the fifth append path adds after them
+   *  (GF-3 T2), and only the configs the rest still reference. */
   const before = (key: string): GoldenCorpus => {
     const corpus = readCorpus(key);
     const mine = new Set(BRANCH_STORIES.filter((s) => s.sport === key).map(storyIdentity));
-    const streams = corpus.streams.filter((s) => !mine.has(identity(s)));
+    const streams = corpus.streams.filter((s) => !mine.has(identity(s)) && s.foldOptions === undefined);
     const used = new Set(streams.map((s) => s.config));
     return { ...corpus, configs: Object.fromEntries(Object.entries(corpus.configs).filter(([name]) => used.has(name))), streams };
   };
@@ -589,7 +591,9 @@ describe("extendBranches - the append path", () => {
   it("reproduces the committed branch streams, and the configs only they use, byte for byte from a corpus that lacks them", () => {
     let appended = 0;
     forEachSport(({ module, key }) => {
-      const committed = readCorpus(key);
+      const fullCommitted = readCorpus(key);
+      // what the branch pass alone produced: the committed corpus without the fold-option streams appended after it
+      const committed = { ...fullCommitted, streams: fullCommitted.streams.filter((s) => s.foldOptions === undefined) };
       const base = before(key);
       const expected = BRANCH_STORIES.filter((s) => s.sport === key);
       expect(branchHoles(module, base), `${key}: without its branch streams the sport has holes`).toEqual(expected.map((s) => s.id));

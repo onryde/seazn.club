@@ -50,6 +50,7 @@ import {
   type GoldenCorpus,
 } from "./golden.ts";
 import { extendBranches } from "./golden-branches.ts";
+import { extendFoldOptions } from "./golden-fold-options.ts";
 import { extendFloor } from "./golden-floor-streams.ts";
 import { reformatAll } from "./golden-reformat.ts";
 
@@ -94,7 +95,9 @@ if (corpusWriteRefusalReason !== null) {
         const floor = extendFloor(module, covered);
         // W2c 16c is the third: the opt-in config branches no generator walk and no floor scenario takes (golden-branches.ts).
         const branches = extendBranches(module, floor.corpus);
-        const corpus = branches.corpus;
+        // GF-3 T2 is the fourth: the forfeit-award streams that carry a `foldOptions`, for the sports that read the award (golden-fold-options.ts).
+        const foldOptions = extendFoldOptions(module, branches.corpus);
+        const corpus = foldOptions.corpus;
         expect(corpus.streams.slice(0, before.streams.length)).toEqual(before.streams);
         // eslint-disable-next-line no-console
         console.log(
@@ -111,7 +114,12 @@ if (corpusWriteRefusalReason !== null) {
           `[extend] ${module.key} branches: +${branches.appended.length} streams ${JSON.stringify(branches.appended)} ` +
             `stillMissing ${JSON.stringify(branches.stillMissing)}`,
         );
-        if (appended.length > 0 || floor.appended.length > 0 || branches.appended.length > 0) writeCorpus(corpus);
+        // eslint-disable-next-line no-console
+        console.log(
+          `[extend] ${module.key} foldOptions: +${foldOptions.appended.length} streams ${JSON.stringify(foldOptions.appended)} ` +
+            `stillMissing ${JSON.stringify(foldOptions.stillMissing)}`,
+        );
+        if (appended.length > 0 || floor.appended.length > 0 || branches.appended.length > 0 || foldOptions.appended.length > 0) writeCorpus(corpus);
         // Generous: a maintenance tool, not a gate. The floor's search for cricket's tie walks thousands of seeds.
       }, 300_000);
     }

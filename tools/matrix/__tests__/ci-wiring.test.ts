@@ -623,10 +623,15 @@ describe("fold-epoch guard CI wiring (engine-split Task 1e-2, D15, D26)", () => 
     // only a guard that read the flag, through `pnpm --filter`, in the engine's directory, prints this; the sport count is the corpora on disk
     const corpora = (readdirSync(resolve(REPO, "packages/engine/src/sports"), { recursive: true }) as string[]).filter((f) => f.endsWith(".golden.json")).length;
     expect(corpora).toBeGreaterThan(0);
-    const m = /^fold-epoch: (\d+) sports checked, (\d+) streams compared against HEAD: 0 violation\(s\)$/m.exec(r.stdout);
+    const m = /^fold-epoch: (\d+) sports checked, (\d+) streams compared against HEAD: 0 violation\(s\), STATS_FOLD_VERSION (\d+) -> (\d+)$/m.exec(r.stdout);
     expect(m, r.stdout).not.toBeNull();
     expect(Number(m?.[1])).toBe(corpora);
     expect(Number(m?.[2])).toBeGreaterThanOrEqual(corpora);
+    // GF-3 T1: the summary also carries the stats version, base -> tree; HEAD and this tree are the same commit, and the number is what
+    // src/stats/stats.ts declares (read here by its declaration line: the engine's own, not the guard's output)
+    const declared = /^export const STATS_FOLD_VERSION = (\d+);$/m.exec(readFileSync(resolve(REPO, "packages/engine/src/stats/stats.ts"), "utf8"))?.[1];
+    expect(declared, "src/stats/stats.ts declares STATS_FOLD_VERSION on a line of its own").toBeDefined();
+    expect([Number(m?.[3]), Number(m?.[4])]).toEqual([Number(declared), Number(declared)]);
   }, spawnBudget(1));
 });
 

@@ -49,7 +49,7 @@ import {
 import { DRAW_KINDS, FORFEIT_REASONS, OUTCOME_KINDS, isLevelOutcome, type LineupPair, type LineupSlot, type MatchOutcome } from "../core/types.ts";
 import { resolvePositions } from "../sport/catalog.ts";
 import type { AnySportModule } from "../sport/module.ts";
-import { corpusFormat, recomputeKernel, recomputeStats, recomputeStream, textDigest, type GoldenCorpus, type GoldenEvent, type Recomputed } from "./golden.ts";
+import { corpusFormat, recomputeKernel, recomputeStats, recomputeStream, textDigest, type GoldenCorpus, type GoldenEvent, type GoldenFoldOptions, type Recomputed } from "./golden.ts";
 import { FOLD_OVERLAY_KEYS, OVERLAY_COLUMNS, overlayTransitions } from "./golden-overlay.ts";
 import { awardStatKey, creditedAwardKeys } from "./golden-stats.ts";
 import { buildWalk, defaultLineupPair, makeEnvelope } from "./helpers.ts";
@@ -411,7 +411,7 @@ export const NATURAL_OUTCOMES: Readonly<Record<string, Readonly<Record<string, s
 
 /** The harness function that turns a recorded ledger into a stream's recorded half. Injectable so a probe can be shown to answer
  *  both ways: under `kernelRecorder` (the real format-2 recording) and under `moduleRecorder` (what the harness recorded before). */
-export type Recorder = (module: AnySportModule, rawConfig: unknown, events: readonly GoldenEvent[], lineups?: LineupPair) => Recomputed;
+export type Recorder = (module: AnySportModule, rawConfig: unknown, events: readonly GoldenEvent[], lineups?: LineupPair, foldOptions?: GoldenFoldOptions) => Recomputed;
 
 /** The floor's recorder since GF-2 T3: the REAL format-2 recording (the effective outcome, a digest of the summary after every
  *  event, the kernel overlay as change points, and the dense per-step overlay a probe compares). Every probe below defaults to it,
@@ -419,18 +419,18 @@ export type Recorder = (module: AnySportModule, rawConfig: unknown, events: read
  *  for what the guard now compares. */
 // (these two call the recorders that carry the dense overlay, NOT `recomputeStream`: that returns only what a stream stores, and a probe
 // handed a recording without `dense` skips its kernel comparison and reads every event as unpinned)
-export const kernelRecorder: Recorder = (module, rawConfig, events, lineups) => recomputeKernel(module, rawConfig, events, lineups);
+export const kernelRecorder: Recorder = (module, rawConfig, events, lineups, foldOptions) => recomputeKernel(module, rawConfig, events, lineups, foldOptions);
 
 /** The floor's recorder since GF-2 T4: the REAL format-3 recording, the format-2 one plus the final player-stats rows. A probe
  *  defaults to it because the corpora are format 3, and a probe that asked a narrower question than the corpus records would
  *  answer "unpinned" for what the guard now compares (an award, until this recorder, moved no recorded field). `kernelRecorder`
  *  stays, explicit, as the CONTROL of that retirement: the same probe is unpinned under it. */
-export const statsRecorder: Recorder = (module, rawConfig, events, lineups) => recomputeStats(module, rawConfig, events, lineups);
+export const statsRecorder: Recorder = (module, rawConfig, events, lineups, foldOptions) => recomputeStats(module, rawConfig, events, lineups, foldOptions);
 
 /** The MODULE-ONLY recorder (corpus format 1): what the harness recorded before GF-2. Kept, explicit, as the CONTROL of every
  *  retirement: the same probe that answers "pinned" under `kernelRecorder` answers "unpinned" under this one, which is what shows
  *  the claim it retired was true before and is false now (a probe that could only ever answer one way would prove nothing). */
-export const moduleRecorder: Recorder = (module, rawConfig, events, lineups) => recomputeStream(module, rawConfig, events, lineups, 1);
+export const moduleRecorder: Recorder = (module, rawConfig, events, lineups, foldOptions) => recomputeStream(module, rawConfig, events, lineups, 1, foldOptions);
 
 export interface FloorExemption {
   readonly token: FloorToken;
@@ -655,10 +655,10 @@ function ablationProbe(
     const raw = corpus.configs[stream.config];
     streams++;
     // The recorded ledger itself must fold: a recorder that cannot is the probe's failure, not evidence.
-    const a = record(module, raw, near.kept, stream.lineups);
+    const a = record(module, raw, near.kept, stream.lineups, stream.foldOptions);
     let b;
     try {
-      b = record(module, raw, far.kept, stream.lineups);
+      b = record(module, raw, far.kept, stream.lineups, stream.foldOptions);
     } catch {
       refused++;
       continue;

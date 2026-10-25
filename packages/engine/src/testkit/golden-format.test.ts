@@ -64,7 +64,7 @@ const formatOneOf = (key: string): GoldenCorpus => asFormatOne(readCorpus(key));
 const formatOneRecordable = (key: string): { corpus: GoldenCorpus; setAside: GoldenStream[] } => {
   const module = sport(key);
   const one = formatOneOf(key);
-  const reproduces = (s: GoldenStream): boolean => recomputeStream(module, one.configs[s.config], s.events, s.lineups, 1).outcome === s.outcome;
+  const reproduces = (s: GoldenStream): boolean => recomputeStream(module, one.configs[s.config], s.events, s.lineups, 1, s.foldOptions).outcome === s.outcome;
   return { corpus: { ...one, streams: one.streams.filter(reproduces) }, setAside: one.streams.filter((s) => !reproduces(s)) };
 };
 
@@ -750,18 +750,23 @@ describe("a recomputation hands out only the fields a stream stores; the probe-o
   it("every stream in every committed corpus stores exactly its corpus format's fields and no other key (swept, counted)", () => {
     let streams = 0;
     let withLineups = 0;
+    let withFoldOptions = 0;
     forEachSport(({ module }) => {
       const corpus = readCorpus(module.key);
       const format = corpusFormat(corpus);
       expect(format, `${module.key}: the committed corpora are format ${CURRENT_FORMAT}`).toBe(CURRENT_FORMAT);
       corpus.streams.forEach((stream, i) => {
         const lineups = stream.lineups === undefined ? [] : ["lineups"];
-        expect(Object.keys(stream).sort(), `${module.key} stream #${i} (${stream.config}#${stream.seed})`).toEqual([...INPUT, ...lineups, ...STORED[format]].sort());
+        // the second optional INPUT key (GF-3 T2): a stream that offers the fold an award records it; the format number does not change
+        const foldOptions = stream.foldOptions === undefined ? [] : ["foldOptions"];
+        expect(Object.keys(stream).sort(), `${module.key} stream #${i} (${stream.config}#${stream.seed})`).toEqual([...INPUT, ...lineups, ...foldOptions, ...STORED[format]].sort());
         streams++;
         if (lineups.length > 0) withLineups++;
+        if (foldOptions.length > 0) withFoldOptions++;
       });
     });
     expect(streams, "the sweep reached the streams of every sport").toBeGreaterThan(builtinModules.length);
     expect(withLineups, "some committed stream carries lineups, so the optional key was exercised").toBeGreaterThan(0);
+    expect(withFoldOptions, "some committed stream carries foldOptions, so the second optional key was exercised").toBeGreaterThan(0);
   });
 });

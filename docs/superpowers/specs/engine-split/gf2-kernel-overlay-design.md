@@ -347,7 +347,7 @@ The owner answered §6 on 2026-10-15. These bind T1-T4.
   narrowed award bullet. `STATS_FOLD_VERSION` is a separate, manual obligation that this guard does not enforce. It is an ENGINE constant
   (`src/stats/stats.ts`, fold source and phone closure) that apps/web folds into the md5 of every stored stat snapshot: bump it when
   the stats fold's output changes, or snapshots folded by the old rules keep being served until their division changes. The guard sees
-  the trigger (` stats-only N`) but nothing requires the rise; whether it should is an owner decision, not built here.
+  the trigger (` stats-only N`) but nothing requires the rise; whether it should is an owner decision, not built here. **Now enforced by GF-3 T1** (a matched stream's `playerStats` moved, or a stream gained its stats while the change touches fold source, and `STATS_FOLD_VERSION` did not rise, or it fell, is a violation; exit 2 when it cannot be read). Review round: a stats-rule change whose every moved stream is also re-recorded in the same PR is not compared, so the rise is owed by hand there.
 
 - **Review round (gf2-t4-review.md: 1 Important, 5 Minor, all fixed in new commits).** (1) The `STATS_FOLD_VERSION` wording above, and the
   obligation added to the policy table row for a stats-only difference. (2) `capture-s2-handoff.md` no longer says the player-stats half of the

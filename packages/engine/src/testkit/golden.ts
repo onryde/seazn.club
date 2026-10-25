@@ -25,7 +25,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { EngineError } from "../core/errors.ts";
-import { foldMatch, foldMatchWithStoppage, isCoreEventType, type EventEnvelope } from "../core/events.ts";
+import { foldMatch, foldMatchWithStoppage, isCoreEventType, type EventEnvelope, type FoldOptions } from "../core/events.ts";
 import type { LineupPair, MatchOutcome, StageCtx } from "../core/types.ts";
 import { resolvePositions } from "../sport/catalog.ts";
 import type { AnySportModule } from "../sport/module.ts";
@@ -46,6 +46,36 @@ import { fieldPresent, optionalFieldPaths, valueFieldPaths } from "./schema-fiel
 // and is therefore exactly the pre-seam behaviour. Only a real READ path
 // (apps/web fold.ts) and the cfg-replay property pass no options at all.
 const STRICT_ALL = { strictFromSeq: 0 } as const;
+
+/** Why a stream's `foldOptions` is not the shape the recorder writes, or null when it is: an object with exactly one key, `forfeitAward`, a pair of
+ *  non-negative finite integers. The SAME rule as `scripts/fold-epoch-guard.ts` (`foldOptionsProblem`, which `parseCorpus` refuses a corpus by): the
+ *  guard is a standalone script that imports nothing from the testkit, so the rule is stated twice and a test holds both to one set of inputs. */
+export function foldOptionsProblem(value: unknown): string | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return "it is not an object";
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record);
+  const other = keys.find((k) => k !== "forfeitAward");
+  if (other !== undefined) return `only forfeitAward is allowed, and it holds ${JSON.stringify(other)}`;
+  if (record.forfeitAward === undefined) return "it holds no forfeitAward";
+  const award = record.forfeitAward;
+  if (!Array.isArray(award) || award.length !== 2) return "forfeitAward is not a pair of two numbers";
+  for (const n of award as number[]) {
+    if (!Number.isInteger(n)) return `forfeitAward holds ${String(n)}, which is not an integer`;
+    if (n < 0) return `forfeitAward holds ${n}, and a score is non-negative`;
+  }
+  return null;
+}
+
+/** The options every recorded fold of a stream is given: what the server's WRITE path passes (`append-event.ts`: `{ strictFromSeq, ...(forfeitAward
+ *  === undefined ? {} : { forfeitAward }) }`) with the whole stream marked new, plus the stream's own `foldOptions` (the stage points rule's award, winner
+ *  first), as a copy. No `foldOptions` is exactly `STRICT_ALL`, so a stream recorded without any folds as it always did. A malformed one is refused by
+ *  name rather than offered to a fold: an award that is not two non-negative integers would fold into a state nobody can read back. */
+export function strictFold(foldOptions?: GoldenFoldOptions): FoldOptions {
+  if (foldOptions === undefined) return STRICT_ALL;
+  const problem = foldOptionsProblem(foldOptions);
+  if (problem !== null) throw new Error(`golden: malformed foldOptions (${problem}): the only fold option a corpus records is { "forfeitAward": [winner, loser] }`);
+  return { ...STRICT_ALL, forfeitAward: [...foldOptions.forfeitAward] as [number, number] };
+}
 
 // ---------------------------------------------------------------- generation
 
@@ -122,6 +152,11 @@ export interface GoldenEvent {
   voids?: string;
 }
 
+/** The fold options a corpus stream records (`GoldenStream.foldOptions`): `forfeitAward` only, winner first (`ForfeitAward`, core/types.ts). */
+export interface GoldenFoldOptions {
+  readonly forfeitAward: readonly [number, number];
+}
+
 export interface GoldenStream {
   /** Key into GoldenCorpus.configs. */
   config: string;
@@ -132,6 +167,11 @@ export interface GoldenStream {
    *  would change `init` for all eleven corpora, so a coverage stream that
    *  needs a bench (football cannot substitute without one) carries its own. */
   lineups?: LineupPair;
+  /** GF-3 T2 - the server-only fold input this stream's fold was offered beside its ledger (`FoldOptions`): ONLY `forfeitAward`, the stage
+   *  points rule's award for a forfeit with nothing played, winner first. Part of the stream's INPUT like `lineups`: the guard compares it
+   *  with the config and the events, so a stream whose award changed is re-recorded, not a moved output. Absent on every stream recorded
+   *  before it existed, which then fold as they always did. Optional in every format; the format stays 3. */
+  foldOptions?: GoldenFoldOptions;
   events: GoldenEvent[];
   /** JSON of the folded state after each event — states[i] is the fold of
    *  events[0..i]. Length always equals events.length. */
@@ -267,17 +307,19 @@ export function recomputeStream(
   events: readonly GoldenEvent[],
   recordedLineups: LineupPair | undefined,
   format: CorpusFormat,
+  foldOptions: GoldenFoldOptions | undefined = undefined,
 ): ReplayedStream {
-  if (format === 3) return storedFields(recomputeStats(module, rawConfig, events, recordedLineups));
-  if (format === 2) return storedFields(recomputeKernel(module, rawConfig, events, recordedLineups));
+  if (format === 3) return storedFields(recomputeStats(module, rawConfig, events, recordedLineups, foldOptions));
+  if (format === 2) return storedFields(recomputeKernel(module, rawConfig, events, recordedLineups, foldOptions));
   const cfg = module.configSchema.parse(rawConfig);
   const lineups = recordedLineups ?? defaultLineupPair(resolvePositions(module, cfg));
   const envelopes: EventEnvelope[] = events.map((event, i) => makeEnvelope(i, event, event.voids));
+  const opts = strictFold(foldOptions);
 
   const states = envelopes.map((_, i) =>
-    JSON.stringify(foldMatch(module, cfg, lineups, envelopes.slice(0, i + 1), STRICT_ALL)),
+    JSON.stringify(foldMatch(module, cfg, lineups, envelopes.slice(0, i + 1), opts)),
   );
-  const finalState = foldMatch(module, cfg, lineups, envelopes, STRICT_ALL);
+  const finalState = foldMatch(module, cfg, lineups, envelopes, opts);
   const outcome = module.outcome(finalState);
 
   return {
@@ -296,12 +338,16 @@ export function recomputeKernel(
   rawConfig: unknown,
   events: readonly GoldenEvent[],
   recordedLineups?: LineupPair,
+  foldOptions?: GoldenFoldOptions,
 ): KernelRecomputed {
   const cfg = module.configSchema.parse(rawConfig);
   const lineups = recordedLineups ?? defaultLineupPair(resolvePositions(module, cfg));
   const envelopes: EventEnvelope[] = events.map((event, i) => makeEnvelope(i, event, event.voids));
-  const folds = foldPrefixes(module, cfg, lineups, envelopes, STRICT_ALL);
-  const final = folds.at(-1) ?? foldMatchWithStoppage(module, cfg, lineups, [], STRICT_ALL);
+  // (every prefix fold is offered the award with `strictFromSeq`, as the write path offers both to its one fold; the empty ledger too, so a stream
+  // of no events is recorded under the same options as one of many)
+  const opts = strictFold(foldOptions);
+  const folds = foldPrefixes(module, cfg, lineups, envelopes, opts);
+  const final = folds.at(-1) ?? foldMatchWithStoppage(module, cfg, lineups, [], opts);
   const { outcome, summary } = effectiveFacts(module, final);
   const dense = denseOverlay(module, lineups, folds, textDigest);
   return {
@@ -322,8 +368,11 @@ export function recomputeStats(
   rawConfig: unknown,
   events: readonly GoldenEvent[],
   recordedLineups?: LineupPair,
+  foldOptions?: GoldenFoldOptions,
 ): StatsRecomputed {
-  const kernel = recomputeKernel(module, rawConfig, events, recordedLineups);
+  const kernel = recomputeKernel(module, rawConfig, events, recordedLineups, foldOptions);
+  // (the player-stats fold is NOT offered the options: the server's `aggregatePlayerStats` takes no `FoldOptions` and no module fold it runs is
+  // handed a `forfeitAward`, so the rows are those of the ledger alone - GOLDEN-POLICY, "Corpus format 3")
   const cfg = module.configSchema.parse(rawConfig);
   const lineups = recordedLineups ?? defaultLineupPair(resolvePositions(module, cfg));
   const envelopes: EventEnvelope[] = events.map((event, i) => makeEnvelope(i, event, event.voids));
@@ -1289,7 +1338,7 @@ function refoldStream(
   collapse: ReadonlySet<string>;
 } {
   const raw = corpus.configs[stream.config];
-  const fresh = storedFields(recomputeStream(module, raw, stream.events, stream.lineups, corpusFormat(corpus)));
+  const fresh = storedFields(recomputeStream(module, raw, stream.events, stream.lineups, corpusFormat(corpus), stream.foldOptions));
   const { configKey, collapse } = streamLens(module, corpus, stream);
   const carrier = stream.states.find((state) => !isStateDigest(state));
   const states = fresh.states.map((state, i) => {
@@ -1850,7 +1899,7 @@ export function formatCorpusStateDiff(diff: CorpusStateDiff): string {
       `  ${diff.digestOnlyStates} of those state(s) are stored as digests only, so no key ` +
         `can be named for them. Recompute the full state from the recorded ledger: ` +
         `recomputeStream(module, corpus.configs[stream.config], stream.events, ` +
-        `stream.lineups).states[N]`,
+        `stream.lineups, corpusFormat(corpus), stream.foldOptions).states[N]`,
     );
   }
   if (diff.eventsMoved) {
@@ -2168,7 +2217,8 @@ export function stateMismatch(
 // liked. It is bounded by one fact: the corpus still stores the `config`, the
 // `lineups` and every `event`, so the full state at ANY step is recomputable
 // locally — `recomputeStream(module, corpus.configs[stream.config],
-// stream.events, stream.lineups).states[N]`. A digest mismatch says so.
+// stream.events, stream.lineups, corpusFormat(corpus), stream.foldOptions).states[N]` (the options are part of the input, GF-3 T2: a
+// stream that offered an award folds to other states without it). A digest mismatch says so.
 //
 // WHAT THIS DOES NOT COST. The digest is taken over `comparableStateText` —
 // the exact text the byte-exact half of `stateMismatch` compares, with the
@@ -2477,7 +2527,7 @@ export function stepMismatch(
     `was kept, so the previous state is a hash in git too. The full state IS recomputable ` +
     `locally, because the ledger it folds from is still recorded: ` +
     `recomputeStream(module, corpus.configs[${JSON.stringify(stream.config)}], stream.events, ` +
-    `stream.lineups).states[${step}]` +
+    `stream.lineups, corpusFormat(corpus), stream.foldOptions).states[${step}]` +
     (nearest === null ? "." : `. The nearest stored full state is step ${nearest}.`)
   );
 }
@@ -2497,7 +2547,7 @@ export function verifyStream(
   const raw = corpus.configs[stream.config];
   const label = `${module.key} config=${stream.config} seed=${stream.seed}`;
   const format = corpusFormat(corpus);
-  const result = replayed ?? recomputeStream(module, raw, stream.events, stream.lineups, format);
+  const result = replayed ?? recomputeStream(module, raw, stream.events, stream.lineups, format, stream.foldOptions);
   const configKey = configStateKey(module, raw, stream.lineups);
   const out: string[] = [];
 
@@ -2638,7 +2688,9 @@ export interface PayloadParseFailure {
 /** Recorded payloads that no longer parse against the branch `apply` selects
  *  for their event type. Stops at the first event the fold cannot get past:
  *  after that the states diverge and every later verdict is about a different
- *  match, not about a schema. */
+ *  match, not about a schema. It takes no `foldOptions` on purpose: a payload
+ *  parses or not whatever the fold is offered, and the award lives in the
+ *  options, never in a payload. */
 export function payloadParseFailures(
   module: AnySportModule,
   rawConfig: unknown,
