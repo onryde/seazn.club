@@ -2435,6 +2435,8 @@
   "divset.onlinePlay.unlinked.other": "{count} spelers hebben nog geen Lichess-account gekoppeld: {names}. Zonder gekoppeld account kunnen zij niet online worden ingedeeld.",
   "divset.onlinePlay.reconnect.one": "{count} speler moet het Lichess-account opnieuw koppelen: {names}. Zonder opnieuw koppelen kan deze speler niet online worden ingedeeld.",
   "divset.onlinePlay.reconnect.other": "{count} spelers moeten het Lichess-account opnieuw koppelen: {names}. Zonder opnieuw koppelen kunnen zij niet online worden ingedeeld.",
+  "divset.onlinePlay.empty.one": "{count} deelnemer heeft nog geen speler: {names}. Voeg een speler toe voordat je online indeelt.",
+  "divset.onlinePlay.empty.other": "{count} deelnemers hebben nog geen speler: {names}. Voeg een speler toe voordat je online indeelt.",
   "divset.onlinePlay.gapMore.one": "{count} ander",
   "divset.onlinePlay.gapMore.other": "{count} anderen",
   "divset.camera.label": "Camera tijdens online spelen",

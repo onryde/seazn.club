@@ -2480,6 +2480,8 @@
   "divset.onlinePlay.unlinked.other": "{count} joueurs n'ont pas encore lié de compte Lichess : {names}. Ils ne pourront pas être appariés en ligne tant qu'ils n'en auront pas lié un.",
   "divset.onlinePlay.reconnect.one": "{count} joueur doit relier à nouveau son compte Lichess : {names}. Il ne pourra pas être apparié en ligne tant qu'il ne l'aura pas fait.",
   "divset.onlinePlay.reconnect.other": "{count} joueurs doivent relier à nouveau leur compte Lichess : {names}. Ils ne pourront pas être appariés en ligne tant qu'ils ne l'auront pas fait.",
+  "divset.onlinePlay.empty.one": "{count} participant n'a pas encore de joueur : {names}. Ajoutez un joueur avant d'apparier en ligne.",
+  "divset.onlinePlay.empty.other": "{count} participants n'ont pas encore de joueur : {names}. Ajoutez un joueur avant d'apparier en ligne.",
   "divset.onlinePlay.gapMore.one": "{count} autre",
   "divset.onlinePlay.gapMore.other": "{count} autres",
   "divset.camera.label": "Caméra pendant le jeu en ligne",

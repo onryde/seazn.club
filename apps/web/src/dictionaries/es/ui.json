@@ -2435,6 +2435,8 @@
   "divset.onlinePlay.unlinked.other": "{count} jugadores aún no tienen una cuenta de Lichess vinculada: {names}. No se les podrá emparejar en línea hasta que vinculen una.",
   "divset.onlinePlay.reconnect.one": "{count} jugador debe volver a vincular su cuenta de Lichess: {names}. No se le podrá emparejar en línea hasta que lo haga.",
   "divset.onlinePlay.reconnect.other": "{count} jugadores deben volver a vincular su cuenta de Lichess: {names}. No se les podrá emparejar en línea hasta que lo hagan.",
+  "divset.onlinePlay.empty.one": "{count} participante aún no tiene jugador: {names}. Añade un jugador antes de emparejar en línea.",
+  "divset.onlinePlay.empty.other": "{count} participantes aún no tienen jugador: {names}. Añade un jugador antes de emparejar en línea.",
   "divset.onlinePlay.gapMore.one": "{count} más",
   "divset.onlinePlay.gapMore.other": "{count} más",
   "divset.camera.label": "Cámara durante el juego en línea",

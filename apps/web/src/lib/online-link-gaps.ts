@@ -1,8 +1,8 @@
 // The warning shown when a chess division is (being) switched to online play while players cannot be paired online yet
-// (owner ruling 2026-10-25: warn, never block - clubs switch first and collect links later; fix round 1: the warning's
-// purpose is "these players can't be paired online", so it covers a link that cannot play as well as no link at all).
-// Client-safe and pure: the division page summarises the server's two lists with `summariseLinkGaps`, and Settings
-// prints each with `linkGapSentence`.
+// (owner ruling 2026-10-25: warn, never block - clubs switch first and collect links later; fix rounds 1 and 2: the
+// warning's purpose is "these players can't be paired online", so it covers a link that cannot play, and an entrant with
+// nobody on it, as well as no link at all - each its own sentence). Client-safe and pure: the division page summarises the
+// server's lists with `summariseLinkGaps`, and Settings prints each with `linkGapSentence`.
 //
 // The summary caps how many NAMES cross to the browser, so a 500-player division does not ship 500 names to print five.
 // `count` is always the true number in that list; `names` is the first few, already in the server's order.
@@ -10,8 +10,9 @@
 /** How many names a sentence prints before folding the rest into "and N more". Both sentences share it. */
 export const LINK_GAP_NAMES_SHOWN = 5;
 
-/** The two gaps, which are two sentences with two fixes: no Lichess link at all, and a link that cannot play. */
-export type LinkGapKind = "unlinked" | "reconnect";
+/** The three gaps, which are three sentences with three fixes: no Lichess link at all, a link that cannot play, and an
+ *  entrant with no player on it. */
+export type LinkGapKind = "unlinked" | "reconnect" | "empty";
 
 export type LinkGapList = {
   /** Everybody in the field with this gap, not just the ones named. */
@@ -27,12 +28,12 @@ export function summariseLinkGaps(gaps: Record<LinkGapKind, readonly { name: str
     count: rows.length,
     names: rows.slice(0, LINK_GAP_NAMES_SHOWN).map((r) => r.name),
   });
-  return { unlinked: one(gaps.unlinked), reconnect: one(gaps.reconnect) };
+  return { unlinked: one(gaps.unlinked), reconnect: one(gaps.reconnect), empty: one(gaps.empty) };
 }
 
-/** Whether there is anything to say at all (either sentence). */
+/** Whether there is anything to say at all (any of the sentences). */
 export function hasLinkGaps(summary: LinkGapsSummary): boolean {
-  return summary.unlinked.count > 0 || summary.reconnect.count > 0;
+  return summary.unlinked.count > 0 || summary.reconnect.count > 0 || summary.empty.count > 0;
 }
 
 /** One sentence in the viewer's language: the count (plural by the locale's own rules) and the names joined the way that

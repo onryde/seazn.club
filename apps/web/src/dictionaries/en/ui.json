@@ -2480,6 +2480,8 @@
   "divset.onlinePlay.unlinked.other": "{count} players have no Lichess account linked yet: {names}. They can't be paired online until they link one.",
   "divset.onlinePlay.reconnect.one": "{count} player needs to reconnect Lichess: {names}. They can't be paired online until they do.",
   "divset.onlinePlay.reconnect.other": "{count} players need to reconnect Lichess: {names}. They can't be paired online until they do.",
+  "divset.onlinePlay.empty.one": "{count} entrant has no player yet: {names}. Add a player before pairing online.",
+  "divset.onlinePlay.empty.other": "{count} entrants have no player yet: {names}. Add a player before pairing online.",
   "divset.onlinePlay.gapMore.one": "{count} more",
   "divset.onlinePlay.gapMore.other": "{count} more",
   "divset.camera.label": "Camera during online play",

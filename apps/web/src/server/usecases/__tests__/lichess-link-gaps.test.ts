@@ -6,10 +6,13 @@
 // (`playGrantRefusal`, the function `seatPlayer` calls), not against a table typed here.
 //
 // Two kinds of gap, two lists (controller ruling, fix round 1):
-//   - `unlinked`: no Lichess link at all (seat reason lichess_link_required), AND an entrant with no member - nobody can
-//     claim its seat (`not_a_player`) and no game is created for it (`no_person`) - named by the ENTRANT;
+//   - `unlinked`: no Lichess link at all (seat reason lichess_link_required);
 //   - `reconnect`: a link that cannot play (seat reason lichess_reconsent_required): identity-only, or a grant short of a
-//     play scope.
+//     play scope;
+//   - `empty` (fix round 2): an entrant with NO member - nobody can claim its seat (`not_a_player`) and no game is created
+//     for it (`no_person`) - named by the ENTRANT, in a list of its own: it is not a player who lacks a link, so it must
+//     never be counted as one.
+// The link states are read in the prelude for the division's OWN persons only (fix round 2), never the whole org.
 // What each list must do, stated from the ruling and the schema (entrants_status_check, V212), not from the code:
 //   - it names PEOPLE, one row each, however many entrants carry them (a link is per person, not per team);
 //   - it names only people in the FIELD: a withdrawn or disqualified entrant's players are not owed a link;
@@ -21,8 +24,21 @@
 //
 // Boardgame only: it is the one sport that plays online (online-play.ts `supportsOnlinePlay`); the component suite owns the
 // "another sport never shows the warning" case.
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+
+// A pass-through spy on the link-state reader: what the prelude ASKS for is asserted beside what the list DOES.
+const spy = vi.hoisted(() => ({ calls: [] as { orgId: string; personIds: string[] | undefined }[] }));
+vi.mock("../external-accounts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../external-accounts")>();
+  return {
+    ...actual,
+    lichessLinkStatesByPerson: (tx: Tx, orgId: string, personIds?: readonly string[]) => {
+      spy.calls.push({ orgId, personIds: personIds === undefined ? undefined : [...personIds] });
+      return actual.lichessLinkStatesByPerson(tx, orgId, personIds);
+    },
+  };
+});
 
 // Outside a Next request there is no incrementalCache (the use-cases already swallow it); a passthrough keeps the route honest.
 vi.mock("next/cache", () => ({
@@ -31,20 +47,24 @@ vi.mock("next/cache", () => ({
   revalidatePath: vi.fn(),
 }));
 
-import { sql } from "@/lib/db";
+import { sql, type Tx } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createApiKey } from "../api-keys";
 import { createCompetition } from "../competitions";
 import { createDivision, getDivision, patchDivision } from "../divisions";
 import { createEntrants, listLichessLinkGaps, patchEntrant } from "../entrants";
-import { PLAY_SCOPES, unlinkLichess, upsertLichessLink } from "../external-accounts";
+import { PLAY_SCOPES, lichessLinkStatesByPerson, unlinkLichess, upsertLichessLink } from "../external-accounts";
 import { loadSides } from "../external-play/guard";
 import { playGrantRefusal } from "../external-play/preflight";
 import { seedOwner, seedPlayer, type SeedPlayer } from "./_external-play-seed";
 import { PATCH } from "@/app/api/v1/divisions/[id]/route";
 
 const HAS_DB = !!process.env.DATABASE_URL;
+
+beforeEach(() => {
+  spy.calls.length = 0;
+});
 
 afterAll(async () => {
   if (HAS_DB) await sql.end({ timeout: 2 }).catch(() => undefined);
@@ -255,6 +275,9 @@ describe.skipIf(!HAS_DB)("listLichessLinkGaps.unlinked - who the online-switch w
     await enter(theirs, theirDivision, await player(theirs, "Their Player", false), "Their Player");
 
     await expect(listLichessLinkGaps(mine, theirDivision)).rejects.toMatchObject({ status: 404 });
+    // The prelude is not under RLS, so its own scope is what keeps it off another club's roster: it asked about nobody.
+    expect(spy.calls, "the prelude ran once").toHaveLength(1);
+    expect(spy.calls[0]!.personIds, "and named none of the other club's people").toEqual([]);
   });
 });
 
@@ -284,11 +307,11 @@ describe.skipIf(!HAS_DB)("listLichessLinkGaps.reconnect - a link that cannot pla
   it("empty case first: nobody entered, and everybody able to play, both name nobody", async () => {
     const auth = await seedOwner();
     const divisionId = await seedDivisionOf(auth);
-    expect(await listLichessLinkGaps(auth, divisionId)).toEqual({ unlinked: [], reconnect: [] });
+    expect(await listLichessLinkGaps(auth, divisionId)).toEqual({ unlinked: [], reconnect: [], empty: [] });
 
     await enter(auth, divisionId, await player(auth, "Plays One", true), "Plays One");
     await enter(auth, divisionId, await player(auth, "Plays Two", true), "Plays Two");
-    expect(await listLichessLinkGaps(auth, divisionId)).toEqual({ unlinked: [], reconnect: [] });
+    expect(await listLichessLinkGaps(auth, divisionId)).toEqual({ unlinked: [], reconnect: [], empty: [] });
   });
 
   // The oracle is the seat gate, not this file: `playGrantRefusal` is what `seatPlayer` calls (preflight.ts), so each
@@ -363,7 +386,7 @@ describe.skipIf(!HAS_DB)("listLichessLinkGaps.reconnect - a link that cannot pla
     expect(await listLichessLinkGaps(auth, divisionId), "a second call").toEqual(first);
 
     await link(p); // re-consent: the real upsert replaces the identity-only row with a full grant
-    expect(await listLichessLinkGaps(auth, divisionId), "after they re-consent").toEqual({ unlinked: [], reconnect: [] });
+    expect(await listLichessLinkGaps(auth, divisionId), "after they re-consent").toEqual({ unlinked: [], reconnect: [], empty: [] });
 
     await unlinkLichess(p.userId);
     const after = await listLichessLinkGaps(auth, divisionId);
@@ -404,7 +427,7 @@ describe.skipIf(!HAS_DB)("listLichessLinkGaps.reconnect - a link that cannot pla
 // An entrant with no member is refused at the seat: `loadSide` (external-play/guard.ts) resolves `personId` from the
 // entrant's members, so a member-less side has none; `seatPlayer` answers `not_a_player` to anyone for a side without a
 // person (preflight.ts), and `createGameIfReady` answers `no_person` (create-game.ts) - nobody could ever be paired.
-describe.skipIf(!HAS_DB)("listLichessLinkGaps - an entrant with no member cannot be paired online, so it is named", () => {
+describe.skipIf(!HAS_DB)("listLichessLinkGaps.empty - an entrant with no member cannot be paired online, so it is named, as itself", () => {
   it("premise, through the real seat loader: a member-less side has no person to seat; a side with a ready player has one", async () => {
     const auth = await seedOwner();
     const divisionId = await seedDivisionOf(auth);
@@ -417,40 +440,147 @@ describe.skipIf(!HAS_DB)("listLichessLinkGaps - an entrant with no member cannot
     expect(away.personId, "its positive pair: a rostered player seats").not.toBeNull();
   });
 
-  it("is named by the ENTRANT in the no-link list, beside the people, sorted with them case-insensitively, never in reconnect", async () => {
+  it("is named by the ENTRANT in a list of its own, sorted case-insensitively, and is NOT counted among the players without a link", async () => {
     const auth = await seedOwner();
     const divisionId = await seedDivisionOf(auth);
-    const empty = await enterMemberless(auth, divisionId, "board 2 (nobody yet)");
+    const second = await enterMemberless(auth, divisionId, "board 2 (nobody yet)");
+    const first = await enterMemberless(auth, divisionId, "Alpha Table");
     const missing = await player(auth, "Zoe Unlinked", false);
-    const first = await player(auth, "Abe Unlinked", false);
+    const early = await player(auth, "Abe Unlinked", false);
     await enter(auth, divisionId, missing, "Zoe Unlinked");
-    await enter(auth, divisionId, first, "Abe Unlinked");
+    await enter(auth, divisionId, early, "Abe Unlinked");
     await enter(auth, divisionId, await player(auth, "Linked", true), "Linked");
 
     const gaps = await listLichessLinkGaps(auth, divisionId);
 
+    expect(gaps.empty).toEqual([
+      { kind: "entrant", id: first, name: "Alpha Table" },
+      { kind: "entrant", id: second, name: "board 2 (nobody yet)" },
+    ]);
+    // The players without a link are the two PEOPLE and nobody else: an empty entrant is not a player with no link.
     expect(gaps.unlinked).toEqual([
-      { kind: "person", id: first.personId, name: "Abe Unlinked" },
-      { kind: "entrant", id: empty, name: "board 2 (nobody yet)" },
+      { kind: "person", id: early.personId, name: "Abe Unlinked" },
       { kind: "person", id: missing.personId, name: "Zoe Unlinked" },
     ]);
     expect(gaps.reconnect).toEqual([]);
+  });
+
+  it("an empty entrant alone: the no-link list is empty (the only gap is not a missing link)", async () => {
+    const auth = await seedOwner();
+    const divisionId = await seedDivisionOf(auth);
+    const id = await enterMemberless(auth, divisionId, "Nobody Yet");
+
+    expect(await listLichessLinkGaps(auth, divisionId)).toEqual({
+      unlinked: [],
+      reconnect: [],
+      empty: [{ kind: "entrant", id, name: "Nobody Yet" }],
+    });
   });
 
   it("only while it is in the field and still empty: withdrawn is not named, reinstated is, and rostering someone replaces it with that person", async () => {
     const auth = await seedOwner();
     const divisionId = await seedDivisionOf(auth);
     const id = await enterMemberless(auth, divisionId, "Open Board");
+    const emptyOf = async () => (await listLichessLinkGaps(auth, divisionId)).empty;
 
-    expect(names((await listLichessLinkGaps(auth, divisionId)).unlinked)).toEqual(["Open Board"]);
+    expect(names(await emptyOf())).toEqual(["Open Board"]);
     await patchEntrant(auth, id, { status: "disqualified" });
-    expect((await listLichessLinkGaps(auth, divisionId)).unlinked, "disqualified").toEqual([]);
+    expect(await emptyOf(), "disqualified").toEqual([]);
     await patchEntrant(auth, id, { status: "confirmed" });
-    expect(names((await listLichessLinkGaps(auth, divisionId)).unlinked)).toEqual(["Open Board"]);
+    expect(names(await emptyOf())).toEqual(["Open Board"]);
 
     const p = await player(auth, "Finally Rostered", true);
     await sql`insert into entrant_members (entrant_id, person_id, org_id) values (${id}, ${p.personId}, ${auth.orgId})`;
-    expect(await listLichessLinkGaps(auth, divisionId), "rostered with a ready player: nothing left to say").toEqual({ unlinked: [], reconnect: [] });
+    expect(await listLichessLinkGaps(auth, divisionId), "rostered with a ready player: nothing left to say").toEqual({ unlinked: [], reconnect: [], empty: [] });
+  });
+
+  it("an entrant rostered with someone who has no link is that PERSON's gap, not an empty entrant", async () => {
+    const auth = await seedOwner();
+    const divisionId = await seedDivisionOf(auth);
+    const p = await player(auth, "Has A Seat No Link", false);
+    await enter(auth, divisionId, p, "Has A Seat No Link");
+
+    const gaps = await listLichessLinkGaps(auth, divisionId);
+
+    expect(gaps.empty).toEqual([]);
+    expect(gaps.unlinked).toEqual([{ kind: "person", id: p.personId, name: "Has A Seat No Link" }]);
+  });
+});
+
+// Fix round 2: the Lichess-link read in the prelude is scoped to the division's own people, not the whole org (a 5,000
+// player club would otherwise read every link it has to answer for eight players). It is the `personIds` argument
+// `lichessLinkStatesByPerson` already took, and `createEntrants` already passes the same way for a known roster.
+describe.skipIf(!HAS_DB)("the link-state read is scoped to the division's own people", () => {
+  it("asks only about the people in THIS division's field: not another division's, not a withdrawn entrant's, not the org's other persons", async () => {
+    const auth = await seedOwner();
+    const divisionId = await seedDivisionOf(auth);
+    const otherDivision = await seedDivisionOf(auth);
+    const inField = [await player(auth, "In Field A", false), await player(auth, "In Field B", true)];
+    for (const p of inField) await enter(auth, divisionId, p, `Entry ${p.lichessId}`);
+    const identity = await player(auth, "In Field Reconnect", false);
+    await identityOnly(identity);
+    await enter(auth, divisionId, identity, "Entry reconnect");
+    const departed = await player(auth, "Withdrawn Player", false);
+    await patchEntrant(auth, await enter(auth, divisionId, departed, "Entry departed"), { status: "withdrawn" });
+    const elsewhere = await player(auth, "Other Division Player", false);
+    await enter(auth, otherDivision, elsewhere, "Entry elsewhere");
+    await player(auth, "Org Member Without Entry", true); // a linked person nobody entered
+
+    await listLichessLinkGaps(auth, divisionId);
+
+    expect(spy.calls, "the prelude read the link states once").toHaveLength(1);
+    const asked = spy.calls[0]!;
+    expect(asked.orgId).toBe(auth.orgId);
+    expect(asked.personIds, "scoped: never the unscoped (whole-org) read").toBeDefined();
+    expect([...asked.personIds!].sort()).toEqual([inField[0]!.personId, inField[1]!.personId, identity.personId].sort());
+    expect(asked.personIds!.length, "anti-vacuity: it asked about someone").toBeGreaterThan(0);
+  });
+
+  it("an empty division asks about nobody (an empty list), never the whole org", async () => {
+    const auth = await seedOwner();
+    const divisionId = await seedDivisionOf(auth);
+    await player(auth, "Linked Bystander", true);
+
+    expect(await listLichessLinkGaps(auth, divisionId)).toEqual({ unlinked: [], reconnect: [], empty: [] });
+
+    expect(spy.calls).toHaveLength(1);
+    expect(spy.calls[0]!.personIds).toEqual([]);
+  });
+
+  it("the scoped answers are the right ones: a reconnect and an unlinked person in the field are still told apart", async () => {
+    const auth = await seedOwner();
+    const divisionId = await seedDivisionOf(auth);
+    const re = await player(auth, "Scoped Reconnect", false);
+    await identityOnly(re);
+    const none = await player(auth, "Scoped None", false);
+    await enter(auth, divisionId, re, "Scoped Reconnect");
+    await enter(auth, divisionId, none, "Scoped None");
+
+    const gaps = await listLichessLinkGaps(auth, divisionId);
+
+    expect(names(gaps.reconnect)).toEqual(["Scoped Reconnect"]);
+    expect(names(gaps.unlinked)).toEqual(["Scoped None"]);
+  });
+
+  // The reader's own `personIds` argument, directly: it had no caller outside createEntrants' sibling until now.
+  it("lichessLinkStatesByPerson, named ids only: answers for those and no one else, never another org's person", async () => {
+    const o = await seedOwner();
+    const other = await seedOwner();
+    const ready = await player(o, "States Ready", true);
+    const re = await player(o, "States Reconnect", false);
+    await identityOnly(re);
+    const none = await player(o, "States None", false);
+    const foreign = await player(other, "Foreign Ready", true);
+    const read = (ids?: readonly string[]) => sql.begin((tx) => lichessLinkStatesByPerson(tx, o.orgId, ids));
+
+    expect(Object.fromEntries(await read()), "premise: unscoped is the whole org, a state per linked person").toEqual({
+      [ready.personId]: "plays",
+      [re.personId]: "reconnect",
+    });
+    expect(Object.fromEntries(await read([re.personId])), "named, reconnect").toEqual({ [re.personId]: "reconnect" });
+    expect(Object.fromEntries(await read([ready.personId, none.personId])), "a named person with no link is absent").toEqual({ [ready.personId]: "plays" });
+    expect(Object.fromEntries(await read([])), "naming nobody asks about nobody").toEqual({});
+    expect(Object.fromEntries(await read([foreign.personId])), "another org's person, named").toEqual({});
   });
 });
 

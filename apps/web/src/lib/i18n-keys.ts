@@ -2078,6 +2078,8 @@ export type DictionaryKey =
   | "divset.notice.logoUploaded"
   | "divset.notice.nameSaved"
   | "divset.notice.rulesSaved"
+  | "divset.onlinePlay.empty.one"
+  | "divset.onlinePlay.empty.other"
   | "divset.onlinePlay.gapMore.one"
   | "divset.onlinePlay.gapMore.other"
   | "divset.onlinePlay.help"
