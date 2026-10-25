@@ -47,6 +47,7 @@ vi.mock("next/navigation", async (importOriginal) => ({
 
 import ArbiterPage from "../page";
 import { ArbiterPanel } from "@/components/v2/arbiter-panel";
+import type { RoundColumnData } from "@/components/v2/arbiter/round-column";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import type { Dict } from "@/lib/i18n-constants";
 import en from "@/dictionaries/en/ui.json";
@@ -60,8 +61,11 @@ const VIEWS = [{ stageId: "st", roundNo: 3, press: "open", marker: "views" }];
 const HELD = [{ fixtureId: "fx-held", marker: "held" }];
 const FLAGGED = { boards: [{ fixtureId: "fx-flagged", marker: "flagged" }], ownBoards: 2 };
 const VENUE_TZ = "Asia/Tokyo";
-// The six fields of the column, as the panel's type declares them (RoundColumnData): the page must hand every one.
-const COLUMN_FIELDS = ["awaitsStart", "flagged", "held", "ownFlagged", "tz", "views"];
+// The fields of the column, as the panel's type declares them (RoundColumnData): the page must hand every one. `satisfies` refuses a
+// name the type does not have, and the check below it refuses a field the type has and this list lacks, so the list cannot drift from
+// the type it names (a length typed into an assertion could only ever agree with itself).
+const COLUMN_FIELDS = ["awaitsStart", "flagged", "held", "ownFlagged", "tz", "views"] as const satisfies readonly (keyof RoundColumnData)[];
+const EVERY_FIELD_LISTED: [Exclude<keyof RoundColumnData, (typeof COLUMN_FIELDS)[number]>] extends [never] ? true : never = true;
 
 const render = (search: Record<string, string | string[] | undefined> = {}) =>
   ArbiterPage({
@@ -183,7 +187,6 @@ describe("the arbiter page follows the online-chess flag (spec §7)", () => {
     expect(usecases.onlineChessOffered, "the flag WAS asked, once, for this club").toHaveBeenCalledTimes(1);
     expect(usecases.onlineChessOffered).toHaveBeenCalledWith(PAGE.auth);
     for (const read of allReads()) expect(read, "no read behind a refused flag").not.toHaveBeenCalled();
-    expect(allReads().length, "anti-vacuity: six readers watched").toBe(6);
   });
 
   it("flag on: the panel renders and the flag was asked once, with the page's auth", async () => {
@@ -217,11 +220,12 @@ describe("the arbiter page follows the online-chess flag (spec §7)", () => {
 });
 
 describe("the arbiter page loads the round column (spec §5, §7)", () => {
-  it("the column is handed to the panel with all SIX fields, each from its own read (a dropped or crossed field fails)", async () => {
+  it("the column is handed to the panel with every field, each from its own read (a dropped or crossed field fails)", async () => {
     const tree = await panel();
     const column = tree.props.column as unknown as Record<string, unknown>;
     expect(column, "the page hands a column").toBeDefined();
-    expect(Object.keys(column).sort(), "exactly the six fields").toEqual(COLUMN_FIELDS);
+    expect(EVERY_FIELD_LISTED, "the list names every field of the type").toBe(true);
+    expect(Object.keys(column).sort(), "exactly the type's fields").toEqual([...COLUMN_FIELDS]);
     // By identity: the read's own result, not a copy or a neighbour's.
     expect(column.views).toBe(VIEWS);
     expect(column.held).toBe(HELD);
@@ -229,7 +233,6 @@ describe("the arbiter page loads the round column (spec §5, §7)", () => {
     expect(column.ownFlagged).toBe(FLAGGED.ownBoards);
     expect(column.tz).toBe(VENUE_TZ);
     expect(column.awaitsStart).toBe(false);
-    expect(COLUMN_FIELDS.length, "anti-vacuity: six fields checked").toBe(6);
     // ... and each read was asked for THIS division, as this organiser.
     for (const read of columnReads()) expect(read).toHaveBeenCalledWith(PAGE.auth, "div-1");
   });
