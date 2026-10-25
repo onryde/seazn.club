@@ -70,7 +70,11 @@ vi.mock("@/server/usecases/fixtures", () => ({
   listDivisionFixtures: vi.fn(async () => fx.rows),
   listFixtureHeadlines: vi.fn(async () => ({})),
 }));
-vi.mock("@/server/usecases/entrants", () => ({ listEntrants: vi.fn(async () => []) }));
+// The Settings tab also reads who holds no Lichess link (the online-switch warning, online-chess-flag-wiring.test.tsx owns it).
+vi.mock("@/server/usecases/entrants", () => ({
+  listEntrants: vi.fn(async () => []),
+  listLichessLinkGaps: vi.fn(async () => ({ unlinked: [], reconnect: [], empty: [] })),
+}));
 vi.mock("@/server/usecases/schedule", () => ({
   getScheduleSettings: vi.fn(async () => ({ config: {}, tz: "UTC" })),
 }));

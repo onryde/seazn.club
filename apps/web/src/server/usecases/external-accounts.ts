@@ -282,27 +282,61 @@ export async function assertUserHasLichessForOnlinePlay(userId: string | null): 
   }
 }
 
-/** The org's persons whose Seazn user holds a Lichess account row, as a set, on a connection the caller already holds
- *  - optionally only among `personIds`, when the caller knows up front which people it will ask about. `undefined`
- *  reads every such person in the org; a list reads just those (an empty list reads no one).
+/** The org's persons whose Seazn user holds a Lichess account row, and what that row stores about playing - the ONE
+ *  query behind both readers below (a "linked" person is a row here, whatever it stores), so the two cannot disagree on
+ *  who counts as linked. Optionally only among `personIds`, when the caller knows up front which people it will ask about.
+ *  `undefined` reads every such person in the org; a list reads just those (an empty list reads no one).
  *
  *  `user_external_accounts` is sealed from `app_user` (V451: FORCE RLS, no grant), so this can only run BEFORE a tenant
  *  transaction's role drop: pass it as `withTenant`'s `privilegedPrelude`, which runs on the transaction's own
  *  connection. Called from inside the callback it fails with `42501`; reaching for the pooled `sql` instead would be a
  *  second connection while the first is held (see lib/db.ts). Always scoped to `orgId` by `persons.org_id` - a named id
  *  of another org's person is not answered for - which is also what RLS scoped the roster's persons to. */
+async function lichessLinkRows(
+  tx: Tx,
+  orgId: string,
+  personIds?: readonly string[],
+): Promise<{ id: string; consented_at: Date | null; scopes: string[] }[]> {
+  return tx<{ id: string; consented_at: Date | null; scopes: string[] }[]>`
+    select p.id, a.consented_at, a.scopes
+      from persons p
+      join user_external_accounts a on a.user_id = p.user_id and a.provider = 'lichess'
+     where p.org_id = ${orgId}
+     ${personIds === undefined ? tx`` : tx`and p.id = any(${[...personIds]})`}`;
+}
+
+/** The org's persons whose Seazn user holds a Lichess account row - ANY row, identity-only included - as a set, on a
+ *  connection the caller already holds (see `lichessLinkRows` for the prelude rule and the scoping). This is the
+ *  REGISTRATION gate's question ("does this person have a link at all"); whether the link can PLAY is
+ *  `lichessLinkStatesByPerson`. */
 export async function personIdsWithLichessLink(
   tx: Tx,
   orgId: string,
   personIds?: readonly string[],
 ): Promise<Set<string>> {
-  const rows = await tx<{ id: string }[]>`
-    select p.id
-      from persons p
-      join user_external_accounts a on a.user_id = p.user_id and a.provider = 'lichess'
-     where p.org_id = ${orgId}
-     ${personIds === undefined ? tx`` : tx`and p.id = any(${[...personIds]})`}`;
-  return new Set(rows.map((r) => r.id));
+  return new Set((await lichessLinkRows(tx, orgId, personIds)).map((r) => r.id));
+}
+
+/** What a person's stored Lichess row lets them do: `plays` (the seat gate lets them in) or `reconnect` (a row is there,
+ *  but the gate would refuse it with `lichess_reconsent_required`: identity-only, or a grant short of a play scope).
+ *  A person with NO row is absent from the map - that is `lichess_link_required`, a different gap. */
+export type LichessLinkState = "plays" | "reconnect";
+
+/** `personIdsWithLichessLink`'s people, each with the state of their link. The verdict is `lichessGrantPlays` - the very
+ *  function the seat gate (`assertLichessConsentForPlay`) refuses by - never a second definition of "can play". Same
+ *  connection rule, same scoping (see `lichessLinkRows`). */
+export async function lichessLinkStatesByPerson(
+  tx: Tx,
+  orgId: string,
+  personIds?: readonly string[],
+): Promise<Map<string, LichessLinkState>> {
+  const rows = await lichessLinkRows(tx, orgId, personIds);
+  return new Map(
+    rows.map((r): [string, LichessLinkState] => [
+      r.id,
+      lichessGrantPlays({ consentedAt: r.consented_at, scopes: r.scopes }) ? "plays" : "reconnect",
+    ]),
+  );
 }
 
 /** The organiser-side REGISTRATION gate for an online division: every rostered person must hold a Lichess link.

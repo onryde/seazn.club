@@ -26,7 +26,9 @@ import { divisionLockedFields } from "@/server/usecases/rule-locks";
 import { isRosterDriftEligible } from "@/lib/roster-drift-eligibility";
 import { listDivisionFixtures, listFixtureHeadlines } from "@/server/usecases/fixtures";
 import { BracketPanel } from "@/components/v2/bracket-panel";
-import { listEntrants, DEPARTED_STATUSES } from "@/server/usecases/entrants";
+import { listEntrants, listLichessLinkGaps, DEPARTED_STATUSES } from "@/server/usecases/entrants";
+import { summariseLinkGaps } from "@/lib/online-link-gaps";
+import { log } from "@/server/logger";
 import { getScheduleSettings } from "@/server/usecases/schedule";
 // P9 pass 4d, item 1: StagesPanel's per-fixture court editor needs the org's
 // real courts (id/name/venue) to build its picker and to venue-qualify a
@@ -577,6 +579,20 @@ export default async function DivisionPage({
   // (The queue no longer offers the invite resend: the server refuses it for every held board - 409 BOARD_HELD.)
   const onlineChessOn =
     division.sport_key === "boardgame" && tab === "settings" && canEdit ? await onlineChessOffered(auth) : false;
+  // The warning under the Online play select (owner ruling 2026-10-25: switching to online with players who cannot be paired
+  // WARNS, it never blocks) names whoever in the field holds no Lichess link, and, in a sentence of its own, whoever holds one
+  // that cannot play and must be reconnected. Read wherever that select renders - the SAME gate as `onlineChessOn`, so a club
+  // that is not offered online chess pays nothing - and whether or not the division is online yet, since the switch moment is
+  // exactly when it is not. A courtesy beside the form, not the form: a reader that throws is logged and the tab renders without
+  // the warning, rather than the whole Settings tab answering 500 over a hint.
+  let lichessGaps: ReturnType<typeof summariseLinkGaps> | undefined;
+  if (onlineChessOn) {
+    try {
+      lichessGaps = summariseLinkGaps(await listLichessLinkGaps(auth, id));
+    } catch (err) {
+      log.error({ err, divisionId: id }, "online-switch warning: reading who cannot be paired online failed; the Settings tab renders without it");
+    }
+  }
 
   // T15: the way into the arbiter panel - the entry card and every link into it, only where it would answer. The card says ONE
   // thing: the attention count is the column title's own function over the same two lists (C6), and the phase is the column's
@@ -1048,6 +1064,7 @@ export default async function DivisionPage({
             }}
             orgId={auth.orgId}
             onlineChessOffered={onlineChessOn}
+            lichessGaps={lichessGaps}
             variants={await listVariantOptions(auth, division.sport_key)}
             // W2c Task 20 (S4): two locks, two sources. The stage STRUCTURE locks on any fixture row (replaceStages); the
             // RULES lock per field and per STARTED stage that inherits them - the same read the save asks (patchDivision).

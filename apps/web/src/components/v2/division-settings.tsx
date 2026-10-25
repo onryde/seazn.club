@@ -47,9 +47,10 @@ import {
   type TemplateKnobs,
 } from "@/lib/format-templates";
 import { UpgradeGate } from "@/components/upgrade-gate";
-import { useMsg } from "@/components/i18n/dict-provider";
+import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { sportLabel } from "@/lib/scoring-vocab";
 import { variantWord } from "@/lib/variant-label-keys";
+import { hasLinkGaps, linkGapSentence, type LinkGapsSummary } from "@/lib/online-link-gaps";
 import { TagChipInput } from "@/components/ui/tag-chip-input";
 import type { MessageKey } from "@/lib/messages";
 import type { EffectiveEntrantModel } from "@seazn/engine/sport";
@@ -409,6 +410,7 @@ export function DivisionSettings({
   showSeeds,
   viewerPlan,
   onlineChessOffered,
+  lichessGaps,
 }: {
   division: DivisionSettingsInfo;
   /** Org id, for the tag-suggestions fetch only (the division PATCH itself
@@ -460,8 +462,17 @@ export function DivisionSettings({
    *  play select and the camera control are not rendered at all. A division already online keeps its stored value
    *  through a save — the select's state still starts from the config (applyFormat). */
   onlineChessOffered: boolean;
+  /** The players in the field who cannot be paired online yet (`listLichessLinkGaps`, summarised by the page): those with
+   *  no Lichess link, and those whose link cannot play and must be reconnected. Read only where the select renders. The
+   *  warning under the Online play select reads it - while the FORM says Lichess, so it shows at the moment of switching
+   *  and stays once saved - one sentence per kind (no link, reconnect, and an entrant with no player), each present only
+   *  when somebody is in it, and never blocks the switch
+   *  (owner ruling 2026-10-25). Absent or both counts `0` ⇒ no warning. */
+  lichessGaps?: LinkGapsSummary;
 }) {
   const msg = useMsg();
+  const plural = useMsgPlural();
+  const locale = useLocaleOrDefault();
   // The Format section names the division's sport and variant as WORDS (`sport.<key>`, `variant.<sport>.<variant>`),
   // never the stored keys: the key is the identity (`boardgame`), the word is what the organiser reads ("Chess").
   const sportName = sportLabel(division.sport_key, msg);
@@ -1197,6 +1208,34 @@ export function DivisionSettings({
               </select>
             </label>
             <p className="mt-1 text-[11px] text-slate-500">{msg("divset.onlinePlay.help")}</p>
+            {/* WARN, never block: the select above and Save below stay live. The same sentence before and after the
+                save, because it follows the form's choice, which a save leaves where it was. */}
+            {onlinePlay === "lichess" && lichessGaps !== undefined && hasLinkGaps(lichessGaps) && (
+              <div
+                role="status"
+                data-testid="division-online-link-gaps"
+                className="mt-2 grid min-w-0 gap-2 break-words rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"
+              >
+                {/* An unbroken name (a 70-character token) must wrap INSIDE the box: `break-words` alone does not shrink a
+                    grid item below its min-content width, so each sentence also takes `min-w-0` and `anywhere`, which
+                    counts the break opportunities in the min-content width too. */}
+                {lichessGaps.unlinked.count > 0 && (
+                  <p data-testid="division-online-unlinked" className="min-w-0 [overflow-wrap:anywhere]">
+                    {linkGapSentence("unlinked", lichessGaps.unlinked, locale, plural)}
+                  </p>
+                )}
+                {lichessGaps.reconnect.count > 0 && (
+                  <p data-testid="division-online-reconnect" className="min-w-0 [overflow-wrap:anywhere]">
+                    {linkGapSentence("reconnect", lichessGaps.reconnect, locale, plural)}
+                  </p>
+                )}
+                {lichessGaps.empty.count > 0 && (
+                  <p data-testid="division-online-empty" className="min-w-0 [overflow-wrap:anywhere]">
+                    {linkGapSentence("empty", lichessGaps.empty, locale, plural)}
+                  </p>
+                )}
+              </div>
+            )}
           </div>
         )}
 

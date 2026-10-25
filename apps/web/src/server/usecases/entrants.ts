@@ -37,7 +37,12 @@ import { retireCompetitionPlayerMatches } from "@/server/public-site/player-matc
 import { log } from "@/server/logger";
 import { readOnlinePlay } from "@/server/external-play/online-play";
 import { onlineChessOffered } from "./external-play/online-chess-flag";
-import { assertPersonIdsLinkedForOnlinePlay, personIdsWithLichessLink } from "./external-accounts";
+import {
+  assertPersonIdsLinkedForOnlinePlay,
+  lichessLinkStatesByPerson,
+  personIdsWithLichessLink,
+  type LichessLinkState,
+} from "./external-accounts";
 
 type Tx = postgres.TransactionSql;
 type MemberInput = z.infer<typeof EntrantMemberInput>;
@@ -583,6 +588,99 @@ export async function deleteEntrant(auth: AuthCtx, id: string): Promise<void> {
  *  half lives in `DEPARTED_STATUS_CHIPS` (standings-table.tsx) and is pinned
  *  to this set by `departed-vocabulary-is-single-sourced.test.ts`. */
 export const DEPARTED_STATUSES = new Set(["withdrawn", "disqualified"]);
+
+/** One line of the online-switch warning: who (or what) in a division's field cannot be paired online yet. `person` is a
+ *  rostered player (`id` a person id); `entrant` is an entrant with NOBODY on it (`id` an entrant id, `name` its own
+ *  display name), since there is no person to name. */
+export interface LichessLinkGap {
+  readonly kind: "person" | "entrant";
+  readonly id: string;
+  readonly name: string;
+}
+
+/** The three things the online-play switch warns about, kept apart because the fixes differ: `unlinked` are PLAYERS with
+ *  no Lichess link to use (the player links one), `reconnect` are players whose link cannot play (the player reconnects
+ *  Lichess and consents again), `empty` are ENTRANTS with nobody on them (a player is added). Only `unlinked` and
+ *  `reconnect` hold people; `empty` holds entrants, and an empty entrant is never counted as a player without a link. */
+export interface LichessLinkGaps {
+  readonly unlinked: LichessLinkGap[];
+  readonly reconnect: LichessLinkGap[];
+  readonly empty: LichessLinkGap[];
+}
+
+/** The people in a division's FIELD who cannot be paired online yet, by name - what the online-play switch warns about
+ *  (owner ruling 2026-10-25: the switch is ALLOWED, the organiser is told who is not ready; blocking was rejected because
+ *  clubs switch first and collect links later). "Cannot be paired" is the SEAT gate's verdict, so each gap is a reason the
+ *  gate would give:
+ *   - `unlinked`: no link row at all (`lichess_link_required`);
+ *   - `reconnect`: a row that cannot play (`lichess_reconsent_required`), decided by `lichessGrantPlays`, the gate's own
+ *     predicate, via `lichessLinkStatesByPerson` - never a second definition;
+ *   - `empty`: an entrant with no member, which nobody can claim a seat for (`seatPlayer` -> `not_a_player`,
+ *     external-play/preflight.ts) and no game is created for (`createGameIfReady` -> `no_person`, create-game.ts). Named
+ *     by the ENTRANT, as there is no person - and in its own list, since it is not a player who lacks a link.
+ *
+ *  A link is per PERSON, never per entrant (the registration gate it mirrors, `assertPersonIdsLinkedForOnlinePlay`, tests
+ *  `entrant_members` persons): a team's members are each named under their own state, and a person on two entrants is named
+ *  once. Only the field counts - a withdrawn or disqualified entrant (`DEPARTED_STATUSES`) is owed nothing.
+ *
+ *  The field's person ids are read ONCE, in the transaction's privileged prelude (the link table is sealed from `app_user`,
+ *  V451), scoped by `entrant_members.org_id` because a prelude is not under RLS; the link states are then read for exactly
+ *  those people, never the whole org. Everything that is RETURNED is read under RLS in the callback: the division must be
+ *  visible (another club's is a 404 and answers nothing) and the names come from the tenant's own `persons` and `entrants`.
+ *  Each list is sorted by name, case-insensitively, then id, so the same roster always prints the same lists. */
+export async function listLichessLinkGaps(auth: AuthCtx, divisionId: string): Promise<LichessLinkGaps> {
+  let fieldPersonIds: string[] = [];
+  let states: ReadonlyMap<string, LichessLinkState> = new Map();
+  return withTenant(
+    auth.orgId,
+    async (tx) => {
+      const [division] = await tx`select 1 from divisions where id = ${divisionId}`;
+      if (!division) throw new HttpError(404, "division not found");
+      const field = await tx<LichessLinkGap[]>`
+        select * from (
+          select 'person' as kind, p.id, p.full_name as name
+            from persons p
+           where p.id = any(${fieldPersonIds})
+          union all
+          select 'entrant' as kind, e.id, e.display_name as name
+            from entrants e
+           where e.division_id = ${divisionId}
+             and not (e.status = any(${[...DEPARTED_STATUSES]}))
+             and not exists (select 1 from entrant_members em where em.entrant_id = e.id)
+        ) field
+        order by lower(name), id`;
+      const gaps: { unlinked: LichessLinkGap[]; reconnect: LichessLinkGap[]; empty: LichessLinkGap[] } = {
+        unlinked: [],
+        reconnect: [],
+        empty: [],
+      };
+      for (const row of field) {
+        // An entrant row is only ever an empty one (the query above): no person, so no link state to look up.
+        if (row.kind === "entrant") {
+          gaps.empty.push(row);
+          continue;
+        }
+        const state = states.get(row.id);
+        if (state === undefined) gaps.unlinked.push(row);
+        else if (state === "reconnect") gaps.reconnect.push(row);
+      }
+      return gaps;
+    },
+    {
+      privilegedPrelude: async (ptx) => {
+        const rows = await ptx<{ person_id: string }[]>`
+          select distinct em.person_id
+            from entrant_members em
+            join entrants e on e.id = em.entrant_id
+           where e.division_id = ${divisionId}
+             and em.org_id = ${auth.orgId}
+             and not (e.status = any(${[...DEPARTED_STATUSES]}))`;
+        fieldPersonIds = rows.map((r) => r.person_id);
+        states = await lichessLinkStatesByPerson(ptx, auth.orgId, fieldPersonIds);
+      },
+    },
+  );
+}
 
 /** An ad-hoc entrant's name and roster, read BEFORE a write that changes who
  *  its people are or what they are called. */

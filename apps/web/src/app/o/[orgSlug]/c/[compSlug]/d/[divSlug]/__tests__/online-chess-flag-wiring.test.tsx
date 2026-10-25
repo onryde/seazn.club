@@ -22,6 +22,9 @@ const fx = vi.hoisted(() => ({ rows: [] as Record<string, unknown>[] }));
 const flags = vi.hoisted(() => ({ isServerFeatureEnabled: vi.fn() }));
 // The division's resolved venue zone, as `getScheduleSettings` serves it (the division's own override, else the club's).
 const schedule = vi.hoisted(() => ({ tz: "UTC" }));
+// Who holds no Lichess link (the online-switch warning): the real page hands DivisionSettings a summary of this list.
+const unlinked = vi.hoisted(() => ({ read: vi.fn() }));
+const NO_GAPS = { unlinked: [], reconnect: [], empty: [] };
 const queue = vi.hoisted(() => ({
   listNeedsOrganiserExternalPlay: vi.fn(),
   listFlaggedExternalPlay: vi.fn(),
@@ -67,7 +70,10 @@ vi.mock("@/server/usecases/fixtures", () => ({
   listDivisionFixtures: vi.fn(async () => fx.rows),
   listFixtureHeadlines: vi.fn(async () => ({})),
 }));
-vi.mock("@/server/usecases/entrants", () => ({ listEntrants: vi.fn(async () => []) }));
+vi.mock("@/server/usecases/entrants", () => ({
+  listEntrants: vi.fn(async () => []),
+  listLichessLinkGaps: unlinked.read,
+}));
 vi.mock("@/server/usecases/schedule", () => ({
   getScheduleSettings: vi.fn(async () => ({ config: {}, tz: schedule.tz })),
 }));
@@ -118,6 +124,7 @@ import { DivisionSettings } from "@/components/v2/division-settings";
 import { ExternalPlayNeedsResultQueue } from "@/components/v2/external-play-needs-result-queue";
 import { StagesPanel } from "@/components/v2/stages-panel";
 import { forgetOnlineChessFlagCache } from "@/server/usecases/external-play/online-chess-flag";
+import { log } from "@/server/logger";
 
 function findAll(node: ReactNode, type: unknown, out: ReactElement[] = []): ReactElement[] {
   if (Array.isArray(node)) {
@@ -186,11 +193,13 @@ beforeEach(() => {
   queue.listNeedsOrganiserExternalPlay.mockReset().mockResolvedValue([]);
   queue.listFlaggedExternalPlay.mockReset().mockResolvedValue({ boards: [], ownBoards: 0 });
   queue.listRunSheetOnlinePlay.mockReset().mockResolvedValue({});
+  unlinked.read.mockReset().mockResolvedValue(NO_GAPS);
   forgetOnlineChessFlagCache();
   flags.isServerFeatureEnabled.mockReset().mockRejectedValue(new Error("flag asked while the override was on"));
 });
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
 });
 
 describe("division page: the online-chess flag's answer reaches the islands", () => {
@@ -358,4 +367,148 @@ describe("division page: the online-chess flag's answer reaches the islands", ()
     expect(flags.isServerFeatureEnabled).not.toHaveBeenCalled();
   });
 
+});
+
+// The online-switch warning (owner ruling 2026-10-25: switching to online with players who cannot be paired WARNS, never
+// blocks). The island's own suite (division-settings-online-link-gaps.test.tsx) proves what it prints from a summary; the
+// use-case's (lichess-link-gaps.test.ts) proves the two lists against a real database. This one proves the JOIN between them
+// - the page reads the lists for THIS division as THIS organiser, summarises BOTH, and hands them to DivisionSettings, and
+// only where the Online play select renders - which neither end can see on its own (a fixture on both ends proves the fixture).
+describe("division page: the link-gap summary reaches DivisionSettings", () => {
+  type List = { count: number; names: string[] };
+  const settingsProps = async () => {
+    const found = findAll(await renderPage("settings"), DivisionSettings);
+    expect(found, "DivisionSettings mounted once").toHaveLength(1);
+    return found[0]!.props as { lichessGaps?: { unlinked: List; reconnect: List; empty: List } };
+  };
+  const person = (n: number, prefix = "Player") => ({ kind: "person", id: `p${n}`, name: `${prefix} ${n}` });
+  const NONE: List = { count: 0, names: [] };
+
+  it("empty case first: offered, nobody short -> zero summaries (so the island prints nothing), read for this division", async () => {
+    flagIs(FLAG_STATES[0]!);
+    unlinked.read.mockResolvedValue(NO_GAPS);
+
+    expect((await settingsProps()).lichessGaps).toEqual({ unlinked: NONE, reconnect: NONE, empty: NONE });
+    expect(unlinked.read).toHaveBeenCalledTimes(1);
+    expect(unlinked.read).toHaveBeenLastCalledWith(PAGE.auth, "div-1");
+  });
+
+  it("offered, 7 unlinked: the true count and the first five names, in the reader's order", async () => {
+    flagIs(FLAG_STATES[0]!);
+    unlinked.read.mockResolvedValue({ ...NO_GAPS, unlinked: [1, 2, 3, 4, 5, 6, 7].map((n) => person(n)) });
+
+    expect((await settingsProps()).lichessGaps).toEqual({
+      unlinked: { count: 7, names: ["Player 1", "Player 2", "Player 3", "Player 4", "Player 5"] },
+      reconnect: NONE,
+      empty: NONE,
+    });
+  });
+
+  it("the reconnect list rides its own field: 3 to reconnect and 1 unlinked arrive as two summaries, neither in the other", async () => {
+    flagIs(FLAG_STATES[0]!);
+    unlinked.read.mockResolvedValue({
+      ...NO_GAPS,
+      unlinked: [person(1, "Unlinked")],
+      reconnect: [1, 2, 3].map((n) => person(n + 10, "Reconnect")),
+    });
+
+    expect((await settingsProps()).lichessGaps).toEqual({
+      unlinked: { count: 1, names: ["Unlinked 1"] },
+      reconnect: { count: 3, names: ["Reconnect 11", "Reconnect 12", "Reconnect 13"] },
+      empty: NONE,
+    });
+  });
+
+  it("the empty-entrant list rides its own field too: 2 empty entrants arrive in `empty`, in neither of the others", async () => {
+    flagIs(FLAG_STATES[0]!);
+    unlinked.read.mockResolvedValue({
+      ...NO_GAPS,
+      unlinked: [person(1, "Unlinked")],
+      empty: [{ kind: "entrant", id: "e1", name: "Table 1" }, { kind: "entrant", id: "e2", name: "Table 2" }],
+    });
+
+    expect((await settingsProps()).lichessGaps).toEqual({
+      unlinked: { count: 1, names: ["Unlinked 1"] },
+      reconnect: NONE,
+      empty: { count: 2, names: ["Table 1", "Table 2"] },
+    });
+  });
+
+  it("read whether or not the division is online yet - the switch moment is exactly when it is not", async () => {
+    let checked = 0;
+    for (const online of ["off", "lichess"] as const) {
+      division.onlinePlay = online;
+      unlinked.read.mockReset().mockResolvedValue({ ...NO_GAPS, unlinked: [person(1)] });
+      flagIs(FLAG_STATES[0]!);
+      expect((await settingsProps()).lichessGaps, `online play ${online}`).toEqual({
+        unlinked: { count: 1, names: ["Player 1"] },
+        reconnect: NONE,
+        empty: NONE,
+      });
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("not offered (flag off, PostHog down), not chess, or not the Settings tab: no summary, and the lists are never read", async () => {
+    let checked = 0;
+    for (const s of [FLAG_STATES[1]!, FLAG_STATES[2]!]) {
+      flagIs(s);
+      unlinked.read.mockClear();
+      expect((await settingsProps()).lichessGaps, s.label).toBeUndefined();
+      expect(unlinked.read, s.label).not.toHaveBeenCalled();
+      checked++;
+    }
+    division.sport_key = "generic";
+    flagIs(FLAG_STATES[0]!);
+    unlinked.read.mockClear();
+    expect((await settingsProps()).lichessGaps, "another sport").toBeUndefined();
+    expect(unlinked.read, "another sport").not.toHaveBeenCalled();
+    checked++;
+    division.sport_key = "boardgame";
+    flagIs(FLAG_STATES[0]!);
+    unlinked.read.mockClear();
+    await renderPage("entrants");
+    expect(unlinked.read, "a tab that mounts no Settings").not.toHaveBeenCalled();
+    checked++;
+    expect(checked).toBe(4);
+  });
+
+  // Fix round 2: the warning is a courtesy beside the form. A reader that throws (a database hiccup, a sealed table) must
+  // not take the whole Settings tab down with a 500: it logs, and the tab renders without the warning.
+  it("a reader that throws does not take the Settings tab down: it logs (English, once) and renders without the warning", async () => {
+    flagIs(FLAG_STATES[0]!);
+    const boom = new Error("link table unavailable");
+    unlinked.read.mockRejectedValue(boom);
+    const errorLog = vi.spyOn(log, "error").mockImplementation(() => undefined);
+
+    const props = await settingsProps(); // the page rendered: DivisionSettings is there
+
+    expect(props.lichessGaps, "no summary, so the island prints no warning").toBeUndefined();
+    expect(unlinked.read, "premise: the reader was reached and threw").toHaveBeenCalledTimes(1);
+    expect(errorLog).toHaveBeenCalledTimes(1);
+    const [context, message] = errorLog.mock.calls[0] as unknown as [{ err: unknown; divisionId: string }, string];
+    expect(context.err).toBe(boom);
+    expect(context.divisionId).toBe("div-1");
+    expect(message).toMatch(/online-switch warning/);
+    expect(message, "a log line, never copy: English").toMatch(/^[\x20-\x7e]+$/);
+  });
+
+  it("its positive pair: a reader that answers logs nothing and the warning is handed over", async () => {
+    flagIs(FLAG_STATES[0]!);
+    unlinked.read.mockResolvedValue({ ...NO_GAPS, unlinked: [person(1)] });
+    const errorLog = vi.spyOn(log, "error").mockImplementation(() => undefined);
+
+    expect((await settingsProps()).lichessGaps?.unlinked.count).toBe(1);
+
+    expect(errorLog).not.toHaveBeenCalled();
+  });
+
+  it("a viewer (not an editor) reads nothing: the Settings island is not mounted for them", async () => {
+    pageAuth.requireDivisionPage.mockResolvedValue({ ...PAGE, canEdit: false });
+    flagIs(FLAG_STATES[0]!);
+
+    expect(findAll(await renderPage("settings"), DivisionSettings)).toHaveLength(0);
+    expect(unlinked.read).not.toHaveBeenCalled();
+  });
 });
