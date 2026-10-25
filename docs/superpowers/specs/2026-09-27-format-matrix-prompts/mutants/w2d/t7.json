@@ -557,30 +557,30 @@
   {
     "id": "t7-m36-pf3-coalesce-swapped",
     "file": "db/migration/deltas/V472__w2d_table_rules.sql",
-    "find": "coalesce(s.table_rules_pinned -> 'points', s.config -> 'points') as points,",
-    "replace": "coalesce(s.config -> 'points', s.table_rules_pinned -> 'points') /*MUT36*/ as points,",
+    "find": "coalesce(s.table_rules_pinned -> 'points', s.config -> 'points') as table_points,",
+    "replace": "coalesce(s.config -> 'points', s.table_rules_pinned -> 'points') /*MUT36*/ as table_points,",
     "killers": [
       {
         "cwd": "apps/web",
         "files": [
           "src/server/engine-db/__tests__/w2d-migration-pin.test.ts"
         ],
-        "name": "PF-3 public_stages_v.points_rule returns the pin's points for a pinned stage and the new shape otherwise"
+        "name": "PF-3 public_stages_v: table_points_rule is the pin's points for a pinned stage, points_rule stays the stage's OWN rule "
       }
     ]
   },
   {
     "id": "t7-m37-pf3-pin-ignored",
     "file": "db/migration/deltas/V472__w2d_table_rules.sql",
-    "find": "coalesce(s.table_rules_pinned -> 'points', s.config -> 'points') as points,",
-    "replace": "s.config -> 'points' /*MUT37*/ as points,",
+    "find": "coalesce(s.table_rules_pinned -> 'points', s.config -> 'points') as table_points,",
+    "replace": "s.config -> 'points' /*MUT37*/ as table_points,",
     "killers": [
       {
         "cwd": "apps/web",
         "files": [
           "src/server/engine-db/__tests__/w2d-migration-pin.test.ts"
         ],
-        "name": "PF-3 public_stages_v.points_rule returns the pin's points for a pinned stage and the new shape otherwise"
+        "name": "PF-3 public_stages_v: table_points_rule is the pin's points for a pinned stage, points_rule stays the stage's OWN rule "
       }
     ]
   },
@@ -775,7 +775,7 @@
         "files": [
           "src/server/engine-db/__tests__/w2d-migration-pin.test.ts"
         ],
-        "name": "w2d_pre_points pays a tie and a no-result what the pre-W2d module paid them, against its draw"
+        "name": "w2d_pre_points pays a tie and a no-result what the pre-W2d module paid them "
       }
     ]
   },
@@ -790,7 +790,7 @@
         "files": [
           "src/server/engine-db/__tests__/w2d-migration-pin.test.ts"
         ],
-        "name": "w2d_pre_points pays a tie and a no-result what the pre-W2d module paid them, against its draw"
+        "name": "w2d_pre_points pays a tie and a no-result what the pre-W2d module paid them "
       }
     ]
   },
@@ -805,7 +805,7 @@
         "files": [
           "src/server/engine-db/__tests__/w2d-migration-pin.test.ts"
         ],
-        "name": "w2d_pre_points pays a tie and a no-result what the pre-W2d module paid them, against its draw"
+        "name": "w2d_pre_points pays a tie and a no-result what the pre-W2d module paid them "
       }
     ]
   },
@@ -820,7 +820,7 @@
         "files": [
           "src/server/engine-db/__tests__/w2d-migration-pin.test.ts"
         ],
-        "name": "w2d_pre_points pays a tie and a no-result what the pre-W2d module paid them, against its draw"
+        "name": "w2d_pre_points pays a tie and a no-result what the pre-W2d module paid them "
       }
     ]
   },
@@ -835,7 +835,7 @@
         "files": [
           "src/server/engine-db/__tests__/w2d-migration-pin.test.ts"
         ],
-        "name": "w2d_pre_points pays a tie and a no-result what the pre-W2d module paid them, against its draw"
+        "name": "w2d_pre_points pays a tie and a no-result what the pre-W2d module paid them "
       }
     ]
   },
@@ -850,7 +850,7 @@
         "files": [
           "src/server/engine-db/__tests__/w2d-migration-pin.test.ts"
         ],
-        "name": "w2d_pre_points pays a tie and a no-result what the pre-W2d module paid them, against its draw"
+        "name": "w2d_pre_points pays a tie and a no-result what the pre-W2d module paid them "
       }
     ]
   },
@@ -865,7 +865,7 @@
         "files": [
           "src/server/engine-db/__tests__/w2d-migration-pin.test.ts"
         ],
-        "name": "w2d_pre_points pays a tie and a no-result what the pre-W2d module paid them, against its draw"
+        "name": "w2d_pre_points pays a tie and a no-result what the pre-W2d module paid them "
       }
     ]
   },
@@ -880,7 +880,7 @@
         "files": [
           "src/server/engine-db/__tests__/w2d-migration-pin.test.ts"
         ],
-        "name": "w2d_pre_points pays a tie and a no-result what the pre-W2d module paid them, against its draw"
+        "name": "w2d_pre_points pays a tie and a no-result what the pre-W2d module paid them "
       }
     ]
   },
@@ -896,6 +896,231 @@
           "src/server/engine-db/__tests__/w2d-migration-pin.test.ts"
         ],
         "name": "B1 w2d_pre_points"
+      }
+    ]
+  },
+  {
+    "id": "t7-m59-pf3-points-rule-reads-pin",
+    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "find": "         stage_points_rule_published(src.points),",
+    "replace": "         stage_points_rule_published(src.table_points) /*MUT59*/,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-migration-pin.test.ts"
+        ],
+        "name": "PF-3 public_stages_v: table_points_rule is the pin's points for a pinned stage, points_rule stays the stage's OWN rule "
+      }
+    ]
+  },
+  {
+    "id": "t7-m60-pf3-own-points-coalesce-pin",
+    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "find": "           s.config -> 'points' as points,",
+    "replace": "           coalesce(s.table_rules_pinned -> 'points', s.config -> 'points') /*MUT60*/ as points,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-migration-pin.test.ts"
+        ],
+        "name": "PF-3 public_stages_v: table_points_rule is the pin's points for a pinned stage, points_rule stays the stage's OWN rule "
+      }
+    ]
+  },
+  {
+    "id": "t7-m61-pf3-bounds-read-own-rule",
+    "file": "apps/web/src/server/public-site/qualification-view.ts",
+    "find": "  const rule = meta.tablePointsRule;",
+    "replace": "  const rule = meta.pointsRule /*MUT61*/;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/qualification-view.test.ts"
+        ],
+        "name": "W2d PF-3: the per-match bounds read the rule the TABLE is paid by"
+      }
+    ]
+  },
+  {
+    "id": "t7-m62-helper-drop-missing",
+    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "find": "drop function w2d_points_num(jsonb, jsonb, text, boolean);",
+    "replace": "select 1 /*MUT62*/;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-migration-pin.test.ts"
+        ],
+        "name": "the delta drops every w2d_\\* helper it defines"
+      }
+    ]
+  },
+  {
+    "id": "t7-m63-new-shape-read-as-legacy",
+    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "find": "      pts := r.own;",
+    "replace": "      pts := w2d_legacy_points(r.own) /*MUT63*/;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-migration-pin.test.ts"
+        ],
+        "name": "the pin takes an own rule in the outcome-keyed shape as it stands"
+      }
+    ]
+  },
+  {
+    "id": "t7-m64-new-shape-guard-off",
+    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "find": "    elsif jsonb_typeof(r.own -> 'win') = 'object' and jsonb_typeof(r.own #> '{win,regulation}') = 'number'",
+    "replace": "    elsif true /*MUT64*/ or jsonb_typeof(r.own -> 'win') = 'object' and jsonb_typeof(r.own #> '{win,regulation}') = 'number'",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-migration-pin.test.ts"
+        ],
+        "name": "the pin takes an own rule in the outcome-keyed shape as it stands"
+      }
+    ]
+  },
+  {
+    "id": "t7-m65-new-shape-loss-unchecked",
+    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "find": "          and jsonb_typeof(r.own -> 'loss') = 'object' and jsonb_typeof(r.own #> '{loss,regulation}') = 'number' then",
+    "replace": "          then /*MUT65*/",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-migration-pin.test.ts"
+        ],
+        "name": "the pin takes an own rule in the outcome-keyed shape as it stands"
+      }
+    ]
+  },
+  {
+    "id": "t7-m66-new-shape-win-regulation-unchecked",
+    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "find": "jsonb_typeof(r.own #> '{win,regulation}') = 'number'",
+    "replace": "true /*MUT66*/",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-migration-pin.test.ts"
+        ],
+        "name": "the pin takes an own rule in the outcome-keyed shape as it stands"
+      }
+    ]
+  },
+  {
+    "id": "t7-m67-e3-sweep-first-entry",
+    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "find": "    sweep := coalesce(p -> '*', sweep);",
+    "replace": "    sweep := sweep /*MUT67*/;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-migration-pin.test.ts"
+        ],
+        "name": "w2d_pre_points takes a set map's clean-sweep pair from "
+      }
+    ]
+  },
+  {
+    "id": "t7-m68-drift-handler-misses-22023",
+    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "find": "      exception when sqlstate '22023' then",
+    "replace": "      exception when sqlstate '99999' /*MUT68*/ then",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-migration-pin.test.ts"
+        ],
+        "name": "the pin says so when a stage's scored fixtures were paid under another points config than the live division's"
+      }
+    ]
+  },
+  {
+    "id": "t7-m69-drift-handler-silent",
+    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "find": "      exception when sqlstate '22023' then\n        drift := drift || r.id::text;",
+    "replace": "      exception when sqlstate '22023' then\n        null /*MUT69*/;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-migration-pin.test.ts"
+        ],
+        "name": "the pin says so when a stage's scored fixtures were paid under another points config than the live division's"
+      }
+    ]
+  },
+  {
+    "id": "t7-m70-cricket-tie-noresult-swapped",
+    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "find": "'tie', t, 'noResult', nr, 'draw', coalesce(d, t));",
+    "replace": "'tie', nr, 'noResult', t, 'draw', coalesce(d, t)) /*MUT70*/;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-migration-pin.test.ts"
+        ],
+        "name": "w2d_pre_points pays a tie and a no-result what the pre-W2d module paid them "
+      }
+    ]
+  },
+  {
+    "id": "t7-m71-ddl-guard-any-host",
+    "file": "scripts/w2d/ddl-mutants.ts",
+    "find": "  if (u.hostname !== \"127.0.0.1\" && u.hostname !== \"localhost\") {",
+    "replace": "  if (false /*MUT71*/) {",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/w2d-ddl-mutants.test.ts"
+        ],
+        "name": "refuses no URL, an unparsable one, another protocol, a remote host"
+      }
+    ]
+  },
+  {
+    "id": "t7-m72-ddl-guard-any-database",
+    "file": "scripts/w2d/ddl-mutants.ts",
+    "find": "  if (!m) throw new Error(`refusing database",
+    "replace": "  if (false /*MUT72*/) throw new Error(`refusing database",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/w2d-ddl-mutants.test.ts"
+        ],
+        "name": "refuses no URL, an unparsable one, another protocol, a remote host"
+      }
+    ]
+  },
+  {
+    "id": "t7-m73-ddl-guard-any-protocol",
+    "file": "scripts/w2d/ddl-mutants.ts",
+    "find": "  if (u.protocol !== \"postgres:\" && u.protocol !== \"postgresql:\")",
+    "replace": "  if (false /*MUT73*/)",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/w2d-ddl-mutants.test.ts"
+        ],
+        "name": "refuses no URL, an unparsable one, another protocol, a remote host"
       }
     ]
   }
