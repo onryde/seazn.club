@@ -55,7 +55,7 @@ vi.mock("@/server/email-outbox", async (importOriginal) => {
   };
 });
 
-import { sql } from "@/lib/db";
+import { sql, type Tx } from "@/lib/db";
 import { DELETE } from "@/app/api/users/me/route";
 import { OUTBOX_STATUSES, RETRYABLE_STATUSES, enqueueEmail, type OutboxKind, type OutboxStatus } from "@/server/email-outbox";
 import { anonymiseAccountEmails, legacyInviteAt, namesAccount } from "@/server/email-outbox/account-deletion";
@@ -397,6 +397,33 @@ describe.skipIf(!HAS_DB)("deleting an account ends and scrubs the account's own 
 
     const again = await sql.begin((tx) => anonymiseAccountEmails(tx, { userId, email, placeholder }));
     expect(again, "a second run ends nothing").toEqual([]);
+  });
+
+  it("each exported predicate is one self-contained condition: under `not` it selects exactly the complement of what it selects bare", async () => {
+    // The fragments are composed as `where ${p} and status = 'queued'` today, and a later edit may compose them under `or` or `not`. An
+    // unparenthesised `a and b and c` under `not` negates only `a`, so it would select a different set than its own complement. One query,
+    // one snapshot: what the predicate selects, what its negation selects and what it cannot decide (NULL) must add up to the table.
+    const email = address("compose");
+    const userId = await seedUser(email, "Compose");
+    await chess(email); // in the legacy predicate
+    await chess(address("elsewhere"), userId); // in the account predicate; NOT in the legacy one
+    await literal("registration_confirmation", email); // no account, this address, but not a chess invite: the decoy a loose negation would count
+    const counts = async (name: string, frag: (tx: Tx) => ReturnType<typeof namesAccount>) => {
+      const [r] = await sql.begin(
+        (tx) => tx<{ total: string; inside: string; outside: string; unknown: string }[]>`
+          select count(*) as total,
+                 count(*) filter (where ${frag(tx)}) as inside,
+                 count(*) filter (where not ${frag(tx)}) as outside,
+                 count(*) filter (where (${frag(tx)}) is null) as unknown
+            from email_outbox`,
+      );
+      const n = { total: Number(r!.total), inside: Number(r!.inside), outside: Number(r!.outside), unknown: Number(r!.unknown) };
+      expect(n.inside, `${name}: anti-vacuity: it selects the row seeded for it`).toBeGreaterThanOrEqual(1);
+      expect(n.outside, `${name}: anti-vacuity: and its negation selects rows too`).toBeGreaterThanOrEqual(1);
+      expect(n.inside + n.outside + n.unknown, `${name}: inside, outside and undecided are the whole table`).toBe(n.total);
+    };
+    await counts("legacy arm", (tx) => legacyInviteAt(tx, email));
+    await counts("account arm", (tx) => namesAccount(tx, userId));
   });
 
   it("each arm's predicate can use an index: with sequential scans off, the planner picks its index and not the table", async () => {

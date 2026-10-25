@@ -20,6 +20,12 @@ import "server-only";
 //   - NOT a row of a literal-address kind (`registration_confirmation` ...) queued to the account's address. It is the organiser's:
 //     an entry, a payment or a refund they keep their record of (D5). A kind is the account's only if it names the account.
 //
+// RESIDUAL (accepted): a pre-V472 invite queued to an address the account has SINCE CHANGED AWAY FROM is reached by neither arm. It names no
+// account (the account arm cannot find it) and no longer holds the account's current address (the legacy arm cannot find it), so that old
+// address stays in the row until the 90-day retention removes it. It cannot be claimed by matching the old address either: nothing says the
+// account still owns it, and the previous owner of an address is ambiguous (another account may hold it now, and a match would scrub that
+// account's row). Rows written since V472 carry the id and have no such gap (F3).
+//
 // WHAT THE STATUS DOES (steps 2 and 3; the row keeps its status when it is not queued):
 //   - `sent` / `delayed`: the provider's later events find a row by its provider id (or the outbox tag), never by recipient
 //     (provider-events.ts findRow), so they still land.
@@ -30,12 +36,13 @@ import "server-only";
 //     the seat through the usual hook. Nothing reaches the deleted person either way.
 //   - terminal rows: the address is simply replaced.
 //
-// EACH OF STEPS 2 AND 3 IS TWO STATEMENTS, ONE PER ARM, and each arm has its own index (EXPLAIN on 100k rows):
+// EACH OF STEPS 2 AND 3 IS TWO STATEMENTS, ONE PER ARM, and each arm is index-served (EXPLAIN on 100k rows):
 //   - the account arm (every row since V472, the arm that grows): a Bitmap Index Scan on `email_outbox_recipient_user_idx`;
-//   - the legacy arm's END (it also carries `status = 'queued'`): an Index Scan on `email_outbox_due_idx`;
 //   - the legacy arm's SCRUB (all statuses): an Index Scan on `email_outbox_legacy_invite_idx`, V472's partial index on `(recipient) where
 //     kind = 'chess_invite' and recipient_user_id is null`. It is plain `recipient`, not `lower(recipient)`, because this arm does not fold
-//     case; before the index this one statement read the whole table (cost ~4300 against ~23).
+//     case; before the index this one statement read the whole table (cost ~4300, now ~23);
+//   - the legacy arm's END is the same predicate plus `status = 'queued'`, so the same index serves it (the planner may prefer the partial
+//     `queued` index instead; which one it takes is not pinned).
 // With that index even a single `a or b` statement would be a BitmapOr of the two, so the split is for clarity (each arm's access path is
 // stated and pinned alone, account-deletion-sweep.test.ts) and no longer for the planner. The `magic_link` delete in step 1 is a Seq Scan,
 // as it has always been (it matches `ref_id` or `recipient` on a kind, and no index leads on either).
@@ -59,10 +66,11 @@ export const deletedAccountPlaceholder = (userId: string): string => `deleted-${
 
 type EndedRecord = { id: string; kind: OutboxKind; ref_type: string; ref_id: string; meta: Record<string, string> };
 
-/** The account arm: every row that names the account, at whatever address. Served by `email_outbox_recipient_user_idx`. */
-export const namesAccount = (tx: Tx, userId: string) => tx`recipient_user_id = ${userId}`;
+/** The account arm: every row that names the account, at whatever address. Served by `email_outbox_recipient_user_idx`. Parenthesised, like
+ *  its sibling, so a caller may compose it under `and`, `or` or `not` without re-reading its insides. */
+export const namesAccount = (tx: Tx, userId: string) => tx`(recipient_user_id = ${userId})`;
 /** The legacy arm: a chess invite from before V472, no user id, at the address EXACTLY (no case folding). */
-export const legacyInviteAt = (tx: Tx, email: string) => tx`kind = 'chess_invite' and recipient_user_id is null and recipient = ${email}`;
+export const legacyInviteAt = (tx: Tx, email: string) => tx`(kind = 'chess_invite' and recipient_user_id is null and recipient = ${email})`;
 
 type Predicate = ReturnType<typeof namesAccount>;
 
