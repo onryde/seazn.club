@@ -38,7 +38,9 @@ const SESSION_ALGORITHM = "HS256";
 // Auth data is read on nearly every request but changes rarely, so it caches
 // well (cache-aside, fail-open via lib/cache). Explicit busts run on the few
 // writes that touch these rows; short TTLs bound staleness if a bust is missed.
-const USER_TTL_SECONDS = 300;
+/** How long a cached `users` row may answer. This is also the longest a MISSED bust (a Redis blip on the DEL after an account
+ *  deletion, or a read racing it) can keep a deleted account signed in, so it is exported for the test that pins the bound. */
+export const USER_TTL_SECONDS = 300;
 const ORGS_TTL_SECONDS = 120;
 const userKey = (uid: string) => `user:${uid}`;
 const orgsKey = (uid: string) => `orgs:${uid}`;

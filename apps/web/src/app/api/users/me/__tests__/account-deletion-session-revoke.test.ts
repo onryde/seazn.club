@@ -81,7 +81,7 @@ vi.mock("@/lib/cache", async (importOriginal) => {
 });
 
 import { sql } from "@/lib/db";
-import { createSession, getCurrentUser, requireUser } from "@/lib/auth";
+import { USER_TTL_SECONDS, createSession, getCurrentUser, requireUser } from "@/lib/auth";
 import { AuthError } from "@/lib/errors";
 import { sendAccountDeletionEmail } from "@/lib/email";
 import { DELETE, GET } from "@/app/api/users/me/route";
@@ -101,6 +101,9 @@ async function seedUser(tag: string): Promise<Seed> {
   seeded.push(id);
   return { id, email, name };
 }
+
+/** Whether the fake cache would still answer for `key` at the (faked) current time. */
+const alive = (key: string): boolean => (h.cache.get(key)?.expiresAt ?? 0) > Date.now();
 
 const as = (device: string) => {
   h.device = device;
@@ -226,20 +229,27 @@ describe.skipIf(!HAS_DB)("a deleted account's sessions on other devices", () => 
     expect(h.cache.has(userKey(leaver.id))).toBe(false);
   });
 
-  it("a deletion whose cache bust was MISSED still ends when the cached entry expires", async () => {
+  it("a deletion whose cache bust was MISSED ends exactly when the cached entry expires, which is the documented bound", async () => {
     const leaver = await seedUser("ttl");
     await signIn("B", leaver.id);
     expect((await ask("B")).user?.id).toBe(leaver.id);
-    expect(h.ttlsAsked.length, "the resolver cached the row, with a TTL").toBeGreaterThan(0);
-    const ttlSeconds = Math.max(...h.ttlsAsked);
-    expect(ttlSeconds).toBeGreaterThan(0);
+
+    // The bound is a number the owner can read: a missed bust may outlive a deletion by at most five minutes. The resolver must ask
+    // the cache for EXACTLY the exported constant (not a longer one, not a second write), and the constant must not creep upward.
+    expect(h.ttlsAsked, "the resolver cached the row once, for exactly USER_TTL_SECONDS").toEqual([USER_TTL_SECONDS]);
+    expect(USER_TTL_SECONDS).toBeGreaterThan(0);
+    expect(USER_TTL_SECONDS, "a missed bust may not outlive the deletion by more than five minutes").toBeLessThanOrEqual(300);
+    const warmedAt = Date.now();
 
     // Delete the row behind the application's back: the bust never runs, so the warm entry is left in place.
     await sql`update users set deleted_at = now(), display_name = 'Deleted User' where id = ${leaver.id}`;
-    expect(h.cache.has(userKey(leaver.id)), "the entry the missed bust leaves behind").toBe(true);
 
-    // Past the TTL the entry is gone and the lookup answers, and the lookup refuses a deleted row.
-    vi.setSystemTime(Date.now() + (ttlSeconds + 1) * 1000);
+    // One second inside the bound the entry is still alive (the very window the TTL exists to bound) ...
+    vi.setSystemTime(warmedAt + (USER_TTL_SECONDS - 1) * 1000);
+    expect(alive(userKey(leaver.id)), "the entry the missed bust leaves behind, one second inside the bound").toBe(true);
+    // ... and at the bound it is gone and the lookup answers, and the lookup refuses a deleted row.
+    vi.setSystemTime(warmedAt + USER_TTL_SECONDS * 1000);
+    expect(alive(userKey(leaver.id)), "gone at the bound").toBe(false);
     const after = await ask("B");
     expect(after.user).toBeNull();
     expect(after.guard).toBe("AuthError");

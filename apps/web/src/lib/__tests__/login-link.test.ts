@@ -49,6 +49,20 @@ describe.skipIf(!HAS_DB)("login-link (passwordless sign-in tokens)", () => {
     expect(await consumeLoginLink(token)).toBeNull();
   });
 
+  // A link issued before the account was deleted (it lives 15 minutes) must not be redeemable afterwards: the deleted row
+  // is neither verified nor named as the person to sign in. The route-level proof (cookie, organisation) is
+  // app/api/auth/magic-link/__tests__/consume-deleted-account.test.ts.
+  it("refuses a link whose account was deleted, leaves the row unverified, and stays refused", async () => {
+    const userId = await track(false);
+    const token = await createLoginLink(userId);
+    await sql`update users set deleted_at = now() where id = ${userId}`;
+    expect(await consumeLoginLink(token)).toBeNull();
+    expect(await consumeLoginLink(token)).toBeNull();
+    const [{ email_verified }] = await sql<{ email_verified: boolean }[]>`
+      select email_verified from users where id = ${userId}`;
+    expect(email_verified).toBe(false);
+  });
+
   it("rejects an unknown token", async () => {
     expect(await consumeLoginLink(`nope-${randomUUID()}`)).toBeNull();
   });
