@@ -64,6 +64,7 @@ The pinned image is `ghcr.io/onryde/seazn-placement:<placement sha>`. Its tag is
 - **Fly:**
   - `fly.toml` keeps `app = "placement"`, and stg deploys the same file with `--app placement-stg`.
   - `packages/scheduler/src/placement-client.ts` keeps `DEFAULT_HOST` as `placement.flycast:50051`.
+  - **Internal only:** no public IP on `placement` or `placement-stg`, ever (owner ruling, see "Owner rulings" at the end).
   - The only secret is `FLY_TOKEN`. `GITHUB_TOKEN` gets `packages: write` on the placement `publish` job and nowhere else.
 - **The CI service secrets stay literals,** exactly as today: `ci-smoke-secret`, `ci-e2e-secret`, `ci-bench-secret`, `ci-integration-secret`. Each must be identical on both sides of its job.
 - **Toolchain:**
