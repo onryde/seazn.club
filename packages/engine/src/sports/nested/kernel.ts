@@ -1810,10 +1810,11 @@ function applyPointForReplay(state: NestedState, side: Side): NestedState {
 }
 
 /**
- * Games won so far, closed sets plus the set in progress — VERBATIM the
- * formula `sideMetrics`'s own `gamesOf` uses inside `makeNestedModule`
- * (below), duplicated because that one is a closure over `opponent`, not a
- * standalone export. Keep the two in sync if either changes.
+ * Games won so far, closed sets plus the set in progress — the formula
+ * `sideMetrics`'s own `gamesOf` used inside `makeNestedModule` (below) before
+ * W2d. They now differ on purpose in ONE place: the table's `gamesOf` credits a
+ * won match tie-break as one game to its winner (TN-TB-2, RB2A-11), while this
+ * player-stat count still reads a match tie-break as no games.
  */
 function nestedGamesOf(state: NestedState, side: Side): number {
   return (
@@ -2068,8 +2069,12 @@ export function makeNestedModule(
 
   const sideMetrics = (state: NestedState, side: Side): Record<string, number> => {
     const opp = opponent(side);
+    // W2d (SPEC §5.10, TN-TB-2; RB2A-11, ITF 4.02): on the TABLE a won match tie-break counts as one set and one game
+    // to its winner and none to the loser — its points are not games. (Player stats' `nestedGamesOf` keeps its own
+    // count: it is not the table's game %.)
     const gamesOf = (s: Side): number =>
-      state.sets.reduce((sum, set) => sum + (set.mtb === true ? 0 : set[s]), 0) + state.games[s];
+      state.sets.reduce((sum, set) => sum + (set.mtb === true ? (set[s] > set[opponent(s)] ? 1 : 0) : set[s]), 0) +
+      state.games[s];
     return {
       sets_won: state.setsWon[side],
       sets_lost: state.setsWon[opp],

@@ -328,5 +328,35 @@
     "name": "runs the check on its primaryTableKey"
    }
   ]
+ },
+ {
+  "id": "t11-mtb-no-game",
+  "file": "packages/engine/src/sports/nested/kernel.ts",
+  "find": "(set.mtb === true ? (set[s] > set[opponent(s)] ? 1 : 0) : set[s])",
+  "replace": "(set.mtb === true ? 0 : set[s])",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tables-rulebook.test.ts"
+    ],
+    "name": "TN-TB-2 a won match tie-break counts"
+   }
+  ]
+ },
+ {
+  "id": "t11-mtb-loser-gets-game",
+  "file": "packages/engine/src/sports/nested/kernel.ts",
+  "find": "(set.mtb === true ? (set[s] > set[opponent(s)] ? 1 : 0) : set[s])",
+  "replace": "(set.mtb === true ? (set[s] > set[opponent(s)] ? 1 : 1) : set[s])",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tables-rulebook.test.ts"
+    ],
+    "name": "TN-TB-2 a won match tie-break counts"
+   }
+  ]
  }
 ]

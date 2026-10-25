@@ -257,9 +257,6 @@ interface Case {
 interface Extra {
   readonly title: string;
   readonly run: (module: AnySportModule) => void;
-  /** Set while the rule's code change waits on a golden re-baseline the orchestrator has not yet allowed: the case is
-   *  listed as a todo (visible in every count), never passed and never inverted to pin today's behaviour. */
-  readonly held?: string;
 }
 
 interface Book {
@@ -899,9 +896,6 @@ const BOOK: Readonly<Record<string, Book>> = {
     extras: [
       {
         title: "TN-TB-2 a won match tie-break counts as one set and one game (ATP 4.02, RB2A-11)",
-        // The nested kernel's table `gamesOf` change moves one recorded tennis golden stream (doubles-noad-mtb10 #2,
-        // games 8→9); it lands with that re-baseline, on the orchestrator's go (W2d T11 report).
-        held: "the MTB game credit moves golden tennis doubles-noad-mtb10#2; awaiting the re-baseline go",
         run: (module) => {
           // The doubles norm: no-ad games and a 10-point match tie-break as the deciding set (ITF App VI).
           const cfg = cfgOf(module, "doubles-noad-mtb10");
@@ -1085,10 +1079,7 @@ describe("W2d T11 — rulebook scenarios per sport (spec §13.1)", () => {
         });
       }
 
-      for (const extra of book.extras ?? []) {
-        if (extra.held === undefined) it(extra.title, () => extra.run(module));
-        else it.todo(`${extra.title} — HELD: ${extra.held}`);
-      }
+      for (const extra of book.extras ?? []) it(extra.title, () => extra.run(module));
 
       it(`decides every position of its default, and orders differently from its pre-W2d order at least once`, () => {
         const covered = decidedPositions(book);
