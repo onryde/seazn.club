@@ -345,6 +345,8 @@ cd ~/github/seazn.club.placement && PATH="$BUF_DIR:$PATH" venv/bin/python -m pyt
 
 Run these in order. O3 MUST precede O5, because O5's push deploys `placement-stg`.
 
+> **Amended 2026-10-25 after the P3 review:** P3 deploys the tested GHCR image with `flyctl deploy --image … --no-public-ips` (stg on `workflow_run` after `ci` succeeds on main; prod on a `v*.*.*` tag that already has an image). So the first stg run is expected RED until O6 makes the package public. Also owed at O2 (owner, recommended): a `production` GitHub environment holding `FLY_TOKEN`, plus a tag ruleset on `v*.*.*`, so a tag push alone cannot reach the prod token (P3 review M-7); branch protection blocks force-pushes on `main` (P2 review M-5); required checks are listed by job `name:` (P2 review M-11).
+
 - [ ] **O2 — OWNER (GitHub UI / `gh secret set`):**
   - Set `FLY_TOKEN` in `onryde/seazn.club.placement`. It must be able to deploy both `placement` and `placement-stg`.
   - Confirm the `onryde` org's package settings allow public container packages. The token here lacks `read:packages`, so the orchestrator cannot see that setting.
@@ -372,15 +374,17 @@ Run these in order. O3 MUST precede O5, because O5's push deploys `placement-stg
   - `gh repo view onryde/seazn.club.placement --json defaultBranchRef` is `main`.
   - Watch both runs: `gh run list -R onryde/seazn.club.placement --limit 5`.
   - Expected: `ci` is green on all four jobs, and the `buf-breaking` log shows `::notice::buf breaking skipped: no base commit (first push to main)`.
-  - Expected: `stg` is green. Paste both run URLs.
+  - Expected: `stg` is RED at `require-image` ("not published or not public"). That is correct: stg deploys the published GHCR image, checked anonymously, and the package stays private until O6. Paste both run URLs.
 - [ ] **O6 — OWNER (GitHub UI): make the image public.** In Package `seazn-placement` → Package settings → Change visibility → Public. Then the orchestrator proves an anonymous pull without docker:
 
   ```bash
   TOKEN=$(curl -fsS "https://ghcr.io/token?scope=repository:onryde/seazn-placement:pull" | jq -r .token); curl -fsS -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json' "https://ghcr.io/v2/onryde/seazn-placement/manifests/$PLACEMENT_HEAD"
   ```
   Expected: `200`. The anonymous token is not a secret, but do not echo it anyway.
+  - Then re-run the failed stg run: `gh run rerun <stg run id> -R onryde/seazn.club.placement --failed`. Expected: green, with `require-private-ips` passing (private v6 only).
 - [ ] **O7 — Proof 1 (spec §6.6): the stg deploy from the new repo.**
-  - Run `fly status --app placement-stg`. Its image must be `registry.fly.io/placement-stg:$PLACEMENT_HEAD`.
+  - Run `fly status --app placement-stg`. Its image must be `ghcr.io/onryde/seazn-placement:$PLACEMENT_HEAD` (P3 deploys the tested image; no registry.fly.io rebuild).
+  - Run `fly ips list --app placement-stg`: only a private v6 (owner ruling: internal only).
   - The owner runs one Auto-schedule on stg.seazn.club.
   - `fly logs --app placement-stg` must then show a `solve request=` line, and `fly logs --app placement` must show nothing for it (`stg.yml`'s verify-by-hand step).
   - Write down what was SEEN.
