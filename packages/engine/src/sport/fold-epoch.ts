@@ -36,8 +36,10 @@ export const FOLD_EPOCH = Object.freeze({
 export type FoldEpochSport = keyof typeof FOLD_EPOCH;
 // The same sports as FOLD_EPOCH: `satisfies` over its keys makes a sport missing here, or one only here, a type error.
 export const FOLD_MINOR = Object.freeze({
+  // W2d T11 (TN-TB-2, RB2A-11) raised tennis one MINOR: the nested kernel's table `gamesOf` credits a won match tie-break as one game
+  // to its winner, so a stream ending in one moves its standings deltas (games_won/games_lost) and no state, outcome or summary.
   football: 0, cricket: 0, boardgame: 0, carrom: 0, generic: 0, volleyball: 0,
-  badminton: 0, tabletennis: 0, tennis: 0, icehockey: 0, hockey: 0,
+  badminton: 0, tabletennis: 0, tennis: 1, icehockey: 0, hockey: 0,
 } as const satisfies Readonly<Record<FoldEpochSport, number>>);
 
 function entryOf(table: Readonly<Record<string, number>>, name: "FOLD_EPOCH" | "FOLD_MINOR", sport: string): number {
