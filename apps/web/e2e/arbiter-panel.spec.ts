@@ -5,7 +5,9 @@
  * boardgame division played online with the camera REQUIRED (set before the
  * round opens, as D9 allows), four linked players, a league stage, Generate,
  * Start, round 1 opened through the open-round route. The panel is reached the
- * way an organiser reaches it: from the division's fixtures tab.
+ * way an organiser reaches it: from the division's fixtures tab, by the one
+ * entry card that tab keeps (phase 2 moved Open round and the queue into the
+ * panel's round column, so the tab has no queue to settle from any more).
  *
  * Three facts no API writes are seeded by SQL, and each says why:
  * - the players' Lichess links (match-room-kit.ts: linking is an OAuth trip to
@@ -262,8 +264,12 @@ test.describe("arbiter panel", () => {
 
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto(r.fixturesTab);
-    // Exact: the run sheet's flag chips and the queue's "Review in arbiter panel" (T16) also lead there.
-    await page.getByRole("link", { name: uiEn["arbiter.entry.link"], exact: true }).click();
+    // The way in is the entry card (the run sheet's flag chips lead there too, so the link is found INSIDE the card and by its exact
+    // name). Board 2 is held and flagged, so the card's one line is the column title's own count: one board needs a decision.
+    const entry = page.getByTestId("arbiter-entry");
+    await expect(entry.getByTestId("arbiter-entry-status")).toHaveText(fill("arbiter.column.queue.one", { count: 1 }), { timeout: 30_000 });
+    await expect(entry.getByTestId("arbiter-entry-status")).toHaveAttribute("data-kind", "attention");
+    await entry.getByRole("link", { name: uiEn["arbiter.entry.link"]!, exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`${r.arbiterPath}$`));
     await expect(page.getByRole("heading", { level: 1, name: uiEn["arbiter.title"] })).toBeVisible();
 
@@ -496,13 +502,13 @@ test.describe("arbiter panel", () => {
   });
 
   // I-3 (controller ruling, fix round 2): "No result" is VOID — an abandon, no points, no absence — and in ANY knockout
-  // the server refuses it (a knockout game needs a winner), so it is not offered there — on the panel or on the
-  // division's queue — and the settle says why. The knockout board here FEEDS a next match: the hiding is the
+  // the server refuses it (a knockout game needs a winner), so it is not offered there — on the panel, whether reached by the
+  // board's own link or by its card's Review in the round column's queue — and the settle says why. The knockout board here FEEDS a next match: the hiding is the
   // knockout's, not a final's. The pairs: a league board offers it, and settling it reads back as No result; both
   // players absent, the double walkover is offered and written. Here the knockout is a league stage switched by SQL;
   // the knockout's own positive pair — a winner clicked on the panel, and the next match seating that winner — is the
   // I-4 test below, on a REAL knockout the generator wired.
-  test("I-3: a league board settles No result as VOID; in a Swiss and on a knockout line No result is hidden and the settle says why, panel and queue; both players absent, a knockout line that feeds a next match offers W2b's double walkover by name and writes it, a final hides it; no sideways scroll at 320, 768 or 1280", async ({
+  test("I-3: a league board settles No result as VOID; in a Swiss and on a knockout line No result is hidden and the settle says why, panel and the column's Review; both players absent, a knockout line that feeds a next match offers W2b's double walkover by name and writes it, a final hides it; no sideways scroll at 320, 768 or 1280", async ({
     page,
     request,
   }) => {
@@ -555,20 +561,30 @@ test.describe("arbiter panel", () => {
       await expect(open).toHaveAttribute("aria-expanded", "true");
       return page.getByTestId("arbiter-settle").getByRole("button");
     };
-    const queueSettle = async (fixtureId: string) => {
+    // The queue lives in the round column now (the Fixtures tab has none): the held board's card says "Review board N", and Review puts
+    // that board on screen with its decision area - the same area `settleOn` reaches by the link to the board. The page opens on board 1,
+    // so the board on screen changing to board 2 is the Review's own doing.
+    const columnSettle = async (fixtureId: string) => {
       await page.setViewportSize({ width: 1280, height: 900 });
-      await page.goto(r.fixturesTab);
-      const row = page.getByTestId(`external-play-queue-row-${fixtureId}`);
-      await row.getByTestId("external-play-settle-toggle").click();
-      return row;
+      await page.goto(r.arbiterPath);
+      const card = page.locator(`[data-testid="arbiter-column-card"][data-kind="held"][data-fixture-id="${fixtureId}"]`);
+      await expect(card.getByTestId("arbiter-column-review")).toHaveText(fill("arbiter.column.review", { board: 2 }));
+      await expect(boardsNav(page).getByRole("button").nth(0)).toHaveAttribute("aria-pressed", "true");
+      await card.getByTestId("arbiter-column-review").click();
+      await expect(boardsNav(page).getByRole("button").nth(1)).toHaveAttribute("aria-pressed", "true");
+      await expect(page).toHaveURL(new RegExp(`\\?fixture=${fixtureId}$`));
+      const open = decision(page).getByRole("button", { name: uiEn["arbiter.decide.settle"] });
+      await open.click();
+      await expect(open).toHaveAttribute("aria-expanded", "true");
+      return page.getByTestId("arbiter-settle");
     };
 
     // A Swiss (fix round 3): the held board's stage a Swiss — a void would hold the next round up, so No result is
-    // hidden there too, and the settle says why, in the queue and on the panel.
+    // hidden there too, and the settle says why, reached from the column's card and from the board's own link.
     await withDb((sql) => sql`update stages set kind = 'swiss' where id = (select stage_id from fixtures where id = ${b2.fixtureId})`);
-    const swissRow = await queueSettle(b2.fixtureId);
-    await expect(swissRow.getByTestId("external-play-settle").getByRole("button")).toHaveText([...winners, uiEn["externalPlay.resolve.draw"]!]);
-    await expect(swissRow.getByTestId("external-play-settle-guidance")).toHaveText(uiEn["arbiter.decide.swissNeedsResult"]!);
+    const swissFromCard = await columnSettle(b2.fixtureId);
+    await expect(swissFromCard.getByRole("button")).toHaveText([...winners, uiEn["externalPlay.resolve.draw"]!]);
+    await expect(page.getByTestId("arbiter-settle-guidance")).toHaveText(uiEn["arbiter.decide.swissNeedsResult"]!);
     const swissChoices = await settleOn(b2.fixtureId);
     await expect(swissChoices).toHaveText([...winners, uiEn["externalPlay.resolve.draw"]!]);
     await expect(page.getByTestId("arbiter-settle-guidance")).toHaveText(uiEn["arbiter.decide.swissNeedsResult"]!);
@@ -589,12 +605,12 @@ test.describe("arbiter panel", () => {
     });
     expect(feeds[0]!.w, "premise: the line feeds a next match — not a final").not.toBeNull();
 
-    // The division's queue: the held card's settle, opened.
-    const row = await queueSettle(b2.fixtureId);
-    await expect(row.getByTestId("external-play-settle").getByRole("button")).toHaveText([...winners, uiEn["externalPlay.resolve.draw"]!]);
-    await expect(row.getByTestId("external-play-settle-guidance")).toHaveText(uiEn["arbiter.decide.knockoutNeedsWinner"]!);
-    await shoot(page, "queue-knockout-settle");
-    expect(await noSidewaysScroll(page, [320, 768, 1280]), "the queue").toBe(3);
+    // The column's queue: the held card's Review, then its settle, opened.
+    const fromCard = await columnSettle(b2.fixtureId);
+    await expect(fromCard.getByRole("button")).toHaveText([...winners, uiEn["externalPlay.resolve.draw"]!]);
+    await expect(page.getByTestId("arbiter-settle-guidance")).toHaveText(uiEn["arbiter.decide.knockoutNeedsWinner"]!);
+    await shoot(page, "column-knockout-settle");
+    expect(await noSidewaysScroll(page, [320, 768, 1280]), "the column's Review").toBe(3);
 
     // The arbiter panel: the same three, the same sentence.
     const choices2 = await settleOn(b2.fixtureId);
@@ -616,8 +632,8 @@ test.describe("arbiter panel", () => {
 
     // On a line that feeds a next match it is offered, by its own name, and the settle writes it.
     await withDb((sql) => sql`update fixtures set winner_to_fixture = ${next} where id = ${b2.fixtureId}`);
-    const dwRow = await queueSettle(b2.fixtureId);
-    await expect(dwRow.getByTestId("external-play-settle").getByRole("button")).toHaveText([
+    const dwFromCard = await columnSettle(b2.fixtureId);
+    await expect(dwFromCard.getByRole("button")).toHaveText([
       ...winners,
       uiEn["externalPlay.resolve.draw"]!,
       uiEn["externalPlay.resolve.doubleWalkover"]!,

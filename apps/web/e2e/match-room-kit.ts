@@ -30,6 +30,7 @@ import { Chess } from "chess.js";
 import type { RoomSnapshot } from "../src/components/public-site/match-room/room-snapshot";
 import { apiJson, createStageAndGenerate, linkLichessBySql, linkPersonToUserBySql, TAG, withDb } from "./helpers";
 import { mintMatchRoomLink } from "./match-room-link";
+import { ENDED_BADLY_STATUSES, LIVE_STATUSES, type OutboxStatus } from "../src/server/email-outbox/constants";
 
 /** The room's own copy, read from the dictionary rather than retyped. */
 export const uiEn = JSON.parse(
@@ -349,7 +350,8 @@ export type SeededRound = {
   competitionId: string;
   divisionId: string;
   stageId: string;
-  /** The division's run sheet, where the queue and the Open round control live. */
+  /** The division's run sheet (`?tab=fixtures`). The queue and Open round live in the Arbiter Panel's round column now
+   *  (`arbiterPath`); the tab keeps the run-sheet chips and the `arbiter-entry` card that leads there. */
   fixturesTab: string;
   arbiterPath: string;
   /** `/shared/{org}/{comp}/{div}` — prefix of every public fixture page. */
@@ -511,6 +513,70 @@ export async function roundGameSql(board: RoundBoard, opts: { moves: string[]; h
     expect(res.count, `bridge row for ${board.fixtureId} (was the round opened?)`).toBe(1);
   });
   return { fen: rules.fen() };
+}
+
+/** The statuses in which the provider took the mail, so the row carries its message id and a send time (V470's unique
+ *  `provider_id` index is only for rows that have one). */
+const PROVIDER_TOOK: readonly OutboxStatus[] = ["sent", "delayed", "delivered", "bounced", "complained"];
+
+/** Spec §6: put a seat's newest outbox row in `status` (honouring V470's CHECKs: no body outside queued or sending, a lease
+ *  only while sending, a unique provider id once the provider took it), and stamp the seat bound to its round's open when
+ *  the status holds the seat, or clear the stamp when it does not. The holding list is composed HERE from the pure
+ *  constants.ts as [...LIVE_STATUSES, "complained"] (C3; Task 1 pins it equal to the hook's SEAT_HOLDING_STATUSES) - never
+ *  imported from invite-outbox-hook.ts, which is server-only.
+ *
+ *  The product reaches these states through the outbox worker and the provider's webhook (`/api/cron/email-outbox`, a
+ *  Resend event), neither of which runs in e2e (no mail provider), so a spec that must show "Bounced" or "Delivered" on a
+ *  waiting-list seat writes the row the way the hook leaves it: the status, and the seat's stamp to match (`releaseSeat`'s
+ *  rule when it does not hold: clear the colour, and unbind the row from the open when the other colour holds nothing).
+ *  Throws, named, when the seat has no outbox row (the round was not opened, or its mail was never queued) or the round has
+ *  no open to bind to: a seed that quietly changed nothing would let a spec assert on the state it started in. */
+export async function seedSeatInvite(fixtureId: string, colour: "white" | "black", status: OutboxStatus): Promise<void> {
+  const holdsSeat = ([...LIVE_STATUSES, "complained"] as readonly OutboxStatus[]).includes(status);
+  const providerTook = PROVIDER_TOOK.includes(status);
+  const endedBadly = ENDED_BADLY_STATUSES.includes(status);
+  const ref = `${fixtureId}:${colour}`;
+  const stampCol = colour === "white" ? "white_emailed_at" : "black_emailed_at";
+  const otherCol = colour === "white" ? "black_emailed_at" : "white_emailed_at";
+  const at = new Date();
+  await withDb(async (sql) => {
+    const [row] = await sql<{ id: string; meta: Record<string, unknown> }[]>`
+      select id, meta from email_outbox
+       where kind = 'chess_invite' and ref_type = 'fixture_seat' and ref_id = ${ref}
+       order by created_at desc, id desc limit 1`;
+    if (!row) throw new Error(`seedSeatInvite: no chess_invite outbox row for ${ref} (was the round opened?)`);
+    const updated = await sql`
+      update email_outbox
+         set status = ${status},
+             body_sealed = null,
+             lease_until = ${status === "sending" ? new Date(at.getTime() + 120_000) : null},
+             provider_id = ${providerTook ? `e2e-seed-${randomUUID()}` : null},
+             sent_at = ${providerTook ? at : null},
+             last_error = ${endedBadly ? `e2e_seed_${status}` : null},
+             meta = ${sql.json({ ...row.meta, ...(holdsSeat ? { stampedAt: at.toISOString() } : {}) } as never)},
+             status_at = ${at}
+       where id = ${row.id}`;
+    expect(updated.count, `the outbox row of ${ref} took the status`).toBe(1);
+    if (holdsSeat) {
+      const [open] = await sql<{ id: string }[]>`
+        select o.id from fixtures f join stage_round_opens o on o.stage_id = f.stage_id and o.round_no = f.round_no
+         where f.id = ${fixtureId}`;
+      if (!open) throw new Error(`seedSeatInvite: the round of ${fixtureId} has no open to bind ${colour}'s stamp to`);
+      const stamped = await sql`
+        update fixture_external_play
+           set ${sql(stampCol)} = ${at}, round_open_id = ${open.id}, updated_at = now()
+         where fixture_id = ${fixtureId}`;
+      expect(stamped.count, `the bridge row of ${fixtureId} took ${colour}'s stamp`).toBe(1);
+    } else {
+      const released = await sql`
+        update fixture_external_play
+           set ${sql(stampCol)} = null,
+               round_open_id = case when ${sql(otherCol)} is null then null else round_open_id end,
+               updated_at = now()
+         where fixture_id = ${fixtureId}`;
+      expect(released.count, `the bridge row of ${fixtureId} released ${colour}'s stamp`).toBe(1);
+    }
+  });
 }
 
 // ─── the board, as a player's finger meets it (T17) ─────────────────────────

@@ -7,12 +7,13 @@
  * Lichess game (D3); a held board is settled from the organiser's queue.
  *
  * Task 17 (the serial describe below): the product-level proof of the venue.
- * The organiser OPENS a Swiss round through the run sheet (D12); four players
+ * The organiser OPENS a Swiss round from the Arbiter Panel's round column (D12;
+ * phase 2 moved the control there from the run sheet); four players
  * seat themselves through the SERVER-verified camera preflight (states 2, 3
  * and 4 on the way, 9 on the board); our server creates each Lichess game and
  * submits both sides' moves; a resign and an unwatched flag are written as
  * results — never as forfeits; round 2 waits for the organiser, and is
- * opened by the same control. Plus D12's negative: a round paired but never
+ * opened from the same column. Plus D12's negative: a round paired but never
  * opened, long past its scheduled time, seats and forfeits nobody.
  *
  * Both outside services are LOCAL fixture servers the spec starts —
@@ -97,6 +98,20 @@ async function passCameraTest(p: Page): Promise<void> {
   if ((await camera.count()) === 0) return;
   await camera.click();
   await expect(p.getByTestId("room-checkin-cta"), "the tested camera opens Check in").toBeEnabled({ timeout: 15_000 });
+}
+
+/** Opens `roundNo` from the Arbiter Panel's round column: the press, its confirmation, and the open-round route's answer. The block that
+ *  shows the answer's words is unmounted by the refresh that follows (the open moves the column to its next phase), so the sync is the
+ *  route's own answer, read off the wire, not a notice that may already be gone. The press is the before phase's own
+ *  (`arbiter-column-open-cta`) or, beside a round on screen, the playing phase's (`arbiter-column-next`): the same press either way. */
+async function openFromColumn(page: Page, r: { stageId: string }, roundNo: number): Promise<void> {
+  const block = page.getByTestId("arbiter-round-column").locator(`[data-testid="arbiter-column-open"][data-round-no="${roundNo}"]`);
+  await expect(block, `round ${roundNo} is offered in the column`).toHaveCount(1, { timeout: 30_000 });
+  await block.locator('[data-testid="arbiter-column-open-cta"], [data-testid="arbiter-column-next"]').click();
+  const answered = page.waitForResponse((res) => res.request().method() === "POST" && res.url().includes(`/stages/${r.stageId}/open-round`), { timeout: 20_000 });
+  await page.getByTestId("arbiter-column-confirm-confirm").click();
+  const res = await answered;
+  expect(res.status(), `opening round ${roundNo}: ${(await res.text()).slice(0, 200)}`).toBeLessThan(300);
 }
 
 async function sharedPath(
@@ -184,6 +199,13 @@ test("needs_organiser queue: organiser can resolve from division page", async ({
   });
   const row = page.getByTestId(`external-play-queue-row-${fx.fixtureId}`);
   await expect(row).toBeVisible();
+  // An over-the-board division offers no Arbiter Panel (it plays nothing online), so its queue stays here, settled from here - and it
+  // carries no way into a panel that would answer 404: neither the retired "Review in arbiter panel" link nor any link to the panel
+  // at all (the queue's positive pair is the row above, visible and settled below; the Online division's queue is the panel's, in
+  // online-chess-desk.spec.ts).
+  await expect(page.getByTestId("external-play-review")).toHaveCount(0);
+  await expect(page.getByTestId("external-play-needs-result-queue").locator('a[href*="/arbiter"]')).toHaveCount(0);
+  await expect(page.getByTestId("arbiter-entry"), "and the tab has no entry card into a panel it does not offer").toHaveCount(0);
   // T16: the four outcomes sit behind the card's "Settle" toggle (canvas HoldQueue).
   await row.getByTestId("external-play-settle-toggle").click();
   await row.getByTestId("external-play-resolve-draw").click();
@@ -482,7 +504,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     await ctx.close();
   });
 
-  test("the organiser opens Swiss round 1 from the run sheet: the stamp and the invites, and nothing reaches Lichess or video yet", async ({ page, request }) => {
+  test("the organiser opens Swiss round 1 from the Arbiter Panel's column: the stamp and the invites, and nothing reaches Lichess or video yet", async ({ page, request }) => {
     test.setTimeout(budget(2));
     round = await seedOnlineRound(request, [`Ada White ${TAG}`, `Bo Black ${TAG}`, `Cy Third ${TAG}`, `Di Fourth ${TAG}`], {
       open: false,
@@ -498,12 +520,11 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     expect(await roundOpenedAtSql(round.stageId, 1), "the empty case: nothing opened").toBeNull();
 
     await page.setViewportSize({ width: 1280, height: 900 });
-    await page.goto(round.fixturesTab);
-    const control = page.getByTestId("open-round").filter({ has: page.getByRole("heading", { name: fill("runsheet.round.heading", { round: 1 }) }) });
-    await expect(control).toHaveAttribute("data-state", "paired", { timeout: 30_000 });
-    await control.getByTestId("open-round-cta").click();
-    await page.getByTestId("open-round-confirm-confirm").click();
-    await expect(control.getByTestId("open-round-notice")).toBeVisible({ timeout: 20_000 });
+    await page.goto(round.arbiterPath);
+    const column = page.getByTestId("arbiter-round-column");
+    await expect(column, "paired, not opened: the column's before phase").toHaveAttribute("data-phase", "before", { timeout: 30_000 });
+    await openFromColumn(page, round, 1);
+    await expect(column, "opened: the column moves on to check-in").toHaveAttribute("data-phase", "checkin", { timeout: 30_000 });
 
     const stamp = await roundOpenedAtSql(round.stageId, 1);
     expect(stamp, "the open stamped stage_round_opens").not.toBeNull();
@@ -821,7 +842,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     expect(await resultEventCountSql(boardB.fixtureId), "the sweep wrote the result twice").toBe(once);
   });
 
-  test("round 2 waits for the organiser: paired on Generate, silent until opened, then opened by the same control and played", async ({ page, browser }) => {
+  test("round 2 waits for the organiser: paired on Generate, silent until opened, then opened from the same column and played", async ({ page, browser }) => {
     test.setTimeout(budget(8));
     const stamp1 = await roundOpenedAtSql(round.stageId, 1);
     const round2 = () =>
@@ -850,13 +871,16 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
       expect(v!.n, `pairing round 2 made a meeting for ${f.id}`).toBe(0);
     }
 
+    // Round 1 is over (a resign and a flag were written as its results), so the column is in its playing phase and offers round 2's press
+    // beside it; opening it moves the panel on to round 2, whose check-in hero names it.
     await page.setViewportSize({ width: 1280, height: 900 });
-    await page.goto(round.fixturesTab);
-    const control = page.getByTestId("open-round").filter({ has: page.getByRole("heading", { name: fill("runsheet.round.heading", { round: 2 }) }) });
-    await expect(control).toHaveAttribute("data-state", "paired", { timeout: 30_000 });
-    await control.getByTestId("open-round-cta").click();
-    await page.getByTestId("open-round-confirm-confirm").click();
-    await expect(control.getByTestId("open-round-notice")).toBeVisible({ timeout: 20_000 });
+    await page.goto(round.arbiterPath);
+    const column = page.getByTestId("arbiter-round-column");
+    await expect(column, "round 1 played out: the column's playing phase").toHaveAttribute("data-phase", "playing", { timeout: 30_000 });
+    await openFromColumn(page, round, 2);
+    await expect(column.getByTestId("arbiter-checkin-hero").getByRole("heading", { name: fill("runsheet.round.heading", { round: 2 }) })).toBeVisible({
+      timeout: 30_000,
+    });
     const stamp2 = await roundOpenedAtSql(round.stageId, 2);
     expect(stamp2, "round 2 opened").not.toBeNull();
     expect(stamp2!.getTime(), "a NEW stamp, after round 1's").toBeGreaterThan(stamp1!.getTime());
@@ -918,7 +942,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
       old.set(b.fixtureId, m!.meeting_id);
     }
 
-    // The organiser unpairs the round from the run sheet.
+    // The organiser unpairs the round from the run sheet (the Fixtures tab keeps Unpair).
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto(r.fixturesTab);
     await page.getByTestId("stage-unpair").click();
@@ -959,15 +983,16 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     const reBoard1: RoundBoard = { fixtureId: board1.fixtureId, home: people.get(now1.home!)!, away: people.get(now1.away!)! };
     expect(await meetingsOf(board1.fixtureId), "premise — the old, ended meeting is still on file before the re-open").toHaveLength(1);
 
-    // The organiser re-opens round 1 from the same control: nobody is bound to its open any more, so it offers it again.
-    await page.goto(r.fixturesTab);
-    const control = page.getByTestId("open-round").filter({ has: page.getByRole("heading", { name: fill("runsheet.round.heading", { round: 1 }) }) });
-    await expect(control).toHaveAttribute("data-press", "reopen", { timeout: 30_000 });
+    // The organiser re-opens round 1 from the Arbiter Panel's check-in hero: nobody is bound to its open any more, so the hero offers it
+    // again - as "Invite again and restart check-in", the press that says what a reopen does - and its answer stays under the press.
+    await page.goto(r.arbiterPath);
+    const reopen = page.getByTestId("arbiter-round-column").getByTestId("arbiter-column-reinvite");
+    await expect(reopen).toHaveText(uiEn["arbiter.column.reopenCta"]!, { timeout: 30_000 });
     const stampBefore = await roundOpenedAtSql(r.stageId, 1);
     const mark = video.calls.length;
-    await control.getByTestId("open-round-cta").click();
-    await page.getByTestId("open-round-confirm-confirm").click();
-    await expect(control.getByTestId("open-round-notice")).toBeVisible({ timeout: 20_000 });
+    await reopen.click();
+    await page.getByTestId("arbiter-column-reinvite-dialog-confirm").click();
+    await expect(page.getByTestId("arbiter-column-reinvite-notice")).toBeVisible({ timeout: 20_000 });
     expect((await roundOpenedAtSql(r.stageId, 1))!.getTime(), "the re-open stamped a new window").toBeGreaterThan(stampBefore!.getTime());
     let gone = 0;
     for (const [fixtureId, meetingId] of old) {
