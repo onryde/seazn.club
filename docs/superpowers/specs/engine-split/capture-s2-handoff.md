@@ -33,6 +33,10 @@ until the first bump. Test the 426 path with a faked epoch, as the server's own 
 | **higher** | | **accepted** — a phone ahead of the server is a supported state ("we maintain 2-3 backward version support with release discipline") |
 | **lower** | | **refused 426, no grace window** |
 
+The server may TEMPORARILY lower one sport's floor by hand (`ENGINE_EPOCH_FLOOR_OVERRIDE`, an emergency lever the operators hold, default
+off): then a "lower" phone at or above that lowered floor is accepted, a phone below it still gets the 426, and its `required` is the
+lowered floor. The rule above otherwise stands: do not build on the lever, and expect it to be withdrawn once phones have updated.
+
 **The refusal.** HTTP `426`, body
 
 ```json
@@ -41,7 +45,8 @@ until the first bump. Test the 426 path with a faked epoch, as the server's own 
   "requestId": "<uuid>" }
 ```
 
-- `sport` is the fixture's sport key, `required` the server's epoch for it, `got` the epoch the request carried.
+- `sport` is the fixture's sport key, `required` the server's floor for it (its `foldEpochOf(sport)`, or the LOWERED floor while an
+  operator's `ENGINE_EPOCH_FLOOR_OVERRIDE` is on for that sport: the number to reach to be admitted), `got` the epoch the request carried.
 - `message` is English prose and **English only**, by the API's convention (the web pad's `components/v2/scorepad/refusal-copy.ts`
   maps the wire CODE to its own 4-locale copy and "never falls through to server prose"). Map `error.code`, never show `message`.
 - **Key on `error.code`, never on the status alone.** The 426 carries no `Upgrade` header (it is not a protocol upgrade, and
