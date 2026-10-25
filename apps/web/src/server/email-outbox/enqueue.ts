@@ -68,6 +68,17 @@ export class OutboxKindMismatchError extends Error {
   }
 }
 
+/** Raised by `enqueueEmailOnce` when its once-key is not a non-blank string. A blank key would be one shared "blank" key for the whole
+ *  kind (the table's CHECK only refuses the empty string, and does so as a 23514 that aborts the caller's transaction), silencing every
+ *  later email of the kind. Names the kind and ref type; never the key, the address or the body. */
+export class OutboxDedupeKeyError extends Error {
+  readonly code = "EMAIL_OUTBOX_BAD_DEDUPE_KEY";
+  constructor(kind: OutboxKind, refType: string) {
+    super(`email outbox: a ${kind} email (${refType}) was given a once-key that is empty or blank; refusing to queue the email`);
+    this.name = "OutboxDedupeKeyError";
+  }
+}
+
 /** Raised by `enqueueEmail` when its insert wrote no row. The writer's `on conflict do nothing` has no target (see the header),
  *  so a primary-key or provider-id collision is skipped as quietly as a once-key; without this a caller would be handed the id
  *  of a row that was never written. Names the kind and ref type; never the address or the body. */
@@ -128,7 +139,8 @@ async function insertQueued(db: Tx | typeof sql, m: OutboxMessage, dedupeKey: st
  */
 export async function enqueueEmail(db: Tx | typeof sql, m: OutboxMessage): Promise<string> {
   const { id, written } = await insertQueued(db, m, null);
-  if (written === 0) throw new OutboxInsertSkippedError(m.kind, m.refType);
+  // `!(written >= 1)` and not `written === 0`: a count that is not a number (a driver that returned none) is no evidence of a row.
+  if (!(written >= 1)) throw new OutboxInsertSkippedError(m.kind, m.refType);
   return id;
 }
 
@@ -143,11 +155,15 @@ export async function enqueueEmail(db: Tx | typeof sql, m: OutboxMessage): Promi
  * A key is freed when `email_outbox_cancel` ends its row, so a voided email can be queued again.
  *
  * `null` also covers a primary-key or provider-id collision, which the target-less clause cannot tell apart; the id is a fresh
- * UUID and `provider_id` is null at insert, so neither happens in practice.
+ * UUID and `provider_id` is null at insert, so neither happens in practice. Refuses an empty or blank key by name
+ * (`OutboxDedupeKeyError`), before the statement.
  */
 export async function enqueueEmailOnce(db: Tx | typeof sql, m: OutboxMessage & { dedupeKey: string }): Promise<string | null> {
+  // Before any statement, like every refusal here. `typeof` as well as `trim`: a caller that cast around the type with `undefined`
+  // would otherwise reach the driver, which throws its own (unnamed) error for an undefined parameter.
+  if (typeof m.dedupeKey !== "string" || m.dedupeKey.trim() === "") throw new OutboxDedupeKeyError(m.kind, m.refType);
   const { id, written } = await insertQueued(db, m, m.dedupeKey);
-  return written === 0 ? null : id;
+  return written >= 1 ? id : null;
 }
 
 /**

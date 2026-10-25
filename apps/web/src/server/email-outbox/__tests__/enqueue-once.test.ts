@@ -20,6 +20,7 @@ import { sql, withTenant } from "@/lib/db";
 import { stubOutboxEnv } from "@/server/usecases/__tests__/_invite-mail";
 import { OUTBOX_KIND_FACTS, type OutboxKind } from "../constants";
 import {
+  OutboxDedupeKeyError,
   OutboxInsertSkippedError,
   OutboxKindMismatchError,
   enqueueEmail,
@@ -58,6 +59,20 @@ const SPEC_LEGEND: Record<string, [to: "account" | "literal", transactional: boo
 /** A `db` that records the statements it is handed and answers like postgres.js does for an insert: a row list carrying the
  *  count of rows written. `enqueueEmail` uses it as a tagged template and as `db.json`. */
 function stubDb(count = 1) {
+  const calls: unknown[][] = [];
+  const db = Object.assign(
+    async (...args: unknown[]) => {
+      calls.push(args);
+      return Object.assign([], { count });
+    },
+    { json: (v: unknown) => v },
+  );
+  return { db: db as never, calls };
+}
+
+/** `stubDb` with an arbitrary `count`, including the values `stubDb`'s default parameter would swallow (`undefined`) and the ones a
+ *  broken driver could hand back (`NaN`, a negative). */
+function stubDbRaw(count: unknown) {
   const calls: unknown[][] = [];
   const db = Object.assign(
     async (...args: unknown[]) => {
@@ -170,6 +185,61 @@ describe("the writer's insert (no database)", () => {
     await expect(enqueueEmailOnce(stubDb(1).db, { ...msg(), dedupeKey: "k-1" })).resolves.toMatch(/^[0-9a-f-]{36}$/);
   });
 
+  // T2 review m3: "wrote nothing" is `!(written >= 1)`, not `written === 0`. A count that is not a number (a driver that returned no
+  // `count`, `NaN`) is not evidence of a row, and a skipped insert reported as written hands the caller the id of a row that
+  // does not exist.
+  it("a count that is not at least 1 is a skipped insert, whatever it is (0, undefined, NaN, negative)", async () => {
+    let checked = 0;
+    for (const count of [0, undefined, Number.NaN, -1]) {
+      const err = (await enqueueEmail(stubDbRaw(count).db, msg()).catch((e: unknown) => e)) as Error;
+      expect(err, `enqueueEmail, count ${String(count)}`).toBeInstanceOf(OutboxInsertSkippedError);
+      await expect(enqueueEmailOnce(stubDbRaw(count).db, { ...msg(), dedupeKey: "k-m3" }), `enqueueEmailOnce, count ${String(count)}`).resolves.toBeNull();
+      checked++;
+    }
+    expect(checked, "four unusable counts, two writers each").toBe(4);
+    // The positive pair: one written row is an id, from both writers.
+    await expect(enqueueEmail(stubDbRaw(1).db, msg())).resolves.toMatch(/^[0-9a-f-]{36}$/);
+    await expect(enqueueEmailOnce(stubDbRaw(1).db, { ...msg(), dedupeKey: "k-m3" })).resolves.toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  // T2 review m2: a blank once-key is refused by name BEFORE the statement. The table's CHECK (`dedupe_key <> ''`) already refuses an
+  // empty one, but as a 23514 that aborts the caller's transaction, and it lets a whitespace-only key through to occupy the
+  // kind's key space as a single shared "blank" key that would silence every later email of the kind.
+  it("an empty or whitespace-only once-key is refused by name before any statement", async () => {
+    let checked = 0;
+    for (const dedupeKey of ["", " ", "   ", "\t", "\n", " \t\n "]) {
+      const { db, calls } = stubDb();
+      const err = (await enqueueEmailOnce(db, { ...msg(), dedupeKey }).catch((e: unknown) => e)) as OutboxDedupeKeyError;
+      expect(err, JSON.stringify(dedupeKey)).toBeInstanceOf(OutboxDedupeKeyError);
+      expect(err.name).toBe("OutboxDedupeKeyError");
+      expect(err.code).toBe("EMAIL_OUTBOX_BAD_DEDUPE_KEY");
+      expect(err.message).toContain("registration_confirmation");
+      expect(err.message).toContain("registration_group");
+      for (const secret of ["someone-private@x.test", "SECRET-TOKEN"]) expect(err.message, secret).not.toContain(secret);
+      expect(calls, `${JSON.stringify(dedupeKey)}: a refusal issues no statement`).toHaveLength(0);
+      checked++;
+    }
+    expect(checked, "six blank keys").toBe(6);
+  });
+
+  it("a key that merely contains whitespace is a key (positive pair), and a refusal is not sticky (sequence)", async () => {
+    const { db, calls } = stubDb();
+    await expect(enqueueEmailOnce(db, { ...msg(), dedupeKey: " " })).rejects.toBeInstanceOf(OutboxDedupeKeyError);
+    expect(calls).toHaveLength(0);
+    await expect(enqueueEmailOnce(db, { ...msg(), dedupeKey: "reg 1:submit" })).resolves.toMatch(/^[0-9a-f-]{36}$/);
+    await expect(enqueueEmailOnce(db, { ...msg(), dedupeKey: " k " })).resolves.toMatch(/^[0-9a-f-]{36}$/);
+    expect(calls, "the two valid keys issued one statement each").toHaveLength(2);
+  });
+
+  it("a key that is not a string at all (a caller that cast around the type) is refused by name too, not left to the driver", async () => {
+    for (const dedupeKey of [undefined, null, 42]) {
+      const { db, calls } = stubDb();
+      const err = await enqueueEmailOnce(db, { ...msg(), dedupeKey: dedupeKey as never }).catch((e: unknown) => e);
+      expect(err, String(dedupeKey)).toBeInstanceOf(OutboxDedupeKeyError);
+      expect(calls).toHaveLength(0);
+    }
+  });
+
   it("both writers issue exactly one statement, and a refused expiry or key issues none (the guards run before the statement)", async () => {
     const once = stubDb();
     await enqueueEmailOnce(once.db, { ...msg(), dedupeKey: "k-2" });
@@ -276,6 +346,20 @@ describe.skipIf(!HAS_DB)("enqueueEmail / enqueueEmailOnce against the database",
         attempts: 0,
       },
     ]);
+  });
+
+  it("a blank once-key refused inside a transaction does not abort it (the table CHECK would): the next statement on the same handle works", async () => {
+    // Without the writer's own refusal the statement runs and the CHECK `dedupe_key <> ''` raises 23514, which leaves the caller's
+    // transaction aborted ("current transaction is aborted, commands ignored") for everything after it.
+    const ref = newRef();
+    const outcome = await sql.begin(async (tx) => {
+      const refused = await enqueueEmailOnce(tx, { ...row({ refId: ref }), dedupeKey: "" }).catch((e: unknown) => e);
+      const stillUsable = await tx`select 1 as ok`;
+      return { refused, ok: stillUsable[0]!.ok };
+    });
+    expect(outcome.refused).toBeInstanceOf(OutboxDedupeKeyError);
+    expect(outcome.ok, "the transaction is still usable").toBe(1);
+    expect(await byRef(ref), "nothing was written").toHaveLength(0);
   });
 
   it("enqueueEmail (no once-key) writes a null recipient_user_id and a null dedupe_key, and the user id when it is given", async () => {

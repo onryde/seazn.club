@@ -1,6 +1,7 @@
 // The email outbox's public surface. No logic here: callers import from "@/server/email-outbox".
 export * from "./constants";
 export {
+  OutboxDedupeKeyError,
   OutboxExpiryTooLongError,
   OutboxInsertSkippedError,
   OutboxKindMismatchError,
