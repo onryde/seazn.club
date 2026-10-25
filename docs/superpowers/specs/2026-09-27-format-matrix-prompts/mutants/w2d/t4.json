@@ -429,8 +429,8 @@
  {
   "id": "t4-residual-note-key-undefined",
   "file": "packages/engine/src/competition/tiebreakers.ts",
-  "find": "...(note === undefined ? {} : { note }) };",
-  "replace": "note };",
+  "find": "      ...(note === undefined ? {} : { note }),",
+  "replace": "      note,",
   "killers": [
    {
     "cwd": "packages/engine",

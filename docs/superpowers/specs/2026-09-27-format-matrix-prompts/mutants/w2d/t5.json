@@ -1,0 +1,308 @@
+[
+ {
+  "id": "t5-empty-table-branch-dropped",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "  const empty = ctx.countedFixtures === 0;",
+  "replace": "  const empty = false;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/lots-stored.test.ts"
+    ],
+    "name": "X-TB-6 an empty table"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/lots-stored.test.ts"
+    ],
+    "name": "X-TB-6 completeTableStage: a stage whose every fixture was voided"
+   }
+  ]
+ },
+ {
+  "id": "t5-empty-table-still-draws-lots",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "  const hasLots = !empty && ctx.cascade.includes(\"lots\");",
+  "replace": "  const hasLots = ctx.cascade.includes(\"lots\");",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/lots-stored.test.ts"
+    ],
+    "name": "X-TB-6 an empty table"
+   }
+  ]
+ },
+ {
+  "id": "t5-stale-level-flag-kept",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "    else delete row.level;",
+  "replace": "    else void row.level;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/lots-stored.test.ts"
+    ],
+    "name": "the first counted result ends the level table"
+   }
+  ]
+ },
+ {
+  "id": "t5-lookup-by-unsorted-ids",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "const stored = ctx.lotsDraws?.get(membersKey);",
+  "replace": "const stored = ctx.lotsDraws?.get(cls.map((row) => row.entrantId).join(\",\"));",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-properties.test.ts"
+    ],
+    "name": "lots reload stability"
+   }
+  ]
+ },
+ {
+  "id": "t5-stored-draw-ignored",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "const stored = ctx.lotsDraws?.get(membersKey);",
+  "replace": "const stored = undefined as StoredLotsDraw | undefined;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/lots-stored.test.ts"
+    ],
+    "name": "stored beats re-hash"
+   }
+  ]
+ },
+ {
+  "id": "t5-new-draw-not-returned",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "newLotsDraws.push({ membersKey, members: [...ids], drawnOrder: drawn, seed });",
+  "replace": "void seed;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/lots-stored.test.ts"
+    ],
+    "name": "X-TB-4 a residual class with no stored draw"
+   }
+  ]
+ },
+ {
+  "id": "t5-stored-date-dropped-from-trace",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "markResidual(cls, \"lots\", run, stored?.drawnAt);",
+  "replace": "markResidual(cls, \"lots\", run);",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/lots-stored.test.ts"
+    ],
+    "name": "stored beats re-hash"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreak-properties.test.ts"
+    ],
+    "name": "lots reload stability"
+   }
+  ]
+ },
+ {
+  "id": "t5-stored-order-guard-dropped",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "  if (membersKeyOf(stored.order) !== membersKey) {",
+  "replace": "  if (false) {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/lots-stored.test.ts"
+    ],
+    "name": "a stored draw that does not order exactly its members"
+   }
+  ]
+ },
+ {
+  "id": "t5-separator-guard-dropped",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "    if (id.includes(\",\")) {",
+  "replace": "    if (false) {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/lots-stored.test.ts"
+    ],
+    "name": "an entrant id holding the key separator"
+   }
+  ]
+ },
+ {
+  "id": "t5-members-key-unsorted",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "  return [...ids].sort().join(\",\");",
+  "replace": "  return [...ids].join(\",\");",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/lots-stored.test.ts"
+    ],
+    "name": "membersKeyOf is the sorted ids joined"
+   }
+  ]
+ },
+ {
+  "id": "t5-stage-rank-lock-never-emitted",
+  "file": "packages/engine/src/competition/stage.ts",
+  "find": "      if (drawn !== undefined) {",
+  "replace": "      if (false) {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/lots-stored.test.ts"
+    ],
+    "name": "completeTableStage's rank_lock carries"
+   }
+  ]
+ },
+ {
+  "id": "t5-stage-rank-lock-order-is-the-group",
+  "file": "packages/engine/src/competition/stage.ts",
+  "find": "order: [...drawn.order], drawnAt: drawn.drawnAt });",
+  "replace": "order: group, drawnAt: drawn.drawnAt });",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/lots-stored.test.ts"
+    ],
+    "name": "completeTableStage's rank_lock carries"
+   }
+  ]
+ },
+ {
+  "id": "t5-stage-rank-lock-date-invented",
+  "file": "packages/engine/src/competition/stage.ts",
+  "find": "order: [...drawn.order], drawnAt: drawn.drawnAt });",
+  "replace": "order: [...drawn.order], drawnAt: new Date(0).toISOString() });",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/lots-stored.test.ts"
+    ],
+    "name": "completeTableStage's rank_lock carries"
+   }
+  ]
+ },
+ {
+  "id": "t5-stage-ignores-stored-draws",
+  "file": "packages/engine/src/competition/stage.ts",
+  "find": "      ...(poolDraws === undefined ? {} : { lotsDraws: poolDraws }),",
+  "replace": "      ...{},",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/lots-stored.test.ts"
+    ],
+    "name": "completeTableStage's rank_lock carries"
+   }
+  ]
+ },
+ {
+  "id": "t5-stage-draws-not-per-pool",
+  "file": "packages/engine/src/competition/stage.ts",
+  "find": "    const poolDraws = stage.lotsDraws?.get(pool);",
+  "replace": "    const poolDraws = new Map([...(stage.lotsDraws?.values() ?? [])].flatMap((m) => [...m]));",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/lots-stored.test.ts"
+    ],
+    "name": "reads each pool's own stored draws"
+   }
+  ]
+ },
+ {
+  "id": "t5-stage-new-draws-not-returned",
+  "file": "packages/engine/src/competition/stage.ts",
+  "find": "    for (const draw of ranked.newLotsDraws) newLotsDraws.push({ pool, ...draw });",
+  "replace": "    void ranked.newLotsDraws;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/lots-stored.test.ts"
+    ],
+    "name": "completeTableStage's rank_lock carries"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/lots-stored.test.ts"
+    ],
+    "name": "reads each pool's own stored draws"
+   }
+  ]
+ },
+ {
+  "id": "t5-stage-count-ignores-awards",
+  "file": "packages/engine/src/competition/stage.ts",
+  "find": "    const countedFixtures = results.length + awardDeltas.length + openings.length;",
+  "replace": "    const countedFixtures = results.length + openings.length;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/lots-stored.test.ts"
+    ],
+    "name": "counts a sit-out award and a carried opening"
+   }
+  ]
+ },
+ {
+  "id": "t5-stage-count-ignores-openings",
+  "file": "packages/engine/src/competition/stage.ts",
+  "find": "    const countedFixtures = results.length + awardDeltas.length + openings.length;",
+  "replace": "    const countedFixtures = results.length + awardDeltas.length;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/lots-stored.test.ts"
+    ],
+    "name": "counts a sit-out award and a carried opening"
+   }
+  ]
+ },
+ {
+  "id": "t5-stage-count-not-passed",
+  "file": "packages/engine/src/competition/stage.ts",
+  "find": "      countedFixtures,\n",
+  "replace": "      countedFixtures: undefined,\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/lots-stored.test.ts"
+    ],
+    "name": "X-TB-6 completeTableStage: a stage whose every fixture was voided"
+   }
+  ]
+ }
+]
