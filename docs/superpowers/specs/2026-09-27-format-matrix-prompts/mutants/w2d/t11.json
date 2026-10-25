@@ -332,7 +332,7 @@
  {
   "id": "t11-mtb-no-game",
   "file": "packages/engine/src/sports/nested/kernel.ts",
-  "find": "(set.mtb === true ? (set[s] > set[opponent(s)] ? 1 : 0) : set[s])",
+  "find": "(set.mtb === true ? mtbGameOf(set, s) : set[s])",
   "replace": "(set.mtb === true ? 0 : set[s])",
   "killers": [
    {
@@ -347,8 +347,8 @@
  {
   "id": "t11-mtb-loser-gets-game",
   "file": "packages/engine/src/sports/nested/kernel.ts",
-  "find": "(set.mtb === true ? (set[s] > set[opponent(s)] ? 1 : 0) : set[s])",
-  "replace": "(set.mtb === true ? (set[s] > set[opponent(s)] ? 1 : 1) : set[s])",
+  "find": "((set.home > set.away ? \"home\" : \"away\") === s ? 1 : 0)",
+  "replace": "((set.home > set.away ? \"home\" : \"away\") === s ? 1 : 1)",
   "killers": [
    {
     "cwd": "packages/engine",
@@ -362,8 +362,8 @@
  {
   "id": "t11-mtb-home-biased",
   "file": "packages/engine/src/sports/nested/kernel.ts",
-  "find": "(set.mtb === true ? (set[s] > set[opponent(s)] ? 1 : 0) : set[s])",
-  "replace": "(set.mtb === true ? (s === \"home\" ? 1 : 0) : set[s])",
+  "find": "((set.home > set.away ? \"home\" : \"away\") === s ? 1 : 0)",
+  "replace": "(s === \"home\" ? 1 : 0)",
   "killers": [
    {
     "cwd": "packages/engine",
@@ -401,6 +401,21 @@
      "src/testkit/simulation.test.ts"
     ],
     "name": "refuses a round-robin default that ranks on the Swiss ledger"
+   }
+  ]
+ },
+ {
+  "id": "t11-mtb-level-to-home",
+  "file": "packages/engine/src/sports/nested/kernel.ts",
+  "find": "((set.home > set.away ? \"home\" : \"away\") === s ? 1 : 0)",
+  "replace": "((set.home >= set.away ? \"home\" : \"away\") === s ? 1 : 0)",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tables-rulebook.test.ts"
+    ],
+    "name": "TN-TB-2 a level match tie-break replayed from a tolerant read"
    }
   ]
  }

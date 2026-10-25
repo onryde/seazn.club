@@ -936,6 +936,30 @@ const BOOK: Readonly<Record<string, Book>> = {
           expect([home.entrantId, away.entrantId]).toEqual([H, A]);
         },
       },
+      {
+        // A read path folds tolerant (core/events.ts: "every READ path passes nothing"), so a stored summary no strict write
+        // admits — a level 10-10 — still replays, and the kernel banks it to away (applySetSummary: the higher score, else
+        // away). The rule ties the game to the set, so the game goes where the set went, never to neither side.
+        title: "TN-TB-2 a level match tie-break replayed from a tolerant read: its one game goes to the side its set went to (ATP 4.02, RB2A-11)",
+        run: (module) => {
+          const cfg = cfgOf(module, "doubles-noad-mtb10");
+          const lineups = defaultLineupPair(module.positions);
+          const [H, A] = [lineups.home.entrantId, lineups.away.entrantId];
+          const summary = (home: number, away: number) => ({ type: "tennis.set_summary", payload: { home, away } });
+          const events = [{ type: "core.start", payload: {} }, summary(6, 4), summary(4, 6), summary(10, 10)].map((e, i) => makeEnvelope(i, e));
+          // premise: a strict write refuses the level summary; the tolerant read admits it.
+          expect(() => foldMatch(module, cfg, lineups, events, { strictFromSeq: 0 })).toThrow(/not a reachable final score/);
+          const state = foldMatch(module, cfg, lineups, events);
+          const outcome = module.outcome(state);
+          expect(outcome).toMatchObject({ kind: "win", winner: A });
+          if (outcome === null) throw new Error("the match decided nothing");
+          const [home, away] = module.standingsDelta(outcome, cfg, { kind: "league" }, state);
+          // Sets 1-2 (the kernel's bank); games 6 + 4 = 10 against 4 + 6 + 1 = 11.
+          expect([home.metrics["sets_won"], home.metrics["sets_lost"], home.metrics["games_won"], home.metrics["games_lost"]]).toEqual([1, 2, 10, 11]);
+          expect([away.metrics["sets_won"], away.metrics["sets_lost"], away.metrics["games_won"], away.metrics["games_lost"]]).toEqual([2, 1, 11, 10]);
+          expect([home.entrantId, away.entrantId]).toEqual([H, A]);
+        },
+      },
     ],
   },
 

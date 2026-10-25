@@ -2070,11 +2070,12 @@ export function makeNestedModule(
   const sideMetrics = (state: NestedState, side: Side): Record<string, number> => {
     const opp = opponent(side);
     // W2d (SPEC §5.10, TN-TB-2; RB2A-11, ATP Rulebook 4.02): on the TABLE a won match tie-break counts as one set
-    // and one game to its winner and none to the loser — its points are not games. (Player stats' `nestedGamesOf`
-    // keeps its own count: it is not the table's game %.)
+    // and one game to its winner and none to the loser — its points are not games. Its winner is the side the set was
+    // banked to (`applySetSummary`: the higher score, else away — a level one replays only from a tolerant read), so
+    // the game follows `sets_won`. (Player stats' `nestedGamesOf` keeps its own count: it is not the table's game %.)
+    const mtbGameOf = (set: ClosedSet, s: Side): number => ((set.home > set.away ? "home" : "away") === s ? 1 : 0);
     const gamesOf = (s: Side): number =>
-      state.sets.reduce((sum, set) => sum + (set.mtb === true ? (set[s] > set[opponent(s)] ? 1 : 0) : set[s]), 0) +
-      state.games[s];
+      state.sets.reduce((sum, set) => sum + (set.mtb === true ? mtbGameOf(set, s) : set[s]), 0) + state.games[s];
     return {
       sets_won: state.setsWon[side],
       sets_lost: state.setsWon[opp],
