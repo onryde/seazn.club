@@ -25,7 +25,9 @@ export type SidePlayer = {
   personId: string | null;
   userId: string | null;
   lichess: { id: string; username: string } | null;
-  recipients: { email: string; locale: string | null }[];
+  /** The linked accounts that can be mailed for this seat, one per member with a live address: `userId` is the account the invite is FOR
+   *  (the outbox row carries it, and the address is resolved from it when the mail is sent - email-outbox/recipient.ts). */
+  recipients: { email: string; locale: string | null; userId: string }[];
 };
 
 /** The revived (Date-typed) shape of a `fixture_external_play` row, as read
@@ -415,8 +417,10 @@ async function loadSide(side: Side, entrantId: string): Promise<SidePlayer> {
     // so a Resend or the next Open would queue, stamp and send an invite to nobody; with the filter the seat takes the existing "no
     // address" path (its stamp is released). Filtered HERE and nowhere else: `personId`, `userId` and `lichess` still resolve for the seat.
     recipients: rows
-      .filter((r): r is SideRow & { email: string } => r.email !== null && r.deletedAt === null)
-      .map((r) => ({ email: r.email, locale: r.locale })),
+      // `u.email` comes from the join on `p.user_id`, so a row with an address always has a `userId`. The test narrows the type and, were
+      // it ever false, drops the row rather than queue an invite for no account.
+      .filter((r): r is SideRow & { email: string; userId: string } => r.email !== null && r.userId !== null && r.deletedAt === null)
+      .map((r) => ({ email: r.email, locale: r.locale, userId: r.userId })),
   };
 }
 

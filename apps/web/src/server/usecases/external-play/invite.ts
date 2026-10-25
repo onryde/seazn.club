@@ -224,6 +224,9 @@ export async function queueFixtureInvite(
         refId: chessSeatRef(f.fixtureId, seat.colour),
         orgId: f.orgId,
         to: r.email,
+        // The invite is for the player's ACCOUNT: the address is read from it when the mail is sent, so an address change between
+        // now and the send is followed while no request can have left (email-outbox/recipient.ts), and the replace rule matches by it.
+        recipientUserId: r.userId,
         ...content,
         // An invite starts a clock against the player: the marketing suppression list must not swallow it.
         transactional: true,
