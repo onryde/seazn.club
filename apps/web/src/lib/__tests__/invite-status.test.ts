@@ -217,6 +217,103 @@ describe("seatInviteWords", () => {
   });
 });
 
+// G-2 (phase 3 wave 1, T4): a chess invite is now an ACCOUNT's mail. Its row carries `recipient_user_id`, and the address on the row
+// is the one the account had when the row was queued (or was rewritten to at send, when the key was clean). The seat's current
+// mailbox is whatever the account has NOW, so matching by address alone reads a mail that went out (or is still on its way) to
+// the old address as "Not delivered". A seat matches its rows by the player's user id first, and falls back to the address only
+// when the row or the seat has no user id.
+describe("seatInviteWords: an account's mail follows the account, not the address (G-2)", () => {
+  const U1 = "11111111-1111-4111-8111-111111111111";
+  const U2 = "22222222-2222-4222-8222-222222222222";
+  const old = (status: OutboxStatus, userId: string | null = U1) => ({ recipient: "old@x", status, recipientUserId: userId });
+
+  it("a mail sent to the OLD address is the seat's word after the player changed address (D2)", () => {
+    // Every status that carries an outcome, so the test cannot pass on a single lucky word. Expected words come from the
+    // existing status -> word map; the point of this test is WHICH row answers, not what the words are.
+    let checked = 0;
+    for (const status of OUTBOX_STATUSES) {
+      const word = inviteWordOf(status);
+      if (word === null) continue; // `replaced` is never an answer
+      const got = seatInviteWords({ rows: [old(status)], mailboxes: [{ email: "new@x", userId: U1 }], stamped: true });
+      expect(got, status).toEqual([word]);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: every status but `replaced`").toBe(OUTBOX_STATUSES.length - 1);
+  });
+
+  it("a row still queued at the old address reads as the queued word, not Not delivered", () => {
+    const got = seatInviteWords({ rows: [old("queued")], mailboxes: [{ email: "new@x", userId: U1 }], stamped: true });
+    expect(got).toEqual([inviteWordOf("queued")]);
+    expect(got, "the two words differ, so the test can tell a match from the stamp's fallback").not.toEqual(["not_delivered"]);
+  });
+
+  it("the same two rows without the user id on either side read as before: the address is the key (the mutant's witness)", () => {
+    // The old behaviour, kept for a row or a seat that has no user id.
+    expect(seatInviteWords({ rows: [old("sent", null)], mailboxes: [{ email: "new@x", userId: U1 }], stamped: true })).toEqual(["not_delivered"]);
+    expect(seatInviteWords({ rows: [old("sent")], mailboxes: ["new@x"], stamped: true })).toEqual(["not_delivered"]);
+  });
+
+  it("a row with no user id still matches its seat by address, folded (a literal-kind or phase-1 row)", () => {
+    const row = { recipient: "  A@X ", status: "delivered" as const, recipientUserId: null };
+    expect(seatInviteWords({ rows: [row], mailboxes: [{ email: "a@x", userId: U1 }], stamped: false })).toEqual(["delivered"]);
+    // `recipientUserId` left out entirely is the same row (a caller that predates the column).
+    expect(seatInviteWords({ rows: [{ recipient: "a@x", status: "delivered" }], mailboxes: [{ email: "a@x", userId: U1 }], stamped: false })).toEqual(["delivered"]);
+  });
+
+  it("a seat with no user id matches a row that has one by address (the seat is the side without an account)", () => {
+    const row = { recipient: "a@x", status: "sent" as const, recipientUserId: U1 };
+    expect(seatInviteWords({ rows: [row], mailboxes: ["A@x"], stamped: false })).toEqual(["sent"]);
+    expect(seatInviteWords({ rows: [row], mailboxes: [{ email: "A@x", userId: null }], stamped: false })).toEqual(["sent"]);
+  });
+
+  it("two DIFFERENT accounts never share a row, even at one address: the previous player's mail is not this seat's word", () => {
+    // Account U1 left the seat; U2 now sits on it and has since taken the address U1 once had. Both ids are known, they differ.
+    const row = { recipient: "shared@x", status: "delivered" as const, recipientUserId: U1 };
+    expect(seatInviteWords({ rows: [row], mailboxes: [{ email: "shared@x", userId: U2 }], stamped: false })).toEqual(["not_invited"]);
+    expect(seatInviteWords({ rows: [row], mailboxes: [{ email: "shared@x", userId: U2 }], stamped: true })).toEqual(["not_delivered"]);
+  });
+
+  it("a user-id match wins over an address match: the account's row answers, not a stranger's row at its new address", () => {
+    // U1 changed address to new@x. A row for U1 sits at old@x (sent); a stale row for ANOTHER account sits at new@x (bounced).
+    const rows = [
+      { recipient: "new@x", status: "bounced" as const, recipientUserId: U2 },
+      old("sent"),
+    ];
+    expect(seatInviteWords({ rows, mailboxes: [{ email: "new@x", userId: U1 }], stamped: true })).toEqual(["sent"]);
+    expect(seatInviteWords({ rows: [...rows].reverse(), mailboxes: [{ email: "new@x", userId: U1 }], stamped: true })).toEqual(["sent"]);
+  });
+
+  it("two accounts on one seat: one word each, in mailbox order, each matched by its own id", () => {
+    const rows = [
+      { recipient: "a-old@x", status: "bounced" as const, recipientUserId: U1 },
+      { recipient: "b@x", status: "sent" as const, recipientUserId: U2 },
+    ];
+    const seat = (order: "ab" | "ba") => {
+      const a = { email: "a-new@x", userId: U1 };
+      const b = { email: "b@x", userId: U2 };
+      return order === "ab" ? [a, b] : [b, a];
+    };
+    expect(seatInviteWords({ rows, mailboxes: seat("ab"), stamped: true })).toEqual(["bounced", "sent"]);
+    expect(seatInviteWords({ rows, mailboxes: seat("ba"), stamped: true })).toEqual(["sent", "bounced"]);
+  });
+
+  it("two live rows for one account: the later row in `rows` answers (callers pass newest last), whatever the addresses", () => {
+    const first = { recipient: "old@x", status: "delivered" as const, recipientUserId: U1 };
+    const second = { recipient: "mid@x", status: "bounced" as const, recipientUserId: U1 };
+    const mailboxes = [{ email: "new@x", userId: U1 }];
+    expect(seatInviteWords({ rows: [first, second], mailboxes, stamped: true })).toEqual(["bounced"]);
+    expect(seatInviteWords({ rows: [second, first], mailboxes, stamped: true })).toEqual(["delivered"]);
+  });
+
+  it("a replaced row is dropped on the id path too; the empty case still falls to the stamp", () => {
+    const mailboxes = [{ email: "new@x", userId: U1 }];
+    expect(seatInviteWords({ rows: [old("replaced")], mailboxes, stamped: true })).toEqual(["not_delivered"]);
+    expect(seatInviteWords({ rows: [old("replaced")], mailboxes, stamped: false })).toEqual(["not_invited"]);
+    expect(seatInviteWords({ rows: [], mailboxes, stamped: false })).toEqual(["not_invited"]);
+    expect(seatInviteWords({ rows: [old("replaced"), old("sent")], mailboxes, stamped: true })).toEqual(["sent"]);
+  });
+});
+
 describe("INVITE_WORD_KEYS", () => {
   it('"Not invited" is the run sheet\'s existing key, and there is no second copy of it', () => {
     expect(INVITE_WORD_KEYS.not_invited).toBe("runsheet.round.notInvited");

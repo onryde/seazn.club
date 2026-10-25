@@ -545,7 +545,9 @@ async function withSeats(
       const at = side.personId === null ? null : (checkedInAt.get(row.fixtureId)?.get(side.personId) ?? null);
       let invites: SeatInviteWord[];
       try {
-        invites = seatInviteWords({ rows, mailboxes: side.recipients.map((x) => x.email), stamped });
+        // The seat's mailboxes WITH their accounts: a row is matched to the player by the account first (an invite is an account's mail
+        // and its row keeps the address it was queued with), by the address only when either side has no account (invite-status.ts).
+        invites = seatInviteWords({ rows, mailboxes: side.recipients, stamped });
       } catch {
         // One row the panel has no word for (a status outside the outbox's declared set) must not fail the whole panel. The line
         // names the board, the seat, the ref and the statuses on file: never an address.

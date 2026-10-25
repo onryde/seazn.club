@@ -62,6 +62,8 @@ describe.skipIf(!HAS_DB)("latestEmailStatus and purgeOldEmails (V470 email_outbo
     ref: string;
     org?: string | null;
     to?: string;
+    /** `recipient_user_id`. Written under `session_replication_role = replica` (see `history`), so it need not name a real user. */
+    userId?: string | null;
     status?: OutboxStatus;
     createdAt: Date;
     statusAt?: Date;
@@ -73,10 +75,10 @@ describe.skipIf(!HAS_DB)("latestEmailStatus and purgeOldEmails (V470 email_outbo
     const status = s.status ?? "queued";
     await x`
       insert into email_outbox
-        (id, kind, ref_type, ref_id, org_id, recipient, subject, transactional, status, lease_until, expires_at, created_at, status_at)
+        (id, kind, ref_type, ref_id, org_id, recipient, recipient_user_id, subject, transactional, status, lease_until, expires_at, created_at, status_at)
       values
         (${id}, ${s.kind ?? "chess_invite"}, ${s.refType ?? REF_TYPE}, ${s.ref}, ${s.org === undefined ? orgA : s.org},
-         ${s.to ?? `${randomUUID()}@x.test`}, 'subject', true, ${status},
+         ${s.to ?? `${randomUUID()}@x.test`}, ${s.userId ?? null}, 'subject', true, ${status},
          ${status === "sending" ? new Date(NOW + 5 * MIN) : null}, ${new Date(NOW + 60 * MIN)},
          ${s.createdAt}, ${s.statusAt ?? s.createdAt})`;
     return id;
@@ -123,7 +125,39 @@ describe.skipIf(!HAS_DB)("latestEmailStatus and purgeOldEmails (V470 email_outbo
       // One row: three spellings of one recipient are one recipient. Its status is the newest NON-replaced row's (the sent one,
       // although a replaced row is newer on the clock), and `at` is that row's `status_at`, the recipient is as that row stored it.
       expect(await latest(orgA, ref)).toEqual([
-        { refId: ref, recipient: "ANN@x.test", kind: "chess_invite", status: "sent", at: minutesAgo(29) },
+        { refId: ref, recipient: "ANN@x.test", recipientUserId: null, kind: "chess_invite", status: "sent", at: minutesAgo(29) },
+      ]);
+    });
+
+    // G-2 (phase 3 wave 1, T4): the arbiter matches a seat's rows to the player by the ACCOUNT first, so the read hands it the row's
+    // `recipient_user_id`. A row with no account (a literal-address kind, or a phase-1 invite) hands back null, not undefined.
+    it("returns each row's recipient_user_id (null when the row has none), beside the address it was queued with", async () => {
+      const ref = newRef();
+      const account = randomUUID();
+      await history([
+        { ref, to: "moved-from@x.test", userId: account, status: "delivered", createdAt: minutesAgo(30), statusAt: minutesAgo(29) },
+        { ref, to: "phase1@x.test", status: "sent", createdAt: minutesAgo(20), statusAt: minutesAgo(19) },
+      ]);
+      const rows = await latest(orgA, ref);
+      expect(rows.map((r) => [r.recipient, r.recipientUserId]).sort()).toEqual([
+        ["moved-from@x.test", account],
+        ["phase1@x.test", null],
+      ]);
+      expect(rows.length, "anti-vacuity: both rows came back").toBe(2);
+    });
+
+    it("an account's rows that differ only in address are two rows to the fold (the fold is by address; the seat matches them by account)", async () => {
+      // The reader's contract: it does not collapse an account's rows. The seat-level match (lib/invite-status.ts) picks the newest.
+      const ref = newRef();
+      const account = randomUUID();
+      await history([
+        { ref, to: "first@x.test", userId: account, status: "delivered", createdAt: minutesAgo(30), statusAt: minutesAgo(29) },
+        { ref, to: "second@x.test", userId: account, status: "queued", createdAt: minutesAgo(10), statusAt: minutesAgo(9) },
+      ]);
+      const rows = await latest(orgA, ref);
+      expect(rows.map((r) => [r.recipient, r.recipientUserId, r.status]).sort()).toEqual([
+        ["first@x.test", account, "delivered"],
+        ["second@x.test", account, "queued"],
       ]);
     });
 
@@ -153,7 +187,7 @@ describe.skipIf(!HAS_DB)("latestEmailStatus and purgeOldEmails (V470 email_outbo
         await history([{ ref, to: "solo@x.test", status, createdAt: minutesAgo(20), statusAt: minutesAgo(19) }]);
         const rows = await latest(orgA, ref);
         if (status === "replaced") expect(rows, "replaced is never an answer").toEqual([]);
-        else expect(rows, status).toEqual([{ refId: ref, recipient: "solo@x.test", kind: "chess_invite", status, at: minutesAgo(19) }]);
+        else expect(rows, status).toEqual([{ refId: ref, recipient: "solo@x.test", recipientUserId: null, kind: "chess_invite", status, at: minutesAgo(19) }]);
         checked += 1;
       }
       expect(checked, "anti-vacuity: every status in the registry was judged").toBe(OUTBOX_STATUSES.length);

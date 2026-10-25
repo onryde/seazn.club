@@ -95,40 +95,62 @@ export function inviteWordOf(status: OutboxStatus): InviteWord | null {
  *  or padding (pre-flight C1). Both sides go through this and nothing else. */
 const foldMailbox = (address: string): string => address.trim().toLowerCase();
 
+/** A mailbox of a seat: the address it has NOW, and the account that owns it when the loader knows one (`SidePlayer.recipients`). */
+export type SeatMailbox = { email: string; userId?: string | null };
+
+/**
+ * Does this row belong to this mailbox of the seat? THE rule, in one place (G-2, phase 3 wave 1).
+ *
+ * A chess invite is an account's mail: its row carries `recipientUserId`, and the address on it is the one the account had when the
+ * row was queued (it follows the account to a new address only while the send is key-clean, recipient.ts, and keeps the old one
+ * otherwise, D2). The seat's mailbox is the address the account has NOW. So:
+ *  - both sides name an account: they match exactly when it is the SAME account, whatever the addresses say. A changed address still
+ *    finds its mail, and two different accounts never share a row, even if one has since taken the other's old address;
+ *  - either side names no account (a phase-1 invite queued before the column, a seat read without ids): the address decides, folded.
+ */
+function rowBelongsToMailbox(row: { recipient: string; recipientUserId?: string | null }, mailbox: SeatMailbox): boolean {
+  if (row.recipientUserId != null && mailbox.userId != null) return row.recipientUserId === mailbox.userId;
+  return foldMailbox(row.recipient) === foldMailbox(mailbox.email);
+}
+
 /**
  * The words one seat shows (spec 6.2): one per current mailbox that has mail, in mailbox order.
  *
  *  - Only the seat's CURRENT mailboxes count. A board re-paired after an Unpair keeps its fixture-and-colour ref, so the
- *    previous player's rows are still there and must not read as the new player's.
+ *    previous player's rows are still there and must not read as the new player's. A row is matched to a mailbox by the
+ *    player's ACCOUNT first (`rowBelongsToMailbox`), and by the folded address when either has no account.
  *  - A `replaced` row is dropped (it has no word); a live row for the same recipient still answers.
  *  - `rows` is the newest row per recipient, as `latestEmailStatus` returns it. Callers pass RAW addresses.
  *  - If two live rows still fold to one mailbox, the LATER one in `rows` answers, so a caller orders its rows oldest
  *    first (newest last). It can happen: that query de-duplicates on `lower(recipient)` and does not trim, so
- *    `" A@x "` and `"a@x"` are two rows to SQL and one mailbox here.
+ *    `" A@x "` and `"a@x"` are two rows to SQL and one mailbox here; and an account that changed address has a row per address.
  *  - A mailbox with no row of its own gets no word while a sibling mailbox has one: the seat shows only the mail that
  *    exists (spec 6.2 item 3). "Not delivered" and "Not invited" speak for a seat with NO mail left (items 4 and 5).
  *  - No mail left for the seat: "Not delivered" if the seat is stamped (a held stamp with no mail is the same as every row
  *    having ended badly, which is what `seatOutcome([])` says), otherwise "Not invited".
+ *
+ * `mailboxes` are bare addresses (a caller with no accounts to hand) or `SeatMailbox`es.
  */
 export function seatInviteWords(seat: {
-  rows: readonly { recipient: string; status: OutboxStatus }[];
-  mailboxes: readonly string[];
+  rows: readonly { recipient: string; status: OutboxStatus; recipientUserId?: string | null }[];
+  mailboxes: readonly (string | SeatMailbox)[];
   stamped: boolean;
 }): SeatInviteWord[] {
-  const wordByMailbox = new Map<string, InviteWord>();
-  for (const row of seat.rows) {
-    const word = inviteWordOf(row.status);
-    if (word === null) continue; // a `replaced` row is never an answer
-    wordByMailbox.set(foldMailbox(row.recipient), word);
-  }
-
+  // Every row is given its word up front, matched or not: a status outside the outbox's declared set throws here, as it always has,
+  // and the loader (arbiter.ts) turns that into "no invite words for this seat" rather than a failed panel.
+  const answers = seat.rows.map((row) => ({ row, word: inviteWordOf(row.status) }));
   const words: SeatInviteWord[] = [];
   const counted = new Set<string>();
-  for (const mailbox of seat.mailboxes) {
-    const key = foldMailbox(mailbox);
+  for (const entry of seat.mailboxes) {
+    const mailbox: SeatMailbox = typeof entry === "string" ? { email: entry } : entry;
+    const key = foldMailbox(mailbox.email);
     if (counted.has(key)) continue; // one word per recipient, however many times the seat lists the address
     counted.add(key);
-    const word = wordByMailbox.get(key);
+    // The LAST matching row answers (rows are oldest first), and a `replaced` row is never an answer.
+    let word: InviteWord | undefined;
+    for (const { row, word: w } of answers) {
+      if (w !== null && rowBelongsToMailbox(row, mailbox)) word = w;
+    }
     if (word !== undefined) words.push(word);
   }
   if (words.length > 0) return words;

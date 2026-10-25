@@ -25,8 +25,18 @@ import { PURGE_BATCH, RETENTION_DAYS, type OutboxKind, type OutboxStatus } from 
 const current = () => sql`status <> 'replaced'`;
 const newestFirst = () => sql`created_at desc, id desc`;
 
-/** One recipient's latest email about one thing. `at` is when its status last changed (`status_at`). */
-export type EmailStatusRow = { refId: string; recipient: string; kind: OutboxKind; status: OutboxStatus; at: Date };
+/** One recipient's latest email about one thing. `at` is when its status last changed (`status_at`). `recipientUserId` is the account
+ *  an account kind's row is for (`recipient_user_id`), null for a row with none (a literal-address kind, or a phase-1 invite): the
+ *  address on the row is the one it was queued with, which the account may since have left, so a reader that wants "this person's
+ *  mail" matches by the id first (lib/invite-status.ts `seatInviteWords`). */
+export type EmailStatusRow = {
+  refId: string;
+  recipient: string;
+  recipientUserId: string | null;
+  kind: OutboxKind;
+  status: OutboxStatus;
+  at: Date;
+};
 
 /**
  * The status of the newest email to each recipient of each of these refs, for one organisation and one ref type: one row per
@@ -47,15 +57,22 @@ export async function latestEmailStatus(
   kind?: OutboxKind,
 ): Promise<EmailStatusRow[]> {
   if (refIds.length === 0) return [];
-  const rows = await sql<{ refId: string; recipient: string; kind: OutboxKind; status: OutboxStatus; at: Date }[]>`
+  const rows = await sql<EmailStatusRow[]>`
     select distinct on (ref_id, lower(recipient))
-           ref_id as "refId", recipient, kind, status, status_at as "at"
+           ref_id as "refId", recipient, recipient_user_id as "recipientUserId", kind, status, status_at as "at"
       from email_outbox
      where org_id = ${orgId} and ref_type = ${refType} and ref_id = any(${refIds as string[]}::text[])
        ${kind === undefined ? sql`` : sql`and kind = ${kind}`}
        and ${current()}
      order by ref_id, lower(recipient), ${newestFirst()}`;
-  return rows.map((r) => ({ refId: r.refId, recipient: r.recipient, kind: r.kind, status: r.status, at: r.at }));
+  return rows.map((r) => ({
+    refId: r.refId,
+    recipient: r.recipient,
+    recipientUserId: r.recipientUserId,
+    kind: r.kind,
+    status: r.status,
+    at: r.at,
+  }));
 }
 
 /**
@@ -104,7 +121,10 @@ export type QueuedEmailRow = {
  *    5xx that the provider accepted, so a 429 after them proves nothing and the row is not eligible.
  * and LOCKED (`for update`) on the caller's transaction.
  *
- * The second test is the one that keeps the promise "never an extra mail". A re-rendered email is a NEW row, so a new idempotency
+ * The second test is the one that keeps the promise "never an extra mail", and it is the SAME rule as recipient.ts `isKeyClean`
+ * (may a request under this row's key have left?), judged one moment earlier: here the row is not yet claimed, so `attempts` does not
+ * yet count the attempt that `isKeyClean` sees (attempts + 1 there). recipient-resolution.test.ts drives a grid of
+ * (attempts, last_error) through both and asserts they agree. A re-rendered email is a NEW row, so a new idempotency
  * key (`idempotencyKey(row.id)`). A row whose earlier attempt ended in a network error, a 5xx or a 409 in-flight answer may have been
  * ACCEPTED with the answer lost; the same key would make its retry harmless, but a fresh key would mail the recipient a second time.
  * Such a row is not returned: it keeps its key and its body (naming the deadline it was written with), and the caller moves only its
