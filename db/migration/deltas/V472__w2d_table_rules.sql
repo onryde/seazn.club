@@ -56,7 +56,7 @@ alter table stages
     check (table_rules_pinned is null or jsonb_typeof(table_rules_pinned) = 'object');
 
 comment on column stages.table_rules_pinned is
-  'W2d spec §5.4: the table rules the stage is paid and ranked by once started — {points, tiebreakers, crossGroup, sources: {points, tiebreakers}}. Null = not pinned (pending).';
+  'W2d spec §5.4: the table rules the stage is paid and ranked by once started — {points, tiebreakers, crossGroup, sources: {points, tiebreakers, crossGroup}}. Null = not pinned (pending).';
 comment on column stages.table_rules_pinned_at is
   'When table_rules_pinned was written; null exactly when it is null.';
 
@@ -475,9 +475,10 @@ begin
        set table_rules_pinned = jsonb_build_object(
              'points',      pts,
              'tiebreakers', tbs,
-             -- the cross-group order, hard-coded at W2D_BASE (progression.ts:573-575)
+             -- the cross-group order, hard-coded at W2D_BASE (progression.ts:573-575): its source is the migration too,
+             -- never the stage's own, so a later order save re-derives it (T9 re-review N2)
              'crossGroup',  '["points", "diff", "for", "wins"]'::jsonb,
-             'sources',     '{"points": "migrated", "tiebreakers": "migrated"}'::jsonb),
+             'sources',     '{"points": "migrated", "tiebreakers": "migrated", "crossGroup": "migrated"}'::jsonb),
            table_rules_pinned_at = now()
      where id = r.id;
     n := n + 1;

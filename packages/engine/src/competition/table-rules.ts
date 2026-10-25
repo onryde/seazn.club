@@ -5,7 +5,8 @@
 //               tiebreakers: stage own ?? the division's ?? the sport's default (`defaultTiebreakers`) for the stage kind,
 //               crossGroup:  stage own ?? the winning order with its head-to-head steps removed }
 //
-// `sources` names the layer that won each of points and order (the badge, spec §9). A pin is returned whole: the engine
+// `sources` names the layer that won each of points and order (the badge, spec §9), and whether the cross-group order is
+// the stage's own or derived from the winning order (`migrated` in a pin the W2d migration took). A pin is returned whole: the engine
 // never merges into one — a stage's own save after activation is re-pinned by the web (Task 9's `repinStageOwnRules`).
 // The merged cfg is read only when a sport layer answers, and then as the sport's schema parses it, so a stored partial
 // cfg reads the defaults the schema declares. A cfg the schema refuses is read AS GIVEN, as the fold reads it
@@ -24,6 +25,11 @@ import { PointsRule } from "./points.ts";
  *  rules the W2d migration found the stage ranking by (B1). */
 export type TableRulesSource = "stage" | "division" | "sport" | "migrated";
 
+/** Where a cross-group order came from: the stage's own, derived from the winning order (§5.9), or — in a pin only — the
+ *  order the W2d migration found every stage compared by (hard-coded before W2d). A re-pin keeps a cross-group order
+ *  across an order save only when it is the stage's OWN; it reads this, never compares values (T9 re-review N2). */
+export type CrossGroupSource = "stage" | "derived" | "migrated";
+
 /** What a table stage pays and ranks by (spec §5.4). `crossGroup` compares entrants from different groups (§5.9). */
 export interface TableRules {
   readonly points: PointsRule;
@@ -32,9 +38,13 @@ export interface TableRules {
 }
 
 /** The rules a stage was fixed to when it became active (D9, OC2; `stages.table_rules_pinned`), with the layer each came
- *  from. The cross-group order follows the order's source. */
+ *  from. */
 export interface TableRulesPin extends TableRules {
-  readonly sources: { readonly points: TableRulesSource; readonly tiebreakers: TableRulesSource };
+  readonly sources: {
+    readonly points: TableRulesSource;
+    readonly tiebreakers: TableRulesSource;
+    readonly crossGroup: CrossGroupSource;
+  };
 }
 
 export interface TableRulesInput {
@@ -118,6 +128,6 @@ export function resolveTableRules(input: TableRulesInput): TableRulesPin {
     points: points.points,
     tiebreakers: order.tiebreakers,
     crossGroup: input.stageOwn.crossGroup ?? defaultCrossGroup(order.tiebreakers),
-    sources: { points: points.source, tiebreakers: order.source },
+    sources: { points: points.source, tiebreakers: order.source, crossGroup: input.stageOwn.crossGroup != null ? "stage" : "derived" },
   };
 }

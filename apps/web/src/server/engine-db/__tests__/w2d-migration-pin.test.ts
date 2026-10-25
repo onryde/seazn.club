@@ -137,7 +137,7 @@ const head = (sport: string) => {
  *  for a started stage, as its pin: since W2d Task 9 a started stage is paid by its pin alone (and one with none is
  *  refused, CONFIG_INVALID), so the rule is written where today's read takes it. Only the points are compared. */
 async function pointsUnder(tx: Tx, stageId: string, rule: unknown): Promise<Record<string, number>> {
-  const pin = { points: rule, tiebreakers: ["points"], crossGroup: ["points"], sources: { points: "stage", tiebreakers: "stage" } };
+  const pin = { points: rule, tiebreakers: ["points"], crossGroup: ["points"], sources: { points: "stage", tiebreakers: "stage", crossGroup: "derived" } };
   await tx`
     update stages set config = jsonb_set(coalesce(config, '{}'::jsonb), '{points}', ${tx.json(rule as never)}),
            table_rules_pinned = case when status in ('active', 'complete') then ${tx.json(pin as never)} else table_rules_pinned end,
@@ -413,7 +413,9 @@ describe.skipIf(!HAS_DB)("W2d migration — B1 pin, stored lots table (V472)", (
         points: own ? afterMigration(own) : value.pre.get(s.stageId),
         tiebreakers: s.divisionTiebreakers ?? W2D_PIN_BEFORE.declarations[s.sport]!.defaultTiebreakers,
         crossGroup: PRE_W2D_CROSS_GROUP,
-        sources: { points: "migrated", tiebreakers: "migrated" },
+        // the cross-group order is the migration's too — never the stage's own (T9 re-review N2): a later order save
+        // re-derives it
+        sources: { points: "migrated", tiebreakers: "migrated", crossGroup: "migrated" },
       });
       expect(row.pinned_at, `${s.family} pinned at the migration's moment`).toBe(value.now);
       pinned++;
@@ -427,7 +429,7 @@ describe.skipIf(!HAS_DB)("W2d migration — B1 pin, stored lots table (V472)", (
 
   it("B1 a second call pins nothing and changes nothing (idempotent)", async () => {
     const marked = stageOf("hockey-pro");
-    const marker = { points: { marker: true }, tiebreakers: ["lots"], crossGroup: [], sources: { points: "stage", tiebreakers: "stage" } };
+    const marker = { points: { marker: true }, tiebreakers: ["lots"], crossGroup: [], sources: { points: "stage", tiebreakers: "stage", crossGroup: "derived" } };
     const { value } = await rolledBack(async (tx) => {
       await seeded(tx);
       const [{ n: first }] = await tx<{ n: number }[]>`select w2d_pin_started_stages() as n`;

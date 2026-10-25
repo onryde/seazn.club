@@ -25,7 +25,6 @@ import {
   type RankingResult,
   type StoredLotsDraw,
   type TableRulesPin,
-  type TableRulesSource,
 } from "@seazn/engine/competition";
 import type { AnySportModule, TableStageKind, TiebreakerKey } from "@seazn/engine/sport";
 import { log } from "@/server/logger";
@@ -66,12 +65,14 @@ export function tableStageKindOf(kind: string): TableStageKind {
 }
 
 const SOURCE = z.enum(["stage", "division", "sport", "migrated"]);
-/** The stored pin (`stages.table_rules_pinned`, V472): `{points, tiebreakers, crossGroup, sources}`. */
+const CROSS_GROUP_SOURCE = z.enum(["stage", "derived", "migrated"]);
+/** The stored pin (`stages.table_rules_pinned`, V472): `{points, tiebreakers, crossGroup, sources}` — `sources.crossGroup`
+ *  says whether the cross-group order is the stage's own (T9 re-review N2). */
 const StoredPin = z.object({
   points: PointsRule,
   tiebreakers: z.array(z.string()).min(1),
   crossGroup: z.array(z.string()),
-  sources: z.object({ points: SOURCE, tiebreakers: SOURCE }),
+  sources: z.object({ points: SOURCE, tiebreakers: SOURCE, crossGroup: CROSS_GROUP_SOURCE }),
 });
 const Order = z.array(z.string()).min(1);
 
@@ -227,7 +228,7 @@ export interface StageTableRulesDoc {
   readonly points: PointsRule;
   readonly tiebreakers: readonly TiebreakerKey[];
   readonly crossGroup: readonly TiebreakerKey[];
-  readonly sources: { readonly points: TableRulesSource; readonly tiebreakers: TableRulesSource };
+  readonly sources: TableRulesPin["sources"];
   readonly pinnedAt: string | null;
   readonly reachable: readonly OutcomeKey[];
   readonly sportDefault: readonly TiebreakerKey[];
@@ -304,8 +305,8 @@ export async function pinStageTableRules(tx: Db, stageId: string): Promise<void>
  *  CLEARED — the field reverts to the layer below as it stands NOW (the division's order, else the sport's; the sport's
  *  rule under the live cfg), its source updated (fix round 1, I4b ruling). The new pin is read through the engine's one
  *  resolver over the new own layer (I4a): the cross-group order is the resolver's — derived from the NEW order unless it
- *  is the stage's own, never one derived from the old order. The pin's date is kept. No pin → no-op (a pending stage
- *  reads live). */
+ *  is the stage's own (`sources.crossGroup === "stage"`, read, never inferred from the values: re-review N2), never one
+ *  derived from the old order or the migration's. The pin's date is kept. No pin → no-op (a pending stage reads live). */
 export async function repinStageOwnRules(
   tx: Db,
   stageId: string,
@@ -328,9 +329,11 @@ export async function repinStageOwnRules(
     resolveTableRules({ module: sportModule, stageKind, mergedCfg, stageOwn, divisionTiebreakers: divisionOrderOf(r), pinned: null });
   const keepPoints = saved.points === undefined;
   const keepOrder = saved.tiebreakers === undefined;
-  // The pin's cross-group order is the stage's own only where it is not what the resolver derives from the pin's order.
-  const derivedFromPin = resolve({ points: pin.points, tiebreakers: pin.tiebreakers, crossGroup: null }).crossGroup;
-  const crossGroupIsOwn = !sameOrder(pin.crossGroup, derivedFromPin);
+  // The pin's cross-group order is the stage's own only where its SOURCE says so (re-review N2: never by comparing it with
+  // a derived order — a migrated order differs from every derived one, and an own order may equal it). An own one stays
+  // across an order save; a derived or migrated one follows the order: kept while the order is, re-derived when it moves.
+  const crossGroupIsOwn = pin.sources.crossGroup === "stage";
+  const keepCrossGroup = saved.crossGroup === undefined && (crossGroupIsOwn || keepOrder);
   const rules = resolve({
     points: keepPoints ? pin.points : (saved.points ?? null),
     tiebreakers: keepOrder ? pin.tiebreakers : (saved.tiebreakers ?? null),
@@ -339,17 +342,17 @@ export async function repinStageOwnRules(
   const next: TableRulesPin = {
     points: rules.points,
     tiebreakers: rules.tiebreakers,
-    crossGroup: rules.crossGroup,
+    crossGroup: keepCrossGroup ? pin.crossGroup : rules.crossGroup,
     sources: {
       points: keepPoints ? pin.sources.points : rules.sources.points,
       tiebreakers: keepOrder ? pin.sources.tiebreakers : rules.sources.tiebreakers,
+      crossGroup: keepCrossGroup ? pin.sources.crossGroup : rules.sources.crossGroup,
     },
   };
   await tx`update stages set table_rules_pinned = ${tx.json(pinJson(next) as never)} where id = ${stageId}`;
 }
 
 type TableRulesInputOwn = Parameters<typeof resolveTableRules>[0]["stageOwn"];
-const sameOrder = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((k, i) => k === b[i]);
 
 // ── Stored lots draws (spec §5.8) ──
 

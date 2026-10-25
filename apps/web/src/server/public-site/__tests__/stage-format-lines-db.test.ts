@@ -116,7 +116,7 @@ describe.skipIf(!HAS_DB)("a stage's deciders and own points reach the hub and th
         points: pinPoints,
         tiebreakers: ["points", "wins", "diff", "for", "h2h_points"],
         crossGroup: ["points", "diff", "for", "wins"],
-        sources: { points: "migrated", tiebreakers: "migrated" },
+        sources: { points: "migrated", tiebreakers: "migrated", crossGroup: "migrated" },
       };
       await sql`update stages set status = 'active', table_rules_pinned = ${sql.json(pin)}, table_rules_pinned_at = now()
                 where id = ${s.leagueStageId}`;

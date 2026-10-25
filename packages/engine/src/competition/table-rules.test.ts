@@ -80,13 +80,13 @@ describe("resolveTableRules — the layers (X-TB-1)", () => {
           const nothing = resolveTableRules(input(module, kind, cfg));
           expect(nothing.tiebreakers, label).toEqual(sportOrder);
           expect(nothing.points, label).toEqual(sportPoints);
-          expect(nothing.sources, label).toEqual({ points: "sport", tiebreakers: "sport" });
+          expect(nothing.sources, label).toEqual({ points: "sport", tiebreakers: "sport", crossGroup: "derived" });
           expect(nothing.crossGroup, label).toEqual(sportOrder.filter((key) => !headToHead(key)));
 
           // The division sets an order: it beats the sport's.
           const division = resolveTableRules(input(module, kind, cfg, { divisionTiebreakers: DIVISION_ORDER }));
           expect(division.tiebreakers, label).toEqual(DIVISION_ORDER);
-          expect(division.sources, label).toEqual({ points: "sport", tiebreakers: "division" });
+          expect(division.sources, label).toEqual({ points: "sport", tiebreakers: "division", crossGroup: "derived" });
           expect(division.crossGroup, label).toEqual(["seed", "lots"]);
 
           // The stage sets its own order and points: they beat the division's and the sport's.
@@ -95,13 +95,19 @@ describe("resolveTableRules — the layers (X-TB-1)", () => {
           );
           expect(own.tiebreakers, label).toEqual(OWN_ORDER);
           expect(own.points, label).toBe(OWN_POINTS);
-          expect(own.sources, label).toEqual({ points: "stage", tiebreakers: "stage" });
+          // an own ORDER is not an own cross-group order: the cross-group order is still derived from it (T9 re-review N2)
+          expect(own.sources, label).toEqual({ points: "stage", tiebreakers: "stage", crossGroup: "derived" });
           expect(own.crossGroup, label).toEqual(OWN_ORDER);
 
           // Its own cross-group order beats the default one, whichever order won.
           const ownCross = resolveTableRules(input(module, kind, cfg, { stageOwn: { ...NOTHING, crossGroup: OWN_CROSS } }));
           expect(ownCross.crossGroup, label).toEqual(OWN_CROSS);
           expect(ownCross.tiebreakers, label).toEqual(sportOrder);
+          expect(ownCross.sources, label).toEqual({ points: "sport", tiebreakers: "sport", crossGroup: "stage" });
+          // its own cross-group order EQUAL to the derived one is still its own: the source says so, not the value
+          const ownEqual = resolveTableRules(input(module, kind, cfg, { stageOwn: { ...NOTHING, crossGroup: nothing.crossGroup } }));
+          expect(ownEqual.crossGroup, label).toEqual(nothing.crossGroup);
+          expect(ownEqual.sources.crossGroup, label).toBe("stage");
 
           // A second call on the same input answers the same.
           expect(resolveTableRules(input(module, kind, cfg)), label).toStrictEqual(nothing);
@@ -119,7 +125,7 @@ describe("resolveTableRules — the layers (X-TB-1)", () => {
       points: PointsRule.parse({ win: { regulation: 2 }, loss: { regulation: 0 }, draw: 1, shootoutAs: "result", unit: "whole" }),
       tiebreakers: ["points", "diff", "for", "h2h_points", "seed"],
       crossGroup: ["points", "diff", "for", "seed"],
-      sources: { points: "migrated", tiebreakers: "migrated" },
+      sources: { points: "migrated", tiebreakers: "migrated", crossGroup: "migrated" },
     };
     const asked = { tiebreakers: 0, points: 0, parse: 0 };
     const spy: AnySportModule = {
@@ -136,7 +142,7 @@ describe("resolveTableRules — the layers (X-TB-1)", () => {
     });
     expect(resolveTableRules(everything)).toBe(pin);
     // A pin whose sources name a live layer is still returned whole: the engine never re-reads the layer it names.
-    const fromDivision: TableRulesPin = { ...pin, sources: { points: "sport", tiebreakers: "division" } };
+    const fromDivision: TableRulesPin = { ...pin, sources: { points: "sport", tiebreakers: "division", crossGroup: "derived" } };
     expect(resolveTableRules({ ...everything, pinned: fromDivision })).toBe(fromDivision);
     expect(asked).toEqual({ tiebreakers: 0, points: 0, parse: 0 });
     // The same input with the pin taken away reads the stage's own layer: the pin, not the input, was answering.
@@ -150,7 +156,7 @@ describe("resolveTableRules — the layers (X-TB-1)", () => {
     const none = resolveTableRules(input(football, "league", cfg, { pinned: absent, divisionTiebreakers: absent, stageOwn: { points: absent, tiebreakers: absent, crossGroup: absent } }));
     expect(none.tiebreakers).toEqual(sport);
     expect(none.points).toEqual(football.tablePointsRule(cfg, "league"));
-    expect(none.sources).toEqual({ points: "sport", tiebreakers: "sport" });
+    expect(none.sources).toEqual({ points: "sport", tiebreakers: "sport", crossGroup: "derived" });
     // An absent own order over a division order: the division's.
     const division = resolveTableRules(input(football, "league", cfg, { divisionTiebreakers: DIVISION_ORDER, stageOwn: { points: absent, tiebreakers: absent, crossGroup: null } }));
     expect(division.tiebreakers).toEqual(DIVISION_ORDER);
@@ -334,7 +340,7 @@ describe("defaultTiebreakers(kind, cfg) and the sport layer (PS-7c)", () => {
     expect(chess.points.win.regulation).toBe(halfPoints.scoring.win);
     expect(chess.points.unit).toBe("half");
     expect(PointsRule.safeParse(chess.points).success, "the half-point rule is a points rule").toBe(true);
-    expect(chess.sources).toEqual({ points: "sport", tiebreakers: "sport" });
+    expect(chess.sources).toEqual({ points: "sport", tiebreakers: "sport", crossGroup: "derived" });
     // The other direction: a reader that meets a missing field returns `undefined` where a number belongs instead of
     // throwing. Generic's settings with a win and a draw but no loss read a rule PointsRule refuses (no loss.regulation);
     // a pin (T9) would keep it for good, so it is the typed refusal, naming the rule's own issues.
@@ -418,7 +424,7 @@ describe("defaultTiebreakers(kind, cfg) and the sport layer (PS-7c)", () => {
     expect(resolveTableRules(input(volleyball, "league", 42, ownAll)).points).toBe(OWN_POINTS);
     // Own points, the division's order: the order needs no cfg reading, the junk map is never priced.
     expect(resolveTableRules(input(volleyball, "league", junk, { stageOwn: { ...NOTHING, points: OWN_POINTS }, divisionTiebreakers: DIVISION_ORDER })).sources)
-      .toEqual({ points: "stage", tiebreakers: "division" });
+      .toEqual({ points: "stage", tiebreakers: "division", crossGroup: "derived" });
   });
 });
 

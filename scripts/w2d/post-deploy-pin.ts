@@ -1,38 +1,52 @@
-// W2d Task 9 fix round 1 (I2) — the post-deploy step for the table-rules pin. ONE file, three jobs.
+// W2d Task 9 fix rounds 1 (I2) and 2 (N1-N4, the shoot-out split) — the post-deploy step for the table-rules pin. ONE
+// file, four jobs.
 //
-// V472 pins every started stage and converts every W2c `{base, bonuses, forfeit}` stage rule while it migrates. Between
-// that migration and the deploy of the code that pins at activation, the OLD code is still serving: a stage it starts
-// (or completes) in that window is left active/complete with no pin, and a stage rule it saves is written in the old
-// `{base}` shape, which the W2d reader (`parseStoredPointsRule`) reads as NO rule. This script closes that window, once,
-// after the deploy:
+// V472 pins every started stage, converts every W2c `{base, bonuses, forfeit}` stage rule, and moves every football,
+// hockey and ice hockey division config and organisation sport variant off the retired shoot-out split while it
+// migrates. Between that migration and the deploy of the code that pins at activation, the OLD code is still serving: a
+// stage it starts (or completes) in that window is left active/complete with no pin, a stage rule it saves is written in
+// the old `{base}` shape (which the W2d reader, `parseStoredPointsRule`, reads as NO rule), and a division config or
+// variant it saves carries `shootoutWin`/`shootoutLoss` again (which the W2d schema strips silently, so the division
+// would pay draw + the default bonus instead of the organiser's split). This script closes that window, once, after the
+// deploy, in this order:
 //
-//   1. convert — every stage `config.points` still in the `{base}` shape becomes the outcome-keyed rule through
-//      `parseLegacyPointsRule`, the engine's B1 authority (the TypeScript twin of V472's `w2d_legacy_points`). A value
-//      that reader refuses is NOT written and is counted `refused`; its stage is then not pinned either (a pin taken
-//      over a rule nobody can read would pin the sport's rule silently).
-//   2. pin — every `active`/`complete` stage with no pin is pinned through the app's own `pinStageTableRules` (the
-//      activation door's code, run here), each in its own transaction. Conversion runs FIRST so a started stage's pin
-//      carries its converted rule, not the sport's.
-//   3. `--check` — read-only: prints the two counts (started stages with no pin; `{base}` stage rules) and exits 1 if
-//      either is above 0, else 0. Nothing is written.
+//   1. split — every football/hockey/ice hockey division config and organisation-owned (`org_id` not null) sport variant
+//      still holding `shootoutWin`/`shootoutLoss` is converted by `dropShootoutSplit`, the TypeScript twin of V472's
+//      `w2d_drop_shootout_split` (spec §5.3, PS-1: `soBonus = shootoutWin − draw`, ice hockey drops the keys). A config
+//      that twin refuses is NOT written and is counted `refused`; that division's stages are then not pinned (a pin
+//      taken over a config the reader strips would pin the default bonus silently). The system presets (`org_id` null)
+//      are `sync:sports`'s, written from the code, which carries no split.
+//   2. convert — every stage `config.points` still in the `{base}` shape becomes the outcome-keyed rule through
+//      `parseLegacyPointsRule`, the engine's B1 authority (the twin of V472's `w2d_legacy_points`). A refused value is
+//      not written, counted `refused`, and its stage not pinned. A stage that is ALREADY pinned (V472 pinned it, or the
+//      new code did, before the old code saved this rule) has its pin's points re-pinned to the converted rule through
+//      the app's own `repinStageOwnRules` — what the W2d code does on an own save (PS-5d) — counted `repinned` (N4).
+//   3. pin — every `active`/`complete` stage with no pin is pinned through the app's own `pinStageTableRules` (the
+//      activation door's code, run here), each in its own transaction. Steps 1 and 2 run FIRST so a started stage's pin
+//      carries its converted config and rule, never the sport's.
+//   4. `--check` — read-only: prints the three counts (started stages with no pin; `{base}` stage rules; configs on the
+//      shoot-out split) and exits 1 if any is above 0, else 0. Nothing is written.
 //
 //   node --experimental-strip-types scripts/w2d/post-deploy-pin.ts --check   # audit, writes nothing
-//   node --experimental-strip-types scripts/w2d/post-deploy-pin.ts           # convert, then pin
+//   node --experimental-strip-types scripts/w2d/post-deploy-pin.ts           # split, convert, then pin
 //
 // Options: `--org <uuid>` (repeatable) limits every count and write to those orgs; `--prod` is required for any
 // DATABASE_URL whose host is not localhost / 127.0.0.1 / ::1. ONLY THE OWNER passes `--prod`. The URL is read from the
-// environment and never printed, never parsed into an error message (a URL parse error echoes its input) and never
-// accepted on argv.
+// environment and never accepted on argv, never printed, and never handed to anything that can echo it before this
+// file has parsed it itself (`parseDatabaseUrl`, which never echoes; a `new URL` error carries its input). Every driver
+// message this script prints has the URL's host, port, user and password, and any IP address, taken out (`redact`).
 //
 // Exit: 0 = nothing left to do; 1 = work remains (`--check` found some, or a run refused/failed a row — a deploy must
 // stop); 2 = refused to start (no/unreadable/non-local URL without `--prod`, a bad argument). Safe to run twice: a
-// converted rule is no longer `{base}`, a pinned stage is no longer unpinned, and `pinStageTableRules` itself writes only
-// `where table_rules_pinned is null` — a second run reports zeros and changes no row.
+// converted config holds no split, a converted rule is no longer `{base}`, a pinned stage is no longer unpinned, and
+// `pinStageTableRules` itself writes only `where table_rules_pinned is null` — a second run reports zeros and changes no
+// row.
 //
 // Why the app's code and not SQL: the pin must be exactly the one activation takes (the loader's layers, the module's
 // declared order, the derived cross-group order), and the one place that is computed is `pinStageTableRules`
-// (apps/web/src/server/engine-db/table-rules.ts). Node cannot load that file as-is (`server-only`, the `@/` alias,
-// extensionless specifiers), so `main` registers a resolve hook for exactly those three before it imports it.
+// (apps/web/src/server/engine-db/table-rules.ts), as the re-pin of an own save is `repinStageOwnRules`. Node cannot load
+// that file as-is (`server-only`, the `@/` alias, extensionless specifiers), so `main` registers a resolve hook for
+// exactly those three before it imports it.
 import { registerHooks } from "node:module";
 import { existsSync, statSync } from "node:fs";
 import { dirname, resolve as resolvePath } from "node:path";
@@ -68,22 +82,188 @@ export function parseArgs(argv: readonly string[]): Args | { error: string } {
   return out;
 }
 
+// ── The URL: parsed here first, never echoed (re-review N1, N3) ──
+
+/** DATABASE_URL as the driver will read it. Holds secrets: used for the locality check and for `redact`, never printed. */
+export interface DatabaseUrl {
+  /** The URL as given. */
+  raw: string;
+  /** `host[:port]` as written. */
+  host: string;
+  hostname: string;
+  /** As written; "" when the URL names none (the driver then uses 5432). */
+  port: string;
+  username: string;
+  password: string;
+  /** A `?host=`/`?hostaddr=` parameter: the URL's host is then not proven to be the one reached. */
+  hostOverride: boolean;
+}
+
+/** Our own parse of DATABASE_URL, run before anything else sees it: the same reading postgres.js 3.4.9's `parseUrl`
+ *  makes (the authority's host after the first `@`, then `new URL`, then the decoded user and password), so the host
+ *  checked is the host the driver connects to. Refuses (null) a URL that is not `postgres:`/`postgresql:`, names no host
+ *  (a socket or PGHOST), names a host list (the driver connects to any of them), carries a second `@` in its authority
+ *  (the driver and `new URL` disagree on its host), or cannot be read or decoded. Never throws and never returns or
+ *  echoes any part of an input it refuses. */
+export function parseDatabaseUrl(url: string): DatabaseUrl | null {
+  try {
+    const scheme = url.indexOf("://");
+    if (scheme < 0) return null;
+    const authority = url.slice(scheme + 3).split(/[?/]/)[0] ?? "";
+    const driverHost = decodeURIComponent(authority.slice(authority.indexOf("@") + 1));
+    if (driverHost.includes(",") || driverHost.includes("@")) return null;
+    const u = new URL(url);
+    if (u.protocol !== "postgres:" && u.protocol !== "postgresql:") return null;
+    if (u.hostname === "") return null;
+    return {
+      raw: url,
+      host: u.host,
+      hostname: u.hostname,
+      port: u.port,
+      username: decodeURIComponent(u.username),
+      password: decodeURIComponent(u.password),
+      hostOverride: u.searchParams.has("host") || u.searchParams.has("hostaddr"),
+    };
+  } catch {
+    return null;
+  }
+}
+
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
-/** Is this a database on this machine? The host must be exactly localhost / 127.0.0.1 / ::1 — an empty host (a socket or
- *  PGHOST), a host list, or a `host`/`hostaddr` query override is not proven local and reads as remote. Never throws and
+const isLocalDatabase = (db: DatabaseUrl): boolean => !db.hostOverride && LOCAL_HOSTS.has(db.hostname.toLowerCase());
+
+/** Is this a database on this machine? The host must be exactly localhost / 127.0.0.1 / ::1 — a URL `parseDatabaseUrl`
+ *  refuses, or one with a `host`/`hostaddr` query override, is not proven local and reads as remote. Never throws and
  *  never returns any part of the URL. */
 export function isLocalDatabaseUrl(url: string): boolean {
-  let u: URL;
-  try {
-    u = new URL(url);
-  } catch {
-    return false;
-  }
-  if (u.protocol !== "postgres:" && u.protocol !== "postgresql:") return false;
-  if (u.searchParams.has("host") || u.searchParams.has("hostaddr")) return false;
-  return LOCAL_HOSTS.has(u.hostname.toLowerCase());
+  const db = parseDatabaseUrl(url);
+  return db !== null && isLocalDatabase(db);
 }
+
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** `s` anywhere it is not part of a longer alphanumeric run. */
+const word = (s: string, flags: string): RegExp => new RegExp(`(?<![A-Za-z0-9])${escapeRe(s)}(?![A-Za-z0-9])`, flags);
+const IPV4 = /(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?(?![\d.])/g;
+const IPV6 = /(?<![\w:])\[?(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}\]?(?::\d{1,5})?(?![\w:])/gi;
+
+/** A driver or server message with the URL's host, port, user and password — and any IP address the host resolved to —
+ *  taken out (re-review N3: `connect ECONNREFUSED ip:port`, `write CONNECTION_CLOSED host:port`, `password
+ *  authentication failed for user "x"`). The rest of the message (its code words) is kept so the owner can act on it. */
+export function redact(message: string, db: DatabaseUrl | null): string {
+  let out = message;
+  const take = (s: string, label: string, flags = "gi"): void => {
+    if (s.length > 0) out = out.replace(word(s, flags), label);
+  };
+  if (db !== null) {
+    if (db.raw.length > 0) out = out.split(db.raw).join("<url>");
+    take(db.password, "<password>", "g");
+    // the host as named, an IPv6 one without its brackets (`connect ECONNREFUSED ::1:5432`); its port goes below
+    take(db.hostname.replace(/^\[|\]$/g, ""), "<host>");
+    take(db.username, "<user>");
+  }
+  out = out.replace(IPV4, "<address>").replace(IPV6, "<address>");
+  // the port as a number of its own (never four digits inside an id: `-` is a uuid's separator)
+  const port = db === null || db.port === "" ? "5432" : db.port;
+  return out.replace(new RegExp(`(?<![A-Za-z0-9-])${escapeRe(port)}(?![A-Za-z0-9-])`, "g"), "<port>");
+}
+
+/** One failed row as printed: its id, the error's code, and its message with the connection's details taken out. */
+export function failureLine(id: string, e: unknown, db: DatabaseUrl | null): string {
+  const code = (e as { code?: unknown } | null)?.code;
+  const message = e instanceof Error ? e.message : String(e);
+  return `${id}: ${typeof code === "string" ? code : "ERROR"} ${redact(message, db)}`;
+}
+
+// ── The shoot-out split (spec §5.3, PS-1; the TypeScript twin of V472's `w2d_drop_shootout_split`) ──
+
+const SPLIT_SPORTS = new Set(["football", "hockey", "icehockey"]);
+const SPLIT_KEYS = ["shootoutWin", "shootoutLoss"] as const;
+
+export type SplitNotice = "overtime-differs" | "loss-differs-from-draw" | "bonus-clamped";
+export type SplitResult = { cfg: unknown; changed: boolean; notices: SplitNotice[] } | { refused: string };
+
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+const has = (o: Record<string, unknown>, k: string): boolean => Object.hasOwn(o, k);
+
+class SplitRefused extends Error {}
+
+/** A table-points value as the pre-W2d schema read it (`w2d_points_num`): absent ⇒ `fallback`; absent with no fallback
+ *  and `required` ⇒ refused; present and not a number (a JSON null too) ⇒ refused. */
+function pointsNum(p: Record<string, unknown>, key: string, fallback: number | null, what: string, required: boolean): number | null {
+  if (!has(p, key)) {
+    if (fallback === null && required) throw new SplitRefused(`${what} is missing`);
+    return fallback;
+  }
+  const v = p[key];
+  if (typeof v !== "number") throw new SplitRefused(`${what} is not a number`);
+  return v;
+}
+
+/** `a − b` as Postgres `numeric` subtracts two JSON numbers: exact in decimal (0.3 − 0.1 is 0.2, not 0.19999…). */
+function decimalSub(a: number, b: number): number {
+  const places = (n: number): number | null => {
+    const s = String(n);
+    if (/e/i.test(s)) return null;
+    const dot = s.indexOf(".");
+    return dot < 0 ? 0 : s.length - dot - 1;
+  };
+  const pa = places(a);
+  const pb = places(b);
+  if (pa === null || pb === null) return a - b;
+  const f = 10 ** Math.max(pa, pb);
+  return (Math.round(a * f) - Math.round(b * f)) / f;
+}
+
+/** A config off the retired shoot-out split, exactly as V472's `w2d_drop_shootout_split` converts it. Football and
+ *  hockey: `soBonus = shootoutWin − draw` (draw absent: 1), clamped at 0, unless a `soBonus` is already there; a
+ *  `shootoutLoss` other than the draw is said (a draw-plus-bonus shoot-out pays its loser the draw). Ice hockey: the keys
+ *  are dropped (a shoot-out pays the overtime values), and a split that differs from `otWin ?? win` / `otLoss ?? loss`
+ *  is said. Any other sport, or a config with neither key, is returned as it is (`changed: false`). */
+export function dropShootoutSplit(sport: string, cfg: unknown): SplitResult {
+  const p = isObject(cfg) ? cfg.points : undefined;
+  if (!SPLIT_SPORTS.has(sport) || !isObject(cfg) || !isObject(p) || !SPLIT_KEYS.some((k) => has(p, k))) {
+    return { cfg, changed: false, notices: [] };
+  }
+  try {
+    const notices: SplitNotice[] = [];
+    const sw = pointsNum(p, "shootoutWin", null, `${sport} points.shootoutWin`, false);
+    const sl = pointsNum(p, "shootoutLoss", null, `${sport} points.shootoutLoss`, false);
+    const next: Record<string, unknown> = { ...p };
+    if (sport === "icehockey") {
+      const otherOf = (ot: string, plain: string): unknown => (has(p, ot) ? p[ot] : has(p, plain) ? p[plain] : undefined);
+      const differs = (side: number | null, other: unknown): boolean => side !== null && !(typeof other === "number" && other === side);
+      if (differs(sw, otherOf("otWin", "win")) || differs(sl, otherOf("otLoss", "loss"))) notices.push("overtime-differs");
+    } else {
+      const d = pointsNum(p, "draw", 1, `${sport} points.draw`, true) as number;
+      if (sl !== null && sl !== d) notices.push("loss-differs-from-draw");
+      if (sw !== null && !has(p, "soBonus")) {
+        let bonus = decimalSub(sw, d);
+        if (bonus < 0) {
+          notices.push("bonus-clamped");
+          bonus = 0;
+        }
+        next.soBonus = bonus;
+      }
+    }
+    for (const k of SPLIT_KEYS) delete next[k];
+    return { cfg: { ...cfg, points: next }, changed: true, notices };
+  } catch (e) {
+    if (e instanceof SplitRefused) return { refused: e.message };
+    throw e;
+  }
+}
+
+/** The rows a split conversion reads, in SQL: the twin's own precondition, so a row it would return unchanged is never
+ *  listed. */
+const SPLIT_ROWS = (sql: Sql | Tx) => sql`
+  sport_key in ('football', 'hockey', 'icehockey')
+  and jsonb_typeof(config -> 'points') = 'object'
+  and config -> 'points' ?| array['shootoutWin', 'shootoutLoss']`;
+
+/** The organisation sport variants on the split: never a system preset (`org_id` null), which `sync:sports` writes. One
+ *  fragment for the count and the write, so the two cannot disagree on which rows are in. */
+const SPLIT_VARIANTS = (sql: Sql | Tx) => sql`org_id is not null and ${SPLIT_ROWS(sql)}`;
 
 /** Scope fragment: every count and write below is limited to the named orgs, or to none. */
 function inOrgs(sql: Sql | Tx, orgs: readonly string[]) {
@@ -95,6 +275,8 @@ export interface Census {
   unpinnedStarted: number;
   /** Stages whose `config.points` is still the W2c `{base}` shape. */
   baseStageRules: number;
+  /** Football/hockey/ice hockey division configs and organisation sport variants still on the shoot-out split. */
+  shootoutSplitConfigs: number;
 }
 
 export async function census(sql: Sql, orgs: readonly string[]): Promise<Census> {
@@ -102,78 +284,185 @@ export async function census(sql: Sql, orgs: readonly string[]): Promise<Census>
     select count(*) filter (where status in ('active', 'complete') and table_rules_pinned is null)::int as unpinned,
            count(*) filter (where jsonb_typeof(config -> 'points') = 'object' and config -> 'points' ? 'base')::int as base
       from stages where ${inOrgs(sql, orgs)}`;
-  return { unpinnedStarted: row.unpinned, baseStageRules: row.base };
+  const [split] = await sql<{ n: number }[]>`
+    select (select count(*) from divisions where ${SPLIT_ROWS(sql)} and ${inOrgs(sql, orgs)})::int
+         + (select count(*) from sport_variants where ${SPLIT_VARIANTS(sql)} and ${inOrgs(sql, orgs)})::int as n`;
+  return { unpinnedStarted: row.unpinned, baseStageRules: row.base, shootoutSplitConfigs: split.n };
 }
 
 export interface RunReport {
+  /** Division configs moved off the shoot-out split. */
+  divisionConfigs: number;
+  /** Organisation sport variants moved off the shoot-out split. */
+  variantConfigs: number;
   converted: number;
+  /** Of `converted`: stages already pinned, whose pin's points were re-pinned to the converted rule (N4). */
+  repinned: number;
   pinned: number;
-  /** `{base}` rules `parseLegacyPointsRule` refuses: left as they are, their stage not pinned. */
+  /** What a reader refused, one line each (`stage <id> …`, `division <id> …`, `variant …`): left as it is, and a refused
+   *  stage or division's stages not pinned. */
   refused: string[];
-  /** Stages whose pin failed: `id: CODE message`. */
+  /** Rows whose write failed: `id: CODE message` (`failureLine`). */
   failed: string[];
+  /** What the split conversion said out loud, one line per config (V472 raises the same as notices). */
+  notices: string[];
   after: Census;
 }
 
 type PinStage = (tx: Tx, stageId: string) => Promise<void>;
+type RepinStage = (tx: Tx, stageId: string, saved: { readonly points?: unknown }) => Promise<void>;
 
-/** The two writes, in order (convert, then pin), each row in its own transaction. */
-export async function run(sql: Sql, orgs: readonly string[], pinStageTableRules: PinStage): Promise<RunReport> {
-  const report: RunReport = { converted: 0, pinned: 0, refused: [], failed: [], after: { unpinnedStarted: 0, baseStageRules: 0 } };
+/** The app's two pin doors the run calls (`server/engine-db/table-rules.ts`), and the parsed URL its failures are redacted
+ *  against. */
+export interface Doors {
+  pinStageTableRules: PinStage;
+  repinStageOwnRules: RepinStage;
+  db: DatabaseUrl | null;
+}
+
+/** The writes, in order (split, convert, then pin), each row in its own transaction. */
+export async function run(sql: Sql, orgs: readonly string[], doors: Doors): Promise<RunReport> {
+  const report: RunReport = {
+    divisionConfigs: 0,
+    variantConfigs: 0,
+    converted: 0,
+    repinned: 0,
+    pinned: 0,
+    refused: [],
+    failed: [],
+    notices: [],
+    after: { unpinnedStarted: 0, baseStageRules: 0, shootoutSplitConfigs: 0 },
+  };
+  const refusedStages = new Set<string>();
+  const refusedDivisions = new Set<string>();
+
+  // 1. the shoot-out split: division configs, then organisation sport variants
+  const divisions = await sql<{ id: string }[]>`
+    select id from divisions where ${SPLIT_ROWS(sql)} and ${inOrgs(sql, orgs)} order by id`;
+  for (const { id } of divisions) {
+    try {
+      const outcome = await sql.begin(async (tx) => {
+        const [row] = await tx<{ sport_key: string; config: unknown }[]>`
+          select sport_key, config from divisions where id = ${id} and ${SPLIT_ROWS(tx)} for update`;
+        if (row === undefined) return null; // converted by someone else since the list was read
+        const r = dropShootoutSplit(row.sport_key, row.config);
+        if (!("refused" in r) && r.changed) {
+          await tx`update divisions set config = jsonb_set(config, '{points}', ${tx.json((r.cfg as { points: never }).points)}) where id = ${id}`;
+        }
+        return r;
+      });
+      if (outcome === null) continue;
+      if ("refused" in outcome) {
+        refusedDivisions.add(id);
+        report.refused.push(`division ${id}: shoot-out split not converted (${outcome.refused}); its stages not pinned`);
+      } else if (outcome.changed) {
+        report.divisionConfigs++;
+        for (const n of outcome.notices) report.notices.push(`division ${id}: ${n}`);
+      }
+    } catch (e) {
+      report.failed.push(failureLine(`division ${id}`, e, doors.db));
+    }
+  }
+  const variants = await sql<{ sport_key: string; key: string; org_id: string }[]>`
+    select sport_key, key, org_id from sport_variants
+     where ${SPLIT_VARIANTS(sql)} and ${inOrgs(sql, orgs)}
+     order by sport_key, key, org_id`;
+  for (const v of variants) {
+    const name = `variant ${v.sport_key}/${v.key} of org ${v.org_id}`;
+    try {
+      const outcome = await sql.begin(async (tx) => {
+        const [row] = await tx<{ config: unknown }[]>`
+          select config from sport_variants
+           where sport_key = ${v.sport_key} and key = ${v.key} and org_id = ${v.org_id} and ${SPLIT_VARIANTS(tx)} for update`;
+        if (row === undefined) return null;
+        const r = dropShootoutSplit(v.sport_key, row.config);
+        if (!("refused" in r) && r.changed) {
+          await tx`
+            update sport_variants set config = jsonb_set(config, '{points}', ${tx.json((r.cfg as { points: never }).points)})
+             where sport_key = ${v.sport_key} and key = ${v.key} and org_id = ${v.org_id}`;
+        }
+        return r;
+      });
+      if (outcome === null) continue;
+      if ("refused" in outcome) report.refused.push(`${name}: shoot-out split not converted (${outcome.refused})`);
+      else if (outcome.changed) {
+        report.variantConfigs++;
+        for (const n of outcome.notices) report.notices.push(`${name}: ${n}`);
+      }
+    } catch (e) {
+      report.failed.push(failureLine(name, e, doors.db));
+    }
+  }
+
+  // 2. the `{base}` stage rules; a stage already pinned has its pin's points re-pinned (N4)
   const based = await sql<{ id: string }[]>`
     select id from stages
      where jsonb_typeof(config -> 'points') = 'object' and config -> 'points' ? 'base' and ${inOrgs(sql, orgs)}
      order by id`;
   for (const { id } of based) {
-    const outcome = await sql.begin(async (tx) => {
-      const [row] = await tx<{ points: unknown }[]>`
-        select config -> 'points' as points from stages
-         where id = ${id} and jsonb_typeof(config -> 'points') = 'object' and config -> 'points' ? 'base' for update`;
-      if (row === undefined) return "gone" as const; // converted by someone else since the list was read
-      const rule = parseLegacyPointsRule(row.points);
-      if (rule === null) return "refused" as const;
-      await tx`update stages set config = jsonb_set(config, '{points}', ${tx.json(rule)}) where id = ${id}`;
-      return "converted" as const;
-    });
-    if (outcome === "converted") report.converted++;
-    else if (outcome === "refused") report.refused.push(id);
+    try {
+      const outcome = await sql.begin(async (tx) => {
+        const [row] = await tx<{ points: unknown; pinned: boolean }[]>`
+          select config -> 'points' as points, table_rules_pinned is not null as pinned from stages
+           where id = ${id} and jsonb_typeof(config -> 'points') = 'object' and config -> 'points' ? 'base' for update`;
+        if (row === undefined) return "gone" as const; // converted by someone else since the list was read
+        const rule = parseLegacyPointsRule(row.points);
+        if (rule === null) return "refused" as const;
+        await tx`update stages set config = jsonb_set(config, '{points}', ${tx.json(rule)}) where id = ${id}`;
+        if (!row.pinned) return "converted" as const;
+        // The old code saved this rule over a stage already pinned: the W2d code re-pins an own save (PS-5d), so this
+        // does — the points field only, its source "stage"; the order, the cross-group order and the pin's date kept.
+        await doors.repinStageOwnRules(tx, id, { points: rule });
+        return "repinned" as const;
+      });
+      if (outcome === "converted" || outcome === "repinned") report.converted++;
+      if (outcome === "repinned") report.repinned++;
+      if (outcome === "refused") {
+        refusedStages.add(id);
+        report.refused.push(`stage ${id}: {base} rule not converted (the B1 reader refuses it); not pinned`);
+      }
+    } catch (e) {
+      // Rolled back, its rule still `{base}`: the pin below refuses it too (`ownRulesOf` reads no `{base}` rule).
+      report.failed.push(failureLine(`stage ${id}`, e, doors.db));
+    }
   }
 
-  const unpinned = await sql<{ id: string }[]>`
-    select id from stages
+  // 3. the pin of every started stage with none
+  const unpinned = await sql<{ id: string; division_id: string }[]>`
+    select id, division_id from stages
      where status in ('active', 'complete') and table_rules_pinned is null and ${inOrgs(sql, orgs)}
      order by id`;
-  for (const { id } of unpinned) {
-    if (report.refused.includes(id)) continue;
+  for (const { id, division_id } of unpinned) {
+    if (refusedStages.has(id) || refusedDivisions.has(division_id)) continue;
     try {
       const pinned = await sql.begin(async (tx) => {
         const [row] = await tx<{ id: string }[]>`
           select id from stages where id = ${id} and status in ('active', 'complete') and table_rules_pinned is null for update`;
         if (row === undefined) return false;
-        await pinStageTableRules(tx, id);
+        await doors.pinStageTableRules(tx, id);
         const [after] = await tx<{ pinned: boolean }[]>`select table_rules_pinned is not null as pinned from stages where id = ${id}`;
         if (after?.pinned !== true) throw Object.assign(new Error("the pin wrote nothing"), { code: "NOT_PINNED" });
         return true;
       });
       if (pinned) report.pinned++;
     } catch (e) {
-      const code = (e as { code?: unknown }).code;
-      const message = e instanceof Error ? e.message : String(e);
-      report.failed.push(`${id}: ${typeof code === "string" ? code : "ERROR"} ${message}`);
+      report.failed.push(failureLine(`stage ${id}`, e, doors.db));
     }
   }
   report.after = await census(sql, orgs);
   return report;
 }
 
+const anyLeft = (c: Census): boolean => c.unpinnedStarted > 0 || c.baseStageRules > 0 || c.shootoutSplitConfigs > 0;
+
 /** Exit code of an apply run: 0 only when nothing was refused or failed and nothing is left in scope. */
 export function exitCodeOfRun(r: RunReport): number {
-  return r.refused.length > 0 || r.failed.length > 0 || r.after.unpinnedStarted > 0 || r.after.baseStageRules > 0 ? 1 : 0;
+  return r.refused.length > 0 || r.failed.length > 0 || anyLeft(r.after) ? 1 : 0;
 }
 
-/** Exit code of `--check`: 1 while either count is above 0. */
+/** Exit code of `--check`: 1 while any count is above 0. */
 export function exitCodeOfCheck(c: Census): number {
-  return c.unpinnedStarted > 0 || c.baseStageRules > 0 ? 1 : 0;
+  return anyLeft(c) ? 1 : 0;
 }
 
 /** Lets node load apps/web server modules: `server-only` is a no-op, `@/` is apps/web/src, and an extensionless
@@ -210,35 +499,64 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv): Pro
     console.error("post-deploy-pin: DATABASE_URL is not set.");
     return 2;
   }
-  if (!isLocalDatabaseUrl(url) && !args.prod) {
+  // N1: parsed HERE before anything else sees it — nothing below gets a URL this parse could not read.
+  const db = parseDatabaseUrl(url);
+  if (db === null) {
+    console.error("post-deploy-pin: DATABASE_URL is not a valid postgres URL (postgres:// or postgresql://, one host). It is not printed.");
+    return 2;
+  }
+  if (!isLocalDatabase(db) && !args.prod) {
     console.error("post-deploy-pin: refused — DATABASE_URL is not a local database (localhost / 127.0.0.1 / ::1). Only the owner runs this against a deployed database, with --prod.");
     return 2;
   }
   const webSrc = fileURLToPath(new URL("../../apps/web/src/", import.meta.url));
   registerWebResolve(webSrc);
-  const db = (await import(pathToFileURL(resolvePath(webSrc, "lib/db.ts")).href)) as {
+  const dbModule = (await import(pathToFileURL(resolvePath(webSrc, "lib/db.ts")).href)) as {
     connectionOptions(url: string, env: NodeJS.ProcessEnv): { ssl: false | "require"; prepare: boolean; schema: string };
   };
   const tableRules = (await import(pathToFileURL(resolvePath(webSrc, "server/engine-db/table-rules.ts")).href)) as {
     pinStageTableRules: PinStage;
+    repinStageOwnRules: RepinStage;
   };
-  const { ssl, prepare, schema } = db.connectionOptions(url, env);
-  const sql = postgres(url, { ssl, prepare, max: 1, connection: { search_path: schema }, onnotice: () => undefined });
+  let sql: Sql;
+  try {
+    // N1: the driver's own option parse can still refuse what ours read (a `target_session_attrs` it does not know, and
+    // its message echoes the value): a fixed message, never the error's.
+    const { ssl, prepare, schema } = dbModule.connectionOptions(url, env);
+    sql = postgres(url, { ssl, prepare, max: 1, connection: { search_path: schema }, onnotice: () => undefined });
+  } catch {
+    console.error("post-deploy-pin: the database driver refused DATABASE_URL's options. It is not printed.");
+    return 2;
+  }
   try {
     if (args.check) {
       const c = await census(sql, args.orgs);
       console.log(JSON.stringify({ mode: "check", ...c }));
       return exitCodeOfCheck(c);
     }
-    const r = await run(sql, args.orgs, tableRules.pinStageTableRules);
-    console.log(JSON.stringify({ mode: "apply", converted: r.converted, pinned: r.pinned, refused: r.refused.length, failed: r.failed.length, ...r.after }));
-    for (const id of r.refused) console.error(`refused {base} rule (not converted, not pinned): stage ${id}`);
-    for (const f of r.failed) console.error(`pin failed: stage ${f}`);
+    const r = await run(sql, args.orgs, { ...tableRules, db });
+    for (const n of r.notices) console.error(`shoot-out split converted, said: ${n}`);
+    for (const line of r.refused) console.error(`refused: ${line}`);
+    for (const f of r.failed) console.error(`failed: ${f}`);
+    console.log(
+      JSON.stringify({
+        mode: "apply",
+        divisionConfigs: r.divisionConfigs,
+        variantConfigs: r.variantConfigs,
+        converted: r.converted,
+        repinned: r.repinned,
+        pinned: r.pinned,
+        refused: r.refused.length,
+        failed: r.failed.length,
+        ...r.after,
+      }),
+    );
     return exitCodeOfRun(r);
   } catch (e) {
-    // A connection or SQL failure: its code only — a driver message can carry the host it tried.
+    // A connection or SQL failure: its code and its message with the connection's details taken out (N3).
     const code = (e as { code?: unknown }).code;
-    console.error(`post-deploy-pin: failed (${typeof code === "string" ? code : e instanceof Error ? e.name : "error"})`);
+    const message = e instanceof Error ? e.message : String(e);
+    console.error(`post-deploy-pin: failed (${typeof code === "string" ? code : e instanceof Error ? e.name : "error"}): ${redact(message, db)}`);
     return 1;
   } finally {
     await sql.end({ timeout: 5 });
@@ -246,5 +564,12 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv): Pro
 }
 
 if (isMainModule(import.meta.url)) {
-  process.exitCode = await main(process.argv.slice(2), process.env);
+  try {
+    process.exitCode = await main(process.argv.slice(2), process.env);
+  } catch (e) {
+    // Never node's own print of an unhandled rejection: an error's fields can carry the URL.
+    const message = e instanceof Error ? e.message : String(e);
+    console.error(`post-deploy-pin: failed (${e instanceof Error ? e.name : "error"}): ${redact(message, parseDatabaseUrl(process.env.DATABASE_URL ?? ""))}`);
+    process.exitCode = 1;
+  }
 }

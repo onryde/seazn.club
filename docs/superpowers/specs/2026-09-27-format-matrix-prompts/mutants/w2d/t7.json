@@ -377,8 +377,8 @@
   {
     "id": "t7-m27-sources-literal",
     "file": "db/migration/deltas/V472__w2d_table_rules.sql",
-    "find": "'{\"points\": \"migrated\", \"tiebreakers\": \"migrated\"}'::jsonb)",
-    "replace": "'{\"points\": \"migrated\", \"tiebreakers\": \"division\"}'::jsonb) /*MUT27*/",
+    "find": "'{\"points\": \"migrated\", \"tiebreakers\": \"migrated\", \"crossGroup\": \"migrated\"}'::jsonb)",
+    "replace": "'{\"points\": \"migrated\", \"tiebreakers\": \"division\", \"crossGroup\": \"migrated\"}'::jsonb) /*MUT27*/",
     "killers": [
       {
         "cwd": "apps/web",

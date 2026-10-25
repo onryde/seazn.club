@@ -786,7 +786,7 @@ describe.skipIf(!HAS_DB)("public_stages_v — qualification columns (V414)", () 
         points: pinPoints,
         tiebreakers: ["points", "wins"],
         crossGroup: ["points", "diff", "for", "wins"],
-        sources: { points: "migrated", tiebreakers: "migrated" },
+        sources: { points: "migrated", tiebreakers: "migrated", crossGroup: "migrated" },
       })} where id = ${leagueId}`;
       const parsed = parseStoredPointsRule(pinPoints);
       expect(parsed, "premise: today's reader takes the pin's points").not.toBeNull();

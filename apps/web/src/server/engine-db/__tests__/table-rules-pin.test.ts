@@ -85,7 +85,7 @@ describe.skipIf(!HAS_DB)("W2d T9: the pin at activation (X-TB-2, OC2)", () => {
     // the human reading of the same values, from the declared inputs: generic pays `points.w` a win, ranks by its default
     expect((after.pin as { points: PointsRule }).points.win.regulation).toBe(GENERIC_CONFIG.points.w);
     expect((after.pin as { tiebreakers: string[] }).tiebreakers).toEqual(SPORT_ORDER);
-    expect((after.pin as { sources: unknown }).sources).toEqual({ points: "sport", tiebreakers: "sport" });
+    expect((after.pin as { sources: unknown }).sources).toEqual({ points: "sport", tiebreakers: "sport", crossGroup: "derived" });
     // Same transaction: Postgres' now() is the transaction's start, so the pin's date IS the generated fixtures' date.
     const created = await sql<{ at: string }[]>`select distinct to_json(created_at) #>> '{}' as at from fixtures where stage_id = ${stageId}`;
     expect(created.map((r) => r.at), "the fixtures and the pin were written by one transaction").toEqual([after.pinned_at]);
@@ -442,7 +442,7 @@ describe.skipIf(!HAS_DB)("W2d T9: the pin at activation (X-TB-2, OC2)", () => {
     expect(derived, "premise: the new order's cross-group order is not the pin's").not.toEqual(pin0.crossGroup);
     await sql.begin((tx) => repinStageOwnRules(tx, stageId, { tiebreakers: NEW_ORDER }));
     const order = await stageRules(stageId);
-    expect(order.pin).toEqual({ ...pin0, tiebreakers: NEW_ORDER, crossGroup: derived, sources: { points: "sport", tiebreakers: "stage" } });
+    expect(order.pin).toEqual({ ...pin0, tiebreakers: NEW_ORDER, crossGroup: derived, sources: { points: "sport", tiebreakers: "stage", crossGroup: "derived" } });
     expect(order.pinned_at, "the pin's date is kept").toBe(first.pinned_at);
 
     const OWN = PointsRule.parse({ win: { regulation: 2 }, loss: { regulation: 0 }, draw: 1, shootoutAs: "result", unit: "whole" });
@@ -453,7 +453,7 @@ describe.skipIf(!HAS_DB)("W2d T9: the pin at activation (X-TB-2, OC2)", () => {
       points: OWN,
       tiebreakers: NEW_ORDER,
       crossGroup: derived,
-      sources: { points: "stage", tiebreakers: "stage" },
+      sources: { points: "stage", tiebreakers: "stage", crossGroup: "derived" },
     });
     expect((await loadTableRules(sql, stageId)).points, "the loader serves the re-pinned rule").toEqual(OWN);
     expect(points.pinned_at).toBe(first.pinned_at);
@@ -465,18 +465,72 @@ describe.skipIf(!HAS_DB)("W2d T9: the pin at activation (X-TB-2, OC2)", () => {
     await generateStageFixtures(s.auth, stageId);
     const OWN_CROSS = ["points", "for", "lots"] as TiebreakerKey[];
     await sql.begin((tx) => repinStageOwnRules(tx, stageId, { crossGroup: OWN_CROSS }));
-    expect((await stageRules(stageId)).pin, "the own cross-group order is pinned").toMatchObject({ crossGroup: OWN_CROSS });
+    expect((await stageRules(stageId)).pin, "the own cross-group order is pinned").toMatchObject({ crossGroup: OWN_CROSS, sources: { crossGroup: "stage" } });
     const NEW_ORDER = ["points", "direct", "diff", "lots"] as TiebreakerKey[];
     expect(defaultCrossGroup(NEW_ORDER), "premise: the derived order is not the own one").not.toEqual(OWN_CROSS);
     await sql.begin((tx) => repinStageOwnRules(tx, stageId, { tiebreakers: NEW_ORDER }));
     expect((await stageRules(stageId)).pin, "an order save keeps the stage's own cross-group order").toMatchObject({
       tiebreakers: NEW_ORDER,
       crossGroup: OWN_CROSS,
+      sources: { crossGroup: "stage" },
     });
     await sql.begin((tx) => repinStageOwnRules(tx, stageId, { crossGroup: null }));
     expect((await stageRules(stageId)).pin, "cleared: derived from the pinned order").toMatchObject({
       tiebreakers: NEW_ORDER,
       crossGroup: defaultCrossGroup(NEW_ORDER),
+      sources: { crossGroup: "derived" },
+    });
+  }, 120_000);
+
+  it("PS-5d re-review N2: a stage's own cross-group order EQUAL to the derived one is still its own — it survives an order save (the source is read, never the values)", async () => {
+    const s = await tableScene({});
+    const stageId = s.stageIds[0]!;
+    await generateStageFixtures(s.auth, stageId);
+    const pin0 = (await stageRules(stageId)).pin as { tiebreakers: TiebreakerKey[]; crossGroup: TiebreakerKey[]; sources: Record<string, string> };
+    expect(pin0.sources.crossGroup, "premise: the activation pin's cross-group order is derived").toBe("derived");
+    // the organiser saves, as its own, exactly the order the engine derived
+    await sql.begin((tx) => repinStageOwnRules(tx, stageId, { crossGroup: pin0.crossGroup }));
+    expect((await stageRules(stageId)).pin, "saved as its own").toMatchObject({ crossGroup: pin0.crossGroup, sources: { crossGroup: "stage" } });
+    const NEW_ORDER = ["points", "direct", "diff", "lots"] as TiebreakerKey[];
+    expect(defaultCrossGroup(NEW_ORDER), "premise: the new order derives another cross-group order").not.toEqual(pin0.crossGroup);
+    await sql.begin((tx) => repinStageOwnRules(tx, stageId, { tiebreakers: NEW_ORDER }));
+    expect((await stageRules(stageId)).pin, "the own order stays, though it equalled the derived one").toMatchObject({
+      tiebreakers: NEW_ORDER,
+      crossGroup: pin0.crossGroup,
+      sources: { tiebreakers: "stage", crossGroup: "stage" },
+    });
+  }, 120_000);
+
+  it("PS-5d re-review N2: a V472-migrated pin's cross-group order is the migration's, never the stage's own — a points save keeps it, an order save re-derives it from the new order", async () => {
+    // The migrated pin exactly as V472 writes it: its cross-group literal and its sources, read from the delta's text.
+    const deltas = resolve(import.meta.dirname, "../../../../../../db/migration/deltas");
+    const v472 = readFileSync(join(deltas, readdirSync(deltas).find((f) => /^V\d+__w2d_table_rules\.sql$/.test(f))!), "utf8");
+    const literal = (key: string) => JSON.parse(new RegExp(`'${key}',\\s*'([^']+)'::jsonb`).exec(v472)![1]!) as unknown;
+    const MIGRATED_CROSS = literal("crossGroup") as TiebreakerKey[];
+    const MIGRATED_SOURCES = literal("sources") as Record<string, string>;
+    expect(MIGRATED_SOURCES, "premise: V472 names every source the migration").toEqual({ points: "migrated", tiebreakers: "migrated", crossGroup: "migrated" });
+    const s = await tableScene({});
+    const stageId = s.stageIds[0]!;
+    await generateStageFixtures(s.auth, stageId);
+    const pin0 = (await stageRules(stageId)).pin as { points: PointsRule; tiebreakers: TiebreakerKey[] };
+    expect(MIGRATED_CROSS, "premise: the migrated cross-group order is not the one derived from the pin's order").not.toEqual(defaultCrossGroup(pin0.tiebreakers));
+    const migrated = { points: pin0.points, tiebreakers: pin0.tiebreakers, crossGroup: MIGRATED_CROSS, sources: MIGRATED_SOURCES };
+    await sql`update stages set table_rules_pinned = ${sql.json(migrated as never)} where id = ${stageId}`;
+
+    const OWN = PointsRule.parse({ win: { regulation: 2 }, loss: { regulation: 0 }, draw: 1, shootoutAs: "result", unit: "whole" });
+    await sql.begin((tx) => repinStageOwnRules(tx, stageId, { points: OWN }));
+    expect((await stageRules(stageId)).pin, "a points save keeps the migrated order and its cross-group order").toEqual({
+      ...migrated,
+      points: OWN,
+      sources: { ...MIGRATED_SOURCES, points: "stage" },
+    });
+    const NEW_ORDER = ["points", "direct", "diff", "lots"] as TiebreakerKey[];
+    await sql.begin((tx) => repinStageOwnRules(tx, stageId, { tiebreakers: NEW_ORDER }));
+    expect((await stageRules(stageId)).pin, "an order save: derived from the NEW order, not kept as if it were the stage's own").toEqual({
+      points: OWN,
+      tiebreakers: NEW_ORDER,
+      crossGroup: defaultCrossGroup(NEW_ORDER),
+      sources: { points: "stage", tiebreakers: "stage", crossGroup: "derived" },
     });
   }, 120_000);
 
