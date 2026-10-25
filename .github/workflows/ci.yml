@@ -1742,6 +1742,12 @@ jobs:
           cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static
           rm -rf apps/web/.next/standalone/apps/web/public
           cp -R apps/web/public apps/web/.next/standalone/apps/web/public
+          # The compiled instrumentation.js, overlaid as the Dockerfile does (see its comment): Turbopack's standalone
+          # tracing drops it and Next silently skips register() without it, so a server started from the traced tree
+          # alone never ran Sentry init, the relayDriverMode() boot check, the outbox readiness report or the public
+          # error no-store guard - CI served something production does not. The merge form (`/.`): the destination
+          # exists, and `cp -R dir dest` would nest under it.
+          cp -R apps/web/.next/server/. apps/web/.next/standalone/apps/web/.next/server/
           node apps/web/.next/standalone/apps/web/server.js > dev-server.log 2>&1 &
           echo "waiting for server…"
           up=""
@@ -1791,6 +1797,30 @@ jobs:
       # from the standalone tree just staged above.
       - name: Verify every route's referenced build chunks were written (#19)
         run: npm run check:build-chunks
+
+      # The overlay in "Start server" is wiring; this is the behaviour. installPublicErrorNoStore is one of the things
+      # register() does, and it shows on the wire: Next sends an ISR page's notFound() with the FOUND page's
+      # `s-maxage=30, stale-while-revalidate=270`, and only the guard turns a /shared 404 into `private, no-cache,
+      # no-store, max-age=0, must-revalidate`. The same build without the overlay answers this URL with the s-maxage
+      # header (measured), so no-store here means the boot hook ran. A fresh slug per try, so no answer is a cached
+      # one; the bound only absorbs a slow first render, a guard that never installs fails it.
+      - name: Prove the server ran register() (a public 404 goes out no-store)
+        run: |
+          set -o pipefail
+          hdrs="$RUNNER_TEMP/register-proof-headers.txt"
+          ok=""
+          for i in $(seq 1 15); do
+            code=$(curl -s -o /dev/null -D "$hdrs" -w '%{http_code}' --max-time 30 "http://localhost:3000/shared/register-proof-${GITHUB_RUN_ID:-0}-${i}" || true)
+            cc=$(tr -d '\r' < "$hdrs" | grep -i '^cache-control:' || true)
+            if [ "$code" = "404" ] && grep -qi 'no-store' <<< "$cc"; then
+              ok=1; echo "register() ran: HTTP ${code}, ${cc}"; break
+            fi
+            sleep 1
+          done
+          if [ -z "$ok" ]; then
+            echo "a public 404 did not go out no-store (last: HTTP ${code}, ${cc:-no Cache-Control header}) - instrumentation.ts register() did not run on this server"
+            cat dev-server.log; exit 1
+          fi
 
       - name: Run smoke test
         run: npm run test:smoke

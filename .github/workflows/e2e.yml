@@ -1047,6 +1047,12 @@ jobs:
           # public/ too, as the Dockerfile does — tracing does not carry it (#887).
           rm -rf apps/web/.next/standalone/apps/web/public
           cp -R apps/web/public apps/web/.next/standalone/apps/web/public
+          # The compiled instrumentation.js, overlaid as the Dockerfile does (see its comment): Turbopack's standalone
+          # tracing drops it and Next silently skips register() without it, so a server started from the traced tree
+          # alone never ran Sentry init, the relayDriverMode() boot check, the outbox readiness report or the public
+          # error no-store guard - CI served something production does not. The merge form (`/.`): the destination
+          # exists, and `cp -R dir dest` would nest under it.
+          cp -R apps/web/.next/server/. apps/web/.next/standalone/apps/web/.next/server/
           node apps/web/.next/standalone/apps/web/server.js > dev-server.log 2>&1 &
           echo "waiting for server…"
           up=""
@@ -1516,6 +1522,12 @@ jobs:
           # public/ too, as the Dockerfile does — tracing does not carry it (#887).
           rm -rf apps/web/.next/standalone/apps/web/public
           cp -R apps/web/public apps/web/.next/standalone/apps/web/public
+          # The compiled instrumentation.js, overlaid as the Dockerfile does (see its comment): Turbopack's standalone
+          # tracing drops it and Next silently skips register() without it, so a server started from the traced tree
+          # alone never ran Sentry init, the relayDriverMode() boot check, the outbox readiness report or the public
+          # error no-store guard - CI served something production does not. The merge form (`/.`): the destination
+          # exists, and `cp -R dir dest` would nest under it.
+          cp -R apps/web/.next/server/. apps/web/.next/standalone/apps/web/.next/server/
           node apps/web/.next/standalone/apps/web/server.js > dev-server.log 2>&1 &
           echo "waiting for server…"
           up=""
@@ -1879,6 +1891,12 @@ jobs:
           # public/ too, as the Dockerfile does — tracing does not carry it (#887).
           rm -rf apps/web/.next/standalone/apps/web/public
           cp -R apps/web/public apps/web/.next/standalone/apps/web/public
+          # The compiled instrumentation.js, overlaid as the Dockerfile does (see its comment): Turbopack's standalone
+          # tracing drops it and Next silently skips register() without it, so a server started from the traced tree
+          # alone never ran Sentry init, the relayDriverMode() boot check, the outbox readiness report or the public
+          # error no-store guard - CI served something production does not. The merge form (`/.`): the destination
+          # exists, and `cp -R dir dest` would nest under it.
+          cp -R apps/web/.next/server/. apps/web/.next/standalone/apps/web/.next/server/
           node apps/web/.next/standalone/apps/web/server.js > dev-server.log 2>&1 &
           echo "waiting for server…"
           up=""
