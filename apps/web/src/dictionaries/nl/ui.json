@@ -6079,7 +6079,7 @@
   "externalPlay.yourBoard.state.playing": "Je partij is bezig.",
   "externalPlay.yourBoard.state.held": "Je bord wacht op de organisator.",
   "externalPlay.yourBoard.state.over": "Deze partij is voorbij.",
-  "externalPlay.queue.title": "Online spelen — uitslag nodig",
+  "externalPlay.queue.title": "Online spelen: uitslag nodig",
   "externalPlay.queue.help": "Deze partijen eindigden niet netjes. Regel ze hier.",
   "externalPlay.queue.heldHeading": "Vastgehouden · {count}",
   "externalPlay.queue.knockoutHeading": "Remise in knock-out · {stage}",

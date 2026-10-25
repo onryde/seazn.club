@@ -6079,7 +6079,7 @@
   "externalPlay.yourBoard.state.playing": "Votre partie est en cours.",
   "externalPlay.yourBoard.state.held": "Votre échiquier attend l'organisateur.",
   "externalPlay.yourBoard.state.over": "Cette partie est terminée.",
-  "externalPlay.queue.title": "Jeu en ligne — résultat manquant",
+  "externalPlay.queue.title": "Jeu en ligne : résultat manquant",
   "externalPlay.queue.help": "Ces parties ne se sont pas terminées proprement. Réglez-les ici.",
   "externalPlay.queue.heldHeading": "En attente · {count}",
   "externalPlay.queue.knockoutHeading": "Nulle en élimination directe · {stage}",

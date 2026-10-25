@@ -6079,7 +6079,7 @@
   "externalPlay.yourBoard.state.playing": "Tu partida está en juego.",
   "externalPlay.yourBoard.state.held": "Tu tablero está a la espera del organizador.",
   "externalPlay.yourBoard.state.over": "Esta partida ha terminado.",
-  "externalPlay.queue.title": "Juego en línea — falta resultado",
+  "externalPlay.queue.title": "Juego en línea: falta resultado",
   "externalPlay.queue.help": "Estas partidas no terminaron bien. Resuélvelas aquí.",
   "externalPlay.queue.heldHeading": "Retenidas · {count}",
   "externalPlay.queue.knockoutHeading": "Tablas en eliminatoria · {stage}",

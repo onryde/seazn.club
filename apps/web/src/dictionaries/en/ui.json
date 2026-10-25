@@ -6079,7 +6079,7 @@
   "externalPlay.yourBoard.state.playing": "Your game is on.",
   "externalPlay.yourBoard.state.held": "Your board is waiting for the organiser.",
   "externalPlay.yourBoard.state.over": "This game is over.",
-  "externalPlay.queue.title": "Online play — needs result",
+  "externalPlay.queue.title": "Online play: needs result",
   "externalPlay.queue.help": "These games did not finish cleanly. Settle them here.",
   "externalPlay.queue.heldHeading": "Held · {count}",
   "externalPlay.queue.knockoutHeading": "Knockout draw · {stage}",
