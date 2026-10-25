@@ -35,7 +35,7 @@ import { join } from "node:path";
 import { CHECKIN_EXTEND_MAX, CHECKIN_EXTEND_STEP_MINUTES, CHECKIN_EXTEND_STEP_MS } from "../src/lib/checkin-extend";
 import { DEADLINE_AFTER_MS, WINDOW_OPEN_LEAD_MS } from "../src/server/external-play/window";
 import { apiJson, withDb } from "./helpers";
-import { fill, longName, roundGameSql, seedOnlineRound, uiEn, type SeededRound } from "./match-room-kit";
+import { fill, longName, PANEL_TIME_SLOT, roundGameSql, seedOnlineRound, uiEn, type SeededRound } from "./match-room-kit";
 import { mintMatchRoomLink } from "./match-room-link";
 
 test.describe.configure({ mode: "parallel" });
@@ -47,7 +47,8 @@ const LINE = ["e2e4", "e7e5", "g1f3", "b8c6", "f1c4", "f8c5"];
 
 const NAMES = () => ["Ana Petrova", "Bo Lindqvist", "Chen Wei", "Dara Okafor"];
 
-/** A dictionary line as a regex: the given slots filled, every other slot (a local time of day) any HH:MM. */
+/** A dictionary line as a regex: the given slots filled, every other slot (a time of day in the venue's zone) any HH:MM, with the venue's
+ *  name after it when the browser's offset differs (Task 16 D1: PANEL_TIME_SLOT). */
 function lineRe(key: string, vars: Record<string, string | number> = {}): RegExp {
   const raw = uiEn[key];
   if (raw === undefined) throw new Error(`checkin-extend.spec: no en copy for ${key}`);
@@ -58,7 +59,7 @@ function lineRe(key: string, vars: Record<string, string | number> = {}): RegExp
       .map((part) => {
         const m = /^\{(\w+)\}$/.exec(part);
         if (!m) return esc(part);
-        return m[1]! in vars ? esc(String(vars[m[1]!])) : "\\d{1,2}:\\d{2}";
+        return m[1]! in vars ? esc(String(vars[m[1]!])) : PANEL_TIME_SLOT;
       })
       .join(""),
   );

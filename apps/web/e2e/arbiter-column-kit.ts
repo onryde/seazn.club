@@ -2,7 +2,7 @@
 // drive and read it. Playwright refuses a spec file that imports another spec file, so the helpers online-chess-desk.spec.ts grew in
 // Task 12 live here, with the ones Task 13 adds (arbiter-panel.spec.ts at 1280, mobile.spec.ts at the seven phone and tablet
 // widths). Nothing in this file is a test.
-import { expect, type Page, type Response } from "@playwright/test";
+import { expect, type Locator, type Page, type Response } from "@playwright/test";
 import { LIVE_POLL_MS } from "../src/components/v2/desk/band-poll";
 import { INVITE_WORD_KEYS, type SeatInviteWord } from "../src/lib/invite-status";
 import { withDb } from "./helpers";
@@ -23,6 +23,14 @@ export async function expectSeatWord(page: Page, board: RoundBoard, colour: "whi
   await expect(chip, `${colour} of ${board.fixtureId}: one word`).toHaveCount(1);
   await expect(chip, `${colour} of ${board.fixtureId}`).toHaveAttribute("data-word", word);
   await expect(chip, `${colour} of ${board.fixtureId}`).toHaveText(uiEn[INVITE_WORD_KEYS[word]]!);
+}
+
+/** One seat of a board in a confirmation dialog's row (`OpenRoundConfirmBody`): the same word the waiting list shows for that seat
+ *  (Task 16 D2 - the dialog used to say "Not invited" for a seat the list called Not delivered), in the dictionary's own text. */
+export async function expectConfirmSeatWord(dialog: Locator, board: RoundBoard, colour: "white" | "black", word: SeatInviteWord): Promise<void> {
+  const seat = dialog.getByTestId(`open-round-invitee-${board.fixtureId}`).locator(`[data-seat="${colour}"]`);
+  await expect(seat, `${colour} of ${board.fixtureId} is named in the confirmation`).toHaveCount(1);
+  await expect(seat, `${colour} of ${board.fixtureId} in the confirmation`).toContainText(uiEn[INVITE_WORD_KEYS[word]]!);
 }
 
 /** The open-round route's answer (`OpenRoundResult`, lib/open-round.ts), as it crosses the wire. */

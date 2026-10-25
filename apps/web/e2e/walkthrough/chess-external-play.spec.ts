@@ -64,6 +64,7 @@ import {
   bridgeRow,
   checkedInAt,
   fill,
+  PANEL_TIME_SLOT,
   seedGameSql,
   seedMatchRoom,
   seedOnlineRound,
@@ -1454,10 +1455,11 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
   /** "09:05" and "9:05" are one time. */
   const plain = (t: string): string => t.replace(/^0/, "");
   const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  /** A dictionary line as a regex: the given slots filled, its `{time}` slot any HH:MM (the page prints it in the viewer's zone). */
+  /** A dictionary line as a regex: the given slots filled, its `{time}` slot any HH:MM in the venue's zone, followed by the venue's name
+   *  when the browser's offset differs (Task 16 D1: PANEL_TIME_SLOT). */
   const withTime = (key: string, vars: Record<string, string | number> = {}): RegExp => {
     const SLOT = "@@TIME@@";
-    return new RegExp(esc(fill(key, { ...vars, time: SLOT })).replace(SLOT, "\\d{1,2}:\\d{2}"));
+    return new RegExp(esc(fill(key, { ...vars, time: SLOT })).replace(SLOT, PANEL_TIME_SLOT));
   };
   /** The dictionary's one/other pair for a count, picked the way `plural()` picks it. */
   const pluralKey = (stem: string, count: number) => `${stem}.${count === 1 ? "one" : "other"}`;

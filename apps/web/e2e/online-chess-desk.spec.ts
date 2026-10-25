@@ -47,6 +47,7 @@ import { CHECKIN_BATCH_GAP_MS, CHECKIN_BATCH_SIZE, DEADLINE_AFTER_MS } from "../
 import { apiJson, loginUi, withDb } from "./helpers";
 import {
   column,
+  expectConfirmSeatWord,
   expectSeatWord,
   openAnswerOf,
   openNoticeLines,
@@ -494,6 +495,15 @@ test.describe("online chess — the organiser's desk", () => {
       const reDialog = page.getByTestId("arbiter-column-reinvite-dialog");
       await expect(reDialog).toContainText(fill("arbiter.column.reopenConfirmTitle", { round: 1 }));
       await expect(page.getByTestId("arbiter-column-reinvite-dialog-confirm")).toHaveText(fill("arbiter.column.reopenConfirmCta.other", { count: 4 }));
+      // D2: each seat in the confirmation reads the word the waiting list shows for it (Not delivered), never the stamp line's "Not invited".
+      let confirmWords = 0;
+      for (const b of r.boards) {
+        for (const colour of ["white", "black"] as const) {
+          await expectConfirmSeatWord(reDialog, b, colour, "not_delivered");
+          confirmWords += 1;
+        }
+      }
+      expect(confirmWords, "anti-vacuity: every seat of every board read in the confirmation").toBe(4);
       const sentAgain = openRoundSent(page, r.stageId);
       await page.getByTestId("arbiter-column-reinvite-dialog-confirm").click();
       const again = await openAnswerOf(await sentAgain);
@@ -706,7 +716,7 @@ test.describe("online chess — the organiser's desk", () => {
       await expect(row.locator('[data-field="boards"]')).toHaveText(
         g.from === g.to ? fill("arbiter.boardNo", { n: g.from }) : fill("arbiter.column.batchBoards", { from: g.from, to: g.to }),
       );
-      // The clock text is the viewer's local time; its shape is checked here, its value is the attribute above.
+      // The clock text is the venue's time of day (with its name after it when the browser is elsewhere); its shape is checked here, its value is the attribute above.
       await expect(row.locator('[data-field="opens"]')).toHaveText(new RegExp(`^${timePart("runsheet.round.batchOpens")}\\d{1,2}:\\d{2}`));
       await expect(row.locator('[data-field="closes"]')).toHaveText(new RegExp(`^${timePart("runsheet.round.batchCloses")}\\d{1,2}:\\d{2}`));
       checked += 1;

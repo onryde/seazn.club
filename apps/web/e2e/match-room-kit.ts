@@ -44,6 +44,19 @@ export function fill(key: string, vars: Record<string, string | number> = {}): s
   return raw.replace(/\{(\w+)\}/g, (_, k: string) => String(vars[k] ?? `{${k}}`));
 }
 
+/** The regex SOURCE for a `{time}` slot printed by the Arbiter Panel: an HH:MM, then (Task 16 D1) - when the viewer's own UTC offset
+ *  differs from the venue's at that instant - the venue's name once, "15:56 (Tokyo time)". The suffix is read off the dictionary's
+ *  `arbiter.venueTime` so a reworded label moves with it, and optional because whether it shows depends on the browser's zone against
+ *  the seeded venue's (the page prints every time in the VENUE's zone). */
+export const PANEL_TIME_SLOT = (() => {
+  const raw = uiEn["arbiter.venueTime"];
+  if (raw === undefined) throw new Error("match-room-kit: no en copy for arbiter.venueTime");
+  const [before, after] = raw.split("{time}");
+  if (before !== "" || after === undefined) throw new Error(`match-room-kit: arbiter.venueTime is no longer "{time}<label>": ${raw}`);
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return `\\d{1,2}:\\d{2}(?:${esc(after).replace("\\{city\\}", "[^)]+")})?`;
+})();
+
 /** The play grant's scopes, read from lib/oauth.ts (server-only, so it cannot
  *  be imported here) — a grant missing one is a re-consent screen, not a seat. */
 export function playScopes(): string[] {
