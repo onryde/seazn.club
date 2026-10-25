@@ -6241,9 +6241,10 @@ test("arbiter round column: below md the column leads the page; from md it is th
   expect(relations.length, "anti-vacuity: every relation of this branch was checked").toBe(expectedRelations);
 
   // ── the sideways scroll, and what overflows inside the column ─────────────────────────────────────────────────────────────────────
+  // `expectNoHorizontalScroll` is the gate: it lifts `html, body { overflow-x: clip }` (globals.css) before it measures. A raw
+  // `documentElement.scrollWidth <= clientWidth` beside it was removed because it cannot fail under that clip, so it only looked
+  // like a second proof. What overflows INSIDE the column is the scan below.
   await expectNoHorizontalScroll(page);
-  const dims = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
-  expect(dims.scroll, `scrollWidth ${dims.scroll} within clientWidth ${dims.client} at ${width}`).toBeLessThanOrEqual(dims.client);
   // A box whose extra content cannot be reached is a defect; one that scrolls is a feature that must be a tab stop (AGENTS class 23).
   let scanned = 0;
   for (const root of ['[data-testid="arbiter-round-column"]', '[data-testid="arbiter-waiting"]']) {
@@ -6333,12 +6334,15 @@ test("arbiter round column: below md the column leads the page; from md it is th
   expect(here!.filter((c) => c.inNav).length, `the board list is not in the set below lg (${width}px)`).toBe(0);
   expect(desk!.filter((c) => c.picker).length, "the picker is not in the set at 1280").toBe(0);
   expect(desk!.filter((c) => c.inNav).length, "the board list has a button per board at 1280").toBe(boardCount);
-  // Everything else is the same controls, in the same order, with the same repeats.
-  const same = (list: NonNullable<typeof here>) => list.filter((c) => !c.picker && !c.inNav).map((c) => c.key);
-  expect(same(here!), `the control set at ${width}px, less the picker, is the one 1280 shows, less its board list`).toEqual(same(desk!));
+  // Everything else is the same controls with the same repeats: MEMBERSHIP and REPEATS, as sorted multisets. Visual order is not
+  // claimed here: it is the layout relations above, and with one DOM branched by Tailwind the source order is the same at both
+  // widths by construction, so comparing it would prove nothing a width change could move.
+  const multiset = (keys: string[]) => [...keys].sort();
+  const same = (list: NonNullable<typeof here>) => multiset(list.filter((c) => !c.picker && !c.inNav).map((c) => c.key));
+  expect(same(here!), `membership and repeats: the control set at ${width}px, less the picker, is the one 1280 shows, less its board list`).toEqual(same(desk!));
   expect(same(here!).length, "anti-vacuity: the set has controls in it").toBeGreaterThan(0);
-  const inColumn = (list: NonNullable<typeof here>) => list.filter((c) => c.inColumn).map((c) => c.key);
-  expect(inColumn(here!), "the column's controls are the same at both widths").toEqual(inColumn(desk!));
+  const inColumn = (list: NonNullable<typeof here>) => multiset(list.filter((c) => c.inColumn).map((c) => c.key));
+  expect(inColumn(here!), "membership and repeats: the column's controls are the same at both widths").toEqual(inColumn(desk!));
   expect(inColumn(here!).length, "anti-vacuity: the column has controls at both widths").toBeGreaterThan(0);
 
   console.log(
