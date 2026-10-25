@@ -1009,6 +1009,21 @@ describe("CheckinHero: the reinvite press is the SHARED handle's, with its confi
     expect(tagOf(html(props("reinvite", { busy: { kind: "resend", fixtureId: "f1" } })), "arbiter-column-reinvite")).toContain('disabled=""');
   });
 
+  it("busy while confirming: the hero's confirmation holds BOTH its buttons, for the reinvite and for the reopen (final review m3)", () => {
+    let checked = 0;
+    for (const press of ["reinvite", "reopen"] as const) {
+      const busy = html(props(press, { confirming: true, busy: { kind: "open" } }));
+      expect(tagOf(busy, "arbiter-column-reinvite-dialog-confirm"), `${press}: confirm`).toContain('disabled=""');
+      expect(tagOf(busy, "arbiter-column-reinvite-dialog-cancel"), `${press}: cancel`).toContain('disabled=""');
+      // The positive pair: the same dialog, idle, is free (so the held buttons above are the busy state's doing).
+      const idle = html(props(press, { confirming: true }));
+      expect(tagOf(idle, "arbiter-column-reinvite-dialog-confirm"), `${press}: idle confirm`).not.toContain('disabled=""');
+      expect(tagOf(idle, "arbiter-column-reinvite-dialog-cancel"), `${press}: idle cancel`).not.toContain('disabled=""');
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: both presses").toBe(2);
+  });
+
   it("the confirmation is the run sheet's: titled and labelled for reinvite, or for reopen; its body is OpenRoundConfirmBody", () => {
     const re = html(props("reinvite", { confirming: true }));
     const dialog = inner(re, "arbiter-column-reinvite-dialog")!;
@@ -1618,6 +1633,8 @@ describe("the open-round confirmation names the press it sits under, under every
   const fillIn = (s: string, vars: Record<string, string | number>) => Object.entries(vars).reduce((acc, [k, v]) => acc.replaceAll(`{${k}}`, String(v)), s);
   /** Where the Open round label keeps its verb: the one word of it that starts like this. Guarded below, so a relabel cannot blind the probe. */
   const VERB_STEM: Record<Locale, string> = { en: "open", es: "abr", fr: "ouv", nl: "open" };
+  /** What the "no Open verb" probes look for: the stem above, and the past participle too ("abierta" does not contain "abr"). Final review m2. */
+  const VERB_PROBE: Record<Locale, RegExp> = { en: /open/i, es: /abr|abiert/i, fr: /ouv/i, nl: /open/i };
   const verbOf = (d: Record<string, string>, locale: Locale) => {
     const words = d["runsheet.round.openCta"]!.split(/\s+/).filter((w) => w.toLowerCase().startsWith(VERB_STEM[locale]));
     expect(words, `${locale}: the Open round label has exactly one verb`).toHaveLength(1);
@@ -1635,7 +1652,7 @@ describe("the open-round confirmation names the press it sits under, under every
     return found;
   };
   /** A dialog with no Open sentence of its own has no word from the Open verb at all (the staggered body's own "a group opens" is the exception). */
-  const hasVerbStem = (markup: string, locale: Locale) => new RegExp(VERB_STEM[locale], "i").test(textOf(markup));
+  const hasVerbStem = (markup: string, locale: Locale) => VERB_PROBE[locale].test(textOf(markup));
 
   const BATCHES = [0, 1, 2].map((i) => ({ fromBoard: 10 * i + 1, toBoard: 10 * i + 10, offsetMs: i * CHECKIN_BATCH_GAP_MS, opensAt: null, closesAt: null }));
   const SPAN = (2 * CHECKIN_BATCH_GAP_MS) / 60_000;
@@ -1668,6 +1685,23 @@ describe("the open-round confirmation names the press it sits under, under every
       "arbiter-column-reinvite-dialog",
     );
 
+  it("the verb probe sees the participle as well as the stem, in every locale (words typed here, not read from the probe)", () => {
+    const WORDS: Record<Locale, { stem: string; participle: string; unrelated: string }> = {
+      en: { stem: "Open round", participle: "the round is open", unrelated: "Invite again and restart check-in" },
+      es: { stem: "Abrir ronda", participle: "la ronda esta abierta", unrelated: "Invitar de nuevo y reiniciar el registro" },
+      fr: { stem: "Ouvrir la ronde", participle: "la ronde est ouverte", unrelated: "Relancer l'enregistrement" },
+      nl: { stem: "Ronde openen", participle: "de ronde is open", unrelated: "Nodig opnieuw uit en herstart de check-in" },
+    };
+    let checked = 0;
+    for (const [locale, w] of Object.entries(WORDS) as [Locale, (typeof WORDS)[Locale]][]) {
+      expect(w.stem, `${locale}: the stem form`).toMatch(VERB_PROBE[locale]);
+      expect(w.participle, `${locale}: the participle`).toMatch(VERB_PROBE[locale]);
+      expect(w.unrelated, `${locale}: a restart is not an open`).not.toMatch(VERB_PROBE[locale]);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: locales checked").toBe(4);
+  });
+
   it.each(dicts)("%s: the reopen and the reinvite dialogs never name an Open button, whole or by its verb, and their titles carry no Open verb", (locale, dict) => {
     const d = dict as unknown as Record<string, string>;
     let checked = 0;
@@ -1676,7 +1710,7 @@ describe("the open-round confirmation names the press it sits under, under every
       expect(dialog, `${locale} ${name}: the dialog is open`).not.toBeNull();
       const heading = fillIn(d[title]!, { round: ON_SCREEN.roundNo });
       expect(dialog!, `${locale} ${name}: its title`).toContain(esc(heading));
-      expect(heading, `${locale} ${name}: the title names no Open verb`).not.toMatch(new RegExp(VERB_STEM[locale], "i"));
+      expect(heading, `${locale} ${name}: the title names no Open verb`).not.toMatch(VERB_PROBE[locale]);
       expect(namesOpenPress(dialog!, d, locale), `${locale} ${name}: the dialog names the Open press`).toEqual([]);
       // The reopen shows the run sheet's window sentence for its round (the staggered one is the sentence that said "press Open"); the reinvite its own.
       const staggeredSentence = fillIn(d["runsheet.round.confirmWindowStaggered"]!, { span: SPAN, minutes: DEADLINE_AFTER_MS / 60_000 });
@@ -2234,5 +2268,158 @@ describe("the queue under another locale, through the column that mounts it", ()
       expect(h, `${locale}: English leaked`).not.toContain(esc(text));
     }
     expect(Object.keys(expected).length, "anti-vacuity: words checked").toBe(6);
+  });
+});
+
+// ==== PLAYING: the round on screen's own press (final review I2) ==================================================================
+//
+// After D17 (the arbiter's No result, then the organiser's void) the re-armed board keeps its bridge row `finished`, so the loader paints it
+// a result: no board is `checking_in`, the phase is `playing`, and the reader (`listOpenRounds`) still names `reopen` for the round on screen.
+// The hero (check-in only) was the press's one home, so nothing drew it. The playing status now draws the SAME press, through the same
+// handle and the same confirmation. The real D17 state, read by the real reader, is driven in arbiter-panel-d17.test.tsx; this block
+// proves the column's own contract: where it draws, what it says, what it is wired to, and when it stays away.
+describe("RoundColumn: the playing status offers the round on screen's own press (final review I2)", () => {
+  /** The round on screen is round 2 of stage s1 (`R2`). Two seats owed on board 1: the re-armed board of a D17 state. */
+  const OWN = (press: OpenRoundView["press"], o: Partial<OpenRoundView> = {}) =>
+    VIEW({ roundNo: 2, state: "open", press, pairings: [P(1, { owedSeats: 2 }), P(2, { owedSeats: 0, invitedAt: iso(NOW - 5 * MIN) })], ...o });
+  /** Every board over: the re-armed board paints as a result, so a D17 round plays no board at all. */
+  const D17 = () => [over(), over()];
+  const status = (h: string) => inner(h, "arbiter-column-status")!;
+
+  it("a reopen the reader names for the round on screen is pressable in the playing status: one button, inside the status card, with the reopen words", () => {
+    const h = playingColumn(D17(), { data: DATA({ views: [OWN("reopen")] }) });
+    expect(h, "premise: the playing phase, not the hero").toContain('data-phase="playing"');
+    expect(h).not.toContain(ATTR("arbiter-checkin-hero"));
+    expect(count(h, "arbiter-column-reinvite"), "one press in the column").toBe(1);
+    expect(status(h), "and it sits in the status card").toContain(ATTR("arbiter-column-reinvite"));
+    expect(textIn(h, "arbiter-column-reinvite")).toBe(esc(en["arbiter.column.reopenCta"]!));
+    expect(textIn(h, "arbiter-column-reinvite"), "not the Open round label").not.toBe(esc(en["runsheet.round.openCta"]!));
+  });
+
+  it("a reinvite is drawn the same way, with the reinvite words and the owed count", () => {
+    const h = playingColumn(D17(), { data: DATA({ views: [OWN("reinvite", { pairings: [P(1, { owedSeats: 2 }), P(2, { owedSeats: 1 })] })] }) });
+    expect(status(h)).toContain(ATTR("arbiter-column-reinvite"));
+    expect(textIn(h, "arbiter-column-reinvite")).toBe(esc(pl("runsheet.round.inviteCta", 3)));
+  });
+
+  it("the empty case and the refusals: no press, no dialog, no answer when the reader names none (none, open, no view, another round's view)", () => {
+    const cases: [string, RoundColumnData][] = [
+      ["press none", DATA({ views: [OWN("none")] })],
+      ["press open (the next round's, not this round's)", DATA({ views: [OWN("open")] })],
+      ["no view at all", DATA({ views: [] })],
+      ["another round's view", DATA({ views: [OWN("reopen", { roundNo: 9 })] })],
+      ["another stage's view of the same round number", DATA({ views: [OWN("reopen", { stageId: "s2" })] })],
+    ];
+    let checked = 0;
+    for (const [what, data] of cases) {
+      const h = playingColumn(D17(), { data });
+      expect(h, what).not.toContain(ATTR("arbiter-column-reinvite"));
+      expect(h, what).not.toContain(ATTR("arbiter-column-reinvite-dialog"));
+      expect(h, what).not.toContain(ATTR("arbiter-column-reinvite-notice"));
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: refusals checked").toBe(5);
+    // The positive pair of the sweep: the same boards with the press named do draw it.
+    expect(playingColumn(D17(), { data: DATA({ views: [OWN("reopen")] }) })).toContain(ATTR("arbiter-column-reinvite"));
+  });
+
+  it("it is the column's one primary action: the violet fill, 44px, full width on a phone, with padding for a wrapped label", () => {
+    const h = playingColumn(D17(), { data: DATA({ views: [OWN("reopen")] }) });
+    const cls = classOf(tagOf(h, "arbiter-column-reinvite")!).split(/\s+/);
+    expect(cls).toContain("bg-[#7c3aed]");
+    expect(cls, "the tap area stays at least 44px tall").toContain("min-h-11");
+    expect(cls, "full width on a phone").toContain("w-full");
+    expect(cls, "a two-line label (fr, 320 to 375) clears the border").toContain("py-2");
+  });
+
+  it("the next round waits for it: while the press is owed the next round's Open is quiet; with the press gone the same boards make it primary", () => {
+    const next = NEXT();
+    const owed = playingColumn(D17(), { data: DATA({ views: [OWN("reopen"), next] }) });
+    expect(count(owed, "arbiter-column-next"), "premise: the next round is offered").toBe(1);
+    expect(nextTag(owed)).toContain('data-primary="false"');
+    expect(classOf(nextTag(owed)!), "no violet fill on the next round").not.toContain("bg-[#7c3aed]");
+    // The positive pair: nothing owed (press none), every board over: primary.
+    const settled = playingColumn(D17(), { data: DATA({ views: [OWN("none"), next] }) });
+    expect(nextTag(settled)).toContain('data-primary="true"');
+    // And a reinvite holds it the same way.
+    expect(nextTag(playingColumn(D17(), { data: DATA({ views: [OWN("reinvite"), next] }) }))).toContain('data-primary="false"');
+  });
+
+  it("it follows the shared handle: the button ASKS, the confirmation opens and cancels through the SAME handle, and nothing is sent by the press", () => {
+    const { handle, spies } = sharedHandle();
+    const open = (state: Partial<OpenRoundUiState>) =>
+      renderIsland(RoundColumn, COLUMN({ round: R2(D17()), nowMs: NOW, data: DATA({ views: [OWN("reopen")] }), openRound: { ...handle, state: { ...initialOpenRoundUi(), ...state } } })).tree();
+    const buttons = open({}).filter((n) => propsOf(n)["data-testid"] === "arbiter-column-reinvite");
+    expect(buttons, "anti-vacuity: the press is in the column's own tree").toHaveLength(1);
+    (propsOf(buttons[0]!).onClick as () => void)();
+    expect([spies.ask.mock.calls.length, spies.open.mock.calls.length, spies.cancel.mock.calls.length, spies.resend.mock.calls.length]).toEqual([1, 0, 0, 0]);
+
+    const dialogs = (state: Partial<OpenRoundUiState>) => [...new Set(open(state).filter((n) => n.type === ConfirmDialog))];
+    expect(dialogs({}), "one confirmation").toHaveLength(1);
+    expect(propsOf(dialogs({})[0]!).open, "closed until asked").toBe(false);
+    const d = propsOf(dialogs({ confirming: true })[0]!);
+    expect(d.open).toBe(true);
+    spies.ask.mockClear();
+    (d.onConfirm as () => void)();
+    expect([spies.ask.mock.calls.length, spies.open.mock.calls.length, spies.cancel.mock.calls.length], "confirm only opens").toEqual([0, 1, 0]);
+    spies.open.mockClear();
+    (d.onCancel as () => void)();
+    expect([spies.ask.mock.calls.length, spies.open.mock.calls.length, spies.cancel.mock.calls.length], "cancel only cancels").toEqual([0, 0, 1]);
+  });
+
+  it("busy: the press is disabled and busy, the confirmation's buttons are held; idle leaves them all free", () => {
+    const withState = (state: Partial<OpenRoundUiState>) =>
+      playingColumn(D17(), { data: DATA({ views: [OWN("reopen")] }), openRound: { ...sharedHandle().handle, state: { ...initialOpenRoundUi(), ...state } } });
+    const busy = withState({ confirming: true, busy: { kind: "open" } });
+    expect(tagOf(busy, "arbiter-column-reinvite")).toContain('disabled=""');
+    expect(tagOf(busy, "arbiter-column-reinvite")).toContain('aria-busy="true"');
+    expect(tagOf(busy, "arbiter-column-reinvite-dialog-confirm")).toContain('disabled=""');
+    expect(tagOf(busy, "arbiter-column-reinvite-dialog-cancel")).toContain('disabled=""');
+    const idle = withState({ confirming: true });
+    expect(tagOf(idle, "arbiter-column-reinvite")).not.toContain('disabled=""');
+    expect(tagOf(idle, "arbiter-column-reinvite")).not.toContain("aria-busy");
+    expect(tagOf(idle, "arbiter-column-reinvite-dialog-confirm")).not.toContain('disabled=""');
+    // A Resend in flight on a row holds the round's press too (R1: one request at a time), the same handle's word.
+    expect(tagOf(withState({ busy: { kind: "resend", fixtureId: "f1" } }), "arbiter-column-reinvite")).toContain('disabled=""');
+  });
+
+  it("the confirmation is the hero's: the reopen's own title and button over the run sheet's body, naming who is invited", () => {
+    const h = playingColumn(D17(), { data: DATA({ views: [OWN("reopen")] }), openRound: { ...sharedHandle().handle, state: { ...initialOpenRoundUi(), confirming: true } } });
+    const dialog = inner(h, "arbiter-column-reinvite-dialog")!;
+    expect(dialog).toContain(esc(t("arbiter.column.reopenConfirmTitle", { round: 2 })));
+    expect(textIn(h, "arbiter-column-reinvite-dialog-confirm")).toBe(esc(pl("arbiter.column.reopenConfirmCta", 2)));
+    expect(dialog, "not the first-time open's title").not.toContain(esc(t("runsheet.round.confirmTitle", { round: 2 })));
+    expect(dialog, "the body names the board that is invited").toContain(ATTR("open-round-invitee-f1"));
+    expect(dialog, "and not the board that owes nothing").not.toContain(ATTR("open-round-invitee-f2"));
+    expect(dialog).toContain(esc(pl("runsheet.round.confirmBody", 2)));
+    // Closed unless asked, and never open for a press the reader refuses.
+    expect(playingColumn(D17(), { data: DATA({ views: [OWN("reopen")] }) })).not.toContain(ATTR("arbiter-column-reinvite-dialog"));
+    expect(
+      playingColumn(D17(), { data: DATA({ views: [OWN("none")] }), openRound: { ...sharedHandle().handle, state: { ...initialOpenRoundUi(), confirming: true } } }),
+    ).not.toContain(ATTR("arbiter-column-reinvite-dialog"));
+  });
+
+  it("the answer stands under the press, even once the answer flips the press away", () => {
+    const result: OpenRoundResult = { opened: true, invited: 2, retrying: 0, skipped: [] };
+    const answered = { ...sharedHandle().handle, state: { ...initialOpenRoundUi(), notice: { kind: "answered", result } as const } };
+    const withPress = playingColumn(D17(), { data: DATA({ views: [OWN("reopen")] }), openRound: answered });
+    expect(status(withPress)).toContain(ATTR("arbiter-column-reinvite-notice"));
+    expect(textIn(withPress, "arbiter-column-reinvite-notice")).toBe(esc(pl("externalPlay.openRound.invited", 2)));
+    const flipped = playingColumn(D17(), { data: DATA({ views: [OWN("none")] }), openRound: answered });
+    expect(flipped).not.toContain(ATTR("arbiter-column-reinvite"));
+    expect(textIn(flipped, "arbiter-column-reinvite-notice")).toBe(esc(pl("externalPlay.openRound.invited", 2)));
+    expect(playingColumn(D17(), { data: DATA({ views: [OWN("none")] }) }), "no answer, no region").not.toContain(ATTR("arbiter-column-reinvite-notice"));
+  });
+
+  it.each([["en", enUi], ["es", esUi], ["fr", frUi], ["nl", nlUi]] as [Locale, Dict][])("%s: the press and its confirmation read that locale's words", (locale, dict) => {
+    const d = dict as unknown as Record<string, string>;
+    const h = renderToStaticMarkup(
+      <DictProvider dict={dict} locale={locale}>
+        <RoundColumn {...COLUMN({ round: R2(D17()), nowMs: NOW, data: DATA({ views: [OWN("reopen")] }), openRound: { ...sharedHandle().handle, state: { ...initialOpenRoundUi(), confirming: true } } })} />
+      </DictProvider>,
+    );
+    expect(textIn(h, "arbiter-column-reinvite"), locale).toBe(esc(d["arbiter.column.reopenCta"]!));
+    expect(inner(h, "arbiter-column-reinvite-dialog"), locale).toContain(esc(d["arbiter.column.reopenConfirmTitle"]!.replaceAll("{round}", "2")));
+    if (locale !== "en") expect(d["arbiter.column.reopenCta"], `${locale}: premise, translated`).not.toBe(en["arbiter.column.reopenCta"]);
   });
 });

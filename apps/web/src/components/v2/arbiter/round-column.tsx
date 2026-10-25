@@ -11,8 +11,9 @@
 //            checked in, what is already playing, the round's own +5 and reinvite press, the staggered groups) and, placed by the
 //            panel under the camera, the WAITING LIST (the seats that are not here, each seat's invite words, Resend, a board's +5);
 //   PLAYING  no board is checking in: the STATUS ("14 of 20 boards playing", the finished clause, and the round bar the panel hands
-//            over) and, below it, the NEXT round's press - quiet while any board plays, with every earlier-in-play warning shown
-//            inline, and primary once every board on screen is over.
+//            over, then the round's OWN reinvite or reopen press when the reader names one - a re-armed board after the D17 void) and,
+//            below it, the NEXT round's press - quiet while any board plays or the round's own press is owed, with every earlier-in-play
+//            warning shown inline, and primary once every board on screen is over and nothing of this round is owed.
 //
 // What a BEFORE block presses is its OWN round. Each block calls `useOpenRound(view)` itself (R1 holds per round). The handle the
 // panel shares for the round ON SCREEN (`openRound`, C9) is for the check-in hero and the waiting list: both press the same
@@ -96,6 +97,7 @@ const ASIDE_PLACEMENT: Record<ColumnPlacement, string> = {
 
 export function RoundColumn(p: RoundColumnProps) {
   const msg = useMsg();
+  const plural = useMsgPlural();
   const phase = roundColumnPhase(p.round, p.requested);
   // "none" is the panel's notice standing alone (spec §5.2 rule 1): no column, and no queue with it.
   if (phase === "none") return null;
@@ -145,11 +147,28 @@ export function RoundColumn(p: RoundColumnProps) {
     // Primary needs every board on screen over. With no board on screen at all (a round whose every board is the organiser's own)
     // the empty set would satisfy "every board is over" vacuously, and nobody can say it is: `total > 0` keeps the press quiet.
     const { total, finished } = playingTally(p.round.boards);
-    const primary = total > 0 && finished === total;
+    // Final review I2: the round on screen's OWN press, when the reader names one. After D17 (the arbiter's No result, then the organiser's
+    // void) the re-armed board keeps its bridge row `finished`, so it paints as a result and no board is `checking_in`: this is the one
+    // place the organiser's re-open can be pressed. The handle is the panel's (the same one the check-in hero and the waiting list read).
+    const own = roundPress({
+      round: p.round,
+      view: viewOfRound(p.data.views, p.round),
+      tz: p.data.tz,
+      openRound: p.openRound,
+      msg,
+      plural,
+      buttonClass: `${BUTTON_PRIMARY} py-2`,
+    });
+    // The next round waits for it: a board owed its re-open is not "over", whatever its bridge row says.
+    const primary = total > 0 && finished === total && own.owedView === null;
     return (
       <aside aria-label={msg("arbiter.column.label")} data-testid="arbiter-round-column" data-phase={phase} className={asideClass}>
         {queue}
-        <PlayingStatus round={p.round} roundExtend={p.roundExtend} />
+        <PlayingStatus round={p.round} roundExtend={p.roundExtend}>
+          {own.button}
+          {own.notice}
+          {own.dialog}
+        </PlayingStatus>
         {views.map((view) => (
           <NextRoundBlock key={`${view.stageId}:${view.roundNo}`} view={view} tz={p.data.tz} showStage={showStage} playing={{ primary }} />
         ))}
@@ -190,7 +209,7 @@ export function RoundColumn(p: RoundColumnProps) {
  *  round bar the panel hands over (its why line and last answer: C13). A round with no board on screen (every board is the
  *  organiser's own) prints no count at all - never "0 of 0" - and keeps the heading and the bar. A zero finished clause is not
  *  printed (desk _RULES: an empty cell is not information). The count agrees with the TOTAL ("1 of 1 board"). */
-function PlayingStatus({ round, roundExtend }: { round: ArbiterRound; roundExtend: ReactNode }) {
+function PlayingStatus({ round, roundExtend, children }: { round: ArbiterRound; roundExtend: ReactNode; children?: ReactNode }) {
   const msg = useMsg();
   const plural = useMsgPlural();
   const { playing, total, finished, held } = playingTally(round.boards);
@@ -218,6 +237,8 @@ function PlayingStatus({ round, roundExtend }: { round: ArbiterRound; roundExten
         </div>
       )}
       {roundExtend}
+      {/* The round's own reinvite or reopen press, its answer and its confirmation (`roundPress`): nothing when the reader names none. */}
+      {children}
     </section>
   );
 }
@@ -374,6 +395,88 @@ export function OpenRoundBlockView({
   );
 }
 
+// ---- the round on screen's own press ----------------------------------------------------------------------------------------------
+
+type Msg = ReturnType<typeof useMsg>;
+type Plural = ReturnType<typeof useMsgPlural>;
+
+/** The round on screen's own reinvite or reopen press: its button, its answer and its confirmation, drawn by the check-in hero and,
+ *  since the final review (I2), by the playing status. A plain function and not a component, so each caller's tree holds the button
+ *  itself and a test (or a hook harness that renders one level) sees it where the caller put it. The caller owns the hooks.
+ *
+ *  `view.press` is the reader's prediction of the branch `openRound` takes (open-round-view.ts), so "reinvite" and "reopen" are the
+ *  only presses of the round on screen that are offered here; "open" belongs to the next round's block and "none" to no one. The
+ *  confirmation is the run sheet's (`OpenRoundConfirmBody`), titled and labelled for what the press does: the reinvite uses the run
+ *  sheet's title and button; the reopen has its own, because its press says "Invite again and restart check-in" and an action keeps
+ *  one name through the flow (the first-time open's "Open Round N?" would be a different action). The answer is drawn whenever one
+ *  stands, even after the answer has flipped the press away. */
+function roundPress(a: {
+  round: ArbiterRound;
+  /** `viewOfRound(...)`: null when `listOpenRounds` has none for the round on screen. */
+  view: OpenRoundView | null;
+  tz: string;
+  openRound: OpenRoundHandle;
+  msg: Msg;
+  plural: Plural;
+  /** The button's class: the hero's quiet press and the playing status's primary one differ only in this. */
+  buttonClass: string;
+}): { owedView: OpenRoundView | null; button: ReactNode; notice: ReactNode; dialog: ReactNode } {
+  const { round, view, tz, openRound, msg, plural } = a;
+  const { state } = openRound;
+  const owedView = view !== null && (view.press === "reinvite" || view.press === "reopen") ? view : null;
+  const notice = view !== null && state.notice !== null ? openNoticeText(state.notice, view, msg, plural) : null;
+  const owed = owedView === null ? 0 : owedPlayers(owedView);
+  const reinvite = owedView?.press === "reinvite";
+  // The confirmation words each seat as the waiting list does (D2): the round on screen's own boards are where the seats are read.
+  const seatsOf: BoardSeats = new Map(round.boards.map((b) => [b.fixtureId, b.seats]));
+  return {
+    owedView,
+    button:
+      owedView === null ? null : (
+        <button
+          type="button"
+          data-testid="arbiter-column-reinvite"
+          disabled={state.busy !== null}
+          aria-busy={state.busy?.kind === "open" || undefined}
+          onClick={openRound.ask}
+          className={a.buttonClass}
+        >
+          {reinvite ? plural("runsheet.round.inviteCta", owed) : msg("arbiter.column.reopenCta")}
+        </button>
+      ),
+    notice:
+      notice === null ? null : (
+        <div role="status" data-testid="arbiter-column-reinvite-notice" className={`min-w-0 space-y-0.5 text-sm ${SOFT}`}>
+          {notice.map((line, i) => (
+            <p key={i} className="m-0">
+              {line}
+            </p>
+          ))}
+        </div>
+      ),
+    dialog: (
+      <ConfirmDialog
+        open={owedView !== null && state.confirming}
+        testId="arbiter-column-reinvite-dialog"
+        title={
+          reinvite
+            ? msg("runsheet.round.confirmTitleReinvite", { round: round.roundNo })
+            : msg("arbiter.column.reopenConfirmTitle", { round: round.roundNo })
+        }
+        confirmLabel={reinvite ? plural("runsheet.round.inviteCta", owed) : plural("arbiter.column.reopenConfirmCta", owed)}
+        confirmVariant="primary"
+        cancelLabel={msg("confirm.cancel")}
+        stackActions
+        busy={state.busy !== null}
+        onConfirm={openRound.open}
+        onCancel={openRound.cancel}
+      >
+        {owedView !== null && <OpenRoundConfirmBody round={owedView} tz={tz} seats={seatsOf} />}
+      </ConfirmDialog>
+    ),
+  };
+}
+
 // ---- check-in: the hero ---------------------------------------------------------------------------------------------------------
 
 /** "07:42": whole minutes and seconds left to `atIso`, rounded UP, so a clock that is still counting never reads 00:00 (the board
@@ -401,19 +504,23 @@ export type CheckinHeroProps = {
 export function CheckinHero({ round, view, tz, nowMs, openRound, roundExtend }: CheckinHeroProps) {
   const msg = useMsg();
   const plural = useMsgPlural();
-  const { state } = openRound;
   const venueAt = useVenueClock(tz);
   const clock = checkinClock(round.boards, nowMs);
   const tally = checkinTally(round.boards, nowMs);
   const batches = view === null ? null : timedBatches(view);
   // The round's own press: a seat whose invite was released (Not delivered, Bounced) is invited again from here (C4), and a round
   // nobody was reached by opens again. Any other press belongs to the Fixtures tab or to no one.
-  const owedView = view !== null && (view.press === "reinvite" || view.press === "reopen") ? view : null;
-  const notice = view !== null && state.notice !== null ? openNoticeText(state.notice, view, msg, plural) : null;
-  const owed = owedView === null ? 0 : owedPlayers(owedView);
-  const reinvite = owedView?.press === "reinvite";
-  // The confirmation words each seat as the waiting list does (D2): the round on screen's own boards are where the seats are read.
-  const seatsOf: BoardSeats = new Map(round.boards.map((b) => [b.fixtureId, b.seats]));
+  const press = roundPress({
+    round,
+    view,
+    tz,
+    openRound,
+    msg,
+    plural,
+    // BUTTON_QUIET has min-h-11 and no vertical padding. This label is long ("Inviter de nouveau et relancer l'enregistrement" wraps to two
+    // lines from 320 to 375), and two lines of text would touch the border: py-2 keeps them clear of it, on this press only.
+    buttonClass: `${BUTTON_QUIET} w-full py-2 max-md:max-w-sm`,
+  });
 
   const clockLabel =
     clock.kind === "closes" ? msg("arbiter.column.checkin.closesIn") : clock.kind === "opens" ? msg("arbiter.column.checkin.opensIn") : msg("arbiter.column.checkin.closed");
@@ -482,31 +589,10 @@ export function CheckinHero({ round, view, tz, nowMs, openRound, roundExtend }: 
       {/* The panel's one "+5 min to the round", exactly as it is handed over (its button, why line and answer). */}
       {roundExtend}
 
-      {owedView !== null && (
-        <button
-          type="button"
-          data-testid="arbiter-column-reinvite"
-          disabled={state.busy !== null}
-          aria-busy={state.busy?.kind === "open" || undefined}
-          onClick={openRound.ask}
-          // BUTTON_QUIET has min-h-11 and no vertical padding. This label is long ("Inviter de nouveau et relancer l'enregistrement" wraps to two
-          // lines from 320 to 375), and two lines of text would touch the border: py-2 keeps them clear of it, on this press only.
-          className={`${BUTTON_QUIET} w-full py-2 max-md:max-w-sm`}
-        >
-          {reinvite ? plural("runsheet.round.inviteCta", owed) : msg("arbiter.column.reopenCta")}
-        </button>
-      )}
+      {press.button}
 
       {/* The press's answer stays under it even after the answer flips the press away (a successful reinvite leaves nobody owed). */}
-      {notice !== null && (
-        <div role="status" data-testid="arbiter-column-reinvite-notice" className={`min-w-0 space-y-0.5 text-sm ${SOFT}`}>
-          {notice.map((line, i) => (
-            <p key={i} className="m-0">
-              {line}
-            </p>
-          ))}
-        </div>
-      )}
+      {press.notice}
 
       {view !== null && batches !== null && (
         <div data-testid="arbiter-column-batches" className="flex min-w-0 flex-col gap-1">
@@ -537,27 +623,8 @@ export function CheckinHero({ round, view, tz, nowMs, openRound, roundExtend }: 
         </div>
       )}
 
-      {/* The press's confirmation, closed unless the reader offers the press. Its body is the run sheet's. The reinvite uses the run sheet's title
-          and button; the reopen has its own, because its press says "Invite again and restart check-in" and an action keeps one name through
-          the flow (the first-time open's "Open Round N?" would be a different action). */}
-      <ConfirmDialog
-        open={owedView !== null && state.confirming}
-        testId="arbiter-column-reinvite-dialog"
-        title={
-          reinvite
-            ? msg("runsheet.round.confirmTitleReinvite", { round: round.roundNo })
-            : msg("arbiter.column.reopenConfirmTitle", { round: round.roundNo })
-        }
-        confirmLabel={reinvite ? plural("runsheet.round.inviteCta", owed) : plural("arbiter.column.reopenConfirmCta", owed)}
-        confirmVariant="primary"
-        cancelLabel={msg("confirm.cancel")}
-        stackActions
-        busy={state.busy !== null}
-        onConfirm={openRound.open}
-        onCancel={openRound.cancel}
-      >
-        {owedView !== null && <OpenRoundConfirmBody round={owedView} tz={tz} seats={seatsOf} />}
-      </ConfirmDialog>
+      {/* The press's confirmation, closed unless the reader offers the press (`roundPress`). */}
+      {press.dialog}
     </section>
   );
 }

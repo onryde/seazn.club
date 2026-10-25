@@ -38,7 +38,6 @@ beforeEach(() => stubOutboxEnv());
 
 import { openRound } from "../open-round";
 import { listOpenRounds } from "../open-round-view";
-import { resolveExternalPlay } from "../resolve";
 import { addFixture } from "../../stages";
 import { getFixtureState } from "../../fixtures";
 import { scoreEvent } from "../../scoring";
@@ -49,6 +48,7 @@ import {
   seedOnlineSwiss,
   type SeedOnlineChessRoundResult,
 } from "../../__tests__/_external-play-seed";
+import { decide, noResultThenVoid } from "../../__tests__/_external-play-d17";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const MIN = 60_000;
@@ -497,26 +497,6 @@ describe.skipIf(!HAS_DB)("listOpenRounds — timed batches", () => {
 // round whose press restarts check-in, and named nothing at all when no other board was owed. Every state below is pressed through the
 // REAL usecase and the branch it took is READ BACK from the rows (opened_at moved or not, the audit event written), never from the reader.
 describe.skipIf(!HAS_DB)("listOpenRounds - a re-armed board (D17): the press named is the branch the server takes", () => {
-  const lastEvent = async (fixtureId: string) =>
-    (await sql<{ id: string; seq: number }[]>`select id, seq from score_events where fixture_id = ${fixtureId} order by seq desc limit 1`)[0]!;
-  /** The arbiter's No result (the real resolve), then the organiser's undo on the match page (the real void): the board is playable again. */
-  async function noResultThenVoid(r: SeedOnlineChessRoundResult, fixtureId: string) {
-    expect(await resolveExternalPlay(r.owner, fixtureId, "no_result")).toEqual({ status: "finished" });
-    const last = await lastEvent(fixtureId);
-    await scoreEvent(r.owner, fixtureId, { expected_seq: last.seq, type: "core.void", payload: { event_id: last.id } });
-    const [fx] = await sql<{ status: string }[]>`select status from fixtures where id = ${fixtureId}`;
-    expect(["scheduled", "in_play"], "premise: the void made the board playable again").toContain(fx!.status);
-    const [b] = await sql<{ status: string; challenge_id: string | null; create_sent_at: Date | null }[]>`
-      select status, challenge_id, create_sent_at from fixture_external_play where fixture_id = ${fixtureId}`;
-    expect([b?.status, b?.challenge_id, b?.create_sent_at], "premise: closed, no game").toEqual(["finished", null, null]);
-  }
-  /** A neighbour DECIDED on the pad (the real scoring usecase): a Start, then a result. */
-  async function decide(r: SeedOnlineChessRoundResult, b: SeedOnlineChessRoundResult["boards"][number]) {
-    await scoreEvent(r.owner, b.fixtureId, { expected_seq: 0, type: "core.start", payload: {} });
-    await scoreEvent(r.owner, b.fixtureId, { expected_seq: 1, type: "boardgame.result", payload: { winner: b.home.entrantId, method: "resign" } });
-    const [fx] = await sql<{ status: string }[]>`select status from fixtures where id = ${b.fixtureId}`;
-    expect(["scheduled", "in_play"], "premise: the neighbour is decided").not.toContain(fx!.status);
-  }
   const openedAt = async (stageId: string) =>
     (await sql<{ openedAt: Date }[]>`select opened_at as "openedAt" from stage_round_opens where stage_id = ${stageId} and round_no = 1`)[0]!.openedAt.getTime();
   const auditTypes = async (competitionId: string) =>
