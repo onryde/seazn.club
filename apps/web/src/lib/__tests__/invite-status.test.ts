@@ -234,7 +234,9 @@ describe("seatInviteWords: an account's mail follows the account, not the addres
     for (const status of OUTBOX_STATUSES) {
       const word = inviteWordOf(status);
       if (word === null) continue; // `replaced` is never an answer
-      const got = seatInviteWords({ rows: [old(status)], mailboxes: [{ email: "new@x", userId: U1 }], stamped: true });
+      // `stamped: false`: a row that ended badly says `not_delivered` itself, and with a held stamp the fallback for "no matching row"
+      // says the same word. Unstamped, the fallback is `not_invited`, so a row that failed to match cannot pass as its own word.
+      const got = seatInviteWords({ rows: [old(status)], mailboxes: [{ email: "new@x", userId: U1 }], stamped: false });
       expect(got, status).toEqual([word]);
       checked += 1;
     }

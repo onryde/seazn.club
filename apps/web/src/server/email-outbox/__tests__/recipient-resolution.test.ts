@@ -24,7 +24,7 @@ const deliverMock = vi.hoisted(() => vi.fn());
 vi.mock("@/server/email-outbox/transport", () => ({ deliver: deliverMock }));
 
 import { makeUser } from "@/server/usecases/__tests__/_registration-fixtures";
-import { attemptClaimed, dispatchNow, toClaimedRow, type ClaimedRecord } from "../attempt";
+import { attemptClaimed, claimQueuedRow, dispatchNow, toClaimedRow } from "../attempt";
 import { FIRST_ATTEMPT_WINDOW_MS, OUTBOX_KINDS, type OutboxKind } from "../constants";
 import { ACCOUNT_DELETED_REASON, deletedAccountPlaceholder } from "../account-deletion";
 import { enqueueEmail, type OutboxMessage } from "../enqueue";
@@ -84,7 +84,8 @@ describe("isKeyClean: when may a changed address still be used (no database)", (
   });
 
   it("a network error, a thrown transport and a missing error are never trusted past the first attempt", () => {
-    for (const lastError of ["network timeout", "network transport_threw", null, "", "http 4290 x"]) {
+    // "http 429" with no name is not a shape `lastErrorOf` writes (it always adds one), and the SQL copy of the rule (`like 'http 429 %'`) refuses it.
+    for (const lastError of ["network timeout", "network transport_threw", null, "", "http 4290 x", "http 429"]) {
       expect(isKeyClean({ attempts: 2, lastError, reclaimed: false }), String(lastError)).toBe(false);
     }
   });
@@ -371,16 +372,10 @@ describe.skipIf(!HAS_DB)("an account's recipient is resolved at send time (DB)",
 
     it("a row that is no longer ours when the address is rewritten sends nothing (the rewrite is fenced on the claim)", async () => {
       // attemptClaimed is handed a hand-claimed row on purpose: the interleaving (a supersede between the claim and the resolution) cannot
-      // be made to land there through a tick. The claim statement is the production one, copied.
+      // be made to land there through a tick. The claim is the production one (`claimQueuedRow`, which `dispatchNow` calls), not a copy.
       const acct = await account("fence");
       const id = await queueFor(acct);
-      const [rec] = await sql<ClaimedRecord[]>`
-        update email_outbox
-           set status = 'sending', attempts = attempts + 1, lease_until = now() + interval '2 minutes', status_at = now()
-         where id = ${id} and status = 'queued'
-        returning id, kind, ref_type, ref_id, org_id, meta, recipient, subject, body_sealed, transactional,
-                  attempts, expires_at, lease_until, recipient_user_id, last_error, false as reclaimed`;
-      const claimed = toClaimedRow(rec!);
+      const claimed = toClaimedRow((await claimQueuedRow(id, new Date()))!);
       expect([claimed.recipientUserId, claimed.lastError, claimed.reclaimed]).toEqual([acct.id, null, false]);
       await changeEmail(acct.id);
       await sql`update email_outbox set status = 'replaced', body_sealed = null, lease_until = null where id = ${id}`;
@@ -452,16 +447,12 @@ describe.skipIf(!HAS_DB)("an account's recipient is resolved at send time (DB)",
   // ---- the fences and the read error (T3 review M1, M2) -----------------------------------------------------------------------
 
   describe("the claim's fences and the resolution's read error", () => {
-    /** The production claim statement, copied: attemptClaimed is handed what a claim returned, so the interleavings below (another
-     *  worker acting between the claim and the resolution) can be staged exactly. */
+    /** The production claim (`claimQueuedRow`, the statement `dispatchNow` makes): attemptClaimed is handed what a claim returned, so
+     *  the interleavings below (another worker acting between the claim and the resolution) can be staged exactly. */
     async function handClaim(id: string): Promise<ReturnType<typeof toClaimedRow>> {
-      const [rec] = await sql<ClaimedRecord[]>`
-        update email_outbox
-           set status = 'sending', attempts = attempts + 1, lease_until = now() + interval '2 minutes', status_at = now()
-         where id = ${id} and status = 'queued'
-        returning id, kind, ref_type, ref_id, org_id, meta, recipient, subject, body_sealed, transactional,
-                  attempts, expires_at, lease_until, recipient_user_id, last_error, false as reclaimed`;
-      return toClaimedRow(rec!);
+      const rec = await claimQueuedRow(id, new Date());
+      if (!rec) throw new Error(`premise: row ${id} was claimable`);
+      return toClaimedRow(rec);
     }
 
     it("M1: a recipient id the database cannot read (22P02) rejects, sends nothing, and leaves the row `sending` for the worker to reclaim", async () => {

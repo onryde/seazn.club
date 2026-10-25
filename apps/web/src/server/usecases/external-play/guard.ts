@@ -417,9 +417,9 @@ async function loadSide(side: Side, entrantId: string): Promise<SidePlayer> {
     // so a Resend or the next Open would queue, stamp and send an invite to nobody; with the filter the seat takes the existing "no
     // address" path (its stamp is released). Filtered HERE and nowhere else: `personId`, `userId` and `lichess` still resolve for the seat.
     recipients: rows
-      // `u.email` comes from the join on `p.user_id`, so a row with an address always has a `userId`. The test narrows the type and, were
-      // it ever false, drops the row rather than queue an invite for no account.
-      .filter((r): r is SideRow & { email: string; userId: string } => r.email !== null && r.userId !== null && r.deletedAt === null)
+      // The type guard states what the join guarantees rather than testing it: `u.email` comes from `left join users u on u.id =
+      // p.user_id`, so a row with an address has a user and therefore a `userId`. Nothing is dropped silently on that account.
+      .filter((r): r is SideRow & { email: string; userId: string } => r.email !== null && r.deletedAt === null)
       .map((r) => ({ email: r.email, locale: r.locale, userId: r.userId })),
   };
 }

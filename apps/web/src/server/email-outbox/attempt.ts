@@ -384,6 +384,23 @@ export type DispatchOptions = {
 };
 
 /**
+ * `dispatchNow`'s claim of ONE row: a `queued`, never-attempted, unexpired row becomes `sending` with its first attempt counted and a
+ * fresh lease. Answers the claimed row, or `undefined` when it is not ours to start (taken, replaced, already attempted, or expired).
+ * Exported so a test that must stage an interleaving between the claim and `attemptClaimed` claims with THIS statement and not a copy
+ * of it that can drift (a `ClaimedRecord` is what `toClaimedRow` takes).
+ */
+export async function claimQueuedRow(id: string, now: Date): Promise<ClaimedRecord | undefined> {
+  const [rec] = await sql<ClaimedRecord[]>`
+    update email_outbox
+       set status = 'sending', attempts = attempts + 1, lease_until = now() + make_interval(secs => ${LEASE_MS / 1000}),
+           status_at = now()
+     where id = ${id} and status = 'queued' and attempts = 0 and expires_at > ${now}
+    returning id, kind, ref_type, ref_id, org_id, meta, recipient, subject, body_sealed, transactional,
+              attempts, expires_at, lease_until, recipient_user_id, last_error, false as reclaimed`;
+  return rec;
+}
+
+/**
  * Attempt the first send of each id, in order, and say what happened to each. Call it AFTER the caller's transaction
  * has committed (never inside `withTenant`: it uses the pooled client). It does not throw: the rows are durable, so a
  * failure here defers them to the worker rather than failing a request that already committed.
@@ -466,13 +483,7 @@ export async function dispatchNow(ids: readonly string[], opts: DispatchOptions 
       }
       // The clock is read again for every row: sending the earlier ones took time.
       const rowNow = effectiveNow(opts.now);
-      const [rec] = await sql<ClaimedRecord[]>`
-        update email_outbox
-           set status = 'sending', attempts = attempts + 1, lease_until = now() + make_interval(secs => ${LEASE_MS / 1000}),
-               status_at = now()
-         where id = ${id} and status = 'queued' and attempts = 0 and expires_at > ${rowNow}
-        returning id, kind, ref_type, ref_id, org_id, meta, recipient, subject, body_sealed, transactional,
-                  attempts, expires_at, lease_until, recipient_user_id, last_error, false as reclaimed`;
+      const rec = await claimQueuedRow(id, rowNow);
       if (!rec) {
         // Not ours to start (taken, replaced, already attempted), or its window closed while earlier rows were sent:
         // the latter is ended now rather than left queued for a worker that would only expire it.
