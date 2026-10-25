@@ -251,7 +251,7 @@ function buildAward(c: ForfeitAwardCase, ctx: AwardBuildCtx): AwardBuilt | null 
   const own = ownCredit(ctx.module, ctx.cfg, ctx.lineups, events, c.reason, c.offender);
   if (own === null) return null;
   // differs from the sport's own credit in BOTH numbers (winner's +2, loser's +1), and winner first so the pair is not symmetric
-  const rule = PointsRule.parse({ base: { win: 3, draw: 1, loss: 0 }, forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [own.for + 2, own.against + 1] } });
+  const rule = PointsRule.parse({ win: { regulation: 3 }, loss: { regulation: 0 }, draw: 1, shootoutAs: "result", unit: "whole", forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [own.for + 2, own.against + 1] } });
   const forfeitAward = forfeitAwardOffer(rule, ctx.module);
   return forfeitAward === undefined ? null : { events, foldOptions: { forfeitAward } };
 }
