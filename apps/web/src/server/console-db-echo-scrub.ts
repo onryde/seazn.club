@@ -93,7 +93,7 @@ export function installConsoleDbEchoScrub(target: Pick<Console, "error"> = conso
   const original = target.error as Print;
   if (original[INSTALLED]) return () => {};
   const wrapped: Print = function (this: unknown, ...args: unknown[]) {
-    return original.apply(this, scrubConsoleArgs(args));
+    return original.call(this, ...scrubConsoleArgs(args));
   };
   wrapped[INSTALLED] = true;
   target.error = wrapped;
