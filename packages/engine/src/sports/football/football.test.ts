@@ -410,8 +410,15 @@ describe("football contract declarations", () => {
     expect(football.supportsDraws(knockoutCfg, "double_elim")).toBe(false);
   });
 
-  it("declares point totals {3, 2} (+ SO split total when configured)", () => {
+  it("declares point totals {win+loss, 2·draw} — {3, 2} by default; a shoot-out bonus adds no total (§9.3, W2d PS-1)", () => {
     expect([...football.declaredPointsSets(leagueCfg)].sort()).toEqual([2, 3]);
+    // A decided match pays the winner `win` and the loser `loss`, so a paid loss moves the decided total: W3 D1 L1 is
+    // {3+1, 1+1} = {4, 2} (the default's L0 cannot tell win+loss from win-loss).
+    const paidLoss = football.configSchema.parse({ points: { win: 3, draw: 1, loss: 1 } });
+    expect([...football.declaredPointsSets(paidLoss)].sort()).toEqual([2, 4]);
+    // PS-1: a shoot-out pays a plain win in standingsDelta, so soBonus declares no extra total.
+    const withBonus = football.configSchema.parse({ shootout: true, points: { win: 3, draw: 1, loss: 0, soBonus: 2 } });
+    expect([...football.declaredPointsSets(withBonus)].sort()).toEqual([2, 3]);
   });
 });
 

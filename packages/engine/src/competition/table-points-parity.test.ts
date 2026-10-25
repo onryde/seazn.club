@@ -384,6 +384,23 @@ describe("W2d the sports' table points, row by row (SPEC §5.10)", () => {
     for (const score of ["3-0", "3-1", "3-2"]) expect(JSON.stringify(none), score).toContain(score);
   });
 
+  it("VB only the shipped FIVB map (any key order) takes the FIVB table; an organiser's map one key or one number away pays as written (D10(a))", () => {
+    // Best of 3 is where the two differ: the FIVB table pays a 2-1 2:1, a map's "*" pays it the "*" pair. The expected
+    // tables are the organiser's own map spelled out per best-of-3 score (exact entry, else "*"), or the FIVB rule's.
+    const cases: { why: string; pointsMap: Record<string, [number, number]>; table: Record<string, [number, number]> }[] = [
+      { why: "the shipped map, keys reordered", pointsMap: { "*": [3, 0], "3-2": [2, 1] }, table: { "2-0": [3, 0], "2-1": [2, 1] } },
+      { why: "a key fewer (a flat 3:0)", pointsMap: { "*": [3, 0] }, table: { "*": [3, 0] } },
+      { why: "same keys, one pair's first number moved", pointsMap: { "3-2": [2, 1], "*": [2, 0] }, table: { "2-0": [2, 0], "2-1": [2, 0] } },
+      { why: "same keys, one pair's second number moved", pointsMap: { "3-2": [2, 1], "*": [3, 1] }, table: { "2-0": [3, 1], "2-1": [3, 1] } },
+    ];
+    let checked = 0;
+    for (const { why, pointsMap, table } of cases) {
+      expect(ruleOf(volleyball, { bestOf: 3, pointsMap }, "league").bySetScore, why).toEqual(table);
+      checked += 1;
+    }
+    expect(checked).toBe(cases.length);
+  });
+
   it("VB settled abandons pay FIVB 6.4.3's score under the default maps: 1-1 ⇒ 3-1 (3:0), 2-2 ⇒ 3-2 (2:1), bo3 1-1 ⇒ 2-1 (2:1)", () => {
     const settled = (cfg: unknown, sets: boolean[]): Probe => {
       const parsed = volleyball.configSchema.parse(cfg) as SetCfg;

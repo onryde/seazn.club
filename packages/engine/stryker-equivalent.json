@@ -518,6 +518,12 @@
       "reason": "The zero flag only zeroes gf/ga/gd of the played ledger; every non-bye credit carries gf, ga and gd, and a bye's credit is the played ledger with the real goals (computed with zero=false), so creditedMetrics overwrites those three keys either way."
     },
     {
+      "mutant": "src/sports/football/football.ts:2841:9 ConditionalExpression → false",
+      "original": "cfg.points.soBonus === undefined",
+      "line": "...(cfg.points.soBonus === undefined ? {} : { soBonus: cfg.points.soBonus }),",
+      "reason": "With no soBonus the mutant writes `soBonus: undefined` into the table rule instead of leaving the key out; PointsRule declares it optional, its refinement tests `rule.soBonus !== undefined`, and both payers (payout's draw_plus_bonus arm and coverage's so prices) read `rule.soBonus ?? 1`, so undefined pays the same 1 either way (JSON drops the key)."
+    },
+    {
       "mutant": "src/sports/generic/generic.ts:297:72 ArrayDeclaration → []",
       "original": "[\"for\", \"against\", \"diff\"]",
       "line": "if (by === \"both\") return doubleWalkoverCredit(played[0], played[1], [\"for\", \"against\", \"diff\"]);",
@@ -594,6 +600,12 @@
       "original": "\"walkover\"",
       "line": "const credit = setBasedForfeitCredit(cfg, state, \"walkover\", \"both\");",
       "reason": "setBasedForfeitCredit returns doubleWalkoverCredit for by \"both\" before it reads `reason`, so the reason passed for a double walkover is never read."
+    },
+    {
+      "mutant": "src/sports/setbased/kernel.ts:2341:15 CallExpression → ;",
+      "original": "Object.assign(bySetScore, map)",
+      "line": "if (flat) Object.assign(bySetScore, map);",
+      "reason": "For a flat map the mutant leaves `bySetScore` empty, and the rule's own fallback `Object.keys(bySetScore).length > 0 ? bySetScore : { ...map }` then returns a copy of the same map, key for key and pair for pair, so the rule is identical either way (W2d Task 3)."
     },
     {
       "mutant": "src/sports/setbased/kernel.ts:2386:9 ConditionalExpression → true",
@@ -702,6 +714,24 @@
       "original": "preset.stageDefaults === undefined",
       "line": "...(preset.stageDefaults === undefined ? {} : { stageDefaults: preset.stageDefaults }),",
       "reason": "Both builtin period presets declare stageDefaults (hockey.ts, icehockey.ts; makePeriodModule has no other production caller), so the condition is already false for every builtin; for a hand-built preset with none the mutant gives the module an own `stageDefaults: undefined`, and its only reader, rule-keys.ts `m.stageDefaults?.(kind, variant) ?? {}`, reads that exactly as an absent key (the same shape as kernel.ts:2612:9 above; Survived over the 3,527-test related run, W2c Task 22)."
+    },
+    {
+      "mutant": "src/sports/period/kernel.ts:2862:46 ConditionalExpression → false",
+      "original": "cfg.points.otWin === undefined",
+      "line": "win: { regulation: cfg.points.win, ...(cfg.points.otWin === undefined ? {} : { ot: cfg.points.otWin }) },",
+      "reason": "With no otWin the mutant writes `win.ot: undefined` into the table rule instead of leaving the key out; PointsRule declares `ot` optional and its one reader, points.ts `byChain`'s `side.ot !== undefined`, falls through to `regulation` for undefined exactly as for an absent key (JSON drops it; W2d Task 3)."
+    },
+    {
+      "mutant": "src/sports/period/kernel.ts:2863:48 ConditionalExpression → false",
+      "original": "cfg.points.otLoss === undefined",
+      "line": "loss: { regulation: cfg.points.loss, ...(cfg.points.otLoss === undefined ? {} : { ot: cfg.points.otLoss }) },",
+      "reason": "With no otLoss the mutant writes `loss.ot: undefined` into the table rule instead of leaving the key out; PointsRule declares `ot` optional and its one reader, points.ts `byChain`'s `side.ot !== undefined`, falls through to `regulation` for undefined exactly as for an absent key (JSON drops it; W2d Task 3)."
+    },
+    {
+      "mutant": "src/sports/period/kernel.ts:2865:11 ConditionalExpression → false",
+      "original": "cfg.points.soBonus === undefined",
+      "line": "...(cfg.points.soBonus === undefined ? {} : { soBonus: cfg.points.soBonus }),",
+      "reason": "With no soBonus the mutant writes `soBonus: undefined` into the table rule instead of leaving the key out; PointsRule declares it optional, its refinement tests `rule.soBonus !== undefined` (so a `result` sport such as ice hockey is not refused), and both payers (payout's draw_plus_bonus arm and coverage's so prices) read `rule.soBonus ?? 1`, so undefined pays the same 1 either way (JSON drops the key; W2d Task 3)."
     },
     {
       "mutant": "src/sports/setbased/kernel.ts:2400:27 StringLiteral → \"\"",

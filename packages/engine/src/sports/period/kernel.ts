@@ -157,7 +157,7 @@ export function makePeriodConfigSchema(
   defaults: PeriodParams,
   setPieceKinds: readonly string[] = [],
   abandonOptions: readonly string[] = DEFAULT_ABANDON_OPTIONS,
-  shootoutAs: PeriodPreset["shootoutAs"] = "result",
+  shootoutAs: PeriodPreset["shootoutAs"],
 ) {
   // W2d (B2): a bonus exists only where a table shoot-out is a draw plus one. A sport that books it as a result (ice
   // hockey's GWS) pays `otWin`/`otLoss` for it, and the PointsRule refuses a `soBonus` there, so its schema takes none.
