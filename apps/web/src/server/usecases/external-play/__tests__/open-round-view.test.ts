@@ -18,6 +18,7 @@ import { HttpError } from "@/lib/errors";
 import { isRoundPaired } from "@/lib/division-phase";
 import type { OpenRoundView } from "@/lib/open-round";
 import { appendEvent } from "@/server/engine-db";
+import { boardOpenFor } from "@/server/external-play/round-open";
 import { CHECKIN_BATCH_GAP_MS, CHECKIN_BATCH_SIZE, DEADLINE_AFTER_MS } from "@/server/external-play/window";
 
 // The email seam, as open-round.test.ts: the invite is queued on the email outbox and the provider's answer is ours.
@@ -41,6 +42,7 @@ import { resolveExternalPlay } from "../resolve";
 import { addFixture } from "../../stages";
 import { getFixtureState } from "../../fixtures";
 import { scoreEvent } from "../../scoring";
+import { patchDivision } from "../../divisions";
 import {
   seedOnlineChessRound,
   seedOnlineChessRoundWithRankedBoard,
@@ -682,5 +684,83 @@ describe.skipIf(!HAS_DB)("listOpenRounds - a re-armed board (D17): the press nam
     expect(rearmed, "owed both seats, no stamp, no resend").toMatchObject({ owedSeats: 2, invitedAt: null, canResend: false });
     expect(v.pairings.filter((p) => p.owedSeats > 0).map((p) => p.fixtureId), "only the re-armed board is invited").toEqual([r.boards[0]!.fixtureId]);
     expect(await pressAndRead(r, INSIDE)).toBe("reopened");
+  });
+
+  // Final review I1 (owner-approved 2026-10-25): a reopen KEEPS the stored `staggered` flag. The organiser's confirmation is worded
+  // from the READER's `staggered` and `staggerSpanMinutes` ("the last group opens {span} minutes from now"); the usecase then stamps
+  // the batches. After a camera downgrade the usecase used to ask the live policy again and stamp ONE batch, so the dialog promised
+  // groups the server did not make. Both sides are the real ones here, and the expected values come from the constants and from the
+  // rows the press wrote (`boardOpenFor`), never from the reader. The board in batch 2 is the one whose time differs between the
+  // right answer (T + 2 gaps) and the wrong one (T).
+  describe("a reopen after a camera downgrade: the view and the usecase agree on `staggered`", () => {
+    const S = CHECKIN_BATCH_SIZE;
+    const GAP = CHECKIN_BATCH_GAP_MS;
+    const NOW = at(MIN);
+    type Ranked = Awaited<ReturnType<typeof seedOnlineChessRoundWithRankedBoard>>;
+    const unbound = async (r: Ranked) =>
+      (
+        await sql<{ n: number }[]>`
+          select count(*)::int as n from fixture_external_play
+           where fixture_id in ${sql([r.boards[0]!.fixtureId, r.ranked.fixtureId])} and round_open_id is not null`
+      )[0]!.n === 0;
+    const PATHS: { name: string; beforeFirstPress: (r: Ranked) => void; afterFirstPress: (r: Ranked) => Promise<void> }[] = [
+      {
+        name: "nobody was invited: every send failed, so the reopen restarts the window",
+        beforeFirstPress: (r) => {
+          for (const b of [r.boards[0]!, r.ranked]) mail.fail.add(b.home.email).add(b.away.email);
+        },
+        afterFirstPress: async (r) => {
+          expect(await unbound(r), "premise: no board is bound to the open").toBe(true);
+          mail.fail.clear();
+        },
+      },
+      {
+        name: "D17: the batch-2 board was re-armed after the No result and the void, every other board is decided",
+        beforeFirstPress: () => undefined,
+        afterFirstPress: async (r) => {
+          await decide(r, r.boards[0]!);
+          await noResultThenVoid(r, r.ranked.fixtureId);
+        },
+      },
+    ];
+
+    it.each(PATHS.map((p) => [p.name, p] as const))("%s", async (_name, path) => {
+      const r = await seedOnlineChessRoundWithRankedBoard({ roundNo: 1, cameraPolicy: "required" }, 2 * S);
+      path.beforeFirstPress(r);
+      expect(await press(r, 1, T0), "premise: the round opened").toMatchObject({ opened: true });
+      await path.afterFirstPress(r);
+      expect((await boardOpenFor(sql, r.ranked.fixtureId))?.staggered, "premise: the first open staggered").toBe(true);
+      await patchDivision(r.owner, r.divisionId, { camera_policy: "off" });
+      const [d] = await sql<{ camera_policy: string | null }[]>`select camera_policy from divisions where id = ${r.divisionId}`;
+      expect(d!.camera_policy, "premise: the downgrade landed").toBe("off");
+
+      // What the confirmation is worded from.
+      const shown = roundOf(await view(r, NOW), 1);
+      expect(shown.press, "premise: the press is a restart").toBe("reopen");
+      expect([shown.staggered, shown.staggerSpanMinutes], "the screen still promises the groups").toEqual([true, Math.ceil((2 * GAP) / MIN)]);
+
+      // What the press then does, read back from the rows it wrote.
+      expect(await pressAndRead(r, NOW), "premise: the press restarted the window").toBe("reopened");
+      const first = (await boardOpenFor(sql, r.boards[0]!.fixtureId))!;
+      const last = (await boardOpenFor(sql, r.ranked.fixtureId))!;
+      expect(last.staggered, "the stored flag after the press is the one the screen promised").toBe(shown.staggered);
+      expect([last.anchor.batch, last.anchor.at.getTime() - NOW.getTime()], "the ranked board sits in batch 2, 2 x gap after the NEW T").toEqual([2, 2 * GAP]);
+      expect(last.anchor.at.getTime(), "the wrong answer's constant is not the right one's").not.toBe(NOW.getTime());
+      expect(first.anchor.at.getTime(), "board 1 opens at the new T").toBe(NOW.getTime());
+      expect(
+        Math.ceil((last.anchor.at.getTime() - first.anchor.at.getTime()) / MIN),
+        "the span the screen named is the span the server stamped",
+      ).toBe(shown.staggerSpanMinutes);
+
+      // And the round, read again, shows the same groups at the times the server stamped.
+      const after = roundOf(await view(r, at(2 * MIN)), 1);
+      expect([after.staggered, after.batches.length]).toEqual([true, 3]);
+      expect(after.batches[2]!.opensAt, "batch 2 opens when the server said").toBe(last.anchor.at.toISOString());
+      expect(after.batches[0]!.opensAt).toBe(first.anchor.at.toISOString());
+    });
+
+    it("anti-vacuity: both paths of the reopen are driven", () => {
+      expect(PATHS.length).toBe(2);
+    });
   });
 });
