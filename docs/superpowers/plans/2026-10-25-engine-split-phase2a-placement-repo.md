@@ -706,3 +706,5 @@ Revert the web PR with `git revert -m 1 <merge sha>`, as a PR, OWNER GO. That re
 3. **Branch protection on `onryde/seazn.club.placement` `main`:** after O5's first green run, the owner requires `ci`'s `test`, `docker` and `buf-breaking` checks (owner UI step).
 
 **Placement is an internal service only** (owner, 2026-10-25). It is reached only over Fly private networking (`placement.flycast:50051`, private IPv6, DEPLOY.md §2), never from the public internet. Task P3's deploy workflows MUST keep it so: after each deploy, `flyctl ips list --app <app> --json` is checked and the job fails if any address is public (anything other than a private v6). No workflow ever runs `fly ips allocate-v4`, `allocate-v6` without `--private`, or adds an HTTP handler to `fly.toml`'s `[[services.ports]]`. P3 ships a test that pins both rules.
+
+**Visibility** (owner "Ok", 2026-10-25): the repo and the GHCR image stay PUBLIC as planned. "Internal only" governs the network, not visibility; nothing in the repo or image is secret (the shared secret lives in Fly secrets).
