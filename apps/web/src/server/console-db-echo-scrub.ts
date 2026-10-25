@@ -15,9 +15,14 @@
 // Only the Node runtime has a database driver, so only it installs this. Server-only: nothing on the client imports it.
 //
 // Like the logger's and Sentry's hooks it strips by field name on any error-shaped value, so a non-database error's `detail` (a
-// Stripe error's) goes too (lib/strip-db-echo.ts). It looks only as far as `console.error` prints: util.inspect's own depth and array
-// length, read from `inspect.defaultOptions` at each call. Next patches Error.prototype's inspect in every server process
-// (node-environment-extensions/error-inspect.js); that rebuilds the error from the keys it still has, so it prints the scrubbed copy.
+// Stripe error's) goes too (lib/strip-db-echo.ts).
+//
+// How far it looks. A line made by util.inspect's DEFAULTS shows nothing past inspect's depth and array length, so for such a call the
+// walk stops there (read from `inspect.defaultOptions` at each call). That is NOT true of every line: `%j` is JSON.stringify (no
+// limits, calls getters) and `%o` is inspect with depth 4 and showHidden, so a call whose format string has one of them is scrubbed
+// with no bounds (`formatSpecifiersReach`). And Next patches Error.prototype's inspect in every server process
+// (node-environment-extensions/error-inspect.js): it rebuilds each error by READING every enumerable key, so a getter on an error is
+// called whatever the bounds; the strip calls an error's getters too and strips what they return.
 // In `next dev` only, React's server bundle patches console AFTER register() and replays the raw arguments to the browser; production
 // is not affected.
 import { inspect } from "node:util";
@@ -31,13 +36,46 @@ type Print = ((...args: unknown[]) => void) & { [INSTALLED]?: true };
 const WITHHELD = "[console] argument withheld: the database-echo scrub could not read it";
 
 /**
+ * What a `console.error(...args)` call hands its operands to, when `args[0]` is a format string (`util.format`, read from Node's
+ * `formatWithOptionsInternal`): only the FIRST argument is one, and only when something follows it. `%%` is a literal percent. Each
+ * other recognised specifier (`s d i f j o O c`) takes the next operand, in order, until the operands run out; anything else
+ * (`%x`, a trailing `%`) takes none. Of those:
+ *  - `%j` is `JSON.stringify`: no depth or length limit, and it calls getters (`json`);
+ *  - `%o` is inspect with `showHidden` and `depth: 4`, and `%O` is inspect (`wide`, with `%j`).
+ * `wide` means the line can show more than the default inspect does, so the call is scrubbed with no bounds.
+ */
+export function formatSpecifiersReach(args: unknown[]): { json: boolean; wide: boolean } {
+  const first = args[0];
+  let json = false;
+  let wide = false;
+  if (typeof first !== "string" || args.length < 2) return { json, wide };
+  let operands = args.length - 1;
+  for (let i = 0; i < first.length - 1 && operands > 0; i++) {
+    if (first[i] !== "%") continue;
+    const spec = first[++i];
+    if (spec === "j") {
+      json = wide = true;
+      operands--;
+    } else if (spec === "o" || spec === "O") {
+      wide = true;
+      operands--;
+    } else if (spec === "s" || spec === "d" || spec === "i" || spec === "f" || spec === "c") {
+      operands--;
+    }
+  }
+  return { json, wide };
+}
+
+/**
  * `args` with every database error in them stripped of its echo fields; untouched arguments keep their identity. Fails closed PER
  * ARGUMENT: the one the strip cannot read is replaced by a note, so the message strings around it still print.
  */
 export function scrubConsoleArgs(args: unknown[]): unknown[] {
-  // util.inspect's own declarations of how far a print reaches; `null` there means unlimited.
+  // A line made by inspect's defaults shows what util.inspect's own declarations say (`null` there means unlimited). A format
+  // specifier can send an operand somewhere that shows more: then no bounds, and for %j the getters are called too.
+  const { wide, json } = formatSpecifiersReach(args);
   const { depth, maxArrayLength } = inspect.defaultOptions;
-  const bounds = { depth: depth ?? undefined, maxItems: maxArrayLength ?? undefined };
+  const bounds = wide ? { getters: json } : { depth: depth ?? undefined, maxItems: maxArrayLength ?? undefined };
   return args.map((arg) => {
     try {
       return stripDbEchoFromErrors(arg, bounds);

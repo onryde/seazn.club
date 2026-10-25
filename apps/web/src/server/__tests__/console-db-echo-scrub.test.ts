@@ -23,10 +23,10 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Console } from "node:console";
 import { Writable } from "node:stream";
-import { inspect } from "node:util";
+import { format, inspect } from "node:util";
 import { randomBytes } from "node:crypto";
 import { sql } from "@/lib/db";
-import { installConsoleDbEchoScrub, scrubConsoleArgs } from "../console-db-echo-scrub";
+import { formatSpecifiersReach, installConsoleDbEchoScrub, scrubConsoleArgs } from "../console-db-echo-scrub";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -269,7 +269,8 @@ describe("installing the scrub", () => {
   });
 });
 
-// What the scrub walks is what util.inspect prints, and no more: its depth and array length are Node's own declared defaults.
+// For a line made by inspect's defaults the scrub walks what inspect prints and no more: its depth and array length are Node's own
+// declared defaults, read at the call. (A %j / %o line is another matter: see the format-specifier suites below.)
 describe("the scrub walks what console.error prints, bounded by util.inspect's defaults", () => {
   const driverShaped = () => {
     const err = new Error("duplicate key value") as DriverError;
@@ -311,21 +312,33 @@ describe("the scrub walks what console.error prints, bounded by util.inspect's d
 
 // Next patches Error.prototype[nodejs.util.inspect.custom] in EVERY server process (server/node-environment-extensions/error-inspect.js,
 // loaded by node-environment.js): it rebuilds the error as `new Error(message, { cause })` and copies every enumerable key of `this`
-// before handing it to util.inspect. So what console.error really prints in production goes through that, not through the bare
-// formatter the other tests use.
+// (reading each one, so an enumerable GETTER is called) before handing it to util.inspect. So what console.error really prints in
+// production goes through that, not through the bare formatter the other tests use.
+/** Run `fn` with Next's own patch installed, in Next's boot order, and put everything back afterwards. */
+async function withNextPatchedInspect<T>(fn: () => Promise<T>): Promise<T> {
+  // node-environment-baseline puts AsyncLocalStorage on globalThis (the patch's storage is a fake without it).
+  const hadAls = "AsyncLocalStorage" in globalThis;
+  // @ts-expect-error -- a side-effect-only module whose declaration file is empty, so TypeScript does not call it a module
+  await import("next/dist/server/node-environment-baseline");
+  const { patchErrorInspectNodeJS } = await import("next/dist/server/patch-error-inspect");
+  const inspectSymbol = Symbol.for("nodejs.util.inspect.custom");
+  const priorPrepare = Error.prepareStackTrace;
+  const priorCustom = Object.getOwnPropertyDescriptor(Error.prototype, inspectSymbol);
+  try {
+    patchErrorInspectNodeJS(Error);
+    expect(Object.getOwnPropertyDescriptor(Error.prototype, inspectSymbol), "premise: Next's patch is installed").toBeDefined();
+    return await fn();
+  } finally {
+    Error.prepareStackTrace = priorPrepare;
+    if (!hadAls) delete (globalThis as unknown as Record<string, unknown>).AsyncLocalStorage;
+    if (priorCustom) Object.defineProperty(Error.prototype, inspectSymbol, priorCustom);
+    else delete (Error.prototype as unknown as Record<symbol, unknown>)[inspectSymbol];
+  }
+}
+
 describe.skipIf(!HAS_DB)("with Next's patched Error inspect installed", () => {
   it("a real database error printed through the wrapped console has no canary, and still has its message, SQLSTATE and stack", async () => {
-    // Next's own boot order: node-environment-baseline puts AsyncLocalStorage on globalThis (the patch's storage is a fake without it).
-    const hadAls = "AsyncLocalStorage" in globalThis;
-    // @ts-expect-error -- a side-effect-only module whose declaration file is empty, so TypeScript does not call it a module
-    await import("next/dist/server/node-environment-baseline");
-    const { patchErrorInspectNodeJS } = await import("next/dist/server/patch-error-inspect");
-    const inspectSymbol = Symbol.for("nodejs.util.inspect.custom");
-    const priorPrepare = Error.prepareStackTrace;
-    const priorCustom = Object.getOwnPropertyDescriptor(Error.prototype, inspectSymbol);
-    try {
-      patchErrorInspectNodeJS(Error);
-      expect(Object.getOwnPropertyDescriptor(Error.prototype, inspectSymbol), "premise: Next's patch is installed").toBeDefined();
+    await withNextPatchedInspect(async () => {
       const canaries = mintCanaries();
       const err = await uniqueViolation(canaries, false);
 
@@ -345,12 +358,28 @@ describe.skipIf(!HAS_DB)("with Next's patched Error inspect installed", () => {
       expect(line, "the SQLSTATE is still printed").toContain("23505");
       expect(line, "a stack frame is still printed").toMatch(/\n\s+at /);
       expect(line, "both prints happened").toContain("wrapper");
-    } finally {
-      Error.prepareStackTrace = priorPrepare;
-      if (!hadAls) delete (globalThis as unknown as Record<string, unknown>).AsyncLocalStorage;
-      if (priorCustom) Object.defineProperty(Error.prototype, inspectSymbol, priorCustom);
-      else delete (Error.prototype as unknown as Record<symbol, unknown>)[inspectSymbol];
-    }
+    });
+  });
+
+  it("VECTOR: an Error with an ENUMERABLE GETTER that returns a database error (Next's inspect reads every enumerable key, so it calls it)", async () => {
+    await withNextPatchedInspect(async () => {
+      const canaries = mintCanaries();
+      const db = await uniqueViolation(canaries, false);
+      const wrapper = new Error("wrapper with a getter");
+      Object.defineProperty(wrapper, "failure", { enumerable: true, get: () => db });
+
+      const raw = capturingConsole();
+      raw.target.error(wrapper);
+      expect(raw.stderr(), "premise: without the scrub, Next's inspect calls the getter and prints the database error's fields").toContain(canaries.email);
+
+      const { target, stderr } = capturingConsole();
+      installConsoleDbEchoScrub(target);
+      target.error(wrapper);
+      expect(stderr().length, "anti-vacuity: something was printed").toBeGreaterThan(0);
+      expect(stderr(), "no canary").not.toContain(canaries.email);
+      expect(stderr(), "the wrapper's message is still printed").toContain("wrapper with a getter");
+      expect(stderr(), "and the database error's SQLSTATE, which the getter returned").toContain("23505");
+    });
   });
 });
 
@@ -372,5 +401,148 @@ describe.skipIf(!HAS_DB)("an error that points back at itself, printed through t
     expect(stderr().length).toBeGreaterThan(0);
     expect(stderr()).not.toContain(canaries.email);
     expect(stderr()).toContain("23505");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// A line is not always made by util.inspect's defaults. When the first argument is a FORMAT STRING, util.format hands the operand to
+// something else: %j is JSON.stringify (no depth or length limit, and it calls getters), %o is inspect with showHidden and depth 4,
+// %O is inspect. So a call whose format has one of those is scrubbed with no bounds.
+// ---------------------------------------------------------------------------------------------------------------------------
+describe("which calls util.format sends past inspect's limits", () => {
+  /**
+   * Node is the oracle for %j and %o: what each operand of `format(fmt, ...operands)` was actually consumed by, observed from inside
+   * the operand (`toJSON` is JSON.stringify's; `showHidden` is %o's inspect). It cannot see %O: that is `inspect` with its defaults,
+   * indistinguishable from the way an unconsumed operand is appended. So %O (which reaches no further than the default print, but
+   * is named in the ruling) is typed per row from the documented grammar.
+   */
+  function consumedBy(fmt: string, operands: number): ("j" | "o" | null)[] {
+    const seen: ("j" | "o" | null)[] = Array.from({ length: operands }, () => null);
+    const ops = seen.map((_, i) => ({
+      toJSON() {
+        seen[i] = "j";
+        return 1;
+      },
+      [inspect.custom](_depth: number, options: { showHidden?: boolean }) {
+        if (options.showHidden) seen[i] = "o";
+        return "x";
+      },
+    }));
+    format(fmt, ...ops);
+    return seen;
+  }
+
+  // [format, operands, a %O takes an operand (documented grammar; the oracle cannot see it)]
+  const TABLE: [string, number, boolean][] = [
+    ["%j", 1, false],
+    ["%o", 1, false],
+    ["%O", 1, true],
+    ["%s", 1, false],
+    ["%d %i %f %c", 4, false],
+    ["%%j", 1, false], //           an escaped percent: the j is text
+    ["%%%j", 1, false], //          an escaped percent, then a real %j
+    ["100%%", 1, false],
+    ["%x%j", 1, false], //          %x is no specifier and consumes nothing; the %j takes the operand
+    ["%s%j", 1, false], //          %s takes the only operand; %j finds none and stays text
+    ["%s%O", 1, false], //          likewise for %O
+    ["%j %o", 2, false],
+    ["%s %j", 2, false],
+    ["%", 1, false],
+    ["tag %j", 1, false],
+    ["no specifier at all", 2, false],
+    ["%%O", 1, false],
+  ];
+
+  it.each(TABLE)("%s with %i operand(s): the module agrees with what Node did to the operands", (fmt, operands, oTakesOperand) => {
+    const nodeSays = consumedBy(fmt, operands);
+    const json = nodeSays.includes("j");
+    const wide = json || nodeSays.includes("o") || oTakesOperand;
+    const ours = formatSpecifiersReach([fmt, ...Array.from({ length: operands }, () => ({}))]);
+    expect(ours, `${JSON.stringify(fmt)} ${JSON.stringify(nodeSays)}`).toEqual({ json, wide });
+  });
+
+  it("anti-vacuity: the table has rows where Node reached past the limits and rows where it did not", () => {
+    const outcomes = TABLE.map(([fmt, n, o]) => o || consumedBy(fmt, n).some((c) => c !== null));
+    expect(outcomes.filter(Boolean).length).toBeGreaterThan(3);
+    expect(outcomes.filter((x) => !x).length).toBeGreaterThan(3);
+  });
+
+  it("only the FIRST argument is a format string, and only when something follows it; a later '%j' is text", () => {
+    expect(formatSpecifiersReach(["%j"])).toEqual({ json: false, wide: false });
+    expect(formatSpecifiersReach(["tag", "%j", {}])).toEqual({ json: false, wide: false });
+    expect(formatSpecifiersReach([{ a: 1 }, "%j", {}])).toEqual({ json: false, wide: false });
+    expect(formatSpecifiersReach(["%j", {}])).toEqual({ json: true, wide: true });
+  });
+
+  it("a call with no such specifier stays bounded (the very same object back); one with %j / %o / %O is walked in full", () => {
+    const deep = () => {
+      const err = new Error("duplicate key value") as DriverError;
+      err.name = "PostgresError";
+      err.detail = "Key (email)=(leak-canary-shape) already exists.";
+      return { a: { b: { c: { err } } } }; // the error is at level 4: past inspect's default depth, inside %o's
+    };
+    for (const [fmt, bounded] of [["%%j", true], ["100%%", true], ["%s", true], ["%j", false], ["%o", false], ["%O", false]] as const) {
+      const arg = deep();
+      const out = scrubConsoleArgs([fmt, arg])[1];
+      expect(Object.is(out, arg), `${fmt}: ${bounded ? "left as it was" : "walked and copied"}`).toBe(bounded);
+    }
+    const arg = deep();
+    expect(Object.is(scrubConsoleArgs(["tag", "%j", arg])[2], arg), "a later argument's '%j' is text").toBe(true);
+  });
+});
+
+describe.skipIf(!HAS_DB)("a line made by a format specifier, with a real database error", () => {
+  const nested = (err: Error) => ({ a: { b: { err } } }); // the error is at level 3: past console.error's depth 2, inside %o's 4
+
+  it.each([
+    ["%j: a database error at nesting level 3", "%j", (e: Error) => nested(e)],
+    ["%j: a database error at item 101 of an array", "%j", (e: Error) => [...Array<number>(100).fill(0), e]],
+    ["%j: a database error returned by a getter", "%j", (e: Error) => ({ get failure() { return e; } })],
+    ["%o: a database error at nesting level 3", "%o", (e: Error) => nested(e)],
+  ] as [string, string, (e: Error) => unknown][])("%s", async (_name, fmt, build) => {
+    const canaries = mintCanaries();
+    const err = await uniqueViolation(canaries, false);
+    const operand = build(err);
+
+    // POSITIVE PAIR: the same call on a Console without the scrub writes the canary.
+    const raw = capturingConsole();
+    raw.target.error(fmt, operand);
+    expect(raw.stderr(), "premise: the unscrubbed line carries the canary").toContain(canaries.email);
+
+    const { target, stderr } = capturingConsole();
+    installConsoleDbEchoScrub(target);
+    target.error(fmt, operand);
+    expect(stderr().length, "anti-vacuity: something was printed").toBeGreaterThan(0);
+    expect(stderr(), "no canary on the line").not.toContain(canaries.email);
+    expect(stderr(), "no canary on the line").not.toContain(canaries.token);
+    expect(stderr(), "the SQLSTATE is still printed").toContain("23505");
+  });
+
+  it("%o prints an error's NON-ENUMERABLE own properties too: postgres.js's hidden statement fields, with the bind values in them, are not on the line", async () => {
+    const canaries = mintCanaries();
+    vi.stubEnv("VITEST", ""); // the production client: query/parameters/args/types exist but are not enumerable
+    await dropClient();
+    const err = await sql`insert into no_such_table_for_console_scrub (token, recipient) values (${canaries.token}, ${canaries.email})`.then(
+      () => null,
+      (e: unknown) => e,
+    );
+    await dropClient();
+    vi.unstubAllEnvs();
+    if (!(err instanceof Error)) throw new Error("premise: the staged statement must fail");
+    expect((err as DriverError).code, "premise: Postgres refused it for the staged reason").toBe("42P01");
+    expect(Object.keys(err).filter((k) => ECHO_FIELDS.includes(k)), "premise: nothing ENUMERABLE to strip").toEqual([]);
+
+    const raw = capturingConsole();
+    raw.target.error("%o", err);
+    expect(raw.stderr(), "premise: %o (showHidden) prints the hidden bind values").toContain(canaries.token);
+
+    const { target, stderr } = capturingConsole();
+    installConsoleDbEchoScrub(target);
+    target.error("%o", err);
+    expect(stderr().length).toBeGreaterThan(0);
+    expect(stderr()).not.toContain(canaries.token);
+    expect(stderr()).not.toContain(canaries.email);
+    expect(stderr(), "the SQLSTATE is still printed").toContain("42P01");
+    expect(stderr(), "and the message").toContain("no_such_table_for_console_scrub");
   });
 });
