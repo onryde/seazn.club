@@ -202,8 +202,10 @@ describe("stripDbEchoFromErrors", () => {
   });
 });
 
-// Print mode stops where util.inspect stops printing. Nothing past the depth or the array length it shows can reach a line, so
-// walking it is pure cost (a 2M-item array took seconds) and a way to run code (getters, traps) that inspect never runs.
+// Print mode, given bounds, stops where the DEFAULT util.inspect stops printing: nothing past that depth or array length is on a line
+// that inspect makes, so walking it is cost (a 2M-item array took seconds) and a way to run code (getters) inspect never runs. That
+// is true of inspect's defaults only: a %j line (JSON.stringify) and a %o line (depth 4, showHidden) go further, and the caller passes
+// no bounds for them (console-db-echo-scrub.test.ts drives those lines). Without bounds the walk goes as deep as stripDbEcho does.
 describe("stripDbEchoFromErrors, bounded by what util.inspect prints", () => {
   function driverError(): Error & Record<string, unknown> {
     const err = new Error("duplicate key value") as Error & Record<string, unknown>;
@@ -261,7 +263,7 @@ describe("stripDbEchoFromErrors, bounded by what util.inspect prints", () => {
     expect(inspect(stripDbEchoFromErrors(nested), { depth: 8 })).not.toContain(SECRET);
   });
 
-  it("an accessor is copied as an accessor and never called (inspect shows [Getter] and does not call it); the rest of the object is stripped", () => {
+  it("an accessor on a plain object is copied as an accessor and not called (inspect shows [Getter]); the rest of the object is stripped", () => {
     let calls = 0;
     const holder: Record<string, unknown> = { err: driverError(), note: "kept" };
     Object.defineProperty(holder, "lazy", {
@@ -279,6 +281,46 @@ describe("stripDbEchoFromErrors, bounded by what util.inspect prints", () => {
     expect(inspect(out)).not.toContain(SECRET);
     expect(inspect(out)).toContain("[Getter]");
     expect(calls, "printing it does not call it either").toBe(0);
+  });
+
+  it("`getters: true` (a %j line: JSON.stringify calls getters) calls a plain object's accessor and strips what it returns", () => {
+    const err = driverError();
+    const holder = { get lazy() { return err; } };
+    const out = stripDbEchoFromErrors(holder, { getters: true });
+    expect(JSON.stringify(holder), "premise: JSON.stringify calls the getter and writes the error's fields").toContain(SECRET);
+    expect(JSON.stringify(out), "after the strip it does not").not.toContain(SECRET);
+    expect(Object.getOwnPropertyDescriptor(out, "lazy")?.value, "the copy holds the stripped value, not the accessor").toBeInstanceOf(Error);
+  });
+
+  it("an ENUMERABLE accessor on an Error is called and its result stripped, with no option (Next's patched inspect reads every enumerable key of an error)", () => {
+    const inner = driverError();
+    const outer = new Error("wrapper");
+    Object.defineProperty(outer, "inner", { enumerable: true, get: () => inner });
+    // What Next's sourceMapError does with an Error before it is printed: `for (const key in error) copy[key] = error[key]`.
+    const nextCopy = (e: Error) => Object.fromEntries(Object.keys(e).map((k) => [k, (e as unknown as Record<string, unknown>)[k]]));
+    expect(inspect(nextCopy(outer)), "premise: that read reaches the error's fields").toContain(SECRET);
+
+    const out = stripDbEchoFromErrors(outer);
+    expect(Object.is(out, outer)).toBe(false);
+    expect(out).toBeInstanceOf(Error);
+    expect(inspect(nextCopy(out)), "after the strip the same read finds nothing").not.toContain(SECRET);
+    expect((nextCopy(out).inner as Error).message).toBe("duplicate key value");
+    // and a getter on an Error that returns a primitive leaves the Error alone
+    const plain = new Error("p");
+    Object.defineProperty(plain, "n", { enumerable: true, get: () => 7 });
+    expect(stripDbEchoFromErrors(plain)).toBe(plain);
+  });
+
+  it("postgres.js's hidden statement fields (own, NOT enumerable, bind values in them) are left out of the copy: util.inspect with showHidden (%o) prints them", () => {
+    const err = new Error("relation does not exist");
+    err.name = "PostgresError";
+    for (const k of ["query", "parameters", "args", "types"]) Object.defineProperty(err, k, { value: `${k}: ${SECRET}`, enumerable: false });
+    expect(inspect(err, { showHidden: true }), "premise: showHidden prints them").toContain(SECRET);
+    expect(Object.keys(err), "premise: nothing enumerable to strip").toEqual(["name"]);
+    const out = stripDbEchoFromErrors(err);
+    expect(Object.is(out, err), "so it is a copy, not the original").toBe(false);
+    expect(inspect(out, { showHidden: true, depth: 4 })).not.toContain(SECRET);
+    expect(out.message).toBe("relation does not exist");
   });
 });
 

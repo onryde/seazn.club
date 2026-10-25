@@ -62,15 +62,17 @@ function isPlain(v: object): boolean {
  * copy.
  */
 export function stripDbEcho<T>(value: T): T {
-  return walk(value, { seen: new WeakMap(), print: false, depthLimit: MAX_DEPTH, maxItems: Infinity }, 0) as T;
+  return walk(value, { seen: new WeakMap(), print: false, depthLimit: MAX_DEPTH, maxItems: Infinity, getters: true }, 0) as T;
 }
 
-/** How far a print-mode walk goes: `util.inspect`'s own depth and array length, which the caller reads from `inspect.defaultOptions`. */
+/** How far a print-mode walk goes, and what it may call: what the line being made will reach. */
 export interface PrintBounds {
-  /** Nesting levels printed below the argument (inspect `depth`); omitted = as deep as `stripDbEcho` goes. */
+  /** Nesting levels `util.inspect` prints below the argument (its `depth`); omitted = as deep as `stripDbEcho` goes (a %j or %o line). */
   depth?: number;
-  /** Array items printed (inspect `maxArrayLength`); omitted = all. */
+  /** Array items `util.inspect` prints (its `maxArrayLength`); omitted = all. */
   maxItems?: number;
+  /** The line is JSON (`%j`): `JSON.stringify` calls every getter, so the walk must too and strip what they return. Default: no. */
+  getters?: boolean;
 }
 
 /**
@@ -79,9 +81,15 @@ export interface PrintBounds {
  *    and `errors` carried as the non-enumerable own properties they are), not as a plain object, so `util.inspect` renders it
  *    exactly as it rendered the original minus the dropped fields; and an Error with nothing to strip (nor anywhere in its cause
  *    chain) comes back as the SAME object rather than a copy;
- *  - it stops where `util.inspect` stops printing (`bounds`): a node deeper than `depth`, or an array item past `maxItems`, can
- *    never reach a line, so it is neither walked nor copied (it is left exactly as it is);
- *  - an accessor property is copied as an accessor and never called, as `inspect` shows `[Getter]` without calling it.
+ *  - with `bounds` it stops where the DEFAULT `util.inspect` stops printing: a node deeper than `depth`, or an array item past
+ *    `maxItems`, is not on that line, so it is neither walked nor copied. That holds only for a line made by inspect's defaults. A
+ *    `%j` line is JSON.stringify (no limit, calls getters) and a `%o` line is inspect with depth 4 and showHidden, so the caller
+ *    passes no bounds for those (console-db-echo-scrub.ts decides which);
+ *  - an accessor on a plain object is copied as an accessor and not called, as `inspect` shows `[Getter]` without calling it
+ *    (unless `bounds.getters`: JSON calls it). An accessor on an ERROR is always called and its result stripped: Next's patched
+ *    inspect rebuilds every error by reading each of its enumerable keys;
+ *  - an error's own NON-enumerable echo fields (postgres.js keeps `query`, `parameters`, `args` and `types` so, with the bind values in
+ *    them) are left out of the copy, because `%o` prints non-enumerable properties (showHidden).
  * Everything else, the field list, the walk and the cycle handling, is `stripDbEcho`'s own. Nothing is mutated: code that reads
  * `err.detail` after the line is printed still can.
  */
@@ -91,6 +99,7 @@ export function stripDbEchoFromErrors<T>(value: T, bounds: PrintBounds = {}): T 
     print: true,
     depthLimit: Math.min(bounds.depth ?? MAX_DEPTH, MAX_DEPTH),
     maxItems: bounds.maxItems ?? Infinity,
+    getters: bounds.getters ?? false,
   };
   return walk(value, ctx, 0) as T;
 }
@@ -102,6 +111,8 @@ interface Ctx {
   print: boolean;
   depthLimit: number;
   maxItems: number;
+  /** Print mode: call accessors on plain objects too (a %j line). */
+  getters: boolean;
 }
 
 const own = (v: object, key: string) => Object.prototype.hasOwnProperty.call(v, key);
@@ -173,12 +184,17 @@ function walk(value: unknown, ctx: Ctx, depth: number): unknown {
       }
     }
   }
+  if (ctx.print && errorShaped) {
+    // Own but not enumerable (postgres.js with `debug` off): not copied below, but the original still has them, and a %o line prints
+    // them. Their presence is a reason to hand back the copy.
+    for (const field of DB_ECHO_FIELDS) if (own(value, field)) changed = true;
+  }
   for (const key of Object.keys(bag)) {
     if (errorShaped && ECHO.has(key)) {
       changed = true;
       continue;
     }
-    if (ctx.print) {
+    if (ctx.print && !isError && !ctx.getters) {
       const desc = Object.getOwnPropertyDescriptor(bag, key);
       if (desc && !("value" in desc)) {
         Object.defineProperty(out, key, desc);
