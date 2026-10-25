@@ -64,6 +64,7 @@ import {
   bridgeRow,
   checkedInAt,
   fill,
+  roundGameSql,
   seedGameSql,
   seedMatchRoom,
   seedOnlineRound,
@@ -73,6 +74,16 @@ import {
   type RoundPlayer,
   type SeededRound,
 } from "../match-room-kit";
+import {
+  backdateOpenSql,
+  budgetFor,
+  column,
+  expectSeatWord,
+  inviteRowCount,
+  POLL_BUDGET_MS,
+  refreshNow,
+  watchOpenRoundPosts,
+} from "../arbiter-column-kit";
 import { LICHESS_FIXTURE_PORT, startLichessFixtureServer, type LichessFixtureServer } from "../lichess-fixture-server";
 import {
   REALTIMEKIT_FIXTURE_PORT,
@@ -80,6 +91,7 @@ import {
   type RealtimeKitFixtureServer,
 } from "../realtimekit-fixture-server";
 import { DEADLINE_AFTER_MS, LICHESS_TIMEOUT_MS, WINDOW_OPEN_LEAD_MS } from "../../src/server/external-play/window";
+import { CHECKIN_EXTEND_MAX, CHECKIN_EXTEND_STEP_MINUTES, CHECKIN_EXTEND_STEP_MS } from "../../src/lib/checkin-extend";
 import { CONSENT_KEY, CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION } from "../../src/lib/consent";
 import { routes } from "../../src/lib/routes";
 
@@ -1406,5 +1418,459 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     expect(stayerClaims, "one claim after the reload — the room's own landing — never a loop").toHaveLength(1);
     await nctx.close();
     await sctx.close();
+  });
+
+  // ─── Task 14 (arbiter round column, phase 2): one round, run end to end from the Arbiter Panel's column ───────────────────────────
+  // It lives in THIS describe because it needs the Lichess stub in-process (a real game is made, moved and resigned at it), and it
+  // seeds its own league, so it leans on nothing the tests above left behind. The organiser opens the round from the column, adds
+  // time to one board, eight players seat themselves through the real room (the second of a pair makes the game), the check-in
+  // window ends and the real sweep acts, a held board is settled from the queue, two games are played out and resigned, and round 2
+  // is opened from the same column. Every number on screen is read against the number the DB or the stub holds.
+  //
+  // What the build taught that the brief did not know (each one is asserted, not assumed):
+  //  - the SECOND player's check-in makes the game, so a board never sits at "both here, no game": the tally goes 0 -> 3 of 8 (one
+  //    seat on each of three boards) -> 0 of 2 (the one board nobody came to), and "already playing" counts the rest;
+  //  - the real sweep does not HOLD a board nobody came to: it writes a double walkover (sweep.ts `noShow`, `by: "both"`; only a
+  //    bracket line that feeds no next match refuses one, and a league has none) and the queue stays empty. A board reaches the
+  //    queue by a hold the sweep cannot produce here (an out-of-band mismatch), so the held board is written the way
+  //    online-chess-desk.spec.ts writes it, on a board of its own.
+  const hm = (text: string): string => {
+    const m = /(\d{1,2}:\d{2})/.exec(text);
+    if (!m) throw new Error(`no HH:MM in ${JSON.stringify(text)}`);
+    return m[1]!;
+  };
+  /** "09:05" and "9:05" are one time. */
+  const plain = (t: string): string => t.replace(/^0/, "");
+  /** A dictionary line as a regex: the given slots filled, its `{time}` slot any HH:MM (the page prints it in the viewer's zone). */
+  const withTime = (key: string, vars: Record<string, string | number> = {}): RegExp => {
+    const SLOT = "@@TIME@@";
+    const escaped = fill(key, { ...vars, time: SLOT }).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(escaped.replace(SLOT, "\\d{1,2}:\\d{2}"));
+  };
+  /** The dictionary's one/other pair for a count, picked the way `plural()` picks it. */
+  const pluralKey = (stem: string, count: number) => `${stem}.${count === 1 ? "one" : "other"}`;
+
+  test("walkthrough: one round from the Arbiter Panel's column", async ({ page, request }) => {
+    const names = ["Ada", "Bo", "Cy", "Di", "Eve", "Fay", "Gus", "Hal"].map((n) => `${n} Walk ${TAG}`);
+    // The seat and board counts come from what was ASKED for, not read back out of the seeded boards (that would make the premise
+    // below a tautology).
+    const SEATS = names.length;
+    const BOARDS = SEATS / 2;
+
+    // The budget, DERIVED (AGENTS class 20). Three costs: the seed (SEED_MS is a four-player seed, scaled by the head count); the
+    // scripted calls, each a round trip through our server that may wait out one Lichess call (PER_ACTION_MS, as `budget` costs
+    // them); and the panel waits. Every `arrived` below may wait out ONE band poll if its visibility refresh were lost, so each is
+    // charged POLL_BUDGET_MS, and the count of them is PINNED at the end of the test so a step added without moving the budget reds.
+    const PANEL_WAITS = 10;
+    const PAGE_LOAD_MS = 30_000; // the first load of the panel
+    const SETTLE_MS = 45_000; // under `next dev` the resolve route's first POST compiles; a prod server answers at once
+    const lichessActions = 3 * 2 /* two claims on each of three boards, the second makes the game */ + 2 * 3 /* two boards: move, move, resign */ + 2 * 2 /* two sweeps, each reads three games */;
+    const otherActions = 2 /* the two opens */ + 1 /* +5 min */ + 1 /* the settle */;
+    test.setTimeout(
+      Math.max(300_000, budgetFor(PANEL_WAITS, SEED_MS * (names.length / 4) + (lichessActions + otherActions) * PER_ACTION_MS + PAGE_LOAD_MS + SETTLE_MS)),
+    );
+
+    const r = await seedOnlineRound(request, names, { open: false, stage: "league", playable: true });
+    expect(r.boards, "premise: eight players pair into four boards").toHaveLength(BOARDS);
+    expect(BOARDS, "premise: the walkthrough names four boards").toBe(4);
+    const [b1, b2, b3, b4] = r.boards as [RoundBoard, RoundBoard, RoundBoard, RoundBoard];
+    const boardNo = (b: RoundBoard) => r.boards.indexOf(b) + 1;
+    const everyone = r.boards.flatMap((b) => [b.home, b.away]);
+    expect(everyone, "premise: a board seats two, so the seeded seats are the seats asked for").toHaveLength(SEATS);
+    for (const p of everyone) lichess.registerToken(p.lichessToken!, p.lichessId);
+
+    // ── locators and readers ────────────────────────────────────────────────────────────────────────────────────────────────────
+    const col = column(page);
+    const nav = page.getByRole("navigation", { name: uiEn["arbiter.boardsHeading"]! }).getByRole("button");
+    const decision = page.getByRole("region", { name: uiEn["arbiter.decide.heading"]! });
+    // The waiting list is NOT inside the column's `aside`: the panel places it in its board group (arbiter-panel.tsx), so it is read
+    // from the page. A locator scoped to the column would find nothing there, and a count of 0 on it would pass for any state.
+    const row = (b: RoundBoard) => page.locator(`[data-testid="arbiter-waiting-row"][data-fixture-id="${b.fixtureId}"]`);
+    const seatOf = (b: RoundBoard, p: RoundPlayer) => row(b).getByTestId("arbiter-seat").filter({ hasText: p.name });
+    const queue = col.getByTestId("arbiter-column-queue");
+    const card = (b: RoundBoard) => queue.locator(`[data-testid="arbiter-column-card"][data-fixture-id="${b.fixtureId}"]`);
+    const next = col.locator('[data-testid="arbiter-column-open"][data-round-no="2"]').getByTestId("arbiter-column-next");
+    const quick = { timeout: 2_000 } as const;
+
+    // ── the record of what was asserted at each step (anti-vacuity: a step that asserts nothing is a failure) ──────────────────────
+    const steps: { step: string; phase: string; lines: string[] }[] = [];
+    let lines: string[] = [];
+    const said = (what: string): void => void lines.push(what);
+    const endStep = (step: string, phase: string): void => {
+      steps.push({ step, phase, lines });
+      lines = [];
+    };
+    const phaseIs = async (phase: string) => {
+      await expect(col, `the column is in its ${phase} phase`).toHaveAttribute("data-phase", phase);
+      said(`phase ${phase}`);
+    };
+    /** Brings the panel up to date, and again on every try, until `gate` holds: a refresh already in flight when the DB changed would
+     *  hand back the old snapshot, and the next poll is 20 s away (90 s once nothing is live). The gate is the ONE assertion that
+     *  proves the new snapshot arrived; everything else is asserted after it, on that snapshot, and recorded by `said`. */
+    let waits = 0;
+    const arrived = async (why: string, gate: () => Promise<void>) => {
+      waits += 1;
+      await expect(async () => {
+        await refreshNow(page);
+        await gate();
+      }, why).toPass({ timeout: POLL_BUDGET_MS, intervals: [1_000, 2_000, 4_000] });
+    };
+
+    const tallyText = (here: number, seats: number) => fill(pluralKey("arbiter.column.checkin.tally", seats), { count: here, total: seats });
+    const tallyIs = async (here: number, seats: number) => {
+      await expect(col.locator("#arbiter-checkin-tally-text")).toHaveText(tallyText(here, seats));
+      const bar = col.getByTestId("arbiter-checkin-tally").getByRole("progressbar");
+      await expect(bar).toHaveAttribute("aria-valuenow", String(here));
+      await expect(bar).toHaveAttribute("aria-valuemax", String(seats));
+      said(`tally ${here} of ${seats}`);
+    };
+    const waitingIs = async (boards: RoundBoard[]) => {
+      await expect(page.getByTestId("arbiter-waiting-heading")).toHaveText(fill(pluralKey("arbiter.column.waiting", boards.length), { count: boards.length }));
+      await expect(page.getByTestId("arbiter-waiting-row"), "one row per board still waited on, and no other").toHaveCount(boards.length);
+      for (const b of boards) await expect(row(b), `board ${boardNo(b)} is waited on`).toHaveCount(1);
+      said(`waiting on ${boards.length}`);
+    };
+    const seatWords = async (boards: RoundBoard[], word: "not_delivered") => {
+      let read = 0;
+      for (const b of boards) {
+        for (const colour of ["white", "black"] as const) {
+          await expectSeatWord(page, b, colour, word);
+          read += 1;
+        }
+      }
+      expect(read, "anti-vacuity: every seat of every board named was read").toBe(boards.length * 2);
+      said(`${read} seats read ${word}`);
+    };
+    const alreadyPlayingIs = async (count: number) => {
+      await expect(col.getByTestId("arbiter-checkin-playing")).toHaveText(fill(pluralKey("arbiter.column.alreadyPlaying", count), { count }));
+      said(`already playing ${count}`);
+    };
+    const playingIs = async (playing: number, finished: number) => {
+      await expect(col.getByTestId("arbiter-column-playing")).toHaveText(fill(pluralKey("arbiter.column.playing", BOARDS), { count: playing, total: BOARDS }));
+      const done = col.getByTestId("arbiter-column-finished");
+      if (finished === 0) await expect(done, "a zero clause is never printed").toHaveCount(0);
+      else await expect(done).toHaveText(fill(pluralKey("arbiter.column.finished", finished), { count: finished }));
+      said(`playing ${playing} of ${BOARDS}, finished ${finished}`);
+    };
+    const earlierIs = async (games: number) => {
+      const note = col.getByTestId("arbiter-column-earlier");
+      if (games === 0) await expect(note, "round 1 has nothing in play, so the note is gone").toHaveCount(0);
+      else await expect(note.locator('[data-earlier-round="1"]')).toHaveText(fill(pluralKey("runsheet.round.confirmEarlierInPlay", games), { round: 1, count: games }));
+      said(`round 1 in play: ${games}`);
+    };
+    /** The countdown's face in seconds ("07:42"). */
+    const faceSeconds = async (): Promise<number> => {
+      const timer = col.getByTestId("arbiter-checkin-clock").getByRole("timer");
+      await expect(timer).toBeVisible();
+      const text = (await timer.innerText()).trim();
+      const m = /^(\d+):(\d{2})$/.exec(text);
+      if (!m) throw new Error(`the countdown reads ${JSON.stringify(text)}, not mm:ss`);
+      return Number(m[1]) * 60 + Number(m[2]);
+    };
+    /** The face must be the NEXT board to close (the earliest deadline among the open windows), read against the instant the DB
+     *  stamped the open and the engine's own window length, never against the page. A stale face is later than the truth, so the
+     *  lower bound has slack only for rounding; a face past the window means it counted down to the wrong board. */
+    const faceIsTheFirstToClose = async (stamp: Date) => {
+      const face = await faceSeconds();
+      const remaining = Math.ceil((stamp.getTime() + DEADLINE_AFTER_MS - Date.now()) / 1000);
+      expect(face, "the countdown never shows more than the window").toBeLessThanOrEqual(DEADLINE_AFTER_MS / 1000);
+      expect(face, "and never less than what the open has left, less rounding").toBeGreaterThanOrEqual(remaining - 5);
+      said(`countdown reads ${face} s of ${DEADLINE_AFTER_MS / 1000}`);
+    };
+    const extensionOf = (fixtureId: string) =>
+      withDb(async (sql) => {
+        const [x] = await sql<{ ms: number; n: number }[]>`
+          select checkin_extra_ms as ms, checkin_extensions as n from fixture_external_play where fixture_id = ${fixtureId}`;
+        expect(x, `a bridge row for ${fixtureId} (was the round opened?)`).toBeDefined();
+        return x!;
+      });
+    const gameOf = new Map<string, string>();
+
+    // ── 1. before: paired, not opened ───────────────────────────────────────────────────────────────────────────────────────────
+    const posts = watchOpenRoundPosts(page, r.stageId);
+    expect(await roundOpenedAtSql(r.stageId, 1), "the empty case: nothing is opened").toBeNull();
+    expect(await inviteRowCount(r.boards.map((b) => b.fixtureId)), "the empty case: nothing is mailed").toBe(0);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(r.arbiterPath);
+    await expect(col).toHaveAttribute("data-phase", "before", { timeout: PAGE_LOAD_MS });
+    said("phase before");
+    await expect(col.getByTestId("arbiter-checkin-hero"), "no check-in hero before the open").toHaveCount(0);
+    said("no hero");
+    expect(posts.roundNos(), "no open was sent").toEqual([]);
+    said("no open sent");
+    endStep("before", "before");
+
+    // ── 2. open round 1 from the column ─────────────────────────────────────────────────────────────────────────────────────────
+    await openFromColumn(page, r, 1);
+    const stamp1 = await roundOpenedAtSql(r.stageId, 1);
+    expect(stamp1, "the open stamped stage_round_opens").not.toBeNull();
+    await arrived("the open moves the column to check-in", () => expect(col).toHaveAttribute("data-phase", "checkin", quick));
+    await phaseIs("checkin");
+    await expect(col.getByTestId("arbiter-checkin-hero").getByRole("heading", { name: fill("runsheet.round.heading", { round: 1 }) })).toBeVisible();
+    said("the hero names round 1");
+    await expect(col.getByTestId("arbiter-checkin-clock")).toHaveAttribute("data-kind", "closes");
+    await expect(col.locator("#arbiter-checkin-clock-label")).toHaveText(uiEn["arbiter.column.checkin.closesIn"]!);
+    said("the clock is counting down to a close");
+    await faceIsTheFirstToClose(stamp1!);
+    await tallyIs(0, SEATS);
+    await waitingIs(r.boards);
+    await seatWords(r.boards, "not_delivered");
+    // No mail provider in e2e, so every invite ended dead inside the open and nobody holds a mail: the hero offers the reopen.
+    await expect(col.getByTestId("arbiter-column-reinvite")).toHaveText(uiEn["arbiter.column.reopenCta"]!);
+    said("the hero offers the reopen press");
+    expect(posts.roundNos(), "one open was sent, for round 1").toEqual([1]);
+    said("one open sent");
+    expect(await inviteRowCount(r.boards.map((b) => b.fixtureId)), "one invite row per player's address").toBe(SEATS);
+    said(`${SEATS} invite rows`);
+    expect(lichessCallsFor(everyone).length, "opening a round makes no Lichess call").toBe(0);
+    said("no Lichess call");
+    endStep("opened", "checkin");
+
+    // ── 3. +5 min on a board that is NOT the panel's own selection ──────────────────────────────────────────────────────────────
+    // Board 1 is the panel's default selection, so a press on its row would "select" what is already selected and prove nothing
+    // about the select-then-extend; board 3's row has to move the selection AND the closing time.
+    const extend3 = page.locator(`[data-testid="arbiter-waiting-extend"][data-fixture-id="${b3.fixtureId}"]`);
+    const extendLabel = (left: number) => fill("externalPlay.checkinExtend.board", { minutes: CHECKIN_EXTEND_STEP_MINUTES, left });
+    await expect(extend3).toHaveText(extendLabel(CHECKIN_EXTEND_MAX));
+    said("the row offers +5 with every press left");
+    await expect(nav.nth(boardNo(b1) - 1), "premise: board 1 is the selection").toHaveAttribute("aria-pressed", "true");
+    await expect(nav.nth(boardNo(b3) - 1), "premise: board 3 is not").toHaveAttribute("aria-pressed", "false");
+    const extended = page.waitForResponse((q) => q.request().method() === "POST" && q.url().endsWith(`/fixtures/${b3.fixtureId}/external-play/extend-checkin`));
+    await extend3.click();
+    expect((await extended).status(), "board 3's extension").toBe(200);
+    await arrived("the press counts down on the row", () => expect(extend3).toHaveText(extendLabel(CHECKIN_EXTEND_MAX - 1), quick));
+    await phaseIs("checkin");
+    await expect(nav.nth(boardNo(b3) - 1), "the row's press selected board 3").toHaveAttribute("aria-pressed", "true");
+    await expect(nav.nth(boardNo(b1) - 1)).toHaveAttribute("aria-pressed", "false");
+    said("the press moved the selection to board 3");
+    const closes = decision.getByTestId("arbiter-extend-closes");
+    // The new closing time, from the DB's stamp and the engine's own constants: the window length plus one step.
+    await expect(closes).toHaveAttribute("data-deadline-at", new Date(stamp1!.getTime() + DEADLINE_AFTER_MS + CHECKIN_EXTEND_STEP_MS).toISOString());
+    await expect(closes).toHaveText(withTime("externalPlay.checkinExtend.closesAt"));
+    const notice = decision.getByRole("status");
+    await expect(notice).toHaveText(withTime("externalPlay.checkinExtend.notice.board", { minutes: CHECKIN_EXTEND_STEP_MINUTES, n: boardNo(b3) }));
+    expect(plain(hm(await notice.innerText())), "the answer and the 'Check-in closes' line name one time").toBe(plain(hm(await closes.innerText())));
+    said("the decision area shows the new closing time");
+    expect(await extensionOf(b3.fixtureId)).toEqual({ ms: CHECKIN_EXTEND_STEP_MS, n: 1 });
+    for (const b of [b1, b2, b4]) expect(await extensionOf(b.fixtureId), `board ${boardNo(b)} is untouched`).toEqual({ ms: 0, n: 0 });
+    said("only board 3 holds an extension");
+    // The column's clock counts down to the NEXT board to close: board 3's extra five minutes moved a board that was not first.
+    await faceIsTheFirstToClose(stamp1!);
+    await tallyIs(0, SEATS);
+    endStep("extended", "checkin");
+
+    // ── 4. one player on each of three boards: the tally moves, no game is made ─────────────────────────────────────────────────
+    const seated = [b1, b3, b4];
+    for (const b of seated) {
+      expect((await claimByLink(page, b, b.home)).seat, `${b.home.name} takes a seat`).toMatchObject({ seated: true });
+    }
+    await arrived("three seats are counted", () => expect(col.locator("#arbiter-checkin-tally-text")).toHaveText(tallyText(seated.length, SEATS), quick));
+    await phaseIs("checkin");
+    await tallyIs(seated.length, SEATS);
+    for (const b of seated) {
+      await expect(seatOf(b, b.home), `${b.home.name} is here`).toHaveAttribute("data-here", "true");
+      await expect(seatOf(b, b.away), `${b.away.name} is not`).toHaveAttribute("data-here", "false");
+    }
+    await expect(row(b2).locator('[data-testid="arbiter-seat"][data-here="false"]'), "board 2: neither is").toHaveCount(2);
+    await expect(page.locator('[data-testid="arbiter-seat"][data-here="true"]')).toHaveCount(seated.length);
+    await expect(page.locator('[data-testid="arbiter-seat"][data-here="false"]')).toHaveCount(SEATS - seated.length);
+    // A seat that is here shows no invite word; the rest keep theirs.
+    await expect(page.getByTestId("arbiter-invite-word")).toHaveCount(SEATS - seated.length);
+    said(`${seated.length} seats here, ${SEATS - seated.length} not, and the words follow`);
+    await waitingIs(r.boards);
+    for (const b of seated) expect((await bridgeRow(b.fixtureId))?.challenge_id ?? null, `board ${boardNo(b)}: one seat makes no game`).toBeNull();
+    expect(lichessCallsFor(everyone).length, "one seat asks Lichess for nothing").toBe(0);
+    said("no game made, no Lichess call");
+    endStep("first-seats", "checkin");
+
+    // ── 5. the second player of each pair: the game is made, and the board leaves the check-in ──────────────────────────────────
+    for (const b of seated) {
+      expect((await claimByLink(page, b, b.away)).seat, `${b.away.name} takes a seat`).toMatchObject({ seated: true });
+      await expect.poll(async () => (await bridgeRow(b.fixtureId))?.challenge_id ?? null, { timeout: 30_000, message: `board ${boardNo(b)}: the second seat makes the game` }).not.toBeNull();
+      const id = (await bridgeRow(b.fixtureId))!.challenge_id!;
+      gameOf.set(b.fixtureId, id);
+      expect(lichess.game(id)?.status, `board ${boardNo(b)}'s game is live at Lichess`).toBe("started");
+    }
+    expect(new Set(gameOf.values()).size, "three boards, three different games").toBe(seated.length);
+    await arrived("the three boards leave the check-in", () => expect(col.locator("#arbiter-checkin-tally-text")).toHaveText(tallyText(0, 2), quick));
+    await phaseIs("checkin");
+    await tallyIs(0, 2);
+    await alreadyPlayingIs(seated.length);
+    await expect(col.getByTestId("arbiter-checkin-finished"), "nothing has finished: that clause is not printed").toHaveCount(0);
+    said("no finished clause");
+    await waitingIs([b2]);
+    await seatWords([b2], "not_delivered");
+    endStep("second-seats", "checkin");
+
+    // ── 6. the check-in window ends: the deadline alone changes nothing on screen ───────────────────────────────────────────────
+    await backdateOpenSql(r.stageId, 1, DEADLINE_AFTER_MS + 120_000);
+    const stampBack = await roundOpenedAtSql(r.stageId, 1);
+    expect(stampBack!.getTime(), "the open moved into the past").toBeLessThan(stamp1!.getTime());
+    await arrived("the window has ended", () => expect(col.getByTestId("arbiter-checkin-clock")).toHaveAttribute("data-kind", "closed", quick));
+    await phaseIs("checkin");
+    await expect(col.locator("#arbiter-checkin-clock-label")).toHaveText(uiEn["arbiter.column.checkin.closed"]!);
+    await expect(col.getByTestId("arbiter-checkin-clock").getByRole("timer"), "a closed clock has no face").toHaveCount(0);
+    await expect(col.getByTestId("arbiter-checkin-tally"), "no window is open, so there is no tally").toHaveCount(0);
+    await expect(page.getByTestId("arbiter-waiting"), "and no one to wait on").toHaveCount(0);
+    said("closed: no face, no tally, no waiting list");
+    await alreadyPlayingIs(seated.length);
+    await expect(queue, "the deadline passing files nothing with the organiser").toHaveCount(0);
+    said("the queue is empty");
+    endStep("window-ended", "checkin");
+
+    // ── 7. the sweep acts on the board nobody came to ───────────────────────────────────────────────────────────────────────────
+    const swept = await sweep(page);
+    for (const b of r.boards) expect(JSON.stringify(swept.failures), `board ${boardNo(b)} is not among the sweep's failures`).not.toContain(b.fixtureId);
+    const walked = await fixtureState(page, b2.fixtureId);
+    expect(walked.status, "board 2 was walked over").toBe("forfeited");
+    expect(walked.outcome, "nobody came: both lose").toMatchObject({ kind: "double_walkover" });
+    expect(await forfeitEventCountSql(b2.fixtureId), "one forfeit on board 2's ledger").toBe(1);
+    expect((await bridgeRow(b2.fixtureId))?.challenge_id ?? null, "and no game was ever made for it").toBeNull();
+    expect(lichessCallsFor([b2.home, b2.away]).length, "nothing reached Lichess for board 2").toBe(0);
+    for (const b of seated) {
+      expect(["decided", "forfeited", "cancelled"], `board ${boardNo(b)} is still in play`).not.toContain((await fixtureState(page, b.fixtureId)).status);
+      expect(await forfeitEventCountSql(b.fixtureId), `board ${boardNo(b)}: a board with a game is never walked over`).toBe(0);
+      expect((await bridgeRow(b.fixtureId))?.challenge_id, `board ${boardNo(b)}: the sweep left its game alone`).toBe(gameOf.get(b.fixtureId));
+    }
+    // A second pass changes nothing: one forfeit, the same three games.
+    await sweep(page);
+    expect(await forfeitEventCountSql(b2.fixtureId), "a second sweep forfeits nothing twice").toBe(1);
+    for (const b of seated) expect((await bridgeRow(b.fixtureId))?.challenge_id, `board ${boardNo(b)}: still the same game`).toBe(gameOf.get(b.fixtureId));
+    await arrived("the forfeit moves the column to playing", () => expect(col).toHaveAttribute("data-phase", "playing", quick));
+    await phaseIs("playing");
+    await expect(col.getByTestId("arbiter-checkin-hero"), "the check-in hero is gone").toHaveCount(0);
+    said("no hero");
+    await playingIs(seated.length, 1);
+    await expect(next, "round 2 is offered beside the round on screen").toHaveCount(1);
+    await expect(next).toHaveAttribute("data-primary", "false");
+    await expect(next).toHaveText(uiEn["runsheet.round.openCta"]!);
+    said("Open round 2 is offered, and quiet");
+    await earlierIs(seated.length);
+    await expect(queue, "a board nobody came to is walked over, not held: the queue is empty").toHaveCount(0);
+    said("the queue is still empty");
+    endStep("swept", "playing");
+
+    // ── 8. a held board reaches the queue ───────────────────────────────────────────────────────────────────────────────────────
+    // The one board the sweep cannot hold here is written the way online-chess-desk.spec.ts writes it: board 4's row, an
+    // out-of-band mismatch with six plies, White the home side. Its real game at the stub is left behind (no sweep runs again).
+    await roundGameSql(b4, { moves: [...OPENING], hold: "mismatch" });
+    const title = queue.getByTestId("arbiter-column-queue-title");
+    await arrived("the held board is in the queue", () => expect(title).toHaveText(fill("arbiter.column.queue.one", { count: 1 }), quick));
+    await phaseIs("playing");
+    await expect(title).toHaveAttribute("data-tone", "held");
+    said("the queue title reads one board, in the held tone");
+    await expect(queue.getByTestId("arbiter-column-card"), "exactly one card").toHaveCount(1);
+    await expect(card(b4)).toHaveAttribute("data-kind", "held");
+    await expect(card(b4).getByTestId("arbiter-column-card-chip")).toHaveText(uiEn["externalPlay.held.mismatch"]!);
+    await expect(card(b4).getByTestId("arbiter-column-card-names")).toHaveText(`${b4.home.name} ${uiEn["arbiter.vs"]} ${b4.away.name}`);
+    const review = card(b4).getByTestId("arbiter-column-review");
+    await expect(review).toHaveText(fill("arbiter.column.review", { board: boardNo(b4) }));
+    await expect(review).toHaveAttribute("data-target", "select");
+    said("the card names board 4, its reason and its players");
+    await playingIs(seated.length - 1, 1);
+    await earlierIs(seated.length);
+    endStep("held", "playing");
+
+    // ── 9. review it in place, settle it from the decision area ─────────────────────────────────────────────────────────────────
+    await review.click();
+    await expect(nav.nth(boardNo(b4) - 1), "Review selected board 4 in place").toHaveAttribute("aria-pressed", "true");
+    await expect(nav.nth(boardNo(b3) - 1)).toHaveAttribute("aria-pressed", "false");
+    said("Review selected board 4");
+    const toggle = decision.getByRole("button", { name: uiEn["arbiter.decide.settle"]! });
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    const homeWins = page.getByTestId("arbiter-settle").getByRole("button", { name: fill("externalPlay.settle.wins", { name: b4.home.name }), exact: true });
+    await expect(homeWins).toHaveCount(1);
+    await homeWins.click();
+    await expect(card(b4), "the settled board leaves the queue").toHaveCount(0, { timeout: SETTLE_MS });
+    await expect(decision.getByRole("status")).toHaveText(uiEn["arbiter.notice.settled"]!);
+    said("the card closed and the decision area says Settled");
+    await arrived("the settled board counts as finished", () => expect(col.getByTestId("arbiter-column-finished")).toHaveText(fill("arbiter.column.finished.other", { count: 2 }), quick));
+    await phaseIs("playing");
+    await expect(title, "nothing needs a decision: no queue title").toHaveCount(0);
+    await playingIs(seated.length - 1, 2);
+    await earlierIs(seated.length - 1);
+    const settled = await fixtureState(page, b4.fixtureId);
+    expect(settled.status, "board 4 is decided").toBe("decided");
+    expect(settled.outcome, "the home side the organiser chose wins").toMatchObject({ kind: "win", winner: b4.home.entrantId });
+    said("board 4 is decided for the home side");
+    endStep("settled", "playing");
+
+    // ── 10. play out the two boards that are still going, through the real room, and resign them ────────────────────────────────
+    const played = [b1, b3];
+    for (const b of played) {
+      const side = await colours(b);
+      const id = gameOf.get(b.fixtureId)!;
+      expect(await actByLink(page, b, side.white, { kind: "move", uci: "d2d4" })).toMatchObject({ ok: true });
+      expect(await actByLink(page, b, side.black, { kind: "move", uci: "d7d5" })).toMatchObject({ ok: true });
+      expect(lichess.game(id)?.movesUci, `board ${boardNo(b)}: both moves reached Lichess`).toEqual(["d2d4", "d7d5"]);
+      expect(await actByLink(page, b, side.white, { kind: "resign" })).toMatchObject({ ok: true });
+      await expect.poll(() => lichess.game(id)?.status, { timeout: LICHESS_TIMEOUT_MS }).toBe("resign");
+      expect(lichess.game(id)?.winner, `board ${boardNo(b)}: two plies and more is a resign, not an abort`).toBe("black");
+      await expect.poll(async () => (await fixtureState(page, b.fixtureId)).status, { timeout: 30_000, message: `board ${boardNo(b)} is decided` }).toBe("decided");
+      expect(await lastResultWinner(b.fixtureId), `board ${boardNo(b)}: Black's entrant wins`).toBe(side.black.entrantId);
+      expect(await forfeitEventCountSql(b.fixtureId), `board ${boardNo(b)}: a resign is not a forfeit`).toBe(0);
+      expect(await resultEventCountSql(b.fixtureId), `board ${boardNo(b)}: the result is written once`).toBe(1);
+    }
+    await arrived("every board is over", () => expect(col.getByTestId("arbiter-column-finished")).toHaveText(fill("arbiter.column.finished.other", { count: BOARDS }), quick));
+    await phaseIs("playing");
+    await playingIs(0, BOARDS);
+    await earlierIs(0);
+    await expect(next, "every board over: Open round 2 is the column's primary press").toHaveAttribute("data-primary", "true");
+    said("Open round 2 is primary");
+    await expect(queue, "no queue").toHaveCount(0);
+    said("the queue is empty");
+    endStep("played-out", "playing");
+
+    // ── 11. open round 2 from the same column ───────────────────────────────────────────────────────────────────────────────────
+    const round1Ids = r.boards.map((b) => b.fixtureId);
+    const round2Ids = (
+      await withDb((sql) => sql<{ id: string }[]>`select id from fixtures where stage_id = ${r.stageId} and round_no = 2 order by seq_in_round`)
+    ).map((f) => f.id);
+    expect(round2Ids, "premise: a league pairs every round at Generate").toHaveLength(BOARDS);
+    expect(await roundOpenedAtSql(r.stageId, 2), "round 2 is paired, not opened").toBeNull();
+    expect(await inviteRowCount(round2Ids), "nothing is mailed for round 2 before its open").toBe(0);
+    await openFromColumn(page, r, 2);
+    expect(posts.roundNos(), "one open for each round, in order").toEqual([1, 2]);
+    const stamp2 = await roundOpenedAtSql(r.stageId, 2);
+    expect(stamp2, "round 2 opened").not.toBeNull();
+    expect(stamp2!.getTime(), "round 2's stamp is after round 1's").toBeGreaterThan(stamp1!.getTime());
+    expect((await roundOpenedAtSql(r.stageId, 1))!.getTime(), "and round 1's stamp did not move").toBe(stampBack!.getTime());
+    expect(await inviteRowCount(round2Ids), "one invite row per player's address for round 2").toBe(SEATS);
+    expect(await inviteRowCount(round1Ids), "round 1 was not mailed again").toBe(SEATS);
+    await arrived("round 2's check-in", () => expect(col.getByTestId("arbiter-checkin-hero").getByRole("heading", { name: fill("runsheet.round.heading", { round: 2 }) })).toBeVisible(quick));
+    await phaseIs("checkin");
+    said("the hero names round 2");
+    await expect(col.getByTestId("arbiter-checkin-clock")).toHaveAttribute("data-kind", "closes");
+    await faceIsTheFirstToClose(stamp2!);
+    await tallyIs(0, SEATS);
+    await expect(page.getByTestId("arbiter-waiting-heading")).toHaveText(fill(pluralKey("arbiter.column.waiting", BOARDS), { count: BOARDS }));
+    await expect(page.locator('[data-testid="arbiter-invite-word"][data-word="not_delivered"]'), "every one of round 2's seats reads Not delivered").toHaveCount(SEATS);
+    await expect(nav, "the picker lists round 2's boards").toHaveCount(BOARDS);
+    said(`round 2 waits on ${BOARDS} boards, ${SEATS} seats`);
+    endStep("round-2-opened", "checkin");
+
+    // ── anti-vacuity: the whole walk happened, and every step asserted its phase and something besides ────────────────────────────
+    expect(
+      steps.map((s) => `${s.step}:${s.phase}`),
+      "the walk, in order, with each step's phase",
+    ).toEqual([
+      "before:before",
+      "opened:checkin",
+      "extended:checkin",
+      "first-seats:checkin",
+      "second-seats:checkin",
+      "window-ended:checkin",
+      "swept:playing",
+      "held:playing",
+      "settled:playing",
+      "played-out:playing",
+      "round-2-opened:checkin",
+    ]);
+    for (const s of steps) {
+      expect(s.lines, `${s.step}: its phase was asserted`).toContain(`phase ${s.phase}`);
+      expect(s.lines.length, `${s.step}: asserted something besides its phase (${s.lines.join("; ")})`).toBeGreaterThanOrEqual(3);
+    }
+    expect(waits, "the panel waits the budget was costed for").toBe(PANEL_WAITS);
   });
 });
