@@ -296,6 +296,72 @@
       "reason": "carromForfeitCredit returns doubleWalkoverCredit for by \"both\" before it reads `reason`, so the reason passed for a double walkover is never read."
     },
     {
+      "mutant": "src/sports/carrom/carrom.ts:254:35 ArrowFunction → () => undefined",
+      "original": "(game) => game.winner !== null",
+      "line": "completed: state.games.filter((game) => game.winner !== null).length,",
+      "reason": "unitNumber takes max(started, currentUnit(completed, live)) and `completed` never exceeds `started` (games.length): live, the open game makes completed = started - 1, so completed + 1 = started and the mutant's 1 is not above it (pre: both are 1); decided or abandoned, max(1, completed) is already <= started (a walkover before play: 1 on both sides). The count can never move the position."
+    },
+    {
+      "mutant": "src/sports/carrom/carrom.ts:254:45 ConditionalExpression → false",
+      "original": "game.winner !== null",
+      "line": "completed: state.games.filter((game) => game.winner !== null).length,",
+      "reason": "unitNumber takes max(started, currentUnit(completed, live)) and `completed` never exceeds `started` (games.length): live, the open game makes completed = started - 1, so completed + 1 = started and the mutant's 1 is not above it (pre: both are 1); decided or abandoned, max(1, completed) is already <= started (a walkover before play: 1 on both sides). The count can never move the position."
+    },
+    {
+      "mutant": "src/sports/carrom/carrom.ts:301:7 ConditionalExpression → false",
+      "original": "game === undefined || game.winner !== null",
+      "line": "if (game === undefined || game.winner !== null) {",
+      "reason": "openGame is called only from applyBoard and applyAdjust, each after its `phase !== \"live\"` refusal; phase becomes \"live\" at one place (core.start, which seeds one open game) and a later fold keeps it live only through bankGame, which opens the next game in the same step (a decided match goes to \"done\"), so a live state's last game is always open and this guard never fires."
+    },
+    {
+      "mutant": "src/sports/carrom/carrom.ts:301:7 LogicalOperator → game === undefined && game.winner !== null",
+      "original": "game === undefined || game.winner !== null",
+      "line": "if (game === undefined || game.winner !== null) {",
+      "reason": "openGame is called only from applyBoard and applyAdjust, each after its `phase !== \"live\"` refusal; phase becomes \"live\" at one place (core.start, which seeds one open game) and a later fold keeps it live only through bankGame, which opens the next game in the same step (a decided match goes to \"done\"), so a live state's last game is always open and this guard never fires."
+    },
+    {
+      "mutant": "src/sports/carrom/carrom.ts:301:29 ConditionalExpression → false",
+      "original": "game.winner !== null",
+      "line": "if (game === undefined || game.winner !== null) {",
+      "reason": "openGame is called only from applyBoard and applyAdjust, each after its `phase !== \"live\"` refusal; phase becomes \"live\" at one place (core.start, which seeds one open game) and a later fold keeps it live only through bankGame, which opens the next game in the same step (a decided match goes to \"done\"), so a live state's last game is always open and this guard never fires."
+    },
+    {
+      "mutant": "src/sports/carrom/carrom.ts:301:51 BlockStatement → {}",
+      "original": "{",
+      "line": "if (game === undefined || game.winner !== null) {",
+      "reason": "openGame is called only from applyBoard and applyAdjust, each after its `phase !== \"live\"` refusal; phase becomes \"live\" at one place (core.start, which seeds one open game) and a later fold keeps it live only through bankGame, which opens the next game in the same step (a decided match goes to \"done\"), so a live state's last game is always open and this guard never fires."
+    },
+    {
+      "mutant": "src/sports/carrom/carrom.ts:304:16 StringLiteral → \"\"",
+      "original": "\"no open game\"",
+      "line": "wrongPhase(\"no open game\");",
+      "reason": "openGame is called only from applyBoard and applyAdjust, each after its `phase !== \"live\"` refusal; phase becomes \"live\" at one place (core.start, which seeds one open game) and a later fold keeps it live only through bankGame, which opens the next game in the same step (a decided match goes to \"done\"), so a live state's last game is always open and this guard never fires. The message is never thrown."
+    },
+    {
+      "mutant": "src/sports/carrom/carrom.ts:315:11 ArithmeticOperator → gameIndex - boardIndex",
+      "original": "gameIndex + boardIndex",
+      "line": "return (gameIndex + boardIndex) % 2 === 0 ? firstBreak : opponent(firstBreak);",
+      "reason": "Only the parity of the sum is read (`% 2 === 0`); gameIndex - boardIndex has the same parity as gameIndex + boardIndex, and a negative odd difference gives -1 (not 0) and a negative even one gives -0, which `=== 0` accepts, so the same side breaks for every pair."
+    },
+    {
+      "mutant": "src/sports/carrom/carrom.ts:328:7 ConditionalExpression → true",
+      "original": "leader !== null",
+      "line": "if (leader !== null && game.score[leader] >= cfg.gameTo) return leader;",
+      "reason": "With leader null (level score) the mutant evaluates `game.score[null] >= cfg.gameTo`, and `game.score[null]` is undefined, so the comparison is false (undefined >= n is false for every n); the line falls through exactly as the original's false does."
+    },
+    {
+      "mutant": "src/sports/carrom/carrom.ts:1014:41 ArithmeticOperator → state.games.length + 1",
+      "original": "state.games.length - 1",
+      "line": "breakerOf(state.firstBreak, state.games.length - 1, current.boards.length)",
+      "reason": "breakerOf reads gameIndex only through `(gameIndex + boardIndex) % 2`, and length + 1 differs from length - 1 by 2, so the parity, and the breaker the summary reports, is identical."
+    },
+    {
+      "mutant": "src/sports/carrom/carrom.ts:1220:12 EqualityOperator → adjust.delta <= 0",
+      "original": "adjust.delta < 0",
+      "line": "(adjust.delta < 0 ? adjust.entrantId : opponentOf(adjust.entrantId));",
+      "reason": "The branch is reached only for an adjust that parsed through CarromGameAdjust, whose delta refine rejects 0, so delta is never 0 here and `< 0` and `<= 0` agree."
+    },
+    {
       "mutant": "src/core/events.ts:441:20 StringLiteral → \"\"",
       "original": "\"over\"",
       "line": "return decided ? \"over\" : started ? \"play\" : \"pre\";",
