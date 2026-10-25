@@ -13,16 +13,20 @@ import "server-only";
 //     above a sport's own epoch is INERT (the boot report says so), and it does not crash the boot: a stale entry left behind by
 //     a later bump must not take prod down.
 //   - It is understood or it is OFF, never a guess. A value that is not understood (an unknown sport, an epoch that is not an
-//     integer >= 1, a duplicate, an empty pair, a pair with no `=`) THROWS at boot (instrumentation.ts), so a typo cannot ship
-//     as "no override" or as a wrong floor. If boot was bypassed (a hand-staged tree that never runs instrumentation) the GATE
-//     does not throw: it falls back to the declared floors, which is today's behaviour with the lever off, and says so once per
-//     distinct bad value (`log.error` and a Sentry error). A bad operator variable must not turn into a 500 on every scoring write,
-//     and nothing here echoes the variable's text into an HTTP body.
-//   - It is LOUD. Boot logs one warning per sport, and sends the same to Sentry as a warning. The gate logs a warning for each
-//     request it admitted ONLY because of the override (`ENGINE_EPOCH_FLOOR_OVERRIDDEN`): at most one line per request that
-//     passed the gate, so ops can see what the lever is letting through, and for how long. That line says the gate admitted the
-//     request, not that a row was written: a keyed retry the cache could not answer passes the gate again and is then replayed,
-//     and a stale `expected_seq` can still be refused after admission. Per-write lines stay out of Sentry (quota); boot's do not.
+//     integer >= 1, a duplicate, an empty pair, a pair with no `=`) is OFF: every sport keeps its declared floor, which is today's
+//     behaviour with the lever off. Boot (instrumentation.ts) reads it strictly and, for such a value, logs it as an error,
+//     reports the parse error to Sentry (flushed) and CARRIES ON BOOTING with the lever OFF. It must not throw: a typo in an
+//     emergency lever must not become a site outage, and a rejected `register()` is cached by Next and fails every route,
+//     /api/health included, until a restart.
+//     The GATE reads it through `epochFloorOverrideOrOff`, which never throws either: it logs `log.error` (and reports to Sentry
+//     when this process initialised it) once per distinct bad value, and nothing here echoes the variable's text into an HTTP body.
+//   - It is LOUD. Boot logs one warning per sport, with how many majors behind the floor is, and sends the same to Sentry as a
+//     warning (an error when the floor is more than one major behind: a forgotten entry that has widened across a later bump).
+//     The gate logs a warning for each request it admitted ONLY because of the override (`ENGINE_EPOCH_FLOOR_OVERRIDDEN`): at
+//     most one line per request that passed the gate, so ops can see what the lever is letting through, and for how long. That
+//     line says the gate admitted the request, not that a row was written: a keyed retry the cache could not answer passes the
+//     gate again and is then replayed, and a stale `expected_seq` can still be refused after admission. Per-request lines are
+//     never a Sentry Issue (pino lines still reach Sentry Logs through the pino integration); boot's alerts are.
 //   - Production use is the point. This is NOT a `tunable()` (relay/config.ts), which is honoured only on local and ci.
 //
 // WHAT IT DOES NOT TOUCH. Absent `engine_epoch` is still accepted (D31), ahead is still accepted, a keyed retry still replays before
@@ -84,23 +88,47 @@ export function epochFloorOverride(env: EnvReader = process.env): ReadonlyMap<st
 }
 
 const NO_OVERRIDE: ReadonlyMap<string, number> = new Map();
-/** Bad values already reported by the gate's fallback: one report per distinct raw value, not one per request. */
+/** Bad values already reported in this process: one report per distinct raw value, however many reads or reporters. */
 const reportedInvalid = new Set<string>();
+
+/** What the log and Sentry say about a value that is not understood. Carries the parse error's message (which quotes the text). */
+export const epochFloorOverrideInvalidMessage = (e: unknown): string =>
+  `${e instanceof Error ? e.message : String(e)} - the override is OFF for this process: every sport keeps its declared floor`;
+
+/** Claims the report of a bad raw value for this process: true the first time, false after. Boot and the gate share it, so one
+ *  typo is one report, not one from boot and another from the first scoring write. */
+function claimInvalidReport(raw: string): boolean {
+  if (reportedInvalid.has(raw)) return false;
+  reportedInvalid.add(raw);
+  return true;
+}
+
+/**
+ * Boot's report of a value the strict parse refused (instrumentation.ts calls it, then CARRIES ON): an error line, the parse error
+ * to Sentry as an exception, flushed (the first thing a process with a bad secret does may be to fall over for another reason), and
+ * the value marked as reported so the gate does not say it a second time. Resolves; never throws on the value's account.
+ */
+export async function reportInvalidEpochFloorOverride(e: unknown, env: EnvReader = process.env): Promise<void> {
+  claimInvalidReport(env[ENGINE_EPOCH_FLOOR_OVERRIDE_ENV] ?? "");
+  log.error({ code: "ENGINE_EPOCH_FLOOR_OVERRIDE_INVALID" }, epochFloorOverrideInvalidMessage(e));
+  Sentry.captureException(e);
+  await Sentry.flush(2000);
+}
 
 /**
  * The accessor THE GATE reads (usecases/scoring.ts `assertEngineEpoch`): the same parse, but a value that is not understood is OFF
- * rather than an exception. Boot has already refused such a value; this is for a process that never ran boot. The result is the
- * declared floors for every sport (today's behaviour), reported ONCE per distinct bad value to the log and to Sentry as an error.
- * The report carries the parse error's message (which quotes the variable's text), and nothing returned to a client does.
+ * rather than an exception. Boot has already reported such a value and carried on, so in a booted process this stays quiet; in a
+ * process that never ran boot (a hand-staged tree without instrumentation) it reports ONCE per distinct bad value with `log.error`
+ * and a Sentry error message (a no-op where Sentry was never initialised). The result is the declared floors for every sport
+ * (today's behaviour). The report carries the parse error's message (which quotes the variable's text), and nothing returned to a
+ * client does.
  */
 export function epochFloorOverrideOrOff(env: EnvReader = process.env): ReadonlyMap<string, number> {
   try {
     return epochFloorOverride(env);
   } catch (e) {
-    const raw = env[ENGINE_EPOCH_FLOOR_OVERRIDE_ENV] ?? "";
-    if (!reportedInvalid.has(raw)) {
-      reportedInvalid.add(raw);
-      const message = `${e instanceof Error ? e.message : String(e)} - the override is OFF for this process: every sport keeps its declared floor`;
+    if (claimInvalidReport(env[ENGINE_EPOCH_FLOOR_OVERRIDE_ENV] ?? "")) {
+      const message = epochFloorOverrideInvalidMessage(e);
       log.error({ code: "ENGINE_EPOCH_FLOOR_OVERRIDE_INVALID" }, message);
       Sentry.captureMessage(message, "error");
     }
@@ -133,16 +161,23 @@ export interface EpochOverrideEntry {
   declared: number;
 }
 
-/** What boot says about an ACTIVE entry. Also what it sends to Sentry as a warning, so the log and the alert read the same. */
+/** How many majors the floor sits below the sport's own epoch: 1 is the lever doing its job after a bump, 2 or more is an entry that
+ *  was forgotten across a later bump and now admits clients further behind than anyone decided. */
+export const majorsBehind = (e: EpochOverrideEntry): number => e.declared - e.floor;
+
+/** What boot says about an ACTIVE entry. Also what it sends to Sentry, so the log and the alert read the same. */
 export const epochFloorOverrideActiveMessage = (e: EpochOverrideEntry): string =>
-  `${ENGINE_EPOCH_FLOOR_OVERRIDE_ENV} ACTIVE: ${e.sport} scoring writes from clients at epoch ${e.floor} or above are ADMITTED although the fold epoch is ${e.declared} - an emergency lever; remove ${e.sport} from it once those clients have updated`;
+  `${ENGINE_EPOCH_FLOOR_OVERRIDE_ENV} ACTIVE: ${e.sport} scoring writes from clients at epoch ${e.floor} or above are ADMITTED although the fold epoch is ${e.declared} (majorsBehind=${majorsBehind(e)}) - an emergency lever; remove ${e.sport} from it once those clients have updated`;
+
+/** The Sentry level of an ACTIVE entry: a warning for one major behind, an error for more than one. The pino line stays a warning. */
+export const epochFloorOverrideSentryLevel = (e: EpochOverrideEntry): "warning" | "error" => (majorsBehind(e) > 1 ? "error" : "warning");
 
 /**
- * Called once from instrumentation.ts's register() (nodejs runtime). Parses the override - a value that is not understood THROWS,
- * so the process does not boot on a typo, exactly as `relayDriverMode()` does for a faking deployment - and logs one warning per
- * sport: ACTIVE when the floor is below the sport's epoch (the lever is lowering it), INERT when it is not (it does nothing, and is
- * stale or mistaken). Logs nothing when the lever is off. Returns which sports landed in which bucket, so the caller can alert on
- * the ACTIVE ones (instrumentation.ts sends each to Sentry as a warning).
+ * Called once from instrumentation.ts's register() (nodejs runtime). Parses the override STRICTLY - a value that is not understood
+ * THROWS from here, and register() reports it (`reportInvalidEpochFloorOverride`) and carries on with the lever off - and logs one
+ * warning per sport: ACTIVE when the floor is below the sport's epoch (the lever is lowering it), INERT when it is not (it does
+ * nothing, and is stale or mistaken). Logs nothing when the lever is off. Returns which sports landed in which bucket, so the
+ * caller can alert on the ACTIVE ones (instrumentation.ts sends each to Sentry, at `epochFloorOverrideSentryLevel`).
  */
 export function reportEpochFloorOverrides(
   env: EnvReader = process.env,
@@ -154,7 +189,7 @@ export function reportEpochFloorOverrides(
     const entry = { sport, floor, declared: epochOf(sport) };
     if (floor < entry.declared) {
       active.push(entry);
-      log.warn({ code: "ENGINE_EPOCH_FLOOR_OVERRIDE_ACTIVE", ...entry }, epochFloorOverrideActiveMessage(entry));
+      log.warn({ code: "ENGINE_EPOCH_FLOOR_OVERRIDE_ACTIVE", ...entry, majorsBehind: majorsBehind(entry) }, epochFloorOverrideActiveMessage(entry));
     } else {
       inert.push(entry);
       log.warn(

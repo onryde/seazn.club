@@ -919,7 +919,7 @@ describe.skipIf(!HAS_DB)("scoreEvent — the engine-epoch FLOOR OVERRIDE (ENGINE
     const b = await refusal(scoreEvent(s.auth, s.fixtureId, { expected_seq: 2, type: "core.note", payload: { text: "x" }, engine_epoch: behind }));
     expect([a.status, b.status]).toEqual([426, 426]);
     expect(a.extra).toEqual(b.extra);
-    expect(await rows(s.fixtureId), "two refusals, zero rows").toBe(2);
+    expect(await rows(s.fixtureId), "two refusals add no row: the ledger still holds the two admitted events").toBe(2);
 
     // Withdraw the lever: the phone that was admitted is behind again. Put it back: admitted again.
     vi.stubEnv(ENV, "");

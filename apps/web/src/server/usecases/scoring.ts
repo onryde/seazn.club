@@ -685,8 +685,9 @@ interface FixtureSport {
  * passed the gate (it says the gate admitted, not that a row was written - a cold retry of a key the ledger holds passes it again and is
  * then replayed). A refusal under an override reports the EFFECTIVE floor as `required` (what the client must reach to be admitted),
  * and the lockout line adds `declared`, the sport's own epoch; `required` always means the effective floor, `declared` the sport's own.
- * A malformed override does NOT throw here (boot refuses it): `epochFloorOverrideOrOff` answers "no override", which is today's floors,
- * and reports the bad value once. The replay lookup below is untouched: it still runs before any refusal.
+ * A malformed override does NOT throw here (nor at boot, which reports it and carries on): `epochFloorOverrideOrOff` answers "no
+ * override", which is today's floors, and reports the bad value once per process (`log.error`, and Sentry where this process
+ * initialised it). The replay lookup below is untouched: it still runs before any refusal.
  */
 async function assertEngineEpoch(
   auth: AuthCtx,
