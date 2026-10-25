@@ -102,14 +102,14 @@ const STAGE_CTXS: StageCtx[] = [{ kind: "league" }, { kind: "knockout" }];
 
 // Hand-picked configs that no `variants` entry reaches but that own real fold
 // paths. Football's pre-existing golden covered extra-time + shootout and the
-// group-stage shootout points split; keeping them here preserves that coverage
+// group-stage shoot-out bonus (W2d PS-1: was the split 2/1); keeping them here preserves that coverage
 // through the migration onto this harness.
 const EXTRA_CONFIGS: Record<string, Record<string, unknown>> = {
   football: {
     knockout: { extraTime: { enabled: true, halfMinutes: 15 }, shootout: true },
     groupSO: {
       shootout: true,
-      points: { win: 3, draw: 1, loss: 0, shootoutWin: 2, shootoutLoss: 1 },
+      points: { win: 3, draw: 1, loss: 0, soBonus: 1 },
     },
   },
 };
@@ -1119,7 +1119,7 @@ const COVERAGE_CONFIG_KNOBS: Record<string, Record<string, unknown>> = {
     "iihf-detail": {
       goalkeeper: "optional",
       periodSeconds: { P1: 1200, P2: 1200, P3: 1260 },
-      points: { win: 3, draw: 1, loss: 0, otWin: 2, otLoss: 1, shootoutWin: 2, shootoutLoss: 1 },
+      points: { win: 3, draw: 1, loss: 0, otWin: 2, otLoss: 1 },
       shootout: { attempts: 5, suddenDeath: true, clockSeconds: 8 },
     },
   },
