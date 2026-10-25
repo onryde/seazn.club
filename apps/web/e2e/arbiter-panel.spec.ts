@@ -1304,8 +1304,8 @@ test.describe("arbiter panel", () => {
 // Resend and the hero's press, an Open from a page made stale, a Review that selects in place, Open round 2 while round 1 plays,
 // the Fixtures tab's absences, and the two pieces of client state the column owns (the queue's reducer, the open-round hook).
 // The e2e servers have no mail provider, so every invite row ends `dead` inside the open and every seat reads "Not delivered";
-// `seedSeatInvite` writes the rows the worker and the provider's webhook would. The sweep that holds a no-show is a cron job that
-// does not run here, so `holdNoShowSql` writes the row it leaves.
+// `seedSeatInvite` writes the rows the worker and the provider's webhook would. The sweep that holds a no-show (a board with a Start on its
+// ledger; one without is walked over, not held) is a cron job that does not run here, so `holdNoShowSql` writes the row it leaves.
 test.describe("arbiter round column", () => {
   /** The dictionary's one/other pair for a count, picked the way `plural()` picks it. */
   const pluralKey = (stem: string, count: number) => `${stem}.${count === 1 ? "one" : "other"}`;
@@ -1659,8 +1659,9 @@ test.describe("arbiter round column", () => {
     expect(later, "premise: round 2 is paired").toBeDefined();
     await cancelFlaggedSql(r.orgId, later!.id);
     await roundGameSql(b1, { moves: LINE.slice(0, 6), hold: "mismatch" });
-    // Board 2 is the one still checking in. Its window has ENDED (the round was opened long enough ago), which is how a board comes to be
-    // held: the sweep follows the deadline. The deadline passing alone changes nothing on screen.
+    // Board 2 is the one still checking in. Its window has ENDED (the round was opened long enough ago); the sweep acts on the deadline
+    // (it holds a board that has a Start on its ledger, and walks over one that has none). The deadline passing alone changes nothing
+    // on screen.
     await backdateOpenSql(r.stageId, 1, DEADLINE_AFTER_MS + 120_000);
 
     await page.setViewportSize({ width: 1280, height: 900 });
@@ -1698,7 +1699,8 @@ test.describe("arbiter round column", () => {
     // The window is over and the phase has not moved: a deadline passing flips nothing; a board leaving check-in does.
     await expect(col).toHaveAttribute("data-phase", "checkin");
 
-    // The sweep holds board 2 (no_show_both); the panel's own poll brings it in. The wait is the poll's period, from the constant.
+    // Board 2 is held as the sweep holds a both-absent board that has a Start (no_show_both; written here in SQL, no sweep runs in this
+    // spec); the panel's own poll brings it in. The wait is the poll's period, from the constant.
     await holdNoShowSql(b2.fixtureId);
     await expect(col, "no board is checking in: the column flips to its playing phase").toHaveAttribute("data-phase", "playing", { timeout: POLL_BUDGET_MS });
     // The same queue, not a new one: the probe survived, so did the answer, and the new held board is in it.

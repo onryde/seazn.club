@@ -107,9 +107,11 @@ export async function inviteRowCount(fixtureIds: readonly string[]): Promise<num
   );
 }
 
-/** What the sweep does to a board whose check-in window ended with nobody there: it is held for the organiser (`no_show_both`),
- *  with no game on file. The sweep is a cron job that does not run in e2e, so this writes the row it leaves; the board leaves the
- *  `checking_in` state, which is what flips the column from its check-in phase to its playing phase. */
+/** The row the sweep leaves on a board whose check-in window ended with nobody there AND a Start on its ledger: held for the
+ *  organiser (`no_show_both`), with no game on file (sweep.ts `noShow`, RB3). A both-absent board with NO Start is not held: the
+ *  sweep walks it over (a double walkover). The sweep is a cron job that does not run in these specs, so this writes the row it
+ *  leaves; the board leaves the `checking_in` state, which is what flips the column from its check-in phase to its playing phase.
+ *  walkthrough/chess-external-play.spec.ts drives the real thing (a Start through the events route, then the sweep). */
 export async function holdNoShowSql(fixtureId: string): Promise<void> {
   await withDb(async (sql) => {
     const res = await sql`
