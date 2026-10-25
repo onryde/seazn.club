@@ -642,6 +642,36 @@
       "original": "rank > n",
       "line": "if (rank < 1 || rank > n || out[rank - 1] !== null) {",
       "reason": "A rank above n reads `out[rank - 1]` past the array's end, which is undefined, so `out[rank - 1] !== null` throws the same CONFIG_INVALID without it (competition/points-md1.test.ts, 'a lock outside 1..n ...', rank n + 1)."
+    },
+    {
+      "mutant": "src/sports/setbased/badminton.ts:54:21 StringLiteral → \"\"",
+      "original": "\"Game\"",
+      "line": "unitLabel: { one: \"Game\", many: \"Games\" },",
+      "reason": "`unitLabel.one` has no reader: kernel.ts only ever reads `unitLabel.many` (makeMetrics and the folded sets_won/sets_lost labels), the built module does not carry `unitLabel` forward, and nothing else in the package imports it, so the singular label is unobservable."
+    },
+    {
+      "mutant": "src/sports/setbased/tabletennis.ts:56:21 StringLiteral → \"\"",
+      "original": "\"Game\"",
+      "line": "unitLabel: { one: \"Game\", many: \"Games\" },",
+      "reason": "`unitLabel.one` has no reader: kernel.ts only ever reads `unitLabel.many` (makeMetrics and the folded sets_won/sets_lost labels), the built module does not carry `unitLabel` forward, and nothing else in the package imports it, so the singular label is unobservable."
+    },
+    {
+      "mutant": "src/sports/setbased/volleyball.ts:96:21 StringLiteral → \"\"",
+      "original": "\"Set\"",
+      "line": "unitLabel: { one: \"Set\", many: \"Sets\" },",
+      "reason": "`unitLabel.one` has no reader: kernel.ts only ever reads `unitLabel.many` (makeMetrics and the folded sets_won/sets_lost labels), the built module does not carry `unitLabel` forward, and nothing else in the package imports it, so the singular label is unobservable."
+    },
+    {
+      "mutant": "src/sports/setbased/tabletennis.ts:87:15 StringLiteral → \"\"",
+      "original": "\"alternate\"",
+      "line": "setStart: \"alternate\",",
+      "reason": "`serve.setStart` is read in one place, kernel.ts openNextSet, as `rotation.setStart === \"set-winner\"`; the type is the two-value union \"set-winner\" | \"alternate\", so `\"\"` takes the same fall-through branch as \"alternate\" (the next set opens with the opponent of the previous opener) and no stream can tell them apart."
+    },
+    {
+      "mutant": "src/sports/setbased/volleyball.ts:127:15 StringLiteral → \"\"",
+      "original": "\"alternate\"",
+      "line": "setStart: \"alternate\",",
+      "reason": "`serve.setStart` is read in one place, kernel.ts openNextSet, as `rotation.setStart === \"set-winner\"`; the type is the two-value union \"set-winner\" | \"alternate\", so `\"\"` takes the same fall-through branch as \"alternate\" (the next set opens with the opponent of the previous opener) and no stream can tell them apart."
     }
   ]
 }
