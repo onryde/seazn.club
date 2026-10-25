@@ -10,7 +10,6 @@ import "server-only";
 // a wrong one (R3). Every `return null` below names the fact it cannot trust;
 // each has its own test in __tests__/qualification-view.test.ts.
 import {
-  DECIDED_IN,
   FOR_KEYS,
   SETTLED_FIXTURE_STATUSES,
   isTableStageComplete,
@@ -38,6 +37,7 @@ import { isOneSidedAwardBye } from "@/lib/fixture-bye";
 import type { TKey } from "@/lib/i18n-runtime";
 import { tableWithdrawalInputs } from "@/lib/table-withdrawal";
 import { completionEngineStatus, rowAwaitsSettle } from "@/server/engine-db/recorded-abandon";
+import { EVERY_OUTCOME } from "@/server/engine-db/table-rules";
 import type { QualRowT, QualTableT } from "./competition-hub-schema";
 import { tieBreakRule } from "./standings-view";
 
@@ -54,10 +54,10 @@ export interface StageQualMeta {
   /** V414 (ruling M1): the organiser pinned ranks on this stage. NOT a row's
    *  `rankLocked`, which the engine also sets on every tie settled by lots. */
   hasRankOverrides: boolean;
-  /** W2d (V472, PF-3): the rule the TABLE is paid by. From the public row (`table_points_rule`: a started stage's pinned
-   *  points, else its own rule, else null), and — on every surface since W2d T9 — replaced by the one loader's rule
-   *  (`divisionQualification`, from `stageTableRulesDocs`). The per-match bounds read this one (`boundsInForce`), and so
-   *  does a rule-scored forfeit (`ruleScoreReaches`, T7 carry: never the own rule). */
+  /** W2d T9: the rule the TABLE is paid by — the one loader's (`stageTableRulesDocs`: the pin, else the live layers),
+   *  set by `divisionQualification`; null until it is (no SQL column publishes it: T9 review m3). The per-match bounds
+   *  read this one (`boundsInForce`; null gives none, never the sport's), and so does a rule-scored forfeit
+   *  (`ruleScoreReaches`, T7 carry: never the own rule). */
   tablePointsRule: unknown;
 }
 
@@ -70,7 +70,6 @@ export function stageQualMeta(row: {
   swiss_rounds: number | null;
   points_rule: unknown;
   has_rank_overrides: boolean | null;
-  table_points_rule: unknown;
 }): StageQualMeta {
   return {
     qualifyCount: row.qualify_count,
@@ -79,7 +78,8 @@ export function stageQualMeta(row: {
     swissRounds: row.swiss_rounds,
     pointsRule: row.points_rule ?? null,
     hasRankOverrides: row.has_rank_overrides === true,
-    tablePointsRule: row.table_points_rule ?? null,
+    // the loader's, set by `divisionQualification` — never a column of the row (T9 review m3)
+    tablePointsRule: null,
   };
 }
 
@@ -351,17 +351,10 @@ function headline(s: QualStatus, i: QualificationViewInput, next: string, n: num
   }
 }
 
-/** W2d: every outcome a stage rule can name — a win or loss however decided, an unplayed loss, a draw, a tie, a no
- *  result. The view holds no module or cfg to narrow it to the stage's reachable outcomes (`reachableOutcomes`), so the
- *  bounds range over all of them: wider, never narrower, than the table can pay (R3: cautious, never wrong). A set-score
- *  map with no `set:` key reachable ranges over every pair it names (`pointsRuleBounds`). */
-export const EVERY_OUTCOME: ReadonlySet<OutcomeKey> = new Set<OutcomeKey>([
-  ...DECIDED_IN.flatMap((d): OutcomeKey[] => [`win.${d}`, `loss.${d}`]),
-  "loss.unplayed",
-  "draw",
-  "tie",
-  "noResult",
-]);
+/** W2d: every outcome a stage rule can name — ONE copy, the loader's (`table-rules.ts`, fix round 1 m6). Where the view
+ *  holds no module or cfg to narrow it to the stage's reachable outcomes (`reachableOutcomes`), the bounds range over all
+ *  of them: wider, never narrower, than the table can pay (R3: cautious, never wrong). */
+export { EVERY_OUTCOME };
 
 /** The per-match bounds in force: the rule the table is paid by (`tablePointsRule`: since W2d T9 the loader's — the pin,
  *  else the live layers) replaces the sport's, ranging over the outcomes the stage reaches (`reachable`; absent: every

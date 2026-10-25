@@ -76,7 +76,6 @@ const NO_CUT = {
   swiss_rounds: null,
   points_rule: null,
   has_rank_overrides: false,
-  table_points_rule: null,
 } satisfies Partial<Stage>;
 const oneStage = (kind: StageKind): Stage[] => [
   { id: "st", division_id: "d1", seq: 1, kind, name: "Finals", status: "active", ...NO_CUT },

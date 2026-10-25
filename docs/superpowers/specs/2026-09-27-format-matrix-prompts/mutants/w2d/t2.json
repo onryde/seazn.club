@@ -257,7 +257,7 @@
         "files": [
           "src/competition/points-w2d.test.ts"
         ],
-        "name": "parseStoredPointsRule reads the new shape"
+        "name": "PS-9f parseStoredPointsRule reads the outcome-keyed shape"
       }
     ]
   },
@@ -324,8 +324,8 @@
   {
     "id": "t2-web-fold-decidedin-regulation",
     "file": "apps/web/src/server/engine-db/competition.ts",
-    "find": "            decidedInFor(sportModule, f.outcome as MatchOutcome),\n",
-    "replace": "            (f.outcome as MatchOutcome).kind === \"win\" ? \"regulation\" : null, /*MUT*/\n",
+    "find": "        decidedInFor(sportModule, f.outcome as MatchOutcome),\n",
+    "replace": "        (f.outcome as MatchOutcome).kind === \"win\" ? \"regulation\" : null, /*MUT*/\n",
     "killers": [
       {
         "cwd": "apps/web",

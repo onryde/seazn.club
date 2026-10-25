@@ -489,7 +489,7 @@ const CACHE_SITES: Record<string, { via: "cachedIfFound" | "unstable_cache"; fil
   "pub-fixture-v8": { via: "cachedIfFound", file: "server/public-site/data.ts", why: "a fixture id may not exist in this division" },
   "pub-hub-v5": { via: "cachedIfFound", file: "server/public-site/competition-hub.ts", why: "the hub refuses when its shell does" },
   "<keyParts>": { via: "unstable_cache", file: "server/public-site/cache-found.ts", why: "the guard itself: throws instead of storing a miss" },
-  "pub-div-v4": { via: "unstable_cache", file: "server/public-site/data.ts", why: "the detail of a division already found; never null" },
+  "pub-div-v5": { via: "unstable_cache", file: "server/public-site/data.ts", why: "the detail of a division already found; never null" },
   "pub-player-gate-tag": { via: "unstable_cache", file: "server/public-site/data.ts", why: "stores `true` — holds tags, never an answer" },
   "pub-player-v17": { via: "unstable_cache", file: "server/public-site/data.ts", why: "behind publicPlayerGate, read uncached; never null" },
   "pub-player-figures-v2": {

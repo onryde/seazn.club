@@ -246,8 +246,13 @@ describe.skipIf(!HAS_DB)("W2d T9: stored lots draws (§5.8)", () => {
     expect(lock.method).toBe("lots");
     expect(lock.order, "the stored order").toEqual(live[0]!.drawn_order);
     expect(lock.drawnAt, "the stored drawn_at, as the DB prints it").toBe(live[0]!.drawn_at);
-    // microseconds: the DB's clock, never a JS Date (which prints milliseconds and a `Z`)
-    expect(lock.drawnAt).toMatch(/\.\d{6}\+00:00$/);
+    // The row's own drawn_at, read back by id. `to_json(timestamptz)` trims trailing zeros from the fraction (`.12`,
+    // `.12345`, or none at all), so the witness is equality with the DB's own print plus its offset shape — a JS Date's
+    // `toISOString()` ends in `Z` and fails it.
+    const [own] = await sql<{ drawn_at: string }[]>`
+      select to_json(drawn_at) #>> '{}' as drawn_at from stage_lots_draws where id = ${live[0]!.id}`;
+    expect(lock.drawnAt, "the row's own drawn_at").toBe(own!.drawn_at);
+    expect(lock.drawnAt, "the DB's offset, never a JS `Z`").toMatch(/[+-]\d{2}:\d{2}$/);
     const [snap] = await sql<{ rows: { entrantId: string }[] }[]>`select rows from standings_snapshots where stage_id = ${t.stageId} and pool_id is null`;
     expect(snap!.rows.map((r) => r.entrantId), "the final snapshot is the stored order").toEqual(live[0]!.drawn_order);
   }, 240_000);
@@ -274,5 +279,25 @@ describe.skipIf(!HAS_DB)("W2d T9: stored lots draws (§5.8)", () => {
     expect(await draws(t.stageId), "nothing stored").toEqual([]);
     await sql.begin((tx) => persistLotsDraws(tx, t.stageId, null, [{ membersKey: membersKeyOf([A, B]), members: [B, A], drawnOrder: [B, A], seed: 1 }]));
     expect((await draws(t.stageId)).map((d) => d.members_key), "the positive pair stores").toEqual([membersKeyOf([A, B])]);
+  }, 120_000);
+
+  it("fix round 1 m5: a members key whose history holds two rows is read as ONE — its newest (superseded or not), never the older", async () => {
+    const t = await started();
+    const [A, B] = t.entrants as [string, string];
+    const key = membersKeyOf([A, B]);
+    // planted history: the set drawn an hour ago (A first), superseded, and drawn again since (B first) — two rows, one key
+    await sql`
+      insert into stage_lots_draws (org_id, stage_id, pool_id, members_key, members, drawn_order, seed, drawn_at, superseded_at)
+      values (${t.auth.orgId}, ${t.stageId}, null, ${key}, ${[A, B]}, ${[A, B]}, 1, now() - interval '1 hour', now()),
+             (${t.auth.orgId}, ${t.stageId}, null, ${key}, ${[A, B]}, ${[B, A]}, 2, now(), null)`;
+    const stored = await draws(t.stageId);
+    expect(stored.filter((d) => d.members_key === key).length, "premise: two rows of one key").toBe(2);
+    const newest = servedDraw(stored, key)!;
+    expect(newest.drawn_order, "premise: the newest row is the B-first one").toEqual([B, A]);
+    const loaded = await loadLotsDraws(sql, t.stageId);
+    const served = loaded.get("")?.get(key);
+    expect(served, "the key is served").toBeDefined();
+    expect(served!.order, "the newest row's order").toEqual(newest.drawn_order);
+    expect(served!.drawnAt, "the newest row's date").toBe(newest.drawn_at);
   }, 120_000);
 });

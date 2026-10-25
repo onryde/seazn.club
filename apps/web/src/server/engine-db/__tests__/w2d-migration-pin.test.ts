@@ -19,6 +19,7 @@ import { PointsRule, parseLegacyPointsRule, parseStoredPointsRule } from "@seazn
 import { builtinModules } from "@seazn/engine/sports";
 import { connectionOptions, type Tx } from "@/lib/db";
 import { rankedStageStandings } from "@/server/engine-db/competition";
+import { loadTableRules } from "@/server/engine-db/table-rules";
 import { boundsInForce, divisionPointsBounds, stageQualMeta } from "@/server/public-site/qualification-view";
 import {
   W2D_PIN_BEFORE,
@@ -621,51 +622,48 @@ describe.skipIf(!HAS_DB)("W2d migration — B1 pin, stored lots table (V472)", (
     expect(pin.points.loss).toEqual({ regulation: sp.loss, ot: sp.otLoss, so: sp.shootoutLoss });
   });
 
-  it("PF-3 public_stages_v: table_points_rule is the pin's points for a pinned stage, points_rule stays the stage's OWN rule (V414)", async () => {
-    // Two columns, two readers: `points_rule` is what the format line prints as the stage's own points (so a pinned stage
-    // with no rule of its own prints none, as before W2d), `table_points_rule` is what the table is paid by (qualification
-    // reads its bounds). The function and the view must agree on both: the console reads the function, the pages the view.
+  it("PF-3 public_stages_v: points_rule stays the stage's OWN rule (V414) for pinned and pending stages alike, and neither the function nor the view publishes the table's rule (T9 review m3: the loader's alone)", async () => {
+    // `points_rule` is what the format line prints as the stage's own points (so a pinned stage with no rule of its own
+    // prints none, as before W2d). The rule the table is paid by is the loader's (`table-rules.ts`): a SQL twin of it
+    // disagreed with the loader on a pending stage with no rule of its own, so it was retired. The function and the view
+    // must agree: the console reads the function, the pages the view.
     const pinnedSport = stageOf("football-so");
     const pinnedOwn = stageOf("generic-legacy", "active");
     const pendingOwn = stageOf("generic-legacy", "pending");
     const pendingNone = stageOf("football-pending");
     const later = { win: { regulation: 9 }, loss: { regulation: 9 }, draw: 9, shootoutAs: "result", unit: "whole", bonuses: [] };
-    type Rules = { points_rule: unknown; table_points_rule: unknown };
+    type Row = Record<string, unknown>;
     const { value } = await rolledBack(async (tx) => {
       await seeded(tx);
       await runSteps(tx);
-      // after the pin, the stage's own rule moves — the table keeps the pin's, the format line reads the new own rule
+      // after the pin, the stage's own rule moves — the format line reads the new own rule
       await tx`update stages set config = jsonb_set(config, '{points}', ${tx.json(later as never)}) where id = ${pinnedOwn.stageId}`;
       const rows = await stageRows(tx);
       await tx`reset role`;
       const ids = [pinnedSport, pinnedOwn, pendingOwn, pendingNone].map((s) => s.stageId);
-      const meta = new Map<string, Rules>();
-      for (const id of ids) {
-        meta.set(id, (await tx<Rules[]>`select points_rule, table_points_rule from stage_qualification_meta(${id})`)[0]!);
-      }
-      const view = new Map(
-        (await tx<({ id: string } & Rules)[]>`select id, points_rule, table_points_rule from public_stages_v where id in ${tx(ids)}`).map(
-          ({ id, ...r }) => [id, r],
-        ),
-      );
+      const meta = new Map<string, Row>();
+      for (const id of ids) meta.set(id, (await tx<Row[]>`select * from stage_qualification_meta(${id})`)[0]!);
+      const view = new Map((await tx<({ id: string } & Row)[]>`select * from public_stages_v where id in ${tx(ids)}`).map(({ id, ...r }) => [id, r]));
       return { rows, meta, view };
     });
     const pinOf = (s: W2dPinStage) => (value.rows.find((r) => r.id === s.stageId)!.pin as { points: unknown }).points;
     expect(value.view.size, "every stage is on the public view (a public competition)").toBe(4);
     expect(PointsRule.safeParse(later).success, "premise: the later own rule is one today's reader takes").toBe(true);
     let checked = 0;
-    for (const [s, own, table] of [
-      [pinnedSport, null, pinOf(pinnedSport)],
-      [pinnedOwn, later, pinOf(pinnedOwn)],
-      [pendingOwn, afterMigration(ownPoints(pendingOwn)), afterMigration(ownPoints(pendingOwn))],
-      [pendingNone, null, null],
+    for (const [s, own] of [
+      [pinnedSport, null],
+      [pinnedOwn, later],
+      [pendingOwn, afterMigration(ownPoints(pendingOwn))],
+      [pendingNone, null],
     ] as const) {
-      const want = { points_rule: own, table_points_rule: table };
-      expect(value.view.get(s.stageId), `${s.family} (${s.status}): the view`).toEqual(want);
-      expect(value.meta.get(s.stageId), `${s.family} (${s.status}): the function`).toEqual(want);
-      checked++;
+      for (const [where, r] of [["the view", value.view.get(s.stageId)], ["the function", value.meta.get(s.stageId)]] as const) {
+        expect(r, `${s.family} (${s.status}): ${where}`).toBeDefined();
+        expect(r!.points_rule, `${s.family} (${s.status}): ${where}'s own rule`).toEqual(own);
+        expect(Object.hasOwn(r!, "table_points_rule"), `${s.family} (${s.status}): ${where} publishes no table rule`).toBe(false);
+        checked++;
+      }
     }
-    expect(checked).toBe(4);
+    expect(checked).toBe(8);
     expect(pinOf(pinnedOwn), "premise: the pin is not the stage's later rule").not.toEqual(later);
     expect(pinOf(pinnedSport), "premise: a pinned stage with no rule of its own has a pin").not.toBeNull();
   });
@@ -683,12 +681,16 @@ describe.skipIf(!HAS_DB)("W2d migration — B1 pin, stored lots table (V472)", (
       await seeded(tx);
       await runSteps(tx);
       await tx`update divisions set config = ${tx.json(edited as never)} where id = ${recorded.id}`;
+      // the rule the table is paid by, as every reader takes it: the one loader's (T9 review m3)
+      const rules = await loadTableRules(tx, swiss.stageId);
       await tx`reset role`;
       const [row] = await tx<Parameters<typeof stageQualMeta>[0][]>`select * from public_stages_v where id = ${swiss.stageId}`;
-      return row;
+      return { row, rules };
     });
-    expect(value, "the stage is on the public view").toBeDefined();
-    const meta = stageQualMeta(value!);
+    expect(value.row, "the stage is on the public view").toBeDefined();
+    expect(value.rules.pinnedAt, "premise: the loader serves the pin").not.toBeNull();
+    // as `divisionQualification` builds it: the row's V414 meta, the loader's rule in force
+    const meta = { ...stageQualMeta(value.row!), tablePointsRule: value.rules.points };
     const declared = divisionPointsBounds(head("badminton"), recorded.config);
     expect(declared, "premise: the module declares bounds for the recorded cfg").not.toBeNull();
     expect(divisionPointsBounds(head("badminton"), edited), "premise: the edit moves the declared bounds").not.toEqual(declared);

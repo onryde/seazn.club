@@ -35,14 +35,16 @@ import type { EmbedPayload } from "@/server/embed-data";
 import type { PublicEntrant, PublicFixture, PublicStage } from "@/server/public-site/data";
 import type { QualificationView } from "@/server/public-site/qualification-view";
 import enPublic from "@/dictionaries/en/public.json";
-import { registry } from "@seazn/engine/sport";
+import { resolveModule } from "@/server/engine-db/registry";
 import { unpinnedRulesDoc } from "@/server/engine-db/__tests__/helpers/table-rules-doc";
 import EmbedWidgetPage from "../page";
 
 /** The division's cfg and pinned module (`embed-data.ts` selects both); each stage carries the rules the one loader
  *  serves for it (`PublicStage.table_rules`, W2d Task 9) — its order, its points, its bounds. */
 const DIVISION_CFG = { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 } };
-const GENERIC = registry.get("generic", "1.0.0");
+// the pinned module as the adapter resolves it (`resolveModule` boots the registry; a bare `registry.get` at import
+// time finds it empty and the file never collects)
+const GENERIC = resolveModule("generic", "1.0.0");
 const rulesFor = (kind: string) => unpinnedRulesDoc({ module: GENERIC, kind, divisionConfig: DIVISION_CFG });
 
 /** The en captions of pools A and B under `stage`: `table.poolLabel` over the
@@ -114,7 +116,6 @@ function payload(qualifyCount: number | null): EmbedPayload {
     swiss_rounds: 3,
     points_rule: null,
     has_rank_overrides: false,
-    table_points_rule: null,
     table_rules: rulesFor("swiss"),
   };
   return {

@@ -178,24 +178,6 @@ export function tableRulesOf(row: TableRulesRow, module: AnySportModule): Loaded
   };
 }
 
-/** V347 × W2d: the rule ONE decided fixture is paid by. A pinned stage, and a stage with a rule of its own, pay that rule
- *  for every fixture. A pending stage on its sport's rule pays each fixture the sport's rule under THAT fixture's
- *  resolved cfg — its frozen snapshot once scored (`resolveFixtureCfg`) — exactly as the sport's own `standingsDelta`
- *  points did before W2d: a division edit after a match was played never moves the table under it (V347), and an
- *  unscored fixture follows the live cfg. */
-export function fixturePointsRule(rules: LoadedTableRules, module: AnySportModule, kind: string, fixtureCfg: unknown): PointsRule {
-  if (rules.pinnedAt !== null || rules.sources.points !== "sport") return rules.points;
-  return resolveTableRules({
-    module,
-    stageKind: tableStageKindOf(kind),
-    mergedCfg: fixtureCfg,
-    stageOwn: { points: null, tiebreakers: null, crossGroup: null },
-    // the order is not asked here (the stage's own answers it): only the points are read
-    divisionTiebreakers: rules.tiebreakers,
-    pinned: null,
-  }).points;
-}
-
 interface RulesQueryRow {
   stage_id: string;
   kind: string;
@@ -317,28 +299,57 @@ export async function pinStageTableRules(tx: Db, stageId: string): Promise<void>
     where id = ${stageId} and table_rules_pinned is null`;
 }
 
-/** PS-5d (Task 10's caller): an own save between activation and the first score. Replaces ONLY the saved field(s) of the
- *  existing pin, with source "stage"; every other field, its source and the pin's date are kept. No pin → no-op (a
- *  pending stage reads live). */
+/** PS-5d (Task 10's caller): an own save between activation and the first score, re-pinned. Each field of `saved`:
+ *  absent = keep the pin's value and its source; a value = the stage's own (source "stage"); `null` = the own layer
+ *  CLEARED — the field reverts to the layer below as it stands NOW (the division's order, else the sport's; the sport's
+ *  rule under the live cfg), its source updated (fix round 1, I4b ruling). The new pin is read through the engine's one
+ *  resolver over the new own layer (I4a): the cross-group order is the resolver's — derived from the NEW order unless it
+ *  is the stage's own, never one derived from the old order. The pin's date is kept. No pin → no-op (a pending stage
+ *  reads live). */
 export async function repinStageOwnRules(
   tx: Db,
   stageId: string,
-  saved: { readonly points?: PointsRule; readonly tiebreakers?: readonly TiebreakerKey[]; readonly crossGroup?: readonly TiebreakerKey[] },
+  saved: {
+    readonly points?: PointsRule | null;
+    readonly tiebreakers?: readonly TiebreakerKey[] | null;
+    readonly crossGroup?: readonly TiebreakerKey[] | null;
+  },
 ): Promise<void> {
-  const [row] = await tx<{ pin: unknown }[]>`select table_rules_pinned as pin from stages where id = ${stageId} for update`;
-  if (row === undefined || row.pin === null || row.pin === undefined) return;
-  const pin = parsePin(stageId, row.pin);
+  const [locked] = await tx<{ pin: unknown }[]>`select table_rules_pinned as pin from stages where id = ${stageId} for update`;
+  if (locked === undefined || locked.pin === null || locked.pin === undefined) return;
+  const pin = parsePin(stageId, locked.pin);
+  const [row] = await rulesRows(tx, [stageId]);
+  if (!row) throw new EngineError("STAGE_NOT_READY", `stage ${stageId} not found`, { stageId });
+  const sportModule = resolveModule(row.sport_key, row.module_version);
+  const r = toRow(row);
+  const stageKind = tableStageKindOf(r.kind);
+  const mergedCfg = liveCfg(r.divisionConfig, { kind: r.kind, config: r.stageConfig }, sportModule);
+  const resolve = (stageOwn: TableRulesInputOwn) =>
+    resolveTableRules({ module: sportModule, stageKind, mergedCfg, stageOwn, divisionTiebreakers: divisionOrderOf(r), pinned: null });
+  const keepPoints = saved.points === undefined;
+  const keepOrder = saved.tiebreakers === undefined;
+  // The pin's cross-group order is the stage's own only where it is not what the resolver derives from the pin's order.
+  const derivedFromPin = resolve({ points: pin.points, tiebreakers: pin.tiebreakers, crossGroup: null }).crossGroup;
+  const crossGroupIsOwn = !sameOrder(pin.crossGroup, derivedFromPin);
+  const rules = resolve({
+    points: keepPoints ? pin.points : (saved.points ?? null),
+    tiebreakers: keepOrder ? pin.tiebreakers : (saved.tiebreakers ?? null),
+    crossGroup: saved.crossGroup !== undefined ? saved.crossGroup : crossGroupIsOwn ? pin.crossGroup : null,
+  });
   const next: TableRulesPin = {
-    points: saved.points ?? pin.points,
-    tiebreakers: saved.tiebreakers ?? pin.tiebreakers,
-    crossGroup: saved.crossGroup ?? pin.crossGroup,
+    points: rules.points,
+    tiebreakers: rules.tiebreakers,
+    crossGroup: rules.crossGroup,
     sources: {
-      points: saved.points === undefined ? pin.sources.points : "stage",
-      tiebreakers: saved.tiebreakers === undefined ? pin.sources.tiebreakers : "stage",
+      points: keepPoints ? pin.sources.points : rules.sources.points,
+      tiebreakers: keepOrder ? pin.sources.tiebreakers : rules.sources.tiebreakers,
     },
   };
   await tx`update stages set table_rules_pinned = ${tx.json(pinJson(next) as never)} where id = ${stageId}`;
 }
+
+type TableRulesInputOwn = Parameters<typeof resolveTableRules>[0]["stageOwn"];
+const sameOrder = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((k, i) => k === b[i]);
 
 // ── Stored lots draws (spec §5.8) ──
 
@@ -347,12 +358,13 @@ const poolKeyOf = (poolId: string | null): string => poolId ?? "";
 
 /** The stage's stored draws, by pool ("" for none) then members key. The NEWEST row of each (pool, members key) serves,
  *  superseded or not: a tied set that comes back after a draw for a wider set is ordered as it was first drawn, and
- *  nothing new is stored (progress ledger, T5/T9). */
+ *  nothing new is stored (progress ledger, T5/T9). One row per (pool, members key) is read (`distinct on`, fix round 1
+ *  m5): the history of a set drawn again stays in the table, never on the wire. */
 export async function loadLotsDraws(tx: Db, stageId: string): Promise<ReadonlyMap<string, ReadonlyMap<MembersKey, StoredLotsDraw>>> {
   const rows = await tx<{ pool_id: string | null; members_key: string; drawn_order: string[]; drawn_at: string }[]>`
-    select pool_id, members_key, drawn_order, to_json(drawn_at) #>> '{}' as drawn_at
+    select distinct on (pool_id, members_key) pool_id, members_key, drawn_order, to_json(drawn_at) #>> '{}' as drawn_at
     from stage_lots_draws where stage_id = ${stageId}
-    order by drawn_at, id`;
+    order by pool_id, members_key, drawn_at desc, id desc`;
   const out = new Map<string, Map<MembersKey, StoredLotsDraw>>();
   for (const r of rows) {
     const pool = poolKeyOf(r.pool_id);

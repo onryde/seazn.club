@@ -182,8 +182,8 @@ export function hasFrozenCfg(snapshot: unknown): boolean {
  * W2c Task 16b (X-WO-1 part B; Task 9 P-3 "A") - the walkover score the fixture's STAGE offers a fold: its points rule's
  * `forfeit.awardScore` (winner first), and only where that award reaches the sport's table (`forfeitAwardOffer`, the
  * engine's one place). `undefined` for a stage with no points rule, a rule with no award, a sport the award never reaches,
- * and a stored rule neither shape reads (`parseStoredPointsRule`, never `parse`: this feeds a fold, which must not be
- * made stricter than the table's own read of the same rule).
+ * and a stored rule the outcome-keyed shape does not read (`parseStoredPointsRule`, never `parse`: this feeds a fold,
+ * which must not be made stricter than the table's own read of the same rule).
  *
  * It is NOT part of the cfg (`resolveFixtureCfg`): the cfg is frozen into `config_snapshot` at the first event and the
  * award replaces the sport's credit only for a forfeit with NOTHING PLAYED, a fact the ledger knows and a cfg cannot (an
@@ -200,7 +200,7 @@ export function stageForfeitAward(
 ): ForfeitAward | undefined {
   const raw = stage?.config?.points;
   if (raw === undefined || raw === null) return undefined;
-  // W2d: either stored shape (the legacy one through `legacyPointsRule`); a rule neither takes offers nothing.
+  // W2d: the outcome-keyed shape only (PS-9f; the migration converted every `{base}` row); a rule it refuses offers nothing.
   const rule = parseStoredPointsRule(raw);
   return rule === null ? undefined : forfeitAwardOffer(rule, module);
 }

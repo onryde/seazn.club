@@ -76,23 +76,24 @@
   },
   {
     "id": "t9-fixture-points-v347",
-    "file": "apps/web/src/server/engine-db/table-rules.ts",
-    "find": "if (rules.pinnedAt !== null || rules.sources.points !== \"sport\") return rules.points;",
-    "replace": "return rules.points; /*MUT*/",
+    "file": "apps/web/src/server/engine-db/competition.ts",
+    "find": "        rules.points,\n        sportModule.awardScoreKeys,",
+    "replace": "        sportModule.tablePointsRule(fixtureCfg as never, stage.kind as never) /*MUT*/,\n        sportModule.awardScoreKeys,",
     "killers": [
       {
         "cwd": "apps/web",
         "files": [
           "src/server/engine-db/__tests__/config-snapshot.test.ts"
-        ]
+        ],
+        "name": "an UNSCORED fixture still folds under live config"
       }
     ]
   },
   {
     "id": "t9-repin-points",
     "file": "apps/web/src/server/engine-db/table-rules.ts",
-    "find": "points: saved.points ?? pin.points,",
-    "replace": "points: pin.points /*MUT*/,",
+    "find": "    points: keepPoints ? pin.points : (saved.points ?? null),",
+    "replace": "    points: pin.points /*MUT*/,",
     "killers": [
       {
         "cwd": "apps/web",
@@ -464,6 +465,356 @@
           "src/server/engine-db/__tests__/w2d-migration-pin.test.ts"
         ],
         "name": "T7 m10"
+      }
+    ]
+  },
+  {
+    "id": "t9r1-loader-ignores-pin",
+    "file": "apps/web/src/server/engine-db/table-rules.ts",
+    "find": "    divisionTiebreakers: pinned === null ? divisionOrderOf(row) : null,\n    pinned,\n  });",
+    "replace": "    divisionTiebreakers: pinned === null ? divisionOrderOf(row) : null,\n    pinned: null /*MUT*/,\n  });",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-migration-pin.test.ts"
+        ],
+        "name": "B1 a started stage's table is IDENTICAL before and after the migration"
+      }
+    ]
+  },
+  {
+    "id": "t9r1-migration-skips-pin",
+    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "find": "  pinned := w2d_pin_started_stages();",
+    "replace": "  pinned := 0; /*MUT*/",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-migration-pin.test.ts"
+        ],
+        "name": "B1 a started stage's table is IDENTICAL before and after the migration"
+      }
+    ]
+  },
+  {
+    "id": "t9r1-carried-row-repaid",
+    "file": "apps/web/src/server/engine-db/competition.ts",
+    "find": "      ? { openingDeltas: inputs.stage.config.carry_deltas as never }",
+    "replace": "      ? { openingDeltas: (inputs.stage.config.carry_deltas as { won?: number; drawn?: number; lost?: number }[]).map((d) => ({ ...d, points: (d.won ?? 0) * inputs.rules.points.win.regulation + (d.drawn ?? 0) * inputs.rules.points.draw + (d.lost ?? 0) * inputs.rules.points.loss.regulation })) as never /*MUT*/ }",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/table-rules-pin.test.ts"
+        ],
+        "name": "Review Focus 5: carried openings are not re-paid"
+      }
+    ]
+  },
+  {
+    "id": "t9r1-complete-no-pin",
+    "file": "apps/web/src/server/engine-db/competition.ts",
+    "find": "    await pinStageTableRules(tx, stageId);\n    await tx`update stages set status = 'complete' where id = ${stageId}`;",
+    "replace": "    /*MUT*/\n    await tx`update stages set status = 'complete' where id = ${stageId}`;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/table-rules-pin.test.ts"
+        ],
+        "name": "a stage that leaves pending by any door is pinned"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/table-rules-pin.test.ts"
+        ],
+        "name": "started-status census"
+      }
+    ]
+  },
+  {
+    "id": "t9r1-complete-pin-after-write",
+    "file": "apps/web/src/server/engine-db/competition.ts",
+    "find": "    await pinStageTableRules(tx, stageId);\n    await tx`update stages set status = 'complete' where id = ${stageId}`;",
+    "replace": "    await tx`update stages set status = 'complete' where id = ${stageId}`;\n    await pinStageTableRules(tx, stageId); /*MUT*/",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/table-rules-pin.test.ts"
+        ],
+        "name": "started-status census"
+      }
+    ]
+  },
+  {
+    "id": "t9r1-repin-crossgroup-from-old-order",
+    "file": "apps/web/src/server/engine-db/table-rules.ts",
+    "find": "    crossGroup: saved.crossGroup !== undefined ? saved.crossGroup : crossGroupIsOwn ? pin.crossGroup : null,",
+    "replace": "    crossGroup: saved.crossGroup !== undefined ? saved.crossGroup : pin.crossGroup /*MUT*/,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/table-rules-pin.test.ts"
+        ],
+        "name": "PS-5d repinStageOwnRules replaces only the saved field"
+      }
+    ]
+  },
+  {
+    "id": "t9r1-repin-crossgroup-null-keeps",
+    "file": "apps/web/src/server/engine-db/table-rules.ts",
+    "find": "    crossGroup: saved.crossGroup !== undefined ? saved.crossGroup : crossGroupIsOwn ? pin.crossGroup : null,",
+    "replace": "    crossGroup: saved.crossGroup != null ? saved.crossGroup : crossGroupIsOwn ? pin.crossGroup : null /*MUT*/,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/table-rules-pin.test.ts"
+        ],
+        "name": "PS-5d a cross-group order of the stage's own survives a later order save"
+      }
+    ]
+  },
+  {
+    "id": "t9r1-repin-own-crossgroup-forgotten",
+    "file": "apps/web/src/server/engine-db/table-rules.ts",
+    "find": "  const crossGroupIsOwn = !sameOrder(pin.crossGroup, derivedFromPin);",
+    "replace": "  const crossGroupIsOwn = false /*MUT*/;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/table-rules-pin.test.ts"
+        ],
+        "name": "PS-5d a cross-group order of the stage's own survives a later order save"
+      }
+    ]
+  },
+  {
+    "id": "t9r1-repin-null-points-keeps",
+    "file": "apps/web/src/server/engine-db/table-rules.ts",
+    "find": "  const keepPoints = saved.points === undefined;",
+    "replace": "  const keepPoints = saved.points == null /*MUT*/;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/table-rules-pin.test.ts"
+        ],
+        "name": "PS-5d a saved null CLEARS the own layer"
+      }
+    ]
+  },
+  {
+    "id": "t9r1-repin-null-order-keeps",
+    "file": "apps/web/src/server/engine-db/table-rules.ts",
+    "find": "  const keepOrder = saved.tiebreakers === undefined;",
+    "replace": "  const keepOrder = saved.tiebreakers == null /*MUT*/;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/table-rules-pin.test.ts"
+        ],
+        "name": "PS-5d a saved null CLEARS the own layer"
+      }
+    ]
+  },
+  {
+    "id": "t9r1-repin-points-source-kept",
+    "file": "apps/web/src/server/engine-db/table-rules.ts",
+    "find": "      points: keepPoints ? pin.sources.points : rules.sources.points,",
+    "replace": "      points: pin.sources.points /*MUT*/,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/table-rules-pin.test.ts"
+        ],
+        "name": "PS-5d a saved null CLEARS the own layer"
+      }
+    ]
+  },
+  {
+    "id": "t9r1-repin-order-source-kept",
+    "file": "apps/web/src/server/engine-db/table-rules.ts",
+    "find": "      tiebreakers: keepOrder ? pin.sources.tiebreakers : rules.sources.tiebreakers,",
+    "replace": "      tiebreakers: pin.sources.tiebreakers /*MUT*/,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/table-rules-pin.test.ts"
+        ],
+        "name": "PS-5d a saved null CLEARS the own layer"
+      }
+    ]
+  },
+  {
+    "id": "t9r1-gamepoints-fallback-web",
+    "file": "apps/web/src/server/engine-db/competition.ts",
+    "find": "    const pair = gamePoints.get(result);\n    if (pair === undefined) {",
+    "replace": "    const pair = gamePoints.get(result) ?? ([result[0].points, result[1].points] as const); /*MUT*/\n    if (pair === undefined) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/game-points-reader.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t9r1-gamepoints-fallback-bench",
+    "file": "tools/bench/lib/validate-pack.ts",
+    "find": "    const pair = gamePoints.get(result);\n    if (pair === undefined) {",
+    "replace": "    const pair = gamePoints.get(result) ?? ([result[0].points, result[1].points] as const); /*MUT*/\n    if (pair === undefined) {",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "tools/bench/lib/__tests__/validate-pack.test.ts"
+        ],
+        "name": "gamePointsReader"
+      }
+    ]
+  },
+  {
+    "id": "t9r1-meta-reads-row-column",
+    "file": "apps/web/src/server/public-site/qualification-view.ts",
+    "find": "    tablePointsRule: null,\n  };\n}",
+    "replace": "    tablePointsRule: (row as { table_points_rule?: unknown }).table_points_rule ?? null /*MUT*/,\n  };\n}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/qualification-view.test.ts"
+        ],
+        "name": "maps the V414 columns"
+      }
+    ]
+  },
+  {
+    "id": "t9r1-lots-distinct-on-dropped",
+    "file": "apps/web/src/server/engine-db/table-rules.ts",
+    "find": "    select distinct on (pool_id, members_key) pool_id,",
+    "replace": "    select /*MUT*/ pool_id,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/stage-lots.test.ts"
+        ],
+        "name": "fix round 1 m5"
+      }
+    ]
+  },
+  {
+    "id": "t9r1-scan-second-resolver-call",
+    "file": "apps/web/src/server/public-site/qualification-view.ts",
+    "find": "/** The fixture columns the builder reads — `PublicFixture` satisfies it. */",
+    "replace": "// resolveTableRules( /*MUT*/\n/** The fixture columns the builder reads — `PublicFixture` satisfies it. */",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/table-rules-single-resolver.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t9r1-pdp-remote-guard",
+    "file": "scripts/w2d/post-deploy-pin.ts",
+    "find": "  if (!isLocalDatabaseUrl(url) && !args.prod) {",
+    "replace": "  if (false /*MUT*/) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
+        ],
+        "name": "the script refuses any database not on this machine"
+      }
+    ]
+  },
+  {
+    "id": "t9r1-pdp-host-override",
+    "file": "scripts/w2d/post-deploy-pin.ts",
+    "find": "  if (u.searchParams.has(\"host\") || u.searchParams.has(\"hostaddr\")) return false;",
+    "replace": "  /*MUT*/",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
+        ],
+        "name": "isLocalDatabaseUrl: exactly localhost"
+      }
+    ]
+  },
+  {
+    "id": "t9r1-pdp-refused-pinned",
+    "file": "scripts/w2d/post-deploy-pin.ts",
+    "find": "    if (report.refused.includes(id)) continue;",
+    "replace": "    /*MUT*/",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
+        ],
+        "name": "rule the B1 reader refuses is neither written nor pinned over"
+      }
+    ]
+  },
+  {
+    "id": "t9r1-pdp-pin-before-convert",
+    "file": "scripts/w2d/post-deploy-pin.ts",
+    "find": "  for (const { id } of based) {\n    const outcome",
+    "replace": "  for (const { id } of based) {\n    await sql.begin(async (tx) => { const [s] = await tx<{ status: string }[]>`select status from stages where id = ${id}`; if (s?.status !== \"pending\") await pinStageTableRules(tx, id); }).catch((e: unknown) => { report.failed.push(`${id}: ${String(e)}`); }); /*MUT*/\n    const outcome",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
+        ],
+        "name": "then pins every started stage with no pin"
+      }
+    ]
+  },
+  {
+    "id": "t9r1-pdp-check-writes",
+    "file": "scripts/w2d/post-deploy-pin.ts",
+    "find": "    if (args.check) {",
+    "replace": "    if (false /*MUT*/) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
+        ],
+        "name": "then pins every started stage with no pin"
+      }
+    ]
+  },
+  {
+    "id": "t9r1-pdp-scope-ignored",
+    "file": "scripts/w2d/post-deploy-pin.ts",
+    "find": "  return orgs.length === 0 ? sql`true` : sql`org_id in ${sql(orgs as string[])}`;",
+    "replace": "  return sql`true` /*MUT*/;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
+        ],
+        "name": "then pins every started stage with no pin"
       }
     ]
   }

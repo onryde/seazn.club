@@ -203,7 +203,7 @@ describe.skipIf(!HAS_DB)("the Redis hub rebuild on a machine whose data cache st
     // HIT.
     await loadCompetitionHub(scene.orgSlug, scene.compSlug);
     await getPublicDivision(scene.orgSlug, scene.compSlug, scene.divisionSlug);
-    expect(dataCache.hits, "premise: this machine holds the division in its data cache").toContain("pub-div-v4");
+    expect(dataCache.hits, "premise: this machine holds the division in its data cache").toContain("pub-div-v5");
 
     await scoreBehindTheDataCache(scene);
     // Premise: the data cache is still serving the pre-score division here.
@@ -233,7 +233,7 @@ describe.skipIf(!HAS_DB)("the ISR page path keeps reading through the data cache
     const again = (await loadCompetitionHub(scene.orgSlug, scene.compSlug))!;
 
     expect(dataCache.hits).toContain("pub-comp");
-    expect(dataCache.hits).toContain("pub-div-v4");
+    expect(dataCache.hits).toContain("pub-div-v5");
     expect(bucket(again)).toBe(bucket(warmed));
     // …where Postgres now says otherwise, so "the same answer" means "the
     // cached answer".

@@ -167,8 +167,8 @@ export interface PointsDraft {
 
 const text = (n: number | null): string => (n === null ? "" : String(n));
 
-/** The stored rule if it is one the engine's schema takes, else null (absent, `null`, or a hand-edited row). W2d: either
- *  stored shape — a W2c `{base, …}` row reads through `legacyPointsRule` (`parseStoredPointsRule`). */
+/** The stored rule if it is one the engine's schema takes, else null (absent, `null`, or a hand-edited row). W2d: the
+ *  outcome-keyed shape only (`parseStoredPointsRule`, PS-9f) — the W2d migration converted every W2c `{base, …}` row. */
 export function storedPointsRule(stored: unknown): PointsRule | null {
   return parseStoredPointsRule(stored);
 }

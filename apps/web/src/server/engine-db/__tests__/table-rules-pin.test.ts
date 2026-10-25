@@ -11,8 +11,8 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { EngineError } from "@seazn/engine/core";
-import { PointsRule, resolveTableRules } from "@seazn/engine/competition";
-import type { AnySportModule } from "@seazn/engine/sport";
+import { PointsRule, defaultCrossGroup, resolveTableRules } from "@seazn/engine/competition";
+import type { AnySportModule, TiebreakerKey } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { sql } from "@/lib/db";
 import { buildTemplateStages } from "@/lib/format-templates";
@@ -20,7 +20,7 @@ import type { CreateStages } from "@/server/api-v1/schemas";
 import { ENGINE_HTTP, v1 } from "@/server/api-v1/http";
 import { startDivision } from "@/server/usecases/schedule";
 import { scoreEvent } from "@/server/usecases/scoring";
-import { completeStage, generateStageFixtures, rebuildStageFixtures } from "@/server/usecases/stages";
+import { addFixture, completeStage, generateStageFixtures, issueChallenge, rebuildStageFixtures } from "@/server/usecases/stages";
 import { GENERIC_CONFIG, seedFootballCatalog } from "@/server/usecases/__tests__/_seed";
 import { recomputeStandings } from "../competition";
 import { loadTableRules, pinStageTableRules, repinStageOwnRules, tableRulesOf } from "../table-rules";
@@ -260,7 +260,7 @@ describe.skipIf(!HAS_DB)("W2d T9: the pin at activation (X-TB-2, OC2)", () => {
     expect((await seatedFixtures(stageId)).length, "no fixture was written").toBe(0);
   }, 120_000);
 
-  it("activation-writer census: every `update stages set status = 'active'` in non-test W/server (git grep -a) is followed by pinStageTableRules in the same function (source scan; counts writers found, expects 2; 0 fails)", () => {
+  it("started-status census (fix I1): every `update stages set status = 'active' | 'complete'` in non-test W/server pins in its block — after an activation's write, before a completion's (source scan; counts writers found, expects 2 active + 1 complete; 0 fails)", () => {
     const SERVER = resolve(import.meta.dirname, "../..");
     const files: string[] = [];
     const walk = (dir: string) => {
@@ -273,8 +273,9 @@ describe.skipIf(!HAS_DB)("W2d T9: the pin at activation (X-TB-2, OC2)", () => {
     };
     walk(SERVER);
     expect(files.length, "anti-vacuity: server files scanned").toBeGreaterThan(200);
-    const WRITE = /update\s+stages\s+set\s+status\s*=\s*'active'/gi;
-    const writers: { at: string; pinned: boolean }[] = [];
+    const WRITE = /update\s+stages\s+set\s+status\s*=\s*'(active|complete)'/gi;
+    const PIN = /\bpinStageTableRules\(\s*tx\s*,\s*stageId\s*\)/;
+    const writers: { at: string; status: string; pinned: boolean }[] = [];
     for (const file of files) {
       const text = readFileSync(file, "utf8");
       for (const m of text.matchAll(WRITE)) {
@@ -291,13 +292,18 @@ describe.skipIf(!HAS_DB)("W2d T9: the pin at activation (X-TB-2, OC2)", () => {
           if (text[close] === "{") depth++;
           else if (text[close] === "}" && depth-- === 0) break;
         }
-        const after = text.slice(m.index, close);
+        const status = m[1]!.toLowerCase();
+        // an activation pins after its write (the stage's rules as they stand when it starts); a completion pins
+        // before it (a stage completed straight from pending, fix I1) — either way inside the write's own block
+        const span = status === "active" ? text.slice(m.index, close) : text.slice(open + 1, m.index);
         const line = text.slice(0, m.index).split("\n").length;
-        writers.push({ at: `${relative(SERVER, file)}:${line}`, pinned: open >= 0 && /\bpinStageTableRules\(\s*tx\s*,\s*stageId\s*\)/.test(after) });
+        writers.push({ at: `${relative(SERVER, file)}:${line}`, status, pinned: open >= 0 && PIN.test(span) });
       }
     }
-    expect(writers.length, `activation writers found: ${writers.map((w) => w.at).join(", ")}`).toBe(2);
-    expect(writers.filter((w) => !w.pinned).map((w) => w.at), "every activation pins, after its status write, in its block").toEqual([]);
+    const found = writers.map((w) => `${w.status}@${w.at}`).join(", ");
+    expect(writers.filter((w) => w.status === "active").length, `activation writers found: ${found}`).toBe(2);
+    expect(writers.filter((w) => w.status === "complete").length, `completion writers found: ${found}`).toBe(1);
+    expect(writers.filter((w) => !w.pinned).map((w) => w.at), "every writer into a started status pins in its block").toEqual([]);
   });
 
   it("active ⇒ pinned, swept over THIS test's org only (the shared DB holds older active, unpinned stages): every stage the product started here is pinned (counted)", async () => {
@@ -418,7 +424,7 @@ describe.skipIf(!HAS_DB)("W2d T9: the pin at activation (X-TB-2, OC2)", () => {
     expect(checked).toBe(2);
   }, 180_000);
 
-  it("PS-5d repinStageOwnRules replaces only the saved field of the pin (source stage), keeps the rest and the pin's date; a pending stage is left to read live", async () => {
+  it("PS-5d repinStageOwnRules replaces only the saved field of the pin (source stage), keeps the rest and the pin's date — its cross-group order is the engine resolver's, derived from the NEW order (fix I4a); a pending stage is left to read live", async () => {
     const s = await tableScene({});
     const stageId = s.stageIds[0]!;
     // pending: no pin, nothing written
@@ -428,15 +434,140 @@ describe.skipIf(!HAS_DB)("W2d T9: the pin at activation (X-TB-2, OC2)", () => {
     await generateStageFixtures(s.auth, stageId);
     const first = await stageRules(stageId);
     const pin0 = first.pin as { points: PointsRule; tiebreakers: string[]; crossGroup: string[]; sources: Record<string, string> };
-    await sql.begin((tx) => repinStageOwnRules(tx, stageId, { tiebreakers: ["points", "lots"] }));
+    // An order with a head-to-head step: the cross-group order the engine derives from it drops that step, and differs
+    // from the one the pin derived from the sport's order — so a cross-group order kept from the OLD order is seen.
+    const NEW_ORDER = ["points", "direct", "diff", "lots"] as TiebreakerKey[];
+    const derived = defaultCrossGroup(NEW_ORDER);
+    expect(derived, "premise: the engine drops the head-to-head step").toEqual(["points", "diff", "lots"]);
+    expect(derived, "premise: the new order's cross-group order is not the pin's").not.toEqual(pin0.crossGroup);
+    await sql.begin((tx) => repinStageOwnRules(tx, stageId, { tiebreakers: NEW_ORDER }));
     const order = await stageRules(stageId);
-    expect(order.pin).toEqual({ ...pin0, tiebreakers: ["points", "lots"], sources: { points: "sport", tiebreakers: "stage" } });
+    expect(order.pin).toEqual({ ...pin0, tiebreakers: NEW_ORDER, crossGroup: derived, sources: { points: "sport", tiebreakers: "stage" } });
     expect(order.pinned_at, "the pin's date is kept").toBe(first.pinned_at);
 
     const OWN = PointsRule.parse({ win: { regulation: 2 }, loss: { regulation: 0 }, draw: 1, shootoutAs: "result", unit: "whole" });
     await sql.begin((tx) => repinStageOwnRules(tx, stageId, { points: OWN }));
     const points = await stageRules(stageId);
-    expect(points.pin).toEqual({ ...pin0, points: OWN, tiebreakers: ["points", "lots"], sources: { points: "stage", tiebreakers: "stage" } });
+    expect(points.pin, "a points save keeps the order and its cross-group order").toEqual({
+      ...pin0,
+      points: OWN,
+      tiebreakers: NEW_ORDER,
+      crossGroup: derived,
+      sources: { points: "stage", tiebreakers: "stage" },
+    });
     expect((await loadTableRules(sql, stageId)).points, "the loader serves the re-pinned rule").toEqual(OWN);
+    expect(points.pinned_at).toBe(first.pinned_at);
   }, 120_000);
+
+  it("PS-5d a cross-group order of the stage's own survives a later order save; cleared (null) it is the resolver's again (fix I4a, both directions)", async () => {
+    const s = await tableScene({});
+    const stageId = s.stageIds[0]!;
+    await generateStageFixtures(s.auth, stageId);
+    const OWN_CROSS = ["points", "for", "lots"] as TiebreakerKey[];
+    await sql.begin((tx) => repinStageOwnRules(tx, stageId, { crossGroup: OWN_CROSS }));
+    expect((await stageRules(stageId)).pin, "the own cross-group order is pinned").toMatchObject({ crossGroup: OWN_CROSS });
+    const NEW_ORDER = ["points", "direct", "diff", "lots"] as TiebreakerKey[];
+    expect(defaultCrossGroup(NEW_ORDER), "premise: the derived order is not the own one").not.toEqual(OWN_CROSS);
+    await sql.begin((tx) => repinStageOwnRules(tx, stageId, { tiebreakers: NEW_ORDER }));
+    expect((await stageRules(stageId)).pin, "an order save keeps the stage's own cross-group order").toMatchObject({
+      tiebreakers: NEW_ORDER,
+      crossGroup: OWN_CROSS,
+    });
+    await sql.begin((tx) => repinStageOwnRules(tx, stageId, { crossGroup: null }));
+    expect((await stageRules(stageId)).pin, "cleared: derived from the pinned order").toMatchObject({
+      tiebreakers: NEW_ORDER,
+      crossGroup: defaultCrossGroup(NEW_ORDER),
+    });
+  }, 120_000);
+
+  it("PS-5d a saved null CLEARS the own layer: points revert to the sport's rule under the division's cfg as it is NOW, the order to the division's order as it is now, else the sport's — sources updated (fix I4b, both directions)", async () => {
+    const s = await tableScene({});
+    const stageId = s.stageIds[0]!;
+    await generateStageFixtures(s.auth, stageId);
+    const pin0 = (await stageRules(stageId)).pin as { points: PointsRule; sources: Record<string, string> };
+    const OWN = PointsRule.parse({ win: { regulation: 2 }, loss: { regulation: 0 }, draw: 1, shootoutAs: "result", unit: "whole" });
+    await sql.begin((tx) => repinStageOwnRules(tx, stageId, { points: OWN, tiebreakers: FOR_FIRST as TiebreakerKey[] }));
+    expect((await stageRules(stageId)).pin, "premise: both are the stage's own").toMatchObject({
+      points: OWN,
+      tiebreakers: FOR_FIRST,
+      sources: { points: "stage", tiebreakers: "stage" },
+    });
+    // The division moves after activation: a win now pays 5, and it ranks by its own order.
+    const NOW_CFG = { ...GENERIC_CONFIG, points: { w: 5, d: 2, l: 0 } };
+    const DIVISION_ORDER = ["points", "diff", "for", "lots"];
+    await sql`update divisions set config = ${sql.json(NOW_CFG)}, tiebreakers = ${DIVISION_ORDER} where id = ${s.divisionId}`;
+    const nowRule = generic.tablePointsRule(generic.configSchema.parse(NOW_CFG), "league");
+    expect(nowRule, "premise: the sport's rule NOW is not the one the stage was pinned with").not.toEqual(pin0.points);
+    await sql.begin((tx) => repinStageOwnRules(tx, stageId, { points: null }));
+    const cleared = (await stageRules(stageId)).pin;
+    expect(cleared, "points cleared: the sport's rule under the live cfg; the order untouched").toMatchObject({
+      points: nowRule,
+      tiebreakers: FOR_FIRST,
+      sources: { points: "sport", tiebreakers: "stage" },
+    });
+    await sql.begin((tx) => repinStageOwnRules(tx, stageId, { tiebreakers: null }));
+    expect((await stageRules(stageId)).pin, "order cleared: the division's order as it is now").toMatchObject({
+      points: nowRule,
+      tiebreakers: DIVISION_ORDER,
+      crossGroup: defaultCrossGroup(DIVISION_ORDER as TiebreakerKey[]),
+      sources: { points: "sport", tiebreakers: "division" },
+    });
+    // …and with no division order, the sport's
+    await sql`update divisions set tiebreakers = null where id = ${s.divisionId}`;
+    await sql.begin((tx) => repinStageOwnRules(tx, stageId, { tiebreakers: FOR_FIRST as TiebreakerKey[] }));
+    await sql.begin((tx) => repinStageOwnRules(tx, stageId, { tiebreakers: null }));
+    const sportOrder = generic.defaultTiebreakers("league", generic.configSchema.parse(NOW_CFG));
+    expect((await stageRules(stageId)).pin, "order cleared, no division order: the sport's").toMatchObject({
+      tiebreakers: sportOrder,
+      sources: { tiebreakers: "sport" },
+    });
+    // the other direction: a value saved again is the stage's own
+    await sql.begin((tx) => repinStageOwnRules(tx, stageId, { points: OWN }));
+    expect((await stageRules(stageId)).pin, "saved again: the stage's own").toMatchObject({ points: OWN, sources: { points: "stage" } });
+  }, 120_000);
+});
+
+// W2d T9 fix round 1, I1: a stage leaves pending by more doors than its two activation writers. A ladder challenge issued
+// before the division starts, and an ad-hoc match added to a league nobody generated, are both played on a PENDING
+// stage; completing it then goes straight from pending to complete. Both are organiser behaviour the help pages document
+// (`content/help/divisions/add-a-match.md`), so neither is refused: the completion pins instead. Each case walks the
+// whole sequence — pending → score → complete → void — and every read after the completion must answer: without the pin
+// the stage is `complete` and unpinned, and every later read (the void's recompute first) is refused `unpinned`.
+describe.skipIf(!HAS_DB)("W2d T9 fix I1: a stage that leaves pending by any door is pinned", () => {
+  async function playCompleteVoid(s: Awaited<ReturnType<typeof tableScene>>, fixtureId: string) {
+    const stageId = s.stageIds[0]!;
+    // the division starts; its first stage already holds a fixture, so the start generates nothing and leaves it pending
+    await startDivision(s.auth, s.divisionId);
+    expect(await stageRules(stageId), "premise: the match is on a stage nobody started").toMatchObject({ status: "pending", pin: null });
+    await post(s.auth, fixtureId, "core.start");
+    await post(s.auth, fixtureId, "generic.result", { p1Score: 3, p2Score: 1 });
+    expect(await stageRules(stageId), "premise: scoring alone does not start the stage").toMatchObject({ status: "pending", pin: null });
+    await completeStage(s.auth, stageId);
+    const done = await stageRules(stageId);
+    expect(done.status, "the stage completed").toBe("complete");
+    expect(done.pin, "completing a pending stage pins it").not.toBeNull();
+    expect(done.pinned_at).not.toBeNull();
+    expect(done.pin, "pinned with the layers it was ranked by").toEqual(sportPin(GENERIC_CONFIG));
+    // void the result: its recompute reads the completed stage's rules — the pin, never a refusal
+    const [result] = await sql<{ id: string }[]>`
+      select id from score_events where fixture_id = ${fixtureId} and type = 'generic.result' order by seq desc limit 1`;
+    await post(s.auth, fixtureId, "core.void", { event_id: result!.id });
+    const after = await recomputeStandings(s.auth.orgId, stageId);
+    expect(after.length, "the table still reads after the void").toBeGreaterThan(0);
+    expect((await loadTableRules(sql, stageId)).pinnedAt, "the loader serves the pin").toBe(done.pinned_at);
+  }
+
+  it("(a) ladder: a challenge issued before the division starts, played, the stage completed and the result voided", async () => {
+    const s = await tableScene({ stages: { seq: 1, kind: "ladder" as never, name: "Ladder", config: {} } });
+    const [E1, E2] = s.entrants as [string, string];
+    const { fixture_id } = await issueChallenge(s.auth, s.stageIds[0]!, { challenger_id: E2, opponent_id: E1 });
+    await playCompleteVoid(s, fixture_id);
+  }, 180_000);
+
+  it("(b) addFixture: an ad-hoc match on a league nobody generated, played, the stage completed and the result voided", async () => {
+    const s = await tableScene({});
+    const [E1, E2] = s.entrants as [string, string];
+    const { fixture_id } = await addFixture(s.auth, s.stageIds[0]!, { home_entrant_id: E1, away_entrant_id: E2 });
+    await playCompleteVoid(s, fixture_id);
+  }, 180_000);
 });

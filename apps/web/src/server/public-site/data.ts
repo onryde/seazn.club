@@ -423,9 +423,6 @@ export interface PublicStage {
    *  (`config.rank_overrides`). NOT the same as a row's `rankLocked`, which
    *  the engine also sets on every tie it settles by lots. */
   has_rank_overrides: boolean;
-  /** W2d (V472, PF-3) — the rule the TABLE is paid by: a started stage's pinned points, else its own rule, else null.
-   *  Qualification's per-match bounds read it; the format line never does (it prints `points_rule`, the stage's own). */
-  table_points_rule: unknown;
   /** Per-stage match rules (design 2026-09-17 §D3/T7): the stage's own
    *  `config.rules` FRAGMENT — `{bestOf: 1, setTo: 15}`, never a materialised
    *  config; null/absent means the stage plays the division's format. Read off
@@ -990,7 +987,7 @@ export async function readPublicDivisionDetail(
     const stages = await sql<PublicStage[]>`
       select id, division_id, seq, kind, name, status,
              qualify_count, qualify_per_group, next_stage_name, swiss_rounds, points_rule,
-             has_rank_overrides, table_points_rule,
+             has_rank_overrides,
              -- Per-stage match rules (design 2026-09-17 T7): the rules
              -- FRAGMENT only, read off stages by the VIEW row's own id so the
              -- view still decides which rows exist and the rest of config

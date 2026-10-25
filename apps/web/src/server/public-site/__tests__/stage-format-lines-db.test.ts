@@ -17,6 +17,7 @@ vi.mock("next/cache", () => ({
   revalidateTag: vi.fn(),
 }));
 
+import { PointsRule } from "@seazn/engine/competition";
 import { stageDefaultsFor } from "@seazn/engine/sport";
 import { sql } from "@/lib/db";
 import { resolveLatestModule } from "@/server/engine-db";
@@ -94,7 +95,7 @@ describe.skipIf(!HAS_DB)("a stage's deciders and own points reach the hub and th
     ]);
   }, 90_000);
 
-  it("W2d PF-3: a started stage PINNED to its table rules, with no points of its own, still prints no points line — the pin reaches the table's rule (table_points_rule), never the stage's own (points_rule)", async () => {
+  it("W2d PF-3: a started stage PINNED to its table rules, with no points of its own, still prints no points line — the pin reaches the table's rule (the loader's `table_rules`), never the stage's own (points_rule)", async () => {
     // The migration pins every started stage (V472 B1); a stage that plays the division's format must still read exactly
     // as before (division page, hub, embed: "a stage that plays the division's format gets nothing"). The pin is written
     // as the migration writes one; its points are a rule today's reader takes.
@@ -120,16 +121,15 @@ describe.skipIf(!HAS_DB)("a stage's deciders and own points reach the hub and th
       await sql`update stages set status = 'active', table_rules_pinned = ${sql.json(pin)}, table_rules_pinned_at = now()
                 where id = ${s.leagueStageId}`;
 
-      const [row] = await sql<{ points_rule: unknown; table_points_rule: unknown }[]>`
-        select points_rule, table_points_rule from public_stages_v where id = ${s.leagueStageId}`;
+      const [row] = await sql<Record<string, unknown>[]>`select * from public_stages_v where id = ${s.leagueStageId}`;
       expect(row, "the Pool is on the public view").toBeDefined();
       expect(row!.points_rule, "the stage's own rule: none").toBeNull();
-      expect(row!.table_points_rule, "the rule its table is paid by: the pin's").toEqual(pinPoints);
+      expect(Object.hasOwn(row!, "table_points_rule"), "the view publishes no table rule (T9 review m3)").toBe(false);
 
       const data = await getPublicDivision(s.orgSlug, s.compSlug, s.divSlug);
       const pool = data!.stages.find((st) => st.id === s.leagueStageId);
       expect(pool?.points_rule ?? null).toBeNull();
-      expect(pool?.table_points_rule).toEqual(pinPoints);
+      expect(pool?.table_rules?.points, "the rule its table is paid by: the pin's, from the loader").toEqual(PointsRule.parse(pinPoints));
 
       const doc = await loadCompetitionHub(s.orgSlug, s.compSlug);
       expect(CompetitionHubDoc.safeParse(doc).success).toBe(true);

@@ -2174,6 +2174,21 @@ function firstMatchDivergence(
 // Stage 3's derivation — the product's own competition path
 // ---------------------------------------------------------------------------
 
+/** B5, as the product's `gamePointsReader` (engine-db/competition.ts): a result's GAME points from the map filled as each
+ *  result was paid, identity-keyed. A result the map does not hold was never paid by this stage — a defect, thrown, never
+ *  a fallback to the paid points (fix round 1, m2). */
+export function gamePointsReader(
+  gamePoints: ReadonlyMap<FixtureResult, readonly [number, number]>,
+): (result: FixtureResult) => readonly [number, number] {
+  return (result) => {
+    const pair = gamePoints.get(result);
+    if (pair === undefined) {
+      throw new Error(`game points asked for a result this stage did not pay (${result[0].entrantId} v ${result[1].entrantId})`);
+    }
+    return pair;
+  };
+}
+
 /**
  * Fold a division's streams into the ranked standings rows, through exactly
  * the path `recomputeStandings` uses:
@@ -2216,7 +2231,7 @@ function deriveStandings(
   let pointsRule: PointsRule | null = null;
   if (pointsRuleRaw !== undefined && pointsRuleRaw !== null) {
     // W2d: a stored rule is read as the product reads it — the outcome-keyed
-    // shape, or the legacy win/draw/loss one through `legacyPointsRule`.
+    // shape alone (PS-9f; a W2c `{base}` rule is refused, as the product refuses it).
     pointsRule = parseStoredPointsRule(pointsRuleRaw);
     if (pointsRule === null) {
       const refused = PointsRule.safeParse(pointsRuleRaw);
@@ -2260,8 +2275,8 @@ function deriveStandings(
     // W2c Task 9 (X-PT-1): the rule reads a forfeit's "was anything played" fact. A pack carries every fixture's
     // events, so it is W2b's `playRecorded` over the same envelopes the fold read, under the fixture's module. Gap (a):
     // the module's own score keys (`awardScoreKeys`) take the awarded score too. W2d T9: the rule ALWAYS pays (the
-    // product's standingsDelta fallback is gone) — the stage's own, else the sport's under THIS fixture's cfg, as
-    // `fixturePointsRule` pays an unpinned stage (a pack has no pin).
+    // product's standingsDelta fallback is gone) — the stage's own, else the sport's under the stage's format
+    // (`fold.cfg`, `stageScopedFoldCfg`: one cfg for every fixture of the stage), as the product pays a stage with no pin.
     const result = payout(
       fold.outcome,
       decidedInFor(fold.module, fold.outcome),
@@ -2354,7 +2369,7 @@ function deriveStandings(
     rules,
     // W2d T9, as the product's `toTableStage`: the sport's `winsCount` (B2, HK-TB-1) and each result's game points (B5)
     ...(sport.module.winsCount === undefined ? {} : { winsCount: sport.module.winsCount }),
-    gamePoints: (result) => gamePoints.get(result) ?? [result[0].points, result[1].points],
+    gamePoints: gamePointsReader(gamePoints),
     ...(seeds.size > 0 ? { seeds } : {}),
     // `!= null`, matching `toTableStage` exactly (competition.ts:337-338) and
     // NOT a `typeof === "number"` sniff. `PackStage.config` is an opaque JSON

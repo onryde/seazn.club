@@ -762,11 +762,12 @@ describe.skipIf(!HAS_DB)("public_stages_v — qualification columns (V414)", () 
     expect(embed.data.division.config).toMatchObject({ resultMode: "score", allowDraws: true });
   });
 
-  // W2d PF-3 (V472): the pin rides `table_points_rule`, and each public reader names its columns, so each must select it —
-  // tsc cannot see SQL text. A reader that drops it hands qualification `undefined`, and the bounds fall back to the
-  // sport's: equal to the pin's at pin time, wrong after a division points edit on a started stage. So the pin here pays
-  // differently from the division, and the bounds are read through EACH reader's own row.
-  it("W2d PF-3: getPublicDivision AND embedDivisionData carry table_points_rule, so a started stage's PIN reaches qualification's bounds through both (never the sport's)", async () => {
+  // W2d PF-3, as T9 review m3 ruled it: the pin reaches each public reader as the one loader's `table_rules` (no SQL
+  // column publishes the table's rule any more). A reader that dropped it would hand qualification nothing, and the bounds
+  // would be none; one that re-derived it would read the division's points, equal to the pin's at pin time and wrong
+  // after a division points edit on a started stage. So the pin here pays differently from the division, and the bounds
+  // are read through EACH reader's own row.
+  it("W2d PF-3: getPublicDivision AND embedDivisionData carry the loader's rules, so a started stage's PIN reaches qualification's bounds through both (never the sport's, never a SQL column)", async () => {
     const d = await division();
     // Committed (the readers use the module's own connection), so the scene is deleted afterwards and counted gone.
     const subscriptionId = await sceneSubscriptionId(d.auth);
@@ -804,11 +805,16 @@ describe.skipIf(!HAS_DB)("public_stages_v — qualification columns (V414)", () 
         ["embedDivisionData", embed.data.stages, embed.data.division.config],
       ] as const) {
         const league = stages.find((st) => st.id === leagueId);
-        expect(league?.table_points_rule, `${reader}: the pin's points`).toEqual(pinPoints);
-        expect(league?.points_rule ?? null, `${reader}: no own rule`).toBeNull();
+        expect(league, `${reader}: the league`).toBeDefined();
+        expect(Object.hasOwn(league!, "table_points_rule"), `${reader}: no SQL column carries the table's rule`).toBe(false);
+        expect(league!.table_rules?.points, `${reader}: the pin's points, from the loader`).toEqual(parsed);
+        expect(league!.points_rule ?? null, `${reader}: no own rule`).toBeNull();
         const sportBounds = divisionPointsBounds(generic, cfg);
         expect(sportBounds, `premise (${reader}): the division's own bounds differ from the pin's`).not.toEqual(pinBounds);
-        expect(boundsInForce(stageQualMeta(league!), sportBounds), `${reader}: qualification's bounds`).toEqual(pinBounds);
+        // as `divisionQualification` builds it: the row's V414 meta, the loader's rule in force
+        const meta = { ...stageQualMeta(league!), tablePointsRule: league!.table_rules!.points };
+        expect(boundsInForce(meta, sportBounds), `${reader}: qualification's bounds`).toEqual(pinBounds);
+        expect(boundsInForce(stageQualMeta(league!), sportBounds), `${reader}: the row alone carries no pin`).toEqual(sportBounds);
         checked++;
       }
       expect(checked).toBe(2);

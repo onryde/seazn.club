@@ -42,7 +42,7 @@ import type { AnySportModule } from "@seazn/engine/sport";
 import { resolveModule } from "./registry";
 import { resolveFixtureCfg } from "./fixture-cfg";
 import { forfeitPlayedFacts, playedFor } from "./forfeit-played";
-import { fixturePointsRule, loadLotsDraws, persistLotsDraws, tableRulesOf, type LoadedTableRules } from "./table-rules";
+import { loadLotsDraws, persistLotsDraws, pinStageTableRules, tableRulesOf, type LoadedTableRules } from "./table-rules";
 
 type Tx = postgres.TransactionSql;
 
@@ -473,8 +473,9 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
         decidedInFor(sportModule, f.outcome as MatchOutcome),
         pair,
         playedFor(f, playedFacts),
-        // V347: a pending stage on its sport's rule pays the sport's rule under this fixture's own resolved cfg
-        fixturePointsRule(rules, sportModule, stage.kind, fixtureCfg),
+        // the stage's ONE rule for every fixture (ruling 12: never per-fixture points) — its pin once started, so a
+        // division edit after a match was played never moves the table under it (V347's promise, kept by the pin)
+        rules.points,
         sportModule.awardScoreKeys,
         // I2: a set match settled before its end is scored to the sets this fixture's own format is won on
         setsToWinOf(sportModule, fixtureCfg),
@@ -497,7 +498,7 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
         f.outcome as MatchOutcome,
         byeCfg,
         ctx,
-        fixturePointsRule(rules, sportModule, stage.kind, byeCfg),
+        rules.points,
         f.home_entrant_id,
       );
     }
@@ -541,6 +542,22 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
   };
 }
 
+/** B5: a result's GAME points, read from the map `loadStageInputs` filled as it paid each result (identity-keyed: the
+ *  engine hands back the very `FixtureResult` objects the stage gave it). A result the map does not hold is a result this
+ *  stage never paid — a defect, never a fallback: game points silently equal to the paid points would rank `direct` and
+ *  `sberger` by the wrong numbers (fix round 1, m2). */
+export function gamePointsReader(
+  gamePoints: ReadonlyMap<FixtureResult, readonly [number, number]>,
+): (result: FixtureResult) => readonly [number, number] {
+  return (result) => {
+    const pair = gamePoints.get(result);
+    if (pair === undefined) {
+      throw new Error(`game points asked for a result this stage did not pay (${result[0].entrantId} v ${result[1].entrantId})`);
+    }
+    return pair;
+  };
+}
+
 // W2d T9: the stage as the ranker reads it — its rules (pin or live, `tableRulesOf`), the sport's `winsCount` (B2,
 // HK-TB-1) and each result's game points (B5), and the lots draws stored for it (§5.8; read under the division lock,
 // `rankWithStoredLots`). A bracket or ladder stage still reaches this fold (an admin cfg edit or a rules refold
@@ -557,7 +574,7 @@ function toTableStage(
     entrants: inputs.entrants,
     rules: { points: inputs.rules.points, tiebreakers: inputs.rules.tiebreakers, crossGroup: inputs.rules.crossGroup },
     ...(inputs.module.winsCount === undefined ? {} : { winsCount: inputs.module.winsCount }),
-    gamePoints: (result) => gamePoints.get(result) ?? [result[0].points, result[1].points],
+    gamePoints: gamePointsReader(gamePoints),
     lotsDraws,
     ...(inputs.seeds.size > 0 ? { seeds: inputs.seeds } : {}),
     ...(inputs.stage.config?.rngSeed != null ? { rngSeed: inputs.stage.config.rngSeed } : {}),
@@ -934,6 +951,10 @@ export async function completeStageIfReady(
     for (const ev of events) {
       lastSeq = await appendDivisionEvent(tx, inputs.stage.division_id, ev.type, ev);
     }
+    // W2d T9 fix I1: a stage leaves pending by more doors than its two activation writers — a ladder challenge or an
+    // ad-hoc fixture played on a stage nobody generated completes it straight from pending. Pin it before the status
+    // write (idempotent: a stage pinned at activation keeps its first pin), so no started stage is ever unpinned.
+    await pinStageTableRules(tx, stageId);
     await tx`update stages set status = 'complete' where id = ${stageId}`;
     await tx`update divisions set seq = ${lastSeq} where id = ${inputs.stage.division_id}`;
     log.info({ event: "stage_completed", stageId, kind: inputs.kind }, "stage_completed");

@@ -179,8 +179,7 @@ const row = (entrantId: string, rank: number, won: number, played: number, goals
   metrics: { for: goals[0], against: goals[1], diff: goals[0] - goals[1] },
 });
 
-/** V414's six columns, V472's `table_points_rule` and the stage's loaded table rules (W2d Task 9), as the usecase
- *  returns them. */
+/** V414's six columns and the stage's loaded table rules (W2d Task 9), as the usecase returns them. */
 const meta = (m: Partial<StageQualMetaRow>, kind = "swiss"): StageQualMetaRow => ({
   qualify_count: null,
   qualify_per_group: false,
@@ -188,8 +187,7 @@ const meta = (m: Partial<StageQualMetaRow>, kind = "swiss"): StageQualMetaRow =>
   swiss_rounds: null,
   points_rule: null,
   has_rank_overrides: false,
-  // an unpinned stage (V472): the table is paid by its own rule
-  table_points_rule: m.points_rule ?? null,
+  // the stage's rules as the loader serves them (an unpinned stage: the live layers)
   table_rules: rulesFor(kind),
   ...m,
 });
@@ -481,9 +479,13 @@ describe("organiser console — the tie-break cascade caption says the sport's w
     qual.listStageQualificationMeta.mockResolvedValue(new Map([["sw", { ...meta({ swiss_rounds: 3 }), table_rules: rulesFor("swiss", module_, divisionConfig) }]]));
   const variantCfg = (m: AnySportModule) => m.variants[Object.keys(m.variants)[0]!];
 
-  it("a stage the loader refused (no rules came back for it) gets no caption — never a default re-read by the page", async () => {
+  it("a stage the loader refused (its row carries `table_rules: null`, as listStageQualificationMeta sends it) gets no caption — never a default re-read by the page", async () => {
     swissScene();
-    qual.listStageQualificationMeta.mockResolvedValue(new Map());
+    // the positive pair: the same stage with its rules served captions its order
+    captionMeta(GENERIC, DIVISION_CFG);
+    expect((await cascadeCaption()).length, "premise: a served stage is captioned").toBeGreaterThan(0);
+    // production's shape for a refused stage: its V414 row is there, its rules are null (`stageTableRulesDocs` left it out)
+    qual.listStageQualificationMeta.mockResolvedValue(new Map([["sw", { ...meta({ swiss_rounds: 3 }), table_rules: null }]]));
     const root = await DivisionPage({
       params: Promise.resolve({ orgSlug: "org", compSlug: "comp", divSlug: "div" }),
       searchParams: Promise.resolve({ tab: "standings" }),

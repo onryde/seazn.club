@@ -22,6 +22,7 @@ import { fillPeriodMarkers, reconstructSetRallies } from "../reconstruct.ts";
 import {
   OFFLINE_RECORDED_AT,
   PACK_FOLD_OPTIONS,
+  gamePointsReader,
   packEnvelope,
   packEnvelopes,
   packLineupPair,
@@ -5278,5 +5279,20 @@ describe("validatePack — a double walkover (W2b)", () => {
     );
     expect(reverse.code).toBe("match.outcome_kind");
     expect(reverse.message).toBe('outcome kind: pack expects "double_walkover", the fold produced "award"');
+  });
+});
+
+// W2d T9 fix round 1, m2 — the bench's game-points reader, as the product's: a result the stage never paid throws (a
+// structurally equal clone included), never falls back to the paid points. Both directions.
+describe("gamePointsReader (fix round 1, m2)", () => {
+  it("returns a paid result's game points and throws for a result the stage did not pay", () => {
+    const side = (entrantId: string, points: number) => ({ entrantId, points, played: 1, won: 0, drawn: 0, lost: 0, metrics: {} });
+    type Result = Parameters<ReturnType<typeof gamePointsReader>>[0];
+    const paid = [side("a", 3), side("b", 0)] as unknown as Result;
+    const read = gamePointsReader(new Map([[paid, [2, 1] as const]]));
+    expect(read(paid)).toEqual([2, 1]);
+    const clone = [side("a", 3), side("b", 0)] as unknown as Result;
+    expect(clone).toEqual(paid);
+    expect(() => read(clone)).toThrow(/did not pay \(a v b\)/);
   });
 });

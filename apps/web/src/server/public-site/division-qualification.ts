@@ -102,7 +102,7 @@ export function divisionQualification(
     // a stage whose rule scores forfeits. Any other stage builds — the rule's own bounds are the bounds (fix round 1 M-2).
     if (!i.module_ && pointsRuleScoresForfeits(rules.points)) return null;
     return buildQualificationView({
-      // The rule in force replaces the public row's (`table_points_rule`): one authority, the loader.
+      // The rule in force: one authority, the loader (no SQL column publishes it — T9 review m3).
       stage: { id: stage.id, kind: stage.kind, meta: { ...stageQualMeta(stage), tablePointsRule: rules.points } },
       poolId: snap.pool_id ?? null,
       rows: snap.rows,

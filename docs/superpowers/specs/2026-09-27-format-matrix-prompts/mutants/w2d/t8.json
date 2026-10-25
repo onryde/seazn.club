@@ -122,8 +122,8 @@
  {
   "id": "t8-sport-read-unparsed",
   "file": "packages/engine/src/competition/table-rules.ts",
-  "find": "  if (parsed.success) return ask(parsed.data);",
-  "replace": "  if (parsed.success) return ask(input.mergedCfg);",
+  "find": "    const answer = ask(parsed.data);",
+  "replace": "    const answer = ask(input.mergedCfg);",
   "killers": [
    {
     "cwd": "packages/engine",

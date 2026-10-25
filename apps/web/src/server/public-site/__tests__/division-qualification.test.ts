@@ -99,7 +99,6 @@ const stage = (over: Partial<QualStage> = {}): QualStage => ({
   points_rule: null,
   has_rank_overrides: false,
   // an unpinned stage (V472): the table is paid by its own rule, so the two columns agree unless a test says otherwise
-  table_points_rule: over.points_rule ?? null,
   table_rules: rulesDoc(over.points_rule ?? null),
   ...over,
 });

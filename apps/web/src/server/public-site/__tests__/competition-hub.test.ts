@@ -687,7 +687,6 @@ const STAGE: PublicStage = {
   swiss_rounds: null,
   points_rule: null,
   has_rank_overrides: false,
-  table_points_rule: null,
   // W2d Task 9: the rules the one loader serves for this stage (its order, its points) — the division's live layers
   table_rules: unpinnedRulesDoc({ module: resolveLatestModule("football"), kind: "league", divisionConfig: DIV.config }),
 };

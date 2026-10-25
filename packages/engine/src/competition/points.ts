@@ -38,7 +38,8 @@ export const SET_SCORE_KEY = /^(\d+-\d+|\*)$/;
  * a set sport's payout by set score. An absent `draw` or `tie` means the rule covers none (`coverage` refuses it where one
  * is reachable); an absent `ot`/`so` falls back so → ot → regulation; an absent `noResult` pays 0 (D14); an absent
  * `soBonus` pays 1 (B2). `unit` is display only ("half": the stored numbers are half-points, shown "1½"). Replaces the
- * W2c `{base, bonuses, forfeit}` shape (greenfield, no shim; a stored old shape is read through `parseStoredPointsRule`).
+ * W2c `{base, bonuses, forfeit}` shape (greenfield, no shim: the W2d migration converts every stored old shape, and
+ * `parseStoredPointsRule` reads this shape alone — W2d T9, PS-9f).
  */
 export const PointsRule = z
   .object({

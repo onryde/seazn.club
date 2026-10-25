@@ -16,8 +16,9 @@
 --    change in this same release, and the migration must not read them.
 -- 4. `w2d_pin_started_stages()` — the B1 pin (spec §5.4, §8).
 -- 5. `stage_qualification_meta` (W2d Task 2; PF-3) and `public_stages_v`: `points_rule` stays the stage's OWN rule (the
---    format line prints it as the stage's own points), and a new trailing `table_points_rule` is the rule the TABLE is
---    paid by — the pin's points where the stage is pinned, else its own rule — which qualification reads for its bounds.
+--    format line prints it as the stage's own points). The rule the TABLE is paid by is not published here: every reader
+--    takes it from the one loader (`server/engine-db/table-rules.ts`, W2d Task 9; T9 review m3 retired the
+--    `table_points_rule` column this step first added, which disagreed with the loader on a pending stage).
 -- 6. The data steps, in ONE block: pin first, then convert the old-shape stage rules, then the division configs and the
 --    organisations' own sport variants (W2d Task 9, T7 review m10: a variant's cfg seeds a new division's).
 -- 7. The `w2d_*` helpers are DROPPED: after this release the start path is the only pin writer, and a manual call of the
@@ -495,15 +496,13 @@ end $$;
 -- (usecases/stage-qualification.ts, which calls the function directly) — as `{bonuses, forfeit}`: no qualification
 -- status, no "Points:" clause, no walkover-score clause. The fold was unaffected (it reads `config.points` itself).
 --
--- Two rules now leave the function, each built from BOTH stored shapes by `stage_points_rule_published` (below):
+-- One rule leaves the function, published by `stage_points_rule_published` (below):
 -- * `points_rule` — the stage's OWN `config.points`, as V414 published it. The format line prints it as the stage's own
 --   points ("a stage that plays the division's format gets nothing"), so a pin must never reach it: a started stage
 --   with no rule of its own still prints no points line.
--- * `table_points_rule` (new, last) — the rule the TABLE is paid by: the stage's PIN where it has one (PF-3: a started
---   stage is paid by its pin, not by a later edit of its own rule), else its own rule. Qualification reads it for its
---   per-match bounds.
--- A new OUT column changes the function's row type, which `create or replace` cannot do, and the view depends on the
--- function: both are dropped and re-created here, the view with V414's columns in V414's order and the new one LAST.
+-- The rule the TABLE is paid by (the pin, else the live layers) is the loader's alone (`table-rules.ts`): a second,
+-- SQL derivation of it disagreed with the loader on a pending stage with no rule of its own (T9 review m3), so it is not
+-- published. The function and the view keep V414's columns in V414's order; both are dropped and re-created here.
 --
 -- The published shape, for both: every key the outcome-keyed PointsRule reads. The W2c `base` is not published: step 6
 -- converts every stored one, and the engine no longer reads the shape (W2d Task 9 retired the two together). The same
@@ -555,7 +554,7 @@ grant execute on function stage_points_rule_published(jsonb) to app_user;
 drop view public_stages_v;
 drop function stage_qualification_meta(uuid);
 
--- V414's function verbatim, but for the two rules it reads (`points`, `table_points`) and its new last column.
+-- V414's function verbatim, but for the rule it publishes (`stage_points_rule_published`).
 create or replace function stage_qualification_meta(p_stage_id uuid)
 returns table (
   qualify_count int,
@@ -563,15 +562,13 @@ returns table (
   next_stage_name text,
   swiss_rounds int,
   points_rule jsonb,
-  has_rank_overrides boolean,
-  table_points_rule jsonb
+  has_rank_overrides boolean
 )
   language sql stable security definer
   set search_path = ${flyway:defaultSchema}, pg_temp as $$
   with src as (
     select s.id, s.division_id, s.seq, s.kind, s.config,
            s.config -> 'points' as points,
-           coalesce(s.table_rules_pinned -> 'points', s.config -> 'points') as table_points,
            coalesce(jsonb_typeof(s.config -> 'cross_feeds') = 'array'
                     and s.config -> 'cross_feeds' <> '[]'::jsonb, false) as feeds_by_result
     from stages s where s.id = p_stage_id
@@ -639,8 +636,7 @@ returns table (
               then (src.config ->> 'rounds')::int end,
          stage_points_rule_published(src.points),
          coalesce(jsonb_typeof(src.config -> 'rank_overrides') = 'array'
-                  and src.config -> 'rank_overrides' <> '[]'::jsonb, false),
-         stage_points_rule_published(src.table_points)
+                  and src.config -> 'rank_overrides' <> '[]'::jsonb, false)
   from src
   left join forecast f on not src.feeds_by_result
 $$;
@@ -648,12 +644,12 @@ $$;
 revoke all on function stage_qualification_meta(uuid) from public;
 grant execute on function stage_qualification_meta(uuid) to app_user;
 
--- V414's columns in V414's order (V233's six, then V414's appended six), then `table_points_rule`. The visibility gate is
--- copied verbatim from V233; the grant is V239's.
+-- V414's columns in V414's order (V233's six, then V414's appended six). The visibility gate is copied verbatim from
+-- V233; the grant is V239's.
 create view public_stages_v as
   select st.id, st.division_id, st.seq, st.kind, st.name, st.status,
          q.qualify_count, q.qualify_per_group, q.next_stage_name, q.swiss_rounds, q.points_rule,
-         q.has_rank_overrides, q.table_points_rule
+         q.has_rank_overrides
   from stages st
   join divisions d    on d.id = st.division_id
   join competitions c on c.id = d.competition_id
