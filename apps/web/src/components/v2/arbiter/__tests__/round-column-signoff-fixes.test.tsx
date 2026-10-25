@@ -661,3 +661,30 @@ describe("D5: in the round card both buttons take the same width", () => {
     expect(tokens(cta).has("max-md:max-w-sm"), "the page-wide bar is not the card's button").toBe(false);
   });
 });
+
+// ======================================================================================================================
+// D8: the two confirmation dialogs of the column stack their buttons below 400px (French: three-line confirm at 320).
+// ======================================================================================================================
+
+describe("D8: the column's confirmation dialogs stack their buttons below 400px", () => {
+  /** The class tokens of the element carrying `testid` in `h`. */
+  const tokensOfId = (h: string, id: string) => new Set((new RegExp(`<[a-z0-9]+\\b[^>]*data-testid="${id}"[^>]*>`).exec(h)?.[0].match(/\sclass="([^"]*)"/)?.[1] ?? "").split(/\s+/).filter(Boolean));
+  const stacked = (h: string, root: string) => {
+    expect(h, `premise: ${root} is open`).toContain(ATTR(root));
+    expect(tokensOfId(h, `${root}-cancel`).has("max-[400px]:w-full"), `${root}: cancel fills the stacked row`).toBe(true);
+    expect(tokensOfId(h, `${root}-confirm`).has("max-[400px]:w-full"), `${root}: confirm fills the stacked row`).toBe(true);
+    const dialog = h.slice(h.indexOf(ATTR(root)));
+    expect(dialog.includes("max-[400px]:flex-col"), `${root}: the row is a column below 400px`).toBe(true);
+    expect(dialog.indexOf(ATTR(`${root}-cancel`)), `${root}: DOM order cancel, then confirm`).toBeLessThan(dialog.indexOf(ATTR(`${root}-confirm`)));
+  };
+
+  it("the first Open's confirmation (arbiter-column-confirm) and the reopen/reinvite confirmation (arbiter-column-reinvite-dialog) both stack", () => {
+    viewer.zone = null;
+    const first = underEnglish(<OpenRoundBlockView view={VIEW()} state={{ ...initialOpenRoundUi(), confirming: true }} tz={VENUE} showStage={false} on={{ ask: NOOP, cancel: NOOP, open: NOOP }} />);
+    stacked(first, "arbiter-column-confirm");
+    const f4 = inWindow();
+    const view = VIEW({ state: "open", press: "reinvite", deadlineAt: DEADLINE, pairings: [P(1, { fixtureId: f4.fixtureId, owedSeats: 1, invitedAt: OPENS })] });
+    const second = screen([live(), f4], f4.fixtureId, { column: DATA({ tz: VENUE, views: [view] }), openRound: { ...handle(), state: { ...initialOpenRoundUi(), confirming: true } } });
+    stacked(second, "arbiter-column-reinvite-dialog");
+  });
+});

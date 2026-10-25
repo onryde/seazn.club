@@ -363,6 +363,7 @@ export function OpenRoundBlockView({
         confirmLabel={plural("runsheet.round.confirmCta", owed)}
         confirmVariant="primary"
         cancelLabel={msg("confirm.cancel")}
+        stackActions
         busy={state.busy !== null}
         onConfirm={on.open}
         onCancel={on.cancel}
@@ -550,6 +551,7 @@ export function CheckinHero({ round, view, tz, nowMs, openRound, roundExtend }: 
         confirmLabel={reinvite ? plural("runsheet.round.inviteCta", owed) : plural("arbiter.column.reopenConfirmCta", owed)}
         confirmVariant="primary"
         cancelLabel={msg("confirm.cancel")}
+        stackActions
         busy={state.busy !== null}
         onConfirm={openRound.open}
         onCancel={openRound.cancel}
