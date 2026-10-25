@@ -308,13 +308,18 @@ Fly rollback. `ENGINE_EPOCH_FLOOR_OVERRIDE=football=2,hockey=1` (a Fly secret; a
 sports it names: the gate compares against `min(foldEpochOf(sport), override)`, so it can never raise one.
 `apps/web/src/server/usecases/engine-epoch-override.ts` owns it.
 - **Default off.** Unset or blank changes nothing. Production use is the point (it is not a local/ci-only `tunable()`).
-- **Fails closed.** An unknown sport (checked against the `FOLD_EPOCH` keys), an epoch that is not an integer >= 1, a duplicate sport,
-  an empty pair or a pair with no `=` THROWS at boot (`instrumentation.ts`, beside `relayDriverMode()`: the process stays up and
-  answers 500 until it is fixed) and at the gate. A typo never becomes "no override", nor a wrong floor.
-- **Loud.** Boot logs `ENGINE_EPOCH_FLOOR_OVERRIDE_ACTIVE { sport, floor, required }` once per sport. An entry at or above the sport's
-  own epoch is inert: boot logs `ENGINE_EPOCH_FLOOR_OVERRIDE_INERT` and does NOT throw, so a stale entry left behind by a later bump
-  cannot take prod down. Every write admitted ONLY because of the lever logs `ENGINE_EPOCH_FLOOR_OVERRIDDEN
-  { sport, floor, required, got, via, deviceLinkId, fixtureId }`.
+- **Understood or off, never a guess.** An unknown sport (checked against the `FOLD_EPOCH` keys), an epoch that is not an integer >= 1,
+  a duplicate sport, an empty pair or a pair with no `=` THROWS at boot (`instrumentation.ts`, beside `relayDriverMode()`: the process
+  stays up and answers 500 until it is fixed; the throw is first sent to Sentry and flushed). A typo never ships as "no override", nor
+  as a wrong floor. If boot was bypassed, the GATE does not throw: a value it cannot read is OFF (every sport keeps its declared
+  floor, today's behaviour), reported once per distinct bad value to the log and to Sentry as an error, and never echoed in an HTTP body.
+- **Loud.** Boot logs `ENGINE_EPOCH_FLOOR_OVERRIDE_ACTIVE { sport, floor, declared }` once per sport and sends the same sentence to
+  Sentry as a warning. An entry at or above the sport's own epoch is inert: boot logs `ENGINE_EPOCH_FLOOR_OVERRIDE_INERT` (log only)
+  and does NOT throw, so a stale entry left behind by a later bump cannot take prod down. Each request admitted ONLY because of the
+  lever logs `ENGINE_EPOCH_FLOOR_OVERRIDDEN { sport, floor, declared, got, via, deviceLinkId, fixtureId }`: at most one line per
+  request that passed the gate (it says the gate admitted, not that a row was written; a cold retry of a key the ledger holds passes
+  the gate again, and a stale `expected_seq` is still refused after admission). Per-request lines are log-only (the Sentry quota).
+  In every line `floor` and `required` mean the effective floor and `declared` means the sport's own epoch.
 - **Unchanged.** Absent `engine_epoch` is accepted (D31), ahead is accepted, a keyed retry replays before any refusal, and
   authorisation / entitlement / phase refusals still outrank the gate. The 426 code and shape are the same; under an override
   `required` reports the EFFECTIVE (lowered) floor, the number the client must reach, and the lockout log adds `declared`.

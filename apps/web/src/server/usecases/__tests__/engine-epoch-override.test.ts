@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const logMock = vi.hoisted(() => ({ error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() }));
 vi.mock("@/server/logger", () => ({ log: logMock }));
-const sentryMock = vi.hoisted(() => ({ captureMessage: vi.fn(), captureException: vi.fn() }));
+const sentryMock = vi.hoisted(() => ({ captureMessage: vi.fn(), captureException: vi.fn(), flush: vi.fn(async () => true) }));
 vi.mock("@sentry/nextjs", () => ({ captureRequestError: () => {}, init: () => {}, ...sentryMock }));
 vi.mock("../../../../sentry.server.config", () => ({}));
 vi.mock("../../../../sentry.edge.config", () => ({}));
@@ -25,6 +25,8 @@ import { FOLD_EPOCH, foldEpochOf } from "@seazn/engine/sport";
 import {
   ENGINE_EPOCH_FLOOR_OVERRIDE_ENV,
   epochFloorOverride,
+  epochFloorOverrideActiveMessage,
+  epochFloorOverrideOrOff,
   judgeEngineEpoch,
   parseEpochFloorOverride,
   reportEpochFloorOverrides,
@@ -33,7 +35,7 @@ import {
 const SPORTS = Object.keys(FOLD_EPOCH);
 
 beforeEach(() => {
-  for (const m of [logMock.error, logMock.warn, logMock.info, logMock.debug, sentryMock.captureMessage, sentryMock.captureException]) m.mockClear();
+  for (const m of [logMock.error, logMock.warn, logMock.info, logMock.debug, sentryMock.captureMessage, sentryMock.captureException, sentryMock.flush]) m.mockClear();
 });
 afterEach(() => vi.unstubAllEnvs());
 
@@ -268,6 +270,58 @@ describe("epochFloorOverride — the cached accessor the gate reads", () => {
   });
 });
 
+describe("epochFloorOverrideOrOff — the accessor the GATE reads: a value that is not understood is OFF, reported once", () => {
+  const invalid = () => logMock.error.mock.calls.filter(([f]) => (f as { code?: unknown } | undefined)?.code === "ENGINE_EPOCH_FLOOR_OVERRIDE_INVALID");
+  const [A] = SPORTS as [string];
+
+  it("unset, blank and a good value behave exactly like the strict accessor, and report nothing", () => {
+    expect(epochFloorOverrideOrOff({}).size).toBe(0);
+    expect(epochFloorOverrideOrOff({ [ENGINE_EPOCH_FLOOR_OVERRIDE_ENV]: "  " }).size).toBe(0);
+    const env = { [ENGINE_EPOCH_FLOOR_OVERRIDE_ENV]: `${A}=1` };
+    expect(epochFloorOverrideOrOff(env)).toBe(epochFloorOverride(env));
+    expect(invalid()).toHaveLength(0);
+    expect(sentryMock.captureMessage).not.toHaveBeenCalled();
+  });
+
+  it("a malformed value answers an EMPTY map (every sport keeps its declared floor), never an exception", () => {
+    let checked = 0;
+    for (const raw of [`footbal=2`, `${A}=0`, `${A}=2,${A}=1`, `${A}=2,`, A, "constructor=1"]) {
+      const m = epochFloorOverrideOrOff({ [ENGINE_EPOCH_FLOOR_OVERRIDE_ENV]: `${raw}#off-${checked}` });
+      expect(m, raw).toBeInstanceOf(Map);
+      expect(m.size, raw).toBe(0);
+      checked++;
+    }
+    expect(checked).toBe(6);
+  });
+
+  it("is reported ONCE per distinct bad value: one log.error and one Sentry ERROR, naming the variable and the pair and saying the lever is OFF", () => {
+    const env = { [ENGINE_EPOCH_FLOOR_OVERRIDE_ENV]: "once-footbal=2" };
+    for (let i = 0; i < 4; i++) expect(epochFloorOverrideOrOff(env).size).toBe(0);
+    expect(invalid(), "four reads, one report").toHaveLength(1);
+    expect(sentryMock.captureMessage).toHaveBeenCalledTimes(1);
+    const [message, level] = sentryMock.captureMessage.mock.calls[0]! as [string, string];
+    expect(level).toBe("error");
+    expect(message).toContain(ENGINE_EPOCH_FLOOR_OVERRIDE_ENV);
+    expect(message).toContain("once-footbal");
+    expect(message).toMatch(/OFF/);
+    expect(invalid()[0]![1], "the log line and the alert say the same").toBe(message);
+
+    // A different bad value is a new report; the first one coming back is not.
+    epochFloorOverrideOrOff({ [ENGINE_EPOCH_FLOOR_OVERRIDE_ENV]: "twice-footbal=2" });
+    expect(invalid()).toHaveLength(2);
+    epochFloorOverrideOrOff(env);
+    expect(invalid(), "a value already reported is not reported again").toHaveLength(2);
+    expect(sentryMock.captureMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("the STRICT accessor still throws for the same value (boot's contract is unchanged), and reports nothing itself", () => {
+    const env = { [ENGINE_EPOCH_FLOOR_OVERRIDE_ENV]: "strict-footbal=2" };
+    expect(() => epochFloorOverride(env)).toThrow(/strict-footbal/);
+    expect(invalid()).toHaveLength(0);
+    expect(sentryMock.captureMessage).not.toHaveBeenCalled();
+  });
+});
+
 describe("reportEpochFloorOverrides — the boot report", () => {
   // A table in which every sport sits at 3, so "below", "at" and "above" are all reachable for every sport (the real table has
   // sports at 1, where nothing can be below). The real table is exercised in its own test.
@@ -288,10 +342,11 @@ describe("reportEpochFloorOverrides — the boot report", () => {
     for (const sport of SPORTS) {
       logMock.warn.mockClear();
       const r = reportEpochFloorOverrides({ [ENGINE_EPOCH_FLOOR_OVERRIDE_ENV]: `${sport}=2` }, AT_THREE);
-      expect(r, sport).toEqual({ active: [sport], inert: [] });
+      expect(r, sport).toEqual({ active: [{ sport, floor: 2, declared: 3 }], inert: [] });
       const calls = leverWarnings();
       expect(calls, `${sport}: exactly one warning`).toHaveLength(1);
-      expect(calls[0]![0], sport).toEqual({ code: "ENGINE_EPOCH_FLOOR_OVERRIDE_ACTIVE", sport, floor: 2, required: 3 });
+      expect(calls[0]![0], sport).toEqual({ code: "ENGINE_EPOCH_FLOOR_OVERRIDE_ACTIVE", sport, floor: 2, declared: 3 });
+      expect(calls[0]![1], `${sport}: the log line is the message Sentry gets`).toBe(epochFloorOverrideActiveMessage({ sport, floor: 2, declared: 3 }));
       expect(calls[0]![1], `${sport}: loud, and says what it does`).toMatch(/ACTIVE|lowered/i);
       checked++;
     }
@@ -305,10 +360,10 @@ describe("reportEpochFloorOverrides — the boot report", () => {
       for (const v of [3, 4, 99]) {
         logMock.warn.mockClear();
         const r = reportEpochFloorOverrides({ [ENGINE_EPOCH_FLOOR_OVERRIDE_ENV]: `${sport}=${v}` }, AT_THREE);
-        expect(r, `${sport}=${v}`).toEqual({ active: [], inert: [sport] });
+        expect(r, `${sport}=${v}`).toEqual({ active: [], inert: [{ sport, floor: v, declared: 3 }] });
         const calls = leverWarnings();
         expect(calls, `${sport}=${v}: exactly one warning`).toHaveLength(1);
-        expect(calls[0]![0], `${sport}=${v}`).toEqual({ code: "ENGINE_EPOCH_FLOOR_OVERRIDE_INERT", sport, floor: v, required: 3 });
+        expect(calls[0]![0], `${sport}=${v}`).toEqual({ code: "ENGINE_EPOCH_FLOOR_OVERRIDE_INERT", sport, floor: v, declared: 3 });
         expect(calls[0]![1]).toMatch(/no effect/i);
         checked++;
       }
@@ -319,7 +374,7 @@ describe("reportEpochFloorOverrides — the boot report", () => {
   it("two sports: one warning EACH, in the order given, one active and one inert", () => {
     const [A, B] = SPORTS as [string, string];
     const r = reportEpochFloorOverrides({ [ENGINE_EPOCH_FLOOR_OVERRIDE_ENV]: `${A}=1,${B}=3` }, AT_THREE);
-    expect(r).toEqual({ active: [A], inert: [B] });
+    expect(r).toEqual({ active: [{ sport: A, floor: 1, declared: 3 }], inert: [{ sport: B, floor: 3, declared: 3 }] });
     expect(leverWarnings().map(([f]) => [f.code, f.sport])).toEqual([
       ["ENGINE_EPOCH_FLOOR_OVERRIDE_ACTIVE", A],
       ["ENGINE_EPOCH_FLOOR_OVERRIDE_INERT", B],
@@ -340,8 +395,8 @@ describe("reportEpochFloorOverrides — the boot report", () => {
       logMock.warn.mockClear();
       const own = foldEpochOf(sport);
       const r = reportEpochFloorOverrides({ [ENGINE_EPOCH_FLOOR_OVERRIDE_ENV]: `${sport}=${own - 1}` });
-      expect(r, sport).toEqual({ active: [sport], inert: [] });
-      expect(leverWarnings()[0]![0], sport).toEqual({ code: "ENGINE_EPOCH_FLOOR_OVERRIDE_ACTIVE", sport, floor: own - 1, required: own });
+      expect(r, sport).toEqual({ active: [{ sport, floor: own - 1, declared: own }], inert: [] });
+      expect(leverWarnings()[0]![0], sport).toEqual({ code: "ENGINE_EPOCH_FLOOR_OVERRIDE_ACTIVE", sport, floor: own - 1, declared: own });
       checked++;
     }
     expect(checked).toBe(movable.length);
@@ -353,7 +408,7 @@ describe("reportEpochFloorOverrides — the boot report", () => {
       logMock.warn.mockClear();
       const own = foldEpochOf(sport);
       const r = reportEpochFloorOverrides({ [ENGINE_EPOCH_FLOOR_OVERRIDE_ENV]: `${sport}=${own}` });
-      expect(r, sport).toEqual({ active: [], inert: [sport] });
+      expect(r, sport).toEqual({ active: [], inert: [{ sport, floor: own, declared: own }] });
       checked++;
     }
     expect(checked).toBe(SPORTS.length);
@@ -379,6 +434,27 @@ describe("register() (instrumentation.ts) applies the lever at boot", () => {
     expect(leverWarnings(), "nothing is logged as active for a value that was refused").toHaveLength(0);
   });
 
+  it("nodejs, a junk value: the throw is reported to Sentry as an exception and FLUSHED before register() rejects (the process may never get another chance)", async () => {
+    vi.stubEnv("NEXT_RUNTIME", "nodejs");
+    vi.stubEnv(ENGINE_EPOCH_FLOOR_OVERRIDE_ENV, "footbal=2");
+    const order: string[] = [];
+    sentryMock.captureException.mockImplementationOnce(() => void order.push("captureException"));
+    sentryMock.flush.mockImplementationOnce(async () => {
+      order.push("flush");
+      return true;
+    });
+    const settled = await boot().then(
+      () => "resolved",
+      (e: unknown) => (e as Error).message,
+    );
+    expect(settled).toContain("footbal");
+    expect(order, "captured, then flushed, then the rejection").toEqual(["captureException", "flush"]);
+    expect(sentryMock.captureException).toHaveBeenCalledTimes(1);
+    expect((sentryMock.captureException.mock.calls[0]![0] as Error).message).toContain(ENGINE_EPOCH_FLOOR_OVERRIDE_ENV);
+    expect(sentryMock.flush).toHaveBeenCalledWith(2000);
+    expect(sentryMock.captureMessage, "a refused value alerts as an exception, not as an ACTIVE warning").not.toHaveBeenCalled();
+  });
+
   it("nodejs, a valid value: boots, and logs ONE ACTIVE warning for the sport", async () => {
     const own = foldEpochOf(MOVED!);
     vi.stubEnv("NEXT_RUNTIME", "nodejs");
@@ -386,7 +462,28 @@ describe("register() (instrumentation.ts) applies the lever at boot", () => {
     await expect(boot()).resolves.toBeUndefined();
     const calls = leverWarnings();
     expect(calls).toHaveLength(1);
-    expect(calls[0]![0]).toEqual({ code: "ENGINE_EPOCH_FLOOR_OVERRIDE_ACTIVE", sport: MOVED, floor: own - 1, required: own });
+    expect(calls[0]![0]).toEqual({ code: "ENGINE_EPOCH_FLOOR_OVERRIDE_ACTIVE", sport: MOVED, floor: own - 1, declared: own });
+    // The same sentence goes to Sentry as a WARNING, once per ACTIVE sport (a pino line alone never becomes an Issue).
+    expect(sentryMock.captureMessage).toHaveBeenCalledTimes(1);
+    expect(sentryMock.captureMessage).toHaveBeenCalledWith(epochFloorOverrideActiveMessage({ sport: MOVED!, floor: own - 1, declared: own }), "warning");
+    expect(sentryMock.captureException).not.toHaveBeenCalled();
+  });
+
+  it("nodejs, two sports both lowered: one Sentry warning EACH; one lowered and one inert: only the lowered one alerts", async () => {
+    const moved = SPORTS.filter((s) => FOLD_EPOCH[s as keyof typeof FOLD_EPOCH] > 1);
+    expect(moved.length, "premise: two sports have moved off epoch 1").toBeGreaterThanOrEqual(2);
+    const [a, b] = moved as [string, string];
+    vi.stubEnv("NEXT_RUNTIME", "nodejs");
+    vi.stubEnv(ENGINE_EPOCH_FLOOR_OVERRIDE_ENV, `${a}=${foldEpochOf(a) - 1},${b}=${foldEpochOf(b) - 1}`);
+    await boot();
+    expect(sentryMock.captureMessage.mock.calls.map(([m, level]) => [String(m).includes(`${a} scoring`) ? a : String(m).includes(`${b} scoring`) ? b : "?", level])).toEqual([
+      [a, "warning"],
+      [b, "warning"],
+    ]);
+    sentryMock.captureMessage.mockClear();
+    vi.stubEnv(ENGINE_EPOCH_FLOOR_OVERRIDE_ENV, `${a}=${foldEpochOf(a) - 1},${b}=${foldEpochOf(b)}`);
+    await boot();
+    expect(sentryMock.captureMessage).toHaveBeenCalledTimes(1);
   });
 
   it("nodejs, an inert value (equal to the sport's epoch): boots and logs INERT, not ACTIVE", async () => {
@@ -395,6 +492,7 @@ describe("register() (instrumentation.ts) applies the lever at boot", () => {
     vi.stubEnv(ENGINE_EPOCH_FLOOR_OVERRIDE_ENV, `${MOVED}=${own}`);
     await expect(boot()).resolves.toBeUndefined();
     expect(leverWarnings().map(([f]) => f.code)).toEqual(["ENGINE_EPOCH_FLOOR_OVERRIDE_INERT"]);
+    expect(sentryMock.captureMessage, "an inert entry is log-only: nobody needs paging for a stale line").not.toHaveBeenCalled();
   });
 
   it("nodejs, unset or blank: boots and logs nothing from this lever", async () => {
@@ -404,9 +502,12 @@ describe("register() (instrumentation.ts) applies the lever at boot", () => {
       await expect(boot()).resolves.toBeUndefined();
     }
     expect(leverWarnings()).toHaveLength(0);
+    expect(sentryMock.captureMessage).not.toHaveBeenCalled();
+    expect(sentryMock.captureException).not.toHaveBeenCalled();
+    expect(sentryMock.flush).not.toHaveBeenCalled();
   });
 
-  it("the edge runtime serves no scoring route and does not parse the value (positive pair: the same junk rejects on nodejs)", async () => {
+  it("register() on the EDGE runtime resolves with a junk value - the check is nodejs-only (positive pair: the same junk rejects on nodejs)", async () => {
     vi.stubEnv(ENGINE_EPOCH_FLOOR_OVERRIDE_ENV, "footbal=2");
     vi.stubEnv("NEXT_RUNTIME", "edge");
     await expect(boot()).resolves.toBeUndefined();

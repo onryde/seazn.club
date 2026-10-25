@@ -21,8 +21,19 @@ export async function register() {
     // process stays up and answers 500 until it is fixed), so a typo never silently becomes "no override" or a wrong floor. A valid
     // one logs one loud warning per sport; an INERT one (at or above the sport's epoch) logs that it does nothing and does not stop
     // the boot, so a stale entry left behind by a later bump cannot take prod down. Unset logs nothing.
-    const { reportEpochFloorOverrides } = await import("@/server/usecases/engine-epoch-override");
-    reportEpochFloorOverrides();
+    const { reportEpochFloorOverrides, epochFloorOverrideActiveMessage } = await import("@/server/usecases/engine-epoch-override");
+    let overrides: ReturnType<typeof reportEpochFloorOverrides>;
+    try {
+      overrides = reportEpochFloorOverrides();
+    } catch (e) {
+      // The throw below ends the boot, and a process that is about to answer 500 to everything may never flush: report it first.
+      Sentry.captureException(e);
+      await Sentry.flush(2000);
+      throw e;
+    }
+    // Each ACTIVE sport also goes to Sentry as a warning, as the outbox check below does for its problem: a pino line alone never
+    // becomes an Issue. INERT and the per-write OVERRIDDEN lines stay log-only (the quota).
+    for (const active of overrides.active) Sentry.captureMessage(epochFloorOverrideActiveMessage(active), "warning");
     // The email outbox seals every queued body under EMAIL_OUTBOX_KEK, and a sign-in request that cannot be queued answers
     // 500. A deployment with a Resend key and no (or the published sample) key would find out from the first person who tried
     // to sign in, so say it now: one error line, and an alert. Unlike the relay check this does not stop the boot.

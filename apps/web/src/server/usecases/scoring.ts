@@ -13,7 +13,7 @@ import { deferred } from "@/lib/deferred";
 import { divisionScoringClosed } from "@/lib/division-phase";
 import { EngineError } from "@seazn/engine/core";
 import { foldEpochOf } from "@seazn/engine/sport";
-import { epochFloorOverride, judgeEngineEpoch } from "./engine-epoch-override";
+import { epochFloorOverrideOrOff, judgeEngineEpoch } from "./engine-epoch-override";
 import { appendEvent, replayOutcomeFor, resolveModule, rulesVersionNow } from "@/server/engine-db";
 import type { CascadeWriter } from "@/server/engine-db/append-event";
 import { recomputeStandings } from "@/server/engine-db";
@@ -680,10 +680,13 @@ interface FixtureSport {
  * sport or a pinned version this build no longer ships, so an unknown sport can never reach `foldEpochOf`.
  *
  * THE FLOOR OVERRIDE (`ENGINE_EPOCH_FLOOR_OVERRIDE`, engine-split spec §5.6, `engine-epoch-override.ts`): a default-off emergency lever that
- * LOWERS the floor for the sports it names, `min(foldEpochOf(sport), override)`, never raises it. A write admitted ONLY because of it
- * (below the sport's own epoch, at or above the lowered floor) logs `ENGINE_EPOCH_FLOOR_OVERRIDDEN`, one line per admitted write. A
- * refusal under an override reports the EFFECTIVE floor as `required` (what the client must reach to be admitted), and the lockout
- * line adds `declared`, the sport's own epoch. The replay lookup below is untouched: it still runs before any refusal.
+ * LOWERS the floor for the sports it names, `min(foldEpochOf(sport), override)`, never raises it. A request admitted ONLY because of it
+ * (below the sport's own epoch, at or above the lowered floor) logs `ENGINE_EPOCH_FLOOR_OVERRIDDEN`: at most one line per request that
+ * passed the gate (it says the gate admitted, not that a row was written - a cold retry of a key the ledger holds passes it again and is
+ * then replayed). A refusal under an override reports the EFFECTIVE floor as `required` (what the client must reach to be admitted),
+ * and the lockout line adds `declared`, the sport's own epoch; `required` always means the effective floor, `declared` the sport's own.
+ * A malformed override does NOT throw here (boot refuses it): `epochFloorOverrideOrOff` answers "no override", which is today's floors,
+ * and reports the bad value once. The replay lookup below is untouched: it still runs before any refusal.
  */
 async function assertEngineEpoch(
   auth: AuthCtx,
@@ -694,13 +697,14 @@ async function assertEngineEpoch(
 ): Promise<ScoreOutcome | null> {
   const sportKey = resolveModule(sport.key, sport.moduleVersion).key;
   const declared = foldEpochOf(sportKey);
-  const verdict = judgeEngineEpoch(got, declared, epochFloorOverride().get(sportKey));
+  const verdict = judgeEngineEpoch(got, declared, epochFloorOverrideOrOff().get(sportKey));
   if (verdict.admitted) {
     if (verdict.viaOverride) {
-      // Ops visibility for the lever: this write is in the ledger only because the floor was lowered by hand. One line per write.
+      // Ops visibility for the lever: this request passed the gate only because the floor was lowered by hand. At most one line per
+      // request - the gate admitted it, which is not the same as a row being written (see the doc above).
       log.warn(
-        { code: "ENGINE_EPOCH_FLOOR_OVERRIDDEN", sport: sportKey, floor: verdict.floor, required: declared, got, via: auth.via, deviceLinkId: auth.deviceLinkId ?? null, fixtureId },
-        "scoring: ENGINE_EPOCH_FLOOR_OVERRIDDEN — a write was admitted below the server's fold epoch by ENGINE_EPOCH_FLOOR_OVERRIDE",
+        { code: "ENGINE_EPOCH_FLOOR_OVERRIDDEN", sport: sportKey, floor: verdict.floor, declared, got, via: auth.via, deviceLinkId: auth.deviceLinkId ?? null, fixtureId },
+        "scoring: ENGINE_EPOCH_FLOOR_OVERRIDDEN — a request was admitted below the server's fold epoch by ENGINE_EPOCH_FLOOR_OVERRIDE",
       );
     }
     return null;

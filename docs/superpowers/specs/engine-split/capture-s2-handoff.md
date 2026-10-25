@@ -45,7 +45,8 @@ lowered floor. The rule above otherwise stands: do not build on the lever, and e
   "requestId": "<uuid>" }
 ```
 
-- `sport` is the fixture's sport key, `required` the server's epoch for it, `got` the epoch the request carried.
+- `sport` is the fixture's sport key, `required` the server's floor for it (its `foldEpochOf(sport)`, or the LOWERED floor while an
+  operator's `ENGINE_EPOCH_FLOOR_OVERRIDE` is on for that sport: the number to reach to be admitted), `got` the epoch the request carried.
 - `message` is English prose and **English only**, by the API's convention (the web pad's `components/v2/scorepad/refusal-copy.ts`
   maps the wire CODE to its own 4-locale copy and "never falls through to server prose"). Map `error.code`, never show `message`.
 - **Key on `error.code`, never on the status alone.** The 426 carries no `Upgrade` header (it is not a protocol upgrade, and

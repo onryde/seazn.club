@@ -15,7 +15,7 @@
 // THE CACHE. `@/lib/cache`'s idempotency keys (`idemv3:*`, W2c Task 15) are served from an in-memory fake here, because case 7 must pin
 // BOTH the warm and the cold path of a retry; every other key delegates to the real module (no REDIS_URL, so a no-op).
 // `scoring-durable-idempotency.test.ts` stays the no-cache witness for the database guarantee itself.
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
 import { foldEpochOf } from "@seazn/engine/sport";
@@ -30,12 +30,21 @@ import { log } from "@/server/logger";
 import { v1 } from "@/server/api-v1/http";
 import { LOCKED_FIXTURE_STATUSES } from "@/server/engine-db";
 import { declaredVariant, seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
-import type { AuthCtx } from "@/server/api-v1/auth";
+import { requireFixtureActor, type AuthCtx } from "@/server/api-v1/auth";
+import { POST as eventsRoute } from "@/app/api/v1/fixtures/[id]/events/route";
+import { createDeviceLink } from "../device-links";
 import { scoreEvent } from "../scoring";
 import { withdrawEntrantCascade } from "../withdrawal";
 
 const bump = vi.hoisted(() => new Map<string, number>());
 const idemCache = vi.hoisted(() => ({ store: new Map<string, unknown>(), hits: 0, misses: 0 }));
+const sentry = vi.hoisted(() => ({ captureMessage: vi.fn() }));
+
+// Only captureMessage is replaced (the override's fallback reports a malformed value to Sentry); everything else is the real SDK.
+vi.mock("@sentry/nextjs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@sentry/nextjs")>()),
+  captureMessage: sentry.captureMessage,
+}));
 
 vi.mock("@seazn/engine/sport", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@seazn/engine/sport")>();
@@ -70,6 +79,7 @@ const realEpoch = (sport: string) => foldEpochOf(sport) - (bump.get(sport) ?? 0)
 
 beforeEach(() => {
   bump.clear();
+  sentry.captureMessage.mockClear();
   idemCache.store.clear();
   idemCache.hits = 0;
   idemCache.misses = 0;
@@ -798,19 +808,19 @@ describe.skipIf(!HAS_DB)("scoreEvent — the engine-epoch FLOOR OVERRIDE (ENGINE
     expect(await rows(s.fixtureId), "blank is off too").toBe(0);
   });
 
-  it("a phone AT the lowered floor is admitted and written, with exactly ONE ENGINE_EPOCH_FLOOR_OVERRIDDEN warning naming everything ops needs", async () => {
+  it("a phone AT the lowered floor is admitted and written, with exactly ONE ENGINE_EPOCH_FLOOR_OVERRIDDEN warning for the request, naming everything ops needs", async () => {
     const s = await seed(BADMINTON);
     const { declared, floor } = lowered(BADMINTON);
     const out = await start(s, { engine_epoch: floor });
     expect(out.seq).toBe(1);
     expect(await rows(s.fixtureId)).toBe(1);
     const calls = logged("ENGINE_EPOCH_FLOOR_OVERRIDDEN");
-    expect(calls, "one warning per admitted write").toHaveLength(1);
+    expect(calls, "one warning for the one request that passed the gate").toHaveLength(1);
     expect(calls[0]![0]).toEqual({
       code: "ENGINE_EPOCH_FLOOR_OVERRIDDEN",
       sport: BADMINTON,
       floor,
-      required: declared,
+      declared,
       got: floor,
       via: "session",
       deviceLinkId: null,
@@ -903,7 +913,7 @@ describe.skipIf(!HAS_DB)("scoreEvent — the engine-epoch FLOOR OVERRIDE (ENGINE
     const one = await start(s, { engine_epoch: floor });
     const two = await scoreEvent(s.auth, s.fixtureId, { expected_seq: 1, type: "core.note", payload: { text: "second" }, engine_epoch: floor });
     expect([one.seq, two.seq]).toEqual([1, 2]);
-    expect(logged("ENGINE_EPOCH_FLOOR_OVERRIDDEN"), "one warning per admitted write").toHaveLength(2);
+    expect(logged("ENGINE_EPOCH_FLOOR_OVERRIDDEN"), "one warning per request that passed the gate").toHaveLength(2);
 
     const a = await refusal(scoreEvent(s.auth, s.fixtureId, { expected_seq: 2, type: "core.note", payload: { text: "x" }, engine_epoch: behind }));
     const b = await refusal(scoreEvent(s.auth, s.fixtureId, { expected_seq: 2, type: "core.note", payload: { text: "x" }, engine_epoch: behind }));
@@ -920,6 +930,16 @@ describe.skipIf(!HAS_DB)("scoreEvent — the engine-epoch FLOOR OVERRIDE (ENGINE
     const on = await scoreEvent(s.auth, s.fixtureId, { expected_seq: 2, type: "core.note", payload: { text: "on" }, engine_epoch: floor });
     expect(on.seq).toBe(3);
     expect(await rows(s.fixtureId)).toBe(3);
+  });
+
+  it("the line means the GATE admitted the request, not that a row was written: a stale expected_seq after admission is SEQ_CONFLICT with the line logged once and no row", async () => {
+    const s = await seed(BADMINTON);
+    const { floor } = lowered(BADMINTON);
+    await start(s);
+    const err = await scoreEvent(s.auth, s.fixtureId, { expected_seq: 0, type: "core.start", payload: {}, engine_epoch: floor }).catch((e: unknown) => e);
+    expect(EngineError.is(err, "SEQ_CONFLICT"), `got ${String(err)}`).toBe(true);
+    expect(logged("ENGINE_EPOCH_FLOOR_OVERRIDDEN"), "admitted by the gate, then refused by the ledger").toHaveLength(1);
+    expect(await rows(s.fixtureId), "only the unflagged start is in the ledger").toBe(1);
   });
 
   it("a core.void from a phone at the lowered floor is admitted too (the void rides the same gate), once, with the warning", async () => {
@@ -965,6 +985,9 @@ describe.skipIf(!HAS_DB)("scoreEvent — the engine-epoch FLOOR OVERRIDE (ENGINE
     const again = await start(s, { engine_epoch: floor, idempotency_key: key });
     expect(again).toEqual(first);
     expect(await rows(s.fixtureId), "one row through all four retries").toBe(1);
+    // The line says the GATE admitted a request, not that a row was written: the first write logged it, the warm retry (cache) did not,
+    // and this cold retry passed the gate again before the ledger replayed it. At most one line per request that passed the gate.
+    expect(logged("ENGINE_EPOCH_FLOOR_OVERRIDDEN"), "first write + this cold retry; the warm retry never reached the gate").toHaveLength(2);
   });
 
   it("the KEY is not burned by a refusal under the lever: behind with key K -> 426; the same K at the lowered floor -> 201, exactly one row", async () => {
@@ -997,23 +1020,112 @@ describe.skipIf(!HAS_DB)("scoreEvent — the engine-epoch FLOOR OVERRIDE (ENGINE
     });
   });
 
-  it("FAILS CLOSED at the gate: a malformed override throws (no write) for a request that carries an epoch, and does NOT touch one that carries none", async () => {
+  it("a MALFORMED override at the gate is OFF, not an error: the declared floors apply, the bad value is reported ONCE per distinct value to the log and to Sentry", async () => {
     const s = await seed(BADMINTON);
     bump.set(BADMINTON, 2);
-    vi.stubEnv(ENV, `${BADMINTON}=two`);
-    const err = await start(s, { engine_epoch: foldEpochOf(BADMINTON) }).then(
-      () => {
-        throw new Error("a request was admitted past a malformed override");
-      },
-      (e: unknown) => e,
-    );
-    expect(err, "a plain Error naming the variable, not a 426 and not 'no override'").toBeInstanceOf(Error);
-    expect(err).not.toBeInstanceOf(HttpError);
-    expect((err as Error).message).toContain(ENV);
-    expect(await rows(s.fixtureId)).toBe(0);
-    // The web pad sends no epoch, so it never asks the gate and is never refused by a typo in an operator's variable.
-    const pad = await start(s);
-    expect(pad.seq).toBe(1);
+    const declared = foldEpochOf(BADMINTON);
+    const junk = `${BADMINTON}=two-${randomUUID().slice(0, 8)}`;
+    vi.stubEnv(ENV, junk);
+    const errorLog = vi.spyOn(log, "error").mockImplementation(() => undefined);
+    try {
+      // At the sport's own epoch: admitted (no throw, no 500), and NOT logged as an override admission.
+      const a = await start(s, { engine_epoch: declared });
+      expect(a.seq).toBe(1);
+      // Below it: refused at the DECLARED floor. Had the lever been read as "football=anything", this would differ.
+      const err = await refusal(scoreEvent(s.auth, s.fixtureId, { expected_seq: 1, type: "core.note", payload: { text: "behind" }, engine_epoch: declared - 1 }));
+      expect(err.extra).toEqual({ sport: BADMINTON, required: declared, got: declared - 1 });
+      expect(JSON.stringify([err.message, err.extra]), "nothing the client sees echoes the variable").not.toContain("two-");
+      // The web pad (no epoch) never asks the gate at all.
+      const pad = await scoreEvent(s.auth, s.fixtureId, { expected_seq: 1, type: "core.note", payload: { text: "pad" } });
+      expect(pad.seq).toBe(2);
+      expect(logged("ENGINE_EPOCH_FLOOR_OVERRIDDEN"), "the lever admitted nothing").toHaveLength(0);
+
+      // Reported once for this value, across the three requests above (two of them reached the gate).
+      const invalid = () => errorLog.mock.calls.filter(([f]) => (f as { code?: unknown } | undefined)?.code === "ENGINE_EPOCH_FLOOR_OVERRIDE_INVALID");
+      expect(invalid(), "one log.error for the value").toHaveLength(1);
+      expect(String(invalid()[0]![1]), "the report names the variable and the bad pair, and says the lever is OFF").toMatch(new RegExp(`${ENV}.*two-.*OFF`));
+      expect(sentry.captureMessage).toHaveBeenCalledTimes(1);
+      expect(sentry.captureMessage).toHaveBeenCalledWith(expect.stringContaining(ENV), "error");
+
+      // A second request with the same value: still one report. A DIFFERENT bad value is a new report.
+      await refusal(scoreEvent(s.auth, s.fixtureId, { expected_seq: 2, type: "core.note", payload: { text: "behind again" }, engine_epoch: declared - 1 }));
+      expect(invalid()).toHaveLength(1);
+      vi.stubEnv(ENV, `${junk}-second`);
+      await refusal(scoreEvent(s.auth, s.fixtureId, { expected_seq: 2, type: "core.note", payload: { text: "behind" }, engine_epoch: declared - 1 }));
+      expect(invalid(), "a distinct bad value is reported again").toHaveLength(2);
+      expect(sentry.captureMessage).toHaveBeenCalledTimes(2);
+      vi.stubEnv(ENV, junk);
+      await refusal(scoreEvent(s.auth, s.fixtureId, { expected_seq: 2, type: "core.note", payload: { text: "behind" }, engine_epoch: declared - 1 }));
+      expect(invalid(), "the first bad value again is not re-reported").toHaveLength(2);
+      expect(await rows(s.fixtureId), "start + pad note; no refused request wrote").toBe(2);
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
+  describe("through the real POST /api/v1/fixtures/{id}/events route, with a device-link bearer (the native capture phone's door)", () => {
+    /** A real device link for the fixture, its bearer, and the route's answer to a body. */
+    async function nativePhone(s: Seeded) {
+      vi.stubEnv("DEVICE_LINK_KEK", randomBytes(32).toString("hex"));
+      // seedBracket's actor has no user (a link is minted by a signed-in editor and records who issued it), so give it one.
+      const [{ id: userId }] = await sql<{ id: string }[]>`
+        insert into users (email, display_name, email_verified)
+        values (${`epoch-${randomUUID().slice(0, 8)}@test.local`}, 'Epoch Editor', true) returning id`;
+      const link = await createDeviceLink({ ...s.auth, userId }, s.fixtureId, "epoch override");
+      const bearer = { authorization: `Bearer ${link.secret}`, "content-type": "application/json" };
+      const device = await requireFixtureActor(new Request("http://test.local/api/v1", { headers: bearer }), s.fixtureId, "score");
+      expect([device.via, device.deviceLinkId], "premise: a real device-link actor").toEqual(["device_link", link.id]);
+      const post = (body: Record<string, unknown>) =>
+        eventsRoute(new Request(`http://test.local/api/v1/fixtures/${s.fixtureId}/events`, { method: "POST", headers: bearer, body: JSON.stringify(body) }), {
+          params: Promise.resolve({ id: s.fixtureId }),
+        });
+      return { link, device, post };
+    }
+
+    it("a device link at the lowered floor is admitted, and the OVERRIDDEN line carries ITS via and deviceLinkId (not hard-coded)", async () => {
+      const s = await seed(BADMINTON);
+      const { declared, floor } = lowered(BADMINTON);
+      const { link, device } = await nativePhone(s);
+      const out = await scoreEvent(device, s.fixtureId, { expected_seq: 0, type: "core.start", payload: {}, engine_epoch: floor });
+      expect(out.seq).toBe(1);
+      const calls = logged("ENGINE_EPOCH_FLOOR_OVERRIDDEN");
+      expect(calls).toHaveLength(1);
+      expect(calls[0]![0]).toEqual({
+        code: "ENGINE_EPOCH_FLOOR_OVERRIDDEN",
+        sport: BADMINTON,
+        floor,
+        declared,
+        got: floor,
+        via: "device_link",
+        deviceLinkId: link.id,
+        fixtureId: s.fixtureId,
+      });
+    });
+
+    it("with a MALFORMED override: a native write AT its floor is 201 and one BELOW it is 426 with the declared `required` - never a 500, and the body never echoes the variable", async () => {
+      const s = await seed(BADMINTON);
+      bump.set(BADMINTON, 2);
+      const declared = foldEpochOf(BADMINTON);
+      const junk = `${BADMINTON}=junk-${randomUUID().slice(0, 8)}`;
+      vi.stubEnv(ENV, junk);
+      const { post } = await nativePhone(s);
+
+      const ok = await post({ expected_seq: 0, type: "core.start", payload: {}, engine_epoch: declared });
+      const okBody = (await ok.json()) as { ok: boolean; data?: { seq: number } };
+      expect([ok.status, okBody.ok, okBody.data?.seq]).toEqual([201, true, 1]);
+
+      const behind = await post({ expected_seq: 1, type: "core.note", payload: { text: "behind" }, engine_epoch: declared - 1 });
+      const raw = await behind.text();
+      expect(behind.status).toBe(426);
+      expect(JSON.parse(raw)).toEqual({
+        ok: false,
+        error: { code: "ENGINE_OUTDATED", message: expect.any(String), sport: BADMINTON, required: declared, got: declared - 1 },
+        requestId: expect.any(String),
+      });
+      expect(raw, "no part of the operator's variable, nor the sport list the parser prints, reaches the client").not.toMatch(/junk-|sports:|ENGINE_EPOCH_FLOOR_OVERRIDE/);
+      expect(await rows(s.fixtureId)).toBe(1);
+      expect(sentry.captureMessage, "one Sentry error for the value, across both requests").toHaveBeenCalledTimes(1);
+    });
   });
 
   it("every sport: the lever admits a phone at the lowered floor and still refuses one below it, naming that sport", async () => {
