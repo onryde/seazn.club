@@ -17,12 +17,14 @@
 //     in the artifact;
 //   * every `node … server.js` line, and every `node …` line that backgrounds a process (`… &`, however its script is
 //     spelled: `node "${srv}.js" &`), is counted apart from the standalone-path form, and the two counts must agree, so a
-//     start spelled another way (`cd … && node server.js`) cannot slip past the detector unseen. (A start spelled with no
-//     `node` word and no `&` at all still can; that is the limit of a text sweep.)
+//     start spelled another way (`cd … && node server.js`) cannot slip past the detector unseen. What still slips, because
+//     a text sweep cannot see it: a backgrounded wrapper (`bash start.sh &`, `npm run … &`), and a `node \` line
+//     continuation whose script sits on the next line.
 // Neither a comment nor a later line nor another job's overlay counts, nor one in a step that has an `if:` (it may not
 // run), unless it is the start's own step.
-// A tarball's pack must also strip the source maps (`find … -name '*.map' -delete`) before the tar: ~220 MB nothing in a
-// shard reads, in an artifact every shard downloads.
+// A tarball's pack must also strip the source maps (`find … -name '*.map' -delete`) between the last overlay before the
+// tar and the tar itself (the overlay is what brings the maps in): ~220 MB nothing in a shard reads, in an artifact every
+// shard downloads.
 //
 // Enabling register() makes a Sentry DSN consequential — `sentry.server.config.ts` is `enabled` the moment one is set — so
 // every server-start step also holds both DSN variables blank in its own env (the empty string wins the `??`), and no
@@ -45,9 +47,9 @@ const WORKFLOWS = resolve(ROOT, ".github/workflows");
 const START = /\bnode\b[^\n]*\bstandalone\/apps\/web\/server\.js\b/;
 /** ANY `node … server.js` line, whatever path it takes, and ANY `node …` line that backgrounds its process (a trailing `&`,
  *  bare or inside a subshell), however the script is named: the independent count START is held to. Every backgrounded
- *  `node` in the workflows today is one of the standalone starts, so a new one that is not goes red here and is either
- *  added to START's shapes or excused by name. */
-const BOOT = /\bnode\b[^\n]*\bserver\.js\b|\bnode\b[^\n]*&\s*\)?\s*$/;
+ *  `node` in the workflows today is one of the standalone starts, so a new one that is not makes the counts disagree and
+ *  goes red here, until START learns its shape. A trailing `&&` is a continuation, not a backgrounding. */
+const BOOT = /\bnode\b[^\n]*\bserver\.js\b|\bnode\b[^\n]*(?<!&)&\s*\)?\s*$/;
 /** A line that packs the standalone tree into a tarball. */
 const PACK = /\btar\b[^\n]*\bstandalone\b/;
 /** The source-map strip a pack owes before its tar. */
@@ -98,6 +100,7 @@ function overlayVerdicts(text: string): Verdict[] {
     const overlayAt = live(job.lines, OVERLAY);
     const extractAt = live(job.lines, EXTRACT);
     const stripAt = live(job.lines, STRIP);
+    const lastOverlayBefore = (i: number): number => Math.max(-1, ...overlayAt.filter((o) => o < i));
     // Which step each line belongs to, and which steps are conditional.
     const stepOf: number[] = [];
     let step = -1;
@@ -107,7 +110,7 @@ function overlayVerdicts(text: string): Verdict[] {
     }
     const conditional = new Set(live(job.lines, STEP_IF).map((i) => stepOf[i]!));
     const covers = (i: number): boolean => overlayAt.some((o) => o < i && (stepOf[o] === stepOf[i] || !conditional.has(stepOf[o]!)));
-    return { job, startAt, packAt, extractAt, covers, packMissing: packAt.filter((p) => !covers(p)), packUnstripped: packAt.filter((p) => !stripAt.some((o) => o < p)) };
+    return { job, startAt, packAt, extractAt, covers, packMissing: packAt.filter((p) => !covers(p)), packUnstripped: packAt.filter((p) => !stripAt.some((o) => o < p && o > lastOverlayBefore(p))) };
   });
   const packsSound = per.some((p) => p.packAt.length > 0) && per.every((p) => p.packMissing.length === 0);
   return per
@@ -277,6 +280,7 @@ describe("every job that starts the standalone Next server overlays the compiled
       ["no pack anywhere (an extracted tree nobody overlaid)", `name: x\njobs:\n${shard}`, { packMissing: 0, startMissing: 1, unstripped: 0 }],
       ["a sound pack covers the extracting shard", `${head}${packStep(overlay, strip, pack)}${shard}`, { packMissing: 0, startMissing: 0, unstripped: 0 }],
       ["a pack that overlays but keeps the source maps", `${head}${packStep(overlay, pack)}${shard}`, { packMissing: 0, startMissing: 0, unstripped: 1 }],
+      ["the map strip comes BEFORE the overlay (the overlay then brings the maps back)", `${head}${packStep(strip, overlay, pack)}${shard}`, { packMissing: 0, startMissing: 0, unstripped: 1 }],
       ["the map strip comes after the tar", `${head}${packStep(overlay, pack, strip)}${shard}`, { packMissing: 0, startMissing: 0, unstripped: 1 }],
       ["the strip names the wrong pattern", `${head}${packStep(overlay, "          find apps/web/.next/standalone -name '*.js' -delete\n", pack)}${shard}`, { packMissing: 0, startMissing: 0, unstripped: 1 }],
     ];
@@ -307,6 +311,9 @@ describe("every job that starts the standalone Next server overlays the compiled
       expect(bootLines(`${l}\n`), l).toBe(1);
       expect(startLines(`${l}\n`), l).toBe(0);
     }
+    // A trailing `&&` is a continuation; `2>&1 &` still backgrounds.
+    expect(bootLines("          node ./dist/main.mjs &&\n"), "&& is not backgrounding").toBe(0);
+    expect(bootLines("          node ./dist/main.mjs > s.log 2>&1 &\n"), "2>&1 & is").toBe(1);
     // And a foreground `node` that is not a server is not a boot.
     expect(bootLines("          node scripts/gen-keys.mjs\n")).toBe(0);
     expect(bootLines("          node --input-type=module -e \"console.log(1)\"\n")).toBe(0);
@@ -363,12 +370,13 @@ function proofProblems(text: string): string[] {
   return problems;
 }
 
-type Answer = { code: string; cacheControl: string | null; isr?: boolean };
+type Answer = { code: string; cacheControl: string | null; isr?: false | "MISS" | "HIT" | "STALE" };
 type Ran = { exit: number | null; out: string; urls: string[]; maxTimes: string[] };
 
 /** Run a step's `run:` body the way Actions does (`bash -e`), with `curl` and `sleep` stubbed on PATH: curl answers `answer`
  *  to every request and logs its arguments; sleep returns at once. The body's other tools (seq, tr, grep, cat) are real.
- *  `isr` (default true) adds the `x-nextjs-cache` header a response rendered through Next's incremental cache carries. */
+ *  `isr` (default "MISS") is the value of the `x-nextjs-cache` header a response rendered through Next's incremental cache
+ *  carries; false sends none. */
 function runStep(body: string, answer: Answer): Ran {
   const dir = mkdtempSync(join(tmpdir(), "register-proof-"));
   try {
@@ -383,7 +391,7 @@ function runStep(body: string, answer: Answer): Ran {
         'hdrs=""',
         'while [ $# -gt 0 ]; do case "$1" in -D) hdrs="$2"; shift 2;; *) shift;; esac; done',
         'if [ "$STUB_CODE" = "000" ]; then printf 000; exit 7; fi',
-        '{ printf "HTTP/1.1 %s X\\r\\n" "$STUB_CODE"; if [ -n "$STUB_CC" ]; then printf "Cache-Control: %s\\r\\n" "$STUB_CC"; fi; if [ -n "$STUB_ISR" ]; then printf "x-nextjs-cache: MISS\\r\\nx-nextjs-prerender: 1\\r\\n"; fi; printf "\\r\\n"; } > "$hdrs"',
+        '{ printf "HTTP/1.1 %s X\\r\\n" "$STUB_CODE"; if [ -n "$STUB_CC" ]; then printf "Cache-Control: %s\\r\\n" "$STUB_CC"; fi; if [ -n "$STUB_ISR" ]; then printf "x-nextjs-cache: %s\\r\\nx-nextjs-prerender: 1\\r\\n" "$STUB_ISR"; fi; printf "\\r\\n"; } > "$hdrs"',
         'printf "%s" "$STUB_CODE"',
         "",
       ].join("\n"),
@@ -406,7 +414,7 @@ function runStep(body: string, answer: Answer): Ran {
         STUB_LOG: log,
         STUB_CODE: answer.code,
         STUB_CC: answer.cacheControl ?? "",
-        STUB_ISR: answer.isr === false ? "" : "1",
+        STUB_ISR: answer.isr === false ? "" : (answer.isr ?? "MISS"),
       },
     });
     let calls: string[] = [];
@@ -433,6 +441,7 @@ const TABLE: { what: string; answer: Answer; exit: number }[] = [
   { what: "no answer at all (000, no header)", answer: { code: "000", cacheControl: null }, exit: 1 },
   { what: "404 with no Cache-Control header", answer: { code: "404", cacheControl: null }, exit: 1 },
   { what: "404 no-store WITHOUT the ISR marker (a dynamic render sends no-store by itself: proves nothing)", answer: { code: "404", cacheControl: NO_STORE, isr: false }, exit: 1 },
+  { what: "404 no-store with x-nextjs-cache: HIT (a fresh slug is always a MISS: this was replayed from a cache)", answer: { code: "404", cacheControl: NO_STORE, isr: "HIT" }, exit: 1 },
 ];
 
 /** What a TABLE row's run did, judged against the row: a wrong exit, or the right exit for the wrong reason. Null if right. */
@@ -465,6 +474,7 @@ const MUTANTS: [string, string, string][] = [
   ["the header test swapped for a look-alike", "grep -qi 'no-store'", "grep -qi 'cache'"],
   ["the ISR premise dropped", ' && [ -n "$isr" ]', ""],
   ["the ISR header test swapped for a look-alike", "^x-nextjs-cache:", "^x-powered-by:"],
+  ["the MISS requirement relaxed to any x-nextjs-cache value", "[[:space:]]*MISS", ""],
   ["the failure no longer fails the job", "cat dev-server.log; exit 1", "cat dev-server.log; exit 0"],
 ];
 /** The time one row's run is allowed under load, in ms: the tests' timeouts are derived from it and the row count, so a row
