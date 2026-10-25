@@ -201,7 +201,7 @@ describe.skipIf(!HAS_DB)("the Arbiter Panel's playing phase draws the D17 re-ope
     expect(before).toContain('data-phase="playing"');
     expect(before).not.toContain('data-testid="arbiter-checkin-hero"');
 
-    // The status card says where EVERY board is (residual round): the re-armed board has no result, so it is WAITING TO REOPEN and not
+    // The status card says where EVERY board is (residual round): the re-armed board has no result, so it is WAITING TO RESTART CHECK-IN and not
     // finished, and the printed counts add up to the boards the seed built. The expected numbers are the seed's: `fixtures` boards, every
     // one but the re-armed one decided on the pad. Nothing here is read back from `playingTally`.
     const built = state.seed.fixtures;
@@ -211,7 +211,7 @@ describe.skipIf(!HAS_DB)("the Arbiter Panel's playing phase draws the D17 re-ope
     const words = (key: string, n: number, vars?: Record<string, string | number>) => pluralRuntime(enUi as unknown as Dict, key, n, "en", vars);
     expect(said("arbiter-column-playing")).toBe(words("arbiter.column.playing", built, { count: 0, total: built }));
     expect(said("arbiter-column-finished"), "only the decided boards are finished").toBe(decided === 0 ? null : words("arbiter.column.finished", decided));
-    expect(said("arbiter-column-reopen-waiting"), "the re-armed board waits").toBe(words("arbiter.column.waitingToReopen", 1));
+    expect(said("arbiter-column-reopen-waiting"), "the re-armed board waits").toBe(words("arbiter.column.waitingToRestart", 1));
     expect(said("arbiter-column-onhold")).toBeNull();
     const num = (id: string) => (said(id) === null ? 0 : Number(/^\d+/.exec(said(id)!)![0]));
     expect(
@@ -264,7 +264,7 @@ describe.skipIf(!HAS_DB)("the Arbiter Panel's playing phase draws the D17 re-ope
     expect(h).not.toContain('data-testid="arbiter-column-reinvite"');
     expect(h).toContain('data-testid="arbiter-column-reinvite-notice"');
     expect(h).toContain(pluralRuntime(enUi as unknown as Dict, "externalPlay.openRound.invited", 2, "en"));
-    expect(h, "checking in again: the board is not waiting to reopen any more").not.toContain('data-testid="arbiter-column-reopen-waiting"');
+    expect(h, "checking in again: the board is not waiting to restart check-in any more").not.toContain('data-testid="arbiter-column-reopen-waiting"');
   });
 
   it("the empty pair: a game MAY be on file (a create marker), so the reader names nothing and the playing status draws no press", async () => {

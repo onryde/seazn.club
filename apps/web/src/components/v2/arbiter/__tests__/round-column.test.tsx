@@ -2442,11 +2442,11 @@ describe("RoundColumn: the playing status offers the round on screen's own press
     };
   };
 
-  it("the card says where EVERY board is: 0 playing, 2 finished, 1 waiting to reopen, and the counts add up to the 3 boards built", () => {
+  it("the card says where EVERY board is: 0 playing, 2 finished, 1 waiting to restart check-in, and the counts add up to the 3 boards built", () => {
     const h = playingColumn(REARMED(), { data: DATA({ views: [OWN("reopen")] }) });
     expect(textIn(h, "arbiter-column-playing")).toBe(esc(pl("arbiter.column.playing", 3, { count: 0, total: 3 })));
     expect(textIn(h, "arbiter-column-finished"), "the re-armed board is not among the finished").toBe(esc(pl("arbiter.column.finished", 2)));
-    expect(textIn(h, WAITING)).toBe(esc(pl("arbiter.column.waitingToReopen", 1)));
+    expect(textIn(h, WAITING)).toBe(esc(pl("arbiter.column.waitingToRestart", 1)));
     // The numbers are the boards BUILT (3: none playing, 2 decided, 1 owed its invite), and the printed counts add up to them.
     const t = printed(h);
     expect(t).toEqual({ playing: 0, finished: 2, held: 0, waiting: 1, total: REARMED().length });
@@ -2458,7 +2458,7 @@ describe("RoundColumn: the playing status offers the round on screen's own press
     const card = status(h);
     const order = ["arbiter-column-playing", "arbiter-column-finished", "arbiter-column-onhold", WAITING, "arbiter-column-reinvite"].map((id) => card.indexOf(ATTR(id)));
     expect(order.every((i) => i >= 0), "every line and the press are present").toBe(true);
-    expect(order, "playing, finished, on hold, waiting to reopen, then the press").toEqual([...order].sort((a, b) => a - b));
+    expect(order, "playing, finished, on hold, waiting to restart check-in, then the press").toEqual([...order].sort((a, b) => a - b));
     expect(card).not.toMatch(/<div class="[^"]*"><\/div>/);
     // And with a held board on screen the printed counts still account for all four boards built.
     const t = printed(h);
@@ -2498,9 +2498,9 @@ describe("RoundColumn: the playing status offers the round on screen's own press
     const two = playingColumn([over({ fixtureId: "f1" }), over({ fixtureId: "f2" }), over({ fixtureId: "f3" })], {
       data: DATA({ views: [OWN("reopen", { pairings: [P(1, { owedSeats: 2 }), P(2, { owedSeats: 1 })] })] }),
     });
-    expect(textIn(one, WAITING)).toBe(esc(pl("arbiter.column.waitingToReopen", 1)));
-    expect(textIn(two, WAITING)).toBe(esc(pl("arbiter.column.waitingToReopen", 2)));
-    expect(pl("arbiter.column.waitingToReopen", 1), "anti-vacuity: the two forms differ").not.toBe(pl("arbiter.column.waitingToReopen", 2));
+    expect(textIn(one, WAITING)).toBe(esc(pl("arbiter.column.waitingToRestart", 1)));
+    expect(textIn(two, WAITING)).toBe(esc(pl("arbiter.column.waitingToRestart", 2)));
+    expect(pl("arbiter.column.waitingToRestart", 1), "anti-vacuity: the two forms differ").not.toBe(pl("arbiter.column.waitingToRestart", 2));
     // One board decided is the only finished one beside one waiting; two waiting leave one finished.
     expect(textIn(one, "arbiter-column-finished")).toBe(esc(pl("arbiter.column.finished", 1)));
     expect(textIn(two, "arbiter-column-finished")).toBe(esc(pl("arbiter.column.finished", 1)));
@@ -2509,7 +2509,7 @@ describe("RoundColumn: the playing status offers the round on screen's own press
   it("a round whose every board is waiting prints no finished clause (an empty cell is not information) but the waiting one", () => {
     const h = playingColumn([over({ fixtureId: "f1" })], { data: DATA({ views: [OWN("reopen", { pairings: [P(1, { owedSeats: 2 })] })] }) });
     expect(h).not.toContain(ATTR("arbiter-column-finished"));
-    expect(textIn(h, WAITING)).toBe(esc(pl("arbiter.column.waitingToReopen", 1)));
+    expect(textIn(h, WAITING)).toBe(esc(pl("arbiter.column.waitingToRestart", 1)));
     expect(textIn(h, "arbiter-column-playing")).toBe(esc(pl("arbiter.column.playing", 1, { count: 0, total: 1 })));
   });
 
@@ -2523,8 +2523,8 @@ describe("RoundColumn: the playing status offers the round on screen's own press
       );
     const one = render([P(1, { owedSeats: 2 })]);
     const two = render([P(1, { owedSeats: 2 }), P(2, { owedSeats: 2 })]);
-    expect(textIn(one, WAITING), locale).toBe(esc(d["arbiter.column.waitingToReopen.one"]!.replaceAll("{count}", "1")));
-    expect(textIn(two, WAITING), locale).toBe(esc(d["arbiter.column.waitingToReopen.other"]!.replaceAll("{count}", "2")));
-    if (locale !== "en") expect(d["arbiter.column.waitingToReopen.other"], `${locale}: premise, translated`).not.toBe(en["arbiter.column.waitingToReopen.other"]);
+    expect(textIn(one, WAITING), locale).toBe(esc(d["arbiter.column.waitingToRestart.one"]!.replaceAll("{count}", "1")));
+    expect(textIn(two, WAITING), locale).toBe(esc(d["arbiter.column.waitingToRestart.other"]!.replaceAll("{count}", "2")));
+    if (locale !== "en") expect(d["arbiter.column.waitingToRestart.other"], `${locale}: premise, translated`).not.toBe(en["arbiter.column.waitingToRestart.other"]);
   });
 });

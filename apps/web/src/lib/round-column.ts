@@ -252,7 +252,7 @@ export const ROUND_COLUMN_KEYS: readonly ColumnKey[] = [
   "arbiter.column.reviewThis",
   "arbiter.column.toFixtures",
   "arbiter.column.waiting",
-  "arbiter.column.waitingToReopen",
+  "arbiter.column.waitingToRestart",
   "arbiter.flagCount",
   "arbiter.invite.help",
   "arbiter.notice.settleOwnBoard",

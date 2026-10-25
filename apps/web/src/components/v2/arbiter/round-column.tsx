@@ -156,7 +156,7 @@ export function RoundColumn(p: RoundColumnProps) {
       plural,
       buttonClass: `${BUTTON_PRIMARY} py-2 text-balance`,
     });
-    // The boards the press would invite are, on screen, over without a result: the card counts them as WAITING TO REOPEN, not finished.
+    // The boards the press would invite are, on screen, over without a result: the card counts them as WAITING TO RESTART CHECK-IN, not finished.
     const owed = boardsOwedAnInvite(own.owedView);
     // Primary needs every board on screen over. With no board on screen at all (a round whose every board is the organiser's own)
     // the empty set would satisfy "every board is over" vacuously, and nobody can say it is: `total > 0` keeps the press quiet.
@@ -212,7 +212,7 @@ export function RoundColumn(p: RoundColumnProps) {
  *  round bar the panel hands over (its why line and last answer: C13). A round with no board on screen (every board is the
  *  organiser's own) prints no count at all - never "0 of 0" - and keeps the heading and the bar. A zero finished clause is not
  *  printed (desk _RULES: an empty cell is not information). The count agrees with the TOTAL ("1 of 1 board"). `owed` is the boards the
- *  round's own press would still invite: the ones of them that are over on screen are "waiting to reopen", not finished (D17), so playing,
+ *  round's own press would still invite: the ones of them that are over on screen are "waiting to restart check-in", not finished (D17), so playing,
  *  finished, on hold and waiting add up to the total. */
 function PlayingStatus({ round, roundExtend, owed, children }: { round: ArbiterRound; roundExtend: ReactNode; owed: ReadonlySet<string>; children?: ReactNode }) {
   const msg = useMsg();
@@ -243,7 +243,7 @@ function PlayingStatus({ round, roundExtend, owed, children }: { round: ArbiterR
               and the next round's warning ("Round 1 still has a game in play") would contradict the card. */}
           {waiting > 0 && (
             <p data-testid="arbiter-column-reopen-waiting" className={`m-0 text-sm ${MUTED}`}>
-              {plural("arbiter.column.waitingToReopen", waiting)}
+              {plural("arbiter.column.waitingToRestart", waiting)}
             </p>
           )}
         </div>

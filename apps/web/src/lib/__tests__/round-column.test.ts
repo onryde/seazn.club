@@ -542,7 +542,7 @@ describe("the held count: a round's tally says where EVERY board is (Task 16 D7)
     expect(t.held, "premise: a held board is on screen").toBe(1);
   });
 
-  it("the same identity with a board WAITING TO REOPEN (D17: no result, owed its invite): playing + finished + held + waiting + checking in = total", () => {
+  it("the same identity with a board WAITING TO RESTART CHECK-IN (D17: no result, owed its invite): playing + finished + held + waiting + checking in = total", () => {
     const rearmed = withState({ kind: "result", score: null, noResult: true });
     const boards = [
       withState({ kind: "live", moveNo: 2 }),
@@ -572,7 +572,7 @@ describe("the held count: a round's tally says where EVERY board is (Task 16 D7)
   });
 });
 
-// ---- boards waiting to reopen (final review, residual round: the D17 tally) --------------------------------------
+// ---- boards waiting to restart check-in (final review, residual round: the D17 tally) --------------------------------------
 
 const pairingOf = (fixtureId: string, owedSeats: 0 | 1 | 2): OpenRoundPairing => ({
   fixtureId,
@@ -598,7 +598,7 @@ describe("boardsOwedAnInvite: the boards a round's press would still invite (pai
   });
 });
 
-describe("playingTally: a board waiting to reopen has no result, so it is not finished (D17)", () => {
+describe("playingTally: a board waiting to restart check-in has no result, so it is not finished (D17)", () => {
   const overBoard = () => withState({ kind: "result", score: null, noResult: true });
 
   it("empty owed set (the default): waiting is 0 and every over board is finished, as before", () => {
