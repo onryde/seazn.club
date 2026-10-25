@@ -20,6 +20,8 @@ const pageAuth = vi.hoisted(() => ({ requireDivisionPage: vi.fn() }));
 const division = vi.hoisted(() => ({ sport_key: "boardgame", onlinePlay: "off" as "off" | "lichess" }));
 const fx = vi.hoisted(() => ({ rows: [] as Record<string, unknown>[] }));
 const flags = vi.hoisted(() => ({ isServerFeatureEnabled: vi.fn() }));
+// The division's resolved venue zone, as `getScheduleSettings` serves it (the division's own override, else the club's).
+const schedule = vi.hoisted(() => ({ tz: "UTC" }));
 const queue = vi.hoisted(() => ({
   listNeedsOrganiserExternalPlay: vi.fn(),
   listFlaggedExternalPlay: vi.fn(),
@@ -67,7 +69,7 @@ vi.mock("@/server/usecases/fixtures", () => ({
 }));
 vi.mock("@/server/usecases/entrants", () => ({ listEntrants: vi.fn(async () => []) }));
 vi.mock("@/server/usecases/schedule", () => ({
-  getScheduleSettings: vi.fn(async () => ({ config: {}, tz: "UTC" })),
+  getScheduleSettings: vi.fn(async () => ({ config: {}, tz: schedule.tz })),
 }));
 vi.mock("@/lib/entitlements", () => ({
   hasFeature: vi.fn(async () => true),
@@ -177,6 +179,7 @@ const ROW = {
 beforeEach(() => {
   division.sport_key = "boardgame";
   division.onlinePlay = "off";
+  schedule.tz = "UTC";
   fx.rows = [];
   pageAuth.requireDivisionPage.mockReset().mockResolvedValue(PAGE);
   queue.listOpenRounds.mockReset().mockResolvedValue([]);
@@ -301,6 +304,26 @@ describe("division page: the online-chess flag's answer reaches the islands", ()
     expect(queues).toHaveLength(1);
     expect((queues[0]!.props as { held: unknown }).held).toEqual([]);
     expect(flags.isServerFeatureEnabled).not.toHaveBeenCalled();
+  });
+
+  // Owner ruling 2026-10-25 (follow-up to the Arbiter Panel's D1): the queue reads its times in the VENUE's zone, so the page must hand it
+  // the division's resolved venue zone - the same `scheduleSettings.tz` its StagesPanel gets - and not the club's zone (the page's
+  // `org.timezone` is "UTC" here) and not a constant. A prop the page never sets would leave the queue on the viewer's clock.
+  it("the queue is handed the division's venue zone: the schedule's zone, not the club's, and the same one the stage cards get", async () => {
+    let checked = 0;
+    for (const tz of ["Asia/Tokyo", "Pacific/Auckland"]) {
+      schedule.tz = tz;
+      flagIs(FLAG_STATES[0]!);
+      const tree = await renderPage("fixtures");
+      const queues = findAll(tree, ExternalPlayNeedsResultQueue);
+      expect(queues, `${tz}: the queue mounted once`).toHaveLength(1);
+      expect((queues[0]!.props as { venueTz: unknown }).venueTz, `${tz}: the queue's venue zone`).toBe(tz);
+      expect(PAGE.org.timezone, "premise: the club's zone is not the venue's").not.toBe(tz);
+      const panels = findAll(tree, StagesPanel);
+      expect((panels[0]!.props as { tz: unknown }).tz, `${tz}: the stage cards read the same zone`).toBe(tz);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: two venues").toBe(2);
   });
 
   it("T16 — not chess, or a viewer: no queue, no entry card, and none of the three reads", async () => {

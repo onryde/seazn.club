@@ -69,7 +69,7 @@ function flaggedBoard(over: Partial<FlaggedBoard> & Pick<FlaggedBoard, "fixtureI
 function render(props: Partial<ExternalPlayQueueProps>, locale: Locale = "en"): string {
   return renderToStaticMarkup(
     <DictProvider dict={LOCALES[locale] as unknown as Dict} locale={locale}>
-      <ExternalPlayNeedsResultQueue held={[]} flagged={[]} ownFlagged={0} {...props} />
+      <ExternalPlayNeedsResultQueue held={[]} flagged={[]} ownFlagged={0} venueTz="UTC" {...props} />
     </DictProvider>,
   );
 }

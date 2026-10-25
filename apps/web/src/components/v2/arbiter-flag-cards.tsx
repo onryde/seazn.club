@@ -39,8 +39,8 @@ export type Fmt = {
   list(items: string[]): string;
 };
 
-/** `venueTz`: the zone every time of day is read in (the arbiter panel passes the venue's, Task 16 D1). Left out, times are the viewer's
- *  own and carry no label (the organiser queue, which has no venue to name). */
+/** `venueTz`: the zone every time of day is read in (the arbiter panel and the Fixtures tab's online queue pass the venue's, Task 16 D1 and
+ *  the owner's 2026-10-25 ruling). Left out, times are the viewer's own and carry no label (a caller that draws no time of day). */
 export function useFmt(nowMs: number | null, venueTz?: string): Fmt {
   const t = useT();
   const plural = usePlural();
