@@ -2121,15 +2121,31 @@ export interface GenerateOutcome {
  */
 // Fixture-shape changes (generation, stage completion) must refresh the public
 // dashboard's ISR pages just like scoring writes do (doc 09 §3).
+//
+// AWAIT it, at every call site (stage-revalidate-settles.test.ts reads the file
+// for a bare one). It looks the stage up and only THEN calls
+// `fireDivisionRevalidate`, so a `void`ed call is a tag revalidation made after
+// the request has flushed its revalidations: Next 16 drops it silently and the
+// public pages stay stale for the cache entry's whole life. It also outlives the
+// write that asked for it, which landed it in a later test's window as the CI
+// flake of run 40233887793.
+//
+// Best-effort: the write it follows has already committed, so a failed lookup is
+// logged and swallowed, never turned into the caller's failure - and never left
+// as an unhandled rejection, which is what a `void`ed one became.
 async function fireStageRevalidate(orgId: string, stageId: string): Promise<void> {
-  const row = await withTenant(orgId, async (tx) => {
-    const [r] = await tx<{ division_id: string; competition_id: string }[]>`
-      select s.division_id, d.competition_id
-      from stages s join divisions d on d.id = s.division_id
-      where s.id = ${stageId}`;
-    return r ?? null;
-  });
-  if (row) fireDivisionRevalidate(row.division_id, row.competition_id);
+  try {
+    const row = await withTenant(orgId, async (tx) => {
+      const [r] = await tx<{ division_id: string; competition_id: string }[]>`
+        select s.division_id, d.competition_id
+        from stages s join divisions d on d.id = s.division_id
+        where s.id = ${stageId}`;
+      return r ?? null;
+    });
+    if (row) fireDivisionRevalidate(row.division_id, row.competition_id);
+  } catch (err) {
+    log.warn({ event: "stage_revalidate_failed", stageId, err: String(err) }, "stage write committed, but its public-page revalidation could not be fired");
+  }
 }
 
 /** A generate's committed write (R10e): the wire outcome, plus the division
@@ -2428,7 +2444,7 @@ export async function unpairSwissRound(
   // the next scored match — Dan after Unpair R3. Fold from the cleared rows.
   await recomputeStandings(auth.orgId, stageId);
 
-  void fireStageRevalidate(auth.orgId, stageId);
+  await fireStageRevalidate(auth.orgId, stageId);
   afterScheduleWrite(write.divisionId, write.competitionId, "schedule", []);
   return { cleared: write.cleared, round: write.round };
 }
@@ -2501,7 +2517,7 @@ async function generateStageFixturesWrite(
     if (pre?.seeded) {
       const write = await generateProgressionSetupFixtures(auth, stageId);
       const outcome = write.outcome;
-      void fireStageRevalidate(auth.orgId, stageId);
+      await fireStageRevalidate(auth.orgId, stageId);
       if (outcome.created > 0) {
         await captureServer({
           event: EVENTS.SCHEDULE_GENERATED,
@@ -3017,7 +3033,7 @@ async function generateStageFixturesWrite(
   if ((write.swissSeatedCount ?? 0) > 0) {
     await recomputeStandings(auth.orgId, stageId);
   }
-  void fireStageRevalidate(auth.orgId, stageId);
+  await fireStageRevalidate(auth.orgId, stageId);
   // Activation funnel (feature 1): fixtures exist → the tournament is playable.
   if (outcome.created > 0) {
     await captureServer({
@@ -4683,7 +4699,7 @@ async function progressCompletedStage(
   });
   const nextProgression = next?.progression as (ProgressionSpec & { timing: "setup" | "on_complete" }) | null | undefined;
 
-  void fireStageRevalidate(auth.orgId, stageId);
+  await fireStageRevalidate(auth.orgId, stageId);
 
   if (nextProgression?.timing === "setup") {
     // Best-effort, same spirit as the on_complete path's generation step
@@ -5840,7 +5856,7 @@ export async function confirmSeedProposal(
     { event: "stage_seeded", stageId, proposalId: input.proposalId, edits: input.edits?.length ?? 0 },
     "stage_seeded",
   );
-  void fireStageRevalidate(auth.orgId, stageId);
+  await fireStageRevalidate(auth.orgId, stageId);
   // R10g (review-r10f G1): the confirm names entrants into the bracket, and the
   // hub and each filled fixture's match centre show those names. So after the
   // commit, ONE `afterScheduleWrite` drops the hub key plus exactly the
