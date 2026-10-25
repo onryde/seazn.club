@@ -108,51 +108,59 @@ describe("parseEpochFloorOverride — accepted shapes", () => {
 
 describe("parseEpochFloorOverride — FAILS CLOSED: every malformed value throws, naming the bad token", () => {
   const [A, B] = SPORTS as [string, string];
-  // [raw value, the token the message must name]. A typo must never become "no override", nor a wrong floor.
-  const BAD: [string, string, string][] = [
+  // Each KIND of failure says so in words, so a wrong branch (a missing `=` reported as an unknown sport) cannot hide behind a
+  // message that happens to contain the token.
+  const UNKNOWN = "unknown sport";
+  const NOT_INT = "is not an integer >= 1";
+  const DUP = "duplicate sport";
+  const EMPTY = "empty pair";
+  const NO_EQ = 'no "="';
+  // [what, raw value, the token the message must name, the kind of failure it must say]. A typo must never become "no override",
+  // nor a wrong floor.
+  const BAD: [string, string, string, string][] = [
     // unknown sport (an own-key check: Object.prototype names are NOT sports)
-    ["unknown sport", "footbal=2", "footbal"],
-    ["unknown sport, second pair", `${A}=2,quidditch=1`, "quidditch"],
-    ["case matters", "Football=2", "Football"],
-    ["empty sport name", "=2", "=2"],
-    ["constructor is not a sport", "constructor=1", "constructor"],
-    ["toString is not a sport", "toString=1", "toString"],
-    ["__proto__ is not a sport", "__proto__=1", "__proto__"],
-    ["hasOwnProperty is not a sport", "hasOwnProperty=1", "hasOwnProperty"],
+    ["unknown sport", "footbal=2", "footbal", UNKNOWN],
+    ["unknown sport, second pair", `${A}=2,quidditch=1`, "quidditch", UNKNOWN],
+    ["case matters", "Football=2", "Football", UNKNOWN],
+    ["empty sport name", "=2", "=2", UNKNOWN],
+    ["constructor is not a sport", "constructor=1", "constructor", UNKNOWN],
+    ["toString is not a sport", "toString=1", "toString", UNKNOWN],
+    ["__proto__ is not a sport", "__proto__=1", "__proto__", UNKNOWN],
+    ["hasOwnProperty is not a sport", "hasOwnProperty=1", "hasOwnProperty", UNKNOWN],
     // the epoch is an integer >= 1
-    ["zero", `${A}=0`, "0"],
-    ["negative", `${A}=-1`, "-1"],
-    ["fraction", `${A}=1.5`, "1.5"],
-    ["whole number written as a decimal", `${A}=2.0`, "2.0"],
-    ["words", `${A}=abc`, "abc"],
-    ["exponent", `${A}=1e1`, "1e1"],
-    ["hex", `${A}=0x2`, "0x2"],
-    ["explicit plus", `${A}=+2`, "+2"],
-    ["two numbers", `${A}=2 3`, "2 3"],
-    ["a second =", `${A}=2=3`, "2=3"],
-    ["leading zero", `${A}=02`, "02"],
-    ["Infinity", `${A}=Infinity`, "Infinity"],
-    ["NaN", `${A}=NaN`, "NaN"],
-    ["beyond the safe integers", `${A}=9007199254740993`, "9007199254740993"],
-    ["nothing after =", `${A}=`, `${A}=`],
-    ["the second pair's epoch", `${A}=2,${B}=x`, "x"],
+    ["zero", `${A}=0`, "0", NOT_INT],
+    ["negative", `${A}=-1`, "-1", NOT_INT],
+    ["fraction", `${A}=1.5`, "1.5", NOT_INT],
+    ["whole number written as a decimal", `${A}=2.0`, "2.0", NOT_INT],
+    ["words", `${A}=abc`, "abc", NOT_INT],
+    ["exponent", `${A}=1e1`, "1e1", NOT_INT],
+    ["hex", `${A}=0x2`, "0x2", NOT_INT],
+    ["explicit plus", `${A}=+2`, "+2", NOT_INT],
+    ["two numbers", `${A}=2 3`, "2 3", NOT_INT],
+    ["a second =", `${A}=2=3`, "2=3", NOT_INT],
+    ["leading zero", `${A}=02`, "02", NOT_INT],
+    ["Infinity", `${A}=Infinity`, "Infinity", NOT_INT],
+    ["NaN", `${A}=NaN`, "NaN", NOT_INT],
+    ["beyond the safe integers", `${A}=9007199254740993`, "9007199254740993", NOT_INT],
+    ["nothing after =", `${A}=`, `${A}=`, NOT_INT],
+    ["the second pair's epoch", `${A}=2,${B}=x`, "x", NOT_INT],
     // duplicates
-    ["same sport twice", `${A}=2,${A}=1`, A],
-    ["same sport twice, same value, spaced", `${A}=2 , ${A} = 2`, A],
+    ["same sport twice", `${A}=2,${A}=1`, A, DUP],
+    ["same sport twice, same value, spaced", `${A}=2 , ${A} = 2`, A, DUP],
     // empty pairs
-    ["trailing comma", `${A}=2,`, "empty"],
-    ["leading comma", `,${A}=2`, "empty"],
-    ["double comma", `${A}=2,,${B}=1`, "empty"],
-    ["only a comma", ",", "empty"],
-    ["comma and spaces", " , ", "empty"],
+    ["trailing comma", `${A}=2,`, "empty", EMPTY],
+    ["leading comma", `,${A}=2`, "empty", EMPTY],
+    ["double comma", `${A}=2,,${B}=1`, "empty", EMPTY],
+    ["only a comma", ",", "empty", EMPTY],
+    ["comma and spaces", " , ", "empty", EMPTY],
     // missing =
-    ["no =", A, A],
-    ["no =, second pair", `${A}=2,${B}`, B],
+    ["no =", A, A, NO_EQ],
+    ["no =, second pair", `${A}=2,${B}`, B, NO_EQ],
   ];
 
-  it("each case throws an Error whose message names the variable and the bad token", () => {
+  it("each case throws an Error whose message names the variable, the bad token and the KIND of failure", () => {
     let checked = 0;
-    for (const [what, raw, token] of BAD) {
+    for (const [what, raw, token, kind] of BAD) {
       let thrown: unknown;
       try {
         parseEpochFloorOverride(raw);
@@ -163,10 +171,12 @@ describe("parseEpochFloorOverride — FAILS CLOSED: every malformed value throws
       const message = (thrown as Error).message;
       expect(message, `${what}: names the variable`).toContain(ENGINE_EPOCH_FLOOR_OVERRIDE_ENV);
       expect(message, `${what}: names ${JSON.stringify(token)}`).toContain(token);
+      expect(message, `${what}: says ${JSON.stringify(kind)}`).toContain(kind);
       checked++;
     }
     expect(checked, "every bad value was thrown on").toBe(BAD.length);
     expect(checked).toBeGreaterThan(25);
+    expect(new Set(BAD.map((b) => b[3])).size, "all five kinds of failure are represented").toBe(5);
   });
 
   it("each KIND of failure reads differently to the person on call", () => {
