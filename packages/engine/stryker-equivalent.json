@@ -642,6 +642,420 @@
       "original": "rank > n",
       "line": "if (rank < 1 || rank > n || out[rank - 1] !== null) {",
       "reason": "A rank above n reads `out[rank - 1]` past the array's end, which is undefined, so `out[rank - 1] !== null` throws the same CONFIG_INVALID without it (competition/points-md1.test.ts, 'a lock outside 1..n ...', rank n + 1)."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:83:10 OptionalChaining → fine.currentBowler",
+      "original": "fine?.currentBowler",
+      "line": "return fine?.currentBowler ?? fine?.prevOverBowler ?? null;",
+      "reason": "`fine` here is the FineInnings of an innings a delivery just folded; the only creators of a fine innings are a cricket.ball (createInnings 'fine') and a super-over ball (freshFine), so it is never null/undefined and `?.` reads the same value as `.`. creditedBowler is called only from onBall with that innings."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:83:33 OptionalChaining → fine.prevOverBowler",
+      "original": "fine?.prevOverBowler",
+      "line": "return fine?.currentBowler ?? fine?.prevOverBowler ?? null;",
+      "reason": "`fine` here is the FineInnings of an innings a delivery just folded; the only creators of a fine innings are a cricket.ball (createInnings 'fine') and a super-over ball (freshFine), so it is never null/undefined and `?.` reads the same value as `.`. creditedBowler is called only from onBall with that innings."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:102:10 ConditionalExpression → true",
+      "original": "typeof payload === \"object\" && payload !== null && \"runs\" in payload && typeof payload.runs === \"object\"",
+      "line": "return typeof payload === \"object\" && payload !== null && \"runs\" in payload && typeof payload.runs === \"object\";",
+      "reason": "onBall's `if (!isCricketBallPayload(...)) return` guard is dead code for real folds: every cricket.ball / cricket.superover.ball the kernel hands to observe was first parsed by cricket.apply's parsePayload(CricketBall, ...) (a strictObject whose `runs` is an object), so the guard is true for every payload that reaches it and each mutant evaluates to the same true."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:102:10 LogicalOperator → typeof payload === \"object\" && payload !== null && \"runs\" in payload || typeof payload.runs === \"object\"",
+      "original": "typeof payload === \"object\" && payload !== null && \"runs\" in payload && typeof payload.runs === \"object\"",
+      "line": "return typeof payload === \"object\" && payload !== null && \"runs\" in payload && typeof payload.runs === \"object\";",
+      "reason": "onBall's `if (!isCricketBallPayload(...)) return` guard is dead code for real folds: every cricket.ball / cricket.superover.ball the kernel hands to observe was first parsed by cricket.apply's parsePayload(CricketBall, ...) (a strictObject whose `runs` is an object), so the guard is true for every payload that reaches it and each mutant evaluates to the same true."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:102:10 LogicalOperator → typeof payload === \"object\" && payload !== null || \"runs\" in payload",
+      "original": "typeof payload === \"object\" && payload !== null && \"runs\" in payload && typeof payload.runs === \"object\"",
+      "line": "return typeof payload === \"object\" && payload !== null && \"runs\" in payload && typeof payload.runs === \"object\";",
+      "reason": "onBall's `if (!isCricketBallPayload(...)) return` guard is dead code for real folds: every cricket.ball / cricket.superover.ball the kernel hands to observe was first parsed by cricket.apply's parsePayload(CricketBall, ...) (a strictObject whose `runs` is an object), so the guard is true for every payload that reaches it and each mutant evaluates to the same true."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:102:10 LogicalOperator → typeof payload === \"object\" || payload !== null",
+      "original": "typeof payload === \"object\" && payload !== null && \"runs\" in payload && typeof payload.runs === \"object\"",
+      "line": "return typeof payload === \"object\" && payload !== null && \"runs\" in payload && typeof payload.runs === \"object\";",
+      "reason": "onBall's `if (!isCricketBallPayload(...)) return` guard is dead code for real folds: every cricket.ball / cricket.superover.ball the kernel hands to observe was first parsed by cricket.apply's parsePayload(CricketBall, ...) (a strictObject whose `runs` is an object), so the guard is true for every payload that reaches it and each mutant evaluates to the same true."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:102:41 ConditionalExpression → true",
+      "original": "payload !== null && \"runs\" in payload && typeof payload.runs === \"object\"",
+      "line": "return typeof payload === \"object\" && payload !== null && \"runs\" in payload && typeof payload.runs === \"object\";",
+      "reason": "onBall's `if (!isCricketBallPayload(...)) return` guard is dead code for real folds: every cricket.ball / cricket.superover.ball the kernel hands to observe was first parsed by cricket.apply's parsePayload(CricketBall, ...) (a strictObject whose `runs` is an object), so the guard is true for every payload that reaches it and each mutant evaluates to the same true."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:102:82 ConditionalExpression → true",
+      "original": "typeof payload.runs === \"object\"",
+      "line": "return typeof payload === \"object\" && payload !== null && \"runs\" in payload && typeof payload.runs === \"object\";",
+      "reason": "onBall's `if (!isCricketBallPayload(...)) return` guard is dead code for real folds: every cricket.ball / cricket.superover.ball the kernel hands to observe was first parsed by cricket.apply's parsePayload(CricketBall, ...) (a strictObject whose `runs` is an object), so the guard is true for every payload that reaches it and each mutant evaluates to the same true."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:119:10 StringLiteral → \"\"",
+      "original": "\"wide\"",
+      "line": "case \"wide\":",
+      "reason": "The `default` branch returns { kind: extras.kind, runs } and for extras.kind === 'wide' that is the very object the 'wide' case returns, so emptying the label routes wides to an identical result."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:121:5 ConditionalExpression → case \"noball\":",
+      "original": "case \"noball\":",
+      "line": "case \"noball\":",
+      "reason": "The `default` branch returns { kind: extras.kind, runs } and for extras.kind === 'noball' that is the very object the 'noball' case returns, so dropping the case routes no-balls to an identical result."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:121:10 StringLiteral → \"\"",
+      "original": "\"noball\"",
+      "line": "case \"noball\":",
+      "reason": "The `default` branch returns { kind: extras.kind, runs } and for extras.kind === 'noball' that is the very object the 'noball' case returns, so a label that never matches routes no-balls to an identical result."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:180:44 ArrayDeclaration → [\"Stryker was here\"]",
+      "original": "[]",
+      "line": "private hasBallEventByIndex: boolean[] = [];",
+      "reason": "hasBallEventByIndex is only ever read as `=== true` at its own index and written `[index] = true` by onBall; ensure() pushes `false`, so a stray string at slot 0 is never `true` and the readers cannot tell it from an empty array."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:244:42 ArrayDeclaration → [\"Stryker was here\"]",
+      "original": "[]",
+      "line": "private availableByIndex: string[][] = [];",
+      "reason": "availableByIndex[index] is assigned by onFolded for every main innings on every event until the innings closes, and card() reads it only for an innings present in the final state (so assigned); the seeded element at slot 0 is always overwritten before any read, and super-over/coarse cards never read it (`fine === null || isSuperOver ? []`)."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:245:47 ArrayDeclaration → [\"Stryker was here\"]",
+      "original": "[]",
+      "line": "private availableFrozenByIndex: boolean[] = [];",
+      "reason": "availableFrozenByIndex is only read as `=== true`; the seeded string at slot 0 is not `true`, so the reader cannot tell it from an empty array."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:265:37 BooleanLiteral → true",
+      "original": "false",
+      "line": "this.hasBallEventByIndex.push(false);",
+      "reason": "ensure() pre-fills hasBallEventByIndex for lower slots; it is read only in card() as `hasBallEventByIndex[index] === true && fine !== null`. A slot without a ball event is a coarse innings (fine === null, so extras stays null) because a fine innings can only be created by a ball (createInnings 'fine' in cricket.ball, freshFine in a super-over ball), and onBall sets its own slot true anyway."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:323:13 OptionalChaining → memberOf(squads[side], person).onField",
+      "original": "memberOf(squads[side], person)?.onField",
+      "line": "!(memberOf(squads[side], person)?.onField === false && this.lastDeparture[side].get(person) === \"swapped\"),",
+      "reason": "`state.orders` and the kernel squads are both built from the same LineupPair and withArrivals appends every arrival to orders from the squad, so every person in orders has a squad member and memberOf never returns undefined here; `?.` reads the same value as `.`."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:333:9 ConditionalExpression → false",
+      "original": "!isLineupEventType(ev.type)",
+      "line": "if (!isLineupEventType(ev.type)) return;",
+      "reason": "Without the early return a non-lineup event falls to the payload checks; none of the other event payloads is an object with a string `side` that sideOf resolves, and the two branches below only act on SWAPPED_OFF / RETIRED_OFF types, so a non-lineup event records nothing either way."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:335:9 ConditionalExpression → false",
+      "original": "typeof payload !== \"object\" || payload === null",
+      "line": "if (typeof payload !== \"object\" || payload === null) return;",
+      "reason": "noteDeparture is reached for a lineup event only after the kernel parsed its payload (an invalid or null payload throws EngineError 'invalid core.lineup.* payload' before the observer runs, probed with null and {side:5} as the first event), so the payload is always a non-null object here and the object/null guard never fires."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:335:9 LogicalOperator → typeof payload !== \"object\" && payload === null",
+      "original": "typeof payload !== \"object\" || payload === null",
+      "line": "if (typeof payload !== \"object\" || payload === null) return;",
+      "reason": "noteDeparture is reached for a lineup event only after the kernel parsed its payload (an invalid or null payload throws EngineError 'invalid core.lineup.* payload' before the observer runs, probed with null and {side:5} as the first event), so the payload is always a non-null object here and the object/null guard never fires."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:335:40 ConditionalExpression → false",
+      "original": "payload === null",
+      "line": "if (typeof payload !== \"object\" || payload === null) return;",
+      "reason": "noteDeparture is reached for a lineup event only after the kernel parsed its payload (an invalid or null payload throws EngineError 'invalid core.lineup.* payload' before the observer runs, probed with null and {side:5} as the first event), so the payload is always a non-null object here and the object/null guard never fires."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:336:9 ConditionalExpression → false",
+      "original": "!(\"side\" in payload) || typeof payload.side !== \"string\"",
+      "line": "if (!(\"side\" in payload) || typeof payload.side !== \"string\") return;",
+      "reason": "Dropping the `side`-is-a-string guard only lets an absent/non-string side reach sideOf(squads, side), which compares it to the two entrant ids with === and returns null, hitting the same return on the next line; every lineup payload the kernel accepts carries a string `side` anyway."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:336:9 LogicalOperator → !(\"side\" in payload) && typeof payload.side !== \"string\"",
+      "original": "!(\"side\" in payload) || typeof payload.side !== \"string\"",
+      "line": "if (!(\"side\" in payload) || typeof payload.side !== \"string\") return;",
+      "reason": "Dropping the `side`-is-a-string guard only lets an absent/non-string side reach sideOf(squads, side), which compares it to the two entrant ids with === and returns null, hitting the same return on the next line; every lineup payload the kernel accepts carries a string `side` anyway."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:336:33 ConditionalExpression → false",
+      "original": "typeof payload.side !== \"string\"",
+      "line": "if (!(\"side\" in payload) || typeof payload.side !== \"string\") return;",
+      "reason": "Dropping the `side`-is-a-string guard only lets an absent/non-string side reach sideOf(squads, side), which compares it to the two entrant ids with === and returns null, hitting the same return on the next line; every lineup payload the kernel accepts carries a string `side` anyway."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:339:9 ConditionalExpression → true",
+      "original": "SWAPPED_OFF.has(ev.type) && \"off\" in payload && typeof payload.off === \"string\"",
+      "line": "if (SWAPPED_OFF.has(ev.type) && \"off\" in payload && typeof payload.off === \"string\") {",
+      "reason": "The only lineup payloads with an `off` key are substitution and replacement (core/lineup.ts schemas), exactly SWAPPED_OFF; widening the test lets retirement/position/entry events call lastDeparture[side].set(undefined, 'swapped'), a key no reader ever asks for, so the Map reads identically."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:339:9 LogicalOperator → SWAPPED_OFF.has(ev.type) && \"off\" in payload || typeof payload.off === \"string\"",
+      "original": "SWAPPED_OFF.has(ev.type) && \"off\" in payload && typeof payload.off === \"string\"",
+      "line": "if (SWAPPED_OFF.has(ev.type) && \"off\" in payload && typeof payload.off === \"string\") {",
+      "reason": "The only lineup payloads with an `off` key are substitution and replacement (core/lineup.ts schemas), exactly SWAPPED_OFF; widening the test lets retirement/position/entry events call lastDeparture[side].set(undefined, 'swapped'), a key no reader ever asks for, so the Map reads identically."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:339:9 LogicalOperator → SWAPPED_OFF.has(ev.type) || \"off\" in payload",
+      "original": "SWAPPED_OFF.has(ev.type) && \"off\" in payload && typeof payload.off === \"string\"",
+      "line": "if (SWAPPED_OFF.has(ev.type) && \"off\" in payload && typeof payload.off === \"string\") {",
+      "reason": "The only lineup payloads with an `off` key are substitution and replacement (core/lineup.ts schemas), exactly SWAPPED_OFF; widening the test lets retirement/position/entry events call lastDeparture[side].set(undefined, 'swapped'), a key no reader ever asks for, so the Map reads identically."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:339:57 ConditionalExpression → true",
+      "original": "typeof payload.off === \"string\"",
+      "line": "if (SWAPPED_OFF.has(ev.type) && \"off\" in payload && typeof payload.off === \"string\") {",
+      "reason": "Both SWAPPED_OFF payloads (LineupSubstitution, LineupReplacement) declare `off` as a non-empty string, so the typeof check is true whenever `\"off\" in payload` is."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:342:9 ConditionalExpression → true",
+      "original": "ev.type === RETIRED_OFF && \"personId\" in payload && typeof payload.personId === \"string\"",
+      "line": "if (ev.type === RETIRED_OFF && \"personId\" in payload && typeof payload.personId === \"string\") {",
+      "reason": "The mutated test additionally fires for events other than a retirement: a position change (the only other lineup payload with `personId`) marks a person 'retired' who is on the field by the kernel's own rule (a position change is refused for someone off), and lastDeparture is read only for persons with onField === false, whose next departure overwrites the entry; substitutions/entries just set the unread key undefined."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:342:9 LogicalOperator → ev.type === RETIRED_OFF && \"personId\" in payload || typeof payload.personId === \"string\"",
+      "original": "ev.type === RETIRED_OFF && \"personId\" in payload && typeof payload.personId === \"string\"",
+      "line": "if (ev.type === RETIRED_OFF && \"personId\" in payload && typeof payload.personId === \"string\") {",
+      "reason": "The mutated test additionally fires for events other than a retirement: a position change (the only other lineup payload with `personId`) marks a person 'retired' who is on the field by the kernel's own rule (a position change is refused for someone off), and lastDeparture is read only for persons with onField === false, whose next departure overwrites the entry; substitutions/entries just set the unread key undefined."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:342:9 LogicalOperator → ev.type === RETIRED_OFF || \"personId\" in payload",
+      "original": "ev.type === RETIRED_OFF && \"personId\" in payload && typeof payload.personId === \"string\"",
+      "line": "if (ev.type === RETIRED_OFF && \"personId\" in payload && typeof payload.personId === \"string\") {",
+      "reason": "The mutated test additionally fires for events other than a retirement: a position change (the only other lineup payload with `personId`) marks a person 'retired' who is on the field by the kernel's own rule (a position change is refused for someone off), and lastDeparture is read only for persons with onField === false, whose next departure overwrites the entry; substitutions/entries just set the unread key undefined."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:342:61 ConditionalExpression → true",
+      "original": "typeof payload.personId === \"string\"",
+      "line": "if (ev.type === RETIRED_OFF && \"personId\" in payload && typeof payload.personId === \"string\") {",
+      "reason": "LineupRetirement declares `personId` as a non-empty string, so the typeof check is true whenever `\"personId\" in payload` is."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:343:54 StringLiteral → \"\"",
+      "original": "\"retired\"",
+      "line": "this.lastDeparture[side].set(payload.personId, \"retired\");",
+      "reason": "lastDeparture values are only compared with `=== \"swapped\"`; any other value, '' included, is the same 'not swapped' answer as 'retired'."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:372:58 OptionalChaining → after.superOver.innings",
+      "original": "after.superOver?.innings",
+      "line": "const list: readonly InningsState[] = inSuperOver ? (after.superOver?.innings ?? []) : after.innings;",
+      "reason": "This branch runs for cricket.superover.ball only, which applySuperOverBall accepts only with state.superOver non-null (it throws wrongPhase otherwise), so superOver is never null/undefined here."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:372:86 ArrayDeclaration → [\"Stryker was here\"]",
+      "original": "[]",
+      "line": "const list: readonly InningsState[] = inSuperOver ? (after.superOver?.innings ?? []) : after.innings;",
+      "reason": "`after.superOver?.innings` is never nullish for a super-over ball (applySuperOverBall requires superOver), so the `?? []` fallback is never taken."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:375:9 ConditionalExpression → false",
+      "original": "innings === undefined",
+      "line": "if (innings === undefined) return;",
+      "reason": "After a folded ball the list the ball was routed to always has its innings (createInnings / applySuperOverBall append one), so the last entry is never undefined."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:379:9 ConditionalExpression → false",
+      "original": "!isCricketBallPayload(ev.payload)",
+      "line": "if (!isCricketBallPayload(ev.payload)) return;",
+      "reason": "onBall's `if (!isCricketBallPayload(...)) return` guard is dead code for real folds: every cricket.ball / cricket.superover.ball the kernel hands to observe was first parsed by cricket.apply's parsePayload(CricketBall, ...) (a strictObject whose `runs` is an object), so the guard is true for every payload that reaches it and each mutant evaluates to the same true."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:392:11 ConditionalExpression → true",
+      "original": "tally !== undefined",
+      "line": "if (tally !== undefined) {",
+      "reason": "ensure(index) ran two statements earlier and pushed a tally for every slot up to index, so extrasByIndex[index] is always defined."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:481:35 ArithmeticOperator → (this.overRunsByIndex[index] ?? 0) - charged",
+      "original": "(this.overRunsByIndex[index] ?? 0) + charged",
+      "line": "this.overRunsByIndex[index] = (this.overRunsByIndex[index] ?? 0) + charged;",
+      "reason": "The running over total is only ever compared `=== 0` (maiden check) and every charged amount is >= 0, so negating the increments gives a sum that is zero exactly when the original sum is zero."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:532:11 ConditionalExpression → true",
+      "original": "ending != null",
+      "line": "if (ending != null) {",
+      "reason": "The open partnership is created on the first ball of an innings (line 507) before this branch, and a null written by an earlier wicket is re-created by the next ball's line 507, so `ending` is never null/undefined when a wicket ball reaches here."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:563:26 OptionalChaining → innings.fine.prevOverBowler",
+      "original": "innings.fine?.prevOverBowler",
+      "line": "const overBowler = innings.fine?.prevOverBowler ?? null;",
+      "reason": "`fine` here is the FineInnings of an innings a delivery just folded; the only creators of a fine innings are a cricket.ball (createInnings 'fine') and a super-over ball (freshFine), so it is never null/undefined and `?.` reads the same value as `.`."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:617:9 ConditionalExpression → false",
+      "original": "innings === undefined",
+      "line": "if (innings === undefined) return;",
+      "reason": "applyRetire goes through requireOpenInnings, which throws unless an innings is open, so state.innings always has the last innings when cricket.retire reaches the observer."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:636:11 ConditionalExpression → true",
+      "original": "ending !== null",
+      "line": "if (ending !== null) {",
+      "reason": "A retirement needs an open innings with a ball already bowled; the open partnership is null only after a wicket with an empty end (super over only, where retire is not allowed) or in a closed innings, so `ending` is never null at a retire."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:646:9 LogicalOperator → !innings.closed || striker !== null",
+      "original": "!innings.closed && striker !== null && nonStriker !== null",
+      "line": "!innings.closed && striker !== null && nonStriker !== null",
+      "reason": "In the retire-out branch an end is null only when the retirement made the innings all out (applyRetire's else branch), and autoClose closes the innings on that same wicket, so `closed` and 'an end is null' coincide and either guard alone gives the same answer; the mutants that keep the `closed` test or tighten it are the ones tests kill."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:646:28 ConditionalExpression → true",
+      "original": "striker !== null",
+      "line": "!innings.closed && striker !== null && nonStriker !== null",
+      "reason": "An end of fine is null after a retire only when the retirement made the innings all out, which autoClose closes in the same step, so `!innings.closed` already excludes every case where this test could be false."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:646:48 ConditionalExpression → true",
+      "original": "nonStriker !== null",
+      "line": "!innings.closed && striker !== null && nonStriker !== null",
+      "reason": "An end of fine is null after a retire only when the retirement made the innings all out, which autoClose closes in the same step, so `!innings.closed` already excludes every case where this test could be false."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:657:9 ConditionalExpression → true",
+      "original": "open !== null && striker !== null && nonStriker !== null",
+      "line": "if (open !== null && striker !== null && nonStriker !== null) {",
+      "reason": "cricket.retire for a reason other than 'out' reaches here with an open innings that has had a ball, an open partnership (see 636) and both ends occupied (ends go null only on an all-out retire-out, which is the other branch), so all three conditions are always true and weakening them is unobservable."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:657:9 LogicalOperator → open !== null && striker !== null || nonStriker !== null",
+      "original": "open !== null && striker !== null && nonStriker !== null",
+      "line": "if (open !== null && striker !== null && nonStriker !== null) {",
+      "reason": "cricket.retire for a reason other than 'out' reaches here with an open innings that has had a ball, an open partnership (see 636) and both ends occupied (ends go null only on an all-out retire-out, which is the other branch), so all three conditions are always true and weakening them is unobservable."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:657:9 LogicalOperator → open !== null || striker !== null",
+      "original": "open !== null && striker !== null && nonStriker !== null",
+      "line": "if (open !== null && striker !== null && nonStriker !== null) {",
+      "reason": "cricket.retire for a reason other than 'out' reaches here with an open innings that has had a ball, an open partnership (see 636) and both ends occupied (ends go null only on an all-out retire-out, which is the other branch), so all three conditions are always true and weakening them is unobservable."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:657:26 ConditionalExpression → true",
+      "original": "striker !== null",
+      "line": "if (open !== null && striker !== null && nonStriker !== null) {",
+      "reason": "Both ends are occupied after a retire that is not 'out' (applyRetire seats a replacement or resumes a retiree, else throws 'batting order exhausted'), so this test is always true."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:657:46 ConditionalExpression → true",
+      "original": "nonStriker !== null",
+      "line": "if (open !== null && striker !== null && nonStriker !== null) {",
+      "reason": "Both ends are occupied after a retire that is not 'out' (applyRetire seats a replacement or resumes a retiree, else throws 'batting order exhausted'), so this test is always true."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:702:9 ConditionalExpression → false",
+      "original": "index < 0",
+      "line": "if (index < 0) return;",
+      "reason": "cricket.player.line is applied by applyPlayerLine against state.innings[payload.innings - 1] and refused when that innings does not exist, so payload.innings >= 1 and index >= 0 for every folded line."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:836:5 CallExpression → ;",
+      "original": "this.ensure(index);",
+      "line": "this.ensure(index);",
+      "reason": "card() reads the slot only through `?? emptyExtras()`, `=== true` and `?? []`; ensure() pushes exactly those defaults (empty tally, false), so skipping it leaves every read unchanged (onBall calls ensure itself before it writes)."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:849:52 ArrayDeclaration → [\"Stryker was here\"]",
+      "original": "[]",
+      "line": "const order = [...(this.orderByIndex[index] ?? [])];",
+      "reason": "orderByIndex[index] is read in card() only for the batting rows and didNotBat of a fine innings, and a fine innings has had a ball, which set orderByIndex[index]; a coarse innings never reads `order`."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:853:59 ArrayDeclaration → [\"Stryker was here\"]",
+      "original": "[]",
+      "line": "const bowlerOrder = this.bowlerOrderByIndex[index] ?? [];",
+      "reason": "bowlerOrderByIndex[index] is read only to mint the bowling rows of a fine innings, and a fine innings has had a ball, which set it; a coarse innings uses lineBowling instead."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:929:44 ArrayDeclaration → [\"Stryker was here\"]",
+      "original": "[]",
+      "line": ": (this.availableByIndex[index] ?? []).filter((person) => !atCrease.has(person));",
+      "reason": "availableByIndex[index] is assigned by onFolded for every main innings of the final state (see 244), and super-over and coarse cards take the `[]` branch before this, so the `?? []` fallback is never taken."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:954:9 ConditionalExpression → true",
+      "original": "this.hasBallEventByIndex[index] === true && fine !== null",
+      "line": "this.hasBallEventByIndex[index] === true && fine !== null",
+      "reason": "hasBallEventByIndex[index] === true and fine !== null always agree: a ball sets the flag and a ball is the only thing that gives an innings a non-null fine (createInnings 'fine', freshFine), so neither operand can differ from the other and the or/true variants equal the original."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:954:9 LogicalOperator → this.hasBallEventByIndex[index] === true || fine !== null",
+      "original": "this.hasBallEventByIndex[index] === true && fine !== null",
+      "line": "this.hasBallEventByIndex[index] === true && fine !== null",
+      "reason": "hasBallEventByIndex[index] === true and fine !== null always agree: a ball sets the flag and a ball is the only thing that gives an innings a non-null fine (createInnings 'fine', freshFine), so neither operand can differ from the other and the or/true variants equal the original."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:954:53 ConditionalExpression → true",
+      "original": "fine !== null",
+      "line": "this.hasBallEventByIndex[index] === true && fine !== null",
+      "reason": "hasBallEventByIndex[index] === true and fine !== null always agree: a ball sets the flag and a ball is the only thing that gives an innings a non-null fine (createInnings 'fine', freshFine), so the second operand adds nothing."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:1014:47 ArrayDeclaration → [\"Stryker was here\"]",
+      "original": "[]",
+      "line": "const overs = this.oversByIndex[index] ?? [];",
+      "reason": "oversByIndex[index] is missing only for a live coarse innings (no ball ever filed an over); thisOver then reads overs[n]?.balls ?? [], and a seeded string has no `.balls` while any other index is undefined, so thisOver is [] either way; `overs` is read nowhere else in live()."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:1063:21 OptionalChaining → fine.batterRuns",
+      "original": "fine?.batterRuns",
+      "line": "runs: fine?.batterRuns[lastFall.batter] ?? 0,",
+      "reason": "lastFall exists only after a ball or a retire-out filed a fall of wicket, both of which need a fine innings, and live() returns null for closed/decided innings, so `fine` is non-null whenever lastFall is."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:1064:22 OptionalChaining → fine.batterBalls",
+      "original": "fine?.batterBalls",
+      "line": "balls: fine?.batterBalls[lastFall.batter] ?? 0,",
+      "reason": "lastFall exists only after a ball or a retire-out filed a fall of wicket, both of which need a fine innings, and live() returns null for closed/decided innings, so `fine` is non-null whenever lastFall is."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:1069:33 ConditionalExpression → true",
+      "original": "ballsLeft !== null",
+      "line": "rrr: needRuns !== null && ballsLeft !== null && ballsLeft > 0 ? (needRuns * bpo) / ballsLeft : null,",
+      "reason": "`ballsLeft > 0` is the next operand and is false for null, so the null test adds nothing."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:1069:55 ConditionalExpression → true",
+      "original": "ballsLeft > 0",
+      "line": "rrr: needRuns !== null && ballsLeft !== null && ballsLeft > 0 ? (needRuns * bpo) / ballsLeft : null,",
+      "reason": "ballsLeft <= 0 with an open innings cannot occur: autoClose closes an innings at legalBalls >= ballsLimit, and a revise below the balls already bowled is applied by closing it too (probed: revise to 1 over after 7 balls leaves closed === true and live null), and live() returns null for closed innings."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:1069:55 EqualityOperator → ballsLeft >= 0",
+      "original": "ballsLeft > 0",
+      "line": "rrr: needRuns !== null && ballsLeft !== null && ballsLeft > 0 ? (needRuns * bpo) / ballsLeft : null,",
+      "reason": "ballsLeft <= 0 with an open innings cannot occur: autoClose closes an innings at legalBalls >= ballsLimit, and a revise below the balls already bowled is applied by closing it too (probed: revise to 1 over after 7 balls leaves closed === true and live null), and live() returns null for closed innings."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:1079:9 ConditionalExpression → true",
+      "original": "!inSuperOver",
+      "line": "!inSuperOver && state.innings.length === 1 && innings.ballsLimit !== null && innings.legalBalls > 0",
+      "reason": "A super over starts only after the main innings are complete, so inSuperOver implies state.innings.length >= 2 and the next operand (`state.innings.length === 1`) is already false; the `!inSuperOver` test is redundant."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:1122:9 ConditionalExpression → true",
+      "original": "eventBand !== undefined",
+      "line": "if (eventBand !== undefined && eventBand > band) band = eventBand;",
+      "reason": "`undefined > band` is false, so the undefined test adds nothing to `eventBand > band`."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:1122:36 EqualityOperator → eventBand >= band",
+      "original": "eventBand > band",
+      "line": "if (eventBand !== undefined && eventBand > band) band = eventBand;",
+      "reason": "The only difference is the equal case, which assigns band = eventBand where they are already equal."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:1128:9 ConditionalExpression → true",
+      "original": "ev.type === \"cricket.ball\"",
+      "line": "if (ev.type === \"cricket.ball\" || ev.type === \"cricket.superover.ball\") {",
+      "reason": "For an event that is not a ball, onBall can only set hasBallEventByIndex on the last innings (already true for a fine innings, and read only with fine !== null) and then returns at the isCricketBallPayload test: no other cricket/core payload has an object-valued top-level `runs` (summary's `runs` is a number)."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:1134:9 ConditionalExpression → true",
+      "original": "ev.type === \"cricket.player.line\"",
+      "line": "if (ev.type === \"cricket.player.line\") {",
+      "reason": "onLine for any other event reads payload.innings (undefined -> NaN, `NaN < 0` is false) and then payload.batting / payload.bowling, which no other cricket or core payload declares, so it pushes nothing."
     }
   ]
 }
