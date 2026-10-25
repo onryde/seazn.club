@@ -16,6 +16,13 @@ export async function register() {
     // serves nothing at all rather than faking at its first stream. Sentry is initialised first, so the refusal is reported.
     const { relayDriverMode } = await import("@/server/relay/config");
     relayDriverMode();
+    // The per-sport engine-epoch floor override (engine-split spec §5.6): the emergency lever that lowers the scoring door's 426
+    // floor. Parsed here ONCE before the server takes a request, and a value that is not understood THROWS exactly as above (the
+    // process stays up and answers 500 until it is fixed), so a typo never silently becomes "no override" or a wrong floor. A valid
+    // one logs one loud warning per sport; an INERT one (at or above the sport's epoch) logs that it does nothing and does not stop
+    // the boot, so a stale entry left behind by a later bump cannot take prod down. Unset logs nothing.
+    const { reportEpochFloorOverrides } = await import("@/server/usecases/engine-epoch-override");
+    reportEpochFloorOverrides();
     // The email outbox seals every queued body under EMAIL_OUTBOX_KEK, and a sign-in request that cannot be queued answers
     // 500. A deployment with a Resend key and no (or the published sample) key would find out from the first person who tried
     // to sign in, so say it now: one error line, and an alert. Unlike the relay check this does not stop the boot.
