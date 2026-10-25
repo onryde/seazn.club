@@ -1,5 +1,5 @@
 "use client";
-// T16 — "Online play — needs result" on the division's fixtures tab (canvas
+// T16 — "Online play: needs result" on the division's fixtures tab (canvas
 // HoldQueueDesktop / HoldQueuePhone). Two lists, side by side at `lg`, one
 // column below it:
 //   - Held: boards the sweep or the result writer held for the organiser.

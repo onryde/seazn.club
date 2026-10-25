@@ -1,4 +1,4 @@
-// T16 — the organiser's "Online play — needs result" queue (canvas
+// T16 — the organiser's "Online play: needs result" queue (canvas
 // HoldQueueDesktop / HoldQueuePhone), rendered to markup through the real
 // DictProvider in every locale. What it SHOWS: the two lists, a held card's
 // title / names by colour / sentence, which controls each card offers, and

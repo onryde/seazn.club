@@ -12,7 +12,8 @@
 //      fails until the pin is moved on purpose, and the map it names must be inside the two lists;
 //   3. the key maps themselves (`INVITE_WORD_KEYS`, `HELD_TITLE_KEYS`, `heldBody`, the open's and the extension's own tables), each
 //      required to be a SUBSET of the two lists, so a value added to a map cannot skip the sweep.
-// The helper files the column renders through (open-round-control.tsx, checkin-extend-ui.ts, `RoundExtend`, `boardStateWord`) are scanned
+// The helper files the column renders through (open-round-control.tsx, checkin-extend-ui.ts, venue-clock.ts, `RoundExtend`, `boardStateWord`,
+// `useFmt`'s venue label) are scanned
 // both ways. NOT guaranteed: a key reached by a path none of this sees (a helper added outside these files, a key built by string
 // concatenation). Every sweep reports how many items it checked, and a count of zero is a failure.
 import { readdirSync, readFileSync } from "node:fs";
@@ -116,7 +117,7 @@ const COLUMN_FILES = readdirSync(join(SRC, COLUMN_DIR), { withFileTypes: true })
   .filter((e) => e.isFile() && /\.tsx?$/.test(e.name))
   .map((e) => `${COLUMN_DIR}/${e.name}`)
   .sort();
-const HELPER_FILES = ["components/v2/desk/open-round-control.tsx", "components/v2/checkin-extend-ui.ts"];
+const HELPER_FILES = ["components/v2/desk/open-round-control.tsx", "components/v2/checkin-extend-ui.ts", "components/v2/venue-clock.ts"];
 
 /** One function out of a file that holds dozens of keys the column never renders: from its opening to the first line that is a bare `}`. */
 function functionBody(rel: string, opening: string): string {
@@ -135,6 +136,17 @@ function roundExtendBody(): string {
   expect(from, "premise: RoundExtend is in arbiter-panel.tsx").toBeGreaterThan(-1);
   expect(to, "premise: RequestedNotice follows RoundExtend").toBeGreaterThan(from);
   return panel.slice(from, to);
+}
+/** The venue's name after a time of day (Task 16 D1): `arbiter.venueTime` is asked for by `useVenueClock` (venue-clock.ts, scanned whole) and by
+ *  `useFmt` in arbiter-flag-cards.tsx, whose other keys (durations, flag words) the column never renders: only its `named` helper is read,
+ *  from its declaration to the object `useFmt` returns. */
+function venueLabelBody(): string {
+  const src = read("components/v2/arbiter-flag-cards.tsx");
+  const from = src.indexOf("const named = ");
+  const to = src.indexOf("return {", from);
+  expect(from, "premise: useFmt has the `named` helper that adds the venue's name").toBeGreaterThan(-1);
+  expect(to, "premise: `named` is followed by the object useFmt returns").toBeGreaterThan(from);
+  return src.slice(from, to);
 }
 /** The seven words of a board's state, which the queue's cards draw through `boardStateWord`. */
 const boardStateWordBody = () => functionBody("components/v2/arbiter-flag-cards.tsx", "export function boardStateWord(");
@@ -213,6 +225,9 @@ const NON_LITERAL_SITES: Record<string, readonly Site[]> = {
   // The two single functions the column reaches inside bigger files: neither passes a variable.
   "RoundExtend (arbiter-panel.tsx)": [],
   "boardStateWord (arbiter-flag-cards.tsx)": [],
+  // Task 16 D1: the venue's name after a time, asked for by a literal in both places.
+  "components/v2/venue-clock.ts": [],
+  "useFmt's venue label (arbiter-flag-cards.tsx)": [],
 };
 
 const LISTED = new Set<string>([...ROUND_COLUMN_KEYS, ...ROUND_COLUMN_HELPER_KEYS]);
@@ -315,12 +330,13 @@ describe("the list cannot fall behind the column", () => {
     expect(literalsPassed(`msg("a.b", { x: "(" }); msg("c.d")`)).toEqual(["a.b", "c.d"]);
   });
 
-  it("every literal the helpers pass is in one of the two lists (open-round-control.tsx, checkin-extend-ui.ts, RoundExtend, boardStateWord)", () => {
+  it("every literal the helpers pass is in one of the two lists (open-round-control.tsx, checkin-extend-ui.ts, venue-clock.ts, RoundExtend, boardStateWord, useFmt's venue label)", () => {
     let checked = 0;
     const sources: [string, string][] = [
       ...HELPER_FILES.map((f): [string, string] => [f, read(f)]),
       ["RoundExtend (arbiter-panel.tsx)", roundExtendBody()],
       ["boardStateWord (arbiter-flag-cards.tsx)", boardStateWordBody()],
+      ["useFmt's venue label (arbiter-flag-cards.tsx)", venueLabelBody()],
     ];
     for (const [name, src] of sources) {
       const literals = literalsPassed(src);
@@ -357,7 +373,13 @@ describe("the list cannot fall behind the column", () => {
 
 describe("a call whose key is not a literal is pinned, and tied to the map that supplies it", () => {
   const sourceOf = (name: string): string =>
-    name.startsWith("RoundExtend") ? roundExtendBody() : name.startsWith("boardStateWord") ? boardStateWordBody() : read(name);
+    name.startsWith("RoundExtend")
+      ? roundExtendBody()
+      : name.startsWith("boardStateWord")
+        ? boardStateWordBody()
+        : name.startsWith("useFmt")
+          ? venueLabelBody()
+          : read(name);
   const pinned = (name: string): string[] => NON_LITERAL_SITES[name]!.map((site) => site.expr).sort();
 
   it("the scanner reads first arguments: a variable, a map read and a ternary are reported; plain literals are not", () => {
@@ -377,7 +399,7 @@ describe("a call whose key is not a literal is pinned, and tied to the map that 
       files += 1;
       sites += NON_LITERAL_SITES[name]!.length;
     }
-    expect(files, "anti-vacuity: the column's files, three helpers and the two functions").toBe(COLUMN_FILES.length + HELPER_FILES.length + 2);
+    expect(files, "anti-vacuity: the column's files, the helper files and the three functions").toBe(COLUMN_FILES.length + HELPER_FILES.length + 3);
     expect(sites, "anti-vacuity: sixteen sites are pinned").toBe(16);
   });
 

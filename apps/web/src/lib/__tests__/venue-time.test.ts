@@ -24,11 +24,14 @@ describe("zoneCity: the label comes from the IANA id, no hand table", () => {
       ["Asia/Tokyo", "Tokyo"],
       ["America/New_York", "New York"],
       ["America/Argentina/Buenos_Aires", "Buenos Aires"],
+      // More than one underscore in the last segment: every one reads as a space, not only the first.
+      ["Asia/Ho_Chi_Minh", "Ho Chi Minh"],
+      ["America/Port_of_Spain", "Port of Spain"],
       ["Europe/London", "London"],
       ["UTC", "UTC"],
     ];
     for (const [id, want] of cases) expect(zoneCity(id), id).toBe(want);
-    expect(cases.length, "anti-vacuity").toBe(5);
+    expect(cases.length, "anti-vacuity").toBe(7);
   });
 
   it("never returns an empty label, whatever it is given", () => {

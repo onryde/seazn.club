@@ -269,12 +269,15 @@ export const ROUND_COLUMN_KEYS: readonly ColumnKey[] = [
  *   - `openNoticeText`, `resendNoticeText` and `OpenRoundConfirmBody` (desk/open-round-control.tsx), and the maps they read;
  *   - `RoundExtend` and the extend copy it asks for (checkin-extend-ui.ts; the reasons are `EXTEND_WHY_KEYS`);
  *   - the invite word of a seat (`INVITE_WORD_KEYS`) and the chip of a held card (`HELD_TITLE_KEYS`);
+ *   - the venue's name after a time of day (`useVenueClock` in venue-clock.ts, and `useFmt`'s `named` in arbiter-flag-cards.tsx);
  *   - what the queue's cards say through `where()`, `boardStateWord()` and `noticeSentence()` (only a Mark as reviewed answer reaches
  *     the column, so only its two kinds are listed). The test scans `boardStateWord` for its words; `where()` and `noticeSentence()`
  *     are listed by hand and not scanned. */
 export const ROUND_COLUMN_HELPER_KEYS: readonly ColumnKey[] = [
   // OpenRoundConfirmBody, inviteState, the open's answer and the resend's
   "arbiter.column.confirmSeat",
+  // The venue's name after a time of day (Task 16 D1): venue-clock.ts and useFmt's `named` ask for it
+  "arbiter.venueTime",
   "externalPlay.openRound.alreadyOpen",
   "externalPlay.openRound.clockNotPlayable",
   "externalPlay.openRound.divisionNotStarted",
