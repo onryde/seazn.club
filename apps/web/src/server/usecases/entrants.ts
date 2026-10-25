@@ -584,6 +584,53 @@ export async function deleteEntrant(auth: AuthCtx, id: string): Promise<void> {
  *  to this set by `departed-vocabulary-is-single-sourced.test.ts`. */
 export const DEPARTED_STATUSES = new Set(["withdrawn", "disqualified"]);
 
+/** A person on a division's roster who holds no Lichess link. */
+export interface UnlinkedLichessPlayer {
+  readonly person_id: string;
+  readonly full_name: string;
+}
+
+/** The people in a division's FIELD who hold no Lichess link, by name - what the online-play switch warns about (owner
+ *  ruling 2026-10-25: the switch is ALLOWED, the organiser is told who is unlinked; blocking was rejected because clubs
+ *  switch first and collect links later).
+ *
+ *  A link is per PERSON, never per entrant (the registration gate it mirrors, `assertPersonIdsLinkedForOnlinePlay`, tests
+ *  `entrant_members` persons): a team's unlinked members are each named, and a person on two entrants is named once. Only
+ *  the field counts - a withdrawn or disqualified entrant (`DEPARTED_STATUSES`) is owed nothing. Who is linked is
+ *  `personIdsWithLichessLink`, read in the transaction's privileged prelude (the table is sealed from `app_user`) for the
+ *  whole org, exactly as `createEntrants` reads it when a roster is resolved late; the roster itself is read under RLS, so
+ *  another club's division is a 404 and answers nothing. Sorted by name, case-insensitively, then id, so the same roster
+ *  always prints the same list. */
+export async function listUnlinkedLichessPlayers(
+  auth: AuthCtx,
+  divisionId: string,
+): Promise<UnlinkedLichessPlayer[]> {
+  let linked: ReadonlySet<string> = new Set();
+  return withTenant(
+    auth.orgId,
+    async (tx) => {
+      const [division] = await tx`select 1 from divisions where id = ${divisionId}`;
+      if (!division) throw new HttpError(404, "division not found");
+      const roster = await tx<UnlinkedLichessPlayer[]>`
+        select p.id as person_id, p.full_name
+          from persons p
+         where p.id in (
+           select em.person_id
+             from entrant_members em
+             join entrants e on e.id = em.entrant_id
+            where e.division_id = ${divisionId}
+              and not (e.status = any(${[...DEPARTED_STATUSES]})))
+         order by lower(p.full_name), p.id`;
+      return roster.filter((p) => !linked.has(p.person_id));
+    },
+    {
+      privilegedPrelude: async (ptx) => {
+        linked = await personIdsWithLichessLink(ptx, auth.orgId);
+      },
+    },
+  );
+}
+
 /** An ad-hoc entrant's name and roster, read BEFORE a write that changes who
  *  its people are or what they are called. */
 export interface PendingRosterName {
