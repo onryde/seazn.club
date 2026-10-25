@@ -840,6 +840,7 @@ export default async function DivisionPage({
                   held={needsOrganiserExternalPlay}
                   flagged={flaggedExternalPlay.boards}
                   ownFlagged={flaggedExternalPlay.ownBoards}
+                  venueTz={scheduleSettings.tz}
                 />
               </div>
             )}
