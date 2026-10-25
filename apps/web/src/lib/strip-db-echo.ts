@@ -12,11 +12,14 @@
 //
 // What stays is what says WHAT went wrong: name, message, code, constraint_name, table_name, column_name, schema_name, stack.
 //
-// Used at three seams, because an error reaches the outside world by three routes: pino's `err` serializer (server/logger.ts,
+// Used at four seams, because an error reaches the outside world by four routes: pino's `err` serializer (server/logger.ts,
 // which also feeds Sentry Logs through pinoIntegration), Sentry's `beforeSend` (the console breadcrumb that Next's own
 // `console.error(err)` leaves on an event, and any `extra` that carries an error) and `beforeSendLog` (a log attribute that
-// holds an error). Not a repair of `message`: a cast error's message quotes the value ("invalid input syntax for type integer:
-// \"abc\""), which is parked.
+// holds an error), and the process's own `console.error` (server/console-db-echo-scrub.ts: Next's uncaught-error log and every
+// `console.error("...", err)` in the app print an error with util.inspect, which writes every enumerable field, `detail` and
+// all). That last route needs the error to stay an Error so the printed line keeps its `PostgresError: message` head and its
+// stack frames: `stripDbEchoFromErrors`. Not a repair of `message`: a cast error's message quotes the value ("invalid input
+// syntax for type integer: \"abc\""), which is parked.
 //
 // A LEAF: it imports nothing, so the logger, the Sentry configs and a test can all take it.
 
@@ -51,10 +54,29 @@ function isPlain(v: object): boolean {
  * message and stack (all non-enumerable on the original, so absent from `JSON.stringify`) and its own enumerable fields.
  */
 export function stripDbEcho<T>(value: T): T {
-  return walk(value, new WeakMap(), 0) as T;
+  return walk(value, new WeakMap(), 0, false) as T;
 }
 
-function walk(value: unknown, seen: WeakMap<object, unknown>, depth: number): unknown {
+/**
+ * The same strip, for a value about to be PRINTED. The only differences are in what the output is made of: an `Error` instance
+ * comes back as an `Error` of the same class (same prototype, same message, name and stack, its `cause` and `errors` carried as
+ * the non-enumerable own properties they are), not as a plain object, so `util.inspect` renders it exactly as it rendered the
+ * original minus the dropped fields; and an Error with nothing to strip (nor anywhere in its cause chain) comes back as the SAME
+ * object rather than a copy. Everything else, the field list, the walk, the depth limit and the cycle handling, is `stripDbEcho`'s
+ * own. Nothing is mutated: code that reads `err.detail` after the line is printed still can.
+ */
+export function stripDbEchoFromErrors<T>(value: T): T {
+  return walk(value, new WeakMap(), 0, true) as T;
+}
+
+const own = (v: object, key: string) => Object.prototype.hasOwnProperty.call(v, key);
+
+/** An own, non-enumerable data property: how an Error keeps `message`, `stack`, `cause` and `errors`. */
+function hide(target: Bag, key: string, value: unknown): void {
+  Object.defineProperty(target, key, { value, writable: true, configurable: true, enumerable: false });
+}
+
+function walk(value: unknown, seen: WeakMap<object, unknown>, depth: number, keepErrors: boolean): unknown {
   if (typeof value !== "object" || value === null || depth > MAX_DEPTH) return value;
   if (seen.has(value)) return seen.get(value);
 
@@ -62,7 +84,7 @@ function walk(value: unknown, seen: WeakMap<object, unknown>, depth: number): un
     seen.set(value, value);
     let copy: unknown[] | undefined;
     value.forEach((item, i) => {
-      const next = walk(item, seen, depth + 1);
+      const next = walk(item, seen, depth + 1, keepErrors);
       if (!Object.is(next, item)) (copy ??= value.slice())[i] = next;
     });
     const out = copy ?? value;
@@ -76,16 +98,33 @@ function walk(value: unknown, seen: WeakMap<object, unknown>, depth: number): un
 
   seen.set(value, value);
   const bag = value as Bag;
-  const out: Bag = {};
-  // An Error's own name/message/stack are not enumerable; carry them, or the copy would be an empty `{}`.
-  let changed = isError;
+  // An Error kept as an Error is built on the same prototype, so it prints under its own class and name.
+  const out: Bag = isError && keepErrors ? Object.create(Object.getPrototypeOf(value) as object | null) : {};
+  let changed = isError && !keepErrors;
   if (isError) {
-    out.name = value.name;
-    out.message = value.message;
-    out.stack = value.stack;
+    // An Error's own name/message/stack are not enumerable; carry them, or the copy would be an empty `{}`. Kept as an Error, the
+    // copy has them as non-enumerable own properties again, and is only a copy when something below it changed.
+    if (keepErrors) {
+      for (const key of ["name", "message", "stack"]) {
+        // An own ENUMERABLE one (PostgresError sets `name` so) is copied with the other enumerable fields below.
+        if (own(value, key) && !Object.prototype.propertyIsEnumerable.call(value, key)) hide(out, key, bag[key]);
+      }
+    } else {
+      out.name = value.name;
+      out.message = value.message;
+      out.stack = value.stack;
+    }
     // Own but non-enumerable too (`new Error(m, { cause })`, AggregateError): the chain is part of what went wrong.
     for (const key of ["cause", "errors"] as const) {
-      if (key in value) out[key] = walk((value as unknown as Bag)[key], seen, depth + 1);
+      if (!(key in value)) continue;
+      const item = bag[key];
+      const next = walk(item, seen, depth + 1, keepErrors);
+      if (!keepErrors) {
+        out[key] = next;
+      } else {
+        if (!Object.is(next, item)) changed = true;
+        hide(out, key, next);
+      }
     }
   }
   for (const key of Object.keys(bag)) {
@@ -94,7 +133,7 @@ function walk(value: unknown, seen: WeakMap<object, unknown>, depth: number): un
       continue;
     }
     const item = bag[key];
-    const next = walk(item, seen, depth + 1);
+    const next = walk(item, seen, depth + 1, keepErrors);
     if (!Object.is(next, item)) changed = true;
     out[key] = next;
   }
