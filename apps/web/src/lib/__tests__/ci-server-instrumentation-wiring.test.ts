@@ -477,9 +477,6 @@ const MUTANTS: [string, string, string][] = [
   ["the MISS requirement relaxed to any x-nextjs-cache value", "[[:space:]]*MISS", ""],
   ["the failure no longer fails the job", "cat dev-server.log; exit 1", "cat dev-server.log; exit 0"],
 ];
-/** The time one row's run is allowed under load, in ms: the tests' timeouts are derived from it and the row count, so a row
- *  added to TABLE or MUTANTS moves them. (A measured run took ~7 s a row at load 376.) */
-const ROW_BUDGET_MS = 30_000;
 
 describe("the behavioural proof that register() ran", () => {
   const ci = readFileSync(resolve(WORKFLOWS, "ci.yml"), "utf8");
@@ -490,51 +487,54 @@ describe("the behavioural proof that register() ran", () => {
     expect(body, "the proof step's run: body was not found").not.toBeNull();
   });
 
-  it(
-    "the extracted step, run against a stub curl, passes only for a 404 from an ISR render that is no-store — and asks fresh /shared URLs, bounded to 10 s each",
-    { timeout: TABLE.length * ROW_BUDGET_MS },
-    () => {
-      const { wrong, ran } = runTable(body!);
-      expect(wrong).toEqual([]);
-      expect(ran.length, "every row ran").toBe(TABLE.length);
-      // Every request (row 0's, reused: it already made all 15) is a /shared/ URL on the job's server port, with the short bound.
-      const first = ran[0]!;
-      expect(first.urls.length).toBe(15);
-      for (const u of first.urls) expect(u, "the proof asks a public /shared URL").toMatch(/^http:\/\/localhost:3000\/shared\/[\w-]+$/);
-      expect(first.maxTimes, "a hung server must not cost 30 s a try").toEqual(Array(15).fill("10"));
-    },
-  );
+  // One test per TABLE row (and per mutant below) so each stays inside the repo's shared testTimeout: a per-test
+  // timeout option would be re-pinned inline, which inline-timeout-truth (#370) refuses. A row added to TABLE adds a test.
+  it("the table has rows on both sides: at least one that passes and at least one that fails the job", () => {
+    expect(TABLE.filter((r) => r.exit === 0).length, "a row that must pass").toBeGreaterThan(0);
+    expect(TABLE.filter((r) => r.exit === 1).length, "a row that must fail").toBeGreaterThan(0);
+  });
 
-  it(
-    "the detector is live: a mutated step body is caught by the table, and the ordering and silencing checks catch a misplaced or muted step",
-    { timeout: MUTANTS.length * TABLE.length * ROW_BUDGET_MS },
-    () => {
-      let caught = 0;
-      for (const [what, from, to] of MUTANTS) {
-        expect(body!.split(from).length - 1, `${what}: the mutation target occurs once`).toBe(1);
-        expect(runTable(body!.replace(from, to), true).wrong.length, what).toBeGreaterThan(0);
-        caught++;
-      }
-      expect(caught).toBe(MUTANTS.length);
-      const head = "jobs:\n  smoke:\n    steps:\n";
-      const start = ["      - name: Start", "        run: |", "          node apps/web/.next/standalone/apps/web/server.js &"];
-      const proof = ["      - name: Prove", "        run: |", "          curl http://localhost:3000/shared/x | grep -qi 'no-store'"];
-      const smoke = ["      - name: Smoke", "        run: npm run test:smoke"];
-      const job = (...steps: string[][]): string => `${head}${steps.flat().join("\n")}\n`;
-      const muted = (key: string): string[] => ["      - name: Prove", `        ${key}`, ...proof.slice(1)];
-      expect(proofProblems(job(start, proof, smoke)), "the sound order").toEqual([]);
-      expect(proofProblems(job(start, smoke)).join("|")).toMatch(/no step requests/);
-      expect(proofProblems(job(proof, start, smoke)).join("|")).toMatch(/after the step that starts/);
-      expect(proofProblems(job(start, smoke, proof)).join("|")).toMatch(/before the first smoke run/);
-      // Muting: the proof can pass without running if it is skippable or its failure is ignored.
-      expect(proofProblems(job(start, muted("continue-on-error: true"), smoke)).join("|"), "continue-on-error").toMatch(/can be skipped or ignored/);
-      expect(proofProblems(job(start, muted("if: false"), smoke)).join("|"), "if: false").toMatch(/can be skipped or ignored/);
-      expect(proofProblems(job(start, ["      - if: false", ...proof.slice(1)], smoke)).join("|"), "an if: on the header line, no name").toMatch(/can be skipped or ignored/);
-      expect(proofProblems(`jobs:\n  smoke:\n    continue-on-error: true\n    steps:\n${[start, proof, smoke].flat().join("\n")}\n`).join("|"), "a non-blocking job").toMatch(/continue-on-error, so a red proof/);
-      // The positive pair: a `name:` and a commented-out `# if:` do not mute it.
-      expect(proofProblems(job(start, ["      - name: Prove", "        # if: false", ...proof.slice(1)], smoke)), "a comment is not an if").toEqual([]);
-    },
-  );
+  it.each(TABLE)("the extracted step, run against a stub curl, gives the right verdict: $what", (row) => {
+    expect(body, "the proof step's run: body was not found").not.toBeNull();
+    const ran = runStep(body!, row.answer);
+    expect(judgeRow(row, ran)).toBeNull();
+  });
+
+  it("the extracted step asks fresh public /shared URLs on the job's server port, each bounded to 10 s", () => {
+    expect(body, "the proof step's run: body was not found").not.toBeNull();
+    // A failing answer makes the step ask all 15 times, so every request is visible.
+    const ran = runStep(body!, TABLE[0]!.answer);
+    expect(ran.urls.length).toBe(15);
+    for (const u of ran.urls) expect(u, "the proof asks a public /shared URL").toMatch(/^http:\/\/localhost:3000\/shared\/[\w-]+$/);
+    expect(new Set(ran.urls).size, "a fresh slug per request").toBe(15);
+    expect(ran.maxTimes, "a hung server must not cost 30 s a try").toEqual(Array(15).fill("10"));
+  });
+
+  it.each(MUTANTS)("the detector is live: the table catches the mutated step (%s)", (what, from, to) => {
+    expect(body, "the proof step's run: body was not found").not.toBeNull();
+    expect(body!.split(from).length - 1, `${what}: the mutation target occurs once`).toBe(1);
+    expect(runTable(body!.replace(from, to), true).wrong.length, what).toBeGreaterThan(0);
+  });
+
+  it("the ordering and silencing checks catch a misplaced or muted step", () => {
+    const head = "jobs:\n  smoke:\n    steps:\n";
+    const start = ["      - name: Start", "        run: |", "          node apps/web/.next/standalone/apps/web/server.js &"];
+    const proof = ["      - name: Prove", "        run: |", "          curl http://localhost:3000/shared/x | grep -qi 'no-store'"];
+    const smoke = ["      - name: Smoke", "        run: npm run test:smoke"];
+    const job = (...steps: string[][]): string => `${head}${steps.flat().join("\n")}\n`;
+    const muted = (key: string): string[] => ["      - name: Prove", `        ${key}`, ...proof.slice(1)];
+    expect(proofProblems(job(start, proof, smoke)), "the sound order").toEqual([]);
+    expect(proofProblems(job(start, smoke)).join("|")).toMatch(/no step requests/);
+    expect(proofProblems(job(proof, start, smoke)).join("|")).toMatch(/after the step that starts/);
+    expect(proofProblems(job(start, smoke, proof)).join("|")).toMatch(/before the first smoke run/);
+    // Muting: the proof can pass without running if it is skippable or its failure is ignored.
+    expect(proofProblems(job(start, muted("continue-on-error: true"), smoke)).join("|"), "continue-on-error").toMatch(/can be skipped or ignored/);
+    expect(proofProblems(job(start, muted("if: false"), smoke)).join("|"), "if: false").toMatch(/can be skipped or ignored/);
+    expect(proofProblems(job(start, ["      - if: false", ...proof.slice(1)], smoke)).join("|"), "an if: on the header line, no name").toMatch(/can be skipped or ignored/);
+    expect(proofProblems(`jobs:\n  smoke:\n    continue-on-error: true\n    steps:\n${[start, proof, smoke].flat().join("\n")}\n`).join("|"), "a non-blocking job").toMatch(/continue-on-error, so a red proof/);
+    // The positive pair: a `name:` and a commented-out `# if:` do not mute it.
+    expect(proofProblems(job(start, ["      - name: Prove", "        # if: false", ...proof.slice(1)], smoke)), "a comment is not an if").toEqual([]);
+  });
 
   it("runBodyOf reads a step's run block, dedented, and nothing past it", () => {
     const text = "jobs:\n  a:\n    steps:\n      - name: One\n        run: |\n          echo one\n          echo two\n\n      - name: Two\n        run: echo no\n";
