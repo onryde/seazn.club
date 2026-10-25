@@ -1237,13 +1237,14 @@ test("football v3: the public page's decided sentence updates live while already
   await expect(page.getByText("shootout", { exact: false })).toHaveCount(0);
 });
 
-// R3.5/Task I (F19) — points.shootoutWin/shootoutLoss have worked in the
-// engine since spec 04 and had zero references in apps/web; this proves the
-// UI-shaped config (nested under `points`, per match-rules.tsx's own unit
-// tests) reaches a REAL decided fixture's standings row, not just that the
+// R3.5/Task I (F19), re-pointed by W2d PS-1 (spec §5.3, B2) — the shoot-out
+// points pair (points.shootoutWin/shootoutLoss) is gone: a table shoot-out is
+// a DRAW for both sides plus `points.soBonus` (absent: 1) to its winner, paid
+// by the stage's table points rule (the sport's `tablePointsRule`, which the
+// server reads from W2d Task 7/8's resolveTableRules on). This proves the
+// config reaches a REAL decided fixture's standings row, not just that the
 // config round-trips. Stage kind is whatever seedRosteredFixture defaults to
-// (league) — football.ts's standingsDelta never reads StageCtx.kind, so a
-// league stage exercises the identical code path a group stage would.
+// (league): the rule books a league shoot-out the same as a group one.
 test("football v3: group-stage shoot-out points reach the standings (R3.5/Task I, F19)", async ({
   page,
 }) => {
@@ -1258,7 +1259,7 @@ test("football v3: group-stage shoot-out points reach the standings (R3.5/Task I
   await mergeDivisionConfig(page.request, fx.divisionId, {
     shootout: true,
     extraTime: { enabled: false, halfMinutes: 15 },
-    points: { win: 3, draw: 1, loss: 0, shootoutWin: 2, shootoutLoss: 1 },
+    points: { win: 3, draw: 1, loss: 0, soBonus: 1 },
   });
   await decideByShootout(page.request, fx);
 
@@ -1280,7 +1281,7 @@ test("football v3: group-stage shoot-out points reach the standings (R3.5/Task I
       },
       { timeout: 20_000 },
     )
-    .toBe(2); // shoot-out WIN pays 2, not the flat 3
+    .toBe(2); // shoot-out WIN pays the draw's 1 plus the bonus's 1, not the flat 3
 
   const standings = await apiJson<{ rows: { entrantId: string; points: number }[] }>(
     page.request,
@@ -1288,7 +1289,7 @@ test("football v3: group-stage shoot-out points reach the standings (R3.5/Task I
   );
   expect(
     standings.data!.rows.find((r) => r.entrantId === fx.awayEntrantId)?.points,
-    "shoot-out LOSS pays 1, not the flat 0",
+    "shoot-out LOSS pays the draw's 1, not the flat 0",
   ).toBe(1);
 });
 

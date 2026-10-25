@@ -270,17 +270,6 @@ describe("the hydrate/build pair — the value saved is the value played", () =>
     expect(buildRuleOverride(sport, values, { bestOf: 1 })).toEqual(expected);
   });
 
-  it("leaves a sport with buildOnBlank alone (football's shoot-out pair)", () => {
-    // The blank semantics `division-settings.tsx` depends on: a blank field
-    // with `buildOnBlank` still emits its delete markers, collapse or not.
-    const values = { shootoutWin: "3", shootoutLoss: "" };
-    expect(buildRuleOverride("football", values)).toEqual({
-      points: { shootoutWin: undefined, shootoutLoss: undefined },
-    });
-    expect(buildRuleOverride("football", values, { bestOf: 1 })).toEqual(
-      buildRuleOverride("football", values),
-    );
-  });
 });
 
 describe("cap validation still sees both keys", () => {

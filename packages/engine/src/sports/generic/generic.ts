@@ -798,6 +798,15 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
   reachableDecidedIn: () => new Set<DecidedIn>(["regulation"]),
   reachableResultKinds: (cfg, stage) => new Set<"draw" | "tie" | "noResult">(generic.supportsDraws(cfg, stage) ? ["draw"] : []),
   shootoutAs: "result",
+  // W2d (spec §5.3, §5.10) — `points.w/d/l` as a rule (3/1/0 by default).
+  tablePointsRule: (cfg) => ({
+    win: { regulation: cfg.points.w },
+    loss: { regulation: cfg.points.l },
+    draw: cfg.points.d,
+    shootoutAs: generic.shootoutAs,
+    unit: "whole",
+    bonuses: [],
+  }),
 
   // W2a: none (spec §5.2). W2c I3 (ruling): sharing the points is a table-stage policy (its rule key applies in
   // DRAW_KINDS only) - a bracket cannot end level, so an abandon there follows W2a (held, then settled) whatever the

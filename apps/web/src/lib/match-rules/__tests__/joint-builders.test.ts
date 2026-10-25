@@ -1,5 +1,6 @@
-// Fix round 1, M6. Three sports edit ONE engine key from SEVERAL form inputs: boardgame's clock (base + increment + delay),
-// ice hockey's overtime (on/off + minutes + skaters) and football's shoot-out points (win + loss). The per-field contract
+// Fix round 1, M6. Two sports edit ONE engine key from SEVERAL form inputs: boardgame's clock (base + increment + delay) and
+// ice hockey's overtime (on/off + minutes + skaters). Football's shoot-out points pair (win + loss) was the third until W2d
+// PS-1 retired it (a table shoot-out is a draw plus `points.soBonus`, edited in the Points section). The per-field contract
 // (`run-contract.ts`) builds each input with an empty form, so it never sees the builder that reads its SIBLINGS. Here the whole
 // form goes through `buildRuleOverride` (the producer the division settings use) and the result through the engine's own
 // schema (the consumer), and the assertions are on the JOINT values: a sibling dropped by the assembler fails here.
@@ -58,24 +59,5 @@ describe("joint builders — one engine key assembled from several inputs", () =
     const off = buildRuleOverride("icehockey", { overtime: "off", overtimeMinutes: "7", overtimeSkaters: "4" });
     expect(off.overtime).toBeNull();
     expect(parse("icehockey", off).overtime).toBeNull();
-  });
-
-  it("football: the shoot-out win and loss points are a PAIR — both typed lands both, either blank deletes both", () => {
-    const both = buildRuleOverride("football", { shootoutWin: "2", shootoutLoss: "1" });
-    expect(both.points).toEqual({ shootoutWin: 2, shootoutLoss: 1 });
-    expect(parse("football", both).points).toMatchObject({ shootoutWin: 2, shootoutLoss: 1 });
-
-    // A half-typed pair is the half that must NOT land: Number("") is 0, a valid score that would pay a loser nothing.
-    for (const half of [{ shootoutWin: "2", shootoutLoss: "" }, { shootoutWin: "", shootoutLoss: "1" }]) {
-      const p = buildRuleOverride("football", half).points as Record<string, unknown>;
-      expect(Object.keys(p).sort(), "both keys are named, so the merge can delete them").toEqual(["shootoutLoss", "shootoutWin"]);
-      expect(p.shootoutWin).toBeUndefined();
-      expect(p.shootoutLoss).toBeUndefined();
-      const out = parse("football", { points: p }).points as Record<string, unknown>;
-      expect(out).not.toHaveProperty("shootoutWin");
-      expect(out).not.toHaveProperty("shootoutLoss");
-    }
-    // Neither input in the form at all: the points object is not touched.
-    expect(buildRuleOverride("football", {})).not.toHaveProperty("points");
   });
 });

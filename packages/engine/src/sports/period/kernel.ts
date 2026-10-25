@@ -101,8 +101,10 @@ export interface PeriodParams {
     loss: number;
     otWin?: number;
     otLoss?: number;
-    shootoutWin?: number;
-    shootoutLoss?: number;
+    // W2d (spec §5.3, B2; PS-1) — the shoot-out winner's bonus on top of the draw, where the sport books a table shoot-out
+    // as a draw plus a bonus (FIH; the schema declares it for those presets only). Absent pays 1. Read only by
+    // `tablePointsRule`; it replaces the W2c shoot-out win/loss split (greenfield, no alias).
+    soBonus?: number;
   };
   suspensions: SuspensionCfg | null;
   strength: { base: number; min: number };
@@ -155,7 +157,15 @@ export function makePeriodConfigSchema(
   defaults: PeriodParams,
   setPieceKinds: readonly string[] = [],
   abandonOptions: readonly string[] = DEFAULT_ABANDON_OPTIONS,
+  shootoutAs: PeriodPreset["shootoutAs"] = "result",
 ) {
+  // W2d (B2): a bonus exists only where a table shoot-out is a draw plus one. A sport that books it as a result (ice
+  // hockey's GWS) pays `otWin`/`otLoss` for it, and the PointsRule refuses a `soBonus` there, so its schema takes none.
+  // Typed as present for both, so the inferred cfg stays `PeriodCfg` (its `soBonus?` is optional either way); at run time
+  // a result sport's object declares no such key and strips it.
+  const soBonus = (shootoutAs === "draw_plus_bonus" ? { soBonus: z.number().int().nonnegative().optional() } : {}) as {
+    soBonus: z.ZodOptional<z.ZodNumber>;
+  };
   return z.object({
     // W4 review item 4 — which restarts this competition records as AWARDED
     // (FIH penalty corner / stroke, IIHF penalty shot). These used to be read
@@ -218,8 +228,7 @@ export function makePeriodConfigSchema(
         loss: z.number().int().nonnegative(),
         otWin: z.number().int().nonnegative().optional(),
         otLoss: z.number().int().nonnegative().optional(),
-        shootoutWin: z.number().int().nonnegative().optional(),
-        shootoutLoss: z.number().int().nonnegative().optional(),
+        ...soBonus,
       })
       .default(defaults.points),
     suspensions: z
@@ -1535,13 +1544,9 @@ function applyAbandon(state: PeriodState): PeriodState {
 // ---------------------------------------------------------------------------
 
 function winPoints(cfg: PeriodCfg, method: string | undefined): [number, number] {
-  if (method === "shootout") {
-    return [
-      cfg.points.shootoutWin ?? cfg.points.otWin ?? cfg.points.win,
-      cfg.points.shootoutLoss ?? cfg.points.otLoss ?? cfg.points.loss,
-    ];
-  }
-  if (method === "extra_time") {
+  // W2d PS-1: a shoot-out win pays the overtime values (the chain with no shoot-out split); FIH's draw-plus-bonus booking
+  // is `tablePointsRule`'s (B2), paid by the stage's points rule.
+  if (method === "shootout" || method === "extra_time") {
     return [cfg.points.otWin ?? cfg.points.win, cfg.points.otLoss ?? cfg.points.loss];
   }
   return [cfg.points.win, cfg.points.loss];
@@ -1892,8 +1897,8 @@ export interface PeriodPreset {
   //
   // A SPORT flag, and omitted means off, because this is not a shared rule.
   // FIH records the identical match as a DRAW plus a bonus point — which is
-  // exactly what `hockey`'s `fih-shootout` variant encodes (`shootoutWin: 2`
-  // = draw 1 + 1) — and FIFA records 4-4 with the shoot-out beside it, which
+  // exactly what `hockey`'s `fih-shootout` variant encodes (`soBonus: 1`
+  // over a draw of 1, its table points rule) — and FIFA records 4-4 with the shoot-out beside it, which
   // is what football's corpus already holds. Awarding it in the kernel would
   // put a shoot-out win into FIH goal difference, where the same competition
   // has already paid for it in points.
@@ -1965,7 +1970,7 @@ export interface PeriodPreset {
 export function makePeriodModule(
   preset: PeriodPreset,
 ): SportModule<PeriodCfg, PeriodEv, PeriodState> {
-  const configSchema = makePeriodConfigSchema(preset.defaults, preset.setPieceKinds ?? [], preset.abandonOptions ?? DEFAULT_ABANDON_OPTIONS);
+  const configSchema = makePeriodConfigSchema(preset.defaults, preset.setPieceKinds ?? [], preset.abandonOptions ?? DEFAULT_ABANDON_OPTIONS, preset.shootoutAs);
   const goalType = `${preset.key}.goal`;
   const advanceType = `${preset.key}.period.advance`;
   const clockType = `${preset.key}.clock`;
@@ -2850,18 +2855,24 @@ export function makePeriodModule(
       ),
     shootoutAs: preset.shootoutAs,
     ...(preset.winsCount === undefined ? {} : { winsCount: preset.winsCount }),
+    // W2d (spec §5.3, §5.10) — the cfg's win/draw/loss, with `otWin`/`otLoss` as the overtime split (D9: absent pays a
+    // win). A `result` sport's shoot-out falls back to them (IIHF: the GWS pays 2/1, IH-PT-1); a `draw_plus_bonus` one is
+    // a draw plus `soBonus` (absent: 1; FIH Pro League 2/1, HK-PT-2).
+    tablePointsRule: (cfg) => ({
+      win: { regulation: cfg.points.win, ...(cfg.points.otWin === undefined ? {} : { ot: cfg.points.otWin }) },
+      loss: { regulation: cfg.points.loss, ...(cfg.points.otLoss === undefined ? {} : { ot: cfg.points.otLoss }) },
+      draw: cfg.points.draw,
+      ...(cfg.points.soBonus === undefined ? {} : { soBonus: cfg.points.soBonus }),
+      shootoutAs: preset.shootoutAs,
+      unit: "whole",
+      bonuses: [],
+    }),
 
     declaredPointsSets(cfg) {
       const totals = [cfg.points.win + cfg.points.loss, cfg.points.draw * 2];
       if (cfg.points.otWin !== undefined || cfg.points.otLoss !== undefined) {
         totals.push(
           (cfg.points.otWin ?? cfg.points.win) + (cfg.points.otLoss ?? cfg.points.loss),
-        );
-      }
-      if (cfg.points.shootoutWin !== undefined || cfg.points.shootoutLoss !== undefined) {
-        totals.push(
-          (cfg.points.shootoutWin ?? cfg.points.otWin ?? cfg.points.win) +
-            (cfg.points.shootoutLoss ?? cfg.points.otLoss ?? cfg.points.loss),
         );
       }
       return [...new Set(totals)];
@@ -2871,8 +2882,8 @@ export function makePeriodModule(
       const p = cfg.points;
       const opt = (v: number | undefined) => (v !== undefined ? [v] : []);
       return boundsFrom(
-        [p.win, ...opt(p.otWin), ...opt(p.shootoutWin)],
-        [p.loss, ...opt(p.otLoss), ...opt(p.shootoutLoss)],
+        [p.win, ...opt(p.otWin)],
+        [p.loss, ...opt(p.otLoss)],
         [p.draw],
       );
     },

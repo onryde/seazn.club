@@ -443,12 +443,12 @@ describe("X-PT-1 gap (a) — the awarded score reaches the sport's own score key
 
 /** Q1 / spec §2 routing (b): the per-sport point systems a stage PointsRule (win/draw/loss + bonuses + forfeit) cannot
  *  express — routed to W2d — named per module and preset. Ice hockey's OT/SO (default and iihf), hockey's shoot-out
- *  split (fih-shootout), cricket's tie / no-result (every preset, plan finding 29), and volleyball's set-score map
+ *  bonus (fih-shootout; W2d PS-1 made the split one `soBonus`), cricket's tie / no-result (every preset, plan finding 29), and volleyball's set-score map
  *  (FIVB 3-2 → 2:1, indoor and the default; beach pays one pair). Every other preset is expressible. */
 const INEXPRESSIBLE: Record<string, readonly string[]> = {
   "icehockey/(schema default)": ["otWin", "otLoss"],
   "icehockey/iihf": ["otWin", "otLoss"],
-  "hockey/fih-shootout": ["shootoutWin", "shootoutLoss"],
+  "hockey/fih-shootout": ["soBonus"],
   "cricket/(schema default)": ["tie", "noResult"],
   "cricket/t20": ["tie", "noResult"],
   "cricket/odi": ["tie", "noResult"],

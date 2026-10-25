@@ -263,7 +263,8 @@ describe.skipIf(!HAS_DB)("X-SR-1 putStageRules covers every sport", () => {
     const { divisionId } = await seedDivision(auth, "football", "11-a-side", 0);
     const s = await seedStage(auth, divisionId, 1, "league");
     expect(sportTopKeys(mod("football")).has("points"), "the premise: football declares points").toBe(true);
-    await expect(putStageRules(auth, s, { rules: { points: { shootoutWin: 2, shootoutLoss: 1 } } })).rejects.toMatchObject({
+    // W2d PS-1: the shoot-out bonus is football's own points key now (the pair it replaced left the schema).
+    await expect(putStageRules(auth, s, { rules: { points: { soBonus: 1 } } })).rejects.toMatchObject({
       status: 400,
       code: "RULE_NOT_SETTABLE",
       extra: { field: "points" },

@@ -106,7 +106,7 @@ export const notSettableReasonEn = (r: RuleNotSettableReason): string => enMsg(R
 
 /**
  * W2c Task 13 — the division points a stage PointsRule cannot express, by their config key (the engine's
- * `pointsRuleExpressible` names them: ice hockey's OT split, hockey's and football's shoot-out split, cricket's tie and no
+ * `pointsRuleExpressible` names them: ice hockey's OT split, hockey's and football's shoot-out bonus, cricket's tie and no
  * result, a set sport's `pointsMap` that pays more than one pair), each with its label. POINTS_RULE_INEXPRESSIBLE carries
  * the KEYS (`extra.keys`), never English, and every reader names them through this table: the server in en, a client in
  * the reader's language. Swept against every sport's declared points in rule-errors-copy.test.ts: a key the engine can
@@ -115,8 +115,7 @@ export const notSettableReasonEn = (r: RuleNotSettableReason): string => enMsg(R
 export const POINTS_SPLIT_LABEL_KEYS = {
   otWin: "rules.err.pointsSplit.otWin",
   otLoss: "rules.err.pointsSplit.otLoss",
-  shootoutWin: "rules.err.pointsSplit.shootoutWin",
-  shootoutLoss: "rules.err.pointsSplit.shootoutLoss",
+  soBonus: "rules.err.pointsSplit.soBonus",
   tie: "rules.err.pointsSplit.tie",
   noResult: "rules.err.pointsSplit.noResult",
   pointsMap: "rules.err.pointsSplit.pointsMap",

@@ -7,6 +7,8 @@ import { describe, expect, it } from "vitest";
 import { EngineError } from "../../core/errors.ts";
 import { foldMatch, type EventEnvelope } from "../../core/events.ts";
 import { rankStandings, validateCascade } from "../../competition/tiebreakers.ts";
+import { decidedInFor } from "../../competition/decided-in.ts";
+import { payout, setsToWinOf } from "../../competition/points.ts";
 import type { FixtureResult, StandingsRow } from "../../competition/standings.ts";
 import { conformanceSuite } from "../../testkit/conformance.ts";
 import { defaultLineupPair, makeEnvelope } from "../../testkit/helpers.ts";
@@ -361,7 +363,7 @@ describe("period kernel — OT-aware points (Event Code §219)", () => {
     expect([h.drawn, a.drawn]).toEqual([1, 1]);
   });
 
-  it("fih-shootout: SO win pays the bonus point split 2/1", () => {
+  it("fih-shootout: an SO win is a plain win in standingsDelta (3/0, W2d PS-1); the table books it a draw plus the bonus, 2/1 (B2)", () => {
     const so = [
       ...fihRegulation([fihGoal(FH), fihGoal(FA)]).slice(0, -1),
       fihAdvance("FT"),
@@ -382,7 +384,10 @@ describe("period kernel — OT-aware points (Event Code §219)", () => {
       "fih-shootout",
     );
     const [h, a] = hockey.standingsDelta(done.outcome!, done.cfg, { kind: "league" }, done);
-    expect([h.points, a.points]).toEqual([2, 1]);
+    expect([h.won, h.points, a.lost, a.points]).toEqual([1, 3, 1, 0]);
+    // The table's own payer (HK-PT-2): FIH Pro League 2/1, both drawn.
+    const table = payout(done.outcome!, decidedInFor(hockey, done.outcome), [h, a], true, hockey.tablePointsRule(done.cfg, "league"), hockey.awardScoreKeys, setsToWinOf(hockey, done.cfg));
+    expect(table.map((d) => [d.won, d.drawn, d.lost, d.points])).toEqual([[0, 1, 0, 2], [0, 1, 0, 1]]);
   });
 });
 
@@ -683,7 +688,7 @@ describe("period kernel — the shoot-out winner's credited goal", () => {
     expect(rows.reduce((sum, r) => sum + Number(r.stats.goals ?? 0), 0)).toBe(1);
   });
 
-  it("FIH records the same match as a draw plus a bonus point — unchanged", () => {
+  it("FIH records the same match as a draw plus a bonus point — no credited goal; the bonus is the table rule's (W2d B2)", () => {
     const so: ModuleEvent[] = [
       ...fihRegulation([fihGoal(FH), fihGoal(FA), fihGoal(FH), fihGoal(FA)]),
       { type: "hockey.shootout.attempt", payload: { by: FA, scored: true } },
@@ -700,7 +705,11 @@ describe("period kernel — the shoot-out winner's credited goal", () => {
     const [h, a] = hockey.standingsDelta(state.outcome!, state.cfg, { kind: "league" }, state);
     expect([h.metrics.gf, h.metrics.ga, h.metrics.gd]).toEqual([2, 2, 0]);
     expect([a.metrics.gf, a.metrics.ga, a.metrics.gd]).toEqual([2, 2, 0]);
-    expect([h.points, a.points]).toEqual([1, 2]);
+    // W2d PS-1: `standingsDelta` pays the shoot-out as a plain win; the table pays a draw plus the bonus.
+    expect([h.points, a.points]).toEqual([0, 3]);
+    const table = payout(state.outcome!, decidedInFor(hockey, state.outcome), [h, a], true, hockey.tablePointsRule(state.cfg, "league"), hockey.awardScoreKeys, setsToWinOf(hockey, state.cfg));
+    expect(table.map((d) => [d.drawn, d.points])).toEqual([[1, 1], [1, 2]]);
+    expect(table.map((d) => [d.metrics.gf, d.metrics.ga])).toEqual([[2, 2], [2, 2]]);
   });
 
   it("an UNDECIDED shoot-out credits nothing — the score moves only on the decision", () => {

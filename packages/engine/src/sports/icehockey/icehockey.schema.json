@@ -177,16 +177,6 @@
             "minimum": 0,
             "type": "integer"
           },
-          "shootoutLoss": {
-            "maximum": 9007199254740991,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "shootoutWin": {
-            "maximum": 9007199254740991,
-            "minimum": 0,
-            "type": "integer"
-          },
           "win": {
             "maximum": 9007199254740991,
             "minimum": 0,

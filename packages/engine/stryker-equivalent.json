@@ -578,31 +578,31 @@
       "reason": "nestedForfeitCredit returns doubleWalkoverCredit for by \"both\" before it reads `reason`, so the reason passed for a double walkover is never read."
     },
     {
-      "mutant": "src/sports/period/kernel.ts:2800:58 StringLiteral → \"\"",
+      "mutant": "src/sports/period/kernel.ts:2805:58 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "const credit = periodForfeitCredit(cfg, state, \"walkover\", \"both\");",
       "reason": "periodForfeitCredit returns doubleWalkoverCredit for by \"both\" before it reads `reason`, so the reason passed for a double walkover is never read."
     },
     {
-      "mutant": "src/sports/period/kernel.ts:2801:135 BooleanLiteral → true",
+      "mutant": "src/sports/period/kernel.ts:2806:135 BooleanLiteral → true",
       "original": "false",
       "line": "const at = (side: Side): StandingsDelta => ({ ...build(side, 0, 0, 1, 0), metrics: creditedMetrics(sideMetrics(state, side, false), credit, side) });",
       "reason": "The zero flag only zeroes gf/ga/gd of the played ledger; the double-walkover credit lays 0 over every key that ledger carries (and excludes them), so the played values are never observable."
     },
     {
-      "mutant": "src/sports/setbased/kernel.ts:2594:60 StringLiteral → \"\"",
+      "mutant": "src/sports/setbased/kernel.ts:2644:60 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "const credit = setBasedForfeitCredit(cfg, state, \"walkover\", \"both\");",
       "reason": "setBasedForfeitCredit returns doubleWalkoverCredit for by \"both\" before it reads `reason`, so the reason passed for a double walkover is never read."
     },
     {
-      "mutant": "src/sports/setbased/kernel.ts:2336:9 ConditionalExpression → true",
+      "mutant": "src/sports/setbased/kernel.ts:2386:9 ConditionalExpression → true",
       "original": "reason !== \"walkover\"",
       "line": "if (reason !== \"walkover\") {",
       "reason": "A walkover is admitted only while nothing is played (rulings 112, 114: any sport event after Start is play) and every set-kernel event refuses outside phase \"live\", so an admitted walkover's state has no sets and setsWon 0-0 (6,000 admitted walkovers measured): reading them adds nothing."
     },
     {
-      "mutant": "src/sports/setbased/kernel.ts:2336:20 StringLiteral → \"\"",
+      "mutant": "src/sports/setbased/kernel.ts:2386:20 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "if (reason !== \"walkover\") {",
       "reason": "A walkover is admitted only while nothing is played (rulings 112, 114: any sport event after Start is play) and every set-kernel event refuses outside phase \"live\", so an admitted walkover's state has no sets and setsWon 0-0 (6,000 admitted walkovers measured): reading them adds nothing."
@@ -680,55 +680,31 @@
       "reason": "A walkover is admitted only while nothing is played (rulings 112, 114: any sport event after Start is play) and carrom's board summary and adjustment refuse outside phase \"live\", so an admitted walkover's state has no games and gamesWon 0-0: reading them adds nothing."
     },
     {
-      "mutant": "src/sport/module.ts:541:73 MethodExpression → unioned.options.some(o => typeof o === \"object\" && o !== null)",
-      "original": "unioned.options.every((o) => typeof o === \"object\" && o !== null)",
-      "line": "if (Array.isArray(unioned.options) && unioned.options.length > 0 && unioned.options.every((o) => typeof o === \"object\" && o !== null)) {",
-      "reason": "`some` differs from `every` only on a MIXED options array; a zod `.options` is all schemas (union, discriminatedUnion) or all enum values (strings, or numbers for a numeric enum), never schemas and values together, and the empty array never reaches it (`length > 0` first, killed by module.test.ts 'the empty case'), so the two agree on every schema the walk can meet."
-    },
-    {
-      "mutant": "src/sport/module.ts:541:102 LogicalOperator → typeof o === \"object\" || o !== null",
-      "original": "typeof o === \"object\" && o !== null",
-      "line": "if (Array.isArray(unioned.options) && unioned.options.length > 0 && unioned.options.every((o) => typeof o === \"object\" && o !== null)) {",
-      "reason": "`||` differs from `&&` only for a non-null non-object option, i.e. an enum's strings: the mutant then reads the enum as a union of string branches, each a leaf, so fieldsNamed throws the same `is not an object schema` message (same prefix, same path) the enum itself would (module.test.ts 'an enum is still a leaf' passes under it)."
-    },
-    {
-      "mutant": "src/sport/module.ts:541:102 ConditionalExpression → true",
-      "original": "typeof o === \"object\" && o !== null",
-      "line": "if (Array.isArray(unioned.options) && unioned.options.length > 0 && unioned.options.every((o) => typeof o === \"object\" && o !== null)) {",
-      "reason": "Names two mutants, the whole test and its `typeof o === \"object\"` operand, each made `true`; with options never null (union options are schemas, enum values strings or numbers) both are true for every element exactly as the LogicalOperator `||` mutant beside this entry is, so they read an enum as a union of leaf branches and fieldsNamed throws the same `is not an object schema` message at the same path (module.test.ts 'an enum is still a leaf' passes under both: the 4,478-test related run, W2c Task 22)."
-    },
-    {
-      "mutant": "src/sport/module.ts:541:127 ConditionalExpression → true",
-      "original": "o !== null",
-      "line": "if (Array.isArray(unioned.options) && unioned.options.length > 0 && unioned.options.every((o) => typeof o === \"object\" && o !== null)) {",
-      "reason": "Differs from `o !== null` only for a null option, and zod `.options` never holds null: a union's are schemas, an enum's are its string or number values (`typeof null === \"object\"` is the only case the operand exists for)."
-    },
-    {
-      "mutant": "src/sports/period/kernel.ts:2387:38 ConditionalExpression → true",
+      "mutant": "src/sports/period/kernel.ts:2392:38 ConditionalExpression → true",
       "original": "awardReasonOf(outcome) !== \"bye\"",
       "line": "if (outcome?.kind === \"award\" && awardReasonOf(outcome) !== \"bye\") {",
       "reason": "officialScore reads the MODULE state's own outcome; the fold writes an award there only from a core.forfeit, whose reasons never include the system-only \"bye\", and ruling 104 (no core.forfeit was ever stored) rules out a legacy reason-less one, so `state.outcome` is never a bye and the conjunct is always true."
     },
     {
-      "mutant": "src/sports/period/kernel.ts:2387:65 StringLiteral → \"\"",
+      "mutant": "src/sports/period/kernel.ts:2392:65 StringLiteral → \"\"",
       "original": "\"bye\"",
       "line": "if (outcome?.kind === \"award\" && awardReasonOf(outcome) !== \"bye\") {",
       "reason": "officialScore reads the MODULE state's own outcome; the fold writes an award there only from a core.forfeit, whose reasons never include the system-only \"bye\", and ruling 104 (no core.forfeit was ever stored) rules out a legacy reason-less one, so `state.outcome` is never a bye and the conjunct is always true."
     },
     {
-      "mutant": "src/sports/period/kernel.ts:2616:9 ConditionalExpression → false",
+      "mutant": "src/sports/period/kernel.ts:2621:9 ConditionalExpression → false",
       "original": "preset.abandonOptions === undefined",
       "line": "...(preset.abandonOptions === undefined ? {} : { abandonOptions: preset.abandonOptions }),",
       "reason": "Both builtin period presets declare a list (hockey.ts, icehockey.ts; makePeriodModule has no other production caller), so the condition is already false for every builtin; for a hand-built preset with none the mutant gives the module an own `abandonOptions: undefined`, and every reader reads `module.abandonOptions ?? []` (web match-rules/shared.ts, stage-row-model.ts, describe-rules.ts; the engine reads the preset, not the module), so the offer is the same empty list (period.test.ts 'a preset that declares no abandon list' passes under it)."
     },
     {
-      "mutant": "src/sports/period/kernel.ts:2617:9 ConditionalExpression → false",
+      "mutant": "src/sports/period/kernel.ts:2622:9 ConditionalExpression → false",
       "original": "preset.stageDefaults === undefined",
       "line": "...(preset.stageDefaults === undefined ? {} : { stageDefaults: preset.stageDefaults }),",
       "reason": "Both builtin period presets declare stageDefaults (hockey.ts, icehockey.ts; makePeriodModule has no other production caller), so the condition is already false for every builtin; for a hand-built preset with none the mutant gives the module an own `stageDefaults: undefined`, and its only reader, rule-keys.ts `m.stageDefaults?.(kind, variant) ?? {}`, reads that exactly as an absent key (the same shape as kernel.ts:2612:9 above; Survived over the 3,527-test related run, W2c Task 22)."
     },
     {
-      "mutant": "src/sports/setbased/kernel.ts:2350:27 StringLiteral → \"\"",
+      "mutant": "src/sports/setbased/kernel.ts:2400:27 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "let next = reason === \"walkover\" || state.sets.length === 0 ? null : state.sets.length;",
       "reason": "An admitted walkover's state has no sets (rulings 112, 114; set-kernel events refuse outside \"live\"; 6,000 admitted walkovers measured), so `state.sets.length === 0` already makes `next` null for it."
@@ -738,6 +714,30 @@
       "original": "outcome.kind === \"win\"",
       "line": "return outcome.kind === \"award\" || (outcome.kind === \"win\" && (outcome.method === \"walkover\" || outcome.method === \"forfeit\"));",
       "reason": "The guard exists for TypeScript narrowing only: past the award arm the remaining MatchOutcome kinds (draw, tie, no_result, double_walkover; core/types.ts:169-197) declare no `method`, so the method test is already false for every one of them and the mutant answers the same (W2c Task 9)."
+    },
+    {
+      "mutant": "src/sport/module.ts:542:73 MethodExpression → unioned.options.some(o => typeof o === \"object\" && o !== null)",
+      "original": "unioned.options.every((o) => typeof o === \"object\" && o !== null)",
+      "line": "if (Array.isArray(unioned.options) && unioned.options.length > 0 && unioned.options.every((o) => typeof o === \"object\" && o !== null)) {",
+      "reason": "`some` differs from `every` only on a MIXED options array; a zod `.options` is all schemas (union, discriminatedUnion) or all enum values (strings, or numbers for a numeric enum), never schemas and values together, and the empty array never reaches it (`length > 0` first, killed by module.test.ts 'the empty case'), so the two agree on every schema the walk can meet."
+    },
+    {
+      "mutant": "src/sport/module.ts:542:102 LogicalOperator → typeof o === \"object\" || o !== null",
+      "original": "typeof o === \"object\" && o !== null",
+      "line": "if (Array.isArray(unioned.options) && unioned.options.length > 0 && unioned.options.every((o) => typeof o === \"object\" && o !== null)) {",
+      "reason": "`||` differs from `&&` only for a non-null non-object option, i.e. an enum's strings: the mutant then reads the enum as a union of string branches, each a leaf, so fieldsNamed throws the same `is not an object schema` message (same prefix, same path) the enum itself would (module.test.ts 'an enum is still a leaf' passes under it)."
+    },
+    {
+      "mutant": "src/sport/module.ts:542:102 ConditionalExpression → true",
+      "original": "typeof o === \"object\" && o !== null",
+      "line": "if (Array.isArray(unioned.options) && unioned.options.length > 0 && unioned.options.every((o) => typeof o === \"object\" && o !== null)) {",
+      "reason": "Names two mutants, the whole test and its `typeof o === \"object\"` operand, each made `true`; with options never null (union options are schemas, enum values strings or numbers) both are true for every element exactly as the LogicalOperator `||` mutant beside this entry is, so they read an enum as a union of leaf branches and fieldsNamed throws the same `is not an object schema` message at the same path (module.test.ts 'an enum is still a leaf' passes under both: the 4,478-test related run, W2c Task 22)."
+    },
+    {
+      "mutant": "src/sport/module.ts:542:127 ConditionalExpression → true",
+      "original": "o !== null",
+      "line": "if (Array.isArray(unioned.options) && unioned.options.length > 0 && unioned.options.every((o) => typeof o === \"object\" && o !== null)) {",
+      "reason": "Differs from `o !== null` only for a null option, and zod `.options` never holds null: a union's are schemas, an enum's are its string or number values (`typeof null === \"object\"` is the only case the operand exists for)."
     },
     {
       "mutant": "src/sports/generic/generic.ts:242:43 ConditionalExpression → false",

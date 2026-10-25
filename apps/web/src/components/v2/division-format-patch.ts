@@ -36,7 +36,7 @@ export function divisionFormatPatch(input: DivisionFormatPatchInput): Record<str
     delete override.allowDraws;
   }
   // R3.5/Task Q — buildRuleOverride can return a nested `{ points: {...} }`
-  // (football's shootoutWin/shootoutLoss). A bare Object.assign of the
+  // (the best-of-1 points field). A bare Object.assign of the
   // whole rule override would REPLACE override.points wholesale, dropping
   // whatever of the existing config's points (win/draw/loss, or a
   // shootout half the organiser isn't touching right now) the rule
@@ -56,8 +56,8 @@ export function divisionFormatPatch(input: DivisionFormatPatchInput): Record<str
       ...((override.points as Record<string, unknown>) ?? {}),
       ...(rulePoints as Record<string, unknown>),
     };
-    // R3.5 review F5 — a rule field's build()/buildOnBlank() (currently
-    // only match-rules.tsx's shootoutPointsPatch) can ask to DELETE a key
+    // R3.5 review F5 — a rule field's build()/buildOnBlank() (no field
+    // does today: football's shoot-out pair left in W2d) can ask to DELETE a key
     // from the nested object by setting it to `undefined` rather than
     // omitting it — omitting it would leave whatever `override.points`
     // already carried forward from the `{...division.config}` base at

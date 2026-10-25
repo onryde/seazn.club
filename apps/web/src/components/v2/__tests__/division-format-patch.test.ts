@@ -103,15 +103,13 @@ describe("the moved save builder keeps its behaviour (pins for the code that mov
     expect(changed.progressScore, "schema-required keys stay").toBe(false);
   });
 
-  it("football: blanking a shoot-out points box deletes BOTH keys from the nested points, the rest of points stays", () => {
-    const config = { points: { win: 3, draw: 1, loss: 0, shootoutWin: 2, shootoutLoss: 1 } };
+  it("football: a saved soBonus rides through an untouched save and a rule-field save — no field owns it (W2d PS-1)", () => {
+    const config = { points: { win: 3, draw: 1, loss: 0, soBonus: 1 } };
     const input = opened("football", config);
-    expect(input.ruleValues.shootoutWin, "premise: hydrated").toBe("2");
-    const blanked = divisionFormatPatch({ ...input, ruleValues: { ...input.ruleValues, shootoutWin: "" } });
-    expect(blanked.points).toEqual({ win: 3, draw: 1, loss: 0 });
-    expect(Object.hasOwn(blanked.points as object, "shootoutWin")).toBe(false);
-    expect(Object.hasOwn(blanked.points as object, "shootoutLoss")).toBe(false);
-    expect(divisionFormatPatch(input).points, "untouched keeps the pair").toEqual(config.points);
+    expect(divisionFormatPatch(input).points, "untouched keeps it").toEqual(config.points);
+    const subs = divisionFormatPatch({ ...input, ruleValues: { ...input.ruleValues, maxSubs: "3" } });
+    expect(subs.points, "a rule field's save leaves points as saved").toEqual(config.points);
+    expect(subs.maxSubs).toBe(3);
   });
 
   it("the standings-points boxes write the keys the sport declares, a blank box falls back to the saved value, and the advanced JSON is laid on last", () => {

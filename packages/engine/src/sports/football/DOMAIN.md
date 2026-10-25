@@ -93,7 +93,7 @@ is initialised with.
 | Which side takes the first kick | as above | entrant | the `by` of the first recorded kick | modelled | The recorded order *is* the coin-toss result; no separate field needed. |
 | Keeper facing a shootout kick, and how a kick missed | as above | keeper | — | deferred | Niche even in an elite match record, and the wrong fidelity for tiers 0–3. |
 | ABBA shootout order | as above | entrant | — | deferred | Trialled and withdrawn by IFAB; not in force in any competition we serve. |
-| Group-stage shootout points split | `11-a-side` in group stages | entrant | `Cfg.points.shootoutWin`, `.shootoutLoss` | modelled | Youth-cup convention (SO win 2 / SO loss 1); folded through `declaredPointsSets`. |
+| Group-stage shoot-out booked as a draw plus a bonus | `11-a-side` in group stages | entrant | `Cfg.points.soBonus` → `tablePointsRule` (`shootoutAs: "draw_plus_bonus"`) | modelled | W2d (B2, FB-PT-1): a table shoot-out is a draw for both plus `soBonus` (absent: 1) to its winner — SO win 2 / SO loss 1 with a draw of 1, both drawn. Paid by the stage points rule; `standingsDelta` pays the shoot-out as a plain win (PS-1). |
 | Referee and assistants | all | officials | `officialLabel.scorer = "Referee"` | deferred | Officials are a competition-layer assignment (the officials rota), not a match event; the module declares only the label the scoring UI shows. |
 | Man of the match | all | `person` | `core.award` + `playerStats.awards[motm]` | modelled | Kernel-owned event, undoable via `core.void`. |
 | Referee's written remarks | all | n/a | `core.note` | modelled | No state effect by contract. |

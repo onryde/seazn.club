@@ -126,10 +126,10 @@ export const FootballCfg = z.object({
       win: z.number().int().nonnegative().default(3),
       draw: z.number().int().nonnegative().default(1),
       loss: z.number().int().nonnegative().default(0),
-      // spec 04 §1.4 — optional split for group-stage shootouts
-      // (youth-cup convention: SO win 2, SO loss 1).
-      shootoutWin: z.number().int().nonnegative().optional(),
-      shootoutLoss: z.number().int().nonnegative().optional(),
+      // W2d (spec §5.3, B2; PS-1) — a group-stage shoot-out is a draw on the table plus this bonus to its winner
+      // (RB2B-7: draw 1 + 1 = 2/1). Optional: absent pays 1. Read only by `tablePointsRule`; it replaces the W2c
+      // shoot-out win/loss split (greenfield, no alias: z.object strips the old keys).
+      soBonus: z.number().int().nonnegative().optional(),
     })
     .default({ win: 3, draw: 1, loss: 0 }),
   awardScore: z.object({ goals: z.number().int().positive() }).default({ goals: 3 }),
@@ -2777,15 +2777,10 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
       }
       case "win": {
         const winnerSide = sideOf(state, outcome.winner);
-        // spec 04 §1.4 — optional shootout points split (group-stage SO).
-        const split =
-          outcome.method === "shootout" &&
-          cfg.points.shootoutWin !== undefined &&
-          cfg.points.shootoutLoss !== undefined;
-        const winnerPts = split ? (cfg.points.shootoutWin as number) : cfg.points.win;
-        const loserPts = split ? (cfg.points.shootoutLoss as number) : cfg.points.loss;
-        const winner = build(winnerSide, 1, 0, 0, winnerPts);
-        const loser = build(opponent(winnerSide), 0, 0, 1, loserPts);
+        // W2d PS-1: a shoot-out win pays a win here, as it did with no split set; the table's draw-plus-bonus booking is
+        // `tablePointsRule`'s (B2), paid by the stage's points rule.
+        const winner = build(winnerSide, 1, 0, 0, cfg.points.win);
+        const loser = build(opponent(winnerSide), 0, 0, 1, cfg.points.loss);
         return winnerSide === "home" ? [winner, loser] : [loser, winner];
       }
       case "draw":
@@ -2837,6 +2832,17 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
   // every level result for the organiser (ruling 79).
   reachableResultKinds: (cfg, stage) => new Set<"draw" | "tie" | "noResult">(football.supportsDraws(cfg, stage) ? ["draw"] : []),
   shootoutAs: "draw_plus_bonus",
+  // W2d (spec §5.3, §5.10) — W3 D1 L0; a table shoot-out is a draw plus `soBonus` (absent: 1) to its winner (B2,
+  // FB-PT-1). Overtime pays a win: no `ot` split (D9).
+  tablePointsRule: (cfg) => ({
+    win: { regulation: cfg.points.win },
+    loss: { regulation: cfg.points.loss },
+    draw: cfg.points.draw,
+    ...(cfg.points.soBonus === undefined ? {} : { soBonus: cfg.points.soBonus }),
+    shootoutAs: football.shootoutAs,
+    unit: "whole",
+    bonuses: [],
+  }),
 
   // W2c X-SR-6, FB-SO-1 (spec §4.2) — the preset a NEW bracket stage should start with: extra time 2×15, penalties and 5
   // kicks each (3 in the youth formats), every one the organiser's to switch off; a table stage starts with none. Stage
@@ -2847,22 +2853,14 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
       ? { extraTime: { enabled: true, halfMinutes: 15 }, shootout: true, shootoutAttempts: SHOOTOUT_ATTEMPTS_DEFAULT, ...KO_VARIANT_PRESET.get(variant) }
       : {},
 
-  // §9.3 — {win+loss, 2·draw} plus the optional shootout split total.
+  // §9.3 — {win+loss, 2·draw} (W2d PS-1: a shoot-out win pays a win).
   declaredPointsSets(cfg) {
-    const totals = [cfg.points.win + cfg.points.loss, cfg.points.draw * 2];
-    if (cfg.points.shootoutWin !== undefined && cfg.points.shootoutLoss !== undefined) {
-      totals.push(cfg.points.shootoutWin + cfg.points.shootoutLoss);
-    }
-    return [...new Set(totals)];
+    return [...new Set([cfg.points.win + cfg.points.loss, cfg.points.draw * 2])];
   },
 
   matchPointsBounds(cfg) {
     const p = cfg.points;
-    return boundsFrom(
-      [p.win, ...(p.shootoutWin !== undefined ? [p.shootoutWin] : [])],
-      [p.loss, ...(p.shootoutLoss !== undefined ? [p.shootoutLoss] : [])],
-      [p.draw],
-    );
+    return boundsFrom([p.win], [p.loss], [p.draw]);
   },
 
   officialLabel: { scorer: "Referee" }, // doc 13 §1

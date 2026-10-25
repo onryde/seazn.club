@@ -26,11 +26,11 @@
     "lifecycle": 231,
     "atomicApplicable": 15318,
     "bound": 178,
-    "variantCasesScorable": 1033,
+    "variantCasesScorable": 1029,
     "variantCasesUnscorable": 40,
     "denied": 7,
     "regressions": 9,
-    "value": 16598
+    "value": 16594
   },
   "drops": {
     "total": 4779,
@@ -129,7 +129,7 @@
   },
   "variants": {
     "perSport": {
-      "football": 96,
+      "football": 92,
       "cricket": 107,
       "boardgame": 90,
       "carrom": 97,
@@ -141,8 +141,8 @@
       "icehockey": 90,
       "hockey": 86
     },
-    "cases": 1073,
-    "scorable": 1033,
+    "cases": 1069,
+    "scorable": 1029,
     "unscorable": 40,
     "engineUnscorable": {
       "count": 40,

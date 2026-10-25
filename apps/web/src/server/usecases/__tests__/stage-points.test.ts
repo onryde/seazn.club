@@ -586,7 +586,8 @@ describe.skipIf(!HAS_DB)("ST-G8 the division save re-asks Q1 for every unstarted
     const auth = await seedOrg("pro");
     const hk = mod("hockey");
     const plain = variantCfg(hk, PLAIN) as { points: Record<string, number> };
-    const split = { ...plain, points: { ...plain.points, shootoutWin: 2, shootoutLoss: 1 } };
+    // W2d PS-1: hockey's split key is the FIH shoot-out bonus (the shoot-out pair it replaced is gone from the schema).
+    const split = { ...plain, points: { ...plain.points, soBonus: 2 } };
     expect(pointsRuleExpressible(split).ok, "premise: the edit splits the points").toBe(false);
     const { divisionId } = await seedDivision(auth, "hockey", PLAIN);
     const s = await seedStage(auth, divisionId, 1, "league");
@@ -607,27 +608,29 @@ describe.skipIf(!HAS_DB)("ST-G8 the division save re-asks Q1 for every unstarted
     await appendEvent(auth.orgId, f!.id, 0, { type: "core.start", payload: {} });
     expect(await formatLockedStageIds(auth, started.divisionId), "premise: started").toContain(s2);
     const out = await patchDivision(auth, started.divisionId, { config: split });
-    expect((out.config as { points: Record<string, number> }).points.shootoutWin).toBe(2);
+    expect((out.config as { points: Record<string, number> }).points.soBonus).toBe(2);
   }, 60_000);
 
   it("a save that did not cause the split is not blamed for it: an unrelated edit passes over a legacy stage; a NEW split key still refuses (fix round 1)", async () => {
     const auth = await seedOrg("pro");
-    const ih = mod("icehockey");
-    const iihf = variantCfg(ih, "iihf") as { points: Record<string, number>; periods: { count: number; minutes: number } };
-    const already = pointsRuleExpressible(iihf);
-    expect(already.ok, "premise: iihf already splits its points").toBe(false);
-    const { divisionId } = await seedDivision(auth, "icehockey", "iihf");
+    // W2d PS-1: hockey, not ice hockey — ice hockey's only split keys (otWin, otLoss) are both standing in iihf, so it has
+    // no NEW key left to add since the shoot-out pair left its schema. FIH's shoot-out bonus is hockey's standing split.
+    const hk = mod("hockey");
+    const fih = variantCfg(hk, "fih-shootout") as { points: Record<string, number>; periods: { count: number; minutes: number } };
+    const already = pointsRuleExpressible(fih);
+    expect(already.ok, "premise: fih-shootout already splits its points").toBe(false);
+    const { divisionId } = await seedDivision(auth, "hockey", "fih-shootout");
     const s = await seedStage(auth, divisionId, 1, "league");
     // A legacy stage: points stored over a division that already splits (no door writes this now; a row from before can).
     const legacy = await sql`update stages set config = config || ${sql.json({ points: base } as never)} where id = ${s}`;
     expect(legacy.count).toBe(1);
     // The unrelated edit: the period length. The split keys are exactly the ones already there.
-    const longer = { ...iihf, periods: { ...iihf.periods, minutes: iihf.periods.minutes + 5 } };
+    const longer = { ...fih, periods: { ...fih.periods, minutes: fih.periods.minutes + 5 } };
     expect(pointsRuleExpressible(longer), "premise: the same split, the same keys").toEqual(already);
     const out = await patchDivision(auth, divisionId, { config: longer });
-    expect((out.config as typeof iihf).periods.minutes).toBe(iihf.periods.minutes + 5);
+    expect((out.config as typeof fih).periods.minutes).toBe(fih.periods.minutes + 5);
     // The positive pair, same stage: a save that ADDS a split key the division did not have is refused, naming the stage.
-    const wider = { ...longer, points: { ...longer.points, shootoutWin: 2 } };
+    const wider = { ...longer, points: { ...longer.points, otWin: 2 } };
     const next = pointsRuleExpressible(wider);
     expect(next.ok === false && !already.ok && next.keys.some((k) => !already.keys.includes(k)), "premise: a new split key").toBe(true);
     await expect(patchDivision(auth, divisionId, { config: wider })).rejects.toMatchObject({
@@ -637,26 +640,27 @@ describe.skipIf(!HAS_DB)("ST-G8 the division save re-asks Q1 for every unstarted
 
   it("the removal arm: a save whose split keys are a strict subset of the standing ones passes; a new key from there still refuses (fix round 2)", async () => {
     const auth = await seedOrg("pro");
-    const ih = mod("icehockey");
-    const iihf = variantCfg(ih, "iihf") as { points: Record<string, number> };
-    const three = { ...iihf, points: { ...iihf.points, shootoutWin: 2 } };
+    // W2d PS-1: hockey (see the test above) — fih-shootout's soBonus is the standing split, otWin the one dropped.
+    const hk = mod("hockey");
+    const fih = variantCfg(hk, "fih-shootout") as { points: Record<string, number> };
+    const three = { ...fih, points: { ...fih.points, otWin: 2 } };
     const standing = pointsRuleExpressible(three);
-    const fewer = pointsRuleExpressible(iihf);
+    const fewer = pointsRuleExpressible(fih);
     expect(
       !standing.ok && !fewer.ok && fewer.keys.length < standing.keys.length && fewer.keys.every((k) => standing.keys.includes(k)),
-      "premise: iihf's split keys are a strict subset of the standing ones",
+      "premise: fih-shootout's split keys are a strict subset of the standing ones",
     ).toBe(true);
-    const { divisionId } = await seedDivision(auth, "icehockey", "iihf");
+    const { divisionId } = await seedDivision(auth, "hockey", "fih-shootout");
     const s = await seedStage(auth, divisionId, 1, "league");
-    // Legacy rows, as a pre-Task-13 division and stage hold them: three split keys, and the stage's own points over them.
+    // Legacy rows, as a pre-Task-13 division and stage hold them: two split keys, and the stage's own points over them.
     const div = await sql`update divisions set config = ${sql.json(three as never)} where id = ${divisionId}`;
     const st = await sql`update stages set config = config || ${sql.json({ points: base } as never)} where id = ${s}`;
     expect([div.count, st.count]).toEqual([1, 1]);
-    // The removal: the save drops `shootoutWin`, splitting LESS than the division already does.
-    const out = await patchDivision(auth, divisionId, { config: iihf });
-    expect(Object.hasOwn((out.config as typeof iihf).points, "shootoutWin"), "the key is gone").toBe(false);
-    // The pair, from there: adding a key the division does not split now (`shootoutLoss`) is refused, naming the stage.
-    const added = { ...iihf, points: { ...iihf.points, shootoutLoss: 1 } };
+    // The removal: the save drops `otWin`, splitting LESS than the division already does.
+    const out = await patchDivision(auth, divisionId, { config: fih });
+    expect(Object.hasOwn((out.config as typeof fih).points, "otWin"), "the key is gone").toBe(false);
+    // The pair, from there: adding a key the division does not split now (`otLoss`) is refused, naming the stage.
+    const added = { ...fih, points: { ...fih.points, otLoss: 1 } };
     const next = pointsRuleExpressible(added);
     expect(!next.ok && !fewer.ok && next.keys.some((k) => !fewer.keys.includes(k)), "premise: a new split key").toBe(true);
     await expect(patchDivision(auth, divisionId, { config: added })).rejects.toMatchObject({

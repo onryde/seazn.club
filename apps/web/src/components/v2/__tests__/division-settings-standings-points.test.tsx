@@ -4,8 +4,8 @@
 // division-settings.tsx:
 //
 //   1. `ruleValues` (MatchRuleFields' controlled values) never hydrated from
-//      `division.config` — every field, including shootoutWin/shootoutLoss,
-//      showed blank on reopen no matter what was saved.
+//      `division.config` — every field showed blank on reopen no matter what
+//      was saved.
 //   2. `Object.assign(override, buildRuleOverride(...))` replaced
 //      `override.points` WHOLESALE instead of merging it — buildRuleOverride
 //      returns a nested `{ points: {...} }`, so this discarded whatever of
@@ -17,6 +17,10 @@
 //      For every other sport this editor's writes were silently dropped by
 //      the pinned schema's non-strict `.object()`, and its reads were always
 //      undefined, so the boxes showed blank too.
+//
+// W2d (PS-1): Task I's shoot-out points pair is gone (a table shoot-out is a draw plus `points.soBonus`, which the
+// stage's Points section owns). `soBonus` stays in these fixtures as the saved points key NO box here edits: every save
+// must carry it through untouched, which is what bug 2 broke.
 //
 // Same harness as division-settings-paywall.test.tsx (DivisionSettings is a
 // stateful island; renderToStaticMarkup can't drive a save). MatchRuleFields
@@ -66,7 +70,7 @@ const ENTRANT_MODEL: EffectiveEntrantModel = {
   maxTeamMembers: null,
 };
 
-const FOOTBALL_POINTS = { win: 3, draw: 1, loss: 0, shootoutWin: 2, shootoutLoss: 1 };
+const FOOTBALL_POINTS = { win: 3, draw: 1, loss: 0, soBonus: 1 };
 
 function baseProps(config: Record<string, unknown>, sportKey = "football", variantKey = "standard") {
   return {
@@ -183,11 +187,11 @@ beforeEach(() => {
 });
 
 describe("division settings — rule-field values hydrate from the saved config (bug 1)", () => {
-  it("shows the division's saved shoot-out points instead of blank inputs on open", () => {
-    const island = mount({ points: { ...FOOTBALL_POINTS } });
+  it("shows the division's saved match rules instead of blank inputs on open", () => {
+    const island = mount({ halfMinutes: 50, maxSubs: 3, points: { ...FOOTBALL_POINTS } });
     const values = ruleValuesOf(island.tree());
-    expect(values.shootoutWin, "shootoutWin should show the saved value, not blank").toBe("2");
-    expect(values.shootoutLoss, "shootoutLoss should show the saved value, not blank").toBe("1");
+    expect(values.halfMinutes, "halfMinutes should show the saved value, not blank").toBe("50");
+    expect(values.maxSubs, "maxSubs should show the saved value, not blank").toBe("3");
   });
 
   it("hydrates the football standings win/draw/loss inputs from win/draw/loss, not w/d/l", () => {
@@ -200,7 +204,7 @@ describe("division settings — rule-field values hydrate from the saved config 
 });
 
 describe("division settings save path — the standings-points editor must not silently cancel other saved points (R3.5/Task Q)", () => {
-  it("case 1: saving an unrelated rule change leaves all five points keys intact", async () => {
+  it("case 1: saving an unrelated rule change leaves every points key intact (soBonus, which no box owns, included)", async () => {
     const island = mount({ points: { ...FOOTBALL_POINTS } });
     typeRuleField(island.tree(), "halfMinutes", "50");
     clickButton(island.tree(), "Save match rules");
@@ -208,15 +212,14 @@ describe("division settings save path — the standings-points editor must not s
     expect(lastPatchConfig().points).toEqual(FOOTBALL_POINTS);
   });
 
-  it("case 2: retyping only shootoutWin still keeps shootoutLoss (and win/draw/loss) intact", async () => {
+  it("case 2: retyping only the win box still keeps soBonus (and draw/loss) intact", async () => {
     const island = mount({ points: { ...FOOTBALL_POINTS } });
-    typeRuleField(island.tree(), "shootoutWin", "5");
+    typePointsField(island.tree(), 0, "5");
     clickButton(island.tree(), "Save match rules");
     await flush();
     const points = lastPatchConfig().points as Record<string, unknown>;
-    expect(points.shootoutWin, "the just-retyped value").toBe(5);
-    expect(points.shootoutLoss, "must survive even though it was never retyped").toBe(1);
-    expect(points.win).toBe(3);
+    expect(points.win, "the just-retyped value").toBe(5);
+    expect(points.soBonus, "must survive even though no box edits it").toBe(1);
     expect(points.draw).toBe(1);
     expect(points.loss).toBe(0);
   });
@@ -315,73 +318,32 @@ describe("division settings — the points editor renders exactly the boxes a sp
   });
 });
 
-describe("division settings — clearing a shoot-out points field deletes BOTH keys (R3.5 review F5, BLOCKER)", () => {
-  it("clearing only shootoutWin removes both shootoutWin and shootoutLoss from the saved points", async () => {
+describe("division settings — no football field writes shoot-out points any more (W2d PS-1)", () => {
+  it("a retired shoot-out points key typed into the form (a stale tab) writes nothing into points", async () => {
     const island = mount({ points: { ...FOOTBALL_POINTS } });
-    typeRuleField(island.tree(), "shootoutWin", "");
-    clickButton(island.tree(), "Save match rules");
-    await flush();
-    const points = lastPatchConfig().points as Record<string, unknown>;
-    expect(points, "clearing win must also drop the now-orphaned loss side").not.toHaveProperty("shootoutWin");
-    expect(points).not.toHaveProperty("shootoutLoss");
-    expect(points.win).toBe(3);
-    expect(points.draw).toBe(1);
-    expect(points.loss).toBe(0);
-  });
-
-  it("clearing only shootoutLoss removes both shootoutWin and shootoutLoss from the saved points", async () => {
-    const island = mount({ points: { ...FOOTBALL_POINTS } });
-    typeRuleField(island.tree(), "shootoutLoss", "");
-    clickButton(island.tree(), "Save match rules");
-    await flush();
-    const points = lastPatchConfig().points as Record<string, unknown>;
-    expect(points).not.toHaveProperty("shootoutWin");
-    expect(points).not.toHaveProperty("shootoutLoss");
-  });
-
-  it("clearing both shoot-out fields removes both keys — the deliberate 'turn it off' path", async () => {
-    const island = mount({ points: { ...FOOTBALL_POINTS } });
-    typeRuleField(island.tree(), "shootoutWin", "");
-    typeRuleField(island.tree(), "shootoutLoss", "");
-    clickButton(island.tree(), "Save match rules");
-    await flush();
-    const points = lastPatchConfig().points as Record<string, unknown>;
-    expect(points).not.toHaveProperty("shootoutWin");
-    expect(points).not.toHaveProperty("shootoutLoss");
-    expect(points.win).toBe(3);
-    expect(points.draw).toBe(1);
-    expect(points.loss).toBe(0);
-  });
-
-  it("setting both shoot-out fields from scratch still writes both — the pair stays intact when fully set", async () => {
-    const island = mount({ points: { win: 3, draw: 1, loss: 0 } });
     typeRuleField(island.tree(), "shootoutWin", "2");
     typeRuleField(island.tree(), "shootoutLoss", "1");
     clickButton(island.tree(), "Save match rules");
     await flush();
-    const points = lastPatchConfig().points as Record<string, unknown>;
-    expect(points.shootoutWin).toBe(2);
-    expect(points.shootoutLoss).toBe(1);
+    expect(lastPatchConfig().points, "exactly the saved points: no retired key gained, soBonus kept").toEqual(FOOTBALL_POINTS);
   });
 });
 
 describe("division settings — the rules/points panel re-syncs with a refreshed division.config (R3.5 review F6)", () => {
   it("re-hydrates ruleValues on a MOUNTED instance when router.refresh() hands back a new config", () => {
-    const island = mount({ points: { ...FOOTBALL_POINTS } });
-    expect(ruleValuesOf(island.tree()).shootoutWin, "sanity: starts hydrated from the initial config").toBe("2");
-    // The shape a real router.refresh() delivers after F5's fix actually
-    // deletes a cleared shoot-out pair server-side: same component instance,
-    // a NEW division.config with shootoutWin/shootoutLoss gone.
+    const island = mount({ halfMinutes: 50, points: { ...FOOTBALL_POINTS } });
+    expect(ruleValuesOf(island.tree()).halfMinutes, "sanity: starts hydrated from the initial config").toBe("50");
+    // The shape a real router.refresh() delivers after a key is deleted server-side: same component instance, a NEW
+    // division.config with halfMinutes gone.
     island.rerender(baseProps({ points: { win: 3, draw: 1, loss: 0 } }));
     const values = ruleValuesOf(island.tree());
-    expect(values.shootoutWin, "must drop the stale value once the server no longer has it").toBeUndefined();
-    expect(values.shootoutLoss).toBeUndefined();
+    expect(values.halfMinutes, "must drop the stale value once the server no longer has it").toBeUndefined();
   });
 
   it("re-hydrates the standings-points boxes the same way, on the same prop change", () => {
     const island = mount({ points: { ...FOOTBALL_POINTS } });
     island.rerender(
-      baseProps({ points: { win: 5, draw: 2, loss: 1, shootoutWin: 2, shootoutLoss: 1 } }),
+      baseProps({ points: { win: 5, draw: 2, loss: 1, soBonus: 1 } }),
     );
     const [w, d, l] = pointsInputs(island.tree());
     expect(propsOf(w!).value, "server-clamped/defaulted win must overwrite the stale typed value").toBe("5");

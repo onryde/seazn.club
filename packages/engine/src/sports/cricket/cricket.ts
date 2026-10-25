@@ -4059,6 +4059,18 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
   reachableResultKinds: (cfg, stage) =>
     new Set<"draw" | "tie" | "noResult">(DRAW_KINDS.has(stage) ? ["tie", "noResult", ...(cricket.supportsDraws(cfg, stage) ? (["draw"] as const) : [])] : []),
   shootoutAs: "result",
+  // W2d (spec §5.10; CK-PT-1, CK-PT-2) — W2, tie 1, NR 1, L0 from `points`; a two-innings draw (only there: inningsPerSide
+  // 2) pays `points.draw`, else 1 (D10(c): no longer the tie's points). A super-over win pays a win.
+  tablePointsRule: (cfg) => ({
+    win: { regulation: cfg.points.win },
+    loss: { regulation: cfg.points.loss },
+    tie: cfg.points.tie,
+    noResult: cfg.points.noResult,
+    ...(cfg.inningsPerSide === 2 ? { draw: cfg.points.draw ?? 1 } : {}),
+    shootoutAs: cricket.shootoutAs,
+    unit: "whole",
+    bonuses: [],
+  }),
 
   // W2c X-SR-6, CK-SO-1 (spec §4.2) — the preset a NEW bracket stage should start with: the super over ON, wherever the
   // schema takes one (`ruleKeys.superOver.appliesTo` is the one declaration of which variants: a two-innings test match

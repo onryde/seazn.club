@@ -584,7 +584,7 @@ const BASE_KEYS: ReadonlySet<string> = new Set(["win", "draw", "loss", "w", "d",
  * W2c Q1 (owner "A"): can a stage PointsRule (win/draw/loss + bonuses + a forfeit row) stand in for this division's own
  * points without dropping any of them? Refused — never silently dropped — where the division splits its points in a way
  * the rule cannot say (W2d widens PointsRule and lifts this):
- *  - a `points` key beyond the three-way result: ice hockey's `otWin`/`otLoss`, hockey's `shootoutWin`/`shootoutLoss`,
+ *  - a `points` key beyond the three-way result: ice hockey's `otWin`/`otLoss`, hockey's shoot-out `soBonus` (W2d PS-1),
  *    cricket's `tie`/`noResult` (plan finding 29);
  *  - a set sport's `pointsMap` that pays more than one pair by set score (volleyball's FIVB 3-2 → 2:1 beside 3:0): the
  *    rule pays one pair per result. A map of one pair (badminton's `*` 2:0) is the rule's own win/loss.

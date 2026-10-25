@@ -1102,6 +1102,16 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
   reachableDecidedIn: (cfg) => new Set<DecidedIn>(cfg.tiebreak === true && effectiveRungs(cfg).length > 0 ? ["regulation", "so"] : ["regulation"]),
   reachableResultKinds: (cfg, stage) => new Set<"draw" | "tie" | "noResult">(boardgame.supportsDraws(cfg, stage) ? ["draw"] : []),
   shootoutAs: "result",
+  // W2d (spec §5.10; BG-PT-1) — `scoring` as stored, in half-points (2/1/0 is FIDE's 1/½/0, `unit: "half"`); a
+  // tie-break game's winner is paid a win (no `so` split).
+  tablePointsRule: (cfg) => ({
+    win: { regulation: cfg.scoring.win },
+    loss: { regulation: cfg.scoring.loss },
+    draw: cfg.scoring.draw,
+    shootoutAs: boardgame.shootoutAs,
+    unit: "half",
+    bonuses: [],
+  }),
   // C12: lots is the organiser's settle (ruling 73) — settleApplies is true while
   // the tie-break is pending. A held double forfeit is phase "done": false (T15-R1).
   awaitingDecider: (s: BoardgameState) => s.phase === "tiebreak",

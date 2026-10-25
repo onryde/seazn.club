@@ -111,12 +111,7 @@
             "minimum": 0,
             "type": "integer"
           },
-          "shootoutLoss": {
-            "maximum": 9007199254740991,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "shootoutWin": {
+          "soBonus": {
             "maximum": 9007199254740991,
             "minimum": 0,
             "type": "integer"

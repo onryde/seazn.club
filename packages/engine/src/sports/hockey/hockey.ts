@@ -143,7 +143,8 @@ export const hockey = makePeriodModule({
     // bonus point (App 12: 5 attempts, 8 s each, then sudden death).
     "fih-shootout": {
       shootout: { attempts: 5, suddenDeath: true, clockSeconds: 8 },
-      points: { win: 3, draw: 1, loss: 0, shootoutWin: 2, shootoutLoss: 1 },
+      // W2d (B2, HK-PT-2): the shoot-out is a draw on the table plus a bonus point to its winner (2/1, booked D).
+      points: { win: 3, draw: 1, loss: 0, soBonus: 1 },
       // HK-AB-2 (W2c, H-15): the FIH tournament rule - an abandon replays until the 4th quarter has started, then the
       // result stands (ruling 117 where the cfg refuses a draw).
       abandonPolicy: "q4_stands",

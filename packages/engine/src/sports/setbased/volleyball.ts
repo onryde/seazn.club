@@ -4,11 +4,19 @@
 // role (validation only — positions never touch scoring). The kernel owns all
 // set logic; this file is configuration.
 import type { PositionCatalog } from "../../sport/catalog.ts";
-import { makeSetBasedModule, SET_RULE_KEYS, type SetBasedParams } from "./kernel.ts";
+import { makeSetBasedModule, samePointsMap, SET_RULE_KEYS, type PointsPair, type SetBasedParams } from "./kernel.ts";
 
 // spec 04 §3.4 — FIVB league convention. "*" (clean 3-0/3-1) → 3:0; the 3-2
 // split is the only exception → 2:1. Total is 3 either way (declaredPointsSets).
 const FIVB_POINTS: SetBasedParams["pointsMap"] = { "3-2": [2, 1], "*": [3, 0] };
+// W2d (spec §5.3, §5.10, D10(a); VB-PT-1, VB-PT-2) — the FIVB table points, spelled out by final score (a map that pays
+// two pairs names every score: `coverage`). Best of 5 pays what `FIVB_POINTS` pays; best of 3 pays a 2-1 2:1, where the
+// shipped map's "*" paid it 3:0. Read by `tablePointsRule` for the shipped map only (an organiser's own map pays as
+// written). The cfg default stays `FIVB_POINTS`: it is serialised into every recorded state, and `standingsDelta` reads it.
+const FIVB_TABLE: Readonly<Record<number, Readonly<Record<string, PointsPair>>>> = {
+  5: { "3-0": [3, 0], "3-1": [3, 0], "3-2": [2, 1] },
+  3: { "2-0": [3, 0], "2-1": [2, 1] },
+};
 
 // engine/sports/volleyball.md §5 — S (setter) / OH (outside) / MB (middle) /
 // OPP (opposite) / L (libero); 6 on court, libero as a role tracked for lineups
@@ -98,6 +106,10 @@ export const volleyball = makeSetBasedModule({
   defaultTiebreakers: ["points", "wins", "set_ratio", "point_ratio", "h2h_points"],
   officialLabel: { scorer: "Referee" }, // doc 13 §1
   coarseEventType: "set.summary",
+  tablePointsRule: (cfg, fromMap) => {
+    const fivb = samePointsMap(cfg.pointsMap, FIVB_POINTS) && Object.hasOwn(FIVB_TABLE, cfg.bestOf) ? FIVB_TABLE[cfg.bestOf] : undefined;
+    return fivb === undefined ? fromMap : { ...fromMap, bySetScore: { ...fivb } };
+  },
   // S7/#427 — the FIVB ladder verbatim; the kernel enum IS volleyball's own
   // vocabulary (DOMAIN.volleyball.md:38), so all four steps are on the pad.
   sanctionLevels: ["warning", "penalty", "expulsion", "disqualification"],

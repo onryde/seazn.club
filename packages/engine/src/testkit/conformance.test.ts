@@ -198,6 +198,7 @@ const coinflip: SportModule<CoinCfg, CoinEv, CoinState> = {
   reachableDecidedIn: () => new Set(["regulation"] as const),
   reachableResultKinds: (_cfg, stage) => new Set(stage === "league" || stage === "group" || stage === "swiss" ? (["draw"] as const) : []),
   shootoutAs: "result",
+  tablePointsRule: () => ({ win: { regulation: 2 }, loss: { regulation: 0 }, draw: 1, shootoutAs: "result", unit: "whole", bonuses: [] }),
   bracketDeciders: () => ({}),
   declaredPointsSets: () => [2],
   matchPointsBounds: () => ({ max: 2, min: 0, winFloor: 2, lossCeil: 0, winsOnly: false }), // a draw pays 1

@@ -26,7 +26,7 @@ Once the shoot-out starts, **Shoot-out kick** tiles replace the goal and substit
 
 ## Standings
 
-Football pays your division's usual win/draw/loss points, and by default a shoot-out win is worth exactly the same as a win in regulation — the shoot-out is only how the match was decided, not a different result. A group stage that also plays a shoot-out can instead pay less for a win on kicks than a win in regulation (a youth-cup convention); that's a setting in your stage's **Match rules**, not something you choose while scoring — see [knockout deciders](/help/scoring/knockout-deciders).
+Football pays your division's usual win/draw/loss points. In a knockout the shoot-out only decides who goes through. A group or league stage that also plays a shoot-out counts it on the table as a draw for both sides plus a bonus point for the team that wins on kicks — with a draw worth 1, that is 2 for the winner and 1 for the loser, and neither side is credited a win. Whether a stage plays a shoot-out is a setting in its **Match rules**, not something you choose while scoring — see [knockout deciders](/help/scoring/knockout-deciders).
 
 ## Common questions
 

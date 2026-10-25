@@ -363,9 +363,9 @@ export function structureDraftsForApply(
  * half-built here — a box with no help text explaining what a "no result"
  * pays would be the same dead/confusing-control defect in a new place.
  * `editablePointsKeys` also excludes any key a MatchRuleFields field already
- * owns a dedicated, better-explained input for (football's
- * shootoutWin/shootoutLoss — see match-rules.tsx) so the two editors never
- * double up on one key.
+ * owns a dedicated, better-explained input for (none today: football's
+ * shoot-out points pair left in W2d, its `soBonus` is the stage Points
+ * section's) so the two editors never double up on one key.
  */
 const POINTS_KEY_CONCEPT: Record<string, { order: number; labelKey: MessageKey }> = {
   w: { order: 0, labelKey: "divset.win" },

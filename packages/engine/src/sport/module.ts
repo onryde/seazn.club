@@ -22,6 +22,7 @@ import type {
   StandingsDelta,
 } from "../core/types.ts";
 import type { PositionCatalog } from "./catalog.ts";
+import type { PointsRule } from "../competition/points.ts";
 import type { DocSection } from "../exports/types.ts";
 import { resolvePayloadPath, type PlayerStatsModel } from "../stats/stats.ts";
 import type { EntrantModel } from "./entrant-model.ts";
@@ -1020,6 +1021,15 @@ export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> 
   /** D6 (X-WO-1 amended) — the sport pays a separate "loss, not played" (table tennis: played L 1, unplayed L 0). Absent
    *  everywhere else, so `loss.unplayed` is reachable nowhere else (PS-7a). */
   readonly declaresUnplayedLoss?: true;
+  /**
+   * W2d (spec §5.3 "The sport's default, as a rule", §5.10; X-PT-2, X-PT-3) — the points a TABLE stage of `stageKind`
+   * pays under `cfg` when the stage sets no rule of its own, as an outcome-keyed `PointsRule` built from the sport's own
+   * cfg keys (football's `points`, the period kernel's `otWin/otLoss`, cricket's `tie/noResult/draw`, a set sport's
+   * `pointsMap`, chess's `scoring` in half-points, generic's `w/d/l`). `shootoutAs` is the sport's own (above). It pays
+   * exactly what `standingsDelta` pays, every cfg × reachable outcome, except the signed changes (D6, D10(a)(c), B2) —
+   * table-points-parity.test.ts sweeps it against `standingsDelta`, and it covers `reachableOutcomes` (`coverage`).
+   */
+  tablePointsRule(cfg: Cfg, stageKind: StageKind): PointsRule;
   // W2a (spec §5.2, ruling 76) — the cfg changes a BRACKET stage applies on top
   // of the resolved cfg (resolveFixtureCfg merges it by stage kind; the V347
   // freeze then carries it). `{}` is a legal declaration.

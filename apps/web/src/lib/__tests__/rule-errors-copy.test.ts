@@ -153,8 +153,10 @@ describe("ruleRefusalText — the client reads the code and its extra, in the re
       ["RULE_NOT_SETTABLE", { field: "clock", reason: "some_future_reason" }, sayEs(RULE_ERROR_KEYS.RULE_NOT_SETTABLE, { field: "clock" })],
       ["POINTS_RULE_INEXPRESSIBLE", {}, null],
       // W2c Task 13: its emitter sends the split keys; a key with no label is one this app cannot say (null: the message).
-      ["POINTS_RULE_INEXPRESSIBLE", { keys: ["shootoutWin", "shootoutLoss"] }, sayEs(RULE_ERROR_KEYS.POINTS_RULE_INEXPRESSIBLE, { reason: sayEs(RULE_ERROR_SUPPORT_KEYS.pointsSplit, { fields: [sayEs(POINTS_SPLIT_LABEL_KEYS.shootoutWin), sayEs(POINTS_SPLIT_LABEL_KEYS.shootoutLoss)].join(", ") }) })],
-      ["POINTS_RULE_INEXPRESSIBLE", { keys: ["shootoutWin", "notAPointsKey"] }, null],
+      ["POINTS_RULE_INEXPRESSIBLE", { keys: ["otWin", "otLoss"] }, sayEs(RULE_ERROR_KEYS.POINTS_RULE_INEXPRESSIBLE, { reason: sayEs(RULE_ERROR_SUPPORT_KEYS.pointsSplit, { fields: [sayEs(POINTS_SPLIT_LABEL_KEYS.otWin), sayEs(POINTS_SPLIT_LABEL_KEYS.otLoss)].join(", ") }) })],
+      // W2d PS-1: hockey's FIH shoot-out bonus is the split key the shoot-out pair used to be.
+      ["POINTS_RULE_INEXPRESSIBLE", { keys: ["soBonus"] }, sayEs(RULE_ERROR_KEYS.POINTS_RULE_INEXPRESSIBLE, { reason: sayEs(RULE_ERROR_SUPPORT_KEYS.pointsSplit, { fields: sayEs(POINTS_SPLIT_LABEL_KEYS.soBonus) }) })],
+      ["POINTS_RULE_INEXPRESSIBLE", { keys: ["soBonus", "notAPointsKey"] }, null],
       ["POINTS_RULE_INEXPRESSIBLE", { keys: [] }, null],
       ["FIXTURE_HAS_OWN_FORMAT", { fixture_id: "f", fixture_no: 3 }, sayEs(RULE_ERROR_KEYS.FIXTURE_HAS_OWN_FORMAT, { match: sayEs(RULE_ERROR_SUPPORT_KEYS.match, { n: 3 }) })],
       ["FIXTURE_HAS_OWN_FORMAT", { fixture_id: "f", fixture_no: null }, sayEs(RULE_ERROR_KEYS.FIXTURE_HAS_OWN_FORMAT, { match: sayEs(RULE_ERROR_SUPPORT_KEYS.thisMatch) })],

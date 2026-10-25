@@ -2311,6 +2311,14 @@ export function makeNestedModule(
     reachableDecidedIn: () => new Set<DecidedIn>(["regulation"]),
     reachableResultKinds: () => new Set<"draw" | "tie" | "noResult">(),
     shootoutAs: "result",
+    // W2d (spec §5.3, §5.10) — `points` as a rule: tennis 2/0, no draw.
+    tablePointsRule: (cfg) => ({
+      win: { regulation: cfg.points.win },
+      loss: { regulation: cfg.points.loss },
+      shootoutAs: "result",
+      unit: "whole",
+      bonuses: [],
+    }),
 
     // W2a: none — a tennis match always produces a winner (spec §5.2)
     bracketDeciders: () => ({}),

@@ -1137,6 +1137,15 @@ export const carrom: SportModule<CarromCfg, CarromEv, CarromState> = {
   reachableDecidedIn: () => new Set<DecidedIn>(["regulation"]),
   reachableResultKinds: (cfg, stage) => new Set<"draw" | "tie" | "noResult">(carrom.supportsDraws(cfg, stage) ? ["draw"] : []),
   shootoutAs: "result",
+  // W2d (spec §5.3, §5.10) — `points` as a rule: 2/1/0, a drawn match (the tieBoard "draw" house rule) paying `draw`.
+  tablePointsRule: (cfg) => ({
+    win: { regulation: cfg.points.win },
+    loss: { regulation: cfg.points.loss },
+    draw: cfg.points.draw,
+    shootoutAs: carrom.shootoutAs,
+    unit: "whole",
+    bonuses: [],
+  }),
 
   // §9.3 — {win+loss (win & walkover), 2·draw (drawn match & no_result)}.
   declaredPointsSets(cfg) {

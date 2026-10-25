@@ -123,6 +123,7 @@ function makeFakeModule(over: Partial<SportModule<FakeCfg, FakeEv, FakeState>> =
     reachableDecidedIn: () => new Set(["regulation"] as const),
     reachableResultKinds: () => new Set(["draw"] as const),
     shootoutAs: "result",
+    tablePointsRule: () => ({ win: { regulation: 0 }, loss: { regulation: 0 }, draw: 0, shootoutAs: "result", unit: "whole", bonuses: [] }),
     bracketDeciders: () => ({}),
     declaredPointsSets: () => [0],
     matchPointsBounds: () => ({ max: 0, min: 0, winFloor: 0, lossCeil: 0, winsOnly: false }),
