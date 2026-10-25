@@ -2,14 +2,20 @@
 // column can render exists in all four locales, none of them carries a dash or an arrow, and the list of keys cannot fall behind
 // the column. Pure: no DB, no render, the sources are read as text.
 //
-// Three sources feed the sweep, and each is checked against a declaration rather than against itself:
-//   1. the literals the column's own files pass to msg( / plural( / t( / f.t( - read from the source, ONE way (a literal that is not in
-//      `ROUND_COLUMN_KEYS` fails; a listed key the column stopped asking for only widens the sweep);
-//   2. the key maps the column reads (`INVITE_WORD_KEYS`, `HELD_TITLE_KEYS`, `heldBody`, the open's and the extension's own tables), each
-//      required to be a SUBSET of the two lists, so a value added to a map cannot skip the sweep;
-//   3. the helper files the column renders through (open-round-control.tsx, checkin-extend-ui.ts, `RoundExtend`), scanned the same way.
-// Every sweep reports how many items it checked, and a count of zero is a failure.
-import { readFileSync } from "node:fs";
+// What this file guarantees, and what it does not. Three sources feed the sweep, and each is checked against a declaration rather than
+// against itself:
+//   1. the literals the column's own files pass to msg( / plural( / t( / f.t( - read from the source (a literal that is not in
+//      `ROUND_COLUMN_KEYS` fails; a listed key the column stopped asking for only widens the sweep). The files are the directory's own
+//      listing, so a new file in components/v2/arbiter/ is scanned without anyone adding it here;
+//   2. the calls whose first argument is NOT a literal (a key read out of a map, a variable): a scan cannot know which keys they
+//      reach, so every such site is PINNED by its text and tied to the map that supplies it. A new site, a changed one or a lost one
+//      fails until the pin is moved on purpose, and the map it names must be inside the two lists;
+//   3. the key maps themselves (`INVITE_WORD_KEYS`, `HELD_TITLE_KEYS`, `heldBody`, the open's and the extension's own tables), each
+//      required to be a SUBSET of the two lists, so a value added to a map cannot skip the sweep.
+// The helper files the column renders through (open-round-control.tsx, checkin-extend-ui.ts, `RoundExtend`, `boardStateWord`) are scanned
+// both ways. NOT guaranteed: a key reached by a path none of this sees (a helper added outside these files, a key built by string
+// concatenation). Every sweep reports how many items it checked, and a count of zero is a failure.
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import en from "@/dictionaries/en/ui.json";
@@ -29,14 +35,11 @@ import {
 import { ROUND_COLUMN_HELPER_KEYS, ROUND_COLUMN_KEYS } from "@/lib/round-column";
 import { NEEDS_REASONS, SEAT_HOLD_REASONS } from "@/server/external-play/types";
 import { HELD_TITLE_KEYS, heldBody } from "../../external-play-held-copy";
+import { BANNED, BANNED_RE } from "./_banned-copy";
 
 const DICTS: Record<Locale, Record<string, string>> = { en, es, fr, nl };
 const SRC = join(__dirname, "..", "..", "..", "..");
 const read = (rel: string) => readFileSync(join(SRC, rel), "utf8");
-
-// Built from code points, not typed: `\u` in a source edit is mangled by tooling here. En dash, em dash, the two arrows, the diagonal.
-const BANNED = [0x2013, 0x2014, 0x2192, 0x2190, 0x2197].map((c) => String.fromCharCode(c));
-const DASH = new RegExp(`[${BANNED.join("")}]`);
 
 // ---- what a key stands for -------------------------------------------------------------------------------------
 
@@ -51,9 +54,9 @@ function formsOf(key: string, locale: Locale): string[] | null {
 
 // ---- the sources ------------------------------------------------------------------------------------------------
 
-/** Every dictionary-shaped string literal inside the arguments of a msg( / plural( / t( call (f.t( and f.plural( included: a word
- *  boundary precedes the name), including the arms of a ternary. Parentheses inside a string do not count toward the call's end. */
-function literalsPassed(src: string): string[] {
+/** The text between the parentheses of every msg( / plural( / t( call (f.t( and f.plural( included: a word boundary precedes the name).
+ *  Parentheses inside a string do not count toward the call's end. */
+function callBodies(src: string): string[] {
   const out: string[] = [];
   const call = /\b(?:msg|plural|t)\(/g;
   for (let m = call.exec(src); m !== null; m = call.exec(src)) {
@@ -70,13 +73,60 @@ function literalsPassed(src: string): string[] {
       else if (c === "(") depth++;
       else if (c === ")") depth--;
     }
-    for (const lit of src.slice(start, i - 1).matchAll(/"([A-Za-z][A-Za-z0-9]*(?:\.[A-Za-z0-9]+)+)"/g)) out.push(lit[1]!);
+    out.push(src.slice(start, i - 1));
   }
   return out;
 }
 
-const COLUMN_FILES = ["components/v2/arbiter/round-column.tsx", "components/v2/arbiter/round-queue-cards.tsx"];
+/** Every dictionary-shaped string literal inside the arguments of those calls, including the arms of a ternary. */
+function literalsPassed(src: string): string[] {
+  return callBodies(src).flatMap((body) => [...body.matchAll(/"([A-Za-z][A-Za-z0-9]*(?:\.[A-Za-z0-9]+)+)"/g)].map((lit) => lit[1]!));
+}
+
+/** The first argument of a call body: up to the first comma that is not inside a string or a bracket pair. */
+function firstArgument(body: string): string {
+  let depth = 0;
+  let quote: string | null = null;
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i]!;
+    if (quote !== null) {
+      if (c === "\\") i++;
+      else if (c === quote) quote = null;
+    } else if (c === '"' || c === "'" || c === "`") quote = c;
+    else if (c === "(" || c === "[" || c === "{") depth++;
+    else if (c === ")" || c === "]" || c === "}") depth--;
+    else if (c === "," && depth === 0) return body.slice(0, i).replace(/\s+/g, " ").trim();
+  }
+  return body.replace(/\s+/g, " ").trim();
+}
+
+/** The first arguments that are NOT plain string literals (whitespace collapsed, sorted): `msg(map[reason])`, `t(key as MessageKey)`,
+ *  `msg(isWhite ? "a.b" : "c.d")`. A scan of literals cannot see which keys these reach, which is why each is pinned below. A first
+ *  argument that is only literals (and the `?` and `:` of a ternary between them) is not listed: `literalsPassed` reads it whole. */
+function nonLiteralFirstArguments(src: string): string[] {
+  return callBodies(src)
+    .map(firstArgument)
+    .filter((arg) => arg.replace(/"[^"]*"/g, "").replace(/[\s?:]/g, "") !== "")
+    .sort();
+}
+
+/** The column's own files: every component file in components/v2/arbiter/, from the directory listing and not from a list typed here. */
+const COLUMN_DIR = "components/v2/arbiter";
+const COLUMN_FILES = readdirSync(join(SRC, COLUMN_DIR), { withFileTypes: true })
+  .filter((e) => e.isFile() && /\.tsx?$/.test(e.name))
+  .map((e) => `${COLUMN_DIR}/${e.name}`)
+  .sort();
 const HELPER_FILES = ["components/v2/desk/open-round-control.tsx", "components/v2/checkin-extend-ui.ts"];
+
+/** One function out of a file that holds dozens of keys the column never renders: from its opening to the first line that is a bare `}`. */
+function functionBody(rel: string, opening: string): string {
+  const src = read(rel);
+  const from = src.indexOf(opening);
+  expect(from, `premise: ${opening} is in ${rel}`).toBeGreaterThan(-1);
+  const to = src.indexOf("\n}\n", from);
+  expect(to, `premise: ${opening} ends`).toBeGreaterThan(from);
+  return src.slice(from, to);
+}
 /** `RoundExtend` lives in the panel's file beside dozens of keys the column never renders: only its own function body is read. */
 function roundExtendBody(): string {
   const panel = read("components/v2/arbiter-panel.tsx");
@@ -86,6 +136,8 @@ function roundExtendBody(): string {
   expect(to, "premise: RequestedNotice follows RoundExtend").toBeGreaterThan(from);
   return panel.slice(from, to);
 }
+/** The seven words of a board's state, which the queue's cards draw through `boardStateWord`. */
+const boardStateWordBody = () => functionBody("components/v2/arbiter-flag-cards.tsx", "export function boardStateWord(");
 
 // ---- the key maps -----------------------------------------------------------------------------------------------
 
@@ -110,12 +162,53 @@ const MAPS: Record<string, readonly string[]> = {
   "heldBody (each reason, each revoked seat)": heldBodyKeys(),
   "OPEN_ROUND_REFUSAL_KEYS": Object.values(OPEN_ROUND_REFUSAL_KEYS),
   "OPEN_ROUND_SKIP_KEYS": Object.values(OPEN_ROUND_SKIP_KEYS),
-  "the open's answers (already open, invited)": [OPEN_ROUND_ALREADY_OPEN_KEY, OPEN_ROUND_INVITED_KEY],
+  "OPEN_ROUND_ALREADY_OPEN_KEY and OPEN_ROUND_INVITED_KEY (the open's answers)": [OPEN_ROUND_ALREADY_OPEN_KEY, OPEN_ROUND_INVITED_KEY],
   "RESEND_REFUSAL_KEYS": Object.values(RESEND_REFUSAL_KEYS),
   "EXTEND_WHY_KEYS (the reasons a +5 is not offered)": NON_NULL(Object.values(EXTEND_WHY_KEYS)),
   "EXTEND_ROUND_MIXED_WHY_KEY": [EXTEND_ROUND_MIXED_WHY_KEY],
   "EXTEND_ROUND_SKIP_COPY": Object.values(EXTEND_ROUND_SKIP_COPY),
   "EXTEND_REFUSAL_KEYS": Object.values(EXTEND_REFUSAL_KEYS),
+};
+
+/** The extension's copy: what a pass-through `t(key)` in checkin-extend-ui.ts, or the column's shim over it, can be asked for. */
+const EXTEND_MAPS = [
+  "EXTEND_WHY_KEYS (the reasons a +5 is not offered)",
+  "EXTEND_ROUND_MIXED_WHY_KEY",
+  "EXTEND_ROUND_SKIP_COPY",
+  "EXTEND_REFUSAL_KEYS",
+] as const;
+
+/** Every call in the column's files and its helpers whose first argument is not a plain literal, PINNED by its text. `maps` names the
+ *  entries of `MAPS` that supply the key (so the keys it can reach are swept); `arms` marks a ternary whose two arms are literals the
+ *  literal scan reads whole. A site that is not here, or is here and gone, fails the pin test below. */
+type Site = { expr: string; maps?: readonly (keyof typeof MAPS)[]; arms?: true };
+const NON_LITERAL_SITES: Record<string, readonly Site[]> = {
+  "components/v2/arbiter/round-column.tsx": [
+    // WaitingList's `copy.t` shim: it forwards the keys checkin-extend-ui.ts asks for.
+    { expr: "key as MessageKey", maps: EXTEND_MAPS },
+    { expr: 'colour === "white" ? "arbiter.colour.white" : "arbiter.colour.black"', arms: true },
+    { expr: "INVITE_WORD_KEYS[word] as MessageKey", maps: ["INVITE_WORD_KEYS"] },
+  ],
+  "components/v2/arbiter/round-queue-cards.tsx": [
+    { expr: "HELD_TITLE_KEYS[row.reason]", maps: ["HELD_TITLE_KEYS"] },
+    { expr: "body.key", maps: ["heldBody (each reason, each revoked seat)"] },
+  ],
+  "components/v2/desk/open-round-control.tsx": [
+    { expr: "OPEN_ROUND_REFUSAL_KEYS[r.reason] as MessageKey", maps: ["OPEN_ROUND_REFUSAL_KEYS"] },
+    { expr: "OPEN_ROUND_INVITED_KEY", maps: ["OPEN_ROUND_ALREADY_OPEN_KEY and OPEN_ROUND_INVITED_KEY (the open's answers)"] },
+    { expr: "OPEN_ROUND_ALREADY_OPEN_KEY as MessageKey", maps: ["OPEN_ROUND_ALREADY_OPEN_KEY and OPEN_ROUND_INVITED_KEY (the open's answers)"] },
+    { expr: "OPEN_ROUND_SKIP_KEYS[s.reason] as MessageKey", maps: ["OPEN_ROUND_SKIP_KEYS"] },
+    { expr: "RESEND_REFUSAL_KEYS[n.code] as MessageKey", maps: ["RESEND_REFUSAL_KEYS"] },
+  ],
+  "components/v2/checkin-extend-ui.ts": [
+    { expr: "key", maps: ["EXTEND_WHY_KEYS (the reasons a +5 is not offered)"] }, // extendWhyLine
+    { expr: "why.key", maps: ["EXTEND_WHY_KEYS (the reasons a +5 is not offered)", "EXTEND_ROUND_MIXED_WHY_KEY"] }, // roundWhyLine
+    { expr: "key", maps: ["EXTEND_ROUND_SKIP_COPY"] }, // extendRoundLines
+    { expr: "EXTEND_REFUSAL_KEYS[refusal]", maps: ["EXTEND_REFUSAL_KEYS"] },
+  ],
+  // The two single functions the column reaches inside bigger files: neither passes a variable.
+  "RoundExtend (arbiter-panel.tsx)": [],
+  "boardStateWord (arbiter-flag-cards.tsx)": [],
 };
 
 const LISTED = new Set<string>([...ROUND_COLUMN_KEYS, ...ROUND_COLUMN_HELPER_KEYS]);
@@ -133,6 +226,16 @@ describe("the column's copy: premises", () => {
     expect(NON_NULL(Object.values(EXTEND_WHY_KEYS)).length, "the four reasons a board has, a board that is over says nothing").toBe(4);
   });
 
+  it("the column's files come from the directory: both known components are in it, and nothing but components", () => {
+    expect(COLUMN_FILES, "the listing finds the two components the column is made of").toEqual(
+      expect.arrayContaining([`${COLUMN_DIR}/round-column.tsx`, `${COLUMN_DIR}/round-queue-cards.tsx`]),
+    );
+    for (const file of COLUMN_FILES) expect(file, "a component file, not a test or a directory").toMatch(/^components\/v2\/arbiter\/[\w-]+\.tsx?$/);
+    expect(Object.keys(NON_LITERAL_SITES), "every file the column is made of has its non-literal calls pinned").toEqual(
+      expect.arrayContaining(COLUMN_FILES),
+    );
+  });
+
   it("no key is listed twice, and no list holds a key the other list holds", () => {
     expect(new Set(ROUND_COLUMN_KEYS).size, "ROUND_COLUMN_KEYS: no repeats").toBe(ROUND_COLUMN_KEYS.length);
     expect(new Set(ROUND_COLUMN_HELPER_KEYS).size, "ROUND_COLUMN_HELPER_KEYS: no repeats").toBe(ROUND_COLUMN_HELPER_KEYS.length);
@@ -140,8 +243,8 @@ describe("the column's copy: premises", () => {
   });
 
   it("the dash probe sees every banned character (it is not blind), and passes plain copy", () => {
-    for (const ch of BANNED) expect(DASH.test(`before ${ch} after`), `U+${ch.charCodeAt(0).toString(16)}`).toBe(true);
-    expect(DASH.test("Paired, not opened. Nobody has been invited yet.")).toBe(false);
+    for (const ch of BANNED) expect(BANNED_RE.test(`before ${ch} after`), `U+${ch.charCodeAt(0).toString(16)}`).toBe(true);
+    expect(BANNED_RE.test("Paired, not opened. Nobody has been invited yet.")).toBe(false);
     expect(BANNED.length).toBe(5);
   });
 });
@@ -172,7 +275,7 @@ describe("no dash and no arrow in any locale", () => {
     for (const locale of LOCALES) {
       for (const key of SWEPT) {
         for (const form of formsOf(key, locale) ?? []) {
-          expect(DICTS[locale][form], `${locale}: ${form}`).not.toMatch(DASH);
+          expect(DICTS[locale][form], `${locale}: ${form}`).not.toMatch(BANNED_RE);
           checked += 1;
         }
       }
@@ -184,7 +287,7 @@ describe("no dash and no arrow in any locale", () => {
 });
 
 describe("the list cannot fall behind the column", () => {
-  it("every literal the column's two files pass to msg( / plural( / t( / f.t( is in ROUND_COLUMN_KEYS", () => {
+  it("every literal the column's files (the directory's own listing) pass to msg( / plural( / t( / f.t( is in ROUND_COLUMN_KEYS", () => {
     let checked = 0;
     for (const file of COLUMN_FILES) {
       const literals = literalsPassed(read(file));
@@ -208,9 +311,13 @@ describe("the list cannot fall behind the column", () => {
     expect(literalsPassed(`msg("a.b", { x: "(" }); msg("c.d")`)).toEqual(["a.b", "c.d"]);
   });
 
-  it("every literal the helpers pass is in one of the two lists (open-round-control.tsx, checkin-extend-ui.ts, RoundExtend)", () => {
+  it("every literal the helpers pass is in one of the two lists (open-round-control.tsx, checkin-extend-ui.ts, RoundExtend, boardStateWord)", () => {
     let checked = 0;
-    const sources: [string, string][] = [...HELPER_FILES.map((f): [string, string] => [f, read(f)]), ["RoundExtend (arbiter-panel.tsx)", roundExtendBody()]];
+    const sources: [string, string][] = [
+      ...HELPER_FILES.map((f): [string, string] => [f, read(f)]),
+      ["RoundExtend (arbiter-panel.tsx)", roundExtendBody()],
+      ["boardStateWord (arbiter-flag-cards.tsx)", boardStateWordBody()],
+    ];
     for (const [name, src] of sources) {
       const literals = literalsPassed(src);
       expect(literals.length, `${name}: the scan found literals`).toBeGreaterThan(0);
@@ -219,7 +326,14 @@ describe("the list cannot fall behind the column", () => {
         checked += 1;
       }
     }
-    expect(checked, "anti-vacuity: helper literals checked").toBeGreaterThanOrEqual(25);
+    expect(checked, "anti-vacuity: helper literals checked").toBeGreaterThanOrEqual(30);
+  });
+
+  it("every state word boardStateWord can return is listed (the seven arbiter.state.* keys come from the function, not from a typed list)", () => {
+    const words = [...new Set(literalsPassed(boardStateWordBody()))].sort();
+    expect(words.length, "anti-vacuity: the function names its words").toBeGreaterThanOrEqual(7);
+    for (const key of words) expect(LISTED.has(key), `${key} is listed`).toBe(true);
+    expect(words.every((k) => k.startsWith("arbiter.state."))).toBe(true);
   });
 
   it("every key map the column reads is inside the two lists: INVITE_WORD_KEYS, HELD_TITLE_KEYS, heldBody, the open's and the extension's tables", () => {
@@ -234,6 +348,65 @@ describe("the list cannot fall behind the column", () => {
     // The two maps the plan names, by name: their values are listed in full.
     expect(Object.values(INVITE_WORD_KEYS).every((k) => LISTED.has(k))).toBe(true);
     expect(Object.values(HELD_TITLE_KEYS).every((k) => LISTED.has(k))).toBe(true);
+  });
+});
+
+describe("a call whose key is not a literal is pinned, and tied to the map that supplies it", () => {
+  const sourceOf = (name: string): string =>
+    name.startsWith("RoundExtend") ? roundExtendBody() : name.startsWith("boardStateWord") ? boardStateWordBody() : read(name);
+  const pinned = (name: string): string[] => NON_LITERAL_SITES[name]!.map((site) => site.expr).sort();
+
+  it("the scanner reads first arguments: a variable, a map read and a ternary are reported; plain literals are not", () => {
+    expect(nonLiteralFirstArguments("msg(someNewVar)")).toEqual(["someNewVar"]);
+    expect(nonLiteralFirstArguments("f.t(MAP[k] as MessageKey, { x: \"(\" })")).toEqual(["MAP[k] as MessageKey"]);
+    expect(nonLiteralFirstArguments('plural(\n  keys.one,\n  n)')).toEqual(["keys.one"]);
+    expect(nonLiteralFirstArguments('msg(c ? "a.b" : "c.d")')).toEqual(['c ? "a.b" : "c.d"']);
+    expect(nonLiteralFirstArguments('msg("a.b", { x: y }); plural("c.d", n); t(`a.${b}`)').length, "a literal first argument is not reported, a template is").toBe(1);
+    expect(nonLiteralFirstArguments('msg("a.b", { x: y }); plural("c.d", n)')).toEqual([]);
+  });
+
+  it("each file's non-literal calls are exactly the pinned list (a new one, a changed one or a lost one fails)", () => {
+    let files = 0;
+    let sites = 0;
+    for (const name of Object.keys(NON_LITERAL_SITES)) {
+      expect(nonLiteralFirstArguments(sourceOf(name)), `${name}: the calls whose key is not a literal`).toEqual(pinned(name));
+      files += 1;
+      sites += NON_LITERAL_SITES[name]!.length;
+    }
+    expect(files, "anti-vacuity: the column's files, three helpers and the two functions").toBe(COLUMN_FILES.length + HELPER_FILES.length + 2);
+    expect(sites, "anti-vacuity: fourteen sites are pinned").toBe(14);
+  });
+
+  it("a variable key added to the column's file is caught by the pin (a scratch copy with msg(someNewVar) differs from the list)", () => {
+    const file = `${COLUMN_DIR}/round-column.tsx`;
+    const scratch = `${read(file)}\nconst added = msg(someNewVar);\n`;
+    expect(nonLiteralFirstArguments(scratch)).toContain("someNewVar");
+    expect(nonLiteralFirstArguments(scratch), "the scratch copy no longer equals the pin").not.toEqual(pinned(file));
+  });
+
+  it("every pinned site is accounted for: it names a map that exists, is not empty, and (for a named table) is the table in its text", () => {
+    let accounted = 0;
+    for (const [name, sites] of Object.entries(NON_LITERAL_SITES)) {
+      for (const site of sites) {
+        if (site.arms) {
+          const arms = literalsPassed(`msg(${site.expr})`);
+          expect(arms.length, `${name}: ${site.expr} has literal arms`).toBe(2);
+          for (const arm of arms) expect((ROUND_COLUMN_KEYS as readonly string[]).includes(arm), `${name}: ${arm} is listed`).toBe(true);
+        } else {
+          expect(site.maps?.length ?? 0, `${name}: ${site.expr} names the map that supplies it`).toBeGreaterThan(0);
+          for (const map of site.maps!) {
+            expect(Object.keys(MAPS), `${name}: ${site.expr} -> ${map}`).toContain(map);
+            expect(MAPS[map]!.length, `${map} is not empty`).toBeGreaterThan(0);
+          }
+          // A call that reads a SCREAMING_SNAKE table by name must be tied to that table, not to an unrelated one.
+          for (const ident of site.expr.match(/\b[A-Z][A-Z_]{4,}\b/g) ?? []) {
+            expect(site.maps!.some((m) => m.includes(ident)), `${name}: ${site.expr} reads ${ident}, so it names that table`).toBe(true);
+          }
+        }
+        accounted += 1;
+      }
+    }
+    expect(accounted, "anti-vacuity: all fourteen sites accounted for").toBe(14);
   });
 });
 
@@ -279,6 +452,19 @@ describe("the reasons a +5 is not offered say what is off, and not what the cloc
     expect(checked).toBe(5 * LOCALES.length);
   });
 
+  it("the four reasons share one lead-in in every locale: the text before the colon is the same, only the cause after it differs", () => {
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const parts = CAUSES.map((key) => DICTS[locale][key]!.split(":").map((p) => p.trim()));
+      for (const [i, p] of parts.entries()) expect(p.length, `${locale}: ${CAUSES[i]} has one colon (a lead-in and a cause)`).toBe(2);
+      const leads = new Set(parts.map((p) => p[0]));
+      expect([...leads], `${locale}: one lead-in for ${CAUSES.length} reasons`).toHaveLength(1);
+      expect(new Set(parts.map((p) => p[1])).size, `${locale}: the causes differ`).toBe(CAUSES.length);
+      checked += parts.length;
+    }
+    expect(checked).toBe(4 * LOCALES.length);
+  });
+
   it("a reason is never the clock's own label: 'Check-in has closed' stood twice, one line under the other", () => {
     let checked = 0;
     for (const locale of LOCALES) {
@@ -308,5 +494,41 @@ describe("the reopen press says what it does", () => {
     }
     expect(checked).toBe(LOCALES.length);
     expect(DICTS.en["runsheet.round.openCta"], "premise: the real press keeps its label").toBe("Open round");
+  });
+
+  // An action keeps one name through the flow: the press, the confirmation's title and the confirmation's button say the SAME thing
+  // ("restart check-in"), and none of them is the first-time open's wording ("Open Round 2 again?" under a button that did not say open).
+  const RESTART: Record<Locale, RegExp> = { en: /restart check-in/i, es: /reinici/i, fr: /relanc/i, nl: /herstart/i };
+
+  it("the press, the confirmation's title and both forms of its button all name the restart (4 locales x 4 strings, counted)", () => {
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const d = DICTS[locale];
+      for (const key of ["arbiter.column.reopenCta", "arbiter.column.reopenConfirmTitle", "arbiter.column.reopenConfirmCta.one", "arbiter.column.reopenConfirmCta.other"]) {
+        expect(d[key], `${locale}: ${key} exists`).toBeTruthy();
+        expect(d[key], `${locale}: ${key} names the restart`).toMatch(RESTART[locale]);
+        expect(d[key], `${locale}: ${key} does not say the round is being opened`).not.toMatch(OPEN_WORD[locale]);
+        checked += 1;
+      }
+    }
+    expect(checked).toBe(LOCALES.length * 4);
+  });
+
+  it("the confirmation is not the first-time open's: another title, another button, and the title still names the round", () => {
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const d = DICTS[locale];
+      expect(d["arbiter.column.reopenConfirmTitle"], `${locale}: title`).not.toBe(d["runsheet.round.confirmTitle"]);
+      expect(d["arbiter.column.reopenConfirmCta.one"], `${locale}: button, one`).not.toBe(d["runsheet.round.confirmCta.one"]);
+      expect(d["arbiter.column.reopenConfirmCta.other"], `${locale}: button, other`).not.toBe(d["runsheet.round.confirmCta.other"]);
+      expect(d["arbiter.column.reopenConfirmTitle"], `${locale}: the title keeps {round}`).toContain("{round}");
+      expect(d["arbiter.column.reopenConfirmCta.one"], `${locale}: the button keeps {count}`).toContain("{count}");
+      expect(d["arbiter.column.reopenConfirmCta.other"], `${locale}: the button keeps {count}`).toContain("{count}");
+      checked += 1;
+    }
+    expect(checked).toBe(LOCALES.length);
+    // The first-time open keeps its own wording: it IS opening the round.
+    expect(DICTS.en["runsheet.round.confirmTitle"]).toBe("Open Round {round}?");
+    expect(DICTS.en["runsheet.round.confirmCta.other"]).toBe("Open round and invite {count} players");
   });
 });

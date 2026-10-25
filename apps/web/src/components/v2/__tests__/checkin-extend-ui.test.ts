@@ -233,7 +233,7 @@ describe("what a board's +5 is on a ticking clock", () => {
     expect(said.filter((x) => x !== null), "anti-vacuity: four reasons").toHaveLength(4);
     expect(extendWhyLine("not_playable", C)).toBeNull();
     expect(said.filter((x) => x !== null).sort()).toEqual(
-      ["Can't extend check-in yet: it hasn't opened", "Can't extend check-in: it has closed", "Can't extend check-in: a game has started", "Can't extend check-in: no extensions left"].sort(),
+      ["Can't extend check-in: it hasn't opened yet", "Can't extend check-in: it has closed", "Can't extend check-in: a game has started", "Can't extend check-in: no extensions left"].sort(),
     );
   });
 

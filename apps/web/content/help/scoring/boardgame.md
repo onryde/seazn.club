@@ -28,10 +28,10 @@ A mis-tap on a half is a real risk on this pad, because one tap decides the game
 
 ## Online chess: adding time to check-in
 
-On a division that plays its chess online, players check in before each game. If a board is slow to fill, the arbiter can give it more time from the arbiter panel, or from the round's Open round bar on the Fixtures tab.
+On a division that plays its chess online, players check in before each game. If a board is slow to fill, the arbiter can give it more time from the arbiter panel: on the board itself, or for the whole round from the round column.
 
 - **+5 min** on a board adds five minutes to that board's check-in. **+5 min to the round** does the same for every board of the round that is eligible at that moment.
-- It works **only while check-in is open** — from the moment a board's check-in opens until its deadline. Before it opens, or once it has closed, there is nothing to add to, and the panel says so ("Can't extend check-in yet: it hasn't opened", "Can't extend check-in: it has closed").
+- It works **only while check-in is open** — from the moment a board's check-in opens until its deadline. Before it opens, or once it has closed, there is nothing to add to, and the panel says so ("Can't extend check-in: it hasn't opened yet", "Can't extend check-in: it has closed").
 - Each board can be extended **up to three times**. After that the panel says "Can't extend check-in: no extensions left" for that board.
 - The round button **skips** boards whose check-in has not opened yet or has already closed, boards whose game has started, and boards with no extensions left. It also skips any board you are playing on yourself. It tells you how many it extended and why it left the rest.
 - When the round has nothing left to extend, the round button gives way to a short reason. If every board gives the same one it says so ("Can't extend check-in: it has closed", "Can't extend check-in: a game has started", and so on); if the boards differ it says "No board can be extended right now".

@@ -25,6 +25,7 @@ import type { FlaggedBoard } from "@/server/usecases/external-play/arbiter";
 import type { NeedsOrganiserExternalPlayRow } from "@/server/usecases/external-play/queue";
 import { HELD_TITLE_KEYS, heldBody } from "../../external-play-held-copy";
 import { RoundQueueCards } from "../round-queue-cards";
+import { BANNED } from "./_banned-copy";
 
 const router = vi.hoisted(() => ({ refresh: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
@@ -284,7 +285,6 @@ describe("queue: a held board", () => {
   it("every held reason the engine declares has a chip and a sentence on the card, and none carries a dash or an arrow (a sweep over NEEDS_REASONS)", () => {
     // Dictionary copy has no dash or arrow (spec §9); Task 11 reworded externalPlay.held.clockFlagUnsettled, the last reason that had one,
     // so every reason is scanned and none is skipped.
-    const banned = [0x2013, 0x2014, 0x2192, 0x2190, 0x2197].map((c) => String.fromCharCode(c));
     let checked = 0;
     let scanned = 0;
     for (const reason of NEEDS_REASONS) {
@@ -295,7 +295,7 @@ describe("queue: a held board", () => {
       expect(textIn(h, "arbiter-column-card-body"), reason).toBe(esc(t(body.key, body.vars ?? {})));
       expect(textIn(h, "arbiter-column-card-chip")!.length, reason).toBeGreaterThan(0);
       checked += 1;
-      for (const ch of banned) expect(h, `${reason} U+${ch.charCodeAt(0).toString(16)}`).not.toContain(ch);
+      for (const ch of BANNED) expect(h, `${reason} U+${ch.charCodeAt(0).toString(16)}`).not.toContain(ch);
       scanned += 1;
     }
     expect(checked, "anti-vacuity: every reason rendered").toBe(NEEDS_REASONS.length);
@@ -470,7 +470,7 @@ describe("queue: layout rules", () => {
 
   it("the markup carries no em dash, en dash or arrow of its own", () => {
     const h = queue({ round: ROUND("h1", "c1"), held: [HELD("h1"), HELD("s1", { seated: true })], flagged: [FLAGGED("g1"), CANCELLED("c1")], ownFlagged: 2 });
-    for (const code of [0x2013, 0x2014, 0x2192, 0x2190, 0x2197]) expect(h, `U+${code.toString(16)}`).not.toContain(String.fromCharCode(code));
+    for (const ch of BANNED) expect(h, `U+${ch.charCodeAt(0).toString(16)}`).not.toContain(ch);
     expect(count(h, "arbiter-column-card"), "anti-vacuity: four cards scanned").toBe(4);
   });
 });
@@ -572,7 +572,6 @@ describe("the queue's own keys, in four locales", () => {
     "arbiter.column.playing.one": "{count} of {total} board playing",
     "arbiter.column.playing.other": "{count} of {total} boards playing",
   };
-  const BANNED = [0x2014, 0x2013, 0x2192, 0x2190, 0x2197].map((c) => String.fromCharCode(c));
   const locales: [string, Record<string, unknown>][] = [["en", enUi], ["es", esUi], ["fr", frUi], ["nl", nlUi]];
 
   it("English is the spec's; es, fr and nl are real translations; none carries a dash or an arrow; every placeholder survives", () => {

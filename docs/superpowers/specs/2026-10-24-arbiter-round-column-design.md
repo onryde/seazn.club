@@ -228,13 +228,20 @@ No state loses a line it shows today.
   clause is never printed (desk `_RULES.md`: an empty cell is not information).
 - **"+5 min to the round"**: the panel's one `RoundExtend` (`arbiter-extend-round*` testids, `roundExtendRunner`,
   `liveExtendableBoards`, `roundExtendWhy`), placed here in this phase (§5.2).
-- **The round's own press** when `press` is `reinvite` or `reopen` (the spike dropped it, §2): the existing
-  confirmation, reached from a quiet secondary button with the existing copy ("Invite {count} players", "Open Round
-  {round} again?"). This is how a Not delivered seat is invited again (pre-flight C4). Its stamp is released, so its
+- **The round's own press** when `press` is `reinvite` or `reopen` (the spike dropped it, §2): a quiet secondary button
+  that opens a confirmation. A `reinvite` press keeps the run sheet's copy ("Invite {count} players", "Open Round {round}
+  for the players not yet invited?"). A `reopen` press has its own words, below. This is how a Not delivered seat is
+  invited again (pre-flight C4). Its stamp is released, so its
   row offers no Resend, and the round's press becomes `reopen` or `reinvite`. A `reopen` press is on a round that is
   ALREADY open, and what it does is invite everyone again and start the check-in window again now (`openRound`'s
   "reopened": the window is re-stamped and the +5 presses on boards with no game are reset), so its label is
-  `arbiter.column.reopenCta` ("Invite again and restart check-in"), never "Open round" (Task 11).
+  `arbiter.column.reopenCta` ("Invite again and restart check-in"), never "Open round" (Task 11). An action keeps one name
+  through the flow, so its confirmation says the same: the title is `arbiter.column.reopenConfirmTitle` ("Restart
+  check-in for Round {round}?") and the button `arbiter.column.reopenConfirmCta` ("Invite {count} players and restart
+  check-in"), over the run sheet's body ("This invites {count} players and starts their clock now."). The first-time Open
+  press and its confirmation ("Open Round {round}?", "Open round and invite {count} players") are unchanged. The reader
+  names `reopen` when the window will start again: nobody it reached is still bound, or (D17) a board the arbiter closed
+  with No result and the organiser voided is re-armed and every other bound board is decided.
 - **Check-in groups** for a staggered round (`timedBatches`, I-1), as the Fixtures-tab control lists them today.
 
 **The waiting list** (`data-testid="arbiter-waiting"`), under the camera from `md` and after the column below `md`. It
@@ -518,7 +525,9 @@ New keys (English shown; es, fr and nl get their own translations in the same ta
 | `arbiter.column.batchBoards` | "Boards {from} to {to}" |
 | `arbiter.invite.sent` / `.delivered` / `.delayed` / `.bounced` / `.notDelivered` | "Sent" / "Delivered" / "Delayed" / "Bounced" / "Not delivered" |
 | `arbiter.invite.help` | "Delivered means the player's mail server accepted the invite. It does not mean they have read it." |
-| `arbiter.column.reopenCta` | "Invite again and restart check-in" (the quiet press on a round that is already open and whose invites all failed; the real Open round press keeps `runsheet.round.openCta`) |
+| `arbiter.column.reopenCta` | "Invite again and restart check-in" (the quiet press on a round that is already open and whose window starts again: every invite failed, or a re-armed board with every other bound board decided; the real Open round press keeps `runsheet.round.openCta`) |
+| `arbiter.column.reopenConfirmTitle` | "Restart check-in for Round {round}?" (the confirmation of that press; the run sheet's `confirmTitleReopen`, "Open Round {round} again?", is no longer read) |
+| `arbiter.column.reopenConfirmCta.one/.other` | "Invite {count} player and restart check-in" / "Invite {count} players and restart check-in" |
 | `arbiter.entry.status.ready` | "Round {round} is ready to open" |
 | `arbiter.entry.status.checkin` | "Round {round} check-in is open" |
 
@@ -535,7 +544,8 @@ source file reads it any more (Task 10 removed the Fixtures-tab control), and Ta
 `runsheet.round.paired` has no source reader either; it is reworded as listed and Task 12 may delete it with the same e2e.
 
 **The reasons a +5 is not offered** (`externalPlay.checkinExtend.why.notOpen`, `.closed`, `.gameStarted`, `.capReached`) are one
-sentence each, "Can't extend check-in: a game has started", in all four locales (Task 11). The column shows them with no button
+sentence each, with one lead-in and the cause after the colon ("Can't extend check-in: a game has started", "Can't extend
+check-in: it hasn't opened yet"), in all four locales (Task 11). The column shows them with no button
 beside them, where a bare "Game started" read as a fragment and "Check-in has closed" repeated the clock label above it. The
 mixed reason `.roundNoneOpen` was already a sentence and is unchanged. The same lines stand on the round bar and on a board's
 decision area, so each reads as true of one board and of a round.
@@ -546,14 +556,20 @@ range as "Boards 1 to 8", using `arbiter.column.batchBoards`, so that no dash of
 dash (`guard.ts:363-374`), and that floor stays.
 
 **The sweep** (pre-flight C19). Every key the column can render must be present in all four locales and must contain
-no `—`, `→`, `←` or `↗`. The keys come from three sources:
+no `—` (U+2014, the em dash), `–` (U+2013, the en dash), `→`, `←` or `↗`. The keys come from four sources:
 
 1. **literals in the column's own files.** Every literal passed to `msg(`, `plural(`, `t(` or `f.t(` must be in
    `ROUND_COLUMN_KEYS` (one way: literals are a subset of the list);
 2. **maps.** The values of `INVITE_WORD_KEYS`, `HELD_TITLE_KEYS` and the other key maps the column reads must be a
    subset of the list;
 3. **helpers.** An explicit `ROUND_COLUMN_HELPER_KEYS` names the keys rendered through `openNoticeText`,
-   `resendNoticeText`, `OpenRoundConfirmBody` and `RoundExtend`.
+   `resendNoticeText`, `OpenRoundConfirmBody`, `RoundExtend` and `boardStateWord`; the helpers' own literals are scanned
+   the same way as the column's.
+4. **calls whose key is not a literal.** The test lists every call in the column's files and its helpers whose first
+   argument is a variable or a map read (`msg(map[reason])`), pins each by its text and ties it to the map that supplies
+   its keys. A new one, a changed one or a lost one fails until the pin is moved on purpose. The column's files are the
+   directory's own listing. What this does not see: a helper added outside the scanned files, and a key built by string
+   concatenation.
 
 No invite word, in any locale, reads as "opened": `/open/i` in `en`, `abiert` in `es`, `ouvert` in `fr` and `geopend` in
 `nl`. Each sweep reports its count, and zero is a failure.

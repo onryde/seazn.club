@@ -473,7 +473,9 @@ export function CheckinHero({ round, view, tz, nowMs, openRound, roundExtend }: 
           disabled={state.busy !== null}
           aria-busy={state.busy?.kind === "open" || undefined}
           onClick={openRound.ask}
-          className={`${BUTTON_QUIET} w-full sm:w-auto`}
+          // BUTTON_QUIET has min-h-11 and no vertical padding. This label is long ("Inviter de nouveau et relancer l'enregistrement" wraps to two
+          // lines from 320 to 375), and two lines of text would touch the border: py-2 keeps them clear of it, on this press only.
+          className={`${BUTTON_QUIET} w-full py-2 sm:w-auto`}
         >
           {reinvite ? plural("runsheet.round.inviteCta", owed) : msg("arbiter.column.reopenCta")}
         </button>
@@ -519,16 +521,18 @@ export function CheckinHero({ round, view, tz, nowMs, openRound, roundExtend }: 
         </div>
       )}
 
-      {/* The reinvite's confirmation: the run sheet's own words and body. Closed unless the reader offers the press. */}
+      {/* The press's confirmation, closed unless the reader offers the press. Its body is the run sheet's. The reinvite uses the run sheet's title
+          and button; the reopen has its own, because its press says "Invite again and restart check-in" and an action keeps one name through
+          the flow (the first-time open's "Open Round N?" would be a different action). */}
       <ConfirmDialog
         open={owedView !== null && state.confirming}
         testId="arbiter-column-reinvite-dialog"
         title={
           reinvite
             ? msg("runsheet.round.confirmTitleReinvite", { round: round.roundNo })
-            : msg("runsheet.round.confirmTitleReopen", { round: round.roundNo })
+            : msg("arbiter.column.reopenConfirmTitle", { round: round.roundNo })
         }
-        confirmLabel={reinvite ? plural("runsheet.round.inviteCta", owed) : plural("runsheet.round.confirmCta", owed)}
+        confirmLabel={reinvite ? plural("runsheet.round.inviteCta", owed) : plural("arbiter.column.reopenConfirmCta", owed)}
         confirmVariant="primary"
         cancelLabel={msg("confirm.cancel")}
         busy={state.busy !== null}

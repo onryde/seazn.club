@@ -888,6 +888,13 @@ describe("RoundColumn: the check-in hero", () => {
     expect(textIn(reopen, "arbiter-column-reinvite")).toBe(esc(en["arbiter.column.reopenCta"]!));
     expect(textIn(reopen, "arbiter-column-reinvite")).not.toBe(esc(en["runsheet.round.openCta"]!));
     expect(reopen, "the reopen press does not borrow the Open round label").not.toContain(esc(en["runsheet.round.openCta"]!));
+    // A two-line label (fr, 320 to 375) must clear the border: vertical padding on this press, with the 44px floor of the shared button kept.
+    for (const [what, h] of [["reopen", reopen], ["reinvite", checkinColumn(boards, { data: DATA({ views: [VIEW({ state: "open", press: "reinvite", pairings })] }) })]] as const) {
+      const cls = /class="([^"]*)"/.exec(tagOf(h, "arbiter-column-reinvite")!)![1]!.split(/\s+/);
+      expect(cls, `${what}: vertical padding for a wrapped label`).toContain("py-2");
+      expect(cls, `${what}: the tap area stays at least 44px tall`).toContain("min-h-11");
+      expect(cls, `${what}: full width on a phone`).toContain("w-full");
+    }
     let absent = 0;
     for (const press of ["none", "open"] as const) {
       const h = checkinColumn(boards, { data: DATA({ views: [VIEW({ state: "open", press, pairings })] }) });
@@ -1009,8 +1016,14 @@ describe("CheckinHero: the reinvite press is the SHARED handle's, with its confi
     expect(textIn(re, "arbiter-column-reinvite-dialog-confirm")).toBe(esc(pl("runsheet.round.inviteCta", 3)));
     expect(dialog).toContain(esc(pl("runsheet.round.confirmBodyReinvite", 3)));
     const reopen = html(props("reopen", { confirming: true }));
-    expect(inner(reopen, "arbiter-column-reinvite-dialog")).toContain(esc(t("runsheet.round.confirmTitleReopen", { round: ON_SCREEN.roundNo })));
-    expect(textIn(reopen, "arbiter-column-reinvite-dialog-confirm")).toBe(esc(pl("runsheet.round.confirmCta", 3)));
+    // The reopen confirmation names the action its press names ("Invite again and restart check-in"), not "Open Round N again?".
+    const reopenDialog = inner(reopen, "arbiter-column-reinvite-dialog")!;
+    expect(reopenDialog).toContain(esc(t("arbiter.column.reopenConfirmTitle", { round: ON_SCREEN.roundNo })));
+    expect(textIn(reopen, "arbiter-column-reinvite-dialog-confirm")).toBe(esc(pl("arbiter.column.reopenConfirmCta", 3)));
+    expect(reopenDialog, "not the first-time open's title").not.toContain(esc(t("runsheet.round.confirmTitle", { round: ON_SCREEN.roundNo })));
+    expect(textIn(reopen, "arbiter-column-reinvite-dialog-confirm"), "not the first-time open's button").not.toBe(esc(pl("runsheet.round.confirmCta", 3)));
+    // Its body is the existing truthful one: who is invited and that their clock starts now.
+    expect(reopenDialog).toContain(esc(pl("runsheet.round.confirmBody", 3)));
     // The empty case: nothing asked, no dialog; and a press the reader refuses never opens one, even if state says confirming.
     expect(html(props("reinvite"))).not.toContain(ATTR("arbiter-column-reinvite-dialog"));
     expect(html(props("none", { confirming: true }))).not.toContain(ATTR("arbiter-column-reinvite-dialog"));
@@ -1542,6 +1555,57 @@ describe("the reopen press, under every locale", () => {
       </DictProvider>,
     );
     expect(textIn(next, "arbiter-column-next"), `${locale}: the real press`).toBe(esc(d["runsheet.round.openCta"]!));
+  });
+});
+
+describe("the confirmation of each press, under every locale: the press and its confirmation name one action", () => {
+  const fillIn = (s: string, vars: Record<string, string | number>) => Object.entries(vars).reduce((acc, [k, v]) => acc.replaceAll(`{${k}}`, String(v)), s);
+  const SAME_ACTION: Record<Locale, RegExp> = { en: /restart check-in/i, es: /reinici/i, fr: /relanc/i, nl: /herstart/i };
+  const boards = [checking(OPEN(), seat(false), seat(false))];
+  /** The column with its confirmation open, for a press and for the number of players it would invite. */
+  const confirming = (dict: Dict, locale: Locale, press: "reopen" | "reinvite", owedSeats: 1 | 2) =>
+    renderToStaticMarkup(
+      <DictProvider dict={dict} locale={locale}>
+        <RoundColumn
+          {...COLUMN({
+            round: ROUND(boards),
+            nowMs: NOW,
+            data: DATA({ views: [VIEW({ state: "open", press, pairings: [P(1, { owedSeats })] })] }),
+            openRound: { ...sharedHandle().handle, state: { ...initialOpenRoundUi(), confirming: true } },
+          })}
+        />
+      </DictProvider>,
+    );
+
+  it.each([["en", enUi], ["es", esUi], ["fr", frUi], ["nl", nlUi]] as [Locale, Dict][])("%s: reopen says restart on the press, the title and the button, in the singular and the plural", (locale, dict) => {
+    const d = dict as unknown as Record<string, string>;
+    let checked = 0;
+    for (const [owedSeats, form] of [[2, "other"], [1, "one"]] as const) {
+      const count = owedSeats; // one board: its owed seats are the players it invites
+      const h = confirming(dict, locale, "reopen", owedSeats);
+      const dialog = inner(h, "arbiter-column-reinvite-dialog")!;
+      const title = fillIn(d["arbiter.column.reopenConfirmTitle"]!, { round: ON_SCREEN.roundNo });
+      const button = fillIn(d[`arbiter.column.reopenConfirmCta.${form}`]!, { count });
+      expect(dialog, `${locale} ${form}: title`).toContain(esc(title));
+      expect(textIn(h, "arbiter-column-reinvite-dialog-confirm"), `${locale} ${form}: button`).toBe(esc(button));
+      expect(textIn(h, "arbiter-column-reinvite"), `${locale} ${form}: the press`).toBe(esc(d["arbiter.column.reopenCta"]!));
+      for (const [what, text] of [["press", d["arbiter.column.reopenCta"]!], ["title", title], ["button", button]] as const) {
+        expect(text, `${locale} ${form}: the ${what} names the restart`).toMatch(SAME_ACTION[locale]);
+        checked += 1;
+      }
+      // The first-time open's words are not on this dialog.
+      expect(dialog, `${locale} ${form}: not the first-time title`).not.toContain(esc(fillIn(d["runsheet.round.confirmTitle"]!, { round: ON_SCREEN.roundNo })));
+      expect(textIn(h, "arbiter-column-reinvite-dialog-confirm"), `${locale} ${form}: not the first-time button`).not.toBe(esc(fillIn(d[`runsheet.round.confirmCta.${form}`]!, { count })));
+    }
+    expect(checked, "anti-vacuity: 2 counts x 3 strings").toBe(6);
+  });
+
+  it.each([["en", enUi], ["es", esUi], ["fr", frUi], ["nl", nlUi]] as [Locale, Dict][])("%s: the reinvite press keeps its own title and button, and they are not the restart's", (locale, dict) => {
+    const d = dict as unknown as Record<string, string>;
+    const h = confirming(dict, locale, "reinvite", 2);
+    expect(inner(h, "arbiter-column-reinvite-dialog")!, `${locale}: title`).toContain(esc(fillIn(d["runsheet.round.confirmTitleReinvite"]!, { round: ON_SCREEN.roundNo })));
+    expect(textIn(h, "arbiter-column-reinvite-dialog-confirm"), `${locale}: button`).toBe(esc(fillIn(d["runsheet.round.inviteCta.other"]!, { count: 2 })));
+    expect(inner(h, "arbiter-column-reinvite-dialog")!, `${locale}: not the restart title`).not.toContain(esc(fillIn(d["arbiter.column.reopenConfirmTitle"]!, { round: ON_SCREEN.roundNo })));
   });
 });
 

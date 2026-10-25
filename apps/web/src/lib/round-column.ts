@@ -198,10 +198,12 @@ type PluralStem = DictionaryKey extends infer K ? (K extends `${infer S}.one` ? 
 /** A dictionary key, or the stem of a plural pair. tsc refuses a key that is not in the dictionary, and a stem with no `.one`. */
 export type ColumnKey = DictionaryKey | PluralStem;
 
-/** Every key round-column.tsx and round-queue-cards.tsx pass as a LITERAL to `msg(`, `plural(`, `t(` or `f.t(` (plural keys by their
- *  stem). round-column-copy.test.ts reads both files as text and refuses a literal that is not here, so a key added to the column
- *  cannot skip the four-locale and no-dash sweeps. One way on purpose: a key listed here that the column no longer asks for only
- *  widens the sweep. */
+/** Every key the column's own files (every component in components/v2/arbiter/) pass as a LITERAL to `msg(`, `plural(`, `t(` or
+ *  `f.t(` (plural keys by their stem). round-column-copy.test.ts reads those files as text, from the directory listing, and refuses a
+ *  literal that is not here; it sweeps every key here through all four locales and for dashes and arrows. What it does NOT see is a
+ *  key the column asks for through a variable (`msg(map[reason])`): each such call is pinned by its text in the test and tied to the
+ *  table that supplies it (the `HELPER` keys below), so a new one fails until it is pinned. A key listed here that the column no
+ *  longer asks for only widens the sweep. */
 export const ROUND_COLUMN_KEYS: readonly ColumnKey[] = [
   "arbiter.boardNo",
   "arbiter.colour.black",
@@ -219,6 +221,8 @@ export const ROUND_COLUMN_KEYS: readonly ColumnKey[] = [
   "arbiter.column.nothingPaired",
   "arbiter.column.playing",
   "arbiter.column.queue",
+  "arbiter.column.reopenConfirmCta",
+  "arbiter.column.reopenConfirmTitle",
   "arbiter.column.reopenCta",
   "arbiter.column.review",
   "arbiter.column.reviewThis",
@@ -240,7 +244,6 @@ export const ROUND_COLUMN_KEYS: readonly ColumnKey[] = [
   "runsheet.round.confirmEarlierInPlay",
   "runsheet.round.confirmTitle",
   "runsheet.round.confirmTitleReinvite",
-  "runsheet.round.confirmTitleReopen",
   "runsheet.round.heading",
   "runsheet.round.inviteCta",
   "runsheet.round.openCta",
@@ -250,14 +253,16 @@ export const ROUND_COLUMN_KEYS: readonly ColumnKey[] = [
   "schedule.vs",
 ];
 
-/** Keys the column renders through code it does not own, which a literal scan of its two files cannot see. Each group names its
- *  helper; round-column-copy.test.ts checks every group against the declaration it mirrors (the key maps, the vocabulary lists)
- *  and scans the helper's own file for literals, so neither side can move alone:
+/** Keys the column renders through code it does not own, which a literal scan of its own files cannot see. Each group names its
+ *  helper; round-column-copy.test.ts requires every value of the key maps the helpers read to be listed here, and scans the helper's
+ *  own file (or function) for literals and for variable keys, so a literal added to a helper, or a value added to a map, fails until it
+ *  is listed. A path the test does not scan (a new helper file, a key built by string concatenation) is not covered:
  *   - `openNoticeText`, `resendNoticeText` and `OpenRoundConfirmBody` (desk/open-round-control.tsx), and the maps they read;
  *   - `RoundExtend` and the extend copy it asks for (checkin-extend-ui.ts; the reasons are `EXTEND_WHY_KEYS`);
  *   - the invite word of a seat (`INVITE_WORD_KEYS`) and the chip of a held card (`HELD_TITLE_KEYS`);
  *   - what the queue's cards say through `where()`, `boardStateWord()` and `noticeSentence()` (only a Mark as reviewed answer reaches
- *     the column, so only its two kinds are listed). */
+ *     the column, so only its two kinds are listed). The test scans `boardStateWord` for its words; `where()` and `noticeSentence()`
+ *     are listed by hand and not scanned. */
 export const ROUND_COLUMN_HELPER_KEYS: readonly ColumnKey[] = [
   // OpenRoundConfirmBody, inviteState, the open's answer and the resend's
   "externalPlay.openRound.alreadyOpen",

@@ -46,13 +46,15 @@ describe("help: extending a board's check-in", () => {
     let quoted = 0;
     for (const [refusal, key] of worded) {
       const words = EN[key!]!;
-      // The page quotes the three the panel shows around a closed or unopened window; the others it names by their words.
-      if (["not_open", "closed", "cap_reached"].includes(refusal)) {
+      // The page quotes the four reasons the panel gives for a board: an unopened window, a closed one, a game that has started, and a
+      // spent cap. (A board that is over says nothing, and has no key.) Each is pinned, so none can be reworded behind the page.
+      if (["not_open", "closed", "game_started", "cap_reached"].includes(refusal)) {
         expect(s, `${refusal}: "${words}"`).toContain(words);
         quoted += 1;
       }
     }
-    expect(quoted, "anti-vacuity: three reasons quoted").toBe(3);
+    expect(quoted, "anti-vacuity: four reasons quoted").toBe(4);
+    expect(worded.length, "premise: the panel has exactly four worded reasons, all of them quoted").toBe(4);
     expect(s).toContain(`**+${CHECKIN_EXTEND_STEP_MINUTES} min**`);
     expect(s).toContain(`**+${CHECKIN_EXTEND_STEP_MINUTES} min to the round**`);
     expect(EN["externalPlay.checkinExtend.round"], "premise: the round button is '+N min to the round'").toBe(`+{minutes} min to the round`);
