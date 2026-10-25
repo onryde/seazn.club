@@ -1123,5 +1123,64 @@
         "name": "refuses no URL, an unparsable one, another protocol, a remote host"
       }
     ]
+  },
+  {
+    "id": "t7-m74-embed-select-drops-table-rule",
+    "file": "apps/web/src/server/embed-data.ts",
+    "find": "has_rank_overrides, table_points_rule\n",
+    "replace": "has_rank_overrides /*MUT74*/\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/public-stages-qualification-db.test.ts"
+        ],
+        "name": "W2d PF-3: getPublicDivision AND embedDivisionData carry table_points_rule, so a started stage's PIN reaches qualification's bounds through both "
+      }
+    ]
+  },
+  {
+    "id": "t7-m75-page-select-drops-table-rule",
+    "file": "apps/web/src/server/public-site/data.ts",
+    "find": "has_rank_overrides, table_points_rule,",
+    "replace": "has_rank_overrides, /*MUT75*/",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/public-stages-qualification-db.test.ts"
+        ],
+        "name": "W2d PF-3: getPublicDivision AND embedDivisionData carry table_points_rule, so a started stage's PIN reaches qualification's bounds through both "
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/stage-format-lines-db.test.ts"
+        ],
+        "name": "W2d PF-3: a started stage PINNED to its table rules, with no points of its own, still prints no points line"
+      }
+    ]
+  },
+  {
+    "id": "t7-m76-scene-cleanup-keeps-the-org",
+    "file": "apps/web/src/server/public-site/__tests__/_stage-rules-scene.ts",
+    "find": "  await sql`delete from organizations where id = ${auth.orgId}`;",
+    "replace": "  /*MUT76*/",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/public-stages-qualification-db.test.ts"
+        ],
+        "name": "W2d PF-3: getPublicDivision AND embedDivisionData carry table_points_rule, so a started stage's PIN reaches qualification's bounds through both "
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/stage-format-lines-db.test.ts"
+        ],
+        "name": "W2d PF-3: a started stage PINNED to its table rules, with no points of its own, still prints no points line"
+      }
+    ]
   }
 ]

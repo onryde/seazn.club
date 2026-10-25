@@ -28,8 +28,11 @@ import { createDivision } from "@/server/usecases/divisions";
 import { createEntrants } from "@/server/usecases/entrants";
 import { createStages, overrideStandings } from "@/server/usecases/stages";
 import { GENERIC_CONFIG, seedOrg } from "@/server/usecases/__tests__/_seed";
-import { parseStoredPointsRule } from "@seazn/engine/competition";
+import { parseStoredPointsRule, pointsRuleBounds } from "@seazn/engine/competition";
+import { resolveLatestModule } from "@/server/engine-db";
 import { getPublicDivision } from "../data";
+import { EVERY_OUTCOME, boundsInForce, divisionPointsBounds, stageQualMeta } from "../qualification-view";
+import { dropScene, sceneRowCounts, sceneSubscriptionId } from "./_stage-rules-scene";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -754,5 +757,67 @@ describe.skipIf(!HAS_DB)("public_stages_v — qualification columns (V414)", () 
     if (!embed.ok) return;
     expect(embed.data.stages[0]).toMatchObject(expected);
     expect(embed.data.division.config).toMatchObject({ resultMode: "score", allowDraws: true });
+  });
+
+  // W2d PF-3 (V472): the pin rides `table_points_rule`, and each public reader names its columns, so each must select it —
+  // tsc cannot see SQL text. A reader that drops it hands qualification `undefined`, and the bounds fall back to the
+  // sport's: equal to the pin's at pin time, wrong after a division points edit on a started stage. So the pin here pays
+  // differently from the division, and the bounds are read through EACH reader's own row.
+  it("W2d PF-3: getPublicDivision AND embedDivisionData carry table_points_rule, so a started stage's PIN reaches qualification's bounds through both (never the sport's)", async () => {
+    const d = await division();
+    // Committed (the readers use the module's own connection), so the scene is deleted afterwards and counted gone.
+    const subscriptionId = await sceneSubscriptionId(d.auth);
+    let standing: Record<string, number> = {};
+    try {
+      await createStages(d.auth, d.divisionId, [
+        { seq: 1, kind: "league", name: "League", config: {} },
+        { seq: 2, kind: "knockout", name: "Finals", config: {}, progression: prog([{ kind: "rankRange", from: 1, to: 2 }]) },
+      ] as never);
+      const [{ id: leagueId }] = await sql<{ id: string }[]>`select id from stages where division_id = ${d.divisionId} and seq = 1`;
+      const pinPoints = {
+        win: { regulation: 5 }, loss: { regulation: 1 }, draw: 2, tie: 2, noResult: 2,
+        shootoutAs: "result", unit: "whole", bonuses: [],
+      };
+      await sql`update stages set status = 'active', table_rules_pinned_at = now(), table_rules_pinned = ${sql.json({
+        points: pinPoints,
+        tiebreakers: ["points", "wins"],
+        crossGroup: ["points", "diff", "for", "wins"],
+        sources: { points: "migrated", tiebreakers: "migrated" },
+      })} where id = ${leagueId}`;
+      const parsed = parseStoredPointsRule(pinPoints);
+      expect(parsed, "premise: today's reader takes the pin's points").not.toBeNull();
+      const pinBounds = pointsRuleBounds(parsed!, EVERY_OUTCOME);
+      const generic = resolveLatestModule("generic");
+
+      const page = await getPublicDivision(d.orgSlug, d.compSlug, d.divSlug);
+      expect(page, "premise: the division page resolves").not.toBeNull();
+      const embed = await embedDivisionData(d.divisionId);
+      expect(embed.ok, "premise: the embed resolves on Pro").toBe(true);
+      if (!embed.ok) return;
+
+      let checked = 0;
+      for (const [reader, stages, cfg] of [
+        ["getPublicDivision", page!.stages, page!.division.config],
+        ["embedDivisionData", embed.data.stages, embed.data.division.config],
+      ] as const) {
+        const league = stages.find((st) => st.id === leagueId);
+        expect(league?.table_points_rule, `${reader}: the pin's points`).toEqual(pinPoints);
+        expect(league?.points_rule ?? null, `${reader}: no own rule`).toBeNull();
+        const sportBounds = divisionPointsBounds(generic, cfg);
+        expect(sportBounds, `premise (${reader}): the division's own bounds differ from the pin's`).not.toEqual(pinBounds);
+        expect(boundsInForce(stageQualMeta(league!), sportBounds), `${reader}: qualification's bounds`).toEqual(pinBounds);
+        checked++;
+      }
+      expect(checked).toBe(2);
+      standing = await sceneRowCounts(d.auth, subscriptionId);
+    } finally {
+      await dropScene(d.auth);
+    }
+    expect(standing, "premise: the scene stood").toMatchObject({
+      organizations: 1, competitions: 1, divisions: 1, stages: 2, subscriptions: 1, users: 1,
+    });
+    expect(await sceneRowCounts(d.auth, subscriptionId), "nothing of the scene is left behind").toEqual({
+      organizations: 0, competitions: 0, divisions: 0, stages: 0, fixtures: 0, entrants: 0, subscriptions: 0, users: 0,
+    });
   });
 });

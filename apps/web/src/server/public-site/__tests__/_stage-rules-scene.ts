@@ -165,3 +165,41 @@ export async function seedDecidersScene(opts: {
     cupFixtureId: cupFixtures.fixtures[0]!.id,
   };
 }
+
+// ---------------------------------------------------------------------------
+// W2d T7 fix round 2 - a test that COMMITS a started, pinned stage must leave none of it behind: global sweeps over
+// active or pinned stages (T9's "active ⇒ pinned") read the shared test DB. The public readers these tests prove read
+// through the module's own `sql`, so a rolled-back transaction cannot hold the scene; it is deleted instead.
+// ---------------------------------------------------------------------------
+/** What a `seedOrg` scene owns, counted: the org, its competitions, divisions, stages, fixtures and entrants (all of
+ *  which cascade from the org), its billing group, and its owner. */
+export async function sceneRowCounts(auth: AuthCtx, subscriptionId: string | null): Promise<Record<string, number>> {
+  const [row] = await sql<Record<string, number>[]>`
+    select (select count(*)::int from organizations where id = ${auth.orgId}) as organizations,
+           (select count(*)::int from competitions where org_id = ${auth.orgId}) as competitions,
+           (select count(*)::int from divisions where org_id = ${auth.orgId}) as divisions,
+           (select count(*)::int from stages s join divisions d on d.id = s.division_id where d.org_id = ${auth.orgId}) as stages,
+           (select count(*)::int from fixtures where org_id = ${auth.orgId}) as fixtures,
+           (select count(*)::int from entrants where org_id = ${auth.orgId}) as entrants,
+           (select count(*)::int from subscriptions where id = ${subscriptionId}) as subscriptions,
+           (select count(*)::int from users where id = ${auth.userId}) as users`;
+  return row!;
+}
+
+/** The scene's billing group (`setOrgPlan` gives each seeded org its own). */
+export async function sceneSubscriptionId(auth: AuthCtx): Promise<string | null> {
+  const [row] = await sql<{ subscription_id: string | null }[]>`select subscription_id from organizations where id = ${auth.orgId}`;
+  return row?.subscription_id ?? null;
+}
+
+/** Deletes everything `seedOrg` and the scene wrote: the org (its competitions, divisions, stages, fixtures and
+ *  entrants cascade), then its own billing group, then its owner. */
+export async function dropScene(auth: AuthCtx): Promise<void> {
+  const subscriptionId = await sceneSubscriptionId(auth);
+  await sql`delete from organizations where id = ${auth.orgId}`;
+  if (subscriptionId !== null) {
+    await sql`delete from subscriptions where id = ${subscriptionId}
+              and not exists (select 1 from organizations where subscription_id = ${subscriptionId})`;
+  }
+  await sql`delete from users where id = ${auth.userId}`;
+}

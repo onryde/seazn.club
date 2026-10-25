@@ -23,7 +23,7 @@ import { resolveLatestModule } from "@/server/engine-db";
 import { CompetitionHubDoc } from "../competition-hub-schema";
 import { loadCompetitionHub } from "../competition-hub";
 import { getPublicDivision } from "../data";
-import { SWISS_RULES, seedDecidersScene, seedStageRulesScene } from "./_stage-rules-scene";
+import { SWISS_RULES, dropScene, sceneRowCounts, sceneSubscriptionId, seedDecidersScene, seedStageRulesScene } from "./_stage-rules-scene";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -102,41 +102,58 @@ describe.skipIf(!HAS_DB)("a stage's deciders and own points reach the hub and th
     const cfg = m.configSchema.parse(m.variants["fih-outdoor"]) as { periods: { minutes: number } };
     const preset = stageDefaultsFor(m, "knockout", "fih-outdoor") as { shootout: { attempts: number } };
     const s = await seedDecidersScene({ sportKey: "hockey", variantKey: "fih-outdoor" });
-    const pinPoints = {
-      win: { regulation: 3, so: 2 }, loss: { regulation: 0, so: 1 }, draw: 1, tie: 1, noResult: 1,
-      shootoutAs: "result", unit: "whole", bonuses: [],
-    };
-    const pin = {
-      points: pinPoints,
-      tiebreakers: ["points", "wins", "diff", "for", "h2h_points"],
-      crossGroup: ["points", "diff", "for", "wins"],
-      sources: { points: "migrated", tiebreakers: "migrated" },
-    };
-    await sql`update stages set status = 'active', table_rules_pinned = ${sql.json(pin)}, table_rules_pinned_at = now()
-              where id = ${s.leagueStageId}`;
+    // The scene is COMMITTED (the readers below use the module's own connection), so it is deleted afterwards — every row
+    // of it, counted while it stands and after it is gone: no started, pinned stage is left for a later global sweep.
+    const subscriptionId = await sceneSubscriptionId(s.auth);
+    let standing: Record<string, number> = {};
+    try {
+      const pinPoints = {
+        win: { regulation: 3, so: 2 }, loss: { regulation: 0, so: 1 }, draw: 1, tie: 1, noResult: 1,
+        shootoutAs: "result", unit: "whole", bonuses: [],
+      };
+      const pin = {
+        points: pinPoints,
+        tiebreakers: ["points", "wins", "diff", "for", "h2h_points"],
+        crossGroup: ["points", "diff", "for", "wins"],
+        sources: { points: "migrated", tiebreakers: "migrated" },
+      };
+      await sql`update stages set status = 'active', table_rules_pinned = ${sql.json(pin)}, table_rules_pinned_at = now()
+                where id = ${s.leagueStageId}`;
 
-    const [row] = await sql<{ points_rule: unknown; table_points_rule: unknown }[]>`
-      select points_rule, table_points_rule from public_stages_v where id = ${s.leagueStageId}`;
-    expect(row, "the Pool is on the public view").toBeDefined();
-    expect(row!.points_rule, "the stage's own rule: none").toBeNull();
-    expect(row!.table_points_rule, "the rule its table is paid by: the pin's").toEqual(pinPoints);
+      const [row] = await sql<{ points_rule: unknown; table_points_rule: unknown }[]>`
+        select points_rule, table_points_rule from public_stages_v where id = ${s.leagueStageId}`;
+      expect(row, "the Pool is on the public view").toBeDefined();
+      expect(row!.points_rule, "the stage's own rule: none").toBeNull();
+      expect(row!.table_points_rule, "the rule its table is paid by: the pin's").toEqual(pinPoints);
 
-    const data = await getPublicDivision(s.orgSlug, s.compSlug, s.divSlug);
-    const pool = data!.stages.find((st) => st.id === s.leagueStageId);
-    expect(pool?.points_rule ?? null).toBeNull();
-    expect(pool?.table_points_rule).toEqual(pinPoints);
+      const data = await getPublicDivision(s.orgSlug, s.compSlug, s.divSlug);
+      const pool = data!.stages.find((st) => st.id === s.leagueStageId);
+      expect(pool?.points_rule ?? null).toBeNull();
+      expect(pool?.table_points_rule).toEqual(pinPoints);
 
-    const doc = await loadCompetitionHub(s.orgSlug, s.compSlug);
-    expect(CompetitionHubDoc.safeParse(doc).success).toBe(true);
-    expect(doc!.divisions.find((d) => d.slug === s.divSlug)?.stageFormatLines).toEqual([
-      {
-        stageName: "Cup",
-        line: [
-          { key: "format.rules.period.quarters", params: { minutes: cfg.periods.minutes } },
-          { key: "format.rules.decider.shootout", params: { n: preset.shootout.attempts } },
-        ],
-      },
-    ]);
+      const doc = await loadCompetitionHub(s.orgSlug, s.compSlug);
+      expect(CompetitionHubDoc.safeParse(doc).success).toBe(true);
+      expect(doc!.divisions.find((d) => d.slug === s.divSlug)?.stageFormatLines).toEqual([
+        {
+          stageName: "Cup",
+          line: [
+            { key: "format.rules.period.quarters", params: { minutes: cfg.periods.minutes } },
+            { key: "format.rules.decider.shootout", params: { n: preset.shootout.attempts } },
+          ],
+        },
+      ]);
+      standing = await sceneRowCounts(s.auth, subscriptionId);
+    } finally {
+      await dropScene(s.auth);
+    }
+    expect(standing, "premise: the scene stood (its org, competition, division, two stages, fixtures, entrants, group, owner)").toMatchObject({
+      organizations: 1, competitions: 1, divisions: 1, stages: 2, subscriptions: 1, users: 1,
+    });
+    expect(standing.fixtures).toBeGreaterThan(0);
+    expect(standing.entrants).toBe(4);
+    expect(await sceneRowCounts(s.auth, subscriptionId), "nothing of the scene is left behind").toEqual({
+      organizations: 0, competitions: 0, divisions: 0, stages: 0, fixtures: 0, entrants: 0, subscriptions: 0, users: 0,
+    });
   }, 90_000);
 
   it("football: a stage with its own points says them (view's points_rule), ahead of the Cup in stage order, and the Cup says its extra time and penalties", async () => {
