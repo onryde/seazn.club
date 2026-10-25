@@ -281,9 +281,9 @@ describe("queue: a held board", () => {
     expect(textIn(h, "arbiter-column-card-body")).toBe(esc(t("externalPlay.reason.noShowWhite", { name: "Bo M." })));
   });
 
-  it("every held reason the engine declares has a chip and a sentence on the card (a sweep over NEEDS_REASONS)", () => {
-    // Em dashes in dictionary copy are Task 11's to reword (externalPlay.held.clockFlagUnsettled is on its list); the rest are scanned.
-    const OWED_TO_TASK_11 = ["clock_flag_unsettled"];
+  it("every held reason the engine declares has a chip and a sentence on the card, and none carries a dash or an arrow (a sweep over NEEDS_REASONS)", () => {
+    // Dictionary copy has no dash or arrow (spec §9); Task 11 reworded externalPlay.held.clockFlagUnsettled, the last reason that had one,
+    // so every reason is scanned and none is skipped.
     const banned = [0x2013, 0x2014, 0x2192, 0x2190, 0x2197].map((c) => String.fromCharCode(c));
     let checked = 0;
     let scanned = 0;
@@ -295,14 +295,15 @@ describe("queue: a held board", () => {
       expect(textIn(h, "arbiter-column-card-body"), reason).toBe(esc(t(body.key, body.vars ?? {})));
       expect(textIn(h, "arbiter-column-card-chip")!.length, reason).toBeGreaterThan(0);
       checked += 1;
-      if (OWED_TO_TASK_11.includes(reason)) continue;
       for (const ch of banned) expect(h, `${reason} U+${ch.charCodeAt(0).toString(16)}`).not.toContain(ch);
       scanned += 1;
     }
     expect(checked, "anti-vacuity: every reason rendered").toBe(NEEDS_REASONS.length);
     expect(NEEDS_REASONS.length, "premise: the declared list is not empty").toBeGreaterThan(0);
-    expect(scanned, "anti-vacuity: the dash scan covered all but the owed ones").toBe(NEEDS_REASONS.length - OWED_TO_TASK_11.length);
-    expect(OWED_TO_TASK_11.every((r) => (NEEDS_REASONS as readonly string[]).includes(r)), "the owed list names real reasons").toBe(true);
+    expect(scanned, "anti-vacuity: the dash scan covered every reason, the formerly owed one included").toBe(NEEDS_REASONS.length);
+    // The positive pair for the scan: the reason that used to be skipped is on screen, with the reworded chip.
+    const clock = queue({ round: ROUND("h1"), held: [HELD("h1", { reason: "clock_flag_unsettled" })] });
+    expect(textIn(clock, "arbiter-column-card-chip")).toBe(esc("Time's up: confirm the result"));
   });
 
   it("seated: the card is shown with the settle-own-board line and NO action; the title's count leaves it out (C6)", () => {

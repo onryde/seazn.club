@@ -883,7 +883,11 @@ describe("RoundColumn: the check-in hero", () => {
     const reinvite = checkinColumn(boards, { data: DATA({ views: [VIEW({ state: "open", press: "reinvite", pairings })] }) });
     expect(textIn(reinvite, "arbiter-column-reinvite")).toBe(esc(pl("runsheet.round.inviteCta", 3)));
     const reopen = checkinColumn(boards, { data: DATA({ views: [VIEW({ state: "open", press: "reopen", pairings })] }) });
-    expect(textIn(reopen, "arbiter-column-reinvite")).toBe(esc(en["runsheet.round.openCta"]!));
+    // The round is already open: its press invites everyone again and starts the window now (openRound's "reopened"), and says so. It
+    // is not the real Open round press, whose label the before and playing phases keep.
+    expect(textIn(reopen, "arbiter-column-reinvite")).toBe(esc(en["arbiter.column.reopenCta"]!));
+    expect(textIn(reopen, "arbiter-column-reinvite")).not.toBe(esc(en["runsheet.round.openCta"]!));
+    expect(reopen, "the reopen press does not borrow the Open round label").not.toContain(esc(en["runsheet.round.openCta"]!));
     let absent = 0;
     for (const press of ["none", "open"] as const) {
       const h = checkinColumn(boards, { data: DATA({ views: [VIEW({ state: "open", press, pairings })] }) });
@@ -1516,6 +1520,28 @@ describe("check-in under another locale: every word comes from that dictionary",
       expect(hero + list, `${locale}: English leaked`).not.toContain(esc(text));
     }
     expect(Object.keys(expected).length, "anti-vacuity: words checked").toBe(10);
+  });
+});
+
+describe("the reopen press, under every locale", () => {
+  it.each([["en", enUi], ["es", esUi], ["fr", frUi], ["nl", nlUi]] as [Locale, Dict][])("%s: it reads that locale's reopen label, never the Open round label", (locale, dict) => {
+    const d = dict as unknown as Record<string, string>;
+    const boards = [checking(OPEN(), seat(false), seat(false))];
+    const pairings = [P(1, { owedSeats: 2 })];
+    const reopen = renderToStaticMarkup(
+      <DictProvider dict={dict} locale={locale}>
+        <RoundColumn {...COLUMN({ round: ROUND(boards), nowMs: NOW, data: DATA({ views: [VIEW({ state: "open", press: "reopen", pairings })] }) })} />
+      </DictProvider>,
+    );
+    expect(textIn(reopen, "arbiter-column-reinvite"), locale).toBe(esc(d["arbiter.column.reopenCta"]!));
+    expect(textIn(reopen, "arbiter-column-reinvite"), `${locale}: not the Open round label`).not.toBe(esc(d["runsheet.round.openCta"]!));
+    // Its positive pair: the real Open round press keeps its label under the same locale (the next round, beside a round on screen).
+    const next = renderToStaticMarkup(
+      <DictProvider dict={dict} locale={locale}>
+        <RoundColumn {...COLUMN({ round: ROUND([playing()]), nowMs: NOW, data: DATA({ views: [VIEW({ roundNo: 2, press: "open", pairings })] }) })} />
+      </DictProvider>,
+    );
+    expect(textIn(next, "arbiter-column-next"), `${locale}: the real press`).toBe(esc(d["runsheet.round.openCta"]!));
   });
 });
 

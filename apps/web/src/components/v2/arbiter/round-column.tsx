@@ -475,7 +475,7 @@ export function CheckinHero({ round, view, tz, nowMs, openRound, roundExtend }: 
           onClick={openRound.ask}
           className={`${BUTTON_QUIET} w-full sm:w-auto`}
         >
-          {reinvite ? plural("runsheet.round.inviteCta", owed) : msg("runsheet.round.openCta")}
+          {reinvite ? plural("runsheet.round.inviteCta", owed) : msg("arbiter.column.reopenCta")}
         </button>
       )}
 

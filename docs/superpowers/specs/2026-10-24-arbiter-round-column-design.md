@@ -158,8 +158,8 @@ joins three of them:
 | the board grid | the phase from the ladder, placed as in §5.1 |
 
 **The round bar (`RoundExtend`) keeps every line it shows today** (controller ruling on pre-flight C13). Today it renders
-on every path with a round (`arbiter-panel.tsx:249-251`), with its button, its why line ("Game started", "Check-in
-has closed") and the answer to the last press. Exactly one bar is mounted per page, and where it goes depends on the
+on every path with a round (`arbiter-panel.tsx:249-251`), with its button, its why line ("Can't extend check-in: a game has started", "Can't extend check-in: it has closed") and the
+answer to the last press. Exactly one bar is mounted per page, and where it goes depends on the
 path:
 
 - **check-in phase:** inside the hero (§5.3), with its button;
@@ -231,7 +231,10 @@ No state loses a line it shows today.
 - **The round's own press** when `press` is `reinvite` or `reopen` (the spike dropped it, §2): the existing
   confirmation, reached from a quiet secondary button with the existing copy ("Invite {count} players", "Open Round
   {round} again?"). This is how a Not delivered seat is invited again (pre-flight C4). Its stamp is released, so its
-  row offers no Resend, and the round's press becomes `reopen` or `reinvite`.
+  row offers no Resend, and the round's press becomes `reopen` or `reinvite`. A `reopen` press is on a round that is
+  ALREADY open, and what it does is invite everyone again and start the check-in window again now (`openRound`'s
+  "reopened": the window is re-stamped and the +5 presses on boards with no game are reset), so its label is
+  `arbiter.column.reopenCta` ("Invite again and restart check-in"), never "Open round" (Task 11).
 - **Check-in groups** for a staggered round (`timedBatches`, I-1), as the Fixtures-tab control lists them today.
 
 **The waiting list** (`data-testid="arbiter-waiting"`), under the camera from `md` and after the column below `md`. It
@@ -304,7 +307,8 @@ their window opens.
 | Round 2                       |
 | 14 of 20 boards playing       |
 | 3 boards finished             |
-| Game started (round bar why)  |   <- the round bar's why line and last answer (§5.2)
+| Can't extend check-in: a game |   <- the round bar's why line and last answer (§5.2)
+| has started                   |
 +-------------------------------+
 | Round 3 is paired             |
 | Round 2 still has 6 games in  |   <- the server's earlierInPlay warning, inline
@@ -514,6 +518,7 @@ New keys (English shown; es, fr and nl get their own translations in the same ta
 | `arbiter.column.batchBoards` | "Boards {from} to {to}" |
 | `arbiter.invite.sent` / `.delivered` / `.delayed` / `.bounced` / `.notDelivered` | "Sent" / "Delivered" / "Delayed" / "Bounced" / "Not delivered" |
 | `arbiter.invite.help` | "Delivered means the player's mail server accepted the invite. It does not mean they have read it." |
+| `arbiter.column.reopenCta` | "Invite again and restart check-in" (the quiet press on a round that is already open and whose invites all failed; the real Open round press keeps `runsheet.round.openCta`) |
 | `arbiter.entry.status.ready` | "Round {round} is ready to open" |
 | `arbiter.entry.status.checkin` | "Round {round} check-in is open" |
 
@@ -524,8 +529,16 @@ Reused as they are: `runsheet.round.notInvited` (the sixth label), `runsheet.rou
 panel's `arbiter-extend-round*` copy; `arbiter.notice.settleOwnBoard`.
 
 Reworded because the column renders them and they carry an em dash (fix 4). Each is reworded in all four locales:
-`runsheet.round.paired`, `runsheet.round.openUntil`, `runsheet.round.err.notOnline`,
-`externalPlay.openRound.alreadyOpen`, `externalPlay.held.clockFlagUnsettled`, `externalPlay.queue.reviewedNew.*`.
+`runsheet.round.paired`, `runsheet.round.err.notOnline`, `externalPlay.openRound.alreadyOpen`,
+`externalPlay.held.clockFlagUnsettled`, `externalPlay.queue.reviewedNew.*`. `runsheet.round.openUntil` is NOT reworded: no
+source file reads it any more (Task 10 removed the Fixtures-tab control), and Task 12 deletes it with the e2e that does.
+`runsheet.round.paired` has no source reader either; it is reworded as listed and Task 12 may delete it with the same e2e.
+
+**The reasons a +5 is not offered** (`externalPlay.checkinExtend.why.notOpen`, `.closed`, `.gameStarted`, `.capReached`) are one
+sentence each, "Can't extend check-in: a game has started", in all four locales (Task 11). The column shows them with no button
+beside them, where a bare "Game started" read as a fragment and "Check-in has closed" repeated the clock label above it. The
+mixed reason `.roundNoneOpen` was already a sentence and is unchanged. The same lines stand on the round bar and on a board's
+decision area, so each reads as true of one board and of a round.
 Also `arbiter.empty.body`, whose "open a round from the run sheet" is no longer true. The column renders a numeric
 range as "Boards 1 to 8", using `arbiter.column.batchBoards`, so that no dash of any kind is left in its copy.
 

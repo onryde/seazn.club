@@ -91,7 +91,7 @@ describe("held copy: every reason, every locale", () => {
       account_changed: "Lichess account changed",
       // T17B fix 2, D11 + controller ruling (2026-10-14): the organiser is confirming it, never "not confirmed" — the
       // player's room reads "Time's up — your organiser is confirming the result"; the desk asks for that confirmation.
-      clock_flag_unsettled: "Time's up — confirm the result",
+      clock_flag_unsettled: "Time's up: confirm the result",
     };
     let checked = 0;
     for (const reason of NEEDS_REASONS) {

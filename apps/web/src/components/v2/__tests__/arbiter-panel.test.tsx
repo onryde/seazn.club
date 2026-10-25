@@ -1446,10 +1446,12 @@ describe("the check-in extension on a ticking clock: offered between the opening
       expect(html(screen(mk({ canExtend: false, refusal: "not_playable" }), NOW), locale), `${locale}: a board that is over says nothing`).not.toContain("arbiter-extend-why");
     }
     expect(checked, "anti-vacuity: 4 refusals x 4 locales").toBe(16);
-    expect(EN["externalPlay.checkinExtend.why.notOpen"]).toBe("Check-in hasn't opened yet");
-    expect(EN["externalPlay.checkinExtend.why.closed"]).toBe("Check-in has closed");
-    expect(EN["externalPlay.checkinExtend.why.gameStarted"]).toBe("Game started");
-    expect(EN["externalPlay.checkinExtend.why.capReached"]).toBe("No extensions left");
+    // Phase 2, Task 11: the reasons stand in the round column too (under a tally, beside no button), where "Game started" read as a
+    // fragment and "Check-in has closed" repeated the clock label above it. Each is now one sentence: what cannot be done, and why.
+    expect(EN["externalPlay.checkinExtend.why.notOpen"]).toBe("Can't extend check-in yet: it hasn't opened");
+    expect(EN["externalPlay.checkinExtend.why.closed"]).toBe("Can't extend check-in: it has closed");
+    expect(EN["externalPlay.checkinExtend.why.gameStarted"]).toBe("Can't extend check-in: a game has started");
+    expect(EN["externalPlay.checkinExtend.why.capReached"]).toBe("Can't extend check-in: no extensions left");
     expect(html(screen(null, NOW)), "a board with no check-in at all has no reason line").not.toContain("arbiter-extend-why");
   });
 });

@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import type { Dict } from "@/lib/i18n-constants";
+import { routes } from "@/lib/routes";
 import en from "@/dictionaries/en/ui.json";
 import es from "@/dictionaries/es/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
@@ -273,8 +274,17 @@ describe("the flagged list", () => {
 
   // Phase 2 (spec 2026-10-24-arbiter-round-column-design.md §8): the queue is on the Fixtures tab only when the panel is NOT
   // offered (online play off now, or the flag off), and there the panel 404s. Its old "Review in arbiter panel" link was a live
-  // 404 in exactly the one place it rendered, so no card links into the panel in any state, and says no such words.
+  // 404 in exactly the one place it rendered, so no card links into the panel in any state. Task 11 deleted the link's words
+  // (`externalPlay.queue.review`) from every dictionary, so a check on those words would test an undefined key; the checks that
+  // can still fail are the testid, the href and the anchor itself, each beside a card that IS on screen with its other control.
   it("no flagged board links into the arbiter panel, in any state or any locale (the panel would 404 where this queue shows)", () => {
+    const ANCHOR = /<a[\s>]/;
+    // The probes are not blind: the markup of a link into the panel trips all three.
+    const link = `<a data-testid="external-play-review" href="${routes.divisionArbiter("o", "c", "d", "fx-1")}">x</a>`;
+    expect(testIds(link, "external-play-review"), "the testid probe sees a review link").toBe(1);
+    expect(link, "the href probe sees a link into the panel").toContain("/arbiter");
+    expect(link, "the anchor probe sees an anchor").toMatch(ANCHOR);
+
     const states: [string, FlaggedBoard][] = [
       ["live", flaggedBoard({ fixtureId: "fx-1" })],
       ["finished", flaggedBoard({ fixtureId: "fx-2", state: { kind: "result", score: "1–0", noResult: false } })],
@@ -288,7 +298,7 @@ describe("the flagged list", () => {
         expect(testIds(h, "external-play-go-on"), `${locale} ${label}: the card renders`).toBe(1);
         expect(testIds(h, "external-play-review"), `${locale} ${label}: no review link`).toBe(0);
         expect(h, `${locale} ${label}: no href into the panel`).not.toContain("/arbiter");
-        expect(text(h), `${locale} ${label}: none of its words`).not.toContain((LOCALES[locale] as Record<string, string>)["externalPlay.queue.review"]);
+        expect(h, `${locale} ${label}: no anchor of any kind`).not.toMatch(ANCHOR);
         checked++;
       }
     }

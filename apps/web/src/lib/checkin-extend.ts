@@ -104,8 +104,9 @@ export function nextExtendEdge(edges: readonly number[], nowMs: number): number 
   return best;
 }
 
-/** The short reason shown where the +5 button is not offered (owner, 2026-10-19): "Check-in hasn't opened yet", "Check-in has closed",
- *  "Game started", "No extensions left". `not_playable` (a board that is over) says nothing: it has no check-in to speak of. Every
+/** The short reason shown where the +5 button is not offered (owner, 2026-10-19): check-in not opened, closed, a game started, no
+ *  extensions left. Each is one sentence that says what cannot be done and why ("Can't extend check-in: a game has started", phase 2
+ *  Task 11), because the round column shows it with no button beside it. `not_playable` (a board that is over) says nothing: it has no check-in to speak of. Every
  *  refusal is a key of this table, so a sixth reason cannot be added without choosing its words (or choosing silence) here. */
 export const EXTEND_WHY_KEYS: Readonly<Record<ExtendRefusal, DictionaryKey | null>> = {
   not_playable: null,
@@ -125,7 +126,7 @@ export type RoundWhy = { code: ExtendRefusal | "mixed"; key: DictionaryKey };
 /** The reason a round-wide press has nothing to reach, from each board's refusal at the instant asked (`null`: that board would accept
  *  a press). Null when ANY board would accept one (the round has its button, and a button needs no reason), and when no board has a
  *  reason to speak of: a round that lists no boards, and one whose every board is over (`not_playable` is silent, as it is on the
- *  board). Boards that are over are left out of the count: "Game started" is true of a round whose boards are all either started or over. */
+ *  board). Boards that are over are left out of the count: "a game has started" is true of a round whose boards are all either started or over. */
 export function roundWhy(refusals: Iterable<ExtendRefusal | null>): RoundWhy | null {
   const spoken = new Set<ExtendRefusal>();
   for (const r of refusals) {

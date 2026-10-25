@@ -10,6 +10,7 @@
 import type { ArbiterBoard, ArbiterBoardState, ArbiterRound } from "./arbiter-view.ts";
 import { boardIsOver } from "./arbiter-view.ts";
 import type { CheckinExtendState } from "./checkin-extend.ts";
+import type { DictionaryKey } from "./i18n-keys.ts";
 import { inExtendWindow, liveExtendRefusal } from "./checkin-extend.ts";
 import type { OpenRoundView } from "./open-round.ts";
 import type { FlaggedBoard } from "@/server/usecases/external-play/arbiter";
@@ -188,3 +189,193 @@ export function nextRoundViews(views: readonly OpenRoundView[], round: ArbiterRo
   if (round !== null && !round.current) return [];
   return views.filter((v) => v.press === "open" && !(round !== null && v.stageId === round.stageId && v.roundNo === round.roundNo));
 }
+
+// ---- the column's copy (§9, C19) --------------------------------------------------------------------------------
+
+/** The stem of a plural pair: `foo` for `foo.one` / `foo.other`, the form `plural()` is called with. */
+type PluralStem = DictionaryKey extends infer K ? (K extends `${infer S}.one` ? S : never) : never;
+
+/** A dictionary key, or the stem of a plural pair. tsc refuses a key that is not in the dictionary, and a stem with no `.one`. */
+export type ColumnKey = DictionaryKey | PluralStem;
+
+/** Every key round-column.tsx and round-queue-cards.tsx pass as a LITERAL to `msg(`, `plural(`, `t(` or `f.t(` (plural keys by their
+ *  stem). round-column-copy.test.ts reads both files as text and refuses a literal that is not here, so a key added to the column
+ *  cannot skip the four-locale and no-dash sweeps. One way on purpose: a key listed here that the column no longer asks for only
+ *  widens the sweep. */
+export const ROUND_COLUMN_KEYS: readonly ColumnKey[] = [
+  "arbiter.boardNo",
+  "arbiter.colour.black",
+  "arbiter.colour.white",
+  "arbiter.column.alreadyPlaying",
+  "arbiter.column.batchBoards",
+  "arbiter.column.checkin.closed",
+  "arbiter.column.checkin.closesIn",
+  "arbiter.column.checkin.opensIn",
+  "arbiter.column.checkin.tally",
+  "arbiter.column.finished",
+  "arbiter.column.here",
+  "arbiter.column.label",
+  "arbiter.column.notHereYet",
+  "arbiter.column.nothingPaired",
+  "arbiter.column.playing",
+  "arbiter.column.queue",
+  "arbiter.column.reopenCta",
+  "arbiter.column.review",
+  "arbiter.column.reviewThis",
+  "arbiter.column.toFixtures",
+  "arbiter.column.waiting",
+  "arbiter.flagCount",
+  "arbiter.invite.help",
+  "arbiter.notice.settleOwnBoard",
+  "arbiter.roundLine",
+  "arbiter.vs",
+  "confirm.cancel",
+  "externalPlay.openRound.startFirst",
+  "externalPlay.queue.markReviewed",
+  "externalPlay.queue.ownFlagged",
+  "runsheet.round.batchCloses",
+  "runsheet.round.batchOpens",
+  "runsheet.round.batchesLabel",
+  "runsheet.round.confirmCta",
+  "runsheet.round.confirmEarlierInPlay",
+  "runsheet.round.confirmTitle",
+  "runsheet.round.confirmTitleReinvite",
+  "runsheet.round.confirmTitleReopen",
+  "runsheet.round.heading",
+  "runsheet.round.inviteCta",
+  "runsheet.round.openCta",
+  "runsheet.round.pairedLede",
+  "runsheet.round.pairingsLabel",
+  "runsheet.round.resend",
+  "schedule.vs",
+];
+
+/** Keys the column renders through code it does not own, which a literal scan of its two files cannot see. Each group names its
+ *  helper; round-column-copy.test.ts checks every group against the declaration it mirrors (the key maps, the vocabulary lists)
+ *  and scans the helper's own file for literals, so neither side can move alone:
+ *   - `openNoticeText`, `resendNoticeText` and `OpenRoundConfirmBody` (desk/open-round-control.tsx), and the maps they read;
+ *   - `RoundExtend` and the extend copy it asks for (checkin-extend-ui.ts; the reasons are `EXTEND_WHY_KEYS`);
+ *   - the invite word of a seat (`INVITE_WORD_KEYS`) and the chip of a held card (`HELD_TITLE_KEYS`);
+ *   - what the queue's cards say through `where()`, `boardStateWord()` and `noticeSentence()` (only a Mark as reviewed answer reaches
+ *     the column, so only its two kinds are listed). */
+export const ROUND_COLUMN_HELPER_KEYS: readonly ColumnKey[] = [
+  // OpenRoundConfirmBody, inviteState, the open's answer and the resend's
+  "externalPlay.openRound.alreadyOpen",
+  "externalPlay.openRound.clockNotPlayable",
+  "externalPlay.openRound.divisionNotStarted",
+  "externalPlay.openRound.invited",
+  "externalPlay.openRound.noFixtures",
+  "externalPlay.openRound.notPaired",
+  "externalPlay.openRound.skipped.sendFailed",
+  "externalPlay.openRound.skipped.windowClosed",
+  "externalPlay.resend.boardHeld",
+  "externalPlay.resend.gameExists",
+  "externalPlay.resend.roundChanged",
+  "externalPlay.resend.windowClosed",
+  "runsheet.round.confirmBody",
+  "runsheet.round.confirmBodyReinvite",
+  "runsheet.round.confirmListLabel",
+  "runsheet.round.confirmScheduled",
+  "runsheet.round.confirmWindow",
+  "runsheet.round.confirmWindowReinvite",
+  "runsheet.round.confirmWindowStaggered",
+  "runsheet.round.err.disabled",
+  "runsheet.round.err.failed",
+  "runsheet.round.err.notOnline",
+  "runsheet.round.err.roundChanged",
+  "runsheet.round.invited",
+  "runsheet.round.noInviteOwed",
+  "runsheet.round.notInvited",
+  "runsheet.round.reopenNotice",
+  "runsheet.round.resendFailed",
+  "runsheet.round.resent",
+  "runsheet.round.resentNone",
+  "runsheet.round.sending",
+  "runsheet.round.skipLine",
+  "runsheet.round.stillToInvite",
+  // RoundExtend (the round bar the panel hands the column) and the board's +5 on a waiting row
+  "externalPlay.checkinExtend.board",
+  "externalPlay.checkinExtend.busy",
+  "externalPlay.checkinExtend.closesAt",
+  "externalPlay.checkinExtend.helper",
+  "externalPlay.checkinExtend.notice.board",
+  "externalPlay.checkinExtend.notice.round",
+  "externalPlay.checkinExtend.notice.roundNone",
+  "externalPlay.checkinExtend.refused.capReached",
+  "externalPlay.checkinExtend.refused.closed",
+  "externalPlay.checkinExtend.refused.failed",
+  "externalPlay.checkinExtend.refused.gameStarted",
+  "externalPlay.checkinExtend.refused.notOpen",
+  "externalPlay.checkinExtend.refused.notPlayable",
+  "externalPlay.checkinExtend.refused.playsThis",
+  "externalPlay.checkinExtend.refused.roundNotOpen",
+  "externalPlay.checkinExtend.round",
+  "externalPlay.checkinExtend.roundHint",
+  "externalPlay.checkinExtend.skip.capReached",
+  "externalPlay.checkinExtend.skip.closed",
+  "externalPlay.checkinExtend.skip.failed",
+  "externalPlay.checkinExtend.skip.gameStarted",
+  "externalPlay.checkinExtend.skip.notOpenYet",
+  "externalPlay.checkinExtend.skip.ownBoards",
+  // the reasons a round or a board has no +5 (the "why" family)
+  "externalPlay.checkinExtend.why.capReached",
+  "externalPlay.checkinExtend.why.closed",
+  "externalPlay.checkinExtend.why.gameStarted",
+  "externalPlay.checkinExtend.why.notOpen",
+  "externalPlay.checkinExtend.why.roundNoneOpen",
+  // INVITE_WORD_KEYS
+  "arbiter.invite.bounced",
+  "arbiter.invite.delayed",
+  "arbiter.invite.delivered",
+  "arbiter.invite.notDelivered",
+  "arbiter.invite.sent",
+  // HELD_TITLE_KEYS
+  "externalPlay.held.aborted",
+  "externalPlay.held.accountChanged",
+  "externalPlay.held.clockFlagUnsettled",
+  "externalPlay.held.createOutcomeUnknown",
+  "externalPlay.held.doubleWalkoverBlocked",
+  "externalPlay.held.fairPlay",
+  "externalPlay.held.mismatch",
+  "externalPlay.held.noShowBlack",
+  "externalPlay.held.noShowBoth",
+  "externalPlay.held.noShowWhite",
+  "externalPlay.held.notStarted",
+  "externalPlay.held.providerError",
+  "externalPlay.held.tiebreakOwed",
+  "externalPlay.held.tokenRevoked",
+  // heldBody(): the sentence of a held card, one per reason and per revoked seat
+  "externalPlay.reason.abort",
+  "externalPlay.reason.accountChanged",
+  "externalPlay.reason.accountChangedBlack",
+  "externalPlay.reason.accountChangedBoth",
+  "externalPlay.reason.accountChangedWhite",
+  "externalPlay.reason.accountMismatch",
+  "externalPlay.reason.clockFlagUnsettled",
+  "externalPlay.reason.createOutcomeUnknown",
+  "externalPlay.reason.doubleWalkoverBlocked",
+  "externalPlay.reason.fairPlay",
+  "externalPlay.reason.noShowBlack",
+  "externalPlay.reason.noShowBoth",
+  "externalPlay.reason.noShowWhite",
+  "externalPlay.reason.notStarted",
+  "externalPlay.reason.providerError",
+  "externalPlay.reason.tiebreakOwed",
+  "externalPlay.reason.tokenRevoked",
+  "externalPlay.reason.tokenRevokedBlack",
+  "externalPlay.reason.tokenRevokedBoth",
+  "externalPlay.reason.tokenRevokedWhite",
+  // the queue's cards: where(), boardStateWord(), and the answer to Mark as reviewed
+  "arbiter.notice.failed",
+  "arbiter.notice.goOnOwnBoard",
+  "arbiter.state.cancelled",
+  "arbiter.state.checkingIn",
+  "arbiter.state.live",
+  "arbiter.state.noResult",
+  "arbiter.state.onHold",
+  "arbiter.state.over",
+  "arbiter.state.starting",
+  "externalPlay.queue.reviewed",
+  "externalPlay.queue.reviewedNew",
+  "externalPlay.queue.where",
+];
