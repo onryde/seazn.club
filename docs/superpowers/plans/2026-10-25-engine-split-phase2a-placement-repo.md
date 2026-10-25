@@ -7,7 +7,7 @@
 **Architecture:** Two batches with outward steps between them.
 - **Batch P** builds the new repo's tree, CI and deploy workflows in a local clone of the empty remote. Nothing in seazn.club changes.
 - **The outward steps** (§ "Outward sequence") push that clone, publish the image and prove the stg deploy. Every one of them that changes something outside this machine waits for an explicit owner go.
-- **Batch W** is ONE seazn.club PR in three tasks: vendor the proto, pull the pinned image, then delete the old tree with a re-add guard.
+- **Batch W** is ONE seazn.club PR in three tasks: vendor the proto, pull the pinned image, then delete the old tree (no re-add guard; owner ruling 2026-10-25).
 
 The pinned image is `ghcr.io/onryde/seazn-placement:<placement sha>`. Its tag is read from `packages/scheduler/VENDORED.json` and never typed into a workflow.
 
@@ -96,7 +96,7 @@ The pinned image is `ghcr.io/onryde/seazn-placement:<placement sha>`. Its tag is
 
    Pinned in Task W1 (`vendorProto` refusal cases, `resolveCheckout` with `INIT_CWD`).
 3. **An image reference that silently comes out empty.** `echo "image=$(script)"` swallows the script's failure under `bash -e`. A malformed `imageTag` must fail with `::error::`, and the pin step must assign the reference before writing it. Pinned in Task W2.
-4. **The re-add guard false-redding on a developer's machine.** The 225 MB gitignored `services/placement/venv/` survives the deletion in every checkout that ever ran `seazn-env` natively, so an `existsSync` guard (the `registrations-sweep-workflow.test.ts:58` precedent) is red locally forever. The guard reads `git ls-files`. Pinned in Task W3, temp-repo cases.
+4. **[Superseded 2026-10-25: owner ruled no re-add guard; see Owner rulings 4.]** **The re-add guard false-redding on a developer's machine.** The 225 MB gitignored `services/placement/venv/` survives the deletion in every checkout that ever ran `seazn-env` natively, so an `existsSync` guard (the `registrations-sweep-workflow.test.ts:58` precedent) is red locally forever. The guard reads `git ls-files`. Pinned in Task W3, temp-repo cases.
 5. **A job that still runs `placement-service:ci` without its pull step, or pulls a typed tag.** That job either dies with "image not found" or tests an image that does not match the vendored proto. Pinned in Task W2's workflow sweep: an exact set of seven jobs, and no hex literal next to `seazn-placement:`.
 
 ## False premises found while planning
@@ -108,7 +108,7 @@ These are recorded per AGENTS.md class 5. None blocks the plan. Each is handled 
 3. **Spec §6.5's line numbers are all stale.** Live: `ci.yml:975/1276/1571`, `e2e.yml:853/1410/1773`, `bench.yml:147`, and the TS drift gate at `placement-ci.yml:303-314` (not 297-305). Re-pin at execution.
 4. **The brief names a "Build schedule" e2e.** No spec, test title or copy uses that name. The e2e that proves a real browser reaches the optimiser on the pinned image is `apps/web/e2e/placement-cutover.spec.ts` ("Auto-schedule reaches the OPTIMISER, not the greedy fallback…", :199). O12 reads that spec's results.
 5. **"No edits to services/placement or proto" does not stop the stg race.** `placement-stg.yml:42-47` also fires on `packages/scheduler/**` and `packages/engine/src/scheduling/**`, so any web merge touching the scheduler during the freeze redeploys `placement-stg` from the old tree. O3 disables the old deploy workflows before the new repo first deploys.
-6. **The re-add guard precedent (`existsSync`, `registrations-sweep-workflow.test.ts:58`) does not transfer.** See Review Focus 4.
+6. **The re-add guard precedent (`existsSync`, `registrations-sweep-workflow.test.ts:58`) does not transfer.** See Review Focus 4. (Moot: no guard, owner ruling 4.)
 7. **A GitHub Actions `services:` container cannot read a file.** So "the live integration test runs against the image at `imageTag` as a service container" needs a pin job whose output feeds `services.placement.image` (Task W2).
 8. **`services/placement/DEPLOY.md:5,226` cites `.github/workflows/placement-service.yml`,** which does not exist on main today. It is fixed in Task P1.
 9. **`relay-drivers-ci-wiring.test.ts:222-223` does not break on deletion.** Its `services/placement/*` literals are synthetic `/r/…` paths that test the detector. Only its comment at :204-205 goes stale (Task W3).
@@ -564,7 +564,9 @@ cd ~/github/seazn.club-worktrees/engine-split-2a/packages/scheduler && R=$(mktem
   - E2E: e2e.yml by dispatch (O12).
   - Regression: `scheduler-live`'s judge, and the bench `--engine optimized` assertion.
 
-### Task W3: Delete the tree and the workflows; re-add guard; stale-reference sweep
+### Task W3: Delete the tree and the workflows; stale-reference sweep
+
+> **Owner ruling 2026-10-25 ("3 dont add guard"): NO re-add guard.** Do not create `placement-moved-out.test.ts`; skip Steps 1, 2 and 7 below and every guard line in Steps 5, 6 and the four types. The test that fails without this task is the existing-test edits plus Step 6's `gen:proto` drift proof with `/proto` gone.
 
 **Files:**
 - Delete:
@@ -573,7 +575,7 @@ cd ~/github/seazn.club-worktrees/engine-split-2a/packages/scheduler && R=$(mktem
   - `.github/workflows/placement-ci.yml`
   - `.github/workflows/placement-stg.yml`
   - `.github/workflows/placement-prod.yml`
-- Create: `packages/scheduler/test/placement-moved-out.test.ts`.
+- ~~Create: `packages/scheduler/test/placement-moved-out.test.ts`.~~ (dropped, owner ruling 4)
 - Modify:
   - `apps/web/src/__tests__/toolchain.test.ts:213-218` (drop the two placement entries)
   - `packages/scheduler/test/integration-runs-elsewhere.test.ts:191-205` (delete the `placement-ci.yml` paths test)
@@ -633,7 +635,7 @@ cd ~/github/seazn.club-worktrees/engine-split-2a/packages/scheduler && R=$(mktem
 - [ ] **Step 7: Mutate once.**
   - Before committing (HEAD is still W2's commit), re-add one deleted file: `git checkout HEAD -- .github/workflows/placement-stg.yml`, which also stages it. The guard goes red.
   - Remove the file again: `git rm -qf .github/workflows/placement-stg.yml`.
-- [ ] **Step 8: Commit** as `chore: the placement service and its proto now live in onryde/seazn.club.placement; guard against re-adding them`.
+- [ ] **Step 8: Commit** as `chore: the placement service and its proto now live in onryde/seazn.club.placement`.
 - [ ] **Four types:**
   - Unit: the guard with its detector cases.
   - Regression: the re-add mutant.
@@ -710,5 +712,7 @@ Revert the web PR with `git revert -m 1 <merge sha>`, as a PR, OWNER GO. That re
 3. **Branch protection on `onryde/seazn.club.placement` `main`:** after O5's first green run, the owner requires `ci`'s `test`, `docker` and `buf-breaking` checks (owner UI step).
 
 **Placement is an internal service only** (owner, 2026-10-25). It is reached only over Fly private networking (`placement.flycast:50051`, private IPv6, DEPLOY.md §2), never from the public internet. Task P3's deploy workflows MUST keep it so: after each deploy, `flyctl ips list --app <app> --json` is checked and the job fails if any address is public (anything other than a private v6). No workflow ever runs `fly ips allocate-v4`, `allocate-v6` without `--private`, or adds an HTTP handler to `fly.toml`'s `[[services.ports]]`. P3 ships a test that pins both rules.
+
+4. **No re-add guard in W3** (owner, 2026-10-25, "3 dont add guard"). The deletion ships without `placement-moved-out.test.ts`; Review Focus 4 and Steps 1, 2, 7 of W3 are superseded.
 
 **Visibility** (owner "Ok", 2026-10-25): the repo and the GHCR image stay PUBLIC as planned. "Internal only" governs the network, not visibility; nothing in the repo or image is secret (the shared secret lives in Fly secrets).
