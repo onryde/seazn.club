@@ -535,5 +535,35 @@
     "name": "offerableKeys refuses a position outside the order"
    }
   ]
+ },
+ {
+  "id": "t6-offerable-order-reversed",
+  "file": "packages/engine/src/competition/cascade-rules.ts",
+  "find": "const KEYS = Object.keys(KEY_RULES) as TiebreakerKey[];",
+  "replace": "const KEYS = (Object.keys(KEY_RULES) as TiebreakerKey[]).reverse();",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "offerableKeys complement"
+   }
+  ]
+ },
+ {
+  "id": "t6-refusals-sorted-by-index",
+  "file": "packages/engine/src/competition/cascade-rules.ts",
+  "find": "  return out;\n}",
+  "replace": "  return out.sort((a, b) => a.index - b.index);\n}",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "refusals come in the spec"
+   }
+  ]
  }
 ]

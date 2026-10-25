@@ -1,7 +1,8 @@
 // Edge-path coverage for the tiebreaker engine — PROMPT-14 §4 (100% line gate
 // on competition/tiebreakers.ts): malformed-ledger throws, direct-encounter
 // branches, display formatting, non-swiss `direct` refinement, the seed
-// fallback, and every ledger refusal of `validateCascade` (W2d: cascade-rules.ts).
+// fallback, and `validateCascade`'s ledger refusals for the eight pre-W2d metric keys (W2d: the validator is
+// cascade-rules.ts; every key's ledger, the W2d keys included, is swept in cascade-rules.test.ts).
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { EngineError } from "../core/errors.ts";
@@ -325,7 +326,7 @@ describe("an unregistered cascade key is never an ordering input — it is refus
   });
 });
 
-describe("validateCascade ledger refusals (spec 05 §4.1, W2d §5.5 rule 2)", () => {
+describe("validateCascade ledger refusals for the eight pre-W2d metric keys (spec 05 §4.1; every key incl. W2d's: cascade-rules.test.ts)", () => {
   const cases: [string, TiebreakerKey][] = [
     ["goal/run difference", "diff"],
     ["goals/runs-for", "for"],

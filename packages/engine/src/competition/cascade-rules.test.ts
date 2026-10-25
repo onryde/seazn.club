@@ -9,6 +9,7 @@
 // Sequence (TEST-STRATEGY rule 1): the empty order → a valid one → one fault → three faults → another sport; a second
 // call on the same input; the ranker running exactly what the validator lets through (rule 5).
 import fc from "fast-check";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { EngineError } from "../core/errors.ts";
 import { StageKind } from "../core/types.ts";
@@ -378,7 +379,9 @@ describe("validateCascade — X-TB-7 cross-group (rule 4) and the modifier posit
     expect(checked).toBe(SPORTS * BLOCK_KEYS.length * MODIFIERS.length);
   });
 
-  it("rule 5 agrees with the ranker: an order refused on position throws in rankStandings, and one accepted on it runs (fast-check, counted)", () => {
+  it("rule 5 agrees with the ranker: an order refused on position throws in rankStandings, and one accepted on it parses there (fast-check, counted)", () => {
+    // `rankStandings([], …)` parses the order (the ranker's `parseCascade`) before it ranks anything, so zero rows is the
+    // parse alone: what this holds the two to is the rule both enforce, not a ranking.
     let refused = 0;
     let accepted = 0;
     fc.assert(
@@ -421,6 +424,34 @@ describe("validateCascade — every refusal, primaryTableKey, and the guards", (
     expect(sorted(validateCascade(["points", "h2h_set_ratio", "lots"], ctxOf(football, "league", { crossGroup: true })))).toEqual([
       { index: 1, key: "h2h_set_ratio", reason: "cross_group" },
       { index: 1, key: "h2h_set_ratio", reason: "sport", need: "sets_won, sets_lost" },
+    ]);
+  });
+
+  it("refusals come in the spec's rule order (§5.5 1 → 5), each rule's by index — not one list sorted by step", () => {
+    // Unsorted on purpose (every other case here compares `sorted`): badminton's three faults are rule 1's `first` (step 1)
+    // and `last` (step 3), then rule 2's `sport` (step 2).
+    expect(validateCascade(["points", "nrr", "set_diff"], ctxOf(badminton)).map((r) => [r.reason, r.index])).toEqual([
+      ["first", 0],
+      ["last", 2],
+      ["sport", 1],
+    ]);
+    // Within one rule, by index: two ledgers badminton does not keep, then the order's closing lots is fine.
+    expect(validateCascade(["wins", "nrr", "board_ratio", "lots"], ctxOf(badminton)).map((r) => [r.reason, r.index])).toEqual([
+      ["sport", 1],
+      ["sport", 2],
+    ]);
+    // All five rules on one league order across groups, in turn: the shape (1), two ledgers (2), Buchholz outside Swiss (3),
+    // a modifier compared across groups (4) that follows no h2h block (5).
+    expect(
+      validateCascade(["nrr", "buchholz", "diff", "h2h_reapply"], ctxOf(badminton, "league", { crossGroup: true })).map((r) => [r.reason, r.index]),
+    ).toEqual([
+      ["first", 0],
+      ["last", 3],
+      ["sport", 0],
+      ["sport", 2],
+      ["stage_format", 1],
+      ["cross_group", 3],
+      ["position", 3],
     ]);
   });
 
@@ -486,10 +517,21 @@ function addedBy(
 }
 
 describe("offerableKeys — '+ Add step' (spec §9)", () => {
-  it("offerableKeys complement: every key it hides is refused at that position and every key it offers is accepted (forEachSport × stage kind, counted)", () => {
+  it("premise: this file's vocabulary is in TiebreakerKey's own order, read from the union's declaration in module.ts", () => {
+    const source = readFileSync(new URL("../sport/module.ts", import.meta.url), "utf8");
+    const start = source.indexOf("export type TiebreakerKey =");
+    expect(start, "module.ts declares TiebreakerKey").toBeGreaterThan(-1);
+    const declaration = source.slice(start, source.indexOf(";", start));
+    const declared = [...declaration.matchAll(/^\s*\|\s*"([a-z0-9_]+)"/gm)].map((m) => m[1]);
+    expect(declared.length, "anti-vacuity: the union's members were read").toBe(KEYS.length);
+    expect(KEYS).toEqual(declared);
+  });
+
+  it("offerableKeys complement: it offers exactly the keys whose insertion adds no refusal, in TiebreakerKey's own order (forEachSport × stage kind, counted)", () => {
     let cells = 0;
     let offered = 0;
     let hidden = 0;
+    let ordered = 0;
     const conflicts: string[] = [];
     let needsChecked = 0;
     forEachSport(({ module }) => {
@@ -512,6 +554,9 @@ describe("offerableKeys — '+ Add step' (spec §9)", () => {
               for (let position = 0; position <= order.length; position++) {
                 const offers = offerableKeys(order, position, ctx);
                 expect(new Set(offers).size, "no key offered twice").toBe(offers.length);
+                // The editor lists "+ Add step" in the order this returns: TiebreakerKey's own (the premise test above).
+                expect(offers, "offered in TiebreakerKey's own order").toEqual(KEYS.filter((key) => offers.includes(key)));
+                if (offers.length >= 2) ordered++;
                 const added = addedBy(order, position, ctx, needs);
                 for (const key of KEYS) {
                   const adds = added(key);
@@ -530,6 +575,8 @@ describe("offerableKeys — '+ Add step' (spec §9)", () => {
     expect(cells).toBeGreaterThan(SPORTS * KINDS.length * 2 * 4);
     expect(offered).toBeGreaterThan(0);
     expect(hidden).toBeGreaterThan(0);
+    // anti-vacuity for the order check: one key offered cannot be out of order.
+    expect(ordered).toBeGreaterThan(0);
     // The premise offerableKeys's refusal identity rests on (cascade-rules.ts `refusalId`), over every refusal seen.
     expect(conflicts).toEqual([]);
     expect(needsChecked).toBeGreaterThan(cells);
