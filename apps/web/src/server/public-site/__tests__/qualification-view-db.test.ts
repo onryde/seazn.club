@@ -196,7 +196,8 @@ async function load(
     entrantStatuses: statuses,
     bounds: divisionPointsBounds(module_, data.division.config),
     awardAddsToLedger: divisionAwardAddsToLedger(module_, data.division.config),
-    cascade: data.division.tiebreakers ?? module_!.defaultTiebreakers,
+    // The shared page's own read (W2d T8: the sport's league default under the division's cfg).
+    cascade: data.division.tiebreakers ?? module_!.defaultTiebreakers("league", data.division.config),
     entrantNames: Object.fromEntries(data.entrants.map((e) => [e.id, e.display_name])),
     msg: (k: TKey, v?: Record<string, string | number>) => t(en, k, v),
     plural: (k: string, n: number, v?: Record<string, string | number>) => plural(en, k, n, "en", v),

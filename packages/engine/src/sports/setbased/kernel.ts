@@ -2661,7 +2661,7 @@ export function makeSetBasedModule(
     },
 
     metrics: makeMetrics(preset.unitLabel),
-    defaultTiebreakers: preset.defaultTiebreakers,
+    defaultTiebreakers: () => [...preset.defaultTiebreakers],
     primaryTableKey: preset.primaryTableKey,
 
     supportsDraws(_cfg, _stage: StageKind) {

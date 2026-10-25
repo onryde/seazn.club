@@ -464,7 +464,8 @@ describe("icehockey cascade — IIHF §220 hand-computed 3-team tie", () => {
     // shape rule's (rule 1): today's default does not close on `lots`, so its last step is refused. A TRIPWIRE, pinned
     // exactly: Task 11 signs the IIHF order (plan PS-2), which reddens this line on purpose — then expect `[]` here.
     const ctx = { module: icehockey, cfg: icehockey.configSchema.parse({}), stageKind: "league", crossGroup: false } as const;
-    expect(validateCascade(icehockey.defaultTiebreakers, ctx)).toEqual([{ index: 6, key: "seed", reason: "last", need: "lots" }]);
+    const iihf = icehockey.defaultTiebreakers("league", ctx.cfg);
+    expect(validateCascade(iihf, ctx)).toEqual([{ index: 6, key: "seed", reason: "last", need: "lots" }]);
     // Three teams on 6 points. Head-to-head mini-table (each played each
     // once): A beat B 5–0, B beat C 3–2, C beat A 2–1 → all 3 H2H points;
     // H2H diff: A +4, B −2, C −2; H2H for: B 3, C 4 → order A, C, B.
@@ -487,7 +488,7 @@ describe("icehockey cascade — IIHF §220 hand-computed 3-team tie", () => {
         { entrantId: "A", played: 1, won: 0, drawn: 0, lost: 1, points: 0, metrics: { gf: 1, ga: 2, gd: -1 } },
       ],
     ] as FixtureResult[];
-    const ranked = rankStandings(rows, { cascade: icehockey.defaultTiebreakers, results: h2h });
+    const ranked = rankStandings(rows, { cascade: iihf, results: h2h });
     expect(ranked.rows.map((r) => r.entrantId)).toEqual(["A", "C", "B"]);
   });
 });

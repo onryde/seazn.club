@@ -1114,7 +1114,7 @@ export const carrom: SportModule<CarromCfg, CarromEv, CarromState> = {
     { key: "points_won", label: "Points for", direction: "desc", display: false },
     { key: "points_lost", label: "Points against", direction: "asc", display: false },
   ],
-  defaultTiebreakers: CARROM_TIEBREAKERS,
+  defaultTiebreakers: () => [...CARROM_TIEBREAKERS],
   primaryTableKey: "points", // W2d (D11): the table ranks on points first.
 
   // Drawn matches exist only under the tieBoard 'draw' house rule, and only in

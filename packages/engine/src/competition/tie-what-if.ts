@@ -7,7 +7,7 @@
 // plays ONE more match whose total size is its own average so far
 // ((won + lost) / played, in the key's units). It is always shown with that
 // assumption (R5); this module returns data, the copy lives in the web app.
-import type { TiebreakerKey } from "../sport/module.ts";
+import type { AnySportModule, TiebreakerKey } from "../sport/module.ts";
 import { derivedMetricText, RATIO_LEDGERS } from "./display.ts";
 import type { StandingsRow } from "./standings.ts";
 import { AGAINST_KEYS, DIFF_KEYS, FOR_KEYS, ledgerOf, metricOf } from "./tiebreakers.ts";
@@ -36,6 +36,9 @@ export interface TieWhatIfOpts {
    *  Never `supportsDraws`: carrom and cricket draw nothing and still pay a
    *  no-result. */
   winsOnly: boolean;
+  /** W2d (P25, spec §6 E3): the sport's primary table measure, `module.primaryTableKey` — what a wins-first order (D11)
+   *  starts with. */
+  primary: AnySportModule["primaryTableKey"];
 }
 
 // The integer won/lost pair each ratio key compares: the engine's one
@@ -47,14 +50,21 @@ const RATIO_LEDGER: Record<Exclude<WhatIfKey, "diff" | "for">, readonly [string,
 const floorDiv = (a: number, b: number) => Math.floor(a / b);
 const isWhatIfKey = (key: TiebreakerKey): key is WhatIfKey => (WHAT_IF_KEYS as readonly string[]).includes(key);
 
-/** The cascade key that splits a tie on points: the first one after `points`,
- *  passing over `wins` when it cannot separate rows level on points. Null when
- *  `points` is not the cascade's primary key (rows level on points are then
- *  ordered by an earlier key, so no key after it decides) or nothing follows. */
+/** The cascade key that splits a tie on the order's first step: the first one
+ *  after it, passing over the other table measure (`wins` after `points`,
+ *  `points` after `wins`) when it cannot separate rows level on the first —
+ *  every point came from wins at one rate, so the two move together. The first
+ *  step must be `points` or the sport's own primary measure (P25: `wins` for
+ *  volleyball, badminton and tennis); `points` stays one, since every order
+ *  before W2d started there and the migration pinned those (spec §5.4 B1).
+ *  Null when the order starts with anything else (rows level on a table
+ *  measure are then ordered by an earlier key) or nothing follows. */
 export function tieDecidingKey(cascade: readonly TiebreakerKey[], opts: TieWhatIfOpts): TiebreakerKey | null {
-  if (cascade[0] !== "points") return null;
+  const first = cascade[0];
+  if (first !== "points" && first !== opts.primary) return null;
+  const twin: TiebreakerKey = first === "points" ? "wins" : "points";
   for (const key of cascade.slice(1)) {
-    if (key === "wins" && opts.winsOnly) continue;
+    if (key === twin && opts.winsOnly) continue;
     return key;
   }
   return null;
@@ -74,6 +84,9 @@ export function tieKeyValue(row: StandingsRow, key: TiebreakerKey): string | nul
     }
     case "wins":
       return `${row.won}`;
+    // P25: after a wins-first step, `points` is a deciding key.
+    case "points":
+      return `${row.points}`;
     default:
       return derivedMetricText(row, key);
   }

@@ -9,8 +9,8 @@ import { foldResults, foldStandings, type FixtureResult } from "./standings.ts";
 import { applyRankLocks, type RankLock } from "./points.ts";
 import type { StandingsDelta } from "../core/types.ts";
 import type { PoolTable, SourceTables as StageTables } from "./progression.ts";
-import type { TiebreakerKey } from "../sport/module.ts";
-import { buildSwissTable, membersKeyOf, rankStandings, type MembersKey, type NewLotsDraw, type StoredLotsDraw } from "./tiebreakers.ts";
+import type { TableRules } from "./table-rules.ts";
+import { buildSwissTable, membersKeyOf, rankStandings, type MembersKey, type NewLotsDraw, type RankContext, type StoredLotsDraw } from "./tiebreakers.ts";
 
 // spec 02 §6 fixture statuses that matter to a stage's completion/ranking.
 export type FixtureStatus = "scheduled" | "in_play" | "decided" | "void" | "walkover";
@@ -68,7 +68,14 @@ export interface TableStage {
   id: string;
   kind: Extract<StageKind, "league" | "group" | "swiss">;
   entrants: readonly EntrantId[];
-  cascade: readonly TiebreakerKey[];
+  /** W2d (spec §5.4, §6 E1): the stage's effective table rules (`resolveTableRules`). The table ranks by
+   *  `rules.tiebreakers`; `points` and `crossGroup` ride along for the caller that pays and the progression that compares
+   *  groups — `completeTableStage` folds the deltas it is handed and never re-pays them. */
+  rules: TableRules;
+  /** W2d (B2, HK-TB-1): which wins the `wins` step counts — the module's `winsCount`. Absent = every win. */
+  winsCount?: RankContext["winsCount"];
+  /** W2d (B5): a result's GAME points, for `sberger` and `direct` on a non-Swiss stage. Absent = the table points. */
+  gamePoints?: RankContext["gamePoints"];
   swiss?: boolean; // assemble the Swiss ledger for buchholz/sberger/direct
   seeds?: ReadonlyMap<EntrantId, number>;
   rngSeed?: number;
@@ -137,7 +144,7 @@ function poolOf(fixture: TableFixture): string {
 // league / group: every fixture decided or void (group pools all complete is
 // the same condition — pools only partition the fixtures). swiss: the first
 // `rounds` rounds all settled.
-export function isTableStageComplete(stage: TableStage, fixtures: readonly TableFixture[]): boolean {
+export function isTableStageComplete(stage: Pick<TableStage, "kind" | "rounds">, fixtures: readonly TableFixture[]): boolean {
   if (fixtures.length === 0) return false;
   if (stage.kind === "swiss") {
     const rounds = stage.rounds ?? 0;
@@ -256,9 +263,11 @@ export function completeTableStage(
     const countedFixtures = results.length + awardDeltas.length + carried.length;
     const poolDraws = stage.lotsDraws?.get(pool);
     const ranked = rankStandings(rows, {
-      cascade: stage.cascade,
+      cascade: stage.rules.tiebreakers,
       results,
       countedFixtures,
+      ...(stage.winsCount === undefined ? {} : { winsCount: stage.winsCount }),
+      ...(stage.gamePoints === undefined ? {} : { gamePoints: stage.gamePoints }),
       ...(poolDraws === undefined ? {} : { lotsDraws: poolDraws }),
       ...(stage.seeds === undefined ? {} : { seeds: stage.seeds }),
       ...(stage.rngSeed === undefined ? {} : { rngSeed: stage.rngSeed }),
@@ -473,7 +482,7 @@ const EXPUNGES_EARLY_WITHDRAWAL: Readonly<Record<TableStage["kind"], boolean>> =
 // full schedule, including result-less pending fixtures). Swiss always
 // AWARDS — see EXPUNGES_EARLY_WITHDRAWAL.
 export function withdrawTableEntrant(
-  stage: TableStage,
+  stage: Pick<TableStage, "id" | "kind">,
   entrantId: EntrantId,
   fixtures: {
     played: readonly TableFixture[]; // decided games this entrant appears in

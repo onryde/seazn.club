@@ -5,6 +5,7 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { foldMatch, resolveVoids, type CoreEv, type EventEnvelope } from "../core/events.ts";
 import {
+  DRAW_KINDS,
   MatchOutcome,
   MetricSpec,
   ScoreSummary,
@@ -13,7 +14,7 @@ import {
   type StageCtx,
 } from "../core/types.ts";
 import { PositionCatalog, resolvePositions, validateLineup } from "../sport/catalog.ts";
-import type { SportModule } from "../sport/module.ts";
+import type { SportModule, TableStageKind } from "../sport/module.ts";
 import { parseSemver } from "../sport/registry.ts";
 import {
   aggregatePlayerStats,
@@ -107,7 +108,10 @@ export function conformanceSuite<Cfg, Ev, State>(
       expect(Object.keys(spec!.fidelity).length).toBeGreaterThan(0);
       expect(module.officialLabel.scorer.length).toBeGreaterThan(0);
       for (const metric of module.metrics) MetricSpec.parse(metric);
-      expect(module.defaultTiebreakers.length).toBeGreaterThan(0);
+      // W2d T8: a default order for every table stage kind (DRAW_KINDS), asked under the parsed cfg.
+      for (const kind of DRAW_KINDS) {
+        expect(module.defaultTiebreakers(kind as TableStageKind, cfg).length, kind).toBeGreaterThan(0);
+      }
       const pointsSets = module.declaredPointsSets(cfg);
       expect(pointsSets.length).toBeGreaterThan(0);
       for (const total of pointsSets) expect(Number.isFinite(total)).toBe(true);

@@ -12,10 +12,13 @@ import {
   openStage,
   type BracketFixture,
   type BracketStage,
+  type CompletedTableStage,
   type DivisionEvent,
   type TableFixture,
   type TableStage,
 } from "../competition/stage.ts";
+import { resolveTableRules, type TableRules } from "../competition/table-rules.ts";
+import type { MembersKey, StoredLotsDraw } from "../competition/tiebreakers.ts";
 import {
   progressionSize,
   resolveProgression,
@@ -42,7 +45,7 @@ import {
   type SwissStanding,
 } from "../scheduling/swiss.ts";
 import { resolvePositions } from "../sport/catalog.ts";
-import type { AnySportModule, ModuleEvent, TiebreakerKey } from "../sport/module.ts";
+import type { AnySportModule, ModuleEvent, TableStageKind, TiebreakerKey } from "../sport/module.ts";
 import { lineupFromCatalog, TEST_INSTANT } from "./helpers.ts";
 
 // W4a (#425) §3.3 — every fold below is PAD-SHAPED: it builds a stream event by
@@ -232,10 +235,46 @@ const SWISS_ONLY_KEYS: ReadonlySet<TiebreakerKey> = new Set([
   "direct",
 ]);
 
-// The stage cascade: the module's official cascade, minus Swiss-ledger keys
-// outside a swiss stage (they need the assembled ledger, spec 05 §4.1).
-function stageCascade(module: AnySportModule, swiss: boolean): TiebreakerKey[] {
-  return module.defaultTiebreakers.filter((key) => swiss || !SWISS_ONLY_KEYS.has(key));
+// The stage's table rules through the product's one resolver (W2d spec §5.4, §6 E6): the sport's points under the run's
+// cfg, and the sport's default order for the stage kind — minus the Swiss-ledger keys outside a swiss stage (they need
+// the assembled ledger, spec 05 §4.1). Where that strip removes a step, the stage sets the rest as its own order; where it
+// removes none, the stage inherits the sport's. No division order, no pin: a simulated stage is never pinned.
+function stageRules(ctx: SimContext, kind: TableStageKind): TableRules {
+  const order = ctx.module.defaultTiebreakers(kind, ctx.cfg);
+  const swiss = kind === "swiss";
+  const kept = order.filter((key) => swiss || !SWISS_ONLY_KEYS.has(key));
+  return resolveTableRules({
+    module: ctx.module,
+    stageKind: kind,
+    mergedCfg: ctx.cfg,
+    stageOwn: { points: null, tiebreakers: kept.length === order.length ? null : kept, crossGroup: null },
+    divisionTiebreakers: null,
+    pinned: null,
+  });
+}
+
+// Completes a table stage as the product does (W2d spec §5.8, §6 E6): rank, store each drawing of lots it made (the sim's
+// store stamps the date — the engine never invents one), then rank again with the stored draws. The second pass must
+// reproduce the first order in every pool and draw nothing new (X-TB-4: a stored draw IS the order); its rows carry the
+// stored date, and its rank_lock events the stored order and date.
+const poolOrders = (c: CompletedTableStage): string => JSON.stringify(c.tables.pools.map((p) => [p.pool, p.rows.map((r) => r.entrantId)]));
+function completeWithStoredLots(stage: TableStage, fixtures: readonly TableFixture[], drawnAt: string): CompletedTableStage {
+  const first = completeTableStage(stage, fixtures);
+  if (first.newLotsDraws.length === 0) return first;
+  const store = new Map<string, Map<MembersKey, StoredLotsDraw>>();
+  for (const draw of first.newLotsDraws) {
+    const pool = store.get(draw.pool) ?? new Map<MembersKey, StoredLotsDraw>();
+    pool.set(draw.membersKey, { order: draw.drawnOrder, drawnAt });
+    store.set(draw.pool, pool);
+  }
+  const stored = completeTableStage({ ...stage, lotsDraws: store }, fixtures);
+  if (stored.newLotsDraws.length > 0 || poolOrders(stored) !== poolOrders(first)) {
+    throw new SimInvariantError(`stage "${stage.id}": its stored drawing of lots did not reproduce the table it was drawn for`, {
+      drawn: first.newLotsDraws,
+      redrawn: stored.newLotsDraws,
+    });
+  }
+  return stored;
 }
 
 // ---------------------------------------------------------------------------
@@ -554,14 +593,15 @@ function playRoundRobinStage(
     id: stageId,
     kind,
     entrants: allEntrants,
-    cascade: stageCascade(ctx.module, false),
+    rules: stageRules(ctx, kind),
+    ...(ctx.module.winsCount === undefined ? {} : { winsCount: ctx.module.winsCount }),
     seeds,
     rngSeed: deriveSeed(ctx.seed, "lots", stageId),
   };
   if (!isTableStageComplete(stage, tableFixtures)) {
     throw new SimInvariantError(`stage "${stageId}" not complete after playing every fixture`);
   }
-  const completed = completeTableStage(stage, tableFixtures);
+  const completed = completeWithStoredLots(stage, tableFixtures, `sim:${ctx.seed}:${stageId}`);
   ctx.divisionEvents.push(...completed.events);
 
   const done = completed.events.find((e) => e.type === "stage_completed");
@@ -573,7 +613,7 @@ function playRoundRobinStage(
       entrants: allEntrants,
       fixtures: records,
       tables: completed.tables,
-      cascade: [...stage.cascade],
+      cascade: [...stage.rules.tiebreakers],
       ...(legs === 1 ? {} : { legs }),
       finalRanks,
     },
@@ -647,7 +687,8 @@ function playSwissStage(
     id: stageId,
     kind: "swiss",
     entrants: [...entrants],
-    cascade: stageCascade(ctx.module, true),
+    rules: stageRules(ctx, "swiss"),
+    ...(ctx.module.winsCount === undefined ? {} : { winsCount: ctx.module.winsCount }),
     swiss: true,
     seeds,
     rngSeed: deriveSeed(ctx.seed, "lots", stageId),
@@ -656,7 +697,7 @@ function playSwissStage(
   if (roundsPlayed === 0 || !isTableStageComplete(stage, tableFixtures)) {
     throw new SimInvariantError(`swiss stage "${stageId}" has no complete rounds`);
   }
-  const completed = completeTableStage(stage, tableFixtures);
+  const completed = completeWithStoredLots(stage, tableFixtures, `sim:${ctx.seed}:${stageId}`);
   ctx.divisionEvents.push(...completed.events);
   const done = completed.events.find((e) => e.type === "stage_completed");
   const finalRanks = done?.type === "stage_completed" ? done.finalRanks : [];
@@ -667,7 +708,7 @@ function playSwissStage(
       entrants: [...entrants],
       fixtures: records,
       tables: completed.tables,
-      cascade: [...stage.cascade],
+      cascade: [...stage.rules.tiebreakers],
       finalRanks,
     },
     tables: completed.tables,

@@ -69,7 +69,8 @@ export default async function EmbedWidgetPage({ params }: Props) {
   try {
     module_ = resolveModule(division.sport_key, division.module_version);
     metricSpecs = module_.metrics;
-    cascade = division.tiebreakers ?? module_.defaultTiebreakers;
+    // W2d T8: the sport default for a league under the division's cfg — every default is kind- and cfg-independent until Task 11; Task 9 replaces this with the stage's own rules (`loadTableRules`).
+    cascade = division.tiebreakers ?? module_.defaultTiebreakers("league", division.config);
   } catch {
     // retired module build — structural columns only
   }

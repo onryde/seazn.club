@@ -33,6 +33,7 @@ import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
 import { createEntrants } from "@/server/usecases/entrants";
 import { createStages } from "@/server/usecases/stages";
+import { defaultOrderOf } from "@seazn/engine/testkit";
 
 type StandingsSlide = Extract<Slide, { kind: "standings" }>;
 
@@ -138,7 +139,7 @@ describe("slideshow standings slide — the Pts ratio column (public /present)",
     const without: string[] = [];
     for (const m of builtinModules) {
       const slide = await standingsSlide({ sport_key: m.key, module_version: m.version, tiebreakers: null });
-      const table = normalTable(m, m.defaultTiebreakers);
+      const table = normalTable(m, defaultOrderOf(m));
       expect({ sport: m.key, slide: slideShowsRatio(slide) }).toEqual({ sport: m.key, slide: tableHasRatio(table) });
       (tableHasRatio(table) ? withRatio : without).push(m.key);
     }
@@ -149,8 +150,8 @@ describe("slideshow standings slide — the Pts ratio column (public /present)",
   });
 
   it("a division's OWN cascade override wins over the module default, in both directions", async () => {
-    const ranksOnRatio = builtinModules.find((m) => m.defaultTiebreakers.includes("point_ratio"));
-    const doesNot = builtinModules.find((m) => !m.defaultTiebreakers.includes("point_ratio"));
+    const ranksOnRatio = builtinModules.find((m) => defaultOrderOf(m).includes("point_ratio"));
+    const doesNot = builtinModules.find((m) => !defaultOrderOf(m).includes("point_ratio"));
     if (!ranksOnRatio || !doesNot) throw new Error("the shipped modules no longer split on point_ratio");
 
     // Positive: a sport that never ranks on it, told to, gets the column.
@@ -168,7 +169,7 @@ describe("slideshow standings slide — the Pts ratio column (public /present)",
 
   // ---- the value -------------------------------------------------------------
   it("each row's ratio is the engine's text for its OWN points pair, the normal table's cell, to two decimals", async () => {
-    const m = builtinModules.find((x) => x.defaultTiebreakers.includes("point_ratio"));
+    const m = builtinModules.find((x) => defaultOrderOf(x).includes("point_ratio"));
     if (!m) throw new Error("no shipped module ranks on point_ratio");
     const slide = await standingsSlide({ sport_key: m.key, module_version: m.version, tiebreakers: null });
 
@@ -176,7 +177,7 @@ describe("slideshow standings slide — the Pts ratio column (public /present)",
     expect(slide.rows.map((r) => r.pointRatio)).toEqual(LEDGER.map((l) => l.want));
 
     // And the normal table prints the very same text in its point_ratio cell.
-    const table = normalTable(m, m.defaultTiebreakers);
+    const table = normalTable(m, defaultOrderOf(m));
     const col = table.columns.findIndex((c) => c.key === "point_ratio");
     expect(col).toBeGreaterThan(-1);
     const cellOf = (id: string) => table.rows.find((r) => r.entrantId === id)!.cells[col];
@@ -184,7 +185,7 @@ describe("slideshow standings slide — the Pts ratio column (public /present)",
   });
 
   it("the structural cells are untouched by the new column (rank, name, P/W/D/L/Pts)", async () => {
-    const m = builtinModules.find((x) => x.defaultTiebreakers.includes("point_ratio"))!;
+    const m = builtinModules.find((x) => defaultOrderOf(x).includes("point_ratio"))!;
     const withCol = await standingsSlide({ sport_key: m.key, module_version: m.version, tiebreakers: null });
     const without = await standingsSlide({});
     const structural = (rows: StandingsSlideRow[]) =>
@@ -194,7 +195,7 @@ describe("slideshow standings slide — the Pts ratio column (public /present)",
   });
 
   it("a snapshot row with NO metrics object at all prints the table's dash under the ratio and does not throw", async () => {
-    const m = builtinModules.find((x) => x.defaultTiebreakers.includes("point_ratio"))!;
+    const m = builtinModules.find((x) => defaultOrderOf(x).includes("point_ratio"))!;
     // A row as a hand-built input or a pre-ledger snapshot carries it: no `metrics` key.
     const bare = { entrantId: "e1", played: 0, won: 0, drawn: 0, lost: 0, points: 0, rank: 1 };
     const withLedger = { ...bare, entrantId: "e2", rank: 2, metrics: { points_won: 63, points_lost: 42 } };
@@ -275,8 +276,8 @@ describe.skipIf(!HAS_DB)("slideshow standings slide — the Pts ratio column (or
   // `tiebreakers` (falling back to the module default) fails one of the pair.
   it("a division whose OWN cascade adds point_ratio to a sport that never ranks on it gets the column, with its values", async () => {
     const generic = builtinModules.find((m) => m.key === "generic")!;
-    expect(generic.defaultTiebreakers, "generic's default cascade").not.toContain("point_ratio");
-    const added = [...generic.defaultTiebreakers, "point_ratio"];
+    expect(defaultOrderOf(generic), "generic's default cascade").not.toContain("point_ratio");
+    const added = [...defaultOrderOf(generic), "point_ratio"];
     const { auth, division } = await seededDivision("generic", "score", GENERIC_CONFIG, added);
     const slides = await buildDivisionSlides(auth, division.id, "Open");
     const slide = slides.find((s): s is StandingsSlide => s.kind === "standings");
@@ -286,8 +287,8 @@ describe.skipIf(!HAS_DB)("slideshow standings slide — the Pts ratio column (or
 
   it("a division whose OWN cascade drops point_ratio from badminton loses the column (same rows as the badminton case above)", async () => {
     const badminton = builtinModules.find((m) => m.key === "badminton")!;
-    expect(badminton.defaultTiebreakers, "badminton's default cascade").toContain("point_ratio");
-    const dropped = badminton.defaultTiebreakers.filter((k) => k !== "point_ratio");
+    expect(defaultOrderOf(badminton), "badminton's default cascade").toContain("point_ratio");
+    const dropped = defaultOrderOf(badminton).filter((k) => k !== "point_ratio");
     const { auth, division } = await seededDivision("badminton", "bwf", {}, dropped);
     const slides = await buildDivisionSlides(auth, division.id, "Open");
     const slide = slides.find((s): s is StandingsSlide => s.kind === "standings");

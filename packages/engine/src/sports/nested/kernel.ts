@@ -2303,7 +2303,7 @@ export function makeNestedModule(
     },
 
     metrics: METRICS,
-    defaultTiebreakers: preset.defaultTiebreakers,
+    defaultTiebreakers: () => [...preset.defaultTiebreakers],
     primaryTableKey: preset.primaryTableKey,
 
     supportsDraws(_cfg, _stage: StageKind) {

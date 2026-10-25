@@ -68,7 +68,7 @@ vi.mock("@/server/engine-db", () => ({
     entrantModel: null,
     positions: { groups: [], roles: [] },
     metrics: [],
-    defaultTiebreakers: [],
+    defaultTiebreakers: () => [],
   })),
 }));
 vi.mock("@/server/usecases/discipline", () => ({

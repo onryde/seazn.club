@@ -76,6 +76,10 @@ export type TiebreakerKey =
   | "matches_played"
   | "field_goals";
 
+/** W2d (spec §5.4, PS-7c) — the stage kinds that keep a table: the round robins, Swiss and americano (core/types.ts
+ *  `DRAW_KINDS`). A sport's default tie-break order is asked per kind (`defaultTiebreakers`). */
+export type TableStageKind = Extract<StageKind, "league" | "group" | "swiss" | "americano">;
+
 // A type + payload pair before persistence stamps the envelope fields
 // (id/seq/recordedAt) — what generators and coarsen produce.
 export interface ModuleEvent<Ev = unknown> {
@@ -991,7 +995,11 @@ export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> 
    * none, CK-WO-2) — which `pointsRuleAwardReachesTable` reports. Held to `metrics` by points-w2c.test.ts.
    */
   awardScoreKeys?: AwardScoreKeys;
-  defaultTiebreakers: TiebreakerKey[]; // sport's official cascade (doc 05 §4)
+  /** W2d (spec §5.4, §5.10; PS-7c) — the sport's official tie-break order (doc 05 §4) for a TABLE stage of `kind`, under
+   *  `cfg`: the stage's merged cfg (division ⊕ stage.rules) as the sport's schema parses it. Asked by the one resolver,
+   *  `resolveTableRules` (competition/table-rules.ts), and only when neither the stage nor its division sets an order.
+   *  A fresh list the caller owns. Until Task 11 every sport answers its pre-W2d list for every kind and reads no cfg. */
+  defaultTiebreakers(kind: TableStageKind, cfg: Cfg): TiebreakerKey[];
   /** W2d (spec §5.5 rule 1, D11; X-TB-3) — the sport's primary table measure: step 0 of every non-Swiss tie-break order
    *  (`validateCascade`), the stage editor's pinned first row. `wins` for volleyball, badminton and tennis (FIVB V3-1,
    *  BWF 16.2.1, ATP C.3-1), `points` for every other sport. Required, so a new sport states its own. */

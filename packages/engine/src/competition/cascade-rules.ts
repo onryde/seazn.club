@@ -182,3 +182,12 @@ export function offerableKeys(cascade: readonly TiebreakerKey[], position: numbe
     ),
   );
 }
+
+/** Rule 4's question of one step (D3; spec §5.9): does it compare the tied entrants with each other — an `h2h_*` key,
+ *  `h2h_two`, `direct`, a block modifier? `defaultCrossGroup` (table-rules.ts) removes exactly these, so a default
+ *  cross-group order is one rule 4 never refuses. A stored order is data: a key outside the vocabulary is CONFIG_INVALID,
+ *  as in rule 6. */
+export function isHeadToHeadKey(key: TiebreakerKey): boolean {
+  if (!Object.hasOwn(KEY_RULES, key)) throw new EngineError("CONFIG_INVALID", `tie-break key "${key}" is not a tie-break key`, { key });
+  return KEY_RULES[key].headToHead === true;
+}

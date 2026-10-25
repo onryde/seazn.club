@@ -446,7 +446,8 @@ export default async function DivisionPage({
     (tab === "fixtures" && hasKnockout) || tab === "standings"
       ? await listFixtureHeadlines(auth, id)
       : undefined;
-  const cascade = division.tiebreakers ?? sportModule.defaultTiebreakers;
+  // W2d T8: the sport default for a league under the division's cfg — every default is kind- and cfg-independent until Task 11; Task 9 replaces this with the stage's own rules (`loadTableRules`).
+  const cascade = division.tiebreakers ?? sportModule.defaultTiebreakers("league", division.config);
 
   // SPEC-1: the Discipline tab's queue + squad, and the entrant-row chips.
   const disciplineData =

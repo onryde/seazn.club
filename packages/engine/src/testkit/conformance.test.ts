@@ -191,7 +191,7 @@ const coinflip: SportModule<CoinCfg, CoinEv, CoinState> = {
     { key: "against", label: "Flips lost", direction: "asc" },
     { key: "diff", label: "Flip difference", direction: "desc" },
   ],
-  defaultTiebreakers: ["points", "diff", "lots"],
+  defaultTiebreakers: () => ["points", "diff", "lots"],
   primaryTableKey: "points",
   supportsDraws: (_cfg, stage) => stage === "league" || stage === "group" || stage === "swiss",
   // W2d — the fake writes `regulation` and `timeout` wins, both in regulation; a draw stands in a table.

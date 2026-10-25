@@ -116,7 +116,7 @@ function makeFakeModule(over: Partial<SportModule<FakeCfg, FakeEv, FakeState>> =
       { entrantId: "A", played: 1, won: 0, drawn: 0, lost: 0, points: 0, metrics: {} },
     ],
     metrics: [],
-    defaultTiebreakers: ["points"],
+    defaultTiebreakers: () => ["points"],
     primaryTableKey: "points",
     supportsDraws: () => true,
     outcomeMethods: [],

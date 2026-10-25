@@ -25,7 +25,7 @@ import { describe, expect, it } from "vitest";
 import type { StandingsRow } from "@seazn/engine/competition";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
-import { defaultLineupPair } from "@seazn/engine/testkit";
+import { defaultLineupPair, defaultOrderOf } from "@seazn/engine/testkit";
 import en from "@/dictionaries/en/public.json";
 import { divisionQualification, qualificationFixtures, type QualSnapshot, type QualStage } from "../division-qualification";
 import { divisionAwardAddsToLedger, type QualFixture } from "../qualification-view";
@@ -100,7 +100,7 @@ function assemble(over: { module_?: AnySportModule | null; config?: unknown; fix
     fixtures: over.fixtures,
     entrantStatuses: Object.fromEntries(over.ids.map((id) => [id, "confirmed"])),
     entrantNames: NAMES,
-    cascade: [...GENERIC.defaultTiebreakers],
+    cascade: [...defaultOrderOf(GENERIC)],
   });
 }
 

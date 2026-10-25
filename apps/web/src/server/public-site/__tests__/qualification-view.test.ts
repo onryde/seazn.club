@@ -55,7 +55,7 @@
 //   and the ledgerless reading of a real walkover on real reads too.
 import { describe, expect, it } from "vitest";
 import { foldMatchWithStoppage, outcomeOf, type EventEnvelope } from "@seazn/engine/core";
-import { defaultLineupPair, makeEnvelope } from "@seazn/engine/testkit";
+import { defaultLineupPair, defaultOrderOf, makeEnvelope } from "@seazn/engine/testkit";
 import {
   PointsRule,
   pointsRuleBounds,
@@ -95,7 +95,7 @@ const CFG = { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 
 const BOUNDS = divisionPointsBounds(GENERIC, CFG)!;
 const W = BOUNDS.winFloor;
 /** The generic module's own cascade: `diff` decides a tie on points. */
-const CASCADE = [...GENERIC.defaultTiebreakers];
+const CASCADE = [...defaultOrderOf(GENERIC)];
 const NAMES: Record<string, string> = { A: "Ada", B: "Bo", C: "Cy", D: "Di", E: "Ed" };
 
 type Dict = typeof en;
@@ -1445,7 +1445,7 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
       ledgerRow("D", 4, 0, 2, 0, { ...sets(1 + cl.sets_won!, 2 + cl.sets_lost!), ...(scored ? ruleAward(0, 3) : {}) }),
     ];
     const fixtures = [walkover(1, "A", "D"), won(1, "C", "B"), won(2, "A", "C"), won(2, "B", "D"), open(3, "A", "B"), open(3, "C", "D")];
-    const over = { cascade: [...BADMINTON.defaultTiebreakers], bounds: BB, awardAddsToLedger: divisionAwardAddsToLedger(BADMINTON, {}) };
+    const over = { cascade: [...defaultOrderOf(BADMINTON)], bounds: BB, awardAddsToLedger: divisionAwardAddsToLedger(BADMINTON, {}) };
     const target = "If you finish level on points with Bo, set ratio decides: win your next match by 2 or more to finish ahead.";
     const plain = must(view({ kind: "league", rows: rows(false), fixtures }, over)).rows.D!;
     expect(plain.whatIf).not.toBe(target);
@@ -1470,7 +1470,7 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
       row("C", 3, 1, 2, [0, 0], { points: bw, metrics: sets(2, 3) }),
       row("D", 4, 0, 2, [0, 0], { points: 0, metrics: sets(1, 4) }),
     ];
-    const cascade = [...BADMINTON.defaultTiebreakers];
+    const cascade = [...defaultOrderOf(BADMINTON)];
     const d = must(view({ ...s, rows }, { bounds: bb, cascade })).rows.D!;
     expect(d.whatIf).toContain("set ratio decides");
     // Points that did not come from wins at one rate (carry-over) put `wins` back.

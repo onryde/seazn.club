@@ -194,7 +194,7 @@
       "reason": "Line 83 returns whenever taken.home === taken.away, so line 84 only compares two different counts, where `<` and `<=` agree."
     },
     {
-      "mutant": "src/competition/stage.ts:393:33 EqualityOperator → fixture.round <= prev",
+      "mutant": "src/competition/stage.ts:402:33 EqualityOperator → fixture.round <= prev",
       "original": "fixture.round < prev",
       "line": "if (prev === undefined || fixture.round < prev) outAt.set(id, fixture.round);",
       "reason": "At fixture.round === prev the mutant sets outAt[id] to the value it already holds (prev), so the elimination round each entrant is pinned at is the same map either way; only the strict `>=` mutant changes it (killed)."
@@ -740,25 +740,25 @@
       "reason": "The guard exists for TypeScript narrowing only: past the award arm the remaining MatchOutcome kinds (draw, tie, no_result, double_walkover; core/types.ts:169-197) declare no `method`, so the method test is already false for every one of them and the mutant answers the same (W2c Task 9)."
     },
     {
-      "mutant": "src/sport/module.ts:542:73 MethodExpression → unioned.options.some(o => typeof o === \"object\" && o !== null)",
+      "mutant": "src/sport/module.ts:546:73 MethodExpression → unioned.options.some(o => typeof o === \"object\" && o !== null)",
       "original": "unioned.options.every((o) => typeof o === \"object\" && o !== null)",
       "line": "if (Array.isArray(unioned.options) && unioned.options.length > 0 && unioned.options.every((o) => typeof o === \"object\" && o !== null)) {",
       "reason": "`some` differs from `every` only on a MIXED options array; a zod `.options` is all schemas (union, discriminatedUnion) or all enum values (strings, or numbers for a numeric enum), never schemas and values together, and the empty array never reaches it (`length > 0` first, killed by module.test.ts 'the empty case'), so the two agree on every schema the walk can meet."
     },
     {
-      "mutant": "src/sport/module.ts:542:102 LogicalOperator → typeof o === \"object\" || o !== null",
+      "mutant": "src/sport/module.ts:546:102 LogicalOperator → typeof o === \"object\" || o !== null",
       "original": "typeof o === \"object\" && o !== null",
       "line": "if (Array.isArray(unioned.options) && unioned.options.length > 0 && unioned.options.every((o) => typeof o === \"object\" && o !== null)) {",
       "reason": "`||` differs from `&&` only for a non-null non-object option, i.e. an enum's strings: the mutant then reads the enum as a union of string branches, each a leaf, so fieldsNamed throws the same `is not an object schema` message (same prefix, same path) the enum itself would (module.test.ts 'an enum is still a leaf' passes under it)."
     },
     {
-      "mutant": "src/sport/module.ts:542:102 ConditionalExpression → true",
+      "mutant": "src/sport/module.ts:546:102 ConditionalExpression → true",
       "original": "typeof o === \"object\" && o !== null",
       "line": "if (Array.isArray(unioned.options) && unioned.options.length > 0 && unioned.options.every((o) => typeof o === \"object\" && o !== null)) {",
       "reason": "Names two mutants, the whole test and its `typeof o === \"object\"` operand, each made `true`; with options never null (union options are schemas, enum values strings or numbers) both are true for every element exactly as the LogicalOperator `||` mutant beside this entry is, so they read an enum as a union of leaf branches and fieldsNamed throws the same `is not an object schema` message at the same path (module.test.ts 'an enum is still a leaf' passes under both: the 4,478-test related run, W2c Task 22)."
     },
     {
-      "mutant": "src/sport/module.ts:542:127 ConditionalExpression → true",
+      "mutant": "src/sport/module.ts:546:127 ConditionalExpression → true",
       "original": "o !== null",
       "line": "if (Array.isArray(unioned.options) && unioned.options.length > 0 && unioned.options.every((o) => typeof o === \"object\" && o !== null)) {",
       "reason": "Differs from `o !== null` only for a null option, and zod `.options` never holds null: a union's are schemas, an enum's are its string or number values (`typeof null === \"object\"` is the only case the operand exists for)."
@@ -938,10 +938,22 @@
       "reason": "`< 1` and `<= 1` agree on every length but 1. On a class of one the mutant sends it to groupBySort, which returns [[row]] without a comparator call, `groups.length > 1` is false, and the same class comes back unmarked: the `→ false` row's case."
     },
     {
-      "mutant": "src/competition/stage.ts:262:11 ConditionalExpression → false",
+      "mutant": "src/competition/stage.ts:271:11 ConditionalExpression → false",
       "original": "poolDraws === undefined",
       "line": "...(poolDraws === undefined ? {} : { lotsDraws: poolDraws }),",
       "reason": "With the test false the spread always passes `lotsDraws: poolDraws`, and poolDraws is undefined exactly when the original passes no `lotsDraws` key. rankStandings reads the context's lotsDraws in one place, `ctx.lotsDraws?.get(membersKey)` in its lots step, which answers undefined for an absent key and an undefined value alike (`run` spreads the context, but nothing reads `run.lotsDraws`); zero rows and an empty table never reach that lookup in either version. Every ranking, event and new draw is the same."
+    },
+    {
+      "mutant": "src/competition/stage.ts:269:11 ConditionalExpression → false",
+      "original": "stage.winsCount === undefined",
+      "line": "...(stage.winsCount === undefined ? {} : { winsCount: stage.winsCount }),",
+      "reason": "With the test false the spread always passes `winsCount: stage.winsCount`, which is undefined exactly when the original passes no `winsCount` key. rankStandings reads it in one place, `ctx.winsCount === \"regulation\"` in the `wins` comparator (tiebreakers.ts winsOf), which answers false for an absent key and an undefined value alike; nothing tests `\"winsCount\" in`. Every ranking is the same. W2d T8."
+    },
+    {
+      "mutant": "src/competition/stage.ts:270:11 ConditionalExpression → false",
+      "original": "stage.gamePoints === undefined",
+      "line": "...(stage.gamePoints === undefined ? {} : { gamePoints: stage.gamePoints }),",
+      "reason": "With the test false the spread always passes `gamePoints: stage.gamePoints`, which is undefined exactly when the original passes no `gamePoints` key. rankStandings reads it in one place, `ctx.gamePoints === undefined ? <table points> : ctx.gamePoints(result)` (tiebreakers.ts gamePointsOf), which takes the table-points branch for an absent key and an undefined value alike. Every ranking is the same. W2d T8."
     },
     {
       "mutant": "src/sports/cricket/scorecard.ts:83:10 OptionalChaining → fine.currentBowler",

@@ -18,6 +18,7 @@ import nlPublic from "@/dictionaries/nl/public.json";
 import { RATIO_LEDGERS } from "@seazn/engine/competition";
 import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
+import { defaultOrderOf } from "@seazn/engine/testkit";
 
 describe("localizedTieBreakLabel", () => {
   it("translates known engine rule keys via the ui catalog", () => {
@@ -55,7 +56,7 @@ describe("localizedTieBreakLabel", () => {
   // a real word, never the raw key (tennis's `game_ratio` printed "game_ratio"
   // in the console) and never a slashed catch-all.
   it("every rule, locale and family has a word of its own, with no slash", () => {
-    const rules = new Set([...Object.keys(TIE_BREAK_MSG_KEYS), ...builtinModules.flatMap((m) => m.defaultTiebreakers)]);
+    const rules = new Set([...Object.keys(TIE_BREAK_MSG_KEYS), ...builtinModules.flatMap((m) => defaultOrderOf(m))]);
     expect(rules, "premise: the sweep reaches tennis's game ratio").toContain("game_ratio");
     const bad: string[] = [];
     for (const [locale, dict] of Object.entries({ en, es, fr, nl })) {

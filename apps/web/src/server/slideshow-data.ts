@@ -58,6 +58,8 @@ interface StandingsShapeInput {
   sport_key?: string;
   module_version?: string;
   tiebreakers?: readonly string[] | null;
+  /** The division's cfg, when the caller selected it. */
+  config?: unknown;
 }
 
 /** Resolves a division's pinned module the way the division page does
@@ -68,7 +70,8 @@ function standingsShape(division: StandingsShapeInput): StandingsShape {
   if (division.sport_key === undefined || division.module_version === undefined) return none;
   try {
     const module_ = resolveModule(division.sport_key, division.module_version);
-    return { metricSpecs: module_.metrics, cascade: division.tiebreakers ?? module_.defaultTiebreakers };
+    // W2d T8: the sport default for a league under the division's cfg — every default is kind- and cfg-independent until Task 11; Task 9 replaces this with the stage's own rules (`loadTableRules`).
+    return { metricSpecs: module_.metrics, cascade: division.tiebreakers ?? module_.defaultTiebreakers("league", division.config) };
   } catch {
     return none;
   }

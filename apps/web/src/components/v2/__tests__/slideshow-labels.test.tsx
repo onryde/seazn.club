@@ -43,6 +43,7 @@ import { t } from "@/lib/i18n-runtime";
 import { LOCALES } from "@/lib/i18n-constants";
 import { ratioText } from "@seazn/engine/competition";
 import { builtinModules } from "@seazn/engine/sports";
+import { defaultOrderOf } from "@seazn/engine/testkit";
 
 /** Every plain `ui` key the board renders. */
 const PLAIN_KEYS = [
@@ -230,7 +231,7 @@ describe("public /present kiosk: chrome in the org's locale (R10e u1)", () => {
 // is the first shipped module whose default cascade lacks `point_ratio` (the
 // very same rows, ledger included — only the division's module differs).
 const RATIO_SPORT = builtinModules.find((m) => m.key === "badminton")!;
-const NO_RATIO_SPORT = builtinModules.find((m) => !m.defaultTiebreakers.includes("point_ratio"))!;
+const NO_RATIO_SPORT = builtinModules.find((m) => !defaultOrderOf(m).includes("point_ratio"))!;
 const LEDGER_WON = 63;
 const LEDGER_LOST = 42;
 
@@ -264,8 +265,8 @@ async function divisionKioskMarkups(data: object): Promise<string[]> {
 
 describe("public /present kiosk: the Pts ratio column, through the real page and builder", () => {
   it("the sports this test names really do split on point_ratio (else the pair below proves nothing)", () => {
-    expect(RATIO_SPORT.defaultTiebreakers).toContain("point_ratio");
-    expect(NO_RATIO_SPORT.defaultTiebreakers).not.toContain("point_ratio");
+    expect(defaultOrderOf(RATIO_SPORT)).toContain("point_ratio");
+    expect(defaultOrderOf(NO_RATIO_SPORT)).not.toContain("point_ratio");
   });
 
   it.each([...LOCALES])("division kiosk, badminton, %s org: the standings slide carries the ratio header in the org's language and both rows' ratios", async (locale) => {
@@ -292,7 +293,7 @@ describe("public /present kiosk: the Pts ratio column, through the real page and
 
   it("division kiosk: the division's own cascade override is honoured (drop it from badminton: no column)", async () => {
     const en = await getDictionary("en", "ui");
-    const dropped = RATIO_SPORT.defaultTiebreakers.filter((k) => k !== "point_ratio");
+    const dropped = defaultOrderOf(RATIO_SPORT).filter((k) => k !== "point_ratio");
     const markups = await divisionKioskMarkups(sportData("en", RATIO_SPORT, dropped));
     expect(markups.some((h) => shows(h, t(en, "slideshow.col.pointRatio")))).toBe(false);
     expect(markups.some((h) => shows(h, t(en, "slideshow.col.points")))).toBe(true);

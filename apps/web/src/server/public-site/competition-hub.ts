@@ -917,7 +917,8 @@ export async function loadCompetitionHub(
     // from the division's PINNED module and live cfg; the cascade is the one
     // the table is ranked and captioned by. Called per table with that
     // table's own snapshot, which carries its pool.
-    const cascade = d.tiebreakers ?? module_?.defaultTiebreakers ?? [];
+    // W2d T8: the sport default for a league under the division's cfg — every default is kind- and cfg-independent until Task 11; Task 9 replaces this with the stage's own rules (`loadTableRules`).
+    const cascade = d.tiebreakers ?? module_?.defaultTiebreakers("league", d.config) ?? [];
     const qualificationFor = divisionQualification({
       module_,
       division: d,

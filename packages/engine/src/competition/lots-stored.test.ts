@@ -14,7 +14,7 @@ import type { TiebreakerKey } from "../sport/module.ts";
 import { builtinModules } from "../sports/index.ts";
 import { declaredCfgs } from "../testkit/declared-cfgs.ts";
 import { forEachSport } from "../testkit/for-each-sport.ts";
-import { lineupFromCatalog, makeEnvelope } from "../testkit/helpers.ts";
+import { lineupFromCatalog, makeEnvelope, tableRulesOf } from "../testkit/helpers.ts";
 import { carryDeltas } from "./points.ts";
 import { completeTableStage, type TableFixture, type TableStage } from "./stage.ts";
 import { foldResults, type FixtureResult, type StandingsRow } from "./standings.ts";
@@ -92,7 +92,7 @@ describe("W2d T5 — the empty table (X-TB-6, anti-goal 3)", () => {
 
   it("X-TB-6 completeTableStage: a stage whose every fixture was voided draws nothing and ranks every row level", () => {
     // Each void kept its result (a voided fixture still names its pool's members), but nothing COUNTS.
-    const stage: TableStage = { id: "s", kind: "league", entrants: ["X", "Y", "Z"], cascade: ["points", "lots"], rngSeed: 1, seeds: new Map([["Z", 1]]) };
+    const stage: TableStage = { id: "s", kind: "league", entrants: ["X", "Y", "Z"], rules: tableRulesOf(["points", "lots"]), rngSeed: 1, seeds: new Map([["Z", 1]]) };
     const voided: TableFixture[] = [goals("X", "Y", 1, 1), goals("Y", "Z", 1, 1), goals("Z", "X", 1, 1)].map((result, i) => ({ id: `f${i}`, status: "void", result }));
     const completed = completeTableStage(stage, voided);
     expect(completed.events).toEqual([{ type: "stage_completed", stageId: "s", finalRanks: ["Z", "X", "Y"] }]);
@@ -128,7 +128,7 @@ describe("W2d T5 — the empty table (X-TB-6, anti-goal 3)", () => {
     // asks for no lock at all.
     const order = ["Y", "X", "Z"];
     const stage: TableStage = {
-      id: "s", kind: "league", entrants: ["X", "Y", "Z"], cascade: ["points", "lots"], rngSeed: 1, seeds: new Map([["Z", 1]]),
+      id: "s", kind: "league", entrants: ["X", "Y", "Z"], rules: tableRulesOf(["points", "lots"]), rngSeed: 1, seeds: new Map([["Z", 1]]),
       lotsDraws: new Map([["", new Map([["X,Y,Z", stored(order)]])]]),
     };
     expect(order).not.toEqual(["Z", "X", "Y"]);
@@ -149,7 +149,7 @@ describe("W2d T5 — the empty table (X-TB-6, anti-goal 3)", () => {
     // A points-mode carry (Jul3/05 §3) from a source table where nothing counted: three zero openings. They carry no
     // counted fixture, so with the stage's own fixture voided the table is empty (spec §5.8 step 1): seed then id
     // (Z seeded 1, then X, Y), every row level, nothing drawn.
-    const stage: TableStage = { id: "s", kind: "league", entrants: ["X", "Y", "Z"], cascade: ["points", "lots"], rngSeed: 1, seeds: new Map([["Z", 1]]) };
+    const stage: TableStage = { id: "s", kind: "league", entrants: ["X", "Y", "Z"], rules: tableRulesOf(["points", "lots"]), rngSeed: 1, seeds: new Map([["Z", 1]]) };
     const voidXY: TableFixture[] = [{ id: "v", status: "void", result: goals("X", "Y", 0, 0) }];
     const zero = carryDeltas(foldResults(["X", "Y", "Z"], []), "points");
     expect(zero).toHaveLength(3);
@@ -178,7 +178,7 @@ describe("W2d T5 — the empty table (X-TB-6, anti-goal 3)", () => {
     // A Swiss-style bye: the pool's only counted fixture is an award to X (3 points). Y and Z stay level at 0 and are
     // drawn; the table is not empty, so nothing is flagged level.
     const bye: StandingsDelta = { entrantId: "X", played: 1, won: 1, drawn: 0, lost: 0, points: 3, metrics: {} };
-    const stage: TableStage = { id: "s", kind: "league", entrants: ["X", "Y", "Z"], cascade: ["points", "lots"], rngSeed: 1 };
+    const stage: TableStage = { id: "s", kind: "league", entrants: ["X", "Y", "Z"], rules: tableRulesOf(["points", "lots"]), rngSeed: 1 };
     const awarded = completeTableStage(stage, [{ id: "b", status: "decided", awardDelta: bye }, { id: "v", status: "void", result: goals("Y", "Z", 0, 0) }]);
     expect(awarded.tables.overall?.map((row) => row.entrantId)[0]).toBe("X");
     expect(awarded.newLotsDraws.map((d) => d.membersKey)).toEqual(["Y,Z"]);
@@ -311,7 +311,7 @@ describe("W2d T5 — the stored, seeded drawing of lots (X-TB-4, ruling 70)", ()
 
   it("X-TB-4 completeTableStage's rank_lock carries `order` and `drawnAt` read from the stored draw in lotsDraws — the engine invents no date (PS-5b)", () => {
     const fixtures: TableFixture[] = [goals("X", "Y", 1, 1), goals("Y", "Z", 1, 1), goals("Z", "X", 1, 1)].map((result, i) => ({ id: `f${i}`, status: "decided", result }));
-    const stage: TableStage = { id: "s", kind: "league", entrants: ["X", "Y", "Z"], cascade: ["points", "lots"], rngSeed: 1 };
+    const stage: TableStage = { id: "s", kind: "league", entrants: ["X", "Y", "Z"], rules: tableRulesOf(["points", "lots"]), rngSeed: 1 };
     const fresh = declaredDraw(1, ["X", "Y", "Z"]);
 
     // No stored draw: the group still needs its lock, and the draw goes back to be stored. With no date to read there
@@ -342,7 +342,7 @@ describe("W2d T5 — the stored, seeded drawing of lots (X-TB-4, ruling 70)", ()
     const draws = (a: EntrantId, b: EntrantId, c: EntrantId, pool: string): TableFixture[] =>
       [goals(a, b, 0, 0), goals(b, c, 0, 0), goals(c, a, 0, 0)].map((result, i) => ({ id: `${pool}-${i}`, poolId: pool, status: "decided", result }));
     const stage: TableStage = {
-      id: "g", kind: "group", entrants: ["X", "Y", "Z", "U", "V", "W"], cascade: ["points", "lots"], rngSeed: 1,
+      id: "g", kind: "group", entrants: ["X", "Y", "Z", "U", "V", "W"], rules: tableRulesOf(["points", "lots"]), rngSeed: 1,
       lotsDraws: new Map([["P1", new Map([["X,Y,Z", stored(["Z", "Y", "X"])], ["U,V,W", stored(["U", "W", "V"])]])]]),
     };
     const p2 = declaredDraw(1, ["U", "V", "W"]);

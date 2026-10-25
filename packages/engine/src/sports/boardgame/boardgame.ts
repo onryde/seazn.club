@@ -1076,7 +1076,7 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
     { key: "white", label: "Games as White", direction: "desc", display: false },
     { key: "black", label: "Games as Black", direction: "desc", display: false },
   ],
-  defaultTiebreakers: BOARDGAME_TIEBREAKERS,
+  defaultTiebreakers: () => [...BOARDGAME_TIEBREAKERS],
   primaryTableKey: "points", // W2d (D11): the table ranks on points first.
 
   // X-DR-1 (ruling 78): draws only where nobody must advance. A drawn bracket

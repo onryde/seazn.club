@@ -195,7 +195,7 @@ describe("validateCascade — X-TB-3 the order's shape (spec §5.5 rule 1), empt
     });
     expect(checked).toBe(SPORTS);
     // Chess's own Swiss order (W3 owns it): buchholz first after points, wins late, lots last — accepted as it stands.
-    expect(validateCascade(boardgame.defaultTiebreakers, ctxOf(boardgame, "swiss"))).toEqual([]);
+    expect(validateCascade(boardgame.defaultTiebreakers("swiss", boardgame.configSchema.parse({})), ctxOf(boardgame, "swiss"))).toEqual([]);
     expect(validateCascade(["points", "nrr"], ctxOf(badminton, "swiss"))).toEqual([
       { index: 1, key: "nrr", reason: "sport", need: "runs_for, balls_faced_eff, runs_against, balls_bowled_eff" },
     ]);
@@ -290,7 +290,7 @@ describe("validateCascade — X-TB-5 what the sport records and what the stage f
   });
 
   it("FB-TB-4 fair_play: football with fairPlay true accepted; fairPlay false → 'fair_play_off'; hockey → 'sport' (D8)", () => {
-    const fifa = football.defaultTiebreakers;
+    const fifa = football.defaultTiebreakers("league", football.configSchema.parse({}));
     const at = fifa.indexOf("fair_play");
     expect(at, "premise: football's default order holds fair_play").toBeGreaterThan(0);
     const on = football.configSchema.parse({ fairPlay: true });
@@ -549,7 +549,8 @@ describe("offerableKeys — '+ Add step' (spec §9)", () => {
         [],
         [module.primaryTableKey, "lots"],
         [module.primaryTableKey, "h2h_points", "h2h_reapply", "seed", "lots"],
-        [...module.defaultTiebreakers],
+        // W2d T8: asked for a league under the first declared cfg — every default is kind- and cfg-independent until Task 11.
+        [...module.defaultTiebreakers("league", firstCfg(module))],
       ];
       for (const stageKind of KINDS) {
         for (const crossGroup of [false, true]) {

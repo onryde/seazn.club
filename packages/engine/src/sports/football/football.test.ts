@@ -400,7 +400,7 @@ describe("football contract declarations", () => {
       "h2h_for",
     ]);
     expect(FOOTBALL_TIEBREAKERS.classic.slice(0, 3)).toEqual(["points", "diff", "for"]);
-    expect(football.defaultTiebreakers).toEqual(FOOTBALL_TIEBREAKERS.fifa2026);
+    expect(football.defaultTiebreakers("league", football.configSchema.parse({}))).toEqual(FOOTBALL_TIEBREAKERS.fifa2026);
   });
 
   it("supports draws in league/group but never in eliminations", () => {

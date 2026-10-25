@@ -121,6 +121,7 @@ import enPublic from "@/dictionaries/en/public.json";
 import esPublic from "@/dictionaries/es/public.json";
 import frPublic from "@/dictionaries/fr/public.json";
 import nlPublic from "@/dictionaries/nl/public.json";
+import { defaultOrderOf } from "@seazn/engine/testkit";
 
 /** The en captions of pools A and B under `stage`: `table.poolLabel` over the
  *  pool KEY, read from the dictionary file — never the stored "Pool " + key. */
@@ -464,7 +465,7 @@ describe("organiser console — the tie-break cascade caption says the sport's w
 
   it("generic: plain 'difference' and 'total scored', never the goal/run catch-all", async () => {
     swissScene();
-    expect(GENERIC.defaultTiebreakers, "premise: generic splits on diff then for").toEqual(
+    expect(defaultOrderOf(GENERIC), "premise: generic splits on diff then for").toEqual(
       expect.arrayContaining(["diff", "for"]),
     );
     expect(await cascadeCaption()).toEqual(["points", "difference", "total scored", "head-to-head", "drawing of lots"]);

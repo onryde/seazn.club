@@ -18,7 +18,7 @@ import { builtinModules } from "../sports/index.ts";
 import { hockey } from "../sports/hockey/hockey.ts";
 import { declaredCfgs } from "../testkit/declared-cfgs.ts";
 import { forEachSport } from "../testkit/for-each-sport.ts";
-import { lineupFromCatalog, makeEnvelope } from "../testkit/helpers.ts";
+import { lineupFromCatalog, makeEnvelope, tableRulesOf } from "../testkit/helpers.ts";
 import { completeTableStage, type TableFixture } from "./stage.ts";
 import { foldResults, type FixtureResult, type StandingsRow } from "./standings.ts";
 import { buildSwissTable, directEncounter, rankStandings, type RankContext, type RankingResult, type SwissGame, type SwissTable } from "./tiebreakers.ts";
@@ -544,7 +544,7 @@ describe("W2d T4 — the new tie-break keys (spec §5.6)", () => {
     const fx = (id: string, poolId: string, result?: FixtureResult): TableFixture & { result?: FixtureResult } =>
       result === undefined ? { id, poolId, status: "scheduled" } : { id, poolId, status: "decided", result };
     const stage = completeTableStage(
-      { id: "s", kind: "group", entrants: ["A", "B", "C", "D", "E", "F", "G"], cascade: BWF, rngSeed: 1 },
+      { id: "s", kind: "group", entrants: ["A", "B", "C", "D", "E", "F", "G"], rules: tableRulesOf(BWF), rngSeed: 1 },
       [
         fx("1", "1", bwf("A", "C", [2, 0], [42, 30])), fx("2", "1", bwf("B", "D", [2, 1], [55, 50])), fx("3", "1"),
         fx("4", "2", bwf("E", "F", [2, 1], [60, 50])), fx("5", "2", bwf("F", "G", [2, 1], [55, 50])), fx("6", "2", bwf("G", "E", [2, 1], [55, 55])),
@@ -612,7 +612,7 @@ describe("W2d T4 — the new tie-break keys (spec §5.6)", () => {
     const games = [ih("A", "B", 3, 1), ih("B", "C", 3, 0), ih("C", "A", 2, 1), ih("A", "D", 1, 0), ih("B", "D", 5, 0), ih("C", "D", 1, 0)];
     const stageAt = (voided: number | null) =>
       completeTableStage(
-        { id: "s", kind: "league", entrants: ["A", "B", "C", "D"], cascade: IIHF, rngSeed: 1 },
+        { id: "s", kind: "league", entrants: ["A", "B", "C", "D"], rules: tableRulesOf(IIHF), rngSeed: 1 },
         games.map((result, i) => ({ id: `f${i}`, status: i === voided ? ("void" as const) : ("decided" as const), result })),
       ).events.find((e) => e.type === "stage_completed");
     expect(stageAt(null)).toEqual({ type: "stage_completed", stageId: "s", finalRanks: ["A", "B", "C", "D"] });
@@ -836,13 +836,13 @@ describe("W2d T4 — the refinement driver's guards", () => {
     // A group stage: pool A drew its one match (a real tie, so one lock naming both); pool B has only an unplayed
     // fixture, so no member yet and nobody to draw.
     const grouped = completeTableStage(
-      { id: "g", kind: "group", entrants: ["A1", "A2", "B1", "B2"], cascade: ["points", "lots"], rngSeed: 1 },
+      { id: "g", kind: "group", entrants: ["A1", "A2", "B1", "B2"], rules: tableRulesOf(["points", "lots"]), rngSeed: 1 },
       [{ id: "a", poolId: "A", status: "decided", result: fb("A1", "A2", 1, 1) }, { id: "b", poolId: "B", status: "scheduled" }],
     );
     expect(grouped.events.filter((e) => e.type === "rank_lock_required")).toEqual([{ type: "rank_lock_required", stageId: "g", group: ["A1", "A2"] }]);
     expect(grouped.tables.pools.map((p) => [p.pool, p.rows.length])).toEqual([["A", 2], ["B", 0]]);
     // A league stage with no entrants completes with an empty order and nothing to lock.
-    const league = completeTableStage({ id: "s", kind: "league", entrants: [], cascade: ["points", "lots"], rngSeed: 1 }, []);
+    const league = completeTableStage({ id: "s", kind: "league", entrants: [], rules: tableRulesOf(["points", "lots"]), rngSeed: 1 }, []);
     expect(league.events).toEqual([{ type: "stage_completed", stageId: "s", finalRanks: [] }]);
   });
 

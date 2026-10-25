@@ -171,8 +171,12 @@ describe("boardgame contract declarations", () => {
   });
 
   it("declares the FIDE cascade and {2, 0} point totals", () => {
-    expect(boardgame.defaultTiebreakers).toEqual(BOARDGAME_TIEBREAKERS);
-    expect(boardgame.defaultTiebreakers.slice(0, 4)).toEqual([
+    // W2d T8: asked per table kind under the default cfg — the same FIDE order for each until Task 11.
+    const cfg = boardgame.configSchema.parse({});
+    for (const kind of ["league", "group", "swiss", "americano"] as const) {
+      expect(boardgame.defaultTiebreakers(kind, cfg), kind).toEqual(BOARDGAME_TIEBREAKERS);
+    }
+    expect(boardgame.defaultTiebreakers("swiss", cfg).slice(0, 4)).toEqual([
       "points",
       "buchholz_cut1",
       "buchholz",

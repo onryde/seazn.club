@@ -2810,7 +2810,7 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
   awardScoreKeys: { for: "gf", against: "ga", diff: "gd" },
   // Module default = fifa2026 (spec 04 §1.6); `classic` selectable by the
   // organiser via FOOTBALL_TIEBREAKERS.
-  defaultTiebreakers: FOOTBALL_TIEBREAKERS.fifa2026,
+  defaultTiebreakers: () => [...FOOTBALL_TIEBREAKERS.fifa2026],
   primaryTableKey: "points", // W2d (D11): the table ranks on points first.
 
   // spec 04 §1.3 — draws are table results only. X-DR-1 (ruling 78; W2a plan

@@ -28,7 +28,7 @@ import { tabletennis } from "../sports/setbased/tabletennis.ts";
 import { volleyball } from "../sports/setbased/volleyball.ts";
 import { forEachSport } from "../testkit/for-each-sport.ts";
 import { readCorpus } from "../testkit/golden.ts";
-import { defaultLineupPair, makeEnvelope } from "../testkit/index.ts";
+import { defaultLineupPair, makeEnvelope, tableRulesOf } from "../testkit/index.ts";
 // The barrel: Tasks 3, 7, 9, 10 import these names from `@seazn/engine/competition`.
 import {
   PointsRule,
@@ -115,7 +115,7 @@ function corpusFixtures(key: string): { config: string; outcome: MatchOutcome; p
 describe("W2d payout (SPEC §5.3)", () => {
   // empty case first
   it("an undecided fixture pays nothing and is not counted", () => {
-    const stage = { id: "s", kind: "league" as const, entrants: ["H", "A"], cascade: ["points" as const] };
+    const stage = { id: "s", kind: "league" as const, entrants: ["H", "A"], rules: tableRulesOf(["points" as const]) };
     const undecided: TableFixture = { id: "f1", status: "scheduled" };
     const rows = byEntrant(completeTableStage(stage, [undecided]).tables.overall!);
     expect(rows.map((r) => [r.entrantId, r.played, r.points])).toEqual([
@@ -462,7 +462,7 @@ describe("W2d payout (SPEC §5.3)", () => {
 
   it("Sequence: undecided → decided → second recompute (same points) → void → another sport (cricket tie)", () => {
     // single-sport: the sequence walks football's recorded shoot-out, then cricket's recorded tie (the rule rows' own sports)
-    const stage = { id: "s", kind: "league" as const, entrants: ["H", "A"], cascade: ["points" as const] };
+    const stage = { id: "s", kind: "league" as const, entrants: ["H", "A"], rules: tableRulesOf(["points" as const]) };
     const rowsOf = (fixtures: TableFixture[]) =>
       byEntrant(completeTableStage(stage, fixtures).tables.overall!).map((r) => [r.entrantId, r.won, r.drawn, r.lost, r.points]);
     // the recorded football shoot-out (football.golden.json), paid under the signed football rule
@@ -499,7 +499,7 @@ describe("W2d payout (SPEC §5.3)", () => {
       status: "decided",
       result: payout(decided.outcome, decidedInFor(boardgame, decided.outcome), decided.pair, true, chessRule, undefined, undefined),
     };
-    const stage = { id: "s", kind: "swiss" as const, entrants: ["H", "A"], cascade: ["points" as const] };
+    const stage = { id: "s", kind: "swiss" as const, entrants: ["H", "A"], rules: tableRulesOf(["points" as const]) };
     // The abandoned board is held by the table read as a fixture with no result (the web's completion reads it void or
     // in play, never decided with a pair): whatever its status, it credits nobody.
     for (const status of ["void", "in_play", "decided"] as const) {

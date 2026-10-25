@@ -28,17 +28,19 @@ import {
   isBracketStageComplete,
   isTableStageComplete,
   placementTable,
+  resolveTableRules,
   type BracketFixture,
   type BracketStage,
   type DivisionEvent,
   type FixtureResult,
   type StandingsRow,
   type TableFixture,
+  type TableRules,
   type TableStage,
 } from "@seazn/engine/competition";
-import type { AnySportModule } from "@seazn/engine/sport";
+import type { AnySportModule, TableStageKind, TiebreakerKey } from "@seazn/engine/sport";
 import { resolveModule } from "./registry";
-import { resolveFixtureCfg } from "./fixture-cfg";
+import { liveCfg, resolveFixtureCfg } from "./fixture-cfg";
 import { forfeitPlayedFacts, playedFor } from "./forfeit-played";
 
 type Tx = postgres.TransactionSql;
@@ -314,6 +316,8 @@ interface StageInputs {
   kind: StageKind;
   division: DivisionRow;
   module: AnySportModule;
+  /** The stage's own points rule (`stages.config.points`), parsed; null = the sport's (W2d T8: the resolver's own layer). */
+  pointsRule: PointsRule | null;
   fixtures: FixtureRow[];
   tableFixtures: TableFixture[];
   entrants: string[];
@@ -492,6 +496,7 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
     kind,
     division,
     module: sportModule,
+    pointsRule,
     // No stage-wide `cfg` field: there is no such thing any more. Each fixture
     // resolves its own above, and a single shared one is exactly how live
     // config leaked back into decided fixtures.
@@ -503,8 +508,31 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
   };
 }
 
-function cascadeFor(inputs: StageInputs): readonly string[] {
-  return inputs.division.tiebreakers ?? inputs.module.defaultTiebreakers;
+// W2d T8 (X-TB-1): the stage's table rules through the engine's one resolver, unpinned — Task 9 reads the stage's pin
+// (`loadTableRules`) and pays its points; until then the points ride along unread (the fixtures above are paid by
+// `standingsDelta` or the stage's own rule) and only the order ranks. The stage's own order and cross-group order are
+// not stored yet (Task 10 writes them), so they inherit. The merged cfg is the stage's format, `liveCfg` — division ⊕
+// the stage's rules ⊕ its bracket deciders. A cfg the sport cannot read is the resolver's typed CONFIG_INVALID (the
+// API's 422), never a crash.
+//
+// The resolver's stage kind: a table kind is its own (americano too — its sport default is asked for americano, though
+// it folds as a league below). A bracket or ladder stage still reaches this fold (an admin cfg edit or a rules refold
+// recomputes its snapshot) and ranks, as before W2d, by the order a league would: every default is kind-independent
+// until Task 11.
+function tableRulesFor(inputs: StageInputs): TableRules {
+  const stageKind: TableStageKind = TABLE_KINDS.has(inputs.kind) ? (inputs.kind as TableStageKind) : "league";
+  return resolveTableRules({
+    module: inputs.module,
+    stageKind,
+    mergedCfg: liveCfg(
+      inputs.division.config,
+      { kind: inputs.stage.kind, config: inputs.stage.config as Record<string, unknown> | null },
+      inputs.module,
+    ),
+    stageOwn: { points: inputs.pointsRule, tiebreakers: null, crossGroup: null },
+    divisionTiebreakers: inputs.division.tiebreakers as readonly TiebreakerKey[] | null,
+    pinned: null,
+  });
 }
 
 function toTableStage(inputs: StageInputs): TableStage {
@@ -513,7 +541,7 @@ function toTableStage(inputs: StageInputs): TableStage {
     // americano rides the league fold (Jul3/08 §3)
     kind: (inputs.stage.kind === "americano" ? "league" : inputs.stage.kind) as TableStage["kind"],
     entrants: inputs.entrants,
-    cascade: cascadeFor(inputs) as TableStage["cascade"],
+    rules: tableRulesFor(inputs),
     ...(inputs.seeds.size > 0 ? { seeds: inputs.seeds } : {}),
     ...(inputs.stage.config?.rngSeed != null ? { rngSeed: inputs.stage.config.rngSeed } : {}),
     ...(inputs.stage.config?.rounds != null ? { rounds: inputs.stage.config.rounds } : {}),

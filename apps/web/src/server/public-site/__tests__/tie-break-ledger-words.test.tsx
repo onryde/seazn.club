@@ -46,6 +46,7 @@ import enUi from "@/dictionaries/en/ui.json";
 import esUi from "@/dictionaries/es/ui.json";
 import frUi from "@/dictionaries/fr/ui.json";
 import nlUi from "@/dictionaries/nl/ui.json";
+import { defaultOrderOf } from "@seazn/engine/testkit";
 
 const LOCALES = { en, es, fr, nl } as unknown as Record<string, Dict>;
 
@@ -154,7 +155,7 @@ describe("the tie note says the sport's word — on the hub and on the division 
       caption: "League",
       fullHref: "/x",
       metricSpecs: m.metrics,
-      cascade: m.defaultTiebreakers,
+      cascade: defaultOrderOf(m),
       rows: [ledgerRow(sport, "a", { rank: 1 }), ledgerRow(sport, "b", { rank: 2, tieBreak: { key: rule, with: ["a"] } })],
       entrantNames: { a: "Alpha", b: "Beta" },
       entrantLogos: {},
@@ -170,7 +171,7 @@ describe("the tie note says the sport's word — on the hub and on the division 
       <StandingsTable
         rows={[ledgerRow(sport, "a", { rank: 1 }), ledgerRow(sport, "b", { rank: 2, tieBreak: { key: rule, with: ["a"] } })]}
         metricSpecs={m.metrics}
-        cascade={m.defaultTiebreakers}
+        cascade={defaultOrderOf(m)}
         entrantNames={{ a: "Alpha", b: "Beta" }}
         dict={dict}
       />,
@@ -223,7 +224,7 @@ describe("a tied row with no ledger reads its partners' word", () => {
   ];
   const ranked = () =>
     rankStandings(foldResults(["A", "B", "C", "D", "E"], RESULTS), {
-      cascade: HOCKEY.defaultTiebreakers,
+      cascade: defaultOrderOf(HOCKEY),
       results: RESULTS,
     }).rows;
 
@@ -246,7 +247,7 @@ describe("a tied row with no ledger reads its partners' word", () => {
       caption: "League",
       fullHref: "/x",
       metricSpecs: HOCKEY.metrics,
-      cascade: HOCKEY.defaultTiebreakers,
+      cascade: defaultOrderOf(HOCKEY),
       rows,
       entrantNames: names,
       entrantLogos: {},
@@ -261,7 +262,7 @@ describe("a tied row with no ledger reads its partners' word", () => {
       <StandingsTable
         rows={rows}
         metricSpecs={HOCKEY.metrics}
-        cascade={HOCKEY.defaultTiebreakers}
+        cascade={defaultOrderOf(HOCKEY)}
         entrantNames={names}
         dict={en as unknown as Dict}
       />,

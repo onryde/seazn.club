@@ -368,7 +368,8 @@ function withdrawalVoidsResults(stageId: string, kind: string, entrantId: string
   const mine = fixtures.filter((f) => f.stage_id === stageId && seats(f, entrantId));
   const { played, pending } = tableWithdrawalInputs(entrantId, mine);
   const result = withdrawTableEntrant(
-    { id: stageId, kind: kind as "league" | "group" | "swiss", entrants: [entrantId], cascade: [] },
+    // W2d T8: the policy reads the stage's id and kind alone (`withdrawTableEntrant`'s parameter), no field or rules.
+    { id: stageId, kind: kind as "league" | "group" | "swiss" },
     entrantId,
     { played, pending },
   );
@@ -496,11 +497,9 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
       (f) => statusIn(i.stage.kind, f) === "decided" && f.home_entrant_id !== null && f.away_entrant_id !== null,
     ),
     complete: isTableStageComplete(
+      // W2d T8: the predicate reads the stage's kind and Swiss rounds alone (`isTableStageComplete`'s parameter).
       {
-        id: i.stage.id,
         kind: i.stage.kind as "league" | "group" | "swiss",
-        entrants: [],
-        cascade: [],
         ...(isSwiss ? { rounds: meta.swissRounds! } : {}),
       },
       engineFx,
@@ -517,7 +516,11 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
   // table itself, since a carry-over opening pays points no match paid (the
   // carry mode is not public; `points = winFloor × won` on every row is).
   const winsOnly = perMatch.winsOnly && i.rows.every((r) => r.points === r.won * perMatch.winFloor);
-  const decidingKey = tieDecidingKey(cascade, { winsOnly });
+  // W2d P25: the what-if names the sport's primary step (`primaryTableKey`). This view reaches here only on an order
+  // that starts with `points` (the gate at the top), where every primary answers alike, so "points" is exact; Task 11
+  // re-keys that gate and then owes the module's own primary here.
+  const primary = "points" as const;
+  const decidingKey = tieDecidingKey(cascade, { winsOnly, primary });
 
   /** The entrant's next match has no opponent seat (T2-C1): a bye it cannot lose. */
   const nextIsBye = (id: string): boolean => {
@@ -535,7 +538,7 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
     // The average match counts only matches with a ledger (T3-⚠3).
     const ruleInAverage = ruleScoreInAverage(r, decidingKey);
     const noLedger = tableFx.filter((f) => seats(f, r.entrantId) && counted(f) && ledgerless(f, i.awardAddsToLedger, ruleInAverage, meta)).length;
-    const w: TieWhatIf | null = tieWhatIf({ ...r, played: r.played - noLedger }, rival, cascade, { winsOnly });
+    const w: TieWhatIf | null = tieWhatIf({ ...r, played: r.played - noLedger }, rival, cascade, { winsOnly, primary });
     if (w === null) return null;
     const name = i.entrantNames[rival.entrantId] ?? rival.entrantId;
     const vars = { rival: name, rule: tieBreakRule(w.key, i.msg, r, ordered, [rival.entrantId]) };

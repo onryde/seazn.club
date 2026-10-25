@@ -46,6 +46,7 @@ import nl from "@/dictionaries/nl/public.json";
 import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import { TableView } from "../competition-hub-schema";
+import { defaultOrderOf } from "@seazn/engine/testkit";
 import {
   buildTableView,
   columnHeader,
@@ -250,7 +251,7 @@ describe("buildTableView", () => {
     // or, for a key the engine has no label for either (`game_ratio`, which
     // tennis ranks on), the raw key. A module that starts ranking on a new key
     // reds here until the key is added with its four translations.
-    const defaults = new Set(builtinModules.flatMap((m) => [...m.defaultTiebreakers]));
+    const defaults = new Set(builtinModules.flatMap((m) => [...defaultOrderOf(m)]));
     expect(defaults.size, "premise: the engine declares default cascades to check").toBeGreaterThan(5);
     expect(defaults.has("game_ratio"), "premise: tennis ranks on game_ratio by default").toBe(true);
     const unregistered = [...defaults].filter((key) => !Object.hasOwn(TIE_BREAK_MSG_KEYS, key));
