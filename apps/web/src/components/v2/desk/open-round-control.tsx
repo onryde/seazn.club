@@ -13,7 +13,9 @@
 // Offered only while the club is offered online chess (T20: an open STARTS play); the page decides that, not these helpers.
 // One DOM, mobile-first: `min-w-0` down every name.
 import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
+import type { ArbiterBoard } from "@/lib/arbiter-view";
 import { fmtTime } from "@/lib/format";
+import { SEAT_WORD_KEYS, seatWords } from "@/lib/invite-status";
 import type { MessageKey } from "@/lib/messages";
 import { ONLINE_CHESS_DISABLED_CODE } from "@/lib/online-chess";
 import {
@@ -83,8 +85,36 @@ export function timedBatches(round: OpenRoundView): (OpenRoundBatch & { opensAt:
   return timed.length === round.batches.length ? timed : null;
 }
 
-/** The confirmation's body: who this press reaches and what starts. Exported for its static test. */
-export function OpenRoundConfirmBody({ round, tz }: { round: OpenRoundView; tz: string }) {
+/** The seats of the boards the round column lists, by fixture id (`ArbiterBoard.seats`): the waiting list's own source. */
+export type BoardSeats = ReadonlyMap<string, ArbiterBoard["seats"]>;
+
+/** One pairing's seats in the words the waiting list uses (Task 16 D2): "White: Here · Black: Not delivered". `seatWords` is the one
+ *  helper both read, so the two can never word a seat two ways. Null when the board has no seat to read, or neither seat has a word
+ *  to give: the caller then keeps the stamp line (`inviteState`), which is all it knows. */
+function seatsLine(p: OpenRoundPairing, seats: BoardSeats | undefined, msg: Msg) {
+  const board = seats?.get(p.fixtureId) ?? null;
+  if (board === null) return null;
+  const parts = (["white", "black"] as const).flatMap((colour) => {
+    const words = seatWords(board[colour]);
+    if (words.length === 0) return [];
+    const colourWord = msg(colour === "white" ? "arbiter.colour.white" : "arbiter.colour.black");
+    return [
+      <span key={colour} data-seat={colour}>
+        {msg("arbiter.column.confirmSeat", { colour: colourWord, words: words.map((w) => msg(SEAT_WORD_KEYS[w] as MessageKey)).join(", ") })}
+      </span>,
+    ];
+  });
+  if (parts.length === 0) return null;
+  return (
+    <>
+      {parts.flatMap((part, i) => (i === 0 ? [part] : [" · ", part]))}
+    </>
+  );
+}
+
+/** The confirmation's body: who this press reaches and what starts. Exported for its static test. `seats`, where the caller has the
+ *  round's boards (the check-in hero), words each seat the way the waiting list does; without it a row reads the stamp line. */
+export function OpenRoundConfirmBody({ round, tz, seats }: { round: OpenRoundView; tz: string; seats?: BoardSeats }) {
   const msg = useMsg();
   const plural = useMsgPlural();
   const owed = owedPlayers(round);
@@ -119,7 +149,7 @@ export function OpenRoundConfirmBody({ round, tz }: { round: OpenRoundView; tz: 
           <li key={p.fixtureId} data-testid={`open-round-invitee-${p.fixtureId}`} className="flex min-w-0 flex-col gap-0.5 px-3 py-2">
             {names(p, msg)}
             <span className={`text-xs ${MUTED}`}>
-              {boardLabel(p, msg)} · {inviteState(p, tz, msg, plural)}
+              {boardLabel(p, msg)} · {seatsLine(p, seats, msg) ?? inviteState(p, tz, msg, plural)}
             </span>
           </li>
         ))}

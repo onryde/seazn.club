@@ -28,7 +28,7 @@ import Link from "@/components/ui/console-link";
 import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import type { ArbiterBoard, ArbiterRound } from "@/lib/arbiter-view";
 import { fmtTime } from "@/lib/format";
-import { INVITE_WORD_KEYS, type SeatInviteWord } from "@/lib/invite-status";
+import { INVITE_WORD_KEYS, seatWords, type SeatInviteWord } from "@/lib/invite-status";
 import type { MessageKey } from "@/lib/messages";
 import type { OpenRoundView } from "@/lib/open-round";
 import { checkinClock, checkinTally, nextRoundViews, openWindowBoards, playingTally, roundColumnPhase, viewOfRound } from "@/lib/round-column";
@@ -38,7 +38,7 @@ import type { NeedsOrganiserExternalPlayRow } from "@/server/usecases/external-p
 import { BUTTON_QUIET, CLOCK_FACE, MUTED, SOFT } from "../arbiter-flag-cards";
 import { boardExtendOffer, extendBoardLabel } from "../checkin-extend-ui";
 import { ConfirmDialog } from "../confirm-dialog";
-import { OpenRoundConfirmBody, openNoticeText, owedPlayers, resendNoticeText, timedBatches } from "../desk/open-round-control";
+import { OpenRoundConfirmBody, openNoticeText, owedPlayers, resendNoticeText, timedBatches, type BoardSeats } from "../desk/open-round-control";
 import type { OpenRoundUiState } from "../desk/open-round-state";
 import { useOpenRound, type OpenRoundHandle } from "../desk/use-open-round";
 import { RoundQueueCards } from "./round-queue-cards";
@@ -410,6 +410,8 @@ export function CheckinHero({ round, view, tz, nowMs, openRound, roundExtend }: 
   const notice = view !== null && state.notice !== null ? openNoticeText(state.notice, view, msg, plural) : null;
   const owed = owedView === null ? 0 : owedPlayers(owedView);
   const reinvite = owedView?.press === "reinvite";
+  // The confirmation words each seat as the waiting list does (D2): the round on screen's own boards are where the seats are read.
+  const seatsOf: BoardSeats = new Map(round.boards.map((b) => [b.fixtureId, b.seats]));
 
   const clockLabel =
     clock.kind === "closes" ? msg("arbiter.column.checkin.closesIn") : clock.kind === "opens" ? msg("arbiter.column.checkin.opensIn") : msg("arbiter.column.checkin.closed");
@@ -551,7 +553,7 @@ export function CheckinHero({ round, view, tz, nowMs, openRound, roundExtend }: 
         onConfirm={openRound.open}
         onCancel={openRound.cancel}
       >
-        {owedView !== null && <OpenRoundConfirmBody round={owedView} tz={tz} />}
+        {owedView !== null && <OpenRoundConfirmBody round={owedView} tz={tz} seats={seatsOf} />}
       </ConfirmDialog>
     </section>
   );
@@ -631,32 +633,41 @@ export function WaitingList({ boards, view, openRound, nowMs, requestBusy, on }:
               </button>
               <ul className="m-0 flex min-w-0 list-none flex-col gap-2 p-0">
                 {(["white", "black"] as const).map((colour) => {
-                  const seat = b.seats?.[colour] ?? null;
-                  const here = seat !== null && seat.here;
+                  // The words a seat shows come from `seatWords`, the helper the reopen/reinvite confirmation reads as well (D2).
+                  const words = seatWords(b.seats?.[colour] ?? null);
+                  const here = words.includes("here");
+                  const invites = words.filter((w): w is SeatInviteWord => w !== "here");
                   return (
-                    <li key={colour} data-testid="arbiter-seat" data-colour={colour} data-here={String(here)} className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                      <span className={`w-14 shrink-0 text-xs ${MUTED}`}>{msg(colour === "white" ? "arbiter.colour.white" : "arbiter.colour.black")}</span>
-                      <span data-field="name" className={`min-w-0 flex-1 basis-32 text-sm font-medium break-words ${INK}`}>
-                        {b[colour].name}
-                      </span>
-                      {here ? (
-                        <span data-field="presence" className={`inline-flex items-center gap-1.5 text-xs font-semibold ${SOFT}`}>
-                          <span aria-hidden="true" className="size-2 shrink-0 rounded-full bg-[#4ade80]" />
-                          {msg("arbiter.column.here")}
+                    // D3: two lines at every width. The colour and the name, then the words (presence and invite chips) on a row of their
+                    // own under the name, so the rows of the list line up whether or not a chip would have fitted beside it.
+                    <li key={colour} data-testid="arbiter-seat" data-colour={colour} data-here={String(here)} className="flex min-w-0 flex-col gap-1">
+                      <div className="flex min-w-0 items-baseline gap-2">
+                        <span className={`w-14 shrink-0 text-xs ${MUTED}`}>{msg(colour === "white" ? "arbiter.colour.white" : "arbiter.colour.black")}</span>
+                        <span data-field="name" className={`min-w-0 flex-1 text-sm font-medium break-words ${INK}`}>
+                          {b[colour].name}
                         </span>
-                      ) : (
-                        <>
-                          <span data-field="presence" className={`${CHIP} ${AMBER_CHIP}`}>
-                            {msg("arbiter.column.notHereYet")}
+                      </div>
+                      {/* pl-16 = the colour column (w-14) and the gap (gap-2), so the words start under the name. */}
+                      <div data-testid="arbiter-seat-words" className="flex min-w-0 flex-wrap items-center gap-1.5 pl-16">
+                        {here ? (
+                          <span data-field="presence" className={`inline-flex items-center gap-1.5 text-xs font-semibold ${SOFT}`}>
+                            <span aria-hidden="true" className="size-2 shrink-0 rounded-full bg-[#4ade80]" />
+                            {msg("arbiter.column.here")}
                           </span>
-                          {/* One chip per invite word. A seat that is here shows none; one the loader could not read has none to show. */}
-                          {(seat?.invites ?? []).map((word, i) => (
-                            <span key={`${word}:${i}`} data-testid="arbiter-invite-word" data-word={word} className={`${CHIP} ${CHIP_PAIR[word]}`}>
-                              {msg(INVITE_WORD_KEYS[word] as MessageKey)}
+                        ) : (
+                          <>
+                            <span data-field="presence" className={`${CHIP} ${AMBER_CHIP}`}>
+                              {msg("arbiter.column.notHereYet")}
                             </span>
-                          ))}
-                        </>
-                      )}
+                            {/* One chip per invite word. A seat that is here shows none; one the loader could not read has none to show. */}
+                            {invites.map((word, i) => (
+                              <span key={`${word}:${i}`} data-testid="arbiter-invite-word" data-word={word} className={`${CHIP} ${CHIP_PAIR[word]}`}>
+                                {msg(INVITE_WORD_KEYS[word] as MessageKey)}
+                              </span>
+                            ))}
+                          </>
+                        )}
+                      </div>
                     </li>
                   );
                 })}

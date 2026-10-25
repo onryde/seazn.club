@@ -274,6 +274,7 @@ export const ROUND_COLUMN_KEYS: readonly ColumnKey[] = [
  *     are listed by hand and not scanned. */
 export const ROUND_COLUMN_HELPER_KEYS: readonly ColumnKey[] = [
   // OpenRoundConfirmBody, inviteState, the open's answer and the resend's
+  "arbiter.column.confirmSeat",
   "externalPlay.openRound.alreadyOpen",
   "externalPlay.openRound.clockNotPlayable",
   "externalPlay.openRound.divisionNotStarted",

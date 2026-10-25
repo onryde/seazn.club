@@ -31,6 +31,28 @@ export const INVITE_WORD_KEYS: Readonly<Record<SeatInviteWord, DictionaryKey>> =
   not_invited: "runsheet.round.notInvited",
 };
 
+/** What one seat shows: "Here" (it has checked in) or an invite word. */
+export type SeatWord = "here" | SeatInviteWord;
+
+/** The key of each seat word. `here` is the column's own "Here"; the invite words are `INVITE_WORD_KEYS`, spread rather than copied, so
+ *  the waiting list and the reopen/reinvite confirmation can never word one state two ways. */
+export const SEAT_WORD_KEYS: Readonly<Record<SeatWord, DictionaryKey>> = { here: "arbiter.column.here", ...INVITE_WORD_KEYS };
+
+/**
+ * The words a seat shows, the ONE answer the waiting list and the confirmation of the round's invite press both read (Task 16 D2:
+ * the confirmation used to word a seat from the run sheet's stamp line, "Not invited", while the list said "Not delivered").
+ *
+ *  - A seat that is here shows "here" and nothing else: its invite is moot once the player has arrived.
+ *  - A seat that is not here shows its invite words, in the order the loader gave them (one per current mailbox that has mail).
+ *  - Nothing to show: no seat at all (`null`: the board's seats could not be read), or a seat whose mail the loader had no word for.
+ *
+ * Returns a new array; the caller may keep it.
+ */
+export function seatWords(seat: { here: boolean; invites: readonly SeatInviteWord[] } | null): SeatWord[] {
+  if (seat === null) return [];
+  return seat.here ? ["here"] : [...seat.invites];
+}
+
 /**
  * The word for one outbox status (spec 6.1). Total over `OutboxStatus`: the `never` check in the default arm makes a
  * thirteenth status a compile error here, so it cannot be left without a word by accident.

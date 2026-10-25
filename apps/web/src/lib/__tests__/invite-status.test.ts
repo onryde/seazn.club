@@ -19,7 +19,9 @@ import {
   INVITE_WORDS,
   INVITE_WORD_KEYS,
   inviteWordOf,
+  SEAT_WORD_KEYS,
   seatInviteWords,
+  seatWords,
   type InviteWord,
   type SeatInviteWord,
 } from "../invite-status";
@@ -256,5 +258,55 @@ describe("INVITE_WORD_KEYS", () => {
       if (locale === "en") continue;
       expect(DICTS[locale]!["arbiter.invite.help"], `${locale} is translated`).not.toBe(en["arbiter.invite.help" as keyof typeof en]);
     }
+  });
+});
+
+// Task 16 D2: the waiting list and the reopen/reinvite confirmation must give a seat ONE word. `seatWords` is the helper both read;
+// its answers are typed here from the rule (a seat that is here shows only "Here"; one that is not shows its invite words in order;
+// a seat the loader could not read shows nothing), not read back from the function.
+describe("seatWords: the one answer for what a seat shows (Task 16 D2)", () => {
+  it("empty cases first: no seat at all, and a seat that is not here with no readable mail, show nothing", () => {
+    expect(seatWords(null)).toEqual([]);
+    expect(seatWords({ here: false, invites: [] })).toEqual([]);
+  });
+
+  it("a seat that is here shows 'here' and none of its invite words, whatever they were", () => {
+    const every: SeatInviteWord[] = [...INVITE_WORDS, "not_invited"];
+    expect(seatWords({ here: true, invites: [] })).toEqual(["here"]);
+    expect(seatWords({ here: true, invites: every })).toEqual(["here"]);
+  });
+
+  it("a seat that is not here shows its invite words, in the order it holds them (one per mailbox)", () => {
+    const every: SeatInviteWord[] = [...INVITE_WORDS, "not_invited"];
+    let checked = 0;
+    for (const word of every) {
+      expect(seatWords({ here: false, invites: [word] }), word).toEqual([word]);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: six words").toBe(6);
+    expect(seatWords({ here: false, invites: ["sent", "bounced"] })).toEqual(["sent", "bounced"]);
+    expect(seatWords({ here: false, invites: ["bounced", "sent"] }), "order is kept, not sorted").toEqual(["bounced", "sent"]);
+  });
+
+  it("returns a copy: the seat's own list is not handed out to be changed", () => {
+    const invites: SeatInviteWord[] = ["sent"];
+    const out = seatWords({ here: false, invites });
+    out.push("bounced");
+    expect(invites).toEqual(["sent"]);
+  });
+});
+
+describe("SEAT_WORD_KEYS", () => {
+  it("is the invite words' keys plus 'here', one key each, and every key resolves in all four locales", () => {
+    expect(SEAT_WORD_KEYS.here).toBe("arbiter.column.here");
+    for (const w of [...INVITE_WORDS, "not_invited"] as const) expect(SEAT_WORD_KEYS[w], w).toBe(INVITE_WORD_KEYS[w]);
+    let checked = 0;
+    for (const locale of LOCALES) {
+      for (const key of Object.values(SEAT_WORD_KEYS)) {
+        expect((DICTS[locale]![key] ?? "").trim().length, `${locale}: ${key}`).toBeGreaterThan(0);
+        checked += 1;
+      }
+    }
+    expect(checked, "anti-vacuity: 7 words x 4 locales").toBe(28);
   });
 });

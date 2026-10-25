@@ -24,7 +24,7 @@ import fr from "@/dictionaries/fr/ui.json";
 import nl from "@/dictionaries/nl/ui.json";
 import { EXTEND_REFUSAL_KEYS, EXTEND_ROUND_MIXED_WHY_KEY, EXTEND_ROUND_SKIP_COPY, EXTEND_WHY_KEYS } from "@/lib/checkin-extend";
 import { LOCALES, type Locale } from "@/lib/i18n-constants";
-import { INVITE_WORD_KEYS } from "@/lib/invite-status";
+import { INVITE_WORD_KEYS, SEAT_WORD_KEYS } from "@/lib/invite-status";
 import {
   OPEN_ROUND_ALREADY_OPEN_KEY,
   OPEN_ROUND_INVITED_KEY,
@@ -158,6 +158,7 @@ const NON_NULL = <T>(xs: readonly (T | null)[]): T[] => xs.filter((x): x is T =>
 /** Each map or table the column reads, with its keys read from the declaration and not typed here. */
 const MAPS: Record<string, readonly string[]> = {
   "INVITE_WORD_KEYS": Object.values(INVITE_WORD_KEYS),
+  "SEAT_WORD_KEYS": Object.values(SEAT_WORD_KEYS),
   "HELD_TITLE_KEYS": Object.values(HELD_TITLE_KEYS),
   "heldBody (each reason, each revoked seat)": heldBodyKeys(),
   "OPEN_ROUND_REFUSAL_KEYS": Object.values(OPEN_ROUND_REFUSAL_KEYS),
@@ -194,6 +195,9 @@ const NON_LITERAL_SITES: Record<string, readonly Site[]> = {
     { expr: "body.key", maps: ["heldBody (each reason, each revoked seat)"] },
   ],
   "components/v2/desk/open-round-control.tsx": [
+    // The reopen/reinvite confirmation's per-seat words (Task 16 D2): the waiting list's words, through the one `seatWords` helper.
+    { expr: 'colour === "white" ? "arbiter.colour.white" : "arbiter.colour.black"', arms: true },
+    { expr: "SEAT_WORD_KEYS[w] as MessageKey", maps: ["SEAT_WORD_KEYS"] },
     { expr: "OPEN_ROUND_REFUSAL_KEYS[r.reason] as MessageKey", maps: ["OPEN_ROUND_REFUSAL_KEYS"] },
     { expr: "OPEN_ROUND_INVITED_KEY", maps: ["OPEN_ROUND_ALREADY_OPEN_KEY and OPEN_ROUND_INVITED_KEY (the open's answers)"] },
     { expr: "OPEN_ROUND_ALREADY_OPEN_KEY as MessageKey", maps: ["OPEN_ROUND_ALREADY_OPEN_KEY and OPEN_ROUND_INVITED_KEY (the open's answers)"] },
@@ -374,7 +378,7 @@ describe("a call whose key is not a literal is pinned, and tied to the map that 
       sites += NON_LITERAL_SITES[name]!.length;
     }
     expect(files, "anti-vacuity: the column's files, three helpers and the two functions").toBe(COLUMN_FILES.length + HELPER_FILES.length + 2);
-    expect(sites, "anti-vacuity: fourteen sites are pinned").toBe(14);
+    expect(sites, "anti-vacuity: sixteen sites are pinned").toBe(16);
   });
 
   it("a variable key added to the column's file is caught by the pin (a scratch copy with msg(someNewVar) differs from the list)", () => {
@@ -406,7 +410,7 @@ describe("a call whose key is not a literal is pinned, and tied to the map that 
         accounted += 1;
       }
     }
-    expect(accounted, "anti-vacuity: all fourteen sites accounted for").toBe(14);
+    expect(accounted, "anti-vacuity: all sixteen sites accounted for").toBe(16);
   });
 });
 
