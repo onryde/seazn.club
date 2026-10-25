@@ -261,10 +261,11 @@ export async function unlinkLichess(userId: string): Promise<void> {
      where user_id = ${userId} and provider = 'lichess'`;
 }
 
-/** REGISTRATION gate — a link is required to enter an online division.
- *  Deliberately NOT a consent gate: a player registers long before consent is
- *  needed, and §3.1 owes re-consent "before their first online fixture", not
- *  before signup. The consent gate is assertLichessConsentForPlay. */
+/** REGISTRATION gate - a Lichess link that PLAYS is required to enter an online division, the same bar the seat gate
+ *  (`assertLichessConsentForPlay`) holds the player to (owner 2026-10-25: reverses the earlier "register first, consent
+ *  before the first fixture" reading, so a player is told to reconnect when they sign up and not when they are turned away
+ *  at the board). Two refusals, as at the seat: no link is `LICHESS_LINK_REQUIRED`; a link `lichessGrantPlays` refuses
+ *  (identity-only, or short of a play scope) is `LICHESS_RECONSENT_REQUIRED`. */
 export async function assertUserHasLichessForOnlinePlay(userId: string | null): Promise<void> {
   if (!userId) {
     throw new HttpError(
@@ -273,11 +274,19 @@ export async function assertUserHasLichessForOnlinePlay(userId: string | null): 
       "LICHESS_LINK_REQUIRED",
     );
   }
-  if (!(await getLichessLink(userId))) {
+  const link = await getLichessLink(userId);
+  if (!link) {
     throw new HttpError(
       422,
       "Link your Lichess account in Settings before registering for online play",
       "LICHESS_LINK_REQUIRED",
+    );
+  }
+  if (!lichessGrantPlays(link)) {
+    throw new HttpError(
+      422,
+      "Reconnect your Lichess account so Seazn can submit your moves before registering for online play",
+      "LICHESS_RECONSENT_REQUIRED",
     );
   }
 }

@@ -101,12 +101,15 @@ import { act } from "../external-play/play";
 import { writeResultFrom } from "../external-play/result";
 import { forgetOnlineChessFlagCache } from "../external-play/online-chess-flag";
 import {
+  linkWithoutPlayConsent,
+  reconnectLichess,
   seedOnlineChessFixture,
   seedOnlineChessRound,
   seedOwner,
   seedPlayer,
   type SeedOnlineChessRoundResult,
 } from "./_external-play-seed";
+import { PLAY_SCOPES } from "../external-accounts";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -623,6 +626,103 @@ describe.skipIf(!HAS_DB)("gate: the Lichess link demanded at sign-up", () => {
       checked++;
     }
     expect(checked).toBe(FLAG_STATES.length);
+  });
+
+  // Owner ruling 2026-10-25: a link the seat gate refuses (identity-only, or short of a play scope) is not "linked" for
+  // registration either - the player is told to RECONNECT, before they enter. Asked as the club, like the demand above.
+  const soloEntry = (divisionId: string) => ({
+    division_id: divisionId,
+    entrant_kind: "individual" as const,
+    registering_self: true,
+    players: [{ full_name: "Solo Player" }],
+    answers: {},
+  });
+
+  it("registration: a signed-in registrant whose link cannot play is refused 422 LICHESS_RECONSENT_REQUIRED with the flag on; flag OFF or PostHog throwing confirms the entry", async () => {
+    let checked = 0;
+    for (const s of FLAG_STATES) {
+      overrideOn();
+      const g = await onlineRegistration("individual", "auto");
+      const me = await seedPlayer(g.owner.orgId, "Identity Only", `io${randomUUID().slice(0, 6)}`, false);
+      await linkWithoutPlayConsent(me, "identity-only");
+      flagIs(s);
+      const submitted = submitRegistrationGroup(
+        { orgSlug: g.orgSlug, compSlug: g.compSlug, sessionUserId: me.userId },
+        { contact: contact(), privacy_consent: true, entries: [soloEntry(g.divisionId)] },
+      );
+      if (s.offered) expect(await refusal(submitted), s.label).toEqual({ status: 422, code: "LICHESS_RECONSENT_REQUIRED" });
+      else expect((await submitted).entries.map((e) => e.status), s.label).toEqual(["confirmed"]);
+      expectAsked(g.owner.orgId, g.owner.orgId);
+      checked++;
+    }
+    expect(checked).toBe(FLAG_STATES.length);
+  });
+
+  it("registration: a grant short of ANY one play scope is refused as reconnect (one case per declared scope); a registrant with no link is still told to LINK", async () => {
+    let checked = 0;
+    for (const dropped of PLAY_SCOPES) {
+      overrideOn();
+      const g = await onlineRegistration("individual", "auto");
+      const me = await seedPlayer(g.owner.orgId, "Narrow", `nw${randomUUID().slice(0, 6)}`, false);
+      await linkWithoutPlayConsent(me, { without: dropped });
+      flagIs(FLAG_STATES[0]!);
+      expect(
+        await refusal(submitRegistrationGroup({ orgSlug: g.orgSlug, compSlug: g.compSlug, sessionUserId: me.userId }, { contact: contact(), privacy_consent: true, entries: [soloEntry(g.divisionId)] })),
+        dropped,
+      ).toEqual({ status: 422, code: "LICHESS_RECONSENT_REQUIRED" });
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every play scope swept").toBe(PLAY_SCOPES.length);
+    overrideOn();
+    const g = await onlineRegistration("individual", "auto");
+    const nobody = await seedPlayer(g.owner.orgId, "No Link", `nl${randomUUID().slice(0, 6)}`, false);
+    flagIs(FLAG_STATES[0]!);
+    expect(
+      await refusal(submitRegistrationGroup({ orgSlug: g.orgSlug, compSlug: g.compSlug, sessionUserId: nobody.userId }, { contact: contact(), privacy_consent: true, entries: [soloEntry(g.divisionId)] })),
+    ).toEqual({ status: 422, code: "LICHESS_LINK_REQUIRED" });
+  });
+
+  it("registration, the sequence: refused as reconnect, the player reconnects, the same submit now confirms", async () => {
+    overrideOn();
+    const g = await onlineRegistration("individual", "auto");
+    const me = await seedPlayer(g.owner.orgId, "Comes Back", `cb${randomUUID().slice(0, 6)}`, false);
+    await linkWithoutPlayConsent(me, "identity-only");
+    flagIs(FLAG_STATES[0]!);
+    const submit = () =>
+      submitRegistrationGroup({ orgSlug: g.orgSlug, compSlug: g.compSlug, sessionUserId: me.userId }, { contact: contact(), privacy_consent: true, entries: [soloEntry(g.divisionId)] });
+
+    expect(await refusal(submit())).toEqual({ status: 422, code: "LICHESS_RECONSENT_REQUIRED" });
+    await reconnectLichess(me);
+
+    expect((await submit()).entries.map((e) => e.status)).toEqual(["confirmed"]);
+  });
+
+  it("the join link: a signed-in joiner whose link cannot play is refused as reconnect, before the next check (privacy consent)", async () => {
+    overrideOn();
+    const g = await onlineRegistration("team", "manual");
+    flagIs(FLAG_STATES[1]!);
+    const res = await submitRegistrationGroup(
+      { orgSlug: g.orgSlug, compSlug: g.compSlug },
+      { contact: contact(), privacy_consent: true, entries: [{ division_id: g.divisionId, entrant_kind: "team", team_name: "Knights", players: [], answers: {} }] },
+    );
+    const joinCode = res.entries[0]!.join_code!;
+    const joiner = await seedPlayer(g.owner.orgId, "Joiner", `jn${randomUUID().slice(0, 6)}`, false);
+    await linkWithoutPlayConsent(joiner, "identity-only");
+    flagIs(FLAG_STATES[0]!);
+
+    // privacy_consent false: the check that comes AFTER the link demand, so the answer tells the gates apart.
+    const err = await joinTeamEntry({ sessionUserId: joiner.userId }, { join_code: joinCode, player: { full_name: "Joiner" }, privacy_consent: false }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toMatchObject({ status: 422, code: "LICHESS_RECONSENT_REQUIRED" });
+
+    await reconnectLichess(joiner);
+    const next = await joinTeamEntry({ sessionUserId: joiner.userId }, { join_code: joinCode, player: { full_name: "Joiner" }, privacy_consent: false }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(next, "reconnected: on to the next check").toMatchObject({ status: 422, message: "Please agree to the privacy policy to join" });
   });
 
   it("the join link: flag ON demands the link; flag OFF or PostHog throwing moves on to the next check (privacy consent)", async () => {

@@ -523,6 +523,16 @@ export function RegisterStepper({
                     {t("register.lichessLinkCta")}
                   </a>
                 </p>
+              ) : submitError.code === "LICHESS_RECONSENT_REQUIRED" ? (
+                // The link is there but cannot play (the registration gate refuses what the seat gate refuses): the same
+                // start, back to this registration, under the reconnect words.
+                <p className="text-sm text-ink">
+                  {t("register.lichessReconnectRequired")}{" "}
+                  {/* `ph-no-capture`: the return path carries the team's join code (`?join=`), url-encoded into this href. */}
+                  <a href={lichessLinkStartHref(orgSlug, lichessReturn)} className="ph-no-capture font-medium underline" data-testid="register-lichess-reconnect-link">
+                    {t("register.lichess.reconnect.cta")}
+                  </a>
+                </p>
               ) : (
                 <p className="text-xs text-ink-muted">{submitError.detail}</p>
               )}

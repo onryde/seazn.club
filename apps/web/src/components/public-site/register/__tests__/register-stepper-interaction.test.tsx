@@ -1877,7 +1877,7 @@ describe("step 5 — REVIEW→PAY line items", () => {
 // I5 (T16 fix round 1): the consent step offers the Lichess link for the SELECTED online divisions, starting back to
 // this registration — driven through the real stepper, from WHO to CONSENT, so the wiring (not just the card) is proven.
 describe("step 4 — the Lichess link on CONSENT (I5)", () => {
-  const UNLINKED: RegisterLichessState = { configured: true, linkedUsername: null, flash: null };
+  const UNLINKED: RegisterLichessState = { configured: true, linkedUsername: null, needsReconsent: false, flash: null };
   async function reachConsent(division: DivisionLike, lichess: RegisterLichessState | null) {
     const m = mount([division], undefined, { lichess });
     (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Alex Test", email: "alex@example.com" });
@@ -2044,6 +2044,43 @@ describe("step 5 — submit", () => {
     expect(propsOf(links[0]!).href).toBe(
       `/api/auth/lichess?org=${ORG_SLUG}&next=${encodeURIComponent(`/shared/${ORG_SLUG}/${COMPETITION_SLUG}/register`)}`,
     );
+  });
+
+  // Owner ruling 2026-10-25: a link the seat gate refuses is refused at registration too, as LICHESS_RECONSENT_REQUIRED.
+  // The review step's backstop must say RECONNECT (its own localized sentence, from the dictionary) and offer the same
+  // start - back to this registration - under the reconnect label; and it must not say "link".
+  it("LICHESS_RECONSENT_REQUIRED: says to RECONNECT, in the dictionary's words, and offers the start back to this registration", async () => {
+    apiV1Mock.impl.mockRejectedValueOnce(
+      new ApiV1Error("Reconnect your Lichess account so Seazn can submit your moves before registering for online play", 422, "LICHESS_RECONSENT_REQUIRED"),
+    );
+    const { island } = await reachReview();
+    const btn = island.tree().find((e) => e.type === "button" && textOf(e) === "Enter the competition");
+    await (propsOf(btn!).onClick as () => Promise<void>)();
+
+    const { secondary } = alertBlock(island);
+    expect(textOf(secondary)).toContain(String(EN_UI["register.lichessReconnectRequired"]));
+    expect(textOf(secondary)).not.toContain(String(EN_UI["register.lichessLinkRequired"]));
+    const links = island.tree().filter((e) => propsOf(e)["data-testid"] === "register-lichess-reconnect-link");
+    expect(links, "exactly one reconnect link").toHaveLength(1);
+    expect(propsOf(links[0]!).href).toBe(
+      `/api/auth/lichess?org=${ORG_SLUG}&next=${encodeURIComponent(`/shared/${ORG_SLUG}/${COMPETITION_SLUG}/register`)}`,
+    );
+    expect(textOf(links[0]!)).toBe(String(EN_UI["register.lichess.reconnect.cta"]));
+    // The pair: the "link" affordance is not offered for this reason, and a "link" refusal offers no reconnect.
+    expect(island.tree().filter((e) => propsOf(e)["data-testid"] === "register-lichess-link")).toHaveLength(0);
+  });
+
+  it("LICHESS_LINK_REQUIRED keeps its own copy and offers no reconnect (negative pair of the above)", async () => {
+    apiV1Mock.impl.mockRejectedValueOnce(
+      new ApiV1Error("Link your Lichess account in Settings before registering for online play", 422, "LICHESS_LINK_REQUIRED"),
+    );
+    const { island } = await reachReview();
+    const btn = island.tree().find((e) => e.type === "button" && textOf(e) === "Enter the competition");
+    await (propsOf(btn!).onClick as () => Promise<void>)();
+
+    expect(textOf(alertBlock(island).secondary)).toContain(String(EN_UI["register.lichessLinkRequired"]));
+    expect(island.tree().filter((e) => propsOf(e)["data-testid"] === "register-lichess-reconnect-link")).toHaveLength(0);
+    expect(island.tree().filter((e) => propsOf(e)["data-testid"] === "register-lichess-link")).toHaveLength(1);
   });
 
   it("a CONFLICT failure (409 — a concurrent checkout-mint race) shows the retry-bucket message, not the rejected one", async () => {

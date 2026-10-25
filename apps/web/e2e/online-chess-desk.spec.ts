@@ -1534,11 +1534,18 @@ test.describe("online chess — registration (I5)", () => {
 
   /** WHO → (ENTRIES) → DETAILS → CONSENT, through the real stepper. A competition with one open division skips
    *  ENTRIES (its one entry is added for the player); with several, "Add an entry" on this division's card. */
-  async function toConsent(page: Page, divisionName: string, who: { name: string; email: string }): Promise<void> {
+  async function toConsent(page: Page, divisionName: string, who: { name: string; email: string; playing?: boolean }): Promise<void> {
     const next = () => page.getByRole("button", { name: /^next$/i }).click();
     await page.locator("#reg-who-name").fill(who.name);
     const email = page.locator("#reg-who-email");
     if (await email.isEditable()) await email.fill(who.email);
+    // "I'm playing": the one entry is then linked to the registrant, so the submit asks THEIR Lichess link (a registrant who
+    // is not playing is refused as unlinked before any link is looked at).
+    if (who.playing) {
+      await page.getByTestId("reg-who-playing").check();
+      // Playing makes the date of birth required (register/validation.ts whoFieldRequirements); a gender only when the division asks.
+      await page.locator("#reg-who-dob").fill("1990-04-12");
+    }
     await next();
     const add = page.getByRole("button", { name: uiEn["register.entries.add.individual"] });
     const roster = page.getByTestId("reg-roster-name").first();
@@ -1622,6 +1629,68 @@ test.describe("online chess — registration (I5)", () => {
     await expect(back.getByTestId("register-lichess-flash")).toHaveCount(0);
     expect(await noSidewaysScroll(p)).toBe(3);
     await shoot(p, "register-lichess-linked");
+    await ctx.close();
+  });
+
+  // Owner ruling 2026-10-25: a link the seat gate refuses (here the identity-only row the first Lichess flow wrote - no
+  // token, no consent, no scopes) is refused at registration too, with the RECONNECT reason. The card says so up front, and
+  // a submit that goes ahead anyway meets the same words and the same start. The pair: no "linked" tick, no "link" prompt.
+  test("a player whose Lichess link cannot play is told to reconnect: on the consent step, and again if they submit anyway", async ({
+    browser,
+    request,
+  }) => {
+    test.setTimeout(180_000);
+    const reg = await openOnlineRegistration(request);
+    const player = await seedUser(`Cy Nakamura ${Date.now() % 1e5}`);
+    const lichessId = `e2e-idonly-${Date.now() % 1e8}`;
+    await withDb(
+      (sql) => sql`
+        insert into user_external_accounts (user_id, provider, external_user_id, username)
+        values (${player.userId}, 'lichess', ${lichessId}, ${lichessId})`,
+    );
+    const ctx = await cold(browser);
+    const p = await ctx.newPage();
+    await p.setViewportSize({ width: 1280, height: 900 });
+    await loginUi(p, player.email, reg.registerPath);
+    await p.waitForURL((u) => u.pathname === reg.registerPath);
+    await toConsent(p, reg.divisionName, { name: "Cy Nakamura", email: player.email, playing: true });
+
+    const card = p.getByTestId("register-lichess-card");
+    await expect(card).toBeVisible();
+    await expect(card).toContainText(uiEn["register.lichess.reconnect.title"]!);
+    await expect(card).toContainText(fill("register.lichess.reconnect.lead.one", { divisions: reg.divisionName }));
+    await expect(card.getByTestId("register-lichess-needs-reconnect")).toHaveText(fill("settings.account.lichess.linkedAs", { username: lichessId }));
+    await expect(card, "not the link prompt").not.toContainText(uiEn["register.lichess.title"]!);
+    await expect(card.getByTestId("register-lichess-linked"), "no done tick").toHaveCount(0);
+    await expect(card.getByTestId("register-lichess-start"), "no link start").toHaveCount(0);
+    if (CONFIGURED) {
+      const go = card.getByTestId("register-lichess-reconnect");
+      await expect(go).toHaveText(uiEn["register.lichess.reconnect.cta"]!);
+      const href = new URL((await go.getAttribute("href"))!, "https://seazn.test");
+      expect(href.origin, "same origin").toBe("https://seazn.test");
+      expect(href.searchParams.get("org")).toBe(reg.orgSlug);
+      expect(href.searchParams.get("next"), "the reconnect comes back to this registration").toBe(reg.registerPath);
+      await tappable(p, go, "Reconnect my Lichess account");
+    } else {
+      await expect(card).toContainText(uiEn["settings.account.lichess.notConfigured"]!);
+    }
+    expect(await noSidewaysScroll(p)).toBe(3);
+    await shoot(p, "register-lichess-reconnect");
+
+    // Going ahead anyway: the server refuses (LICHESS_RECONSENT_REQUIRED) and the review step says RECONNECT, not link.
+    await p.locator("#reg-consent-privacy").check();
+    await p.getByRole("button", { name: /^next$/i }).click();
+    await p.getByTestId("reg-submit").click();
+    const refused = p.getByRole("alert").filter({ hasText: uiEn["register.lichessReconnectRequired"]! });
+    await expect(refused).toBeVisible({ timeout: 30_000 });
+    await expect(refused.getByTestId("register-lichess-reconnect-link")).toHaveText(uiEn["register.lichess.reconnect.cta"]!);
+    await expect(p.getByTestId("register-lichess-link"), "the link prompt is not this refusal's").toHaveCount(0);
+    await expect(p.getByText(uiEn["register.lichessLinkRequired"]!)).toHaveCount(0);
+    const again = new URL((await refused.getByTestId("register-lichess-reconnect-link").getAttribute("href"))!, "https://seazn.test");
+    expect(again.searchParams.get("org")).toBe(reg.orgSlug);
+    expect(again.searchParams.get("next")).toBe(reg.registerPath);
+    expect(await noSidewaysScroll(p)).toBe(3);
+    await shoot(p, "register-lichess-reconnect-refused");
     await ctx.close();
   });
 });

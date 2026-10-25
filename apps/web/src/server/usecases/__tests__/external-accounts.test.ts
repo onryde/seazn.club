@@ -7,6 +7,7 @@ import {
   PLAY_SCOPES,
   assertLichessConsentForPlay,
   assertPersonIdsLinkedForOnlinePlay,
+  assertUserHasLichessForOnlinePlay,
   getLichessAccessToken,
   getLichessLink,
   lichessGrantDowngraded,
@@ -1024,6 +1025,89 @@ describe.skipIf(!HAS_DB)("external-accounts — the roster's link states", () =>
     }
     expect(checked, "anti-vacuity").toBe(4);
     expect(new Set(got.values()), "premise: both verdicts occur").toEqual(new Set(["plays", "reconnect"]));
+  });
+});
+
+// The player's own side of the same ruling (owner 2026-10-25): signing themselves up for an online division refuses
+// exactly the link the seat gate refuses, with the reconnect reason. Expected scopes come from PLAY_SCOPES.
+describe.skipIf(!HAS_DB)("external-accounts - the registrant's own Lichess demand", () => {
+  const refusalOf = async (userId: string | null): Promise<{ status?: number; code?: string; message?: string } | null> =>
+    assertUserHasLichessForOnlinePlay(userId).then(
+      () => null,
+      (e: { status?: number; code?: string; message?: string }) => ({ status: e.status, code: e.code, message: e.message }),
+    );
+
+  it("nobody signed in, and a signed-in player with no link, are asked to LINK (the existing copy)", async () => {
+    expect(await refusalOf(null)).toEqual({
+      status: 422, code: "LICHESS_LINK_REQUIRED", message: "Sign in and link your Lichess account to register for online play",
+    });
+    expect(await refusalOf(await newUser("reg-nolink"))).toEqual({
+      status: 422, code: "LICHESS_LINK_REQUIRED", message: "Link your Lichess account in Settings before registering for online play",
+    });
+  });
+
+  it("a link that lets Seazn submit moves passes - and a wider grant does too", async () => {
+    const full = await newUser("reg-full");
+    await upsertLichessLink(full, { externalUserId: lid("reg-full"), username: "Full", scopes: [...PLAY_SCOPES], token: "lio_t" });
+    const wide = await newUser("reg-wide");
+    await upsertLichessLink(wide, { externalUserId: lid("reg-wide"), username: "Wide", scopes: [...PLAY_SCOPES, "email:read"], token: "lio_t" });
+
+    expect(await refusalOf(full)).toBeNull();
+    expect(await refusalOf(wide)).toBeNull();
+  });
+
+  it("an identity-only link, or a consented grant short of ANY one play scope, is asked to RECONNECT - not to link", async () => {
+    const wantMessage = "Reconnect your Lichess account so Seazn can submit your moves before registering for online play";
+    const identityOnly = await newUser("reg-idonly");
+    await sql`insert into user_external_accounts (user_id, provider, external_user_id, username)
+              values (${identityOnly}, 'lichess', ${lid("reg-idonly")}, 'Legacy')`;
+    expect(await refusalOf(identityOnly)).toEqual({ status: 422, code: "LICHESS_RECONSENT_REQUIRED", message: wantMessage });
+
+    let checked = 0;
+    for (const dropped of PLAY_SCOPES) {
+      const u = await newUser(`reg-without-${dropped.replace(":", "-")}`);
+      await upsertLichessLink(u, {
+        externalUserId: lid("reg-narrow"), username: "Narrow", scopes: PLAY_SCOPES.filter((x) => x !== dropped), token: "lio_t",
+      });
+      expect(await refusalOf(u), dropped).toEqual({ status: 422, code: "LICHESS_RECONSENT_REQUIRED", message: wantMessage });
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every play scope swept").toBe(PLAY_SCOPES.length);
+    // The scopes look right but there is no consent stamp (and so no token): the other half of lichessGrantPlays.
+    const noStamp = await newUser("reg-nostamp");
+    await sql`insert into user_external_accounts (user_id, provider, external_user_id, username, scopes)
+              values (${noStamp}, 'lichess', ${lid("reg-nostamp")}, 'NoStamp', ${[...PLAY_SCOPES]})`;
+    expect(await refusalOf(noStamp)).toMatchObject({ code: "LICHESS_RECONSENT_REQUIRED" });
+  });
+
+  it("refuses by the same verdict as the play gate, row for row (one authority)", async () => {
+    let checked = 0;
+    let refused = 0;
+    for (const scopes of [[...PLAY_SCOPES], PLAY_SCOPES.slice(1), ["email:read"], [...PLAY_SCOPES, "email:read"]]) {
+      const u = await newUser("reg-oracle");
+      await upsertLichessLink(u, { externalUserId: lid("reg-oracle"), username: "O", scopes, token: "lio_t" });
+      const play = await assertLichessConsentForPlay(u).then(() => null, (e: { code?: string }) => e.code);
+      const reg = await refusalOf(u);
+      expect(reg?.code ?? null, scopes.join(",")).toBe(play);
+      checked++;
+      if (play !== null) refused++;
+    }
+    expect(checked, "anti-vacuity").toBe(4);
+    expect(refused, "premise: some rows are refused, some are not").toBe(2);
+  });
+
+  // The sequence the reason exists for: told to reconnect, reconnecting clears it; unlinking turns it back into "link".
+  it("reconnect -> passes; then unlink -> LINK, not reconnect", async () => {
+    const u = await newUser("reg-seq");
+    await sql`insert into user_external_accounts (user_id, provider, external_user_id, username)
+              values (${u}, 'lichess', ${lid("reg-seq")}, 'Legacy')`;
+    expect(await refusalOf(u)).toMatchObject({ code: "LICHESS_RECONSENT_REQUIRED" });
+
+    await upsertLichessLink(u, { externalUserId: lid("reg-seq-2"), username: "Seq", scopes: [...PLAY_SCOPES], token: "lio_t" });
+    expect(await refusalOf(u)).toBeNull();
+
+    await unlinkLichess(u);
+    expect(await refusalOf(u)).toMatchObject({ code: "LICHESS_LINK_REQUIRED" });
   });
 });
 
