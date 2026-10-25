@@ -462,6 +462,31 @@ describe.runIf(HAS_DB)("loadArbiterRound seats: what the invite did", () => {
     expect((await rowsOf(r.orgId, b.fixtureId, "white")).map((x) => x.status)).toEqual(["dead", "sent"]);
   });
 
+  // Final review m4. Today only `chess_invite` writes `fixture_seat` refs, but the outbox is shared (phase 3 moves every email onto it): a
+  // newer row of ANOTHER kind on the same ref and mailbox would become the seat's "latest" and paint its word, drifting from spec 6.1's
+  // word <=> seatOutcome cross-check. Nothing writes such a row yet, so it is a labelled SQL insert; its positive pair is the SAME insert
+  // as a chess_invite row, which does answer - so the ignored row is ignored for its kind and not for the shape of the insert.
+  it("a newer row of another outbox kind on the same seat ref and mailbox is not the seat's word; the same row as a chess_invite is (final review m4)", async () => {
+    const r = await openedRound(1);
+    const b = r.boards[0]!;
+    const [white] = await rowsOf(r.orgId, b.fixtureId, "white");
+    await setStatus(white!.id, "delivered");
+    await stampSeat(b.fixtureId, "white");
+    expect((await seatsOf(r, b.fixtureId)).white.invites, "premise: the chess invite is Delivered").toEqual(["delivered"]);
+
+    const insertRow = (kind: "magic_link" | "chess_invite") => sql`
+      insert into email_outbox (id, kind, ref_type, ref_id, org_id, recipient, subject, transactional, status, expires_at, created_at, status_at)
+      values (${randomUUID()}, ${kind}, ${CHESS_SEAT_REF_TYPE}, ${chessSeatRef(b.fixtureId, "white")}, ${r.orgId}, ${white!.recipient},
+              'm4', true, 'bounced', now() + interval '1 day', now() + interval '1 minute', now() + interval '1 minute')`;
+    await insertRow("magic_link");
+    const rows = await rowsOf(r.orgId, b.fixtureId, "white");
+    expect(rows.map((x) => x.status), "premise: the other kind's row is on file and is the NEWEST on the ref").toEqual(["delivered", "bounced"]);
+    expect((await seatsOf(r, b.fixtureId)).white.invites, "the other kind's Bounced is not the seat's word").toEqual(["delivered"]);
+
+    await insertRow("chess_invite");
+    expect((await seatsOf(r, b.fixtureId)).white.invites, "the same row as a chess_invite IS the word").toEqual(["bounced"]);
+  });
+
   it("two rows that are one mailbox (padding and case): the LATER status answers, whatever order the read returns them in", async () => {
     const r = await openedRound(1);
     const b = r.boards[0]!;

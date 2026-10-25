@@ -515,7 +515,9 @@ async function withSeats(
   const ids = inCheckIn.map((b) => b.row.fixtureId);
   const [checkedInAt, mail] = await Promise.all([
     checkedInAtOfBoards(ids),
-    latestEmailStatus(auth.orgId, CHESS_SEAT_REF_TYPE, ids.flatMap((id) => COLOURS.map((c) => chessSeatRef(id, c)))),
+    // Only the chess invite writes a seat ref today, but the outbox is shared: a row of another kind on the same ref and mailbox would
+    // become the seat's "latest" and paint its word (final review m4). The hook that holds and releases the stamp reads the same kind.
+    latestEmailStatus(auth.orgId, CHESS_SEAT_REF_TYPE, ids.flatMap((id) => COLOURS.map((c) => chessSeatRef(id, c))), "chess_invite"),
   ]);
   // The read orders by ref then lower(recipient), not by time, and keeps two rows that fold to one mailbox only when they differ in
   // padding. `seatInviteWords` lets the LATER row of a mailbox answer, so each seat's rows go in oldest first (ruling M2).
