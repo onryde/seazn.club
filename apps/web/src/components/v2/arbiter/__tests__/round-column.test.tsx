@@ -2330,6 +2330,8 @@ describe("RoundColumn: the playing status offers the round on screen's own press
     expect(cls, "the tap area stays at least 44px tall").toContain("min-h-11");
     expect(cls, "full width on a phone").toContain("w-full");
     expect(cls, "a two-line label (fr, 320 to 375) clears the border").toContain("py-2");
+    // Seen at 320 (final-fix capture): the English label broke at its hyphen and stranded "in" alone on the second line.
+    expect(cls, "a wrapped label breaks into balanced lines, not a stranded last word").toContain("text-balance");
   });
 
   it("the next round waits for it: while the press is owed the next round's Open is quiet; with the press gone the same boards make it primary", () => {

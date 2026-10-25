@@ -157,7 +157,7 @@ export function RoundColumn(p: RoundColumnProps) {
       openRound: p.openRound,
       msg,
       plural,
-      buttonClass: `${BUTTON_PRIMARY} py-2`,
+      buttonClass: `${BUTTON_PRIMARY} py-2 text-balance`,
     });
     // The next round waits for it: a board owed its re-open is not "over", whatever its bridge row says.
     const primary = total > 0 && finished === total && own.owedView === null;
