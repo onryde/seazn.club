@@ -103,6 +103,22 @@ const FLAG: ArbiterFlag = { id: "fl-1", kind: "out_of_band_play", at: iso(NOW - 
 /** Opened ten minutes ago, closes in eight: NOW is inside it. */
 const WINDOW: CheckinExtendState = { canExtend: true, refusal: null, extensionsLeft: CHECKIN_EXTEND_MAX, opensAt: iso(NOW - 10 * MIN), deadlineAt: iso(NOW + 8 * MIN) };
 const SEATS = { white: { here: false, invites: ["sent" as const] }, black: { here: true, invites: [] } };
+/** A clock face read from Intl at test time (never typed), in `tz`: "13:08". The component reads its times in the VENUE's zone (D1). */
+const faceIn = (iso: string, tz?: string) =>
+  new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", ...(tz ? { timeZone: tz } : {}) }).format(new Date(iso));
+/** The machine's own zone: what a component that read the VIEWER's clock instead of the venue's would show. */
+const MACHINE_FACE = faceIn(WINDOW.deadlineAt);
+/** The venue's zone. Whatever zone this runs in (CI is UTC, a laptop is not), it reads the deadline differently from the machine AND from
+ *  UTC, so a column read in the viewer's zone cannot pass: the first of three zones spread across the clock (+9, -7, +13 on this date)
+ *  that does. A fixed venue would agree with the one machine zone that shares its offset - that is how the old Europe/London venue
+ *  passed on a London laptop and went red on CI. */
+const VENUE_TZ: string = (() => {
+  const zone = ["Asia/Tokyo", "America/Los_Angeles", "Pacific/Auckland"].find((z) => faceIn(WINDOW.deadlineAt, z) !== MACHINE_FACE && faceIn(WINDOW.deadlineAt, z) !== faceIn(WINDOW.deadlineAt, "UTC"));
+  if (zone === undefined) throw new Error("no candidate venue zone reads the deadline differently from this machine and from UTC");
+  return zone;
+})();
+/** The deadline as the panel must say it: the venue's wall clock. */
+const venueFace = (iso: string) => faceIn(iso, VENUE_TZ);
 const checkingIn = (id: string, no: number) => boardOf(id, no, { state: { kind: "checking_in" }, checkin: WINDOW, seats: SEATS });
 const finished = (id: string, no: number) => boardOf(id, no, { state: { kind: "result", score: "1-0", noResult: false }, playable: false, flags: [FLAG] });
 
@@ -166,7 +182,7 @@ const DATA = (round: ArbiterRound, over: Partial<RoundColumnData> = {}): RoundCo
   held: [HELD_F5],
   flagged: [FLAGGED_F2(round)],
   ownFlagged: 0,
-  tz: "Europe/London",
+  tz: VENUE_TZ,
   awaitsStart: false,
   ...over,
 });
@@ -266,6 +282,17 @@ describe("on.select reaches ANY board of the round (ruling 4): the queue's 'Revi
   });
 });
 
+// CI fix B: the two answers below name the deadline's time. They read the VENUE's clock (D1), so the expected face is read from Intl in the
+// zone the column is handed - never in the machine's, which is UTC on CI and London on the laptop this was written on.
+describe("the venue clock the expected times are read in", () => {
+  it("is a zone that reads the deadline differently from this machine and from UTC, so a read in the viewer's zone cannot satisfy the answers", () => {
+    // The machine IS UTC on CI, so those two may agree with each other; the venue must differ from both.
+    expect(venueFace(WINDOW.deadlineAt), "not the machine's face").not.toBe(MACHINE_FACE);
+    expect(venueFace(WINDOW.deadlineAt), "not UTC's face").not.toBe(faceIn(WINDOW.deadlineAt, "UTC"));
+    expect(DATA(ROUND([])).tz, "and the column is handed that venue").toBe(VENUE_TZ);
+  });
+});
+
 describe("on.extendBoard selects the board, then extends it (through a waiting row's +5)", () => {
   const rowExtend = (ui: Ui, fixtureId: string) => {
     const hits = byTestid(island(waitingEl(ui)).tree(), "arbiter-waiting-extend", fixtureId);
@@ -291,7 +318,7 @@ describe("on.extendBoard selects the board, then extends it (through a waiting r
     const from = page.indexOf('data-testid="arbiter-decision-group"');
     const decisionArea = page.slice(from, page.indexOf("<aside", from));
     expect(text(decisionArea), "in the decision area").toContain(
-      EN["externalPlay.checkinExtend.notice.board"]!.replace("{minutes}", "5").replace("{n}", "6").replace("{time}", new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(WINDOW.deadlineAt))),
+      EN["externalPlay.checkinExtend.notice.board"]!.replace("{minutes}", "5").replace("{n}", "6").replace("{time}", venueFace(WINDOW.deadlineAt)),
     );
     expect(router.refresh, "the page is re-read after the answer").toHaveBeenCalled();
   });
@@ -335,7 +362,7 @@ describe("on.extendBoard selects the board, then extends it (through a waiting r
     const page = markup(ui);
     const from = page.indexOf('data-testid="arbiter-decision-group"');
     expect(text(page.slice(from, page.indexOf("<aside", from))), "in the decision area").toContain(
-      EN["externalPlay.checkinExtend.notice.board"]!.replace("{minutes}", "5").replace("{n}", "6").replace("{time}", new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(WINDOW.deadlineAt))),
+      EN["externalPlay.checkinExtend.notice.board"]!.replace("{minutes}", "5").replace("{n}", "6").replace("{time}", venueFace(WINDOW.deadlineAt)),
     );
   });
 
