@@ -507,7 +507,28 @@ describe("the reasons a +5 is not offered say what is off, and not what the cloc
 describe("the reopen press says what it does", () => {
   // A round whose every invite failed (press `reopen`) is OPEN already; its press invites everyone again and starts the window now
   // (openRound: kind "reopened"). "Open round" there reads as if the round were not yet open.
-  const OPEN_WORD: Record<Locale, RegExp> = { en: /open/i, es: /abr/i, fr: /ouvr/i, nl: /open/i };
+  // The verb ("abrir", "ouvrir") and its past participle ("abierta", "ouverte"): a label that says the round IS open names the same
+  // wrong action as one that says it is being opened, so the probe has to see both forms (final review m2).
+  const OPEN_WORD: Record<Locale, RegExp> = { en: /open/i, es: /abr|abiert/i, fr: /ouvr|ouvert/i, nl: /open/i };
+
+  it("the probe sees the verb AND the participle in every locale (so a participle in a label cannot slip past it)", () => {
+    // Words typed here, from the languages themselves - not read from the dictionaries or from the probe under test.
+    const SAMPLES: Record<Locale, { verb: string; participle: string; unrelated: string }> = {
+      en: { verb: "Open round", participle: "The round is open", unrelated: "Invite again and restart check-in" },
+      es: { verb: "Abrir ronda", participle: "La ronda esta abierta", unrelated: "Invitar de nuevo y reiniciar el registro" },
+      fr: { verb: "Ouvrir la ronde", participle: "La ronde est ouverte", unrelated: "Inviter de nouveau et relancer l'enregistrement" },
+      nl: { verb: "Ronde openen", participle: "De ronde is open", unrelated: "Nodig opnieuw uit en herstart de check-in" },
+    };
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const s = SAMPLES[locale];
+      expect(s.verb, `${locale}: the verb`).toMatch(OPEN_WORD[locale]);
+      expect(s.participle, `${locale}: the participle`).toMatch(OPEN_WORD[locale]);
+      expect(s.unrelated, `${locale}: a restart is not an open`).not.toMatch(OPEN_WORD[locale]);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: locales checked").toBe(LOCALES.length);
+  });
 
   it("it has a label of its own, which is not the real Open round press and does not say open (4 locales)", () => {
     let checked = 0;
