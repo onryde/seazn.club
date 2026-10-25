@@ -1283,14 +1283,20 @@ test("football v3: group-stage shoot-out points reach the standings (R3.5/Task I
     )
     .toBe(2); // shoot-out WIN pays the draw's 1 plus the bonus's 1, not the flat 3
 
-  const standings = await apiJson<{ rows: { entrantId: string; points: number }[] }>(
+  const standings = await apiJson<{ rows: { entrantId: string; points: number; won: number; drawn: number; lost: number }[] }>(
     page.request,
     `/api/v1/stages/${fixture.data!.stage_id}/standings`,
   );
-  expect(
-    standings.data!.rows.find((r) => r.entrantId === fx.awayEntrantId)?.points,
-    "shoot-out LOSS pays the draw's 1, not the flat 0",
-  ).toBe(1);
+  const home = standings.data!.rows.find((r) => r.entrantId === fx.homeEntrantId);
+  const away = standings.data!.rows.find((r) => r.entrantId === fx.awayEntrantId);
+  expect(away?.points, "shoot-out LOSS pays the draw's 1, not the flat 0").toBe(1);
+  // B2's headline is the booking, not only the points: a shoot-out is a DRAW for
+  // both sides on the table, so a 2 paid as a WIN (W1 D0) is still a red here.
+  for (const [side, row] of [["home", home], ["away", away]] as const) {
+    expect(row?.drawn, `${side}: the shoot-out is booked drawn`).toBe(1);
+    expect(row?.won, `${side}: no win credited`).toBe(0);
+    expect(row?.lost, `${side}: no loss credited`).toBe(0);
+  }
 });
 
 // R8/WS-B2 — the app-side half of "a required attribution item's dead-end
