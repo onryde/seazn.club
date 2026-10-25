@@ -201,3 +201,84 @@ describe("stripDbEchoFromErrors", () => {
     expect(stripDbEchoFromErrors(attr)).toBe(attr);
   });
 });
+
+// Print mode stops where util.inspect stops printing. Nothing past the depth or the array length it shows can reach a line, so
+// walking it is pure cost (a 2M-item array took seconds) and a way to run code (getters, traps) that inspect never runs.
+describe("stripDbEchoFromErrors, bounded by what util.inspect prints", () => {
+  function driverError(): Error & Record<string, unknown> {
+    const err = new Error("duplicate key value") as Error & Record<string, unknown>;
+    err.name = "PostgresError";
+    err.code = "23505";
+    for (const k of DROPPED) err[k] = `${k}: ${SECRET}`;
+    return err;
+  }
+
+  it("an item past the array length inspect prints is not walked: the array it sits in comes back as the SAME array, the item untouched", () => {
+    const limit = inspect.defaultOptions.maxArrayLength as number; // Node's own declaration of what an array prints
+    expect(limit, "premise: Node prints a bounded number of items").toBeGreaterThan(0);
+    const late = driverError();
+    const big: unknown[] = new Array<unknown>(2_000_000).fill(0);
+    big[big.length - 1] = late;
+
+    const out = stripDbEchoFromErrors(big, { maxItems: limit });
+    expect(out, "nothing within the printed items changed, so nothing is copied").toBe(big);
+    expect(out[big.length - 1], "and the unprinted late item was not walked").toBe(late);
+    expect(inspect(out), "the late item is not on the line").not.toContain(SECRET);
+    expect(inspect(out), "premise: inspect elides it rather than printing it").toMatch(/more items/);
+
+    // The same limit does not stop an item inside the printed range, and the copy keeps the unprinted tail as it was.
+    const early = driverError();
+    big[3] = early;
+    const out2 = stripDbEchoFromErrors(big, { maxItems: limit });
+    expect(out2).not.toBe(big);
+    expect(inspect(out2)).not.toContain(SECRET);
+    expect(out2[3]).not.toBe(early);
+    expect(out2[big.length - 1]).toBe(late);
+    expect(out2.length).toBe(big.length);
+  });
+
+  it("an error nested deeper than inspect prints is not walked; one level shallower it is (the depth is what stops it)", () => {
+    const depth = inspect.defaultOptions.depth as number;
+    expect(depth, "premise: Node prints a bounded depth").toBeGreaterThanOrEqual(0);
+    const err = driverError();
+    // `err` sits at nesting level depth+2 (the argument is level 0): inspect prints the level before it as [Object].
+    let nested: Record<string, unknown> = { err };
+    for (let i = 0; i < depth + 1; i++) nested = { next: nested };
+    const text = inspect(nested);
+    expect(text, "premise: inspect does not print it").not.toContain(SECRET);
+    expect(text).toContain("[Object]");
+
+    const out = stripDbEchoFromErrors(nested, { depth });
+    expect(out, "nothing within the printed depth changed").toBe(nested);
+
+    const reached = stripDbEchoFromErrors(nested, { depth: depth + 3 });
+    expect(reached).not.toBe(nested);
+    expect(inspect(reached, { depth: depth + 6 }), "with a depth that reaches it, the strip does").not.toContain(SECRET);
+  });
+
+  it("with no bounds it walks everything the data form does (an error three levels down is stripped)", () => {
+    const nested = { a: { b: { c: [driverError()] } } };
+    expect(inspect(stripDbEchoFromErrors(nested), { depth: 8 })).not.toContain(SECRET);
+  });
+
+  it("an accessor is copied as an accessor and never called (inspect shows [Getter] and does not call it); the rest of the object is stripped", () => {
+    let calls = 0;
+    const holder: Record<string, unknown> = { err: driverError(), note: "kept" };
+    Object.defineProperty(holder, "lazy", {
+      enumerable: true,
+      get() {
+        calls += 1;
+        throw new Error("a getter inspect would never have run");
+      },
+    });
+    const out = stripDbEchoFromErrors(holder, { depth: 2, maxItems: 100 });
+    expect(calls, "the getter was not called").toBe(0);
+    expect(Object.is(out, holder), "the error inside was stripped, so the holder is a copy").toBe(false); // (not.toBe would diff the two and call the getter itself)
+    expect(Object.getOwnPropertyDescriptor(out, "lazy")?.get, "still an accessor on the copy").toBeTypeOf("function");
+    expect(out.note).toBe("kept");
+    expect(inspect(out)).not.toContain(SECRET);
+    expect(inspect(out)).toContain("[Getter]");
+    expect(calls, "printing it does not call it either").toBe(0);
+  });
+});
+

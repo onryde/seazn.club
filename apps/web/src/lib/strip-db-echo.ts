@@ -12,6 +12,10 @@
 //
 // What stays is what says WHAT went wrong: name, message, code, constraint_name, table_name, column_name, schema_name, stack.
 //
+// The strip goes by field NAME on any error-shaped value (a message and a stack), not by where the error came from: a non-database
+// error that happens to carry a `detail` (a Stripe error's, say) loses it too, exactly as in the logger's and Sentry's hooks. That
+// is the accepted trade for not having to know an error's origin.
+//
 // Used at four seams, because an error reaches the outside world by four routes: pino's `err` serializer (server/logger.ts,
 // which also feeds Sentry Logs through pinoIntegration), Sentry's `beforeSend` (the console breadcrumb that Next's own
 // `console.error(err)` leaves on an event, and any `extra` that carries an error) and `beforeSendLog` (a log attribute that
@@ -52,21 +56,52 @@ function isPlain(v: object): boolean {
  * a branch with nothing to strip keeps its original reference, and a thing that is not data (a string, a Date, a class
  * instance that is not an error) is left as it is. An `Error` instance comes back as a plain object carrying its name,
  * message and stack (all non-enumerable on the original, so absent from `JSON.stringify`) and its own enumerable fields.
+ *
+ * A reference from below a node back up to it (`e.self = e`, a cause cycle, a holder that contains itself) lands on the node's
+ * COPY, so a cycle stays a cycle and never hands back the original with its fields. A branch on a cycle is therefore always a
+ * copy.
  */
 export function stripDbEcho<T>(value: T): T {
-  return walk(value, new WeakMap(), 0, false) as T;
+  return walk(value, { seen: new WeakMap(), print: false, depthLimit: MAX_DEPTH, maxItems: Infinity }, 0) as T;
+}
+
+/** How far a print-mode walk goes: `util.inspect`'s own depth and array length, which the caller reads from `inspect.defaultOptions`. */
+export interface PrintBounds {
+  /** Nesting levels printed below the argument (inspect `depth`); omitted = as deep as `stripDbEcho` goes. */
+  depth?: number;
+  /** Array items printed (inspect `maxArrayLength`); omitted = all. */
+  maxItems?: number;
 }
 
 /**
- * The same strip, for a value about to be PRINTED. The only differences are in what the output is made of: an `Error` instance
- * comes back as an `Error` of the same class (same prototype, same message, name and stack, its `cause` and `errors` carried as
- * the non-enumerable own properties they are), not as a plain object, so `util.inspect` renders it exactly as it rendered the
- * original minus the dropped fields; and an Error with nothing to strip (nor anywhere in its cause chain) comes back as the SAME
- * object rather than a copy. Everything else, the field list, the walk, the depth limit and the cycle handling, is `stripDbEcho`'s
- * own. Nothing is mutated: code that reads `err.detail` after the line is printed still can.
+ * The same strip, for a value about to be PRINTED. The only differences are in what the output is made of and how far it looks:
+ *  - an `Error` instance comes back as an `Error` of the same class (same prototype, same message, name and stack, its `cause`
+ *    and `errors` carried as the non-enumerable own properties they are), not as a plain object, so `util.inspect` renders it
+ *    exactly as it rendered the original minus the dropped fields; and an Error with nothing to strip (nor anywhere in its cause
+ *    chain) comes back as the SAME object rather than a copy;
+ *  - it stops where `util.inspect` stops printing (`bounds`): a node deeper than `depth`, or an array item past `maxItems`, can
+ *    never reach a line, so it is neither walked nor copied (it is left exactly as it is);
+ *  - an accessor property is copied as an accessor and never called, as `inspect` shows `[Getter]` without calling it.
+ * Everything else, the field list, the walk and the cycle handling, is `stripDbEcho`'s own. Nothing is mutated: code that reads
+ * `err.detail` after the line is printed still can.
  */
-export function stripDbEchoFromErrors<T>(value: T): T {
-  return walk(value, new WeakMap(), 0, true) as T;
+export function stripDbEchoFromErrors<T>(value: T, bounds: PrintBounds = {}): T {
+  const ctx: Ctx = {
+    seen: new WeakMap(),
+    print: true,
+    depthLimit: Math.min(bounds.depth ?? MAX_DEPTH, MAX_DEPTH),
+    maxItems: bounds.maxItems ?? Infinity,
+  };
+  return walk(value, ctx, 0) as T;
+}
+
+interface Ctx {
+  /** Every node entered so far -> its COPY while it is being built, its result once it is built. */
+  seen: WeakMap<object, unknown>;
+  /** Print mode (`stripDbEchoFromErrors`): Errors stay Errors, accessors are not called. */
+  print: boolean;
+  depthLimit: number;
+  maxItems: number;
 }
 
 const own = (v: object, key: string) => Object.prototype.hasOwnProperty.call(v, key);
@@ -76,35 +111,46 @@ function hide(target: Bag, key: string, value: unknown): void {
   Object.defineProperty(target, key, { value, writable: true, configurable: true, enumerable: false });
 }
 
-function walk(value: unknown, seen: WeakMap<object, unknown>, depth: number, keepErrors: boolean): unknown {
-  if (typeof value !== "object" || value === null || depth > MAX_DEPTH) return value;
-  if (seen.has(value)) return seen.get(value);
+function walk(value: unknown, ctx: Ctx, depth: number): unknown {
+  if (typeof value !== "object" || value === null || depth > ctx.depthLimit) return value;
+  if (ctx.seen.has(value)) return ctx.seen.get(value);
 
   if (Array.isArray(value)) {
-    seen.set(value, value);
-    let copy: unknown[] | undefined;
-    value.forEach((item, i) => {
-      const next = walk(item, seen, depth + 1, keepErrors);
-      if (!Object.is(next, item)) (copy ??= value.slice())[i] = next;
-    });
-    const out = copy ?? value;
-    seen.set(value, out);
-    return out;
+    // Seeded with the copy BEFORE the items are walked: an item that points back at this array must get the copy, not the original.
+    const out = value.slice();
+    ctx.seen.set(value, out);
+    let changed = false;
+    const reach = Math.min(value.length, ctx.maxItems);
+    for (let i = 0; i < reach; i++) {
+      if (!(i in value)) continue;
+      const item: unknown = value[i];
+      const next = walk(item, ctx, depth + 1);
+      if (!Object.is(next, item)) {
+        out[i] = next;
+        changed = true;
+      }
+    }
+    const result = changed ? out : value;
+    ctx.seen.set(value, result);
+    return result;
   }
 
   const isError = value instanceof Error;
   const errorShaped = isError || isErrorShaped(value);
   if (!errorShaped && !isPlain(value)) return value;
 
-  seen.set(value, value);
   const bag = value as Bag;
+  const keepAsError = isError && ctx.print;
   // An Error kept as an Error is built on the same prototype, so it prints under its own class and name.
-  const out: Bag = isError && keepErrors ? Object.create(Object.getPrototypeOf(value) as object | null) : {};
-  let changed = isError && !keepErrors;
+  const out: Bag = keepAsError ? Object.create(Object.getPrototypeOf(value) as object | null) : {};
+  // Seeded with the copy BEFORE anything below is walked (see the array case): `seen.set(value, value)` here handed a
+  // back-reference (`e.self = e`, `e.ctx = { back: e }`, a cause cycle) the original, with its fields, inside the "clean" copy.
+  ctx.seen.set(value, out);
+  // An Error's own name/message/stack are not enumerable; carry them, or the copy would be an empty `{}`. Kept as an Error, the
+  // copy has them as non-enumerable own properties again, and is only a copy when something below it changed.
+  let changed = isError && !ctx.print;
   if (isError) {
-    // An Error's own name/message/stack are not enumerable; carry them, or the copy would be an empty `{}`. Kept as an Error, the
-    // copy has them as non-enumerable own properties again, and is only a copy when something below it changed.
-    if (keepErrors) {
+    if (ctx.print) {
       for (const key of ["name", "message", "stack"]) {
         // An own ENUMERABLE one (PostgresError sets `name` so) is copied with the other enumerable fields below.
         if (own(value, key) && !Object.prototype.propertyIsEnumerable.call(value, key)) hide(out, key, bag[key]);
@@ -118,8 +164,8 @@ function walk(value: unknown, seen: WeakMap<object, unknown>, depth: number, kee
     for (const key of ["cause", "errors"] as const) {
       if (!(key in value)) continue;
       const item = bag[key];
-      const next = walk(item, seen, depth + 1, keepErrors);
-      if (!keepErrors) {
+      const next = walk(item, ctx, depth + 1);
+      if (!ctx.print) {
         out[key] = next;
       } else {
         if (!Object.is(next, item)) changed = true;
@@ -132,12 +178,19 @@ function walk(value: unknown, seen: WeakMap<object, unknown>, depth: number, kee
       changed = true;
       continue;
     }
+    if (ctx.print) {
+      const desc = Object.getOwnPropertyDescriptor(bag, key);
+      if (desc && !("value" in desc)) {
+        Object.defineProperty(out, key, desc);
+        continue;
+      }
+    }
     const item = bag[key];
-    const next = walk(item, seen, depth + 1, keepErrors);
+    const next = walk(item, ctx, depth + 1);
     if (!Object.is(next, item)) changed = true;
     out[key] = next;
   }
   const result = changed ? out : value;
-  seen.set(value, result);
+  ctx.seen.set(value, result);
   return result;
 }
