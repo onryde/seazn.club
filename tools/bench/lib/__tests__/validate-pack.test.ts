@@ -1950,16 +1950,19 @@ describe("validatePack — the stage-config mirror is DRIVEN, key by key", () =>
     // `standingsDelta` path — a real group stage sets 3/1/0 at the STAGE. The
     // division cfg awards 3/1/0; the stage rule awards 10/4/1, so the table is
     // green ONLY if the rule ran.
-    const pack = leaguePack({
+    // W2d T9 (PS-9f): a stored rule is read in the outcome-keyed shape only, as the product reads it — every stored
+    // row was converted by the migration (V472), so the retired `{ base }` shape is a rule the engine refuses, never
+    // silently re-read. No committed pack carries one.
+    const legacy = leaguePack({
       entrants: ["e1", "e2"],
       fixtures: [["f1", "e1", "e2", 3, 1]],
       stage: { points: { base: { win: 10, draw: 4, loss: 1 } } },
       rows: [row("e1", 1, 1, 1, 0, 0, 10), row("e2", 2, 1, 0, 0, 1, 1)],
     });
-    expectClean(validatePack(pack, UNIT), []);
+    const refused = onlyError(validatePack(legacy, UNIT).findings);
+    expect(refused.code).toBe("standings.underivable");
+    expect(refused.message).toContain("points rule the engine refuses");
 
-    // W2d: the outcome-keyed shape pays the same table — a stored rule is read
-    // either way, the legacy one through `legacyPointsRule`.
     const keyed = leaguePack({
       entrants: ["e1", "e2"],
       fixtures: [["f1", "e1", "e2", 3, 1]],

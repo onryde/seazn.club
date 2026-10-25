@@ -1172,9 +1172,20 @@ export async function backdateFixtureStartSql(fixtureId: string, minutesAgo: num
 
 /** Force a stage's status directly (competition-desk e2e: rule 1 — "finished"
  *  requires every stage complete, or no open stage AND no live fixture — so
- *  the "all decided" case needs the stage flipped as well as its fixtures). */
+ *  the "all decided" case needs the stage flipped as well as its fixtures).
+ *
+ *  W2d Task 9: a started stage (active or complete) must carry the table-rules
+ *  pin its activation wrote (spec §5.4, "active or complete ⇒ pinned"), or every
+ *  standings read of it is refused CONFIG_INVALID. This raw write cannot pin, so
+ *  it refuses to start a stage that was never activated through the product
+ *  (generate its fixtures first) rather than leave one the reads refuse. */
 export async function setStageStatusSql(stageId: string, status: string): Promise<void> {
   await withDb(async (sql) => {
+    const rows = await sql<{ pinned: boolean }[]>`select table_rules_pinned is not null as pinned from stages where id = ${stageId}`;
+    if (rows.length !== 1) throw new Error(`setStageStatusSql: no stage ${stageId}`);
+    if ((status === "active" || status === "complete") && !rows[0]!.pinned) {
+      throw new Error(`setStageStatusSql: stage ${stageId} was never activated (no table-rules pin); generate its fixtures before marking it ${status}`);
+    }
     await sql`update stages set status = ${status} where id = ${stageId}`;
   });
 }

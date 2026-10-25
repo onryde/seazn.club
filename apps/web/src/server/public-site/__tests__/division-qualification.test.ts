@@ -22,13 +22,14 @@
 // award flag forced false (→ the award test); bounds not derived (→ the empty
 // case's positive pair, the two-pool test).
 import { describe, expect, it } from "vitest";
-import type { StandingsRow } from "@seazn/engine/competition";
+import { PointsRule, resolveTableRules, type StandingsRow } from "@seazn/engine/competition";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { defaultLineupPair, defaultOrderOf } from "@seazn/engine/testkit";
 import en from "@/dictionaries/en/public.json";
 import { divisionQualification, qualificationFixtures, type QualSnapshot, type QualStage } from "../division-qualification";
-import { divisionAwardAddsToLedger, type QualFixture } from "../qualification-view";
+import { EVERY_OUTCOME, divisionAwardAddsToLedger, type QualFixture } from "../qualification-view";
+import type { StageTableRulesDoc } from "@/server/engine-db/table-rules";
 
 const moduleOf = (key: string) => {
   const m = builtinModules.find((x) => x.key === key);
@@ -73,7 +74,21 @@ const toPlay = (pool: string | null, round: number, home: string, away: string) 
 const walkover = (pool: string | null, round: number, winner: string, loser: string) =>
   fx(pool, round, winner, loser, "forfeited", { kind: "award", winner, loser, reason: "walkover" });
 
-/** A stage row as `public_stages_v` publishes it (V414 meta, snake_case). */
+/** W2d Task 9: a stage's table rules as the one loader serves them (`stageTableRulesDocs`) for an unpinned stage — the
+ *  ENGINE's resolver over the stage's own rule and the sport's layers (its order, its rule), every outcome reachable. */
+function rulesDoc(points: unknown = null): StageTableRulesDoc {
+  const r = resolveTableRules({
+    module: GENERIC,
+    stageKind: "league",
+    mergedCfg: CFG,
+    stageOwn: { points: points === null ? null : PointsRule.parse(points), tiebreakers: null, crossGroup: null },
+    divisionTiebreakers: null,
+    pinned: null,
+  });
+  return { ...r, pinnedAt: null, reachable: [...EVERY_OUTCOME], sportDefault: [...defaultOrderOf(GENERIC)], primary: GENERIC.primaryTableKey };
+}
+
+/** A stage row as `public_stages_v` publishes it (V414 meta, snake_case), with its loaded table rules (W2d Task 9). */
 const stage = (over: Partial<QualStage> = {}): QualStage => ({
   id: "S",
   kind: "league",
@@ -85,6 +100,7 @@ const stage = (over: Partial<QualStage> = {}): QualStage => ({
   has_rank_overrides: false,
   // an unpinned stage (V472): the table is paid by its own rule, so the two columns agree unless a test says otherwise
   table_points_rule: over.points_rule ?? null,
+  table_rules: rulesDoc(over.points_rule ?? null),
   ...over,
 });
 
@@ -102,7 +118,6 @@ function assemble(over: { module_?: AnySportModule | null; config?: unknown; fix
     fixtures: over.fixtures,
     entrantStatuses: Object.fromEntries(over.ids.map((id) => [id, "confirmed"])),
     entrantNames: NAMES,
-    cascade: [...defaultOrderOf(GENERIC)],
   });
 }
 
@@ -126,12 +141,20 @@ const GROUP = stage({ kind: "group", qualify_count: 1, qualify_per_group: true }
 const POOL_IDS = ["e1", "e2", "e3", "e4", "e5", "e6"];
 
 describe("divisionQualification — no status stated first", () => {
-  it("a retired module build (no module, so no bounds) gives no view for any table", () => {
+  it("a retired module build gives no view for any table: the loader cannot resolve its module, so the stage carries no rules", () => {
+    const unread = { ...GROUP, table_rules: null };
     const qual = assemble({ module_: null, fixtures: POOL_FIXTURES, ids: POOL_IDS });
-    expect(qual(GROUP, SNAP_A)).toBeNull();
-    expect(qual(GROUP, SNAP_B)).toBeNull();
+    expect(qual(unread, SNAP_A)).toBeNull();
+    expect(qual(unread, SNAP_B)).toBeNull();
   });
-  it("…its positive pair: the pinned module's bounds give both pools a view", () => {
+  it("W2d T9: a stage with no table rules (the loader refused it, or an older document) gets no view even under a live module — never a guessed order", () => {
+    const qual = assemble({ fixtures: POOL_FIXTURES, ids: POOL_IDS });
+    for (const table_rules of [null, undefined]) {
+      expect(qual({ ...GROUP, table_rules }, SNAP_A)).toBeNull();
+      expect(qual({ ...GROUP, table_rules }, SNAP_B)).toBeNull();
+    }
+  });
+  it("…its positive pair: the stage's loaded rules give both pools a view", () => {
     const qual = assemble({ fixtures: POOL_FIXTURES, ids: POOL_IDS });
     expect(qual(GROUP, SNAP_A)).not.toBeNull();
     expect(qual(GROUP, SNAP_B)).not.toBeNull();
@@ -139,6 +162,8 @@ describe("divisionQualification — no status stated first", () => {
   it("W2c X-PT-1: a retired build gives no view under a stage PointsRule either — its played facts are the module's", () => {
     // The rule has bounds of its own (`pointsRuleBounds`), so only the missing module can refuse here: where the rule's
     // awarded score lands depends on what was played, which only the module reads (ruling 118).
+    // W2d T9: the stage's rule in force is its loaded one (`table_rules.points`); a doc that reaches the builder without
+    // a module is the builder's own contract (the loader itself never serves one for a retired build).
     const ruled = stage({ kind: "group", qualify_count: 1, qualify_per_group: true, points_rule: { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [3, 0] } } });
     const live = assemble({ fixtures: POOL_FIXTURES, ids: POOL_IDS });
     expect(live(ruled, SNAP_A), "premise: the rule's own bounds give a view").not.toBeNull();
@@ -158,10 +183,25 @@ describe("divisionQualification — no status stated first", () => {
     expect(retired(unscoring, SNAP_B)).not.toBeNull();
     expect(retired(scoring, SNAP_A)).toBeNull();
   });
+  it("W2d T9 (T7 carry): whether a stage scores forfeits is read off the rule the table is PAID by (its loaded rules), never its own column — both directions", () => {
+    // A stage's own rule and its rule in force part ways once it is pinned (a migrated pin, a division or sport layer
+    // fixed at start): the forfeit-award read follows the one in force.
+    const RULE = { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0 } };
+    const SCORES = { ...RULE, forfeit: { ...RULE.forfeit, awardScore: [3, 0] } };
+    const base = { kind: "group", qualify_count: 1, qualify_per_group: true } as const;
+    // own rule silent, rule in force scores forfeits → the retired build cannot place it: no view
+    const paidScores = { ...stage({ ...base, points_rule: RULE }), table_rules: rulesDoc(SCORES) };
+    // own rule scores forfeits, rule in force does not → the retired build keeps the rule's view
+    const paidSilent = { ...stage({ ...base, points_rule: SCORES }), table_rules: rulesDoc(RULE) };
+    const retired = assemble({ module_: null, fixtures: POOL_FIXTURES, ids: POOL_IDS });
+    expect(retired(paidScores, SNAP_A)).toBeNull();
+    expect(retired(paidSilent, SNAP_A)).not.toBeNull();
+  });
 });
 
 describe("qualificationFixtures — the played facts the view reads (W2c X-PT-1)", () => {
-  const SCORING = [{ points_rule: { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [3, 0] } } }];
+  // W2d T9 (T7 carry): the rule the table is PAID by (the loader's `table_rules.points`), never the stage's own.
+  const SCORING = [{ table_rules: { points: { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [3, 0] } } } }];
   it("a one-seated award under a scoring stage rule is a bye: played false, never refused for a fact nobody read (fix round 1 I-2)", async () => {
     // `playedFor` refuses a forfeit-shaped fixture whose ledger was not read (CONFIG_INVALID), and a one-seated award is
     // forfeit-shaped but has no ledger to read — only the seated gate keeps that refusal off a public page. Typed and

@@ -646,6 +646,113 @@ describe("no status — stated first, each with its positive pair", () => {
   });
 });
 
+// W2d Task 9 (carry 6; spec D11, X-TB-3): the "ranked first" gate keys on the sport's OWN first measure
+// (`primaryTableKey`), not on `points` alone. Volleyball, badminton and tennis rank on matches won first (FIVB V3-1, BWF
+// 16.2.1, ATP C.3-1): a table led by `wins` is a qualification table there, and its race is run in wins (a win adds 1, a
+// loss 0), never in points. Every shipped sport is swept, counted.
+describe("W2d T9: the table's first measure is the sport's primaryTableKey (carry 6)", () => {
+  /** A Swiss of four, two of three rounds played, whose POINTS do not follow its wins (an FIVB-like 3-2 win pays 2, a
+   *  2-3 loss pays 1): A 2W 4pts, B 1W 4pts, C 1W 3pts, D 0W 2pts. Read in wins it is swiss4; in points it is not. */
+  const splitScene = (): Scene => ({
+    ...swiss4(),
+    rows: [
+      row("A", 1, 2, 2, [6, 4], { points: 4 }),
+      row("B", 2, 1, 2, [5, 3], { points: 4 }),
+      row("C", 3, 1, 2, [4, 5], { points: 3 }),
+      row("D", 4, 0, 2, [4, 6], { points: 2 }),
+    ],
+  });
+  /** The rulebook's wins table as a points rule: a win adds 1, anything else 0 — its bounds are the engine's own. */
+  const WINS_RULE_BOUNDS = pointsRuleBounds(
+    PointsRule.parse({ win: { regulation: 1 }, draw: 0, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole" }),
+    EVERY_OUTCOME,
+  );
+  const engineOn = (measure: "won" | "points", perMatch: NonNullable<typeof BOUNDS>) => {
+    const res = qualificationStatus({
+      rows: splitScene().rows.map((r) => ({ entrantId: r.entrantId, points: r[measure], active: true })),
+      remaining: new Map(["A", "B", "C", "D"].map((id) => [id, 1])),
+      perMatch,
+      cut: 2,
+      anyPlayed: true,
+      complete: false,
+    })!;
+    return ["A", "B", "C", "D"].map((id) => res.get(id)?.status.kind ?? null);
+  };
+  const statusesOf = (v: QualificationView) => ["A", "B", "C", "D"].map((id) => v.rows[id]?.status ?? null);
+
+  it("the sports whose table ranks on matches won first are badminton, tennis and volleyball (their rulebooks), every other on points", () => {
+    const wins = builtinModules.filter((m) => m.primaryTableKey === "wins").map((m) => m.key).sort();
+    expect(wins).toEqual(["badminton", "tennis", "volleyball"]);
+    expect(builtinModules.filter((m) => m.primaryTableKey === "points").length, "anti-vacuity: the points sports").toBeGreaterThan(0);
+  });
+
+  it("premise: the split scene reads differently in wins than in points, so a race run in the wrong measure is seen", () => {
+    expect(engineOn("won", WINS_RULE_BOUNDS!)).not.toEqual(engineOn("points", BOUNDS));
+  });
+
+  it("a wins table races on the wins table's bounds (a win adds 1), never the points rule's (a generic win pays 3): two 2-0 leaders with a round to go are clear of rivals who can reach 1 — every wins sport, counted", () => {
+    // Swiss of four, two of three rounds played: A and B 2-0 (they have not met), C and D 0-2.
+    const clear = (): Scene => ({
+      kind: "swiss",
+      rows: [
+        row("A", 1, 2, 2, [4, 0], { points: 6 }),
+        row("B", 2, 2, 2, [4, 1], { points: 6 }),
+        row("C", 3, 0, 2, [1, 4], { points: 0 }),
+        row("D", 4, 0, 2, [0, 4], { points: 0 }),
+      ],
+      fixtures: [won(1, "A", "C"), won(1, "B", "D"), won(2, "A", "D"), won(2, "B", "C"), open(3, null, null), open(3, null, null)],
+    });
+    const race = (perMatch: NonNullable<typeof BOUNDS>) => {
+      const res = qualificationStatus({
+        rows: clear().rows.map((r) => ({ entrantId: r.entrantId, points: r.won, active: true })),
+        remaining: new Map(["A", "B", "C", "D"].map((id) => [id, 1])),
+        perMatch,
+        cut: 2,
+        anyPlayed: true,
+        complete: false,
+      })!;
+      return ["A", "B", "C", "D"].map((id) => res.get(id)?.status.kind ?? null);
+    };
+    // premise: the bounds differ, and the wins race reads differently under them
+    expect(BOUNDS.max, "the points rule's per-match max").toBeGreaterThan(WINS_RULE_BOUNDS!.max);
+    expect(race(WINS_RULE_BOUNDS!)).not.toEqual(race(BOUNDS));
+    let checked = 0;
+    for (const m of builtinModules.filter((x) => x.primaryTableKey === "wins")) {
+      const v = must(view(clear(), { primary: m.primaryTableKey, cascade: [m.primaryTableKey, "diff"] }));
+      expect(statusesOf(v), `${m.key}: the race in wins, on the wins bounds`).toEqual(race(WINS_RULE_BOUNDS!));
+      checked++;
+    }
+    expect(checked, "the wins sports").toBe(3);
+  });
+
+  it("every sport: led by its primary it shows (in wins: the wins race); led by a step that is neither points nor its primary it shows none", () => {
+    let checked = 0;
+    let byWins = 0;
+    for (const m of builtinModules) {
+      const primary = m.primaryTableKey;
+      const other = primary === "wins" ? "points" : "wins";
+      const led = view(splitScene(), { primary, cascade: [primary, "diff"] });
+      expect(led, `${m.key}: led by its primary (${primary})`).not.toBeNull();
+      expect(view(splitScene(), { primary, cascade: ["diff", primary] }), `${m.key}: led by diff`).toBeNull();
+      if (primary === "wins") {
+        // the race in wins — the engine on the rows' wins under the wins table's bounds, not on their points
+        expect(statusesOf(led!), `${m.key}: the wins race`).toEqual(engineOn("won", WINS_RULE_BOUNDS!));
+        // `points` first is always a points table, and races in points
+        const byPoints = must(view(splitScene(), { primary, cascade: ["points", "wins"] }));
+        expect(statusesOf(byPoints), `${m.key}: led by points`).toEqual(engineOn("points", BOUNDS));
+        byWins++;
+      } else {
+        expect(statusesOf(led!), `${m.key}: the points race`).toEqual(engineOn("points", BOUNDS));
+        // `wins` first is not this sport's first measure: no status
+        expect(view(splitScene(), { primary, cascade: [other, "points"] }), `${m.key}: led by ${other}`).toBeNull();
+      }
+      checked++;
+    }
+    expect(checked, "every shipped sport").toBe(builtinModules.length);
+    expect(byWins, "the wins sports swept").toBe(3);
+  });
+});
+
 describe("statuses equal the engine's on the derived input", () => {
   it("R4: A is 'Win and in', never Through; the line sits after place 2", () => {
     const v = must(view(swiss4()));

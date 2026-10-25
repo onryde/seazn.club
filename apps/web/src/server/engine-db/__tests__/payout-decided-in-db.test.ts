@@ -4,7 +4,6 @@
 // declaration, and each one differs from the regulation pair, so a fold that dropped `decidedIn` (paying every win
 // as regulation) and the rule-less twin (the module's own IIHF 3-2-1-0) both read differently.
 import { afterAll, describe, expect, it } from "vitest";
-import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { getStandings } from "@/server/usecases/stages";
 import { seedBracket } from "./helpers/seed-bracket";
@@ -80,13 +79,9 @@ describe.skipIf(!HAS_DB)("W2d payout through the web fold: how a match was decid
     let checked = 0;
     for (const script of SCRIPTS) {
       const play = async (rule: boolean) => {
-        const s = await seedBracket({ sport: "icehockey", variant: "iihf", stageKind: "league", entrants: 2 });
-        if (rule) {
-          // Raw SQL: the W2c door still refuses a split rule on a division that scores overtime apart
-          // (`pointsRuleExpressible`, lifted later in W2d); the fold reads whatever the stage stores.
-          const n = await sql`update stages set config = config || ${sql.json({ points: RULE } as never)} where id = ${s.stageId}`;
-          expect(n.count, "rig: the stage rule was written").toBe(1);
-        }
+        // Raw SQL before the generate (seedBracket's `stagePoints`): the W2c door still refuses a split rule on a division
+        // that scores overtime apart (`pointsRuleExpressible`, lifted later in W2d); the activation pin carries it.
+        const s = await seedBracket({ sport: "icehockey", variant: "iihf", stageKind: "league", entrants: 2, ...(rule ? { stagePoints: RULE } : {}) });
         const id = s.fixtureIds[0]!;
         const f = await fixtureRow(id);
         const side = (v: unknown) => (v === "H" ? f.home_entrant_id : v === "A" ? f.away_entrant_id : v);

@@ -741,6 +741,68 @@ describe("reconstructSetBasedStream — the stream a pack carries", () => {
     expect(errorsOf(unbound.findings)).toEqual([]);
     expect(codesOf(unbound.findings)).toContain("standings.stage_unbindable");
   });
+
+  it("W2d T9: a stage with no rule of its own is paid by its SPORT's rule, never the sport's ledger points — table tennis's played loss pays 1 (D6)", () => {
+    // The product's standingsDelta fallback is gone (engine-db/competition.ts: the rule always pays), and the bench
+    // mirrors it. Table tennis is the sport whose rule and ledger differ on a played loss (signed row D6,
+    // table-points-parity.test.ts); both numbers are read from the sport's own declarations here.
+    const cfg = cfgFor(tabletennis, "bo5");
+    const rule = tabletennis.tablePointsRule(cfg as never, "league") as { win: { regulation: number }; loss: { regulation: number } };
+    const stream = reconstructSetBasedStream({
+      stage: undefined,
+      variantKey: "bo5",
+      module: tabletennis,
+      cfg,
+      divisionRef: "d",
+      fixtureExtKey: "fx",
+      home: HOME,
+      away: AWAY,
+      rallyType: "tabletennis.rally",
+      sets: [
+        { home: 11, away: 5 },
+        { home: 9, away: 11 },
+        { home: 11, away: 7 },
+        { home: 11, away: 8 },
+      ],
+      seed: 3,
+    });
+    const tablePack = (home: number, away: number) =>
+      unitPack({
+        sportKey: "tabletennis",
+        variantKey: "bo5",
+        moduleVersion: tabletennis.version,
+        streams: [stream],
+        expected: {
+          matches: [
+            {
+              divisionRef: "d",
+              fixtureExtKey: "fx",
+              outcome: { kind: "win", winner: HOME, loser: AWAY, method: "regulation" },
+              perSide: [
+                { entrant: HOME, line: "3" },
+                { entrant: AWAY, line: "1" },
+              ],
+            },
+          ],
+          tables: [
+            {
+              divisionRef: "d",
+              stageRef: "s",
+              rows: [
+                { entrant: HOME, rank: 1, played: 1, won: 1, drawn: 0, lost: 0, points: home },
+                { entrant: AWAY, rank: 2, played: 1, won: 0, drawn: 0, lost: 1, points: away },
+              ],
+            },
+          ],
+        },
+      });
+    expect(rule.loss.regulation, "premise: the rule pays a played loss").toBeGreaterThan(0);
+    const green = validatePack(tablePack(rule.win.regulation, rule.loss.regulation), { expectedSuite: "_unit" });
+    expect(errorsOf(green.findings)).toEqual([]);
+    // Its pair: the ledger's 0 for the loss is now a wrong table.
+    const ledger = validatePack(tablePack(rule.win.regulation, 0), { expectedSuite: "_unit" });
+    expect(codesOf(ledger.findings)).toContain("standings.value");
+  });
 });
 
 describe("fillPeriodMarkers — the whistles a match sheet does not record", () => {

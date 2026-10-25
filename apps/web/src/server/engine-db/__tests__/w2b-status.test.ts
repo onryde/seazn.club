@@ -378,14 +378,11 @@ describe.skipIf(!HAS_DB)("X-PT-1 stage points read a forfeit's played fact from 
   const RULE = { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [], forfeit: { winnerPoints: 2, loserPoints: 0, awardScore: [21, 0] } };
   /** A two-entrant badminton league (with or without the stage rule): `script` runs before the away side withdraws. */
   async function withdrawal(rule: boolean, script: (auth: AuthCtx, id: string, home: string) => Promise<void>) {
-    const s = await seedBracket({ sport: "badminton", variant: "bwf", stageKind: "league", entrants: 2 });
-    // Raw SQL on purpose: since W2c Task 13 no door stores a walkover `awardScore` on a set sport (batch-3 I3: badminton's
-    // table never reads it, `pointsRuleAwardReachesTable`), but the fold must still read a stored one as it did — the keys
-    // it lands on are exactly how this rig tells the rule's award from the sport's credit. Read at the fold, never frozen.
-    if (rule) {
-      const n = await sql`update stages set config = config || ${sql.json({ points: RULE } as never)} where id = ${s.stageId}`;
-      expect(n.count, "rig: the stage rule was written").toBe(1);
-    }
+    // Raw SQL on purpose (seedBracket's `stagePoints`, before the generate so the activation pin carries it): since W2c
+    // Task 13 no door stores a walkover `awardScore` on a set sport (batch-3 I3: badminton's table never reads it,
+    // `pointsRuleAwardReachesTable`), but the fold must still read a stored one as it did — the keys it lands on are
+    // exactly how this rig tells the rule's award from the sport's credit. Read at the fold, never frozen.
+    const s = await seedBracket({ sport: "badminton", variant: "bwf", stageKind: "league", entrants: 2, ...(rule ? { stagePoints: RULE } : {}) });
     const id = s.fixtureIds[0]!;
     const f = await fixtureRow(id);
     await post(s.auth, id, "core.start");
@@ -395,7 +392,7 @@ describe.skipIf(!HAS_DB)("X-PT-1 stage points read a forfeit's played fact from 
     expect([out.status, (out.outcome as { reason?: string }).reason], "rig: the withdrawal decided the fixture").toEqual(["forfeited", "withdrew"]);
     const rows = await standings(s.auth, s.stageId);
     // The public view's read of the same fixture, under a stage that scores forfeits (the loader reads only there).
-    const [qual] = await qualificationFixtures([{ ...(await fixtureRow(id)), stage_id: s.stageId, pool_id: null }], moduleOf("badminton"), [{ points_rule: RULE }]);
+    const [qual] = await qualificationFixtures([{ ...(await fixtureRow(id)), stage_id: s.stageId, pool_id: null }], moduleOf("badminton"), [{ table_rules: { points: RULE } }]);
     return { home: rows.find((r) => r.entrantId === f.home_entrant_id)!, away: rows.find((r) => r.entrantId === f.away_entrant_id)!, qualPlayed: qual!.played };
   }
   const rally = async (auth: AuthCtx, id: string, home: string) => {

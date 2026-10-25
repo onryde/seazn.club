@@ -7,6 +7,7 @@ import "server-only";
 // plain Postgres. The outcome enum keeps failure modes explicit.
 import { sql } from "@/lib/db";
 import { hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
+import { stageTableRulesDocs } from "@/server/engine-db/table-rules";
 import { hasFeature } from "@/lib/entitlements";
 import { resolveSponsors, type ResolvedSponsor } from "@/server/usecases/sponsors";
 import { maskPublicEntrantNames, withCourtVenueNames } from "@/server/public-site/data";
@@ -168,6 +169,10 @@ export async function embedDivisionData(divisionId: string): Promise<EmbedResolu
       left join organizations o on o.id = d.org_id
       where d.id = ${divisionId}`,
   ]);
+
+  // W2d Task 9: every stage's table rules from the one loader, as the division page's document carries them.
+  const tableRules = await stageTableRulesDocs(sql, stages.map((st) => st.id));
+  for (const st of stages) st.table_rules = tableRules[st.id] ?? null;
 
   return {
     ok: true,

@@ -40,6 +40,7 @@ import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
 import { createStages } from "@/server/usecases/stages";
 import { listStageQualificationMeta } from "../stage-qualification";
+import { stageTableRulesDocs } from "@/server/engine-db/table-rules";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -143,13 +144,18 @@ describe.skipIf(!HAS_DB)("listStageQualificationMeta (R1a — the console's V414
       expect(pub.map((r) => r.id), "premise: the view publishes every stage").toEqual(scene.stages.map((s) => s.id));
       const console_ = await listStageQualificationMeta(scene.auth, scene.stages.map((s) => s.id));
       expect([...console_.keys()].sort()).toEqual(pub.map((r) => r.id).sort());
+      // W2d Task 9: the public document's table rules for the same stages — the one loader both read through.
+      const docs = await stageTableRulesDocs(sql, pub.map((r) => r.id));
       for (const row of pub) {
         // The view publishes every one of the function's columns…
         expect(Object.keys(row), `stage ${row.id}`).toEqual(expect.arrayContaining(columns));
         // …and the console returns exactly those, with the same values: no
-        // extra key, no missing one.
-        expect(Object.keys(console_.get(row.id) ?? {}).sort(), `stage ${row.id}`).toEqual([...columns].sort());
-        expect(console_.get(row.id), `stage ${row.id}`).toEqual(pick(row, columns));
+        // extra key, no missing one — plus the stage's table rules (W2d Task 9).
+        const { table_rules, ...meta } = console_.get(row.id) ?? { table_rules: undefined };
+        expect(Object.keys(meta).sort(), `stage ${row.id}`).toEqual([...columns].sort());
+        expect(meta, `stage ${row.id}`).toEqual(pick(row, columns));
+        expect(table_rules, `stage ${row.id}: its table rules are read`).toBeTruthy();
+        expect(table_rules, `stage ${row.id}: the public document's rules`).toEqual(docs[row.id]);
       }
       compared.push(...pub);
     }
@@ -173,7 +179,11 @@ describe.skipIf(!HAS_DB)("listStageQualificationMeta (R1a — the console's V414
     expect([...got.keys()]).toEqual([swiss!.id]);
     // Exactly the function's own row for the stage…
     const [own] = await sql<Record<string, unknown>[]>`select * from stage_qualification_meta(${swiss!.id})`;
-    expect(got.get(swiss!.id)).toEqual(pick(own!, await functionColumns()));
+    const { table_rules, ...meta } = got.get(swiss!.id) ?? { table_rules: undefined };
+    expect(meta).toEqual(pick(own!, await functionColumns()));
+    // …and its table rules (W2d Task 9), read under the same tenant: the loader's.
+    expect(table_rules).toEqual((await stageTableRulesDocs(sql, [swiss!.id]))[swiss!.id]);
+    expect(table_rules, "premise: the rules are read").toBeTruthy();
     // …which is the scene's cut, not an empty one.
     expect(got.get(swiss!.id)).toMatchObject({
       qualify_count: 4,

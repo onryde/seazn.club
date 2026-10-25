@@ -48,14 +48,16 @@ export interface StageQualMeta {
   qualifyPerGroup: boolean;
   nextStageName: string | null;
   swissRounds: number | null;
-  /** The stage's OWN PointsRule (`points_rule`, V414), or null. What the format line prints and what a rule-scored
-   *  forfeit reads; never the pin. */
+  /** The stage's OWN PointsRule (`points_rule`, V414), or null. What the format line prints; never the pin, and never
+   *  what the table or this view reads (W2d T9: a rule-scored forfeit reads `tablePointsRule`, the rule in force). */
   pointsRule: unknown;
   /** V414 (ruling M1): the organiser pinned ranks on this stage. NOT a row's
    *  `rankLocked`, which the engine also sets on every tie settled by lots. */
   hasRankOverrides: boolean;
-  /** W2d (V472, PF-3): the rule the TABLE is paid by (`table_points_rule`) — a started stage's pinned points, else its
-   *  own rule, else null (the sport's points apply). The per-match bounds read this one (`boundsInForce`). */
+  /** W2d (V472, PF-3): the rule the TABLE is paid by. From the public row (`table_points_rule`: a started stage's pinned
+   *  points, else its own rule, else null), and — on every surface since W2d T9 — replaced by the one loader's rule
+   *  (`divisionQualification`, from `stageTableRulesDocs`). The per-match bounds read this one (`boundsInForce`), and so
+   *  does a rule-scored forfeit (`ruleScoreReaches`, T7 carry: never the own rule). */
   tablePointsRule: unknown;
 }
 
@@ -175,7 +177,14 @@ export interface QualificationViewInput {
    *  (`ruleScoreInAverage`, read off `stage.meta.pointsRule`); elsewhere this
    *  flag decides. */
   awardAddsToLedger: boolean;
+  /** The order the table is ranked by — since W2d T9 the stage's own (`loadTableRules`: its pin, else its live layers). */
   cascade: readonly string[];
+  /** W2d T9: the outcomes the stage's cfg reaches (the loader's `reachable`): the rule's bounds range over them
+   *  (`pointsRuleBounds`). Absent: every outcome (wider, never narrower). */
+  reachable?: ReadonlySet<OutcomeKey>;
+  /** W2d T9 (P25, D11): the sport's primary table measure (`primaryTableKey`). An order that starts with it — or with
+   *  `points` — decides places on a measure the view can bound; absent: "points". */
+  primary?: AnySportModule["primaryTableKey"];
   entrantNames: Readonly<Record<string, string>>;
   msg: (key: TKey, vars?: Record<string, string | number>) => string;
   plural: (key: string, count: number, vars?: Record<string, string | number>) => string;
@@ -241,6 +250,7 @@ function ledgerless(f: QualFixture, awardAddsToLedger: boolean, ruleInAverage: b
  *  Read off the stage, not by the caller, so a caller cannot forget it. A rule that does not parse scores nothing (and
  *  gives no view: `boundsInForce` refuses it). */
 export function pointsRuleScoresForfeits(pointsRule: unknown): boolean {
+  // (W2d T9: the caller hands the rule in FORCE — the loader's — never the stage's own.)
   if (pointsRule === null || pointsRule === undefined) return false;
   const parsed = parseStoredPointsRule(pointsRule);
   return parsed?.forfeit?.awardScore !== undefined;
@@ -258,7 +268,8 @@ export function ruleScoreReaches(
   f: Pick<QualFixture, "outcome" | "played" | "home_entrant_id" | "away_entrant_id">,
   meta: StageQualMeta,
 ): boolean {
-  if (!pointsRuleScoresForfeits(meta.pointsRule) || isOneSidedAwardBye(f)) return false;
+  // W2d T9 (T7 carry): the rule the table is paid by — `payout` writes ITS award — never the stage's own.
+  if (!pointsRuleScoresForfeits(meta.tablePointsRule) || isOneSidedAwardBye(f)) return false;
   return outcomeKind(f) !== undefined && isUnplayedForfeit(f.outcome as MatchOutcome, f.played);
 }
 
@@ -352,14 +363,23 @@ export const EVERY_OUTCOME: ReadonlySet<OutcomeKey> = new Set<OutcomeKey>([
   "noResult",
 ]);
 
-/** The per-match bounds in force: the rule the table is paid by (`tablePointsRule`: a started stage's pin, else its own
- *  rule) replaces the sport's. A rule that does not parse gives none — never the sport's bounds instead. */
-export function boundsInForce(meta: StageQualMeta, sportBounds: MatchPointsBounds | null): MatchPointsBounds | null {
+/** The per-match bounds in force: the rule the table is paid by (`tablePointsRule`: since W2d T9 the loader's — the pin,
+ *  else the live layers) replaces the sport's, ranging over the outcomes the stage reaches (`reachable`; absent: every
+ *  outcome). A rule that does not parse gives none — never the sport's bounds instead. */
+export function boundsInForce(
+  meta: StageQualMeta,
+  sportBounds: MatchPointsBounds | null,
+  reachable: ReadonlySet<OutcomeKey> = EVERY_OUTCOME,
+): MatchPointsBounds | null {
   const rule = meta.tablePointsRule;
   if (rule === null || rule === undefined) return sportBounds;
   const parsed = parseStoredPointsRule(rule);
-  return parsed === null ? null : pointsRuleBounds(parsed, EVERY_OUTCOME);
+  return parsed === null ? null : pointsRuleBounds(parsed, reachable);
 }
+
+/** W2d T9: a table ranked on wins first is a race in wins — each match pays one win or none, whatever its rule pays in
+ *  points (a forfeit's award is a win; a no result, a tie, a double walkover pay none). */
+const WINS_BOUNDS: MatchPointsBounds = { max: 1, min: 0, winFloor: 1, lossCeil: 0, winsOnly: true };
 
 /** F1 — would this departed entrant's table withdrawal VOID results the table
  *  counts? The policy (usecases/withdrawal.ts) expunges a league/group entrant
@@ -394,9 +414,15 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
   if (meta.hasRankOverrides) return null; // M1: the organiser, not the cascade, orders this table
   if (!meta.qualifyPerGroup && i.poolId !== null) return null; // Review Focus 5: an overall cut
   if (i.rows.length === 0) return null;
-  if (i.cascade[0] !== "points") return null; // Review Focus 4: points do not decide places
-  const perMatch = boundsInForce(meta, i.bounds);
-  if (perMatch === null) return null;
+  // Review Focus 4: the table's first measure must decide places — `points`, or the sport's primary measure (W2d T9,
+  // carry 6: `wins` for volleyball, badminton and tennis, `primaryTableKey`). A wins-first table races in wins.
+  const primary = i.primary ?? "points";
+  const first = i.cascade[0];
+  if (first !== "points" && first !== primary) return null;
+  const pointsBounds = boundsInForce(meta, i.bounds, i.reachable);
+  if (pointsBounds === null) return null;
+  const byWins = first === "wins";
+  const perMatch = byWins ? WINS_BOUNDS : pointsBounds;
 
   const isSwiss = i.stage.kind === "swiss";
   const settled = (f: QualFixture) => settledIn(i.stage.kind, f);
@@ -496,7 +522,7 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
   // false Out. (Through stays sound either way: an extra rival only makes it
   // more cautious.)
   const engine: QualificationInput = {
-    rows: ordered.map((r) => ({ entrantId: r.entrantId, points: r.points, active: active.get(r.entrantId) === true })),
+    rows: ordered.map((r) => ({ entrantId: r.entrantId, points: byWins ? r.won : r.points, active: active.get(r.entrantId) === true })),
     remaining: new Map(ordered.map((r) => [r.entrantId, remainingOf(r.entrantId)])),
     perMatch,
     cut,
@@ -519,14 +545,11 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
   const orderedIds = ordered.map((r) => r.entrantId);
   const cascade = i.cascade as readonly TiebreakerKey[];
   // What-if OQ1: `wins` cannot split a points tie when every point came from
-  // wins at one rate — read from the bounds IN FORCE, and confirmed on the
-  // table itself, since a carry-over opening pays points no match paid (the
-  // carry mode is not public; `points = winFloor × won` on every row is).
-  const winsOnly = perMatch.winsOnly && i.rows.every((r) => r.points === r.won * perMatch.winFloor);
-  // W2d P25: the what-if names the sport's primary step (`primaryTableKey`). This view reaches here only on an order
-  // that starts with `points` (the gate at the top), where every primary answers alike, so "points" is exact; Task 11
-  // re-keys that gate and then owes the module's own primary here.
-  const primary = "points" as const;
+  // wins at one rate — read from the RULE's bounds in force (not the race's: a wins-first table's twin step is
+  // `points`, which the same fact makes useless), and confirmed on the table itself, since a carry-over opening pays
+  // points no match paid (the carry mode is not public; `points = winFloor × won` on every row is).
+  const winsOnly = pointsBounds.winsOnly && i.rows.every((r) => r.points === r.won * pointsBounds.winFloor);
+  // W2d P25 / T9: the what-if names the sport's primary step (`primaryTableKey`), as the gate above does.
   const decidingKey = tieDecidingKey(cascade, { winsOnly, primary });
 
   /** The entrant's next match has no opponent seat (T2-C1): a bye it cannot lose. */

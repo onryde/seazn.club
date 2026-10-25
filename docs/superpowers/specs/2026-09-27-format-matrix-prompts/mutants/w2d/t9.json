@@ -1,0 +1,470 @@
+[
+  {
+    "id": "t9-pin-generate-writer",
+    "file": "apps/web/src/server/usecases/stages.ts",
+    "find": "await resolveBracketSeats(tx, stageId);\n\n    if (stage.status === \"pending\") {\n      await tx`update stages set status = 'active' where id = ${stageId}`;\n      // W2d X-TB-2 (OC2): the table rules are fixed in the transaction that starts the stage.\n      await pinStageTableRules(tx, stageId);",
+    "replace": "await resolveBracketSeats(tx, stageId);\n\n    if (stage.status === \"pending\") {\n      await tx`update stages set status = 'active' where id = ${stageId}`;\n      /*MUT*/",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/table-rules-pin.test.ts"
+        ],
+        "name": "X-TB-2 generating a stage"
+      }
+    ]
+  },
+  {
+    "id": "t9-pin-setup-writer",
+    "file": "apps/web/src/server/usecases/stages.ts",
+    "find": "      }\n    }\n\n    if (stage.status === \"pending\") {\n      await tx`update stages set status = 'active' where id = ${stageId}`;\n      // W2d X-TB-2 (OC2): the table rules are fixed in the transaction that starts the stage.\n      await pinStageTableRules(tx, stageId);",
+    "replace": "      }\n    }\n\n    if (stage.status === \"pending\") {\n      await tx`update stages set status = 'active' where id = ${stageId}`;\n      /*MUT*/",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/table-rules-pin.test.ts"
+        ],
+        "name": "X-TB-2 the progression setup path"
+      }
+    ]
+  },
+  {
+    "id": "t9-pin-idempotent",
+    "file": "apps/web/src/server/engine-db/table-rules.ts",
+    "find": "where id = ${stageId} and table_rules_pinned is null`;",
+    "replace": "where id = ${stageId} /*MUT*/`;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/table-rules-pin.test.ts"
+        ],
+        "name": "Review Focus 1: regenerating"
+      }
+    ]
+  },
+  {
+    "id": "t9-unpinned-guard",
+    "file": "apps/web/src/server/engine-db/table-rules.ts",
+    "find": "if (started && pinned === null) {",
+    "replace": "if (false /*MUT*/) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/table-rules-pin.test.ts"
+        ],
+        "name": "an active stage with no pin makes loadTableRules throw"
+      }
+    ]
+  },
+  {
+    "id": "t9-division-order-m9",
+    "file": "apps/web/src/server/engine-db/table-rules.ts",
+    "find": "divisionTiebreakers: pinned === null ? divisionOrderOf(row) : null,",
+    "replace": "divisionTiebreakers: null /*MUT*/,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/table-rules-pin.test.ts"
+        ],
+        "name": "X-TB-2 OC2 a pending stage reads live layers"
+      }
+    ]
+  },
+  {
+    "id": "t9-fixture-points-v347",
+    "file": "apps/web/src/server/engine-db/table-rules.ts",
+    "find": "if (rules.pinnedAt !== null || rules.sources.points !== \"sport\") return rules.points;",
+    "replace": "return rules.points; /*MUT*/",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/config-snapshot.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t9-repin-points",
+    "file": "apps/web/src/server/engine-db/table-rules.ts",
+    "find": "points: saved.points ?? pin.points,",
+    "replace": "points: pin.points /*MUT*/,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/table-rules-pin.test.ts"
+        ],
+        "name": "PS-5d repinStageOwnRules"
+      }
+    ]
+  },
+  {
+    "id": "t9-lots-dup-member",
+    "file": "apps/web/src/server/engine-db/table-rules.ts",
+    "find": "if (members.size !== draw.members.length) throw fail(\"names an entrant twice\");",
+    "replace": "/*MUT*/",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/stage-lots.test.ts"
+        ],
+        "name": "T7 m9: persistLotsDraws refuses"
+      }
+    ]
+  },
+  {
+    "id": "t9-lots-key",
+    "file": "apps/web/src/server/engine-db/table-rules.ts",
+    "find": "if (membersKeyOf(draw.members) !== draw.membersKey) throw fail(\"carries a members key that is not its members'\");",
+    "replace": "/*MUT*/",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/stage-lots.test.ts"
+        ],
+        "name": "T7 m9: persistLotsDraws refuses"
+      }
+    ]
+  },
+  {
+    "id": "t9-lots-order",
+    "file": "apps/web/src/server/engine-db/table-rules.ts",
+    "find": "if (draw.drawnOrder.length !== members.size || !draw.drawnOrder.every((id) => members.has(id))) {",
+    "replace": "if (false /*MUT*/) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/stage-lots.test.ts"
+        ],
+        "name": "T7 m9: persistLotsDraws refuses"
+      }
+    ]
+  },
+  {
+    "id": "t9-lots-on-conflict",
+    "file": "apps/web/src/server/engine-db/table-rules.ts",
+    "find": "      on conflict do nothing\n",
+    "replace": "      /*MUT*/\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/stage-lots.test.ts"
+        ],
+        "name": "Review Focus 3: two concurrent recomputes"
+      }
+    ]
+  },
+  {
+    "id": "t9-lots-supersede",
+    "file": "apps/web/src/server/engine-db/table-rules.ts",
+    "find": "update stage_lots_draws set superseded_at = now()",
+    "replace": "update stage_lots_draws set superseded_at = superseded_at /*MUT*/",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/stage-lots.test.ts"
+        ],
+        "name": "Review Focus 2: a withdrawal that changes"
+      }
+    ]
+  },
+  {
+    "id": "t9-payout-always-web",
+    "file": "apps/web/src/server/engine-db/competition.ts",
+    "find": "      base.result = payout(\n        f.outcome as MatchOutcome,",
+    "replace": "      base.result = !(stage.config as { points?: unknown } | null)?.points /*MUT*/ ? pair : payout(\n        f.outcome as MatchOutcome,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/payout-settled-set-db.test.ts"
+        ],
+        "name": "indoor volleyball settled for home at 1-2"
+      }
+    ]
+  },
+  {
+    "id": "t9-primary-gate",
+    "file": "apps/web/src/server/public-site/qualification-view.ts",
+    "find": "if (first !== \"points\" && first !== primary) return null;",
+    "replace": "if (first !== \"points\" /*MUT*/) return null;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/qualification-view.test.ts"
+        ],
+        "name": "every sport: led by its primary"
+      }
+    ]
+  },
+  {
+    "id": "t9-wins-race-rows",
+    "file": "apps/web/src/server/public-site/qualification-view.ts",
+    "find": "points: byWins ? r.won : r.points,",
+    "replace": "points: r.points /*MUT*/,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/qualification-view.test.ts"
+        ],
+        "name": "every sport: led by its primary"
+      }
+    ]
+  },
+  {
+    "id": "t9-wins-bounds",
+    "file": "apps/web/src/server/public-site/qualification-view.ts",
+    "find": "const perMatch = byWins ? WINS_BOUNDS : pointsBounds;",
+    "replace": "const perMatch = pointsBounds; /*MUT*/",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/qualification-view.test.ts"
+        ],
+        "name": "a wins table races on the wins table's bounds"
+      }
+    ]
+  },
+  {
+    "id": "t9-forfeit-read-paid-rule",
+    "file": "apps/web/src/server/public-site/division-qualification.ts",
+    "find": "if (!i.module_ && pointsRuleScoresForfeits(rules.points)) return null;",
+    "replace": "if (!i.module_ && pointsRuleScoresForfeits(stage.points_rule /*MUT*/)) return null;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/division-qualification.test.ts"
+        ],
+        "name": "whether a stage scores forfeits is read off"
+      }
+    ]
+  },
+  {
+    "id": "t9-qualfixtures-paid-rule",
+    "file": "apps/web/src/server/public-site/division-qualification.ts",
+    "find": "pointsRuleScoresForfeits(s.table_rules?.points)",
+    "replace": "pointsRuleScoresForfeits((s as { points_rule?: unknown }).points_rule /*MUT*/)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2b-status.test.ts"
+        ],
+        "name": "a withdrawal AFTER a rally"
+      }
+    ]
+  },
+  {
+    "id": "t9-meta-table-rule",
+    "file": "apps/web/src/server/public-site/division-qualification.ts",
+    "find": "meta: { ...stageQualMeta(stage), tablePointsRule: rules.points } },",
+    "replace": "meta: stageQualMeta(stage) /*MUT*/ },",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/division-qualification.test.ts",
+          "src/server/public-site/__tests__/competition-hub.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t9-slideshow-organiser",
+    "file": "apps/web/src/server/slideshow-data.ts",
+    "find": "stageShape(metricSpecs, tableRules[stage.id]?.tiebreakers)",
+    "replace": "stageShape(metricSpecs, [] /*MUT*/)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/__tests__/slideshow-point-ratio.test.ts"
+        ],
+        "name": "a badminton division's board carries the ratio"
+      }
+    ]
+  },
+  {
+    "id": "t9-console-caption",
+    "file": "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx",
+    "find": "{tableOrderOf(stageOrder(stage.id)).map((key, i) => (",
+    "replace": "{([] as string[] /*MUT*/).map((key, i) => (",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/__tests__/qualification-plumbing.test.tsx"
+        ],
+        "name": "generic: plain"
+      }
+    ]
+  },
+  {
+    "id": "t9-hub-cascade",
+    "file": "apps/web/src/server/public-site/competition-hub.ts",
+    "find": "cascade: tableOrderOf(stage.table_rules),",
+    "replace": "cascade: [] /*MUT*/,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/competition-hub.test.ts"
+        ],
+        "name": "a stage whose own order ranks by point ratio"
+      }
+    ]
+  },
+  {
+    "id": "t9-scan-readd",
+    "file": "apps/web/src/server/public-site/competition-hub.ts",
+    "find": "cascade: tableOrderOf(stage.table_rules),",
+    "replace": "cascade: tableOrderOf(stage.table_rules) ?? module_?.defaultTiebreakers(\"league\", d.config) /*MUT*/,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/table-rules-single-resolver.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t9-data-attach",
+    "file": "apps/web/src/server/public-site/data.ts",
+    "find": "    for (const st of stages) st.table_rules = tableRules[st.id] ?? null;",
+    "replace": "    /*MUT*/",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/public-division-loaders-identity.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t9-embed-attach",
+    "file": "apps/web/src/server/embed-data.ts",
+    "find": "  for (const st of stages) st.table_rules = tableRules[st.id] ?? null;",
+    "replace": "  /*MUT*/",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/public-division-loaders-identity.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t9-console-meta-attach",
+    "file": "apps/web/src/server/usecases/stage-qualification.ts",
+    "find": "table_rules: tableRules[stage_id] ?? null",
+    "replace": "table_rules: null /*MUT*/",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/stage-qualification-db.test.ts"
+        ],
+        "name": "parity: for a public division"
+      }
+    ]
+  },
+  {
+    "id": "t9-pack-template-inherit",
+    "file": "tools/bench/lib/pack-template.ts",
+    "find": "...(division.tiebreakers === undefined ? {} : { tiebreakers: [...division.tiebreakers] }),",
+    "replace": "tiebreakers: division.tiebreakers ?? [] /*MUT*/,",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "tools/bench/lib/__tests__/pack-schema.test.ts"
+        ],
+        "name": "W2d T9: a division's own order"
+      }
+    ]
+  },
+  {
+    "id": "t9-bench-payout-always",
+    "file": "tools/bench/lib/validate-pack.ts",
+    "find": "    const result = payout(\n      fold.outcome,",
+    "replace": "    const result = pointsRule === null /*MUT*/ ? pair : payout(\n      fold.outcome,",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "tools/bench/lib/__tests__/reconstruct.test.ts"
+        ],
+        "name": "W2d T9: a stage with no rule"
+      }
+    ]
+  },
+  {
+    "id": "t9-legacy-parse-restore",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "  const now = PointsRule.safeParse(raw);\n  return now.success ? now.data : null;",
+    "replace": "  const now = PointsRule.safeParse(raw);\n  return now.success ? now.data : parseLegacyPointsRule(raw); /*MUT*/",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/points-w2d.test.ts"
+        ],
+        "name": "PS-9f parseStoredPointsRule"
+      },
+      {
+        "cwd": ".",
+        "files": [
+          "tools/bench/lib/__tests__/validate-pack.test.ts"
+        ],
+        "name": "applies the stage's own points rule"
+      }
+    ]
+  },
+  {
+    "id": "t9-mR11-revert",
+    "file": "packages/engine/src/competition/table-rules.ts",
+    "find": "return answerSchema === undefined ? answer : answerSchema.parse(answer);",
+    "replace": "return answer; /*MUT*/",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-rules.test.ts"
+        ],
+        "name": "T8 m-R1-1"
+      }
+    ]
+  },
+  {
+    "id": "t9-variants-org-only",
+    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "find": "   where org_id is not null\n     and sport_key in ('football', 'hockey', 'icehockey')",
+    "replace": "   where true /*MUT*/\n     and sport_key in ('football', 'hockey', 'icehockey')",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-migration-pin.test.ts"
+        ],
+        "name": "T7 m10"
+      }
+    ]
+  }
+]

@@ -196,6 +196,7 @@ import {
   PointsRule,
   resolveTableRules,
   setsToWinOf,
+  type FixtureResult,
   type StandingsRow,
   type TableFixture,
   type TableStage,
@@ -2176,8 +2177,9 @@ function firstMatchDivergence(
 /**
  * Fold a division's streams into the ranked standings rows, through exactly
  * the path `recomputeStandings` uses:
- * `sportModule.standingsDelta(outcome, cfg, ctx, state)` per fixture, an
- * optional `payout` (the stage PointsRule), then `completeTableStage`.
+ * `sportModule.standingsDelta(outcome, cfg, ctx, state)` per fixture, `payout`
+ * under the stage's table rule (W2d T9: always — the stage's own, else its
+ * sport's under the fixture's cfg), then `completeTableStage`.
  *
  * Mirrors `apps/web/src/server/engine-db/competition.ts` — `ctxBase` at `:236`
  * (`{ kind }`, the stage's OWN kind, not the americano→league display map),
@@ -2233,6 +2235,10 @@ function deriveStandings(
   const fixtures: TableFixture[] = [];
   const entrants: string[] = [];
   const seen = new Set<string>();
+  // B5 (FIDE C.07): each paid result's GAME points — the sport's own ledger points, before the rule re-pays them
+  // (the product's `gamePoints`, engine-db/competition.ts).
+  const gamePoints = new Map<FixtureResult, readonly [number, number]>();
+  const tableKind: TableStageKind = DRAW_KINDS.has(stage.kind) ? (stage.kind as TableStageKind) : "league";
   for (const stream of streams) {
     const fold = folded.get(
       fixtureKey(stream.divisionRef, stream.fixtureExtKey),
@@ -2251,6 +2257,29 @@ function deriveStandings(
       ctxBase,
       fold.state,
     );
+    // W2c Task 9 (X-PT-1): the rule reads a forfeit's "was anything played" fact. A pack carries every fixture's
+    // events, so it is W2b's `playRecorded` over the same envelopes the fold read, under the fixture's module. Gap (a):
+    // the module's own score keys (`awardScoreKeys`) take the awarded score too. W2d T9: the rule ALWAYS pays (the
+    // product's standingsDelta fallback is gone) — the stage's own, else the sport's under THIS fixture's cfg, as
+    // `fixturePointsRule` pays an unpinned stage (a pack has no pin).
+    const result = payout(
+      fold.outcome,
+      decidedInFor(fold.module, fold.outcome),
+      pair,
+      playRecorded(packEnvelopes(stream), fold.module),
+      pointsRule ??
+        resolveTableRules({
+          module: fold.module,
+          stageKind: tableKind,
+          mergedCfg: fold.cfg,
+          stageOwn: { points: null, tiebreakers: null, crossGroup: null },
+          divisionTiebreakers: division.tiebreakers ?? null,
+          pinned: null,
+        }).points,
+      fold.module.awardScoreKeys,
+      setsToWinOf(fold.module, fold.cfg),
+    );
+    gamePoints.set(result, [pair[0].points, pair[1].points]);
     fixtures.push({
       id: fixtureKey(stream.divisionRef, stream.fixtureExtKey),
       ...(poolPrefix !== undefined &&
@@ -2262,20 +2291,7 @@ function deriveStandings(
       // 20) and the fold treats them identically, so the distinction — which
       // is a fixture-row fact a pack does not declare — cannot change a row.
       status: "decided",
-      // W2c Task 9 (X-PT-1): the rule reads a forfeit's "was anything played" fact. A pack carries every fixture's
-      // events, so it is W2b's `playRecorded` over the same envelopes the fold read, under the fixture's module. Gap (a):
-      // the module's own score keys (`awardScoreKeys`) take the awarded score too.
-      result: pointsRule
-        ? payout(
-            fold.outcome,
-            decidedInFor(fold.module, fold.outcome),
-            pair,
-            playRecorded(packEnvelopes(stream), fold.module),
-            pointsRule,
-            fold.module.awardScoreKeys,
-            setsToWinOf(fold.module, fold.cfg),
-          )
-        : pair,
+      result,
     });
   }
 
@@ -2319,7 +2335,7 @@ function deriveStandings(
   if (sport === undefined) return [];
   const rules = resolveTableRules({
     module: sport.module,
-    stageKind: DRAW_KINDS.has(stage.kind) ? (stage.kind as TableStageKind) : "league",
+    stageKind: tableKind,
     mergedCfg: sport.cfg,
     stageOwn: { points: pointsRule, tiebreakers: null, crossGroup: null },
     divisionTiebreakers: division.tiebreakers ?? null,
@@ -2336,6 +2352,9 @@ function deriveStandings(
       : stage.kind) as TableStage["kind"],
     entrants,
     rules,
+    // W2d T9, as the product's `toTableStage`: the sport's `winsCount` (B2, HK-TB-1) and each result's game points (B5)
+    ...(sport.module.winsCount === undefined ? {} : { winsCount: sport.module.winsCount }),
+    gamePoints: (result) => gamePoints.get(result) ?? [result[0].points, result[1].points],
     ...(seeds.size > 0 ? { seeds } : {}),
     // `!= null`, matching `toTableStage` exactly (competition.ts:337-338) and
     // NOT a `typeof === "number"` sniff. `PackStage.config` is an opaque JSON

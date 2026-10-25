@@ -252,6 +252,22 @@ export interface StageTableRulesDoc {
   readonly primary: AnySportModule["primaryTableKey"];
 }
 
+/** One stage's rules as a document (`tableRulesOf`, its Set spread to an array): what `stageTableRulesDocs` serves, and
+ *  what a pure reader's test hands its stage so it carries exactly the loader's shape. Throws as `tableRulesOf` does. */
+export function stageTableRulesDocOf(row: TableRulesRow, module: AnySportModule): StageTableRulesDoc {
+  const rules = tableRulesOf(row, module);
+  return {
+    points: rules.points,
+    tiebreakers: rules.tiebreakers,
+    crossGroup: rules.crossGroup,
+    sources: rules.sources,
+    pinnedAt: rules.pinnedAt,
+    reachable: [...rules.reachable],
+    sportDefault: rules.sportDefault,
+    primary: module.primaryTableKey,
+  };
+}
+
 /** The readers that show many stages at once (the public division page and its document, the embed, the hub, the
  *  slideshow, the organiser console): every stage's rules in one read, by stage id. A stage whose rules are refused (a
  *  build this server no longer carries, a cfg its sport cannot read) is LEFT OUT and logged — the reader shows its table
@@ -260,23 +276,18 @@ export async function stageTableRulesDocs(db: Db, stageIds: readonly string[]): 
   const out: Record<string, StageTableRulesDoc> = {};
   for (const r of await rulesRows(db, [...new Set(stageIds)])) {
     try {
-      const module = resolveModule(r.sport_key, r.module_version);
-      const rules = tableRulesOf(toRow(r), module);
-      out[r.stage_id] = {
-        points: rules.points,
-        tiebreakers: rules.tiebreakers,
-        crossGroup: rules.crossGroup,
-        sources: rules.sources,
-        pinnedAt: rules.pinnedAt,
-        reachable: [...rules.reachable],
-        sportDefault: rules.sportDefault,
-        primary: module.primaryTableKey,
-      };
+      out[r.stage_id] = stageTableRulesDocOf(toRow(r), resolveModule(r.sport_key, r.module_version));
     } catch (cause) {
       log.warn({ event: "table_rules_unreadable", stageId: r.stage_id, err: String(cause) }, "stage table rules unreadable");
     }
   }
   return out;
+}
+
+/** The order a stage's table is ranked and captioned by, from its loaded rules (a `StageTableRulesDoc` on a public
+ *  stage, or the console's): none for a stage the loader refused — never a default re-read by the reader. */
+export function tableOrderOf(rules: { readonly tiebreakers: readonly TiebreakerKey[] } | null | undefined): readonly TiebreakerKey[] {
+  return rules === null || rules === undefined ? [] : rules.tiebreakers;
 }
 
 const pinJson = (rules: TableRulesPin) => ({

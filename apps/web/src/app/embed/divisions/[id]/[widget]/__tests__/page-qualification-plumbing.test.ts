@@ -35,7 +35,15 @@ import type { EmbedPayload } from "@/server/embed-data";
 import type { PublicEntrant, PublicFixture, PublicStage } from "@/server/public-site/data";
 import type { QualificationView } from "@/server/public-site/qualification-view";
 import enPublic from "@/dictionaries/en/public.json";
+import { registry } from "@seazn/engine/sport";
+import { unpinnedRulesDoc } from "@/server/engine-db/__tests__/helpers/table-rules-doc";
 import EmbedWidgetPage from "../page";
+
+/** The division's cfg and pinned module (`embed-data.ts` selects both); each stage carries the rules the one loader
+ *  serves for it (`PublicStage.table_rules`, W2d Task 9) — its order, its points, its bounds. */
+const DIVISION_CFG = { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 } };
+const GENERIC = registry.get("generic", "1.0.0");
+const rulesFor = (kind: string) => unpinnedRulesDoc({ module: GENERIC, kind, divisionConfig: DIVISION_CFG });
 
 /** The en captions of pools A and B under `stage`: `table.poolLabel` over the
  *  pool KEY, read from the dictionary file — never the stored "Pool " + key. */
@@ -107,6 +115,7 @@ function payload(qualifyCount: number | null): EmbedPayload {
     points_rule: null,
     has_rank_overrides: false,
     table_points_rule: null,
+    table_rules: rulesFor("swiss"),
   };
   return {
     org: { id: "o1", slug: "test-org", name: "Test Org", default_locale: "en" },
@@ -136,7 +145,7 @@ function payload(qualifyCount: number | null): EmbedPayload {
       sport_name: null,
       entrant_count: 4,
       // embed-data.ts selects `dv.config` for exactly this (V414).
-      config: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 } },
+      config: DIVISION_CFG,
     } as EmbedPayload["division"],
     stages: [stage],
     pools: [],
@@ -186,6 +195,7 @@ function twoPoolPayload(): EmbedPayload {
     qualify_per_group: true,
     next_stage_name: "Finals",
     swiss_rounds: null,
+    table_rules: rulesFor("group"),
   };
   const inPool = (f: PublicFixture, pool: string): PublicFixture => ({ ...f, stage_id: "gr", pool_id: pool });
   const prow = (entrantId: string, rank: number, won: number, played: number) => ({

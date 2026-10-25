@@ -2615,6 +2615,23 @@ describe("packToTemplateSkeleton — the pack schema is a superset of the templa
     const skeleton = packToTemplateSkeleton(parsed(basePack()));
     expect(skeleton.divisions[0]?.stages.map((s) => s.kind)).toEqual(["league"]);
   });
+
+  it("W2d T9: a division's own order is carried verbatim; a pack that declares none emits NO order (inherit), never []", () => {
+    // Positive: the pack's declared order, as declared.
+    const declared = packToTemplateSkeleton(parsed(basePack()));
+    expect(declared.divisions[0]?.tiebreakers).toEqual(["points", "diff"]);
+    // Negative pair: no order declared ⇒ no key at all — the template then stores null and the division inherits. An
+    // empty list is an empty ORDER (W2d Review Focus 4 refuses it), and a resolved default would be frozen as an override.
+    const bare = packToTemplateSkeleton(
+      parsed(
+        pack((p) => {
+          delete (p["divisions"] as Record<string, unknown>[])[0]!["tiebreakers"];
+        }),
+      ),
+    );
+    expect(bare.divisions).toHaveLength(1);
+    expect(Object.keys(bare.divisions[0]!)).not.toContain("tiebreakers");
+  });
 });
 
 describe("entrantsOfDivision — the ONE division selector", () => {

@@ -8,6 +8,7 @@
 // read differently.
 import { afterAll, describe, expect, it } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
+import type { MatchOutcome } from "@seazn/engine/core";
 import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { getStandings } from "@/server/usecases/stages";
@@ -58,11 +59,9 @@ describe.skipIf(!HAS_DB)("W2d I2 a settled abandon of a set match pays the stage
   it("volleyball indoor 1-1 and 1-2, beach 1-0, settled for home by lot: the map's pair at ⌈bestOf/2⌉ - the other side's sets", async () => {
     let checked = 0;
     for (const c of CASES) {
-      const s = await seedBracket({ sport: "volleyball", variant: c.variant, stageKind: "league", entrants: 2 });
       const map = MAPS[c.variant]!;
-      // Raw SQL: the stage door is Task 10's; the fold reads whatever the stage stores.
-      const n = await sql`update stages set config = config || ${sql.json({ points: rule(map) } as never)} where id = ${s.stageId}`;
-      expect(n.count, "rig: the stage rule was written").toBe(1);
+      // The stage rule is written raw before the generate (the stage door is Task 10's), so the activation pin carries it.
+      const s = await seedBracket({ sport: "volleyball", variant: c.variant, stageKind: "league", entrants: 2, stagePoints: rule(map) });
       const id = s.fixtureIds[0]!;
       const f = await fixtureRow(id);
       // The variant's own declarations: its set target and its best-of (indoor 25 / 5, beach 21 / 3).
@@ -97,5 +96,47 @@ describe.skipIf(!HAS_DB)("W2d I2 a settled abandon of a set match pays the stage
       checked++;
     }
     expect(checked).toBe(CASES.length);
+  });
+});
+
+// W2d Task 9 (carry 1; T3 progress ruling: "every SIGNED row through the real standings read") — the web's standingsDelta
+// fallback is gone: a stage with NO rule of its own is paid by its sport's rule (`tablePointsRule`, via the one loader),
+// never by the sport's own `standingsDelta` points. The signed row (table-points-parity.test.ts, `set:3-2`): indoor
+// volleyball on the shipped FIVB map, best of 5, settled at 1-2 or 2-2 — FIVB 6.4.3 scores it 3-2 (2:1), where the old
+// payer priced the partial score by "*" (3:0). Both are read here: the expected pair from the sport's own declaration,
+// and the old payer's pair from the sport's own `standingsDelta` on the stored fold, as the counterfactual.
+describe.skipIf(!HAS_DB)("W2d T9 the signed settled-abandon row reaches the real standings read with no stage rule (carry 1)", () => {
+  it("indoor volleyball settled for home at 1-2 and at 2-2 pays the shipped map's 3-2 pair (2:1), not the old payer's \"*\" (3:0)", async () => {
+    const cfg = volleyball.configSchema.parse(volleyball.variants.indoor) as { bestOf: number; setTo: number };
+    expect(cfg.bestOf, "premise: the signed row's best of 5").toBe(5);
+    const shipped = volleyball.tablePointsRule(cfg as never, "league") as { bySetScore?: Record<string, [number, number]> };
+    const want = shipped.bySetScore?.["3-2"];
+    expect(want, "premise: the shipped map prices 3-2").toBeDefined();
+    let checked = 0;
+    for (const sets of [["H", "A", "A"], ["H", "A", "H", "A"]] as const) {
+      const s = await seedBracket({ sport: "volleyball", variant: "indoor", stageKind: "league", entrants: 2 });
+      const id = s.fixtureIds[0]!;
+      const f = await fixtureRow(id);
+      await post(s.auth, id, "core.start");
+      for (const w of sets) {
+        const [won, lost] = [cfg.setTo, cfg.setTo - 5];
+        await post(s.auth, id, "volleyball.set.summary", w === "H" ? { home: won, away: lost } : { home: lost, away: won });
+      }
+      await post(s.auth, id, "core.abandon", { reason: "weather" });
+      await post(s.auth, id, "core.settle", { winner: f.home_entrant_id, method: "lot" });
+      const row = await fixtureRow(id);
+      expect(row.outcome, `${sets.join("")}: rig, settled for home`).toMatchObject({ kind: "win", winner: f.home_entrant_id, method: "settled_lot" });
+      const [ms] = await sql<{ state: unknown }[]>`select state from match_states where fixture_id = ${id}`;
+      // The counterfactual: the sport's own payer on the same stored fold, which the web booked before W2d.
+      const old = volleyball.standingsDelta(row.outcome as MatchOutcome, cfg as never, { kind: "league" }, ms!.state as never);
+      const oldPair = [old.find((d) => d.entrantId === f.home_entrant_id)!.points, old.find((d) => d.entrantId === f.away_entrant_id)!.points];
+      expect(oldPair, `${sets.join("")}: premise, the old payer reads differently`).not.toEqual(want);
+      const rows = await standings(s.auth, s.stageId);
+      const home = rows.find((r) => r.entrantId === f.home_entrant_id)!;
+      const away = rows.find((r) => r.entrantId === f.away_entrant_id)!;
+      expect([home.points, away.points], `${sets.join("")} → 3-2`).toEqual(want);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 });

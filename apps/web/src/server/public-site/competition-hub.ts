@@ -49,6 +49,7 @@ import {
   type MatchBucket,
 } from "@/lib/matches-hub";
 import { resolveModule } from "@/server/engine-db";
+import { tableOrderOf } from "@/server/engine-db/table-rules";
 import { publicRegistrationInfo } from "@/server/usecases/registrations";
 import { fixturesStatsReading } from "@/server/usecases/player-stats";
 import { activePublicSuspensionEntries } from "@/server/usecases/discipline";
@@ -913,12 +914,11 @@ export async function loadCompetitionHub(
         (a.status === "complete" ? 1 : 0) - (b.status === "complete" ? 1 : 0) || a.seq - b.seq,
     );
     // Standings qualification status (spec 2026-09-22): the same assembly the
-    // division page and the embed use. Bounds and the walkover's ledger come
-    // from the division's PINNED module and live cfg; the cascade is the one
-    // the table is ranked and captioned by. Called per table with that
-    // table's own snapshot, which carries its pool.
-    // W2d T8: the sport default for a league under the division's cfg — every default is kind- and cfg-independent until Task 11; Task 9 replaces this with the stage's own rules (`loadTableRules`).
-    const cascade = d.tiebreakers ?? module_?.defaultTiebreakers("league", d.config) ?? [];
+    // division page and the embed use. The walkover's ledger comes from the
+    // division's PINNED module and live cfg; the order, the bounds and the rule
+    // a forfeit is scored by are each STAGE's (W2d Task 9: `stage.table_rules`,
+    // the one loader's). Called per table with that table's own snapshot,
+    // which carries its pool.
     const qualificationFor = divisionQualification({
       module_,
       division: d,
@@ -927,7 +927,6 @@ export async function loadCompetitionHub(
       fixtures: await qualificationFixtures(fixtures, module_, stages),
       entrantStatuses: Object.fromEntries(entrants.map((e) => [e.id, e.status])),
       entrantNames: names,
-      cascade,
     });
     for (const stage of orderedStages) {
       if (BRACKET_KINDS.has(stage.kind)) continue;
@@ -946,7 +945,8 @@ export async function loadCompetitionHub(
             fullHref: `${divHref}?tab=standings`,
             rows: snap.rows,
             metricSpecs: module_?.metrics ?? [],
-            cascade,
+            // the order THIS stage ranks by; a stage the loader refused gets no caption
+            cascade: tableOrderOf(stage.table_rules),
             entrantNames: names,
             entrantLogos: badges,
             entrantColours: colours,

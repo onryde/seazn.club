@@ -47,6 +47,7 @@ import { hasFeature, orgPlanKey } from "@/lib/entitlements";
 import { viewerPlanFrom } from "@/lib/viewer-plan";
 import { listEntrantLogoUrls } from "@/server/usecases/teams";
 import { resolveModule } from "@/server/engine-db";
+import { tableOrderOf } from "@/server/engine-db/table-rules";
 import { lineupCatalogFor } from "@/server/usecases/lineup-catalog";
 import { effectiveEntrantModel } from "@seazn/engine/sport";
 import type { ProgressionSpec } from "@seazn/engine/competition";
@@ -446,8 +447,6 @@ export default async function DivisionPage({
     (tab === "fixtures" && hasKnockout) || tab === "standings"
       ? await listFixtureHeadlines(auth, id)
       : undefined;
-  // W2d T8: the sport default for a league under the division's cfg — every default is kind- and cfg-independent until Task 11; Task 9 replaces this with the stage's own rules (`loadTableRules`).
-  const cascade = division.tiebreakers ?? sportModule.defaultTiebreakers("league", division.config);
 
   // SPEC-1: the Discipline tab's queue + squad, and the entrant-row chips.
   const disciplineData =
@@ -537,9 +536,11 @@ export default async function DivisionPage({
           fixtures: await qualificationFixtures(fixtures, sportModule, [...qualMeta.values()]),
           entrantStatuses,
           entrantNames,
-          cascade,
         })
       : null;
+  // W2d Task 9: each table stage's order and where it came from (its pin, else its live layers — the one loader, via
+  // `listStageQualificationMeta`). A stage the loader refused has none: no caption, no trace.
+  const stageOrder = (stageId: string) => qualMeta.get(stageId)?.table_rules ?? null;
 
   // Spec 2026-09-30 §2 (T6): the stream panel lives on the fixture page; the run sheet keeps a chip ("● Live" /
   // "● Waiting for phone") per fixture with a session up, linking there with `?stream=open` — the division's path to
@@ -949,7 +950,7 @@ export default async function DivisionPage({
                       <StandingsTable
                         rows={snap.rows as StandingsRow[]}
                         metricSpecs={sportModule.metrics as MetricSpecLike[]}
-                        cascade={cascade}
+                        cascade={tableOrderOf(stageOrder(stage.id))}
                         entrantNames={entrantNames}
                         entrantLogos={entrantLogos}
                         entrantStatuses={entrantStatuses}
@@ -985,7 +986,7 @@ export default async function DivisionPage({
                 {/* Cascade trace (doc 05 §4): the exact tie-break order in force. */}
                 <p className="mt-3 border-t border-slate-100 pt-3 text-xs text-slate-500">
                   {t(dict, "div.detail.tiebreak.label")}{" "}
-                  {cascade.map((key, i) => (
+                  {tableOrderOf(stageOrder(stage.id)).map((key, i) => (
                     <span key={key}>
                       {i > 0 && " → "}
                       <span className="text-slate-500">
@@ -998,9 +999,13 @@ export default async function DivisionPage({
                     </span>
                   ))}
                   {" "}
-                  {division.tiebreakers
-                    ? t(dict, "div.detail.tiebreak.override")
-                    : t(dict, "div.detail.tiebreak.default")}
+                  {/* the sport's order reads "default"; the stage's or the division's "override"; a B1-migrated pin names
+                      no layer (Task 17 owns the caption) */}
+                  {stageOrder(stage.id)?.sources.tiebreakers === "sport"
+                    ? t(dict, "div.detail.tiebreak.default")
+                    : stageOrder(stage.id)?.sources.tiebreakers === "stage" || stageOrder(stage.id)?.sources.tiebreakers === "division"
+                      ? t(dict, "div.detail.tiebreak.override")
+                      : null}
                 </p>
               </section>
             ))}
