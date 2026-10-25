@@ -13,22 +13,38 @@
 //
 // Installed in `register()` right after Sentry's init, so it is the outer wrapper: Sentry's console breadcrumb sees the scrubbed arguments.
 // Only the Node runtime has a database driver, so only it installs this. Server-only: nothing on the client imports it.
+//
+// Like the logger's and Sentry's hooks it strips by field name on any error-shaped value, so a non-database error's `detail` (a
+// Stripe error's) goes too (lib/strip-db-echo.ts). It looks only as far as `console.error` prints: util.inspect's own depth and array
+// length, read from `inspect.defaultOptions` at each call. Next patches Error.prototype's inspect in every server process
+// (node-environment-extensions/error-inspect.js); that rebuilds the error from the keys it still has, so it prints the scrubbed copy.
+// In `next dev` only, React's server bundle patches console AFTER register() and replays the raw arguments to the browser; production
+// is not affected.
+import { inspect } from "node:util";
 import { stripDbEchoFromErrors } from "@/lib/strip-db-echo";
 
 const INSTALLED = Symbol.for("seazn.consoleDbEchoScrub");
 
 type Print = ((...args: unknown[]) => void) & { [INSTALLED]?: true };
 
-/** Printed in place of the arguments if the strip itself throws (a getter that throws on a plain object). A secret printed is worse than a line lost. */
-const WITHHELD = "[console] arguments withheld: the database-echo scrub could not read them";
+/** Printed in place of ONE argument if the strip throws on it (a getter or a Proxy trap that throws). A secret printed is worse than a value lost. */
+const WITHHELD = "[console] argument withheld: the database-echo scrub could not read it";
 
-/** `args` with every database error in them stripped of its echo fields; untouched arguments keep their identity. */
+/**
+ * `args` with every database error in them stripped of its echo fields; untouched arguments keep their identity. Fails closed PER
+ * ARGUMENT: the one the strip cannot read is replaced by a note, so the message strings around it still print.
+ */
 export function scrubConsoleArgs(args: unknown[]): unknown[] {
-  try {
-    return args.map((arg) => stripDbEchoFromErrors(arg));
-  } catch {
-    return [WITHHELD];
-  }
+  // util.inspect's own declarations of how far a print reaches; `null` there means unlimited.
+  const { depth, maxArrayLength } = inspect.defaultOptions;
+  const bounds = { depth: depth ?? undefined, maxItems: maxArrayLength ?? undefined };
+  return args.map((arg) => {
+    try {
+      return stripDbEchoFromErrors(arg, bounds);
+    } catch {
+      return WITHHELD;
+    }
+  });
 }
 
 /**

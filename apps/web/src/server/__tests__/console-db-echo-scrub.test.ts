@@ -239,20 +239,138 @@ describe("installing the scrub", () => {
     expect(target.error).toBe(under);
   });
 
-  it("fails closed: if the scrub itself throws, the call does not throw and the arguments are withheld, not printed raw", () => {
+  it("fails closed PER ARGUMENT: an argument the scrub cannot read is withheld, the others (the message strings) still print", () => {
     const secret = `leak-canary-${randomBytes(6).toString("hex")}`;
-    const hostile = {
-      get boom(): string {
-        throw new Error("a getter that throws");
+    // A Proxy whose trap throws: `instanceof Error` (the strip's first question) asks it for its prototype.
+    const hostile = new Proxy(
+      { secret },
+      {
+        getPrototypeOf() {
+          throw new Error("a trap that throws");
+        },
       },
-      secret,
-    };
+    );
     const { target, stderr } = capturingConsole();
     installConsoleDbEchoScrub(target);
-    expect(() => target.error("context", hostile)).not.toThrow();
+    expect(() => target.error("context message", hostile, "after")).not.toThrow();
     const line = stderr();
-    expect(line, "a note says arguments were withheld").toContain("withheld");
-    expect(line, "and nothing of them was printed").not.toContain(secret);
-    expect(line).not.toContain("context");
+    expect(line, "the unreadable argument is replaced by a note").toContain("withheld");
+    expect(line, "and none of it was printed").not.toContain(secret);
+    expect(line, "the message before it still prints").toContain("context message");
+    expect(line, "and so does the argument after it").toContain("after");
+
+    // The unit under the Console: one withheld note in the slot of the one argument, the rest by identity.
+    const err = new Error("kept");
+    const out = scrubConsoleArgs(["m", hostile, err]);
+    expect(out.length).toBe(3);
+    expect(out[0]).toBe("m");
+    expect(String(out[1])).toContain("withheld");
+    expect(out[2], "a clean Error after it is the same object").toBe(err);
+  });
+});
+
+// What the scrub walks is what util.inspect prints, and no more: its depth and array length are Node's own declared defaults.
+describe("the scrub walks what console.error prints, bounded by util.inspect's defaults", () => {
+  const driverShaped = () => {
+    const err = new Error("duplicate key value") as DriverError;
+    err.name = "PostgresError";
+    err.detail = "Key (email)=(leak-canary-shape) already exists.";
+    return err;
+  };
+
+  it("an item past the array length inspect prints, and an error past its depth, are neither walked nor printed", () => {
+    const late = driverShaped();
+    const big: unknown[] = new Array<unknown>(2_000_000).fill(0);
+    big[big.length - 1] = late;
+    expect(scrubConsoleArgs([big])[0], "nothing printed changed: the very same array").toBe(big);
+    expect(inspect(big)).not.toContain("leak-canary-shape");
+
+    const depth = inspect.defaultOptions.depth as number;
+    let nested: Record<string, unknown> = { err: driverShaped() };
+    for (let i = 0; i < depth + 1; i++) nested = { next: nested };
+    expect(inspect(nested), "premise: inspect elides it").not.toContain("leak-canary-shape");
+    expect(scrubConsoleArgs([nested])[0], "not walked: the very same object").toBe(nested);
+  });
+
+  it("the bounds are read from util.inspect.defaultOptions at the call (not typed here): a deeper default reaches the deeper error", () => {
+    const depth = inspect.defaultOptions.depth as number;
+    let nested: Record<string, unknown> = { err: driverShaped() };
+    for (let i = 0; i < depth + 1; i++) nested = { next: nested };
+    expect(scrubConsoleArgs([nested])[0]).toBe(nested);
+    const was = inspect.defaultOptions.depth;
+    try {
+      inspect.defaultOptions.depth = depth + 4;
+      const reached = scrubConsoleArgs([nested])[0];
+      expect(reached, "with a deeper default the walk reaches it").not.toBe(nested);
+      expect(inspect(reached, { depth: depth + 8 })).not.toContain("leak-canary-shape");
+    } finally {
+      inspect.defaultOptions.depth = was;
+    }
+  });
+});
+
+// Next patches Error.prototype[nodejs.util.inspect.custom] in EVERY server process (server/node-environment-extensions/error-inspect.js,
+// loaded by node-environment.js): it rebuilds the error as `new Error(message, { cause })` and copies every enumerable key of `this`
+// before handing it to util.inspect. So what console.error really prints in production goes through that, not through the bare
+// formatter the other tests use.
+describe.skipIf(!HAS_DB)("with Next's patched Error inspect installed", () => {
+  it("a real database error printed through the wrapped console has no canary, and still has its message, SQLSTATE and stack", async () => {
+    // Next's own boot order: node-environment-baseline puts AsyncLocalStorage on globalThis (the patch's storage is a fake without it).
+    const hadAls = "AsyncLocalStorage" in globalThis;
+    // @ts-expect-error -- a side-effect-only module whose declaration file is empty, so TypeScript does not call it a module
+    await import("next/dist/server/node-environment-baseline");
+    const { patchErrorInspectNodeJS } = await import("next/dist/server/patch-error-inspect");
+    const inspectSymbol = Symbol.for("nodejs.util.inspect.custom");
+    const priorPrepare = Error.prepareStackTrace;
+    const priorCustom = Object.getOwnPropertyDescriptor(Error.prototype, inspectSymbol);
+    try {
+      patchErrorInspectNodeJS(Error);
+      expect(Object.getOwnPropertyDescriptor(Error.prototype, inspectSymbol), "premise: Next's patch is installed").toBeDefined();
+      const canaries = mintCanaries();
+      const err = await uniqueViolation(canaries, false);
+
+      const raw = capturingConsole();
+      raw.target.error(err);
+      expect(raw.stderr(), "premise: through Next's inspect, an unscrubbed print carries the canary").toContain(canaries.email);
+
+      const { target, stderr } = capturingConsole();
+      installConsoleDbEchoScrub(target);
+      target.error("[next] uncaught", err);
+      target.error(new Error("wrapper", { cause: err }));
+      const line = stderr();
+      expect(line.length, "anti-vacuity: something was printed").toBeGreaterThan(0);
+      expect(line, "no canary").not.toContain(canaries.email);
+      expect(line, "no canary").not.toContain(canaries.token);
+      expect(line, "the message is still printed").toContain("duplicate key value violates unique constraint");
+      expect(line, "the SQLSTATE is still printed").toContain("23505");
+      expect(line, "a stack frame is still printed").toMatch(/\n\s+at /);
+      expect(line, "both prints happened").toContain("wrapper");
+    } finally {
+      Error.prepareStackTrace = priorPrepare;
+      if (!hadAls) delete (globalThis as unknown as Record<string, unknown>).AsyncLocalStorage;
+      if (priorCustom) Object.defineProperty(Error.prototype, inspectSymbol, priorCustom);
+      else delete (Error.prototype as unknown as Record<symbol, unknown>)[inspectSymbol];
+    }
+  });
+});
+
+describe.skipIf(!HAS_DB)("an error that points back at itself, printed through the wrapped console", () => {
+  it.each([
+    ["e.self = e", (e: DriverError) => void (e.self = e)],
+    ["e.ctx = { back: e }", (e: DriverError) => void (e.ctx = { back: e })],
+    ["e.list = [e]", (e: DriverError) => void (e.list = [e])],
+  ])("%s: no canary on the line", async (_name, link) => {
+    const canaries = mintCanaries();
+    const err = await uniqueViolation(canaries, false);
+    link(err);
+    const raw = capturingConsole();
+    raw.target.error(err);
+    expect(raw.stderr(), "premise: the unscrubbed print carries the canary").toContain(canaries.email);
+    const { target, stderr } = capturingConsole();
+    installConsoleDbEchoScrub(target);
+    target.error(err);
+    expect(stderr().length).toBeGreaterThan(0);
+    expect(stderr()).not.toContain(canaries.email);
+    expect(stderr()).toContain("23505");
   });
 });
