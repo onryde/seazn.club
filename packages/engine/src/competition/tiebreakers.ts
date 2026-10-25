@@ -17,7 +17,7 @@
 // comparators call.
 import { EngineError } from "../core/errors.ts";
 import { shuffle } from "../core/rng.ts";
-import type { EntrantId, MetricSpec, StandingsDelta } from "../core/types.ts";
+import type { EntrantId, StandingsDelta } from "../core/types.ts";
 import type { TiebreakerKey } from "../sport/module.ts";
 import { RATIO_LEDGERS, type RatioKey } from "./display.ts";
 import {
@@ -910,67 +910,7 @@ export function rankStandings(rows: readonly StandingsRow[], ctx: RankContext): 
   return { rows: order, lotsGroups, newLotsDraws };
 }
 
-// spec 05 §4.1 — reject cascade keys whose metrics the sport doesn't maintain
-// (validated at division-config time). `swiss` marks a stage that assembles the
-// Swiss ledger (buchholz/sberger/direct); the rest map to declared MetricSpecs.
-export function validateCascade(
-  cascade: readonly TiebreakerKey[],
-  opts: { metrics: readonly MetricSpec[]; swiss?: boolean },
-): void {
-  const keys = new Set(opts.metrics.map((metric) => metric.key));
-  const has = (...alts: string[]): boolean => alts.some((key) => keys.has(key));
-  const reject = (key: TiebreakerKey, need: string): never => {
-    throw new EngineError(
-      "CONFIG_INVALID",
-      `tiebreaker "${key}" needs ${need}, which this sport does not maintain`,
-      { key },
-    );
-  };
-  for (const key of cascade) {
-    switch (key) {
-      case "points":
-      case "wins":
-      case "h2h_points":
-      case "seed":
-      case "lots":
-        break; // structural — always available
-      case "diff":
-      case "h2h_diff":
-        if (!has(...DIFF_KEYS)) reject(key, "a goal/run difference metric");
-        break;
-      case "for":
-      case "h2h_for":
-        if (!has(...FOR_KEYS)) reject(key, "a goals/runs-for metric");
-        break;
-      case "fair_play":
-        if (!has("fair_play")) reject(key, "a fair_play metric");
-        break;
-      case "nrr":
-        if (!has("runs_for") || !has("balls_faced_eff") || !has("runs_against") || !has("balls_bowled_eff")) {
-          reject(key, "the NRR ledger (runs/balls for & against)");
-        }
-        break;
-      case "set_ratio":
-        if (!has("sets_won") || !has("sets_lost")) reject(key, "sets won/lost");
-        break;
-      case "game_ratio":
-        if (!has("games_won") || !has("games_lost")) reject(key, "games won/lost");
-        break;
-      case "board_ratio":
-        if (!has("boards_won") || !has("boards_lost")) reject(key, "boards won/lost");
-        break;
-      case "point_ratio":
-        if (!has("points_won") || !has("points_lost")) reject(key, "points won/lost");
-        break;
-      case "buchholz":
-      case "buchholz_cut1":
-      case "sberger":
-      case "direct":
-        if (opts.swiss !== true) reject(key, "an assembled Swiss ledger");
-        break;
-    }
-  }
-}
+// The write-side check of an order (`validateCascade`, `offerableKeys`) lives in cascade-rules.ts (W2d Task 6, spec §5.5).
 
 // Assemble a SwissTable from decided fixture results for the buchholz/sberger/
 // direct comparators (spec 05 §4.1, PROMPT-07 note). Each entrant's card is

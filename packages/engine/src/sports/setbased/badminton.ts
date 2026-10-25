@@ -55,6 +55,7 @@ export const badminton = makeSetBasedModule({
   // spec 04 §4 — points → matches → game ratio → point ratio → h2h. game_ratio
   // is the set_ratio key (games are the kernel's sets).
   defaultTiebreakers: ["points", "wins", "set_ratio", "point_ratio", "h2h_points"],
+  primaryTableKey: "wins", // W2d (D11): BWF 16.2.1 — the number of matches won comes first.
   officialLabel: { scorer: "Umpire" }, // doc 13 §1
   coarseEventType: "game.summary",
   // S7/#427 — BWF has THREE umpire cards and the black one is the reason this

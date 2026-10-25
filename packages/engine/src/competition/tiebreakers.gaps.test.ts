@@ -1,11 +1,13 @@
 // Edge-path coverage for the tiebreaker engine — PROMPT-14 §4 (100% line gate
 // on competition/tiebreakers.ts): malformed-ledger throws, direct-encounter
 // branches, display formatting, non-swiss `direct` refinement, the seed
-// fallback, and every validateCascade rejection.
+// fallback, and every ledger refusal of `validateCascade` (W2d: cascade-rules.ts).
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import { EngineError } from "../core/errors.ts";
 import type { StandingsDelta } from "../core/types.ts";
-import type { TiebreakerKey } from "../sport/module.ts";
+import type { AnySportModule, TiebreakerKey } from "../sport/module.ts";
+import { validateCascade, type CascadeContext } from "./cascade-rules.ts";
 import { RATIO_LEDGERS } from "./display.ts";
 import type { FixtureResult, StandingsRow } from "./standings.ts";
 import {
@@ -19,9 +21,21 @@ import {
   metricOf,
   pointsToText,
   rankStandings,
-  validateCascade,
   type SwissTable,
 } from "./tiebreakers.ts";
+
+// A sport that records exactly `keys`: the ledger rule's own unit, apart from any shipped sport (the per-sport sweeps are
+// cascade-rules.test.ts). Cast: validateCascade reads only `metrics`, `primaryTableKey` and `configSchema` of a module.
+// A Swiss stage, so the order's shape (first/last, OC1) is not in play.
+function recording(keys: readonly string[]): CascadeContext {
+  const module = {
+    key: "ledger-stub",
+    metrics: keys.map((key) => ({ key, label: key, direction: "desc" as const })),
+    primaryTableKey: "points",
+    configSchema: z.object({}),
+  } as unknown as AnySportModule;
+  return { module, cfg: {}, stageKind: "swiss", crossGroup: false };
+}
 
 function row(entrantId: string, points: number, metrics: Record<string, number> = {}): StandingsRow {
   return { entrantId, played: 1, won: 0, drawn: 0, lost: 0, points, metrics };
@@ -262,15 +276,22 @@ describe("federation cascades on complete data are unaffected", () => {
 // purpose: `rankStandings` now THROWS CONFIG_INVALID for a key with no
 // comparator, so the display-only guarantee still holds (the key never orders
 // anything) and a broken order can no longer pass for a working one. The write
-// side refuses such keys before they are stored (W2d §5.5); `validateCascade`
-// itself is unchanged here — its switch still has no `default`.
+// side refuses such keys before they are stored (W2d §5.5): the zod enum first,
+// and `validateCascade` (cascade-rules.ts) throws on one that gets past it.
 describe("an unregistered cascade key is never an ordering input — it is refused (W2d anti-goal 2)", () => {
   // Cast: the point of the test is the RUNTIME behaviour on a key the type
   // system is supposed to exclude, so the cast is the fixture, not a shortcut.
   const unknown = "sp_pc_scored" as Parameters<typeof rankStandings>[1]["cascade"][number];
 
-  it("validateCascade accepts it — the switch has no `default`, so it passes through", () => {
-    expect(() => validateCascade([unknown], { metrics: [] })).not.toThrow();
+  it("validateCascade refuses it by name (CONFIG_INVALID): the zod enum is the gate, so a key reaching it is a caller's breach", () => {
+    let refused: unknown;
+    try {
+      validateCascade([unknown], recording(["sp_pc_scored"]));
+    } catch (e) {
+      refused = e;
+    }
+    expect(EngineError.is(refused, "CONFIG_INVALID")).toBe(true);
+    expect((refused as EngineError).data).toEqual({ key: "sp_pc_scored", index: 0 });
   });
 
   it("rankStandings refuses it with CONFIG_INVALID instead of skipping it, before any ordering", () => {
@@ -304,47 +325,28 @@ describe("an unregistered cascade key is never an ordering input — it is refus
   });
 });
 
-describe("validateCascade rejections (spec 05 §4.1)", () => {
-  const cases: [string, Parameters<typeof validateCascade>[0]][] = [
-    ["goal/run difference", ["diff"]],
-    ["goals/runs-for", ["for"]],
-    ["fair_play", ["fair_play"]],
-    ["NRR ledger", ["nrr"]],
-    ["sets won/lost", ["set_ratio"]],
-    ["games won/lost", ["game_ratio"]],
-    ["boards won/lost", ["board_ratio"]],
-    ["points won/lost", ["point_ratio"]],
+describe("validateCascade ledger refusals (spec 05 §4.1, W2d §5.5 rule 2)", () => {
+  const cases: [string, TiebreakerKey][] = [
+    ["goal/run difference", "diff"],
+    ["goals/runs-for", "for"],
+    ["fair_play", "fair_play"],
+    ["NRR ledger", "nrr"],
+    ["sets won/lost", "set_ratio"],
+    ["games won/lost", "game_ratio"],
+    ["boards won/lost", "board_ratio"],
+    ["points won/lost", "point_ratio"],
   ];
 
-  it.each(cases)("rejects %s keys the sport does not maintain", (_label, cascade) => {
-    let thrown: unknown;
-    try {
-      validateCascade(cascade, { metrics: [] });
-    } catch (err) {
-      thrown = err;
-    }
-    expect(EngineError.is(thrown, "CONFIG_INVALID")).toBe(true);
+  it.each(cases)("refuses %s keys the sport does not maintain", (_label, key) => {
+    expect(validateCascade([key], recording([])).map((r) => [r.index, r.key, r.reason])).toEqual([[0, key, "sport"]]);
   });
 
   it("accepts ratio keys when the sport maintains their ledgers", () => {
-    const metric = (key: string) => ({ key, label: key, direction: "desc" as const });
-    expect(() =>
-      validateCascade(["nrr"], {
-        metrics: ["runs_for", "balls_faced_eff", "runs_against", "balls_bowled_eff"].map(metric),
-      }),
-    ).not.toThrow();
-    expect(() =>
-      validateCascade(["set_ratio"], { metrics: ["sets_won", "sets_lost"].map(metric) }),
-    ).not.toThrow();
-    expect(() =>
-      validateCascade(["game_ratio"], { metrics: ["games_won", "games_lost"].map(metric) }),
-    ).not.toThrow();
-    expect(() =>
-      validateCascade(["board_ratio"], { metrics: ["boards_won", "boards_lost"].map(metric) }),
-    ).not.toThrow();
-    expect(() =>
-      validateCascade(["point_ratio"], { metrics: ["points_won", "points_lost"].map(metric) }),
-    ).not.toThrow();
+    expect(validateCascade(["nrr"], recording(["runs_for", "balls_faced_eff", "runs_against", "balls_bowled_eff"]))).toEqual([]);
+    expect(validateCascade(["set_ratio"], recording(["sets_won", "sets_lost"]))).toEqual([]);
+    expect(validateCascade(["game_ratio"], recording(["games_won", "games_lost"]))).toEqual([]);
+    expect(validateCascade(["board_ratio"], recording(["boards_won", "boards_lost"]))).toEqual([]);
+    expect(validateCascade(["point_ratio"], recording(["points_won", "points_lost"]))).toEqual([]);
   });
 });
 

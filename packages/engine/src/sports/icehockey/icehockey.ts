@@ -257,6 +257,7 @@ export const icehockey = makePeriodModule({
   // Event Code §220 — H2H sub-group first, then overall (maps directly onto
   // the existing comparator registry, v6/00 §1).
   defaultTiebreakers: ["points", "h2h_points", "h2h_diff", "h2h_for", "diff", "for", "seed"],
+  primaryTableKey: "points", // W2d (D11): the table ranks on points first.
   officialLabel: { scorer: "Scorekeeper" },
   suspensionReasons: ICEHOCKEY_SUSPENSION_REASONS,
   shootoutLabel: "GWS",

@@ -55,6 +55,7 @@ const nestedTennis = makeNestedModule({
   entrantModel: { kinds: ["individual", "pair"], defaultKind: "individual" },
   // v6/00 §4 — points → set ratio → game ratio → h2h → seed.
   defaultTiebreakers: ["points", "set_ratio", "game_ratio", "h2h_points", "seed"],
+  primaryTableKey: "wins", // W2d (D11): ATP C.3-1 — the number of matches won comes first.
   officialLabel: { scorer: "Chair Umpire" }, // ITF App VII
   // Jul3/07 §3 — unlocked by W4's optional `server`/`winner` on the point.
   // Aces and double faults are SERVING statistics, so both credit the server:

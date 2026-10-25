@@ -104,6 +104,7 @@ export const volleyball = makeSetBasedModule({
   unitLabel: { one: "Set", many: "Sets" },
   // spec 04 §3.4 — points → matches won → set ratio → point ratio → h2h.
   defaultTiebreakers: ["points", "wins", "set_ratio", "point_ratio", "h2h_points"],
+  primaryTableKey: "wins", // W2d (D11): FIVB V3-1 — the number of matches won comes first.
   officialLabel: { scorer: "Referee" }, // doc 13 §1
   coarseEventType: "set.summary",
   tablePointsRule: (cfg, fromMap) => {

@@ -59,6 +59,7 @@ export const tabletennis = makeSetBasedModule({
   unitLabel: { one: "Game", many: "Games" },
   // spec 04 §5 / table-tennis.md §5 — matches → h2h → game ratio → point ratio.
   defaultTiebreakers: ["points", "wins", "set_ratio", "point_ratio", "h2h_points"],
+  primaryTableKey: "points", // W2d (D11): ITTF match points first (a played loss pays 1).
   officialLabel: { scorer: "Umpire" }, // doc 13 §1
   coarseEventType: "game.summary",
   // S7/#427 — the ITTF umpire has exactly two cards, yellow and red, and no

@@ -1523,6 +1523,8 @@ export interface SetBasedPreset {
   // shared comparator registry (PROMPT-08) resolves them uniformly.
   unitLabel: { one: string; many: string };
   defaultTiebreakers: TiebreakerKey[];
+  // W2d (D11; X-TB-3) — the module's `primaryTableKey`; stated per sport (volleyball and badminton rank on wins).
+  primaryTableKey: "points" | "wins";
   officialLabel: { scorer: string };
   coarseEventType: "set.summary" | "game.summary";
   /**
@@ -2660,6 +2662,7 @@ export function makeSetBasedModule(
 
     metrics: makeMetrics(preset.unitLabel),
     defaultTiebreakers: preset.defaultTiebreakers,
+    primaryTableKey: preset.primaryTableKey,
 
     supportsDraws(_cfg, _stage: StageKind) {
       return false;

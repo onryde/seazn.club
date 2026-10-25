@@ -1885,6 +1885,8 @@ export interface PeriodPreset {
   lineupPolicy?: (cfg: PeriodCfg) => LineupPolicy;
   metrics: MetricSpec[];
   defaultTiebreakers: TiebreakerKey[];
+  // W2d (D11; X-TB-3) — the module's `primaryTableKey`; stated per sport.
+  primaryTableKey: "points" | "wins";
   officialLabel: { scorer: string };
   shootoutLabel: string; // 'GWS' (ice) | 'SO' (FIH)
   // W2d (X-PT-4, B2) — how a table books a shoot-out: FIH as a draw plus a bonus point, ice hockey as a result.
@@ -2824,6 +2826,7 @@ export function makePeriodModule(
     // W2c X-PT-1 (gap a): the kernel's own goal ledger (`sideMetrics`, `periodForfeitCredit`) is gf / ga / gd.
     awardScoreKeys: { for: "gf", against: "ga", diff: "gd" },
     defaultTiebreakers: preset.defaultTiebreakers,
+    primaryTableKey: preset.primaryTableKey,
 
     // v6/00 §3 — draws are a table result only where no decider is
     // configured (FIH outdoor, rec ice); OT or a shootout means every match

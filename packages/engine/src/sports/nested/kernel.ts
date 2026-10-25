@@ -1450,6 +1450,8 @@ export interface NestedPreset {
   variants: Record<string, Partial<NestedParams>>;
   positions: PositionCatalog;
   defaultTiebreakers: TiebreakerKey[];
+  // W2d (D11; X-TB-3) — the module's `primaryTableKey`; stated per sport (tennis ranks on wins, ATP C.3-1).
+  primaryTableKey: "points" | "wins";
   officialLabel: { scorer: string };
   entrantModel?: EntrantModel;
   playerStats?: PlayerStatsModel; // Jul3/07 §3 — unlocked by person attribution
@@ -2302,6 +2304,7 @@ export function makeNestedModule(
 
     metrics: METRICS,
     defaultTiebreakers: preset.defaultTiebreakers,
+    primaryTableKey: preset.primaryTableKey,
 
     supportsDraws(_cfg, _stage: StageKind) {
       return false; // v6/00 §4 — tennis never draws

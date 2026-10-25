@@ -3,8 +3,11 @@ import { describe, expect, it } from "vitest";
 import fc from "fast-check";
 import type { StandingsDelta } from "../core/types.ts";
 import type { TiebreakerKey } from "../sport/module.ts";
+// single-sport: the validation cases below are football's own ledger (gf/ga/gd, fair_play), as they always were; the per-sport sweeps are cascade-rules.test.ts
+import { football } from "../sports/football/index.ts";
+import { validateCascade, type CascadeContext } from "./cascade-rules.ts";
 import { foldResults, type FixtureResult, type StandingsRow } from "./standings.ts";
-import { buildSwissTable, rankStandings, validateCascade } from "./tiebreakers.ts";
+import { buildSwissTable, rankStandings } from "./tiebreakers.ts";
 
 // The two football presets under test (spec 04 §1.6): H2H-first vs GD-first.
 const FIFA2026: TiebreakerKey[] = ["points", "h2h_points", "h2h_diff", "h2h_for", "diff", "for", "fair_play", "lots"];
@@ -222,32 +225,33 @@ describe("buchholz / direct comparators from the Swiss ledger", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Cascade validation (spec 05 §4.1).
+// Cascade validation (spec 05 §4.1; W2d spec §5.5 — cascade-rules.ts returns the refusals instead of throwing the first).
 // ---------------------------------------------------------------------------
 
-describe("validateCascade rejects unsupported keys (spec 05 §4.1)", () => {
-  const footballMetrics = [
-    { key: "gf", label: "GF", direction: "desc" as const },
-    { key: "ga", label: "GA", direction: "asc" as const },
-    { key: "gd", label: "GD", direction: "desc" as const },
-    { key: "fair_play", label: "FP", direction: "desc" as const },
-  ];
+describe("validateCascade refuses unsupported keys (spec 05 §4.1, W2d §5.5)", () => {
+  const league: CascadeContext = { module: football, cfg: football.configSchema.parse({}), stageKind: "league", crossGroup: false };
 
   it("accepts a cascade whose metrics the sport maintains", () => {
-    expect(() => validateCascade(FIFA2026, { metrics: footballMetrics })).not.toThrow();
+    expect(validateCascade(FIFA2026, league)).toEqual([]);
   });
 
-  it("rejects nrr when the NRR ledger is absent", () => {
-    expect(() => validateCascade(["points", "nrr"], { metrics: footballMetrics })).toThrow(/NRR/);
+  it("refuses nrr when the NRR ledger is absent", () => {
+    expect(validateCascade(["points", "nrr", "lots"], league)).toEqual([
+      { index: 1, key: "nrr", reason: "sport", need: "runs_for, balls_faced_eff, runs_against, balls_bowled_eff" },
+    ]);
   });
 
-  it("rejects set_ratio without sets won/lost", () => {
-    expect(() => validateCascade(["points", "set_ratio"], { metrics: footballMetrics })).toThrow(/sets won\/lost/);
+  it("refuses set_ratio without sets won/lost", () => {
+    expect(validateCascade(["points", "set_ratio", "lots"], league)).toEqual([
+      { index: 1, key: "set_ratio", reason: "sport", need: "sets_won, sets_lost" },
+    ]);
   });
 
-  it("rejects buchholz unless a Swiss ledger is assembled", () => {
-    expect(() => validateCascade(["points", "buchholz"], { metrics: [] })).toThrow(/Swiss ledger/);
-    expect(() => validateCascade(["points", "buchholz"], { metrics: [], swiss: true })).not.toThrow();
+  it("refuses buchholz unless the stage is Swiss (the only stage that assembles its ledger)", () => {
+    expect(validateCascade(["points", "buchholz", "lots"], league)).toEqual([
+      { index: 1, key: "buchholz", reason: "stage_format", need: "swiss" },
+    ]);
+    expect(validateCascade(["points", "buchholz", "lots"], { ...league, stageKind: "swiss" })).toEqual([]);
   });
 });
 

@@ -4038,6 +4038,7 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
   // spec §2.6 — ICC-style cascade; `nrr` is resolved from the integer ledger
   // by the competition engine at rank time (cross-multiplication).
   defaultTiebreakers: ["points", "wins", "nrr", "h2h_points", "seed"],
+  primaryTableKey: "points", // W2d (D11): the table ranks on points first.
 
   // Draw exists only in 2-innings cricket and only survives table play
   // (X-DR-1, ruling 78; americano offered per W2a plan finding 15).

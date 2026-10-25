@@ -992,6 +992,10 @@ export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> 
    */
   awardScoreKeys?: AwardScoreKeys;
   defaultTiebreakers: TiebreakerKey[]; // sport's official cascade (doc 05 §4)
+  /** W2d (spec §5.5 rule 1, D11; X-TB-3) — the sport's primary table measure: step 0 of every non-Swiss tie-break order
+   *  (`validateCascade`), the stage editor's pinned first row. `wins` for volleyball, badminton and tennis (FIVB V3-1,
+   *  BWF 16.2.1, ATP C.3-1), `points` for every other sport. Required, so a new sport states its own. */
+  readonly primaryTableKey: "points" | "wins";
   supportsDraws(cfg: Cfg, stage: StageKind): boolean; // knockout football: no
 
   // W2d (spec §5.2, D4, B2, D6; X-PT-2) — the outcome vocabulary the table reads. `outcomeMethods` and `decidedInOf` come

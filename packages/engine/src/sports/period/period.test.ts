@@ -6,7 +6,8 @@
 import { describe, expect, it } from "vitest";
 import { EngineError } from "../../core/errors.ts";
 import { foldMatch, type EventEnvelope } from "../../core/events.ts";
-import { rankStandings, validateCascade } from "../../competition/tiebreakers.ts";
+import { validateCascade } from "../../competition/cascade-rules.ts";
+import { rankStandings } from "../../competition/tiebreakers.ts";
 import { decidedInFor } from "../../competition/decided-in.ts";
 import { payout, setsToWinOf } from "../../competition/points.ts";
 import type { FixtureResult, StandingsRow } from "../../competition/standings.ts";
@@ -459,7 +460,10 @@ describe("period kernel — headline grammar (v6/00 §5)", () => {
 
 describe("icehockey cascade — IIHF §220 hand-computed 3-team tie", () => {
   it("validates and orders the sub-group by H2H points, then H2H diff", () => {
-    validateCascade(icehockey.defaultTiebreakers, { metrics: icehockey.metrics });
+    // Every step of the IIHF order is one ice hockey records and can run (W2d §5.5 rules 2-5). The order's missing closing
+    // `lots` is the shape rule's (rule 1), which today's default fails until Task 11 signs the IIHF order (plan PS-2).
+    const ctx = { module: icehockey, cfg: icehockey.configSchema.parse({}), stageKind: "league", crossGroup: false } as const;
+    expect(validateCascade(icehockey.defaultTiebreakers, ctx).filter((refusal) => refusal.reason !== "last")).toEqual([]);
     // Three teams on 6 points. Head-to-head mini-table (each played each
     // once): A beat B 5–0, B beat C 3–2, C beat A 2–1 → all 3 H2H points;
     // H2H diff: A +4, B −2, C −2; H2H for: B 3, C 4 → order A, C, B.
@@ -755,6 +759,7 @@ describe("S8/#417 W6 — shotTracking gates `<key>.shot` per preset", () => {
     positions: minimalCatalog,
     metrics: [],
     defaultTiebreakers: ["points"],
+    primaryTableKey: "points",
     officialLabel: { scorer: "Referee" },
     shootoutLabel: "SO",
     shootoutAs: "result",

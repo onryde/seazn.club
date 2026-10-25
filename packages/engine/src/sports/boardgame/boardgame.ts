@@ -1077,6 +1077,7 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
     { key: "black", label: "Games as Black", direction: "desc", display: false },
   ],
   defaultTiebreakers: BOARDGAME_TIEBREAKERS,
+  primaryTableKey: "points", // W2d (D11): the table ranks on points first.
 
   // X-DR-1 (ruling 78): draws only where nobody must advance. A drawn bracket
   // game goes to the tie-break (BG-KO-1), never to a decided draw.
