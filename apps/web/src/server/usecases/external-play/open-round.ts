@@ -372,10 +372,11 @@ export async function openRound(
     let open: RoundOpenRow;
     let kind: "opened" | "reopened" | "reinvited";
     let retireBoards: string[] = [];
-    // Spec §3.2.1: whether this round's check-in runs in timed batches is decided HERE, once per stamp (the insert AND the
-    // re-stamp), from the camera policy of this moment, and stored: an `off` round spends no vendor calls so it is one
-    // batch; required and optional stagger. Read only when a stamp is about to be written, and never again - a later
-    // downgrade must not move a board's open time underneath a player who was told it.
+    // Spec §3.2.1: whether this round's check-in runs in timed batches is decided HERE, ONCE, at the round's first open, from the
+    // camera policy of that moment, and stored: an `off` round spends no vendor calls so it is one batch; required and optional
+    // stagger. A re-stamp (the organiser's re-open, D17's re-arm) KEEPS the stored flag and never asks the policy again
+    // (final review I1, owner-approved 2026-10-25): the screen words its confirmation from that stored flag ("the last group
+    // opens {span} minutes from now"), and a later downgrade must not move a board's open time underneath a player who was told it.
     const staggerNow = async (): Promise<boolean> => (await stageCameraPolicy(tx, a.stageId)) !== "off";
     if (!existing) {
       const staggered = await staggerNow();
@@ -391,9 +392,9 @@ export async function openRound(
       // Nobody this round was invited (a re-pair deleted the rows, or every
       // send failed), or — D17 — the only boards still playable are the ones
       // this open re-arms: the window starts now, for everyone.
-      const staggered = await staggerNow();
+      // `staggered` is not in the SET: the flag the first open stored stands.
       const [row] = await tx<RoundOpenRow[]>`
-        update stage_round_opens set opened_at = ${now}, opened_by = ${a.actorUserId}, staggered = ${staggered}
+        update stage_round_opens set opened_at = ${now}, opened_by = ${a.actorUserId}
          where id = ${existing.id}
         returning id, opened_at as "roundOpenedAt", opened_by as "openedBy", staggered`;
       open = row!;

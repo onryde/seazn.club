@@ -127,6 +127,25 @@ describe.skipIf(!HAS_DB)("latestEmailStatus and purgeOldEmails (V470 email_outbo
       ]);
     });
 
+    it("a kind narrows the ask BEFORE the fold: a newer row of another kind on the same ref and mailbox neither answers nor hides the kind's own (final review m4)", async () => {
+      const ref = newRef();
+      await history([
+        { ref, to: "ann@x.test", kind: "chess_invite", status: "delivered", createdAt: minutesAgo(30), statusAt: minutesAgo(29) },
+        { ref, to: "ann@x.test", kind: "magic_link", status: "bounced", createdAt: minutesAgo(10), statusAt: minutesAgo(9) },
+      ]);
+      // Asked for the chess invite: its own row answers, although the other kind's row is the newest on the ref.
+      const chess = await latestEmailStatus(orgA, REF_TYPE, [ref], "chess_invite");
+      expect(chess.map((r) => [r.kind, r.status])).toEqual([["chess_invite", "delivered"]]);
+      // The other kind asks for its own, and gets it; the positive pair, so the filter is for the kind and not a constant.
+      expect((await latestEmailStatus(orgA, REF_TYPE, [ref], "magic_link")).map((r) => [r.kind, r.status])).toEqual([["magic_link", "bounced"]]);
+      // A kind with no row on the ref answers nothing (not the other kind's row).
+      const lonely = newRef();
+      await history([{ ref: lonely, to: "bo@x.test", kind: "magic_link", status: "sent", createdAt: minutesAgo(5), statusAt: minutesAgo(4) }]);
+      expect(await latestEmailStatus(orgA, REF_TYPE, [lonely], "chess_invite")).toEqual([]);
+      // No kind asked: the newest of any kind answers, as before (the other callers' behaviour is unchanged).
+      expect((await latest(orgA, ref)).map((r) => [r.kind, r.status])).toEqual([["magic_link", "bounced"]]);
+    });
+
     it("sweeps the vocabulary: each status reads as itself when it is the only row, and a ref whose every row is replaced reads as none", async () => {
       let checked = 0;
       for (const status of OUTBOX_STATUSES) {

@@ -6,11 +6,15 @@
 // with a White/Black switch, never their sound, never seen by them. Beside the
 // pane, the board's flags — evidence, never a verdict — and the decision actions.
 //
-// One DOM, branched at `lg` (the canvas draws a 1280 desktop and a 320
-// phone): below it the board picker is a <select> and the page is one column
-// in the phone's order; at `lg` the three columns of the desktop artboard.
-// The two wrappers below `lg` are `display: contents`, so their children
-// take the phone's order (`order-*`) in the one flex column.
+// One DOM, branched at `md` and `lg` (the canvas draws a 1280 desktop and a 320
+// phone): below `md` the page is one flex column in the phone's order (the
+// round column first, then the waiting list, the board picker, the board, the
+// flags, the decision); from `md` the round column is a real column (spec
+// 2026-10-24-arbiter-round-column-design.md §5.1) and the board and the decision
+// stack in the first track beside it; at `lg` the three columns of the desktop
+// artboard. The two groups below `md` are `display: contents`, so their children
+// take the phone's order (`order-*`) in the one flex column; the column itself
+// (an `aside`, a landmark) is one real box and is placed by name.
 //
 // `ArbiterScreen` is pure (props in, markup out — the unit suite renders it);
 // `ArbiterPanel` is the shell: the decision reducer, the camera join, the
@@ -23,8 +27,11 @@ import { routes } from "@/lib/routes";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { boardIsOver, offersSettle, type ArbiterBoard, type ArbiterFlag, type ArbiterRound } from "@/lib/arbiter-view";
 import { extendEdgesOf, watchedWindows } from "@/lib/checkin-extend";
+import { viewOfRound } from "@/lib/round-column";
 import { formatClock, remainingMs } from "@/components/public-site/match-room/clock-math";
+import { RoundColumn, WaitingList, type ColumnPlacement, type RoundColumnData } from "./arbiter/round-column";
 import { browserBandPollDeps, startBandPolling } from "./desk/band-poll";
+import { useOpenRound, type OpenRoundHandle } from "./desk/use-open-round";
 import { useExtendClock } from "./use-extend-clock";
 import {
   arbiterDecision,
@@ -60,6 +67,7 @@ import {
   CameraReportCard,
   CARD,
   CHIP_NEUTRAL,
+  CLOCK_FACE,
   FlagCard,
   MUTED,
   noticeLapsed,
@@ -116,8 +124,17 @@ export type ArbiterScreenProps = {
   /** The viewer's clock; null before mount (no time of day is painted). */
   nowMs: number | null;
   slugs: { org: string; comp: string; div: string };
+  /** What the page read for the round column: the open-able rounds, the organiser's queue, the venue zone (spec §5). */
+  column: RoundColumnData;
+  /** C9: the Open / Resend press of the round ON SCREEN, owned by `ArbiterPanel` (one `useOpenRound`) and read by both the check-in
+   *  hero in the column and the waiting list, so a Resend on a row and the hero's reinvite are never in flight together. */
+  openRound: OpenRoundHandle;
   on: {
+    /** Any board of the round: a live one, a finished one, one on hold (the queue's "Review board N" offers all three). */
     select(fixtureId: string): void;
+    /** A waiting row's "+5 min": select the board (so its answer lands in the decision area), then extend it. Does nothing at all while a
+     *  request is in flight (the row's button is disabled then, too). */
+    extendBoard(fixtureId: string): void;
     resync(): void;
     /** "Let the game go on" for the flags on screen, by id (ruling A). */
     goOn(flagIds: readonly string[]): void;
@@ -204,7 +221,6 @@ export function nextOffSince(prev: number | null, tile: Pick<ArbiterTileView, "p
 // ── the screen ─────────────────────────────────────────────────────────────
 
 const INK = "text-[#2e1065]";
-const CLOCK_FACE = "[font-family:var(--font-barlow,var(--font-geist-sans))] font-semibold tabular-nums";
 
 function names(b: ArbiterBoard, f: Fmt): string {
   return `${b.white.name} ${f.t("arbiter.vs")} ${b.black.name}`;
@@ -215,11 +231,30 @@ function flagCount(b: ArbiterBoard, f: Fmt): string | null {
 }
 
 export function ArbiterScreen(p: ArbiterScreenProps) {
-  const f = useFmt(p.nowMs);
+  const f = useFmt(p.nowMs, p.column.tz);
   const back = routes.division(p.slugs.org, p.slugs.comp, p.slugs.div, "fixtures");
   const ids = { flags: useId(), decide: useId(), outage: useId(), board: useId(), boards: useId(), switch: useId() };
   const roundLine = p.round ? f.t("arbiter.roundLine", { stage: p.round.stageName, round: p.round.roundNo }) : null;
   const board = p.round?.boards.find((b) => b.fixtureId === p.decision.boardId) ?? null;
+  // C13: the round's "+5 min" bar. Built once per path, never twice: with no round there is none.
+  const roundBar = (variant: RoundBarVariant) =>
+    p.round === null ? null : (
+      <RoundExtend variant={variant} round={p.round} state={p.roundExtend} requestBusy={p.decision.busy !== null} nowMs={p.nowMs} onExtend={p.on.extendRound} f={f} />
+    );
+  // The column, with the bar it places by phase. `grid` on the board grid, `solo` on the paths with no grid (spec §5.1).
+  const column = (placement: ColumnPlacement) => (
+    <RoundColumn
+      round={p.round}
+      requested={p.requested}
+      data={p.column}
+      nowMs={p.nowMs}
+      slugs={p.slugs}
+      openRound={p.openRound}
+      on={{ select: p.on.select, extendBoard: p.on.extendBoard }}
+      roundExtend={roundBar("inline")}
+      placement={placement}
+    />
+  );
 
   return (
     <div className={`min-w-0 bg-[#fdfcf8] ${INK}`}>
@@ -246,26 +281,34 @@ export function ArbiterScreen(p: ArbiterScreenProps) {
       </header>
 
       {p.requested === null && p.round !== null && <RoundNotes round={p.round} slugs={p.slugs} f={f} />}
-      {p.requested === null && p.round !== null && (
-        <RoundExtend round={p.round} state={p.roundExtend} requestBusy={p.decision.busy !== null} nowMs={p.nowMs} onExtend={p.on.extendRound} f={f} />
-      )}
-
+      {/* C13: exactly ONE round bar per page, placed by path. Check-in: the hero's. Playing, and the no-boards path: the status block's.
+          Both are handed to the column below. Only the I3 branch of the chain below has no column, so only there does the bar keep the
+          top of the page. */}
       {p.requested !== null ? (
         <RequestedNotice body={f.t(p.requested === "own" ? "arbiter.requested.own" : "arbiter.requested.unavailable")} slugs={p.slugs} f={f} />
       ) : p.round === null ? (
-        <EmptyNotice title={f.t("arbiter.empty.title")} body={f.t("arbiter.empty.body")} />
+        <EmptyNotice title={f.t("arbiter.empty.title")} body={f.t("arbiter.empty.body")}>
+          {column("solo")}
+        </EmptyNotice>
       ) : p.round.boards.length === 0 && p.round.ownBoards > 0 ? (
         // C1 (D7): every board of the round is one the viewer plays on.
-        <EmptyNotice title={null} body={f.t("arbiter.ownRound")} />
+        <EmptyNotice title={null} body={f.t("arbiter.ownRound")}>
+          {column("solo")}
+        </EmptyNotice>
       ) : p.round.boards.length === 0 ? (
-        <EmptyNotice title={null} body={f.t("arbiter.emptyBoards")} />
+        <EmptyNotice title={null} body={f.t("arbiter.emptyBoards")}>
+          {column("solo")}
+        </EmptyNotice>
       ) : board === null ? (
         // I3: the board asked for (or on screen) is not in this round — said
-        // so, never another board opened in its place.
-        <RequestedNotice body={f.t("arbiter.requested.unavailable")} slugs={p.slugs} f={f} />
+        // so, never another board opened in its place. The one path with a round and no column, so the round's bar stays on top.
+        <>
+          {roundBar("bar")}
+          <RequestedNotice body={f.t("arbiter.requested.unavailable")} slugs={p.slugs} f={f} />
+        </>
       ) : (
-        <main className="mx-auto flex w-full min-w-0 max-w-[1232px] flex-col gap-3 px-4 pt-3 pb-6 lg:grid lg:grid-cols-[248px_minmax(0,1fr)_320px] lg:items-start lg:gap-6 lg:p-6">
-          <nav aria-labelledby={ids.boards} className="hidden min-w-0 flex-col gap-1.5 lg:flex">
+        <main className="mx-auto flex w-full min-w-0 max-w-[1232px] flex-col gap-3 px-4 pt-3 pb-6 md:grid md:grid-cols-[minmax(0,1fr)_320px] md:grid-rows-[auto_1fr] md:items-start md:gap-4 lg:grid-cols-[248px_minmax(0,1fr)_320px] lg:grid-rows-[auto_1fr] lg:gap-6 lg:p-6">
+          <nav aria-labelledby={ids.boards} className="hidden min-w-0 flex-col gap-1.5 lg:col-start-1 lg:row-start-1 lg:row-span-2 lg:flex">
             <h2 id={ids.boards} className={`m-0 mb-1 text-xs font-semibold tracking-[0.06em] uppercase ${MUTED}`}>
               {f.t("arbiter.boardsHeading")}
             </h2>
@@ -291,100 +334,133 @@ export function ArbiterScreen(p: ArbiterScreenProps) {
             })}
           </nav>
 
-          <label className={`flex min-w-0 flex-col gap-1.5 text-[13px] font-semibold lg:hidden ${SOFT}`}>
-            {f.t("arbiter.boardPicker")}
-            <select
-              value={board.fixtureId}
-              onChange={(e) => p.on.select(e.target.value)}
-              className={`min-h-11 w-full min-w-0 rounded-[10px] border border-[#c9bdf0] bg-white px-3 text-[15px] font-normal ${INK}`}
+          {/* The track (Task 16 D4): ONE box from md to lg, the first grid track's flex column, holding the board group and the decision
+              group so their children sort against each other - the decision above the waiting list. Below md and from lg it is `contents`
+              and owns nothing. */}
+          <div className="min-w-0 contents md:max-lg:col-start-1 md:max-lg:row-start-1 md:max-lg:flex md:max-lg:flex-col md:max-lg:gap-3">
+            {/* The board group: the picker (below lg), the watch-only line, the heading, the camera, other reports and the waiting list. It is
+                `contents` until lg (its children are the page's flex items below md, the track's from md), and at lg the middle track over
+                both rows. */}
+            <div
+              data-testid="arbiter-board-group"
+              className="min-w-0 contents lg:col-start-2 lg:row-start-1 lg:row-span-2 lg:flex lg:flex-col lg:gap-3.5"
             >
-              {p.round.boards.map((b) => (
-                <option key={b.fixtureId} value={b.fixtureId}>
-                  {[f.t("arbiter.boardNo", { n: b.boardNo }), names(b, f), flagCount(b, f)].filter(Boolean).join(" · ")}
-                </option>
-              ))}
-            </select>
-          </label>
-          <p className={`m-0 text-xs leading-[1.45] lg:hidden ${MUTED}`}>{f.t("arbiter.watchOnly")}</p>
-
-          {/* centre column (desktop) */}
-          <div className="contents min-w-0 lg:flex lg:flex-col lg:gap-3.5">
-            <div className="order-1 flex min-w-0 items-center justify-between gap-2 lg:items-baseline lg:gap-3">
-              <h2 id={ids.board} className="m-0 min-w-0 text-xl font-semibold max-lg:sr-only">
-                {f.t("arbiter.boardNo", { n: board.boardNo })} · {board.white.name} <span className={`font-medium ${MUTED}`}>{f.t("arbiter.vs")}</span>{" "}
-                {board.black.name}
-              </h2>
-              <BoardStatus board={board} f={f} />
-              {p.round.timeControl && <span className={`text-[13px] lg:hidden ${SOFT}`}>{p.round.timeControl}</span>}
-            </div>
-            <div className="order-2 flex min-w-0 flex-col gap-3 lg:gap-3.5">
-              <Tile seat={p.shown} board={board} video={p.video} f={f} />
-              <PlayerSwitch board={board} shown={p.shown} video={p.video} nowMs={p.nowMs} baseId={ids.switch} onSwitch={p.on.switchTo} f={f} />
-              {/* The completed switch, and each refusal, said to assistive technology (§5.6.4). */}
-              <p role="status" className="sr-only">
-                {statusSentence(p.video, board, p.shown, f)}
-              </p>
-            </div>
-            {(p.video.kind === "fault" || p.video.kind === "error") && (
-              <button type="button" onClick={p.on.retryVideo} className={`order-2 self-start ${BUTTON_QUIET}`}>
-                {f.t("arbiter.tile.retry")}
-              </button>
-            )}
-            <OtherReports round={p.round} board={board} f={f} />
-          </div>
-
-          {/* right column (desktop) */}
-          <div className="contents min-w-0 lg:flex lg:flex-col lg:gap-3.5">
-            <section aria-labelledby={ids.flags} className="order-3 flex min-w-0 flex-col gap-2.5 border-t border-[#e7e3f3] pt-3 lg:border-t-0 lg:pt-0">
-              <h2 id={ids.flags} className="m-0 text-[17px] font-semibold">
-                <span className="lg:hidden">{f.t("arbiter.flags.headingThis")}</span>
-                <span className="max-lg:hidden">{f.t("arbiter.flags.headingBoard", { n: board.boardNo })}</span>
-              </h2>
-              <p className={`m-0 text-xs leading-[1.45] lg:text-[13px] ${MUTED}`}>{f.t("arbiter.flags.lede")}</p>
-              {board.flags.map((flag) => (
-                <FlagCard key={flag.id} flag={flag} f={f} />
-              ))}
-              {board.cameraReport === "pending" && (
-                <article className={`${CARD} border-[#e7e3f3]`}>
-                  <span className={CHIP_NEUTRAL}>{f.t("arbiter.flag.pending.chip")}</span>
-                  <p className="m-0 text-[13px] leading-[1.45] lg:text-sm">{f.t("arbiter.flag.pending.body")}</p>
-                </article>
-              )}
-              {board.flags.length === 0 && board.cameraReport !== "pending" && (
-                <p className={`m-0 text-[13px] ${SOFT}`}>{f.t("arbiter.flags.none")}</p>
-              )}
-            </section>
-            <Decision board={board} decision={p.decision} roundBusy={p.roundExtend.busy} nowMs={p.nowMs} slugs={p.slugs} on={p.on} f={f} headingId={ids.decide} />
-            {showsOutageCard(board, p.video) && (
-              <section aria-labelledby={ids.outage} className="order-6 flex min-w-0 flex-col gap-2 rounded-xl border border-[#f5d27a] bg-[#fef3c7] p-3 text-[#713f12]">
-                <span className="text-[11px] font-semibold tracking-[0.06em] uppercase">{f.t("arbiter.outage.eyebrow")}</span>
-                <h2 id={ids.outage} className="m-0 text-[15px] font-semibold">
-                  {f.t("arbiter.outage.title")}
-                </h2>
-                <p className="m-0 text-[13px] leading-[1.45]">{f.t("arbiter.outage.body")}</p>
-                <button
-                  type="button"
-                  onClick={p.on.override}
-                  disabled={p.decision.busy !== null}
-                  aria-busy={p.decision.busy?.kind === "override" || undefined}
-                  className="min-h-11 cursor-pointer rounded-[10px] bg-[#713f12] px-3 text-[15px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+              <label className={`flex min-w-0 flex-col gap-1.5 text-[13px] font-semibold lg:hidden ${SOFT}`}>
+                {f.t("arbiter.boardPicker")}
+                <select
+                  value={board.fixtureId}
+                  onChange={(e) => p.on.select(e.target.value)}
+                  className={`min-h-11 w-full min-w-0 rounded-[10px] border border-[#c9bdf0] bg-white px-3 text-[15px] font-normal ${INK}`}
                 >
-                  {f.t("arbiter.outage.cta")}
+                  {p.round.boards.map((b) => (
+                    <option key={b.fixtureId} value={b.fixtureId}>
+                      {[f.t("arbiter.boardNo", { n: b.boardNo }), names(b, f), flagCount(b, f)].filter(Boolean).join(" · ")}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <p className={`m-0 text-xs leading-[1.45] lg:hidden ${MUTED}`}>{f.t("arbiter.watchOnly")}</p>
+              <div className="order-1 flex min-w-0 items-center justify-between gap-2 lg:items-baseline lg:gap-3">
+                <h2 id={ids.board} className="m-0 min-w-0 text-xl font-semibold max-lg:sr-only">
+                  {f.t("arbiter.boardNo", { n: board.boardNo })} · {board.white.name} <span className={`font-medium ${MUTED}`}>{f.t("arbiter.vs")}</span>{" "}
+                  {board.black.name}
+                </h2>
+                <BoardStatus board={board} f={f} />
+                {p.round.timeControl && <span className={`text-[13px] lg:hidden ${SOFT}`}>{p.round.timeControl}</span>}
+              </div>
+              <div className="order-2 flex min-w-0 flex-col gap-3 lg:gap-3.5">
+                <Tile seat={p.shown} board={board} video={p.video} f={f} />
+                <PlayerSwitch board={board} shown={p.shown} video={p.video} nowMs={p.nowMs} baseId={ids.switch} onSwitch={p.on.switchTo} f={f} />
+                {/* The completed switch, and each refusal, said to assistive technology (§5.6.4). */}
+                <p role="status" className="sr-only">
+                  {statusSentence(p.video, board, p.shown, f)}
+                </p>
+              </div>
+              {(p.video.kind === "fault" || p.video.kind === "error") && (
+                <button type="button" onClick={p.on.retryVideo} className={`order-2 self-start ${BUTTON_QUIET}`}>
+                  {f.t("arbiter.tile.retry")}
                 </button>
+              )}
+              <OtherReports round={p.round} board={board} f={f} />
+              {/* The seats that are not here: sorted by its own `order` classes (round-column.tsx), first of the page on a phone and under
+                  the camera from md. Renders nothing at all outside a check-in with someone to wait for. */}
+              <WaitingList
+                boards={p.round.boards}
+                view={viewOfRound(p.column.views, p.round)}
+                openRound={p.openRound}
+                nowMs={p.nowMs}
+                requestBusy={p.decision.busy !== null || p.roundExtend.busy}
+                on={{ select: p.on.select, extendBoard: p.on.extendBoard }}
+              />
+            </div>
+
+            {/* The decision group: the flags, the decision and the outage card. `contents` until lg (the phone's flex column, then the track's:
+                from md to lg their orders 5 to 7 put them after the camera and other reports and before the waiting list's 8), and at lg the
+                right track's second row, under the column. */}
+            <div
+              data-testid="arbiter-decision-group"
+              className="min-w-0 contents lg:col-start-3 lg:row-start-2 lg:flex lg:flex-col lg:gap-3.5"
+            >
+              <section aria-labelledby={ids.flags} className="order-3 flex min-w-0 flex-col gap-2.5 border-t border-[#e7e3f3] pt-3 md:max-lg:order-5 lg:border-t-0 lg:pt-0">
+                <h2 id={ids.flags} className="m-0 text-[17px] font-semibold">
+                  <span className="lg:hidden">{f.t("arbiter.flags.headingThis")}</span>
+                  <span className="max-lg:hidden">{f.t("arbiter.flags.headingBoard", { n: board.boardNo })}</span>
+                </h2>
+                <p className={`m-0 text-xs leading-[1.45] lg:text-[13px] ${MUTED}`}>{f.t("arbiter.flags.lede")}</p>
+                {board.flags.map((flag) => (
+                  <FlagCard key={flag.id} flag={flag} f={f} />
+                ))}
+                {board.cameraReport === "pending" && (
+                  <article className={`${CARD} border-[#e7e3f3]`}>
+                    <span className={CHIP_NEUTRAL}>{f.t("arbiter.flag.pending.chip")}</span>
+                    <p className="m-0 text-[13px] leading-[1.45] lg:text-sm">{f.t("arbiter.flag.pending.body")}</p>
+                  </article>
+                )}
+                {board.flags.length === 0 && board.cameraReport !== "pending" && (
+                  <p className={`m-0 text-[13px] ${SOFT}`}>{f.t("arbiter.flags.none")}</p>
+                )}
               </section>
-            )}
+              <Decision board={board} decision={p.decision} roundBusy={p.roundExtend.busy} nowMs={p.nowMs} slugs={p.slugs} on={p.on} f={f} headingId={ids.decide} />
+              {showsOutageCard(board, p.video) && (
+                <section aria-labelledby={ids.outage} className="order-6 flex min-w-0 flex-col gap-2 rounded-xl border border-[#f5d27a] bg-[#fef3c7] p-3 text-[#713f12] md:max-lg:order-7">
+                  <span className="text-[11px] font-semibold tracking-[0.06em] uppercase">{f.t("arbiter.outage.eyebrow")}</span>
+                  <h2 id={ids.outage} className="m-0 text-[15px] font-semibold">
+                    {f.t("arbiter.outage.title")}
+                  </h2>
+                  <p className="m-0 text-[13px] leading-[1.45]">{f.t("arbiter.outage.body")}</p>
+                  <button
+                    type="button"
+                    onClick={p.on.override}
+                    disabled={p.decision.busy !== null}
+                    aria-busy={p.decision.busy?.kind === "override" || undefined}
+                    className="min-h-11 cursor-pointer rounded-[10px] bg-[#713f12] px-3 text-[15px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {f.t("arbiter.outage.cta")}
+                  </button>
+                </section>
+              )}
+            </div>
           </div>
+
+          {/* The round column: last in the DOM, placed by name (round-column.tsx), the first thing on a phone and the second track from
+              md. Never inside either group: a landmark is not `display: contents`. */}
+          {column("grid")}
         </main>
       )}
     </div>
   );
 }
 
-function EmptyNotice({ title, body }: { title: string | null; body: string }) {
+/** A notice with nothing to watch, and the round column beside it: from md `main` is two tracks (the notice, the column); below md
+ *  the column leads (it carries the press that fixes the notice). `children` is the column. */
+function EmptyNotice({ title, body, children }: { title: string | null; body: string; children: ReactNode }) {
   return (
-    <main className="mx-auto flex w-full max-w-[1232px] flex-col gap-2 px-4 py-6 lg:p-6">
-      {title && <h2 className="m-0 text-[17px] font-semibold">{title}</h2>}
-      <p className={`m-0 max-w-prose text-sm leading-[1.5] ${SOFT}`}>{body}</p>
+    <main className="mx-auto flex w-full min-w-0 max-w-[1232px] flex-col gap-3 px-4 py-6 md:grid md:grid-cols-[minmax(0,1fr)_320px] md:items-start md:gap-4 lg:gap-6 lg:p-6">
+      <div className="flex min-w-0 flex-col gap-2 md:col-start-1 md:row-start-1">
+        {title && <h2 className="m-0 text-[17px] font-semibold">{title}</h2>}
+        <p className={`m-0 max-w-prose text-sm leading-[1.5] ${SOFT}`}>{body}</p>
+      </div>
+      {children}
     </main>
   );
 }
@@ -418,11 +494,23 @@ function RoundNotes({ round, slugs, f }: { round: ArbiterRound; slugs: ArbiterSc
   );
 }
 
+/** Where the bar is drawn. `bar` is the top of the page (the I3 path, the one with no column to hold it); `inline` is a block inside the
+ *  column (the check-in hero, the playing status), whose own card already pads and bounds it. */
+type RoundBarVariant = "bar" | "inline";
+const ROUND_BAR_BOX: Record<RoundBarVariant, string> = {
+  bar: "mx-auto flex w-full max-w-[1232px] min-w-0 flex-col items-start gap-1.5 px-4 pt-3 lg:px-6 lg:pt-5",
+  inline: "flex w-full min-w-0 flex-col items-start gap-1.5",
+};
+// `inline` is the round card's button, side by side with the round's press (round-column.tsx): both fill the card and are capped at the
+// same width below md, so the two read as one pair of buttons rather than one stretched and one label-wide (Task 16 D5).
+const ROUND_BAR_BUTTON: Record<RoundBarVariant, string> = { bar: "w-full lg:w-auto", inline: "w-full max-md:max-w-sm" };
+
 /** Spec §3.2.2: "+5 min to the round" at the top of the panel - one press gives every board of the round whose check-in is open
  *  five more minutes, and the answer says how many and why the rest were left alone. Offered while at least one board would
  *  accept it - the server's own reading of each board (`checkin.refusal`), re-asked of the TICKING clock (owner, 2026-10-19: +5 only
  *  inside the check-in window, to the millisecond) - and, once pressed, for as long as its answer is on screen. */
 function RoundExtend({
+  variant,
   round,
   state,
   requestBusy,
@@ -430,6 +518,7 @@ function RoundExtend({
   onExtend,
   f,
 }: {
+  variant: RoundBarVariant;
   round: ArbiterRound;
   state: RoundExtendState;
   requestBusy: boolean;
@@ -446,7 +535,7 @@ function RoundExtend({
   const why = offered ? null : roundExtendWhy(round.boards, nowMs);
   if (!offered && lines.length === 0 && why === null) return null;
   return (
-    <div data-testid="arbiter-extend-round" className="mx-auto flex w-full max-w-[1232px] min-w-0 flex-col items-start gap-1.5 px-4 pt-3 lg:px-6 lg:pt-5">
+    <div data-testid="arbiter-extend-round" className={ROUND_BAR_BOX[variant]}>
       {offered && (
         <>
           <button
@@ -455,7 +544,7 @@ function RoundExtend({
             onClick={onExtend}
             disabled={state.busy || requestBusy}
             aria-busy={state.busy || undefined}
-            className={`${BUTTON_QUIET} w-full lg:w-auto`}
+            className={`${BUTTON_QUIET} ${ROUND_BAR_BUTTON[variant]}`}
           >
             {state.busy ? f.t("externalPlay.checkinExtend.busy") : extendRoundLabel(f)}
           </button>
@@ -797,7 +886,7 @@ function Decision({
   const busy = decision.busy !== null || roundBusy;
   const guidance = settleGuidance(board);
   return (
-    <section aria-labelledby={headingId} className="order-5 flex min-w-0 flex-col gap-2 border-t border-[#e7e3f3] pt-3 lg:pt-3.5">
+    <section aria-labelledby={headingId} data-testid="arbiter-decision" className="order-5 flex min-w-0 flex-col gap-2 border-t border-[#e7e3f3] pt-3 md:max-lg:order-6 lg:pt-3.5">
       <h2 id={headingId} className="m-0 text-[17px] font-semibold">
         <span className="lg:hidden">{f.t("arbiter.decide.headingBoard", { n: board.boardNo })}</span>
         <span className="max-lg:hidden">{f.t("arbiter.decide.heading")}</span>
@@ -942,11 +1031,15 @@ export function ArbiterPanel({
   requested,
   slugs,
   initialFixtureId,
+  column,
 }: {
   round: ArbiterRound | null;
   requested: ArbiterScreenProps["requested"];
   slugs: ArbiterScreenProps["slugs"];
   initialFixtureId: string | null;
+  /** The round column's data, read server-side by the page. Required: a panel handed nothing would paint an empty column that
+   *  looks like "no round is paired" when the page simply forgot to read one. */
+  column: RoundColumnData;
 }) {
   const router = useRouter();
   // I3: the board asked for, EXACTLY — absent from the round, the screen
@@ -1078,6 +1171,10 @@ export function ArbiterPanel({
     [router, linked],
   );
 
+  // C9: ONE handle for the round on screen, shared by the hero (inside the column) and the waiting list. Two calls would be two
+  // reducers: a resend started from a row would not disable the hero's. It resets by itself on a new round (use-open-round.ts).
+  const openRound = useOpenRound(round === null ? null : viewOfRound(column.views, round));
+
   const select = useCallback(
     (fixtureId: string) => {
       dispatch({ type: "select", boardId: fixtureId });
@@ -1100,8 +1197,23 @@ export function ArbiterPanel({
       shown={shown}
       nowMs={nowMs}
       slugs={slugs}
+      column={column}
+      openRound={openRound}
       on={{
         select,
+        // A waiting row's "+5 min": the board becomes the one on screen (its answer lands in the decision area, which is about the
+        // board on screen), then the extend goes. An id not in this round, or any request in flight, does nothing at all.
+        extendBoard: (fixtureId) => {
+          const target = round?.boards.find((b) => b.fixtureId === fixtureId);
+          if (!target) return;
+          // One request at a time, and the pane stays put: `select` ignores `busy`, so moving to this board while another request is out
+          // would leave that request's answer on a deselected board, where the reducer clears the busy flag and shows nothing. The same
+          // rule as the panel's own +5 (disabled while a decision or the round's +5 is in flight), and the row's button says so too.
+          if (decision.busy !== null) return;
+          if (roundExtend.busy) return;
+          select(fixtureId);
+          void runner.extend(target.fixtureId, target.boardNo);
+        },
         resync: () => {
           if (decision.boardId) void runner.resync(decision.boardId);
         },

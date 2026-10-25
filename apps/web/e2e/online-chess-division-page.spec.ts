@@ -1,14 +1,15 @@
 // Owner staging test 2026-10-19, in a real browser: an online (Lichess) chess division's PAGE.
 //   - the header chip names the sport as the word "Chess" (not the stored key "Boardgame");
 //   - until the division is started the fixtures tab says so, once ("Start the division to open rounds for online play.");
-//   - after Start the line is gone and the Open round control takes its place.
+//   - after Start the line is gone, and the tab hands the round over to the Arbiter Panel: no Open round control on the tab
+//     any more (phase 2 moved it into the panel's round column), and the one entry card reads "Round 1 is ready to open".
 // The cards' markup is stages-panel-start-hint.test.tsx's and the page's gates are online-start-hint-wiring.test.tsx's;
 // this is the sequence, driven through the real page and the real Start.
 import { test, expect } from "@playwright/test";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { TAG, apiJson, competitionPath, createStageAndGenerate, expectNoHorizontalScroll } from "./helpers";
-import { uiEn } from "./match-room-kit";
+import { fill, uiEn } from "./match-room-kit";
 
 const SHOTS = process.env.ROOM_SHOTS_DIR;
 
@@ -47,6 +48,15 @@ test("online chess division: the header says Chess; the fixtures tab says to sta
   await expect(hint).toHaveCount(1);
   await expect(hint).toHaveText(uiEn["externalPlay.openRound.startFirst"]!);
   await expect(page.getByTestId("open-round"), "no Open round control while it waits").toHaveCount(0);
+  // By its words too (the testid is the retired control's and exists nowhere in the source now): beside the hint, which rendered.
+  await expect(
+    page.getByRole("button", { name: uiEn["runsheet.round.openCta"]!, exact: true }),
+    "no Open round button while it waits",
+  ).toHaveCount(0);
+  await expect(
+    page.getByTestId("arbiter-entry-status").filter({ hasText: fill("arbiter.entry.status.ready", { round: 1 }) }),
+    "not started: nothing is ready to open yet, so the entry card cannot say so",
+  ).toHaveCount(0);
   for (const width of [320, 768, 1280]) {
     await page.setViewportSize({ width, height: width === 1280 ? 900 : 800 });
     await expect(hint).toBeVisible();
@@ -57,10 +67,20 @@ test("online chess division: the header says Chess; the fixtures tab says to sta
     }
   }
 
-  // Started: the line is gone, the control that opens a round is there.
+  // Started: the line is gone. The control that opens a round is NOT on this tab (it lives in the panel's round column); the tab
+  // keeps one entry card, and it says round 1 is ready to open.
   const started = await apiJson(request, `/api/v1/divisions/${div.data!.id}/start`, "POST");
   expect(started.status, JSON.stringify(started.error)).toBeLessThan(300);
   await page.goto(`${base}?tab=fixtures`);
-  await expect(page.getByTestId("open-round").first()).toBeVisible();
+  const entry = page.getByTestId("arbiter-entry");
+  await expect(entry, "started: the one way into the panel is on the tab").toHaveCount(1);
+  await expect(entry.getByTestId("arbiter-entry-status")).toHaveAttribute("data-kind", "ready");
+  await expect(entry.getByTestId("arbiter-entry-status")).toHaveText(fill("arbiter.entry.status.ready", { round: 1 }));
+  await expect(entry.getByRole("link", { name: uiEn["arbiter.entry.link"]!, exact: true })).toBeVisible();
+  await expect(page.getByTestId("open-round"), "started: Open round is the panel's, not the tab's").toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: uiEn["runsheet.round.openCta"]!, exact: true }),
+    "started: no Open round button on the tab, with the entry card (which says the round is ready) beside it",
+  ).toHaveCount(0);
   await expect(page.getByTestId("online-start-hint"), "started: nothing left to say").toHaveCount(0);
 });

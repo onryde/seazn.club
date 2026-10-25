@@ -180,8 +180,9 @@ the round's open row, below), and a player can read when they are due.
 - **Whether a round staggers is decided once, at the open, and stored (Q1 ruled; the review's I4).**
   A round whose camera policy is `off` spends no vendor calls, and the stagger exists for the
   vendor budget alone, so an `off` round is ONE batch: every board opens at `T`. `openRound`
-  decides it when it stamps the round (the insert AND the re-stamp of `stage_round_opens`, so a
-  re-open or D17's re-arm decides afresh) and stores it on that open row, `stage_round_opens.staggered
+  decides it ONCE, when it first stamps the round (the insert of `stage_round_opens`; a re-open or
+  D17's re-arm re-stamps the window and KEEPS the stored flag, the screen having worded its
+  confirmation from it, final review I1, owner-approved 2026-10-25) and stores it on that open row, `stage_round_opens.staggered
   boolean not null` (the capacity delta, §5.7.2; a row that exists when the delta lands defaults to
   `false`, so a round already open behaves exactly as it did). It is true when the stage's camera
   policy at that moment is `required` or `optional` (an optional tile spends when the budget
@@ -2936,7 +2937,8 @@ Every minute count is derived from `DEADLINE_AFTER_MS`, `LINE_DEADLINE_GRACE_MS`
    batch: every board opens at `T`. (b) A `required` round opened, then DOWNGRADED to `off` (D9):
    batch index 2's open time and deadline are exactly what they were before the downgrade, and
    differ from `T`'s (the case where the wrong answer is not the right one's constant). (c) A re-open
-   decides afresh and a policy change before it counts. (d) A row that existed before the delta
+   keeps the stored flag, so a policy change after the first open does not move the groups the screen promised (final review I1,
+   owner-approved 2026-10-25). (d) A row that existed before the delta
    (`staggered` defaulted `false`) behaves as it did. Mutant: `boardAnchor` reads the live policy:
    (b) red.
 6. **The deadline shift reaches every reader.** One table lists the readers (§3.2.1): seat, check-in

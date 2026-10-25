@@ -85,6 +85,8 @@ function row(opts: { onlinePlay?: RunSheetOnlinePlay; arbiterHref?: string | nul
     arbiterHref: opts.arbiterHref === null ? undefined : (opts.arbiterHref ?? ARBITER),
   }).tree();
 }
+/** The opening tag of the element carrying this testid, or null. */
+const tagOf = (h: string, testId: string) => h.match(new RegExp(`<[a-z]+[^>]*data-testid="${testId}"[^>]*>`))?.[0] ?? null;
 const chips = (tree: ReactElement[], id: string) => [...new Set(tree.filter((el) => propsOf(el)["data-testid"] === id))];
 /** The filter chip's count (run-sheet-filters.test.tsx's reader). */
 function chipCount(html: string, filter: RunSheetFilter): number | null {
@@ -194,17 +196,29 @@ describe("the row's online chips", () => {
     }
   });
 
-  it("held for the organiser: 'Needs a decision', leading to the board's card in the queue — every reason, counted", () => {
+  it("held for the organiser: 'Needs a decision' leads to the board's card - in the panel when the page offers it, in the queue on the tab when it does not - every reason, counted", () => {
+    // The queue (and its `#external-play-queue-row-<id>` anchor) is mounted only where the panel is NOT offered, so with a panel
+    // link handed down the anchor would be a tap that does nothing. The differential, per reason:
+    //   offered     -> the panel opened ON this board (`?fixture=`), never the anchor
+    //   not offered -> the anchor to the board's card in the tab's queue, never a panel link
     let checked = 0;
     for (const reason of NEEDS_REASONS) {
-      const [chip, ...more] = chips(row({ onlinePlay: online({ held: reason, live: false }) }), "run-sheet-online-held-chip");
+      const held = online({ held: reason, live: false });
+      const [chip, ...more] = chips(row({ onlinePlay: held }), "run-sheet-online-held-chip");
       expect(more, reason).toHaveLength(0);
       expect(textOf(chip), reason).toBe(messages["score.status.needs_decision"]);
-      expect(propsOf(chip!).href, reason).toBe("#external-play-queue-row-f1");
+      expect(propsOf(chip!).href, `${reason}: offered`).toBe(ARBITER);
       expect(propsOf(chip!)["data-reason"], reason).toBe(reason);
+
+      const [bare, ...bareMore] = chips(row({ onlinePlay: held, arbiterHref: null }), "run-sheet-online-held-chip");
+      expect(bareMore, `${reason}: not offered`).toHaveLength(0);
+      expect(textOf(bare), `${reason}: not offered still says it`).toBe(messages["score.status.needs_decision"]);
+      expect(propsOf(bare!).href, `${reason}: not offered`).toBe("#external-play-queue-row-f1");
+      expect(propsOf(bare!)["data-reason"], `${reason}: not offered`).toBe(reason);
       checked++;
     }
     expect(checked).toBe(NEEDS_REASONS.length);
+    expect(NEEDS_REASONS.length, "anti-vacuity: the reasons swept").toBeGreaterThan(0);
   });
 
   it("a fixture the engine already holds keeps ITS chip: one 'Needs a decision', never two", () => {
@@ -325,11 +339,20 @@ describe("StagesPanel threads the map and the arbiter link to the run sheet", ()
     canEdit: true, tz: "UTC", orgTz: "UTC", canExport: false, viewerPlan: "community" as const, phase: "scheduled" as const,
   };
 
-  it("an entry for the row ⇒ its chips, the camera chip leading to the arbiter panel for THAT fixture; no map ⇒ none", () => {
-    const h = renderToStaticMarkup(<StagesPanel {...props} onlinePlay={{ "f-s1": online({ cameraFlagCount: 2, held: "aborted" }) }} />);
+  it("an entry for the row ⇒ its chips, the camera chip leading to the arbiter panel for THAT fixture when the page offers the panel; no map ⇒ none", () => {
+    const entry = { "f-s1": online({ cameraFlagCount: 2, held: "aborted" }) };
+    const h = renderToStaticMarkup(<StagesPanel {...props} onlinePlay={entry} arbiterHref="/o/org/c/comp/d/div/arbiter" />);
     // Typed from the route's contract, not built with the helper.
     expect(h).toContain('href="/o/org/c/comp/d/div/arbiter?fixture=f-s1"');
-    expect(h).toContain('href="#external-play-queue-row-f-s1"');
+    // The held chip, offered: the panel on THIS board, and no dead anchor (nothing on the tab carries it while the panel is offered).
+    expect(tagOf(h, "run-sheet-online-held-chip"), "offered: the held chip leads into the panel").toContain('href="/o/org/c/comp/d/div/arbiter?fixture=f-s1"');
+    expect(h).not.toContain("#external-play-queue-row-f-s1");
+    // The pair: the page did not offer the panel (`arbiterHref` absent), the camera chip is still there but leads nowhere.
+    const notOffered = renderToStaticMarkup(<StagesPanel {...props} onlinePlay={entry} />);
+    expect(notOffered, "the chip renders without the link").toContain("run-sheet-camera-chip");
+    expect(notOffered, "no link into the panel").not.toContain("/arbiter");
+    // ... and the held chip is the other half of the differential: with no panel offered the queue IS on the tab, so it scrolls to it.
+    expect(tagOf(notOffered, "run-sheet-online-held-chip"), "not offered: the held chip leads to the queue's card").toContain('href="#external-play-queue-row-f-s1"');
     const bare = renderToStaticMarkup(<StagesPanel {...props} />);
     expect(bare, "the positive pair: the same row renders").toContain('data-fixture-no="1"');
     expect(bare).not.toContain("run-sheet-camera-chip");

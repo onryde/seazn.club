@@ -943,6 +943,23 @@ describe.skipIf(!HAS_DB)("every reader of a board's window sees the extension", 
     expect(await refusal(press(auth, id))).toEqual({ status: 409, code: "CHECKIN_EXTEND_CAP" });
   });
 
+  it("[extend-reader:arbiter-here] the arbiter's \"who is here\" judges the extended window: a check-in between the old and the new deadline is here only once the board is extended", async () => {
+    const { r, b, id } = await oneBoard();
+    // The seats pass reads the white (home) seat of a board in check-in; the stamp is moved by SQL to P, a minute past the old deadline.
+    await stampFixtureCheckIn(b.home.personId, id, r.orgId, { at: at(O, MIN) });
+    await sql`update fixture_availability set checked_in_at = ${P} where fixture_id = ${id} and person_id = ${b.home.personId}`;
+    const hereNow = async () => {
+      const board = (await loadArbiterRound(r.owner, r.divisionId, { now: P }))!.boards.find((x) => x.fixtureId === id)!;
+      expect(board.state, "premise: the board is in check-in, so it carries seats").toEqual({ kind: "checking_in" });
+      return board.seats!.white.here;
+    };
+    expect(await hereNow(), "before the press: the stamp is past the deadline").toBe(false);
+    await press(r.owner, id);
+    expect(await hereNow(), "after the press: it counts").toBe(true);
+    await sql`update fixture_availability set checked_in_at = ${deadlineAfter(1)} where fixture_id = ${id} and person_id = ${b.home.personId}`;
+    expect(await hereNow(), "a stamp AT the extended deadline does not").toBe(false);
+  });
+
   it("[extend-reader:extend-result] the press answers with the deadline from window.ts's own function, the same one the readers above judge by", async () => {
     const { r, id } = await oneBoard();
     const out = await press(r.owner, id);

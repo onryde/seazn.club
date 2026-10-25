@@ -13,6 +13,7 @@
 // addendum 2026-10-12): the loader reads it from fixture_video_guard_faults.
 
 import type { CheckinExtendState } from "./checkin-extend.ts";
+import type { SeatInviteWord } from "./invite-status.ts";
 
 export type ArbiterColour = "white" | "black";
 /** What the organiser's settle offers in place of a winner (I-3, fix rounds 2 and 3) — the server's one reading
@@ -168,9 +169,18 @@ export type ArbiterBoard = {
   /** Spec §3.2.2: this board's check-in - the deadline it is on, the presses it has left and whether a press would be accepted
    *  now. null in the Flagged list (no window is being run there) and for a board whose round was never opened. */
   checkin: CheckinExtendState | null;
+  /** Phase 2 (spec §6): who has checked in, and each seat's invite words, by colour. Set only for a `checking_in` board of the
+   *  round on screen; null in the Flagged list and for every other state. */
+  seats: { white: ArbiterSeatCheckin; black: ArbiterSeatCheckin } | null;
   /** Open flags only: a flag the organiser closed has had its review. */
   flags: ArbiterFlag[];
 };
+
+/** One seat of a board in check-in: has its player checked in inside the board's window (`checkInCounts`), and what the seat's
+ *  invite did (`seatInviteWords`: one word per current mailbox that has mail; "Not delivered" or "Not invited" for a seat with none).
+ *  `invites` is empty only for a seat whose mail the loader could not read (an outbox status it has no word for): the seat then
+ *  says nothing, and the error is logged. */
+export type ArbiterSeatCheckin = { here: boolean; invites: SeatInviteWord[] };
 
 /** One player's camera meeting as the board list reads it (D16, §5.6.4): `open` can be watched, `ended` has been torn
  *  down, `none` has not started (the player has not arrived). `endedAt`/`evidenceAt` are ISO, from that side's own row. */

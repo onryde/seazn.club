@@ -1,8 +1,8 @@
-// T16 (D12, canvas OpenRoundPhone / OpenRoundConfirmPhone / OpenRoundDesktop)
-// — the organiser's Open round control, as it renders each state the reader
-// (listOpenRounds, driven against the database in open-round-view.test.ts)
-// hands it, and the confirmation it shows BEFORE anything is sent: how many
-// players, and which pairings. Copy is read from the dictionaries, never typed
+// T16 (D12, canvas OpenRoundPhone / OpenRoundConfirmPhone / OpenRoundDesktop), retargeted by phase 2 (Task 10). The Open round control
+// that rendered each state on a stage card is deleted; this file now covers what is KEPT in open-round-control.tsx because the
+// Arbiter Panel's round column reads it: the confirmation shown BEFORE anything is sent (how many players, which pairings), the
+// invite state of a pairing, the count of players a press reaches, and the rule for drawing a staggered round's check-in groups.
+// (How the column lays them out is arbiter/__tests__/round-column.test.tsx's.) Copy is read from the dictionaries, never typed
 // here; the window's minutes come from the window module itself.
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -15,7 +15,7 @@ import { fmtTime } from "@/lib/format";
 import { messages } from "@/lib/messages";
 import type { OpenRoundBatch, OpenRoundPairing, OpenRoundView } from "@/lib/open-round";
 import { CHECKIN_BATCH_GAP_MS, CHECKIN_BATCH_SIZE, DEADLINE_AFTER_MS } from "@/server/external-play/window";
-import { OpenRoundConfirmBody, OpenRoundControl } from "../open-round-control";
+import { OpenRoundConfirmBody, inviteState, owedPlayers, timedBatches } from "../open-round-control";
 import { emptyExtendTally } from "@/lib/checkin-extend";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
@@ -63,104 +63,62 @@ const ROUND = (o: Partial<OpenRoundView> = {}): OpenRoundView => ({
   extendRefusals: emptyExtendTally(),
   ...o,
 });
-const html = (round: OpenRoundView) => renderToStaticMarkup(<OpenRoundControl round={round} tz={TZ} />);
-const pairingTestIds = (h: string) => [...h.matchAll(/data-testid="open-round-(pending|already)-([^"]+)"/g)].map((m) => `${m[1]}:${m[2]}`);
+/** The `msg` / `plural` the column hands the helpers (`useMsg` / `useMsgPlural`), over the English catalogue. */
+const msg = (key: string, vars: Record<string, string | number> = {}) => t(key, vars);
+const plural = (key: string, n: number, vars: Record<string, string | number> = {}) => pl(key, n, vars);
+/** A pairing's invite state as the column prints it (a fragment: text and, once invited, a <time>). */
+const stateOf = (p: OpenRoundPairing) => renderToStaticMarkup(<>{inviteState(p, (iso) => fmtTime(TZ, iso), msg, plural)}</>);
 
-describe("OpenRoundControl — each state", () => {
-  it("the empty case first: a round with no pairings offers nothing to open (the reader never sends one; the guard is here anyway)", () => {
-    const h = html(ROUND({ pairings: [] }));
-    expect(h).toContain(esc(en["externalPlay.openRound.noFixtures"]!));
-    expect(h).not.toContain('data-testid="open-round-cta"');
-    expect(h).not.toContain("data-uninvited-count");
+describe("the pairing's invite state and the players a press reaches", () => {
+  const DEADLINE = new Date(Date.parse(OPENED) + DEADLINE_AFTER_MS).toISOString();
+
+  it("the empty case first: a round with no pairing owes nobody an invite, and has no state to word", () => {
+    expect(owedPlayers(ROUND({ pairings: [] }))).toBe(0);
+    expect(owedPlayers(ROUND({ pairings: [P(1, { owedSeats: 0 })] })), "a pairing that owes nothing counts nothing").toBe(0);
   });
 
-  it("paired, not opened: says so, counts the boards and players, offers Open round, every pairing 'Not invited' by colour", () => {
-    const h = html(ROUND());
-    expect(h).toContain('data-testid="open-round"');
-    expect(h).toContain('data-state="paired"');
-    expect(h).toContain('data-uninvited-count="6"');
-    expect(h).toContain(esc(t("runsheet.round.heading", { round: 4 })));
-    expect(h).toContain(esc(en["runsheet.round.paired"]!));
-    expect(h).toContain(esc(pl("runsheet.round.pairedLede", 3, { players: 6 })));
-    expect(h, "the OTHER state's words").not.toContain(esc(en["externalPlay.openRound.alreadyOpen"]!));
-    expect(h).toMatch(new RegExp(`data-testid="open-round-cta"[^>]*>${esc(en["runsheet.round.openCta"]!)}<`));
-    // React serialises the prop as `dateTime` (the browser's DOM lowercases it).
-    expect(h).toContain('dateTime="2026-10-16T19:00:00.000Z"');
-    expect(pairingTestIds(h)).toEqual(["pending:f1", "pending:f2", "pending:f3"]);
-    let named = 0;
-    for (const n of [1, 2, 3]) {
-      // White first: the names are the board's colours, not home/away.
-      expect(h.indexOf(`White ${n}`), `board ${n}`).toBeLessThan(h.indexOf(`Black ${n}`));
-      expect(h).toContain(esc(t("arbiter.boardNo", { n })));
-      named += 1;
+  it("paired, not opened: two players owed per board, and every pairing reads 'Not invited'", () => {
+    const round = ROUND();
+    expect(owedPlayers(round), "3 boards x 2 seats, counted from the fixtures above").toBe(6);
+    let checked = 0;
+    for (const p of round.pairings) {
+      expect(stateOf(p), `board ${p.boardNo}`).toBe(esc(en["runsheet.round.notInvited"]!));
+      checked += 1;
     }
-    expect(named, "anti-vacuity: pairings named").toBe(3);
-    expect(h.split(esc(en["runsheet.round.notInvited"]!)).length - 1, "one 'Not invited' per pairing").toBe(3);
+    expect(checked, "anti-vacuity: pairings worded").toBe(3);
   });
 
-  it("opened, everyone invited: 'already open' and no Open press; each pairing's invite time; a resend only where the reader allows one", () => {
-    const h = html(
-      ROUND({
-        state: "open",
-        openedAt: OPENED,
-        deadlineAt: new Date(Date.parse(OPENED) + DEADLINE_AFTER_MS).toISOString(),
-        press: "none",
-        pairings: [P(1, { owedSeats: 0, invitedAt: OPENED, canResend: true }), P(2, { owedSeats: 0, invitedAt: OPENED })],
-      }),
-    );
-    expect(h).toContain('data-state="open"');
-    expect(h).toContain('data-uninvited-count="0"');
-    expect(h).toContain(esc(en["externalPlay.openRound.alreadyOpen"]!));
-    expect(h).toContain(esc(t("runsheet.round.openUntil", { time: fmtTime(TZ, Date.parse(OPENED) + DEADLINE_AFTER_MS) })));
-    expect(h).not.toContain('data-testid="open-round-cta"');
-    expect(pairingTestIds(h)).toEqual(["already:f1", "already:f2"]);
-    expect(h.split(`dateTime="${OPENED}"`).length - 1, "each pairing's <time>").toBe(2);
-    expect(h).toContain(`>${fmtTime(TZ, OPENED)}<`);
-    expect(h).toContain('data-testid="open-round-resend-f1"');
-    expect(h, "f2: the reader allows no resend").not.toContain('data-testid="open-round-resend-f2"');
-    expect(h).not.toContain(esc(en["runsheet.round.notInvited"]!));
+  it("opened, everyone invited: nobody owed, and each pairing says WHEN it was invited", () => {
+    const round = ROUND({ state: "open", openedAt: OPENED, deadlineAt: DEADLINE, press: "none", pairings: [P(1, { owedSeats: 0, invitedAt: OPENED }), P(2, { owedSeats: 0, invitedAt: OPENED })] });
+    expect(owedPlayers(round)).toBe(0);
+    for (const p of round.pairings) {
+      const h = stateOf(p);
+      expect(h, `board ${p.boardNo}: the invite word`).toContain(esc(en["runsheet.round.invited"]!));
+      // React serialises the prop as `dateTime` (the browser's DOM lowercases it).
+      expect(h, `board ${p.boardNo}: its <time>`).toContain(`dateTime="${OPENED}"`);
+      expect(h).toContain(`>${fmtTime(TZ, OPENED)}<`);
+      expect(h, "nobody still to invite").not.toContain(esc(en["runsheet.round.notInvited"]!));
+    }
   });
 
-  it("opened with someone still owed ('reinvite'): counts ONLY the uninvited, offers 'Invite N players', states each pairing's own invite", () => {
-    const h = html(
-      ROUND({
-        state: "open",
-        openedAt: OPENED,
-        deadlineAt: new Date(Date.parse(OPENED) + DEADLINE_AFTER_MS).toISOString(),
-        press: "reinvite",
-        pairings: [P(1, { owedSeats: 0, invitedAt: OPENED }), P(2, { owedSeats: 1, invitedAt: OPENED }), P(3)],
-      }),
-    );
-    expect(h).toContain('data-uninvited-count="3"');
-    expect(h).toContain(esc(pl("runsheet.round.owed", 3)));
-    expect(h).toMatch(new RegExp(`data-testid="open-round-cta"[^>]*>${esc(pl("runsheet.round.inviteCta", 3))}<`));
-    expect(pairingTestIds(h)).toEqual(["already:f1", "pending:f2", "pending:f3"]);
-    expect(h).toContain(esc(pl("runsheet.round.stillToInvite", 1)));
-    expect(h.split(esc(en["runsheet.round.notInvited"]!)).length - 1, "only the board nobody on was invited").toBe(1);
+  it("opened with someone still owed ('reinvite'): counts ONLY the uninvited, and states each pairing's own invite", () => {
+    const round = ROUND({
+      state: "open",
+      openedAt: OPENED,
+      deadlineAt: DEADLINE,
+      press: "reinvite",
+      pairings: [P(1, { owedSeats: 0, invitedAt: OPENED }), P(2, { owedSeats: 1, invitedAt: OPENED }), P(3)],
+    });
+    expect(owedPlayers(round), "board 1 owes none, board 2 one, board 3 two").toBe(3);
+    expect(stateOf(round.pairings[0]!)).not.toContain(esc(en["runsheet.round.stillToInvite.one"]!.split("{count}")[1]!));
+    expect(stateOf(round.pairings[1]!), "invited, one seat still owed").toContain(esc(pl("runsheet.round.stillToInvite", 1)));
+    expect(stateOf(round.pairings[2]!), "never invited").toBe(esc(en["runsheet.round.notInvited"]!));
   });
 
   it("a board past inviting with no stamp (a game made another way) reads 'No invite needed', never 'Not invited'", () => {
-    const h = html(ROUND({ state: "open", openedAt: OPENED, press: "none", pairings: [P(1, { owedSeats: 0, invitedAt: null })] }));
-    expect(h).toContain(esc(en["runsheet.round.noInviteOwed"]!));
+    const h = stateOf(P(1, { owedSeats: 0, invitedAt: null }));
+    expect(h).toBe(esc(en["runsheet.round.noInviteOwed"]!));
     expect(h).not.toContain(esc(en["runsheet.round.notInvited"]!));
-  });
-
-  it("'reopen': opened but nobody reached — says so, and the press is Open round again", () => {
-    const h = html(ROUND({ state: "open", openedAt: OPENED, press: "reopen" }));
-    expect(h).toContain(esc(en["runsheet.round.reopenState"]!));
-    expect(h).toMatch(new RegExp(`data-testid="open-round-cta"[^>]*>${esc(en["runsheet.round.openCta"]!)}<`));
-  });
-
-  it.each([["es", esUi], ["fr", frUi], ["nl", nlUi]] as [Locale, Dict][])("%s: real translations, not the English copied", (locale, dict) => {
-    const h = renderToStaticMarkup(
-      <DictProvider dict={dict} locale={locale}>
-        <OpenRoundControl round={ROUND()} tz={TZ} />
-      </DictProvider>,
-    );
-    const d = dict as unknown as Record<string, string>;
-    expect(d["runsheet.round.paired"]).not.toBe(en["runsheet.round.paired"]);
-    expect(h).toContain(esc(d["runsheet.round.paired"]!));
-    expect(h).toContain(esc(d["runsheet.round.openCta"]!));
   });
 });
 
@@ -277,10 +235,12 @@ describe("OpenRoundConfirmBody — what will happen, stated before it happens", 
 });
 
 // ─── The check-in groups an opened, staggered round lists (final review I-1; spec §3.2.1, "What the organiser sees") ────────
-// The view has computed `batches` since the capacity build and its test pins the numbers, but nothing drew them, so the
-// desk read "open until 14:14" - the LAST group's deadline - while group 0's no-shows were already reaching the organiser.
+// The view has computed `batches` since the capacity build and its test pins the numbers, but nothing drew them, so the desk read
+// "open until 14:14" - the LAST group's deadline - while group 0's no-shows were already reaching the organiser. `timedBatches` is
+// the one rule for whether groups are drawn and which; the Arbiter Panel's check-in hero draws what it returns (its own markup is
+// round-column.test.tsx's). The tests call the exported rule directly, including its named refusals.
 // Single-sport by construction: online play, and so the batches, exist only for `boardgame`.
-describe("OpenRoundControl - the check-in groups of an opened, staggered round (final review I-1)", () => {
+describe("timedBatches - the check-in groups of an opened, staggered round (final review I-1)", () => {
   const S = CHECKIN_BATCH_SIZE;
   const OPENED_MS = Date.parse(OPENED);
   /** The view builder's input: batch i is boards i*S+1..(i+1)*S, opening i gaps after the press and closing a window later. */
@@ -304,81 +264,23 @@ describe("OpenRoundControl - the check-in groups of an opened, staggered round (
       pairings: [P(1, { owedSeats: 0, invitedAt: OPENED })],
       ...o,
     });
-  const dicts: [Locale, Dict][] = [["en", messages as unknown as Dict], ["es", esUi], ["fr", frUi], ["nl", nlUi]];
-  const at = (d: Dict, key: string) => (d as unknown as Record<string, string>)[key]!;
-  const fill = (s: string, vars: Record<string, string | number>) =>
-    Object.entries(vars).reduce((acc, [k, v]) => acc.replaceAll(`{${k}}`, String(v)), s);
-  const render = (round: OpenRoundView, locale: Locale, dict: Dict) =>
-    renderToStaticMarkup(
-      <DictProvider dict={dict} locale={locale}>
-        <OpenRoundControl round={round} tz={TZ} />
-      </DictProvider>,
-    );
-  /** The rows as drawn: index, the three fields' text, and the ISO instants the row carries. */
-  const rowsOf = (h: string) =>
-    [...h.matchAll(/<li([^>]*data-testid="open-round-batch-(\d+)"[^>]*)>(.*?)<\/li>/gs)].map((m) => {
-      const attr = (name: string) => new RegExp(`${name}="([^"]*)"`).exec(m[1]!)?.[1];
-      const field = (name: string) => new RegExp(`data-field="${name}"[^>]*>([^<]*)<`).exec(m[3]!)?.[1];
-      return {
-        i: Number(m[2]),
-        opensAt: attr("data-opens-at"),
-        closesAt: attr("data-closes-at"),
-        boards: field("boards"),
-        opens: field("opens"),
-        closes: field("closes"),
-      };
-    });
-  /** What a row must read for batch `b` in a dictionary: from the input and the dictionary, never from the component. */
-  const expected = (b: OpenRoundBatch, d: Dict) => ({
-    boards: esc(
-      b.fromBoard === b.toBoard
-        ? fill(at(d, "arbiter.boardNo"), { n: b.fromBoard })
-        : fill(at(d, "runsheet.round.batchBoards"), { from: b.fromBoard, to: b.toBoard }),
-    ),
-    opens: esc(fill(at(d, "runsheet.round.batchOpens"), { time: fmtTime(TZ, b.opensAt!) })),
-    closes: esc(fill(at(d, "runsheet.round.batchCloses"), { time: fmtTime(TZ, b.closesAt!) })),
-  });
 
-  it.each([2, 3, 10])("%s groups: one row per group, each with ITS boards, its opening and its closing, in all four locales", (n) => {
+  it.each([2, 3, 10])("%s groups: one entry per group, in batch order, each with ITS boards, its opening and its closing", (n) => {
     const batches = batchesOf(n);
+    const drawn = timedBatches(OPENED_ROUND(batches));
+    expect(drawn, "premise: a staggered, opened, fully timed round draws its groups").not.toBeNull();
+    expect(drawn, "one per batch").toHaveLength(n);
     let checked = 0;
-    for (const [locale, dict] of dicts) {
-      const rows = rowsOf(render(OPENED_ROUND(batches), locale, dict));
-      expect(rows, `${locale}: one row per batch`).toHaveLength(n);
-      rows.forEach((row, i) => {
-        const want = expected(batches[i]!, dict);
-        expect(row.i, `${locale}: rows in batch order`).toBe(i);
-        expect([row.boards, row.opens, row.closes], `${locale}: row ${i}`).toEqual([want.boards, want.opens, want.closes]);
-        expect([row.opensAt, row.closesAt], `${locale}: row ${i} instants`).toEqual([batches[i]!.opensAt, batches[i]!.closesAt]);
-        expect(`${row.boards}${row.opens}${row.closes}`, `${locale}: row ${i} has no unfilled placeholder`).not.toMatch(/\{[a-z]+\}/);
-        checked += 1;
-      });
-    }
-    expect(checked, "anti-vacuity: rows checked").toBe(4 * n);
+    drawn!.forEach((g, i) => {
+      expect([g.fromBoard, g.toBoard, g.opensAt, g.closesAt], `group ${i}`).toEqual([batches[i]!.fromBoard, batches[i]!.toBoard, batches[i]!.opensAt, batches[i]!.closesAt]);
+      checked += 1;
+    });
+    expect(checked, "anti-vacuity: groups checked").toBe(n);
+    // The point of the finding: group 0 closes strictly BEFORE the last group, so one "open until" line could not have told them apart.
+    expect(Date.parse(drawn![0]!.closesAt)).toBeLessThan(Date.parse(drawn![n - 1]!.closesAt));
   });
 
-  it("a group of one board reads 'Board n', not 'Boards n-n'", () => {
-    const batches = [...batchesOf(2), { ...batchesOf(3)[2]!, fromBoard: 2 * S + 1, toBoard: 2 * S + 1 }];
-    const rows = rowsOf(render(OPENED_ROUND(batches), "en", messages as unknown as Dict));
-    expect(rows).toHaveLength(3);
-    expect(rows[2]!.boards).toBe(esc(t("arbiter.boardNo", { n: 2 * S + 1 })));
-    expect(rows[0]!.boards).toBe(esc(t("runsheet.round.batchBoards", { from: 1, to: S })));
-  });
-
-  it("the earlier group's deadline is on the card: no single 'open until' that names only the LAST group's close", () => {
-    const batches = batchesOf(3);
-    const h = renderToStaticMarkup(<OpenRoundControl round={OPENED_ROUND(batches)} tz={TZ} />);
-    const openUntil = esc(en["runsheet.round.openUntil"]!.split("{time}")[0]!);
-    expect(h, "the single line that read the last group's deadline as the round's").not.toContain(openUntil);
-    const rows = rowsOf(h);
-    expect(rows.length, "premise: more than one group").toBeGreaterThan(1);
-    // Premise: the first group closes strictly before the last, so a single line could not have told them apart.
-    expect(Date.parse(rows[0]!.closesAt!)).toBeLessThan(Date.parse(rows[rows.length - 1]!.closesAt!));
-    expect(h).toContain(esc(fmtTime(TZ, batches[0]!.closesAt!)));
-    expect(h).toContain(esc(en["runsheet.round.batchesLede"]!));
-  });
-
-  it("the empty case and the pair: no groups (a round with no batches, one batch, a staggered flag over one batch, or two batches the flag does not stagger) draw no list and keep the 'open until' line", () => {
+  it("the empty case and the pair: no groups (a round with no batches, one batch, a staggered flag over one batch, or two batches the flag does not stagger) draw nothing", () => {
     const one = batchesOf(1);
     const cases: [string, OpenRoundView][] = [
       ["no batches at all", OPENED_ROUND(one, { batches: [], staggered: false })],
@@ -390,29 +292,23 @@ describe("OpenRoundControl - the check-in groups of an opened, staggered round (
     ];
     let checked = 0;
     for (const [name, round] of cases) {
-      const h = renderToStaticMarkup(<OpenRoundControl round={round} tz={TZ} />);
-      expect(rowsOf(h), name).toEqual([]);
-      expect(h, name).not.toContain('data-testid="open-round-batches"');
-      expect(h, `${name}: the one deadline is the truth`).toContain(esc(t("runsheet.round.openUntil", { time: fmtTime(TZ, round.deadlineAt!) })));
+      expect(timedBatches(round), name).toBeNull();
       checked += 1;
     }
     expect(checked, "anti-vacuity").toBe(4);
+    expect(timedBatches(OPENED_ROUND(batchesOf(2))), "the pair: two staggered batches DO draw").toHaveLength(2);
   });
 
-  it("no times to draw, no rows: a round not yet opened, and one opened but reaching nobody ('reopen'), list nothing", () => {
+  it("no times to draw: a round not yet opened, and one opened but reaching nobody ('reopen'), draw nothing", () => {
     const unopened = batchesOf(3).map((b) => ({ ...b, opensAt: null, closesAt: null }));
     const paired = ROUND({ staggered: true, batches: unopened, staggerSpanMinutes: 4 });
     const reopen = OPENED_ROUND(batchesOf(3), { press: "reopen" });
-    for (const round of [paired, reopen]) {
-      const h = renderToStaticMarkup(<OpenRoundControl round={round} tz={TZ} />);
-      expect(rowsOf(h), `${round.state}/${round.press}`).toEqual([]);
-      expect(h).not.toContain('data-testid="open-round-batches"');
-    }
+    for (const round of [paired, reopen]) expect(timedBatches(round), `${round.state}/${round.press}`).toBeNull();
   });
 
   // The named refusal of `timedBatches`: the producer never makes either state (one open row feeds every batch) but the type allows
   // both, and a row with a hole in it is worse than no list. Each case is one broken batch among otherwise complete ones.
-  it("a batch with only one of its two times, or a round with only some groups timed, draws no list and keeps the 'open until' line", () => {
+  it("a batch with only one of its two times, or a round with only some groups timed, draws nothing", () => {
     const full = batchesOf(3);
     const cases: [string, OpenRoundBatch[]][] = [
       ["a group with a start and no close", full.map((b, i) => (i === 1 ? { ...b, closesAt: null } : b))],
@@ -425,20 +321,16 @@ describe("OpenRoundControl - the check-in groups of an opened, staggered round (
       expect(batches.length, `${name}: premise - more than one group, so only the times can refuse it`).toBeGreaterThan(1);
       const round = OPENED_ROUND(batches, { deadlineAt: full[2]!.closesAt });
       expect(round.staggered && round.press !== "reopen", `${name}: premise - every other condition for drawing holds`).toBe(true);
-      const h = renderToStaticMarkup(<OpenRoundControl round={round} tz={TZ} />);
-      expect(rowsOf(h), name).toEqual([]);
-      expect(h, name).not.toContain('data-testid="open-round-batches"');
-      expect(h, `${name}: the one deadline is the truth`).toContain(esc(t("runsheet.round.openUntil", { time: fmtTime(TZ, round.deadlineAt!) })));
+      expect(timedBatches(round), name).toBeNull();
       checked += 1;
     }
     expect(checked, "anti-vacuity: cases checked").toBe(4);
     // The pair: the same round with every time present DOES draw, so the refusal above is the times and nothing else.
-    expect(rowsOf(renderToStaticMarkup(<OpenRoundControl round={OPENED_ROUND(full)} tz={TZ} />))).toHaveLength(3);
+    expect(timedBatches(OPENED_ROUND(full))).toHaveLength(3);
   });
 
   it("a re-invite press on a staggered round still lists every group (the card shows the groups; the confirm names the earliest deadline)", () => {
-    const batches = batchesOf(3);
-    const round = OPENED_ROUND(batches, { press: "reinvite", pairings: [P(1, { owedSeats: 1, invitedAt: OPENED })] });
-    expect(rowsOf(renderToStaticMarkup(<OpenRoundControl round={round} tz={TZ} />))).toHaveLength(3);
+    const round = OPENED_ROUND(batchesOf(3), { press: "reinvite", pairings: [P(1, { owedSeats: 1, invitedAt: OPENED })] });
+    expect(timedBatches(round)).toHaveLength(3);
   });
 });

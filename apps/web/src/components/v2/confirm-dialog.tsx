@@ -40,6 +40,10 @@ interface Props {
    *  caller renders today; pass one when the dialog is reachable from a
    *  translated surface. */
   cancelLabel?: string;
+  /** Task 16 D8: below 400px wide, stack the two buttons one under the other, each the full width of the sheet (DOM order unchanged:
+   *  cancel, then confirm). For a dialog whose confirm label is long enough to wrap to three lines beside Cancel at 320px (a French
+   *  "Inviter de nouveau et relancer l'enregistrement"). OPT-IN: omitted, every caller's row is byte-for-byte what it was. */
+  stackActions?: boolean;
   /** Root hook. The two buttons derive `${testId}-confirm` / `${testId}-cancel`,
    *  so a spec never has to select on copy. */
   testId?: string;
@@ -57,6 +61,7 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
   cancelLabel = "Cancel",
+  stackActions = false,
   testId,
 }: Props) {
   const [typed, setTyped] = useState("");
@@ -172,11 +177,11 @@ export function ConfirmDialog({
         {/* `min-h-11` = 44px, the phone touch-target floor this repo asserts on
             every other action bar. `.btn` alone renders 38px, and this dialog is
             a bottom SHEET under `sm` — the one place a control is thumbed. */}
-        <div className="flex justify-end gap-2">
+        <div className={stackActions ? "flex justify-end gap-2 max-[400px]:flex-col" : "flex justify-end gap-2"}>
           <button
             type="button"
             data-testid={testId ? `${testId}-cancel` : undefined}
-            className="btn btn-ghost min-h-11"
+            className={stackActions ? "btn btn-ghost min-h-11 max-[400px]:w-full" : "btn btn-ghost min-h-11"}
             onClick={onCancel}
             disabled={busy}
           >
@@ -186,7 +191,7 @@ export function ConfirmDialog({
             <button
               type="button"
               data-testid={testId ? `${testId}-confirm` : undefined}
-              className={`btn min-h-11 ${confirmVariant === "primary" ? "btn-primary" : "btn-danger"}`}
+              className={`btn min-h-11 ${confirmVariant === "primary" ? "btn-primary" : "btn-danger"}${stackActions ? " max-[400px]:w-full" : ""}`}
               onClick={onConfirm}
               disabled={busy || !armed || confirmDisabled}
             >

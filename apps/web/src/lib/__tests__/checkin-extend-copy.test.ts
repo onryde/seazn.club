@@ -86,7 +86,9 @@ describe("check-in extension copy", () => {
   });
 
   it("every key a source file asks for exists: an exact key, or a plural base with both forms", () => {
-    const files = ["components/v2/checkin-extend-ui.ts", "components/v2/arbiter-panel.tsx", "components/v2/desk/open-round-control.tsx", "lib/checkin-extend.ts"];
+    // open-round-control.tsx left this list when the round's +5 moved into the Arbiter Panel's column (phase 2, Task 10): it no longer
+    // asks for any extend key, and a file listed here must ask for at least one.
+    const files = ["components/v2/checkin-extend-ui.ts", "components/v2/arbiter-panel.tsx", "lib/checkin-extend.ts"];
     let asked = 0;
     for (const f of files) {
       const src = readFileSync(join(SRC, f), "utf8");

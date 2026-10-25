@@ -1,8 +1,9 @@
 // Owner staging test 2026-10-19: an online (Lichess) chess division that has not been started shows nothing where the
-// Open round controls will appear, and no word on why. The division page now tells the stage cards (`onlineAwaitsStart`,
-// the same gates as `openRounds` plus the shared not-started predicate — online-start-hint-wiring.test.tsx is the page's
-// half); this is the cards' half: one quiet line, once, in the first stage's card, for an organiser, in every locale's
-// words — and nowhere else. What the Open round control itself renders is open-round-control.test.tsx's.
+// Open round controls will appear, and no word on why. The division page tells the stage cards (`onlineAwaitsStart`, the
+// shared not-started predicate - online-start-hint-wiring.test.tsx is the page's half); this is the cards' half: one quiet
+// line, once, in the first stage's card, for an organiser, in every locale's words - and nowhere else. Phase 2 moved the
+// Open round control itself into the Arbiter Panel (spec 2026-10-24-arbiter-round-column-design.md §8): the hint STAYS here,
+// because the Start button is on this tab, and the cards take no rounds map any more (stages-panel-open-round.test.tsx).
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { StagesPanel } from "@/components/v2/stages-panel";
@@ -46,7 +47,7 @@ describe("the stage cards' start hint", () => {
   });
 
   it("told the division has not started: ONE line, in the first stage's card, saying to start the division", () => {
-    const h = renderToStaticMarkup(<StagesPanel {...PROPS} onlineAwaitsStart openRounds={{}} />);
+    const h = renderToStaticMarkup(<StagesPanel {...PROPS} onlineAwaitsStart />);
     expect(count(h, HINT), "once, not once per stage").toBe(1);
     expect(cardOf(h, "s1")).toContain(HINT);
     expect(cardOf(h, "s2")).not.toContain(HINT);
@@ -58,7 +59,7 @@ describe("the stage cards' start hint", () => {
 
   it("the first stage is the lowest SEQ, whatever order the stages arrive in", () => {
     const h = renderToStaticMarkup(
-      <StagesPanel {...PROPS} stages={[stage("s2", 2), stage("s1", 1)]} onlineAwaitsStart openRounds={{}} />,
+      <StagesPanel {...PROPS} stages={[stage("s2", 2), stage("s1", 1)]} onlineAwaitsStart />,
     );
     expect(cardOf(h, "s1")).toContain(HINT);
     expect(cardOf(h, "s2")).not.toContain(HINT);

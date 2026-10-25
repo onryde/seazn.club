@@ -102,8 +102,7 @@ import { swissPairingMenuFor } from "@/lib/swiss-pairing-menu";
 // this file's own former copies are deleted below.
 import { buildRunSheet, isBye, type RunSheetFixture, type RunSheetOnlinePlay } from "@/lib/run-sheet-groups";
 import { RunSheet, type RunSheetFilter } from "@/components/v2/desk/run-sheet";
-import { OpenRoundControl } from "@/components/v2/desk/open-round-control";
-import { isOnlineGameExists, type OpenRoundView } from "@/lib/open-round";
+import { isOnlineGameExists } from "@/lib/open-round";
 import { OnlineGameExistsNotice } from "@/components/v2/online-game-exists-notice";
 // Competition Desk W3 (Task 2) — the stage rail takes the three header
 // action controls (Generate/Complete/Delete). See stage-rail.tsx's own
@@ -371,15 +370,16 @@ interface Props {
   /** T16 — each online chess board's camera, flags and hold (`listRunSheetOnlinePlay`, read by the division page for
    *  an organiser), threaded to the run sheet's chips. Optional: none by default. */
   onlinePlay?: Record<string, RunSheetOnlinePlay>;
-  /** T16 (D12) — the organiser's Open round control per stage (`listOpenRounds`), keyed by stage id. The page hands
-   *  it down only while the club is offered online chess (an open STARTS play, T20); absent ⇒ no control. */
-  openRounds?: Record<string, OpenRoundView[]>;
   /** The division plays online and has not been started, so no round can be opened yet (`listOpenRounds` answers
-   *  none until it starts). The page sets it from the SAME gates as `openRounds` plus the shared not-started predicate
-   *  (`divisionScoringClosed`); true ⇒ the first stage card says to start the division. Optional: absent ⇒ no hint. */
+   *  none until it starts). The page sets it from the SAME gates as the Arbiter Panel's entry (an organiser who can act, a chess
+   *  division that plays online now, the club offered online chess) plus the shared not-started predicate
+   *  (`divisionScoringClosed`); true ⇒ the first stage card says to start the division - the Start button is on this tab, while the
+   *  round itself is opened in the panel (phase 2, spec 2026-10-24-arbiter-round-column-design.md §8). Optional: absent ⇒ no hint. */
   onlineAwaitsStart?: boolean;
-  /** T16 (T19 carry) — where a refused Unpair / Rebuild sends the organiser when an online game stands behind a board
-   *  it would clear (409 ONLINE_GAME_EXISTS): the arbiter panel, which settles it. Null ⇒ the notice alone. */
+  /** Where the Arbiter Panel is, or null when it would not answer (online play off, the club not offered online chess; the page
+   *  decides, with `canEdit`). T16 (T19 carry): a refused Unpair / Rebuild sends the organiser there when an online game stands
+   *  behind a board it would clear (409 ONLINE_GAME_EXISTS) - null ⇒ the notice alone. Phase 2: it also decides whether the run
+   *  sheet's online chips are links into the panel at all (null ⇒ plain text, never a link to a 404). */
   arbiterHref?: string | null;
 }
 
@@ -495,7 +495,7 @@ export function boardSlotOptionsFor(
  *  whole panel every second. */
 const RUN_SHEET_NOW_TICK_MS = 60_000;
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, openRounds, onlineAwaitsStart = false, arbiterHref = null }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -1344,15 +1344,8 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                   </div>
                 )}
 
-                {/* T16 (D12) — the organiser opens this stage's online rounds here, beside the counts that say how many
-                    boards wait on it. The page hands `openRounds` down only while the club is offered online chess
-                    (an open STARTS play, T20); a viewer never gets one. */}
-                {canEdit &&
-                  (openRounds?.[stage.id] ?? []).map((r) => (
-                    <OpenRoundControl key={`${r.stageId}:${r.roundNo}`} round={r} tz={tz} />
-                  ))}
-                {/* The same slot, before there is anything to open: an online division that has not started. One line,
-                    on the first stage only — the start is the division's, not a stage's. */}
+                {/* An online division that has not started: one line, on the first stage only (the start is the division's, not a
+                    stage's). The Start button is on this tab; the round itself is opened in the Arbiter Panel. */}
                 {canEdit && onlineAwaitsStart && stage.seq === Math.min(...stages.map((s) => s.seq)) && (
                   <p className="px-4 py-3 text-xs text-slate-500" data-testid="online-start-hint">
                     {msg("externalPlay.openRound.startFirst")}
@@ -1537,7 +1530,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         streamStates={streamStates}
         awaitingSettle={awaitingSettle}
         onlinePlay={onlinePlay}
-        arbiterHrefFor={(fixtureId) => routes.divisionArbiter(orgSlug, compSlug, divSlug, fixtureId)}
+        arbiterHrefFor={arbiterHref === null ? undefined : (fixtureId) => routes.divisionArbiter(orgSlug, compSlug, divSlug, fixtureId)}
         /* An unfilled bracket seat is named by its FEEDER ("Winner of R1·3"),
            not "TBD" — the same `feedLabels()` builder and the same
            `slot.winner_match`/`slot.loser_match` vocabulary the schedule board

@@ -24,7 +24,8 @@
 //      built without it judges the board by a deadline its players are no longer on. The reader table gains two readers that are not
 //      batch readers (the arbiter's board list; the extend door's answer), and every reader is owed an `[extend-reader:<id>]` test.
 // And the table of READERS (the spec names 15; the scan found a 16th - openRound's re-invite skip; the build's review found a 17th - the
-// QR self check-in, which hands the stamp the board's window) is closed over the tests: each
+// QR self check-in, which hands the stamp the board's window; the arbiter column's "who is here" is an 18th - the loader's `seats`
+// pass asks `checkInCounts` with the board's own anchor) is closed over the tests: each
 // reader id appears in exactly one test title as `[reader:<id>]`, and no title carries an id that is not in the table.
 //
 // Anti-vacuity: every sweep reports what it scanned and zero is a failure; the scanner is tested on a fixture that must pass
@@ -62,6 +63,7 @@ const READERS = [
   "open-round-view",
   "reinvite",
   "qr-checkin",
+  "arbiter-here",
 ] as const;
 
 /** The readers the check-in extension adds (spec §3.2.2): the arbiter's board list, which says whether a press is offered and what
@@ -104,6 +106,9 @@ const SITES: readonly { file: string; fn: Consumer; times: number; readers: read
   // The check-in extension's two new readers (spec §3.2.2): the arbiter's board list (its deadline and whether a press is offered),
   // and the extend door's answer (the new deadline, from the same function the readers above judge by).
   { file: "server/usecases/external-play/arbiter.ts", fn: "windowFor", times: 1, readers: ["arbiter-board"] },
+  // The arbiter column's "who is here" (the loader's `seats` pass, spec 6): a seat's recorded check-in judged against the BOARD's own
+  // anchor (`anchorOf`, the one the board list above uses: rank, stagger and extension). A batch reader, so it owns both titles.
+  { file: "server/usecases/external-play/arbiter.ts", fn: "checkInCounts", times: 1, readers: ["arbiter-here"] },
   { file: "server/usecases/external-play/checkin-extend.ts", fn: "windowFor", times: 1, readers: ["extend-result"] },
 ];
 
@@ -335,7 +340,7 @@ describe("the reader table is closed over the tests", () => {
     const all = titles("reader");
     const seen = new Map<string, number>();
     for (const t of all) for (const m of t.text.matchAll(/\[reader:([a-z-]+)\]/g)) seen.set(m[1]!, (seen.get(m[1]!) ?? 0) + 1);
-    expect(READERS.length, "readers in the table (the spec's 15, openRound's re-invite and the QR self check-in)").toBe(17);
+    expect(READERS.length, "readers in the table (the spec's 15, openRound's re-invite, the QR self check-in and the arbiter's seats)").toBe(18);
     expect([...seen.keys()].sort(), "ids in titles = ids in the table").toEqual([...READERS].sort());
     for (const id of READERS) expect(seen.get(id), `[reader:${id}] in test titles`).toBe(1);
     expect(all.length, "titled tests found").toBeGreaterThanOrEqual(READERS.length - 6);
@@ -354,7 +359,7 @@ describe("the reader table is closed over the tests", () => {
     const all = titles("extend-reader");
     const seen = new Map<string, number>();
     for (const t of all) for (const m of t.text.matchAll(/\[extend-reader:([a-z-]+)\]/g)) seen.set(m[1]!, (seen.get(m[1]!) ?? 0) + 1);
-    expect(EXTEND_READERS.length, "the 17 batch readers and the arbiter's board list and the extend door's answer").toBe(19);
+    expect(EXTEND_READERS.length, "the 18 batch readers and the arbiter's board list and the extend door's answer").toBe(20);
     expect([...seen.keys()].sort(), "ids in titles = ids in the table").toEqual([...EXTEND_READERS].sort());
     for (const id of EXTEND_READERS) expect(seen.get(id), `[extend-reader:${id}] in test titles`).toBe(1);
     expect(all.length, "titled tests found").toBe(EXTEND_READERS.length);

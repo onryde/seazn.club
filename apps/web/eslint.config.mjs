@@ -131,6 +131,32 @@ const eslintConfig = defineConfig([
   },
 
   {
+    // `lib/round-column.ts` (the Arbiter Panel's round column model) and `lib/invite-status.ts` (its invite words) are pure
+    // and client-imported: a client component reaches them. Each names a few SERVER types for its arguments (`FlaggedBoard`,
+    // `NeedsOrganiserExternalPlayRow`, `OutboxStatus`), which is safe because a type-only import is erased. A VALUE import of
+    // anything under `@/server/**` (or of `server-only`) is a BUILD FAILURE in this app, so it is refused here, in the same
+    // spirit as the `lib/timeline-keys.ts` block above, with `allowTypeImports` keeping the erased ones legal. The core rule
+    // is used (not the typescript-eslint variant) because the tools-import guard below spreads
+    // `@typescript-eslint/no-restricted-imports` over every file, and in flat config a later block's value for the same rule
+    // REPLACES an earlier one's.
+    files: ["src/lib/round-column.ts", "src/lib/invite-status.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["@/server/*", "@/server/**", "**/server/**", "server-only"],
+              allowTypeImports: true,
+              message:
+                "This module is imported by client components: only a type-only import (`import type`) may reach @/server/**. A value import fails the client build.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     // Server-only surfaces (route handlers, usecases): pino (server/logger.ts)
     // is the logger, not console. Scoped to server/** and app/api/** rather
     // than repo-wide — pino is server-only, and src/**/*.tsx client

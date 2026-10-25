@@ -2796,19 +2796,26 @@ describe.skipIf(!HAS_DB)("openRound — the stored `staggered` flag decides the 
     expect(await storedFlag(r.stageId)).toBe(false);
   });
 
-  it("(c) a RE-OPEN decides afresh: a round nobody was invited into, re-stamped after a downgrade, stores the new answer", async () => {
+  // Final review I1 (owner-approved 2026-10-25): the flag is decided ONCE, at the first open, and a re-stamp KEEPS it. The screen
+  // words its confirmation from the stored flag ("the last group opens {span} minutes from now"), so a re-stamp that asked the
+  // live policy again promised groups the server then did not make. The wrong answer (an unbatched board from T1) is a different
+  // value from the right one (batch 2 from T1), so the case can witness the regression.
+  it("(c) a RE-OPEN keeps the stored flag: a round nobody was invited into, re-stamped after a downgrade, is still staggered", async () => {
     const r = await seedRanked("required");
     for (const b of [...r.boards, r.ranked]) mail.fail.add(b.home.email).add(b.away.email);
     await open(r, 1, T0);
     expect(await storedFlag(r.stageId), "premise: the first open staggered").toBe(true);
     expect((await bridgeOf(r.ranked.fixtureId))?.round_open_id, "premise: every send failed, nobody is bound").toBeNull();
     await patchDivision(r.owner, r.divisionId, { camera_policy: "off" });
+    const [d] = await sql<{ camera_policy: string | null }[]>`select camera_policy from divisions where id = ${r.divisionId}`;
+    expect(d!.camera_policy, "premise: the downgrade landed").toBe("off");
     mail.fail.clear();
     const T1 = new Date(T0.getTime() + MIN);
     expect(await open(r, 1, T1)).toMatchObject({ opened: true });
-    expect(await storedFlag(r.stageId), "the re-stamp decided afresh from the live policy").toBe(false);
+    expect(await storedFlag(r.stageId), "the re-stamp kept the flag the first open stored").toBe(true);
     const a = await anchorOf(r.ranked.fixtureId);
-    expect([a.batch, a.at.getTime()], "and the board is now an unbatched one, from the new T").toEqual([0, T1.getTime()]);
+    expect([a.batch, a.at.getTime() - T1.getTime()], "and the ranked board is still in batch 2, 2 x gap after the NEW T").toEqual([2, 2 * CHECKIN_BATCH_GAP_MS]);
+    expect(a.at.getTime(), "the wrong answer's constant is not the right one's").not.toBe(T1.getTime());
   });
 
   it("(d) a row from before the delta: the column defaults to false and not-null, so every board opens at T as it did", async () => {

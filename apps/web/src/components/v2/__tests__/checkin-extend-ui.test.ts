@@ -232,7 +232,9 @@ describe("what a board's +5 is on a ticking clock", () => {
     const said = EXTEND_REFUSALS.map((r) => extendWhyLine(r, C));
     expect(said.filter((x) => x !== null), "anti-vacuity: four reasons").toHaveLength(4);
     expect(extendWhyLine("not_playable", C)).toBeNull();
-    expect(said.filter((x) => x !== null).sort()).toEqual(["Check-in hasn't opened yet", "Check-in has closed", "Game started", "No extensions left"].sort());
+    expect(said.filter((x) => x !== null).sort()).toEqual(
+      ["Can't extend check-in: it hasn't opened yet", "Can't extend check-in: it has closed", "Can't extend check-in: a game has started", "Can't extend check-in: no extensions left"].sort(),
+    );
   });
 
   it("the round reducer's clear: drops the answer and nothing else, and is a no-op with nothing to drop", () => {

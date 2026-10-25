@@ -34,11 +34,17 @@ export type EmailStatusRow = { refId: string; recipient: string; kind: OutboxKin
  * it is the newest on the clock: the replace trigger supersedes by KEY, not by time, so the row that carries the outcome is the
  * newest one that is not. "Newest" is `created_at`, ties by `id` (`status_at` moves with every status change and says nothing about
  * which email is the latest). A resend after a dead row reads as the new row. Empty `refIds` answers `[]` and issues no statement.
+ *
+ * `kind`, when given, narrows the ask to the emails of that kind BEFORE the newest-per-recipient fold: a ref is "a thing", and the
+ * outbox is shared by every kind, so a newer row of another kind on the same ref and mailbox must not become this kind's latest (and a
+ * filter applied after the fold would lose the kind's own row behind it). The arbiter asks for `chess_invite`, the only kind that
+ * writes a seat ref. Without it every kind answers.
  */
 export async function latestEmailStatus(
   orgId: string,
   refType: string,
   refIds: readonly string[],
+  kind?: OutboxKind,
 ): Promise<EmailStatusRow[]> {
   if (refIds.length === 0) return [];
   const rows = await sql<{ refId: string; recipient: string; kind: OutboxKind; status: OutboxStatus; at: Date }[]>`
@@ -46,6 +52,7 @@ export async function latestEmailStatus(
            ref_id as "refId", recipient, kind, status, status_at as "at"
       from email_outbox
      where org_id = ${orgId} and ref_type = ${refType} and ref_id = any(${refIds as string[]}::text[])
+       ${kind === undefined ? sql`` : sql`and kind = ${kind}`}
        and ${current()}
      order by ref_id, lower(recipient), ${newestFirst()}`;
   return rows.map((r) => ({ refId: r.refId, recipient: r.recipient, kind: r.kind, status: r.status, at: r.at }));

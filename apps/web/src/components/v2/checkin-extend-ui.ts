@@ -24,8 +24,9 @@ import {
 
 type Vars = Record<string, string | number>;
 
-/** What the copy needs from either screen's translator: the plain lookup, the plural lookup and the time of day in the viewer's
- *  own zone (`null` before mount). The arbiter panel hands its `Fmt`; the Open round control hands `useMsg` and `fmtTime`. */
+/** What the copy needs from either screen's translator: the plain lookup, the plural lookup and the time of day (`null` before mount).
+ *  The arbiter panel hands its `Fmt`, whose times are the VENUE's zone, named when the viewer's own offset differs (Task 16 D1); the
+ *  Open round control hands `useMsg` and the venue clock. */
 export type ExtendCopy = {
   t: (key: string, vars?: Vars) => string;
   plural: (key: string, count: number, vars?: Vars) => string;
@@ -36,7 +37,7 @@ export const extendBoardPath = (fixtureId: string) => `/api/v1/fixtures/${encode
 export const extendRoundPath = (stageId: string) => `/api/v1/stages/${encodeURIComponent(stageId)}/extend-checkin`;
 
 /** The button's label: "+5 min (2 left)". */
-export const extendBoardLabel = (left: number, c: ExtendCopy) => c.t("externalPlay.checkinExtend.board", { minutes: CHECKIN_EXTEND_STEP_MINUTES, left });
+export const extendBoardLabel = (left: number, c: Pick<ExtendCopy, "t">) => c.t("externalPlay.checkinExtend.board", { minutes: CHECKIN_EXTEND_STEP_MINUTES, left });
 export const extendRoundLabel = (c: ExtendCopy) => c.t("externalPlay.checkinExtend.round", { minutes: CHECKIN_EXTEND_STEP_MINUTES });
 
 /** "Check-in closes 19:14" - the deadline a board is on. Null before the viewer's clock is known. */

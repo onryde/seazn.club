@@ -1,4 +1,4 @@
-// T16 — the organiser's "Online play — needs result" queue (canvas
+// T16 — the organiser's "Online play: needs result" queue (canvas
 // HoldQueueDesktop / HoldQueuePhone), rendered to markup through the real
 // DictProvider in every locale. What it SHOWS: the two lists, a held card's
 // title / names by colour / sentence, which controls each card offers, and
@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import type { Dict } from "@/lib/i18n-constants";
+import { routes } from "@/lib/routes";
 import en from "@/dictionaries/en/ui.json";
 import es from "@/dictionaries/es/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
@@ -25,8 +26,6 @@ type Locale = keyof typeof LOCALES;
 const decode = (s: string) =>
   s.replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
 const text = (h: string) => decode(h.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
-
-const SLUGS = { org: "northfield", comp: "autumn-rapid", div: "open" };
 
 function held(over: Partial<HeldRow> & Pick<HeldRow, "fixtureId" | "reason">): HeldRow {
   return {
@@ -70,7 +69,7 @@ function flaggedBoard(over: Partial<FlaggedBoard> & Pick<FlaggedBoard, "fixtureI
 function render(props: Partial<ExternalPlayQueueProps>, locale: Locale = "en"): string {
   return renderToStaticMarkup(
     <DictProvider dict={LOCALES[locale] as unknown as Dict} locale={locale}>
-      <ExternalPlayNeedsResultQueue held={[]} flagged={[]} ownFlagged={0} slugs={SLUGS} {...props} />
+      <ExternalPlayNeedsResultQueue held={[]} flagged={[]} ownFlagged={0} {...props} />
     </DictProvider>,
   );
 }
@@ -262,7 +261,7 @@ describe("a held card", () => {
 });
 
 describe("the flagged list", () => {
-  it("each board: where and how it stands, the names, its flag cards, the arbiter link for THIS board, and 'Let the game go on'", () => {
+  it("each board: where and how it stands, the names, its flag cards, and 'Let the game go on'", () => {
     const h = render({ flagged: [flaggedBoard({ fixtureId: "fx-9" })] });
     const t = text(h);
     expect(t).toContain("Flagged · the game carried on · 1");
@@ -270,9 +269,40 @@ describe("the flagged list", () => {
     expect(t).toContain("Round 3 · Board 3 · live");
     expect(t).toContain("Jonah Mbeki vs Elif Demirtaş");
     expect(t).toContain("3 moves reached Lichess that were not played on Seazn's board (moves 26 to 27).");
-    // Typed from the route's contract, not built with the helper.
-    expect(h).toContain('href="/o/northfield/c/autumn-rapid/d/open/arbiter?fixture=fx-9"');
     expect(t).toContain("Let the game go on");
+  });
+
+  // Phase 2 (spec 2026-10-24-arbiter-round-column-design.md §8): the queue is on the Fixtures tab only when the panel is NOT
+  // offered (online play off now, or the flag off), and there the panel 404s. Its old "Review in arbiter panel" link was a live
+  // 404 in exactly the one place it rendered, so no card links into the panel in any state. Task 11 deleted the link's words
+  // (`externalPlay.queue.review`) from every dictionary, so a check on those words would test an undefined key; the checks that
+  // can still fail are the testid, the href and the anchor itself, each beside a card that IS on screen with its other control.
+  it("no flagged board links into the arbiter panel, in any state or any locale (the panel would 404 where this queue shows)", () => {
+    const ANCHOR = /<a[\s>]/;
+    // The probes are not blind: the markup of a link into the panel trips all three.
+    const link = `<a data-testid="external-play-review" href="${routes.divisionArbiter("o", "c", "d", "fx-1")}">x</a>`;
+    expect(testIds(link, "external-play-review"), "the testid probe sees a review link").toBe(1);
+    expect(link, "the href probe sees a link into the panel").toContain("/arbiter");
+    expect(link, "the anchor probe sees an anchor").toMatch(ANCHOR);
+
+    const states: [string, FlaggedBoard][] = [
+      ["live", flaggedBoard({ fixtureId: "fx-1" })],
+      ["finished", flaggedBoard({ fixtureId: "fx-2", state: { kind: "result", score: "1–0", noResult: false } })],
+      ["cancelled", flaggedBoard({ fixtureId: "fx-3", state: { kind: "cancelled" }, canSettle: false, canResync: false, playable: false })],
+    ];
+    let checked = 0;
+    for (const locale of Object.keys(LOCALES) as Locale[]) {
+      for (const [label, board] of states) {
+        const h = render({ flagged: [board], held: [held({ fixtureId: "h1", reason: "aborted" })] }, locale);
+        // Positive pair: the board's card IS on screen with its other control, so an absent link is not an absent card.
+        expect(testIds(h, "external-play-go-on"), `${locale} ${label}: the card renders`).toBe(1);
+        expect(testIds(h, "external-play-review"), `${locale} ${label}: no review link`).toBe(0);
+        expect(h, `${locale} ${label}: no href into the panel`).not.toContain("/arbiter");
+        expect(h, `${locale} ${label}: no anchor of any kind`).not.toMatch(ANCHOR);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: three states in four locales").toBe(12);
   });
 
   it("a finished game's flags are reviewed, not let go on: the button says 'Mark as reviewed' and the state is the score", () => {

@@ -38,7 +38,9 @@ export type OpenRoundResult =
  *  (`listOpenRounds`) from the same facts `openRound` decides on:
  *  - `open`: never opened — stamp it, invite everyone, start the window now;
  *  - `reopen`: opened, but nobody it reached is still bound (every send
- *    failed, or a re-pair cleared the rows) — the window starts again now;
+ *    failed, or a re-pair cleared the rows), or a board the arbiter closed
+ *    with No result and the organiser voided is re-armed while every other
+ *    board bound to the open is decided (D17) — the window starts again now;
  *  - `reinvite`: opened and under way — invite only who is still owed, inside
  *    the round's own window (its deadline does not move);
  *  - `none`: nobody left to invite, or the window has closed on them. */
@@ -107,8 +109,8 @@ export type OpenRoundView = {
   extendWindows: ExtendWindow[];
   /** The rest of the round's boards (not the viewer's own), counted by the reason the server gave each at the snapshot: every board that
    *  is NOT in `extendWindows` - a board that is over, one with a game on file, one that is closed, one with no extensions left. With the
-   *  windows, the sentence that stands where the round button is not offered ("Game started", "Check-in has closed", "No board's
-   *  check-in is open right now"): `window boards + the sum of this = the round's boards`. All zero before the open. */
+   *  windows, the sentence that stands where the round button is not offered ("Can't extend check-in: a game has started", "Can't extend
+   *  check-in: it has closed", "No board can be extended right now"): `window boards + the sum of this = the round's boards`. All zero before the open. */
   extendRefusals: ExtendTally;
   /** T16 fix round 1, R1 — this stage's EARLIER rounds that still have games in play (a paired board still to be
    *  played), lowest round first; empty when none. Opening is still allowed (the organiser drives; D8 never blocks):

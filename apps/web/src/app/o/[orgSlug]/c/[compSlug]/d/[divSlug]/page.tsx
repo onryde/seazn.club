@@ -60,7 +60,9 @@ import { resolveLogoUrl } from "@/server/public-site/data";
 import { EntrantsPanel } from "@/components/v2/entrants-panel";
 import { entrantListLocked } from "@/lib/open-entry-stages";
 import { StagesPanel } from "@/components/v2/stages-panel";
+import { ArbiterEntryCard } from "@/components/v2/arbiter-entry-card";
 import { ExternalPlayNeedsResultQueue } from "@/components/v2/external-play-needs-result-queue";
+import { attentionCount, entryLine, entryStatus } from "@/lib/round-column";
 import {
   listFlaggedExternalPlay,
   listNeedsOrganiserExternalPlay,
@@ -68,8 +70,7 @@ import {
   listRunSheetOnlinePlay,
   onlineChessOffered,
 } from "@/server/usecases/external-play";
-import { readOnlinePlay } from "@/server/external-play/online-play";
-import type { OpenRoundView } from "@/lib/open-round";
+import { arbiterPanelOffered } from "@/server/arbiter-panel-offered";
 import { ProgressionPanel } from "@/components/v2/progression-panel";
 import { LaunchActions } from "@/components/v2/launch-actions";
 import { StandingsTable } from "@/components/public-site/standings-table";
@@ -537,47 +538,53 @@ export default async function DivisionPage({
   const streamStates =
     tab === "fixtures" && canEdit ? await openStreamStates(auth, fixtures.map((f) => f.id)) : {};
 
+  // Phase 2 (spec 2026-10-24-arbiter-round-column-design.md §7, §8): the round is opened and watched in the Arbiter Panel, so this
+  // tab hands it over wherever the panel would answer. Two predicates (pre-flight C18), not one:
+  //   - `arbiterOffered` is the panel's own 404 predicate - `arbiterPanelOffered`, the ONE function the arbiter page calls too
+  //     (`canEdit`, a chess division that plays online, then the club offered online chess, cheapest first) - plus "has fixtures".
+  //     It decides the entry card and every link into the panel (the run sheet's chips, the Unpair/Rebuild notice). `canEdit`,
+  //     never `editable`: a billing-frozen organiser keeps a working panel and so keeps its way in.
+  //   - `editable` (below) decides the controls and the queue, as before.
+  // The flag (PostHog `online-chess`) is asked ONCE per render and only on this tab, after the cheap parts. It also feeds the start
+  // hint (T20: "start the division" only makes sense where a round could be opened), which is wanted before there are fixtures, so
+  // the ask is made when either the card or the hint needs the answer.
+  const awaitsStart = editable && divisionScoringClosed(division.status);
+  const clubOffered =
+    tab === "fixtures" &&
+    (await arbiterPanelOffered(auth, { canEdit, sport_key: division.sport_key, config: division.config }, () => fixtures.length > 0 || awaitsStart));
+  const arbiterOffered = clubOffered && fixtures.length > 0;
+  // The division plays online and has not been started, so no round can be opened yet (`listOpenRounds` answers none until it
+  // starts): the first stage card says to start it. The Start button is on this tab, so the hint stays here.
+  const onlineAwaitsStart = clubOffered && awaitsStart;
   // T16: the online-play queue (Held | Flagged) above the run sheet, and the sheet's own chips (camera, flags, held).
   // An organiser who can act, on a chess division's fixtures tab. Read whether or not online play is switched on now:
   // a board held or flagged before it was switched off is still owed its decision. Every control these feed FINISHES
-  // or reviews play, so none is gated by the online-chess flag (T20).
+  // or reviews play, so none is gated by the online-chess flag (T20). The queue is mounted only where the panel is NOT offered
+  // (it lives in the panel's column otherwise), without a link into the panel it would 404.
   const onlineDesk = tab === "fixtures" && editable && division.sport_key === "boardgame";
-  const [needsOrganiserExternalPlay, flaggedExternalPlay, runSheetOnlinePlay] = onlineDesk
-    ? await Promise.all([
-        listNeedsOrganiserExternalPlay(auth, id),
-        listFlaggedExternalPlay(auth, id),
-        listRunSheetOnlinePlay(auth, id),
-      ])
-    : [[], { boards: [], ownBoards: 0 }, {}];
-  // T16 (D12): the one START control on this tab — each stage card's Open round. Only for a division that plays online
-  // now, and only while the club is offered online chess (T20: the control is not rendered at all otherwise, never
-  // rendered disabled). Grouped by stage, in the reader's order.
-  let openRounds: Record<string, OpenRoundView[]> | undefined;
-  // Same gates, one more fact: the division has not started, so `listOpenRounds` answers none and the stage cards say to
-  // start it (the shared not-started predicate — what the Start button and the open-round guard ask).
-  let onlineAwaitsStart = false;
-  if (onlineDesk && readOnlinePlay(division.config) === "lichess" && (await onlineChessOffered(auth))) {
-    openRounds = {};
-    for (const r of await listOpenRounds(auth, id)) (openRounds[r.stageId] ??= []).push(r);
-    onlineAwaitsStart = divisionScoringClosed(division.status);
-  }
+  // The entry card's line is made from the column's own reads: the held and flagged lists (for a billing-frozen organiser too, whose
+  // panel shows them) and the open rounds.
+  const readsQueue = onlineDesk || arbiterOffered;
+  const [needsOrganiserExternalPlay, flaggedExternalPlay, runSheetOnlinePlay, openViews] = await Promise.all([
+    readsQueue ? listNeedsOrganiserExternalPlay(auth, id) : [],
+    readsQueue ? listFlaggedExternalPlay(auth, id) : { boards: [], ownBoards: 0 },
+    onlineDesk ? listRunSheetOnlinePlay(auth, id) : {},
+    arbiterOffered ? listOpenRounds(auth, id) : [],
+  ]);
   // T20: the controls that START online chess (turning it on, the camera policy) render only while the club is
   // offered it (the PostHog flag `online-chess`). Asked only where one of them can render: a chess division's settings
-  // here, and (above) the fixtures tab's Open round of a division that plays online.
-  // (The queue no longer offers the invite resend: the server refuses it for every held board — 409 BOARD_HELD.)
+  // here, and (above) the fixtures tab's entry into the panel of a division that plays online.
+  // (The queue no longer offers the invite resend: the server refuses it for every held board - 409 BOARD_HELD.)
   const onlineChessOn =
     division.sport_key === "boardgame" && tab === "settings" && canEdit ? await onlineChessOffered(auth) : false;
 
-  // T15: the way into the arbiter panel — organisers, only where there is a
-  // board to watch (an online chess division with fixtures); it renders
-  // inside the fixtures tab. The panel page itself 404s everywhere else.
-  const arbiterHref =
-    canEdit &&
-    division.sport_key === "boardgame" &&
-    (division.config as { onlinePlay?: unknown } | null)?.onlinePlay === "lichess" &&
-    fixtures.length > 0
-      ? routes.divisionArbiter(orgSlug, compSlug, divSlug)
-      : null;
+  // T15: the way into the arbiter panel - the entry card and every link into it, only where it would answer. The card says ONE
+  // thing: the attention count is the column title's own function over the same two lists (C6), and the phase is the column's
+  // own reader of the open rounds.
+  const arbiterHref = arbiterOffered ? routes.divisionArbiter(orgSlug, compSlug, divSlug) : null;
+  const arbiterEntryLine = arbiterOffered
+    ? entryLine(entryStatus(openViews, attentionCount(needsOrganiserExternalPlay, flaggedExternalPlay.boards), new Date().getTime()))
+    : null;
 
   return (
     <>
@@ -822,23 +829,17 @@ export default async function DivisionPage({
                 canEdit={editable}
               />
             ))}
-            {arbiterHref && (
-              <div className="mb-4 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-[#e7e3f3] bg-white px-4 py-2">
-                <Link href={arbiterHref} className="min-h-11 content-center text-sm font-semibold text-[#5b21b6]">
-                  {t(dict, "arbiter.entry.link")}
-                </Link>
-                <span className="min-w-0 text-sm text-slate-600">{t(dict, "arbiter.entry.body")}</span>
-              </div>
+            {arbiterHref !== null && arbiterEntryLine !== null && (
+              <ArbiterEntryCard href={arbiterHref} line={arbiterEntryLine} dict={dict} locale={locale} />
             )}
-            {onlineDesk && (
-              // Mounted for every chess desk, even with nothing held: the queue keeps the answer to the last decision
-              // on screen after the refresh that takes its row away (it renders nothing when there is neither).
+            {onlineDesk && !arbiterOffered && (
+              // Mounted for every chess desk the panel is not offered on, even with nothing held: the queue keeps the answer to the
+              // last decision on screen after the refresh that takes its row away (it renders nothing when there is neither).
               <div className="mb-4 empty:hidden">
                 <ExternalPlayNeedsResultQueue
                   held={needsOrganiserExternalPlay}
                   flagged={flaggedExternalPlay.boards}
                   ownFlagged={flaggedExternalPlay.ownBoards}
-                  slugs={{ org: orgSlug, comp: compSlug, div: divSlug }}
                 />
               </div>
             )}
@@ -876,7 +877,6 @@ export default async function DivisionPage({
               streamStates={streamStates}
               awaitingSettle={[...awaitingSettle]}
               onlinePlay={runSheetOnlinePlay}
-              openRounds={openRounds}
               onlineAwaitsStart={onlineAwaitsStart}
               arbiterHref={arbiterHref}
             />
