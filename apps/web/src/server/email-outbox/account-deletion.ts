@@ -30,6 +30,13 @@ import type { EndedRow } from "./hooks";
 /** Why a queued invite was ended: the row's `last_error`, a closed reason and never free text. */
 export const ACCOUNT_DELETED_REASON = "account_deleted";
 
+/**
+ * The address a deleted account is given in place of its own (`users.email` after the deletion route anonymises it), and the recipient a
+ * row of that account is left with. One function so the route, the send-time resolution (`recipient.ts`) and the deletion sweep cannot
+ * disagree: a reserved TLD (`.invalid`, RFC 2606), so nothing sent to it is ever delivered.
+ */
+export const deletedAccountPlaceholder = (userId: string): string => `deleted-${userId}@deleted.invalid`;
+
 type EndedRecord = { id: string; ref_type: string; ref_id: string; meta: Record<string, string> };
 
 /**

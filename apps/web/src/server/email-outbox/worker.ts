@@ -162,7 +162,7 @@ function endExhausted(onlyIds: readonly string[] | undefined): Promise<EndedReco
 async function claimOne(onlyIds: readonly string[] | undefined): Promise<ClaimedRecord | undefined> {
   const [rec] = await sql<ClaimedRecord[]>`
     with picked as (
-      select id from email_outbox
+      select id, status as prior_status from email_outbox
        where ${dueNow(onlyIds)}
        order by expires_at, next_attempt_at, id
        limit 1
@@ -174,7 +174,8 @@ async function claimOne(onlyIds: readonly string[] | undefined): Promise<Claimed
       from picked
      where o.id = picked.id
     returning o.id, o.kind, o.ref_type, o.ref_id, o.org_id, o.meta, o.recipient, o.subject, o.body_sealed,
-              o.transactional, o.attempts, o.expires_at, o.lease_until`;
+              o.transactional, o.attempts, o.expires_at, o.lease_until, o.recipient_user_id, o.last_error,
+              (picked.prior_status = 'sending') as reclaimed`;
   return rec;
 }
 

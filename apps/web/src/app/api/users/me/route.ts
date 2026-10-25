@@ -14,7 +14,7 @@ import { groupIdsOwnedBy } from "@/lib/billing-group";
 import { toLocale } from "@/lib/i18n";
 import { unlinkLichess } from "@/server/usecases/external-accounts";
 import { afterEndedBadly } from "@/server/email-outbox";
-import { anonymiseChessInvites } from "@/server/email-outbox/account-deletion";
+import { anonymiseChessInvites, deletedAccountPlaceholder } from "@/server/email-outbox/account-deletion";
 
 /**
  * Whoami (task-8): resolves the same identity AnalyticsBootstrap used to read
@@ -162,7 +162,7 @@ export async function DELETE(req: Request) {
     await unlinkLichess(user.id);
 
     const purgeAfter = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-    const anonEmail = `deleted-${user.id}@deleted.invalid`;
+    const anonEmail = deletedAccountPlaceholder(user.id);
 
     const endedInvites = await sql.begin(async (tx) => {
       // Remove from all orgs they were sole owner of (no other members — safe to dissolve)

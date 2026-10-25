@@ -152,7 +152,7 @@ describe.skipIf(!HAS_DB)("the email outbox core (DB)", () => {
          set status = 'sending', attempts = attempts + 1, lease_until = now() + interval '2 minutes', status_at = now()
        where id = ${id} and status = 'queued'
       returning id, kind, ref_type, ref_id, org_id, meta, recipient, subject, body_sealed, transactional,
-                attempts, expires_at, lease_until`;
+                attempts, expires_at, lease_until, recipient_user_id, last_error, false as reclaimed`;
     if (!rec) throw new Error(`could not claim ${id} for a retry (not queued)`);
     return toClaimedRow(rec);
   }

@@ -179,7 +179,8 @@ describe.skipIf(!HAS_DB)("the outbox through the real transport (fetch is the on
     const [rec] = await sql<ClaimedRecord[]>`
       update email_outbox set status = 'sending', attempts = attempts + 1, lease_until = now() + interval '2 minutes'
        where id = ${id} and status = 'queued'
-      returning id, kind, ref_type, ref_id, org_id, meta, recipient, subject, body_sealed, transactional, attempts, expires_at, lease_until`;
+      returning id, kind, ref_type, ref_id, org_id, meta, recipient, subject, body_sealed, transactional, attempts, expires_at, lease_until,
+                recipient_user_id, last_error, false as reclaimed`;
     respond = accept;
     expect((await attemptClaimed(toClaimedRow(rec!))).outcome).toBe("sent");
     expect(calls.map((c) => c.headers["Idempotency-Key"])).toEqual([idempotencyKey(id), idempotencyKey(id)]);

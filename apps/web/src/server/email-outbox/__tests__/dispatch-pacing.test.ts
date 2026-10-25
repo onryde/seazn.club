@@ -224,7 +224,7 @@ describe.skipIf(!HAS_DB)("dispatchNow - pacing and the budget (DB)", () => {
            set status = 'sending', attempts = attempts + 1, lease_until = now() + interval '2 minutes', status_at = now()
          where id = ${id!} and status = 'queued'
         returning id, kind, ref_type, ref_id, org_id, meta, recipient, subject, body_sealed, transactional,
-                  attempts, expires_at, lease_until`;
+                  attempts, expires_at, lease_until, recipient_user_id, last_error, false as reclaimed`;
       return toClaimedRow(rec!);
     }
     const http = (status: number, errorName: string) => ({ ok: false, reason: "http", status, errorName, detail: "x" });
