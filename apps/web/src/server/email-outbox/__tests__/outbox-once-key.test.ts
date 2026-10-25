@@ -20,6 +20,7 @@ import { sql, withTenant } from "@/lib/db";
 const HAS_DB = !!process.env.DATABASE_URL;
 
 const CHECK_VIOLATION = "23514";
+const INSUFFICIENT_PRIVILEGE = "42501";
 const INVALID_PARAMETER_VALUE = "22023";
 
 // Typed from the phase-3 spec's kind table, in its wave order: the five wave-1 kinds. Never read from constants.ts.
@@ -222,6 +223,59 @@ describe.skipIf(!HAS_DB)("email_outbox (V472: once-key, user-id replace, cancel)
     expect(await attempt(row({ dedupeKey: null }))).toEqual({ accepted: true });
   });
 
+  // ---- the once-key, as the role that will write it ----------------------------------------------------------------
+  // Everything above runs on the pooled superuser, which can infer a conflict target and bypasses RLS, so it cannot see P1.
+  // `enqueueEmail` runs as app_user inside withTenant: INSERT only, no SELECT, the row's org fenced by the policy.
+
+  it("as app_user inside withTenant: a keyed insert writes one row, the same key again writes none and does not throw, and another org's same key writes none", async () => {
+    const k = `${RUN}-tenant-${randomUUID()}`;
+    const asTenant = (org: string, s: Seed): Promise<{ id: string; count: number }> =>
+      withTenant(org, (tx) => insertRow(tx as unknown as typeof sql, { ...s, org }));
+
+    // A different ref and recipient on every call: the KEY alone decides.
+    const first = await asTenant(orgX, { dedupeKey: k, to: addr("t1") });
+    expect(first.count, "the first keyed insert is written").toBe(1);
+    const again = await asTenant(orgX, { dedupeKey: k, to: addr("t2") });
+    expect(again.count, "the same key from the same tenant writes nothing (and did not throw)").toBe(0);
+    const foreign = await asTenant(orgY, { dedupeKey: k, to: addr("t3") });
+    expect(foreign.count, "the same key from another tenant writes nothing (the key is global to the kind)").toBe(0);
+    // The pair: orgY can write as app_user, so that 0 is the key and not a refused tenant.
+    const other = await asTenant(orgY, { dedupeKey: `${k}-other`, to: addr("t4") });
+    expect(other.count, "orgY's own, different key is written").toBe(1);
+
+    const rows = await sql<{ id: string; org_id: string; status: string; has_body: boolean }[]>`
+      select id, org_id, status, body_sealed is not null as has_body
+        from email_outbox where kind = 'registration_confirmation' and dedupe_key = ${k}`;
+    expect(rows).toEqual([{ id: first.id, org_id: orgX, status: "queued", has_body: true }]);
+    expect((await stored([again.id, foreign.id])).size, "neither skipped id is in the table").toBe(0);
+  });
+
+  it("as app_user the TARGETED on-conflict form of the spec is refused (42501), and the same statement without a target is accepted", async () => {
+    // The spec (§5) wrote `on conflict (kind, dedupe_key) where dedupe_key is not null do nothing`. Inferring that target needs
+    // SELECT on the columns; app_user holds INSERT only. This test is what keeps the writer on the target-less form.
+    const insertWith = (targeted: boolean, ref: string): Promise<unknown> =>
+      withTenant(orgX, (tx) => {
+        const x = tx as unknown as typeof sql;
+        return x`
+          insert into email_outbox (id, kind, ref_type, ref_id, org_id, recipient, subject, transactional, expires_at, dedupe_key)
+          values (${randomUUID()}, 'registration_confirmation', 'registration', ${ref}, ${orgX}, ${addr("tg")}, 's', ${false},
+                  now() + interval '1 hour', ${`${RUN}-targeted-${randomUUID()}`})
+          ${targeted ? x`on conflict (kind, dedupe_key) where dedupe_key is not null do nothing` : x`on conflict do nothing`}`;
+      });
+    const refused = newRef();
+    const out = await attempt(insertWith(true, refused));
+    expect(out).toMatchObject({ accepted: false, code: INSUFFICIENT_PRIVILEGE });
+    expect((out as { message: string }).message).toMatch(/permission denied|row-level security/);
+    const [none] = await sql<{ n: number }[]>`select count(*)::int as n from email_outbox where ref_id = ${refused}`;
+    expect(none!.n, "the refused statement wrote nothing").toBe(0);
+
+    // The pair: the identical statement with the target-less clause goes in.
+    const ok = newRef();
+    expect(await attempt(insertWith(false, ok))).toEqual({ accepted: true });
+    const [one] = await sql<{ n: number }[]>`select count(*)::int as n from email_outbox where ref_id = ${ok}`;
+    expect(one!.n).toBe(1);
+  });
+
   // ---- replace by user id -------------------------------------------------------------------------------------------
 
   it("replace by user id", async () => {
@@ -404,6 +458,31 @@ describe.skipIf(!HAS_DB)("email_outbox (V472: once-key, user-id replace, cancel)
 
       // A second call finds nothing queued: the cancel is idempotent and reports an empty set rather than the same rows.
       expect(await cancelAsTenant(orgX, [r1, r2], "round_voided")).toEqual([]);
+    });
+
+    it("frees the once-key of the row it ends, so a same-key re-enqueue is written; a row it does not end keeps its key", async () => {
+      const k = `${RUN}-cancelled-${randomUUID()}`;
+      const kSent = `${RUN}-sentkey-${randomUUID()}`;
+      const r = newRef();
+      const queued = await mustRow({ kind: KIND, ref: r, org: orgX, to: addr("ck"), dedupeKey: k, aged: true });
+      const sent = await mustRow({ kind: KIND, ref: r, org: orgX, to: addr("cs"), dedupeKey: kSent, status: "sent", body: null, aged: true });
+      // While the email is queued its key is taken.
+      expect((await row({ kind: KIND, ref: newRef(), org: orgX, dedupeKey: k })).count, "the key is taken while queued").toBe(0);
+
+      const out = await cancelAsTenant(orgX, [r], "round_voided");
+      expect(out.map((o) => o.outbox_id), "only the queued row was ended").toEqual([queued]);
+      const keys = await sql<{ id: string; dedupe_key: string | null }[]>`
+        select id, dedupe_key from email_outbox where id in ${sql([queued, sent])}`;
+      expect(Object.fromEntries(keys.map((x) => [x.id, x.dedupe_key])), "the ended row lost its key, the sent row kept its own").toEqual({
+        [queued]: null, [sent]: kSent,
+      });
+      expect((await stored([queued])).get(queued)!.status).toBe("expired");
+
+      // The point of it (spec §7, wave 3's email change cancels and re-sends): the same key now enqueues.
+      const again = await row({ kind: KIND, ref: newRef(), org: orgX, dedupeKey: k });
+      expect(again.count, "a cancelled email does not block its re-enqueue").toBe(1);
+      // And the pair: the sent row's key is still taken.
+      expect((await row({ kind: KIND, ref: newRef(), org: orgX, dedupeKey: kSent })).count, "a sent email's key is still taken").toBe(0);
     });
 
     it("an empty ref list returns no rows and touches nothing", async () => {

@@ -36,7 +36,10 @@ alter table email_outbox
   add column dedupe_key text,
   add constraint email_outbox_dedupe_key_nonempty check (dedupe_key is null or dedupe_key <> '');
 
--- "Every email for this account": the account-deletion sweep and the user-id replace arm.
+-- "Every email for this account". It serves the account-deletion sweep (plan T5: `recipient_user_id = <the deleted user>`) and
+-- the foreign key's own lookup when a `users` row is deleted (`on delete set null` must find the rows that point at it). It does
+-- NOT serve the replace trigger's `case`: that arm is not indexable, and the trigger is served by email_outbox_replace_idx on
+-- (kind, ref_type, ref_id).
 create index email_outbox_recipient_user_idx on email_outbox (recipient_user_id) where recipient_user_id is not null;
 -- The once-key. Partial: a row with no key is free to repeat.
 create unique index email_outbox_once_idx on email_outbox (kind, dedupe_key) where dedupe_key is not null;
@@ -70,6 +73,9 @@ create trigger email_outbox_replace_older after insert on email_outbox
 -- so it fences on `current_org_id()` itself. Called with no tenant (the pool), `current_org_id()` is null and the fence
 -- matches the org-less rows only, never an organisation's. The reason is the row's `last_error`, a snake_case word the
 -- readers match on; the shape check keeps a free-text message (an address, a token) out of that column.
+-- It also clears `dedupe_key` on the rows it ends. A cancelled email is dead for good, and a once-key that outlived it would
+-- refuse the same key's re-enqueue for the 90-day retention (wave 3's email change cancels the old invite and sends a new one).
+-- Only a `queued` row is ever cancelled, so a row that may have been mailed (`sending`, `sent`) keeps its key.
 create function email_outbox_cancel(p_kind text, p_ref_type text, p_ref_ids text[], p_reason text)
   returns table (outbox_id uuid, outbox_kind text, outbox_ref_type text, outbox_ref_id text, outbox_meta jsonb)
   language plpgsql security definer set search_path = ${flyway:defaultSchema}, pg_temp as $$
@@ -79,7 +85,7 @@ begin
   end if;
   return query
     update email_outbox o
-       set status = 'expired', last_error = p_reason, body_sealed = null, lease_until = null, status_at = now()
+       set status = 'expired', last_error = p_reason, body_sealed = null, lease_until = null, dedupe_key = null, status_at = now()
      where o.kind = p_kind and o.ref_type = p_ref_type and o.ref_id = any(p_ref_ids) and o.status = 'queued'
        and o.org_id is not distinct from current_org_id()
     returning o.id, o.kind, o.ref_type, o.ref_id, o.meta;

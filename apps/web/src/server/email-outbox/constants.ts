@@ -2,9 +2,9 @@
 // "The row" and "Statuses"). Pure declarations: no I/O, no imports, so the core, the kind hooks and the tests
 // can all read them without a cycle.
 //
-// The same two lists are typed again as CHECK constraints in db/migration/deltas/V470__email_outbox.sql. They
-// are two copies of one fact, so outbox-schema.test.ts reads the constraint definitions back from the catalogue
-// and requires them to name exactly these members.
+// The same two lists are typed again as CHECK constraints: the statuses in db/migration/deltas/V470__email_outbox.sql, the kinds
+// (as last redefined) in V472__email_outbox_phase3_wave1.sql. They are two copies of one fact, so outbox-schema.test.ts reads the
+// constraint definitions back from the catalogue and requires them to name exactly these members.
 
 export const OUTBOX_KINDS = [
   "magic_link",
