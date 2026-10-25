@@ -55,6 +55,7 @@ import {
   seedLichessLink,
   seedOnlineRound,
   seedSeatInvite,
+  seedSeatUninvited,
   seedUser,
   uiEn,
   type RoundBoard,
@@ -288,7 +289,8 @@ async function flagBoard(r: SeededRound, board: RoundBoard): Promise<void> {
 // Open round, the invites, the round's +5 and the queue of boards that need a decision moved off the Fixtures tab into the panel's
 // round column (spec 2026-10-24-arbiter-round-column-design.md). These are the column's locators and the open-round route's
 // answer, which a press from the BEFORE block cannot show on screen: the open flips the column to its check-in phase and the block
-// (with its answer) unmounts, so the answer is read from the wire, and the same press's reopen from the check-in hero keeps its.
+// (with its answer) unmounts: the answer is read from the wire AND recorded as it is drawn (`recordOpenNotices`, a MutationObserver),
+// and the same press's reopen from the check-in hero keeps its notice on screen.
 
 /** The column: one `aside`, its phase on `data-phase` (before | checkin | playing). */
 const column = (page: Page) => page.getByTestId("arbiter-round-column");
@@ -324,6 +326,44 @@ async function openAnswerOf(res: Response): Promise<OpenAnswer> {
 
 /** "{count} player(s) invited." - the dictionary's one/other pair, picked by the count the way `plural()` picks it. */
 const invitedLine = (count: number) => fill(count === 1 ? "externalPlay.openRound.invited.one" : "externalPlay.openRound.invited.other", { count });
+
+/** The lines an open's notice draws for the answer the route gave: the count, then one line per board nobody was reached on (the
+ *  keys `openNoticeText` reads, filled from the answer and the round's boards, not from the notice). The first line assumes nothing
+ *  is left sending - the notice words a send still in flight as its own line, and drops the count when it is 0 - so that is a PREMISE
+ *  and fails by name: the e2e servers have no mail provider, every attempt ends dead inside the open, and `retrying` is 0. */
+function openNoticeLines(answer: OpenAnswer, boards: readonly RoundBoard[]): string[] {
+  expect(answer.retrying, "premise: no mail provider, so no invite is left sending when the open answers").toBe(0);
+  return [
+    invitedLine(answer.invited),
+    ...answer.skipped.map((skipped) => {
+      const n = boards.findIndex((b) => b.fixtureId === skipped.fixtureId) + 1;
+      expect(n, `the skipped board ${skipped.fixtureId} is one of the round's`).toBeGreaterThan(0);
+      expect(skipped.reason, "a send that failed is skipped as send_failed").toBe("send_failed");
+      return fill("runsheet.round.skipLine", { board: fill("arbiter.boardNo", { n }), reason: uiEn["externalPlay.openRound.skipped.sendFailed"]! });
+    }),
+  ];
+}
+
+/** Records every distinct set of lines the open's notice shows, from now on, into `window.__openNotices`. The first open's notice
+ *  lives only until the refresh that follows it flips the column's phase and takes its block away, which is shorter than any poll,
+ *  so a MutationObserver (not an assertion in flight) is what can read it. */
+async function recordOpenNotices(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const w = window as unknown as { __openNotices?: string[][] };
+    const seen: string[][] = (w.__openNotices = []);
+    const read = () => {
+      for (const el of document.querySelectorAll('[data-testid="arbiter-column-open-notice"]')) {
+        const lines = [...el.querySelectorAll("p")].map((p) => p.textContent ?? "");
+        const last = seen[seen.length - 1];
+        if (lines.length > 0 && JSON.stringify(last) !== JSON.stringify(lines)) seen.push(lines);
+      }
+    };
+    new MutationObserver(read).observe(document.body, { childList: true, subtree: true, characterData: true });
+    read();
+  });
+}
+const recordedOpenNotices = (page: Page) =>
+  page.evaluate(() => (window as unknown as { __openNotices?: string[][] }).__openNotices ?? null);
 
 test.describe("online chess — the organiser's desk", () => {
   test("Open round (D12): paired, not opened — the column's confirmation names who it invites; opened, the column reads what was sent", async ({
@@ -431,12 +471,19 @@ test.describe("online chess — the organiser's desk", () => {
 
     await block.getByTestId("arbiter-column-open-cta").click();
     await expect(page.getByTestId("arbiter-column-confirm-confirm")).toHaveText(fill("runsheet.round.confirmCta.other", { count: 4 }));
+    // The open answers into the BEFORE block, and the refresh that follows flips the column to its check-in phase, which takes the
+    // block (and the answer it was showing) away: the notice is recorded as it is drawn, and read once the flip has happened.
+    await recordOpenNotices(page);
     const sentOpen = openRoundSent(page, r.stageId);
     await page.getByTestId("arbiter-column-confirm-confirm").click();
     const answer = await openAnswerOf(await sentOpen);
-    // The open answers into the BEFORE block, and the refresh that follows flips the column to its check-in phase, which takes the
-    // block (and the answer it was showing) away - so the answer is read off the wire above, and the flip is the page's proof.
     await expect(col).toHaveAttribute("data-phase", "checkin", { timeout: 30_000 });
+    const drawn = await recordedOpenNotices(page);
+    expect(drawn, "the observer was installed and survived the flip (the page did not navigate)").not.toBeNull();
+    expect(drawn!.length, "the open's answer was drawn in the Before block before the refresh took it away").toBeGreaterThan(0);
+    expect(drawn!.at(-1), "the Before block's notice says what the route answered: the count, then a line per board nobody was reached on").toEqual(
+      openNoticeLines(answer, r.boards),
+    );
     expect(posts, "one press, one request").toHaveLength(1);
     expect(await opens(), "one open, stamped by the route").toBe(1);
     // What the open sent, read from the ledger it stamps (a seat's emailed_at). The e2e
@@ -471,7 +518,7 @@ test.describe("online chess — the organiser's desk", () => {
     }
     const sent = stamps.reduce((n, x) => n + x.sent, 0);
     // The answer the route gave is the ledger's: the count it reports is what is stamped, and each board it reached nobody on is
-    // named once with the reason the notice words as "could not be sent" (the notice itself is read below, off the reopen).
+    // named once with the reason the notice words as "could not be sent" (the notice itself is read off the Before block as it is drawn, and again off the reopen).
     expect(answer.opened, "the open opened").toBe(true);
     expect(answer.invited, "the answer counts what the ledger stamped").toBe(sent);
     const unsent = r.boards.filter((b) => stamps.find((x) => x.fixture_id === b.fixtureId)!.sent === 0);
@@ -511,19 +558,8 @@ test.describe("online chess — the organiser's desk", () => {
       const again = await openAnswerOf(await sentAgain);
       expect(again.skipped.length, "premise: no mail provider, so the reopen reached nobody either, on both boards").toBe(unsent.length);
       const notice = col.getByTestId("arbiter-column-reinvite-notice");
-      const lines = notice.locator("p");
-      await expect(lines.first()).toHaveText(invitedLine(again.invited));
-      await expect(lines).toHaveCount(1 + again.skipped.length);
-      for (const [i, s] of again.skipped.entries()) {
-        const n = r.boards.findIndex((b) => b.fixtureId === s.fixtureId) + 1;
-        expect(n, `the skipped board ${s.fixtureId} is one of the round's`).toBeGreaterThan(0);
-        await expect(lines.nth(1 + i)).toHaveText(
-          fill("runsheet.round.skipLine", {
-            board: fill("arbiter.boardNo", { n }),
-            reason: uiEn["externalPlay.openRound.skipped.sendFailed"]!,
-          }),
-        );
-      }
+      // The array form pins the number of lines as well as each one's words.
+      await expect(notice.locator("p")).toHaveText(openNoticeLines(again, r.boards));
       expect(posts, "the reopen is one more request").toHaveLength(2);
     } else if (sent === 4) {
       await expect(reinvite).toHaveCount(0);
@@ -583,9 +619,10 @@ test.describe("online chess — the organiser's desk", () => {
   });
 
   // Spec 2026-10-24-arbiter-round-column-design.md §6: the waiting list names what became of each seat's mail, in the outbox's own
-  // five words, and a seat the mail still holds stops being offered a re-invite. The e2e servers send no mail, so the worker and the
-  // provider's webhook never run; `seedSeatInvite` writes the row the way they leave it, with the seat's stamp to match.
-  test("Invite words (§6): Bounced and Delivered on a waiting seat are the outbox's, and the round's re-invite follows the seats the mail still holds", async ({
+  // five words plus "Not invited" for a seat with no mail, and a seat the mail still holds stops being offered a re-invite. The e2e
+  // servers send no mail, so the worker and the provider's webhook never run; `seedSeatInvite` writes the row the way they leave
+  // it, with the seat's stamp to match, and `seedSeatUninvited` takes a seat's rows away. All six words are read in the browser.
+  test("Invite words (§6): every word a waiting seat can show is the outbox's - Not invited, Not delivered, Sent, Delayed, Delivered, Bounced - and the round's re-invite follows the seats the mail still holds", async ({
     page,
     request,
   }) => {
@@ -594,13 +631,19 @@ test.describe("online chess — the organiser's desk", () => {
     const [b1, b2] = [r.boards[0]!, r.boards[1]!];
     const col = column(page);
     const reinvite = col.getByTestId("arbiter-column-reinvite");
+    // Every word a seat is read as, so the six are accounted for at the end against the engine's own list (INVITE_WORD_KEYS).
+    const seen = new Set<SeatInviteWord>();
+    const read = async (board: RoundBoard, colour: "white" | "black", word: SeatInviteWord) => {
+      await expectSeatWord(page, board, colour, word);
+      seen.add(word);
+    };
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto(r.arbiterPath);
     await expect(col).toHaveAttribute("data-phase", "checkin", { timeout: 30_000 });
 
     // The empty case first: no mail was accepted by anyone, every row ended `dead`, so all four seats read Not delivered and the
     // round offers the open again (nobody was reached).
-    for (const b of [b1, b2]) for (const colour of ["white", "black"] as const) await expectSeatWord(page, b, colour, "not_delivered");
+    for (const b of [b1, b2]) for (const colour of ["white", "black"] as const) await read(b, colour, "not_delivered");
     await expect(reinvite).toHaveText(uiEn["arbiter.column.reopenCta"]!);
 
     // Bounced and Delivered, on one board: the seat the address bounced for is still owed, and the seat that has the mail is not.
@@ -608,10 +651,10 @@ test.describe("online chess — the organiser's desk", () => {
     await seedSeatInvite(b1.fixtureId, "black", "delivered");
     await page.reload();
     await expect(col).toHaveAttribute("data-phase", "checkin", { timeout: 30_000 });
-    await expectSeatWord(page, b1, "white", "bounced");
-    await expectSeatWord(page, b1, "black", "delivered");
-    await expectSeatWord(page, b2, "white", "not_delivered");
-    await expectSeatWord(page, b2, "black", "not_delivered");
+    await read(b1, "white", "bounced");
+    await read(b1, "black", "delivered");
+    await read(b2, "white", "not_delivered");
+    await read(b2, "black", "not_delivered");
     // One seat holds its mail, so the round is no longer "nobody reached": the press is the re-invite of the three seats not holding.
     await expect(reinvite).toHaveText(fill("runsheet.round.inviteCta.other", { count: 3 }));
     expect(await noSidewaysScroll(page)).toBe(3);
@@ -624,18 +667,37 @@ test.describe("online chess — the organiser's desk", () => {
     await seedSeatInvite(b2.fixtureId, "white", "sending");
     await seedSeatInvite(b2.fixtureId, "black", "complained");
     await page.reload();
-    await expectSeatWord(page, b1, "white", "sent");
-    await expectSeatWord(page, b1, "black", "delivered");
-    await expectSeatWord(page, b2, "white", "delayed");
-    await expectSeatWord(page, b2, "black", "delivered");
+    await read(b1, "white", "sent");
+    await read(b1, "black", "delivered");
+    await read(b2, "white", "delayed");
+    await read(b2, "black", "delivered");
     await expect(reinvite, "all four seats are held by their mail: nobody is owed").toHaveCount(0);
 
     // And back out: a held seat whose mail then fails is released, and the press returns for that one seat.
     await seedSeatInvite(b2.fixtureId, "black", "failed");
     await page.reload();
-    await expectSeatWord(page, b2, "black", "not_delivered");
-    await expectSeatWord(page, b2, "white", "delayed");
+    await read(b2, "black", "not_delivered");
+    await read(b2, "white", "delayed");
     await expect(reinvite).toHaveText(fill("runsheet.round.inviteCta.one", { count: 1 }));
+
+    // And a seat nobody mailed. It is in the same state as the failed seat just above (its stamp is released, so it is still owed),
+    // and the one difference is that its mail is gone: that is the whole of the difference between "Not delivered" (mail ended
+    // badly) and "Not invited" (no mail at all). The press does not move: what is owed follows the stamps, not the mail.
+    expect(await seedSeatUninvited(b2.fixtureId, "black"), "premise: one address per seat, so the seat had one row on file").toBe(1);
+    await page.reload();
+    await expect(col).toHaveAttribute("data-phase", "checkin", { timeout: 30_000 });
+    await read(b2, "black", "not_invited");
+    await expect(waitingSeat(page, b2, "black").getByTestId("arbiter-invite-word")).toHaveText(uiEn["runsheet.round.notInvited"]!);
+    // The other three seats still read what the mail on file says.
+    await read(b2, "white", "delayed");
+    await read(b1, "white", "sent");
+    await read(b1, "black", "delivered");
+    await expect(reinvite).toHaveText(fill("runsheet.round.inviteCta.one", { count: 1 }));
+
+    // All six words, accounted for against the engine's own list: a word added to INVITE_WORD_KEYS without a witness here fails.
+    const declared = Object.keys(INVITE_WORD_KEYS).sort();
+    expect(declared.length, "anti-vacuity: the engine declares the six words").toBe(6);
+    expect([...seen].sort(), "every word a seat can show was read in the browser").toEqual(declared);
   });
 
   // Final review I-1 (spec §3.2.1, "What the organiser sees"): the view has always carried each check-in group's boards,
@@ -911,7 +973,12 @@ test.describe("online chess — the organiser's desk", () => {
     await expect((await runSheetRow(page, flagged)).getByTestId("run-sheet-camera-chip")).toHaveAttribute("data-state", "ok");
     await expect((await runSheetRow(page, flagged)).getByTestId("run-sheet-camera-chip")).toHaveText(uiEn["runsheet.camera.ok"]!);
     await expect((await runSheetRow(page, flagged)).getByTestId("run-sheet-connection-chip")).toHaveCount(0);
-    await expect(page.getByTestId("arbiter-entry").getByTestId("arbiter-entry-status")).not.toHaveAttribute("data-kind", "attention");
+    // The queue is empty, so nothing outranks the phase any more and the card says what the phase is. Round 1 was opened a few
+    // minutes ago and its check-in window (DEADLINE_AFTER_MS) is still running, so the phase is check-in for round 1: asserted as
+    // the line itself (kind and words), which an absent card or a stale "needs a decision" line cannot satisfy.
+    const settledEntry = page.getByTestId("arbiter-entry").getByTestId("arbiter-entry-status");
+    await expect(settledEntry).toHaveAttribute("data-kind", "checkin");
+    await expect(settledEntry).toHaveText(fill("arbiter.entry.status.checkin", { round: 1 }));
   });
 
   test("Unpair while a game is on file: refused, the round stays paired, and the notice leads to the arbiter panel", async ({

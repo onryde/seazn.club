@@ -11,8 +11,11 @@
  *     audit row names the organiser, and the PLAYER'S open room, with no reload, counts down from five minutes later. The other
  *     board's room does not move (the inert-seam class: a number stored on the row that the room never reads).
  *  2. The ROUND: "+5 min to the round" is the Arbiter Panel's round bar, in the round column's check-in hero (phase 2 moved the
- *     round's press off the Fixtures tab's Open round control, which is gone - the tab is asserted to carry no "+5" at all). It extends
- *     the open boards and says why it left one alone (a game is on it), and stops offering itself at the cap.
+ *     round's press off the Fixtures tab's Open round control, which is gone). The tab is asserted to carry no button or text with
+ *     the round bar's label and no Open round button (queries that would find the old control's words if it came back; the retired
+ *     testids are checked as well, but nothing in the source carries them now, so they alone prove nothing), with the run sheet and
+ *     the entry card rendered beside them. The bar extends the open boards and says why it left one alone (a game is on it), and
+ *     stops offering itself at the cap.
  *  3. The bar: the hero's bar with its answers painted, at 320, 768 and 1280 - no sideways scroll, every button's whole label,
  *     a 44px target. The answers are ASSERTED: a board press then a round press leaves only the round's answer (and the other way
  *     round), and the time a board's answer names is the time the board's own "Check-in closes" line names.
@@ -228,13 +231,21 @@ test.describe("the check-in extension", () => {
     const [b1, b2] = r.boards as [SeededRound["boards"][number], SeededRound["boards"][number]];
     await roundGameSql(b1, { moves: LINE });
 
-    // The Fixtures tab no longer carries the round's +5 (it was the Open round control's; the control is gone). The entry card that
-    // leads into the panel is there, so the absence is the tab's own state and not a page that did not render.
+    // The Fixtures tab no longer carries the round's +5 (it was the Open round control's; the control is gone). The absence is
+    // asserted by the control's own words, which the page would show if it came back, and beside two things that did render: the
+    // entry card that leads into the panel and the run sheet's rows (so it is the tab's own state, not a page that did not load).
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto(r.fixturesTab);
     await expect(page.getByTestId("arbiter-entry")).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator("li[data-fixture-no]").first(), "the run sheet rendered").toBeVisible();
+    await expect(page.getByRole("button", { name: roundLabel, exact: true }), "no round +5 button on the Fixtures tab").toHaveCount(0);
+    await expect(page.getByText(roundLabel, { exact: true }), "no round +5 words on the Fixtures tab").toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: uiEn["runsheet.round.openCta"]!, exact: true }),
+      "no Open round button on the Fixtures tab",
+    ).toHaveCount(0);
     for (const gone of ["open-round", "open-round-extend", "open-round-extend-cta", "open-round-extend-why"]) {
-      await expect(page.getByTestId(gone), `${gone}: not on the Fixtures tab`).toHaveCount(0);
+      await expect(page.getByTestId(gone), `${gone}: the retired testid is not on the Fixtures tab`).toHaveCount(0);
     }
 
     // The arbiter panel: board 1 (a game is on it) offers no press; board 2 offers three, and the round bar in the hero presses it.
@@ -244,6 +255,8 @@ test.describe("the check-in extension", () => {
     await expect(page.getByTestId("arbiter-extend-why"), "... and the reason stands in its place, not a silent gap").toHaveText(uiEn["externalPlay.checkinExtend.why.gameStarted"]!);
     const bar = hero(page).getByTestId("arbiter-extend-round");
     await expect(bar.getByTestId("arbiter-extend-round-cta")).toHaveText(roundLabel);
+    // The pair of the tab's absence above: the very query that found nothing there finds the press here.
+    await expect(page.getByRole("button", { name: roundLabel, exact: true }), "the panel carries the round +5 button the tab does not").toHaveCount(1);
     await expect(bar.getByTestId("arbiter-extend-round-helper")).toContainText(fill("externalPlay.checkinExtend.roundHint.one", { count: 1 }));
     await bar.getByTestId("arbiter-extend-round-cta").click();
     const notice = bar.getByTestId("arbiter-extend-round-notice");

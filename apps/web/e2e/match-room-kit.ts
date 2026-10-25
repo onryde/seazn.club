@@ -579,6 +579,34 @@ export async function seedSeatInvite(fixtureId: string, colour: "white" | "black
   });
 }
 
+/** Spec §6: a seat nobody ever mailed. Takes away every chess_invite outbox row of the seat and releases its stamp the way
+ *  `releaseSeat` does (clear the colour; unbind the row from the open when the other colour holds nothing), which is V451's
+ *  rule: a stamp needs a round_open_id, so the open id may only go when both stamps are gone. A seat with no mail on file
+ *  and no stamp reads "Not invited"; a seat that is stamped with no mail reads "Not delivered" (the arbiter read logs it as
+ *  an anomaly), so the release is half of what makes the word. The product reads "Not invited" for a seat whose current
+ *  player has no mail on file (a player put on the board after the open); no e2e server reaches it by itself, since the open
+ *  queues a row for every address it has, so the rows are taken away to the same read.
+ *  Throws when there was no row to take away: a seed that quietly changed nothing would let a spec assert on the state it
+ *  started in. Returns how many rows went. */
+export async function seedSeatUninvited(fixtureId: string, colour: "white" | "black"): Promise<number> {
+  const ref = `${fixtureId}:${colour}`;
+  const stampCol = colour === "white" ? "white_emailed_at" : "black_emailed_at";
+  const otherCol = colour === "white" ? "black_emailed_at" : "white_emailed_at";
+  return withDb(async (sql) => {
+    const gone = await sql`
+      delete from email_outbox where kind = 'chess_invite' and ref_type = 'fixture_seat' and ref_id = ${ref}`;
+    if (gone.count === 0) throw new Error(`seedSeatUninvited: no chess_invite outbox row for ${ref} to take away (was the round opened?)`);
+    const released = await sql`
+      update fixture_external_play
+         set ${sql(stampCol)} = null,
+             round_open_id = case when ${sql(otherCol)} is null then null else round_open_id end,
+             updated_at = now()
+       where fixture_id = ${fixtureId}`;
+    expect(released.count, `the bridge row of ${fixtureId} released ${colour}'s stamp`).toBe(1);
+    return gone.count;
+  });
+}
+
 // ─── the board, as a player's finger meets it (T17) ─────────────────────────
 // The same reading match-room.spec.ts uses (its helpers are local to that
 // file): a square's centre from the board surface's box and the player's

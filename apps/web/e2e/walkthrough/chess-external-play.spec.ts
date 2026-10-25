@@ -203,8 +203,14 @@ test("needs_organiser queue: organiser can resolve from division page", async ({
   // carries no way into a panel that would answer 404: neither the retired "Review in arbiter panel" link nor any link to the panel
   // at all (the queue's positive pair is the row above, visible and settled below; the Online division's queue is the panel's, in
   // online-chess-desk.spec.ts).
-  await expect(page.getByTestId("external-play-review")).toHaveCount(0);
+  await expect(page.getByTestId("external-play-review"), "the retired review link's testid (nothing in the source carries it now)").toHaveCount(0);
   await expect(page.getByTestId("external-play-needs-result-queue").locator('a[href*="/arbiter"]')).toHaveCount(0);
+  // By its words: the entry card's link is named "Arbiter panel" and the retired review link was "Review in arbiter panel", so one
+  // case-insensitive query on the dictionary's own words finds either if it came back into the queue (beside the row, which rendered).
+  await expect(
+    page.getByTestId("external-play-needs-result-queue").getByRole("link", { name: new RegExp(uiEn["arbiter.entry.link"]!, "i") }),
+    "no link named for the Arbiter Panel in the queue",
+  ).toHaveCount(0);
   await expect(page.getByTestId("arbiter-entry"), "and the tab has no entry card into a panel it does not offer").toHaveCount(0);
   // T16: the four outcomes sit behind the card's "Settle" toggle (canvas HoldQueue).
   await row.getByTestId("external-play-settle-toggle").click();

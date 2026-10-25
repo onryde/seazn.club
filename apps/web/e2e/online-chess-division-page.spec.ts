@@ -48,6 +48,11 @@ test("online chess division: the header says Chess; the fixtures tab says to sta
   await expect(hint).toHaveCount(1);
   await expect(hint).toHaveText(uiEn["externalPlay.openRound.startFirst"]!);
   await expect(page.getByTestId("open-round"), "no Open round control while it waits").toHaveCount(0);
+  // By its words too (the testid is the retired control's and exists nowhere in the source now): beside the hint, which rendered.
+  await expect(
+    page.getByRole("button", { name: uiEn["runsheet.round.openCta"]!, exact: true }),
+    "no Open round button while it waits",
+  ).toHaveCount(0);
   await expect(
     page.getByTestId("arbiter-entry-status").filter({ hasText: fill("arbiter.entry.status.ready", { round: 1 }) }),
     "not started: nothing is ready to open yet, so the entry card cannot say so",
@@ -73,5 +78,9 @@ test("online chess division: the header says Chess; the fixtures tab says to sta
   await expect(entry.getByTestId("arbiter-entry-status")).toHaveText(fill("arbiter.entry.status.ready", { round: 1 }));
   await expect(entry.getByRole("link", { name: uiEn["arbiter.entry.link"]!, exact: true })).toBeVisible();
   await expect(page.getByTestId("open-round"), "started: Open round is the panel's, not the tab's").toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: uiEn["runsheet.round.openCta"]!, exact: true }),
+    "started: no Open round button on the tab, with the entry card (which says the round is ready) beside it",
+  ).toHaveCount(0);
   await expect(page.getByTestId("online-start-hint"), "started: nothing left to say").toHaveCount(0);
 });
