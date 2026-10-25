@@ -11,8 +11,9 @@ FOLD_EPOCH/FOLD_MINOR split (#963, D34) and the release-time epoch report
 (#964, warn-only). GF-2 (corpus format 3: kernel overlay, effective results and
 player stats recorded and guarded) is this spec's last Phase 1 follow-up
 (`engine-split/gf2-kernel-overlay-design.md`). Phase 2a and 2b wait on the
-owner's go-ahead. Owed before the first capture app release to real scorers:
-a default-off per-sport epoch floor override, logged at boot.
+owner's go-ahead. The per-sport epoch floor override owed before the first
+capture app release to real scorers is delivered (`ENGINE_EPOCH_FLOOR_OVERRIDE`,
+default off, logged at boot; §5.6).
 
 **Inputs.** Brief: `.superpowers/handoff/2026-10-08-w1d-close/engine-split-prompt.md`.
 Fact check: `engine-split-facts.md` beside it (36 claims against `origin/main`
@@ -300,6 +301,31 @@ at 2b.
   in progress** does when the epoch moves (finish under the old rules, or stop
   and ask for an update).
 - This PR does not block 2a or 2b; it must land before capture S2 ships.
+
+**Delivered after 1f: the per-sport floor override (the emergency lever; owner ruling 2026-10-15, review 1f lens 3).** After a bump
+reaches prod, every capture app on the old epoch is locked out of that sport until it updates, and the only way back used to be a
+Fly rollback. `ENGINE_EPOCH_FLOOR_OVERRIDE=football=2,hockey=1` (a Fly secret; a restart applies it) LOWERS the floor for the
+sports it names: the gate compares against `min(foldEpochOf(sport), override)`, so it can never raise one.
+`apps/web/src/server/usecases/engine-epoch-override.ts` owns it.
+- **Default off.** Unset or blank changes nothing. Production use is the point (it is not a local/ci-only `tunable()`).
+- **Understood or off, never a guess.** An unknown sport (checked against the `FOLD_EPOCH` keys), an epoch that is not an integer >= 1,
+  a duplicate sport, an empty pair or a pair with no `=` is OFF: every sport keeps its declared floor, today's behaviour. Boot
+  (`instrumentation.ts`, beside `relayDriverMode()`) parses it strictly and, for such a value, logs it as an error, reports it to
+  Sentry as an exception (flushed) and CARRIES ON; unlike `relayDriverMode()` it does not throw, because a rejected `register()` is
+  cached by Next and fails every route, `/api/health` included (a typo in an emergency lever must not be a site outage). The lever
+  stays OFF. The GATE reads the same value without ever throwing; in a process that never ran boot it reports it once per distinct
+  bad value with `log.error` (and to Sentry where that process initialised it), and the value is never echoed in an HTTP body.
+- **Loud.** Boot logs `ENGINE_EPOCH_FLOOR_OVERRIDE_ACTIVE { sport, floor, declared, majorsBehind }` once per sport (`majorsBehind` is
+  `declared - floor`) and sends the same sentence to Sentry: a warning for one major behind, an error for more than one (a forgotten
+  entry that has widened across a later bump; the pino line stays a warning). An entry at or above the sport's own epoch is inert: boot logs `ENGINE_EPOCH_FLOOR_OVERRIDE_INERT` (log only)
+  and does NOT throw, so a stale entry left behind by a later bump cannot take prod down. Each request admitted ONLY because of the
+  lever logs `ENGINE_EPOCH_FLOOR_OVERRIDDEN { sport, floor, declared, got, via, deviceLinkId, fixtureId }`: at most one line per
+  request that passed the gate (it says the gate admitted, not that a row was written; a cold retry of a key the ledger holds passes
+  the gate again, and a stale `expected_seq` is still refused after admission). Per-request lines are never a Sentry Issue (pino lines still reach Sentry Logs through the pino integration).
+  In every line `floor` and `required` mean the effective floor and `declared` means the sport's own epoch.
+- **Unchanged.** Absent `engine_epoch` is accepted (D31), ahead is accepted, a keyed retry replays before any refusal, and
+  authorisation / entitlement / phase refusals still outrank the gate. The 426 code and shape are the same; under an override
+  `required` reports the EFFECTIVE (lowered) floor, the number the client must reach, and the lockout log adds `declared`.
 
 ## 6. Phase 2a — placement repo (rehearsal; D13, D22, D27)
 

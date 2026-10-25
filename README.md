@@ -153,6 +153,11 @@ Optional but needed for full feature coverage: Supabase keys (realtime, storage)
 (test keys), Resend, Google OAuth. See [`apps/web/.env.example`](apps/web/.env.example)
 for the full list.
 
+Emergency lever, default off: `ENGINE_EPOCH_FLOOR_OVERRIDE=football=2,hockey=1` lowers the scoring door's per-sport engine-epoch
+floor (the 426 `ENGINE_OUTDATED` gate) so capture apps one epoch behind can keep scoring after a bump. It only ever lowers a
+floor, treats a value it does not understand as off (logged as an error and reported to Sentry; the boot carries on), and logs
+loudly; see the root [`.env.example`](.env.example).
+
 ### Cloudflare Stream (relay tier)
 
 The streaming programme's Tier B relay publishes a phone's feed into a Cloudflare Stream

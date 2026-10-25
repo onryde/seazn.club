@@ -15,7 +15,7 @@
 // THE CACHE. `@/lib/cache`'s idempotency keys (`idemv3:*`, W2c Task 15) are served from an in-memory fake here, because case 7 must pin
 // BOTH the warm and the cold path of a retry; every other key delegates to the real module (no REDIS_URL, so a no-op).
 // `scoring-durable-idempotency.test.ts` stays the no-cache witness for the database guarantee itself.
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
 import { foldEpochOf } from "@seazn/engine/sport";
@@ -30,12 +30,21 @@ import { log } from "@/server/logger";
 import { v1 } from "@/server/api-v1/http";
 import { LOCKED_FIXTURE_STATUSES } from "@/server/engine-db";
 import { declaredVariant, seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
-import type { AuthCtx } from "@/server/api-v1/auth";
+import { requireFixtureActor, type AuthCtx } from "@/server/api-v1/auth";
+import { POST as eventsRoute } from "@/app/api/v1/fixtures/[id]/events/route";
+import { createDeviceLink } from "../device-links";
 import { scoreEvent } from "../scoring";
 import { withdrawEntrantCascade } from "../withdrawal";
 
 const bump = vi.hoisted(() => new Map<string, number>());
 const idemCache = vi.hoisted(() => ({ store: new Map<string, unknown>(), hits: 0, misses: 0 }));
+const sentry = vi.hoisted(() => ({ captureMessage: vi.fn() }));
+
+// Only captureMessage is replaced (the override's fallback reports a malformed value to Sentry); everything else is the real SDK.
+vi.mock("@sentry/nextjs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@sentry/nextjs")>()),
+  captureMessage: sentry.captureMessage,
+}));
 
 vi.mock("@seazn/engine/sport", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@seazn/engine/sport")>();
@@ -70,11 +79,15 @@ const realEpoch = (sport: string) => foldEpochOf(sport) - (bump.get(sport) ?? 0)
 
 beforeEach(() => {
   bump.clear();
+  sentry.captureMessage.mockClear();
   idemCache.store.clear();
   idemCache.hits = 0;
   idemCache.misses = 0;
 });
-afterEach(() => bump.clear());
+afterEach(() => {
+  bump.clear();
+  vi.unstubAllEnvs();
+});
 afterAll(async () => {
   if (!HAS_DB) return;
   const g = globalThis as { _sql?: { end(): Promise<void> } };
@@ -747,4 +760,393 @@ describe.skipIf(!HAS_DB)("scoreEvent — the engine-epoch gate (D31)", () => {
       warn.mockRestore();
     }
   });
+});
+
+// ENGINE_EPOCH_FLOOR_OVERRIDE (engine-split spec §5.6; owner ruling 2026-10-15): the default-off emergency lever. The parser, the
+// verdict function and the boot report are proved without a database in engine-epoch-override.test.ts; THIS block drives the gate
+// itself through scoreEvent, so a lever that nothing in the gate reads (the inert-seam class) cannot pass.
+//
+// The setup every case shares: `sport` is moved two epochs past the engine's table (`bump`), so it is at `declared`, and the
+// override names `declared - 1`. So `declared - 2` is a phone that stays refused, `declared - 1` one that only the lever admits,
+// and `declared` one that never needed it. Every number is derived from `foldEpochOf` (the engine's own declaration).
+describe.skipIf(!HAS_DB)("scoreEvent — the engine-epoch FLOOR OVERRIDE (ENGINE_EPOCH_FLOOR_OVERRIDE)", () => {
+  const ENV = "ENGINE_EPOCH_FLOOR_OVERRIDE";
+  const spyWarn = () => vi.spyOn(log, "warn").mockImplementation(() => undefined);
+  let warn: ReturnType<typeof spyWarn>;
+  beforeEach(() => {
+    warn = spyWarn();
+  });
+  afterEach(() => warn.mockRestore());
+
+  /** The warnings the gate logged under `code`: [fields, message]. */
+  const logged = (code: string) =>
+    warn.mock.calls.filter(([f]) => (f as { code?: unknown } | undefined)?.code === code) as [Record<string, unknown>, string][];
+
+  /** Move `sport` two epochs ahead of the table and lower its floor by one; returns the three phones worth testing. */
+  function lowered(sport: string, setEnv = true) {
+    bump.set(sport, 2);
+    const declared = foldEpochOf(sport);
+    const floor = declared - 1;
+    if (setEnv) vi.stubEnv(ENV, `${sport}=${floor}`);
+    expect(floor, "premise: the lowered floor is below the sport's epoch").toBeLessThan(declared);
+    expect(declared - 2, "premise: a phone two behind is still a valid (>= 1) epoch").toBeGreaterThanOrEqual(1);
+    return { declared, floor, behind: declared - 2 };
+  }
+
+  it("OFF is the default: the same write the lever would admit is refused 426 with no override variable at all (the control for every case below)", async () => {
+    const s = await seed(BADMINTON);
+    const { declared, floor } = lowered(BADMINTON, false);
+    const err = await refusal(start(s, { engine_epoch: floor }));
+    expect([err.status, err.code]).toEqual([426, "ENGINE_OUTDATED"]);
+    expect(err.extra).toEqual({ sport: BADMINTON, required: declared, got: floor });
+    expect(logged("ENGINE_EPOCH_FLOOR_OVERRIDDEN")).toHaveLength(0);
+    expect(await rows(s.fixtureId)).toBe(0);
+    for (const blank of ["", "   "]) {
+      vi.stubEnv(ENV, blank);
+      await refusal(start(s, { engine_epoch: floor }));
+    }
+    expect(await rows(s.fixtureId), "blank is off too").toBe(0);
+  });
+
+  it("a phone AT the lowered floor is admitted and written, with exactly ONE ENGINE_EPOCH_FLOOR_OVERRIDDEN warning for the request, naming everything ops needs", async () => {
+    const s = await seed(BADMINTON);
+    const { declared, floor } = lowered(BADMINTON);
+    const out = await start(s, { engine_epoch: floor });
+    expect(out.seq).toBe(1);
+    expect(await rows(s.fixtureId)).toBe(1);
+    const calls = logged("ENGINE_EPOCH_FLOOR_OVERRIDDEN");
+    expect(calls, "one warning for the one request that passed the gate").toHaveLength(1);
+    expect(calls[0]![0]).toEqual({
+      code: "ENGINE_EPOCH_FLOOR_OVERRIDDEN",
+      sport: BADMINTON,
+      floor,
+      declared,
+      got: floor,
+      via: "session",
+      deviceLinkId: null,
+      fixtureId: s.fixtureId,
+    });
+    expect(calls[0]![1]).toContain("ENGINE_EPOCH_FLOOR_OVERRIDDEN");
+    expect(logged("ENGINE_OUTDATED"), "an admitted write is not logged as a lockout").toHaveLength(0);
+  });
+
+  it("a phone one BELOW the lowered floor is still refused 426, and `required` is the EFFECTIVE floor (what the client must reach), not the sport's epoch", async () => {
+    const s = await seed(BADMINTON);
+    const { declared, floor, behind } = lowered(BADMINTON);
+    const err = await refusal(start(s, { engine_epoch: behind }));
+    expect([err.status, err.code]).toEqual([426, "ENGINE_OUTDATED"]);
+    expect(err.extra).toEqual({ sport: BADMINTON, required: floor, got: behind });
+    expect(floor, "the case where the right answer differs from the wrong one's constant").not.toBe(declared);
+    expect(await rows(s.fixtureId)).toBe(0);
+    expect(logged("ENGINE_EPOCH_FLOOR_OVERRIDDEN"), "a refusal is not an override").toHaveLength(0);
+    const out = logged("ENGINE_OUTDATED");
+    expect(out).toHaveLength(1);
+    expect(out[0]![0], "the lockout line carries the effective floor and, under an override only, the sport's own epoch").toEqual({
+      code: "ENGINE_OUTDATED",
+      sport: BADMINTON,
+      required: floor,
+      declared,
+      got: behind,
+      via: "session",
+      deviceLinkId: null,
+      fixtureId: s.fixtureId,
+    });
+    // The wire body says the same, in the envelope's usual shape.
+    const res = await v1(() => start(s, { engine_epoch: behind }));
+    expect(res.status).toBe(426);
+    expect(await res.json()).toEqual({
+      ok: false,
+      error: { code: "ENGINE_OUTDATED", message: expect.any(String), sport: BADMINTON, required: floor, got: behind },
+      requestId: expect.any(String),
+    });
+  });
+
+  it("a phone AT the sport's own epoch, AHEAD of it, or sending NO epoch is admitted with NO override warning (the lever is not what let them in)", async () => {
+    const s = await seed(BADMINTON);
+    const { declared } = lowered(BADMINTON);
+    const a = await start(s, { engine_epoch: declared });
+    const b = await scoreEvent(s.auth, s.fixtureId, { expected_seq: 1, type: "core.note", payload: { text: "ahead" }, engine_epoch: declared + 1 });
+    const c = await scoreEvent(s.auth, s.fixtureId, { expected_seq: 2, type: "core.note", payload: { text: "absent" } });
+    expect([a.seq, b.seq, c.seq]).toEqual([1, 2, 3]);
+    expect(warn, "nothing is logged for a write that needed no lever").not.toHaveBeenCalled();
+  });
+
+  it("only the NAMED sport is lowered: another sport that is equally behind is refused at its own floor", async () => {
+    const shuttle = await seed(BADMINTON);
+    const ball = await seed("cricket");
+    const sh = lowered(BADMINTON);
+    bump.set("cricket", 2);
+    const cricketDeclared = foldEpochOf("cricket");
+    const cricketAlmost = cricketDeclared - 1;
+    expect(cricketAlmost, "premise: cricket's phone sits exactly where badminton's lowered floor is, relative to its own epoch").toBe(sh.floor - (sh.declared - cricketDeclared));
+
+    const ok = await start(shuttle, { engine_epoch: sh.floor });
+    expect(ok.seq, "the named sport is admitted").toBe(1);
+
+    const err = await refusal(start(ball, { engine_epoch: cricketAlmost }));
+    expect([err.status, err.code]).toEqual([426, "ENGINE_OUTDATED"]);
+    expect(err.extra, "cricket's `required` is its OWN epoch: no override applies").toEqual({ sport: "cricket", required: cricketDeclared, got: cricketAlmost });
+    expect(await rows(ball.fixtureId)).toBe(0);
+    expect(logged("ENGINE_EPOCH_FLOOR_OVERRIDDEN").map(([f]) => f.sport), "only badminton was ever overridden").toEqual([BADMINTON]);
+  });
+
+  it("an override AT or ABOVE the sport's epoch changes nothing: it can only lower a floor, never raise it", async () => {
+    const s = await seed(BADMINTON);
+    const { declared } = lowered(BADMINTON, false);
+    let checked = 0;
+    for (const v of [declared, declared + 1, declared + 50]) {
+      vi.stubEnv(ENV, `${BADMINTON}=${v}`);
+      const err = await refusal(start(s, { engine_epoch: declared - 1 }));
+      expect(err.extra, `override ${v}`).toEqual({ sport: BADMINTON, required: declared, got: declared - 1 });
+      checked++;
+    }
+    expect(checked).toBe(3);
+    // And the phone at the epoch is admitted exactly as it is with no override at all (the positive pair), with no warning.
+    const out = await start(s, { engine_epoch: declared });
+    expect(out.seq).toBe(1);
+    expect(logged("ENGINE_EPOCH_FLOOR_OVERRIDDEN")).toHaveLength(0);
+  });
+
+  it("a second call: the lever is read every time, admitting twice and refusing twice, and a withdrawn lever refuses the same phone again", async () => {
+    const s = await seed(BADMINTON);
+    const { floor, behind } = lowered(BADMINTON);
+    const one = await start(s, { engine_epoch: floor });
+    const two = await scoreEvent(s.auth, s.fixtureId, { expected_seq: 1, type: "core.note", payload: { text: "second" }, engine_epoch: floor });
+    expect([one.seq, two.seq]).toEqual([1, 2]);
+    expect(logged("ENGINE_EPOCH_FLOOR_OVERRIDDEN"), "one warning per request that passed the gate").toHaveLength(2);
+
+    const a = await refusal(scoreEvent(s.auth, s.fixtureId, { expected_seq: 2, type: "core.note", payload: { text: "x" }, engine_epoch: behind }));
+    const b = await refusal(scoreEvent(s.auth, s.fixtureId, { expected_seq: 2, type: "core.note", payload: { text: "x" }, engine_epoch: behind }));
+    expect([a.status, b.status]).toEqual([426, 426]);
+    expect(a.extra).toEqual(b.extra);
+    expect(await rows(s.fixtureId), "two refusals add no row: the ledger still holds the two admitted events").toBe(2);
+
+    // Withdraw the lever: the phone that was admitted is behind again. Put it back: admitted again.
+    vi.stubEnv(ENV, "");
+    const off = await refusal(scoreEvent(s.auth, s.fixtureId, { expected_seq: 2, type: "core.note", payload: { text: "off" }, engine_epoch: floor }));
+    expect(off.status).toBe(426);
+    expect(off.extra).toEqual({ sport: BADMINTON, required: foldEpochOf(BADMINTON), got: floor });
+    vi.stubEnv(ENV, `${BADMINTON}=${floor}`);
+    const on = await scoreEvent(s.auth, s.fixtureId, { expected_seq: 2, type: "core.note", payload: { text: "on" }, engine_epoch: floor });
+    expect(on.seq).toBe(3);
+    expect(await rows(s.fixtureId)).toBe(3);
+  });
+
+  it("the line means the GATE admitted the request, not that a row was written: a stale expected_seq after admission is SEQ_CONFLICT with the line logged once and no row", async () => {
+    const s = await seed(BADMINTON);
+    const { floor } = lowered(BADMINTON);
+    await start(s);
+    const err = await scoreEvent(s.auth, s.fixtureId, { expected_seq: 0, type: "core.start", payload: {}, engine_epoch: floor }).catch((e: unknown) => e);
+    expect(EngineError.is(err, "SEQ_CONFLICT"), `got ${String(err)}`).toBe(true);
+    expect(logged("ENGINE_EPOCH_FLOOR_OVERRIDDEN"), "admitted by the gate, then refused by the ledger").toHaveLength(1);
+    expect(await rows(s.fixtureId), "only the unflagged start is in the ledger").toBe(1);
+  });
+
+  it("a core.void from a phone at the lowered floor is admitted too (the void rides the same gate), once, with the warning", async () => {
+    const s = await seed(BADMINTON);
+    const started = await start(s);
+    const { floor } = lowered(BADMINTON);
+    const out = await scoreEvent(s.auth, s.fixtureId, { expected_seq: 1, type: "core.void", payload: { event_id: started.event_id }, engine_epoch: floor });
+    expect(out.seq).toBe(2);
+    expect(logged("ENGINE_EPOCH_FLOOR_OVERRIDDEN")).toHaveLength(1);
+  });
+
+  it("a keyed retry still REPLAYS: a lowered-floor write's retry is answered from the cache, then from the ledger, whatever the lever says now", async () => {
+    const s = await seed(BADMINTON);
+    const { floor, behind } = lowered(BADMINTON);
+    const key = `epoch-${randomUUID()}`;
+    const first = await start(s, { engine_epoch: floor, idempotency_key: key });
+    expect(first.seq).toBe(1);
+    expect(logged("ENGINE_EPOCH_FLOOR_OVERRIDDEN")).toHaveLength(1);
+
+    // WARM: the cache answers before the gate is reached, so the retry is not a second admission.
+    const hits = idemCache.hits;
+    const warm = await start(s, { engine_epoch: floor, idempotency_key: key });
+    expect(idemCache.hits, "answered from the cache").toBe(hits + 1);
+    expect(warm).toEqual(first);
+    expect(logged("ENGINE_EPOCH_FLOOR_OVERRIDDEN"), "a cache replay is not an admission").toHaveLength(1);
+
+    // COLD, and the phone is BELOW the lowered floor: only the gate's durable replay can answer, and it runs before the refusal.
+    idemCache.store.clear();
+    const cold = await start(s, { engine_epoch: behind, idempotency_key: key });
+    expect(cold).toEqual(first);
+    expect(logged("ENGINE_OUTDATED"), "a replay is not a lockout").toHaveLength(0);
+
+    // COLD, and the lever has been WITHDRAWN: the phone is behind again, and still gets its original answer.
+    idemCache.store.clear();
+    vi.stubEnv(ENV, "");
+    const withdrawn = await start(s, { engine_epoch: floor, idempotency_key: key });
+    expect(withdrawn).toEqual(first);
+    expect(logged("ENGINE_OUTDATED")).toHaveLength(0);
+
+    // COLD, lever still on, phone at the floor: admitted by the gate and then replayed by the ledger - still the original answer.
+    idemCache.store.clear();
+    vi.stubEnv(ENV, `${BADMINTON}=${floor}`);
+    const again = await start(s, { engine_epoch: floor, idempotency_key: key });
+    expect(again).toEqual(first);
+    expect(await rows(s.fixtureId), "one row through all four retries").toBe(1);
+    // The line says the GATE admitted a request, not that a row was written: the first write logged it, the warm retry (cache) did not,
+    // and this cold retry passed the gate again before the ledger replayed it. At most one line per request that passed the gate.
+    expect(logged("ENGINE_EPOCH_FLOOR_OVERRIDDEN"), "first write + this cold retry; the warm retry never reached the gate").toHaveLength(2);
+  });
+
+  it("the KEY is not burned by a refusal under the lever: behind with key K -> 426; the same K at the lowered floor -> 201, exactly one row", async () => {
+    const s = await seed(BADMINTON);
+    const { floor, behind } = lowered(BADMINTON);
+    const key = `epoch-${randomUUID()}`;
+    await refusal(start(s, { engine_epoch: behind, idempotency_key: key }));
+    expect([...idemCache.store.keys()].filter((k) => k.includes(key)), "a refusal caches nothing under the key").toEqual([]);
+    const out = await start(s, { engine_epoch: floor, idempotency_key: key });
+    expect(out.seq).toBe(1);
+    expect(await rows(s.fixtureId)).toBe(1);
+  });
+
+  it("a refusal under the lever logs the effective floor for a device link too (via / deviceLinkId travel with it)", async () => {
+    const s = await seed(BADMINTON);
+    const { declared, floor, behind } = lowered(BADMINTON);
+    const deviceLinkId = randomUUID();
+    const device: AuthCtx = { ...s.auth, via: "device_link", deviceLinkId };
+    const err = await refusal(scoreEvent(device, s.fixtureId, { expected_seq: 0, type: "core.note", payload: { text: "behind" }, engine_epoch: behind }));
+    expect(err.status).toBe(426);
+    expect(logged("ENGINE_OUTDATED")[0]![0]).toEqual({
+      code: "ENGINE_OUTDATED",
+      sport: BADMINTON,
+      required: floor,
+      declared,
+      got: behind,
+      via: "device_link",
+      deviceLinkId,
+      fixtureId: s.fixtureId,
+    });
+  });
+
+  it("a MALFORMED override at the gate is OFF, not an error: the declared floors apply, the bad value is reported ONCE per distinct value to the log and to Sentry", async () => {
+    const s = await seed(BADMINTON);
+    bump.set(BADMINTON, 2);
+    const declared = foldEpochOf(BADMINTON);
+    const junk = `${BADMINTON}=two-${randomUUID().slice(0, 8)}`;
+    vi.stubEnv(ENV, junk);
+    const errorLog = vi.spyOn(log, "error").mockImplementation(() => undefined);
+    try {
+      // At the sport's own epoch: admitted (no throw, no 500), and NOT logged as an override admission.
+      const a = await start(s, { engine_epoch: declared });
+      expect(a.seq).toBe(1);
+      // Below it: refused at the DECLARED floor. Had the lever been read as "football=anything", this would differ.
+      const err = await refusal(scoreEvent(s.auth, s.fixtureId, { expected_seq: 1, type: "core.note", payload: { text: "behind" }, engine_epoch: declared - 1 }));
+      expect(err.extra).toEqual({ sport: BADMINTON, required: declared, got: declared - 1 });
+      expect(JSON.stringify([err.message, err.extra]), "nothing the client sees echoes the variable").not.toContain("two-");
+      // The web pad (no epoch) never asks the gate at all.
+      const pad = await scoreEvent(s.auth, s.fixtureId, { expected_seq: 1, type: "core.note", payload: { text: "pad" } });
+      expect(pad.seq).toBe(2);
+      expect(logged("ENGINE_EPOCH_FLOOR_OVERRIDDEN"), "the lever admitted nothing").toHaveLength(0);
+
+      // Reported once for this value, across the three requests above (two of them reached the gate).
+      const invalid = () => errorLog.mock.calls.filter(([f]) => (f as { code?: unknown } | undefined)?.code === "ENGINE_EPOCH_FLOOR_OVERRIDE_INVALID");
+      expect(invalid(), "one log.error for the value").toHaveLength(1);
+      expect(String(invalid()[0]![1]), "the report names the variable and the bad pair, and says the lever is OFF").toMatch(new RegExp(`${ENV}.*two-.*OFF`));
+      expect(sentry.captureMessage).toHaveBeenCalledTimes(1);
+      expect(sentry.captureMessage).toHaveBeenCalledWith(expect.stringContaining(ENV), "error");
+
+      // A second request with the same value: still one report. A DIFFERENT bad value is a new report.
+      await refusal(scoreEvent(s.auth, s.fixtureId, { expected_seq: 2, type: "core.note", payload: { text: "behind again" }, engine_epoch: declared - 1 }));
+      expect(invalid()).toHaveLength(1);
+      vi.stubEnv(ENV, `${junk}-second`);
+      await refusal(scoreEvent(s.auth, s.fixtureId, { expected_seq: 2, type: "core.note", payload: { text: "behind" }, engine_epoch: declared - 1 }));
+      expect(invalid(), "a distinct bad value is reported again").toHaveLength(2);
+      expect(sentry.captureMessage).toHaveBeenCalledTimes(2);
+      vi.stubEnv(ENV, junk);
+      await refusal(scoreEvent(s.auth, s.fixtureId, { expected_seq: 2, type: "core.note", payload: { text: "behind" }, engine_epoch: declared - 1 }));
+      expect(invalid(), "the first bad value again is not re-reported").toHaveLength(2);
+      expect(await rows(s.fixtureId), "start + pad note; no refused request wrote").toBe(2);
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
+  describe("through the real POST /api/v1/fixtures/{id}/events route, with a device-link bearer (the native capture phone's door)", () => {
+    /** A real device link for the fixture, its bearer, and the route's answer to a body. */
+    async function nativePhone(s: Seeded) {
+      vi.stubEnv("DEVICE_LINK_KEK", randomBytes(32).toString("hex"));
+      // seedBracket's actor has no user (a link is minted by a signed-in editor and records who issued it), so give it one.
+      const [{ id: userId }] = await sql<{ id: string }[]>`
+        insert into users (email, display_name, email_verified)
+        values (${`epoch-${randomUUID().slice(0, 8)}@test.local`}, 'Epoch Editor', true) returning id`;
+      const link = await createDeviceLink({ ...s.auth, userId }, s.fixtureId, "epoch override");
+      const bearer = { authorization: `Bearer ${link.secret}`, "content-type": "application/json" };
+      const device = await requireFixtureActor(new Request("http://test.local/api/v1", { headers: bearer }), s.fixtureId, "score");
+      expect([device.via, device.deviceLinkId], "premise: a real device-link actor").toEqual(["device_link", link.id]);
+      const post = (body: Record<string, unknown>) =>
+        eventsRoute(new Request(`http://test.local/api/v1/fixtures/${s.fixtureId}/events`, { method: "POST", headers: bearer, body: JSON.stringify(body) }), {
+          params: Promise.resolve({ id: s.fixtureId }),
+        });
+      return { link, device, post };
+    }
+
+    it("a device link at the lowered floor is admitted, and the OVERRIDDEN line carries ITS via and deviceLinkId (not hard-coded)", async () => {
+      const s = await seed(BADMINTON);
+      const { declared, floor } = lowered(BADMINTON);
+      const { link, device } = await nativePhone(s);
+      const out = await scoreEvent(device, s.fixtureId, { expected_seq: 0, type: "core.start", payload: {}, engine_epoch: floor });
+      expect(out.seq).toBe(1);
+      const calls = logged("ENGINE_EPOCH_FLOOR_OVERRIDDEN");
+      expect(calls).toHaveLength(1);
+      expect(calls[0]![0]).toEqual({
+        code: "ENGINE_EPOCH_FLOOR_OVERRIDDEN",
+        sport: BADMINTON,
+        floor,
+        declared,
+        got: floor,
+        via: "device_link",
+        deviceLinkId: link.id,
+        fixtureId: s.fixtureId,
+      });
+    });
+
+    it("with a MALFORMED override: a native write AT its floor is 201 and one BELOW it is 426 with the declared `required` - never a 500, and the body never echoes the variable", async () => {
+      const s = await seed(BADMINTON);
+      bump.set(BADMINTON, 2);
+      const declared = foldEpochOf(BADMINTON);
+      const junk = `${BADMINTON}=junk-${randomUUID().slice(0, 8)}`;
+      vi.stubEnv(ENV, junk);
+      const { post } = await nativePhone(s);
+
+      const ok = await post({ expected_seq: 0, type: "core.start", payload: {}, engine_epoch: declared });
+      const okBody = (await ok.json()) as { ok: boolean; data?: { seq: number } };
+      expect([ok.status, okBody.ok, okBody.data?.seq]).toEqual([201, true, 1]);
+
+      const behind = await post({ expected_seq: 1, type: "core.note", payload: { text: "behind" }, engine_epoch: declared - 1 });
+      const raw = await behind.text();
+      expect(behind.status).toBe(426);
+      expect(JSON.parse(raw)).toEqual({
+        ok: false,
+        error: { code: "ENGINE_OUTDATED", message: expect.any(String), sport: BADMINTON, required: declared, got: declared - 1 },
+        requestId: expect.any(String),
+      });
+      expect(raw, "no part of the operator's variable, nor the sport list the parser prints, reaches the client").not.toMatch(/junk-|sports:|ENGINE_EPOCH_FLOOR_OVERRIDE/);
+      expect(await rows(s.fixtureId)).toBe(1);
+      expect(sentry.captureMessage, "one Sentry error for the value, across both requests").toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("every sport: the lever admits a phone at the lowered floor and still refuses one below it, naming that sport", async () => {
+    let admitted = 0;
+    let refused = 0;
+    const checked = await forEachSportAsync(async ({ key }) => {
+      const s = await seed(key);
+      bump.clear();
+      const { floor, behind } = lowered(key);
+      const err = await refusal(start(s, { engine_epoch: behind }));
+      expect(err.status, key).toBe(426);
+      expect(err.extra, key).toEqual({ sport: key, required: floor, got: behind });
+      expect(await rows(s.fixtureId), key).toBe(0);
+      refused++;
+      const out = await start(s, { engine_epoch: floor });
+      expect(out.seq, key).toBe(1);
+      admitted++;
+    });
+    expect(checked, "the sweep visited every builtin sport").toBe(builtinModules.length);
+    expect(checked).toBeGreaterThan(0);
+    expect(logged("ENGINE_EPOCH_FLOOR_OVERRIDDEN").map(([f]) => f.sport).sort()).toEqual(builtinModules.map((m) => m.key).sort());
+    expect([refused, admitted]).toEqual([checked, checked]);
+  }, 180_000);
 });

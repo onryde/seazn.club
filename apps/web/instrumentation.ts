@@ -16,6 +16,27 @@ export async function register() {
     // serves nothing at all rather than faking at its first stream. Sentry is initialised first, so the refusal is reported.
     const { relayDriverMode } = await import("@/server/relay/config");
     relayDriverMode();
+    // The per-sport engine-epoch floor override (engine-split spec §5.6): the emergency lever that lowers the scoring door's 426
+    // floor. Parsed here ONCE before the server takes a request. A valid value logs one loud warning per sport (and a Sentry
+    // alert for each ACTIVE one); an INERT one (at or above the sport's epoch) logs that it does nothing, so a stale entry left
+    // behind by a later bump cannot take prod down. Unset logs nothing. A value that is NOT understood is the opposite of the relay
+    // check above and deliberately does NOT throw: a rejected register() is cached by Next, which then answers 500 to every
+    // request including /api/health (measured on a real standalone server), so a typo in an emergency lever would be a site
+    // outage and a red Fly health check. It is logged as an error, sent to Sentry (flushed) and the lever stays OFF: the gate
+    // reads the same value through `epochFloorOverrideOrOff`, which serves the declared floors.
+    const { reportEpochFloorOverrides, reportInvalidEpochFloorOverride, epochFloorOverrideActiveMessage, epochFloorOverrideSentryLevel } = await import(
+      "@/server/usecases/engine-epoch-override"
+    );
+    let overrides: ReturnType<typeof reportEpochFloorOverrides> = { active: [], inert: [] };
+    try {
+      overrides = reportEpochFloorOverrides();
+    } catch (e) {
+      await reportInvalidEpochFloorOverride(e);
+    }
+    // Each ACTIVE sport also goes to Sentry, as the outbox check below does for its problem: a pino line alone never becomes an
+    // Issue. A warning for one major behind, an error for more than one. INERT and the per-request OVERRIDDEN lines never become an
+    // Issue (pino lines still reach Sentry Logs through the pino integration).
+    for (const active of overrides.active) Sentry.captureMessage(epochFloorOverrideActiveMessage(active), epochFloorOverrideSentryLevel(active));
     // The email outbox seals every queued body under EMAIL_OUTBOX_KEK, and a sign-in request that cannot be queued answers
     // 500. A deployment with a Resend key and no (or the published sample) key would find out from the first person who tried
     // to sign in, so say it now: one error line, and an alert. Unlike the relay check this does not stop the boot.
