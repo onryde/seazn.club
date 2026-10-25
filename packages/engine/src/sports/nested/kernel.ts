@@ -1450,6 +1450,9 @@ export interface NestedPreset {
   variants: Record<string, Partial<NestedParams>>;
   positions: PositionCatalog;
   defaultTiebreakers: TiebreakerKey[];
+  // W2d (spec §5.10, OC1) — a Swiss stage's order, unchanged by W2d (W3 owns Swiss orders); `defaultTiebreakers` above is
+  // the round-robin, league and group order. Required, so a new sport states both.
+  swissTiebreakers: TiebreakerKey[];
   // W2d (D11; X-TB-3) — the module's `primaryTableKey`; stated per sport (tennis ranks on wins, ATP C.3-1).
   primaryTableKey: "points" | "wins";
   officialLabel: { scorer: string };
@@ -2303,7 +2306,7 @@ export function makeNestedModule(
     },
 
     metrics: METRICS,
-    defaultTiebreakers: () => [...preset.defaultTiebreakers],
+    defaultTiebreakers: (kind) => [...(kind === "swiss" ? preset.swissTiebreakers : preset.defaultTiebreakers)],
     primaryTableKey: preset.primaryTableKey,
 
     supportsDraws(_cfg, _stage: StageKind) {

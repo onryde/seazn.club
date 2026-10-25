@@ -254,9 +254,11 @@ export const icehockey = makePeriodModule({
     { key: "sp_ps_scored", label: "PS scored", direction: "desc", display: false },
     { key: "sp_ps_resolved", label: "PS resolved", direction: "desc", display: false },
   ],
-  // Event Code §220 — H2H sub-group first, then overall (maps directly onto
-  // the existing comparator registry, v6/00 §1).
-  defaultTiebreakers: ["points", "h2h_points", "h2h_diff", "h2h_for", "diff", "for", "seed"],
+  // W2d (SPEC §5.10, IH-TB-1): IIHF — points, then the head-to-head block among the tied, re-applied to any smaller
+  // group still level, then overall goal difference and goals for, the seed, then lots.
+  defaultTiebreakers: ["points", "h2h_points", "h2h_diff", "h2h_for", "h2h_reapply", "diff", "for", "seed", "lots"],
+  // OC1: a Swiss stage keeps its pre-W2d order.
+  swissTiebreakers: ["points", "h2h_points", "h2h_diff", "h2h_for", "diff", "for", "seed"],
   primaryTableKey: "points", // W2d (D11): the table ranks on points first.
   officialLabel: { scorer: "Scorekeeper" },
   suspensionReasons: ICEHOCKEY_SUSPENSION_REASONS,

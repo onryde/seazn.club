@@ -57,8 +57,12 @@ export const tabletennis = makeSetBasedModule({
     allowSquadGrowth: false,
   }),
   unitLabel: { one: "Game", many: "Games" },
-  // spec 04 §5 / table-tennis.md §5 — matches → h2h → game ratio → point ratio.
-  defaultTiebreakers: ["points", "wins", "set_ratio", "point_ratio", "h2h_points"],
+  // W2d (SPEC §5.10, TT-TB-1): ITTF 3.7.5 — match points, then only the matches among the tied: their match points,
+  // games ratio and points ratio (3.7.5.2); once some are placed, their matches drop and the rest recompute
+  // (3.7.5.3); then lots (3.7.5.4).
+  defaultTiebreakers: ["points", "h2h_points", "h2h_set_ratio", "h2h_point_ratio", "h2h_exclusion", "lots"],
+  // OC1: a Swiss stage keeps its pre-W2d order.
+  swissTiebreakers: ["points", "wins", "set_ratio", "point_ratio", "h2h_points"],
   primaryTableKey: "points", // W2d (D11): ITTF match points first (a played loss pays 1).
   officialLabel: { scorer: "Umpire" }, // doc 13 §1
   coarseEventType: "game.summary",

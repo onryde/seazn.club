@@ -460,12 +460,12 @@ describe("period kernel — headline grammar (v6/00 §5)", () => {
 
 describe("icehockey cascade — IIHF §220 hand-computed 3-team tie", () => {
   it("validates and orders the sub-group by H2H points, then H2H diff", () => {
-    // Every step of the IIHF order is one ice hockey records and can run (W2d §5.5 rules 2-5). Its one refusal is the
-    // shape rule's (rule 1): today's default does not close on `lots`, so its last step is refused. A TRIPWIRE, pinned
-    // exactly: Task 11 signs the IIHF order (plan PS-2), which reddens this line on purpose — then expect `[]` here.
+    // Every step of the IIHF order is one ice hockey records and can run (W2d §5.5 rules 2-5), and since Task 11 signed
+    // it (SPEC §5.10, IH-TB-1: … h2h_reapply, diff, for, seed, lots) it also closes on `lots` — the tripwire PS-2 laid
+    // here went red on purpose and now holds the signed order clean.
     const ctx = { module: icehockey, cfg: icehockey.configSchema.parse({}), stageKind: "league", crossGroup: false } as const;
     const iihf = icehockey.defaultTiebreakers("league", ctx.cfg);
-    expect(validateCascade(iihf, ctx)).toEqual([{ index: 6, key: "seed", reason: "last", need: "lots" }]);
+    expect(validateCascade(iihf, ctx)).toEqual([]);
     // Three teams on 6 points. Head-to-head mini-table (each played each
     // once): A beat B 5–0, B beat C 3–2, C beat A 2–1 → all 3 H2H points;
     // H2H diff: A +4, B −2, C −2; H2H for: B 3, C 4 → order A, C, B.
@@ -761,6 +761,7 @@ describe("S8/#417 W6 — shotTracking gates `<key>.shot` per preset", () => {
     positions: minimalCatalog,
     metrics: [],
     defaultTiebreakers: ["points"],
+    swissTiebreakers: ["points"],
     primaryTableKey: "points",
     officialLabel: { scorer: "Referee" },
     shootoutLabel: "SO",

@@ -102,8 +102,11 @@ export const volleyball = makeSetBasedModule({
     exemptions: { libero: { requiresRole: "libero" } },
   }),
   unitLabel: { one: "Set", many: "Sets" },
-  // spec 04 §3.4 — points → matches won → set ratio → point ratio → h2h.
-  defaultTiebreakers: ["points", "wins", "set_ratio", "point_ratio", "h2h_points"],
+  // W2d (SPEC §5.10, VB-TB-1): FIVB V3 — matches won, then match points, set ratio, point ratio, the head-to-head,
+  // lots (the product's own final step: FIVB's list ends at the h2h result, RB2B deviation).
+  defaultTiebreakers: ["wins", "points", "set_ratio", "point_ratio", "h2h_points", "lots"],
+  // OC1: a Swiss stage keeps its pre-W2d order.
+  swissTiebreakers: ["points", "wins", "set_ratio", "point_ratio", "h2h_points"],
   primaryTableKey: "wins", // W2d (D11): FIVB V3-1 — the number of matches won comes first.
   officialLabel: { scorer: "Referee" }, // doc 13 §1
   coarseEventType: "set.summary",

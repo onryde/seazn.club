@@ -226,8 +226,17 @@ export const hockey = makePeriodModule({
     { key: "sp_stroke_scored", label: "Strokes scored", direction: "desc", display: false },
     { key: "sp_stroke_resolved", label: "Strokes resolved", direction: "desc", display: false },
   ],
-  // FIH standard: points → GD → GF → H2H (v6/00 §4).
-  defaultTiebreakers: ["points", "diff", "for", "h2h_points", "seed"],
+  // W2d (SPEC §5.10, HK-TB-1): FIH GTR App. 3 — points, matches won, goal difference, goals for, the head-to-head
+  // block, field goals, then lots (in place of FIH's ranking shoot-out, App. 3 §2 g-k — RB2B-11).
+  defaultTiebreakers: ["points", "wins", "diff", "for", "h2h_points", "h2h_wins", "h2h_diff", "h2h_for", "field_goals", "lots"],
+  // OC1: a Swiss stage keeps its pre-W2d order.
+  swissTiebreakers: ["points", "diff", "for", "h2h_points", "seed"],
+  // W2d (HK-PT-2): the Pro League preset — the module's own `fih-shootout` points read through its own schema and
+  // its own `tablePointsRule`, so the preset is the variant and never a second hand-typed copy.
+  tablePresets: (kind) => ({
+    points: [{ id: "pro_league", rule: hockey.tablePointsRule(hockey.configSchema.parse(hockey.variants["fih-shootout"]), kind) }],
+    tiebreakers: [],
+  }),
   primaryTableKey: "points", // W2d (D11): the table ranks on points first.
   officialLabel: { scorer: "Umpire" },
   suspensionReasons: HOCKEY_SUSPENSION_REASONS,

@@ -543,14 +543,15 @@ describe("offerableKeys — '+ Add step' (spec §9)", () => {
     forEachSport(({ module }) => {
       const cfgs: unknown[] = [firstCfg(module)];
       if (module.key === "football") cfgs.push(football.configSchema.parse({ fairPlay: false }));
-      // The empty order, the minimal valid one, one with an h2h block, and the sport's default as it stands today (most
-      // defaults fail the shape rule until Task 11, PS-2 — an invalid order the editor can still be asked to extend).
+      // The empty order, the minimal valid one, one with an h2h block, and the sport's two defaults as they stand: the
+      // league one (signed and shape-valid since Task 11) and the Swiss one, which keeps its pre-W2d order (OC1) and so is,
+      // for most sports, an INVALID order under every non-Swiss kind — one the editor can still be asked to extend.
       const orders: TiebreakerKey[][] = [
         [],
         [module.primaryTableKey, "lots"],
         [module.primaryTableKey, "h2h_points", "h2h_reapply", "seed", "lots"],
-        // W2d T8: asked for a league under the first declared cfg — every default is kind- and cfg-independent until Task 11.
         [...module.defaultTiebreakers("league", firstCfg(module))],
+        [...module.defaultTiebreakers("swiss", firstCfg(module))],
       ];
       for (const stageKind of KINDS) {
         for (const crossGroup of [false, true]) {

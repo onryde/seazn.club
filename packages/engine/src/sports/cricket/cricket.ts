@@ -4035,9 +4035,11 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
     { key: "ties", label: "T", direction: "desc" },
     { key: "no_results", label: "NR", direction: "desc" },
   ],
-  // spec §2.6 — ICC-style cascade; `nrr` is resolved from the integer ledger
-  // by the competition engine at rank time (cross-multiplication).
-  defaultTiebreakers: () => ["points", "wins", "nrr", "h2h_points", "seed"],
+  // spec §2.6 — ICC-style cascade (C2 16.10.4); `nrr` is resolved from the integer ledger
+  // by the competition engine at rank time (cross-multiplication). W2d (spec §5.10, CK-TB-1): a round robin ends in
+  // lots after the seed (deviation: the ICC stops at the pre-event ranking, RBS:454); the Swiss order is unchanged (OC1).
+  defaultTiebreakers: (kind) =>
+    kind === "swiss" ? ["points", "wins", "nrr", "h2h_points", "seed"] : ["points", "wins", "nrr", "h2h_points", "seed", "lots"],
   primaryTableKey: "points", // W2d (D11): the table ranks on points first.
 
   // Draw exists only in 2-innings cricket and only survives table play

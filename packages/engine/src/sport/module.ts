@@ -1000,6 +1000,12 @@ export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> 
    *  `resolveTableRules` (competition/table-rules.ts), and only when neither the stage nor its division sets an order.
    *  A fresh list the caller owns. Until Task 11 every sport answers its pre-W2d list for every kind and reads no cfg. */
   defaultTiebreakers(kind: TableStageKind, cfg: Cfg): TiebreakerKey[];
+  /** W2d (spec §5.10; FB-TB-2, HK-PT-2, BG-PT-1) — the named points rules and tie-break orders a TABLE stage of
+   *  `stageKind` may pick instead of the sport's default (the stage editor's preset menu). Fresh arrays the caller owns.
+   *  Absent = the sport offers none. Each preset order passes `validateCascade` and each rule covers
+   *  `reachableOutcomes` under every declared cfg (defaults-sweep.test.ts), except a fair-play order under a cfg that
+   *  does not track fair play, which the editor refuses at that step (D8). */
+  tablePresets?(stageKind: TableStageKind): TablePresets;
   /** W2d (spec §5.5 rule 1, D11; X-TB-3) — the sport's primary table measure: step 0 of every non-Swiss tie-break order
    *  (`validateCascade`), the stage editor's pinned first row. `wins` for volleyball, badminton and tennis (FIVB V3-1,
    *  BWF 16.2.1, ATP C.3-1), `points` for every other sport. Required, so a new sport states its own. */
@@ -1093,3 +1099,23 @@ export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> 
 // Registry-facing view — the generics are the module author's business.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnySportModule = SportModule<any, any, any>;
+
+/** W2d (spec §5.10) — a sport's table presets for one stage kind (`SportModule.tablePresets`). */
+export interface TablePresets {
+  readonly points: readonly { readonly id: string; readonly rule: PointsRule }[];
+  readonly tiebreakers: readonly { readonly id: string; readonly keys: readonly TiebreakerKey[] }[];
+}
+
+/**
+ * W2d (D8, PS-7c; FB-TB-4) — THE reading of "this cfg tracks fair play", for the default order (football's
+ * `defaultTiebreakers` omits its `fair_play` step without it) and for `validateCascade` (which refuses the step without
+ * it) alike, so the default can never hold a step the validator refuses. Read as the sport's schema parses the cfg, so a
+ * stored partial cfg reads football's declared default (on) rather than "absent"; a cfg the schema refuses is read as
+ * given; only `fairPlay: true` tracks. Lives here, not in competition/, because a sport file may not value-import
+ * competition/ (the phone closure, test/boundary-gate.test.ts).
+ */
+export function tracksFairPlay(module: Pick<AnySportModule, "configSchema">, cfg: unknown): boolean {
+  const parsed = module.configSchema.safeParse(cfg);
+  const read: unknown = parsed.success ? parsed.data : cfg;
+  return typeof read === "object" && read !== null && (read as { fairPlay?: unknown }).fairPlay === true;
+}

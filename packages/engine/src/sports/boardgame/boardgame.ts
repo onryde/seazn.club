@@ -548,6 +548,7 @@ const positions: PositionCatalog = {
 // Tiebreakers — spec 04 §6.3 / chess.md §4 (score = the standings points key).
 // ---------------------------------------------------------------------------
 
+// The Swiss order (W3's; unchanged by W2d, OC1): the Buchholz family first.
 export const BOARDGAME_TIEBREAKERS: TiebreakerKey[] = [
   "points",
   "buchholz_cut1",
@@ -557,6 +558,10 @@ export const BOARDGAME_TIEBREAKERS: TiebreakerKey[] = [
   "wins",
   "lots",
 ];
+
+// W2d (spec §5.10, BG-TB-1, BG-TB-2; RBG:459-461) — the round-robin order: points → direct encounter → number of wins →
+// Sonneborn-Berger → lots. No Buchholz outside Swiss (FIDE C.07 Art. 8 note).
+export const BOARDGAME_RR_TIEBREAKERS: TiebreakerKey[] = ["points", "direct", "wins", "sberger", "lots"];
 
 // ---------------------------------------------------------------------------
 // Display — half-points → points string (2 → "1", 1 → "½", 3 → "1½").
@@ -1076,7 +1081,18 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
     { key: "white", label: "Games as White", direction: "desc", display: false },
     { key: "black", label: "Games as Black", direction: "desc", display: false },
   ],
-  defaultTiebreakers: () => [...BOARDGAME_TIEBREAKERS],
+  defaultTiebreakers: (kind) => [...(kind === "swiss" ? BOARDGAME_TIEBREAKERS : BOARDGAME_RR_TIEBREAKERS)],
+  // W2d (spec §5.10, BG-PT-1) — FIDE's 1 / ½ / 0 in half-points on every table stage, and the 3/1/0 "football scoring"
+  // some opens use (RB2B-18) on a round-robin stage only: a Swiss pairs on the score, which 3/1/0 would distort.
+  tablePresets: (stageKind) => ({
+    points: [
+      { id: "fide_1_half_0", rule: { win: { regulation: 2 }, loss: { regulation: 0 }, draw: 1, shootoutAs: "result", unit: "half", bonuses: [] } },
+      ...(stageKind === "swiss"
+        ? []
+        : [{ id: "three_one_zero", rule: { win: { regulation: 3 }, loss: { regulation: 0 }, draw: 1, shootoutAs: "result" as const, unit: "whole" as const, bonuses: [] } }]),
+    ],
+    tiebreakers: [],
+  }),
   primaryTableKey: "points", // W2d (D11): the table ranks on points first.
 
   // X-DR-1 (ruling 78): draws only where nobody must advance. A drawn bracket

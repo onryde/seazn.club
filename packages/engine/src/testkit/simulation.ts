@@ -228,16 +228,17 @@ export function drawEntrantCount(seed: number): number {
   return Math.min(64, 2 + Math.floor(rng() * rng() * 63));
 }
 
+// W2d T11: only the Buchholz pair is Swiss-only (validateCascade rule 3). Sonneborn-Berger and the direct encounter
+// rank a round robin from its own pool ledger (W2d §5.6, B5) — chess's signed round-robin order (BG-TB-1) holds both, so
+// stripping them would simulate an order the product never ranks by.
 const SWISS_ONLY_KEYS: ReadonlySet<TiebreakerKey> = new Set([
   "buchholz",
   "buchholz_cut1",
-  "sberger",
-  "direct",
 ]);
 
 // The stage's table rules through the product's one resolver (W2d spec §5.4, §6 E6): the sport's points under the run's
 // cfg, and the sport's default order for the stage kind — minus the Swiss-ledger keys outside a swiss stage (they need
-// the assembled ledger, spec 05 §4.1). Where that strip removes a step, the stage sets the rest as its own order; where it
+// the assembled Swiss ledger, spec 05 §4.1). Where that strip removes a step, the stage sets the rest as its own order; where it
 // removes none, the stage inherits the sport's. No division order, no pin: a simulated stage is never pinned.
 function stageRules(ctx: SimContext, kind: TableStageKind): TableRules {
   const order = ctx.module.defaultTiebreakers(kind, ctx.cfg);
@@ -1146,12 +1147,21 @@ function fail(sim: SimulationResult, message: string, detail?: unknown): never {
   throw new SimInvariantError(`[${sim.seedToken}] ${message}`, detail);
 }
 
+/** What `assertDivisionInvariants` checked, so a caller can refuse a vacuous pass: the table pools whose rank order it
+ *  held against each table measure (W2d T11). */
+export interface DivisionInvariantReport {
+  tableMeasureChecks: Record<TableMeasure, number>;
+}
+
+type TableMeasure = "points" | "wins";
+
 export function assertDivisionInvariants(
   sim: SimulationResult,
   module: AnySportModule,
   rawCfg?: unknown,
-): void {
+): DivisionInvariantReport {
   const cfg = module.configSchema.parse(rawCfg ?? {}) as unknown;
+  const tableMeasureChecks: Record<TableMeasure, number> = { points: 0, wins: 0 };
   const entrantSet = new Set(sim.entrants);
 
   // Champion well-defined.
@@ -1242,20 +1252,35 @@ export function assertDivisionInvariants(
         if (JSON.stringify([...ranks].sort((a, b) => (a ?? 0) - (b ?? 0))) !== JSON.stringify(want)) {
           fail(sim, `stage "${stage.id}" pool "${pool.pool}" ranks not a total order 1..n`, ranks);
         }
-        // Cascade sanity (the comparator-flip catcher): every builtin cascade
-        // ranks on points first, so rank order must be non-increasing in points.
-        if (stage.cascade?.[0] === "points") {
+        // Cascade sanity (the comparator-flip catcher): every builtin order opens on a table measure — `points`, or the
+        // sport's own primary (W2d D11: `wins` for volleyball, badminton and tennis; T11 re-keyed this off `points`
+        // alone, which skipped every wins-first default) — so rank order must be non-increasing in it. An order that
+        // opens on anything else is no builtin default: refused, not skipped.
+        const first = stage.cascade?.[0];
+        if (first !== undefined) {
+          if (first !== "points" && first !== module.primaryTableKey) {
+            fail(sim, `stage "${stage.id}" order opens on "${first}", neither points nor the sport's primary "${module.primaryTableKey}"`);
+          }
+          // `wins` is read as the plain W column: no builtin ranks wins-first while counting regulation wins only
+          // (hockey, the one winsCount "regulation" sport, ranks on points first — HK-TB-1). Refused, not misread.
+          if (first === "wins" && module.winsCount === "regulation") {
+            fail(sim, `stage "${stage.id}" ranks wins-first under winsCount "regulation", which this check does not model`);
+          }
+          const measure: TableMeasure = first;
           const sorted = [...pool.rows].sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0));
           for (let i = 1; i < sorted.length; i++) {
             const prev = sorted[i - 1] as (typeof sorted)[number];
             const here = sorted[i] as (typeof sorted)[number];
-            if (here.points > prev.points) {
+            const was = measure === "points" ? prev.points : prev.won;
+            const now = measure === "points" ? here.points : here.won;
+            if (now > was) {
               fail(
                 sim,
-                `stage "${stage.id}" pool "${pool.pool}" rank order contradicts points (rank ${prev.rank}: ${prev.points} < rank ${here.rank}: ${here.points})`,
+                `stage "${stage.id}" pool "${pool.pool}" rank order contradicts ${measure} (rank ${prev.rank}: ${was} < rank ${here.rank}: ${now})`,
               );
             }
           }
+          tableMeasureChecks[measure]++;
         }
       }
     }
@@ -1344,4 +1369,5 @@ export function assertDivisionInvariants(
   for (const stage of sim.stages) {
     if (!completed.has(stage.id)) fail(sim, `stage "${stage.id}" never completed`);
   }
+  return { tableMeasureChecks };
 }

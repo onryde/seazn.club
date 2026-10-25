@@ -52,7 +52,7 @@ import {
   type StandingsDelta,
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
-import { boundsFrom, stampAttributionRequired, winMethodTable, type DecidedIn } from "../../sport/module.ts";
+import { boundsFrom, stampAttributionRequired, tracksFairPlay, winMethodTable, type DecidedIn } from "../../sport/module.ts";
 import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit, goalCredit } from "../../sport/forfeit-credit.ts";
 import type {
   ModuleEvent,
@@ -1787,13 +1787,24 @@ function displayedGoals(state: FootballState): { home: number; away: number } {
 // engine/11-sources.md: H2H-first cascade aligned with UEFA for 2026).
 // ---------------------------------------------------------------------------
 
-export const FOOTBALL_TIEBREAKERS: Record<"fifa2026" | "classic", TiebreakerKey[]> = {
+export const FOOTBALL_TIEBREAKERS: Record<"fifa2026" | "uefa" | "classic", TiebreakerKey[]> = {
   // points → H2H points → H2H GD → H2H goals → overall GD → overall GF →
-  // fair play → drawing of lots.
+  // fair play → drawing of lots (deviation: FIFA's world ranking, RB2B-4).
   fifa2026: ["points", "h2h_points", "h2h_diff", "h2h_for", "diff", "for", "fair_play", "lots"],
+  // W2d (spec §5.10, FB-TB-2): UEFA Art. 20.01(d) — fifa2026 with the H2H block re-applied to any subset it leaves level.
+  // The criteria UEFA lists after overall goals are not modelled, so the tail is fifa2026's (INFERRED from RBG:111-112,
+  // which names only re-application); 20.02's penalties between two level teams is not offered (FB-TB-3, RB2B-5).
+  uefa: ["points", "h2h_points", "h2h_diff", "h2h_for", "h2h_reapply", "diff", "for", "fair_play", "lots"],
   // pre-2026 WC: points → overall GD → overall GF → H2H block → fair play → lots.
   classic: ["points", "diff", "for", "h2h_points", "h2h_diff", "h2h_for", "fair_play", "lots"],
 };
+
+// W2d (PS-7c, FB-TB-4; owner 2026-10-24 Option 1): the default ranks on fair play only while the division's cfg tracks it,
+// read by `tracksFairPlay` — the reading `validateCascade` refuses the step by — so the default always validates (D8).
+function footballDefaultOrder(cfg: unknown): TiebreakerKey[] {
+  const order = FOOTBALL_TIEBREAKERS.fifa2026;
+  return tracksFairPlay({ configSchema: FootballCfg }, cfg) ? [...order] : order.filter((key) => key !== "fair_play");
+}
 
 // ---------------------------------------------------------------------------
 // Positions — spec 04 §1 / PROMPT-04 §8
@@ -2808,9 +2819,13 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
   ],
   // W2c X-PT-1 (gap a): football's goal ledger (`sideMetrics`, `footballForfeitCredit`) is gf / ga / gd.
   awardScoreKeys: { for: "gf", against: "ga", diff: "gd" },
-  // Module default = fifa2026 (spec 04 §1.6); `classic` selectable by the
-  // organiser via FOOTBALL_TIEBREAKERS.
-  defaultTiebreakers: () => [...FOOTBALL_TIEBREAKERS.fifa2026],
+  // Module default = fifa2026 (spec 04 §1.6, §5.10) for every table kind (the Swiss order is the same list, unchanged,
+  // OC1), its fair-play step only while the cfg tracks fair play; `uefa` and `classic` are stage presets.
+  defaultTiebreakers: (_kind, cfg) => footballDefaultOrder(cfg),
+  tablePresets: () => ({
+    points: [],
+    tiebreakers: (["fifa2026", "uefa", "classic"] as const).map((id) => ({ id, keys: [...FOOTBALL_TIEBREAKERS[id]] })),
+  }),
   primaryTableKey: "points", // W2d (D11): the table ranks on points first.
 
   // spec 04 §1.3 — draws are table results only. X-DR-1 (ruling 78; W2a plan

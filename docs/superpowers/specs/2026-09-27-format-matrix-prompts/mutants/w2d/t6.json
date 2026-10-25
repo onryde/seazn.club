@@ -188,7 +188,7 @@
  },
  {
   "id": "t6-fair-play-cfg-read-unparsed",
-  "file": "packages/engine/src/competition/cascade-rules.ts",
+  "file": "packages/engine/src/sport/module.ts",
   "find": "  const read: unknown = parsed.success ? parsed.data : cfg;",
   "replace": "  const read: unknown = cfg;",
   "killers": [
@@ -448,7 +448,7 @@
  },
  {
   "id": "t6-fair-play-read-object-check-true",
-  "file": "packages/engine/src/competition/cascade-rules.ts",
+  "file": "packages/engine/src/sport/module.ts",
   "find": "  return typeof read === \"object\" && read !== null && (read as { fairPlay?: unknown }).fairPlay === true;",
   "replace": "  return true && read !== null && (read as { fairPlay?: unknown }).fairPlay === true;",
   "killers": [
@@ -463,7 +463,7 @@
  },
  {
   "id": "t6-fair-play-read-object-guard-true",
-  "file": "packages/engine/src/competition/cascade-rules.ts",
+  "file": "packages/engine/src/sport/module.ts",
   "find": "  return typeof read === \"object\" && read !== null && (read as { fairPlay?: unknown }).fairPlay === true;",
   "replace": "  return true && (read as { fairPlay?: unknown }).fairPlay === true;",
   "killers": [
@@ -478,7 +478,7 @@
  },
  {
   "id": "t6-fair-play-read-object-or-not-null",
-  "file": "packages/engine/src/competition/cascade-rules.ts",
+  "file": "packages/engine/src/sport/module.ts",
   "find": "  return typeof read === \"object\" && read !== null && (read as { fairPlay?: unknown }).fairPlay === true;",
   "replace": "  return (typeof read === \"object\" || read !== null) && (read as { fairPlay?: unknown }).fairPlay === true;",
   "killers": [
@@ -493,7 +493,7 @@
  },
  {
   "id": "t6-fair-play-read-null-check-true",
-  "file": "packages/engine/src/competition/cascade-rules.ts",
+  "file": "packages/engine/src/sport/module.ts",
   "find": "  return typeof read === \"object\" && read !== null && (read as { fairPlay?: unknown }).fairPlay === true;",
   "replace": "  return typeof read === \"object\" && true && (read as { fairPlay?: unknown }).fairPlay === true;",
   "killers": [

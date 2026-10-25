@@ -53,6 +53,8 @@ import type {
   PadSpec,
   RuleKeys,
   SportModule,
+  TablePresets,
+  TableStageKind,
   TiebreakerKey,
 } from "../../sport/module.ts";
 import { playedInStats, type PlayerStatRow, type PlayerStatsModel, type StatsPlayDeclaration } from "../../stats/stats.ts";
@@ -1885,6 +1887,11 @@ export interface PeriodPreset {
   lineupPolicy?: (cfg: PeriodCfg) => LineupPolicy;
   metrics: MetricSpec[];
   defaultTiebreakers: TiebreakerKey[];
+  // W2d (spec §5.10, OC1) — a Swiss stage's order, unchanged by W2d (W3 owns Swiss orders); `defaultTiebreakers` above is
+  // the round-robin, league and group order. Required, so a new sport states both.
+  swissTiebreakers: TiebreakerKey[];
+  // W2d (spec §5.10, HK-PT-2) — the sport's table presets (`SportModule.tablePresets`); omitted = none.
+  tablePresets?: (stageKind: TableStageKind) => TablePresets;
   // W2d (D11; X-TB-3) — the module's `primaryTableKey`; stated per sport.
   primaryTableKey: "points" | "wins";
   officialLabel: { scorer: string };
@@ -2825,7 +2832,8 @@ export function makePeriodModule(
     metrics: preset.metrics,
     // W2c X-PT-1 (gap a): the kernel's own goal ledger (`sideMetrics`, `periodForfeitCredit`) is gf / ga / gd.
     awardScoreKeys: { for: "gf", against: "ga", diff: "gd" },
-    defaultTiebreakers: () => [...preset.defaultTiebreakers],
+    defaultTiebreakers: (kind) => [...(kind === "swiss" ? preset.swissTiebreakers : preset.defaultTiebreakers)],
+    ...(preset.tablePresets === undefined ? {} : { tablePresets: preset.tablePresets }),
     primaryTableKey: preset.primaryTableKey,
 
     // v6/00 §3 — draws are a table result only where no decider is

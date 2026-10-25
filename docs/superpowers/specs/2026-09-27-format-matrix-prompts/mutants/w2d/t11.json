@@ -1,0 +1,332 @@
+[
+ {
+  "id": "t11-badminton-diff-swap",
+  "file": "packages/engine/src/sports/setbased/badminton.ts",
+  "find": "  defaultTiebreakers: [\"wins\", \"h2h_two\", \"set_diff\", \"h2h_two\", \"point_diff\", \"h2h_two\", \"lots\"],",
+  "replace": "  defaultTiebreakers: [\"wins\", \"h2h_two\", \"point_diff\", \"h2h_two\", \"set_diff\", \"h2h_two\", \"lots\"],",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tables-rulebook.test.ts"
+    ],
+    "name": "BD-TB-1 three level on wins: games DIFFERENCE"
+   }
+  ]
+ },
+ {
+  "id": "t11-volleyball-points-first",
+  "file": "packages/engine/src/sports/setbased/volleyball.ts",
+  "find": "  defaultTiebreakers: [\"wins\", \"points\", \"set_ratio\", \"point_ratio\", \"h2h_points\", \"lots\"],",
+  "replace": "  defaultTiebreakers: [\"points\", \"wins\", \"set_ratio\", \"point_ratio\", \"h2h_points\", \"lots\"],",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tables-rulebook.test.ts"
+    ],
+    "name": "VB-TB-1 VB-PT-1 matches won first"
+   }
+  ]
+ },
+ {
+  "id": "t11-chess-310-on-swiss",
+  "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+  "find": "      ...(stageKind === \"swiss\"",
+  "replace": "      ...(stageKind === \"swiss\" && false",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/defaults-sweep.test.ts"
+    ],
+    "name": "3/1/0 preset is a round-robin preset only"
+   }
+  ]
+ },
+ {
+  "id": "t11-football-fair-play-kept-ps7c",
+  "file": "packages/engine/src/sports/football/football.ts",
+  "find": "  return tracksFairPlay({ configSchema: FootballCfg }, cfg) ? [...order] : order.filter((key) => key !== \"fair_play\");",
+  "replace": "  return [...order];",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/defaults-sweep.test.ts"
+    ],
+    "name": "PS-7c FB-TB-4 football: the default omits fair_play"
+   }
+  ]
+ },
+ {
+  "id": "t11-football-fair-play-kept-sweep",
+  "file": "packages/engine/src/sports/football/football.ts",
+  "find": "  return tracksFairPlay({ configSchema: FootballCfg }, cfg) ? [...order] : order.filter((key) => key !== \"fair_play\");",
+  "replace": "  return [...order];",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/defaults-sweep.test.ts"
+    ],
+    "name": "X-TB-3 FB-TB-1 BG-TB-1 every sport"
+   }
+  ]
+ },
+ {
+  "id": "t11-football-fair-play-hand-read",
+  "file": "packages/engine/src/sports/football/football.ts",
+  "find": "tracksFairPlay({ configSchema: FootballCfg }, cfg)",
+  "replace": "(cfg as { fairPlay?: unknown }).fairPlay === true",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/defaults-sweep.test.ts"
+    ],
+    "name": "PS-7c the football default and validateCascade read fair play the ONE way"
+   }
+  ]
+ },
+ {
+  "id": "t11-setbased-kernel-swiss-ignored",
+  "file": "packages/engine/src/sports/setbased/kernel.ts",
+  "find": "kind === \"swiss\" ? preset.swissTiebreakers : preset.defaultTiebreakers",
+  "replace": "preset.defaultTiebreakers",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/defaults-sweep.test.ts"
+    ],
+    "name": "X-TB-3 FB-TB-1 BG-TB-1 every sport"
+   }
+  ]
+ },
+ {
+  "id": "t11-period-kernel-swiss-ignored",
+  "file": "packages/engine/src/sports/period/kernel.ts",
+  "find": "kind === \"swiss\" ? preset.swissTiebreakers : preset.defaultTiebreakers",
+  "replace": "preset.defaultTiebreakers",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/defaults-sweep.test.ts"
+    ],
+    "name": "X-TB-3 FB-TB-1 BG-TB-1 every sport"
+   }
+  ]
+ },
+ {
+  "id": "t11-nested-kernel-swiss-ignored",
+  "file": "packages/engine/src/sports/nested/kernel.ts",
+  "find": "kind === \"swiss\" ? preset.swissTiebreakers : preset.defaultTiebreakers",
+  "replace": "preset.defaultTiebreakers",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/defaults-sweep.test.ts"
+    ],
+    "name": "X-TB-3 FB-TB-1 BG-TB-1 every sport"
+   }
+  ]
+ },
+ {
+  "id": "t11-cricket-swiss-gets-lots",
+  "file": "packages/engine/src/sports/cricket/cricket.ts",
+  "find": "    kind === \"swiss\" ? [\"points\", \"wins\", \"nrr\", \"h2h_points\", \"seed\"] :",
+  "replace": "    kind === \"swiss\" ? [\"points\", \"wins\", \"nrr\", \"h2h_points\", \"seed\", \"lots\"] :",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/defaults-sweep.test.ts"
+    ],
+    "name": "X-TB-3 FB-TB-1 BG-TB-1 every sport"
+   }
+  ]
+ },
+ {
+  "id": "t11-cricket-rr-no-lots",
+  "file": "packages/engine/src/sports/cricket/cricket.ts",
+  "find": " : [\"points\", \"wins\", \"nrr\", \"h2h_points\", \"seed\", \"lots\"],",
+  "replace": " : [\"points\", \"wins\", \"nrr\", \"h2h_points\", \"seed\"],",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tables-rulebook.test.ts"
+    ],
+    "name": "CK-TB-1 the pre-event seed, then lots"
+   }
+  ]
+ },
+ {
+  "id": "t11-boardgame-rr-buchholz",
+  "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+  "find": "kind === \"swiss\" ? BOARDGAME_TIEBREAKERS : BOARDGAME_RR_TIEBREAKERS",
+  "replace": "BOARDGAME_TIEBREAKERS",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tables-rulebook.test.ts"
+    ],
+    "name": "BG-TB-2 no Buchholz outside Swiss"
+   }
+  ]
+ },
+ {
+  "id": "t11-hockey-pro-league-outdoor",
+  "file": "packages/engine/src/sports/hockey/hockey.ts",
+  "find": "hockey.variants[\"fih-shootout\"]), kind)",
+  "replace": "hockey.variants[\"fih-outdoor\"]), kind)",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/defaults-sweep.test.ts"
+    ],
+    "name": "FB-TB-2 HK-PT-2 BG-PT-1 every sport × table kind"
+   }
+  ]
+ },
+ {
+  "id": "t11-period-presets-dropped",
+  "file": "packages/engine/src/sports/period/kernel.ts",
+  "find": "...(preset.tablePresets === undefined ? {} : { tablePresets: preset.tablePresets }),",
+  "replace": "...({}),",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tables-rulebook.test.ts"
+    ],
+    "name": "HK-PT-1 HK-PT-2 SC-P4"
+   }
+  ]
+ },
+ {
+  "id": "t11-icehockey-no-reapply",
+  "file": "packages/engine/src/sports/icehockey/icehockey.ts",
+  "find": "  defaultTiebreakers: [\"points\", \"h2h_points\", \"h2h_diff\", \"h2h_for\", \"h2h_reapply\", \"diff\", \"for\", \"seed\", \"lots\"],",
+  "replace": "  defaultTiebreakers: [\"points\", \"h2h_points\", \"h2h_diff\", \"h2h_for\", \"diff\", \"for\", \"seed\", \"lots\"],",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tables-rulebook.test.ts"
+    ],
+    "name": "IH-TB-1 IH-PT-1 a four-way tie re-applied down to two"
+   }
+  ]
+ },
+ {
+  "id": "t11-tennis-no-matches-played",
+  "file": "packages/engine/src/sports/tennis/tennis.ts",
+  "find": "  defaultTiebreakers: [\"wins\", \"matches_played\", \"h2h_two\", \"set_ratio\", \"h2h_two\", \"game_ratio\", \"h2h_two\", \"seed\", \"lots\"],",
+  "replace": "  defaultTiebreakers: [\"wins\", \"h2h_two\", \"set_ratio\", \"h2h_two\", \"game_ratio\", \"h2h_two\", \"seed\", \"lots\"],",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tables-rulebook.test.ts"
+    ],
+    "name": "TN-TB-1 ATP C.3-2 most matches played"
+   }
+  ]
+ },
+ {
+  "id": "t11-tabletennis-no-exclusion",
+  "file": "packages/engine/src/sports/setbased/tabletennis.ts",
+  "find": "  defaultTiebreakers: [\"points\", \"h2h_points\", \"h2h_set_ratio\", \"h2h_point_ratio\", \"h2h_exclusion\", \"lots\"],",
+  "replace": "  defaultTiebreakers: [\"points\", \"h2h_points\", \"h2h_set_ratio\", \"h2h_point_ratio\", \"lots\"],",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tables-rulebook.test.ts"
+    ],
+    "name": "TT-TB-1 TT-PT-1 a walkover loser scores 0"
+   }
+  ]
+ },
+ {
+  "id": "t11-hockey-no-field-goals",
+  "file": "packages/engine/src/sports/hockey/hockey.ts",
+  "find": "  defaultTiebreakers: [\"points\", \"wins\", \"diff\", \"for\", \"h2h_points\", \"h2h_wins\", \"h2h_diff\", \"h2h_for\", \"field_goals\", \"lots\"],",
+  "replace": "  defaultTiebreakers: [\"points\", \"wins\", \"diff\", \"for\", \"h2h_points\", \"h2h_wins\", \"h2h_diff\", \"h2h_for\", \"lots\"],",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tables-rulebook.test.ts"
+    ],
+    "name": "HK-TB-2 field goals decide"
+   }
+  ]
+ },
+ {
+  "id": "t11-sim-check-points-only",
+  "file": "packages/engine/src/testkit/simulation.ts",
+  "find": "        if (first !== undefined) {",
+  "replace": "        if (first === \"points\") {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/testkit/simulation.test.ts"
+    ],
+    "name": "runs the check on its primaryTableKey"
+   }
+  ]
+ },
+ {
+  "id": "t11-sim-open-guard-off",
+  "file": "packages/engine/src/testkit/simulation.ts",
+  "find": "          if (first !== \"points\" && first !== module.primaryTableKey) {",
+  "replace": "          if (false) {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/testkit/simulation.test.ts"
+    ],
+    "name": "refuses an order that opens on neither points nor the primary"
+   }
+  ]
+ },
+ {
+  "id": "t11-sim-regulation-guard-off",
+  "file": "packages/engine/src/testkit/simulation.ts",
+  "find": "          if (first === \"wins\" && module.winsCount === \"regulation\") {",
+  "replace": "          if (false) {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/testkit/simulation.test.ts"
+    ],
+    "name": "refuses an order that opens on neither points nor the primary"
+   }
+  ]
+ },
+ {
+  "id": "t11-sim-strips-direct",
+  "file": "packages/engine/src/testkit/simulation.ts",
+  "find": "const SWISS_ONLY_KEYS: ReadonlySet<TiebreakerKey> = new Set([",
+  "replace": "const SWISS_ONLY_KEYS: ReadonlySet<TiebreakerKey> = new Set([\"direct\", ",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/testkit/simulation.test.ts"
+    ],
+    "name": "runs the check on its primaryTableKey"
+   }
+  ]
+ }
+]

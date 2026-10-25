@@ -52,9 +52,12 @@ export const badminton = makeSetBasedModule({
     allowSquadGrowth: false,
   }),
   unitLabel: { one: "Game", many: "Games" },
-  // spec 04 §4 — points → matches → game ratio → point ratio → h2h. game_ratio
-  // is the set_ratio key (games are the kernel's sets).
-  defaultTiebreakers: ["points", "wins", "set_ratio", "point_ratio", "h2h_points"],
+  // W2d (SPEC §5.10, BD-TB-1): BWF 16.2 — matches won; a tie of two goes to their match (16.2.2); three or more go
+  // to the game DIFFERENCE (16.2.3), then the point difference (16.2.4), each falling back to the two-way h2h when
+  // it leaves two level; then lots. Games are the kernel's sets.
+  defaultTiebreakers: ["wins", "h2h_two", "set_diff", "h2h_two", "point_diff", "h2h_two", "lots"],
+  // OC1: a Swiss stage keeps its pre-W2d order.
+  swissTiebreakers: ["points", "wins", "set_ratio", "point_ratio", "h2h_points"],
   primaryTableKey: "wins", // W2d (D11): BWF 16.2.1 — the number of matches won comes first.
   officialLabel: { scorer: "Umpire" }, // doc 13 §1
   coarseEventType: "game.summary",

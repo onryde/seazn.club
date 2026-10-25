@@ -171,11 +171,13 @@ describe("boardgame contract declarations", () => {
   });
 
   it("declares the FIDE cascade and {2, 0} point totals", () => {
-    // W2d T8: asked per table kind under the default cfg — the same FIDE order for each until Task 11.
+    // W2d T11 (SPEC §5.10, BG-TB-1): a round robin ranks points, direct encounter, wins, Sonneborn-Berger, lots — no
+    // Buchholz outside Swiss (FIDE C.07 Art. 8 note); the Swiss order is unchanged (OC1).
     const cfg = boardgame.configSchema.parse({});
-    for (const kind of ["league", "group", "swiss", "americano"] as const) {
-      expect(boardgame.defaultTiebreakers(kind, cfg), kind).toEqual(BOARDGAME_TIEBREAKERS);
+    for (const kind of ["league", "group", "americano"] as const) {
+      expect(boardgame.defaultTiebreakers(kind, cfg), kind).toEqual(["points", "direct", "wins", "sberger", "lots"]);
     }
+    expect(boardgame.defaultTiebreakers("swiss", cfg)).toEqual(BOARDGAME_TIEBREAKERS);
     expect(boardgame.defaultTiebreakers("swiss", cfg).slice(0, 4)).toEqual([
       "points",
       "buchholz_cut1",

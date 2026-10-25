@@ -8,7 +8,8 @@
 // `sberger`/`direct` outside Swiss and had no production caller.
 import { EngineError } from "../core/errors.ts";
 import type { StageKind } from "../core/types.ts";
-import type { AnySportModule, TiebreakerKey } from "../sport/module.ts";
+// D8: the order may rank on fair play only while the cfg tracks it — the ONE reading, shared with the defaults (PS-7c).
+import { tracksFairPlay, type AnySportModule, type TiebreakerKey } from "../sport/module.ts";
 import { RATIO_LEDGERS, type RatioKey } from "./display.ts";
 import { DIFF_KEYS, FOR_KEYS } from "./tiebreakers.ts";
 
@@ -92,14 +93,6 @@ const KEY_RULES: Readonly<Record<TiebreakerKey, KeyRule>> = {
   field_goals: { ledger: [["gf"], ["goals_pc"], ["goals_stroke"]] },
 };
 const KEYS = Object.keys(KEY_RULES) as TiebreakerKey[];
-
-// D8: the order may rank on fair play only while the cfg tracks it. Read as the sport's schema parses the cfg, so a stored
-// partial cfg reads football's declared default (on) rather than "absent"; a cfg the schema refuses is read as given.
-function tracksFairPlay(module: AnySportModule, cfg: unknown): boolean {
-  const parsed = module.configSchema.safeParse(cfg);
-  const read: unknown = parsed.success ? parsed.data : cfg;
-  return typeof read === "object" && read !== null && (read as { fairPlay?: unknown }).fairPlay === true;
-}
 
 /** Every refusal of `cascade` in `ctx`; `[]` = valid. In the spec's rule order (§5.5 1 → 5), each rule's by index. Throws
  *  CONFIG_INVALID for a key outside the vocabulary (rule 6: the zod enum refuses those before this runs). */
