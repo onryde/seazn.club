@@ -992,6 +992,12 @@ jobs:
         # (`placement.flycast:50051`) — unreachable from a runner — and every
         # board would come back greedy while the suite reported on it.
         env:
+          # register() runs on this server, and sentry.server.config.ts enables Sentry the moment a DSN exists. Held
+          # blank-but-defined (the empty string wins `SENTRY_DSN ?? NEXT_PUBLIC_SENTRY_DSN`), so a DSN baked into the
+          # build or present on the runner never sends a CI event to the real project. Only the SENTRY_DSN blank is
+          # load-bearing: a NEXT_PUBLIC_ value is inlined into the server chunks at build, so blanking it here is inert.
+          SENTRY_DSN: ""
+          NEXT_PUBLIC_SENTRY_DSN: ""
           PLACEMENT_SERVICE_HOST: localhost:50051
           PLACEMENT_SERVICE_SECRET: ci-e2e-secret
           SUPABASE_JWT_SIGNING_KEY_B64: ${{ env.SUPABASE_JWT_SIGNING_KEY_B64 }}
@@ -1047,6 +1053,12 @@ jobs:
           # public/ too, as the Dockerfile does — tracing does not carry it (#887).
           rm -rf apps/web/.next/standalone/apps/web/public
           cp -R apps/web/public apps/web/.next/standalone/apps/web/public
+          # The compiled instrumentation.js, overlaid as the Dockerfile does (see its comment): Turbopack's standalone
+          # tracing drops it and Next silently skips register() without it, so a server started from the traced tree
+          # alone never ran Sentry init, the relayDriverMode() boot check, the outbox readiness report or the public
+          # error no-store guard - CI served something production does not. The merge form (`/.`): the destination
+          # exists, and `cp -R dir dest` would nest under it.
+          cp -R apps/web/.next/server/. apps/web/.next/standalone/apps/web/.next/server/
           node apps/web/.next/standalone/apps/web/server.js > dev-server.log 2>&1 &
           echo "waiting for server…"
           up=""
@@ -1489,6 +1501,12 @@ jobs:
 
       - name: Start server
         env:
+          # register() runs on this server, and sentry.server.config.ts enables Sentry the moment a DSN exists. Held
+          # blank-but-defined (the empty string wins `SENTRY_DSN ?? NEXT_PUBLIC_SENTRY_DSN`), so a DSN baked into the
+          # build or present on the runner never sends a CI event to the real project. Only the SENTRY_DSN blank is
+          # load-bearing: a NEXT_PUBLIC_ value is inlined into the server chunks at build, so blanking it here is inert.
+          SENTRY_DSN: ""
+          NEXT_PUBLIC_SENTRY_DSN: ""
           PLACEMENT_SERVICE_HOST: localhost:50051
           PLACEMENT_SERVICE_SECRET: ci-e2e-secret
           SUPABASE_JWT_SIGNING_KEY_B64: ${{ env.SUPABASE_JWT_SIGNING_KEY_B64 }}
@@ -1516,6 +1534,12 @@ jobs:
           # public/ too, as the Dockerfile does — tracing does not carry it (#887).
           rm -rf apps/web/.next/standalone/apps/web/public
           cp -R apps/web/public apps/web/.next/standalone/apps/web/public
+          # The compiled instrumentation.js, overlaid as the Dockerfile does (see its comment): Turbopack's standalone
+          # tracing drops it and Next silently skips register() without it, so a server started from the traced tree
+          # alone never ran Sentry init, the relayDriverMode() boot check, the outbox readiness report or the public
+          # error no-store guard - CI served something production does not. The merge form (`/.`): the destination
+          # exists, and `cp -R dir dest` would nest under it.
+          cp -R apps/web/.next/server/. apps/web/.next/standalone/apps/web/.next/server/
           node apps/web/.next/standalone/apps/web/server.js > dev-server.log 2>&1 &
           echo "waiting for server…"
           up=""
@@ -1852,6 +1876,12 @@ jobs:
 
       - name: Start server
         env:
+          # register() runs on this server, and sentry.server.config.ts enables Sentry the moment a DSN exists. Held
+          # blank-but-defined (the empty string wins `SENTRY_DSN ?? NEXT_PUBLIC_SENTRY_DSN`), so a DSN baked into the
+          # build or present on the runner never sends a CI event to the real project. Only the SENTRY_DSN blank is
+          # load-bearing: a NEXT_PUBLIC_ value is inlined into the server chunks at build, so blanking it here is inert.
+          SENTRY_DSN: ""
+          NEXT_PUBLIC_SENTRY_DSN: ""
           PLACEMENT_SERVICE_HOST: localhost:50051
           PLACEMENT_SERVICE_SECRET: ci-e2e-secret
           SUPABASE_JWT_SIGNING_KEY_B64: ${{ env.SUPABASE_JWT_SIGNING_KEY_B64 }}
@@ -1879,6 +1909,12 @@ jobs:
           # public/ too, as the Dockerfile does — tracing does not carry it (#887).
           rm -rf apps/web/.next/standalone/apps/web/public
           cp -R apps/web/public apps/web/.next/standalone/apps/web/public
+          # The compiled instrumentation.js, overlaid as the Dockerfile does (see its comment): Turbopack's standalone
+          # tracing drops it and Next silently skips register() without it, so a server started from the traced tree
+          # alone never ran Sentry init, the relayDriverMode() boot check, the outbox readiness report or the public
+          # error no-store guard - CI served something production does not. The merge form (`/.`): the destination
+          # exists, and `cp -R dir dest` would nest under it.
+          cp -R apps/web/.next/server/. apps/web/.next/standalone/apps/web/.next/server/
           node apps/web/.next/standalone/apps/web/server.js > dev-server.log 2>&1 &
           echo "waiting for server…"
           up=""
