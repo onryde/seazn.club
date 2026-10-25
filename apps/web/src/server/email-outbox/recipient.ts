@@ -24,9 +24,11 @@ import { log } from "@/server/logger";
 import { deletedAccountPlaceholder } from "./account-deletion";
 import type { ClaimedRow } from "./attempt";
 
-/** What the last attempt's `last_error` says when Resend answered 429: `http 429 <name>` (attempt.ts `lastErrorOf`). Anchored on the
- *  status and what follows it, so `http 4290 x` is not a 429. */
-const RATE_LIMITED = /^http 429(?: |$)/;
+/** What the last attempt's `last_error` says when Resend answered 429: `http 429 <name>` (attempt.ts `lastErrorOf`, which always writes a
+ *  name, `unknown` when the provider sent none). Anchored on the status and the space after it, so `http 4290 x` is not a 429, and
+ *  exactly the shape status.ts `lockQueuedEmails` tests in SQL (`like 'http 429 %'`): the two copies of the rule are held to each
+ *  other by a grid in recipient-resolution.test.ts. */
+const RATE_LIMITED = /^http 429 /;
 
 /**
  * May this attempt send to a NEW address under the row's idempotency key? Only when no request under the key can have created a

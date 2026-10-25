@@ -30,6 +30,7 @@ import { ACCOUNT_DELETED_REASON, deletedAccountPlaceholder } from "../account-de
 import { enqueueEmail, type OutboxMessage } from "../enqueue";
 import { KIND_HOOKS, type EndedRow } from "../hooks";
 import { isKeyClean } from "../recipient";
+import { lockQueuedEmails } from "../status";
 import { runOutboxTick, type OutboxTickReport } from "../worker";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -445,6 +446,151 @@ describe.skipIf(!HAS_DB)("an account's recipient is resolved at send time (DB)",
       expect(deliverMock, "the 503 request was the only one").toHaveBeenCalledTimes(1);
       const row = await get(id);
       expect([row.status, row.last_error, row.recipient]).toEqual(["expired", "account_deleted", `deleted-${acct.id}@deleted.invalid`]);
+    });
+  });
+
+  // ---- the fences and the read error (T3 review M1, M2) -----------------------------------------------------------------------
+
+  describe("the claim's fences and the resolution's read error", () => {
+    /** The production claim statement, copied: attemptClaimed is handed what a claim returned, so the interleavings below (another
+     *  worker acting between the claim and the resolution) can be staged exactly. */
+    async function handClaim(id: string): Promise<ReturnType<typeof toClaimedRow>> {
+      const [rec] = await sql<ClaimedRecord[]>`
+        update email_outbox
+           set status = 'sending', attempts = attempts + 1, lease_until = now() + interval '2 minutes', status_at = now()
+         where id = ${id} and status = 'queued'
+        returning id, kind, ref_type, ref_id, org_id, meta, recipient, subject, body_sealed, transactional,
+                  attempts, expires_at, lease_until, recipient_user_id, last_error, false as reclaimed`;
+      return toClaimedRow(rec!);
+    }
+
+    it("M1: a recipient id the database cannot read (22P02) rejects, sends nothing, and leaves the row `sending` for the worker to reclaim", async () => {
+      const acct = await account("badid");
+      const id = await queueFor(acct);
+      const claimed = { ...(await handClaim(id)), recipientUserId: "not-a-uuid" };
+
+      const err = (await attemptClaimed(claimed).catch((e: unknown) => e)) as { code?: string };
+      expect(err, "a read failure propagates, it is not swallowed into a send").toBeInstanceOf(Error);
+      expect(err.code, "invalid_text_representation").toBe("22P02");
+      expect(deliverMock, "nothing was requested under a recipient nobody could resolve").not.toHaveBeenCalled();
+      const row = await get(id);
+      expect([row.status, row.attempts, row.recipient], "the row is left exactly as the claim made it").toEqual(["sending", 1, acct.email]);
+      expect(row.lease_until, "... with its lease, which is how the worker finds it").not.toBeNull();
+
+      // The sequence: once the lease lapses the worker reclaims it, and it is a RECLAIM (not key-clean), so a changed address is not followed.
+      await sql`update email_outbox set lease_until = now() - interval '1 second' where id = ${id}`;
+      await changeEmail(acct.id);
+      expect(await tick(id)).toEqual({ ...ZERO, claimed: 1, sent: 1 });
+      expect(sent().map((m) => m.to)).toEqual([acct.email]);
+    });
+
+    it("M2: a row another worker re-claimed (attempts bumped) between the claim and the rewrite is `lost`: nothing is sent and the row is not rewritten", async () => {
+      const acct = await account("fence2");
+      const id = await queueFor(acct);
+      const claimed = await handClaim(id);
+      expect([claimed.attempts, claimed.reclaimed], "premise: a clean first attempt, which would follow the account").toEqual([1, false]);
+      const next = await changeEmail(acct.id);
+      expect(next).not.toBe(acct.email);
+      // Another worker took the row over after its lease lapsed and claimed it again: still `sending`, but it is attempt 2 now.
+      await sql`update email_outbox set attempts = 2 where id = ${id}`;
+
+      const res = await attemptClaimed(claimed);
+      expect([res.outcome, res.requestMade]).toEqual(["deferred", false]);
+      expect(deliverMock).not.toHaveBeenCalled();
+      const row = await get(id);
+      expect([row.status, row.attempts, row.recipient], "the other attempt's row is untouched").toEqual(["sending", 2, acct.email]);
+    });
+
+    it("M2: the same row, un-fenced (attempts unchanged), IS rewritten and sent (the positive pair: the fence is what stopped the one above)", async () => {
+      const acct = await account("fence2b");
+      const id = await queueFor(acct);
+      const claimed = await handClaim(id);
+      const next = await changeEmail(acct.id);
+
+      const res = await attemptClaimed(claimed);
+      expect([res.outcome, res.requestMade]).toEqual(["sent", true]);
+      expect(sent().map((m) => m.to)).toEqual([next]);
+      expect((await get(id)).recipient).toBe(next);
+    });
+
+    it("M2: a deleted account's row that another worker re-claimed is not ended by this attempt (markAccountDeleted is fenced on the attempt)", async () => {
+      const acct = await account("fence3");
+      const id = await queueFor(acct);
+      const claimed = await handClaim(id);
+      await sql`update users set deleted_at = now() where id = ${acct.id}`;
+      await sql`update email_outbox set attempts = 2 where id = ${id}`;
+
+      const res = await attemptClaimed(claimed);
+      expect([res.outcome, res.requestMade]).toEqual(["deferred", false]);
+      expect(deliverMock).not.toHaveBeenCalled();
+      const row = await get(id);
+      expect([row.status, row.attempts, row.last_error], "not expired by a stale attempt").toEqual(["sending", 2, null]);
+      expect(row.recipient, "the address is not scrubbed by a stale attempt either").toBe(acct.email);
+      expect(row.body_sealed, "the body is still there for the attempt that owns the row").not.toBeNull();
+    });
+
+    it("M2: a deleted account's row superseded between the claim and the end is not touched (the status fence)", async () => {
+      const acct = await account("fence4");
+      const id = await queueFor(acct);
+      const claimed = await handClaim(id);
+      await sql`update users set deleted_at = now() where id = ${acct.id}`;
+      await sql`update email_outbox set status = 'replaced', body_sealed = null, lease_until = null where id = ${id}`;
+
+      const res = await attemptClaimed(claimed);
+      expect([res.outcome, res.requestMade]).toEqual(["deferred", false]);
+      const row = await get(id);
+      expect([row.status, row.last_error, row.recipient]).toEqual(["replaced", null, acct.email]);
+    });
+  });
+
+  // ---- the key-clean rule is written twice (T3 review M3) ----------------------------------------------------------------------
+
+  describe("the key-clean rule, in TypeScript and in SQL", () => {
+    // `isKeyClean` (recipient.ts) judges a CLAIMED row: its `attempts` already counts this attempt. `lockQueuedEmails` (status.ts,
+    // the check-in extension's "may this queued row be re-rendered?") judges the same row BEFORE a claim: its `attempts` does not.
+    // They are one rule over two moments, so a pre-claim row with n attempts must be eligible exactly when the claim of it (n + 1
+    // attempts, nothing reclaimed) would be key-clean. If the two ever drift, the extension re-renders (new key, new body) a row
+    // whose send the resolution still treats as possibly delivered, or the reverse.
+    const ATTEMPTS = [0, 1, 2, 3, 4, 5, 6];
+    // Every shape `lastErrorOf` writes (`http <status> <name>`, `network <detail>`), the bare statuses it cannot, and nothing.
+    const LAST_ERRORS: Array<string | null> = [
+      null,
+      "http 429 rate_limit_exceeded",
+      "http 429 unknown",
+      "http 503 service_unavailable",
+      "http 500 internal_server_error",
+      "http 409 concurrent_idempotent_requests",
+      "network timeout",
+      "http 4290 x",
+      "http 429",
+      "",
+    ];
+
+    it("agree on every (attempts, last_error): a queued row is re-render-eligible exactly when its claim would be key-clean", async () => {
+      let checked = 0;
+      let eligibleSeen = 0;
+      let ineligibleSeen = 0;
+      for (const attempts of ATTEMPTS) {
+        for (const lastError of LAST_ERRORS) {
+          const refId = `${RUN}-${randomUUID()}`;
+          const id = await queue({ refId, orgId: null }, { fresh: true });
+          await sql`update email_outbox set attempts = ${attempts}, last_error = ${lastError} where id = ${id}`;
+          const eligible = (
+            await sql.begin((tx) => lockQueuedEmails(tx, "chess_invite", "fixture_seat", [refId]))
+          ).some((r) => r.id === id);
+          const clean = isKeyClean({ attempts: attempts + 1, lastError, reclaimed: false });
+          expect(eligible, JSON.stringify({ attempts, lastError, sqlEligible: eligible, tsClean: clean })).toBe(clean);
+          if (eligible) eligibleSeen++;
+          else ineligibleSeen++;
+          checked++;
+        }
+      }
+      expect(checked, "anti-vacuity: the whole grid was judged by both").toBe(ATTEMPTS.length * LAST_ERRORS.length);
+      expect(eligibleSeen, "the grid has both answers").toBeGreaterThan(0);
+      expect(ineligibleSeen).toBeGreaterThan(0);
+      // The rule's two accepting corners, spelled out so a grid that drifted together would still be caught: a never-attempted row, and
+      // a row whose only attempt was a 429.
+      expect(eligibleSeen, "10 last_errors at 0 attempts, plus the 429 shapes at 1 attempt").toBe(LAST_ERRORS.length + 2);
     });
   });
 
