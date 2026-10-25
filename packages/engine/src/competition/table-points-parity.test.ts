@@ -237,7 +237,8 @@ describe("W2d tablePointsRule (SPEC §5.3, §13.4)", () => {
       // The allowlist cannot hide a non-change: a signed row that pays as it did is a stale signature.
       expect(got.differed, `SIGNED ${s.sport} ${s.outcome} (${s.why}) actually changes`).toBeGreaterThan(0);
     }
-  });
+    // 14,120 sides over 11 sports: measured 4.7-5.8 s on a loaded machine, past vitest's 5 s default.
+  }, 60_000);
 
   it("X-PT-3 every module's tablePointsRule is a valid PointsRule and covers its own reachableOutcomes, every cfg × stage kind (counted)", () => {
     let checked = 0;
@@ -261,7 +262,8 @@ describe("W2d tablePointsRule (SPEC §5.3, §13.4)", () => {
     expect(swept).toBe(SPORTS);
     expect(checked, "anti-vacuity: rules checked").toBeGreaterThanOrEqual(SPORTS * StageKind.options.length);
     expect(failures).toEqual([]);
-  });
+    // 909 rules, each coverage-checked: measured 1.2-2.2 s on a loaded machine; the same headroom as X-PT-2.
+  }, 60_000);
 });
 
 // ---------------------------------------------------------------------------------------------------------------------
