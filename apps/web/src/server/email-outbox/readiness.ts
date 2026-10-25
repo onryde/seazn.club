@@ -13,10 +13,10 @@ import { outboxKeyProblem, type OutboxKeyProblem } from "./seal";
 const WHAT: Record<OutboxKeyProblem, string> = {
   unset:
     "RESEND_API_KEY is set but EMAIL_OUTBOX_KEK is unset or malformed (64 hex characters): every email the outbox is asked to " +
-    "queue will be refused, so sign-in requests will fail until it is set",
+    "queue will be refused, so every action that sends email will fail until it is set",
   sample:
     "EMAIL_OUTBOX_KEK is the sample key published in apps/web/.env.example, which is refused under NODE_ENV=production: " +
-    "every email the outbox is asked to queue will be refused, so sign-in requests will fail until a key of its own is set",
+    "every email the outbox is asked to queue will be refused, so every action that sends email will fail until a key of its own is set",
 };
 
 /** The message a report carries (also what the boot hook hands to Sentry). */

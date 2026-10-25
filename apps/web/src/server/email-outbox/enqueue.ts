@@ -3,12 +3,17 @@ import "server-only";
 // inside `withTenant` / `sql.begin` queues the email in the SAME transaction as the thing that caused it (committed <=>
 // queued; a rollback queues nothing). It never calls Resend; `dispatchNow` does, after the caller commits.
 //
-// Two constraints from the schema (V470):
+// Constraints from the schema (V470, V472):
 //  - `app_user` holds INSERT only, so the id is made here and the insert has no RETURNING (RETURNING needs SELECT);
-//  - the replace trigger supersedes older non-terminal rows for the same kind + ref + recipient on this very insert.
+//  - the replace trigger supersedes older non-terminal rows for the same kind + ref + recipient AFTER this very insert;
+//  - the insert ends `on conflict do nothing` with NO conflict target (plan P1). A target (`on conflict (kind, dedupe_key)
+//    where ...`) needs SELECT on its columns and fails 42501 for `app_user`. The price: the clause swallows ANY unique
+//    violation, so the table may carry exactly the unique indexes it is meant to swallow (the primary key,
+//    `email_outbox_provider_idx` and `email_outbox_once_idx`; outbox-once-key.test.ts reads the catalogue), and a writer
+//    that wrote nothing for a reason other than its once-key must say so (`OutboxInsertSkippedError`).
 import { randomUUID } from "node:crypto";
 import type { Tx, sql } from "@/lib/db";
-import { MAX_EXPIRY_MS, RETRYABLE_STATUSES, type OutboxKind } from "./constants";
+import { MAX_EXPIRY_MS, OUTBOX_KIND_FACTS, RETRYABLE_STATUSES, type OutboxKind } from "./constants";
 import { sealBody } from "./seal";
 
 export type OutboxMessage = {
@@ -29,6 +34,10 @@ export type OutboxMessage = {
   expiresAt: Date;
   /** Non-secret data a kind's hooks need later (ids, stamps). Never a token, never a body. */
   meta?: Record<string, string>;
+  /** The account this email is for, when `OUTBOX_KIND_FACTS[kind].to` is `account`: the address is then resolved from the
+   *  account at send time, and the replace rule matches by this id. A literal-address kind must NOT carry one
+   *  (`OutboxKindMismatchError`). */
+  recipientUserId?: string;
 };
 
 /** Raised by `enqueueEmail` when `expiresAt` is further out than `MAX_EXPIRY_MS` (or is not a date): such a row could be
@@ -45,25 +54,100 @@ export class OutboxExpiryTooLongError extends Error {
   }
 }
 
+/** Raised when a message carries `recipientUserId` but its kind is not addressed to an account (`OUTBOX_KIND_FACTS[kind].to`
+ *  is not `account`: a literal address, or the staff address): the id would never be read, and a replace rule that matched by
+ *  it would silently pair rows it should not. Names the kind and ref type; never the address or the id. */
+export class OutboxKindMismatchError extends Error {
+  readonly code = "EMAIL_OUTBOX_KIND_MISMATCH";
+  constructor(kind: OutboxKind, refType: string) {
+    super(
+      `email outbox: a ${kind} email (${refType}) is not addressed to an account, so it must not carry an account id ` +
+        "(recipientUserId); refusing to queue the email",
+    );
+    this.name = "OutboxKindMismatchError";
+  }
+}
+
+/** Raised by `enqueueEmail` when its insert wrote no row. The writer's `on conflict do nothing` has no target (see the header),
+ *  so a primary-key or provider-id collision is skipped as quietly as a once-key; without this a caller would be handed the id
+ *  of a row that was never written. Names the kind and ref type; never the address or the body. */
+export class OutboxInsertSkippedError extends Error {
+  readonly code = "EMAIL_OUTBOX_INSERT_SKIPPED";
+  constructor(kind: OutboxKind, refType: string) {
+    super(
+      `email outbox: the insert of a ${kind} email (${refType}) wrote no row and no once-key explains it ` +
+        "(a primary-key or provider-id collision); refusing to report it queued",
+    );
+    this.name = "OutboxInsertSkippedError";
+  }
+}
+
 /**
- * Insert one queued row on `db` and return its id (client-made). Throws, BEFORE any statement, so the caller's
- * transaction refuses as a whole:
- *  - `OutboxExpiryTooLongError` when `expiresAt` is more than `MAX_EXPIRY_MS` from now (or not a date);
- *  - `OutboxKeyUnavailableError` when the box can send mail but cannot seal the body.
- * A past `expiresAt` is accepted: that row simply ends `expired`, unsent.
+ * The `expiresAt` for an email that is worthless after `deadline` (the end of the thing it is about; `null` when it has no
+ * end): the deadline, but never further out than `MAX_EXPIRY_MS` from `nowMs`, the bound `enqueueEmail` holds every row to. A
+ * deadline already past is returned as it is (the row simply ends `expired`, unsent). An Invalid Date stays invalid, so the
+ * writer still refuses it by name rather than the bound laundering it.
  */
-export async function enqueueEmail(db: Tx | typeof sql, m: OutboxMessage): Promise<string> {
+export function expiryWithin(deadline: Date | null, nowMs: number = Date.now()): Date {
+  return new Date(Math.min(deadline?.getTime() ?? Infinity, nowMs + MAX_EXPIRY_MS));
+}
+
+/**
+ * The one insert both writers share. Throws, BEFORE any statement, so the caller's transaction refuses as a whole:
+ *  - `OutboxExpiryTooLongError` when `expiresAt` is more than `MAX_EXPIRY_MS` from now (or not a date);
+ *  - `OutboxKindMismatchError` when a literal-address kind carries `recipientUserId`;
+ *  - `OutboxKeyUnavailableError` when the box can send mail but cannot seal the body.
+ * A past `expiresAt` is accepted: that row simply ends `expired`, unsent. Returns the client-made id and how many rows the
+ * statement wrote (`on conflict do nothing` writes none when a unique index already holds the row).
+ *
+ * The facts guard is one-directional on purpose: an account kind without an id and a `transactional` flag that differs from the
+ * kind's fact are NOT refused here. Phase-1 call sites enqueue `chess_invite` with no user id, and others pass
+ * `transactional: false` on a T kind to reach the suppression gate; the facts harness pins both on every kind's real rows.
+ */
+async function insertQueued(db: Tx | typeof sql, m: OutboxMessage, dedupeKey: string | null): Promise<{ id: string; written: number }> {
   // `!(x <= max)` and not `x > max`: an Invalid Date is NaN, and NaN compares false both ways.
   if (!(m.expiresAt.getTime() - Date.now() <= MAX_EXPIRY_MS)) throw new OutboxExpiryTooLongError(m.kind, m.refType);
+  if (m.recipientUserId !== undefined && OUTBOX_KIND_FACTS[m.kind].to !== "account") throw new OutboxKindMismatchError(m.kind, m.refType);
   const id = randomUUID();
   const sealed = sealBody({ html: m.html, text: m.text });
-  await db`
+  const result = await db`
     insert into email_outbox
-      (id, kind, ref_type, ref_id, org_id, meta, recipient, subject, body_sealed, transactional, expires_at)
+      (id, kind, ref_type, ref_id, org_id, meta, recipient, subject, body_sealed, transactional, expires_at,
+       recipient_user_id, dedupe_key)
     values
       (${id}, ${m.kind}, ${m.refType}, ${m.refId}, ${m.orgId}, ${db.json(m.meta ?? {})}, ${m.to}, ${m.subject},
-       ${sealed}, ${m.transactional}, ${m.expiresAt})`;
+       ${sealed}, ${m.transactional}, ${m.expiresAt}, ${m.recipientUserId ?? null}, ${dedupeKey})
+    on conflict do nothing`;
+  return { id, written: result.count };
+}
+
+/**
+ * Insert one queued row on `db` and return its id (client-made). Throws, BEFORE any statement, on an expiry past the bound, a
+ * literal kind that carries an account id, or a box that cannot seal the body (see `insertQueued`). Throws
+ * `OutboxInsertSkippedError` when the insert wrote nothing: a row with no once-key is never legitimately skipped.
+ */
+export async function enqueueEmail(db: Tx | typeof sql, m: OutboxMessage): Promise<string> {
+  const { id, written } = await insertQueued(db, m, null);
+  if (written === 0) throw new OutboxInsertSkippedError(m.kind, m.refType);
   return id;
+}
+
+/**
+ * `enqueueEmail` for an email that must exist at most once per `(kind, dedupeKey)`: returns the new row's id, or `null` when
+ * the key is already taken (no row written, nothing thrown, the caller's transaction still usable, the original row untouched).
+ * The same refusals as `enqueueEmail`, before any statement.
+ *
+ * THE KEY IS GLOBAL. `email_outbox_once_idx` is unique on `(kind, dedupe_key)` across ALL organisations, not per organisation,
+ * so a key must embed a globally unique id (a row UUID or a Stripe id, for example `<registration_id>:submit`), never a
+ * per-org counter, a slug or a bare ordinal: two organisations that both built `1:submit` would silence each other's email.
+ * A key is freed when `email_outbox_cancel` ends its row, so a voided email can be queued again.
+ *
+ * `null` also covers a primary-key or provider-id collision, which the target-less clause cannot tell apart; the id is a fresh
+ * UUID and `provider_id` is null at insert, so neither happens in practice.
+ */
+export async function enqueueEmailOnce(db: Tx | typeof sql, m: OutboxMessage & { dedupeKey: string }): Promise<string | null> {
+  const { id, written } = await insertQueued(db, m, m.dedupeKey);
+  return written === 0 ? null : id;
 }
 
 /**

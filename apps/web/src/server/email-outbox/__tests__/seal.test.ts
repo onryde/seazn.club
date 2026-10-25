@@ -9,7 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sealWith } from "@/server/relay/crypto";
-import { OutboxKeyUnavailableError, openBody, sealBody, type EmailBody } from "../seal";
+import { OutboxKeyUnavailableError, assertOutboxCanQueue, openBody, sealBody, type EmailBody } from "../seal";
 
 /** The key a developer's copy of apps/web/.env.example carries, read from the FILE (the rulebook for what is "published"),
  *  never from the constant seal.ts keeps. */
@@ -284,5 +284,97 @@ describe("the published sample key under NODE_ENV=production", () => {
     expect(seen.get("unset")).not.toBe(seen.get("sample"));
     expect(seen.get("unset")).toMatch(/^EMAIL_OUTBOX_KEK_MISSING\|/);
     expect(seen.get("sample")).toMatch(/^EMAIL_OUTBOX_KEK_SAMPLE\|/);
+  });
+});
+
+// Phase 3 wave 1 (plan P4): a caller that must refuse BEFORE its own transaction (the registration submit mints a Checkout
+// session after the fact commits, so it cannot let the enqueue be the first to find out the box cannot queue) asks the same rule
+// `sealBody` applies, without a body to seal.
+describe("assertOutboxCanQueue", () => {
+  it("throws OutboxKeyUnavailableError with EMAIL_OUTBOX_KEK_MISSING when a Resend key is set and the KEK is unusable, over every unusable shape", () => {
+    let checked = 0;
+    for (const [label, kek] of UNUSABLE_KEKS) {
+      vi.stubEnv("EMAIL_OUTBOX_KEK", kek);
+      let caught: unknown;
+      try {
+        assertOutboxCanQueue();
+      } catch (e) {
+        caught = e;
+      }
+      expect(caught, label).toBeInstanceOf(OutboxKeyUnavailableError);
+      expect((caught as OutboxKeyUnavailableError).code, label).toBe("EMAIL_OUTBOX_KEK_MISSING");
+      expect((caught as OutboxKeyUnavailableError).problem, label).toBe("unset");
+      checked++;
+    }
+    expect(checked).toBe(UNUSABLE_KEKS.length);
+  });
+
+  it("returns when both the KEK and the Resend key are unset (dev, CI: nothing could send the row anyway), over every unusable shape", () => {
+    vi.stubEnv("RESEND_API_KEY", undefined);
+    let checked = 0;
+    for (const [label, kek] of UNUSABLE_KEKS) {
+      vi.stubEnv("EMAIL_OUTBOX_KEK", kek);
+      expect(() => assertOutboxCanQueue(), label).not.toThrow();
+      checked++;
+    }
+    expect(checked).toBe(UNUSABLE_KEKS.length);
+  });
+
+  it("returns for a key of one's own, with or without a Resend key (the positive pair of the refusals above)", () => {
+    expect(() => assertOutboxCanQueue()).not.toThrow(); // the file's beforeEach: own KEK and a Resend key
+    vi.stubEnv("RESEND_API_KEY", undefined);
+    expect(() => assertOutboxCanQueue()).not.toThrow();
+  });
+
+  it("refuses the published sample key under NODE_ENV=production with EMAIL_OUTBOX_KEK_SAMPLE, and accepts it elsewhere", () => {
+    expect(PUBLISHED_SAMPLE).toMatch(/^[0-9a-f]{64}$/); // a vacuous parse would refuse nothing
+    vi.stubEnv("EMAIL_OUTBOX_KEK", PUBLISHED_SAMPLE);
+    vi.stubEnv("NODE_ENV", "production");
+    let caught: unknown;
+    try {
+      assertOutboxCanQueue();
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(OutboxKeyUnavailableError);
+    expect((caught as OutboxKeyUnavailableError).code).toBe("EMAIL_OUTBOX_KEK_SAMPLE");
+    expect((caught as Error).message).not.toContain(PUBLISHED_SAMPLE);
+    for (const env of ["development", "test"]) {
+      vi.stubEnv("NODE_ENV", env);
+      expect(() => assertOutboxCanQueue(), env).not.toThrow();
+    }
+  });
+
+  it("agrees with sealBody on every environment (one rule, two callers): it throws exactly when sealing would", () => {
+    const keks: Array<string | undefined> = [...UNUSABLE_KEKS.map(([, k]) => k), KEK, PUBLISHED_SAMPLE];
+    let checked = 0;
+    for (const resend of [true, false]) {
+      for (const env of ["production", "test"]) {
+        for (const kek of keks) {
+          vi.stubEnv("RESEND_API_KEY", resend ? "re_test" : undefined);
+          vi.stubEnv("NODE_ENV", env);
+          vi.stubEnv("EMAIL_OUTBOX_KEK", kek);
+          const sealThrows = (() => {
+            try {
+              sealBody(BODY);
+              return false;
+            } catch {
+              return true;
+            }
+          })();
+          const assertThrows = (() => {
+            try {
+              assertOutboxCanQueue();
+              return false;
+            } catch {
+              return true;
+            }
+          })();
+          expect(assertThrows, `resend=${resend} env=${env} kek=${kek}`).toBe(sealThrows);
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBe(2 * 2 * (UNUSABLE_KEKS.length + 2));
   });
 });

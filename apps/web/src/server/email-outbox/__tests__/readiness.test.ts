@@ -105,6 +105,22 @@ describe("the readiness rule, over every (Resend key, outbox key, NODE_ENV) comb
     expect(outboxReadinessMessage("unset")).toMatch(/RESEND_API_KEY/);
     expect(outboxReadinessMessage("sample")).toMatch(/sample/i);
   });
+
+  // Phase 3 (spec §8): after wave 1 every action that sends email queues through the outbox, so a missing key breaks all of
+  // them, not only sign-in. The text the on-call person reads must say so.
+  it("both problems say every action that sends email will fail, and neither still claims only sign-in will", () => {
+    let checked = 0;
+    for (const problem of ["unset", "sample"] as const) {
+      const message = outboxReadinessMessage(problem);
+      expect(message, problem).toContain("every action that sends email will fail");
+      expect(message, problem).not.toContain("sign-in requests will fail");
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // The remedies stay told apart: set the key, or set a key of one's own.
+    expect(outboxReadinessMessage("unset")).toMatch(/until it is set$/);
+    expect(outboxReadinessMessage("sample")).toMatch(/until a key of its own is set$/);
+  });
 });
 
 // The seam. register() is what Next calls once before the server takes a request; the report only helps if it is called.
