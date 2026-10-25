@@ -47,6 +47,24 @@ function step(job: string, name: string): string | null {
   return lines.slice(i, j).join("\n");
 }
 
+/** The steps (their `- ` header lines, in order, de-duplicated) that carry `needle` on any line of their own. A comment block between
+ *  steps belongs to no step, and a step without a `name:` is still counted. */
+function stepsCarrying(job: string, needle: string): { owners: string[]; steps: number } {
+  const lines = job.split("\n");
+  const owners: string[] = [];
+  let current: string | null = null;
+  let steps = 0;
+  for (const l of lines) {
+    if (/^ {6}- /.test(l)) {
+      current = l;
+      steps++;
+    } else if (/^ {6}#/.test(l)) current = null;
+    else if (/^ {4}\S/.test(l)) current = null;
+    if (current !== null && l.includes(needle) && !owners.includes(current)) owners.push(current);
+  }
+  return { owners, steps };
+}
+
 /** A step's `env:` map - the `key: value` lines at the step's env indent (10), quotes stripped. */
 function envOf(stepText: string): Map<string, string> {
   const lines = stepText.split("\n");
@@ -113,8 +131,8 @@ describe("engine-split 5.6 CI smoke: the floor override is witnessed against a t
     const sport = derive![1]!;
     expect(server!).toContain(`export ENGINE_EPOCH_FLOOR_OVERRIDE="${sport}=\${floor}"`);
     expect(server!, "no typed override value").not.toMatch(/ENGINE_EPOCH_FLOOR_OVERRIDE=["']?[a-z_]+=\d/);
-    // Exported BEFORE the server starts (the server reads it at boot), and handed to the NEXT step through GITHUB_ENV (the smoke
-    // process asserts it is the value the server booted with).
+    // Exported BEFORE the server starts (the server reads it at boot), and handed to the smoke step through a STEP OUTPUT (the smoke
+    // process asserts it is the value the server booted with). Not through GITHUB_ENV: that would put it in every later step of the job.
     const exportAt = server!.indexOf('export ENGINE_EPOCH_FLOOR_OVERRIDE="');
     const startAt = server!.indexOf("node apps/web/.next/standalone/apps/web/server.js");
     expect(exportAt, "exported").toBeGreaterThan(-1);
@@ -126,7 +144,14 @@ describe("engine-split 5.6 CI smoke: the floor override is witnessed against a t
     expect(overlayAt, "the compiled server dir is overlaid onto the standalone tree").toBeGreaterThan(-1);
     expect(startAt, "before the server starts").toBeGreaterThan(overlayAt);
     expect(DOCKERFILE, "and it is the one production does").toContain("COPY --from=builder --chown=nextjs:nodejs /app/apps/web/.next/server ./apps/web/.next/server");
-    expect(server!).toContain('echo "ENGINE_EPOCH_FLOOR_OVERRIDE=${ENGINE_EPOCH_FLOOR_OVERRIDE}" >> "$GITHUB_ENV"');
+    expect(server!).toContain('echo "override=${ENGINE_EPOCH_FLOOR_OVERRIDE}" >> "$GITHUB_OUTPUT"');
+    const id = /^ {8}id: ([a-z0-9-]+)$/m.exec(server!)?.[1];
+    expect(id, "the server step has an id for its output").toBeDefined();
+    expect(envOf(smoke!).get("ENGINE_EPOCH_FLOOR_OVERRIDE"), "the smoke step's own env takes it from that output").toBe(`\${{ steps.${id}.outputs.override }}`);
+    expect(
+      CI.split("\n").filter((l) => l.includes("ENGINE_EPOCH_FLOOR_OVERRIDE") && l.includes("GITHUB_ENV")),
+      "never through the job environment",
+    ).toHaveLength(0);
     // The sport is the one the smoke suite drives, and the ACTIVE / OVERRIDDEN greps name it.
     expect(SMOKE, "the suite drives the same sport").toContain(`const SPORT = "${sport}";`);
     expect(server!).toContain(`'"sport":"${sport}"'`);
@@ -136,7 +161,11 @@ describe("engine-split 5.6 CI smoke: the floor override is witnessed against a t
     expect(first!, "the first server runs with the lever off").not.toContain("ENGINE_EPOCH_FLOOR_OVERRIDE");
     expect(step(job, "Start a second server with a compositor image (R2004)")!, "the composed server too").not.toContain("ENGINE_EPOCH_FLOOR_OVERRIDE");
     expect(step(job, "Run smoke test")!, "the full smoke too").not.toContain("ENGINE_EPOCH_FLOOR_OVERRIDE");
-    expect(envOf(smoke!).has("ENGINE_EPOCH_FLOOR_OVERRIDE"), "the smoke step inherits it from GITHUB_ENV, it does not retype it").toBe(false);
+    // Exactly the two steps that need it carry it - nothing before, nothing after (the job's later steps run the gallery and other
+    // servers' checks, and none of them may see a lowered floor).
+    const { owners, steps } = stepsCarrying(job, "ENGINE_EPOCH_FLOOR_OVERRIDE");
+    expect(steps, "premise: the job's steps were read").toBeGreaterThan(10);
+    expect(owners, "only the server step and the smoke step").toEqual([`      - name: ${SERVER_STEP}`, `      - name: ${SMOKE_STEP}`]);
   });
 
   it("the greps are the gate: each names a label smoke.ts prints, a log code the server really emits, and the step count is the suite's own", () => {
