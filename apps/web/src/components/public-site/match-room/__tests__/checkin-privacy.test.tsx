@@ -187,8 +187,13 @@ describe("the division page's arbiter entry line says what the panel does now: o
     expect(checked, "anti-vacuity: every locale").toBe(LOCALES.length);
   });
 
-  it("is the line the division page draws - counted from the page's source", () => {
-    const src = readFileSync(join(__dirname, "..", "..", "..", "..", "app", "o", "[orgSlug]", "c", "[compSlug]", "d", "[divSlug]", "page.tsx"), "utf8");
-    expect(src.split('t(dict, "arbiter.entry.body")').length - 1).toBe(1);
+  // The line is drawn by `ArbiterEntryCard` since the Fixtures tab handed the round to the Arbiter Panel (15e6658e88); the division
+  // page only mounts that card. So the guard is two counted facts, in the two files that now carry it: the card draws the key exactly
+  // once, and the page mounts the card exactly once. Either one moving away again reds this, instead of the line vanishing silently.
+  it("is the line the division page draws: the entry card draws the key once, and the page mounts the card once - counted from the sources", () => {
+    const card = readFileSync(join(__dirname, "..", "..", "..", "v2", "arbiter-entry-card.tsx"), "utf8");
+    expect(card.split('t(dict, "arbiter.entry.body")').length - 1, "the card draws the line").toBe(1);
+    const page = readFileSync(join(__dirname, "..", "..", "..", "..", "app", "o", "[orgSlug]", "c", "[compSlug]", "d", "[divSlug]", "page.tsx"), "utf8");
+    expect(page.split("<ArbiterEntryCard ").length - 1, "the division page mounts the card").toBe(1);
   });
 });
