@@ -1,7 +1,7 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
-import { TAG, apiJson, activeOrg, expectNoHorizontalScroll } from "./helpers";
-import { seedOnlineRound } from "./match-room-kit";
+import { TAG, apiJson, activeOrg, expectNoHorizontalScroll, linkPersonToUserBySql, withDb } from "./helpers";
+import { seedOnlineRound, seedUser } from "./match-room-kit";
 import { closeOpenContexts } from "./spectator-public-helpers";
 import { dictString, publicJson, spectator, uiString, type W2Locale } from "./spectator-w2-kit";
 
@@ -653,18 +653,22 @@ test.describe("online chess: the division's camera group (Task 6's owed browser 
     expect(errors).toEqual([]);
   });
 
-  // Owner ruling 2026-10-25 ("apply rec"): switching a chess division to online play while players have no Lichess link WARNS,
-  // naming them, and never blocks - clubs switch first and collect links later. Driven end to end: real entrants with persons
-  // (an entrant typed in the UI always has one; no Lichess account behind either), the real Settings tab, the real save. The
-  // drop-off when a player links is a database fact (unlinked-lichess-players.test.ts): there is no Lichess to link to here.
-  test("online play with unlinked players: nobody unlinked is silent; choosing Lichess warns and names them; the save still lands; the warning stays after it and after a reload, in all four languages, at 320/768/1280", async ({
+  // Owner ruling 2026-10-25 ("apply rec"): switching a chess division to online play while players cannot be paired online
+  // WARNS, naming them, and never blocks - clubs switch first and collect links later. Fix round 1 (controller): "cannot be
+  // paired" is the seat gate's word, so the warning has TWO sentences - players with no Lichess link (and an entrant with
+  // nobody on it, which nobody can claim a seat for), and players whose link must be reconnected (identity-only, so the seat
+  // says lichess_reconsent_required). Driven end to end: real entrants, the real Settings tab, the real save. The drop-off
+  // when a player links is a database fact (lichess-link-gaps.test.ts): there is no Lichess to link to here.
+  test("online play with players who cannot be paired: nobody short is silent; choosing Lichess warns in two sentences and names them; the save still lands; the warning stays after it and after a reload, in all four languages, at 320/768/1280; each sentence stands alone", async ({
     page,
     request,
   }) => {
-    test.setTimeout(240_000);
+    test.setTimeout(300_000);
     const errors = pageErrors(page);
     const rig = await seedChessDivision(request, page, { online: false });
     const warning = page.getByTestId("division-online-unlinked");
+    const reconnect = page.getByTestId("division-online-reconnect");
+    const gaps = page.getByTestId("division-online-link-gaps");
     const openFormat = async (locale: W2Locale = "en") => {
       const group = page.getByRole("button", { name: new RegExp(escapeRe(uiString(locale, "divset.format"))) }).first();
       if ((await group.getAttribute("aria-expanded")) !== "true") await group.click();
@@ -675,48 +679,68 @@ test.describe("online chess: the division's camera group (Task 6's owed browser 
     await openFormat();
     await page.getByTestId("division-online-play").selectOption("lichess");
     await expect(warning, "no entrants: nothing to warn about").toHaveCount(0);
+    await expect(reconnect, "no entrants: nothing to reconnect").toHaveCount(0);
+    await expect(gaps, "no entrants: no box at all").toHaveCount(0);
 
-    // Two players with a person each and no Lichess account (the division is still Off, so no link is demanded of the roster).
-    const added = await apiJson(
-      request,
-      `/api/v1/divisions/${rig.divisionId}/entrants`,
-      "POST",
-      ["Ann Unlinked", "Ben Unlinked"].map((n) => ({
+    // One of each gap (the division is still Off, so no link is demanded of the roster): Ann and Ben are people with no
+    // Lichess account; Cat has a Seazn account whose Lichess link is identity-only (no token, no consent); and an entrant
+    // with no member at all, which no one can claim a seat for.
+    const cat = await seedUser("Cat Reconnect");
+    const catPerson = await apiJson<{ id: string }>(request, "/api/v1/persons", "POST", { full_name: "Cat Reconnect", consent: { public_name: true } });
+    expect(catPerson.status, JSON.stringify(catPerson.error)).toBeLessThan(300);
+    await linkPersonToUserBySql(catPerson.data!.id, cat.userId);
+    const catLichessId = `e2e-gap-${TAG}-${Math.random().toString(36).slice(2, 8)}`.toLowerCase();
+    await withDb(async (sql) => {
+      await sql`
+        insert into user_external_accounts (user_id, provider, external_user_id, username, scopes)
+        values (${cat.userId}, 'lichess', ${catLichessId}, ${catLichessId}, '{}'::text[])`;
+    });
+    const added = await apiJson<{ id: string; display_name: string }[]>(request, `/api/v1/divisions/${rig.divisionId}/entrants`, "POST", [
+      ...["Ann Unlinked", "Ben Unlinked"].map((n) => ({
         kind: "individual",
         display_name: n,
         members: [{ new_person: { full_name: n }, is_captain: false, roles: [] }],
       })),
-    );
+      { kind: "individual", display_name: "Cat Reconnect", members: [{ person_id: catPerson.data!.id, is_captain: false, roles: [] }] },
+      { kind: "individual", display_name: "Board 3 (nobody yet)", members: [] },
+    ]);
     expect(added.status, JSON.stringify(added.error)).toBeLessThan(300);
+    expect(added.data, "anti-vacuity: four entrants were created").toHaveLength(4);
 
+    const listIn = (locale: W2Locale, items: string[]) => new Intl.ListFormat(locale, { style: "long", type: "conjunction" }).format(items);
+    // Alphabetical without regard to case; the member-less entrant is named by its own name, beside the people.
     const sentence = (locale: W2Locale) =>
-      uiString(locale, "divset.onlinePlay.unlinked.other", {
-        count: 2,
-        names: new Intl.ListFormat(locale, { style: "long", type: "conjunction" }).format(["Ann Unlinked", "Ben Unlinked"]),
-      });
+      uiString(locale, "divset.onlinePlay.unlinked.other", { count: 3, names: listIn(locale, ["Ann Unlinked", "Ben Unlinked", "Board 3 (nobody yet)"]) });
+    const reconnectSentence = (locale: W2Locale) =>
+      uiString(locale, "divset.onlinePlay.reconnect.one", { count: 1, names: "Cat Reconnect" });
 
     // The switch moment: Off is silent, Lichess warns - before anything is saved - and nothing is disabled.
     await gotoSettings(page, rig.settings);
     await openFormat();
     await page.getByTestId("division-online-play").selectOption("off");
-    await expect(warning).toHaveCount(0);
+    await expect(gaps).toHaveCount(0);
     await page.getByTestId("division-online-play").selectOption("lichess");
     await expect(warning).toBeVisible();
     await expect(warning).toHaveText(sentence("en"));
+    await expect(reconnect, "the reconnect player is a sentence of their own").toBeVisible();
+    await expect(reconnect).toHaveText(reconnectSentence("en"));
+    await expect(warning, "Cat is not in the no-link sentence").not.toContainText("Cat Reconnect");
+    await expect(gaps).toHaveAttribute("role", "status");
     const stillOff = await apiJson<{ config: { onlinePlay?: string } }>(request, `/api/v1/divisions/${rig.divisionId}`);
     expect(stillOff.data?.config.onlinePlay, "choosing it saved nothing").toBeUndefined();
     await expect(page.getByTestId("division-online-play")).toBeEnabled();
     const save = page.getByRole("button", { name: uiString("en", "divset.saveRules") });
     await expect(save, "the warning does not block the save").toBeEnabled();
 
-    // The save lands - 200, stored - and the warning is still there on the refreshed page.
+    // The save lands - 200, stored - and both sentences are still there on the refreshed page.
     await save.click();
     await expect(page.getByText("Match rules saved.")).toBeVisible({ timeout: 15_000 });
     const stored = await apiJson<{ config: { onlinePlay?: string } }>(request, `/api/v1/divisions/${rig.divisionId}`);
-    expect(stored.data?.config.onlinePlay, "the switch was saved with two players unlinked").toBe("lichess");
+    expect(stored.data?.config.onlinePlay, "the switch was saved with three unlinked and one to reconnect").toBe("lichess");
     await expect(warning, "still warned after the save").toHaveText(sentence("en"));
+    await expect(reconnect, "still told to reconnect after the save").toHaveText(reconnectSentence("en"));
 
-    // After a reload, in every language, at every width: the saved division keeps the warning, and the page never scrolls sideways.
+    // After a reload, in every language, at every width: the saved division keeps both sentences, and the page never scrolls sideways.
     let checked = 0;
     for (const locale of LOCALES) {
       await setLocaleCookie(page, locale);
@@ -726,13 +750,38 @@ test.describe("online chess: the division's camera group (Task 6's owed browser 
         await openFormat(locale);
         await expect(warning, `${locale} ${width}`).toBeVisible();
         await expect(warning, `${locale} ${width}`).toHaveText(sentence(locale));
+        await expect(reconnect, `${locale} ${width}`).toBeVisible();
+        await expect(reconnect, `${locale} ${width}`).toHaveText(reconnectSentence(locale));
         await expectNoHorizontalScroll(page);
-        const box = (await warning.boundingBox())!;
-        expect(box.x + box.width, `${locale}: the warning fits a ${width}px viewport`).toBeLessThanOrEqual(width);
+        for (const el of [gaps, warning, reconnect]) {
+          const box = (await el.boundingBox())!;
+          expect(box.x + box.width, `${locale}: the warning fits a ${width}px viewport`).toBeLessThanOrEqual(width);
+        }
         checked++;
       }
     }
     expect(checked, "anti-vacuity: four languages at three widths").toBe(12);
+
+    // Each sentence stands alone. Withdraw the three with no link (a departed entrant is owed nothing): only the reconnect
+    // sentence is left. Withdraw Cat too: nothing is left, and the box goes with it.
+    await setLocaleCookie(page, "en");
+    await page.setViewportSize({ width: 1280, height: 900 });
+    for (const e of added.data!.filter((x) => x.display_name !== "Cat Reconnect")) {
+      const res = await apiJson(request, `/api/v1/entrants/${e.id}`, "PATCH", { status: "withdrawn" });
+      expect(res.status, `withdraw ${e.display_name}: ${JSON.stringify(res.error)}`).toBeLessThan(300);
+    }
+    await gotoSettings(page, rig.settings);
+    await openFormat();
+    await expect(reconnect, "only Cat is left to reconnect").toHaveText(reconnectSentence("en"));
+    await expect(warning, "nobody is unlinked now: that sentence is gone").toHaveCount(0);
+    await expect(gaps).toBeVisible();
+    const cats = added.data!.find((x) => x.display_name === "Cat Reconnect")!;
+    const gone = await apiJson(request, `/api/v1/entrants/${cats.id}`, "PATCH", { status: "withdrawn" });
+    expect(gone.status, JSON.stringify(gone.error)).toBeLessThan(300);
+    await gotoSettings(page, rig.settings);
+    await openFormat();
+    await expect(page.getByTestId("division-online-play"), "premise: the Online play control is still there").toBeVisible();
+    await expect(gaps, "nobody left: no box").toHaveCount(0);
     expect(errors).toEqual([]);
   });
 });
