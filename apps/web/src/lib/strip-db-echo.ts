@@ -12,11 +12,18 @@
 //
 // What stays is what says WHAT went wrong: name, message, code, constraint_name, table_name, column_name, schema_name, stack.
 //
-// Used at three seams, because an error reaches the outside world by three routes: pino's `err` serializer (server/logger.ts,
+// The strip goes by field NAME on any error-shaped value (a message and a stack), not by where the error came from: a non-database
+// error that happens to carry a `detail` (a Stripe error's, say) loses it too, exactly as in the logger's and Sentry's hooks. That
+// is the accepted trade for not having to know an error's origin.
+//
+// Used at four seams, because an error reaches the outside world by four routes: pino's `err` serializer (server/logger.ts,
 // which also feeds Sentry Logs through pinoIntegration), Sentry's `beforeSend` (the console breadcrumb that Next's own
 // `console.error(err)` leaves on an event, and any `extra` that carries an error) and `beforeSendLog` (a log attribute that
-// holds an error). Not a repair of `message`: a cast error's message quotes the value ("invalid input syntax for type integer:
-// \"abc\""), which is parked.
+// holds an error), and the process's own `console.error` (server/console-db-echo-scrub.ts: Next's uncaught-error log and every
+// `console.error("...", err)` in the app print an error with util.inspect, which writes every enumerable field, `detail` and
+// all). That last route needs the error to stay an Error so the printed line keeps its `PostgresError: message` head and its
+// stack frames: `stripDbEchoFromErrors`. Not a repair of `message`: a cast error's message quotes the value ("invalid input
+// syntax for type integer: \"abc\""), which is parked.
 //
 // A LEAF: it imports nothing, so the logger, the Sentry configs and a test can all take it.
 
@@ -49,56 +56,157 @@ function isPlain(v: object): boolean {
  * a branch with nothing to strip keeps its original reference, and a thing that is not data (a string, a Date, a class
  * instance that is not an error) is left as it is. An `Error` instance comes back as a plain object carrying its name,
  * message and stack (all non-enumerable on the original, so absent from `JSON.stringify`) and its own enumerable fields.
+ *
+ * A reference from below a node back up to it (`e.self = e`, a cause cycle, a holder that contains itself) lands on the node's
+ * COPY, so a cycle stays a cycle and never hands back the original with its fields. A branch on a cycle is therefore always a
+ * copy.
  */
 export function stripDbEcho<T>(value: T): T {
-  return walk(value, new WeakMap(), 0) as T;
+  return walk(value, { seen: new WeakMap(), print: false, depthLimit: MAX_DEPTH, maxItems: Infinity, getters: true }, 0) as T;
 }
 
-function walk(value: unknown, seen: WeakMap<object, unknown>, depth: number): unknown {
-  if (typeof value !== "object" || value === null || depth > MAX_DEPTH) return value;
-  if (seen.has(value)) return seen.get(value);
+/** How far a print-mode walk goes, and what it may call: what the line being made will reach. */
+export interface PrintBounds {
+  /** Nesting levels `util.inspect` prints below the argument (its `depth`); omitted = as deep as `stripDbEcho` goes (a %j or %o line). */
+  depth?: number;
+  /** Array items `util.inspect` prints (its `maxArrayLength`); omitted = all. */
+  maxItems?: number;
+  /** The line is JSON (`%j`): `JSON.stringify` calls every getter, so the walk must too and strip what they return. Default: no. */
+  getters?: boolean;
+}
+
+/**
+ * The same strip, for a value about to be PRINTED. The only differences are in what the output is made of and how far it looks:
+ *  - an `Error` instance comes back as an `Error` of the same class (same prototype, same message, name and stack, its `cause`
+ *    and `errors` carried as the non-enumerable own properties they are), not as a plain object, so `util.inspect` renders it
+ *    exactly as it rendered the original minus the dropped fields; and an Error with nothing to strip (nor anywhere in its cause
+ *    chain) comes back as the SAME object rather than a copy;
+ *  - with `bounds` it stops where the DEFAULT `util.inspect` stops printing: a node deeper than `depth`, or an array item past
+ *    `maxItems`, is not on that line, so it is neither walked nor copied. That holds only for a line made by inspect's defaults. A
+ *    `%j` line is JSON.stringify (no limit, calls getters) and a `%o` line is inspect with depth 4 and showHidden, so the caller
+ *    passes no bounds for those (console-db-echo-scrub.ts decides which);
+ *  - an accessor on a plain object is copied as an accessor and not called, as `inspect` shows `[Getter]` without calling it
+ *    (unless `bounds.getters`: JSON calls it). An accessor on an ERROR is always called and its result stripped: Next's patched
+ *    inspect rebuilds every error by reading each of its enumerable keys;
+ *  - an error's own NON-enumerable echo fields (postgres.js keeps `query`, `parameters`, `args` and `types` so, with the bind values in
+ *    them) are left out of the copy, because `%o` prints non-enumerable properties (showHidden).
+ * Everything else, the field list, the walk and the cycle handling, is `stripDbEcho`'s own. Nothing is mutated: code that reads
+ * `err.detail` after the line is printed still can.
+ */
+export function stripDbEchoFromErrors<T>(value: T, bounds: PrintBounds = {}): T {
+  const ctx: Ctx = {
+    seen: new WeakMap(),
+    print: true,
+    depthLimit: Math.min(bounds.depth ?? MAX_DEPTH, MAX_DEPTH),
+    maxItems: bounds.maxItems ?? Infinity,
+    getters: bounds.getters ?? false,
+  };
+  return walk(value, ctx, 0) as T;
+}
+
+interface Ctx {
+  /** Every node entered so far -> its COPY while it is being built, its result once it is built. */
+  seen: WeakMap<object, unknown>;
+  /** Print mode (`stripDbEchoFromErrors`): Errors stay Errors, accessors are not called. */
+  print: boolean;
+  depthLimit: number;
+  maxItems: number;
+  /** Print mode: call accessors on plain objects too (a %j line). */
+  getters: boolean;
+}
+
+const own = (v: object, key: string) => Object.prototype.hasOwnProperty.call(v, key);
+
+/** An own, non-enumerable data property: how an Error keeps `message`, `stack`, `cause` and `errors`. */
+function hide(target: Bag, key: string, value: unknown): void {
+  Object.defineProperty(target, key, { value, writable: true, configurable: true, enumerable: false });
+}
+
+function walk(value: unknown, ctx: Ctx, depth: number): unknown {
+  if (typeof value !== "object" || value === null || depth > ctx.depthLimit) return value;
+  if (ctx.seen.has(value)) return ctx.seen.get(value);
 
   if (Array.isArray(value)) {
-    seen.set(value, value);
-    let copy: unknown[] | undefined;
-    value.forEach((item, i) => {
-      const next = walk(item, seen, depth + 1);
-      if (!Object.is(next, item)) (copy ??= value.slice())[i] = next;
-    });
-    const out = copy ?? value;
-    seen.set(value, out);
-    return out;
+    // Seeded with the copy BEFORE the items are walked: an item that points back at this array must get the copy, not the original.
+    const out = value.slice();
+    ctx.seen.set(value, out);
+    let changed = false;
+    const reach = Math.min(value.length, ctx.maxItems);
+    for (let i = 0; i < reach; i++) {
+      if (!(i in value)) continue;
+      const item: unknown = value[i];
+      const next = walk(item, ctx, depth + 1);
+      if (!Object.is(next, item)) {
+        out[i] = next;
+        changed = true;
+      }
+    }
+    const result = changed ? out : value;
+    ctx.seen.set(value, result);
+    return result;
   }
 
   const isError = value instanceof Error;
   const errorShaped = isError || isErrorShaped(value);
   if (!errorShaped && !isPlain(value)) return value;
 
-  seen.set(value, value);
   const bag = value as Bag;
-  const out: Bag = {};
-  // An Error's own name/message/stack are not enumerable; carry them, or the copy would be an empty `{}`.
-  let changed = isError;
+  const keepAsError = isError && ctx.print;
+  // An Error kept as an Error is built on the same prototype, so it prints under its own class and name.
+  const out: Bag = keepAsError ? Object.create(Object.getPrototypeOf(value) as object | null) : {};
+  // Seeded with the copy BEFORE anything below is walked (see the array case): `seen.set(value, value)` here handed a
+  // back-reference (`e.self = e`, `e.ctx = { back: e }`, a cause cycle) the original, with its fields, inside the "clean" copy.
+  ctx.seen.set(value, out);
+  // An Error's own name/message/stack are not enumerable; carry them, or the copy would be an empty `{}`. Kept as an Error, the
+  // copy has them as non-enumerable own properties again, and is only a copy when something below it changed.
+  let changed = isError && !ctx.print;
   if (isError) {
-    out.name = value.name;
-    out.message = value.message;
-    out.stack = value.stack;
+    if (ctx.print) {
+      for (const key of ["name", "message", "stack"]) {
+        // An own ENUMERABLE one (PostgresError sets `name` so) is copied with the other enumerable fields below.
+        if (own(value, key) && !Object.prototype.propertyIsEnumerable.call(value, key)) hide(out, key, bag[key]);
+      }
+    } else {
+      out.name = value.name;
+      out.message = value.message;
+      out.stack = value.stack;
+    }
     // Own but non-enumerable too (`new Error(m, { cause })`, AggregateError): the chain is part of what went wrong.
     for (const key of ["cause", "errors"] as const) {
-      if (key in value) out[key] = walk((value as unknown as Bag)[key], seen, depth + 1);
+      if (!(key in value)) continue;
+      const item = bag[key];
+      const next = walk(item, ctx, depth + 1);
+      if (!ctx.print) {
+        out[key] = next;
+      } else {
+        if (!Object.is(next, item)) changed = true;
+        hide(out, key, next);
+      }
     }
+  }
+  if (ctx.print && errorShaped) {
+    // Own but not enumerable (postgres.js with `debug` off): not copied below, but the original still has them, and a %o line prints
+    // them. Their presence is a reason to hand back the copy.
+    for (const field of DB_ECHO_FIELDS) if (own(value, field)) changed = true;
   }
   for (const key of Object.keys(bag)) {
     if (errorShaped && ECHO.has(key)) {
       changed = true;
       continue;
     }
+    if (ctx.print && !isError && !ctx.getters) {
+      const desc = Object.getOwnPropertyDescriptor(bag, key);
+      if (desc && !("value" in desc)) {
+        Object.defineProperty(out, key, desc);
+        continue;
+      }
+    }
     const item = bag[key];
-    const next = walk(item, seen, depth + 1);
+    const next = walk(item, ctx, depth + 1);
     if (!Object.is(next, item)) changed = true;
     out[key] = next;
   }
   const result = changed ? out : value;
-  seen.set(value, result);
+  ctx.seen.set(value, result);
   return result;
 }
