@@ -248,9 +248,12 @@ export function completeTableStage(
         ? foldStandings(entrants, [...openings, ...results.flat(), ...awardDeltas])
         : foldResults(entrants, results);
     // W2d §5.8 step 1: the pool's table is empty when nothing in it counts — no
-    // counted result, no sit-out award, and no carried opening (an opening is
-    // the fold of counted fixtures in its source stage, so it carries a table).
-    const countedFixtures = results.length + awardDeltas.length + openings.length;
+    // counted result, no sit-out award, and no carried opening that holds
+    // something (an opening is the fold of counted fixtures in its source stage;
+    // one with nothing played and no points carries no table — a points-mode
+    // carry plays 0 by construction, so its points are what it carries).
+    const carried = openings.filter((d) => d.played > 0 || d.points !== 0);
+    const countedFixtures = results.length + awardDeltas.length + carried.length;
     const poolDraws = stage.lotsDraws?.get(pool);
     const ranked = rankStandings(rows, {
       cascade: stage.cascade,

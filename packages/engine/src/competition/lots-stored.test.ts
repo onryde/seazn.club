@@ -15,6 +15,7 @@ import { builtinModules } from "../sports/index.ts";
 import { declaredCfgs } from "../testkit/declared-cfgs.ts";
 import { forEachSport } from "../testkit/for-each-sport.ts";
 import { lineupFromCatalog, makeEnvelope } from "../testkit/helpers.ts";
+import { carryDeltas } from "./points.ts";
 import { completeTableStage, type TableFixture, type TableStage } from "./stage.ts";
 import { foldResults, type FixtureResult, type StandingsRow } from "./standings.ts";
 import { lotSeed, membersKeyOf, rankStandings, type RankingResult, type StoredLotsDraw } from "./tiebreakers.ts";
@@ -103,6 +104,74 @@ describe("W2d T5 — the empty table (X-TB-6, anti-goal 3)", () => {
     expect(one.events.filter((e) => e.type === "rank_lock_required")).toEqual([{ type: "rank_lock_required", stageId: "s", group: ["X", "Y"] }]);
     expect(one.newLotsDraws.map((d) => d.membersKey)).toEqual(["X,Y"]);
     expect(one.tables.overall?.some((row) => Object.hasOwn(row, "level"))).toBe(false);
+  });
+
+  it("X-TB-6 after a void: a stored draw is not applied once every counted fixture is voided — level, seed then id, nothing new", () => {
+    // Sequence: the cycle counts and its tie is drawn and stored (C, B, A); then all three results are voided. Spec
+    // §5.8 step 1 comes first: an empty table orders seed then id (no seeds here, so A, B, C) and stores nothing, so
+    // the stored draw is not the order. It differs from the seed order, so applying it would show.
+    const lotsDraws = new Map([["A,B,C", stored(["C", "B", "A"])]]);
+    expect(["C", "B", "A"]).not.toEqual(["A", "B", "C"]);
+    const counted = rankStandings(foldResults(["A", "B", "C"], CYCLE), { cascade: GOALS_LOTS, rngSeed: 7, lotsDraws, countedFixtures: 3 });
+    expect(ids(counted)).toEqual(["C", "B", "A"]);
+    expect(counted.rows.map((row) => row.tieBreak?.drawnAt)).toEqual([DRAWN_AT, DRAWN_AT, DRAWN_AT]);
+
+    const voided = rankStandings(foldResults(["A", "B", "C"], []), { cascade: GOALS_LOTS, rngSeed: 7, lotsDraws, countedFixtures: 0 });
+    expect(ids(voided)).toEqual(["A", "B", "C"]);
+    expect(voided.rows.map((row) => row.level)).toEqual([true, true, true]);
+    expect(voided.rows.filter((row) => row.tieBreak?.drawnAt !== undefined || row.rankLocked === true)).toEqual([]);
+    expect(voided.lotsGroups).toEqual([]);
+    expect(voided.newLotsDraws).toEqual([]);
+
+    // The same through completeTableStage: X, Y and Z drew each other 1-1, stored as Y, X, Z. Counted, that draw locks
+    // the table; once every fixture is voided the stage is level in seed-then-id order (Z seeded 1, then X, Y) and
+    // asks for no lock at all.
+    const order = ["Y", "X", "Z"];
+    const stage: TableStage = {
+      id: "s", kind: "league", entrants: ["X", "Y", "Z"], cascade: ["points", "lots"], rngSeed: 1, seeds: new Map([["Z", 1]]),
+      lotsDraws: new Map([["", new Map([["X,Y,Z", stored(order)]])]]),
+    };
+    expect(order).not.toEqual(["Z", "X", "Y"]);
+    const draws = [goals("X", "Y", 1, 1), goals("Y", "Z", 1, 1), goals("Z", "X", 1, 1)];
+    const played = completeTableStage(stage, draws.map((result, i) => ({ id: `f${i}`, status: "decided", result })));
+    expect(played.events).toEqual([
+      { type: "rank_lock_required", stageId: "s", group: ["X", "Y", "Z"] },
+      { type: "rank_lock", stageId: "s", method: "lots", group: ["X", "Y", "Z"], order, drawnAt: DRAWN_AT },
+      { type: "stage_completed", stageId: "s", finalRanks: order },
+    ]);
+    const allVoid = completeTableStage(stage, draws.map((result, i) => ({ id: `f${i}`, status: "void", result })));
+    expect(allVoid.events).toEqual([{ type: "stage_completed", stageId: "s", finalRanks: ["Z", "X", "Y"] }]);
+    expect(allVoid.newLotsDraws).toEqual([]);
+    expect(allVoid.tables.overall?.map((row) => [row.level, row.tieBreak?.drawnAt])).toEqual([[true, undefined], [true, undefined], [true, undefined]]);
+  });
+
+  it("X-TB-6 completeTableStage: a carry that holds nothing (every opening 0 played, 0 points) counts no fixture, so the table stays level", () => {
+    // A points-mode carry (Jul3/05 §3) from a source table where nothing counted: three zero openings. They carry no
+    // counted fixture, so with the stage's own fixture voided the table is empty (spec §5.8 step 1): seed then id
+    // (Z seeded 1, then X, Y), every row level, nothing drawn.
+    const stage: TableStage = { id: "s", kind: "league", entrants: ["X", "Y", "Z"], cascade: ["points", "lots"], rngSeed: 1, seeds: new Map([["Z", 1]]) };
+    const voidXY: TableFixture[] = [{ id: "v", status: "void", result: goals("X", "Y", 0, 0) }];
+    const zero = carryDeltas(foldResults(["X", "Y", "Z"], []), "points");
+    expect(zero).toHaveLength(3);
+    const nothing = completeTableStage({ ...stage, openingDeltas: zero }, voidXY);
+    expect(nothing.events).toEqual([{ type: "stage_completed", stageId: "s", finalRanks: ["Z", "X", "Y"] }]);
+    expect(nothing.newLotsDraws).toEqual([]);
+    expect(nothing.tables.overall?.map((row) => row.level)).toEqual([true, true, true]);
+
+    // Positive pairs. A points-mode carry plays 0 by construction (points.ts carryDeltas), so 3 carried points alone
+    // make a counted table: X leads, Y and Z are drawn.
+    const xBeatY = carryDeltas(foldResults(["X", "Y", "Z"], [goals("X", "Y", 1, 0)]), "points");
+    expect(xBeatY.map((d) => [d.played, d.points])).toEqual([[0, 3], [0, 0], [0, 0]]);
+    const carriedPoints = completeTableStage({ ...stage, openingDeltas: xBeatY }, voidXY);
+    expect(carriedPoints.tables.overall?.map((row) => row.entrantId)[0]).toBe("X");
+    expect(carriedPoints.newLotsDraws.map((d) => d.membersKey)).toEqual(["Y,Z"]);
+    expect(carriedPoints.tables.overall?.some((row) => Object.hasOwn(row, "level"))).toBe(false);
+    // And a played carry worth 0 points (Y and Z each lost a carried match) is counted too: all three are level on 0
+    // points on a counted table, so they are drawn and nobody is flagged level.
+    const lost: StandingsDelta[] = ["Y", "Z"].map((id) => ({ entrantId: id, played: 1, won: 0, drawn: 0, lost: 1, points: 0, metrics: {} }));
+    const carriedPlays = completeTableStage({ ...stage, openingDeltas: lost }, voidXY);
+    expect(carriedPlays.newLotsDraws.map((d) => d.membersKey)).toEqual(["X,Y,Z"]);
+    expect(carriedPlays.tables.overall?.some((row) => Object.hasOwn(row, "level"))).toBe(false);
   });
 
   it("X-TB-6 completeTableStage counts a sit-out award and a carried opening as counted, so neither table is empty", () => {
@@ -345,6 +414,8 @@ describe("W2d T5 — every sport (rule 6)", () => {
       const cascade: TiebreakerKey[] = ["points", "wins", "lots"];
 
       // The empty table: four rows, nothing counted, nothing drawn.
+      // Differential: the drawing of lots over all four is not the seed-then-id order, so drawing here would show.
+      expect(declaredDraw(R, ["A", "B", "C", "D"]).order, m.key).not.toEqual(["A", "B", "C", "D"]);
       const empty = rankStandings(foldResults(["A", "B", "C", "D"], []), { cascade, rngSeed: R, countedFixtures: 0 });
       expect(ids(empty), m.key).toEqual(["A", "B", "C", "D"]);
       expect(empty.rows.every((row) => row.level === true), m.key).toBe(true);
@@ -360,7 +431,10 @@ describe("W2d T5 — every sport (rule 6)", () => {
 
       // The reload: stored, another seed, the same order and nothing new.
       const lotsDraws = new Map([["A,B,C", stored(abc.order)]]);
-      const reload = rankStandings(foldResults(["D", "C", "B", "A"], cycle), { cascade, rngSeed: R + 1, lotsDraws, countedFixtures: 3 });
+      // Differential: a re-hash under the new seed would draw another order, so only the stored draw lands on abc.
+      // (R + 1 would not do: it happens to draw A, C, B again.)
+      expect(declaredDraw(R + 2, ["A", "B", "C"]).order, m.key).not.toEqual(abc.order);
+      const reload = rankStandings(foldResults(["D", "C", "B", "A"], cycle), { cascade, rngSeed: R + 2, lotsDraws, countedFixtures: 3 });
       expect(ids(reload), m.key).toEqual([...abc.order, "D"]);
       expect(reload.newLotsDraws, m.key).toEqual([]);
       steps++;

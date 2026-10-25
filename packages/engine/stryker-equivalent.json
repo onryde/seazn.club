@@ -194,7 +194,7 @@
       "reason": "Line 83 returns whenever taken.home === taken.away, so line 84 only compares two different counts, where `<` and `<=` agree."
     },
     {
-      "mutant": "src/competition/stage.ts:390:33 EqualityOperator → fixture.round <= prev",
+      "mutant": "src/competition/stage.ts:393:33 EqualityOperator → fixture.round <= prev",
       "original": "fixture.round < prev",
       "line": "if (prev === undefined || fixture.round < prev) outAt.set(id, fixture.round);",
       "reason": "At fixture.round === prev the mutant sets outAt[id] to the value it already holds (prev), so the elimination round each entrant is pinned at is the same map either way; only the strict `>=` mutant changes it (killed)."
@@ -938,7 +938,7 @@
       "reason": "`< 1` and `<= 1` agree on every length but 1. On a class of one the mutant sends it to groupBySort, which returns [[row]] without a comparator call, `groups.length > 1` is false, and the same class comes back unmarked: the `→ false` row's case."
     },
     {
-      "mutant": "src/competition/stage.ts:259:11 ConditionalExpression → false",
+      "mutant": "src/competition/stage.ts:262:11 ConditionalExpression → false",
       "original": "poolDraws === undefined",
       "line": "...(poolDraws === undefined ? {} : { lotsDraws: poolDraws }),",
       "reason": "With the test false the spread always passes `lotsDraws: poolDraws`, and poolDraws is undefined exactly when the original passes no `lotsDraws` key. rankStandings reads the context's lotsDraws in one place, `ctx.lotsDraws?.get(membersKey)` in its lots step, which answers undefined for an absent key and an undefined value alike (`run` spreads the context, but nothing reads `run.lotsDraws`); zero rows and an empty table never reach that lookup in either version. Every ranking, event and new draw is the same."

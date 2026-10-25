@@ -816,6 +816,22 @@ describe("W2d T4 — the refinement driver's guards", () => {
     expect(checked).toBe(8);
   });
 
+  it("zero rows under a counted table: no member is no tie, so nothing is drawn or stored whatever the count", () => {
+    // First principles as above: lots need two entrants level on every key. A caller that counts fixtures over a
+    // membership that filters to nobody passes zero rows with a count above 0, so the W2d §5.8 empty-table branch
+    // (counted 0) does not apply and this guard alone keeps an empty group out of lotsGroups and newLotsDraws (T9
+    // would otherwise store a draw keyed ""). Through completeTableStage a zero-row pool always counts 0, which is
+    // why this is asked of rankStandings directly.
+    let checked = 0;
+    for (const countedFixtures of [1, 3]) {
+      for (const cascade of [["points", "lots"], ["points", "diff", "lots"], ["points", "direct", "lots"], BWF, ITTF, UEFA, ATP, FIDE_RR] as TiebreakerKey[][]) {
+        expect(rankStandings([], { cascade, rngSeed: 1, countedFixtures }), `${countedFixtures} ${cascade.join(",")}`).toStrictEqual({ rows: [], lotsGroups: [], newLotsDraws: [] });
+        checked++;
+      }
+    }
+    expect(checked).toBe(16);
+  });
+
   it("a stage with an empty pool emits no rank_lock_required for it (stage.ts emits one per lotsGroups entry)", () => {
     // A group stage: pool A drew its one match (a real tie, so one lock naming both); pool B has only an unplayed
     // fixture, so no member yet and nobody to draw.

@@ -587,7 +587,7 @@
     "files": [
      "src/competition/tiebreak-keys-w2d.test.ts"
     ],
-    "name": "a stage with an empty pool"
+    "name": "zero rows under a counted table"
    }
   ]
  }

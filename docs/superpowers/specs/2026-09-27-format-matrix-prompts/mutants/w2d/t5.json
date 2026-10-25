@@ -263,8 +263,8 @@
  {
   "id": "t5-stage-count-ignores-awards",
   "file": "packages/engine/src/competition/stage.ts",
-  "find": "    const countedFixtures = results.length + awardDeltas.length + openings.length;",
-  "replace": "    const countedFixtures = results.length + openings.length;",
+  "find": "    const countedFixtures = results.length + awardDeltas.length + carried.length;",
+  "replace": "    const countedFixtures = results.length + carried.length;",
   "killers": [
    {
     "cwd": "packages/engine",
@@ -278,7 +278,7 @@
  {
   "id": "t5-stage-count-ignores-openings",
   "file": "packages/engine/src/competition/stage.ts",
-  "find": "    const countedFixtures = results.length + awardDeltas.length + openings.length;",
+  "find": "    const countedFixtures = results.length + awardDeltas.length + carried.length;",
   "replace": "    const countedFixtures = results.length + awardDeltas.length;",
   "killers": [
    {
@@ -302,6 +302,66 @@
      "src/competition/lots-stored.test.ts"
     ],
     "name": "X-TB-6 completeTableStage: a stage whose every fixture was voided"
+   }
+  ]
+ },
+ {
+  "id": "t5-empty-table-applies-stored-draw",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "  const hasLots = !empty && ctx.cascade.includes(\"lots\");",
+  "replace": "  const hasLots = (!empty || ctx.lotsDraws !== undefined) && ctx.cascade.includes(\"lots\");",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/lots-stored.test.ts"
+    ],
+    "name": "X-TB-6 after a void"
+   }
+  ]
+ },
+ {
+  "id": "t5-stage-count-zero-openings",
+  "file": "packages/engine/src/competition/stage.ts",
+  "find": "    const carried = openings.filter((d) => d.played > 0 || d.points !== 0);",
+  "replace": "    const carried = openings;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/lots-stored.test.ts"
+    ],
+    "name": "a carry that holds nothing"
+   }
+  ]
+ },
+ {
+  "id": "t5-stage-count-ignores-played-carry",
+  "file": "packages/engine/src/competition/stage.ts",
+  "find": "    const carried = openings.filter((d) => d.played > 0 || d.points !== 0);",
+  "replace": "    const carried = openings.filter((d) => d.points !== 0);",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/lots-stored.test.ts"
+    ],
+    "name": "a carry that holds nothing"
+   }
+  ]
+ },
+ {
+  "id": "t5-stage-count-ignores-carried-points",
+  "file": "packages/engine/src/competition/stage.ts",
+  "find": "    const carried = openings.filter((d) => d.played > 0 || d.points !== 0);",
+  "replace": "    const carried = openings.filter((d) => d.played > 0);",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/lots-stored.test.ts"
+    ],
+    "name": "a carry that holds nothing"
    }
   ]
  }
