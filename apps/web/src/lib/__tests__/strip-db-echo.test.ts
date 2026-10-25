@@ -120,7 +120,7 @@ describe("stripDbEchoFromErrors", () => {
       name: "PostgresError",
       code: "23505",
       constraint_name: "t_email_key",
-    }) as DriverError & Record<string, unknown>;
+    }) as unknown as DriverError & Record<string, unknown>;
     // The postgres.js shape with `debug` off: the statement fields exist but are NOT enumerable.
     for (const k of ["query", "parameters", "args", "types"]) Object.defineProperty(err, k, { value: `${k}: ${SECRET}`, enumerable: false });
     for (const k of ["detail", "where", "hint", "internal_query"]) err[k] = `${k}: ${SECRET}`;
