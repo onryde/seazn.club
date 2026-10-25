@@ -4,8 +4,8 @@
 // whose clock it is, once: "15:56 (Tokyo time)".
 import { useMsg } from "@/components/i18n/dict-provider";
 import { fmtTime } from "@/lib/format";
+import { useBrowserZone } from "@/lib/use-client-snapshot";
 import { venueZoneCity } from "@/lib/venue-time";
-import { useViewerZone } from "./use-viewer-zone";
 
 /** `time` (already read in the venue's zone) with the venue's name added when the viewer's offset differs at `iso`; `time` untouched
  *  otherwise. `say` words the pair: the caller's own translator, so this file owns no copy. */
@@ -18,6 +18,6 @@ export function withVenueName(time: string, iso: string, venueTz: string, viewer
  *  the bare time, which is also all the server ever renders. */
 export function useVenueClock(venueTz: string): (iso: string) => string {
   const msg = useMsg();
-  const viewerTz = useViewerZone();
+  const viewerTz = useBrowserZone();
   return (iso) => withVenueName(fmtTime(venueTz, iso), iso, venueTz, viewerTz, (v) => msg("arbiter.venueTime", v));
 }

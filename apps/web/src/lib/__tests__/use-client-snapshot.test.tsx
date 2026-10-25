@@ -8,6 +8,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { renderIsland } from "@/components/__tests__/_hook-harness";
 import {
   readLocalStorageItem,
+  useBrowserZone,
   useHydrated,
   useLocalStorageItem,
   useMediaQuery,
@@ -77,6 +78,42 @@ describe("useHydrated", () => {
   it("true once hydration has committed", () => {
     const island = renderIsland(Probe, {}, undefined, { hydrate: true });
     expect(island.text()).toBe("true");
+  });
+});
+
+describe("useBrowserZone", () => {
+  const Probe = probeOf(useBrowserZone);
+  /** An engine whose `Intl.DateTimeFormat().resolvedOptions().timeZone` is `zone` (or throws, when `zone` is `Error`). */
+  const stubZone = (zone: string | Error) =>
+    vi.stubGlobal("Intl", {
+      ...Intl,
+      DateTimeFormat: function DateTimeFormat() {
+        return {
+          resolvedOptions: () => {
+            if (zone instanceof Error) throw zone;
+            return { timeZone: zone };
+          },
+        };
+      },
+    });
+
+  it("null on the server and during hydration, even though the machine has a zone", () => {
+    stubZone("Asia/Tokyo");
+    expect(renderToStaticMarkup(<Probe />)).toBe("<span>null</span>");
+  });
+
+  it("the browser's zone once hydration has committed - a different zone gives a different answer", () => {
+    stubZone("Asia/Tokyo");
+    expect(renderIsland(Probe, {}, undefined, { hydrate: true }).text()).toBe("Asia/Tokyo");
+    stubZone("America/New_York");
+    expect(renderIsland(Probe, {}, undefined, { hydrate: true }).text()).toBe("America/New_York");
+  });
+
+  it("an engine that cannot resolve a zone (empty, or throws) reads null, never throws", () => {
+    stubZone("");
+    expect(renderIsland(Probe, {}, undefined, { hydrate: true }).text()).toBe("null");
+    stubZone(new Error("no zone"));
+    expect(renderIsland(Probe, {}, undefined, { hydrate: true }).text()).toBe("null");
   });
 });
 

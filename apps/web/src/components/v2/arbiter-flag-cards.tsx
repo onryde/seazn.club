@@ -6,10 +6,10 @@ import { useMemo } from "react";
 import { useLocale, usePlural, useT } from "@/components/i18n/dict-provider";
 import { fullMoveOf, timelineSegments, type ArbiterBoard, type ArbiterFlag, type CameraOffReport, type NoResultOffer } from "@/lib/arbiter-view";
 import { formatTimeOfDay } from "@/components/public-site/match-room/room-time";
+import { useBrowserZone } from "@/lib/use-client-snapshot";
 import { DEFAULT_TZ, isValidIana } from "@/lib/tz";
 import type { ArbiterNotice, SettleChoice } from "./arbiter-decision";
 import { extendBoardSentence, extendedNoticeTime, extendFailureText } from "./checkin-extend-ui";
-import { useViewerZone } from "./use-viewer-zone";
 import { withVenueName } from "./venue-clock";
 
 export const MUTED = "text-[#6b5b8a]";
@@ -45,7 +45,7 @@ export function useFmt(nowMs: number | null, venueTz?: string): Fmt {
   const t = useT();
   const plural = usePlural();
   const locale = useLocale();
-  const viewerTz = useViewerZone();
+  const viewerTz = useBrowserZone();
   const mounted = nowMs !== null;
   const zone = venueTz === undefined ? undefined : isValidIana(venueTz) ? venueTz : DEFAULT_TZ;
   return useMemo<Fmt>(() => {

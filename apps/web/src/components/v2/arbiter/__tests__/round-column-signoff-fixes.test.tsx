@@ -26,7 +26,7 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 
 /** The viewer's browser zone, which the real hook reads from `Intl` after mount and answers `null` for on a server render. */
 const viewer = vi.hoisted(() => ({ zone: null as string | null }));
-vi.mock("../../use-viewer-zone", () => ({ useViewerZone: () => viewer.zone }));
+vi.mock("@/lib/use-client-snapshot", async (importOriginal) => ({ ...(await importOriginal<typeof import("@/lib/use-client-snapshot")>()), useBrowserZone: () => viewer.zone }));
 
 const en = messages as unknown as Record<string, string>;
 const TZ = "Europe/London";
@@ -492,7 +492,6 @@ const screen = (boards: ArbiterBoard[], selected: string, o: Partial<ArbiterScre
   );
 const inWindow = (o: Partial<ArbiterBoard> = {}) => board({ state: { kind: "checking_in" }, checkin: WINDOW, seats: { white: seat(false, ["sent"]), black: seat(true) }, ...o });
 const reported = () => over({ canResync: false, playable: false, canSettle: false, cameraReport: "settled", flags: [CAMERA_FLAG] });
-const labelsIn = (h: string, city = "Tokyo") => h.split(en["arbiter.venueTime"]!.replace("{time}", "").replace("{city}", city).trim()).length - 1;
 const NY = "America/New_York";
 
 describe("D1: one deadline, one clock - every time on the panel is the venue's", () => {
