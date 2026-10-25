@@ -13,7 +13,7 @@
 // order — the "wrong one's constant", typed below from the plan's Anchors row (main@e97823e4d8 `defaultTiebreakers`).
 // Where the pre-W2d order IS the signed one (football with fair play on, carrom, generic) the test says so, by name.
 import { describe, expect, it } from "vitest";
-import { foldMatch } from "../core/events.ts";
+import { foldMatch, foldMatchWithStoppage, outcomeOf } from "../core/events.ts";
 import type { EntrantId, MatchOutcome, StandingsDelta } from "../core/types.ts";
 import type { AnySportModule, TiebreakerKey } from "../sport/module.ts";
 import { builtinModules } from "../sports/index.ts";
@@ -958,6 +958,35 @@ const BOOK: Readonly<Record<string, Book>> = {
           expect([home.metrics["sets_won"], home.metrics["sets_lost"], home.metrics["games_won"], home.metrics["games_lost"]]).toEqual([1, 2, 10, 11]);
           expect([away.metrics["sets_won"], away.metrics["sets_lost"], away.metrics["games_won"], away.metrics["games_lost"]]).toEqual([2, 1, 11, 10]);
           expect([home.entrantId, away.entrantId]).toEqual([H, A]);
+        },
+      },
+      {
+        // X-ST-1: a settle "invents no score", so an abandon the organiser settles keeps the games as they were played —
+        // the closed set's AND the set in progress's (the abandon closes no set). Settled for the side that trails on
+        // games, so a credit that followed the winner or dropped the open set reads differently.
+        title: "TN-TB-2 X-ST-1 a settled abandon mid-set: the table counts every game played, the set in progress included, and invents none",
+        run: (module) => {
+          const cfg = cfgOf(module, undefined);
+          const lineups = defaultLineupPair(module.positions);
+          const [H, A] = [lineups.home.entrantId, lineups.away.entrantId];
+          const loveGame = (by: EntrantId) => Array.from({ length: 4 }, () => ({ type: "tennis.point", payload: { by } }));
+          // 6-4, then 3-2 in the second set (five love games), abandoned, settled by the organiser for the away pair.
+          const events = [
+            { type: "core.start", payload: {} },
+            { type: "tennis.set_summary", payload: { home: 6, away: 4 } },
+            ...loveGame(H), ...loveGame(A), ...loveGame(H), ...loveGame(A), ...loveGame(H),
+            { type: "core.abandon", payload: { reason: "rain" } },
+            { type: "core.settle", payload: { winner: A, method: "organiser" } },
+          ].map((e, i) => makeEnvelope(i, e));
+          const folded = foldMatchWithStoppage(module, cfg, lineups, events, { strictFromSeq: 0 });
+          const outcome = outcomeOf(module, folded);
+          expect(outcome).toMatchObject({ kind: "win", winner: A, method: "settled_organiser" });
+          if (outcome === null) throw new Error("the settle decided nothing");
+          const [home, away] = module.standingsDelta(outcome, cfg, { kind: "league" }, folded.state);
+          // Sets 1-0 as played; games 6 + 3 = 9 against 4 + 2 = 6.
+          expect([home.metrics["sets_won"], home.metrics["sets_lost"], home.metrics["games_won"], home.metrics["games_lost"]]).toEqual([1, 0, 9, 6]);
+          expect([away.metrics["sets_won"], away.metrics["sets_lost"], away.metrics["games_won"], away.metrics["games_lost"]]).toEqual([0, 1, 6, 9]);
+          expect([home.won, away.won]).toEqual([0, 1]);
         },
       },
     ],

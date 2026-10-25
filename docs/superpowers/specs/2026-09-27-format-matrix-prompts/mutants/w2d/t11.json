@@ -418,5 +418,35 @@
     "name": "TN-TB-2 a level match tie-break replayed from a tolerant read"
    }
   ]
+ },
+ {
+  "id": "t11-games-open-set-subtracted",
+  "file": "packages/engine/src/sports/nested/kernel.ts",
+  "find": "0) + state.games[s];",
+  "replace": "0) - state.games[s];",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tables-rulebook.test.ts"
+    ],
+    "name": "TN-TB-2 X-ST-1 a settled abandon mid-set"
+   }
+  ]
+ },
+ {
+  "id": "t11-games-open-set-dropped",
+  "file": "packages/engine/src/sports/nested/kernel.ts",
+  "find": "0) + state.games[s];",
+  "replace": "0);",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tables-rulebook.test.ts"
+    ],
+    "name": "TN-TB-2 X-ST-1 a settled abandon mid-set"
+   }
+  ]
  }
 ]
