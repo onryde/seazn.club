@@ -257,7 +257,7 @@ silently close them.
   DEFERRED — tightening an API's accepted charset is a behaviour change owing
   its own review surface and possibly a migration for stored slugs.
 - Still owed from the Knockout wave: **P1b** shell-held live status may lag
-  (unmeasured); **P1c** `void fireStageRevalidate` ×4 in `stages.ts`; **O1**
+  (unmeasured); **P1c** (CLOSED by 9bae1fbcc7, all five sites awaited) `void fireStageRevalidate` ×4 in `stages.ts`; **O1**
   thin pre-start league Overview; an engine wave for double-elim unowed reset /
   `bracketRanks`.
 - Two PRODUCT defects recorded via `test.fixme` in W1's walkthrough, owed to the
