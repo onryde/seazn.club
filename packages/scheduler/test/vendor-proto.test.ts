@@ -305,7 +305,7 @@ describe("vendorProto", () => {
     expect(readdirSync(pkg)).toEqual([]);
   });
 
-  describe("refuses THIS repository (the one that holds the package): its own proto/scheduler.proto is not the placement's", () => {
+  describe("refuses THIS repository and its worktrees (the one that holds the package): it has no root proto any more, but older checkouts do and none of its commits is the placement's", () => {
     /** A package directory inside `repo`, like packages/scheduler inside the monorepo. */
     const pkgInside = (repo: string): string => {
       const pkg = join(repo, "packages/scheduler");

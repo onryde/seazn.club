@@ -935,7 +935,7 @@ describe("channel lifecycle", () => {
   // HTTP/2 streams over ONE TCP connection, and Fly's TCP proxy load-balances
   // by CONNECTION: all ten pin to a single machine however many are scaled up,
   // so `fly scale count` buys nothing and nine solves queue behind the first
-  // (`fly.toml`'s `[services.concurrency] hard_limit = 1`, in onryde/seazn.club.placement).
+  // (`fly.toml`'s `[services.concurrency] hard_limit`, in onryde/seazn.club.placement).
   //
   // Two solves against the SAME host are therefore two clients and two closes.
   // Under a per-host cache this reads 1 construction and 0 closes, which is

@@ -492,7 +492,7 @@ describe("the workflows: every placement image comes from the pin", () => {
     expect(waits, "wait ids checked (smoke-e2e: 2, e2e: 3 each)").toBe(2 + 3 + 3 + 3);
   });
 
-  it("no workflow builds the placement image from source or types a tag; the seven blocks carry no build tooling", () => {
+  it("no workflow uses a `context: services/placement` build action or types a tag; the seven blocks carry no build tooling", () => {
     let jobsScanned = 0;
     for (const file of WORKFLOW_FILES) {
       const text = stripComments(readFileSync(join(WORKFLOWS, file), "utf8"));
@@ -502,7 +502,9 @@ describe("the workflows: every placement image comes from the pin", () => {
       expect(jobs, `${file}: jobs parsed`).toBeGreaterThan(0);
       jobsScanned += jobs;
       expect(text, `${file}: a typed placement tag`).not.toMatch(/\/seazn-placement:[0-9a-f]{7,}/);
-      expect(text, `${file}: builds placement from source`).not.toMatch(/context:\s*services\/placement/);
+      // Only the build-push-action `context:` form is checked. It is not a guard against re-adding the service: other
+      // spellings (`docker build services/placement`) are not looked for, by owner ruling (engine-split 2a, no re-add guard).
+      expect(text, `${file}: a \`context: services/placement\` build action`).not.toMatch(/context:\s*services\/placement/);
     }
     expect(jobsScanned, "jobs scanned across every workflow").toBe(ALL_JOBS.length);
     expect(jobsScanned, "and that is a real number of jobs").toBeGreaterThan(30);
