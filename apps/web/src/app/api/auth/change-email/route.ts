@@ -3,18 +3,20 @@ import { sql } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { handler, HttpError } from "@/lib/http";
 import { changeEmailSchema } from "@/lib/types";
-import { emailChangeConfirmationEmail, sendEmailChangeNotice } from "@/lib/email";
+import { emailChangeConfirmationEmail, emailChangeNoticeEmail } from "@/lib/email";
 import { baseUrl } from "@/lib/oauth";
 import {
   EMAIL_CHANGE_SUPERSEDED_REASON,
   cancelQueuedEmails,
   dispatchNow,
   enqueueEmail,
+  enqueueEmailOnce,
   expiryWithin,
+  onceKey,
   recipientLocale,
 } from "@/server/email-outbox";
 
-/** Request an email-address change. Sends a confirmation link to the new address. */
+/** Request an email-address change. Sends a confirmation link to the new address, and a notice to the old one. */
 export async function POST(req: Request) {
   return handler(async () => {
     const user = await requireUser();
@@ -34,15 +36,16 @@ export async function POST(req: Request) {
 
     const link = `${baseUrl(req)}/api/auth/change-email/confirm?token=${token}`;
 
-    // One transaction on the pool (account mail has no organisation): the request and the confirmation that carries its token are
-    // committed together or not at all, and a refused row fails the request.
-    const { confirmId, locale } = await sql.begin(async (tx) => {
+    // One transaction on the pool (account mail has no organisation): the request, the confirmation that carries its token and the
+    // notice to the old address are committed together or not at all, and a refused row fails the request.
+    const queued = await sql.begin(async (tx) => {
       // Invalidate any prior pending requests for this user
       await tx`delete from email_change_requests where user_id = ${user.id} and not confirmed`;
 
-      await tx`
+      const [request] = await tx<{ id: string }[]>`
         insert into email_change_requests (user_id, old_email, new_email, token, expires_at)
-        values (${user.id}, ${user.email}, ${new_email}, ${token}, ${expiresAt.toISOString()})`;
+        values (${user.id}, ${user.email}, ${new_email}, ${token}, ${expiresAt.toISOString()})
+        returning id`;
 
       // D4: the account's own language (its stored pick, then the account; there is no organisation).
       const locale = await recipientLocale(tx, { pick: user.locale, userId: user.id, orgDefault: null });
@@ -65,11 +68,24 @@ export async function POST(req: Request) {
         expiresAt: expiryWithin(expiresAt),
         ...(await emailChangeConfirmationEmail(link, locale)),
       });
-      return { confirmId, locale };
+      // The security notice to the address being left, naming the new one. Its ref is the account too, so a newer request's notice to
+      // the same old address supersedes a still-queued older one through the replace rule. The once-key (the request's own id) is a
+      // belt: nothing replays a request, so it never collides (P-W3-3); a taken key writes nothing and returns null.
+      const noticeId = await enqueueEmailOnce(tx, {
+        kind: "email_change_notice",
+        refType: "user",
+        refId: user.id,
+        dedupeKey: onceKey("email_change_notice", "user", request!.id),
+        orgId: null,
+        to: user.email,
+        transactional: true,
+        expiresAt: expiryWithin(null),
+        ...(await emailChangeNoticeEmail(new_email, locale)),
+      });
+      return noticeId === null ? [confirmId] : [confirmId, noticeId];
     });
     // After commit, in the request: the person is waiting for the link. A failed attempt is the retry worker's to finish.
-    await dispatchNow([confirmId]);
-    await sendEmailChangeNotice(user.email, new_email, locale);
+    await dispatchNow(queued);
 
     return { message: "A confirmation link has been sent to your new email address." };
   });

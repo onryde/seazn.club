@@ -463,13 +463,12 @@ export async function emailChangeConfirmationEmail(link: string, locale: Locale)
   return emailChangeConfirmTemplate(link, dict);
 }
 
-export async function sendEmailChangeNotice(
-  to: string,
-  newEmail: string,
-  locale: Locale = "en",
-): Promise<boolean> {
+/** The security notice to the OLD address that an email change was requested, naming the new address, RENDERED and not sent. The
+ *  email-change request (`api/auth/change-email`) queues what this returns on the email outbox (kind `email_change_notice`,
+ *  transactional, once per request) in the request's transaction, and makes the first attempt after commit. Nothing sends it directly. */
+export async function emailChangeNoticeEmail(newEmail: string, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, transactional: true, ...emailChangeNoticeTemplate(newEmail, dict) });
+  return emailChangeNoticeTemplate(newEmail, dict);
 }
 
 export async function sendAccountDeletionEmail(

@@ -47,6 +47,8 @@
 //     draft and its row are one transaction on the pool, and the request makes the first attempt after commit.
 //   - email_change_confirmation: the route POST of app/api/auth/change-email/route.ts by an `es` account (signed in through the session
 //     stand-in): the confirmation to the NEW address is queued in the request's transaction, and the request makes the first attempt.
+//   - email_change_notice: the same route by another `es` account: the notice to the OLD address, once per request, is queued in the
+//     same transaction, and the request makes the first attempt.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -191,7 +193,6 @@ const SPEC_FACTS: KindFacts = {
 /** Wave 3's kinds, typed from the spec's table: registered by T1 before any producer moved, so each is still on its direct sender until its
  *  kind task (T2-T4) deletes it from NOT_YET_MOVED, and here. The last move (T4c) empties both. */
 const WAVE_3_UNMOVED: readonly OutboxKind[] = [
-  "email_change_notice",
   "account_deletion",
   "org_invite",
   "claim_invite",
@@ -879,26 +880,35 @@ async function emailChangeConfirmationScenario(): Promise<KindScenario> {
     subjectVars: {},
     recipient,
     firstAttempt: "request",
-    run: async () => {
-      // Until the notice to the old address moves to the outbox (the next kind task), the route still mails it directly; Resend is
-      // answered locally so the sweep makes no network call.
-      vi.stubGlobal("fetch", async () => new Response(JSON.stringify({ id: `re_${RUN}_notice` }), { status: 200 }));
-      try {
-        const res = await signedInAs(user.id, () =>
-          changeEmailPost(
-            new Request("https://sweep.test/api/auth/change-email", {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ new_email: recipient }),
-            }),
-          ),
-        );
-        expect(res.status, "premise: the real route answered 200").toBe(200);
-      } finally {
-        vi.unstubAllGlobals();
-      }
-    },
+    run: () => requestEmailChange(user.id, recipient),
   };
+}
+
+/** The real email-change request by another `es` account: the notice goes to the OLD address, naming the new one. */
+async function emailChangeNoticeScenario(): Promise<KindScenario> {
+  const user = await runUser({ locale: "es" });
+  return {
+    locale: "es",
+    subjectKey: "emailChangeNotice.subject",
+    subjectVars: {},
+    recipient: user.email,
+    firstAttempt: "request",
+    run: () => requestEmailChange(user.id, address()),
+  };
+}
+
+/** The account `userId`, signed in, asks to move to `newEmail` through the real route. */
+async function requestEmailChange(userId: string, newEmail: string): Promise<void> {
+  const res = await signedInAs(userId, () =>
+    changeEmailPost(
+      new Request("https://sweep.test/api/auth/change-email", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ new_email: newEmail }),
+      }),
+    ),
+  );
+  expect(res.status, "premise: the real route answered 200").toBe(200);
 }
 
 describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (DB)", () => {
@@ -981,6 +991,9 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
       dictionarySubject("en", confirmation.subjectKey, confirmation.subjectVars),
     );
 
+    const notice = await emailChangeNoticeScenario();
+    expect(dictionarySubject("es", notice.subjectKey, notice.subjectVars)).not.toBe(dictionarySubject("en", notice.subjectKey, notice.subjectVars));
+
     const out = await forEachOutboxKind(
       {
         magic_link: magicLinkScenario(),
@@ -1003,6 +1016,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         email_verification: verification,
         funnel_claim: funnelClaimScenario(),
         email_change_confirmation: confirmation,
+        email_change_notice: notice,
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );

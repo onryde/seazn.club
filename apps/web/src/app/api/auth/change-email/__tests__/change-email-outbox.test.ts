@@ -1,7 +1,8 @@
-// POST /api/auth/change-email queues the confirmation link to the NEW address on the email outbox (phase 3 wave 3, kind
-// `email_change_confirmation`). The request's delete, its insert, the end of an older request's still-queued confirmation, and the new
-// row are one transaction on the pool (account mail has no organisation). The row's ref is the account, the language is the account's,
-// and the first attempt is made in the request after commit: the person is waiting for the link.
+// POST /api/auth/change-email queues two emails on the email outbox (phase 3 wave 3): the confirmation link to the NEW address (kind
+// `email_change_confirmation`) and the security notice to the OLD one (kind `email_change_notice`, once per request). The request's
+// delete, its insert, the end of an older request's still-queued confirmation, and both rows are one transaction on the pool (account
+// mail has no organisation). Each row's ref is the account, the language is the account's, and the first attempt is made in the
+// request after commit: the person is waiting for the link.
 //
 // Driven through the REAL route and the real session (a seeded account's session in the cookie jar, through the real requireUser).
 // Stand-ins: the outbox's transport (the one network seam: captured, never sent) and `next/headers`. Expected values come from the
@@ -40,7 +41,7 @@ type Delivered = { to: string; subject: string; html: string; text: string; idem
 type MailRow = {
   id: string; kind: string; ref_type: string; ref_id: string; org_id: string | null; recipient: string;
   recipient_user_id: string | null; transactional: boolean; subject: string; status: string; attempts: number;
-  last_error: string | null; cleared: boolean;
+  last_error: string | null; dedupe_key: string | null; cleared: boolean;
 };
 
 const address = (): string => `${RUN}-${randomUUID().slice(0, 8)}@x.test`;
@@ -72,7 +73,7 @@ async function requestChange(userId: string, newEmail: string): Promise<{ status
 const rowsOf = (kind: string, userId: string) =>
   sql<MailRow[]>`
     select id, kind, ref_type, ref_id, org_id, recipient, recipient_user_id, transactional, subject, status, attempts, last_error,
-           body_sealed is null as cleared
+           dedupe_key, body_sealed is null as cleared
       from email_outbox where kind = ${kind} and ref_type = 'user' and ref_id = ${userId}
      order by created_at, id`;
 /** The account's pending change requests. */
@@ -159,6 +160,47 @@ describe.skipIf(!HAS_DB)("POST /api/auth/change-email queues the confirmation on
     const requests = await requestsOf(user.id);
     expect(requests.map((r) => r.new_email), "one pending request: the second").toEqual([second]);
     expect(callsFor(newer!.id)[0]!.text).toContain(`change-email/confirm?token=${requests[0]!.token}`);
+
+    // The notices both went to the same old address: the second names the address now in play and supersedes the first, which was
+    // still waiting for its retry, through the replace rule.
+    const notices = await rowsOf("email_change_notice", user.id);
+    expect(notices.map((n) => [n.recipient, n.status])).toEqual([
+      [user.email, "replaced"],
+      [user.email, "sent"],
+    ]);
+    expect(callsFor(notices[1]!.id)[0]!.text, "the sent notice names the second address").toContain(second);
+  });
+
+  it("the old address gets one notice naming the new one", async () => {
+    const user = await account("es");
+    const newEmail = address();
+    expect(dictionarySubject("es", "emailChangeNotice.subject", {})).not.toBe(dictionarySubject("en", "emailChangeNotice.subject", {}));
+
+    expect((await requestChange(user.id, newEmail)).status).toBe(200);
+
+    const notices = await rowsOf("email_change_notice", user.id);
+    expect(notices).toHaveLength(1);
+    const notice = notices[0]!;
+    const requests = await requestsOf(user.id);
+    expect(notice).toMatchObject({
+      kind: "email_change_notice",
+      ref_type: "user",
+      ref_id: user.id,
+      org_id: null,
+      recipient: user.email,
+      recipient_user_id: null,
+      transactional: true,
+      status: "sent",
+      cleared: true,
+      // Once per request: the key is the request's own id.
+      dedupe_key: requests[0]!.id,
+    });
+    expect(notice.subject).toBe(dictionarySubject("es", "emailChangeNotice.subject", {}));
+    const calls = callsFor(notice.id);
+    expect(calls, "one transport call, under the row's own key").toHaveLength(1);
+    expect(calls[0]!.to, "to the OLD address").toBe(user.email);
+    expect(calls[0]!.to).not.toBe(newEmail);
+    expect(calls[0]!.text, "naming the new one").toContain(newEmail);
   });
 
   it("empty: the same address or a taken one queues nothing", async () => {
