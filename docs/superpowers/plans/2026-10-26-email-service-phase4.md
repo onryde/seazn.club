@@ -55,6 +55,10 @@ Executors also read:
 - Pricing: Free allows 1,000 messages a day and 10 active schedules. Pay as you go costs "$1 per 100K messages".
   "Scheduled messages are billed once for each time the schedule triggers." <https://upstash.com/pricing/qstash>
 
+## PARKED (owner, 2026-10-26)
+
+Phase 4 is parked after phase 3 wave 5. Start it only when one of these triggers happens: (1) email volume makes sending slow app requests or the minute cron cannot keep up; (2) a security review asks for the Resend key to be held outside the web app; (3) a second product or service needs to send email. Until then the in-app outbox (worker on the Cloudflare minute cron, `dispatchNow` for request emails, the Resend webhook in the app) is the design. The phase-3 obligations stay: no send path bypasses the outbox; dispatch/worker/webhook keep no app-render dependency. The owner questions below stay open until the phase starts.
+
 ## Global Constraints
 
 - **Two repos.**
