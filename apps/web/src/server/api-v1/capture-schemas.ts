@@ -213,7 +213,7 @@ const publicUrl = () => z.union([RecordPublicUrl, ...Scalar]).optional();
 const text = () => z.union([z.string(), ...Scalar]).optional();
 const scalar = () => z.union([...Scalar]).optional();
 
-/** Capture's `modules/capture-engine/src/scrub/allow-list.json` at capture ebac190, class by class (§5). `kind` and
+/** Capture's `modules/capture-engine/src/scrub/allow-list.json` at capture 2b4df80, class by class (§5). `kind` and
  *  `sid` and `tokenTag` are plain keys the line narrows below, as are four scalars (RECORD_NARROWED_SCALARS); a plain
  *  key named like one of the line's own keys is written `field_<key>`. A key capture adds is a contract bump here, in
  *  step with capture's change. */
@@ -226,10 +226,11 @@ const RECORD_PLAIN_KEYS = [
 const RECORD_PUBLIC_URL_KEYS = ["url", "playbackUrl", "overlayUrl"] as const;
 const RECORD_TEXT_KEYS = ["message", "problems"] as const;
 const RECORD_SCALAR_KEYS = [
-  "audioFps", "camera", "counted", "encodeListed", "exitAtMs", "failed", "gapMs", "granted", "headroom", "held",
-  "intervalMs", "lagGrowthMs", "lagMs", "late", "listed", "minuteEpochMs", "msSinceAdvance", "ok", "on", "outageMs",
-  "pickHeight", "pickWidth", "publishedMs", "rebaselined", "rebuilds", "refusedSid", "sameArea", "sent", "sinceLastMs",
-  "sound", "srtOffered", "stalledMs", "stopped", "suppressed", "validated", "videoFps", "wasLive",
+  "audioFps", "bandwidthBps", "camera", "counted", "dropped", "egressBps", "encodeListed", "exitAtMs", "failed", "gapMs",
+  "gateBps", "granted", "headroom", "held", "intervalMs", "lagGrowthMs", "lagMs", "late", "listed", "lost",
+  "minuteEpochMs", "msSinceAdvance", "ok", "on", "outageMs", "pickHeight", "pickWidth", "publishedMs", "rebaselined",
+  "rebuilds", "refusedSid", "sameArea", "sendBufferMs", "sent", "sinceLastMs", "sound", "srtOffered", "stalledMs",
+  "stopped", "suppressed", "target", "validated", "videoFps", "wasLive",
 ] as const;
 /** Scalars the allow-list's own reasons narrow (capture ebac190): a size, a count and a wait — integers of at least 0 —
  *  and a yes/no. Capture writes them from typed fields (Kotlin Int/Long/Boolean, JS `TextEncoder` length), never null. */

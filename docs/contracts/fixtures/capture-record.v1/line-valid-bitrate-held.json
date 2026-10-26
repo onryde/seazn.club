@@ -1,0 +1,10 @@
+{
+  "at": "2026-10-11T21:46:00.500Z",
+  "kind": "bitrate-held",
+  "sid": "5f2c8a1e-3b4d-4e6f-8a9b-0c1d2e3f4a5b",
+  "target": 4000000,
+  "egressBps": 2650000.5,
+  "gateBps": 2800000,
+  "count": 3,
+  "videoFps": 29.97
+}

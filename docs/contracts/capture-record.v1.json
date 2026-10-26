@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://seazn.club/contracts/capture-record.v1.json",
   "title": "Seazn capture record, v1: POST /api/v1/capture/codes/{code}/records (APPROVED design, owner 2026-10-12)",
-  "description": "APPROVED design (owner, 2026-10-12; docs/superpowers/specs/2026-10-12-capture-record-upload-design.md), served by POST /api/v1/capture/codes/{code}/records and twinned in apps/web/src/server/api-v1/capture-schemas.ts. The operator's Send record tap (owner rulings R3, R4) posts the phone's scrubbed session record as NDJSON (application/x-ndjson): one JSON object per line, and THIS schema is ONE line. Limits apply to the DECOMPRESSED body: at most 1000 non-empty lines and at most 1 MB (1048576 bytes). Content-Encoding: gzip is accepted; the server inflates at most 1 MB + 1 byte and stops there, so a zip bomb is 413 too_large and is never inflated whole. The keys are capture's modules/capture-engine/src/scrub/allow-list.json (capture ebac190): at, kind and level are the line's own; every plain, publicUrl, text and scalars key under its class, a field named like a line key written field_<key>. A bad line is DROPPED and the rest of the record is stored; the body is never refused for a line (owner ruling RL, 2026-10-12). A bad line is one this schema refuses — any other key, a never key included (even masked) and __proto__ included, a value off its key's class, a line that is not a JSON object or not UTF-8 — or one that names any key twice (the server reads the line's TEXT, where a JSON parser keeps only the last value, so no schema can state it: fixture line-server-duplicate-key), or one in which, beyond any shape, any string value is secret-shaped: S1 the Bearer token that sent the record, raw, percent-encoded or form-encoded (the server holds the Bearer; no schema can state it); S2 an RTMP(S) URL that carries a stream key ($defs.secretS2); S3 a streamid or passphrase value, after = or after whitespace ($defs.secretS3); S4 a URL with userinfo ($defs.secretS4); S5 a Bearer credential ($defs.secretS5). A string value that validates against $defs.secretShaped is one of S2–S5. Every rule skips a masked value: a credential the scrub masked in place — *** with no letter or digit after it, whatever punctuation follows — is not secret-shaped, so capture's own scrubbed output (e.g. srt://h:1?passphrase=***&x=1, streamid *** refused, (streamid=***), …/live/***.) is admitted. A kept line is stored as the server re-serialises the object it screened, never as the bytes sent. A bad line is counted twice — in the 201's dropped, and on its own with the stored record so staff can see a scrub leak — and is never stored, logged or echoed. Attribution: the record is the phone's last 1000 lines and can span codes. The server keeps a line only if it belongs to the sending code, and drops every other line before storing: A1 a line whose sid is a uuid is kept iff that session belongs to the sending code (the owner's reading, the spec's Q9: through the session's pairing, so a session with no pairing — an organiser's start with no phone — belongs to no code and its lines are dropped; fixture_stream_sessions.code_id is not used), and a line whose sid is the mask *** is dropped; A2 a line whose sid is null or absent is kept iff it falls inside a pairing window of the sending code: a window opens at a `pair` line whose tokenTag is the tag of a token of the sending code, and runs through the next `unpaired`, `ended`, `pair-refused` or `reset` line (capture's answer to the spec's Q7, as capture corrected it on 2026-10-12: an `engine-error` line closes nothing, because the app also writes one where the pairing goes on, and a fatal error is followed by an `ended` line whose reason is fatal-error), or up to (not including) the next `pair` line or the next line this schema refuses (which may be another code's `pair`, so the window fails closed there), whichever comes first. A secret-shaped line this schema admits is read like any other line and then dropped. A line before the record's first `pair` line is in no window. A dropped line is counted, never stored, logged or echoed. $defs.ok is the 201 answer and $defs.refusal every refusal body (the capture envelope {code, message}: the phone keys on code; message is a developer string the phone never shows). Its sha256 and fixtures are pinned by apps/web/src/server/api-v1/__tests__/capture-contract.test.ts.",
+  "description": "APPROVED design (owner, 2026-10-12; docs/superpowers/specs/2026-10-12-capture-record-upload-design.md), served by POST /api/v1/capture/codes/{code}/records and twinned in apps/web/src/server/api-v1/capture-schemas.ts. The operator's Send record tap (owner rulings R3, R4) posts the phone's scrubbed session record as NDJSON (application/x-ndjson): one JSON object per line, and THIS schema is ONE line. Limits apply to the DECOMPRESSED body: at most 1000 non-empty lines and at most 1 MB (1048576 bytes). Content-Encoding: gzip is accepted; the server inflates at most 1 MB + 1 byte and stops there, so a zip bomb is 413 too_large and is never inflated whole. The keys are capture's modules/capture-engine/src/scrub/allow-list.json (capture 2b4df80): at, kind and level are the line's own; every plain, publicUrl, text and scalars key under its class, a field named like a line key written field_<key>. A bad line is DROPPED and the rest of the record is stored; the body is never refused for a line (owner ruling RL, 2026-10-12). A bad line is one this schema refuses — any other key, a never key included (even masked) and __proto__ included, a value off its key's class, a line that is not a JSON object or not UTF-8 — or one that names any key twice (the server reads the line's TEXT, where a JSON parser keeps only the last value, so no schema can state it: fixture line-server-duplicate-key), or one in which, beyond any shape, any string value is secret-shaped: S1 the Bearer token that sent the record, raw, percent-encoded or form-encoded (the server holds the Bearer; no schema can state it); S2 an RTMP(S) URL that carries a stream key ($defs.secretS2); S3 a streamid or passphrase value, after = or after whitespace ($defs.secretS3); S4 a URL with userinfo ($defs.secretS4); S5 a Bearer credential ($defs.secretS5). A string value that validates against $defs.secretShaped is one of S2–S5. Every rule skips a masked value: a credential the scrub masked in place — *** with no letter or digit after it, whatever punctuation follows — is not secret-shaped, so capture's own scrubbed output (e.g. srt://h:1?passphrase=***&x=1, streamid *** refused, (streamid=***), …/live/***.) is admitted. A kept line is stored as the server re-serialises the object it screened, never as the bytes sent. A bad line is counted twice — in the 201's dropped, and on its own with the stored record so staff can see a scrub leak — and is never stored, logged or echoed. Attribution: the record is the phone's last 1000 lines and can span codes. The server keeps a line only if it belongs to the sending code, and drops every other line before storing: A1 a line whose sid is a uuid is kept iff that session belongs to the sending code (the owner's reading, the spec's Q9: through the session's pairing, so a session with no pairing — an organiser's start with no phone — belongs to no code and its lines are dropped; fixture_stream_sessions.code_id is not used), and a line whose sid is the mask *** is dropped; A2 a line whose sid is null or absent is kept iff it falls inside a pairing window of the sending code: a window opens at a `pair` line whose tokenTag is the tag of a token of the sending code, and runs through the next `unpaired`, `ended`, `pair-refused` or `reset` line (capture's answer to the spec's Q7, as capture corrected it on 2026-10-12: an `engine-error` line closes nothing, because the app also writes one where the pairing goes on, and a fatal error is followed by an `ended` line whose reason is fatal-error), or up to (not including) the next `pair` line or the next line this schema refuses (which may be another code's `pair`, so the window fails closed there), whichever comes first. A secret-shaped line this schema admits is read like any other line and then dropped. A line before the record's first `pair` line is in no window. A dropped line is counted, never stored, logged or echoed. $defs.ok is the 201 answer and $defs.refusal every refusal body (the capture envelope {code, message}: the phone keys on code; message is a developer string the phone never shows). Its sha256 and fixtures are pinned by apps/web/src/server/api-v1/__tests__/capture-contract.test.ts.",
   "type": "object",
   "properties": {
     "at": {
@@ -979,6 +979,20 @@
         }
       ]
     },
+    "bandwidthBps": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "bytes": {
       "description": "scalars, narrowed by the allow-list's own reason (\"JS: record.send, the size of the body Send record to Seazn sent or would have sent (R3)\"): a size in bytes, an integer of at least 0. Never a fraction, a boolean, null or the mask.",
       "type": "integer",
@@ -1000,6 +1014,34 @@
       ]
     },
     "counted": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "dropped": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "egressBps": {
       "description": "scalars: a number, a boolean or null only.",
       "anyOf": [
         {
@@ -1062,6 +1104,20 @@
       "maximum": 9007199254740991
     },
     "gapMs": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "gateBps": {
       "description": "scalars: a number, a boolean or null only.",
       "anyOf": [
         {
@@ -1174,6 +1230,20 @@
       ]
     },
     "listed": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "lost": {
       "description": "scalars: a number, a boolean or null only.",
       "anyOf": [
         {
@@ -1365,6 +1435,20 @@
         }
       ]
     },
+    "sendBufferMs": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "sent": {
       "description": "scalars: a number, a boolean or null only.",
       "anyOf": [
@@ -1450,6 +1534,20 @@
       ]
     },
     "suppressed": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "target": {
       "description": "scalars: a number, a boolean or null only.",
       "anyOf": [
         {
