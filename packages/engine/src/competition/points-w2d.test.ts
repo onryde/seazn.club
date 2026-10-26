@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { SETTLE_METHODS, foldMatchWithStoppage, outcomeOf, settledMethod, type EventEnvelope } from "../core/events.ts";
-import { MatchOutcome, type StandingsDelta } from "../core/types.ts";
+import { MatchOutcome, StageKind, type StandingsDelta } from "../core/types.ts";
 import { FOLD_EPOCH } from "../sport/fold-epoch.ts";
 import type { AnySportModule } from "../sport/module.ts";
 // single-sport: badminton is X-WO-1's (amended) set sport with no unplayed loss; the sweeps below cover every sport
@@ -26,6 +26,7 @@ import { icehockey } from "../sports/icehockey/icehockey.ts";
 import { tabletennis } from "../sports/setbased/tabletennis.ts";
 // single-sport: VB-PT-2/3 are the FIVB set-score rows
 import { volleyball } from "../sports/setbased/volleyball.ts";
+import { declaredCfgs } from "../testkit/declared-cfgs.ts";
 import { forEachSport } from "../testkit/for-each-sport.ts";
 import { readCorpus } from "../testkit/golden.ts";
 import { defaultLineupPair, makeEnvelope, tableRulesOf } from "../testkit/index.ts";
@@ -280,6 +281,13 @@ describe("W2d payout (SPEC §5.3)", () => {
     expect(() => payout(win("H"), "regulation", sets(1, 3), true, VB(FIVB5), undefined, 3)).toThrowError(/1-3 no match won on 3 sets ends on/);
     expect(() => payout(win("H"), "regulation", sets(4, 1), true, VB(FIVB5), undefined, 3)).toThrowError(/4-1 no match won on 3 sets ends on/);
     expect(() => payout(win("H"), "regulation", sets(3, 1), true, VB(FIVB5), undefined, undefined)).toThrowError(/keeps no set score/);
+    // W2d T20 MD-1: each refusal is typed and names the pair (and the count it was judged on), not only a message
+    expect(() => payout(win("H"), "regulation", sets(4, 1), true, VB(FIVB5), undefined, 3)).toThrowError(
+      expect.objectContaining({ code: "CONFIG_INVALID", data: { entrants: ["H", "A"], setsToWin: 3 } }),
+    );
+    expect(() => payout(win("H"), "regulation", sets(3, 1), true, VB(FIVB5), undefined, undefined)).toThrowError(
+      expect.objectContaining({ code: "CONFIG_INVALID", data: { entrants: ["H", "A"] } }),
+    );
     // the boundary: a played final score is its own key (3-2 pays 3-2's pair, never a completed 3-… guess)
     expect(pts(payout(win("H"), "regulation", sets(3, 2), true, VB(FIVB5), undefined, 3))).toEqual([2, 1]);
   });
@@ -710,7 +718,7 @@ describe("reachableOutcomes + coverage (X-PT-3)", () => {
     expect(settledSetScores).toBeGreaterThan(0); // the set corpora record settles: the FIVB 6.4.3 arm is reached for real
   });
 
-  it("setsToWinOf: a set-table sport's ⌈bestOf/2⌉ from the cfg (each × bestOf 1/3/5/7); undefined for every other sport (registry, counted)", () => {
+  it("setsToWinOf: a set-table sport's ⌈bestOf/2⌉ from the cfg (each × bestOf 1/3/5/7/19 — 19 is won on 10, a two-digit count); undefined for every other sport (registry, counted)", () => {
     let checked = 0;
     const setSports: string[] = [];
     expect(
@@ -722,14 +730,48 @@ describe("reachableOutcomes + coverage (X-PT-3)", () => {
           return;
         }
         setSports.push(key);
-        for (const bestOf of [1, 3, 5, 7]) {
+        // 19: the configSchema takes any positive bestOf; a best of 19 is won on ⌈19/2⌉ = 10, read off "10-L" whole.
+        for (const bestOf of [1, 3, 5, 7, 19]) {
           expect(setsToWinOf(module, { ...(variant as Raw), bestOf }), `${key} bo${bestOf}`).toBe(Math.ceil(bestOf / 2));
           checked++;
         }
       }),
     ).toBe(SPORTS);
     expect(setSports.sort()).toEqual(["badminton", "tabletennis", "volleyball"]);
-    expect(checked).toBe(SPORTS - 3 + 3 * 4);
+    expect(checked).toBe(SPORTS - 3 + 3 * 5);
+  });
+
+  it("W2d T20 MD-1 setsToWinOf refuses, typed, a sport whose final set scores name more than one winning count (assumptions are guards)", () => {
+    // single-sport: a stubbed set module (volleyball's, its reachableSetScores replaced); the registry sweep above covers every real sport
+    // No real sport does (the sweep above: one ⌈bestOf/2⌉ per cfg); a module declaring 2-0 and 3-1 as final scores has no
+    // one count a match is won on, so the set-score payout could not complete a short result: refused by name, never guessed.
+    const mixed = { ...volleyball, reachableSetScores: () => ["2-0", "3-1"] } as AnySportModule;
+    let caught: unknown;
+    try {
+      setsToWinOf(mixed, {});
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toMatchObject({ code: "CONFIG_INVALID", data: { sport: "volleyball" } });
+    expect((caught as Error).message).toBe("volleyball's final set scores name 2 winning counts, not one");
+    // the positive pair: one count, however many final scores
+    expect(setsToWinOf({ ...volleyball, reachableSetScores: () => ["3-0", "3-1", "3-2"] } as AnySportModule, {})).toBe(3);
+  });
+
+  it("W2d T20 MD-1 every reachable outcome set a stage can have holds a win (registry × stage kind × declared cfg, counted) — the guard behind coverage's `decided` equivalent (stryker-equivalent.json, points.ts:501)", () => {
+    let sets = 0;
+    expect(
+      forEachSport(({ key, module }) => {
+        for (const { cfg } of declaredCfgs(module)) {
+          for (const stageKind of StageKind.options) {
+            const reach = reachableOutcomes(module, cfg, stageKind);
+            expect([...reach].some((k) => k.startsWith("win.")), `${key} ${stageKind}`).toBe(true);
+            sets++;
+          }
+        }
+      }),
+    ).toBe(SPORTS);
+    expect(sets, "anti-vacuity").toBeGreaterThanOrEqual(SPORTS * StageKind.options.length);
   });
 });
 

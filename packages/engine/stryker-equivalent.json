@@ -1040,6 +1040,144 @@
       "reason": "The `?? []` arm runs only for a schedule handed with no `results` (nothing counted yet). resultsAmong keeps an entry only when both of its sides' entrantIds are in the class, and a string's characters have no entrantId, so [\"Stryker was here\"] counts no result, as `[]` does (W2d T12)."
     },
     {
+      "mutant": "src/competition/tiebreakers.ts:96:7 ConditionalExpression → false",
+      "original": "cut <= 0",
+      "line": "if (cut <= 0) return scores.reduce((sum, s) => sum + s, 0);",
+      "reason": "W2d T20 MD-1. Every caller passes cut 0 (buchholz's default: the `buchholz` comparator and its display column) or 1 (buchholzCut1). With cut 0 the mutant takes the sorted branch, and sorted.slice(0) is every score: the same integers summed, so the same total. Only a negative cut, which nothing passes, separates the two."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:96:7 EqualityOperator → cut < 0",
+      "original": "cut <= 0",
+      "line": "if (cut <= 0) return scores.reduce((sum, s) => sum + s, 0);",
+      "reason": "W2d T20 MD-1. `< 0` and `<= 0` differ only at cut 0, where the mutant sums sorted.slice(0): every opponent score, integers, so the same total as the reduce over `scores`. Equivalent for every input."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:134:15 BooleanLiteral → true",
+      "original": "false",
+      "line": "let met = false;",
+      "reason": "W2d T20 MD-1. `met` is set in the same iteration that adds to `scored`, so a side that never met its foe has scored 0. With met always true the never-met early return is skipped, and the comparison of 0 with 0 that follows returns the same 0. Equivalent for every input (directEncounter also has no production caller: git grep -F directEncounter outside tests and docs finds only tiebreakers.ts)."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:144:7 ConditionalExpression → false",
+      "original": "!aVsB.met && !bVsA.met",
+      "line": "if (!aVsB.met && !bVsA.met) return 0; // never met",
+      "reason": "W2d T20 MD-1. When neither side met the other both scored 0 (scored only grows where met is set), so dropping the never-met early return leaves the comparison, which returns the same 0. Equivalent for every input."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:152:10 MethodExpression → row.games",
+      "original": "row.games",
+      "line": "return row.games",
+      "reason": "W2d T20 MD-1. Without the colour filter the games with no colour map to undefined or null (Color | null | undefined are the only values the type allows), and Array.prototype.join writes both as the empty string: the same 'W'/'B' string. Equivalent for every typed input."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:153:23 ConditionalExpression → true",
+      "original": "game.color === \"W\" || game.color === \"B\"",
+      "line": ".filter((game) => game.color === \"W\" || game.color === \"B\")",
+      "reason": "W2d T20 MD-1. A filter that keeps every game is the 152:10 mutant: the colourless games map to undefined or null, which join writes as the empty string, so the colour history is the same string. Equivalent for every typed input."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:331:10 ConditionalExpression → false",
+      "original": "key === undefined",
+      "line": "return key === undefined ? undefined : row.metrics[key];",
+      "reason": "W2d T20 MD-1. metricKeyOf returns undefined only when the row records none of `keys`; the mutant then reads row.metrics[undefined], the property named 'undefined', which nothing writes: a row's metric keys are its sport's declared metrics (no sport declares 'undefined': the registry sweep in tiebreakers-md1.test.ts) and rankStandings' buchholz / buchholz_cut1 / sberger columns. So it is undefined either way."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:382:26 ConditionalExpression → false",
+      "original": "lhs < rhs",
+      "line": "return lhs > rhs ? 1 : lhs < rhs ? -1 : 0;",
+      "reason": "W2d T20 MD-1. compareRatio is reached only through groupBySort. Its sort asks the comparator through `-sgn(cmp(later, earlier))`: V8's TimSort (a port of CPython's listsort) compares an element only against an EARLIER one and moves it only on a negative answer, so 0 in place of -1 for 'later is smaller' keeps the same order. The grouping pass then compares neighbours best-first, where lhs < rhs never holds. Measured (scratch probe, 20,000 random inputs of 2-300 rows): 0 groupings differ; the probe with a genuinely wrong comparator differs in 56,923 of 120,000 checks."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:546:7 ConditionalExpression → true",
+      "original": "current.length > 0",
+      "line": "if (current.length > 0) groups.push(current);",
+      "reason": "W2d T20 MD-1. After the loop `current` holds the last row and is empty only when `cls` is. No caller passes an empty class: refine's plain and direct steps return a class of one first, h2hPass skips groups of one, h2hExclusion and h2hTwo sort a mini-table with one row per member of a class of two or more, partialSchedule refines the class the block handed it and the non-empty groups groupBySort itself returned, and rankStandings starts refine with no class at all when there are no rows. So the push of an empty group never happens."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:546:7 EqualityOperator → current.length >= 0",
+      "original": "current.length > 0",
+      "line": "if (current.length > 0) groups.push(current);",
+      "reason": "W2d T20 MD-1. `>= 0` is the `→ true` mutant of the same line: it adds an empty group only when `current` is empty after the loop, which needs an empty class, and no caller of groupBySort passes one (see 546:7 → true)."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:870:15 ConditionalExpression → false",
+      "original": "cls.length <= 1",
+      "line": "if (cls.length <= 1) return [cls];",
+      "reason": "W2d T20 MD-1. refine's direct step on a class of one, past the shortcut: scheduleComplete counts no scheduled pair and no result among one entrant (a pair needs two members), so it is complete; directRefine groupBySorts the one row into [[row]], and `groups.length > 1` is false, so nothing is marked: the same [cls]. The same shape as the recorded plain-step row at :880 and h2hTwo's at :802."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:870:15 EqualityOperator → cls.length < 1",
+      "original": "cls.length <= 1",
+      "line": "if (cls.length <= 1) return [cls];",
+      "reason": "W2d T20 MD-1. `< 1` and `<= 1` agree on every length but 1 (a class is never empty: rankStandings starts refine with no class when there are no rows), and on a class of one the direct step returns the same [cls] (see 870:15 → false)."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:920:12 EqualityOperator → a.entrantId <= b.entrantId",
+      "original": "a.entrantId < b.entrantId",
+      "line": "return a.entrantId < b.entrantId ? -1 : a.entrantId > b.entrantId ? 1 : 0;",
+      "reason": "W2d T20 MD-1. `<=` differs from `<` only for two rows with the SAME entrantId: a ranked table holds one row per entrant (stage tables are folded one row per entrant id), and the sort never compares an element with itself."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:920:45 ConditionalExpression → true",
+      "original": "a.entrantId > b.entrantId",
+      "line": "return a.entrantId < b.entrantId ? -1 : a.entrantId > b.entrantId ? 1 : 0;",
+      "reason": "W2d T20 MD-1. The second test is reached only when `a.entrantId < b.entrantId` is false; with one row per entrant that means a > b, where the original also returns 1."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:920:45 EqualityOperator → a.entrantId >= b.entrantId",
+      "original": "a.entrantId > b.entrantId",
+      "line": "return a.entrantId < b.entrantId ? -1 : a.entrantId > b.entrantId ? 1 : 0;",
+      "reason": "W2d T20 MD-1. Reached only when a.entrantId >= b.entrantId already; with one row per entrant a > b, so `>=` and `>` are both true and both return 1."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:920:45 ConditionalExpression → false",
+      "original": "a.entrantId > b.entrantId",
+      "line": "return a.entrantId < b.entrantId ? -1 : a.entrantId > b.entrantId ? 1 : 0;",
+      "reason": "W2d T20 MD-1. Returns 0 where the original returns 1 (a's id after b's). bySeedThenId is only the comparator of `[...cls].sort(bySeedThenId(ctx))`: V8's TimSort (a port of CPython's listsort) compares an element only against an EARLIER one and moves it only on a negative answer, so 0 in place of +1 for 'later sorts after' keeps the same order. Measured (scratch probe, 20,000 random inputs of 2-300 rows, duplicate and missing seeds): 0 orders differ; the probe with a wrong comparator differs."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:920:45 EqualityOperator → a.entrantId <= b.entrantId",
+      "original": "a.entrantId > b.entrantId",
+      "line": "return a.entrantId < b.entrantId ? -1 : a.entrantId > b.entrantId ? 1 : 0;",
+      "reason": "W2d T20 MD-1. Reached only when a.entrantId >= b.entrantId, so with one row per entrant `<=` is false there and returns 0 where the original returns 1: the 920:45 → false mutant, which V8's TimSort (compares later against earlier, moves only on a negative answer) sorts identically. Measured with the same probe: 0 orders differ."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:1066:5 CallExpression → ;",
+      "original": "scoreOf.set(id, 0);",
+      "line": "scoreOf.set(id, 0);",
+      "reason": "W2d T20 MD-1. Every read of scoreOf falls back with `?? 0` (the result push, the award, the returned score), so an entrant whose 0 was never set reads 0 all the same. Equivalent for every input."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:1098:34 ArrayDeclaration → [\"Stryker was here\"]",
+      "original": "[]",
+      "line": "games: cards.get(entrant) ?? [],",
+      "reason": "W2d T20 MD-1. NoCoverage: `cards` is given an empty card for every entrant before any result is read, so `cards.get(entrant)` is never undefined and the `?? []` arm never runs."
+    },
+    {
+      "mutant": "src/competition/points.ts:501:9 ConditionalExpression → true",
+      "original": "key.startsWith(\"win.\")",
+      "line": "if (key.startsWith(\"win.\")) decided = true;",
+      "reason": "W2d T20 MD-1. `decided` is set inside the loop, so on the empty reachable set it stays false either way. On any other set the only producer, reachableOutcomes (coverage's one production caller, table-rule-guards.ts), adds `win.<d>` beside every `loss.<d>`, and every sport's every stage kind and declared cfg reaches at least one win (the registry sweep in points-w2d.test.ts), so the original also sets it true. Only a hand-built set of level results alone, which no stage has, separates them."
+    },
+    {
+      "mutant": "src/competition/points.ts:501:24 StringLiteral → \"\"",
+      "original": "\"win.\"",
+      "line": "if (key.startsWith(\"win.\")) decided = true;",
+      "reason": "W2d T20 MD-1. `key.startsWith(\"\")` is always true: the 501:9 `→ true` mutant of the same line. `decided` then turns true on the first reachable key; the original turns true on the first `win.` key, and every reachable set a stage can have holds one (the registry sweep in points-w2d.test.ts), so after the loop both are true; on the empty set the loop never runs and both stay false."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:305:49 ConditionalExpression → false",
+      "original": "n < 0",
+      "line": "const sgn = (n: number): number => (n > 0 ? 1 : n < 0 ? -1 : 0);",
+      "reason": "W2d T20 MD-1. sgn then answers 0 for every negative. sgn is module-local and feeds only comparators, and every comparator is consumed only by groupBySort (COMPARATORS, FEWEST_PLAYED and the score comparator alike; no other caller). Its sort asks `-sgn(cmp(a, b))`, which is negative exactly when cmp(a, b) > 0 under both versions (a negative cmp reads +1 or -0, neither negative), and V8's TimSort (a port of CPython's listsort) compares an element only against an EARLIER one and moves it only on a negative answer, so the order is the same. The grouping pass then reads `sgn(cmp(prev, row)) !== 0` on neighbours already best-first, where cmp is never negative (each comparator is antisymmetric), so a split happens exactly when cmp > 0 in both. Same probe as compareRatio's 0-for--1 row (20,000 random inputs): 0 groupings differ. In the whole-file run it reported Timeout under load; the low-load re-run reports Survived."
+    },
+    {
+      "mutant": "src/sports/period/kernel.ts:2871:9 ConditionalExpression → false",
+      "original": "preset.winsCount === undefined",
+      "line": "...(preset.winsCount === undefined ? {} : { winsCount: preset.winsCount }),",
+      "reason": "W2d T20 MD-1. For a preset with no winsCount (every period sport but hockey) the mutant writes `winsCount: undefined` on the module where the original writes no key. Every reader of a module's winsCount asks `=== undefined` before copying it on (stage.ts, progression.ts, web engine-db/competition.ts, testkit/simulation.ts, tools/bench validate-pack.ts) or `=== \"regulation\"` (tiebreakers.ts winsOf, simulation.ts's wins-first refusal), and none enumerates the module's keys (`git grep -n winsCount` over packages/engine/src, apps/web/src, tools: no `in`, `hasOwn` or `Object.keys` read). An undefined own property reads exactly as an absent one at each, so no ranking changes. Static (module build time): Stryker ran every related test and none sees it."
+    },
+    {
       "mutant": "src/sports/cricket/scorecard.ts:83:10 OptionalChaining → fine.currentBowler",
       "original": "fine?.currentBowler",
       "line": "return fine?.currentBowler ?? fine?.prevOverBowler ?? null;",
