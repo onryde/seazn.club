@@ -23535,6 +23535,10 @@ async function cleanup(tag: string): Promise<void> {
     // outboxTrialWarningSuite's own org (email outbox phase 3 wave 2 T11) — its group goes with the orphaned-group purge
     // below. Its trial_ending row has no org, so the suite deletes that itself.
     `delivered+trialwarn_${tag}@resend.dev`,
+    // w2cStageRulesSuite's own Pro org (W2c T10) — found in review (W2d A14 m4): it was never purged, one org a run.
+    `delivered+w2c_${tag}@resend.dev`,
+    // w2dTablesSuite's own org (W2d A-smoke) — its competition, the pinned stage and its stored lots draws cascade with it.
+    `delivered+w2d_${tag}@resend.dev`,
   ];
   const isLocal = /@(localhost|127\.0\.0\.1)[:/]/.test(url);
   const sql = postgres(url, {
