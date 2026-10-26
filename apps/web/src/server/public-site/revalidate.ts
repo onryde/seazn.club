@@ -214,9 +214,10 @@ export function dropNamedPublicDocuments(
  *  ORDER IS LOAD-BEARING: competition 'max' first, division expiry second. A
  *  flush groups its tags by profile in first-seen order and Next's tag
  *  manifest is last-write-wins, so a 'max' for the same division fired later
- *  in the same request (`completeStage`'s voided `fireStageRevalidate`, reached
- *  from scoreEvent's auto-advance) joins the already-open 'max' group and can
- *  no longer overwrite the expiry. */
+ *  in the same request (`completeStage`'s `fireStageRevalidate`, which is
+ *  awaited so it fires inside the request, reached from scoreEvent's
+ *  auto-advance) joins the already-open 'max' group and can no longer
+ *  overwrite the expiry. */
 export function fireScoreRevalidate(divisionId: string, competitionId: string): Promise<void> {
   try {
     revalidateTag(competitionTag(competitionId), "max");

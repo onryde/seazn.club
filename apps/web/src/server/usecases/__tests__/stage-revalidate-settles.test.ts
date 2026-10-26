@@ -19,12 +19,13 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
+import { appendEvent } from "@/server/engine-db";
 import { declaredVariant, seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { scoreEvent } from "../scoring";
-import { completeStage, createStages, generateStageFixtures, unpairSwissRound } from "../stages";
+import { completeStage, confirmSeedProposal, createStages, generateStageFixtures, unpairSwissRound } from "../stages";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -38,7 +39,7 @@ const rig = vi.hoisted(() => ({
   seq: 0,
   held: 0,
   lookupDone: [] as number[],
-  fires: [] as { divisionId: string; seq: number }[],
+  fires: [] as { divisionId: string; seq: number; viaStage: boolean }[],
 }));
 
 vi.mock("@/lib/db", async (importOriginal) => {
@@ -60,7 +61,10 @@ vi.mock("@/server/public-site/revalidate", async (importOriginal) => {
   return {
     ...real,
     fireDivisionRevalidate: (...args: Parameters<typeof real.fireDivisionRevalidate>) => {
-      rig.fires.push({ divisionId: args[0], seq: ++rig.seq });
+      // Who fired it: the call is synchronous, so its immediate caller is the top of the stack. `fireStageRevalidate` is the
+      // function under test; `afterScheduleWrite` also fires the division, with no lookup, and must not be mistaken for it.
+      const viaStage = /\bat (?:async )?fireStageRevalidate\b/.test(new Error().stack ?? "");
+      rig.fires.push({ divisionId: args[0], seq: ++rig.seq, viaStage });
       return real.fireDivisionRevalidate(...args);
     },
   };
@@ -81,13 +85,18 @@ interface Seen {
   held: number;
   /** Held lookups that had finished by the instant the operation resolved. */
   lookupsDoneAtResolve: number;
-  /** `fireDivisionRevalidate` calls for the division that came AFTER a finished lookup (so: from `fireStageRevalidate`,
-   *  never from `afterScheduleWrite`, which fires with no lookup), and were made before the operation resolved. */
+  /** `fireDivisionRevalidate` calls for the division made BY `fireStageRevalidate` (attributed by call stack, not by timing:
+   *  `afterScheduleWrite` fires too, with no lookup), before the operation resolved. */
   toldBeforeResolve: number;
   /** ... and those that landed after it resolved, once the held lookup was let go. */
   toldAfterResolve: number;
   /** Every `fireDivisionRevalidate` call for the division, whatever its source. */
   firesInAll: number;
+  /** Fires made by `fireStageRevalidate` for ANY division. A catch block that fires with ids it does not have would name some
+   *  other division, which `toldBeforeResolve`/`toldAfterResolve` (this division only) could not see. */
+  stageFiresAnywhere: number;
+  /** Held lookups that ran to the end (a failing one never does), once the held lookup was let go. */
+  lookupsFinished: number;
   /** Promise rejections nobody awaited, counted while the door ran and the held lookup finished. */
   unhandled: number;
   outcome: "resolved" | "rejected";
@@ -112,15 +121,16 @@ async function observe(divisionId: string, op: () => Promise<unknown>, o: { fail
   const resolvedAt = ++rig.seq;
   const lookupsDoneAtResolve = rig.lookupDone.filter((s) => s < resolvedAt).length;
   const mine = () => rig.fires.filter((f) => f.divisionId === divisionId);
-  const afterALookup = (f: { seq: number }) => rig.lookupDone.some((d) => d < f.seq);
-  const toldBeforeResolve = mine().filter((f) => f.seq < resolvedAt && afterALookup(f)).length;
+  const toldBeforeResolve = mine().filter((f) => f.seq < resolvedAt && f.viaStage).length;
   await sleep(rig.HOLD_MS + 300);
   process.off("unhandledRejection", onUnhandled);
-  const toldAfterResolve = mine().filter((f) => f.seq > resolvedAt && afterALookup(f)).length;
+  const toldAfterResolve = mine().filter((f) => f.seq > resolvedAt && f.viaStage).length;
   const held = rig.held;
   const firesInAll = mine().length;
+  const lookupsFinished = rig.lookupDone.length;
+  const stageFiresAnywhere = rig.fires.filter((f) => f.viaStage).length;
   rig.armed = false;
-  return { held, lookupsDoneAtResolve, toldBeforeResolve, toldAfterResolve, firesInAll, unhandled, outcome, value };
+  return { held, lookupsDoneAtResolve, toldBeforeResolve, toldAfterResolve, firesInAll, stageFiresAnywhere, lookupsFinished, unhandled, outcome, value };
 }
 
 async function freshLeague() {
@@ -135,6 +145,35 @@ async function freshLeague() {
   );
   const [stage] = await createStages(auth, division.id, [{ seq: 1, kind: "league", name: "League", config: {} }]);
   return { auth, divisionId: division.id, stageId: stage!.id };
+}
+
+/** Two groups feeding a 1-qualifier-per-group knockout at `timing: "setup"` (the owner's TBD-fixture shape). */
+async function groupsFeedingSetupKnockout() {
+  const { auth } = await seedOrg("pro");
+  const suffix = randomUUID().slice(0, 8);
+  const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Settle " + suffix, visibility: "private", branding: {} });
+  const division = await createDivision(auth, comp.id, { name: "Open", slug: "open-" + suffix, sport_key: "generic", variant_key: "score", config: GENERIC_CONFIG });
+  await createEntrants(
+    auth,
+    division.id,
+    Array.from({ length: 4 }, (_, i) => ({ kind: "individual" as const, display_name: `E${i + 1}`, seed: i + 1, members: [] })),
+  );
+  const stages = await createStages(auth, division.id, [
+    { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 2 } } },
+    {
+      seq: 2,
+      kind: "knockout",
+      name: "KO",
+      config: {},
+      progression: { sources: [{ stage: "previous", take: [{ kind: "topNPerGroup", n: 1 }] }], placement: "rank_order", timing: "setup" },
+    },
+  ]);
+  return {
+    auth,
+    divisionId: division.id,
+    groupStageId: stages.find((s) => s.kind === "group")!.id,
+    koStageId: stages.find((s) => s.kind === "knockout")!.id,
+  };
 }
 
 const tip = async (id: string) => (await sql<{ s: number }[]>`select coalesce(max(seq), 0)::int as s from score_events where fixture_id = ${id}`)[0]!.s;
@@ -192,15 +231,59 @@ describe.skipIf(!HAS_DB)("a stage write resolves only after the revalidation it 
   }, 60_000);
 
   it("a revalidation that cannot be looked up never fails the write that already committed", async () => {
+    // The baseline: the same door with the lookup healthy, so the attribution below is known to see the lookup's fire.
+    const healthyLeague = await freshLeague();
+    const healthy = await observe(healthyLeague.divisionId, () => generateStageFixtures(healthyLeague.auth, healthyLeague.stageId));
+    expect(healthy.toldBeforeResolve + healthy.toldAfterResolve, "premise: on a healthy lookup fireStageRevalidate DOES fire the division (else this test witnesses nothing)").toBeGreaterThanOrEqual(1);
+    expect(healthy.stageFiresAnywhere, "premise: and the any-division count sees it").toBeGreaterThanOrEqual(1);
+
     const t = await freshLeague();
     const seen = await observe(t.divisionId, () => generateStageFixtures(t.auth, t.stageId), { failLookup: true });
     expect(seen.held, "anti-vacuity: the lookup was reached, and failed").toBeGreaterThanOrEqual(1);
+    expect(seen.lookupsFinished, "the held lookup never finished: it threw").toBe(0);
     expect(seen.outcome, "Generate committed: its caller is not told it failed").toBe("resolved");
     expect(seen.unhandled, "the failure is handled where it happens, not left to reject unobserved").toBe(0);
+    // Attributed by call stack: a catch block that fired the division anyway (with what it has: no ids) is a fire made by
+    // fireStageRevalidate. Counting fires that FOLLOW a finished lookup could not see it: a failed lookup finishes none.
     expect(seen.toldBeforeResolve + seen.toldAfterResolve, "no lookup, no revalidation from it").toBe(0);
+    expect(seen.stageFiresAnywhere, "nor for any other division, named from nowhere").toBe(0);
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int n from fixtures where stage_id = ${t.stageId}`;
     expect(n, "the write stood").toBeGreaterThan(0);
-  }, 60_000);
+  }, 90_000);
+
+  it("Generate on a stage fed at SETUP (the progression-setup path, its own call site): the same", async () => {
+    const t = await groupsFeedingSetupKnockout();
+    const seen = await observe(t.divisionId, () => generateStageFixtures(t.auth, t.koStageId));
+    expect(seen.outcome).toBe("resolved");
+    expect((seen.value as { created?: number }).created, "premise: this ran the progression-setup path and made the TBD knockout fixture").toBeGreaterThan(0);
+    expect(seen.held, "anti-vacuity: this path reached fireStageRevalidate's lookup").toBeGreaterThanOrEqual(1);
+    expect(seen.lookupsDoneAtResolve, "every lookup had finished when Generate resolved").toBe(seen.held);
+    expect(seen.toldBeforeResolve, "the division was told before Generate resolved").toBeGreaterThanOrEqual(1);
+    expect(seen.toldAfterResolve, "nothing is told after it resolved").toBe(0);
+  }, 90_000);
+
+  it("Confirm a seed proposal: the same", async () => {
+    const t = await groupsFeedingSetupKnockout();
+    await generateStageFixtures(t.auth, t.koStageId); // the TBD knockout fixture exists up front
+    await generateStageFixtures(t.auth, t.groupStageId);
+    const groupFixtures = await sql<{ id: string }[]>`select id from fixtures where stage_id = ${t.groupStageId}`;
+    expect(groupFixtures.length, "the rig has group matches to decide").toBeGreaterThan(0);
+    for (const f of groupFixtures) {
+      await appendEvent(t.auth.orgId, f.id, 0, { type: "core.start", payload: {} });
+      await appendEvent(t.auth.orgId, f.id, 1, { type: "generic.result", payload: { p1Score: 2, p2Score: 0 } });
+    }
+    await completeStage(t.auth, t.groupStageId); // computes the draft proposal
+    const [proposal] = await sql<{ id: string }[]>`select id from stage_seed_proposals where stage_id = ${t.koStageId} and status = 'draft'`;
+    expect(proposal, "premise: a draft proposal is waiting to be confirmed").toBeDefined();
+
+    const seen = await observe(t.divisionId, () => confirmSeedProposal(t.auth, t.koStageId, { proposalId: proposal!.id }));
+    expect(seen.outcome).toBe("resolved");
+    expect((seen.value as { filled: number }).filled, "premise: the confirm filled the knockout's slots").toBeGreaterThan(0);
+    expect(seen.held, "anti-vacuity: Confirm reached fireStageRevalidate's lookup").toBeGreaterThanOrEqual(1);
+    expect(seen.lookupsDoneAtResolve, "every lookup had finished when Confirm resolved").toBe(seen.held);
+    expect(seen.toldBeforeResolve, "the division was told before Confirm resolved").toBeGreaterThanOrEqual(1);
+    expect(seen.toldAfterResolve, "nothing is told after it resolved").toBe(0);
+  }, 120_000);
 
   it("no call site in stages.ts is left un-awaited (every one is counted)", () => {
     const src = readFileSync(fileURLToPath(new URL("../stages.ts", import.meta.url)), "utf8");
