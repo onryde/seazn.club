@@ -602,122 +602,75 @@ export async function refundIssuedEmail(args: RefundIssuedArgs, locale: Locale):
   return refundIssuedTemplate(args, dict);
 }
 
-export interface DisputeAlertEmail extends DisputeAlertArgs {
-  to: string;
-  locale?: Locale;
-}
-
-/** Organiser alert: an entry-fee payment was disputed (spec issue #5). */
-export async function sendDisputeAlertEmail(opts: DisputeAlertEmail): Promise<boolean> {
-  const { to, locale = "en", ...args } = opts;
+/** Organiser alert: an entry-fee payment was disputed (spec issue #5), in the owner's language. It is queued on the email outbox by
+ *  `handleRegistrationDispute` (registrations.ts, kind `registration_dispute_alert`) in the transaction that records the dispute; nothing
+ *  sends it directly. */
+export async function disputeAlertEmail(args: DisputeAlertArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...disputeAlertTemplate(args, dict) });
+  return disputeAlertTemplate(args, dict);
 }
 
-export interface DisputeLostEmail extends DisputeLostArgs {
-  to: string;
-  locale?: Locale;
-}
-
-/** Organiser outcome mail: a chargeback closed lost — states the write-off
- *  and the balance recovery (PROMPT-55). */
-export async function sendDisputeLostEmail(opts: DisputeLostEmail): Promise<boolean> {
-  const { to, locale = "en", ...args } = opts;
+/** Organiser outcome mail: a chargeback closed lost — states the write-off and the balance recovery (PROMPT-55), in the owner's language.
+ *  It is queued on the email outbox by `handleRegistrationDispute` (registrations.ts, kind `registration_dispute_lost`) after the recovery;
+ *  nothing sends it directly. */
+export async function disputeLostEmail(args: DisputeLostArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...disputeLostTemplate(args, dict) });
+  return disputeLostTemplate(args, dict);
 }
 
-export interface SponsorInvoiceEmail extends SponsorInvoiceArgs {
-  to: string;
-  locale?: Locale;
-}
-
-/** Pay-now invoice to the sponsor contact at checkout start (v10). */
-export async function sendSponsorInvoiceEmail(opts: SponsorInvoiceEmail): Promise<boolean> {
-  const { to, locale = "en", ...args } = opts;
+/** Pay-now invoice to the sponsor contact at checkout start (v10), in the org's language. It is queued on the email outbox by
+ *  `startSponsorCheckout` (sponsors.ts, kind `sponsor_invoice`) once the Checkout session is minted; nothing sends it directly. */
+export async function sponsorInvoiceEmail(args: SponsorInvoiceArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...sponsorInvoiceTemplate(args, dict) });
+  return sponsorInvoiceTemplate(args, dict);
 }
 
-export interface SponsorReceiptEmail extends SponsorReceiptArgs {
-  to: string;
-  locale?: Locale;
-}
-
-/** Receipt to the sponsor once the order is paid and the placement is live. */
-export async function sendSponsorReceiptEmail(opts: SponsorReceiptEmail): Promise<boolean> {
-  const { to, locale = "en", ...args } = opts;
+/** Receipt to the sponsor once the order is paid and the placement is live, in the org's language. It is queued on the email outbox by
+ *  `queueSponsorReceipt` (sponsors.ts, kind `sponsor_receipt`) in the transaction that activates the placement; nothing sends it
+ *  directly. The dispute evidence pack quotes the same rendering. */
+export async function sponsorReceiptEmail(args: SponsorReceiptArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...sponsorReceiptTemplate(args, dict) });
+  return sponsorReceiptTemplate(args, dict);
 }
 
-export interface SponsorRefundEmail extends SponsorRefundArgs {
-  to: string;
-  locale?: Locale;
-}
-
-/** Refund notice to the sponsor when a paid order is refunded. */
-export async function sendSponsorRefundEmail(opts: SponsorRefundEmail): Promise<boolean> {
-  const { to, locale = "en", ...args } = opts;
+/** Refund notice to the sponsor when a paid order is refunded, in the org's language. It is queued on the email outbox by
+ *  `queueSponsorRefundReceipt` (sponsors.ts, kind `sponsor_refund`) in the transaction that records the refund; nothing sends it
+ *  directly. */
+export async function sponsorRefundEmail(args: SponsorRefundArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...sponsorRefundTemplate(args, dict) });
+  return sponsorRefundTemplate(args, dict);
 }
 
-export interface SponsorDisputeAlertEmail extends SponsorDisputeAlertArgs {
-  to: string;
-  locale?: Locale;
-}
-
-/** Organiser alert: a sponsorship package payment was disputed (P0-2). */
-export async function sendSponsorDisputeAlertEmail(
-  opts: SponsorDisputeAlertEmail,
-): Promise<boolean> {
-  const { to, locale = "en", ...args } = opts;
+/** Organiser alert: a sponsorship package payment was disputed (P0-2), in the owner's language. It is queued on the email outbox by
+ *  `handleSponsorDispute` (sponsors.ts, kind `sponsor_dispute_alert`) in the transaction that flags the order; nothing sends it
+ *  directly. */
+export async function sponsorDisputeAlertEmail(args: SponsorDisputeAlertArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...sponsorDisputeAlertTemplate(args, dict) });
+  return sponsorDisputeAlertTemplate(args, dict);
 }
 
-export interface SponsorDisputeLostEmail extends SponsorDisputeLostArgs {
-  to: string;
-  locale?: Locale;
-}
-
-/** Organiser outcome mail: a sponsorship chargeback closed lost — states the
- *  write-off and the balance recovery (P0-2). */
-export async function sendSponsorDisputeLostEmail(
-  opts: SponsorDisputeLostEmail,
-): Promise<boolean> {
-  const { to, locale = "en", ...args } = opts;
+/** Organiser outcome mail: a sponsorship chargeback closed lost — states the write-off and the balance recovery (P0-2), in the owner's
+ *  language. It is queued on the email outbox by `handleSponsorDispute` (sponsors.ts, kind `sponsor_dispute_lost`) after the recovery;
+ *  nothing sends it directly. */
+export async function sponsorDisputeLostEmail(args: SponsorDisputeLostArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...sponsorDisputeLostTemplate(args, dict) });
+  return sponsorDisputeLostTemplate(args, dict);
 }
 
-export interface SponsorDisputeWonEmail extends SponsorDisputeWonArgs {
-  to: string;
-  locale?: Locale;
-}
-
-/** Organiser outcome mail: a sponsorship chargeback closed WON — the money
- *  stays and the placement is restored (the lost mail's happy twin). */
-export async function sendSponsorDisputeWonEmail(
-  opts: SponsorDisputeWonEmail,
-): Promise<boolean> {
-  const { to, locale = "en", ...args } = opts;
+/** Organiser outcome mail: a sponsorship chargeback closed WON — the money stays and the placement is restored (the lost mail's happy
+ *  twin), in the owner's language. It is queued on the email outbox by `handleSponsorDispute` (sponsors.ts, kind `sponsor_dispute_won`)
+ *  in the transaction that clears the flag; nothing sends it directly. */
+export async function sponsorDisputeWonEmail(args: SponsorDisputeWonArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...sponsorDisputeWonTemplate(args, dict) });
+  return sponsorDisputeWonTemplate(args, dict);
 }
 
-export interface PassRevokedEmail extends PassRevokedArgs {
-  to: string;
-  locale?: Locale;
-}
-
-/** Owner notice when an Event Pass is refunded (P0-3a): the pass is revoked and
- *  the competition returns to the plan's active-competition allowance. */
-export async function sendPassRevokedEmail(opts: PassRevokedEmail): Promise<boolean> {
-  const { to, locale = "en", ...args } = opts;
+/** Owner notice when an Event Pass is refunded (P0-3a): the pass is revoked and the competition returns to the plan's active-competition
+ *  allowance, in the owner's language. It is queued on the email outbox by `queuePassRevokedEmail` (billing-events.ts, kind
+ *  `pass_revoked`) in the transaction that deletes the pass; nothing sends it directly. */
+export async function passRevokedEmail(args: PassRevokedArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...passRevokedTemplate(args, dict) });
+  return passRevokedTemplate(args, dict);
 }
 
 export interface StaffDisputeAlertEmail extends StaffDisputeAlertArgs {
@@ -1598,9 +1551,7 @@ export async function sendRegistrationRefundFailedAlertEmail(
   return send({ to: opts.to, transactional: true, subject, html, text });
 }
 
-export interface TrialEndingEmail {
-  to: string;
-  locale?: Locale;
+export interface TrialEndingEmailArgs {
   planName: string;
   trialEnd: string;
   hasPaymentMethod: boolean;
@@ -1611,25 +1562,23 @@ export interface TrialEndingEmail {
 }
 
 /**
- * Stripe's 3-day trial warning (V411, `customer.subscription.trial_will_end`).
- *
- * Transactional: it is the only notice before a no-card trial CANCELS or a
- * card-on-file trial CHARGES, so a group that unsubscribed from product mail
- * still gets to hear that their money is about to move.
+ * Stripe's 3-day trial warning (V411, `customer.subscription.trial_will_end`), in the payer's language, with the link to the billing
+ * page. It is queued on the email outbox by `handleTrialWillEnd` (billing-events.ts, kind `trial_ending`), TRANSACTIONAL: it is the only
+ * notice before a no-card trial CANCELS or a card-on-file trial CHARGES, so a group that unsubscribed from product mail still gets to hear
+ * that their money is about to move. Nothing sends it directly.
  */
-export async function sendTrialEndingEmail(opts: TrialEndingEmail): Promise<boolean> {
-  const { to, locale = "en", orgSlug, ...args } = opts;
+export async function trialEndingEmail(args: TrialEndingEmailArgs, locale: Locale): Promise<EmailContent> {
+  const { orgSlug, ...rest } = args;
   const base = (
     process.env.OAUTH_BASE_URL ||
     process.env.NEXT_PUBLIC_BASE_URL ||
     "http://localhost:3000"
   ).replace(/\/$/, "");
   const dict = await getDictionary(locale, "emails");
-  const body = trialEndingTemplate(
-    { ...args, locale, billingUrl: orgSlug ? `${base}/o/${orgSlug}/settings/billing` : base },
+  return trialEndingTemplate(
+    { ...rest, locale, billingUrl: orgSlug ? `${base}/o/${orgSlug}/settings/billing` : base },
     dict,
   );
-  return send({ to, transactional: true, ...body });
 }
 
 export interface ConnectBankAlertEmail {

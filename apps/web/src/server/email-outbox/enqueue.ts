@@ -79,6 +79,17 @@ export class OutboxDedupeKeyError extends Error {
   }
 }
 
+/**
+ * The once-key for an email about `id` (a row UUID or a Stripe id): `id`, or `<id>:<suffix>` when one fact owes several emails (a
+ * dispute's `created`, `won`, `lost`). Refuses a missing or blank id by name (`OutboxDedupeKeyError`), before any key exists: the
+ * blank check in `enqueueEmailOnce` cannot see one, because `${undefined}:created` is not blank, and a key that lost its id is one key
+ * for the whole kind in EVERY organisation (the index is global, ruling R-T1f), so every later email of the kind would be skipped.
+ */
+export function onceKey(kind: OutboxKind, refType: string, id: string | null | undefined, suffix?: string): string {
+  if (typeof id !== "string" || id.trim() === "") throw new OutboxDedupeKeyError(kind, refType);
+  return suffix === undefined ? id : `${id}:${suffix}`;
+}
+
 /** Raised by `enqueueEmail` when its insert wrote no row. The writer's `on conflict do nothing` has no target (see the header),
  *  so a primary-key or provider-id collision is skipped as quietly as a once-key; without this a caller would be handed the id
  *  of a row that was never written. Names the kind and ref type; never the address or the body. */

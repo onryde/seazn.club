@@ -6,7 +6,7 @@ import "server-only";
 // the handler ran, so a NULL processed_at is a stuck event and a missing row
 // is an event we never received (the deleted-endpoint incident class).
 import type Stripe from "stripe";
-import { sql } from "@/lib/db";
+import { sql, type Tx } from "@/lib/db";
 import { log } from "@/server/logger";
 import {
   linkStripeCustomerForGroup,
@@ -56,7 +56,7 @@ import {
 } from "@/server/usecases/pass-credit";
 import { getStripe } from "@/lib/stripe";
 import {
-  sendPassRevokedEmail,
+  passRevokedEmail,
   sendStaffDisputeAlertEmail,
   sendStuckEventsAlertEmail,
   sendCreditPackGrantFailedAlertEmail,
@@ -65,9 +65,11 @@ import {
   sendExtraOrgRepriceFailedAlertEmail,
   sendPassUnknownCompetitionAlertEmail,
   sendConnectBankAlertEmail,
-  sendTrialEndingEmail,
+  trialEndingEmail,
 } from "@/lib/email";
-import type { StaffDisputeAlertArgs } from "@/lib/email-templates";
+import type { PassRevokedArgs, StaffDisputeAlertArgs } from "@/lib/email-templates";
+import { enqueueEmailOnce, expiryWithin, onceKey, recipientLocale } from "@/server/email-outbox";
+import { orgOwnerRecipient } from "@/server/usecases/org-owner";
 import {
   handleRegistrationCheckoutAsyncPaymentFailed,
   handleRegistrationCheckoutCompleted,
@@ -80,7 +82,7 @@ import {
   syncConnectAccount,
 } from "@/server/usecases/stripe-connect";
 import { planLabel } from "@/lib/plan-label";
-import { toLocale } from "@/lib/i18n-constants";
+import type { Locale } from "@/lib/i18n-constants";
 import {
   handleSponsorChargeRefunded,
   handleSponsorDispute,
@@ -578,7 +580,7 @@ async function groupForCustomer(customerId: string | null | undefined): Promise<
  *
  * `deleted_at is null` matters: orgIdsInGroup deliberately includes
  * soft-deleted orgs (they still bear on billing), but a deleted org has no
- * owner left for orgOwnerEmail to find, so attributing a dispute alert or a
+ * owner left for orgOwnerRecipient to find, so attributing a dispute alert or a
  * PAYMENT_FAILED to it would send the notification nowhere. Falls back to the
  * oldest org of any state rather than dropping the event entirely — a group
  * whose every org is deleted still has a real invoice failing.
@@ -1953,33 +1955,63 @@ async function trueUpQuantityPaid(invoice: Stripe.Invoice, subId: string): Promi
   }
 }
 
-/** Current owner's email via org_members — NOT organizations.created_by, which
- *  an ownership transfer leaves on the original creator. */
-async function orgOwnerEmail(orgId: string): Promise<string | null> {
-  const [owner] = await sql<{ email: string }[]>`
-    select u.email from org_members m join users u on u.id = m.user_id
-    where m.org_id = ${orgId} and m.role = 'owner'
-    order by m.created_at, m.user_id limit 1`;
-  return owner?.email ?? null;
+/** The org owner's notice that an Event Pass was refunded and revoked (kind
+ *  `pass_revoked`, ref `charge/<charge id>`), queued on `tx`: the transaction
+ *  that deletes the pass (R1). The charge id is the once-key, so a charge is
+ *  told about once however many times its refund is delivered; `onceKey`
+ *  refuses a charge with no id by name, which takes the revoke down with it.
+ *  Addressed to the owner's account (resolved at send), in `locale`; the worker
+ *  makes the first attempt. Returns the row's id, or null when the key was
+ *  taken. */
+export async function queuePassRevokedEmail(
+  tx: Tx,
+  a: {
+    chargeId: string | undefined;
+    orgId: string;
+    owner: { userId: string; email: string };
+    locale: Locale;
+    args: PassRevokedArgs;
+  },
+): Promise<string | null> {
+  const kind = "pass_revoked";
+  // The key is the charge id itself (no suffix), so it is also the ref.
+  const dedupeKey = onceKey(kind, "charge", a.chargeId);
+  return enqueueEmailOnce(tx, {
+    kind,
+    refType: "charge",
+    refId: dedupeKey,
+    orgId: a.orgId,
+    to: a.owner.email,
+    recipientUserId: a.owner.userId,
+    ...(await passRevokedEmail(a.args, a.locale)),
+    transactional: false,
+    expiresAt: expiryWithin(null),
+    dedupeKey,
+  });
 }
 
 /** Event Pass refund (P0-3a): a fully-refunded pass charge — dashboard refunds
- *  included — revokes the pass and emails the org owner. The org, competition
- *  and RUNG are read BEFORE the revoke deletes the row; the email is
- *  fire-and-forget so a Resend hiccup never blocks the webhook ACK.
+ *  included — revokes the pass and tells the org owner. The org, competition,
+ *  RUNG and the org's default language are read BEFORE the revoke deletes the
+ *  row, and so are the owner (the oldest current owner, `orgOwnerRecipient`,
+ *  owner ruling Q2) and their language (D4: the account's, then the org
+ *  default). The notice is queued on the outbox in the revoke's own
+ *  transaction (`inRevoke`), only when a pass row was deleted: a redelivered
+ *  refund finds no pass and asks for nothing, and the charge-id once-key holds
+ *  the rest. An org with no current owner still loses the pass; nobody is told.
  *
  *  The read is no longer gated on `charge.refunded` (v17 #294). A PARTIAL refund
  *  leaves the pass row alone but still runs `reversePassCreditOnRefund` below,
  *  and that path's staff alert has to name the rung too — which is only knowable
  *  here, from the row, before it can be deleted. One extra indexed lookup by
- *  payment intent on partial refunds; the buyer email is still gated on
- *  `revoked`, so nothing customer-visible changes. */
+ *  payment intent on partial refunds; the owner's notice is still gated on the
+ *  delete, so nothing customer-visible changes. */
 async function revokePassForRefundedChargeAndNotify(charge: Stripe.Charge): Promise<void> {
   const intent =
     typeof charge.payment_intent === "string" ? charge.payment_intent : charge.payment_intent?.id;
   const [ctx] = intent
-    ? await sql<{ org_id: string; org_name: string; comp_name: string; pass_key: string }[]>`
-        select p.org_id, o.name as org_name, c.name as comp_name, p.pass_key
+    ? await sql<{ org_id: string; org_name: string; comp_name: string; pass_key: string; default_locale: string }[]>`
+        select p.org_id, o.name as org_name, c.name as comp_name, p.pass_key, o.default_locale
         from competition_passes p
         join organizations o on o.id = p.org_id
         join competitions   c on c.id = p.competition_id
@@ -1993,22 +2025,33 @@ async function revokePassForRefundedChargeAndNotify(charge: Stripe.Charge): Prom
       ? ctx.pass_key
       : "event_pass"
     : null;
-  const revoked = await revokePassForRefundedCharge(charge);
-  // Unconditional — not gated on `revoked`: a partial refund leaves the pass
+  const owner = ctx ? await orgOwnerRecipient(sql, ctx.org_id) : null;
+  const notice =
+    ctx && passKey && owner
+      ? {
+          chargeId: charge.id,
+          orgId: ctx.org_id,
+          owner,
+          locale: await recipientLocale(sql, { pick: null, userId: owner.userId, orgDefault: ctx.default_locale }),
+          args: { orgName: ctx.org_name, competitionName: ctx.comp_name, passKey },
+        }
+      : null;
+  await revokePassForRefundedCharge(
+    charge,
+    notice
+      ? {
+          inRevoke: async (tx) => {
+            await queuePassRevokedEmail(tx, notice);
+          },
+        }
+      : {},
+  );
+  // Unconditional — not gated on the revoke: a partial refund leaves the pass
   // row in place (revokePassForRefundedCharge only deletes on a full refund),
   // but the credit reversal question is about the CHARGE's refund state, not
   // the pass row's survival. `intent` is only undefined for a charge with no
   // payment_intent, which could never have a redemption row to reverse.
   if (intent) await reversePassCreditOnRefund(intent, passKey);
-  if (!revoked || !ctx || !passKey) return;
-  const to = await orgOwnerEmail(ctx.org_id);
-  if (!to) return;
-  void sendPassRevokedEmail({
-    to,
-    orgName: ctx.org_name,
-    competitionName: ctx.comp_name,
-    passKey,
-  }).catch(() => {});
 }
 
 /** AI credit-pack refund (v17 SPEC-2 §5, Phase 3 Task 4): a refunded pack
@@ -2524,11 +2567,23 @@ async function handleExternalAccountChanged(event: Stripe.Event): Promise<void> 
  * not carry its default payment method (see `syncSubscriptionForGroup`'s
  * `hasPm` note), so the event cannot answer this question about itself.
  *
- * Best-effort throughout: an unresolvable group, a group with no reachable
- * owner, or a send failure all ACK. A throw here would park the event in the
- * ledger and have the sweeper re-send the same warning up to three more times.
+ * The warning is queued on the email outbox (kind `trial_ending`, ref
+ * `subscription/<group id>`, no organisation: a group can span several),
+ * addressed to the payer's account (`subscriptions.owner_user_id`, resolved at
+ * send) in the payer's language (D4: the account's, then the default of the org
+ * the billing link points at), TRANSACTIONAL as it always was, and the worker
+ * makes the first attempt. The once-key is the Stripe EVENT id: a redelivery,
+ * the stuck-event sweeper or a staff replay of one event queues one row, while a
+ * changed trial (a new `trial_will_end`, so a new event id) queues a new row
+ * that replaces a still-queued earlier one (the outbox's replace trigger).
+ *
+ * An unresolvable group, a group with no reachable payer (none, or a deleted
+ * account) and an event with no `trial_end` ACK with a log line: there is no
+ * one to warn, or nothing to warn about. A refused enqueue throws (D1), so the
+ * event stays unprocessed in the ledger and is run again; the once-key holds
+ * every run of it to one row.
  */
-async function handleTrialWillEnd(stripeSub: Stripe.Subscription): Promise<void> {
+async function handleTrialWillEnd(stripeSub: Stripe.Subscription, eventId: string): Promise<void> {
   const resolved = await resolveGroupForStripeSub(stripeSub);
   if (!resolved) {
     log.warn(
@@ -2541,12 +2596,13 @@ async function handleTrialWillEnd(stripeSub: Stripe.Subscription): Promise<void>
     {
       plan_key: string | null;
       has_payment_method: boolean | null;
+      owner_user_id: string;
       owner_email: string | null;
-      owner_locale: string | null;
       org_slug: string | null;
+      org_default_locale: string | null;
     }[]
   >`
-    select s.plan_key, s.has_payment_method, u.email as owner_email, u.locale as owner_locale,
+    select s.plan_key, s.has_payment_method, s.owner_user_id, u.email as owner_email,
            -- The billing page is per-ORG, but a group can span several. Prefer
            -- the one the payer actually owns — that is the org whose settings
            -- they can reach — and fall back to the group's oldest org so a
@@ -2558,7 +2614,18 @@ async function handleTrialWillEnd(stripeSub: Stripe.Subscription): Promise<void>
              (select o.slug from organizations o
                where o.subscription_id = s.id
                order by o.created_at limit 1)
-           ) as org_slug
+           ) as org_slug,
+           -- That same org's default language, by the same choice (an org's
+           -- default_locale is never null, so each coalesce settles on the
+           -- same arm).
+           coalesce(
+             (select o.default_locale from organizations o
+               where o.subscription_id = s.id and o.created_by = s.owner_user_id
+               order by o.created_at limit 1),
+             (select o.default_locale from organizations o
+               where o.subscription_id = s.id
+               order by o.created_at limit 1)
+           ) as org_default_locale
     from subscriptions s
     left join users u on u.id = s.owner_user_id and u.deleted_at is null
     where s.id = ${resolved.subscriptionId}`;
@@ -2582,18 +2649,28 @@ async function handleTrialWillEnd(stripeSub: Stripe.Subscription): Promise<void>
     );
     return;
   }
-  try {
-    await sendTrialEndingEmail({
-      to: row.owner_email,
-      locale: toLocale(row.owner_locale),
-      planName: planLabel(row.plan_key),
-      trialEnd,
-      hasPaymentMethod: row.has_payment_method === true,
-      orgSlug: row.org_slug,
-    });
-  } catch (err) {
-    log.error({ subscriptionId: resolved.subscriptionId, err }, "billing: trial-ending email failed");
-  }
+  const locale = await recipientLocale(sql, { pick: null, userId: row.owner_user_id, orgDefault: row.org_default_locale });
+  const kind = "trial_ending";
+  await enqueueEmailOnce(sql, {
+    kind,
+    refType: "subscription",
+    refId: resolved.subscriptionId,
+    orgId: null,
+    to: row.owner_email,
+    recipientUserId: row.owner_user_id,
+    ...(await trialEndingEmail(
+      {
+        planName: planLabel(row.plan_key),
+        trialEnd,
+        hasPaymentMethod: row.has_payment_method === true,
+        orgSlug: row.org_slug,
+      },
+      locale,
+    )),
+    transactional: true,
+    expiresAt: expiryWithin(null),
+    dedupeKey: onceKey(kind, "subscription", eventId),
+  });
 }
 
 /** The dispatch table (formerly inline in the webhook route). Unhandled
@@ -2737,7 +2814,7 @@ export async function processStripeEvent(event: Stripe.Event): Promise<void> {
     case "customer.subscription.trial_will_end":
       // Stripe's 3-day warning — the only notice before a no-card trial
       // cancels or a card-on-file trial charges.
-      await handleTrialWillEnd(event.data.object as Stripe.Subscription);
+      await handleTrialWillEnd(event.data.object as Stripe.Subscription, event.id);
       break;
     // Unhandled events are silently ACKed
   }

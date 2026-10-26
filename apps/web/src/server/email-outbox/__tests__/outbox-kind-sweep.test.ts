@@ -16,17 +16,43 @@
 //     assignment's own transaction and the request that did it makes the first attempt.
 //   - refund_issued: the real `refundRegistration` of a paid `es` registrant (Stripe's refund is mocked): the receipt is queued in the transaction
 //     that records the refund, with the refund id as its ref and once-key, and the request that did it makes the first attempt.
+//   - registration_dispute_alert: the real `handleRegistrationDispute` (`created`) on a paid card cart whose org owner's account is `fr`: the
+//     alert is queued to the owner's account in the transaction that records the dispute, and the worker makes the first attempt.
+//   - registration_dispute_lost: the real `handleRegistrationDispute` (`closed`, lost) on a paid card cart whose owner's account has no
+//     language, in an `es` org. The dispute names no charge, so the balance recovery is skipped and Stripe is not called; the notice is
+//     queued to the owner's account and the worker makes the first attempt.
+//   - sponsor_invoice: the real `startSponsorCheckout` of a package in an `fr` org (the Checkout session is the Stripe mock's): the invoice
+//     is queued to the sponsor contact after the session is minted, and the request that did it makes the first attempt.
+//   - sponsor_receipt: the real `handleSponsorPaymentSucceeded` on a pending order in an `nl` org: the receipt is queued to the sponsor
+//     contact in the transaction that activates the placement, and the worker makes the first attempt.
+//   - sponsor_refund: the real `refundSponsorOrder` of a paid order in an `es` org (Stripe's refund is mocked): the notice is queued in
+//     the transaction that records the refund, at its own savepoint, and the request that did it makes the first attempt.
+//   - sponsor_dispute_alert: the real `handleSponsorDispute` (`created`) on a paid sponsor order whose org owner's account is `fr`: the
+//     alert is queued to the owner's account in the transaction that flags the order, and the worker makes the first attempt.
+//   - sponsor_dispute_won: the real `handleSponsorDispute` (`closed`, won) on a flagged sponsor order whose owner's account has no
+//     language, in an `es` org: the notice is queued to the owner's account in the transaction that clears the flag, and the worker
+//     makes the first attempt.
+//   - sponsor_dispute_lost: the real `handleSponsorDispute` (`closed`, lost) on a paid sponsor order whose owner's account is `nl`. The
+//     dispute names no charge, so the balance recovery is skipped and Stripe is not called; the notice is queued to the owner's account
+//     after the write-off and the worker makes the first attempt.
+//   - pass_revoked: the real `processStripeEvent` (`charge.refunded`, a full refund) on an Event Pass in an org whose owner's account is
+//     `nl`: the notice is queued to the owner's account in the transaction that deletes the pass, and the worker makes the first attempt.
+//   - trial_ending: the real `processStripeEvent` (`customer.subscription.trial_will_end`) on a no-card trialing billing group whose
+//     payer's account is `fr`: the warning is queued to the payer's account, TRANSACTIONAL (the only wave-2 kind that is), with no
+//     organisation, and the worker makes the first attempt.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
-// SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list, so every kind in the registry is swept. A kind that is neither
-// moved nor listed fails by name, and so does a kind that is listed while it has a scenario (a stale entry would skip the sweep), and so do
-// the three lists when they disagree.
+// SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
+// moved, each kind task (wave 2, T2-T9) added the scenario and deleted the entry, and T10 closed the list again, so every kind in the
+// registry is swept. A kind that is neither moved nor listed fails by name, and so does a kind that is listed while it has a scenario (a
+// stale entry would skip the sweep), and so do the three lists when they disagree.
 //
 // Sport: not applicable. These emails do not vary by sport (spec, Test strategy 4).
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import type Stripe from "stripe";
 import { sql } from "@/lib/db";
 
 vi.mock("@/lib/rate-limit", async (importOriginal) => ({
@@ -52,8 +78,19 @@ import { POST as magicLinkPost } from "@/app/api/auth/magic-link/route";
 import { POST as registerPost } from "@/app/api/v1/public/orgs/[orgSlug]/competitions/[slug]/register/route";
 import { openRound } from "@/server/usecases/external-play/open-round";
 import { assignSoloSignUp } from "@/server/usecases/registration-assign";
-import { handleRegistrationCheckoutCompleted, putRegistrationSettings, refundRegistration, sweepRegistrations, withdrawRegistrationPublic } from "@/server/usecases/registrations";
+import {
+  handleRegistrationCheckoutCompleted,
+  handleRegistrationDispute,
+  putRegistrationSettings,
+  refundRegistration,
+  sweepRegistrations,
+  withdrawRegistrationPublic,
+} from "@/server/usecases/registrations";
+import { handleSponsorDispute, handleSponsorPaymentSucceeded, refundSponsorOrder, startSponsorCheckout } from "@/server/usecases/sponsors";
+import { processStripeEvent } from "@/server/usecases/billing-events";
 import { seedOnlineChessRound } from "@/server/usecases/__tests__/_external-play-seed";
+import { seedPassOrg, seedSponsorOrder, seedSponsorOrg, seedTrialingGroup } from "@/server/usecases/__tests__/_money-fixtures";
+import { planLabel } from "@/lib/plan-label";
 import { SETTINGS_BASE, asOwner, fakeSession, rig, seedOrg, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
 import { DISPATCH_NOW_BUDGET_MS, DISPATCH_NOW_MARGIN_MS, OUTBOX_KINDS, idempotencyKey, type OutboxKind } from "../constants";
 import { dispatchNow } from "../attempt";
@@ -79,6 +116,17 @@ const SPEC_KINDS = [
   "registration_promoted",
   "refund_issued",
   "solo_signup_assigned",
+  // Wave 2, in the table's row order.
+  "registration_dispute_alert",
+  "registration_dispute_lost",
+  "sponsor_invoice",
+  "sponsor_receipt",
+  "sponsor_refund",
+  "sponsor_dispute_alert",
+  "sponsor_dispute_won",
+  "sponsor_dispute_lost",
+  "pass_revoked",
+  "trial_ending",
 ] as const satisfies readonly OutboxKind[];
 
 /** The legend: [to, transactional]. A = an account, resolved at send; L = a literal address; S = the staff address. T = transactional. */
@@ -90,6 +138,16 @@ const SPEC_FACTS: KindFacts = {
   registration_promoted: ["literal", false],
   refund_issued: ["literal", false],
   solo_signup_assigned: ["literal", false],
+  registration_dispute_alert: ["account", false],
+  registration_dispute_lost: ["account", false],
+  sponsor_invoice: ["literal", false],
+  sponsor_receipt: ["literal", false],
+  sponsor_refund: ["literal", false],
+  sponsor_dispute_alert: ["account", false],
+  sponsor_dispute_won: ["account", false],
+  sponsor_dispute_lost: ["account", false],
+  pass_revoked: ["account", false],
+  trial_ending: ["account", true],
 };
 
 /** What the real producers create beyond the rows the hand-made scenarios name: the seeded round's people and organisation. (The
@@ -105,6 +163,8 @@ async function cleanUp(): Promise<void> {
     delete from email_outbox
      where ref_id like ${like} or lower(recipient) like ${like} or recipient_user_id = any(${made.userIds}::uuid[])
         or recipient_user_id in (select id from users where email like ${like})`;
+  // A sponsor org's orders hold it (a RESTRICT foreign key, V299): they go first.
+  if (made.orgIds.length > 0) await sql`delete from sponsor_orders where org_id = any(${made.orgIds}::uuid[])`;
   if (made.orgIds.length > 0) await sql`delete from organizations where id = any(${made.orgIds}::uuid[])`;
   // The seeded owner is referenced without a cascade by the plan it was given and by the round's audit trail.
   await sql`delete from subscriptions where owner_user_id = any(${made.userIds}::uuid[])`;
@@ -132,18 +192,37 @@ afterEach(() => {
 });
 
 describe("the spec's lists (no database)", () => {
-  it("the spec lists seven kinds and the code's registry is exactly them, in the spec's order", () => {
+  it("the spec lists seventeen kinds and the code's registry is exactly them, in the spec's order", () => {
     expect([...OUTBOX_KINDS]).toEqual([...SPEC_KINDS]);
-    expect(SPEC_KINDS).toHaveLength(7);
+    expect(SPEC_KINDS).toHaveLength(17);
   });
 
-  it("the legend has SIX literal kinds (magic_link and the five wave-1 mails) and one account kind (chess_invite) (R-T2a)", () => {
+  it("the legend has NINE literal kinds, EIGHT account kinds and no staff kind", () => {
     const by = (to: string): string[] => SPEC_KINDS.filter((k) => SPEC_FACTS[k][0] === to);
-    expect(by("literal")).toEqual(["magic_link", "registration_confirmation", "payment_reminder", "registration_promoted", "refund_issued", "solo_signup_assigned"]);
-    expect(by("account")).toEqual(["chess_invite"]);
-    expect(by("staff"), "wave 1 has no staff kind").toEqual([]);
-    // The two phase-1 kinds are transactional, the five registration and refund mails are not.
-    expect(SPEC_KINDS.filter((k) => SPEC_FACTS[k][1])).toEqual(["magic_link", "chess_invite"]);
+    expect(by("literal")).toEqual([
+      "magic_link",
+      "registration_confirmation",
+      "payment_reminder",
+      "registration_promoted",
+      "refund_issued",
+      "solo_signup_assigned",
+      "sponsor_invoice",
+      "sponsor_receipt",
+      "sponsor_refund",
+    ]);
+    expect(by("account")).toEqual([
+      "chess_invite",
+      "registration_dispute_alert",
+      "registration_dispute_lost",
+      "sponsor_dispute_alert",
+      "sponsor_dispute_won",
+      "sponsor_dispute_lost",
+      "pass_revoked",
+      "trial_ending",
+    ]);
+    expect(by("staff"), "waves 1 and 2 have no staff kind").toEqual([]);
+    // The two phase-1 kinds and the trial-ending notice are transactional (each keeps its sender's flag); the rest are not.
+    expect(SPEC_KINDS.filter((k) => SPEC_FACTS[k][1])).toEqual(["magic_link", "chess_invite", "trial_ending"]);
   });
 
   it("the not-yet-moved list names only spec kinds, once each, and leaves at least one kind to sweep", () => {
@@ -168,9 +247,10 @@ describe("the spec's lists (no database)", () => {
       checked += 1;
     }
     expect(checked, "anti-vacuity: every kind was judged").toBe(SPEC_KINDS.length);
-    // Wave 1 is closed (T12): every kind has moved, so no kind is listed and none has a direct sender left. The moved side is what the loop
-    // above judged for all of them; the unmoved side of the equivalence has no member to judge until a later wave registers a kind early.
-    expect(NOT_YET_MOVED, "wave 1 is closed: every kind has moved to the outbox").toEqual([]);
+    // Waves 1 and 2 are closed (wave 1 T12, wave 2 T10): every kind has moved, so no kind is listed and none has a direct sender left.
+    // The moved side is what the loop above judged for all of them; the unmoved side of the equivalence has no member to judge until a
+    // later wave registers a kind early.
+    expect(NOT_YET_MOVED, "waves 1 and 2 are closed: every kind has moved to the outbox").toEqual([]);
     expect(Object.values(KIND_DIRECT_SENDER).filter((x) => x !== null), "and none still names a direct sender").toEqual([]);
     expect(SPEC_KINDS.length - NOT_YET_MOVED.length).toBeGreaterThan(0);
     const senders = Object.values(KIND_DIRECT_SENDER).filter((x): x is string => x !== null);
@@ -424,6 +504,228 @@ async function soloSignupAssignedScenario(): Promise<KindScenario> {
   };
 }
 
+/** A card-paid entry (the real webhook confirmed it) in a fresh org whose one owner's account is mailed at a run-unique address, in the given
+ *  language, under the given org default. Returns the address and the payment intent its cart carries (read back, not rebuilt). */
+async function disputableEntry(o: { ownerLocale: string | null; orgDefault: string; feeCents: number }) {
+  const w = await stripeRig({ feeCents: o.feeCents });
+  made.orgIds.push(w.orgId);
+  made.userIds.push(w.ownerId);
+  const recipient = address();
+  await sql`update users set email = ${recipient}, locale = ${o.ownerLocale} where id = ${w.ownerId}`;
+  await sql`update organizations set default_locale = ${o.orgDefault} where id = ${w.orgId}`;
+  const { registration } = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address() });
+  await handleRegistrationCheckoutCompleted(fakeSession(registration.id, o.feeCents));
+  const [cart] = await sql<{ payment_intent_id: string | null }[]>`select payment_intent_id from registration_groups where id = ${registration.group_id}`;
+  expect(cart!.payment_intent_id, "premise: the paid cart carries its payment intent").toBeTruthy();
+  return { w, recipient, intent: cart!.payment_intent_id! };
+}
+
+/** The real `created` webhook handler on a paid card cart: the org's owner (account `fr`, org default `en`) is alerted on the outbox in the
+ *  transaction that records the dispute, and the first attempt is the worker's. */
+async function registrationDisputeAlertScenario(): Promise<KindScenario> {
+  const { w, recipient, intent } = await disputableEntry({ ownerLocale: "fr", orgDefault: "en", feeCents: 900 });
+  return {
+    locale: "fr",
+    subjectKey: "disputeAlert.subject",
+    subjectVars: { competitionName: w.competition.name },
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      const dispute = { id: `dp_${RUN}_alert`, payment_intent: intent, amount: 900, status: "needs_response" } as unknown as Stripe.Dispute;
+      expect(await handleRegistrationDispute(dispute, "created"), "premise: the real handler matched the entry-fee charge").toBe(true);
+    },
+  };
+}
+
+/** The real `closed` webhook handler on a lost dispute: the org's owner (an account with no language, in an `es` org) is told on the
+ *  outbox, and the first attempt is the worker's. The dispute names no charge, so the recovery is skipped and Stripe is never called. */
+async function registrationDisputeLostScenario(): Promise<KindScenario> {
+  const { w, recipient, intent } = await disputableEntry({ ownerLocale: null, orgDefault: "es", feeCents: 900 });
+  return {
+    locale: "es",
+    subjectKey: "disputeLost.subject",
+    subjectVars: { competitionName: w.competition.name },
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      const dispute = { id: `dp_${RUN}_lost`, payment_intent: intent, amount: 900, status: "lost" } as unknown as Stripe.Dispute;
+      expect(await handleRegistrationDispute(dispute, "closed"), "premise: the real handler matched the entry-fee charge").toBe(true);
+    },
+  };
+}
+
+/** The real checkout of a package in an `fr` org: the invoice is queued to the sponsor contact once the Checkout session (the Stripe
+ *  mock's) is minted, and the request that did it makes the first attempt. The org's owner is mailed at a RUN address, so it is found. */
+async function sponsorInvoiceScenario(): Promise<KindScenario> {
+  const s = await seedSponsorOrg({ defaultLocale: "fr", prefix: RUN });
+  made.orgIds.push(s.orgId);
+  made.userIds.push(s.ownerId);
+  const recipient = address();
+  return {
+    locale: "fr",
+    subjectKey: "sponsorInvoice.subject",
+    subjectVars: { orgName: s.orgName },
+    recipient,
+    firstAttempt: "request",
+    run: async () => {
+      const out = await startSponsorCheckout(s.auth, { package_id: s.packageId, sponsor_name: "Sweep Sponsor", sponsor_email: recipient }, "https://sweep.test");
+      expect(out.order.status, "premise: the real checkout opened a pending order").toBe("pending");
+    },
+  };
+}
+
+/** The real payment webhook on a pending order in an `nl` org: the receipt is queued to the sponsor contact in the transaction that
+ *  activates the placement, and the first attempt is the worker's. The fixture's addresses start with RUN, so they are found. */
+async function sponsorReceiptScenario(): Promise<KindScenario> {
+  const o = await seedSponsorOrder({ status: "pending", defaultLocale: "nl", prefix: RUN });
+  made.orgIds.push(o.orgId);
+  made.userIds.push(o.ownerId);
+  return {
+    locale: "nl",
+    subjectKey: "sponsorReceipt.subject",
+    subjectVars: { orgName: o.orgName },
+    recipient: o.sponsorEmail,
+    firstAttempt: "worker",
+    run: async () => {
+      await handleSponsorPaymentSucceeded({ id: o.intent, metadata: { kind: "sponsor", order_id: o.orderId } } as unknown as Stripe.PaymentIntent);
+      const [order] = await sql<{ status: string }[]>`select status from sponsor_orders where id = ${o.orderId}`;
+      expect(order!.status, "premise: the real handler activated the order").toBe("paid");
+    },
+  };
+}
+
+/** The real console refund of a paid order in an `es` org: the notice is queued in the transaction that records the refund, at its own
+ *  savepoint, and the request that did it makes the first attempt. */
+async function sponsorRefundScenario(): Promise<KindScenario> {
+  const o = await seedSponsorOrder({ status: "paid", defaultLocale: "es", prefix: RUN });
+  made.orgIds.push(o.orgId);
+  made.userIds.push(o.ownerId);
+  const auth = { orgId: o.orgId, via: "session", userId: o.ownerId, role: "owner", keyId: null } as const;
+  return {
+    locale: "es",
+    subjectKey: "sponsorRefund.subject",
+    subjectVars: { orgName: o.orgName },
+    recipient: o.sponsorEmail,
+    firstAttempt: "request",
+    run: async () => {
+      const after = await refundSponsorOrder(auth, o.orderId);
+      expect(after.status, "premise: the real refund went through").toBe("refunded");
+    },
+  };
+}
+
+/** A paid sponsor order whose org's one owner (an account at a RUN address, so it is found) has the given language, under the given org
+ *  default. */
+async function disputableSponsorOrder(o: { ownerLocale: string | null; defaultLocale: "en" | "es" | "fr" | "nl" }) {
+  const order = await seedSponsorOrder({ status: "paid", ownerLocale: o.ownerLocale, defaultLocale: o.defaultLocale, prefix: RUN });
+  made.orgIds.push(order.orgId);
+  made.userIds.push(order.ownerId);
+  return order;
+}
+
+/** The real `created` webhook handler on a paid sponsor order: the org's owner (account `fr`, org default `en`) is alerted on the outbox
+ *  in the transaction that flags the order, and the first attempt is the worker's. */
+async function sponsorDisputeAlertScenario(): Promise<KindScenario> {
+  const o = await disputableSponsorOrder({ ownerLocale: "fr", defaultLocale: "en" });
+  return {
+    locale: "fr",
+    subjectKey: "sponsorDisputeAlert.subject",
+    subjectVars: { orgName: o.orgName },
+    recipient: o.ownerEmail,
+    firstAttempt: "worker",
+    run: async () => {
+      const dispute = { id: `dp_${RUN}_sp_alert`, payment_intent: o.intent, amount: 25000, status: "needs_response" } as unknown as Stripe.Dispute;
+      expect(await handleSponsorDispute(dispute, "created"), "premise: the real handler matched the sponsor's charge").toBe(true);
+    },
+  };
+}
+
+/** The real `closed` webhook handler on a dispute that closed won, on an order its `created` flagged: the org's owner (an account with no
+ *  language, in an `es` org) is told on the outbox in the transaction that clears the flag, and the first attempt is the worker's. */
+async function sponsorDisputeWonScenario(): Promise<KindScenario> {
+  const o = await disputableSponsorOrder({ ownerLocale: null, defaultLocale: "es" });
+  const id = `dp_${RUN}_sp_won`;
+  const dispute = (status: string) => ({ id, payment_intent: o.intent, amount: 25000, status }) as unknown as Stripe.Dispute;
+  // The dispute opened first (it queues the owner's alert, a kind this scenario does not judge).
+  expect(await handleSponsorDispute(dispute("needs_response"), "created"), "premise: the real handler flagged the sponsor's order").toBe(true);
+  return {
+    locale: "es",
+    subjectKey: "sponsorDisputeWon.subject",
+    subjectVars: { orgName: o.orgName },
+    recipient: o.ownerEmail,
+    firstAttempt: "worker",
+    run: async () => {
+      expect(await handleSponsorDispute(dispute("won"), "closed"), "premise: the real handler matched the sponsor's charge").toBe(true);
+    },
+  };
+}
+
+/** The real `closed` webhook handler on a dispute that closed lost: the org's owner (account `nl`, org default `en`) is told on the outbox
+ *  after the write-off, and the first attempt is the worker's. The dispute names no charge, so the recovery is skipped and Stripe is
+ *  never called. */
+async function sponsorDisputeLostScenario(): Promise<KindScenario> {
+  const o = await disputableSponsorOrder({ ownerLocale: "nl", defaultLocale: "en" });
+  return {
+    locale: "nl",
+    subjectKey: "sponsorDisputeLost.subject",
+    subjectVars: { orgName: o.orgName },
+    recipient: o.ownerEmail,
+    firstAttempt: "worker",
+    run: async () => {
+      const dispute = { id: `dp_${RUN}_sp_lost`, payment_intent: o.intent, amount: 25000, status: "lost" } as unknown as Stripe.Dispute;
+      expect(await handleSponsorDispute(dispute, "closed"), "premise: the real handler matched the sponsor's charge").toBe(true);
+    },
+  };
+}
+
+/** The real refund webhook (`charge.refunded`, a full refund) on an Event Pass: the org's owner (account `nl`, org default `en`; the
+ *  org's `created_by` is another account) is told on the outbox in the transaction that deletes the pass, and the first attempt is the
+ *  worker's. Both accounts are at RUN addresses, so they are found. */
+async function passRevokedScenario(): Promise<KindScenario> {
+  const intent = `pi_${RUN}_pass`;
+  const o = await seedPassOrg({ intent, ownerLocale: "nl", defaultLocale: "en", prefix: RUN });
+  made.orgIds.push(o.orgId);
+  made.userIds.push(o.ownerId, o.trapId);
+  return {
+    locale: "nl",
+    subjectKey: "passRevoked.subject",
+    subjectVars: { rung: dictionarySubject("nl", "passRevoked.rung.m", {}) },
+    recipient: o.ownerEmail,
+    firstAttempt: "worker",
+    run: async () => {
+      const charge = { id: `ch_${RUN}_pass`, payment_intent: intent, refunded: true, amount_refunded: 2900 };
+      await processStripeEvent({ id: `evt_${RUN}_pass`, type: "charge.refunded", data: { object: charge } } as unknown as Stripe.Event);
+      const [pass] = await sql`select 1 from competition_passes where stripe_payment_intent = ${intent}`;
+      expect(pass, "premise: the real handler revoked the pass").toBeUndefined();
+    },
+  };
+}
+
+/** The real `trial_will_end` webhook on a no-card trialing billing group: its payer (account `fr`, the org's default `en`, at a RUN
+ *  address, so it is found) is warned on the outbox, transactionally, in the `card` variant (add a card or the trial stops), and the first
+ *  attempt is the worker's. */
+async function trialEndingScenario(): Promise<KindScenario> {
+  const g = await seedTrialingGroup({ hasPaymentMethod: false, ownerLocale: "fr", orgDefaultLocale: "en", prefix: RUN });
+  made.orgIds.push(g.orgId);
+  made.userIds.push(g.ownerId);
+  const trialEnd = new Date(Math.floor((Date.now() + 3 * 24 * 60 * MIN) / 1000) * 1000);
+  return {
+    locale: "fr",
+    subjectKey: "trialEnding.subject.card",
+    subjectVars: {
+      planName: planLabel("pro"),
+      date: new Intl.DateTimeFormat("fr", { dateStyle: "long", timeZone: "UTC" }).format(trialEnd),
+    },
+    recipient: g.ownerEmail,
+    firstAttempt: "worker",
+    run: async () => {
+      const sub = { id: g.stripeSubId, object: "subscription", status: "trialing", trial_end: trialEnd.getTime() / 1000, metadata: {} };
+      const event = { id: `evt_${RUN}_trial`, type: "customer.subscription.trial_will_end", data: { object: sub } };
+      await processStripeEvent(event as unknown as Stripe.Event);
+    },
+  };
+}
+
 describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (DB)", () => {
   it("every outbox kind is swept through its real producer", async () => {
     // The Spanish subject differs from the English one, so a producer that dropped the locale would be seen (the right answer is not
@@ -448,6 +750,52 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
     const solo = await soloSignupAssignedScenario();
     expect(dictionarySubject("fr", solo.subjectKey, solo.subjectVars)).not.toBe(dictionarySubject("en", solo.subjectKey, solo.subjectVars));
 
+    const disputeAlert = await registrationDisputeAlertScenario();
+    expect(dictionarySubject("fr", disputeAlert.subjectKey, disputeAlert.subjectVars)).not.toBe(
+      dictionarySubject("en", disputeAlert.subjectKey, disputeAlert.subjectVars),
+    );
+
+    const disputeLost = await registrationDisputeLostScenario();
+    expect(dictionarySubject("es", disputeLost.subjectKey, disputeLost.subjectVars)).not.toBe(
+      dictionarySubject("en", disputeLost.subjectKey, disputeLost.subjectVars),
+    );
+
+    const invoice = await sponsorInvoiceScenario();
+    expect(dictionarySubject("fr", invoice.subjectKey, invoice.subjectVars)).not.toBe(dictionarySubject("en", invoice.subjectKey, invoice.subjectVars));
+
+    const receipt = await sponsorReceiptScenario();
+    expect(dictionarySubject("nl", receipt.subjectKey, receipt.subjectVars)).not.toBe(dictionarySubject("en", receipt.subjectKey, receipt.subjectVars));
+
+    const sponsorRefund = await sponsorRefundScenario();
+    expect(dictionarySubject("es", sponsorRefund.subjectKey, sponsorRefund.subjectVars)).not.toBe(
+      dictionarySubject("en", sponsorRefund.subjectKey, sponsorRefund.subjectVars),
+    );
+
+    const sponsorDisputeAlert = await sponsorDisputeAlertScenario();
+    expect(dictionarySubject("fr", sponsorDisputeAlert.subjectKey, sponsorDisputeAlert.subjectVars)).not.toBe(
+      dictionarySubject("en", sponsorDisputeAlert.subjectKey, sponsorDisputeAlert.subjectVars),
+    );
+
+    const sponsorDisputeWon = await sponsorDisputeWonScenario();
+    expect(dictionarySubject("es", sponsorDisputeWon.subjectKey, sponsorDisputeWon.subjectVars)).not.toBe(
+      dictionarySubject("en", sponsorDisputeWon.subjectKey, sponsorDisputeWon.subjectVars),
+    );
+
+    const sponsorDisputeLost = await sponsorDisputeLostScenario();
+    expect(dictionarySubject("nl", sponsorDisputeLost.subjectKey, sponsorDisputeLost.subjectVars)).not.toBe(
+      dictionarySubject("en", sponsorDisputeLost.subjectKey, sponsorDisputeLost.subjectVars),
+    );
+
+    const passRevoked = await passRevokedScenario();
+    expect(dictionarySubject("nl", passRevoked.subjectKey, passRevoked.subjectVars)).not.toBe(
+      dictionarySubject("en", passRevoked.subjectKey, { rung: dictionarySubject("en", "passRevoked.rung.m", {}) }),
+    );
+
+    const trialEnding = await trialEndingScenario();
+    expect(dictionarySubject("fr", trialEnding.subjectKey, trialEnding.subjectVars)).not.toBe(
+      dictionarySubject("en", trialEnding.subjectKey, trialEnding.subjectVars),
+    );
+
     const out = await forEachOutboxKind(
       {
         magic_link: magicLinkScenario(),
@@ -457,11 +805,21 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         registration_promoted: promoted,
         refund_issued: refund,
         solo_signup_assigned: solo,
+        registration_dispute_alert: disputeAlert,
+        registration_dispute_lost: disputeLost,
+        sponsor_invoice: invoice,
+        sponsor_receipt: receipt,
+        sponsor_refund: sponsorRefund,
+        sponsor_dispute_alert: sponsorDisputeAlert,
+        sponsor_dispute_won: sponsorDisputeWon,
+        sponsor_dispute_lost: sponsorDisputeLost,
+        pass_revoked: passRevoked,
+        trial_ending: trialEnding,
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );
 
-    expect(out.checked, "anti-vacuity: every kind the spec lists was swept (wave 1 closed: none is left unmoved)").toBe(SPEC_KINDS.length);
+    expect(out.checked, "anti-vacuity: every kind the spec lists was swept (waves 1 and 2 closed: none is left unmoved)").toBe(SPEC_KINDS.length);
     expect(out.checked).toBeGreaterThan(0);
     expect(out.kinds, "and they are exactly the spec's kinds, in the spec's order").toEqual([...SPEC_KINDS]);
   }, 60_000);

@@ -54,6 +54,16 @@ const SPEC_LEGEND: Record<string, [to: "account" | "literal", transactional: boo
   registration_promoted: ["literal", false],
   refund_issued: ["literal", false],
   solo_signup_assigned: ["literal", false],
+  registration_dispute_alert: ["account", false],
+  registration_dispute_lost: ["account", false],
+  sponsor_invoice: ["literal", false],
+  sponsor_receipt: ["literal", false],
+  sponsor_refund: ["literal", false],
+  sponsor_dispute_alert: ["account", false],
+  sponsor_dispute_won: ["account", false],
+  sponsor_dispute_lost: ["account", false],
+  pass_revoked: ["account", false],
+  trial_ending: ["account", true],
 };
 
 /** A `db` that records the statements it is handed and answers like postgres.js does for an insert: a row list carrying the
@@ -114,7 +124,7 @@ describe("the kind facts guard (no database)", () => {
       expect(OUTBOX_KIND_FACTS[kind as OutboxKind], kind).toEqual({ to, transactional });
       checked++;
     }
-    expect(checked, "every kind of the legend was compared").toBe(7);
+    expect(checked, "every kind of the legend was compared").toBe(17);
     // The other direction: the code declares no kind the legend does not.
     expect(Object.keys(OUTBOX_KIND_FACTS).sort()).toEqual(Object.keys(SPEC_LEGEND).sort());
   });
@@ -133,7 +143,7 @@ describe("the kind facts guard (no database)", () => {
         checked++;
       }
     }
-    expect(checked, "6 literal kinds (magic_link and the five wave-1 kinds) x 2 writers").toBe(12);
+    expect(checked, "9 literal kinds (magic_link, the five wave-1 kinds and wave 2's three sponsor mails) x 2 writers").toBe(18);
   });
 
   it("the refusal names the kind and ref type and carries neither the address, the user id nor the body", async () => {

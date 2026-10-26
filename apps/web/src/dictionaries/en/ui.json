@@ -469,7 +469,7 @@
   "sponsors.order.name": "Sponsor name",
   "sponsors.order.email": "Sponsor email",
   "sponsors.order.send": "Send pay-now invoice",
-  "sponsors.order.sent": "Invoice sent — payment link:",
+  "sponsors.order.sent": "We're emailing the invoice to the sponsor. You can also share this payment link:",
   "sponsors.order.copyLink": "Copy payment link",
   "sponsors.orders.title": "Orders",
   "sponsors.orders.empty": "No orders yet. Send a package invoice to a sponsor to start one.",

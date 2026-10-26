@@ -9,24 +9,34 @@ import "server-only";
 // webhook activation.
 import type Stripe from "stripe";
 import { z } from "zod";
-import { sql, withTenant } from "@/lib/db";
+import { sql, withTenant, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { requireFeature } from "@/lib/entitlements";
 import { brandingSponsors } from "@/lib/org-branding";
 import { getStripe } from "@/lib/stripe";
 import {
-  sendSponsorInvoiceEmail,
-  sendSponsorReceiptEmail,
-  sendSponsorRefundEmail,
-  sendSponsorDisputeAlertEmail,
-  sendSponsorDisputeLostEmail,
-  sendSponsorDisputeWonEmail,
+  sponsorInvoiceEmail,
+  sponsorReceiptEmail,
+  sponsorRefundEmail,
+  sponsorDisputeAlertEmail,
+  sponsorDisputeWonEmail,
+  sponsorDisputeLostEmail,
 } from "@/lib/email";
 import { deferred } from "@/lib/deferred";
+import {
+  assertOutboxCanQueue,
+  dispatchNow,
+  enqueueEmailOnce,
+  expiryWithin,
+  onceKey,
+  recipientLocale,
+} from "@/server/email-outbox";
+import { log } from "@/server/logger";
 import { fireOrgRevalidate } from "@/server/public-site/revalidate";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { applicationFeeCents, feePercentFor } from "./registrations";
 import { recoverDisputedTransfer as recoverDisputedTransferCore } from "./dispute-recovery";
+import { orgOwnerRecipient } from "./org-owner";
 
 export const SPONSOR_TIERS = ["title", "gold", "silver", "partner"] as const;
 export type SponsorTier = (typeof SPONSOR_TIERS)[number];
@@ -449,6 +459,15 @@ export async function listSponsorOrders(auth: AuthCtx): Promise<SponsorOrderRow[
  * like registrations. Stripe is called OUTSIDE any sql transaction; the
  * idempotency key `sponsor-order-<id>` pins retries to one session. The
  * sponsor contact gets a pay-now invoice email.
+ *
+ * The invoice goes through the email outbox (kind `sponsor_invoice`, ref
+ * `sponsor_order/<order id>`, once-key the order id), in the org's language,
+ * and this request makes its first attempt after it returns. The box is asked
+ * whether it can queue email BEFORE the order exists (P-W2-1): the session
+ * minted below is real, so a key fault must refuse the checkout before it
+ * starts. Once the session exists the order stands: an invoice that still
+ * cannot be queued is logged and the checkout answers as usual, since the
+ * organiser is shown the same payment link to share.
  */
 export async function startSponsorCheckout(
   auth: AuthCtx,
@@ -468,13 +487,22 @@ export async function startSponsorCheckout(
   // entry fees — before any order exists. The ToS chargeback clause was
   // accepted when the connected account was created (createConnectOnboardingLink).
   const [org] = await sql<
-    { slug: string; name: string; stripe_account_id: string | null; stripe_charges_enabled: boolean }[]
+    {
+      slug: string;
+      name: string;
+      default_locale: string;
+      stripe_account_id: string | null;
+      stripe_charges_enabled: boolean;
+    }[]
   >`
-    select slug, name, stripe_account_id, stripe_charges_enabled
+    select slug, name, default_locale, stripe_account_id, stripe_charges_enabled
     from organizations where id = ${auth.orgId}`;
   if (!org?.stripe_account_id || !org.stripe_charges_enabled) {
     throw new HttpError(409, "Connect Stripe (Get paid) before selling sponsorship packages");
   }
+  // P-W2-1: refuse now, before the order and the Checkout session, if this box
+  // cannot queue the invoice.
+  assertOutboxCanQueue();
 
   const order = await withTenant(auth.orgId, async (tx) => {
     const [row] = await tx<SponsorOrderRow[]>`
@@ -522,15 +550,38 @@ export async function startSponsorCheckout(
   );
   if (!session.url) throw new HttpError(502, "Stripe did not return a checkout URL");
 
-  await sendSponsorInvoiceEmail({
-    to: input.sponsor_email,
-    orgName: org.name,
-    packageName: pkg.name,
-    sponsorName: input.sponsor_name,
-    amountCents: pkg.price_cents,
-    currency: pkg.currency,
-    checkoutUrl: session.url,
-  });
+  // The render is inside the same try as the enqueue: the session is minted,
+  // so nothing about the invoice may turn this checkout into an error.
+  let invoiceId: string | null = null;
+  try {
+    const locale = await recipientLocale(sql, { pick: null, userId: null, orgDefault: org.default_locale });
+    const content = await sponsorInvoiceEmail(
+      {
+        orgName: org.name,
+        packageName: pkg.name,
+        sponsorName: input.sponsor_name,
+        amountCents: pkg.price_cents,
+        currency: pkg.currency,
+        checkoutUrl: session.url,
+      },
+      locale,
+    );
+    invoiceId = await enqueueEmailOnce(sql, {
+      kind: "sponsor_invoice",
+      refType: "sponsor_order",
+      refId: order.id,
+      dedupeKey: onceKey("sponsor_invoice", "sponsor_order", order.id),
+      orgId: auth.orgId,
+      to: input.sponsor_email,
+      transactional: false,
+      expiresAt: expiryWithin(null),
+      ...content,
+    });
+  } catch (err) {
+    log.error({ err, orderId: order.id }, "sponsors: invoice email could not be queued");
+  }
+  const queued = invoiceId;
+  if (queued) deferred(() => dispatchNow([queued]));
 
   return { order, checkout_url: session.url };
 }
@@ -545,6 +596,11 @@ export async function startSponsorCheckout(
  * under /admin/billing-events replay — belt (order already paid) and braces
  * (order already carries a sponsor_id) both short-circuit; Stripe's own
  * idempotency keys expire ~24h so this DB guard is the real one.
+ *
+ * The sponsor's receipt is queued on the email outbox in the SAME transaction
+ * (`queueSponsorReceipt`), so it exists exactly when the activation does, and
+ * only on the transition (the guards above stop a replay before it). The
+ * worker makes the first attempt: a webhook has no response to defer behind.
  */
 export async function handleSponsorPaymentSucceeded(
   intent: Stripe.PaymentIntent,
@@ -573,27 +629,74 @@ export async function handleSponsorPaymentSucceeded(
                  and competition_id is not distinct from ${pkg.competition_id}
                  and tier = ${pkg.tier}))
       returning id`;
+    await queueSponsorReceipt(tx, { order, packageName: pkg.name, intentId: intent.id });
     await tx`
       update sponsor_orders
       set status = 'paid', paid_at = now(),
           payment_intent_id = coalesce(payment_intent_id, ${intent.id}),
           sponsor_id = ${sponsor!.id}
       where id = ${orderId}`;
-    return { order, packageName: pkg.name };
+    return { order };
   });
   if (!activated) return;
 
-  const [org] = await sql<{ slug: string; name: string }[]>`
-    select slug, name from organizations where id = ${activated.order.org_id}`;
+  const [org] = await sql<{ slug: string }[]>`
+    select slug from organizations where id = ${activated.order.org_id}`;
   if (org) deferred(() => fireOrgRevalidate(org.slug));
-  await sendSponsorReceiptEmail({
-    to: activated.order.sponsor_email,
-    orgName: org?.name ?? "the organiser",
-    packageName: activated.packageName,
-    sponsorName: activated.order.sponsor_name,
-    amountCents: activated.order.amount_cents,
-    currency: activated.order.currency,
-    publicUrl: org ? `${sponsorEmailOrigin()}/shared/${org.slug}` : null,
+}
+
+/**
+ * Queue the sponsor's payment receipt on the email outbox, on `tx`: the
+ * transaction that activates the placement (R1), so the receipt and the paid
+ * order commit together or not at all. Kind `sponsor_receipt`, ref
+ * `sponsor_order/<order id>`, once-key the payment intent: one receipt per
+ * payment, whatever redelivers it. Literal address (the sponsor contact), in
+ * the org's language (D4: the order has no pick and no account). The org is
+ * read through `tx` (#996). There is no catch (D1): a refused enqueue rolls the
+ * activation back and fails the webhook, which Stripe delivers again. Returns
+ * the outbox id, or `null` when this payment already has its receipt.
+ * Exported for the once-key test.
+ */
+export async function queueSponsorReceipt(
+  tx: Tx,
+  a: {
+    order: {
+      id: string;
+      org_id: string;
+      sponsor_name: string;
+      sponsor_email: string;
+      amount_cents: number;
+      currency: string;
+    };
+    packageName: string;
+    intentId: string;
+  },
+): Promise<string | null> {
+  const { order, packageName, intentId } = a;
+  const [org] = await tx<{ slug: string; name: string; default_locale: string }[]>`
+    select slug, name, default_locale from organizations where id = ${order.org_id}`;
+  const locale = await recipientLocale(tx, { pick: null, userId: null, orgDefault: org?.default_locale ?? null });
+  const content = await sponsorReceiptEmail(
+    {
+      orgName: org?.name ?? "the organiser",
+      packageName,
+      sponsorName: order.sponsor_name,
+      amountCents: order.amount_cents,
+      currency: order.currency,
+      publicUrl: org ? `${sponsorEmailOrigin()}/shared/${org.slug}` : null,
+    },
+    locale,
+  );
+  return enqueueEmailOnce(tx, {
+    kind: "sponsor_receipt",
+    refType: "sponsor_order",
+    refId: order.id,
+    dedupeKey: onceKey("sponsor_receipt", "sponsor_order", intentId),
+    orgId: order.org_id,
+    to: order.sponsor_email,
+    transactional: false,
+    expiresAt: expiryWithin(null),
+    ...content,
   });
 }
 
@@ -616,6 +719,8 @@ export async function handleSponsorPaymentFailed(
  * the transfer to the org reverses and the platform returns its
  * application fee, exactly like entry-fee refunds. The local flip reuses
  * the charge.refunded path, so the later Stripe event replays as a no-op.
+ * The sponsor's refund notice is queued by that path; this request makes its
+ * first attempt after it returns.
  */
 export async function refundSponsorOrder(
   auth: AuthCtx,
@@ -647,10 +752,11 @@ export async function refundSponsorOrder(
     },
     { idempotencyKey: `sponsor-refund-${orderId}` },
   );
-  await handleSponsorChargeRefunded({
+  const notice = await handleSponsorChargeRefunded({
     payment_intent: order.payment_intent_id,
     refunded: true,
   } as Stripe.Charge);
+  if (notice) deferred(() => dispatchNow([notice]));
   return withTenant(auth.orgId, async (tx) => {
     const [row] = await tx<SponsorOrderRow[]>`
       select ${tx(ORDER_COLS)} from sponsor_orders where id = ${orderId}`;
@@ -664,13 +770,19 @@ export async function refundSponsorOrder(
  * public pages (status → inactive; the row survives as the audit trail).
  * Idempotent — only a `paid` order flips, and non-sponsor charges don't
  * match any order row.
+ *
+ * The flip queues the sponsor's refund notice in the same transaction
+ * (`queueSponsorRefundReceipt`), so only the transition writes one. Returns
+ * its outbox id (null: no flip, or no notice) for the console refund, which
+ * makes the first attempt; a webhook (a refund made in the Stripe dashboard)
+ * leaves it to the worker.
  */
-export async function handleSponsorChargeRefunded(charge: Stripe.Charge): Promise<void> {
+export async function handleSponsorChargeRefunded(charge: Stripe.Charge): Promise<string | null> {
   const intent =
     typeof charge.payment_intent === "string"
       ? charge.payment_intent
       : charge.payment_intent?.id;
-  if (!intent || !charge.refunded) return;
+  if (!intent || !charge.refunded) return null;
   const refunded = await sql.begin(async (tx) => {
     const [order] = await tx<
       {
@@ -690,25 +802,78 @@ export async function handleSponsorChargeRefunded(charge: Stripe.Charge): Promis
       returning id, org_id, sponsor_id, sponsor_name, sponsor_email,
                 amount_cents, currency, package_id`;
     if (!order) return null;
+    const notice = await queueSponsorRefundReceipt(tx, order);
     if (order.sponsor_id) {
       await tx`update sponsors set status = 'inactive' where id = ${order.sponsor_id}`;
     }
-    return order;
+    return { orgId: order.org_id, notice };
   });
-  if (!refunded) return;
-  const [org] = await sql<{ slug: string; name: string }[]>`
-    select slug, name from organizations where id = ${refunded.org_id}`;
+  if (!refunded) return null;
+  const [org] = await sql<{ slug: string }[]>`
+    select slug from organizations where id = ${refunded.orgId}`;
   if (org) deferred(() => fireOrgRevalidate(org.slug));
-  const [pkg] = await sql<{ name: string }[]>`
-    select name from sponsor_packages where id = ${refunded.package_id}`;
-  await sendSponsorRefundEmail({
-    to: refunded.sponsor_email,
-    orgName: org?.name ?? "the organiser",
-    packageName: pkg?.name ?? "sponsorship",
-    sponsorName: refunded.sponsor_name,
-    amountCents: refunded.amount_cents,
-    currency: refunded.currency,
-  });
+  return refunded.notice;
+}
+
+/**
+ * Queue the sponsor's refund notice on the email outbox, on `tx`: the
+ * transaction that flips the order to `refunded`. Kind `sponsor_refund`, ref
+ * `sponsor_order/<order id>`, once-key `<order id>:refunded` (an order is
+ * refunded once). Literal address (the sponsor contact), in the org's language.
+ *
+ * The notice is about money that has ALREADY moved at Stripe, so a failure
+ * here must never undo the refund's record (R4). It is contained at its own
+ * savepoint: a statement that errors inside a Postgres transaction aborts the
+ * whole transaction, which would roll back the flip and fail the refund. The
+ * reads and the render run inside the same savepoint and the same try, so
+ * any of them failing is contained too: logged, and `null` is returned.
+ * Exported for the once-key test.
+ */
+export async function queueSponsorRefundReceipt(
+  tx: Tx,
+  order: {
+    id: string;
+    org_id: string;
+    sponsor_name: string;
+    sponsor_email: string;
+    amount_cents: number;
+    currency: string;
+    package_id: string;
+  },
+): Promise<string | null> {
+  try {
+    return await tx.savepoint(async (sp) => {
+      const [org] = await sp<{ name: string; default_locale: string }[]>`
+        select name, default_locale from organizations where id = ${order.org_id}`;
+      const [pkg] = await sp<{ name: string }[]>`
+        select name from sponsor_packages where id = ${order.package_id}`;
+      const locale = await recipientLocale(sp, { pick: null, userId: null, orgDefault: org?.default_locale ?? null });
+      const content = await sponsorRefundEmail(
+        {
+          orgName: org?.name ?? "the organiser",
+          packageName: pkg?.name ?? "sponsorship",
+          sponsorName: order.sponsor_name,
+          amountCents: order.amount_cents,
+          currency: order.currency,
+        },
+        locale,
+      );
+      return enqueueEmailOnce(sp, {
+        kind: "sponsor_refund",
+        refType: "sponsor_order",
+        refId: order.id,
+        dedupeKey: onceKey("sponsor_refund", "sponsor_order", order.id, "refunded"),
+        orgId: order.org_id,
+        to: order.sponsor_email,
+        transactional: false,
+        expiresAt: expiryWithin(null),
+        ...content,
+      });
+    });
+  } catch (err) {
+    log.error({ err, orderId: order.id }, "sponsors: refund notice could not be queued");
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -727,27 +892,17 @@ function sponsorEmailOrigin(): string {
   ).replace(/\/$/, "");
 }
 
-/** Current owner via org_members, NOT organizations.created_by — an ownership
- *  transfer flips the role but leaves created_by on the original creator. Local
- *  copy (registrations.ts keeps its own too): importing billing-events'
- *  orgOwnerEmail would make sponsors ⇄ billing-events a circular import. */
-async function currentOrgOwnerEmail(orgId: string): Promise<string | null> {
-  const [owner] = await sql<{ email: string }[]>`
-    select u.email from org_members m join users u on u.id = m.user_id
-    where m.org_id = ${orgId} and m.role = 'owner' limit 1`;
-  return owner?.email ?? null;
-}
-
-async function resolveOrgName(orgId: string): Promise<string | null> {
-  const [org] = await sql<{ name: string }[]>`
-    select name from organizations where id = ${orgId}`;
-  return org?.name ?? null;
-}
-
-async function resolvePackageName(packageId: string): Promise<string> {
-  const [pkg] = await sql<{ name: string }[]>`
-    select name from sponsor_packages where id = ${packageId}`;
-  return pkg?.name ?? "sponsorship";
+/** Who a sponsorship dispute notice goes to: the org's current owner (the
+ *  oldest, `orgOwnerRecipient`, owner ruling Q2) as an account, in their
+ *  language (D4: the account's, then the org default). Read on the pool,
+ *  before any transaction opens. `null`: the org has no current owner, so the
+ *  dispute is recorded and nobody is mailed. */
+async function sponsorDisputeRecipient(orgId: string, orgDefault: string | null) {
+  const owner = await orgOwnerRecipient(sql, orgId);
+  return owner && {
+    ...owner,
+    locale: await recipientLocale(sql, { pick: null, userId: owner.userId, orgDefault }),
+  };
 }
 
 /** Actorless audit breadcrumb for a sponsor recovery, on the same
@@ -793,10 +948,16 @@ async function recoverSponsorDispute(
  * loss. Dispatched after handleRegistrationDispute for both event types —
  * a non-sponsor intent matches no order row and no-ops.
  *
+ * The owner's notices go through the email outbox (kinds
+ * `sponsor_dispute_alert`, `sponsor_dispute_won`, `sponsor_dispute_lost`, ref
+ * `dispute/<id>`), addressed to the owner's account in their language; the
+ * worker makes the first attempt.
+ *
  * Replay-safe: the disputed_at/dispute_id + status writes converge, the
- * created alert fires only on the first flag of a given dispute, and the lost
- * recovery + its email short-circuit on the core's dispute_id metadata guard.
- * Stripe calls stay OUTSIDE any sql tx.
+ * created alert and the won notice are queued only on their transition, the
+ * lost recovery + its notice short-circuit on the core's dispute_id metadata
+ * guard, and each once-key holds its dispute to one row of its kind. Stripe
+ * calls stay OUTSIDE any sql tx.
  */
 export async function handleSponsorDispute(
   dispute: Stripe.Dispute,
@@ -811,61 +972,101 @@ export async function handleSponsorDispute(
       disputed_at: Date | null;
       dispute_id: string | null;
       competition_id: string | null;
+      org_name: string | null;
+      org_default_locale: string | null;
+      package_name: string | null;
     })[]
   >`
     select ${sql(ORDER_COLS as unknown as string[])}, org_id, disputed_at, dispute_id,
            (select competition_id from sponsor_packages p where p.id = sponsor_orders.package_id)
-             as competition_id
+             as competition_id,
+           (select name from sponsor_packages p where p.id = sponsor_orders.package_id)
+             as package_name,
+           (select name from organizations g where g.id = sponsor_orders.org_id) as org_name,
+           (select default_locale from organizations g where g.id = sponsor_orders.org_id)
+             as org_default_locale
     from sponsor_orders where payment_intent_id = ${intent}`;
   if (!order) return false; // not a sponsor charge (or it doesn't know its intent YET)
 
+  // What a dispute notice says about the order, read with it, before any
+  // transaction. Rendering needs no handle.
+  const noticeArgs = {
+    orgName: order.org_name ?? "your organisation",
+    packageName: order.package_name ?? "sponsorship",
+    sponsorName: order.sponsor_name,
+    amountCents: dispute.amount,
+    currency: order.currency,
+  };
+
   if (phase === "created") {
-    // A replayed created event re-stamps nothing new: coalesce keeps the first
-    // flag time and the alert / placement park run only the first time.
-    const firstFlag = order.dispute_id !== dispute.id;
-    await sql`update sponsor_orders
-              set disputed_at = coalesce(disputed_at, now()), dispute_id = ${dispute.id}
-              where id = ${order.id}`;
-    if (firstFlag) {
-      if (order.sponsor_id) {
-        await sql`update sponsors set status = 'pending' where id = ${order.sponsor_id}`;
+    const recipient = await sponsorDisputeRecipient(order.org_id, order.org_default_locale);
+    // ONE transaction flags the order and queues the owner's alert, so the
+    // alert exists exactly when the flag does (R1). The alert and the
+    // placement park run only on the TRANSITION to this dispute (the order,
+    // read under lock, named another dispute or none): a redelivered `created`
+    // is not one, and coalesce keeps the first flag time. The once-key keeps
+    // an older dispute's `created`, arriving again after a newer one moved the
+    // order on, from alerting twice.
+    await sql.begin(async (tx) => {
+      const [prior] = await tx<{ dispute_id: string | null }[]>`
+        select dispute_id from sponsor_orders where id = ${order.id} for update`;
+      await tx`update sponsor_orders
+               set disputed_at = coalesce(disputed_at, now()), dispute_id = ${dispute.id}
+               where id = ${order.id}`;
+      const firstFlag = prior?.dispute_id !== dispute.id;
+      if (firstFlag && recipient) {
+        const kind = "sponsor_dispute_alert";
+        await enqueueEmailOnce(tx, {
+          kind,
+          refType: "dispute",
+          refId: dispute.id,
+          orgId: order.org_id,
+          to: recipient.email,
+          recipientUserId: recipient.userId,
+          ...(await sponsorDisputeAlertEmail(noticeArgs, recipient.locale)),
+          transactional: false,
+          expiresAt: expiryWithin(null),
+          dedupeKey: onceKey(kind, "dispute", dispute.id, "created"),
+        });
       }
-      const owner = await currentOrgOwnerEmail(order.org_id);
-      if (owner) {
-        void sendSponsorDisputeAlertEmail({
-          to: owner,
-          orgName: (await resolveOrgName(order.org_id)) ?? "your organisation",
-          packageName: await resolvePackageName(order.package_id),
-          sponsorName: order.sponsor_name,
-          amountCents: dispute.amount,
-          currency: order.currency,
-        }).catch(() => {});
+      if (firstFlag && order.sponsor_id) {
+        await tx`update sponsors set status = 'pending' where id = ${order.sponsor_id}`;
       }
-    }
+    });
     bustPublicSponsors(order.org_id);
     return true;
   }
 
   if (dispute.status === "won") {
-    // First transition only (replay-safe): the row still carried the flag.
-    const firstClear = order.disputed_at !== null;
-    await sql`update sponsor_orders set disputed_at = null where id = ${order.id}`;
-    if (order.sponsor_id) {
-      await sql`update sponsors set status = 'active' where id = ${order.sponsor_id}`;
-    }
-    if (firstClear) {
-      const owner = await currentOrgOwnerEmail(order.org_id);
-      if (owner) {
-        void sendSponsorDisputeWonEmail({
-          to: owner,
-          orgName: (await resolveOrgName(order.org_id)) ?? "your organisation",
-          packageName: await resolvePackageName(order.package_id),
-          sponsorName: order.sponsor_name,
-          amountCents: dispute.amount,
-          currency: order.currency,
-        }).catch(() => {});
+    const recipient = await sponsorDisputeRecipient(order.org_id, order.org_default_locale);
+    // ONE transaction clears the flag and queues the owner's notice (R1),
+    // only on the TRANSITION (replay-safe): the order, read under lock, still
+    // carried the flag. A redelivered `won` finds it clear. The once-key keeps
+    // the notice single should this dispute flag the order again and win again.
+    await sql.begin(async (tx) => {
+      const [prior] = await tx<{ disputed_at: Date | null }[]>`
+        select disputed_at from sponsor_orders where id = ${order.id} for update`;
+      await tx`update sponsor_orders set disputed_at = null where id = ${order.id}`;
+      const firstClear = prior?.disputed_at !== null;
+      if (firstClear && recipient) {
+        const kind = "sponsor_dispute_won";
+        await enqueueEmailOnce(tx, {
+          kind,
+          refType: "dispute",
+          refId: dispute.id,
+          orgId: order.org_id,
+          to: recipient.email,
+          recipientUserId: recipient.userId,
+          ...(await sponsorDisputeWonEmail(noticeArgs, recipient.locale)),
+          transactional: false,
+          expiresAt: expiryWithin(null),
+          dedupeKey: onceKey(kind, "dispute", dispute.id, "won"),
+        });
       }
-    }
+      if (order.sponsor_id) {
+        await tx`update sponsors set status = 'active' where id = ${order.sponsor_id}`;
+      }
+    });
     bustPublicSponsors(order.org_id);
     return true;
   }
@@ -881,17 +1082,25 @@ export async function handleSponsorDispute(
     // `already` = a replayed close (metadata guard hit) — the write-off + email
     // already happened on the first run.
     if (!recovery.already) {
-      const owner = await currentOrgOwnerEmail(order.org_id);
-      if (owner) {
-        void sendSponsorDisputeLostEmail({
-          to: owner,
-          orgName: (await resolveOrgName(order.org_id)) ?? "your organisation",
-          packageName: await resolvePackageName(order.package_id),
-          sponsorName: order.sponsor_name,
-          amountCents: dispute.amount,
-          currency: order.currency,
-          recoveredCents: recovery.recoveredCents,
-        }).catch(() => {});
+      // The owner's notice states the write-off and what the recovery pulled
+      // back, both fixed now, in the owner's language (D4). It is queued once
+      // per dispute (`<dispute id>:lost`) and the worker makes the first
+      // attempt. No catch: a refused enqueue fails the webhook (D1).
+      const recipient = await sponsorDisputeRecipient(order.org_id, order.org_default_locale);
+      if (recipient) {
+        const kind = "sponsor_dispute_lost";
+        await enqueueEmailOnce(sql, {
+          kind,
+          refType: "dispute",
+          refId: dispute.id,
+          orgId: order.org_id,
+          to: recipient.email,
+          recipientUserId: recipient.userId,
+          ...(await sponsorDisputeLostEmail({ ...noticeArgs, recoveredCents: recovery.recoveredCents }, recipient.locale)),
+          transactional: false,
+          expiresAt: expiryWithin(null),
+          dedupeKey: onceKey(kind, "dispute", dispute.id, "lost"),
+        });
       }
     }
     bustPublicSponsors(order.org_id);
@@ -933,8 +1142,8 @@ export async function buildSponsorDisputeEvidence(
   const [pkg] = await sql<
     { name: string; tier: SponsorTier; competition_id: string | null }[]
   >`select name, tier, competition_id from sponsor_packages where id = ${order.package_id}`;
-  const [org] = await sql<{ name: string; slug: string }[]>`
-    select name, slug from organizations where id = ${auth.orgId}`;
+  const [org] = await sql<{ name: string; slug: string; default_locale: string }[]>`
+    select name, slug, default_locale from organizations where id = ${auth.orgId}`;
   const [comp] = pkg?.competition_id
     ? await sql<{ name: string; slug: string }[]>`
         select name, slug from competitions where id = ${pkg.competition_id}`
@@ -951,21 +1160,22 @@ export async function buildSponsorDisputeEvidence(
     where c.org_id = ${auth.orgId} and e.payload->>'order_id' = ${orderId}
     order by e.created_at`;
 
-  // The receipt, reconstructed with the exact sender inputs (sponsor emails
-  // are sent in en — orders carry no locale).
-  const { sponsorReceiptTemplate } = await import("@/lib/email-templates/sponsor-receipt");
-  const { getDictionary } = await import("@/lib/i18n");
+  // The receipt, reconstructed with the exact sender inputs, in the language
+  // it was sent in: the org's (queueSponsorReceipt resolves it the same way).
   const publicUrl = org ? `${origin}/shared/${org.slug}` : null;
-  const emailText = sponsorReceiptTemplate(
-    {
-      orgName: org?.name ?? "the organiser",
-      packageName: pkg?.name ?? "sponsorship",
-      sponsorName: order.sponsor_name,
-      amountCents: order.amount_cents,
-      currency: order.currency,
-      publicUrl,
-    },
-    await getDictionary("en", "emails"),
+  const locale = await recipientLocale(sql, { pick: null, userId: null, orgDefault: org?.default_locale ?? null });
+  const emailText = (
+    await sponsorReceiptEmail(
+      {
+        orgName: org?.name ?? "the organiser",
+        packageName: pkg?.name ?? "sponsorship",
+        sponsorName: order.sponsor_name,
+        amountCents: order.amount_cents,
+        currency: order.currency,
+        publicUrl,
+      },
+      locale,
+    )
   ).text;
 
   const when = (d: Date | string | null) => (d ? new Date(d).toISOString() : "—");

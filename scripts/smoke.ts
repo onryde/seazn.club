@@ -1206,6 +1206,12 @@ async function main() {
   // STRIPE_WEBHOOK_SECRET and skips cleanly without it.
   await addonChurnWebhookSuite();
 
+  // Email outbox, phase 3 wave 2 (Task 11): a signed trial_will_end queues ONE
+  // trial_ending row for the worker, and a redelivery of the same event id
+  // queues none. Own fresh org; needs STRIPE_WEBHOOK_SECRET and skips cleanly
+  // without it.
+  await outboxTrialWarningSuite();
+
   // F5 remainder: build.ts's per-value i18n fallbacks (see BuildOpts.i18n's
   // resultVs/courtUnassigned/rosterSignatures/rotaSignatures fields). Own
   // fresh org — never flip the shared org's default_locale, which would
@@ -5438,6 +5444,72 @@ async function addonChurnWebhookSuite(): Promise<void> {
 }
 
 /**
+ * Email outbox, phase 3 wave 2 (Task 11): Stripe's three-day trial warning, over the real signed-webhook route.
+ *
+ * `customer.subscription.trial_will_end` reaches `handleTrialWillEnd`, which queues ONE `trial_ending` row (ref
+ * `subscription/<group id>`, no organisation) for the worker to send, once per Stripe EVENT id. A redelivery of that same
+ * event — Stripe's retry, the stuck-event sweeper, a staff replay — must queue nothing more.
+ *
+ * The fixture is a fresh org's own billing group, made a no-card trial on a stored Stripe subscription: the handler
+ * resolves the group by `stripe_subscription_id` and reads `has_payment_method` from it. The event id carries the run's
+ * `evt_smoke_<tag>_` prefix, so teardown's ledger sweep removes it. The row has no org, so no org teardown reaches it:
+ * `finally` deletes it.
+ *
+ * Needs the server's `STRIPE_WEBHOOK_SECRET` to sign a payload it will accept; skips cleanly without one, as
+ * `addonChurnWebhookSuite` does.
+ */
+async function outboxTrialWarningSuite(): Promise<void> {
+  if (!process.env.STRIPE_WEBHOOK_SECRET) {
+    check(
+      "outbox trial warning: skipped (no STRIPE_WEBHOOK_SECRET — cannot sign a webhook this server will accept); the DB-backed vitest suites cover the producer",
+      true,
+    );
+    return;
+  }
+
+  const db = smokeDb();
+  let groupId: string | undefined;
+  try {
+    const s = newSession();
+    const orgId = (await signIn(s, `delivered+trialwarn_${tag}@resend.dev`)).org_id;
+    const stripeSubId = `sub_smoke_trial_${tag}`;
+    const [group] = await db<{ id: string }[]>`
+      update subscriptions
+         set stripe_subscription_id = ${stripeSubId}, status = 'trialing', has_payment_method = false
+       where id = (select subscription_id from organizations where id = ${orgId})
+      returning id`;
+    groupId = group?.id;
+    check(
+      "outbox trial warning: fixture built — the fresh org's billing group is a no-card trial on a stored Stripe subscription",
+      !!groupId,
+    );
+    if (!groupId) return;
+
+    const eventId = `evt_smoke_${tag}_trial`;
+    const subscription = {
+      id: stripeSubId,
+      object: "subscription",
+      status: "trialing",
+      trial_end: Math.floor(Date.now() / 1000) + 3 * 24 * 60 * 60,
+      items: { object: "list", data: [] },
+    };
+    const first = await postSignedStripeWebhook("customer.subscription.trial_will_end", subscription, eventId);
+    check("outbox trial warning: the app accepts the signed trial_will_end webhook (200)", first === 200);
+    await checkQueuedOutboxRow("trial_ending", "subscription", groupId);
+
+    const replay = await postSignedStripeWebhook("customer.subscription.trial_will_end", subscription, eventId);
+    check("outbox trial warning: the app accepts a redelivery of the SAME event id (200)", replay === 200);
+    const [after] = await db<{ n: number }[]>`
+      select count(*)::int as n from email_outbox
+       where kind = 'trial_ending' and ref_type = 'subscription' and ref_id = ${groupId}`;
+    check("outbox trial warning: the redelivery queues no second row (still one)", after?.n === 1);
+  } finally {
+    if (groupId) await db`delete from email_outbox where kind = 'trial_ending' and ref_id = ${groupId}`;
+    await db.end();
+  }
+}
+
+/**
  * v17 gap W10 — the `past_ends_on` arm of the Event Pass lock, over real HTTP.
  *
  * `passGrantsSuite` already covers the lock's TERMINAL arm (archived and
@@ -9034,6 +9106,34 @@ async function checkOutboxRow(kind: string, refType: string, refId: string): Pro
   }
 }
 
+/** Email outbox, phase 3 wave 2 (Task 11): the counterpart of `checkOutboxRow` for a kind the WORKER sends. Such a kind
+ *  makes no attempt in the request (no `dispatchNow`); the worker takes it after its 30 s window. So, read straight after
+ *  the response, exactly one row carries (kind, ref), it is still `queued` with no attempt made, and it is addressed to an
+ *  account (`recipient_user_id` set), not only to an address. No poll: the row commits with the response, and a row that
+ *  has already moved is the failure this exists to catch. */
+async function checkQueuedOutboxRow(kind: string, refType: string, refId: string): Promise<void> {
+  const url = process.env.DATABASE_URL;
+  if (!url) return; // keyless run: nothing to assert against
+  const isLocal = /@(localhost|127\.0\.0\.1)[:/]/.test(url);
+  const sql = postgres(url, {
+    connection: { search_path: process.env.DB_SCHEMA ?? "seazn_club" },
+    ssl: process.env.DATABASE_SSL === "disable" ? false : isLocal ? false : "require",
+    prepare: !url.includes(":6543"),
+    max: 1,
+  });
+  try {
+    const rows = await sql<{ status: string; attempts: number; recipient_user_id: string | null }[]>`
+      select status, attempts, recipient_user_id
+        from email_outbox
+       where kind = ${kind} and ref_type = ${refType} and ref_id = ${refId}`;
+    check(`${kind}: one outbox row for the ref`, rows.length === 1);
+    check(`${kind}: left to the worker (queued, no attempt yet)`, rows[0]?.status === "queued" && rows[0]?.attempts === 0);
+    check(`${kind}: addressed to the account (recipient_user_id set)`, !!rows[0]?.recipient_user_id);
+  } finally {
+    await sql.end();
+  }
+}
+
 /** Flip the staff-console flag on a user — same SQL-flip convention as
  *  setPlan/setConnect (design/v7 PROMPT-51). */
 async function setStaff(email: string, role: "superadmin" | null): Promise<void> {
@@ -12041,14 +12141,18 @@ let smokeWebhookSeq = 0;
  *
  * Returns the HTTP status so the caller asserts it rather than this helper
  * throwing an unlabelled error.
+ *
+ * `id` is for a caller that delivers ONE event twice (a Stripe redelivery):
+ * it names the id and posts it again. It must keep the `evt_smoke_<tag>_`
+ * prefix, or cleanup()'s billing_events sweep never reaches its ledger row.
  */
-async function postSignedStripeWebhook(type: string, object: unknown): Promise<number> {
+async function postSignedStripeWebhook(type: string, object: unknown, id?: string): Promise<number> {
   const secret = process.env.STRIPE_WEBHOOK_SECRET;
   if (!secret) throw new Error("STRIPE_WEBHOOK_SECRET is required to sign a smoke webhook");
   const event = {
     // `evt_smoke_<tag>_…` is also what teardown deletes by: billing_events has
     // no org FK, so these rows would otherwise outlive the run's orgs.
-    id: `evt_smoke_${tag}_${++smokeWebhookSeq}`,
+    id: id ?? `evt_smoke_${tag}_${++smokeWebhookSeq}`,
     object: "event",
     api_version: "2026-06-24.dahlia",
     created: Math.floor(Date.now() / 1000),
@@ -23249,6 +23353,9 @@ async function cleanup(tag: string): Promise<void> {
     `delivered+bracketfinish_${tag}@resend.dev`,
     // walkoverCreditSuite's own org (W2b T18) — its two competitions, one PUBLIC with walked-over and archived divisions.
     `delivered+walkovercredit_${tag}@resend.dev`,
+    // outboxTrialWarningSuite's own org (email outbox phase 3 wave 2 T11) — its group goes with the orphaned-group purge
+    // below. Its trial_ending row has no org, so the suite deletes that itself.
+    `delivered+trialwarn_${tag}@resend.dev`,
   ];
   const isLocal = /@(localhost|127\.0\.0\.1)[:/]/.test(url);
   const sql = postgres(url, {
@@ -23485,6 +23592,7 @@ const SELECTABLE_SUITES: Record<string, (c: SubsetCtx) => Promise<void>> = {
   divisionSettings: (c) => divisionSettingsSuite(c.admin),
   epochFloorOverride: () => epochFloorOverrideSuite(),
   registrationOpenFlow: () => registrationOpenFlowSuite(),
+  outboxTrialWarning: () => outboxTrialWarningSuite(),
 };
 
 /** The subset's setup: the same calls main() makes for this state, in main()'s order — the admin sign-in, the plan

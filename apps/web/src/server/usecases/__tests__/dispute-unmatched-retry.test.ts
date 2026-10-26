@@ -12,7 +12,6 @@ import type Stripe from "stripe";
 
 vi.mock("@/lib/email", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/email")>()),
-  sendSponsorDisputeAlertEmail: vi.fn().mockResolvedValue(true),
   sendStaffDisputeAlertEmail: vi.fn().mockResolvedValue(true),
 }));
 

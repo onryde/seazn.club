@@ -469,7 +469,7 @@
   "sponsors.order.name": "Naam sponsor",
   "sponsors.order.email": "E-mail sponsor",
   "sponsors.order.send": "Betaalfactuur versturen",
-  "sponsors.order.sent": "Factuur verstuurd — betaallink:",
+  "sponsors.order.sent": "We mailen de factuur naar de sponsor. Je kunt ook deze betaallink delen:",
   "sponsors.order.copyLink": "Betaallink kopiëren",
   "sponsors.orders.title": "Bestellingen",
   "sponsors.orders.empty": "Nog geen bestellingen. Stuur een pakketfactuur naar een sponsor om er een te starten.",

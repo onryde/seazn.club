@@ -3,7 +3,7 @@
 // can all read them without a cycle.
 //
 // The same two lists are typed again as CHECK constraints: the statuses in db/migration/deltas/V470__email_outbox.sql, the kinds
-// (as last redefined) in V472__email_outbox_phase3_wave1.sql. They are two copies of one fact, so outbox-schema.test.ts reads the
+// (as last redefined) in V473__email_outbox_phase3_wave2.sql. They are two copies of one fact, so outbox-schema.test.ts reads the
 // constraint definitions back from the catalogue and requires them to name exactly these members.
 
 export const OUTBOX_KINDS = [
@@ -14,6 +14,17 @@ export const OUTBOX_KINDS = [
   "registration_promoted",
   "refund_issued",
   "solo_signup_assigned",
+  // Phase 3 wave 2, in the spec's table order.
+  "registration_dispute_alert",
+  "registration_dispute_lost",
+  "sponsor_invoice",
+  "sponsor_receipt",
+  "sponsor_refund",
+  "sponsor_dispute_alert",
+  "sponsor_dispute_won",
+  "sponsor_dispute_lost",
+  "pass_revoked",
+  "trial_ending",
 ] as const;
 export type OutboxKind = (typeof OUTBOX_KINDS)[number];
 
@@ -22,7 +33,8 @@ export type OutboxKind = (typeof OUTBOX_KINDS)[number];
  *  - `to` (the spec's legend A, L, S): `account` is an account, resolved at send so a changed or deleted account is followed
  *    (spec §6); `literal` is a literal address, sent as it stands; `staff` is `STAFF_ALERT_EMAIL`.
  *  - `transactional`: whether the mail ignores the marketing suppression list. Each kind keeps its sender's flag from before it
- *    joined the outbox: the sign-in link and the chess invite are transactional, the five registration and refund mails are not.
+ *    joined the outbox: the sign-in link, the chess invite and the trial-ending notice are transactional; the registration, refund,
+ *    dispute, sponsor and pass mails are not.
  *
  * A declaration, like the lists above: pure data for the core, the writers and the tests to read.
  */
@@ -34,6 +46,16 @@ export const OUTBOX_KIND_FACTS: Readonly<Record<OutboxKind, { to: "account" | "l
   registration_promoted: { to: "literal", transactional: false },
   refund_issued: { to: "literal", transactional: false },
   solo_signup_assigned: { to: "literal", transactional: false },
+  registration_dispute_alert: { to: "account", transactional: false },
+  registration_dispute_lost: { to: "account", transactional: false },
+  sponsor_invoice: { to: "literal", transactional: false },
+  sponsor_receipt: { to: "literal", transactional: false },
+  sponsor_refund: { to: "literal", transactional: false },
+  sponsor_dispute_alert: { to: "account", transactional: false },
+  sponsor_dispute_won: { to: "account", transactional: false },
+  sponsor_dispute_lost: { to: "account", transactional: false },
+  pass_revoked: { to: "account", transactional: false },
+  trial_ending: { to: "account", transactional: true },
 };
 
 /** Spec order: the happy path first (`queued` -> `sending` -> `sent` -> `delivered`, `delayed` between `sent` and

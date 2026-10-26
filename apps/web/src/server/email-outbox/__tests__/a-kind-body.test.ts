@@ -7,14 +7,28 @@
 //
 // What is checked, and how:
 //  - WHICH kinds are account kinds is the engine's own declaration (`OUTBOX_KIND_FACTS`), compared with a list typed here from the
-//    spec (`chess_invite` is the only one). A new account kind is then a failure that asks for a decision here, not a quiet pass.
+//    spec (`chess_invite` and wave 2's seven). A new account kind is then a failure that asks for a decision here, not a quiet pass.
+//  - Every account kind is swept through its real producer. Wave 2's T1 registered its kinds before their producers moved, each kind task
+//    (T2-T9) added its producer here, and T10 deleted the list of the pending ones.
 //  - The bodies are the REAL producer's: `openRound` renders the invite with the real `externalPlayInviteEmail` (NOT replaced, unlike the
 //    sibling suites: their stand-in puts the address in the body on purpose so the transport double can read it) and queues it. Only
 //    the transport is replaced, and it answers 503 so every row stays `queued` with its sealed body. A row that had been sent has no
 //    body left to open, and a guard over no bodies is the vacuous pass this file exists to avoid.
 //  - The bodies are opened with the outbox's own `openBody` and the recipient's address (lower-cased, as the row stores it) must be
-//    absent. A positive pair shows the bodies really were opened and are the invite (they carry the match link).
+//    absent. A positive pair shows the bodies really were opened and are the kind's own mail (the invite carries the match link; a
+//    registration dispute notice names the competition; a sponsor dispute notice names the package; a pass notice names the competition;
+//    a trial warning links to the billing page).
+//  - The registration dispute notices are driven through the real `handleRegistrationDispute` on a card cart the real webhook confirmed.
+//    Neither touches Stripe: the alert never does, and the lost notice's dispute names no charge, so the balance recovery is skipped.
+//  - The sponsor dispute notices are driven through the real `handleSponsorDispute` on a paid sponsor order. None touches Stripe: the
+//    alert and the won notice never do, and the lost notice's dispute names no charge, so the balance recovery is skipped.
+//  - The pass notice is driven through the real `processStripeEvent` (`charge.refunded`, a full refund) on an Event Pass. The revoke and
+//    the notice read the database only; the other refund handlers no-op on a pass charge (their one Stripe lookup needs a Stripe key).
+//  - The trial warning is driven through the real `processStripeEvent` (`customer.subscription.trial_will_end`) on a trialing billing
+//    group. Nothing reaches Stripe: the group is found by the subscription id it stores.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
+import type Stripe from "stripe";
 import { sql } from "@/lib/db";
 import { OUTBOX_KIND_FACTS, OUTBOX_KINDS, type OutboxKind } from "../constants";
 import { openBody } from "../seal";
@@ -26,11 +40,25 @@ vi.mock("@/server/email-outbox/transport", () => ({
 }));
 
 import { openRound } from "@/server/usecases/external-play/open-round";
+import { handleRegistrationCheckoutCompleted, handleRegistrationDispute } from "@/server/usecases/registrations";
+import { handleSponsorDispute } from "@/server/usecases/sponsors";
+import { processStripeEvent } from "@/server/usecases/billing-events";
+import { seedPassOrg, seedSponsorOrder, seedTrialingGroup } from "@/server/usecases/__tests__/_money-fixtures";
+import { fakeSession, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
-/** Typed from the spec (phase 3, "Recipient"): the kinds whose recipient is an account. */
-const SPEC_ACCOUNT_KINDS: readonly OutboxKind[] = ["chess_invite"];
+/** Typed from the spec (phase 3, the kind table's "To" column, A): the kinds whose recipient is an account, in the table's order. */
+const SPEC_ACCOUNT_KINDS: readonly OutboxKind[] = [
+  "chess_invite",
+  "registration_dispute_alert",
+  "registration_dispute_lost",
+  "sponsor_dispute_alert",
+  "sponsor_dispute_won",
+  "sponsor_dispute_lost",
+  "pass_revoked",
+  "trial_ending",
+];
 
 beforeEach(() => stubOutboxEnv());
 afterAll(async () => {
@@ -47,28 +75,109 @@ describe("which kinds are addressed to an account (no database)", () => {
 });
 
 describe.skipIf(!HAS_DB)("an account kind's sealed body never names its recipient (real producer, real renderer)", () => {
-  // One producer per account kind: the real code path that writes the kind's rows, returning the fixture ids its rows hang off.
-  const PRODUCERS: Readonly<Record<string, () => Promise<string[]>>> = {
+  /** A card-paid entry (the real webhook confirmed it) in a fresh org: its competition's name and the payment intent its cart carries. */
+  async function disputableEntry(): Promise<{ competitionName: string; intent: string }> {
+    const w = await stripeRig({ feeCents: 900 });
+    const { registration } = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: `akb-${randomUUID().slice(0, 8)}@test.local` });
+    await handleRegistrationCheckoutCompleted(fakeSession(registration.id, 900));
+    const [cart] = await sql<{ payment_intent_id: string | null }[]>`select payment_intent_id from registration_groups where id = ${registration.group_id}`;
+    expect(cart!.payment_intent_id, "premise: the paid cart carries its payment intent").toBeTruthy();
+    return { competitionName: w.competition.name, intent: cart!.payment_intent_id! };
+  }
+  const rowIdsOf = async (kind: OutboxKind, disputeId: string): Promise<string[]> =>
+    (await sql<{ id: string }[]>`select id from email_outbox where kind = ${kind} and ref_id = ${disputeId}`).map((x) => x.id);
+  /** A pattern that matches `text` literally. */
+  const literal = (text: string): RegExp => new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+
+  // One producer per account kind: the real code path that writes the kind's rows. It returns the ids of the rows it wrote
+  // and a pattern the kind's own body must carry (the positive pair: an empty or unreadable body would pass every absence check).
+  const PRODUCERS: Readonly<Partial<Record<OutboxKind, () => Promise<{ rowIds: string[]; positive: RegExp }>>>> = {
     chess_invite: async () => {
       const r = await seedOnlineChessRound({ fixtures: 2 });
       const out = await openRound({ stageId: r.stageId, roundNo: r.roundNo, actorUserId: r.ownerUserId });
       expect(out, "premise: the real open invited the round").toMatchObject({ opened: true });
-      return r.boards.map((b) => b.fixtureId);
+      const fixtureIds = r.boards.map((b) => b.fixtureId);
+      const rows = await sql<{ id: string }[]>`
+        select id from email_outbox where kind = 'chess_invite' and split_part(ref_id, ':', 1) = any(${fixtureIds}::text[])`;
+      expect(rows.length, "anti-vacuity: the chess_invite producer wrote a row per seat").toBeGreaterThanOrEqual(2);
+      // The invite carries the match link.
+      return { rowIds: rows.map((x) => x.id), positive: /href="https?:\/\// };
+    },
+    registration_dispute_alert: async () => {
+      const { competitionName, intent } = await disputableEntry();
+      const disputeId = `dp_akb_${randomUUID().slice(0, 12)}`;
+      const dispute = { id: disputeId, payment_intent: intent, amount: 900, status: "needs_response" } as unknown as Stripe.Dispute;
+      expect(await handleRegistrationDispute(dispute, "created"), "premise: the real handler matched the entry-fee charge").toBe(true);
+      // The alert names the competition the disputed entry belongs to.
+      return { rowIds: await rowIdsOf("registration_dispute_alert", disputeId), positive: literal(competitionName) };
+    },
+    registration_dispute_lost: async () => {
+      const { competitionName, intent } = await disputableEntry();
+      const disputeId = `dp_akb_${randomUUID().slice(0, 12)}`;
+      // No `charge`: the balance recovery is skipped, so nothing reaches Stripe.
+      const dispute = { id: disputeId, payment_intent: intent, amount: 900, status: "lost" } as unknown as Stripe.Dispute;
+      expect(await handleRegistrationDispute(dispute, "closed"), "premise: the real handler matched the entry-fee charge").toBe(true);
+      // The notice names the competition the written-off entry belongs to.
+      return { rowIds: await rowIdsOf("registration_dispute_lost", disputeId), positive: literal(competitionName) };
+    },
+    sponsor_dispute_alert: async () => {
+      const o = await seedSponsorOrder({ status: "paid" });
+      const disputeId = `dp_akb_${randomUUID().slice(0, 12)}`;
+      const dispute = { id: disputeId, payment_intent: o.intent, amount: 25000, status: "needs_response" } as unknown as Stripe.Dispute;
+      expect(await handleSponsorDispute(dispute, "created"), "premise: the real handler matched the sponsor's charge").toBe(true);
+      // The alert names the package the disputed payment bought.
+      return { rowIds: await rowIdsOf("sponsor_dispute_alert", disputeId), positive: literal(o.packageName) };
+    },
+    sponsor_dispute_won: async () => {
+      const o = await seedSponsorOrder({ status: "paid" });
+      const disputeId = `dp_akb_${randomUUID().slice(0, 12)}`;
+      const dispute = (status: string) => ({ id: disputeId, payment_intent: o.intent, amount: 25000, status }) as unknown as Stripe.Dispute;
+      expect(await handleSponsorDispute(dispute("needs_response"), "created"), "premise: the real handler flagged the sponsor's order").toBe(true);
+      expect(await handleSponsorDispute(dispute("won"), "closed"), "premise: the real handler matched the sponsor's charge").toBe(true);
+      // The notice names the package the disputed payment bought.
+      return { rowIds: await rowIdsOf("sponsor_dispute_won", disputeId), positive: literal(o.packageName) };
+    },
+    sponsor_dispute_lost: async () => {
+      const o = await seedSponsorOrder({ status: "paid" });
+      const disputeId = `dp_akb_${randomUUID().slice(0, 12)}`;
+      // No `charge`: the balance recovery is skipped, so nothing reaches Stripe.
+      const dispute = { id: disputeId, payment_intent: o.intent, amount: 25000, status: "lost" } as unknown as Stripe.Dispute;
+      expect(await handleSponsorDispute(dispute, "closed"), "premise: the real handler matched the sponsor's charge").toBe(true);
+      // The notice names the package the written-off payment bought.
+      return { rowIds: await rowIdsOf("sponsor_dispute_lost", disputeId), positive: literal(o.packageName) };
+    },
+    pass_revoked: async () => {
+      const intent = `pi_akb_${randomUUID().slice(0, 12)}`;
+      const chargeId = `ch_akb_${randomUUID().slice(0, 12)}`;
+      const o = await seedPassOrg({ intent });
+      const charge = { id: chargeId, payment_intent: intent, refunded: true, amount_refunded: 2900 };
+      const event = { id: `evt_akb_${randomUUID().slice(0, 12)}`, type: "charge.refunded", data: { object: charge } };
+      await processStripeEvent(event as unknown as Stripe.Event);
+      // The notice names the competition the refunded pass was for.
+      return { rowIds: await rowIdsOf("pass_revoked", chargeId), positive: literal(o.compName) };
+    },
+    trial_ending: async () => {
+      const g = await seedTrialingGroup({ hasPaymentMethod: false });
+      const trialEnd = Math.floor(Date.now() / 1000) + 3 * 24 * 60 * 60;
+      const sub = { id: g.stripeSubId, object: "subscription", status: "trialing", trial_end: trialEnd, metadata: {} };
+      const event = { id: `evt_akb_${randomUUID().slice(0, 12)}`, type: "customer.subscription.trial_will_end", data: { object: sub } };
+      await processStripeEvent(event as unknown as Stripe.Event);
+      // The warning links to the billing page, where the payer adds a card or cancels.
+      return { rowIds: await rowIdsOf("trial_ending", g.groupId), positive: /\/settings\/billing/ };
     },
   };
 
-  it("chess_invite (and every other account kind): the recipient's address is absent from the subject, the html and the text", async () => {
+  it("every account kind: the recipient's address is absent from the subject, the html and the text", async () => {
+    expect(Object.keys(PRODUCERS).sort(), "a producer for exactly the account kinds").toEqual([...SPEC_ACCOUNT_KINDS].sort());
     let kindsChecked = 0;
     let rowsChecked = 0;
     for (const kind of SPEC_ACCOUNT_KINDS) {
-      const produce = PRODUCERS[kind];
-      expect(produce, `a producer for the account kind ${kind}`).toBeDefined();
-      const fixtureIds = await produce!();
+      const { rowIds, positive } = await PRODUCERS[kind]!();
       const rows = await sql<{ id: string; recipient: string; recipient_user_id: string | null; subject: string; status: string; body_sealed: Buffer | null }[]>`
         select id, recipient, recipient_user_id, subject, status, body_sealed
           from email_outbox
-         where kind = ${kind} and split_part(ref_id, ':', 1) = any(${fixtureIds}::text[])`;
-      expect(rows.length, `anti-vacuity: the ${kind} producer wrote rows`).toBeGreaterThanOrEqual(2);
+         where kind = ${kind} and id = any(${rowIds}::uuid[])`;
+      expect(rows.length, `anti-vacuity: the ${kind} producer's rows were found`).toBeGreaterThanOrEqual(1);
       for (const row of rows) {
         expect(row.status, `premise: ${kind} row still holds its sealed body`).toBe("queued");
         expect(row.body_sealed, `premise: ${kind} row has a body to open`).not.toBeNull();
@@ -79,14 +188,15 @@ describe.skipIf(!HAS_DB)("an account kind's sealed body never names its recipien
         expect(row.subject.toLowerCase(), `${kind}: subject`).not.toContain(address);
         expect(body.html.toLowerCase(), `${kind}: html`).not.toContain(address);
         expect(body.text.toLowerCase(), `${kind}: text`).not.toContain(address);
-        // The positive pair: this is the invite, opened. An empty or unreadable body would pass the three checks above.
+        // The positive pair: this is the kind's own mail, opened. An empty or unreadable body would pass the three checks above.
         expect(body.text.length, `${kind}: the text really was opened`).toBeGreaterThan(20);
-        expect(body.html, `${kind}: the html carries the match link`).toMatch(/href="https?:\/\//);
+        expect(positive.test(body.text) || positive.test(body.html), `${kind}: the body carries ${positive}`).toBe(true);
         rowsChecked += 1;
       }
       kindsChecked += 1;
     }
     expect(kindsChecked, "every account kind was checked").toBe(SPEC_ACCOUNT_KINDS.length);
-    expect(rowsChecked, "anti-vacuity: bodies were opened").toBeGreaterThanOrEqual(2);
+    expect(kindsChecked, "anti-vacuity: at least one account kind was swept").toBeGreaterThan(0);
+    expect(rowsChecked, "anti-vacuity: bodies were opened, at least one per kind").toBeGreaterThanOrEqual(kindsChecked);
   });
 });

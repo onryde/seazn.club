@@ -2,6 +2,10 @@
 
 Owner decision, 2026-10-26. Starts after phase 3 wave 5 deletes `send()`, when the outbox is the only way an email leaves.
 
+## PARKED (owner, 2026-10-26)
+
+Phase 4 is parked after phase 3 wave 5. Start it only when one of these triggers happens: (1) email volume makes sending slow app requests or the minute cron cannot keep up; (2) a security review asks for the Resend key to be held outside the web app; (3) a second product or service needs to send email. Until then the in-app outbox (worker on the Cloudflare minute cron, `dispatchNow` for request emails, the Resend webhook in the app) is the design. The phase-3 obligations stay: no send path bypasses the outbox; dispatch/worker/webhook keep no app-render dependency. The owner questions below stay open until the phase starts.
+
 ## Shape
 
 ```

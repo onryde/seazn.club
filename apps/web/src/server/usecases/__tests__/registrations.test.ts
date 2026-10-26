@@ -38,21 +38,25 @@ const stripeMock = vi.hoisted(() => {
 
 vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
 
-// Observe the dispute-lost organiser email without touching the rest of the
-// email module (send() is a no-op without RESEND_API_KEY either way).
+// Observe two direct senders without touching the rest of the email module
+// (send() is a no-op without RESEND_API_KEY either way).
 //
 // The registration confirmation is NOT here any more: it no longer goes through a
 // sender in this module. It is rendered (`registrationEmail`), queued on the email
 // outbox and sent through the outbox's one network seam, replaced just below, so a
 // test sees what the registrant would receive (the subject, html and text the
 // transport was handed) and the outbox row, rather than a spy on the arguments.
+//
+// Nor is the dispute-lost organiser notice: it is rendered by `disputeLostEmail` and
+// queued on the outbox (kind `registration_dispute_lost`), so the dispute tests read
+// its row. The builder is wrapped in a spy that calls through (below), so the
+// recovered amount is read where it enters the mail.
 const emailMock = vi.hoisted(() => ({
-  disputeLost: vi.fn().mockResolvedValue(true),
   // RS006 follow-up: staff alert for a registration refund that FAILS.
-  // Observed the same way as disputeLost above — a bare vi.fn(), asserted
-  // on directly — rather than forwarded to the real implementation, since
-  // these tests only need to prove the call sites TRIGGER it, not exercise
-  // its own template rendering (that lives in registration-refund-alert.test.ts).
+  // A bare vi.fn(), asserted on directly — rather than forwarded to the real
+  // implementation, since these tests only need to prove the call sites
+  // TRIGGER it, not exercise its own template rendering (that lives in
+  // registration-refund-alert.test.ts).
   registrationRefundFailedAlert: vi.fn().mockResolvedValue(true),
   // RS008: the system claim-invite mail — observed directly (bare vi.fn,
   // a no-op without RESEND_API_KEY anyway), so the invite-sweep tests can
@@ -63,7 +67,7 @@ vi.mock("@/lib/email", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/email")>();
   return {
     ...actual,
-    sendDisputeLostEmail: emailMock.disputeLost,
+    disputeLostEmail: vi.fn(actual.disputeLostEmail),
     sendRegistrationRefundFailedAlertEmail: emailMock.registrationRefundFailedAlert,
     sendClaimInviteEmail: emailMock.claimInvite,
   };
@@ -90,6 +94,7 @@ vi.mock("@/lib/credits", async (importOriginal) => {
 });
 
 import { sql, withTenant } from "@/lib/db";
+import { disputeLostEmail } from "@/lib/email";
 import { log } from "@/server/logger";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
@@ -429,7 +434,7 @@ beforeEach(() => {
   stripeMock.chargeRetrieve.mockReset();
   stripeMock.reversalCreate.mockReset().mockResolvedValue({ id: "trr_test_1" });
   stripeMock.reversalList.mockReset().mockResolvedValue({ data: [] });
-  emailMock.disputeLost.mockClear();
+  vi.mocked(disputeLostEmail).mockClear();
   emailMock.registrationRefundFailedAlert.mockClear();
   transport.deliver.mockReset().mockImplementation(async () => ({ ok: true, providerId: `re_rs_${randomUUID()}` }));
   emailMock.claimInvite.mockReset().mockResolvedValue(true);
@@ -2922,11 +2927,24 @@ describe.skipIf(!HAS_DB)("dispute loss recovery (PROMPT-55)", () => {
       where type = ${type} and payload->>'registration_id' = ${regId}`;
   }
 
+  /** The organiser's dispute-lost notices queued for one org (each rig is a fresh org). */
+  const lostNotices = (orgId: string) =>
+    sql<{ ref_type: string; ref_id: string; dedupe_key: string | null; recipient: string; recipient_user_id: string | null; status: string; attempts: number }[]>`
+      select ref_type, ref_id, dedupe_key, recipient, recipient_user_id, status, attempts
+        from email_outbox
+       where kind = 'registration_dispute_lost' and org_id = ${orgId}
+       order by created_at, id`;
+
+  /** A Stripe dispute id unique to this run: the notice's once-key is global (`<dispute id>:lost`), so a fixed id would find an earlier
+   *  run's row and queue nothing. */
+  const runDisputeId = (tag: string): string => `${tag}_${randomUUID().slice(0, 8)}`;
+
   it("lost dispute reverses the club's net share with a dispute-scoped idempotency key", async () => {
-    const { regId, orgId, intent, chargeId, transferId } = await disputedRig();
+    const { regId, orgId, ownerId, intent, chargeId, transferId } = await disputedRig();
+    const disputeId = runDisputeId("dp_r1");
     await handleRegistrationDispute(
       disputeObj({
-        id: "dp_r1",
+        id: disputeId,
         payment_intent: intent,
         charge: chargeId,
         amount: 2000,
@@ -2936,7 +2954,7 @@ describe.skipIf(!HAS_DB)("dispute loss recovery (PROMPT-55)", () => {
     );
     await handleRegistrationDispute(
       disputeObj({
-        id: "dp_r1",
+        id: disputeId,
         payment_intent: intent,
         charge: chargeId,
         amount: 2000,
@@ -2955,40 +2973,52 @@ describe.skipIf(!HAS_DB)("dispute loss recovery (PROMPT-55)", () => {
       transferId,
       {
         amount: 1900, // 2000 transfer − 100 app fee: the net the club received
-        metadata: { dispute_id: "dp_r1", registration_id: regId },
+        metadata: { dispute_id: disputeId, registration_id: regId },
       },
-      { idempotencyKey: "dispute-reversal-dp_r1" },
+      { idempotencyKey: `dispute-reversal-${disputeId}` },
     );
 
     const recovered = await auditRows("registration.dispute_recovered", regId);
     expect(recovered).toHaveLength(1);
     expect(recovered[0].payload).toMatchObject({
-      dispute_id: "dp_r1",
+      dispute_id: disputeId,
       transfer_id: transferId,
       reversed_cents: 1900,
     });
 
-    // Organiser hears about the loss + recovery — addressed to the current
-    // owner (org_members), not organizations.created_by.
+    // Organiser hears about the loss + recovery — queued on the outbox for the
+    // current owner's account (org_members), not organizations.created_by. The
+    // worker sends it.
     const [owner] = await sql<{ email: string }[]>`
       select u.email from org_members m join users u on u.id = m.user_id
       where m.org_id = ${orgId} and m.role = 'owner'`;
-    expect(emailMock.disputeLost).toHaveBeenCalledTimes(1);
-    expect(emailMock.disputeLost).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: owner.email,
-        amountCents: 2000,
-        recoveredCents: 1900,
-      }),
+    const notices = await lostNotices(orgId);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatchObject({
+      ref_type: "dispute",
+      ref_id: disputeId,
+      dedupe_key: `${disputeId}:lost`,
+      recipient: owner.email,
+      recipient_user_id: ownerId,
+      status: "queued",
+      attempts: 0,
+    });
+    // The recovered amount the notice states is what the reversal moved (read off
+    // the Stripe mock's own call, not the code).
+    const reversed = (stripeMock.reversalCreate.mock.calls[0]![1] as { amount: number }).amount;
+    expect(vi.mocked(disputeLostEmail)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(disputeLostEmail)).toHaveBeenCalledWith(
+      expect.objectContaining({ amountCents: 2000, recoveredCents: reversed }),
+      expect.anything(),
     );
   });
 
   it("write-off lands even when the reversal throws (recovery_failed audited)", async () => {
-    const { regId, intent, chargeId } = await disputedRig();
+    const { regId, orgId, intent, chargeId } = await disputedRig();
     stripeMock.reversalCreate.mockRejectedValue(new Error("stripe down"));
     await handleRegistrationDispute(
       disputeObj({
-        id: "dp_r2",
+        id: runDisputeId("dp_r2"),
         payment_intent: intent,
         charge: chargeId,
         amount: 2000,
@@ -3003,18 +3033,22 @@ describe.skipIf(!HAS_DB)("dispute loss recovery (PROMPT-55)", () => {
     const failed = await auditRows("registration.dispute_recovery_failed", regId);
     expect(failed).toHaveLength(1);
     expect(failed[0].payload.error).toContain("stripe down");
-    expect(emailMock.disputeLost).toHaveBeenCalledWith(
+    // The notice still goes, and says nothing was recovered.
+    expect(await lostNotices(orgId)).toHaveLength(1);
+    expect(vi.mocked(disputeLostEmail)).toHaveBeenCalledWith(
       expect.objectContaining({ recoveredCents: 0 }),
+      expect.anything(),
     );
   });
 
   it("replayed lost event short-circuits on the metadata guard — one reversal, one email", async () => {
-    const { regId, intent, chargeId, transferId } = await disputedRig();
+    const { regId, orgId, intent, chargeId, transferId } = await disputedRig();
+    const disputeId = runDisputeId("dp_r3");
     stripeMock.reversalList.mockResolvedValueOnce({ data: [] }).mockResolvedValue({
-      data: [{ id: "trr_prior", amount: 1900, metadata: { dispute_id: "dp_r3" } }],
+      data: [{ id: "trr_prior", amount: 1900, metadata: { dispute_id: disputeId } }],
     });
     const lost = disputeObj({
-      id: "dp_r3",
+      id: disputeId,
       payment_intent: intent,
       charge: chargeId,
       amount: 2000,
@@ -3027,7 +3061,9 @@ describe.skipIf(!HAS_DB)("dispute loss recovery (PROMPT-55)", () => {
       limit: 100,
     });
     expect(await auditRows("registration.dispute_recovered", regId)).toHaveLength(1);
-    expect(emailMock.disputeLost).toHaveBeenCalledTimes(1);
+    expect(await lostNotices(orgId)).toHaveLength(1);
+    // The replay never renders a second notice: the recovery's guard stops it before the once-key is asked.
+    expect(vi.mocked(disputeLostEmail)).toHaveBeenCalledTimes(1);
   });
 
   it("partial dispute reverses the proportional net share, capped by the unreversed remainder", async () => {
@@ -3099,7 +3135,7 @@ describe.skipIf(!HAS_DB)("dispute loss recovery (PROMPT-55)", () => {
   });
 
   it("won dispute never touches transfers", async () => {
-    const { regId, intent, chargeId } = await disputedRig();
+    const { regId, orgId, intent, chargeId } = await disputedRig();
     await handleRegistrationDispute(
       disputeObj({
         id: "dp_r7",
@@ -3123,7 +3159,8 @@ describe.skipIf(!HAS_DB)("dispute loss recovery (PROMPT-55)", () => {
 
     expect(stripeMock.chargeRetrieve).not.toHaveBeenCalled();
     expect(stripeMock.reversalCreate).not.toHaveBeenCalled();
-    expect(emailMock.disputeLost).not.toHaveBeenCalled();
+    expect(await lostNotices(orgId)).toHaveLength(0);
+    expect(vi.mocked(disputeLostEmail)).not.toHaveBeenCalled();
     const row = await loadWithGroup(regId);
     expect(row.group_refunded_cents).toBe(0);
     expect(row.disputed_at).toBeNull();
@@ -3141,7 +3178,7 @@ describe.skipIf(!HAS_DB)("dispute loss recovery (PROMPT-55)", () => {
 
     await handleRegistrationDispute(
       disputeObj({
-        id: "dp_r8",
+        id: runDisputeId("dp_r8"),
         payment_intent: intent,
         charge: chargeId,
         amount: 2000,
@@ -3149,10 +3186,9 @@ describe.skipIf(!HAS_DB)("dispute loss recovery (PROMPT-55)", () => {
       "closed",
     );
 
-    expect(emailMock.disputeLost).toHaveBeenCalledTimes(1);
-    expect(emailMock.disputeLost).toHaveBeenCalledWith(
-      expect.objectContaining({ to: newOwnerEmail }),
-    );
+    const notices = await lostNotices(orgId);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatchObject({ recipient_user_id: newOwnerId, recipient: newOwnerEmail });
     expect(await auditRows("registration.dispute_recovered", regId)).toHaveLength(1);
   });
 });

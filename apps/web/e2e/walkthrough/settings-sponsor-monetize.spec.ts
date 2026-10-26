@@ -261,6 +261,26 @@ interface SponsorRow {
   status: "active" | "pending" | "inactive";
 }
 
+/** The sponsor's three emails go through the email outbox (phase 3, wave 2).
+ *  Every row of one kind about one thing, read straight from the table: the
+ *  console shows none of them. */
+async function outboxRows(
+  kind: string,
+  refType: string,
+  refId: string,
+): Promise<{ status: string; has_body: boolean }[]> {
+  return withDb(async (sql) => [
+    ...(await sql<{ status: string; has_body: boolean }[]>`
+      select status, body_sealed is not null as has_body
+        from email_outbox
+       where kind = ${kind} and ref_type = ${refType} and ref_id = ${refId}
+       order by created_at`),
+  ]);
+}
+
+/** An outbox row is WAITING while it has no attempt behind it yet. */
+const isWaiting = (status: string): boolean => status === "queued" || status === "sending";
+
 // ---------------------------------------------------------------------------
 // The fixture account: claim, and give it back
 // ---------------------------------------------------------------------------
@@ -477,7 +497,8 @@ test("invoice: Send invoice mints a REAL Stripe Checkout Session on the connecte
   page: Page;
   request: APIRequestContext;
 }) => {
-  test.setTimeout(budget(1, 1));
+  // Two nav-sized waits: the page, and the outbox poll (READ_MS) below.
+  test.setTimeout(budget(2, 1));
   expect(packageId, "leg 1 must have sold a package").not.toBe("");
   await page.goto(settingsUrl(org.slug, "sponsors"));
 
@@ -549,6 +570,25 @@ test("invoice: Send invoice mints a REAL Stripe Checkout Session on the connecte
   expect(order!.status, "an unpaid invoice is pending").toBe("pending");
   expect(order!.sponsor_id, "no placement exists until the money lands").toBeNull();
   orderId = order!.id;
+
+  // The invoice email went through the outbox: ONE row for the order, and the
+  // request made its first attempt once the response was out, so it is no
+  // longer waiting and keeps no body. CI's server has no Resend key, so there
+  // it ends `dead` (`no_api_key`); a server with one has sent it. Polled,
+  // because that attempt runs after the response.
+  await expect
+    .poll(
+      async () =>
+        (await outboxRows("sponsor_invoice", "sponsor_order", orderId)).map((r) => ({
+          waiting: isWaiting(r.status),
+          hasBody: r.has_body,
+        })),
+      {
+        timeout: READ_MS,
+        message: "one sponsor_invoice row for the order, its first attempt made, no body kept",
+      },
+    )
+    .toEqual([{ waiting: false, hasBody: false }]);
 
   // The negative half of leg 3's positive: a pending order offers no refund.
   // Asserted here so the pair is a real differential rather than a lone
@@ -668,6 +708,14 @@ test("paid: a real destination charge, delivered as a signed event, activates th
   expect(order!.payment_intent_id, "the order must record the intent that paid it").toBe(intent.id);
   expect(order!.sponsor_id, "a paid order must have minted its placement").not.toBeNull();
 
+  // The receipt is queued in the activation's own transaction, one per
+  // payment however often it is delivered, and the worker makes its first
+  // attempt: ONE row for the order, still waiting.
+  expect(
+    (await outboxRows("sponsor_receipt", "sponsor_order", orderId)).map((r) => r.status),
+    "one sponsor_receipt row for the order, queued for the worker",
+  ).toEqual(["queued"]);
+
   // The placement itself, on the public-facing sponsor list — and carrying the
   // PACKAGE's tier, which is the only thing that copies it there.
   const sponsors = await apiJson<SponsorRow[]>(request, `/api/v1/orgs/${org.orgId}/sponsors`);
@@ -700,7 +748,8 @@ test("refund: the console reverses the charge, and the placement comes off the p
   page: Page;
   request: APIRequestContext;
 }) => {
-  test.setTimeout(budget(2, 3));
+  // Three nav-sized waits: two pages, and the outbox poll (READ_MS) below.
+  test.setTimeout(budget(3, 3));
   expect(paymentIntentId, "leg 3 must have paid the order").not.toBe("");
   await page.goto(settingsUrl(org.slug, "sponsors"));
 
@@ -737,6 +786,23 @@ test("refund: the console reverses the charge, and the placement comes off the p
   const orders = await apiJson<OrderRow[]>(request, `/api/v1/orgs/${org.orgId}/sponsor-orders`);
   const order = orders.data?.find((o) => o.id === orderId);
   expect(order!.status, "the refunded order must read back refunded").toBe("refunded");
+
+  // The refund notice is queued in the refund's own transaction, and the
+  // console request makes its first attempt once the response is out: ONE row
+  // for the order (the later `charge.refunded` from Stripe flips nothing, so
+  // it queues nothing), no longer waiting. Polled, as the invoice's is.
+  await expect
+    .poll(
+      async () =>
+        (await outboxRows("sponsor_refund", "sponsor_order", orderId)).map((r) => ({
+          waiting: isWaiting(r.status),
+        })),
+      {
+        timeout: READ_MS,
+        message: "one sponsor_refund row for the order, its first attempt made",
+      },
+    )
+    .toEqual([{ waiting: false }]);
 
   // The placement comes DOWN — the half of the refund a Stripe-only assertion
   // cannot see, and the reason `refundSponsorOrder` reuses the charge.refunded

@@ -110,6 +110,39 @@ async function withDb<T>(fn: (sql: import("postgres").Sql) => Promise<T>): Promi
 }
 
 // ---------------------------------------------------------------------------
+// Email outbox rows (email-outbox phase 3, wave 2: the money notices)
+// ---------------------------------------------------------------------------
+
+/** The shipped EN email copy, read from the file rather than typed here, so a
+ *  copy change moves the expected subject with it (the fs read is this
+ *  directory's idiom: an e2e spec cannot import a JSON module, see T13). */
+const EMAILS_EN = JSON.parse(
+  readFileSync(
+    fileURLToPath(new URL("../src/dictionaries/en/emails.json", import.meta.url)),
+    "utf8",
+  ),
+) as Record<string, string>;
+
+interface OutboxRow {
+  status: string;
+  recipient: string;
+  recipient_user_id: string | null;
+  subject: string;
+  transactional: boolean;
+}
+
+/** Every outbox row of one kind about one thing (`ref_type / ref_id`). */
+async function outboxRows(kind: string, refType: string, refId: string): Promise<OutboxRow[]> {
+  return withDb(async (sql) => [
+    ...(await sql<OutboxRow[]>`
+      select status, recipient, recipient_user_id, subject, transactional
+        from email_outbox
+       where kind = ${kind} and ref_type = ${refType} and ref_id = ${refId}
+       order by created_at`),
+  ]);
+}
+
+// ---------------------------------------------------------------------------
 // SQL seed helpers (mirror the wave's vitest seeds; run-unique)
 // ---------------------------------------------------------------------------
 
@@ -131,6 +164,8 @@ interface SeededOrg {
   orgId: string;
   orgSlug: string;
   ownerEmail: string;
+  /** The owner's account: an owner-addressed outbox row must name it. */
+  ownerId: string;
 }
 
 /** Org with its own fresh owner (never the shared Pro user → no budget impact).
@@ -180,7 +215,7 @@ async function seedOrg(opts: {
         returning id`;
       await sql`update organizations set subscription_id = ${group.id} where id = ${orgId}`;
     }
-    return { orgId, orgSlug, ownerEmail };
+    return { orgId, orgSlug, ownerEmail, ownerId };
   });
 }
 
@@ -537,10 +572,11 @@ test.describe("T3 · Event Pass refund revokes the pass", () => {
     expect(held.data!.status).toBe("pending");
 
     // A fully-refunded pass charge revokes the pass.
+    const chargeId = uid("ch");
     const res = await postSignedEvent(
       request,
       stripeEvent("charge.refunded", {
-        id: uid("ch"),
+        id: chargeId,
         payment_intent: intent,
         refunded: true,
         amount_refunded: 500,
@@ -553,6 +589,23 @@ test.describe("T3 · Event Pass refund revokes the pass", () => {
       sql`select 1 from competition_passes where stripe_payment_intent = ${intent}`,
     );
     expect(passGone.length).toBe(0);
+
+    // The owner is told through the email outbox, queued in the revoke's own
+    // transaction: ONE row about the charge, for the owner's account, waiting
+    // for the worker (it makes the first attempt), with the M rung's subject
+    // in English (the seeded org's default; the owner picked no language).
+    const subjectTpl = EMAILS_EN["passRevoked.subject"];
+    const rungM = EMAILS_EN["passRevoked.rung.m"];
+    expect(subjectTpl, "premise: the EN catalogue has the pass-revoked subject").toBeTruthy();
+    expect(rungM, "premise: the EN catalogue has the M rung's label").toBeTruthy();
+    const notices = await outboxRows("pass_revoked", "charge", chargeId);
+    expect(notices, "one pass_revoked row for the refunded charge").toHaveLength(1);
+    expect(notices[0]).toMatchObject({
+      recipient: org.ownerEmail,
+      recipient_user_id: org.ownerId,
+      status: "queued",
+      subject: subjectTpl!.replace("{rung}", rungM!),
+    });
 
     // … and the cap has dropped back to 64: the next entry (the 66th spot-holder)
     // is over the community ceiling and waitlists. Reverting the revocation leaves
@@ -636,10 +689,11 @@ test.describe("T6 · sponsor package disputes pull the placement", () => {
     await page.goto(`/shared/${org.orgSlug}/${compSlug}`);
     await expect(page.getByText(sponsorName)).toBeVisible();
 
+    const did = uid("dp");
     const res = await postSignedEvent(
       request,
       stripeEvent("charge.dispute.created", {
-        id: uid("dp"),
+        id: did,
         status: "needs_response",
         amount: 25000,
         currency: "gbp",
@@ -648,6 +702,12 @@ test.describe("T6 · sponsor package disputes pull the placement", () => {
       }),
     );
     expect(res.status()).toBe(200);
+
+    // The owner's alert is queued on the outbox with the flag: one row for the dispute.
+    expect(
+      await outboxRows("sponsor_dispute_alert", "dispute", did),
+      "one sponsor_dispute_alert row for the dispute",
+    ).toHaveLength(1);
 
     await expectSponsorOnPage(page, `/shared/${org.orgSlug}/${compSlug}`, sponsorName, false);
   });
@@ -691,6 +751,12 @@ test.describe("T6 · sponsor package disputes pull the placement", () => {
     );
     expect(order.status).toBe("refunded");
 
+    // The owner's write-off notice is queued on the outbox: one row for the closed dispute.
+    expect(
+      await outboxRows("sponsor_dispute_lost", "dispute", did),
+      "one sponsor_dispute_lost row for the dispute",
+    ).toHaveLength(1);
+
     await expectSponsorOnPage(page, `/shared/${org.orgSlug}/${compSlug}`, sponsorName, false);
   });
 
@@ -727,6 +793,12 @@ test.describe("T6 · sponsor package disputes pull the placement", () => {
       }),
     );
     expect(won.status()).toBe(200);
+
+    // The owner's "dispute won" notice is queued on the outbox: one row for the closed dispute.
+    expect(
+      await outboxRows("sponsor_dispute_won", "dispute", did),
+      "one sponsor_dispute_won row for the dispute",
+    ).toHaveLength(1);
 
     await expectSponsorOnPage(page, `/shared/${org.orgSlug}/${compSlug}`, sponsorName, true);
   });
@@ -860,8 +932,9 @@ test.describe("Replay · re-posting a processed event is a clean no-op", () => {
 
     // ONE event object with ONE id, reused verbatim on the replay — this is the
     // wave's idempotency contract (Stripe re-delivers the SAME event id).
+    const did = uid("dp");
     const event = stripeEvent("charge.dispute.created", {
-      id: uid("dp"),
+      id: did,
       status: "needs_response",
       amount: 25000,
       currency: "gbp",
@@ -879,6 +952,12 @@ test.describe("Replay · re-posting a processed event is a clean no-op", () => {
     );
     expect(afterFirst.disputed_at).not.toBeNull(); // flagged
     expect(afterFirst.status).toBe("pending"); // placement parked
+    // The first delivery queued the owner's alert: the positive half of the
+    // "still one" below.
+    expect(
+      await outboxRows("sponsor_dispute_alert", "dispute", did),
+      "the first delivery queues one sponsor_dispute_alert row",
+    ).toHaveLength(1);
 
     // Replay the IDENTICAL event id.
     const replay = await postSignedEvent(request, event);
@@ -900,6 +979,108 @@ test.describe("Replay · re-posting a processed event is a clean no-op", () => {
     );
     expect(afterReplay.disputed_at).toBe(afterFirst.disputed_at); // not re-stamped
     expect(afterReplay.status).toBe("pending"); // not re-mutated
+    // … and the owner is not alerted twice.
+    expect(
+      await outboxRows("sponsor_dispute_alert", "dispute", did),
+      "the replay queues no second sponsor_dispute_alert row",
+    ).toHaveLength(1);
+  });
+});
+
+// ===========================================================================
+// Email outbox — the money notices a webhook queues (phase 3, wave 2)
+// ===========================================================================
+
+test.describe("Outbox · wave-2 money notices from the webhook", () => {
+  test("registration dispute: created alerts the owner once", async ({ request }) => {
+    const intent = uid("pi");
+    const org = await seedOrg({ plan: "community", chargesEnabled: true, connected: true });
+    const { compId, compSlug } = await seedComp(org.orgId);
+    const { divisionId } = await seedStripeDivision(compId);
+    const entered = await submitPublicRegistration(
+      request, org.orgSlug, compSlug, divisionId, "Disputed Entrant",
+    );
+    expect(entered.status).toBe(201);
+
+    // The card payment's intent lives on the cart (V364). The checkout mint
+    // fails on the seeded fake Connect account, so write it as a paid cart
+    // would carry it. The comp is fresh, so its one cart is this entry's.
+    const carts = await withDb((sql) =>
+      sql<{ id: string }[]>`
+        update registration_groups set payment_intent_id = ${intent}
+         where competition_id = ${compId}
+        returning id`,
+    );
+    expect(carts, "premise: the submit made exactly one cart on the fresh comp").toHaveLength(1);
+
+    const did = uid("dp");
+    const dispute = {
+      id: did,
+      status: "needs_response",
+      amount: 500,
+      currency: "gbp",
+      payment_intent: intent,
+      charge: uid("ch"),
+    };
+    const alerts = () => outboxRows("registration_dispute_alert", "dispute", did);
+
+    // First delivery: the cart is flagged and the owner's alert is queued.
+    const event = stripeEvent("charge.dispute.created", dispute);
+    expect((await postSignedEvent(request, event)).status()).toBe(200);
+    const first = await alerts();
+    expect(first, "the first delivery queues one registration_dispute_alert row").toHaveLength(1);
+    expect(first[0]).toMatchObject({ recipient_user_id: org.ownerId, status: "queued" });
+
+    // Stripe redelivers the SAME event: the ledger's fast path skips it.
+    expect((await postSignedEvent(request, event)).status()).toBe(200);
+    expect(await alerts(), "a redelivered event queues no second alert").toHaveLength(1);
+
+    // A NEW event about the SAME dispute runs the handler again: the cart
+    // already names this dispute, so it is not a transition.
+    expect(
+      (await postSignedEvent(request, stripeEvent("charge.dispute.created", dispute))).status(),
+    ).toBe(200);
+    expect(await alerts(), "a second event for the same dispute queues no second alert").toHaveLength(1);
+  });
+
+  test("trial_will_end queues one transactional warning", async ({ request }) => {
+    const subId = uid("sub");
+    const org = await seedOrg({
+      plan: "pro",
+      subStatus: "trialing",
+      customerId: uid("cus"),
+      subscriptionId: subId,
+    });
+    const [group] = await withDb((sql) =>
+      sql<{ subscription_id: string }[]>`
+        select subscription_id from organizations where id = ${org.orgId}`,
+    );
+    expect(group?.subscription_id, "premise: the seeded org points at its billing group").toBeTruthy();
+
+    const res = await postSignedEvent(
+      request,
+      stripeEvent("customer.subscription.trial_will_end", {
+        id: subId,
+        object: "subscription",
+        status: "trialing",
+        // Stripe sends this three days ahead of the trial's end.
+        trial_end: Math.floor(Date.now() / 1000) + 3 * 24 * 60 * 60,
+        metadata: {},
+      }),
+    );
+    expect(res.status()).toBe(200);
+
+    // One warning for the group, addressed to the payer's account, and
+    // transactional: it is about money the payer is about to be charged (or
+    // a plan they are about to lose), so the marketing suppression list must
+    // not swallow it.
+    const warnings = await outboxRows("trial_ending", "subscription", group!.subscription_id);
+    expect(warnings, "one trial_ending row for the group").toHaveLength(1);
+    expect(warnings[0]).toMatchObject({
+      transactional: true,
+      recipient_user_id: org.ownerId,
+      status: "queued",
+    });
   });
 });
 
