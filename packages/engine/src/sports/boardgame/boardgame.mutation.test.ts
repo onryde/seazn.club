@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { foldMatch, type CoreEv, type EventEnvelope } from "../../core/events.ts";
 import type { EngineError } from "../../core/errors.ts";
 import { defaultLineupPair, makeEnvelope } from "../../testkit/index.ts";
-import type { MatchOutcome, StageCtx } from "../../core/types.ts";
+import type { StageCtx } from "../../core/types.ts";
 import type { PlayerStatsFoldCtx } from "../../stats/stats.ts";
 import {
   boardgame,
@@ -288,7 +288,7 @@ describe("boardgame: standingsDelta for an outcome nobody played out", () => {
   });
 
   it("an outcome the module cannot rank is refused naming its kind", () => {
-    const e = refusal(() => boardgame.standingsDelta({ kind: "tie" } as MatchOutcome, cfg, league, fresh));
+    const e = refusal(() => boardgame.standingsDelta({ kind: "tie" }, cfg, league, fresh));
     expect(e.code).toBe("INVALID_EVENT");
     expect(e.message).toBe('board-game module cannot rank outcome "tie"');
   });
