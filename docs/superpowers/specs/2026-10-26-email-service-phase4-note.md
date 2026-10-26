@@ -2,7 +2,11 @@
 
 Owner decision, 2026-10-26. Starts after phase 3 wave 5 deletes `send()`, when the outbox is the only way an email leaves.
 
-## PARKED (owner, 2026-10-26)
+## SCHEDULED (owner, 2026-10-26, later the same day): un-parked
+
+Phase 4 goes ahead after phase 3 wave 5, no trigger needed. Owner rulings: **Q2 = Upstash QStash** (Pay as you go; QStash publishes to the service and runs the `/sweep` schedule) and **Q3 = the same repo**: a workspace app `apps/email-service` in this monorepo, still its own Fly app (as `apps/cron-worker` is). Plan consequence (Q3): T4 Step 1 creates `apps/email-service`, the T4 fixture copy becomes an import, T6's workflows become jobs in `ci.yml`/`stg.yml`/`prod.yml`, and Part 2's contract (if ever) is a workspace package. Q1 (templates A or B), Q2(b) (prod `min_machines_running`) and Q4 (prod Resend events) are still asked at phase-4 start. The earlier park text follows for the record.
+
+## Superseded: PARKED (owner, 2026-10-26)
 
 Phase 4 is parked after phase 3 wave 5. Start it only when one of these triggers happens: (1) email volume makes sending slow app requests or the minute cron cannot keep up; (2) a security review asks for the Resend key to be held outside the web app; (3) a second product or service needs to send email. Until then the in-app outbox (worker on the Cloudflare minute cron, `dispatchNow` for request emails, the Resend webhook in the app) is the design. The phase-3 obligations stay: no send path bypasses the outbox; dispatch/worker/webhook keep no app-render dependency. The owner questions below stay open until the phase starts.
 

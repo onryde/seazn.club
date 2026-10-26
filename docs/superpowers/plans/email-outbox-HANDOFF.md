@@ -12,7 +12,7 @@ phase 4. Read this first, then the documents it names.
 | Phase 3 wave 1 (#1035) | 7 kinds on the outbox: `magic_link`, `chess_invite`, `registration_confirmation`, `payment_reminder`, `registration_promoted`, `refund_issued`, `solo_signup_assigned`. Migration `V472`. |
 | Phase 3 wave 2 | Planned: `docs/superpowers/plans/2026-10-26-email-outbox-phase3-wave2.md` (10 money kinds). Not started. |
 | Phase 3 waves 3–5 | Outlined at the end of `docs/superpowers/plans/2026-10-25-email-outbox-phase3-wave1.md` (Next waves). Wave 5 deletes `send()` / `sendWithResult` and empties the scan's allowlist. |
-| Phase 4 | **PARKED (owner, 2026-10-26)** until a trigger: email volume, a security review wanting the Resend key out of the app, or a second sender. Plan: `docs/superpowers/plans/2026-10-26-email-service-phase4.md`. Owner-approved roadmap: `docs/superpowers/specs/2026-10-26-email-service-phase4-note.md` (separate repo + Fly app, shared DB, QStash carries only the row id). Starts after wave 5. |
+| Phase 4 | **SCHEDULED after wave 5 (owner, 2026-10-26; un-parked the same day)**: Upstash QStash, in this monorepo as `apps/email-service` (own Fly app). Q1, Q2(b), Q4 asked at phase-4 start. Plan: `docs/superpowers/plans/2026-10-26-email-service-phase4.md` |
 
 Spec of record for phase 3: the one named at the top of the wave-1 plan.
 
