@@ -49,9 +49,10 @@ export type EmailStatusRow = {
 
 /**
  * The status of the newest email to each recipient of each of these refs, for one organisation and one ref type: one row per
- * (ref, recipient case-folded, as the V470 replace rule folds it), never a `replaced` row. A `replaced` row is skipped even when
- * it is the newest on the clock: the replace trigger supersedes by KEY, not by time, so the row that carries the outcome is the
- * newest one that is not. "Newest" is `created_at`, ties by `id` (`status_at` moves with every status change and says nothing about
+ * (ref, recipient case-folded, as the V470 replace rule folds it), never a `replaced` row and never a row a void ended (`expired`
+ * with a cancel reason in `last_error`, see `current`). Either is skipped even when it is the newest on the clock: the replace
+ * trigger supersedes by KEY, not by time, and a voided email is mail about a thing that is gone, so the row that carries the
+ * outcome is the newest one that is neither. "Newest" is `created_at`, ties by `id` (`status_at` moves with every status change and says nothing about
  * which email is the latest). A resend after a dead row reads as the new row. Empty `refIds` answers `[]` and issues no statement.
  *
  * `kind`, when given, narrows the ask to the emails of that kind BEFORE the newest-per-recipient fold: a ref is "a thing", and the
@@ -85,7 +86,7 @@ export async function latestEmailStatus(
 }
 
 /**
- * The status NOW of the newest non-replaced row for each of these ROWS' kind, ref and recipient (the recipient compared as the
+ * The status NOW of the newest current row (neither `replaced` nor voided, see `current`) for each of these ROWS' kind, ref and recipient (the recipient compared as the
  * replace rule compares it, case-insensitively), keyed by the row asked about. A row the caller wrote and a newer one another
  * request wrote for the same recipient answer alike: the newer row is what the recipient's mail is. The same rule as
  * `latestEmailStatus` (the `current` and `newestFirst` fragments above); asked by row id because its caller (the chess invite, in the
@@ -120,8 +121,8 @@ export type QueuedEmailRow = {
 };
 
 /**
- * The emails of these refs that may still be RE-RENDERED: for each recipient (of each ref, case-folded) the newest non-replaced row
- * (the SAME rule as `latestEmailStatus` and `latestStatusesOfRows`, the fragments above), kept only when
+ * The emails of these refs that may still be RE-RENDERED: for each recipient (of each ref, case-folded) the newest current row (neither
+ * `replaced` nor voided, see `current`; the SAME rule as `latestEmailStatus` and `latestStatusesOfRows`, the fragments above), kept only when
  *  - its status is `queued` (waiting to go out: a `sending`, `sent`, `delayed`, `delivered` or ended row is out of the caller's hands
  *    or already gone), AND
  *  - no request of it can have reached the provider: it was never attempted (`attempts = 0`), or its ONLY attempt was answered 429

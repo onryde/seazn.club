@@ -266,13 +266,20 @@ async function departSeat(auth: AuthCtx, fixtureId: string, entrantId: string, m
 /** Phase 3 wave 1 (spec §7): the boards the cascade just settled will never be played, so the chess invites still QUEUED for them
  *  end `board_settled` (a row already sending is left to finish). Its own tenant transaction, after the settles committed (each
  *  commits on its own, ruling 101). A failure here is logged and never thrown: the walkovers stand, the entrant must still be marked
- *  withdrawn, and a stale invite is only a mail to a board nobody can play - it expires on its own. */
+ *  withdrawn, and a stale invite is only a mail to a board nobody can play - it expires on its own. An empty list needs no guard here:
+ *  `cancelBoardInvites` answers `[]` before it issues a statement. */
 async function cancelSettledBoardInvites(auth: AuthCtx, fixtureIds: readonly string[]): Promise<void> {
-  if (fixtureIds.length === 0) return;
   try {
     await withTenant(auth.orgId, (tx) => cancelBoardInvites(tx, fixtureIds, BOARD_SETTLED_REASON));
   } catch (err) {
-    log.error({ err, boards: fixtureIds.length }, "withdrawal: the settled boards' queued invites could not be ended; they expire on their own");
+    // The residual is accepted (T6 review m2): nothing re-drives this, so an invite still queued for one of these boards is mailed
+    // until it expires (under a day) and names a board nobody will play. The log is how an operator finds it: the board ids to
+    // look the rows up by (`fixtureId:white|black`), and how many boards, so at most twice as many invites. A count of the queued
+    // rows themselves would be a second read on the connection that just failed.
+    log.error(
+      { err, fixtureIds, boards: fixtureIds.length },
+      "withdrawal: the settled boards' queued invites could not be ended; they expire on their own",
+    );
   }
 }
 

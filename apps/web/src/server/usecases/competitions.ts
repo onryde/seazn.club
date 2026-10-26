@@ -873,17 +873,20 @@ export async function deleteCompetition(auth: AuthCtx, id: string): Promise<void
       using sponsor_packages p
       where p.id = o.package_id and p.competition_id = ${id}`;
     // Phase 3 wave 1 (G-1): the delete CASCADEs to every fixture, and the bridge row of each online board with it. A chess invite
-    // still queued for one of those boards would keep retrying a mail to a board that no longer exists, so it ends first
-    // (`fixture_deleted`). Only a bridged fixture can have been invited, so those are the boards named.
+    // still queued for one of those boards would keep retrying a mail to a board that no longer exists, so it ends
+    // (`fixture_deleted`) in this transaction. Only a bridged fixture can have been invited, so those are the boards named, and
+    // they are read BEFORE the delete because the cascade takes the bridge rows that name them.
     const boards = await tx<{ id: string }[]>`
       select ep.fixture_id as id from fixture_external_play ep
         join fixtures f on f.id = ep.fixture_id join divisions d on d.id = f.division_id
        where d.competition_id = ${id}`;
-    await cancelBoardInvites(tx, boards.map((b) => b.id), FIXTURE_DELETED_REASON);
     const [deleted] = await tx<{ slug: string; org_slug: string | null }[]>`
       delete from competitions c where c.id = ${id}
       returning c.slug, (select o.slug from organizations o where o.id = c.org_id) as org_slug`;
     if (!deleted) throw new HttpError(404, "competition not found");
+    // AFTER the delete (T6 review m3): `resend` and `open` lock the bridge row and then the outbox row, so a cancel that took the
+    // outbox rows first would be the reverse order. Here the delete already holds the bridge rows when the cancel reaches the outbox.
+    await cancelBoardInvites(tx, boards.map((b) => b.id), FIXTURE_DELETED_REASON);
     return deleted;
   });
   // Public hub perf T2: a deleted competition must stop answering the polled

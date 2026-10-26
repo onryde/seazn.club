@@ -15,6 +15,7 @@
 // C6 (pre-flight): the spec's "deleting a seated entrant unseats the round and ends its invites" cannot be reached - `deleteEntrant`
 // refuses once the division has started and an open refuses a division that has not. The case below pins that REFUSAL instead.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { EngineError } from "@seazn/engine/core";
 import { randomUUID } from "node:crypto";
 import { sql, withTenant, type Tx } from "@/lib/db";
 import { log } from "@/server/logger";
@@ -69,14 +70,20 @@ vi.mock("../../scoring", async (importOriginal) => {
 });
 
 // The cancel the usecases call, wrapped so one test can make it fail (a withdrawal must survive a cancel that cannot be written).
-const cancelling = vi.hoisted(() => ({ fail: false }));
+// `probe`, when set, is asked from INSIDE the cancel's own transaction just before the cancel runs (what the delete has already done).
+const cancelling = vi.hoisted(() => ({
+  fail: false,
+  probe: null as null | ((tx: unknown, fixtureIds: readonly string[], reason: string) => Promise<void>),
+}));
 vi.mock("../cancel-invites", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../cancel-invites")>();
   return {
     ...actual,
-    cancelBoardInvites: vi.fn((...args: Parameters<typeof actual.cancelBoardInvites>) =>
-      cancelling.fail ? Promise.reject(new Error("cancel exploded (test)")) : actual.cancelBoardInvites(...args),
-    ),
+    cancelBoardInvites: vi.fn(async (...args: Parameters<typeof actual.cancelBoardInvites>) => {
+      if (cancelling.fail) throw new Error("cancel exploded (test)");
+      if (cancelling.probe) await cancelling.probe(args[0], args[1], args[2]);
+      return actual.cancelBoardInvites(...args);
+    }),
   };
 });
 
@@ -85,11 +92,11 @@ import { loadArbiterRound } from "../arbiter";
 import { openRound } from "../open-round";
 import { CHESS_SEAT_REF_TYPE, chessSeatRef, type Colour } from "../seat-stamp";
 import { createCompetition, deleteCompetition } from "../../competitions";
-import { createDivision } from "../../divisions";
+import { archiveDivision, createDivision, deleteDivision } from "../../divisions";
 import { createEntrants, deleteEntrant, patchEntrant } from "../../entrants";
 import { undoDivision } from "../../history";
 import { startDivision } from "../../schedule";
-import { createStages, deleteStage, generateStageFixtures, rebuildStageFixtures, unpairSwissRound } from "../../stages";
+import { createStages, deleteStage, generateStageFixtures, rebuildStageFixtures, replaceStages, unpairSwissRound } from "../../stages";
 import { withdrawEntrantCascade } from "../../withdrawal";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -100,6 +107,7 @@ beforeEach(() => {
   transport.calls = 0;
   scoring.failOnFixture = null;
   cancelling.fail = false;
+  cancelling.probe = null;
   stubOutboxEnv();
 });
 afterAll(async () => {
@@ -609,12 +617,19 @@ describe.skipIf(!HAS_DB)("a withdrawal that settles an opened board ends its que
     const s = await openedSwiss(4);
     await expectQueuedRows(s.orgId, 4);
     const who = s.players[0]!;
+    // The board the withdrawn player sits on, from the fixtures' own rows: what the log must name (T6 review m2).
+    const mine = await sql<{ id: string }[]>`
+      select id from fixtures
+       where stage_id = ${s.stageId} and round_no = 1 and (home_entrant_id = ${who.entrantId} or away_entrant_id = ${who.entrantId})`;
+    expect(mine, "premise: the player sits on exactly one board").toHaveLength(1);
     cancelling.fail = true;
     const error = vi.spyOn(log, "error").mockImplementation(() => undefined);
     try {
       const out = await withdrawEntrantCascade(s.owner, who.entrantId);
       expect(out.walkovers, "the walkover was written").toBe(1);
-      expect(error.mock.calls.map((c) => String(c[1])).filter((m) => /could not be ended/.test(m)), "and the failed cancel was logged").toHaveLength(1);
+      const logged = error.mock.calls.filter((c) => /could not be ended/.test(String(c[1])));
+      expect(logged, "and the failed cancel was logged, once, at error level").toHaveLength(1);
+      expect(logged[0]![0], "naming the board whose invites are left, and how many boards").toMatchObject({ fixtureIds: [mine[0]!.id], boards: 1 });
     } finally {
       error.mockRestore();
     }
@@ -679,15 +694,98 @@ describe.skipIf(!HAS_DB)("a deleted fixture takes its queued invites with it (G-
     expect(expectVoided(after, FIXTURE_DELETED)).toBe(before.length);
   });
 
-  it("deleting a competition ends the queued invites of its boards fixture_deleted", async () => {
+  it("deleting a competition ends the queued invites of its boards fixture_deleted, after its delete and in the same transaction, naming boards read before it (T6 review m3)", async () => {
     const r = await openedLeague(2);
     const before = await expectQueuedRows(r.orgId, 4);
+    const boardIds = r.boards.map((b) => b.fixtureId);
+
+    // Asked from INSIDE the cancel's own handle: the competition (and with it the bridge rows) is already gone THERE, yet the cancel
+    // still names every board, so the ids were read before the delete. Outside that transaction the competition is still visible
+    // until it commits, which is how the probe knows it is looking through the cancel's handle.
+    const seen: { competitionsLeft: number; bridgesLeft: number; named: string[]; reason: string }[] = [];
+    cancelling.probe = async (tx, fixtureIds, reason) => {
+      const h = tx as Tx;
+      const [c] = await h<{ n: number }[]>`select count(*)::int as n from competitions where id = ${r.competitionId}`;
+      const [b] = await h<{ n: number }[]>`select count(*)::int as n from fixture_external_play where fixture_id = any(${boardIds}::uuid[])`;
+      seen.push({ competitionsLeft: c!.n, bridgesLeft: b!.n, named: [...fixtureIds], reason });
+    };
 
     await deleteCompetition(r.owner, r.competitionId);
+
+    expect(seen, "the cancel ran once").toHaveLength(1);
+    expect(seen[0]!.competitionsLeft, "after the delete, in the same transaction").toBe(0);
+    expect(seen[0]!.bridgesLeft, "the cascade had already taken the bridge rows").toBe(0);
+    expect([...seen[0]!.named].sort(), "and it still named every board").toEqual([...boardIds].sort());
+    expect(seen[0]!.reason).toBe(FIXTURE_DELETED);
 
     const after = await rowsOf(r.orgId);
     expect(after.map((x) => x.id)).toEqual(before.map((x) => x.id));
     expect(expectVoided(after, FIXTURE_DELETED)).toBe(before.length);
     expect(await bridgeCount(r.boards.map((b) => b.fixtureId)), "premise: the boards are gone").toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// T6 review m1. Three paths that WOULD delete the fixtures of an opened, invited round were found unreachable and are not patched
+// (no cancel is wired there). That holds only while each one refuses, so each refusal is pinned here over a round the real open
+// invited: the refusal itself, and that nothing it guards moved - the invites, the boards, the bridge rows.
+describe.skipIf(!HAS_DB)("the paths that would delete an opened, invited round's boards refuse it, and leave its invites alone (T6 review m1)", () => {
+  /** Everything a refused delete must leave as it found it. */
+  async function stateOf(s: SeedOnlineSwissResult) {
+    const rows = await rowsOf(s.orgId);
+    const fixtures = (await sql<{ id: string }[]>`select id from fixtures where division_id = ${s.divisionId} order by id`).map((r) => r.id);
+    return {
+      invites: rows.map((r) => `${r.id}|${r.status}|${r.attempts}|${r.last_error}|${r.has_body}|${r.has_lease}`),
+      fixtures,
+      bridges: await bridgeCount(fixtures),
+      stages: (await sql<{ id: string }[]>`select id from stages where division_id = ${s.divisionId} order by id`).map((r) => r.id),
+    };
+  }
+
+  it("replacing the stage graph is refused FORMAT_LOCKED once the round's boards exist", async () => {
+    const s = await openedSwiss(4);
+    await expectQueuedRows(s.orgId, 4);
+    const before = await stateOf(s);
+    expect(before.bridges, "premise: the open bound the round's boards").toBeGreaterThan(0);
+
+    await expect(
+      replaceStages(s.owner, s.divisionId, { seq: 1, kind: "knockout", name: "KO", config: {}, progression: null }),
+    ).rejects.toMatchObject({ status: 409, code: "FORMAT_LOCKED" });
+
+    expect(await stateOf(s), "no invite, board, bridge row or stage moved").toEqual(before);
+  });
+
+  it("Pair next over the opened round is refused while its boards are undecided, so the shell reconcile never reaches a seated round", async () => {
+    const s = await openedSwiss(4);
+    await expectQueuedRows(s.orgId, 4);
+    const before = await stateOf(s);
+
+    // `reconcileSwissRoundShells` refuses (or skips) a round with a seated board, but it sits BEHIND this refusal: the target is the
+    // next unseated round, and it is only reached once the round before is decided. Pinned at the entry, which is what a person can press.
+    let thrown: unknown;
+    await generateStageFixtures(s.owner, s.stageId).catch((e: unknown) => (thrown = e));
+    expect(EngineError.is(thrown, "STAGE_NOT_READY"), `refused with STAGE_NOT_READY (got ${String(thrown)})`).toBe(true);
+
+    expect(await stateOf(s), "no invite, board, bridge row or stage moved").toEqual(before);
+  });
+
+  it("deleting the division is refused while it is started and for 30 days after it is archived; the 30th day is the only way through", async () => {
+    const s = await openedSwiss(4);
+    await expectQueuedRows(s.orgId, 4);
+    const before = await stateOf(s);
+
+    await expect(deleteDivision(s.owner, s.divisionId)).rejects.toMatchObject({ status: 409, code: "DIVISION_HAS_RESULTS" });
+    expect(await stateOf(s), "started: nothing moved").toEqual(before);
+
+    await archiveDivision(s.owner, s.divisionId);
+    await expect(deleteDivision(s.owner, s.divisionId)).rejects.toMatchObject({ status: 409, code: "ARCHIVE_COOL_OFF" });
+    expect(await stateOf(s), "archived today: nothing moved").toEqual(before);
+
+    // The control: the refusals above are the guard, not a broken fixture. Thirty-one days on, the same call goes through (an invite
+    // that old is long past its own expiry, under a day, so no cancel is owed there).
+    await sql`update divisions set archived_at = now() - interval '31 days' where id = ${s.divisionId}`;
+    await deleteDivision(s.owner, s.divisionId);
+    const [gone] = await sql<{ n: number }[]>`select count(*)::int as n from divisions where id = ${s.divisionId}`;
+    expect(gone!.n, "archived 31 days: the division is purged").toBe(0);
   });
 });
