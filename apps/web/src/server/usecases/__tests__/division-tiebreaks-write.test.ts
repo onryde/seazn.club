@@ -45,6 +45,7 @@ const mod = (key: string): AnySportModule => {
   if (m === undefined) throw new Error(`no sport ${key}`);
   return m as AnySportModule;
 };
+// single-sport: generic is the rig's sport for the sport-blind rules below; a test whose rule belongs to one sport names that sport (and says why).
 const generic = mod("generic");
 const GENERIC_DEFAULT = generic.defaultTiebreakers("league", generic.configSchema.parse(GENERIC_CONFIG));
 const DIV_ORDER: TiebreakerKey[] = ["points", "diff", "lots"];
@@ -70,7 +71,7 @@ async function division(opts: {
     slug: "open-" + suffix,
     sport_key: opts.sport,
     variant_key: opts.variant,
-    config: opts.config ?? (opts.sport === "generic" ? GENERIC_CONFIG : {}),
+    config: opts.config ?? (opts.sport === "generic" ? GENERIC_CONFIG : {}), // single-sport: the rig's cfg default: generic takes the shared GENERIC_CONFIG fixture, every other sport its variant's own.
     ...(opts.tiebreakers === undefined ? {} : { tiebreakers: opts.tiebreakers }),
   });
   const kind = mod(opts.sport).entrantModel?.defaultKind ?? "individual";
@@ -102,6 +103,7 @@ const stageCount = async (divisionId: string): Promise<number> =>
 
 describe.skipIf(!HAS_DB)("W2d T10 the division's order and points after the pin", () => {
   it("X-TB-2 a division tiebreakers save is no longer refused for a started stage; the response lists it in stagesKeptPinned", async () => {
+    // single-sport: generic carries this sport-blind write-path rule (no sport step or cfg key in it could refuse the save for another reason).
     const d = await division({ sport: "generic", variant: "score", entrants: 2 });
     const a = await stage(d, 1, "league", "Pool A");
     const b = await stage(d, 2, "league", "Pool B");
@@ -127,6 +129,7 @@ describe.skipIf(!HAS_DB)("W2d T10 the division's order and points after the pin"
   });
 
   it("STAGE_POINTS_REPLACES: a division otWin / soBonus / tie / draw save is accepted once stages are pinned; boardgame `scoring` still DIVISION_TABLE_RULES_LOCKED", async () => {
+    // single-sport: each case is a sport that declares that points key (icehockey otWin, football soBonus and draw, cricket tie); boardgame is the one whose `scoring` also writes the headline, so the one still locked.
     // Each sport's points key, nested where its schema declares it (`points.otWin` etc.): the save changes `points`.
     const cases: { sport: string; variant: string; sub: string }[] = [
       { sport: "icehockey", variant: "iihf", sub: "otWin" },
@@ -164,6 +167,7 @@ describe.skipIf(!HAS_DB)("W2d T10 the division's order and points after the pin"
   });
 
   it("X-TB-5 a division default invalid for one unpinned inheriting stage is refused naming that stage and its kind; a pinned stage is not consulted", async () => {
+    // single-sport: the stage-kind refusal is sport-blind (buchholz is a Swiss step in every sport), so generic carries it; football stands for a sport that records no NRR (cricket's step) for the sport refusal.
     const d = await division({ sport: "generic", variant: "score", entrants: 2 });
     const a = await stage(d, 1, "league", "Pool A");
     await stage(d, 2, "swiss", "Swiss");
@@ -200,6 +204,7 @@ describe.skipIf(!HAS_DB)("W2d T10 the division's order and points after the pin"
   });
 
   it("FB-TB-4 flipping football fairPlay off while an unpinned stage has an OWN or division order holding fair_play is refused naming it; a stage inheriting the sport default is not refused (the default drops fair_play with it — PS-7c, Task 11)", async () => {
+    // single-sport: FB-TB-4 is football's alone: fairPlay is its cfg key and fair_play its step, and no other sport declares either.
     const football = mod("football");
     const d = await division({ sport: "football", variant: "11-a-side", entrants: 2 });
     const s = await stage(d, 1, "league", "Pool A");
@@ -232,6 +237,7 @@ describe.skipIf(!HAS_DB)("W2d T10 the division's order and points after the pin"
   });
 
   it("FB-TB-4 a PINNED stage is not asked (spec §5.5: the flip re-validates every UNPINNED inheriting cascade): its pin ranks on fair_play, the flip lands, the pin is kept", async () => {
+    // single-sport: FB-TB-4 is football's alone: fairPlay is its cfg key and fair_play its step, and no other sport declares either.
     const football = mod("football");
     const d = await division({ sport: "football", variant: "11-a-side", entrants: 2 });
     const s = await stage(d, 1, "league", "Pool A");
@@ -254,6 +260,7 @@ describe.skipIf(!HAS_DB)("W2d T10 the division's order and points after the pin"
   });
 
   it("createStages: an inherited key invalid for the new stage's kind is refused with the 'set this stage's own order' reason; rngSeed is assigned when absent", async () => {
+    // single-sport: the kind refusal on an inherited key is sport-blind (buchholz is a Swiss step in every sport), so generic carries it.
     const order: TiebreakerKey[] = ["points", "buchholz", "lots"];
     const d = await division({ sport: "generic", variant: "score", tiebreakers: order });
     await expect(
@@ -279,6 +286,7 @@ describe.skipIf(!HAS_DB)("W2d T10 the division's order and points after the pin"
   });
 
   it("a template whose tiebreakers hold an unknown key is refused at apply (schema.ts no longer z.string())", async () => {
+    // single-sport: the refusal is the template schema's key enum, which no sport changes; the synthetic template needs a sport, and generic is the neutral one.
     const template = (tiebreakers: string[], kind: "league" | "knockout" = "league"): CompetitionTemplate => ({
       key: "t10-synthetic",
       version: 1,

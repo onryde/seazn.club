@@ -66,7 +66,7 @@ async function scene(opts: {
   const { auth } = await seedOrg(opts.plan ?? "pro");
   const suffix = randomUUID().slice(0, 8);
   const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "T10 " + suffix, visibility: "private", branding: {} });
-  const config = opts.config ?? (opts.sport === "generic" ? GENERIC_CONFIG : {});
+  const config = opts.config ?? (opts.sport === "generic" ? GENERIC_CONFIG : {}); // single-sport: the rig's cfg default: generic takes the shared GENERIC_CONFIG fixture, every other sport its variant's own.
   const division = await createDivision(auth, comp.id, {
     name: "Open", slug: "open-" + suffix, sport_key: opts.sport, variant_key: opts.variant, config,
   });
@@ -99,6 +99,7 @@ const firstFixture = async (stageId: string): Promise<string> =>
 
 /** A valid league order of generic's (an engine declaration: its primary first, `lots` last), and the one the tests
  *  save over it: `for` before `diff`, the sport's own order reversed in the middle. */
+// single-sport: generic is the rig's sport for the sport-blind rules below; a test whose rule belongs to one sport names that sport (and says why).
 const generic = mod("generic");
 const GENERIC_DEFAULT = generic.defaultTiebreakers("league", generic.configSchema.parse(GENERIC_CONFIG));
 const OWN_ORDER: TiebreakerKey[] = ["points", "for", "diff", "lots"];
@@ -118,6 +119,7 @@ describe.skipIf(!HAS_DB)("W2d T10 a stage's own order and points: validated, re-
   });
 
   it("X-TB-5 an own order with nrr on a football stage is refused 422 TIEBREAK_KEY_INVALID with refusals [{index, key:'nrr', reason:'sport'}]", async () => {
+    // single-sport: the sport refusal needs a sport that records no NRR (cricket's step); football is one, and its own default order is the positive pair.
     const s = await scene({ sport: "football", variant: "11-a-side" });
     const football = mod("football");
     const order: TiebreakerKey[] = [football.primaryTableKey, "nrr", "lots"];
@@ -137,6 +139,7 @@ describe.skipIf(!HAS_DB)("W2d T10 a stage's own order and points: validated, re-
   });
 
   it("Review Focus 4: tiebreakers [] is refused (reason 'empty'); null inherits (sources.tiebreakers 'division' or 'sport')", async () => {
+    // single-sport: generic carries this sport-blind write-path rule (no sport step or cfg key in it could refuse the save for another reason).
     const s = await scene({ sport: "generic", variant: "score" });
     await expect(putStageRules(s.auth, s.stageId, { tiebreakers: [] })).rejects.toMatchObject({
       status: 422,
@@ -163,6 +166,7 @@ describe.skipIf(!HAS_DB)("W2d T10 a stage's own order and points: validated, re-
   });
 
   it("X-TB-2 between activation and the first score an own save is accepted and re-pins (sources 'stage')", async () => {
+    // single-sport: generic carries this sport-blind write-path rule (no sport step or cfg key in it could refuse the save for another reason).
     const s = await scene({ sport: "generic", variant: "score" });
     await generateStageFixtures(s.auth, s.stageId);
     const pinned = await loadTableRules(sql, s.stageId);
@@ -183,6 +187,7 @@ describe.skipIf(!HAS_DB)("W2d T10 a stage's own order and points: validated, re-
   });
 
   it("PS-5d an own points save after activation re-pins ONLY points: a division default order edited after activation does not ride in — the pinned tiebreakers and their source are unchanged", async () => {
+    // single-sport: generic carries this sport-blind write-path rule (no sport step or cfg key in it could refuse the save for another reason).
     const s = await scene({ sport: "generic", variant: "score" });
     await generateStageFixtures(s.auth, s.stageId);
     const pinned = await loadTableRules(sql, s.stageId);
@@ -198,6 +203,7 @@ describe.skipIf(!HAS_DB)("W2d T10 a stage's own order and points: validated, re-
   });
 
   it("X-TB-2 after the first score an own tiebreakers or points save is 409 STAGE_FORMAT_LOCKED; a void of that score does not unlock (monotonic)", async () => {
+    // single-sport: generic carries this sport-blind write-path rule (no sport step or cfg key in it could refuse the save for another reason) (W2c's lock predicate reads no sport).
     const s = await scene({ sport: "generic", variant: "score" });
     await generateStageFixtures(s.auth, s.stageId);
     const f = await firstFixture(s.stageId);
@@ -218,6 +224,7 @@ describe.skipIf(!HAS_DB)("W2d T10 a stage's own order and points: validated, re-
   });
 
   it("PF-9 / PS-6 an online (Lichess) division stage with an opened round and NO score refuses own tiebreakers and points 409 STAGE_FORMAT_LOCKED (W2c's lockedStageIdsAmong); the same stage before the round opens accepts them", async () => {
+    // single-sport: online play (the Lichess door) is chess's alone, and chess is boardgame's classical variant.
     const s = await scene({ sport: "boardgame", variant: "classical", entrants: 2 });
     // Online play is the division's (its clock and family): set on the row, as the Lichess door stores it.
     await sql`update divisions set config = config || ${sql.json({ onlinePlay: "lichess" } as never)} where id = ${s.divisionId}`;
@@ -239,6 +246,7 @@ describe.skipIf(!HAS_DB)("W2d T10 a stage's own order and points: validated, re-
   });
 
   it("X-PT-3 a football group stage with shootout on and an own rule with no draw is refused POINTS_OUTCOME_UNCOVERED ['draw']", async () => {
+    // single-sport: X-PT-3's witness needs a table sport whose group shoot-out is reachable while a draw stays reachable; football's shootout preset is the rule row's case.
     const s = await scene({ sport: "football", variant: "11-a-side", kind: "group", entrants: 4, config: { shootout: true } });
     const football = mod("football");
     const noDraw: PointsRule = { win: { regulation: 3 }, loss: { regulation: 0 }, soBonus: 1, shootoutAs: "draw_plus_bonus", unit: "whole", bonuses: [] };
@@ -260,6 +268,7 @@ describe.skipIf(!HAS_DB)("W2d T10 a stage's own order and points: validated, re-
   });
 
   it("X-PT-3 VB-PT-3 a best-of-3 fixture override on a FIVB best-of-5 stage is refused naming set:2-0 and set:2-1", async () => {
+    // single-sport: VB-PT-3 is volleyball's: the FIVB best-of-5 set scores (set:2-0, set:2-1) it names are volleyball's outcomes.
     const s = await scene({ sport: "volleyball", variant: "indoor", entrants: 2 });
     const vb = mod("volleyball");
     await generateStageFixtures(s.auth, s.stageId);
@@ -281,6 +290,7 @@ describe.skipIf(!HAS_DB)("W2d T10 a stage's own order and points: validated, re-
   });
 
   it("VB-PT-3 order: a best-of-3 correction the recorded play cannot take (2-0 up in a best-of-5 would END the match) keeps its own 409 FORMAT_DOES_NOT_FIT_PLAY — coverage is asked after the fit", async () => {
+    // single-sport: VB-PT-3 is volleyball's: the FIVB best-of-5 set scores it names are volleyball's outcomes.
     const s = await scene({ sport: "volleyball", variant: "indoor", entrants: 2 });
     const vb = mod("volleyball");
     await generateStageFixtures(s.auth, s.stageId);
@@ -301,6 +311,7 @@ describe.skipIf(!HAS_DB)("W2d T10 a stage's own order and points: validated, re-
   });
 
   it("a bracket stage is never asked coverage (it has no table to pay): the same best-of-3 override and a best-of-3 stage rules save on a FIVB knockout land", async () => {
+    // single-sport: the FIVB knockout is VB-PT-3's counterfactual: the same volleyball override the league case refuses lands on a bracket.
     const s = await scene({ sport: "volleyball", variant: "indoor", kind: "knockout", entrants: 2 });
     const vb = mod("volleyball");
     const bo3 = { ...vb.configSchema.parse(await divisionCfg(s.divisionId)), bestOf: 3 };
@@ -318,6 +329,7 @@ describe.skipIf(!HAS_DB)("W2d T10 a stage's own order and points: validated, re-
   });
 
   it("an override that only removes outcomes (football extra time off) is accepted", async () => {
+    // single-sport: football's knockout preset plays extra time (win.ot), so its extraTime toggle is the override that only removes outcomes.
     const s = await scene({ sport: "football", variant: "11-a-side", kind: "knockout", entrants: 2 });
     const football = mod("football");
     await generateStageFixtures(s.auth, s.stageId);
@@ -336,6 +348,7 @@ describe.skipIf(!HAS_DB)("W2d T10 a stage's own order and points: validated, re-
   });
 
   it("a Community org saves an own order, a split points rule, bonuses and a forfeit row, and its table pays them (D1; behaviour only)", async () => {
+    // single-sport: generic carries this sport-blind write-path rule (no sport step or cfg key in it could refuse the save for another reason) (D1: the plan gates nothing, whatever the sport).
     const s = await scene({ sport: "generic", variant: "score", plan: "community", entrants: 2 });
     await generateStageFixtures(s.auth, s.stageId);
     const rule: PointsRule = {
