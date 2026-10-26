@@ -230,7 +230,15 @@ export async function publishCompetition(request: APIRequestContext, competition
 export async function division(
   request: APIRequestContext,
   competitionId: string,
-  body: { name: string; sport_key: string; variant_key: string; config?: Record<string, unknown>; description?: string },
+  body: {
+    name: string;
+    sport_key: string;
+    variant_key: string;
+    config?: Record<string, unknown>;
+    description?: string;
+    /** The division's own tie-break order (`CreateDivision.tiebreakers`); absent: the sport's default. */
+    tiebreakers?: string[];
+  },
 ): Promise<{ id: string; slug: string }> {
   const created = await apiJson<{ id: string }>(request, `/api/v1/competitions/${competitionId}/divisions`, "POST", body);
   if (!created.data) throw new Error(`division "${body.name}" -> ${created.status} ${JSON.stringify(created.error)}`);

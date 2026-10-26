@@ -23,15 +23,22 @@
 // popover showed 157 of its 178px. The checks below were box-relative until
 // then.)
 //
-// THE SEED — a badminton round robin, scored through the real event route.
-// Badminton because its default cascade ranks on `point_ratio` (and
-// `set_ratio`, whose unit is "games" there — the reason that column has no
-// popover). Four players and six 2-0 matches arranged so that wins split
-// 2-2-1-1 and set ratio cannot separate either pair: A/B are tied on points,
-// wins and games, and so are C/D, so BOTH ties are split on point ratio. That
-// puts a tied row LAST — the row whose panel has to open upward — and gives
-// every row a ledger. Every total asserted below is summed from `MATCHES`,
-// never typed.
+// THE SEED — a badminton round robin, scored through the real event route,
+// ranked by the division's OWN order `RATIO_ORDER` below, which names
+// `point_ratio` (and `set_ratio`, whose unit is "games" in badminton — the
+// reason that column has no popover). Badminton's default ranked on both until
+// W2d's signed order (spec §5.10, BWF 16.2: wins, then the two-way
+// head-to-head, game and point DIFFERENCE), so the stage is given an order that
+// still has them. Four players and six 2-0 matches arranged so that wins split
+// 2-2-1-1 and set ratio cannot separate either pair: A/B are tied on wins and
+// games, and so are C/D, so BOTH ties are split on point ratio. That puts a
+// tied row LAST — the row whose panel has to open upward — and gives every row
+// a ledger. Every total asserted below is summed from `MATCHES`, never typed.
+//
+// The order opens on badminton's primary measure (`wins`) and closes on
+// `lots`, as spec §5.5 rule 1 requires of a non-Swiss order (the division
+// create validates it from W2d Task 10 on); with badminton's flat 2/0 points
+// it ranks exactly as the old points-first order did.
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type APIRequestContext, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import { TAG, addEntrantsViaApi, apiJson, expectNoHorizontalScroll, overflowingIn } from "./helpers";
@@ -47,6 +54,9 @@ import {
   publicCompetition,
   spectator,
 } from "./spectator-w2-kit";
+
+// The order the seed division ranks by (THE SEED, above).
+const RATIO_ORDER = ["wins", "set_ratio", "point_ratio", "lots"];
 
 const NAMES = {
   a: `Ada Ratio ${TAG}`,
@@ -115,6 +125,7 @@ test.beforeAll(async ({ browser }) => {
     name: "Singles",
     sport_key: "badminton",
     variant_key: "bwf",
+    tiebreakers: RATIO_ORDER,
   });
   const created = await addEntrantsViaApi(request, div.id, FIELD.map((k) => NAMES[k]));
   expect(created.status, "the whole field was created").toBe(201);
