@@ -576,18 +576,13 @@ export async function paymentReminderEmail(args: PaymentReminderArgs, locale: Lo
   return paymentReminderTemplate(args, dict);
 }
 
-export interface RegistrationPromotedEmail extends RegistrationPromotedArgs {
-  to: string;
-  locale?: Locale;
-}
-
-/** Waitlist promotion (spec §2): spot opened — pay window / instructions. */
-export async function sendRegistrationPromotedEmail(
-  opts: RegistrationPromotedEmail,
-): Promise<boolean> {
-  const { to, locale = "en", ...args } = opts;
+/** The waitlist promotion (spec §2: a spot opened — pay window / instructions), RENDERED and not sent. The producer (`notifyPromoted` in
+ *  `server/usecases/registrations.ts`) queues what this returns on the email outbox (kind `registration_promoted`); there is no direct
+ *  sender for it any more (a second path would skip the outbox's retry and its once-key). The address is not part of the content, so it
+ *  is not an argument here. `locale` is the language the mail is written in: the producer resolves it (`recipientLocale`). */
+export async function registrationPromotedEmail(args: RegistrationPromotedArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...registrationPromotedTemplate(args, dict) });
+  return registrationPromotedTemplate(args, dict);
 }
 
 export interface SoloSignUpAssignedEmail extends SoloSignUpAssignedArgs {

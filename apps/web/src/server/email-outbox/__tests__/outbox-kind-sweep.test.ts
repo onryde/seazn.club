@@ -8,6 +8,8 @@
 //     real account-kind enqueue, the real dispatch). Only `transport.deliver` is replaced: it is the network.
 //   - registration_confirmation: the route POST of app/api/v1/public/orgs/[orgSlug]/competitions/[slug]/register/route.ts with an `es`
 //     locale cookie (the real submit, `notifySubmitted`, the real enqueue, the dispatch after the response).
+//   - registration_promoted: the real `withdrawRegistrationPublic` of the holder of a division's only spot, with an `nl` registrant waiting
+//     behind them: the real promotion, `notifyPromoted`, the real once-keyed enqueue, the dispatch after the response.
 //   - payment_reminder: the real `sweepRegistrations` (pass 1a) over a stripe cart due for its T-24h reminder, in an `fr` group: the real
 //     claim, mint (Stripe is the one mocked network), once-keyed enqueue and stamp. The sweep leaves the first attempt to the worker.
 //
@@ -43,7 +45,7 @@ vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
 import { POST as magicLinkPost } from "@/app/api/auth/magic-link/route";
 import { POST as registerPost } from "@/app/api/v1/public/orgs/[orgSlug]/competitions/[slug]/register/route";
 import { openRound } from "@/server/usecases/external-play/open-round";
-import { putRegistrationSettings, sweepRegistrations } from "@/server/usecases/registrations";
+import { putRegistrationSettings, sweepRegistrations, withdrawRegistrationPublic } from "@/server/usecases/registrations";
 import { seedOnlineChessRound } from "@/server/usecases/__tests__/_external-play-seed";
 import { SETTINGS_BASE, asOwner, rig, seedOrg, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
 import { DISPATCH_NOW_BUDGET_MS, DISPATCH_NOW_MARGIN_MS, OUTBOX_KINDS, idempotencyKey, type OutboxKind } from "../constants";
@@ -284,6 +286,31 @@ async function registrationConfirmationScenario(): Promise<KindScenario> {
   };
 }
 
+/** The real withdrawal that frees the division's only spot: the holder withdraws and the `nl` registrant behind them is promoted. The
+ *  promotion email is queued after the promotion committed, and the request that did it makes the first attempt. */
+async function registrationPromotedScenario(): Promise<KindScenario> {
+  const { orgId, ownerId } = await seedOrg("pro");
+  made.orgIds.push(orgId);
+  made.userIds.push(ownerId);
+  const owner = asOwner(orgId, ownerId);
+  const { competition, division } = await rig(owner);
+  const settings = await putRegistrationSettings(owner, division.id, { ...SETTINGS_BASE, fee_cents: 1500, payment_method: "offline", capacity: 1 });
+  const holder = await seedRegistration(competition.id, division.id, settings, { contactEmail: address() });
+  const recipient = address();
+  await seedRegistration(competition.id, division.id, settings, { contactEmail: recipient, status: "waitlisted", locale: "nl" });
+  return {
+    locale: "nl",
+    subjectKey: "registrationPromoted.subject",
+    subjectVars: { competitionName: competition.name },
+    recipient,
+    firstAttempt: "request",
+    run: async () => {
+      const view = await withdrawRegistrationPublic(holder.registration.id, holder.access_token);
+      expect(view.status, "premise: the real withdrawal went through").toBe("withdrawn");
+    },
+  };
+}
+
 /** The real sweep: a stripe cart in an `fr` group whose deadline is inside the reminder window. The sweep claims it, mints a Checkout
  *  session, and queues the reminder with its once-key; the first attempt is the worker's, so the harness sees the row wait. */
 async function paymentReminderScenario(): Promise<KindScenario> {
@@ -318,11 +345,14 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
       dictionarySubject("en", registration.subjectKey, registration.subjectVars),
     );
 
+    const promoted = await registrationPromotedScenario();
+    expect(dictionarySubject("nl", promoted.subjectKey, promoted.subjectVars)).not.toBe(dictionarySubject("en", promoted.subjectKey, promoted.subjectVars));
+
     const reminder = await paymentReminderScenario();
     expect(dictionarySubject("fr", reminder.subjectKey, reminder.subjectVars)).not.toBe(dictionarySubject("en", reminder.subjectKey, reminder.subjectVars));
 
     const out = await forEachOutboxKind(
-      { magic_link: magicLinkScenario(), chess_invite: chess, registration_confirmation: registration, payment_reminder: reminder },
+      { magic_link: magicLinkScenario(), chess_invite: chess, registration_confirmation: registration, payment_reminder: reminder, registration_promoted: promoted },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );
 

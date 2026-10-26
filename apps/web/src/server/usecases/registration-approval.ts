@@ -259,7 +259,7 @@ export async function rejectRegistration(
   if (result.promoted) {
     const ctx = await divisionCtx(sql, result.row.division_id);
     const settings = await loadSettings(sql, result.row.division_id);
-    void notifyPromoted(result.promoted, ctx, settings, fallbackOrigin());
+    void notifyPromoted(result.promoted, ctx, settings, fallbackOrigin(), { firstAttempt: "request" });
   }
 
   if (result.refundable?.payment_intent_id) {
@@ -428,7 +428,7 @@ export async function promoteFromWaitlist(
   fireDivisionRevalidate(divisionId, result.competitionId);
   if (result.freshlyPromoted) {
     const ctx = await divisionCtx(sql, divisionId);
-    void notifyPromoted(result.promoted, ctx, result.settings, fallbackOrigin());
+    void notifyPromoted(result.promoted, ctx, result.settings, fallbackOrigin(), { firstAttempt: "request" });
   }
   log.info(
     {

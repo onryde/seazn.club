@@ -27,7 +27,7 @@ import { SPOT_HOLDERS } from "@/lib/registration-status";
 import {
   registrationEmail,
   paymentReminderEmail,
-  sendRegistrationPromotedEmail,
+  registrationPromotedEmail,
   sendRefundIssuedEmail,
   sendDisputeAlertEmail,
   sendDisputeLostEmail,
@@ -1448,17 +1448,27 @@ export async function promoteWaitlistedRow(
   return row;
 }
 
-/** Post-tx promoted email (fire-and-forget): card entries get a fresh
- *  token-free checkout link, offline entries the resolved instructions.
+/** Post-tx promoted email: card entries get a fresh token-free checkout link, offline entries the resolved instructions.
  *  Exported for `registration-approval.ts` (RS002 W5) — `promoteFromWaitlist`
- *  reuses this verbatim rather than re-deriving the promoted-email shape. */
+ *  reuses this verbatim rather than re-deriving the promoted-email shape.
+ *
+ *  The mail is QUEUED on the email outbox (kind `registration_promoted`, ref `registration/<id>`, once-key `<id>:<promoted_at>`):
+ *  the promotion has already committed, so the enqueue is on the pool AFTER it (P4), and the promotion email must never undo it;
+ *  a refusal is logged and swallowed. The once-key is the promotion itself, so a replay of the same promotion queues nothing
+ *  more while a re-promotion (a new `promoted_at`) is a new mail. `firstAttempt` says who makes the first attempt: `request`
+ *  (a withdrawal or an organiser's action, a person is waiting on the response: it is made after the response) or `worker`
+ *  (the cron sweep, which leaves it to the retry worker). */
 export async function notifyPromoted(
   promoted: RegistrationWithGroupRow,
   ctx: DivisionCtx,
   settings: RegistrationSettingsRow | null,
   origin: string,
+  opts: { firstAttempt: "request" | "worker" },
 ): Promise<void> {
   try {
+    // A promotion always stamps `promoted_at` and the once-key is built from it: refuse by name, BEFORE the pay link is minted
+    // (a Checkout session minted for an email that cannot be queued is a session nobody holds).
+    if (promoted.promoted_at === null) throw new Error("notifyPromoted: a promoted registration has no promoted_at");
     // REVIEW FIX (#10): the DIVISION's own payment method — never
     // `promoted.payment_method` (registration_groups.payment_method, the
     // cart's shared envelope column). promoteWaitlistedRow only writes that
@@ -1477,33 +1487,48 @@ export async function notifyPromoted(
         /* the reminder sweep mints another */
       }
     }
-    await sendRegistrationPromotedEmail({
+    const locale = await recipientLocale(sql, { pick: promoted.locale, userId: promoted.user_id, orgDefault: ctx.default_locale });
+    const content = await registrationPromotedEmail(
+      {
+        orgName: ctx.org_name,
+        competitionName: ctx.comp_name,
+        displayName: promoted.display_name,
+        feeCents: promoted.amount_cents,
+        currency: promoted.currency,
+        payUrl,
+        // REVIEW FIX (#13b): this entry's OWN promotion_expires_at, never
+        // `promoted.expires_at` (the GROUP's shared column, which a sibling's
+        // own earlier/later promotion can leave disagreeing with this row) —
+        // the lapse sweep enforces THIS entry's own clock (sweepRegistrations
+        // pass 1b, keyed on `r.promotion_expires_at`), so emailing the
+        // group's could tell a registrant they have longer than they
+        // actually do. Same column pass (1b)'s own reminder mail already
+        // uses. Null on an offline/free promotion, exactly as before.
+        payDeadline: promoted.promotion_expires_at,
+        paymentInstructions:
+          method === "offline" && promoted.amount_cents > 0
+            ? (settings?.payment_instructions ?? ctx.payment_instructions)
+            : null,
+        refCode: promoted.ref_code,
+        refStatusUrl: promoted.ref_code ? `${origin}/r/${promoted.ref_code}` : null,
+      },
+      locale,
+    );
+    const id = await enqueueEmailOnce(sql, {
+      kind: "registration_promoted",
+      refType: "registration",
+      refId: promoted.id,
+      orgId: promoted.org_id,
       to: promoted.contact_email,
-      locale: toLocale(promoted.locale),
-      orgName: ctx.org_name,
-      competitionName: ctx.comp_name,
-      displayName: promoted.display_name,
-      feeCents: promoted.amount_cents,
-      currency: promoted.currency,
-      payUrl,
-      // REVIEW FIX (#13b): this entry's OWN promotion_expires_at, never
-      // `promoted.expires_at` (the GROUP's shared column, which a sibling's
-      // own earlier/later promotion can leave disagreeing with this row) —
-      // the lapse sweep enforces THIS entry's own clock (sweepRegistrations
-      // pass 1b, keyed on `r.promotion_expires_at`), so emailing the
-      // group's could tell a registrant they have longer than they
-      // actually do. Same column pass (1b)'s own reminder mail already
-      // uses. Null on an offline/free promotion, exactly as before.
-      payDeadline: promoted.promotion_expires_at,
-      paymentInstructions:
-        method === "offline" && promoted.amount_cents > 0
-          ? (settings?.payment_instructions ?? ctx.payment_instructions)
-          : null,
-      refCode: promoted.ref_code,
-      refStatusUrl: promoted.ref_code ? `${origin}/r/${promoted.ref_code}` : null,
+      ...content,
+      transactional: false,
+      expiresAt: expiryWithin(promoted.promotion_expires_at),
+      dedupeKey: `${promoted.id}:${promoted.promoted_at.toISOString()}`,
     });
-  } catch {
-    /* fire-and-forget */
+    // `null` = this promotion's mail is already queued (a replay): nothing more to attempt.
+    if (opts.firstAttempt === "request" && id !== null) deferred(() => dispatchNow([id]));
+  } catch (err) {
+    log.error({ err, registrationId: promoted.id }, "registration: promotion email could not be queued");
   }
 }
 
@@ -4973,7 +4998,7 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
 
   fireDivisionRevalidate(reg.division_id, ctx.competition_id);
   if (outcome.promoted) {
-    void notifyPromoted(outcome.promoted, ctx, settings, fallbackOrigin());
+    void notifyPromoted(outcome.promoted, ctx, settings, fallbackOrigin(), { firstAttempt: "request" });
   }
 
   // Auto-refund policy (doc 16 §1.1): full refund when withdrawal lands
@@ -5436,7 +5461,7 @@ export async function sweepRegistrations(
     if (outcome.promoted) {
       promotedCount++;
       const ctx = await divisionCtx(sql, division_id);
-      await notifyPromoted(outcome.promoted, ctx, outcome.settings, origin);
+      await notifyPromoted(outcome.promoted, ctx, outcome.settings, origin, { firstAttempt: "worker" });
     }
   }
 
@@ -5531,7 +5556,7 @@ export async function sweepRegistrations(
     if (outcome.promoted) {
       promotedCount++;
       const ctx = await divisionCtx(sql, division_id);
-      await notifyPromoted(outcome.promoted, ctx, outcome.settings, origin);
+      await notifyPromoted(outcome.promoted, ctx, outcome.settings, origin, { firstAttempt: "worker" });
     }
   }
 
