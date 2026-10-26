@@ -619,7 +619,7 @@ export function crossGroupOrder(
   const level = new Set(rows.filter((row) => row.level === true).map((row) => row.entrantId));
   const ranked = rankStandings(rows, {
     cascade: crossGroup,
-    ...(rows.length > 0 && level.size === rows.length ? { countedFixtures: 0 } : {}),
+    ...(level.size === rows.length ? { countedFixtures: 0 } : {}),
     ...(lotsDraws === undefined ? {} : { lotsDraws }),
     ...(ctx.seeds === undefined ? {} : { seeds: ctx.seeds }),
     ...(ctx.rngSeed === undefined ? {} : { rngSeed: ctx.rngSeed }),

@@ -194,7 +194,7 @@
       "reason": "Line 83 returns whenever taken.home === taken.away, so line 84 only compares two different counts, where `<` and `<=` agree."
     },
     {
-      "mutant": "src/competition/stage.ts:427:33 EqualityOperator → fixture.round <= prev",
+      "mutant": "src/competition/stage.ts:429:33 EqualityOperator → fixture.round <= prev",
       "original": "fixture.round < prev",
       "line": "if (prev === undefined || fixture.round < prev) outAt.set(id, fixture.round);",
       "reason": "At fixture.round === prev the mutant sets outAt[id] to the value it already holds (prev), so the elimination round each entrant is pinned at is the same map either way; only the strict `>=` mutant changes it (killed)."
@@ -884,19 +884,19 @@
       "reason": "NoCoverage: the literal is evaluated only when sberger ranks a round robin with no `results`, which no test does. resultsAmong then filters [\"Stryker was here\"]: its callback destructures the string, so `home` is \"S\", whose `.entrantId` is undefined, and the group (a Set of entrant-id strings) never holds undefined, so the filter returns [] exactly as it did from [], so the pool ledger is buildSwissTable(ids, []) either way."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:520:10 ConditionalExpression → true",
+      "mutant": "src/competition/tiebreakers.ts:521:10 ConditionalExpression → true",
       "original": "key !== undefined",
       "line": "return key !== undefined && H2H_KEYS.has(key);",
       "reason": "TypeScript narrowing for `H2H_KEYS.has(key)`: with it true, an absent key (parseCascade looks one past the end with `cascade[i + 1]`) reaches `H2H_KEYS.has(undefined)`, which is false (the set holds key strings), so the answer is the same false."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:524:10 ConditionalExpression → true",
+      "mutant": "src/competition/tiebreakers.ts:525:10 ConditionalExpression → true",
       "original": "key !== undefined",
       "line": "return key !== undefined && MODIFIERS.has(key);",
       "reason": "TypeScript narrowing for `MODIFIERS.has(key)`: with it true, the absent key one past the cascade's end reaches `MODIFIERS.has(undefined)`, which is false (the set holds the two modifier strings), so the answer is the same false."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:592:25 ArrayDeclaration → [\"Stryker was here\"]",
+      "mutant": "src/competition/tiebreakers.ts:593:25 ArrayDeclaration → [\"Stryker was here\"]",
       "original": "[]",
       "line": "const steps: Step[] = [];",
       "reason": "parseCascade's step list then starts with a string, which refine alone reads: `\"Stryker was here\".index > 0` is false and its `.kind` (undefined) matches no case of the switch, so that step does nothing and the real steps follow it unchanged."
@@ -960,6 +960,84 @@
       "original": "preset.tablePresets === undefined",
       "line": "...(preset.tablePresets === undefined ? {} : { tablePresets: preset.tablePresets }),",
       "reason": "The twin of :2630:9 and :2631:9 above. Hockey declares `tablePresets` and ice hockey does not (spec §5.10: hockey's Pro League points are the period family's only preset), so the mutant gives the ice hockey module an own `tablePresets: undefined` beside an absent key. Every reader calls it as `module.tablePresets?.(kind)` (defaults-sweep.test.ts, tables-rulebook.test.ts; module.ts types it optional, and no production code reads it before T15's editor), which answers undefined for both, and nothing tests `\"tablePresets\" in` or `hasOwn`. Survived its re-run at load ~40 over 4,529 related tests (W2d T11 review I1); the first run's \"Killed\" was a 30 s test timeout under load ~160."
+    },
+    {
+      "mutant": "src/competition/progression.ts:623:9 ConditionalExpression → false",
+      "original": "lotsDraws === undefined",
+      "line": "...(lotsDraws === undefined ? {} : { lotsDraws }),",
+      "reason": "crossGroupOrder with no stored cross-group draws: the mutant passes `lotsDraws: undefined` to rankStandings instead of leaving the key out; rankStandings reads `ctx.lotsDraws?.get(membersKey)`, undefined either way (W2d T12)."
+    },
+    {
+      "mutant": "src/competition/progression.ts:624:9 ConditionalExpression → false",
+      "original": "ctx.seeds === undefined",
+      "line": "...(ctx.seeds === undefined ? {} : { seeds: ctx.seeds }),",
+      "reason": "crossGroupOrder with no seeds: the mutant passes `seeds: undefined`; rankStandings reads `ctx.seeds?.get(id) ?? Number.MAX_SAFE_INTEGER`, the same for an absent key (W2d T12)."
+    },
+    {
+      "mutant": "src/competition/progression.ts:625:9 ConditionalExpression → false",
+      "original": "ctx.rngSeed === undefined",
+      "line": "...(ctx.rngSeed === undefined ? {} : { rngSeed: ctx.rngSeed }),",
+      "reason": "crossGroupOrder with no rngSeed: the mutant passes `rngSeed: undefined`; rankStandings reads `ctx.rngSeed ?? 0`, the same for an absent key (W2d T12)."
+    },
+    {
+      "mutant": "src/competition/progression.ts:626:9 ConditionalExpression → false",
+      "original": "ctx.winsCount === undefined",
+      "line": "...(ctx.winsCount === undefined ? {} : { winsCount: ctx.winsCount }),",
+      "reason": "crossGroupOrder with no winsCount: the mutant passes `winsCount: undefined`; the `wins` comparator tests `ctx.winsCount === \"regulation\"`, false for undefined and absent alike (W2d T12)."
+    },
+    {
+      "mutant": "src/competition/stage.ts:113:9 ConditionalExpression → false",
+      "original": "lotsDraws === undefined",
+      "line": "...(lotsDraws === undefined ? {} : { lotsDraws }),",
+      "reason": "crossGroupRulesOf with no stored \"\" draws: the mutant writes `lotsDraws: undefined` into CrossGroupRules; its readers (resolveProgression's `rules?.lotsDraws`, crossGroupOrder's `lotsDraws === undefined`) see undefined either way (W2d T12)."
+    },
+    {
+      "mutant": "src/competition/stage.ts:114:9 ConditionalExpression → false",
+      "original": "stage.seeds === undefined",
+      "line": "...(stage.seeds === undefined ? {} : { seeds: stage.seeds }),",
+      "reason": "crossGroupRulesOf with no seeds: the mutant writes `seeds: undefined`; resolveProgression forwards it only when `rules?.seeds !== undefined`, so absent and undefined pass nothing alike (W2d T12)."
+    },
+    {
+      "mutant": "src/competition/stage.ts:115:9 ConditionalExpression → false",
+      "original": "stage.rngSeed === undefined",
+      "line": "...(stage.rngSeed === undefined ? {} : { rngSeed: stage.rngSeed }),",
+      "reason": "crossGroupRulesOf with no rngSeed: the mutant writes `rngSeed: undefined`; resolveProgression forwards it only when `rules?.rngSeed !== undefined`, so absent and undefined pass nothing alike (W2d T12)."
+    },
+    {
+      "mutant": "src/competition/stage.ts:116:9 ConditionalExpression → false",
+      "original": "stage.winsCount === undefined",
+      "line": "...(stage.winsCount === undefined ? {} : { winsCount: stage.winsCount }),",
+      "reason": "crossGroupRulesOf with no winsCount: the mutant writes `winsCount: undefined`; resolveProgression forwards it only when `rules?.winsCount !== undefined`, so absent and undefined pass nothing alike (W2d T12)."
+    },
+    {
+      "mutant": "src/competition/stage.ts:302:11 ConditionalExpression → false",
+      "original": "stage.partialScheduleOrder === undefined",
+      "line": "...(stage.partialScheduleOrder === undefined ? {} : { partialScheduleOrder: stage.partialScheduleOrder }),",
+      "reason": "A stage with no partial-schedule order: the mutant passes `partialScheduleOrder: undefined` to rankStandings, which parses it only when `ctx.partialScheduleOrder !== undefined` — the same as an absent key (W2d T12; Timeout under load, equivalent by reading)."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:647:26 StringLiteral → \"\"",
+      "original": "\"plain\"",
+      "line": "steps.push({ kind: \"plain\", index: i, key, cmp: FEWEST_PLAYED });",
+      "reason": "A partial-schedule step's `kind` is never read: partialSchedule iterates `run.partial` using only `step.cmp` and `step.key` (the discriminant matters to refine's own Steps, which never hold these), so `kind: \"\"` ranks and traces the same (W2d T12)."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:652:24 StringLiteral → \"\"",
+      "original": "\"plain\"",
+      "line": "steps.push({ kind: \"plain\", index: i, key: key as PlainKey, cmp });",
+      "reason": "A partial-schedule step's `kind` is never read: partialSchedule iterates `run.partial` using only `step.cmp` and `step.key`, so `kind: \"\"` ranks and traces the same (W2d T12)."
+    },
+    {
+      "mutant": "src/sports/period/kernel.ts:2872:9 ConditionalExpression → false",
+      "original": "preset.partialScheduleOrder === undefined",
+      "line": "...(preset.partialScheduleOrder === undefined ? {} : { partialScheduleOrder: preset.partialScheduleOrder }),",
+      "reason": "A period sport with no partial-schedule order: the mutant writes `partialScheduleOrder: undefined` onto the module; every reader (toTableStage, completeTableStage, rankStandings, the premise sweep) tests `=== undefined`, the same as an absent key (W2d T12)."
+    },
+    {
+      "mutant": "src/competition/tiebreakers.ts:686:57 ArrayDeclaration → [\"Stryker was here\"]",
+      "original": "[]",
+      "line": "return scheduled === resultsAmong(ids, run.results ?? []).length;",
+      "reason": "The `?? []` arm runs only for a schedule handed with no `results` (nothing counted yet). resultsAmong keeps an entry only when both of its sides' entrantIds are in the class, and a string's characters have no entrantId, so [\"Stryker was here\"] counts no result, as `[]` does (W2d T12)."
     },
     {
       "mutant": "src/sports/cricket/scorecard.ts:83:10 OptionalChaining → fine.currentBowler",

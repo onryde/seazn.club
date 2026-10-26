@@ -32,7 +32,9 @@ const moduleOf = (key: string): AnySportModule => {
   if (m === undefined) throw new Error(`no sport ${key}`);
   return m;
 };
+// single-sport: badminton's group order holds set_diff (BWF 16.2.3), the step ST-G4's differential turns on.
 const badminton = moduleOf("badminton");
+// single-sport: football's cross-group order ends in lots — the stored cross-group draw cases (§5.8).
 const football = moduleOf("football");
 const cfgOf = (m: AnySportModule): unknown => declaredCfgs(m)[0]!.cfg;
 
@@ -193,6 +195,7 @@ describe("W2d T12 — the source stage's order compares groups (X-TB-7, ST-G4)",
       const order = ["points", key, "lots"] as TiebreakerKey[];
       expect(() => crossGroupOrder([], order, undefined), key).toThrow(expect.objectContaining({ code: "CONFIG_INVALID" }));
       expect(() => crossGroupOrder([], order, undefined), key).toThrow(new RegExp(`"${key}" at position 2`));
+      expect(() => crossGroupOrder([], order, undefined), key).toThrow(expect.objectContaining({ data: { key, index: 1 } }));
     }
     const source = groupStage(badminton, BADMINTON_GROUPS, { seeds: BADMINTON_SEEDS });
     const withH2h: SourceTables = { ...source.tables, crossGroup: { order: ["wins", "h2h_two", "set_diff", "lots"] } };

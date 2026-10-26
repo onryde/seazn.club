@@ -704,7 +704,6 @@ function partialSchedule(cls: StandingsRow[], run: RunContext): StandingsRow[][]
   let current = classes;
   for (const step of run.partial) {
     current = current.flatMap((group) => {
-      if (group.length <= 1) return [group];
       const groups = groupBySort(group, step.cmp, run);
       if (groups.length > 1) markTieBreak(group, step.key, run);
       return groups;

@@ -32,9 +32,13 @@ const moduleOf = (key: string): AnySportModule => {
   if (m === undefined) throw new Error(`no sport ${key}`);
   return m;
 };
+// single-sport: ice hockey is the one sport declaring a partial-schedule order (RBG:349-350; the premise test sweeps for it).
 const icehockey = moduleOf("icehockey");
+// single-sport: football witnesses the generic skip — no partial order, and its default order holds the h2h block.
 const football = moduleOf("football");
+// single-sport: badminton's default order holds h2h_two (BWF 16.2.2), and production's one Swiss competition is badminton (B1).
 const badminton = moduleOf("badminton");
+// single-sport: the board game's round-robin order is the one holding `direct` (FIDE C.07).
 const boardgame = moduleOf("boardgame");
 const cfgOf = (m: AnySportModule): unknown => declaredCfgs(m)[0]!.cfg;
 
@@ -169,6 +173,13 @@ describe("W2d T12 — the empty cases first (X-TB-8)", () => {
     // An EMPTY schedule is no schedule: the football half-played table below ranks exactly as it did before W2d (the h2h
     // block on the mini-table it has: B 3 h2h points; A, absent from that mini-table, sorts below C's −1 on h2h GD, #429),
     // not as the guard would (C, then A and B by lots).
+    // Nothing counted yet (no results at all): a level pair with a meeting scheduled has an incomplete mini-schedule —
+    // h2h points does not split them, lots does, noted.
+    const unplayed = rankStandings(rows.slice(2).map((r) => ({ ...r, played: 0, drawn: 0, points: 0 })), {
+      cascade, scheduledPairs: [["C", "D"]], rngSeed: 3,
+    });
+    for (const row of unplayed.rows) expect(row.tieBreak, row.entrantId).toMatchObject({ key: "lots", note: "h2h_incomplete" });
+    expect(unplayed.rows, "anti-vacuity: both rows checked").toHaveLength(2);
     const fbHalf: Scene = { ...FOOTBALL_HALF, schedule: "none" };
     expect(rank({ ...fbHalf, schedule: "empty" })).toStrictEqual(rank(fbHalf));
     expect(ids(rank({ ...fbHalf, schedule: "empty" }))).toEqual(["B", "C", "A", "D"]);
@@ -205,6 +216,14 @@ describe("W2d T12 — IIHF partial schedule (X-TB-8, IH-TB-2)", () => {
     // overall GD then GF among all three: C, A, B.
     expect(ids(rank({ ...IIHF_HALF, schedule: "none" }))).toEqual(["B", "C", "A", "D"]);
     expect(ids(rows)).not.toEqual(["C", "A", "B", "D"]);
+  });
+
+  it("X-TB-8 IH-TB-2 the partial order's own keys rank the class, whatever the stage's order holds after the block", () => {
+    // The stage ranks by points, h2h points, lots — no goal difference after the block. RBG:349-350 still orders the
+    // half-played class by fewest played, then GD: A (+3) above B (+1), traced to `diff`, not drawn by lots.
+    const rows = rank({ ...IIHF_HALF, order: ["points", "h2h_points", "lots"] });
+    expect(ids(rows)).toEqual(["A", "B", "C", "D"]);
+    expect(rowOf(rows, "A").tieBreak).toStrictEqual({ key: "diff", with: ["B"] });
   });
 
   it("X-TB-8 IH-TB-2 a class the partial order leaves level goes to lots and keeps the 'h2h_incomplete' note", () => {
@@ -391,6 +410,7 @@ describe("W2d T12 — the guards (assumptions are guards)", () => {
       () => rankStandings(rows, { cascade: ["points", "h2h_points", "lots"], results, scheduledPairs });
     expect(run([["C", "D"]], [ab])).toThrow(expect.objectContaining({ code: "CONFIG_INVALID" }));
     expect(run([["C", "D"]], [ab])).toThrow(/A,B/);
+    expect(run([["C", "D"]], [ab])).toThrow(expect.objectContaining({ data: { pair: "A,B" } }));
     // two results of a pair scheduled once
     expect(run([["B", "A"]], [ab, ab])).toThrow(expect.objectContaining({ code: "CONFIG_INVALID" }));
     // the positive pair: scheduled once, decided once; scheduled twice, decided once
@@ -405,6 +425,11 @@ describe("W2d T12 — the guards (assumptions are guards)", () => {
     for (const bad of [["fewest_played", "h2h_points", "lots"], ["h2h_two", "lots"], ["direct"], ["lots", "diff"], ["fewest_played", "nope"], ["h2h_reapply"]]) {
       expect(run(bad), bad.join(",")).toThrow(expect.objectContaining({ code: "CONFIG_INVALID" }));
     }
+    // Each refusal names the key and its position (1-based), and carries both.
+    expect(run(["fewest_played", "h2h_points", "lots"])).toThrow(/^partial-schedule key "h2h_points" at position 2 is not a plain key/);
+    expect(run(["fewest_played", "h2h_points", "lots"])).toThrow(expect.objectContaining({ data: { key: "h2h_points", index: 1 } }));
+    expect(run(["lots", "diff"])).toThrow(/^partial-schedule key "lots" at position 1 must be last$/);
+    expect(run(["lots", "diff"])).toThrow(expect.objectContaining({ data: { key: "lots", index: 0 } }));
     expect(run(RBG_PARTIAL)).not.toThrow();
     expect(run(["fewest_played", "diff"])).not.toThrow();
   });
