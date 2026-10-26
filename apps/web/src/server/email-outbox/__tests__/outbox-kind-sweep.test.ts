@@ -25,6 +25,8 @@
 //     is queued to the sponsor contact after the session is minted, and the request that did it makes the first attempt.
 //   - sponsor_receipt: the real `handleSponsorPaymentSucceeded` on a pending order in an `nl` org: the receipt is queued to the sponsor
 //     contact in the transaction that activates the placement, and the worker makes the first attempt.
+//   - sponsor_refund: the real `refundSponsorOrder` of a paid order in an `es` org (Stripe's refund is mocked): the notice is queued in
+//     the transaction that records the refund, at its own savepoint, and the request that did it makes the first attempt.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -71,7 +73,7 @@ import {
   sweepRegistrations,
   withdrawRegistrationPublic,
 } from "@/server/usecases/registrations";
-import { handleSponsorPaymentSucceeded, startSponsorCheckout } from "@/server/usecases/sponsors";
+import { handleSponsorPaymentSucceeded, refundSponsorOrder, startSponsorCheckout } from "@/server/usecases/sponsors";
 import { seedOnlineChessRound } from "@/server/usecases/__tests__/_external-play-seed";
 import { seedSponsorOrder, seedSponsorOrg } from "@/server/usecases/__tests__/_money-fixtures";
 import { SETTINGS_BASE, asOwner, fakeSession, rig, seedOrg, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
@@ -136,7 +138,6 @@ const SPEC_FACTS: KindFacts = {
 /** Wave 2's kinds, typed from the spec's table: registered by T1 before any producer moved, so each is still on its direct sender until its
  *  kind task (T2-T9) deletes it from NOT_YET_MOVED, and here. */
 const WAVE_2_UNMOVED: readonly OutboxKind[] = [
-  "sponsor_refund",
   "sponsor_dispute_alert",
   "sponsor_dispute_won",
   "sponsor_dispute_lost",
@@ -591,6 +592,26 @@ async function sponsorReceiptScenario(): Promise<KindScenario> {
   };
 }
 
+/** The real console refund of a paid order in an `es` org: the notice is queued in the transaction that records the refund, at its own
+ *  savepoint, and the request that did it makes the first attempt. */
+async function sponsorRefundScenario(): Promise<KindScenario> {
+  const o = await seedSponsorOrder({ status: "paid", defaultLocale: "es", prefix: RUN });
+  made.orgIds.push(o.orgId);
+  made.userIds.push(o.ownerId);
+  const auth = { orgId: o.orgId, via: "session", userId: o.ownerId, role: "owner", keyId: null } as const;
+  return {
+    locale: "es",
+    subjectKey: "sponsorRefund.subject",
+    subjectVars: { orgName: o.orgName },
+    recipient: o.sponsorEmail,
+    firstAttempt: "request",
+    run: async () => {
+      const after = await refundSponsorOrder(auth, o.orderId);
+      expect(after.status, "premise: the real refund went through").toBe("refunded");
+    },
+  };
+}
+
 describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (DB)", () => {
   it("every outbox kind is swept through its real producer", async () => {
     // The Spanish subject differs from the English one, so a producer that dropped the locale would be seen (the right answer is not
@@ -631,6 +652,11 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
     const receipt = await sponsorReceiptScenario();
     expect(dictionarySubject("nl", receipt.subjectKey, receipt.subjectVars)).not.toBe(dictionarySubject("en", receipt.subjectKey, receipt.subjectVars));
 
+    const sponsorRefund = await sponsorRefundScenario();
+    expect(dictionarySubject("es", sponsorRefund.subjectKey, sponsorRefund.subjectVars)).not.toBe(
+      dictionarySubject("en", sponsorRefund.subjectKey, sponsorRefund.subjectVars),
+    );
+
     const out = await forEachOutboxKind(
       {
         magic_link: magicLinkScenario(),
@@ -644,6 +670,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         registration_dispute_lost: disputeLost,
         sponsor_invoice: invoice,
         sponsor_receipt: receipt,
+        sponsor_refund: sponsorRefund,
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );

@@ -17,7 +17,7 @@ import { getStripe } from "@/lib/stripe";
 import {
   sponsorInvoiceEmail,
   sponsorReceiptEmail,
-  sendSponsorRefundEmail,
+  sponsorRefundEmail,
   sendSponsorDisputeAlertEmail,
   sendSponsorDisputeLostEmail,
   sendSponsorDisputeWonEmail,
@@ -718,6 +718,8 @@ export async function handleSponsorPaymentFailed(
  * the transfer to the org reverses and the platform returns its
  * application fee, exactly like entry-fee refunds. The local flip reuses
  * the charge.refunded path, so the later Stripe event replays as a no-op.
+ * The sponsor's refund notice is queued by that path; this request makes its
+ * first attempt after it returns.
  */
 export async function refundSponsorOrder(
   auth: AuthCtx,
@@ -749,10 +751,11 @@ export async function refundSponsorOrder(
     },
     { idempotencyKey: `sponsor-refund-${orderId}` },
   );
-  await handleSponsorChargeRefunded({
+  const notice = await handleSponsorChargeRefunded({
     payment_intent: order.payment_intent_id,
     refunded: true,
   } as Stripe.Charge);
+  if (notice) deferred(() => dispatchNow([notice]));
   return withTenant(auth.orgId, async (tx) => {
     const [row] = await tx<SponsorOrderRow[]>`
       select ${tx(ORDER_COLS)} from sponsor_orders where id = ${orderId}`;
@@ -766,13 +769,19 @@ export async function refundSponsorOrder(
  * public pages (status → inactive; the row survives as the audit trail).
  * Idempotent — only a `paid` order flips, and non-sponsor charges don't
  * match any order row.
+ *
+ * The flip queues the sponsor's refund notice in the same transaction
+ * (`queueSponsorRefundReceipt`), so only the transition writes one. Returns
+ * its outbox id (null: no flip, or no notice) for the console refund, which
+ * makes the first attempt; a webhook (a refund made in the Stripe dashboard)
+ * leaves it to the worker.
  */
-export async function handleSponsorChargeRefunded(charge: Stripe.Charge): Promise<void> {
+export async function handleSponsorChargeRefunded(charge: Stripe.Charge): Promise<string | null> {
   const intent =
     typeof charge.payment_intent === "string"
       ? charge.payment_intent
       : charge.payment_intent?.id;
-  if (!intent || !charge.refunded) return;
+  if (!intent || !charge.refunded) return null;
   const refunded = await sql.begin(async (tx) => {
     const [order] = await tx<
       {
@@ -792,25 +801,78 @@ export async function handleSponsorChargeRefunded(charge: Stripe.Charge): Promis
       returning id, org_id, sponsor_id, sponsor_name, sponsor_email,
                 amount_cents, currency, package_id`;
     if (!order) return null;
+    const notice = await queueSponsorRefundReceipt(tx, order);
     if (order.sponsor_id) {
       await tx`update sponsors set status = 'inactive' where id = ${order.sponsor_id}`;
     }
-    return order;
+    return { orgId: order.org_id, notice };
   });
-  if (!refunded) return;
-  const [org] = await sql<{ slug: string; name: string }[]>`
-    select slug, name from organizations where id = ${refunded.org_id}`;
+  if (!refunded) return null;
+  const [org] = await sql<{ slug: string }[]>`
+    select slug from organizations where id = ${refunded.orgId}`;
   if (org) deferred(() => fireOrgRevalidate(org.slug));
-  const [pkg] = await sql<{ name: string }[]>`
-    select name from sponsor_packages where id = ${refunded.package_id}`;
-  await sendSponsorRefundEmail({
-    to: refunded.sponsor_email,
-    orgName: org?.name ?? "the organiser",
-    packageName: pkg?.name ?? "sponsorship",
-    sponsorName: refunded.sponsor_name,
-    amountCents: refunded.amount_cents,
-    currency: refunded.currency,
-  });
+  return refunded.notice;
+}
+
+/**
+ * Queue the sponsor's refund notice on the email outbox, on `tx`: the
+ * transaction that flips the order to `refunded`. Kind `sponsor_refund`, ref
+ * `sponsor_order/<order id>`, once-key `<order id>:refunded` (an order is
+ * refunded once). Literal address (the sponsor contact), in the org's language.
+ *
+ * The notice is about money that has ALREADY moved at Stripe, so a failure
+ * here must never undo the refund's record (R4). It is contained at its own
+ * savepoint: a statement that errors inside a Postgres transaction aborts the
+ * whole transaction, which would roll back the flip and fail the refund. The
+ * reads and the render run inside the same savepoint and the same try, so
+ * any of them failing is contained too: logged, and `null` is returned.
+ * Exported for the once-key test.
+ */
+export async function queueSponsorRefundReceipt(
+  tx: Tx,
+  order: {
+    id: string;
+    org_id: string;
+    sponsor_name: string;
+    sponsor_email: string;
+    amount_cents: number;
+    currency: string;
+    package_id: string;
+  },
+): Promise<string | null> {
+  try {
+    return await tx.savepoint(async (sp) => {
+      const [org] = await sp<{ name: string; default_locale: string }[]>`
+        select name, default_locale from organizations where id = ${order.org_id}`;
+      const [pkg] = await sp<{ name: string }[]>`
+        select name from sponsor_packages where id = ${order.package_id}`;
+      const locale = await recipientLocale(sp, { pick: null, userId: null, orgDefault: org?.default_locale ?? null });
+      const content = await sponsorRefundEmail(
+        {
+          orgName: org?.name ?? "the organiser",
+          packageName: pkg?.name ?? "sponsorship",
+          sponsorName: order.sponsor_name,
+          amountCents: order.amount_cents,
+          currency: order.currency,
+        },
+        locale,
+      );
+      return enqueueEmailOnce(sp, {
+        kind: "sponsor_refund",
+        refType: "sponsor_order",
+        refId: order.id,
+        dedupeKey: onceKey("sponsor_refund", "sponsor_order", order.id, "refunded"),
+        orgId: order.org_id,
+        to: order.sponsor_email,
+        transactional: false,
+        expiresAt: expiryWithin(null),
+        ...content,
+      });
+    });
+  } catch (err) {
+    log.error({ err, orderId: order.id }, "sponsors: refund notice could not be queued");
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------

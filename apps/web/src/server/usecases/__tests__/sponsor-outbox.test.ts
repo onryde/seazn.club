@@ -5,6 +5,10 @@
 //   - Email 4, `sponsor_receipt`: the payment webhook queues the receipt to the sponsor contact in the transaction that activates the
 //     placement, once per payment intent (once-key the intent id), in the org's language; the worker makes the first attempt. The
 //     dispute evidence pack quotes that receipt in the language it was sent in.
+//   - Email 5, `sponsor_refund`: the transition of a paid order to refunded queues the refund notice in that transaction, at its own
+//     savepoint (a notice that cannot be queued never undoes a refund whose money has moved), once per order (once-key
+//     `<order id>:refunded`). The organiser's console refund makes the first attempt in its request; a refund made in the Stripe
+//     dashboard reaches us as a webhook only, and leaves it to the worker.
 //
 // Producers under test are driven through their real entry points. Only the network seams are replaced (Stripe, and
 // `@/server/email-outbox/transport`). The enqueue is the real one, observed through a spy that calls through, so a test can tell "not
@@ -30,11 +34,12 @@ vi.mock("@/server/email-outbox/transport", () => ({ deliver: deliverMock }));
 vi.mock("@/server/email-outbox", async (io) => { const m = await io<typeof import("@/server/email-outbox")>(); return { ...m, enqueueEmailOnce: vi.fn(m.enqueueEmailOnce) }; });
 
 import type Stripe from "stripe";
-import { sql } from "@/lib/db";
+import { sql, type Tx } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { enqueueEmailOnce, type OutboxKind } from "@/server/email-outbox";
 import { idempotencyKey } from "@/server/email-outbox/constants";
 import { dictionarySubject } from "@/server/email-outbox/__tests__/_kind-harness";
+import { log } from "@/server/logger";
 import { processStripeEvent } from "../billing-events";
 import {
   buildSponsorDisputeEvidence,
@@ -42,6 +47,8 @@ import {
   deleteSponsor,
   handleSponsorChargeRefunded,
   queueSponsorReceipt,
+  queueSponsorRefundReceipt,
+  refundSponsorOrder,
   startSponsorCheckout,
 } from "../sponsors";
 import { stubOutboxEnv } from "./_invite-mail";
@@ -50,6 +57,7 @@ import { cleanUpSponsorOrgs, seedSponsorOrder, seedSponsorOrg } from "./_money-f
 const HAS_DB = !!process.env.DATABASE_URL;
 const INVOICE = "sponsor_invoice" as const;
 const RECEIPT = "sponsor_receipt" as const;
+const REFUND = "sponsor_refund" as const;
 const CHECKOUT_URL = "https://checkout.stripe.test/sponsor-session";
 
 const made = { orgIds: [] as string[], userIds: [] as string[] };
@@ -98,6 +106,22 @@ const succeeded = (intent: string, orderId: string, kind = "sponsor") =>
 /** The enqueue calls the producers made for a kind and order (the spy sees every caller, so it is filtered). */
 const enqueueCalls = (kind: OutboxKind, orderId: string) =>
   vi.mocked(enqueueEmailOnce).mock.calls.filter(([, m]) => m.kind === kind && m.refId === orderId);
+
+/** Stripe's `charge.refunded` for a payment intent of the fixture's 25000, as the billing webhook receives it: in full (`refunded`), or a
+ *  part of it (the event fires for a partial refund too, with `refunded` false). */
+const chargeRefunded = (intent: string, refunded = true) =>
+  ({
+    type: "charge.refunded",
+    data: { object: { id: `ch_sp_${randomUUID().slice(0, 8)}`, payment_intent: intent, refunded, amount_refunded: refunded ? 25000 : 10000 } },
+  }) as unknown as Stripe.Event;
+
+const orderState = async (orderId: string) =>
+  (
+    await sql<{ status: string; sponsor_status: string | null }[]>`
+      select o.status, s.status as sponsor_status
+        from sponsor_orders o left join sponsors s on s.id = o.sponsor_id
+       where o.id = ${orderId}`
+  )[0]!;
 
 const sponsorsIn = async (orgId: string): Promise<number> =>
   (await sql<{ n: number }[]>`select count(*)::int as n from sponsors where org_id = ${orgId}`)[0]!.n;
@@ -358,5 +382,122 @@ describe.skipIf(!HAS_DB)("a paid sponsor order queues its receipt on the outbox 
     expect(await sponsorsIn(o.orgId), "no placement was re-created").toBe(0);
     expect(await rowsOf(RECEIPT, [o.orderId])).toHaveLength(1);
     expect(enqueueCalls(RECEIPT, o.orderId), "asked once in total").toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Email 5: the refund notice, when a paid order is refunded
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("a refunded sponsor order tells the sponsor through the outbox (DB)", () => {
+  it("an organiser refund queues one notice to the sponsor, and sends it in the request", async () => {
+    const o = await sponsorOrder({ status: "paid", defaultLocale: "es" });
+
+    const after = await refundSponsorOrder(ownerAuth(o), o.orderId);
+    expect(after.status, "premise: the console refund went through").toBe("refunded");
+    expect(stripeMock.refundCreate, "premise: one Stripe refund").toHaveBeenCalledTimes(1);
+
+    const [row] = await settled(REFUND, [o.orderId], 1);
+    expect(row).toMatchObject({
+      kind: REFUND,
+      ref_type: "sponsor_order",
+      ref_id: o.orderId,
+      dedupe_key: `${o.orderId}:refunded`,
+      org_id: o.orgId,
+      recipient: o.sponsorEmail,
+      recipient_user_id: null,
+      transactional: false,
+      status: "sent",
+      cleared: true,
+    });
+    const subject = dictionarySubject("es", "sponsorRefund.subject", { orgName: o.orgName });
+    expect(subject, "the Spanish subject is not the English one").not.toBe(dictionarySubject("en", "sponsorRefund.subject", { orgName: o.orgName }));
+    expect(row!.subject).toBe(subject);
+    const calls = transportCallsFor(row!.id);
+    expect(calls, "one transport call under the row's key").toHaveLength(1);
+    expect(calls[0]).toMatchObject({ to: o.sponsorEmail, subject });
+    expect(await orderState(o.orderId)).toEqual({ status: "refunded", sponsor_status: "inactive" });
+  });
+
+  it("the webhook after a console refund queues no second notice", async () => {
+    const o = await sponsorOrder({ status: "paid", defaultLocale: "es" });
+
+    await refundSponsorOrder(ownerAuth(o), o.orderId);
+    await processStripeEvent(chargeRefunded(o.intent)); // Stripe's own charge.refunded for the same refund
+
+    expect(await rowsOf(REFUND, [o.orderId])).toHaveLength(1);
+    // Asked once: the webhook finds the order already refunded, so it is not a transition.
+    expect(enqueueCalls(REFUND, o.orderId)).toHaveLength(1);
+  });
+
+  it("a dashboard refund (webhook only) leaves the first attempt to the worker", async () => {
+    const o = await sponsorOrder({ status: "paid", defaultLocale: "es" });
+
+    await processStripeEvent(chargeRefunded(o.intent));
+
+    const rows = await rowsOf(REFUND, [o.orderId]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ dedupe_key: `${o.orderId}:refunded`, recipient: o.sponsorEmail, status: "queued", attempts: 0 });
+    expect(rows[0]!.subject).toBe(dictionarySubject("es", "sponsorRefund.subject", { orgName: o.orgName }));
+    expect(transportCallsFor(rows[0]!.id), "the webhook did not attempt the send").toHaveLength(0);
+    expect(await orderState(o.orderId)).toEqual({ status: "refunded", sponsor_status: "inactive" });
+  });
+
+  it("a refund whose notice fails inside its savepoint is still recorded", async () => {
+    const o = await sponsorOrder({ status: "paid", defaultLocale: "es" });
+    // A failing SQL statement on the handle the producer gives the enqueue (C4): a JS throw before any SQL would not witness the
+    // savepoint. The spy only records the handle; an expect inside it would be swallowed by the producer's catch.
+    const handles: unknown[] = [];
+    vi.mocked(enqueueEmailOnce).mockImplementationOnce(async (h) => {
+      handles.push(h);
+      await (h as Tx)`select 1/0`;
+      return null;
+    });
+    const logged = vi.spyOn(log, "error").mockImplementation(() => undefined);
+    try {
+      await expect(refundSponsorOrder(ownerAuth(o), o.orderId)).resolves.toMatchObject({ status: "refunded" });
+
+      expect(await orderState(o.orderId), "the refund and the placement's take-down committed").toEqual({ status: "refunded", sponsor_status: "inactive" });
+      expect(await rowsOf(REFUND, [o.orderId]), "no notice was queued").toHaveLength(0);
+      expect(logged).toHaveBeenCalledWith(expect.objectContaining({ orderId: o.orderId }), expect.any(String));
+      expect(handles, "premise: the enqueue was reached").toHaveLength(1);
+      expect(handles[0], "the enqueue ran inside the refund's transaction, not on the pool").not.toBe(sql);
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  it("the refund notice's once-key alone: two transactions for one order queue one notice", async () => {
+    const o = await sponsorOrder({ status: "paid", defaultLocale: "es" });
+    const [{ package_id }] = await sql<{ package_id: string }[]>`select package_id from sponsor_orders where id = ${o.orderId}`;
+    const order = {
+      id: o.orderId,
+      org_id: o.orgId,
+      sponsor_name: "Acme Corp",
+      sponsor_email: o.sponsorEmail,
+      amount_cents: 25000,
+      currency: "gbp",
+      package_id,
+    };
+
+    const first = await sql.begin((tx) => queueSponsorRefundReceipt(tx, order));
+    const second = await sql.begin((tx) => queueSponsorRefundReceipt(tx, order));
+
+    expect(first, "the first call queued a row").not.toBeNull();
+    expect(second, "the second is a duplicate: no id, nothing thrown").toBeNull();
+    const rows = await rowsOf(REFUND, [o.orderId]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ id: first, dedupe_key: `${o.orderId}:refunded`, status: "queued" });
+  });
+
+  it("empty: a partial refund or an unknown intent queues nothing", async () => {
+    const o = await sponsorOrder({ status: "paid", defaultLocale: "es" });
+
+    await processStripeEvent(chargeRefunded(o.intent, false)); // partly refunded: `refunded` stays false
+    await processStripeEvent(chargeRefunded(`pi_unknown_${randomUUID().slice(0, 8)}`));
+
+    expect(await rowsOf(REFUND, [o.orderId])).toHaveLength(0);
+    expect(vi.mocked(enqueueEmailOnce).mock.calls.filter(([, m]) => m.kind === REFUND), "never asked").toHaveLength(0);
+    expect(await orderState(o.orderId), "and the order is still paid and live").toEqual({ status: "paid", sponsor_status: "active" });
   });
 });

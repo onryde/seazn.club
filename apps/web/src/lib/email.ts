@@ -633,16 +633,12 @@ export async function sponsorReceiptEmail(args: SponsorReceiptArgs, locale: Loca
   return sponsorReceiptTemplate(args, dict);
 }
 
-export interface SponsorRefundEmail extends SponsorRefundArgs {
-  to: string;
-  locale?: Locale;
-}
-
-/** Refund notice to the sponsor when a paid order is refunded. */
-export async function sendSponsorRefundEmail(opts: SponsorRefundEmail): Promise<boolean> {
-  const { to, locale = "en", ...args } = opts;
+/** Refund notice to the sponsor when a paid order is refunded, in the org's language. It is queued on the email outbox by
+ *  `queueSponsorRefundReceipt` (sponsors.ts, kind `sponsor_refund`) in the transaction that records the refund; nothing sends it
+ *  directly. */
+export async function sponsorRefundEmail(args: SponsorRefundArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...sponsorRefundTemplate(args, dict) });
+  return sponsorRefundTemplate(args, dict);
 }
 
 export interface SponsorDisputeAlertEmail extends SponsorDisputeAlertArgs {

@@ -19,17 +19,9 @@ const stripeMock = vi.hoisted(() => {
 });
 vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
 
-// The sponsor's mail that has moved to the email outbox is read from its rows and from the outbox's one network seam.
+// The sponsor's mail goes through the email outbox: it is read from its rows and from the outbox's one network seam.
 const deliverMock = vi.hoisted(() => vi.fn());
 vi.mock("@/server/email-outbox/transport", () => ({ deliver: deliverMock }));
-
-const emailMock = vi.hoisted(() => ({
-  refund: vi.fn().mockResolvedValue(true),
-}));
-vi.mock("@/lib/email", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/email")>()),
-  sendSponsorRefundEmail: emailMock.refund,
-}));
 
 import type Stripe from "stripe";
 import { sql } from "@/lib/db";
@@ -93,7 +85,6 @@ beforeEach(() => {
   deliverMock.mockReset().mockImplementation(async () => ({ ok: true, providerId: `re_${randomUUID()}` }));
   stripeMock.checkoutCreate.mockReset();
   stripeMock.refundCreate.mockReset().mockResolvedValue({ id: "re_test" });
-  emailMock.refund.mockClear();
 });
 
 describe.skipIf(!HAS_DB)("sponsor monetization", () => {
@@ -404,7 +395,7 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
         payment_intent: "pi_not_ours",
         refunded: true,
       } as unknown as Stripe.Charge),
-    ).resolves.toBeUndefined();
+    ).resolves.toBeNull();
   });
 
   it("console refund: entry-fee shape, order → refunded, placement deactivated", async () => {
@@ -451,13 +442,29 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
     expect(sponsor.status).toBe("inactive");
 
     // The sponsor hears about it — once (the later Stripe event replay
-    // finds the order already refunded and stays silent).
-    expect(emailMock.refund).toHaveBeenCalledOnce();
-    expect(emailMock.refund.mock.calls[0]![0]).toMatchObject({
-      to: "r@ref.test",
-      amountCents: 8_000,
-      packageName: "Silver package",
-    });
+    // finds the order already refunded and stays silent): one outbox row,
+    // sent by the request after it returned.
+    await expect(
+      handleSponsorChargeRefunded({ payment_intent: params.payment_intent, refunded: true } as unknown as Stripe.Charge),
+    ).resolves.toBeNull();
+    await vi.waitFor(
+      async () => {
+        const [r] = await sql<{ status: string }[]>`
+          select status from email_outbox where kind = 'sponsor_refund' and ref_id = ${order.id}`;
+        if (r?.status !== "sent") throw new Error(`the refund notice is ${r?.status ?? "not queued"}`);
+      },
+      { timeout: 10_000, interval: 50 },
+    );
+    const notices = await sql<{ id: string; recipient: string }[]>`
+      select id, recipient from email_outbox where kind = 'sponsor_refund' and ref_id = ${order.id}`;
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!.recipient).toBe("r@ref.test");
+    const mailed = deliverMock.mock.calls
+      .map((c) => c[0] as { to: string; text: string; idempotencyKey: string })
+      .filter((c) => c.idempotencyKey === idempotencyKey(notices[0]!.id));
+    expect(mailed).toHaveLength(1);
+    expect(mailed[0]!.text).toContain("Silver package");
+    expect(mailed[0]!.text).toContain("£80.00");
   });
 
   it("webhook: pending order fails on payment_failed; stray intents are ignored", async () => {
