@@ -76,6 +76,12 @@ export const OUTBOX_KIND_FACTS: Readonly<Record<OutboxKind, { to: "account" | "l
   official_invite: { to: "literal", transactional: true },
 };
 
+/** Mail ABOUT an account that is addressed to a literal address (phase-3 D5, wave 3): its verification and its email change. These kinds
+ *  name no account (`recipient_user_id` is null), so deleting the account finds them by their ref, `user / <the account>`
+ *  (account-deletion.ts `accountMail`). The deletion notice is not among them: it is written after the deletion's sweep, to tell the
+ *  person it happened. */
+export const ACCOUNT_MAIL_KINDS: readonly OutboxKind[] = ["email_verification", "email_change_confirmation", "email_change_notice"];
+
 /** Spec order: the happy path first (`queued` -> `sending` -> `sent` -> `delivered`, `delayed` between `sent` and
  *  `delivered`), then the other terminal states. Twelve members; the spec's "Statuses" paragraph is the authority. */
 export const OUTBOX_STATUSES = [

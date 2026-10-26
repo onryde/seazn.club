@@ -6,9 +6,12 @@
 //   - a `chess_invite` queued BEFORE wave 1, which carries no user id, addressed to the address EXACTLY as `users.email` stores it
 //     (FU2: `users.email` is unique but case-sensitive, so `Ann@x.io` and `ann@x.io` are two accounts and a folded match would reach
 //     the other one's rows);
+//   - mail ABOUT the account (wave 3: its verification and its email change), found by its ref `user / <the account>`: a literal-address
+//     kind that names no account, at whatever address (the confirmation goes to the NEW address);
 //   - the account's `magic_link` rows (by ref, or by that exact address), which are deleted outright as before.
-// NOT the account's, whatever address they hold: a literal-address kind (`registration_confirmation` ...) queued to that address. It was
-// written for an entry, a payment or a refund that belongs to an organiser's books, not to the account (D5).
+// NOT the account's, whatever address they hold: any other literal-address kind (`registration_confirmation`, an org's invite ...) queued
+// to that address. It was written for an entry, a payment, a refund or an invite that belongs to an organiser's books, not to the account
+// (D5).
 //
 // WHAT HAPPENS TO THE ACCOUNT'S ROWS: the ones still `queued` end `expired` / `account_deleted`, body and lease gone, and are handed
 // back for the kind's hook; EVERY matching row, whatever its status, then has its recipient replaced by the account's placeholder.
@@ -58,7 +61,7 @@ vi.mock("@/server/email-outbox", async (importOriginal) => {
 import { sql, type Tx } from "@/lib/db";
 import { DELETE } from "@/app/api/users/me/route";
 import { OUTBOX_STATUSES, RETRYABLE_STATUSES, enqueueEmail, type OutboxKind, type OutboxStatus } from "@/server/email-outbox";
-import { anonymiseAccountEmails, legacyInviteAt, namesAccount } from "@/server/email-outbox/account-deletion";
+import { accountMail, anonymiseAccountEmails, legacyInviteAt, namesAccount } from "@/server/email-outbox/account-deletion";
 import { CHESS_SEAT_REF_TYPE, chessSeatRef } from "@/server/usecases/external-play/seat-stamp";
 import { stubOutboxEnv } from "@/server/usecases/__tests__/_invite-mail";
 
@@ -156,6 +159,27 @@ async function literal(kind: Exclude<OutboxKind, "chess_invite">, to: string, re
     transactional: kind === "magic_link",
     expiresAt: new Date(Date.now() + 15 * MIN),
   });
+  made.rows.push(id);
+  return id;
+}
+
+/** A row of a wave-3 literal kind (account mail, or an org's invite), through the real writer on a transaction of the pool, as its producer
+ *  writes it: no organisation, no account id. */
+async function accountMailRow(kind: OutboxKind, refType: string, refId: string, to: string): Promise<string> {
+  const id = await sql.begin((tx) =>
+    enqueueEmail(tx, {
+      kind,
+      refType,
+      refId,
+      orgId: null,
+      to,
+      subject: "A subject",
+      html: "<p>x</p>",
+      text: "x",
+      transactional: kind !== "org_invite",
+      expiresAt: new Date(Date.now() + 60 * MIN),
+    }),
+  );
   made.rows.push(id);
   return id;
 }
@@ -334,6 +358,54 @@ describe.skipIf(!HAS_DB)("deleting an account ends and scrubs the account's own 
     expect((await accountOf(vId)).deleted_at, "V is still live").toBeNull();
   });
 
+  it("the account's own verification and email-change mail is ended and scrubbed; an org's invite to the same address is not", async () => {
+    // Wave 3's account mail is addressed to a literal address and names no account (`recipient_user_id` is null), so neither arm above
+    // reaches it. It is ABOUT the account, though: its ref is `user / <the account>`. An org's invite to the same address is the org's.
+    const email = address("own-mail");
+    const userId = await seedUser(email, "Own Mail");
+    const otherEmail = address("own-mail-other");
+    const otherId = await seedUser(otherEmail, "Own Mail Other");
+    authState.user = { id: userId, email, locale: null };
+
+    const r1 = await accountMailRow("email_verification", "user", userId, email);
+    const r2 = await accountMailRow("email_change_confirmation", "user", userId, address("new"));
+    const r3 = await accountMailRow("email_change_notice", "user", userId, email);
+    await put(r3, "sent");
+    const r4 = await accountMailRow("org_invite", "org_invite", randomUUID(), email);
+    const r5 = await accountMailRow("email_verification", "user", otherId, otherEmail);
+    const all = [r1, r2, r3, r4, r5];
+    const before = new Map((await rowsByIds(all)).map((r) => [r.id, r]));
+    expect(before.size, "premise: all five rows exist").toBe(5);
+    expect([r1, r2, r4, r5].map((id) => before.get(id)!.status), "premise: rows 1, 2, 4 and 5 are queued").toEqual(["queued", "queued", "queued", "queued"]);
+    expect(before.get(r3)!.status, "premise: row 3 is sent").toBe("sent");
+    expect(all.map((id) => before.get(id)!.recipient_user_id), "premise: every one is a literal-address row, naming no account").toEqual([null, null, null, null, null]);
+
+    expect((await del()).status).toBe(200);
+    const gone = await accountOf(userId);
+    expect(gone.deleted_at, "premise: the account really was deleted").not.toBeNull();
+    expect(gone.email, "premise: the account's address was replaced").not.toBe(email);
+
+    const after = new Map((await rowsByIds(all)).map((r) => [r.id, r]));
+    let checked = 0;
+    for (const [id, what] of [[r1, "row 1 (its queued verification)"], [r2, "row 2 (its queued email-change confirmation, to the new address)"]] as const) {
+      const a = after.get(id)!;
+      expect(a.status, `${what} ends`).toBe("expired");
+      expect(a.last_error).toBe("account_deleted");
+      expect(a.has_body, `${what}: the unsent body is gone`).toBe(false);
+      expect(a.recipient, `${what}: the address is the deleted account's own`).toBe(gone.email);
+      checked += 1;
+    }
+    const a3 = after.get(r3)!;
+    expect(a3.status, "row 3 (its sent email-change notice) keeps its status").toBe("sent");
+    expect(a3.recipient, "and loses the address").toBe(gone.email);
+    checked += 1;
+    expect(after.get(r4), "row 4 (an org's invite to the same address) is untouched (D5)").toEqual(before.get(r4));
+    checked += 1;
+    expect(after.get(r5), "row 5 (another account's queued verification) is untouched").toEqual(before.get(r5));
+    checked += 1;
+    expect(checked, "anti-vacuity: all five rows were read back").toBe(5);
+  });
+
   it("the sequence: a second deletion changes nothing and does not fail; an account with no outbox rows deletes as before", async () => {
     const email = address("twice");
     const id = await seedUser(email, "Twice");
@@ -408,6 +480,7 @@ describe.skipIf(!HAS_DB)("deleting an account ends and scrubs the account's own 
     await chess(email); // in the legacy predicate
     await chess(address("elsewhere"), userId); // in the account predicate; NOT in the legacy one
     await literal("registration_confirmation", email); // no account, this address, but not a chess invite: the decoy a loose negation would count
+    await accountMailRow("email_verification", "user", userId, email); // in the account-mail predicate
     const counts = async (name: string, frag: (tx: Tx) => ReturnType<typeof namesAccount>) => {
       const [r] = await sql.begin(
         (tx) => tx<{ total: string; inside: string; outside: string; unknown: string }[]>`
@@ -424,6 +497,7 @@ describe.skipIf(!HAS_DB)("deleting an account ends and scrubs the account's own 
     };
     await counts("legacy arm", (tx) => legacyInviteAt(tx, email));
     await counts("account arm", (tx) => namesAccount(tx, userId));
+    await counts("account-mail arm", (tx) => accountMail(tx, userId));
   });
 
   it("each arm's predicate can use an index: with sequential scans off, the planner picks its index and not the table", async () => {
@@ -437,6 +511,7 @@ describe.skipIf(!HAS_DB)("deleting an account ends and scrubs the account's own 
       return {
         account: await explain(namesAccount(tx, randomUUID())),
         legacy: await explain(legacyInviteAt(tx, address("plan"))),
+        accountMail: await explain(accountMail(tx, randomUUID())),
       };
     });
     // The index is named AND the column is an `Index Cond`: a partial index whose predicate the statement implies can be read end to end
@@ -447,5 +522,9 @@ describe.skipIf(!HAS_DB)("deleting an account ends and scrubs the account's own 
     expect(plans.legacy, "the legacy arm").toMatch(/Index Scan using email_outbox_legacy_invite_idx|Bitmap Index Scan on email_outbox_legacy_invite_idx/);
     expect(plans.legacy, "looked up by the address exactly").toMatch(/Index Cond: \(recipient = /);
     expect(plans.legacy).not.toMatch(/Seq Scan/);
+    // The account-mail arm (wave 3) is found by its ref, which the arbiter's ref index (V470, not partial) leads on; the kind is a Filter.
+    expect(plans.accountMail, "the account-mail arm").toMatch(/Index Scan using email_outbox_ref_idx|Bitmap Index Scan on email_outbox_ref_idx/);
+    expect(plans.accountMail, "looked up by the account's ref").toMatch(/Index Cond: \(\(ref_type = 'user'::text\) AND \(ref_id = /);
+    expect(plans.accountMail).not.toMatch(/Seq Scan/);
   });
 });
