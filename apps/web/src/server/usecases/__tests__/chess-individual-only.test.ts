@@ -10,6 +10,7 @@
 //   3. patchDivision             — config.entrants
 //   4. createEntrants            — entrants.kind
 //   5. commitImport (+ the plan) — the CSV import hard-codes kind 'team'
+//   6. generateStageFixtures (americano / mexicano) — mints `pair` entrants for every rotation
 //
 // Each writer has a refusal (chess), a positive pair (a sport that DOES take
 // teams/pairs, swept across the registry from the engine's own declarations),
@@ -37,6 +38,8 @@ import {
 import { createCompetition } from "../competitions";
 import { createDivision, getDivision, patchDivision } from "../divisions";
 import { createEntrants, listEntrants } from "../entrants";
+import { createPerson } from "../persons";
+import { createStages, generateStageFixtures } from "../stages";
 import { commitImport, createImport } from "../imports";
 import { getRegistrationSettings, publicRegistrationInfo, putRegistrationSettings } from "../registrations";
 import { asOwner, makeUser } from "./_registration-fixtures";
@@ -61,6 +64,7 @@ const WRITERS = [
   "patchDivision",
   "createEntrants",
   "commitImport",
+  "generateStageFixtures",
 ] as const;
 type Writer = (typeof WRITERS)[number];
 /** Writer -> how many chess refusals this file actually drove through it. */
@@ -242,10 +246,12 @@ describe.skipIf(!HAS_DB)("1. putRegistrationSettings", () => {
       // Individual + free agents: the generic "requires entrant_kind 'team'"
       // message would point the organiser at the very option chess forbids.
       ["individual + allow_free_agents", { ...SETTINGS, entrant_kind: "individual", allow_free_agents: true }],
+      // A solo price on its own (no pool): the older "requires allow_free_agents" message would be the wrong answer.
+      ["individual + solo fee", { ...SETTINGS, entrant_kind: "individual", free_agent_fee_cents: 500 }],
       ["team + allow_free_agents", { ...SETTINGS, entrant_kind: "team", allow_free_agents: true }],
       ["team + allow_free_agents + solo fee", { ...SETTINGS, entrant_kind: "team", allow_free_agents: true, free_agent_fee_cents: 500 }],
     ];
-    expect(attempts.length).toBeGreaterThanOrEqual(5);
+    expect(attempts.length).toBeGreaterThanOrEqual(6);
     for (const [label, input] of attempts) {
       await expect(putRegistrationSettings(owner, division.id, input), label).rejects.toMatchObject({
         status: 422,
@@ -626,12 +632,90 @@ describe.skipIf(!HAS_DB)("5. CSV import (hard-codes entrant kind 'team')", () =>
 });
 
 // ---------------------------------------------------------------------------
+// 6. americano / mexicano generation (mints `pair` entrants)
+// ---------------------------------------------------------------------------
+
+async function playersFor(auth: AuthCtx, divisionId: string, n: number) {
+  for (let i = 1; i <= n; i++) {
+    const person = await createPerson(auth, { full_name: `Player ${i}`, consent: {}, dob: null, gender: null, external_ref: null });
+    await createEntrants(auth, divisionId, [
+      {
+        kind: "individual",
+        display_name: `Player ${i}`,
+        seed: i,
+        members: [{ person_id: person.id, is_captain: false, roles: [], default_position_key: null, squad_number: null }],
+      },
+    ]);
+  }
+}
+const pairCount = async (divisionId: string) => {
+  const [r] = await sql<{ n: number }[]>`select count(*)::int as n from entrants where division_id = ${divisionId} and kind = 'pair'`;
+  return r!.n;
+};
+
+describe.skipIf(!HAS_DB)("6. generateStageFixtures (americano / mexicano mint pair entrants)", () => {
+  it("refuses to generate an americano stage for chess and mints no pair; the same stage on a team sport generates", async () => {
+    const owner = await seedOwner();
+    const { division: chess } = await chessDivision(owner);
+    await playersFor(owner, chess.id, 8);
+    const [stage] = await createStages(owner, chess.id, {
+      seq: 1,
+      kind: "americano" as never,
+      name: "Rotation",
+      config: { mode: "americano", courtCount: 2, rounds: 3 },
+    });
+    expect(await pairCount(chess.id), "premise: no pair yet").toBe(0);
+    await expect(generateStageFixtures(owner, stage!.id)).rejects.toMatchObject({ status: 422, code: CHESS_INDIVIDUAL_ONLY });
+    noteRefusal("generateStageFixtures");
+    expect(await pairCount(chess.id)).toBe(0);
+    // A second call is refused the same way (the guard is not first-call-only).
+    await expect(generateStageFixtures(owner, stage!.id)).rejects.toMatchObject({ status: 422, code: CHESS_INDIVIDUAL_ONLY });
+
+    // Positive pair: a sport that takes pairs generates, and the rotation does mint them.
+    const { division: other } = await divisionOf(owner, "generic");
+    await playersFor(owner, other.id, 8);
+    const [otherStage] = await createStages(owner, other.id, {
+      seq: 1,
+      kind: "americano" as never,
+      name: "Rotation",
+      config: { mode: "americano", courtCount: 2, rounds: 3 },
+    });
+    const { created } = await generateStageFixtures(owner, otherStage!.id);
+    expect(created).toBeGreaterThan(0);
+    expect(await pairCount(other.id)).toBeGreaterThan(0);
+  });
+
+  it("too few players to rotate (2 of the 4 it needs): chess is refused as chess, not as 'not ready'", async () => {
+    const owner = await seedOwner();
+    const { division } = await chessDivision(owner);
+    await playersFor(owner, division.id, 2);
+    const [stage] = await createStages(owner, division.id, {
+      seq: 1,
+      kind: "americano" as never,
+      name: "Rotation",
+      config: { mode: "americano", courtCount: 1, rounds: 3 },
+    });
+    await expect(generateStageFixtures(owner, stage!.id)).rejects.toMatchObject({ code: CHESS_INDIVIDUAL_ONLY });
+    // Control: the same two players on a team sport hit the stage's own readiness check instead.
+    const { division: other } = await divisionOf(owner, "generic");
+    await playersFor(owner, other.id, 2);
+    const [otherStage] = await createStages(owner, other.id, {
+      seq: 1,
+      kind: "americano" as never,
+      name: "Rotation",
+      config: { mode: "americano", courtCount: 1, rounds: 3 },
+    });
+    await expect(generateStageFixtures(owner, otherStage!.id)).rejects.toMatchObject({ code: "STAGE_NOT_READY" });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // The ledger
 // ---------------------------------------------------------------------------
 
 describe.skipIf(!HAS_DB)("every writer in the ledger refused chess at least once", () => {
   it("WRITERS and the refusals actually driven are the same set, each driven more than zero times", () => {
-    expect(WRITERS.length).toBe(5);
+    expect(WRITERS.length).toBe(6);
     for (const w of WRITERS) expect(refused.get(w) ?? 0, w).toBeGreaterThan(0);
     expect([...refused.keys()].sort()).toEqual([...WRITERS].sort());
   });

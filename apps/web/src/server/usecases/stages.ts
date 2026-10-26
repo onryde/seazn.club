@@ -8,6 +8,7 @@ import { sql, withTenant } from "@/lib/db";
 import { SWISS_ABANDONED_BOARDS_REASON } from "@/lib/swiss-abandoned-refusal";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { HttpError } from "@/lib/errors";
+import { chessIndividualOnlyError, isChessSport } from "@/lib/chess-individual-only";
 import { ROSTER_DRIFT_INELIGIBLE_KINDS, isRosterDriftEligible } from "@/lib/roster-drift-eligibility";
 import { assertWithinLimit, getLimit, requireFeature } from "@/lib/entitlements";
 import { captureServer } from "@/lib/posthog-server";
@@ -867,6 +868,11 @@ async function americanoGen(
   cfg: Record<string, unknown>,
   entrants: ActiveEntrant[],
 ): Promise<GenFixture[]> {
+  // Chess is individual-only (owner ruling 2026-10-26). This stage mints `pair` entrants for every rotation
+  // (pairEntrantsFor below), and nothing gates the stage kind per sport - so the entrant-kind writers' refusal has to
+  // stand here too, before a single pair is written.
+  const [sportRow] = await tx<{ sport_key: string }[]>`select sport_key from divisions where id = ${divisionId}`;
+  if (sportRow && isChessSport(sportRow.sport_key)) throw chessIndividualOnlyError();
   // players = the PERSONS behind the individual entrants
   const entrantIds = entrants.map((e) => e.id);
   if (entrantIds.length === 0) return [];
