@@ -296,6 +296,84 @@
       "reason": "carromForfeitCredit returns doubleWalkoverCredit for by \"both\" before it reads `reason`, so the reason passed for a double walkover is never read."
     },
     {
+      "mutant": "src/sports/carrom/carrom.ts:649:7 ConditionalExpression → default:",
+      "original": "default:",
+      "line": "default:",
+      "reason": "The default clause only holds a `break`, so removing it leaves an event type that matches no case doing the same thing (nothing). Ran carrom.mutation.test.ts with the clause removed: still green."
+    },
+    {
+      "mutant": "src/sports/carrom/carrom.ts:873:7 ConditionalExpression → true",
+      "original": "cfgParsed.success",
+      "line": "if (cfgParsed.success && ctx.entrants.length === 2 && home !== undefined && away !== undefined) {",
+      "reason": "With an unparseable cfg `cfgParsed.data` is undefined, and every path that can decide a result (a board, an adjustment, a settle) reads `state.cfg` inside the try, throws, and is swallowed; forfeits are no personal result here (resultInStats), so nothing is credited either way. Ran a 195-case probe (13 event streams x 5 configs x 1/2/3 entrants, through aggregatePlayerStats) with this mutant applied: output identical to the original."
+    },
+    {
+      "mutant": "src/sports/carrom/carrom.ts:873:57 ConditionalExpression → true",
+      "original": "home !== undefined",
+      "line": "if (cfgParsed.success && ctx.entrants.length === 2 && home !== undefined && away !== undefined) {",
+      "reason": "The guard before it requires `ctx.entrants.length === 2`, so entrants[0] is always defined. Ran a 195-case probe (13 event streams x 5 configs x 1/2/3 entrants, through aggregatePlayerStats) with this mutant applied: output identical to the original."
+    },
+    {
+      "mutant": "src/sports/carrom/carrom.ts:873:79 ConditionalExpression → true",
+      "original": "away !== undefined",
+      "line": "if (cfgParsed.success && ctx.entrants.length === 2 && home !== undefined && away !== undefined) {",
+      "reason": "The guard before it requires `ctx.entrants.length === 2`, so entrants[1] is always defined. Ran a 195-case probe (13 event streams x 5 configs x 1/2/3 entrants, through aggregatePlayerStats) with this mutant applied: output identical to the original."
+    },
+    {
+      "mutant": "src/sports/carrom/carrom.ts:875:42 ArrayDeclaration → [\"Stryker was here\"]",
+      "original": "[]",
+      "line": "home: { entrantId: home.id, slots: [] },",
+      "reason": "The synthetic lineup's slots are never read: carrom's init and apply use only entrantId (the comment above the fold says so). Ran a 195-case probe (13 event streams x 5 configs x 1/2/3 entrants, through aggregatePlayerStats) with this mutant applied: output identical to the original."
+    },
+    {
+      "mutant": "src/sports/carrom/carrom.ts:876:42 ArrayDeclaration → [\"Stryker was here\"]",
+      "original": "[]",
+      "line": "away: { entrantId: away.id, slots: [] },",
+      "reason": "The synthetic lineup's slots are never read: carrom's init and apply use only entrantId (the comment above the fold says so). Ran a 195-case probe (13 event streams x 5 configs x 1/2/3 entrants, through aggregatePlayerStats) with this mutant applied: output identical to the original."
+    },
+    {
+      "mutant": "src/sports/carrom/carrom.ts:889:18 ConditionalExpression → true",
+      "original": "outcome !== null",
+      "line": "} else if (outcome !== null && (outcome.kind === \"win\" || outcome.kind === \"award\")) {",
+      "reason": "A null outcome (a live or abandoned match) reaches `outcome.kind`, which throws a TypeError inside the try whose catch credits nothing, exactly what skipping the branch does; a non-null outcome here is a draw (a double walkover never gets this far: resultInStats is false for it, and no_result is never produced by carrom.outcome/outcomeOf). Ran a 195-case probe (13 event streams x 5 configs x 1/2/3 entrants, through aggregatePlayerStats) with this mutant applied: output identical to the original."
+    },
+    {
+      "mutant": "src/sports/carrom/carrom.ts:893:18 ConditionalExpression → true",
+      "original": "outcome !== null",
+      "line": "} else if (outcome !== null && (outcome.kind === \"draw\" || outcome.kind === \"no_result\")) {",
+      "reason": "A null outcome (a live or abandoned match) reaches `outcome.kind`, which throws a TypeError inside the try whose catch credits nothing, exactly what skipping the branch does; a non-null outcome here is a draw (a double walkover never gets this far: resultInStats is false for it, and no_result is never produced by carrom.outcome/outcomeOf). Ran a 195-case probe (13 event streams x 5 configs x 1/2/3 entrants, through aggregatePlayerStats) with this mutant applied: output identical to the original."
+    },
+    {
+      "mutant": "src/sports/carrom/carrom.ts:893:18 LogicalOperator → outcome !== null || outcome.kind === \"draw\" || outcome.kind === \"no_result\"",
+      "original": "outcome !== null && (outcome.kind === \"draw\" || outcome.kind === \"no_result\")",
+      "line": "} else if (outcome !== null && (outcome.kind === \"draw\" || outcome.kind === \"no_result\")) {",
+      "reason": "A null outcome (a live or abandoned match) reaches `outcome.kind`, which throws a TypeError inside the try whose catch credits nothing, exactly what skipping the branch does; a non-null outcome here is a draw (a double walkover never gets this far: resultInStats is false for it, and no_result is never produced by carrom.outcome/outcomeOf). Ran a 195-case probe (13 event streams x 5 configs x 1/2/3 entrants, through aggregatePlayerStats) with this mutant applied: output identical to the original."
+    },
+    {
+      "mutant": "src/sports/carrom/carrom.ts:893:39 ConditionalExpression → true",
+      "original": "outcome.kind === \"draw\"",
+      "line": "} else if (outcome !== null && (outcome.kind === \"draw\" || outcome.kind === \"no_result\")) {",
+      "reason": "The kinds that reach this branch are draw and null (null fails `outcome !== null` first); a double walkover is excluded by resultInStats and no_result is never produced. Ran a 195-case probe (13 event streams x 5 configs x 1/2/3 entrants, through aggregatePlayerStats) with this mutant applied: output identical to the original."
+    },
+    {
+      "mutant": "src/sports/carrom/carrom.ts:893:66 ConditionalExpression → false",
+      "original": "outcome.kind === \"no_result\"",
+      "line": "} else if (outcome !== null && (outcome.kind === \"draw\" || outcome.kind === \"no_result\")) {",
+      "reason": "carrom.outcome and outcomeOf never produce no_result (the module's outcomes are win, draw, award and double_walkover, plus the kernel's settle win/award), so this operand is false for every outcome that gets here. Ran a 195-case probe (13 event streams x 5 configs x 1/2/3 entrants, through aggregatePlayerStats) with this mutant applied: output identical to the original."
+    },
+    {
+      "mutant": "src/sports/carrom/carrom.ts:893:66 EqualityOperator → outcome.kind !== \"no_result\"",
+      "original": "outcome.kind === \"no_result\"",
+      "line": "} else if (outcome !== null && (outcome.kind === \"draw\" || outcome.kind === \"no_result\")) {",
+      "reason": "After `draw` is false the only outcome left that could differ is a double walkover, which resultInStats excludes before this branch; no_result is never produced. Ran a 195-case probe (13 event streams x 5 configs x 1/2/3 entrants, through aggregatePlayerStats) with this mutant applied: output identical to the original."
+    },
+    {
+      "mutant": "src/sports/carrom/carrom.ts:893:83 StringLiteral → \"\"",
+      "original": "\"no_result\"",
+      "line": "} else if (outcome !== null && (outcome.kind === \"draw\" || outcome.kind === \"no_result\")) {",
+      "reason": "no_result is never produced by carrom.outcome or outcomeOf, so what the literal reads never decides a branch. Ran a 195-case probe (13 event streams x 5 configs x 1/2/3 entrants, through aggregatePlayerStats) with this mutant applied: output identical to the original."
+    },
+    {
       "mutant": "src/sports/carrom/carrom.ts:249:16 ConditionalExpression → false",
       "original": "state.outcome === null",
       "line": "const live = state.outcome === null;",
