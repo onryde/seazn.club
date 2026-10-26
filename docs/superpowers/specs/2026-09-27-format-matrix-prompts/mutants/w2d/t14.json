@@ -94,5 +94,109 @@
     "name": "X-TB-7 the cross-group door in PR A is an ORDER save"
    }
   ]
+ },
+ {
+  "id": "t14-qualification-drops-primary",
+  "file": "apps/web/src/server/public-site/division-qualification.ts",
+  "find": "      primary: rules.primary,\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
+    ],
+    "name": "X-TB-3 a wins-first sport's DEFAULT reaches the public qualification view"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
+    ],
+    "name": "X-TB-3 volleyball races in matches WON"
+   }
+  ]
+ },
+ {
+  "id": "t14-walkover-credit-dropped",
+  "file": "packages/engine/src/sports/setbased/kernel.ts",
+  "find": "            metrics: creditedMetrics(sideMetrics(state, side), credit, side),\n          });\n          const winner = at(winnerSide, 1, 0, wp);\n",
+  "replace": "            metrics: sideMetrics(state, side),\n          });\n          const winner = at(winnerSide, 1, 0, wp);\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
+    ],
+    "name": "BD-WO-1 under BWF"
+   }
+  ]
+ },
+ {
+  "id": "t14-generate-skips-pin",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "    await resolveBracketSeats(tx, stageId);\n\n    if (stage.status === \"pending\") {\n      await tx`update stages set status = 'active' where id = ${stageId}`;\n      // W2d X-TB-2 (OC2): the table rules are fixed in the transaction that starts the stage.\n      await pinStageTableRules(tx, stageId);\n",
+  "replace": "    await resolveBracketSeats(tx, stageId);\n\n    if (stage.status === \"pending\") {\n      await tx`update stages set status = 'active' where id = ${stageId}`;\n      // W2d X-TB-2 (OC2): the table rules are fixed in the transaction that starts the stage.\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
+    ],
+    "name": "empty case first: a generated stage is pinned by the real generate"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
+    ],
+    "name": "X-TB-2 the pin comes from the real generate"
+   }
+  ]
+ },
+ {
+  "id": "t14-stage-rules-lock-off",
+  "file": "apps/web/src/server/usecases/stage-rules.ts",
+  "find": "    const locked = (await lockedStageIdsAmong(tx, [stageId])).has(stageId);\n",
+  "replace": "    const locked = false;\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
+    ],
+    "name": "X-TB-2 the pin comes from the real generate"
+   }
+  ]
+ },
+ {
+  "id": "t14-override-refusal-reads-live",
+  "file": "apps/web/src/server/usecases/table-rule-guards.ts",
+  "find": "  const rules = readable(() => tableRulesOf(stage, module));\n  if (rules === null) return;\n  const stageCfg = stageCfgOf(module, stage);\n",
+  "replace": "  const rules = readable(() => tableRulesOf({ ...stage, status: \"pending\", pin: null, pinnedAt: null }, module));\n  if (rules === null) return;\n  const stageCfg = stageCfgOf(module, stage);\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
+    ],
+    "name": "X-TB-2 the pin comes from the real generate"
+   }
+  ]
+ },
+ {
+  "id": "t14-qualification-races-in-points",
+  "file": "apps/web/src/server/public-site/qualification-view.ts",
+  "find": "  const byWins = first === \"wins\";\n",
+  "replace": "  const byWins = false;\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
+    ],
+    "name": "X-TB-3 volleyball races in matches WON"
+   }
+  ]
  }
 ]
