@@ -405,6 +405,10 @@ describe.skipIf(!HAS_DB)("W2d T9: the pin at activation (X-TB-2, OC2)", () => {
     await seedFootballCatalog();
     const football = moduleOf("football");
     const OWN_ORDER = ["points", "lots"];
+    // The signed order, typed from the spec's own table (§5.10, football `fifa2026`), never read off the engine under
+    // test: its fair-play step stands only while the cfg tracks fair play (PS-7c, FB-TB-4, owner Option 1).
+    const FIFA2026 = ["points", "h2h_points", "h2h_diff", "h2h_for", "diff", "for", "fair_play", "lots"];
+    const served = new Map<boolean, readonly string[]>();
     let checked = 0;
     for (const fairPlay of [true, false]) {
       const base = football.variants["11-a-side"] as Record<string, unknown>;
@@ -419,9 +423,13 @@ describe.skipIf(!HAS_DB)("W2d T9: the pin at activation (X-TB-2, OC2)", () => {
       expect(cfg.fairPlay, "premise: the division plays the fair-play setting asked").toBe(fairPlay);
       expect(rules.sportDefault, `fairPlay ${fairPlay}: the sport's own default`).toEqual(football.defaultTiebreakers("league", cfg));
       expect(rules.sportDefault.length).toBeGreaterThan(0);
+      served.set(fairPlay, rules.sportDefault);
       checked++;
     }
     expect(checked).toBe(2);
+    expect(served.get(true), "fairPlay on: the spec's fifa2026 order").toEqual(FIFA2026);
+    expect(served.get(false), "fairPlay off: fifa2026 without its fair-play step").toEqual(FIFA2026.filter((k) => k !== "fair_play"));
+    expect(served.get(true), "the two differ from Task 11 on").not.toEqual(served.get(false));
   }, 180_000);
 
   it("PS-5d repinStageOwnRules replaces only the saved field of the pin (source stage), keeps the rest and the pin's date — its cross-group order is the engine resolver's, derived from the NEW order (fix I4a); a pending stage is left to read live", async () => {

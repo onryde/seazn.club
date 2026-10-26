@@ -939,8 +939,10 @@ const BOOK: Readonly<Record<string, Book>> = {
       {
         // A read path folds tolerant (core/events.ts: "every READ path passes nothing"), so a stored summary no strict write
         // admits — a level 10-10 — still replays, and the kernel banks it to away (applySetSummary: the higher score, else
-        // away). The rule ties the game to the set, so the game goes where the set went, never to neither side.
-        title: "TN-TB-2 a level match tie-break replayed from a tolerant read: its one game goes to the side its set went to (ATP 4.02, RB2A-11)",
+        // away). NO rule covers this: ATP 4.02 and RB2A-11 speak only of a WON match tie-break, and one cannot end level.
+        // It is the product's own self-consistency (T11 review n1): the table's one game follows the set the kernel banked,
+        // so set % and game % name the same side, never neither. Not a proof of TN-TB-2, so the title carries no rule id.
+        title: "self-consistency, no rule: a level match tie-break replayed from a tolerant read: the game follows the banked set",
         run: (module) => {
           const cfg = cfgOf(module, "doubles-noad-mtb10");
           const lineups = defaultLineupPair(module.positions);

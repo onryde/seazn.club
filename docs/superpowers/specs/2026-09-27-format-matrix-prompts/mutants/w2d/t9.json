@@ -295,7 +295,7 @@
         "files": [
           "src/server/__tests__/slideshow-point-ratio.test.ts"
         ],
-        "name": "a badminton division's board carries the ratio"
+        "name": "a division whose sport ranks on point_ratio by default carries the ratio"
       }
     ]
   },

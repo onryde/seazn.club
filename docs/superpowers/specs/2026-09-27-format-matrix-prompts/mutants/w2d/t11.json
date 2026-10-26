@@ -415,7 +415,7 @@
     "files": [
      "src/competition/tables-rulebook.test.ts"
     ],
-    "name": "TN-TB-2 a level match tie-break replayed from a tolerant read"
+    "name": "self-consistency, no rule: a level match tie-break replayed from a tolerant read"
    }
   ]
  },

@@ -90,6 +90,11 @@ const moduleOf = (key: string) => {
 };
 const GENERIC = moduleOf("generic");
 const BADMINTON = moduleOf("badminton");
+/** A badminton stage ranked POINTS-first, off the engine: its Swiss order (OC1), which is also the pre-W2d league default
+ *  a stage active at the W2d deploy keeps in its pin (spec §5.10: the new defaults reach only stages not yet active, B1).
+ *  Since W2d its league default is wins-first (BWF 16.2), where `wins` is the race itself, not a step after points — so
+ *  the points-first scenes below hand the stage this order as its own. */
+const BADMINTON_POINTS_FIRST = [...defaultOrderOf(BADMINTON, "swiss")];
 const ICEHOCKEY = moduleOf("icehockey");
 const FOOTBALL = moduleOf("football");
 const CFG = { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false };
@@ -1573,7 +1578,9 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
       ledgerRow("D", 4, 0, 2, 0, { ...sets(1 + cl.sets_won!, 2 + cl.sets_lost!), ...(scored ? ruleAward(0, 3) : {}) }),
     ];
     const fixtures = [walkover(1, "A", "D"), won(1, "C", "B"), won(2, "A", "C"), won(2, "B", "D"), open(3, "A", "B"), open(3, "C", "D")];
-    const over = { cascade: [...defaultOrderOf(BADMINTON)], bounds: BB, awardAddsToLedger: divisionAwardAddsToLedger(BADMINTON, {}) };
+    // A points-first badminton order (a pinned pre-W2d stage's), whose step after `wins` is set ratio.
+    expect(BADMINTON_POINTS_FIRST.slice(0, 3), "premise: points, then wins, then set ratio").toEqual(["points", "wins", "set_ratio"]);
+    const over = { cascade: BADMINTON_POINTS_FIRST, bounds: BB, awardAddsToLedger: divisionAwardAddsToLedger(BADMINTON, {}) };
     const target = "If you finish level on points with Bo, set ratio decides: win your next match by 2 or more to finish ahead.";
     const plain = must(view({ kind: "league", rows: rows(false), fixtures }, over)).rows.D!;
     expect(plain.whatIf).not.toBe(target);
@@ -1586,7 +1593,7 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     const stale = must(view({ kind: "league", rows: rows(false), fixtures }, { ...over, awardAddsToLedger: false })).rows.D!;
     expect(stale.whatIf).not.toBe(plain.whatIf);
   });
-  it("winsOnly from the bounds IN FORCE: badminton skips `wins` for set ratio", () => {
+  it("winsOnly from the bounds IN FORCE: badminton (a points-first stage) skips `wins` for set ratio", () => {
     const bb = divisionPointsBounds(BADMINTON, {})!;
     expect(bb.winsOnly).toBe(true);
     const bw = bb.winFloor;
@@ -1598,7 +1605,8 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
       row("C", 3, 1, 2, [0, 0], { points: bw, metrics: sets(2, 3) }),
       row("D", 4, 0, 2, [0, 0], { points: 0, metrics: sets(1, 4) }),
     ];
-    const cascade = [...defaultOrderOf(BADMINTON)];
+    const cascade = BADMINTON_POINTS_FIRST;
+    expect(cascade.slice(0, 3), "premise: points, then wins, then set ratio").toEqual(["points", "wins", "set_ratio"]);
     const d = must(view({ ...s, rows }, { bounds: bb, cascade })).rows.D!;
     expect(d.whatIf).toContain("set ratio decides");
     // Points that did not come from wins at one rate (carry-over) put `wins` back.

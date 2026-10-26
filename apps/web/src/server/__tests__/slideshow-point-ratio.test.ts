@@ -4,10 +4,11 @@
 // pin, else the division's override, else the module's default) names
 // `point_ratio` (`standingsColumns` / `DERIVED_METRICS`).
 //
-// The slide used to hardcode #, entrant, P, W, D, L, Pts, so a badminton, table
-// tennis, volleyball or carrom division — whose cascades all rank on
-// `point_ratio` — showed a table on the wall that left out the number the tie
-// was decided on, while the same division's public page printed it.
+// The slide used to hardcode #, entrant, P, W, D, L, Pts, so a division whose
+// cascade ranks on `point_ratio` (volleyball and carrom by default; badminton and
+// table tennis too until W2d's signed defaults, spec §5.10) showed a table on the
+// wall that left out the number the tie was decided on, while the same
+// division's public page printed it.
 //
 // Conventions (RULES.md, test-case design):
 //  - the "which sports get the column" question is answered by the REAL normal
@@ -261,8 +262,19 @@ describe.skipIf(!HAS_DB)("slideshow standings slide — the Pts ratio column (or
     return { auth, division, stage: stage! };
   }
 
-  it("a badminton division's board carries the ratio, computed from its snapshot's points ledger", async () => {
-    const { auth, division } = await seededDivision("badminton", "bwf", {});
+  // The sport is the first shipped module whose DEFAULT order ranks on point_ratio, read off the engine (badminton by
+  // name until W2d's §5.10 order, BWF 16.2, which ranks on the point DIFFERENCE instead), under its first variant.
+  const ratioSport = () => {
+    const m = builtinModules.find((x) => defaultOrderOf(x).includes("point_ratio"));
+    if (!m) throw new Error("no shipped module ranks on point_ratio by default (the pair below proves nothing)");
+    const variant = Object.keys(m.variants)[0];
+    if (variant === undefined) throw new Error(`${m.key} declares no variant`);
+    return { m, variant };
+  };
+
+  it("a division whose sport ranks on point_ratio by default carries the ratio, computed from its snapshot's points ledger", async () => {
+    const { m, variant } = ratioSport();
+    const { auth, division } = await seededDivision(m.key, variant, {});
     const slides = await buildDivisionSlides(auth, division.id, "Open");
     const slide = slides.find((s): s is StandingsSlide => s.kind === "standings");
     expect(slide, "a standings slide").toBeDefined();
@@ -293,11 +305,11 @@ describe.skipIf(!HAS_DB)("slideshow standings slide — the Pts ratio column (or
     expect(slide!.rows.map((r) => r.pointRatio)).toEqual(LEDGER.map((l) => l.want));
   });
 
-  it("a division whose OWN cascade drops point_ratio from badminton loses the column (same rows as the badminton case above)", async () => {
-    const badminton = builtinModules.find((m) => m.key === "badminton")!;
-    expect(defaultOrderOf(badminton), "badminton's default cascade").toContain("point_ratio");
-    const dropped = defaultOrderOf(badminton).filter((k) => k !== "point_ratio");
-    const { auth, division } = await seededDivision("badminton", "bwf", {}, dropped);
+  it("a division whose OWN cascade drops point_ratio from a sport that ranks on it loses the column (same rows as the ratio-sport case above)", async () => {
+    const { m, variant } = ratioSport();
+    expect(defaultOrderOf(m), `${m.key}'s default cascade`).toContain("point_ratio");
+    const dropped = defaultOrderOf(m).filter((k) => k !== "point_ratio");
+    const { auth, division } = await seededDivision(m.key, variant, {}, dropped);
     const slides = await buildDivisionSlides(auth, division.id, "Open");
     const slide = slides.find((s): s is StandingsSlide => s.kind === "standings");
     expect(slide, "a standings slide").toBeDefined();

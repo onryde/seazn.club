@@ -43,7 +43,9 @@ import { t } from "@/lib/i18n-runtime";
 import { LOCALES } from "@/lib/i18n-constants";
 import { ratioText } from "@seazn/engine/competition";
 import { builtinModules } from "@seazn/engine/sports";
+import type { AnySportModule } from "@seazn/engine/sport";
 import { defaultOrderOf } from "@seazn/engine/testkit";
+import { unpinnedRulesDoc } from "@/server/engine-db/__tests__/helpers/table-rules-doc";
 
 /** Every plain `ui` key the board renders. */
 const PLAIN_KEYS = [
@@ -227,22 +229,34 @@ describe("public /present kiosk: chrome in the org's locale (R10e u1)", () => {
 // the page still sends, would leave every one of those suites green.
 //
 // Expected values are DERIVED: the label from each locale's own catalog, the
-// cell from the engine's `ratioText`, and the sport that must NOT get the column
-// is the first shipped module whose default cascade lacks `point_ratio` (the
-// very same rows, ledger included — only the division's module differs).
-const RATIO_SPORT = builtinModules.find((m) => m.key === "badminton")!;
-const NO_RATIO_SPORT = builtinModules.find((m) => !defaultOrderOf(m).includes("point_ratio"))!;
+// cell from the engine's `ratioText`, the sport that MUST get the column is the
+// first shipped module whose default cascade ranks on `point_ratio` (badminton
+// by name until W2d's §5.10 order, BWF 16.2, ranked on the point difference),
+// and the sport that must NOT is the first whose default lacks it (the very same
+// rows, ledger included — only the division's module differs).
+const RATIO_SPORT = builtinModules.find((m) => defaultOrderOf(m).includes("point_ratio"));
+const NO_RATIO_SPORT = builtinModules.find((m) => !defaultOrderOf(m).includes("point_ratio"));
+if (!RATIO_SPORT || !NO_RATIO_SPORT) throw new Error("the shipped modules no longer split on point_ratio (the pair below proves nothing)");
 const LEDGER_WON = 63;
 const LEDGER_LOST = 42;
 
-/** The public division with real sport pins and snapshot rows that carry a points ledger. */
+/** The public division with real sport pins and snapshot rows that carry a points ledger. Its group stage carries its
+ *  table rules as the one loader serves them (`PublicStage.table_rules`, W2d Task 9) — the ONLY order the slide reads
+ *  (`stage.table_rules.tiebreakers`): an unpinned stage's live layers, the division's override else the sport's
+ *  default. (Before this fixture carried them, every stage arrived with none, so no sport could get the column: the
+ *  positive cases were red on T9's tip and the override case below passed with nothing to drop.) */
 const sportData = (
   default_locale: string,
-  sport: { key: string; version: string },
+  sport: AnySportModule,
   tiebreakers: string[] | null = null,
 ) => ({
   ...orgData(default_locale),
   division: { id: "d1", name: "Open", sport_key: sport.key, module_version: sport.version, tiebreakers },
+  stages: DIVISION.stages.map((s) =>
+    s.kind === "group"
+      ? { ...s, table_rules: unpinnedRulesDoc({ module: sport, kind: s.kind, divisionConfig: {}, divisionTiebreakers: tiebreakers }) }
+      : s,
+  ),
   standings: [
     {
       stage_id: "sg",
@@ -269,7 +283,7 @@ describe("public /present kiosk: the Pts ratio column, through the real page and
     expect(defaultOrderOf(NO_RATIO_SPORT)).not.toContain("point_ratio");
   });
 
-  it.each([...LOCALES])("division kiosk, badminton, %s org: the standings slide carries the ratio header in the org's language and both rows' ratios", async (locale) => {
+  it.each([...LOCALES])(`division kiosk, ${RATIO_SPORT.key} (ranks on point_ratio), %s org: the standings slide carries the ratio header in the org's language and both rows' ratios`, async (locale) => {
     const dict = await getDictionary(locale, "ui");
     const label = t(dict, "slideshow.col.pointRatio");
     expect(label.startsWith("slideshow."), `${locale} resolves the key`).toBe(false);
@@ -291,15 +305,16 @@ describe("public /present kiosk: the Pts ratio column, through the real page and
     expect(markups.some((h) => shows(h, t(en, "slideshow.col.points")))).toBe(true);
   });
 
-  it("division kiosk: the division's own cascade override is honoured (drop it from badminton: no column)", async () => {
+  it(`division kiosk: the division's own cascade override is honoured (drop it from ${RATIO_SPORT.key}: no column)`, async () => {
     const en = await getDictionary("en", "ui");
     const dropped = defaultOrderOf(RATIO_SPORT).filter((k) => k !== "point_ratio");
+    expect(dropped, "premise: there was a point_ratio step to drop").toHaveLength(defaultOrderOf(RATIO_SPORT).length - 1);
     const markups = await divisionKioskMarkups(sportData("en", RATIO_SPORT, dropped));
     expect(markups.some((h) => shows(h, t(en, "slideshow.col.pointRatio")))).toBe(false);
     expect(markups.some((h) => shows(h, t(en, "slideshow.col.points")))).toBe(true);
   });
 
-  it("competition kiosk, badminton, es org: the competition board's own spread reaches the builder too", async () => {
+  it(`competition kiosk, ${RATIO_SPORT.key}, es org: the competition board's own spread reaches the builder too`, async () => {
     const es = await getDictionary("es", "ui");
     getPublicCompetition.mockResolvedValue({
       org: { default_locale: "es" },
