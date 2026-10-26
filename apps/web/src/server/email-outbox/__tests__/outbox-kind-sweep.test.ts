@@ -18,9 +18,10 @@
 //     that records the refund, with the refund id as its ref and once-key, and the request that did it makes the first attempt.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
-// SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list, so every kind in the registry is swept. A kind that is neither
-// moved nor listed fails by name, and so does a kind that is listed while it has a scenario (a stale entry would skip the sweep), and so do
-// the three lists when they disagree.
+// SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
+// moved, so they are back in NOT_YET_MOVED until each kind task (wave 2, T2-T9) adds the scenario and deletes the entry. A kind that is
+// neither moved nor listed fails by name, and so does a kind that is listed while it has a scenario (a stale entry would skip the sweep), and
+// so do the three lists when they disagree.
 //
 // Sport: not applicable. These emails do not vary by sport (spec, Test strategy 4).
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -79,6 +80,17 @@ const SPEC_KINDS = [
   "registration_promoted",
   "refund_issued",
   "solo_signup_assigned",
+  // Wave 2, in the table's row order.
+  "registration_dispute_alert",
+  "registration_dispute_lost",
+  "sponsor_invoice",
+  "sponsor_receipt",
+  "sponsor_refund",
+  "sponsor_dispute_alert",
+  "sponsor_dispute_won",
+  "sponsor_dispute_lost",
+  "pass_revoked",
+  "trial_ending",
 ] as const satisfies readonly OutboxKind[];
 
 /** The legend: [to, transactional]. A = an account, resolved at send; L = a literal address; S = the staff address. T = transactional. */
@@ -90,7 +102,32 @@ const SPEC_FACTS: KindFacts = {
   registration_promoted: ["literal", false],
   refund_issued: ["literal", false],
   solo_signup_assigned: ["literal", false],
+  registration_dispute_alert: ["account", false],
+  registration_dispute_lost: ["account", false],
+  sponsor_invoice: ["literal", false],
+  sponsor_receipt: ["literal", false],
+  sponsor_refund: ["literal", false],
+  sponsor_dispute_alert: ["account", false],
+  sponsor_dispute_won: ["account", false],
+  sponsor_dispute_lost: ["account", false],
+  pass_revoked: ["account", false],
+  trial_ending: ["account", true],
 };
+
+/** Wave 2's kinds, typed from the spec's table: registered by T1 before any producer moved, so each is still on its direct sender until its
+ *  kind task (T2-T9) deletes it from NOT_YET_MOVED, and here. */
+const WAVE_2_UNMOVED: readonly OutboxKind[] = [
+  "registration_dispute_alert",
+  "registration_dispute_lost",
+  "sponsor_invoice",
+  "sponsor_receipt",
+  "sponsor_refund",
+  "sponsor_dispute_alert",
+  "sponsor_dispute_won",
+  "sponsor_dispute_lost",
+  "pass_revoked",
+  "trial_ending",
+];
 
 /** What the real producers create beyond the rows the hand-made scenarios name: the seeded round's people and organisation. (The
  *  addresses this run mails all start with RUN, so the accounts the magic-link route makes and the ones `accountAt` makes are found
@@ -132,18 +169,37 @@ afterEach(() => {
 });
 
 describe("the spec's lists (no database)", () => {
-  it("the spec lists seven kinds and the code's registry is exactly them, in the spec's order", () => {
+  it("the spec lists seventeen kinds and the code's registry is exactly them, in the spec's order", () => {
     expect([...OUTBOX_KINDS]).toEqual([...SPEC_KINDS]);
-    expect(SPEC_KINDS).toHaveLength(7);
+    expect(SPEC_KINDS).toHaveLength(17);
   });
 
-  it("the legend has SIX literal kinds (magic_link and the five wave-1 mails) and one account kind (chess_invite) (R-T2a)", () => {
+  it("the legend has NINE literal kinds, EIGHT account kinds and no staff kind", () => {
     const by = (to: string): string[] => SPEC_KINDS.filter((k) => SPEC_FACTS[k][0] === to);
-    expect(by("literal")).toEqual(["magic_link", "registration_confirmation", "payment_reminder", "registration_promoted", "refund_issued", "solo_signup_assigned"]);
-    expect(by("account")).toEqual(["chess_invite"]);
-    expect(by("staff"), "wave 1 has no staff kind").toEqual([]);
-    // The two phase-1 kinds are transactional, the five registration and refund mails are not.
-    expect(SPEC_KINDS.filter((k) => SPEC_FACTS[k][1])).toEqual(["magic_link", "chess_invite"]);
+    expect(by("literal")).toEqual([
+      "magic_link",
+      "registration_confirmation",
+      "payment_reminder",
+      "registration_promoted",
+      "refund_issued",
+      "solo_signup_assigned",
+      "sponsor_invoice",
+      "sponsor_receipt",
+      "sponsor_refund",
+    ]);
+    expect(by("account")).toEqual([
+      "chess_invite",
+      "registration_dispute_alert",
+      "registration_dispute_lost",
+      "sponsor_dispute_alert",
+      "sponsor_dispute_won",
+      "sponsor_dispute_lost",
+      "pass_revoked",
+      "trial_ending",
+    ]);
+    expect(by("staff"), "waves 1 and 2 have no staff kind").toEqual([]);
+    // The two phase-1 kinds and the trial-ending notice are transactional (each keeps its sender's flag); the rest are not.
+    expect(SPEC_KINDS.filter((k) => SPEC_FACTS[k][1])).toEqual(["magic_link", "chess_invite", "trial_ending"]);
   });
 
   it("the not-yet-moved list names only spec kinds, once each, and leaves at least one kind to sweep", () => {
@@ -168,10 +224,13 @@ describe("the spec's lists (no database)", () => {
       checked += 1;
     }
     expect(checked, "anti-vacuity: every kind was judged").toBe(SPEC_KINDS.length);
-    // Wave 1 is closed (T12): every kind has moved, so no kind is listed and none has a direct sender left. The moved side is what the loop
-    // above judged for all of them; the unmoved side of the equivalence has no member to judge until a later wave registers a kind early.
-    expect(NOT_YET_MOVED, "wave 1 is closed: every kind has moved to the outbox").toEqual([]);
-    expect(Object.values(KIND_DIRECT_SENDER).filter((x) => x !== null), "and none still names a direct sender").toEqual([]);
+    // Wave 1 is closed (T12) and wave 2's T1 registered its ten kinds before any producer moved: exactly those ten are unmoved, and they
+    // are exactly the kinds that still name a direct sender. Both sides of the equivalence above have members to judge.
+    expect(NOT_YET_MOVED, "the unmoved kinds are wave 2's, in the spec's order").toEqual(WAVE_2_UNMOVED);
+    expect(
+      SPEC_KINDS.filter((k) => KIND_DIRECT_SENDER[k] !== null),
+      "and they, and no other kind, still name a direct sender",
+    ).toEqual(WAVE_2_UNMOVED);
     expect(SPEC_KINDS.length - NOT_YET_MOVED.length).toBeGreaterThan(0);
     const senders = Object.values(KIND_DIRECT_SENDER).filter((x): x is string => x !== null);
     expect(new Set(senders).size, "no two kinds share a direct sender").toBe(senders.length);
@@ -461,9 +520,10 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );
 
-    expect(out.checked, "anti-vacuity: every kind the spec lists was swept (wave 1 closed: none is left unmoved)").toBe(SPEC_KINDS.length);
+    const moved = SPEC_KINDS.filter((k) => !NOT_YET_MOVED.includes(k));
+    expect(out.checked, "anti-vacuity: every kind the spec lists that has moved was swept").toBe(SPEC_KINDS.length - NOT_YET_MOVED.length);
     expect(out.checked).toBeGreaterThan(0);
-    expect(out.kinds, "and they are exactly the spec's kinds, in the spec's order").toEqual([...SPEC_KINDS]);
+    expect(out.kinds, "and they are exactly the spec's moved kinds, in the spec's order").toEqual(moved);
   }, 60_000);
 });
 

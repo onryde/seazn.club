@@ -7,7 +7,9 @@
 //
 // What is checked, and how:
 //  - WHICH kinds are account kinds is the engine's own declaration (`OUTBOX_KIND_FACTS`), compared with a list typed here from the
-//    spec (`chess_invite` is the only one). A new account kind is then a failure that asks for a decision here, not a quiet pass.
+//    spec (`chess_invite` and wave 2's seven). A new account kind is then a failure that asks for a decision here, not a quiet pass.
+//  - Every account kind is swept through its real producer, except those in PRODUCERS_PENDING: wave 2's kinds, registered (T1) before
+//    their producers moved. Each kind task (T2-T9) adds its producer and deletes its entry; T10 deletes the list.
 //  - The bodies are the REAL producer's: `openRound` renders the invite with the real `externalPlayInviteEmail` (NOT replaced, unlike the
 //    sibling suites: their stand-in puts the address in the body on purpose so the transport double can read it) and queues it. Only
 //    the transport is replaced, and it answers 503 so every row stays `queued` with its sealed body. A row that had been sent has no
@@ -29,8 +31,29 @@ import { openRound } from "@/server/usecases/external-play/open-round";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
-/** Typed from the spec (phase 3, "Recipient"): the kinds whose recipient is an account. */
-const SPEC_ACCOUNT_KINDS: readonly OutboxKind[] = ["chess_invite"];
+/** Typed from the spec (phase 3, the kind table's "To" column, A): the kinds whose recipient is an account, in the table's order. */
+const SPEC_ACCOUNT_KINDS: readonly OutboxKind[] = [
+  "chess_invite",
+  "registration_dispute_alert",
+  "registration_dispute_lost",
+  "sponsor_dispute_alert",
+  "sponsor_dispute_won",
+  "sponsor_dispute_lost",
+  "pass_revoked",
+  "trial_ending",
+];
+
+/** Account kinds whose producer has not moved to the outbox yet, so there is no real producer to drive. Each kind task deletes its own
+ *  entry when it adds its producer to PRODUCERS below; T10 deletes the list. */
+const PRODUCERS_PENDING: readonly OutboxKind[] = [
+  "registration_dispute_alert",
+  "registration_dispute_lost",
+  "sponsor_dispute_alert",
+  "sponsor_dispute_won",
+  "sponsor_dispute_lost",
+  "pass_revoked",
+  "trial_ending",
+];
 
 beforeEach(() => stubOutboxEnv());
 afterAll(async () => {
@@ -47,28 +70,34 @@ describe("which kinds are addressed to an account (no database)", () => {
 });
 
 describe.skipIf(!HAS_DB)("an account kind's sealed body never names its recipient (real producer, real renderer)", () => {
-  // One producer per account kind: the real code path that writes the kind's rows, returning the fixture ids its rows hang off.
-  const PRODUCERS: Readonly<Record<string, () => Promise<string[]>>> = {
+  // One producer per account kind that has moved: the real code path that writes the kind's rows. It returns the ids of the rows it wrote
+  // and a pattern the kind's own body must carry (the positive pair: an empty or unreadable body would pass every absence check).
+  const PRODUCERS: Readonly<Partial<Record<OutboxKind, () => Promise<{ rowIds: string[]; positive: RegExp }>>>> = {
     chess_invite: async () => {
       const r = await seedOnlineChessRound({ fixtures: 2 });
       const out = await openRound({ stageId: r.stageId, roundNo: r.roundNo, actorUserId: r.ownerUserId });
       expect(out, "premise: the real open invited the round").toMatchObject({ opened: true });
-      return r.boards.map((b) => b.fixtureId);
+      const fixtureIds = r.boards.map((b) => b.fixtureId);
+      const rows = await sql<{ id: string }[]>`
+        select id from email_outbox where kind = 'chess_invite' and split_part(ref_id, ':', 1) = any(${fixtureIds}::text[])`;
+      expect(rows.length, "anti-vacuity: the chess_invite producer wrote a row per seat").toBeGreaterThanOrEqual(2);
+      // The invite carries the match link.
+      return { rowIds: rows.map((x) => x.id), positive: /href="https?:\/\// };
     },
   };
 
-  it("chess_invite (and every other account kind): the recipient's address is absent from the subject, the html and the text", async () => {
+  it("every account kind with a producer: the recipient's address is absent from the subject, the html and the text", async () => {
+    const swept = SPEC_ACCOUNT_KINDS.filter((k) => !PRODUCERS_PENDING.includes(k));
+    expect(Object.keys(PRODUCERS).sort(), "a producer for exactly the account kinds that are not pending").toEqual([...swept].sort());
     let kindsChecked = 0;
     let rowsChecked = 0;
-    for (const kind of SPEC_ACCOUNT_KINDS) {
-      const produce = PRODUCERS[kind];
-      expect(produce, `a producer for the account kind ${kind}`).toBeDefined();
-      const fixtureIds = await produce!();
+    for (const kind of swept) {
+      const { rowIds, positive } = await PRODUCERS[kind]!();
       const rows = await sql<{ id: string; recipient: string; recipient_user_id: string | null; subject: string; status: string; body_sealed: Buffer | null }[]>`
         select id, recipient, recipient_user_id, subject, status, body_sealed
           from email_outbox
-         where kind = ${kind} and split_part(ref_id, ':', 1) = any(${fixtureIds}::text[])`;
-      expect(rows.length, `anti-vacuity: the ${kind} producer wrote rows`).toBeGreaterThanOrEqual(2);
+         where kind = ${kind} and id = any(${rowIds}::uuid[])`;
+      expect(rows.length, `anti-vacuity: the ${kind} producer's rows were found`).toBeGreaterThanOrEqual(1);
       for (const row of rows) {
         expect(row.status, `premise: ${kind} row still holds its sealed body`).toBe("queued");
         expect(row.body_sealed, `premise: ${kind} row has a body to open`).not.toBeNull();
@@ -79,14 +108,15 @@ describe.skipIf(!HAS_DB)("an account kind's sealed body never names its recipien
         expect(row.subject.toLowerCase(), `${kind}: subject`).not.toContain(address);
         expect(body.html.toLowerCase(), `${kind}: html`).not.toContain(address);
         expect(body.text.toLowerCase(), `${kind}: text`).not.toContain(address);
-        // The positive pair: this is the invite, opened. An empty or unreadable body would pass the three checks above.
+        // The positive pair: this is the kind's own mail, opened. An empty or unreadable body would pass the three checks above.
         expect(body.text.length, `${kind}: the text really was opened`).toBeGreaterThan(20);
-        expect(body.html, `${kind}: the html carries the match link`).toMatch(/href="https?:\/\//);
+        expect(positive.test(body.text) || positive.test(body.html), `${kind}: the body carries ${positive}`).toBe(true);
         rowsChecked += 1;
       }
       kindsChecked += 1;
     }
-    expect(kindsChecked, "every account kind was checked").toBe(SPEC_ACCOUNT_KINDS.length);
-    expect(rowsChecked, "anti-vacuity: bodies were opened").toBeGreaterThanOrEqual(2);
+    expect(kindsChecked, "every account kind that is not pending was checked").toBe(SPEC_ACCOUNT_KINDS.length - PRODUCERS_PENDING.length);
+    expect(kindsChecked, "anti-vacuity: at least one account kind was swept").toBeGreaterThan(0);
+    expect(rowsChecked, "anti-vacuity: bodies were opened, at least one per kind").toBeGreaterThanOrEqual(kindsChecked);
   });
 });

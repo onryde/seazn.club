@@ -46,13 +46,16 @@ describe("email outbox vocabularies (constants.ts)", () => {
     expect([...OUTBOX_STATUSES]).toEqual(SPEC_STATUSES);
   });
 
-  it("the kinds are the spec's seven, in the spec's wave order", () => {
-    // Typed from the phase-3 spec's kind table (wave order), never read from constants.ts.
+  it("the kinds are the spec's seventeen, in the spec's wave order", () => {
+    // Typed from the phase-3 spec's kind table (wave order), never read from constants.ts: the two phase-1 kinds, the
+    // five wave-1 kinds, then wave 2's ten in the table's row order.
     const SPEC_KINDS = [
       "magic_link", "chess_invite", "registration_confirmation", "payment_reminder", "registration_promoted",
       "refund_issued", "solo_signup_assigned",
+      "registration_dispute_alert", "registration_dispute_lost", "sponsor_invoice", "sponsor_receipt", "sponsor_refund",
+      "sponsor_dispute_alert", "sponsor_dispute_won", "sponsor_dispute_lost", "pass_revoked", "trial_ending",
     ];
-    expect(SPEC_KINDS.length).toBe(7);
+    expect(SPEC_KINDS.length).toBe(17);
     expect([...OUTBOX_KINDS]).toEqual(SPEC_KINDS);
   });
 
