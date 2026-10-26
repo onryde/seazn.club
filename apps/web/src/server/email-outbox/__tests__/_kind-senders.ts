@@ -48,7 +48,6 @@ export const SENDER_ALLOWLIST: readonly string[] = [
   "sendOfficialAssignmentChangedEmail",
   "sendOfficialInviteEmail",
   "sendPassCreditReversalIncompleteAlertEmail",
-  "sendPassRevokedEmail",
   "sendPassRungMismatchAlertEmail",
   "sendPassUnknownCompetitionAlertEmail",
   "sendRegistrationRefundFailedAlertEmail",
@@ -70,7 +69,6 @@ export const SENDER_ALLOWLIST: readonly string[] = [
 /** Kinds whose producer still mails through a `send*`. Wave 1 emptied it (T8-T12); wave 2's T1 registered its ten kinds before their
  *  producers moved, so they are listed here until their kind task (T2-T9) deletes each one. The sweep covers every kind not listed. */
 export const NOT_YET_MOVED: readonly OutboxKind[] = [
-  "pass_revoked",
   "trial_ending",
 ];
 
@@ -91,7 +89,7 @@ export const KIND_DIRECT_SENDER: Readonly<Record<OutboxKind, string | null>> = {
   sponsor_dispute_alert: null,
   sponsor_dispute_won: null,
   sponsor_dispute_lost: null,
-  pass_revoked: "sendPassRevokedEmail",
+  pass_revoked: null,
   trial_ending: "sendTrialEndingEmail",
 };
 

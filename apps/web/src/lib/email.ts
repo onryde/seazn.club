@@ -665,17 +665,12 @@ export async function sponsorDisputeWonEmail(args: SponsorDisputeWonArgs, locale
   return sponsorDisputeWonTemplate(args, dict);
 }
 
-export interface PassRevokedEmail extends PassRevokedArgs {
-  to: string;
-  locale?: Locale;
-}
-
-/** Owner notice when an Event Pass is refunded (P0-3a): the pass is revoked and
- *  the competition returns to the plan's active-competition allowance. */
-export async function sendPassRevokedEmail(opts: PassRevokedEmail): Promise<boolean> {
-  const { to, locale = "en", ...args } = opts;
+/** Owner notice when an Event Pass is refunded (P0-3a): the pass is revoked and the competition returns to the plan's active-competition
+ *  allowance, in the owner's language. It is queued on the email outbox by `queuePassRevokedEmail` (billing-events.ts, kind
+ *  `pass_revoked`) in the transaction that deletes the pass; nothing sends it directly. */
+export async function passRevokedEmail(args: PassRevokedArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...passRevokedTemplate(args, dict) });
+  return passRevokedTemplate(args, dict);
 }
 
 export interface StaffDisputeAlertEmail extends StaffDisputeAlertArgs {

@@ -35,6 +35,8 @@
 //   - sponsor_dispute_lost: the real `handleSponsorDispute` (`closed`, lost) on a paid sponsor order whose owner's account is `nl`. The
 //     dispute names no charge, so the balance recovery is skipped and Stripe is not called; the notice is queued to the owner's account
 //     after the write-off and the worker makes the first attempt.
+//   - pass_revoked: the real `processStripeEvent` (`charge.refunded`, a full refund) on an Event Pass in an org whose owner's account is
+//     `nl`: the notice is queued to the owner's account in the transaction that deletes the pass, and the worker makes the first attempt.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -82,8 +84,9 @@ import {
   withdrawRegistrationPublic,
 } from "@/server/usecases/registrations";
 import { handleSponsorDispute, handleSponsorPaymentSucceeded, refundSponsorOrder, startSponsorCheckout } from "@/server/usecases/sponsors";
+import { processStripeEvent } from "@/server/usecases/billing-events";
 import { seedOnlineChessRound } from "@/server/usecases/__tests__/_external-play-seed";
-import { seedSponsorOrder, seedSponsorOrg } from "@/server/usecases/__tests__/_money-fixtures";
+import { seedPassOrg, seedSponsorOrder, seedSponsorOrg } from "@/server/usecases/__tests__/_money-fixtures";
 import { SETTINGS_BASE, asOwner, fakeSession, rig, seedOrg, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
 import { DISPATCH_NOW_BUDGET_MS, DISPATCH_NOW_MARGIN_MS, OUTBOX_KINDS, idempotencyKey, type OutboxKind } from "../constants";
 import { dispatchNow } from "../attempt";
@@ -146,7 +149,6 @@ const SPEC_FACTS: KindFacts = {
 /** Wave 2's kinds, typed from the spec's table: registered by T1 before any producer moved, so each is still on its direct sender until its
  *  kind task (T2-T9) deletes it from NOT_YET_MOVED, and here. */
 const WAVE_2_UNMOVED: readonly OutboxKind[] = [
-  "pass_revoked",
   "trial_ending",
 ];
 
@@ -681,6 +683,29 @@ async function sponsorDisputeLostScenario(): Promise<KindScenario> {
   };
 }
 
+/** The real refund webhook (`charge.refunded`, a full refund) on an Event Pass: the org's owner (account `nl`, org default `en`; the
+ *  org's `created_by` is another account) is told on the outbox in the transaction that deletes the pass, and the first attempt is the
+ *  worker's. Both accounts are at RUN addresses, so they are found. */
+async function passRevokedScenario(): Promise<KindScenario> {
+  const intent = `pi_${RUN}_pass`;
+  const o = await seedPassOrg({ intent, ownerLocale: "nl", defaultLocale: "en", prefix: RUN });
+  made.orgIds.push(o.orgId);
+  made.userIds.push(o.ownerId, o.trapId);
+  return {
+    locale: "nl",
+    subjectKey: "passRevoked.subject",
+    subjectVars: { rung: dictionarySubject("nl", "passRevoked.rung.m", {}) },
+    recipient: o.ownerEmail,
+    firstAttempt: "worker",
+    run: async () => {
+      const charge = { id: `ch_${RUN}_pass`, payment_intent: intent, refunded: true, amount_refunded: 2900 };
+      await processStripeEvent({ id: `evt_${RUN}_pass`, type: "charge.refunded", data: { object: charge } } as unknown as Stripe.Event);
+      const [pass] = await sql`select 1 from competition_passes where stripe_payment_intent = ${intent}`;
+      expect(pass, "premise: the real handler revoked the pass").toBeUndefined();
+    },
+  };
+}
+
 describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (DB)", () => {
   it("every outbox kind is swept through its real producer", async () => {
     // The Spanish subject differs from the English one, so a producer that dropped the locale would be seen (the right answer is not
@@ -741,6 +766,11 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
       dictionarySubject("en", sponsorDisputeLost.subjectKey, sponsorDisputeLost.subjectVars),
     );
 
+    const passRevoked = await passRevokedScenario();
+    expect(dictionarySubject("nl", passRevoked.subjectKey, passRevoked.subjectVars)).not.toBe(
+      dictionarySubject("en", passRevoked.subjectKey, { rung: dictionarySubject("en", "passRevoked.rung.m", {}) }),
+    );
+
     const out = await forEachOutboxKind(
       {
         magic_link: magicLinkScenario(),
@@ -758,6 +788,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         sponsor_dispute_alert: sponsorDisputeAlert,
         sponsor_dispute_won: sponsorDisputeWon,
         sponsor_dispute_lost: sponsorDisputeLost,
+        pass_revoked: passRevoked,
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );

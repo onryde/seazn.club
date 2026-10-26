@@ -1,8 +1,9 @@
-// Sponsor-money fixtures (phase 3 wave 2, Batch B), shared by the sponsor outbox tests, the kind sweep and the older sponsor suites.
-// Real Postgres rows only; nothing here calls a usecase. Every address a fixture makes starts with `prefix`, so a caller whose cleanup
-// finds its rows by address (the kind sweep's RUN prefix) can hand its own in.
+// Money fixtures (phase 3 wave 2): sponsor orders (Batch B), Event Pass orgs and trialing billing groups (Batch D), shared by the outbox
+// tests, the kind sweep and the older suites they came from. Real Postgres rows only; nothing here calls a usecase. Every address a fixture
+// makes starts with `prefix`, so a caller whose cleanup finds its rows by address (the kind sweep's RUN prefix) can hand its own in.
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
+import type { PassKey } from "@/lib/currency";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { Locale } from "@/lib/i18n-constants";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -114,6 +115,41 @@ export async function seedSponsorOrder(opts: {
             25000, 'gbp', ${opts.status}, ${sponsorId}, ${paid ? intent : null}, ${paid ? new Date() : null})
     returning id`;
   return { orderId, orgId, sponsorId, intent, sponsorEmail, ownerId, ownerEmail, orgName, packageName };
+}
+
+/**
+ * An organisation with one competition, for the Event Pass refund path. Moved from billing-pass-revoke.test.ts. The org's owner (an
+ * account at `<prefix>-owner-…@test.local`, with the given account language, seated in `org_members` as `owner`) is a DIFFERENT account
+ * from `organizations.created_by` (`<prefix>-trap-…`, `trapId`): a notice to the owner must find them by membership, and `created_by` is
+ * the trap. With `intent`, the competition holds an Event Pass bought with that payment intent, of the given rung (default the M rung).
+ * The org and competition names carry no `&`, `<` or `>`.
+ */
+export async function seedPassOrg(
+  opts: { intent?: string; passKey?: PassKey; ownerLocale?: string | null; defaultLocale?: Locale; prefix?: string } = {},
+): Promise<{ orgId: string; compId: string; orgName: string; compName: string; ownerId: string; ownerEmail: string; trapId: string }> {
+  const suffix = randomUUID().slice(0, 8);
+  const prefix = opts.prefix ?? "pass";
+  const ownerEmail = `${prefix}-owner-${suffix}@test.local`;
+  const [{ id: ownerId }] = await sql<{ id: string }[]>`
+    insert into users (email, display_name, email_verified, locale)
+    values (${ownerEmail}, 'Owner', true, ${opts.ownerLocale ?? null}) returning id`;
+  const [{ id: trapId }] = await sql<{ id: string }[]>`
+    insert into users (email, display_name, email_verified)
+    values (${`${prefix}-trap-${suffix}@test.local`}, 'Trap Creator', true) returning id`;
+  const orgName = `Pass Org ${suffix}`;
+  const [{ id: orgId }] = await sql<{ id: string }[]>`
+    insert into organizations (name, slug, created_by, default_locale)
+    values (${orgName}, ${`pass-org-${suffix}`}, ${trapId}, ${opts.defaultLocale ?? "en"}) returning id`;
+  await sql`insert into org_members (org_id, user_id, role) values (${orgId}, ${ownerId}, 'owner')`;
+  const compName = `Pass Cup ${suffix}`;
+  const [{ id: compId }] = await sql<{ id: string }[]>`
+    insert into competitions (org_id, name, slug)
+    values (${orgId}, ${compName}, ${`pass-cup-${suffix}`}) returning id`;
+  if (opts.intent !== undefined) {
+    await sql`insert into competition_passes (competition_id, org_id, stripe_payment_intent, pass_key)
+              values (${compId}, ${orgId}, ${opts.intent}, ${opts.passKey ?? "event_pass"})`;
+  }
+  return { orgId, compId, orgName, compName, ownerId, ownerEmail, trapId };
 }
 
 /** Everything the fixtures above made for these organisations: their outbox rows, their sponsor orders (a RESTRICT foreign key keeps

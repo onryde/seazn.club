@@ -60,7 +60,6 @@ vi.mock("@/lib/sentry", () => ({ captureError: sentry.captureError }));
 // Mocked at the function so no case depends on a mail transport being set.
 vi.mock("@/lib/email", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/email")>()),
-  sendPassRevokedEmail: vi.fn(async () => true),
   sendStaffDisputeAlertEmail: vi.fn(async () => true),
   sendStreamCreditClawbackAlertEmail: vi.fn(async () => true),
 }));

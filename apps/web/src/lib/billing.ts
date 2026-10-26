@@ -1,7 +1,7 @@
 import "server-only";
 import type Stripe from "stripe";
 import { getStripe } from "@/lib/stripe";
-import { sql } from "@/lib/db";
+import { sql, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import {
   invalidateEntitlementsForOrgGroup,
@@ -1047,15 +1047,28 @@ export async function refundDuplicatePassPayment(intent: string): Promise<void> 
  * 2 ruling, 2026-09-29). They sit in the pack beside any bought pack, so a
  * `min(grant, pack)` claw-back could take a later-bought pack's PAID credits;
  * forgiving one pass's grant (at most 5) is the better trade.
+ *
+ * `inRevoke` is the caller's write that must exist exactly when the revoke does
+ * (the owner's notice, phase 3 wave 2): it runs on the delete's own
+ * transaction, only when a pass row was deleted, so a throw from it undoes the
+ * delete and a redelivery that finds the pass gone never calls it. This module
+ * knows nothing of what it writes.
  */
-export async function revokePassForRefundedCharge(charge: Stripe.Charge): Promise<boolean> {
+export async function revokePassForRefundedCharge(
+  charge: Stripe.Charge,
+  opts: { inRevoke?: (tx: Tx, revoked: { org_id: string; competition_id: string }) => Promise<void> } = {},
+): Promise<boolean> {
   const intent =
     typeof charge.payment_intent === "string" ? charge.payment_intent : charge.payment_intent?.id;
   if (!intent || !charge.refunded) return false;
   await recordPassRefund(intent);
-  const [revoked] = await sql<{ org_id: string; competition_id: string }[]>`
-    delete from competition_passes where stripe_payment_intent = ${intent}
-    returning org_id, competition_id`;
+  const revoked = await sql.begin(async (tx) => {
+    const [row] = await tx<{ org_id: string; competition_id: string }[]>`
+      delete from competition_passes where stripe_payment_intent = ${intent}
+      returning org_id, competition_id`;
+    if (row && opts.inRevoke) await opts.inRevoke(tx, row);
+    return row ?? null;
+  });
   if (!revoked) return false;
   await invalidateOrgEntitlements(revoked.org_id);
   return true;
