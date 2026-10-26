@@ -365,6 +365,19 @@ describe("buildTableView", () => {
     }
   });
 
+  it("X-TB-8 every key a sport's partial-schedule order can trace is localised — IIHF's internal fewest_played too (W2d T12)", () => {
+    // The trace names the step that split a row; a partial-schedule order (IH-TB-2) splits by keys no stage order holds
+    // (`fewest_played`). Read off the engine's declarations, counted: an unregistered one would print its raw key.
+    const keys = new Set(builtinModules.flatMap((m) => [...(m.partialScheduleOrder ?? [])]));
+    expect(keys.has("fewest_played"), "premise: ice hockey declares fewest_played (RBG:349-350)").toBe(true);
+    expect([...keys].filter((key) => !Object.hasOwn(TIE_BREAK_MSG_KEYS, key))).toEqual([]);
+    const v = buildTableView({
+      ...base,
+      rows: [row("a", { rank: 1 }), row("b", { rank: 2, tieBreak: { key: "fewest_played", with: ["a"] } })],
+    });
+    expect(v.rows[1]!.tieBreakText).toBe('table.tieBreak:{"with":"Alpha","rule":"table.tieBreak.fewest_played"}');
+  });
+
   it("a self-labelling engine key is still localised (the trap that forbids deriving the set from tieBreakLabel)", () => {
     // `tieBreakLabel("points")` returns "points" — identical to the key — so a
     // `label !== key` derivation would classify it as unknown and leak the

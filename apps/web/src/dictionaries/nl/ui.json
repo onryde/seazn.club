@@ -3502,6 +3502,7 @@
   "div.detail.tiebreak.rule.set_diff": "setsaldo",
   "div.detail.tiebreak.rule.point_diff": "puntensaldo",
   "div.detail.tiebreak.rule.matches_played": "gespeelde wedstrijden",
+  "div.detail.tiebreak.rule.fewest_played": "minste wedstrijden gespeeld",
   "div.detail.tiebreak.rule.field_goals": "velddoelpunten",
   "div.detail.tiebreak.rule.h2h_points": "onderling resultaat",
   "div.detail.tiebreak.rule.h2h_diff": "verschil in onderling resultaat",

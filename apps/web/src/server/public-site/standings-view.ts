@@ -31,7 +31,7 @@ import {
   type RatioKey,
   type StandingsRow,
 } from "@seazn/engine/competition";
-import type { TiebreakerKey } from "@seazn/engine/sport";
+import type { PartialScheduleKey, TiebreakerKey } from "@seazn/engine/sport";
 import { standingsColumns, formatMetric, type MetricSpecLike } from "@/lib/public-site";
 import type { TKey } from "@/lib/i18n-runtime";
 import type { DictionaryKey } from "@/lib/i18n-keys";
@@ -225,7 +225,10 @@ export const TIE_BREAK_MSG_KEYS: Readonly<Record<string, TKey>> = {
   sberger: "table.tieBreak.sberger",
   seed: "table.tieBreak.seed",
   lots: "table.tieBreak.lots",
-} satisfies Record<TiebreakerKey, DictionaryKey>;
+  // W2d T12 (IH-TB-2): a trace can also name a step of a sport's partial-schedule order — IIHF's internal
+  // `fewest_played`, which no stage order holds — so the map covers every PartialScheduleKey (TiebreakerKey + it).
+  fewest_played: "table.tieBreak.fewest_played",
+} satisfies Record<PartialScheduleKey, DictionaryKey>;
 
 /** Sort key for a row the ranking pass has not ranked (a division with no
  *  played fixtures yet, or a row excluded from the cascade). Unranked rows go

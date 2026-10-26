@@ -11,7 +11,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { EngineError } from "@seazn/engine/core";
-import { PointsRule, defaultCrossGroup, resolveTableRules } from "@seazn/engine/competition";
+import { PointsRule, crossGroupOrder, defaultCrossGroup, lotSeed, resolveTableRules, type CrossGroupRules, type StandingsRow } from "@seazn/engine/competition";
 import type { AnySportModule, TiebreakerKey } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { sql } from "@/lib/db";
@@ -22,8 +22,8 @@ import { startDivision } from "@/server/usecases/schedule";
 import { scoreEvent } from "@/server/usecases/scoring";
 import { addFixture, completeStage, generateStageFixtures, issueChallenge, rebuildStageFixtures } from "@/server/usecases/stages";
 import { GENERIC_CONFIG, seedFootballCatalog } from "@/server/usecases/__tests__/_seed";
-import { recomputeStandings } from "../competition";
-import { loadTableRules, pinStageTableRules, repinStageOwnRules, tableRulesOf } from "../table-rules";
+import { loadCrossGroupRules, recomputeStandings } from "../competition";
+import { loadTableRules, persistLotsDraws, pinStageTableRules, repinStageOwnRules, tableRulesOf } from "../table-rules";
 import { between, genericResult, seatedFixtures, stageRules, tableRulesRowOf, tableScene, unpin } from "./helpers/w2d-table-rig";
 import { post } from "./helpers/w2b-rig";
 
@@ -394,7 +394,23 @@ describe.skipIf(!HAS_DB)("W2d T9: the pin at activation (X-TB-2, OC2)", () => {
       const [stored] = await sql<{ status: string; outcome: unknown }[]>`select status, outcome from fixtures where id = ${cd.id}`;
       expect(stored, `${sp.sport}: premise, the board is closed with no outcome`).toMatchObject({ status: "abandoned", outcome: null });
       const after = await recomputeStandings(s.auth.orgId, stageId);
-      expect(after, `${sp.sport}: the No-result board changes no row`).toEqual(before);
+      // W2d T12 (X-TB-8): the one thing the board may change is the tie note. While C–D was still to play, a tie the
+      // head-to-head step met between C and D was noted `h2h_incomplete`; the No-result settles the board (engine `void`,
+      // never to be played), so their mini-schedule is complete and the note goes. Credit, order and trace are unchanged.
+      const unnoted = (rows: readonly StandingsRow[]) =>
+        rows.map((r) => {
+          if (r.tieBreak?.note !== "h2h_incomplete") return r;
+          const trace = { ...r.tieBreak };
+          delete trace.note;
+          return { ...r, tieBreak: trace };
+        });
+      expect(unnoted(after), `${sp.sport}: the No-result board changes no row`).toEqual(unnoted(before));
+      // Which rows keep it, from the matches: generic's 0-point class splits B off on its recorded GD (−1), leaving C and D,
+      // whose one meeting is the settled board — no note. Chess ranks the 0-point class B, C, D by direct encounter, and
+      // B–C and B–D are still to play — the note stays.
+      const noted = (rows: readonly StandingsRow[]) => rows.filter((r) => r.tieBreak?.note === "h2h_incomplete").map((r) => r.entrantId).sort();
+      expect(noted(before), `${sp.sport}: premise, the tie at 0 was noted while C–D was to play`).toEqual(sp.sport === "generic" ? [C, D].sort() : [B, C, D].sort());
+      expect(noted(after), `${sp.sport}: after the settle`).toEqual(sp.sport === "generic" ? [] : [B, C, D].sort());
       for (const id of [C, D]) expect(after.find((r) => r.entrantId === id), `${sp.sport}: no credit`).toMatchObject({ played: 0, points: 0 });
       checked++;
     }
@@ -632,4 +648,80 @@ describe.skipIf(!HAS_DB)("W2d T9 fix I1: a stage that leaves pending by any door
     const { fixture_id } = await addFixture(s.auth, s.stageIds[0]!, { home_entrant_id: E1, away_entrant_id: E2 });
     await playCompleteVoid(s, fixture_id);
   }, 180_000);
+});
+
+describe.skipIf(!HAS_DB)("W2d T12: a source stage's cross-group rules, as progression is handed them (X-TB-7, §5.9)", () => {
+  /** The V472 migrated pin's cross-group literal and sources, read from the delta's text (never typed here). */
+  const v472 = (): { cross: TiebreakerKey[]; sources: Record<string, string> } => {
+    const deltas = resolve(import.meta.dirname, "../../../../../../db/migration/deltas");
+    const text = readFileSync(join(deltas, readdirSync(deltas).find((f) => /^V\d+__w2d_table_rules\.sql$/.test(f))!), "utf8");
+    const literal = (key: string) => JSON.parse(new RegExp(`'${key}',\\s*'([^']+)'::jsonb`).exec(text)![1]!) as unknown;
+    return { cross: literal("crossGroup") as TiebreakerKey[], sources: literal("sources") as Record<string, string> };
+  };
+  const loaded = (stageId: string) => sql.begin((tx) => loadCrossGroupRules(tx, stageId));
+  const across = (rows: readonly StandingsRow[], rules: CrossGroupRules) =>
+    crossGroupOrder(rows, rules.order, rules.lotsDraws, {
+      ...(rules.seeds === undefined ? {} : { seeds: rules.seeds }),
+      ...(rules.rngSeed === undefined ? {} : { rngSeed: rules.rngSeed }),
+    }).rows.map((r) => r.entrantId);
+
+  it("X-TB-7 crossGroup: loadCrossGroupRules reads the source's PINNED cross-group order — a V472-migrated pin (points, diff, for, wins) keeps best-Nth where it was, the stage's own order moves it — with the stage's seeds and its stored cross-group draws (pool null)", async () => {
+    const { cross: MIGRATED_CROSS, sources: MIGRATED_SOURCES } = v472();
+    const s = await tableScene({ stages: { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 2 } } } });
+    const stageId = s.stageIds[0]!;
+    await generateStageFixtures(s.auth, stageId);
+    await startDivision(s.auth, s.divisionId);
+    const fixtures = await seatedFixtures(stageId);
+    expect(fixtures, "rig: two groups of two, one match each").toHaveLength(2);
+    const [f1, f2] = [fixtures[0]!, fixtures[1]!];
+    // Group 1: W1 beat its rival 3-1 (GD +2, GF 3). Group 2: W2 beat its rival 5-4 (GD +1, GF 5).
+    await genericResult(s.auth, stageId, f1.home, f1.away, 3, 1);
+    await genericResult(s.auth, stageId, f2.home, f2.away, 5, 4);
+    await recomputeStandings(s.auth.orgId, stageId);
+    const snaps = await sql<{ rows: StandingsRow[] }[]>`select rows from standings_snapshots where stage_id = ${stageId} and pool_id is not null`;
+    expect(snaps, "rig: one table per group").toHaveLength(2);
+    const winners = snaps.map((p) => p.rows.find((r) => r.rank === 1)!);
+    expect(winners.map((r) => r.entrantId).sort()).toEqual([f1.home, f2.home].sort());
+    const [W1, W2] = [f1.home, f2.home];
+
+    // The pin generation took: the derived order (the stage's order without head-to-head steps), and the stage's seeds.
+    const pinned0 = (await stageRules(stageId)).pin as { tiebreakers: TiebreakerKey[]; crossGroup: TiebreakerKey[] };
+    const derived = await loaded(stageId);
+    expect(derived.order).toEqual(defaultCrossGroup(pinned0.tiebreakers));
+    expect(derived.order).toEqual(pinned0.crossGroup);
+    expect(derived.seeds).toEqual(new Map(s.entrants.map((id, i) => [id, i + 1])));
+
+    // A V472-migrated pin: its cross-group order is the pre-W2d list — goal difference first, W1 (+2) above W2 (+1).
+    expect(MIGRATED_SOURCES.crossGroup).toBe("migrated");
+    await sql`update stages set table_rules_pinned = table_rules_pinned || ${sql.json({ crossGroup: MIGRATED_CROSS, sources: MIGRATED_SOURCES } as never)} where id = ${stageId}`;
+    const migrated = await loaded(stageId);
+    expect(migrated.order).toEqual(MIGRATED_CROSS);
+    expect(across(winners, migrated)).toEqual([W1, W2]);
+
+    // The stage's own cross-group order, goals for first: W2 (5) above W1 (3) — the loader reads the pin, not a list.
+    await sql`update stages set table_rules_pinned = table_rules_pinned || ${sql.json({ crossGroup: FOR_FIRST, sources: { ...MIGRATED_SOURCES, crossGroup: "stage" } } as never)} where id = ${stageId}`;
+    const own = await loaded(stageId);
+    expect(own.order).toEqual(FOR_FIRST);
+    expect(across(winners, own)).toEqual([W2, W1]);
+
+    // A cross-group draw stored under the stage's "" pool (pool_id null) reaches the loader; the groups' own tables never
+    // read it (they rank under their own pool ids).
+    expect(own.lotsDraws, "empty: no cross-group draw stored yet").toBeUndefined();
+    const members = [W1, W2].sort();
+    await sql.begin((tx) =>
+      persistLotsDraws(tx, stageId, null, [{ membersKey: members.join(","), members, drawnOrder: [...members].reverse(), seed: lotSeed(0, members) }]),
+    );
+    const stored = await loaded(stageId);
+    expect(stored.lotsDraws?.get(members.join(","))?.order).toEqual([...members].reverse());
+    const tables = () => sql<{ pool_id: string; rows: StandingsRow[] }[]>`
+      select pool_id, rows from standings_snapshots where stage_id = ${stageId} order by pool_id nulls first`;
+    const before = await tables();
+    expect(await recomputeStandings(s.auth.orgId, stageId), "a pooled stage has no \"\" table of its own").toEqual([]);
+    expect(await tables(), "the groups' tables are untouched by a cross-group draw").toEqual(before);
+    expect(before.map((t) => t.pool_id === null), "no phantom null-pool table").toEqual([false, false]);
+  }, 180_000);
+
+  it.todo(
+    "HELD until task-12-usecase-wiring.patch lands (usecases/** is T10's lane): seedNextStage and computeSeedProposal read best-Nth through loadCrossGroupRules — a B1-migrated source keeps its seats, an unpinned badminton source seats by set_diff, and a cross-group draw is stored under the source's pool null",
+  );
 });

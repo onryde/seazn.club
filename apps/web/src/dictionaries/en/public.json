@@ -356,6 +356,7 @@
   "table.tieBreak.set_diff": "set difference",
   "table.tieBreak.point_diff": "point difference",
   "table.tieBreak.matches_played": "matches played",
+  "table.tieBreak.fewest_played": "fewest games played",
   "table.tieBreak.field_goals": "field goals",
   "table.tieBreak.h2h_points": "head-to-head",
   "table.tieBreak.h2h_diff": "head-to-head difference",

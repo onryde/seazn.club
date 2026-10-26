@@ -23,12 +23,14 @@ import {
   setsToWinOf,
   completeBracketStage,
   completeTableStage,
+  crossGroupRulesOf,
   isBracketStageComplete,
   isTableStageComplete,
   placementTable,
   type BracketFixture,
   type BracketStage,
   type CompletedTableStage,
+  type CrossGroupRules,
   type DivisionEvent,
   type FixtureResult,
   type MembersKey,
@@ -558,6 +560,27 @@ export function gamePointsReader(
   };
 }
 
+/** W2d T12 (spec §5.6 "ST-G12", X-TB-8): every fixture the stage schedules between two seated entrants, decided or not,
+ *  as [home, away] — one entry per fixture, so a double round robin lists a pair twice. The head-to-head steps read it to
+ *  know whether a tied class has played out its meetings. A fixture whose engine status is `void` will never be played (a
+ *  withdrawal's expunge, a voided match), and a seat still to be filled names nobody, so neither is on it. Read off the
+ *  same rows and statuses as the counted results (only `decided` / `walkover` count, never `void`), so every counted
+ *  result is on it — the engine refuses one that is not. */
+export function scheduledPairsOf(
+  fixtures: readonly Pick<FixtureRow, "id" | "home_entrant_id" | "away_entrant_id">[],
+  tableFixtures: readonly Pick<TableFixture, "id" | "status">[],
+): [string, string][] {
+  const statusOf = new Map(tableFixtures.map((f) => [f.id, f.status]));
+  const pairs: [string, string][] = [];
+  for (const f of fixtures) {
+    const status = statusOf.get(f.id);
+    if (status === undefined) throw new Error(`fixture ${f.id} has no engine status: the schedule and the table read different fixtures`);
+    if (status === "void" || !f.home_entrant_id || !f.away_entrant_id) continue;
+    pairs.push([f.home_entrant_id, f.away_entrant_id]);
+  }
+  return pairs;
+}
+
 // W2d T9: the stage as the ranker reads it — its rules (pin or live, `tableRulesOf`), the sport's `winsCount` (B2,
 // HK-TB-1) and each result's game points (B5), and the lots draws stored for it (§5.8; read under the division lock,
 // `rankWithStoredLots`). A bracket or ladder stage still reaches this fold (an admin cfg edit or a rules refold
@@ -592,7 +615,22 @@ function toTableStage(
         }
       : {}),
     ...(inputs.stage.config?.h2h_scope === "overall" ? { h2hScope: "overall" as const } : {}),
+    // W2d T12 (ST-G12, IH-TB-2): the schedule the head-to-head steps need complete, and the sport's order when it is not.
+    scheduledPairs: scheduledPairsOf(inputs.fixtures, inputs.tableFixtures),
+    ...(inputs.module.partialScheduleOrder === undefined ? {} : { partialScheduleOrder: inputs.module.partialScheduleOrder }),
   };
+}
+
+/**
+ * W2d T12 (spec §5.9, ST-G4, X-TB-7): how a source stage compares entrants from DIFFERENT groups, for
+ * `SourceTables.crossGroup` — its effective `crossGroup` order (the pin once active: a B1-migrated pin's is the pre-W2d
+ * list, so its seats do not move), its seeds, rngSeed and `winsCount`, and the cross-group draws stored under its "" pool
+ * (`crossGroupRulesOf`). The one reading a seeding path hands `resolveProgression`; the draws best-Nth makes come back as
+ * its `newLotsDraws`, stored with `persistLotsDraws(tx, stageId, null, …)` under the division lock.
+ */
+export async function loadCrossGroupRules(tx: Tx, stageId: string): Promise<CrossGroupRules> {
+  const inputs = await loadStageInputs(tx, stageId);
+  return crossGroupRulesOf(toTableStage(inputs, await loadLotsDraws(tx, stageId)));
 }
 
 /**

@@ -3502,6 +3502,7 @@
   "div.detail.tiebreak.rule.set_diff": "diferencia de sets",
   "div.detail.tiebreak.rule.point_diff": "diferencia de puntos",
   "div.detail.tiebreak.rule.matches_played": "partidos jugados",
+  "div.detail.tiebreak.rule.fewest_played": "menos partidos jugados",
   "div.detail.tiebreak.rule.field_goals": "goles de campo",
   "div.detail.tiebreak.rule.h2h_points": "enfrentamiento directo",
   "div.detail.tiebreak.rule.h2h_diff": "diferencia en enfrentamiento directo",
