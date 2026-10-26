@@ -14,18 +14,9 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import type Stripe from "stripe";
 
-// Observe the organiser notifications without touching the rest of the email
-// module (send() is a no-op without RESEND_API_KEY either way).
-const emailMock = vi.hoisted(() => ({
-  lost: vi.fn().mockResolvedValue(true),
-}));
-vi.mock("@/lib/email", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/email")>()),
-  sendSponsorDisputeLostEmail: emailMock.lost,
-}));
-// The notices that have moved to the email outbox are observed there: the
-// enqueue is the real one, through a spy that calls through, and the one
-// network seam of the outbox is replaced.
+// The organiser notifications go through the email outbox and are observed
+// there: the enqueue is the real one, through a spy that calls through, and
+// the one network seam of the outbox is replaced.
 const deliverMock = vi.hoisted(() => vi.fn());
 vi.mock("@/server/email-outbox/transport", () => ({ deliver: deliverMock }));
 vi.mock("@/server/email-outbox", async (io) => { const m = await io<typeof import("@/server/email-outbox")>(); return { ...m, enqueueEmailOnce: vi.fn(m.enqueueEmailOnce) }; });
@@ -62,7 +53,6 @@ beforeEach(() => {
   stubOutboxEnv();
   vi.mocked(enqueueEmailOnce).mockClear();
   deliverMock.mockReset().mockImplementation(async () => ({ ok: true, providerId: `re_spd_${randomUUID()}` }));
-  emailMock.lost.mockClear();
 });
 
 afterAll(async () => {
@@ -113,7 +103,7 @@ describe.skipIf(!HAS_DB)("handleSponsorDispute", () => {
   });
 
   it("closed lost: order refunded-state, placement inactive, recovery audited", async () => {
-    const { intent, orderId, sponsorId } = await seedSponsorOrder({ status: "paid" });
+    const { intent, orderId, sponsorId, ownerId, ownerEmail } = await seedSponsorOrder({ status: "paid" });
     const did = "dp_" + uniq();
     await handleSponsorDispute(disputeFor(intent, did), "created");
     await handleSponsorDispute(disputeFor(intent, did, "lost"), "closed");
@@ -128,9 +118,15 @@ describe.skipIf(!HAS_DB)("handleSponsorDispute", () => {
       select 1 from competition_events
       where type = 'sponsor.dispute_recovery_failed' and payload->>'order_id' = ${orderId}`;
     expect(audits).toHaveLength(1);
-    // Organiser hears about the loss (recoveredCents 0 — recovery could not run).
-    expect(emailMock.lost).toHaveBeenCalledTimes(1);
-    expect(emailMock.lost.mock.calls[0]![0]).toMatchObject({ recoveredCents: 0 });
+    // Organiser hears about the loss, on the outbox (nothing recovered —
+    // recovery could not run; the owner has no language and the org default
+    // is en).
+    const rows = await outboxRows("sponsor_dispute_lost", did);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ recipient: ownerEmail, recipient_user_id: ownerId });
+    const calls = enqueued("sponsor_dispute_lost", did);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]![1].text).toContain(dictionarySubject("en", "sponsorDisputeLost.textNotRecovered", {}));
   });
 
   it("closed lost replay: order + placement stay written off (idempotent)", async () => {
@@ -144,6 +140,10 @@ describe.skipIf(!HAS_DB)("handleSponsorDispute", () => {
     expect(o.status).toBe("refunded");
     const [s] = await sql`select status from sponsors where id = ${sponsorId}`;
     expect(s.status).toBe("inactive");
+    // The recovery failed both times (keyless), so no reversal guard stops the
+    // replay and the producer asks again: the once-key keeps one notice.
+    expect(enqueued("sponsor_dispute_lost", did)).toHaveLength(2);
+    expect(await outboxRows("sponsor_dispute_lost", did)).toHaveLength(1);
   });
 
   it("closed won: flag cleared, placement re-activated (idempotent on replay)", async () => {
@@ -157,7 +157,7 @@ describe.skipIf(!HAS_DB)("handleSponsorDispute", () => {
     expect(o.disputed_at).toBeNull();
     const [s] = await sql`select status from sponsors where id = ${sponsorId}`;
     expect(s.status).toBe("active");
-    expect(emailMock.lost).not.toHaveBeenCalled(); // a win is not a loss
+    expect(enqueued("sponsor_dispute_lost", did)).toHaveLength(0); // a win is not a loss
     // The organiser hears about the win exactly once — the replay above must
     // not re-notify (the flag was already clear on the second pass).
     expect(enqueued("sponsor_dispute_won", did)).toHaveLength(1);

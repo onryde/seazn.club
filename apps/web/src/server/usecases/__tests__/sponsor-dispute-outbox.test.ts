@@ -5,14 +5,28 @@
 //     the transaction that flags the order, and only on the transition to THIS dispute (the order's prior dispute, read under lock).
 //   - Email 7, `sponsor_dispute_won`: a dispute that closes won queues the notice (once-key `<dispute id>:won`) in the transaction that
 //     clears the flag, and only on the transition (the order, read under lock, still carried the flag).
+//   - Email 8, `sponsor_dispute_lost`: a dispute that closes lost writes the order off, recovers the club's share from its balance, then
+//     queues the notice (once-key `<dispute id>:lost`) carrying what was recovered. A replayed close that finds its own reversal already
+//     made (the recovery's metadata guard) queues nothing.
 //
-// Producer under test: `handleSponsorDispute`, driven directly as the billing webhook calls it. Only the network seam is replaced
-// (`@/server/email-outbox/transport`). The enqueue is the real one, observed through a spy that calls through, so a test can tell "not
-// written because the key was taken" from "never asked".
+// Producer under test: `handleSponsorDispute`, driven directly as the billing webhook calls it. Only the network seams are replaced
+// (Stripe, for the lost dispute's balance recovery; `@/server/email-outbox/transport`). The enqueue is the real one, observed through a
+// spy that calls through, so a test can tell "not written because the key was taken" from "never asked".
 //
 // Sport: not applicable. A chargeback notice does not vary by sport (spec, Test strategy 4); the locale is the axis that varies.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+
+// Stripe, as the lost dispute's balance recovery sees it: the charge (expanded with its transfer to the club), the transfer's reversals
+// (the recovery's replay guard reads them back by `metadata.dispute_id`) and the reversal it makes.
+const stripeMock = vi.hoisted(() => {
+  const reversals: { amount: number; metadata: Record<string, string> }[] = [];
+  const chargesRetrieve = vi.fn();
+  const listReversals = vi.fn();
+  const createReversal = vi.fn();
+  return { reversals, chargesRetrieve, listReversals, createReversal, stripe: { charges: { retrieve: chargesRetrieve }, transfers: { listReversals, createReversal } } };
+});
+vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
 
 // The one network seam of the outbox.
 const deliverMock = vi.hoisted(() => vi.fn());
@@ -34,6 +48,10 @@ const HAS_DB = !!process.env.DATABASE_URL;
 const RUN = randomUUID().slice(0, 8);
 const ALERT = "sponsor_dispute_alert" as const;
 const WON = "sponsor_dispute_won" as const;
+const LOST = "sponsor_dispute_lost" as const;
+/** The charge the fixture's order paid (25000), its platform fee, and the transfer that carried the rest to the club. */
+const CHARGE_CENTS = 25000;
+const APP_FEE_CENTS = 1250;
 
 const made = { orgIds: [] as string[], userIds: [] as string[] };
 
@@ -47,6 +65,18 @@ beforeEach(() => {
   stubOutboxEnv();
   vi.mocked(enqueueEmailOnce).mockClear();
   deliverMock.mockReset().mockImplementation(async () => ({ ok: true, providerId: `re_spo_${randomUUID()}` }));
+  stripeMock.reversals.length = 0;
+  stripeMock.chargesRetrieve.mockReset().mockImplementation(async (id: string) => ({
+    id,
+    amount: CHARGE_CENTS,
+    application_fee_amount: APP_FEE_CENTS,
+    transfer: { id: `tr_spo_${RUN}`, amount: CHARGE_CENTS, amount_reversed: 0 },
+  }));
+  stripeMock.listReversals.mockReset().mockImplementation(async () => ({ data: [...stripeMock.reversals] }));
+  stripeMock.createReversal.mockReset().mockImplementation(async (_transfer: string, params: { amount: number; metadata: Record<string, string> }) => {
+    stripeMock.reversals.push({ amount: params.amount, metadata: params.metadata });
+    return { id: `trr_spo_${randomUUID().slice(0, 8)}`, amount: params.amount };
+  });
 });
 
 // ---------------------------------------------------------------------------------------------------------------------------------
@@ -187,18 +217,33 @@ describe.skipIf(!HAS_DB)("a disputed sponsorship alerts the org owner through th
     expect(enqueueCalls(ALERT, noIntent)).toHaveLength(0);
   });
 
-  it("an org with no owner: the order is flagged and the placement parked all the same, and nothing is queued", async () => {
+  it("an org with no owner: every dispute step is recorded all the same, and nothing is queued", async () => {
     const o = await paidOrder({ ownerLocale: "fr", defaultLocale: "en" });
     await sql`update org_members set role = 'admin' where org_id = ${o.orgId} and role = 'owner'`;
-    const id = newDisputeId();
+    const a = newDisputeId();
+    const b = newDisputeId();
 
-    await expect(handleSponsorDispute(disputeOf(id, o.intent), "created")).resolves.toBe(true);
+    await expect(handleSponsorDispute(disputeOf(a, o.intent), "created")).resolves.toBe(true);
+    const flagged = await orderState(o.orderId);
+    expect(flagged.dispute_id, "the dispute is recorded").toBe(a);
+    expect(flagged.sponsor_status, "and the placement is parked: that does not wait on someone to tell").toBe("pending");
 
-    const after = await orderState(o.orderId);
-    expect(after.dispute_id, "the dispute is recorded").toBe(id);
-    expect(after.sponsor_status, "and the placement is parked: that does not wait on someone to tell").toBe("pending");
-    expect(await rowsOf(ALERT, [id])).toHaveLength(0);
-    expect(enqueueCalls(ALERT, id)).toHaveLength(0);
+    await expect(handleSponsorDispute(disputeOf(a, o.intent, { status: "won" }), "closed")).resolves.toBe(true);
+    const cleared = await orderState(o.orderId);
+    expect(cleared.disputed_at, "a win clears the flag").toBeNull();
+    expect(cleared.sponsor_status, "and restores the placement").toBe("active");
+
+    await handleSponsorDispute(disputeOf(b, o.intent), "created");
+    // No charge on the dispute: the recovery is skipped (nothing reaches Stripe).
+    await expect(handleSponsorDispute(disputeOf(b, o.intent, { status: "lost" }), "closed")).resolves.toBe(true);
+    const writtenOff = await orderState(o.orderId);
+    expect(writtenOff.status, "a loss writes the order off").toBe("refunded");
+    expect(writtenOff.sponsor_status, "and takes the placement down").toBe("inactive");
+
+    for (const kind of [ALERT, WON, LOST] as const) {
+      expect(await rowsOf(kind, [a, b]), `${kind}: no row`).toHaveLength(0);
+      expect(enqueueCalls(kind, a).length + enqueueCalls(kind, b).length, `${kind}: never asked`).toBe(0);
+    }
   });
 });
 
@@ -259,5 +304,76 @@ describe.skipIf(!HAS_DB)("a sponsorship dispute that closes won tells the org ow
     const rows = await rowsOf(WON, [a]);
     expect(rows.map((r) => r.dedupe_key)).toEqual([`${a}:won`]);
     expect(rows[0]).toMatchObject({ recipient_user_id: o.ownerId, status: "queued" });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Email 8: the notice when a dispute closes lost
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("a sponsorship dispute that closes lost tells the org owner through the outbox (DB)", () => {
+  it("lost queues one notice carrying the recovered amount; a replay with the metadata guard hit queues none", async () => {
+    const o = await paidOrder({ ownerLocale: "es", defaultLocale: "en" });
+    const id = newDisputeId();
+    const lost = disputeOf(id, o.intent, { status: "lost", charge: `ch_${id}` });
+
+    await handleSponsorDispute(disputeOf(id, o.intent), "created");
+    await expect(handleSponsorDispute(lost, "closed")).resolves.toBe(true);
+    await handleSponsorDispute(lost, "closed"); // Stripe's retry, or an /admin/billing-events replay: its reversal is made already
+
+    // Premise: the first close reversed the club's share once, and the replay found that reversal (the recovery's guard).
+    expect(stripeMock.createReversal).toHaveBeenCalledTimes(1);
+    expect(stripeMock.reversals[0]!.metadata.dispute_id).toBe(id);
+    const recoveredCents = stripeMock.reversals[0]!.amount;
+    expect(recoveredCents, "premise: something was recovered, and it is not the disputed amount").toBeGreaterThan(0);
+    expect(recoveredCents).not.toBe(CHARGE_CENTS);
+
+    const rows = await rowsOf(LOST, [id]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      kind: LOST,
+      ref_type: "dispute",
+      ref_id: id,
+      dedupe_key: `${id}:lost`,
+      org_id: o.orgId,
+      recipient_user_id: o.ownerId,
+      recipient: o.ownerEmail,
+      transactional: false,
+      status: "queued",
+      attempts: 0,
+    });
+    const subject = dictionarySubject("es", "sponsorDisputeLost.subject", { orgName: o.orgName });
+    expect(subject, "the Spanish subject is not the English one").not.toBe(dictionarySubject("en", "sponsorDisputeLost.subject", { orgName: o.orgName }));
+    expect(rows[0]!.subject).toBe(subject);
+    expect(transportCallsFor(rows[0]!.id), "the webhook did not attempt the send: the first attempt is the worker's").toHaveLength(0);
+    // Asked once: the replay's recovery reported the reversal already made, so the producer never asked again.
+    const calls = enqueueCalls(LOST, id);
+    expect(calls).toHaveLength(1);
+    // The notice states what Stripe was asked to reverse (every amount in these mails is en-GB money).
+    const recovered = `£${(recoveredCents / 100).toFixed(2)}`;
+    expect(calls[0]![1].text).toContain(dictionarySubject("es", "sponsorDisputeLost.textRecovered", { recovered }));
+    const after = await orderState(o.orderId);
+    expect(after.status, "the order is written off").toBe("refunded");
+    expect(after.sponsor_status, "and the placement taken down").toBe("inactive");
+  });
+
+  it("created then lost are two rows, neither replaced", async () => {
+    const o = await paidOrder({ ownerLocale: "fr", defaultLocale: "en" });
+    const a = newDisputeId();
+
+    await handleSponsorDispute(disputeOf(a, o.intent), "created");
+    // No charge on the dispute: the recovery is skipped (nothing reaches Stripe) and nothing is recovered.
+    await handleSponsorDispute(disputeOf(a, o.intent, { status: "lost" }), "closed");
+
+    const alert = await rowsOf(ALERT, [a]);
+    const lostRows = await rowsOf(LOST, [a]);
+    expect(alert.map((r) => r.dedupe_key)).toEqual([`${a}:created`]);
+    expect(lostRows.map((r) => r.dedupe_key)).toEqual([`${a}:lost`]);
+    expect([...alert, ...lostRows].map((r) => r.status), "neither replaced the other").toEqual(["queued", "queued"]);
+    expect([...alert, ...lostRows].map((r) => r.recipient_user_id)).toEqual([o.ownerId, o.ownerId]);
+    expect(stripeMock.chargesRetrieve, "premise: the recovery was skipped").not.toHaveBeenCalled();
+    expect(enqueueCalls(LOST, a)[0]![1].text, "the notice says nothing was recovered").toContain(
+      dictionarySubject("fr", "sponsorDisputeLost.textNotRecovered", {}),
+    );
   });
 });

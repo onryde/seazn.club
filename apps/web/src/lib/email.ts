@@ -649,19 +649,12 @@ export async function sponsorDisputeAlertEmail(args: SponsorDisputeAlertArgs, lo
   return sponsorDisputeAlertTemplate(args, dict);
 }
 
-export interface SponsorDisputeLostEmail extends SponsorDisputeLostArgs {
-  to: string;
-  locale?: Locale;
-}
-
-/** Organiser outcome mail: a sponsorship chargeback closed lost — states the
- *  write-off and the balance recovery (P0-2). */
-export async function sendSponsorDisputeLostEmail(
-  opts: SponsorDisputeLostEmail,
-): Promise<boolean> {
-  const { to, locale = "en", ...args } = opts;
+/** Organiser outcome mail: a sponsorship chargeback closed lost — states the write-off and the balance recovery (P0-2), in the owner's
+ *  language. It is queued on the email outbox by `handleSponsorDispute` (sponsors.ts, kind `sponsor_dispute_lost`) after the recovery;
+ *  nothing sends it directly. */
+export async function sponsorDisputeLostEmail(args: SponsorDisputeLostArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...sponsorDisputeLostTemplate(args, dict) });
+  return sponsorDisputeLostTemplate(args, dict);
 }
 
 /** Organiser outcome mail: a sponsorship chargeback closed WON — the money stays and the placement is restored (the lost mail's happy

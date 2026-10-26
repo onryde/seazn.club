@@ -19,8 +19,8 @@
 //    registration dispute notice names the competition; a sponsor dispute notice names the package).
 //  - The registration dispute notices are driven through the real `handleRegistrationDispute` on a card cart the real webhook confirmed.
 //    Neither touches Stripe: the alert never does, and the lost notice's dispute names no charge, so the balance recovery is skipped.
-//  - The sponsor dispute notices are driven through the real `handleSponsorDispute` on a paid sponsor order. The alert never touches
-//    Stripe.
+//  - The sponsor dispute notices are driven through the real `handleSponsorDispute` on a paid sponsor order. None touches Stripe: the
+//    alert and the won notice never do, and the lost notice's dispute names no charge, so the balance recovery is skipped.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import type Stripe from "stripe";
@@ -57,7 +57,6 @@ const SPEC_ACCOUNT_KINDS: readonly OutboxKind[] = [
 /** Account kinds whose producer has not moved to the outbox yet, so there is no real producer to drive. Each kind task deletes its own
  *  entry when it adds its producer to PRODUCERS below; T10 deletes the list. */
 const PRODUCERS_PENDING: readonly OutboxKind[] = [
-  "sponsor_dispute_lost",
   "pass_revoked",
   "trial_ending",
 ];
@@ -138,6 +137,15 @@ describe.skipIf(!HAS_DB)("an account kind's sealed body never names its recipien
       expect(await handleSponsorDispute(dispute("won"), "closed"), "premise: the real handler matched the sponsor's charge").toBe(true);
       // The notice names the package the disputed payment bought.
       return { rowIds: await rowIdsOf("sponsor_dispute_won", disputeId), positive: literal(o.packageName) };
+    },
+    sponsor_dispute_lost: async () => {
+      const o = await seedSponsorOrder({ status: "paid" });
+      const disputeId = `dp_akb_${randomUUID().slice(0, 12)}`;
+      // No `charge`: the balance recovery is skipped, so nothing reaches Stripe.
+      const dispute = { id: disputeId, payment_intent: o.intent, amount: 25000, status: "lost" } as unknown as Stripe.Dispute;
+      expect(await handleSponsorDispute(dispute, "closed"), "premise: the real handler matched the sponsor's charge").toBe(true);
+      // The notice names the package the written-off payment bought.
+      return { rowIds: await rowIdsOf("sponsor_dispute_lost", disputeId), positive: literal(o.packageName) };
     },
   };
 

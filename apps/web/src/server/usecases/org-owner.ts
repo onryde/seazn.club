@@ -1,7 +1,7 @@
 import "server-only";
 // The one owner lookup for owner-addressed mail (phase 3 wave 2). A deliberate LEAF: it imports only `@/lib/db`, so the registration,
 // sponsor and billing modules can all import it without the circular import that kept each of them on a private copy of this query
-// (sponsors.ts's `currentOrgOwnerEmail` says why it could not import billing-events'). The copies also disagreed: two read
+// (sponsors.ts kept one because importing billing-events' would have made sponsors ⇄ billing-events circular). The copies also disagreed: two read
 // `limit 1` with no order, so an org with two owners was mailed whichever row the planner met first.
 import type { Tx, sql } from "@/lib/db";
 

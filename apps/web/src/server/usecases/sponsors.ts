@@ -20,7 +20,7 @@ import {
   sponsorRefundEmail,
   sponsorDisputeAlertEmail,
   sponsorDisputeWonEmail,
-  sendSponsorDisputeLostEmail,
+  sponsorDisputeLostEmail,
 } from "@/lib/email";
 import { deferred } from "@/lib/deferred";
 import {
@@ -892,29 +892,6 @@ function sponsorEmailOrigin(): string {
   ).replace(/\/$/, "");
 }
 
-/** Current owner via org_members, NOT organizations.created_by — an ownership
- *  transfer flips the role but leaves created_by on the original creator. Local
- *  copy (registrations.ts keeps its own too): importing billing-events'
- *  orgOwnerEmail would make sponsors ⇄ billing-events a circular import. */
-async function currentOrgOwnerEmail(orgId: string): Promise<string | null> {
-  const [owner] = await sql<{ email: string }[]>`
-    select u.email from org_members m join users u on u.id = m.user_id
-    where m.org_id = ${orgId} and m.role = 'owner' limit 1`;
-  return owner?.email ?? null;
-}
-
-async function resolveOrgName(orgId: string): Promise<string | null> {
-  const [org] = await sql<{ name: string }[]>`
-    select name from organizations where id = ${orgId}`;
-  return org?.name ?? null;
-}
-
-async function resolvePackageName(packageId: string): Promise<string> {
-  const [pkg] = await sql<{ name: string }[]>`
-    select name from sponsor_packages where id = ${packageId}`;
-  return pkg?.name ?? "sponsorship";
-}
-
 /** Who a sponsorship dispute notice goes to: the org's current owner (the
  *  oldest, `orgOwnerRecipient`, owner ruling Q2) as an account, in their
  *  language (D4: the account's, then the org default). Read on the pool,
@@ -971,16 +948,16 @@ async function recoverSponsorDispute(
  * loss. Dispatched after handleRegistrationDispute for both event types —
  * a non-sponsor intent matches no order row and no-ops.
  *
- * The owner's alert and won notice go through the email outbox (kinds
- * `sponsor_dispute_alert`, `sponsor_dispute_won`, ref `dispute/<id>`),
- * addressed to the owner's account in their language; the worker makes the
- * first attempt.
+ * The owner's notices go through the email outbox (kinds
+ * `sponsor_dispute_alert`, `sponsor_dispute_won`, `sponsor_dispute_lost`, ref
+ * `dispute/<id>`), addressed to the owner's account in their language; the
+ * worker makes the first attempt.
  *
  * Replay-safe: the disputed_at/dispute_id + status writes converge, the
- * created alert and the won notice are queued only on their transition (and
- * each once-key holds its dispute to one row), and the lost recovery + its
- * email short-circuit on the core's dispute_id metadata guard. Stripe calls
- * stay OUTSIDE any sql tx.
+ * created alert and the won notice are queued only on their transition, the
+ * lost recovery + its notice short-circuit on the core's dispute_id metadata
+ * guard, and each once-key holds its dispute to one row of its kind. Stripe
+ * calls stay OUTSIDE any sql tx.
  */
 export async function handleSponsorDispute(
   dispute: Stripe.Dispute,
@@ -1105,17 +1082,25 @@ export async function handleSponsorDispute(
     // `already` = a replayed close (metadata guard hit) — the write-off + email
     // already happened on the first run.
     if (!recovery.already) {
-      const owner = await currentOrgOwnerEmail(order.org_id);
-      if (owner) {
-        void sendSponsorDisputeLostEmail({
-          to: owner,
-          orgName: (await resolveOrgName(order.org_id)) ?? "your organisation",
-          packageName: await resolvePackageName(order.package_id),
-          sponsorName: order.sponsor_name,
-          amountCents: dispute.amount,
-          currency: order.currency,
-          recoveredCents: recovery.recoveredCents,
-        }).catch(() => {});
+      // The owner's notice states the write-off and what the recovery pulled
+      // back, both fixed now, in the owner's language (D4). It is queued once
+      // per dispute (`<dispute id>:lost`) and the worker makes the first
+      // attempt. No catch: a refused enqueue fails the webhook (D1).
+      const recipient = await sponsorDisputeRecipient(order.org_id, order.org_default_locale);
+      if (recipient) {
+        const kind = "sponsor_dispute_lost";
+        await enqueueEmailOnce(sql, {
+          kind,
+          refType: "dispute",
+          refId: dispute.id,
+          orgId: order.org_id,
+          to: recipient.email,
+          recipientUserId: recipient.userId,
+          ...(await sponsorDisputeLostEmail({ ...noticeArgs, recoveredCents: recovery.recoveredCents }, recipient.locale)),
+          transactional: false,
+          expiresAt: expiryWithin(null),
+          dedupeKey: onceKey(kind, "dispute", dispute.id, "lost"),
+        });
       }
     }
     bustPublicSponsors(order.org_id);
