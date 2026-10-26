@@ -475,7 +475,7 @@ describe("W2d T10: a points-table key that is no set score never reaches the bou
     for (const m of [badminton, tabletennis, volleyball]) {
       const clean = m.configSchema.parse(Object.values(m.variants)[0]);
       for (const pointsMap of stored) {
-        const cfg = { ...clean, pointsMap } as SetBasedCfg;
+        const cfg = { ...clean, pointsMap };
         expect(() => m.tablePointsRule(cfg, "league"), `${m.key} ${JSON.stringify(pointsMap)}`).toThrowError(
           expect.objectContaining({ code: "CONFIG_INVALID", data: { keys: Object.keys(pointsMap) } }),
         );

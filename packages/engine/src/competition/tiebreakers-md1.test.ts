@@ -11,6 +11,7 @@
 // Every table here is hand-built; the one sport read is the whole registry, swept (R26).
 import { describe, expect, it } from "vitest";
 import type { StandingsDelta } from "../core/types.ts";
+import { mulberry32 } from "../core/rng.ts";
 import { builtinModules } from "../sports/index.ts";
 import { forEachSport } from "../testkit/for-each-sport.ts";
 import { RATIO_LEDGERS } from "./display.ts";
@@ -164,6 +165,61 @@ describe("W2d T20 MD-1 — ratio keys: spec 05 §4.3 (0/0 is 0, 'no data') and t
 });
 
 describe("W2d T20 MD-1 — the guards behind the recorded equivalents (assumptions are guards)", () => {
+  it("this runtime's sort asks the comparator only (later, earlier) and reads only whether the answer is negative — the premise of the V8-sort equivalents (counted, with a control)", () => {
+    // stryker-equivalent.json records mutants that change only a comparator's NON-negative answers as the sort sees them:
+    // sgn's negative arm and compareRatio's `lhs < rhs` arm (both under groupBySort's `-sgn(cmp)`), bySeedThenId's id
+    // tail, and (unrecorded, its key shared) compareRecorded's `va === undefined` arm. They hold only while
+    // Array.prototype.sort is V8's TimSort, which compares an element only against an EARLIER one and moves it only on a
+    // negative answer. Another engine's sort (SpiderMonkey's insertion sort asks (earlier, later) and moves on > 0)
+    // turns this red, and those rows must then be re-checked, never kept.
+    const rng = mulberry32(0x5eed2020);
+    const int = (n: number) => Math.floor(rng() * n);
+    type El = { readonly k: number; readonly i: number };
+    const orderOf = (els: readonly El[], cmp: (a: El, b: El) => number) => [...els].sort(cmp).map((e) => e.i).join(",");
+    const byKey = (a: El, b: El) => a.k - b.k;
+    let inputs = 0;
+    let merged = 0; // inputs long enough that TimSort merges runs (and gallops), not only binary insertion
+    let calls = 0;
+    let askedEarlierFirst = 0;
+    let signOnlyChecks = 0;
+    let signOnlyDiffer = 0;
+    let controlDiffer = 0;
+    for (let trial = 0; trial < 3000; trial++) {
+      const n = trial % 5 === 0 ? 64 + int(237) : 2 + int(40);
+      const keys = Array.from({ length: n }, () => int(6));
+      // every third input is built of presorted runs, so merges meet long runs and gallop
+      if (trial % 3 === 0) {
+        for (let from = 0; from < n; from += 8 + int(40)) {
+          const run = keys.slice(from, from + 8 + int(40)).sort((x, y) => x - y);
+          keys.splice(from, run.length, ...run);
+        }
+      }
+      const els: El[] = keys.map((k, i) => ({ k, i }));
+      inputs++;
+      if (n >= 64) merged++;
+      [...els].sort((a, b) => {
+        calls++;
+        if (a.i < b.i) askedEarlierFirst++;
+        return byKey(a, b);
+      });
+      const want = orderOf(els, byKey);
+      // a positive answer read as 0, and a 0 read as positive: neither moves anything
+      for (const signOnly of [(a: El, b: El) => (byKey(a, b) < 0 ? -1 : 0), (a: El, b: El) => (byKey(a, b) < 0 ? -1 : 1)]) {
+        signOnlyChecks++;
+        if (orderOf(els, signOnly) !== want) signOnlyDiffer++;
+      }
+      // the control: a comparator that answers negative where the true one answers 0 DOES move elements
+      if (orderOf(els, (a, b) => (byKey(a, b) <= 0 ? -1 : 1)) !== want) controlDiffer++;
+    }
+    expect(askedEarlierFirst, "the comparator is never asked (earlier, later)").toBe(0);
+    expect(signOnlyDiffer, "only the negative answers move elements").toBe(0);
+    expect(inputs, "anti-vacuity: inputs sorted").toBe(3000);
+    expect(merged, "anti-vacuity: inputs long enough to merge runs").toBeGreaterThanOrEqual(500);
+    expect(calls, "anti-vacuity: comparator calls checked").toBeGreaterThan(100_000);
+    expect(signOnlyChecks).toBe(2 * inputs);
+    expect(controlDiffer, "the control: a comparator wrong on a negative answer is seen").toBeGreaterThan(inputs / 2);
+  });
+
   it("no sport declares a metric keyed 'undefined' — metricOf's `key === undefined` arm (stryker-equivalent.json, tiebreakers.ts:331) reads the same as row.metrics[undefined] only while none does (every sport, counted)", () => {
     let metrics = 0;
     const visited = forEachSport(({ module }) => {
