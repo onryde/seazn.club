@@ -30,7 +30,7 @@ import {
   registrationPromotedEmail,
   refundIssuedEmail,
   disputeAlertEmail,
-  sendDisputeLostEmail,
+  disputeLostEmail,
   sendRegistrationRefundFailedAlertEmail,
   sendClaimInviteEmail,
 } from "@/lib/email";
@@ -3441,35 +3441,43 @@ export async function handleRegistrationDispute(
     // `already` = a replayed close (metadata guard hit) — everything below
     // already happened on the first run.
     if (!recovery.already) {
-      const owner = await currentOwnerEmail(reg.org_id);
+      // The owner's notice states the write-off and what the recovery pulled back, both fixed now, in the owner's language (D4). It is
+      // queued once per dispute (`<dispute id>:lost`) and the worker makes the first attempt. A refused enqueue fails the webhook (D1).
+      const owner = await orgOwnerRecipient(sql, reg.org_id);
       if (owner) {
-        void sendDisputeLostEmail({
-          to: owner,
-          orgName: ctx.org_name,
-          competitionName: ctx.comp_name,
-          displayName: reg.display_name,
-          amountCents: dispute.amount,
-          currency: reg.currency,
-          refCode: reg.ref_code,
-          recoveredCents: recovery.recoveredCents,
-          // divisionRegistrations route deleted (RS001 demolition) —
-          // point at the competition page for now; RS004's hub re-points
-          // this at the new competition-level Registration hub.
-          consoleUrl: fallbackOrigin() + routes.competition(ctx.org_slug, ctx.comp_slug),
-        }).catch(() => {});
+        const locale = await recipientLocale(sql, { pick: null, userId: owner.userId, orgDefault: ctx.default_locale });
+        const kind = "registration_dispute_lost";
+        await enqueueEmailOnce(sql, {
+          kind,
+          refType: "dispute",
+          refId: dispute.id,
+          orgId: reg.org_id,
+          to: owner.email,
+          recipientUserId: owner.userId,
+          ...(await disputeLostEmail(
+            {
+              orgName: ctx.org_name,
+              competitionName: ctx.comp_name,
+              displayName: reg.display_name,
+              amountCents: dispute.amount,
+              currency: reg.currency,
+              refCode: reg.ref_code,
+              recoveredCents: recovery.recoveredCents,
+              // divisionRegistrations route deleted (RS001 demolition) —
+              // point at the competition page for now; RS004's hub re-points
+              // this at the new competition-level Registration hub.
+              consoleUrl: fallbackOrigin() + routes.competition(ctx.org_slug, ctx.comp_slug),
+            },
+            locale,
+          )),
+          transactional: false,
+          expiresAt: expiryWithin(null),
+          dedupeKey: onceKey(kind, "dispute", dispute.id, "lost"),
+        });
       }
     }
   }
   return true;
-}
-
-/** Current owner via org_members, NOT organizations.created_by — ownership
- *  transfers flip the role but leave created_by on the original creator. */
-async function currentOwnerEmail(orgId: string): Promise<string | null> {
-  const [owner] = await sql<{ email: string }[]>`
-    select u.email from org_members m join users u on u.id = m.user_id
-    where m.org_id = ${orgId} and m.role = 'owner' limit 1`;
-  return owner?.email ?? null;
 }
 
 /**

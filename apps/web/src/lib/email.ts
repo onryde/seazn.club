@@ -610,17 +610,12 @@ export async function disputeAlertEmail(args: DisputeAlertArgs, locale: Locale):
   return disputeAlertTemplate(args, dict);
 }
 
-export interface DisputeLostEmail extends DisputeLostArgs {
-  to: string;
-  locale?: Locale;
-}
-
-/** Organiser outcome mail: a chargeback closed lost — states the write-off
- *  and the balance recovery (PROMPT-55). */
-export async function sendDisputeLostEmail(opts: DisputeLostEmail): Promise<boolean> {
-  const { to, locale = "en", ...args } = opts;
+/** Organiser outcome mail: a chargeback closed lost — states the write-off and the balance recovery (PROMPT-55), in the owner's language.
+ *  It is queued on the email outbox by `handleRegistrationDispute` (registrations.ts, kind `registration_dispute_lost`) after the recovery;
+ *  nothing sends it directly. */
+export async function disputeLostEmail(args: DisputeLostArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...disputeLostTemplate(args, dict) });
+  return disputeLostTemplate(args, dict);
 }
 
 export interface SponsorInvoiceEmail extends SponsorInvoiceArgs {

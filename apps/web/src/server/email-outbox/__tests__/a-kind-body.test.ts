@@ -17,8 +17,8 @@
 //  - The bodies are opened with the outbox's own `openBody` and the recipient's address (lower-cased, as the row stores it) must be
 //    absent. A positive pair shows the bodies really were opened and are the kind's own mail (the invite carries the match link; a
 //    registration dispute notice names the competition).
-//  - The registration dispute alert is driven through the real `handleRegistrationDispute` on a card cart the real webhook confirmed; it
-//    never touches Stripe.
+//  - The registration dispute notices are driven through the real `handleRegistrationDispute` on a card cart the real webhook confirmed.
+//    Neither touches Stripe: the alert never does, and the lost notice's dispute names no charge, so the balance recovery is skipped.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import type Stripe from "stripe";
@@ -53,7 +53,6 @@ const SPEC_ACCOUNT_KINDS: readonly OutboxKind[] = [
 /** Account kinds whose producer has not moved to the outbox yet, so there is no real producer to drive. Each kind task deletes its own
  *  entry when it adds its producer to PRODUCERS below; T10 deletes the list. */
 const PRODUCERS_PENDING: readonly OutboxKind[] = [
-  "registration_dispute_lost",
   "sponsor_dispute_alert",
   "sponsor_dispute_won",
   "sponsor_dispute_lost",
@@ -111,6 +110,15 @@ describe.skipIf(!HAS_DB)("an account kind's sealed body never names its recipien
       expect(await handleRegistrationDispute(dispute, "created"), "premise: the real handler matched the entry-fee charge").toBe(true);
       // The alert names the competition the disputed entry belongs to.
       return { rowIds: await rowIdsOf("registration_dispute_alert", disputeId), positive: literal(competitionName) };
+    },
+    registration_dispute_lost: async () => {
+      const { competitionName, intent } = await disputableEntry();
+      const disputeId = `dp_akb_${randomUUID().slice(0, 12)}`;
+      // No `charge`: the balance recovery is skipped, so nothing reaches Stripe.
+      const dispute = { id: disputeId, payment_intent: intent, amount: 900, status: "lost" } as unknown as Stripe.Dispute;
+      expect(await handleRegistrationDispute(dispute, "closed"), "premise: the real handler matched the entry-fee charge").toBe(true);
+      // The notice names the competition the written-off entry belongs to.
+      return { rowIds: await rowIdsOf("registration_dispute_lost", disputeId), positive: literal(competitionName) };
     },
   };
 

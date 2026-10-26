@@ -18,6 +18,9 @@
 //     that records the refund, with the refund id as its ref and once-key, and the request that did it makes the first attempt.
 //   - registration_dispute_alert: the real `handleRegistrationDispute` (`created`) on a paid card cart whose org owner's account is `fr`: the
 //     alert is queued to the owner's account in the transaction that records the dispute, and the worker makes the first attempt.
+//   - registration_dispute_lost: the real `handleRegistrationDispute` (`closed`, lost) on a paid card cart whose owner's account has no
+//     language, in an `es` org. The dispute names no charge, so the balance recovery is skipped and Stripe is not called; the notice is
+//     queued to the owner's account and the worker makes the first attempt.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -127,7 +130,6 @@ const SPEC_FACTS: KindFacts = {
 /** Wave 2's kinds, typed from the spec's table: registered by T1 before any producer moved, so each is still on its direct sender until its
  *  kind task (T2-T9) deletes it from NOT_YET_MOVED, and here. */
 const WAVE_2_UNMOVED: readonly OutboxKind[] = [
-  "registration_dispute_lost",
   "sponsor_invoice",
   "sponsor_receipt",
   "sponsor_refund",
@@ -526,6 +528,23 @@ async function registrationDisputeAlertScenario(): Promise<KindScenario> {
   };
 }
 
+/** The real `closed` webhook handler on a lost dispute: the org's owner (an account with no language, in an `es` org) is told on the
+ *  outbox, and the first attempt is the worker's. The dispute names no charge, so the recovery is skipped and Stripe is never called. */
+async function registrationDisputeLostScenario(): Promise<KindScenario> {
+  const { w, recipient, intent } = await disputableEntry({ ownerLocale: null, orgDefault: "es", feeCents: 900 });
+  return {
+    locale: "es",
+    subjectKey: "disputeLost.subject",
+    subjectVars: { competitionName: w.competition.name },
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      const dispute = { id: `dp_${RUN}_lost`, payment_intent: intent, amount: 900, status: "lost" } as unknown as Stripe.Dispute;
+      expect(await handleRegistrationDispute(dispute, "closed"), "premise: the real handler matched the entry-fee charge").toBe(true);
+    },
+  };
+}
+
 describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (DB)", () => {
   it("every outbox kind is swept through its real producer", async () => {
     // The Spanish subject differs from the English one, so a producer that dropped the locale would be seen (the right answer is not
@@ -555,6 +574,11 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
       dictionarySubject("en", disputeAlert.subjectKey, disputeAlert.subjectVars),
     );
 
+    const disputeLost = await registrationDisputeLostScenario();
+    expect(dictionarySubject("es", disputeLost.subjectKey, disputeLost.subjectVars)).not.toBe(
+      dictionarySubject("en", disputeLost.subjectKey, disputeLost.subjectVars),
+    );
+
     const out = await forEachOutboxKind(
       {
         magic_link: magicLinkScenario(),
@@ -565,6 +589,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         refund_issued: refund,
         solo_signup_assigned: solo,
         registration_dispute_alert: disputeAlert,
+        registration_dispute_lost: disputeLost,
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );

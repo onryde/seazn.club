@@ -1,8 +1,9 @@
 // Phase 3 wave 2, Batch A: the organiser's chargeback mail goes through the email outbox. A disputed entry fee alerts the org's owner (kind
 // `registration_dispute_alert`, ref `dispute/<Stripe dispute id>`, once-key `<dispute id>:created`), queued in the transaction that records
-// the dispute on the cart and written only on the transition to THIS dispute. The owner is an account (the address is resolved at send),
-// the mail is in the owner's language (D4: the account's, then the org default), and the first attempt is the worker's (a webhook has no
-// response to defer behind).
+// the dispute on the cart and written only on the transition to THIS dispute. A dispute that closes lost tells the owner what was written
+// off and recovered (kind `registration_dispute_lost`, the same ref, once-key `<dispute id>:lost`). The owner is an account (the address is
+// resolved at send), the mail is in the owner's language (D4: the account's, then the org default), and the first attempt is the worker's
+// (a webhook has no response to defer behind). The lost notice's own tests are the dispute-loss suite of registrations.test.ts.
 //
 // Producer under test: `handleRegistrationDispute`, driven directly as the billing webhook calls it. Only the network seams are replaced
 // (Stripe, for the withdrawal's refund; `@/server/email-outbox/transport`). The enqueue is the real one, observed through a spy that calls
@@ -53,6 +54,7 @@ import { fakeSession, loadWithGroup, makeUser, seedRegistration, stripeRig } fro
 const HAS_DB = !!process.env.DATABASE_URL;
 const RUN = randomUUID().slice(0, 8);
 const ALERT = "registration_dispute_alert" as const;
+const LOST = "registration_dispute_lost" as const;
 const FEE = 1200;
 
 const made = { orgIds: [] as string[], userIds: [] as string[] };
@@ -290,5 +292,32 @@ describe.skipIf(!HAS_DB)("a disputed entry fee alerts the org owner through the 
 
     // The chargeback is about money, whatever the entry's state.
     expect(await rowsOf(ALERT, [id])).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Email 2: the notice when a dispute closes lost
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("a lost dispute notifies the org owner through the outbox (DB)", () => {
+  it("one dispute's alert and lost notice are two rows, and neither replaces the other", async () => {
+    const w = await world({ ownerLocale: "fr", orgDefault: "en" });
+    const e = await paidEntry(w);
+    const id = newDisputeId();
+
+    await handleRegistrationDispute(disputeOf(id, e.intent), "created");
+    // Closed lost, with no charge on the dispute: the balance recovery is skipped and Stripe is not called.
+    await handleRegistrationDispute(disputeOf(id, e.intent, { status: "lost" }), "closed");
+
+    const alert = await rowsOf(ALERT, [id]);
+    const lost = await rowsOf(LOST, [id]);
+    // Same ref and recipient, different kinds: the replace rule (kind + ref + recipient) pairs neither with the other.
+    expect(alert.map((r) => ({ dedupe_key: r.dedupe_key, status: r.status }))).toEqual([{ dedupe_key: `${id}:created`, status: "queued" }]);
+    expect(lost.map((r) => ({ dedupe_key: r.dedupe_key, status: r.status }))).toEqual([{ dedupe_key: `${id}:lost`, status: "queued" }]);
+    for (const r of [...alert, ...lost]) {
+      expect(r, `${r.kind}: the owner's account, for the worker`).toMatchObject({ ref_type: "dispute", ref_id: id, recipient_user_id: w.ownerId, attempts: 0 });
+    }
+    expect(lost[0]!.subject).toBe(dictionarySubject("fr", "disputeLost.subject", { competitionName: w.competition.name }));
+    expect(transportCallsFor(lost[0]!.id), "the webhook did not attempt the send").toHaveLength(0);
   });
 });
