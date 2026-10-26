@@ -333,7 +333,7 @@ async function play(g: Game, moves: readonly string[]): Promise<void> {
 async function offerBy(g: Game, who: Colour): Promise<void> {
   const out = await act(
     { fixtureId: g.fixtureId, personId: g[who].personId, action: { kind: "draw", accept: true } },
-    { now: new Date(), accessToken: async (u) => `tok-${u}`, publish: async () => {}, offerOrAcceptDraw: async () => ({ ok: true }) },
+    { now: SWEEP_AT, accessToken: async (u) => `tok-${u}`, publish: async () => {}, offerOrAcceptDraw: async () => ({ ok: true }) },
   );
   expect(out, `premise: T10 recorded ${who}'s offer`).toEqual({ ok: true, applied: true });
 }
@@ -661,13 +661,26 @@ describe.runIf(HAS_DB)("reconcile — the stream is the read; the ledger follows
     const gapsFor = (read: number) => [INT4_MAX - read - 1, INT4_MAX - read, INT4_MAX - read + 1, 25 * DAY_MS, 30 * DAY_MS, 400 * DAY_MS];
     let checked = 0;
     let capped = 0;
+    let warned = 0;
+    const warn = vi.spyOn(log, "warn");
     for (const side of sides) {
       for (const gap of gapsFor(side.read)) {
         const g = await readyGame();
         serveStream(gameFull(g, MID, { moves: side.line }));
         await reconcile(g.fixtureId, "sweep", observed().deps); // adopts the line at READ
         expect((await rowOf(g.fixtureId)).last_move_at, "premise: last_move_at = READ").toEqual(READ);
+        warn.mockClear();
         await reconcile(g.fixtureId, "sweep", observed(later(gap)).deps); // adopts nothing: the mover's clock = reading + the gap
+        // The cap is never silent: ONE structured warn per capped write, naming the fixture, the side and the value that did not fit -
+        // and none when the sum fits (the ceiling itself fits).
+        const capWarns = warn.mock.calls.filter(([, msg]) => /int4 column/.test(String(msg)));
+        if (side.read + gap > INT4_MAX) {
+          expect(capWarns, `${side.mover} to move, gap ${gap} ms: the cap says so`).toHaveLength(1);
+          expect(capWarns[0]![0], "structured: fixture, side, the uncapped value").toMatchObject({ fixtureId: g.fixtureId, side: side.mover, uncapped: side.read + gap });
+          warned++;
+        } else {
+          expect(capWarns, `${side.mover} to move, gap ${gap} ms: nothing capped, nothing said`).toHaveLength(0);
+        }
         const r = await rowOf(g.fixtureId);
         const want = Math.min(INT4_MAX, side.read + gap);
         expect(side.mover === "white" ? r.white_ms : r.black_ms, `${side.mover} to move, gap ${gap} ms: reading + gap, capped at int4`).toBe(want);
@@ -677,8 +690,10 @@ describe.runIf(HAS_DB)("reconcile — the stream is the read; the ledger follows
         if (side.read + gap > INT4_MAX) capped++;
       }
     }
+    warn.mockRestore();
     expect(checked, "anti-vacuity: every parity x gap ran").toBe(12);
     expect(capped, "premise: 4 of the 6 gaps cross the ceiling, on both parities").toBe(8);
+    expect(warned, "the warn fired for exactly the capped cases").toBe(capped);
   });
 
   it("a game that has ENDED has no standing offer: the one on file is cleared, a flag on the final line is not adopted", async () => {
@@ -688,11 +703,11 @@ describe.runIf(HAS_DB)("reconcile — the stream is the read; the ledger follows
     await play(g, LINE.slice(0, 4));
     await act(
       { fixtureId: g.fixtureId, personId: g.black.personId, action: { kind: "draw", accept: true } },
-      { now: new Date(), accessToken: async (u) => `tok-${u}`, publish: async () => {}, offerOrAcceptDraw: async () => ({ ok: true }) },
+      { now: SWEEP_AT, accessToken: async (u) => `tok-${u}`, publish: async () => {}, offerOrAcceptDraw: async () => ({ ok: true }) },
     );
     expect((await rowOf(g.fixtureId)).draw_offer_by, "premise: Black's offer on file").toBe("black");
     serveStream(gameFull(g, MID, { moves: LINE.slice(0, 4), status: "resign", winner: "white", wdraw: true, bdraw: true }));
-    const { deps, sent } = observed(new Date());
+    const { deps, sent } = observed(SWEEP_AT);
     expect(await reconcile(g.fixtureId, "game_end", deps)).toMatchObject({ finished: true });
     const r = await rowOf(g.fixtureId);
     expect([r.draw_offer_by, r.black_draw_offer_ply, r.white_draw_offer_ply], "no offer after the end; the ply history stays").toEqual([null, 4, null]);
@@ -753,12 +768,12 @@ describe.runIf(HAS_DB)("reconcile — the stream is the read; the ledger follows
     await play(g, LINE.slice(0, 3));
     const offered = await act(
       { fixtureId: g.fixtureId, personId: g.black.personId, action: { kind: "draw", accept: true } },
-      { now: new Date(), accessToken: async (u) => `tok-${u}`, publish: async () => {}, offerOrAcceptDraw: async () => ({ ok: true }) },
+      { now: SWEEP_AT, accessToken: async (u) => `tok-${u}`, publish: async () => {}, offerOrAcceptDraw: async () => ({ ok: true }) },
     );
     expect(offered, "premise: T10 recorded Black's offer").toMatchObject({ ok: true });
     expect([(await rowOf(g.fixtureId)).draw_offer_by, (await rowOf(g.fixtureId)).black_draw_offer_ply], "premise").toEqual(["black", 3]);
     serveStream(gameFull(g, MID, { moves: LINE.slice(0, 4), bdraw: true }));
-    await reconcile(g.fixtureId, "sweep", observed(new Date()).deps);
+    await reconcile(g.fixtureId, "sweep", observed(SWEEP_AT).deps);
     const r = await rowOf(g.fixtureId);
     expect([r.move_count, r.draw_offer_by, r.black_draw_offer_ply]).toEqual([4, "black", 3]);
   });
