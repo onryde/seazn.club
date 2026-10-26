@@ -2350,10 +2350,10 @@ export function makeSetBasedModule(
    * reads (`matchPoints` for a match, `cleanSweepPair` for a bye) and PointsRule refuses: skipped. A map left pricing no
    * score at all is refused, as the payer refuses its every match (review M-4, N-1).
    */
-  const setBasedPointsMapRule = (cfg: SetBasedCfg): PointsRule => {
+  const setBasedPointsMapRule = (cfg: SetBasedCfg, storedKeys: readonly string[]): PointsRule => {
     const map = cfg.pointsMap;
     if (Object.keys(map).length === 0) {
-      throw new EngineError("CONFIG_INVALID", "pointsMap prices no set score: name a \"W-L\" score or \"*\"", { keys: Object.keys(cfg.pointsMap) });
+      throw new EngineError("CONFIG_INVALID", "pointsMap prices no set score: name a \"W-L\" score or \"*\"", { keys: [...storedKeys] });
     }
     const flat = new Set(Object.values(map).map(([w, l]) => `${w}:${l}`)).size <= 1 && Object.hasOwn(map, "*");
     const bySetScore: Record<string, PointsPair> = {};
@@ -2692,7 +2692,7 @@ export function makeSetBasedModule(
       // A key that is no set score is skipped before anything reads the map (review M-4): the sport's own table reads
       // the map the payer prices, so the shipped map with a stray key is still the shipped map.
       const priced = { ...cfg, pointsMap: Object.fromEntries(Object.entries(cfg.pointsMap).filter(([key]) => SET_SCORE_KEY.test(key))) };
-      const fromMap = setBasedPointsMapRule(priced);
+      const fromMap = setBasedPointsMapRule(priced, Object.keys(cfg.pointsMap)); // the refusal names the keys stored
       return preset.tablePointsRule === undefined ? fromMap : preset.tablePointsRule(priced, fromMap);
     },
 

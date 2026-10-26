@@ -467,6 +467,26 @@ describe("W2d T10: a points-table key that is no set score never reaches the bou
     expect(checked, "anti-vacuity: set sport variants checked").toBeGreaterThanOrEqual(3);
   });
 
+  it("the table rule refuses a map that prices no set score, naming the keys STORED — not the empty map left after the stray ones are skipped (every set sport, counted)", () => {
+    // A20 fix round 1 (controller ruling on kernel.ts' refusal): the payload is what the organiser saved, so the editor
+    // and the API can name the stray key. Expected keys are the stored map's own, from this test's input.
+    const stored: readonly Record<string, [number, number]>[] = [{ junk: [9, 9] }, { odd: [5, 2], bonus: [1, 0] }, {}];
+    let refused = 0;
+    for (const m of [badminton, tabletennis, volleyball]) {
+      const clean = m.configSchema.parse(Object.values(m.variants)[0]);
+      for (const pointsMap of stored) {
+        const cfg = { ...clean, pointsMap } as SetBasedCfg;
+        expect(() => m.tablePointsRule(cfg, "league"), `${m.key} ${JSON.stringify(pointsMap)}`).toThrowError(
+          expect.objectContaining({ code: "CONFIG_INVALID", data: { keys: Object.keys(pointsMap) } }),
+        );
+        refused++;
+      }
+      // the positive pair: the variant's own map prices its set scores and is no refusal
+      expect(() => m.tablePointsRule(clean, "league"), `${m.key}: shipped map`).not.toThrow();
+    }
+    expect(refused, "anti-vacuity: stored maps refused").toBe(3 * stored.length);
+  });
+
   it("a map that prices no set score is read as before (every value): the tolerant read, never a throw", () => {
     const cfg = { ...volleyball.configSchema.parse(volleyball.variants.indoor), pointsMap: { odd: [5, 2] as [number, number] } };
     expect([...volleyball.declaredPointsSets(cfg)]).toEqual([7]);

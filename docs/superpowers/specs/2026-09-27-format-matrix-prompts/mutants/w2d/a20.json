@@ -28,5 +28,20 @@
         "name": "X-TB-8 D3: 'overall' covers ties of three or more only"
       }
     ]
+  },
+  {
+    "id": "a20-r1-pointsmap-refusal-names-stored-keys",
+    "file": "packages/engine/src/sports/setbased/kernel.ts",
+    "find": "{ keys: [...storedKeys] }",
+    "replace": "{ keys: Object.keys(cfg.pointsMap) }",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/setbased/setbased.test.ts"
+        ],
+        "name": "the table rule refuses a map that prices no set score, naming the keys STORED"
+      }
+    ]
   }
 ]
