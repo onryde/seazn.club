@@ -2055,6 +2055,15 @@ jobs:
   # the only place the reference is made (the seven jobs that `docker run` the
   # image pull it with the same script, and packages/scheduler/test/
   # placement-image-wiring.test.ts pins all of them).
+  #
+  # This job also VERIFIES the pin: the other modes trust VENDORED.json, so a pin
+  # whose copy and sha256 were updated but whose placementCommit is stale (or was
+  # never pushed) would pass everywhere. `verify-pin` fetches the proto at that
+  # commit from the placement repo and compares its sha256.
+  #
+  # The job cannot be skipped or made non-blocking (no `if:`, `continue-on-error:`
+  # or `defaults:` at the job level): a skipped placement-pin skips scheduler-live
+  # with it, and a skipped `needs` job reads as a green run.
   # -------------------------------------------------------------------------
   placement-pin:
     name: Resolve the pinned placement image
@@ -2063,6 +2072,8 @@ jobs:
       image: ${{ steps.pin.outputs.image }}
     steps:
       - uses: actions/checkout@v5
+      - name: Verify the pin against the placement repo
+        run: bash packages/scheduler/scripts/placement-image.sh verify-pin
       # ASSIGN, then echo. `echo "image=$(bash …)"` would swallow the script's
       # failure (bash -e does not see a command substitution inside an argument),
       # and `needs.placement-pin.outputs.image` would arrive EMPTY downstream. A

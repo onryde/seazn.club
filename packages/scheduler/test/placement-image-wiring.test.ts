@@ -13,6 +13,7 @@
 // the jobs that exist today — never from the scan under test.
 import { spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -286,6 +287,182 @@ describe("placement-image.sh pull", () => {
   });
 });
 
+describe("placement-image.sh verify-pin", () => {
+  const COMMIT = "9684aa96d17c1f4c546c1df09d5e20a885091978";
+  const URL = `https://raw.githubusercontent.com/onryde/seazn.club.placement/${COMMIT}/proto/scheduler.proto`;
+  const PROTO = 'syntax = "proto3";\npackage scheduler;\n';
+  const sha = (text: string): string => createHash("sha256").update(text).digest("hex");
+  // A curl that records its argv and answers from CURL_RESULTS: comma-separated, one per call, the last repeats. An entry is
+  // STATUS or STATUS:EXIT. The shim prints the status the way `--write-out %{http_code}` does, writes CURL_BODY to the
+  // `--output` file when the status is 200, and exits EXIT (default 0; 7 for status 000, a dropped connection). It is
+  // proven against the real network once per change (see the task report), not in this suite.
+  const SHIMS = shimDir({
+    curl: [
+      "#!/bin/sh",
+      'echo "$*" >> "$CURL_LOG"',
+      'n=$(wc -l < "$CURL_LOG" | tr -d " ")',
+      'entry=$(echo "$CURL_RESULTS" | cut -d, -f"$n")',
+      'if [ -z "$entry" ]; then entry=$(echo "$CURL_RESULTS" | awk -F, \'{print $NF}\'); fi',
+      'status=${entry%%:*}',
+      'code=0; case "$entry" in *:*) code=${entry##*:} ;; esac',
+      '[ "$status" = "000" ] && code=7',
+      'out=""; prev=""',
+      'for a in "$@"; do [ "$prev" = "--output" ] && out="$a"; prev="$a"; done',
+      'if [ "$status" = "200" ] && [ -n "$out" ]; then cat "$CURL_BODY" > "$out"; fi',
+      'printf "%s" "$status"',
+      'exit "$code"',
+      "",
+    ].join("\n"),
+    sleep: '#!/bin/sh\necho "$*" >> "$SLEEP_LOG"\nexit 0\n',
+  });
+  const pinOf = (over: Record<string, unknown> = {}): string =>
+    pinFile(JSON.stringify({ placementCommit: COMMIT, sha256: sha(PROTO), imageTag: COMMIT, ...over }, null, 2) + "\n");
+
+  interface VerifyOpts {
+    /** What the shim serves on a 200. */
+    body?: string;
+    /** PLACEMENT_PULL_BACKOFF_S; "0" by default so no case waits, null leaves it unset (the script's own default). */
+    backoff?: string | null;
+  }
+  function verify(pin: string, results: string, { body = PROTO, backoff = "0" }: VerifyOpts = {}) {
+    const curlLog = fresh("curl.log");
+    const sleepLog = fresh("sleep.log");
+    const bodyFile = fresh("body");
+    writeFileSync(bodyFile, body);
+    const env = envWith({
+      PLACEMENT_VENDORED_JSON: pin,
+      PATH: `${SHIMS}:${process.env.PATH ?? ""}`,
+      CURL_LOG: curlLog,
+      CURL_RESULTS: results,
+      CURL_BODY: bodyFile,
+      SLEEP_LOG: sleepLog,
+      ...(backoff === null ? {} : { PLACEMENT_PULL_BACKOFF_S: backoff }),
+    });
+    if (backoff === null) delete env.PLACEMENT_PULL_BACKOFF_S;
+    const r = spawnSync("bash", [SCRIPT, "verify-pin"], { cwd: SCRATCH, encoding: "utf8", env });
+    expect(r.error).toBeUndefined();
+    const lines = (path: string) => (existsSync(path) ? readFileSync(path, "utf8").split("\n").filter(Boolean) : []);
+    return { code: r.status, stdout: r.stdout, stderr: r.stderr, curls: lines(curlLog), sleeps: lines(sleepLog) };
+  }
+
+  it("accepts a pin whose sha256 is the sha256 of the proto served at placementCommit, fetching exactly that URL once", () => {
+    const out = verify(pinOf(), "200");
+    expect(out.code, out.stderr).toBe(0);
+    expect(out.curls).toHaveLength(1);
+    expect(out.curls[0], "the raw URL at the pinned commit").toContain(URL);
+    expect(out.stdout).toContain(COMMIT);
+    expect(out.stdout).toContain(sha(PROTO));
+  });
+
+  it("refuses a pin that lies: the commit's proto hashes to something else; ::error:: names both hashes and the commit, no retry", () => {
+    const served = `${PROTO}// edited after the pin\n`;
+    const out = verify(pinOf(), "200", { body: served });
+    expect(out.code).toBe(1);
+    expect(out.stderr).toMatch(/::error::/);
+    expect(out.stderr, "the hash the pin claims").toContain(sha(PROTO));
+    expect(out.stderr, "the hash the commit actually has").toContain(sha(served));
+    expect(out.stderr).toContain(COMMIT);
+    expect(out.stderr, "the likely causes are named").toMatch(/stale|unpushed|hand/);
+    expect(out.curls, "a mismatch is not transient").toHaveLength(1);
+    expect(out.stdout, "no success line on a lie").toBe("");
+  });
+
+  it("an empty 200 body is a mismatch, not a pass", () => {
+    const out = verify(pinOf(), "200", { body: "" });
+    expect(out.code).toBe(1);
+    expect(out.stderr).toContain(sha(""));
+  });
+
+  it("a 404 is permanent: fails at once (one fetch, no wait) saying the commit is not on the placement repo", () => {
+    const out = verify(pinOf(), "404");
+    expect(out.code).toBe(1);
+    expect(out.curls).toHaveLength(1);
+    expect(out.sleeps).toEqual([]);
+    expect(out.stderr).toMatch(/::error::.*404/);
+    expect(out.stderr).toContain(COMMIT);
+    expect(out.stderr).toMatch(/not pushed|hand/);
+  });
+
+  it.each([["503"], ["000"], ["429"], ["200:18"]])("a transient %s then a 200 succeeds: two fetches, one wait between them", (first) => {
+    const out = verify(pinOf(), `${first},200`);
+    expect(out.code, out.stderr).toBe(0);
+    expect(out.curls).toHaveLength(2);
+    expect(out.sleeps).toEqual(["0"]);
+  });
+
+  it("a transient failure that never clears gives up after exactly three fetches with an ::error:: (and no wait after the last)", () => {
+    const out = verify(pinOf(), "503");
+    expect(out.code).toBe(1);
+    expect(out.curls).toHaveLength(3);
+    expect(out.sleeps).toEqual(["0", "0"]);
+    expect(out.stderr).toMatch(/::error::.*3 attempts.*503/);
+  });
+
+  it("a 200 whose transfer was cut short (curl exits non-zero) is NOT a fetched file: retried, never compared, never read as a lying pin", () => {
+    // The body the shim leaves WOULD hash to the pinned value, so a script that trusted the status alone would pass this.
+    const out = verify(pinOf(), "200:18");
+    expect(out.code).toBe(1);
+    expect(out.curls).toHaveLength(3);
+    expect(out.stderr).toMatch(/::error::.*3 attempts.*curl exit 18/);
+    expect(out.stderr, "not reported as a hash mismatch").not.toMatch(/pin lies/);
+  });
+
+  it("a mismatch after a transient failure is still a mismatch (the retry does not skip the comparison)", () => {
+    const out = verify(pinOf({ sha256: sha("something else") }), "503,200");
+    expect(out.code).toBe(1);
+    expect(out.curls).toHaveLength(2);
+    expect(out.stderr).toContain(sha("something else"));
+  });
+
+  it("the backoff is the pull's: PLACEMENT_PULL_BACKOFF_S, default 5, validated before any fetch", () => {
+    expect(verify(pinOf(), "503", { backoff: null }).sleeps).toEqual(["5", "5"]);
+    expect(verify(pinOf(), "503", { backoff: "7" }).sleeps).toEqual(["7", "7"]);
+    const bad = verify(pinOf(), "200", { backoff: "soon" });
+    expect(bad.code).toBe(1);
+    expect(bad.stderr).toMatch(/::error::.*PLACEMENT_PULL_BACKOFF_S/);
+    expect(bad.curls).toEqual([]);
+  });
+
+  it.each([
+    ["a placementCommit with uppercase", { placementCommit: COMMIT.toUpperCase() }],
+    ["a 39-character placementCommit", { placementCommit: COMMIT.slice(1) }],
+    ["no placementCommit", { placementCommit: undefined }],
+    ["a placementCommit that is a branch name", { placementCommit: "main" }],
+    ["a sha256 with uppercase", { sha256: sha(PROTO).toUpperCase() }],
+    ["a 63-character sha256", { sha256: sha(PROTO).slice(1) }],
+    ["no sha256", { sha256: undefined }],
+  ] as [string, Record<string, unknown>][])("refuses %s with an ::error:: before any fetch", (_label, over) => {
+    const out = verify(pinOf(over), "200");
+    expect(out.code).toBe(1);
+    expect(out.stderr).toMatch(/::error::/);
+    expect(out.curls, "curl was never called").toEqual([]);
+  });
+
+  it("refuses a missing curl with an ::error:: naming it", () => {
+    // A PATH holding only jq and dirname (what the script needs before it reaches curl): `command -v curl` finds nothing.
+    const tool = (name: string): string => spawnSync("sh", ["-c", `command -v ${name}`], { encoding: "utf8" }).stdout.trim();
+    const bare = shimDir({});
+    symlinkSync(tool("jq"), join(bare, "jq"));
+    symlinkSync(tool("dirname"), join(bare, "dirname"));
+    const r = spawnSync("/bin/bash", [SCRIPT, "verify-pin"], { cwd: SCRATCH, encoding: "utf8", env: { PATH: bare, PLACEMENT_VENDORED_JSON: pinOf() } });
+    expect(r.error).toBeUndefined();
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/::error::.*\bcurl\b/);
+  });
+
+  it("refuses a missing pin file with an ::error:: and never fetches", () => {
+    const out = verify(join(SCRATCH, "no-such-dir", "VENDORED.json"), "200");
+    expect(out.code).toBe(1);
+    expect(out.stderr).toMatch(/::error::.*does not exist/);
+    expect(out.curls).toEqual([]);
+  });
+
+  it("reads placementCommit and sha256 only: a pin with no imageTag still verifies (that field belongs to ref and pull)", () => {
+    const out = verify(pinFile(JSON.stringify({ placementCommit: COMMIT, sha256: sha(PROTO) })), "200");
+    expect(out.code, out.stderr).toBe(0);
+  });
+});
+
 // ---------------------------------------------------------------------------------------------------------------------
 // The workflows' text.
 // ---------------------------------------------------------------------------------------------------------------------
@@ -306,10 +483,17 @@ interface Job {
   text: string;
 }
 const key = (job: Job): string => `${job.file}:${job.id}`;
+/** Job-level keys that skip a job, make its red non-blocking or move its steps: `if:` and `continue-on-error:` (a skipped job
+ *  reads as green, and so does everything that `needs` it), `defaults:` (a working-directory there moves every step). Anchored
+ *  to the job's key column, so a step's own `if:` (8 spaces), a `run:` body line and a comment never match. */
+const JOB_SILENCERS = /^ {4}(?:if|continue-on-error|defaults):/gm;
+const silencersOf = (j: Job): string[] => j.text.match(JOB_SILENCERS) ?? [];
 
 /** Every job of one workflow: the 2-space `id:` lines under the top-level `jobs:`. */
-function jobsOf(file: string): Job[] {
-  const lines = stripComments(readFileSync(join(WORKFLOWS, file), "utf8")).split("\n");
+const jobsOf = (file: string): Job[] => parseJobs(file, readFileSync(join(WORKFLOWS, file), "utf8"));
+/** The same, from workflow TEXT: the negative self-tests parse a mutated copy of the real file. */
+function parseJobs(file: string, source: string): Job[] {
+  const lines = stripComments(source).split("\n");
   const from = lines.findIndex((l) => /^jobs:\s*$/.test(l));
   if (from < 0) return [];
   const jobs: Job[] = [];
@@ -492,7 +676,7 @@ describe("the workflows: every placement image comes from the pin", () => {
     expect(waits, "wait ids checked (smoke-e2e: 2, e2e: 3 each)").toBe(2 + 3 + 3 + 3);
   });
 
-  it("no workflow uses a `context: services/placement` build action or types a tag; the seven blocks carry no build tooling", () => {
+  it("no workflow uses a `context: services/placement` build action or types a tag; none of the seven blocks uses build-push-action or setup-buildx-action", () => {
     let jobsScanned = 0;
     for (const file of WORKFLOW_FILES) {
       const text = stripComments(readFileSync(join(WORKFLOWS, file), "utf8"));
@@ -524,6 +708,16 @@ describe("ci.yml: placement-pin resolves the reference, scheduler-live runs the 
   const PIN = (): Job => job("ci.yml", "placement-pin");
   const LIVE = (): Job => job("ci.yml", "scheduler-live");
   const RESOLVE = "Resolve the pinned placement image";
+
+  it("placement-pin verifies the pin against the placement repo in its own unsilenced step, after the checkout and BEFORE it resolves the reference", () => {
+    const steps = stepsOf(PIN());
+    const verify = steps.filter((x) => x.runLine === "bash packages/scheduler/scripts/placement-image.sh verify-pin");
+    expect(verify, "verify-pin steps").toHaveLength(1);
+    expect(verify[0]!.name).toBe("Verify the pin against the placement repo");
+    expect(verify[0]!.keys, "nothing on the step can skip or soften it").toEqual(["name", "run"]);
+    expect(steps.map((x) => x.name ?? "(uses)")).toEqual(["(uses)", "Verify the pin against the placement repo", RESOLVE]);
+    expect(steps[0]!.text, "the first step is the checkout").toContain("actions/checkout@");
+  });
 
   it("placement-pin assigns the reference BEFORE echoing it (a failed script must fail the step), and exports it as `image`", () => {
     const step = stepNamed(PIN(), RESOLVE);
@@ -605,12 +799,66 @@ describe("ci.yml: placement-pin resolves the reference, scheduler-live runs the 
     expect(using, "steps that read the container id").toBe(2);
   });
 
-  it("the judge and the job cannot be skipped or made non-blocking, and the judge has no key beyond name, env, run", () => {
-    const judge = stepNamed(LIVE(), "Assert the suite RAN, and passed");
-    expect(judge.keys).toEqual(["name", "env", "run"]);
-    expect(LIVE().text, "no job-level if / continue-on-error / defaults").not.toMatch(/^ {4}(if|continue-on-error|defaults):/m);
-    const wait = stepNamed(LIVE(), "Wait for the placement service");
-    expect(wait.keys).toEqual(["name", "env", "run"]);
+  it("neither placement-pin nor scheduler-live can be skipped, made non-blocking or moved at the JOB level (`if:`, `continue-on-error:`, `defaults:`)", () => {
+    // A skipped placement-pin skips scheduler-live with it (a `needs` job that did not run), and a skipped job reads as green:
+    // the only job that talks to a real solver would vanish without a red. Step-level keys are pinned step by step, below.
+    let jobs = 0;
+    for (const j of [PIN(), LIVE()]) {
+      expect(silencersOf(j), `${key(j)} carries a job-level key that can skip or soften it`).toEqual([]);
+      jobs++;
+    }
+    expect(jobs, "jobs checked").toBe(2);
+  });
+
+  it("the judge and the wait step carry no key beyond name, env, run", () => {
+    expect(stepNamed(LIVE(), "Assert the suite RAN, and passed").keys).toEqual(["name", "env", "run"]);
+    expect(stepNamed(LIVE(), "Wait for the placement service").keys).toEqual(["name", "env", "run"]);
+  });
+
+  describe("the job-level check refuses each way to silence the two jobs (negative self-test on a mutated copy of the real ci.yml)", () => {
+    const REAL = readFileSync(join(WORKFLOWS, "ci.yml"), "utf8");
+    const after = (anchor: string, insert: string): string => {
+      expect(REAL.split(anchor).length - 1, `anchor occurs once: ${anchor.trim()}`).toBe(1);
+      return REAL.replace(anchor, () => `${anchor}${insert}`);
+    };
+    const PIN_HEAD = "    name: Resolve the pinned placement image\n";
+    const LIVE_HEAD = "    name: Scheduler ↔ live placement service (real gRPC, no mocks)\n";
+    const PIN_LAST = '          echo "image=$ref" >> "$GITHUB_OUTPUT"\n';
+    const LIVE_LAST = '          echo "integration suite ran against the live service: $passed passed, 0 skipped"\n';
+    const MUTED: [label: string, jobId: string, yml: () => string][] = [
+      ["`if: false` on placement-pin", "placement-pin", () => after(PIN_HEAD, "    if: false\n")],
+      ["`continue-on-error: true` on placement-pin", "placement-pin", () => after(PIN_HEAD, "    continue-on-error: true\n")],
+      ["`defaults:` on placement-pin", "placement-pin", () => after(PIN_HEAD, "    defaults:\n      run:\n        working-directory: apps/web\n")],
+      ["`if:` on placement-pin, written AFTER its steps", "placement-pin", () => after(PIN_LAST, "    if: github.event_name == 'push'\n")],
+      ["`continue-on-error:` on placement-pin, written AFTER its steps", "placement-pin", () => after(PIN_LAST, "    continue-on-error: true\n")],
+      ["`if: false` on scheduler-live", "scheduler-live", () => after(LIVE_HEAD, "    if: false\n")],
+      ["`continue-on-error: true` on scheduler-live", "scheduler-live", () => after(LIVE_HEAD, "    continue-on-error: true\n")],
+      ["`defaults:` on scheduler-live", "scheduler-live", () => after(LIVE_HEAD, "    defaults:\n      run:\n        working-directory: apps/web\n")],
+      ["`if:` on scheduler-live, written AFTER its steps", "scheduler-live", () => after(LIVE_LAST, "    if: false\n")],
+    ];
+    it.each(MUTED)("flags %s", (_label, jobId, yml) => {
+      const mutated = parseJobs("ci.yml", yml()).find((j) => j.id === jobId);
+      expect(mutated, `the mutated file still has job ${jobId}`).toBeDefined();
+      expect(silencersOf(mutated!), "silencing keys found").toHaveLength(1);
+    });
+
+    it("anti-vacuity: the table is not empty, and the unmutated file is clean for both jobs", () => {
+      expect(MUTED.length).toBeGreaterThanOrEqual(9);
+      let clean = 0;
+      for (const id of ["placement-pin", "scheduler-live"]) {
+        expect(silencersOf(parseJobs("ci.yml", REAL).find((j) => j.id === id)!), id).toEqual([]);
+        clean++;
+      }
+      expect(clean).toBe(2);
+    });
+
+    it("does not flag what silences nothing: a comment, a step's own `if:`", () => {
+      const pinOf = (yml: string) => parseJobs("ci.yml", yml).find((j) => j.id === "placement-pin")!;
+      expect(silencersOf(pinOf(after(PIN_HEAD, "    # continue-on-error: true\n    # if: false\n")))).toEqual([]);
+      const stepIf = pinOf(after("      - name: Verify the pin against the placement repo\n", "        if: false\n"));
+      expect(stepIf.text, "the fixture really put an `if:` on the step").toMatch(/^ {8}if: false$/m);
+      expect(silencersOf(stepIf), "a step-level `if:` is the step pin's business, not the job check's").toEqual([]);
+    });
   });
 
   // The readiness gate, EXECUTED with shims for `timeout` (the probe), `sleep` and `docker`. Its clauses are the ones a text match

@@ -7,10 +7,10 @@ name: Stg
 #
 # NO `needs:` — the gates live in a SEPARATE workflow (ci.yml) now, and a
 # `needs:` job can only reference jobs in its own workflow file. Same
-# reasoning this repo's own prod.yml (its `deploy` job has no `needs:` either): this workflow
-# only runs on push, ci.yml only runs on pull_request, and they never
-# overlap, so the gates having already been green is trusted rather than
-# re-checked here.
+# reasoning as this repo's own prod.yml (its `deploy-prod` job has no
+# `needs:` either): this workflow only runs on push, ci.yml only runs on
+# pull_request, and they never overlap, so the gates having already been
+# green is trusted rather than re-checked here.
 #
 # Migration-before-deploy means every migration must be backward compatible
 # with the app version still running (expand/contract) — if the migrate step
