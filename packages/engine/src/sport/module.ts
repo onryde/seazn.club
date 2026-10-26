@@ -76,6 +76,11 @@ export type TiebreakerKey =
   | "matches_played"
   | "field_goals";
 
+/** W2d (spec §5.6 "ST-G12", IH-TB-2) — a key of a sport's partial-schedule order (`SportModule.partialScheduleOrder`): a
+ *  plain tie-break key, `lots` last, or the internal `fewest_played` (fewer games played ranks higher, IIHF RBG:349-350).
+ *  `fewest_played` is never a `TiebreakerKey`: no stage order holds it and the editor never offers it. */
+export type PartialScheduleKey = TiebreakerKey | "fewest_played";
+
 /** W2d (spec §5.4, PS-7c) — the stage kinds that keep a table: the round robins, Swiss and americano (core/types.ts
  *  `DRAW_KINDS`). A sport's default tie-break order is asked per kind (`defaultTiebreakers`). */
 export type TableStageKind = Extract<StageKind, "league" | "group" | "swiss" | "americano">;
@@ -1036,6 +1041,12 @@ export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> 
   readonly shootoutAs: "draw_plus_bonus" | "result";
   /** HK-TB-1 (B2) — which wins the `wins` tie-break counts. Absent = every win; FIH counts regulation wins only. */
   readonly winsCount?: "all" | "regulation";
+  /** W2d (spec §5.6 "ST-G12", IH-TB-2; X-TB-8) — the order a TABLE ranks a tied class by, in place of the head-to-head
+   *  block, when the class's mini-schedule is incomplete (a fixture among them is still to be decided). IIHF: fewest games
+   *  played, goal difference, goals for, seed, lots (RBG:349-350). Absent = the block does not split such a class, which
+   *  carries the note `h2h_incomplete` (the author's call, AUD-ST:71). Plain keys and `fewest_played`, `lots` last only
+   *  (`rankStandings` refuses anything else). */
+  readonly partialScheduleOrder?: readonly PartialScheduleKey[];
   /** D6 (X-WO-1 amended) — the sport pays a separate "loss, not played" (table tennis: played L 1, unplayed L 0). Absent
    *  everywhere else, so `loss.unplayed` is reachable nowhere else (PS-7a). */
   readonly declaresUnplayedLoss?: true;

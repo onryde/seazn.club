@@ -8,7 +8,7 @@ import type { EntrantId, StageKind } from "../core/types.ts";
 import { foldResults, foldStandings, type FixtureResult } from "./standings.ts";
 import { applyRankLocks, type RankLock } from "./points.ts";
 import type { StandingsDelta } from "../core/types.ts";
-import type { PoolTable, SourceTables as StageTables } from "./progression.ts";
+import type { CrossGroupRules, PoolTable, SourceTables as StageTables } from "./progression.ts";
 import type { TableRules } from "./table-rules.ts";
 import { buildSwissTable, membersKeyOf, rankStandings, type MembersKey, type NewLotsDraw, type RankContext, type StoredLotsDraw } from "./tiebreakers.ts";
 
@@ -92,6 +92,29 @@ export interface TableStage {
    *  `poolId`, "" for none — the key completeTableStage names its pools by),
    *  then by the tied set's members key. A draw belongs to its pool. */
   lotsDraws?: ReadonlyMap<string, ReadonlyMap<MembersKey, StoredLotsDraw>>;
+  /** W2d (spec §5.6 "ST-G12", X-TB-8): every fixture the stage schedules, decided or not, as [home, away] — one entry per
+   *  fixture (`RankContext.scheduledPairs`). A head-to-head step needs the tied class's mini-schedule complete. Absent or
+   *  empty = every mini-schedule complete, as before W2d. */
+  scheduledPairs?: RankContext["scheduledPairs"];
+  /** W2d (IH-TB-2): the sport's partial-schedule order (`SportModule.partialScheduleOrder`). Absent = the block does not
+   *  split a class whose mini-schedule is incomplete. */
+  partialScheduleOrder?: RankContext["partialScheduleOrder"];
+}
+
+/** W2d (spec §5.9, ST-G4, X-TB-7): how this stage compares entrants from DIFFERENT groups (best-Nth) — its effective
+ *  `crossGroup` order (pinned with the stage), with the seeds, `winsCount` and rngSeed its keys read, and the cross-group
+ *  draws stored for it. Those live in the stage-wide pool "" (`stage_lots_draws.pool_id` null): a cross-group tie holds
+ *  one entrant per group, so its members key never meets a group's own tie, and a pooled stage has no "" table of its
+ *  own (T5 review G3). The one reading of a stage for `SourceTables.crossGroup`. */
+export function crossGroupRulesOf(stage: TableStage): CrossGroupRules {
+  const lotsDraws = stage.lotsDraws?.get("");
+  return {
+    order: stage.rules.crossGroup,
+    ...(lotsDraws === undefined ? {} : { lotsDraws }),
+    ...(stage.seeds === undefined ? {} : { seeds: stage.seeds }),
+    ...(stage.rngSeed === undefined ? {} : { rngSeed: stage.rngSeed }),
+    ...(stage.winsCount === undefined ? {} : { winsCount: stage.winsCount }),
+  };
 }
 
 export interface BracketStage {
@@ -273,6 +296,8 @@ export function completeTableStage(
       ...(stage.rngSeed === undefined ? {} : { rngSeed: stage.rngSeed }),
       ...(stage.h2hScope === undefined ? {} : { h2hScope: stage.h2hScope }),
       ...(stage.swiss === true ? { swiss: buildSwissTable(entrants, results, awardDeltas) } : {}),
+      ...(stage.scheduledPairs === undefined ? {} : { scheduledPairs: stage.scheduledPairs }),
+      ...(stage.partialScheduleOrder === undefined ? {} : { partialScheduleOrder: stage.partialScheduleOrder }),
     });
     // Manual override wins — it is the final structural word (Jul3/05 §8).
     if (stage.rankLocks !== undefined && stage.rankLocks.length > 0) {

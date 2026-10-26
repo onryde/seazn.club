@@ -18,7 +18,7 @@
 import { EngineError } from "../core/errors.ts";
 import { shuffle } from "../core/rng.ts";
 import type { EntrantId, StandingsDelta } from "../core/types.ts";
-import type { TiebreakerKey } from "../sport/module.ts";
+import type { PartialScheduleKey, TiebreakerKey } from "../sport/module.ts";
 import { RATIO_LEDGERS, type RatioKey } from "./display.ts";
 import {
   foldResults,
@@ -204,6 +204,9 @@ export interface RankContext {
   cascade: readonly TiebreakerKey[];
   // Decided fixtures of the pool being ranked — the source for head-to-head
   // and direct-encounter mini-tables (spec 05 §4.2). Empty ⇒ no h2h data.
+  // Absent (W2d T12) ⇒ the rows are not one pool's table (the cross-group
+  // comparison, §5.9): `sberger` then compares each row's own materialised SB
+  // rather than a ledger of results nobody passed.
   results?: readonly FixtureResult[];
   // W2d (spec §5.6, B2): which wins the `wins` key (and `h2h_wins`) counts.
   // "regulation" — FIH "matches won" — leaves out a win in overtime (the
@@ -240,6 +243,23 @@ export interface RankContext {
   // 0 ⇒ an empty table: every row is `level`, ordered by seed then id, and no
   // lots are drawn. Absent ⇒ the caller does not say, and nothing is level.
   countedFixtures?: number;
+  // W2d (spec §5.6 "ST-G12", X-TB-8): every fixture the stage schedules among
+  // these rows, decided or not, as [home, away] — ONE ENTRY PER FIXTURE, so a
+  // double round robin lists each pair twice. A head-to-head step (an h2h
+  // block, `h2h_two`, `direct`) needs the tied class's mini-schedule complete:
+  // every scheduled fixture between members of the class counted in `results`.
+  // Otherwise the block gives way to `partialScheduleOrder`, or the step does not
+  // split and the class carries the note `h2h_incomplete`. Every counted result
+  // must be on the schedule (CONFIG_INVALID otherwise: the two were built from
+  // different fixtures). Absent or empty ⇒ every mini-schedule is complete (as
+  // before W2d).
+  scheduledPairs?: readonly (readonly [EntrantId, EntrantId])[];
+  // W2d (IH-TB-2): the sport's order for a tied class whose mini-schedule is
+  // incomplete, in place of the h2h block (`SportModule.partialScheduleOrder`,
+  // IIHF RBG:349-350). Plain keys and `fewest_played`; a final `lots` hands the
+  // class still level back to the stage's order, whose lots decide it. Anything
+  // else is refused up front (CONFIG_INVALID).
+  partialScheduleOrder?: readonly PartialScheduleKey[];
 }
 
 /** W2d (spec §5.8): a tied set's identity — its entrant ids, sorted, joined with ",". */
@@ -292,6 +312,7 @@ export const FOR_KEYS = ["gf", "runs_for", "for"] as const;
 export const AGAINST_KEYS = ["ga", "runs_against", "against"] as const;
 
 const FAIR_PLAY_KEYS = ["fair_play"] as const;
+const SBERGER_KEYS = ["sberger"] as const;
 
 // The first of `keys` this row records, or `undefined` when it records none.
 //
@@ -424,8 +445,14 @@ interface RunContext extends RankContext {
   // in game points. Built once per call, and only when the cascade has sberger.
   readonly poolLedger: SwissTable | undefined;
   // Why a conditional step left a class unsplit (anti-goal 2), by entrant.
-  // A later split clears it (markTieBreak); a residual tie keeps it.
+  // A later split clears it (markTieBreak), except `h2h_incomplete`; a residual
+  // tie keeps it.
   readonly notes: Map<EntrantId, TieBreakNote>;
+  // W2d (ST-G12): `scheduledPairs` when it says anything (non-empty), else
+  // undefined — every mini-schedule complete.
+  readonly schedule: readonly (readonly [EntrantId, EntrantId])[] | undefined;
+  // W2d (IH-TB-2): `partialScheduleOrder`, parsed once per rank call.
+  readonly partial: readonly PlainStep[] | undefined;
 }
 type RunComparator = (a: StandingsRow, b: StandingsRow, run: RunContext) => number;
 
@@ -455,10 +482,12 @@ const COMPARATORS: Readonly<Record<PlainKey, RunComparator>> = {
     ctx.swiss
       ? sgn(buchholzCut1(ctx.swiss, a.entrantId) - buchholzCut1(ctx.swiss, b.entrantId))
       : 0,
-  // The Swiss ledger, else (W2d §5.6, B5) the pool ledger in game points.
+  // The Swiss ledger, else (W2d §5.6, B5) the pool ledger in game points, else
+  // (W2d T12: rows from different pools, compared without results, §5.9) each
+  // row's own SB as its pool's table materialised it.
   sberger: (a, b, run) => {
     const table = run.swiss ?? run.poolLedger;
-    return table ? sgn(sonnebornBerger(table, a.entrantId) - sonnebornBerger(table, b.entrantId)) : 0;
+    return table ? sgn(sonnebornBerger(table, a.entrantId) - sonnebornBerger(table, b.entrantId)) : compareMetric(a, b, SBERGER_KEYS);
   },
   seed: (a, b, ctx) => {
     const sa = ctx.seeds?.get(a.entrantId) ?? Number.MAX_SAFE_INTEGER;
@@ -525,7 +554,8 @@ function markTieBreak(cls: readonly StandingsRow[], key: string, run: RunContext
   const ids = cls.map((row) => row.entrantId);
   for (const row of cls) {
     row.tieBreak = { key, with: ids.filter((id) => id !== row.entrantId) };
-    run.notes.delete(row.entrantId);
+    // W2d (ST-G12): a skipped head-to-head stays unanswered — no later step re-runs it for these rows.
+    if (run.notes.get(row.entrantId) !== "h2h_incomplete") run.notes.delete(row.entrantId);
   }
 }
 
@@ -548,9 +578,10 @@ function markResidual(cls: readonly StandingsRow[], key: "lots" | "seed", run: R
 // The cascade, parsed once per rank call. `index` is the key's position: the
 // first key is the primary order, so a split there is not a tie to explain.
 type Step =
-  | { kind: "plain"; index: number; key: PlainKey; cmp: RunComparator }
+  | { kind: "plain"; index: number; key: PlainKey | "fewest_played"; cmp: RunComparator }
   | { kind: "block"; index: number; keys: readonly BlockKey[]; modifier: Modifier | null }
   | { kind: "h2h_two" | "direct" | "lots"; index: number };
+type PlainStep = Extract<Step, { kind: "plain" }>;
 
 // Anti-goal 2 (W2d spec §2.3, §5.5 read side): a key nothing handles THROWS.
 // Before W2d it was silently skipped (a preset name stored where a key belongs
@@ -592,6 +623,95 @@ function refusal(key: string, index: number, why: string): EngineError {
   return new EngineError("CONFIG_INVALID", `tie-break key "${key}" at position ${index + 1} ${why}`, { key, index });
 }
 
+// W2d (IH-TB-2, RBG:349-350): IIHF's "fewest games played" — fewer played ranks
+// higher. Internal: only a partial-schedule order holds it (never a TiebreakerKey).
+const FEWEST_PLAYED: RunComparator = (a, b) => sgn(b.played - a.played);
+
+// W2d (spec §5.6, IH-TB-2): a partial-schedule order, parsed up front like the
+// cascade, so a bad order is refused whether or not this table reaches it. Plain
+// keys and `fewest_played` refine; `lots`, last only, is the residual the stage's
+// own order goes on to decide. A head-to-head key would need the very
+// mini-schedule that is incomplete, so it — and anything without a comparator —
+// is refused.
+function parsePartialOrder(order: readonly PartialScheduleKey[]): PlainStep[] {
+  const steps: PlainStep[] = [];
+  order.forEach((key, i) => {
+    const why = (what: string): EngineError =>
+      new EngineError("CONFIG_INVALID", `partial-schedule key "${key}" at position ${i + 1} ${what}`, { key, index: i });
+    if (key === "lots") {
+      if (i !== order.length - 1) throw why("must be last");
+      return;
+    }
+    if (key === "fewest_played") {
+      steps.push({ kind: "plain", index: i, key, cmp: FEWEST_PLAYED });
+      return;
+    }
+    const cmp = Object.hasOwn(COMPARATORS, key) ? COMPARATORS[key as PlainKey] : undefined;
+    if (cmp === undefined) throw why("is not a plain key (no head-to-head step can rank an incomplete mini-schedule)");
+    steps.push({ kind: "plain", index: i, key: key as PlainKey, cmp });
+  });
+  return steps;
+}
+
+// W2d (X-TB-8): the schedule holds every counted result, pair for pair. A
+// result it does not list — or more results of a pair than it schedules — means
+// the schedule and the results were built from different fixtures, and every
+// completeness answer would be wrong: refused by name.
+function checkSchedule(schedule: readonly (readonly [EntrantId, EntrantId])[], results: readonly FixtureResult[]): void {
+  const owed = new Map<MembersKey, number>();
+  for (const [home, away] of schedule) {
+    const key = membersKeyOf([home, away]);
+    owed.set(key, (owed.get(key) ?? 0) + 1);
+  }
+  for (const result of results) {
+    const key = membersKeyOf([result[0].entrantId, result[1].entrantId]);
+    const left = owed.get(key) ?? 0;
+    if (left === 0) {
+      throw new EngineError("CONFIG_INVALID", `counted result ${key} is not on the stage's schedule (or is counted more often than scheduled)`, {
+        pair: key,
+      });
+    }
+    owed.set(key, left - 1);
+  }
+}
+
+// W2d (spec §5.6 "ST-G12"): a tied class's mini-schedule is complete when every
+// fixture the stage schedules between its members is decided. `checkSchedule`
+// holds results ⊆ schedule pair for pair, so equal totals mean every pair is done.
+function scheduleComplete(cls: readonly StandingsRow[], run: RunContext): boolean {
+  if (run.schedule === undefined) return true;
+  const ids = new Set(cls.map((row) => row.entrantId));
+  const scheduled = run.schedule.filter(([home, away]) => ids.has(home) && ids.has(away)).length;
+  return scheduled === resultsAmong(ids, run.results ?? []).length;
+}
+
+// A head-to-head step that cannot run on an incomplete mini-schedule: no split,
+// and the popover says why (the author's call, AUD-ST:71 — a team is never placed
+// above a rival it has not yet played on the strength of the meetings so far).
+function h2hIncomplete(cls: StandingsRow[], run: RunContext): StandingsRow[][] {
+  for (const row of cls) run.notes.set(row.entrantId, "h2h_incomplete");
+  return [cls];
+}
+
+// W2d (IH-TB-2): the block's class has an incomplete mini-schedule. The sport's
+// partial-schedule order ranks it (IIHF RBG:349-350), each split traced as the
+// block's own would be; whatever stays level goes on down the stage's order,
+// still noted. A sport without one: the block does not split.
+function partialSchedule(cls: StandingsRow[], run: RunContext): StandingsRow[][] {
+  const classes = h2hIncomplete(cls, run);
+  if (run.partial === undefined) return classes;
+  let current = classes;
+  for (const step of run.partial) {
+    current = current.flatMap((group) => {
+      if (group.length <= 1) return [group];
+      const groups = groupBySort(group, step.cmp, run);
+      if (groups.length > 1) markTieBreak(group, step.key, run);
+      return groups;
+    });
+  }
+  return current;
+}
+
 // spec 05 §4.2, W2d §5.6 — head-to-head partition refinement over a maximal
 // run of h2h_* keys (the block), with its optional modifier:
 //   none (FIFA)             one pass; residual groups fall through.
@@ -613,6 +733,9 @@ function h2hBlock(
   // Jul3/05 §5 circular-H2H mode: an organiser may prefer overall metrics in
   // a ≥3-way tie — skip the mini-table and let later cascade keys decide.
   if (run.h2hScope === "overall" && cls.length >= 3) return [cls];
+  // W2d (ST-G12): the block reads a mini-table only when it is complete. (A
+  // re-applied or excluded sub-group of a complete class is complete.)
+  if (!scheduleComplete(cls, run)) return partialSchedule(cls, run);
   if (modifier === "h2h_exclusion") return h2hExclusion(cls, keys, run);
   const ordered = h2hPass(cls, keys, run);
   if (modifier !== "h2h_reapply") return ordered;
@@ -678,6 +801,8 @@ function h2hExclusion(cls: StandingsRow[], keys: readonly BlockKey[], run: RunCo
 function h2hTwo(cls: StandingsRow[], explain: boolean, run: RunContext): StandingsRow[][] {
   if (cls.length <= 1) return [cls];
   if (cls.length === 2) {
+    // W2d (ST-G12): a match between them still to be decided — the matches so far are not "the match between them".
+    if (!scheduleComplete(cls, run)) return h2hIncomplete(cls, run);
     const mini = miniTable(cls, run);
     const groups = groupBySort(mini.rows, COMPARATORS.points, run);
     if (groups.length > 1) {
@@ -743,6 +868,8 @@ function refine(classes: StandingsRow[][], steps: readonly Step[], run: RunConte
       case "direct":
         current = current.flatMap((cls) => {
           if (cls.length <= 1) return [cls];
+          // W2d (ST-G12): direct encounter among a tied set that has not played out its meetings does not split.
+          if (!scheduleComplete(cls, run)) return h2hIncomplete(cls, run);
           const groups = directRefine(cls, run);
           if (explain && groups.length > 1) markTieBreak(cls, "direct", run);
           return groups;
@@ -820,12 +947,15 @@ function storedOrder(stored: StoredLotsDraw, membersKey: MembersKey): readonly E
 // `parseCascade`) and for a stored draw that does not fit its set.
 export function rankStandings(rows: readonly StandingsRow[], ctx: RankContext): RankingResult {
   const steps = parseCascade(ctx.cascade);
+  const partial = ctx.partialScheduleOrder === undefined ? undefined : parsePartialOrder(ctx.partialScheduleOrder);
+  const schedule = ctx.scheduledPairs !== undefined && ctx.scheduledPairs.length > 0 ? ctx.scheduledPairs : undefined;
+  if (schedule !== undefined) checkSchedule(schedule, ctx.results ?? []);
   const clones = rows.map((row) => ({ ...row, metrics: { ...row.metrics } }));
   const poolLedger =
-    ctx.swiss === undefined && ctx.cascade.includes("sberger")
+    ctx.swiss === undefined && ctx.results !== undefined && ctx.cascade.includes("sberger")
       ? buildPoolLedger(clones.map((row) => row.entrantId), ctx)
       : undefined;
-  const run: RunContext = { ...ctx, poolLedger, notes: new Map() };
+  const run: RunContext = { ...ctx, poolLedger, notes: new Map(), schedule, partial };
   // No rows, no class: zero entrants are no tie, so there is nothing for lots to draw (W2d T4 N1).
   const classes = refine(clones.length === 0 ? [] : [clones], steps, run);
   // W2d §5.8 step 1 (anti-goal 3): a table with no counted fixture has no

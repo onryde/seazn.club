@@ -7,13 +7,22 @@
 // one resolver. Pure — no DB, no tenant, idempotent.
 import { EngineError } from "../core/errors.ts";
 import type { EntrantId } from "../core/types.ts";
+import type { TiebreakerKey } from "../sport/module.ts";
+import { isHeadToHeadKey } from "./cascade-rules.ts";
 import {
   foldResults,
   resultsAmong,
   type FixtureResult,
   type StandingsRow,
 } from "./standings.ts";
-import { rankStandings } from "./tiebreakers.ts";
+import {
+  rankStandings,
+  type MembersKey,
+  type NewLotsDraw,
+  type RankContext,
+  type RankingResult,
+  type StoredLotsDraw,
+} from "./tiebreakers.ts";
 
 export interface PoolRankPick {
   pool: string;
@@ -455,7 +464,26 @@ export interface SourceTables {
   // qualification.ts.
   overall?: readonly StandingsRow[];
   bracket?: readonly BracketFixtureRow[]; // only present for a bracket-kind source; only roundLosers reads it
+  /** W2d (spec §5.9, ST-G4, X-TB-7): how the source stage compares entrants from different groups (best-Nth) —
+   *  `crossGroupRulesOf(stage)` (stage.ts). Absent = the pre-W2d order, `PRE_W2D_CROSS_GROUP`, with no seeds or draws:
+   *  the order every B1-migrated pin records, so a caller not yet handing the stage's own rules moves no seat. */
+  crossGroup?: CrossGroupRules;
 }
+
+/** W2d (spec §5.9): a source stage's cross-group comparison — its effective `crossGroup` order (no head-to-head key:
+ *  entrants from different groups never met, X-TB-7) and what its keys read. `lotsDraws` are the stage's stored
+ *  cross-group draws, by members key. */
+export interface CrossGroupRules {
+  readonly order: readonly TiebreakerKey[];
+  readonly lotsDraws?: ReadonlyMap<MembersKey, StoredLotsDraw>;
+  readonly seeds?: ReadonlyMap<EntrantId, number>;
+  readonly rngSeed?: number;
+  readonly winsCount?: RankContext["winsCount"];
+}
+
+/** The order best-Nth used before W2d, hard-coded for every sport — and the `crossGroup` every B1-migrated pin records
+ *  (V472: points, diff, for, wins), so a pinned stage's best-Nth seats do not move (B1). */
+export const PRE_W2D_CROSS_GROUP: readonly TiebreakerKey[] = ["points", "diff", "for", "wins"];
 export interface ResolvedProgressionEntry {
   seed: number;
   sourceIndex: number;
@@ -567,11 +595,38 @@ function normalisedRow(table: PoolTable, candidateId: EntrantId): StandingsRow {
   return row;
 }
 
-// Same cascade both prior implementations already used verbatim
-// (orderCandidates in qualification.ts, crossGroupOrder in
-// stage-seeding.ts) — unifying it is a rename, not a behaviour change.
-function crossGroupOrder(rows: StandingsRow[]): StandingsRow[] {
-  return rankStandings(rows, { cascade: ["points", "diff", "for", "wins"] }).rows;
+/** W2d (spec §5.9, ST-G4, X-TB-7): order rows from DIFFERENT groups by the source stage's `crossGroup` order, with its
+ *  stored cross-group draws (`lotsDraws`) and the seeds / winsCount / rngSeed its keys read. No results: the entrants
+ *  never met, so the order holds no head-to-head key (refused by name, CONFIG_INVALID — `resolveTableRules` and the
+ *  write path already strip or refuse one) and `sberger` compares each row's own SB. A row from an empty pool keeps its
+ *  `level` (T5 M4); when every row is level the comparison is an empty table too: seed, then id, and no lots. Returns
+ *  the ranked clones (`rank` = cross-group position) and any draw made here, for the caller to store. */
+export function crossGroupOrder(
+  rows: readonly StandingsRow[],
+  crossGroup: readonly TiebreakerKey[],
+  lotsDraws: ReadonlyMap<MembersKey, StoredLotsDraw> | undefined,
+  ctx: Pick<RankContext, "seeds" | "rngSeed" | "winsCount"> = {},
+): RankingResult {
+  crossGroup.forEach((key, index) => {
+    if (isHeadToHeadKey(key)) {
+      throw new EngineError(
+        "CONFIG_INVALID",
+        `cross-group key "${key}" at position ${index + 1} is a head-to-head step — entrants from different groups never met`,
+        { key, index },
+      );
+    }
+  });
+  const level = new Set(rows.filter((row) => row.level === true).map((row) => row.entrantId));
+  const ranked = rankStandings(rows, {
+    cascade: crossGroup,
+    ...(rows.length > 0 && level.size === rows.length ? { countedFixtures: 0 } : {}),
+    ...(lotsDraws === undefined ? {} : { lotsDraws }),
+    ...(ctx.seeds === undefined ? {} : { seeds: ctx.seeds }),
+    ...(ctx.rngSeed === undefined ? {} : { rngSeed: ctx.rngSeed }),
+    ...(ctx.winsCount === undefined ? {} : { winsCount: ctx.winsCount }),
+  });
+  for (const row of ranked.rows) if (level.has(row.entrantId)) row.level = true;
+  return ranked;
 }
 
 function loserAt(bracket: readonly BracketFixtureRow[] | undefined, round: number, position: number): StandingsRow {
@@ -608,7 +663,13 @@ export function resolveProgression(
   // doc comment) — an old caller that hasn't been taught to pass one yet
   // does not regress into an always-throwing guard.
   targetKind?: string,
-): { qualifiers: ResolvedProgressionEntry[]; ties: ProgressionTieFlag[] } {
+): {
+  qualifiers: ResolvedProgressionEntry[];
+  ties: ProgressionTieFlag[];
+  /** W2d (spec §5.9): the cross-group draws best-Nth made here, by source — for the caller to store under that stage's
+   *  "" pool (`crossGroupRulesOf`). Empty when every draw was stored or no tie needed one. */
+  newLotsDraws: (NewLotsDraw & { readonly sourceIndex: number })[];
+} {
   const pots = expandSources(spec.sources, (i) => shapes[i]!);
   const placed = placeDescriptors(pots, spec.placement, spec.map, targetKind);
 
@@ -616,6 +677,7 @@ export function resolveProgression(
   const tieGroups = new Map<string, ProgressionTieFlag>();
   const seen = new Set<EntrantId>();
   const bestNthCache = new Map<string, StandingsRow[]>();
+  const newLotsDraws: (NewLotsDraw & { readonly sourceIndex: number })[] = [];
 
   placed.forEach((slot, i) => {
     const seed = i + 1;
@@ -665,7 +727,14 @@ export function resolveProgression(
             );
           }
         }
-        ordered = crossGroupOrder(candidates);
+        const rules = src.crossGroup;
+        const ranked = crossGroupOrder(candidates, rules?.order ?? PRE_W2D_CROSS_GROUP, rules?.lotsDraws, {
+          ...(rules?.seeds === undefined ? {} : { seeds: rules.seeds }),
+          ...(rules?.rngSeed === undefined ? {} : { rngSeed: rules.rngSeed }),
+          ...(rules?.winsCount === undefined ? {} : { winsCount: rules.winsCount }),
+        });
+        for (const draw of ranked.newLotsDraws) newLotsDraws.push({ sourceIndex: slot.sourceIndex, ...draw });
+        ordered = ranked.rows;
         bestNthCache.set(cacheKey, ordered);
       }
       const candidate = ordered[d.position - 1];
@@ -708,7 +777,7 @@ export function resolveProgression(
     }
   });
 
-  return { qualifiers, ties: [...tieGroups.values()] };
+  return { qualifiers, ties: [...tieGroups.values()], newLotsDraws };
 }
 
 // L3/#414 — wraps any finish order as a single-pool PoolTable, unchanged

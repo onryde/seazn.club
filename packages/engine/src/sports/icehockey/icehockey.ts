@@ -259,6 +259,9 @@ export const icehockey = makePeriodModule({
   defaultTiebreakers: ["points", "h2h_points", "h2h_diff", "h2h_for", "h2h_reapply", "diff", "for", "seed", "lots"],
   // OC1: a Swiss stage keeps its pre-W2d order.
   swissTiebreakers: ["points", "h2h_points", "h2h_diff", "h2h_for", "diff", "for", "seed"],
+  // W2d (SPEC §5.6 "ST-G12", IH-TB-2): "if the tied teams have not all met" — a tied class whose mini-schedule is still
+  // incomplete — IIHF ranks by fewest games played, goal difference, goals for, then the seed (RBG:349-350), then lots.
+  partialScheduleOrder: ["fewest_played", "diff", "for", "seed", "lots"],
   primaryTableKey: "points", // W2d (D11): the table ranks on points first.
   officialLabel: { scorer: "Scorekeeper" },
   suspensionReasons: ICEHOCKEY_SUSPENSION_REASONS,

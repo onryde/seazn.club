@@ -54,6 +54,7 @@ import type {
   RuleKeys,
   SportModule,
   TablePresets,
+  PartialScheduleKey,
   TableStageKind,
   TiebreakerKey,
 } from "../../sport/module.ts";
@@ -1900,6 +1901,8 @@ export interface PeriodPreset {
   shootoutAs: "draw_plus_bonus" | "result";
   // W2d (HK-TB-1) — "regulation" when the tie-break's "wins" counts regulation wins only (FIH); omitted = every win.
   winsCount?: "regulation";
+  // W2d (spec §5.6 "ST-G12", IH-TB-2) — the module's `partialScheduleOrder`; omitted = none (the block does not split).
+  partialScheduleOrder?: readonly PartialScheduleKey[];
   // IIHF Rule 87 / NHL Rule 84.4 — the shoot-out winner is credited ONE extra
   // goal in the OFFICIAL SCORE: 2-2 won on the shoot-out is recorded 3-2, so
   // the winner's GF and the loser's GA carry it and it reaches goal difference.
@@ -2866,6 +2869,7 @@ export function makePeriodModule(
       ),
     shootoutAs: preset.shootoutAs,
     ...(preset.winsCount === undefined ? {} : { winsCount: preset.winsCount }),
+    ...(preset.partialScheduleOrder === undefined ? {} : { partialScheduleOrder: preset.partialScheduleOrder }),
     // W2d (spec §5.3, §5.10) — the cfg's win/draw/loss, with `otWin`/`otLoss` as the overtime split (D9: absent pays a
     // win). A `result` sport's shoot-out falls back to them (IIHF: the GWS pays 2/1, IH-PT-1); a `draw_plus_bonus` one is
     // a draw plus `soBonus` (absent: 1; FIH Pro League 2/1, HK-PT-2).

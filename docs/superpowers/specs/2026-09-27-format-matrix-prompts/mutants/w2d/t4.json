@@ -159,7 +159,7 @@
  {
   "id": "t4-split-keeps-stale-note",
   "file": "packages/engine/src/competition/tiebreakers.ts",
-  "find": "    run.notes.delete(row.entrantId);",
+  "find": "    if (run.notes.get(row.entrantId) !== \"h2h_incomplete\") run.notes.delete(row.entrantId);",
   "replace": "    void run.notes;",
   "killers": [
    {
@@ -489,8 +489,8 @@
  {
   "id": "t4-pool-ledger-without-sberger",
   "file": "packages/engine/src/competition/tiebreakers.ts",
-  "find": "ctx.swiss === undefined && ctx.cascade.includes(\"sberger\")",
-  "replace": "ctx.swiss === undefined || ctx.cascade.includes(\"sberger\")",
+  "find": "ctx.swiss === undefined && ctx.results !== undefined && ctx.cascade.includes(\"sberger\")",
+  "replace": "ctx.swiss === undefined && ctx.results !== undefined || ctx.cascade.includes(\"sberger\")",
   "killers": [
    {
     "cwd": "packages/engine",
@@ -549,8 +549,8 @@
  {
   "id": "t4-pool-ledger-on-a-swiss-stage",
   "file": "packages/engine/src/competition/tiebreakers.ts",
-  "find": "ctx.swiss === undefined && ctx.cascade.includes(\"sberger\")",
-  "replace": "true && ctx.cascade.includes(\"sberger\")",
+  "find": "ctx.swiss === undefined && ctx.results !== undefined && ctx.cascade.includes(\"sberger\")",
+  "replace": "true && ctx.results !== undefined && ctx.cascade.includes(\"sberger\")",
   "killers": [
    {
     "cwd": "packages/engine",
