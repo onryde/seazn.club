@@ -26,6 +26,10 @@ plan (`2026-10-26-email-outbox-phase3-wave2.md`, its Global Constraints and ruli
 **Kind count.** The spec's table lists exactly nine wave-4 rows (#5, #6, #7, #8, #9, #15, #16, #17, #18), matching
 the wave-1 outline. 49 − 5 − 10 − 8 − 9 = 17 left for wave 5, which matches the spec's wave-5 count.
 
+## Owner rulings (2026-10-26) — every Owner question below is decided
+
+The owner applied every recommendation in this plan's Owner questions: Q1 an unassignment does NOT cancel a still-queued assignment notice (recorded, not built); Q2 the assignment notice uses the 24 h bound, not the fixture start.
+
 ## Global Constraints
 
 Everything in the wave-2 plan's Global Constraints applies, with the path, branch and label below. The lines that bite

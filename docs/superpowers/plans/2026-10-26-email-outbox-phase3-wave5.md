@@ -28,6 +28,10 @@ and the mutation rows "funnel claim" and "R2". Executors also read:
 - the merged wave-3 and wave-4 plans (written in parallel with this one; their names are re-pinned at T0);
 - the phase-4 note, `docs/superpowers/specs/2026-10-26-email-service-phase4-note.md`.
 
+## Owner rulings (2026-10-26) — every Owner question below is decided
+
+The owner applied every recommendation in this plan's Owner questions: Q1 a staff alert that cannot be queued is logged and dropped (D1 exception); Q2 a persistent money fault re-alerts once per UTC day; Q3 `funnel_drafts` remembers the visitor's language (only if wave 3 stored none); the T9 `STAFF_ALERT_EMAIL` e2e env edit is approved.
+
 ## Global Constraints
 
 Everything in the wave-1 plan's Global Constraints (its lines 25–102) applies, with the path, branch and label replaced

@@ -32,6 +32,10 @@ rows of its kind table (inventory #1, #2, #3, #4, #11, #12, #13, #14), §5 (emai
 `official_invite`. That matches the wave-1 plan's "Next waves" list and the spec's count line ("wave 3 has 8"). No
 difference.
 
+## Owner rulings (2026-10-26) — every Owner question below is decided
+
+The owner applied every recommendation in this plan's Owner questions: Q1 yes (also reword `claim.invite.sendFailed`, 4 locales); Q2 screenshots from a ONE-OFF local server with no Resend key, used only for the 3 widths and torn down after; Q3 yes (sign-in link in the account's language, T2e).
+
 ## Global Constraints
 
 Everything in the wave-1 plan's Global Constraints applies, with the path, branch and label replaced as below. The

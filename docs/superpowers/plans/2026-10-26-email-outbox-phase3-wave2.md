@@ -33,6 +33,10 @@ regrouped into Batches Aâ€“D, still one commit per email. Emails are numbered 1â
 say "Batch A / email 1". T1 was dispatched from the pre-revision text plus the controller's T0 rulings; its section
 below records the corrected facts its review holds it to.
 
+## Owner ruling (2026-10-26): screenshots
+
+- Q1's screenshots (1280/768/320) come from a ONE-OFF local server (`$S up --label outbox-p3-w2 --server`), used only for that visual check and torn down right after. An exception to the no-local-server rule for this visual check only.
+
 ## Owner rulings (2026-10-26, wave-2 session)
 
 - **Q1: yes.** `sponsors.order.sent` becomes en "We're emailing the invoice to the sponsor. You can also share this
