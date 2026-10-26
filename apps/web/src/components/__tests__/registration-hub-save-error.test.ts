@@ -141,3 +141,23 @@ describe("mapSaveError — unmapped errors fall back to a banner, never silently
     expect(mapSaveError(err)).toEqual({ field: null, message: "Failed to fetch" });
   });
 });
+
+// Owner ruling 2026-10-26: chess takes individual players only. The refusal is a plain-message 422 with a stable
+// code; the panel routes it to the entrant type and localises it by CODE (the server words it in English only).
+describe("mapSaveError - CHESS_INDIVIDUAL_ONLY", () => {
+  it("routes the code to entrant_kind and carries it, so the panel can localise", () => {
+    const err = new ApiV1Error("Chess divisions take individual players only", 422, "CHESS_INDIVIDUAL_ONLY");
+    expect(mapSaveError(err)).toEqual({
+      field: "entrant_kind",
+      message: "Chess divisions take individual players only",
+      code: "CHESS_INDIVIDUAL_ONLY",
+    });
+  });
+
+  it("any other 422 is untouched: no code, routed by the old table", () => {
+    const err = new ApiV1Error("closes_at must be after opens_at.", 422, "UNPROCESSABLE");
+    const info = mapSaveError(err);
+    expect(info.field).toBe("closes_at");
+    expect(info.code).toBeUndefined();
+  });
+});

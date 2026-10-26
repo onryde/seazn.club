@@ -603,6 +603,7 @@ describe("registration hub — Settings tab data wiring (RS004 W3)", () => {
       {
         division_id: "div-1",
         name: "Open Singles",
+        sport_key: "football",
         category: null,
         age_min: 10,
         age_max: 18,
@@ -635,6 +636,7 @@ describe("registration hub — Settings tab data wiring (RS004 W3)", () => {
       {
         division_id: "div-1",
         name: "Open Singles",
+        individual_only: false,
         category: null,
         age_min: 10,
         age_max: 18,
@@ -654,6 +656,27 @@ describe("registration hub — Settings tab data wiring (RS004 W3)", () => {
       },
     ]);
     expect((props.context as { currency: string }).currency).toBe("gbp");
+  });
+
+  // Owner ruling 2026-10-26: chess takes individual entrants only. The page is the one place a division's sport
+  // becomes the row's `individual_only` flag, which the config panel reads - so it is mapped per ROW, not per page.
+  it("flags a chess row individual_only and no other sport's row", async () => {
+    const base = {
+      category: null, age_min: null, age_max: null, age_cutoff_month: null, age_cutoff_day: null,
+      eligibility_note: null, enabled: true, entrant_kind: "team", opens_at: null, closes_at: null,
+      capacity: null, fee_cents: 0, approval: "auto", allow_free_agents: true, taken: 0, waitlisted: 0,
+      org_currency: "gbp",
+    };
+    h.rows = [
+      { ...base, division_id: "d-chess", name: "Blitz", sport_key: "boardgame" },
+      { ...base, division_id: "d-foot", name: "Five-a-side", sport_key: "football" },
+    ];
+    const tree = walk(await Page({ params, searchParams: noTab }));
+    const rows = propsOf(tree.find((e) => e.type === RegistrationHubSettingsPanel)!).rows as { division_id: string; individual_only: boolean }[];
+    expect(rows.map((r) => [r.division_id, r.individual_only])).toEqual([
+      ["d-chess", true],
+      ["d-foot", false],
+    ]);
   });
 
   it("resolves the org timezone from organizations.timezone", async () => {

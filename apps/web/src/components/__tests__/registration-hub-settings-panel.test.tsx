@@ -146,6 +146,26 @@ describe("RegistrationHubSettingsPanel — opening/closing/saving the config pan
     });
   });
 
+  // Owner ruling 2026-10-26: the config panel offers chess individual entry only. This panel builds the config
+  // panel's `division` prop field-by-field, so a flag the row carries but this literal omits would never arrive.
+  it("hands the open row's individual_only flag to the config panel - per row, and false when the row has none", () => {
+    const island = renderIsland(RegistrationHubSettingsPanel, {
+      ...BASE_PROPS,
+      rows: [ROW, { ...ROW, division_id: "div-2", name: "Blitz", individual_only: true }],
+    });
+    const rows = island.tree().filter((e) => e.type === RegistrationHubDivisionRow);
+    (propsOf(rows[1]!).context as RegistrationHubRowContext).onOpen("div-2");
+    expect(propsOf(island.tree().find((e) => e.type === RegistrationHubConfigPanel)!).division).toMatchObject({
+      division_id: "div-2",
+      individual_only: true,
+    });
+    (propsOf(rows[0]!).context as RegistrationHubRowContext).onOpen("div-1");
+    expect(propsOf(island.tree().find((e) => e.type === RegistrationHubConfigPanel)!).division).toMatchObject({
+      division_id: "div-1",
+      individual_only: false,
+    });
+  });
+
   it("passes orgTz/currency/orgSlug/feePercentPct/cardUnsupportedCurrency through to the config panel", () => {
     const island = renderIsland(RegistrationHubSettingsPanel, {
       ...BASE_PROPS,

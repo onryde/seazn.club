@@ -6,6 +6,8 @@ import esUi from "@/dictionaries/es/ui.json";
 import frUi from "@/dictionaries/fr/ui.json";
 import nlUi from "@/dictionaries/nl/ui.json";
 import type { EffectiveEntrantModel } from "@seazn/engine/sport";
+import { builtinModules } from "@seazn/engine/sports";
+import { CHESS_SPORT_KEY } from "@/lib/chess-individual-only";
 
 // Same harness as stages-panel-delete.test.tsx: mock the router + confirm hooks
 // and assert on the STATIC markup. The Entrants block is a defaultOpen Group so
@@ -31,6 +33,8 @@ function renderSettings(
     entrantModelSource?: "sport" | "override";
     canEdit?: boolean;
     showSeeds?: boolean;
+    sportKey?: string;
+    config?: unknown;
   } = {},
 ): string {
   return renderToStaticMarkup(
@@ -38,9 +42,9 @@ function renderSettings(
       division={{
         id: "d1",
         name: "Open",
-        sport_key: "football",
+        sport_key: overrides.sportKey ?? "football",
         variant_key: "standard",
-        config: {},
+        config: overrides.config ?? {},
         logo_url: null,
         logo_storage_path: null,
       }}
@@ -112,6 +116,92 @@ describe("DivisionSettings — Entrants block", () => {
   it("hides the editing affordances from viewers (canEdit=false)", () => {
     const html = renderSettings({ canEdit: false });
     expect(html).not.toContain("Save entrant settings");
+  });
+});
+
+// Owner ruling 2026-10-26: chess divisions are individual-only. The block must not OFFER pair, team or a default
+// kind for chess, must keep offering them for every other sport, and must still render a legacy widened row (a
+// division saved before the ruling) without crashing - naming it and offering Reset, never a Save.
+const WIDENED = { kinds: ["individual", "team"], defaultKind: "team", squadNumbers: true, captain: true };
+const TEAM_MODEL: EffectiveEntrantModel = {
+  kinds: ["individual", "pair", "team"],
+  defaultKind: "individual",
+  squadNumbers: true,
+  captain: true,
+  maxTeamMembers: null,
+};
+
+describe("DivisionSettings - Entrants block for chess (individual-only)", () => {
+  it("offers no kind chips, default select, team options or Save; says why", () => {
+    const html = renderSettings({ sportKey: CHESS_SPORT_KEY, entrantModel: INDIVIDUAL_ONLY });
+    expect(html).toContain('data-testid="entrants-chess-only"');
+    expect(html).toContain("Chess divisions take individual players only");
+    expect(html).not.toMatch(/data-kind="/);
+    expect(html).not.toContain("Default kind");
+    expect(html).not.toContain("Team options");
+    expect(html).not.toContain("Save entrant settings");
+    expect(html).not.toContain("entrants-sport-default");
+    // A clean chess division has nothing legacy to name or reset.
+    expect(html).not.toContain("entrants-chess-legacy");
+    expect(html).not.toContain("Reset to sport default");
+  });
+
+  it("a legacy widened row still renders (no crash), names the leftover setup, and offers Reset - not the team controls", () => {
+    // The page clamps the model for chess, but even handed the WIDENED model the block must not offer it.
+    const html = renderSettings({
+      sportKey: CHESS_SPORT_KEY,
+      entrantModel: TEAM_MODEL,
+      entrantModelSource: "override",
+      config: { entrants: WIDENED },
+    });
+    expect(html).toContain('data-testid="entrants-chess-legacy"');
+    expect(html).toContain("Reset to sport default");
+    expect(html).not.toMatch(/data-kind="/);
+    expect(html).not.toContain("Team options");
+    expect(html).not.toContain("Squad numbers");
+    expect(html).not.toContain("Save entrant settings");
+  });
+
+  it("a viewer sees the legacy line but no Reset", () => {
+    const html = renderSettings({
+      sportKey: CHESS_SPORT_KEY,
+      entrantModelSource: "override",
+      config: { entrants: WIDENED },
+      canEdit: false,
+    });
+    expect(html).toContain('data-testid="entrants-chess-legacy"');
+    expect(html).not.toContain("Reset to sport default");
+  });
+
+  it("an individual-only override left by an earlier Save is not legacy: nothing to reset", () => {
+    const html = renderSettings({
+      sportKey: CHESS_SPORT_KEY,
+      entrantModelSource: "override",
+      config: { entrants: { kinds: ["individual"], defaultKind: "individual" } },
+    });
+    expect(html).not.toContain("entrants-chess-legacy");
+  });
+
+  it("every OTHER sport in the registry still offers all three kinds (positive pair, swept)", () => {
+    const others = builtinModules.filter((m) => m.key !== CHESS_SPORT_KEY);
+    expect(others.length).toBeGreaterThan(1);
+    let checked = 0;
+    for (const m of others) {
+      const html = renderSettings({ sportKey: m.key, entrantModel: TEAM_MODEL });
+      for (const kind of ["individual", "pair", "team"]) {
+        expect(html, `${m.key} offers ${kind}`).toMatch(new RegExp(`data-kind="${kind}"`));
+      }
+      expect(html, m.key).not.toContain("entrants-chess-only");
+      expect(html, m.key).toContain("Save entrant settings");
+      checked += 1;
+    }
+    expect(checked).toBe(others.length);
+  });
+
+  it("the same widened model on a team sport renders the team controls (the chess branch is not a global hide)", () => {
+    const html = renderSettings({ sportKey: "football", entrantModel: TEAM_MODEL, entrantModelSource: "override", config: { entrants: WIDENED } });
+    expect(html).toContain("Team options");
+    expect(html).not.toContain("entrants-chess-legacy");
   });
 });
 

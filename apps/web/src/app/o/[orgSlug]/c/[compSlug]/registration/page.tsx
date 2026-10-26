@@ -26,6 +26,7 @@ import {
   type RegistrationHubTab,
 } from "@/components/registration-hub-tab";
 import { RegistrationHubSettingsPanel } from "@/components/registration-hub-settings-panel";
+import { isChessSport } from "@/lib/chess-individual-only";
 import {
   RegistrationHubRegistrantsPanel,
   type PoolSummaryPanelRow,
@@ -98,6 +99,7 @@ export default async function RegistrationHubPage({
     const rows: RegistrationHubRowData[] = rawRows.map((r) => ({
       division_id: r.division_id,
       name: r.name,
+      individual_only: isChessSport(r.sport_key),
       category: r.category,
       age_min: r.age_min,
       age_max: r.age_max,

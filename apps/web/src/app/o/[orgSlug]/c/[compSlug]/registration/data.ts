@@ -39,6 +39,9 @@ import {
 export interface RawDivisionRow {
   division_id: string;
   name: string;
+  /** The division's sport module key - read ONLY to derive `individual_only` (chess takes individual entrants only,
+   *  owner ruling 2026-10-26); the page maps it, the row card does not show it. */
+  sport_key: string;
   category: RegistrationHubRowData["category"];
   age_min: number | null;
   age_max: number | null;
@@ -93,6 +96,7 @@ export async function fetchDivisionRows(
       select
         d.id as division_id,
         d.name,
+        d.sport_key,
         d.category,
         d.age_min,
         d.age_max,

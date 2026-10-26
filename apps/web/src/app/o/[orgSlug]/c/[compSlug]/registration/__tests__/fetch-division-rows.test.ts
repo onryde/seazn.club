@@ -113,6 +113,10 @@ describe.skipIf(!HAS_DB)("fetchDivisionRows — real Postgres", () => {
       age_cutoff_day: 1,
       eligibility_note: "School-registered students only",
     });
+    // Owner ruling 2026-10-26 (chess is individual-only): the SELECT carries each division's sport, which the page
+    // turns into the config panel's individual_only flag. Created above as "generic", so read back as exactly that.
+    expect(configuredRow.sport_key).toBe("generic");
+    expect(unconfiguredRow.sport_key).toBeTruthy();
     expect(configuredRow.org_currency).toBeTruthy();
     // A fresh org's Stripe account is not connected at all — never
     // "unsupported", which would wrongly disable card payments outright.
