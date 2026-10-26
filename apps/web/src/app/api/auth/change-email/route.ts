@@ -47,8 +47,8 @@ export async function POST(req: Request) {
         values (${user.id}, ${user.email}, ${new_email}, ${token}, ${expiresAt.toISOString()})
         returning id`;
 
-      // D4: the account's own language (its stored pick, then the account; there is no organisation).
-      const locale = await recipientLocale(tx, { pick: user.locale, userId: user.id, orgDefault: null });
+      // D4: the account's own language, read fresh on `tx` (no explicit pick: the session's cached row is not one; no organisation).
+      const locale = await recipientLocale(tx, { pick: null, userId: user.id, orgDefault: null });
       // An older request's confirmation still queued for a retry would reach an address the person has moved on from, carrying a
       // token that no longer exists (phase-3 spec §5). End it BEFORE the new one is queued: the cancel matches by kind and ref, so
       // after the enqueue it would end the new row too. (The replace rule cannot: it pairs rows by recipient, and the address differs.)
