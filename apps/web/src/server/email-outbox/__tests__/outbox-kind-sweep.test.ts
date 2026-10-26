@@ -40,6 +40,9 @@
 //   - trial_ending: the real `processStripeEvent` (`customer.subscription.trial_will_end`) on a no-card trialing billing group whose
 //     payer's account is `fr`: the warning is queued to the payer's account, TRANSACTIONAL (the only wave-2 kind that is), with no
 //     organisation, and the worker makes the first attempt.
+//   - email_verification: the route POST of app/api/admin/users/[id]/resend-verification/route.ts, a staff press for an unverified `fr`
+//     account: the token and its row are one transaction on the pool, no organisation, and the request's own deferred attempt sends it.
+//     The staff member is signed in through the session stand-in below; `requireStaff` itself is real.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -65,6 +68,14 @@ vi.mock("next/headers", () => ({
   headers: async () => new Headers({ "x-forwarded-for": "203.0.113.78" }),
   cookies: async () => ({ get: () => undefined, set: () => {}, delete: () => {} }),
 }));
+// Wave 3's account mail comes from signed-in routes (a staff press, an email change). Their scenario sets who is signed in for its own
+// `run` only (`signedInAs`); every other producer here runs with nobody signed in, as before (the real `requireUser`, no session).
+const session = vi.hoisted(() => ({ user: null as null | { id: string } }));
+vi.mock("@/lib/auth", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/auth")>();
+  type User = Awaited<ReturnType<typeof real.requireUser>>;
+  return { ...real, requireUser: vi.fn(async (): Promise<User> => (session.user as User | null) ?? real.requireUser()) };
+});
 // The one network seam. The harness reads this same mock back (it imports `deliver` from the same module).
 const deliverMock = vi.hoisted(() => vi.fn());
 vi.mock("@/server/email-outbox/transport", () => ({ deliver: deliverMock }));
@@ -77,6 +88,7 @@ const stripeMock = vi.hoisted(() => {
 vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
 
 import { POST as magicLinkPost } from "@/app/api/auth/magic-link/route";
+import { POST as resendVerificationPost } from "@/app/api/admin/users/[id]/resend-verification/route";
 import { POST as registerPost } from "@/app/api/v1/public/orgs/[orgSlug]/competitions/[slug]/register/route";
 import { openRound } from "@/server/usecases/external-play/open-round";
 import { assignSoloSignUp } from "@/server/usecases/registration-assign";
@@ -93,7 +105,7 @@ import { processStripeEvent } from "@/server/usecases/billing-events";
 import { seedOnlineChessRound } from "@/server/usecases/__tests__/_external-play-seed";
 import { seedPassOrg, seedSponsorOrder, seedSponsorOrg, seedTrialingGroup } from "@/server/usecases/__tests__/_money-fixtures";
 import { planLabel } from "@/lib/plan-label";
-import { SETTINGS_BASE, asOwner, fakeSession, rig, seedOrg, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
+import { SETTINGS_BASE, asOwner, fakeSession, makeUser, rig, seedOrg, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
 import { DISPATCH_NOW_BUDGET_MS, DISPATCH_NOW_MARGIN_MS, OUTBOX_KINDS, idempotencyKey, type OutboxKind } from "../constants";
 import { dispatchNow } from "../attempt";
 import { enqueueEmail, type OutboxMessage } from "../enqueue";
@@ -173,7 +185,6 @@ const SPEC_FACTS: KindFacts = {
 /** Wave 3's kinds, typed from the spec's table: registered by T1 before any producer moved, so each is still on its direct sender until its
  *  kind task (T2-T4) deletes it from NOT_YET_MOVED, and here. The last move (T4c) empties both. */
 const WAVE_3_UNMOVED: readonly OutboxKind[] = [
-  "email_verification",
   "funnel_claim",
   "email_change_confirmation",
   "email_change_notice",
@@ -202,6 +213,8 @@ async function cleanUp(): Promise<void> {
   // The seeded owner is referenced without a cascade by the plan it was given and by the round's audit trail.
   await sql`delete from subscriptions where owner_user_id = any(${made.userIds}::uuid[])`;
   await sql`delete from online_chess_audit where actor_user_id = any(${made.userIds}::uuid[])`;
+  // The staff press's audit row references its staff member without a cascade.
+  await sql`delete from staff_audit_log where actor_id in (select id from users where email like ${like})`;
   await sql`delete from users where email like ${like} or id = any(${made.userIds}::uuid[])`;
 }
 
@@ -783,6 +796,49 @@ async function trialEndingScenario(): Promise<KindScenario> {
   };
 }
 
+/** Run `fn` with `userId` signed in (the session stand-in above), and nobody after it. */
+async function signedInAs<T>(userId: string, fn: () => Promise<T>): Promise<T> {
+  const [user] = await sql<{ id: string }[]>`select id, display_name, email, avatar_url, timezone, locale from users where id = ${userId}`;
+  session.user = user!;
+  try {
+    return await fn();
+  } finally {
+    session.user = null;
+  }
+}
+
+/** An account at a RUN address (`makeUser`'s), so the harness and the clean-up find it. */
+async function runUser(set: { locale?: string; verified?: boolean; staff?: boolean }): Promise<{ id: string; email: string }> {
+  const id = await makeUser(RUN);
+  const [u] = await sql<{ email: string }[]>`
+    update users set locale = ${set.locale ?? null}, email_verified = ${set.verified ?? true},
+                     is_staff = ${set.staff === true}, staff_role = ${set.staff ? "support" : null}
+     where id = ${id} returning email`;
+  return { id, email: u!.email };
+}
+
+/** The real staff resend for an unverified account whose language is `fr`: the token and its row are one transaction on the pool, and
+ *  the request's own (deferred) attempt sends it. */
+async function emailVerificationScenario(): Promise<KindScenario> {
+  const staff = await runUser({ staff: true });
+  const target = await runUser({ locale: "fr", verified: false });
+  return {
+    locale: "fr",
+    subjectKey: "verification.subject",
+    subjectVars: {},
+    recipient: target.email,
+    firstAttempt: "request",
+    run: async () => {
+      const res = await signedInAs(staff.id, () =>
+        resendVerificationPost(new Request(`https://sweep.test/api/admin/users/${target.id}/resend-verification`, { method: "POST" }), {
+          params: Promise.resolve({ id: target.id }),
+        }),
+      );
+      expect(res.status, "premise: the real staff action answered 200").toBe(200);
+    },
+  };
+}
+
 describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (DB)", () => {
   it("every outbox kind is swept through its real producer", async () => {
     // The Spanish subject differs from the English one, so a producer that dropped the locale would be seen (the right answer is not
@@ -853,6 +909,11 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
       dictionarySubject("en", trialEnding.subjectKey, trialEnding.subjectVars),
     );
 
+    const verification = await emailVerificationScenario();
+    expect(dictionarySubject("fr", verification.subjectKey, verification.subjectVars)).not.toBe(
+      dictionarySubject("en", verification.subjectKey, verification.subjectVars),
+    );
+
     const out = await forEachOutboxKind(
       {
         magic_link: magicLinkScenario(),
@@ -872,6 +933,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         sponsor_dispute_lost: sponsorDisputeLost,
         pass_revoked: passRevoked,
         trial_ending: trialEnding,
+        email_verification: verification,
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );

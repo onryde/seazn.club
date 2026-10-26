@@ -22,7 +22,7 @@ import {
   checkSendable,
   deliver,
   sendAiRunCostAlertEmail,
-  sendVerificationEmail,
+  sendFunnelReminderEmail,
   sendWithResult,
   type SendOptions,
 } from "../email";
@@ -460,23 +460,26 @@ describe("checkSendable / deliver — the seam the outbox's attemptClaimed uses"
 
 describe("regression — existing senders resolve a boolean exactly as before", () => {
   const to = "someone@example.test";
+  // The representative transactional sender. It was the verification email until that moved to the outbox (wave 3); the funnel
+  // reminder is transactional too and keeps its direct sender until the outbox takes it.
+  const reminder = { competitionName: "Spring Open", sport: "Badminton", link: "https://seazn.test/start/claim?token=t1" };
 
-  it("sendVerificationEmail: true on 2xx, false on 500, false on no key", async () => {
-    expect(await sendVerificationEmail(to, "https://seazn.test/verify?t=1")).toBe(true);
+  it("sendFunnelReminderEmail: true on 2xx, false on 500, false on no key", async () => {
+    expect(await sendFunnelReminderEmail(to, reminder)).toBe(true);
 
     fetchMock.mockImplementationOnce(async () => new Response("boom", { status: 500 }));
-    expect(await sendVerificationEmail(to, "https://seazn.test/verify?t=1")).toBe(false);
+    expect(await sendFunnelReminderEmail(to, reminder)).toBe(false);
 
     fetchMock.mockClear();
     delete process.env.RESEND_API_KEY;
-    expect(await sendVerificationEmail(to, "https://seazn.test/verify?t=1")).toBe(false);
+    expect(await sendFunnelReminderEmail(to, reminder)).toBe(false);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("existing senders put today's request on the wire: no Idempotency-Key, no signal, no tags", async () => {
     // One transactional sender and one alert sender: the two routes into send().
-    expect(await sendVerificationEmail(to, "https://seazn.test/verify?t=1")).toBe(true);
-    const verification = lastCall();
+    expect(await sendFunnelReminderEmail(to, reminder)).toBe(true);
+    const transactional = lastCall();
     expect(await sendAiRunCostAlertEmail({
       to,
       orgId: "org-1",
@@ -489,7 +492,7 @@ describe("regression — existing senders resolve a boolean exactly as before", 
     const alert = lastCall();
     expect(fetchMock).toHaveBeenCalledTimes(2);
 
-    for (const call of [verification, alert]) {
+    for (const call of [transactional, alert]) {
       expect(call.init.headers).toEqual({
         Authorization: `Bearer ${KEY}`,
         "Content-Type": "application/json",
@@ -504,7 +507,7 @@ describe("regression — existing senders resolve a boolean exactly as before", 
     fetchMock.mockImplementation(async () => {
       throw new TypeError("fetch failed");
     });
-    expect(await sendVerificationEmail(to, "https://seazn.test/verify?t=1")).toBe(false);
+    expect(await sendFunnelReminderEmail(to, reminder)).toBe(false);
     expect(error).toHaveBeenCalledWith(`[email] send error to ${to}:`, expect.any(TypeError));
   });
 });

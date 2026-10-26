@@ -285,13 +285,12 @@ async function send(opts: SendOptions): Promise<boolean> {
 // Transactional emails (bypass suppression — user must receive these)
 // ---------------------------------------------------------------------------
 
-export async function sendVerificationEmail(
-  to: string,
-  link: string,
-  locale: Locale = "en",
-): Promise<boolean> {
+/** The account's verification link, RENDERED and not sent. The staff resend (`api/admin/users/[id]/resend-verification`) queues
+ *  what this returns on the email outbox (kind `email_verification`, transactional), in the same transaction as the token it carries,
+ *  and the first attempt is made after commit. Nothing sends it directly. */
+export async function verificationEmail(link: string, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, transactional: true, ...verificationTemplate(link, dict) });
+  return verificationTemplate(link, dict);
 }
 
 /** What an email says: the part of a message that is not who it goes to. */
