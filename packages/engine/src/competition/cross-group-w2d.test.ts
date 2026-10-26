@@ -219,6 +219,20 @@ describe("W2d T12 — the source stage's order compares groups (X-TB-7, ST-G4)",
     // …while the same groups unpinned resolve by the stage's own order: x2 first (the differential).
     expect(seatsOf(groupStage(badminton, BADMINTON_GROUPS, { seeds: BADMINTON_SEEDS }), 2, 2).qualifiers.map((q) => q.entrantId)).toEqual(["x2", "a2"]);
   });
+
+  it("X-TB-7 the source's seeds reach the cross-group residual: a full tie under a lots-less order (the migrated pin) falls to seed, then id (§5.8)", () => {
+    // Deviation (recorded in the T12 report): before W2d best-Nth passed no seeds, so this full tie fell to the id alone.
+    // The migrated order has no lots, so its residual is the documented seed → id fallback — the same one each group's
+    // own table uses. With x2 seeded above a2 (3 against 4) the seed decides, against the id order (a2 first).
+    const derived = rulesFor(badminton);
+    const pin: TableRulesPin = {
+      points: derived.points, tiebreakers: derived.tiebreakers, crossGroup: MIGRATED_CROSS_GROUP,
+      sources: { points: "migrated", tiebreakers: "migrated", crossGroup: "migrated" },
+    };
+    const seats = seatsOf(groupStage(badminton, BADMINTON_GROUPS, { seeds: { ...BADMINTON_SEEDS, x2: 3, a2: 4 }, pinned: pin }), 2, 2);
+    expect(seats.qualifiers.map((q) => q.entrantId)).toEqual(["x2", "a2"]);
+    expect(seats.ties.map((t) => [t.entrantIds, t.reason])).toEqual([[["a2", "x2"], "seed"]]);
+  });
 });
 
 // Two football groups whose runners-up are level on every step of the cross-group order: y2 and b2 each won 1-0 and
@@ -299,6 +313,12 @@ describe("W2d T12 — what the order's keys read (X-TB-7)", () => {
     expect(rules.order.slice(0, 3)).toEqual(["points", "wins", "diff"]);
     expect(crossGroupOrder(rows, rules.order, undefined, { winsCount: rules.winsCount! }).rows.map((r) => r.entrantId)).toEqual(["B", "A"]);
     expect(crossGroupOrder(rows, rules.order, undefined).rows.map((r) => r.entrantId)).toEqual(["A", "B"]);
+    // Through progression: A and B are their groups' runners-up, and the best-second seat reads the source's winsCount.
+    const leader = (id: EntrantId): StandingsRow => ({ entrantId: id, rank: 1, played: 3, won: 3, drawn: 0, lost: 0, points: 9, metrics: { won_ot: 0, gd: 6, gf: 6, ga: 0 } });
+    const second = (r: StandingsRow): StandingsRow => ({ ...r, rank: 2 });
+    const tables: SourceTables = { pools: [{ pool: "P1", rows: [leader("A1"), second(rows[0]!)] }, { pool: "P2", rows: [leader("B1"), second(rows[1]!)] }], crossGroup: rules };
+    const seats = resolveProgression(bestNth(2, 2), [{ poolKeys: ["P1", "P2"] }], [tables]);
+    expect(seats.qualifiers.map((q) => q.entrantId)).toEqual(["B", "A"]);
   });
 
   it("X-TB-7 chess: Sonneborn-Berger compares each group's own SB (FIDE C.07), not a ledger of games they never played", () => {

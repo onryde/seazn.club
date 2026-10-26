@@ -252,7 +252,8 @@ export interface RankContext {
   // split and the class carries the note `h2h_incomplete`. Every counted result
   // must be on the schedule (CONFIG_INVALID otherwise: the two were built from
   // different fixtures). Absent or empty ⇒ every mini-schedule is complete (as
-  // before W2d).
+  // before W2d). Refused beside `swiss` (a Swiss stage has no round-robin
+  // schedule).
   scheduledPairs?: readonly (readonly [EntrantId, EntrantId])[];
   // W2d (IH-TB-2): the sport's order for a tied class whose mini-schedule is
   // incomplete, in place of the h2h block (`SportModule.partialScheduleOrder`,
@@ -949,6 +950,10 @@ export function rankStandings(rows: readonly StandingsRow[], ctx: RankContext): 
   const steps = parseCascade(ctx.cascade);
   const partial = ctx.partialScheduleOrder === undefined ? undefined : parsePartialOrder(ctx.partialScheduleOrder);
   const schedule = ctx.scheduledPairs !== undefined && ctx.scheduledPairs.length > 0 ? ctx.scheduledPairs : undefined;
+  if (schedule !== undefined && ctx.swiss !== undefined) {
+    // ST-G12 is a round-robin rule: a Swiss stage pairs round by round, so it has no schedule to complete (B1, D7).
+    throw new EngineError("CONFIG_INVALID", "a Swiss table has no round-robin schedule: scheduledPairs (ST-G12) is read only on a league or group stage", {});
+  }
   if (schedule !== undefined) checkSchedule(schedule, ctx.results ?? []);
   const clones = rows.map((row) => ({ ...row, metrics: { ...row.metrics } }));
   const poolLedger =

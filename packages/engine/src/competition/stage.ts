@@ -94,7 +94,7 @@ export interface TableStage {
   lotsDraws?: ReadonlyMap<string, ReadonlyMap<MembersKey, StoredLotsDraw>>;
   /** W2d (spec §5.6 "ST-G12", X-TB-8): every fixture the stage schedules, decided or not, as [home, away] — one entry per
    *  fixture (`RankContext.scheduledPairs`). A head-to-head step needs the tied class's mini-schedule complete. Absent or
-   *  empty = every mini-schedule complete, as before W2d. */
+   *  empty = every mini-schedule complete, as before W2d. Not read on a Swiss stage (no round-robin schedule; B1). */
   scheduledPairs?: RankContext["scheduledPairs"];
   /** W2d (IH-TB-2): the sport's partial-schedule order (`SportModule.partialScheduleOrder`). Absent = the block does not
    *  split a class whose mini-schedule is incomplete. */
@@ -296,7 +296,9 @@ export function completeTableStage(
       ...(stage.rngSeed === undefined ? {} : { rngSeed: stage.rngSeed }),
       ...(stage.h2hScope === undefined ? {} : { h2hScope: stage.h2hScope }),
       ...(stage.swiss === true ? { swiss: buildSwissTable(entrants, results, awardDeltas) } : {}),
-      ...(stage.scheduledPairs === undefined ? {} : { scheduledPairs: stage.scheduledPairs }),
+      // ST-G12 reads a round robin's schedule; a Swiss stage pairs round by round and has none (Swiss stays W3, D7 —
+      // and production's one competition, a Swiss one, does not move, B1).
+      ...(stage.scheduledPairs === undefined || stage.kind === "swiss" ? {} : { scheduledPairs: stage.scheduledPairs }),
       ...(stage.partialScheduleOrder === undefined ? {} : { partialScheduleOrder: stage.partialScheduleOrder }),
     });
     // Manual override wins — it is the final structural word (Jul3/05 §8).

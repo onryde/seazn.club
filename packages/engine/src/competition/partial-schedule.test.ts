@@ -24,8 +24,8 @@ import { decidedInFor } from "./decided-in.ts";
 import { payout, setsToWinOf } from "./points.ts";
 import { completeTableStage, type TableFixture } from "./stage.ts";
 import type { FixtureResult, StandingsRow } from "./standings.ts";
-import { resolveTableRules } from "./table-rules.ts";
-import { lotSeed, rankStandings } from "./tiebreakers.ts";
+import { resolveTableRules, type TableRulesPin } from "./table-rules.ts";
+import { buildSwissTable, lotSeed, rankStandings } from "./tiebreakers.ts";
 
 const moduleOf = (key: string): AnySportModule => {
   const m = builtinModules.find((x) => x.key === key);
@@ -89,6 +89,10 @@ interface Scene {
   readonly schedule?: "all" | "none" | "empty";
   readonly seeds?: Readonly<Record<EntrantId, number>>;
   readonly order?: readonly TiebreakerKey[];
+  /** The stage's format: default a league. */
+  readonly kind?: "league" | "swiss";
+  /** A pinned stage's rules (B1): never re-validated, so an order W2d would refuse to save still ranks. */
+  readonly pinned?: TableRulesPin;
 }
 
 /** The stage's own path: every match paid through the sport's rule, ranked by the resolved order (or `order`), with the
@@ -96,8 +100,8 @@ interface Scene {
 function rank(s: Scene): readonly StandingsRow[] {
   const cfg = cfgOf(s.module);
   const resolved = resolveTableRules({
-    module: s.module, stageKind: "league", mergedCfg: cfg,
-    stageOwn: { points: null, tiebreakers: s.order ?? null, crossGroup: null }, divisionTiebreakers: null, pinned: null,
+    module: s.module, stageKind: s.kind ?? "league", mergedCfg: cfg,
+    stageOwn: { points: null, tiebreakers: s.order ?? null, crossGroup: null }, divisionTiebreakers: null, pinned: s.pinned ?? null,
   });
   const entrants = [...new Set([...s.decided.flatMap((m) => [m.home, m.away]), ...s.pending.flat()])].sort();
   const fixtures: TableFixture[] = [
@@ -108,7 +112,8 @@ function rank(s: Scene): readonly StandingsRow[] {
   const scheduledPairs = s.schedule === "none" ? undefined : s.schedule === "empty" ? [] : all;
   const done = completeTableStage(
     {
-      id: "s", kind: "league", entrants, rules: resolved, rngSeed: 7,
+      id: "s", kind: s.kind ?? "league", entrants, rules: resolved, rngSeed: 7,
+      ...(s.kind === "swiss" ? { swiss: true, rounds: 3 } : {}),
       ...(scheduledPairs === undefined ? {} : { scheduledPairs }),
       ...(s.module.partialScheduleOrder === undefined ? {} : { partialScheduleOrder: s.module.partialScheduleOrder }),
       ...(s.module.winsCount === undefined ? {} : { winsCount: s.module.winsCount }),
@@ -331,6 +336,47 @@ describe("W2d T12 — every other sport: the step does not split (X-TB-8, author
   });
 });
 
+// Production's one competition is a Swiss badminton one, pinned by the W2d migration to the order it ranks by today
+// (spec §5.10 "Production fact", B1): points, wins, set ratio, point ratio, h2h points — no lots, so its residual is seed →
+// id (§5.8). Its round in progress: z beat y; x and y are drawn against each other and have not played. x, y and z have
+// one win and one loss each, sets 2-2 and points 62-62 — level on every step before h2h points.
+const PRODUCTION_SWISS_ORDER: TiebreakerKey[] = ["points", "wins", "set_ratio", "point_ratio", "h2h_points"];
+const SWISS_ROUND: Scene = {
+  module: badminton,
+  decided: [
+    sets("z", "y", 2, 0, 42, 20), sets("d", "z", 2, 0, 42, 20), sets("y", "e", 2, 0, 42, 20),
+    sets("x", "f", 2, 0, 42, 20), sets("g", "x", 2, 0, 42, 20),
+  ],
+  pending: [["y", "x"]],
+};
+const xyz = (rows: readonly StandingsRow[]): EntrantId[] => ids(rows).filter((id) => id === "x" || id === "y" || id === "z");
+
+describe("W2d T12 — a Swiss stage is not a round robin (B1, D7: Swiss stays W3)", () => {
+  it("X-TB-8 B1 Swiss: production's pinned badminton Swiss order ranks a round in progress as before W2d — the schedule is not read", () => {
+    // single-sport: the production competition's sport and pinned order are the case B1 protects.
+    const derived = resolveTableRules({
+      module: badminton, stageKind: "swiss", mergedCfg: cfgOf(badminton),
+      stageOwn: { points: null, tiebreakers: null, crossGroup: null }, divisionTiebreakers: null, pinned: null,
+    });
+    const pinned: TableRulesPin = {
+      points: derived.points, tiebreakers: PRODUCTION_SWISS_ORDER, crossGroup: [],
+      sources: { points: "migrated", tiebreakers: "migrated", crossGroup: "migrated" },
+    };
+    const swiss: Scene = { ...SWISS_ROUND, kind: "swiss", pinned };
+    const rows = rank(swiss);
+    // Before W2d: h2h points on the meetings so far — z won its meeting; y lost it and x has played none, so both hold 0
+    // h2h points and are level, and the order (no lots) falls to seed → id (§5.8): z, x, y.
+    expect(xyz(rows)).toEqual(["z", "x", "y"]);
+    expect(rows).toStrictEqual(rank({ ...swiss, schedule: "none" }));
+    for (const row of rows) expect(row.tieBreak?.note, row.entrantId).toBeUndefined();
+    // The differential: the same round read as a league with its schedule — the guard skips h2h points for the class
+    // (y–x still to play), and the order, with no lots, falls to seed → id: x, y, z. That is the move B1 forbids.
+    const league = rank({ ...SWISS_ROUND, pinned });
+    expect(xyz(league)).toEqual(["x", "y", "z"]);
+    expect(rowOf(league, "x").tieBreak?.note).toBe("h2h_incomplete");
+  });
+});
+
 describe("W2d T12 — the guards (assumptions are guards)", () => {
   it("X-TB-8 a counted result the schedule does not hold is refused, typed (the schedule and the results disagree)", () => {
     const rows: StandingsRow[] = [
@@ -361,6 +407,23 @@ describe("W2d T12 — the guards (assumptions are guards)", () => {
     }
     expect(run(RBG_PARTIAL)).not.toThrow();
     expect(run(["fewest_played", "diff"])).not.toThrow();
+  });
+
+  it("X-TB-8 a Swiss table handed a schedule is refused, typed — ST-G12 reads a round-robin schedule, which a Swiss stage has not", () => {
+    const rows: StandingsRow[] = [
+      { entrantId: "A", played: 0, won: 0, drawn: 0, lost: 0, points: 0, metrics: {} },
+      { entrantId: "B", played: 0, won: 0, drawn: 0, lost: 0, points: 0, metrics: {} },
+    ];
+    const run = (swiss: boolean, scheduledPairs: readonly (readonly [EntrantId, EntrantId])[]) => () =>
+      rankStandings(rows, {
+        cascade: ["points", "h2h_points", "lots"], results: [], scheduledPairs,
+        ...(swiss ? { swiss: buildSwissTable(["A", "B"], [], []) } : {}),
+      });
+    expect(run(true, [["A", "B"]])).toThrow(expect.objectContaining({ code: "CONFIG_INVALID" }));
+    expect(run(true, [["A", "B"]])).toThrow(/Swiss/);
+    // the positive pairs: a Swiss table with no schedule; a league table with one
+    expect(run(true, [])).not.toThrow();
+    expect(run(false, [["A", "B"]])).not.toThrow();
   });
 
   it("X-TB-8 'fewest_played' is internal: never a tie-break key the editor offers (every sport × table kind, counted)", () => {
