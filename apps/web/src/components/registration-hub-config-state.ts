@@ -83,11 +83,27 @@ export interface DivisionEligibility {
   eligibility_note: string | null;
 }
 
+/** Does a stored registration_settings row hold an entry shape chess no longer
+ *  takes (owner ruling 2026-10-26: individual players only - no pair, team or
+ *  solo sign-up pool)? Read only to NAME it; a legacy row is never rewritten
+ *  until the organiser saves. */
+export function holdsNonIndividualEntry(
+  s: Pick<RegistrationSettingsResponse, "entrant_kind" | "allow_free_agents" | "free_agent_fee_cents">,
+): boolean {
+  return s.entrant_kind !== "individual" || s.allow_free_agents || s.free_agent_fee_cents !== null;
+}
+
 /** Seed the panel's local edit state: registration_settings fields from the
- *  GET response, eligibility fields from the division row. */
+ *  GET response, eligibility fields from the division row.
+ *
+ *  `individualOnly` (a chess division): the three entry-shape fields are seeded
+ *  as individual / no solo pool / no solo price whatever the row holds, so the
+ *  panel never shows - and a save never re-sends - a shape the server refuses.
+ *  A legacy row therefore changes only when the organiser saves. */
 export function initialConfigState(
   settings: RegistrationSettingsResponse,
   eligibility: DivisionEligibility,
+  individualOnly = false,
 ): RegistrationConfigState {
   return {
     category: eligibility.category,
@@ -97,19 +113,19 @@ export function initialConfigState(
     age_cutoff_day: eligibility.age_cutoff_day,
     eligibility_note: eligibility.eligibility_note,
     enabled: settings.enabled,
-    entrant_kind: settings.entrant_kind,
+    entrant_kind: individualOnly ? "individual" : settings.entrant_kind,
     opens_at: settings.opens_at,
     closes_at: settings.closes_at,
     capacity: settings.capacity,
     fee_cents: settings.fee_cents,
-    free_agent_fee_cents: settings.free_agent_fee_cents,
+    free_agent_fee_cents: individualOnly ? null : settings.free_agent_fee_cents,
     refund_lock_at: settings.refund_lock_at,
     place_by_at: settings.place_by_at,
     form_fields: settings.form_fields,
     payment_method: settings.payment_method,
     payment_instructions: settings.payment_instructions,
     approval: settings.approval,
-    allow_free_agents: settings.allow_free_agents,
+    allow_free_agents: individualOnly ? false : settings.allow_free_agents,
   };
 }
 

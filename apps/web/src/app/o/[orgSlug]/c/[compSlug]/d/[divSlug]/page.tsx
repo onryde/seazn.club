@@ -90,6 +90,7 @@ import {
   listSuspensions,
 } from "@/server/usecases/discipline";
 import { PaymentRequiredError } from "@/lib/errors";
+import { isChessSport } from "@/lib/chess-individual-only";
 import type { StandingsRow } from "@seazn/engine/competition";
 import type { MetricSpecLike } from "@/lib/public-site";
 import { localizedTieBreakLabel } from "@/lib/tiebreak-label";
@@ -300,7 +301,13 @@ export default async function DivisionPage({
   const sportModule = resolveModule(division.sport_key, division.module_version);
   // Effective entrant model (sport default ← config.entrants override) — shared
   // by the entrants panel (add form + roster editor) and the Settings tab.
-  const entrantModel = effectiveEntrantModel(sportModule.entrantModel ?? null, division.config);
+  // Chess is individual-only (owner ruling 2026-10-26): a division saved before the ruling may still carry a widened
+  // `config.entrants`, so the stored override is NOT read for chess - the panels offer individual entry only. The
+  // stored value itself is untouched (Settings > Entrants names it and offers Reset).
+  const entrantModel = effectiveEntrantModel(
+    sportModule.entrantModel ?? null,
+    isChessSport(division.sport_key) ? null : division.config,
+  );
   // R7 B2 — per-config catalog (see the fixture console page). The roster
   // editor's default-position picker offers this division's groups.
   const lineupCatalog = lineupCatalogFor(sportModule, division.config);

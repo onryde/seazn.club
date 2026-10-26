@@ -5,6 +5,7 @@
 // without the hook harness.
 import { describe, expect, it } from "vitest";
 import {
+  holdsNonIndividualEntry,
   initialConfigState,
   toDivisionPatchBody,
   toRegistrationSettingsPutBody,
@@ -82,6 +83,45 @@ describe("initialConfigState", () => {
     expect(state.age_cutoff_month).toBe(9);
     expect(state.age_cutoff_day).toBe(1);
     expect(state.eligibility_note).toBe("School-registered students only");
+  });
+});
+
+// Owner ruling 2026-10-26: chess takes individual players only. The seed is where a legacy stored shape is kept
+// out of the panel, so a save can never re-send it.
+describe("initialConfigState - individualOnly (chess)", () => {
+  const LEGACY = { ...RESPONSE, entrant_kind: "team" as const, allow_free_agents: true, free_agent_fee_cents: 500 };
+
+  it("seeds individual / no solo pool / no solo price whatever the stored row holds, and leaves the rest alone", () => {
+    const state = initialConfigState(LEGACY, NO_ELIGIBILITY, true);
+    expect(state.entrant_kind).toBe("individual");
+    expect(state.allow_free_agents).toBe(false);
+    expect(state.free_agent_fee_cents).toBeNull();
+    expect(state.fee_cents).toBe(1500);
+    expect(state.capacity).toBe(32);
+    expect(state.approval).toBe("manual");
+    // ... and the PUT a save builds from it carries the same.
+    expect(toRegistrationSettingsPutBody(state)).toMatchObject({
+      entrant_kind: "individual",
+      allow_free_agents: false,
+      free_agent_fee_cents: null,
+    });
+  });
+
+  it("is a no-op for every other sport: default off, and explicit false, keep the stored shape", () => {
+    for (const state of [initialConfigState(LEGACY, NO_ELIGIBILITY), initialConfigState(LEGACY, NO_ELIGIBILITY, false)]) {
+      expect(state.entrant_kind).toBe("team");
+      expect(state.allow_free_agents).toBe(true);
+      expect(state.free_agent_fee_cents).toBe(500);
+    }
+  });
+
+  it("holdsNonIndividualEntry names each way a stored row is no longer chess-shaped, and is false for a clean one", () => {
+    const clean = { entrant_kind: "individual" as const, allow_free_agents: false, free_agent_fee_cents: null };
+    expect(holdsNonIndividualEntry(clean)).toBe(false);
+    expect(holdsNonIndividualEntry({ ...clean, entrant_kind: "team" })).toBe(true);
+    expect(holdsNonIndividualEntry({ ...clean, entrant_kind: "pair" })).toBe(true);
+    expect(holdsNonIndividualEntry({ ...clean, allow_free_agents: true })).toBe(true);
+    expect(holdsNonIndividualEntry({ ...clean, free_agent_fee_cents: 0 })).toBe(true);
   });
 });
 

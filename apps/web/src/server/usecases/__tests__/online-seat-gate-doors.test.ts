@@ -103,6 +103,10 @@ interface Door {
   name: string;
   /** The door seats an EXISTING person (a roster, a squad, a CSV match) - a registrant is the one that may not have a person row yet. */
   needsPerson: boolean;
+  /** false: no chess division can be reached through this door any more. Chess takes individual players only (owner ruling
+   *  2026-10-26, CHESS_INDIVIDUAL_ONLY) and the CSV import creates TEAM entrants, so a chess division refuses the file before
+   *  any link is asked. The door still seats on another sport (the stale-setting sweep below). */
+  onChess?: false;
   open(auth: AuthCtx, online: boolean): Promise<World>;
 }
 
@@ -249,6 +253,7 @@ const DOORS: Door[] = [
   {
     name: "import",
     needsPerson: true,
+    onChess: false,
     async open(auth, online) {
       const division = await divisionFor(auth, online);
       return {
@@ -294,8 +299,10 @@ const refusalOf = async (promise: Promise<unknown>): Promise<{ status?: number; 
 const DOOR_COUNT = 8;
 const ran = { scenarios: 0, doors: new Set<string>() };
 
+const CHESS_DOORS = DOORS.filter((d) => d.onChess !== false);
+
 describe.skipIf(!HAS_DB)("every door that seats a player on an online division holds them to the seat gate's bar", () => {
-  for (const door of DOORS) {
+  for (const door of CHESS_DOORS) {
     describe(door.name, () => {
       it("a link that plays seats the player", async () => {
         const auth = await seedOwner();
@@ -430,10 +437,13 @@ describe.skipIf(!HAS_DB)("every door that seats a player on an online division h
   it("anti-vacuity: every door ran every scenario it owes", () => {
     expect(DOORS.map((d) => d.name).sort()).toEqual(["approve", "confirm", "import", "mark-paid", "patch", "promote", "sync", "waive"]);
     expect(DOORS).toHaveLength(DOOR_COUNT);
-    expect([...ran.doors].sort()).toEqual(DOORS.map((d) => d.name).sort());
+    expect(CHESS_DOORS.map((d) => d.name).sort(), "the import is the one door a chess division can no longer be reached through").toEqual(
+      DOORS.map((d) => d.name).filter((n) => n !== "import").sort(),
+    );
+    expect([...ran.doors].sort()).toEqual(CHESS_DOORS.map((d) => d.name).sort());
     // 7 scenarios for every door that needs a person, 9 for the registration doors (plus the two no-person-row ones), 1 more each for the flag-off case.
-    const personal = DOORS.filter((d) => d.needsPerson).length;
-    const registrations = DOORS.length - personal;
+    const personal = CHESS_DOORS.filter((d) => d.needsPerson).length;
+    const registrations = CHESS_DOORS.length - personal;
     expect(ran.scenarios).toBe(personal * 7 + registrations * 9);
   });
 });
@@ -473,9 +483,11 @@ describe.skipIf(!HAS_DB)("a division of another sport with a stale onlinePlay se
   });
 });
 
-// The import is the one door whose callers read a FILE, so its refusal answers in file rows as well as people: the organiser
-// finds a player by the line they typed, and a player the file would create has no id (and no account to link) to be named by.
-describe.skipIf(!HAS_DB)("the CSV import's refusal names the file rows, and the people it can", () => {
+// The import is the one door whose callers read a FILE, so its refusal answers in file rows. It used to ask the seat gate's question
+// (a link that plays) of every player the file seats on an online division; since the owner ruling of 2026-10-26 chess divisions take
+// individual players only and the CSV import creates TEAM entrants, so the file is refused for that, on every line, before any link is
+// asked (and whatever the players' links are). The gate's own questions stay covered through the other seven doors above.
+describe.skipIf(!HAS_DB)("the CSV import into an online chess division is refused as a team import, naming the file rows", () => {
   const refusalPayload = async (promise: Promise<unknown>): Promise<{ code?: string; person_ids?: unknown; rows?: unknown }> => {
     const e = (await promise.then(
       () => null,
@@ -485,12 +497,12 @@ describe.skipIf(!HAS_DB)("the CSV import's refusal names the file rows, and the 
     return { code: e!.code, person_ids: e!.extra?.person_ids, rows: e!.extra?.rows };
   };
 
-  it("rows are the lines of the refused players in order; person_ids are real people only; nothing is written; a player who links drops out", async () => {
+  it("rows are every line of the file; no link is asked; nothing is written; linking the players changes nothing", async () => {
     const auth = await seedOwner();
     const division = await divisionFor(auth, true);
     const unlinked = await makeTarget(auth, "none", true);
     const plays = await makeTarget(auth, "plays", true);
-    const created = `Brand New ${randomUUID().slice(0, 8)}`; // no person row: the file itself creates them
+    const created = `Brand New ${randomUUID().slice(0, 8)}`; // no person row: the file itself would create them
     const tag = randomUUID().slice(0, 6);
     // Line 1 is the header (import-parse.ts: "header is line 1"), so the players are on lines 2, 3 and 4.
     const csv = ["Team,Player", `A ${tag},${unlinked.name}`, `B ${tag},${created}`, `C ${tag},${plays.name}`].join("\r\n");
@@ -500,23 +512,25 @@ describe.skipIf(!HAS_DB)("the CSV import's refusal names the file rows, and the 
       buffer: Buffer.from(csv, "utf8"),
       pinDivision: { id: division.id, slug: division.slug },
     });
-    expect(pinned.plan.issues.filter((i) => i.severity === "error"), "premise: the file plans without errors").toEqual([]);
+    expect(
+      pinned.plan.issues.filter((i) => i.severity === "error").map((i) => i.code),
+      "the plan already says so, on each of the three lines (the wizard shows it before commit)",
+    ).toEqual(["CHESS_INDIVIDUAL_ONLY", "CHESS_INDIVIDUAL_ONLY", "CHESS_INDIVIDUAL_ONLY"]);
 
     const first = await refusalPayload(commitImport(auth, pinned.importId, null));
-    expect(first.code).toBe("LICHESS_LINK_REQUIRED");
-    expect(first.person_ids, "only the person who exists: the one the file creates has no id").toEqual([unlinked.personId]);
-    expect(first.rows, "the lines of both refused players, not the one who plays").toEqual([2, 3]);
+    expect(first.code).toBe("CHESS_INDIVIDUAL_ONLY");
+    expect(first.person_ids, "no player is named: no link was asked").toBeUndefined();
+    expect(first.rows, "every line of the file").toEqual([2, 3, 4]);
     expect(await rosterUsers(division.id), "nothing was written").toEqual([]);
     expect(
       await sql`select 1 from persons where org_id = ${auth.orgId} and full_name = ${created}`,
       "the refused file created nobody",
     ).toHaveLength(0);
 
-    // The SEQUENCE: the unlinked player links; the same file is refused again, now for the created player alone - who can never play.
+    // The SEQUENCE: the unlinked player links; the same file is refused the same way - the link was never the reason.
     await reconnectLichess({ userId: unlinked.userId, lichessId: unlinked.lichessId });
     const second = await refusalPayload(commitImport(auth, pinned.importId, null));
-    expect(second.code).toBe("LICHESS_LINK_REQUIRED");
-    expect(second.person_ids, "nobody who exists is left to name").toEqual([]);
-    expect(second.rows).toEqual([3]);
+    expect(second.code).toBe("CHESS_INDIVIDUAL_ONLY");
+    expect(second.rows).toEqual([2, 3, 4]);
   });
 });

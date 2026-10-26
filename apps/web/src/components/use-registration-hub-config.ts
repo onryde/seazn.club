@@ -13,6 +13,7 @@
 import { useEffect, useState } from "react";
 import { apiV1 } from "@/lib/client-v1";
 import {
+  holdsNonIndividualEntry,
   initialConfigState,
   toDivisionPatchBody,
   toRegistrationSettingsPutBody,
@@ -25,6 +26,9 @@ import { mapSaveError, type ConfigFieldKey } from "@/components/registration-hub
 export interface RegistrationHubConfigDivisionLike extends DivisionEligibility {
   division_id: string;
   name: string;
+  /** Chess (owner ruling 2026-10-26): the panel offers individual entry only. Optional so a caller that predates
+   *  the ruling reads as "not restricted"; the page sets it from the division's sport. */
+  individual_only?: boolean;
 }
 
 /** Outcome of the two save requests, named by what FAILED. */
@@ -34,6 +38,9 @@ export type SaveOutcome = "success" | "patch-failed" | "put-failed" | "both-fail
 export interface ReadOnlyEcho {
   chargesEnabled: boolean;
   orgPaymentInstructions: string | null;
+  /** An individual-only (chess) division whose STORED settings still hold a pair/team/solo-pool shape from before the
+   *  ruling: the panel seeds individual and says that saving moves it. */
+  storedEntryShapeLegacy: boolean;
 }
 
 interface Loaded {
@@ -44,6 +51,8 @@ interface Loaded {
 export function useRegistrationConfigPanelState(
   division: RegistrationHubConfigDivisionLike,
   onSaved: () => void,
+  /** Localises a refusal code the server only words in English (see mapSaveError); null = show the server's text. */
+  localiseCode?: (code: string) => string | null,
 ) {
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -61,9 +70,14 @@ export function useRegistrationConfigPanelState(
     apiV1<RegistrationSettingsResponse>(`/api/v1/divisions/${division.division_id}/registration-settings`)
       .then((data) => {
         if (cancelled) return;
+        const individualOnly = division.individual_only === true;
         setLoaded({
-          state: initialConfigState(data, division),
-          readOnly: { chargesEnabled: data.charges_enabled, orgPaymentInstructions: data.org_payment_instructions },
+          state: initialConfigState(data, division, individualOnly),
+          readOnly: {
+            chargesEnabled: data.charges_enabled,
+            orgPaymentInstructions: data.org_payment_instructions,
+            storedEntryShapeLegacy: individualOnly && holdsNonIndividualEntry(data),
+          },
         });
       })
       .catch((err) => {
@@ -112,8 +126,9 @@ export function useRegistrationConfigPanelState(
     for (const result of [patchResult, putResult]) {
       if (result.status !== "rejected") continue;
       const info = mapSaveError(result.reason);
-      if (info.field) nextErrors[info.field] = info.message;
-      else banner = info.message;
+      const text = (info.code ? localiseCode?.(info.code) : null) ?? info.message;
+      if (info.field) nextErrors[info.field] = text;
+      else banner = text;
     }
     setErrors(nextErrors);
     setFormError(banner);

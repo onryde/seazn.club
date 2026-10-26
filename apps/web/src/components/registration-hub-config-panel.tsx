@@ -49,6 +49,7 @@ import {
   type ConfigValidationIssue,
 } from "@/components/registration-hub-config-state";
 import type { ConfigFieldKey } from "@/components/registration-hub-save-error";
+import { CHESS_INDIVIDUAL_ONLY } from "@/lib/chess-individual-only";
 import {
   useRegistrationConfigPanelState,
   type RegistrationHubConfigDivisionLike,
@@ -329,7 +330,9 @@ export function RegistrationHubConfigPanel({
   // useLocaleOrDefault's own doc comment, dict-provider.tsx).
   const locale = useLocaleOrDefault();
   const { state, readOnly, loadError, busy, errors, formError, saveOutcome, patch, save } =
-    useRegistrationConfigPanelState(division, onSaved);
+    useRegistrationConfigPanelState(division, onSaved, (code) =>
+      code === CHESS_INDIVIDUAL_ONLY ? msg("divset.err.chessIndividualOnly") : null,
+    );
   const [openSections, setOpenSections] = useState<Record<SectionId, boolean>>(DEFAULT_OPEN);
   // Finding 3: the fee input's draft text, independent of fee_cents. Owned
   // HERE (not inside MoneySection) rather than as a useState in the section
@@ -500,6 +503,7 @@ export function RegistrationHubConfigPanel({
                     orgTz={orgTz}
                     dtDrafts={dtDrafts}
                     onDateTimeHalfChange={onDateTimeHalfChange}
+                    individualOnly={division.individual_only === true}
                   />
                 ) : id === "schedule" ? (
                   <OpenCloseSection
@@ -510,6 +514,8 @@ export function RegistrationHubConfigPanel({
                     orgTz={orgTz}
                     dtDrafts={dtDrafts}
                     onDateTimeHalfChange={onDateTimeHalfChange}
+                    individualOnly={division.individual_only === true}
+                    entryShapeLegacy={readOnly!.storedEntryShapeLegacy}
                   />
                 ) : id === "capacity" ? (
                   <CapacitySection state={state} errors={fieldErrors} patch={patch} msg={msg} />
@@ -589,6 +595,7 @@ export function EligibilitySection({
   orgTz,
   dtDrafts,
   onDateTimeHalfChange,
+  individualOnly = false,
 }: {
   state: RegistrationConfigState;
   errors: Partial<Record<ConfigFieldKey, string>>;
@@ -601,8 +608,10 @@ export function EligibilitySection({
    *  panel (OrgTzDateTimePair's own comment explains why). */
   dtDrafts: Partial<Record<DateTimeFieldKey, DateTimeHalves>>;
   onDateTimeHalfChange: (field: DateTimeFieldKey, half: "date" | "time", value: string) => void;
+  /** Chess (owner ruling 2026-10-26): no solo sign-up pool, whatever the state holds. */
+  individualOnly?: boolean;
 }) {
-  const isTeam = state.entrant_kind === "team";
+  const isTeam = state.entrant_kind === "team" && !individualOnly;
   const zone = fmtZoneAbbrev(orgTz, new Date());
   // Meaningless outside a division that accepts solo sign-ups at all — same
   // "shown when it applies, but still shown if the server names an error on
@@ -808,6 +817,8 @@ export function OpenCloseSection({
   orgTz,
   dtDrafts,
   onDateTimeHalfChange,
+  individualOnly = false,
+  entryShapeLegacy = false,
 }: {
   state: RegistrationConfigState;
   errors: Partial<Record<ConfigFieldKey, string>>;
@@ -818,6 +829,10 @@ export function OpenCloseSection({
    *  the panel (OrgTzDateTimePair's own comment explains why). */
   dtDrafts: Partial<Record<DateTimeFieldKey, DateTimeHalves>>;
   onDateTimeHalfChange: (field: DateTimeFieldKey, half: "date" | "time", value: string) => void;
+  /** Chess (owner ruling 2026-10-26): Individual is the only entrant type offered, with the reason beside it. */
+  individualOnly?: boolean;
+  /** The stored settings still hold a pair/team/solo-pool shape from before the ruling (seeded as Individual here). */
+  entryShapeLegacy?: boolean;
 }) {
   // A short, DST-correct abbreviation ("BST", "IST") rather than the raw
   // IANA string — matches the zone labelling the row already shows
@@ -842,6 +857,7 @@ export function OpenCloseSection({
           data-field="entrant_kind"
           className="input min-h-11 mt-1"
           value={state.entrant_kind}
+          disabled={individualOnly}
           onChange={(e) => {
             const v = e.target.value as RegistrationConfigState["entrant_kind"];
             // Team-only setting (server 422s otherwise) — clear it locally
@@ -851,9 +867,23 @@ export function OpenCloseSection({
           }}
         >
           <option value="individual">{msg("reg.settings.entrant.individual")}</option>
-          <option value="team">{msg("reg.settings.entrant.team")}</option>
-          <option value="pair">{msg("reg.settings.entrant.pair")}</option>
+          {!individualOnly && <option value="team">{msg("reg.settings.entrant.team")}</option>}
+          {!individualOnly && <option value="pair">{msg("reg.settings.entrant.pair")}</option>}
         </select>
+        {individualOnly && (
+          <span data-testid="entrant-kind-individual-only" className="mt-1 block text-xs font-normal text-slate-500">
+            {msg("reg.settings.entrant.chessOnly")}
+          </span>
+        )}
+        {individualOnly && entryShapeLegacy && (
+          <span
+            data-testid="entrant-kind-legacy"
+            role="status"
+            className="mt-1 block rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-normal text-amber-800"
+          >
+            {msg("reg.settings.entrant.chessLegacy")}
+          </span>
+        )}
         {errors.entrant_kind && (<p data-field-error="entrant_kind" role="alert" className="mt-1 text-xs text-red-600">{errors.entrant_kind}</p>)}
       </label>
       <div className="grid grid-cols-1 gap-3">

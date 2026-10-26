@@ -52,6 +52,12 @@ const ISSUE_I18N: Record<string, { messageKey: MessageKey; badgeKey: MessageKey 
     messageKey: "import.error.divisionNotFound",
     badgeKey: "import.issueCode.divisionNotFound",
   },
+  // Owner ruling 2026-10-26: a row that would enter a team into a chess division. The server words it in English
+  // (usecases/imports.ts chessEntrantIssues); this is the localized line, with the division name as its argument.
+  CHESS_INDIVIDUAL_ONLY: {
+    messageKey: "import.error.chessIndividualOnly",
+    badgeKey: "import.issueCode.chessIndividualOnly",
+  },
 };
 /** A plan target: either an existing row's id or a forward reference to
  *  another op in this same plan (`packages/engine/src/import/types.ts`). */
