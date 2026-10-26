@@ -158,7 +158,7 @@ describe("carrom position of a decided match", () => {
   it("a match won 2-0 reports Game 2, not a phantom Game 3 (the last position that happened)", () => {
     const state = fold(stream(["core.start"], ...boards(...game1H, ...game1H)));
     expect(state.outcome).not.toBeNull();
-    const segments = carrom.position(state).segments;
+    const segments = carrom.position!(state).segments;
     expect(segments[0]).toMatchObject({ key: "game", value: "2" });
     expect(segments[1]).toMatchObject({ key: "board", value: "3" });
   });
@@ -205,8 +205,8 @@ describe("carrom summary detail", () => {
 
 describe("carrom variants and declarations", () => {
   it("the variants are the ICF default (no overrides) and the documented club-29 rules", () => {
-    expect(carrom.variants!.icf).toEqual({});
-    expect(carrom.variants!["club-29"]).toEqual({ gameTo: 29, queenPoints: 5, queenCapAt: 24 });
+    expect(carrom.variants.icf).toEqual({});
+    expect(carrom.variants["club-29"]).toEqual({ gameTo: 29, queenPoints: 5, queenCapAt: 24 });
   });
 
   it("game columns display; board and point ledgers are ledger-only operands (carrom.md §4)", () => {
@@ -221,8 +221,8 @@ describe("carrom variants and declarations", () => {
   it("declaredPointsSets is {win+loss, 2*draw}, told apart by loss > 0 and draw != 1", () => {
     const custom = carrom.configSchema.parse({ points: { win: 3, loss: 1, draw: 1 } });
     // win+loss = 4 (a win/walkover pays 3 + 1 to the loser); a drawn match pays 1 + 1 = 2.
-    expect([...carrom.declaredPointsSets!(custom)].sort()).toEqual([2, 4]);
-    expect([...carrom.declaredPointsSets!(cfg)]).toEqual([2]); // default 2+0 and 2*1 coincide
+    expect([...carrom.declaredPointsSets(custom)].sort()).toEqual([2, 4]);
+    expect([...carrom.declaredPointsSets(cfg)]).toEqual([2]); // default 2+0 and 2*1 coincide
   });
 
   it("player stat metrics are labelled for the stats table", () => {
