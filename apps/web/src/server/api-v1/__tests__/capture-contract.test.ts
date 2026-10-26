@@ -54,7 +54,7 @@ const SHA256: Record<string, string> = {
   "capture-beat.v1.json": "e14329132400d45cd38e03b19cf85189fe35acb0b8b9a51e7ca98879fe07c736",
   "capture-start.v1.json": "012d6e3851e84d0ce659ad23449fa91b61f0d20cfac1e58f2ccbc7cbb0742bae",
   "capture-scoring-link.v1.json": "f0f1188655f3ca83b3e42ce7fedd6f6210a3a141b0bcf02fa250eb2448b1c85f",
-  "capture-record.v1.json": "48a798649e24d6b779c745a017e897a9bac5b3a83d3731eaa0824c181fb78334",
+  "capture-record.v1.json": "213f766043b7682f198cc98da13e93995b6602e46533ecf60c78bf562aebd6f8",
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -271,7 +271,7 @@ const DIRS: Record<string, { file: string; routes: Route[]; count: number }> = {
   "capture-beat.v1": { file: BEAT, routes: [["beat-", S.CaptureBeat, ""], ["answer-", S.CaptureBeatAnswer, "#/$defs/answer"]], count: 40 },
   "capture-start.v1": { file: START, routes: [["request-", S.CaptureStartBody, ""], ["ok-", S.CaptureStartOk, "#/$defs/ok"], ["", S.CaptureRefusal, "#/$defs/refusal"]], count: 18 },
   "capture-scoring-link.v1": { file: SCORING, routes: [["request-", S.CaptureStartBody, ""], ["ok-", S.CaptureScoringLinkOk, "#/$defs/ok"], ["", S.CaptureRefusal, "#/$defs/refusal"]], count: 17 },
-  [RECORD_DIR]: { file: RECORD, routes: [["line-", S.CaptureRecordLine, ""], ["ok-", S.CaptureRecordOk, "#/$defs/ok"], ["", S.CaptureRecordRefusal, "#/$defs/refusal"]], count: 60 },
+  [RECORD_DIR]: { file: RECORD, routes: [["line-", S.CaptureRecordLine, ""], ["ok-", S.CaptureRecordOk, "#/$defs/ok"], ["", S.CaptureRecordRefusal, "#/$defs/refusal"]], count: 63 },
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -279,11 +279,11 @@ const DIRS: Record<string, { file: string; routes: Route[]; count: number }> = {
 // ---------------------------------------------------------------------------------------------------------------
 /** Per fixture prefix: the shape's pointer and the exact count (never 0). `line-` is ONE NDJSON line (the root). */
 const RECORD_ROUTES: [prefix: string, pointer: "" | "#/$defs/ok" | "#/$defs/refusal", count: number][] = [
-  ["line-", "", 46], ["ok-", "#/$defs/ok", 6], ["", "#/$defs/refusal", 8],
+  ["line-", "", 49], ["ok-", "#/$defs/ok", 6], ["", "#/$defs/refusal", 8],
 ];
-/** Capture's `modules/capture-engine/src/scrub/allow-list.json` at capture ebac190 (branch feat/s1-d3-fixes), list for list: the rulebook the
- *  record's keys come from, typed here and never read off the contract. A key added on capture's side is a contract
- *  bump here (the spec's §Body). */
+/** Capture's `modules/capture-engine/src/scrub/allow-list.json` at capture 2b4df80 (ebac190's lists plus the seven
+ *  scalars its reasons tag R-990P), list for list: the rulebook the record's keys come from, typed here and never read
+ *  off the contract. A key added on capture's side is a contract bump here (the spec's §Body). */
 const ALLOW_LIST = {
   reserved: ["at", "kind", "level"],
   plain: ["action", "answer", "appVersion", "attempt", "cause", "claim", "count", "delivery", "endReason", "error", "exit",
@@ -293,12 +293,16 @@ const ALLOW_LIST = {
   publicUrl: ["url", "playbackUrl", "overlayUrl"],
   text: ["message", "problems"],
   never: ["tok", "token", "code", "passphrase", "streamKey", "streamId", "bearer", "authorization"],
-  scalars: ["audioFps", "bytes", "camera", "counted", "encodeListed", "exitAtMs", "failed", "failures", "gapMs", "granted",
-    "headroom", "held", "intervalMs", "lagGrowthMs", "lagMs", "late", "listed", "minuteEpochMs", "msSinceAdvance", "ok", "on",
-    "outageMs", "pickAspect16x9", "pickHeight", "pickWidth", "publishedMs", "rebaselined", "rebuilds", "refusedSid", "retryMs",
-    "sameArea", "sent", "sinceLastMs", "sound", "srtOffered", "stalledMs", "stopped", "suppressed", "validated", "videoFps",
-    "wasLive"],
+  scalars: ["audioFps", "bandwidthBps", "bytes", "camera", "counted", "dropped", "egressBps", "encodeListed", "exitAtMs",
+    "failed", "failures", "gapMs", "gateBps", "granted", "headroom", "held", "intervalMs", "lagGrowthMs", "lagMs", "late",
+    "listed", "lost", "minuteEpochMs", "msSinceAdvance", "ok", "on", "outageMs", "pickAspect16x9", "pickHeight", "pickWidth",
+    "publishedMs", "rebaselined", "rebuilds", "refusedSid", "retryMs", "sameArea", "sendBufferMs", "sent", "sinceLastMs",
+    "sound", "srtOffered", "stalledMs", "stopped", "suppressed", "target", "validated", "videoFps", "wasLive"],
 };
+/** The seven scalars capture 2b4df80's allow-list tags R-990P (owner-approved 2026-10-26), each with the class its
+ *  reason states: all seven are the generic scalar class — a number, a boolean or null, nothing narrower — so
+ *  `sendBufferMs` may be negative (−336 has been seen on a real SRT link) and none is in NARROWED_SCALARS. */
+const R990P_KEYS = ["bandwidthBps", "dropped", "egressBps", "gateBps", "lost", "sendBufferMs", "target"];
 /** The scalars the allow-list's own REASONS narrow (as its reason narrows tokenTag), typed from capture's writers at
  *  ebac190 and the coordinator's relay of the capture team's answer (2026-10-12): `bytes` is `record.send`'s
  *  `TextEncoder` length, `failures` a Kotlin Int count, `retryMs` `Rejoin.delayAfter`'s Long, `pickAspect16x9` a
@@ -528,7 +532,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       expect(checked, `${dir}: fixtures checked`).toBe(count);
       total += checked;
     }
-    expect(total).toBe(12 + 52 + 40 + 18 + 17 + 60);
+    expect(total).toBe(12 + 52 + 40 + 18 + 17 + 63);
     expect(byFile, "fixtures checked against the published bytes").toBe(total);
     // Every ZOD_ONLY entry names a fixture that exists and was swept (a stale entry would excuse nothing, silently).
     expect(zodOnlySeen, "ZOD_ONLY fixtures swept").toBe(Object.keys(ZOD_ONLY).length);
@@ -1165,7 +1169,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       routes++;
     }
     expect(routes).toBe(3);
-    expect(names).toHaveLength(46 + 6 + 8);
+    expect(names).toHaveLength(49 + 6 + 8);
     // Every RECORD_SERVER_ONLY entry names a fixture that exists and was swept (a stale entry would excuse nothing).
     expect(secrets, "secret-shaped vectors swept").toBe(Object.keys(RECORD_SERVER_ONLY).length);
     expect(secrets).toBe(6);
@@ -1247,7 +1251,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       strings += stringsOf(line).length;
       validLines++;
     }
-    expect(validLines).toBe(22);
+    expect(validLines).toBe(25);
     expect(strings).toBeGreaterThan(validLines);
     // The bare ingest URLs W26 serves carry no credential; a masked RTMPS key or SRT passphrase is no secret either.
     let bare = 0;
@@ -1266,7 +1270,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     const expected = [...ALLOW_LIST.reserved, ...ALLOW_LIST.plain.map(written), ...ALLOW_LIST.publicUrl, ...ALLOW_LIST.text, ...ALLOW_LIST.scalars];
     // Premise: the lists are disjoint once `kind` is renamed, so the key count is their sum.
     expect(new Set(expected).size, "premise: disjoint lists").toBe(lists.reduce((n, l) => n + l.length, 0));
-    expect(expected).toHaveLength(3 + 48 + 3 + 2 + 41);
+    expect(expected).toHaveLength(3 + 48 + 3 + 2 + 48);
     expect(Object.keys(root.properties as Json).sort()).toEqual([...expected].sort());
     expect(root.additionalProperties).toBe(false);
     expect([...(root.required as string[])].sort()).toEqual(["at", "kind"]);
@@ -1340,9 +1344,101 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     for (const k of unlisted) for (const v of ["***", 3, null]) probe(k, v, false);
     expect(plain).toHaveLength(46);
     expect(unlisted).toHaveLength(11);
-    // plain 46 × 20, sid 11, tokenTag 10, publicUrl 3 × 16, text 2 × 10, scalars 37 × 8, the narrowed counts 3 × 14 and
+    // plain 46 × 20, sid 11, tokenTag 10, publicUrl 3 × 16, text 2 × 10, scalars 44 × 8, the narrowed counts 3 × 14 and
     // yes/no 1 × 8, at 12, kind 7, level 9, unlisted 11 × 3.
-    expect(probes).toBe(46 * 20 + 11 + 10 + 3 * 16 + 2 * 10 + 37 * 8 + 3 * 14 + 8 + 12 + 7 + 9 + 11 * 3);
+    expect(probes).toBe(46 * 20 + 11 + 10 + 3 * 16 + 2 * 10 + 44 * 8 + 3 * 14 + 8 + 12 + 7 + 9 + 11 * 3);
+  });
+
+  it("capture-record.v1 R-990P (capture 2b4df80): the seven bitrate scalars are the contract's own generic scalar class, exactly gapMs's and videoFps's — a number, a boolean or null admitted (a negative sendBufferMs included), every other JSON type refused, an unknown key still refused — by the published bytes AND the twin, counted; the three bitrate fixtures carry every one of the seven", () => {
+    const root = rootOf(contract(RECORD));
+    const props = root.properties as Record<string, Json>;
+    const fileAdmits = fileValidator();
+    const base: Json = { at: "2026-10-11T21:42:17.350Z", kind: "bitrate" };
+
+    // Premises, typed from capture's allow-list: seven keys, each a scalar there, none narrowed by its own reason.
+    expect(R990P_KEYS).toHaveLength(7);
+    for (const k of R990P_KEYS) {
+      expect(ALLOW_LIST.scalars, `${k}: one of capture's scalars`).toContain(k);
+      expect(k in NARROWED_SCALARS, `${k}: not narrowed by its reason`).toBe(false);
+    }
+    // The class is the contract's OWN: the anyOf gapMs and videoFps already carry, verbatim (description included), and
+    // the types admitted are read off that anyOf, never typed here. A key missing from the file fails on its first line.
+    expect(props.videoFps, "premise: gapMs and videoFps are one class").toEqual(props.gapMs);
+    const classTypes = (props.gapMs.anyOf as Json[]).map((branch) => branch.type as string);
+    expect(classTypes, "the class: a number, a boolean or null only").toEqual(["number", "boolean", "null"]);
+    for (const k of R990P_KEYS) {
+      expect(props[k], `${k}: exactly gapMs's shape`).toEqual(props.gapMs);
+      // No bound anywhere on it: a minimum would refuse the −336 capture has seen.
+      expect(JSON.stringify(props[k]), `${k}: no bound`).not.toMatch(/minimum|maximum|exclusive|multipleOf|"integer"/i);
+    }
+    expect(root.additionalProperties, "the line stays closed").toBe(false);
+
+    // Every JSON type, by name; a type is admitted iff the contract's class lists it.
+    const BY_TYPE: Record<string, unknown[]> = {
+      number: [0, 3, 0.4, 4000000, -1, -336],
+      boolean: [true, false],
+      null: [null],
+      string: ["word", "***", "", "-336", "4000000", "true", "null"],
+      object: [{}, { a: 1 }],
+      array: [[], [3]],
+    };
+    let probes = 0, admittedProbes = 0, refusedProbes = 0;
+    for (const k of R990P_KEYS) {
+      for (const [type, values] of Object.entries(BY_TYPE)) {
+        const want = classTypes.includes(type);
+        for (const v of values) {
+          const line = { ...base, [k]: v };
+          expect(fileAdmits(RECORD, "", line), `file: ${k} = ${JSON.stringify(v)}`).toBe(want);
+          expect(parses(S.CaptureRecordLine, line), `twin: ${k} = ${JSON.stringify(v)}`).toBe(want);
+          probes++;
+          if (want) admittedProbes++; else refusedProbes++;
+        }
+      }
+    }
+    expect(probes).toBe(7 * (6 + 2 + 1 + 7 + 2 + 2));
+    expect(admittedProbes, "anti-vacuity: the sweep admitted").toBe(7 * (6 + 2 + 1));
+    expect(refusedProbes, "anti-vacuity: the sweep refused").toBe(7 * (7 + 2 + 2));
+    // The one that matters for the SRT send buffer, alone: −336 admitted by both, on the key it was seen on.
+    expect(fileAdmits(RECORD, "", { ...base, sendBufferMs: -336 }), "file: sendBufferMs −336").toBe(true);
+    expect(parses(S.CaptureRecordLine, { ...base, sendBufferMs: -336 }), "twin: sendBufferMs −336").toBe(true);
+
+    // The closed line survives the seven additions: a key near each of them, and a never key, is still refused whatever
+    // it holds, by both sides — so `additionalProperties: false` is the thing refusing, not luck.
+    const NEAR = ["bandwidthbps", "bandwidth", "sendBuffer", "targetBps", "egress", "gatebps", "lostPackets", "droppedPackets", "R-990P", ...ALLOW_LIST.never];
+    let unknown = 0;
+    for (const k of NEAR) {
+      expect(R990P_KEYS, `${k}: premise — none of the seven`).not.toContain(k);
+      for (const v of [3, true, null, "***"]) {
+        expect(fileAdmits(RECORD, "", { ...base, [k]: v }), `file: ${k} = ${JSON.stringify(v)}`).toBe(false);
+        expect(parses(S.CaptureRecordLine, { ...base, [k]: v }), `twin: ${k} = ${JSON.stringify(v)}`).toBe(false);
+        unknown++;
+      }
+    }
+    expect(NEAR).toHaveLength(9 + 8);
+    expect(unknown).toBe((9 + 8) * 4);
+    // All seven on one line, and each of the seven absent: every key is optional.
+    const all = Object.fromEntries(R990P_KEYS.map((k) => [k, null])) as Json;
+    expect(fileAdmits(RECORD, "", { ...base, ...all })).toBe(true);
+    expect(parses(S.CaptureRecordLine, { ...base, ...all })).toBe(true);
+    expect(fileAdmits(RECORD, "", base)).toBe(true);
+    expect(parses(S.CaptureRecordLine, base)).toBe(true);
+
+    // The lines as capture now sends them: a full SRT `bitrate` (with the negative send buffer), the RTMPS one (the
+    // SRT-only readings null, lost 0 — the allow-list's own reasons) and a `bitrate-held`, admitted by both sides, and
+    // between them they carry every one of the seven keys.
+    const BITRATE_FIXTURES = ["line-valid-bitrate", "line-valid-bitrate-rtmps", "line-valid-bitrate-held"];
+    const carried = new Set<string>();
+    for (const name of BITRATE_FIXTURES) {
+      const line = fixture(RECORD_DIR, name);
+      expect(fileAdmits(RECORD, "", line), `${name}: the file admits it`).toBe(true);
+      expect(parses(S.CaptureRecordLine, line), `${name}: the twin admits it`).toBe(true);
+      for (const k of Object.keys(line)) if (R990P_KEYS.includes(k)) carried.add(k);
+    }
+    expect([...carried].sort(), "the fixtures carry all seven").toEqual([...R990P_KEYS].sort());
+    expect(BITRATE_FIXTURES.map((n) => fixture(RECORD_DIR, n).kind)).toEqual(["bitrate", "bitrate", "bitrate-held"]);
+    expect(fixture(RECORD_DIR, "line-valid-bitrate").sendBufferMs, "a real SRT reading below zero").toBe(-336);
+    const rtmps = fixture(RECORD_DIR, "line-valid-bitrate-rtmps");
+    expect([rtmps.bandwidthBps, rtmps.sendBufferMs, rtmps.lost], "RTMPS: no bandwidth, no buffer, none lost").toEqual([null, null, 0]);
   });
 
   it("capture-record.v1 answers: 201 is the closed {ref, kept, dropped} with an upper-case Crockford ref; every refusal word of the spec's table has a fixture the file admits; replaced is none of them (R4)", () => {

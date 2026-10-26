@@ -47405,6 +47405,19 @@
                       }
                     ]
                   },
+                  "bandwidthBps": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "camera": {
                     "anyOf": [
                       {
@@ -47419,6 +47432,32 @@
                     ]
                   },
                   "counted": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "dropped": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "egressBps": {
                     "anyOf": [
                       {
                         "type": "number"
@@ -47471,6 +47510,19 @@
                     ]
                   },
                   "gapMs": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "gateBps": {
                     "anyOf": [
                       {
                         "type": "number"
@@ -47575,6 +47627,19 @@
                     ]
                   },
                   "listed": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lost": {
                     "anyOf": [
                       {
                         "type": "number"
@@ -47743,6 +47808,19 @@
                       }
                     ]
                   },
+                  "sendBufferMs": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "sent": {
                     "anyOf": [
                       {
@@ -47822,6 +47900,19 @@
                     ]
                   },
                   "suppressed": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "target": {
                     "anyOf": [
                       {
                         "type": "number"

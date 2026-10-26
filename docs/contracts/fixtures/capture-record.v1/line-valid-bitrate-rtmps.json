@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-11T21:44:02.118Z",
+  "kind": "bitrate",
+  "from": 3000000,
+  "to": 4000000,
+  "reason": "raise",
+  "bandwidthBps": null,
+  "dropped": 0,
+  "egressBps": 2950000,
+  "lost": 0,
+  "sendBufferMs": null
+}

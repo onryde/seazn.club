@@ -99,11 +99,11 @@ describe("screenRecordLine (§5 under owner ruling RL): the allow-list, then S1�
         server++;
       } else expect.fail(`${name}: an unrouted line fixture`);
     }
-    expect(valid).toBe(22);
+    expect(valid).toBe(25);
     expect(invalid).toBe(17);
     expect(secret).toBe(6);
     expect(server).toBe(1);
-    expect(valid + invalid + secret + server).toBe(46);
+    expect(valid + invalid + secret + server).toBe(49);
   });
 
   it("S1 is the SENDING Bearer: its vector is ok under another Bearer (a plain word), and dropped as S1 under its own", () => {
@@ -202,6 +202,55 @@ describe("screenRecordLine (§5 under owner ruling RL): the allow-list, then S1�
       checked++;
     }
     expect(checked).toBe(11);
+  });
+
+  it("the seven scalars capture added (R-990P, 2b4df80): a `bitrate` and a `bitrate-held` line as capture writes them are ok, each key reads as the contract's generic scalar class (a number, a boolean or null — a negative sendBufferMs too) and a string, the mask, an object or an array is unreadable, counted", () => {
+    // Capture's allow-list keys tagged R-990P, typed from it; the class they read in is the contract's, off gapMs.
+    const KEYS = ["bandwidthBps", "dropped", "egressBps", "gateBps", "lost", "sendBufferMs", "target"];
+    const props = CONTRACT.properties as Record<string, Json>;
+    const classTypes = (props.gapMs.anyOf as Json[]).map((b) => b.type as string);
+    expect(classTypes).toEqual(["number", "boolean", "null"]);
+    const BY_TYPE: Record<string, unknown[]> = {
+      number: [0, 4000000, 0.4, -1, -336], boolean: [true, false], null: [null],
+      string: ["word", "***", "-336"], object: [{}], array: [[]],
+    };
+    const base = { at: "2026-10-11T21:42:17.350Z", kind: "bitrate-held" };
+    let checked = 0, ok = 0, unreadable = 0;
+    for (const k of KEYS) {
+      expect(props[k], `${k}: the contract lists it`).toEqual(props.gapMs);
+      for (const [type, values] of Object.entries(BY_TYPE)) {
+        const want = classTypes.includes(type);
+        for (const v of values) {
+          const line = { ...base, [k]: v };
+          const r = screenRecordLine(JSON.stringify(line), OTHER_TOK);
+          expect(r.ok, `${k} = ${JSON.stringify(v)}`).toBe(want);
+          if (!r.ok) expect(r, `${k} = ${JSON.stringify(v)}`).toEqual({ ok: false, why: "shape" });
+          expect(fileReads(line), `the file agrees: ${k} = ${JSON.stringify(v)}`).toBe(want);
+          checked++;
+          if (want) ok++; else unreadable++;
+        }
+      }
+    }
+    expect(checked).toBe(7 * (5 + 2 + 1 + 3 + 1 + 1));
+    expect(ok).toBe(7 * 8);
+    expect(unreadable).toBe(7 * 5);
+    // Still closed: a key near one of the seven is unreadable, as is a bitrate key capture does not send.
+    for (const k of ["bandwidth", "sendBuffer", "targetBps", "egressbps"]) {
+      expect(screenRecordLine(JSON.stringify({ ...base, [k]: 3 }), OTHER_TOK), k).toEqual({ ok: false, why: "shape" });
+    }
+    // The lines as capture writes them, through the real screen: the kept line is the parsed object, key for key.
+    let lines = 0;
+    for (const name of ["line-valid-bitrate", "line-valid-bitrate-rtmps", "line-valid-bitrate-held"]) {
+      const value = fixture(name);
+      const r = screenRecordLine(JSON.stringify(value), OTHER_TOK);
+      expect(r.ok, name).toBe(true);
+      if (r.ok) {
+        expect(r.line, `${name}: kept whole, no key stripped`).toEqual(value);
+        expect(JSON.parse(r.text), `${name}: and stored whole`).toEqual(value);
+      }
+      lines++;
+    }
+    expect(lines).toBe(3);
   });
 
   it("review fix 1 (PR #943): a key named twice is unreadable — JSON.parse keeps the LAST value, so a first, secret-shaped value would pass a screen of the parsed object; escaped key spellings are the same key — counted", () => {

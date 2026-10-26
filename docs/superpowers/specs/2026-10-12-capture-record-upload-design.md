@@ -139,8 +139,8 @@ The rate limit is the exception. `capturePhoneRoute` spends `CAPTURE_CODE_LIMIT`
 - **Zip-bomb defence:** the server inflates the body as a stream with a hard output cap of 1 MB + 1 byte, using zlib
   `maxOutputLength` or a counting transform that aborts. Reaching the cap is 413, and inflation stops there. The raw
   body read is also capped at 1 MB.
-- **Keys:** the line keys come from capture's `modules/capture-engine/src/scrub/allow-list.json` (capture `ebac190`,
-  branch `feat/s1-d3-fixes`), 97 of them:
+- **Keys:** the line keys come from capture's `modules/capture-engine/src/scrub/allow-list.json` (capture `2b4df80`,
+  on `main`), 104 of them:
   - `at` (required), `kind` (required) and `level` (optional) are the line's own keys;
   - each `plain`, `publicUrl`, `text` and `scalars` key is accepted in its class;
   - the field `kind` is written as `field_kind`, because `kind` is the line's own key;
@@ -162,6 +162,11 @@ The rate limit is the exception. `capturePhoneRoute` spends `CAPTURE_CODE_LIMIT`
   `tokenTag`'s narrows it: `bytes` (record.send's body size), `failures` (rejoin-retry's failed connects) and
   `retryMs` (rejoin-retry's wait) are integers of at least 0, and `pickAspect16x9` (preview-size: is the preview
   16:9) is a boolean. None of the four admits null or the mask; capture writes each from a typed field.
+
+  Capture 2b4df80 added seven scalar keys (R-990P; owner approved 2026-10-26; web PR #1037), written on the `bitrate`
+  and `bitrate-held` lines: `bandwidthBps`, `dropped`, `egressBps`, `gateBps`, `lost`, `sendBufferMs` and `target`.
+  Each is the generic scalar class (a number, a boolean or null), as `gapMs` and `videoFps` are. Nothing narrows them;
+  `sendBufferMs` has no minimum, because SRT reports it negative (-336 has been seen).
 
   **A line with any other key is dropped (ruling RL), including a never key** (`tok`, `code`, `streamKey`, …) even when
   masked, and so is a line with a value outside its key's class. When capture adds a key, it is a contract change here (a new sha256) in step with
