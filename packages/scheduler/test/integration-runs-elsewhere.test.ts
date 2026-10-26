@@ -257,23 +257,25 @@ describe("the scheduler's live tests run in ci.yml's scheduler-live job, against
     expect(good, good.errors).toEqual({ code: 0, errors: "", docker: [] });
   });
 
-  it("the executed judge reads the SERVICE container's logs on every refusal path (the container is a service, not one `docker run` named here)", () => {
-    const refusals: [string, string][] = [
-      ["a skip", report(BOTH(), { numPendingTests: 1 })],
-      ["a failed test", report(BOTH(), { numFailedTests: 1, numPassedTests: 3 })],
-      ["a failed suite", report(BOTH(), { numFailedTestSuites: 1 })],
-      ["a live file that did not report", report([{ file: live[0]! }])],
-      ["a live file that passed with no assertions", report([{ file: live[0]! }, { file: live[1]!, assertions: 0 }])],
-    ];
-    expect(refusals.length, "paths exercised").toBe(5);
-    for (const [label, json] of refusals) {
-      const out = judge(json);
-      expect(out.code, `${label}: ${out.errors}`).toBe(1);
-      expect(out.docker, `${label}: the judge must print the service's logs by the id the workflow supplies`).toEqual([`logs ${CONTAINER}`]);
-    }
-    expect(judge(report(BOTH())).docker, "a passing run reads no logs").toEqual([]);
-    // Six bash+jq spawns in one case: the 5s default is not enough on a loaded runner.
-  }, 30_000);
+  // One spawn per case: nothing here needs a timeout above the default. The zero-tests branch prints no logs (it refuses before
+  // reading any), so it is not in this table.
+  const LOG_READING_REFUSALS: [label: string, json: () => string][] = [
+    ["a skip", () => report(BOTH(), { numPendingTests: 1 })],
+    ["a failed test", () => report(BOTH(), { numFailedTests: 1, numPassedTests: 3 })],
+    ["a failed suite", () => report(BOTH(), { numFailedTestSuites: 1 })],
+    ["a live file that did not report", () => report([{ file: live[0]! }])],
+    ["a live file that passed with no assertions", () => report([{ file: live[0]! }, { file: live[1]!, assertions: 0 }])],
+  ];
+  it.each(LOG_READING_REFUSALS)("the executed judge reads the SERVICE container's logs, by the id the workflow supplies, when it refuses %s", (label, json) => {
+    const out = judge(json());
+    expect(out.code, `${label}: ${out.errors}`).toBe(1);
+    expect(out.docker).toEqual([`logs ${CONTAINER}`]);
+  });
+
+  it("the executed judge reads no logs on a passing run (and the table above is not empty)", () => {
+    expect(LOG_READING_REFUSALS.length, "refusal paths exercised").toBe(5);
+    expect(judge(report(BOTH())).docker).toEqual([]);
+  });
 
   // Each case below is red through exactly ONE clause of the judge, so deleting any one clause turns exactly its case
   // green-when-it-should-be-red. Two clauses covering for each other would each be untested.

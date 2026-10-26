@@ -12,12 +12,20 @@
 # (packages/scheduler/test/placement-image-wiring.test.ts pins both).
 #
 #   placement-image.sh ref    print the pinned reference on stdout (and nothing else)
-#   placement-image.sh pull   docker pull it, retag it `placement-service:ci` (the name the jobs' `docker run` lines use),
-#                             then print the digest(s) that were pulled
+#   placement-image.sh pull   docker pull it (3 attempts at most, $PLACEMENT_PULL_BACKOFF_S seconds apart, default 5),
+#                             retag it `placement-service:ci` (the name the jobs' `docker run` lines use), then print the
+#                             digest(s) that were pulled
 #
 # A malformed pin is an error, not an empty string: `::error::` goes to STDERR and the exit status is 1. STDERR matters. The
 # caller is `ref="$(bash …/placement-image.sh ref)"`, which captures stdout, so an annotation printed there would be swallowed
 # into $ref and the failure would arrive with no message.
+#
+# Only the PULL is retried: it is the one step that talks to a registry, and a transient 5xx there should not red a whole job.
+# A retag or inspect that fails is a real failure and stops the script at once. After the last attempt the script fails with
+# an `::error::`; it never loops on.
+#
+# jq is required (present on GitHub's ubuntu runners); its absence is an `::error::` naming it, not a confusing failure from
+# inside a command substitution.
 #
 # The pin file is `$PLACEMENT_VENDORED_JSON` when set (the tests aim it at fixtures), else VENDORED.json next to this script's
 # directory — the script's own location, never the caller's working directory.
@@ -43,6 +51,8 @@ case "$mode" in
   *) fail "unknown mode '$mode' (expected ref or pull)" ;;
 esac
 
+command -v jq > /dev/null || fail "jq is required to read the pin and is not on PATH"
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 pin="${PLACEMENT_VENDORED_JSON:-$script_dir/../VENDORED.json}"
 [ -f "$pin" ] || fail "the pin file $pin does not exist"
@@ -62,6 +72,24 @@ if [ "$mode" = ref ]; then
   exit 0
 fi
 
-docker pull "$ref"
+# Validate before the first docker call: a typo here must not become a `sleep` error on the second attempt.
+backoff="${PLACEMENT_PULL_BACKOFF_S:-5}"
+backoff_re='^[0-9]+$'
+[[ "$backoff" =~ $backoff_re ]] || fail "PLACEMENT_PULL_BACKOFF_S must be a whole number of seconds, got '${backoff}'"
+
+attempts=3
+pulled=""
+for attempt in $(seq 1 "$attempts"); do
+  if docker pull "$ref"; then
+    pulled=1
+    break
+  fi
+  if [ "$attempt" -lt "$attempts" ]; then
+    printf '::warning::placement-image.sh: docker pull %s failed (attempt %s of %s); retrying in %ss\n' "$ref" "$attempt" "$attempts" "$backoff" >&2
+    sleep "$backoff"
+  fi
+done
+[ -n "$pulled" ] || fail "docker pull $ref failed after $attempts attempts"
+
 docker tag "$ref" "$LOCAL_TAG"
 docker image inspect --format '{{json .RepoDigests}}' "$ref"

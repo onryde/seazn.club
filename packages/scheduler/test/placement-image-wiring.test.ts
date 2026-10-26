@@ -12,15 +12,11 @@
 // nobody runs is the inert-seam shape), and the two new ci.yml jobs. The expected job set comes from the plan's facts table —
 // the jobs that exist today — never from the scan under test.
 import { spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, describe, expect, it, vi } from "vitest";
-
-// Every case below spawns bash (and jq, and a docker shim), several in a row; on a loaded runner the 5s default is not enough and
-// a timeout reads as a failure of the thing under test. The budget lives here, with the tests it is for.
-vi.setConfig({ testTimeout: 30_000 });
+import { afterAll, describe, expect, it } from "vitest";
 
 const PACKAGE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REPO = resolve(PACKAGE, "../..");
@@ -33,6 +29,16 @@ const SCRATCH = mkdtempSync(join(tmpdir(), "placement-image-"));
 afterAll(() => rmSync(SCRATCH, { recursive: true, force: true }));
 let counter = 0;
 const fresh = (name: string): string => join(SCRATCH, `${String(++counter)}-${name}`);
+/** A directory of executable shell shims, one per entry (name -> script body), to put at the front of a child's PATH. */
+function shimDir(files: Record<string, string>): string {
+  const dir = fresh("shims");
+  mkdirSync(dir);
+  for (const [name, body] of Object.entries(files)) {
+    writeFileSync(join(dir, name), body);
+    chmodSync(join(dir, name), 0o755);
+  }
+  return dir;
+}
 
 // ---------------------------------------------------------------------------------------------------------------------
 // The script, executed.
@@ -129,55 +135,147 @@ describe("placement-image.sh ref", () => {
   );
 });
 
+describe("placement-image.sh without jq", () => {
+  // jq is the script's one non-POSIX dependency. A runner without it must fail with a message that names it, not with
+  // `jq: command not found` from the middle of a command substitution (which the tag check would then misreport as a bad pin).
+  const BASH = "/bin/bash";
+  it.each([["ref"], ["pull"]])("%s mode: refuses with an ::error:: naming jq, before reading the pin or touching docker", (mode) => {
+    expect(existsSync(BASH), "the control below needs an absolute bash").toBe(true);
+    const empty = shimDir({});
+    const docker = fresh("docker.log");
+    const r = spawnSync(BASH, [SCRIPT, mode], {
+      cwd: SCRATCH,
+      encoding: "utf8",
+      env: { PATH: empty, PLACEMENT_VENDORED_JSON: pinWith(GOOD_TAG), DOCKER_LOG: docker },
+    });
+    expect(r.error).toBeUndefined();
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/::error::.*\bjq\b/);
+    expect(r.stdout).toBe("");
+    expect(existsSync(docker), "docker was never reached").toBe(false);
+  });
+
+  it("the control: the same invocation with jq on PATH succeeds", () => {
+    const jqDir = shimDir({});
+    const jq = spawnSync("sh", ["-c", "command -v jq"], { encoding: "utf8" }).stdout.trim();
+    expect(jq, "jq is installed").not.toBe("");
+    symlinkSync(jq, join(jqDir, "jq"));
+    const dirname = spawnSync("sh", ["-c", "command -v dirname"], { encoding: "utf8" }).stdout.trim();
+    symlinkSync(dirname, join(jqDir, "dirname"));
+    const r = spawnSync(BASH, [SCRIPT, "ref"], { cwd: SCRATCH, encoding: "utf8", env: { PATH: jqDir, PLACEMENT_VENDORED_JSON: pinWith(GOOD_TAG) } });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toBe(`${IMAGE}:${GOOD_TAG}\n`);
+  });
+});
+
 describe("placement-image.sh pull", () => {
   const TAG = "c".repeat(40);
   const REF = `${IMAGE}:${TAG}`;
-  const SHIM_DIR = fresh("shim");
-  mkdirSync(SHIM_DIR);
-  // A docker that records its argv, one call per line, and can be told to fail one subcommand. `image inspect` prints a
-  // RepoDigests-shaped line so the test can see the script surface it.
-  writeFileSync(
-    join(SHIM_DIR, "docker"),
-    [
+  // A docker that records its argv, one call per line. It can be told to fail one subcommand for good (DOCKER_FAIL_ON) or to
+  // fail the first N `pull`s and then succeed (DOCKER_PULL_FAILS: a transient registry error). `image inspect` prints a
+  // RepoDigests-shaped line so the test can see the script surface it. A `sleep` that only records, so no case waits.
+  const SHIMS = shimDir({
+    docker: [
       "#!/bin/sh",
       'echo "$*" >> "$DOCKER_LOG"',
+      'if [ "$1" = "pull" ] && [ -n "${DOCKER_PULL_FAILS:-}" ]; then',
+      '  n=$(cat "$DOCKER_LOG.pulls" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$DOCKER_LOG.pulls"',
+      '  [ "$n" -le "$DOCKER_PULL_FAILS" ] && exit 1',
+      "  exit 0",
+      "fi",
       '[ "$1" = "$DOCKER_FAIL_ON" ] && exit 1',
       'if [ "$1" = "image" ]; then echo \'["ghcr.io/onryde/seazn-placement@sha256:feedface"]\'; fi',
       "exit 0",
       "",
     ].join("\n"),
-  );
-  chmodSync(join(SHIM_DIR, "docker"), 0o755);
+    sleep: '#!/bin/sh\necho "$*" >> "$SLEEP_LOG"\nexit 0\n',
+  });
 
-  function pull(pin: string, failOn = "") {
-    const log = fresh("docker.log");
-    const r = spawnSync("bash", [SCRIPT, "pull"], {
-      cwd: SCRATCH,
-      encoding: "utf8",
-      env: envWith({ PLACEMENT_VENDORED_JSON: pin, PATH: `${SHIM_DIR}:${process.env.PATH ?? ""}`, DOCKER_LOG: log, DOCKER_FAIL_ON: failOn }),
-    });
-    expect(r.error).toBeUndefined();
-    const calls = existsSync(log) ? readFileSync(log, "utf8").split("\n").filter(Boolean) : [];
-    return { code: r.status, stdout: r.stdout, stderr: r.stderr, calls };
+  interface PullOpts {
+    /** A docker subcommand that always fails. */
+    failOn?: string;
+    /** The first N pulls fail, then pulls succeed. */
+    pullFails?: number;
+    /** PLACEMENT_PULL_BACKOFF_S; "0" by default so no case waits, null leaves it unset (the script's own default). */
+    backoff?: string | null;
   }
+  function pull(pin: string, { failOn = "", pullFails, backoff = "0" }: PullOpts = {}) {
+    const log = fresh("docker.log");
+    const sleepLog = fresh("sleep.log");
+    const env = envWith({
+      PLACEMENT_VENDORED_JSON: pin,
+      PATH: `${SHIMS}:${process.env.PATH ?? ""}`,
+      DOCKER_LOG: log,
+      SLEEP_LOG: sleepLog,
+      DOCKER_FAIL_ON: failOn,
+      ...(pullFails === undefined ? {} : { DOCKER_PULL_FAILS: String(pullFails) }),
+      ...(backoff === null ? {} : { PLACEMENT_PULL_BACKOFF_S: backoff }),
+    });
+    if (backoff === null) delete env.PLACEMENT_PULL_BACKOFF_S;
+    const r = spawnSync("bash", [SCRIPT, "pull"], { cwd: SCRATCH, encoding: "utf8", env });
+    expect(r.error).toBeUndefined();
+    const lines = (path: string) => (existsSync(path) ? readFileSync(path, "utf8").split("\n").filter(Boolean) : []);
+    return { code: r.status, stdout: r.stdout, stderr: r.stderr, calls: lines(log), sleeps: lines(sleepLog) };
+  }
+  const TAIL = [`tag ${REF} placement-service:ci`, `image inspect --format {{json .RepoDigests}} ${REF}`];
 
   it("pulls the pinned reference, retags it placement-service:ci, then prints what was pulled", () => {
     const out = pull(pinWith(TAG));
     expect(out.code, out.stderr).toBe(0);
-    expect(out.calls).toEqual([
-      `pull ${REF}`,
-      `tag ${REF} placement-service:ci`,
-      `image inspect --format {{json .RepoDigests}} ${REF}`,
-    ]);
+    expect(out.calls).toEqual([`pull ${REF}`, ...TAIL]);
+    expect(out.sleeps, "no retry, so no wait").toEqual([]);
     expect(out.stdout, "the pulled digest reaches the log").toContain("sha256:feedface");
   });
 
-  it.each([["pull"], ["tag"]])("stops when `docker %s` fails: no later docker call runs", (failOn) => {
-    const out = pull(pinWith(TAG), failOn);
+  // A registry hiccup must not red a whole job, but a retry must also be BOUNDED and must not paper over a real failure.
+  it("retries a pull that fails once: two pulls, one wait between them, then the retag", () => {
+    const out = pull(pinWith(TAG), { pullFails: 1 });
+    expect(out.code, out.stderr).toBe(0);
+    expect(out.calls).toEqual([`pull ${REF}`, `pull ${REF}`, ...TAIL]);
+    expect(out.sleeps).toEqual(["0"]);
+  });
+
+  it("retries twice: the third attempt is the last one it makes, and it succeeds", () => {
+    const out = pull(pinWith(TAG), { pullFails: 2 });
+    expect(out.code, out.stderr).toBe(0);
+    expect(out.calls).toEqual([`pull ${REF}`, `pull ${REF}`, `pull ${REF}`, ...TAIL]);
+    expect(out.sleeps).toEqual(["0", "0"]);
+  });
+
+  it("gives up after exactly three pulls, with an ::error:: and no retag: a pull that always fails stays a failure", () => {
+    const out = pull(pinWith(TAG), { failOn: "pull" });
     expect(out.code, "a failed docker call must fail the script").not.toBe(0);
-    expect(out.calls.at(-1), "the failing call is the last one made").toMatch(new RegExp(`^${failOn} `));
-    if (failOn === "pull") expect(out.calls.filter((c) => c.startsWith("tag ") || c.startsWith("image ")), "no retag after a failed pull").toEqual([]);
-    if (failOn === "tag") expect(out.calls.filter((c) => c.startsWith("image ")), "no inspect after a failed retag").toEqual([]);
+    expect(out.calls, "three attempts, then nothing").toEqual([`pull ${REF}`, `pull ${REF}`, `pull ${REF}`]);
+    expect(out.sleeps, "a wait between attempts, none after the last").toEqual(["0", "0"]);
+    expect(out.stderr).toMatch(/::error::.*pull.*3 attempts/);
+  });
+
+  it("three failed pulls and a fourth that would succeed: still a failure (the bound is real)", () => {
+    const out = pull(pinWith(TAG), { pullFails: 3 });
+    expect(out.code).not.toBe(0);
+    expect(out.calls.filter((c) => c.startsWith("pull ")).length, "pull attempts").toBe(3);
+    expect(out.calls.filter((c) => c.startsWith("tag ") || c.startsWith("image ")), "nothing after a given-up pull").toEqual([]);
+  });
+
+  it("does NOT retry the retag: a failed `docker tag` is the last call", () => {
+    const out = pull(pinWith(TAG), { failOn: "tag" });
+    expect(out.code).not.toBe(0);
+    expect(out.calls).toEqual([`pull ${REF}`, `tag ${REF} placement-service:ci`]);
+  });
+
+  it.each([
+    ["unset: the default is 5 seconds", null, "5"],
+    ["PLACEMENT_PULL_BACKOFF_S=7", "7", "7"],
+  ] as [string, string | null, string][])("backoff %s", (_label, backoff, expected) => {
+    const out = pull(pinWith(TAG), { failOn: "pull", backoff });
+    expect(out.sleeps).toEqual([expected, expected]);
+  });
+
+  it.each([["abc"], ["1.5"], ["-1"], ["5 5"]])("refuses PLACEMENT_PULL_BACKOFF_S=%j with an ::error:: before touching docker", (backoff) => {
+    const out = pull(pinWith(TAG), { backoff });
+    expect(out.code).toBe(1);
+    expect(out.stderr).toMatch(/::error::.*PLACEMENT_PULL_BACKOFF_S/);
+    expect(out.calls, "docker was never called").toEqual([]);
   });
 
   it("refuses a malformed pin BEFORE touching docker", () => {
@@ -400,14 +498,19 @@ describe("the workflows: every placement image comes from the pin", () => {
   });
 
   it("no workflow builds the placement image from source or types a tag; the seven blocks carry no build tooling", () => {
-    let scanned = 0;
+    let jobsScanned = 0;
     for (const file of WORKFLOW_FILES) {
       const text = stripComments(readFileSync(join(WORKFLOWS, file), "utf8"));
-      scanned++;
+      // A file that parses to no jobs, or to no text, is "scanned" for nothing: that is a red, not a pass.
+      expect(text.length, `${file}: text scanned`).toBeGreaterThan(0);
+      const jobs = jobsOf(file).length;
+      expect(jobs, `${file}: jobs parsed`).toBeGreaterThan(0);
+      jobsScanned += jobs;
       expect(text, `${file}: a typed placement tag`).not.toMatch(/\/seazn-placement:[0-9a-f]{7,}/);
       if (!FROZEN_TREE_WORKFLOWS.includes(file)) expect(text, `${file}: builds placement from source`).not.toMatch(/context:\s*services\/placement/);
     }
-    expect(scanned, "workflows scanned").toBe(WORKFLOW_FILES.length);
+    expect(jobsScanned, "jobs scanned across every workflow").toBe(ALL_JOBS.length);
+    expect(jobsScanned, "and that is a real number of jobs").toBeGreaterThan(30);
     let blocks = 0;
     for (const id of RUNNERS) {
       const [file, jobId] = id.split(":") as [string, string];
@@ -524,5 +627,88 @@ describe("ci.yml: placement-pin resolves the reference, scheduler-live runs the 
     expect(LIVE().text, "no job-level if / continue-on-error / defaults").not.toMatch(/^ {4}(if|continue-on-error|defaults):/m);
     const wait = stepNamed(LIVE(), "Wait for the placement service");
     expect(wait.keys).toEqual(["name", "env", "run"]);
+  });
+
+  // The readiness gate, EXECUTED with shims for `timeout` (the probe), `sleep` and `docker`. Its clauses are the ones a text match
+  // cannot hold: that it GIVES UP (`exit 1`), after exactly the loop bound, and that it stops at the first success (`break`).
+  describe("the wait step's script, executed", () => {
+    const CONTAINER = "feedbeef-service-container-id";
+    const BOUND = 15; // the loop `placement-ci.yml` ran: `seq 1 15`, one second apart, the figure its own message gives
+    const SHIMS = shimDir({
+      // Succeeds on the TIMEOUT_OK_ON-th probe and never before; unset means never.
+      timeout: [
+        "#!/bin/sh",
+        'echo "timeout $*" >> "$CALL_LOG"',
+        'n=$(grep -c "^timeout " "$CALL_LOG")',
+        '[ -n "${TIMEOUT_OK_ON:-}" ] && [ "$n" -eq "$TIMEOUT_OK_ON" ] && exit 0',
+        "exit 1",
+        "",
+      ].join("\n"),
+      sleep: '#!/bin/sh\necho "sleep $*" >> "$CALL_LOG"\nexit 0\n',
+      docker: '#!/bin/sh\necho "docker $*" >> "$CALL_LOG"\nexit 0\n',
+    });
+    function wait(okOn?: number) {
+      const body = runBody(stepNamed(LIVE(), "Wait for the placement service"));
+      const log = fresh("wait.log");
+      const r = spawnSync("bash", ["-e", "-c", body], {
+        cwd: SCRATCH,
+        encoding: "utf8",
+        env: envWith({ PATH: `${SHIMS}:${process.env.PATH ?? ""}`, CALL_LOG: log, PLACEMENT_CONTAINER: CONTAINER, ...(okOn === undefined ? {} : { TIMEOUT_OK_ON: String(okOn) }) }),
+      });
+      expect(r.error).toBeUndefined();
+      const calls = existsSync(log) ? readFileSync(log, "utf8").split("\n").filter(Boolean) : [];
+      const out = r.stdout + r.stderr;
+      return {
+        code: r.status,
+        probes: calls.filter((c) => c.startsWith("timeout ")),
+        sleeps: calls.filter((c) => c.startsWith("sleep ")),
+        docker: calls.filter((c) => c.startsWith("docker ")),
+        errors: out.split("\n").filter((l) => l.startsWith("::error::")),
+      };
+    }
+
+    it("a service that never answers: exactly the loop bound of probes, then ::error:: and the service's logs, and exit 1", () => {
+      const out = wait();
+      expect(out.code, "gives up: the step must FAIL").toBe(1);
+      expect(out.probes.length, "probes made").toBe(BOUND);
+      expect(out.probes.every((c) => c.includes("/dev/tcp/127.0.0.1/50051")), "each probe is a TCP open to the service port").toBe(true);
+      expect(out.sleeps, "a one-second wait after each failed probe").toEqual(Array(BOUND).fill("sleep 1"));
+      expect(out.errors).toHaveLength(1);
+      expect(out.errors[0]).toMatch(new RegExp(`50051.*${String(BOUND)}s`));
+      expect(out.docker, "the logs of the container the runner gave the service").toEqual([`docker logs ${CONTAINER}`]);
+    });
+
+    it("a service that answers on the 3rd probe: stops there (no further probe or wait), prints nothing red, reads no logs", () => {
+      const out = wait(3);
+      expect(out.code).toBe(0);
+      expect(out.probes.length, "probes made").toBe(3);
+      expect(out.sleeps, "waits between the failed probes only").toHaveLength(2);
+      expect(out.errors).toEqual([]);
+      expect(out.docker).toEqual([]);
+    });
+
+    it("a service that answers on the last probe is still ready (the bound is inclusive)", () => {
+      const out = wait(BOUND);
+      expect(out.code).toBe(0);
+      expect(out.probes.length).toBe(BOUND);
+      expect(out.errors).toEqual([]);
+    });
+
+    it("a service that answers at once: one probe and no wait", () => {
+      const out = wait(1);
+      expect(out).toMatchObject({ code: 0, errors: [], docker: [], sleeps: [] });
+      expect(out.probes.length).toBe(1);
+    });
+  });
+
+  it("the suite step never fails the job by itself (the judge does), and keeps its id, working directory and env", () => {
+    const suite = stepNamed(LIVE(), "Run the integration suite against the live service");
+    // `continue-on-error` is what lets the judge run after a red vitest and print the container's logs; without it a red
+    // suite ends the job before the judge speaks. The judge, not vitest's exit code, is the gate.
+    expect(suite.text).toMatch(/^ {8}continue-on-error: true\s*$/m);
+    expect(suite.keys).toEqual(["name", "id", "continue-on-error", "working-directory", "env", "run"]);
+    expect(suite.text).toMatch(/^ {8}working-directory: packages\/scheduler\s*$/m);
+    const names = stepsOf(LIVE()).map((x) => x.name);
+    expect(names.indexOf("Assert the suite RAN, and passed"), "the judge comes after the suite").toBe(names.indexOf("Run the integration suite against the live service") + 1);
   });
 });

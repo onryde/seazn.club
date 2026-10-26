@@ -843,10 +843,13 @@ jobs:
       # jobs: the image is PULLED from the pin (packages/scheduler/VENDORED.json)
       # and retagged `placement-service:ci`, never built here.
       #
-      # It stays in the foreground (not backgrounded like the production build
-      # above), exactly where the build step it replaces was — an undocumented
-      # backgrounded `uses:` step was measured on this repo to lose its outputs
-      # (probe run 32011114196), and the `wait:` below names this step's id.
+      # It is a `run:` step and stays in the foreground, exactly where the build
+      # step it replaces was (the `wait:` below names its id). Backgrounding it
+      # like the production build above is a possible later optimisation, not
+      # done here. The old reason for staying foreground was a measurement about
+      # an undocumented backgrounded `uses:` step losing its outputs (probe run
+      # 32011114196); it does not apply to a `run:` step, but the Playwright cache
+      # RESTORE below is still a `uses:` step, and still stays foreground for it.
       - name: Pull the pinned placement image
         id: image
         run: bash packages/scheduler/scripts/placement-image.sh pull
@@ -1404,11 +1407,12 @@ jobs:
 
       #
       # The image is PULLED from the pin (packages/scheduler/VENDORED.json) and
-      # retagged `placement-service:ci`; nothing is built here. It stays in the
-      # foreground (not backgrounded like the production build above), exactly
-      # where the build step it replaces was — an undocumented backgrounded
-      # `uses:` step was measured on this repo to lose its outputs (probe run
-      # 32011114196).
+      # retagged `placement-service:ci`; nothing is built here. It is a `run:`
+      # step and stays in the foreground, exactly where the build step it
+      # replaces was; backgrounding it like the production build above is a
+      # possible later optimisation, not done here. (The old reason — an
+      # undocumented backgrounded `uses:` step was measured to lose its outputs,
+      # probe run 32011114196 — applies to the cache RESTORE below, not to this.)
       - name: Pull the pinned placement image
         id: image
         run: bash packages/scheduler/scripts/placement-image.sh pull
@@ -1772,11 +1776,12 @@ jobs:
 
       #
       # The image is PULLED from the pin (packages/scheduler/VENDORED.json) and
-      # retagged `placement-service:ci`; nothing is built here. It stays in the
-      # foreground (not backgrounded like the production build above), exactly
-      # where the build step it replaces was — an undocumented backgrounded
-      # `uses:` step was measured on this repo to lose its outputs (probe run
-      # 32011114196).
+      # retagged `placement-service:ci`; nothing is built here. It is a `run:`
+      # step and stays in the foreground, exactly where the build step it
+      # replaces was; backgrounding it like the production build above is a
+      # possible later optimisation, not done here. (The old reason — an
+      # undocumented backgrounded `uses:` step was measured to lose its outputs,
+      # probe run 32011114196 — applies to the cache RESTORE below, not to this.)
       - name: Pull the pinned placement image
         id: image
         run: bash packages/scheduler/scripts/placement-image.sh pull
