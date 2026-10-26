@@ -570,39 +570,71 @@ export async function releaseOutput(sessionId: string, site: ReleaseSite, deps: 
   }
 }
 
-/** The session has ENDED: the phone's own input (Input A — the session's CAMERA input) is switched OFF, so Cloudflare rejects
- *  any further push. A phone left sending after a Stop, a failure or the live limit otherwise keeps a connection open to
- *  Cloudflare for nothing. Only the camera input, found by role from `fixture_stream_inputs` — never `ingest_input_uid`, which
- *  is the OUTPUT input (Input B, the compositor's programme, on a composed session) — and switched OFF, never deleted: the
- *  input carries the recording (C2). A session with no camera input at the provider (it ended before it was provisioned, or
- *  the retention sweep has reclaimed it) has nothing to disable and records nothing.
+/** The session has ENDED: the phone's own inputs — EVERY `camera` input of the session (Input A, and any further camera slot) —
+ *  are switched OFF, so Cloudflare rejects any further push. A phone left sending after a Stop, a failure or the live limit
+ *  otherwise keeps a connection open to Cloudflare for nothing. Found by role from `fixture_stream_inputs` — never
+ *  `ingest_input_uid`, which is the OUTPUT input (Input B, the compositor's programme, on a composed session), and never a
+ *  `programme` row — and switched OFF, never deleted: the input carries the recording (C2). A session with no camera input
+ *  at the provider (it ended before it was provisioned, or the retention sweep has reclaimed it) has nothing to disable and
+ *  records nothing.
  *
- *  BEST EFFORT, and it never throws (the `releaseOutput` precedent): the terminal transition that asked for it has committed
- *  and stays, so a failed disable never blocks or fails the Stop, and it never skips the effects after it (the replay fill).
- *  The failure is recorded (the `disable_phone_input` effect row, and the adapter's own provider-call row with the HTTP status
- *  and Cloudflare's code) and REPORTED to Sentry, naming the session and the input uid (not a secret) and nothing else. It has
- *  no retry owner: each input belongs to ONE session (`provisionSession` makes a fresh pair per session), so nothing starts
- *  on it again, and the input is reclaimed with the session's recordings by the retention sweep.
+ *  BEST EFFORT, and it NEVER throws (the `releaseOutput` precedent), not for a provider fault and not for a database one:
+ *  the terminal transition that asked for it has committed and stays, so nothing here blocks or fails the Stop, or skips the
+ *  effects after it (the Machine's teardown, the replay fill). Three faults, told apart, each reported once:
+ *   - the PROVIDER refused (`relay.disable_phone_input`): the input may still accept a phone. Recorded as the effect row
+ *     (`failed`) and the adapter's own provider-call row with the HTTP status and Cloudflare's code;
+ *   - the LEDGER failed after the provider said yes (`relay.disable_phone_input_db`, stage `ledger`): the input IS off, only
+ *     its effect row is missing — never reported as a failed disable (the N3 identity test of `forceDestroy`, without its
+ *     rethrow: this effect must not fail the reader);
+ *   - a READ failed before any call (`relay.disable_phone_input_db`, stage `read`): nothing was attempted.
+ *  A provider fault whose own ledger row then also failed is still the provider alarm — the input may still be on.
+ *  One camera failing does not stop the next. No retry owner: each input belongs to ONE session (`provisionSession` makes a
+ *  fresh pair per session), so nothing starts on it again, and it is reclaimed with the session's recordings by the
+ *  retention sweep.
  *
  *  Idempotent at the provider (a disable of a disabled or gone input is success), and the domain emits the effect once per
- *  session — on ENTERING a terminal state — so a second Stop of an ended session decides nothing and calls nothing. */
+ *  session — on ENTERING a terminal state — so a second Stop of an ended session decides nothing and calls nothing.
+ *  `true` when no input was left on by a provider fault (and none was missed by a read fault). */
 export async function disablePhoneInput(sessionId: string, deps: SessionDeps): Promise<boolean> {
-  const row = await readRow(sessionId);
-  if (!row) return true;
-  const s = toSession(row);
-  const [camera] = await sql<{ uid: string | null }[]>`
-    select ingest_input_id as uid from fixture_stream_inputs where session_id = ${sessionId} and role = 'camera' order by slot asc limit 1`;
-  const inputUid = camera?.uid ?? null;
-  if (!inputUid) return true;
-  const extra = { sessionId, inputUid };
+  let s: Session;
+  let cameras: { uid: string; slot: number }[];
   try {
-    await recordEffect(s, "disable_phone_input", "ingest", () => deps.drivers.ingest.setInputEnabled(inputUid, false, { sessionId }), { inputUid });
-    return true;
+    const row = await readRow(sessionId);
+    if (!row) return true;
+    s = toSession(row);
+    cameras = await sql<{ uid: string; slot: number }[]>`
+      select ingest_input_id as uid, slot from fixture_stream_inputs
+       where session_id = ${sessionId} and role = 'camera' and ingest_input_id is not null order by slot asc`;
   } catch (err) {
-    captureError(err, { orgId: s.orgId, route: "relay.disable_phone_input", extra });
-    log.error({ ...extra, err: String(err) }, "stream session: the phone's input was NOT disabled — the session has ended, a phone still pushing keeps its connection until the input is reclaimed; recorded and reported");
+    captureError(err, { route: "relay.disable_phone_input_db", extra: { sessionId, stage: "read" } });
+    log.error({ sessionId, err: String(err) }, "stream session: the phone's input was NOT disabled — the session's rows could not be read; reported");
     return false;
   }
+  let allOff = true;
+  for (const { uid, slot } of cameras) {
+    const extra = { sessionId, inputUid: uid, slot };
+    const provider: { failure?: unknown } = {};
+    try {
+      await recordEffect(s, "disable_phone_input", "ingest", async () => {
+        try {
+          return await deps.drivers.ingest.setInputEnabled(uid, false, { sessionId, slot, role: "camera" });
+        } catch (err) {
+          provider.failure = err;
+          throw err;
+        }
+      }, { inputUid: uid, slot });
+    } catch (err) {
+      if ("failure" in provider) {
+        allOff = false;
+        captureError(provider.failure, { orgId: s.orgId, route: "relay.disable_phone_input", extra: err === provider.failure ? extra : { ...extra, ledger: "unwritten" } });
+        log.error({ ...extra, err: String(provider.failure) }, "stream session: the phone's input was NOT disabled — the session has ended, a phone still pushing keeps its connection until the input is reclaimed; recorded and reported");
+      } else {
+        captureError(err, { orgId: s.orgId, route: "relay.disable_phone_input_db", extra: { ...extra, stage: "ledger" } });
+        log.error({ ...extra, err: String(err) }, "stream session: the phone's input was disabled, but its ledger row could not be written; reported");
+      }
+    }
+  }
+  return allOff;
 }
 
 /** Task 12's orphan pass (A22(b)): destroy a Machine the provider LISTS under `sessionId` that its row does not own,

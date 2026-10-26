@@ -339,35 +339,54 @@ describe("CloudflareIngest", () => {
     expect(rec.calls.some((x) => /\/live_inputs\/in_abc$/.test(x.url))).toBe(false);
   });
 
-  // The phone's input is switched off when its session ends, and on again before a session that reuses it. Cloudflare's
+  // The phone's input is switched off when its session ends (the enable direction is the port's symmetry only: every session
+  // gets a FRESH input, so nothing in production switches one back on). Cloudflare's
   // own page ("Enable or disable a live input") sends `{"enabled": false}` alone, but nothing there says a body without
   // `recording` leaves the recording untouched — and the recording is the thing C4 measured: an input whose mode went
   // off was off air. So this adapter never sends the flag alone: it re-asserts the recording settings the create sent.
-  it("setInputEnabled PUTs live_inputs/{input} ONCE per call, in both directions, with the flag AND the create's own recording settings — never the flag alone, and nothing else (no meta, no preferLowLatency)", async () => {
-    await ingest.createLiveInput({ sessionId: "s_1", slot: 0 });
-    const created = JSON.parse(String(rec.calls[0]!.init.body)) as { recording: { mode: string; timeoutSeconds: number }; deleteRecordingAfterDays: number };
+  it("setInputEnabled PUTs live_inputs/{input} ONCE per call, in both directions, with the CREATE's own body plus the flag — the same name, recording settings and retention, never the flag alone, and nothing else (no preferLowLatency)", async () => {
     let checked = 0;
-    for (const enabled of [false, true]) {
+    // Every role the create names differently: the camera (the default) and a programme input.
+    for (const role of [undefined, "camera", "programme"] as const) {
+      const spec = { sessionId: "s_1", slot: 0, ...(role ? { role } : {}) };
       rec.calls.length = 0;
-      await expect(ingest.setInputEnabled("in_abc", enabled)).resolves.toBeUndefined();
-      expect(rec.calls, `enabled ${enabled}: one call`).toHaveLength(1);
-      const call = rec.calls[0]!;
-      expect(call.init.method).toBe("PUT");
-      expect(call.url).toBe(`${CLOUDFLARE_STREAM_BASE}/acct/stream/live_inputs/in_abc`);
-      expect((call.init.headers as Record<string, string>).authorization).toBe("Bearer tok");
-      const body = JSON.parse(String(call.init.body)) as { enabled: boolean; recording: { mode: string; timeoutSeconds: number }; deleteRecordingAfterDays: number };
-      expect(body.enabled, "the flag is the boolean asked for").toBe(enabled);
-      // ONE authority for the settings: what the create sent is what the update re-asserts, so neither can drift from the other.
-      expect(body.recording).toEqual(created.recording);
-      expect(body.deleteRecordingAfterDays).toBe(created.deleteRecordingAfterDays);
-      // …and each is the rulebook's value, read off config and C4, not off the adapter: mode is the literal "automatic".
-      expect(body.recording.mode).toBe("automatic");
-      expect(body.recording.timeoutSeconds).toBe(INGEST_TIMEOUT_SECONDS);
-      expect(body.deleteRecordingAfterDays).toBe(DELETE_RECORDING_AFTER_DAYS);
-      expect(Object.keys(body).sort(), "exactly these three keys").toEqual(["deleteRecordingAfterDays", "enabled", "recording"]);
-      checked++;
+      await ingest.createLiveInput(spec);
+      const created = JSON.parse(String(rec.calls[0]!.init.body)) as { meta: { name: string }; recording: { mode: string; timeoutSeconds: number }; deleteRecordingAfterDays: number };
+      for (const enabled of [false, true]) {
+        rec.calls.length = 0;
+        await expect(ingest.setInputEnabled("in_abc", enabled, spec)).resolves.toBeUndefined();
+        expect(rec.calls, `${role ?? "default"} enabled ${enabled}: one call`).toHaveLength(1);
+        const call = rec.calls[0]!;
+        expect(call.init.method).toBe("PUT");
+        expect(call.url).toBe(`${CLOUDFLARE_STREAM_BASE}/acct/stream/live_inputs/in_abc`);
+        expect((call.init.headers as Record<string, string>).authorization).toBe("Bearer tok");
+        const body = JSON.parse(String(call.init.body)) as { enabled: boolean; meta: { name: string }; recording: { mode: string; timeoutSeconds: number }; deleteRecordingAfterDays: number };
+        // ONE authority for the settings: what the create sent is what the update re-asserts, so neither can drift from the other.
+        expect(body, `${role ?? "default"} enabled ${enabled}: the create's body plus the flag`).toEqual({ ...created, enabled });
+        expect(body.enabled, "the flag is the boolean asked for").toBe(enabled);
+        // …and each is the rulebook's value, read off config and C4, not off the adapter: mode is the literal "automatic".
+        expect(body.recording.mode).toBe("automatic");
+        expect(body.recording.timeoutSeconds).toBe(INGEST_TIMEOUT_SECONDS);
+        expect(body.deleteRecordingAfterDays).toBe(DELETE_RECORDING_AFTER_DAYS);
+        expect(Object.keys(body).sort(), "exactly these four keys").toEqual(["deleteRecordingAfterDays", "enabled", "meta", "recording"]);
+        checked++;
+      }
     }
-    expect(checked, "both directions were sent").toBe(2);
+    expect(checked, "three roles x both directions were sent").toBe(6);
+    // The names differ by role, so the loop above is not three copies of one case.
+    rec.calls.length = 0;
+    await ingest.setInputEnabled("in_abc", false, { sessionId: "s_1", slot: 0, role: "programme" });
+    await ingest.setInputEnabled("in_abc", false, { sessionId: "s_1", slot: 0, role: "camera" });
+    const names = rec.calls.map((c) => (JSON.parse(String(c.init.body)) as { meta: { name: string } }).meta.name);
+    expect(new Set(names).size, "a programme input and a camera input are not named alike").toBe(2);
+  });
+
+  it("setInputEnabled with no session or slot to name the input sends no meta at all (never a made-up name) — the recording settings and retention still ride", async () => {
+    await ingest.setInputEnabled("in_abc", false);
+    const body = JSON.parse(String(rec.calls.at(-1)!.init.body)) as Record<string, unknown>;
+    expect(Object.keys(body).sort()).toEqual(["deleteRecordingAfterDays", "enabled", "recording"]);
+    await ingest.setInputEnabled("in_abc", false, { sessionId: "s_1" });
+    expect(Object.keys(JSON.parse(String(rec.calls.at(-1)!.init.body)) as Record<string, unknown>), "a session without a slot cannot name it either").not.toContain("meta");
   });
 
   it("setInputEnabled outcomes: a 404 is an input already gone — success for a DISABLE (idempotent), a refusal for an ENABLE; a 5xx throws with the account token redacted; and a 200 that did not apply the flag, flipped the recording mode, or echoed nothing is an ERROR, never a pass", async () => {

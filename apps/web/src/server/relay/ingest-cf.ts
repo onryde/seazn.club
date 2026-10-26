@@ -42,7 +42,7 @@ import { NOOP_RECORDER } from "./ports";
 import { redact } from "./sanitise";
 import type {
   DeleteVideoResult, IngestCapabilities, IngestCreateSpec, IngestCredentials, IngestProvider,
-  IngestState, IngestStatus, IngestTarget, IngestVideo, OutputState, ProviderCallMeta, ProviderCallRecorder, StorageUsage,
+  IngestState, IngestStatus, IngestTarget, IngestVideo, InputSwitchMeta, OutputState, ProviderCallMeta, ProviderCallRecorder, StorageUsage,
 } from "./ports";
 
 export const CLOUDFLARE_STREAM_BASE = "https://api.cloudflare.com/client/v4/accounts";
@@ -66,6 +66,10 @@ export const LIST_VIDEOS_PAGE_LIMIT = 1000;
  *  two cannot drift: the mode is `automatic`, always (C4 — a live input whose recording goes off is off air), and the
  *  timeout is config's. `deleteRecordingAfterDays` is NOT a member: it is a top-level sibling (U1-S1). */
 const LIVE_INPUT_RECORDING = { mode: "automatic", timeoutSeconds: INGEST_TIMEOUT_SECONDS } as const;
+
+/** The dashboard name a live input is created with: session, role (a programme input says so) and slot. ONE builder, so the
+ *  create and the update (`setInputEnabled`) cannot name the same input two ways. */
+const inputName = (spec: IngestCreateSpec): string => `seazn-session-${spec.sessionId}-${spec.role === "programme" ? "programme-" : ""}slot-${spec.slot}`;
 
 interface CfEnvelope<T> { success: boolean; result?: T; errors?: { code?: number; message?: string }[] }
 
@@ -279,7 +283,7 @@ export class CloudflareIngest implements IngestProvider {
     }>("POST", "/live_inputs", {
       // R2004: a programme input (the composed session's Input B) says so in its name; the camera's name is unchanged.
       // Both record (owner ruling 2026-10-18, option (a)), so the settings below are the same for both roles.
-      meta: { name: `seazn-session-${spec.sessionId}-${spec.role === "programme" ? "programme-" : ""}slot-${spec.slot}` },
+      meta: { name: inputName(spec) },
       // U1-S1, MEASURED 2026-09-10: `deleteRecordingAfterDays` is a TOP-LEVEL
       // SIBLING of `recording`, never a member of it. Nested, Cloudflare answers
       // HTTP 200 / success:true, echoes a `recording` block that does not carry
@@ -483,16 +487,21 @@ export class CloudflareIngest implements IngestProvider {
    *  THE BODY IS NOT THE FLAG ALONE. The docs' own example sends `{"enabled": false}`, and the OpenAPI says only the
    *  retention field is "omit to indicate no change" — nothing says a body without `recording` leaves it as it was, and
    *  `recording.mode` defaults to `off`, which on a live input is the C4 outage. UNMEASURED (no live call was made), so the
-   *  call is made safe either way: it re-sends the create's own recording settings (LIVE_INPUT_RECORDING) and retention with
-   *  the flag. Sending them is a no-op on a healthy input and the repair on one that would have been reset.
+   *  call is made safe either way: it re-sends the create's own body (name, recording settings, retention) with the flag, so
+   *  the update's body is the create's plus `enabled`. Sending it is a no-op on a healthy input and the repair on one that
+   *  would have been reset. (Cloudflare also documents `POST …/live_inputs/{id}/disable` and `/enable`, which take no body;
+   *  not used, as neither is measured here either.)
    *
    *  Read back, like every setting the create sends (U1): a 200 whose echoed `enabled` is not the flag, or whose echoed
    *  `recording.mode` is anything but `automatic`, is an ERROR — a disable that did not take leaves a phone connected, and
    *  a flipped mode is C4. A 404 is an input already gone: success to a DISABLE (idempotent — the daily retention sweep and
    *  the create's cleanup delete inputs, and a second stop must not fail), a refusal to an ENABLE. */
-  async setInputEnabled(inputId: string, enabled: boolean, meta: ProviderCallMeta = {}): Promise<void> {
+  async setInputEnabled(inputId: string, enabled: boolean, meta: InputSwitchMeta = {}): Promise<void> {
+    // The name is the create's, rebuilt from the same three facts; a caller with no session or slot cannot name the input, and
+    // then the body carries none (the usecase always passes them).
+    const named = meta.sessionId && meta.slot !== undefined ? { meta: { name: inputName({ sessionId: meta.sessionId, slot: meta.slot, ...(meta.role ? { role: meta.role } : {}) }) } } : {};
     const r = await this.call<{ enabled?: boolean; recording?: { mode?: string } | null }>("PUT", `/live_inputs/${encodeURIComponent(inputId)}`, {
-      enabled, recording: LIVE_INPUT_RECORDING, deleteRecordingAfterDays: DELETE_RECORDING_AFTER_DAYS,
+      ...named, enabled, recording: LIVE_INPUT_RECORDING, deleteRecordingAfterDays: DELETE_RECORDING_AFTER_DAYS,
     }, { operation: "setInputEnabled", ids: [inputId], subjectId: inputId, sessionId: meta.sessionId ?? null });
     if (r.status === 404 && !enabled) return;
     if (!r.json.success || !r.json.result) this.fail("set input enabled", r);

@@ -4113,6 +4113,56 @@ describe.skipIf(!HAS_DB)("the phone's Cloudflare input is switched OFF on every 
     expect(state).toBe("completed");
   });
 
+  /** The ledger write of the `disable_phone_input` effect row failing, and nothing else: every other event is the real recorder. */
+  const ledgerDownForDisable = () => {
+    const real = telemetry.recordEvent;
+    return vi.spyOn(telemetry, "recordEvent").mockImplementation((tx, e) =>
+      e.type === "disable_phone_input" ? Promise.reject(new Error("injected: ledger down")) : real(tx, e));
+  };
+
+  it("PR #1039 m3: a LEDGER write failing AFTER the provider said yes is a database fault, not a failed disable — the input IS off, the Stop completes, and the one report is `relay.disable_phone_input_db` at stage `ledger` (the provider route stays silent)", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    await goLive(r);
+    const camera = await cameraOf(sessionId);
+    sentry.captureError.mockClear();
+    const spy = ledgerDownForDisable();
+    try {
+      expect(await stopSession(r.auth, r.fixtureId, sessionId, r.deps)).toMatchObject({ id: sessionId, state: "completed", endReason: "stopped" });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(r.ingest.enabledCalls).toEqual([{ inputId: camera, enabled: false }]);
+    expect(r.ingest.isEnabled(camera), "the provider switched it off").toBe(false);
+    expect(alarms(), "never reported as a failed disable").toEqual([]);
+    const db = sentry.captureError.mock.calls.filter(([, ctx]) => (ctx as { route?: string }).route === "relay.disable_phone_input_db");
+    expect(db).toHaveLength(1);
+    expect(db[0]![1]).toMatchObject({ orgId: r.auth.orgId, extra: { sessionId, inputUid: camera, stage: "ledger" } });
+    expect(await disableRows(sessionId), "the row that could not be written is absent").toEqual([]);
+    expect(await effectTypes(sessionId), "the effects after it still ran").toEqual(expect.arrayContaining(["release_output", "fill_replay"]));
+  });
+
+  it("PR #1039 m3: the provider refusing AND the ledger failing is still the PROVIDER alarm (the input may still be on), naming the provider's own error and that its row went unwritten — and the Stop completes", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    await goLive(r);
+    const camera = await cameraOf(sessionId);
+    const cf = flakyDisable(r);
+    sentry.captureError.mockClear();
+    const spy = ledgerDownForDisable();
+    try {
+      expect(await stopSession(r.auth, r.fixtureId, sessionId, cf.deps)).toMatchObject({ id: sessionId, state: "completed" });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(r.ingest.isEnabled(camera), "still on").toBe(true);
+    const hits = alarms();
+    expect(hits).toHaveLength(1);
+    expect(hits[0]![0], "the provider's error, not the ledger's").toBe(cf.down.err);
+    expect(hits[0]![1]).toMatchObject({ extra: { sessionId, inputUid: camera, ledger: "unwritten" } });
+    expect(sentry.captureError.mock.calls.filter(([, ctx]) => (ctx as { route?: string }).route === "relay.disable_phone_input_db")).toEqual([]);
+  });
+
   it("both teardown calls FAILING at once — the output removal and the disable — each is recorded and alarmed under its OWN route, and the Stop still completes (neither failure shadows the other)", async () => {
     const r = await rig({ credits: 1 });
     const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);

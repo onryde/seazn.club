@@ -30,6 +30,25 @@ import { type SessionDeps, createSession, currentSession, heartbeat, reconcileSe
 const sentry = vi.hoisted(() => ({ captureError: vi.fn() }));
 vi.mock("@/lib/sentry", () => ({ captureError: sentry.captureError }));
 
+// PR #1039 review m2: a switchable fault on ONE statement of the pooled `sql` (the route-cache.test.ts precedent for mocking
+// @/lib/db), so a test can make the phone-input disable's camera read throw in the middle of a Stop. A pass-through while
+// `match` is null — every other test in this file runs on the real pool.
+const dbFault = vi.hoisted(() => ({ match: null as RegExp | null, hits: 0, err: new Error("injected: connection reset by peer") }));
+vi.mock("@/lib/db", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/db")>();
+  const sql = new Proxy(real.sql, {
+    apply(target, thisArg, args: unknown[]) {
+      const strings = args[0];
+      if (dbFault.match && Array.isArray(strings) && dbFault.match.test(strings.join("?"))) {
+        dbFault.hits++;
+        return Promise.reject(dbFault.err);
+      }
+      return Reflect.apply(target as unknown as (...a: unknown[]) => unknown, thisArg, args);
+    },
+  });
+  return { ...real, sql };
+});
+
 const HAS_DB = !!process.env.DATABASE_URL;
 
 // The KEK and the compositor image of this file's own (stream-sessions.test.ts precedent), put back afterwards.
@@ -222,6 +241,56 @@ describe.skipIf(!HAS_DB)("R2004: composed provisioning — two inputs, the outpu
     await currentSession(r.auth, r.fixtureId, r.deps);
     await stopSession(r.auth, r.fixtureId, sessionId, r.deps);
     expect(r.ingest.enabledCalls, "a second read and a second Stop switch nothing").toHaveLength(1);
+  });
+
+  it("SEVERAL camera inputs (PR #1039 m5): every camera slot of a composed session is switched OFF, in slot order, each told its own slot and role (so the adapter can re-send its name) — and the programme input B is never touched (mutant: `limit 1` → the second camera stays on)", async () => {
+    const r = await rig();
+    const created = vi.spyOn(r.ingest, "createLiveInput");
+    const { sessionId } = await r.start("composed");
+    const [a, b] = await Promise.all(created.mock.results.map((x) => x.value as ReturnType<FakeIngest["createLiveInput"]>));
+    // A second camera slot: today's start inserts one, and a multi-camera session would have more.
+    const a2 = await r.ingest.createLiveInput({ sessionId, slot: 1 });
+    await sql`insert into fixture_stream_inputs (session_id, slot, ingest_input_id) values (${sessionId}, 1, ${a2.inputId})`;
+    expect((await inputs(sessionId)).map((x) => [x.role, x.slot, x.ingest_input_id]), "premise: two cameras and the programme").toEqual([
+      ["camera", 0, a!.inputId], ["camera", 1, a2.inputId], ["programme", 0, b!.inputId],
+    ]);
+    const switched = vi.spyOn(r.ingest, "setInputEnabled");
+    await stopSession(r.auth, r.fixtureId, sessionId, r.deps);
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state).toBe("completed");
+    expect(r.ingest.enabledCalls, "both cameras OFF, in slot order, once each — B never named").toEqual([
+      { inputId: a!.inputId, enabled: false }, { inputId: a2.inputId, enabled: false },
+    ]);
+    expect(switched.mock.calls.map((c) => c[2]), "each call carries the session, its slot and its role").toEqual([
+      { sessionId, slot: 0, role: "camera" }, { sessionId, slot: 1, role: "camera" },
+    ]);
+    expect(r.ingest.isEnabled(a!.inputId) || r.ingest.isEnabled(a2.inputId), "no camera is left on").toBe(false);
+    expect(r.ingest.isEnabled(b!.inputId), "B is untouched").toBe(true);
+  });
+
+  it("a READ failing inside the disable (PR #1039 m2) never fails the Stop or skips what follows it: the session completes, the replay still fills, and the fault is reported once as a database fault at stage `read` — not as a failed provider call, which nothing attempted", async () => {
+    const r = await rig();
+    const { sessionId } = await r.start("passthrough");
+    r.tick(10 * 60_000 + 1000);
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state, "premise: the phone connected and the session is live (so the Stop has a replay to fill)").toBe("live");
+    sentry.captureError.mockClear();
+    dbFault.hits = 0;
+    dbFault.match = /select ingest_input_id as uid, slot from fixture_stream_inputs/;
+    let stopped: Awaited<ReturnType<typeof stopSession>>;
+    try {
+      stopped = await stopSession(r.auth, r.fixtureId, sessionId, r.deps);
+    } finally {
+      dbFault.match = null;
+    }
+    expect(dbFault.hits, "the fault was reached — exactly the disable's camera read").toBe(1);
+    expect(stopped).toMatchObject({ id: sessionId, state: "completed", endReason: "stopped" });
+    expect(r.ingest.enabledCalls, "nothing was attempted").toEqual([]);
+    const effects = (await sql<{ type: string; result: string }[]>`select type, result from fixture_stream_events where session_id = ${sessionId} and kind = 'effect' order by seq`).map((e) => `${e.type}:${e.result}`);
+    expect(effects, "the effects after the disable's slot still ran").toEqual(expect.arrayContaining(["release_output:ok", "fill_replay:ok"]));
+    expect(effects.some((e) => e.startsWith("disable_phone_input")), "no disable row: none was tried").toBe(false);
+    const reports = sentry.captureError.mock.calls.filter(([, ctx]) => (ctx as { route?: string }).route?.startsWith("relay.disable_phone_input"));
+    expect(reports).toHaveLength(1);
+    expect(reports[0]![0]).toBe(dbFault.err);
+    expect(reports[0]![1]).toMatchObject({ route: "relay.disable_phone_input_db", extra: { sessionId, stage: "read" } });
   });
 
   it("ADMISSION backstop, composed: a composed session whose end FAILED to release B's output holds its fixture — the next start is refused 409 active_session while the retry fails, and once it succeeds B's output is released (reason admission) and the start is admitted (mutant: restore the passthrough-only filter → admitted while the old output still simulcasts)", async () => {
