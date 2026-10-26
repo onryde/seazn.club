@@ -67,6 +67,7 @@ import {
 import { ageAt, isMinor, requiresDob, requiresGender } from "./registration-eligibility";
 import { audit } from "./audit";
 import { divisionPlaysOnline } from "@/server/external-play/online-play";
+import { chessIndividualOnlyError, isChessSport } from "@/lib/chess-individual-only";
 import { effectivePolicy, readCameraPolicy, type CameraPolicy } from "@/server/external-play/camera-policy";
 import { onlineChessOffered } from "./external-play/online-chess-flag";
 import { isLichessRosterRefusal } from "./external-accounts";
@@ -1935,8 +1936,8 @@ export async function putRegistrationSettings(
   input: PutRegistrationSettings,
 ): Promise<RegistrationSettingsRow & OrgPaymentDefaults> {
   await requireFeature(auth.orgId, "registration.enabled");
-  const [regDiv] = await sql<{ competition_id: string }[]>`
-    select competition_id from divisions where id = ${divisionId}`;
+  const [regDiv] = await sql<{ competition_id: string; sport_key: string }[]>`
+    select competition_id, sport_key from divisions where id = ${divisionId}`;
   const org = await orgPaymentDefaults(auth.orgId);
 
   // Offline (cash/bank) fees are free on every plan — they fill the funnel.
@@ -1955,6 +1956,19 @@ export async function putRegistrationSettings(
   // this paid division") and `||` would silently turn it back into "unset",
   // charging the full team fee to someone the panel told was free.
   const freeAgentFeeCents = input.free_agent_fee_cents ?? null;
+  // Chess is individual-only (owner ruling 2026-10-26): no pair, no team, and
+  // so no free-agent pool either. FIRST among the entrant-shape checks, so an
+  // individual chess division asking for free agents hears the chess rule and
+  // not "allow_free_agents requires entrant_kind 'team'" — advice that points
+  // at the very option chess forbids. The division's sport is read above; an
+  // unknown division falls through to the 404 inside the transaction.
+  if (
+    regDiv &&
+    isChessSport(regDiv.sport_key) &&
+    (entrantKind !== "individual" || allowFreeAgents || freeAgentFeeCents !== null)
+  ) {
+    throw chessIndividualOnlyError();
+  }
   // Free agents (an entry with no roster yet, RS004/V364) only make sense
   // where there IS a roster to join later — registration-submit.ts's own
   // guard already refuses a free-agent submit outside entrant_kind 'team';

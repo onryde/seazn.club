@@ -8,6 +8,7 @@ import {
   ImportConfig,
   ImportRow,
   planImport,
+  type ImportIssue,
   type ImportOp,
   type ImportPlan,
   type ImportSnapshot,
@@ -20,6 +21,12 @@ import { assertWithinLimit, getLimit, hasFeature, withinLimit } from "@/lib/enti
 import { cacheGet, cacheSet } from "@/lib/cache";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { EligibilityOverride } from "@/server/api-v1/schemas";
+import {
+  CHESS_INDIVIDUAL_ONLY,
+  CHESS_INDIVIDUAL_ONLY_MESSAGE,
+  chessIndividualOnlyError,
+  isChessSport,
+} from "@/lib/chess-individual-only";
 import { parseUpload, toImportRows, type ImportField } from "./import-parse";
 import { audit } from "./audit";
 import { isLichessRosterRefusal } from "./external-accounts";
@@ -58,6 +65,47 @@ export interface ImportCommitResult {
 function pinSnapshot(snapshot: ImportSnapshot, pinDivisionId: string | null): ImportSnapshot {
   if (!pinDivisionId) return snapshot;
   return { ...snapshot, divisions: snapshot.divisions.filter((d) => d.id === pinDivisionId) };
+}
+
+/** Chess is individual-only (owner ruling 2026-10-26), and the planner places a
+ *  TEAM into any division a row names — `entrant.create` always carries
+ *  kind 'team' (types.ts). So every such op aimed at a chess division is an
+ *  error row in the plan: the preview shows it, and commit refuses on it.
+ *  Judged here, on the web side, because the engine's planner knows divisions
+ *  by sport key only to validate positions; the entrant-shape ruling is not
+ *  its to restate. A row that names no division (a directory-only import: clubs,
+ *  teams, people) creates no entrant and is untouched. */
+function chessEntrantIssues(plan: ImportPlan, snapshot: ImportSnapshot): ImportIssue[] {
+  const issues: ImportIssue[] = [];
+  for (const op of plan.ops) {
+    if (op.kind !== "entrant.create") continue;
+    const division = snapshot.divisions.find((d) => d.id === op.divisionId);
+    if (!division || !isChessSport(division.sportKey)) continue;
+    for (const rowNo of op.sourceRows) {
+      issues.push({
+        rowNo,
+        column: "divisionSlug",
+        severity: "error",
+        code: CHESS_INDIVIDUAL_ONLY,
+        message: `division '${division.name}' is a chess division — ${CHESS_INDIVIDUAL_ONLY_MESSAGE}`,
+        messageArgs: { division: division.name },
+      });
+    }
+  }
+  return issues;
+}
+
+/** `planImport` plus the entrant-shape ruling above. The ONE planning call the
+ *  three entry points (plan, re-preview, commit) share, so the preview and the
+ *  commit can never disagree about what is refused. */
+function planChecked(
+  rows: Parameters<typeof planImport>[0],
+  snapshot: ImportSnapshot,
+  config: Parameters<typeof planImport>[2],
+): ImportPlan {
+  const plan = planImport(rows, snapshot, config);
+  const chess = chessEntrantIssues(plan, snapshot);
+  return chess.length === 0 ? plan : { ...plan, issues: [...plan.issues, ...chess] };
 }
 
 // Read-only org state the planner matches against (Jul3/01 §3). Fetched in
@@ -151,7 +199,7 @@ export async function createImport(
 
   return withTenant(auth.orgId, async (tx) => {
     const snapshot = pinSnapshot(await fetchSnapshot(tx), input.pinDivision?.id ?? null);
-    const plan = planImport(rows, snapshot, config);
+    const plan = planChecked(rows, snapshot, config);
     const [row] = await tx<{ id: string }[]>`
       insert into imports (org_id, filename, config, rows, plan, pin_division_id, created_by)
       values (${auth.orgId}, ${input.filename}, ${tx.json(config as never)},
@@ -180,7 +228,7 @@ export async function getImport(auth: AuthCtx, id: string): Promise<ImportPrevie
     const rows = ImportRow.array().parse(imp.rows);
     const config = ImportConfig.parse(imp.config);
     const snapshot = pinSnapshot(await fetchSnapshot(tx), imp.pin_division_id);
-    const plan = planImport(rows, snapshot, config);
+    const plan = planChecked(rows, snapshot, config);
     if (imp.status === "planned") {
       await tx`update imports set plan = ${tx.json(plan as never)} where id = ${id}`;
     }
@@ -377,7 +425,11 @@ export async function commitImport(
     assertWithinLimit(bulkCap, "import.bulk", rows.length);
     const config = ImportConfig.parse(imp.config);
     const snapshot = pinSnapshot(await fetchSnapshot(tx), imp.pin_division_id);
-    const plan = planImport(rows, snapshot, config);
+    const plan = planChecked(rows, snapshot, config);
+
+    // The named refusal first: it is the same answer every other chess writer gives, and it says which rows.
+    const chessRows = plan.issues.filter((i) => i.code === CHESS_INDIVIDUAL_ONLY).map((i) => i.rowNo);
+    if (chessRows.length > 0) throw chessIndividualOnlyError({ rows: chessRows });
 
     const blocking = plan.issues.filter((i) => i.severity === "error");
     if (blocking.length > 0) {

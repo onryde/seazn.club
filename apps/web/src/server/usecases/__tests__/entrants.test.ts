@@ -75,18 +75,19 @@ afterAll(async () => {
 });
 
 describe.skipIf(!HAS_DB)("entrant shapes: write-path validation (G-entrant-shapes)", () => {
-  it("boardgame rejects a team kind and a >1 individual roster; an override widens kinds", async () => {
+  it("boardgame rejects a team kind and a >1 individual roster; a widened override cannot add a team (chess is individual-only)", async () => {
     const { auth } = await seedOrg();
     const division = await seedBoardgameDivision(auth);
 
-    // 1) kind not allowed — boardgame's model is individual-only.
+    // 1) kind not allowed — boardgame's model is individual-only, and chess is
+    // individual-only by owner ruling (2026-10-26): the chess refusal names it.
     await expect(
       createEntrants(auth, division.id, [
         { kind: "team", display_name: "Blunders FC", members: [] },
       ]),
     ).rejects.toMatchObject({
       status: 422,
-      code: "ENTRANT_KIND_NOT_ALLOWED",
+      code: "CHESS_INDIVIDUAL_ONLY",
     });
 
     // 2) roster too big for an individual (structural cap = 1, not configurable).
@@ -105,15 +106,19 @@ describe.skipIf(!HAS_DB)("entrant shapes: write-path validation (G-entrant-shape
       ]),
     ).rejects.toMatchObject({ status: 422, code: "ENTRANT_ROSTER_TOO_BIG" });
 
-    // 3) a division config override widens the allowed kinds (raw SQL — the
-    // boardgame configSchema folds `entrants` away on create).
+    // 3) a legacy division config override that widens the allowed kinds (raw
+    // SQL — the boardgame configSchema folds `entrants` away on create) no
+    // longer lets a NEW team in: the chess rule outranks the override. (The
+    // override-widens-kinds positive lives on a non-chess sport in
+    // chess-individual-only.test.ts.)
     await sql`
       update divisions set config = config || ${sql.json({ entrants: { kinds: ["individual", "team"] } })}
       where id = ${division.id}`;
-    const ok = await createEntrants(auth, division.id, [
-      { kind: "team", display_name: "Allowed Now", members: [] },
-    ]);
-    expect(ok[0]!.kind).toBe("team");
+    await expect(
+      createEntrants(auth, division.id, [
+        { kind: "team", display_name: "Not Allowed Now", members: [] },
+      ]),
+    ).rejects.toMatchObject({ status: 422, code: "CHESS_INDIVIDUAL_ONLY" });
   });
 
   it("caps a squad-seeded roster resolved from team_id (resolved-roster backstop)", async () => {
@@ -173,9 +178,12 @@ describe.skipIf(!HAS_DB)("entrant shapes: write-path validation (G-entrant-shape
     await sql`
       update divisions set config = config || ${sql.json({ entrants: { kinds: ["individual", "team"] } })}
       where id = ${division.id}`;
-    const [team] = await createEntrants(auth, division.id, [
-      { kind: "team", display_name: "Dup Roster FC", members: [] },
-    ]);
+    // A legacy team entrant seeded raw: createEntrants now refuses a new chess
+    // team, but the members-replacing PATCH path must keep working on old rows.
+    const [team] = await sql<{ id: string }[]>`
+      insert into entrants (division_id, kind, display_name)
+      values (${division.id}, 'team', 'Dup Roster FC')
+      returning id`;
     const m1 = await seedPerson(auth, "Dup One");
 
     await expect(

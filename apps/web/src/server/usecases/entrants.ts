@@ -36,6 +36,7 @@ import { dropNamedPublicDocuments, fireScoreRevalidate } from "@/server/public-s
 import { retireCompetitionPlayerMatches } from "@/server/public-site/player-matches-cache-keys";
 import { log } from "@/server/logger";
 import { readOnlinePlay } from "@/server/external-play/online-play";
+import { assertChessKindIndividual } from "@/lib/chess-individual-only";
 import { onlineChessOffered } from "./external-play/online-chess-flag";
 import { assertPersonIdsLinkedForOnlinePlay, lichessLinkStatesByPerson, type LichessLinkState } from "./external-accounts";
 import { openRosterSeatGate } from "./online-seat-gate";
@@ -381,6 +382,11 @@ export async function createEntrants(
     const eff = await loadEntrantShape(tx, divisionId);
     for (const input of inputs) {
       const kind = input.kind ?? eff.defaultKind;
+      // Chess is individual-only (owner ruling 2026-10-26) — judged BEFORE the model below, because a chess division
+      // saved before the ruling can still carry an entrant-shape override that widens the model to teams or pairs; the
+      // model would accept what the ruling refuses. The default is judged too: a widened default must not slip a team
+      // in through an omitted kind.
+      assertChessKindIndividual(division.sport_key, kind);
       if (!eff.kinds.includes(kind as EntrantKind)) {
         throw new HttpError(
           422,

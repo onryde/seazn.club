@@ -5,6 +5,11 @@ import "server-only";
 import type postgres from "postgres";
 import { sql, withTenant, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import {
+  chessIndividualOnlyError,
+  entrantsOverrideWidensBeyondIndividual,
+  isChessSport,
+} from "@/lib/chess-individual-only";
 import { assertWithinLimit, getLimit, requireFeature, passLockReason } from "@/lib/entitlements";
 import { EngineError, type StageKind } from "@seazn/engine/core";
 import { effectiveEntrantModel, fixtureKeysFor, type EntrantKind } from "@seazn/engine/sport";
@@ -318,6 +323,12 @@ export async function createDivision(
     applyOnlinePlayToConfig(finalConfig, onlinePlay);
     const incomingEntrants = inputCfg?.entrants;
     if (incomingEntrants != null && typeof incomingEntrants === "object") {
+      // Chess is individual-only (owner ruling 2026-10-26): the entrant-shape
+      // override may not widen it to pairs or teams. Nothing is stored yet, so
+      // there is no legacy value to tolerate here (patchDivision does).
+      if (isChessSport(input.sport_key) && entrantsOverrideWidensBeyondIndividual(incomingEntrants)) {
+        throw chessIndividualOnlyError();
+      }
       finalConfig.entrants = incomingEntrants;
     }
     // T6: a column, not a config key — absent ⇒ null ⇒ inherit, exactly like
@@ -1068,6 +1079,17 @@ export async function patchDivision(
         nextConfig = parsed.data as Record<string, unknown>;
         const incomingEntrants = (patch.config as { entrants?: unknown } | undefined)?.entrants;
         if (incomingEntrants != null && typeof incomingEntrants === "object") {
+          // Chess is individual-only (owner ruling 2026-10-26). A chess division saved BEFORE the ruling may still hold
+          // a widened override, and the Settings page re-sends the whole stored config on every save (format, entrants,
+          // online play…): an override that arrives exactly as it is stored is carried, not SET, and refusing it would
+          // leave a legacy division unable to save anything. Anything else that widens is a new write: refused.
+          if (
+            isChessSport(current.sport_key) &&
+            entrantsOverrideWidensBeyondIndividual(incomingEntrants) &&
+            canonicalJson(incomingEntrants) !== canonicalJson(currentConfig.entrants ?? null)
+          ) {
+            throw chessIndividualOnlyError();
+          }
           nextConfig.entrants = incomingEntrants;
         }
         // Online play rides in config too and the parse strips it: the patch's value when it names one, else the
