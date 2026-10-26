@@ -32,7 +32,7 @@ import { BRACKET_KINDS, BRACKET_OF, STRUCTURAL_FINAL_KINDS, terminalFinalKeys } 
 import { W2A_SCENARIO_KEYS, W2B_SCENARIO_KEYS } from "../lib/scenarios/types.ts";
 import type { CaseSpec, ScenarioContext, ScenarioKey } from "../lib/scenarios/types.ts";
 import { START } from "../lib/streams/types.ts";
-import { offlineBuilderDefault, type VariantCase } from "../lib/variants.ts";
+import { offlineBuilderDefault, offlineVariantOrder, type VariantCase } from "../lib/variants.ts";
 import { runSlice } from "../run.ts";
 import { FakeDeniedDriver, FakeKnockoutDriver, FakeLeagueDriver, FakeSwissDriver, type FakeFixture, type FakeKnockoutOptions } from "./fake-driver.ts";
 import { wireCodeFor } from "./product-text.ts";
@@ -713,16 +713,43 @@ describe("builtAsPosted's override items, swept over the sport registry (Task 10
     expect(keys).toBeGreaterThanOrEqual(SPORT_KEYS.length);
   });
   it("the expected value is the engine's PARSE of preset + override, never the raw override (a product storing the raw one reds)", () => {
-    // A committed override whose parse differs from what was sent: the schema
-    // fills the rest of a partly-overridden nested object.
-    let found: { vc: VariantCase; k: string; cfg: Record<string, unknown> } | null = null;
-    for (const vc of committed.flatMap((s) => s.cases)) {
+    // An override whose parse differs from what was sent: the schema fills the
+    // rest of a partly-overridden nested object. A committed one is taken first.
+    // Since W2d retired football's shoot-out points pair (PS-1), no field the
+    // editor builds sends a partial nested object, so none is committed (the
+    // count below says so). The witness is then read off the registry's own
+    // declarations: a preset's nested object with one key left out, which the
+    // sport's schema fills back in (cricket's points today) — a real config an
+    // API client may post, never a value typed here.
+    type Witness = { vc: Pick<VariantCase, "sport" | "preset" | "overrides">; k: string; cfg: Record<string, unknown> };
+    const differs = (vc: Witness["vc"]): Witness | null => {
       let cfg: Record<string, unknown>;
-      try { cfg = resolveSportCfg(vc.sport, vc.preset, { ...vc.overrides }) as Record<string, unknown>; } catch { continue; }
+      try { cfg = resolveSportCfg(vc.sport, vc.preset, { ...vc.overrides }) as Record<string, unknown>; } catch { return null; }
       const k = Object.keys(vc.overrides).find((x) => !isDeepStrictEqual(cfg[x], vc.overrides[x]));
-      if (k !== undefined) { found = { vc, k, cfg }; break; }
+      return k === undefined ? null : { vc, k, cfg };
+    };
+    const plain = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+    let found: Witness | null = null;
+    let committedDiffer = 0;
+    for (const vc of committed.flatMap((s) => s.cases)) {
+      const w = differs(vc);
+      if (w !== null) { committedDiffer++; found ??= w; }
     }
-    expect(found, "no committed override parses to something other than what was sent").not.toBeNull();
+    let registryDiffer = 0;
+    for (const sport of SPORT_KEYS) {
+      for (const preset of offlineVariantOrder(sport)) {
+        const declared = (sportModule(sport).variants as Record<string, Record<string, unknown>>)[preset]!;
+        for (const [key, value] of Object.entries(declared)) {
+          if (!plain(value) || Object.keys(value).length < 2) continue;
+          for (const left of Object.keys(value)) {
+            const w = differs({ sport, preset, overrides: { [key]: Object.fromEntries(Object.entries(value).filter(([n]) => n !== left)) } });
+            if (w !== null) { registryDiffer++; found ??= w; }
+          }
+        }
+      }
+    }
+    console.info(`[builtAsPosted parse witness] ${committedDiffer} committed override(s), ${registryDiffer} registry partial(s) parse to something other than what was sent`);
+    expect(found, "no override, committed or read off the registry's presets, parses to something other than what was sent").not.toBeNull();
     const { vc, k, cfg } = found!;
     expect(builtAsPosted(readback(vc.sport, vc.preset, { ...vc.overrides }, cfg), none).verdict).toBe("pass");
     const raw = builtAsPosted(readback(vc.sport, vc.preset, { ...vc.overrides }, { ...cfg, [k]: vc.overrides[k] }), none);
