@@ -1,0 +1,98 @@
+[
+ {
+  "id": "t14-payout-decided-in-null",
+  "file": "apps/web/src/server/engine-db/competition.ts",
+  "find": "        decidedInFor(sportModule, f.outcome as MatchOutcome),\n",
+  "replace": "        null,\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
+    ],
+    "name": "FB-PT-1 football group, shootout on"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
+    ],
+    "name": "IH-PT-1 icehockey an overtime goal"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
+    ],
+    "name": "IH-PT-1 icehockey a game-winning shot"
+   }
+  ]
+ },
+ {
+  "id": "t14-rank-call-drops-wins-count",
+  "file": "apps/web/src/server/engine-db/competition.ts",
+  "find": "    ...(inputs.module.winsCount === undefined ? {} : { winsCount: inputs.module.winsCount }),\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
+    ],
+    "name": "HK-TB-1 winsCount"
+   }
+  ]
+ },
+ {
+  "id": "t14-rank-call-drops-game-points",
+  "file": "apps/web/src/server/engine-db/competition.ts",
+  "find": "    gamePoints: gamePointsReader(gamePoints),\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
+    ],
+    "name": "B5 chess round robin under the 3/1/0 preset: Sonneborn-Berger"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
+    ],
+    "name": "B5 chess round robin under the 3/1/0 preset: direct encounter"
+   }
+  ]
+ },
+ {
+  "id": "t14-recompute-skips-persist-lots-draws",
+  "file": "apps/web/src/server/engine-db/competition.ts",
+  "find": "  for (const [pool, draws] of byPool) await persistLotsDraws(tx, stageId, pool === \"\" ? null : pool, draws);\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/stage-lots.test.ts"
+    ],
+    "name": "X-TB-4 a residual tie is drawn once, stored, and the same order comes back on two reloads"
+   }
+  ]
+ },
+ {
+  "id": "t14-cross-group-ignores-derived-order",
+  "file": "packages/engine/src/competition/table-rules.ts",
+  "find": "    crossGroup: input.stageOwn.crossGroup ?? defaultCrossGroup(order.tiebreakers),\n",
+  "replace": "    crossGroup: input.stageOwn.crossGroup ?? defaultCrossGroup(askSport(input, (cfg) => input.module.defaultTiebreakers(input.stageKind, cfg))),\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
+    ],
+    "name": "X-TB-7 the cross-group door in PR A is an ORDER save"
+   }
+  ]
+ }
+]
