@@ -704,6 +704,7 @@ Revert the web PR with `git revert -m 1 <merge sha>`, as a PR, OWNER GO. That re
 
 **Before O14, a bad stg deploy from the new repo is rolled back by:**
 1. re-enabling the two old workflows;
+   - and, in the same step, `gh workflow disable stg.yml prod.yml -R onryde/seazn.club.placement`, so each Fly app has exactly one deployer again (batch W review m-3). Reverse both when rolling forward.
 2. the owner redeploying `placement-stg` from seazn.club per `services/placement/DEPLOY.md` (`fly deploy services/placement --config services/placement/fly.toml --app placement-stg`).
 
 ## Owner rulings on the open questions (2026-10-25, "Apply rec from 1-3")
