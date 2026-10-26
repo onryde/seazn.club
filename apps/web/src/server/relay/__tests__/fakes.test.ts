@@ -213,6 +213,44 @@ describe("FakeIngest", () => {
     void outA2;
   });
 
+  it("setInputEnabled: an input starts enabled; DISABLING it rejects the phone — even one scripted `connected`, even one the clock would connect — and re-enabling lets it back; a repeat is harmless; an input that is gone is Cloudflare's 404 (success to a disable, a refusal to an enable); every call is visible", async () => {
+    let now = 0;
+    const fake = new FakeIngest({ clock: () => now, connectAfterMs: 1000 });
+    const a = await fake.createLiveInput({ sessionId: "s1", slot: 0 });
+    const b = await fake.createLiveInput({ sessionId: "s2", slot: 0 });
+    expect([fake.isEnabled(a.inputId), fake.isEnabled(b.inputId)], "a new input is enabled — Cloudflare's default").toEqual([true, true]);
+    expect(fake.enabledCalls, "the empty case: nothing has been asked yet").toEqual([]);
+    fake.setState(a.inputId, "connected");                      // scripted: a phone is pushing to A
+    now = 1000;                                                 // the clock connects B (no scripted state)
+    expect([(await fake.inputStatus(a.inputId)).state, (await fake.inputStatus(b.inputId)).state], "the positive pair: both phones are connected before the switch").toEqual(["connected", "connected"]);
+
+    await fake.setInputEnabled(a.inputId, false);
+    expect(fake.isEnabled(a.inputId)).toBe(false);
+    expect(fake.isEnabled(b.inputId), "B is not A: disabling one input leaves its neighbour alone").toBe(true);
+    expect((await fake.inputStatus(a.inputId)).state, "a disabled input rejects the connection it was holding").toBe("disconnected");
+    expect((await fake.inputStatus(a.inputId)).protocol).toBeNull();
+    expect((await fake.inputStatus(b.inputId)).state, "and B still carries its phone").toBe("connected");
+
+    await fake.setInputEnabled(a.inputId, false);               // a second disable: harmless
+    expect(fake.isEnabled(a.inputId)).toBe(false);
+    await fake.setInputEnabled(a.inputId, true);
+    expect(fake.isEnabled(a.inputId)).toBe(true);
+    expect((await fake.inputStatus(a.inputId)).state, "re-enabled: the phone that never stopped pushing is back").toBe("connected");
+    await fake.setInputEnabled(a.inputId, true);                // enabling an enabled input is fine
+
+    await fake.deleteInput(b.inputId);
+    await expect(fake.setInputEnabled(b.inputId, false), "a deleted input: a disable is idempotent success").resolves.toBeUndefined();
+    await expect(fake.setInputEnabled("fake-in-unknown", false), "an input this fake never made: the same 404").resolves.toBeUndefined();
+    await expect(fake.setInputEnabled(b.inputId, true), "…but an enable of a gone input is refused, loudly").rejects.toThrow(/gone|unknown/);
+    await expect(fake.setInputEnabled("fake-in-unknown", true)).rejects.toThrow(/gone|unknown/);
+    expect(fake.isEnabled(b.inputId), "a deleted input accepts nothing").toBe(false);
+
+    expect(fake.enabledCalls).toEqual([
+      { inputId: a.inputId, enabled: false }, { inputId: a.inputId, enabled: false }, { inputId: a.inputId, enabled: true }, { inputId: a.inputId, enabled: true },
+      { inputId: b.inputId, enabled: false }, { inputId: "fake-in-unknown", enabled: false }, { inputId: b.inputId, enabled: true }, { inputId: "fake-in-unknown", enabled: true },
+    ]);
+  });
+
   it("listVideos carries Cloudflare's recording facts, and a LIVE recording reads unknown — never a finalised-looking zero (Dd)", async () => {
     const fake = new FakeIngest();
     // The live row deliberately PASSES numbers: the fake must drop them. A fake
@@ -473,6 +511,7 @@ describe("the provider-call recorder seam (ruling 13)", () => {
     const out = await ingest.addOutput(inputId, { url: "rtmps://a.rtmps.youtube.com/live2", streamKey: "k" });
     await ingest.outputState(inputId);
     await ingest.removeOutput(inputId, out);
+    await ingest.setInputEnabled(inputId, false);
     await ingest.storageUsage();
     await ingest.listVideos({ createdBefore: new Date(1) });
     await ingest.deleteVideo("vid-a");
@@ -491,6 +530,7 @@ describe("the provider-call recorder seam (ruling 13)", () => {
       ["cloudflare", "addOutput", "POST", `${cf}/live_inputs/{id}/outputs`, inputId, null],
       ["cloudflare", "outputState", "GET", `${cf}/live_inputs/{id}/outputs`, inputId, null],
       ["cloudflare", "removeOutput", "DELETE", `${cf}/live_inputs/{id}/outputs/{id}`, out, null],   // C1: about the OUTPUT
+      ["cloudflare", "setInputEnabled", "PUT", `${cf}/live_inputs/{id}`, inputId, null],            // about the INPUT it switches
       ["cloudflare", "storageUsage", "GET", `${cf}/storage-usage`, null, null],
       ["cloudflare", "listVideos", "GET", cf, null, null],
       ["cloudflare", "deleteVideo", "DELETE", `${cf}/{id}`, "vid-a", null],
@@ -508,7 +548,7 @@ describe("the provider-call recorder seam (ruling 13)", () => {
 describe("T4 — the fake's output state and session ids (spec §5.6 D3, §5.7)", () => {
   const flush = () => new Promise((r) => setImmediate(r));
 
-  it("the four per-session calls record their session id on the provider-call row, exactly as the real adapter does", async () => {
+  it("the five per-session calls record their session id on the provider-call row, exactly as the real adapter does", async () => {
     const rec = new FakeRecorder();
     const ingest = new FakeIngest({ clock: () => 0, recorder: rec });
     const { inputId } = await ingest.createLiveInput({ sessionId: "s1", slot: 0 });
@@ -519,13 +559,14 @@ describe("T4 — the fake's output state and session ids (spec §5.6 D3, §5.7)"
       ["addOutput", () => ingest.addOutput(inputId, { url: "rtmps://a.rtmps.youtube.com/live2", streamKey: "k2" }, { sessionId: "sess-9" })],
       ["outputState", () => ingest.outputState(inputId, { sessionId: "sess-9" })],
       ["removeOutput", () => ingest.removeOutput(inputId, out, { sessionId: "sess-9" })],
+      ["setInputEnabled", () => ingest.setInputEnabled(inputId, false, { sessionId: "sess-9" })],
     ] as const) {
       await run();
       await flush();
       expect(rec.calls.at(-1), op).toMatchObject({ operation: op, sessionId: "sess-9" });
       checked++;
     }
-    expect(checked).toBe(4);
+    expect(checked).toBe(5);
   });
 
   it(`a key starting with FAKE_CONNECTING_KEY_PREFIX reads unknown before the input connects and connecting after — never ok — and reads nothing else to decide`, async () => {
