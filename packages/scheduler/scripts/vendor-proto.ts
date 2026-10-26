@@ -2,8 +2,8 @@
 //
 //   pnpm --filter @seazn/scheduler vendor:proto <path-to-placement-checkout>
 //
-// Copies `<checkout>/proto/scheduler.proto` to packages/scheduler/proto/scheduler.proto and writes VENDORED.json (the placement
-// commit, the copy's sha256, and the CI image tag, which is that same commit). Refuses a dirty or non-checkout path: see
+// Copies `<checkout>/proto/scheduler.proto` to packages/scheduler/proto/scheduler.proto and writes VENDORED.json (the CI image tag,
+// which is the placement checkout's HEAD commit). Refuses a dirty or non-checkout path: see
 // vendor-proto-lib.ts. A relative path is taken from the directory you ran pnpm in, not from packages/scheduler.
 //
 // It does NOT regenerate the TypeScript stubs. Run `gen:proto` next and commit the result; ci.yml's stub drift gate catches a

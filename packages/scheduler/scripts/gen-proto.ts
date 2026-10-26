@@ -1,6 +1,6 @@
 // Regenerate the TypeScript gRPC stubs from the vendored copy of the placement service's proto,
 // `packages/scheduler/proto/scheduler.proto`. The copy is written by `pnpm --filter @seazn/scheduler vendor:proto <placement
-// checkout>` and pinned in VENDORED.json; this script never reads the proto from anywhere else.
+// checkout>`, which also writes the image tag to VENDORED.json; this script never reads the proto from anywhere else.
 //
 //   pnpm --filter @seazn/scheduler gen:proto
 //

@@ -336,8 +336,9 @@ jobs:
             if (stray.length > 0) fail(`the packages/scheduler filter also ran files outside packages/scheduler/: ${stray.join(", ")}`);
           '
 
-      # The placement service's proto lives in its own repo; packages/scheduler/proto/scheduler.proto is a vendored copy, pinned
-      # by packages/scheduler/VENDORED.json (`pnpm --filter @seazn/scheduler vendor:proto <placement checkout>` writes both).
+      # The placement service's proto lives in its own repo; packages/scheduler/proto/scheduler.proto is a vendored copy, and
+      # packages/scheduler/VENDORED.json holds the image tag CI pulls (`pnpm --filter @seazn/scheduler vendor:proto <placement
+      # checkout>` writes both). Nothing in CI checks either against the placement repo: a contract change is handled by hand.
       # The TypeScript stubs are COMMITTED, so this pair proves they still come from that copy: regenerate, then fail the PR if
       # the working tree moved. The Python half of the same gate runs in the placement repo's own CI. Both steps are pinned by
       # packages/scheduler/test/integration-runs-elsewhere.test.ts, and the second is executed there against a temp repo.
@@ -2051,15 +2052,14 @@ jobs:
   #
   # `scheduler-live` runs it as a `services:` container, and a service's image is
   # fixed before any step of its job runs, so the reference has to come from a job
-  # it `needs`. packages/scheduler/VENDORED.json is the pin; placement-image.sh is
-  # the only place the reference is made (the seven jobs that `docker run` the
-  # image pull it with the same script, and packages/scheduler/test/
-  # placement-image-wiring.test.ts pins all of them).
+  # it `needs`. packages/scheduler/VENDORED.json is the pin (its `imageTag` is the
+  # whole of it); placement-image.sh is the only place the reference is made (the
+  # seven jobs that `docker run` the image pull it with the same script, and
+  # packages/scheduler/test/placement-image-wiring.test.ts pins all of them).
   #
-  # This job also VERIFIES the pin: the other modes trust VENDORED.json, so a pin
-  # whose copy and sha256 were updated but whose placementCommit is stale (or was
-  # never pushed) would pass everywhere. `verify-pin` fetches the proto at that
-  # commit from the placement repo and compares its sha256.
+  # The pin is NOT verified against the placement repo: a placement contract change
+  # is handled by hand (the owner asks both repos to regenerate), so this job only
+  # turns the pin into an image reference.
   #
   # The job-level keys of this job and of scheduler-live are pinned EXACTLY (this
   # job: name, runs-on, outputs, steps; scheduler-live: name, needs, runs-on,
@@ -2076,8 +2076,6 @@ jobs:
       image: ${{ steps.pin.outputs.image }}
     steps:
       - uses: actions/checkout@v5
-      - name: Verify the pin against the placement repo
-        run: bash packages/scheduler/scripts/placement-image.sh verify-pin
       # ASSIGN, then echo. `echo "image=$(bash …)"` would swallow the script's
       # failure (bash -e does not see a command substitution inside an argument),
       # and `needs.placement-pin.outputs.image` would arrive EMPTY downstream. A

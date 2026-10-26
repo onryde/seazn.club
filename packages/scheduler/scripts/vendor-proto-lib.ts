@@ -1,8 +1,9 @@
 // The vendoring logic behind `pnpm --filter @seazn/scheduler vendor:proto <placement checkout>` (engine-split phase 2a, W1).
 //
 // The placement service lives in its own repo; this package keeps a byte-for-byte copy of its `proto/scheduler.proto` plus a
-// pin saying which placement commit that copy came from. The pin's `imageTag` is that SAME commit, so the CI image the web
-// jobs pull can never be older than the proto they generated their stubs from.
+// pin holding the image tag the web jobs pull. That `imageTag` is the placement commit the copy came from, so a vendoring run
+// leaves the CI image no older than the proto the stubs were generated from. The pin is not checked against the placement
+// repo afterwards: a contract change is handled by hand, by regenerating both repos.
 //
 // What this refuses, because each is a way to vendor the WRONG bytes without anything going red:
 //   * a path that is not the root of a git checkout (a plain folder, a folder inside a checkout, a repo with no commit);
@@ -17,20 +18,12 @@
 //
 // Runs under `node --experimental-strip-types`: type annotations only, no enums or parameter properties, `.ts` import suffixes.
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { PKG_ROOT } from "./proto-paths.ts";
 
 export interface VendoredPin {
-  placementCommit: string;
-  sha256: string;
   imageTag: string;
-}
-
-/** Lowercase hex sha256 of a file's bytes. */
-export function sha256Of(file: string): string {
-  return createHash("sha256").update(readFileSync(file)).digest("hex");
 }
 
 /**
@@ -132,7 +125,7 @@ export function vendorProto(opts: { checkout: string; pkgRoot?: string }): Vendo
   const dest = path.join(destDir, "scheduler.proto");
   mkdirSync(destDir, { recursive: true });
   writeFileSync(dest, readFileSync(source));
-  const pin: VendoredPin = { placementCommit: head.out, sha256: sha256Of(dest), imageTag: head.out };
+  const pin: VendoredPin = { imageTag: head.out };
   writeFileSync(path.join(pkgRoot, "VENDORED.json"), `${JSON.stringify(pin, null, 2)}\n`);
   return pin;
 }
