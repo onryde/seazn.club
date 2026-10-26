@@ -83,6 +83,10 @@ afterAll(async () => {
 
 beforeEach(() => {
   stubOutboxEnv();
+  // Keyless, as in a dev env. The same dispatch also runs handlers outside this wave (the pack and stream-credit refund checks, the
+  // platform dispute's customer lookup) whose Stripe retrieve is guarded on this key and swallows a failure. CI's smoke job sets a
+  // real key, which sent those retrieves to the mock 8 times.
+  vi.stubEnv("STRIPE_SECRET_KEY", "");
   getStripeMock.mockClear();
   deliverMock.mockReset().mockImplementation(async () => ({ ok: true, providerId: `re_f7_${randomUUID()}` }));
 });
