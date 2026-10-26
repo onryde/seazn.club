@@ -19,14 +19,16 @@ const stripeMock = vi.hoisted(() => {
 });
 vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
 
+// The sponsor's mail that has moved to the email outbox is read from its rows and from the outbox's one network seam.
+const deliverMock = vi.hoisted(() => vi.fn());
+vi.mock("@/server/email-outbox/transport", () => ({ deliver: deliverMock }));
+
 const emailMock = vi.hoisted(() => ({
-  invoice: vi.fn().mockResolvedValue(true),
   receipt: vi.fn().mockResolvedValue(true),
   refund: vi.fn().mockResolvedValue(true),
 }));
 vi.mock("@/lib/email", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/email")>()),
-  sendSponsorInvoiceEmail: emailMock.invoice,
   sendSponsorReceiptEmail: emailMock.receipt,
   sendSponsorRefundEmail: emailMock.refund,
 }));
@@ -35,6 +37,8 @@ import type Stripe from "stripe";
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { idempotencyKey } from "@/server/email-outbox/constants";
+import { stubOutboxEnv } from "./_invite-mail";
 import {
   createSponsorPackage,
   deactivateSponsorPackage,
@@ -48,6 +52,8 @@ import {
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 const HAS_DB = !!process.env.DATABASE_URL;
+/** The orgs this file made: their outbox rows are removed at the end (a queued row must not wait for another file's worker). */
+const madeOrgIds: string[] = [];
 
 async function seedOrg(
   plan: "community" | "pro",
@@ -59,6 +65,7 @@ async function seedOrg(
     values (${"Mon " + suffix}, ${"mon-" + suffix},
             ${connect ? "acct_" + suffix : null}, ${connect})
     returning id`;
+  madeOrgIds.push(orgId);
   if (plan !== "community") {
     await setOrgPlan(orgId, plan);
   }
@@ -82,9 +89,10 @@ function fakeIntent(orderId: string, packageId = "", orgId = ""): Stripe.Payment
 }
 
 beforeEach(() => {
+  stubOutboxEnv();
+  deliverMock.mockReset().mockImplementation(async () => ({ ok: true, providerId: `re_${randomUUID()}` }));
   stripeMock.checkoutCreate.mockReset();
   stripeMock.refundCreate.mockReset().mockResolvedValue({ id: "re_test" });
-  emailMock.invoice.mockClear();
   emailMock.receipt.mockClear();
   emailMock.refund.mockClear();
 });
@@ -284,12 +292,27 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
       },
     });
 
-    expect(emailMock.invoice).toHaveBeenCalledOnce();
-    expect(emailMock.invoice.mock.calls[0]![0]).toMatchObject({
-      to: "pay@acme.test",
-      checkoutUrl: "https://stripe.test/session",
-      amountCents: 50_000,
-    });
+    // The sponsor contact's invoice is one outbox row for this order, sent by the request (after it returned), carrying the link
+    // Stripe returned and the package's price.
+    await vi.waitFor(
+      async () => {
+        const [r] = await sql<{ status: string }[]>`
+          select status from email_outbox where kind = 'sponsor_invoice' and ref_id = ${order.id}`;
+        if (r?.status !== "sent") throw new Error(`the invoice is ${r?.status ?? "not queued"}`);
+      },
+      { timeout: 10_000, interval: 50 },
+    );
+    const invoices = await sql<{ id: string; recipient: string }[]>`
+      select id, recipient from email_outbox where kind = 'sponsor_invoice' and ref_id = ${order.id}`;
+    expect(invoices).toHaveLength(1);
+    expect(invoices[0]!.recipient).toBe("pay@acme.test");
+    const sent = deliverMock.mock.calls
+      .map((c) => c[0] as { to: string; text: string; idempotencyKey: string })
+      .filter((c) => c.idempotencyKey === idempotencyKey(invoices[0]!.id));
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.to).toBe("pay@acme.test");
+    expect(sent[0]!.text).toContain("https://stripe.test/session");
+    expect(sent[0]!.text).toContain("£500.00");
   });
 
   it("webhook: paid activates exactly once under replay; failed flips pending only", async () => {
@@ -472,5 +495,6 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
 
 afterAll(async () => {
   if (!HAS_DB) return;
+  await sql`delete from email_outbox where org_id = any(${madeOrgIds}::uuid[])`;
   await sql.end();
 });

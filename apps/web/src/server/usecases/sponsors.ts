@@ -15,7 +15,7 @@ import { requireFeature } from "@/lib/entitlements";
 import { brandingSponsors } from "@/lib/org-branding";
 import { getStripe } from "@/lib/stripe";
 import {
-  sendSponsorInvoiceEmail,
+  sponsorInvoiceEmail,
   sendSponsorReceiptEmail,
   sendSponsorRefundEmail,
   sendSponsorDisputeAlertEmail,
@@ -23,6 +23,15 @@ import {
   sendSponsorDisputeWonEmail,
 } from "@/lib/email";
 import { deferred } from "@/lib/deferred";
+import {
+  assertOutboxCanQueue,
+  dispatchNow,
+  enqueueEmailOnce,
+  expiryWithin,
+  onceKey,
+  recipientLocale,
+} from "@/server/email-outbox";
+import { log } from "@/server/logger";
 import { fireOrgRevalidate } from "@/server/public-site/revalidate";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { applicationFeeCents, feePercentFor } from "./registrations";
@@ -449,6 +458,15 @@ export async function listSponsorOrders(auth: AuthCtx): Promise<SponsorOrderRow[
  * like registrations. Stripe is called OUTSIDE any sql transaction; the
  * idempotency key `sponsor-order-<id>` pins retries to one session. The
  * sponsor contact gets a pay-now invoice email.
+ *
+ * The invoice goes through the email outbox (kind `sponsor_invoice`, ref
+ * `sponsor_order/<order id>`, once-key the order id), in the org's language,
+ * and this request makes its first attempt after it returns. The box is asked
+ * whether it can queue email BEFORE the order exists (P-W2-1): the session
+ * minted below is real, so a key fault must refuse the checkout before it
+ * starts. Once the session exists the order stands: an invoice that still
+ * cannot be queued is logged and the checkout answers as usual, since the
+ * organiser is shown the same payment link to share.
  */
 export async function startSponsorCheckout(
   auth: AuthCtx,
@@ -468,13 +486,22 @@ export async function startSponsorCheckout(
   // entry fees — before any order exists. The ToS chargeback clause was
   // accepted when the connected account was created (createConnectOnboardingLink).
   const [org] = await sql<
-    { slug: string; name: string; stripe_account_id: string | null; stripe_charges_enabled: boolean }[]
+    {
+      slug: string;
+      name: string;
+      default_locale: string;
+      stripe_account_id: string | null;
+      stripe_charges_enabled: boolean;
+    }[]
   >`
-    select slug, name, stripe_account_id, stripe_charges_enabled
+    select slug, name, default_locale, stripe_account_id, stripe_charges_enabled
     from organizations where id = ${auth.orgId}`;
   if (!org?.stripe_account_id || !org.stripe_charges_enabled) {
     throw new HttpError(409, "Connect Stripe (Get paid) before selling sponsorship packages");
   }
+  // P-W2-1: refuse now, before the order and the Checkout session, if this box
+  // cannot queue the invoice.
+  assertOutboxCanQueue();
 
   const order = await withTenant(auth.orgId, async (tx) => {
     const [row] = await tx<SponsorOrderRow[]>`
@@ -522,15 +549,38 @@ export async function startSponsorCheckout(
   );
   if (!session.url) throw new HttpError(502, "Stripe did not return a checkout URL");
 
-  await sendSponsorInvoiceEmail({
-    to: input.sponsor_email,
-    orgName: org.name,
-    packageName: pkg.name,
-    sponsorName: input.sponsor_name,
-    amountCents: pkg.price_cents,
-    currency: pkg.currency,
-    checkoutUrl: session.url,
-  });
+  // The render is inside the same try as the enqueue: the session is minted,
+  // so nothing about the invoice may turn this checkout into an error.
+  let invoiceId: string | null = null;
+  try {
+    const locale = await recipientLocale(sql, { pick: null, userId: null, orgDefault: org.default_locale });
+    const content = await sponsorInvoiceEmail(
+      {
+        orgName: org.name,
+        packageName: pkg.name,
+        sponsorName: input.sponsor_name,
+        amountCents: pkg.price_cents,
+        currency: pkg.currency,
+        checkoutUrl: session.url,
+      },
+      locale,
+    );
+    invoiceId = await enqueueEmailOnce(sql, {
+      kind: "sponsor_invoice",
+      refType: "sponsor_order",
+      refId: order.id,
+      dedupeKey: onceKey("sponsor_invoice", "sponsor_order", order.id),
+      orgId: auth.orgId,
+      to: input.sponsor_email,
+      transactional: false,
+      expiresAt: expiryWithin(null),
+      ...content,
+    });
+  } catch (err) {
+    log.error({ err, orderId: order.id }, "sponsors: invoice email could not be queued");
+  }
+  const queued = invoiceId;
+  if (queued) deferred(() => dispatchNow([queued]));
 
   return { order, checkout_url: session.url };
 }

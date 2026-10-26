@@ -469,7 +469,7 @@
   "sponsors.order.name": "Nom du sponsor",
   "sponsors.order.email": "E-mail du sponsor",
   "sponsors.order.send": "Envoyer la facture à payer",
-  "sponsors.order.sent": "Facture envoyée — lien de paiement :",
+  "sponsors.order.sent": "Nous envoyons la facture au sponsor par e-mail. Vous pouvez aussi partager ce lien de paiement :",
   "sponsors.order.copyLink": "Copier le lien de paiement",
   "sponsors.orders.title": "Commandes",
   "sponsors.orders.empty": "Aucune commande pour l'instant. Envoyez la facture d'une offre à un sponsor pour en créer une.",

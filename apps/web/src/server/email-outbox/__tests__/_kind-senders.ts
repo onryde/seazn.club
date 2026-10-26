@@ -57,7 +57,6 @@ export const SENDER_ALLOWLIST: readonly string[] = [
   "sendSponsorDisputeAlertEmail",
   "sendSponsorDisputeLostEmail",
   "sendSponsorDisputeWonEmail",
-  "sendSponsorInvoiceEmail",
   "sendSponsorReceiptEmail",
   "sendSponsorRefundEmail",
   "sendStaffDisputeAlertEmail",
@@ -76,7 +75,6 @@ export const SENDER_ALLOWLIST: readonly string[] = [
 /** Kinds whose producer still mails through a `send*`. Wave 1 emptied it (T8-T12); wave 2's T1 registered its ten kinds before their
  *  producers moved, so they are listed here until their kind task (T2-T9) deletes each one. The sweep covers every kind not listed. */
 export const NOT_YET_MOVED: readonly OutboxKind[] = [
-  "sponsor_invoice",
   "sponsor_receipt",
   "sponsor_refund",
   "sponsor_dispute_alert",
@@ -97,7 +95,7 @@ export const KIND_DIRECT_SENDER: Readonly<Record<OutboxKind, string | null>> = {
   solo_signup_assigned: null,
   registration_dispute_alert: null,
   registration_dispute_lost: null,
-  sponsor_invoice: "sendSponsorInvoiceEmail",
+  sponsor_invoice: null,
   sponsor_receipt: "sendSponsorReceiptEmail",
   sponsor_refund: "sendSponsorRefundEmail",
   sponsor_dispute_alert: "sendSponsorDisputeAlertEmail",

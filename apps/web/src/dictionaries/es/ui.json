@@ -469,7 +469,7 @@
   "sponsors.order.name": "Nombre del patrocinador",
   "sponsors.order.email": "Correo del patrocinador",
   "sponsors.order.send": "Enviar factura de pago",
-  "sponsors.order.sent": "Factura enviada — enlace de pago:",
+  "sponsors.order.sent": "Estamos enviando la factura al patrocinador por correo. También puedes compartir este enlace de pago:",
   "sponsors.order.copyLink": "Copiar enlace de pago",
   "sponsors.orders.title": "Pedidos",
   "sponsors.orders.empty": "Aún no hay pedidos. Envía la factura de un paquete a un patrocinador para crear uno.",

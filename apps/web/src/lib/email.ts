@@ -618,16 +618,11 @@ export async function disputeLostEmail(args: DisputeLostArgs, locale: Locale): P
   return disputeLostTemplate(args, dict);
 }
 
-export interface SponsorInvoiceEmail extends SponsorInvoiceArgs {
-  to: string;
-  locale?: Locale;
-}
-
-/** Pay-now invoice to the sponsor contact at checkout start (v10). */
-export async function sendSponsorInvoiceEmail(opts: SponsorInvoiceEmail): Promise<boolean> {
-  const { to, locale = "en", ...args } = opts;
+/** Pay-now invoice to the sponsor contact at checkout start (v10), in the org's language. It is queued on the email outbox by
+ *  `startSponsorCheckout` (sponsors.ts, kind `sponsor_invoice`) once the Checkout session is minted; nothing sends it directly. */
+export async function sponsorInvoiceEmail(args: SponsorInvoiceArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...sponsorInvoiceTemplate(args, dict) });
+  return sponsorInvoiceTemplate(args, dict);
 }
 
 export interface SponsorReceiptEmail extends SponsorReceiptArgs {
