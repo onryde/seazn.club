@@ -3,6 +3,8 @@
 // ref `dispute/<Stripe dispute id>`, and the worker makes the first attempt (a webhook has no response to defer behind).
 //   - Email 6, `sponsor_dispute_alert`: a dispute that opens on a sponsor's payment queues the alert (once-key `<dispute id>:created`) in
 //     the transaction that flags the order, and only on the transition to THIS dispute (the order's prior dispute, read under lock).
+//   - Email 7, `sponsor_dispute_won`: a dispute that closes won queues the notice (once-key `<dispute id>:won`) in the transaction that
+//     clears the flag, and only on the transition (the order, read under lock, still carried the flag).
 //
 // Producer under test: `handleSponsorDispute`, driven directly as the billing webhook calls it. Only the network seam is replaced
 // (`@/server/email-outbox/transport`). The enqueue is the real one, observed through a spy that calls through, so a test can tell "not
@@ -31,6 +33,7 @@ import { cleanUpSponsorOrgs, seedSponsorOrder } from "./_money-fixtures";
 const HAS_DB = !!process.env.DATABASE_URL;
 const RUN = randomUUID().slice(0, 8);
 const ALERT = "sponsor_dispute_alert" as const;
+const WON = "sponsor_dispute_won" as const;
 
 const made = { orgIds: [] as string[], userIds: [] as string[] };
 
@@ -196,5 +199,65 @@ describe.skipIf(!HAS_DB)("a disputed sponsorship alerts the org owner through th
     expect(after.sponsor_status, "and the placement is parked: that does not wait on someone to tell").toBe("pending");
     expect(await rowsOf(ALERT, [id])).toHaveLength(0);
     expect(enqueueCalls(ALERT, id)).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Email 7: the notice when a dispute closes won
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("a sponsorship dispute that closes won tells the org owner through the outbox (DB)", () => {
+  it("won after created queues one won notice; a redelivered won queues nothing", async () => {
+    // D4: the owner's account has no language, so the org default's.
+    const o = await paidOrder({ ownerLocale: null, defaultLocale: "nl" });
+    const id = newDisputeId();
+
+    await handleSponsorDispute(disputeOf(id, o.intent), "created");
+    await expect(handleSponsorDispute(disputeOf(id, o.intent, { status: "won" }), "closed")).resolves.toBe(true);
+    await handleSponsorDispute(disputeOf(id, o.intent, { status: "won" }), "closed"); // Stripe's retry, or an /admin/billing-events replay
+
+    const rows = await rowsOf(WON, [id]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      kind: WON,
+      ref_type: "dispute",
+      ref_id: id,
+      dedupe_key: `${id}:won`,
+      org_id: o.orgId,
+      recipient_user_id: o.ownerId,
+      recipient: o.ownerEmail,
+      transactional: false,
+      status: "queued",
+      attempts: 0,
+    });
+    const subject = dictionarySubject("nl", "sponsorDisputeWon.subject", { orgName: o.orgName });
+    expect(subject, "the Dutch subject is not the English one").not.toBe(dictionarySubject("en", "sponsorDisputeWon.subject", { orgName: o.orgName }));
+    expect(rows[0]!.subject).toBe(subject);
+    expect(transportCallsFor(rows[0]!.id), "the webhook did not attempt the send: the first attempt is the worker's").toHaveLength(0);
+    // Asked once: the redelivery found the flag already clear, so it never reached the once-key.
+    const calls = enqueueCalls(WON, id);
+    expect(calls).toHaveLength(1);
+    // R1: the row was written on the transaction that clears the flag, not on the pool.
+    expect(calls[0]![0], "the enqueue ran on a transaction handle, not the pool").not.toBe(sql);
+    const after = await orderState(o.orderId);
+    expect(after.disputed_at, "the flag is cleared").toBeNull();
+    expect(after.sponsor_status, "and the placement is live again").toBe("active");
+  });
+
+  it("won's once-key alone: a dispute flagged again after its win, and won again, is one notice", async () => {
+    const o = await paidOrder({ ownerLocale: "fr", defaultLocale: "en" });
+    const a = newDisputeId();
+
+    await handleSponsorDispute(disputeOf(a, o.intent), "created");
+    await handleSponsorDispute(disputeOf(a, o.intent, { status: "won" }), "closed");
+    await handleSponsorDispute(disputeOf(a, o.intent), "created"); // a's created again: it re-flags the order (coalesce), no new alert
+    expect((await orderState(o.orderId)).disputed_at, "premise: the order carries the flag again").not.toBeNull();
+    await handleSponsorDispute(disputeOf(a, o.intent, { status: "won" }), "closed");
+
+    // The second won IS a transition (the flag was set again), so the producer asks again; the once-key is what keeps the notice single.
+    expect(enqueueCalls(WON, a), "two asks").toHaveLength(2);
+    const rows = await rowsOf(WON, [a]);
+    expect(rows.map((r) => r.dedupe_key)).toEqual([`${a}:won`]);
+    expect(rows[0]).toMatchObject({ recipient_user_id: o.ownerId, status: "queued" });
   });
 });

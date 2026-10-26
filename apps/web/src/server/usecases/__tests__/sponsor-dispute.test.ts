@@ -18,12 +18,10 @@ import type Stripe from "stripe";
 // module (send() is a no-op without RESEND_API_KEY either way).
 const emailMock = vi.hoisted(() => ({
   lost: vi.fn().mockResolvedValue(true),
-  won: vi.fn().mockResolvedValue(true),
 }));
 vi.mock("@/lib/email", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/email")>()),
   sendSponsorDisputeLostEmail: emailMock.lost,
-  sendSponsorDisputeWonEmail: emailMock.won,
 }));
 // The notices that have moved to the email outbox are observed there: the
 // enqueue is the real one, through a spy that calls through, and the one
@@ -65,7 +63,6 @@ beforeEach(() => {
   vi.mocked(enqueueEmailOnce).mockClear();
   deliverMock.mockReset().mockImplementation(async () => ({ ok: true, providerId: `re_spd_${randomUUID()}` }));
   emailMock.lost.mockClear();
-  emailMock.won.mockClear();
 });
 
 afterAll(async () => {
@@ -150,7 +147,7 @@ describe.skipIf(!HAS_DB)("handleSponsorDispute", () => {
   });
 
   it("closed won: flag cleared, placement re-activated (idempotent on replay)", async () => {
-    const { intent, orderId, sponsorId, ownerEmail } = await seedSponsorOrder({ status: "paid" });
+    const { intent, orderId, sponsorId, ownerId, ownerEmail } = await seedSponsorOrder({ status: "paid" });
     const did = "dp_" + uniq();
     await handleSponsorDispute(disputeFor(intent, did), "created");
     const won = disputeFor(intent, did, "won");
@@ -163,8 +160,10 @@ describe.skipIf(!HAS_DB)("handleSponsorDispute", () => {
     expect(emailMock.lost).not.toHaveBeenCalled(); // a win is not a loss
     // The organiser hears about the win exactly once — the replay above must
     // not re-notify (the flag was already clear on the second pass).
-    expect(emailMock.won).toHaveBeenCalledTimes(1);
-    expect(emailMock.won.mock.calls[0]![0]).toMatchObject({ to: ownerEmail });
+    expect(enqueued("sponsor_dispute_won", did)).toHaveLength(1);
+    const rows = await outboxRows("sponsor_dispute_won", did);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ recipient: ownerEmail, recipient_user_id: ownerId });
   });
 
   it("ignores non-sponsor intents (reports no match)", async () => {

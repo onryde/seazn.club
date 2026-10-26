@@ -57,7 +57,6 @@ const SPEC_ACCOUNT_KINDS: readonly OutboxKind[] = [
 /** Account kinds whose producer has not moved to the outbox yet, so there is no real producer to drive. Each kind task deletes its own
  *  entry when it adds its producer to PRODUCERS below; T10 deletes the list. */
 const PRODUCERS_PENDING: readonly OutboxKind[] = [
-  "sponsor_dispute_won",
   "sponsor_dispute_lost",
   "pass_revoked",
   "trial_ending",
@@ -130,6 +129,15 @@ describe.skipIf(!HAS_DB)("an account kind's sealed body never names its recipien
       expect(await handleSponsorDispute(dispute, "created"), "premise: the real handler matched the sponsor's charge").toBe(true);
       // The alert names the package the disputed payment bought.
       return { rowIds: await rowIdsOf("sponsor_dispute_alert", disputeId), positive: literal(o.packageName) };
+    },
+    sponsor_dispute_won: async () => {
+      const o = await seedSponsorOrder({ status: "paid" });
+      const disputeId = `dp_akb_${randomUUID().slice(0, 12)}`;
+      const dispute = (status: string) => ({ id: disputeId, payment_intent: o.intent, amount: 25000, status }) as unknown as Stripe.Dispute;
+      expect(await handleSponsorDispute(dispute("needs_response"), "created"), "premise: the real handler flagged the sponsor's order").toBe(true);
+      expect(await handleSponsorDispute(dispute("won"), "closed"), "premise: the real handler matched the sponsor's charge").toBe(true);
+      // The notice names the package the disputed payment bought.
+      return { rowIds: await rowIdsOf("sponsor_dispute_won", disputeId), positive: literal(o.packageName) };
     },
   };
 

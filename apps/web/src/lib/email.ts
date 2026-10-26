@@ -664,19 +664,12 @@ export async function sendSponsorDisputeLostEmail(
   return send({ to, ...sponsorDisputeLostTemplate(args, dict) });
 }
 
-export interface SponsorDisputeWonEmail extends SponsorDisputeWonArgs {
-  to: string;
-  locale?: Locale;
-}
-
-/** Organiser outcome mail: a sponsorship chargeback closed WON — the money
- *  stays and the placement is restored (the lost mail's happy twin). */
-export async function sendSponsorDisputeWonEmail(
-  opts: SponsorDisputeWonEmail,
-): Promise<boolean> {
-  const { to, locale = "en", ...args } = opts;
+/** Organiser outcome mail: a sponsorship chargeback closed WON — the money stays and the placement is restored (the lost mail's happy
+ *  twin), in the owner's language. It is queued on the email outbox by `handleSponsorDispute` (sponsors.ts, kind `sponsor_dispute_won`)
+ *  in the transaction that clears the flag; nothing sends it directly. */
+export async function sponsorDisputeWonEmail(args: SponsorDisputeWonArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...sponsorDisputeWonTemplate(args, dict) });
+  return sponsorDisputeWonTemplate(args, dict);
 }
 
 export interface PassRevokedEmail extends PassRevokedArgs {

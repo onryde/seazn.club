@@ -19,8 +19,8 @@ import {
   sponsorReceiptEmail,
   sponsorRefundEmail,
   sponsorDisputeAlertEmail,
+  sponsorDisputeWonEmail,
   sendSponsorDisputeLostEmail,
-  sendSponsorDisputeWonEmail,
 } from "@/lib/email";
 import { deferred } from "@/lib/deferred";
 import {
@@ -971,15 +971,16 @@ async function recoverSponsorDispute(
  * loss. Dispatched after handleRegistrationDispute for both event types —
  * a non-sponsor intent matches no order row and no-ops.
  *
- * The owner's alert goes through the email outbox (kind
- * `sponsor_dispute_alert`, ref `dispute/<id>`), addressed to the owner's
- * account in their language; the worker makes the first attempt.
+ * The owner's alert and won notice go through the email outbox (kinds
+ * `sponsor_dispute_alert`, `sponsor_dispute_won`, ref `dispute/<id>`),
+ * addressed to the owner's account in their language; the worker makes the
+ * first attempt.
  *
  * Replay-safe: the disputed_at/dispute_id + status writes converge, the
- * created alert is queued only on the transition to a given dispute (and its
- * once-key holds it to one row), and the lost recovery + its email
- * short-circuit on the core's dispute_id metadata guard. Stripe calls stay
- * OUTSIDE any sql tx.
+ * created alert and the won notice are queued only on their transition (and
+ * each once-key holds its dispute to one row), and the lost recovery + its
+ * email short-circuit on the core's dispute_id metadata guard. Stripe calls
+ * stay OUTSIDE any sql tx.
  */
 export async function handleSponsorDispute(
   dispute: Stripe.Dispute,
@@ -1060,25 +1061,35 @@ export async function handleSponsorDispute(
   }
 
   if (dispute.status === "won") {
-    // First transition only (replay-safe): the row still carried the flag.
-    const firstClear = order.disputed_at !== null;
-    await sql`update sponsor_orders set disputed_at = null where id = ${order.id}`;
-    if (order.sponsor_id) {
-      await sql`update sponsors set status = 'active' where id = ${order.sponsor_id}`;
-    }
-    if (firstClear) {
-      const owner = await currentOrgOwnerEmail(order.org_id);
-      if (owner) {
-        void sendSponsorDisputeWonEmail({
-          to: owner,
-          orgName: (await resolveOrgName(order.org_id)) ?? "your organisation",
-          packageName: await resolvePackageName(order.package_id),
-          sponsorName: order.sponsor_name,
-          amountCents: dispute.amount,
-          currency: order.currency,
-        }).catch(() => {});
+    const recipient = await sponsorDisputeRecipient(order.org_id, order.org_default_locale);
+    // ONE transaction clears the flag and queues the owner's notice (R1),
+    // only on the TRANSITION (replay-safe): the order, read under lock, still
+    // carried the flag. A redelivered `won` finds it clear. The once-key keeps
+    // the notice single should this dispute flag the order again and win again.
+    await sql.begin(async (tx) => {
+      const [prior] = await tx<{ disputed_at: Date | null }[]>`
+        select disputed_at from sponsor_orders where id = ${order.id} for update`;
+      await tx`update sponsor_orders set disputed_at = null where id = ${order.id}`;
+      const firstClear = prior?.disputed_at !== null;
+      if (firstClear && recipient) {
+        const kind = "sponsor_dispute_won";
+        await enqueueEmailOnce(tx, {
+          kind,
+          refType: "dispute",
+          refId: dispute.id,
+          orgId: order.org_id,
+          to: recipient.email,
+          recipientUserId: recipient.userId,
+          ...(await sponsorDisputeWonEmail(noticeArgs, recipient.locale)),
+          transactional: false,
+          expiresAt: expiryWithin(null),
+          dedupeKey: onceKey(kind, "dispute", dispute.id, "won"),
+        });
       }
-    }
+      if (order.sponsor_id) {
+        await tx`update sponsors set status = 'active' where id = ${order.sponsor_id}`;
+      }
+    });
     bustPublicSponsors(order.org_id);
     return true;
   }
