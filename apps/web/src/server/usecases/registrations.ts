@@ -3337,7 +3337,8 @@ async function confirmPaidRegistration(
 /**
  * Dispute lifecycle (spec issue #5 — destination charges make the PLATFORM
  * liable): `created` flags the registration + alerts the org owner; `closed`
- * either clears the flag (won) or writes the money off (lost). No automatic
+ * either clears the flag (won, or a closed inquiry: `warning_closed`) or
+ * writes the money off (lost). No automatic
  * entrant changes — contested entries are the organiser's call.
  */
 export async function handleRegistrationDispute(
@@ -3410,7 +3411,10 @@ export async function handleRegistrationDispute(
     });
     return true;
   }
-  if (dispute.status === "won") {
+  // An inquiry (opened as `warning_needs_response`) that the bank drops without a chargeback closes `warning_closed`: no money was
+  // ever taken, so it ends the dispute as a win does. Without this arm the registrant stayed "disputed" for good in the hub and in
+  // the division's dispute count.
+  if (dispute.status === "won" || dispute.status === "warning_closed") {
     await sql`update registration_groups set disputed_at = null, updated_at = now()
               where id = ${reg.group_id}`;
     await audit(sql, ctx.competition_id, reg.org_id, "registration.dispute_won", {
