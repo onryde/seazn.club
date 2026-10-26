@@ -93,6 +93,8 @@ export function buchholz(table: SwissTable, entrant: EntrantId, opts: { cut?: nu
   const row = requireRow(byEntrant, entrant);
   const scores = row.games.map((_, i) => opponentScore(byEntrant, row, i));
   const cut = opts.cut ?? 0;
+  // Assumptions are guards (W2d A20): every caller cuts 0 or 1 lowest scores; a negative cut means nothing.
+  if (cut < 0) throw new EngineError("CONFIG_INVALID", `a Buchholz cut drops opponents' scores, so it is never negative: ${cut}`, { cut });
   if (cut <= 0) return scores.reduce((sum, s) => sum + s, 0);
   const sorted = [...scores].sort((a, b) => a - b);
   return sorted.slice(cut).reduce((sum, s) => sum + s, 0);
@@ -946,6 +948,12 @@ function storedOrder(stored: StoredLotsDraw, membersKey: MembersKey): readonly E
 // §3). Throws CONFIG_INVALID for a cascade it cannot run (anti-goal 2,
 // `parseCascade`) and for a stored draw that does not fit its set.
 export function rankStandings(rows: readonly StandingsRow[], ctx: RankContext): RankingResult {
+  // Assumptions are guards (W2d A20): one row per entrant — the seed-then-id order and every per-entrant read assume it.
+  const seen = new Set<EntrantId>();
+  for (const row of rows) {
+    if (seen.has(row.entrantId)) throw new EngineError("CONFIG_INVALID", `entrant "${row.entrantId}" has two rows in one table`, { entrantId: row.entrantId });
+    seen.add(row.entrantId);
+  }
   const steps = parseCascade(ctx.cascade);
   const partial = ctx.partialScheduleOrder === undefined ? undefined : parsePartialOrder(ctx.partialScheduleOrder);
   const schedule = ctx.scheduledPairs !== undefined && ctx.scheduledPairs.length > 0 ? ctx.scheduledPairs : undefined;

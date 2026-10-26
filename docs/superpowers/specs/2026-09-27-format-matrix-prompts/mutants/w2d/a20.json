@@ -73,5 +73,35 @@
         "name": "a BYE written without the unplayed flag"
       }
     ]
+  },
+  {
+    "id": "a20-r1-negative-cut-guard-off",
+    "file": "packages/engine/src/competition/tiebreakers.ts",
+    "find": "  if (cut < 0) throw new EngineError(",
+    "replace": "  if (false) throw new EngineError(",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/tiebreakers-md1.test.ts"
+        ],
+        "name": "buchholz refuses a negative cut"
+      }
+    ]
+  },
+  {
+    "id": "a20-r1-duplicate-entrant-guard-off",
+    "file": "packages/engine/src/competition/tiebreakers.ts",
+    "find": "    if (seen.has(row.entrantId)) throw new EngineError(",
+    "replace": "    if (false) throw new EngineError(",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/tiebreakers-md1.test.ts"
+        ],
+        "name": "rankStandings refuses a table naming an entrant twice"
+      }
+    ]
   }
 ]

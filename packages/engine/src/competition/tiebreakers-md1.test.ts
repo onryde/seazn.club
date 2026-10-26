@@ -165,6 +165,32 @@ describe("W2d T20 MD-1 — ratio keys: spec 05 §4.3 (0/0 is 0, 'no data') and t
 });
 
 describe("W2d T20 MD-1 — the guards behind the recorded equivalents (assumptions are guards)", () => {
+  it("buchholz refuses a negative cut, typed: a cut drops the lowest opponents' scores, so the cut-0 branch's equivalents assume none", () => {
+    const table = buildSwissTable(SWISS_ENTRANTS, SWISS_RESULTS);
+    for (const cut of [-1, -3]) {
+      expect(() => buchholz(table, "P", { cut })).toThrowError(expect.objectContaining({ code: "CONFIG_INVALID", data: { cut } }));
+      expect(() => buchholz(table, "P", { cut })).toThrow(/never negative/);
+    }
+    // the positive pair, from the hand count above (half-points): P's Buchholz 6, Cut-1 4
+    expect(buchholz(table, "P", { cut: 0 })).toBe(6);
+    expect(buchholz(table, "P", { cut: 1 })).toBe(4);
+    expect(buchholz(table, "P")).toBe(6);
+  });
+
+  it("rankStandings refuses a table naming an entrant twice, typed: one row per entrant is what bySeedThenId's id-tail equivalents assume", () => {
+    const cascade = ["points"] as const;
+    for (const rows of [[row("A", 3), row("B", 3), row("A", 1)], [row("B", 0), row("B", 0)]]) {
+      const twice = rows.find((r, i) => rows.findIndex((o) => o.entrantId === r.entrantId) !== i)!.entrantId;
+      expect(() => rankStandings(rows, { cascade: [...cascade] })).toThrowError(
+        expect.objectContaining({ code: "CONFIG_INVALID", data: { entrantId: twice } }),
+      );
+      expect(() => rankStandings(rows, { cascade: [...cascade] })).toThrow(/two rows/);
+    }
+    // the positive pair (distinct ids rank), and the empty table, which names nobody twice
+    expect(ids(rankStandings([row("A", 3), row("B", 3), row("C", 1)], { cascade: [...cascade] }).rows)).toEqual(["A", "B", "C"]);
+    expect(rankStandings([], { cascade: [...cascade] }).rows).toEqual([]);
+  });
+
   it("this runtime's sort asks the comparator only (later, earlier) and reads only whether the answer is negative — the premise of the V8-sort equivalents (counted, with a control)", () => {
     // stryker-equivalent.json records mutants that change only a comparator's NON-negative answers as the sort sees them:
     // sgn's negative arm and compareRatio's `lhs < rhs` arm (both under groupBySort's `-sgn(cmp)`), bySeedThenId's id
@@ -220,7 +246,7 @@ describe("W2d T20 MD-1 — the guards behind the recorded equivalents (assumptio
     expect(controlDiffer, "the control: a comparator wrong on a negative answer is seen").toBeGreaterThan(inputs / 2);
   });
 
-  it("no sport declares a metric keyed 'undefined' — metricOf's `key === undefined` arm (stryker-equivalent.json, tiebreakers.ts:331) reads the same as row.metrics[undefined] only while none does (every sport, counted)", () => {
+  it("no sport declares a metric keyed 'undefined' — metricOf's `key === undefined` arm (its stryker-equivalent.json row) reads the same as row.metrics[undefined] only while none does (every sport, counted)", () => {
     let metrics = 0;
     const visited = forEachSport(({ module }) => {
       for (const metric of module.metrics) {
