@@ -21,6 +21,7 @@ const KNOWN = [
   "w2cStageRules",
   "divisionSettings",
   "epochFloorOverride",
+  "registrationOpenFlow",
 ] as const;
 
 describe("SMOKE_ONLY — selectSmokeSuites (review R1)", () => {
@@ -76,7 +77,8 @@ describe("SMOKE_ONLY — selectSmokeSuites (review R1)", () => {
     // bracketFinish and walkoverCredit after that (format matrix W2b T18: their own orgs, nothing from SubsetCtx), and
     // streamOverlay after those (R2007 step 12: its own orgs too), then matchRoom (chess T14), arbiter (chess T15) and
     // onlineChessDesk (chess T16); w2cStageRules (own org) and divisionSettings (SubsetCtx.admin) after those (format
-    // matrix W2c T10), then epochFloorOverride (engine-split 5.6, override review I2: its own org, nothing from SubsetCtx).
+    // matrix W2c T10), then epochFloorOverride (engine-split 5.6, override review I2: its own org, nothing from SubsetCtx),
+    // then registrationOpenFlow (email outbox phase 3 T13: its own org and its own sign-in, nothing from SubsetCtx).
     const block = /const SELECTABLE_SUITES\b[\s\S]*?=\s*\{([\s\S]*?)\n\};/.exec(src)?.[1] ?? "";
     const names = [...block.matchAll(/^\s*(\w+):/gm)].map((m) => m[1]);
     expect(names.length, "the registry block was found and read").toBeGreaterThan(0);

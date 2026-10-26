@@ -8998,6 +8998,42 @@ async function checkSignInOutbox(email: string): Promise<void> {
   }
 }
 
+/** Email outbox, phase 3 (Task 13): the same three assertions as `checkSignInOutbox`, for any kind, keyed by the row's ref instead
+ *  of the address. Exactly one row carries (kind, ref); its first attempt has been made (neither `queued` nor `sending`); and no
+ *  sealed body is left on it. A producer that queues after the response makes its first attempt after it too, so the row is polled
+ *  (up to 20 s) until it has left `queued`/`sending` - a row still waiting at the end is the failure, not a reason to wait longer.
+ *  The smoke server has no Resend key, so a settled row is `dead` (`no_api_key`); one that can send would be `sent`. Either way
+ *  it holds no body. */
+async function checkOutboxRow(kind: string, refType: string, refId: string): Promise<void> {
+  const url = process.env.DATABASE_URL;
+  if (!url) return; // keyless run: nothing to assert against
+  const isLocal = /@(localhost|127\.0\.0\.1)[:/]/.test(url);
+  const sql = postgres(url, {
+    connection: { search_path: process.env.DB_SCHEMA ?? "seazn_club" },
+    ssl: process.env.DATABASE_SSL === "disable" ? false : isLocal ? false : "require",
+    prepare: !url.includes(":6543"),
+    max: 1,
+  });
+  try {
+    const deadline = Date.now() + 20_000;
+    let rows: { status: string; cleared: boolean }[] = [];
+    for (;;) {
+      rows = await sql<{ status: string; cleared: boolean }[]>`
+        select status, body_sealed is null as cleared
+          from email_outbox
+         where kind = ${kind} and ref_type = ${refType} and ref_id = ${refId}`;
+      const settled = rows.length > 0 && rows.every((r) => !["queued", "sending"].includes(r.status));
+      if (settled || Date.now() >= deadline) break;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    check(`${kind}: one outbox row for the ref`, rows.length === 1);
+    check(`${kind}: its first attempt was made (not waiting)`, !!rows[0] && !["queued", "sending"].includes(rows[0].status));
+    check(`${kind}: no sealed body is left on the row`, rows[0]?.cleared === true);
+  } finally {
+    await sql.end();
+  }
+}
+
 /** Flip the staff-console flag on a user — same SQL-flip convention as
  *  setPlan/setConnect (design/v7 PROMPT-51). */
 async function setStaff(email: string, role: "superadmin" | null): Promise<void> {
@@ -23448,6 +23484,7 @@ const SELECTABLE_SUITES: Record<string, (c: SubsetCtx) => Promise<void>> = {
   w2cStageRules: () => w2cStageRulesSuite(),
   divisionSettings: (c) => divisionSettingsSuite(c.admin),
   epochFloorOverride: () => epochFloorOverrideSuite(),
+  registrationOpenFlow: () => registrationOpenFlowSuite(),
 };
 
 /** The subset's setup: the same calls main() makes for this state, in main()'s order — the admin sign-in, the plan
@@ -24342,7 +24379,7 @@ async function registrationOpenFlowSuite(): Promise<void> {
     }),
   );
 
-  type SubmitOut = { entries: { registration_id: string; status: string }[] };
+  type SubmitOut = { group_id: string; entries: { registration_id: string; status: string }[] };
 
   // --- FREE path: auto approval + zero fee confirms INLINE, no approve() ---
   const freeDiv = v1data<{ id: string }>(
@@ -24394,6 +24431,9 @@ async function registrationOpenFlowSuite(): Promise<void> {
       (r) => r.id === freeOut.entries[0].registration_id && !!r.entrant_id,
     ),
   );
+
+  // The submit queued the cart's confirmation on the email outbox, keyed to the cart: one row, its first attempt made, no body kept.
+  await checkOutboxRow("registration_confirmation", "registration_group", freeOut.group_id);
 
   // --- Approval-required path: stays pending until the organiser approves ---
   const manualDiv = v1data<{ id: string }>(
