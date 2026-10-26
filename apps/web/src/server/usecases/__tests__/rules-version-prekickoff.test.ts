@@ -436,10 +436,11 @@ describe.skipIf(!HAS_DB)("X-SR-7 a take-back that reopens an event-less award: t
    *  lands and freezes it. `pick` reads the moved key off a cfg. */
   async function staleThenReload(b: Ko, id: string, pad: Awaited<ReturnType<typeof loadFixturePadCfg>>, pick: (cfg: unknown) => unknown, want: unknown) {
     expect(pick(pad.cfg), "premise: the pad was folding the old value").not.toEqual(want);
+    const format = await rulesLineNow(b.auth, id);
     await expect(scoreEvent(b.auth, id, start(pad.rulesVersion))).rejects.toMatchObject({
       status: 409,
       code: "FIXTURE_RULES_CHANGED",
-      extra: { rules_version: pad.rulesVersion + 1, format: await rulesLineNow(b.auth, id) },
+      extra: { rules_version: pad.rulesVersion + 1, format },
     });
     expect(await count(id), "the refused tap wrote nothing").toBe(0);
     expect(await snapshotOf(id), "and froze nothing").toBeNull();
