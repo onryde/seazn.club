@@ -7,6 +7,19 @@
 > - Task 0 re-took every **Anchors** pin at `e97823e4d8` (= origin/main `2e0deaa6c1` plus the W2d docs merge); they are marked **main@e97823e4d8**. They are still pins, not promises.
 > - The migration is **V472** (`V472__w2d_table_rules.sql`). Main's max is V471: V469 W2c (`fixture_rules_override`), V470 email-outbox, V471 all-stages-free.
 
+## PR split (owner, 2026-10-25/26)
+
+- W2d ships as **two PRs**.
+- **PR A** = Tasks 0–12, plus:
+  - **A14**: Task 14's DB-level producer→consumer seam tests for Tasks 0–12, without its API v1 parts, including the `gamePoints` and `winsCount` producer killers.
+  - **A-smoke**: in `scripts/smoke.ts`, a stage is pinned at generate, and two reloads give the same lots order.
+  - **A20**: the MD-1 Stryker sweep over PR A's engine files.
+  - **A21**: PR A's ship gates.
+- **PR B** = Tasks 13–21, branched from PR A.
+- **V472 is frozen** once PR A merges.
+- `scripts/w2d/post-deploy-pin.ts` is the one owner-run post-deploy script. Prod is idle, so run `--check` after the deploy, and run fix mode (a run without `--check`) only if a count is above 0.
+- The tennis player stat `nestedGamesOf` stays unchanged (owner).
+
 **Goal:** Every table stage ranks by its sport's real rules — outcome-keyed points (regulation, overtime, shoot-out, tie, no result), a per-stage tie-break order validated when it is saved, a stored drawing of lots, the sport's cross-group order — and once a stage is active its table can no longer move under anyone, including under this release.
 
 **Architecture:**
