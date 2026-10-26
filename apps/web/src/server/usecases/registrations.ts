@@ -69,6 +69,8 @@ import { audit } from "./audit";
 import { divisionPlaysOnline } from "@/server/external-play/online-play";
 import { effectivePolicy, readCameraPolicy, type CameraPolicy } from "@/server/external-play/camera-policy";
 import { onlineChessOffered } from "./external-play/online-chess-flag";
+import { isLichessRosterRefusal } from "./external-accounts";
+import { openRegistrationSeatGate, type SeatGate } from "./online-seat-gate";
 
 type Tx = postgres.TransactionSql;
 
@@ -946,6 +948,7 @@ export async function materialise(
   tx: Tx,
   reg: RegistrationRow,
   entrantKind: string,
+  seatGate?: SeatGate,
 ): Promise<string | null> {
   if (reg.entrant_id) return reg.entrant_id;
   // RS009 — a SOLO SIGN-UP is not a team of one, and must not become an
@@ -1042,6 +1045,15 @@ export async function materialise(
         is_captain: p.is_captain,
       });
     }
+  }
+  // The seat gate (online-seat-gate.ts): the roster this entrant now HOLDS - whoever the players resolved to, a person minted a
+  // moment ago included - must be able to play on an online division. Read back from the table rather than predicted from the
+  // player rows, so it cannot drift from what the branches above wrote; a refusal rolls the whole confirmation back. Passed by the
+  // doors that seat on a person's behalf (the organiser's approve / confirm / waive / mark-paid, a promotion that seats); the card
+  // webhook and the submit's own inline confirm do not pass it - the first has been paid, the second asked the registrant at submit.
+  if (seatGate) {
+    const seated = await tx<{ person_id: string }[]>`select person_id from entrant_members where entrant_id = ${entrant.id}`;
+    await seatGate.assertRoster(tx, reg.division_id, seated.map((m) => m.person_id));
   }
   await tx`
     update registrations
@@ -1173,15 +1185,62 @@ export async function promoteOldestWaitlisted(
   divisionId: string,
   settings: RegistrationSettingsRow | null,
   excludeId?: string,
+  seatGate?: SeatGate,
 ): Promise<RegistrationWithGroupRow | null> {
-  const [picked] = await tx<{ id: string; group_id: string }[]>`
-    select id, group_id from registrations
-    where division_id = ${divisionId} and status = 'waitlisted'
-      ${excludeId ? tx`and id <> ${excludeId}` : tx``}
-    order by coalesce(waitlisted_at, created_at), id limit 1
-    for update skip locked`;
-  if (!picked) return null;
-  return promoteWaitlistedRow(tx, picked.id, picked.group_id, settings);
+  // `skipped`: the candidates this call has passed over - `excludeId`, and (with a seat gate) every registrant whose seat the gate
+  // refused. A passed-over entry is left exactly as it was: still waitlisted, in its place, picked again by the NEXT freed spot.
+  const skipped: string[] = excludeId ? [excludeId] : [];
+  for (;;) {
+    const [picked] = await tx<{ id: string; group_id: string }[]>`
+      select id, group_id from registrations
+      where division_id = ${divisionId} and status = 'waitlisted'
+        ${skipped.length > 0 ? tx`and id <> all(${skipped})` : tx``}
+      order by coalesce(waitlisted_at, created_at), id limit 1
+      for update skip locked`;
+    if (!picked) return null;
+    if (!seatGate) return promoteWaitlistedRow(tx, picked.id, picked.group_id, settings);
+    // ONLINE division: the promotion seats the registrant at once (free, auto-approval - `promotionSeats`), and the seat gate may
+    // refuse them (no Lichess link that plays). That must neither fail the withdrawal / sweep / organiser act that freed the spot
+    // nor leave the head of the queue stuck: roll back just this attempt (its savepoint) and offer the spot to the next in line.
+    // Hold-and-notify is not an option - an entry promoted to `pending` WITHOUT a seat can never be confirmed on this kind of
+    // division (see the RS010 note on `promoteWaitlistedRow`).
+    try {
+      return await tx.savepoint((sp) => promoteWaitlistedRow(sp, picked.id, picked.group_id, settings, seatGate));
+    } catch (err) {
+      if (!isLichessRosterRefusal(err)) throw err;
+      log.warn(
+        { registrationId: picked.id, divisionId, code: err.code },
+        "registrations: waitlist promotion skipped a registrant who cannot be seated on an online division yet",
+      );
+      skipped.push(picked.id);
+    }
+  }
+}
+
+/** Whether promoting a waitlisted entry under these settings SEATS it at once: a free entry on an auto-approval division confirms
+ *  (and so materialises) on the spot. Every other promotion only opens a pay window or waits for the organiser, and seats nobody -
+ *  its seat is made later, by a door that carries its own seat gate. The one statement of the rule, read by `promoteWaitlistedRow`
+ *  to decide whether to materialise and by the callers that decide whether to open a gate. */
+export function promotionSeats(settings: RegistrationSettingsRow | null): settings is RegistrationSettingsRow {
+  return settings?.approval === "auto" && (settings.fee_cents ?? 0) === 0;
+}
+
+/** The seat gate for an AUTOMATIC promotion on `divisionId` (a withdrawal, an expiry, a lapsed pay window), or undefined when a
+ *  promotion there seats nobody. Opened out here, before the transaction that promotes. No `auth`: there is no one to ask the
+ *  online-chess flag as but the club. `settings` when the caller already has them. */
+export async function openPromotionSeatGate(
+  divisionId: string,
+  settings?: RegistrationSettingsRow | null,
+): Promise<SeatGate | undefined> {
+  const live = settings === undefined ? await loadSettings(sql, divisionId) : settings;
+  return promotionSeats(live) ? openRegistrationSeatGate({ divisionId }) : undefined;
+}
+
+/** The seat gate for an organiser door that seats ONE named registration (approve, confirm, waive, mark-paid, an explicit promote),
+ *  or undefined when there is no such registration (the door's own lookup answers 404). */
+export async function openRegistrationSeatGateFor(auth: AuthCtx, regId: string): Promise<SeatGate | undefined> {
+  const [row] = await sql<{ division_id: string }[]>`select division_id from registrations where id = ${regId}`;
+  return row ? openRegistrationSeatGate({ divisionId: row.division_id, registrationId: regId, auth }) : undefined;
 }
 
 /**
@@ -1251,6 +1310,7 @@ export async function promoteWaitlistedRow(
   regId: string,
   groupId: string,
   settings: RegistrationSettingsRow | null,
+  seatGate?: SeatGate,
 ): Promise<RegistrationWithGroupRow | null> {
   const feeCents = settings?.fee_cents ?? 0;
   const method = settings?.payment_method ?? "offline";
@@ -1312,8 +1372,8 @@ export async function promoteWaitlistedRow(
   // division sat at `pending` forever: no entrant materialised, never
   // counted toward the public entrant list, while `notifyPromoted` (below)
   // still emailed the registrant as if they were in.
-  if (settings?.approval === "auto" && feeCents === 0) {
-    await materialise(tx, row, settings.entrant_kind);
+  if (promotionSeats(settings)) {
+    await materialise(tx, row, settings.entrant_kind, seatGate);
     const [confirmed] = await tx<RegistrationWithGroupRow[]>`
       select ${regGroupCols(tx)}
       from registrations r join registration_groups g on g.id = r.group_id
@@ -4714,8 +4774,12 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
   }
   const settings = await loadSettings(sql, reg.division_id);
   const ctx = await divisionCtx(sql, reg.division_id);
+  // The spot this frees goes to the waitlist, and where that seats the next registrant at once the seat gate decides who
+  // (`promoteOldestWaitlisted`). Opened out here, before the transaction.
+  const seatGate = await openPromotionSeatGate(reg.division_id, settings);
 
   const outcome = (await sql.begin(async (tx) => {
+    if (seatGate) await seatGate.load(tx); // a superuser transaction: the link read needs no prelude
     // `for update` on the join locks both the entry AND its cart row — right
     // here, since the refund block below reads the cart's payment_intent_id.
     const [locked] = await tx<RegistrationWithGroupRow[]>`
@@ -4748,7 +4812,7 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
     // still-pending entry is correctly left untouched.
     await clearExpiresIfNoLongerNeeded(tx, locked.group_id, locked.id);
     const promoted = freedSpot
-      ? await promoteOldestWaitlisted(tx, reg.division_id, settings)
+      ? await promoteOldestWaitlisted(tx, reg.division_id, settings, undefined, seatGate)
       : null;
     await audit(tx, ctx.competition_id, ctx.org_id, "registration.withdrawn", {
       registration_id: reg.id,
@@ -5168,7 +5232,9 @@ export async function sweepRegistrations(
     order by g.expires_at
     limit 200`;
   for (const { id, division_id } of overdue) {
+    const seatGate = await openPromotionSeatGate(division_id);
     const outcome = (await sql.begin(async (tx) => {
+      if (seatGate) await seatGate.load(tx);
       const [locked] = await tx<RegistrationWithGroupRow[]>`
         select ${regGroupCols(tx)}
         from registrations r join registration_groups g on g.id = r.group_id
@@ -5200,7 +5266,7 @@ export async function sweepRegistrations(
       // excludes it), so its own expiry here must never trigger a waitlist
       // promotion. See freesTeamSlot's own doc comment.
       const promoted = freesTeamSlot(locked)
-        ? await promoteOldestWaitlisted(tx, division_id, settings)
+        ? await promoteOldestWaitlisted(tx, division_id, settings, undefined, seatGate)
         : null;
       await audit(tx, div.competition_id, div.org_id, "registration.expired", {
         registration_id: id,
@@ -5248,7 +5314,9 @@ export async function sweepRegistrations(
     order by r.promotion_expires_at
     limit 200`;
   for (const { id, division_id } of lapsing) {
+    const seatGate = await openPromotionSeatGate(division_id);
     const outcome = (await sql.begin(async (tx) => {
+      if (seatGate) await seatGate.load(tx);
       const [locked] = await tx<RegistrationWithGroupRow[]>`
         select ${regGroupCols(tx)}
         from registrations r join registration_groups g on g.id = r.group_id
@@ -5294,7 +5362,7 @@ export async function sweepRegistrations(
       // lapsed — see promoteOldestWaitlisted's own doc comment for why
       // `for update skip locked` alone cannot stop this call from
       // re-selecting it.
-      const promoted = await promoteOldestWaitlisted(tx, division_id, settings, id);
+      const promoted = await promoteOldestWaitlisted(tx, division_id, settings, id, seatGate);
       await audit(tx, div.competition_id, div.org_id, "registration.promotion_lapsed", {
         registration_id: id,
         promoted_registration_id: promoted?.id ?? null,
@@ -5872,6 +5940,8 @@ export async function confirmRegistration(auth: AuthCtx, regId: string): Promise
   // callback — see entitlement-freeze.ts. The set is keyed on the ORG, so it
   // needs no id the transaction has not read yet, and `assertNotFrozen` is pure.
   const frozen = await frozenCompetitionIds(auth.orgId);
+  // The seat gate, asked out here for the same reason (online-seat-gate.ts): confirming seats the registrant.
+  const seatGate = await openRegistrationSeatGateFor(auth, regId);
   const row = await withTenant(auth.orgId, async (tx) => {
     const reg = await orgReg(tx, regId);
     if (reg.status === "confirmed") return reg;
@@ -5894,13 +5964,13 @@ export async function confirmRegistration(auth: AuthCtx, regId: string): Promise
     const [div] = await tx<{ competition_id: string }[]>`
       select competition_id from divisions where id = ${reg.division_id}`;
     assertNotFrozen(frozen, div.competition_id);
-    await materialise(tx, reg, settings?.entrant_kind ?? "individual");
+    await materialise(tx, reg, settings?.entrant_kind ?? "individual", seatGate);
     await audit(tx, div.competition_id, auth.orgId, "registration.confirmed", {
       registration_id: regId,
       paid: reg.status === "paid",
     }, auth.userId);
     return orgRegAfter(tx, regId);
-  });
+  }, seatGate?.tenant);
   fireDivisionRevalidate(row.division_id);
   // RS008: fire-and-forget, strictly AFTER the transaction above has
   // committed. `row.entrant_id` is null on an early-return before
@@ -5923,6 +5993,7 @@ export async function markRegistrationPaidOffline(
   // callback — see entitlement-freeze.ts. The set is keyed on the ORG, so it
   // needs no id the transaction has not read yet, and `assertNotFrozen` is pure.
   const frozen = await frozenCompetitionIds(auth.orgId);
+  const seatGate = await openRegistrationSeatGateFor(auth, regId);
   const row = await withTenant(auth.orgId, async (tx) => {
     const reg = await orgReg(tx, regId);
     // RULING A (RS002 W5 review, BLOCKER): rejected is terminal from every
@@ -5954,13 +6025,13 @@ export async function markRegistrationPaidOffline(
       update registration_groups
       set offline_marked_paid_at = now(), offline_marked_paid_by = ${auth.userId}, updated_at = now()
       where id = ${reg.group_id}`;
-    await materialise(tx, { ...reg, status: "paid" }, settings?.entrant_kind ?? "individual");
+    await materialise(tx, { ...reg, status: "paid" }, settings?.entrant_kind ?? "individual", seatGate);
     await audit(tx, div.competition_id, auth.orgId, "registration.offline_paid", {
       registration_id: regId,
       amount_cents: reg.amount_cents,
     }, auth.userId);
     return orgRegAfter(tx, regId);
-  });
+  }, seatGate?.tenant);
   fireDivisionRevalidate(row.division_id);
   // RS008: fire-and-forget, strictly AFTER the transaction above has
   // committed — see confirmRegistration's identical wiring for why.
@@ -5978,6 +6049,7 @@ export async function confirmRegistrationWaived(
   // callback — see entitlement-freeze.ts. The set is keyed on the ORG, so it
   // needs no id the transaction has not read yet, and `assertNotFrozen` is pure.
   const frozen = await frozenCompetitionIds(auth.orgId);
+  const seatGate = await openRegistrationSeatGateFor(auth, regId);
   const row = await withTenant(auth.orgId, async (tx) => {
     const reg = await orgReg(tx, regId);
     if (reg.status === "confirmed") return orgRegAfter(tx, regId);
@@ -5995,13 +6067,13 @@ export async function confirmRegistrationWaived(
     const [div] = await tx<{ competition_id: string }[]>`
       select competition_id from divisions where id = ${reg.division_id}`;
     assertNotFrozen(frozen, div.competition_id);
-    await materialise(tx, reg, settings?.entrant_kind ?? "individual");
+    await materialise(tx, reg, settings?.entrant_kind ?? "individual", seatGate);
     await audit(tx, div.competition_id, auth.orgId, "registration.fee_waived", {
       registration_id: regId,
       fee_cents: settings?.fee_cents ?? 0,
     }, auth.userId);
     return orgRegAfter(tx, regId);
-  });
+  }, seatGate?.tenant);
   fireDivisionRevalidate(row.division_id);
   // RS008: fire-and-forget, strictly AFTER the transaction above has
   // committed — see confirmRegistration's identical wiring for why.

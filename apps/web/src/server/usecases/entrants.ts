@@ -38,6 +38,7 @@ import { log } from "@/server/logger";
 import { readOnlinePlay } from "@/server/external-play/online-play";
 import { onlineChessOffered } from "./external-play/online-chess-flag";
 import { assertPersonIdsLinkedForOnlinePlay, lichessLinkStatesByPerson, type LichessLinkState } from "./external-accounts";
+import { openRosterSeatGate } from "./online-seat-gate";
 
 type Tx = postgres.TransactionSql;
 type MemberInput = z.infer<typeof EntrantMemberInput>;
@@ -859,6 +860,15 @@ export async function patchEntrant(
   id: string,
   patch: PatchEntrant,
 ): Promise<EntrantWithMembers> {
+  // A roster replace seats people: on an online division each must hold a Lichess link that plays, as `createEntrants` demands.
+  // Asked out here, before the transaction (see online-seat-gate.ts); a patch that names no roster seats nobody and asks nothing.
+  const [home] = patch.members
+    ? await sql<{ division_id: string }[]>`select division_id from entrants where id = ${id}`
+    : [];
+  const seatGate =
+    patch.members && home
+      ? await openRosterSeatGate(auth, { divisionId: home.division_id, personIds: patch.members.map((m) => m.person_id) })
+      : undefined;
   const { out, fieldChanged, refresh } = await withTenant(auth.orgId, async (tx) => {
     // RS011: `eligibility_override` is request metadata for the gate below,
     // never an `entrants` column — destructured out alongside `members` so
@@ -890,6 +900,7 @@ export async function patchEntrant(
       // (kind itself isn't patchable, so only the roster is being written).
       const eff = await loadEntrantShape(tx, row.division_id);
       assertRosterFits(eff, row.kind, members.length);
+      await seatGate?.assertRoster(tx, row.division_id, members.map((m) => m.person_id));
       // The name follows the roster (2026-09-22, reported from production:
       // "Sankar & Ritwik" kept that name after Ritwik was swapped out) — but
       // only an AD-HOC entrant's, and only when this patch does not name it
@@ -946,7 +957,7 @@ export async function patchEntrant(
       fieldChanged,
       refresh: await entrantPublicScope(tx, row),
     };
-  });
+  }, seatGate?.tenant);
   // Before this, an entrant patch refreshed nothing, so a rename (or a roster,
   // seed, status or badge edit) reached the public pages only when their 30s
   // cache ran out.
@@ -981,6 +992,11 @@ export async function syncEntrantRosterFromSquad(
   id: string,
   override?: EligibilityOverride | null,
 ): Promise<CreatedEntrant & { members: unknown[] }> {
+  // The squad replaces the roster, so its people are seated: on an online division each must hold a link that plays. The squad is
+  // only read inside the transaction, so the gate reads the org's links (as `createEntrants` does for a squad-seeded roster).
+  const [home] = await sql<{ division_id: string; team_id: string | null }[]>`
+    select division_id, team_id from entrants where id = ${id}`;
+  const seatGate = home?.team_id ? await openRosterSeatGate(auth, { divisionId: home.division_id }) : undefined;
   const { out, refresh } = await withTenant(auth.orgId, async (tx) => {
     const [row] = await tx<EntrantRow[]>`select ${tx(COLS)} from entrants where id = ${id}`;
     if (!row) throw new HttpError(404, "entrant not found");
@@ -998,6 +1014,7 @@ export async function syncEntrantRosterFromSquad(
     );
     const eff = await loadEntrantShape(tx, row.division_id);
     assertRosterFits(eff, row.kind, members.length);
+    await seatGate?.assertRoster(tx, row.division_id, members.map((m) => m.person_id));
     await tx`delete from entrant_members where entrant_id = ${id}`;
     const warnings = await insertMembers(tx, id, members, {
       divisionId: row.division_id,
@@ -1014,7 +1031,7 @@ export async function syncEntrantRosterFromSquad(
       },
       refresh: await entrantPublicScope(tx, row),
     };
-  });
+  }, seatGate?.tenant);
   refreshEntrantPublicPages(refresh, { entrantId: id, synced: true });
   return out;
 }
