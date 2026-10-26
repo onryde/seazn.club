@@ -4,7 +4,7 @@
 // over has to be the ONLY one, and has to stay free of app rendering. This file keeps these claims, by reading the source (no runner,
 // no database):
 //
-//  1. Allowlist. The `send*` exports of lib/email.ts are exactly the typed list in _kind-senders.ts (49). A new `send*` is a new direct
+//  1. Allowlist. The `send*` exports of lib/email.ts are exactly the typed list in _kind-senders.ts (49 at the start of wave 1, one fewer per kind that has moved). A new `send*` is a new direct
 //     sender, and adding one is a decision this test makes someone take on purpose. Each kind that moves to the outbox (T8-T12) deletes
 //     its `send*` in the same commit as it adds its enqueue, and removes its name there.
 //  2. Imports. Nothing outside the outbox's tests, lib/email.ts itself and that module's own unit test imports `deliver`,
@@ -12,7 +12,9 @@
 //     relative path, a re-export, a namespace import, a dynamic import).
 //  3. The outbox's own production files are pinned file by file, not exempted by directory: the only two that touch the gated
 //     names are attempt.ts (the gate and the transport) and transport.ts (the wire function), and no outbox file imports anything else
-//     from lib/email (a render builder in dispatch or the worker is exactly what phase 4 cannot carry across).
+//     from lib/email (a render builder in dispatch or the worker is exactly what phase 4 cannot carry across). Those two may CALL what
+//     they import and nothing else: a local re-export, a default export, a copy or an argument is a second way out the import pin
+//     cannot see.
 //  4. Resend. Exactly one production file, lib/email.ts, names `api.resend.com`; none imports a mail SDK; and the key that authorises a
 //     send (RESEND_API_KEY) is named in exactly the four production files that need it, so a second provider (a host built at run time,
 //     another vendor) has to touch this list. Tests name the host legitimately (a fetch stub answers for it), so they are not scanned
@@ -23,7 +25,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, posix, relative, resolve } from "node:path";
-import { SENDER_ALLOWLIST } from "./_kind-senders";
+import { allowlistLengthFor, NOT_YET_MOVED, SENDER_ALLOWLIST } from "./_kind-senders";
 
 const SRC = resolve(import.meta.dirname, "../../.."); // apps/web/src
 const rel = (abs: string): string => relative(SRC, abs).split("\\").join("/");
@@ -86,10 +88,10 @@ describe("1. the send* allowlist", () => {
     expect(senderExports(src).sort()).toEqual(["sendArrow", "sendNewThingEmail", "sendSyncOne", "sendTyped"]);
   });
 
-  it("lib/email.ts exports exactly the typed list: 49 senders, none added and none dropped", () => {
+  it("lib/email.ts exports exactly the typed list (the spec's 49, less one for each kind that has moved to the outbox), none added and none dropped", () => {
     const found = senderExports(read("lib/email.ts"));
     expect(new Set(found).size, "premise: no name is exported twice").toBe(found.length);
-    expect(SENDER_ALLOWLIST, "the spec says 49 send* exports").toHaveLength(49);
+    expect(SENDER_ALLOWLIST, "the spec says 49 send* exports at the start of wave 1; each kind that moves takes its own with it").toHaveLength(allowlistLengthFor(NOT_YET_MOVED.length));
     expect(found.length, "anti-vacuity: the file was read and its senders found").toBeGreaterThan(0);
     expect([...found].sort()).toEqual([...SENDER_ALLOWLIST].sort());
   });
@@ -157,16 +159,83 @@ function opensInCommentOrString(linePrefix: string): boolean {
   return quote !== null || /^\s*\*/.test(linePrefix);
 }
 
+/** The index just past the string literal that opens at `open` (a quote of any kind), or the end of the source when it never closes. */
+function stringEnd(source: string, open: number): number {
+  const quote = source[open]!;
+  for (let i = open + 1; i < source.length; i++) {
+    if (source[i] === "\\") i += 1;
+    else if (source[i] === quote) return i + 1;
+  }
+  return source.length;
+}
+
+/** If a string or a comment opens at `i`, the index of its last character; otherwise `i`. */
+function skipLiteral(source: string, i: number): number {
+  const c = source[i];
+  if (c === '"' || c === "'" || c === "`") return stringEnd(source, i) - 1;
+  if (c === "/" && source[i + 1] === "/") {
+    const nl = source.indexOf("\n", i);
+    return nl < 0 ? source.length : nl;
+  }
+  if (c === "/" && source[i + 1] === "*") {
+    const end = source.indexOf("*/", i + 2);
+    return end < 0 ? source.length : end + 1;
+  }
+  return i;
+}
+
+/** The positions of the brackets (`(`, `{`, `[`) still open at `to`, scanning from `from` and skipping strings and comments. */
+function bracketsOpenAt(source: string, from: number, to: number): number[] {
+  const stack: number[] = [];
+  for (let i = from; i < to; i++) {
+    i = skipLiteral(source, i);
+    const c = source[i];
+    if (c === "(" || c === "{" || c === "[") stack.push(i);
+    else if (c === ")" || c === "}" || c === "]") stack.pop();
+  }
+  return stack;
+}
+
+/** The position of the bracket that closes the one opened at `open`, or -1 when it never closes. */
+function closingBracket(source: string, open: number): number {
+  let depth = 0;
+  for (let i = open; i < source.length; i++) {
+    i = skipLiteral(source, i);
+    const c = source[i];
+    if (c === "(" || c === "{" || c === "[") depth += 1;
+    else if ((c === ")" || c === "}" || c === "]") && --depth === 0) return i;
+  }
+  return -1;
+}
+
+/**
+ * Whether the position `at` is inside the object literal that a `vi.mock` / `vi.doMock` factory hands to vitest: the object after
+ * `return` or after `=> (`, directly inside that call's arguments (`vi.mock("@/lib/email", async () => { const actual = ...; return
+ * { ...actual, sendX: vi.fn() }; })`). That is the one place a spread of the real module is the idiom (a partial mock) and it goes
+ * nowhere but into the mock; the same spread kept in a variable, passed on, or returned from an ordinary function is a copy of every
+ * export, the gated ones included.
+ */
+function inMockFactoryResult(source: string, at: number): boolean {
+  for (const call of source.matchAll(/\bvi\s*\.\s*(?:mock|doMock)\s*\(/g)) {
+    const open = call.index + call[0].length - 1;
+    if (open >= at || closingBracket(source, open) < at) continue; // `at` is not inside this call
+    const enclosing = bracketsOpenAt(source, open + 1, at).pop();
+    return enclosing !== undefined && source[enclosing] === "{" && /(?:\breturn\s*\(?\s*|=>\s*\(\s*)$/.test(source.slice(0, enclosing));
+  }
+  return false;
+}
+
 /**
  * Every use of `ident` in `source` other than as `ident.<name>` with a name that is not gated: the declaration itself, a comment
  * mention, and a member of a name that is not gated are all fine; a gated member, a member that is not a plain name (`ident[name]`,
- * `ident.default`) and any bare use (`const { deliver } = ident`, `export default ident`, `use(ident)`) are not, because each can carry a
+ * `ident.default`) and any bare use (`const { deliver } = ident`, `export default ident`, `use(ident)`, `{ ...ident }`) are not, because each can carry a
  * gated function out of the module under another name.
  */
 function usesOf(source: string, ident: string, spec: string): string[] {
   const out: string[] = [];
   const escaped = ident.replace(/\$/g, "\\$");
-  for (const m of source.matchAll(new RegExp(`(?<![\\w$.])${escaped}(?![\\w$])`, "g"))) {
+  // Not a member of something else (`a.ident`), but `...ident` is a SPREAD of it, which copies every export: the `.` there is no access.
+  for (const m of source.matchAll(new RegExp(`(?<![\\w$])(?:(?<!\\.)|(?<=\\.\\.\\.))${escaped}(?![\\w$])`, "g"))) {
     const at = m.index;
     const before = source.slice(0, at);
     const after = source.slice(at + ident.length);
@@ -176,6 +245,13 @@ function usesOf(source: string, ident: string, spec: string): string[] {
     // A mention in a comment or a string (prose that happens to use the name) is not a use.
     if (opensInCommentOrString(before.slice(before.lastIndexOf("\n") + 1))) continue;
     const member = /^\s*\??\.\s*([A-Za-z_$][\w$]*)/.exec(after) ?? /^\s*\[\s*["']([^"']+)["']\s*\]/.exec(after);
+    const spread = /\.\.\.\s*$/.test(before);
+    if (spread && !member) {
+      // `{ ...ident }` / `[...ident]` copies every export. The partial-mock idiom (the object a vi.mock factory returns) is the one
+      // place that copy goes nowhere.
+      if (!inMockFactoryResult(source, at)) out.push(`spreads ${ident} (the module ${spec}): a copy holds every export, the gated ones included`);
+      continue;
+    }
     if (member) {
       if (GATED_NAMES.includes(member[1]!)) out.push(`uses ${ident}.${member[1]} from ${spec}`);
       else if (member[1] === "default") out.push(`reads ${ident}.default from ${spec} (it could hold a gated function)`);
@@ -186,11 +262,77 @@ function usesOf(source: string, ident: string, spec: string): string[] {
   return out;
 }
 
+/** What may sit between a binding and a run-time load: `= `, `= await `, `= (await `, `= vi.` (the text before `import(` / `require(` / `importActual(`). */
+const ASSIGN_TAIL = String.raw`\s*(?<![=!<>])=\s*(?:\(\s*|await\s+)*(?:vi\s*\.\s*)?$`;
+/** An object pattern, with up to two levels of nested braces: `{ a, b: { c } }`. */
+const OBJECT_PATTERN = String.raw`\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\}`;
+/** The four ways a run-time load is bound, each read off the text before it (anchored at the end): a declaration anchors on its keyword,
+ *  an assignment to a name declared elsewhere has none. A declaration may carry a type annotation; an assignment cannot. */
+const LOAD_TARGET = {
+  declaredPattern: new RegExp(String.raw`\b(?:const|let|var)\s+(${OBJECT_PATTERN})\s*(?::[^=;]+)?` + ASSIGN_TAIL),
+  declaredName: new RegExp(String.raw`\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=;]+)?` + ASSIGN_TAIL),
+  assignedPattern: new RegExp(String.raw`(?<![\w$.])(${OBJECT_PATTERN})` + ASSIGN_TAIL),
+  assignedName: new RegExp(String.raw`(?<![\w$.])([A-Za-z_$][\w$]*)` + ASSIGN_TAIL),
+};
+
+/** The entries of an object pattern `{ a, b: c, ...rest, "d": e, [f]: g }`, split on the commas that are not inside a nested bracket. */
+function patternEntries(pattern: string): string[] {
+  const entries: string[] = [];
+  let depth = 0;
+  let start = 1;
+  for (let i = 1; i < pattern.length - 1; i++) {
+    const c = pattern[i]!;
+    if (c === "{" || c === "[" || c === "(") depth += 1;
+    else if (c === "}" || c === "]" || c === ")") depth -= 1;
+    else if (c === "," && depth === 0) {
+      entries.push(pattern.slice(start, i));
+      start = i + 1;
+    }
+  }
+  entries.push(pattern.slice(start, pattern.length - 1));
+  return entries.map((e) => e.trim()).filter((e) => e !== "");
+}
+
+/** What one entry of a pattern destructured off a run-time load takes: a gated key (plain or quoted), a rest, or a computed key (which
+ *  could name anything). Null when it takes nothing gated. */
+function patternOffence(entry: string, spec: string): string | null {
+  if (entry.startsWith("...")) return `collects the rest of the run-time load of ${spec} (${entry}): it could hold a gated name`;
+  if (entry.startsWith("[")) return `destructures a computed key (${entry}) from the run-time load of ${spec}: it could name a gated function`;
+  const key = /^(?:["']([^"']+)["']|([A-Za-z_$][\w$]*))/.exec(entry);
+  const name = key?.[1] ?? key?.[2];
+  return name !== undefined && GATED_NAMES.includes(name) ? `destructures ${name} from the run-time load of ${spec}` : null;
+}
+
+/**
+ * Every use of a gated name that this file IMPORTED other than a call. The two files allowed to import one (the outbox's attempt.ts and
+ * transport.ts) may call it and nothing else: `export { deliver as rawSend }`, `export default deliver`, `const send = deliver`,
+ * `register(deliver)` and `deliver.bind(null)` each hand the function to code that is not behind the pin. A type query
+ * (`typeof deliver`), a property key of that name (`{ deliver: 1 }`), a member of another object (`t.deliver`) and a mention in a
+ * comment or a string are not uses. `masked` is the source with its import statements blanked out, so the import itself is not read.
+ */
+function valueUsesOf(masked: string, local: string, spec: string): string[] {
+  const out: string[] = [];
+  const escaped = local.replace(/\$/g, "\\$");
+  for (const m of masked.matchAll(new RegExp(`(?<![\\w$.])${escaped}(?![\\w$])`, "g"))) {
+    const before = masked.slice(0, m.index);
+    const after = masked.slice(m.index + local.length);
+    if (opensInCommentOrString(before.slice(before.lastIndexOf("\n") + 1))) continue;
+    if (/\btypeof\s+$/.test(before)) continue;
+    if (/^\s*(?:<[^<>()]*>)?\s*(?:\?\.)?\(/.test(after)) continue; // a call: f(...), f<T>(...), f?.(...)
+    if (/^\s*:/.test(after) && /[{,]\s*$/.test(before)) continue; // a property key: { f: 1 }
+    out.push(`hands on ${local} (imported from ${spec}) as a value: a gated name may only be called where it is imported`);
+  }
+  return out;
+}
+
 /** What one file does with the gated and render modules. */
 function scanImports(source: string, fromRel: string): Scan {
   const offences: string[] = [];
   const renderImports: string[] = [];
   let gatedModuleImports = 0;
+  /** Where each import / export-from statement sits, and the local binding of every gated name imported (a value import only). */
+  const statementRanges: Array<[number, number]> = [];
+  const gatedLocals: Array<{ local: string; spec: string }> = [];
 
   // import / export ... from "spec" (multi-line clauses included), after a `;`, a line start, or block comments on the same line. `import
   // type` / `export type` are erased and cannot call anything. A comment inside the clause may hold quotes and the words import and
@@ -203,6 +345,7 @@ function scanImports(source: string, fromRel: string): Scan {
   );
   for (const m of source.matchAll(statement)) {
     const [, keyword, typeOnly, rawClause = "", spec = ""] = m;
+    statementRanges.push([m.index, m.index + m[0].length]);
     const mod = moduleOf(spec, fromRel);
     if (mod === null) continue;
     const gatedMod = isGatedModule(mod);
@@ -230,18 +373,34 @@ function scanImports(source: string, fromRel: string): Scan {
     for (const token of (braces?.[1] ?? "").split(",")) {
       const t = token.trim();
       if (t === "" || /^type\s/.test(t)) continue; // an inline `type X` is erased and cannot call anything
-      const name = t.split(/\s+as\s+/)[0]!.trim();
-      if (GATED_NAMES.includes(name)) offences.push(`${keyword === "import" ? "imports" : "re-exports"} ${name} from ${spec}`);
+      const [name = "", alias] = t.split(/\s+as\s+/).map((part) => part.trim());
+      if (GATED_NAMES.includes(name)) {
+        offences.push(`${keyword === "import" ? "imports" : "re-exports"} ${name} from ${spec}`);
+        if (keyword === "import") gatedLocals.push({ local: alias ?? name, spec });
+      }
       if (renderMod) renderImports.push(`${mod}:${name}`);
     }
+  }
+  // A gated name that IS imported (the outbox's two pinned files) may be called there and nothing else: the pin sees the import, and
+  // this sees the local binding leave the file as a value (a local re-export, a default export, a copy, an argument).
+  if (gatedLocals.length > 0) {
+    let masked = source;
+    for (const [from, to] of statementRanges) masked = masked.slice(0, from) + masked.slice(from, to).replace(/[^\n]/g, " ") + masked.slice(to);
+    for (const { local, spec } of gatedLocals) offences.push(...valueUsesOf(masked, local, spec));
   }
 
   // import("spec"), require("spec"), vi.importActual("spec"): a run-time load, judged by what is DONE with it: a gated name read straight
   // off the call, destructured from it (or collected with a rest), picked in a `.then`, or the variable it is bound to used in any way
   // `usesOf` refuses. Loading the module for something else (the status reader, a type) is not a bypass. `typeof import("spec")` is a
   // type query and is erased.
+  // import("spec"), require("spec"), vi.importActual("spec"): a run-time load, judged by what is DONE with it: a gated name read straight
+  // off the call, destructured from it (or collected with a rest), picked in a `.then`, or the variable it is bound to used in any way
+  // `usesOf` refuses. Loading the module for something else (the status reader, a type) is not a bypass. `typeof import("spec")` is a
+  // type query and is erased. WHAT THE LOAD IS ASSIGNED TO is read off the text just before it, and only off the text just before it:
+  // the declaration keyword (`const` / `let` / `var`) anchors a declaration, so the nearest `{` (a function body, a mock factory) or the
+  // nearest name before the `=` (a typed parameter) is never taken for the binding; an assignment to a name declared elsewhere is read
+  // separately, and only when no declaration was found.
   const dynamic = /(?<!typeof\s+)(?:\bimport|\brequire|\bimportActual)\s*(?:<[^>]*>)?\(\s*["']([^"']+)["']\s*\)/g;
-  const tail = String.raw`\s*(?::[^=;]+)?(?<![=!<>])=\s*(?:\(\s*|await\s+)*(?:vi\s*\.\s*)?$`;
   for (const m of source.matchAll(dynamic)) {
     const spec = m[1]!;
     const mod = moduleOf(spec, fromRel);
@@ -257,17 +416,16 @@ function scanImports(source: string, fromRel: string): Scan {
     if (renderMod) renderImports.push(`${mod}:(run-time load)`);
     if (new RegExp(`^\\s*\\)?\\s*\\??\\.\\s*(?:${GATED})\\b`).test(after)) offences.push(`reads a gated name off the run-time load of ${spec}`);
     if (new RegExp(`^\\s*\\.\\s*then\\s*\\([^]{0,200}?\\b(?:${GATED})\\b`).test(after)) offences.push(`picks a gated name in a .then of ${spec}`);
-    const destructured = new RegExp(String.raw`(\{[^}]*\})` + tail).exec(before);
-    const bound = new RegExp(String.raw`(?<![\w$.])([A-Za-z_$][\w$]*)` + tail).exec(before);
-    if (destructured) {
-      for (const token of destructured[1]!.slice(1, -1).split(",")) {
-        const t = token.trim();
-        if (t.startsWith("...")) offences.push(`collects the rest of the run-time load of ${spec} (${t}): it could hold a gated name`);
-        else if (GATED_NAMES.includes(t.split(":")[0]!.trim())) offences.push(`destructures ${t.split(":")[0]!.trim()} from the run-time load of ${spec}`);
+    const pattern = LOAD_TARGET.declaredPattern.exec(before)?.[1] ?? LOAD_TARGET.assignedPattern.exec(before)?.[1];
+    if (pattern !== undefined) {
+      for (const entry of patternEntries(pattern)) {
+        const offence = patternOffence(entry, spec);
+        if (offence !== null) offences.push(offence);
       }
-    } else if (bound) {
-      offences.push(...usesOf(source, bound[1]!, spec));
+      continue;
     }
+    const bound = LOAD_TARGET.declaredName.exec(before)?.[1] ?? LOAD_TARGET.assignedName.exec(before)?.[1];
+    if (bound !== undefined) offences.push(...usesOf(source, bound, spec));
   }
   return { offences, gatedModuleImports, renderImports };
 }
@@ -360,6 +518,37 @@ describe("2. nothing outside the outbox imports the gated functions", () => {
       "an apostrophe in a comment inside the clause": `import {\n  sendInviteEmail, // don't\n  deliver,\n} from "@/lib/email";`,
       "a block comment with a quote inside the clause": `import { /* it's */ deliver } from "@/lib/email";`,
       "a comment that says export inside the clause": `import {\n  // export it\n  deliver,\n} from "@/lib/email";`,
+      // A run-time load is rarely at the top of a file. These sit INSIDE something: each `import(...)` below is only an offence because of
+      // what the code around it does with the result, and a scanner that reads the nearest `{` or the nearest name before the `=` finds
+      // the function body or the typed parameter instead of the binding (the bound name then resolves to `opts`, which nothing uses).
+      "a dynamic import in a function body, destructured": `async function f() {\n  const { deliver } = await import("@/lib/email");\n  return deliver;\n}`,
+      "a dynamic import after a typed parameter, bound then used": `async function f(opts: T) {\n  const m = await import("@/lib/email");\n  m.deliver(x);\n}`,
+      "a dynamic import in an arrow with a typed parameter": `const f = async (opts: Opts) => {\n  const m = await import("@/lib/email");\n  await m.sendWithResult(o);\n};`,
+      "a dynamic import in a method with a typed parameter and return": `class A {\n  async go(opts: T): Promise<void> {\n    const m = await import("@/lib/email");\n    await m.checkSendable(o);\n  }\n}`,
+      "a dynamic import after a typed parameter with an object default": `async function f(opts: { a: number } = { a: 1 }) {\n  const { deliver } = await import("@/lib/email");\n}`,
+      "a dynamic import in a nested block": `async function f(ok: boolean) {\n  if (ok) {\n    const { claimOne } = await import("@/server/email-outbox/worker");\n  }\n}`,
+      "a vi.mock factory, importActual destructured": `vi.mock("@/x", async () => {\n  const { deliver } = await vi.importActual("@/lib/email");\n  return { deliver };\n});`,
+      "a vi.mock factory, importActual bound then used": `vi.mock("@/x", async () => {\n  const actual = await vi.importActual("@/lib/email");\n  return { send: actual.deliver };\n});`,
+      "a vi.mock factory, a generic importActual destructured": `vi.mock("@/x", async () => {\n  const { sendWithResult } = await vi.importActual<typeof import("@/lib/email")>("@/lib/email");\n  return {};\n});`,
+      "a vi.mock factory, a require": `vi.mock("@/x", () => {\n  const { checkSendable } = require("@/lib/email");\n  return {};\n});`,
+      "a require in a function body, with a rest": `function f() {\n  const { ...rest } = require("@/lib/email");\n  return rest;\n}`,
+      "a dynamic import in a function body, assigned to an outer let": `let m;\nasync function f(opts: T) {\n  m = await import("@/lib/email");\n  m.deliver(x);\n}`,
+      "a dynamic import in a function body, destructured by assignment": `async function f() {\n  let deliver;\n  ({ deliver } = await import("@/lib/email"));\n}`,
+      "a dynamic import, destructured with a string key": `const { "deliver": post } = await import("@/lib/email");`,
+      "a dynamic import, destructured with a computed key": `const { [name]: fn } = await import("@/lib/email");`,
+      "a dynamic import, destructured with a type annotation": `const { deliver }: Mail = await import("@/lib/email");`,
+      "a dynamic import, destructured with a nested pattern before the gated key": `const { sendInviteEmail: { length }, deliver } = await import("@/lib/email");`,
+      "a dynamic import, destructured by assignment at the top": `let deliver;\n({ deliver } = await import("@/lib/email"));`,
+      // A spread copies every export of the module, the gated ones included; the `.` in `...ns` is not a member access.
+      "a namespace import, spread into an object": `import * as mail from "@/lib/email";\nconst all = { ...mail };\nall.deliver(m, key);`,
+      "a namespace import, spread into an array": `import * as mail from "@/lib/email";\nconst all = [...mail];`,
+      "a dynamic import, bound then spread": `const m = await import("@/lib/email");\nconst all = { ...m, extra: 1 };`,
+      "a dynamic import in a function, bound then spread": `async function f(opts: T) {\n  const m = await import("@/lib/email");\n  return { ...m };\n}`,
+      "a spread returned from an ordinary function": `import * as mail from "@/lib/email";\nexport function copy() {\n  return { ...mail };\n}`,
+      "a spread kept in a variable inside a mock factory": `vi.mock("@/x", async () => {\n  const actual = await vi.importActual("@/lib/email");\n  const all = { ...actual };\n  return {};\n});`,
+      "a spread passed on from inside a mock factory": `vi.mock("@/x", async () => {\n  const actual = await vi.importActual("@/lib/email");\n  register({ ...actual });\n  return {};\n});`,
+      "an array spread inside a mock factory": `vi.mock("@/x", async () => {\n  const actual = await vi.importActual("@/lib/email");\n  const all = [...actual];\n  return {};\n});`,
+      "a spread returned from a function that follows a mock call": `vi.mock("@/lib/email", () => ({}));\nconst actual = await vi.importActual("@/lib/email");\nfunction leak() {\n  return { ...actual };\n}`,
     };
     let checked = 0;
     for (const [name, src] of Object.entries(forms)) {
@@ -367,7 +556,7 @@ describe("2. nothing outside the outbox imports the gated functions", () => {
       checked += 1;
     }
     expect(checked, "anti-vacuity: every form was tried").toBe(Object.keys(forms).length);
-    expect(checked).toBeGreaterThanOrEqual(40);
+    expect(checked).toBeGreaterThanOrEqual(70);
   });
 
   it("the scanner leaves legal imports alone (a negative needs its positive pair, above)", () => {
@@ -397,6 +586,25 @@ describe("2. nothing outside the outbox imports the gated functions", () => {
       "a type alias off a dynamic import": `type Mail = import("@/lib/email").TrialEndingEmail;\nconst f = vi.fn(async (o: Mail) => Boolean(o.to));`,
       "the bound name in a string and a comment": `const real = await vi.importActual("@/server/email-outbox/status");\n// the real read\nexpect(x, "premise: the real open").toBe(1);\nawait real.latestEmailStatus(a);`,
       "an object that happens to have a deliver key": `const t = { deliver: vi.fn() };\nawait t.deliver(m, k);`,
+      // The same run-time loads INSIDE a function, a method and a mock factory, doing nothing gated: the nearest `{` and the nearest name
+      // before the `=` must not be mistaken for the binding in the other direction either.
+      "a function body, a sender only": `async function f(opts: T) {\n  const m = await import("@/lib/email");\n  m.sendInviteEmail(x);\n}`,
+      "a function body, senders destructured": `async function f() {\n  const { sendInviteEmail, magicLinkEmail } = await import("@/lib/email");\n  return [sendInviteEmail, magicLinkEmail];\n}`,
+      "a typed parameter that happens to be called deliver": `async function f(deliver: Fn) {\n  const m = await import("@/lib/email");\n  m.sendInviteEmail(deliver);\n}`,
+      "a gated name as the alias of a legal key": `const { sendInviteEmail: deliver } = await import("@/lib/email");\ndeliver(x);`,
+      "a vi.mock factory that keeps the real senders": `vi.mock("@/lib/email", async () => {\n  const actual = await vi.importActual("@/lib/email");\n  return { sendInviteEmail: actual.sendInviteEmail, sendFoo: vi.fn() };\n});`,
+      "an outer let assigned in a function, a sender only": `let m;\nasync function f(opts: T) {\n  m = await import("@/lib/email");\n  m.sendInviteEmail(x);\n}`,
+      "a destructure assignment of a legal key": `let sendInviteEmail;\n({ sendInviteEmail } = await import("@/lib/email"));`,
+      "a gated name inside a nested pattern is that member's, not the module's": `const { sendInviteEmail: { length, deliver } } = await import("@/lib/email");`,
+      "a string key that is no gated name": `const { "sendInviteEmail": send } = await import("@/lib/email");`,
+      "a namespace with an optional member and a legal spread-free use": `import * as mail from "@/lib/email";\nconst pick = { send: mail.sendInviteEmail };`,
+      // The partial mock: the real module spread into the object a vi.mock factory returns goes nowhere but into the mock.
+      "a partial mock, returned": `vi.mock("@/lib/email", async () => {\n  const actual = await vi.importActual("@/lib/email");\n  return { ...actual, sendInviteEmail: vi.fn() };\n});`,
+      "a partial mock, returned in parentheses": `vi.mock("@/lib/email", async () => {\n  const actual = await vi.importActual<typeof import("@/lib/email")>("@/lib/email");\n  return ({ ...actual, sendInviteEmail: vi.fn() });\n});`,
+      "a partial mock, as an arrow body": `const actual = await vi.importActual("@/lib/email");\nvi.mock("@/lib/email", () => ({ ...actual, sendInviteEmail: vi.fn() }));`,
+      "a partial mock, by doMock": `vi.doMock("@/lib/email", async () => {\n  const actual = await vi.importActual("@/lib/email");\n  return { ...actual, sendInviteEmail: vi.fn() };\n});`,
+      "a partial mock beside strings and comments that hold brackets": `vi.mock("@/lib/email", async () => {\n  const actual = await vi.importActual("@/lib/email");\n  const note = "a ) } ] in text"; // and ( { [ here\n  /* ) } */\n  return { ...actual, note };\n});`,
+      "the word deliver spread from something else": `const t = { deliver: 1 };\nconst u = { ...t };\nconst m = await import("@/lib/email");\nm.sendInviteEmail(u);`,
     };
     let checked = 0;
     for (const [name, src] of Object.entries(legal)) {
@@ -404,7 +612,132 @@ describe("2. nothing outside the outbox imports the gated functions", () => {
       checked += 1;
     }
     expect(checked).toBe(Object.keys(legal).length);
-    expect(checked).toBeGreaterThanOrEqual(22);
+    expect(checked).toBeGreaterThanOrEqual(41);
+  });
+
+  it("a run-time load is judged the same wherever it sits: top level, function body, typed parameter, method, mock factory, block", () => {
+    // Every shape below is a bypass (or legal) by what it DOES, whatever surrounds it. The contexts are the places real code puts a load; a
+    // scanner that reads the nearest `{` or the nearest name before the `=` finds the surroundings instead of the binding, and loses the
+    // shape in some contexts and not in others - which is why this is a matrix and not a list.
+    const bypasses: Record<string, string> = {
+      "destructured": `const { deliver } = await import("@/lib/email");`,
+      "destructured and renamed": `const { deliver: post, sendInviteEmail } = await import("@/lib/email");`,
+      "destructured from a require": `const { checkSendable } = require("../../lib/email");`,
+      "destructured from an importActual": `const { sendWithResult } = await vi.importActual("@/lib/email");`,
+      "destructured from a generic importActual": `const { claimOne } = await vi.importActual<typeof import("@/server/email-outbox/worker")>("@/server/email-outbox/worker");`,
+      "destructured with an annotation": `const { deliver }: Mail = await import("@/lib/email");`,
+      "destructured by let": `let { deliver } = await import("@/lib/email");`,
+      "destructured by var": `var { deliver } = await import("@/lib/email");`,
+      "destructured with no semicolon": `const { deliver } = await import("@/lib/email")`,
+      "destructured with a rest": `const { sendInviteEmail, ...rest } = await import("@/lib/email");`,
+      "bound then used": `const m = await import("@/server/email-outbox/transport");\n  m.deliver(x, k);`,
+      "bound then indexed": `const m = await import("@/lib/email");\n  await m["checkSendable"](o);`,
+      "bound by importActual": `const actual = await vi.importActual<typeof import("@/lib/email")>("@/lib/email");\n  actual.sendWithResult(o);`,
+      "bound with an annotation": `const m: typeof import("@/lib/email") = await import("@/lib/email");\n  m.deliver(x, k);`,
+      "bound then spread": `const m = await import("@/lib/email");\n  const all = { ...m };`,
+      "read off the call": `const send = (await import("@/lib/email")).sendWithResult;`,
+      "called off the call": `await (await import("@/lib/email")).deliver(m, k);`,
+      "picked in a then": `import("@/lib/email").then(({ deliver }) => deliver(m, k));`,
+      "a require, bound then used": `const m = require("@/lib/email");\n  m.deliver(x);`,
+    };
+    const legalLoads: Record<string, string> = {
+      "a sender off the load": `const m = await import("@/lib/email");\n  m.sendInviteEmail(x);`,
+      "senders destructured": `const { sendInviteEmail, magicLinkEmail } = await import("@/lib/email");`,
+      "a sender off an importActual": `const actual = await vi.importActual("@/lib/email");\n  actual.sendInviteEmail(o);`,
+      "an annotated sender load": `const m: typeof import("@/lib/email") = await import("@/lib/email");\n  m.sendInviteEmail(x);`,
+      "another outbox module": `const { latestEmailStatus } = await import("@/server/email-outbox/status");`,
+      "a parameter named like a gated name": `const m = await import("@/lib/email");\n  m.sendInviteEmail(deliver);`,
+    };
+    const contexts: Record<string, (body: string) => string> = {
+      "top level": (b) => b,
+      "function body": (b) => `async function f() {\n  ${b}\n}`,
+      "function with a typed parameter": (b) => `async function f(opts: T) {\n  ${b}\n}`,
+      "function with typed parameters, a default and a return type": (b) => `export async function f(a: string, opts: { x: number } = { x: 1 }): Promise<void> {\n  ${b}\n}`,
+      "arrow with a typed parameter": (b) => `const f = async (opts: Opts) => {\n  ${b}\n};`,
+      "method": (b) => `class A {\n  async go(opts: T): Promise<void> {\n    ${b}\n  }\n}`,
+      "vi.mock factory": (b) => `vi.mock("@/x", async () => {\n  ${b}\n  return {};\n});`,
+      "vi.mock factory with a typed parameter": (b) => `vi.mock("@/x", async (importOriginal: () => Promise<unknown>) => {\n  ${b}\n  return {};\n});`,
+      "if block": (b) => `async function f(ok: boolean) {\n  if (ok) {\n    ${b}\n  }\n}`,
+      "try block": (b) => `try {\n  ${b}\n} catch (e) {\n  throw e;\n}`,
+      "after an object literal": (b) => `const cfg = { a: 1 };\nasync function f() {\n  ${b}\n}`,
+      "after an earlier destructure": (b) => `const { a } = foo();\nasync function f() {\n  ${b}\n}`,
+    };
+    let caught = 0;
+    for (const [shape, body] of Object.entries(bypasses)) {
+      for (const [where, wrap] of Object.entries(contexts)) {
+        expect(scanImports(wrap(body), at).offences.length, `${shape} / ${where}`).toBeGreaterThan(0);
+        caught += 1;
+      }
+    }
+    let left = 0;
+    for (const [shape, body] of Object.entries(legalLoads)) {
+      for (const [where, wrap] of Object.entries(contexts)) {
+        expect(scanImports(wrap(body), at).offences, `${shape} / ${where}`).toEqual([]);
+        left += 1;
+      }
+    }
+    expect(caught, "anti-vacuity: bypass x context pairs tried").toBe(Object.keys(bypasses).length * Object.keys(contexts).length);
+    expect(left, "anti-vacuity: legal x context pairs tried").toBe(Object.keys(legalLoads).length * Object.keys(contexts).length);
+    expect(caught).toBeGreaterThanOrEqual(228);
+    expect(left).toBeGreaterThanOrEqual(72);
+  });
+
+  it("a gated name imported where it is allowed (a pinned outbox file) is only ever CALLED there: re-exporting or handing on the local binding is a second way out", () => {
+    // `import { deliver } from "./transport"` is the pinned import of attempt.ts. Its offence is expected (and pinned); what follows it
+    // must add no further one unless the binding leaves the file as a value. Each source is the pinned import plus one line.
+    const imp = `import { deliver } from "./transport";\n`;
+    const pinned = ["imports deliver from ./transport"];
+    const escapes: Record<string, string> = {
+      "a local re-export under another name": `${imp}export { deliver as rawSend };`,
+      "a local re-export under its own name": `${imp}export { deliver };`,
+      "a local re-export as the default": `${imp}export { deliver as default };`,
+      "a local re-export among others": `${imp}const a = 1;\nexport { a, deliver as rawSend, type T };`,
+      "a multi-line local re-export": `${imp}export {\n  a,\n  deliver as rawSend,\n};`,
+      "export default": `${imp}export default deliver;`,
+      "an exported constant": `${imp}export const rawSend = deliver;`,
+      "a local copy": `${imp}const send = deliver;\nsend(m, k);`,
+      "handed to another function": `${imp}register(deliver);`,
+      "put in an object": `${imp}const t = { send: deliver };`,
+      "put in an array": `${imp}const all = [deliver];`,
+      "bound": `${imp}export const bound = deliver.bind(null);`,
+      "an alias re-exported": `import { deliver as post } from "./transport";\nexport { post };`,
+      "an alias handed on": `import { checkSendable as gate } from "@/lib/email";\nuse(gate);`,
+      "a ternary": `${imp}const send = ok ? deliver : other;`,
+    };
+    let checked = 0;
+    for (const [name, src] of Object.entries(escapes)) {
+      const offences = scanImports(src, "server/email-outbox/attempt.ts").offences;
+      expect(offences.filter((o) => /as a value/.test(o)).length, `${name}: ${JSON.stringify(offences)}`).toBeGreaterThan(0);
+      checked += 1;
+    }
+    expect(checked).toBe(Object.keys(escapes).length);
+    expect(checked).toBeGreaterThanOrEqual(15);
+
+    // The legal uses of the same binding: a call (plain, generic, optional), a type query, a property KEY of that name, a mention in a
+    // comment or a string, and a local DEFINITION of the same name that was never imported. None adds an offence beyond the import.
+    const calls: Record<string, string> = {
+      "a call": `${imp}await deliver(m, k);`,
+      "a call with a type argument": `${imp}await deliver<X>(m, k);`,
+      "an optional call": `${imp}await deliver?.(m, k);`,
+      "a call split from its parenthesis": `${imp}await deliver\n  (m, k);`,
+      "a type query": `${imp}type D = typeof deliver;\nawait deliver(m, k);`,
+      "a property key of the same name": `${imp}const t = { deliver: 1, other: 2 };\nawait deliver(m, k);`,
+      "a comment and a string": `${imp}// deliver is called once\nconst s = "deliver";\nawait deliver(m, k);`,
+      "a member of another object": `${imp}await t.deliver(m, k);\nawait deliver(m, k);`,
+    };
+    let legalChecked = 0;
+    for (const [name, src] of Object.entries(calls)) {
+      expect(scanImports(src, "server/email-outbox/attempt.ts").offences, name).toEqual(pinned);
+      legalChecked += 1;
+    }
+    expect(legalChecked).toBe(Object.keys(calls).length);
+    // Not imported, so not a gated binding: a file's own function of that name may be exported freely.
+    expect(scanImports(`export async function deliver(m: M) {}\nexport { deliver as again };\nexport default deliver;`, "server/x/y.ts").offences).toEqual([]);
+    // Nothing is reported twice for one import of the name, and the import itself (a multi-line clause too) is never read as a use.
+    expect(scanImports(`import {\n  checkSendable,\n  deliver,\n} from "@/lib/email";\nawait deliver(m, k);\nawait checkSendable(o);`, "server/email-outbox/attempt.ts").offences.sort()).toEqual([
+      "imports checkSendable from @/lib/email",
+      "imports deliver from @/lib/email",
+    ]);
   });
 
   it("the scanner sees the real forms: the transport's alias import and the unit test's relative import both offend", () => {
@@ -484,6 +817,12 @@ describe("3. the outbox's production files import exactly what is pinned (phase 
       "the gate dropped from attempt.ts": ["server/email-outbox/attempt.ts", `import { deliver } from "./transport";`],
       "the transport called twice in attempt.ts": ["server/email-outbox/attempt.ts", `import { checkSendable } from "@/lib/email";\nimport { deliver } from "./transport";\nimport { deliver as again } from "./transport";`],
       "claimOne imported by a core file": ["server/email-outbox/cancel.ts", `import { claimOne } from "./worker";`],
+      // The pinned imports themselves, with the local binding then leaving the file as a value: the import pin alone cannot see these.
+      "attempt.ts re-exporting deliver under another name": ["server/email-outbox/attempt.ts", `import { checkSendable } from "@/lib/email";\nimport { deliver } from "./transport";\nexport { deliver as rawSend };`],
+      "attempt.ts re-exporting the gate": ["server/email-outbox/attempt.ts", `import { checkSendable } from "@/lib/email";\nimport { deliver } from "./transport";\nexport { checkSendable };`],
+      "attempt.ts exporting deliver as the default": ["server/email-outbox/attempt.ts", `import { checkSendable } from "@/lib/email";\nimport { deliver } from "./transport";\nexport default deliver;`],
+      "transport.ts re-exporting the wire function it wraps": ["server/email-outbox/transport.ts", `import { deliver as postToResend, type DeliverResult } from "@/lib/email";\nexport { postToResend as rawPost };`],
+      "transport.ts handing the wire function on": ["server/email-outbox/transport.ts", `import { deliver as postToResend, type DeliverResult } from "@/lib/email";\nexport const wire = postToResend;`],
     };
     let checked = 0;
     for (const [name, [file, src]] of Object.entries(planted)) {

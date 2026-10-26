@@ -37,7 +37,7 @@ import { DISPATCH_NOW_BUDGET_MS, DISPATCH_NOW_MARGIN_MS, OUTBOX_KINDS, idempoten
 import { dispatchNow } from "../attempt";
 import { enqueueEmail, type OutboxMessage } from "../enqueue";
 import { REQUEST_ATTEMPT_WAIT_MS, assertNothingMoreToSend, dictionarySubject, forEachOutboxKind, type KindFacts, type KindScenario } from "./_kind-harness";
-import { KIND_DIRECT_SENDER, NOT_YET_MOVED, SENDER_ALLOWLIST } from "./_kind-senders";
+import { allowlistLengthFor, KIND_DIRECT_SENDER, NOT_YET_MOVED, SENDER_ALLOWLIST } from "./_kind-senders";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const RUN = `ks-${randomUUID().slice(0, 8)}`;
@@ -149,6 +149,13 @@ describe("the spec's lists (no database)", () => {
     expect(SPEC_KINDS.length - NOT_YET_MOVED.length).toBeGreaterThan(0);
     const senders = Object.values(KIND_DIRECT_SENDER).filter((x): x is string => x !== null);
     expect(new Set(senders).size, "no two kinds share a direct sender").toBe(senders.length);
+    // The map and NOT_YET_MOVED can be edited together and still leave the moved kind's `send*` in lib/email.ts and the allowlist: with
+    // the entry nulled, no list names that sender any more. What catches it is the count, which the spec fixes: 49 senders at the start
+    // of wave 1, one fewer for every kind that has moved. (The allowlist is held to lib/email.ts by name in no-second-path.test.ts.)
+    expect(
+      SENDER_ALLOWLIST.length,
+      `${NOT_YET_MOVED.length} kinds are still unmoved, so the allowlist holds ${allowlistLengthFor(NOT_YET_MOVED.length)} senders: a moved kind's send* was left behind (or a sender was dropped for a kind that has not moved)`,
+    ).toBe(allowlistLengthFor(NOT_YET_MOVED.length));
   });
 
   it("the harness waits for a request's own attempt longer than the longest a correct dispatchNow can still be working", () => {
