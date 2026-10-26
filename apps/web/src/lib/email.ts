@@ -455,13 +455,12 @@ export async function sendFunnelReminderEmail(
   return send({ to, transactional: true, ...funnelReminderTemplate(args, dict) });
 }
 
-export async function sendEmailChangeConfirmation(
-  to: string,
-  link: string,
-  locale: Locale = "en",
-): Promise<boolean> {
+/** The confirm-your-new-address link, RENDERED and not sent. The email-change request (`api/auth/change-email`) queues what this
+ *  returns on the email outbox (kind `email_change_confirmation`, transactional, to the NEW address), in the same transaction as the
+ *  request whose token it carries, and makes the first attempt after commit. Nothing sends it directly. */
+export async function emailChangeConfirmationEmail(link: string, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, transactional: true, ...emailChangeConfirmTemplate(link, dict) });
+  return emailChangeConfirmTemplate(link, dict);
 }
 
 export async function sendEmailChangeNotice(

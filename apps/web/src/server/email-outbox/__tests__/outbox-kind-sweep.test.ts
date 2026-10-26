@@ -45,6 +45,8 @@
 //     The staff member is signed in through the session stand-in below; `requireStaff` itself is real.
 //   - funnel_claim: the route POST of app/api/funnel/start/route.ts, a visitor's start (no account, no organisation, so `en`): the
 //     draft and its row are one transaction on the pool, and the request makes the first attempt after commit.
+//   - email_change_confirmation: the route POST of app/api/auth/change-email/route.ts by an `es` account (signed in through the session
+//     stand-in): the confirmation to the NEW address is queued in the request's transaction, and the request makes the first attempt.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -92,6 +94,7 @@ vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
 import { POST as magicLinkPost } from "@/app/api/auth/magic-link/route";
 import { POST as resendVerificationPost } from "@/app/api/admin/users/[id]/resend-verification/route";
 import { POST as funnelStartPost } from "@/app/api/funnel/start/route";
+import { POST as changeEmailPost } from "@/app/api/auth/change-email/route";
 import { POST as registerPost } from "@/app/api/v1/public/orgs/[orgSlug]/competitions/[slug]/register/route";
 import { openRound } from "@/server/usecases/external-play/open-round";
 import { assignSoloSignUp } from "@/server/usecases/registration-assign";
@@ -188,7 +191,6 @@ const SPEC_FACTS: KindFacts = {
 /** Wave 3's kinds, typed from the spec's table: registered by T1 before any producer moved, so each is still on its direct sender until its
  *  kind task (T2-T4) deletes it from NOT_YET_MOVED, and here. The last move (T4c) empties both. */
 const WAVE_3_UNMOVED: readonly OutboxKind[] = [
-  "email_change_confirmation",
   "email_change_notice",
   "account_deletion",
   "org_invite",
@@ -866,6 +868,39 @@ function funnelClaimScenario(): KindScenario {
   };
 }
 
+/** The real email-change request by an `es` account: the confirmation goes to the NEW address, in the account's language, and the
+ *  request makes the first attempt. */
+async function emailChangeConfirmationScenario(): Promise<KindScenario> {
+  const user = await runUser({ locale: "es" });
+  const recipient = address();
+  return {
+    locale: "es",
+    subjectKey: "emailChangeConfirm.subject",
+    subjectVars: {},
+    recipient,
+    firstAttempt: "request",
+    run: async () => {
+      // Until the notice to the old address moves to the outbox (the next kind task), the route still mails it directly; Resend is
+      // answered locally so the sweep makes no network call.
+      vi.stubGlobal("fetch", async () => new Response(JSON.stringify({ id: `re_${RUN}_notice` }), { status: 200 }));
+      try {
+        const res = await signedInAs(user.id, () =>
+          changeEmailPost(
+            new Request("https://sweep.test/api/auth/change-email", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ new_email: recipient }),
+            }),
+          ),
+        );
+        expect(res.status, "premise: the real route answered 200").toBe(200);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+  };
+}
+
 describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (DB)", () => {
   it("every outbox kind is swept through its real producer", async () => {
     // The Spanish subject differs from the English one, so a producer that dropped the locale would be seen (the right answer is not
@@ -941,6 +976,11 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
       dictionarySubject("en", verification.subjectKey, verification.subjectVars),
     );
 
+    const confirmation = await emailChangeConfirmationScenario();
+    expect(dictionarySubject("es", confirmation.subjectKey, confirmation.subjectVars)).not.toBe(
+      dictionarySubject("en", confirmation.subjectKey, confirmation.subjectVars),
+    );
+
     const out = await forEachOutboxKind(
       {
         magic_link: magicLinkScenario(),
@@ -962,6 +1002,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         trial_ending: trialEnding,
         email_verification: verification,
         funnel_claim: funnelClaimScenario(),
+        email_change_confirmation: confirmation,
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );
