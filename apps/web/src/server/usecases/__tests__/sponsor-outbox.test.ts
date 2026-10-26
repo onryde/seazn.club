@@ -383,6 +383,60 @@ describe.skipIf(!HAS_DB)("a paid sponsor order queues its receipt on the outbox 
     expect(await rowsOf(RECEIPT, [o.orderId])).toHaveLength(1);
     expect(enqueueCalls(RECEIPT, o.orderId), "asked once in total").toHaveLength(1);
   });
+
+  it("a payment success re-run on a refunded order whose sponsor was deleted creates no sponsor and leaves the order refunded", async () => {
+    // Only an order that has not been paid activates: `pending`, or `failed` (Stripe lets a failed intent succeed on a retry). Every
+    // other status the database allows is non-activating, named here: `paid` (the test above) and `refunded` (this one). A new status
+    // added to the column must be placed on one side or the other, so the set is read from the column's own check constraint.
+    const ACTIVATING = ["failed", "pending"];
+    const NON_ACTIVATING = ["paid", "refunded"];
+    const [{ def }] = await sql<{ def: string }[]>`
+      select pg_get_constraintdef(c.oid) as def
+        from pg_constraint c
+       where c.conrelid = 'sponsor_orders'::regclass and c.contype = 'c' and pg_get_constraintdef(c.oid) like '%status%'`;
+    const declared = [...def.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]!).sort();
+    expect(declared, "every order status is named as activating or not").toEqual([...ACTIVATING, ...NON_ACTIVATING].sort());
+
+    const o = await sponsorOrder({ status: "pending", defaultLocale: "en" });
+    await processStripeEvent(succeeded(o.intent, o.orderId));
+    await processStripeEvent(chargeRefunded(o.intent)); // refunded in full: the order is written down and the placement taken down
+    const [refunded] = await sql<{ status: string; sponsor_id: string | null }[]>`select status, sponsor_id from sponsor_orders where id = ${o.orderId}`;
+    expect(refunded!.status, "premise: the refund landed").toBe("refunded");
+    expect(refunded!.sponsor_id, "premise: on the placement the payment bought").not.toBeNull();
+    // The organiser deletes the dead placement: `sponsor_id` is set null (V283's foreign key), so the order names no placement.
+    await deleteSponsor(ownerAuth(o), refunded!.sponsor_id!);
+    const [before] = await sql<{ status: string; sponsor_id: string | null }[]>`select status, sponsor_id from sponsor_orders where id = ${o.orderId}`;
+    expect(before, "premise: refunded, with no placement").toEqual({ status: "refunded", sponsor_id: null });
+    expect(await sponsorsIn(o.orgId), "premise: the org has no placement").toBe(0);
+
+    await processStripeEvent(succeeded(o.intent, o.orderId)); // the success event again: a crash re-claim, or an /admin replay
+
+    const [after] = await sql<{ status: string; sponsor_id: string | null }[]>`select status, sponsor_id from sponsor_orders where id = ${o.orderId}`;
+    expect(after, "the order stays refunded and names no placement").toEqual({ status: "refunded", sponsor_id: null });
+    expect(await sponsorsIn(o.orgId), "no placement was created: a refunded sponsor never goes back on the boards").toBe(0);
+    expect(await rowsOf(RECEIPT, [o.orderId]), "no new receipt: only the first payment's").toHaveLength(1);
+    expect(enqueueCalls(RECEIPT, o.orderId), "asked once in total: the re-run never reached the receipt").toHaveLength(1);
+  });
+
+  it("a success after a failed attempt on the same intent activates the order and queues its receipt", async () => {
+    // Stripe's retry: a declined card fires `payment_intent.payment_failed`, then the sponsor pays with another card on the SAME
+    // intent and `payment_intent.succeeded` follows. The money is taken, so the placement must go live.
+    const o = await sponsorOrder({ status: "pending", defaultLocale: "en" });
+    await processStripeEvent({
+      type: "payment_intent.payment_failed",
+      data: { object: { id: o.intent, metadata: { kind: "sponsor", order_id: o.orderId } } },
+    } as unknown as Stripe.Event);
+    const [failed] = await sql<{ status: string }[]>`select status from sponsor_orders where id = ${o.orderId}`;
+    expect(failed!.status, "premise: the declined attempt failed the order").toBe("failed");
+
+    await processStripeEvent(succeeded(o.intent, o.orderId));
+
+    const [order] = await sql<{ status: string; sponsor_id: string | null }[]>`select status, sponsor_id from sponsor_orders where id = ${o.orderId}`;
+    expect(order!.status).toBe("paid");
+    expect(order!.sponsor_id, "the order names the placement it bought").not.toBeNull();
+    expect(await orderState(o.orderId)).toEqual({ status: "paid", sponsor_status: "active" });
+    expect(await rowsOf(RECEIPT, [o.orderId]), "one receipt for the payment").toHaveLength(1);
+  });
 });
 
 // ---------------------------------------------------------------------------------------------------------------------------------

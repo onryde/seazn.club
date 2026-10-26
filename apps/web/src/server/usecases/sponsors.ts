@@ -593,13 +593,14 @@ export async function startSponsorCheckout(
 /**
  * payment_intent.succeeded with metadata.kind === 'sponsor': mark the order
  * paid and create the activated sponsor row at the package tier. Idempotent
- * under /admin/billing-events replay — belt (order already paid) and braces
- * (order already carries a sponsor_id) both short-circuit; Stripe's own
+ * under /admin/billing-events replay: only a `pending` or `failed` order
+ * activates, so a paid or refunded one short-circuits (sponsor_id is written
+ * only with `paid`, so it needs no guard of its own); Stripe's own
  * idempotency keys expire ~24h so this DB guard is the real one.
  *
  * The sponsor's receipt is queued on the email outbox in the SAME transaction
  * (`queueSponsorReceipt`), so it exists exactly when the activation does, and
- * only on the transition (the guards above stop a replay before it). The
+ * only on the transition (the guard above stops a replay before it). The
  * worker makes the first attempt: a webhook has no response to defer behind.
  */
 export async function handleSponsorPaymentSucceeded(
@@ -614,7 +615,10 @@ export async function handleSponsorPaymentSucceeded(
       select ${sql(ORDER_COLS as unknown as string[])}, org_id
       from sponsor_orders where id = ${orderId} for update`;
     if (!order) return null;
-    if (order.status === "paid" || order.sponsor_id !== null) return null;
+    // Only an order that has not been paid activates: `pending`, or `failed` (Stripe lets a failed intent succeed on a retry).
+    // `paid` is a replay. `refunded` must never come back on boards and public pages: the old guard (paid, or a sponsor_id) let a
+    // refunded order whose placement the organiser had deleted (`sponsor_id` set null) re-activate and be marked paid again.
+    if (order.status !== "pending" && order.status !== "failed") return null;
 
     const [pkg] = await tx<{ name: string; tier: SponsorTier; competition_id: string | null }[]>`
       select name, tier, competition_id from sponsor_packages where id = ${order.package_id}`;
