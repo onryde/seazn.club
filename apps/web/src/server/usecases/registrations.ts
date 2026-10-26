@@ -25,8 +25,8 @@ import { getStripe } from "@/lib/stripe";
 import { isRegistrationCurrency } from "@/lib/currency";
 import { SPOT_HOLDERS } from "@/lib/registration-status";
 import {
+  registrationEmail,
   sendPaymentReminderEmail,
-  sendRegistrationEmail,
   sendRegistrationPromotedEmail,
   sendRefundIssuedEmail,
   sendDisputeAlertEmail,
@@ -36,7 +36,9 @@ import {
 } from "@/lib/email";
 import type { RegistrationEmailArgs } from "@/lib/email-templates";
 import { routes } from "@/lib/routes";
-import { toLocale } from "@/lib/i18n-constants";
+import { toLocale, type Locale } from "@/lib/i18n-constants";
+import { deferred } from "@/lib/deferred";
+import { dispatchNow, enqueueEmail, expiryWithin, recipientLocale, type OutboxMessage } from "@/server/email-outbox";
 import { isValidRefCode, normalizeRefCode } from "@/lib/ref-code";
 import { anyOptedOut, resolvePersonDisplayName } from "@/lib/name-display";
 import { isoFromZonedParts } from "@/lib/zoned-datetime";
@@ -1626,22 +1628,30 @@ export async function inviteUnclaimedMembers(orgId: string, entrantId: string): 
  * `payUrl`: never minted here — a caller with a fresh checkout link
  * resolves it itself and passes it straight through, exactly as
  * `notifyPromoted` (above) does inline.
+ *
+ * `locale` is the language the mail is WRITTEN in, resolved here (D4, the
+ * phase-3 spec): the cart's explicit pick, then the linked account's locale,
+ * then the organiser's public default, then `en` (`recipientLocale`). The
+ * queued row stores the rendered mail, so the language is fixed when the
+ * caller renders it. `orgId` is the organisation the outbox row belongs to.
+ * Reads on the pool: call it BEFORE opening a tenant transaction, never inside
+ * one (a pooled read inside `withTenant` holds a second connection, #996).
  */
 async function buildCartMail(
   groupId: string,
   origin: string,
   token: string | null,
   payUrl: string | null,
-): Promise<{ to: string; locale: string | null; competitionId: string; args: RegistrationEmailArgs } | null> {
+): Promise<{ to: string; locale: Locale; orgId: string; competitionId: string; args: RegistrationEmailArgs } | null> {
   const [group] = await sql<
     Pick<
       RegistrationGroupRow,
       | "contact_email" | "locale" | "ref_code" | "amount_cents" | "currency"
-      | "expires_at" | "payment_method" | "competition_id"
+      | "expires_at" | "payment_method" | "competition_id" | "org_id" | "user_id"
     >[]
   >`
     select contact_email, locale, ref_code, amount_cents, currency, expires_at,
-           payment_method, competition_id
+           payment_method, competition_id, org_id, user_id
     from registration_groups where id = ${groupId}`;
   if (!group) {
     // Silent before RS005 F1: a caller (notifySubmitted, resendRegistration-
@@ -1709,7 +1719,8 @@ async function buildCartMail(
 
   return {
     to: group.contact_email,
-    locale: group.locale,
+    locale: await recipientLocale(sql, { pick: group.locale, userId: group.user_id, orgDefault: ctx.default_locale }),
+    orgId: group.org_id,
     competitionId: group.competition_id,
     args: {
       orgName: ctx.org_name,
@@ -1727,19 +1738,49 @@ async function buildCartMail(
   };
 }
 
+/** What `buildCartMail` returns for a cart that has something to say. */
+type CartMail = NonNullable<Awaited<ReturnType<typeof buildCartMail>>>;
+
+/**
+ * The outbox message of one cart's confirmation: ONE place decides its kind, ref, recipient, transactionality and expiry, so the three
+ * producers (the submit, the organiser's resend, the registrant's resend) cannot drift apart. The ref is the CART
+ * (`registration_group/<group id>`), not an entry: the mail restates the whole cart, so a newer row for the same cart and address
+ * supersedes an older one that has not reached the registrant (the replace rule), and there is no once-key (a resend is a deliberate
+ * second mail). It is not transactional (the marketing suppression list applies), and it expires at the bound the writer holds every
+ * row to (`expiryWithin(null)`: the mail has no end of its own). Rendered here, in the locale `buildCartMail` resolved, BEFORE any
+ * transaction opens, so nothing is held open while the dictionary loads.
+ */
+async function cartConfirmationMessage(mail: CartMail, groupId: string): Promise<OutboxMessage> {
+  return {
+    kind: "registration_confirmation",
+    refType: "registration_group",
+    refId: groupId,
+    orgId: mail.orgId,
+    to: mail.to,
+    ...(await registrationEmail(mail.args, mail.locale)),
+    transactional: false,
+    expiresAt: expiryWithin(null),
+  };
+}
+
 /**
  * Post-submit confirmation (RS005 W4) — fire-and-forget, cart-shaped: every
  * entry in the group with its own status/fee, the group's payable total,
  * and `payUrl` exactly as resolved by the caller (the public register
  * route, after its own `mintGroupCheckout` attempt succeeds, fails, or is
  * skipped for a zero-subtotal cart) — this function never mints anything
- * itself. `sendRegistrationEmail` had ZERO callers before this wave; this
- * is the first one. A registrant who gets no mail because the provider
- * rejected it, or because this function itself threw, still keeps a
+ * itself. A registrant who gets no mail because the outbox refused the row,
+ * or because this function itself threw, still keeps a
  * committed, capacity-holding cart — that is the entire reason this wraps
  * everything in one try/catch, matching `notifyPromoted`'s contract
  * exactly: a mail failure must never fail the submit that already
  * committed.
+ *
+ * The mail is QUEUED on the email outbox (kind `registration_confirmation`) and its first attempt is
+ * made after the response (`deferred`): the registrant is not kept waiting on the provider, and a
+ * provider that is down leaves a durable row for the retry worker instead of a lost mail. The caller
+ * (the register route) has already asked `assertOutboxCanQueue()` BEFORE committing the cart, so a
+ * box that cannot seal the body refuses the submit rather than reaching the catch below.
  */
 export async function notifySubmitted(
   groupId: string,
@@ -1750,7 +1791,8 @@ export async function notifySubmitted(
   try {
     const mail = await buildCartMail(groupId, origin, token, payUrl);
     if (!mail) return; // buildCartMail already logged why
-    await sendRegistrationEmail({ to: mail.to, locale: toLocale(mail.locale), ...mail.args });
+    const id = await enqueueEmail(sql, await cartConfirmationMessage(mail, groupId));
+    deferred(() => dispatchNow([id]));
   } catch (err) {
     // RS005 F1 (owner: new code ships logging, 2026-08-12) — this used to
     // swallow silently. That is exactly how the single biggest finding of
@@ -1799,27 +1841,24 @@ export async function resendRegistrationConfirmation(
   }
   const mail = await buildCartMail(reg.group_id, origin, null, null);
   if (!mail) return { sent: false }; // buildCartMail already logged why
-  const sent = await sendRegistrationEmail({ to: mail.to, locale: toLocale(mail.locale), ...mail.args });
-  if (!sent) {
-    // Same standing rule as the terminal-refusal branch above: an organiser
-    // clicking Resend and getting nothing must leave a trace, distinct from
-    // the generic provider-level warn in lib/email.ts (which carries no
-    // registration/actor context to tie back to this click).
-    log.warn(
-      { registrationId: regId, orgId: auth.orgId, actorId: auth.userId, groupId: reg.group_id, to: mail.to },
-      "registration: confirmation resend — email provider did not accept the send",
-    );
-  }
-  await withTenant(auth.orgId, (tx) =>
-    audit(
+  const message = await cartConfirmationMessage(mail, reg.group_id);
+  // The row and the audit entry are ONE transaction: an audit that fails queues no mail, and a mail the outbox refuses leaves no
+  // "resent" entry behind. The mail is then attempted at once; `sent` is whether THAT attempt was accepted. A provider that is down
+  // answers `{ sent: false }` and the row stays queued for the retry worker, which is the record of "it did not go out" (the old
+  // per-click warn is gone: the outbox logs every attempt, with the row's id, where this one could only say "refused").
+  const id = await withTenant(auth.orgId, async (tx) => {
+    const queued = await enqueueEmail(tx, message);
+    await audit(
       tx,
       mail.competitionId,
       auth.orgId,
       "registration.confirmation_resent",
       { registration_id: regId },
       auth.userId,
-    ),
-  );
+    );
+    return queued;
+  });
+  const sent = (await dispatchNow([id])).get(id) === "sent";
   return { sent };
 }
 
@@ -1861,15 +1900,14 @@ export async function resendRegistrationConfirmationPublic(
   }
   const mail = await buildCartMail(groupId, origin, token, null);
   if (!mail) return { sent: false }; // buildCartMail already logged why
-  const sent = await sendRegistrationEmail({ to: mail.to, locale: toLocale(mail.locale), ...mail.args });
-  await audit(
-    sql,
-    group.competition_id,
-    group.org_id,
-    "registration.confirmation_resent",
-    { group_id: groupId },
-    null,
-  );
+  const message = await cartConfirmationMessage(mail, groupId);
+  // As the organiser's resend: the row and the audit entry are one transaction, then the first attempt is made at once.
+  const id = await sql.begin(async (tx) => {
+    const queued = await enqueueEmail(tx, message);
+    await audit(tx, group.competition_id, group.org_id, "registration.confirmation_resent", { group_id: groupId }, null);
+    return queued;
+  });
+  const sent = (await dispatchNow([id])).get(id) === "sent";
   return { sent };
 }
 
@@ -6596,7 +6634,7 @@ export async function buildDisputeEvidence(
   const cartMail = await buildCartMail(reg.group_id, origin, null, null);
   // Reconstruct the receipt exactly as sent — in the registrant's captured
   // locale (cycle 47), so replayed dispute evidence matches the original mail.
-  const emailDict = await getDictionary(toLocale(cartMail?.locale ?? reg.locale), "emails");
+  const emailDict = await getDictionary(cartMail?.locale ?? toLocale(reg.locale), "emails");
   const emailText = cartMail
     ? registrationTemplate(
         { ...cartMail.args, paymentInstructions: null, payDeadline: null },

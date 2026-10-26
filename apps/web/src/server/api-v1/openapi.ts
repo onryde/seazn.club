@@ -316,9 +316,13 @@ export const ROUTES: RouteSpec[] = [
   { path: "/registrations/{id}/withdraw", method: "post", summary: "Withdraw: frees the spot, auto-promotes, auto-refunds pre-lock", tag: "registration", response: S.Registration },
   { path: "/registrations/{id}/refund", method: "post", summary: "Manual refund (post-lock discretion; partial allowed; audited)", tag: "registration", request: S.RefundRegistration, response: S.Registration, errors: [422] },
   { path: "/registrations/{id}/remind", method: "post", summary: "Email an unpaid registrant a payment reminder (offline pay)", tag: "registration", response: z.object({ sent: z.boolean() }), errors: [422] },
-  // RS005 W4 — sendRegistrationEmail had zero callers before this wave; this
+  // RS005 W4 — the confirmation mailer had zero callers before this wave; this
   // is the organiser-facing resend of the cart-shaped confirmation the
-  // public register route now sends at submit.
+  // public register route now queues at submit. Each resend writes a
+  // `registration_confirmation` row on the email outbox (ref
+  // `registration_group/<group id>`), which supersedes an older one still
+  // waiting; `sent` is whether the first attempt at it was accepted — false
+  // while the outbox is retrying, not that the mail is lost.
   { path: "/registrations/{id}/resend-confirmation", method: "post", summary: "Resend the registrant's confirmation email — the whole cart, not just this entry", tag: "registration", response: z.object({ sent: z.boolean() }) },
   // RS009 — the organiser's solo sign-up assignment loop. The three routes
   // were written without entries here and the openapi drift gate stayed

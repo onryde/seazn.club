@@ -10,7 +10,7 @@
 // whether or not it's actually called — see RS003 W2 dispatch). The usecase
 // is mocked as a spy WRAPPING the real implementation, so wiring assertions
 // and DB-backed persistence share one file without diverging behaviour.
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
 vi.mock("@/lib/rate-limit", () => ({ rateLimit: vi.fn(async () => {}) }));
@@ -23,24 +23,13 @@ vi.mock("@/lib/stripe", () => ({
   getStripe: () => ({ checkout: { sessions: { create: stripeMock.checkoutCreate } } }),
 }));
 
-// RS005 W4 — the route now sends the cart confirmation post-submit
-// (notifySubmitted, registrations.ts). Mocked as a bare spy (not wrapping
-// the real sender): this file proves WIRING — was it called, with what
-// args — not template rendering, which email-builders.test.ts owns.
-const emailMock = vi.hoisted(() => ({
-  // Typed to the REAL signature, through vi.fn's type argument. A bare
-  // `vi.fn(async () => true)` declares a zero-parameter spy, so
-  // `mock.calls[0][0]` indexes an empty tuple and tsc rejects every assertion
-  // about what was actually sent — errors vitest never surfaces, because it
-  // does not typecheck test files.
-  sendRegistrationEmail: vi.fn<
-    (opts: Parameters<typeof import("@/lib/email").sendRegistrationEmail>[0]) => Promise<boolean>
-  >(async () => true),
-}));
-vi.mock("@/lib/email", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/email")>();
-  return { ...actual, sendRegistrationEmail: emailMock.sendRegistrationEmail };
-});
+// RS005 W4 — the route sends the cart confirmation post-submit (notifySubmitted, registrations.ts). Since phase 3 wave 1 that mail is
+// QUEUED on the email outbox (kind `registration_confirmation`, ref `registration_group/<group id>`) and attempted after the response.
+// Only the outbox's network seam is replaced: this file proves the route's WIRING (what was queued, for whom, with what body, and what
+// the 201 does when the mail goes wrong); the queue itself is registration-confirmation-outbox.test.ts's and the template's is
+// email-builders.test.ts's.
+const transport = vi.hoisted(() => ({ deliver: vi.fn() }));
+vi.mock("@/server/email-outbox/transport", () => ({ deliver: transport.deliver }));
 
 vi.mock("@/server/usecases/registration-submit", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/server/usecases/registration-submit")>();
@@ -63,6 +52,9 @@ import {
 } from "@/server/usecases/registration-submit";
 import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
+import { idempotencyKey } from "@/server/email-outbox/constants";
+import { stubOutboxEnv } from "@/server/usecases/__tests__/_invite-mail";
+import { dictionarySubject } from "@/server/email-outbox/__tests__/_kind-harness";
 import { POST as registerRoute } from "../route";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -138,8 +130,48 @@ beforeEach(() => {
     id: "cs_test_" + randomUUID().slice(0, 8),
     url: "https://checkout.stripe.test/session",
   }));
-  emailMock.sendRegistrationEmail.mockReset().mockResolvedValue(true);
+  transport.deliver.mockReset().mockImplementation(async () => ({ ok: true, providerId: `re_rr_${randomUUID()}` }));
+  stubOutboxEnv();
 });
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+});
+
+type ConfirmationRow = {
+  id: string;
+  kind: string;
+  ref_type: string;
+  ref_id: string;
+  recipient: string;
+  subject: string;
+  status: string;
+  attempts: number;
+};
+
+/** The cart's confirmation row once its first attempt has finished (the dispatch after the response runs on its own). */
+async function confirmationOf(groupId: string): Promise<ConfirmationRow> {
+  await vi.waitFor(
+    async () => {
+      const rows = await sql<{ status: string; attempts: number }[]>`
+        select status, attempts from email_outbox where kind = 'registration_confirmation' and ref_id = ${groupId}`;
+      if (rows.length !== 1) throw new Error(`${rows.length} confirmation row(s) for the cart`);
+      if (rows[0]!.status === "queued" && rows[0]!.attempts === 0) throw new Error("the first attempt has not started");
+      if (rows[0]!.status === "sending") throw new Error("the first attempt is still in flight");
+    },
+    { timeout: 10_000, interval: 50 },
+  );
+  const [row] = await sql<ConfirmationRow[]>`
+    select id, kind, ref_type, ref_id, recipient, subject, status, attempts
+      from email_outbox where kind = 'registration_confirmation' and ref_id = ${groupId}`;
+  return row!;
+}
+
+/** What the provider was handed under the row's key. */
+const providerSaw = (row: { id: string }) =>
+  transport.deliver.mock.calls
+    .map((c) => c[0] as { to: string; subject: string; html: string; text: string; idempotencyKey: string })
+    .filter((m) => m.idempotencyKey === idempotencyKey(row.id));
 
 afterAll(async () => {
   if (!HAS_DB) return;
@@ -425,9 +457,11 @@ describe.skipIf(!HAS_DB)("POST .../register — DB-backed", () => {
     expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(1);
     // RS005 W4: the pay link appears in the confirmation mail exactly when
     // a checkout was actually minted.
-    expect(emailMock.sendRegistrationEmail).toHaveBeenCalledWith(
-      expect.objectContaining({ payUrl: "https://checkout.stripe.test/session" }),
-    );
+    const row = await confirmationOf(String(body.data!.group_id));
+    expect(row).toMatchObject({ kind: "registration_confirmation", ref_type: "registration_group", ref_id: body.data!.group_id, status: "sent" });
+    const saw = providerSaw(row);
+    expect(saw).toHaveLength(1);
+    expect(saw[0]!.text).toContain("https://checkout.stripe.test/session");
   });
 
   // submitRegistrationGroup COMMITS before the route mints. If a mint failure
@@ -479,17 +513,20 @@ describe.skipIf(!HAS_DB)("POST .../register — DB-backed", () => {
     expect(rows).toHaveLength(1);
     // RS005 W4: a mint failure must not skip the send — the registrant
     // still needs the confirmation, just without a pay link this time.
-    expect(emailMock.sendRegistrationEmail).toHaveBeenCalledWith(
-      expect.objectContaining({ payUrl: null }),
-    );
+    const row = await confirmationOf(String(body.data!.group_id));
+    expect(row.status).toBe("sent");
+    const saw = providerSaw(row);
+    expect(saw).toHaveLength(1);
+    expect(saw[0]!.text, "no pay link: none was minted").not.toContain("checkout.stripe.test");
+    expect(saw[0]!.text, "but it is still the cart's confirmation, with its status link").toContain(`rid=${String(body.data!.group_id)}`);
   });
 
-  // RS005 W4 finding: sendRegistrationEmail had ZERO callers before this
+  // RS005 W4 finding: the confirmation mailer had ZERO callers before this
   // wave, so nobody who registered ever received a ref code, a status link
   // or a receipt. This is the assertion whose absence let the whole gap
-  // exist — it proves the mailer is actually invoked, with the cart's own
-  // contact and every entry, not just that the route returns 201.
-  it("a real submit sends the cart confirmation — mailer called with the contact and every entry", async () => {
+  // exist — it proves a confirmation is actually queued and sent, with the
+  // cart's own contact and every entry, not just that the route returns 201.
+  it("a real submit queues the cart confirmation — addressed to the contact, listing every entry", async () => {
     const { orgSlug, orgId, ownerId } = await seedOrg();
     const owner = asOwner(orgId, ownerId);
     const { competition, division } = await rig(owner);
@@ -519,28 +556,38 @@ describe.skipIf(!HAS_DB)("POST .../register — DB-backed", () => {
       ),
       ctx(orgSlug, competition.slug),
     );
-    expect((await read(res)).status).toBe(201);
+    const { status, body } = await read(res);
+    expect(status).toBe(201);
+    const groupId = String(body.data!.group_id);
 
-    expect(emailMock.sendRegistrationEmail).toHaveBeenCalledTimes(1);
-    const sent = emailMock.sendRegistrationEmail.mock.calls[0]![0];
-    expect(sent.to).toBe(contactEmail);
-    expect(sent.entries).toHaveLength(2);
-    expect(sent.entries).toContainEqual({ displayName: "First In", status: "pending", feeCents: 1500 });
-    // Waitlisted entries carry no charge, by construction upstream.
-    expect(sent.entries).toContainEqual({ displayName: "Second In", status: "waitlisted", feeCents: 0 });
-    expect(sent.totalCents).toBe(1500);
+    // The row: one confirmation for the cart, addressed to the contact, in the dictionary's English subject.
+    const row = await confirmationOf(groupId);
+    expect(row).toMatchObject({ kind: "registration_confirmation", ref_type: "registration_group", ref_id: groupId, recipient: contactEmail, status: "sent" });
+    const [{ name: competitionName }] = await sql<{ name: string }[]>`select name from competitions where id = ${competition.id}`;
+    expect(row.subject).toBe(dictionarySubject("en", "registration.subject", { competitionName }));
+    const saw = providerSaw(row);
+    expect(saw, "one mail for the whole cart").toHaveLength(1);
+    expect(saw[0]!.to).toBe(contactEmail);
+    expect(saw[0]!.subject).toBe(row.subject);
+    // Every entry is in it, with its OWN status (the waitlisted one carries no charge, by construction upstream) and the cart's total.
+    expect(saw[0]!.text).toContain("First In");
+    expect(saw[0]!.text).toContain("Second In");
+    expect(saw[0]!.text).toContain("Pending");
+    expect(saw[0]!.text).toContain("Waitlisted");
+    expect(saw[0]!.text).toContain("£15.00");
   });
 
   // The other half of "never fail the submit": submitRegistrationGroup has
   // already COMMITTED by the time notifySubmitted runs, so a mail-provider
   // throw must not turn a real, capacity-holding registration into an error
   // response the registrant would (wrongly) read as "it didn't work".
-  it("a mail failure does not fail the submit — the registration still exists and the response is still 201", async () => {
+  it("a mail failure does not fail the submit — the registration still exists, the response is still 201, and the outbox keeps the mail to retry", async () => {
     const { orgSlug, orgId, ownerId } = await seedOrg();
     const owner = asOwner(orgId, ownerId);
     const { competition, division } = await rig(owner);
     await seedSettings(division.id);
-    emailMock.sendRegistrationEmail.mockRejectedValueOnce(new Error("resend is down"));
+    // The provider call itself blows up: the attempt reads it as a network failure and leaves the row to the retry worker.
+    transport.deliver.mockReset().mockRejectedValue(new Error("resend is down"));
 
     const res = await registerRoute(
       req(
@@ -560,5 +607,7 @@ describe.skipIf(!HAS_DB)("POST .../register — DB-backed", () => {
     const [row] = await sql<{ status: string }[]>`
       select status from registrations where id = ${entries[0]!.registration_id}`;
     expect(row!.status).toBe("confirmed");
+    const mail = await confirmationOf(String(body.data!.group_id));
+    expect(mail, "the confirmation waits in the outbox for the retry worker").toMatchObject({ status: "queued", attempts: 1 });
   });
 });

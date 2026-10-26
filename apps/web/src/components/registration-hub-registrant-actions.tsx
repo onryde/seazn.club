@@ -386,9 +386,11 @@ export function RegistrationHubRegistrantActions({
         { method: "POST" },
       );
       // task 3: "sent" must read as visibly different from "nothing
-      // happened" — sent:false (buildCartMail found nothing to send) is
-      // its OWN distinct, translated message, never silently indistinguishable
-      // from a real send.
+      // happened" — sent:false is its OWN distinct, translated message, never
+      // silently indistinguishable from a real send. It means the first attempt
+      // was not accepted (the confirmation is queued on the email outbox and
+      // being retried, so it may still arrive) or that there was nothing to
+      // send; the notice says "may arrive late, or not at all".
       setFeedback(
         result.sent
           ? { tone: "success", text: msg("reg.hub.registrants.detail.actions.resent") }

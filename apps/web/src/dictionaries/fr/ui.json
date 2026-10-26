@@ -769,7 +769,7 @@
   "reg.hub.registrants.detail.actions.resend": "Renvoyer l'e-mail de confirmation",
   "reg.hub.registrants.detail.actions.resending": "Envoi…",
   "reg.hub.registrants.detail.actions.resent": "E-mail de confirmation envoyé",
-  "reg.hub.registrants.detail.actions.resendNotSent": "Aucun e-mail de confirmation n'a pu être envoyé",
+  "reg.hub.registrants.detail.actions.resendNotSent": "L'e-mail de confirmation n'est pas parti tout de suite. Il peut arriver en retard, ou pas du tout : si la personne ne le reçoit pas, contactez-la directement.",
   "reg.hub.registrants.detail.actions.confirmReject.title": "Refuser cette inscription ?",
   "reg.hub.registrants.detail.actions.confirmReject.body": "Cette action est irréversible. Si elle a été payée, elle sera remboursée et la place proposée à la personne suivante sur la liste d'attente.",
   "reg.hub.registrants.detail.actions.confirmReject.confirm": "Refuser",

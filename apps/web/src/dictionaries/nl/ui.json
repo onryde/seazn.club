@@ -769,7 +769,7 @@
   "reg.hub.registrants.detail.actions.resend": "Bevestigingsmail opnieuw versturen",
   "reg.hub.registrants.detail.actions.resending": "Versturen…",
   "reg.hub.registrants.detail.actions.resent": "Bevestigingsmail verstuurd",
-  "reg.hub.registrants.detail.actions.resendNotSent": "Er kon geen bevestigingsmail worden verstuurd",
+  "reg.hub.registrants.detail.actions.resendNotSent": "De bevestigingsmail is niet meteen verstuurd. Hij kan later aankomen, of helemaal niet: als de persoon hem niet ontvangt, neem dan rechtstreeks contact op.",
   "reg.hub.registrants.detail.actions.confirmReject.title": "Deze inschrijving afwijzen?",
   "reg.hub.registrants.detail.actions.confirmReject.body": "Dit kan niet ongedaan worden gemaakt. Als er is betaald, wordt dit terugbetaald en wordt de plek aangeboden aan de volgende persoon op de wachtlijst.",
   "reg.hub.registrants.detail.actions.confirmReject.confirm": "Afwijzen",

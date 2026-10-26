@@ -49,10 +49,11 @@ function farFutureDate(daysFromNow = 60): string {
   return d.toISOString().slice(0, 10);
 }
 
-// RS005 found `sendRegistrationEmail` had ZERO callers — the mailer existed,
+// RS005 found the registration confirmation mailer had ZERO callers — the mailer existed,
 // the copy existed in four locales, and nothing ever sent it. So this asserts
 // the SEND, not the template: a notification nothing calls is the same defect
-// wearing a different name.
+// wearing a different name. (The solo sign-up mail below is still a direct send; the
+// registration confirmation itself now goes through the email outbox.)
 // Typed with the arg it actually receives: an untyped `vi.fn(async () => …)`
 // gives the mock a zero-length tuple, so `calls[n][0]` is a tsc error even
 // though it works at runtime — and vitest does NOT typecheck test files, so

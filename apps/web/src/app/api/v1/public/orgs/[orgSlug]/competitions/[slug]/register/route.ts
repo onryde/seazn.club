@@ -8,6 +8,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { baseUrl } from "@/lib/oauth";
 import { log } from "@/server/logger";
 import { hasLocale, type Locale } from "@/lib/i18n-constants";
+import { OutboxKeyUnavailableError, assertOutboxCanQueue } from "@/server/email-outbox";
 
 /** The registrant's explicit locale pick (footer switcher → seazn_locale cookie),
  *  or null when they never chose — then the org's public default applies.
@@ -59,6 +60,18 @@ export async function POST(req: Request, { params }: Ctx) {
     // route keyed on `division_id`, a globally unique uuid, and had no such
     // ambiguity to lose.
     await rateLimit(`regsubmit:${ip}:${orgSlug}:${slug}`, { max: 5, windowSeconds: 300 });
+    // Can this box queue the confirmation at all? Asked BEFORE anything is committed. The submit commits the cart (and the mint below
+    // may create a Checkout session) before the confirmation is queued, so a box that cannot seal the body (a Resend key set, no usable
+    // outbox key) must refuse HERE, with nothing done: an enqueue that was the first to find out would leave a committed cart, and
+    // possibly a live payment link, with no mail and a 201 the registrant takes at its word. An anonymous caller is told only
+    // "Server error": the real cause (it names a variable) goes to the log, and `v1` reports the 500 to Sentry.
+    try {
+      assertOutboxCanQueue();
+    } catch (err) {
+      if (!(err instanceof OutboxKeyUnavailableError)) throw err;
+      log.error({ err, org_slug: orgSlug, comp_slug: slug }, "register: the confirmation email cannot be queued; the submit was refused before any cart was committed");
+      throw new HttpError(500, "Server error");
+    }
     // #402 — resolve the session HERE, never inside the usecase: keeping the
     // lookup at the public boundary is what makes organiser-facing entry
     // paths structurally unable to supply one (an organiser entering a team
@@ -111,13 +124,13 @@ export async function POST(req: Request, { params }: Ctx) {
         );
       }
     }
-    // Cart-shaped confirmation (RS005 W4 finding: sendRegistrationEmail had
+    // Cart-shaped confirmation (RS005 W4 finding: the confirmation mailer had
     // ZERO callers before this wave — see notifySubmitted's own doc
-    // comment). Sent HERE, after the mint attempt resolves either way, so
+    // comment). Queued HERE, after the mint attempt resolves either way, so
     // the mail can carry whatever payUrl actually exists rather than a
-    // guess made before it was known. notifySubmitted never throws — a
-    // mail-provider failure must never turn this already-committed cart
-    // into an error response.
+    // guess made before it was known; its first attempt is made after the
+    // response. notifySubmitted never throws — a mail failure must never
+    // turn this already-committed cart into an error response.
     await notifySubmitted(result.group_id, baseUrl(req), result.access_token, checkout_url);
     return reply(201, { ...result, checkout_url });
   });

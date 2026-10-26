@@ -556,18 +556,14 @@ export async function sendGroupOrgLeftEmail(
   return send({ to, ...groupOrgLeftTemplate(orgName, seatFreed, link, dict) });
 }
 
-export interface RegistrationEmail extends RegistrationEmailArgs {
-  to: string;
-  /** Recipient locale for the email copy; defaults to English. */
-  locale?: Locale;
-}
-
-/** Registration confirmation — carries the offline (cash/bank) payment
- *  instructions for paid entries. */
-export async function sendRegistrationEmail(opts: RegistrationEmail): Promise<boolean> {
-  const { to, locale = "en", ...args } = opts;
+/** The registration confirmation, RENDERED and not sent — it carries the offline (cash/bank) payment instructions for paid entries.
+ *  The producers (`notifySubmitted`, the organiser's and the registrant's resend in `server/usecases/registrations.ts`) queue what
+ *  this returns on the email outbox (kind `registration_confirmation`) and send it after commit; there is no direct sender for it
+ *  any more (a second path would skip the outbox's replace rule and its retry). The address is not part of the content, so it is not
+ *  an argument here. `locale` is the language the mail is written in: the producer resolves it (`recipientLocale`, D4) and passes it. */
+export async function registrationEmail(args: RegistrationEmailArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...registrationTemplate(args, dict) });
+  return registrationTemplate(args, dict);
 }
 
 export interface PaymentReminderEmail extends PaymentReminderArgs {

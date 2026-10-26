@@ -6,6 +6,8 @@
 //   - magic_link: the route POST of app/api/auth/magic-link/route.ts (the real token minter, the real enqueue, the real `dispatchNow`).
 //   - chess_invite: the real `openRound` on a `seedOnlineChessRound` whose player's account is `es` (the real invite renderer, the
 //     real account-kind enqueue, the real dispatch). Only `transport.deliver` is replaced: it is the network.
+//   - registration_confirmation: the route POST of app/api/v1/public/orgs/[orgSlug]/competitions/[slug]/register/route.ts with an `es`
+//     locale cookie (the real submit, `notifySubmitted`, the real enqueue, the dispatch after the response).
 //
 // Each kind task (T8-T12) adds its scenario and deletes its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 deletes the list. A kind that is neither moved nor listed fails by name, and so
@@ -31,8 +33,11 @@ const deliverMock = vi.hoisted(() => vi.fn());
 vi.mock("@/server/email-outbox/transport", () => ({ deliver: deliverMock }));
 
 import { POST as magicLinkPost } from "@/app/api/auth/magic-link/route";
+import { POST as registerPost } from "@/app/api/v1/public/orgs/[orgSlug]/competitions/[slug]/register/route";
 import { openRound } from "@/server/usecases/external-play/open-round";
+import { putRegistrationSettings } from "@/server/usecases/registrations";
 import { seedOnlineChessRound } from "@/server/usecases/__tests__/_external-play-seed";
+import { SETTINGS_BASE, asOwner, rig, seedOrg } from "@/server/usecases/__tests__/_registration-fixtures";
 import { DISPATCH_NOW_BUDGET_MS, DISPATCH_NOW_MARGIN_MS, OUTBOX_KINDS, idempotencyKey, type OutboxKind } from "../constants";
 import { dispatchNow } from "../attempt";
 import { enqueueEmail, type OutboxMessage } from "../enqueue";
@@ -236,6 +241,40 @@ async function chessInviteScenario(): Promise<KindScenario> {
   };
 }
 
+/** The real public register route: a free, open division, a registrant with an `es` locale cookie (the footer switcher's). The cart is
+ *  committed by the real submit and its confirmation is queued by `notifySubmitted`; the dispatch after the response makes the attempt. */
+async function registrationConfirmationScenario(): Promise<KindScenario> {
+  const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+  made.orgIds.push(orgId);
+  made.userIds.push(ownerId);
+  const owner = asOwner(orgId, ownerId);
+  const { competition, division } = await rig(owner);
+  await putRegistrationSettings(owner, division.id, { ...SETTINGS_BASE, fee_cents: 0, payment_method: "offline" });
+  const recipient = address();
+  return {
+    locale: "es",
+    subjectKey: "registration.subject",
+    subjectVars: { competitionName: competition.name },
+    recipient,
+    firstAttempt: "request",
+    run: async () => {
+      const res = await registerPost(
+        new Request(`https://sweep.test/api/v1/public/orgs/${orgSlug}/competitions/${competition.slug}/register`, {
+          method: "POST",
+          headers: { "content-type": "application/json", cookie: "seazn_locale=es" },
+          body: JSON.stringify({
+            contact: { name: "Sweep Rep", email: recipient },
+            privacy_consent: true,
+            entries: [{ division_id: division.id, entrant_kind: "individual", players: [{ full_name: "Sweep Player" }], answers: {} }],
+          }),
+        }),
+        { params: Promise.resolve({ orgSlug, slug: competition.slug }) },
+      );
+      expect(res.status, "premise: the real route accepted the cart").toBe(201);
+    },
+  };
+}
+
 describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (DB)", () => {
   it("every outbox kind is swept through its real producer", async () => {
     // The Spanish subject differs from the English one, so a producer that dropped the locale would be seen (the right answer is not
@@ -243,7 +282,15 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
     const chess = await chessInviteScenario();
     expect(dictionarySubject("es", chess.subjectKey, chess.subjectVars)).not.toBe(dictionarySubject("en", chess.subjectKey, chess.subjectVars));
 
-    const out = await forEachOutboxKind({ magic_link: magicLinkScenario(), chess_invite: chess }, { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS });
+    const registration = await registrationConfirmationScenario();
+    expect(dictionarySubject("es", registration.subjectKey, registration.subjectVars)).not.toBe(
+      dictionarySubject("en", registration.subjectKey, registration.subjectVars),
+    );
+
+    const out = await forEachOutboxKind(
+      { magic_link: magicLinkScenario(), chess_invite: chess, registration_confirmation: registration },
+      { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
+    );
 
     expect(out.checked, "anti-vacuity: the kinds that have moved were all swept").toBe(SPEC_KINDS.length - NOT_YET_MOVED.length);
     expect(out.checked).toBeGreaterThan(0);

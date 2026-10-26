@@ -769,7 +769,7 @@
   "reg.hub.registrants.detail.actions.resend": "Reenviar correo de confirmación",
   "reg.hub.registrants.detail.actions.resending": "Enviando…",
   "reg.hub.registrants.detail.actions.resent": "Correo de confirmación enviado",
-  "reg.hub.registrants.detail.actions.resendNotSent": "No se pudo enviar ningún correo de confirmación",
+  "reg.hub.registrants.detail.actions.resendNotSent": "El correo de confirmación no salió de inmediato. Puede llegar más tarde o no llegar; si la persona no lo recibe, póngase en contacto con ella directamente.",
   "reg.hub.registrants.detail.actions.confirmReject.title": "¿Rechazar esta inscripción?",
   "reg.hub.registrants.detail.actions.confirmReject.body": "Esta acción no se puede deshacer. Si estaba pagada, se reembolsará y la plaza se ofrecerá a la siguiente persona de la lista de espera.",
   "reg.hub.registrants.detail.actions.confirmReject.confirm": "Rechazar",

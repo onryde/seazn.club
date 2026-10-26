@@ -41,18 +41,13 @@ vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
 // Observe the dispute-lost organiser email without touching the rest of the
 // email module (send() is a no-op without RESEND_API_KEY either way).
 //
-// `registration` (RS005 F1) additionally wraps sendRegistrationEmail: every
-// call still forwards to the REAL implementation (so its actual rendered
-// subject/html/text — via the real registrationTemplate — stays observable
-// through the captured `RegistrationEmail` opts), but `forceResult`/
-// `forceError` let a single test override just the provider outcome
-// deterministically, without depending on whether RESEND_API_KEY happens to
-// be set in this environment.
+// The registration confirmation is NOT here any more: it no longer goes through a
+// sender in this module. It is rendered (`registrationEmail`), queued on the email
+// outbox and sent through the outbox's one network seam, replaced just below, so a
+// test sees what the registrant would receive (the subject, html and text the
+// transport was handed) and the outbox row, rather than a spy on the arguments.
 const emailMock = vi.hoisted(() => ({
   disputeLost: vi.fn().mockResolvedValue(true),
-  registration: vi.fn(),
-  forceRegistrationResult: null as boolean | null,
-  forceRegistrationError: null as Error | null,
   // RS006 follow-up: staff alert for a registration refund that FAILS.
   // Observed the same way as disputeLost above — a bare vi.fn(), asserted
   // on directly — rather than forwarded to the real implementation, since
@@ -78,17 +73,15 @@ vi.mock("@/lib/email", async (importOriginal) => {
   return {
     ...actual,
     sendDisputeLostEmail: emailMock.disputeLost,
-    sendRegistrationEmail: async (opts: Parameters<typeof actual.sendRegistrationEmail>[0]) => {
-      emailMock.registration(opts);
-      if (emailMock.forceRegistrationError) throw emailMock.forceRegistrationError;
-      if (emailMock.forceRegistrationResult !== null) return emailMock.forceRegistrationResult;
-      return actual.sendRegistrationEmail(opts);
-    },
     sendRegistrationRefundFailedAlertEmail: emailMock.registrationRefundFailedAlert,
     sendPaymentReminderEmail: emailMock.paymentReminder,
     sendClaimInviteEmail: emailMock.claimInvite,
   };
 });
+
+// The outbox's one network seam: what the confirmation's attempt hands the provider is recorded here.
+const transport = vi.hoisted(() => ({ deliver: vi.fn() }));
+vi.mock("@/server/email-outbox/transport", () => ({ deliver: transport.deliver }));
 
 // #267 T3 (SPEC-5 §2): a targeted, org-id-scoped walletIdFor failure, so the
 // referral best-effort test can force the referrer grant to throw without
@@ -166,13 +159,11 @@ import {
 // exports"), needed here only to prove an already-placed solo sign-up is
 // excluded from the pool-deadline sweep.
 import { assignSoloSignUp } from "../registration-assign";
-// RS005 F1: rendering the REAL production template off captured
-// `RegistrationEmail` args (see emailMock.registration above) — this file's
-// own convention for "assert the rendered text, not just that it sent",
-// same email-builders.test.ts fixture (emailsEn) other suites already use.
-import { registrationTemplate } from "@/lib/email-templates";
-import emailsEn from "@/dictionaries/en/emails.json";
-import type { Dict } from "@/lib/i18n";
+// RS005 F1: "assert the rendered text, not just that it sent". The confirmation is now queued on the email outbox, so the text is
+// what the transport double was handed for the cart's row, read back through these.
+import { stubOutboxEnv } from "./_invite-mail";
+import { idempotencyKey } from "@/server/email-outbox/constants";
+import { OutboxKeyUnavailableError } from "@/server/email-outbox/seal";
 // The legacy `eligibilityIssues` string[] wrapper these pure tests used to
 // call was deleted at its source (RS002 W5 whole-branch review — zero
 // production callers repo-wide). Re-plumbed through the surviving evaluator
@@ -441,10 +432,8 @@ beforeEach(() => {
   stripeMock.reversalCreate.mockReset().mockResolvedValue({ id: "trr_test_1" });
   stripeMock.reversalList.mockReset().mockResolvedValue({ data: [] });
   emailMock.disputeLost.mockClear();
-  emailMock.registration.mockClear();
-  emailMock.forceRegistrationResult = null;
-  emailMock.forceRegistrationError = null;
   emailMock.registrationRefundFailedAlert.mockClear();
+  transport.deliver.mockReset().mockImplementation(async () => ({ ok: true, providerId: `re_rs_${randomUUID()}` }));
   // .mockReset() (not .mockClear()): a race test installs its own
   // mockImplementation on this one — reset the implementation back to its
   // default too, or it leaks into every later test in this file.
@@ -6119,7 +6108,25 @@ describe.skipIf(!HAS_DB)("mintGroupCheckout — per-currency matrix (RS003 W4)",
 // RS005 F1 review: findings 1 & 2 — resend/promotion/dispute-evidence money
 // correctness (buildCartMail + registrationTemplate's "paid" gate)
 // ---------------------------------------------------------------------------
+/** What the provider was handed for a cart's confirmation: every transport call made under one of the cart's outbox rows. */
+async function confirmationsSentFor(groupId: string): Promise<{ subject: string; html: string; text: string }[]> {
+  const rows = await sql<{ id: string }[]>`
+    select id from email_outbox
+     where kind = 'registration_confirmation' and ref_type = 'registration_group' and ref_id = ${groupId}
+     order by created_at, id`;
+  const keys = new Set(rows.map((r) => idempotencyKey(r.id)));
+  return transport.deliver.mock.calls
+    .map((c) => c[0] as { subject: string; html: string; text: string; idempotencyKey: string })
+    .filter((m) => keys.has(m.idempotencyKey));
+}
+
 describe.skipIf(!HAS_DB)("RS005 F1 finding 1: a settled cart's resend does not re-demand money", () => {
+  beforeEach(() => stubOutboxEnv());
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
   it("resending confirmation for an offline-paid (now confirmed) entry omits the fee ask entirely", async () => {
     const { orgId, ownerId } = await seedOrg("pro");
     const owner = asOwner(orgId, ownerId);
@@ -6135,21 +6142,24 @@ describe.skipIf(!HAS_DB)("RS005 F1 finding 1: a settled cart's resend does not r
     expect(confirmedRow.status, "sanity: fully settled, not merely 'paid'").toBe("confirmed");
 
     await resendRegistrationConfirmation(owner, seeded.registration.id, "https://test.local");
-    expect(emailMock.registration).toHaveBeenCalledTimes(1);
-    const sentArgs = emailMock.registration.mock.calls[0]![0] as Parameters<
-      typeof registrationTemplate
-    >[0] & { to: string; locale: string | null };
+    const sent = await confirmationsSentFor(seeded.registration.group_id);
+    expect(sent, "the resend reached the provider once").toHaveLength(1);
 
-    // The REAL template renders the args resendRegistrationConfirmation
-    // actually built — this is the "assert the rendered text, not just that
-    // it sent" bar, not a mock-behaviour assertion.
-    const rendered = registrationTemplate(sentArgs, emailsEn as Dict);
-    expect(rendered.html).not.toContain("Entry fee");
-    expect(rendered.text).not.toContain("Entry fee");
+    // What the provider was handed is the REAL rendered mail - this is the
+    // "assert the rendered text, not just that it sent" bar, not a
+    // mock-behaviour assertion.
+    expect(sent[0]!.html).not.toContain("Entry fee");
+    expect(sent[0]!.text).not.toContain("Entry fee");
   });
 });
 
 describe.skipIf(!HAS_DB)("RS005 F1 finding 2: a promoted entry's mail/evidence carry its NEW fee", () => {
+  beforeEach(() => stubOutboxEnv());
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
   it("resending confirmation after a waitlist promotion carries the newly-owed fee, not the stale submit-time zero", async () => {
     const { orgId, ownerId } = await seedOrg("pro");
     const owner = asOwner(orgId, ownerId);
@@ -6167,15 +6177,12 @@ describe.skipIf(!HAS_DB)("RS005 F1 finding 2: a promoted entry's mail/evidence c
     expect(promoted!.amount_cents, "sanity: the per-entry column IS updated by promotion").toBe(1500);
 
     await resendRegistrationConfirmation(owner, promoted!.id, "https://test.local");
-    const sentArgs = emailMock.registration.mock.calls.at(-1)![0] as Parameters<
-      typeof registrationTemplate
-    >[0] & { to: string; locale: string | null };
+    const sent = await confirmationsSentFor(promoted!.group_id);
+    expect(sent, "the resend reached the provider once").toHaveLength(1);
     // Before the fix: buildCartMail read the stale registration_groups.
-    // amount_cents (0 — the entry was waitlisted at submit time), so this
-    // was 0 and no fee panel rendered at all.
-    expect(sentArgs.totalCents).toBe(1500);
-    const rendered = registrationTemplate(sentArgs, emailsEn as Dict);
-    expect(rendered.html).toContain("Entry fee: £15.00");
+    // amount_cents (0 — the entry was waitlisted at submit time), so the
+    // total was 0 and no fee panel rendered at all.
+    expect(sent[0]!.html).toContain("Entry fee: £15.00");
   });
 
   it("the dispute-evidence pack's reconstructed receipt agrees with its own Amount row after a promotion", async () => {
@@ -6213,6 +6220,12 @@ describe.skipIf(!HAS_DB)("RS005 F1 finding 2: a promoted entry's mail/evidence c
 // organiser or a registrant getting nothing with zero trace anywhere.
 // ---------------------------------------------------------------------------
 describe.skipIf(!HAS_DB)("RS005 F1: swallowed registration-mail failures are now logged", () => {
+  beforeEach(() => stubOutboxEnv());
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
   it("resendRegistrationConfirmation logs the refusal on a terminal entry, with the actor and registration id", async () => {
     const { orgId, ownerId } = await seedOrg("pro");
     const owner = asOwner(orgId, ownerId);
@@ -6235,20 +6248,23 @@ describe.skipIf(!HAS_DB)("RS005 F1: swallowed registration-mail failures are now
     spy.mockRestore();
   });
 
-  it("resendRegistrationConfirmation logs when the provider does not accept the send", async () => {
+  it("resendRegistrationConfirmation reports sent:false while the outbox retries; the queued row is the record (no provider-refused warn)", async () => {
     const { orgId, ownerId } = await seedOrg("pro");
     const owner = asOwner(orgId, ownerId);
     const { competition, division } = await rig(owner);
     const settings = await putRegistrationSettings(owner, division.id, { ...SETTINGS_BASE, fee_cents: 0 });
     const seeded = await seedRegistration(competition.id, division.id, settings);
-    emailMock.forceRegistrationResult = false;
+    transport.deliver.mockReset().mockImplementation(async () => ({ ok: false, reason: "http", status: 503, errorName: "service_unavailable", detail: "later" }));
 
     const spy = vi.spyOn(log, "warn").mockImplementation(() => undefined as never);
     const result = await resendRegistrationConfirmation(owner, seeded.registration.id, "https://test.local");
     expect(result.sent).toBe(false);
-    expect(spy).toHaveBeenCalled();
-    expect(spy.mock.calls.at(-1)?.[0]).toMatchObject({ registrationId: seeded.registration.id, orgId });
-    expect(spy.mock.calls.at(-1)?.[1]).toContain("did not accept");
+    // The record of "the provider did not take it" is the row, which the worker retries; the old per-click warn is gone (spec section 8).
+    const rows = await sql<{ status: string; attempts: number }[]>`
+      select status, attempts from email_outbox
+       where kind = 'registration_confirmation' and ref_type = 'registration_group' and ref_id = ${seeded.registration.group_id}`;
+    expect(rows).toEqual([{ status: "queued", attempts: 1 }]);
+    expect(spy.mock.calls.filter((c) => JSON.stringify(c).includes("did not accept"))).toEqual([]);
     spy.mockRestore();
   });
 
@@ -6283,23 +6299,26 @@ describe.skipIf(!HAS_DB)("RS005 F1: swallowed registration-mail failures are now
     spy.mockRestore();
   });
 
-  it("notifySubmitted logs (never throws) when the send itself throws", async () => {
+  it("notifySubmitted logs (never throws) when the confirmation cannot be queued", async () => {
     const { orgId, ownerId } = await seedOrg("pro");
     const owner = asOwner(orgId, ownerId);
     const { competition, division } = await rig(owner);
     const settings = await putRegistrationSettings(owner, division.id, { ...SETTINGS_BASE, fee_cents: 0 });
     const seeded = await seedRegistration(competition.id, division.id, settings);
-    const boom = new Error("provider exploded");
-    emailMock.forceRegistrationError = boom;
+    // A Resend key and no usable outbox key: the body cannot be sealed, so the writer refuses (a real fault, not a spy).
+    vi.stubEnv("EMAIL_OUTBOX_KEK", "");
 
     const spy = vi.spyOn(log, "error").mockImplementation(() => undefined as never);
     await expect(
       notifySubmitted(seeded.registration.group_id, "https://test.local", seeded.access_token, null),
     ).resolves.toBeUndefined(); // fire-and-forget semantics preserved
     expect(spy).toHaveBeenCalled();
-    expect(spy.mock.calls[0]?.[0]).toMatchObject({ err: boom, groupId: seeded.registration.group_id });
+    expect(spy.mock.calls[0]?.[0]).toMatchObject({ groupId: seeded.registration.group_id });
+    expect((spy.mock.calls[0]?.[0] as { err: unknown }).err).toBeInstanceOf(OutboxKeyUnavailableError);
     expect(spy.mock.calls[0]?.[1]).toContain("submit confirmation");
     spy.mockRestore();
+    const rows = await sql`select 1 from email_outbox where kind = 'registration_confirmation' and ref_id = ${seeded.registration.group_id}`;
+    expect(rows, "nothing was queued").toHaveLength(0);
   });
 });
 
