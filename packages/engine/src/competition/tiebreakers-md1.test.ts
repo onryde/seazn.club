@@ -1,11 +1,12 @@
 // W2d Task 20 (MD-1, spec §14: W2d owns every survivor in competition/tiebreakers.ts): the tests that kill what
 // Stryker left alive there. The mutants recorded as equivalent are in stryker-equivalent.json, each with its proof.
 //
-// Expected values are computed by hand from the rule each block cites — FIDE Handbook C.07 (Buchholz, Cut-1,
-// Sonneborn-Berger, the virtual opponent of an unplayed game), spec 05 §4.2 (direct encounter), spec 05 §4.3 (a ratio
-// is compared by cross-multiplication; 0/0 is 0, "no data"), the ICC net run rate (runs for per over faced minus runs
-// against per over bowled, spec 04 §5) — and from the engine's own declarations (`SwissGame`, `RATIO_LEDGERS`). Never
-// from rankStandings or the Swiss readers under test.
+// Expected values are computed by hand from the rule each block cites — Buchholz, Cut-1 and Sonneborn-Berger as sums
+// over a card (spec 04 §6.3), spec 05 §4.2 (direct encounter), spec 05 §4.3 (a ratio is compared by cross-multiplication;
+// 0/0 is 0, "no data"), the ICC net run rate (runs for per over faced minus runs against per over bowled, spec 04 §5) —
+// and from the engine's own declarations (`SwissGame`, `RATIO_LEDGERS`). Never from rankStandings or the Swiss readers
+// under test. The virtual opponent of an unplayed game is NOT pinned to a number: the engine's formula DIFFERS from FIDE
+// C.07 (rulebook-W3-swiss.md T2, SW-M1, W3-owned), so its tests are relational and hold under every candidate model.
 //
 // Every table here is hand-built; the one sport read is the whole registry, swept (R26).
 import { describe, expect, it } from "vitest";
@@ -27,27 +28,33 @@ const side = (entrantId: string, r: "w" | "d" | "l"): StandingsDelta => ({
 });
 const beat = (winner: string, loser: string): FixtureResult => [side(winner, "w"), side(loser, "l")];
 
-describe("W2d T20 MD-1 — FIDE C.07 virtual opponent: every unplayed game, however written", () => {
-  // X: R1 beat Y; R2 a game X did not play; R3 beat Z — 3 rounds. C.07: the unplayed game is scored against a virtual
-  // opponent holding X's score before that round (2 half-points) plus ½ point for each round from it to the end (R2,
-  // R3: 2 half-points) = 4. Y holds 3, Z 1: Buchholz(X) = 3 + 4 + 1 = 8.
+// The engine's current virtual-opponent model DIFFERS from FIDE C.07 (rulebook-W3-swiss.md T2; SW-M1, W3 owns the fix),
+// so no number here is asserted as the rule's: each test is a relation that holds under the engine's model, the
+// superseded C.07 text (A6) and the current one (A4 16.4) alike.
+describe("W2d T20 MD-1 — the virtual opponent of an unplayed game, however the card writes it (relational: the model DIFFERS from C.07, W3)", () => {
+  // X: R1 beat Y; R2 a game X did not play; R3 beat Z — 3 rounds. Half-points: Y 3, Z 1; V, the R2 absentee, 8.
+  const SCORE = { X: 6, Y: 3, Z: 1, V: 8 } as const;
   const withRound2 = (game: SwissTable[number]["games"][number]): SwissTable => [
-    { entrant: "X", score: 6, games: [{ opponent: "Y", result: "win", scored: 2 }, game, { opponent: "Z", result: "win", scored: 2 }] },
-    { entrant: "Y", score: 3, games: [] },
-    { entrant: "Z", score: 1, games: [] },
-    { entrant: "V", score: 0, games: [{ opponent: "X", result: "loss", scored: 0, unplayed: true }] },
+    { entrant: "X", score: SCORE.X, games: [{ opponent: "Y", result: "win", scored: 2 }, game, { opponent: "Z", result: "win", scored: 2 }] },
+    { entrant: "Y", score: SCORE.Y, games: [] },
+    { entrant: "Z", score: SCORE.Z, games: [] },
+    { entrant: "V", score: SCORE.V, games: [{ opponent: "X", result: "loss", scored: 0, unplayed: true }] },
   ];
 
-  it("a FORFEIT against a real opponent (unplayed, opponent named) is scored against the virtual opponent, not the absentee's score", () => {
-    // V did not show in R2: the game is unplayed though V exists (SwissGame: "unplayed games (byes, forfeits,
-    // absences) use a FIDE virtual opponent"). V's real score (0) would make it 3 + 0 + 1 = 4.
-    expect(buchholz(withRound2({ opponent: "V", result: "win", scored: 2, unplayed: true }), "X")).toBe(8);
+  it("a FORFEIT against a real opponent (unplayed, opponent named) is not scored at the absentee's own score", () => {
+    // V did not show in R2: the game is unplayed though V exists (SwissGame: "unplayed games (byes, forfeits, absences)
+    // use a FIDE virtual opponent"). Reading V's real score gives Y + V + Z = 12; every candidate model differs from it
+    // on this card (by the reviewer's arithmetic: the engine 8, C.07 A6 7, C.07 A4 16.4.1 10), so only "not 12" is asserted.
+    const forfeit = buchholz(withRound2({ opponent: "V", result: "win", scored: 2, unplayed: true }), "X");
+    expect(forfeit).not.toBe(SCORE.Y + SCORE.V + SCORE.Z);
   });
 
-  it("a BYE written without the unplayed flag (opponent null: 'null for a bye') is still the virtual opponent", () => {
-    expect(buchholz(withRound2({ opponent: null, result: "win", scored: 2 }), "X")).toBe(8);
-    // the positive pair: the flagged bye, as buildSwissTable writes it
-    expect(buchholz(withRound2({ opponent: null, result: "win", scored: 2, unplayed: true }), "X")).toBe(8);
+  it("a BYE written without the unplayed flag (opponent null: 'null for a bye') reads exactly as the flagged bye", () => {
+    // A representation fact, true under every model: the card's two spellings of one bye are one bye.
+    const flagged = buchholz(withRound2({ opponent: null, result: "win", scored: 2, unplayed: true }), "X");
+    expect(buchholz(withRound2({ opponent: null, result: "win", scored: 2 }), "X")).toBe(flagged);
+    // and neither reads the round as 0: on this card every candidate model scores the bye's virtual opponent above 0
+    expect(flagged).toBeGreaterThan(SCORE.Y + SCORE.Z);
   });
 });
 
@@ -98,6 +105,7 @@ describe("W2d T20 MD-1 — a Swiss table's Buchholz Cut-1, and the columns it ma
     expect(ranked, "anti-vacuity: every row checked").toHaveLength(6);
     // the negative pair: a column the cascade does not use is not written
     const plain = rankStandings(rows, { cascade: ["points", "buchholz"], swiss: table }).rows;
+    expect(plain, "anti-vacuity: every row of the negative pair checked").toHaveLength(SWISS_ENTRANTS.length);
     for (const r of plain) {
       expect(Object.keys(r.metrics).sort(), r.entrantId).toEqual(["buchholz"]);
     }

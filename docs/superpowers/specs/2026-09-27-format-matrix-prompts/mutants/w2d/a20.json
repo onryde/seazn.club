@@ -43,5 +43,35 @@
         "name": "the table rule refuses a map that prices no set score, naming the keys STORED"
       }
     ]
+  },
+  {
+    "id": "a20-r1-forfeit-reads-the-absentee",
+    "file": "packages/engine/src/competition/tiebreakers.ts",
+    "find": "  if (game.unplayed || game.opponent === null) return virtualOpponentScore(row, index);\n",
+    "replace": "  if (false || game.opponent === null) return virtualOpponentScore(row, index);\n",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/tiebreakers-md1.test.ts"
+        ],
+        "name": "a FORFEIT against a real opponent"
+      }
+    ]
+  },
+  {
+    "id": "a20-r1-unflagged-bye-looks-up-null",
+    "file": "packages/engine/src/competition/tiebreakers.ts",
+    "find": "  if (game.unplayed || game.opponent === null) return virtualOpponentScore(row, index);\n",
+    "replace": "  if (game.unplayed || false) return virtualOpponentScore(row, index);\n",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/tiebreakers-md1.test.ts"
+        ],
+        "name": "a BYE written without the unplayed flag"
+      }
+    ]
   }
 ]
