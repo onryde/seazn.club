@@ -26,7 +26,8 @@
 // which self-skips without one, like every DB-backed suite here.
 import { describe, expect, it } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
-import { ratioText, type StandingsRow } from "@seazn/engine/competition";
+import { ratioText, validateCascade, type StandingsRow } from "@seazn/engine/competition";
+import type { TiebreakerKey } from "@seazn/engine/sport";
 import { sql } from "@/lib/db";
 import { buildPublicDivisionSlides, buildDivisionSlides, type Slide, type StandingsSlideRow } from "../slideshow-data";
 import { buildTableView, type TableViewInput } from "../public-site/standings-view";
@@ -294,11 +295,32 @@ describe.skipIf(!HAS_DB)("slideshow standings slide — the Pts ratio column (or
   // layers). Both directions, on the same snapshot rows, so a builder that
   // stopped reading the stage's rules (falling back to the module default, or to
   // no order) fails one of the pair.
+  // The sport is the first shipped module whose DEFAULT order never ranks on point_ratio yet which records what the ratio
+  // reads (points_won, points_lost), read off the engine: `validateCascade`, which W2d T10 asks of the order a new stage
+  // inherits (`refuseNewStageTable`). generic records neither, so its own order naming point_ratio is refused at the stage
+  // create. point_ratio goes in AHEAD of the terminal drawing of lots, under the sport's first variant.
+  const addedRatioSport = () => {
+    for (const m of builtinModules) {
+      const variant = Object.keys(m.variants)[0];
+      const order = defaultOrderOf(m);
+      if (variant === undefined || order.includes("point_ratio") || order.at(-1) !== "lots") continue;
+      const added = [...order.slice(0, -1), "point_ratio", "lots"] as TiebreakerKey[];
+      const cfg = m.configSchema.parse(m.variants[variant]);
+      if (validateCascade(added, { module: m, cfg, stageKind: "league", crossGroup: false }).length === 0) return { m, variant, added };
+    }
+    throw new Error("no shipped module records point_ratio's inputs without ranking on it (the case below proves nothing)");
+  };
+
   it("a division whose OWN cascade adds point_ratio to a sport that never ranks on it gets the column, with its values", async () => {
-    const generic = builtinModules.find((m) => m.key === "generic")!;
-    expect(defaultOrderOf(generic), "generic's default cascade").not.toContain("point_ratio");
-    const added = [...defaultOrderOf(generic), "point_ratio"];
-    const { auth, division } = await seededDivision("generic", "score", GENERIC_CONFIG, added);
+    const { m, variant, added } = addedRatioSport();
+    expect(defaultOrderOf(m), `${m.key}'s default cascade`).not.toContain("point_ratio");
+    expect(added, "the own order adds point_ratio").toContain("point_ratio");
+    // Why not generic (the case before W2d T10): it records no points ledger, so the engine refuses point_ratio there.
+    const generic = builtinModules.find((x) => x.key === "generic")!;
+    const genericAdded = [...defaultOrderOf(generic).slice(0, -1), "point_ratio", "lots"] as TiebreakerKey[];
+    const genericCfg = generic.configSchema.parse(GENERIC_CONFIG);
+    expect(validateCascade(genericAdded, { module: generic, cfg: genericCfg, stageKind: "league", crossGroup: false }).map((r) => r.key), "generic refuses it").toEqual(["point_ratio"]);
+    const { auth, division } = await seededDivision(m.key, variant, {}, added);
     const slides = await buildDivisionSlides(auth, division.id, "Open");
     const slide = slides.find((s): s is StandingsSlide => s.kind === "standings");
     expect(slide, "a standings slide").toBeDefined();
