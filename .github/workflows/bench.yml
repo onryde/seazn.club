@@ -141,17 +141,11 @@ jobs:
       # board comes back greedy while the run reports on it — `_RULES.md` §2
       # calls that "the false green, and it looks exactly like a pass". The
       # `--engine` assertion below is what catches it, but only if the solver
-      # was genuinely available to begin with. Image build is cached (type=gha)
-      # and shared with ci.yml and placement-ci.yml.
-      - uses: docker/setup-buildx-action@v3
-      - name: Build the placement service image
-        uses: docker/build-push-action@v6
-        with:
-          context: services/placement
-          file: services/placement/Dockerfile
-          push: false
-          load: true
-          tags: placement-service:ci
+      # was genuinely available to begin with. The image is PULLED from the pin
+      # (packages/scheduler/VENDORED.json) and retagged `placement-service:ci`,
+      # the same one ci.yml and e2e.yml run; nothing is built here.
+      - name: Pull the pinned placement image
+        run: bash packages/scheduler/scripts/placement-image.sh pull
 
       - name: Start placement service
         run: |

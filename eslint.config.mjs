@@ -25,7 +25,6 @@ export default defineConfig([
     "node_modules/**",
     "apps/**",
     "packages/**",
-    "services/**",
     // Generated: a committed artefact rewritten by `bench:build-packs` and
     // `openapi:gen`. Linting output is linting the generator twice.
     "openapi/**",

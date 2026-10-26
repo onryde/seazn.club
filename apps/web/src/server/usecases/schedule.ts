@@ -2122,8 +2122,8 @@ export function autoSolverWallMs(): number {
  * through `reflowExisting` — none of the three calls z3 for scheduling any
  * more, since C4, 2026-08-14) is a remote call to the placement service,
  * which admits only a small, fixed number of concurrent solves
- * (`PLACEMENT_MAX_WORKERS` on the service side — see `services/placement/
- * fly.toml`; this comment predates that cutover and its "one at a time via
+ * (`PLACEMENT_MAX_WORKERS` on the service side — see `fly.toml` in
+ * onryde/seazn.club.placement; this comment predates that cutover and its "one at a time via
  * `withZ3Lock`" framing is no longer literally accurate, but the underlying
  * shape — a small shared ceiling, not unlimited parallelism — still holds,
  * which is why the numbers below have not been revisited). The failure mode

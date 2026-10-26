@@ -1,3 +1,7 @@
 # The capture-app contracts are CHECKSUMMED byte for byte (docs/contracts/capture-*.json): no end-of-line
 # conversion on checkout or commit, or a Windows clone reads a different digest than the one pinned.
 docs/contracts/** -text
+
+# The scheduler's vendored copy of the placement proto is CHECKSUMMED byte for byte (packages/scheduler/VENDORED.json pins its
+# sha256, and the TypeScript stubs embed its comments): no end-of-line conversion, or a Windows clone reads a different digest.
+packages/scheduler/proto/** -text

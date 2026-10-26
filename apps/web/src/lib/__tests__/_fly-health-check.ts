@@ -13,8 +13,8 @@ const REPO_ROOT = resolve(import.meta.dirname, "../../../../..");
 /** Every `fly*.toml` at the repo root, globbed rather than listed, so a new
  *  app config (a preview app, say) is checked without anyone remembering to
  *  add it. Zero matches throws: an empty list would make every `it.each` over
- *  it collect nothing and pass. (services/placement/fly.toml is a different
- *  app with no pool, and is not at the root.) */
+ *  it collect nothing and pass. (The placement service's fly.toml, in onryde/seazn.club.placement,
+ *  is a different app with no pool, and is not in this repo.) */
 export const FLY_CONFIGS: readonly string[] = (() => {
   const files = readdirSync(REPO_ROOT)
     .filter((f) => /^fly.*\.toml$/.test(f))

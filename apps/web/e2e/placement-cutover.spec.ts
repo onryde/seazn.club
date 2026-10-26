@@ -24,8 +24,8 @@ import { TAG, apiJson, addEntrantsViaApi, divisionPath, seedVenueWithCourts } fr
 // matches each (ad-hoc fixtures — `POST /stages/{id}/fixtures`, PROMPT-66 —
 // not the round-robin generator: a generated 21-fixture/7-round board hits
 // the SAME mechanism but is too large to prove optimal inside
-// `PLACEMENT_WALL_SECONDS_MAX` (10s by default, `services/placement/src/
-// placement/config.py`) — measured directly against a live service, it stalls
+// `PLACEMENT_WALL_SECONDS_MAX` (10s by default, `src/placement/config.py` in
+// onryde/seazn.club.placement) — measured directly against a live service, it stalls
 // at `tiers_completed: 1/4`, `budget_expired: true`, and falls back to greedy
 // for a reason that has nothing to do with the cutover). Three matches cannot
 // fit in one wave across two courts, so every round spills one match into a
