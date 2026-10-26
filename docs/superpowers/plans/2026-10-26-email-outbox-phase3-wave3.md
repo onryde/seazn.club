@@ -34,7 +34,7 @@ difference.
 
 ## Owner rulings (2026-10-26) — every Owner question below is decided
 
-The owner applied every recommendation in this plan's Owner questions: Q1 yes (also reword `claim.invite.sendFailed`, 4 locales); Q2 screenshots from a ONE-OFF local server with no Resend key, used only for the 3 widths and torn down after; Q3 yes (sign-in link in the account's language, T2e).
+The owner applied every recommendation in this plan's Owner questions: Q1 yes (also reword `claim.invite.sendFailed`, 4 locales); Q2 screenshots from a ONE-OFF local server with no Resend key, used only for the 3 widths and torn down after; Q3 yes (sign-in link in the account's language, T2e). Later the same day the owner added: check every wave-2 finding for product and customer value and build the ones that have it in this wave → Task 4d (three fixes), triage table below.
 
 ## Global Constraints
 
@@ -704,6 +704,53 @@ and returns `outboxId`. The route passes `baseUrl(req)` and computes `email_sent
 - [ ] **Step 8: TSC, LINT, commit**
   `feat(officials): the officiating invite goes through the outbox; the notice is true while it retries`.
 
+### Task 4d (batch C): wave-2 findings with customer value (owner, 2026-10-26)
+
+The owner asked for every wave-2 finding to be checked for product and customer value, and for the ones that have value
+to be built in this wave. The triage of all 27 is under "Wave-2 findings, triaged by customer value" below. Three
+are built here. Each is one guard plus one test, and each is ONE commit. Lines are cited as of `badfee3fef`; re-pin by
+symbol at T0.
+
+**Files:** `apps/web/src/server/usecases/sponsors.ts`, `apps/web/src/server/usecases/registrations.ts`; tests in
+`apps/web/src/server/usecases/__tests__/sponsor-dispute-outbox.test.ts`, `registration-dispute-outbox.test.ts`,
+`sponsor-outbox.test.ts` (extend; reuse `_money-fixtures.ts`, `_registration-fixtures.ts`; no new fixture code).
+
+- [ ] **4d-1. A closed inquiry un-parks the sponsor** (`handleSponsorDispute`, the `closed` phase, `sponsors.ts:1040`).
+  *Customer value:* Stripe sends an inquiry (`warning_needs_response`) as `charge.dispute.created`, so the sponsor's
+  placement is parked and the owner is alerted. When the inquiry closes without a chargeback, Stripe sends
+  `charge.dispute.closed` with `status: "warning_closed"`. That matches neither `won` nor `lost`, so today the flag
+  stays and the placement stays hidden FOREVER. The organiser cannot fix it either: `updateSponsor` refuses a manual
+  reactivate with 409 "parked by an open payment dispute — it comes back automatically if the dispute is won". A sponsor
+  who paid is invisible and nobody is told.
+  *Change:* the `won` branch runs for `dispute.status === "won" || dispute.status === "warning_closed"`. A
+  `warning_closed` means the money was never taken, which is what the won email already says ("closed in your favour.
+  The money stays with you and the placement is back"), so the existing `sponsor_dispute_won` email and its once-key
+  (`<dispute>:won`) are reused: no new kind, no migration, no new copy.
+  *Test:* `a closed inquiry (warning_closed) clears the flag, re-activates the placement and queues the won notice once`.
+  Expected values: `disputed_at` null, sponsor `status = 'active'`, one `sponsor_dispute_won` row; redelivery → still one.
+  Mutant: drop the `warning_closed` arm → red.
+- [ ] **4d-2. A closed inquiry clears the registrant's dispute flag** (`handleRegistrationDispute`, the `closed` phase,
+  `registrations.ts:3413`).
+  *Customer value:* same Stripe sequence on a registration cart. The registrant stays "disputed" for good in the
+  registration hub (`registration-hub-registrant-derive.ts:176`) and in the division's dispute count
+  (`registration-derive.ts:54`), so the organiser chases a dispute that ended.
+  *Change:* the `won` branch also runs for `warning_closed` (clear `disputed_at`, the `registration.dispute_won` audit).
+  No email: the registration won path sends none today.
+  *Test:* `a closed inquiry (warning_closed) clears the cart's dispute flag`. Mutant: drop the arm → red.
+- [ ] **4d-3. A replayed payment success cannot re-activate a refunded order** (`handleSponsorPaymentSucceeded`,
+  `sponsors.ts:605`).
+  *Customer value:* money. A refunded sponsor must never go back on boards and public pages. The handler's only guard
+  is `order.status === "paid" || order.sponsor_id !== null`. A refunded order whose sponsor row was deleted has neither,
+  so a re-run of its success (a crash re-claim of the event) inserts a NEW `active` sponsor row and marks the order
+  `paid` again. Narrow to reach, but the owner's exception covers it (money), and the fix is one guard.
+  *Change:* the guard becomes "only a `pending` or `failed` order activates" (confirm the order status enum at T0 and
+  name every non-activating status in the test). Anything else returns `null`: no sponsor row, no receipt, no order write.
+  *Test:* `a payment success re-run on a refunded order whose sponsor was deleted creates no sponsor and leaves the order
+  refunded`. Expected: order `status = 'refunded'`, zero new `sponsors` rows for the org, zero new `sponsor_receipt`
+  rows. Mutant: restore the old guard → red.
+
+Changed while queued: nothing new. 4d-1 reuses a kind whose facts were recorded in wave 2.
+
 ### Task 5: Smoke
 
 **Files:** `scripts/smoke.ts` only. No new selectable suite, so `smoke-select.test.ts` is unchanged.
@@ -847,6 +894,33 @@ One line each. None loses money or data or leaks a secret's value, except where 
 - The tick's budget is spent before step 7a: the scrub runs next tick.
 - A staff verification resend races the account's own email change: the newer token goes to whichever address the
   route read.
+
+## Wave-2 findings, triaged by customer value (owner, 2026-10-26)
+
+Source: the wave-2 ledger and final review (24 parked minors and 3 new). The question for each: does a customer
+(organiser, sponsor, player, staff) see a difference? Built = Task 4d.
+
+| # | Finding | Who sees it | Verdict |
+|---|---|---|---|
+| 1 | sponsor `warning_closed` falls through: placement hidden forever, manual reactivate refused | paying sponsor, organiser | **Build (4d-1)** |
+| 2 | registration `warning_closed` twin: registrant "disputed" forever | organiser | **Build (4d-2)** |
+| 3 | refunded order (sponsor deleted) re-activated by a re-run success (`sponsors.ts:605`) | public pages show a refunded sponsor | **Build (4d-3)**: money |
+| 4 | platform-subscription `warning_closed` twin (`billing-events.ts:2433`) | nobody: no code reads `subscriptions.disputed_at` | Record |
+| 5 | missing order/cart row counts as a transition (`sponsors.ts:1050`, `registrations.ts:3380`) | at worst one extra alert for a real dispute; rare | Record |
+| 6 | pass revoke reads owner + locale on partial refunds; no log for an owner-less org | nobody (two indexed reads) | Record |
+| 7 | `refId: dedupeKey` → `chargeId` in `queuePassRevokedEmail` | nobody today; a future suffix fails loudly | Record |
+| 8 | `enqueue.ts:77` refusal says "empty or blank" for a missing id | developers only | Fold only if T1 touches `enqueue.ts` |
+| 9 | evidence-pack comments ("language it was sent in", "exact sender inputs") | developers only | Record |
+| 10 | test anchors / unasserted comments (`once-key-builder.test.ts:67`, `sponsor-dispute-outbox.test.ts:298`) | nobody; behaviour is killed by other tests | Record |
+| 11 | hand-typed spec kind lists in 4 test files | developers only; hand-typing from the spec is deliberate | Record |
+| 12 | three similar enqueue literals in `sponsors.ts` | nobody; below the abstraction bar | Record |
+| 13 | lost branch: no no-owner / after-withdrawal test | nobody; TSC kills the guard mutant | Record |
+| 14 | test rows left in local DBs | developers only; CI is fresh | Record |
+| 15 | wave-1 dedupeKeys not on `onceKey` | nobody; each embeds a non-null id | Record |
+| 16 | walkthrough / e2e wording, order and comments (T11/12 m1–m4), `hasBody:false` belt | nobody | Record |
+| 17 | `registration_dispute_lost` has no e2e/smoke row check | nobody; unit + sweep + F7 cover it | Record |
+| 18 | changed-while-queued plan text for won/lost; first-attempt timing checks; 149-char comment line | nobody | Record |
+| 19 | walkthrough KEK concern | ruled void in wave 2 (CI witness) | Closed |
 
 ## Next waves and routed findings (not built here)
 
