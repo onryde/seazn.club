@@ -943,9 +943,9 @@ async function recoverSponsorDispute(
  * charge.dispute.created / .closed for a sponsor package charge (P0-2 —
  * destination charges make the PLATFORM liable, exactly like entry fees).
  * `created` flags the order + parks the placement (pending) and alerts the
- * owner; `closed` clears the flag and re-activates on a win, or writes the
- * order off, deactivates the placement and reverses the club's transfer on a
- * loss. Dispatched after handleRegistrationDispute for both event types —
+ * owner; `closed` clears the flag and re-activates on a win (or a closed
+ * inquiry, `warning_closed`), or writes the order off, deactivates the
+ * placement and reverses the club's transfer on a loss. Dispatched after handleRegistrationDispute for both event types —
  * a non-sponsor intent matches no order row and no-ops.
  *
  * The owner's notices go through the email outbox (kinds
@@ -1037,18 +1037,26 @@ export async function handleSponsorDispute(
     return true;
   }
 
-  if (dispute.status === "won") {
+  // An inquiry (opened as `warning_needs_response`) that the bank drops without a chargeback closes `warning_closed`: no money was
+  // ever taken, which is a win in all but name. Without this arm the flag stayed and the placement stayed parked for good, and the
+  // organiser could not bring it back by hand (`updateSponsor` refuses while the flag is set). It reuses the won notice and its key.
+  if (dispute.status === "won" || dispute.status === "warning_closed") {
     const recipient = await sponsorDisputeRecipient(order.org_id, order.org_default_locale);
     // ONE transaction clears the flag and queues the owner's notice (R1),
     // only on the TRANSITION (replay-safe): the order, read under lock, still
     // carried the flag. A redelivered `won` finds it clear. The once-key keeps
     // the notice single should this dispute flag the order again and win again.
+    // The placement comes back, and the notice ("the money stays with you")
+    // goes, only while the order is still paid: a full refund is one of the
+    // two ways Stripe offers to resolve an inquiry, and a refunded sponsor
+    // never goes back on boards and public pages.
     await sql.begin(async (tx) => {
-      const [prior] = await tx<{ disputed_at: Date | null }[]>`
-        select disputed_at from sponsor_orders where id = ${order.id} for update`;
+      const [prior] = await tx<{ disputed_at: Date | null; status: SponsorOrderRow["status"] }[]>`
+        select disputed_at, status from sponsor_orders where id = ${order.id} for update`;
       await tx`update sponsor_orders set disputed_at = null where id = ${order.id}`;
       const firstClear = prior?.disputed_at !== null;
-      if (firstClear && recipient) {
+      const stillPaid = prior?.status === "paid";
+      if (firstClear && stillPaid && recipient) {
         const kind = "sponsor_dispute_won";
         await enqueueEmailOnce(tx, {
           kind,
@@ -1063,7 +1071,7 @@ export async function handleSponsorDispute(
           dedupeKey: onceKey(kind, "dispute", dispute.id, "won"),
         });
       }
-      if (order.sponsor_id) {
+      if (stillPaid && order.sponsor_id) {
         await tx`update sponsors set status = 'active' where id = ${order.sponsor_id}`;
       }
     });

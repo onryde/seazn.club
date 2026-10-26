@@ -4,7 +4,9 @@
 //   - Email 6, `sponsor_dispute_alert`: a dispute that opens on a sponsor's payment queues the alert (once-key `<dispute id>:created`) in
 //     the transaction that flags the order, and only on the transition to THIS dispute (the order's prior dispute, read under lock).
 //   - Email 7, `sponsor_dispute_won`: a dispute that closes won queues the notice (once-key `<dispute id>:won`) in the transaction that
-//     clears the flag, and only on the transition (the order, read under lock, still carried the flag).
+//     clears the flag, and only on the transition (the order, read under lock, still carried the flag). An inquiry that closes without
+//     a chargeback (`warning_closed`) is the same outcome: no money was taken, so it takes the won path and its notice. The placement
+//     comes back and the notice goes only while the order is still paid: an inquiry answered with a full refund stays down.
 //   - Email 8, `sponsor_dispute_lost`: a dispute that closes lost writes the order off, recovers the club's share from its balance, then
 //     queues the notice (once-key `<dispute id>:lost`) carrying what was recovered. A replayed close that finds its own reversal already
 //     made (the recovery's metadata guard) queues nothing.
@@ -40,7 +42,7 @@ import { sql } from "@/lib/db";
 import { enqueueEmailOnce, type OutboxKind } from "@/server/email-outbox";
 import { idempotencyKey } from "@/server/email-outbox/constants";
 import { dictionarySubject } from "@/server/email-outbox/__tests__/_kind-harness";
-import { handleSponsorDispute } from "../sponsors";
+import { handleSponsorChargeRefunded, handleSponsorDispute } from "../sponsors";
 import { stubOutboxEnv } from "./_invite-mail";
 import { cleanUpSponsorOrgs, seedSponsorOrder } from "./_money-fixtures";
 
@@ -304,6 +306,56 @@ describe.skipIf(!HAS_DB)("a sponsorship dispute that closes won tells the org ow
     const rows = await rowsOf(WON, [a]);
     expect(rows.map((r) => r.dedupe_key)).toEqual([`${a}:won`]);
     expect(rows[0]).toMatchObject({ recipient_user_id: o.ownerId, status: "queued" });
+  });
+
+  it("a closed inquiry (warning_closed) clears the flag, re-activates the placement and queues the won notice once", async () => {
+    // Stripe's inquiry: it opens as `charge.dispute.created` with status `warning_needs_response` (no money is withdrawn), and when the
+    // bank drops it without a chargeback it closes as `charge.dispute.closed` with status `warning_closed`. The money stays with the
+    // club, so the placement the inquiry parked comes back and the owner hears the dispute closed in their favour.
+    const o = await paidOrder({ ownerLocale: "fr", defaultLocale: "en" });
+    const id = newDisputeId();
+
+    await handleSponsorDispute(disputeOf(id, o.intent, { status: "warning_needs_response" }), "created");
+    const parked = await orderState(o.orderId);
+    expect(parked.disputed_at, "premise: the inquiry flagged the order").not.toBeNull();
+    expect(parked.sponsor_status, "premise: and parked the placement").toBe("pending");
+
+    await expect(handleSponsorDispute(disputeOf(id, o.intent, { status: "warning_closed" }), "closed")).resolves.toBe(true);
+    await handleSponsorDispute(disputeOf(id, o.intent, { status: "warning_closed" }), "closed"); // Stripe's retry, or a replay
+
+    const after = await orderState(o.orderId);
+    expect(after.disputed_at, "the flag is cleared").toBeNull();
+    expect(after.sponsor_status, "and the placement is live again").toBe("active");
+    expect(after.status, "nothing was written off: an inquiry takes no money").toBe("paid");
+    const rows = await rowsOf(WON, [id]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ dedupe_key: `${id}:won`, recipient_user_id: o.ownerId, recipient: o.ownerEmail, status: "queued" });
+    expect(rows[0]!.subject).toBe(dictionarySubject("fr", "sponsorDisputeWon.subject", { orgName: o.orgName }));
+    expect(enqueueCalls(WON, id), "asked once: the redelivery found the flag already clear").toHaveLength(1);
+    expect(await rowsOf(LOST, [id]), "and no loss was recorded").toHaveLength(0);
+  });
+
+  it("an inquiry answered with a full refund closes with the placement still down and no won notice", async () => {
+    // Stripe names a full refund as one of the two ways to resolve an inquiry (docs: disputes/how-disputes-work, "Inquiries"). The
+    // refund takes the placement down (charge.refunded); the inquiry's later `warning_closed` must not put a refunded sponsor back on
+    // the boards, nor tell the owner "the money stays with you".
+    const o = await paidOrder({ ownerLocale: "fr", defaultLocale: "en" });
+    const id = newDisputeId();
+
+    await handleSponsorDispute(disputeOf(id, o.intent, { status: "warning_needs_response" }), "created");
+    await handleSponsorChargeRefunded({ payment_intent: o.intent, refunded: true } as unknown as Stripe.Charge);
+    const refunded = await orderState(o.orderId);
+    expect(refunded.status, "premise: the refund wrote the order down").toBe("refunded");
+    expect(refunded.sponsor_status, "premise: and took the placement down").toBe("inactive");
+
+    await expect(handleSponsorDispute(disputeOf(id, o.intent, { status: "warning_closed" }), "closed")).resolves.toBe(true);
+
+    const after = await orderState(o.orderId);
+    expect(after.disputed_at, "the dispute is over: the flag is cleared").toBeNull();
+    expect(after.status, "the order stays refunded").toBe("refunded");
+    expect(after.sponsor_status, "and the placement stays down").toBe("inactive");
+    expect(await rowsOf(WON, [id]), "no won notice").toHaveLength(0);
+    expect(enqueueCalls(WON, id), "never asked").toHaveLength(0);
   });
 });
 
