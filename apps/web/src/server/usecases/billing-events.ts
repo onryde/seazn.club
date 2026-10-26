@@ -109,6 +109,10 @@ export const HANDLED_EVENT_TYPES = [
   "account.updated",
   "charge.dispute.created",
   "charge.dispute.closed",
+  // A dispute took the money (a formal chargeback at once, or an inquiry the
+  // network escalated). Sponsor placements only: an inquiry leaves the
+  // placement live, and this is what parks it (owner, 2026-10-26).
+  "charge.dispute.funds_withdrawn",
   "charge.refunded",
   // Sponsor package orders (v10): activation keys off the PaymentIntent
   // because the intent metadata carries kind/order_id. Non-sponsor intents
@@ -2778,6 +2782,17 @@ export async function processStripeEvent(event: Stripe.Event): Promise<void> {
       }
       break;
     }
+    case "charge.dispute.funds_withdrawn":
+      // The money is taken: a sponsor's placement is parked now if its
+      // dispute is an inquiry that escalated (owner, 2026-10-26). Sponsor
+      // orders ONLY. The entry-fee and platform handlers record a dispute at
+      // `created` and settle it at `closed`; a withdrawal is neither (as a
+      // `created` it would re-stamp the cart's flag and audit again). An
+      // unmatched withdrawal is a silent no-op, never a retry: the charge is
+      // simply not a sponsor's, and a formal dispute whose withdrawal beats
+      // its `created` is parked by that `created`.
+      await handleSponsorDispute(event.data.object as Stripe.Dispute, "funds_withdrawn");
+      break;
     case "charge.refunded":
       // Refunds made in the Stripe dashboard still show on the console.
       // Registration, sponsor and Event Pass charges share the event type; each

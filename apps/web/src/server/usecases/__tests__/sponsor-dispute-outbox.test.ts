@@ -3,6 +3,9 @@
 // ref `dispute/<Stripe dispute id>`, and the worker makes the first attempt (a webhook has no response to defer behind).
 //   - Email 6, `sponsor_dispute_alert`: a dispute that opens on a sponsor's payment queues the alert (once-key `<dispute id>:created`) in
 //     the transaction that flags the order, and only on the transition to THIS dispute (the order's prior dispute, read under lock).
+//     A formal dispute takes the money at once, so the same transaction parks the placement. An inquiry (`warning_*`) takes no money:
+//     the order is flagged and the owner alerted, but the placement stays live until Stripe reports the money taken
+//     (`charge.dispute.funds_withdrawn`), which parks it and queues nothing (owner, 2026-10-26).
 //   - Email 7, `sponsor_dispute_won`: a dispute that closes won queues the notice (once-key `<dispute id>:won`) in the transaction that
 //     clears the flag, and only on the transition (the order, read under lock, still carried the flag). An inquiry that closes without
 //     a chargeback (`warning_closed`) is the same outcome: no money was taken, so it takes the won path and its notice. The placement
@@ -11,7 +14,8 @@
 //     queues the notice (once-key `<dispute id>:lost`) carrying what was recovered. A replayed close that finds its own reversal already
 //     made (the recovery's metadata guard) queues nothing.
 //
-// Producer under test: `handleSponsorDispute`, driven directly as the billing webhook calls it. Only the network seams are replaced
+// Producer under test: `handleSponsorDispute`, driven directly as the billing webhook calls it (and, for the withdrawal's routing, through
+// the real `runEvent`: the ledger claim, then the dispatch the webhook and the staff replay share). Only the network seams are replaced
 // (Stripe, for the lost dispute's balance recovery; `@/server/email-outbox/transport`). The enqueue is the real one, observed through a
 // spy that calls through, so a test can tell "not written because the key was taken" from "never asked".
 //
@@ -42,9 +46,12 @@ import { sql } from "@/lib/db";
 import { enqueueEmailOnce, type OutboxKind } from "@/server/email-outbox";
 import { idempotencyKey } from "@/server/email-outbox/constants";
 import { dictionarySubject } from "@/server/email-outbox/__tests__/_kind-harness";
+import { CONNECT_SCOPED_EVENT_TYPES, HANDLED_EVENT_TYPES, runEvent } from "../billing-events";
+import { handleRegistrationCheckoutCompleted } from "../registrations";
 import { handleSponsorChargeRefunded, handleSponsorDispute } from "../sponsors";
 import { stubOutboxEnv } from "./_invite-mail";
 import { cleanUpSponsorOrgs, seedSponsorOrder } from "./_money-fixtures";
+import { fakeSession, loadWithGroup, seedRegistration, stripeRig } from "./_registration-fixtures";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const RUN = randomUUID().slice(0, 8);
@@ -54,11 +61,14 @@ const LOST = "sponsor_dispute_lost" as const;
 /** The charge the fixture's order paid (25000), its platform fee, and the transfer that carried the rest to the club. */
 const CHARGE_CENTS = 25000;
 const APP_FEE_CENTS = 1250;
+/** An entry fee, for the one test that disputes an entry next to a sponsorship. */
+const ENTRY_FEE_CENTS = 1200;
 
-const made = { orgIds: [] as string[], userIds: [] as string[] };
+const made = { orgIds: [] as string[], userIds: [] as string[], eventIds: [] as string[] };
 
 afterAll(async () => {
   if (!HAS_DB) return;
+  await sql`delete from billing_events where id = any(${made.eventIds}::text[])`;
   await cleanUpSponsorOrgs(made.orgIds, made.userIds);
   await sql.end({ timeout: 2 }).catch(() => undefined);
 });
@@ -136,6 +146,18 @@ const orderState = async (orderId: string) =>
        where o.id = ${orderId}`
   )[0]!;
 
+/** A `charge.dispute.*` event as the webhook receives it (a fresh event id each), for the tests that go through `runEvent`. */
+const disputeEvent = (type: "created" | "funds_withdrawn", disputeId: string, intent: string, amount: number, status: string): Stripe.Event => {
+  const id = `evt_spo_${RUN}_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
+  made.eventIds.push(id);
+  return {
+    id,
+    type: `charge.dispute.${type}`,
+    created: Math.floor(Date.now() / 1000),
+    data: { object: { id: disputeId, object: "dispute", payment_intent: intent, amount, status } },
+  } as unknown as Stripe.Event;
+};
+
 // ---------------------------------------------------------------------------------------------------------------------------------
 // Email 6: the alert when a dispute opens
 // ---------------------------------------------------------------------------------------------------------------------------------
@@ -171,7 +193,7 @@ describe.skipIf(!HAS_DB)("a disputed sponsorship alerts the org owner through th
     const calls = enqueueCalls(ALERT, id);
     expect(calls).toHaveLength(1);
     expect(calls[0]![0], "the enqueue ran on a transaction handle, not the pool").not.toBe(sql);
-    // The order is flagged and the placement parked, in the same transaction.
+    // A formal dispute (`needs_response`) takes the money at once: the order is flagged and the placement parked, in the same transaction.
     const after = await orderState(o.orderId);
     expect(after.dispute_id).toBe(id);
     expect(after.disputed_at).not.toBeNull();
@@ -250,6 +272,101 @@ describe.skipIf(!HAS_DB)("a disputed sponsorship alerts the org owner through th
 });
 
 // ---------------------------------------------------------------------------------------------------------------------------------
+// A card inquiry alerts the owner and leaves the sponsor live; the money taken hides it (owner, 2026-10-26)
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("a card inquiry leaves the sponsor live; the money taken hides it (DB)", () => {
+  it("an inquiry (warning_needs_response) flags the order and alerts the owner, and the sponsor stays active", async () => {
+    // Stripe (docs, disputes/how-disputes-work): an inquiry is the cardholder's bank asking questions. Only a formal dispute "initiates a
+    // chargeback", where "the card network pulls the funds". No money has left the club, so the sponsor it paid for stays on show.
+    const o = await paidOrder({ ownerLocale: "fr", defaultLocale: "en" });
+    const id = newDisputeId();
+
+    await expect(handleSponsorDispute(disputeOf(id, o.intent, { status: "warning_needs_response" }), "created")).resolves.toBe(true);
+
+    const after = await orderState(o.orderId);
+    expect(after.dispute_id, "the inquiry is recorded on the order").toBe(id);
+    expect(after.disputed_at).not.toBeNull();
+    expect(after.status, "nothing is written off").toBe("paid");
+    expect(after.sponsor_status, "and the placement stays live").toBe("active");
+    const rows = await rowsOf(ALERT, [id]);
+    expect(rows, "the owner is alerted").toHaveLength(1);
+    expect(rows[0]).toMatchObject({ dedupe_key: `${id}:created`, recipient_user_id: o.ownerId, recipient: o.ownerEmail, status: "queued" });
+  });
+
+  it("money taken on the inquiry (funds_withdrawn) hides the sponsor once", async () => {
+    // Stripe sends `charge.dispute.funds_withdrawn` when a dispute takes the money ("funds are removed from your account due to a
+    // dispute"): for an inquiry, when the network escalates it to a chargeback. That hides the placement. It queues nothing: the owner
+    // was alerted when the inquiry opened.
+    const o = await paidOrder({ ownerLocale: "fr", defaultLocale: "en" });
+    const id = newDisputeId();
+    const withdrawn = disputeOf(id, o.intent, { status: "needs_response" });
+
+    await handleSponsorDispute(disputeOf(id, o.intent, { status: "warning_needs_response" }), "created");
+    expect((await orderState(o.orderId)).sponsor_status, "premise: the inquiry left the placement live").toBe("active");
+
+    await expect(handleSponsorDispute(withdrawn, "funds_withdrawn")).resolves.toBe(true);
+    const hidden = await orderState(o.orderId);
+    expect(hidden.sponsor_status, "the money is taken: the placement is hidden").toBe("pending");
+    expect(hidden.disputed_at, "the dispute is still open").not.toBeNull();
+    expect(hidden.status, "and nothing is written off before it is lost").toBe("paid");
+
+    await handleSponsorDispute(withdrawn, "funds_withdrawn"); // Stripe's retry, or an /admin/billing-events replay
+    expect((await orderState(o.orderId)).sponsor_status, "a redelivery changes nothing").toBe("pending");
+
+    // Once: the dispute is won and the placement comes back (the won path, unchanged); a withdrawal delivered after that does not hide
+    // it again.
+    await handleSponsorDispute(disputeOf(id, o.intent, { status: "won" }), "closed");
+    expect((await orderState(o.orderId)).sponsor_status, "premise: the win brought the placement back").toBe("active");
+    await handleSponsorDispute(withdrawn, "funds_withdrawn");
+    expect((await orderState(o.orderId)).sponsor_status, "a withdrawal delivered after the win leaves it live").toBe("active");
+
+    expect(await rowsOf(ALERT, [id]), "still exactly one alert").toHaveLength(1);
+    expect(enqueueCalls(ALERT, id), "asked once: a withdrawal queues no mail").toHaveLength(1);
+  });
+
+  it("through the real dispatch, a funds_withdrawn event hides the sponsor and leaves an entry fee's dispute as it was", async () => {
+    // A platform event: a sponsorship or an entry fee is a destination charge, so its dispute is the platform's, as for
+    // `charge.dispute.created`, and arrives on the platform's own destination, not the connected accounts'.
+    expect(HANDLED_EVENT_TYPES, "the console's Stripe filter asks for it").toContain("charge.dispute.funds_withdrawn");
+    expect(CONNECT_SCOPED_EVENT_TYPES).not.toContain("charge.dispute.funds_withdrawn");
+
+    // A sponsorship's inquiry, then the money taken.
+    const o = await paidOrder({ ownerLocale: "fr", defaultLocale: "en" });
+    const sp = newDisputeId();
+    expect(await runEvent(disputeEvent("created", sp, o.intent, CHARGE_CENTS, "warning_needs_response")), "premise: the dispatch ran").toBe(true);
+    expect((await orderState(o.orderId)).sponsor_status, "premise: the inquiry left the placement live").toBe("active");
+    expect(await runEvent(disputeEvent("funds_withdrawn", sp, o.intent, CHARGE_CENTS, "needs_response"))).toBe(true);
+    expect((await orderState(o.orderId)).sponsor_status, "the withdrawal reached the sponsor's handler").toBe("pending");
+
+    // An entry fee's dispute, then the money taken. The entry-fee path records a dispute at `created` and settles it at `closed`; the
+    // withdrawal is not its event, so the cart's record does not move (a `created` would re-stamp `disputed_at` and audit again).
+    const w = await stripeRig({ feeCents: ENTRY_FEE_CENTS });
+    made.orgIds.push(w.orgId);
+    made.userIds.push(w.ownerId);
+    const seeded = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: `spo-${RUN}-${++seq}@test.local` });
+    await handleRegistrationCheckoutCompleted(fakeSession(seeded.registration.id, ENTRY_FEE_CENTS));
+    const entryIntent = (await loadWithGroup(seeded.registration.id)).payment_intent_id;
+    expect(entryIntent, "premise: the paid cart carries its payment intent").toBeTruthy();
+    const rg = newDisputeId();
+    const cartDispute = async () => {
+      const g = await loadWithGroup(seeded.registration.id);
+      const [{ n }] = await sql<{ n: number }[]>`
+        select count(*)::int as n from competition_events
+         where competition_id = ${w.competition.id} and type like 'registration.%' and payload->>'dispute_id' = ${rg}`;
+      return { disputed_at: g.disputed_at, dispute_id: g.dispute_id, cart_refunded_cents: g.group_refunded_cents, audits: n };
+    };
+    await runEvent(disputeEvent("created", rg, entryIntent!, ENTRY_FEE_CENTS, "needs_response"));
+    const before = await cartDispute();
+    expect(before.dispute_id, "premise: the entry fee's dispute is recorded").toBe(rg);
+    expect(before.audits, "premise: and audited once").toBe(1);
+
+    expect(await runEvent(disputeEvent("funds_withdrawn", rg, entryIntent!, ENTRY_FEE_CENTS, "needs_response")), "taken, not refused").toBe(true);
+    expect(await cartDispute(), "the cart's dispute record is unchanged").toEqual(before);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
 // Email 7: the notice when a dispute closes won
 // ---------------------------------------------------------------------------------------------------------------------------------
 
@@ -308,24 +425,24 @@ describe.skipIf(!HAS_DB)("a sponsorship dispute that closes won tells the org ow
     expect(rows[0]).toMatchObject({ recipient_user_id: o.ownerId, status: "queued" });
   });
 
-  it("a closed inquiry (warning_closed) clears the flag, re-activates the placement and queues the won notice once", async () => {
+  it("a closed inquiry (warning_closed) clears the flag, leaves the placement live and queues the won notice once", async () => {
     // Stripe's inquiry: it opens as `charge.dispute.created` with status `warning_needs_response` (no money is withdrawn), and when the
     // bank drops it without a chargeback it closes as `charge.dispute.closed` with status `warning_closed`. The money stays with the
-    // club, so the placement the inquiry parked comes back and the owner hears the dispute closed in their favour.
+    // club, so the placement stays live throughout and the owner hears the dispute closed in their favour.
     const o = await paidOrder({ ownerLocale: "fr", defaultLocale: "en" });
     const id = newDisputeId();
 
     await handleSponsorDispute(disputeOf(id, o.intent, { status: "warning_needs_response" }), "created");
-    const parked = await orderState(o.orderId);
-    expect(parked.disputed_at, "premise: the inquiry flagged the order").not.toBeNull();
-    expect(parked.sponsor_status, "premise: and parked the placement").toBe("pending");
+    const flagged = await orderState(o.orderId);
+    expect(flagged.disputed_at, "premise: the inquiry flagged the order").not.toBeNull();
+    expect(flagged.sponsor_status, "premise: and left the placement live (an inquiry takes no money)").toBe("active");
 
     await expect(handleSponsorDispute(disputeOf(id, o.intent, { status: "warning_closed" }), "closed")).resolves.toBe(true);
     await handleSponsorDispute(disputeOf(id, o.intent, { status: "warning_closed" }), "closed"); // Stripe's retry, or a replay
 
     const after = await orderState(o.orderId);
     expect(after.disputed_at, "the flag is cleared").toBeNull();
-    expect(after.sponsor_status, "and the placement is live again").toBe("active");
+    expect(after.sponsor_status, "and the placement is still live").toBe("active");
     expect(after.status, "nothing was written off: an inquiry takes no money").toBe("paid");
     const rows = await rowsOf(WON, [id]);
     expect(rows).toHaveLength(1);
