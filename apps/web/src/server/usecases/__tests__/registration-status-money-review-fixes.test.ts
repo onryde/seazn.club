@@ -39,12 +39,21 @@
 // DATABASE_URL (matches every sibling usecase suite in this directory). The
 // notifyPromoted suite needs no DB at all for its deadline/offline-branch
 // assertions — see its own header below.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const emailMock = vi.hoisted(() => ({ promoted: vi.fn().mockResolvedValue(true) }));
+// The promotion email is RENDERED by `registrationPromotedEmail` and queued on the email outbox (it has no sender any more), so the
+// renderer is the seam that shows what `notifyPromoted` decided: it is spied, and still runs for real. (The queueing itself, and the row
+// it leaves, are pinned in registration-promoted-outbox.test.ts.)
+const emailMock = vi.hoisted(() => ({ promoted: vi.fn() }));
 vi.mock("@/lib/email", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/email")>();
-  return { ...actual, sendRegistrationPromotedEmail: emailMock.promoted };
+  return {
+    ...actual,
+    registrationPromotedEmail: (...args: Parameters<typeof actual.registrationPromotedEmail>) => {
+      emailMock.promoted(...args);
+      return actual.registrationPromotedEmail(...args);
+    },
+  };
 });
 
 // vi.mock is hoisted per-module and does not travel through an import (same
@@ -60,6 +69,7 @@ const stripeMock = vi.hoisted(() => {
 vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
 
 import { sql } from "@/lib/db";
+import { log } from "@/server/logger";
 import {
   resumeRegistrationCheckout,
   promoteWaitlistedRow,
@@ -82,6 +92,9 @@ beforeEach(() => {
     url: "https://checkout.stripe.test/session",
   }));
   emailMock.promoted.mockClear();
+});
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe.skipIf(!HAS_DB)("#8 — resumeRegistrationCheckout re-checks the deadline it is about to mint against", () => {
@@ -203,7 +216,7 @@ describe.skipIf(!HAS_DB)("#10 — notifyPromoted mints a real pay link off the D
     expect(promoted.payment_method).toBeNull(); // sanity: reproduces the bug's precondition
     const ctx = await divisionCtx(sql, division.id);
 
-    await notifyPromoted(promoted, ctx, settings, "http://test.local");
+    await notifyPromoted(promoted, ctx, settings, "http://test.local", { firstAttempt: "worker" });
 
     // Reverting the fix (reading promoted.payment_method, the null cart
     // column) never even tries Stripe here — this is the "no way to pay"
@@ -219,6 +232,11 @@ describe.skipIf(!HAS_DB)("#10 — notifyPromoted mints a real pay link off the D
 // payUrl-minting branch, which needs a real DB row, is never entered; the
 // STRIPE half of the division-vs-cart method fix is proven DB-backed above).
 describe("#10/#13b — notifyPromoted (pure function, offline branch — no DB)", () => {
+  // The fixtures below are not rows (fake ids): what they pin is what the renderer is GIVEN. The enqueue that follows cannot write them,
+  // so it fails and is logged; that is silenced here, and is not what these tests assert.
+  beforeEach(() => {
+    vi.spyOn(log, "error").mockImplementation(() => undefined as never);
+  });
   function fakeCtx(over: Partial<DivisionCtx> = {}): DivisionCtx {
     return {
       id: "div-1",
@@ -328,7 +346,7 @@ describe("#10/#13b — notifyPromoted (pure function, offline branch — no DB)"
     const promoted = fakePromoted({ amount_cents: 500 });
     const settings = fakeSettings({ payment_method: "offline", payment_instructions: "Pay at the desk" });
 
-    await notifyPromoted(promoted, fakeCtx(), settings, "http://test.local");
+    await notifyPromoted(promoted, fakeCtx(), settings, "http://test.local", { firstAttempt: "worker" });
 
     expect(stripeMock.checkoutCreate).not.toHaveBeenCalled(); // never even tries Stripe for an offline division
     expect(emailMock.promoted).toHaveBeenCalledTimes(1);
@@ -354,7 +372,7 @@ describe("#10/#13b — notifyPromoted (pure function, offline branch — no DB)"
     });
     const settings = fakeSettings({ payment_method: "offline" });
 
-    await notifyPromoted(promoted, fakeCtx(), settings, "http://test.local");
+    await notifyPromoted(promoted, fakeCtx(), settings, "http://test.local", { firstAttempt: "worker" });
 
     const args = emailMock.promoted.mock.calls[0]![0];
     expect(args.payDeadline).toEqual(entryDeadline);
@@ -368,7 +386,7 @@ describe("#10/#13b — notifyPromoted (pure function, offline branch — no DB)"
     });
     const settings = fakeSettings({ payment_method: "offline" });
 
-    await notifyPromoted(promoted, fakeCtx(), settings, "http://test.local");
+    await notifyPromoted(promoted, fakeCtx(), settings, "http://test.local", { firstAttempt: "worker" });
 
     const args = emailMock.promoted.mock.calls[0]![0];
     expect(args.payDeadline).toBeNull();

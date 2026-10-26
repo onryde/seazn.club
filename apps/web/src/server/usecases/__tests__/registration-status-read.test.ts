@@ -15,7 +15,7 @@
 // webhook is slow or lost, and 6 of their 8 branches had no coverage at all —
 // including both `catch → false` arms, which is what runs when Stripe itself
 // is down at exactly the moment the registrant lands back on the page.
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
 const stripeMock = vi.hoisted(() => ({ retrieve: vi.fn() }));
@@ -23,22 +23,12 @@ vi.mock("@/lib/stripe", () => ({
   getStripe: () => ({ checkout: { sessions: { retrieve: stripeMock.retrieve } } }),
 }));
 
-// RS007 rebuild: resendRegistrationConfirmationPublic sends through
-// sendRegistrationEmail — captured the same way registrations.test.ts
-// already does (forwards to the REAL implementation so `{sent}` stays
-// realistic; send() is a no-op without RESEND_API_KEY either way), so the
-// resolved `args.statusUrl` this function builds is actually observable.
-const emailMock = vi.hoisted(() => ({ registration: vi.fn() }));
-vi.mock("@/lib/email", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/email")>();
-  return {
-    ...actual,
-    sendRegistrationEmail: async (opts: Parameters<typeof actual.sendRegistrationEmail>[0]) => {
-      emailMock.registration(opts);
-      return actual.sendRegistrationEmail(opts);
-    },
-  };
-});
+// RS007 rebuild: resendRegistrationConfirmationPublic queues the cart's confirmation on the email outbox (kind
+// `registration_confirmation`, ref `registration_group/<group id>`) and attempts it at once. Only the outbox's network seam is
+// replaced: the row, the claim and the render are the real ones, and what the provider was handed is recorded here, so the resolved
+// `statusUrl` this function builds is observable in the mail's own text.
+const transport = vi.hoisted(() => ({ deliver: vi.fn() }));
+vi.mock("@/server/email-outbox/transport", () => ({ deliver: transport.deliver }));
 
 // RS007 follow-up: reconcileRegistrationGroupBySession's own outbound-Stripe
 // rate limit. The real limiter is inert without REDIS_URL (unset in this
@@ -72,6 +62,8 @@ import {
   resendRegistrationConfirmationPublic,
 } from "@/server/usecases/registrations";
 import { generateRefCode } from "@/lib/ref-code";
+import { idempotencyKey } from "@/server/email-outbox/constants";
+import { stubOutboxEnv } from "./_invite-mail";
 import { createDivision, patchDivision } from "../divisions";
 import {
   asOwner,
@@ -108,9 +100,29 @@ async function stripeSettingsRig() {
 
 beforeEach(() => {
   stripeMock.retrieve.mockReset();
-  emailMock.registration.mockReset();
+  transport.deliver.mockReset().mockImplementation(async () => ({ ok: true, providerId: `re_sr_${randomUUID()}` }));
+  stubOutboxEnv();
   rateLimitMock.throttle = false;
 });
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+});
+
+/** The cart's confirmation rows (kind, ref, recipient, status), oldest first. */
+const confirmationRows = (groupId: string) =>
+  sql<{ id: string; kind: string; ref_type: string; recipient: string; status: string }[]>`
+    select id, kind, ref_type, recipient, status from email_outbox
+     where kind = 'registration_confirmation' and ref_type = 'registration_group' and ref_id = ${groupId}
+     order by created_at, id`;
+
+/** What the provider was handed under one of the cart's rows. */
+async function providerSaw(groupId: string): Promise<{ to: string; subject: string; text: string }[]> {
+  const keys = new Set((await confirmationRows(groupId)).map((r) => idempotencyKey(r.id)));
+  return transport.deliver.mock.calls
+    .map((c) => c[0] as { to: string; subject: string; text: string; idempotencyKey: string })
+    .filter((m) => keys.has(m.idempotencyKey));
+}
 
 afterAll(async () => {
   if (!HAS_DB) return;
@@ -1210,7 +1222,8 @@ describe.skipIf(!HAS_DB)("resendRegistrationConfirmationPublic (RS007)", () => {
     await expect(
       resendRegistrationConfirmationPublic(registration.group_id, "rg_" + randomUUID(), "https://test.local"),
     ).rejects.toMatchObject({ status: 404 });
-    expect(emailMock.registration).not.toHaveBeenCalled();
+    expect(await confirmationRows(registration.group_id), "a wrong token queues nothing").toHaveLength(0);
+    expect(transport.deliver).not.toHaveBeenCalled();
   });
 
   it("refuses once EVERY entry in the cart is terminal", async () => {
@@ -1224,7 +1237,8 @@ describe.skipIf(!HAS_DB)("resendRegistrationConfirmationPublic (RS007)", () => {
     await expect(
       resendRegistrationConfirmationPublic(registration.group_id, access_token, "https://test.local"),
     ).rejects.toMatchObject({ status: 422 });
-    expect(emailMock.registration).not.toHaveBeenCalled();
+    expect(await confirmationRows(registration.group_id), "a fully terminal cart queues nothing").toHaveLength(0);
+    expect(transport.deliver).not.toHaveBeenCalled();
   });
 
   it("attempts the send when the cart has at least one still-active entry, even if an ARBITRARY other one is terminal", async () => {
@@ -1237,12 +1251,14 @@ describe.skipIf(!HAS_DB)("resendRegistrationConfirmationPublic (RS007)", () => {
     );
     await seedSecondEntry(registration.group_id, division.id, 500, "Still Active", "pending");
 
-    // Whether the provider itself reports success depends on RESEND_API_KEY
-    // being configured in the environment (lib/email.ts) — not this
-    // function's own logic, which is what "reached the real send" proves.
-    await resendRegistrationConfirmationPublic(registration.group_id, access_token, "https://test.local");
+    // The provider is the test double (accepts), so the outcome is the function's own logic: the confirmation was queued and sent.
+    const result = await resendRegistrationConfirmationPublic(registration.group_id, access_token, "https://test.local");
 
-    expect(emailMock.registration).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ sent: true });
+    expect(await confirmationRows(registration.group_id)).toMatchObject([
+      { kind: "registration_confirmation", ref_type: "registration_group", recipient: registration.contact_email, status: "sent" },
+    ]);
+    expect(await providerSaw(registration.group_id)).toHaveLength(1);
   });
 
   // Unlike the organiser path (which never holds the plaintext token past
@@ -1261,9 +1277,10 @@ describe.skipIf(!HAS_DB)("resendRegistrationConfirmationPublic (RS007)", () => {
 
     await resendRegistrationConfirmationPublic(registration.group_id, access_token, "https://test.local");
 
-    expect(emailMock.registration).toHaveBeenCalledTimes(1);
-    const args = emailMock.registration.mock.calls[0]![0] as { statusUrl: string };
-    expect(args.statusUrl).toBe(
+    const saw = await providerSaw(registration.group_id);
+    expect(saw).toHaveLength(1);
+    // The mail links to the full rid+token page (the English text line reads "View your registration: <url>").
+    expect(saw[0]!.text).toContain(
       `https://test.local/shared/${orgSlug}/${competition.slug}/register/status?rid=${registration.group_id}&token=${access_token}`,
     );
   });

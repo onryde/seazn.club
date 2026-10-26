@@ -45,6 +45,8 @@ import {
 } from "@/lib/table-withdrawal";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
+import { BOARD_SETTLED_REASON } from "@/server/email-outbox/cancel";
+import { cancelBoardInvites } from "./external-play/cancel-invites";
 import { DEPARTED_STATUSES, getEntrant, listEntrants, patchEntrant } from "./entrants";
 import { getDivision } from "./divisions";
 import { BRACKET_WALKOVER_KINDS, listStages, writeDepartedSeat } from "./stages";
@@ -261,6 +263,26 @@ async function departSeat(auth: AuthCtx, fixtureId: string, entrantId: string, m
   });
 }
 
+/** Phase 3 wave 1 (spec §7): the boards the cascade just settled will never be played, so the chess invites still QUEUED for them
+ *  end `board_settled` (a row already sending is left to finish). Its own tenant transaction, after the settles committed (each
+ *  commits on its own, ruling 101). A failure here is logged and never thrown: the walkovers stand, the entrant must still be marked
+ *  withdrawn, and a stale invite is only a mail to a board nobody can play - it expires on its own. An empty list needs no guard here:
+ *  `cancelBoardInvites` answers `[]` before it issues a statement. */
+async function cancelSettledBoardInvites(auth: AuthCtx, fixtureIds: readonly string[]): Promise<void> {
+  try {
+    await withTenant(auth.orgId, (tx) => cancelBoardInvites(tx, fixtureIds, BOARD_SETTLED_REASON));
+  } catch (err) {
+    // The residual is accepted (T6 review m2): nothing re-drives this, so an invite still queued for one of these boards is mailed
+    // until it expires (under a day) and names a board nobody will play. The log is how an operator finds it: the board ids to
+    // look the rows up by (`fixtureId:white|black`), and how many boards, so at most twice as many invites. A count of the queued
+    // rows themselves would be a second read on the connection that just failed.
+    log.error(
+      { err, fixtureIds, boards: fixtureIds.length },
+      "withdrawal: the settled boards' queued invites could not be ended; they expire on their own",
+    );
+  }
+}
+
 export async function withdrawEntrantCascade(
   auth: AuthCtx,
   entrantId: string,
@@ -386,61 +408,72 @@ export async function withdrawEntrantCascade(
     const gone = new Set(
       (await listEntrants(auth, division.id)).filter((e) => DEPARTED_STATUSES.has(e.status)).map((e) => e.id),
     );
-    for (const step of plan) {
-      const u = step.update;
-      if (step.bracket && u.status === "walkover") {
-        if (u.walkoverTo === undefined) {
-          // X-WD-3 (plan D17): nobody is on the other side yet to receive a walkover. Her seat is emptied and stamped
-          // dead, so whoever arrives walks over it in the same write that seats them (`resolveBracketSeats`).
-          await departSeat(auth, u.fixtureId, entrantId, "tbd");
-          out.walkovers++;
-          continue;
-        }
-        if (gone.has(u.walkoverTo)) {
-          // X-WD-4: both sides of the line have now withdrawn — a double walkover, no event (as a bye is written),
-          // which seats nobody (X-DW-2) — unless the line feeds nothing: a final has no next match (D19, X-DW-3), so
-          // it stays open for W4's vacant title, and nothing is written. A ladder challenge is exempt (D19).
-          // Review M-1: and only over a line nobody has recorded play on. The other side left by a bare status write
-          // (no cascade), so play may have gone on; that ledger is the organiser's to void or settle, never overwritten
-          // — and named in `left_to_organiser` (Loop R M-5), a played final included.
-          // A double-elimination grand final with a bracket reset feeds only its own rematch: a final too (I-5).
-          const feeds = feedsNextMatch(step.fixture) || step.bracket.kind === "ladder";
+    // Every board the loop below settled (a walkover, a void, a double walkover): their queued invites end in `finally`, so a loop that
+    // fails on a later board still ends the invites of the boards it had already settled (and never those of the board it failed
+    // on - an id is added only after its settle returned).
+    const settled: string[] = [];
+    try {
+      for (const step of plan) {
+        const u = step.update;
+        if (step.bracket && u.status === "walkover") {
+          if (u.walkoverTo === undefined) {
+            // X-WD-3 (plan D17): nobody is on the other side yet to receive a walkover. Her seat is emptied and stamped
+            // dead, so whoever arrives walks over it in the same write that seats them (`resolveBracketSeats`).
+            await departSeat(auth, u.fixtureId, entrantId, "tbd");
+            out.walkovers++;
+            continue;
+          }
+          if (gone.has(u.walkoverTo)) {
+            // X-WD-4: both sides of the line have now withdrawn — a double walkover, no event (as a bye is written),
+            // which seats nobody (X-DW-2) — unless the line feeds nothing: a final has no next match (D19, X-DW-3), so
+            // it stays open for W4's vacant title, and nothing is written. A ladder challenge is exempt (D19).
+            // Review M-1: and only over a line nobody has recorded play on. The other side left by a bare status write
+            // (no cascade), so play may have gone on; that ledger is the organiser's to void or settle, never overwritten
+            // — and named in `left_to_organiser` (Loop R M-5), a played final included.
+            // A double-elimination grand final with a bracket reset feeds only its own rematch: a final too (I-5).
+            const feeds = feedsNextMatch(step.fixture) || step.bracket.kind === "ladder";
+            const line = await lineLedger(auth, sportModule, u.fixtureId);
+            if (line.played) {
+              out.left_to_organiser.push(u.fixtureId);
+            } else if (feeds) {
+              // Loop R M-5: "played" is the engine's reading (ruling 112), so a bare Start no longer leaves the line in
+              // play forever. Nothing live at all: the departure's no-event write. A Start (or an annotation, an abandon)
+              // with nothing played after it: recorded, as the console's double walkover is — the no-event write refuses
+              // any live event, and the Start stands in the record.
+              if (line.live) await recordDoubleWalkover(auth, u.fixtureId, line.events);
+              else await departSeat(auth, u.fixtureId, entrantId, "double_walkover");
+              settled.push(u.fixtureId);
+              out.walkovers++;
+            }
+            continue;
+          }
+        } else if (u.status === "walkover" && !u.walkoverTo) {
+          // A table stage's TBD opponent can't receive a walkover — void that slot instead.
+          step.update = { fixtureId: u.fixtureId, status: "void" };
+        } else if (u.status === "walkover" && gone.has(u.walkoverTo!)) {
+          // Loop R M-4 (controller ruling 2026-10-13): signed X-WD-4 (ruling 90) has no bracket scope. In a league, group
+          // or Swiss round the opponent who already left (a bare status write — ruling 111's self-withdrawal, which
+          // cascades nothing) is still seated, and a walkover would hand her the points and the walkover score. Both
+          // sides have withdrawn: a double walkover. Unlike a bracket line (which seats nothing, so it is written as a
+          // bye is), a table line is RECORDED — X-DW-4 counts it P+1, L+1 for both, and the table folds only a line with
+          // a match state — so it goes through the ordinary write, as the console's double walkover does. M-1's guard
+          // holds here too: a line with recorded play (the engine's reading — a bare Start is not play, Loop R M-5) is the
+          // organiser's to settle, and is named in `left_to_organiser`.
           const line = await lineLedger(auth, sportModule, u.fixtureId);
           if (line.played) {
             out.left_to_organiser.push(u.fixtureId);
-          } else if (feeds) {
-            // Loop R M-5: "played" is the engine's reading (ruling 112), so a bare Start no longer leaves the line in
-            // play forever. Nothing live at all: the departure's no-event write. A Start (or an annotation, an abandon)
-            // with nothing played after it: recorded, as the console's double walkover is — the no-event write refuses
-            // any live event, and the Start stands in the record.
-            if (line.live) await recordDoubleWalkover(auth, u.fixtureId, line.events);
-            else await departSeat(auth, u.fixtureId, entrantId, "double_walkover");
+          } else {
+            await recordDoubleWalkover(auth, u.fixtureId, line.events);
+            settled.push(u.fixtureId);
             out.walkovers++;
           }
           continue;
         }
-      } else if (u.status === "walkover" && !u.walkoverTo) {
-        // A table stage's TBD opponent can't receive a walkover — void that slot instead.
-        step.update = { fixtureId: u.fixtureId, status: "void" };
-      } else if (u.status === "walkover" && gone.has(u.walkoverTo!)) {
-        // Loop R M-4 (controller ruling 2026-10-13): signed X-WD-4 (ruling 90) has no bracket scope. In a league, group
-        // or Swiss round the opponent who already left (a bare status write — ruling 111's self-withdrawal, which
-        // cascades nothing) is still seated, and a walkover would hand her the points and the walkover score. Both
-        // sides have withdrawn: a double walkover. Unlike a bracket line (which seats nothing, so it is written as a
-        // bye is), a table line is RECORDED — X-DW-4 counts it P+1, L+1 for both, and the table folds only a line with
-        // a match state — so it goes through the ordinary write, as the console's double walkover does. M-1's guard
-        // holds here too: a line with recorded play (the engine's reading — a bare Start is not play, Loop R M-5) is the
-        // organiser's to settle, and is named in `left_to_organiser`.
-        const line = await lineLedger(auth, sportModule, u.fixtureId);
-        if (line.played) {
-          out.left_to_organiser.push(u.fixtureId);
-        } else {
-          await recordDoubleWalkover(auth, u.fixtureId, line.events);
-          out.walkovers++;
-        }
-        continue;
+        await applyUpdate(auth, step.update, step.fixture, out, step.bracket?.held === true);
+        settled.push(step.update.fixtureId);
       }
-      await applyUpdate(auth, step.update, step.fixture, out, step.bracket?.held === true);
+    } finally {
+      await cancelSettledBoardInvites(auth, settled);
     }
   }
 

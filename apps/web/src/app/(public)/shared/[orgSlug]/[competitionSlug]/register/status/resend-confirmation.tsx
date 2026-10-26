@@ -41,8 +41,11 @@ export function ResendConfirmation({ groupId, token }: { groupId: string; token:
     setBusy(true);
     setError(null);
     try {
-      await apiV1<{ sent: boolean }>(publicResendPath(groupId), { method: "POST", json: { token } });
-      setSent(true);
+      const result = await apiV1<{ sent: boolean }>(publicResendPath(groupId), { method: "POST", json: { token } });
+      // `sent: false` is a 200: the first attempt was not accepted and the mail waits on the outbox for its retries (or there is no
+      // mail provider here at all). Say so with the existing could-not-resend copy rather than claim it went out.
+      if (result.sent) setSent(true);
+      else setError({ kind: "generic", detail: "" });
     } catch (err) {
       const status = err instanceof ApiV1Error ? err.status : undefined;
       setError({
@@ -68,7 +71,7 @@ export function ResendConfirmation({ groupId, token }: { groupId: string; token:
       {error && (
         <div className="mt-1 space-y-0.5">
           <p className="text-xs text-red-600">{msg(FAILURE_KEY[error.kind])}</p>
-          <p className="text-xs text-ink-muted">{error.detail}</p>
+          {error.detail && <p className="text-xs text-ink-muted">{error.detail}</p>}
         </div>
       )}
     </div>

@@ -44,7 +44,7 @@ import { CONSENT_KEY, CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION } from "../src/
 import { INVITE_WORD_KEYS, type SeatInviteWord } from "../src/lib/invite-status";
 import { routes } from "../src/lib/routes";
 import { CHECKIN_BATCH_GAP_MS, CHECKIN_BATCH_SIZE, DEADLINE_AFTER_MS } from "../src/server/external-play/window";
-import { apiJson, loginUi, withDb } from "./helpers";
+import { TAG, apiJson, loginUi, withDb } from "./helpers";
 import {
   column,
   expectConfirmSeatWord,
@@ -964,6 +964,52 @@ test.describe("online chess — the organiser's desk", () => {
     await link.click();
     await expect(page).toHaveURL(new RegExp(`${r.arbiterPath}$`));
     await expect(page.getByRole("heading", { level: 1, name: uiEn["arbiter.title"] })).toBeVisible();
+  });
+
+  // Email outbox phase 3 (Task 14, spec §7): the void, driven by the press. The vitest file calls the cancel; this one proves the
+  // Unpair button reaches it - the real route, the real tenant transaction, the real SECURITY DEFINER function. The e2e servers
+  // have no mail provider, so the invites the open itself queued are already `dead` and there is nothing waiting to void. The row
+  // that can be voided is the one a provider outage leaves behind, so it is written the way invite.ts writes it (the seat ref, the
+  // meta) and parked an hour out, where no worker tick can take it.
+  test("unpairing an opened online round ends a still-queued invite round_voided", async ({ page, request }) => {
+    test.setTimeout(180_000);
+    const r = await seedOnlineRound(request, ["Ana Petrova", "Bo Lindqvist", "Chen Wei", "Dara Okafor"], { stage: "swiss" });
+    const board = r.boards[0]!;
+    const [queued] = await withDb(
+      (sql) => sql<{ id: string }[]>`
+        insert into email_outbox
+          (id, kind, ref_type, ref_id, org_id, recipient, subject, transactional, status, next_attempt_at, expires_at, body_sealed, meta)
+        values
+          (gen_random_uuid(), 'chess_invite', 'fixture_seat', ${`${board.fixtureId}:white`}, ${r.orgId},
+           ${`delivered+e2e-void-${TAG}@resend.dev`}, 'Your game is ready', true, 'queued',
+           now() + interval '1 hour', now() + interval '2 hours', ${Buffer.from([1])},
+           ${sql.json({ fixtureId: board.fixtureId, colour: "white", stampedAt: new Date().toISOString() })})
+        returning id`,
+    );
+    const rowOf = () =>
+      withDb(async (sql) => {
+        const [row] = await sql<{ status: string; lastError: string | null; hasBody: boolean }[]>`
+          select status, last_error as "lastError", body_sealed is not null as "hasBody"
+            from email_outbox where id = ${queued!.id}`;
+        return row;
+      });
+    expect(await rowOf(), "premise: the forged invite is waiting, with its body, before the press").toEqual({
+      status: "queued",
+      lastError: null,
+      hasBody: true,
+    });
+
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(r.fixturesTab);
+    // No game is on file, so the press is not refused: the notice names the round it cleared.
+    await page.getByTestId("stage-unpair").click();
+    await expect(page.getByText(fill("schedule.notice.unpaired", { round: 1 })).first()).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId("online-game-exists")).toHaveCount(0);
+
+    // Ended in the Unpair's own transaction, so it is settled before the notice shows; the poll is for a slow read, not a late write.
+    await expect
+      .poll(rowOf, { timeout: 20_000, message: "the press ended the waiting invite: expired, round_voided, body gone" })
+      .toEqual({ status: "expired", lastError: "round_voided", hasBody: false });
   });
 });
 

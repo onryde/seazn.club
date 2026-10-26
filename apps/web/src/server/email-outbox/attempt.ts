@@ -10,6 +10,10 @@ import "server-only";
 // opens the sealed body, then hands the plaintext and the gate's key to the transport. The `SendGate` and Resend's raw
 // `detail` are never logged or stored; `last_error` is `http <status> <name>` or `network <cause>`, capped at 200.
 //
+// Who it goes to is decided at the attempt (recipient.ts, after the expiry check and before the gate): an account's row is mailed at
+// the account's CURRENT address while the idempotency key is clean, at the address its first request used otherwise (D2), and a
+// deleted account is mailed nothing: the row ends `expired` / `account_deleted` with a placeholder recipient.
+//
 // Every update after the send is conditional on `status = 'sending' and attempts = <this attempt's number>`: a row
 // superseded while its attempt was in flight (the replace trigger moves a `sending` row to `replaced`) stays `replaced`,
 // and a row whose lease lapsed and was re-claimed (attempts + 1, still `sending`) is not touched by the first attempt's
@@ -29,7 +33,9 @@ import { log } from "@/server/logger";
 import { INVALID_IDEMPOTENT_REQUEST, classifyResult, nextAttemptAt, type Verdict } from "./classify";
 import { DISPATCH_NOW_BUDGET_MS, LEASE_MS, MIN_SEND_INTERVAL_MS, OUTBOX_TAG_NAME, idempotencyKey, type OutboxKind } from "./constants";
 import { errFields } from "./err-fields";
+import { ACCOUNT_DELETED_REASON } from "./account-deletion";
 import { afterEndedBadly, type EndedRow } from "./hooks";
+import { resolveRecipient } from "./recipient";
 import { outboxRoleOk } from "./role-check";
 import { openBody } from "./seal";
 import { deliver } from "./transport";
@@ -54,6 +60,12 @@ export type ClaimedRecord = {
   attempts: number;
   expires_at: Date;
   lease_until: Date;
+  /** The account the row is for, when it is for one (resolved to an address at send time, recipient.ts). */
+  recipient_user_id: string | null;
+  /** The previous attempt's recorded error (a claim does not clear it): what `isKeyClean` reads. */
+  last_error: string | null;
+  /** True when this claim took over a `sending` row whose lease had lapsed (an earlier attempt's outcome was never recorded). */
+  reclaimed: boolean;
 };
 
 /** A row as claimed: already `sending`, `attempts` already counting THIS attempt, a lease running. Built by whoever
@@ -72,6 +84,9 @@ export type ClaimedRow = {
   attempts: number;
   expiresAt: Date;
   leaseUntil: Date;
+  recipientUserId: string | null;
+  lastError: string | null;
+  reclaimed: boolean;
 };
 
 export function toClaimedRow(r: ClaimedRecord): ClaimedRow {
@@ -89,6 +104,9 @@ export function toClaimedRow(r: ClaimedRecord): ClaimedRow {
     attempts: r.attempts,
     expiresAt: r.expires_at,
     leaseUntil: r.lease_until,
+    recipientUserId: r.recipient_user_id,
+    lastError: r.last_error,
+    reclaimed: r.reclaimed,
   };
 }
 
@@ -163,6 +181,18 @@ async function markExpired(row: ClaimedRow): Promise<boolean> {
   return done.length > 0;
 }
 
+/** The account the email was for is gone: end it unsent, with the account's placeholder in place of the address it had (nothing is
+ *  mailed to a deleted person, and the address does not outlive the account in this row). Body and lease go with the status. */
+async function markAccountDeleted(row: ClaimedRow, placeholder: string): Promise<boolean> {
+  const done = await sql`
+    update email_outbox
+       set status = 'expired', last_error = ${ACCOUNT_DELETED_REASON}, recipient = ${placeholder}, body_sealed = null,
+           lease_until = null, status_at = now()
+     where id = ${row.id} and status = 'sending' and attempts = ${row.attempts}
+    returning id`;
+  return done.length > 0;
+}
+
 // ---------------------------------------------------------------------------
 // attemptClaimed
 // ---------------------------------------------------------------------------
@@ -190,8 +220,18 @@ export async function attemptClaimed(row: ClaimedRow, opts: { now?: Date } = {})
     return { outcome: applied ? "expired" : "deferred", verdict: null, rateLimited: false, requestMade: false };
   }
 
+  // Who it goes to is decided now, not when it was queued (recipient.ts): an account's current address, unless a request may already
+  // have left under this row's key (D2), and nobody at all for a deleted account. The gate and the transport use THIS address.
+  const resolved = await resolveRecipient(row);
+  if (resolved.kind === "deleted") {
+    const applied = await markAccountDeleted(row, resolved.placeholder);
+    return { outcome: applied ? "expired" : "deferred", verdict: null, rateLimited: false, requestMade: false };
+  }
+  if (resolved.kind === "lost") return { outcome: "deferred", verdict: null, rateLimited: false, requestMade: false };
+  const to = resolved.to;
+
   // R5/R8: the gate first. The body stays sealed until the gate says yes.
-  const gate = await checkSendable({ to: row.recipient, subject: row.subject, transactional: row.transactional });
+  const gate = await checkSendable({ to, subject: row.subject, transactional: row.transactional });
   if (!gate.ok) {
     const verdict = classifyResult(gate); // "dead" (no key) or "suppressed"
     const status = verdict === "suppressed" ? "suppressed" : "dead";
@@ -216,7 +256,7 @@ export async function attemptClaimed(row: ClaimedRow, opts: { now?: Date } = {})
   try {
     result = await deliver(
       {
-        to: row.recipient,
+        to,
         subject: row.subject,
         html: body.html,
         text: body.text,
@@ -344,6 +384,23 @@ export type DispatchOptions = {
 };
 
 /**
+ * `dispatchNow`'s claim of ONE row: a `queued`, never-attempted, unexpired row becomes `sending` with its first attempt counted and a
+ * fresh lease. Answers the claimed row, or `undefined` when it is not ours to start (taken, replaced, already attempted, or expired).
+ * Exported so a test that must stage an interleaving between the claim and `attemptClaimed` claims with THIS statement and not a copy
+ * of it that can drift (a `ClaimedRecord` is what `toClaimedRow` takes).
+ */
+export async function claimQueuedRow(id: string, now: Date): Promise<ClaimedRecord | undefined> {
+  const [rec] = await sql<ClaimedRecord[]>`
+    update email_outbox
+       set status = 'sending', attempts = attempts + 1, lease_until = now() + make_interval(secs => ${LEASE_MS / 1000}),
+           status_at = now()
+     where id = ${id} and status = 'queued' and attempts = 0 and expires_at > ${now}
+    returning id, kind, ref_type, ref_id, org_id, meta, recipient, subject, body_sealed, transactional,
+              attempts, expires_at, lease_until, recipient_user_id, last_error, false as reclaimed`;
+  return rec;
+}
+
+/**
  * Attempt the first send of each id, in order, and say what happened to each. Call it AFTER the caller's transaction
  * has committed (never inside `withTenant`: it uses the pooled client). It does not throw: the rows are durable, so a
  * failure here defers them to the worker rather than failing a request that already committed.
@@ -426,13 +483,7 @@ export async function dispatchNow(ids: readonly string[], opts: DispatchOptions 
       }
       // The clock is read again for every row: sending the earlier ones took time.
       const rowNow = effectiveNow(opts.now);
-      const [rec] = await sql<ClaimedRecord[]>`
-        update email_outbox
-           set status = 'sending', attempts = attempts + 1, lease_until = now() + make_interval(secs => ${LEASE_MS / 1000}),
-               status_at = now()
-         where id = ${id} and status = 'queued' and attempts = 0 and expires_at > ${rowNow}
-        returning id, kind, ref_type, ref_id, org_id, meta, recipient, subject, body_sealed, transactional,
-                  attempts, expires_at, lease_until`;
+      const rec = await claimQueuedRow(id, rowNow);
       if (!rec) {
         // Not ours to start (taken, replaced, already attempted), or its window closed while earlier rows were sent:
         // the latter is ended now rather than left queued for a worker that would only expire it.

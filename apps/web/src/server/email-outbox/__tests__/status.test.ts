@@ -21,8 +21,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql, statementCount } from "@/lib/db";
+import { ACCOUNT_DELETED_REASON } from "../account-deletion";
+import { CANCELLED_REASONS } from "../cancel";
 import { OUTBOX_STATUSES, PURGE_BATCH, RETENTION_DAYS, type OutboxKind, type OutboxStatus } from "../constants";
-import { latestEmailStatus, purgeOldEmails, type EmailStatusRow } from "../status";
+import { latestEmailStatus, latestStatusesOfRows, lockQueuedEmails, purgeOldEmails, type EmailStatusRow } from "../status";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const RUN = `t8s-${randomUUID().slice(0, 8)}`;
@@ -62,7 +64,11 @@ describe.skipIf(!HAS_DB)("latestEmailStatus and purgeOldEmails (V470 email_outbo
     ref: string;
     org?: string | null;
     to?: string;
+    /** `recipient_user_id`. Written under `session_replication_role = replica` (see `history`), so it need not name a real user. */
+    userId?: string | null;
     status?: OutboxStatus;
+    /** `last_error`: for a row a void ended, the cancel reason (cancel.ts); null otherwise. */
+    lastError?: string | null;
     createdAt: Date;
     statusAt?: Date;
   }
@@ -73,11 +79,11 @@ describe.skipIf(!HAS_DB)("latestEmailStatus and purgeOldEmails (V470 email_outbo
     const status = s.status ?? "queued";
     await x`
       insert into email_outbox
-        (id, kind, ref_type, ref_id, org_id, recipient, subject, transactional, status, lease_until, expires_at, created_at, status_at)
+        (id, kind, ref_type, ref_id, org_id, recipient, recipient_user_id, subject, transactional, status, lease_until, expires_at, last_error, created_at, status_at)
       values
         (${id}, ${s.kind ?? "chess_invite"}, ${s.refType ?? REF_TYPE}, ${s.ref}, ${s.org === undefined ? orgA : s.org},
-         ${s.to ?? `${randomUUID()}@x.test`}, 'subject', true, ${status},
-         ${status === "sending" ? new Date(NOW + 5 * MIN) : null}, ${new Date(NOW + 60 * MIN)},
+         ${s.to ?? `${randomUUID()}@x.test`}, ${s.userId ?? null}, 'subject', true, ${status},
+         ${status === "sending" ? new Date(NOW + 5 * MIN) : null}, ${new Date(NOW + 60 * MIN)}, ${s.lastError ?? null},
          ${s.createdAt}, ${s.statusAt ?? s.createdAt})`;
     return id;
   }
@@ -123,7 +129,39 @@ describe.skipIf(!HAS_DB)("latestEmailStatus and purgeOldEmails (V470 email_outbo
       // One row: three spellings of one recipient are one recipient. Its status is the newest NON-replaced row's (the sent one,
       // although a replaced row is newer on the clock), and `at` is that row's `status_at`, the recipient is as that row stored it.
       expect(await latest(orgA, ref)).toEqual([
-        { refId: ref, recipient: "ANN@x.test", kind: "chess_invite", status: "sent", at: minutesAgo(29) },
+        { refId: ref, recipient: "ANN@x.test", recipientUserId: null, kind: "chess_invite", status: "sent", at: minutesAgo(29) },
+      ]);
+    });
+
+    // G-2 (phase 3 wave 1, T4): the arbiter matches a seat's rows to the player by the ACCOUNT first, so the read hands it the row's
+    // `recipient_user_id`. A row with no account (a literal-address kind, or a phase-1 invite) hands back null, not undefined.
+    it("returns each row's recipient_user_id (null when the row has none), beside the address it was queued with", async () => {
+      const ref = newRef();
+      const account = randomUUID();
+      await history([
+        { ref, to: "moved-from@x.test", userId: account, status: "delivered", createdAt: minutesAgo(30), statusAt: minutesAgo(29) },
+        { ref, to: "phase1@x.test", status: "sent", createdAt: minutesAgo(20), statusAt: minutesAgo(19) },
+      ]);
+      const rows = await latest(orgA, ref);
+      expect(rows.map((r) => [r.recipient, r.recipientUserId]).sort()).toEqual([
+        ["moved-from@x.test", account],
+        ["phase1@x.test", null],
+      ]);
+      expect(rows.length, "anti-vacuity: both rows came back").toBe(2);
+    });
+
+    it("an account's rows that differ only in address are two rows to the fold (the fold is by address; the seat matches them by account)", async () => {
+      // The reader's contract: it does not collapse an account's rows. The seat-level match (lib/invite-status.ts) picks the newest.
+      const ref = newRef();
+      const account = randomUUID();
+      await history([
+        { ref, to: "first@x.test", userId: account, status: "delivered", createdAt: minutesAgo(30), statusAt: minutesAgo(29) },
+        { ref, to: "second@x.test", userId: account, status: "queued", createdAt: minutesAgo(10), statusAt: minutesAgo(9) },
+      ]);
+      const rows = await latest(orgA, ref);
+      expect(rows.map((r) => [r.recipient, r.recipientUserId, r.status]).sort()).toEqual([
+        ["first@x.test", account, "delivered"],
+        ["second@x.test", account, "queued"],
       ]);
     });
 
@@ -153,10 +191,60 @@ describe.skipIf(!HAS_DB)("latestEmailStatus and purgeOldEmails (V470 email_outbo
         await history([{ ref, to: "solo@x.test", status, createdAt: minutesAgo(20), statusAt: minutesAgo(19) }]);
         const rows = await latest(orgA, ref);
         if (status === "replaced") expect(rows, "replaced is never an answer").toEqual([]);
-        else expect(rows, status).toEqual([{ refId: ref, recipient: "solo@x.test", kind: "chess_invite", status, at: minutesAgo(19) }]);
+        else expect(rows, status).toEqual([{ refId: ref, recipient: "solo@x.test", recipientUserId: null, kind: "chess_invite", status, at: minutesAgo(19) }]);
         checked += 1;
       }
       expect(checked, "anti-vacuity: every status in the registry was judged").toBe(OUTBOX_STATUSES.length);
+    });
+
+    // Phase 3 wave 1, T6 (P8): a row a VOID ended - `expired` with a cancel reason in `last_error` (cancel.ts) - is not mail the
+    // recipient has about the thing; the thing is gone. The rule is `current()`, shared by `latestEmailStatus`, `latestStatusesOfRows`
+    // and `lockQueuedEmails`, so each is asked below. The discriminator is the PAIR (status, reason): `expired` alone also means the
+    // worker aged an invite out, which is an answer, and a cancel word on any other status is not a void.
+    it("T6: a voided row is skipped; an expired row the worker aged out, or the account sweep scrubbed, is still an answer; the reason alone is not the test", async () => {
+      const cases: { name: string; status: OutboxStatus; lastError: string | null; reads: OutboxStatus | null }[] = [
+        ...CANCELLED_REASONS.map((reason) => ({ name: `voided: ${reason}`, status: "expired" as const, lastError: reason, reads: null })),
+        { name: "aged out by the worker (no reason)", status: "expired", lastError: null, reads: "expired" },
+        { name: "scrubbed by the account sweep", status: "expired", lastError: ACCOUNT_DELETED_REASON, reads: "expired" },
+        { name: "expired after an attempt (an http word)", status: "expired", lastError: "http 503 service_unavailable", reads: "expired" },
+        { name: "a cancel word on a queued row (not a void)", status: "queued", lastError: CANCELLED_REASONS[0]!, reads: "queued" },
+        { name: "a cancel word on a dead row (not a void)", status: "dead", lastError: CANCELLED_REASONS[0]!, reads: "dead" },
+      ];
+      let skipped = 0;
+      let answered = 0;
+      for (const c of cases) {
+        const ref = newRef();
+        await history([{ ref, to: "solo@x.test", status: c.status, lastError: c.lastError, createdAt: minutesAgo(20), statusAt: minutesAgo(19) }]);
+        const rows = await latest(orgA, ref);
+        expect(rows.map((r) => r.status), c.name).toEqual(c.reads === null ? [] : [c.reads]);
+        if (c.reads === null) skipped += 1;
+        else answered += 1;
+      }
+      expect(skipped, "anti-vacuity: every cancel reason was judged").toBe(CANCELLED_REASONS.length);
+      expect(answered, "and the rows that must still answer were judged").toBe(cases.length - CANCELLED_REASONS.length);
+    });
+
+    it("T6: when the newest row was voided the NEWEST OTHER row answers - in all three readers, which share the rule", async () => {
+      const ref = newRef();
+      const to = "voided-after@x.test";
+      // An older invite still waiting (a resend queued behind it was then voided). Forged: in production the newer insert would have
+      // replaced the older queued row; the point is that the three readers agree on which row is "the email".
+      const [older, voided] = await history([
+        { ref, to, status: "queued", createdAt: minutesAgo(30) },
+        { ref, to, status: "expired", lastError: CANCELLED_REASONS[0]!, createdAt: minutesAgo(10), statusAt: minutesAgo(9) },
+      ]);
+      expect((await latest(orgA, ref)).map((r) => r.status), "latestEmailStatus: the older row answers").toEqual(["queued"]);
+      const byRow = await latestStatusesOfRows([voided!]);
+      expect(byRow.get(voided!), "latestStatusesOfRows: asked about the voided row, the recipient's mail is the older one").toBe("queued");
+      const locked = await sql.begin((tx) => lockQueuedEmails(tx, "chess_invite", REF_TYPE, [ref]));
+      expect(locked.map((r) => r.id), "lockQueuedEmails: the older queued row is the one it may re-render").toEqual([older]);
+
+      // And a ref whose only row was voided has no email at all, in each of them.
+      const lone = newRef();
+      const [only] = await history([{ ref: lone, to, status: "expired", lastError: CANCELLED_REASONS[0]!, createdAt: minutesAgo(10) }]);
+      expect(await latest(orgA, lone)).toEqual([]);
+      expect((await latestStatusesOfRows([only!])).size, "latestStatusesOfRows: no entry").toBe(0);
+      expect(await sql.begin((tx) => lockQueuedEmails(tx, "chess_invite", REF_TYPE, [lone]))).toEqual([]);
     });
 
     it("ordering perturbs the key: the newer row has the SMALLER id and the OLDER status_at, and still wins", async () => {

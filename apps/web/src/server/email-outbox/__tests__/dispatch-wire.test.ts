@@ -8,9 +8,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi, t
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { suppress } from "@/lib/email";
-import { attemptClaimed, dispatchNow, toClaimedRow, type ClaimedRecord } from "../attempt";
+import { attemptClaimed, dispatchNow, toClaimedRow } from "../attempt";
 import { idempotencyKey } from "../constants";
 import { enqueueEmail, type OutboxMessage } from "../enqueue";
+import { claimOne } from "../worker";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const RUN = `wire-${randomUUID().slice(0, 8)}`;
@@ -175,11 +176,9 @@ describe.skipIf(!HAS_DB)("the outbox through the real transport (fetch is the on
     const id = await queue();
     respond = () => resendError(503, "service_unavailable");
     expect((await dispatchNow([id])).get(id)).toBe("retrying");
-    // The worker's reclaim (Task 4) is replaced here by the same claim statement and the same attempt function.
-    const [rec] = await sql<ClaimedRecord[]>`
-      update email_outbox set status = 'sending', attempts = attempts + 1, lease_until = now() + interval '2 minutes'
-       where id = ${id} and status = 'queued'
-      returning id, kind, ref_type, ref_id, org_id, meta, recipient, subject, body_sealed, transactional, attempts, expires_at, lease_until`;
+    // The worker's retry: its own claim statement (`claimOne`, once the delay has passed) and the same attempt function.
+    await sql`update email_outbox set next_attempt_at = now() - interval '1 second' where id = ${id}`;
+    const rec = await claimOne([id]);
     respond = accept;
     expect((await attemptClaimed(toClaimedRow(rec!))).outcome).toBe("sent");
     expect(calls.map((c) => c.headers["Idempotency-Key"])).toEqual([idempotencyKey(id), idempotencyKey(id)]);

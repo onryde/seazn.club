@@ -11,28 +11,48 @@ import "server-only";
 //  - `purgeOldEmails` is the worker's last step (RETENTION_DAYS).
 import { sql, type Tx } from "@/lib/db";
 import { PURGE_BATCH, RETENTION_DAYS, type OutboxKind, type OutboxStatus } from "./constants";
+import { CANCELLED_REASONS } from "./cancel";
 
-// THE RULE for "which row is the email a recipient has about a thing", in one place. Two reads need it and their call shapes
+// THE RULE for "which row is the email a recipient has about a thing", in one place. THREE statements need it and their call shapes
 // differ - `latestEmailStatus` asks by (organisation, ref type, refs) and answers per recipient; `latestStatusesOfRows` asks by row
-// id (the rows a request has just written, whose org it owns) and answers per row - so they cannot be one statement, but they
-// share these two fragments and so cannot disagree about what "latest" means:
+// id (the rows a request has just written, whose org it owns) and answers per row; `lockQueuedEmails` asks by (kind, ref type, refs)
+// and locks what it keeps - so they cannot be one statement, but they share these two fragments and so cannot disagree about what
+// "latest" means:
 //  - `current`: a `replaced` row is never the answer, even when it is the newest on the clock (the V470 replace trigger supersedes
-//    by KEY, not by time, so the row that carries the outcome is the newest one that is not replaced);
+//    by KEY, not by time, so the row that carries the outcome is the newest one that is not replaced); and neither is a row a VOID
+//    ended (`expired` with a cancel reason in `last_error`, cancel.ts): the thing it was about is gone, so it is not "mail this
+//    recipient has about the thing". The test is the pair - status AND reason - because `expired` alone also means the worker aged a
+//    row out, which IS an answer (the invite never went). Without this skip, a seat re-paired to the same player after an Unpair
+//    read the voided row as "Not delivered" (P8, found through the arbiter loader);
 //  - `newestFirst`: "newest" is `created_at`, ties by `id` - never `status_at`, which moves with every status change and says
 //    nothing about which email is the latest.
 // Both are written unqualified on purpose: inside `latestStatusesOfRows`' lateral subselect an unqualified column binds to the inner
 // table (`x`), the one being ranked, and not to the outer row.
-const current = () => sql`status <> 'replaced'`;
+// `coalesce(..., false)`: an `expired` row the worker aged out has a NULL `last_error`, and `status = 'expired' and null` is null, so a
+// bare `not (...)` would be null too and the row would vanish from the answer (a null in a where clause is "no").
+const current = () =>
+  sql`status <> 'replaced' and not (status = 'expired' and coalesce(last_error = any(${CANCELLED_REASONS as string[]}::text[]), false))`;
 const newestFirst = () => sql`created_at desc, id desc`;
 
-/** One recipient's latest email about one thing. `at` is when its status last changed (`status_at`). */
-export type EmailStatusRow = { refId: string; recipient: string; kind: OutboxKind; status: OutboxStatus; at: Date };
+/** One recipient's latest email about one thing. `at` is when its status last changed (`status_at`). `recipientUserId` is the account
+ *  an account kind's row is for (`recipient_user_id`), null for a row with none (a literal-address kind, or a phase-1 invite): the
+ *  address on the row is the one it was queued with, which the account may since have left, so a reader that wants "this person's
+ *  mail" matches by the id first (lib/invite-status.ts `seatInviteWords`). */
+export type EmailStatusRow = {
+  refId: string;
+  recipient: string;
+  recipientUserId: string | null;
+  kind: OutboxKind;
+  status: OutboxStatus;
+  at: Date;
+};
 
 /**
  * The status of the newest email to each recipient of each of these refs, for one organisation and one ref type: one row per
- * (ref, recipient case-folded, as the V470 replace rule folds it), never a `replaced` row. A `replaced` row is skipped even when
- * it is the newest on the clock: the replace trigger supersedes by KEY, not by time, so the row that carries the outcome is the
- * newest one that is not. "Newest" is `created_at`, ties by `id` (`status_at` moves with every status change and says nothing about
+ * (ref, recipient case-folded, as the V470 replace rule folds it), never a `replaced` row and never a row a void ended (`expired`
+ * with a cancel reason in `last_error`, see `current`). Either is skipped even when it is the newest on the clock: the replace
+ * trigger supersedes by KEY, not by time, and a voided email is mail about a thing that is gone, so the row that carries the
+ * outcome is the newest one that is neither. "Newest" is `created_at`, ties by `id` (`status_at` moves with every status change and says nothing about
  * which email is the latest). A resend after a dead row reads as the new row. Empty `refIds` answers `[]` and issues no statement.
  *
  * `kind`, when given, narrows the ask to the emails of that kind BEFORE the newest-per-recipient fold: a ref is "a thing", and the
@@ -47,19 +67,26 @@ export async function latestEmailStatus(
   kind?: OutboxKind,
 ): Promise<EmailStatusRow[]> {
   if (refIds.length === 0) return [];
-  const rows = await sql<{ refId: string; recipient: string; kind: OutboxKind; status: OutboxStatus; at: Date }[]>`
+  const rows = await sql<EmailStatusRow[]>`
     select distinct on (ref_id, lower(recipient))
-           ref_id as "refId", recipient, kind, status, status_at as "at"
+           ref_id as "refId", recipient, recipient_user_id as "recipientUserId", kind, status, status_at as "at"
       from email_outbox
      where org_id = ${orgId} and ref_type = ${refType} and ref_id = any(${refIds as string[]}::text[])
        ${kind === undefined ? sql`` : sql`and kind = ${kind}`}
        and ${current()}
      order by ref_id, lower(recipient), ${newestFirst()}`;
-  return rows.map((r) => ({ refId: r.refId, recipient: r.recipient, kind: r.kind, status: r.status, at: r.at }));
+  return rows.map((r) => ({
+    refId: r.refId,
+    recipient: r.recipient,
+    recipientUserId: r.recipientUserId,
+    kind: r.kind,
+    status: r.status,
+    at: r.at,
+  }));
 }
 
 /**
- * The status NOW of the newest non-replaced row for each of these ROWS' kind, ref and recipient (the recipient compared as the
+ * The status NOW of the newest current row (neither `replaced` nor voided, see `current`) for each of these ROWS' kind, ref and recipient (the recipient compared as the
  * replace rule compares it, case-insensitively), keyed by the row asked about. A row the caller wrote and a newer one another
  * request wrote for the same recipient answer alike: the newer row is what the recipient's mail is. The same rule as
  * `latestEmailStatus` (the `current` and `newestFirst` fragments above); asked by row id because its caller (the chess invite, in the
@@ -94,8 +121,8 @@ export type QueuedEmailRow = {
 };
 
 /**
- * The emails of these refs that may still be RE-RENDERED: for each recipient (of each ref, case-folded) the newest non-replaced row
- * (the SAME rule as `latestEmailStatus` and `latestStatusesOfRows`, the fragments above), kept only when
+ * The emails of these refs that may still be RE-RENDERED: for each recipient (of each ref, case-folded) the newest current row (neither
+ * `replaced` nor voided, see `current`; the SAME rule as `latestEmailStatus` and `latestStatusesOfRows`, the fragments above), kept only when
  *  - its status is `queued` (waiting to go out: a `sending`, `sent`, `delayed`, `delivered` or ended row is out of the caller's hands
  *    or already gone), AND
  *  - no request of it can have reached the provider: it was never attempted (`attempts = 0`), or its ONLY attempt was answered 429
@@ -104,7 +131,10 @@ export type QueuedEmailRow = {
  *    5xx that the provider accepted, so a 429 after them proves nothing and the row is not eligible.
  * and LOCKED (`for update`) on the caller's transaction.
  *
- * The second test is the one that keeps the promise "never an extra mail". A re-rendered email is a NEW row, so a new idempotency
+ * The second test is the one that keeps the promise "never an extra mail", and it is the SAME rule as recipient.ts `isKeyClean`
+ * (may a request under this row's key have left?), judged one moment earlier: here the row is not yet claimed, so `attempts` does not
+ * yet count the attempt that `isKeyClean` sees (attempts + 1 there). recipient-resolution.test.ts drives a grid of
+ * (attempts, last_error) through both and asserts they agree. A re-rendered email is a NEW row, so a new idempotency
  * key (`idempotencyKey(row.id)`). A row whose earlier attempt ended in a network error, a 5xx or a 409 in-flight answer may have been
  * ACCEPTED with the answer lost; the same key would make its retry harmless, but a fresh key would mail the recipient a second time.
  * Such a row is not returned: it keeps its key and its body (naming the deadline it was written with), and the caller moves only its

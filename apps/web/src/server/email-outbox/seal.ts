@@ -64,6 +64,16 @@ export class OutboxKeyUnavailableError extends Error {
 }
 
 /**
+ * Refuse now if this box cannot queue email (`outboxKeyProblem`), with the error `sealBody` would raise. For a caller that cannot
+ * let its enqueue be the first to find out, because it does irreversible work before the enqueue (the registration submit mints
+ * a Checkout session after the fact commits): it asks first, so a key fault fails the action before anything has happened.
+ */
+export function assertOutboxCanQueue(): void {
+  const problem = outboxKeyProblem();
+  if (problem) throw new OutboxKeyUnavailableError(problem);
+}
+
+/**
  * Seal `{ html, text }`. Returns null ONLY when the key is unusable AND no Resend key is set: that box (local dev, CI)
  * could not send the row anyway, and the attempt ends it `dead` with `no_api_key`. Every other unusable state throws
  * (`OutboxKeyUnavailableError`, see `outboxKeyProblem`): queueing a bodiless row where mail CAN be sent would turn a

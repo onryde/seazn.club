@@ -61,7 +61,7 @@ import {
   enqueueEmail,
   type OutboxStatus,
 } from "@/server/email-outbox";
-import { anonymiseChessInvites } from "@/server/email-outbox/account-deletion";
+import { anonymiseAccountEmails } from "@/server/email-outbox/account-deletion";
 import { KIND_HOOKS } from "@/server/email-outbox/hooks";
 import { runOutboxTick } from "@/server/email-outbox/worker";
 import { openRound } from "@/server/usecases/external-play/open-round";
@@ -327,8 +327,10 @@ describe.skipIf(!HAS_DB)("deleting an account anonymises its chess invites in th
     expect(new Set(recipients).size, "two people are never left with one shared placeholder").toBe(2);
   });
 
-  it("the helper touches chess invites and nothing else: a sign-in row for the same address, in any status, is not its business", async () => {
-    // The route deletes the account's sign-in rows first, so through the route the kind filter is unobservable: drive the helper itself.
+  it("the helper scrubs chess invites, deletes sign-in rows and touches nothing else: a registration email for the same address, in any status, is not its business", async () => {
+    // The kind filter of the scrub is unobservable through the route, which gives the helper only the account's own address and rows:
+    // drive the helper itself. (T5: the helper now also owns the sign-in delete, so a `magic_link` row at the address is GONE, and the
+    // row that proves "nothing else" is a literal-address kind of the wave, `registration_confirmation`.)
     const email = address("kinds");
     const rows: { id: string; kind: string }[] = [];
     for (const status of OUTBOX_STATUSES) {
@@ -340,26 +342,38 @@ describe.skipIf(!HAS_DB)("deleting an account anonymises its chess invites in th
       });
       made.rows.push(signIn);
       await put(signIn, status);
-      rows.push({ id: chess, kind: "chess_invite" }, { id: signIn, kind: "magic_link" });
+      const registration = await enqueueEmail(sql, {
+        kind: "registration_confirmation", refType: "registration", refId: randomUUID(), orgId: null, to: email,
+        subject: "Your registration", html: "<p>in</p>", text: "in", transactional: false, expiresAt: new Date(Date.now() + 15 * MIN),
+      });
+      made.rows.push(registration);
+      await put(registration, status);
+      rows.push({ id: chess, kind: "chess_invite" }, { id: signIn, kind: "magic_link" }, { id: registration, kind: "registration_confirmation" });
     }
     const before = new Map((await rowsByIds(rows.map((r) => r.id))).map((r) => [r.id, r]));
     const placeholder = `deleted-${randomUUID()}@deleted.invalid`;
 
-    const ended = await sql.begin((tx) => anonymiseChessInvites(tx, { email, placeholder }));
+    const ended = await sql.begin((tx) => anonymiseAccountEmails(tx, { userId: randomUUID(), email, placeholder }));
     expect(ended.map((e) => e.status), "only the queued chess invite was ended, and it is handed back for the hook").toEqual(["expired"]);
 
     let sawChess = 0;
-    let sawSignIn = 0;
-    for (const r of await rowsByIds(rows.map((x) => x.id))) {
+    let sawRegistration = 0;
+    const left = await rowsByIds(rows.map((x) => x.id));
+    for (const r of left) {
       if (r.kind === "chess_invite") {
         expect(r.recipient).toBe(placeholder);
         sawChess += 1;
       } else {
-        expect(r, `a ${before.get(r.id)!.status} sign-in row is left exactly as it was`).toEqual(before.get(r.id));
-        sawSignIn += 1;
+        expect(r.kind, "only a registration row can still be there").toBe("registration_confirmation");
+        expect(r, `a ${before.get(r.id)!.status} registration row is left exactly as it was`).toEqual(before.get(r.id));
+        sawRegistration += 1;
       }
     }
-    expect([sawChess, sawSignIn], "anti-vacuity: every status, both kinds").toEqual([OUTBOX_STATUSES.length, OUTBOX_STATUSES.length]);
+    const signInsGone = rows.filter((r) => r.kind === "magic_link" && !left.some((l) => l.id === r.id)).length;
+    expect(
+      [sawChess, sawRegistration, signInsGone],
+      "anti-vacuity: every status, all three kinds (scrubbed, untouched, deleted)",
+    ).toEqual([OUTBOX_STATUSES.length, OUTBOX_STATUSES.length, OUTBOX_STATUSES.length]);
   });
 
   it("a REFUSED deletion keeps the address: the account is kept, so its invites are", async () => {

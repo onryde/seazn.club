@@ -40,7 +40,7 @@ vi.mock("../status", async (importOriginal) => {
   };
 });
 
-import { attemptClaimed, dispatchNow, toClaimedRow, type ClaimedRecord, type ClaimedRow } from "../attempt";
+import { attemptClaimed, claimQueuedRow, dispatchNow, toClaimedRow, type ClaimedRow } from "../attempt";
 import {
   ENDED_BADLY_STATUSES,
   CLAIM_CUTOFF_MS,
@@ -266,15 +266,11 @@ describe.skipIf(!HAS_DB)("the email outbox retry worker (DB)", () => {
   const expireNow = async (id: string): Promise<void> => {
     await sql`update email_outbox set expires_at = now() - interval '1 second' where id = ${id}`;
   };
-  /** What a worker's claim does, by hand: sending, attempts + 1, a lease. Returns the row as `attemptClaimed` takes it. */
+  /** A claim of a never-attempted row that the test then holds (a worker that took it and died, or one that stops before the hook): the
+   *  production statement (`claimQueuedRow`, the one `dispatchNow` makes), not a copy of it. Returns the row as `attemptClaimed` takes it. */
   async function claimByHand(id: string): Promise<ClaimedRow> {
-    const [rec] = await sql<ClaimedRecord[]>`
-      update email_outbox
-         set status = 'sending', attempts = attempts + 1, lease_until = now() + interval '2 minutes', status_at = now()
-       where id = ${id} and status = 'queued'
-      returning id, kind, ref_type, ref_id, org_id, meta, recipient, subject, body_sealed, transactional,
-                attempts, expires_at, lease_until`;
-    if (!rec) throw new Error(`could not claim ${id} (not queued)`);
+    const rec = await claimQueuedRow(id, new Date());
+    if (!rec) throw new Error(`could not claim ${id} (not queued, already attempted, or expired)`);
     return toClaimedRow(rec);
   }
   const sent = () => deliverMock.mock.calls.map((c) => c[0] as Sent);

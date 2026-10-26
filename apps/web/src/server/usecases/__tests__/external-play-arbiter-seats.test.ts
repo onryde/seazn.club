@@ -16,7 +16,10 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql, statementCount } from "@/lib/db";
 import type { ArbiterBoard } from "@/lib/arbiter-view";
-import { OUTBOX_STATUSES, type OutboxStatus } from "@/server/email-outbox/constants";
+import { FIRST_ATTEMPT_WINDOW_MS, OUTBOX_STATUSES, type OutboxStatus } from "@/server/email-outbox/constants";
+import { runOutboxTick } from "@/server/email-outbox/worker";
+import { inviteWordOf } from "@/lib/invite-status";
+import { stubOutboxEnv } from "./_invite-mail";
 import {
   CHECKIN_BATCH_GAP_MS,
   CHECKIN_BATCH_SIZE,
@@ -40,8 +43,17 @@ vi.mock("@/lib/email", async (importOriginal) => {
   const h = await import("@/server/usecases/__tests__/_invite-mail");
   return { ...actual, externalPlayInviteEmail: h.renderInviteForTest };
 });
+// The provider's answer: a flat refusal by default (every row ends `dead`); the account-follows-the-address block below switches it
+// per phase (a 429 for the open, an acceptance for the worker's later attempt).
+const provider = vi.hoisted(() => ({ mode: "refuse" as "refuse" | "limit" | "accept" }));
 vi.mock("@/server/email-outbox/transport", () => ({
-  deliver: () => Promise.resolve({ ok: false as const, reason: "http" as const, status: 422, errorName: "validation_error", detail: "refused" }),
+  deliver: () => {
+    if (provider.mode === "limit") {
+      return Promise.resolve({ ok: false as const, reason: "http" as const, status: 429, errorName: "rate_limit_exceeded", detail: "slow down" });
+    }
+    if (provider.mode === "accept") return Promise.resolve({ ok: true as const, providerId: `re_arbiter_${crypto.randomUUID()}` });
+    return Promise.resolve({ ok: false as const, reason: "http" as const, status: 422, errorName: "validation_error", detail: "refused" });
+  },
 }));
 // The outbox read, wrapped so a test can count its calls (the empty case) and make it answer a status the panel has no word for.
 // Every call is the real read unless a test says otherwise.
@@ -84,6 +96,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   // The keyless environment (CI, a fresh checkout): every invite row ends `dead` / `no_api_key`.
   vi.stubEnv("RESEND_API_KEY", "");
+  provider.mode = "refuse";
 });
 
 // ---------------------------------------------------------------------------------------------------------------------------
@@ -563,6 +576,162 @@ describe.runIf(HAS_DB)("loadArbiterRound seats: what the invite did", () => {
     expect(repaired, "anti-vacuity: the re-pair changed at least one seat").toBeGreaterThan(0);
     expect(kept, "anti-vacuity: and kept at least one").toBeGreaterThan(0);
     expect(repaired + kept).toBe(4);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+describe.runIf(HAS_DB)("loadArbiterRound seats: an account's mail follows the account, not the address (G-2)", () => {
+  // A chess invite is an ACCOUNT's mail (phase 3): its row carries `recipient_user_id`, and the address on it is the one the account
+  // had when it was queued, or the one the worker rewrote it to. The seat's CURRENT mailbox is whatever the account has now. A reader
+  // that matches by address alone shows a mail that went out (or is still on its way) to the old address as "Not delivered". These
+  // run through the real open (the producer of the rows), the real loader (the reader), and, for the rewritten row, the real worker.
+  // The expected word is the status -> word map's (`inviteWordOf`): this block is about WHICH row answers, not what the words are.
+
+  /** The seat a player sits on and the row the real open wrote for them (the pairing decides the colour, not the test). */
+  async function seatOfPlayer(r: SeedOnlineChessRoundResult, board: SeedRoundBoard, player: SeedSide): Promise<{ colour: Colour; row: OutboxRow }> {
+    for (const colour of ["white", "black"] as const) {
+      const row = (await rowsOf(r.orgId, board.fixtureId, colour)).find((x) => x.recipient.toLowerCase() === player.email.toLowerCase());
+      if (row) return { colour, row };
+    }
+    throw new Error(`no invite row was written for ${player.email} on ${board.fixtureId}`);
+  }
+  async function moveAccount(player: SeedSide): Promise<string> {
+    const next = `moved-${randomUUID().slice(0, 8)}@test.local`;
+    await sql`update users set email = ${next} where id = ${player.userId}`;
+    return next;
+  }
+  const accountOf = async (rowId: string): Promise<string | null> =>
+    (await sql<{ id: string | null }[]>`select recipient_user_id as id from email_outbox where id = ${rowId}`)[0]!.id;
+
+  it("(a) a mail SENT or DELIVERED to the old address is the seat's word after the player changed address, not Not delivered (D2)", async () => {
+    const r = await openedRound(1);
+    const board = r.boards[0]!;
+    const { colour, row } = await seatOfPlayer(r, board, board.home);
+    // The dead rows of the keyless open released the stamp; hold it again, so that "no word for this seat" would read Not delivered.
+    await stampSeat(board.fixtureId, colour);
+    expect(await accountOf(row.id), "premise: the open's row names the player's account").toBe(board.home.userId);
+    const next = await moveAccount(board.home);
+    expect(next.toLowerCase(), "premise: the seat's mailbox is no longer the row's address").not.toBe(row.recipient.toLowerCase());
+
+    let checked = 0;
+    for (const status of ["sent", "delivered"] as const) {
+      await setStatus(row.id, status);
+      const seat = (await seatsOf(r, board.fixtureId))[colour];
+      expect(seat.invites, status).toEqual([inviteWordOf(status)]);
+      expect(seat.invites, `${status} must not read as the stamp's fallback`).not.toEqual(["not_delivered"]);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: both outcomes were read").toBe(2);
+  });
+
+  it("(b) a row still queued (or sending) at the old address reads as its status word, not Not delivered", async () => {
+    const r = await openedRound(1);
+    const board = r.boards[0]!;
+    const { colour, row } = await seatOfPlayer(r, board, board.home);
+    await stampSeat(board.fixtureId, colour);
+    await moveAccount(board.home);
+
+    let checked = 0;
+    for (const status of ["queued", "sending", "delayed"] as const) {
+      await setStatus(row.id, status);
+      const seat = (await seatsOf(r, board.fixtureId))[colour];
+      expect(seat.invites, status).toEqual([inviteWordOf(status)]);
+      expect(seat.invites).not.toEqual(["not_delivered"]);
+      checked += 1;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("(c) a key-clean row the worker REWROTE to the new address still reads correctly (the real 429 -> change -> tick sequence)", async () => {
+    // This one needs a sending box (a Resend key and the outbox's body key): the keyless default ends every row at the gate.
+    stubOutboxEnv();
+    try {
+      provider.mode = "limit";
+      const r = await openedRound(1);
+      const board = r.boards[0]!;
+      const { colour, row } = await seatOfPlayer(r, board, board.home);
+      const away = await seatOfPlayer(r, board, board.away);
+      expect([row.status, away.row.status], "premise: the 429 left both invites queued").toEqual(["queued", "queued"]);
+      expect((await seatsOf(r, board.fixtureId))[colour].invites, "before the worker: queued reads as its word").toEqual([inviteWordOf("queued")]);
+
+      const next = await moveAccount(board.home);
+      provider.mode = "accept";
+      const ids = [row.id, away.row.id];
+      await sql`
+        update email_outbox
+           set created_at = created_at - make_interval(secs => ${FIRST_ATTEMPT_WINDOW_MS / 1000 + 60}), next_attempt_at = now() - interval '1 second'
+         where id = any(${ids}::uuid[])`;
+      await runOutboxTick({ onlyIds: ids, sleep: async () => undefined });
+
+      const [after] = await sql<{ recipient: string; status: OutboxStatus }[]>`select recipient, status from email_outbox where id = ${row.id}`;
+      expect([after!.recipient, after!.status], "premise: the worker followed the account and sent").toEqual([next, "sent"]);
+      const seats = await seatsOf(r, board.fixtureId);
+      expect(seats[colour].invites).toEqual([inviteWordOf("sent")]);
+      expect(seats[away.colour].invites, "the other seat's mail went out too, to its unchanged address").toEqual([inviteWordOf("sent")]);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("(d) a row with no user id (a phase-1 invite in flight) still matches by address; after an address change it reads as it always did", async () => {
+    const r = await openedRound(1);
+    const board = r.boards[0]!;
+    const { colour, row } = await seatOfPlayer(r, board, board.home);
+    await stampSeat(board.fixtureId, colour);
+    await sql`update email_outbox set recipient_user_id = null where id = ${row.id}`;
+    await setStatus(row.id, "delivered");
+    // The address is unchanged: the address match answers.
+    expect((await seatsOf(r, board.fixtureId))[colour].invites).toEqual([inviteWordOf("delivered")]);
+    // The negative pair: with no account on the row there is nothing to follow, so a changed address is the pre-existing reading. This
+    // is what tells (a) apart from a reader that matches EVERY row to the seat.
+    await moveAccount(board.home);
+    expect((await seatsOf(r, board.fixtureId))[colour].invites).toEqual(["not_delivered"]);
+  });
+
+  it("another account's row at the seat's new address is not the seat's word (two ids that differ never match)", async () => {
+    const r = await openedRound(1);
+    const board = r.boards[0]!;
+    const { colour, row } = await seatOfPlayer(r, board, board.home);
+    await stampSeat(board.fixtureId, colour);
+    // The previous player of this seat (a different account) held `row`; the seat's player now has that address.
+    await sql`update email_outbox set recipient_user_id = ${board.away.userId} where id = ${row.id}`;
+    await setStatus(row.id, "delivered");
+    expect((await seatsOf(r, board.fixtureId))[colour].invites, "the row names a different account, so it is not this seat's").toEqual(["not_delivered"]);
+  });
+
+  it("two live rows of ONE account at different addresses: the row whose status changed last answers, in either order (the loader sorts oldest first)", async () => {
+    const r = await openedRound(1);
+    const board = r.boards[0]!;
+    const { colour, row } = await seatOfPlayer(r, board, board.home);
+    await stampSeat(board.fixtureId, colour);
+    const next = await moveAccount(board.home);
+    // The replace rule retires the first row on the second's insert, so only a privileged write (the trigger off) leaves two live rows
+    // for one account: the one at the address it left (the open's), and one at the address it moved to.
+    const second = randomUUID();
+    await sql.begin(async (tx) => {
+      await tx`set local session_replication_role = replica`;
+      await tx`
+        insert into email_outbox (id, kind, ref_type, ref_id, org_id, recipient, recipient_user_id, subject, transactional, status, expires_at)
+        values (${second}, 'chess_invite', ${CHESS_SEAT_REF_TYPE}, ${chessSeatRef(board.fixtureId, colour)}, ${r.orgId}, ${next},
+                ${board.home.userId}, 'subject', true, 'bounced', now() + interval '1 hour')`;
+    });
+    await setStatus(row.id, "delivered");
+    const changedAt = (id: string, minutesAgo: number) =>
+      sql`update email_outbox set status_at = now() - make_interval(mins => ${minutesAgo}) where id = ${id}`;
+
+    // The word of each row, from the status map; they differ, so the test can tell which row answered.
+    const openWord = inviteWordOf("delivered");
+    const secondWord = inviteWordOf("bounced");
+    expect(openWord).not.toBe(secondWord);
+    expect(await rowsOf(r.orgId, board.fixtureId, colour), "premise: two live rows for the seat").toHaveLength(2);
+
+    await changedAt(row.id, 10);
+    await changedAt(second, 1);
+    expect((await seatsOf(r, board.fixtureId))[colour].invites, "the second row changed last").toEqual([secondWord]);
+    await changedAt(row.id, 1);
+    await changedAt(second, 10);
+    expect((await seatsOf(r, board.fixtureId))[colour].invites, "the open's row changed last").toEqual([openWord]);
   });
 });
 

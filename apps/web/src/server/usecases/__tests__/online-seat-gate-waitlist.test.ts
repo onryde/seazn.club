@@ -111,6 +111,7 @@ import {
   withdrawRegistrationOrganiser,
 } from "../registrations";
 import { seedRegistration } from "./_registration-fixtures";
+import { stubOutboxEnv } from "./_invite-mail";
 import { linkWithoutPlayConsent, reconnectLichess, seedOwner, seedPlayer, type SeedPlayer } from "./_external-play-seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -222,6 +223,42 @@ describe.skipIf(!HAS_DB)("an automatic waitlist promotion on an online division"
     expect((await statusOf(c)).entrant_id).not.toBeNull();
     expect(await seatedUsers(r.divisionId)).toEqual([ok.userId]);
     expect(await queueOf(r.divisionId), "the skipped two are still waitlisted, in their order").toEqual([a, b]);
+  });
+
+  it("the promotion email is queued on the outbox for the registrant who was promoted, and for nobody who was skipped", async () => {
+    stubOutboxEnv();
+    const r = await rig(true);
+    try {
+      const [reconnect, unlinked, ok] = [await player(r, "identity-only"), await player(r, "none"), await player(r, "plays")];
+      const [a, b, c] = [await enter(r, reconnect, "waitlisted"), await enter(r, unlinked, "waitlisted"), await enter(r, ok, "waitlisted")];
+      const holder = await enter(r, null, "pending");
+
+      await withdrawRegistrationOrganiser(r.auth, holder);
+      expect((await statusOf(c)).status, "premise: C was promoted over the skipped A and B").toBe("confirmed");
+
+      // The mail is queued after the commit, off the request path: wait for the one row, then for its first attempt to settle.
+      const rowsOf = () =>
+        sql<{ ref_id: string; recipient: string; status: string }[]>`
+          select ref_id, recipient, status from email_outbox where kind = 'registration_promoted' and org_id = ${r.auth.orgId}`;
+      await vi.waitFor(
+        async () => {
+          const rows = await rowsOf();
+          if (rows.length !== 1) throw new Error(`${rows.length} registration_promoted row(s), waiting for 1`);
+          if (rows[0]!.status === "queued" || rows[0]!.status === "sending") throw new Error(`the row is still ${rows[0]!.status}`);
+        },
+        { timeout: 10_000, interval: 50 },
+      );
+      const rows = await rowsOf();
+      expect(rows, "exactly one promotion email for the whole withdrawal").toHaveLength(1);
+      expect(rows[0]!.ref_id, "it is the promoted registration's").toBe(c);
+      expect(rows[0]!.recipient, "and goes to the promoted registrant's address").toBe(await contactOf(c));
+      expect(rows.map((x) => x.ref_id), "nothing is queued for the two who were skipped").not.toContain(a);
+      expect(rows.map((x) => x.ref_id)).not.toContain(b);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.unstubAllGlobals();
+      await sql`delete from email_outbox where org_id = ${r.auth.orgId}`;
+    }
   });
 
   it("nobody who can play: the withdrawal stands, the spot is simply not taken, the queue is untouched", async () => {

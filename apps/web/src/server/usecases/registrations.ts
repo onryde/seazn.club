@@ -25,10 +25,10 @@ import { getStripe } from "@/lib/stripe";
 import { isRegistrationCurrency } from "@/lib/currency";
 import { SPOT_HOLDERS } from "@/lib/registration-status";
 import {
-  sendPaymentReminderEmail,
-  sendRegistrationEmail,
-  sendRegistrationPromotedEmail,
-  sendRefundIssuedEmail,
+  registrationEmail,
+  paymentReminderEmail,
+  registrationPromotedEmail,
+  refundIssuedEmail,
   sendDisputeAlertEmail,
   sendDisputeLostEmail,
   sendRegistrationRefundFailedAlertEmail,
@@ -36,7 +36,9 @@ import {
 } from "@/lib/email";
 import type { RegistrationEmailArgs } from "@/lib/email-templates";
 import { routes } from "@/lib/routes";
-import { toLocale } from "@/lib/i18n-constants";
+import { toLocale, type Locale } from "@/lib/i18n-constants";
+import { deferred } from "@/lib/deferred";
+import { dispatchNow, enqueueEmail, enqueueEmailOnce, expiryWithin, recipientLocale, type OutboxMessage } from "@/server/email-outbox";
 import { isValidRefCode, normalizeRefCode } from "@/lib/ref-code";
 import { anyOptedOut, resolvePersonDisplayName } from "@/lib/name-display";
 import { isoFromZonedParts } from "@/lib/zoned-datetime";
@@ -1446,17 +1448,27 @@ export async function promoteWaitlistedRow(
   return row;
 }
 
-/** Post-tx promoted email (fire-and-forget): card entries get a fresh
- *  token-free checkout link, offline entries the resolved instructions.
+/** Post-tx promoted email: card entries get a fresh token-free checkout link, offline entries the resolved instructions.
  *  Exported for `registration-approval.ts` (RS002 W5) — `promoteFromWaitlist`
- *  reuses this verbatim rather than re-deriving the promoted-email shape. */
+ *  reuses this verbatim rather than re-deriving the promoted-email shape.
+ *
+ *  The mail is QUEUED on the email outbox (kind `registration_promoted`, ref `registration/<id>`, once-key `<id>:<promoted_at>`):
+ *  the promotion has already committed, so the enqueue is on the pool AFTER it (P4), and the promotion email must never undo it;
+ *  a refusal is logged and swallowed. The once-key is the promotion itself, so a replay of the same promotion queues nothing
+ *  more while a re-promotion (a new `promoted_at`) is a new mail. `firstAttempt` says who makes the first attempt: `request`
+ *  (a withdrawal or an organiser's action, a person is waiting on the response: it is made after the response) or `worker`
+ *  (the cron sweep, which leaves it to the retry worker). */
 export async function notifyPromoted(
   promoted: RegistrationWithGroupRow,
   ctx: DivisionCtx,
   settings: RegistrationSettingsRow | null,
   origin: string,
+  opts: { firstAttempt: "request" | "worker" },
 ): Promise<void> {
   try {
+    // A promotion always stamps `promoted_at` and the once-key is built from it: refuse by name, BEFORE the pay link is minted
+    // (a Checkout session minted for an email that cannot be queued is a session nobody holds).
+    if (promoted.promoted_at === null) throw new Error("notifyPromoted: a promoted registration has no promoted_at");
     // REVIEW FIX (#10): the DIVISION's own payment method — never
     // `promoted.payment_method` (registration_groups.payment_method, the
     // cart's shared envelope column). promoteWaitlistedRow only writes that
@@ -1475,33 +1487,48 @@ export async function notifyPromoted(
         /* the reminder sweep mints another */
       }
     }
-    await sendRegistrationPromotedEmail({
+    const locale = await recipientLocale(sql, { pick: promoted.locale, userId: promoted.user_id, orgDefault: ctx.default_locale });
+    const content = await registrationPromotedEmail(
+      {
+        orgName: ctx.org_name,
+        competitionName: ctx.comp_name,
+        displayName: promoted.display_name,
+        feeCents: promoted.amount_cents,
+        currency: promoted.currency,
+        payUrl,
+        // REVIEW FIX (#13b): this entry's OWN promotion_expires_at, never
+        // `promoted.expires_at` (the GROUP's shared column, which a sibling's
+        // own earlier/later promotion can leave disagreeing with this row) —
+        // the lapse sweep enforces THIS entry's own clock (sweepRegistrations
+        // pass 1b, keyed on `r.promotion_expires_at`), so emailing the
+        // group's could tell a registrant they have longer than they
+        // actually do. Same column pass (1b)'s own reminder mail already
+        // uses. Null on an offline/free promotion, exactly as before.
+        payDeadline: promoted.promotion_expires_at,
+        paymentInstructions:
+          method === "offline" && promoted.amount_cents > 0
+            ? (settings?.payment_instructions ?? ctx.payment_instructions)
+            : null,
+        refCode: promoted.ref_code,
+        refStatusUrl: promoted.ref_code ? `${origin}/r/${promoted.ref_code}` : null,
+      },
+      locale,
+    );
+    const id = await enqueueEmailOnce(sql, {
+      kind: "registration_promoted",
+      refType: "registration",
+      refId: promoted.id,
+      orgId: promoted.org_id,
       to: promoted.contact_email,
-      locale: toLocale(promoted.locale),
-      orgName: ctx.org_name,
-      competitionName: ctx.comp_name,
-      displayName: promoted.display_name,
-      feeCents: promoted.amount_cents,
-      currency: promoted.currency,
-      payUrl,
-      // REVIEW FIX (#13b): this entry's OWN promotion_expires_at, never
-      // `promoted.expires_at` (the GROUP's shared column, which a sibling's
-      // own earlier/later promotion can leave disagreeing with this row) —
-      // the lapse sweep enforces THIS entry's own clock (sweepRegistrations
-      // pass 1b, keyed on `r.promotion_expires_at`), so emailing the
-      // group's could tell a registrant they have longer than they
-      // actually do. Same column pass (1b)'s own reminder mail already
-      // uses. Null on an offline/free promotion, exactly as before.
-      payDeadline: promoted.promotion_expires_at,
-      paymentInstructions:
-        method === "offline" && promoted.amount_cents > 0
-          ? (settings?.payment_instructions ?? ctx.payment_instructions)
-          : null,
-      refCode: promoted.ref_code,
-      refStatusUrl: promoted.ref_code ? `${origin}/r/${promoted.ref_code}` : null,
+      ...content,
+      transactional: false,
+      expiresAt: expiryWithin(promoted.promotion_expires_at),
+      dedupeKey: `${promoted.id}:${promoted.promoted_at.toISOString()}`,
     });
-  } catch {
-    /* fire-and-forget */
+    // `null` = this promotion's mail is already queued (a replay): nothing more to attempt.
+    if (opts.firstAttempt === "request" && id !== null) deferred(() => dispatchNow([id]));
+  } catch (err) {
+    log.error({ err, registrationId: promoted.id }, "registration: promotion email could not be queued");
   }
 }
 
@@ -1626,22 +1653,30 @@ export async function inviteUnclaimedMembers(orgId: string, entrantId: string): 
  * `payUrl`: never minted here — a caller with a fresh checkout link
  * resolves it itself and passes it straight through, exactly as
  * `notifyPromoted` (above) does inline.
+ *
+ * `locale` is the language the mail is WRITTEN in, resolved here (D4, the
+ * phase-3 spec): the cart's explicit pick, then the linked account's locale,
+ * then the organiser's public default, then `en` (`recipientLocale`). The
+ * queued row stores the rendered mail, so the language is fixed when the
+ * caller renders it. `orgId` is the organisation the outbox row belongs to.
+ * Reads on the pool: call it BEFORE opening a tenant transaction, never inside
+ * one (a pooled read inside `withTenant` holds a second connection, #996).
  */
 async function buildCartMail(
   groupId: string,
   origin: string,
   token: string | null,
   payUrl: string | null,
-): Promise<{ to: string; locale: string | null; competitionId: string; args: RegistrationEmailArgs } | null> {
+): Promise<{ to: string; locale: Locale; orgId: string; competitionId: string; args: RegistrationEmailArgs } | null> {
   const [group] = await sql<
     Pick<
       RegistrationGroupRow,
       | "contact_email" | "locale" | "ref_code" | "amount_cents" | "currency"
-      | "expires_at" | "payment_method" | "competition_id"
+      | "expires_at" | "payment_method" | "competition_id" | "org_id" | "user_id"
     >[]
   >`
     select contact_email, locale, ref_code, amount_cents, currency, expires_at,
-           payment_method, competition_id
+           payment_method, competition_id, org_id, user_id
     from registration_groups where id = ${groupId}`;
   if (!group) {
     // Silent before RS005 F1: a caller (notifySubmitted, resendRegistration-
@@ -1709,7 +1744,8 @@ async function buildCartMail(
 
   return {
     to: group.contact_email,
-    locale: group.locale,
+    locale: await recipientLocale(sql, { pick: group.locale, userId: group.user_id, orgDefault: ctx.default_locale }),
+    orgId: group.org_id,
     competitionId: group.competition_id,
     args: {
       orgName: ctx.org_name,
@@ -1727,19 +1763,49 @@ async function buildCartMail(
   };
 }
 
+/** What `buildCartMail` returns for a cart that has something to say. */
+type CartMail = NonNullable<Awaited<ReturnType<typeof buildCartMail>>>;
+
+/**
+ * The outbox message of one cart's confirmation: ONE place decides its kind, ref, recipient, transactionality and expiry, so the three
+ * producers (the submit, the organiser's resend, the registrant's resend) cannot drift apart. The ref is the CART
+ * (`registration_group/<group id>`), not an entry: the mail restates the whole cart, so a newer row for the same cart and address
+ * supersedes an older one that has not reached the registrant (the replace rule), and there is no once-key (a resend is a deliberate
+ * second mail). It is not transactional (the marketing suppression list applies), and it expires at the bound the writer holds every
+ * row to (`expiryWithin(null)`: the mail has no end of its own). Rendered here, in the locale `buildCartMail` resolved, BEFORE any
+ * transaction opens, so nothing is held open while the dictionary loads.
+ */
+async function cartConfirmationMessage(mail: CartMail, groupId: string): Promise<OutboxMessage> {
+  return {
+    kind: "registration_confirmation",
+    refType: "registration_group",
+    refId: groupId,
+    orgId: mail.orgId,
+    to: mail.to,
+    ...(await registrationEmail(mail.args, mail.locale)),
+    transactional: false,
+    expiresAt: expiryWithin(null),
+  };
+}
+
 /**
  * Post-submit confirmation (RS005 W4) — fire-and-forget, cart-shaped: every
  * entry in the group with its own status/fee, the group's payable total,
  * and `payUrl` exactly as resolved by the caller (the public register
  * route, after its own `mintGroupCheckout` attempt succeeds, fails, or is
  * skipped for a zero-subtotal cart) — this function never mints anything
- * itself. `sendRegistrationEmail` had ZERO callers before this wave; this
- * is the first one. A registrant who gets no mail because the provider
- * rejected it, or because this function itself threw, still keeps a
+ * itself. A registrant who gets no mail because the outbox refused the row,
+ * or because this function itself threw, still keeps a
  * committed, capacity-holding cart — that is the entire reason this wraps
  * everything in one try/catch, matching `notifyPromoted`'s contract
  * exactly: a mail failure must never fail the submit that already
  * committed.
+ *
+ * The mail is QUEUED on the email outbox (kind `registration_confirmation`) and its first attempt is
+ * made after the response (`deferred`): the registrant is not kept waiting on the provider, and a
+ * provider that is down leaves a durable row for the retry worker instead of a lost mail. The caller
+ * (the register route) has already asked `assertOutboxCanQueue()` BEFORE committing the cart, so a
+ * box that cannot seal the body refuses the submit rather than reaching the catch below.
  */
 export async function notifySubmitted(
   groupId: string,
@@ -1750,14 +1816,15 @@ export async function notifySubmitted(
   try {
     const mail = await buildCartMail(groupId, origin, token, payUrl);
     if (!mail) return; // buildCartMail already logged why
-    await sendRegistrationEmail({ to: mail.to, locale: toLocale(mail.locale), ...mail.args });
+    const id = await enqueueEmail(sql, await cartConfirmationMessage(mail, groupId));
+    deferred(() => dispatchNow([id]));
   } catch (err) {
     // RS005 F1 (owner: new code ships logging, 2026-08-12) — this used to
     // swallow silently. That is exactly how the single biggest finding of
     // this session went unnoticed for weeks: the confirmation send failed
     // and nothing recorded it. Still fire-and-forget — the point is that a
     // failure stops being invisible, not that submit starts failing.
-    log.error({ err, groupId }, "registration: submit confirmation send failed");
+    log.error({ err, groupId }, "registration: submit confirmation could not be queued");
   }
 }
 
@@ -1799,27 +1866,24 @@ export async function resendRegistrationConfirmation(
   }
   const mail = await buildCartMail(reg.group_id, origin, null, null);
   if (!mail) return { sent: false }; // buildCartMail already logged why
-  const sent = await sendRegistrationEmail({ to: mail.to, locale: toLocale(mail.locale), ...mail.args });
-  if (!sent) {
-    // Same standing rule as the terminal-refusal branch above: an organiser
-    // clicking Resend and getting nothing must leave a trace, distinct from
-    // the generic provider-level warn in lib/email.ts (which carries no
-    // registration/actor context to tie back to this click).
-    log.warn(
-      { registrationId: regId, orgId: auth.orgId, actorId: auth.userId, groupId: reg.group_id, to: mail.to },
-      "registration: confirmation resend — email provider did not accept the send",
-    );
-  }
-  await withTenant(auth.orgId, (tx) =>
-    audit(
+  const message = await cartConfirmationMessage(mail, reg.group_id);
+  // The row and the audit entry are ONE transaction: an audit that fails queues no mail, and a mail the outbox refuses leaves no
+  // "resent" entry behind. The mail is then attempted at once; `sent` is whether THAT attempt was accepted. A provider that is down
+  // answers `{ sent: false }` and the row stays queued for the retry worker, which is the record of "it did not go out" (the old
+  // per-click warn is gone: the outbox logs every attempt, with the row's id, where this one could only say "refused").
+  const id = await withTenant(auth.orgId, async (tx) => {
+    const queued = await enqueueEmail(tx, message);
+    await audit(
       tx,
       mail.competitionId,
       auth.orgId,
       "registration.confirmation_resent",
       { registration_id: regId },
       auth.userId,
-    ),
-  );
+    );
+    return queued;
+  });
+  const sent = (await dispatchNow([id])).get(id) === "sent";
   return { sent };
 }
 
@@ -1861,15 +1925,14 @@ export async function resendRegistrationConfirmationPublic(
   }
   const mail = await buildCartMail(groupId, origin, token, null);
   if (!mail) return { sent: false }; // buildCartMail already logged why
-  const sent = await sendRegistrationEmail({ to: mail.to, locale: toLocale(mail.locale), ...mail.args });
-  await audit(
-    sql,
-    group.competition_id,
-    group.org_id,
-    "registration.confirmation_resent",
-    { group_id: groupId },
-    null,
-  );
+  const message = await cartConfirmationMessage(mail, groupId);
+  // As the organiser's resend: the row and the audit entry are one transaction, then the first attempt is made at once.
+  const id = await sql.begin(async (tx) => {
+    const queued = await enqueueEmail(tx, message);
+    await audit(tx, group.competition_id, group.org_id, "registration.confirmation_resent", { group_id: groupId }, null);
+    return queued;
+  });
+  const sent = (await dispatchNow([id])).get(id) === "sent";
   return { sent };
 }
 
@@ -3219,16 +3282,22 @@ async function confirmPaidRegistration(
     if (outcome.kind === "late" && outcome.reg.refunded_cents >= outcome.reg.amount_cents) {
       return;
     }
+    // Read BEFORE the money moves: a failure here lands in `refund_failed` with nothing refunded, which is true, where the same failure
+    // after the Stripe call would report a refund failure for a refund that went through.
+    const ctxRefund = await divisionCtx(sql, outcome.reg.division_id);
     const refund = await stripeRefund(outcome.intent, entryRefundCents);
-    if (outcome.kind === "late") {
-      // Additive on BOTH tables (hazard 2 fixed), in ONE transaction (review
-      // fixup — these were two separate autocommit statements; if the
-      // second failed after the first committed, Stripe would already have
-      // refunded the money while the entry and cart totals silently
-      // diverged, and the whole attempt would still land in the catch below
-      // as `refund_failed` — a misleading audit trail for a refund that
-      // actually succeeded).
-      await sql.begin(async (tx) => {
+    // ONE transaction records the refund and queues the registrant's receipt. A webhook leaves the first attempt to the worker (it has
+    // no response of its own to defer behind). The duplicate path records no totals (the CONFIRMED payment is untouched), so its
+    // transaction holds the receipt alone.
+    await sql.begin(async (tx) => {
+      if (outcome.kind === "late") {
+        // Additive on BOTH tables (hazard 2 fixed), in ONE transaction (review
+        // fixup — these were two separate autocommit statements; if the
+        // second failed after the first committed, Stripe would already have
+        // refunded the money while the entry and cart totals silently
+        // diverged, and the whole attempt would still land in the catch below
+        // as `refund_failed` — a misleading audit trail for a refund that
+        // actually succeeded).
         await tx`
           update registrations
           set refunded_cents = refunded_cents + ${entryRefundCents}, updated_at = now()
@@ -3238,16 +3307,15 @@ async function confirmPaidRegistration(
           set refunded_cents = refunded_cents + ${entryRefundCents},
               refunded_at = now(), updated_at = now()
           where id = ${outcome.reg.group_id}`;
-      });
-    }
+      }
+      await queueRefundReceipt(tx, { reg: outcome.reg, ctx: ctxRefund, amountCents: entryRefundCents, refundId: refund.id });
+    });
     await audit(sql, outcome.competitionId, outcome.reg.org_id, "registration.refunded", {
       registration_id: regId,
       amount_cents: outcome.reg.amount_cents,
       mode: outcome.kind === "late" ? "late_payment" : "duplicate",
       stripe_refund_id: refund.id,
     }, null);
-    const ctxLate = await divisionCtx(sql, outcome.reg.division_id);
-    notifyRefund(outcome.reg, ctxLate, outcome.reg.amount_cents);
   } catch (err) {
     await audit(sql, outcome.competitionId, outcome.reg.org_id, "registration.refund_failed", {
       registration_id: regId,
@@ -4601,19 +4669,60 @@ export async function stripeRefund(
   });
 }
 
-/** Fire-and-forget refund receipt to the registrant (spec T9). Exported for
- *  `registration-approval.ts` (RS002 W5 whole-branch review). */
-export function notifyRefund(reg: RegistrationWithGroupRow, ctx: DivisionCtx, amountCents: number): void {
-  void sendRefundIssuedEmail({
-    to: reg.contact_email,
-    locale: toLocale(reg.locale),
-    orgName: ctx.org_name,
-    competitionName: ctx.comp_name,
-    displayName: reg.display_name,
-    amountCents,
-    currency: reg.currency,
-    refCode: reg.ref_code,
-  }).catch(() => {});
+/**
+ * Queue the registrant's refund receipt on the email outbox, on the transaction that records the refund (`tx`): the receipt and the
+ * `refunded_cents` it reports commit together or not at all, so a refund the books lost is never mailed and a refund the books kept is
+ * never silently unmailed. Returns the outbox id, or `null` when there is nothing to send: the same Stripe refund already has its receipt
+ * (a webhook delivered twice, a retry), or the receipt could not be queued.
+ *
+ * The ref is the REFUND (`refund/<Stripe refund id>`), and so is the once-key: two partial refunds of one entry are two receipts, each
+ * naming its own amount, and neither supersedes the other (the replace rule keys on kind + ref + recipient). The key is a Stripe id, so it
+ * is globally unique.
+ *
+ * The receipt is a courtesy about money that has ALREADY moved at Stripe, so a failure here must never undo or fail the refund. It is
+ * contained at its own savepoint: a statement that errors inside a Postgres transaction aborts the whole transaction, which would roll
+ * back `refunded_cents` and push the refund into the caller's `refund_failed` path although the money had left. The render is inside the
+ * same try, so a template error is contained as well. The language is the registrant's (D4: the cart's pick, then the linked account,
+ * then the organiser's default).
+ *
+ * `ctx` is read by the caller BEFORE its transaction opens (a pooled read inside a tenant transaction waits on the connection the
+ * transaction holds, #996). Exported for `registration-approval.ts` and the refund tests.
+ */
+export async function queueRefundReceipt(
+  tx: Tx,
+  a: { reg: RegistrationWithGroupRow; ctx: DivisionCtx; amountCents: number; refundId: string },
+): Promise<string | null> {
+  const { reg, ctx, amountCents, refundId } = a;
+  try {
+    return await tx.savepoint(async (sp) => {
+      const locale = await recipientLocale(sp, { pick: reg.locale, userId: reg.user_id, orgDefault: ctx.default_locale });
+      const content = await refundIssuedEmail(
+        {
+          orgName: ctx.org_name,
+          competitionName: ctx.comp_name,
+          displayName: reg.display_name,
+          amountCents,
+          currency: reg.currency,
+          refCode: reg.ref_code,
+        },
+        locale,
+      );
+      return enqueueEmailOnce(sp, {
+        kind: "refund_issued",
+        refType: "refund",
+        refId: refundId,
+        orgId: reg.org_id,
+        to: reg.contact_email,
+        ...content,
+        transactional: false,
+        expiresAt: expiryWithin(null),
+        dedupeKey: refundId,
+      });
+    });
+  } catch (err) {
+    log.error({ err, registrationId: reg.id, refundId }, "registration: refund receipt could not be queued");
+    return null;
+  }
 }
 
 /** Plain string for a caught refund error — never rendered to a customer,
@@ -4935,7 +5044,7 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
 
   fireDivisionRevalidate(reg.division_id, ctx.competition_id);
   if (outcome.promoted) {
-    void notifyPromoted(outcome.promoted, ctx, settings, fallbackOrigin());
+    void notifyPromoted(outcome.promoted, ctx, settings, fallbackOrigin(), { firstAttempt: "request" });
   }
 
   // Auto-refund policy (doc 16 §1.1): full refund when withdrawal lands
@@ -4986,7 +5095,9 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
       // cart totals silently diverged if the second failed after the first
       // committed, reachable today on a single-entry cart, no multi-entry
       // cart needed).
-      await sql.begin(async (tx) => {
+      // The registrant's receipt is queued in the SAME transaction (`ctx` was read before it). This is a request: the first attempt is
+      // made after the response, off the caller's path.
+      const receiptId = await sql.begin(async (tx) => {
         await tx`
           update registrations
           set refunded_cents = refunded_cents + ${remaining}, updated_at = now()
@@ -4995,14 +5106,15 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
           update registration_groups
           set refunded_cents = refunded_cents + ${remaining}, refunded_at = now(), updated_at = now()
           where id = ${locked.group_id}`;
+        return queueRefundReceipt(tx, { reg: locked, ctx, amountCents: remaining, refundId: refund.id });
       });
+      if (receiptId !== null) deferred(() => dispatchNow([receiptId]));
       await audit(sql, ctx.competition_id, ctx.org_id, "registration.refunded", {
         registration_id: reg.id,
         amount_cents: remaining,
         mode: "auto",
         stripe_refund_id: refund.id,
       }, actorId);
-      notifyRefund(locked, ctx, remaining);
     } catch (err) {
       // Refund failure must not undo the withdrawal — surfaces on the
       // organiser console (withdrawn + refunded_cents < amount_cents).
@@ -5059,6 +5171,51 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
 // sitting stale for hours.
 const REMINDER_LEASE_MINUTES = 5;
 
+/**
+ * The outbox message of one payment reminder: ONE place decides its kind, ref, recipient, transactionality and language, so the sweep's
+ * two passes and the organiser's manual reminder cannot drift apart. The ref is the ENTRY (`registration/<reg id>`): a newer reminder
+ * for the same entry fully restates the older one (fee, link, deadline), so it supersedes an older one the registrant has not read. It
+ * is not transactional (the marketing suppression list applies). It is worthless once the pay window it names has closed
+ * (`payDeadline`), and the manual reminder has no end of its own. The language is the registrant's (D4: the cart's pick, then the
+ * linked account, then the organiser's default). Reads on the pool: call it BEFORE opening a tenant transaction (#996).
+ */
+async function paymentReminderMessage(
+  reg: RegistrationWithGroupRow,
+  ctx: DivisionCtx,
+  o: {
+    feeCents: number;
+    paymentInstructions: string | null;
+    checkoutUrl?: string | null;
+    payDeadline?: Date | null;
+    refCode?: string | null;
+  },
+): Promise<OutboxMessage> {
+  const locale = await recipientLocale(sql, { pick: reg.locale, userId: reg.user_id, orgDefault: ctx.default_locale });
+  return {
+    kind: "payment_reminder",
+    refType: "registration",
+    refId: reg.id,
+    orgId: reg.org_id,
+    to: reg.contact_email,
+    ...(await paymentReminderEmail(
+      {
+        orgName: ctx.org_name,
+        competitionName: ctx.comp_name,
+        displayName: reg.display_name,
+        feeCents: o.feeCents,
+        currency: reg.currency,
+        paymentInstructions: o.paymentInstructions,
+        checkoutUrl: o.checkoutUrl,
+        payDeadline: o.payDeadline,
+        refCode: o.refCode,
+      },
+      locale,
+    )),
+    transactional: false,
+    expiresAt: expiryWithin(o.payDeadline ?? null),
+  };
+}
+
 export async function sweepRegistrations(
   origin: string,
 ): Promise<{
@@ -5112,13 +5269,14 @@ export async function sweepRegistrations(
     limit 200`;
   for (const reg of due) {
     let claimed = false;
+    let minted = false;
     try {
       const ctx = await divisionCtx(sql, reg.division_id);
       if (!ctx.charges_enabled) continue; // Connect broke — nothing to link to
       // RS007 follow-up (V381) — the CAS-before-send claim (648c56503) only
       // reverted on a THROWN failure. An ungraceful death (deploy, OOM,
       // SIGKILL, container eviction) between this UPDATE committing and the
-      // send below completing runs no `catch`, so a permanent claim would
+      // queueing transaction below committing runs no `catch`, so a permanent claim would
       // stick forever and `where submit_reminded_at is null` would never
       // match this row again — a silently lost reminder, worse than the
       // double-send the claim exists to prevent (routine here:
@@ -5127,15 +5285,15 @@ export async function sweepRegistrations(
       // submit_reminder_claimed_at is a LEASE instead of a permanent mark: it
       // blocks a concurrent claim for REMINDER_LEASE_MINUTES, then goes
       // stale and the row is claimable again, so a crash costs a delay,
-      // never the reminder. submit_reminded_at — set only after a real send
-      // below — stays the permanent record; the "due" SELECT above filters
+      // never the reminder. submit_reminded_at — set only in the queueing
+      // transaction below — stays the permanent record; the "due" SELECT above filters
       // on THAT column alone, never the lease.
       //
       // REVIEW FIX (money-path defect #9) — the mint used to run BEFORE this
       // claim, unconditionally: a losing invocation (a concurrent sweep that
       // loses THIS claim below) still ran createRegistrationCheckout and
       // stamped registration_groups.checkout_session_id with a session
-      // nobody would ever hold — the loser never reaches the send below, so
+      // nobody would ever hold — the loser never queues a reminder, so
       // nobody is ever given that URL, yet the group's shared session
       // pointer now names it. A registrant who already has the WINNER's
       // session URL (from a real, sent email) then pays via a session the
@@ -5155,46 +5313,35 @@ export async function sweepRegistrations(
       if (!row) continue; // lease held by a concurrent sweep, or already sent
       claimed = true;
       const url = await createRegistrationCheckout(reg.group_id, [reg.id], ctx, origin, null);
-      // RS007 review fix — sendPaymentReminderEmail (lib/email.ts) NEVER
-      // throws on a provider-level failure: its own send() catches every
-      // failure mode (missing key, suppressed, non-2xx, fetch throw) and
-      // RETURNS false instead. This call used to discard that return value,
-      // so an ordinary Resend 4xx/5xx — far commoner than the process death
-      // the lease above exists for — fell through to the unconditional
-      // "sent" write below and permanently marked an email that never left
-      // this process. Branch on the result: only a genuinely delivered send
-      // may promote the lease; a `false` return is handled exactly like a
-      // thrown failure (see the `catch` below) — release the lease, leave
-      // the permanent mark null, and let the next sweep retry.
-      const delivered = await sendPaymentReminderEmail({
-        to: reg.contact_email,
-        locale: toLocale(reg.locale),
-        orgName: ctx.org_name,
-        competitionName: ctx.comp_name,
-        displayName: reg.display_name,
+      // The session exists from here, so nothing below releases the lease (spec §8): releasing it would mint a second session for the
+      // same entry at the next sweep (F8). Queueing the reminder and stamping the entry's mark are ONE transaction, so a reminder is
+      // either queued AND marked or neither; a send that later fails is the outbox's retry, not this pass's. The once-key makes a
+      // second run of this pass (a lapsed lease, a double sweep) queue nothing more.
+      minted = true;
+      const message = await paymentReminderMessage(reg, ctx, {
         feeCents: reg.amount_cents,
-        currency: reg.currency,
         paymentInstructions: null,
         checkoutUrl: url,
         payDeadline: reg.expires_at,
       });
-      if (!delivered) {
+      await sql.begin(async (tx) => {
+        await enqueueEmailOnce(tx, { ...message, dedupeKey: `${reg.id}:submit` });
+        await tx`update registrations set submit_reminded_at = now(), updated_at = now()
+                 where id = ${reg.id}`;
+      });
+    } catch (err) {
+      if (minted) {
+        log.error(
+          { err, registrationId: reg.id },
+          "registrations: the payment reminder could not be queued after its Checkout session was minted",
+        );
+      } else if (claimed) {
+        // The mint (or anything before it) threw: no session exists, so clear the LEASE (not the still-null sent mark) and the next
+        // sweep retries promptly instead of waiting out the window.
         await sql`update registrations set submit_reminder_claimed_at = null, updated_at = now()
                   where id = ${reg.id}`;
-        continue; // submit_reminded_at (sent) stays null — a later sweep retries
       }
-      // Send succeeded — promote the lease to the permanent SENT record.
-      await sql`update registrations set submit_reminded_at = now(), updated_at = now()
-                where id = ${reg.id}`;
-    } catch {
-      if (claimed) {
-        // Thrown failure: clear the LEASE, not the (still-null) sent mark,
-        // so the next sweep retries promptly instead of waiting out the
-        // window.
-        await sql`update registrations set submit_reminder_claimed_at = null, updated_at = now()
-                  where id = ${reg.id}`;
-      }
-      continue; // submit_reminded_at (sent) stays null either way — a later sweep retries
+      continue; // submit_reminded_at stays null either way — a later sweep retries
     }
     reminded++;
   }
@@ -5209,7 +5356,8 @@ export async function sweepRegistrations(
   // `promoteWaitlistedRow` only ever sets it when the promotion itself
   // needed a stripe window (`amount_cents` > 0 at that moment), and nothing
   // else in the codebase writes it.
-  const duePromoted = await sql<RegistrationWithGroupRow[]>`
+  // `r.promoted_at is not null` below is what makes `promoted_at` a Date here (the once-key names the promotion by it).
+  const duePromoted = await sql<(RegistrationWithGroupRow & { promoted_at: Date })[]>`
     select ${regGroupCols(sql)}
     from registrations r join registration_groups g on g.id = r.group_id
     where r.status = 'pending' and r.promoted_at is not null
@@ -5221,6 +5369,7 @@ export async function sweepRegistrations(
     limit 200`;
   for (const reg of duePromoted) {
     let claimed = false;
+    let minted = false;
     try {
       const ctx = await divisionCtx(sql, reg.division_id);
       if (!ctx.charges_enabled) continue; // Connect broke — nothing to link to
@@ -5245,37 +5394,32 @@ export async function sweepRegistrations(
       if (!row) continue; // lease held by a concurrent sweep, or already sent
       claimed = true;
       const url = await createRegistrationCheckout(reg.group_id, [reg.id], ctx, origin, null);
-      // RS007 review fix — same false-vs-throw gap as pass (1a) above, on
-      // this pass's own lease/mark columns (never the group's — see this
-      // pass's own doc comment on why).
-      const delivered = await sendPaymentReminderEmail({
-        to: reg.contact_email,
-        locale: toLocale(reg.locale),
-        orgName: ctx.org_name,
-        competitionName: ctx.comp_name,
-        displayName: reg.display_name,
+      // As pass (1a): from the mint on nothing is released, and the row and this entry's OWN mark are one transaction. The once-key
+      // names this PROMOTION (`promoted_at`), so a re-promoted entry, whose second window gets its own reminder, is a new key.
+      minted = true;
+      const message = await paymentReminderMessage(reg, ctx, {
         feeCents: reg.amount_cents,
-        currency: reg.currency,
         paymentInstructions: null,
         checkoutUrl: url,
         payDeadline: reg.promotion_expires_at,
       });
-      if (!delivered) {
+      await sql.begin(async (tx) => {
+        await enqueueEmailOnce(tx, { ...message, dedupeKey: `${reg.id}:promotion:${reg.promoted_at.toISOString()}` });
+        await tx`update registrations set promotion_reminded_at = now(), updated_at = now()
+                 where id = ${reg.id}`;
+      });
+    } catch (err) {
+      if (minted) {
+        log.error(
+          { err, registrationId: reg.id },
+          "registrations: the promotion payment reminder could not be queued after its Checkout session was minted",
+        );
+      } else if (claimed) {
+        // No session exists: clear the LEASE, not the (still-null) sent mark — see pass (1a).
         await sql`update registrations set promotion_reminder_claimed_at = null, updated_at = now()
                   where id = ${reg.id}`;
-        continue; // promotion_reminded_at (sent) stays null — a later sweep retries
       }
-      // Send succeeded — promote the lease to the permanent SENT record.
-      await sql`update registrations set promotion_reminded_at = now(), updated_at = now()
-                where id = ${reg.id}`;
-    } catch {
-      if (claimed) {
-        // Thrown failure: clear the LEASE, not the (still-null) sent mark —
-        // see pass (1a)'s comment above.
-        await sql`update registrations set promotion_reminder_claimed_at = null, updated_at = now()
-                  where id = ${reg.id}`;
-      }
-      continue; // promotion_reminded_at (sent) stays null either way — a later sweep retries
+      continue; // promotion_reminded_at stays null either way — a later sweep retries
     }
     reminded++;
   }
@@ -5366,7 +5510,7 @@ export async function sweepRegistrations(
     if (outcome.promoted) {
       promotedCount++;
       const ctx = await divisionCtx(sql, division_id);
-      await notifyPromoted(outcome.promoted, ctx, outcome.settings, origin);
+      await notifyPromoted(outcome.promoted, ctx, outcome.settings, origin, { firstAttempt: "worker" });
     }
   }
 
@@ -5461,7 +5605,7 @@ export async function sweepRegistrations(
     if (outcome.promoted) {
       promotedCount++;
       const ctx = await divisionCtx(sql, division_id);
-      await notifyPromoted(outcome.promoted, ctx, outcome.settings, origin);
+      await notifyPromoted(outcome.promoted, ctx, outcome.settings, origin, { firstAttempt: "worker" });
     }
   }
 
@@ -5564,6 +5708,8 @@ export async function sweepRegistrations(
       const remaining = locked.amount_cents - locked.refunded_cents;
       try {
         const refund = await stripeRefund(locked.entry_payment_intent_id, remaining);
+        // The receipt is queued in the same transaction as the refund's record; a cron has no response to defer behind, so the first
+        // attempt is the worker's.
         await sql.begin(async (tx) => {
           await tx`
             update registrations
@@ -5573,6 +5719,7 @@ export async function sweepRegistrations(
             update registration_groups
             set refunded_cents = refunded_cents + ${remaining}, refunded_at = now(), updated_at = now()
             where id = ${locked.group_id}`;
+          await queueRefundReceipt(tx, { reg: locked, ctx, amountCents: remaining, refundId: refund.id });
         });
         await audit(sql, ctx.competition_id, ctx.org_id, "registration.refunded", {
           registration_id: locked.id,
@@ -5580,7 +5727,6 @@ export async function sweepRegistrations(
           mode: "auto_pool_deadline",
           stripe_refund_id: refund.id,
         }, null);
-        notifyRefund(locked, ctx, remaining);
       } catch (err) {
         await audit(sql, ctx.competition_id, ctx.org_id, "registration.refund_failed", {
           registration_id: locked.id,
@@ -6170,22 +6316,22 @@ export async function sendPaymentReminder(
     throw new HttpError(422, "Payment reminders only apply to pending registrations.");
   }
   const ctx = await divisionCtx(sql, reg.division_id);
-  const sent = await sendPaymentReminderEmail({
-    to: reg.contact_email,
-    locale: toLocale(reg.locale),
-    orgName: ctx.org_name,
-    competitionName: ctx.comp_name,
-    displayName: reg.display_name,
+  const message = await paymentReminderMessage(reg, ctx, {
     feeCents: fee,
-    currency: reg.currency,
     // Division override first, org-wide fallback — same resolution as the
     // confirmation email; refCode personalises {{reference}}.
     paymentInstructions: settings?.payment_instructions ?? ctx.payment_instructions,
     refCode: reg.ref_code,
   });
-  await withTenant(auth.orgId, (tx) =>
-    audit(tx, ctx.competition_id, auth.orgId, "registration.payment_reminded", { registration_id: regId }, auth.userId),
-  );
+  // The row and the audit entry are ONE transaction: an audit that fails queues no mail, and a mail the outbox refuses leaves no
+  // "reminded" entry behind. The mail is then attempted at once; `sent` is whether THAT attempt was accepted. A provider that is down
+  // answers `{ sent: false }` and the row stays queued for the retry worker. No once-key: a press is a deliberate mail.
+  const id = await withTenant(auth.orgId, async (tx) => {
+    const queued = await enqueueEmail(tx, message);
+    await audit(tx, ctx.competition_id, auth.orgId, "registration.payment_reminded", { registration_id: regId }, auth.userId);
+    return queued;
+  });
+  const sent = (await dispatchNow([id])).get(id) === "sent";
   return { sent };
 }
 
@@ -6246,8 +6392,10 @@ export async function refundRegistration(
   if (amount > remaining) {
     throw new HttpError(422, `Refund exceeds the remaining ${remaining} cents`);
   }
+  // Read before the money moves and before the tenant transaction opens (a pooled read inside it waits on the connection it holds).
+  const ctx = await divisionCtx(sql, reg.division_id);
   const refund = await stripeRefund(reg.payment_intent_id, amount);
-  const row = await withTenant(auth.orgId, async (tx) => {
+  const { row, receiptId } = await withTenant(auth.orgId, async (tx) => {
     const [div] = await tx<{ competition_id: string }[]>`
       select competition_id from divisions where id = ${reg.division_id}`;
     // Additive on BOTH tables: this entry's own total (V368) and the cart's
@@ -6260,15 +6408,18 @@ export async function refundRegistration(
       update registration_groups
       set refunded_cents = refunded_cents + ${amount}, refunded_at = now(), updated_at = now()
       where id = ${reg.group_id}`;
+    // The receipt joins the refund's record and its audit entry: all three commit together, or none does.
+    const receiptId = await queueRefundReceipt(tx, { reg, ctx, amountCents: amount, refundId: refund.id });
     await audit(tx, div.competition_id, auth.orgId, "registration.refunded", {
       registration_id: regId,
       amount_cents: amount,
       mode: "manual",
       stripe_refund_id: refund.id,
     }, auth.userId);
-    return orgRegAfter(tx, regId);
+    return { row: await orgRegAfter(tx, regId), receiptId };
   });
-  notifyRefund(reg, await divisionCtx(sql, reg.division_id), amount);
+  // A request: the first attempt is made after the response.
+  if (receiptId !== null) deferred(() => dispatchNow([receiptId]));
   return row;
 }
 
@@ -6472,8 +6623,8 @@ export async function registrationIcs(regId: string, token: string): Promise<str
   // This attachment is addressed to ONE specific person, unlike
   // calendar.ics's division-wide feed (which has no single "whose locale"
   // and resolves org.default_locale instead) — so it resolves the
-  // registrant's OWN locale, the same signal notifyRefund and every other
-  // post-signup email in this file already reads via toLocale(reg.locale).
+  // registrant's OWN locale, the same signal every other post-signup email
+  // in this file reads (the cart's pick, `reg.locale`).
   const locale = toLocale(reg.locale);
   const lookup = (
     k: Parameters<typeof msgFor>[1],
@@ -6596,7 +6747,7 @@ export async function buildDisputeEvidence(
   const cartMail = await buildCartMail(reg.group_id, origin, null, null);
   // Reconstruct the receipt exactly as sent — in the registrant's captured
   // locale (cycle 47), so replayed dispute evidence matches the original mail.
-  const emailDict = await getDictionary(toLocale(cartMail?.locale ?? reg.locale), "emails");
+  const emailDict = await getDictionary(cartMail?.locale ?? toLocale(reg.locale), "emails");
   const emailText = cartMail
     ? registrationTemplate(
         { ...cartMail.args, paymentInstructions: null, payDeadline: null },

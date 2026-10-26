@@ -25,7 +25,7 @@ const deliverMock = vi.hoisted(() => vi.fn());
 vi.mock("@/server/email-outbox/transport", () => ({ deliver: deliverMock }));
 
 import { suppress } from "@/lib/email";
-import { attemptClaimed, dispatchNow, toClaimedRow, type ClaimedRecord, type ClaimedRow } from "../attempt";
+import { attemptClaimed, claimQueuedRow, dispatchNow, toClaimedRow, type ClaimedRow } from "../attempt";
 import { DISPATCH_NOW_BUDGET_MS, MIN_SEND_INTERVAL_MS, OUTBOX_KINDS, type OutboxKind } from "../constants";
 import { enqueueEmail, type OutboxMessage } from "../enqueue";
 import { KIND_HOOKS } from "../hooks";
@@ -216,16 +216,13 @@ describe.skipIf(!HAS_DB)("dispatchNow - pacing and the budget (DB)", () => {
   });
 
   describe("attemptClaimed says whether a request left (what the pacing counts)", () => {
-    /** Claim one queued row the way the worker does (sending, attempts + 1, a lease) and return it as the attempt is handed it. */
+    /** Claim one queued row with the production statement (`claimQueuedRow`, the one `dispatchNow` makes) and return it as the attempt is
+     *  handed it. */
     async function claimed(over: Partial<OutboxMessage> = {}): Promise<ClaimedRow> {
       const [id] = await queueN(1, over);
-      const [rec] = await sql<ClaimedRecord[]>`
-        update email_outbox
-           set status = 'sending', attempts = attempts + 1, lease_until = now() + interval '2 minutes', status_at = now()
-         where id = ${id!} and status = 'queued'
-        returning id, kind, ref_type, ref_id, org_id, meta, recipient, subject, body_sealed, transactional,
-                  attempts, expires_at, lease_until`;
-      return toClaimedRow(rec!);
+      const rec = await claimQueuedRow(id!, new Date());
+      if (!rec) throw new Error(`could not claim ${id}`);
+      return toClaimedRow(rec);
     }
     const http = (status: number, errorName: string) => ({ ok: false, reason: "http", status, errorName, detail: "x" });
 

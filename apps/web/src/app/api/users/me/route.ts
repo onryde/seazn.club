@@ -14,7 +14,7 @@ import { groupIdsOwnedBy } from "@/lib/billing-group";
 import { toLocale } from "@/lib/i18n";
 import { unlinkLichess } from "@/server/usecases/external-accounts";
 import { afterEndedBadly } from "@/server/email-outbox";
-import { anonymiseChessInvites } from "@/server/email-outbox/account-deletion";
+import { anonymiseAccountEmails, deletedAccountPlaceholder } from "@/server/email-outbox/account-deletion";
 
 /**
  * Whoami (task-8): resolves the same identity AnalyticsBootstrap used to read
@@ -162,34 +162,21 @@ export async function DELETE(req: Request) {
     await unlinkLichess(user.id);
 
     const purgeAfter = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-    const anonEmail = `deleted-${user.id}@deleted.invalid`;
+    const anonEmail = deletedAccountPlaceholder(user.id);
 
-    const endedInvites = await sql.begin(async (tx) => {
+    const endedEmails = await sql.begin(async (tx) => {
       // Remove from all orgs they were sole owner of (no other members — safe to dissolve)
       await tx`
         delete from org_members where user_id = ${user.id}`;
 
-      // The email outbox keeps the sign-in emails it was asked to send to this account for its 90-day retention, with the real
-      // address as the recipient, and it has no foreign key to users: left alone, the address would outlive the account's own
-      // 30-day purge three times over. The rows go with the account, in THIS transaction, so the address is never left behind an
-      // anonymised account: a failure here fails the deletion (which the person can simply retry) rather than complete it quietly.
-      //
-      // `tx` is the pooled PRIVILEGED client (this route has no tenant context; `app_user` holds INSERT only on email_outbox, V470),
-      // so the delete is allowed, and it is the same role the retry worker writes the table as. Matched two ways: by the account's
-      // ref (a magic_link row's ref is `user/<id>`, which also reaches mail sent to an address the account has since changed away
-      // from) and by the address EXACTLY as the account stores it (which also reaches a row another ref wrote to it). Not case
-      // folded: `users.email` is unique but case-sensitive, so `Ann@x.io` and `ann@x.io` are two live accounts, and a folded
-      // match erased the other one's queued sign-in email (N-B). Only `magic_link`: a `chess_invite` row belongs to an
-      // organiser's fixture, which outlives the player's account, so it is not deleted but anonymised, just below.
-      await tx`
-        delete from email_outbox
-         where kind = 'magic_link'
-           and (ref_id = ${user.id} or recipient = ${user.email})`;
-
-      // The chess invites addressed to this account keep the address for the same 90 days, so it is taken out of them: replaced with the
-      // placeholder the account itself is about to be given, and the ones still waiting to be sent are ended (nothing is mailed to a
-      // deleted person). Same transaction, same connection. The rows it ended are returned for the seat hook, which runs after commit.
-      const endedByDeletion = await anonymiseChessInvites(tx, { email: user.email, placeholder: anonEmail });
+      // The email outbox keeps a row for 90 days, with the real address as the recipient, and has no foreign key to users: left alone,
+      // the address would outlive the account's own 30-day purge three times over. So the account's own rows are dealt with in THIS
+      // transaction, so the address is never left behind an anonymised account (a failure here fails the deletion, which the person can
+      // simply retry): its sign-in links are deleted, its queued emails are ended, and its recipient is taken out of every row of its
+      // own, whatever the status. Which rows are its own, and why a registration email to the same address is not, is account-deletion.ts's
+      // header (D5). `tx` is the pooled PRIVILEGED client (this route has no tenant context; `app_user` holds INSERT only on
+      // email_outbox, V470). The rows it ended are returned for the kind hooks, which run after the commit.
+      const endedByDeletion = await anonymiseAccountEmails(tx, { userId: user.id, email: user.email, placeholder: anonEmail });
 
       // Soft-delete: anonymize PII, mark deleted, schedule purge
       await tx`
@@ -213,11 +200,11 @@ export async function DELETE(req: Request) {
     await sendAccountDeletionEmail(user.email, toLocale(user.locale));
     await destroySession();
 
-    // The invites the deletion ended are badly-ended rows like any other: the chess hook releases a seat whose every email has now ended,
+    // The emails the deletion ended are badly-ended rows like any other: the chess hook releases a seat whose every email has now ended,
     // so the board reads "still to invite" for the organiser. After the commit, as everywhere else the hooks run, and AFTER the sign-out:
     // the hook locks the board's bridge row, and a lock wait must not delay clearing the session cookie. It never throws (a hook that
     // fails is logged, and the worker's re-drive finishes the release), so it cannot fail a deletion that already committed.
-    await afterEndedBadly(endedInvites);
+    await afterEndedBadly(endedEmails);
 
     return { ok: true };
   });

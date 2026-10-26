@@ -24,7 +24,7 @@ vi.mock("@/server/logger", () => ({ log: logMock }));
 const deliverMock = vi.hoisted(() => vi.fn());
 vi.mock("@/server/email-outbox/transport", () => ({ deliver: deliverMock }));
 
-import { attemptClaimed, dispatchNow, endedRowFor, toClaimedRow, type AttemptOutcome, type ClaimedRecord, type ClaimedRow } from "../attempt";
+import { attemptClaimed, claimQueuedRow, dispatchNow, endedRowFor, toClaimedRow, type AttemptOutcome, type ClaimedRow } from "../attempt";
 import {
   ENDED_BADLY_STATUSES,
   LEASE_MS,
@@ -36,6 +36,7 @@ import {
 } from "../constants";
 import { enqueueEmail, type OutboxMessage } from "../enqueue";
 import { KIND_HOOKS, type EndedRow } from "../hooks";
+import { claimOne } from "../worker";
 import { OutboxKeyUnavailableError, openBody } from "../seal";
 import type { DeliverResult } from "@/lib/email";
 
@@ -145,16 +146,24 @@ describe.skipIf(!HAS_DB)("the email outbox core (DB)", () => {
   const statusOf = async (id: string): Promise<string> => (await get(id)).status;
   const callsTo = () => deliverMock.mock.calls.map((c) => c[0] as { to: string; idempotencyKey: string; tags: Record<string, string>; html: string; text: string });
 
-  /** What the worker's claim does for a retry (Task 4 owns the real one): sending, attempts + 1, a lease. */
-  async function claimForRetry(id: string): Promise<ClaimedRow> {
-    const [rec] = await sql<ClaimedRecord[]>`
-      update email_outbox
-         set status = 'sending', attempts = attempts + 1, lease_until = now() + interval '2 minutes', status_at = now()
-       where id = ${id} and status = 'queued'
-      returning id, kind, ref_type, ref_id, org_id, meta, recipient, subject, body_sealed, transactional,
-                attempts, expires_at, lease_until`;
-    if (!rec) throw new Error(`could not claim ${id} for a retry (not queued)`);
+  /** The first attempt's claim: `dispatchNow`'s own statement (`claimQueuedRow`), judged at `now` (the clock expiry is read on; pass an
+   *  earlier one to claim a row that is already past its expiry, as the worker's path can meet one). Never a copy of the SQL. */
+  async function claimFirst(id: string, now: Date = new Date()): Promise<ClaimedRow> {
+    const rec = await claimQueuedRow(id, now);
+    if (!rec) throw new Error(`could not claim ${id} for its first attempt (not queued, already attempted, or expired as of ${now.toISOString()})`);
     return toClaimedRow(rec);
+  }
+  /** A retry's claim: the retry worker's own statement (`claimOne`), after the row's delay has passed. Never a copy of the SQL. */
+  async function claimForRetry(id: string): Promise<ClaimedRow> {
+    await sql`update email_outbox set next_attempt_at = now() - interval '1 second' where id = ${id}`;
+    const rec = await claimOne([id]);
+    if (!rec) throw new Error(`could not claim ${id} for a retry (not queued, or not due)`);
+    return toClaimedRow(rec);
+  }
+  /** A second worker re-claims a row whose lease lapsed: the worker's own statement again, so `attempts` moves by the real rule. */
+  async function reclaim(id: string): Promise<void> {
+    await sql`update email_outbox set lease_until = now() - interval '1 second' where id = ${id} and status = 'sending'`;
+    if (!(await claimOne([id]))) throw new Error(`could not re-claim ${id} (not sending, or past its attempts or expiry)`);
   }
 
   beforeAll(async () => {
@@ -238,7 +247,7 @@ describe.skipIf(!HAS_DB)("the email outbox core (DB)", () => {
       expect((await get(id)).meta).toEqual({});
     });
 
-    it("every kind enqueues (checked: both kinds)", async () => {
+    it("every kind enqueues (checked: every member of OUTBOX_KINDS)", async () => {
       let checked = 0;
       for (const kind of OUTBOX_KINDS) {
         const id = await queue({ kind });
@@ -802,9 +811,8 @@ describe.skipIf(!HAS_DB)("the email outbox core (DB)", () => {
       for (const [label, result] of results) {
         const id = await queue();
         deliverMock.mockImplementationOnce(async () => {
-          // Still 'sending', but it is attempt 2's now: a fresh claim bumps attempts and renews the lease.
-          await sql`update email_outbox set attempts = attempts + 1, lease_until = now() + interval '2 minutes'
-                     where id = ${id} and status = 'sending'`;
+          // Still 'sending', but it is attempt 2's now: the lease lapsed and a worker claimed it (attempts + 1, a fresh lease).
+          await reclaim(id);
           return result;
         });
         const out = await dispatchNow([id]);
@@ -959,8 +967,8 @@ describe.skipIf(!HAS_DB)("the email outbox core (DB)", () => {
       vi.setSystemTime(T0);
       const late = await queue({ expiresAt: new Date(T0.getTime() + 2 * MIN) });
       const fine = await queue({ expiresAt: new Date(T0.getTime() + 20 * MIN) });
-      const claimedLate = await claimForRetry(late);
-      const claimedFine = await claimForRetry(fine);
+      const claimedLate = await claimFirst(late);
+      const claimedFine = await claimFirst(fine);
       vi.setSystemTime(new Date(T0.getTime() + 3 * MIN)); // the claim was at T0; the attempt starts three minutes later
       const l = await attemptClaimed(claimedLate);
       expect(l).toEqual({ outcome: "expired", verdict: null, rateLimited: false, requestMade: false });
@@ -974,7 +982,7 @@ describe.skipIf(!HAS_DB)("the email outbox core (DB)", () => {
 
     it("attemptClaimed takes an injected clock too (the test seam): ahead of real time it expires a row early", async () => {
       const id = await queue({ expiresAt: new Date(Date.now() + MIN) });
-      const claimed = await claimForRetry(id);
+      const claimed = await claimFirst(id);
       expect((await attemptClaimed(claimed, { now: new Date(Date.now() + 2 * MIN) })).outcome).toBe("expired");
       expect(deliverMock).not.toHaveBeenCalled();
     });
@@ -982,7 +990,8 @@ describe.skipIf(!HAS_DB)("the email outbox core (DB)", () => {
     it("attemptClaimed in production also ignores a stale injected clock: a row past expiry in real time is expired though the injected time says it is fine", async () => {
       vi.stubEnv("NODE_ENV", "production");
       const id = await queue({ expiresAt: new Date(Date.now() - 5 * MIN) });
-      const claimed = await claimForRetry(id);
+      // Already past its expiry: claimed as of ten minutes ago, when it still had time (the worker's own claim would not take it).
+      const claimed = await claimFirst(id, new Date(Date.now() - 10 * MIN));
       const out = await attemptClaimed(claimed, { now: new Date(Date.now() - 30 * MIN) });
       expect(out.outcome).toBe("expired");
       expect(deliverMock).not.toHaveBeenCalled();
@@ -990,19 +999,19 @@ describe.skipIf(!HAS_DB)("the email outbox core (DB)", () => {
 
     it("attemptClaimed expires a row at exactly expires_at, like the SQL statements do (<=, not <)", async () => {
       const id = await queue({ expiresAt: new Date(Date.now() + 10 * MIN) });
-      const claimed = await claimForRetry(id);
+      const claimed = await claimFirst(id);
       const edge = await attemptClaimed(claimed, { now: claimed.expiresAt });
       expect(edge.outcome).toBe("expired");
       // One millisecond earlier it is still sendable (so the boundary is the line, not a wide margin).
       const id2 = await queue({ expiresAt: new Date(Date.now() + 10 * MIN) });
-      const claimed2 = await claimForRetry(id2);
+      const claimed2 = await claimFirst(id2);
       expect((await attemptClaimed(claimed2, { now: new Date(claimed2.expiresAt.getTime() - 1) })).outcome).toBe("sent");
     });
 
     it("an expiry found as an attempt begins is fenced like every other write: after a re-claim the stale attempt changes nothing", async () => {
       const id = await queue({ expiresAt: new Date(Date.now() + MIN) });
-      const stale = await claimForRetry(id); // attempt 1
-      await sql`update email_outbox set attempts = attempts + 1, lease_until = now() + interval '2 minutes' where id = ${id}`; // re-claimed: attempt 2
+      const stale = await claimFirst(id); // attempt 1
+      await reclaim(id); // re-claimed: attempt 2
       const out = await attemptClaimed(stale, { now: new Date(Date.now() + 5 * MIN) });
       expect(out.outcome).toBe("deferred");
       const r = await get(id);

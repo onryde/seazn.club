@@ -158,11 +158,15 @@ function endExhausted(onlyIds: readonly string[] | undefined): Promise<EndedReco
  * an open writes share one `next_attempt_at` (the transaction's `now()`), so that key alone would take a round's leftovers in uuid
  * order and let a board whose check-in closes first expire behind boards that close later. `for update skip locked` is the registrations.ts pattern: a second tick
  * passes over a row the first is claiming instead of waiting for it.
+ *
+ * Exported so a test that must stage an interleaving between a worker's claim and `attemptClaimed` (or re-claim a lapsed lease) claims
+ * with THIS statement and not a copy of it that can drift (a `ClaimedRecord` is what `toClaimedRow` takes). `dispatchNow`'s own claim
+ * of a never-attempted row is `claimQueuedRow` (attempt.ts).
  */
-async function claimOne(onlyIds: readonly string[] | undefined): Promise<ClaimedRecord | undefined> {
+export async function claimOne(onlyIds: readonly string[] | undefined): Promise<ClaimedRecord | undefined> {
   const [rec] = await sql<ClaimedRecord[]>`
     with picked as (
-      select id from email_outbox
+      select id, status as prior_status from email_outbox
        where ${dueNow(onlyIds)}
        order by expires_at, next_attempt_at, id
        limit 1
@@ -174,7 +178,8 @@ async function claimOne(onlyIds: readonly string[] | undefined): Promise<Claimed
       from picked
      where o.id = picked.id
     returning o.id, o.kind, o.ref_type, o.ref_id, o.org_id, o.meta, o.recipient, o.subject, o.body_sealed,
-              o.transactional, o.attempts, o.expires_at, o.lease_until`;
+              o.transactional, o.attempts, o.expires_at, o.lease_until, o.recipient_user_id, o.last_error,
+              (picked.prior_status = 'sending') as reclaimed`;
   return rec;
 }
 

@@ -17,20 +17,21 @@ import {
   STG_TICK_MS,
   type OutboxKind,
 } from "../constants";
-import { OutboxExpiryTooLongError, enqueueEmail, type OutboxMessage } from "../enqueue";
+import { OutboxExpiryTooLongError, enqueueEmail, expiryWithin, type OutboxMessage } from "../enqueue";
 import { LOGIN_LINK_TTL_MS } from "@/lib/login-link";
 import { CHECKIN_EXTEND_MAX, CHECKIN_EXTEND_STEP_MS } from "@/lib/checkin-extend";
 import { CHECKIN_BATCH_SIZE, boardAnchor, windowFor } from "@/server/external-play/window";
 
 const T0 = new Date("2026-10-23T12:00:00.000Z");
 
-/** A `db` that records the statements it is handed. `enqueueEmail` uses it as a tagged template and as `db.json`. */
+/** A `db` that records the statements it is handed and answers as postgres.js does for an insert: an (empty) row list that
+ *  carries the count of rows written, which `enqueueEmail` reads. `enqueueEmail` uses it as a tagged template and as `db.json`. */
 function stubDb() {
   const calls: unknown[][] = [];
   const db = Object.assign(
     async (...args: unknown[]) => {
       calls.push(args);
-      return [];
+      return Object.assign([], { count: 1 });
     },
     { json: (v: unknown) => v },
   );
@@ -167,5 +168,58 @@ describe("the real expiries of the two kinds sit inside the bound", () => {
     // Floor, not derived: no division in the product runs a single round of a thousand boards. A change to the batch gap
     // or size that drops the admitted round below it must be a decision, not a side effect.
     expect(firstRefusedRank!).toBeGreaterThanOrEqual(1_000);
+  });
+});
+
+// `expiryWithin` is the one place a caller turns "the thing this email is about ends at X" into an `expiresAt` the writer will
+// accept: the deadline, but never further out than the bound. The expected values are typed from the spec (24 h of Resend's
+// idempotency key life less a 7 minute margin: a 2 minute lease plus the slowest 5 minute tick), never read from MAX_EXPIRY_MS.
+describe("expiryWithin", () => {
+  const SPEC_BOUND_MS = 24 * 3_600_000 - 7 * 60_000;
+  const NOW = T0.getTime();
+
+  it("a null deadline gives now + 24 h - 7 min", () => {
+    expect(expiryWithin(null, NOW).getTime()).toBe(NOW + SPEC_BOUND_MS);
+    // The default clock is the real one (faked here): the same answer with no explicit now.
+    expect(expiryWithin(null).getTime()).toBe(NOW + SPEC_BOUND_MS);
+  });
+
+  it("an earlier deadline gives the deadline, a later one gives the bound, and one exactly at the bound gives the bound", () => {
+    const cases: Array<[string, number, number]> = [
+      ["a sign-in-link-sized deadline", NOW + 15 * 60_000, NOW + 15 * 60_000],
+      ["one ms inside the bound", NOW + SPEC_BOUND_MS - 1, NOW + SPEC_BOUND_MS - 1],
+      ["exactly at the bound", NOW + SPEC_BOUND_MS, NOW + SPEC_BOUND_MS],
+      ["one ms past the bound", NOW + SPEC_BOUND_MS + 1, NOW + SPEC_BOUND_MS],
+      ["a week away", NOW + 7 * 24 * 3_600_000, NOW + SPEC_BOUND_MS],
+      ["already past", NOW - 60_000, NOW - 60_000],
+    ];
+    for (const [label, deadline, want] of cases) {
+      expect(expiryWithin(new Date(deadline), NOW).getTime(), label).toBe(want);
+    }
+    expect(cases).toHaveLength(6);
+  });
+
+  it("returns a new Date and leaves the deadline it was given alone", () => {
+    const deadline = new Date(NOW + 7 * 24 * 3_600_000);
+    const before = deadline.getTime();
+    const out = expiryWithin(deadline, NOW);
+    expect(out).not.toBe(deadline);
+    expect(deadline.getTime()).toBe(before);
+  });
+
+  it("what it returns is always accepted by enqueueEmail, whatever the deadline (sequence with the writer)", async () => {
+    for (const deadline of [null, new Date(NOW + 60_000), new Date(NOW + SPEC_BOUND_MS), new Date(NOW + 30 * 24 * 3_600_000)]) {
+      const { db, calls } = stubDb();
+      await expect(enqueueEmail(db, msg({ expiresAt: expiryWithin(deadline) }))).resolves.toBeTruthy();
+      expect(calls).toHaveLength(1);
+    }
+  });
+
+  it("an Invalid Date deadline stays invalid, so the writer still refuses it by name (the bound does not launder it)", async () => {
+    const out = expiryWithin(new Date("not a date"), NOW);
+    expect(Number.isNaN(out.getTime())).toBe(true);
+    const { db, calls } = stubDb();
+    await expect(enqueueEmail(db, msg({ expiresAt: out }))).rejects.toBeInstanceOf(OutboxExpiryTooLongError);
+    expect(calls).toHaveLength(0);
   });
 });

@@ -556,73 +556,50 @@ export async function sendGroupOrgLeftEmail(
   return send({ to, ...groupOrgLeftTemplate(orgName, seatFreed, link, dict) });
 }
 
-export interface RegistrationEmail extends RegistrationEmailArgs {
-  to: string;
-  /** Recipient locale for the email copy; defaults to English. */
-  locale?: Locale;
-}
-
-/** Registration confirmation — carries the offline (cash/bank) payment
- *  instructions for paid entries. */
-export async function sendRegistrationEmail(opts: RegistrationEmail): Promise<boolean> {
-  const { to, locale = "en", ...args } = opts;
+/** The registration confirmation, RENDERED and not sent — it carries the offline (cash/bank) payment instructions for paid entries.
+ *  The producers (`notifySubmitted`, the organiser's and the registrant's resend in `server/usecases/registrations.ts`) queue what
+ *  this returns on the email outbox (kind `registration_confirmation`) and send it after commit; there is no direct sender for it
+ *  any more (a second path would skip the outbox's replace rule and its retry). The address is not part of the content, so it is not
+ *  an argument here. `locale` is the language the mail is written in: the producer resolves it (`recipientLocale`, D4) and passes it. */
+export async function registrationEmail(args: RegistrationEmailArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...registrationTemplate(args, dict) });
+  return registrationTemplate(args, dict);
 }
 
-export interface PaymentReminderEmail extends PaymentReminderArgs {
-  to: string;
-  locale?: Locale;
-}
-
-/** Payment reminder for an unpaid entry fee (offline nudge or card T-24h). */
-export async function sendPaymentReminderEmail(opts: PaymentReminderEmail): Promise<boolean> {
-  const { to, locale = "en", ...args } = opts;
+/** The payment reminder for an unpaid entry fee (offline nudge or card T-24h), RENDERED and not sent. The producers (the registration
+ *  sweep's two reminder passes and the organiser's manual reminder, `server/usecases/registrations.ts`) queue what this returns on the
+ *  email outbox (kind `payment_reminder`); there is no direct sender for it any more (a second path would skip the outbox's retry and
+ *  its once-key, which is what stops a failed send minting a new Checkout session on every sweep). The address is not part of the
+ *  content, so it is not an argument here. `locale` is the language the mail is written in: the producer resolves it (`recipientLocale`). */
+export async function paymentReminderEmail(args: PaymentReminderArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...paymentReminderTemplate(args, dict) });
+  return paymentReminderTemplate(args, dict);
 }
 
-export interface RegistrationPromotedEmail extends RegistrationPromotedArgs {
-  to: string;
-  locale?: Locale;
-}
-
-/** Waitlist promotion (spec §2): spot opened — pay window / instructions. */
-export async function sendRegistrationPromotedEmail(
-  opts: RegistrationPromotedEmail,
-): Promise<boolean> {
-  const { to, locale = "en", ...args } = opts;
+/** The waitlist promotion (spec §2: a spot opened — pay window / instructions), RENDERED and not sent. The producer (`notifyPromoted` in
+ *  `server/usecases/registrations.ts`) queues what this returns on the email outbox (kind `registration_promoted`); there is no direct
+ *  sender for it any more (a second path would skip the outbox's retry and its once-key). The address is not part of the content, so it
+ *  is not an argument here. `locale` is the language the mail is written in: the producer resolves it (`recipientLocale`). */
+export async function registrationPromotedEmail(args: RegistrationPromotedArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...registrationPromotedTemplate(args, dict) });
+  return registrationPromotedTemplate(args, dict);
 }
 
-export interface SoloSignUpAssignedEmail extends SoloSignUpAssignedArgs {
-  to: string;
-  locale?: Locale;
-}
-
-/** RS009 — tells the person who entered alone that they are now on a team.
- *  The answer to the promise the public stepper makes at sign-up; without it
- *  the placement happens entirely inside the organiser's console and the
- *  person it concerns is never told. */
-export async function sendSoloSignUpAssignedEmail(
-  opts: SoloSignUpAssignedEmail,
-): Promise<boolean> {
-  const { to, locale = "en", ...args } = opts;
+/** RS009 — tells the person who entered alone that they are now on a team, RENDERED and not sent. The answer to the promise the public
+ *  stepper makes at sign-up; without it the placement happens entirely inside the organiser's console and the person it concerns is never
+ *  told. The producer (`assignSoloSignUp` in `server/usecases/registration-assign.ts`) queues what this returns on the email outbox (kind
+ *  `solo_signup_assigned`), inside the assignment's transaction; nothing sends it directly. `locale` is the language the mail is written
+ *  in: the producer resolves it (`recipientLocale`). */
+export async function soloSignUpAssignedEmail(args: SoloSignUpAssignedArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...soloSignUpAssignedTemplate(args, dict) });
+  return soloSignUpAssignedTemplate(args, dict);
 }
 
-export interface RefundIssuedEmail extends RefundIssuedArgs {
-  to: string;
-  locale?: Locale;
-}
-
-/** Registrant receipt for any refund (auto, manual, late, duplicate). */
-export async function sendRefundIssuedEmail(opts: RefundIssuedEmail): Promise<boolean> {
-  const { to, locale = "en", ...args } = opts;
+/** Registrant receipt for any refund (auto, manual, late, duplicate): the subject and body in the registrant's language. It is queued on the
+ *  email outbox by `queueRefundReceipt` (registrations.ts), in the transaction that records the refund; nothing sends it directly. */
+export async function refundIssuedEmail(args: RefundIssuedArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...refundIssuedTemplate(args, dict) });
+  return refundIssuedTemplate(args, dict);
 }
 
 export interface DisputeAlertEmail extends DisputeAlertArgs {

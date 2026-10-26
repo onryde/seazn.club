@@ -62,6 +62,8 @@ import { parseExtKey, bracketWinnerLoser, rankedStageStandings } from "@/server/
 import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "@/server/engine-db/level-seat";
 import { killsLoserEdge, lockDivisionConfigShared, lockStageSeats } from "@/server/engine-db/fed-seats";
 import { hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
+import { FIXTURE_DELETED_REASON, ROUND_VOIDED_REASON } from "@/server/email-outbox/cancel";
+import { cancelBoardInvites } from "./external-play/cancel-invites";
 import { writeAwardedMatchState } from "@/server/engine-db/awarded-state";
 import {
   isSwissBoardSeated,
@@ -758,6 +760,9 @@ export async function deleteStage(auth: AuthCtx, stageId: string): Promise<{ del
       with gone as (delete from fixtures where stage_id = ${stageId} returning id)
       select gone.id, exists (select 1 from score_events se where se.fixture_id = gone.id) as scored
       from gone`;
+    // Phase 3 wave 1 (G-1): the invites still queued for the boards just deleted end with them. Named from the rows the delete
+    // returned, in the same transaction.
+    await cancelBoardInvites(tx, removed.map((row) => row.id), FIXTURE_DELETED_REASON);
     await tx`delete from stages where id = ${stageId}`;
 
     // Structural ledger + division watermark (same pattern as stage_seeded).
@@ -2274,6 +2279,10 @@ async function clearSwissFixtureSeats(tx: Tx, ids: readonly string[]): Promise<v
   // game stands behind refuses the whole clear (lockBoardsRefusingOnlineGames),
   // so past it every row here is one to go.
   await lockBoardsRefusingOnlineGames(tx, ids);
+  // The void (spec §7, plan T6): the round's invites that are still queued name boards whose seats are about to go, so they end
+  // `round_voided` in THIS transaction (an Unpair that is refused above ends nothing). Only after the refusal, and before the bridge
+  // rows they are judged by are deleted. A row already `sending` is left to finish; a seat that was never invited has no row.
+  await cancelBoardInvites(tx, ids, ROUND_VOIDED_REASON);
   await tx`delete from fixture_external_play where fixture_id in ${tx(ids)}`;
   await tx`
     update fixtures set
@@ -3394,6 +3403,9 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
     await lockBoardsRefusingOnlineGames(tx, stageFixtureIds);
     // W2c Task 14: a match's own format would be regenerated away with its row — refused by name instead.
     await refuseOwnFormatLoss(tx, tx`stage_id = ${stageId}`);
+    // Phase 3 wave 1 (G-1): the boards go, and their queued invites with them - after every refusal above, before the delete. The
+    // rebuilt boards are new fixtures with new ids, so an invite left queued would mail a board that no longer exists.
+    await cancelBoardInvites(tx, stageFixtureIds, FIXTURE_DELETED_REASON);
     const deleted = await tx<{ id: string }[]>`
       delete from fixtures where stage_id = ${stageId} returning id`;
     return {
